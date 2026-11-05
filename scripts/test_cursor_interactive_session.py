@@ -556,12 +556,25 @@ TRUST_SCREEN = TRUST_CAPTURE + "\n\n"
 EXAMPLE_PATH = "/home/dev/work/example-task"
 TRUST_PATH_ROW = "  \u2502    " + EXAMPLE_PATH + "                      \u2502\n"
 assert TRUST_PATH_ROW in TRUST_CAPTURE
+# The whole prompt, row for row, as the screen shows it inside the border.
 TRUST_EXPECT = (
-    "Workspace Trust Required\n"
+    "\u26a0 Workspace Trust Required\n"
+    "Cursor Agent can execute code and access files.\n"
     "Do you trust the contents of this directory?\n"
     "/home/dev/work/example-task\n"
-    "[a] Trust this workspace\n"
+    "\u25b6 [a] Trust this workspace\n"
+    "[q] Quit\n"
 )
+APPROVAL_CAPTURE = (
+    "Tip: You can start the Cursor CLI with `agent`.\n"
+    "  \u256d\u2500\u2500\u2500\u2500\u256e\n"
+    "  \u2502  Allow this command: git status              \u2502\n"
+    "  \u2502  \u25b6 [y] Yes                                   \u2502\n"
+    "  \u2502    [n] No                                    \u2502\n"
+    "  \u2570\u2500\u2500\u2500\u2500\u256f\n"
+)
+APPROVAL_SCREEN = APPROVAL_CAPTURE + "\n\n"
+APPROVAL_EXPECT = "Allow this command: git status\n\u25b6 [y] Yes\n[n] No\n"
 APPROVAL = "OP399-approval-2026-11-04T21:40:00Z"
 SECOND_APPROVAL = "OP399-approval-2026-11-04T21:55:00Z"
 DEFAULT_TRUST = object()
@@ -670,8 +683,7 @@ class AnswerTests(AnswerFixture):
             # The expected text must name the trust path, so another path is an input error.
             "other path": (TRUST_EXPECT.replace("example-task", "other-task"), "invalid-input"),
             "missing line": (TRUST_EXPECT + "Allow network access\n", "modal-mismatch"),
-            "reordered": ("Do you trust the contents of this directory?\nWorkspace Trust Required\n"
-                          + EXAMPLE_PATH + "\n[a] Trust this workspace\n", "modal-mismatch"),
+            "reordered": ("".join(TRUST_EXPECT.splitlines(True)[i] for i in (1, 0, 2, 3, 4, 5)), "modal-mismatch"),
         }
         for label, (text, expected) in variants.items():
             with self.subTest(label=label):
@@ -752,27 +764,34 @@ class AnswerTests(AnswerFixture):
         two_keys.write_text("[ab] Trust this workspace\n")
         blank_key = self.root / "expect-blank-key"
         blank_key.write_text("[ ] Trust this workspace\n")
+        receipt = inspected["receipt"]
+
+        def args(**options):
+            # An approval answer, so the trust-path rule cannot mask the rule under test.
+            options.setdefault("kind", "modal-approval")
+            return self.answer_args(options.pop("receipt", receipt), **options)
+
         cases = [
-            ("approval empty", self.answer_args(inspected["receipt"], approval="")),
-            ("approval short", self.answer_args(inspected["receipt"], approval="tom-ok")),
-            ("approval spaces", self.answer_args(inspected["receipt"], approval="Tom approved it")),
-            ("approval long", self.answer_args(inspected["receipt"], approval="a" * 201)),
-            ("kind unknown", self.answer_args(inspected["receipt"], kind="modal-unknown")),
-            ("kind other", self.answer_args(inspected["receipt"], kind="active")),
-            ("choice empty", self.answer_args(inspected["receipt"], choice="")),
-            ("choice two", self.answer_args(inspected["receipt"], choice="ab", expect=two_keys)),
-            ("choice space", self.answer_args(inspected["receipt"], choice=" ", expect=blank_key)),
-            ("choice escape", self.answer_args(inspected["receipt"], choice="\x1b")),
-            ("choice key name", self.answer_args(inspected["receipt"], choice="Enter")),
-            ("choice not offered", self.answer_args(inspected["receipt"], choice="q")),
-            ("choice not bracketed", self.answer_args(inspected["receipt"], choice="T")),
-            ("bad receipt", self.answer_args("v1:not-a-receipt")),
-            ("missing expect file", self.answer_args(inspected["receipt"], expect=self.root / "absent")),
+            ("approval empty", args(approval="")),
+            ("approval short", args(approval="tom-ok")),
+            ("approval spaces", args(approval="Tom approved it")),
+            ("approval long", args(approval="a" * 201)),
+            ("kind unknown", args(kind="modal-unknown")),
+            ("kind other", args(kind="active")),
+            ("choice empty", args(choice="")),
+            ("choice two", args(choice="ab", expect=two_keys)),
+            ("choice space", args(choice=" ", expect=blank_key)),
+            ("choice escape", args(choice="\x1b")),
+            ("choice key name", args(choice="Enter")),
+            ("choice not offered", args(choice="z")),
+            ("choice not bracketed", args(choice="T")),
+            ("bad receipt", args(receipt="v1:not-a-receipt")),
+            ("missing expect file", args(expect=self.root / "absent")),
         ]
         for label, data in bad_expect.items():
             path = self.root / ("bad-expect-" + label)
             path.write_bytes(data)
-            cases.append(("expect " + label, self.answer_args(inspected["receipt"], expect=path)))
+            cases.append(("expect " + label, args(expect=path)))
         for label, extra in cases:
             with self.subTest(label=label):
                 self.log.write_text("")
@@ -1220,6 +1239,86 @@ class AnswerTests(AnswerFixture):
         self.assertTrue(inspected["truncated"])
         code, answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
         self.assertEqual((code, answered["state"]), (0, "answered"))
+
+    # Exact prompt rows (QA on main ece3e83d: an expected line was a case-folded
+    # substring of one row, so a longer or differently cased target was answered).
+
+    def test_expected_lines_must_be_the_exact_prompt_rows(self):
+        path = self.worktree
+        upper = str(self.repo.parent / "Example-Task")
+        cat = "Allow this command: cat " + path
+        trust_rows = self.fix(TRUST_EXPECT).splitlines(True)
+
+        def approval(first_row, extra_rows=""):
+            return APPROVAL_SCREEN.replace("Allow this command: git status  ", first_row + "  ", 1).replace(
+                "  \u2502  \u25b6 [y] Yes", extra_rows + "  \u2502  \u25b6 [y] Yes", 1)
+
+        def expect_cat(rows=None):
+            return (rows or cat) + "\n\u25b6 [y] Yes\n[n] No\n"
+
+        trust, ok = "modal-trust", "answered"
+        cases = {
+            # Positive controls.
+            "exact approval prompt": ("modal-approval", APPROVAL_SCREEN, APPROVAL_EXPECT, "y", ok),
+            "trailing whitespace on the shown row": (
+                "modal-approval", APPROVAL_SCREEN.replace("git status              \u2502", "git status   "),
+                APPROVAL_EXPECT, "y", ok),
+            "trailing whitespace in the expected text": (
+                "modal-approval", APPROVAL_SCREEN, APPROVAL_EXPECT.replace("git status\n", "git status   \n"), "y", ok),
+            # QA's three cases.
+            "QA 1: the path with a suffix": (
+                trust, self.trust_screen(self.box_row(path + "-extra")), TRUST_EXPECT, "a", "trust-path-mismatch"),
+            "QA 2: the path in another case": (
+                trust, self.trust_screen(self.box_row(upper)), TRUST_EXPECT, "a", "trust-path-mismatch"),
+            "QA 3: a longer command": (
+                "modal-approval", approval("Allow this command: git status && echo EXTRA"), APPROVAL_EXPECT, "y",
+                "modal-mismatch"),
+            # The same targets where only the row rule applies.
+            "an approval path target with a suffix": (
+                "modal-approval", approval(cat + "-extra"), expect_cat(), "y", "modal-mismatch"),
+            "an approval path target in another case": (
+                "modal-approval", approval("Allow this command: cat " + upper), expect_cat(), "y", "modal-mismatch"),
+            "the prompt text in another case": (
+                "modal-approval", approval("Allow This Command: git status"), APPROVAL_EXPECT, "y", "modal-mismatch"),
+            "a doubled space inside the row": (
+                "modal-approval", approval("Allow this command: git  status"), APPROVAL_EXPECT, "y", "modal-mismatch"),
+            "a wrapped continuation row": (
+                "modal-approval", approval("Allow this command: git status",
+                                           "  \u2502  && echo EXTRA                               \u2502\n"),
+                APPROVAL_EXPECT, "y", "modal-mismatch"),
+            "a wrapped long path": (
+                "modal-approval", approval(cat[:-4], "  \u2502  " + cat[-4:] + "                \u2502\n"),
+                expect_cat(), "y", "modal-mismatch"),
+            "the first prompt row left out": (trust, TRUST_SCREEN, "".join(trust_rows[1:]), "a", "modal-mismatch"),
+            "a middle prompt row left out": (
+                trust, TRUST_SCREEN, "".join(trust_rows[:1] + trust_rows[2:]), "a", "modal-mismatch"),
+            "the last prompt row left out": (trust, TRUST_SCREEN, "".join(trust_rows[:-1]), "a", "modal-mismatch"),
+            "the prompt shown twice": (
+                "modal-approval", APPROVAL_CAPTURE + APPROVAL_SCREEN, APPROVAL_EXPECT, "y", "prompt-unclear"),
+            "the prompt on the first visible row": (
+                "modal-approval", "Allow this command: git status\n\u25b6 [y] Yes\n[n] No\n\n", APPROVAL_EXPECT, "y",
+                "prompt-unclear"),
+            "the prompt on the last visible row": (
+                "modal-approval", "\nAllow this command: git status\n\u25b6 [y] Yes\n[n] No", APPROVAL_EXPECT, "y",
+                "prompt-unclear"),
+        }
+        for label, (kind, capture, text, choice, expected) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture)
+                inspected = self.start_and_inspect()
+                expect = self.root / "expect-rows"
+                expect.write_text(self.fix(text))
+                approval_ref = self.case_approval(label)
+                code, result = self.invoke("answer", self.answer_args(inspected["receipt"], choice=choice, kind=kind,
+                                                                      approval=approval_ref, expect=expect))
+                if expected == ok:
+                    self.assertEqual((code, result["state"]), (0, "answered"))
+                    self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", choice]])
+                else:
+                    self.assertEqual((code, result["state"]), (2, expected))
+                    self.assertEqual(self.sends(), [])
+                    self.assertFalse(self.ledger(approval_ref).exists())
 
     def test_help_says_the_caller_owns_the_approval(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "answer", "--help"], capture_output=True,
