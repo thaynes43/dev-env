@@ -247,11 +247,12 @@ destination. A failed report goes into `lastFailure` with its error; it is not
 a task failure, and the next report uses another supported route
 (supervised-dispatch, section 4, step 8).
 
-Create the job, then write its job ID into the file. The fired prompt names the
-state file and says what to do, because the context may have been compacted by
-the time it fires. For example: "Timer check-in for OP385: read
-`<state file>`, verify evidence, steer, update the state file; before any stop, write the lane table (section 6)
-and stop only for a stop reason in supervised-dispatch section 5."
+Create the job, then write its job ID and the full prompt text into `timer`. The
+fired prompt names the state file and says what to do, because the context may
+have been compacted by the time it fires. For example: "Timer check-in for
+OP385: read `<state file>`, verify evidence, steer, update the state file;
+before any stop, write the lane table (section 6) and stop only for a stop
+reason in supervised-dispatch section 5."
 
 Pick a cadence that matches what you wait for: one check near the end of an
 8-minute CI run rather than eight, 20 to 30 minutes for idle supervision. Avoid
@@ -350,8 +351,8 @@ Rows are only the authorized work this custodian has claimed, within its
 recorded scope and budget. An unclaimed tracker item or an ungroomed "next" note
 is not a lane; do not start it from here. Write the table into the state file's
 `lanes` (section 2) and mirror it on the tracker, so a successor named under
-section 5 can act if this session ends. Read the open work from the status record and the tracker, not
-from memory. Give each row its owner, its type, its next action and what will
+section 5 can act if this session ends. Read the open work from the status
+record and the tracker, not from memory. Give each row its owner, its type, its next action and what will
 wake it. Types:
 
 - `none`: authorized work can proceed now. It keeps the timer: do it, or
@@ -370,11 +371,10 @@ wake it. Types:
   `agent-run msg`. An Ask ID alone is not a push route: in v1 nothing delivers
   an Ask's answer into the session (DESIGN-034). Never poll `ask_status`. A
   question not yet delivered, or one with no push route, is a `none` row whose
-  next action is delivering it or arranging the route. Copy the existing hold line; do not re-read the
-  held action, its answer or its pane.
+  next action is delivering it or arranging the route. Copy the existing hold
+  line; do not re-read the held action, its answer or its pane.
 - `permission-denied`: blocked, directly or through another lane, by an actual
-  denial, or by a latch the platform has actually
-  set (`agent-run budget show`). Not polled, not retried.
+  denial, or by a latch the platform has actually set (`agent-run budget show`). Not polled, not retried.
 - Stop types: `done` (a demonstrated outcome), `paused` (a pause or cancellation
   by Tom or his verified coordinator), `budget-exhausted` and `unresolvable`.
 
@@ -384,8 +384,8 @@ of quiet or failed wakes; that is the stall rule above, not a stop reason.
 
 A timer prompt scoped to one loop (one worker, one pilot) can stop only that
 loop. When that loop ends and other rows stay open, re-scope: create a new job
-whose prompt names the state file and the lane table, write its ID and prompt
-scope into `timer`, then `CronDelete` the old job. That is a re-scope, not a stop.
+whose prompt names the state file and the lane table, write its ID and full
+prompt text into `timer`, then `CronDelete` the old job. That is a re-scope, not a stop.
 
 When the work ends or pauses:
 
