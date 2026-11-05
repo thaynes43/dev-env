@@ -57,9 +57,10 @@ what needs live identity or live services. The boundary is a build tag.
 The tag is `portallocaltest`. Two files carry it:
 `web/portal/session/localtest.go` and the command `web/portal/localtest`.
 `make build-portal` and `images/portal/Dockerfile` never set it, so the
-deployed binary contains none of this code. A production build with the tag
-set by mistake would still have no path to it: `cmd/dev-env-portal` takes no
-flag and calls only `ServeProduction`.
+deployed binary contains none of this code. `make build-portal` passes an
+empty `-tags=`, so a tag set through `GOFLAGS` cannot reach the portal build.
+A production build with the tag set by mistake would still have no path to
+it: `cmd/dev-env-portal` takes no flag and calls only `ServeProduction`.
 
 ```mermaid
 flowchart LR
@@ -107,7 +108,8 @@ any issuer but Authentik's.
   served by an in-memory HTTP server over `net.Pipe`. The operator and
   OpenProject servers present certificates from a fresh in-memory CA that the
   pinned clients trust. Every other destination, protocol or port is refused.
-  Nothing leaves the process.
+  Nothing leaves the process. `NewLocalTest` refuses to build the instance if
+  any source's client has a proxy or a dialer other than the fixture net.
 - The source clients read token files, as in production. The instance writes
   unsigned fixture tokens to a fresh private temporary directory and removes it
   on exit. Only the in-memory fixture servers accept them. They are not
@@ -153,6 +155,9 @@ live navigation can differ. The Asks answer form, the send composer, launch
 and history are absent here, so those controls need the live portal or a
 follow-up. Logging out revokes the one fixed session; every page then
 redirects to a login that is unavailable until the instance restarts.
+The clock is frozen at the fixture's `now`, so pages never age or go stale.
+The banner adds a row at the top, so screenshots and overflow comparisons
+against the live portal differ by that row.
 
 ## 8. Follow-ups
 

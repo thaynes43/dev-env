@@ -73,10 +73,19 @@ func TestLocalTestExcludedFromDefaultBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	portalBuilds := 0
 	for _, line := range strings.Split(string(makefile), "\n") {
-		if strings.Contains(line, "./cmd/dev-env-portal") && strings.Contains(line, "-tags") {
-			t.Fatalf("Makefile builds the portal with tags: %s", line)
+		if !strings.Contains(line, "./cmd/dev-env-portal") {
+			continue
 		}
+		portalBuilds++
+		// GOFLAGS is inherited; an explicit empty -tags= overrides any tag in it.
+		if strings.Contains(line, "portallocaltest") || !strings.Contains(line, " -tags= ") || strings.Count(line, "-tags") != 1 {
+			t.Fatalf("Makefile portal build must clear build tags: %s", line)
+		}
+	}
+	if portalBuilds != 1 {
+		t.Fatalf("Makefile has %d portal build lines", portalBuilds)
 	}
 }
 

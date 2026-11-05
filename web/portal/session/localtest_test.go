@@ -5,6 +5,7 @@ package session
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,8 +22,79 @@ import (
 
 var localTestListen = netip.MustParseAddrPort("127.0.0.1:8099")
 
+var errInterceptedOutbound = errors.New("outbound attempt intercepted by the test")
+
+// interceptOutbound replaces the process resolver for one test. Every DNS
+// query is recorded and failed inside the process, so code that dials a
+// name with any real dialer records an attempt instead of reaching the
+// network. Refused destinations in these tests are names (.invalid or the
+// pinned cluster names), never IP literals, so no dial can skip the resolver.
+// At cleanup the test fails if anything was recorded.
+func interceptOutbound(t *testing.T) *outboundRecorder {
+	t.Helper()
+	recorder := &outboundRecorder{}
+	previous := net.DefaultResolver
+	net.DefaultResolver = &net.Resolver{PreferGo: true, StrictErrors: true, Dial: func(_ context.Context, network, address string) (net.Conn, error) {
+		recorder.mu.Lock()
+		recorder.attempts = append(recorder.attempts, network+" "+address)
+		recorder.mu.Unlock()
+		return nil, errInterceptedOutbound
+	}}
+	t.Cleanup(func() { net.DefaultResolver = previous })
+	t.Cleanup(func() {
+		if attempts := recorder.list(); len(attempts) != 0 {
+			t.Errorf("outbound attempts intercepted: %d %v", len(attempts), attempts)
+		}
+	})
+	return recorder
+}
+
+type outboundRecorder struct {
+	mu       sync.Mutex
+	attempts []string
+}
+
+func (r *outboundRecorder) list() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.attempts...)
+}
+
+func (r *outboundRecorder) take() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	taken := r.attempts
+	r.attempts = nil
+	return taken
+}
+
+// TestLocalTestInterceptorCatchesRealDialers checks the safety net itself: a
+// real dialer and a default HTTP client aimed at a .invalid name are recorded
+// and failed inside the process.
+func TestLocalTestInterceptorCatchesRealDialers(t *testing.T) {
+	recorder := interceptOutbound(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", "probe.localtest.invalid:443"); err == nil {
+		_ = conn.Close()
+		t.Fatal("real dialer connected")
+	}
+	if len(recorder.take()) == 0 {
+		t.Fatal("real dialer lookup was not intercepted")
+	}
+	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	if response, err := client.Get("http://probe.localtest.invalid/"); err == nil {
+		_ = response.Body.Close()
+		t.Fatal("default HTTP transport connected")
+	}
+	if len(recorder.take()) == 0 {
+		t.Fatal("HTTP client lookup was not intercepted")
+	}
+}
+
 func newLocalTestForTest(t *testing.T) *LocalTest {
 	t.Helper()
+	interceptOutbound(t)
 	sessions, err := os.ReadFile("../../../scripts/trials/portal_product/sessions.json")
 	if err != nil {
 		t.Fatal(err)
@@ -166,25 +239,28 @@ func TestLocalTestLoginAndCrossOriginPostsStayClosed(t *testing.T) {
 }
 
 func TestLocalTestNetworkRefusesEveryOtherDestination(t *testing.T) {
+	// Only .invalid names: a regression that dials for real cannot reach a
+	// real address, and the deadline stops it from hanging.
+	const routed = "fixture.localtest.invalid:8443"
+	recorder := interceptOutbound(t)
 	upstreams := &localTestNet{routes: map[string]*pipeListener{}}
 	defer upstreams.close()
-	upstreams.serve(operatorPortalHost+":8443", nil, http.NotFoundHandler())
-	// A regression that dials for real must fail within the deadline, not hang.
+	upstreams.serve(routed, nil, http.NotFoundHandler())
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	for _, addr := range []string{"dev-env-operator.dev-env-system.svc.cluster.local:443", "example.invalid:443", "127.0.0.1:8443", "issuer.localtest.invalid:443"} {
+	for _, addr := range []string{"fixture.localtest.invalid:443", "example.invalid:443", "other.localtest.invalid:8443", "issuer.localtest.invalid:443"} {
 		conn, err := upstreams.dial(ctx, "tcp", addr)
 		if conn != nil {
 			_ = conn.Close()
 		}
 		if !errors.Is(err, errLocalTestNetwork) {
-			t.Fatalf("%s dialled: %v", addr, err)
+			t.Fatalf("%s dialled: %v (intercepted attempts: %d)", addr, err, len(recorder.list()))
 		}
 	}
-	if _, err := upstreams.dial(ctx, "udp", operatorPortalHost+":8443"); !errors.Is(err, errLocalTestNetwork) {
+	if _, err := upstreams.dial(ctx, "udp", routed); !errors.Is(err, errLocalTestNetwork) {
 		t.Fatal("udp dialled")
 	}
-	conn, err := upstreams.dial(ctx, "tcp", operatorPortalHost+":8443")
+	conn, err := upstreams.dial(ctx, "tcp", routed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,14 +268,63 @@ func TestLocalTestNetworkRefusesEveryOtherDestination(t *testing.T) {
 }
 
 func TestLocalTestRefusesNonLoopbackListenAndBadFixtures(t *testing.T) {
+	interceptOutbound(t)
 	sessions, _ := os.ReadFile("../../../scripts/trials/portal_product/sessions.json")
 	tasks, _ := os.ReadFile("../../../scripts/trials/portal_product/tasks.json")
 	for _, raw := range []string{"0.0.0.0:8099", "192.168.1.10:8099", "[::]:8099", "127.0.0.1:0"} {
-		if _, err := NewLocalTest(netip.MustParseAddrPort(raw), LocalTestFixtures{Sessions: sessions, Tasks: tasks}); err == nil {
+		if instance, err := NewLocalTest(netip.MustParseAddrPort(raw), LocalTestFixtures{Sessions: sessions, Tasks: tasks}); err == nil {
+			t.Cleanup(instance.Close)
 			t.Fatalf("%s accepted", raw)
 		}
 	}
-	if _, err := NewLocalTest(localTestListen, LocalTestFixtures{Sessions: []byte(`{}`), Tasks: tasks}); err == nil {
+	if instance, err := NewLocalTest(localTestListen, LocalTestFixtures{Sessions: []byte(`{}`), Tasks: tasks}); err == nil {
+		t.Cleanup(instance.Close)
 		t.Fatal("invalid fixture accepted")
+	}
+}
+
+// TestLocalTestRefusesSourcesOffTheFixtureNet checks the construction-time
+// guard: a source whose client could dial anything else stops the instance
+// before it serves a request. No request is sent here.
+func TestLocalTestRefusesSourcesOffTheFixtureNet(t *testing.T) {
+	interceptOutbound(t)
+	upstreams := &localTestNet{routes: map[string]*pipeListener{}}
+	defer upstreams.close()
+	caPEM, _, err := localTestCertificates("fixture.localtest.invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := func() time.Time { return time.Date(2026, 10, 26, 15, 0, 0, 0, time.UTC) }
+	source := func(dial func(context.Context, string, string) (net.Conn, error)) *SessionSource {
+		s, err := newSessionSource("unused-token-path", caPEM, now, dial)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	good := func() AssemblyConfig {
+		s := source(upstreams.dial)
+		tasks := &TaskSource{path: s.path, client: source(upstreams.dial).client, now: now}
+		return AssemblyConfig{Sessions: s, Tasks: tasks, Pages: newPagesSource(true, now, upstreams.dial),
+			Asks: &AsksSource{client: source(upstreams.dial).client}, Claims: &ClaimsSource{client: source(upstreams.dial).client}}
+	}
+	if err := localTestDialersFixtureOnly(good(), upstreams); err != nil {
+		t.Fatalf("fixture-only config refused: %v", err)
+	}
+	realDial := (&net.Dialer{}).DialContext // never called: no request is sent
+	for name, mutate := range map[string]func(*AssemblyConfig){
+		"sessions default dialer": func(c *AssemblyConfig) { c.Sessions = source(nil) },
+		"tasks real dialer":       func(c *AssemblyConfig) { c.Tasks.client = source(realDial).client },
+		"pages default dialer":    func(c *AssemblyConfig) { c.Pages = newPagesSource(true, now, nil) },
+		"asks default dialer":     func(c *AssemblyConfig) { c.Asks.client = source(nil).client },
+		"claims proxy":            func(c *AssemblyConfig) { c.Claims.client.Transport.(*http.Transport).Proxy = http.ProxyFromEnvironment },
+		"claims missing":          func(c *AssemblyConfig) { c.Claims = nil },
+		"conversations":           func(c *AssemblyConfig) { c.Sessions.conversations = previewConversation{} },
+	} {
+		c := good()
+		mutate(&c)
+		if err := localTestDialersFixtureOnly(c, upstreams); !errors.Is(err, errLocalTestNetwork) {
+			t.Fatalf("%s accepted", name)
+		}
 	}
 }

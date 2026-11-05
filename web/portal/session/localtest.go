@@ -29,6 +29,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -165,16 +166,43 @@ func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func
 	if err != nil {
 		return nil, err
 	}
-	assembly := productionGate(NewAssembly(AssemblyConfig{
+	config := AssemblyConfig{
 		Session: engine, Authorizer: localTestAuthorizer{principal: principal}, Reader: portal.UnavailableReader{},
 		Sessions: sessions, Tasks: tasks, Pages: newPagesSource(true, now, upstreams.dial),
 		Asks:     &AsksSource{path: asksBase.path, client: asksBase.client, now: now},
 		Claims:   &ClaimsSource{path: claimsBase.path, client: claimsBase.client, now: now, project: claimsProject},
 		FreshFor: 5 * time.Minute, Now: now,
-	}), localTestHost)
+	}
+	if err := localTestDialersFixtureOnly(config, upstreams); err != nil {
+		return nil, err
+	}
+	assembly := productionGate(NewAssembly(config), localTestHost)
 
 	hosts := map[string]bool{listen.String(): true, net.JoinHostPort("localhost", portText(listen)): true}
 	return &localTestGate{next: assembly, hosts: hosts, cookie: cookieValue}, nil
+}
+
+// localTestDialersFixtureOnly refuses to build the instance unless every
+// source's client dials through the fixture net, has no proxy, and no source
+// carries another reader. It runs before any request can be served.
+func localTestDialersFixtureOnly(c AssemblyConfig, upstreams *localTestNet) error {
+	if c.Sessions == nil || c.Tasks == nil || c.Pages == nil || c.Asks == nil || c.Claims == nil || c.Send != nil || c.Launch != nil {
+		return errLocalTestNetwork
+	}
+	if c.Sessions.conversations != nil || c.Sessions.allowance != nil || c.Sessions.currentSource != nil || c.Sessions.aggregateAllowance != nil || c.Sessions.questionAuditProject != "" {
+		return errLocalTestNetwork
+	}
+	want := reflect.ValueOf(upstreams.dial).Pointer()
+	for _, client := range []*http.Client{c.Sessions.client, c.Tasks.client, c.Pages.client, c.Asks.client, c.Claims.client} {
+		if client == nil {
+			return errLocalTestNetwork
+		}
+		transport, ok := client.Transport.(*http.Transport)
+		if !ok || transport.Proxy != nil || transport.DialTLSContext != nil || transport.DialContext == nil || reflect.ValueOf(transport.DialContext).Pointer() != want {
+			return errLocalTestNetwork
+		}
+	}
+	return nil
 }
 
 func portText(a netip.AddrPort) string {

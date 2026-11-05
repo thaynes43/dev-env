@@ -94,18 +94,27 @@ It does not prove:
 - the Asks answer form, which needs the Postgres receipt store and is absent;
 - the live configuration: Pages, Asks and Claims are always on here, while
   the live portal enables each by its mounted config;
+- anything about time: the clock is frozen at the fixture's `now`, so pages
+  never age, go stale or expire;
 - real operator, OpenProject or Alertmanager responses;
 - TLS, the ingress, or the deployment.
+
+The banner adds a row at the top of every page. Screenshots and layout or
+overflow comparisons against the live portal or the static preview differ by
+that row.
 
 Authenticated checks against the live portal remain Tom's.
 
 ## How it stays out of production
 
 The code compiles only with `-tags portallocaltest`. `make build-portal` and
-the portal image never set that tag. Tests in the default build check that
-and check that the production gate refuses requests shaped like the local
-instance's. The instance opens no network connection: every upstream name is
-an in-memory fixture server, and every other destination is refused.
+the portal image never set that tag, and `make build-portal` clears any tag
+set through `GOFLAGS`. Tests in the default build check that and check that
+the production gate refuses requests shaped like the local instance's. The
+instance opens no outbound connection; its only socket is the loopback
+listener. Every upstream name is an in-memory fixture server, every other
+destination is refused, and the instance refuses to start if any source's
+client could dial anything else.
 
 ## Tests
 

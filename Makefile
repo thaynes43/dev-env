@@ -137,7 +137,7 @@ build: $(addprefix $(BIN_DIR)/,$(BINARIES)) ## Build every shared binary into bi
 .PHONY: build-portal
 build-portal: ## Build only the portal BFF. The agent and operator images do not run this target.
 	@mkdir -p $(BIN_DIR)
-	$(NICE) $(GO) build -p $(GO_PARALLELISM) -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/dev-env-portal ./cmd/dev-env-portal
+	$(NICE) $(GO) build -p $(GO_PARALLELISM) -tags= -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/dev-env-portal ./cmd/dev-env-portal
 
 # The CLI also ships as a macOS binary (laptops). Static like the Linux one.
 .PHONY: build-agent-run-darwin

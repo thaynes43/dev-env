@@ -5,9 +5,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,7 +37,32 @@ func TestLocalTestListenRefusesNonLoopback(t *testing.T) {
 	}
 }
 
+// interceptDNS fails and counts every DNS query in this process for one
+// test. The command test reaches its server by IP literal, so any recorded
+// query means some code tried to resolve a name for a real dial.
+func interceptDNS(t *testing.T) {
+	t.Helper()
+	var mu sync.Mutex
+	var attempts []string
+	previous := net.DefaultResolver
+	net.DefaultResolver = &net.Resolver{PreferGo: true, StrictErrors: true, Dial: func(_ context.Context, network, address string) (net.Conn, error) {
+		mu.Lock()
+		attempts = append(attempts, network+" "+address)
+		mu.Unlock()
+		return nil, errors.New("outbound attempt intercepted by the test")
+	}}
+	t.Cleanup(func() { net.DefaultResolver = previous })
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(attempts) != 0 {
+			t.Errorf("outbound attempts intercepted: %d %v", len(attempts), attempts)
+		}
+	})
+}
+
 func TestLocalTestCommandServesSessionsWithBanner(t *testing.T) {
+	interceptDNS(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	out, in := io.Pipe()
 	done := make(chan int, 1)
