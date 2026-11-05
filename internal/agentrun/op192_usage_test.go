@@ -5,10 +5,22 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/apiserver"
+	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/providerallowance"
 )
 
@@ -79,5 +91,54 @@ func TestOP192UsageLocalPreflightEmitsNoGrokRow(t *testing.T) {
 	}
 	if got := op192UsageProviders(t, out.Bytes()); !reflect.DeepEqual(got, []string{"cursor", "anthropic", "openai"}) {
 		t.Fatalf("R1 preflight emitted %v", got)
+	}
+}
+
+// TestOP192UsageReadCurrentDecodesFourRowEmptySlot serves the store's empty
+// slot through the operator API in store mode. --read-current prints the
+// four-row empty-slot document unchanged, Grok row included.
+func TestOP192UsageReadCurrentDecodesFourRowEmptySlot(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 5, 19, 0, 0, 0, time.UTC)
+	readerUID, readerPod := types.UID("allow-session"), types.UID("allow-pod")
+	sess := remoteSession("reader", readerUID)
+	slot := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: apiserver.AggregateAllowanceNamespace, Name: apiserver.AggregateAllowanceName}, Data: map[string]string{"keep": "yes"}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sess, remotePod(sess, readerPod), slot).Build()
+	token := "tok-allow"
+	store := &apiserver.AggregateAllowanceReportStore{
+		Writer: c, Live: c, Namespace: apiserver.AggregateAllowanceNamespace, Name: apiserver.AggregateAllowanceName, DataKey: apiserver.AggregateAllowanceDataKey,
+		Registry: providerallowance.NewStaticRegistry(providerallowance.RegistryParts{}), MaxAge: 30 * time.Minute,
+	}
+	srv := &apiserver.Server{
+		Client: c, Live: c, Auth: remoteAuth{tokens: map[string]apiserver.Identity{token: remoteIdentity(readerPod)}}, Log: logr.Discard(),
+		Now: func() time.Time { return now },
+		Policy: apiserver.Policy{
+			Human: "dev-env-system/dev-env-human", Clients: []string{"dev/dev-env"},
+			SessionNamespace: "dev-agents", SessionServiceAccount: controller.ServiceAccountName,
+		},
+		AggregateAllowanceReports: &apiserver.AggregateAllowanceReports{
+			Enabled: true, OperatorProducer: true, Store: store, Live: c, Now: func() time.Time { return now },
+			SessionNamespace: "dev-agents", SessionServiceAccount: controller.ServiceAccountName, SessionUIDs: []types.UID{readerUID},
+			PublisherSessionUID: "operator-owned", PublisherServiceAccount: "operator-owned",
+		},
+	}
+	if !srv.AggregateAllowanceReports.RouteEnabled() {
+		t.Fatal("store-mode route is not enabled")
+	}
+	tls := httptest.NewTLSServer(srv.Handler())
+	t.Cleanup(tls.Close)
+	stdout, _ := remoteRun(t, remoteAllowanceEnv(t, tls, token), ExitOK, "usage", "-o", "json", "--read-current")
+	got := remoteDecode(t, []byte(stdout))
+	if !reflect.DeepEqual(got, remoteRoundTrip(t, apiserver.UnconfiguredAggregateDocument())) {
+		t.Fatalf("empty slot changed in transit: %s", stdout)
+	}
+	if want := []string{"cursor", "anthropic", "openai", "grok"}; !reflect.DeepEqual(op192UsageProviders(t, []byte(stdout)), want) {
+		t.Fatalf("providers %v, want %v", op192UsageProviders(t, []byte(stdout)), want)
 	}
 }

@@ -351,10 +351,14 @@ relationship to Cursor is Unknown. This source change is release R1 of its S1
 step. No producer emits a Grok row yet, and no collector, acquisition,
 configuration, credential or network change is included.
 
-- The operator store accepts an optional `grok` status that is only
-  `unconfigured`, with no last-good record, no current freshness and no
-  verified binding, and never a `grok` item. It accepts a three-row document
-  after a four-row one and the reverse.
+- The operator store accepts an optional `grok` status only in a fixed Not
+  connected shape: `unconfigured`, no last-good record, unknown freshness with
+  basis `none`, `unverified` validation with no refs, an `unknown` binding with
+  no account, no workspace and generation 0, one timestamp, and the producer,
+  code and reason of the served empty slot, `Collection.build`'s unconfigured
+  row or the agent-run local preflight. It never accepts a `grok` item, so no
+  Grok account identifier is ever stored. It accepts a three-row document after
+  a four-row one and the reverse.
 - The served empty-slot document lists Grok as Not connected.
 - The portal shows a fixed Grok row after Claude, Codex and Cursor. It is Not
   connected when the Grok status is unconfigured or missing (a stored three-row
@@ -373,12 +377,16 @@ and `agent-run` in the separately pinned agent image (`usage capture`, and
 `usage --publish-file` where the slot accepts external publication). The store
 checks the stored document as well as the new one (`preserveAllowance` calls
 `indexAllowanceStatuses` on both), so an operator older than R1 refuses every
-update once a four-row document is stored. Order: install R1 and verify it is
-serving; only then ship R2, the producers that emit the Grok row (the operator
+update once a four-row document is stored. The constraint starts at R1, not
+R2: where the slot accepts external publication, `--read-current` of the
+four-row empty slot followed by `--publish-file` stores four rows before any
+Grok producer exists. Order: install R1 and verify it is serving; only then
+ship R2, the producers that emit the Grok row (the operator
 collector change and an agent image whose `agent-run` emits it). The agent image
 pin must not move ahead of R1. To roll back, return every four-row producer to
-three rows first, let a three-row document replace the stored one, confirm it by
-a read, and only then move the operator below R1. A pre-R1 operator that meets a
+three rows first (including any republished empty-slot document), let a
+three-row document replace the stored one, confirm it by a read, and only then
+move the operator below R1. A pre-R1 operator that meets a
 stored four-row document fails closed: publication stops and the stored values
 age to stale until an R1-or-later operator is restored.
 

@@ -229,7 +229,7 @@ func (s *AggregateAllowanceReportStore) accept(doc providerallowance.ReadRespons
 		}
 	}
 	for _, provider := range optionalAggregateProviders {
-		if status, ok := statuses[provider]; ok && !notConnectedStatus(status) {
+		if status, ok := statuses[provider]; ok && !notConnectedStatus(provider, status) {
 			return ErrAggregateRejected
 		}
 	}
@@ -533,10 +533,43 @@ func optionalAggregateProvider(provider string) bool {
 	return false
 }
 
+// notConnectedShapes are the only statuses the store keeps for an optional
+// provider (OP192 S1, research R-07): the served empty slot, the
+// Collection.build unconfigured row, and the agent-run local preflight row.
+// Each is fixed text, so nothing in the status can carry an account, a
+// workspace, a provider value or free text.
+var notConnectedShapes = []struct {
+	producer, codePrefix, codeSuffix, reason string
+	result                                   providerallowance.AttemptResult
+}{
+	{"aggregate-unconfigured", "source_unconfigured", "", "unconfigured", providerallowance.AttemptUnknown},
+	{"collection-unconfigured", "source_unconfigured", "", "source not configured", providerallowance.AttemptUnknown},
+	{"agent-run-local-preflight", "local_unconfigured_", "_no_provider_request", "local configuration check; no provider request", providerallowance.AttemptUnavailable},
+}
+
 // notConnectedStatus is the only form an optional provider's status may take:
-// unconfigured, never good, no current freshness, and no verified binding.
-func notConnectedStatus(status providerallowance.SourceStatus) bool {
-	return status.Availability == providerallowance.AvailabilityUnconfigured && gapStatus(status) && status.Binding.State != providerallowance.BindingVerified
+// unconfigured and never good; unknown freshness with basis none and no
+// policy; unverified validation with no refs; an unknown binding with no
+// account, no workspace and generation 0; one timestamp; and one fixed shape.
+func notConnectedStatus(provider string, status providerallowance.SourceStatus) bool {
+	attempt, fresh, binding := status.LastAttempt, status.Freshness, status.Binding
+	if status.Availability != providerallowance.AvailabilityUnconfigured || status.LastGood != nil ||
+		fresh.State != providerallowance.FreshUnknown || fresh.Basis != providerallowance.BasisNone || fresh.PolicyRef != nil ||
+		status.Validation.State != providerallowance.ValidationUnverified || len(status.Validation.ValidationRefs) != 0 ||
+		binding.State != providerallowance.BindingUnknown || binding.Generation != 0 || binding.AccountRef != nil || binding.WorkspaceRef != nil ||
+		attempt.Code == nil || attempt.CompletedAt == nil || *attempt.CompletedAt != attempt.AttemptedAt || fresh.AsOf != attempt.AttemptedAt {
+		return false
+	}
+	for _, shape := range notConnectedShapes {
+		code := shape.codePrefix
+		if shape.codeSuffix != "" {
+			code += provider + shape.codeSuffix
+		}
+		if status.ProducerRef == shape.producer && *attempt.Code == code && fresh.Reason == shape.reason && attempt.Result == shape.result {
+			return true
+		}
+	}
+	return false
 }
 
 func knownAggregateProvider(provider string) bool {

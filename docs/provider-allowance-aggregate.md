@@ -30,14 +30,22 @@ that history when acquisition or trust becomes unavailable, as described below. 
 unchanged and is not used as an aggregate fallback.
 
 A report carries exactly one status each for `cursor`, `anthropic` and
-`openai`. It may also carry one optional `grok` status (OP192 S1): only
-`unconfigured`, with no last-good record, no current freshness, no verified
-binding and no `grok` item. Anything else for Grok is refused. A three-row
-report may replace a stored four-row one and the reverse, so producers can
-move between them in either direction. The served empty-slot document already
-lists Grok as Not connected; no producer emits a Grok row until a later release.
-An operator older than this rule refuses every update once a four-row report is
-stored, so it must not be rolled back while one is stored (see
+`openai`. It may also carry one optional `grok` status (OP192 S1), and only in a
+fixed Not connected shape: `unconfigured`; no last-good record; unknown
+freshness with basis `none` and no policy; `unverified` validation with no refs;
+an `unknown` binding with no account, no workspace and generation 0; one
+timestamp; and the producer, code and reason of the served empty slot,
+`Collection.build`'s unconfigured row or the agent-run local preflight. A
+`grok` item and every other Grok status are refused, so no Grok account
+identifier is ever stored. A three-row report may replace a stored four-row one
+and the reverse.
+
+The served empty-slot document already lists Grok as Not connected. A Grok
+producer ships later, but a four-row report can be stored from R1 on: where the
+slot accepts external publication, `--read-current` of the empty slot followed
+by `--publish-file` of that document stores four rows. An operator older than
+this rule refuses every update once a four-row report is stored, so from R1 on
+it must not be rolled back while one is stored (see
 [DESIGN-030](../.agents/sagas/distributed-dev-env/designs/030-provider-allowance-contract.md),
 OP192 S1).
 
