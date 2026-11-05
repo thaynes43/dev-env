@@ -1103,6 +1103,12 @@ class AnswerTests(AnswerFixture):
         for label, options in cases.items():
             with self.subTest(label=label):
                 receipt = self.inspect_now()["receipt"]
+                trust = options.get("trust")
+                if "expect" not in options and trust and " " not in trust:
+                    # The expected text names the same path, so only the path rule can refuse it.
+                    named = self.root / "expect-named"
+                    named.write_text(self.fix(TRUST_EXPECT).replace(self.worktree, trust))
+                    options = dict(options, expect=named)
                 self.log.write_text("")
                 approval = self.case_approval(label)
                 code, refused = self.invoke("answer", self.answer_args(receipt, approval=approval, **options))
@@ -1124,6 +1130,7 @@ class AnswerTests(AnswerFixture):
             "a trailing slash": (self.box_row(path + "/"), "trust-path-mismatch"),
             "attached punctuation": (self.box_row(path + "?"), "trust-path-mismatch"),
             "a home-relative form": (self.box_row("~/example-task"), "trust-path-mismatch"),
+            "the home directory as ~": (self.box_row("~"), "trust-path-mismatch"),
             "a shortened form": (self.box_row(path[:-4] + "\u2026"), "trust-path-mismatch"),
             "a second path in the prompt": (self.box_row(path) + self.box_row("Parent: /tmp"), "trust-path-mismatch"),
             "a URL in the prompt": (self.box_row(path) + self.box_row("Docs: https://cursor.com/docs"),
@@ -1159,7 +1166,29 @@ class AnswerTests(AnswerFixture):
             self.assertEqual(self.sends(), [])
             self.assertFalse(self.ledger(approval).exists())
 
+    def test_trust_path_between_box_borders_is_named(self):
+        # Characterization: box-drawing characters separate words like spaces do.
+        self.screen(self.trust_screen("  \u2502" + self.worktree + "\u2502\n"))
+        inspected = self.start_and_inspect()
+        code, answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual((code, answered["state"]), (0, "answered"))
+
     # Visible-screen location (QA rounds 1 and 2, LOW 3).
+
+    def test_history_size_change_since_inspect_is_stale(self):
+        inspected = self.start_and_inspect()
+        self.env["FAKE_HISTORY"] = "5"
+        code, stale = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
+        self.assertEqual(self.sends(), [])
+
+    def test_inexact_history_size_is_refused(self):
+        code, _started = self.invoke("start")
+        self.assertEqual(code, 0)
+        for value in ("x", "-1", "3 "):
+            with self.subTest(value=value):
+                code, refused = self.invoke("inspect", env={"FAKE_HISTORY": value})
+                self.assertEqual((code, refused["state"]), (3, "inspect-unconfirmed"))
 
     def test_capture_row_count_must_match_tmux_history_and_height(self):
         # If tmux dropped blank rows, the last pane_height rows would reach up into
