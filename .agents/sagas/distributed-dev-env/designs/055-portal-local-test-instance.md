@@ -4,8 +4,9 @@
   [#944](https://github.com/thaynes43/dev-env/pull/944).
 - **Origin:** Tom asked why agents need the live UI when they can host an
   identical test instance locally, with no auth, and drive it with headless
-  Chrome or Playwright tests. The work order came from the coordinator; no
-  OpenProject story ID was given.
+  Chrome or Playwright tests.
+- **Tracking:** [Story OP476](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/476),
+  "Agent-local portal UI/API development and testing entry".
 - **Builds on:** [DESIGN-029](029-portal-foundations.md) (portal foundations),
   [DESIGN-045](045-portal-claims-view.md) (Claims), the preview harness in
   `web/portal/preview`.

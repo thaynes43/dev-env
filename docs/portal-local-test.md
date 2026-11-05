@@ -4,7 +4,8 @@ Run the dev-env v2 portal on a loopback address, with fixture data and one
 fixed test principal, and drive it with headless Chromium or Playwright. It
 serves the production routes, handlers, templates, CSS and CSP. Every page
 carries a "Local test instance" banner. Design:
-[DESIGN-055](../.agents/sagas/distributed-dev-env/designs/055-portal-local-test-instance.md).
+[DESIGN-055](../.agents/sagas/distributed-dev-env/designs/055-portal-local-test-instance.md);
+story [OP476](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/476).
 
 ## Start it
 
