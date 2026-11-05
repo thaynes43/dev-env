@@ -173,3 +173,39 @@ func TestLocalTestLaunchFlow(t *testing.T) {
 		t.Fatalf("refused launches reached the operator: %d -> %d", before, after)
 	}
 }
+
+// TestLocalTestHistoryFlow drives the production conversation source: the
+// Sessions page links a history target's conversation, selecting it reads the
+// fixture operator's conversation route once per view, and a session outside
+// the history scope is never read.
+func TestLocalTestHistoryFlow(t *testing.T) {
+	instance := newLocalTestForTest(t)
+	const uid = "fixture-uid-coordinator"
+	conversation := apiv1.PortalConversationPrefix + uid + "/conversation"
+	page := serveLocalTest(instance, localTestRequest(http.MethodGet, SessionsPath))
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `<a href="`+SessionsPath+`?session=`+uid+`">Load this session's conversation</a>`) {
+		t.Fatalf("no conversation link for the coordinator (status %d)", page.Code)
+	}
+	if calls := localTestCallsTo(instance, conversation); len(calls) != 0 {
+		t.Fatalf("the list view read %d conversations", len(calls))
+	}
+	for view := 1; view <= 2; view++ {
+		selected := serveLocalTest(instance, localTestRequest(http.MethodGet, SessionsPath+"?session="+uid))
+		body := selected.Body.String()
+		if selected.Code != http.StatusOK || !strings.Contains(body, "Fixture conversation: review the portal composer.") || !strings.Contains(body, "Fixture reply: the composer renders.") {
+			t.Fatalf("view %d: conversation missing (status %d)", view, selected.Code)
+		}
+		calls := localTestCallsTo(instance, conversation)
+		if len(calls) != view || calls[view-1].Method != http.MethodGet {
+			t.Fatalf("view %d: fixture operator saw %d conversation reads", view, len(calls))
+		}
+	}
+	// A session outside the history scope shows no conversation and is not read.
+	outside := serveLocalTest(instance, localTestRequest(http.MethodGet, SessionsPath+"?session=fixture-uid-portal-polish"))
+	if outside.Code != http.StatusOK || strings.Contains(outside.Body.String(), "Fixture conversation:") {
+		t.Fatalf("out-of-scope session %d", outside.Code)
+	}
+	if calls := localTestCallsTo(instance, apiv1.PortalConversationPrefix+"fixture-uid-portal-polish/conversation"); len(calls) != 0 {
+		t.Fatalf("out-of-scope conversation read %d times", len(calls))
+	}
+}

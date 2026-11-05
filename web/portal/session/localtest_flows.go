@@ -10,14 +10,18 @@ package session
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/web/portal"
 )
@@ -159,6 +163,54 @@ func (o *localTestWrites) launch(w http.ResponseWriter, body []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_, _ = w.Write(raw)
+}
+
+// localTestCurrentAuthorizer is the production group authorizer, asking the
+// fixture identity provider's UserInfo route over the fixture net.
+func localTestCurrentAuthorizer(store *localTestStore, ca []byte, now func() time.Time, upstreams *localTestNet) (*CurrentAuthorizer, error) {
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(ca) {
+		return nil, portal.ErrUnavailable
+	}
+	return newCurrentAuthorizer(CurrentAuthorizationConfig{Issuer: localTestIssuer, UserInfoURL: "https://" + localTestIssuerHost + "/application/o/userinfo/", Store: store, Now: now, Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}, upstreams.dial)
+}
+
+// localTestUserInfo answers the group check for the fixed principal's
+// fixture access token only.
+func localTestUserInfo() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/application/o/userinfo/" || r.Header.Get("Authorization") != "Bearer "+localTestAccessToken {
+			http.Error(w, "fixture identity provider refused", http.StatusUnauthorized)
+			return
+		}
+		localTestJSON(w, "application/json", []byte(`{"sub":"`+localTestSubject+`","portal_is_active":true,"portal_is_admin":true}`))
+	})
+}
+
+// localTestHistoryTargets is the fixture history scope: the interactive
+// fixture sessions only.
+func localTestHistoryTargets() map[string]string {
+	return map[string]string{"fixture-uid-coordinator": "fixture-coordinator", "fixture-uid-terminal": "fixture-terminal"}
+}
+
+// conversation answers the operator's conversation route with a short fixture
+// projection for a history target, and records the read.
+func (o *localTestWrites) conversation(w http.ResponseWriter, r *http.Request) {
+	o.calls.add(localTestCall{Method: r.Method, Path: r.URL.Path})
+	uid := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, apiv1.PortalConversationPrefix), "/conversation")
+	name, ok := localTestHistoryTargets()[uid]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	at := o.now().UTC()
+	projection := protocol.PortalConversation{State: "truncated", ReasonCode: "source_limit", ConversationID: "00000000-0000-4000-8000-0000000000c1", OldestSeq: 1, NewestSeq: 3, ObservedAt: at, Turns: []protocol.PortalConversationTurn{
+		{Seq: 1, At: at.Add(-26 * time.Minute), Role: "user", Text: "Fixture conversation: review the portal composer."},
+		{Seq: 2, At: at.Add(-24 * time.Minute), Role: "assistant", Text: "Fixture reply: the composer renders."},
+		{Seq: 3, At: at.Add(-9 * time.Minute), Role: "delivered-message", From: "fixture-coordinator-parent", Text: "Fixture relay for " + name + "."},
+	}}
+	raw, _ := json.Marshal(apiv1.PortalConversationResponse{SessionName: name, SessionUID: uid, PodUID: "fixture-pod-" + uid, Projection: projection})
+	localTestJSON(w, "application/json", raw)
 }
 
 // localTestSend wires the production send handler: every fixture session is a
