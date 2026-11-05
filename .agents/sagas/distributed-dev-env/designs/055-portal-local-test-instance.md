@@ -161,6 +161,10 @@ against the live portal differ by that row.
 
 ## 8. Follow-ups
 
+This is a read-only increment (sessions, tasks, pages, asks, claims); send,
+launch, history and the Asks answer form are tracked in OpenProject
+[#479](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/479).
+
 - Send, launch and history with fixture transports and an in-memory receipt
   store, so the composer can be driven.
 - An Attention metadata fixture, if Attention is wired in production.

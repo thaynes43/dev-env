@@ -6,6 +6,9 @@ serves the production routes, handlers, templates, CSS and CSP. Every page
 carries a "Local test instance" banner. Design:
 [DESIGN-055](../.agents/sagas/distributed-dev-env/designs/055-portal-local-test-instance.md);
 story [OP476](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/476).
+This is a read-only increment (sessions, tasks, pages, asks, claims); send,
+launch, history and the Asks answer form are tracked in OpenProject
+[#479](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/479).
 
 ## Start it
 
