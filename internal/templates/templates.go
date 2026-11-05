@@ -212,10 +212,17 @@ type Rollout struct {
 	// off: new sessions get the current revision, running ones keep their pods
 	// until their own suspend and resume. A value that names another image
 	// makes the templates invalid, so a later image bump must set it again or
-	// remove it; removing it resumes drain on idle (Q-03). Deploy order: the
-	// operator that knows the field first, on every replica; the field with
-	// or before the image bump, never with the operator pin; no operator
-	// rollback below this field while it is set (DESIGN-001 5.2).
+	// remove it; removing it resumes drain on idle (Q-03). The haynes-ops
+	// Renovate rule bumps only the image line, so each bump PR must do that by
+	// hand. While the templates are invalid nothing is lost, but new sessions,
+	// resumes, replacement pods, hold-pod rescues and HOME expiry wait,
+	// coordinator creates, portal launches and the managed-launch check are
+	// refused, default archive and idle-suspend timers pause, and a drain whose
+	// stop was recorded keeps its stopped pod; suspend and reap of a running
+	// pod, heartbeats and reads still work. Deploy order: the operator that
+	// knows the field first, on every replica; the field with or before the
+	// image bump, never with the operator pin; no operator rollback below this
+	// field while it is set (DESIGN-001 5.2).
 	NewSessionsOnlyImage string `json:"newSessionsOnlyImage,omitempty"`
 }
 

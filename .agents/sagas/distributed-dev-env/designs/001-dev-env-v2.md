@@ -2096,9 +2096,24 @@ It fails safe and is visible:
 - A set value that differs from `image`, by even one character, makes the
   templates invalid. The parse error names both values. Every session with a
   pod then reports `Outdated` as `Unknown` / `TemplatesInvalid` with that
-  error, new sessions wait `Pending`, and nothing drains. So a set field never
-  silently stops holding: a later image bump must either set the field to the
-  new image (hold again) or remove it (resume Q-03).
+  error, and nothing drains. So a set field never silently stops holding: a
+  later image bump must either set the field to the new image (hold again) or
+  remove it (resume Q-03). The haynes-ops Renovate rule for the templates
+  image matches only the `image:` line, so a Renovate bump never updates the
+  field: every later bump PR must update or remove it by hand, or the
+  templates are refused and the work below waits.
+- While the templates are invalid, nothing is lost, but this is what happens:
+  - waits until they are fixed: new sessions, resumes, replacement pods for
+    preempted or evicted sessions, any rescue that needs a hold pod (a reap
+    or archive of a session with no pod included), and private HOME expiry;
+  - refused: coordinator task creates, portal launches and the managed-launch
+    budget check;
+  - paused: archive timers on the templates' default window and D-09's idle
+    suspend timer;
+  - not finished: a drain whose stop was already recorded; its pod, whose
+    agent is already stopped, stays until the templates are fixed;
+  - still working: an owner's suspend and reap of a session with a running
+    pod, heartbeats, and API reads.
 - While the hold is active, every outdated session reports `Outdated` `True`
   with reason `OlderRevisionHeld` and a message that names the field, and the
   operator logs once, when it loads templates whose hold state differs from
