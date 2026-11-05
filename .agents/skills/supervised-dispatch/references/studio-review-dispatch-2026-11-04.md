@@ -62,4 +62,6 @@ Relayed, about the coordination task `dev-env-1105-001704`:
   model is Unknown.
 
 The rule this gives is step 5 of the loop: re-observe the same task. Never
-launch it again, and never mint or renew a token because its log is not ready.
+launch it again. The bootstrap token serves that one launch only: never renew
+it, never reuse it for observation, and never mint another because the log is
+not ready.

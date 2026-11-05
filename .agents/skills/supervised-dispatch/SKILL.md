@@ -231,12 +231,13 @@ example, labelled historical, is in
    still starting: `agent-run log` can answer not found, and the agent state
    can still be pending. That is the same task starting, not a failure.
    Re-read that same Session within a bounded observer window. The work order
-   sets the window; if it does not, ask its owner. Re-read with access you
-   already hold. A short-lived token minted for the launch serves only within
-   its approval and only while it lasts. Never launch the task again because
-   its log is not ready yet, and never mint another token or renew one to
-   keep watching it. When the observer window ends, record the child's identity and last
-   observed state in the custody record (timer-checkin, section 2), and keep
+   sets the window; if it does not, ask its owner. Re-read with other access
+   you already hold. A short-lived bootstrap token minted for the launch serves
+   that one launch only: it is kept in memory only, never renewed, and never
+   reused for observation. Never launch the task again because its log is not
+   ready yet, and never mint a token to keep watching it. When the observer
+   window ends, record the child's identity and last observed state in the
+   custody record (timer-checkin, section 2), and keep
    observing it through later authorized reads of that same task. The window
    ends the observation, not the task or its assignment. If no authorized read
    path is left, for example because the launcher's only credential was that
@@ -247,7 +248,11 @@ example, labelled historical, is in
 6. **Watch for the return with a bounded PR-or-exit watcher**
    ([timer-checkin, section 1](../timer-checkin/SKILL.md#1-what-exists)). It
    ends when a PR appears on the child's branch, when the child ends, when
-   reads fail or are refused, or at its deadline.
+   reads fail or are refused, or at its deadline. If the child's remaining
+   work waits on a decision only Tom can make, such as a merge or a trust
+   approval, end the watcher. That work is a pending decision (section 5;
+   timer-checkin, section 6): record a checkpoint with its resume trigger,
+   Tom's verified answer, and keep no timer, watcher or poll for it.
 7. **Take the return:** the task exit, verdict and retained outcome from
    `agent-run show`, the log while the pod still runs, and the PR with its
    committed artifacts. Copy them into the custody record at once
