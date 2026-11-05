@@ -281,12 +281,25 @@ Handle it like this:
    normal empty prompt: through `reply` for a helper-started session, or the
    literal send-keys line of route 3 for a plain-tmux pane. Cursor's normal
    `→` composer row classifies as `unclassified`, so `reply` needs
-   `--observed-ready` there. Before giving that flag, read the inspect's whole
-   `text`, history rows included: any prompt in the history must be the one
-   just answered, not a prompt taller than the pane that is still pending. If
-   the read still shows the prompt (a `modal-*` classification, or the prompt
-   on a plain-tmux screen), do not override it: send no keys at all (route 3
-   included), no `--observed-ready`, nothing to clear the screen. The helper
+   `--observed-ready` there. The answered trust box can stay on the screen
+   above that composer. The helper stops counting it as a prompt only when its
+   ledger holds this pane's sent answer and the box rows are that prompt,
+   without the `▶` marker, plus Cursor's `⏳ Trusting workspace...` row
+   ([the answered trust box](../../../docs/cursor-interactive-session.md#the-answered-trust-box)).
+   Such an answered box is not the prompt still showing: its classification
+   is not `modal-*`, and `classification_detail` names the approval reference.
+   For a ledger entry written before format 2 (helpers at 5bf24fec and
+   earlier), pass that answer's exact `--expect-text-file` as
+   `--answered-text-file` to both `inspect` and `reply`, the same on both. The
+   helper checks it against the entry's `expected_text_sha256` and the pane,
+   never writes the ledger, and refuses it with `answered-text-unaccepted`
+   when it does not match. Before giving `--observed-ready`, read the
+   inspect's whole `text`, history rows included: any prompt there must be the
+   one just answered, not a prompt taller than the pane that is still
+   pending. If the read still shows the prompt (a `modal-*` classification,
+   or the prompt on a plain-tmux screen), do not override it: send no keys at
+   all (route 3 included), no `--observed-ready`, nothing to clear the
+   screen. The helper
    ignores prompt text in its history rows only when it can locate the visible
    screen; otherwise a prompt anywhere in its capture still blocks (see the
    helper's

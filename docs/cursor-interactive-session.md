@@ -131,7 +131,7 @@ Fail closed, with no keys and no Enter:
 | Pane id, pid, cwd, session, or command changed | `pane-replaced` |
 | tmux copy/mode flag set | `pane-in-mode` |
 | Receipt missing, old, or capture changed | `stale-receipt` |
-| Trust, permission, approval, or unrecognized confirmation phrasing on the visible screen (anywhere in the capture when that screen cannot be located) | `modal-trust`, `modal-permission`, `modal-approval`, `modal-unknown` |
+| Trust, permission, approval, or unrecognized confirmation phrasing on the visible screen (anywhere in the capture when that screen cannot be located), except in a trust box the ledger shows answered ([the answered trust box](#the-answered-trust-box)) | `modal-trust`, `modal-permission`, `modal-approval`, `modal-unknown` |
 | Cursor row, or the row above a blank cursor row, is a nonempty `>`, `›`, or `❯` composer | `user-draft` |
 | Screen is not that composer and has no known modal phrase | `unclassified-ui` unless `--observed-ready` |
 
@@ -187,9 +187,14 @@ receipt with the same prompt still showing do not allow a second answer.
 
 The entry records `answered_at` (UTC), `approval_ref`, `name`, `kind`,
 `choice`, `expected_text_sha256`, `pane_id`, `pane_pid`, `owner`,
-`trust_path` (for a trust answer) and `outcome`. The task's state file keeps the same record in `answers` (the last
-32). `outcome` is `sent`; `not-sent` when the pane changed after the spend
-(below); or `uncertain` when tmux failed or timed out. An
+`trust_path` (for a trust answer) and `outcome`. Since ledger `format` 2 it
+also records `worktree`, `box_rows_sha256` (a SHA-256 of the expected lines,
+with the selection marker `▶ ` taken off) and `box_marker_rows` (which of
+those lines had the marker). `inspect` and `reply` use these to know the
+answered box again ([below](#the-answered-trust-box)). The task's state file
+keeps the same record in `answers` (the last 32). `outcome` is `sent`;
+`not-sent` when the pane changed after the spend (below); or `uncertain` when
+tmux failed or timed out. An
 entry still at `sending` means the process ended before it recorded the
 outcome; treat it as uncertain. An uncertain answer stays uncertain until a
 supported observation settles it; it is never answered again under the same
@@ -346,7 +351,73 @@ narrows the window; it cannot close it.
 
 After an answer, inspect again. Old prompt text can stay in the history rows
 of the capture. `inspect` and `reply` do not count it there; `reply` refuses
-while a prompt is on the visible screen.
+while a prompt is on the visible screen, except an answered trust box (next).
+
+### The answered trust box
+
+After `[a]` answers a trust prompt, Cursor prints `⏳ Trusting workspace...`
+inside the same box, drops the `▶` marker, and draws its banner and composer
+below. The box can stay on the visible screen. `inspect` and `reply` stop
+counting that box as a prompt only when all of these hold:
+
+1. **Ledger.** The last answer in the task's state is a trust answer whose
+   ledger entry has `format` 2, `outcome` `sent`, and this task's name, pane
+   id, pane pid, owner marker and worktree (also as `trust_path`). The state's
+   record is the entry without its `name`. An unreadable entry or any other
+   outcome is not evidence, and the screen alone never is. Only a regular
+   file is read: a symbolic link is not followed, and the open does not block.
+   An entry written before `format` 2 is evidence only with
+   `--answered-text-file` (below).
+2. **Box.** Every border on the visible screen pairs (rule 4). Exactly one box
+   holds a prompt phrase. It has no title, holds no other box, is not inside
+   one, and has nothing to its left. Its rows, trimmed as in rule 4 and
+   without blank rows, are the answered prompt's rows plus exactly one row
+   that is exactly `⏳ Trusting workspace...` (U+23F3, a space, the words,
+   three full stops). The `▶` marker must be gone from every row, as on the
+   live screen: a box that still shows it stays a prompt. Nothing else may
+   differ: `box_rows_sha256` decides (`box_marker_rows` records which rows
+   had the marker).
+3. **Below.** The cursor is on the last pane row, below the box, and no row
+   on the visible screen outside the box has a prompt phrase.
+
+`inspect` stores with the receipt which ledger answer, if any, its
+classification relied on. `reply` refuses with `stale-receipt` when its own
+reliance differs, for example after an `inspect` without
+`--answered-text-file` and a `reply` with it.
+
+Then the screen is classified as if the box were not there: `active` for an
+empty `>` composer at the cursor, `user-draft` for a draft, and otherwise
+`unclassified`, which still needs `--observed-ready`. Cursor's own `→`
+composer is `unclassified`. `classification_detail` names the approval
+reference. Anything else is refused as before: no ledger entry, an entry for
+another pane, pid, owner or worktree, a box that differs, a second prompt box,
+a nested box, another prompt on the screen, a screen that cannot be located,
+a stale receipt or a changed pane. The ledger shows that the key was sent, not
+that Cursor accepted it.
+
+**Ledger entries written before `format` 2** (by every helper before it:
+5bf24fec and earlier, 8326e2d2 among them) bind the prompt only by
+`expected_text_sha256`. To use one, pass
+`--answered-text-file` to both `inspect` and `reply`: the exact
+`--expect-text-file` of that answer. It is read and checked like
+`--expect-text-file` (at most 4096 bytes, 1..20 nonblank lines, no control
+characters but newlines; otherwise `invalid-input`). The helper accepts it
+only when:
+
+- its SHA-256 equals the entry's `expected_text_sha256`;
+- the entry is the task's last answer, a trust answer with `outcome` `sent`;
+- the entry names this task, pane id, pane pid and owner marker;
+- its `trust_path` is the recorded worktree;
+- the state's record is the entry without its `name`, and the entry has none
+  of the `format` 2 fields.
+
+It then derives `box_rows_sha256` and `box_marker_rows` from the file as
+`answer` would, and applies rules 2 and 3 unchanged. With a `format` 2 entry,
+the file must give the same evidence as the entry. A file that is not
+accepted is `answered-text-unaccepted`, and nothing is sent. The flag reads
+the ledger and the state and never writes them. It changes nothing else: a
+stale receipt, a changed pane, another prompt or a draft still refuse.
+Without it, an entry written before `format` 2 is not evidence.
 
 This command is source only. It is not deployed to any host. Using it on a
 live pane, such as the PR #917 continuation's Cursor pane, still needs Tom's
@@ -365,7 +436,8 @@ prove from tmux text. Classification is intentionally narrow:
   workspace trust, permission required, command approval, and generic
   confirmations such as `yes/no` or `are you sure`. A phrase that is only in
   the history rows, such as an answered prompt that scrolled up, does not
-  block.
+  block. Neither does a trust box that the ledger and the box rows show
+  answered ([the answered trust box](#the-answered-trust-box)).
 - When the visible screen cannot be located (the row count does not match, or
   the bounded capture does not hold all of it), the same rules read the whole
   bounded capture, with its last row as the last pane row: a phrase anywhere
@@ -412,7 +484,7 @@ closed as `pane-replaced`.
 | `trust-path-mismatch`, `trust-path-unclear`, `trust-path-missing` | 2 | `answer` sent nothing and did not spend the approval: `--trust-path` is not the recorded worktree, or the visible screen names another path, a path that may continue across rows, or no exact path. |
 | `prompt-changed` | 2 | `answer` sent nothing: the pane changed after the approval was spent. The approval stays spent and its outcome is `not-sent`; a new approval is needed. |
 | `answer-unconfirmed` | 3 | The answer key's outcome is unknown and is recorded as `uncertain`. The approval and the receipt are spent; do not retry or send another key. |
-| `invalid-input`, `prerequisite-unavailable`, `unsupported-client`, `name-consumed`, `not-owned`, `pane-missing`, `pane-dead`, `pane-replaced`, `pane-in-mode`, `stale-receipt`, `modal-*`, `user-draft`, `unclassified-ui` | 2 | Nothing was sent. Correct the input or re-inspect. |
+| `invalid-input`, `prerequisite-unavailable`, `unsupported-client`, `name-consumed`, `not-owned`, `pane-missing`, `pane-dead`, `pane-replaced`, `pane-in-mode`, `stale-receipt`, `modal-*`, `user-draft`, `unclassified-ui`, `answered-text-unaccepted` | 2 | Nothing was sent. Correct the input or re-inspect. |
 | `launch-unconfirmed`, `client-not-running`, `inspect-unconfirmed`, `send-unconfirmed` | 3 | The outcome is unknown or the pane did not stay up. Do not retry automatically. |
 
 Tool calls time out after five seconds. `--observe-seconds` is `0..5` and defaults
