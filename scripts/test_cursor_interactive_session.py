@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import select
 import shlex
 import subprocess
@@ -21,7 +22,7 @@ helper = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(helper)
 
 FAKE = r'''#!/usr/bin/env python3
-import json, os, sys
+import json, os, re, sys
 from pathlib import Path
 args = sys.argv[1:]
 with open(os.environ["FAKE_LOG"], "a") as out:
@@ -69,7 +70,15 @@ if args and args[0] == "display-message":
     cursor_y = os.environ.get("FAKE_CURSOR_Y", "1")
     height = os.environ.get("FAKE_HEIGHT", "2")
     in_mode = "1" if mode == "copy-mode" else "0"
-    print("\t".join([session, pane, pid, dead, path, command, owner, cursor_y, height, in_mode]))
+    values = {
+        "session_name": session, "pane_id": pane, "pane_pid": pid, "pane_dead": dead,
+        "pane_current_path": path, "pane_current_command": command,
+        "@cursor_interactive_owner": owner, "cursor_y": cursor_y, "pane_height": height,
+        "pane_in_mode": in_mode, "history_size": os.environ.get("FAKE_HISTORY", "0"),
+    }
+    # Like tmux, print only the variables the -F format names, in its order.
+    template = args[args.index("-F") + 1]
+    print("\t".join(values[key] for key in re.findall(r"#\{([^}]*)\}", template)))
     sys.exit(0)
 if args and args[0] == "capture-pane":
     sys.stdout.buffer.write(Path(os.environ["FAKE_CAPTURE"]).read_bytes())
@@ -351,8 +360,12 @@ class CursorInteractiveTests(unittest.TestCase):
                 raise subprocess.TimeoutExpired(argv, 5)
             if argv[1] == "display-message":
                 owner = (self.root / "owner").read_text()
-                line = "\t".join([self.name, "%7", "123", "0", str(self.repo.resolve()), "client",
-                                  owner, "1", "2", "0"])
+                values = {"session_name": self.name, "pane_id": "%7", "pane_pid": "123", "pane_dead": "0",
+                          "pane_current_path": str(self.repo.resolve()), "pane_current_command": "client",
+                          "@cursor_interactive_owner": owner, "cursor_y": "1", "pane_height": "2",
+                          "pane_in_mode": "0", "history_size": "0"}
+                template = argv[argv.index("-F") + 1]
+                line = "\t".join(values[key] for key in re.findall(r"#\{([^}]*)\}", template))
                 return subprocess.CompletedProcess(argv, 0, line + "\n", "")
             if argv[1] == "capture-pane":
                 return subprocess.CompletedProcess(argv, 0, "S8 answered\n>\n", "")
@@ -539,6 +552,10 @@ TRUST_CAPTURE = (
 )
 # The visible screen as tmux prints it: the prompt box, then blank rows.
 TRUST_SCREEN = TRUST_CAPTURE + "\n\n"
+# Fixture text names this path; each answer test replaces it with its real worktree.
+EXAMPLE_PATH = "/home/dev/work/example-task"
+TRUST_PATH_ROW = "  \u2502    " + EXAMPLE_PATH + "                      \u2502\n"
+assert TRUST_PATH_ROW in TRUST_CAPTURE
 TRUST_EXPECT = (
     "Workspace Trust Required\n"
     "Do you trust the contents of this directory?\n"
@@ -547,6 +564,7 @@ TRUST_EXPECT = (
 )
 APPROVAL = "OP399-approval-2026-11-04T21:40:00Z"
 SECOND_APPROVAL = "OP399-approval-2026-11-04T21:55:00Z"
+DEFAULT_TRUST = object()
 
 
 class AnswerFixture(unittest.TestCase):
@@ -562,17 +580,29 @@ class AnswerTests(AnswerFixture):
 
     def setUp(self):
         super().setUp()
+        # A trust answer names its worktree exactly, so use a path the helper can name.
+        self.repo = self.root / "example-task"
+        self.repo.mkdir()
+        self.worktree = str(self.repo.resolve())
+        self.env["FAKE_WORKTREE"] = self.worktree
         self.expect_path = self.root / "expect"
-        self.expect_path.write_text(TRUST_EXPECT)
+        self.expect_path.write_text(self.fix(TRUST_EXPECT))
         self.screen(TRUST_SCREEN)
 
-    def screen(self, capture, visible=None, cursor=None):
-        """Write a capture. The last `visible` rows are the pane (default: all rows)."""
+    def fix(self, text):
+        return text.replace(EXAMPLE_PATH, self.worktree)
+
+    def screen(self, capture, visible=None, cursor=None, history=None):
+        """Write a capture. The last `visible` rows are the pane (default: all rows).
+
+        tmux reports the rows above the pane as history (default: all of them)."""
+        capture = self.fix(capture)
         self.capture.write_text(capture)
         rows = len(capture.splitlines())
         height = rows if visible is None else visible
         self.env["FAKE_HEIGHT"] = str(height)
         self.env["FAKE_CURSOR_Y"] = str(height - 1 if cursor is None else cursor)
+        self.env["FAKE_HISTORY"] = str(max(0, rows - height) if history is None else history)
 
     def state(self, name=None):
         return json.loads((self.root / "state" / "cursor-interactive-session" / (name or self.name)).read_text())
@@ -581,9 +611,19 @@ class AnswerTests(AnswerFixture):
         digest = __import__("hashlib").sha256(approval.encode("utf-8")).hexdigest()
         return self.root / "state" / "cursor-interactive-session" / "approvals" / digest
 
-    def answer_args(self, receipt, choice="a", kind="modal-trust", approval=APPROVAL, expect=None):
-        return ["--receipt", receipt, "--approval-ref", approval, "--expect-kind", kind,
+    def answer_args(self, receipt, choice="a", kind="modal-trust", approval=APPROVAL, expect=None,
+                    trust=DEFAULT_TRUST):
+        args = ["--receipt", receipt, "--approval-ref", approval, "--expect-kind", kind,
                 "--expect-text-file", str(expect or self.expect_path), "--choice", choice]
+        if trust is DEFAULT_TRUST:
+            trust = self.worktree if kind == "modal-trust" else None
+        return args + ([] if trust is None else ["--trust-path", trust])
+
+    def namespace(self, receipt):
+        return argparse.Namespace(name=self.name, tmux=self.tmux, receipt=receipt,
+                                  approval_ref=APPROVAL, expect_kind="modal-trust",
+                                  expect_text_file=str(self.expect_path), choice="a",
+                                  trust_path=self.worktree)
 
     def sends(self):
         return [args for args in self.commands("tmux") if args[0] == "send-keys"]
@@ -611,7 +651,10 @@ class AnswerTests(AnswerFixture):
                           "pane_id": "%7", "pane_pid": "123", "outcome": "sent"})
         self.assertRegex(record["answered_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertEqual(record["expected_text_sha256"],
-                         __import__("hashlib").sha256(TRUST_EXPECT.encode("utf-8")).hexdigest())
+                         __import__("hashlib").sha256(self.fix(TRUST_EXPECT).encode("utf-8")).hexdigest())
+        # The trust path is recorded with the approval reference.
+        self.assertEqual(record["trust_path"], self.worktree)
+        self.assertEqual(json.loads(self.ledger().read_text())["trust_path"], self.worktree)
         self.assertEqual(self.state()["receipt_id"], "")
         self.assertNotIn("Do you trust", json.dumps(answered))
         code, again = self.invoke("answer", self.answer_args(inspected["receipt"]))
@@ -624,16 +667,18 @@ class AnswerTests(AnswerFixture):
     def test_answer_refuses_prompt_text_mismatch_without_spending(self):
         inspected = self.start_and_inspect()
         variants = {
-            "other path": TRUST_EXPECT.replace("example-task", "other-task"),
-            "missing line": TRUST_EXPECT + "Allow network access\n",
-            "reordered": "Do you trust the contents of this directory?\nWorkspace Trust Required\n[a] Trust this workspace\n",
+            # The expected text must name the trust path, so another path is an input error.
+            "other path": (TRUST_EXPECT.replace("example-task", "other-task"), "invalid-input"),
+            "missing line": (TRUST_EXPECT + "Allow network access\n", "modal-mismatch"),
+            "reordered": ("Do you trust the contents of this directory?\nWorkspace Trust Required\n"
+                          + EXAMPLE_PATH + "\n[a] Trust this workspace\n", "modal-mismatch"),
         }
-        for label, text in variants.items():
+        for label, (text, expected) in variants.items():
             with self.subTest(label=label):
                 expect = self.root / ("expect-" + label.replace(" ", "-"))
-                expect.write_text(text)
+                expect.write_text(self.fix(text))
                 code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], expect=expect))
-                self.assertEqual((code, refused["state"]), (2, "modal-mismatch"))
+                self.assertEqual((code, refused["state"]), (2, expected))
                 self.assertEqual(self.sends(), [])
         self.assertNotEqual(self.state()["receipt_id"], "")
         self.assertFalse(self.ledger().exists())
@@ -653,7 +698,7 @@ class AnswerTests(AnswerFixture):
                 self.screen(capture)
                 inspected = self.start_and_inspect()
                 expect = self.root / "expect-kind"
-                expect.write_text(text)
+                expect.write_text(self.fix(text) + (self.worktree + "\n" if kind == "modal-trust" else ""))
                 code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], choice=choice,
                                                                         kind=kind, expect=expect))
                 self.assertEqual((code, refused["state"]), (2, "modal-mismatch"))
@@ -671,7 +716,7 @@ class AnswerTests(AnswerFixture):
                 self.screen(capture, cursor=cursor)
                 inspected = self.start_and_inspect()
                 expect = self.root / "expect-none"
-                expect.write_text("[a] Apply the change\n" if "Apply" in capture else "[a]\n")
+                expect.write_text(("[a] Apply the change\n" if "Apply" in capture else "[a]\n") + self.worktree + "\n")
                 code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], expect=expect))
                 self.assertEqual((code, refused["state"]), (2, "no-modal"))
                 self.assertEqual(self.sends(), [])
@@ -804,9 +849,7 @@ class AnswerTests(AnswerFixture):
 
     def test_answer_timeout_is_uncertain(self):
         inspected = self.start_and_inspect()
-        args = argparse.Namespace(name=self.name, tmux=self.tmux, receipt=inspected["receipt"],
-                                  approval_ref=APPROVAL, expect_kind="modal-trust",
-                                  expect_text_file=str(self.expect_path), choice="a")
+        args = self.namespace(inspected["receipt"])
         original_run = helper.run
         calls = []
 
@@ -911,7 +954,7 @@ class AnswerTests(AnswerFixture):
             "two kinds on the visible screen": (TRUST_CAPTURE + approval_box, None, "prompt-unclear"),
             "a new trust prompt for another path": (
                 TRUST_CAPTURE + TRUST_SCREEN.replace("example-task", "other-task"),
-                len(TRUST_SCREEN.splitlines()), "stale-prompt"),
+                len(TRUST_SCREEN.splitlines()), "trust-path-mismatch"),
         }
         for label, (capture, visible, expected) in cases.items():
             with self.subTest(label=label):
@@ -965,15 +1008,13 @@ class AnswerTests(AnswerFixture):
                 self.env.pop("FAKE_PID", None)
                 self.env["FAKE_PID"] = "123"
                 inspected = self.start_and_inspect()
-                args = argparse.Namespace(name=self.name, tmux=self.tmux, receipt=inspected["receipt"],
-                                          approval_ref=APPROVAL, expect_kind="modal-trust",
-                                          expect_text_file=str(self.expect_path), choice="a")
+                args = self.namespace(inspected["receipt"])
                 original_spend = helper.spend_approval
 
                 def spend_then_change(path, entry):
                     original_spend(path, entry)
                     if "capture" in change:
-                        self.capture.write_text(change["capture"])
+                        self.capture.write_text(self.fix(change["capture"]))
                     for key, value in change.get("env", {}).items():
                         os.environ[key] = value
 
@@ -1003,6 +1044,153 @@ class AnswerTests(AnswerFixture):
         code, refused = self.invoke("answer", self.answer_args(inspected["receipt"]))
         self.assertEqual((code, refused["state"]), (2, "prompt-unclear"))
         self.assertEqual(self.sends(), [])
+
+    # Trust path binding (QA round 2, LOW 4, release-blocking for the G1 use):
+    # the approval covers one directory, so the answer must name exactly that one.
+
+    def box_row(self, text):
+        return "  \u2502    " + text + "                      \u2502\n"
+
+    def case_approval(self, label):
+        """One approval per subcase, so a key sent in one case cannot mask the next."""
+        return "OP399-case-" + __import__("hashlib").sha256(label.encode("utf-8")).hexdigest()[:16]
+
+    def trust_screen(self, path_rows):
+        """The trust screen with its path row replaced by `path_rows`."""
+        return self.fix(TRUST_SCREEN).replace(self.fix(TRUST_PATH_ROW), path_rows)
+
+    def test_trust_path_must_be_the_recorded_worktree(self):
+        inspected = self.start_and_inspect()
+        sibling = self.repo.parent / "other-task"
+        sibling.mkdir()
+        expect = self.root / "expect-sibling"
+        expect.write_text(self.fix(TRUST_EXPECT).replace(self.worktree, str(sibling)))
+        self.log.write_text("")
+        code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], expect=expect,
+                                                                trust=str(sibling)))
+        self.assertEqual((code, refused["state"]), (2, "trust-path-mismatch"))
+        # Checked against the start record under the lock, before any tmux call.
+        self.assertEqual(self.commands("tmux"), [])
+        self.assertFalse(self.ledger().exists())
+        self.assertNotEqual(self.state()["receipt_id"], "")
+
+    def test_trust_path_input_is_checked_before_any_tmux_call(self):
+        self.start_and_inspect()
+        no_path = self.root / "expect-no-path"
+        # QA's case: the question and the choice, but not the path.
+        no_path.write_text("Workspace Trust Required\nDo you trust the contents of this directory?\n"
+                           "[a] Trust this workspace\n")
+        longer = self.root / "expect-longer-word"
+        longer.write_text(self.fix(TRUST_EXPECT).replace(self.worktree, self.worktree + "-old"))
+        permission = self.root / "expect-permission"
+        permission.write_text("Permission required to continue [a] Allow\n" + self.worktree + "\n")
+        parent = str(self.repo.parent)
+        cases = {
+            "a trust answer without --trust-path": {"trust": None},
+            "--trust-path on a permission answer": {"kind": "modal-permission", "expect": permission,
+                                                    "trust": self.worktree},
+            "relative": {"trust": self.worktree.lstrip("/")},
+            "a dot-dot component": {"trust": self.worktree + "/../example-task"},
+            "a dot component": {"trust": parent + "/./example-task"},
+            "a trailing slash": {"trust": self.worktree + "/"},
+            "a double slash": {"trust": parent + "//example-task"},
+            "a space": {"trust": parent + "/example task"},
+            "home-relative": {"trust": "~/example-task"},
+            "oversize": {"trust": "/" + "a" * 1024},
+            "expected text without the path": {"expect": no_path},
+            "expected text with the path inside a longer word": {"expect": longer},
+        }
+        for label, options in cases.items():
+            with self.subTest(label=label):
+                receipt = self.inspect_now()["receipt"]
+                self.log.write_text("")
+                approval = self.case_approval(label)
+                code, refused = self.invoke("answer", self.answer_args(receipt, approval=approval, **options))
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+                self.assertEqual(self.commands("tmux"), [])
+                self.assertFalse(self.ledger(approval).exists())
+                self.assertEqual(self.state()["receipt_id"], helper.parse_receipt(receipt)["id"])
+
+    def test_trust_prompt_must_name_exactly_the_trust_path(self):
+        path = self.worktree
+        middle = len(path) // 2
+        older = self.box_row(path)
+        cases = {
+            "another path": (self.box_row(str(self.repo.parent / "other-task")), "trust-path-mismatch"),
+            "the parent directory": (self.box_row(str(self.repo.parent)), "trust-path-mismatch"),
+            "a longer name that starts with the path": (self.box_row(path + "-old"), "trust-path-mismatch"),
+            "a child directory": (self.box_row(path + "/nested"), "trust-path-mismatch"),
+            "a path that ends with the path": (self.box_row("/private" + path), "trust-path-mismatch"),
+            "a trailing slash": (self.box_row(path + "/"), "trust-path-mismatch"),
+            "attached punctuation": (self.box_row(path + "?"), "trust-path-mismatch"),
+            "a home-relative form": (self.box_row("~/example-task"), "trust-path-mismatch"),
+            "a shortened form": (self.box_row(path[:-4] + "\u2026"), "trust-path-mismatch"),
+            "a second path in the prompt": (self.box_row(path) + self.box_row("Parent: /tmp"), "trust-path-mismatch"),
+            "a URL in the prompt": (self.box_row(path) + self.box_row("Docs: https://cursor.com/docs"),
+                                    "trust-path-mismatch"),
+            "split across two box rows": (self.box_row(path[:middle]) + self.box_row(path[middle:]),
+                                          "trust-path-mismatch"),
+            # tmux prints a wrapped line as separate rows, so a path at a row edge may continue.
+            "wrapped: the path ends its row and the next row continues it": (
+                "  \u2502    " + path + "\n" + "-old                      \u2502\n", "trust-path-unclear"),
+            "wrapped: the path starts its row after the row above": (
+                "  \u2502    see\n" + path + "                      \u2502\n", "trust-path-unclear"),
+            "no path shown": ("", "trust-path-missing"),
+        }
+        for label, (rows, expected) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(self.trust_screen(rows))
+                inspected = self.start_and_inspect()
+                self.assertEqual(inspected["classification"], "modal-trust")
+                approval = self.case_approval(label)
+                code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], approval=approval))
+                self.assertEqual((code, refused["state"]), (2, expected))
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.ledger(approval).exists())
+        with self.subTest(label="the path only in older rows"):
+            self.restart_case()
+            visible = self.trust_screen("")
+            self.screen(older + visible, visible=len(visible.splitlines()))
+            inspected = self.start_and_inspect()
+            approval = self.case_approval("the path only in older rows")
+            code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], approval=approval))
+            self.assertEqual((code, refused["state"]), (2, "trust-path-missing"))
+            self.assertEqual(self.sends(), [])
+            self.assertFalse(self.ledger(approval).exists())
+
+    # Visible-screen location (QA rounds 1 and 2, LOW 3).
+
+    def test_capture_row_count_must_match_tmux_history_and_height(self):
+        # If tmux dropped blank rows, the last pane_height rows would reach up into
+        # history and an old prompt there could look current. The count catches it.
+        rows = len(TRUST_SCREEN.splitlines())
+        older = "older output\n" * 3
+        cases = {
+            "the blank rows below the prompt were dropped": (older + TRUST_CAPTURE, 3),
+            "the prompt is in history and the blank screen was dropped": (
+                older + TRUST_CAPTURE, 3 + len(TRUST_CAPTURE.splitlines())),
+        }
+        for label, (capture, history) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, visible=rows, history=history)
+                inspected = self.start_and_inspect()
+                approval = self.case_approval(label)
+                code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], approval=approval))
+                self.assertEqual((code, refused["state"]), (2, "prompt-unclear"))
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.ledger(approval).exists())
+
+    def test_history_beyond_the_requested_rows_counts_as_80(self):
+        # Characterization: it passes before and after the count check. tmux clamps
+        # -S -80 to 80 history rows, so a longer history still locates the screen.
+        capture = "older output\n" * 80 + TRUST_SCREEN
+        self.screen(capture, visible=len(TRUST_SCREEN.splitlines()), history=500)
+        inspected = self.start_and_inspect()
+        self.assertTrue(inspected["truncated"])
+        code, answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual((code, answered["state"]), (0, "answered"))
 
     def test_help_says_the_caller_owns_the_approval(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "answer", "--help"], capture_output=True,

@@ -822,6 +822,7 @@ def build_parser():
     answer.add_argument("--expect-kind", required=True, help="modal-trust, modal-permission or modal-approval")
     answer.add_argument("--expect-text-file", required=True, help="exact prompt lines that must be shown, in order")
     answer.add_argument("--choice", required=True, help="one key shown as [key] in the expected text")
+    answer.add_argument("--trust-path", help="for modal-trust: the one directory the approval covers; must be the recorded worktree")
     return parser
 
 
