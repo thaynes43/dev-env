@@ -78,13 +78,48 @@ func drainEligible(s *v1alpha1.AgentSession, pod *corev1.Pod, currentRevision st
 	return sessionIdle(s, pod)
 }
 
-// templateRevision is the current template hash, or empty when the templates
-// did not load. An unknown revision is not outdated (DESIGN-001 5.2).
+// templateRevision is the revision the drain phase compares a pod against
+// (drainRevision of the observed templates).
 func templateRevision(obs observation) string {
-	if obs.templates == nil {
+	return drainRevision(obs.templates)
+}
+
+// noteRolloutHold logs the templates' rollout hold state when it differs from
+// the last one logged: once at the first load, then whenever the hold starts,
+// ends or names another image (DESIGN-001 5.2, 2026-11-04 note).
+func (r *Reconciler) noteRolloutHold(ctx context.Context, t *templates.Templates) {
+	if t == nil {
+		return
+	}
+	state := "off"
+	if t.NewSessionsOnly() {
+		state = "held " + t.Image
+	}
+	r.rolloutHoldMu.Lock()
+	changed := r.rolloutHoldLogged != state
+	r.rolloutHoldLogged = state
+	r.rolloutHoldMu.Unlock()
+	if !changed {
+		return
+	}
+	if t.NewSessionsOnly() {
+		log.FromContext(ctx).Info("the templates hold automatic revision drain for their image (rollout.newSessionsOnlyImage, DESIGN-001 5.2): new sessions only", "held", true, "image", t.Image, "revision", t.Revision())
+		return
+	}
+	log.FromContext(ctx).Info("automatic revision drain applies: the templates hold no rollout (DESIGN-001 5.2)", "held", false, "revision", t.Revision())
+}
+
+// drainRevision is the revision automatic drain compares a pod against: the
+// current template hash, or empty when the templates did not load or hold
+// automatic drain for their image (rollout.newSessionsOnlyImage, DESIGN-001
+// 5.2, 2026-11-04 note). An empty revision is not outdated, so nothing is
+// marked Draining and a pending mark without a recorded stop is cancelled.
+// The Outdated condition still reports the real revision.
+func drainRevision(t *templates.Templates) string {
+	if t == nil || t.NewSessionsOnly() {
 		return ""
 	}
-	return obs.templates.Revision()
+	return t.Revision()
 }
 
 // restartProofFor reports whether prepare-restart recorded a conversation for
@@ -129,7 +164,7 @@ func (r *Reconciler) drainIdle(ctx context.Context, s *v1alpha1.AgentSession, t 
 	if s != nil && s.Status.Phase == v1alpha1.PhaseDraining && drainStopRecorded(s, pod) {
 		return r.finishDrain(ctx, s, pod, obs)
 	}
-	if !drainEligible(s, pod, t.Revision()) {
+	if !drainEligible(s, pod, drainRevision(t)) {
 		return false, ctrl.Result{}, false, nil
 	}
 	// observe writes Draining at the end of the reconcile that first notices

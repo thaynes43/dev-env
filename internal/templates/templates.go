@@ -199,7 +199,37 @@ type Templates struct {
 	// change marks no session Outdated.
 	Lifecycle *Lifecycle `json:"lifecycle,omitempty"`
 
+	// Rollout holds automatic revision drain for one image (DESIGN-001 5.2,
+	// 2026-11-04 note). Like the timers, it is not part of the revision.
+	Rollout *Rollout `json:"rollout,omitempty"`
+
 	revision string
+}
+
+// Rollout is how running sessions meet a new revision (DESIGN-001 5.2).
+type Rollout struct {
+	// NewSessionsOnlyImage must equal Image; it turns automatic revision drain
+	// off: new sessions get the current revision, running ones keep their pods
+	// until their own suspend and resume. A value that names another image
+	// makes the templates invalid, so a later image bump must set it again or
+	// remove it; removing it resumes drain on idle (Q-03). The haynes-ops
+	// Renovate rule bumps only the image line, so each bump PR must do that by
+	// hand. While the templates are invalid nothing is lost, but new sessions,
+	// resumes, replacement pods, hold-pod rescues and HOME expiry wait,
+	// coordinator creates, portal launches and the managed-launch check are
+	// refused, default archive and idle-suspend timers pause, and a drain whose
+	// stop was recorded keeps its stopped pod; suspend and reap of a running
+	// pod, heartbeats and reads still work. Deploy order: the operator that
+	// knows the field first, on every replica; the field with or before the
+	// image bump, never with the operator pin; no operator rollback below this
+	// field while it is set (DESIGN-001 5.2).
+	NewSessionsOnlyImage string `json:"newSessionsOnlyImage,omitempty"`
+}
+
+// NewSessionsOnly reports that the templates hold automatic revision drain
+// for their image (DESIGN-001 5.2, 2026-11-04 note).
+func (t *Templates) NewSessionsOnly() bool {
+	return t != nil && t.Rollout != nil && t.Rollout.NewSessionsOnlyImage != "" && t.Rollout.NewSessionsOnlyImage == t.Image
 }
 
 // Workspace names a retained, pre-provisioned claim. The operator only mounts it.
@@ -392,6 +422,8 @@ func (t *Templates) computeRevision() (string, error) {
 func (t *Templates) ReviewRevision() (string, error) {
 	c := *t
 	c.Lifecycle = nil
+	// A rollout hold decides nothing about a pod either (DESIGN-001 5.2).
+	c.Rollout = nil
 	// Marshal sorts map keys, so equal content gives equal bytes.
 	b, err := json.Marshal(&c)
 	if err != nil {
@@ -466,6 +498,15 @@ func (t *Templates) Validate() error {
 		add("image is empty")
 	} else if !strings.Contains(t.Image, "@sha256:") {
 		add("image %q is not pinned by digest (name:tag@sha256:...)", t.Image)
+	}
+	if r := t.Rollout; r != nil {
+		if r.NewSessionsOnlyImage == "" {
+			add("rollout.newSessionsOnlyImage is empty")
+		} else if !strings.Contains(r.NewSessionsOnlyImage, "@sha256:") {
+			add("rollout.newSessionsOnlyImage %q is not pinned by digest (name:tag@sha256:...)", r.NewSessionsOnlyImage)
+		} else if r.NewSessionsOnlyImage != t.Image {
+			add("rollout.newSessionsOnlyImage %q does not match image %q: set it to the image to keep holding automatic drain, or remove it to resume drain on idle (DESIGN-001 5.2)", r.NewSessionsOnlyImage, t.Image)
+		}
 	}
 
 	for _, class := range []v1alpha1.SizeClass{v1alpha1.SizeS, v1alpha1.SizeM, v1alpha1.SizeL} {

@@ -1465,7 +1465,7 @@ sign of activity; the operator's timers judge the window.**
 | interactive or remote session idle | suspended after 3 days | v1's sweep window (Tom, 2026-09-25) |
 | suspended session | archived after 7 days | resume window; RBD is thin, so a parked volume costs only its written bytes |
 | rescue bundle | kept 30 days, and as long as its session exists (D-67) | long enough to notice a loss |
-| outdated revision | drained at the next idle moment (Q-03); summoned sessions are never drained | section 5.2, 3.7 |
+| outdated revision | drained at the next idle moment (Q-03); summoned sessions are never drained; none is drained while the templates hold the rollout for their image (`rollout.newSessionsOnlyImage`, 2026-11-04) | section 5.2, 3.7 |
 | summoned session, outcome `done` | kept joinable 1 day, then rescued and reaped | V-15 (3.7) |
 | summoned session, outcome `failed` or `escalated` | kept joinable 7 days, then rescued and reaped | V-15: Tom joins failures after the fact |
 | summoned session, no activity and no `working` report | closed as its policy's `onUnreported` after its lane's limit (180 min for upgrades; the timeout for `task`) | V-11 (3.7) |
@@ -2077,6 +2077,72 @@ the new version.** Summoned sessions (3.7) are the exception: they are short, th
 belong to an unattended caller, and an escalation that sits idle is waiting on Tom.
 They are never drained; each runs to its outcome on the revision it started on
 (V-13).
+
+**New-sessions-only rollout, source mechanism 2026-11-04 (OpenProject #385, DR1
+rounds 2 and 3; default off).** The templates may name one image in
+`rollout.newSessionsOnlyImage`, and it must equal the templates' `image`. While
+it is set, automatic revision drain is off for every session: no session is
+marked `Draining`, no dry-run or stop runs, and a pending `Draining` mark
+without a recorded stop is cancelled at the next reconcile. A matching
+already-stopped proof still finishes its recovery. A reconcile that read the
+templates before the hold landed can still finish its own stop in that one
+pass. New sessions start on the current revision as always, and each outdated
+session moves to the new revision only through its own suspend and resume
+(D-09's idle suspend included) or a reap. The field is not part of the
+revision, so adding or removing it marks no session `Outdated`.
+
+It fails safe and is visible:
+
+- A set value that differs from `image`, by even one character, makes the
+  templates invalid. The parse error names both values. Every session with a
+  pod then reports `Outdated` as `Unknown` / `TemplatesInvalid` with that
+  error, and nothing drains. So a set field never silently stops holding: a
+  later image bump must either set the field to the new image (hold again) or
+  remove it (resume Q-03). The haynes-ops Renovate rule for the templates
+  image matches only the `image:` line, so a Renovate bump never updates the
+  field: every later bump PR must update or remove it by hand, or the
+  templates are refused and the work below waits.
+- While the templates are invalid, nothing is lost, but this is what happens:
+  - waits until they are fixed: new sessions, resumes, replacement pods for
+    preempted or evicted sessions, any rescue that needs a hold pod (a reap
+    or archive of a session with no pod included), and private HOME expiry;
+  - refused: coordinator task creates, portal launches and the managed-launch
+    budget check;
+  - paused: archive timers on the templates' default window and D-09's idle
+    suspend timer;
+  - not finished: a drain whose stop was already recorded; its pod, whose
+    agent is already stopped, stays until the templates are fixed;
+  - still working: an owner's suspend and reap of a session with a running
+    pod, heartbeats, and API reads.
+- While the hold is active, every outdated session reports `Outdated` `True`
+  with reason `OlderRevisionHeld` and a message that names the field, and the
+  operator logs once, when it loads templates whose hold state differs from
+  the last it logged, whether the hold is active and for which image.
+
+Deploy order and rollback:
+
+1. The operator that knows the field runs on both replicas before any
+   templates file carries it. An older operator refuses the file (strict
+   parsing): new sessions wait `Pending`, running ones are left alone.
+2. The field lands with the image bump it holds, or before it with the
+   current image; never in the same change as the operator pin.
+3. While the field is set, the operator is never rolled back below this
+   change; the older one refuses the file.
+4. Removing the field resumes Q-03 at once for every outdated session, the
+   ones the hold kept included. So does a templates revert that removes it. A
+   PR that removes it is a rollout and needs the same review.
+
+This is **not** Q-03 as published. For the image it names it is option B ("new
+sessions only"), which Tom did not choose; Q-03's default, option A, is
+unchanged for every other image. It exists because, for agents up to 2.89.x,
+the operator cannot prove the idle moment that A's "a busy turn is never cut"
+assumes: the drain checks a heartbeat up to 60 s old, then the existing stop
+runs unconditionally, and a coordinator that is idle can still have native
+background subagents and shells that the drain kills. Setting the field is a
+per-rollout deviation from Q-03 and is recorded in the templates PR that sets
+it; this source change sets nothing.
+
+Drain on idle (Q-03's default, whenever no hold is set) runs these steps:
 
 1. The operator marks the session `Draining` only when it is idle (4.2).
 2. agentd `prepare-restart` records the agent session id, mode, model, effort and
