@@ -2142,6 +2142,8 @@ background subagents and shells that the drain kills. Setting the field is a
 per-rollout deviation from Q-03 and is recorded in the templates PR that sets
 it; this source change sets nothing.
 
+Drain on idle (Q-03's default, whenever no hold is set) runs these steps:
+
 1. The operator marks the session `Draining` only when it is idle (4.2).
 2. agentd `prepare-restart` records the agent session id, mode, model, effort and
    Remote Control name on the volume.
