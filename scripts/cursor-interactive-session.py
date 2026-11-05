@@ -62,10 +62,12 @@ QUEUE_HINT = "\u2190/\u2192 to switch approval"
 # Rejecting the shown command: one Ctrl+C, which Cursor (raw mode) reads as reject for the
 # active decision only. It is never sent outside the command prompt.
 REJECT_CHOICE = "ctrl-c"
-# The footer Cursor draws under a prompt whose agent turn has ended in this error. Only a
-# rejection may be answered with it showing; approving a command its turn no longer awaits
-# is refused.
-ABORT_FOOTER = "Error: Agent stopped retrying"
+# Cursor draws a turn error under the prompt as "Error: <title>" (Agent stopped retrying,
+# Connection failed, ...). With any row after the Skip row or the switch hint, only a
+# rejection may be answered, and those rows must start with such an error line; approving a
+# command its turn may no longer await is refused.
+ERROR_PREFIX = "Error: "
+SKIP_SUFFIX = "(esc or n)"
 MODALS = (
     ("modal-trust", ("trust this workspace", "trust the contents of", "workspace trust", "do you trust")),
     ("modal-permission", ("permission required", "needs permission", "requesting permission")),
@@ -740,14 +742,21 @@ def prompt_shape(expect_kind, choice, lines):
     if choice != REJECT_CHOICE and any("[" + choice + "]" in line for line in lines):
         return "box"
     if expect_kind == "modal-approval" and choice in (COMMAND_CHOICE, REJECT_CHOICE) and sum(
-            line.endswith(" (" + COMMAND_CHOICE + ")") for line in lines) == 1:
+            line.endswith(" (" + COMMAND_CHOICE + ")") for line in prompt_rows(lines)) == 1:
         return "divider"
     return None
 
 
+def prompt_end(lines):
+    """The index after the command prompt's last row: the switch hint, else the Skip row, else
+    the end of the lines."""
+    ends = [index for index, line in enumerate(lines) if line == QUEUE_HINT or line.endswith(SKIP_SUFFIX)]
+    return ends[-1] + 1 if ends else len(lines)
+
+
 def prompt_rows(lines):
-    """The expected lines without the abort footer: the footer starts at its first row."""
-    return lines[:lines.index(ABORT_FOOTER)] if ABORT_FOOTER in lines else lines
+    """The expected lines without the rows after the prompt (a turn error footer)."""
+    return lines[:prompt_end(lines)]
 
 
 def check_queue_text(lines):
@@ -784,13 +793,16 @@ def validate_answer(args):
             line.strip(" ") != prompt_text(line) for line in raw.decode("utf-8").split("\n") if line.strip(" ")):
         raise Refusal("invalid-input", "A command prompt's expected rows must not start or end with a box-drawing or "
                                        "non-space whitespace character. Nothing was sent.")
-    if ABORT_FOOTER in lines:
-        footer = lines.index(ABORT_FOOTER)
-        if choice != REJECT_CHOICE or lines.count(ABORT_FOOTER) != 1 or footer == 0 or not lines[footer - 1].endswith(
-                ("(esc or n)", QUEUE_HINT)):
-            raise Refusal("invalid-input", "The abort footer may follow only the Skip row or the switch hint, once, and "
-                                           "only a ctrl-c rejection may be answered under it. Nothing was sent.")
     if prompt_shape(args.expect_kind, choice, lines) == "divider":
+        # Rows after the Skip row or the hint can only be one turn error footer, and only a
+        # rejection is answered under it. An error line inside the prompt is refused too.
+        tail = lines[prompt_end(lines):]
+        errors = sum(line.startswith(ERROR_PREFIX) for line in lines)
+        if (any(line.startswith(ERROR_PREFIX) for line in prompt_rows(lines))
+                or tail and (choice != REJECT_CHOICE or not tail[0].startswith(ERROR_PREFIX) or errors != 1)):
+            raise Refusal("invalid-input", "Rows after the Skip row or the switch hint must be one turn error footer "
+                                           "(\"Error: ...\"), and only a ctrl-c rejection may be answered under it. "
+                                           "Nothing was sent.")
         check_queue_text(prompt_rows(lines))
     trust_path = getattr(args, "trust_path", None)
     if args.expect_kind == "modal-trust":

@@ -2560,6 +2560,17 @@ class AnswerTests(AnswerFixture):
             "no divider above": ("ctrl-c", self.aborted_rows({divider: ""}), None, "prompt-unclear"),
             "text after the footer": ("ctrl-c", self.aborted_rows({prompt["footer"] + 4: "  queued: git push"}), None,
                                       "prompt-unclear"),
+            "y under another turn error footer": ("y", self.aborted_rows({prompt["footer"]: "  Error: Connection failed"}),
+                                                  expected.replace("Error: Agent stopped retrying", "Error: Connection failed"),
+                                                  "invalid-input"),
+            "y with any row after the hint": ("y", None, "".join(lines[:footer] + ["queued: git push\n"]),
+                                              "invalid-input"),
+            "ctrl-c with a non-error row after the hint": ("ctrl-c", None, "".join(lines[:footer] + ["queued: git push\n"]),
+                                                            "invalid-input"),
+            "the footer right after the Run row": ("ctrl-c", None, "".join(
+                [line for line in lines[:footer] if not line.startswith(("Approval ", "\u2190/\u2192", "Add Shell",
+                                                                         "Run Everything", "Skip &"))]
+                + lines[footer:]), "invalid-input"),
             "a raw Ctrl+C byte": ("\x03", None, expected, "invalid-input"),
             "a tmux key name": ("C-c", None, expected, "invalid-input"),
             "a caret form": ("^C", None, expected, "invalid-input"),
@@ -2588,6 +2599,14 @@ class AnswerTests(AnswerFixture):
                                                    approval=self.case_approval(kind))
                 self.assertEqual((code, refused["state"]), (2, "invalid-input"))
                 self.assertEqual(self.sends(), [])
+        with self.subTest(kind="a box that shows [ctrl-c]"):
+            self.restart_case()
+            screen, text = APPROVAL_SCREEN.replace("[y] Yes", "[ctrl-c] Yes"), APPROVAL_EXPECT.replace("[y] Yes", "[ctrl-c] Yes")
+            self.screen(screen)
+            inspected = self.start_and_inspect()
+            code, refused = self.answer_reject(inspected["receipt"], text, approval=self.case_approval("box ctrl-c"))
+            self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+            self.assertEqual(self.sends(), [])
         with self.subTest(kind="a boxed approval prompt"):
             self.restart_case()
             self.screen(APPROVAL_SCREEN)

@@ -425,20 +425,22 @@ What Ctrl+C does is read from the installed UI code of Cursor
   maps Ctrl+C to `reject` for the active decision only. The store resolves
   that one id as not approved, with no reason, and removes it. No agent turn
   starts and no other decision changes.
-- In message mode (no decision left), one Ctrl+C only arms exit and a second
-  within two seconds quits Cursor. So reject one decision, inspect again, and
+- In message mode (no decision left), one Ctrl+C stops a running turn, clears
+  a draft or arms exit, and a second within two seconds quits Cursor. So reject one decision, inspect again, and
   never send a second Ctrl+C without a fresh inspect that still shows a
   decision.
 - `n` (Skip) is not used: it opens a reason composer, and Enter there can
   send a queued message as a new turn.
 
-When the agent turn has ended with `Error: Agent stopped retrying`, Cursor
-still draws the stale decisions above that footer (G1 pane,
+When the agent turn has ended with an error, Cursor draws it under the prompt
+as `Error: <title>` (for example `Error: Agent stopped retrying` or
+`Error: Connection failed`) and still draws the stale decisions above it (G1 pane,
 2026-11-05T21:41:47Z; anonymized capture
 [`g1-command-approval-aborted.json`](../scripts/cursor-interactive-session-fixtures/g1-command-approval-aborted.json)).
 The expected text for a rejection may then end with the footer rows, after the
-Skip row or the switch hint, once. `y` under that footer is refused: approving
-a command its turn no longer awaits is never answered. After one rejection,
+Skip row or the switch hint, once. Any row after the Skip row or the hint
+refuses `y`, and refuses `ctrl-c` unless those rows start with one `Error: `
+line: approving a command its turn may no longer await is never answered. After one rejection,
 the last decision shows alone, without the counter row or hint, and needs a
 fresh `inspect` and its own approval reference.
 
