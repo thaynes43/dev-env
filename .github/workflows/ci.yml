@@ -118,8 +118,6 @@ jobs:
         run: nice -n 19 python3 -O -B -m unittest discover -s scripts -p 'test_codex_clean_session.py' -v
       - name: Cursor ACP client and smoke checker tests
         run: nice -n 19 python3 -O -B -m unittest discover -s scripts -p 'test_cursor_acp_*.py' -v
-      - name: Cursor interactive session helper tests
-        run: nice -n 19 python3 -O -B -m unittest discover -s scripts -p 'test_cursor_interactive_session.py' -v
       - name: Finite delivery guard tests
         env:
           DEV_ENV_SHARED_GUARD_CHECKOUT: ${{ github.workspace }}/_shared-guard-pinned
@@ -158,6 +156,19 @@ jobs:
       # Unit tests and the envtest suites, two packages at a time (Makefile).
       - name: go test -p 2
         run: make test
+
+  # Its own job: the Test job already runs close to its 20-minute limit.
+  cursor-interactive:
+    name: Cursor interactive session helper tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Cursor interactive session helper tests
+        run: nice -n 19 python3 -O -B -m unittest discover -s scripts -p 'test_cursor_interactive_session.py' -v
 
   build:
     name: Build
@@ -453,6 +464,7 @@ jobs:
       - portal-postgres
       - lint
       - test
+      - cursor-interactive
       - build
       - check-generated
       - image-operator
