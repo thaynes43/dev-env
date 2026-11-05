@@ -36,6 +36,8 @@ TOP_CORNERS = "\u256d\u250c\u2554\u250f"
 TOP_RIGHT_CORNERS = "\u256e\u2510\u2557\u2513"
 BOTTOM_CORNERS = "\u2570\u2514\u255a\u2517"
 BOTTOM_RIGHT_CORNERS = "\u256f\u2518\u255d\u251b"
+CORNERS = TOP_CORNERS + TOP_RIGHT_CORNERS + BOTTOM_CORNERS + BOTTOM_RIGHT_CORNERS
+SIDE_BARS = "\u2502\u2551\u2503"
 TRUST_PATH_RE = re.compile(r"(?:/[A-Za-z0-9_.@+-]+)+")
 COMMAND_TIMEOUT = 5
 OWNER_OPTION = "@cursor_interactive_owner"
@@ -662,29 +664,32 @@ def prompt_text(row):
 
 
 def border(row, text):
-    """("top" or "bottom", left column, right column) for a border row, "bad" for a
-    border row that cannot pair, and None for any other row.
+    """("top" or "bottom", left column, right column, titled) for a border row, "bad"
+    for a row of box-drawing characters that has a corner but cannot be a border,
+    and None for any other row.
 
-    A border row has only box-drawing characters and spaces (no text), with one
-    left corner and one right corner of the same kind."""
-    if text:
-        return None
-    tops = [index for index, character in enumerate(row) if character in TOP_CORNERS]
-    bottoms = [index for index, character in enumerate(row) if character in BOTTOM_CORNERS]
-    if not tops and not bottoms:
-        return None
-    if tops and bottoms:
+    With spaces and side bars taken off both ends, a border row starts with a left
+    corner and ends with the matching right corner, with no other corner between.
+    Text between the corners is a title."""
+    start, end = 0, len(row)
+    while start < end and (row[start].isspace() or row[start] in SIDE_BARS):
+        start += 1
+    while end > start and (row[end - 1].isspace() or row[end - 1] in SIDE_BARS):
+        end -= 1
+    core = row[start:end]
+    if len(core) >= 2 and not any(character in CORNERS for character in core[1:-1]):
+        for kind, lefts, rights in (("top", TOP_CORNERS, TOP_RIGHT_CORNERS),
+                                    ("bottom", BOTTOM_CORNERS, BOTTOM_RIGHT_CORNERS)):
+            if core[0] in lefts and core[-1] in rights:
+                return kind, start, end - 1, any(not is_separator(character) for character in core)
+    if not text and any(character in CORNERS for character in row):
         return "bad"
-    kind, lefts, rights = ("top", tops, TOP_RIGHT_CORNERS) if tops else ("bottom", bottoms, BOTTOM_RIGHT_CORNERS)
-    ends = [index for index, character in enumerate(row) if character in rights]
-    if len(lefts) != 1 or len(ends) != 1 or ends[0] < lefts[0]:
-        return "bad"
-    return kind, lefts[0], ends[0]
+    return None
 
 
 def visible_boxes(rows, texts):
-    """(top row, bottom row, left column, right column) for every box on the
-    visible screen, or None when its borders do not pair.
+    """(top row, bottom row, left column, right column, titled) for every box on
+    the visible screen, or None when its borders do not pair.
 
     Reading down, each bottom border closes the latest open top border, and the
     two must have their corners in the same columns."""
@@ -695,14 +700,14 @@ def visible_boxes(rows, texts):
             continue
         if found == "bad":
             return None
-        kind, left, right = found
+        kind, left, right, titled = found
         if kind == "top":
-            stack.append((index, left, right))
+            stack.append((index, left, right, titled))
             continue
-        if not stack or stack[-1][1:] != (left, right):
+        if not stack or stack[-1][1:3] != (left, right):
             return None
-        top = stack.pop()[0]
-        boxes.append((top, index, left, right))
+        top, _left, _right, top_titled = stack.pop()
+        boxes.append((top, index, left, right, top_titled or titled))
     return None if stack else boxes
 
 
@@ -826,7 +831,10 @@ def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust
     if not around:
         raise Refusal("prompt-unclear", "The expected prompt is not inside a box on the visible screen. Nothing was sent.")
     # The outermost box around the block: the one that opens first.
-    top, bottom, left, _right = min(around)
+    top, bottom, left, _right, titled = min(around)
+    if titled:
+        raise Refusal("prompt-unclear", "The prompt's box has a titled border, and the title is not part of the expected "
+                                        "text. Nothing was sent.")
     if any(top < box[0] and box[1] < bottom for box in boxes):
         raise Refusal("prompt-unclear", "The prompt's box holds another box, so the prompt cannot be bound to one box. "
                                         "Nothing was sent.")
