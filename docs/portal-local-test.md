@@ -31,8 +31,9 @@ Portal local test instance (fixture data, fixed test principal, not production):
 Flags:
 
 - `-listen`: a loopback IP and port. The default is `127.0.0.1:0`, which
-  picks a free port. `[::1]:0` also works. Names (even `localhost`), wildcard,
-  LAN addresses and Unix sockets are refused.
+  picks a free port. `[::1]:0` is accepted where the host has IPv6 loopback.
+  Names (even `localhost`), wildcard, LAN addresses and Unix sockets are
+  refused.
 - `-fixtures`: the directory with `sessions.json` and `tasks.json`. The
   default is `scripts/trials/portal_product`.
 
@@ -41,6 +42,9 @@ directory on exit.
 
 Use the address it printed. A request whose Host is not that address (or
 `localhost` with the same port) gets 403.
+
+Logging out revokes the one fixed session. Every page then redirects to a
+login that is unavailable. Restart the instance to sign in again.
 
 ## Pages
 
@@ -86,6 +90,9 @@ It does not prove:
 - live Authentik login or the live group check (UserInfo);
 - the Postgres session store;
 - send, launch and history actions, which are off;
+- the Asks answer form, which needs the Postgres receipt store and is absent;
+- the live configuration: Pages, Asks and Claims are always on here, while
+  the live portal enables each by its mounted config;
 - real operator, OpenProject or Alertmanager responses;
 - TLS, the ingress, or the deployment.
 

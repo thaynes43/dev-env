@@ -68,8 +68,9 @@ func TestLocalTestServesRealPagesWithBanner(t *testing.T) {
 		if w.Code != http.StatusOK || w.Header().Get("X-Portal-Local-Test") != "fixture" {
 			t.Fatalf("%s: status %d: %.300s", tc.path, w.Code, body)
 		}
-		if tc.policy != "" && w.Header().Get("Content-Security-Policy") != tc.policy {
-			t.Fatalf("%s: policy %q differs from production", tc.path, w.Header().Get("Content-Security-Policy"))
+		policy := w.Header().Get("Content-Security-Policy")
+		if (tc.policy != "" && policy != tc.policy) || !strings.HasPrefix(policy, "default-src 'none'") {
+			t.Fatalf("%s: policy %q differs from production", tc.path, policy)
 		}
 		if !regexp.MustCompile(`<body[^>]*><p class="banner" id="`+LocalTestBannerID+`"`).MatchString(body) || !strings.Contains(body, "<title>Local test · ") {
 			t.Fatalf("%s: no local test banner or title", tc.path)
@@ -81,6 +82,16 @@ func TestLocalTestServesRealPagesWithBanner(t *testing.T) {
 		}
 		if strings.Contains(body, "local-test-fixture-access-token") || strings.Contains(body, localTestOPToken) || strings.Contains(body, "fixture-not-signed") {
 			t.Fatalf("%s: a fixture token reached the page", tc.path)
+		}
+	}
+	// Every source reached its fixture upstream through the in-memory net; a
+	// source wired with another dialer would leave its count at zero.
+	for _, addr := range []string{operatorPortalHost + ":8443", openProjectPortalHost + ":8443", localTestAMHost} {
+		instance.upstreams.mu.Lock()
+		routed := instance.upstreams.routed[addr]
+		instance.upstreams.mu.Unlock()
+		if routed == 0 {
+			t.Fatalf("no page dialled %s through the fixture net", addr)
 		}
 	}
 	w := serveLocalTest(instance, localTestRequest(http.MethodGet, "/"))
@@ -141,8 +152,10 @@ func TestLocalTestLoginAndCrossOriginPostsStayClosed(t *testing.T) {
 		r.Header.Set("Origin", origin)
 		return serveLocalTest(instance, r).Code
 	}
-	if code := post("https://evil.example"); code != http.StatusForbidden {
-		t.Fatalf("cross-origin logout %d", code)
+	for _, origin := range []string{"https://evil.example", "http://localhost:8099", "http://127.0.0.1:8100"} {
+		if code := post(origin); code != http.StatusForbidden {
+			t.Fatalf("logout from origin %s: %d", origin, code)
+		}
 	}
 	if code := post("http://" + localTestListen.String()); code != http.StatusOK {
 		t.Fatalf("same-origin logout %d", code)

@@ -48,13 +48,17 @@ what needs live identity or live services. The boundary is a build tag.
 | Authorizer | `CurrentAuthorizer` (live UserInfo groups) | fixed principal, on the resources `allowedResource` admits |
 | Sessions, Tasks, Pages, Asks, Claims | pinned HTTPS clients to cluster services | the same clients, dialling in-memory fixture servers |
 | Attention reader | `portal.UnavailableReader` | the same |
-| Send, launch, history | opt-in, need Postgres and live operator | off |
+| Pages, Asks, Claims | each on only when its mounted config enables it | always on |
+| Asks answers | form shown when the store keeps command receipts (Postgres) | no form: the in-memory store keeps no receipts |
+| Send, launch, history | opt-in per target, need Postgres and the live operator | off: no composer, Sessions uses the read-only CSP |
 | Listener | TLS on `:8443` | plain HTTP on a loopback IP |
 
 The tag is `portallocaltest`. Two files carry it:
 `web/portal/session/localtest.go` and the command `web/portal/localtest`.
 `make build-portal` and `images/portal/Dockerfile` never set it, so the
-deployed binary contains none of this code.
+deployed binary contains none of this code. A production build with the tag
+set by mistake would still have no path to it: `cmd/dev-env-portal` takes no
+flag and calls only `ServeProduction`.
 
 ```mermaid
 flowchart LR
@@ -78,8 +82,8 @@ request it:
 2. Rewrites the request as the production gate expects: Host
    `portal.localtest.invalid`, a TLS connection-state marker, and the fixed
    session cookie in place of any cookie the client sent.
-3. Translates only its own Origin (`http://<bound address>`) to the test
-   origin. A cross-origin form post keeps its Origin and fails the production
+3. Translates only an Origin equal to the request's own `http://` Host to
+   the test origin. A cross-origin form post keeps its Origin and fails the production
    check.
 4. Adds a banner as the first element of every HTML body, prefixes the page
    title with "Local test", and adds a first line to every plain-text answer.
@@ -124,7 +128,9 @@ Default build, so CI and the image path run them:
 
 Tagged (`make test-portal-localtest`, which `make test` runs):
 
-- Every page renders with the banner, its fixture rows and production's CSP.
+- Every page renders with the banner, its fixture rows and a production CSP
+  header; Sessions and Tasks match production's policy exactly. Every
+  upstream was reached through the fixture net.
 - The gate refuses non-loopback clients, other hosts and ports, absolute-form
   URLs and forwarded identity.
 - Login does not start. A cross-origin logout is refused, and a same-origin
@@ -139,6 +145,13 @@ The instance proves UI and handler behaviour on fixtures. It does not prove
 live login, live group authorization, the Postgres store, real operator or
 OpenProject responses, TLS, or the deployment. Unix sockets are refused:
 Chromium cannot open them, and the gate binds the Host to an IP and port.
+
+It is not a copy of the live configuration. Pages, Asks and Claims are always
+on here, while the live portal enables each by its mounted config, so the
+live navigation can differ. The Asks answer form, the send composer, launch
+and history are absent here, so those controls need the live portal or a
+follow-up. Logging out revokes the one fixed session; every page then
+redirects to a login that is unavailable until the instance restarts.
 
 ## 8. Follow-ups
 

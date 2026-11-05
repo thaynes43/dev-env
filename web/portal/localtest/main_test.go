@@ -36,19 +36,31 @@ func TestLocalTestListenRefusesNonLoopback(t *testing.T) {
 
 func TestLocalTestCommandServesSessionsWithBanner(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	out, in := io.Pipe()
 	done := make(chan int, 1)
 	go func() {
 		done <- run(ctx, []string{"-listen", "127.0.0.1:0", "-fixtures", "../../../scripts/trials/portal_product"}, in, io.Discard)
 		_ = in.Close()
 	}()
+	stopped := false
+	t.Cleanup(func() {
+		cancel()
+		_ = out.Close()
+		if !stopped {
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Error("server did not stop")
+			}
+		}
+	})
 	line, err := bufio.NewReader(out).ReadString('\n')
-	if err != nil {
-		t.Fatalf("no URL line: %v", err)
+	at := strings.Index(line, "http://")
+	if err != nil || at < 0 {
+		t.Fatalf("no URL line: %q %v", line, err)
 	}
 	go func() { _, _ = io.Copy(io.Discard, out) }()
-	url := strings.TrimSpace(line[strings.Index(line, "http://"):])
+	url := strings.TrimSpace(line[at:])
 	if !strings.HasPrefix(url, "http://127.0.0.1:") || !strings.HasSuffix(url, session.SessionsPath) {
 		t.Fatalf("url %q", url)
 	}
@@ -66,6 +78,7 @@ func TestLocalTestCommandServesSessionsWithBanner(t *testing.T) {
 	cancel()
 	select {
 	case code := <-done:
+		stopped = true
 		if code != 0 {
 			t.Fatalf("exit %d", code)
 		}

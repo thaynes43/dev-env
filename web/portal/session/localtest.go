@@ -63,8 +63,9 @@ type LocalTestFixtures struct{ Sessions, Tasks []byte }
 // LocalTest is one in-process portal test instance: the production assembly
 // and gate, one fixed test principal, and in-memory fixture upstreams.
 type LocalTest struct {
-	handler http.Handler
-	close   func()
+	handler   http.Handler
+	upstreams *localTestNet
+	close     func()
 }
 
 // Handler serves the instance. Mount it only on the loopback address given to
@@ -107,7 +108,7 @@ func NewLocalTest(listen netip.AddrPort, fixtures LocalTestFixtures) (*LocalTest
 		closeAll()
 		return nil, err
 	}
-	return &LocalTest{handler: instance, close: closeAll}, nil
+	return &LocalTest{handler: instance, upstreams: upstreams, close: closeAll}, nil
 }
 
 func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func() time.Time, sessionsBody, tasksBody []byte, upstreams *localTestNet) (http.Handler, error) {
@@ -173,11 +174,7 @@ func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func
 	}), localTestHost)
 
 	hosts := map[string]bool{listen.String(): true, net.JoinHostPort("localhost", portText(listen)): true}
-	origins := map[string]bool{}
-	for host := range hosts {
-		origins["http://"+host] = true
-	}
-	return &localTestGate{next: assembly, hosts: hosts, origins: origins, cookie: cookieValue}, nil
+	return &localTestGate{next: assembly, hosts: hosts, cookie: cookieValue}, nil
 }
 
 func portText(a netip.AddrPort) string {
@@ -188,13 +185,13 @@ func portText(a netip.AddrPort) string {
 // localTestGate is the test boundary. It stands in for the TLS listener and the
 // browser's login: it refuses anything but a loopback client naming this
 // instance, then hands the production gate a TLS request for the fixed test
-// host with the fixed session cookie. Only this instance's own Origin is
-// translated, so cross-origin form posts still fail the production checks.
+// host with the fixed session cookie. Only an Origin equal to the request's
+// own scheme and Host is translated, so cross-origin form posts still fail
+// the production checks.
 type localTestGate struct {
-	next    http.Handler
-	hosts   map[string]bool
-	origins map[string]bool
-	cookie  string
+	next   http.Handler
+	hosts  map[string]bool
+	cookie string
 }
 
 func (g *localTestGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +208,7 @@ func (g *localTestGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	inner.TLS = &tls.ConnectionState{Version: tls.VersionTLS13, HandshakeComplete: true, ServerName: localTestHost}
 	inner.Header.Del("Cookie")
 	inner.AddCookie(&http.Cookie{Name: sessionCookie, Value: g.cookie})
-	if origins := inner.Header.Values("Origin"); len(origins) == 1 && g.origins[origins[0]] {
+	if origins := inner.Header.Values("Origin"); len(origins) == 1 && origins[0] == "http://"+r.Host {
 		inner.Header.Set("Origin", localTestOrigin)
 	}
 	buffer := &responseBuffer{header: make(http.Header)}
@@ -381,6 +378,7 @@ type localTestNet struct {
 	mu      sync.Mutex
 	routes  map[string]*pipeListener
 	servers []*http.Server
+	routed  map[string]int
 }
 
 func (n *localTestNet) serve(addr string, cert *tls.Certificate, handler http.Handler) {
@@ -400,6 +398,12 @@ func (n *localTestNet) serve(addr string, cert *tls.Certificate, handler http.Ha
 func (n *localTestNet) dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	n.mu.Lock()
 	listener, ok := n.routes[addr]
+	if ok && network == "tcp" {
+		if n.routed == nil {
+			n.routed = map[string]int{}
+		}
+		n.routed[addr]++
+	}
 	n.mu.Unlock()
 	if !ok || network != "tcp" {
 		return nil, errLocalTestNetwork

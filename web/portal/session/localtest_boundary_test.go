@@ -49,7 +49,18 @@ func TestLocalTestExcludedFromDefaultBuild(t *testing.T) {
 	if _, err = plain.ImportDir("../localtest", 0); !errors.As(err, &none) {
 		t.Fatalf("web/portal/localtest builds without the tag: %v", err)
 	}
-	for _, path := range []string{"../../../images/portal/Dockerfile", "../../../cmd/dev-env-portal/main.go"} {
+	command, err := os.ReadDir("../../../cmd/dev-env-portal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{"../../../images/portal/Dockerfile"}
+	for _, entry := range command {
+		paths = append(paths, "../../../cmd/dev-env-portal/"+entry.Name())
+	}
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
