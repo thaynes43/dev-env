@@ -6,8 +6,8 @@ serves the production routes, handlers, templates, CSS and CSP. Every page
 carries a "Local test instance" banner. Design:
 [DESIGN-055](../.agents/sagas/distributed-dev-env/designs/055-portal-local-test-instance.md);
 story [OP476](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/476).
-This is a read-only increment (sessions, tasks, pages, asks, claims); send,
-launch, history and the Asks answer form are tracked in OpenProject
+The write flows (send, launch, history and the Asks answer form) came with
+OpenProject
 [#479](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/479).
 
 ## Start it
@@ -64,6 +64,22 @@ All under `/portal/projects/dev-env/environments/internal/`:
 
 Query strings work as in production, for example `sessions?session=fixture-uid-coordinator`.
 
+## Flows
+
+The production handlers run each flow. The far end is a fixture operator
+route that records the call. No agent receives anything and no session
+starts.
+
+| Flow | Where | What the fixture does |
+| --- | --- | --- |
+| Send | the composer under a selected session, for example `sessions?session=fixture-uid-coordinator` | answers Delivered; the receipt shows under `session-messages/<request ID>` |
+| Launch | `sessions#launch`, repositories `dev-env` and `fixture-repo` | creates one Pending session per request ID (`fixture-launch-1`, …) that joins the list; the same request again returns the same session |
+| History | "Load this session's conversation" for `fixture-coordinator` or `fixture-terminal` | returns a three-turn fixture conversation |
+| Asks answer | `asks?ask=ask-0000000000000001` (info) and `asks?ask=ask-0000000000000002` (approval) | records one answer, then the ask is Answered |
+
+State lives only in the running instance. Restart it to start over from the
+fixtures.
+
 ## Drive it with Playwright
 
 The session image has the Playwright library and Chromium. With the instance
@@ -79,6 +95,29 @@ banner, a fixture row, that the page has no horizontal scroll, and that the
 console has no errors. It prints `PASS` or `FAIL` per page and exits non-zero
 on a failure.
 
+The flow smoke drives send, launch, history and the Asks answer form at the
+same widths. For each width it starts a fresh instance from the binary. It
+double-clicks each submit, reloads after submitting, and repeats a launch
+request:
+
+```sh
+GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
+  go build -tags portallocaltest -o ~/.local/bin/portal-localtest ./web/portal/localtest
+NODE_PATH=/usr/local/lib/node_modules/@playwright/mcp/node_modules \
+  nice -n 19 node web/portal/localtest/smoke-flows.cjs ~/.local/bin/portal-localtest
+```
+
+**Chromium sends `Origin: null` on the portal's forms.** Every portal page
+sets `Referrer-Policy: no-referrer`. Under that policy Chromium sends
+`Origin: null` on a same-origin form post, and the production origin check
+refuses it. The local instance shows the same refusal. The flow smoke prints
+it as a `FINDING` line per width. It then runs the flows with a harness-only
+override that serves each page with `Referrer-Policy: same-origin`, so
+Chromium sends the page origin. To post a form by hand in Chromium, apply the
+same override; otherwise every send, launch, answer and logout is refused.
+DESIGN-055 section 9.4 has the details. The production fix is a separate
+decision.
+
 The Playwright MCP server works too: navigate to the printed URL and check
 for `#portal-localtest-banner`. The page CSP blocks `fetch` from page scripts,
 as in production, so open each page with a navigation.
@@ -86,17 +125,20 @@ as in production, so open each page with a navigation.
 ## What it proves and what it does not
 
 It proves the portal's UI and request handling on fixtures: routing, the
-production gate, the session engine's cookie and CSRF checks, the source
-clients and decoders, templates, CSS, CSP and responsive layout.
+production gate, the session engine's cookie and CSRF checks, the group
+check's code against a fixture UserInfo, the source clients and decoders,
+the send, launch, history and Asks answer handlers with their replay and
+idempotency rules, templates, CSS, CSP and responsive layout.
 
 It does not prove:
 
 - live Authentik login or the live group check (UserInfo);
-- the Postgres session store;
-- send, launch and history actions, which are off;
-- the Asks answer form, which needs the Postgres receipt store and is absent;
-- the live configuration: Pages, Asks and Claims are always on here, while
-  the live portal enables each by its mounted config;
+- live group membership: the fixture UserInfo always admits the fixed
+  principal;
+- the Postgres session and receipt store;
+- real delivery, launch, history or answers: those reach fixture routes only;
+- the live configuration: Pages, Asks, Claims, send, launch and history are
+  always on here, while the live portal enables each by its mounted config;
 - anything about time: the clock is frozen at the fixture's `now`, so pages
   never age, go stale or expire;
 - real operator, OpenProject or Alertmanager responses;

@@ -46,12 +46,12 @@ what needs live identity or live services. The boundary is a build tag.
 | Routes and handlers | `NewAssembly` | `NewAssembly`, unchanged |
 | Session engine | `Engine` with Postgres store | `Engine` with an in-memory store holding one seeded session |
 | Identity provider | Authentik code flow | none: login answers unavailable, no ID token verifies |
-| Authorizer | `CurrentAuthorizer` (live UserInfo groups) | fixed principal, on the resources `allowedResource` admits |
+| Authorizer | `CurrentAuthorizer` (live UserInfo groups) | `CurrentAuthorizer`, asking a fixture UserInfo route that admits only the seeded session's fixture token (section 9) |
 | Sessions, Tasks, Pages, Asks, Claims | pinned HTTPS clients to cluster services | the same clients, dialling in-memory fixture servers |
 | Attention reader | `portal.UnavailableReader` | the same |
 | Pages, Asks, Claims | each on only when its mounted config enables it | always on |
-| Asks answers | form shown when the store keeps command receipts (Postgres) | no form: the in-memory store keeps no receipts |
-| Send, launch, history | opt-in per target, need Postgres and the live operator | off: no composer, Sessions uses the read-only CSP |
+| Command receipts | `PostgresStore` | the in-memory store, following `PostgresStore`'s receipt rules (section 9) |
+| Send, launch, history, Asks answers | opt-in per target, Postgres receipts, the live operator | on, against fixture operator routes that record every call (section 9) |
 | Listener | TLS on `:8443` | plain HTTP on a loopback IP |
 
 The tag is `portallocaltest`. Two files carry it:
@@ -149,11 +149,12 @@ live login, live group authorization, the Postgres store, real operator or
 OpenProject responses, TLS, or the deployment. Unix sockets are refused:
 Chromium cannot open them, and the gate binds the Host to an IP and port.
 
-It is not a copy of the live configuration. Pages, Asks and Claims are always
-on here, while the live portal enables each by its mounted config, so the
-live navigation can differ. The Asks answer form, the send composer, launch
-and history are absent here, so those controls need the live portal or a
-follow-up. Logging out revokes the one fixed session; every page then
+It is not a copy of the live configuration. Pages, Asks, Claims, send,
+launch and history are always on here, while the live portal enables each by
+its mounted config, so the live navigation and controls can differ. Send,
+launch and Asks answers reach fixture routes only: no agent receives a
+message, no session starts, no ask notifies anyone. Logging out revokes the
+one fixed session; every page then
 redirects to a login that is unavailable until the instance restarts.
 The clock is frozen at the fixture's `now`, so pages never age or go stale.
 The banner adds a row at the top, so screenshots and overflow comparisons
@@ -161,11 +162,90 @@ against the live portal differ by that row.
 
 ## 8. Follow-ups
 
-This is a read-only increment (sessions, tasks, pages, asks, claims); send,
-launch, history and the Asks answer form are tracked in OpenProject
-[#479](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/479).
+The first increment (PR #944, OP476) was read-only: sessions, tasks, pages,
+asks and claims. Send, launch, history and the Asks answer form came with
+OpenProject
+[#479](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/479)
+(section 9).
 
-- Send, launch and history with fixture transports and an in-memory receipt
-  store, so the composer can be driven.
+- The Origin finding in section 9.4 needs a production decision.
 - An Attention metadata fixture, if Attention is wired in production.
 - Selecting other fixture scenarios, for example the preview's product states.
+
+## 9. Addendum: write flows (OP479, 2026-11-05)
+
+### 9.1 What is wired
+
+All four flows use the production handlers and templates. Only the far end
+is a fixture.
+
+| Flow | Production handler | Fixture end |
+| --- | --- | --- |
+| Send | `commandHandler`, every fixture session a target, the real `commandClient` | operator `POST /v1/portal/session-messages`: answers Delivered with a fixture pod UID |
+| Launch | `launchHandler`, scope `dev-env` and `fixture-repo`, the real `launchClient` | operator `POST /v1/portal/sessions`: a new request ID makes one Pending fixture session that joins the Sessions list; the same request returns the same receipt; other content under that ID is a conflict |
+| History | `conversationSource` for `fixture-coordinator` and `fixture-terminal` | operator `GET /v1/portal/sessions/<uid>/conversation`: a three-turn fixture projection |
+| Asks answer | the Asks route's answer path, replay protection in command receipts | operator `POST /v1/portal/asks/<id>/answer`: one valid answer to an open ask, then Answered; conflict when closed, gone when expired |
+
+The fixture operator records every write and every conversation read. Tests
+read that record to prove that a flow reached the fixture exactly as often as
+expected.
+
+The in-memory store implements the command receipt contract with
+`PostgresStore`'s rules: a reservation belongs to a current portal session
+and expires with it, a replay with other content is refused, and the terminal
+receipt is written once.
+
+The authorizer is the production `CurrentAuthorizer`. It asks a fixture
+UserInfo route at `issuer.localtest.invalid`, over the fixture net with the
+fixture CA, which admits only the seeded session's fixture access token. The
+conversation source needs this concrete authorizer, and the group check's
+code now runs on fixture data.
+
+### 9.2 Isolation
+
+The start-up guard (`localTestDialersFixtureOnly`) also requires:
+
+- the send, launch, authorizer and conversation clients to dial only the
+  fixture net, with no proxy;
+- the conversation source to share the configured authorizer.
+
+Any new network-capable field must be added to that guard. The tests keep
+the DNS interception from section 6, so every flow test fails if anything
+resolves a name.
+
+### 9.3 Tests
+
+`TestLocalTestSendFlow`, `TestLocalTestLaunchFlow`, `TestLocalTestHistoryFlow`
+and `TestLocalTestAsksAnswerFlow` each went RED before their flow was wired
+and pass now. Each checks:
+
+- exactly the expected fixture call;
+- a double submit and a reload;
+- a refused cross-origin or tampered post that never reaches the operator.
+
+`web/portal/localtest/smoke-flows.cjs` drives the same flows in headless
+Chromium at 320, 390 and 1280 px. It starts a fresh instance per width.
+
+### 9.4 Finding: Chromium sends `Origin: null` on the portal's forms
+
+Every portal page sets `Referrer-Policy: no-referrer` (`authHeaders`). Under
+that policy Chromium sends `Origin: null` on a same-origin form POST, as the
+Fetch standard says for a no-referrer request that is not CORS. The
+production origin checks accept only the configured origin, so they refuse
+these posts:
+
+- send (`commands.go`);
+- launch (`launch.go`);
+- Asks answers (`asks.go`);
+- logout (`engine.go`).
+
+The local instance reproduces this, because it runs the same handlers.
+Verified with Playwright's Chromium 1247 on 2026-11-05. Other engines were
+not checked.
+
+The flow smoke records the refusal as a `FINDING` line. It then drives the
+flows with a harness-only override that serves each page with
+`Referrer-Policy: same-origin`, so Chromium sends the page origin. With that
+one header changed, every flow completes. The fix is a production decision
+outside OP479: for example, a referrer policy that keeps same-origin `Origin`
+headers, or an origin check that also accepts `Sec-Fetch-Site: same-origin`.
