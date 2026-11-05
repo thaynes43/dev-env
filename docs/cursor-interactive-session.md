@@ -330,7 +330,10 @@ when the expected text shows `(y)` at the end of exactly one row and no
 `[y]`. Rules 1 to 3 and 5 hold as for a box. Rule 4 becomes:
 
 - the expected text is every nonblank row from the first command row to the
-  `Skip` row, trimmed as in rule 4, exactly, in order and once: a different
+  `Skip` row, with only spaces taken off each row's ends (not the box-drawing
+  and other whitespace characters rule 4 trims, because the command has no
+  border: `wc -l ─` is not `wc -l`), exactly, in order and once; expected
+  rows that start or end with such a character are `invalid-input`; a different
   or longer command, another path, an added, missing or reordered row, or a
   cropped prompt is `modal-mismatch` (or `prompt-unclear` when the rows left
   out are its first or last);
@@ -341,6 +344,13 @@ when the expected text shows `(y)` at the end of exactly one row and no
 - no other row on the visible screen holds a known prompt phrase, except
   Cursor's own `Waiting for approval...` status line for the pending command,
   which it shows above the divider.
+
+The binding is to the rows Cursor draws, not to the command's bytes. Cursor
+wraps a long command and indents the continuation rows, and the trim removes
+that indent, so a newline in the command and a wrap at the same point look the
+same, though bash runs them differently. Characters that Cursor or tmux do not
+draw, such as zero-width characters, are invisible here too. Approve the
+command from its own record, not from what the screen shows.
 
 Anything else is `prompt-unclear`. Only `y`, Run (once), is ever sent, as one
 literal key without Enter. The helper refuses every other choice for this

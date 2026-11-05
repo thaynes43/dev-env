@@ -747,6 +747,10 @@ def validate_answer(args):
         raise Refusal("invalid-input", "Choice must appear as [" + choice + "] in the expected prompt text. For Cursor's "
                                        "command prompt (modal-approval) the only choice is y, shown once as (y): never the "
                                        "allowlist (tab), Run Everything (shift+tab) or Skip (esc or n). Nothing was sent.")
+    if prompt_shape(args.expect_kind, choice, lines) == "divider" and any(
+            line.strip(" ") != prompt_text(line) for line in raw.decode("utf-8").split("\n") if prompt_text(line)):
+        raise Refusal("invalid-input", "A command prompt's expected rows must not start or end with a box-drawing or "
+                                       "non-space whitespace character. Nothing was sent.")
     trust_path = getattr(args, "trust_path", None)
     if args.expect_kind == "modal-trust":
         if not trust_path:
@@ -929,7 +933,7 @@ def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust
     if boxes is None:
         raise Refusal("prompt-unclear", "The box borders on the visible screen do not pair up. Nothing was sent.")
     if shape == "divider":
-        check_divider_prompt(visible, boxes, first, last, int(ident["width"]))
+        check_divider_prompt(visible, boxes, first, last, int(ident["width"]), lines)
     else:
         check_box_prompt(visible, texts, boxes, first, last)
     cursor = int(ident["cursor_y"])
@@ -967,11 +971,15 @@ def phrases(row):
     return {phrase for _kind, group in MODALS for phrase in group if phrase in folded}
 
 
-def check_divider_prompt(visible, boxes, first, last, width):
+def check_divider_prompt(visible, boxes, first, last, width, lines):
     """Cursor's command prompt: rows first..last are not in a box, sit directly under a
     divider row that spans the pane, and have only blank rows after them to the pane
     bottom. No other row on the visible screen holds a prompt phrase, except Cursor's
-    status line for the pending command."""
+    status line for the pending command.
+
+    The command is not in a box, so only spaces pad its rows: with spaces alone taken
+    off, the rows must be the expected lines. A box-drawing or other whitespace
+    character at a row's end is part of the command, not a border."""
     if any(box[0] < first and last < box[1] for box in boxes):
         raise Refusal("prompt-unclear", "Cursor's command prompt is not drawn in a box, but these rows are inside one. "
                                         "Nothing was sent.")
@@ -982,6 +990,9 @@ def check_divider_prompt(visible, boxes, first, last, width):
         raise Refusal("prompt-unclear", "Something follows the command prompt before the pane bottom. Nothing was sent.")
     if any(phrases(row) - {PENDING_STATUS} for row in visible[:first] + visible[last + 1:]):
         raise Refusal("prompt-unclear", "Another prompt is on the visible screen. Nothing was sent.")
+    if [row.strip(" ") for row in visible[first:last + 1] if row.strip(" ")] != lines:
+        raise Refusal("modal-mismatch", "The command rows differ from the expected text once only spaces are taken "
+                                        "off their ends. Nothing was sent.")
 
 
 def approval_path(name, approval_ref):

