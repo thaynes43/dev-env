@@ -66,6 +66,7 @@ type LocalTestFixtures struct{ Sessions, Tasks []byte }
 type LocalTest struct {
 	handler   http.Handler
 	upstreams *localTestNet
+	calls     *localTestCalls
 	close     func()
 }
 
@@ -104,15 +105,16 @@ func NewLocalTest(listen netip.AddrPort, fixtures LocalTestFixtures) (*LocalTest
 		upstreams.close()
 		_ = os.RemoveAll(dir)
 	}
-	instance, err := assembleLocalTest(listen, dir, at, now, sessionsFixture.Body, tasksFixture.Body, upstreams)
+	calls := &localTestCalls{}
+	instance, err := assembleLocalTest(listen, dir, at, now, sessionsFixture.Body, tasksFixture.Body, upstreams, calls)
 	if err != nil {
 		closeAll()
 		return nil, err
 	}
-	return &LocalTest{handler: instance, upstreams: upstreams, close: closeAll}, nil
+	return &LocalTest{handler: instance, upstreams: upstreams, calls: calls, close: closeAll}, nil
 }
 
-func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func() time.Time, sessionsBody, tasksBody []byte, upstreams *localTestNet) (http.Handler, error) {
+func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func() time.Time, sessionsBody, tasksBody []byte, upstreams *localTestNet, calls *localTestCalls) (http.Handler, error) {
 	operatorToken := localTestOperatorToken(at.Add(30 * 24 * time.Hour))
 	operatorPath, openProjectPath := filepath.Join(dir, "operator-token"), filepath.Join(dir, "openproject-token")
 	if os.WriteFile(operatorPath, []byte(operatorToken+"\n"), 0o600) != nil || os.WriteFile(openProjectPath, []byte(localTestOPToken+"\n"), 0o600) != nil {
@@ -123,7 +125,7 @@ func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func
 		return nil, err
 	}
 	asks, claims := localTestAsks(at), localTestClaims(at)
-	upstreams.serve(operatorPortalHost+":8443", &certs[0], localTestOperator(operatorToken, sessionsBody, asks, claims))
+	upstreams.serve(operatorPortalHost+":8443", &certs[0], localTestOperator(operatorToken, sessionsBody, asks, claims, &localTestWrites{calls: calls, now: now}))
 	upstreams.serve(openProjectPortalHost+":8443", &certs[1], localTestOpenProject(tasksBody))
 	upstreams.serve(localTestAMHost, nil, localTestAlertmanager())
 
@@ -166,8 +168,13 @@ func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func
 	if err != nil {
 		return nil, err
 	}
+	authorizer := localTestAuthorizer{principal: principal}
+	send, err := localTestSend(engine, authorizer, store, sessionsBody, at, operatorPath, caPEM, now, upstreams)
+	if err != nil {
+		return nil, err
+	}
 	config := AssemblyConfig{
-		Session: engine, Authorizer: localTestAuthorizer{principal: principal}, Reader: portal.UnavailableReader{},
+		Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Send: send,
 		Sessions: sessions, Tasks: tasks, Pages: newPagesSource(true, now, upstreams.dial),
 		Asks:     &AsksSource{path: asksBase.path, client: asksBase.client, now: now},
 		Claims:   &ClaimsSource{path: claimsBase.path, client: claimsBase.client, now: now, project: claimsProject},
@@ -186,14 +193,22 @@ func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func
 // source's client dials through the fixture net, has no proxy, and no source
 // carries another reader. It runs before any request can be served.
 func localTestDialersFixtureOnly(c AssemblyConfig, upstreams *localTestNet) error {
-	if c.Sessions == nil || c.Tasks == nil || c.Pages == nil || c.Asks == nil || c.Claims == nil || c.Send != nil || c.Launch != nil {
+	if c.Sessions == nil || c.Tasks == nil || c.Pages == nil || c.Asks == nil || c.Claims == nil || c.Launch != nil {
+		return errLocalTestNetwork
+	}
+	send, ok := c.Send.(*commandHandler)
+	if !ok || send == nil {
+		return errLocalTestNetwork
+	}
+	sendClient, ok := send.transport.(*commandClient)
+	if !ok || sendClient == nil {
 		return errLocalTestNetwork
 	}
 	if c.Sessions.conversations != nil || c.Sessions.allowance != nil || c.Sessions.currentSource != nil || c.Sessions.aggregateAllowance != nil || c.Sessions.questionAuditProject != "" {
 		return errLocalTestNetwork
 	}
 	want := reflect.ValueOf(upstreams.dial).Pointer()
-	for _, client := range []*http.Client{c.Sessions.client, c.Tasks.client, c.Pages.client, c.Asks.client, c.Claims.client} {
+	for _, client := range []*http.Client{c.Sessions.client, c.Tasks.client, c.Pages.client, c.Asks.client, c.Claims.client, sendClient.client} {
 		if client == nil {
 			return errLocalTestNetwork
 		}
@@ -320,6 +335,7 @@ type localTestStore struct {
 	mu       sync.Mutex
 	logins   map[Handle]Login
 	sessions map[Handle]Record
+	commands map[string]*localTestCommand
 }
 
 func (s *localTestStore) PutLogin(_ context.Context, h Handle, v Login) error {
@@ -489,10 +505,14 @@ func localTestJSON(w http.ResponseWriter, contentType string, body []byte) {
 	_, _ = w.Write(body)
 }
 
-func localTestOperator(token string, sessions []byte, asks []apiv1.Ask, claims apiv1.PortalTaskClaims) http.Handler {
+func localTestOperator(token string, sessions []byte, asks []apiv1.Ask, claims apiv1.PortalTaskClaims, writes http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer "+token {
+		if r.Header.Get("Authorization") != "Bearer "+token {
 			http.Error(w, "fixture operator refused", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodGet {
+			writes.ServeHTTP(w, r)
 			return
 		}
 		switch {

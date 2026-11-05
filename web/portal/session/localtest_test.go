@@ -130,7 +130,7 @@ func TestLocalTestServesRealPagesWithBanner(t *testing.T) {
 		path, policy string
 		want         []string
 	}{
-		{SessionsPath, portal.ProductPolicy, []string{"fixture-portal-polish", "fixture-coordinator"}},
+		{SessionsPath, portal.ProductSendPolicy, []string{"fixture-portal-polish", "fixture-coordinator"}},
 		{TasksPath, portal.ProductPolicy, []string{"Fixture: portal visual refresh"}},
 		{pagesPath, "", []string{"Fixture sample alert"}},
 		{AsksPath, "", []string{"Which fixture should the agent use for the next check?"}},
@@ -305,8 +305,9 @@ func TestLocalTestRefusesSourcesOffTheFixtureNet(t *testing.T) {
 	good := func() AssemblyConfig {
 		s := source(upstreams.dial)
 		tasks := &TaskSource{path: s.path, client: source(upstreams.dial).client, now: now}
+		send := &commandHandler{transport: &commandClient{client: source(upstreams.dial).client}}
 		return AssemblyConfig{Sessions: s, Tasks: tasks, Pages: newPagesSource(true, now, upstreams.dial),
-			Asks: &AsksSource{client: source(upstreams.dial).client}, Claims: &ClaimsSource{client: source(upstreams.dial).client}}
+			Asks: &AsksSource{client: source(upstreams.dial).client}, Claims: &ClaimsSource{client: source(upstreams.dial).client}, Send: send}
 	}
 	if err := localTestDialersFixtureOnly(good(), upstreams); err != nil {
 		t.Fatalf("fixture-only config refused: %v", err)
@@ -320,6 +321,11 @@ func TestLocalTestRefusesSourcesOffTheFixtureNet(t *testing.T) {
 		"claims proxy":            func(c *AssemblyConfig) { c.Claims.client.Transport.(*http.Transport).Proxy = http.ProxyFromEnvironment },
 		"claims missing":          func(c *AssemblyConfig) { c.Claims = nil },
 		"conversations":           func(c *AssemblyConfig) { c.Sessions.conversations = previewConversation{} },
+		"send default dialer": func(c *AssemblyConfig) {
+			c.Send = &commandHandler{transport: &commandClient{client: source(nil).client}}
+		},
+		"send other transport": func(c *AssemblyConfig) { c.Send = &commandHandler{transport: &commandTransportFake{}} },
+		"send missing":         func(c *AssemblyConfig) { c.Send = nil },
 	} {
 		c := good()
 		mutate(&c)
