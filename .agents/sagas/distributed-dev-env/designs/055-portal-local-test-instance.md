@@ -168,7 +168,7 @@ OpenProject
 [#479](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/479)
 (section 9).
 
-- The Origin finding in section 9.4 needs a production decision.
+- The Origin finding in section 9.4 is tracked in [OpenProject #480](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/480).
 - An Attention metadata fixture, if Attention is wired in production.
 - Selecting other fixture scenarios, for example the preview's product states.
 
@@ -207,7 +207,8 @@ The start-up guard (`localTestDialersFixtureOnly`) also requires:
 
 - the send, launch, authorizer and conversation clients to dial only the
   fixture net, with no proxy;
-- the conversation source to share the configured authorizer.
+- the conversation source, the send handler and the launch handler to use
+  the same authorizer object as the assembly.
 
 Any new network-capable field must be added to that guard. The tests keep
 the DNS interception from section 6, so every flow test fails if anything
@@ -247,5 +248,7 @@ The flow smoke records the refusal as a `FINDING` line. It then drives the
 flows with a harness-only override that serves each page with
 `Referrer-Policy: same-origin`, so Chromium sends the page origin. With that
 one header changed, every flow completes. The fix is a production decision
-outside OP479: for example, a referrer policy that keeps same-origin `Origin`
+outside OP479, tracked in [OpenProject #480](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/480) ("Portal forms refused in
+Chromium: Referrer-Policy no-referrer makes Origin null on same-origin
+posts"). Options include a referrer policy that keeps same-origin `Origin`
 headers, or an origin check that also accepts `Sec-Fetch-Site: same-origin`.

@@ -115,8 +115,8 @@ it as a `FINDING` line per width. It then runs the flows with a harness-only
 override that serves each page with `Referrer-Policy: same-origin`, so
 Chromium sends the page origin. To post a form by hand in Chromium, apply the
 same override; otherwise every send, launch, answer and logout is refused.
-DESIGN-055 section 9.4 has the details. The production fix is a separate
-decision.
+DESIGN-055 section 9.4 has the details. The production fix is tracked in
+[OpenProject #480](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/480).
 
 The Playwright MCP server works too: navigate to the printed URL and check
 for `#portal-localtest-banner`. The page CSP blocks `fetch` from page scripts,

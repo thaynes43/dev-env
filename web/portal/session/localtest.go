@@ -242,6 +242,13 @@ func localTestDialersFixtureOnly(c AssemblyConfig, upstreams *localTestNet) erro
 	if !ok || history == nil || history.authorizer != authorizer {
 		return errLocalTestNetwork
 	}
+	// Send and launch authorize each action with the assembly's authorizer.
+	if sendAuthorizer, ok := send.authorizer.(*CurrentAuthorizer); !ok || sendAuthorizer != authorizer {
+		return errLocalTestNetwork
+	}
+	if launchAuthorizer, ok := launch.authorizer.(*CurrentAuthorizer); !ok || launchAuthorizer != authorizer {
+		return errLocalTestNetwork
+	}
 	want := reflect.ValueOf(upstreams.dial).Pointer()
 	for _, client := range []*http.Client{c.Sessions.client, c.Tasks.client, c.Pages.client, c.Asks.client, c.Claims.client, sendClient.client, launchClient.client, authorizer.client, history.client} {
 		if client == nil {

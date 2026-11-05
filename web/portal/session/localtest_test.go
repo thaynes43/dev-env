@@ -306,12 +306,12 @@ func TestLocalTestRefusesSourcesOffTheFixtureNet(t *testing.T) {
 	good := func() AssemblyConfig {
 		s := source(upstreams.dial)
 		tasks := &TaskSource{path: s.path, client: source(upstreams.dial).client, now: now}
-		send := &commandHandler{transport: &commandClient{client: source(upstreams.dial).client}}
-		launch := &launchHandler{transport: &launchClient{client: source(upstreams.dial).client}}
 		authorizer, err := localTestCurrentAuthorizer(&localTestStore{}, caPEM, now, upstreams)
 		if err != nil {
 			t.Fatal(err)
 		}
+		send := &commandHandler{authorizer: authorizer, transport: &commandClient{client: source(upstreams.dial).client}}
+		launch := &launchHandler{authorizer: authorizer, transport: &launchClient{client: source(upstreams.dial).client}}
 		s.UseConversations(&conversationSource{authorizer: authorizer, client: source(upstreams.dial).client})
 		return AssemblyConfig{Sessions: s, Tasks: tasks, Pages: newPagesSource(true, now, upstreams.dial), Authorizer: authorizer,
 			Asks: &AsksSource{client: source(upstreams.dial).client}, Claims: &ClaimsSource{client: source(upstreams.dial).client}, Send: send, Launch: launch}
@@ -344,6 +344,18 @@ func TestLocalTestRefusesSourcesOffTheFixtureNet(t *testing.T) {
 			c.Launch = &launchHandler{transport: &launchClient{client: source(nil).client}}
 		},
 		"launch missing": func(c *AssemblyConfig) { c.Launch = nil },
+		"send other authorizer": func(c *AssemblyConfig) {
+			c.Send.(*commandHandler).authorizer = offNetAuthorizer()
+		},
+		"send authorizer other type": func(c *AssemblyConfig) {
+			c.Send.(*commandHandler).authorizer = authorizeFunc(nil)
+		},
+		"launch other authorizer": func(c *AssemblyConfig) {
+			c.Launch.(*launchHandler).authorizer = offNetAuthorizer()
+		},
+		"launch authorizer other type": func(c *AssemblyConfig) {
+			c.Launch.(*launchHandler).authorizer = authorizeFunc(nil)
+		},
 		"authorizer default dialer": func(c *AssemblyConfig) {
 			a := offNetAuthorizer()
 			c.Authorizer = a
