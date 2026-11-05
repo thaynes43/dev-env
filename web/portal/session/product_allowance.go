@@ -30,12 +30,58 @@ func disconnectedAllowances() []portal.ProductAllowance {
 	return mappedAllowances()
 }
 
+// grokAllowanceProvider is the separate Grok row (OP192 S1, research R-07).
+// It is mapped apart from allowanceProviders: no Grok source is qualified, so
+// the row is only Not connected or Unknown and never carries a value.
+var grokAllowanceProvider = struct{ id, label string }{"grok", "Grok"}
+
 func mappedAllowances() []portal.ProductAllowance {
-	out := make([]portal.ProductAllowance, len(allowanceProviders))
+	out := make([]portal.ProductAllowance, len(allowanceProviders)+1)
 	for i, provider := range allowanceProviders {
 		out[i] = portal.ProductAllowance{Provider: provider.label, Value: portal.AllowanceNotConnected}
 	}
+	out[len(allowanceProviders)] = portal.ProductAllowance{Provider: grokAllowanceProvider.label, Value: portal.AllowanceNotConnected}
 	return out
+}
+
+// grokAllowance maps the Grok row from Grok statuses and items only, so Grok
+// data never changes another row. A missing Grok status, as in a stored
+// three-row document, is Not connected. Until a Grok source is qualified, a
+// Grok item or any other availability is Unknown with no window and no
+// last-reported value.
+func grokAllowance(doc providerallowance.ReadResponse) portal.ProductAllowance {
+	a := portal.ProductAllowance{Provider: grokAllowanceProvider.label, Value: portal.AllowanceUnknown}
+	switch {
+	case doc.NextCursor != nil:
+		a.Reason = "Partial allowance read"
+		return a
+	case doc.Schema != providerallowance.SchemaRead:
+		a.Reason = "Unsupported allowance document"
+		return a
+	}
+	conflict, other := false, false
+	for _, status := range doc.SourceStatuses {
+		if status.Provider != grokAllowanceProvider.id {
+			continue
+		}
+		conflict = conflict || status.Availability == providerallowance.AvailabilityConflict
+		other = other || status.Availability != providerallowance.AvailabilityUnconfigured
+	}
+	for _, item := range doc.Items {
+		if item.Observation.Provider == grokAllowanceProvider.id {
+			conflict = conflict || item.Observation.Availability == providerallowance.AvailabilityConflict
+			other = true
+		}
+	}
+	switch {
+	case conflict:
+		a.Reason = "Conflicting allowance reports"
+	case other:
+		a.Reason = "No qualified Grok source"
+	default:
+		a.Value = portal.AllowanceNotConnected
+	}
+	return a
 }
 
 // MapProductAllowance projects a decoded cached-read contract into account
@@ -149,6 +195,7 @@ func MapProductAllowance(doc providerallowance.ReadResponse) []portal.ProductAll
 			a.LastReported = lastReportedAllowance(doc, provider.id)
 		}
 	}
+	out[len(allowanceProviders)] = grokAllowance(doc)
 	return out
 }
 

@@ -68,7 +68,7 @@ func TestAggregateAllowanceTransport(t *testing.T) {
 		t.Fatal("attach", err)
 	}
 	page := sessions.projectAuthorizedAggregateAllowance(context.Background(), portal.ProductPage{})
-	if hits != 1 || len(page.Allowance) != 3 {
+	if hits != 1 || len(page.Allowance) != 4 || page.Allowance[3].Provider != "Grok" {
 		t.Fatalf("hits %d rows %d", hits, len(page.Allowance))
 	}
 	for _, row := range page.Allowance {

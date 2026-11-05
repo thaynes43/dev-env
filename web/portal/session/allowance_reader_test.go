@@ -61,7 +61,7 @@ func TestCachedAllowanceReachesSessionAndUsage(t *testing.T) {
 	if window.Percent != "40% left" || window.Observed != "1 Nov 03:30 UTC" || window.ObservedAt != allowanceObserved || window.AccountKey != allowanceAccount || window.Provenance != "Provider API" {
 		t.Fatalf("window %+v", window)
 	}
-	if len(page.Allowance) != 3 || page.Allowance[1].Provider != "Codex" || page.Allowance[1].Value != portal.AllowanceUnknown || page.Allowance[2].Provider != "Cursor" || page.Allowance[2].Value != portal.AllowanceUnknown {
+	if len(page.Allowance) != 4 || page.Allowance[3].Provider != "Grok" || page.Allowance[3].Value != portal.AllowanceNotConnected || page.Allowance[1].Provider != "Codex" || page.Allowance[1].Value != portal.AllowanceUnknown || page.Allowance[2].Provider != "Cursor" || page.Allowance[2].Value != portal.AllowanceUnknown {
 		t.Fatalf("providers %+v", page.Allowance)
 	}
 	if strings.Contains(allowanceBlob(page.Allowance), "SECRET") {
@@ -387,7 +387,8 @@ func assertFixedRefusal(t *testing.T, rows []portal.ProductAllowance, reason str
 	if strings.Contains(blob, "SECRET") || strings.Contains(blob, "bytes") || strings.Contains(blob, "limit") || strings.Contains(blob, "invalid_") {
 		t.Fatalf("source text in allowance: %s", blob)
 	}
-	if len(rows) != 3 {
+	// The Grok row (OP192 S1) refuses a whole-document failure the same way.
+	if len(rows) != 4 || rows[3].Provider != "Grok" {
 		t.Fatalf("rows %+v", rows)
 	}
 	for _, row := range rows {

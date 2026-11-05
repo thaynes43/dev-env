@@ -64,12 +64,15 @@ func TestOP192GrokNotConnectedRowIsWireCompatible(t *testing.T) {
 			conflict.SourceStatuses[i].Validation.State = providerallowance.ValidationConflict
 		}
 	}
+	// Since OP192 S1 the portal has its own Grok row: Not connected, or
+	// Unknown for the conflict variant, and never a value.
+	wantGrok := map[string]portal.ProductAllowanceState{"not-connected": portal.AllowanceNotConnected, "grok-conflict": portal.AllowanceUnknown}
 	for name, variant := range map[string]providerallowance.ReadResponse{"not-connected": doc, "grok-conflict": conflict} {
 		rows := session.MapProductAllowance(variant)
-		if len(rows) != 3 {
-			t.Fatalf("%s: rows %d", name, len(rows))
+		if len(rows) != 4 || rows[3].Provider != "Grok" || rows[3].Value != wantGrok[name] || len(rows[3].Windows) != 0 || len(rows[3].LastReported) != 0 {
+			t.Fatalf("%s: rows %+v", name, rows)
 		}
-		for _, row := range rows {
+		for _, row := range rows[:3] {
 			if row.Value != portal.AllowanceNotConnected || row.Reason != "" || len(row.Windows) != 0 || len(row.LastReported) != 0 {
 				t.Fatalf("%s: %s: %+v", name, row.Provider, row)
 			}
@@ -133,8 +136,8 @@ func TestOP192GrokNeverFoldsIntoCursorWithoutTrustedPool(t *testing.T) {
 				t.Fatalf("grok was deduped without a trusted pool: %+v", grok)
 			}
 			rows := session.NewCachedAllowanceReader(raw, providerallowance.FixtureParseLimits, trusts, reg, session.AllowanceReadPolicy{MaxAge: time.Hour, Set: true}).Allowances(collectionServed)
-			if len(rows) != 3 {
-				t.Fatalf("rows %d", len(rows))
+			if len(rows) != 4 || rows[3].Provider != "Grok" || len(rows[3].Windows) != 0 {
+				t.Fatalf("rows %+v", rows)
 			}
 			for _, row := range rows {
 				for _, w := range row.Windows {

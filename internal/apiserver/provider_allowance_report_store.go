@@ -228,6 +228,11 @@ func (s *AggregateAllowanceReportStore) accept(doc providerallowance.ReadRespons
 			return err
 		}
 	}
+	for _, provider := range optionalAggregateProviders {
+		if status, ok := statuses[provider]; ok && !notConnectedStatus(provider, status) {
+			return ErrAggregateRejected
+		}
+	}
 	return nil
 }
 
@@ -477,6 +482,12 @@ func canonicalAllowance(raw string) bool {
 
 var aggregateProviders = []string{"cursor", "anthropic", "openai"}
 
+// optionalAggregateProviders may appear only as a typed Not connected status,
+// never with an item (OP192 S1, research R-07, release R1). Accepting it
+// before any producer emits it, and accepting a three-row document after a
+// four-row one, keeps the release order and its rollback safe.
+var optionalAggregateProviders = []string{"grok"}
+
 func indexAllowanceItems(doc providerallowance.ReadResponse) (map[string]providerallowance.ReadItem, error) {
 	out := map[string]providerallowance.ReadItem{}
 	if len(doc.Items) > 8 {
@@ -497,7 +508,7 @@ func indexAllowanceItems(doc providerallowance.ReadResponse) (map[string]provide
 func indexAllowanceStatuses(doc providerallowance.ReadResponse) (map[string]providerallowance.SourceStatus, error) {
 	out := map[string]providerallowance.SourceStatus{}
 	for _, status := range doc.SourceStatuses {
-		if !knownAggregateProvider(status.Provider) {
+		if !knownAggregateProvider(status.Provider) && !optionalAggregateProvider(status.Provider) {
 			return nil, ErrAggregateRejected
 		}
 		if _, dup := out[status.Provider]; dup {
@@ -510,10 +521,55 @@ func indexAllowanceStatuses(doc providerallowance.ReadResponse) (map[string]prov
 			return nil, ErrAggregateRejected
 		}
 	}
-	if len(out) != len(aggregateProviders) {
-		return nil, ErrAggregateRejected
-	}
 	return out, nil
+}
+
+func optionalAggregateProvider(provider string) bool {
+	for _, name := range optionalAggregateProviders {
+		if name == provider {
+			return true
+		}
+	}
+	return false
+}
+
+// notConnectedShapes are the only statuses the store keeps for an optional
+// provider (OP192 S1, research R-07): the served empty slot, the
+// Collection.build unconfigured row, and the agent-run local preflight row.
+// Each is fixed text, so nothing in the status can carry an account, a
+// workspace, a provider value or free text.
+var notConnectedShapes = []struct {
+	producer, codePrefix, codeSuffix, reason string
+	result                                   providerallowance.AttemptResult
+}{
+	{"aggregate-unconfigured", "source_unconfigured", "", "unconfigured", providerallowance.AttemptUnknown},
+	{"collection-unconfigured", "source_unconfigured", "", "source not configured", providerallowance.AttemptUnknown},
+	{"agent-run-local-preflight", "local_unconfigured_", "_no_provider_request", "local configuration check; no provider request", providerallowance.AttemptUnavailable},
+}
+
+// notConnectedStatus is the only form an optional provider's status may take:
+// unconfigured and never good; unknown freshness with basis none and no
+// policy; unverified validation with no refs; an unknown binding with no
+// account, no workspace and generation 0; one timestamp; and one fixed shape.
+func notConnectedStatus(provider string, status providerallowance.SourceStatus) bool {
+	attempt, fresh, binding := status.LastAttempt, status.Freshness, status.Binding
+	if status.Availability != providerallowance.AvailabilityUnconfigured || status.LastGood != nil ||
+		fresh.State != providerallowance.FreshUnknown || fresh.Basis != providerallowance.BasisNone || fresh.PolicyRef != nil ||
+		status.Validation.State != providerallowance.ValidationUnverified || len(status.Validation.ValidationRefs) != 0 ||
+		binding.State != providerallowance.BindingUnknown || binding.Generation != 0 || binding.AccountRef != nil || binding.WorkspaceRef != nil ||
+		attempt.Code == nil || attempt.CompletedAt == nil || *attempt.CompletedAt != attempt.AttemptedAt || fresh.AsOf != attempt.AttemptedAt {
+		return false
+	}
+	for _, shape := range notConnectedShapes {
+		code := shape.codePrefix
+		if shape.codeSuffix != "" {
+			code += provider + shape.codeSuffix
+		}
+		if status.ProducerRef == shape.producer && *attempt.Code == code && fresh.Reason == shape.reason && attempt.Result == shape.result {
+			return true
+		}
+	}
+	return false
 }
 
 func knownAggregateProvider(provider string) bool {
@@ -659,14 +715,17 @@ func cloneAggregateString(in *string) *string {
 	return &value
 }
 
-// UnconfiguredAggregateDocument is the empty slot. All three providers are
-// unknown and unconfigured. It does not use a serving clock or a zero quota.
+// UnconfiguredAggregateDocument is the empty slot. The three required
+// providers and the optional Grok row are unknown and unconfigured, so an
+// empty slot shows Grok as Not connected. It is served, never stored by the
+// operator, and does not use a serving clock or a zero quota.
 func UnconfiguredAggregateDocument() providerallowance.ReadResponse {
 	at := "1970-01-01T00:00:00Z"
 	code := "source_unconfigured"
 	completed := at
-	statuses := make([]providerallowance.SourceStatus, 0, len(aggregateProviders))
-	for _, provider := range aggregateProviders {
+	providers := append(append([]string(nil), aggregateProviders...), optionalAggregateProviders...)
+	statuses := make([]providerallowance.SourceStatus, 0, len(providers))
+	for _, provider := range providers {
 		statuses = append(statuses, providerallowance.SourceStatus{
 			Provider: provider, ProducerRef: "aggregate-unconfigured", Availability: providerallowance.AvailabilityUnconfigured,
 			LastAttempt: providerallowance.LastAttempt{AttemptedAt: at, CompletedAt: &completed, Result: providerallowance.AttemptUnknown, Code: &code},

@@ -857,12 +857,12 @@ func TestAccountAllowanceNeverComesFromSessionTokensOrCost(t *testing.T) {
 			pattern = `(?s)<section class="allowance".*?Plan limits.*?</section>`
 		}
 		block := regexp.MustCompile(pattern).FindString(string(body))
-		for _, name := range []string{"Claude", "Codex", "Cursor"} {
+		for _, name := range []string{"Claude", "Codex", "Cursor", "Grok"} {
 			if !strings.Contains(block, name) {
 				t.Fatalf("allowance missing %s: %s", name, block)
 			}
 		}
-		if block == "" || strings.Count(block, "Not connected") != 3 || strings.Contains(block, "%") || strings.Contains(block, "38.00") || strings.Contains(block, "62,000") || strings.Contains(block, "62000") {
+		if block == "" || strings.Count(block, "Not connected") != 4 || strings.Contains(block, "%") || strings.Contains(block, "38.00") || strings.Contains(block, "62,000") || strings.Contains(block, "62000") {
 			t.Fatalf("usage leaked into allowance: %s", block)
 		}
 		if view == "usage" {

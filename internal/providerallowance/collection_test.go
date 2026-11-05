@@ -1090,7 +1090,7 @@ func TestCollectionSnapshotRoundTripAndCachedReader(t *testing.T) {
 	}
 	reader := session.NewCachedAllowanceReader(saved, providerallowance.FixtureParseLimits, []providerallowance.TrustedContext{trust}, reg, session.AllowanceReadPolicy{MaxAge: time.Hour, Set: true})
 	rows := reader.Allowances(collectionServed)
-	if len(rows) != 3 || rows[1].Provider != "Codex" || rows[1].Value != portal.AllowanceMeasured || len(rows[1].Windows) != 1 || rows[1].Windows[0].Percent != "12.5% used" {
+	if len(rows) != 4 || rows[1].Provider != "Codex" || rows[1].Value != portal.AllowanceMeasured || len(rows[1].Windows) != 1 || rows[1].Windows[0].Percent != "12.5% used" || rows[3].Provider != "Grok" || rows[3].Value != portal.AllowanceNotConnected {
 		t.Fatalf("%#v", rows)
 	}
 	if rows[0].Value == portal.AllowanceMeasured || rows[2].Value == portal.AllowanceMeasured {

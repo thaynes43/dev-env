@@ -183,8 +183,12 @@ the policy.
 Sessions shows a compact Account allowance list in the list header. Usage shows the
 same model in full, also on a read with no rows. Tasks, Asks and Pages show none.
 A failed Sessions read shows no allowance.
-No allowance reader is configured in production, so Claude, Codex and Cursor show
-`Not connected`, with no percent.
+No allowance reader is configured in production, so Claude, Codex, Cursor and
+Grok show `Not connected`, with no percent. Grok is its own row (OP192 S1); it is
+only `Not connected` or `Unknown` until a Grok source is qualified, and Grok data
+never changes another row. The Cursor and Grok sections on Usage say: "Grok used
+in Cursor counts toward Cursor's plan usage. Whether Cursor and Grok share one
+pool is unknown."
 
 When any provider reports usage windows, the provider lines sit in a "By provider"
 disclosure. On a window wider than 700px and at most 760px tall it starts closed beside
