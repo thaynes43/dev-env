@@ -241,16 +241,19 @@ example, labelled historical, is in
    observing it through later authorized reads of that same task. The window
    ends the observation, not the task or its assignment. If no authorized read
    path is left, for example because the launcher's only credential was that
-   launch token, record the gap. Put the task's identity on the tracker, and
-   send it to a session that can read the task, such as the parent. Handing
-   over the identity does not hand over custody: custody moves only as in
-   timer-checkin, section 5. Never create a credential to fill the gap.
+   launch token, record the gap and put the task's identity on the tracker.
+   Then hand custody over as in timer-checkin, section 5: name a session that
+   can read the task, usually the parent, as the successor, and send it the
+   handoff. Until it reports, custody is in transit. Never create a
+   credential to fill the gap.
 6. **Watch for the return with a bounded PR-or-exit watcher**
    ([timer-checkin, section 1](../timer-checkin/SKILL.md#1-what-exists)). It
    ends when a PR appears on the child's branch, when the child ends, when
    reads fail or are refused, or at its deadline. If the child's remaining
    work waits on a decision only Tom can make, such as a merge or a trust
-   approval, end the watcher. That work is a pending decision (section 5;
+   approval, end the watcher. First check that claim against the work
+   order's merge authority or a recorded hold: the child's own claim is
+   owner-reported, and agents merge their own PRs unless a hold applies. That work is a pending decision (section 5;
    timer-checkin, section 6): record a checkpoint with its resume trigger,
    Tom's verified answer, and keep no timer, watcher or poll for it.
 7. **Take the return:** the task exit, verdict and retained outcome from

@@ -156,8 +156,9 @@ task. The child can still be working, so read `agent-run show` once more
 before you take the return. If the child is still busy, wait for its end with
 the first script, on the same deadline. This one would end at once on the PR
 that already exists. If the child's remaining work waits on a decision only
-Tom can make, such as a merge or a trust approval, stop the watcher instead:
-that work is a pending decision. Record a checkpoint with its resume trigger,
+Tom can make, such as a merge or a trust approval, and the work order or a
+recorded hold confirms it, stop the watcher instead: that work is a pending
+decision. Record a checkpoint with its resume trigger,
 and keep no timer, watcher or poll for it (section 6). A pending agent state is not an end either: a new
 pod can be Running before its agent starts, and the watcher keeps reading the
 same Session. It reads `show`, not `log`, so a log that is not found yet does
