@@ -20,8 +20,10 @@ but it is not that loop.
   log and relayed interim findings to the coordinator with `agent-run msg`.
 - The coordinator's PR-or-exit watcher ended with
   `END pr number=20 state=OPEN head=1111111` and exit 0.
-- `example/example-studio` has no branch rules: `gh api
-  repos/example/example-studio/rules/branches/main` returns `[]`.
+- `example/example-studio` has no required checks: `gh api
+  repos/example/example-studio/rules/branches/main` returns `[]`, and
+  `gh api repos/example/example-studio/branches/main` reports
+  `protected: false`.
 - The coordinator's report to the parent's thread failed with
   "thread-not-found".
 - The parent asks whether this proves the current adversarial review of the
@@ -35,8 +37,8 @@ but it is not that loop.
    its head into the custody record.
 2. Read `review.md` and `questions.md` at head `1111111` yourself (rung 5).
    Record the PR (rung 6).
-3. Record rung 7 as "no required checks configured", with the empty branch
-   rules as evidence. That is not a pass. Say in the report that rung 7 was
+3. Record rung 7 as "no required checks configured", with the empty rulesets
+   and the unprotected branch as evidence. That is not a pass. Say in the report that rung 7 was
    not met.
 4. Get the independent review the story requires. The child's own report and
    the investigator's relay are not one.

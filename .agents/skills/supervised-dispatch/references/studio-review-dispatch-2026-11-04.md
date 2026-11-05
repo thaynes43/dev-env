@@ -8,7 +8,8 @@ of anything.
 
 Sources:
 - GitHub reads made here on 2026-11-05: the metadata of haynes-studio PR 20,
-  its files at its head, and the haynes-studio branch rules;
+  its files at its head, and the rulesets and protection of haynes-studio's
+  `main`;
 - the OP402 sections of the [workflow guide](../../../../docs/workflow-guide.md#launch-a-project-bound-child-on-another-provider)
   and [ask your coordinator](../../../../docs/ask-your-coordinator.md#return-route-for-a-parent-without-a-project);
 - two inbox messages from the coordination task `dev-env-1105-001704`
@@ -30,7 +31,7 @@ here. No Studio session was contacted or read for this page.
 | 5-6. Observe and watch | The parent ran a bounded PR-or-exit watcher. Meanwhile an investigator read the child's log and relayed interim findings to the parent with `agent-run msg`. That relay is not automatic child delivery. | Relayed; ask your coordinator records the relay. |
 | 7. Return | haynes-studio PR 20, "docs(design): studio UI mockup v2 (story 401)", from branch `agent/haynes-studio-1104-151051`, head `edbd1647`. It holds `review.md` (12 findings), `questions.md` (5 questions) and `index.html`. | Read here: PR metadata and both files at `edbd1647`. |
 | 7. Review and merge | The parent picked up and reviewed the result. PR 20 merged at 2026-11-04T15:36:49Z (merge commit `195e5a98`). | Pickup and review relayed; merge read here. |
-| Rung 7 | haynes-studio's `main` has no branch rules (`gh api repos/thaynes43/haynes-studio/rules/branches/main` returned `[]`), so rung 7 cannot be reached there. | Read here. |
+| Rung 7 | haynes-studio's `main` has no required checks: no ruleset rules (`gh api repos/thaynes43/haynes-studio/rules/branches/main` returned `[]`) and no classic protection (`gh api repos/thaynes43/haynes-studio/branches/main` reports `protected: false`). Rung 7 cannot be reached there. | Read here. |
 
 Do not carry Studio's missing required checks to another repository. dev-env
 requires `CI - Success` on the exact head before merge.

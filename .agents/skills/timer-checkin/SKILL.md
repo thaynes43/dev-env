@@ -72,7 +72,9 @@ done
 Save it as a script and run it with `bash` through Bash `run_in_background`,
 which reports once when it exits, or under a `Monitor` for at most 30 minutes,
 then re-arm it with the same deadline. Never run it in the foreground
-(section 4). Take the deadline from the work order. What its exits mean:
+(section 4). Take the deadline from the work order. If it has none, get one
+from whoever owns the work order, and supervise with check-ins until then;
+never run a wait without a deadline. What its exits mean:
 
 - **0** the child ended or stopped. `END child ended` means agentd reported the
   task's end (`exited`), or that it could not start (`failed`), or that its
