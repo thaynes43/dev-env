@@ -999,6 +999,21 @@ per session from `dev-env-templates`, and never changes either after create.**
   scheduler's reason, else the container's waiting reason), `podName`, `nodeName`,
   `revision` (the pod's, not the templates'), and the conditions `PodReady` and
   `Outdated`.
+  *2026-11-05 note (haynes-ops#4663):* a reconcile that finds nothing changed
+  writes no status. A condition keeps its `lastTransitionTime` while its status
+  stays the same, whichever rule sets it. On 2026-11-04 a protected private
+  Session that wanted its pod gone lost `RemovalBlocked` and got it back with a
+  new time on every reconcile. So every reconcile wrote the status, each write
+  queued the next reconcile, and the operator sent about 155 status writes a
+  second for 13 hours until etcd filled. `TestReconcileOfAnUnchangedSessionWritesNoStatus`
+  holds the retained private states (retention pending, task compute
+  reclaimed, preservation unknown, HOME expired) and the legacy rescue path to
+  no write once steady. The operator's client-side API limit
+  (`--kube-api-qps`, `--kube-api-burst`) is off by default, as in
+  controller-runtime. The measured normal rate is about 1 to 1.7 requests a
+  second, but startup resync and rescue bursts were not measured, so an
+  install opts in, for example with `--kube-api-qps=20 --kube-api-burst=40`
+  (per resource kind).
 - **Reach.** The operator's cache holds `dev-agents` and the one templates ConfigMap.
   Its RBAC (6.11) gains `get`, `list` and `watch` on that ConfigMap by `resourceNames`
   in `dev-env-system` (the cache lists and watches it with a `metadata.name` field
