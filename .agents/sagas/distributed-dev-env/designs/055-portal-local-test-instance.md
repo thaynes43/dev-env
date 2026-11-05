@@ -1,7 +1,9 @@
 # DESIGN-055: A local test instance of the portal
 
-- **Status:** Proposed, 2026-11-05. The first implementation is in draft PR
-  [#944](https://github.com/thaynes43/dev-env/pull/944).
+- **Status:** Proposed, 2026-11-05. The read-only first implementation is
+  merged in PR [#944](https://github.com/thaynes43/dev-env/pull/944)
+  (`db04029e`). The write flows (section 9) are in PR
+  [#946](https://github.com/thaynes43/dev-env/pull/946).
 - **Origin:** Tom asked why agents need the live UI when they can host an
   identical test instance locally, with no auth, and drive it with headless
   Chrome or Playwright tests.
