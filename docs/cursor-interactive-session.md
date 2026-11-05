@@ -440,7 +440,7 @@ as `Error: <title>` (for example `Error: Agent stopped retrying` or
 The expected text for a rejection may then end with the footer rows, after the
 Skip row or the switch hint, once. Any row after the Skip row or the hint
 refuses `y`, and refuses `ctrl-c` unless those rows start with one `Error: `
-line: approving a command its turn may no longer await is never answered. After one rejection,
+line: a command whose turn may have ended is never approved. After one rejection,
 the last decision shows alone, without the counter row or hint, and needs a
 fresh `inspect` and its own approval reference.
 
