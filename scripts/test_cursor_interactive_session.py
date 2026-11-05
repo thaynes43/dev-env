@@ -2274,6 +2274,16 @@ class AnswerTests(AnswerFixture):
                 self.command_rows({divider + 2: rows[divider + 2].rstrip() + "\u00a0"}), None, "modal-mismatch"),
             "a trailing box-drawing token in the expected text": (
                 None, "".join(expected[:2] + [expected[2].rstrip("\n") + " \u2500\n"] + expected[3:]), "invalid-input"),
+            "a leading no-break space in the expected text": (
+                None, "".join(expected[:2] + ["\u00a0" + expected[2]] + expected[3:]), "invalid-input"),
+            "a trailing em space in the expected text": (
+                None, "".join(expected[:2] + [expected[2].rstrip("\n") + "\u2003\n"] + expected[3:]), "invalid-input"),
+            "an expected row of only a box-drawing character": (
+                None, "".join(expected[:5] + ["\u2500\n"] + expected[5:]), "invalid-input"),
+            "an expected row of only a no-break space": (
+                None, "".join(expected[:5] + ["\u00a0\n"] + expected[5:]), "invalid-input"),
+            "a no-break space row after the prompt": (
+                self.command_rows({divider + 13: "\u00a0"}), None, "prompt-unclear"),
             "an extra expected row": (None, "".join(expected[:5] + ["Allow network access\n"] + expected[5:]), "modal-mismatch"),
             "a missing middle row": (None, "".join(expected[:5] + expected[6:]), "modal-mismatch"),
             "the first command row left out": (None, "".join(expected[1:]), "prompt-unclear"),

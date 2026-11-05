@@ -748,7 +748,7 @@ def validate_answer(args):
                                        "command prompt (modal-approval) the only choice is y, shown once as (y): never the "
                                        "allowlist (tab), Run Everything (shift+tab) or Skip (esc or n). Nothing was sent.")
     if prompt_shape(args.expect_kind, choice, lines) == "divider" and any(
-            line.strip(" ") != prompt_text(line) for line in raw.decode("utf-8").split("\n") if prompt_text(line)):
+            line.strip(" ") != prompt_text(line) for line in raw.decode("utf-8").split("\n") if line.strip(" ")):
         raise Refusal("invalid-input", "A command prompt's expected rows must not start or end with a box-drawing or "
                                        "non-space whitespace character. Nothing was sent.")
     trust_path = getattr(args, "trust_path", None)
@@ -986,7 +986,7 @@ def check_divider_prompt(visible, boxes, first, last, width, lines):
     if first < 1 or visible[first - 1] != DIVIDER * width:
         raise Refusal("prompt-unclear", "The command prompt is not directly under a divider row across the pane. "
                                         "Nothing was sent.")
-    if any(row.strip() for row in visible[last + 1:]):
+    if any(row.strip(" ") for row in visible[last + 1:]):
         raise Refusal("prompt-unclear", "Something follows the command prompt before the pane bottom. Nothing was sent.")
     if any(phrases(row) - {PENDING_STATUS} for row in visible[:first] + visible[last + 1:]):
         raise Refusal("prompt-unclear", "Another prompt is on the visible screen. Nothing was sent.")
