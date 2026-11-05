@@ -99,6 +99,9 @@ ANSWERED_DETAIL = (
 # row, this navigation hint, was. Nothing else may differ.
 ANSWERED_STATUS = "\u23f3 Trusting workspace..."
 ANSWERED_HINT = "Use arrow keys to navigate, Enter to select, or press the key shown"
+# Cursor's own composer, empty: its arrow and placeholder, nothing typed (the live G1 capture).
+CURSOR_COMPOSER_ARROW = "\u2192"
+CURSOR_COMPOSER_EMPTY = "\u2192 Plan, search, build anything"
 SELECTION_MARKER = "\u25b6 "
 LEDGER_FORMAT = 2
 LEDGER_FORMAT_KEYS = ("format", "worktree", "box_rows_sha256", "box_marker_rows")
@@ -384,7 +387,8 @@ def classify(text, truncated, rows_total, ident, answered=None):
         first = len(rows) - len(scanned)
         box = answered_box(rows, first, answered, truncated)
         cursor = int(ident["cursor_y"])
-        if box and cursor == int(ident["height"]) - 1 and first + cursor > box[1]:
+        if (box and cursor == int(ident["height"]) - 1 and first + cursor > box[1]
+                and cursor_composer_empty(rows[box[1] + 1:first + cursor + 1])):
             kind = modal_kind(rows[first:max(first, box[0])] + rows[box[1] + 1:])
             used = None if kind else answered["approval_ref"]
     kind = kind or composer_kind(rows, ident["cursor_y"], ident["height"])
@@ -1036,6 +1040,16 @@ def answered_evidence(state, answered_text):
             "file of a sent trust answer for this task, pane, process and owner, whose trust path is the worktree "
             "and whose ledger entry matches the task's record. Nothing was sent."))
     return answered
+
+
+def cursor_composer_empty(rows):
+    """True when exactly one of `rows` is Cursor's composer (its first character, after
+    whitespace, is the arrow) and that row is the empty composer: arrow and placeholder only.
+
+    Cursor parks its cursor on the blank last row, so the cursor row alone does not show
+    that Cursor drew its composer after the answer."""
+    composers = [row.strip() for row in rows if row.strip().startswith(CURSOR_COMPOSER_ARROW)]
+    return composers == [CURSOR_COMPOSER_EMPTY]
 
 
 def answered_box(rows, first_visible, answered, truncated):

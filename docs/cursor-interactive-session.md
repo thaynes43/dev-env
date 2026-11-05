@@ -390,20 +390,25 @@ and `reply` stop counting that box as a prompt only when all of these hold:
    differ: `box_rows_sha256` decides (`box_marker_rows` records which rows
    had the marker). A box that keeps the hint and adds the status row is
    refused; the live screen does not show that.
-3. **Around.** The cursor is on the last pane row, below the box. No history
-   row outside the box has a prompt phrase, and no visible row outside the
-   box has one either.
+3. **Around.** The cursor is on the last pane row, below the box. From the
+   row after the box's bottom border to the cursor row, exactly one row is
+   Cursor's composer (its first character after spaces is `→`), and that row
+   is exactly `→ Plan, search, build anything`: the empty composer. Cursor
+   parks its cursor on a blank last row, so the cursor row alone does not
+   show that the composer was drawn. The moment while Cursor shows only
+   `⏳ Trusting workspace...`, a composer with typed text, a second composer
+   row, or a `>` composer keep the box a prompt. No history row outside the
+   box has a prompt phrase, and no visible row outside the box has one
+   either.
 
 `inspect` stores with the receipt which ledger answer, if any, its
 classification relied on. `reply` refuses with `stale-receipt` when its own
 reliance differs, for example after an `inspect` without
 `--answered-text-file` and a `reply` with it.
 
-Then the screen is classified as if the box were not there: `active` for an
-empty `>` composer at the cursor, `user-draft` for a draft, and otherwise
-`unclassified`, which still needs `--observed-ready`. Cursor's own `→`
-composer is `unclassified`. `classification_detail` names the approval
-reference. Anything else is refused as before: no ledger entry, an entry for
+Then the screen is classified as if the box were not there. With Cursor's
+`→` composer that is `unclassified`, which still needs `--observed-ready`.
+`classification_detail` names the approval reference. Anything else is refused as before: no ledger entry, an entry for
 another pane, pid, owner or worktree, a box that differs, a second prompt box
 (in history too), a nested box, another prompt in the capture, a box cut by
 the capture bound or by a narrower pane, a screen that cannot be located, a

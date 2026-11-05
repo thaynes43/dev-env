@@ -1754,7 +1754,6 @@ class AnswerTests(AnswerFixture):
     def test_answered_trust_box_does_not_block_a_reply(self):
         cases = {
             "Cursor's composer: unclassified, needs --observed-ready": (ANSWERED_SCREEN, "unclassified"),
-            "an idle > composer: active": (ANSWERED_SCREEN.replace(CURSOR_COMPOSER, ">"), "active"),
             "no history": (ANSWERED_SCREEN, "unclassified", 0),
             "the box top in history": (ANSWERED_SCREEN, "unclassified", 11, 20),
         }
@@ -1874,7 +1873,8 @@ class AnswerTests(AnswerFixture):
             "a confirmation below": (TRUST_TIP + box + "  Are you sure? (y/n)\n" + CURSOR_COMPOSER, None, "modal-unknown"),
             "a trust phrase below, outside a box": (
                 TRUST_TIP + box + "  Do you trust this folder?\n" + CURSOR_COMPOSER, None, "modal-trust"),
-            "a draft at the cursor": (TRUST_TIP + box + "  Cursor Agent\n> typed draft", None, "user-draft"),
+            "a draft at the cursor": (TRUST_TIP + box + "  Cursor Agent\n> typed draft", None, "modal-trust"),
+            "an idle > composer instead of Cursor's": (ANSWERED_SCREEN.replace(CURSOR_COMPOSER, ">"), None, "modal-trust"),
             "the cursor inside the box": (ANSWERED_SCREEN, 12, "modal-trust"),
             "the cursor below the box, on row 22 of 24": (ANSWERED_SCREEN, 22, "modal-trust"),
         }
@@ -2147,7 +2147,7 @@ class AnswerTests(AnswerFixture):
             "no status row": (ANSWERED_SCREEN.replace(STATUS_ROW.strip(), "x" * len(STATUS_ROW.strip())), "modal-trust"),
             "a command prompt below": (ANSWERED_SCREEN.replace("\n  Cursor Agent\n", "\n  Allow this command: git status\n"),
                                        "modal-approval"),
-            "a draft at the cursor": (ANSWERED_SCREEN.replace(CURSOR_COMPOSER, "> typed draft"), "user-draft"),
+            "a draft at the cursor": (ANSWERED_SCREEN.replace(CURSOR_COMPOSER, "> typed draft"), "modal-trust"),
         }
         for label, (screen, kind) in cases.items():
             with self.subTest(label=label):
@@ -2252,6 +2252,30 @@ class LiveG1Tests(unittest.TestCase):
         self.assertEqual(self.classify("\n".join(rows), history=17), ("modal-trust", True, None))
         # Without that row nothing on the visible screen is a prompt (visible screen only).
         self.assertEqual(self.classify(history=17), ("unclassified", True, None))
+
+    def test_the_answered_box_needs_cursors_empty_composer_below_it(self):
+        # Review of 00606451: Cursor parks the cursor on the blank last row, so the cursor row
+        # does not prove a composer. Exactly one row from the box bottom to the cursor row must
+        # be Cursor's composer, showing only its placeholder.
+        rows = LIVE["capture"].split("\n")
+        composer = rows.index("  " + CURSOR_COMPOSER)
+        cases = {
+            "the trusting moment: the box and status row, nothing below": rows[:19] + [""] * 16,
+            "the composer row missing": rows[:composer] + [""] + rows[composer + 1:],
+            "the composer holding user text": rows[:composer] + ["  \u2192 fix the reminder test"] + rows[composer + 1:],
+            "user text after the placeholder": rows[:composer] + ["  " + CURSOR_COMPOSER + " now"] + rows[composer + 1:],
+            "a bare arrow": rows[:composer] + ["  \u2192"] + rows[composer + 1:],
+            "a second composer row": rows[:composer] + ["  \u2192 draft line"] + rows[composer:-1],
+            "a > composer instead": rows[:composer] + ["  >"] + rows[composer + 1:],
+        }
+        for label, changed in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(len(changed), 35)
+                self.assertEqual(self.classify("\n".join(changed)), ("modal-trust", True, None))
+        # The composer may sit on the cursor row itself.
+        on_cursor = rows[:composer] + rows[composer + 1:] + ["  " + CURSOR_COMPOSER]
+        self.assertEqual(len(on_cursor), 35)
+        self.assertEqual(self.classify("\n".join(on_cursor)), ("unclassified", True, self.ref))
 
     def test_a_cropped_box_is_refused(self):
         rows = LIVE["capture"].split("\n")
