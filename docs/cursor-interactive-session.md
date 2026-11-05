@@ -131,7 +131,7 @@ Fail closed, with no keys and no Enter:
 | Pane id, pid, cwd, session, or command changed | `pane-replaced` |
 | tmux copy/mode flag set | `pane-in-mode` |
 | Receipt missing, old, or capture changed | `stale-receipt` |
-| Trust, permission, approval, or unrecognized confirmation phrasing | `modal-trust`, `modal-permission`, `modal-approval`, `modal-unknown` |
+| Trust, permission, approval, or unrecognized confirmation phrasing on the visible screen | `modal-trust`, `modal-permission`, `modal-approval`, `modal-unknown` |
 | Cursor row is a nonempty `>`, `›`, or `❯` composer | `user-draft` |
 | Screen is not that composer and has no known modal phrase | `unclassified-ui` unless `--observed-ready` |
 
@@ -275,10 +275,11 @@ when:
    expected line, and the cursor row is not a composer row (otherwise
    `stale-prompt`).
 
-`inspect` and `reply` do not use rule 4. Their classification still looks for
-known phrases as case-folded fragments of a row. That is detection, and it
-only ever leads to a refusal: `reply` refuses every prompt. `answer` alone acts
-on an approval, so it alone binds the prompt row for row.
+`inspect` and `reply` locate the visible screen the same way (rule 1), but do
+not use rule 4. Their classification looks for known phrases as case-folded
+fragments of a visible row. That is detection, and it only ever leads to a
+refusal: `reply` refuses every prompt on the visible screen. `answer` alone
+acts on an approval, so it alone binds the prompt row for row.
 
 Like `reply`, it also requires the latest receipt, the same pane id, pid,
 worktree, session, command and owner marker, and a capture unchanged since
@@ -343,8 +344,9 @@ remains between that last capture and the key: the time to start one tmux
 process. A change inside that window can still receive the key. The helper
 narrows the window; it cannot close it.
 
-After an answer, inspect again: old prompt text can stay in the captured rows,
-and `reply` keeps refusing while it is there.
+After an answer, inspect again. Old prompt text can stay in the history rows
+of the capture. `inspect` and `reply` do not count it there; `reply` refuses
+while a prompt is on the visible screen.
 
 This command is source only. It is not deployed to any host. Using it on a
 live pane, such as the PR #917 continuation's Cursor pane, still needs Tom's
@@ -355,21 +357,37 @@ specific approval for that exact prompt and path through a verified channel.
 The installed Cursor TUI has no stable, documented layout that this helper can
 prove from tmux text. Classification is intentionally narrow:
 
-- A known modal phrase anywhere in the bounded capture blocks sending.
-  Phrases include workspace trust, permission required, command approval, and
-  generic confirmations such as `yes/no` or `are you sure`. A phrase still
-  visible after the prompt is gone still blocks until a later capture drops it.
-- A user draft is only the last captured line, and only when tmux reports the
-  cursor on the last pane row and that line is a `>`, `›`, or `❯` prompt plus
-  text. Lines above that row are echoed transcript. Displayed text such as an
+- Classification reads the visible screen: the last `pane_height` rows of the
+  capture, located by the row count in rule 1 of the `answer` section. The
+  history rows above it are returned in `text` and bound by the receipt, but
+  are not classified.
+- A known modal phrase on the visible screen blocks sending. Phrases include
+  workspace trust, permission required, command approval, and generic
+  confirmations such as `yes/no` or `are you sure`. A phrase that is only in
+  the history rows, such as an answered prompt that scrolled up, does not
+  block.
+- When the visible screen cannot be located (the row count does not match, or
+  the bounded capture does not hold all of it), the whole bounded capture is
+  classified as before: a phrase anywhere blocks, and a draft on the last line
+  at the cursor is refused. Such a screen is never `active`; an empty composer
+  there is `unclassified`. `classification_detail` says the screen was not
+  located.
+- A user draft is only the last visible row, and only when tmux reports the
+  cursor on the last pane row and that row is a `>`, `›`, or `❯` prompt plus
+  text. Rows above it are echoed transcript. Displayed text such as an
   answered `S8` line is not an unsent draft.
 - `active` means that same cursor row is only the empty prompt prefix. That is
   not proof the UI is idle, that a modal is absent, or that the served model
   matches `--model`.
 - Any other screen, including a prompt glyph when the cursor is elsewhere, is
-  `unclassified`. Reply then requires manual `--observed-ready` for that
-  receipt. If a real Cursor screen cannot be classified, do not invent a safer
-  reading; re-inspect or confirm the pane manually.
+  `unclassified`. Cursor's own composer row (`→ Plan, search, build anything`)
+  is not a `>`, `›`, or `❯` prompt, so that screen is `unclassified` too.
+  Reply then requires manual `--observed-ready` for that receipt. If a real
+  Cursor screen cannot be classified, do not invent a safer reading;
+  re-inspect or confirm the pane manually.
+- A prompt taller than the pane, whose phrase rows scrolled into history, is
+  judged only by its visible rows. A person giving `--observed-ready` reads the
+  receipt's whole `text`, history rows included.
 
 `pane_current_command` must stay the basename observed at launch and must be
 the client basename, `cursor-agent`, `agent`, or `node`. The official launcher

@@ -280,9 +280,10 @@ Handle it like this:
 6. **Send** only by the session's route in this step, after that read shows a
    normal empty prompt: through `reply` for a helper-started session, or the
    literal send-keys line of route 3 for a plain-tmux pane. If the read still
-   shows the prompt (old text can stay in the helper's capture window), do not
-   override it: send no keys at all (route 3 included), no `--observed-ready`,
-   nothing to clear the screen. This re-read comes only after the press is
+   shows the prompt on the visible screen, do not override it (the helper
+   classifies the visible screen only; old prompt text in its history rows
+   does not block): send no keys at all (route 3 included), no
+   `--observed-ready`, nothing to clear the screen. This re-read comes only after the press is
    recorded, so no decision is pending any more and step 2's no-timer rule no
    longer applies. Read once more at the next check-in of a timer that the
    resume re-created from the state file, or, with no timer, at the next
