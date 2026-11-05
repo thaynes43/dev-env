@@ -336,8 +336,25 @@ its pane (supervised-dispatch section 5; for example a prompt decision in
 authorized work keeps this timer, and its check-ins record nothing about the
 pending action beyond the existing hold line. If every remaining piece of work
 depends on the decision, end the timer as below, recording the stop and the
-resume trigger; the verified answer re-creates it from the state file. When the
-work ends or pauses:
+resume trigger; the verified answer re-creates it from the state file.
+
+Prove "every remaining piece" before you stop. A timer prompt scoped to one loop
+(one worker, one pilot) can stop only that loop; it does not end the custodian's
+other work. Before any `CronDelete`, write a lane table in the state file: one row
+for each piece of work the custodian owns or supervises, with its owner, its
+blocker type (`permission-denied`, `decision-pending`, `dependency` or `none`),
+its next action and what will wake it. Read the open work from the status record
+and the tracker, not from memory. Then:
+
+- A `none` row keeps the timer: do that work, or dispatch it to its owner.
+- A `dependency` row keeps the timer, with a read-only check of the dependency.
+  Its recovery does not lift a denial or answer a pending decision.
+- Delete the timer only when every row is `permission-denied` or
+  `decision-pending`, and record the table with the stop.
+- Never stop after a number of quiet or failed wakes. That is the stall rule
+  above, not a stop reason.
+
+When the work ends or pauses:
 
 1. `CronDelete` the job (or `ScheduleWakeup` with `stop: true`), then `CronList`
    to confirm it is gone. Do not keep polling during a pause.
@@ -350,4 +367,5 @@ This text is not operational proof. A real wake, re-arm, recovery and completion
 are proved by the keeper pilot (OP385), not by this file.
 
 Behavior scenarios for an evaluator: [scenarios/quiet-65-minutes.md](scenarios/quiet-65-minutes.md),
+[scenarios/one-lane-held.md](scenarios/one-lane-held.md), [scenarios/all-lanes-held.md](scenarios/all-lanes-held.md),
 and [new-pod-log-not-found.md](../supervised-dispatch/scenarios/new-pod-log-not-found.md) in supervised-dispatch.
