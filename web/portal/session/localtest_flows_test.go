@@ -209,3 +209,94 @@ func TestLocalTestHistoryFlow(t *testing.T) {
 		t.Fatalf("out-of-scope conversation read %d times", len(calls))
 	}
 }
+
+var localTestAnswerForm = regexp.MustCompile(`<form class="ask-answer" method="post" action="([^"]+)"[^>]*><input type="hidden" name="csrf" value="([^"]+)"><input type="hidden" name="requestID" value="([^"]+)"><input type="hidden" name="askID" value="([^"]+)">`)
+
+func localTestAnswerFormFor(t *testing.T, instance *LocalTest, id string) url.Values {
+	t.Helper()
+	page := serveLocalTest(instance, localTestRequest(http.MethodGet, AsksPath+"?ask="+id))
+	m := localTestAnswerForm.FindStringSubmatch(page.Body.String())
+	if page.Code != http.StatusOK || m == nil || m[1] != AsksPath+"/answer" || m[4] != id {
+		t.Fatalf("no answer form for %s (status %d)", id, page.Code)
+	}
+	return url.Values{"csrf": {m[2]}, "requestID": {m[3]}, "askID": {m[4]}, "optionId": {""}, "text": {""}}
+}
+
+// TestLocalTestAsksAnswerFlow drives the production Asks answer route: one
+// answer reaches the fixture operator once and the page then shows it
+// recorded; a double submit, a retry under a new request ID and a reload are
+// answered from the recorded state without a second operator call; a
+// different answer after the ask is closed and a cross-origin post are
+// refused before the operator.
+func TestLocalTestAsksAnswerFlow(t *testing.T) {
+	instance := newLocalTestForTest(t)
+	const info, approval = "ask-0000000000000001", "ask-0000000000000002"
+	origin := "http://" + localTestListen.String()
+	form := localTestAnswerFormFor(t, instance, info)
+	form.Set("optionId", "small")
+	form.Set("text", "Fixture answer from the local test.")
+	first := localTestPost(instance, AsksPath+"/answer", origin, form)
+	if first.Code != http.StatusSeeOther || first.Header().Get("Location") != AsksPath+"?ask="+info {
+		t.Fatalf("answer %d location %q: %.300s", first.Code, first.Header().Get("Location"), first.Body.String())
+	}
+	answers := localTestCallsTo(instance, apiv1.PortalAskAnswerPath(info))
+	if len(answers) != 1 || answers[0].Method != http.MethodPost {
+		t.Fatalf("fixture operator saw %d answers", len(answers))
+	}
+	var sent apiv1.AskAnswerRequest
+	if err := json.Unmarshal(answers[0].Body, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent.OptionID != "small" || sent.Text != "Fixture answer from the local test." || sent.Approved != nil || sent.Actor.Issuer != localTestIssuer || sent.Actor.Subject != localTestSubject {
+		t.Fatalf("fixture operator received %+v", sent)
+	}
+	recorded := serveLocalTest(instance, localTestRequest(http.MethodGet, AsksPath+"?ask="+info))
+	if recorded.Code != http.StatusOK || !strings.Contains(recorded.Body.String(), "Recorded answer") {
+		t.Fatalf("answered ask page %d", recorded.Code)
+	}
+	for _, m := range localTestAnswerForm.FindAllStringSubmatch(recorded.Body.String(), -1) {
+		if m[4] == info {
+			t.Fatal("the answered ask still offers an answer form")
+		}
+	}
+	// Double submit, then the same answer under a new request ID: no new call.
+	if again := localTestPost(instance, AsksPath+"/answer", origin, form); again.Code != http.StatusSeeOther {
+		t.Fatalf("repeated answer %d", again.Code)
+	}
+	retry := url.Values{}
+	for k, v := range form {
+		retry[k] = v
+	}
+	retry.Set("requestID", strings.Repeat("R", 43))
+	if w := localTestPost(instance, AsksPath+"/answer", origin, retry); w.Code != http.StatusSeeOther {
+		t.Fatalf("same answer under a new request ID %d", w.Code)
+	}
+	// A different answer to the closed ask, and a cross-origin post, are refused.
+	retry.Set("requestID", strings.Repeat("S", 43))
+	retry.Set("text", "A different fixture answer.")
+	if w := localTestPost(instance, AsksPath+"/answer", origin, retry); w.Code == http.StatusSeeOther {
+		t.Fatalf("different answer to a closed ask %d", w.Code)
+	}
+	if w := localTestPost(instance, AsksPath+"/answer", "https://evil.example", form); w.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin answer %d", w.Code)
+	}
+	if answers := localTestCallsTo(instance, apiv1.PortalAskAnswerPath(info)); len(answers) != 1 {
+		t.Fatalf("fixture operator saw %d answers, want 1", len(answers))
+	}
+	// An approval needs the decision and the confirmation.
+	decision := localTestAnswerFormFor(t, instance, approval)
+	decision.Set("decision", "approve")
+	if w := localTestPost(instance, AsksPath+"/answer", origin, decision); w.Code == http.StatusSeeOther {
+		t.Fatal("approval without confirmation was sent")
+	}
+	decision = localTestAnswerFormFor(t, instance, approval)
+	decision.Set("decision", "approve")
+	decision.Set("confirm", "yes")
+	if w := localTestPost(instance, AsksPath+"/answer", origin, decision); w.Code != http.StatusSeeOther {
+		t.Fatalf("approval %d: %.300s", w.Code, w.Body.String())
+	}
+	approvals := localTestCallsTo(instance, apiv1.PortalAskAnswerPath(approval))
+	if len(approvals) != 1 || !strings.Contains(string(approvals[0].Body), `"approved":true`) {
+		t.Fatalf("fixture operator saw %d approvals", len(approvals))
+	}
+}

@@ -129,8 +129,8 @@ func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func
 		return nil, err
 	}
 	asks, claims := localTestAsks(at), localTestClaims(at)
-	writes := &localTestWrites{calls: calls, now: now, sessions: sessionsBody, repos: localTestLaunchRepos}
-	upstreams.serve(operatorPortalHost+":8443", &certs[0], localTestOperator(operatorToken, asks, claims, writes))
+	writes := &localTestWrites{calls: calls, now: now, sessions: sessionsBody, repos: localTestLaunchRepos, asks: asks}
+	upstreams.serve(operatorPortalHost+":8443", &certs[0], localTestOperator(operatorToken, claims, writes))
 	upstreams.serve(openProjectPortalHost+":8443", &certs[1], localTestOpenProject(tasksBody))
 	upstreams.serve(localTestAMHost, nil, localTestAlertmanager())
 	upstreams.serve(localTestIssuerHost+":443", &certs[2], localTestUserInfo())
@@ -528,7 +528,7 @@ func localTestJSON(w http.ResponseWriter, contentType string, body []byte) {
 	_, _ = w.Write(body)
 }
 
-func localTestOperator(token string, asks []apiv1.Ask, claims apiv1.PortalTaskClaims, writes *localTestWrites) http.Handler {
+func localTestOperator(token string, claims apiv1.PortalTaskClaims, writes *localTestWrites) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+token {
 			http.Error(w, "fixture operator refused", http.StatusUnauthorized)
@@ -545,7 +545,7 @@ func localTestOperator(token string, asks []apiv1.Ask, claims apiv1.PortalTaskCl
 			writes.conversation(w, r)
 		case r.URL.Path == apiv1.PortalAsksPath:
 			list := apiv1.AskList{Asks: []apiv1.Ask{}, Complete: true}
-			for _, ask := range asks {
+			for _, ask := range writes.asksSnapshot() {
 				if r.URL.Query().Get(apiv1.AskQueryState) != apiv1.AskStateFilterOpen || ask.State == apiv1.AskStateOpen {
 					list.Asks = append(list.Asks, ask)
 				}
@@ -553,7 +553,7 @@ func localTestOperator(token string, asks []apiv1.Ask, claims apiv1.PortalTaskCl
 			raw, _ := json.Marshal(list)
 			localTestJSON(w, mediaJSON, raw)
 		case strings.HasPrefix(r.URL.Path, apiv1.PortalAsksPath+"/"):
-			for _, ask := range asks {
+			for _, ask := range writes.asksSnapshot() {
 				if r.URL.Path == apiv1.PortalAskPath(ask.ID) {
 					raw, _ := json.Marshal(ask)
 					localTestJSON(w, mediaJSON, raw)

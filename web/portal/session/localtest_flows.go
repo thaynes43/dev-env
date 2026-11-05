@@ -66,6 +66,51 @@ type localTestWrites struct {
 	mu       sync.Mutex
 	launches map[string]localTestLaunch
 	launched []json.RawMessage
+	asks     []apiv1.Ask
+}
+
+// asksSnapshot is the current fixture asks, answers included.
+func (o *localTestWrites) asksSnapshot() []apiv1.Ask {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]apiv1.Ask(nil), o.asks...)
+}
+
+// answer answers like the operator's portal answer route: an open ask takes
+// one valid answer and is then Answered; a closed ask is a conflict and an
+// expired one is gone. It notifies no agent.
+func (o *localTestWrites) answer(w http.ResponseWriter, id string, body []byte) {
+	var request apiv1.AskAnswerRequest
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || request.Validate() != nil {
+		http.Error(w, "fixture operator refused", http.StatusBadRequest)
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	now := o.now().UTC()
+	for i, ask := range o.asks {
+		if ask.ID != id {
+			continue
+		}
+		switch {
+		case ask.State != apiv1.AskStateOpen:
+			http.Error(w, "fixture operator conflict", http.StatusConflict)
+		case !now.Before(ask.ExpiresAt):
+			http.Error(w, "fixture operator gone", http.StatusGone)
+		case request.ValidateForAt(ask, now) != nil:
+			http.Error(w, "fixture operator refused", http.StatusBadRequest)
+		default:
+			ask.State = apiv1.AskStateAnswered
+			ask.Answer = &apiv1.AskAnswer{OptionID: request.OptionID, Text: request.Text, Approved: request.Approved, AnsweredBy: apiv1.AskActor{Issuer: request.Actor.Issuer, Subject: request.Actor.Subject, DisplayName: "Local test reader"}, AnsweredAt: now}
+			o.asks[i] = ask
+			raw, _ := json.Marshal(ask)
+			localTestJSON(w, mediaJSON, raw)
+		}
+		return
+	}
+	http.NotFound(w, nil)
 }
 
 type localTestLaunch struct {
@@ -106,6 +151,13 @@ func (o *localTestWrites) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		o.send(w, body)
 	case r.Method == http.MethodPost && r.URL.Path == apiv1.PortalLaunchPath:
 		o.launch(w, body)
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, apiv1.PortalAsksPath+"/") && strings.HasSuffix(r.URL.Path, apiv1.AskAnswerSuffix):
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, apiv1.PortalAsksPath+"/"), apiv1.AskAnswerSuffix)
+		if apiv1.PortalAskAnswerPath(id) != r.URL.Path {
+			http.NotFound(w, r)
+			return
+		}
+		o.answer(w, id, body)
 	default:
 		http.NotFound(w, r)
 	}
