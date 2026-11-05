@@ -1265,6 +1265,9 @@ class AnswerTests(AnswerFixture):
                 APPROVAL_EXPECT, "y", ok),
             "trailing whitespace in the expected text": (
                 "modal-approval", APPROVAL_SCREEN, APPROVAL_EXPECT.replace("git status\n", "git status   \n"), "y", ok),
+            "the expected text copied with its border": (
+                "modal-approval", APPROVAL_SCREEN,
+                "".join(row + "\n" for row in APPROVAL_CAPTURE.splitlines()[2:5]), "y", ok),
             # QA's three cases.
             "QA 1: the path with a suffix": (
                 trust, self.trust_screen(self.box_row(path + "-extra")), TRUST_EXPECT, "a", "trust-path-mismatch"),
