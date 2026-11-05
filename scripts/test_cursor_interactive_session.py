@@ -1401,6 +1401,136 @@ class AnswerTests(AnswerFixture):
                     self.assertEqual(self.sends(), [])
                     self.assertFalse(self.ledger(approval_ref).exists())
 
+    # Nested and paired boxes (QA round 4, MEDIUM): the nearest top and bottom
+    # borders can belong to different boxes, leaving rows of an outer box unchecked.
+
+    def test_the_prompt_binds_to_one_paired_box(self):
+        def inner(rows, width=44):
+            return (["  \u256d" + "\u2500" * width + "\u256e"]
+                    + ["  \u2502" + row.ljust(width) + "\u2502" for row in rows]
+                    + ["  \u2570" + "\u2500" * width + "\u256f"])
+
+        command, options = "  Allow this command: git status", ["  \u25b6 [y] Yes", "    [n] No"]
+        header = "  Allow this command to modify files outside the workspace?"
+        approval_box = boxed([command] + options)
+        nested_a = boxed(["", header, ""] + inner([command]) + [""] + options + [""])
+        nested_b = boxed(["", command, ""] + inner(options) + ["", "  This also grants network access.", ""])
+        nested_c = boxed(["", header, ""] + inner([command] + options) + [""])
+        c_lines = nested_c.splitlines(True)
+        frameless = ("\u256d" + "\u2500" * 76 + "\u256e\n" + header + "\n\n"
+                     + "".join(row + "\n" for row in inner([command] + options)) + "\u2570" + "\u2500" * 76 + "\u256f\n")
+        narrow_bottom = approval_box.rsplit("  \u2570", 1)[0] + "  \u2570" + "\u2500" * 70 + "\u256f\n"
+        lone_top = "  \u256d" + "\u2500" * 20 + "\u256e\n"
+        closed_above = "  \u2502  old output      \u2502\n  \u2570" + "\u2500" * 18 + "\u256f\n"
+        everything = "Allow this command to modify files outside the workspace?\n" + APPROVAL_EXPECT
+        a, ok = "modal-approval", "answered"
+        cases = {
+            "a separate box above the prompt's box": (a, boxed(["  Tip: one box"]) + "\n" + approval_box + "\n",
+                                                      APPROVAL_EXPECT, ok, None),
+            "QA: an outer header left out, the command in an inner box": (
+                a, nested_a + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
+            "QA: an outer footer below an inner box holding the options": (
+                a, nested_b + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
+            "the prompt inside an inner box, the outer header left out": (
+                a, nested_c + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
+            "every row of both boxes expected": (a, nested_a + "\n", everything, "prompt-unclear", None),
+            "an outer box whose borders are off the visible screen": (
+                a, "".join(c_lines[:-1]), APPROVAL_EXPECT, "prompt-unclear", len(c_lines) - 2),
+            "an outer frame without side borders": (a, frameless + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
+            "top and bottom borders of different widths": (a, narrow_bottom + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
+            "a box left open above the prompt's box": (a, lone_top + "\n" + approval_box + "\n", APPROVAL_EXPECT,
+                                                       "prompt-unclear", None),
+            "two boxes side by side on one border row": (
+                a, "  \u256d\u2500\u2500\u256e  \u256d\u2500\u2500\u256e\n  \u2502a \u2502  \u2502b \u2502\n"
+                   "  \u2570\u2500\u2500\u256f  \u2570\u2500\u2500\u256f\n\n" + approval_box + "\n",
+                APPROVAL_EXPECT, "prompt-unclear", None),
+            "a box closed above the prompt's box, its top off the screen": (
+                a, closed_above + "\n" + approval_box + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
+        }
+        for label, (kind, capture, text, expected, visible) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, visible=visible)
+                inspected = self.start_and_inspect()
+                expect = self.root / "expect-nested"
+                expect.write_text(text)
+                approval_ref = self.case_approval(label)
+                code, result = self.invoke("answer", self.answer_args(inspected["receipt"], choice="y", kind=kind,
+                                                                      approval=approval_ref, expect=expect))
+                if expected == ok:
+                    self.assertEqual((code, result["state"]), (0, "answered"))
+                    self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "y"]])
+                else:
+                    self.assertEqual((code, result["state"]), (2, expected))
+                    self.assertEqual(self.sends(), [])
+                    self.assertFalse(self.ledger(approval_ref).exists())
+
+    # Titled borders (advisory on b8cabefd, MEDIUM): a border with a title, such as
+    # "╭─ Note ─╮", counted as text, so a titled outer frame never paired.
+
+    def test_titled_borders_pair_like_any_border(self):
+        def titled(left, right, title, width, indent=""):
+            return indent + left + "\u2500 " + title + " " + "\u2500" * (width - len(title) - 3) + right
+
+        def inner(rows, width=44, top=None, bottom=None):
+            return ([top or "  \u256d" + "\u2500" * width + "\u256e"]
+                    + ["  \u2502" + row.ljust(width) + "\u2502" for row in rows]
+                    + [bottom or "  \u2570" + "\u2500" * width + "\u256f"])
+
+        command, options = "  Allow this command: git status", ["  \u25b6 [y] Yes", "    [n] No"]
+        header = "  Allow this command to modify files outside the workspace?"
+        approval_box = boxed([command] + options)
+        frame_top, frame_bottom = titled("\u256d", "\u256e", "Note", 76), titled("\u2570", "\u256f", "esc", 76)
+        plain_top, plain_bottom = "\u256d" + "\u2500" * 76 + "\u256e", "\u2570" + "\u2500" * 76 + "\u256f"
+        body = header + "\n\n" + "".join(row + "\n" for row in inner([command] + options))
+
+        def frame(top, bottom):
+            return top + "\n" + body + bottom + "\n\n"
+
+        inner_titled = inner([command], top=titled("\u256d", "\u256e", "Command", 44, "  "),
+                             bottom=titled("\u2570", "\u256f", "esc", 44, "  "))
+        nested_titled = boxed(["", header, ""] + inner_titled + [""] + options + [""])
+        all_rows = header.strip() + "\nCommand\n" + command.strip() + "\nesc\n" + "\n".join(o.strip() for o in options) + "\n"
+        own_titled_top = ("  " + titled("\u256d", "\u256e", "Approval", BOX_WIDTH) + "\n"
+                          + approval_box.split("\n", 1)[1])
+        own_titled_both = own_titled_top.rsplit("  \u2570", 1)[0] + "  " + titled("\u2570", "\u256f", "esc", BOX_WIDTH) + "\n"
+        own_titled_bottom = approval_box.rsplit("  \u2570", 1)[0] + "  " + titled("\u2570", "\u256f", "esc", BOX_WIDTH) + "\n"
+        tip_box = ("  " + titled("\u256d", "\u256e", "Tip", BOX_WIDTH) + "\n  \u2502" + "  one titled box".ljust(BOX_WIDTH)
+                   + "\u2502\n  \u2570" + "\u2500" * BOX_WIDTH + "\u256f\n")
+        a, ok = "modal-approval", "answered"
+        cases = {
+            # Positive controls.
+            "a titled box above the prompt's box": (tip_box + "\n" + approval_box + "\n", APPROVAL_EXPECT, ok),
+            "a tree row above the prompt's box": ("\u2514\u2500\u2500 foo\n\n" + approval_box + "\n", APPROVAL_EXPECT, ok),
+            # Titled outer frames without side borders, around an inner box holding the prompt.
+            "QA: a titled outer frame, top and bottom": (frame(frame_top, frame_bottom), APPROVAL_EXPECT, "prompt-unclear"),
+            "a titled outer frame, top only": (frame(frame_top, plain_bottom), APPROVAL_EXPECT, "prompt-unclear"),
+            "a titled outer frame, bottom only": (frame(plain_top, frame_bottom), APPROVAL_EXPECT, "prompt-unclear"),
+            # A titled inner box inside the prompt's box, every row expected.
+            "a titled inner box, every row expected": (nested_titled + "\n", all_rows, "prompt-unclear"),
+            # The prompt's own box with a title.
+            "the prompt's own box has a titled top": (own_titled_top + "\n", APPROVAL_EXPECT, "prompt-unclear"),
+            "the prompt's own box has a titled top and bottom": (own_titled_both + "\n", APPROVAL_EXPECT, "prompt-unclear"),
+            "the prompt's own box has a titled bottom": (own_titled_bottom + "\n", APPROVAL_EXPECT, "prompt-unclear"),
+        }
+        for label, (capture, text, expected) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture)
+                inspected = self.start_and_inspect()
+                expect = self.root / "expect-titled"
+                expect.write_text(text)
+                approval_ref = self.case_approval(label)
+                code, result = self.invoke("answer", self.answer_args(inspected["receipt"], choice="y", kind=a,
+                                                                      approval=approval_ref, expect=expect))
+                if expected == ok:
+                    self.assertEqual((code, result["state"]), (0, "answered"))
+                    self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "y"]])
+                else:
+                    self.assertEqual((code, result["state"]), (2, expected))
+                    self.assertEqual(self.sends(), [])
+                    self.assertFalse(self.ledger(approval_ref).exists())
+
     def test_help_says_the_caller_owns_the_approval(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "answer", "--help"], capture_output=True,
                                 text=True, timeout=10)

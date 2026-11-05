@@ -33,7 +33,11 @@ ANSWER_KINDS = ("modal-trust", "modal-permission", "modal-approval")
 APPROVAL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@#-]{7,199}")
 MAX_TRUST_PATH = 1024
 TOP_CORNERS = "\u256d\u250c\u2554\u250f"
+TOP_RIGHT_CORNERS = "\u256e\u2510\u2557\u2513"
 BOTTOM_CORNERS = "\u2570\u2514\u255a\u2517"
+BOTTOM_RIGHT_CORNERS = "\u256f\u2518\u255d\u251b"
+CORNERS = TOP_CORNERS + TOP_RIGHT_CORNERS + BOTTOM_CORNERS + BOTTOM_RIGHT_CORNERS
+SIDE_BARS = "\u2502\u2551\u2503"
 TRUST_PATH_RE = re.compile(r"(?:/[A-Za-z0-9_.@+-]+)+")
 COMMAND_TIMEOUT = 5
 OWNER_OPTION = "@cursor_interactive_owner"
@@ -659,21 +663,52 @@ def prompt_text(row):
     return row[start:end]
 
 
-def box_edge(rows, texts, start, step, own, other):
-    """The prompt's own border row from start in direction step, and whether a row
-    with text lies before it. None when no such border is on the visible screen.
+def border(row, text):
+    """("top" or "bottom", left column, right column, titled) for a border row, "bad"
+    for a row of box-drawing characters that has a corner but cannot be a border,
+    and None for any other row.
 
-    A border row has only box-drawing characters and spaces, and a corner."""
-    index, passed = start, False
-    while 0 <= index < len(rows):
-        if texts[index]:
-            passed = True
-        elif any(corner in rows[index] for corner in own):
-            return index, passed
-        elif any(corner in rows[index] for corner in other):
-            return None, passed
-        index += step
-    return None, passed
+    With spaces and side bars taken off both ends, a border row starts with a left
+    corner and ends with the matching right corner, with no other corner between.
+    Text between the corners is a title."""
+    start, end = 0, len(row)
+    while start < end and (row[start].isspace() or row[start] in SIDE_BARS):
+        start += 1
+    while end > start and (row[end - 1].isspace() or row[end - 1] in SIDE_BARS):
+        end -= 1
+    core = row[start:end]
+    if len(core) >= 2 and not any(character in CORNERS for character in core[1:-1]):
+        for kind, lefts, rights in (("top", TOP_CORNERS, TOP_RIGHT_CORNERS),
+                                    ("bottom", BOTTOM_CORNERS, BOTTOM_RIGHT_CORNERS)):
+            if core[0] in lefts and core[-1] in rights:
+                return kind, start, end - 1, any(not is_separator(character) for character in core)
+    if not text and any(character in CORNERS for character in row):
+        return "bad"
+    return None
+
+
+def visible_boxes(rows, texts):
+    """(top row, bottom row, left column, right column, titled) for every box on
+    the visible screen, or None when its borders do not pair.
+
+    Reading down, each bottom border closes the latest open top border, and the
+    two must have their corners in the same columns."""
+    stack, boxes = [], []
+    for index, (row, text) in enumerate(zip(rows, texts)):
+        found = border(row, text)
+        if found is None:
+            continue
+        if found == "bad":
+            return None
+        kind, left, right, titled = found
+        if kind == "top":
+            stack.append((index, left, right, titled))
+            continue
+        if not stack or stack[-1][1:3] != (left, right):
+            return None
+        top, _left, _right, top_titled = stack.pop()
+        boxes.append((top, index, left, right, top_titled or titled))
+    return None if stack else boxes
 
 
 def prompt_blocks(texts, lines):
@@ -752,7 +787,7 @@ def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust
     own history_size and pane_height, so the last pane_height rows are the
     visible screen. It must be complete, show exactly one prompt kind (the
     expected one), name exactly the trust path for a trust prompt, show the
-    expected lines exactly, once, as every row of the box around them, and
+    expected lines exactly, once, as every row of the one paired box around them, and
     have no composer row after the prompt or under the cursor. Anything else
     fails closed."""
     rows = text.split("\n")
@@ -787,13 +822,26 @@ def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust
     if len(blocks) > 1:
         raise Refusal("prompt-unclear", "The expected prompt is shown more than once on the visible screen. Nothing was sent.")
     ((first, last),) = blocks
-    # The block must be the whole of its own box. Padding rows sit between a box's
-    # rows, so the rows next to the block say nothing: check every row up to the borders.
-    top, text_above = box_edge(visible, texts, first - 1, -1, TOP_CORNERS, BOTTOM_CORNERS)
-    bottom, text_below = box_edge(visible, texts, last + 1, 1, BOTTOM_CORNERS, TOP_CORNERS)
-    if top is None or bottom is None:
-        raise Refusal("prompt-unclear", "The expected prompt is not inside one box on the visible screen. Nothing was sent.")
-    if text_above or text_below:
+    # The block must be the whole of one box, paired by its corner columns. Padding rows
+    # sit between a box's rows, so the rows next to the block say nothing: check them all.
+    boxes = visible_boxes(visible, texts)
+    if boxes is None:
+        raise Refusal("prompt-unclear", "The box borders on the visible screen do not pair up. Nothing was sent.")
+    around = [box for box in boxes if box[0] < first and last < box[1]]
+    if not around:
+        raise Refusal("prompt-unclear", "The expected prompt is not inside a box on the visible screen. Nothing was sent.")
+    # The outermost box around the block: the one that opens first.
+    top, bottom, left, _right, titled = min(around)
+    if titled:
+        raise Refusal("prompt-unclear", "The prompt's box has a titled border, and the title is not part of the expected "
+                                        "text. Nothing was sent.")
+    if any(top < box[0] and box[1] < bottom for box in boxes):
+        raise Refusal("prompt-unclear", "The prompt's box holds another box, so the prompt cannot be bound to one box. "
+                                        "Nothing was sent.")
+    if any(row[:left].strip() for row in visible[top:bottom + 1]):
+        raise Refusal("prompt-unclear", "Something is drawn to the left of the prompt's box, so it may sit inside "
+                                        "another box. Nothing was sent.")
+    if any(texts[index] for index in range(top + 1, first)) or any(texts[index] for index in range(last + 1, bottom)):
         raise Refusal("modal-mismatch", "The prompt's box has a row the expected text leaves out: the expected text must "
                                         "be every row in the box. Nothing was sent.")
     cursor = int(ident["cursor_y"])
