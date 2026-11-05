@@ -268,6 +268,8 @@ GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
 ```
 
 That writes `sessions.html` and `tasks.html`, labelled as fixture previews.
+To drive the whole request path in a browser instead of static files, run the
+[portal local test instance](portal-local-test.md) (DESIGN-055).
 The Sessions fixture includes Final, Partial and stale conversation-usage
 figures. The command reuses
 `scripts/trials/portal_attention/fixtures.json` and its fixed observation time;

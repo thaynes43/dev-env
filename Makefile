@@ -103,6 +103,19 @@ lint: $(GOLANGCI_LINT) ## Run golangci-lint.
 test: $(SETUP_ENVTEST) ## Run the unit tests and the envtest suites, GO_PARALLELISM packages at a time.
 	assets="$$($(ENVTEST_USE))"; $(ENVTEST_WRITABLE); \
 		KUBEBUILDER_ASSETS="$$assets" $(NICE) $(GO) test -p $(GO_PARALLELISM) ./...
+	$(MAKE) --no-print-directory test-portal-localtest
+
+# The portal local test instance (DESIGN-055) compiles only with this tag, so
+# ./... above skips it. build-portal and the portal image never set it.
+PORTAL_LOCALTEST_TAG := portallocaltest
+
+.PHONY: test-portal-localtest
+test-portal-localtest: ## Run the portal local test instance's tagged tests (DESIGN-055).
+	$(NICE) $(GO) test -p $(GO_PARALLELISM) -tags $(PORTAL_LOCALTEST_TAG) -run LocalTest ./web/portal/session/ ./web/portal/localtest/
+
+.PHONY: portal-localtest
+portal-localtest: ## Serve the portal on loopback with fixture data and a fixed test principal (DESIGN-055). LOCALTEST_ARGS="-listen 127.0.0.1:8099".
+	$(NICE) $(GO) run -p $(GO_PARALLELISM) -tags $(PORTAL_LOCALTEST_TAG) ./web/portal/localtest $(LOCALTEST_ARGS)
 
 .PHONY: envtest
 envtest: $(SETUP_ENVTEST) ## Download the envtest binaries into bin/tools/envtest/, for a plain `go test`.
@@ -124,7 +137,7 @@ build: $(addprefix $(BIN_DIR)/,$(BINARIES)) ## Build every shared binary into bi
 .PHONY: build-portal
 build-portal: ## Build only the portal BFF. The agent and operator images do not run this target.
 	@mkdir -p $(BIN_DIR)
-	$(NICE) $(GO) build -p $(GO_PARALLELISM) -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/dev-env-portal ./cmd/dev-env-portal
+	$(NICE) $(GO) build -p $(GO_PARALLELISM) -tags= -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/dev-env-portal ./cmd/dev-env-portal
 
 # The CLI also ships as a macOS binary (laptops). Static like the Linux one.
 .PHONY: build-agent-run-darwin

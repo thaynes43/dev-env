@@ -86,6 +86,8 @@ api/coordination/v1alpha1/  CRD types, the separate protected group coordination
 cmd/dev-env-operator/    the operator, and the access broker as its second mode, `dev-env-operator broker` (broker.go, D-61)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
 cmd/dev-env-portal/      the internal read-only portal process; main only, the assembly is web/portal/session
+web/portal/localtest/    the portal local test instance (DESIGN-055): real handlers on loopback, fixture upstreams, one fixed
+                         test principal; built only with -tags portallocaltest (`make portal-localtest`), in no image
 cmd/agentd/              the in-pod supervisor: `run`, `home-verify` (the original-HOME init check, OP252), `hold` (the rescue pod, D-55), `shelf [--history-archive]` (the shelf pod,
                          D-67, DESIGN-025), `run-agent`
                          (a task, or a TUI, D-58), `claude-login[-status|-idle]` (the keeper pod's Claude login helper, T09 increment 5), `render`, `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43,
