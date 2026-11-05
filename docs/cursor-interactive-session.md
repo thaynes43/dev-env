@@ -158,8 +158,10 @@ Before the lock and before any tmux call, `answer` checks its input:
 - `--expect-kind`: `modal-trust`, `modal-permission` or `modal-approval`.
   `modal-unknown` is never answerable.
 - `--expect-text-file`: 1..20 nonblank lines, at most 4096 UTF-8 bytes, no
-  control characters except newlines. These are the exact prompt lines that
-  must be on screen.
+  control characters except newlines. This is the whole prompt, row by row,
+  exactly as the screen shows it (rule 4 below). Each line is trimmed the same
+  way as a screen row: leading and trailing whitespace and box-drawing
+  characters only.
 - `--choice`: exactly one printable ASCII key that appears as `[key]` in the
   expected text.
 - `--trust-path`: required with `--expect-kind modal-trust` and refused with
@@ -215,13 +217,35 @@ when:
    rows; two kinds is `prompt-unclear`; another kind is `modal-mismatch`);
 3. for a trust prompt, the visible screen names exactly the trust path
    (below);
-4. every expected line appears, in order, inside a visible row, case folded
-   (the prompt is drawn in a box, so rows carry border characters). If the
-   lines are only in older rows, it is `stale-prompt`; if they are nowhere,
-   `modal-mismatch`;
+4. the expected lines are the whole prompt, exactly. Each visible row is
+   trimmed of its leading and trailing whitespace and box-drawing characters
+   (U+2500 to U+257F), the border and padding, and of nothing else. Then:
+   - every expected line must equal one trimmed row, case-sensitively, with
+     no substring, prefix or case folding;
+   - the matched rows must be consecutive, except for rows that trim to
+     nothing (borders, padding, empty rows);
+   - the row just above the first matched row and the row just below the
+     last must trim to nothing, so no prompt row is left out;
+   - the block must appear exactly once on the visible screen;
+   - it must not start on the first visible row or end on the last, where it
+     might continue out of view.
+
+   The states:
+   - If the lines are only in older rows, the state is `stale-prompt`.
+   - A block shown twice, or one touching an edge of the screen, is
+     `prompt-unclear`.
+   - Any other difference is `modal-mismatch`. That covers a longer target
+     (`git status && echo EXTRA`), a path with a suffix or in another case, a
+     changed space inside a row, a wrapped continuation row, and a prompt row
+     left out of the expected text.
 5. no composer row (`>`, `›` or `❯` at the start of a row) follows the last
    expected line, and the cursor row is not a composer row (otherwise
    `stale-prompt`).
+
+`inspect` and `reply` do not use rule 4. Their classification still looks for
+known phrases as case-folded fragments of a row. That is detection, and it
+only ever leads to a refusal: `reply` refuses every prompt. `answer` alone acts
+on an approval, so it alone binds the prompt row for row.
 
 Like `reply`, it also requires the latest receipt, the same pane id, pid,
 worktree, session, command and owner marker, and a capture unchanged since
