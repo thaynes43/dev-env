@@ -279,15 +279,23 @@ Handle it like this:
    or receipts.
 6. **Send** only by the session's route in this step, after that read shows a
    normal empty prompt: through `reply` for a helper-started session, or the
-   literal send-keys line of route 3 for a plain-tmux pane. If the read still
-   shows the prompt on the visible screen, do not override it (the helper
-   classifies the visible screen only; old prompt text in its history rows
-   does not block): send no keys at all (route 3 included), no
-   `--observed-ready`, nothing to clear the screen. This re-read comes only after the press is
-   recorded, so no decision is pending any more and step 2's no-timer rule no
-   longer applies. Read once more at the next check-in of a timer that the
-   resume re-created from the state file, or, with no timer, at the next
-   coordinator check-in or work-order read. If it still shows the prompt,
+   literal send-keys line of route 3 for a plain-tmux pane. Cursor's normal
+   `→` composer row classifies as `unclassified`, so `reply` needs
+   `--observed-ready` there. Before giving that flag, read the inspect's whole
+   `text`, history rows included: any prompt in the history must be the one
+   just answered, not a prompt taller than the pane that is still pending. If
+   the read still shows the prompt (a `modal-*` classification, or the prompt
+   on a plain-tmux screen), do not override it: send no keys at all (route 3
+   included), no `--observed-ready`, nothing to clear the screen. The helper
+   ignores prompt text in its history rows only when it can locate the visible
+   screen; otherwise a prompt anywhere in its capture still blocks (see the
+   helper's
+   [UI classification limit](../../../docs/cursor-interactive-session.md#ui-classification-limit)).
+   This re-read comes only after the press is recorded, so no decision is
+   pending any more and step 2's no-timer rule no longer applies. Read once
+   more at the next check-in of a timer that the resume re-created from the
+   state file, or, with no timer, at the next coordinator check-in or
+   work-order read. If it still shows the prompt,
    record `modal-unknown` together with the helper's own label (for example
    `modal-trust`) as evidence, set the state to `blocked`, and stop.
 

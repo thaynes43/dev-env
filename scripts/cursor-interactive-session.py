@@ -64,7 +64,8 @@ CLASSIFICATION_DETAILS = {
         "Prompt text in the history rows above the visible screen is not counted."
     ),
     "user-draft": (
-        "Cursor row has a nonempty composer. Echoed lines above that row are not a user draft."
+        "Cursor row, or the row above a blank cursor row, has a nonempty composer. "
+        "Echoed lines above that row are not a user draft."
     ),
     "unclassified": (
         "Cursor UI is unclassified. Echoed terminal text is not an unsent user draft. "
@@ -78,6 +79,13 @@ CLASSIFICATION_DETAILS = {
     "modal-permission": "Known permission phrasing is on the visible screen.",
     "modal-approval": "Known approval phrasing is on the visible screen.",
     "modal-unknown": "An unrecognized confirmation prompt is on the visible screen.",
+}
+# When the visible screen cannot be located, a phrase may be anywhere in the capture.
+UNLOCATED_DETAILS = {
+    "modal-trust": "Known workspace-trust phrasing is in the captured window.",
+    "modal-permission": "Known permission phrasing is in the captured window.",
+    "modal-approval": "Known approval phrasing is in the captured window.",
+    "modal-unknown": "An unrecognized confirmation prompt is in the captured window.",
 }
 UNLOCATED_DETAIL = " The visible screen cannot be located, so the whole captured window was read."
 
@@ -342,31 +350,38 @@ def visible_screen(text, truncated, rows_total, ident):
 
 
 def classify(text, truncated, rows_total, ident):
-    """(kind, located) for one bounded capture, read on its visible screen only.
+    """(kind, located) for one bounded capture. Transcript lines are never user drafts.
 
-    Prompt text in the history rows above the screen is not counted. When the
-    screen cannot be located, the whole capture is read as before, except that
-    it is never active. Transcript lines are never user drafts."""
+    Modal phrases count only on the visible screen: prompt text in the history
+    rows above it is not counted. When the screen cannot be located, the whole
+    capture is scanned, and the result is never active."""
+    rows = text.split("\n")
     try:
-        rows = visible_screen(text, truncated, rows_total, ident)
+        scanned, located = visible_screen(text, truncated, rows_total, ident), True
     except Refusal:
-        kind = classify_rows(text.split("\n"), ident["cursor_y"], ident["height"])
-        return ("unclassified" if kind == "active" else kind), False
-    return classify_rows(rows, ident["cursor_y"], ident["height"]), True
+        scanned, located = rows, False
+    kind = modal_kind(scanned) or composer_kind(rows, ident["cursor_y"], ident["height"])
+    if not located and kind == "active":
+        kind = "unclassified"
+    return kind, located
 
 
-def classify_rows(lines, cursor_y, pane_height):
-    kind = modal_kind(lines)
-    if kind:
-        return kind
+def composer_kind(rows, cursor_y, pane_height):
+    """The composer at the cursor. The capture's last row is the last pane row."""
     try:
         cursor = int(cursor_y)
         height = int(pane_height)
     except (TypeError, ValueError):
         return "unclassified"
-    if not lines or height < 1 or cursor != height - 1:
+    if not rows or height < 1 or cursor != height - 1:
         return "unclassified"
-    match = COMPOSER.match(lines[-1])
+    match = COMPOSER.match(rows[-1])
+    if not match and rows[-1] == "" and len(rows) > 1:
+        # tmux prints a blank row under the composer. A draft just above that
+        # blank cursor row is still a draft (older parsing dropped the row).
+        above = COMPOSER.match(rows[-2])
+        if above and above.group(1).strip():
+            return "user-draft"
     if not match:
         return "unclassified"
     if match.group(1).strip():
@@ -542,7 +557,8 @@ def inspect_locked(args):
         "state": "inspected", "name": state["name"], "pane_id": ident["pane"], "pane_pid": ident["pid"],
         "owner": state["owner"], "worktree": state["worktree"], "model_requested": state["model"],
         "classification": kind,
-        "classification_detail": CLASSIFICATION_DETAILS[kind] + ("" if located else UNLOCATED_DETAIL),
+        "classification_detail": (CLASSIFICATION_DETAILS[kind] if located
+                                  else UNLOCATED_DETAILS.get(kind, CLASSIFICATION_DETAILS[kind]) + UNLOCATED_DETAIL),
         "receipt": make_receipt(receipt_id, digest, ident["pane"], ident["pid"]),
         "truncated": truncated, "text": text,
         "detail": "Receipt matches this pane, process, worktree, and bounded capture only. It is stale after the next inspect or any pane change.",
@@ -616,7 +632,7 @@ def reply_locked(args, instruction):
         label = kind.split("-", 1)[1]
         raise Refusal(kind, "Refusing to type or send Enter into a " + label + " modal. --observed-ready does not override it. Re-inspect after the pane is clear.")
     if kind == "user-draft":
-        raise Refusal("user-draft", "The cursor row is a nonempty composer. Nothing was sent, and Enter was not sent. Echoed lines above the cursor row are not a draft to submit.")
+        raise Refusal("user-draft", "The cursor row, or the row above a blank cursor row, is a nonempty composer. Nothing was sent, and Enter was not sent. Echoed lines above the cursor row are not a draft to submit.")
     if kind == "unclassified" and not args.observed_ready:
         raise Refusal("unclassified-ui", CLASSIFICATION_DETAILS["unclassified"] + " Nothing was sent.")
     if kind not in {"active", "unclassified"}:

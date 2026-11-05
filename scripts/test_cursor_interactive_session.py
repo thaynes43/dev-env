@@ -977,6 +977,7 @@ class AnswerTests(AnswerFixture):
                 self.screen(capture, visible=visible, cursor=cursor)
                 inspected = self.start_and_inspect()
                 self.assertEqual(inspected["classification"], kind)
+                self.assertIn("on the visible screen", inspected["classification_detail"])
                 code, refused = self.reply_to(inspected["receipt"], "--submit", "--observed-ready")
                 self.assertEqual((code, refused["state"]), (2, kind))
                 self.assertEqual(self.sends(), [])
@@ -1003,6 +1004,10 @@ class AnswerTests(AnswerFixture):
         self.screen(capture, visible=2)
         inspected = self.start_and_inspect()
         self.assertEqual(inspected["classification"], "active")
+        # The receipt binds the history rows too: a change there alone is stale.
+        self.screen(capture.replace("Tip: You can", "Tip: Now you can"), visible=2)
+        code, stale = self.reply_to(inspected["receipt"], "--submit")
+        self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
         self.screen(capture.replace("S8 answered", "S9 answered"), visible=2)
         code, stale = self.reply_to(inspected["receipt"], "--submit")
         self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
@@ -1036,9 +1041,33 @@ class AnswerTests(AnswerFixture):
                 inspected = self.start_and_inspect()
                 self.assertEqual(inspected["classification"], expected)
                 self.assertIn("cannot be located", inspected["classification_detail"])
+                if expected.startswith("modal-"):
+                    self.assertIn("in the captured window", inspected["classification_detail"])
+                    self.assertNotIn("on the visible screen", inspected["classification_detail"])
                 flags = ("--submit",) if expected == "unclassified" else ("--submit", "--observed-ready")
                 code, refused = self.reply_to(inspected["receipt"], *flags)
                 self.assertEqual((code, refused["state"]), (2, refusals[expected]))
+                self.assertEqual(self.sends(), [])
+
+    def test_draft_above_a_blank_cursor_row_is_refused(self):
+        # Review of f517c561: tmux prints a blank row under the composer. The old
+        # parsing dropped that row, so this draft was refused; keep refusing it.
+        draft = "S8 answered\n> typed draft\n\n"
+        cases = {
+            "located, no history": (draft, 3, None),
+            "located, an old prompt in history": (TRUST_SCREEN + draft, 3, None),
+            "located, a one-row pane under the draft": (draft, 1, None),
+            "not located: fewer rows than the pane": (draft, 5, None),
+            "not located: history size does not match": (draft, 3, 4),
+        }
+        for label, (capture, visible, history) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, visible=visible, history=history)
+                inspected = self.start_and_inspect()
+                self.assertEqual(inspected["classification"], "user-draft")
+                code, refused = self.reply_to(inspected["receipt"], "--submit", "--observed-ready")
+                self.assertEqual((code, refused["state"]), (2, "user-draft"))
                 self.assertEqual(self.sends(), [])
 
     def test_draft_under_a_prompt_in_history_is_refused(self):

@@ -131,8 +131,8 @@ Fail closed, with no keys and no Enter:
 | Pane id, pid, cwd, session, or command changed | `pane-replaced` |
 | tmux copy/mode flag set | `pane-in-mode` |
 | Receipt missing, old, or capture changed | `stale-receipt` |
-| Trust, permission, approval, or unrecognized confirmation phrasing on the visible screen | `modal-trust`, `modal-permission`, `modal-approval`, `modal-unknown` |
-| Cursor row is a nonempty `>`, `›`, or `❯` composer | `user-draft` |
+| Trust, permission, approval, or unrecognized confirmation phrasing on the visible screen (anywhere in the capture when that screen cannot be located) | `modal-trust`, `modal-permission`, `modal-approval`, `modal-unknown` |
+| Cursor row, or the row above a blank cursor row, is a nonempty `>`, `›`, or `❯` composer | `user-draft` |
 | Screen is not that composer and has no known modal phrase | `unclassified-ui` unless `--observed-ready` |
 
 `--observed-ready` records that a coordinator looked at this exact receipt and
@@ -278,8 +278,8 @@ when:
 `inspect` and `reply` locate the visible screen the same way (rule 1), but do
 not use rule 4. Their classification looks for known phrases as case-folded
 fragments of a visible row. That is detection, and it only ever leads to a
-refusal: `reply` refuses every prompt on the visible screen. `answer` alone
-acts on an approval, so it alone binds the prompt row for row.
+refusal: `reply` refuses every known prompt phrase on the visible screen.
+`answer` alone acts on an approval, so it alone binds the prompt row for row.
 
 Like `reply`, it also requires the latest receipt, the same pane id, pid,
 worktree, session, command and owner marker, and a capture unchanged since
@@ -360,24 +360,28 @@ prove from tmux text. Classification is intentionally narrow:
 - Classification reads the visible screen: the last `pane_height` rows of the
   capture, located by the row count in rule 1 of the `answer` section. The
   history rows above it are returned in `text` and bound by the receipt, but
-  are not classified.
+  modal phrases there do not count.
 - A known modal phrase on the visible screen blocks sending. Phrases include
   workspace trust, permission required, command approval, and generic
   confirmations such as `yes/no` or `are you sure`. A phrase that is only in
   the history rows, such as an answered prompt that scrolled up, does not
   block.
 - When the visible screen cannot be located (the row count does not match, or
-  the bounded capture does not hold all of it), the whole bounded capture is
-  classified as before: a phrase anywhere blocks, and a draft on the last line
-  at the cursor is refused. Such a screen is never `active`; an empty composer
-  there is `unclassified`. `classification_detail` says the screen was not
-  located.
-- A user draft is only the last visible row, and only when tmux reports the
-  cursor on the last pane row and that row is a `>`, `›`, or `❯` prompt plus
-  text. Rows above it are echoed transcript. Displayed text such as an
-  answered `S8` line is not an unsent draft.
-- `active` means that same cursor row is only the empty prompt prefix. That is
-  not proof the UI is idle, that a modal is absent, or that the served model
+  the bounded capture does not hold all of it), the same rules read the whole
+  bounded capture, with its last row as the last pane row: a phrase anywhere
+  blocks, a draft (below) is `user-draft`, and an empty composer is
+  `unclassified`, never `active`. That is the classification the helper used
+  before it read the visible screen, with `active` made `unclassified`.
+  `classification_detail` then says the phrase is in the captured window and
+  that the screen was not located.
+- A user draft is a `>`, `›`, or `❯` prompt plus text, and only when tmux
+  reports the cursor on the last pane row. The draft must be on that row, or,
+  when that row is blank, on the row just above it: tmux prints a blank row
+  under the composer. Other rows are echoed transcript. Displayed text such as
+  an answered `S8` line is not an unsent draft.
+- `active` means that same cursor row is only the empty prompt prefix. An
+  empty prompt above a blank cursor row is `unclassified`. `active` is not
+  proof the UI is idle, that a modal is absent, or that the served model
   matches `--model`.
 - Any other screen, including a prompt glyph when the cursor is elsewhere, is
   `unclassified`. Cursor's own composer row (`→ Plan, search, build anything`)
