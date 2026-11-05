@@ -11,3 +11,5 @@
 
 # Private per-task evidence and local build artifacts.
 .task-output/
+__pycache__/
+*.pyc
