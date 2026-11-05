@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 
@@ -1506,6 +1507,8 @@ type observation struct {
 // observe writes the session's status from what the reconcile found. It is a
 // pure function of its inputs, so a fresh operator computes the same status.
 func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessionStatus) {
+	before := slices.Clone(st.Conditions)
+	defer func() { keepTransitionTimes(before, st.Conditions) }()
 	st.PodName, st.NodeName, st.Revision = "", "", ""
 	pod := obs.pod.obj
 	hasPod := obs.pod.foreign == "" && !obs.pod.missing
@@ -1558,10 +1561,16 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 		}
 		meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: ConditionRemovalBlocked, Status: metav1.ConditionTrue,
 			Reason: reason, Message: truncate(what + ": " + obs.removalBlocked.Error()), ObservedGeneration: s.Generation})
-	} else {
+	}
+	// A protected private Session that wants its pod gone always shows
+	// RemovalBlocked, set by its own rules below. The condition goes only when
+	// neither sets it: removing it first and setting it again gave it a new
+	// lastTransitionTime on every reconcile, so every reconcile wrote the
+	// status and the write's own event queued the next one (haynes-ops#4663).
+	removalSet := setPrivateHistoryConditions(s, obs, st)
+	if !removalSet && obs.removalBlocked == nil {
 		meta.RemoveStatusCondition(&st.Conditions, ConditionRemovalBlocked)
 	}
-	setPrivateHistoryConditions(s, obs, st)
 	if privateHistoryProtected(s) {
 		setHomeExpiryCondition(s, obs, st)
 	}
@@ -1593,6 +1602,21 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 			Reason: "TemplatesInvalid", Message: truncate("the current template revision is unknown: " + obs.templatesErr.Error()), ObservedGeneration: s.Generation})
 	default:
 		meta.RemoveStatusCondition(&st.Conditions, ConditionOutdated)
+	}
+}
+
+// keepTransitionTimes gives each condition whose status this observation did
+// not change the lastTransitionTime it had before, however observe arrived at
+// it: a condition's transition time moves only when its status does
+// (metav1.Condition). A fresh time on an unchanged condition makes the status
+// differ on every reconcile, so every reconcile writes it, and each write's
+// watch event queues the next reconcile (haynes-ops#4663).
+func keepTransitionTimes(before, after []metav1.Condition) {
+	for i := range after {
+		old := meta.FindStatusCondition(before, after[i].Type)
+		if old != nil && old.Status == after[i].Status && !old.LastTransitionTime.IsZero() {
+			after[i].LastTransitionTime = old.LastTransitionTime
+		}
 	}
 }
 

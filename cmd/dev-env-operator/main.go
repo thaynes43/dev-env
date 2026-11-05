@@ -133,6 +133,8 @@ type options struct {
 	leaderElect                   bool
 	metricsAddr                   string
 	probeAddr                     string
+	kubeAPIQPS                    float64
+	kubeAPIBurst                  int
 	apiURL                        string
 	apiAddr                       string
 	apiTLSDir                     string
@@ -216,6 +218,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.leaderElect, "leader-elect", true, "elect one leader among the replicas; only the leader reconciles")
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
+	fs.Float64Var(&o.kubeAPIQPS, "kube-api-qps", defaultKubeAPIQPS, "most Kubernetes API requests a second for each resource kind, separately for controller-runtime's clients and its informers (one client-go token bucket per kind and client); pod exec streams (rescue, log, message) take no token; 0, the default, or less leaves the client-side limit off, as controller-runtime does")
+	fs.IntVar(&o.kubeAPIBurst, "kube-api-burst", defaultKubeAPIBurst, "most requests sent at once before --kube-api-qps paces them (the token bucket's size); used only while the limit is on, and then at least 1")
 	fs.StringVar(&o.apiURL, "api-url", "", "base URL of the operator's /v1 API that session pods report to (AGENTD_API_URL, D-41); empty turns their heartbeat off")
 	fs.StringVar(&o.apiAddr, "api-bind-address", ":8443", "address of the /v1 API (HTTPS, D-46); 0 turns it off")
 	fs.StringVar(&o.apiTLSDir, "api-tls-dir", "/etc/dev-env-operator/api-tls", "directory holding the /v1 API's tls.crt and tls.key, the cert-manager Secret's mount")
@@ -331,6 +335,9 @@ func parseFlags(args []string) (options, error) {
 	}
 	if o.sessionNamespace == "" || o.templatesNamespace == "" || o.templatesName == "" || o.policyNamespace == "" {
 		return o, errors.New("--session-namespace, --templates-namespace, --templates-name and --policy-namespace must not be empty")
+	}
+	if o.kubeAPIQPS > 0 && o.kubeAPIBurst < 1 {
+		return o, errors.New("--kube-api-burst must be at least 1 while --kube-api-qps is above 0")
 	}
 	if o.originalHome != nil && o.originalHome.Namespace != o.sessionNamespace {
 		return o, errors.New("--original-home-binding namespace must match --session-namespace")
@@ -793,6 +800,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	limitKubeAPI(cfg, o.kubeAPIQPS, o.kubeAPIBurst)
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme: scheme,
 		// The operator's RBAC reaches dev-agents (and dev-tools, later) only,
