@@ -94,9 +94,11 @@ ANSWERED_DETAIL = (
     "under approval reference {}, and the box shows that prompt with Cursor's status row. The ledger records "
     "that the key was sent, not that Cursor accepted it."
 )
-# Besides its prompt rows, an answered trust box must show exactly one status row with
-# this text, and no selection marker anywhere. Nothing else may differ.
+# How an answered trust box differs from its prompt (the live G1 capture, 2026-11-05): the
+# selection marker is gone from every row, and the status row stands where the prompt's last
+# row, this navigation hint, was. Nothing else may differ.
 ANSWERED_STATUS = "\u23f3 Trusting workspace..."
+ANSWERED_HINT = "Use arrow keys to navigate, Enter to select, or press the key shown"
 SELECTION_MARKER = "\u25b6 "
 LEDGER_FORMAT = 2
 LEDGER_FORMAT_KEYS = ("format", "worktree", "box_rows_sha256", "box_marker_rows")
@@ -378,10 +380,12 @@ def classify(text, truncated, rows_total, ident, answered=None):
         scanned, located = rows, False
     kind, used = modal_kind(scanned), None
     if kind == "modal-trust" and located and answered:
-        box = answered_box(scanned, answered)
+        # The box may start in the history rows: the receipt binds the whole bounded capture.
+        first = len(rows) - len(scanned)
+        box = answered_box(rows, first, answered, truncated)
         cursor = int(ident["cursor_y"])
-        if box and cursor == int(ident["height"]) - 1 and cursor > box[1]:
-            kind = modal_kind(scanned[:box[0]] + scanned[box[1] + 1:])
+        if box and cursor == int(ident["height"]) - 1 and first + cursor > box[1]:
+            kind = modal_kind(rows[first:max(first, box[0])] + rows[box[1] + 1:])
             used = None if kind else answered["approval_ref"]
     kind = kind or composer_kind(rows, ident["cursor_y"], ident["height"])
     if not located and kind == "active":
@@ -1034,32 +1038,40 @@ def answered_evidence(state, answered_text):
     return answered
 
 
-def answered_box(visible, answered):
-    """(top, bottom) of the answered trust box on the visible screen, or None.
+def answered_box(rows, first_visible, answered, truncated):
+    """(top, bottom) of the answered trust box in the bounded capture, or None.
 
-    Every border must pair. The box must be the only box with a prompt phrase,
-    untitled, neither inside nor around another box, with nothing to its left.
-    Its nonblank rows, trimmed as in rule 4, must be the answered prompt's rows
-    without the selection marker, plus exactly one ANSWERED_STATUS row. No row
-    may show the marker."""
-    texts = [prompt_text(row) for row in visible]
-    boxes = visible_boxes(visible, texts)
-    phrased = [box for box in boxes or () if modal_kinds(visible[box[0]:box[1] + 1])]
+    `rows` is the whole bounded capture, which the receipt binds; rows[first_visible:]
+    is the visible screen. Every border in the capture must pair. The box must be the
+    only box with a prompt phrase, untitled, neither inside nor around another box,
+    with nothing to its left. Its top border may be in history, but not on the first
+    row of a truncated capture, which may be cut. Its bottom border and its status
+    row must be on the visible screen. Its nonblank rows, trimmed as in rule 4, must
+    be the answered prompt's rows without the selection marker, with the last row,
+    ANSWERED_HINT, replaced by one ANSWERED_STATUS row. No row may show the marker,
+    and no history row outside the box may hold a prompt phrase."""
+    texts = [prompt_text(row) for row in rows]
+    boxes = visible_boxes(rows, texts)
+    phrased = [box for box in boxes or () if modal_kinds(rows[box[0]:box[1] + 1])]
     if len(phrased) != 1:
         return None
     ((top, bottom, left, _right, titled),) = phrased
     if titled or any(box != phrased[0] and box[0] <= bottom and top <= box[1] for box in boxes):
         return None
-    if any(row[:left].strip() for row in visible[top:bottom + 1]):
+    if bottom < first_visible or (truncated and top == 0):
         return None
-    rows = [text for text in texts[top + 1:bottom] if text]
-    if rows.count(ANSWERED_STATUS) != 1:
+    if any(row[:left].strip() for row in rows[top:bottom + 1]):
         return None
-    rows.remove(ANSWERED_STATUS)
+    inner = [(index, texts[index]) for index in range(top + 1, bottom) if texts[index]]
+    if not inner or inner[-1][1] != ANSWERED_STATUS or inner[-1][0] < first_visible:
+        return None
+    body = [text for _index, text in inner[:-1]]
     # Cursor drops the selection marker once the answer is taken: it must be gone.
-    if any(SELECTION_MARKER.strip() in text for text in rows):
+    if ANSWERED_STATUS in body or any(SELECTION_MARKER.strip() in text for text in body):
         return None
-    if rows_digest(rows) != answered["box_rows_sha256"]:
+    if rows_digest(body + [ANSWERED_HINT]) != answered["box_rows_sha256"]:
+        return None
+    if modal_kinds(rows[:min(top, first_visible)]):
         return None
     return top, bottom
 

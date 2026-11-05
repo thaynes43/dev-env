@@ -284,7 +284,9 @@ Handle it like this:
    `--observed-ready` there. The answered trust box can stay on the screen
    above that composer. The helper stops counting it as a prompt only when its
    ledger holds this pane's sent answer and the box rows are that prompt,
-   without the `▶` marker, plus Cursor's `⏳ Trusting workspace...` row
+   without the `▶` marker, with Cursor's `⏳ Trusting workspace...` row in
+   place of its navigation hint. The box may start in the history rows; its
+   status row and bottom border must be on the visible screen
    ([the answered trust box](../../../docs/cursor-interactive-session.md#the-answered-trust-box)).
    Such an answered box is not the prompt still showing: its classification
    is not `modal-*`, and `classification_detail` names the approval reference.

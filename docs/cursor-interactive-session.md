@@ -355,10 +355,16 @@ while a prompt is on the visible screen, except an answered trust box (next).
 
 ### The answered trust box
 
-After `[a]` answers a trust prompt, Cursor prints `⏳ Trusting workspace...`
-inside the same box, drops the `▶` marker, and draws its banner and composer
-below. The box can stay on the visible screen. `inspect` and `reply` stop
-counting that box as a prompt only when all of these hold:
+After `[a]` answers a trust prompt, Cursor drops the `▶` marker, prints
+`⏳ Trusting workspace...` in place of the box's last row (the navigation
+hint), and draws its banner and composer below. The box can stay on the
+visible screen, with its top in the history rows. The live G1 screen of
+2026-11-05 is frozen in
+`scripts/cursor-interactive-session-fixtures/g1-live-capture.json` (tmux
+3.3a, a 24x80 pane under 11 history rows, the box across both), with its
+worktree, task name, owner marker and pid replaced by synthetic values of
+the same length. `inspect`
+and `reply` stop counting that box as a prompt only when all of these hold:
 
 1. **Ledger.** The last answer in the task's state is a trust answer whose
    ledger entry has `format` 2, `outcome` `sent`, and this task's name, pane
@@ -368,17 +374,25 @@ counting that box as a prompt only when all of these hold:
    file is read: a symbolic link is not followed, and the open does not block.
    An entry written before `format` 2 is evidence only with
    `--answered-text-file` (below).
-2. **Box.** Every border on the visible screen pairs (rule 4). Exactly one box
-   holds a prompt phrase. It has no title, holds no other box, is not inside
-   one, and has nothing to its left. Its rows, trimmed as in rule 4 and
-   without blank rows, are the answered prompt's rows plus exactly one row
-   that is exactly `⏳ Trusting workspace...` (U+23F3, a space, the words,
-   three full stops). The `▶` marker must be gone from every row, as on the
-   live screen: a box that still shows it stays a prompt. Nothing else may
+2. **Box.** The box is read in the whole bounded capture, which the receipt
+   binds: history rows and the visible screen. Every border there pairs
+   (rule 4). Exactly one box holds a prompt phrase. It has no title, holds no
+   other box, is not inside one, and has nothing to its left. Its top border
+   may be in history, but not on the first row of a truncated capture (that
+   row may be cut); a box whose top is past the capture bound has no top and
+   does not pair. Its bottom border and its status row are on the visible
+   screen. Its rows, trimmed as in rule 4 and without blank rows, are the
+   answered prompt's rows with the last one, which must be exactly
+   `Use arrow keys to navigate, Enter to select, or press the key shown`,
+   replaced by one row that is exactly `⏳ Trusting workspace...` (U+23F3, a
+   space, the words, three full stops). The `▶` marker must be gone from
+   every row: a box that still shows it stays a prompt. Nothing else may
    differ: `box_rows_sha256` decides (`box_marker_rows` records which rows
-   had the marker).
-3. **Below.** The cursor is on the last pane row, below the box, and no row
-   on the visible screen outside the box has a prompt phrase.
+   had the marker). A box that keeps the hint and adds the status row is
+   refused; the live screen does not show that.
+3. **Around.** The cursor is on the last pane row, below the box. No history
+   row outside the box has a prompt phrase, and no visible row outside the
+   box has one either.
 
 `inspect` stores with the receipt which ledger answer, if any, its
 classification relied on. `reply` refuses with `stale-receipt` when its own
@@ -390,9 +404,10 @@ empty `>` composer at the cursor, `user-draft` for a draft, and otherwise
 `unclassified`, which still needs `--observed-ready`. Cursor's own `→`
 composer is `unclassified`. `classification_detail` names the approval
 reference. Anything else is refused as before: no ledger entry, an entry for
-another pane, pid, owner or worktree, a box that differs, a second prompt box,
-a nested box, another prompt on the screen, a screen that cannot be located,
-a stale receipt or a changed pane. The ledger shows that the key was sent, not
+another pane, pid, owner or worktree, a box that differs, a second prompt box
+(in history too), a nested box, another prompt in the capture, a box cut by
+the capture bound or by a narrower pane, a screen that cannot be located, a
+stale receipt (a changed history row included) or a changed pane. The ledger shows that the key was sent, not
 that Cursor accepted it.
 
 **Ledger entries written before `format` 2** (by every helper before it:

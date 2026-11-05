@@ -592,16 +592,20 @@ APPROVAL_EXPECT = "Allow this command: git status\n\u25b6 [y] Yes\n[n] No\n"
 APPROVAL = "OP399-approval-2026-11-04T21:40:00Z"
 SECOND_APPROVAL = "OP399-approval-2026-11-04T21:55:00Z"
 DEFAULT_TRUST = object()
-# The live shape after a trust answer (OP399 SK3, 2026-11-05, sanitized): Cursor prints a
-# status row inside the same box and drops the selection marker, then its banner and
-# its own composer below. The pane is 24 rows under 11 history rows.
+# The live shape after a trust answer (the frozen G1 capture below): Cursor drops the
+# selection marker and puts its status row where the navigation hint was, then draws its
+# banner and its own composer below.
 STATUS_ROW = "  \u23f3 Trusting workspace..."
-ANSWERED_BOX_ROWS = (TRUST_BOX_ROWS[:10] + ["    [a] Trust this workspace", "    [q] Quit", "", STATUS_ROW]
-                     + TRUST_BOX_ROWS[12:])
+ANSWERED_BOX_ROWS = TRUST_BOX_ROWS[:10] + ["    [a] Trust this workspace", "    [q] Quit", "", STATUS_ROW, ""]
 CURSOR_COMPOSER = "\u2192 Plan, search, build anything"
-ANSWERED_SCREEN = TRUST_TIP + boxed(ANSWERED_BOX_ROWS) + "\n  Cursor Agent\n" + CURSOR_COMPOSER
+ANSWERED_SCREEN = TRUST_TIP + boxed(ANSWERED_BOX_ROWS) + "\n" * 3 + "  Cursor Agent\n" + CURSOR_COMPOSER
 if len(ANSWERED_SCREEN.splitlines()) != 24:
-    raise AssertionError("ANSWERED_SCREEN is no longer the live 24-row pane")
+    raise AssertionError("ANSWERED_SCREEN is no longer a 24-row pane")
+# The frozen live G1 screen (OP399 SK3, 2026-11-05T18:21Z, Cursor UI chrome only): tmux 3.3a,
+# a 24x80 pane under 11 history rows, the answered box across history and the visible screen.
+# Its worktree, task name, owner marker and pid are synthetic values of the same length.
+LIVE = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") / "g1-live-capture.json")
+                  .read_text(encoding="utf-8"))
 # The ledger fields every helper before format 2 wrote for a trust answer (5bf24fec and
 # earlier, 8326e2d2 among them).
 OLD_LEDGER_FIELDS = ("answered_at", "approval_ref", "kind", "choice", "expected_text_sha256", "pane_id",
@@ -1752,12 +1756,14 @@ class AnswerTests(AnswerFixture):
             "Cursor's composer: unclassified, needs --observed-ready": (ANSWERED_SCREEN, "unclassified"),
             "an idle > composer: active": (ANSWERED_SCREEN.replace(CURSOR_COMPOSER, ">"), "active"),
             "no history": (ANSWERED_SCREEN, "unclassified", 0),
+            "the box top in history": (ANSWERED_SCREEN, "unclassified", 11, 20),
         }
-        for label, (screen, kind, *history) in cases.items():
+        for label, (screen, kind, *split) in cases.items():
             with self.subTest(label=label):
                 self.restart_case()
                 approval = self.case_approval(label)
-                after = self.answer_then_show(screen, approval=approval, history=(history or [11])[0])
+                history, visible = (split + [11, None])[0], (split[1:] + [None])[0]
+                after = self.answer_then_show(screen, approval=approval, history=history, visible=visible)
                 self.assertEqual(after["classification"], kind)
                 self.assertIn(approval, after["classification_detail"])
                 flags = ("--submit",)
@@ -1827,7 +1833,11 @@ class AnswerTests(AnswerFixture):
             "a changed row": ANSWERED_SCREEN.replace("this directory?", "every directory?"),
             "another path": ANSWERED_SCREEN.replace("example-task", "other-task"),
             "an extra row": box_with(ANSWERED_BOX_ROWS[:3] + ["  Allow network access too"] + ANSWERED_BOX_ROWS[3:]),
-            "a missing row": box_with([row for row in ANSWERED_BOX_ROWS if "arrow keys" not in row]),
+            "a missing row": box_with([row for row in ANSWERED_BOX_ROWS if "[q] Quit" not in row]),
+            "the hint kept, the status row added": box_with(
+                TRUST_BOX_ROWS[:10] + ["    [a] Trust this workspace", "    [q] Quit", "", STATUS_ROW] + TRUST_BOX_ROWS[12:]),
+            "the status row above the last prompt row": box_with(
+                TRUST_BOX_ROWS[:10] + ["    [a] Trust this workspace", STATUS_ROW, "    [q] Quit", ""]),
             "no status row": box_with([row for row in ANSWERED_BOX_ROWS if row != STATUS_ROW]),
             "the unanswered prompt itself": box_with(TRUST_BOX_ROWS),
             "two status rows": box_with(ANSWERED_BOX_ROWS + [STATUS_ROW]),
@@ -1867,7 +1877,6 @@ class AnswerTests(AnswerFixture):
             "a draft at the cursor": (TRUST_TIP + box + "  Cursor Agent\n> typed draft", None, "user-draft"),
             "the cursor inside the box": (ANSWERED_SCREEN, 12, "modal-trust"),
             "the cursor below the box, on row 22 of 24": (ANSWERED_SCREEN, 22, "modal-trust"),
-            "the box top in history": (ANSWERED_SCREEN, None, "modal-trust", 20),
         }
         for label, (screen, cursor, kind, *visible) in cases.items():
             with self.subTest(label=label):
@@ -1957,6 +1966,88 @@ class AnswerTests(AnswerFixture):
         state = self.state()
         self.assertEqual((state["receipt_answered"], state["receipt_id"]),
                          ("none", helper.parse_receipt(plain["receipt"])["id"]))
+
+    # The answered box across history and the visible screen (OP399 SK3, the frozen G1
+    # capture): its top in history, its status row and bottom on the visible screen.
+
+    def live_capture(self, capture=None):
+        """The live capture as tmux prints it, with the live worktree replaced by this test's."""
+        return (LIVE["capture"] if capture is None else capture).replace(LIVE["identity"]["worktree"], self.worktree) + "\n"
+
+    def show(self, capture, visible=24):
+        self.screen(capture, visible=visible)
+
+    def test_live_box_across_history_is_answered(self):
+        with self.subTest(label="a format-2 entry"):
+            after = self.answer_then_show(self.live_capture(), approval=self.case_approval("live format 2"),
+                                          history=0, visible=24)
+            self.assertEqual((after["classification"], self.env["FAKE_HISTORY"]), ("unclassified", "11"))
+            self.assertIn(self.case_approval("live format 2"), after["classification_detail"])
+            code, sent = self.reply_to(after["receipt"], "--submit", "--observed-ready")
+            self.assertEqual((code, sent["state"]), (0, "sent"))
+        with self.subTest(label="a legacy entry with its answered text file"):
+            self.restart_case()
+            self.make_legacy(self.case_approval("live legacy"))
+            self.show(self.live_capture())
+            self.assert_refused(self.inspect_now(), "modal-trust")
+            code, after = self.invoke("inspect", self.with_text(self.expect_path))
+            self.assertEqual((code, after["classification"]), (0, "unclassified"))
+            code, sent = self.reply_to(after["receipt"], *self.with_text(self.expect_path, "--submit", "--observed-ready"))
+            self.assertEqual((code, sent["state"]), (0, "sent"))
+
+    def test_live_box_across_history_refuses_other_captures(self):
+        live = LIVE["capture"]
+        rows = live.split("\n")
+        box = "\n".join(rows[2:19]) + "\n"
+
+        def with_rows(changes):
+            changed = list(rows)
+            for index, row in changes.items():
+                changed[index] = row
+            return "\n".join(changed)
+
+        def tall(dropped):
+            """A 70-row pane under 20 history rows: 90 capture rows, the first 10 past the
+            80-row bound. The live box starts at capture row `dropped`."""
+            kept = ["older output"] * dropped + rows[2:19]
+            return "\n".join(kept + [""] * (88 - len(kept)) + ["  " + CURSOR_COMPOSER, ""])
+
+        cases = {
+            "the box bottom in history, a trust row visible": (
+                with_rows({27: "  [a] Trust this workspace"}), 15, "modal-trust"),
+            "a second box in history": (box + live, 24, "modal-trust"),
+            "a prompt phrase elsewhere in history": ("  Allow this command: git push\n" + live, 24, "modal-trust"),
+            "a trust phrase elsewhere in history": ("  Do you trust this folder?\n" + live, 24, "modal-trust"),
+            "an active new prompt below the box": (
+                with_rows({26: "  Allow this command: rm -rf build", 27: "  [y] Yes [n] No"}), 24, "modal-approval"),
+            "a second prompt on the visible screen": (live.replace("  the cost.", "  Are you sure? (y/n)"), 24, "modal-unknown"),
+        }
+        for label, (capture, visible, kind) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                after = self.answer_then_show(self.live_capture(capture), approval=self.case_approval(label),
+                                              history=0, visible=visible)
+                self.assert_refused(after, kind)
+        for label, dropped, kind in (("truncated: the box top on the first kept row", 10, "modal-trust"),
+                                     ("the box partly past the 80-row bound", 9, "modal-trust"),
+                                     ("truncated: the box below the first kept row", 11, "unclassified")):
+            with self.subTest(label=label):
+                self.restart_case()
+                after = self.answer_then_show(self.live_capture(tall(dropped)), approval=self.case_approval(label),
+                                              history=0, visible=70)
+                self.assertEqual((after["truncated"], self.env["FAKE_HISTORY"]), (True, "20"))
+                if kind == "unclassified":
+                    self.assertEqual(after["classification"], kind)
+                else:
+                    self.assert_refused(after, kind)
+
+    def test_live_box_history_row_is_bound_by_the_receipt(self):
+        after = self.answer_then_show(self.live_capture(), history=0, visible=24)
+        self.assertEqual(after["classification"], "unclassified")
+        self.show(self.live_capture().replace("Tip: You can start", "Tip: You may start"))
+        code, stale = self.reply_to(after["receipt"], "--submit", "--observed-ready")
+        self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
+        self.assertEqual(len(self.sends()), 1)
 
     def test_ledger_entry_must_be_a_regular_file(self):
         # Review of a8a54c4d: never block on, or follow, something other than the entry.
@@ -2078,6 +2169,100 @@ class AnswerTests(AnswerFixture):
         text = " ".join(result.stdout.split())
         self.assertIn("The caller is responsible for a verified approval", text)
         self.assertIn("does not verify", text)
+
+
+class LiveG1Tests(unittest.TestCase):
+    """The frozen live G1 screen, exact bytes, against the classification alone (no tmux)."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix="cursor-live-")
+        self.addCleanup(temp.cleanup)
+        patcher = mock.patch.dict(os.environ, {"XDG_STATE_HOME": temp.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        identity, ledger = LIVE["identity"], LIVE["legacyLedger"]
+        self.ref = "OP399-g1-live-fixture"
+        entry = dict(ledger, approval_ref=self.ref, choice="a", name=identity["name"], pane_id=identity["pane_id"],
+                     pane_pid=identity["pane_pid"], owner=identity["owner"])
+        path = helper.approval_path(identity["name"], self.ref)
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(entry))
+        self.state = {key: identity[key] for key in ("name", "pane_id", "pane_pid", "owner", "worktree")}
+        self.state["answers"] = [{key: value for key, value in entry.items() if key != "name"}]
+        answered = Path(temp.name) / "g1-trust-expected.txt"
+        answered.write_bytes(LIVE["answeredText"].encode("utf-8"))
+        self.answered = helper.read_answered_text(str(answered))
+
+    def classify(self, capture=None, history=None, answered=True):
+        """tmux prints one newline after each row, the last blank row included."""
+        geometry = LIVE["geometry"]
+        raw = (LIVE["capture"] if capture is None else capture) + "\n"
+        rows = helper.capture_rows(raw)
+        history = geometry["history_size"] if history is None else history
+        height = rows - history
+        ident = {"cursor_y": str(height - 1), "height": str(height), "history": str(history)}
+        text, truncated = helper.bound_text(raw)
+        evidence = helper.answered_trust(self.state, self.answered if answered else None)
+        return helper.classify(text, truncated, rows, ident, evidence)
+
+    def test_the_fixture_is_the_frozen_live_bytes(self):
+        geometry = LIVE["geometry"]
+        self.assertEqual(__import__("hashlib").sha256(LIVE["capture"].encode("utf-8")).hexdigest(), LIVE["captureSha256"])
+        self.assertEqual(self.answered[0], LIVE["answeredText"].encode("utf-8"))
+        self.assertEqual(__import__("hashlib").sha256(self.answered[0]).hexdigest(),
+                         LIVE["legacyLedger"]["expected_text_sha256"])
+        self.assertEqual(helper.capture_rows(LIVE["capture"] + "\n"), geometry["capture_rows"])
+        self.assertEqual(geometry["capture_rows"], geometry["history_size"] + geometry["pane_height"])
+        self.assertEqual(geometry["cursor_y"], geometry["pane_height"] - 1)
+        self.assertEqual(helper.bound_text(LIVE["capture"] + "\n"), (LIVE["capture"], False))
+
+    def test_the_live_screen_is_answered_only_with_the_legacy_file(self):
+        self.assertEqual(self.classify(), ("unclassified", True, self.ref))
+        self.assertEqual(self.classify(answered=False), ("modal-trust", True, None))
+
+    def test_other_splits_of_the_same_capture(self):
+        # A different pane height under a different history size, the same 35 rows.
+        for history in (0, 2, 5, 11, 13):
+            with self.subTest(history=history):
+                self.assertEqual(self.classify(history=history), ("unclassified", True, self.ref))
+        # With the trust row in history, no prompt is on the visible screen at all.
+        for history in (14, 19):
+            with self.subTest(history=history):
+                self.assertEqual(self.classify(history=history), ("unclassified", True, None))
+
+    def test_a_row_at_the_pane_width(self):
+        rows = LIVE["capture"].split("\n")
+        rows[33] = rows[33].ljust(80)
+        self.assertEqual(len(rows[33]), 80)
+        self.assertEqual(self.classify("\n".join(rows)), ("unclassified", True, self.ref))
+
+    def test_a_box_wrapped_by_a_narrower_pane_is_refused(self):
+        rows = LIVE["capture"].split("\n")
+        wrapped = []
+        for index, row in enumerate(rows):
+            wrapped += [row[:60], row[60:]] if 2 <= index <= 18 else [row]
+        self.assertEqual(self.classify("\n".join(wrapped)), ("modal-trust", True, None))
+
+    def test_status_row_in_history_needs_a_prompt_outside_the_box(self):
+        # The status row is the box's last nonblank row. In history, it leaves no visible box
+        # row with a prompt phrase: the screen is a trust prompt only through a phrase outside
+        # the box, and classify's scan outside the box refuses that.
+        rows = LIVE["capture"].split("\n")
+        rows[27] = "  [a] Trust this workspace"
+        self.assertEqual(self.classify("\n".join(rows), history=17), ("modal-trust", True, None))
+        # Without that row nothing on the visible screen is a prompt (visible screen only).
+        self.assertEqual(self.classify(history=17), ("unclassified", True, None))
+
+    def test_a_cropped_box_is_refused(self):
+        rows = LIVE["capture"].split("\n")
+        cropped = {
+            "the bottom border cut": rows[:18] + rows[19:] + [""],
+            "the right border cut": [row[:70] if 2 <= index <= 18 else row for index, row in enumerate(rows)],
+            "the status row cut": [row[:10] if index == 16 else row for index, row in enumerate(rows)],
+        }
+        for label, kept in cropped.items():
+            with self.subTest(label=label):
+                self.assertEqual(self.classify("\n".join(kept))[0], "modal-trust")
 
 
 if __name__ == "__main__":
