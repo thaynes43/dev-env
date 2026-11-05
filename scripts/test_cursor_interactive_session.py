@@ -1440,6 +1440,10 @@ class AnswerTests(AnswerFixture):
             "top and bottom borders of different widths": (a, narrow_bottom + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
             "a box left open above the prompt's box": (a, lone_top + "\n" + approval_box + "\n", APPROVAL_EXPECT,
                                                        "prompt-unclear", None),
+            "two boxes side by side on one border row": (
+                a, "  \u256d\u2500\u2500\u256e  \u256d\u2500\u2500\u256e\n  \u2502a \u2502  \u2502b \u2502\n"
+                   "  \u2570\u2500\u2500\u256f  \u2570\u2500\u2500\u256f\n\n" + approval_box + "\n",
+                APPROVAL_EXPECT, "prompt-unclear", None),
             "a box closed above the prompt's box, its top off the screen": (
                 a, closed_above + "\n" + approval_box + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
         }
