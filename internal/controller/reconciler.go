@@ -1567,7 +1567,8 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 	// neither sets it: removing it first and setting it again gave it a new
 	// lastTransitionTime on every reconcile, so every reconcile wrote the
 	// status and the write's own event queued the next one (haynes-ops#4663).
-	if !setPrivateHistoryConditions(s, obs, st) && obs.removalBlocked == nil {
+	removalSet := setPrivateHistoryConditions(s, obs, st)
+	if !removalSet && obs.removalBlocked == nil {
 		meta.RemoveStatusCondition(&st.Conditions, ConditionRemovalBlocked)
 	}
 	if privateHistoryProtected(s) {

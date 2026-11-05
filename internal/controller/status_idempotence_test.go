@@ -92,16 +92,19 @@ type steadyCase struct {
 	check func(t *testing.T, s *v1alpha1.AgentSession)
 }
 
-// TestReconcileOfAnUnchangedSessionWritesNoStatus is haynes-ops#4663: a
-// protected private Session that wants its pod gone, with no pod and no
-// removal verdict of its own this reconcile (suspended inside its archive
-// window), had RemovalBlocked removed and set again on every reconcile. The
-// condition got a new lastTransitionTime each time, so every reconcile wrote
-// the status, and each write's watch event queued the next reconcile. Once
-// the queue took more than a second to come round, every write changed the
-// stored object and the loop fed itself until the operator restarted
-// (155 status PUTs a second for 13 hours on 2026-11-04). Of the 254 looping
-// Sessions, 232 showed TaskComputeReclaimed and 22 RetentionPending.
+// TestReconcileOfAnUnchangedSessionWritesNoStatus is haynes-ops#4663.
+// Protected private Sessions (254 of them on 2026-11-04) that wanted their pod
+// gone, with no pod and no removal verdict of their own in a reconcile, had
+// RemovalBlocked removed and set again on every reconcile. The condition got
+// a new lastTransitionTime each time, so every reconcile wrote the status, and
+// each write's watch event queued the next reconcile. What made the loop
+// sustain itself is not identified. The leading inference is that once a
+// reconcile took more than a second to come round, each write changed the
+// stored object, whose times are stored to the second, so no write was a
+// no-op. On 2026-11-04 the operator sent about 155 status PUTs a second for
+// 13 hours, and that storm ended when etcd hit its quota; earlier storms
+// ended when the operator restarted. Of the 254 Sessions, 232 showed
+// TaskComputeReclaimed and 22 RetentionPending.
 //
 // Each case starts from a RemovalBlocked condition that has been True for an
 // hour, lets the reconcile record what the fixture lacks, then requires that
@@ -281,6 +284,8 @@ func TestReconcileOfAnUnchangedSessionWritesNoStatus(t *testing.T) {
 			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// Each case has its own objects, fake API server and Reconciler.
+			t.Parallel()
 			s, objects, configure := tc.build()
 			// The status the previous operator left: RemovalBlocked has been
 			// True for an hour.

@@ -1001,11 +1001,15 @@ per session from `dev-env-templates`, and never changes either after create.**
   `Outdated`.
   *2026-11-05 note (haynes-ops#4663):* a reconcile that finds nothing changed
   writes no status. A condition keeps its `lastTransitionTime` while its status
-  stays the same, whichever rule sets it. On 2026-11-04 a protected private
-  Session that wanted its pod gone lost `RemovalBlocked` and got it back with a
-  new time on every reconcile. So every reconcile wrote the status, each write
-  queued the next reconcile, and the operator sent about 155 status writes a
-  second for 13 hours until etcd filled. `TestReconcileOfAnUnchangedSessionWritesNoStatus`
+  stays the same, whichever rule sets it. On 2026-11-04 protected private
+  Sessions (254 of them) that wanted their pod gone lost `RemovalBlocked` and
+  got it back with a new time on every reconcile. So every reconcile wrote the
+  status, and each write queued the next reconcile. What made the loop sustain
+  itself is not identified. The leading inference is that once a reconcile took
+  more than a second to come round, each write changed the stored object. The
+  operator sent about 155 status writes a second for 13 hours, and that storm
+  ended when etcd hit its quota; earlier storms ended when the operator
+  restarted. `TestReconcileOfAnUnchangedSessionWritesNoStatus`
   holds the retained private states (retention pending, task compute
   reclaimed, preservation unknown, HOME expired) and the legacy rescue path to
   no write once steady. The operator's client-side API limit
