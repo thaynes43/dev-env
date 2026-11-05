@@ -1494,6 +1494,7 @@ class AnswerTests(AnswerFixture):
         own_titled_top = ("  " + titled("\u256d", "\u256e", "Approval", BOX_WIDTH) + "\n"
                           + approval_box.split("\n", 1)[1])
         own_titled_both = own_titled_top.rsplit("  \u2570", 1)[0] + "  " + titled("\u2570", "\u256f", "esc", BOX_WIDTH) + "\n"
+        own_titled_bottom = approval_box.rsplit("  \u2570", 1)[0] + "  " + titled("\u2570", "\u256f", "esc", BOX_WIDTH) + "\n"
         tip_box = ("  " + titled("\u256d", "\u256e", "Tip", BOX_WIDTH) + "\n  \u2502" + "  one titled box".ljust(BOX_WIDTH)
                    + "\u2502\n  \u2570" + "\u2500" * BOX_WIDTH + "\u256f\n")
         a, ok = "modal-approval", "answered"
@@ -1510,6 +1511,7 @@ class AnswerTests(AnswerFixture):
             # The prompt's own box with a title.
             "the prompt's own box has a titled top": (own_titled_top + "\n", APPROVAL_EXPECT, "prompt-unclear"),
             "the prompt's own box has a titled top and bottom": (own_titled_both + "\n", APPROVAL_EXPECT, "prompt-unclear"),
+            "the prompt's own box has a titled bottom": (own_titled_bottom + "\n", APPROVAL_EXPECT, "prompt-unclear"),
         }
         for label, (capture, text, expected) in cases.items():
             with self.subTest(label=label):
