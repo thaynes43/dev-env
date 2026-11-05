@@ -157,6 +157,19 @@ jobs:
       - name: go test -p 2
         run: make test
 
+  # Its own job, so this suite's runtime stays out of the Go Test job's timeout budget.
+  cursor-interactive:
+    name: Cursor interactive session helper tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Cursor interactive session helper tests
+        run: nice -n 19 python3 -O -B -m unittest discover -s scripts -p 'test_cursor_interactive_session.py' -v
+
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -451,6 +464,7 @@ jobs:
       - portal-postgres
       - lint
       - test
+      - cursor-interactive
       - build
       - check-generated
       - image-operator

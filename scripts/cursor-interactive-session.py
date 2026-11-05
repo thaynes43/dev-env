@@ -31,11 +31,16 @@ MAX_EXPECT_LINES = 20
 MAX_ANSWERS = 32
 ANSWER_KINDS = ("modal-trust", "modal-permission", "modal-approval")
 APPROVAL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@#-]{7,199}")
+MAX_TRUST_PATH = 1024
+TOP_CORNERS = "\u256d\u250c\u2554\u250f"
+BOTTOM_CORNERS = "\u2570\u2514\u255a\u2517"
+TRUST_PATH_RE = re.compile(r"(?:/[A-Za-z0-9_.@+-]+)+")
 COMMAND_TIMEOUT = 5
 OWNER_OPTION = "@cursor_interactive_owner"
 IDENTITY_FORMAT = (
     "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_dead}\t#{pane_current_path}\t"
-    "#{pane_current_command}\t#{@cursor_interactive_owner}\t#{cursor_y}\t#{pane_height}\t#{pane_in_mode}"
+    "#{pane_current_command}\t#{@cursor_interactive_owner}\t#{cursor_y}\t#{pane_height}\t#{pane_in_mode}\t"
+    "#{history_size}"
 )
 ALLOWED_FLAGS = ("--workspace", "--model")
 MODALS = (
@@ -224,21 +229,23 @@ def parse_identity(stdout, fail_state, fail_code):
     if stdout.endswith("\n"):
         stdout = stdout[:-1]
     fields = stdout.split("\t")
-    if len(fields) != 10 or any(field == "" or "\n" in field for field in fields):
+    if len(fields) != 11 or any(field == "" or "\n" in field for field in fields):
         raise Refusal(fail_state, "tmux identity was incomplete. Nothing was sent.", fail_code)
-    session, pane, pid, dead, path, command, owner, cursor_y, height, in_mode = fields
+    session, pane, pid, dead, path, command, owner, cursor_y, height, in_mode, history = fields
     if not re.fullmatch(r"%[0-9]+", pane) or not re.fullmatch(r"[1-9][0-9]*", pid):
         raise Refusal(fail_state, "tmux identity was not an exact pane and process. Nothing was sent.", fail_code)
     if dead not in {"0", "1"} or in_mode not in {"0", "1"}:
         raise Refusal(fail_state, "tmux dead or mode flag was not exact. Nothing was sent.", fail_code)
     if not re.fullmatch(r"[0-9]+", cursor_y) or not re.fullmatch(r"[1-9][0-9]*", height):
         raise Refusal(fail_state, "tmux cursor position was not exact. Nothing was sent.", fail_code)
+    if not re.fullmatch(r"[0-9]+", history):
+        raise Refusal(fail_state, "tmux history size was not exact. Nothing was sent.", fail_code)
     if not Path(path).is_absolute():
         raise Refusal(fail_state, "tmux worktree path was not absolute. Nothing was sent.", fail_code)
     return {
         "session": session, "pane": pane, "pid": pid, "dead": dead, "path": path,
         "command": command, "owner": owner, "cursor_y": cursor_y, "height": height,
-        "in_mode": in_mode,
+        "in_mode": in_mode, "history": history,
     }
 
 
@@ -279,6 +286,16 @@ def bound_text(text):
 
 
 def read_capture(tmux, pane):
+    text, truncated, _rows = read_capture_rows(tmux, pane)
+    return text, truncated
+
+
+def capture_rows(text):
+    """Rows tmux printed, counted the way bound_text splits them."""
+    return len(text.replace("\r\n", "\n").replace("\r", "\n").splitlines())
+
+
+def read_capture_rows(tmux, pane):
     try:
         result = run([tmux, "capture-pane", "-p", "-t", pane, "-S", "-" + str(MAX_LINES)])
     except subprocess.TimeoutExpired:
@@ -287,7 +304,8 @@ def read_capture(tmux, pane):
         raise Refusal("inspect-unconfirmed", "Pane capture could not be read. Re-inspect. Nothing was sent.", 3)
     if result.returncode:
         raise Refusal("inspect-unconfirmed", "Pane capture failed. Re-inspect. Nothing was sent.", 3)
-    return bound_text(result.stdout)
+    text, truncated = bound_text(result.stdout)
+    return text, truncated, capture_rows(result.stdout)
 
 
 def modal_kind(text):
@@ -329,7 +347,7 @@ def snapshot_hash(ident, text, truncated):
     payload = "\n".join([
         ident["session"], ident["pane"], ident["pid"], ident["dead"], ident["path"],
         ident["command"], ident["owner"], ident["cursor_y"], ident["height"], ident["in_mode"],
-        "1" if truncated else "0", text,
+        ident["history"], "1" if truncated else "0", text,
     ])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -598,7 +616,7 @@ def read_expected(path):
         raise Refusal("invalid-input", "Expected prompt text must be UTF-8. Nothing was sent.")
     if any((ord(character) < 32 and character != "\n") or 127 <= ord(character) <= 159 for character in text):
         raise Refusal("invalid-input", "Expected prompt text must have no control characters except newlines. Nothing was sent.")
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    lines = [prompt_text(line) for line in text.split("\n") if prompt_text(line)]
     if not lines or len(lines) > MAX_EXPECT_LINES:
         raise Refusal("invalid-input", "Expected prompt text must have 1..20 nonblank lines. Nothing was sent.")
     return raw, lines
@@ -615,25 +633,72 @@ def validate_answer(args):
     raw, lines = read_expected(args.expect_text_file)
     if not any("[" + choice + "]" in line for line in lines):
         raise Refusal("invalid-input", "Choice must appear as [" + choice + "] in the expected prompt text. Nothing was sent.")
+    trust_path = getattr(args, "trust_path", None)
+    if args.expect_kind == "modal-trust":
+        if not trust_path:
+            raise Refusal("invalid-input", "A trust answer needs --trust-path, the one directory the approval covers. Nothing was sent.")
+        if (len(trust_path.encode("utf-8")) > MAX_TRUST_PATH or not TRUST_PATH_RE.fullmatch(trust_path)
+                or any(part in {".", ".."} for part in trust_path.split("/"))):
+            raise Refusal("invalid-input", "Trust path must be an absolute, normalized path of letters, digits and _.@+- "
+                                           "between single slashes, at most 1024 bytes. Nothing was sent.")
+        if not any(trust_path in line.split() for line in lines):
+            raise Refusal("invalid-input", "The expected prompt text must contain the trust path as a whole word. Nothing was sent.")
+    elif trust_path is not None:
+        raise Refusal("invalid-input", "--trust-path applies only to a modal-trust answer. Nothing was sent.")
     parse_receipt(args.receipt)
-    return choice, raw, lines
+    return choice, raw, lines, trust_path
 
 
-def match_expected(rows, lines):
-    """Index of the row that matched the last expected line, or None.
+def prompt_text(row):
+    """A row without its border and padding: whitespace and box-drawing characters at its ends only."""
+    start, end = 0, len(row)
+    while start < end and is_separator(row[start]):
+        start += 1
+    while end > start and is_separator(row[end - 1]):
+        end -= 1
+    return row[start:end]
 
-    Every expected line must appear, in order, inside one row (case folded)."""
-    shown = [row.casefold() for row in rows]
-    position, last = 0, None
-    for expected in lines:
-        folded = expected.casefold()
-        while position < len(shown) and folded not in shown[position]:
-            position += 1
-        if position == len(shown):
-            return None
-        last = position
-        position += 1
-    return last
+
+def box_edge(rows, texts, start, step, own, other):
+    """The prompt's own border row from start in direction step, and whether a row
+    with text lies before it. None when no such border is on the visible screen.
+
+    A border row has only box-drawing characters and spaces, and a corner."""
+    index, passed = start, False
+    while 0 <= index < len(rows):
+        if texts[index]:
+            passed = True
+        elif any(corner in rows[index] for corner in own):
+            return index, passed
+        elif any(corner in rows[index] for corner in other):
+            return None, passed
+        index += step
+    return None, passed
+
+
+def prompt_blocks(texts, lines):
+    """(first, last) for each place the expected lines are consecutive trimmed rows.
+
+    Exact and case-sensitive. Rows that trim to nothing (borders, padding,
+    empty rows) may sit between them."""
+    blocks = []
+    for first, text in enumerate(texts):
+        if text != lines[0]:
+            continue
+        index = first
+        for expected in lines[1:]:
+            index += 1
+            while index < len(texts) and texts[index] == "":
+                index += 1
+            if index == len(texts) or texts[index] != expected:
+                break
+        else:
+            blocks.append((first, index))
+    return blocks
+
+
+def is_separator(character):
+    return character.isspace() or "\u2500" <= character <= "\u257f"
 
 
 def modal_kinds(rows):
@@ -646,22 +711,61 @@ def modal_kinds(rows):
     return kinds
 
 
-def current_prompt(text, truncated, cursor_y, height, expect_kind, lines):
+def row_words(row):
+    """(start, end, word) for each run between whitespace and box-drawing characters."""
+    words, start = [], None
+    for index, character in enumerate(row):
+        if is_separator(character):
+            if start is not None:
+                words.append((start, index, row[start:index]))
+                start = None
+        elif start is None:
+            start = index
+    if start is not None:
+        words.append((start, len(row), row[start:]))
+    return words
+
+
+def check_trust_path(visible, trust_path):
+    """Every path-like word on the visible screen must be exactly the trust path."""
+    named = False
+    for row in visible:
+        for start, end, word in row_words(row):
+            if "/" not in word and not word.startswith("~"):
+                continue
+            # tmux prints a wrapped line as separate rows: a word at a row edge may continue.
+            if start == 0 or end == len(row):
+                raise Refusal("trust-path-unclear", "A path on the visible screen starts or ends its row, so it may "
+                                                    "continue on another row. Nothing was sent.")
+            if word != trust_path:
+                raise Refusal("trust-path-mismatch", "The visible screen names a path other than the trust path. Nothing was sent.")
+            named = True
+    if not named:
+        raise Refusal("trust-path-missing", "The visible screen does not show the trust path as one word. Nothing was sent.")
+
+
+def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust_path=None):
     """Require the expected prompt to be the current bottom-of-pane state.
 
-    tmux prints the requested history, then every visible row. The visible
-    screen is therefore the last pane_height rows of the capture. It must be
-    complete, show exactly one prompt kind (the expected one), show every
-    expected line in order, and have no composer row after the prompt or under
-    the cursor. Anything else fails closed."""
+    capture-pane -S -80 prints min(history_size, 80) history rows, then every
+    visible row, blank ones included. The row count is checked against tmux's
+    own history_size and pane_height, so the last pane_height rows are the
+    visible screen. It must be complete, show exactly one prompt kind (the
+    expected one), name exactly the trust path for a trust prompt, show the
+    expected lines exactly, once, as every row of the box around them, and
+    have no composer row after the prompt or under the cursor. Anything else
+    fails closed."""
     rows = text.split("\n")
-    rows_needed = int(height)
+    rows_needed = int(ident["height"])
+    if rows_total != min(int(ident["history"]), MAX_LINES) + rows_needed:
+        raise Refusal("prompt-unclear", "The capture's row count does not match tmux's history size and pane height, "
+                                        "so the visible screen cannot be located. Nothing was sent.")
     if len(rows) < rows_needed or (truncated and len(rows) == rows_needed):
         raise Refusal("prompt-unclear", "The visible screen cannot be established from the bounded capture. Nothing was sent.")
     visible = rows[-rows_needed:]
     kinds = modal_kinds(visible)
     # The expected prompt exists in the capture, but maybe not as the current state.
-    stale = expect_kind in modal_kinds(rows) and match_expected(rows, lines) is not None
+    stale = expect_kind in modal_kinds(rows) and bool(prompt_blocks([prompt_text(row) for row in rows], lines))
     if not kinds:
         if stale:
             raise Refusal("stale-prompt", "The expected prompt is only in older captured text, not on the visible screen. Nothing was sent.")
@@ -671,12 +775,28 @@ def current_prompt(text, truncated, cursor_y, height, expect_kind, lines):
     (kind,) = kinds
     if kind != expect_kind:
         raise Refusal("modal-mismatch", "The visible prompt is " + kind + ", not " + expect_kind + ". Nothing was sent.")
-    last = match_expected(visible, lines)
-    if last is None:
+    if expect_kind == "modal-trust":
+        check_trust_path(visible, trust_path)
+    # The expected lines are the whole prompt: exact rows, once, with nothing next to them.
+    texts = [prompt_text(row) for row in visible]
+    blocks = prompt_blocks(texts, lines)
+    if not blocks:
         if stale:
             raise Refusal("stale-prompt", "The expected prompt text is not all on the visible screen. Nothing was sent.")
-        raise Refusal("modal-mismatch", "The expected prompt text is not shown, in order, on the visible screen. Nothing was sent.")
-    cursor = int(cursor_y)
+        raise Refusal("modal-mismatch", "The expected prompt rows are not shown exactly, in order, on the visible screen. Nothing was sent.")
+    if len(blocks) > 1:
+        raise Refusal("prompt-unclear", "The expected prompt is shown more than once on the visible screen. Nothing was sent.")
+    ((first, last),) = blocks
+    # The block must be the whole of its own box. Padding rows sit between a box's
+    # rows, so the rows next to the block say nothing: check every row up to the borders.
+    top, text_above = box_edge(visible, texts, first - 1, -1, TOP_CORNERS, BOTTOM_CORNERS)
+    bottom, text_below = box_edge(visible, texts, last + 1, 1, BOTTOM_CORNERS, TOP_CORNERS)
+    if top is None or bottom is None:
+        raise Refusal("prompt-unclear", "The expected prompt is not inside one box on the visible screen. Nothing was sent.")
+    if text_above or text_below:
+        raise Refusal("modal-mismatch", "The prompt's box has a row the expected text leaves out: the expected text must "
+                                        "be every row in the box. Nothing was sent.")
+    cursor = int(ident["cursor_y"])
     below = visible[last + 1:]
     if any(COMPOSER.match(row) for row in below) or (0 <= cursor < len(visible) and COMPOSER.match(visible[cursor])):
         raise Refusal("stale-prompt", "A composer row follows the prompt or holds the cursor, so the prompt is not current. Nothing was sent.")
@@ -712,16 +832,19 @@ def utc_now():
 
 def answer_session(args):
     # Read and validate every input before the lock and before any tmux call.
-    choice, raw, lines = validate_answer(args)
+    choice, raw, lines, trust_path = validate_answer(args)
     with state_lock(args.name, wait=False):
-        return answer_locked(args, choice, raw, lines)
+        return answer_locked(args, choice, raw, lines, trust_path)
 
 
-def answer_locked(args, choice, raw, lines):
+def answer_locked(args, choice, raw, lines, trust_path):
     ledger = approval_path(args.name, args.approval_ref)
     if ledger.exists():
         raise Refusal("approval-spent", "This approval reference was already used. One approval answers one prompt once. Nothing was sent.")
     path, state = load_owned(args.name, args.tmux)
+    # The approval covers one directory: the worktree this task's start recorded.
+    if args.expect_kind == "modal-trust" and trust_path != state["worktree"]:
+        raise Refusal("trust-path-mismatch", "--trust-path is not the worktree this task's start recorded. Nothing was sent.")
     receipt = parse_receipt(args.receipt)
     if not state.get("receipt_id") or receipt["id"] != state["receipt_id"]:
         raise Refusal("stale-receipt", "Pane receipt is stale or is not the latest inspect. Re-inspect. Nothing was sent.")
@@ -729,16 +852,18 @@ def answer_locked(args, choice, raw, lines):
         raise Refusal("stale-receipt", "Pane receipt does not match the stored inspect. Re-inspect. Nothing was sent.")
     ident = read_identity(state["tmux"], state["pane_id"], "inspect-unconfirmed", 3)
     require_same_pane(state, ident)
-    text, truncated = read_capture(state["tmux"], state["pane_id"])
+    text, truncated, rows_total = read_capture_rows(state["tmux"], state["pane_id"])
     digest = snapshot_hash(ident, text, truncated)
     if digest != state["snapshot_sha256"] or digest != receipt["digest"]:
         raise Refusal("stale-receipt", "Pane capture changed since inspect. Re-inspect. Nothing was sent.")
-    kind = current_prompt(text, truncated, ident["cursor_y"], ident["height"], args.expect_kind, lines)
+    kind = current_prompt(text, truncated, rows_total, ident, args.expect_kind, lines, trust_path)
     record = {
         "answered_at": utc_now(), "approval_ref": args.approval_ref, "kind": kind, "choice": choice,
         "expected_text_sha256": hashlib.sha256(raw).hexdigest(), "pane_id": ident["pane"],
         "pane_pid": ident["pid"], "owner": state["owner"], "outcome": "sending",
     }
+    if trust_path is not None:
+        record["trust_path"] = trust_path
     entry = dict(record, name=state["name"])
     # Spend the approval durably, then the receipt, before the key is sent.
     spend_approval(ledger, entry)
@@ -750,10 +875,10 @@ def answer_locked(args, choice, raw, lines):
     try:
         again = read_identity(state["tmux"], state["pane_id"], "inspect-unconfirmed", 3)
         require_same_pane(state, again)
-        text_again, truncated_again = read_capture(state["tmux"], state["pane_id"])
+        text_again, truncated_again, rows_again = read_capture_rows(state["tmux"], state["pane_id"])
         if snapshot_hash(again, text_again, truncated_again) != digest:
             raise Refusal("stale-receipt", "Pane capture changed after the approval was spent.")
-        current_prompt(text_again, truncated_again, again["cursor_y"], again["height"], args.expect_kind, lines)
+        current_prompt(text_again, truncated_again, rows_again, again, args.expect_kind, lines, trust_path)
     except Refusal as refusal:
         record["outcome"] = entry["outcome"] = "not-sent"
         write_state(path, state)
@@ -822,6 +947,7 @@ def build_parser():
     answer.add_argument("--expect-kind", required=True, help="modal-trust, modal-permission or modal-approval")
     answer.add_argument("--expect-text-file", required=True, help="exact prompt lines that must be shown, in order")
     answer.add_argument("--choice", required=True, help="one key shown as [key] in the expected text")
+    answer.add_argument("--trust-path", help="for modal-trust: the one directory the approval covers; must be the recorded worktree")
     return parser
 
 
