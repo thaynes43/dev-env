@@ -1296,6 +1296,14 @@ class AnswerTests(AnswerFixture):
             "a middle prompt row left out": (
                 trust, TRUST_SCREEN, "".join(trust_rows[:1] + trust_rows[2:]), "a", "modal-mismatch"),
             "the last prompt row left out": (trust, TRUST_SCREEN, "".join(trust_rows[:-1]), "a", "modal-mismatch"),
+            "a later prompt row with a longer target": (
+                "modal-approval", APPROVAL_SCREEN.replace("[y] Yes      ", "[y] Yes, always"), APPROVAL_EXPECT, "y",
+                "modal-mismatch"),
+            "a later prompt row in another case": (
+                "modal-approval", APPROVAL_SCREEN.replace("[n] No", "[n] NO"), APPROVAL_EXPECT, "y", "modal-mismatch"),
+            "the exact prompt only in history, another one visible": (
+                "modal-approval", APPROVAL_CAPTURE + approval("Allow this command: git push"), APPROVAL_EXPECT, "y",
+                "stale-prompt", len(APPROVAL_SCREEN.splitlines())),
             "the prompt shown twice": (
                 "modal-approval", APPROVAL_CAPTURE + APPROVAL_SCREEN, APPROVAL_EXPECT, "y", "prompt-unclear"),
             "the prompt on the first visible row": (
@@ -1305,10 +1313,10 @@ class AnswerTests(AnswerFixture):
                 "modal-approval", "\nAllow this command: git status\n\u25b6 [y] Yes\n[n] No", APPROVAL_EXPECT, "y",
                 "prompt-unclear"),
         }
-        for label, (kind, capture, text, choice, expected) in cases.items():
+        for label, (kind, capture, text, choice, expected, *visible) in cases.items():
             with self.subTest(label=label):
                 self.restart_case()
-                self.screen(capture)
+                self.screen(capture, visible=visible[0] if visible else None)
                 inspected = self.start_and_inspect()
                 expect = self.root / "expect-rows"
                 expect.write_text(self.fix(text))
