@@ -4,6 +4,10 @@ version: "2"
 
 run:
   concurrency: 2
+  # Lint the portal local test instance too (DESIGN-055). The tag only adds
+  # files; it never removes one from the production build.
+  build-tags:
+    - portallocaltest
 
 linters:
   # standard = errcheck, govet, ineffassign, staticcheck, unused.

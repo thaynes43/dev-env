@@ -63,3 +63,17 @@ func TestPortalDefaultServerDispatchPreserved(t *testing.T) {
 		t.Fatalf("code=%d served=%v out=%q stderr=%q", got, served, out.String(), stderr.String())
 	}
 }
+
+// DESIGN-055: the production command has no switch for the local test
+// instance, its listener, fixtures or principal.
+func TestPortalCommandRefusesLocalTestSelectors(t *testing.T) {
+	for _, args := range [][]string{{"localtest"}, {"--local-test"}, {"-listen", "127.0.0.1:0"}, {"-listen=127.0.0.1:0"}, {"-fixtures", "scripts/trials/portal_product"}, {"-tags", "portallocaltest"}, {"--principal=local-test-reader"}, {"serve", "--insecure"}} {
+		var out, stderr bytes.Buffer
+		called := false
+		check := func(context.Context) session.PagesSourceCheck { called = true; return session.PagesSourceCheck{} }
+		serve := func(context.Context, string) error { called = true; return nil }
+		if got := runCommand(args, &out, &stderr, check, serve); got != 2 || called || out.Len() != 0 || stderr.String() != "portal usage unavailable\n" {
+			t.Fatalf("args=%q code=%d called=%v out=%q stderr=%q", args, got, called, out.String(), stderr.String())
+		}
+	}
+}
