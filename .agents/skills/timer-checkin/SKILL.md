@@ -199,6 +199,7 @@ a supported route (see supervised-dispatch, section 2). It holds:
 - `timer`: the mechanism, job ID, schedule, next check, created time and expiry;
 - `stage`, and evidence references (paths, SHAs, CI run IDs), never raw logs;
 - `lastCheck`: time and result;
+- `lanes`: the lane table of section 6, `[{work, owner, type, nextAction, wake}]`;
 - `stop`: reason, time and evidence, once the work ends.
 
 When the work is a child in another pod, for example a headless task started
@@ -247,8 +248,8 @@ a task failure, and the next report uses another supported route
 Create the job, then write its job ID into the file. The fired prompt names the
 state file and says what to do, because the context may have been compacted by
 the time it fires. For example: "Timer check-in for OP385: read
-`<state file>`, verify evidence, steer, update the state file; stop only for a
-stop reason in supervised-dispatch section 5."
+`<state file>`, verify evidence, steer, update the state file; before any stop, write the lane table (section 6)
+and stop only for a stop reason in supervised-dispatch section 5."
 
 Pick a cadence that matches what you wait for: one check near the end of an
 8-minute CI run rather than eight, 20 to 30 minutes for idle supervision. Avoid
@@ -336,23 +337,49 @@ its pane (supervised-dispatch section 5; for example a prompt decision in
 authorized work keeps this timer, and its check-ins record nothing about the
 pending action beyond the existing hold line. If every remaining piece of work
 depends on the decision, end the timer as below, recording the stop and the
-resume trigger; the verified answer re-creates it from the state file.
+resume trigger; a verified answer delivered into this session re-creates it from the state file.
 
-Prove "every remaining piece" before you stop. A timer prompt scoped to one loop
-(one worker, one pilot) can stop only that loop; it does not end the custodian's
-other work. Before any `CronDelete`, write a lane table in the state file: one row
-for each piece of work the custodian owns or supervises, with its owner, its
-blocker type (`permission-denied`, `decision-pending`, `dependency` or `none`),
-its next action and what will wake it. Read the open work from the status record
-and the tracker, not from memory. Then:
+Prove "every remaining piece" before you end the timer. The lane table gates
+ending it, by `CronDelete` or `ScheduleWakeup` with `stop: true`. It does not
+gate moving the timer: a custody handoff (section 5) or a re-scope (below) is not
+an end.
 
-- A `none` row keeps the timer: do that work, or dispatch it to its owner.
-- A `dependency` row keeps the timer, with a read-only check of the dependency.
-  Its recovery does not lift a denial or answer a pending decision.
-- Delete the timer only when every row is `permission-denied` or
-  `decision-pending`, and record the table with the stop.
-- Never stop after a number of quiet or failed wakes. That is the stall rule
-  above, not a stop reason.
+Rows are only the authorized work this custodian has claimed, within its
+recorded scope and budget. An unclaimed tracker item or an ungroomed "next" note
+is not a lane; do not start it from here. Write the table into the state file's
+`lanes` (section 2) and mirror it on the tracker, so a successor can act if this
+session ends. Read the open work from the status record and the tracker, not
+from memory. Give each row its owner, its type, its next action and what will
+wake it. Types:
+
+- `none`: authorized work can proceed now. It keeps the timer: do it, or
+  dispatch it to its owner.
+- `dependency`: an event that a read-only check can see and nobody has to decide,
+  such as a CI run, an outage or a running worker. It keeps the timer, with a
+  read-only check and a deadline. Past the deadline the stall rule applies;
+  once no repair remains, the row becomes `unresolvable`. Prefer a bounded wait
+  (section 1) to a model timer for a long dependency. A dependency's recovery
+  does not lift a denial or answer a decision.
+- `decision-pending`: waits, directly or through another lane, on a decision by
+  Tom, his verified coordinator or a policy owner. The row names the delivered
+  question (an AskUserQuestion delivery or an Ask ID) and a route that pushes
+  the answer into this session, such as Tom's reply or a verified coordinator's
+  `agent-run msg`. A question not yet delivered is a `none` row whose next
+  action is delivering it. Copy the existing hold line; do not re-read the
+  held action, its answer or its pane.
+- `permission-denied`: an actual denial, or a latch the platform has actually
+  set (`agent-run budget show`). Not polled, not retried.
+- Stop types: `done` (a demonstrated outcome), `paused` (a pause or cancellation
+  by Tom or his verified coordinator), `budget-exhausted` and `unresolvable`.
+
+End the timer only when every row is `decision-pending`, `permission-denied` or
+a stop type. One `none` or `dependency` row keeps it. Never end it after a number
+of quiet or failed wakes; that is the stall rule above, not a stop reason.
+
+A timer prompt scoped to one loop (one worker, one pilot) can stop only that
+loop. When that loop ends and other rows stay open, re-scope: create a new job
+whose prompt names the state file and the lane table, write its ID, then
+`CronDelete` the old job. That is a re-scope, not a stop.
 
 When the work ends or pauses:
 
@@ -360,8 +387,9 @@ When the work ends or pauses:
    to confirm it is gone. Do not keep polling during a pause.
 2. Write `stop` in the state file with the reason, time and evidence, and for a
    pause the condition that resumes it.
-3. Record the end or the pause on the tracker. A verified resume re-creates the
-   timer from the state file.
+3. Record the end or the pause on the tracker. A verified resume delivered into this session re-creates the
+   timer from the state file. If the session has ended, a successor acts from
+   the tracker mirror.
 
 This text is not operational proof. A real wake, re-arm, recovery and completion
 are proved by the keeper pilot (OP385), not by this file.
