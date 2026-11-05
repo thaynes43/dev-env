@@ -408,6 +408,42 @@ stray `y` most likely lands in the composer instead. So answer a queue only
 while nothing else can act on the pane, and check the agent's transcript
 after the answer for exactly one run.
 
+#### Rejecting the shown command: ctrl-c
+
+`answer --expect-kind modal-approval --choice ctrl-c` rejects the command
+Cursor shows, with the same binding as `y`: the exact expected rows under the
+divider, including any `Approval N of M` row and switch hint. It sends one
+`C-c` through tmux and nothing else: no `n`, Enter, Escape or arrow key. It
+is refused on any other prompt kind and on a boxed prompt.
+
+What Ctrl+C does is read from the installed UI code of Cursor
+2026.10.14-0f9edde, not observed by pressing it:
+
+- Cursor renders with raw mode on and `exitOnCtrlC` off, so a tmux Ctrl+C
+  reaches it as a key, not as SIGINT.
+- At the approval screen the composer is unfocused; the decision handler
+  maps Ctrl+C to `reject` for the active decision only. The store resolves
+  that one id as not approved, with no reason, and removes it. No agent turn
+  starts and no other decision changes.
+- In message mode (no decision left), one Ctrl+C stops a running turn, clears
+  a draft or arms exit, and a second within two seconds quits Cursor. So reject one decision, inspect again, and
+  never send a second Ctrl+C without a fresh inspect that still shows a
+  decision.
+- `n` (Skip) is not used: it opens a reason composer, and Enter there can
+  send a queued message as a new turn.
+
+When the agent turn has ended with an error, Cursor draws it under the prompt
+as `Error: <title>` (for example `Error: Agent stopped retrying` or
+`Error: Connection failed`) and still draws the stale decisions above it (G1 pane,
+2026-11-05T21:41:47Z; anonymized capture
+[`g1-command-approval-aborted.json`](../scripts/cursor-interactive-session-fixtures/g1-command-approval-aborted.json)).
+The expected text for a rejection may then end with the footer rows, after the
+Skip row or the switch hint, once. Any row after the Skip row or the hint
+refuses `y`, and refuses `ctrl-c` unless those rows start with one `Error: `
+line: a command whose turn may have ended is never approved. After one rejection,
+the last decision shows alone, without the counter row or hint, and needs a
+fresh `inspect` and its own approval reference.
+
 #### Lesson: qualify a prompt class on a real capture first
 
 - **Observed** (2026-11-05 19:30Z, Cursor 2026.10.14-0f9edde): a

@@ -59,6 +59,15 @@ PENDING_STATUS = "waiting for approval"
 # and a switch hint after the Skip row. Run (once), y, answers only the approval shown.
 QUEUE_HEADER = re.compile(r"Approval ([1-9][0-9]?) of ([1-9][0-9]?)")
 QUEUE_HINT = "\u2190/\u2192 to switch approval"
+# Rejecting the shown command: one Ctrl+C, which Cursor (raw mode) reads as reject for the
+# active decision only. It is never sent outside the command prompt.
+REJECT_CHOICE = "ctrl-c"
+# Cursor draws a turn error under the prompt as "Error: <title>" (Agent stopped retrying,
+# Connection failed, ...). With any row after the Skip row or the switch hint, only a
+# rejection may be answered, and those rows must start with such an error line; approving a
+# command its turn may no longer await is refused.
+ERROR_PREFIX = "Error: "
+SKIP_SUFFIX = "(esc or n)"
 MODALS = (
     ("modal-trust", ("trust this workspace", "trust the contents of", "workspace trust", "do you trust")),
     ("modal-permission", ("permission required", "needs permission", "requesting permission")),
@@ -730,12 +739,24 @@ def prompt_shape(expect_kind, choice, lines):
     """"box" when the expected text shows the choice as [key]; "divider" for Cursor's command
     prompt, a modal-approval whose expected text shows (y) at the end of exactly one row and
     the choice is y; otherwise None."""
-    if any("[" + choice + "]" in line for line in lines):
+    if choice != REJECT_CHOICE and any("[" + choice + "]" in line for line in lines):
         return "box"
-    if expect_kind == "modal-approval" and choice == COMMAND_CHOICE and sum(
-            line.endswith(" (" + COMMAND_CHOICE + ")") for line in lines) == 1:
+    if expect_kind == "modal-approval" and choice in (COMMAND_CHOICE, REJECT_CHOICE) and sum(
+            line.endswith(" (" + COMMAND_CHOICE + ")") for line in prompt_rows(lines)) == 1:
         return "divider"
     return None
+
+
+def prompt_end(lines):
+    """The index after the command prompt's last row: the switch hint, else the Skip row, else
+    the end of the lines."""
+    ends = [index for index, line in enumerate(lines) if line == QUEUE_HINT or line.endswith(SKIP_SUFFIX)]
+    return ends[-1] + 1 if ends else len(lines)
+
+
+def prompt_rows(lines):
+    """The expected lines without the rows after the prompt (a turn error footer)."""
+    return lines[:prompt_end(lines)]
 
 
 def check_queue_text(lines):
@@ -760,8 +781,9 @@ def validate_answer(args):
     if args.expect_kind not in ANSWER_KINDS:
         raise Refusal("invalid-input", "Expected kind must be modal-trust, modal-permission or modal-approval. Nothing was sent.")
     choice = args.choice or ""
-    if len(choice) != 1 or not 33 <= ord(choice) <= 126:
-        raise Refusal("invalid-input", "Choice must be exactly one printable ASCII key. Nothing was sent.")
+    if choice != REJECT_CHOICE and (len(choice) != 1 or not 33 <= ord(choice) <= 126):
+        raise Refusal("invalid-input", "Choice must be exactly one printable ASCII key, or ctrl-c to reject Cursor's "
+                                       "shown command. Nothing was sent.")
     raw, lines = read_expected(args.expect_text_file)
     if prompt_shape(args.expect_kind, choice, lines) is None:
         raise Refusal("invalid-input", "Choice must appear as [" + choice + "] in the expected prompt text. For Cursor's "
@@ -772,7 +794,16 @@ def validate_answer(args):
         raise Refusal("invalid-input", "A command prompt's expected rows must not start or end with a box-drawing or "
                                        "non-space whitespace character. Nothing was sent.")
     if prompt_shape(args.expect_kind, choice, lines) == "divider":
-        check_queue_text(lines)
+        # Rows after the Skip row or the hint can only be one turn error footer, and only a
+        # rejection is answered under it. An error line inside the prompt is refused too.
+        tail = lines[prompt_end(lines):]
+        errors = sum(line.startswith(ERROR_PREFIX) for line in lines)
+        if (any(line.startswith(ERROR_PREFIX) for line in prompt_rows(lines))
+                or tail and (choice != REJECT_CHOICE or not tail[0].startswith(ERROR_PREFIX) or errors != 1)):
+            raise Refusal("invalid-input", "Rows after the Skip row or the switch hint must be one turn error footer "
+                                           "(\"Error: ...\"), and only a ctrl-c rejection may be answered under it. "
+                                           "Nothing was sent.")
+        check_queue_text(prompt_rows(lines))
     trust_path = getattr(args, "trust_path", None)
     if args.expect_kind == "modal-trust":
         if not trust_path:
@@ -1259,7 +1290,8 @@ def answer_locked(args, choice, raw, lines, trust_path):
         raise Refusal("prompt-changed", "The pane changed after the approval was spent (" + refusal.state + "). "
                       "Nothing was sent. The approval stays spent; a new approval is needed.")
     try:
-        sent = run([state["tmux"], "send-keys", "-t", state["pane_id"], "-l", "--", choice])
+        keys = ["C-c"] if choice == REJECT_CHOICE else ["-l", "--", choice]
+        sent = run([state["tmux"], "send-keys", "-t", state["pane_id"]] + keys)
         failed = sent.returncode != 0
     except (subprocess.TimeoutExpired, OSError, UnicodeError):
         failed = True
@@ -1325,7 +1357,8 @@ def build_parser():
                         help="audit reference to the caller's verified approval; recorded once, never verified")
     answer.add_argument("--expect-kind", required=True, help="modal-trust, modal-permission or modal-approval")
     answer.add_argument("--expect-text-file", required=True, help="exact prompt lines that must be shown, in order")
-    answer.add_argument("--choice", required=True, help="one key shown as [key] in the expected text")
+    answer.add_argument("--choice", required=True, help="one key shown as [key] in the expected text; on Cursor's "
+                        "command prompt, y (Run once) or ctrl-c (reject the shown command)")
     answer.add_argument("--trust-path", help="for modal-trust: the one directory the approval covers; must be the recorded worktree")
     return parser
 

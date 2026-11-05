@@ -1,0 +1,26 @@
+{
+ "schema": "g1-command-approval-aborted-fixture.v1",
+ "provenance": {
+  "privateFixtureSha256": "36737f69d7b5f6ebd4936929c457e6fcf0ea1e7694e8f1aecc85949cd7013357",
+  "anonymized": "Same-shape synthetic values replace the worktree name, the helper state directory, the file name and the helper hash fragments; transcript text rows (the delegated request and the agent's reply) are synthetic text of the same width. Every row keeps its captured width. Cursor UI chrome is as captured.",
+  "captured": "2026-11-05T21:41:47Z, helper 7e2fe468 inspect, tmux pane 24x80, Cursor CLI 2026.10.14-0f9edde, after the agent turn ended in 'Agent stopped retrying'",
+  "state": "two stale duplicate decisions left ('Approval 1 of 2'); all three tool rows Interrupted"
+ },
+ "geometry": {
+  "pane_height": 24,
+  "pane_width": 80,
+  "history_size": 36,
+  "capture_rows": 60,
+  "truncated": false
+ },
+ "capture": "\n\n  Cursor Agent\n  v2026.10.14-0f9edde\n  Tip: Try Cursor Grok 4.7 via /model, frontier intelligence at a fraction of\n  the cost.\n\n\n  Synthetic transcript text, same width as the captured row. Synthet\n  Synthetic transcript text, same widt\n  Synthetic transcript text, same width as the captured row. Synthetic t\n  Synthetic transcript text, same width as the ca\n  Synthetic transcript text, same width as the captured row. Synthetic \n  Synthetic transcript text, same width as the captured row. Syntheti\n  Synthetic transcript text, same width as the captured row. Synthetic t\n  Synthetic transcript text, same width as the captured row. Synthetic\n  Synthetic transcript text, same width as the captured row. Syn\n\n\n  Synthetic transcript text, same width as the captured row. Synthetic tran\n  Synthetic\n\n  $ sha256sum /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcd\n    ef0123456789abcdef01234567/XX-XXXXXXXXXX-1.md && wc -l\n    /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcdef01234567\n    89abcdef01234567/XX-XXXXXXXXXX-1.md Interrupted • 13m 59s\n\n  $ sha256sum /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcd\n    ef0123456789abcdef01234567/XX-XXXXXXXXXX-1.md && wc -l\n    /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcdef01234567\n    89abcdef01234567/XX-XXXXXXXXXX-1.md Interrupted • 13m 59s\n\n  $ sha256sum /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcd\n    ef0123456789abcdef01234567/XX-XXXXXXXXXX-1.md && wc -l\n    /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcdef01234567\n    89abcdef01234567/XX-XXXXXXXXXX-1.md Interrupted • 13m 59s\n\n────────────────────────────────────────────────────────────────────────────────\n Approval 1 of 2\n\n $  sha256sum /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcde\n    f0123456789abcdef01234567/XX-XXXXXXXXXX-1.md && wc -l\n    /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcdef012345678\n    9abcdef01234567/XX-XXXXXXXXXX-1.md in .\n\n Run this command?\n Not in allowlist: sha256sum, wc\n  → Run (once) (y)\n    Add Shell(sha256sum), Shell(wc) to allowlist? (tab)\n    Run Everything (shift+tab)\n    Skip & tell the agent what to do instead (esc or n)\n\n ←/→ to switch approval\n\n\n  Error: Agent stopped retrying\n  The connection was interrupted repeatedly without saving progress, so the\n  agent stopped to avoid repeating the same work. Retry to continue from the\n  last saved state.\n",
+ "captureSha256": "e2d3f6acf0c8e4ac683841ee9568fe00dfb4f44928a365c8600351fa47e25425",
+ "promptRows": {
+  "divider": 37,
+  "header": 38,
+  "hint": 52,
+  "footer": 55
+ },
+ "expectedText": "Approval 1 of 2\n$  sha256sum /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcde\nf0123456789abcdef01234567/XX-XXXXXXXXXX-1.md && wc -l\n/home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcdef012345678\n9abcdef01234567/XX-XXXXXXXXXX-1.md in .\nRun this command?\nNot in allowlist: sha256sum, wc\n→ Run (once) (y)\nAdd Shell(sha256sum), Shell(wc) to allowlist? (tab)\nRun Everything (shift+tab)\nSkip & tell the agent what to do instead (esc or n)\n←/→ to switch approval\nError: Agent stopped retrying\nThe connection was interrupted repeatedly without saving progress, so the\nagent stopped to avoid repeating the same work. Retry to continue from the\nlast saved state.\n",
+ "expectedTextSha256": "93bd9e648dc9ccbb4f7673f5aec8094b9c3befe669163b9689b86acd87dfd01e"
+}
