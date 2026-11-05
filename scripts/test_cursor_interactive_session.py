@@ -539,33 +539,45 @@ class CursorInteractiveTests(unittest.TestCase):
         self.assertEqual(sum(args[0] == "send-keys" for args in self.commands("tmux")), 1)
 
 
-TRUST_CAPTURE = (
-    "Tip: You can start the Cursor CLI with `agent`.\n"
-    "  \u256d\u2500\u2500\u2500\u2500\u256e\n"
-    "  \u2502  \u26a0 Workspace Trust Required                      \u2502\n"
-    "  \u2502  Cursor Agent can execute code and access files.   \u2502\n"
-    "  \u2502  Do you trust the contents of this directory?      \u2502\n"
-    "  \u2502    /home/dev/work/example-task                      \u2502\n"
-    "  \u2502  \u25b6 [a] Trust this workspace                       \u2502\n"
-    "  \u2502    [q] Quit                                        \u2502\n"
-    "  \u2570\u2500\u2500\u2500\u2500\u256f\n"
-)
-# The visible screen as tmux prints it: the prompt box, then blank rows.
-TRUST_SCREEN = TRUST_CAPTURE + "\n\n"
 # Fixture text names this path; each answer test replaces it with its real worktree.
 EXAMPLE_PATH = "/home/dev/work/example-task"
-TRUST_PATH_ROW = "  \u2502    " + EXAMPLE_PATH + "                      \u2502\n"
+BOX_WIDTH = 74
+
+
+def boxed(rows, top="\u256d", top_end="\u256e", bottom="\u2570", bottom_end="\u256f"):
+    """Rows inside a border, padded to the box width."""
+    return ("  " + top + "\u2500" * BOX_WIDTH + top_end + "\n"
+            + "".join("  \u2502" + row.ljust(BOX_WIDTH) + "\u2502\n" for row in rows)
+            + "  " + bottom + "\u2500" * BOX_WIDTH + bottom_end + "\n")
+
+
+# The real trust prompt's shape (the G1 capture, STATUS.json inspect.text, 2026-11-04T19:25:02Z),
+# with a synthetic path: a padding row between the prompt's rows.
+TRUST_BOX_ROWS = [
+    "", "  \u26a0 Workspace Trust Required", "",
+    "  Cursor Agent can execute code and access files in this directory.", "",
+    "  Do you trust the contents of this directory?", "",
+    "    " + EXAMPLE_PATH, "", "",
+    "  \u25b6 [a] Trust this workspace", "    [q] Quit", "",
+    "  Use arrow keys to navigate, Enter to select, or press the key shown", "",
+]
+TRUST_TIP = "Tip: You can start the Cursor CLI with `agent` (same as `cursor-agent`).\n\n"
+TRUST_CAPTURE = TRUST_TIP + boxed(TRUST_BOX_ROWS)
+# The visible screen as tmux prints it: the prompt box, then blank rows.
+TRUST_SCREEN = TRUST_CAPTURE + "\n\n"
+TRUST_PATH_ROW = "  \u2502" + ("    " + EXAMPLE_PATH).ljust(BOX_WIDTH) + "\u2502\n"
 # An explicit check, not assert: CI runs this suite with -O, which strips asserts.
 if TRUST_PATH_ROW not in TRUST_CAPTURE:
     raise AssertionError("TRUST_CAPTURE no longer shows TRUST_PATH_ROW; the trust-path fixtures would not apply")
 # The whole prompt, row for row, as the screen shows it inside the border.
 TRUST_EXPECT = (
     "\u26a0 Workspace Trust Required\n"
-    "Cursor Agent can execute code and access files.\n"
+    "Cursor Agent can execute code and access files in this directory.\n"
     "Do you trust the contents of this directory?\n"
     "/home/dev/work/example-task\n"
     "\u25b6 [a] Trust this workspace\n"
     "[q] Quit\n"
+    "Use arrow keys to navigate, Enter to select, or press the key shown\n"
 )
 APPROVAL_CAPTURE = (
     "Tip: You can start the Cursor CLI with `agent`.\n"
@@ -1324,6 +1336,59 @@ class AnswerTests(AnswerFixture):
                 self.screen(capture, visible=visible[0] if visible else None)
                 inspected = self.start_and_inspect()
                 expect = self.root / "expect-rows"
+                expect.write_text(self.fix(text))
+                approval_ref = self.case_approval(label)
+                code, result = self.invoke("answer", self.answer_args(inspected["receipt"], choice=choice, kind=kind,
+                                                                      approval=approval_ref, expect=expect))
+                if expected == ok:
+                    self.assertEqual((code, result["state"]), (0, "answered"))
+                    self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", choice]])
+                else:
+                    self.assertEqual((code, result["state"]), (2, expected))
+                    self.assertEqual(self.sends(), [])
+                    self.assertFalse(self.ledger(approval_ref).exists())
+
+    # The whole box (QA round 3, HIGH): the real trust box has a padding row between
+    # its rows, so the rows next to the expected block are always blank.
+
+    def test_the_expected_text_is_the_whole_box(self):
+        rows = self.fix(TRUST_EXPECT).splitlines(True)
+        trust, approval, ok = "modal-trust", "modal-approval", "answered"
+        top_cut = len(TRUST_SCREEN.splitlines()) - 3
+        unboxed = "Allow this command: git status\n\u25b6 [y] Yes\n[n] No\n"
+        cases = {
+            "the full prompt": (trust, TRUST_SCREEN, TRUST_EXPECT, "a", ok, None),
+            "a square-cornered box": (
+                approval, "\n" + boxed(["  Allow this command: git status", "  \u25b6 [y] Yes", "    [n] No"],
+                                       "\u250c", "\u2510", "\u2514", "\u2518") + "\n", APPROVAL_EXPECT, "y", ok, None),
+            "the header left out": (trust, TRUST_SCREEN, "".join(rows[1:]), "a", "modal-mismatch", None),
+            "the footer left out": (trust, TRUST_SCREEN, "".join(rows[:-1]), "a", "modal-mismatch", None),
+            "only the question to the choices": (trust, TRUST_SCREEN, "".join(rows[2:6]), "a", "modal-mismatch", None),
+            "an unexpected row after a padding row": (
+                trust, TRUST_TIP + boxed(TRUST_BOX_ROWS + ["  Also trusts every parent directory.", ""]) + "\n\n",
+                TRUST_EXPECT, "a", "modal-mismatch", None),
+            "a changed header, left out of the expected text": (
+                trust, TRUST_SCREEN.replace("Required" + " " * 46, "Required for this and every parent directory  "),
+                "".join(rows[1:]), "a", "modal-mismatch", None),
+            "the top border above the visible screen": (trust, TRUST_SCREEN, TRUST_EXPECT, "a", "prompt-unclear", top_cut),
+            "no bottom border": (
+                trust, TRUST_TIP + boxed(TRUST_BOX_ROWS).rsplit("  \u2570", 1)[0] + "\n\n", TRUST_EXPECT, "a",
+                "prompt-unclear", None),
+            "an unboxed prompt between blank rows": (approval, "\n" + unboxed + "\n", APPROVAL_EXPECT, "y",
+                                                     "prompt-unclear", None),
+            "another box's bottom border above the prompt": (
+                approval, boxed(["  Tip"]) + "\n" + unboxed + "\n" + "  \u2570" + "\u2500" * 4 + "\u256f\n\n",
+                APPROVAL_EXPECT, "y", "prompt-unclear", None),
+            "another box's top border below the prompt": (
+                approval, "  \u256d" + "\u2500" * 4 + "\u256e\n\n" + unboxed + "\n" + boxed(["  Other"]) + "\n",
+                APPROVAL_EXPECT, "y", "prompt-unclear", None),
+        }
+        for label, (kind, capture, text, choice, expected, visible) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, visible=visible)
+                inspected = self.start_and_inspect()
+                expect = self.root / "expect-box"
                 expect.write_text(self.fix(text))
                 approval_ref = self.case_approval(label)
                 code, result = self.invoke("answer", self.answer_args(inspected["receipt"], choice=choice, kind=kind,
