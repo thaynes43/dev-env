@@ -326,6 +326,12 @@ it does not establish a compatible individual programmatic quota API or native
 authentication selector. Direct xAI API usage and legacy Cursor monthly meters
 must stay separate. No private call follows from this documentation.
 
+**Grok source plan, 2026-11-05.** [R-07](../research/R-07-op192-grok-usage-source-plan.md)
+keeps Grok as a separate row whose relationship to Cursor is typed Unknown,
+assesses the public and first-party sources, and lists the decisions (D0 to D5)
+a Grok source needs. It adds synthetic contract tests only; acquisition is
+unchanged.
+
 The typed reset compatibility change adds optional `Window.resetDisplayDate`
 and `Window.resetDisplayText`. A date is an exact calendar date; text is the
 original English month/day label without an inferred year. They are mutually

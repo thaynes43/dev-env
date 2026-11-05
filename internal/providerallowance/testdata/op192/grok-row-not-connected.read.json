@@ -1,0 +1,125 @@
+{
+  "schema": "providerallowance.read.v1",
+  "snapshotRevision": "op192-synthetic-grok-not-connected",
+  "servedAt": "2026-11-05T12:00:00Z",
+  "items": [],
+  "sourceStatuses": [
+    {
+      "provider": "anthropic",
+      "producerRef": "collection-unconfigured",
+      "availability": "unconfigured",
+      "lastGood": null,
+      "lastAttempt": {
+        "attemptedAt": "2026-11-05T12:00:00Z",
+        "completedAt": "2026-11-05T12:00:00Z",
+        "result": "unknown",
+        "code": "source_unconfigured"
+      },
+      "freshness": {
+        "state": "unknown",
+        "asOf": "2026-11-05T12:00:00Z",
+        "basis": "none",
+        "policyRef": null,
+        "reason": "source not configured"
+      },
+      "validation": {
+        "state": "unverified",
+        "validationRefs": []
+      },
+      "binding": {
+        "state": "unknown",
+        "generation": 0,
+        "accountRef": null,
+        "workspaceRef": null
+      }
+    },
+    {
+      "provider": "openai",
+      "producerRef": "collection-unconfigured",
+      "availability": "unconfigured",
+      "lastGood": null,
+      "lastAttempt": {
+        "attemptedAt": "2026-11-05T12:00:00Z",
+        "completedAt": "2026-11-05T12:00:00Z",
+        "result": "unknown",
+        "code": "source_unconfigured"
+      },
+      "freshness": {
+        "state": "unknown",
+        "asOf": "2026-11-05T12:00:00Z",
+        "basis": "none",
+        "policyRef": null,
+        "reason": "source not configured"
+      },
+      "validation": {
+        "state": "unverified",
+        "validationRefs": []
+      },
+      "binding": {
+        "state": "unknown",
+        "generation": 0,
+        "accountRef": null,
+        "workspaceRef": null
+      }
+    },
+    {
+      "provider": "cursor",
+      "producerRef": "collection-unconfigured",
+      "availability": "unconfigured",
+      "lastGood": null,
+      "lastAttempt": {
+        "attemptedAt": "2026-11-05T12:00:00Z",
+        "completedAt": "2026-11-05T12:00:00Z",
+        "result": "unknown",
+        "code": "source_unconfigured"
+      },
+      "freshness": {
+        "state": "unknown",
+        "asOf": "2026-11-05T12:00:00Z",
+        "basis": "none",
+        "policyRef": null,
+        "reason": "source not configured"
+      },
+      "validation": {
+        "state": "unverified",
+        "validationRefs": []
+      },
+      "binding": {
+        "state": "unknown",
+        "generation": 0,
+        "accountRef": null,
+        "workspaceRef": null
+      }
+    },
+    {
+      "provider": "grok",
+      "producerRef": "collection-unconfigured",
+      "availability": "unconfigured",
+      "lastGood": null,
+      "lastAttempt": {
+        "attemptedAt": "2026-11-05T12:00:00Z",
+        "completedAt": "2026-11-05T12:00:00Z",
+        "result": "unknown",
+        "code": "source_unconfigured"
+      },
+      "freshness": {
+        "state": "unknown",
+        "asOf": "2026-11-05T12:00:00Z",
+        "basis": "none",
+        "policyRef": null,
+        "reason": "source not configured"
+      },
+      "validation": {
+        "state": "unverified",
+        "validationRefs": []
+      },
+      "binding": {
+        "state": "unknown",
+        "generation": 0,
+        "accountRef": null,
+        "workspaceRef": null
+      }
+    }
+  ],
+  "nextCursor": null
+}
