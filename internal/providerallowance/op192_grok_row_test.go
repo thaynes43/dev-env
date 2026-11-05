@@ -52,10 +52,27 @@ func TestOP192GrokNotConnectedRowIsWireCompatible(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(doc, back) {
 		t.Fatalf("round trip changed the document: %v", err)
 	}
-	// The grok row never changes what the existing three rows show.
-	for _, row := range session.MapProductAllowance(doc) {
-		if row.Value != portal.AllowanceNotConnected || len(row.Windows) != 0 || len(row.LastReported) != 0 {
-			t.Fatalf("%s: %+v", row.Provider, row)
+	// The grok row never changes what the existing three rows show. The first
+	// document has identical statuses, so the conflict variant gives Grok a
+	// status that would turn a folded Cursor row into "Conflicting allowance
+	// reports".
+	conflict := doc
+	conflict.SourceStatuses = append([]providerallowance.SourceStatus(nil), doc.SourceStatuses...)
+	for i := range conflict.SourceStatuses {
+		if conflict.SourceStatuses[i].Provider == "grok" {
+			conflict.SourceStatuses[i].Availability = providerallowance.AvailabilityConflict
+			conflict.SourceStatuses[i].Validation.State = providerallowance.ValidationConflict
+		}
+	}
+	for name, variant := range map[string]providerallowance.ReadResponse{"not-connected": doc, "grok-conflict": conflict} {
+		rows := session.MapProductAllowance(variant)
+		if len(rows) != 3 {
+			t.Fatalf("%s: rows %d", name, len(rows))
+		}
+		for _, row := range rows {
+			if row.Value != portal.AllowanceNotConnected || row.Reason != "" || len(row.Windows) != 0 || len(row.LastReported) != 0 {
+				t.Fatalf("%s: %s: %+v", name, row.Provider, row)
+			}
 		}
 	}
 }

@@ -330,7 +330,8 @@ must stay separate. No private call follows from this documentation.
 keeps Grok as a separate row whose relationship to Cursor is typed Unknown,
 assesses the public and first-party sources, and lists the decisions (D0 to D5)
 a Grok source needs. It adds synthetic contract tests only; acquisition is
-unchanged.
+unchanged. Dated rulings on D0 to D5 are recorded in this section, with R-07
+pointing here.
 
 The typed reset compatibility change adds optional `Window.resetDisplayDate`
 and `Window.resetDisplayText`. A date is an exact calendar date; text is the
