@@ -32,6 +32,8 @@ MAX_ANSWERS = 32
 ANSWER_KINDS = ("modal-trust", "modal-permission", "modal-approval")
 APPROVAL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@#-]{7,199}")
 MAX_TRUST_PATH = 1024
+TOP_CORNERS = "\u256d\u250c\u2554\u250f"
+BOTTOM_CORNERS = "\u2570\u2514\u255a\u2517"
 TRUST_PATH_RE = re.compile(r"(?:/[A-Za-z0-9_.@+-]+)+")
 COMMAND_TIMEOUT = 5
 OWNER_OPTION = "@cursor_interactive_owner"
@@ -657,6 +659,23 @@ def prompt_text(row):
     return row[start:end]
 
 
+def box_edge(rows, texts, start, step, own, other):
+    """The prompt's own border row from start in direction step, and whether a row
+    with text lies before it. None when no such border is on the visible screen.
+
+    A border row has only box-drawing characters and spaces, and a corner."""
+    index, passed = start, False
+    while 0 <= index < len(rows):
+        if texts[index]:
+            passed = True
+        elif any(corner in rows[index] for corner in own):
+            return index, passed
+        elif any(corner in rows[index] for corner in other):
+            return None, passed
+        index += step
+    return None, passed
+
+
 def prompt_blocks(texts, lines):
     """(first, last) for each place the expected lines are consecutive trimmed rows.
 
@@ -733,7 +752,7 @@ def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust
     own history_size and pane_height, so the last pane_height rows are the
     visible screen. It must be complete, show exactly one prompt kind (the
     expected one), name exactly the trust path for a trust prompt, show the
-    expected lines as the whole prompt, row for row and exactly, once, and
+    expected lines exactly, once, as every row of the box around them, and
     have no composer row after the prompt or under the cursor. Anything else
     fails closed."""
     rows = text.split("\n")
@@ -768,12 +787,15 @@ def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust
     if len(blocks) > 1:
         raise Refusal("prompt-unclear", "The expected prompt is shown more than once on the visible screen. Nothing was sent.")
     ((first, last),) = blocks
-    if first == 0 or last == len(visible) - 1:
-        raise Refusal("prompt-unclear", "The expected prompt touches the top or bottom of the visible screen, so it may "
-                                        "continue out of view. Nothing was sent.")
-    if texts[first - 1] or texts[last + 1]:
-        raise Refusal("modal-mismatch", "Another prompt row is next to the expected rows: the expected text must be the "
-                                        "whole prompt. Nothing was sent.")
+    # The block must be the whole of its own box. Padding rows sit between a box's
+    # rows, so the rows next to the block say nothing: check every row up to the borders.
+    top, text_above = box_edge(visible, texts, first - 1, -1, TOP_CORNERS, BOTTOM_CORNERS)
+    bottom, text_below = box_edge(visible, texts, last + 1, 1, BOTTOM_CORNERS, TOP_CORNERS)
+    if top is None or bottom is None:
+        raise Refusal("prompt-unclear", "The expected prompt is not inside one box on the visible screen. Nothing was sent.")
+    if text_above or text_below:
+        raise Refusal("modal-mismatch", "The prompt's box has a row the expected text leaves out: the expected text must "
+                                        "be every row in the box. Nothing was sent.")
     cursor = int(ident["cursor_y"])
     below = visible[last + 1:]
     if any(COMPOSER.match(row) for row in below) or (0 <= cursor < len(visible) and COMPOSER.match(visible[cursor])):
