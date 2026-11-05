@@ -1,0 +1,33 @@
+{
+  "schema": "g1-command-approval-fixture.v1",
+  "provenance": {
+    "privateFixtureSha256": "12586fdf725e086f7b44b7bfc2e67f18dff777ca539e4096d41ef08755f3e0a8",
+    "anonymized": "Same-shape synthetic values replace the worktree name, the helper directory, the file name and the helper hash fragments; the delegated request and the agent's reply rows are synthetic text of the same width. Every row keeps its captured width and wrap position.",
+    "captured": "2026-11-05T19:30:52Z, helper 832963e7 inspect, tmux pane 24x80"
+  },
+  "geometry": {
+    "pane_height": 24,
+    "pane_width": 80,
+    "history_size": 38,
+    "capture_rows": 62,
+    "cursor_y": 23,
+    "truncated": false,
+    "cursor_note": "cursor_y was not in the captured inspect output; 23 is Cursor's usual blank last row"
+  },
+  "identity": {
+    "name": "xxxx-xx-xxxxxxxxxx-1",
+    "pane_id": "%7",
+    "pane_pid": "12345",
+    "owner": "ci1-0123456789abcdef0123456789abcdef",
+    "worktree": "/home/dev/work/xxxx-xx-xxxxxxxxxx-reminder"
+  },
+  "classification_with_832963e7": "modal-approval",
+  "capture": "Tip: You can start the Cursor CLI with `agent` (same as `cursor-agent`).\n\n  ╭──────────────────────────────────────────────────────────────────────────╮\n  │                                                                          │\n  │  ⚠ Workspace Trust Required                                              │\n  │                                                                          │\n  │  Cursor Agent can execute code and access files in this directory.       │\n  │                                                                          │\n  │  Do you trust the contents of this directory?                            │\n  │                                                                          │\n  │    /home/dev/work/xxxx-xx-xxxxxxxxxx-reminder                            │\n  │                                                                          │\n  │                                                                          │\n  │    [a] Trust this workspace                                              │\n  │    [q] Quit                                                              │\n  │                                                                          │\n  │  ⏳ Trusting workspace...                                                │\n  │                                                                          │\n  ╰──────────────────────────────────────────────────────────────────────────╯\n\n\n  Cursor Agent\n  v2026.10.14-0f9edde\n  Tip: Try Cursor Grok 4.7 via /model, frontier intelligence at a fraction of\n  the cost.\n\n\n  Synthetic transcript text, same width as the captured row. Synthet\n  Synthetic transcript text, same widt\n  Synthetic transcript text, same width as the captured row. Synthetic t\n  Synthetic transcript text, same width as the ca\n  Synthetic transcript text, same width as the captured row. Syntheticx\n  Synthetic transcript text, same width as the captured row. Syntheti\n  Synthetic transcript text, same width as the captured row. Synthetic t\n  Synthetic transcript text, same width as the captured row. Synthetic\n  Synthetic transcript text, same width as the captured row. Syn\n\n\n  Synthetic transcript text, same width as the captured row. Synthetic tran\n  Synthetic\n\n  $ sha256sum /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcd\n    ef0123456789abcdef01234567/XX-XXXXXXXXXX-1.md && wc -l\n    /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcdef01234567\n    89abcdef01234567/XX-XXXXXXXXXX-1.md Waiting for approval...\n\n────────────────────────────────────────────────────────────────────────────────\n $  sha256sum /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcde\n    f0123456789abcdef01234567/XX-XXXXXXXXXX-1.md && wc -l\n    /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcdef012345678\n    9abcdef01234567/XX-XXXXXXXXXX-1.md in .\n\n Run this command?\n Not in allowlist: sha256sum, wc\n  → Run (once) (y)\n    Add Shell(sha256sum), Shell(wc) to allowlist? (tab)\n    Run Everything (shift+tab)\n    Skip & tell the agent what to do instead (esc or n)\n\n\n\n",
+  "captureSha256": "3656ca8e3dd253281674813ba96cbf182d57827db3f914b494c3878cf11e3ac0",
+  "promptRows": {
+    "divider": 46,
+    "skip": 57
+  },
+  "expectedText": "$  sha256sum /home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcde\nf0123456789abcdef01234567/XX-XXXXXXXXXX-1.md && wc -l\n/home/dev/.local/state/xx-xxx-xxxxxxxxxx-1/helper/0123456789abcdef012345678\n9abcdef01234567/XX-XXXXXXXXXX-1.md in .\nRun this command?\nNot in allowlist: sha256sum, wc\n→ Run (once) (y)\nAdd Shell(sha256sum), Shell(wc) to allowlist? (tab)\nRun Everything (shift+tab)\nSkip & tell the agent what to do instead (esc or n)\n",
+  "expectedTextSha256": "a7a6f6b7b32bff406bef5c412a6d3b07c84c3f67fe2ceb16c53ecccc23b0eb32"
+}

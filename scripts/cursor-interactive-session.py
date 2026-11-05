@@ -45,9 +45,16 @@ OWNER_OPTION = "@cursor_interactive_owner"
 IDENTITY_FORMAT = (
     "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_dead}\t#{pane_current_path}\t"
     "#{pane_current_command}\t#{@cursor_interactive_owner}\t#{cursor_y}\t#{pane_height}\t#{pane_in_mode}\t"
-    "#{history_size}"
+    "#{history_size}\t#{pane_width}"
 )
 ALLOWED_FLAGS = ("--workspace", "--model")
+# Cursor's command-approval prompt (the live G1 capture, 2026-11-05T19:30:52Z) is not a box: it
+# sits directly under a divider row of this character across the pane, and writes its choices
+# as (key). The helper answers it only with y, Run (once). Cursor's status line for the pending
+# command, "Waiting for approval...", may show above the divider.
+DIVIDER = "\u2500"
+COMMAND_CHOICE = "y"
+PENDING_STATUS = "waiting for approval"
 MODALS = (
     ("modal-trust", ("trust this workspace", "trust the contents of", "workspace trust", "do you trust")),
     ("modal-permission", ("permission required", "needs permission", "requesting permission")),
@@ -262,9 +269,9 @@ def parse_identity(stdout, fail_state, fail_code):
     if stdout.endswith("\n"):
         stdout = stdout[:-1]
     fields = stdout.split("\t")
-    if len(fields) != 11 or any(field == "" or "\n" in field for field in fields):
+    if len(fields) != 12 or any(field == "" or "\n" in field for field in fields):
         raise Refusal(fail_state, "tmux identity was incomplete. Nothing was sent.", fail_code)
-    session, pane, pid, dead, path, command, owner, cursor_y, height, in_mode, history = fields
+    session, pane, pid, dead, path, command, owner, cursor_y, height, in_mode, history, width = fields
     if not re.fullmatch(r"%[0-9]+", pane) or not re.fullmatch(r"[1-9][0-9]*", pid):
         raise Refusal(fail_state, "tmux identity was not an exact pane and process. Nothing was sent.", fail_code)
     if dead not in {"0", "1"} or in_mode not in {"0", "1"}:
@@ -273,12 +280,14 @@ def parse_identity(stdout, fail_state, fail_code):
         raise Refusal(fail_state, "tmux cursor position was not exact. Nothing was sent.", fail_code)
     if not re.fullmatch(r"[0-9]+", history):
         raise Refusal(fail_state, "tmux history size was not exact. Nothing was sent.", fail_code)
+    if not re.fullmatch(r"[1-9][0-9]*", width):
+        raise Refusal(fail_state, "tmux pane width was not exact. Nothing was sent.", fail_code)
     if not Path(path).is_absolute():
         raise Refusal(fail_state, "tmux worktree path was not absolute. Nothing was sent.", fail_code)
     return {
         "session": session, "pane": pane, "pid": pid, "dead": dead, "path": path,
         "command": command, "owner": owner, "cursor_y": cursor_y, "height": height,
-        "in_mode": in_mode, "history": history,
+        "in_mode": in_mode, "history": history, "width": width,
     }
 
 
@@ -424,7 +433,7 @@ def snapshot_hash(ident, text, truncated):
     payload = "\n".join([
         ident["session"], ident["pane"], ident["pid"], ident["dead"], ident["path"],
         ident["command"], ident["owner"], ident["cursor_y"], ident["height"], ident["in_mode"],
-        ident["history"], "1" if truncated else "0", text,
+        ident["history"], ident["width"], "1" if truncated else "0", text,
     ])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -713,6 +722,18 @@ def read_expected(path):
     return raw, lines
 
 
+def prompt_shape(expect_kind, choice, lines):
+    """"box" when the expected text shows the choice as [key]; "divider" for Cursor's command
+    prompt, a modal-approval whose expected text shows (y) at the end of exactly one row and
+    the choice is y; otherwise None."""
+    if any("[" + choice + "]" in line for line in lines):
+        return "box"
+    if expect_kind == "modal-approval" and choice == COMMAND_CHOICE and sum(
+            line.endswith(" (" + COMMAND_CHOICE + ")") for line in lines) == 1:
+        return "divider"
+    return None
+
+
 def validate_answer(args):
     if not APPROVAL_RE.fullmatch(args.approval_ref or ""):
         raise Refusal("invalid-input", "Approval reference must be 8..200 characters of letters, digits and ._:/@#-. Nothing was sent.")
@@ -722,8 +743,10 @@ def validate_answer(args):
     if len(choice) != 1 or not 33 <= ord(choice) <= 126:
         raise Refusal("invalid-input", "Choice must be exactly one printable ASCII key. Nothing was sent.")
     raw, lines = read_expected(args.expect_text_file)
-    if not any("[" + choice + "]" in line for line in lines):
-        raise Refusal("invalid-input", "Choice must appear as [" + choice + "] in the expected prompt text. Nothing was sent.")
+    if prompt_shape(args.expect_kind, choice, lines) is None:
+        raise Refusal("invalid-input", "Choice must appear as [" + choice + "] in the expected prompt text. For Cursor's "
+                                       "command prompt (modal-approval) the only choice is y, shown once as (y): never the "
+                                       "allowlist (tab), Run Everything (shift+tab) or Skip (esc or n). Nothing was sent.")
     trust_path = getattr(args, "trust_path", None)
     if args.expect_kind == "modal-trust":
         if not trust_path:
@@ -866,14 +889,16 @@ def check_trust_path(visible, trust_path):
         raise Refusal("trust-path-missing", "The visible screen does not show the trust path as one word. Nothing was sent.")
 
 
-def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust_path=None):
+def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust_path=None, shape="box"):
     """Require the expected prompt to be the current bottom-of-pane state.
 
     The visible screen is the one visible_screen locates, and it must be
     complete. It must show exactly one prompt kind (the expected one), name
     exactly the trust path for a trust prompt, show the expected lines exactly,
-    once, as every row of the one paired box around them, and have no composer
-    row after the prompt or under the cursor. Anything else fails closed."""
+    once, as every row of the one paired box around them (check_box_prompt) or,
+    for Cursor's command prompt, under its divider (check_divider_prompt), and
+    have no composer row after the prompt or under the cursor. Anything else
+    fails closed."""
     rows = text.split("\n")
     visible = visible_screen(text, truncated, rows_total, ident)
     kinds = modal_kinds(visible)
@@ -900,11 +925,24 @@ def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust
     if len(blocks) > 1:
         raise Refusal("prompt-unclear", "The expected prompt is shown more than once on the visible screen. Nothing was sent.")
     ((first, last),) = blocks
-    # The block must be the whole of one box, paired by its corner columns. Padding rows
-    # sit between a box's rows, so the rows next to the block say nothing: check them all.
     boxes = visible_boxes(visible, texts)
     if boxes is None:
         raise Refusal("prompt-unclear", "The box borders on the visible screen do not pair up. Nothing was sent.")
+    if shape == "divider":
+        check_divider_prompt(visible, boxes, first, last, int(ident["width"]))
+    else:
+        check_box_prompt(visible, texts, boxes, first, last)
+    cursor = int(ident["cursor_y"])
+    below = visible[last + 1:]
+    if any(COMPOSER.match(row) for row in below) or (0 <= cursor < len(visible) and COMPOSER.match(visible[cursor])):
+        raise Refusal("stale-prompt", "A composer row follows the prompt or holds the cursor, so the prompt is not current. Nothing was sent.")
+    return kind
+
+
+def check_box_prompt(visible, texts, boxes, first, last):
+    """The expected rows first..last are every row of one paired, untitled box."""
+    # The block must be the whole of one box, paired by its corner columns. Padding rows
+    # sit between a box's rows, so the rows next to the block say nothing: check them all.
     around = [box for box in boxes if box[0] < first and last < box[1]]
     if not around:
         raise Refusal("prompt-unclear", "The expected prompt is not inside a box on the visible screen. Nothing was sent.")
@@ -922,11 +960,28 @@ def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust
     if any(texts[index] for index in range(top + 1, first)) or any(texts[index] for index in range(last + 1, bottom)):
         raise Refusal("modal-mismatch", "The prompt's box has a row the expected text leaves out: the expected text must "
                                         "be every row in the box. Nothing was sent.")
-    cursor = int(ident["cursor_y"])
-    below = visible[last + 1:]
-    if any(COMPOSER.match(row) for row in below) or (0 <= cursor < len(visible) and COMPOSER.match(visible[cursor])):
-        raise Refusal("stale-prompt", "A composer row follows the prompt or holds the cursor, so the prompt is not current. Nothing was sent.")
-    return kind
+
+
+def phrases(row):
+    folded = row.casefold()
+    return {phrase for _kind, group in MODALS for phrase in group if phrase in folded}
+
+
+def check_divider_prompt(visible, boxes, first, last, width):
+    """Cursor's command prompt: rows first..last are not in a box, sit directly under a
+    divider row that spans the pane, and have only blank rows after them to the pane
+    bottom. No other row on the visible screen holds a prompt phrase, except Cursor's
+    status line for the pending command."""
+    if any(box[0] < first and last < box[1] for box in boxes):
+        raise Refusal("prompt-unclear", "Cursor's command prompt is not drawn in a box, but these rows are inside one. "
+                                        "Nothing was sent.")
+    if first < 1 or visible[first - 1] != DIVIDER * width:
+        raise Refusal("prompt-unclear", "The command prompt is not directly under a divider row across the pane. "
+                                        "Nothing was sent.")
+    if any(row.strip() for row in visible[last + 1:]):
+        raise Refusal("prompt-unclear", "Something follows the command prompt before the pane bottom. Nothing was sent.")
+    if any(phrases(row) - {PENDING_STATUS} for row in visible[:first] + visible[last + 1:]):
+        raise Refusal("prompt-unclear", "Another prompt is on the visible screen. Nothing was sent.")
 
 
 def approval_path(name, approval_ref):
@@ -1138,7 +1193,8 @@ def answer_locked(args, choice, raw, lines, trust_path):
     digest = snapshot_hash(ident, text, truncated)
     if digest != state["snapshot_sha256"] or digest != receipt["digest"]:
         raise Refusal("stale-receipt", "Pane capture changed since inspect. Re-inspect. Nothing was sent.")
-    kind = current_prompt(text, truncated, rows_total, ident, args.expect_kind, lines, trust_path)
+    shape = prompt_shape(args.expect_kind, choice, lines)
+    kind = current_prompt(text, truncated, rows_total, ident, args.expect_kind, lines, trust_path, shape)
     record = {
         "answered_at": utc_now(), "approval_ref": args.approval_ref, "kind": kind, "choice": choice,
         "expected_text_sha256": hashlib.sha256(raw).hexdigest(), "pane_id": ident["pane"],
@@ -1162,7 +1218,7 @@ def answer_locked(args, choice, raw, lines, trust_path):
         text_again, truncated_again, rows_again = read_capture_rows(state["tmux"], state["pane_id"])
         if snapshot_hash(again, text_again, truncated_again) != digest:
             raise Refusal("stale-receipt", "Pane capture changed after the approval was spent.")
-        current_prompt(text_again, truncated_again, rows_again, again, args.expect_kind, lines, trust_path)
+        current_prompt(text_again, truncated_again, rows_again, again, args.expect_kind, lines, trust_path, shape)
     except Refusal as refusal:
         record["outcome"] = entry["outcome"] = "not-sent"
         write_state(path, state)
