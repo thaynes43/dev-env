@@ -1363,8 +1363,6 @@ def answer_locked(args, choice, raw, lines, trust_path):
         text_again, truncated_again, rows_again = read_capture_rows(state["tmux"], state["pane_id"])
         if snapshot_hash(again, text_again, truncated_again) != digest:
             raise Refusal("stale-receipt", "Pane capture changed after the approval was spent.")
-        if classify(text_again, truncated_again, rows_again, again, None)[0].startswith("modal-"):
-            raise Refusal("modal", "A prompt appeared after the approval was spent.")
         current_prompt(text_again, truncated_again, rows_again, again, args.expect_kind, lines, trust_path, shape)
     except Refusal as refusal:
         record["outcome"] = entry["outcome"] = "not-sent"
@@ -1486,6 +1484,8 @@ def menu_key_locked(args, raw, lines):
         text_again, truncated_again, rows_again = read_capture_rows(state["tmux"], state["pane_id"])
         if snapshot_hash(again, text_again, truncated_again) != digest:
             raise Refusal("stale-receipt", "Pane capture changed after the approval was spent.")
+        if classify(text_again, truncated_again, rows_again, again, None)[0].startswith("modal-"):
+            raise Refusal("modal", "A prompt appeared after the approval was spent.")
         if not menu_rows_shown(text_again, truncated_again, rows_again, again, lines):
             raise Refusal("screen-mismatch", "The expected rows left the screen.")
     except Refusal as refusal:
