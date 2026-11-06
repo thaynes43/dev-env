@@ -1393,7 +1393,7 @@ def answer_locked(args, choice, raw, lines, trust_path):
     }
 
 
-MENU_KEYS = {"run-everything-menu": "Enter"}
+MENU_KEYS = {"run-everything-menu": "Enter", "usage-menu": "Enter", "usage-view": "Escape"}
 MENU_MARKER = re.compile(r"^[\u2192\u25b6\u276f\u203a>]\s*")
 # The fixed allowlist of menu rows the Enter may select: (the draft command, the selected row).
 # Nothing else is accepted. The run-everything row must say "currently disabled", so the Enter
@@ -1402,18 +1402,41 @@ MENU_MARKER = re.compile(r"^[\u2192\u25b6\u276f\u203a>]\s*")
 MENU_ROWS = {
     "run-everything-menu": ("/run-everything", re.compile(
         r"^[\u2192\u25b6\u276f\u203a>]\s*/run-everything\s+Toggle Run Everything \(currently disabled\)$")),
+    "usage-menu": ("/usage", re.compile(
+        r"^[\u2192\u25b6\u276f\u203a>]\s*/usage\s+Show plan and on-demand usage$")),
 }
+# The usage view (opened by the usage-menu Enter) closes on one Escape. Its checked shape: a Usage title
+# row, the footer, in order, and no composer arrow row anywhere on the visible screen.
+USAGE_TITLE = re.compile(r"^Usage(\s|$)")
+USAGE_FOOTER = "Esc to close"
+USAGE_VIEW_MAX_LINES = 8
+# Rows that mean the view is not (yet) shown: loading, an error line, or an unavailable plan.
+USAGE_NOT_READY = ("Loading usage data", "Failed to load usage data", "Not logged in",
+                   "Usage details are not available", "Enterprise spend details are not available")
+# What an empty composer shows (the first prompt, and after a turn).
+EMPTY_COMPOSERS = ("Plan, search, build anything", "Add a follow-up")
+POSTCHECK_SETTLE_SECONDS = 0.3
+POSTCHECK_CHECKS = 5
 
 
 def validate_menu_key(args):
     """Read and check the inputs before the lock and before any tmux call. (raw, lines)."""
     if args.expect_kind not in MENU_KEYS:
-        raise Refusal("invalid-input", "--expect-kind must be run-everything-menu. Nothing was sent.")
+        raise Refusal("invalid-input", "--expect-kind must be run-everything-menu, usage-menu or usage-view. Nothing was sent.")
     if not APPROVAL_RE.fullmatch(args.approval_ref or ""):
         raise Refusal("invalid-input", "--approval-ref must be 8..200 characters of letters, digits and ._:/@#-. Nothing was sent.")
     raw, lines = read_expected(args.expect_text_file)
     if modal_kind(lines):
         raise Refusal("invalid-input", "The expected text contains a prompt phrase. This command never answers a prompt. Nothing was sent.")
+    if args.expect_kind == "usage-view":
+        # The checked view: a Usage title row first, the footer last, 2..8 distinct lines, no composer arrow row.
+        if (not 2 <= len(lines) <= USAGE_VIEW_MAX_LINES or not USAGE_TITLE.match(lines[0]) or lines[-1] != USAGE_FOOTER
+                or len(set(lines)) != len(lines) or any(MENU_MARKER.match(line) for line in lines)
+                or any(line.startswith(USAGE_NOT_READY) for line in lines)):
+            raise Refusal("invalid-input", "For usage-view the expected text must be 2..8 distinct lines in order: a 'Usage' "
+                                           "title row first, then the view rows, and '" + USAGE_FOOTER + "' last, with no "
+                                           "composer arrow row and no loading or error line. Nothing was sent.")
+        return raw, lines
     # Exactly two lines, in order: the allowlisted selected row, then the bare draft (no argument).
     command, selected_row = MENU_ROWS[args.expect_kind]
     draft = CURSOR_COMPOSER_ARROW + " " + command
@@ -1450,6 +1473,59 @@ def menu_rows_shown(text, truncated, rows_total, ident, lines):
     return not shown[-1] and int(ident["cursor_y"]) == int(ident["height"]) - 1
 
 
+def usage_view_shown(text, truncated, rows_total, ident, lines):
+    """True when the expected rows are the CHECKED usage view on the visible screen.
+
+    Each expected line appears exactly once, in order; the footer is the last nonblank row; no row of the visible
+    screen is a composer arrow row (the view replaces the composer); no loading, error or unavailable line is shown."""
+    shown = [prompt_text(row) for row in visible_screen(text, truncated, rows_total, ident)]
+    if any(MENU_MARKER.match(row) or row.startswith(USAGE_NOT_READY) for row in shown):
+        return False
+    position = 0
+    for line in lines:
+        if shown.count(line) != 1:
+            return False
+        index = shown.index(line)
+        if index < position:
+            return False
+        position = index
+    filled = [row for row in shown if row]
+    return bool(filled) and filled[-1] == USAGE_FOOTER
+
+
+def rows_shown(kind, text, truncated, rows_total, ident, lines):
+    if kind == "usage-view":
+        return usage_view_shown(text, truncated, rows_total, ident, lines)
+    return menu_rows_shown(text, truncated, rows_total, ident, lines)
+
+
+def composer_restored(text, truncated, rows_total, ident):
+    """True when the usage view is gone and an empty composer is back: no footer row, the last arrow row is Cursor's
+    empty composer, and no prompt is showing."""
+    if classify(text, truncated, rows_total, ident, None)[0].startswith("modal-"):
+        return False
+    shown = [prompt_text(row) for row in visible_screen(text, truncated, rows_total, ident)]
+    arrows = [row for row in shown if MENU_MARKER.match(row)]
+    if USAGE_FOOTER in shown or not arrows:
+        return False
+    return arrows[-1] in [CURSOR_COMPOSER_ARROW + " " + placeholder for placeholder in EMPTY_COMPOSERS]
+
+
+def postcheck_composer(state):
+    """Look at the pane after the Escape. True when the empty composer is back."""
+    for _ in range(POSTCHECK_CHECKS):
+        time.sleep(POSTCHECK_SETTLE_SECONDS)
+        try:
+            ident = read_identity(state["tmux"], state["pane_id"], "inspect-unconfirmed", 3)
+            require_same_pane(state, ident)
+            text, truncated, rows_total = read_capture_rows(state["tmux"], state["pane_id"])
+            if composer_restored(text, truncated, rows_total, ident):
+                return True
+        except (Refusal, subprocess.TimeoutExpired, OSError, UnicodeError, ValueError):
+            return False
+    return False
+
+
 def menu_key_session(args):
     raw, lines = validate_menu_key(args)
     with state_lock(args.name, wait=False):
@@ -1475,8 +1551,8 @@ def menu_key_locked(args, raw, lines):
     kind, _located, _used = classify(text, truncated, rows_total, ident, None)
     if kind.startswith("modal-"):
         raise Refusal(kind, "A prompt is showing. This command never sends a key into a prompt. Nothing was sent.")
-    if not menu_rows_shown(text, truncated, rows_total, ident, lines):
-        raise Refusal("screen-mismatch", "The expected rows are not all on the visible screen, in order. Nothing was sent.")
+    if not rows_shown(args.expect_kind, text, truncated, rows_total, ident, lines):
+        raise Refusal("screen-mismatch", "The expected rows are not all on the visible screen as the live view. Nothing was sent.")
     key = MENU_KEYS[args.expect_kind]
     record = {
         "used_at": utc_now(), "approval_ref": args.approval_ref, "kind": args.expect_kind, "key": key,
@@ -1494,7 +1570,7 @@ def menu_key_locked(args, raw, lines):
             raise Refusal("stale-receipt", "Pane capture changed after the approval was spent.")
         if classify(text_again, truncated_again, rows_again, again, None)[0].startswith("modal-"):
             raise Refusal("modal", "A prompt appeared after the approval was spent.")
-        if not menu_rows_shown(text_again, truncated_again, rows_again, again, lines):
+        if not rows_shown(args.expect_kind, text_again, truncated_again, rows_again, again, lines):
             raise Refusal("screen-mismatch", "The expected rows left the screen.")
     except Refusal as refusal:
         record["outcome"] = "not-sent"
@@ -1509,12 +1585,21 @@ def menu_key_locked(args, raw, lines):
     write_state(ledger, record)
     if failed:
         raise Refusal("key-unconfirmed", "The key's outcome is unknown. Do not retry this receipt or send another key. Re-inspect.", 3)
-    return {
+    result = {
         "state": "key-sent", "name": state["name"], "kind": args.expect_kind, "key": key,
         "approval_ref": args.approval_ref, "used_at": record["used_at"],
         "detail": ("Exactly one " + key + " was sent to the owned pane whose receipt matched. The helper recorded the "
                    "approval reference but did not verify the approval. This receipt is now spent. Inspect again."),
     }
+    if args.expect_kind == "usage-view":
+        restored = postcheck_composer(state)
+        record["postcheck"] = "composer-restored" if restored else "composer-not-confirmed"
+        write_state(ledger, record)
+        if not restored:
+            raise Refusal("post-check-unconfirmed", "The Escape was sent, but the empty composer was not seen afterwards. "
+                          "Do not send another key. Inspect the pane.", 3)
+        result["postcheck"] = "composer-restored"
+    return result
 
 
 ANSWERED_TEXT_HELP = ("for a ledger entry written before format 2: the exact --expect-text-file of the task's "
@@ -1578,7 +1663,7 @@ def build_parser():
     menu.add_argument("--receipt", required=True)
     menu.add_argument("--approval-ref", required=True,
                       help="audit reference to the caller's verified approval; recorded once, never verified")
-    menu.add_argument("--expect-kind", required=True, help="run-everything-menu (sends Enter)")
+    menu.add_argument("--expect-kind", required=True, help="run-everything-menu or usage-menu (send Enter), or usage-view (sends Escape)")
     menu.add_argument("--expect-text-file", required=True, help="the exact visible rows that must be shown, in order, as one block")
     return parser
 

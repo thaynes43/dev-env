@@ -105,6 +105,9 @@ if args and args[0] == "send-keys":
             gate.read(1)
     if mode == "send-fail":
         sys.exit(1)
+    # FAKE_ON_ESCAPE: an Escape replaces the screen with the file's content (the view closing).
+    if args[-1] == "Escape" and os.environ.get("FAKE_ON_ESCAPE") and Path(os.environ["FAKE_ON_ESCAPE"]).exists():
+        Path(os.environ["FAKE_CAPTURE"]).write_text(Path(os.environ["FAKE_ON_ESCAPE"]).read_text(encoding="utf-8"), encoding="utf-8")
     # Like Cursor's composer: typed text shows as a → row only once FAKE_ECHO_DELAY has
     # passed (FAKE_ECHO=0: never), and Enter takes it away. FAKE_PASTE_WINDOW models
     # Cursor 2026.10.14's 75 ms paste buffer: an Enter inside it still submits, but the text
@@ -3453,6 +3456,231 @@ class MenuKeyTests(AnswerFixture):
                 code, refused = self.invoke("menu-key", self.args(receipt, expect=path))
                 self.assertEqual((code, refused["state"]), (2, "invalid-input"))
                 self.assertEqual(self.commands("tmux"), [])
+
+
+USAGE_ROWS = [
+    "Cursor Agent v2026.10.14-0f9edde",
+    "\u2192 /usage    Show plan and on-demand usage",
+    "\u2192 /usage",
+    "  Grok 4.7 256K Extra High \u00b7 7.3%",
+    "  ~/work/example-task",
+]
+USAGE_EXPECT = "\u2192 /usage    Show plan and on-demand usage\n\u2192 /usage\n"
+USAGE_VIEW_ROWS = ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "  Included  42% used", "", "Esc to close"]
+USAGE_VIEW_EXPECT = "Usage\nEsc to close\n"
+COMPOSER_BACK_ROWS = ["Cursor Agent v2026.10.14-0f9edde", "", "", "\u2192 Add a follow-up", "  ~/work/example-task", ""]
+
+
+class UsageKeyTests(AnswerFixture):
+    """menu-key: Enter on the live /usage row, and one checked Escape that closes the usage view."""
+
+    show = MenuKeyTests.show
+    sends = MenuKeyTests.sends
+    state = MenuKeyTests.state
+    restart_case = MenuKeyTests.restart_case
+    menu_ledger = MenuKeyTests.menu_ledger
+    history_show = MenuKeyTests.history_show
+
+    def setUp(self):
+        super().setUp()
+        self.usage_expect = self.root / "expect-usage"
+        self.usage_expect.write_text(USAGE_EXPECT)
+        self.view_expect = self.root / "expect-view"
+        self.view_expect.write_text(USAGE_VIEW_EXPECT)
+        self.back = self.root / "composer-back"
+        self.back.write_text("\n".join(COMPOSER_BACK_ROWS) + "\n\n")
+        self.show(USAGE_ROWS)
+
+    def args(self, receipt, kind="usage-menu", approval=MENU_APPROVAL, expect=None):
+        default = self.view_expect if kind == "usage-view" else self.usage_expect
+        return ["--receipt", receipt, "--approval-ref", approval, "--expect-kind", kind,
+                "--expect-text-file", str(expect or default)]
+
+    def view(self, rows=USAGE_VIEW_ROWS, back=True):
+        self.show(rows)
+        if back:
+            self.env["FAKE_ON_ESCAPE"] = str(self.back)
+        else:
+            self.env.pop("FAKE_ON_ESCAPE", None)
+
+    def spend_then(self, receipt, kind, expect, capture):
+        args = argparse.Namespace(name=self.name, tmux=self.tmux, receipt=receipt, approval_ref=MENU_APPROVAL,
+                                  expect_kind=kind, expect_text_file=str(expect))
+        original = helper.spend_approval
+
+        def spend_then_change(path, entry):
+            original(path, entry)
+            self.capture.write_text(capture)
+
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(helper, "spend_approval", spend_then_change):
+            with self.assertRaises(helper.Refusal) as caught:
+                helper.menu_key_session(args)
+        self.assertEqual((caught.exception.state, caught.exception.code), ("screen-changed", 2))
+        self.assertEqual(self.sends(), [])
+        self.assertEqual(json.loads(self.menu_ledger().read_text())["outcome"], "not-sent")
+
+    def test_usage_menu_sends_exactly_one_enter(self):
+        inspected = self.start_and_inspect()
+        code, sent = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, sent["state"], sent["key"]), (0, "key-sent", "Enter"))
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "Enter"]])
+        self.assertEqual(json.loads(self.menu_ledger().read_text())["kind"], "usage-menu")
+        code, again = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, again["state"]), (2, "approval-spent"))
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_usage_menu_refusals_send_nothing(self):
+        row = USAGE_ROWS[1]
+        cases = {
+            "wrong row": [USAGE_ROWS[0], "\u2192 /model    Switch model", "\u2192 /usage"] + USAGE_ROWS[3:],
+            "run-everything menu": [USAGE_ROWS[0], RUN_ROWS[1], RUN_ROWS[2]] + USAGE_ROWS[3:],
+            "argument draft": USAGE_ROWS[:2] + ["\u2192 /usage now"] + USAGE_ROWS[3:],
+            "duplicate row": USAGE_ROWS[:2] + [row, USAGE_ROWS[2]] + USAGE_ROWS[3:],
+            "duplicate draft": USAGE_ROWS[:3] + [USAGE_ROWS[2]] + USAGE_ROWS[3:],
+            "plain composer": COMPOSER_BACK_ROWS,
+            "unmarked row": [USAGE_ROWS[0], "  /usage    Show plan and on-demand usage", USAGE_ROWS[2]] + USAGE_ROWS[3:],
+            "loading text": [USAGE_ROWS[0], "Loading usage data...", USAGE_ROWS[2]] + USAGE_ROWS[3:],
+        }
+        for label, rows in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.show(rows)
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+                self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.menu_ledger().exists())
+
+    def test_usage_menu_only_in_history_is_not_the_live_menu(self):
+        history = [USAGE_ROWS[1], USAGE_ROWS[2]] * 3
+        self.history_show(history, COMPOSER_BACK_ROWS)
+        inspected = self.start_and_inspect()
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+        self.assertEqual(self.sends(), [])
+
+    def test_usage_menu_in_the_real_pane_layout_sends_one_enter(self):
+        trust = boxed(ANSWERED_BOX_ROWS).replace(EXAMPLE_PATH, "/home/dev/work/example-task").split("\n")
+        history = trust + ["", "  Review: no findings."] * 6
+        visible = ["  Done.", "", USAGE_ROWS[1], USAGE_ROWS[2], "", USAGE_ROWS[3], USAGE_ROWS[4]]
+        self.history_show(history, visible)
+        inspected = self.start_and_inspect()
+        code, sent = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, sent["state"]), (0, "key-sent"))
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "Enter"]])
+
+    def test_a_prompt_before_or_after_the_approval_gets_no_key(self):
+        self.show(USAGE_ROWS + ["  Allow this command: git push", "  (y) Run once"])
+        inspected = self.start_and_inspect()
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual(code, 2)
+        self.assertTrue(refused["state"].startswith("modal-"))
+        self.assertEqual(self.sends(), [])
+        # The prompt appears after the approval is spent: the pre-key look refuses.
+        self.restart_case()
+        self.show(USAGE_ROWS)
+        inspected = self.start_and_inspect()
+        self.spend_then(inspected["receipt"], "usage-menu", self.usage_expect,
+                        "\n".join(USAGE_ROWS + ["  Allow this command: git push", "  (y) Run once"]) + "\n\n")
+
+    def test_usage_view_escape_sends_one_escape_and_checks_the_composer(self):
+        self.view()
+        inspected = self.start_and_inspect()
+        code, sent = self.invoke("menu-key", self.args(inspected["receipt"], kind="usage-view"))
+        self.assertEqual((code, sent["state"], sent["key"], sent["postcheck"]), (0, "key-sent", "Escape", "composer-restored"))
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "Escape"]])
+        self.assertEqual(json.loads(self.menu_ledger().read_text())["postcheck"], "composer-restored")
+
+    def test_escape_without_the_composer_back_is_reported_unconfirmed(self):
+        self.view(back=False)
+        inspected = self.start_and_inspect()
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"], kind="usage-view"))
+        self.assertEqual((code, refused["state"]), (3, "post-check-unconfirmed"))
+        self.assertEqual(len(self.sends()), 1)
+        self.assertEqual(json.loads(self.menu_ledger().read_text())["postcheck"], "composer-not-confirmed")
+        code, again = self.invoke("menu-key", self.args(inspected["receipt"], kind="usage-view"))
+        self.assertEqual((code, again["state"]), (2, "approval-spent"))
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_escape_that_leaves_the_footer_beside_a_composer_is_unconfirmed(self):
+        self.view()
+        self.back.write_text("\n".join(USAGE_VIEW_ROWS[:-2] + ["\u2192 Add a follow-up", "Esc to close"]) + "\n\n")
+        inspected = self.start_and_inspect()
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"], kind="usage-view"))
+        self.assertEqual((code, refused["state"]), (3, "post-check-unconfirmed"))
+
+    def test_a_view_that_is_not_shown_gets_no_escape(self):
+        cases = {
+            "loading": ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "Loading usage data...", "", "Esc to close"],
+            "error": ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "Failed to load usage data", "", "Esc to close"],
+            "no footer": ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "  Included  42% used", ""],
+            "composer under the view": USAGE_VIEW_ROWS[:-1] + ["\u2192 Add a follow-up", "Esc to close"],
+            "plain composer": COMPOSER_BACK_ROWS,
+            "the slash menu": USAGE_ROWS,
+            "duplicate title": USAGE_VIEW_ROWS[:3] + ["Usage"] + USAGE_VIEW_ROWS[3:],
+            "footer not last": USAGE_VIEW_ROWS + ["  Stray row"],
+            "view only in history": None,
+        }
+        for label, rows in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.env["FAKE_ON_ESCAPE"] = str(self.back)
+                if rows is None:
+                    self.history_show(USAGE_VIEW_ROWS * 2, COMPOSER_BACK_ROWS)
+                else:
+                    self.show(rows)
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("menu-key", self.args(inspected["receipt"], kind="usage-view"))
+                self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.menu_ledger().exists())
+
+    def test_a_prompt_over_the_view_gets_no_escape(self):
+        self.view()
+        self.show(USAGE_VIEW_ROWS + ["  Allow this command: git push", "  (y) Run once"])
+        inspected = self.start_and_inspect()
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"], kind="usage-view"))
+        self.assertEqual(code, 2)
+        self.assertTrue(refused["state"].startswith("modal-"))
+        self.assertEqual(self.sends(), [])
+
+    def test_a_view_that_changes_after_the_approval_is_spent_gets_no_escape(self):
+        self.view()
+        inspected = self.start_and_inspect()
+        loading = ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "Loading usage data...", "", "Esc to close"]
+        self.spend_then(inspected["receipt"], "usage-view", self.view_expect, "\n".join(loading) + "\n\n")
+
+    def test_the_expected_text_is_checked_before_any_tmux_call(self):
+        bad = {
+            "usage-menu one line": USAGE_EXPECT.split("\n")[0] + "\n",
+            "usage-menu swapped": "\u2192 /usage\n" + USAGE_EXPECT.split("\n")[0] + "\n",
+        }
+        for label, text in bad.items():
+            with self.subTest(label=label):
+                path = self.root / "bad-expect"
+                path.write_text(text)
+                code, refused = self.invoke("menu-key", self.args("x", expect=path))
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+        path = self.root / "bad-describe"
+        path.write_text("\u2192 /usage    Show plan only\n\u2192 /usage\n")
+        code, refused = self.invoke("menu-key", self.args("x", expect=path))
+        self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+        views = {
+            "no title": "Included\nEsc to close\n",
+            "no footer": "Usage\nIncluded\n",
+            "arrow row": "Usage\n\u2192 Add a follow-up\nEsc to close\n",
+            "loading": "Usage\nLoading usage data...\nEsc to close\n",
+            "duplicate": "Usage\nUsage\nEsc to close\n",
+            "footer only": "Esc to close\n",
+            "wrong footer": "Usage\nEsc\n",
+        }
+        for label, text in views.items():
+            with self.subTest(label=label):
+                path = self.root / "bad-view"
+                path.write_text(text)
+                code, refused = self.invoke("menu-key", self.args("x", kind="usage-view", expect=path))
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+        self.assertEqual(self.commands("tmux"), [])
 
 
 if __name__ == "__main__":

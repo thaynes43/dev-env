@@ -251,8 +251,32 @@ and an argument are typed the menu shows no row (the command declares no argumen
 and if the command were not registered the same Enter would be sent to the model as a chat message. This helper does not
 type or send that form.
 
-The helper does not verify any approval; `--approval-ref` is audit metadata. It does not close any view and it sends no
-Escape.
+The helper does not verify any approval; `--approval-ref` is audit metadata.
+
+### Reading the usage view: `usage-menu` and `usage-view`
+
+Two more allowlist entries let a supervised session open Cursor's `/usage` view and close it again. Each sends one key,
+once per approval, with the same receipt, ledger, modal and last-look rules as above.
+
+1. `reply` with the literal text `/usage` and **no** `--submit`, then `inspect`.
+2. `menu-key --expect-kind usage-menu`: one `Enter`. The expected text is EXACTLY two lines, in order: the selected row
+   `<marker> /usage  Show plan and on-demand usage` and the bare draft `→ /usage`. The live-row rules are the
+   run-everything rules (each row once on the visible screen, the draft directly under the row, the composer's own tail
+   below, nothing in history counts). If the inline menu is not shown, no `Enter` is sent: an unregistered command
+   would otherwise go to the model as a chat message.
+3. `inspect`: the screen must now show the usage view. Read the figures there.
+4. `menu-key --expect-kind usage-view` on that fresh receipt: one `Escape`. The expected text is 2 to 8 distinct lines
+   in order, the first a `Usage` title row and the last exactly `Esc to close`, with no composer arrow row and no
+   loading or error line. On screen, each expected line appears exactly once, the footer is the last nonblank row, no
+   row of the visible screen is a composer arrow row, and none of `Loading usage data`, `Failed to load usage data`,
+   `Not logged in` or an unavailable-plan line is shown. A view that is not (yet) fully shown gets no `Escape`.
+5. After the `Escape` the helper looks at the pane again (up to five looks, 0.3 s apart): the footer is gone, the last
+   arrow row is an empty composer (`→ Plan, search, build anything` or `→ Add a follow-up`) and no prompt shows. It
+   reports `postcheck: composer-restored`. Otherwise it exits 3 with `post-check-unconfirmed`; the approval stays spent
+   and nothing more is sent. Inspect the pane.
+
+The helper sends no key but `Enter` (menu rows) and `Escape` (the checked view). It reads figures from nothing and
+claims no provider measurement time: the figures are whatever the visible view shows at that moment.
 
 ## Answering one approved prompt
 
