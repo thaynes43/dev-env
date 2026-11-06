@@ -1454,10 +1454,15 @@ def validate_menu_key(args):
                                            + "' last, with no "
                                            "composer arrow row and no loading or error line. Nothing was sent.")
         return raw, lines
-    # Exactly two lines, in order: the allowlisted selected row, then the bare draft (no argument).
+    # Exactly two lines, in order. run-everything-menu: the allowlisted selected row, then the bare draft (no argument).
+    # usage-menu, in the order the client renders them: the bare draft first, then the selected menu row below it.
     command, selected_row = MENU_ROWS[args.expect_kind]
     draft = CURSOR_COMPOSER_ARROW + " " + command
-    if len(lines) != 2 or not selected_row.match(lines[0]) or lines[1] != draft:
+    if args.expect_kind == "usage-menu":
+        if len(lines) != 2 or lines[0] != draft or not selected_row.match(lines[1]):
+            raise Refusal("invalid-input", "For usage-menu the expected text must be exactly two lines, in order: '" + draft
+                          + "' and then the selected menu row below it. Nothing was sent.")
+    elif len(lines) != 2 or not selected_row.match(lines[0]) or lines[1] != draft:
         raise Refusal("invalid-input", "For " + args.expect_kind + " the expected text must be exactly two lines, in order: "
                                        "the selected menu row and then '" + draft + "'. Nothing was sent.")
     return raw, lines
@@ -1490,6 +1495,43 @@ def menu_rows_shown(text, truncated, rows_total, ident, lines):
     return not shown[-1] and int(ident["cursor_y"]) == int(ident["height"]) - 1
 
 
+# The chat's prompt column (pinned Cursor 2026.10.14, the prompt render): the input box with the typed draft first, then
+# the inline slash menu BELOW it, and the model/status footer only while no menu is open (so none shows with a menu).
+# The menu is one row per item, never wrapped (a long description is cut with an ellipsis), at most 10 rows in all,
+# counting the "more above" and "more below" rows. Between the draft and the menu sit the input box's own blank rows
+# (two in the live capture). The hint row of the menu appears only for skill commands, not for /usage.
+MENU_GAP_ROWS = 3
+MENU_BLOCK_MAX = 10
+
+
+def inline_menu_shown(text, truncated, rows_total, ident, lines):
+    """True when the expected rows are the LIVE draft and inline menu of the visible screen, in render order.
+
+    lines[0] is the typed draft, lines[1] the selected menu row. Each appears exactly once on the visible screen
+    (history above it is never searched). Below the draft come one to MENU_GAP_ROWS blank rows and then the menu: a
+    block of at most MENU_BLOCK_MAX consecutive nonblank rows that holds the selected row and no other arrow-marked
+    row. Below the block there is nothing, down to a blank last pane row (no status footer, no model row, no output). A copy of these rows in the transcript, a menu of another command, an
+    argument draft, free text in the composer, a draft with no menu (nothing would be selected) or a menu above the
+    draft does not match."""
+    shown = [prompt_text(row) for row in visible_screen(text, truncated, rows_total, ident)]
+    if len(lines) != 2 or shown.count(lines[0]) != 1 or shown.count(lines[1]) != 1:
+        return False
+    below = shown[shown.index(lines[0]) + 1:]
+    gap = 0
+    while gap < len(below) and not below[gap]:
+        gap += 1
+    if not 1 <= gap <= MENU_GAP_ROWS:
+        return False
+    block = []
+    for row in below[gap:]:
+        if not row:
+            break
+        block.append(row)
+    if not block or len(block) > MENU_BLOCK_MAX or any(below[gap + len(block):]) or shown[-1]:
+        return False
+    return [row for row in block if MENU_MARKER.match(row)] == [lines[1]]
+
+
 def usage_view_shown(text, truncated, rows_total, ident, lines):
     """True when the expected rows are the CHECKED usage view on the visible screen.
 
@@ -1507,6 +1549,8 @@ def usage_view_shown(text, truncated, rows_total, ident, lines):
 def rows_shown(kind, text, truncated, rows_total, ident, lines):
     if kind == "usage-view":
         return usage_view_shown(text, truncated, rows_total, ident, lines)
+    if kind == "usage-menu":
+        return inline_menu_shown(text, truncated, rows_total, ident, lines)
     return menu_rows_shown(text, truncated, rows_total, ident, lines)
 
 
