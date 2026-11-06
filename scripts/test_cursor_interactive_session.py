@@ -2751,6 +2751,30 @@ class AnswerTests(AnswerFixture):
         code, sent = self.submit("answer yes/no: are you sure the tests pass (y/n)")
         self.assertEqual((code, sent["state"], sent["submitted"]), (0, "sent", True))
 
+    def test_submit_refuses_enter_when_a_prompt_appears_under_a_quoted_transcript_row(self):
+        # A "> " quote in the transcript looks like a composer row; the prompt below it must
+        # still be seen, and the composer is the LAST composer-like row.
+        self.screen("> quoted earlier text\n  Cursor Agent\n\n> \n")
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        self.env["FAKE_ECHO_DELAY"] = "60"
+        original = self.capture.read_text()
+
+        def swap():
+            __import__("time").sleep(0.1)
+            self.capture.write_text(original.replace("  Cursor Agent", "  Run this command?", 1))
+        thread = threading.Thread(target=swap)
+        thread.start()
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                              "--submit"])
+        thread.join()
+        self.assertEqual((code, refused["state"]), (3, "modal-approval"))
+        self.assertNotIn(["send-keys", "-t", "%7", "Enter"], self.sends())
+
+    def test_submit_counts_the_text_only_after_the_last_composer_row(self):
+        screen = ["> continue the source helper", "", "  \u2192 Add a follow-up", ""]
+        self.assertEqual(helper.tail_count(screen, "continue the source helper"), 0)
+
     def test_submit_refuses_a_text_cursor_would_paste_as_a_placeholder(self):
         code, refused = self.submit("x" * 801)
         self.assertEqual((code, refused["state"]), (2, "invalid-input"))
