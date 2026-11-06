@@ -28,10 +28,19 @@ const (
 // that is not TLS; the store's sslmode=verify-full never does.
 var errDBCheckPlaintext = errors.New("portal db-check connection is not TLS")
 
+// Bounds (DESIGN-056): the whole operation, resolve through rollback, has a
+// 10 s deadline. Inside it the connect has the store's 5 s connect_timeout
+// and the read-only transaction 3 s. Closing the connection afterwards has its
+// own deadline of at most 1 s, so the check returns within 11 s.
 const (
 	dbCheckQueryTimeout = 3 * time.Second
 	dbCheckTotalTimeout = 10 * time.Second
+	dbCheckCloseTimeout = time.Second
 )
+
+// dbCheckMountedFiles are the only files db-check reads, relative to the mounted
+// root. The how-to's Job mounts exactly these; a test pins both.
+var dbCheckMountedFiles = struct{ user, password, ca string }{"secrets/DB_USERNAME", "secrets/DB_PASSWORD", "ca/ca.crt"}
 
 // CheckDatabase loads the mounted production database settings under
 // ProductionRoot, opens one connection with the store's own TLS and DSN rules,
@@ -58,12 +67,12 @@ func DBCheckLine(class string) (string, int) {
 }
 
 // dbCheckSeams are test seams. Production leaves every field zero: pgx's own
-// resolver and dialer, the store's 5 s connect_timeout, and the fixed query
-// and total deadlines.
+// resolver and dialer, the store's 5 s connect_timeout, and the fixed query,
+// total and close deadlines.
 type dbCheckSeams struct {
-	lookup                              func(context.Context, string) ([]string, error)
-	dial                                func(context.Context, string, string) (net.Conn, error)
-	connectTimeout, queryTimeout, total time.Duration
+	lookup                                            func(context.Context, string) ([]string, error)
+	dial                                              func(context.Context, string, string) (net.Conn, error)
+	connectTimeout, queryTimeout, total, closeTimeout time.Duration
 }
 
 // dbCheckProgress records how far a connection attempt got, so a failure is
@@ -71,6 +80,19 @@ type dbCheckSeams struct {
 type dbCheckProgress struct {
 	mu                         sync.Mutex
 	resolved, dialed, upgraded bool
+	transport                  net.Conn // the dialed connection under TLS
+}
+
+func (p *dbCheckProgress) dialedConn(conn net.Conn) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.dialed, p.transport = true, conn
+}
+
+func (p *dbCheckProgress) transportConn() net.Conn {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.transport
 }
 
 func (p *dbCheckProgress) mark(step *bool) {
@@ -92,13 +114,16 @@ func checkDatabase(ctx context.Context, root string, s dbCheckSeams) string {
 	if s.queryTimeout <= 0 {
 		s.queryTimeout = dbCheckQueryTimeout
 	}
+	if s.closeTimeout <= 0 {
+		s.closeTimeout = dbCheckCloseTimeout
+	}
 	ctx, cancel := context.WithTimeout(ctx, s.total)
 	defer cancel()
 
 	// The same files, readers and rules as LoadProduction, and nothing else.
-	user, userErr := readMountedText(root, "secrets/DB_USERNAME", 4096)
-	password, passwordErr := readMountedText(root, "secrets/DB_PASSWORD", 4096)
-	ca, caErr := readMountedBytes(root, "ca/ca.crt", 64<<10)
+	user, userErr := readMountedText(root, dbCheckMountedFiles.user, 4096)
+	password, passwordErr := readMountedText(root, dbCheckMountedFiles.password, 4096)
+	ca, caErr := readMountedBytes(root, dbCheckMountedFiles.ca, 64<<10)
 	if userErr != nil || passwordErr != nil || caErr != nil || user != productionDBUser || !bearerText(password) || !pemPool(ca) {
 		return DBCheckConfig
 	}
@@ -135,7 +160,7 @@ func checkDatabase(ctx context.Context, root string, s dbCheckSeams) string {
 	config.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		conn, err := dial(ctx, network, addr)
 		if err == nil {
-			progress.mark(&progress.dialed)
+			progress.dialedConn(conn)
 		}
 		return conn, err
 	}
@@ -160,11 +185,9 @@ func checkDatabase(ctx context.Context, root string, s dbCheckSeams) string {
 	if err != nil {
 		return dbCheckConnectClass(ctx, err, progress)
 	}
-	defer func() {
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), time.Second)
-		defer closeCancel()
-		_ = db.Close(closeCtx)
-	}()
+	// Close after the operation, success or not, within its own bound. A slow
+	// or failed close changes neither the result nor the line.
+	defer dbCheckClose(db, progress.transportConn(), s.closeTimeout)
 	queryCtx, queryCancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer queryCancel()
 	tx, err := db.BeginTx(queryCtx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
@@ -184,6 +207,29 @@ func checkDatabase(ctx context.Context, root string, s dbCheckSeams) string {
 		return DBCheckQuery
 	}
 	return ""
+}
+
+// dbCheckClose sends Terminate and closes, and returns within bound. pgx's
+// close honours the context for Terminate, but crypto/tls then writes its
+// close_notify alert under its own 5 s write deadline; on a stalled peer that
+// would outlast the bound. When the bound expires, closing the dialed
+// transport underneath ends any write still pending.
+func dbCheckClose(db *pgx.Conn, transport net.Conn, bound time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = db.Close(ctx)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		if transport != nil {
+			_ = transport.Close()
+		}
+		<-done
+	}
 }
 
 func dbCheckTimedOut(ctx context.Context, err error) bool {

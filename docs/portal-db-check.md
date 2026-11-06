@@ -18,13 +18,34 @@ Exactly one line:
 | `FAIL dns` | 3 | `postgres16-rw.database.svc.cluster.local` did not resolve |
 | `FAIL refused` | 3 | the connection was refused or reset, or the network was unreachable |
 | `FAIL tls` | 3 | the server refused TLS or its certificate failed verification against `ca/ca.crt` |
-| `FAIL auth` | 3 | the server refused the login (role, password or database) |
-| `FAIL timeout` | 3 | the 5 s connect timeout, the 3 s query deadline or the 10 s total deadline expired |
+| `FAIL auth` | 3 | the TLS handshake succeeded, but the server ended the session before the login completed |
+| `FAIL timeout` | 3 | the connect, query or total deadline expired |
 | `FAIL query` | 3 | logged in, but the session is read-only or `SELECT 1` failed |
+
+`FAIL auth` does not only mean a bad password. It covers anything that ends
+the session after the TLS handshake and before the login completes:
+
+- a refused password or role (SQLSTATE class 28);
+- a missing database (3D000);
+- too many connections (53300);
+- a server shutting down or starting up (57P01, 57P03);
+- a dropped connection.
+
+The check prints no SQLSTATE, so tell these apart from the database's logs.
 
 Exit code 2 means a usage error: `db-check` takes no other argument and no
 flag. The output never contains a host, user, password, DSN, certificate
 detail or driver error.
+
+**Bounds:** the operation has a 10 s total deadline, covering resolve,
+connect, the read-only transaction and its rollback. Inside it:
+
+- the connect has the store's 5 s `connect_timeout`;
+- the read-only transaction has 3 s.
+
+After a successful connect, the close has its own deadline of at most 1 s.
+If the peer stalls, the connection is cut at that deadline. So the check
+returns within 11 s. A failed connect is closed by the driver at once.
 
 ## What it reads
 
@@ -43,16 +64,35 @@ The target is fixed in source:
   as the store does;
 - `target_session_attrs=read-write`.
 
-## Run it in the cluster: one-shot Job
+## Run it once in the cluster
 
-Proposed spec. It is not created in haynes-ops; release and GitOps
-belong to the coordinator.
+**Chosen approach: a single imperative `kubectl create`, never a GitOps
+manifest.** The Job is not committed to any Flux kustomization:
 
-- It needs a portal image built from a commit that contains `db-check`. The
-  Deployment's current pin, `sha-ce6edc5`, predates it.
-- It uses the Deployment's ServiceAccount, its labels for the existing
-  network policy, and its existing config, Secret and CA volumes, unchanged.
-  It adds no Secret, RBAC rule or network policy.
+- each run gets a new `generateName` name, so Flux never creates or recreates
+  it, and nothing can repeat it;
+- it has no `ttlSecondsAfterFinished`, so nothing deletes it, or its single
+  output line, before the result is recorded;
+- the person who runs it records the result and then deletes the Job
+  explicitly.
+
+If it ever had to go through git, a Flux-managed Job with a TTL would be
+re-applied after each TTL deletion and would probe again. It would then need
+a fixed name, no TTL, and removal in the same change that records the
+result. That variant is not proposed.
+
+The Job needs a portal image built from a commit that contains `db-check`.
+The Deployment's current pin, `sha-ce6edc5`, predates it.
+
+It mounts only what `db-check` reads: the two existing keys `DB_USERNAME` and
+`DB_PASSWORD` of the existing Secret `dev-env-v2-portal-runtime`, and
+`ca.crt` of the existing ConfigMap `dev-env-v2-portal-postgres-ca`. It mounts
+no OIDC secret, session key, OpenProject token, TLS key or projected
+ServiceAccount token. It keeps the portal's ServiceAccount with
+`automountServiceAccountToken: false`, and the pod label that the existing
+network policy selects. It adds no Secret, RBAC rule or network policy. A
+test (`TestDBCheckDocJobMountsOnlyWhatItReads`) parses this example and pins
+that.
 
 ```yaml
 apiVersion: batch/v1
@@ -65,7 +105,6 @@ metadata:
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 60
-  ttlSecondsAfterFinished: 3600
   template:
     metadata:
       labels:
@@ -116,120 +155,89 @@ spec:
               cpu: 100m
               memory: 64Mi
           volumeMounts:
-            - name: config
-              mountPath: /etc/dev-env-portal/config
-              readOnly: true
-            - name: secrets
+            - name: db-secrets
               mountPath: /etc/dev-env-portal/secrets
               readOnly: true
-            - name: ca
+            - name: postgres-ca
               mountPath: /etc/dev-env-portal/ca
               readOnly: true
-            - name: tls
-              mountPath: /etc/dev-env-portal/tls
-              readOnly: true
-            - name: tmp
-              mountPath: /tmp
-      # The Deployment's volumes, unchanged.
       volumes:
-        - name: config
-          projected:
-            defaultMode: 288
-            sources:
-              - configMap:
-                  name: dev-env-v2-portal-config
-                  items:
-                    - {key: origin, path: origin}
-                    - {key: issuer, path: issuer}
-                    - {key: authorization-url, path: authorization-url}
-                    - {key: token-url, path: token-url}
-                    - {key: userinfo-url, path: userinfo-url}
-                    - {key: jwks-url, path: jwks-url}
-                    - {key: openproject-base-url, path: openproject-base-url}
-                    - {key: operator-api-url, path: operator-api-url}
-                    - {key: auth-style, path: auth-style}
-                    - {key: login-ttl, path: login-ttl}
-                    - {key: idle-ttl, path: idle-ttl}
-                    - {key: absolute-ttl, path: absolute-ttl}
-                    - {key: fresh-for, path: fresh-for}
-                    - {key: clock-skew, path: clock-skew}
-                    - {key: pages-alertmanager.json, path: pages-alertmanager.json}
-                    - {key: session-actions.json, path: session-actions.json}
-              - secret:
-                  name: dev-env-v2-portal-allowance-trust
-                  items:
-                    - {key: provider-allowances.json, path: provider-allowances.json}
-        - name: secrets
-          projected:
-            sources:
-              - secret:
-                  name: dev-env-v2-portal-oidc
-                  items:
-                    - {key: OIDC_CLIENT_ID, path: OIDC_CLIENT_ID}
-                    - {key: OIDC_CLIENT_SECRET, path: OIDC_CLIENT_SECRET}
-              - secret:
-                  name: dev-env-v2-portal-runtime
-                  items:
-                    - {key: DB_USERNAME, path: DB_USERNAME}
-                    - {key: DB_PASSWORD, path: DB_PASSWORD}
-                    - {key: SESSION_AEAD_KEY, path: SESSION_AEAD_KEY}
-                    - {key: SESSION_GENERATION, path: SESSION_GENERATION}
-              - secret:
-                  name: dev-env-v2-portal-openproject
-                  optional: true
-                  items:
-                    - {key: OPENPROJECT_TOKEN, path: OPENPROJECT_TOKEN}
-              - serviceAccountToken:
-                  path: OPERATOR_TOKEN
-                  audience: dev-env-operator
-                  expirationSeconds: 3600
-        - name: ca
-          projected:
-            sources:
-              - configMap:
-                  name: dev-env-v2-portal-postgres-ca
-                  items:
-                    - {key: ca.crt, path: ca.crt}
-              - configMap:
-                  name: dev-env-v2-portal-issuer-ca
-                  items:
-                    - {key: ca.crt, path: issuer-ca.crt}
-              - configMap:
-                  name: dev-env-v2-portal-openproject-ca
-                  items:
-                    - {key: ca.crt, path: openproject-ca.crt}
-              - configMap:
-                  name: dev-env-api-ca
-                  items:
-                    - {key: ca.crt, path: operator-ca.crt}
-        - name: tls
+        - name: db-secrets
           secret:
-            secretName: dev-env-v2-portal-tls
+            secretName: dev-env-v2-portal-runtime
+            defaultMode: 288
             items:
-              - {key: tls.crt, path: tls.crt}
-              - {key: tls.key, path: tls.key}
-        - name: tmp
-          emptyDir:
-            sizeLimit: 16Mi
+              - key: DB_USERNAME
+                path: DB_USERNAME
+              - key: DB_PASSWORD
+                path: DB_PASSWORD
+        - name: postgres-ca
+          configMap:
+            name: dev-env-v2-portal-postgres-ca
+            defaultMode: 288
+            items:
+              - key: ca.crt
+                path: ca.crt
 ```
 
-Read the result:
+### Run, record, delete
+
+Save the YAML above as `portal-db-check-job.yaml` with the image filled in.
+Then run, as an identity allowed to create Jobs in `dev-agents`:
 
 ```sh
-kubectl -n dev-agents logs job/<generated name>   # PASS, or FAIL <class>
-kubectl -n dev-agents get job <generated name> -o jsonpath='{.status.succeeded}{.status.failed}'
+job=$(kubectl -n dev-agents create -f portal-db-check-job.yaml -o name)   # job.batch/dev-env-v2-portal-db-check-xxxxx
+
+# Wait for an end: Complete, Failed, or DeadlineExceeded after 60 s.
+until kubectl -n dev-agents get "$job" -o jsonpath='{.status.conditions[*].type}' | grep -Eq 'Complete|Failed'; do sleep 3; done
+
+line=$(kubectl -n dev-agents logs "$job" --tail=1 2>/dev/null)
+status=$(kubectl -n dev-agents get "$job" -o jsonpath='{.status.conditions[*].reason}')
+case "$line" in
+  "PASS"|"FAIL config"|"FAIL dns"|"FAIL refused"|"FAIL tls"|"FAIL auth"|"FAIL timeout"|"FAIL query") result="$line" ;;
+  "") result="NOT RUN (no output; $status)" ;;
+  *)  result="UNEXPECTED OUTPUT (not recorded)" ;;
+esac
+echo "$job $result"
 ```
 
-**Notes**
+Record these in the tracker story or handoff before deleting anything:
 
-- **Least privilege:** `db-check` reads only `secrets/DB_*` and
-  `ca/ca.crt`. A narrower variant would mount only the
-  `dev-env-v2-portal-runtime` DB keys and the Postgres CA ConfigMap.
-- **Anti-affinity:** the Deployment's required anti-affinity matches the pod
-  label. While the Job runs, a new portal replica cannot be scheduled on the
-  Job's node, so run it outside a portal rollout.
-- **Connections:** the Job uses one of the role's 8 connections. Two
-  portal replicas use at most 4.
+- the Job name;
+- the image digest;
+- the time;
+- `$result`.
+
+`$result` is sanitized by construction: one of the eight fixed lines, or
+`NOT RUN`. Never paste other log text. Then delete the Job, which also
+removes its pod:
+
+```sh
+kubectl -n dev-agents delete "$job"
+```
+
+**No output is "not run", not a db-check failure.**
+
+- `NOT RUN` means the check never printed a line, so the database path is
+  untested. Record it as not run. Never record it as a db-check `FAIL`.
+- The usual cause is that the pod never started: Kubernetes ends the Job
+  with `DeadlineExceeded` after 60 s.
+- A likely reason is scheduling. The Deployment's required anti-affinity
+  matches the pod label, and that rule works both ways:
+  - the Job cannot run on a node that already runs a portal replica;
+  - a new portal replica cannot run on the Job's node.
+
+  With four workers and two replicas it fits. Do not run it during a portal
+  rollout.
+
+## Notes
+
+- **Connections:** the Job uses one of the role's 8 connections. Two portal
+  replicas use at most 4.
+- **Follow-up, not in this change:** a cleaner long-term setup would give the
+  check its own pod label, with a small policy allowing only DNS and
+  Postgres egress. The check would then no longer share the portal's label,
+  Service selector, PDB and anti-affinity.
 
 ## Tests
 

@@ -96,9 +96,11 @@ func dbCheckFiles(caPEM []byte) map[string]string {
 // far as db-check needs: SSL negotiation, TLS, cleartext password login, the
 // read-write check and simple-protocol statements. It records everything.
 type fakePostgres struct {
-	cert     tls.Certificate
-	mode     string
-	readOnly bool
+	cert       tls.Certificate
+	mode       string
+	readOnly   bool
+	loginError string // SQLSTATE of a FATAL login refusal; "" accepts
+	release    chan struct{}
 
 	mu         sync.Mutex
 	serverName string
@@ -169,6 +171,11 @@ func (f *fakePostgres) serve(conn net.Conn) {
 		_ = backend.Flush()
 		return
 	}
+	if f.loginError != "" {
+		backend.Send(&pgproto3.ErrorResponse{Severity: "FATAL", Code: f.loginError, Message: "fixture login refusal"})
+		_ = backend.Flush()
+		return
+	}
 	backend.Send(&pgproto3.AuthenticationOk{})
 	for _, p := range [][2]string{{"server_version", "16.4"}, {"client_encoding", "UTF8"}, {"standard_conforming_strings", "on"}, {"DateStyle", "ISO, MDY"}} {
 		backend.Send(&pgproto3.ParameterStatus{Name: p[0], Value: p[1]})
@@ -229,6 +236,15 @@ func (f *fakePostgres) answer(backend *pgproto3.Backend, conn net.Conn, statemen
 	case statement == "rollback":
 		backend.Send(&pgproto3.CommandComplete{CommandTag: []byte("ROLLBACK")})
 		backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+		if f.mode == "hang-close" {
+			// Stop reading: the client's Terminate write then blocks, as on a
+			// stalled TCP peer, until its close deadline.
+			if backend.Flush() != nil {
+				return false
+			}
+			<-f.release
+			return false
+		}
 	default:
 		backend.Send(&pgproto3.ErrorResponse{Severity: "ERROR", Code: "0A000", Message: "statement not served by the fixture"})
 		backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
@@ -305,7 +321,7 @@ func interceptDBCheckResolver(t *testing.T) {
 }
 
 func newFakePostgres(cert tls.Certificate, mode string) *fakePostgres {
-	return &fakePostgres{cert: cert, mode: mode, done: make(chan struct{})}
+	return &fakePostgres{cert: cert, mode: mode, done: make(chan struct{}), release: make(chan struct{})}
 }
 
 func TestDBCheckPassesAgainstAPrimaryWithReadOnlySelect(t *testing.T) {
@@ -530,5 +546,68 @@ func TestDBCheckProductionDefaultsAreFixed(t *testing.T) {
 	c := pool.ConnConfig
 	if c.Host != productionDBHost || c.Port != 5432 || c.Database != "dev_env_v2_portal" || c.User != productionDBUser || c.ConnectTimeout != 5*time.Second || c.TLSConfig == nil || c.TLSConfig.ServerName != productionDBHost || c.TLSConfig.InsecureSkipVerify || len(c.Fallbacks) != 0 || c.ValidateConnect == nil {
 		t.Fatal("db-check would not use the store's connection rules")
+	}
+}
+
+// TestDBCheckAuthCoversEveryRefusalAfterTLS: "auth" is any end of the session
+// after a good TLS handshake and before the login completes, not only a bad
+// password (DESIGN-056 section 3).
+func TestDBCheckAuthCoversEveryRefusalAfterTLS(t *testing.T) {
+	interceptDBCheckResolver(t)
+	ca := newDBCheckCA(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	for _, code := range []string{"28P01", "28000", "3D000", "53300", "57P01", "57P03"} {
+		server := newFakePostgres(ca.leaf(t, productionDBHost), "")
+		server.loginError = code
+		network := &dbCheckNet{server: server}
+		if got := checkDatabase(context.Background(), writeDBCheckRoot(t, dbCheckFiles(ca.pem)), network.seams()); got != DBCheckAuth {
+			t.Fatalf("SQLSTATE %s: class %q, want auth", code, got)
+		}
+	}
+}
+
+// TestDBCheckCloseIsBounded: the operation has its 10 s deadline (5 s connect,
+// 3 s query inside it) and the close has its own deadline of at most 1 s. A
+// stalled close, a query timeout and the total deadline each return within
+// their bounds with one sanitized line, and no second connection is dialed.
+func TestDBCheckCloseIsBounded(t *testing.T) {
+	interceptDBCheckResolver(t)
+	if dbCheckCloseTimeout != time.Second {
+		t.Fatal("close bound changed")
+	}
+	ca := newDBCheckCA(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	const closeBound = 200 * time.Millisecond
+	const slack = 600 * time.Millisecond
+	for _, tc := range []struct {
+		name, mode     string
+		connect, query time.Duration
+		total          time.Duration
+		want           string
+		least, most    time.Duration
+	}{
+		{name: "close stalls after a pass", mode: "hang-close", connect: 2 * time.Second, query: time.Second, total: 4 * time.Second, want: "", least: closeBound / 2, most: closeBound + slack},
+		{name: "query deadline", mode: "hang-query", connect: 2 * time.Second, query: 300 * time.Millisecond, total: 4 * time.Second, want: DBCheckTimeout, least: 250 * time.Millisecond, most: 300*time.Millisecond + closeBound + slack},
+		{name: "total deadline during login", mode: "hang-login", connect: 2 * time.Second, query: time.Second, total: 300 * time.Millisecond, want: DBCheckTimeout, least: 250 * time.Millisecond, most: 300*time.Millisecond + closeBound + slack},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newFakePostgres(ca.leaf(t, productionDBHost), tc.mode)
+			t.Cleanup(func() { close(server.release) })
+			network := &dbCheckNet{server: server}
+			seams := network.seams()
+			seams.connectTimeout, seams.queryTimeout, seams.total, seams.closeTimeout = tc.connect, tc.query, tc.total, closeBound
+			started := time.Now()
+			got := checkDatabase(context.Background(), writeDBCheckRoot(t, dbCheckFiles(ca.pem)), seams)
+			elapsed := time.Since(started)
+			if got != tc.want || elapsed < tc.least || elapsed > tc.most {
+				t.Fatalf("class %q in %v, want %q within [%v, %v]", got, elapsed, tc.want, tc.least, tc.most)
+			}
+			if line, _ := DBCheckLine(got); line != "PASS" && line != "FAIL "+tc.want {
+				t.Fatalf("line %q", line)
+			}
+			network.mu.Lock()
+			defer network.mu.Unlock()
+			if len(network.dials) != 1 {
+				t.Fatalf("dials %v: a deadline must not dial a cancel request", network.dials)
+			}
+		})
 	}
 }

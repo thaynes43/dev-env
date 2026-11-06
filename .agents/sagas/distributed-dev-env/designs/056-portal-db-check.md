@@ -45,9 +45,20 @@ is the usage error (exit 2), as for `pages-source-check`.
    `target_session_attrs=read-write`, the server receives exactly
    `show transaction_read_only`, `begin read only`, `SELECT 1` and
    `rollback`.
-4. **Bounds.** It has a 5 s connect timeout (the store's `connect_timeout`),
-   a 3 s query deadline and a 10 s total deadline. The store's
+4. **Bounds.** The operation has a 10 s total deadline, from resolve
+   through rollback. Inside it, the connect has the store's 5 s
+   `connect_timeout` and the read-only transaction 3 s; the store's
    `statement_timeout` of 5 s also applies on the server.
+
+   After a successful connect, the close has its own deadline of at most
+   1 s. When it expires, the dialed transport is closed. This is needed
+   because crypto/tls writes its close_notify alert under its own 5 s write
+   deadline, which would otherwise outlast the bound on a stalled peer. The
+   check therefore returns within 11 s.
+
+   An expired deadline ends the connection through pgx's default
+   deadline handler, which sends no cancel request. A test pins that the
+   check dials exactly one connection.
 
 ## 3. Output and exit codes
 
@@ -58,9 +69,18 @@ is the usage error (exit 2), as for `pages-source-check`.
 | `FAIL dns` | 3 | the fixed host did not resolve |
 | `FAIL refused` | 3 | the TCP connection was refused or reset, or the network was unreachable |
 | `FAIL tls` | 3 | TLS was refused or the server certificate failed verification |
-| `FAIL auth` | 3 | the server refused the login (role, password or database) |
+| `FAIL auth` | 3 | after a good TLS handshake, the server ended the session before the login completed |
 | `FAIL timeout` | 3 | a connect, query or total deadline expired |
 | `FAIL query` | 3 | logged in, but the session is read-only or `SELECT 1` failed |
+
+`auth` covers any end of the session after a good TLS handshake and before
+the login completes, not only a bad password:
+
+- a refused password or role (SQLSTATE class 28);
+- a missing database (3D000);
+- too many connections (53300);
+- a server shutting down or starting up (57P01, 57P03);
+- a dropped connection.
 
 The class comes from the phase that failed and the error's type, never from
 error text. The check records whether the name lookup, the dial and the TLS
@@ -70,15 +90,27 @@ value is ever printed.
 
 ## 4. Running it in the cluster
 
-A one-shot Job in `dev-agents`:
+A single imperative `kubectl create` of a one-shot Job in `dev-agents`, never
+a GitOps manifest. The full spec and the run, record and delete steps are in
+the how-to.
 
-- the pinned portal image digest, `args: ["db-check"]`;
-- the portal ServiceAccount;
-- the Deployment's existing projected config, Secret and CA volumes;
-- `backoffLimit: 0`, `activeDeadlineSeconds: 60`, `ttlSecondsAfterFinished`
-  and small CPU and memory limits.
+- **Single shot.** The Job has a `generateName`, `backoffLimit: 0`,
+  `activeDeadlineSeconds: 60` and no `ttlSecondsAfterFinished`. Nothing
+  re-creates it, and nothing deletes it before its one sanitized line and
+  its status are recorded. The person who ran it records the result and
+  then deletes it.
 
-The full spec is in the how-to.
+  A Flux-managed Job with a TTL would be re-applied after each TTL deletion
+  and would probe again, so this is not proposed.
+- **Mounts.** Only what `db-check` reads: the existing keys `DB_USERNAME`
+  and `DB_PASSWORD` of the existing Secret `dev-env-v2-portal-runtime`, and
+  `ca.crt` of the existing ConfigMap `dev-env-v2-portal-postgres-ca`. It
+  mounts no OIDC secret, session key, OpenProject token, TLS key or
+  projected token.
+
+  The portal ServiceAccount stays, with `automountServiceAccountToken:
+  false`. A test parses the how-to's YAML and pins the mounted files to the
+  three `db-check` reads.
 
 - **Label.** The pod carries `app.kubernetes.io/name: dev-env-v2-portal`.
   That is the only way the existing `CiliumNetworkPolicy` lets it reach
@@ -89,8 +121,17 @@ The full spec is in the how-to.
 - **PDB.** A `readinessProbe` on the unused port 8443 keeps the pod
   never-Ready, so the PodDisruptionBudget's healthy count is unchanged.
 - **Anti-affinity.** The Deployment's required anti-affinity matches the
-  label. While the Job runs, a new portal replica cannot be scheduled on the
-  Job's node, so run it outside a portal rollout.
+  label, and required anti-affinity is honoured both ways:
+  - the Job cannot be scheduled on a node that already runs a portal
+    replica;
+  - a new replica cannot be scheduled on the Job's node.
+
+  With four workers and two replicas it fits. If it cannot be scheduled,
+  the Job ends `DeadlineExceeded` after 60 s with no output line. That is
+  recorded as "not run", never as a db-check failure.
+- **Follow-up, not in this change:** the check could get its own pod label,
+  with a small policy allowing only DNS and Postgres egress and no shared
+  Service, PDB or anti-affinity.
 - **Connections.** The role's `connectionLimit` is 8. Two replicas use at
   most 4, and the check adds one.
 
@@ -105,9 +146,18 @@ interceptor fails any DNS query.
 - **Expired pinned CA.** A pinned CA past its `NotAfter` still verifies, as
   production does.
 - **TLS:** an unknown CA, a wrong hostname, or a server that refuses TLS.
-- **Each other class:** auth (28P01), timeout, refused, dns, query (an error
-  from `SELECT 1`, a read-only session) and config (each missing or invalid
-  file, an ambient `PGSSLROOTCERT`).
+- **Each other class:**
+  - auth: 28P01, 28000, 3D000, 53300, 57P01 and 57P03;
+  - timeout;
+  - refused;
+  - dns;
+  - query: an error from `SELECT 1`, a read-only session;
+  - config: each missing or invalid file, an ambient `PGSSLROOTCERT`.
+- **Bounded close:** a stalled close after a pass, a query deadline and the
+  total deadline each return within their bounds with one sanitized line,
+  and none dials a second connection.
+- **The how-to's Job:** it parses, and it mounts exactly the three files
+  `db-check` reads. It has no TTL and no retry.
 - **Sanitization:** the output of every case is exactly one of the lines
   above.
 - **No-write:** the server sees exactly the four statements, over the simple
