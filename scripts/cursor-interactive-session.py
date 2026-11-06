@@ -22,6 +22,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 MAX_TEXT = 4096
 MAX_CAPTURE = 8192
@@ -566,7 +567,6 @@ def start_session(args):
         write_state(path, record)
         raise Refusal("launch-unconfirmed", "tmux did not set the owner marker. No automatic retry.", 3)
     if args.observe_seconds:
-        import time
         time.sleep(args.observe_seconds)
     try:
         ident = observe_started(prepared, pane)
@@ -648,6 +648,34 @@ def clear_receipt(path, state):
     write_state(path, state)
 
 
+# Cursor holds fast literal input in a 75 ms paste buffer. An Enter that arrives inside that
+# window submits the whole text but can leave the text box holding it as a stale draft
+# (Cursor 2026.10.14, read from its UI code; G1 pane 2026-11-05T23:43Z). So Enter waits until
+# the window has passed and the text's tail shows in the pane.
+SUBMIT_SETTLE_SECONDS = 0.3
+SUBMIT_CHECKS = 5
+SUBMIT_TAIL = 24
+
+
+def text_shown(tmux, pane, text):
+    """Whether the last characters of text show in the pane, ignoring the whitespace that
+    wrapping adds."""
+    captured, _truncated, _rows = read_capture_rows(tmux, pane)
+    tail = "".join(text.split())[-SUBMIT_TAIL:]
+    return tail in "".join(captured.split())
+
+
+def wait_until_shown(tmux, pane, text):
+    for _ in range(SUBMIT_CHECKS):
+        time.sleep(SUBMIT_SETTLE_SECONDS)
+        try:
+            if text_shown(tmux, pane, text):
+                return True
+        except Refusal:
+            return False
+    return False
+
+
 def send_instruction(tmux, pane, text, submit):
     literal = [tmux, "send-keys", "-t", pane, "-l", "--", text]
     try:
@@ -658,6 +686,9 @@ def send_instruction(tmux, pane, text, submit):
         raise Refusal("send-unconfirmed", "tmux did not accept the literal text. Do not retry this receipt. Re-inspect.", 3)
     if not submit:
         return False
+    if not wait_until_shown(tmux, pane, text):
+        raise Refusal("send-unconfirmed", "The literal text was sent but its end did not show in the pane, so Enter was "
+                      "NOT sent. The text may be in the composer. Do not resend it or send Enter. Re-inspect.", 3)
     try:
         entered = run([tmux, "send-keys", "-t", pane, "Enter"])
     except (subprocess.TimeoutExpired, OSError, UnicodeError):

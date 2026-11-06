@@ -22,7 +22,7 @@ helper = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(helper)
 
 FAKE = r'''#!/usr/bin/env python3
-import json, os, re, sys
+import json, os, re, sys, time
 from pathlib import Path
 args = sys.argv[1:]
 with open(os.environ["FAKE_LOG"], "a") as out:
@@ -92,6 +92,25 @@ if args and args[0] == "send-keys":
             gate.read(1)
     if mode == "send-fail":
         sys.exit(1)
+    # Like a composer, show literal text after it is typed (FAKE_ECHO=0: the text never
+    # shows) and take it away again when Enter submits it.
+    # FAKE_PASTE_WINDOW models Cursor 2026.10.14's 75 ms paste buffer: an Enter that arrives
+    # inside the window still submits, but the text stays in the box as a stale draft.
+    echo = Path(os.environ["FAKE_CAPTURE"] + ".echo")
+    window = float(os.environ.get("FAKE_PASTE_WINDOW", "0"))
+    if "-l" in args and os.environ.get("FAKE_ECHO", "1") != "0":
+        with open(os.environ["FAKE_CAPTURE"], "a", encoding="utf-8") as capture:
+            capture.write(args[-1] + "\n")
+        echo.write_text(args[-1] + "\n", encoding="utf-8")
+    elif args[-1] == "Enter" and echo.exists() and time.time() - echo.stat().st_mtime < window:
+        Path(os.environ["FAKE_CAPTURE"] + ".stale").write_text(echo.read_text(encoding="utf-8"), encoding="utf-8")
+        echo.unlink()
+    elif args[-1] == "Enter" and echo.exists():
+        captured = Path(os.environ["FAKE_CAPTURE"]).read_text(encoding="utf-8")
+        typed = echo.read_text(encoding="utf-8")
+        if captured.endswith(typed):
+            Path(os.environ["FAKE_CAPTURE"]).write_text(captured[:-len(typed)], encoding="utf-8")
+        echo.unlink()
     sys.exit(0)
 raise SystemExit(77)
 '''
@@ -238,6 +257,53 @@ class CursorInteractiveTests(unittest.TestCase):
             ["send-keys", "-t", "%7", "-l", "--", "continue the source helper"],
             ["send-keys", "-t", "%7", "Enter"],
         ])
+
+    def test_submit_waits_until_the_text_shows_before_enter(self):
+        # Cursor 2026.10.14 holds fast literal input in a 75 ms paste buffer; an Enter inside that
+        # window submitted the text but left it in the box as a stale draft (G1, 2026-11-05).
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        started = __import__("time").monotonic()
+        code, sent = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                           "--submit"])
+        self.assertEqual((code, sent["state"]), (0, "sent"))
+        self.assertGreaterEqual(__import__("time").monotonic() - started, helper.SUBMIT_SETTLE_SECONDS)
+        tmux = self.commands("tmux")
+        literal = tmux.index(["send-keys", "-t", "%7", "-l", "--", "continue the source helper"])
+        enter = tmux.index(["send-keys", "-t", "%7", "Enter"])
+        # The pane is read again between the text and Enter.
+        self.assertTrue(any(args[0] == "capture-pane" for args in tmux[literal + 1:enter]))
+
+    def test_submit_never_sends_enter_when_the_text_does_not_show(self):
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        self.env["FAKE_ECHO"] = "0"
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                              "--submit"])
+        self.assertEqual((code, refused["state"]), (3, "send-unconfirmed"))
+        self.assertIn("Enter was NOT sent", refused["detail"])
+        self.assertEqual([args for args in self.commands("tmux") if args[0] == "send-keys"],
+                         [["send-keys", "-t", "%7", "-l", "--", "continue the source helper"]])
+
+    def test_submit_after_the_paste_window_leaves_no_stale_draft(self):
+        # Synthetic reproduction of the G1 stale draft (2026-11-05T23:43Z): with an Enter right
+        # after the text, the fake keeps the text as a draft; the fence's wait clears it.
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        self.env["FAKE_PASTE_WINDOW"] = "0.075"
+        code, sent = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                           "--submit"])
+        self.assertEqual((code, sent["state"], sent["submitted"]), (0, "sent", True))
+        self.assertFalse(Path(str(self.capture) + ".stale").exists())
+        self.assertNotIn("continue the source helper", self.capture.read_text())
+
+    def test_text_shown_ignores_wrapping(self):
+        text = "Readiness check only. Do not call tools, run commands or read files."
+        wrapped = "  → Readiness check only. Do not call tools, run\n     commands or read files.\n\n"
+        with mock.patch.object(helper, "read_capture_rows", return_value=(wrapped, False, 3)):
+            self.assertTrue(helper.text_shown("tmux", "%7", text))
+        with mock.patch.object(helper, "read_capture_rows", return_value=("  → Readiness check only.\n", False, 1)):
+            self.assertFalse(helper.text_shown("tmux", "%7", text))
 
     def test_draft_and_modals_never_send(self):
         self.text_path.write_text("continue")

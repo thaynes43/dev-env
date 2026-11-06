@@ -116,10 +116,25 @@ A successful send proves neither model consumption nor the served model.
 
 Reply sends `tmux send-keys -t <pane> -l -- <exact instruction>`. It does not
 split the instruction into key names. `--submit` then sends one separate
-`Enter`. Without `--submit`, Enter is not sent. All C0 and C1 control
+`Enter`, but only after a submit fence (below). Without `--submit`, Enter is not sent. All C0 and C1 control
 characters and DEL are refused, even with `--observed-ready`. This includes
 newlines, tabs, carriage returns, Escape, Ctrl-C, and Backspace. Neither flag
 is passed to Cursor.
+
+**Submit fence.** Cursor 2026.10.14 holds fast literal input in a 75 ms paste
+buffer. An Enter that arrives inside that window still submits the whole text,
+but the text box keeps its own copy: the text stays in the composer as a stale
+draft. That happened on the G1 pane on 2026-11-05 at 23:43Z. The transcript
+held the full 565-byte prompt and the turn succeeded, while the composer still
+showed its last wrapped lines. The mechanism was read from Cursor's UI code
+(a 6-line viewport, the paste buffer, and a text box that resyncs only when its
+value prop changes), not observed by pressing keys. So, with `--submit`, the
+helper waits 0.3 s after the text and reads the pane, up to five times, until
+the instruction's last 24 non-space characters show (wrapping whitespace is
+ignored). Only then does it send Enter. If the text never shows, Enter is not
+sent and the reply ends `send-unconfirmed`. The text may then be in the
+composer: do not resend it or send Enter; inspect again. The fence narrows the
+race; it does not prove Cursor cleared the box, so inspect after every reply.
 
 Fail closed, with no keys and no Enter:
 
