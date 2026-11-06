@@ -2826,6 +2826,20 @@ class AnswerTests(AnswerFixture):
         self.assertNotIn("..", refused["detail"])
         self.assertNotIn(["send-keys", "-t", "%7", "Enter"], self.sends())
 
+    def test_observed_ready_submit_on_an_unlocatable_screen_types_nothing(self):
+        # An unclassified screen whose row count does not match tmux's history and pane
+        # height: the visible screen cannot be located, so a fenced submit cannot be bound.
+        # --observed-ready does not override that: prompt-unclear, and no key is sent.
+        self.screen("  build output line\n  another line\n\n")
+        self.env["FAKE_HISTORY"] = "7"
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        self.assertEqual(inspected["classification"], "unclassified")
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                              "--submit", "--observed-ready"])
+        self.assertEqual((code, refused["state"]), (2, "prompt-unclear"))
+        self.assertEqual(self.sends(), [])
+
     def test_submit_refuses_a_text_cursor_would_paste_as_a_placeholder(self):
         code, refused = self.submit("x" * 801)
         self.assertEqual((code, refused["state"]), (2, "invalid-input"))
