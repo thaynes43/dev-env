@@ -251,8 +251,46 @@ and an argument are typed the menu shows no row (the command declares no argumen
 and if the command were not registered the same Enter would be sent to the model as a chat message. This helper does not
 type or send that form.
 
-The helper does not verify any approval; `--approval-ref` is audit metadata. It does not close any view and it sends no
-Escape.
+The helper does not verify any approval; `--approval-ref` is audit metadata.
+
+### Reading the usage view: `usage-menu` and `usage-view`
+
+Two more allowlist entries let a supervised session open Cursor's `/usage` view and close it again. Each sends one key,
+once per approval, with the same receipt, ledger, modal and last-look rules as above.
+
+1. `reply` with the literal text `/usage` and **no** `--submit`, then `inspect`.
+2. `menu-key --expect-kind usage-menu`: one `Enter`. The expected text is EXACTLY two lines, in order: the selected row
+   `<marker> /usage  Show plan and on-demand usage` and the bare draft `→ /usage`. The live-row rules are the
+   run-everything rules (each row once on the visible screen, the draft directly under the row, the composer's own tail
+   below, nothing in history counts). If the inline menu is not shown, no `Enter` is sent: an unregistered command
+   would otherwise go to the model as a chat message.
+3. `inspect`: the screen must now show the usage view. Read the figures there.
+4. `menu-key --expect-kind usage-view` on that fresh receipt: one `Escape`. The expected text is 3 to 14 distinct lines (the pinned client's plan view has 10 nonblank rows; 11 when the reset date stacks onto its own row in a pane under 58 columns; 12 to 13 when the dashboard URL and subtitle wrap in a pane under 49 or 40 columns)
+   in order: a `Usage` title row first, then the view rows, the usage view's own `View in dashboard:` row (followed by at most two rows of a wrapped URL), and exactly
+   `Esc to close` last. No composer arrow row and no loading or error line. `Esc to close` is shared by every Cursor
+   view, so the dashboard row directly above it is what marks this one. On screen, the expected lines are one
+   contiguous block at the bottom of the visible screen, ending in the footer (blank rows between them do not count;
+   conversation text above the block is ignored), each line appears exactly once, no row of the visible screen is a
+   composer arrow row, and none of `Loading usage data`, `Failed to load usage data`, `Not logged in` or an
+   unavailable-plan line is shown. Another view that shares the footer, or a view that is not (yet) fully shown, gets no
+   `Escape`.
+5. After the `Escape` the helper only reads the pane, up to five looks 0.3 s apart. It succeeds when the footer is gone
+   and the last arrow row is an empty composer: `→ Plan, search, build anything`, `→ Add a follow-up` or
+   `→ Add a follow-up — /plan to review and build`, each optionally followed by `ctrl+c to stop`. A change of pane, pid
+   or owner, or a lost pane, ends the check at once. A capture or locate failure, or a redraw in progress, only costs
+   that look. A real prompt ends the check at once. It reports `postcheck: composer-restored`; otherwise it exits 3 with
+   `post-check-unconfirmed`. The approval stays spent, and no second key and no input is ever sent from the check.
+   Inspect the pane.
+
+From the pinned client source (Cursor 2026.10.14, usage-pager and the `/usage` command): the view is the chat's bottom
+pager, and while it is open the composer and the workspace status row are not rendered at all, only the transcript above
+and the pager. Detail and metric rows are truncated to the pane, not wrapped; the subtitle and the dashboard URL can wrap
+in a narrow pane. The wrapped layouts are modelled from the source and have not been seen on a live pane: the guard
+compares the exact expected rows, so a layout it does not know refuses instead of guessing. Build the expected text from
+a fresh `inspect` of the real view.
+
+The helper sends no key but `Enter` (menu rows) and `Escape` (the checked view). It reads figures from nothing and
+claims no provider measurement time: the figures are whatever the visible view shows at that moment.
 
 ## Answering one approved prompt
 
