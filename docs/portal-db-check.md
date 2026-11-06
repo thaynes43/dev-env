@@ -18,7 +18,7 @@ Exactly one line:
 | `FAIL dns` | 3 | `postgres16-rw.database.svc.cluster.local` did not resolve |
 | `FAIL refused` | 3 | the connection was refused or reset, or the network was unreachable |
 | `FAIL tls` | 3 | the server refused TLS or its certificate failed verification against `ca/ca.crt` |
-| `FAIL auth` | 3 | the TLS handshake succeeded, but the server ended the session before the login completed |
+| `FAIL auth` | 3 | the TLS handshake succeeded, but the server ended the session before the connect, including the read-write check, completed |
 | `FAIL timeout` | 3 | the connect, query or total deadline expired |
 | `FAIL query` | 3 | logged in, but the session is read-only; or `BEGIN`, `SELECT 1` or the rollback failed with a server error or a dropped connection; or `SELECT 1` returned another value |
 | `INTERRUPTED` | 4 | the check was cancelled from outside (SIGTERM, for example a node drain) before it finished |
@@ -35,13 +35,17 @@ deadline is `FAIL timeout`.
   caller cancels during the rollback or the close.
 - A cancel during the close never changes the line.
 - The class is fixed at the moment the ending error is classified. The
-  check reads its context's state then, so in the microsecond window
-  between a non-server error (for example a dropped connection) and its
-  classification, a cancel arriving can turn that `FAIL query` into
-  `INTERRUPTED`. That is fail-safe: no result.
+  check reads its context's state then, so there is a microsecond window
+  between a non-server error and its classification.
+  - A caller cancel in that window turns that `FAIL` (dns, refused, tls,
+    auth or query) into `INTERRUPTED`.
+  - A deadline in the same window gives `FAIL timeout` instead.
+  - `PASS` never goes through that classification, so this is fail-safe:
+    at worst no result, never a false `PASS`.
 
 `FAIL auth` does not only mean a bad password. It covers anything that ends
-the session after the TLS handshake and before the login completes:
+the session after the TLS handshake and before the connect, including the
+read-write check, completes:
 
 - a refused password or role (SQLSTATE class 28);
 - a missing database (3D000);

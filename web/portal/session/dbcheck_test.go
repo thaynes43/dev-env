@@ -901,14 +901,34 @@ func TestDBCheckDecidedResultSurvivesACallerCancel(t *testing.T) {
 
 // TestDBCheckRollbackAndValueAreQueryFailures: after a good login, a server
 // error on the rollback following a good SELECT 1, and a SELECT 1 that
-// returns another value, are FAIL query.
+// returns another value, are FAIL query, over one wire connection with
+// pgx's cleanup finished.
 func TestDBCheckRollbackAndValueAreQueryFailures(t *testing.T) {
 	interceptDBCheckResolver(t)
 	ca := newDBCheckCA(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
 	for _, mode := range []string{"rollback-error", "select-two"} {
 		server := newFakePostgres(ca.leaf(t, productionDBHost), mode)
 		network := &dbCheckNet{server: server}
-		got, _ := checkDatabaseWithin(t, 10*time.Second, writeDBCheckRoot(t, dbCheckFiles(ca.pem)), network.seams())
+		seams := network.seams()
+		closes, cleanedUp := 0, false
+		seams.closed = func(cleanup <-chan struct{}, _ int) {
+			closes++
+			select {
+			case <-cleanup:
+				cleanedUp = true
+			default:
+			}
+		}
+		got, _ := checkDatabaseWithin(t, 10*time.Second, writeDBCheckRoot(t, dbCheckFiles(ca.pem)), seams)
+		if closes != 1 || !cleanedUp {
+			t.Fatalf("%s: close ran %d times, cleanup finished %v", mode, closes, cleanedUp)
+		}
+		network.mu.Lock()
+		dials := len(network.dials)
+		network.mu.Unlock()
+		if dials != 1 {
+			t.Fatalf("%s: %d dials, want one wire connection", mode, dials)
+		}
 		if line, code := DBCheckLine(got); got != DBCheckQuery || line != "FAIL query" || code != 3 {
 			t.Fatalf("%s: class %q line %q code %d, want FAIL query", mode, got, line, code)
 		}

@@ -96,7 +96,7 @@ is the usage error (exit 2), as for `pages-source-check`.
 | `FAIL dns` | 3 | the fixed host did not resolve |
 | `FAIL refused` | 3 | the TCP connection was refused or reset, or the network was unreachable |
 | `FAIL tls` | 3 | TLS was refused or the server certificate failed verification |
-| `FAIL auth` | 3 | after a good TLS handshake, the server ended the session before the login completed |
+| `FAIL auth` | 3 | after a good TLS handshake, the server ended the session before the connect, including the read-write check, completed |
 | `FAIL timeout` | 3 | a connect, query or total deadline expired |
 | `FAIL query` | 3 | logged in, but the session is read-only; or `BEGIN`, `SELECT 1` or the rollback failed with a server error or a dropped connection; or `SELECT 1` returned another value |
 | `INTERRUPTED` | 4 | the caller cancelled the check (SIGTERM, for example during a node drain) before it finished |
@@ -122,17 +122,26 @@ decided when the operation ends, before the close.
   `INTERRUPTED`.
 
 The class is fixed when `dbCheckEnd` classifies the ending error. It reads
-the context's state at that moment. So in the microsecond window between a
-non-server error (for example a dropped connection) and its classification,
-a caller cancel can turn that `FAIL query` into `INTERRUPTED`. That is
-fail-safe (no result) and is documented rather than changed.
+the context's state at that moment, so there is a microsecond window
+between a non-server error and its classification.
+
+- A caller cancel in that window turns that `FAIL` into `INTERRUPTED`. The
+  `FAIL` can be dns, refused, tls, auth or query: for example a DNS
+  not-found, a refused connection, an x509 failure, a drop after TLS, or a
+  dropped query.
+- A deadline expiring in the same window gives `FAIL timeout` instead.
+- `PASS` never passes through `dbCheckEnd`, so the result stays fail-safe:
+  at worst no result, never a false `PASS`.
+
+This is documented rather than changed.
 
 A config fault is found before any network and stays `FAIL config` even
 then. The command's context is SIGTERM-aware, and a cancelled context is
 told apart from an expired deadline: only a deadline is `FAIL timeout`.
 
 `auth` covers any end of the session after a good TLS handshake and before
-the login completes, not only a bad password:
+the connect, including pgx's read-write check (`show transaction_read_only`),
+completes, not only a bad password:
 
 - a refused password or role (SQLSTATE class 28);
 - a missing database (3D000);
@@ -245,10 +254,12 @@ interceptor fails any DNS query.
     `SELECT 1`;
   - a cancel that ends the rollback after a good `SELECT 1` is
     `INTERRUPTED`;
-  - a rollback server error after a good `SELECT 1`, and a wrong `SELECT 1`
-    value, are `FAIL query`.
 
   Each case keeps one wire connection and a finished cleanup.
+- **Query failures** (`TestDBCheckRollbackAndValueAreQueryFailures`): a
+  rollback server error after a good `SELECT 1`, and a wrong `SELECT 1`
+  value, are `FAIL query`. Each sends exactly the four statements, over one
+  wire connection, with cleanup finished.
 - **Bounded close:** a stalled close after a pass, a query deadline and the
   total deadline each return within their bounds with one sanitized line,
   and none dials a second connection.
