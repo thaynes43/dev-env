@@ -128,8 +128,8 @@ box keeps a copy as a stale draft. This happened on the G1 pane on 2026-11-05 at
 held it. The mechanism was read from Cursor's UI code, not observed by pressing
 keys.
 
-With `--submit`, the helper checks two things before typing anything, and
-refuses with `invalid-input`, nothing typed, when either fails:
+With `--submit`, the helper checks three things before typing anything, and
+types nothing when one fails. Two refuse with `invalid-input`:
 
 - The instruction must not contain one of the helper's known prompt phrases
   (the trust, permission, approval and confirmation phrases it classifies, such
@@ -138,6 +138,9 @@ refuses with `invalid-input`, nothing typed, when either fails:
   instruction cannot be submitted with `--submit` at all.
 - The instruction must be at most 800 characters. Cursor shows a longer paste
   as `[Pasted text #N +M lines]`, so its end would never show.
+
+The third: the visible screen of the verified capture must be locatable, or the
+reply ends `prompt-unclear`.
 
 After typing, the helper waits 0.3 s and reads the pane, up to five times. Each
 read does three things:
@@ -156,15 +159,22 @@ Outcomes:
   typing, and no new prompt row has appeared.
 - **A new prompt row appears** that the verified screen did not have, such as
   Cursor's command prompt, above or below the composer: Enter is not sent, and
-  the reply ends with that prompt's kind (for example `modal-approval`). An
-  answered trust box already on the verified screen does not count as new. A
+  the reply ends with that prompt's kind (for example `modal-approval`). Rows are
+  compared by text: a prompt row already on the verified screen is not new. The
+  only such rows are an answered trust box, because any other prompt on the
+  verified screen refuses the reply before typing. A
   prompt worded without any known phrase is not recognised by this check; it is
   caught only if it hides the typed text from the composer count.
-- **The pane, its process or its owner changes,** or the visible screen can no
-  longer be located: Enter is not sent, and the reply ends with that state (for
-  example `pane-replaced` or `prompt-unclear`).
-- **The text never shows** in the composer, or tmux cannot report the pane's
-  identity: Enter is not sent, and the reply ends `send-unconfirmed`.
+- **The pane is gone, or its process or owner changes,** or the visible screen
+  can no longer be located: Enter is not sent, and the reply ends with that
+  state (for example `pane-missing`, `pane-replaced` or `prompt-unclear`).
+- **tmux cannot capture the pane:** Enter is not sent, and the reply ends
+  `inspect-unconfirmed`.
+- **The text never shows** in the composer, or tmux's identity read times out,
+  fails or returns a malformed reply: Enter is not sent, and the reply ends
+  `send-unconfirmed`.
+- **Enter itself fails to send** (tmux error or timeout): the reply ends
+  `send-unconfirmed` and says not to send another Enter.
 
 In each of these after-typing outcomes where Enter is not sent, the reply says
 the literal text was already typed and may be in the composer: do not resend it
