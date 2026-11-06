@@ -101,6 +101,9 @@ is the usage error (exit 2), as for `pages-source-check`.
 | `FAIL query` | 3 | logged in, but the session is read-only or `SELECT 1` failed |
 | `INTERRUPTED` | 4 | the caller cancelled the check (SIGTERM, for example during a node drain) before it finished |
 
+A usage error (an extra argument or flag) prints nothing on stdout,
+`portal usage unavailable` on stderr, and exits 2.
+
 `INTERRUPTED` is no verified database result. It does not claim that no
 query ran, only that the check did not finish. A config fault is found
 before any network and stays `FAIL config` even then. The command's context

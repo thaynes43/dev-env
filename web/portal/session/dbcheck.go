@@ -12,8 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// The db-check classes (DESIGN-056). The command prints "PASS",
-// "FAIL <class>" or "INTERRUPTED" and nothing else.
+// The db-check classes (DESIGN-056). The command prints exactly one line:
+// "PASS" (exit 0), "FAIL <class>" (exit 3) or "INTERRUPTED" (exit 4, no usable
+// verdict); a usage error exits 2 with nothing on stdout.
 const (
 	DBCheckConfig  = "config"
 	DBCheckDNS     = "dns"

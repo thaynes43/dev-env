@@ -3,7 +3,9 @@
 // select 1Password items or migrate the database.
 //
 // Two fixed diagnostics run instead of the server: pages-source-check and
-// db-check (DESIGN-056). db-check prints only "PASS" or "FAIL <class>".
+// db-check (DESIGN-056). db-check prints exactly one line on stdout: "PASS"
+// (exit 0), "FAIL <class>" (exit 3) or "INTERRUPTED" (exit 4, no usable
+// verdict). A usage error prints only to stderr and exits 2.
 package main
 
 import (
