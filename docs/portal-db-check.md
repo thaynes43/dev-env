@@ -318,7 +318,9 @@ recorded as a check result. Before recording it, check once more that the
 Job still does not exist: a late Flux apply would still run the check.
 
 Then open the follow-up PR that removes the Job's manifest and
-Kustomization; Flux prunes the Job and its pod.
+Kustomization, and the `DB_CHECK_KS` exception in haynes-ops
+`scripts/tests/portal178-m5d/test_component.py` (its policy-dependents
+check fails until both go); Flux prunes the Job and its pod.
 
 **No output and `INTERRUPTED` are "not run", not a db-check result.**
 
