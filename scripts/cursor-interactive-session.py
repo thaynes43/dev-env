@@ -681,7 +681,8 @@ def phrase_rows(visible):
 def wait_until_shown(state, text, before):
     """True once the composer shows the text's tail more often than before it was typed.
     Refuses (Enter not sent) when the pane changes owner or process, or a prompt row appears
-    that the verified screen did not have (an answered trust box already there stays allowed)."""
+    anywhere on the visible screen that the verified screen did not have (an answered trust
+    box already there stays allowed)."""
     before_count, before_prompts = before
     for _ in range(SUBMIT_CHECKS):
         time.sleep(SUBMIT_SETTLE_SECONDS)

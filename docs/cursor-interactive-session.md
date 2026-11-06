@@ -128,40 +128,49 @@ box keeps a copy as a stale draft. This happened on the G1 pane on 2026-11-05 at
 held it. The mechanism was read from Cursor's UI code, not observed by pressing
 keys.
 
-So with `--submit`, the helper waits 0.3 s after the text, then reads the pane up
-to five times. On each read it checks the same pane, process and owner, and looks
-only at the composer: the visible screen from its last `→`, `>`, `›` or `❯` row
-down, ignoring wrapping whitespace. The same text in the transcript or history
-does not count. Outcomes:
+With `--submit`, the helper checks two things before typing anything, and
+refuses with `invalid-input`, nothing typed, when either fails:
 
-- The composer shows the instruction's last 24 non-space characters more often
-  than before typing: Enter is sent.
-- A prompt row appears above the composer that the verified screen did not have,
-  such as Cursor's command prompt: Enter is not sent, and the reply ends with that
-  prompt's kind. A "prompt row" is a row holding one of the helper's known prompt
-  phrases (the trust, permission, approval and confirmation phrases it
-  classifies, such as `Run this command?` or `(y/n)`). Every visible row is
-  checked, the composer rows included, so such a prompt drawn below the composer
-  is seen too. A prompt worded in some other way is not recognised by this check;
-  it can only be caught by the text check (its rows hide the typed text).
-- The pane, its process or its owner changes during the wait, or the screen can
-  no longer be read: Enter is not sent, and the reply ends with that state (for
-  example `pane-replaced` or `prompt-unclear`), saying the text was already typed.
-- The instruction contains a known prompt phrase (such as `yes/no` or `Run this
-  command?`): refused before anything is typed (`invalid-input`), because its
-  echo could not be told apart from a real prompt with the same words. This is a
-  limitation: such an instruction cannot be submitted with `--submit` at all.
-- The text never shows, or tmux cannot report the pane's identity during the
-  wait: Enter is not sent, and the reply ends `send-unconfirmed`. (A screen that
-  cannot be read during the wait ends with its own state, such as
-  `prompt-unclear`, as in the previous item.)
-- The instruction is over 800 characters: refused before anything is typed
-  (`invalid-input`), because Cursor shows a longer paste as `[Pasted text #N +M
-  lines]` and its end would never show.
+- The instruction must not contain one of the helper's known prompt phrases
+  (the trust, permission, approval and confirmation phrases it classifies, such
+  as `yes/no`, `(y/n)` or `Run this command?`). Its echo could not be told apart
+  from a real prompt with the same words. This is a limitation: such an
+  instruction cannot be submitted with `--submit` at all.
+- The instruction must be at most 800 characters. Cursor shows a longer paste
+  as `[Pasted text #N +M lines]`, so its end would never show.
 
-When Enter is not sent, the text may be in the composer: do not resend it or send
-Enter; inspect again. The fence narrows the race; it does not prove Cursor
-cleared the box, so inspect after every reply.
+After typing, the helper waits 0.3 s and reads the pane, up to five times. Each
+read does three things:
+
+1. It checks that the pane, its process and its owner are the same.
+2. It looks for prompt rows: rows holding one of the known prompt phrases,
+   anywhere on the visible screen, the composer rows included.
+3. It counts the instruction's last 24 non-space characters in the composer
+   only. The composer is the visible screen from its last `→`, `>`, `›` or `❯`
+   row down; wrapping whitespace is ignored, and the same text in the
+   transcript or history above does not count.
+
+Outcomes:
+
+- **Enter is sent:** the composer shows the tail more often than before
+  typing, and no new prompt row has appeared.
+- **A new prompt row appears** that the verified screen did not have, such as
+  Cursor's command prompt, above or below the composer: Enter is not sent, and
+  the reply ends with that prompt's kind (for example `modal-approval`). An
+  answered trust box already on the verified screen does not count as new. A
+  prompt worded without any known phrase is not recognised by this check; it is
+  caught only if it hides the typed text from the composer count.
+- **The pane, its process or its owner changes,** or the visible screen can no
+  longer be located: Enter is not sent, and the reply ends with that state (for
+  example `pane-replaced` or `prompt-unclear`).
+- **The text never shows** in the composer, or tmux cannot report the pane's
+  identity: Enter is not sent, and the reply ends `send-unconfirmed`.
+
+In each of these after-typing outcomes where Enter is not sent, the reply says
+the literal text was already typed and may be in the composer: do not resend it
+or send Enter; inspect again. (The two `invalid-input` refusals above happen
+before anything is typed, so nothing is in the composer from them.) The fence narrows the race; it does not prove Cursor cleared the
+box, so inspect after every reply.
 
 Fail closed, with no keys and no Enter:
 
