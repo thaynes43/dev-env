@@ -690,6 +690,9 @@ if len(ANSWERED_SCREEN.splitlines()) != 24:
 COMMAND = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") / "g1-command-approval.json")
                      .read_text(encoding="utf-8"))
 COMMAND_ROWS = COMMAND["capture"].split("\n")
+REVIEW_FOOTER = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") /
+                           "command-approval-review-footer.json").read_text(encoding="utf-8"))
+REVIEW_FOOTER_ROWS = REVIEW_FOOTER["capture"].split("\n")
 # The same prompt with three approvals queued (2026-11-05T20:36:55Z, Cursor CLI 2026.10.14-0f9edde),
 # anonymized: "Approval 1 of 3" under the divider and "←/→ to switch approval" after the Skip row.
 QUEUE = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") / "g1-command-approval-queue.json")
@@ -2292,6 +2295,129 @@ class AnswerTests(AnswerFixture):
                 del rows[0]
         self.assertEqual(len(rows), len(COMMAND_ROWS))
         return rows
+
+    def review_footer_screen(self, rows=None):
+        self.screen("\n".join(REVIEW_FOOTER_ROWS if rows is None else rows) + "\n", visible=24, cursor=23)
+
+    def test_review_footer_capture_sends_only_one_literal_y(self):
+        fixture = REVIEW_FOOTER
+        self.assertEqual(__import__("hashlib").sha256(fixture["capture"].encode()).hexdigest(), fixture["captureSha256"])
+        self.assertEqual(len(REVIEW_FOOTER_ROWS), fixture["geometry"]["history_size"] + 24)
+        self.assertEqual(REVIEW_FOOTER_ROWS[-2], " " * 48 + "ctrl+r to review changed files")
+        self.review_footer_screen()
+        inspected = self.start_and_inspect()
+        code, answered = self.answer_command(inspected["receipt"], text=fixture["expectedText"])
+        self.assertEqual((code, answered["state"]), (0, "answered"), answered.get("detail"))
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "y"]])
+        self.assertEqual(json.loads(self.ledger().read_text())["outcome"], "sent")
+        self.answer_command(inspected["receipt"], text=fixture["expectedText"])
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_review_footer_is_exact_ascii_padded_ui_chrome_only(self):
+        footer = "ctrl+r to review changed files"
+        # Full captured modal, not a minimal synthetic box. Only mutate its tail.
+        tails = {
+            "changed case": [footer.upper()], "changed key": [footer.replace("r", "s", 1)],
+            "changed text": [footer + " now"], "prefix": ["extra " + footer],
+            "wrapped": ["ctrl+r to review", "changed files"], "duplicate": [footer, footer],
+            "nbsp": ["\u00a0" + footer], "tab": ["\t" + footer],
+            "box padding": ["\u2502 " + footer], "box after": [footer + " \u2502"],
+            "extra row": [footer, "queued: git push"],
+            "error and hint": ["Error: Agent stopped retrying", footer],
+        }
+        for label, tail in tails.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.review_footer_screen(REVIEW_FOOTER_ROWS[:-3] + tail + [""])
+                inspected = self.start_and_inspect()
+                approval = self.case_approval(label)
+                code, refused = self.answer_command(inspected["receipt"], text=REVIEW_FOOTER["expectedText"], approval=approval)
+                self.assertEqual((code, refused["state"]), (2, "prompt-unclear"))
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.ledger(approval).exists())
+
+    def test_review_footer_cannot_rescue_an_unbound_command(self):
+        rows = REVIEW_FOOTER_ROWS
+        first = len(rows) - 24
+        changes = {
+            "command changed": {first + 11: rows[first + 11].replace("date", "echo")},
+            "path changed": {first + 12: rows[first + 12].replace("example-regression", "different-worktree")},
+            "divider changed": {first + 10: "-" * 80},
+            "skip missing": {first + 20: ""},
+            "command missing": {first + 11: ""},
+            "footer inside command": {first + 13: "ctrl+r to review changed files"},
+            "another modal": {first + 5: " Permission required"},
+            "composer after": {first + 23: ">"},
+            "duplicate prompt above": {first + 5: " Run this command?"},
+        }
+        for label, altered in changes.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                changed = list(rows)
+                for i, row in altered.items():
+                    changed[i] = row
+                self.review_footer_screen(changed)
+                inspected = self.start_and_inspect()
+                approval = self.case_approval(label)
+                code, refused = self.answer_command(inspected["receipt"], text=REVIEW_FOOTER["expectedText"], approval=approval)
+                self.assertEqual(code, 2, refused)
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.ledger(approval).exists())
+        # A history copy cannot supply the live prompt even with the real footer below it.
+        self.restart_case()
+        self.review_footer_screen(rows + [""] * 22 + [rows[-2], ""])
+        inspected = self.start_and_inspect()
+        code, refused = self.answer_command(inspected["receipt"], text=REVIEW_FOOTER["expectedText"])
+        self.assertEqual((code, refused["state"]), (2, "stale-prompt"))
+        self.assertEqual(self.sends(), [])
+
+    def test_review_footer_rejection_and_uncertain_send_are_one_shot(self):
+        for choice, mode, state in (("ctrl-c", "", "answered"), ("y", "send-fail", "answer-unconfirmed")):
+            with self.subTest(choice=choice, mode=mode):
+                self.restart_case()
+                self.review_footer_screen()
+                inspected = self.start_and_inspect()
+                approval = self.case_approval(choice + mode)
+                args = self.answer_args(inspected["receipt"], choice=choice, kind="modal-approval", approval=approval,
+                                        expect=self.command_expect(REVIEW_FOOTER["expectedText"]))
+                code, result = self.invoke("answer", args, mode=mode)
+                self.assertEqual(result["state"], state)
+                self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "C-c"]] if choice == "ctrl-c" else
+                                 [["send-keys", "-t", "%7", "-l", "--", "y"]])
+                self.invoke("answer", args)
+                self.assertEqual(len(self.sends()), 1)
+
+    def test_review_footer_changes_preserve_receipt_and_spent_ledger_fences(self):
+        self.review_footer_screen()
+        inspected = self.start_and_inspect()
+        changed = list(REVIEW_FOOTER_ROWS)
+        changed[-2] += " extra"
+        self.review_footer_screen(changed)
+        code, refused = self.answer_command(inspected["receipt"], text=REVIEW_FOOTER["expectedText"])
+        self.assertEqual((code, refused["state"]), (2, "stale-receipt"))
+        self.assertFalse(self.ledger().exists())
+        self.assertEqual(self.sends(), [])
+        self.review_footer_screen()
+        inspected = self.inspect_now()
+        args = argparse.Namespace(name=self.name, tmux=self.tmux, receipt=inspected["receipt"], approval_ref=APPROVAL,
+                                  expect_kind="modal-approval", expect_text_file=str(self.command_expect(REVIEW_FOOTER["expectedText"])),
+                                  choice="y", trust_path=None)
+        original = helper.spend_approval
+        def spend_then_change(path, entry):
+            original(path, entry)
+            self.capture.write_text("\n".join(changed) + "\n")
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(helper, "spend_approval", spend_then_change):
+            with self.assertRaises(helper.Refusal) as caught:
+                helper.answer_session(args)
+        self.assertEqual(caught.exception.state, "prompt-changed")
+        self.assertEqual(json.loads(self.ledger().read_text())["outcome"], "not-sent")
+        self.assertEqual(self.state()["receipt_id"], "")
+        self.assertEqual(self.sends(), [])
+        self.review_footer_screen()
+        newer = self.inspect_now()
+        code, refused = self.answer_command(newer["receipt"], text=REVIEW_FOOTER["expectedText"])
+        self.assertEqual((code, refused["state"]), (2, "approval-spent"))
+        self.assertEqual(self.sends(), [])
 
     def test_command_fixture_is_the_captured_shape(self):
         geometry = COMMAND["geometry"]

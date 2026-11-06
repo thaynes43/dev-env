@@ -364,6 +364,17 @@ supported observation settles it; it is never answered again under the same
 approval. No prompt text or
 instruction is stored or printed.
 
+The pinned Cursor 2026.10.14 command decision can also show the separate
+`ctrl+r to review changed files` footer beneath its Skip/switch row. For a
+command prompt bound under its full-width divider, the trailing rows must be
+blank or contain exactly one such footer, with only ASCII spaces trimmed.
+Changed text, duplicate hints, tabs, nonbreaking spaces, box padding, error
+rows or other trailing content still refuse. The footer is UI chrome, excluded
+from the expected command text; it grants no approval and changes no receipt,
+pane/process/owner, one-key or spent-ledger check. It does not qualify another
+client version or arbitrary trailing UI. The complete sanitized 80x24 capture
+and its renderer reference are in `command-approval-review-footer.json`.
+
 ### The prompt must be the current screen
 
 The capture asks tmux for 80 history rows and the visible pane

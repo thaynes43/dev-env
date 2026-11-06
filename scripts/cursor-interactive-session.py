@@ -56,6 +56,9 @@ ALLOWED_FLAGS = ("--workspace", "--model")
 DIVIDER = "\u2500"
 COMMAND_CHOICE = "y"
 PENDING_STATUS = "waiting for approval"
+# Pinned Cursor 2026.10.14 renderer: a separate dim, right-aligned footer beneath
+# the command decision. It is UI chrome, never part of the expected command.
+COMMAND_REVIEW_FOOTER = "ctrl+r to review changed files"
 # Cursor's command prompt with more than one command waiting: a counter row under the divider
 # and a switch hint after the Skip row. Run (once), y, answers only the approval shown.
 QUEUE_HEADER = re.compile(r"Approval ([1-9][0-9]?) of ([1-9][0-9]?)")
@@ -1107,8 +1110,8 @@ def phrases(row):
 
 def check_divider_prompt(visible, boxes, first, last, width, lines):
     """Cursor's command prompt: rows first..last are not in a box, sit directly under a
-    divider row that spans the pane, and have only blank rows after them to the pane
-    bottom. No other row on the visible screen holds a prompt phrase, except Cursor's
+    divider row that spans the pane, and have only blank rows or one exact review
+    footer after them to the pane bottom. No other row on the visible screen holds a prompt phrase, except Cursor's
     status line for the pending command.
 
     The command is not in a box, so only spaces pad its rows: with spaces alone taken
@@ -1120,7 +1123,8 @@ def check_divider_prompt(visible, boxes, first, last, width, lines):
     if first < 1 or visible[first - 1] != DIVIDER * width:
         raise Refusal("prompt-unclear", "The command prompt is not directly under a divider row across the pane. "
                                         "Nothing was sent.")
-    if any(row.strip(" ") for row in visible[last + 1:]):
+    tail = [row.strip(" ") for row in visible[last + 1:] if row.strip(" ")]
+    if tail not in ([], [COMMAND_REVIEW_FOOTER]):
         raise Refusal("prompt-unclear", "Something follows the command prompt before the pane bottom. Nothing was sent.")
     if any(phrases(row) - {PENDING_STATUS} for row in visible[:first] + visible[last + 1:]):
         raise Refusal("prompt-unclear", "Another prompt is on the visible screen. Nothing was sent.")
