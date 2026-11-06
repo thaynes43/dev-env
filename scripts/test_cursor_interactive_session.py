@@ -2746,10 +2746,15 @@ class AnswerTests(AnswerFixture):
         self.assertIn("Enter was NOT sent", refused["detail"])
         self.assertNotIn(["send-keys", "-t", "%7", "Enter"], self.sends())
 
-    def test_submit_sends_an_instruction_that_contains_a_prompt_phrase(self):
-        # The composer shows the typed instruction; its own words are not a new prompt.
-        code, sent = self.submit("answer yes/no: are you sure the tests pass (y/n)")
-        self.assertEqual((code, sent["state"], sent["submitted"]), (0, "sent", True))
+    def test_submit_refuses_an_instruction_that_contains_a_prompt_phrase(self):
+        # Its echo could not be told apart from a real prompt with the same words, so a
+        # --submit instruction must not contain one; nothing is typed.
+        for text in ("answer yes/no: do the tests pass", "say Run this command? to me", "are you sure"):
+            with self.subTest(text=text):
+                self.restart_case()
+                code, refused = self.submit(text)
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+                self.assertEqual(self.sends(), [])
 
     def test_submit_refuses_enter_when_a_prompt_appears_under_a_quoted_transcript_row(self):
         # A "> " quote in the transcript looks like a composer row; the prompt below it must
@@ -2772,16 +2777,12 @@ class AnswerTests(AnswerFixture):
         self.assertNotIn(["send-keys", "-t", "%7", "Enter"], self.sends())
 
     def test_phrase_rows_sees_a_prompt_below_the_composer(self):
-        text = "continue the source helper"
-        below = ["  Cursor Agent", "  \u2192 " + text, "  Are you sure? (y/n)", ""]
-        # A prompt drawn under the composer, with no marker row of its own, is seen.
-        self.assertEqual(helper.phrase_rows(below, text), {"Are you sure? (y/n)"})
-        # The instruction's own words on the composer rows are not a prompt.
-        own = ["  Cursor Agent", "  \u2192 answer yes/no: are you sure (y/n)", ""]
-        self.assertEqual(helper.phrase_rows(own, "answer yes/no: are you sure (y/n)"), set())
-        # A prompt phrase on a composer row that the instruction does not contain is seen.
+        # An unmarked prompt drawn under the composer is seen (the old fence skipped it).
+        below = ["  Cursor Agent", "  \u2192 continue the source helper", "  Are you sure? (y/n)", ""]
+        self.assertEqual(helper.phrase_rows(below), {"Are you sure? (y/n)"})
+        # A real prompt row on the composer rows is seen too.
         other = ["  Cursor Agent", "  \u2192 continue", "  Run this command?", ""]
-        self.assertEqual(helper.phrase_rows(other, "continue"), {"Run this command?"})
+        self.assertEqual(helper.phrase_rows(other), {"Run this command?"})
 
     def test_submit_counts_the_text_only_after_the_last_composer_row(self):
         screen = ["> continue the source helper", "", "  \u2192 Add a follow-up", ""]

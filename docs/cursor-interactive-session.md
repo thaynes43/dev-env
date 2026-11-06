@@ -138,10 +138,11 @@ does not count. Outcomes:
   than before typing: Enter is sent.
 - A prompt row appears above the composer that the verified screen did not have,
   such as Cursor's command prompt: Enter is not sent, and the reply ends with that
-  prompt's kind. Words in the instruction are normally not taken for a prompt;
-  if a wrapped continuation row starts with `>`, `›` or `❯`, earlier composer
-  rows count as above the composer and a prompt phrase there can give a false
-  prompt kind. Enter is then not sent, so it fails safe.
+  prompt's kind. Every visible row is checked, the composer rows included, so a
+  prompt drawn below the composer is seen too.
+- The instruction contains a known prompt phrase (such as `yes/no` or `Run this
+  command?`): refused before anything is typed (`invalid-input`), because its
+  echo could not be told apart from a real prompt with the same words.
 - The text never shows, or the screen cannot be read: Enter is not sent, and the
   reply ends `send-unconfirmed`.
 - The instruction is over 800 characters: refused before anything is typed

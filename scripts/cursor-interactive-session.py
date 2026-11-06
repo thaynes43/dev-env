@@ -671,21 +671,11 @@ def tail_count(visible, text):
     return composer_text(visible).count("".join(text.split())[-SUBMIT_TAIL:])
 
 
-def phrase_rows(visible, text=""):
-    """The visible rows that hold a known prompt phrase. On the composer rows (the last
-    composer row down), a row is skipped only when every phrase on it is in the typed
-    instruction itself, so the instruction's own words are not taken for a prompt while a
-    prompt drawn below the composer is still seen."""
-    starts = [index for index, row in enumerate(visible) if COMPOSER_ROW.match(row)]
-    first = starts[-1] if starts else len(visible)
-    typed = text.casefold()
-    found = set()
-    for index, row in enumerate(visible):
-        hits = phrases(row)
-        if not hits or (index >= first and all(hit in typed for hit in hits)):
-            continue
-        found.add(row.strip())
-    return found
+def phrase_rows(visible):
+    """The visible rows that hold a known prompt phrase, the composer rows included: a
+    --submit instruction never contains a prompt phrase (refused up front), so its echo
+    cannot be taken for a prompt, and a prompt drawn anywhere on screen is seen."""
+    return {row.strip() for row in visible if phrases(row)}
 
 
 def wait_until_shown(state, text, before):
@@ -699,7 +689,7 @@ def wait_until_shown(state, text, before):
         require_same_pane(state, ident)
         captured, truncated, rows_total = read_capture_rows(state["tmux"], state["pane_id"])
         visible = visible_screen(captured, truncated, rows_total, ident)
-        new = phrase_rows(visible, text) - before_prompts
+        new = phrase_rows(visible) - before_prompts
         if new:
             kinds = modal_kinds(sorted(new))
             raise Refusal(sorted(kinds)[0], "A prompt appeared after the literal text was sent, so Enter was NOT sent. "
@@ -773,6 +763,10 @@ def reply_locked(args, instruction, answered_text=None):
         raise Refusal("unclassified-ui", CLASSIFICATION_DETAILS["unclassified"] + " Nothing was sent.")
     if kind not in {"active", "unclassified"}:
         raise Refusal("unclassified-ui", "Cursor UI cannot be classified safely. Nothing was sent.")
+    if args.submit and phrases(instruction):
+        raise Refusal("invalid-input", "With --submit the instruction must not contain a prompt phrase (such as yes/no or "
+                                       "\"Run this command?\"): its echo could not be told apart from a real prompt. "
+                                       "Reword it, or send it without --submit. Nothing was sent.")
     if args.submit and len(instruction) > SUBMIT_MAX_CHARS:
         raise Refusal("invalid-input", "With --submit the instruction must be at most 800 characters: Cursor shows a "
                                        "longer paste as a placeholder, so its end would never show. Nothing was sent.")
@@ -780,7 +774,7 @@ def reply_locked(args, instruction, answered_text=None):
     if args.submit:
         try:
             verified = visible_screen(text, truncated, rows_total, ident)
-            before = (tail_count(verified, instruction), frozenset(phrase_rows(verified, instruction)))
+            before = (tail_count(verified, instruction), frozenset(phrase_rows(verified)))
         except Refusal:
             raise Refusal("prompt-unclear", "The visible screen cannot be located, so a submit cannot be fenced. "
                                             "Nothing was sent.")
