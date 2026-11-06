@@ -513,7 +513,9 @@ when the expected text shows `(y)` at the end of exactly one row and no
 - the rows are not inside a box;
 - the row directly above the first expected row is the divider: `─` repeated
   exactly the pane width, nothing else;
-- every row after the last expected row, to the pane bottom, is blank;
+- every row after the last expected row, to the pane bottom, is blank, except
+  for at most one exact ASCII-space-padded `ctrl+r to review changed files`
+  UI footer (the pinned layout above);
 - no other row on the visible screen holds a known prompt phrase, except
   Cursor's own `Waiting for approval...` status line for the pending command,
   which it shows above the divider.
@@ -610,9 +612,9 @@ as `Error: <title>` (for example `Error: Agent stopped retrying` or
 2026-11-05T21:41:47Z; anonymized capture
 [`g1-command-approval-aborted.json`](../scripts/cursor-interactive-session-fixtures/g1-command-approval-aborted.json)).
 The expected text for a rejection may then end with the footer rows, after the
-Skip row or the switch hint, once. Any row after the Skip row or the hint
-refuses `y`, and refuses `ctrl-c` unless those rows start with one `Error: `
-line: a command whose turn may have ended is never approved. After one rejection,
+Skip row or the switch hint, once. Apart from the exact UI review footer,
+any nonblank row after the Skip row or the hint refuses `y`, and refuses
+`ctrl-c` unless those rows start with one `Error: ` line: a command whose turn may have ended is never approved. After one rejection,
 the last decision shows alone, without the counter row or hint, and needs a
 fresh `inspect` and its own approval reference.
 

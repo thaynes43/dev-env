@@ -1,5 +1,5 @@
 {
-  "provenance": "Captured Cursor CLI 2026.10.14-0f9edde, 2026-11-06T16:06:25Z. Complete bounded capture: historical text replaced by same-length h rows; public task directory replaced by same-length example-regression. Visible row geometry, wrapping, command, divider, choices and footer preserved.",
+  "provenance": "Captured bounded/normalized helper inspect text from Cursor CLI 2026.10.14-0f9edde, 2026-11-06T16:06:25Z (inspect truncated:true). The complete visible 24 rows preserve geometry/wrapping/command/divider/choices/footer, with a same-length public directory substitution. The preceding 56 bounded historical rows are replaced by same-length h placeholders; history_size:56 is reconstructed test geometry, not measured live tmux history_size or raw capture. A separate test covers actual helper truncation of a synthetic 104-row capture.",
   "clientVersion": "2026.10.14-0f9edde",
   "geometry": {
     "pane_width": 80,

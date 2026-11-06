@@ -2371,6 +2371,53 @@ class AnswerTests(AnswerFixture):
         self.assertEqual((code, refused["state"]), (2, "stale-prompt"))
         self.assertEqual(self.sends(), [])
 
+    def test_review_footer_refuses_screen_and_expected_co_omissions(self):
+        original = REVIEW_FOOTER_ROWS
+        offset = len(original) - 24
+        for label, index, expected_line in (("command start", offset + 11, 0),
+                                             ("skip", offset + 20, -1),
+                                             ("question", offset + 14, 2)):
+            with self.subTest(label=label):
+                self.restart_case()
+                rows = list(original)
+                del rows[index]
+                rows.append("")
+                expected = REVIEW_FOOTER["expectedText"].splitlines()
+                del expected[expected_line]
+                self.review_footer_screen(rows)
+                inspected = self.start_and_inspect()
+                approval = self.case_approval("co-omission " + label)
+                code, refused = self.answer_command(inspected["receipt"], text="\n".join(expected) + "\n", approval=approval)
+                self.assertEqual(code, 2, refused)
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.ledger(approval).exists())
+
+    def test_review_footer_with_truncated_history_and_queue(self):
+        # More than MAX_LINES captured: complete visible pane, bounded history.
+        self.review_footer_screen(["older history"] * 24 + REVIEW_FOOTER_ROWS)
+        inspected = self.start_and_inspect()
+        self.assertTrue(inspected["truncated"])
+        code, answered = self.answer_command(inspected["receipt"], text=REVIEW_FOOTER["expectedText"])
+        self.assertEqual((code, answered["state"]), (0, "answered"))
+        self.assertEqual(len(self.sends()), 1)
+        for label, omit in (("complete", None), ("hint missing", "\u2190/\u2192 to switch approval"),
+                            ("header missing", "Approval 1 of 3")):
+            with self.subTest(label=label):
+                self.restart_case()
+                rows = list(QUEUE_ROWS)
+                rows[-2] = " " * 48 + "ctrl+r to review changed files"
+                expected = QUEUE["expectedText"].splitlines()
+                if omit is not None:
+                    rows = ["" if r.strip(" ") == omit else r for r in rows]
+                    expected.remove(omit)
+                self.queue_screen(rows)
+                inspected = self.start_and_inspect()
+                approval = self.case_approval("footer queue " + label)
+                code, result = self.answer_command(inspected["receipt"], text="\n".join(expected) + "\n", approval=approval)
+                self.assertEqual(code, 0 if omit is None else 2, result)
+                self.assertEqual(len(self.sends()), 1 if omit is None else 0)
+                self.assertEqual(self.ledger(approval).exists(), omit is None)
+
     def test_review_footer_rejection_and_uncertain_send_are_one_shot(self):
         for choice, mode, state in (("ctrl-c", "", "answered"), ("y", "send-fail", "answer-unconfirmed")):
             with self.subTest(choice=choice, mode=mode):

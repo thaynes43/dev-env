@@ -67,8 +67,9 @@ QUEUE_HINT = "\u2190/\u2192 to switch approval"
 # active decision only. It is never sent outside the command prompt.
 REJECT_CHOICE = "ctrl-c"
 # Cursor draws a turn error under the prompt as "Error: <title>" (Agent stopped retrying,
-# Connection failed, ...). With any row after the Skip row or the switch hint, only a
-# rejection may be answered, and those rows must start with such an error line; approving a
+# Connection failed, ...). Apart from the exact UI review footer, with any nonblank
+# row after the Skip row or switch hint only rejection may be answered, and those
+# rows must start with such an error line; approving a
 # command its turn may no longer await is refused.
 ERROR_PREFIX = "Error: "
 SKIP_SUFFIX = "(esc or n)"
@@ -1126,6 +1127,18 @@ def check_divider_prompt(visible, boxes, first, last, width, lines):
     tail = [row.strip(" ") for row in visible[last + 1:] if row.strip(" ")]
     if tail not in ([], [COMMAND_REVIEW_FOOTER]):
         raise Refusal("prompt-unclear", "Something follows the command prompt before the pane bottom. Nothing was sent.")
+    if tail:
+        # Unlike a blank tail, this exception must not make a cropped command
+        # answerable when the caller also crops its expected text. Bind the
+        # pinned renderer's command start, question and full decision end.
+        body = prompt_rows(lines)
+        command = body[1:] if QUEUE_HEADER.fullmatch(body[0]) else body
+        end = body[-2] if body[-1] == QUEUE_HINT else body[-1]
+        skip = "Skip & tell the agent what to do instead " + SKIP_SUFFIX
+        if (not command or not command[0].startswith("$ ") or body.count("Run this command?") != 1
+                or body.count(skip) != 1 or end != skip):
+            raise Refusal("prompt-unclear", "The review footer requires a complete command start, question and Skip row. "
+                                            "Nothing was sent.")
     if any(phrases(row) - {PENDING_STATUS} for row in visible[:first] + visible[last + 1:]):
         raise Refusal("prompt-unclear", "Another prompt is on the visible screen. Nothing was sent.")
     if [row.strip(" ") for row in visible[first:last + 1] if row.strip(" ")] != lines:
