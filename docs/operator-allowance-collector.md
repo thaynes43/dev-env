@@ -80,9 +80,12 @@ questions.
   read exposes a provider measurement clock (`providerObservedAt` stays null). So
   each current measure is `unknown` with the reason `provider time missing`. That
   is by design, not a fault of a given capture: the config parser refuses a metric
-  rule that is not historical-only, and the cached reader clears any payload that
-  labels a historical measure current. The guard is not weakened to make a
-  current value appear, and no provider time, period or reset is ever invented.
+  rule that is not historical-only. Two places act on a current label that sits on
+  a historical measure, and they differ. The cached reader resets only that current
+  measure to `unknown`; the observation stays, so the last-reported value is still
+  shown. The publish path refuses the whole report. The guard is not weakened to
+  make a current value appear, and no provider time, period or reset is ever
+  invented.
 
 Collection recency is a third, independent fact: `collectionFreshness` says
 whether the last supported read succeeded (`fresh`, with the reason that the
