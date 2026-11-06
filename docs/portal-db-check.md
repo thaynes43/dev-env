@@ -43,9 +43,14 @@ connect, the read-only transaction and its rollback. Inside it:
 - the connect has the store's 5 s `connect_timeout`;
 - the read-only transaction has 3 s.
 
-After a successful connect, the close has its own deadline of at most 1 s.
-If the peer stalls, the connection is cut at that deadline. So the check
+After a successful connect, the close has its own deadline of at most 1 s,
+including the driver's background cleanup of an interrupted connection. If
+the peer stalls, the connection is cut inside that deadline. So the check
 returns within 11 s. A failed connect is closed by the driver at once.
+
+The check opens exactly one connection. If a deadline interrupts the query,
+the driver would dial again to send a cancel request; the check refuses that
+dial, so it never reaches the database.
 
 ## What it reads
 

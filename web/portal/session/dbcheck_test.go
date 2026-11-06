@@ -35,6 +35,10 @@ const dbCheckPassword = "fixture-db-password-not-a-secret"
 // routes it, in memory, to the fake server.
 const dbCheckFixtureIP = "192.0.2.10"
 
+// dbCheckFixtureIP2 is a second documentation address for the two-address
+// lookup case.
+const dbCheckFixtureIP2 = "192.0.2.11"
+
 type dbCheckCA struct {
 	cert *x509.Certificate
 	key  *ecdsa.PrivateKey
@@ -228,6 +232,10 @@ func (f *fakePostgres) answer(backend *pgproto3.Backend, conn net.Conn, statemen
 		case "hang-query":
 			_, _ = conn.Read(make([]byte, 1))
 			return false
+		case "stall-query":
+			// Never answer and never read again, as a stalled peer.
+			<-f.release
+			return false
 		case "query-error":
 			backend.Send(&pgproto3.ErrorResponse{Severity: "ERROR", Code: "42501", Message: "permission denied for fixture"})
 			backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'E'})
@@ -261,6 +269,7 @@ func (f *fakePostgres) answer(backend *pgproto3.Backend, conn net.Conn, statemen
 // that address into an in-memory pipe to the fake server.
 type dbCheckNet struct {
 	server    *fakePostgres
+	second    *fakePostgres // served at dbCheckFixtureIP2 when set
 	lookupErr error
 	dialErr   error
 
@@ -281,6 +290,9 @@ func (n *dbCheckNet) seams() dbCheckSeams {
 			if host != productionDBHost {
 				return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
 			}
+			if n.second != nil {
+				return []string{dbCheckFixtureIP, dbCheckFixtureIP2}, nil
+			}
 			return []string{dbCheckFixtureIP}, nil
 		},
 		dial: func(_ context.Context, network, addr string) (net.Conn, error) {
@@ -290,11 +302,17 @@ func (n *dbCheckNet) seams() dbCheckSeams {
 			if n.dialErr != nil {
 				return nil, n.dialErr
 			}
-			if network != "tcp" || addr != net.JoinHostPort(dbCheckFixtureIP, "5432") || n.server == nil {
+			target := n.server
+			if n.second != nil && addr == net.JoinHostPort(dbCheckFixtureIP2, "5432") {
+				target = n.second
+			} else if addr != net.JoinHostPort(dbCheckFixtureIP, "5432") {
+				target = nil
+			}
+			if network != "tcp" || target == nil {
 				return nil, &net.OpError{Op: "dial", Net: network, Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
 			}
 			client, server := net.Pipe()
-			go n.server.serve(newBufferedServerConn(server))
+			go target.serve(newBufferedServerConn(server))
 			return client, nil
 		},
 		connectTimeout: 2 * time.Second,
@@ -605,9 +623,13 @@ func TestDBCheckAuthCoversEveryRefusalAfterTLS(t *testing.T) {
 }
 
 // TestDBCheckCloseIsBounded: the operation has its 10 s deadline (5 s connect,
-// 3 s query inside it) and the close has its own deadline of at most 1 s. A
-// stalled close, a query timeout and the total deadline each return within
-// their bounds with one sanitized line, and no second connection is dialed.
+// 3 s query inside it), and the close, including pgx's background cleanup of
+// an interrupted connection, has its own bound of at most 1 s. A stalled close
+// after a pass, a query deadline, a query deadline against a stalled peer and
+// the total deadline each return within their bounds with one sanitized line.
+// pgx's cleanup has finished (CleanupDone) before the check returns, and only
+// one connection reaches the wire. Where pgx's asyncClose tried to dial a
+// cancel request, the dial was refused.
 func TestDBCheckCloseIsBounded(t *testing.T) {
 	interceptDBCheckResolver(t)
 	if dbCheckCloseTimeout != time.Second {
@@ -615,8 +637,8 @@ func TestDBCheckCloseIsBounded(t *testing.T) {
 	}
 	ca := newDBCheckCA(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
 	// Bounds are measured against each case's own deadline. The slack allows a
-	// CPU-starved runner, and stays far below crypto/tls's 5 s close_notify
-	// deadline that an unbounded close would wait for.
+	// CPU-starved runner, and stays far below the 5 s crypto/tls close_notify
+	// deadline and the 15 s asyncClose drain an unbounded close would wait for.
 	const closeBound = 200 * time.Millisecond
 	const slack = 1500 * time.Millisecond
 	for _, tc := range []struct {
@@ -625,9 +647,12 @@ func TestDBCheckCloseIsBounded(t *testing.T) {
 		total          time.Duration
 		want           string
 		least, most    time.Duration
+		closes         bool // whether a connection was open to close
+		cancelTried    bool // whether pgx's asyncClose must have tried a cancel dial
 	}{
-		{name: "close stalls after a pass", mode: "hang-close", connect: 2 * time.Second, query: time.Second, total: 4 * time.Second, want: "", least: closeBound / 2, most: closeBound + slack},
-		{name: "query deadline", mode: "hang-query", connect: 2 * time.Second, query: 300 * time.Millisecond, total: 4 * time.Second, want: DBCheckTimeout, least: 250 * time.Millisecond, most: 300*time.Millisecond + closeBound + slack},
+		{name: "close stalls after a pass", mode: "hang-close", connect: 2 * time.Second, query: time.Second, total: 4 * time.Second, want: "", least: closeBound / 2, most: closeBound + slack, closes: true},
+		{name: "query deadline", mode: "hang-query", connect: 2 * time.Second, query: 300 * time.Millisecond, total: 4 * time.Second, want: DBCheckTimeout, least: 250 * time.Millisecond, most: 300*time.Millisecond + closeBound + slack, closes: true, cancelTried: true},
+		{name: "query deadline, stalled peer", mode: "stall-query", connect: 2 * time.Second, query: 300 * time.Millisecond, total: 4 * time.Second, want: DBCheckTimeout, least: 300*time.Millisecond + closeBound/2, most: 300*time.Millisecond + closeBound + slack, closes: true, cancelTried: true},
 		{name: "total deadline during login", mode: "hang-login", connect: 2 * time.Second, query: time.Second, total: 300 * time.Millisecond, want: DBCheckTimeout, least: 250 * time.Millisecond, most: 300*time.Millisecond + closeBound + slack},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -636,6 +661,16 @@ func TestDBCheckCloseIsBounded(t *testing.T) {
 			network := &dbCheckNet{server: server}
 			seams := network.seams()
 			seams.connectTimeout, seams.queryTimeout, seams.total, seams.closeTimeout = tc.connect, tc.query, tc.total, closeBound
+			// The test checks pgx's cleanup channel itself when the close ends.
+			closes, cleanedUp, refused := 0, false, 0
+			seams.closed = func(cleanup <-chan struct{}, n int) {
+				closes, refused = closes+1, n
+				select {
+				case <-cleanup:
+					cleanedUp = true
+				default:
+				}
+			}
 			got, elapsed := checkDatabaseWithin(t, 10*time.Second, writeDBCheckRoot(t, dbCheckFiles(ca.pem)), seams)
 			if got != tc.want || elapsed < tc.least || elapsed > tc.most {
 				t.Fatalf("class %q in %v, want %q within [%v, %v]", got, elapsed, tc.want, tc.least, tc.most)
@@ -643,11 +678,45 @@ func TestDBCheckCloseIsBounded(t *testing.T) {
 			if line, _ := DBCheckLine(got); line != "PASS" && line != "FAIL "+tc.want {
 				t.Fatalf("line %q", line)
 			}
+			if tc.closes && (closes != 1 || !cleanedUp) {
+				t.Fatalf("close ran %d times, cleanup finished %v: pgx cleanup must finish within the bound", closes, cleanedUp)
+			}
+			if !tc.closes && closes != 0 {
+				t.Fatal("a failed connect has nothing to close")
+			}
+			if tc.cancelTried != (refused > 0) {
+				t.Fatalf("refused dials %d, cancel attempt expected %v", refused, tc.cancelTried)
+			}
 			network.mu.Lock()
 			defer network.mu.Unlock()
 			if len(network.dials) != 1 {
-				t.Fatalf("dials %v: a deadline must not dial a cancel request", network.dials)
+				t.Fatalf("dials %v: only one connection may reach the wire", network.dials)
+			}
+			server.mu.Lock()
+			defer server.mu.Unlock()
+			if len(server.unexpected) != 0 {
+				t.Fatalf("the server saw %q", server.unexpected)
 			}
 		})
+	}
+}
+
+// TestDBCheckRefusedSecondDialLeavesTheResult: when the lookup returns two
+// addresses and the first connection fails TLS, the second address is never
+// dialed (one connection per check), and the result is the first failure's
+// class with its fixed line, not an error from the refusal.
+func TestDBCheckRefusedSecondDialLeavesTheResult(t *testing.T) {
+	interceptDBCheckResolver(t)
+	ca := newDBCheckCA(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	other := newDBCheckCA(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	network := &dbCheckNet{server: newFakePostgres(other.leaf(t, productionDBHost), ""), second: newFakePostgres(ca.leaf(t, productionDBHost), "")}
+	got, _ := checkDatabaseWithin(t, 10*time.Second, writeDBCheckRoot(t, dbCheckFiles(ca.pem)), network.seams())
+	if line, code := DBCheckLine(got); got != DBCheckTLS || line != "FAIL tls" || code != 3 {
+		t.Fatalf("class %q line %q code %d, want tls", got, line, code)
+	}
+	network.mu.Lock()
+	defer network.mu.Unlock()
+	if len(network.dials) != 1 || network.dials[0] != "tcp "+dbCheckFixtureIP+":5432" {
+		t.Fatalf("dials %v: the second address must not be dialed", network.dials)
 	}
 }

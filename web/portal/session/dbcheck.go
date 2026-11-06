@@ -28,9 +28,18 @@ const (
 // that is not TLS; the store's sslmode=verify-full never does.
 var errDBCheckPlaintext = errors.New("portal db-check connection is not TLS")
 
+// errDBCheckSecondConnection refuses every dial after the check's one
+// connection. When a deadline interrupts a statement, pgx abandons the
+// connection in a background goroutine (pgconn asyncClose) that first dials
+// the server again to send a cancel request. The check opens exactly one
+// connection, so that dial is refused before it reaches the network; pgx
+// then sends Terminate on the original connection and closes it.
+var errDBCheckSecondConnection = errors.New("portal db-check opens one connection only")
+
 // Bounds (DESIGN-056): the whole operation, resolve through rollback, has a
 // 10 s deadline. Inside it the connect has the store's 5 s connect_timeout
-// and the read-only transaction 3 s. Closing the connection afterwards has its
+// and the read-only transaction 3 s. Closing the connection afterwards,
+// including pgx's background cleanup of an interrupted connection, has its
 // own deadline of at most 1 s, so the check returns within 11 s.
 const (
 	dbCheckQueryTimeout = 3 * time.Second
@@ -73,6 +82,9 @@ type dbCheckSeams struct {
 	lookup                                            func(context.Context, string) ([]string, error)
 	dial                                              func(context.Context, string, string) (net.Conn, error)
 	connectTimeout, queryTimeout, total, closeTimeout time.Duration
+	// closed observes the end of the close with pgx's own cleanup channel and
+	// the number of dials refused after the one connection. Tests only.
+	closed func(cleanup <-chan struct{}, refusedDials int)
 }
 
 // dbCheckProgress records how far a connection attempt got, so a failure is
@@ -81,12 +93,31 @@ type dbCheckProgress struct {
 	mu                         sync.Mutex
 	resolved, dialed, upgraded bool
 	transport                  net.Conn // the dialed connection under TLS
+	refused                    int      // dials refused after the one connection
+}
+
+func (p *dbCheckProgress) refuseDial() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.refused++
+}
+
+func (p *dbCheckProgress) refusedDials() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.refused
 }
 
 func (p *dbCheckProgress) dialedConn(conn net.Conn) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.dialed, p.transport = true, conn
+}
+
+func (p *dbCheckProgress) hasDialed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.dialed
 }
 
 func (p *dbCheckProgress) transportConn() net.Conn {
@@ -158,6 +189,10 @@ func checkDatabase(ctx context.Context, root string, s dbCheckSeams) string {
 		dial = s.dial
 	}
 	config.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if progress.hasDialed() {
+			progress.refuseDial()
+			return nil, errDBCheckSecondConnection
+		}
 		conn, err := dial(ctx, network, addr)
 		if err == nil {
 			progress.dialedConn(conn)
@@ -186,8 +221,14 @@ func checkDatabase(ctx context.Context, root string, s dbCheckSeams) string {
 		return dbCheckConnectClass(ctx, err, progress)
 	}
 	// Close after the operation, success or not, within its own bound. A slow
-	// or failed close changes neither the result nor the line.
-	defer dbCheckClose(db, progress.transportConn(), s.closeTimeout)
+	// or failed close, or a refused cancel dial, changes neither the result
+	// nor the line.
+	defer func() {
+		dbCheckClose(db, progress.transportConn(), s.closeTimeout)
+		if s.closed != nil {
+			s.closed(db.PgConn().CleanupDone(), progress.refusedDials())
+		}
+	}()
 	queryCtx, queryCancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer queryCancel()
 	tx, err := db.BeginTx(queryCtx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
@@ -209,26 +250,34 @@ func checkDatabase(ctx context.Context, root string, s dbCheckSeams) string {
 	return ""
 }
 
-// dbCheckClose sends Terminate and closes, and returns within bound. pgx's
-// close honours the context for Terminate, but crypto/tls then writes its
-// close_notify alert under its own 5 s write deadline; on a stalled peer that
-// would outlast the bound. When the bound expires, closing the dialed
-// transport underneath ends any write still pending.
+// dbCheckClose closes the connection and returns within bound, waiting for
+// pgx's cleanup to finish, measured by PgConn.CleanupDone, not by Close
+// returning: after a deadline pgx has already abandoned the connection
+// (pgconn asyncClose), Close returns at once, and a background goroutine
+// still sends Terminate and drains under its own 15 s deadline. A normal Close
+// honours the context for Terminate, but crypto/tls then writes close_notify
+// under its own 5 s write deadline. Both would outlast the bound on a stalled
+// peer, so at four fifths of the bound the dialed transport underneath is
+// closed, which ends any pending write or drain at once.
 func dbCheckClose(db *pgx.Conn, transport net.Conn, bound time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), bound)
+	deadline := time.Now().Add(bound)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = db.Close(ctx)
-	}()
+	go func() { _ = db.Close(ctx) }()
+	cleanup := db.PgConn().CleanupDone()
+	force := time.NewTimer(bound * 4 / 5)
+	defer force.Stop()
 	select {
-	case <-done:
+	case <-cleanup:
+		return
+	case <-force.C:
+	}
+	if transport != nil {
+		_ = transport.Close()
+	}
+	select {
+	case <-cleanup:
 	case <-ctx.Done():
-		if transport != nil {
-			_ = transport.Close()
-		}
-		<-done
 	}
 }
 

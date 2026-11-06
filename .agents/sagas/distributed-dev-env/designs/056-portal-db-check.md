@@ -51,14 +51,36 @@ is the usage error (exit 2), as for `pages-source-check`.
    `statement_timeout` of 5 s also applies on the server.
 
    After a successful connect, the close has its own deadline of at most
-   1 s. When it expires, the dialed transport is closed. This is needed
-   because crypto/tls writes its close_notify alert under its own 5 s write
-   deadline, which would otherwise outlast the bound on a stalled peer. The
-   check therefore returns within 11 s.
+   1 s. That includes pgx's background cleanup of an interrupted
+   connection. The check waits for pgx's `CleanupDone`, not for `Close` to
+   return or `IsClosed`.
 
-   An expired deadline ends the connection through pgx's default
-   deadline handler, which sends no cancel request. A test pins that the
-   check dials exactly one connection.
+   Two things would otherwise outlast the bound on a stalled peer:
+   - after a deadline, pgx's `asyncClose` drains under its own 15 s
+     deadline;
+   - crypto/tls writes its close_notify alert under its own 5 s write
+     deadline.
+
+   So at four fifths of the bound the dialed transport underneath is
+   closed, which ends them at once. The check therefore returns within
+   11 s.
+
+   The check opens exactly one connection. When a deadline interrupts a
+   statement, pgx abandons the connection in a background goroutine
+   (`pgconn.asyncClose`). That goroutine first dials the server again to
+   send a cancel request, then sends Terminate, drains and closes. The
+   check's dialer refuses every dial after the first successful one, so that
+   cancel dial never reaches the network, and pgx goes on to send Terminate
+   on the original connection. The refusal happens after the result is
+   known, so it changes neither the result nor the line.
+
+   For the same reason, if the name resolved to several addresses, only the
+   first address that accepts a TCP connection is checked. The cluster
+   Service name resolves to one address. Tests pin all of this:
+   - exactly one dial on every deadline path, with the refused cancel
+     attempt counted;
+   - cleanup finished before the check returns;
+   - with two addresses, the first connection's class.
 
 ## 3. Output and exit codes
 
