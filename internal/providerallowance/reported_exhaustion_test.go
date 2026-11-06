@@ -11,7 +11,7 @@ import (
 func TestProjectCachedReadAnnotatesQualifiedReportedExhaustionOnce(t *testing.T) {
 	at := claudeExhaustionAt()
 	reset := "2026-11-09T18:00:00Z"
-	for _, percent := range []string{"100", "100.0"} {
+	for _, percent := range []string{"100", "100.0", "100.00", "100.000"} {
 		t.Run(percent, func(t *testing.T) {
 			doc, trust := claudeExhaustionDoc(t, []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", percent, &reset, nil)}, at)
 			before, err := json.Marshal(doc.Items[0].Observation)
@@ -137,10 +137,9 @@ func TestProjectCachedReadExhaustionRejectsUnqualifiedEvidence(t *testing.T) {
 		limits []ClaudeUsageLimit
 	}{
 		{"ninety nine point nine", []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "99.9", &reset, nil)}},
+		{"near one hundred", []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "99.999999999999999999999999", &reset, nil)}},
 		{"missing limits", nil},
-		{"scoped model", []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, scope)}},
-		{"advisory beside exhaustion", []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, nil), claudeExhaustionLimit("weekly_all", "100", &reset, scope)}},
-		{"conflicting session", []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, nil), claudeExhaustionLimit("session", "99.9", &reset, nil)}},
+		{"scoped model alone", []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, scope)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -163,10 +162,67 @@ func TestProjectCachedReadExhaustionRejectsUnqualifiedEvidence(t *testing.T) {
 	t.Run("both account windows", func(t *testing.T) {
 		doc, trust := claudeExhaustionDoc(t, []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, nil), claudeExhaustionLimit("session", "100.0", &reset, nil)}, at)
 		ProjectCachedRead(&doc, trust.Contexts, trust.Registry, 30*time.Minute, true, at.Add(time.Minute))
-		if len(doc.Items[0].CurrentMeasures) != 2 {
-			t.Fatalf("measures dropped: %+v", doc.Items[0].CurrentMeasures)
+		assertKindNotice(t, doc.Items[0], "weekly_all", true)
+		assertKindNotice(t, doc.Items[0], "session", true)
+	})
+}
+
+func TestProjectCachedReadExhaustionLabelsEachWindow(t *testing.T) {
+	at := claudeExhaustionAt()
+	reset := at.Add(2 * time.Hour).Format(time.RFC3339)
+	passed := at.Format(time.RFC3339)
+	model := ClaudeUsageLabel{DisplayName: "Opus"}
+	scope := &ClaudeUsageScope{Model: &model}
+	now := at.Add(time.Minute)
+	cases := []struct {
+		name    string
+		limits  []ClaudeUsageLimit
+		weekly  bool
+		session bool
+	}{
+		{"weekly then session", []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, nil), claudeExhaustionLimit("session", "20", &reset, nil)}, true, false},
+		{"session then weekly", []ClaudeUsageLimit{claudeExhaustionLimit("session", "20", &reset, nil), claudeExhaustionLimit("weekly_all", "100.00", &reset, nil)}, true, false},
+		{"session exhausted", []ClaudeUsageLimit{claudeExhaustionLimit("session", "100.000", &reset, nil), claudeExhaustionLimit("weekly_all", "20", &reset, nil)}, false, true},
+		{"sibling reset passed", []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, nil), claudeExhaustionLimit("session", "100", &passed, nil)}, true, false},
+		{"advisory sibling", []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, nil), claudeExhaustionLimit("weekly_all", "0", &reset, scope)}, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, trust := claudeExhaustionDoc(t, tc.limits, at)
+			before := string(mustJSON(t, doc.Items[0].Observation))
+			ProjectCachedRead(&doc, trust.Contexts, trust.Registry, 30*time.Minute, true, now)
+			if string(mustJSON(t, doc.Items[0].Observation)) != before || doc.Items[0].Observation.ProviderObservedAt != nil {
+				t.Fatal("mixed window rewrote the observation or provider clock")
+			}
+			if tc.name == "advisory sibling" {
+				assertMeasureNotice(t, doc.Items[0], measureIDByKind(t, doc.Items[0], "weekly_all", false), true)
+				assertMeasureNotice(t, doc.Items[0], measureIDByKind(t, doc.Items[0], "weekly_all", true), false)
+				return
+			}
+			assertKindNotice(t, doc.Items[0], "weekly_all", tc.weekly)
+			assertKindNotice(t, doc.Items[0], "session", tc.session)
+		})
+	}
+	t.Run("same measure conflict", func(t *testing.T) {
+		doc, trust := claudeExhaustionDoc(t, []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, nil), claudeExhaustionLimit("weekly_all", "20", &reset, nil)}, at)
+		ProjectCachedRead(&doc, trust.Contexts, trust.Registry, 30*time.Minute, true, now)
+		for _, current := range doc.Items[0].CurrentMeasures {
+			if strings.Contains(current.Reason, reportedExhaustionNotice) || current.Value.Decimal != nil || current.State == CurrentKnown {
+				t.Fatalf("same-measure conflict was labelled: %+v", current)
+			}
 		}
-		assertExhaustionNotice(t, doc.Items[0], reasonTimeMissing, true)
+	})
+	t.Run("conflict row does not veto sibling", func(t *testing.T) {
+		doc, trust := claudeExhaustionDoc(t, []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, nil), claudeExhaustionLimit("session", "100", &reset, nil)}, at)
+		weekly := measureIDByKind(t, doc.Items[0], "weekly_all", false)
+		for i := range doc.Items[0].CurrentMeasures {
+			if doc.Items[0].CurrentMeasures[i].MeasureID == weekly {
+				doc.Items[0].CurrentMeasures[i].State = CurrentConflict
+			}
+		}
+		ProjectCachedRead(&doc, trust.Contexts, trust.Registry, 30*time.Minute, true, now)
+		assertMeasureNotice(t, doc.Items[0], weekly, false)
+		assertKindNotice(t, doc.Items[0], "session", true)
 	})
 }
 
@@ -188,7 +244,9 @@ func TestProjectCachedReadExhaustionDoesNotSurviveTrustOrPaging(t *testing.T) {
 		name   string
 		mutate func(*TrustedContext, RegistryParts)
 	}{
-		{"account", func(ctx *TrustedContext, _ RegistryParts) { ctx.AccountRef = stringRef("anthropic-org-sha256:" + strings.Repeat("d", 64)) }},
+		{"account", func(ctx *TrustedContext, _ RegistryParts) {
+			ctx.AccountRef = stringRef("anthropic-org-sha256:" + strings.Repeat("d", 64))
+		}},
 		{"workspace", func(ctx *TrustedContext, _ RegistryParts) { ctx.WorkspaceRef = stringRef("other-workspace") }},
 		{"source", func(ctx *TrustedContext, _ RegistryParts) { ctx.SourceVersion = "other-source" }},
 		{"incarnation", func(ctx *TrustedContext, _ RegistryParts) { ctx.ProducerIncarnation = "other-incarnation" }},
@@ -287,6 +345,51 @@ func claudeExhaustionDoc(t *testing.T, limits []ClaudeUsageLimit, at time.Time) 
 		t.Fatal(err)
 	}
 	return doc, trust
+}
+
+func assertKindNotice(t *testing.T, item ReadItem, kind string, on bool) {
+	t.Helper()
+	assertMeasureNotice(t, item, measureIDByKind(t, item, kind, false), on)
+}
+
+func measureIDByKind(t *testing.T, item ReadItem, kind string, scoped bool) string {
+	t.Helper()
+	var found string
+	n := 0
+	for _, measure := range item.Observation.Measures {
+		got, ok := directLexical(item.Observation, measure.ID+"-kind")
+		if !ok || got != kind {
+			continue
+		}
+		_, model := directLexical(item.Observation, measure.ID+"-model")
+		if model != scoped {
+			continue
+		}
+		found = measure.ID
+		n++
+	}
+	if n != 1 {
+		t.Fatalf("kind %s scoped=%t matched %d measures", kind, scoped, n)
+	}
+	return found
+}
+
+func assertMeasureNotice(t *testing.T, item ReadItem, id string, on bool) {
+	t.Helper()
+	current, ok := currentForMeasure(&item, id)
+	if !ok {
+		t.Fatalf("current row %s missing or duplicated", id)
+	}
+	want := reasonTimeMissing
+	if on {
+		want = appendReportedExhaustion(reasonTimeMissing)
+	}
+	if current.Reason != want || current.State == CurrentKnown || current.Value.Decimal != nil || current.Value.State != ValueUnknown {
+		t.Fatalf("measure %s current %+v, want reason %q", id, current, want)
+	}
+	if on && strings.Count(current.Reason, reportedExhaustionNotice) != 1 {
+		t.Fatalf("measure %s notice count: %q", id, current.Reason)
+	}
 }
 
 func assertExhaustionNotice(t *testing.T, item ReadItem, primary string, on bool) {

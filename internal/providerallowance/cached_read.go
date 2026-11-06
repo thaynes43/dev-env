@@ -348,10 +348,15 @@ func stripReportedExhaustion(reason string) string {
 }
 
 func cachedNoteReportedExhaustion(item *ReadItem, now time.Time) {
-	if !reportedExhaustionQualified(item, now) {
+	if !reportedExhaustionContext(item) {
 		return
 	}
+	blocked := conflictingExhaustionIDs(item)
 	for i := range item.CurrentMeasures {
+		id := item.CurrentMeasures[i].MeasureID
+		if blocked[id] || !currentRowExhausted(item, item.CurrentMeasures[i], now) {
+			continue
+		}
 		item.CurrentMeasures[i].Reason = appendReportedExhaustion(item.CurrentMeasures[i].Reason)
 	}
 }
@@ -364,10 +369,9 @@ func appendReportedExhaustion(reason string) string {
 	return reason + " " + reportedExhaustionNotice
 }
 
-// reportedExhaustionQualified is read-time explanation only. Caller-owned trust
-// and aging have already run. A historical 100 or 100.0 does not become current
-// capacity, and a missing reset is left unknown.
-func reportedExhaustionQualified(item *ReadItem, now time.Time) bool {
+// reportedExhaustionContext is the caller-owned trust and fresh acquisition
+// gate. It does not decide which measure rows are exhausted.
+func reportedExhaustionContext(item *ReadItem) bool {
 	obs := item.Observation
 	if obs.Provider != "anthropic" || obs.ProviderObservedAt != nil || obs.Source.Kind != SourceNativeRPC || obs.Source.Version != ClaudeSDKSourceVersion || obs.Source.CapabilityRef != "claude-sdk:usage-report" {
 		return false
@@ -375,22 +379,68 @@ func reportedExhaustionQualified(item *ReadItem, now time.Time) bool {
 	if item.CollectionFreshness == nil || item.CollectionFreshness.State != FreshFresh {
 		return false
 	}
-	if item.Binding.State != BindingVerified || item.Validation.State != ValidationSourceFields || int64(item.Binding.Generation) != int64(obs.BindingGeneration) || !stringPtrEqual(item.Binding.AccountRef, obs.Scope.AccountRef) || !stringPtrEqual(item.Binding.WorkspaceRef, obs.Scope.WorkspaceRef) {
+	return item.Binding.State == BindingVerified && item.Validation.State == ValidationSourceFields && int64(item.Binding.Generation) == int64(obs.BindingGeneration) && stringPtrEqual(item.Binding.AccountRef, obs.Scope.AccountRef) && stringPtrEqual(item.Binding.WorkspaceRef, obs.Scope.WorkspaceRef)
+}
+
+func conflictingExhaustionIDs(item *ReadItem) map[string]bool {
+	blocked := map[string]bool{}
+	obsCount := map[string]int{}
+	for _, measure := range item.Observation.Measures {
+		obsCount[measure.ID]++
+	}
+	for id, n := range obsCount {
+		if n != 1 {
+			blocked[id] = true
+		}
+	}
+	curCount := map[string]int{}
+	for _, current := range item.CurrentMeasures {
+		curCount[current.MeasureID]++
+		if current.State == CurrentConflict {
+			blocked[current.MeasureID] = true
+		}
+	}
+	for id, n := range curCount {
+		if n != 1 {
+			blocked[id] = true
+		}
+	}
+	kindIDs := map[string][]string{}
+	for _, measure := range item.Observation.Measures {
+		if blocked[measure.ID] || claudeMeasureBlocked(item.Observation, measure) {
+			continue
+		}
+		kind, ok := directLexical(item.Observation, measure.ID+"-kind")
+		if !ok || (kind != "weekly_all" && kind != "session") || measure.Category != CategoryIncluded {
+			continue
+		}
+		kindIDs[kind] = append(kindIDs[kind], measure.ID)
+	}
+	for _, ids := range kindIDs {
+		if len(ids) < 2 {
+			continue
+		}
+		for _, id := range ids {
+			blocked[id] = true
+		}
+	}
+	return blocked
+}
+
+func currentRowExhausted(item *ReadItem, current CurrentMeasure, now time.Time) bool {
+	if current.State != CurrentUnknown || current.Value.State != ValueUnknown || current.Value.Decimal != nil {
 		return false
 	}
-	if len(obs.Measures) == 0 || len(item.CurrentMeasures) != len(obs.Measures) {
-		return false
-	}
-	for _, measure := range obs.Measures {
-		if claudeMeasureBlocked(obs, measure) || !claudeAccountExhausted(obs, measure) || exactResetPassed(measure, now) {
-			return false
+	var measure Measure
+	n := 0
+	for _, candidate := range item.Observation.Measures {
+		if candidate.ID != current.MeasureID {
+			continue
 		}
-		current, ok := currentForMeasure(item, measure.ID)
-		if !ok || current.State != CurrentUnknown || current.Value.State != ValueUnknown || current.Value.Decimal != nil {
-			return false
-		}
+		measure = candidate
+		n++
 	}
-	return true
+	return n == 1 && !claudeMeasureBlocked(item.Observation, measure) && claudeAccountExhausted(item.Observation, measure) && !exactResetPassed(measure, now)
 }
 
 func currentForMeasure(item *ReadItem, id string) (CurrentMeasure, bool) {
@@ -426,12 +476,9 @@ func claudeAccountExhausted(obs Observation, measure Measure) bool {
 	if measure.Category != CategoryIncluded || measure.Unit != UnitPercent || measure.Direction != DirectionUsed || measure.Value.State != ValueKnown || measure.Value.Decimal == nil {
 		return false
 	}
-	switch *measure.Value.Decimal {
-	case "100", "100.0":
-		return true
-	default:
-		return false
-	}
+	got, err := parseDecimal(*measure.Value.Decimal)
+	want, wantErr := parseDecimal("100")
+	return err == nil && wantErr == nil && got.Cmp(want) == 0
 }
 
 func directLexical(obs Observation, field string) (string, bool) {
