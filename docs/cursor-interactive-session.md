@@ -116,10 +116,71 @@ A successful send proves neither model consumption nor the served model.
 
 Reply sends `tmux send-keys -t <pane> -l -- <exact instruction>`. It does not
 split the instruction into key names. `--submit` then sends one separate
-`Enter`. Without `--submit`, Enter is not sent. All C0 and C1 control
+`Enter`, but only after a submit fence (below). Without `--submit`, Enter is not sent. All C0 and C1 control
 characters and DEL are refused, even with `--observed-ready`. This includes
 newlines, tabs, carriage returns, Escape, Ctrl-C, and Backspace. Neither flag
 is passed to Cursor.
+
+**Submit fence.** Cursor 2026.10.14 holds fast literal input in a 75 ms paste
+buffer. An Enter inside that window still submits the whole text, but the text
+box keeps a copy as a stale draft. This happened on the G1 pane on 2026-11-05 at
+23:43Z: the turn succeeded with the full 565-byte prompt, and the composer still
+held it. The mechanism was read from Cursor's UI code, not observed by pressing
+keys.
+
+With `--submit`, the helper checks three things before typing anything, and
+types nothing when one fails. Two refuse with `invalid-input`:
+
+- The instruction must not contain one of the helper's known prompt phrases
+  (the trust, permission, approval and confirmation phrases it classifies, such
+  as `yes/no`, `(y/n)` or `Run this command?`). Its echo could not be told apart
+  from a real prompt with the same words. This is a limitation: such an
+  instruction cannot be submitted with `--submit` at all.
+- The instruction must be at most 800 characters. Cursor shows a longer paste
+  as `[Pasted text #N +M lines]`, so its end would never show.
+
+The third: the visible screen of the verified capture must be locatable, or the
+reply ends `prompt-unclear`.
+
+After typing, the helper waits 0.3 s and reads the pane, up to five times. Each
+read does three things:
+
+1. It checks that the pane, its process and its owner are the same.
+2. It looks for prompt rows: rows holding one of the known prompt phrases,
+   anywhere on the visible screen, the composer rows included.
+3. It counts the instruction's last 24 non-space characters in the composer
+   only. The composer is the visible screen from its last `→`, `>`, `›` or `❯`
+   row down; wrapping whitespace is ignored, and the same text in the
+   transcript or history above does not count.
+
+Outcomes:
+
+- **Enter is sent:** the composer shows the tail more often than before
+  typing, and no new prompt row has appeared.
+- **A new prompt row appears** that the verified screen did not have, such as
+  Cursor's command prompt, above or below the composer: Enter is not sent, and
+  the reply ends with that prompt's kind (for example `modal-approval`). Rows are
+  compared by text: a prompt row already on the verified screen is not new. The
+  only such rows are an answered trust box, because any other prompt on the
+  verified screen refuses the reply before typing. A
+  prompt worded without any known phrase is not recognised by this check; it is
+  caught only if it hides the typed text from the composer count.
+- **The pane is gone, or its process or owner changes,** or the visible screen
+  can no longer be located: Enter is not sent, and the reply ends with that
+  state (for example `pane-missing`, `pane-replaced` or `prompt-unclear`).
+- **tmux cannot capture the pane:** Enter is not sent, and the reply ends
+  `inspect-unconfirmed`.
+- **The text never shows** in the composer, or tmux's identity read times out,
+  fails or returns a malformed reply: Enter is not sent, and the reply ends
+  `send-unconfirmed`.
+- **Enter itself fails to send** (tmux error or timeout): the reply ends
+  `send-unconfirmed` and says not to send another Enter.
+
+In each of these after-typing outcomes where Enter is not sent, the reply says
+the literal text was already typed and may be in the composer: do not resend it
+or send Enter; inspect again. (The two `invalid-input` refusals above happen
+before anything is typed, so nothing is in the composer from them.) The fence narrows the race; it does not prove Cursor cleared the
+box, so inspect after every reply.
 
 Fail closed, with no keys and no Enter:
 

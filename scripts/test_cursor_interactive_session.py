@@ -22,7 +22,7 @@ helper = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(helper)
 
 FAKE = r'''#!/usr/bin/env python3
-import json, os, re, sys
+import json, os, re, sys, time
 from pathlib import Path
 args = sys.argv[1:]
 with open(os.environ["FAKE_LOG"], "a") as out:
@@ -62,6 +62,9 @@ if args and args[0] == "display-message":
     if mode == "foreign-owner":
         owner = "foreign"
     pid = "999" if mode == "replaced" else os.environ.get("FAKE_PID", "123")
+    # FAKE_PID_FILE, when the file exists, replaces the pane process mid-command.
+    if os.environ.get("FAKE_PID_FILE") and Path(os.environ["FAKE_PID_FILE"]).exists():
+        pid = Path(os.environ["FAKE_PID_FILE"]).read_text().strip()
     pane = "%8" if mode == "new-pane" else os.environ.get("FAKE_PANE", "%7")
     dead = "1" if mode == "dead" else "0"
     command = "bash" if mode == "foreign-command" else os.environ.get("FAKE_COMMAND", "client")
@@ -82,7 +85,17 @@ if args and args[0] == "display-message":
     print("\t".join(values[key] for key in re.findall(r"#\{([^}]*)\}", template)))
     sys.exit(0)
 if args and args[0] == "capture-pane":
-    sys.stdout.buffer.write(Path(os.environ["FAKE_CAPTURE"]).read_bytes())
+    captured = Path(os.environ["FAKE_CAPTURE"]).read_text(encoding="utf-8")
+    echo = Path(os.environ["FAKE_CAPTURE"] + ".echo")
+    stale = Path(os.environ["FAKE_CAPTURE"] + ".stale")
+    for typed in (stale, echo):
+        if typed.exists() and (typed is stale or
+                               time.time() - typed.stat().st_mtime >= float(os.environ.get("FAKE_ECHO_DELAY", "0.08"))):
+            rows = captured.split("\n")
+            # The typed text replaces the bottom row (the screen keeps its height).
+            rows[-2 if rows[-1] == "" else -1] = "\u2192 " + typed.read_text(encoding="utf-8")
+            captured = "\n".join(rows)
+    sys.stdout.buffer.write(captured.encode("utf-8"))
     sys.exit(0)
 if args and args[0] == "send-keys":
     if "-l" in args and os.environ.get("FAKE_SEND_READY"):
@@ -92,6 +105,20 @@ if args and args[0] == "send-keys":
             gate.read(1)
     if mode == "send-fail":
         sys.exit(1)
+    # Like Cursor's composer: typed text shows as a → row only once FAKE_ECHO_DELAY has
+    # passed (FAKE_ECHO=0: never), and Enter takes it away. FAKE_PASTE_WINDOW models
+    # Cursor 2026.10.14's 75 ms paste buffer: an Enter inside it still submits, but the text
+    # stays in the box as a stale draft.
+    echo = Path(os.environ["FAKE_CAPTURE"] + ".echo")
+    window = float(os.environ.get("FAKE_PASTE_WINDOW", "0"))
+    # A one-key answer to a prompt is not composer text.
+    if "-l" in args and len(args[-1]) > 1 and os.environ.get("FAKE_ECHO", "1") != "0":
+        echo.write_text(args[-1], encoding="utf-8")
+    elif args[-1] == "Enter" and echo.exists() and time.time() - echo.stat().st_mtime < window:
+        Path(os.environ["FAKE_CAPTURE"] + ".stale").write_text(echo.read_text(encoding="utf-8"), encoding="utf-8")
+        echo.unlink()
+    elif args[-1] == "Enter" and echo.exists():
+        echo.unlink()
     sys.exit(0)
 raise SystemExit(77)
 '''
@@ -238,6 +265,54 @@ class CursorInteractiveTests(unittest.TestCase):
             ["send-keys", "-t", "%7", "-l", "--", "continue the source helper"],
             ["send-keys", "-t", "%7", "Enter"],
         ])
+
+    def test_submit_waits_until_the_text_shows_before_enter(self):
+        # Cursor 2026.10.14 holds fast literal input in a 75 ms paste buffer; an Enter inside that
+        # window submitted the text but left it in the box as a stale draft (G1, 2026-11-05).
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        started = __import__("time").monotonic()
+        code, sent = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                           "--submit"])
+        self.assertEqual((code, sent["state"]), (0, "sent"))
+        self.assertGreaterEqual(__import__("time").monotonic() - started, helper.SUBMIT_SETTLE_SECONDS)
+        tmux = self.commands("tmux")
+        literal = tmux.index(["send-keys", "-t", "%7", "-l", "--", "continue the source helper"])
+        enter = tmux.index(["send-keys", "-t", "%7", "Enter"])
+        # The pane is read again between the text and Enter.
+        self.assertTrue(any(args[0] == "capture-pane" for args in tmux[literal + 1:enter]))
+
+    def test_submit_never_sends_enter_when_the_text_does_not_show(self):
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        self.env["FAKE_ECHO"] = "0"
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                              "--submit"])
+        self.assertEqual((code, refused["state"]), (3, "send-unconfirmed"))
+        self.assertIn("Enter was NOT sent", refused["detail"])
+        self.assertEqual([args for args in self.commands("tmux") if args[0] == "send-keys"],
+                         [["send-keys", "-t", "%7", "-l", "--", "continue the source helper"]])
+
+    def test_submit_after_the_paste_window_leaves_no_stale_draft(self):
+        # Synthetic reproduction of the G1 stale draft (2026-11-05T23:43Z): with an Enter right
+        # after the text, the fake keeps the text as a draft; the fence's wait clears it.
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        self.env["FAKE_PASTE_WINDOW"] = "0.075"
+        code, sent = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                           "--submit"])
+        self.assertEqual((code, sent["state"], sent["submitted"]), (0, "sent", True))
+        self.assertFalse(Path(str(self.capture) + ".stale").exists())
+        self.assertNotIn("continue the source helper", self.capture.read_text())
+
+    def test_composer_text_counts_only_the_composer_rows(self):
+        text = "Readiness check only. Do not call tools, run commands or read files."
+        screen = ["  Readiness check only. Do not call tools, run commands or read files.", "",
+                  "  \u2192 Readiness check only. Do not call tools, run", "     commands or read files.", ""]
+        # The transcript row above the composer does not count; the wrapped composer rows do.
+        self.assertEqual(helper.tail_count(screen, text), 1)
+        self.assertEqual(helper.tail_count(screen[:2] + ["  \u2192 Add a follow-up", ""], text), 0)
+        self.assertEqual(helper.tail_count(screen[:2], text), 0)
 
     def test_draft_and_modals_never_send(self):
         self.text_path.write_text("continue")
@@ -659,6 +734,9 @@ class AnswerTests(AnswerFixture):
         tmux reports the rows above the pane as history (default: all of them)."""
         capture = self.fix(capture)
         self.capture.write_text(capture)
+        # A new screen: no typed or stale composer text left from an earlier send.
+        for typed in (".echo", ".stale"):
+            Path(str(self.capture) + typed).unlink(missing_ok=True)
         rows = len(capture.splitlines())
         height = rows if visible is None else visible
         self.env["FAKE_HEIGHT"] = str(height)
@@ -2622,6 +2700,149 @@ class AnswerTests(AnswerFixture):
         self.queue_screen(self.single_stale_rows())
         code, stale = self.answer_reject(inspected["receipt"], ABORTED["expectedText"])
         self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
+        self.assertEqual(self.sends(), [])
+
+    def wait_for_literal_send(self, timeout=20):
+        """Block until the helper has typed the literal text (a send-keys -l in the fake log),
+        so a test changes the pane only after the pre-send checks, never during them."""
+        deadline = __import__("time").monotonic() + timeout
+        while __import__("time").monotonic() < deadline:
+            if any(args[0] == "send-keys" and "-l" in args for args in self.commands("tmux")):
+                return
+            __import__("time").sleep(0.01)
+        raise AssertionError("the helper never typed the literal text")
+
+    def submit(self, text, *flags, screen="  Cursor Agent\n\n> \n"):
+        if screen is not None:
+            self.screen(screen)
+        self.text_path.write_text(text)
+        inspected = self.start_and_inspect()
+        return self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                     "--submit", *flags])
+
+    def test_submit_waits_for_a_late_echo(self):
+        # The text shows only after 0.5 s: the fence keeps reading, then sends Enter.
+        self.env["FAKE_ECHO_DELAY"] = "0.5"
+        code, sent = self.submit("continue the source helper")
+        self.assertEqual((code, sent["state"], sent["submitted"]), (0, "sent", True))
+
+    def test_submit_ignores_the_same_text_in_history(self):
+        # The instruction is already in the transcript above, and the composer stays empty.
+        self.env["FAKE_ECHO"] = "0"
+        code, refused = self.submit("continue the source helper", screen="  continue the source helper\n\n> \n")
+        self.assertEqual((code, refused["state"]), (3, "send-unconfirmed"))
+        self.assertEqual([args[-1] for args in self.sends()], ["continue the source helper"])
+
+    def test_submit_ignores_a_short_text_that_matches_a_reply_word(self):
+        self.env["FAKE_ECHO"] = "0"
+        code, refused = self.submit("continue", screen="  please continue with the work\n\n> \n")
+        self.assertEqual((code, refused["state"]), (3, "send-unconfirmed"))
+
+    def test_submit_refuses_enter_when_a_prompt_appears_during_the_wait(self):
+        self.screen("  Cursor Agent\n\n> \n")
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        # A command prompt replaces the screen after the text is typed.
+        self.env["FAKE_ECHO_DELAY"] = "60"
+        original = self.capture.read_text()
+
+        def swap():
+            self.wait_for_literal_send()
+            # Same row count, so the visible screen is still located.
+            self.capture.write_text(original.replace("  Cursor Agent", "  Run this command?", 1))
+        thread = threading.Thread(target=swap)
+        thread.start()
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                              "--submit"])
+        thread.join()
+        self.assertEqual((code, refused["state"]), (3, "modal-approval"))
+        self.assertIn("Enter was NOT sent", refused["detail"])
+        self.assertNotIn(["send-keys", "-t", "%7", "Enter"], self.sends())
+
+    def test_submit_refuses_an_instruction_that_contains_a_prompt_phrase(self):
+        # Its echo could not be told apart from a real prompt with the same words, so a
+        # --submit instruction must not contain one; nothing is typed.
+        for text in ("answer yes/no: do the tests pass", "say Run this command? to me", "are you sure"):
+            with self.subTest(text=text):
+                self.restart_case()
+                code, refused = self.submit(text)
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+                self.assertEqual(self.sends(), [])
+
+    def test_submit_refuses_enter_when_a_prompt_appears_under_a_quoted_transcript_row(self):
+        # A "> " quote in the transcript looks like a composer row; the prompt below it must
+        # still be seen, and the composer is the LAST composer-like row.
+        self.screen("> quoted earlier text\n  Cursor Agent\n\n> \n")
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        self.env["FAKE_ECHO_DELAY"] = "60"
+        original = self.capture.read_text()
+
+        def swap():
+            self.wait_for_literal_send()
+            self.capture.write_text(original.replace("  Cursor Agent", "  Run this command?", 1))
+        thread = threading.Thread(target=swap)
+        thread.start()
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                              "--submit"])
+        thread.join()
+        self.assertEqual((code, refused["state"]), (3, "modal-approval"))
+        self.assertNotIn(["send-keys", "-t", "%7", "Enter"], self.sends())
+
+    def test_phrase_rows_sees_a_prompt_below_the_composer(self):
+        # An unmarked prompt drawn under the composer is seen (the old fence skipped it).
+        below = ["  Cursor Agent", "  \u2192 continue the source helper", "  Are you sure? (y/n)", ""]
+        self.assertEqual(helper.phrase_rows(below), {"Are you sure? (y/n)"})
+        # A real prompt row on the composer rows is seen too.
+        other = ["  Cursor Agent", "  \u2192 continue", "  Run this command?", ""]
+        self.assertEqual(helper.phrase_rows(other), {"Run this command?"})
+
+    def test_submit_counts_the_text_only_after_the_last_composer_row(self):
+        screen = ["> continue the source helper", "", "  \u2192 Add a follow-up", ""]
+        self.assertEqual(helper.tail_count(screen, "continue the source helper"), 0)
+
+    def test_submit_keeps_a_replaced_pane_state_after_the_text_is_typed(self):
+        # The pane process changes while the fence waits: the reply ends pane-replaced (not
+        # send-unconfirmed) and still says the text was sent and Enter was not.
+        self.screen("  Cursor Agent\n\n> \n")
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        pid_file = self.root / "pid"
+        self.env["FAKE_PID_FILE"] = str(pid_file)
+        self.env["FAKE_ECHO_DELAY"] = "60"
+
+        def swap():
+            self.wait_for_literal_send()
+            pid_file.write_text("999")
+        thread = threading.Thread(target=swap)
+        thread.start()
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                              "--submit"])
+        thread.join()
+        self.assertEqual((code, refused["state"]), (3, "pane-replaced"))
+        self.assertIn("Enter was NOT sent", refused["detail"])
+        self.assertIn("Do not resend it", refused["detail"])
+        self.assertNotIn("Nothing was sent", refused["detail"])
+        self.assertNotIn("..", refused["detail"])
+        self.assertNotIn(["send-keys", "-t", "%7", "Enter"], self.sends())
+
+    def test_observed_ready_submit_on_an_unlocatable_screen_types_nothing(self):
+        # An unclassified screen whose row count does not match tmux's history and pane
+        # height: the visible screen cannot be located, so a fenced submit cannot be bound.
+        # --observed-ready does not override that: prompt-unclear, and no key is sent.
+        self.screen("  build output line\n  another line\n\n")
+        self.env["FAKE_HISTORY"] = "7"
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        self.assertEqual(inspected["classification"], "unclassified")
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                              "--submit", "--observed-ready"])
+        self.assertEqual((code, refused["state"]), (2, "prompt-unclear"))
+        self.assertEqual(self.sends(), [])
+
+    def test_submit_refuses_a_text_cursor_would_paste_as_a_placeholder(self):
+        code, refused = self.submit("x" * 801)
+        self.assertEqual((code, refused["state"]), (2, "invalid-input"))
         self.assertEqual(self.sends(), [])
 
     def test_help_says_the_caller_owns_the_approval(self):
