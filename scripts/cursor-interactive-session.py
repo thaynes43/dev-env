@@ -1502,6 +1502,8 @@ def menu_rows_shown(text, truncated, rows_total, ident, lines):
 # (two in the live capture). The hint row of the menu appears only for skill commands, not for /usage.
 MENU_GAP_ROWS = 3
 MENU_BLOCK_MAX = 10
+MENU_MORE_ABOVE = "\u2191 more above"  # the menu's scroll rows, first and last row of the block, as the client prints them
+MENU_MORE_BELOW = "\u2193 more below"
 
 
 def inline_menu_shown(text, truncated, rows_total, ident, lines):
@@ -1510,7 +1512,7 @@ def inline_menu_shown(text, truncated, rows_total, ident, lines):
     lines[0] is the typed draft, lines[1] the selected menu row. Each appears exactly once on the visible screen
     (history above it is never searched). Below the draft come one to MENU_GAP_ROWS blank rows and then the menu: a
     block of at most MENU_BLOCK_MAX consecutive nonblank rows that holds the selected row and no other arrow-marked
-    row. Below the block there is nothing, down to a blank last pane row (no status footer, no model row, no output). A copy of these rows in the transcript, a menu of another command, an
+    row; every other row is an unmarked menu item ('/command ...') or the scroll row 'more above' first or 'more below' last. Below the block there is nothing, down to a blank last pane row (no status footer, no model row, no output). A copy of these rows in the transcript, a menu of another command, an
     argument draft, free text in the composer, a draft with no menu (nothing would be selected) or a menu above the
     draft does not match."""
     shown = [prompt_text(row) for row in visible_screen(text, truncated, rows_total, ident)]
@@ -1529,7 +1531,13 @@ def inline_menu_shown(text, truncated, rows_total, ident, lines):
         block.append(row)
     if not block or len(block) > MENU_BLOCK_MAX or any(below[gap + len(block):]) or shown[-1]:
         return False
-    return [row for row in block if MENU_MARKER.match(row)] == [lines[1]]
+    # Every other row is a menu item (an unmarked row starting with the slash command) or a scroll row at its end.
+    for index, row in enumerate(block):
+        if row == lines[1] or (row.startswith("/") and not MENU_MARKER.match(row)):
+            continue
+        if not (row == MENU_MORE_ABOVE and index == 0 or row == MENU_MORE_BELOW and index == len(block) - 1):
+            return False
+    return True
 
 
 def usage_view_shown(text, truncated, rows_total, ident, lines):

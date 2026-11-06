@@ -3747,11 +3747,20 @@ class UsageKeyTests(AnswerFixture):
             "menu above the draft": head[:13] + [selected, context, subagent, "", "", v[17], "", "", "", "", ""],
             "no blank row between": head + [v[17], selected, context, subagent, "", "", ""],
             "four blank rows between": head[:16] + [v[17], "", "", "", "", selected, context, subagent],
+            # Each of the next two ends on a blank last pane row, so only its own check can refuse it.
+            "four blank rows between, blank last row": head[2:] + [v[17], "", "", "", "", selected, context, subagent, ""],
+            "output below the menu after a blank row, blank last row": head[1:] + [v[17], "", "", selected, context, "", "  stray output", ""],
             "two marked rows": head + [v[17], "", "", selected, "   \u2192 /context                  Show context usage breakdown", subagent, ""],
             "selected row twice": head + [v[17], "", "", selected, selected, subagent, ""],
             "draft twice": head[:16] + ["  \u2192 /usage"] + [v[17], "", "", selected, context, ""] + [""],
             "output under the menu after a blank row": head + [v[17], "", "", selected, context, "", "  trailing output"],
             "menu block of eleven rows": head[:9] + [v[17], "", ""] + [selected] + ["     /row%d" % i for i in range(10)] + [""],
+            "status row directly under the menu": head + [v[17], "", "", selected, context, "  ~/work/example-task", ""],
+            "model row directly under the menu": head + [v[17], "", "", selected, context, "  Grok 4.7 256K Extra High \u00b7 7.3%", ""],
+            "output row inside the menu": head + [v[17], "", "", selected, "  Done.", subagent, ""],
+            "more-above row not first": head + [v[17], "", "", selected, "\u2191 more above", subagent, ""],
+            "more-below row not last": head + [v[17], "", "", selected, "\u2193 more below", subagent, ""],
+            "a marked scroll look-alike": head + [v[17], "", "", selected, "\u2193 more below now", subagent, ""],
             "status footer under the menu": head + [v[17], "", "", selected, "", "  Grok 4.7 256K Extra High \u00b7 7.3%", "  ~/work/example-task"],
             "menu on the last pane row": ["  earlier output"] + head + [v[17], "", "", selected, context, subagent],
             "loading text instead of the menu": head + [v[17], "", "", "Loading usage data...", "", "", ""],
@@ -3760,6 +3769,23 @@ class UsageKeyTests(AnswerFixture):
         for label, visible in cases.items():
             with self.subTest(label=label):
                 self.refused_menu(self.live_visible(visible), label)
+
+    def test_a_scrolled_menu_with_more_above_and_below_rows_still_passes(self):
+        v = LIVE_USAGE_CAPTURE_ROWS[-LIVE_HEIGHT:]
+        menu = [v[20], v[21], "     /create-subagent          Create custom subagents for specialized AI\u2026"]
+        for label, block in (("both", ["\u2191 more above"] + menu + ["\u2193 more below"]), ("above", ["\u2191 more above"] + menu),
+                             ("below", menu + ["\u2193 more below"])):
+            with self.subTest(label=label):
+                self.restart_case()
+                for path in (self.root / "state" / "cursor-interactive-session" / "approvals").glob("*"):
+                    path.unlink()
+                self.log.write_text("")
+                rows = v[:17][len(block) - 3:] + [v[17], "", ""] + block + [""]
+                self.assertEqual(len(rows), LIVE_HEIGHT)
+                self.live_show(self.live_visible(rows))
+                inspected = self.start_and_inspect()
+                code, sent = self.invoke("menu-key", self.args(inspected["receipt"]))
+                self.assertEqual((code, sent["state"]), (0, "key-sent"))
 
     def test_a_copy_in_the_transcript_or_in_history_is_not_the_live_menu(self):
         v = LIVE_USAGE_CAPTURE_ROWS[-LIVE_HEIGHT:]
