@@ -651,32 +651,54 @@ def clear_receipt(path, state):
 # Cursor holds fast literal input in a 75 ms paste buffer. An Enter that arrives inside that
 # window submits the whole text but can leave the text box holding it as a stale draft
 # (Cursor 2026.10.14, read from its UI code; G1 pane 2026-11-05T23:43Z). So Enter waits until
-# the window has passed and the text's tail shows in the pane.
+# the window has passed and the text's tail shows in the composer, with no prompt on screen.
 SUBMIT_SETTLE_SECONDS = 0.3
 SUBMIT_CHECKS = 5
 SUBMIT_TAIL = 24
+# Cursor shows a paste longer than this as "[Pasted text #N +M lines]", so its tail never shows.
+SUBMIT_MAX_CHARS = 800
+COMPOSER_ROW = re.compile(r"^\s*[→>›❯](\s|$)")
 
 
-def text_shown(tmux, pane, text):
-    """Whether the last characters of text show in the pane, ignoring the whitespace that
-    wrapping adds."""
-    captured, _truncated, _rows = read_capture_rows(tmux, pane)
-    tail = "".join(text.split())[-SUBMIT_TAIL:]
-    return tail in "".join(captured.split())
+def composer_text(visible):
+    """The visible screen's rows from its last composer row (→, >, › or ❯) down, without
+    whitespace; empty when no composer row is on screen. History rows never count."""
+    starts = [index for index, row in enumerate(visible) if COMPOSER_ROW.match(row)]
+    return "".join("".join(visible[starts[-1]:]).split()) if starts else ""
 
 
-def wait_until_shown(tmux, pane, text):
+def tail_count(visible, text):
+    return composer_text(visible).count("".join(text.split())[-SUBMIT_TAIL:])
+
+
+def phrase_rows(rows):
+    """The rows that hold a known prompt phrase."""
+    return {row.strip() for row in rows if modal_kinds([row])}
+
+
+def wait_until_shown(state, text, before):
+    """True once the composer shows the text's tail more often than before it was typed.
+    Refuses (Enter not sent) when the pane changes owner or process, or a prompt row appears
+    that the verified screen did not have (an answered trust box already there stays allowed)."""
+    before_count, before_prompts = before
     for _ in range(SUBMIT_CHECKS):
         time.sleep(SUBMIT_SETTLE_SECONDS)
-        try:
-            if text_shown(tmux, pane, text):
-                return True
-        except Refusal:
-            return False
+        ident = read_identity(state["tmux"], state["pane_id"], "send-unconfirmed", 3)
+        require_same_pane(state, ident)
+        captured, truncated, rows_total = read_capture_rows(state["tmux"], state["pane_id"])
+        visible = visible_screen(captured, truncated, rows_total, ident)
+        new = phrase_rows(visible) - before_prompts
+        if new:
+            kinds = modal_kinds(sorted(new))
+            raise Refusal(sorted(kinds)[0], "A prompt appeared after the literal text was sent, so Enter was NOT sent. "
+                                            "The text may be in the composer. Do not resend it or send Enter. Re-inspect.", 3)
+        if tail_count(visible, text) > before_count:
+            return True
     return False
 
 
-def send_instruction(tmux, pane, text, submit):
+def send_instruction(state, text, submit, before=(0, frozenset())):
+    tmux, pane = state["tmux"], state["pane_id"]
     literal = [tmux, "send-keys", "-t", pane, "-l", "--", text]
     try:
         sent = run(literal)
@@ -686,7 +708,13 @@ def send_instruction(tmux, pane, text, submit):
         raise Refusal("send-unconfirmed", "tmux did not accept the literal text. Do not retry this receipt. Re-inspect.", 3)
     if not submit:
         return False
-    if not wait_until_shown(tmux, pane, text):
+    try:
+        shown = wait_until_shown(state, text, before)
+    except Refusal as refusal:
+        if refusal.state.startswith("modal-"):
+            raise
+        shown = False
+    if not shown:
         raise Refusal("send-unconfirmed", "The literal text was sent but its end did not show in the pane, so Enter was "
                       "NOT sent. The text may be in the composer. Do not resend it or send Enter. Re-inspect.", 3)
     try:
@@ -733,8 +761,19 @@ def reply_locked(args, instruction, answered_text=None):
         raise Refusal("unclassified-ui", CLASSIFICATION_DETAILS["unclassified"] + " Nothing was sent.")
     if kind not in {"active", "unclassified"}:
         raise Refusal("unclassified-ui", "Cursor UI cannot be classified safely. Nothing was sent.")
+    if args.submit and len(instruction) > SUBMIT_MAX_CHARS:
+        raise Refusal("invalid-input", "With --submit the instruction must be at most 800 characters: Cursor shows a "
+                                       "longer paste as a placeholder, so its end would never show. Nothing was sent.")
+    before = (0, frozenset())
+    if args.submit:
+        try:
+            verified = visible_screen(text, truncated, rows_total, ident)
+            before = (tail_count(verified, instruction), frozenset(phrase_rows(verified)))
+        except Refusal:
+            raise Refusal("prompt-unclear", "The visible screen cannot be located, so a submit cannot be fenced. "
+                                            "Nothing was sent.")
     clear_receipt(path, state)
-    submitted = send_instruction(state["tmux"], state["pane_id"], instruction, args.submit)
+    submitted = send_instruction(state, instruction, args.submit, before)
     return {
         "state": "sent", "name": state["name"], "classification": kind, "submitted": submitted,
         "bytes": len(instruction.encode("utf-8")),
