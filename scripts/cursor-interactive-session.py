@@ -1405,11 +1405,6 @@ MENU_ROWS = {
 }
 
 
-def menu_key_path(name, approval_ref):
-    digest = hashlib.sha256(approval_ref.encode("utf-8")).hexdigest()
-    return state_path(name).parent / "menu-keys" / digest
-
-
 def validate_menu_key(args):
     """Read and check the inputs before the lock and before any tmux call. (raw, lines)."""
     if args.expect_kind not in MENU_KEYS:
@@ -1419,27 +1414,40 @@ def validate_menu_key(args):
     raw, lines = read_expected(args.expect_text_file)
     if modal_kind(lines):
         raise Refusal("invalid-input", "The expected text contains a prompt phrase. This command never answers a prompt. Nothing was sent.")
-    # The typed draft must be exactly the command (no argument), and the selected row must be the allowlisted one.
+    # Exactly two lines, in order: the allowlisted selected row, then the bare draft (no argument).
     command, selected_row = MENU_ROWS[args.expect_kind]
-    draft = any(MENU_MARKER.sub("", line, count=1).strip() == command for line in lines)
-    selected = any(selected_row.match(line) for line in lines)
-    if not draft or not selected:
-        raise Refusal("invalid-input", "For " + args.expect_kind + " the expected text needs the exact selected menu row "
-                                       "and a row holding only the " + command + " draft. Nothing was sent.")
+    draft = CURSOR_COMPOSER_ARROW + " " + command
+    if len(lines) != 2 or not selected_row.match(lines[0]) or lines[1] != draft:
+        raise Refusal("invalid-input", "For " + args.expect_kind + " the expected text must be exactly two lines, in order: "
+                                       "the selected menu row and then '" + draft + "'. Nothing was sent.")
     return raw, lines
 
 
+MENU_TAIL_ROWS = 2
+
+
 def menu_rows_shown(text, truncated, rows_total, ident, lines):
-    """True when the expected rows are on the visible screen as ONE contiguous block, with the draft row
-    (the last expected line) the last composer-arrow row of the visible screen: the menu is the live one
-    directly above the composer, not an old copy in the transcript. History above the visible screen is
-    never searched. Rows are read like prompt rows."""
+    """True when the expected two rows are the LIVE menu and draft of the visible screen.
+
+    The selected row and the draft each appear exactly once on the visible screen, the draft directly under
+    the selected row (history above the screen is never searched). The draft is the last composer-arrow row.
+    Below it come only the composer's own tail: at most two nonblank rows, the last one the workspace status row
+    (it starts with '~'), then blank rows down to the pane's last row, where the cursor is parked. A copy of
+    these rows in the transcript, a live row of another command or an argument draft below it, free text in the
+    composer, or a screen with no live composer does not match."""
     shown = [prompt_text(row) for row in visible_screen(text, truncated, rows_total, ident)]
-    size = len(lines)
-    for start in range(len(shown) - size + 1):
-        if shown[start:start + size] == lines:
-            return not any(MENU_MARKER.match(row) for row in shown[start + size:])
-    return False
+    if len(lines) != 2 or shown.count(lines[0]) != 1 or shown.count(lines[1]) != 1:
+        return False
+    start = shown.index(lines[0])
+    if shown[start + 1:start + 2] != [lines[1]]:
+        return False
+    below = shown[start + 2:]
+    if any(MENU_MARKER.match(row) for row in below):
+        return False
+    filled = [row for row in below if row]
+    if len(filled) > MENU_TAIL_ROWS or not filled or not filled[-1].startswith("~"):
+        return False
+    return not shown[-1] and int(ident["cursor_y"]) == int(ident["height"]) - 1
 
 
 def menu_key_session(args):
@@ -1449,7 +1457,7 @@ def menu_key_session(args):
 
 
 def menu_key_locked(args, raw, lines):
-    ledger = menu_key_path(args.name, args.approval_ref)
+    ledger = approval_path(args.name, args.approval_ref)  # the same ledger as answer: one reference, one key
     if ledger.exists():
         raise Refusal("approval-spent", "This approval reference was already used. One approval sends one key once. Nothing was sent.")
     path, state = load_owned(args.name, args.tmux)

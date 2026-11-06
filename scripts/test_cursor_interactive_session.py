@@ -2978,6 +2978,8 @@ RUN_ROWS = [
     "Cursor Agent v2026.10.14-0f9edde",
     "\u2192 /run-everything    Toggle Run Everything (currently disabled)",
     "\u2192 /run-everything",
+    "  Grok 4.7 256K Extra High \u00b7 7.3%",
+    "  ~/work/example-task",
 ]
 RUN_EXPECT = "\u2192 /run-everything    Toggle Run Everything (currently disabled)\n\u2192 /run-everything\n"
 RUN_APPROVAL = "OP192-run-everything-2026-11-06T06:20:00Z"
@@ -3020,7 +3022,7 @@ class MenuKeyTests(AnswerFixture):
 
     def menu_ledger(self, approval=MENU_APPROVAL):
         digest = __import__("hashlib").sha256(approval.encode("utf-8")).hexdigest()
-        return self.root / "state" / "cursor-interactive-session" / "menu-keys" / digest
+        return self.root / "state" / "cursor-interactive-session" / "approvals" / digest
 
     def test_menu_sends_exactly_one_enter_and_records_it(self):
         inspected = self.start_and_inspect()
@@ -3040,22 +3042,16 @@ class MenuKeyTests(AnswerFixture):
         self.assertEqual(len(self.sends()), 1)
 
     def test_wrong_screen_sends_nothing_and_keeps_the_approval(self):
-        usage_menu = ["Cursor Agent v2026.10.14-0f9edde", "\u2192 /usage    Show plan and on-demand usage", "\u2192 /usage"]
-        composer = ["Cursor Agent v2026.10.14-0f9edde", "\u2192 Add a follow-up"]
-        reordered = self.root / "reordered"
-        reordered.write_text("\u2192 /run-everything\n\u2192 /run-everything    Toggle Run Everything (currently disabled)\n")
-        cases = (
-            ("another command's menu", usage_menu, self.menu_expect),
-            ("a plain composer", composer, self.menu_expect),
-            ("menu rows reordered", RUN_ROWS, reordered),
-        )
-        for label, rows, expect in cases:
+        usage_menu = ["Cursor Agent v2026.10.14-0f9edde", "\u2192 /usage    Show plan and on-demand usage", "\u2192 /usage",
+                      "  ~/work/example-task"]
+        composer = ["Cursor Agent v2026.10.14-0f9edde", "\u2192 Add a follow-up", "  ~/work/example-task"]
+        for label, rows in (("another command's menu", usage_menu), ("a plain composer", composer)):
             with self.subTest(label=label):
                 self.restart_case()
                 self.log.write_text("")
                 self.show(rows)
                 inspected = self.start_and_inspect()
-                code, refused = self.invoke("menu-key", self.args(inspected["receipt"], expect=expect))
+                code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
                 self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
                 self.assertEqual(self.sends(), [])
                 self.assertFalse(self.menu_ledger().exists())
@@ -3133,11 +3129,25 @@ class MenuKeyTests(AnswerFixture):
         code, again = self.invoke("menu-key", self.args(inspected["receipt"]))
         self.assertEqual((code, again["state"]), (2, "approval-spent"))
 
-    def test_menu_key_does_not_touch_the_answer_ledger(self):
+    def test_menu_key_and_answer_share_one_ledger(self):
+        # One approval reference is spent once across both commands: the menu entry lives in answer's approvals/ ledger.
+        self.assertEqual(helper.approval_path(self.name, MENU_APPROVAL).parent.name, "approvals")
+        self.assertEqual(helper.approval_path(self.name, MENU_APPROVAL).name, self.menu_ledger().name)
         inspected = self.start_and_inspect()
-        self.invoke("menu-key", self.args(inspected["receipt"]))
-        self.assertFalse((self.root / "state" / "cursor-interactive-session" / "approvals").exists())
+        self.log.write_text("")
+        code, sent = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, sent["state"]), (0, "key-sent"))
+        self.assertEqual(json.loads(self.menu_ledger().read_text())["kind"], "run-everything-menu")
         self.assertNotIn("answers", self.state())
+        # A reference already spent by answer is refused here, before any tmux call.
+        self.restart_case()
+        self.menu_ledger(MENU_APPROVAL_2).parent.mkdir(parents=True, exist_ok=True)
+        self.menu_ledger(MENU_APPROVAL_2).write_text(json.dumps({"approval_ref": MENU_APPROVAL_2, "kind": "modal-trust"}))
+        inspected = self.start_and_inspect()
+        self.log.write_text("")
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"], approval=MENU_APPROVAL_2))
+        self.assertEqual((code, refused["state"]), (2, "approval-spent"))
+        self.assertEqual(self.sends(), [])
 
     def history_show(self, history_rows, visible_rows):
         """A capture whose first rows are scrolled history and whose last rows are the visible pane."""
@@ -3189,14 +3199,14 @@ class MenuKeyTests(AnswerFixture):
 
     def test_a_pane_that_changes_after_the_approval_is_spent_gets_no_key(self):
         changes = {
-            "an extra row appeared": {"capture": "\n".join(RUN_ROWS + ["extra row"]) + "\n\n"},
-            "the menu row was replaced": {"capture": "\n".join([RUN_ROWS[0], "\u2192 /usage-credits    Configure", RUN_ROWS[2]]) + "\n\n"},
+            "an extra row appeared": {"capture": "\n".join(RUN_ROWS[:1] + ["extra row"] + RUN_ROWS[1:]) + "\n\n"},
+            "the menu row was replaced": {"capture": "\n".join([RUN_ROWS[0], "\u2192 /usage-credits    Configure", *RUN_ROWS[2:]]) + "\n\n"},
             "the pane process was replaced": {"env": {"FAKE_PID": "999"}},
         }
         for label, change in changes.items():
             with self.subTest(label=label):
                 self.restart_case()
-                for path in (self.root / "state" / "cursor-interactive-session" / "menu-keys").glob("*"):
+                for path in (self.root / "state" / "cursor-interactive-session" / "approvals").glob("*"):
                     path.unlink()
                 self.env["FAKE_PID"] = "123"
                 self.show(RUN_ROWS)
@@ -3341,6 +3351,108 @@ class MenuKeyTests(AnswerFixture):
         code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
         self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
         self.assertEqual(self.sends(), [])
+
+    def refused_screen(self, rows, label, state="screen-mismatch", cursor=None):
+        self.restart_case()
+        self.log.write_text("")
+        self.show(rows)
+        if cursor is not None:
+            self.env["FAKE_CURSOR_Y"] = str(cursor)
+        inspected = self.start_and_inspect()
+        self.log.write_text("")
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, refused["state"]), (2, state), label)
+        self.assertEqual(self.sends(), [], label)
+        self.assertFalse(self.menu_ledger().exists(), label)
+
+    def test_copies_of_the_rows_never_stand_in_for_the_live_menu(self):
+        head, selected, draft, model, path = RUN_ROWS
+        enabled = "\u2192 /run-everything    Toggle Run Everything (currently enabled)"
+        cases = {
+            # (a) a disabled copy, then the live enabled row and the draft: an Enter would turn it OFF
+            "a: disabled copy, live enabled row": [head, selected, enabled, draft, model, path],
+            "a: disabled copy and draft copy, live enabled row": [head, selected, draft, enabled, draft, model, path],
+            # (b) copied rows, then a live row and draft of another command
+            "b: live /clear": [head, selected, draft, "\u2192 /clear    Clear the conversation", "\u2192 /clear", model, path],
+            # (c) copied rows, then a live argument draft
+            "c: live off argument": [head, selected, draft, "\u2192 /run-everything off", model, path],
+            # (d) copied rows, then live free text: an Enter would send a chat message
+            "d: live free text": [head, selected, draft, "\u2192 please summarise the review", model, path],
+            # (e) copied rows with no live composer under them (agent busy)
+            "e: busy agent, no composer": [head, selected, draft, "  Running tests...", "  ok  pkg/a", "  ok  pkg/b", "  ok  pkg/c"],
+            "e: busy agent, status rows only": [head, selected, draft, "  Running tests...", "  ok  pkg/a", "  ok  pkg/b", path],
+            "e: rows then nothing": [head, selected, draft],
+            # a live row of another command or an argument draft, with only the status row under it
+            "d: free text then only the status row": [head, selected, draft, "\u2192 please summarise the review", path],
+            "c: off argument then only the status row": [head, selected, draft, "\u2192 /run-everything off", path],
+            "b: other command then only the status row": [head, selected, draft, "\u2192 /clear", path],
+        }
+        for label, rows in cases.items():
+            with self.subTest(label=label):
+                self.refused_screen(rows, label)
+
+    def test_the_selected_row_or_the_draft_anywhere_else_on_screen_refuses(self):
+        head, selected, draft, model, path = RUN_ROWS
+        cases = {
+            "selected row twice": [head, selected, "  more output", selected, draft, model, path],
+            "draft twice": [head, draft, "  more output", selected, draft, model, path],
+            "rows apart": [head, selected, "  some other row", draft, model, path],
+        }
+        for label, rows in cases.items():
+            with self.subTest(label=label):
+                self.refused_screen(rows, label)
+
+    def test_the_draft_must_sit_in_the_composers_own_tail(self):
+        head, selected, draft, model, path = RUN_ROWS
+        cases = {
+            "no workspace status row last": [head, selected, draft, model, "  Add a follow-up"],
+            "three tail rows": [head, selected, draft, "  hint", model, path],
+            "text on the pane's last row": [head, selected, draft, model, path, "  trailing output"],
+        }
+        for label, rows in cases.items():
+            with self.subTest(label=label):
+                self.refused_screen(rows, label)
+
+    def test_the_pane_last_row_must_be_blank(self):
+        # The real pane parks its cursor on a blank last row under the status rows. Here the status row is the last row.
+        capture = "\n".join(RUN_ROWS) + "\n"
+        self.capture.write_text(capture)
+        for typed in (".echo", ".stale"):
+            Path(str(self.capture) + typed).unlink(missing_ok=True)
+        height = len(capture.splitlines())
+        self.env["FAKE_HEIGHT"] = str(height)
+        self.env["FAKE_CURSOR_Y"] = str(height - 1)
+        self.env["FAKE_HISTORY"] = "0"
+        inspected = self.start_and_inspect()
+        self.log.write_text("")
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+        self.assertEqual(self.sends(), [])
+
+    def test_the_cursor_must_sit_on_the_last_row(self):
+        self.refused_screen(RUN_ROWS, "cursor above the last row", cursor=1)
+
+    def test_only_the_exact_two_line_block_is_accepted(self):
+        inspected = self.start_and_inspect()
+        receipt = inspected["receipt"]
+        selected, draft = RUN_ROWS[1], RUN_ROWS[2]
+        cases = {
+            "one line": selected + "\n",
+            "three lines": selected + "\n" + draft + "\n" + RUN_ROWS[3] + "\n",
+            "a line before": "\u2192 /run-everything\n" + selected + "\n" + draft + "\n",
+            "reversed": draft + "\n" + selected + "\n",
+            "draft with trailing text": selected + "\n\u2192 /run-everything now\n",
+            "draft with another arrow": selected + "\n> /run-everything\n",
+            "enabled row": selected.replace("disabled", "enabled") + "\n" + draft + "\n",
+        }
+        for label, text in cases.items():
+            with self.subTest(label=label):
+                path = self.root / ("exact-" + label.replace(" ", "-"))
+                path.write_text(text)
+                self.log.write_text("")
+                code, refused = self.invoke("menu-key", self.args(receipt, expect=path))
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+                self.assertEqual(self.commands("tmux"), [])
 
 
 if __name__ == "__main__":
