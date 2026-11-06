@@ -671,12 +671,21 @@ def tail_count(visible, text):
     return composer_text(visible).count("".join(text.split())[-SUBMIT_TAIL:])
 
 
-def phrase_rows(visible):
-    """The rows above the composer that hold a known prompt phrase. The composer rows hold
-    the typed instruction, so a phrase in its own text is never taken for a prompt."""
+def phrase_rows(visible, text=""):
+    """The visible rows that hold a known prompt phrase. On the composer rows (the last
+    composer row down), a row is skipped only when every phrase on it is in the typed
+    instruction itself, so the instruction's own words are not taken for a prompt while a
+    prompt drawn below the composer is still seen."""
     starts = [index for index, row in enumerate(visible) if COMPOSER_ROW.match(row)]
-    rows = visible[:starts[-1]] if starts else visible
-    return {row.strip() for row in rows if modal_kinds([row])}
+    first = starts[-1] if starts else len(visible)
+    typed = text.casefold()
+    found = set()
+    for index, row in enumerate(visible):
+        hits = phrases(row)
+        if not hits or (index >= first and all(hit in typed for hit in hits)):
+            continue
+        found.add(row.strip())
+    return found
 
 
 def wait_until_shown(state, text, before):
@@ -690,7 +699,7 @@ def wait_until_shown(state, text, before):
         require_same_pane(state, ident)
         captured, truncated, rows_total = read_capture_rows(state["tmux"], state["pane_id"])
         visible = visible_screen(captured, truncated, rows_total, ident)
-        new = phrase_rows(visible) - before_prompts
+        new = phrase_rows(visible, text) - before_prompts
         if new:
             kinds = modal_kinds(sorted(new))
             raise Refusal(sorted(kinds)[0], "A prompt appeared after the literal text was sent, so Enter was NOT sent. "
@@ -771,7 +780,7 @@ def reply_locked(args, instruction, answered_text=None):
     if args.submit:
         try:
             verified = visible_screen(text, truncated, rows_total, ident)
-            before = (tail_count(verified, instruction), frozenset(phrase_rows(verified)))
+            before = (tail_count(verified, instruction), frozenset(phrase_rows(verified, instruction)))
         except Refusal:
             raise Refusal("prompt-unclear", "The visible screen cannot be located, so a submit cannot be fenced. "
                                             "Nothing was sent.")

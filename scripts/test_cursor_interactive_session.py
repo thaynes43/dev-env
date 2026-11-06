@@ -2771,6 +2771,18 @@ class AnswerTests(AnswerFixture):
         self.assertEqual((code, refused["state"]), (3, "modal-approval"))
         self.assertNotIn(["send-keys", "-t", "%7", "Enter"], self.sends())
 
+    def test_phrase_rows_sees_a_prompt_below_the_composer(self):
+        text = "continue the source helper"
+        below = ["  Cursor Agent", "  \u2192 " + text, "  Are you sure? (y/n)", ""]
+        # A prompt drawn under the composer, with no marker row of its own, is seen.
+        self.assertEqual(helper.phrase_rows(below, text), {"Are you sure? (y/n)"})
+        # The instruction's own words on the composer rows are not a prompt.
+        own = ["  Cursor Agent", "  \u2192 answer yes/no: are you sure (y/n)", ""]
+        self.assertEqual(helper.phrase_rows(own, "answer yes/no: are you sure (y/n)"), set())
+        # A prompt phrase on a composer row that the instruction does not contain is seen.
+        other = ["  Cursor Agent", "  \u2192 continue", "  Run this command?", ""]
+        self.assertEqual(helper.phrase_rows(other, "continue"), {"Run this command?"})
+
     def test_submit_counts_the_text_only_after_the_last_composer_row(self):
         screen = ["> continue the source helper", "", "  \u2192 Add a follow-up", ""]
         self.assertEqual(helper.tail_count(screen, "continue the source helper"), 0)
