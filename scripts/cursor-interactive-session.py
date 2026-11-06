@@ -56,6 +56,9 @@ ALLOWED_FLAGS = ("--workspace", "--model")
 DIVIDER = "\u2500"
 COMMAND_CHOICE = "y"
 PENDING_STATUS = "waiting for approval"
+# Pinned Cursor 2026.10.14 renderer: a separate dim, right-aligned footer beneath
+# the command decision. It is UI chrome, never part of the expected command.
+COMMAND_REVIEW_FOOTER = "ctrl+r to review changed files"
 # Cursor's command prompt with more than one command waiting: a counter row under the divider
 # and a switch hint after the Skip row. Run (once), y, answers only the approval shown.
 QUEUE_HEADER = re.compile(r"Approval ([1-9][0-9]?) of ([1-9][0-9]?)")
@@ -64,8 +67,9 @@ QUEUE_HINT = "\u2190/\u2192 to switch approval"
 # active decision only. It is never sent outside the command prompt.
 REJECT_CHOICE = "ctrl-c"
 # Cursor draws a turn error under the prompt as "Error: <title>" (Agent stopped retrying,
-# Connection failed, ...). With any row after the Skip row or the switch hint, only a
-# rejection may be answered, and those rows must start with such an error line; approving a
+# Connection failed, ...). Apart from the exact UI review footer, with any nonblank
+# row after the Skip row or switch hint only rejection may be answered, and those
+# rows must start with such an error line; approving a
 # command its turn may no longer await is refused.
 ERROR_PREFIX = "Error: "
 SKIP_SUFFIX = "(esc or n)"
@@ -878,6 +882,13 @@ def validate_answer(args):
         # Rows after the Skip row or the hint can only be one turn error footer, and only a
         # rejection is answered under it. An error line inside the prompt is refused too.
         tail = lines[prompt_end(lines):]
+        # The pinned client may put its exact review hint before a turn error.
+        # Bind both rows in the expected text; this never permits an approval.
+        if tail and tail[0] == COMMAND_REVIEW_FOOTER:
+            if choice != REJECT_CHOICE or len(tail) < 2 or lines.count(COMMAND_REVIEW_FOOTER) != 1:
+                raise Refusal("invalid-input", "A review hint before an error is rejection-only and must precede an "
+                                               "explicit Error block. Nothing was sent.")
+            tail = tail[1:]
         errors = sum(line.startswith(ERROR_PREFIX) for line in lines)
         if (any(line.startswith(ERROR_PREFIX) for line in prompt_rows(lines))
                 or tail and (choice != REJECT_CHOICE or not tail[0].startswith(ERROR_PREFIX) or errors != 1)):
@@ -1107,8 +1118,8 @@ def phrases(row):
 
 def check_divider_prompt(visible, boxes, first, last, width, lines):
     """Cursor's command prompt: rows first..last are not in a box, sit directly under a
-    divider row that spans the pane, and have only blank rows after them to the pane
-    bottom. No other row on the visible screen holds a prompt phrase, except Cursor's
+    divider row that spans the pane, and have only blank rows or one exact review
+    footer after them to the pane bottom. No other row on the visible screen holds a prompt phrase, except Cursor's
     status line for the pending command.
 
     The command is not in a box, so only spaces pad its rows: with spaces alone taken
@@ -1120,8 +1131,23 @@ def check_divider_prompt(visible, boxes, first, last, width, lines):
     if first < 1 or visible[first - 1] != DIVIDER * width:
         raise Refusal("prompt-unclear", "The command prompt is not directly under a divider row across the pane. "
                                         "Nothing was sent.")
-    if any(row.strip(" ") for row in visible[last + 1:]):
+    tail = [row.strip(" ") for row in visible[last + 1:] if row.strip(" ")]
+    if tail not in ([], [COMMAND_REVIEW_FOOTER]):
         raise Refusal("prompt-unclear", "Something follows the command prompt before the pane bottom. Nothing was sent.")
+    if tail or COMMAND_REVIEW_FOOTER in lines:
+        if tail.count(COMMAND_REVIEW_FOOTER) + lines.count(COMMAND_REVIEW_FOOTER) != 1:
+            raise Refusal("prompt-unclear", "The command review footer must appear only once. Nothing was sent.")
+        # Unlike a blank tail, this exception must not make a cropped command
+        # answerable when the caller also crops its expected text. Bind the
+        # pinned renderer's command start, question and full decision end.
+        body = prompt_rows(lines)
+        command = body[1:] if QUEUE_HEADER.fullmatch(body[0]) else body
+        end = body[-2] if body[-1] == QUEUE_HINT else body[-1]
+        skip = "Skip & tell the agent what to do instead " + SKIP_SUFFIX
+        if (not command or not command[0].startswith("$ ") or body.count("Run this command?") != 1
+                or body.count(skip) != 1 or end != skip):
+            raise Refusal("prompt-unclear", "The review footer requires a complete command start, question and Skip row. "
+                                            "Nothing was sent.")
     if any(phrases(row) - {PENDING_STATUS} for row in visible[:first] + visible[last + 1:]):
         raise Refusal("prompt-unclear", "Another prompt is on the visible screen. Nothing was sent.")
     if [row.strip(" ") for row in visible[first:last + 1] if row.strip(" ")] != lines:

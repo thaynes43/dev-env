@@ -364,6 +364,18 @@ supported observation settles it; it is never answered again under the same
 approval. No prompt text or
 instruction is stored or printed.
 
+The pinned Cursor 2026.10.14 command decision can also show the separate
+`ctrl+r to review changed files` footer beneath its Skip/switch row. For a
+command prompt bound under its full-width divider, the trailing rows must be
+blank or contain exactly one such footer, with only ASCII spaces trimmed.
+Changed text, duplicate hints, tabs, nonbreaking spaces, box padding, error
+rows or other trailing content still refuse approval. The footer is UI chrome,
+not part of the command. Normally it is excluded from the expected text; the
+rejection-only Error layout below explicitly includes it. It grants no approval and changes no receipt,
+pane/process/owner, one-key or spent-ledger check. It does not qualify another
+client version or arbitrary trailing UI. The complete sanitized 80x24 capture
+and its renderer reference are in `command-approval-review-footer.json`.
+
 ### The prompt must be the current screen
 
 The capture asks tmux for 80 history rows and the visible pane
@@ -502,7 +514,9 @@ when the expected text shows `(y)` at the end of exactly one row and no
 - the rows are not inside a box;
 - the row directly above the first expected row is the divider: `─` repeated
   exactly the pane width, nothing else;
-- every row after the last expected row, to the pane bottom, is blank;
+- every row after the last expected row, to the pane bottom, is blank, except
+  for at most one exact ASCII-space-padded `ctrl+r to review changed files`
+  UI footer (the pinned layout above);
 - no other row on the visible screen holds a known prompt phrase, except
   Cursor's own `Waiting for approval...` status line for the pending command,
   which it shows above the divider.
@@ -599,11 +613,20 @@ as `Error: <title>` (for example `Error: Agent stopped retrying` or
 2026-11-05T21:41:47Z; anonymized capture
 [`g1-command-approval-aborted.json`](../scripts/cursor-interactive-session-fixtures/g1-command-approval-aborted.json)).
 The expected text for a rejection may then end with the footer rows, after the
-Skip row or the switch hint, once. Any row after the Skip row or the hint
-refuses `y`, and refuses `ctrl-c` unless those rows start with one `Error: `
-line: a command whose turn may have ended is never approved. After one rejection,
+Skip row or the switch hint, once. Apart from the exact UI review footer,
+any nonblank row after the Skip row or the hint refuses `y`, and refuses
+`ctrl-c` unless those rows start with one `Error: ` line: a command whose turn may have ended is never approved. After one rejection,
 the last decision shows alone, without the counter row or hint, and needs a
 fresh `inspect` and its own approval reference.
+
+The pinned client can instead draw its exact review footer immediately before
+that Error block (captured queued decision, 2026-11-06T20:37Z). Only a rejection
+can bind this layout: include the exact review row and the complete Error block
+in the expected text after the Skip/switch hint. The footer must occur once;
+the full command start, question, Skip and queue boundaries remain required.
+An Error block always prohibits `y`, including when the review footer precedes
+it. Omitting either block, changing the footer or any unbound trailing content
+still refuses. This does not permit an unguarded Ctrl+C.
 
 #### Lesson: qualify a prompt class on a real capture first
 
