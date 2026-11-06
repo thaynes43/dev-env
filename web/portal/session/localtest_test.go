@@ -4,6 +4,7 @@ package session
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/http"
@@ -130,7 +131,7 @@ func TestLocalTestServesRealPagesWithBanner(t *testing.T) {
 		path, policy string
 		want         []string
 	}{
-		{SessionsPath, portal.ProductPolicy, []string{"fixture-portal-polish", "fixture-coordinator"}},
+		{SessionsPath, portal.ProductSendPolicy, []string{"fixture-portal-polish", "fixture-coordinator"}},
 		{TasksPath, portal.ProductPolicy, []string{"Fixture: portal visual refresh"}},
 		{pagesPath, "", []string{"Fixture sample alert"}},
 		{AsksPath, "", []string{"Which fixture should the agent use for the next check?"}},
@@ -305,8 +306,22 @@ func TestLocalTestRefusesSourcesOffTheFixtureNet(t *testing.T) {
 	good := func() AssemblyConfig {
 		s := source(upstreams.dial)
 		tasks := &TaskSource{path: s.path, client: source(upstreams.dial).client, now: now}
-		return AssemblyConfig{Sessions: s, Tasks: tasks, Pages: newPagesSource(true, now, upstreams.dial),
-			Asks: &AsksSource{client: source(upstreams.dial).client}, Claims: &ClaimsSource{client: source(upstreams.dial).client}}
+		authorizer, err := localTestCurrentAuthorizer(&localTestStore{}, caPEM, now, upstreams)
+		if err != nil {
+			t.Fatal(err)
+		}
+		send := &commandHandler{authorizer: authorizer, transport: &commandClient{client: source(upstreams.dial).client}}
+		launch := &launchHandler{authorizer: authorizer, transport: &launchClient{client: source(upstreams.dial).client}}
+		s.UseConversations(&conversationSource{authorizer: authorizer, client: source(upstreams.dial).client})
+		return AssemblyConfig{Sessions: s, Tasks: tasks, Pages: newPagesSource(true, now, upstreams.dial), Authorizer: authorizer,
+			Asks: &AsksSource{client: source(upstreams.dial).client}, Claims: &ClaimsSource{client: source(upstreams.dial).client}, Send: send, Launch: launch}
+	}
+	offNetAuthorizer := func() *CurrentAuthorizer {
+		a, err := newCurrentAuthorizer(CurrentAuthorizationConfig{Issuer: localTestIssuer, UserInfoURL: "https://" + localTestIssuerHost + "/application/o/userinfo/", Store: &localTestStore{}, Now: now, Timeout: time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
 	}
 	if err := localTestDialersFixtureOnly(good(), upstreams); err != nil {
 		t.Fatalf("fixture-only config refused: %v", err)
@@ -320,6 +335,40 @@ func TestLocalTestRefusesSourcesOffTheFixtureNet(t *testing.T) {
 		"claims proxy":            func(c *AssemblyConfig) { c.Claims.client.Transport.(*http.Transport).Proxy = http.ProxyFromEnvironment },
 		"claims missing":          func(c *AssemblyConfig) { c.Claims = nil },
 		"conversations":           func(c *AssemblyConfig) { c.Sessions.conversations = previewConversation{} },
+		"send default dialer": func(c *AssemblyConfig) {
+			c.Send = &commandHandler{transport: &commandClient{client: source(nil).client}}
+		},
+		"send other transport": func(c *AssemblyConfig) { c.Send = &commandHandler{transport: &commandTransportFake{}} },
+		"send missing":         func(c *AssemblyConfig) { c.Send = nil },
+		"launch default dialer": func(c *AssemblyConfig) {
+			c.Launch = &launchHandler{transport: &launchClient{client: source(nil).client}}
+		},
+		"launch missing": func(c *AssemblyConfig) { c.Launch = nil },
+		"send other authorizer": func(c *AssemblyConfig) {
+			c.Send.(*commandHandler).authorizer = offNetAuthorizer()
+		},
+		"send authorizer other type": func(c *AssemblyConfig) {
+			c.Send.(*commandHandler).authorizer = authorizeFunc(nil)
+		},
+		"launch other authorizer": func(c *AssemblyConfig) {
+			c.Launch.(*launchHandler).authorizer = offNetAuthorizer()
+		},
+		"launch authorizer other type": func(c *AssemblyConfig) {
+			c.Launch.(*launchHandler).authorizer = authorizeFunc(nil)
+		},
+		"authorizer default dialer": func(c *AssemblyConfig) {
+			a := offNetAuthorizer()
+			c.Authorizer = a
+			c.Sessions.conversations.(*conversationSource).authorizer = a
+		},
+		"authorizer other type": func(c *AssemblyConfig) { c.Authorizer = authorizeFunc(nil) },
+		"history default dialer": func(c *AssemblyConfig) {
+			c.Sessions.conversations.(*conversationSource).client = source(nil).client
+		},
+		"history other authorizer": func(c *AssemblyConfig) {
+			c.Sessions.conversations.(*conversationSource).authorizer = offNetAuthorizer()
+		},
+		"history missing": func(c *AssemblyConfig) { c.Sessions.conversations = nil },
 	} {
 		c := good()
 		mutate(&c)

@@ -44,15 +44,19 @@ const (
 	// LocalTestBannerID is the id of the banner every local test page carries.
 	LocalTestBannerID = "portal-localtest-banner"
 
-	localTestHost     = "portal.localtest.invalid"
-	localTestOrigin   = "https://" + localTestHost
-	localTestIssuer   = "https://issuer.localtest.invalid/fixture-only/"
-	localTestClientID = "dev-env-portal-localtest"
-	localTestSubject  = "local-test-reader"
-	localTestBanner   = `<p class="banner" id="` + LocalTestBannerID + `" role="note">Local test instance · fixture data · fixed test principal · not production</p>`
-	localTestText     = "Local test instance (fixture data, not production).\n"
-	localTestOPToken  = "local-test-openproject-fixture"
-	localTestAMHost   = "alertmanager-operated.observability.svc.cluster.local:9093"
+	localTestHost       = "portal.localtest.invalid"
+	localTestOrigin     = "https://" + localTestHost
+	localTestIssuer     = "https://issuer.localtest.invalid/fixture-only/"
+	localTestClientID   = "dev-env-portal-localtest"
+	localTestSubject    = "local-test-reader"
+	localTestBanner     = `<p class="banner" id="` + LocalTestBannerID + `" role="note">Local test instance · fixture data · fixed test principal · not production</p>`
+	localTestText       = "Local test instance (fixture data, not production).\n"
+	localTestOPToken    = "local-test-openproject-fixture"
+	localTestAMHost     = "alertmanager-operated.observability.svc.cluster.local:9093"
+	localTestIssuerHost = "issuer.localtest.invalid"
+	// localTestAccessToken is the seeded session's fixture access token. Only
+	// the fixture UserInfo route accepts it.
+	localTestAccessToken = "local-test-fixture-access-token"
 )
 
 var errLocalTestNetwork = errors.New("portal local test instance opens no network connection")
@@ -66,6 +70,7 @@ type LocalTestFixtures struct{ Sessions, Tasks []byte }
 type LocalTest struct {
 	handler   http.Handler
 	upstreams *localTestNet
+	calls     *localTestCalls
 	close     func()
 }
 
@@ -104,30 +109,37 @@ func NewLocalTest(listen netip.AddrPort, fixtures LocalTestFixtures) (*LocalTest
 		upstreams.close()
 		_ = os.RemoveAll(dir)
 	}
-	instance, err := assembleLocalTest(listen, dir, at, now, sessionsFixture.Body, tasksFixture.Body, upstreams)
+	calls := &localTestCalls{}
+	instance, err := assembleLocalTest(listen, dir, at, now, sessionsFixture.Body, tasksFixture.Body, upstreams, calls)
 	if err != nil {
 		closeAll()
 		return nil, err
 	}
-	return &LocalTest{handler: instance, upstreams: upstreams, close: closeAll}, nil
+	return &LocalTest{handler: instance, upstreams: upstreams, calls: calls, close: closeAll}, nil
 }
 
-func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func() time.Time, sessionsBody, tasksBody []byte, upstreams *localTestNet) (http.Handler, error) {
+func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func() time.Time, sessionsBody, tasksBody []byte, upstreams *localTestNet, calls *localTestCalls) (http.Handler, error) {
 	operatorToken := localTestOperatorToken(at.Add(30 * 24 * time.Hour))
 	operatorPath, openProjectPath := filepath.Join(dir, "operator-token"), filepath.Join(dir, "openproject-token")
 	if os.WriteFile(operatorPath, []byte(operatorToken+"\n"), 0o600) != nil || os.WriteFile(openProjectPath, []byte(localTestOPToken+"\n"), 0o600) != nil {
 		return nil, portal.ErrUnavailable
 	}
-	caPEM, certs, err := localTestCertificates(operatorPortalHost, openProjectPortalHost)
+	caPEM, certs, err := localTestCertificates(operatorPortalHost, openProjectPortalHost, localTestIssuerHost)
 	if err != nil {
 		return nil, err
 	}
 	asks, claims := localTestAsks(at), localTestClaims(at)
-	upstreams.serve(operatorPortalHost+":8443", &certs[0], localTestOperator(operatorToken, sessionsBody, asks, claims))
+	writes := &localTestWrites{calls: calls, now: now, sessions: sessionsBody, repos: localTestLaunchRepos, asks: asks}
+	upstreams.serve(operatorPortalHost+":8443", &certs[0], localTestOperator(operatorToken, claims, writes))
 	upstreams.serve(openProjectPortalHost+":8443", &certs[1], localTestOpenProject(tasksBody))
 	upstreams.serve(localTestAMHost, nil, localTestAlertmanager())
+	upstreams.serve(localTestIssuerHost+":443", &certs[2], localTestUserInfo())
 
 	sessions, err := newSessionSource(operatorPath, caPEM, now, upstreams.dial)
+	if err != nil {
+		return nil, err
+	}
+	historyClient, err := pinnedClient(caPEM, operatorPortalHost, 5*time.Second, upstreams.dial)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +167,7 @@ func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func
 		return nil, err
 	}
 	expires := at.Add(12 * time.Hour)
-	if err = store.PutSession(context.Background(), key, Record{Principal: principal, CSRF: csrf, CreatedAt: at.Add(-time.Minute), IdleExpiresAt: expires, ExpiresAt: expires, accessToken: "local-test-fixture-access-token", tokenExpiresAt: expires}); err != nil {
+	if err = store.PutSession(context.Background(), key, Record{Principal: principal, CSRF: csrf, CreatedAt: at.Add(-time.Minute), IdleExpiresAt: expires, ExpiresAt: expires, accessToken: localTestAccessToken, tokenExpiresAt: expires}); err != nil {
 		return nil, err
 	}
 	verifier, err := NewTokenVerifier(VerifierConfig{Issuer: localTestIssuer, ClientID: localTestClientID, Algorithms: []string{oidc.ES256}, Keys: localTestKeys{}, Now: now})
@@ -166,8 +178,22 @@ func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func
 	if err != nil {
 		return nil, err
 	}
+	authorizer, err := localTestCurrentAuthorizer(store, caPEM, now, upstreams)
+	if err != nil {
+		return nil, err
+	}
+	send, err := localTestSend(engine, authorizer, store, sessionsBody, at, operatorPath, caPEM, now, upstreams)
+	if err != nil {
+		return nil, err
+	}
+	launchTransport, err := newLaunchClient(operatorPath, caPEM, now, upstreams.dial)
+	if err != nil {
+		return nil, err
+	}
+	launch := &launchHandler{scope: &launchScope{Repos: localTestLaunchRepos}, engine: engine, authorizer: authorizer, transport: launchTransport, now: now}
+	sessions.UseConversations(&conversationSource{authorizer: authorizer, targets: localTestHistoryTargets(), tokenPath: operatorPath, client: historyClient, now: now})
 	config := AssemblyConfig{
-		Session: engine, Authorizer: localTestAuthorizer{principal: principal}, Reader: portal.UnavailableReader{},
+		Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Send: send, Launch: launch,
 		Sessions: sessions, Tasks: tasks, Pages: newPagesSource(true, now, upstreams.dial),
 		Asks:     &AsksSource{path: asksBase.path, client: asksBase.client, now: now},
 		Claims:   &ClaimsSource{path: claimsBase.path, client: claimsBase.client, now: now, project: claimsProject},
@@ -186,14 +212,45 @@ func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func
 // source's client dials through the fixture net, has no proxy, and no source
 // carries another reader. It runs before any request can be served.
 func localTestDialersFixtureOnly(c AssemblyConfig, upstreams *localTestNet) error {
-	if c.Sessions == nil || c.Tasks == nil || c.Pages == nil || c.Asks == nil || c.Claims == nil || c.Send != nil || c.Launch != nil {
+	if c.Sessions == nil || c.Tasks == nil || c.Pages == nil || c.Asks == nil || c.Claims == nil {
 		return errLocalTestNetwork
 	}
-	if c.Sessions.conversations != nil || c.Sessions.allowance != nil || c.Sessions.currentSource != nil || c.Sessions.aggregateAllowance != nil || c.Sessions.questionAuditProject != "" {
+	launch, ok := c.Launch.(*launchHandler)
+	if !ok || launch == nil {
+		return errLocalTestNetwork
+	}
+	launchClient, ok := launch.transport.(*launchClient)
+	if !ok || launchClient == nil {
+		return errLocalTestNetwork
+	}
+	send, ok := c.Send.(*commandHandler)
+	if !ok || send == nil {
+		return errLocalTestNetwork
+	}
+	sendClient, ok := send.transport.(*commandClient)
+	if !ok || sendClient == nil {
+		return errLocalTestNetwork
+	}
+	if c.Sessions.allowance != nil || c.Sessions.currentSource != nil || c.Sessions.aggregateAllowance != nil || c.Sessions.questionAuditProject != "" {
+		return errLocalTestNetwork
+	}
+	authorizer, ok := c.Authorizer.(*CurrentAuthorizer)
+	if !ok || authorizer == nil {
+		return errLocalTestNetwork
+	}
+	history, ok := c.Sessions.conversations.(*conversationSource)
+	if !ok || history == nil || history.authorizer != authorizer {
+		return errLocalTestNetwork
+	}
+	// Send and launch authorize each action with the assembly's authorizer.
+	if sendAuthorizer, ok := send.authorizer.(*CurrentAuthorizer); !ok || sendAuthorizer != authorizer {
+		return errLocalTestNetwork
+	}
+	if launchAuthorizer, ok := launch.authorizer.(*CurrentAuthorizer); !ok || launchAuthorizer != authorizer {
 		return errLocalTestNetwork
 	}
 	want := reflect.ValueOf(upstreams.dial).Pointer()
-	for _, client := range []*http.Client{c.Sessions.client, c.Tasks.client, c.Pages.client, c.Asks.client, c.Claims.client} {
+	for _, client := range []*http.Client{c.Sessions.client, c.Tasks.client, c.Pages.client, c.Asks.client, c.Claims.client, sendClient.client, launchClient.client, authorizer.client, history.client} {
 		if client == nil {
 			return errLocalTestNetwork
 		}
@@ -282,18 +339,6 @@ func markLocalTest(contentType string, body []byte) []byte {
 	}
 }
 
-// localTestAuthorizer admits only the fixed principal, only on the resources
-// the production authorizer admits, and only for the bound session reference.
-type localTestAuthorizer struct{ principal portal.Principal }
-
-func (a localTestAuthorizer) Authorize(ctx context.Context, p portal.Principal, r portal.Resource) error {
-	ref, ok := ctx.Value(sessionContextKey{}).(sessionReference)
-	if p != a.principal || !allowedResource(r) || !ok || ref.principal != p {
-		return portal.ErrDenied
-	}
-	return nil
-}
-
 // localTestKeys verifies no signature: no ID token is ever accepted, so the
 // only session is the seeded one.
 type localTestKeys struct{}
@@ -320,6 +365,7 @@ type localTestStore struct {
 	mu       sync.Mutex
 	logins   map[Handle]Login
 	sessions map[Handle]Record
+	commands map[string]*localTestCommand
 }
 
 func (s *localTestStore) PutLogin(_ context.Context, h Handle, v Login) error {
@@ -489,18 +535,24 @@ func localTestJSON(w http.ResponseWriter, contentType string, body []byte) {
 	_, _ = w.Write(body)
 }
 
-func localTestOperator(token string, sessions []byte, asks []apiv1.Ask, claims apiv1.PortalTaskClaims) http.Handler {
+func localTestOperator(token string, claims apiv1.PortalTaskClaims, writes *localTestWrites) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer "+token {
+		if r.Header.Get("Authorization") != "Bearer "+token {
 			http.Error(w, "fixture operator refused", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodGet {
+			writes.ServeHTTP(w, r)
 			return
 		}
 		switch {
 		case r.URL.Path == "/v1/sessions":
-			localTestJSON(w, mediaJSON, sessions)
+			localTestJSON(w, mediaJSON, writes.sessionsBody())
+		case strings.HasPrefix(r.URL.Path, apiv1.PortalConversationPrefix) && strings.HasSuffix(r.URL.Path, "/conversation"):
+			writes.conversation(w, r)
 		case r.URL.Path == apiv1.PortalAsksPath:
 			list := apiv1.AskList{Asks: []apiv1.Ask{}, Complete: true}
-			for _, ask := range asks {
+			for _, ask := range writes.asksSnapshot() {
 				if r.URL.Query().Get(apiv1.AskQueryState) != apiv1.AskStateFilterOpen || ask.State == apiv1.AskStateOpen {
 					list.Asks = append(list.Asks, ask)
 				}
@@ -508,7 +560,7 @@ func localTestOperator(token string, sessions []byte, asks []apiv1.Ask, claims a
 			raw, _ := json.Marshal(list)
 			localTestJSON(w, mediaJSON, raw)
 		case strings.HasPrefix(r.URL.Path, apiv1.PortalAsksPath+"/"):
-			for _, ask := range asks {
+			for _, ask := range writes.asksSnapshot() {
 				if r.URL.Path == apiv1.PortalAskPath(ask.ID) {
 					raw, _ := json.Marshal(ask)
 					localTestJSON(w, mediaJSON, raw)
