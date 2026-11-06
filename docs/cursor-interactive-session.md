@@ -77,6 +77,13 @@ file. Shell metacharacters remain literal text.
 
 ## Identity and receipts
 
+Expected prompt files remain limited to 4096 UTF-8 bytes and 20 nonblank rows
+for approvals and other prompt kinds. Only `answer --expect-kind modal-approval
+--choice ctrl-c` accepts up to 64 nonblank rows to reject a longer command.
+The complete command must still fit on the current visible screen, directly
+under its divider; scrollback is insufficient. This does not resize the pane,
+approve execution, or relax the custody, fresh-receipt or one-shot checks.
+
 The owner marker is `ci1-` plus a SHA-256 prefix of the task name and resolved
 worktree. It is stored in `$XDG_STATE_HOME/cursor-interactive-session/<name>`
 (default `~/.local/state/...`, mode `0600`) and on the tmux session as
@@ -318,7 +325,8 @@ Before the lock and before any tmux call, `answer` checks its input:
 - `--approval-ref`: 8..200 characters of letters, digits and `._:/@#-`.
 - `--expect-kind`: `modal-trust`, `modal-permission` or `modal-approval`.
   `modal-unknown` is never answerable.
-- `--expect-text-file`: 1..20 nonblank lines, at most 4096 UTF-8 bytes, no
+- `--expect-text-file`: 1..20 nonblank lines (up to 64 only for
+  `modal-approval` with `--choice ctrl-c`), at most 4096 UTF-8 bytes, no
   control characters except newlines. This is the whole prompt, row by row,
   exactly as the screen shows it (rule 4 below). Each line is trimmed the same
   way as a screen row: leading and trailing whitespace and box-drawing
@@ -326,7 +334,8 @@ Before the lock and before any tmux call, `answer` checks its input:
 - `--choice`: exactly one printable ASCII key that appears as `[key]` in the
   expected text. The one exception is Cursor's command prompt (below): there
   the choice is `y`, shown once as `(y)` at the end of a row, with
-  `--expect-kind modal-approval`. No other key is accepted for that prompt.
+  `--expect-kind modal-approval`, or `ctrl-c` to reject the shown command.
+  No other key is accepted for that prompt.
 - `--trust-path`: required with `--expect-kind modal-trust` and refused with
   any other kind. It is the one directory the approval covers: an absolute,
   normalized path of letters, digits and `_.@+-` between single slashes, with

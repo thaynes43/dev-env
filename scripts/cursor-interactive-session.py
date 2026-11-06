@@ -30,6 +30,7 @@ MAX_LINES = 80
 MAX_COMMAND_BYTES = 8192
 MAX_EXPECT = 4096
 MAX_EXPECT_LINES = 20
+MAX_REJECT_EXPECT_LINES = 64
 MAX_ANSWERS = 32
 ANSWER_KINDS = ("modal-trust", "modal-permission", "modal-approval")
 APPROVAL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@#-]{7,199}")
@@ -800,7 +801,7 @@ def reply_locked(args, instruction, answered_text=None):
     }
 
 
-def read_expected(path):
+def read_expected(path, max_lines=MAX_EXPECT_LINES):
     try:
         with open(path, "rb") as handle:
             raw = handle.read(MAX_EXPECT + 1)
@@ -815,8 +816,9 @@ def read_expected(path):
     if any((ord(character) < 32 and character != "\n") or 127 <= ord(character) <= 159 for character in text):
         raise Refusal("invalid-input", "Expected prompt text must have no control characters except newlines. Nothing was sent.")
     lines = [prompt_text(line) for line in text.split("\n") if prompt_text(line)]
-    if not lines or len(lines) > MAX_EXPECT_LINES:
-        raise Refusal("invalid-input", "Expected prompt text must have 1..20 nonblank lines. Nothing was sent.")
+    if not lines or len(lines) > max_lines:
+        raise Refusal("invalid-input", "Expected prompt text must have 1.." + str(max_lines) +
+                      " nonblank lines. Nothing was sent.")
     return raw, lines
 
 
@@ -869,7 +871,10 @@ def validate_answer(args):
     if choice != REJECT_CHOICE and (len(choice) != 1 or not 33 <= ord(choice) <= 126):
         raise Refusal("invalid-input", "Choice must be exactly one printable ASCII key, or ctrl-c to reject Cursor's "
                                        "shown command. Nothing was sent.")
-    raw, lines = read_expected(args.expect_text_file)
+    # A rejection can bind a longer command, but never authorizes its execution.
+    # The byte cap and complete-current-screen checks remain identical.
+    max_lines = MAX_REJECT_EXPECT_LINES if args.expect_kind == "modal-approval" and choice == REJECT_CHOICE else MAX_EXPECT_LINES
+    raw, lines = read_expected(args.expect_text_file, max_lines)
     if prompt_shape(args.expect_kind, choice, lines) is None:
         raise Refusal("invalid-input", "Choice must appear as [" + choice + "] in the expected prompt text. For Cursor's "
                                        "command prompt (modal-approval) the only choice is y, shown once as (y): never the "
