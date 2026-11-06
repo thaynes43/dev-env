@@ -200,6 +200,60 @@ Fail closed, with no keys and no Enter:
 confirmed a normal composer. It does not override a modal or a nonempty
 composer or control characters, and it is not a trust, approval, or permission grant.
 
+## Sending one guarded Enter to a slash-menu row
+
+`menu-key` sends exactly one `Enter` to the live slash menu of the inspected pane, once per approval. It exists for
+one case: turning Run Everything ON for one chat, without typing the argument form. It is an allowlist of one row
+(`--expect-kind run-everything-menu`). It cannot send any other key and it accepts no other command.
+
+The safe order, which `reply --submit` cannot do because it types and sends Enter in one step:
+
+1. `inspect`;
+2. `reply` with the literal text `/run-everything` and **no** `--submit`;
+3. `inspect` again: the selected row must read `/run-everything  Toggle Run Everything (currently disabled)` directly
+   above the `/run-everything` draft;
+4. `menu-key --expect-kind run-everything-menu` with that block as `--expect-text-file` and the fresh receipt: one `Enter`;
+5. `inspect` and read the printed `Run Everything: ON (Run Everything)` line.
+
+What the command checks, with nothing sent unless all of it holds:
+
+- the expected text is EXACTLY two lines, in order: the selected row `<marker> /run-everything  Toggle Run Everything
+  (currently disabled)` and then `→ /run-everything` (U+2192, the arrow Cursor draws on its composer, nothing after the
+  command). Anything else is refused before any tmux call: `(currently enabled)`, `Run in Sandbox`, the admin-disabled
+  text, any other command, an argument, a third line, a different order;
+- those two rows are the LIVE input of the visible screen. Each appears exactly once on it (a second copy anywhere
+  refuses), the draft directly under the selected row, and history above the screen is never searched. Below the draft
+  come only the composer's own tail: no further arrow row, at most two nonblank rows, the last of them the workspace
+  status row (it starts with `~`), then blank rows down to the pane's last row, which must be blank with the cursor
+  parked on it. A transcript copy of the rows, a live row of another command, an argument draft or free text under the
+  copy do not match; neither does a screen with no live composer (agent busy), unless that screen ends in a copied
+  tail of the same shape (see below);
+- a fresh receipt for the owned pane, the same pid and owner, and an unchanged capture;
+- no prompt phrase on the visible screen (a trust, permission or approval prompt, or an unknown yes/no), and none on a
+  last look right before the key. Historical trust-box text scrolled above the visible screen is ignored; a box still
+  on the visible screen is refused as a prompt;
+- the approval reference is spent once, in answer's own `approvals/` ledger (one reference, one key across both
+  commands), before the key; the receipt is spent too; the pane is checked again right before the key; an unknown tmux
+  result is `key-unconfirmed` and is never retried.
+
+What this does not prove. The state can change between the render and the Enter; the wrong outcome of that race is OFF,
+which is the safer direction. A screen that ends in a COPY of the two rows, then a copied tail whose last nonblank row
+starts with `~`, then a blank row, would match as if it were live: the transcript would have to print those exact rows
+at the very bottom of the visible screen with no live composer under them. This is acceptable for one supervised action
+and is not claimed to be impossible. The tail signature (status row last, blank cursor row) is the shape of the frozen live
+captures; if Cursor's layout changes the command refuses instead of guessing.
+
+Why the bare command and not `/run-everything on`. From the pinned client source (Cursor 2026.10.14, `run-everything`):
+the command toggles when it has no argument (`enable = !current`), sets ON for `on` whatever the current state, and sets
+OFF for `off`. So the bare command is equivalent to ON only while the chat reads `currently disabled` at the moment of the
+Enter; that is exactly what the gated row proves. The typed form `/run-everything on` is idempotent ON, but once a space
+and an argument are typed the menu shows no row (the command declares no arguments), so there is no live row to gate on,
+and if the command were not registered the same Enter would be sent to the model as a chat message. This helper does not
+type or send that form.
+
+The helper does not verify any approval; `--approval-ref` is audit metadata. It does not close any view and it sends no
+Escape.
+
 ## Answering one approved prompt
 
 `answer` sends one approved, specific prompt choice, and nothing else. `reply`
