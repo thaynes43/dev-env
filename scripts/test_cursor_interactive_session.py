@@ -93,11 +93,22 @@ if args and args[0] == "capture-pane":
                                time.time() - typed.stat().st_mtime >= float(os.environ.get("FAKE_ECHO_DELAY", "0.08"))):
             rows = captured.split("\n")
             # The typed text replaces the bottom row (the screen keeps its height).
-            rows[-2 if rows[-1] == "" else -1] = "\u2192 " + typed.read_text(encoding="utf-8")
+            echo_row = int(os.environ.get("FAKE_ECHO_ROW", str(-2 if rows[-1] == "" else -1)))
+            rows[echo_row] = "\u2192 " + typed.read_text(encoding="utf-8")
+            if os.environ.get("FAKE_ECHO_QUEUE"):
+                rows[0] = "\u250c\u2500 follow-ups \u2500\u2510"
+            if os.environ.get("FAKE_ECHO_MODAL"):
+                rows[0] = "Run this command?"
             captured = "\n".join(rows)
     sys.stdout.buffer.write(captured.encode("utf-8"))
     sys.exit(0)
 if args and args[0] == "send-keys":
+    if args[-1] == "n" and os.environ.get("FAKE_ON_N"):
+        Path(os.environ["FAKE_CAPTURE"]).write_text(Path(os.environ["FAKE_ON_N"]).read_text())
+        if os.environ.get("FAKE_N_FAIL"):
+            sys.exit(1)
+    if args[-1] == "Enter" and os.environ.get("FAKE_ENTER_FAIL"):
+        sys.exit(1)
     if "-l" in args and os.environ.get("FAKE_SEND_READY"):
         with open(os.environ["FAKE_SEND_READY"], "wb", buffering=0) as ready:
             ready.write(b"1")
@@ -171,6 +182,8 @@ class CursorInteractiveTests(unittest.TestCase):
             args = ["answer", "--tmux", self.tmux, "--name", self.name, *extra]
         elif command == "menu-key":
             args = ["menu-key", "--tmux", self.tmux, "--name", self.name, *extra]
+        elif command == "feedback":
+            args = ["feedback", "--tmux", self.tmux, "--name", self.name, *extra]
         else:
             args = ["reply", "--tmux", self.tmux, "--name", self.name, *extra]
         merged = dict(self.env, FAKE_MODE=mode)
@@ -2301,6 +2314,182 @@ class AnswerTests(AnswerFixture):
 
     def review_footer_screen(self, rows=None):
         self.screen("\n".join(REVIEW_FOOTER_ROWS if rows is None else rows) + "\n", visible=24, cursor=23)
+
+    def test_skip_opens_reason_without_enter_or_command_approval(self):
+        self.review_footer_screen()
+        inspected = self.start_and_inspect()
+        code, answered = self.answer_command(inspected["receipt"], choice="skip",
+                                             text=REVIEW_FOOTER["expectedText"])
+        self.assertEqual((code, answered["state"]), (0, "answered"), answered)
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "n"]])
+        self.answer_command(inspected["receipt"], choice="skip", text=REVIEW_FOOTER["expectedText"])
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_skip_refuses_queue_error_and_noncanonical_shell(self):
+        cases = [(QUEUE["capture"], QUEUE["expectedText"]),
+                 (REVIEW_ERROR["capture"], REVIEW_ERROR["expectedText"]),
+                 (REVIEW_FOOTER["capture"].replace("Run this command?", "Run this MCP tool?"),
+                  REVIEW_FOOTER["expectedText"].replace("Run this command?", "Run this MCP tool?"))]
+        for capture, text in cases:
+            with self.subTest(text=text):
+                self.restart_case()
+                self.screen(capture, visible=24, cursor=23)
+                inspected = self.start_and_inspect()
+                code, refused = self.answer_command(inspected["receipt"], choice="skip", text=text)
+                self.assertEqual(code, 2, refused)
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.ledger().exists())
+
+    def prepare_feedback(self):
+        self.feedback_case = getattr(self, "feedback_case", 0) + 1
+        self.feedback_ref = self.case_approval("feedback " + str(self.feedback_case))
+        self.env["FAKE_WIDTH"] = "80"
+        self.review_footer_screen()
+        inspected = self.start_and_inspect()
+        code, answered = self.answer_command(inspected["receipt"], choice="skip",
+                                             text=REVIEW_FOOTER["expectedText"], approval=self.feedback_ref)
+        self.assertEqual(code, 0, answered)
+        self.screen("Waiting for approval...\n\n  → " + helper.REASON_PLACEHOLDER +
+                    "\n\n  Grok 4.7 · 10%\n  ~/example-task\n", visible=6)
+        self.env["FAKE_WIDTH"] = "240"
+        self.env["FAKE_ECHO_ROW"] = "2"
+        return self.inspect_now()
+
+    def test_feedback_uncertain_skip_blocks_generic_reply(self):
+        self.review_footer_screen()
+        inspected = self.start_and_inspect()
+        reason = self.root / "reason-after-n"
+        reason.write_text("\n\n  → " + helper.REASON_PLACEHOLDER + "\n\n\n\n")
+        code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], choice="skip",
+            kind="modal-approval", expect=self.command_expect(REVIEW_FOOTER["expectedText"])),
+            env={"FAKE_ON_N": str(reason), "FAKE_N_FAIL": "1"})
+        self.assertEqual((code, refused["state"]), (3, "answer-unconfirmed"))
+        self.env.update(FAKE_HEIGHT="6", FAKE_HISTORY="0", FAKE_CURSOR_Y="5", FAKE_WIDTH="240", FAKE_ECHO_ROW="2")
+        inspected = self.inspect_now()
+        before = list(self.sends())
+        self.text_path.write_text("Read the correction file.")
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                             "--observed-ready", "--submit"])
+        self.assertEqual((code, refused["state"]), (2, "feedback-required"), refused)
+        self.assertEqual(self.sends(), before)
+
+    def feedback(self, receipt, text="Read RELAY-QA-FINDINGS.md; fix per-measure matching and exact decimal equality.", **kwargs):
+        self.text_path.write_text(text)
+        return self.invoke("feedback", ["--receipt", receipt, "--skip-ref", self.feedback_ref,
+                                       "--text-file", str(self.text_path)], **kwargs)
+
+    def test_feedback_echoes_full_reason_and_submits_once(self):
+        inspected = self.prepare_feedback()
+        code, sent = self.feedback(inspected["receipt"])
+        self.assertEqual((code, sent["state"]), (0, "feedback-submitted"), sent)
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "n"],
+            ["send-keys", "-t", "%7", "-l", "--", self.text_path.read_text()],
+            ["send-keys", "-t", "%7", "Enter"]])
+        self.feedback(self.inspect_now()["receipt"])
+        self.assertEqual(len(self.sends()), 3)
+
+    def test_feedback_requires_latest_successful_skip_ledger(self):
+        changes = {"wrong choice": lambda e: dict(e, choice="y"),
+                   "uncertain": lambda e: dict(e, outcome="uncertain"),
+                   "wrong owner": lambda e: dict(e, owner="other"),
+                   "wrong worktree": lambda e: dict(e, worktree="/other"),
+                   "changed command digest": lambda e: dict(e, expected_text_sha256="0" * 64)}
+        for label, change in changes.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                inspected = self.prepare_feedback()
+                self.edit_ledger(self.feedback_ref, change)
+                before = list(self.sends())
+                code, refused = self.feedback(inspected["receipt"])
+                self.assertEqual((code, refused["state"]), (2, "feedback-unbound"), refused)
+                self.assertEqual(self.sends(), before)
+
+    def test_feedback_refuses_generic_reply_and_stale_custody(self):
+        inspected = self.prepare_feedback()
+        self.text_path.write_text("Do the correction.")
+        before = list(self.sends())
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                             "--observed-ready", "--submit"])
+        self.assertEqual((code, refused["state"]), (2, "feedback-required"))
+        for mode in ("foreign-owner", "replaced", "foreign-path"):
+            code, refused = self.feedback(inspected["receipt"], mode=mode)
+            self.assertEqual(code, 2, refused)
+        self.capture.write_text(self.capture.read_text().replace("10%", "11%"))
+        code, refused = self.feedback(inspected["receipt"])
+        self.assertEqual((code, refused["state"]), (2, "stale-receipt"))
+        self.assertEqual(self.sends(), before)
+
+    def test_feedback_refuses_draft_history_queue_and_wrong_field(self):
+        mutations = [lambda s: s.replace(helper.REASON_PLACEHOLDER, "Add a follow-up"),
+                     lambda s: s.replace(helper.REASON_PLACEHOLDER, "already typed"),
+                     lambda s: s.replace("Waiting for approval...", "┌─ follow-ups ─┐"),
+                     lambda s: s.replace("Waiting for approval...", "enter send now · ↑ select/edit · esc cancel"),
+                     lambda s: s.replace("Waiting for approval...", "Run this command?"),
+                     lambda s: s.replace("Waiting for approval...", "Error: Agent stopped retrying"),
+                     lambda s: s.replace("Waiting for approval...", "→ copied placeholder")]
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                self.restart_case()
+                self.prepare_feedback()
+                self.screen(mutate(self.capture.read_text()), visible=6)
+                inspected = self.inspect_now()
+                before = list(self.sends())
+                code, refused = self.feedback(inspected["receipt"])
+                self.assertEqual(code, 2, refused)
+                self.assertEqual(self.sends(), before)
+
+    def test_feedback_never_enters_on_wrong_missing_or_intervening_echo(self):
+        cases = [{"FAKE_ECHO": "0"}, {"FAKE_ECHO_ROW": "1"},
+                 {"FAKE_ECHO_QUEUE": "1"}, {"FAKE_ECHO_MODAL": "1"}]
+        for env in cases:
+            with self.subTest(env=env):
+                self.restart_case()
+                inspected = self.prepare_feedback()
+                code, refused = self.feedback(inspected["receipt"], env=env)
+                self.assertEqual((code, refused["state"]), (3, "feedback-unconfirmed"), refused)
+                self.assertFalse(any(row[-1] == "Enter" for row in self.sends()))
+                before = list(self.sends())
+                self.feedback(self.inspect_now()["receipt"])
+                self.assertEqual(self.sends(), before)
+
+    def test_feedback_placeholder_text_is_never_its_own_echo(self):
+        for reason in (helper.REASON_PLACEHOLDER, helper.REASON_PLACEHOLDER + "  ctrl+c to stop"):
+            with self.subTest(reason=reason):
+                self.restart_case()
+                inspected = self.prepare_feedback()
+                code, refused = self.feedback(inspected["receipt"], text=reason, env={"FAKE_ECHO": "0"})
+                self.assertEqual((code, refused["state"]), (3, "feedback-unconfirmed"), refused)
+                self.assertFalse(any(row[-1] == "Enter" for row in self.sends()))
+
+    def test_feedback_delayed_echo_and_failed_sends_stay_one_shot(self):
+        inspected = self.prepare_feedback()
+        code, sent = self.feedback(inspected["receipt"], env={"FAKE_ECHO_DELAY": "0.6"})
+        self.assertEqual((code, sent["state"]), (0, "feedback-submitted"), sent)
+        for mode, env in (("send-fail", {}), ("", {"FAKE_ENTER_FAIL": "1"})):
+            self.restart_case()
+            inspected = self.prepare_feedback()
+            code, refused = self.feedback(inspected["receipt"], mode=mode, env=env)
+            self.assertEqual((code, refused["state"]), (3, "feedback-unconfirmed"), refused)
+            before = list(self.sends())
+            self.feedback(self.inspect_now()["receipt"])
+            self.assertEqual(self.sends(), before)
+            self.text_path.write_text("Do the correction.")
+            code, refused = self.invoke("reply", ["--receipt", self.inspect_now()["receipt"],
+                "--text-file", str(self.text_path), "--observed-ready", "--submit"])
+            self.assertEqual((code, refused["state"]), (2, "feedback-required"))
+            self.assertEqual(self.sends(), before)
+
+    def test_feedback_retains_short_single_row_input_contract(self):
+        inspected = self.prepare_feedback()
+        before = list(self.sends())
+        for reason in ("x" * 201, "a\nb", "Run this command?", "", "\x1btest", "界", " padded "):
+            code, refused = self.feedback(inspected["receipt"], text=reason)
+            self.assertEqual((code, refused["state"]), (2, "invalid-input"), refused)
+        self.env["FAKE_WIDTH"] = "40"
+        inspected = self.inspect_now()
+        code, refused = self.feedback(inspected["receipt"])
+        self.assertEqual((code, refused["state"]), (2, "invalid-input"), refused)
+        self.assertEqual(self.sends(), before)
 
     def long_rejection_fixture(self):
         return json.loads((SCRIPT.parent / "cursor-interactive-session-fixtures" /

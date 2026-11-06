@@ -67,6 +67,7 @@ QUEUE_HINT = "\u2190/\u2192 to switch approval"
 # Rejecting the shown command: one Ctrl+C, which Cursor (raw mode) reads as reject for the
 # active decision only. It is never sent outside the command prompt.
 REJECT_CHOICE = "ctrl-c"
+SKIP_CHOICE = "skip"  # One literal n: opens the command's reason field, never approves it.
 # Cursor draws a turn error under the prompt as "Error: <title>" (Agent stopped retrying,
 # Connection failed, ...). Apart from the exact UI review footer, with any nonblank
 # row after the Skip row or switch hint only rejection may be answered, and those
@@ -748,6 +749,8 @@ def reply_session(args):
 
 def reply_locked(args, instruction, answered_text=None):
     path, state = load_owned(args.name, args.tmux)
+    if state.get("feedback_pending"):
+        raise Refusal("feedback-required", "A recorded Skip reason is pending. Use feedback with its skip reference; generic reply cannot submit it. Nothing was sent.")
     receipt = parse_receipt(args.receipt)
     if not state.get("receipt_id") or receipt["id"] != state["receipt_id"]:
         raise Refusal("stale-receipt", "Pane receipt is stale or is not the latest inspect. Re-inspect. Nothing was sent.")
@@ -826,9 +829,9 @@ def prompt_shape(expect_kind, choice, lines):
     """"box" when the expected text shows the choice as [key]; "divider" for Cursor's command
     prompt, a modal-approval whose expected text shows (y) at the end of exactly one row and
     the choice is y; otherwise None."""
-    if choice != REJECT_CHOICE and any("[" + choice + "]" in line for line in lines):
+    if choice not in (REJECT_CHOICE, SKIP_CHOICE) and any("[" + choice + "]" in line for line in lines):
         return "box"
-    if expect_kind == "modal-approval" and choice in (COMMAND_CHOICE, REJECT_CHOICE) and sum(
+    if expect_kind == "modal-approval" and choice in (COMMAND_CHOICE, REJECT_CHOICE, SKIP_CHOICE) and sum(
             line.endswith(" (" + COMMAND_CHOICE + ")") for line in prompt_rows(lines)) == 1:
         return "divider"
     return None
@@ -868,13 +871,19 @@ def validate_answer(args):
     if args.expect_kind not in ANSWER_KINDS:
         raise Refusal("invalid-input", "Expected kind must be modal-trust, modal-permission or modal-approval. Nothing was sent.")
     choice = args.choice or ""
-    if choice != REJECT_CHOICE and (len(choice) != 1 or not 33 <= ord(choice) <= 126):
+    if choice not in (REJECT_CHOICE, SKIP_CHOICE) and (len(choice) != 1 or not 33 <= ord(choice) <= 126):
         raise Refusal("invalid-input", "Choice must be exactly one printable ASCII key, or ctrl-c to reject Cursor's "
                                        "shown command. Nothing was sent.")
     # A rejection can bind a longer command, but never authorizes its execution.
     # The byte cap and complete-current-screen checks remain identical.
     max_lines = MAX_REJECT_EXPECT_LINES if args.expect_kind == "modal-approval" and choice == REJECT_CHOICE else MAX_EXPECT_LINES
     raw, lines = read_expected(args.expect_text_file, max_lines)
+    if choice == SKIP_CHOICE:
+        skip_row = "Skip & tell the agent what to do instead " + SKIP_SUFFIX
+        if (args.expect_kind != "modal-approval" or not lines[0].startswith("$ ")
+                or lines.count("Run this command?") != 1 or lines.count(skip_row) != 1
+                or lines[-1] != skip_row or any(QUEUE_HEADER.fullmatch(x) or x == QUEUE_HINT for x in lines)):
+            raise Refusal("invalid-input", "Skip needs one complete single Shell prompt and its exact Skip row. Nothing was sent.")
     if prompt_shape(args.expect_kind, choice, lines) is None:
         raise Refusal("invalid-input", "Choice must appear as [" + choice + "] in the expected prompt text. For Cursor's "
                                        "command prompt (modal-approval) the only choice is y, shown once as (y): never the "
@@ -1385,6 +1394,11 @@ def answer_locked(args, choice, raw, lines, trust_path):
     spend_approval(ledger, entry)
     answers = state.get("answers") if isinstance(state.get("answers"), list) else []
     state["answers"] = (answers + [record])[-MAX_ANSWERS:]
+    # Arm before the key can execute: a lost/failed n response may still have
+    # opened the reason field. Generic reply must remain blocked in that case.
+    state.pop("feedback_pending", None)
+    if choice == SKIP_CHOICE:
+        state["feedback_pending"] = args.approval_ref
     clear_receipt(path, state)
     # The writes above take time. Look at the pane again right before the key:
     # same pane and process, the same capture as verified, and the same prompt.
@@ -1402,7 +1416,7 @@ def answer_locked(args, choice, raw, lines, trust_path):
         raise Refusal("prompt-changed", "The pane changed after the approval was spent (" + refusal.state + "). "
                       "Nothing was sent. The approval stays spent; a new approval is needed.")
     try:
-        keys = ["C-c"] if choice == REJECT_CHOICE else ["-l", "--", choice]
+        keys = ["C-c"] if choice == REJECT_CHOICE else ["-l", "--", "n" if choice == SKIP_CHOICE else choice]
         sent = run([state["tmux"], "send-keys", "-t", state["pane_id"]] + keys)
         failed = sent.returncode != 0
     except (subprocess.TimeoutExpired, OSError, UnicodeError):
@@ -1422,6 +1436,118 @@ def answer_locked(args, choice, raw, lines, trust_path):
             "This receipt is now spent. Inspect again before any reply."
         ),
     }
+
+
+REASON_PLACEHOLDER = "Tell the agent what to do instead (Enter to send, empty to skip, Esc to cancel)"
+# Pinned queued-message-banner.tsx always renders this header and one of these tips.
+QUEUED_REASON = re.compile(r"follow-ups|enter (?:send now|steer|interrupt and send)|↑ (?:select/edit|to edit)|editing · enter done", re.I)
+
+
+def reason_field(visible, instruction=None, expected_index=None):
+    """One current reason field, never a normal composer or queued-message editor.
+
+    The latest sent Skip ledger supplies provenance. Its pinned rejection ID is set
+    by n and only changed by submit/cancel/another decision action, not ordinary
+    typing. Callers must retain sole input custody; no hidden-state API is read.
+    Keep the reason on ONE row so its complete echo can be compared literally.
+    """
+    if any(QUEUED_REASON.search(row) or phrases(row) - {PENDING_STATUS}
+           or row.strip(" ").startswith(ERROR_PREFIX) for row in visible):
+        raise Refusal("feedback-unclear", "A queued input or another prompt is visible. No feedback Enter was sent.")
+    fields = [(i, row.strip(" ")) for i, row in enumerate(visible) if COMPOSER_ROW.match(row)]
+    if len(fields) != 1:
+        raise Refusal("feedback-unclear", "Exactly one current reason field is required. No feedback Enter was sent.")
+    index, row = fields[0]
+    if expected_index is not None and index != expected_index:
+        raise Refusal("feedback-unclear", "The reason field moved. No feedback Enter was sent.")
+    empty = re.fullmatch(re.escape("→ " + REASON_PLACEHOLDER) + r"(?: +ctrl\+c to stop)?", row)
+    if instruction is None:
+        if not empty:
+            raise Refusal("feedback-unclear", "The exact empty reason placeholder is missing. Nothing was sent.")
+    elif empty:
+        return None  # An unchanged placeholder is never proof of literal echo.
+    elif row != "→ " + instruction:
+        raise Refusal("feedback-unclear", "The full intended reason is not in the same field. No feedback Enter was sent.")
+    return index
+
+
+def feedback_session(args):
+    instruction = read_instruction(args.text_file)
+    if (len(instruction) > 200 or not instruction.isascii() or instruction != instruction.strip(" ")
+            or phrases(instruction) or not APPROVAL_RE.fullmatch(args.skip_ref or "")):
+        raise Refusal("invalid-input", "Feedback needs a valid Skip reference and at most 200 single-line ASCII characters without edge padding or prompt phrases. Nothing was sent.")
+    with state_lock(args.name, wait=False):
+        path, state = load_owned(args.name, args.tmux)
+        answers = state.get("answers") or []
+        record = answers[-1] if answers else {}
+        entry = read_ledger(approval_path(args.name, args.skip_ref))
+        required = {"name": args.name, "approval_ref": args.skip_ref, "kind": "modal-approval",
+                    "choice": SKIP_CHOICE, "outcome": "sent", "pane_id": state["pane_id"],
+                    "pane_pid": state["pane_pid"], "owner": state["owner"], "worktree": state["worktree"],
+                    "format": LEDGER_FORMAT}
+        if (state.get("feedback_pending") != args.skip_ref or not isinstance(entry, dict)
+                or any(entry.get(k) != v for k, v in required.items())
+                or not isinstance(entry.get("expected_text_sha256"), str)
+                or not SHA256_RE.fullmatch(entry["expected_text_sha256"])
+                or {k: v for k, v in entry.items() if k != "name"} != record):
+            raise Refusal("feedback-unbound", "The latest successful Skip and its decision ledger do not match this task. Nothing was sent.")
+        receipt = parse_receipt(args.receipt)
+        if (receipt["id"] != state.get("receipt_id") or receipt["pane"] != state["pane_id"]
+                or receipt["pid"] != state["pane_pid"] or receipt["digest"] != state.get("snapshot_sha256")):
+            raise Refusal("stale-receipt", "Feedback receipt is stale. Nothing was sent.")
+
+        def capture():
+            ident = read_identity(state["tmux"], state["pane_id"], "feedback-unconfirmed", 3)
+            require_same_pane(state, ident)
+            text, truncated, total = read_capture_rows(state["tmux"], state["pane_id"])
+            return ident, text, truncated, visible_screen(text, truncated, total, ident)
+
+        ident, text, truncated, visible = capture()
+        digest = snapshot_hash(ident, text, truncated)
+        if digest != receipt["digest"]:
+            raise Refusal("stale-receipt", "Feedback pane changed since inspect. Nothing was sent.")
+        if len(instruction) > int(ident["width"]) - 4:
+            raise Refusal("invalid-input", "The full reason must fit one visible row. Widen and re-inspect; nothing was sent.")
+        index = reason_field(visible)
+        transaction = approval_path(args.name, args.skip_ref + "/feedback")
+        audit = dict(required, reason_sha256=hashlib.sha256(instruction.encode()).hexdigest(),
+                     reason_chars=len(instruction), outcome="sending", started_at=utc_now())
+        spend_approval(transaction, audit)
+        clear_receipt(path, state)
+        try:
+            ident, text, truncated, visible = capture()
+            if snapshot_hash(ident, text, truncated) != digest:
+                raise Refusal("stale-receipt", "The reason pane changed after the transaction was spent.")
+            reason_field(visible, expected_index=index)
+            sent = run([state["tmux"], "send-keys", "-t", state["pane_id"], "-l", "--", instruction])
+            if sent.returncode:
+                raise Refusal("feedback-unconfirmed", "Literal feedback send was not confirmed.")
+            shown = False
+            for _ in range(SUBMIT_CHECKS):
+                time.sleep(SUBMIT_SETTLE_SECONDS)
+                ident, text, truncated, visible = capture()
+                if reason_field(visible, instruction, index) is not None:
+                    shown = True
+                    digest = snapshot_hash(ident, text, truncated)
+                    break
+            if not shown:
+                raise Refusal("feedback-unconfirmed", "The complete reason echo did not appear.")
+            ident, text, truncated, visible = capture()
+            if snapshot_hash(ident, text, truncated) != digest or reason_field(visible, instruction, index) is None:
+                raise Refusal("feedback-unclear", "The verified reason changed before Enter.")
+            entered = run([state["tmux"], "send-keys", "-t", state["pane_id"], "Enter"])
+            if entered.returncode:
+                raise Refusal("feedback-unconfirmed", "Feedback Enter was not confirmed.")
+        except (Refusal, subprocess.TimeoutExpired, OSError, UnicodeError) as error:
+            audit.update(outcome="uncertain", finished_at=utc_now())
+            write_state(transaction, audit)
+            raise Refusal("feedback-unconfirmed", "Feedback transaction is spent (" + type(error).__name__ + "). Do not resend text, n or Enter. Re-inspect.", 3)
+        audit.update(outcome="submitted", finished_at=utc_now())
+        write_state(transaction, audit)
+        state.pop("feedback_pending", None)
+        write_state(path, state)
+        return {"state": "feedback-submitted", "name": args.name, "skip_ref": args.skip_ref,
+                "reason_chars": len(instruction), "detail": "The full reason echoed in the bound field, then one Enter was sent. Transaction spent; verify rejection and semantic consumption. Do not repeat."}
 
 
 MENU_KEYS = {"run-everything-menu": "Enter", "usage-menu": "Enter", "usage-view": "Escape"}
@@ -1755,6 +1881,12 @@ def build_parser():
     answer.add_argument("--choice", required=True, help="one key shown as [key] in the expected text; on Cursor's "
                         "command prompt, y (Run once) or ctrl-c (reject the shown command)")
     answer.add_argument("--trust-path", help="for modal-trust: the one directory the approval covers; must be the recorded worktree")
+    feedback = sub.add_parser("feedback", help="submit one reason for the latest bound Skip, never a generic follow-up")
+    feedback.add_argument("--name", required=True)
+    feedback.add_argument("--tmux", required=True)
+    feedback.add_argument("--receipt", required=True)
+    feedback.add_argument("--skip-ref", required=True)
+    feedback.add_argument("--text-file", required=True)
     menu = sub.add_parser(
         "menu-key", help="send exactly one allowlisted key: Enter to the /run-everything (while currently disabled) or /usage menu row, or Escape to the checked usage view",
         description=(
@@ -1786,6 +1918,8 @@ def main(argv=None):
             payload = answer_session(args)
         elif args.command == "menu-key":
             payload = menu_key_session(args)
+        elif args.command == "feedback":
+            payload = feedback_session(args)
         else:
             payload = reply_session(args)
     except Refusal as error:
