@@ -142,6 +142,17 @@ func TestDBCheckDocJobMountsOnlyWhatItReads(t *testing.T) {
 		t.Fatal("the record step must wait for the Job to exist, then for Complete or Failed, each with a timeout")
 	}
 
+	// The record step classifies INTERRUPTED as no result, like no output,
+	// never as PASS or a db-check FAIL; the PDB is rechecked in a preflight
+	// before the run.
+	if !strings.Contains(text, `"INTERRUPTED") result="NOT RUN (`) || strings.Contains(text, `"INTERRUPTED"|`) || strings.Contains(text, `|"INTERRUPTED"`) {
+		t.Fatal("the record step must classify INTERRUPTED as NOT RUN, on its own")
+	}
+	preflight, pdb := strings.Index(text, "### Preflight, immediately before the Job run"), strings.Index(text, "get pdb dev-env-v2-portal")
+	if preflight < 0 || pdb < preflight || pdb > create {
+		t.Fatal("a preflight must recheck the portal PDB before the record step's waits")
+	}
+
 	want := []string{path.Join(ProductionRoot, dbCheckMountedFiles.user), path.Join(ProductionRoot, dbCheckMountedFiles.password), path.Join(ProductionRoot, dbCheckMountedFiles.ca)}
 	if len(mounted) != len(want) {
 		t.Fatalf("mounted files %v, want exactly %v", mounted, want)

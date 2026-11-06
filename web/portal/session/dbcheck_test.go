@@ -105,6 +105,7 @@ type fakePostgres struct {
 	readOnly   bool
 	loginError string // SQLSTATE of a FATAL login refusal; "" accepts
 	release    chan struct{}
+	onEvent    func(event string) // called on "startup" and on each statement
 
 	mu         sync.Mutex
 	serverName string
@@ -157,6 +158,9 @@ func (f *fakePostgres) serve(conn net.Conn) {
 	f.mu.Lock()
 	f.startup = startup.Parameters
 	f.mu.Unlock()
+	if f.onEvent != nil {
+		f.onEvent("startup")
+	}
 	if f.mode == "hang-login" {
 		_, _ = tlsConn.Read(make([]byte, 1))
 		return
@@ -201,6 +205,9 @@ func (f *fakePostgres) serve(conn net.Conn) {
 		switch m := msg.(type) {
 		case *pgproto3.Query:
 			f.record(&f.statements, m.String)
+			if f.onEvent != nil {
+				f.onEvent(m.String)
+			}
 			if !f.answer(backend, tlsConn, m.String) {
 				return
 			}
@@ -556,12 +563,12 @@ func TestDBCheckRefusesInvalidConfigBeforeAnyNetwork(t *testing.T) {
 	})
 }
 
-// TestDBCheckLineIsSanitized: the only output is one of eight fixed lines,
+// TestDBCheckLineIsSanitized: the only output is one of nine fixed lines,
 // whatever the failure, so no host, user, password, DSN, certificate detail
 // or driver text can reach it.
 func TestDBCheckLineIsSanitized(t *testing.T) {
-	allowed := map[string]int{"PASS": 0, "FAIL config": 3, "FAIL dns": 3, "FAIL refused": 3, "FAIL tls": 3, "FAIL auth": 3, "FAIL timeout": 3, "FAIL query": 3}
-	for _, class := range []string{"", DBCheckConfig, DBCheckDNS, DBCheckRefused, DBCheckTLS, DBCheckAuth, DBCheckTimeout, DBCheckQuery, "x509: certificate signed by unknown authority", productionDBHost, dbCheckPassword} {
+	allowed := map[string]int{"PASS": 0, "FAIL config": 3, "FAIL dns": 3, "FAIL refused": 3, "FAIL tls": 3, "FAIL auth": 3, "FAIL timeout": 3, "FAIL query": 3, "INTERRUPTED": 4}
+	for _, class := range []string{"", DBCheckConfig, DBCheckDNS, DBCheckRefused, DBCheckTLS, DBCheckAuth, DBCheckTimeout, DBCheckQuery, DBCheckInterrupted, "x509: certificate signed by unknown authority", productionDBHost, dbCheckPassword} {
 		line, code := DBCheckLine(class)
 		if want, ok := allowed[line]; !ok || want != code {
 			t.Fatalf("DBCheckLine(%q) = %q, %d", class, line, code)
@@ -718,5 +725,87 @@ func TestDBCheckRefusedSecondDialLeavesTheResult(t *testing.T) {
 	defer network.mu.Unlock()
 	if len(network.dials) != 1 || network.dials[0] != "tcp "+dbCheckFixtureIP+":5432" {
 		t.Fatalf("dials %v: the second address must not be dialed", network.dials)
+	}
+}
+
+// TestDBCheckCallerCancelIsInterruptedNotTimeout: a caller that cancels the
+// check (the command's SIGTERM context, for example during a node drain) gets
+// INTERRUPTED (exit 4), no result, never "FAIL timeout". The cancel is fired
+// by the fake server at a fixed point: when the login arrives (connect stage)
+// and when SELECT 1 arrives (query stage). The close stays within its bound,
+// and only one connection reaches the wire.
+func TestDBCheckCallerCancelIsInterruptedNotTimeout(t *testing.T) {
+	interceptDBCheckResolver(t)
+	ca := newDBCheckCA(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	const closeBound = 200 * time.Millisecond
+	for _, tc := range []struct {
+		name, mode, event string
+		closes            bool
+	}{
+		{name: "connect stage", mode: "hang-login", event: "startup"},
+		{name: "query stage", mode: "hang-query", event: "SELECT 1", closes: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			server := newFakePostgres(ca.leaf(t, productionDBHost), tc.mode)
+			t.Cleanup(func() { close(server.release) })
+			server.onEvent = func(event string) {
+				if event == tc.event {
+					cancel()
+				}
+			}
+			network := &dbCheckNet{server: server}
+			seams := network.seams()
+			seams.connectTimeout, seams.queryTimeout, seams.total, seams.closeTimeout = 3*time.Second, 3*time.Second, 5*time.Second, closeBound
+			closes, cleanedUp := 0, false
+			seams.closed = func(cleanup <-chan struct{}, _ int) {
+				closes++
+				select {
+				case <-cleanup:
+					cleanedUp = true
+				default:
+				}
+			}
+			type outcome struct {
+				class   string
+				elapsed time.Duration
+			}
+			done := make(chan outcome, 1)
+			go func() {
+				started := time.Now()
+				class := checkDatabase(ctx, writeDBCheckRoot(t, dbCheckFiles(ca.pem)), seams)
+				done <- outcome{class, time.Since(started)}
+			}()
+			var got outcome
+			select {
+			case got = <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("db-check did not return after the caller cancelled")
+			}
+			// Well under the 3 s connect and query deadlines: the cancel, not a
+			// deadline, ended it; plus at most the close bound and a slack.
+			if got.class != DBCheckInterrupted || got.elapsed > closeBound+1500*time.Millisecond {
+				t.Fatalf("class %q in %v, want interrupted promptly", got.class, got.elapsed)
+			}
+			if line, code := DBCheckLine(got.class); line != "INTERRUPTED" || code != 4 {
+				t.Fatalf("line %q code %d", line, code)
+			}
+			if tc.closes != (closes == 1) || (tc.closes && !cleanedUp) {
+				t.Fatalf("close ran %d times, cleanup finished %v", closes, cleanedUp)
+			}
+			network.mu.Lock()
+			defer network.mu.Unlock()
+			if len(network.dials) != 1 {
+				t.Fatalf("dials %v: only one connection may reach the wire", network.dials)
+			}
+		})
+	}
+	// A config fault is found before any network and stays a result even if
+	// the caller has already cancelled.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := checkDatabase(ctx, writeDBCheckRoot(t, map[string]string{}), (&dbCheckNet{}).seams()); got != DBCheckConfig {
+		t.Fatalf("config fault under a cancelled caller: %q", got)
 	}
 }

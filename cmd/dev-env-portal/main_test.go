@@ -85,8 +85,8 @@ func noDBCheck(t *testing.T) func(context.Context) string {
 	}
 }
 
-// DESIGN-056: db-check prints exactly one fixed line and exits 0 on PASS or 3
-// on FAIL. It never starts the server or the Pages check.
+// DESIGN-056: db-check prints exactly one fixed line and exits 0 on PASS, 3 on
+// FAIL and 4 when interrupted. It never starts the server or the Pages check.
 func TestDBCheckCommandPrintsOneFixedLine(t *testing.T) {
 	for _, tc := range []struct {
 		class, out string
@@ -100,6 +100,7 @@ func TestDBCheckCommandPrintsOneFixedLine(t *testing.T) {
 		{session.DBCheckAuth, "FAIL auth\n", 3},
 		{session.DBCheckTimeout, "FAIL timeout\n", 3},
 		{session.DBCheckQuery, "FAIL query\n", 3},
+		{session.DBCheckInterrupted, "INTERRUPTED\n", 4},
 		{"dial tcp 10.0.0.1:5432: connect: connection refused", "FAIL query\n", 3},
 	} {
 		var out, stderr bytes.Buffer

@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// The db-check classes (DESIGN-056). The command prints "PASS" or
-// "FAIL <class>" and nothing else.
+// The db-check classes (DESIGN-056). The command prints "PASS",
+// "FAIL <class>" or "INTERRUPTED" and nothing else.
 const (
 	DBCheckConfig  = "config"
 	DBCheckDNS     = "dns"
@@ -22,6 +22,10 @@ const (
 	DBCheckAuth    = "auth"
 	DBCheckTimeout = "timeout"
 	DBCheckQuery   = "query"
+	// DBCheckInterrupted is no result: the caller cancelled the check (for
+	// example SIGTERM during a node drain) before it finished. It does not
+	// claim that no query ran.
+	DBCheckInterrupted = "interrupted"
 )
 
 // errDBCheckPlaintext is returned if pgx ever hands the hook a connection
@@ -62,12 +66,15 @@ func CheckDatabase(ctx context.Context) string {
 }
 
 // DBCheckLine maps a CheckDatabase result to the command's only output line
-// and exit code. An unknown value can only be a programming error; it is
-// reported as a query failure rather than printed.
+// and exit code: PASS 0, FAIL <class> 3, INTERRUPTED 4. An unknown value can
+// only be a programming error; it is reported as a query failure rather than
+// printed.
 func DBCheckLine(class string) (string, int) {
 	switch class {
 	case "":
 		return "PASS", 0
+	case DBCheckInterrupted:
+		return "INTERRUPTED", 4
 	case DBCheckConfig, DBCheckDNS, DBCheckRefused, DBCheckTLS, DBCheckAuth, DBCheckTimeout, DBCheckQuery:
 		return "FAIL " + class, 3
 	default:
@@ -138,7 +145,16 @@ func (p *dbCheckProgress) snapshot() (resolved, dialed, upgraded bool) {
 	return p.resolved, p.dialed, p.upgraded
 }
 
-func checkDatabase(ctx context.Context, root string, s dbCheckSeams) string {
+func checkDatabase(ctx context.Context, root string, s dbCheckSeams) (class string) {
+	// A cancelled caller (SIGTERM) interrupts the check: whatever phase was
+	// cut short, it reports no result rather than a timeout. A config fault is
+	// found before any network and stays a result.
+	parent := ctx
+	defer func() {
+		if class != "" && class != DBCheckConfig && errors.Is(parent.Err(), context.Canceled) {
+			class = DBCheckInterrupted
+		}
+	}()
 	if s.total <= 0 {
 		s.total = dbCheckTotalTimeout
 	}

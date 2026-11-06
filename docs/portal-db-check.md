@@ -21,6 +21,11 @@ Exactly one line:
 | `FAIL auth` | 3 | the TLS handshake succeeded, but the server ended the session before the login completed |
 | `FAIL timeout` | 3 | the connect, query or total deadline expired |
 | `FAIL query` | 3 | logged in, but the session is read-only or `SELECT 1` failed |
+| `INTERRUPTED` | 4 | the check was cancelled from outside (SIGTERM, for example a node drain) before it finished |
+
+`INTERRUPTED` is no verified result. It does not claim that no query ran,
+only that the check did not finish; record it as not run. Only an expired
+deadline is `FAIL timeout`.
 
 `FAIL auth` does not only mean a bad password. It covers anything that ends
 the session after the TLS handshake and before the login completes:
@@ -160,7 +165,7 @@ spec:
           # No container port: the portal Service targets the named port
           # "https", so this pod never becomes its endpoint. The probe on the
           # unused port keeps the pod never-Ready, so the PDB's healthy count
-          # is unchanged.
+          # is unchanged (see "The portal PDB" below).
           readinessProbe:
             tcpSocket:
               port: 8443
@@ -231,6 +236,22 @@ spec:
   timeout: 2m
 ```
 
+### Preflight, immediately before the Job run
+
+Recheck the portal PDB right before the PR with the Job merges. It must
+still have an integer `minAvailable` and no `maxUnavailable` (see "The
+portal PDB" under Notes):
+
+```sh
+kubectl -n dev-agents get pdb dev-env-v2-portal \
+  -o jsonpath='{.spec.minAvailable}|{.spec.maxUnavailable}|{.spec.selector.matchLabels}{"\n"}'
+# expect: 1||{"app.kubernetes.io/name":"dev-env-v2-portal"}
+```
+
+If it shows a percentage or a `maxUnavailable`, do not run the Job: do the
+dedicated-label follow-up first. Also confirm no portal rollout is in
+progress.
+
 ### Record the result, then clean up
 
 After the PR with the Job merges, read the result with bounded waits. First
@@ -254,6 +275,7 @@ line=$(kubectl -n dev-agents logs "job/$job" --tail=1 2>/dev/null)
 status=$(kubectl -n dev-agents get "job/$job" -o jsonpath='{.status.conditions[*].reason}')
 case "$line" in
   "PASS"|"FAIL config"|"FAIL dns"|"FAIL refused"|"FAIL tls"|"FAIL auth"|"FAIL timeout"|"FAIL query") result="$line" ;;
+  "INTERRUPTED") result="NOT RUN (interrupted; no verified result)" ;;
   "") result="NOT RUN (no output; $status)" ;;
   *)  result="UNEXPECTED OUTPUT (not recorded)" ;;
 esac
@@ -267,16 +289,20 @@ Record these in the tracker story or handoff before any cleanup:
 - the time;
 - `$result`.
 
-`$result` is sanitized by construction: one of the eight fixed lines, or
-`NOT RUN`. `NOT APPLIED` means Flux did not create the Job; nothing ran, so
+`$result` is sanitized by construction: one of the eight result lines, or
+`NOT RUN` (no output, or `INTERRUPTED`). `NOT APPLIED` means Flux did not create the Job; nothing ran, so
 nothing is recorded as a check result. Never paste other log text. Then open the follow-up PR that
 removes the Job's manifest and Kustomization; Flux prunes the Job and its
 pod.
 
-**No output is "not run", not a db-check failure.**
+**No output and `INTERRUPTED` are "not run", not a db-check result.**
 
-- `NOT RUN` means the check never printed a line, so the database path is
-  untested. Record it as not run. Never record it as a db-check `FAIL`.
+- `NOT RUN` means the check printed no line, or printed `INTERRUPTED`, so
+  the database path is untested. Record it as not run, never as `PASS` or a
+  db-check `FAIL`.
+- `INTERRUPTED` means the run was cut short by its parent, for example
+  SIGTERM during a node drain, and gives no usable database verdict. It is
+  not proof that no query ran.
 - The usual cause is that the pod never started: Kubernetes ends the Job
   with `DeadlineExceeded` after 60 s.
 - A likely reason is scheduling. The Deployment's required anti-affinity
@@ -288,6 +314,27 @@ pod.
   portal rollout.
 
 ## Notes
+
+- **The portal PDB.** It selects the same label, so it also selects the Job
+  pod. Source:
+  - haynes-ops `kubernetes/main/apps/dev-env-system/portal/app/pdb.yaml`
+    at `3e92686c`;
+  - an integer `spec.minAvailable: 1` and selector
+    `app.kubernetes.io/name: dev-env-v2-portal`;
+  - live on 2026-11-06: currentHealthy 2, desiredHealthy 1, expectedPods 2,
+    disruptionsAllowed 1.
+
+  This is harmless, for two reasons:
+  - With an integer `minAvailable`, the disruption controller does not need
+    a scalable controller for the Job pod. That requirement applies only to
+    `maxUnavailable` or a percentage `minAvailable`.
+  - The never-Ready pod adds one to expectedPods but changes neither
+    currentHealthy, desiredHealthy nor disruptionsAllowed.
+
+  **Recheck the PDB before use.** If it ever uses `maxUnavailable` or a
+  percentage, the Job pod would put it in `SyncFailed` with
+  `disruptionsAllowed: 0` until the Job is pruned. Then the dedicated-label
+  follow-up below must come first.
 
 - **Connections:** the Job uses one of the role's 8 connections. Two portal
   replicas use at most 4.

@@ -13,7 +13,7 @@
 
 One command answers one question: can this portal, with its mounted
 production database settings, open a session to its database and run a
-read-only query? It prints `PASS` or `FAIL <class>` and nothing else.
+read-only query? It prints `PASS`, `FAIL <class>` or `INTERRUPTED`, and nothing else.
 
 Non-goals: running the portal, its routes, OIDC, migrations or any store
 write; reading or printing a DSN, host, user, password, certificate detail
@@ -99,6 +99,13 @@ is the usage error (exit 2), as for `pages-source-check`.
 | `FAIL auth` | 3 | after a good TLS handshake, the server ended the session before the login completed |
 | `FAIL timeout` | 3 | a connect, query or total deadline expired |
 | `FAIL query` | 3 | logged in, but the session is read-only or `SELECT 1` failed |
+| `INTERRUPTED` | 4 | the caller cancelled the check (SIGTERM, for example during a node drain) before it finished |
+
+`INTERRUPTED` is no verified database result. It does not claim that no
+query ran, only that the check did not finish. A config fault is found
+before any network and stays `FAIL config` even then. The command's context
+is SIGTERM-aware, and a cancelled context is told apart from an expired
+deadline: only a deadline is `FAIL timeout`.
 
 `auth` covers any end of the session after a good TLS handshake and before
 the login completes, not only a bad password:
@@ -151,8 +158,28 @@ cleanup steps are in the how-to.
 - **Service.** The same label is in the portal Service's selector, but the
   Service's `targetPort` is the named port `https`. The Job pod declares no
   container port, so no endpoint is created for it.
-- **PDB.** A `readinessProbe` on the unused port 8443 keeps the pod
-  never-Ready, so the PodDisruptionBudget's healthy count is unchanged.
+- **PDB.** The portal PodDisruptionBudget selects the same label, so it
+  also selects the Job pod. Source:
+  - haynes-ops `kubernetes/main/apps/dev-env-system/portal/app/pdb.yaml`
+    at `3e92686c`;
+  - an integer `spec.minAvailable: 1` and selector
+    `app.kubernetes.io/name: dev-env-v2-portal`;
+  - live on 2026-11-06: currentHealthy 2, desiredHealthy 1, expectedPods 2,
+    disruptionsAllowed 1.
+
+  This is harmless, for two reasons:
+  - With an integer `minAvailable`, the disruption controller does not need
+    a scalable controller for each selected pod. That requirement applies
+    only to `maxUnavailable` or a percentage `minAvailable`. So the Job pod,
+    which has none, does not make the PDB fail to sync.
+  - The `readinessProbe` on the unused port 8443 keeps the Job pod
+    never-Ready. While it exists, expectedPods rises by one, but
+    currentHealthy, desiredHealthy and disruptionsAllowed do not change.
+
+  Recheck the PDB's form immediately before the Job run (the how-to's
+  preflight). If it ever uses `maxUnavailable` or a percentage, the Job pod would put it in `SyncFailed` with
+  `disruptionsAllowed: 0` until the Job is pruned. Then the dedicated-label
+  follow-up must come first.
 - **Anti-affinity.** The Deployment's required anti-affinity matches the
   label, and required anti-affinity is honoured both ways:
   - the Job cannot be scheduled on a node that already runs a portal
