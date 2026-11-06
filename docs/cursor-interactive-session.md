@@ -265,8 +265,8 @@ once per approval, with the same receipt, ledger, modal and last-look rules as a
    below, nothing in history counts). If the inline menu is not shown, no `Enter` is sent: an unregistered command
    would otherwise go to the model as a chat message.
 3. `inspect`: the screen must now show the usage view. Read the figures there.
-4. `menu-key --expect-kind usage-view` on that fresh receipt: one `Escape`. The expected text is 3 to 8 distinct lines
-   in order: a `Usage` title row first, then the view rows, the usage view's own `View in dashboard:` row, and exactly
+4. `menu-key --expect-kind usage-view` on that fresh receipt: one `Escape`. The expected text is 3 to 14 distinct lines (the pinned client's plan view has 10 nonblank rows; 11 when the reset date stacks onto its own row in a pane under 58 columns; 12 to 13 when the dashboard URL and subtitle wrap in a pane under 49 or 40 columns)
+   in order: a `Usage` title row first, then the view rows, the usage view's own `View in dashboard:` row (followed by at most two rows of a wrapped URL), and exactly
    `Esc to close` last. No composer arrow row and no loading or error line. `Esc to close` is shared by every Cursor
    view, so the dashboard row directly above it is what marks this one. On screen, the expected lines are one
    contiguous block at the bottom of the visible screen, ending in the footer (blank rows between them do not count;
@@ -281,6 +281,13 @@ once per approval, with the same receipt, ledger, modal and last-look rules as a
    that look. A real prompt ends the check at once. It reports `postcheck: composer-restored`; otherwise it exits 3 with
    `post-check-unconfirmed`. The approval stays spent, and no second key and no input is ever sent from the check.
    Inspect the pane.
+
+From the pinned client source (Cursor 2026.10.14, usage-pager and the `/usage` command): the view is the chat's bottom
+pager, and while it is open the composer and the workspace status row are not rendered at all, only the transcript above
+and the pager. Detail and metric rows are truncated to the pane, not wrapped; the subtitle and the dashboard URL can wrap
+in a narrow pane. The wrapped layouts are modelled from the source and have not been seen on a live pane: the guard
+compares the exact expected rows, so a layout it does not know refuses instead of guessing. Build the expected text from
+a fresh `inspect` of the real view.
 
 The helper sends no key but `Enter` (menu rows) and `Escape` (the checked view). It reads figures from nothing and
 claims no provider measurement time: the figures are whatever the visible view shows at that moment.

@@ -3471,6 +3471,34 @@ USAGE_VIEW_ROWS = ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "  Included 
 USAGE_VIEW_EXPECT = "Usage\n  Included  42% used\nView in dashboard: example.test/usage\nEsc to close\n"
 COMPOSER_BACK_ROWS = ["Cursor Agent v2026.10.14-0f9edde", "", "", "", "\u2192 Add a follow-up", "  ~/work/example-task", ""]
 
+# The plan view of the pinned Cursor client (2026.10.14, usage-pager): title row (plan, reset label), subtitle, table header,
+# Included/Auto/API/On-Demand rows, detail line, dashboard row, footer. Synthetic figures, real strings. A narrow terminal
+# (content width under 58) puts the reset label on its own row.
+REAL_VIEW_WIDE = [
+    "Usage \u00b7 Pro+                          Resets Nov 15",
+    "Monthly plan and on-demand usage",
+    "",
+    "Category   Current       Usage",
+    "Included   42% used      \u2588\u2588\u2588\u2588\u2588\u2588\u2591\u2591\u2591\u2591\u2591\u2591",
+    "  Auto     30% used      \u2588\u2588\u2588\u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591",
+    "  API      12% used      \u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591",
+    "On-Demand  $0 / $20      \u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591",
+    "",
+    "$20 remaining",
+    "",
+    "View in dashboard: example.test/dashboard?tab=usage",
+    "Esc to close",
+]
+REAL_VIEW_NARROW = [REAL_VIEW_WIDE[0].split("  ")[0], "Resets Nov 15"] + REAL_VIEW_WIDE[1:]
+# A pane under 49 columns wraps the dashboard URL (the URL column is narrower than the URL): 12 nonblank rows.
+REAL_VIEW_WRAPPED = REAL_VIEW_NARROW[:-2] + ["View in dashboard: example.test/dash", "                   board?tab=usage", "Esc to close"]
+# A pane under 40 columns drops the table header (Label: value rows), wraps the subtitle and the URL to three rows: 13 rows.
+REAL_VIEW_COMPACT = [
+    "Usage \u00b7 Pro+", "Resets Nov 15", "Monthly plan and on-demand", "usage", "",
+    "Included: 42% used", "Auto: 30% used", "API: 12% used", "On-Demand: $0 / $20", "", "$20 remaining", "",
+    "View in dashboard: exampl", "                   e.test/dash", "                   board?tab=usage", "Esc to close",
+]
+
 
 class UsageKeyTests(AnswerFixture):
     """menu-key: Enter on the live /usage row, and one checked Escape that closes the usage view."""
@@ -3519,6 +3547,73 @@ class UsageKeyTests(AnswerFixture):
         self.assertEqual((caught.exception.state, caught.exception.code), ("screen-changed", 2))
         self.assertEqual(self.sends(), [])
         self.assertEqual(json.loads(self.menu_ledger().read_text())["outcome"], "not-sent")
+
+    def real_expect(self, body):
+        path = self.root / "expect-real-view"
+        path.write_text("\n".join(row for row in body if row) + "\n")
+        return path
+
+    def real_screen(self, body, above=()):
+        rows = ["Cursor Agent v2026.10.14-0f9edde", "", *above, *body]
+        self.show(rows)
+        composer = ["Cursor Agent v2026.10.14-0f9edde"] + [""] * (len(rows) - 3) + ["\u2192 Add a follow-up", "  ~/work/example-task"]
+        self.back.write_text("\n".join(composer[:len(rows) - 1] + [""]) + "\n\n")
+        self.env["FAKE_ON_ESCAPE"] = str(self.back)
+
+    def test_the_real_plan_view_layouts_get_one_escape(self):
+        layouts = (("wide", REAL_VIEW_WIDE, 10), ("narrow", REAL_VIEW_NARROW, 11), ("wrapped URL", REAL_VIEW_WRAPPED, 12),
+                   ("compact", REAL_VIEW_COMPACT, 13))
+        for label, body, rows_expected in layouts:
+            with self.subTest(label=label):
+                self.restart_case()
+                for path in (self.root / "state" / "cursor-interactive-session" / "approvals").glob("*"):
+                    path.unlink()
+                self.assertEqual(len([row for row in body if row.strip()]), rows_expected)
+                self.real_screen(body)
+                inspected = self.start_and_inspect()
+                code, sent = self.invoke("menu-key", self.args(inspected["receipt"], kind="usage-view", expect=self.real_expect(body)))
+                self.assertEqual((code, sent["state"], sent["postcheck"]), (0, "key-sent", "composer-restored"))
+                self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "Escape"]])
+
+    def test_a_wrapped_layout_with_a_row_missing_or_extra_is_refused(self):
+        for label, body, screen in (
+                ("wrapped, url tail missing", REAL_VIEW_WRAPPED, [r for r in REAL_VIEW_WRAPPED if "board?tab" not in r]),
+                ("compact, subtitle tail missing", REAL_VIEW_COMPACT, [r for r in REAL_VIEW_COMPACT if r != "usage"]),
+                ("compact, extra row before the footer", REAL_VIEW_COMPACT, REAL_VIEW_COMPACT[:-1] + ["stray", "Esc to close"])):
+            with self.subTest(label=label):
+                self.restart_case()
+                self.real_screen(screen)
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("menu-key", self.args(inspected["receipt"], kind="usage-view", expect=self.real_expect(body)))
+                self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+                self.assertEqual(self.sends(), [])
+
+    def test_the_real_plan_view_layout_keeps_the_refusals(self):
+        body = REAL_VIEW_WIDE
+        without = lambda needle: [row for row in body if needle not in row]
+        cases = {
+            "loading row": [row.replace("42% used", "Loading usage data...") if "Included" in row else row for row in body],
+            "error row": [row.replace("$20 remaining", "Failed to load usage data") for row in body],
+            "no dashboard row": without("View in dashboard"),
+            "no footer": without("Esc to close"),
+            "a row of the block missing": without("  API "),
+            "a composer row under the view": body[:-1] + ["\u2192 Add a follow-up", body[-1]],
+        }
+        for label, screen in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.real_screen(screen)
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("menu-key", self.args(inspected["receipt"], kind="usage-view", expect=self.real_expect(body)))
+                self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+                self.assertEqual(self.sends(), [])
+        with self.subTest(label="another view with the usage rows copied above it"):
+            self.restart_case()
+            self.real_screen(body[:-3] + ["Other view", "Esc to close"], above=body)
+            inspected = self.start_and_inspect()
+            code, refused = self.invoke("menu-key", self.args(inspected["receipt"], kind="usage-view", expect=self.real_expect(body)))
+            self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+            self.assertEqual(self.sends(), [])
 
     def test_usage_menu_sends_exactly_one_enter(self):
         inspected = self.start_and_inspect()
@@ -3762,6 +3857,10 @@ class UsageKeyTests(AnswerFixture):
             "duplicate": "Usage\nUsage\nView in dashboard: x\nEsc to close\n",
             "footer only": "Esc to close\n",
             "wrong footer": "Usage\nView in dashboard: x\nEsc\n",
+            "two dashboard rows": "Usage\nView in dashboard: x\nView in dashboard: y\nEsc to close\n",
+            "three url rows": "Usage\nView in dashboard: x\na\nb\nc\nEsc to close\n",
+            "dashboard row first": "View in dashboard: x\nUsage\nEsc to close\n",
+            "fifteen rows": "Usage\n" + "".join("row %d\n" % i for i in range(12)) + "View in dashboard: x\nEsc to close\n",
         }
         for label, text in views.items():
             with self.subTest(label=label):

@@ -1410,7 +1410,11 @@ MENU_ROWS = {
 # composer arrow row anywhere on it.
 USAGE_TITLE = re.compile(r"^Usage(\s|$)")
 USAGE_FOOTER = "Esc to close"
-USAGE_VIEW_MAX_LINES = 8
+# The pinned client's plan view (usage-pager, 2026.10.14) shows 10 nonblank rows from the title to the footer; a pane under
+# 58 columns stacks the reset label on its own row (11); under 49 the dashboard URL wraps (12); under 40 the table header
+# goes and the subtitle and URL can wrap further (13). 14 covers every pane from 36 columns up and stays finite.
+USAGE_VIEW_MAX_LINES = 14
+USAGE_DASHBOARD_WRAP_ROWS = 2  # continuation rows of the wrapped dashboard URL, between its row and the footer
 # Rows that mean the view is not (yet) shown: loading, an error line, or an unavailable plan.
 USAGE_NOT_READY = ("Loading usage data", "Failed to load usage data", "Not logged in",
                    "Usage details are not available", "Enterprise spend details are not available")
@@ -1423,6 +1427,13 @@ POSTCHECK_SETTLE_SECONDS = 0.3
 POSTCHECK_CHECKS = 5
 
 
+def dashboard_row_ok(lines):
+    """The usage view's own `View in dashboard:` row (exactly one) comes right before the footer, apart from the
+    continuation rows of a wrapped URL (at most USAGE_DASHBOARD_WRAP_ROWS)."""
+    rows = [index for index, line in enumerate(lines) if line.startswith(USAGE_DASHBOARD)]
+    return len(rows) == 1 and 0 < rows[0] and len(lines) - 2 - rows[0] <= USAGE_DASHBOARD_WRAP_ROWS
+
+
 def validate_menu_key(args):
     """Read and check the inputs before the lock and before any tmux call. (raw, lines)."""
     if args.expect_kind not in MENU_KEYS:
@@ -1433,13 +1444,13 @@ def validate_menu_key(args):
     if modal_kind(lines):
         raise Refusal("invalid-input", "The expected text contains a prompt phrase. This command never answers a prompt. Nothing was sent.")
     if args.expect_kind == "usage-view":
-        # The checked view: a Usage title row first, the dashboard row and the footer last, 3..8 distinct lines, no arrow row.
-        if (not 3 <= len(lines) <= USAGE_VIEW_MAX_LINES or not lines[-2].startswith(USAGE_DASHBOARD)
+        # The checked view: a Usage title row first, the dashboard row and the footer last, 3..14 distinct lines, no arrow row.
+        if (not 3 <= len(lines) <= USAGE_VIEW_MAX_LINES or not dashboard_row_ok(lines)
                 or not USAGE_TITLE.match(lines[0]) or lines[-1] != USAGE_FOOTER
                 or len(set(lines)) != len(lines) or any(MENU_MARKER.match(line) for line in lines)
                 or any(line.startswith(USAGE_NOT_READY) for line in lines)):
-            raise Refusal("invalid-input", "For usage-view the expected text must be 3..8 distinct lines in order: a 'Usage' "
-                                           "title row first, then the view rows, a '" + USAGE_DASHBOARD + "' row and '" + USAGE_FOOTER
+            raise Refusal("invalid-input", "For usage-view the expected text must be 3..14 distinct lines in order: a 'Usage' "
+                                           "title row first, then the view rows, a '" + USAGE_DASHBOARD + "' row (and up to two rows of its wrapped URL) and '" + USAGE_FOOTER
                                            + "' last, with no "
                                            "composer arrow row and no loading or error line. Nothing was sent.")
         return raw, lines
