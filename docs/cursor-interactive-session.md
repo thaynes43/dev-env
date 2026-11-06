@@ -334,7 +334,8 @@ Before the lock and before any tmux call, `answer` checks its input:
 - `--choice`: exactly one printable ASCII key that appears as `[key]` in the
   expected text. The one exception is Cursor's command prompt (below): there
   the choice is `y`, shown once as `(y)` at the end of a row, with
-  `--expect-kind modal-approval`, or `ctrl-c` to reject the shown command.
+  `--expect-kind modal-approval`, `ctrl-c` to reject the shown command, or
+  `skip` to open a single shell command's reason field with one literal `n`.
   No other key is accepted for that prompt.
 - `--trust-path`: required with `--expect-kind modal-trust` and refused with
   any other kind. It is the one directory the approval covers: an absolute,
@@ -613,8 +614,57 @@ What Ctrl+C does is read from the installed UI code of Cursor
   a draft or arms exit, and a second within two seconds quits Cursor. So reject one decision, inspect again, and
   never send a second Ctrl+C without a fresh inspect that still shows a
   decision.
-- `n` (Skip) is not used: it opens a reason composer, and Enter there can
-  send a queued message as a new turn.
+- `n` (Skip) opens a reason composer instead of resolving the decision. Use
+  the guarded `skip`/`feedback` route below; an ordinary follow-up or an
+  unchecked Enter is not equivalent and can send a queued message as a new turn.
+
+#### Skip and give the same decision a reason
+
+On the pinned 2026.10.14-0f9edde client, `answer --choice skip` sends one
+literal `n`, without Enter. It requires the complete single Shell prompt,
+its exact `Run this command?` and `Skip & tell the agent what to do instead`
+rows, the normal 20-row/4096-byte bounds, and the existing custody, receipt
+and one-shot checks. Queued decisions, Error footers and other prompt kinds
+refuse. This opens the reason field; it neither executes nor yet rejects
+the command. It records the pending reference so generic `reply` refuses.
+Other `answer` attempts also refuse while that reference is pending, before
+they can alter the decision record or fence. Only confirmed guarded feedback
+submission clears it; an aborted or uncertain action leaves it in place.
+
+After a fresh inspect, submit the reason through the specific route:
+
+```sh
+python3 scripts/cursor-interactive-session.py feedback \
+  --name SAME-OWNED-NAME --tmux /usr/bin/tmux \
+  --receipt FRESH-REASON-RECEIPT --skip-ref SAME-SKIP-APPROVAL-REF \
+  --text-file /path/to/short-reason.txt
+```
+
+`feedback` requires that task's latest successful Skip ledger, including its
+command digest, pane, PID, owner and worktree. The exact empty reason placeholder
+must be on the current visible screen, with one input field and no queued-message
+banner/tip or another modal. A normal composer, nonempty field, copied history,
+changed identity or stale receipt is not a replacement. Retain sole input custody.
+The reason is limited to 200 single-line ASCII characters without edge padding
+and must fit one visible row.
+Point to the already authorized correction file when more detail is needed.
+
+Before typing, it durably spends a separate feedback transaction and the receipt.
+Only the reason hash and length are recorded. It verifies the complete literal
+echo at that same field position after bounded settling, rechecks identity/state,
+then sends one Enter. It never uses the generic suffix-echo test. A failed or
+unknown action remains spent: do not repeat `n`, text or Enter, or clear the field.
+Read back the result and separately prove the agent consumed the correction.
+
+The source qualification is UI code, not a live experiment: bundle
+`7000.index.js`, SHA256
+`2a614232d8d266b6763c382b499d04bb8fe36791579f51c7722bda58dae94f62`.
+The decision handler's `propose` opens a rejection ID and clears input; ordinary
+typing does not change that ID. Submission rejects that ID with the reason.
+Submit/cancel/another decision action can change it, so other input custody is
+incompatible with this route. The public queued-message banner always has a
+`follow-ups` header and a send/edit tip; either refuses submission. These checks
+do not read hidden queue state or enable permissions, sandbox changes or new turns.
 
 When the agent turn has ended with an error, Cursor draws it under the prompt
 as `Error: <title>` (for example `Error: Agent stopped retrying` or
