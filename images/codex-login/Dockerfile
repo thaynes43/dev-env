@@ -21,7 +21,7 @@ FROM node:24-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf
 # D-78 requires a pinned, reviewed helper; coordinate version changes with the
 # agent guard and login smoke check. Proposals are not an automatic upgrade.
 # renovate: datasource=npm depName=@openai/codex
-ARG CODEX_VERSION=0.160.1
+ARG CODEX_VERSION=0.167.0
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
