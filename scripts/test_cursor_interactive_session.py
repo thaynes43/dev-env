@@ -166,6 +166,8 @@ class CursorInteractiveTests(unittest.TestCase):
             args = ["inspect", "--tmux", self.tmux, "--name", self.name, *extra]
         elif command == "answer":
             args = ["answer", "--tmux", self.tmux, "--name", self.name, *extra]
+        elif command == "menu-key":
+            args = ["menu-key", "--tmux", self.tmux, "--name", self.name, *extra]
         else:
             args = ["reply", "--tmux", self.tmux, "--name", self.name, *extra]
         merged = dict(self.env, FAKE_MODE=mode)
@@ -2970,6 +2972,375 @@ class LiveG1Tests(unittest.TestCase):
         for label, kept in cropped.items():
             with self.subTest(label=label):
                 self.assertEqual(self.classify("\n".join(kept))[0], "modal-trust")
+
+
+RUN_ROWS = [
+    "Cursor Agent v2026.10.14-0f9edde",
+    "\u2192 /run-everything    Toggle Run Everything (currently disabled)",
+    "\u2192 /run-everything",
+]
+RUN_EXPECT = "\u2192 /run-everything    Toggle Run Everything (currently disabled)\n\u2192 /run-everything\n"
+RUN_APPROVAL = "OP192-run-everything-2026-11-06T06:20:00Z"
+MENU_APPROVAL = "OP192-menu-key-2026-11-06T06:10:00Z"
+MENU_APPROVAL_2 = "OP192-menu-key-2026-11-06T06:12:00Z"
+
+
+class MenuKeyTests(AnswerFixture):
+    """menu-key sends one Enter to the live /run-everything menu row (while it reads currently disabled), once per approval."""
+
+    def setUp(self):
+        super().setUp()
+        self.menu_expect = self.root / "expect-menu"
+        self.menu_expect.write_text(RUN_EXPECT)
+        self.show(RUN_ROWS)
+
+    def show(self, rows):
+        capture = "\n".join(rows) + "\n\n"
+        self.capture.write_text(capture)
+        for typed in (".echo", ".stale"):
+            Path(str(self.capture) + typed).unlink(missing_ok=True)
+        self.env["FAKE_HEIGHT"] = str(len(capture.splitlines()))
+        self.env["FAKE_CURSOR_Y"] = str(len(capture.splitlines()) - 1)
+        self.env["FAKE_HISTORY"] = "0"
+
+    def sends(self):
+        return [args for args in self.commands("tmux") if args[0] == "send-keys"]
+
+    def state(self, name=None):
+        return json.loads((self.root / "state" / "cursor-interactive-session" / (name or self.name)).read_text())
+
+    def restart_case(self):
+        self.log.unlink(missing_ok=True)
+        (self.root / "state" / "cursor-interactive-session" / self.name).unlink(missing_ok=True)
+
+    def args(self, receipt, kind="run-everything-menu", approval=MENU_APPROVAL, expect=None):
+        default = self.menu_expect
+        return ["--receipt", receipt, "--approval-ref", approval, "--expect-kind", kind,
+                "--expect-text-file", str(expect or default)]
+
+    def menu_ledger(self, approval=MENU_APPROVAL):
+        digest = __import__("hashlib").sha256(approval.encode("utf-8")).hexdigest()
+        return self.root / "state" / "cursor-interactive-session" / "menu-keys" / digest
+
+    def test_menu_sends_exactly_one_enter_and_records_it(self):
+        inspected = self.start_and_inspect()
+        code, sent = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, sent["state"], sent["key"]), (0, "key-sent", "Enter"))
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "Enter"]])
+        record = json.loads(self.menu_ledger().read_text())
+        self.assertEqual((record["kind"], record["key"], record["outcome"], record["pane_id"], record["pane_pid"]),
+                         ("run-everything-menu", "Enter", "sent", "%7", "123"))
+        self.assertNotIn("Show plan", json.dumps(record))
+        self.assertEqual(self.state()["receipt_id"], "")
+        # The approval and the receipt are spent: nothing more goes out.
+        code, again = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, again["state"]), (2, "approval-spent"))
+        code, other = self.invoke("menu-key", self.args(inspected["receipt"], approval=MENU_APPROVAL_2))
+        self.assertEqual((code, other["state"]), (2, "stale-receipt"))
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_wrong_screen_sends_nothing_and_keeps_the_approval(self):
+        usage_menu = ["Cursor Agent v2026.10.14-0f9edde", "\u2192 /usage    Show plan and on-demand usage", "\u2192 /usage"]
+        composer = ["Cursor Agent v2026.10.14-0f9edde", "\u2192 Add a follow-up"]
+        reordered = self.root / "reordered"
+        reordered.write_text("\u2192 /run-everything\n\u2192 /run-everything    Toggle Run Everything (currently disabled)\n")
+        cases = (
+            ("another command's menu", usage_menu, self.menu_expect),
+            ("a plain composer", composer, self.menu_expect),
+            ("menu rows reordered", RUN_ROWS, reordered),
+        )
+        for label, rows, expect in cases:
+            with self.subTest(label=label):
+                self.restart_case()
+                self.log.write_text("")
+                self.show(rows)
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("menu-key", self.args(inspected["receipt"], expect=expect))
+                self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.menu_ledger().exists())
+                self.assertNotEqual(self.state()["receipt_id"], "")
+
+    def test_a_different_selected_command_or_an_argument_draft_is_not_the_run_everything_menu(self):
+        other = ["Cursor Agent v2026.10.14-0f9edde", "\u2192 /auto-review    Toggle Auto-review (currently disabled)", "\u2192 /auto-review"]
+        argument = ["Cursor Agent v2026.10.14-0f9edde", RUN_ROWS[1], "\u2192 /run-everything on"]
+        for label, rows in (("other command", other), ("argument draft", argument)):
+            with self.subTest(label=label):
+                self.restart_case()
+                self.log.write_text("")
+                self.show(rows)
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+                self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+                self.assertEqual(self.sends(), [])
+
+    def test_a_prompt_on_screen_is_never_answered_with_a_key(self):
+        rows = RUN_ROWS + ["Do you trust this workspace? [a] Trust"]
+        self.show(rows)
+        inspected = self.start_and_inspect()
+        self.assertEqual(inspected["classification"], "modal-trust")
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, refused["state"]), (2, "modal-trust"))
+        self.assertEqual(self.sends(), [])
+
+    def test_stale_receipt_and_changed_pane_refuse_without_spending(self):
+        inspected = self.start_and_inspect()
+        self.show(RUN_ROWS + ["extra row"])
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, refused["state"]), (2, "stale-receipt"))
+        self.show(RUN_ROWS)
+        for mode, state in (("replaced", "pane-replaced"), ("new-pane", "pane-replaced"), ("foreign-owner", "not-owned"),
+                            ("foreign-command", "pane-replaced"), ("dead", "pane-dead"), ("copy-mode", "pane-in-mode")):
+            with self.subTest(mode=mode):
+                code, refused = self.invoke("menu-key", self.args(inspected["receipt"]), mode=mode)
+                self.assertEqual(code, 2)
+                self.assertIn(refused["state"], {state, "stale-receipt"})
+        self.assertEqual(self.sends(), [])
+        self.assertFalse(self.menu_ledger().exists())
+
+    def test_input_is_checked_before_any_tmux_call(self):
+        inspected = self.start_and_inspect()
+        receipt = inspected["receipt"]
+        no_draft = self.root / "no-draft"
+        no_draft.write_text(RUN_ROWS[1] + "\n")
+        no_selected = self.root / "no-selected"
+        no_selected.write_text("\u2192 /run-everything\n")
+        prompt = self.root / "prompt"
+        prompt.write_text(RUN_EXPECT + "Are you sure? (y/n)\n")
+        cases = [
+            ("kind unknown", self.args(receipt, kind="modal-trust")),
+            ("kind usage", self.args(receipt, kind="usage-menu")),
+            ("approval short", self.args(receipt, approval="ok")),
+            ("approval spaces", self.args(receipt, approval="Tom said ok to this")),
+            ("no draft row", self.args(receipt, expect=no_draft)),
+            ("no selected row", self.args(receipt, expect=no_selected)),
+            ("prompt phrase", self.args(receipt, expect=prompt)),
+            ("missing file", self.args(receipt, expect=self.root / "absent")),
+        ]
+        for label, extra in cases:
+            with self.subTest(label=label):
+                self.log.write_text("")
+                code, refused = self.invoke("menu-key", extra)
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+                self.assertEqual(self.commands("tmux"), [])
+        self.assertNotEqual(self.state()["receipt_id"], "")
+
+    def test_a_send_failure_is_uncertain_and_never_retried(self):
+        inspected = self.start_and_inspect()
+        code, failed = self.invoke("menu-key", self.args(inspected["receipt"]), mode="send-fail")
+        self.assertEqual((code, failed["state"]), (3, "key-unconfirmed"))
+        self.assertEqual(json.loads(self.menu_ledger().read_text())["outcome"], "uncertain")
+        code, again = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, again["state"]), (2, "approval-spent"))
+
+    def test_menu_key_does_not_touch_the_answer_ledger(self):
+        inspected = self.start_and_inspect()
+        self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertFalse((self.root / "state" / "cursor-interactive-session" / "approvals").exists())
+        self.assertNotIn("answers", self.state())
+
+    def history_show(self, history_rows, visible_rows):
+        """A capture whose first rows are scrolled history and whose last rows are the visible pane."""
+        capture = "\n".join(history_rows + visible_rows) + "\n\n"
+        self.capture.write_text(capture)
+        for typed in (".echo", ".stale"):
+            Path(str(self.capture) + typed).unlink(missing_ok=True)
+        height = len(visible_rows) + 1
+        self.env["FAKE_HEIGHT"] = str(height)
+        self.env["FAKE_CURSOR_Y"] = str(height - 1)
+        self.env["FAKE_HISTORY"] = str(len(history_rows))
+
+    def real_pane_rows(self):
+        """The shape of the real review pane: the answered trust box scrolled into history, the review
+        output, then the menu, the typed draft and the status rows (synthetic text, real layout)."""
+        trust = [row for row in (boxed(ANSWERED_BOX_ROWS).replace(EXAMPLE_PATH, "/home/dev/work/example-task")).split("\n")]
+        history = trust + ["", "  Review: no findings.", "  Done."] * 6
+        visible = ["  Done.", "", RUN_ROWS[1], RUN_ROWS[2], "",
+                   "  Grok 4.7 256K Extra High \u00b7 7.3%", "  ~/work/example-task"]
+        return history, visible
+
+    def test_trust_text_scrolled_into_history_does_not_block_the_menu_key(self):
+        history, visible = self.real_pane_rows()
+        self.history_show(history, visible)
+        inspected = self.start_and_inspect()
+        self.assertNotIn(inspected["classification"], {"modal-trust", "modal-permission", "modal-approval", "modal-unknown"})
+        code, sent = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, sent["state"]), (0, "key-sent"))
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "Enter"]])
+
+    def test_trust_box_still_on_the_visible_screen_refuses(self):
+        # Not scrolled away: the box is part of the visible screen and the composer is not empty.
+        box = [row for row in boxed(ANSWERED_BOX_ROWS).split("\n")]
+        self.show(box + RUN_ROWS[1:])
+        inspected = self.start_and_inspect()
+        self.assertTrue(inspected["classification"].startswith("modal-"))
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, refused["state"].startswith("modal-")), (2, True))
+        self.assertEqual(self.sends(), [])
+
+    def test_a_new_real_prompt_refuses_in_the_real_pane_layout(self):
+        history, visible = self.real_pane_rows()
+        self.history_show(history, visible + ["  Allow this command: git push", "  (y) Run once"])
+        inspected = self.start_and_inspect()
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual(code, 2)
+        self.assertTrue(refused["state"].startswith("modal-"))
+        self.assertEqual(self.sends(), [])
+
+    def test_a_pane_that_changes_after_the_approval_is_spent_gets_no_key(self):
+        changes = {
+            "an extra row appeared": {"capture": "\n".join(RUN_ROWS + ["extra row"]) + "\n\n"},
+            "the menu row was replaced": {"capture": "\n".join([RUN_ROWS[0], "\u2192 /usage-credits    Configure", RUN_ROWS[2]]) + "\n\n"},
+            "the pane process was replaced": {"env": {"FAKE_PID": "999"}},
+        }
+        for label, change in changes.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                for path in (self.root / "state" / "cursor-interactive-session" / "menu-keys").glob("*"):
+                    path.unlink()
+                self.env["FAKE_PID"] = "123"
+                self.show(RUN_ROWS)
+                inspected = self.start_and_inspect()
+                args = argparse.Namespace(name=self.name, tmux=self.tmux, receipt=inspected["receipt"],
+                                          approval_ref=MENU_APPROVAL, expect_kind="run-everything-menu",
+                                          expect_text_file=str(self.menu_expect))
+                original = helper.spend_approval
+
+                def spend_then_change(path, entry):
+                    original(path, entry)
+                    if "capture" in change:
+                        self.capture.write_text(change["capture"])
+                    for key, value in change.get("env", {}).items():
+                        os.environ[key] = value
+
+                with mock.patch.dict(os.environ, self.env), mock.patch.object(helper, "spend_approval", spend_then_change):
+                    with self.assertRaises(helper.Refusal) as caught:
+                        helper.menu_key_session(args)
+                self.assertEqual((caught.exception.state, caught.exception.code), ("screen-changed", 2))
+                self.assertEqual(self.sends(), [])
+                self.assertEqual(json.loads(self.menu_ledger().read_text())["outcome"], "not-sent")
+                self.assertEqual(self.state()["receipt_id"], "")
+
+    def test_an_unmarked_menu_row_is_not_the_selected_row(self):
+        unmarked = self.root / "unmarked"
+        unmarked.write_text("/run-everything    Toggle Run Everything (currently disabled)\n\u2192 /run-everything\n")
+        inspected = self.start_and_inspect()
+        self.log.write_text("")
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"], expect=unmarked))
+        self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+        self.assertEqual(self.commands("tmux"), [])
+
+    def test_run_everything_never_toggles_off_or_takes_an_argument(self):
+        refused_rows = {
+            "currently enabled": "\u2192 /run-everything    Toggle Run Everything (currently enabled)\n\u2192 /run-everything\n",
+            "sandbox only": "\u2192 /run-everything    Run in Sandbox\n\u2192 /run-everything\n",
+            "disabled by admin": "\u2192 /run-everything    Run Everything is disabled by admin settings\n\u2192 /run-everything\n",
+            "argument form": "\u2192 /run-everything    Toggle Run Everything (currently disabled)\n\u2192 /run-everything on\n",
+            "no selection marker": "/run-everything    Toggle Run Everything (currently disabled)\n\u2192 /run-everything\n",
+            "no draft row": "\u2192 /run-everything    Toggle Run Everything (currently disabled)\n",
+            "another command's rows": "\u2192 /usage    Show plan and on-demand usage\n\u2192 /usage\n",
+        }
+        self.show(RUN_ROWS)
+        inspected = self.start_and_inspect()
+        for label, text in refused_rows.items():
+            with self.subTest(label=label):
+                expect = self.root / ("expect-" + label.replace(" ", "-"))
+                expect.write_text(text)
+                self.log.write_text("")
+                code, refused = self.invoke("menu-key", self.args(inspected["receipt"], kind="run-everything-menu",
+                                                                    approval=RUN_APPROVAL, expect=expect))
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+                self.assertEqual(self.commands("tmux"), [])
+        self.assertFalse(self.menu_ledger(RUN_APPROVAL).exists())
+
+    def test_a_screen_showing_the_enabled_row_is_refused_even_with_the_disabled_text(self):
+        # The caller's text says disabled, but the pane shows "(currently enabled)": the toggle would turn it OFF.
+        enabled = [RUN_ROWS[0], "\u2192 /run-everything    Toggle Run Everything (currently enabled)", RUN_ROWS[2]]
+        expect = self.root / "expect-run"
+        expect.write_text(RUN_EXPECT)
+        self.show(enabled)
+        inspected = self.start_and_inspect()
+        self.log.write_text("")
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"], kind="run-everything-menu",
+                                                            approval=RUN_APPROVAL, expect=expect))
+        self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+        self.assertEqual(self.sends(), [])
+
+    def run_expect(self):
+        path = self.root / "expect-run"
+        path.write_text(RUN_EXPECT)
+        return path
+
+    def test_a_menu_that_sits_only_in_history_is_not_the_live_menu(self):
+        composer = ["  Review: no findings.", "", "\u2192 Add a follow-up", "  Grok 4.7 256K Extra High \u00b7 7.3%", "  ~/work/example-task"]
+        for kind, rows, expect in (("run-everything-menu", RUN_ROWS, self.menu_expect),
+                                   ("run-everything-menu", RUN_ROWS, self.run_expect())):
+            with self.subTest(kind=kind):
+                self.restart_case()
+                self.history_show(rows[1:] + ["  more output"] * 3, composer)
+                inspected = self.start_and_inspect()
+                self.log.write_text("")
+                code, refused = self.invoke("menu-key", self.args(inspected["receipt"], kind=kind, approval=RUN_APPROVAL + kind,
+                                                                    expect=expect))
+                self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+                self.assertEqual(self.sends(), [])
+
+    def test_an_old_visible_copy_above_a_later_composer_is_not_the_live_menu(self):
+        later = RUN_ROWS[1:] + ["  Review: no findings.", "\u2192 Add a follow-up", "  ~/work/example-task"]
+        self.show(later)
+        inspected = self.start_and_inspect()
+        self.log.write_text("")
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+        self.assertEqual(self.sends(), [])
+
+    def test_the_menu_and_draft_rows_must_be_adjacent(self):
+        apart = [RUN_ROWS[0], RUN_ROWS[1], "  some other row", RUN_ROWS[2]]
+        self.show(apart)
+        inspected = self.start_and_inspect()
+        self.log.write_text("")
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+        self.assertEqual(self.sends(), [])
+
+    def test_run_everything_in_the_real_pane_layout_sends_one_enter(self):
+        history, _visible = self.real_pane_rows()
+        visible = ["  Done.", "", RUN_ROWS[1], RUN_ROWS[2], "", "  Grok 4.7 256K Extra High \u00b7 7.3%", "  ~/work/example-task"]
+        self.history_show(history, visible)
+        inspected = self.start_and_inspect()
+        self.assertNotIn(inspected["classification"], {"modal-trust", "modal-permission", "modal-approval", "modal-unknown"})
+        self.log.write_text("")
+        code, sent = self.invoke("menu-key", self.args(inspected["receipt"], kind="run-everything-menu", approval=RUN_APPROVAL,
+                                                         expect=self.run_expect()))
+        self.assertEqual((code, sent["state"], sent["key"]), (0, "key-sent", "Enter"))
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "Enter"]])
+
+    def test_a_prompt_that_appears_after_the_approval_is_spent_gets_no_key(self):
+        self.show(RUN_ROWS)
+        inspected = self.start_and_inspect()
+        args = argparse.Namespace(name=self.name, tmux=self.tmux, receipt=inspected["receipt"], approval_ref=RUN_APPROVAL,
+                                  expect_kind="run-everything-menu", expect_text_file=str(self.run_expect()))
+        original = helper.spend_approval
+
+        def spend_then_prompt(path, entry):
+            original(path, entry)
+            self.capture.write_text("\n".join(RUN_ROWS + ["Do you trust this workspace? [a] Trust"]) + "\n\n")
+            os.environ["FAKE_HEIGHT"] = str(len(RUN_ROWS) + 2)
+
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(helper, "spend_approval", spend_then_prompt):
+            with self.assertRaises(helper.Refusal) as caught:
+                helper.menu_key_session(args)
+        self.assertEqual(caught.exception.state, "screen-changed")
+        self.assertEqual(self.sends(), [])
+
+    def test_a_menu_in_history_with_no_composer_on_the_visible_screen_is_not_the_live_menu(self):
+        busy = ["  Running tests...", "  ok  pkg/a", "  ok  pkg/b", "  ~/work/example-task"]
+        self.history_show(RUN_ROWS[1:] + ["  more output"] * 3, busy)
+        inspected = self.start_and_inspect()
+        self.log.write_text("")
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+        self.assertEqual(self.sends(), [])
 
 
 if __name__ == "__main__":

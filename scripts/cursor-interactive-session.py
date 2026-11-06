@@ -1363,6 +1363,8 @@ def answer_locked(args, choice, raw, lines, trust_path):
         text_again, truncated_again, rows_again = read_capture_rows(state["tmux"], state["pane_id"])
         if snapshot_hash(again, text_again, truncated_again) != digest:
             raise Refusal("stale-receipt", "Pane capture changed after the approval was spent.")
+        if classify(text_again, truncated_again, rows_again, again, None)[0].startswith("modal-"):
+            raise Refusal("modal", "A prompt appeared after the approval was spent.")
         current_prompt(text_again, truncated_again, rows_again, again, args.expect_kind, lines, trust_path, shape)
     except Refusal as refusal:
         record["outcome"] = entry["outcome"] = "not-sent"
@@ -1390,6 +1392,120 @@ def answer_locked(args, choice, raw, lines, trust_path):
             "The helper recorded the approval reference but did not verify the approval. "
             "This receipt is now spent. Inspect again before any reply."
         ),
+    }
+
+
+MENU_KEYS = {"run-everything-menu": "Enter"}
+MENU_MARKER = re.compile(r"^[\u2192\u25b6\u276f\u203a>]\s*")
+# The fixed allowlist of menu rows the Enter may select: (the draft command, the selected row).
+# Nothing else is accepted. The run-everything row must say "currently disabled", so the Enter
+# can only turn it ON, never OFF; "(currently enabled)", "Run in Sandbox" and the admin-disabled
+# text are refused.
+MENU_ROWS = {
+    "run-everything-menu": ("/run-everything", re.compile(
+        r"^[\u2192\u25b6\u276f\u203a>]\s*/run-everything\s+Toggle Run Everything \(currently disabled\)$")),
+}
+
+
+def menu_key_path(name, approval_ref):
+    digest = hashlib.sha256(approval_ref.encode("utf-8")).hexdigest()
+    return state_path(name).parent / "menu-keys" / digest
+
+
+def validate_menu_key(args):
+    """Read and check the inputs before the lock and before any tmux call. (raw, lines)."""
+    if args.expect_kind not in MENU_KEYS:
+        raise Refusal("invalid-input", "--expect-kind must be run-everything-menu. Nothing was sent.")
+    if not APPROVAL_RE.fullmatch(args.approval_ref or ""):
+        raise Refusal("invalid-input", "--approval-ref must be 8..200 characters of letters, digits and ._:/@#-. Nothing was sent.")
+    raw, lines = read_expected(args.expect_text_file)
+    if modal_kind(lines):
+        raise Refusal("invalid-input", "The expected text contains a prompt phrase. This command never answers a prompt. Nothing was sent.")
+    # The typed draft must be exactly the command (no argument), and the selected row must be the allowlisted one.
+    command, selected_row = MENU_ROWS[args.expect_kind]
+    draft = any(MENU_MARKER.sub("", line, count=1).strip() == command for line in lines)
+    selected = any(selected_row.match(line) for line in lines)
+    if not draft or not selected:
+        raise Refusal("invalid-input", "For " + args.expect_kind + " the expected text needs the exact selected menu row "
+                                       "and a row holding only the " + command + " draft. Nothing was sent.")
+    return raw, lines
+
+
+def menu_rows_shown(text, truncated, rows_total, ident, lines):
+    """True when the expected rows are on the visible screen as ONE contiguous block, with the draft row
+    (the last expected line) the last composer-arrow row of the visible screen: the menu is the live one
+    directly above the composer, not an old copy in the transcript. History above the visible screen is
+    never searched. Rows are read like prompt rows."""
+    shown = [prompt_text(row) for row in visible_screen(text, truncated, rows_total, ident)]
+    size = len(lines)
+    for start in range(len(shown) - size + 1):
+        if shown[start:start + size] == lines:
+            return not any(MENU_MARKER.match(row) for row in shown[start + size:])
+    return False
+
+
+def menu_key_session(args):
+    raw, lines = validate_menu_key(args)
+    with state_lock(args.name, wait=False):
+        return menu_key_locked(args, raw, lines)
+
+
+def menu_key_locked(args, raw, lines):
+    ledger = menu_key_path(args.name, args.approval_ref)
+    if ledger.exists():
+        raise Refusal("approval-spent", "This approval reference was already used. One approval sends one key once. Nothing was sent.")
+    path, state = load_owned(args.name, args.tmux)
+    receipt = parse_receipt(args.receipt)
+    if not state.get("receipt_id") or receipt["id"] != state["receipt_id"]:
+        raise Refusal("stale-receipt", "Pane receipt is stale or is not the latest inspect. Re-inspect. Nothing was sent.")
+    if receipt["pane"] != state["pane_id"] or receipt["pid"] != state["pane_pid"] or receipt["digest"] != state["snapshot_sha256"]:
+        raise Refusal("stale-receipt", "Pane receipt does not match the stored inspect. Re-inspect. Nothing was sent.")
+    ident = read_identity(state["tmux"], state["pane_id"], "inspect-unconfirmed", 3)
+    require_same_pane(state, ident)
+    text, truncated, rows_total = read_capture_rows(state["tmux"], state["pane_id"])
+    digest = snapshot_hash(ident, text, truncated)
+    if digest != state["snapshot_sha256"] or digest != receipt["digest"]:
+        raise Refusal("stale-receipt", "Pane capture changed since inspect. Re-inspect. Nothing was sent.")
+    kind, _located, _used = classify(text, truncated, rows_total, ident, None)
+    if kind.startswith("modal-"):
+        raise Refusal(kind, "A prompt is showing. This command never sends a key into a prompt. Nothing was sent.")
+    if not menu_rows_shown(text, truncated, rows_total, ident, lines):
+        raise Refusal("screen-mismatch", "The expected rows are not all on the visible screen, in order. Nothing was sent.")
+    key = MENU_KEYS[args.expect_kind]
+    record = {
+        "used_at": utc_now(), "approval_ref": args.approval_ref, "kind": args.expect_kind, "key": key,
+        "expected_text_sha256": hashlib.sha256(raw).hexdigest(), "pane_id": ident["pane"],
+        "pane_pid": ident["pid"], "owner": state["owner"], "name": state["name"], "outcome": "sending",
+    }
+    spend_approval(ledger, record)
+    clear_receipt(path, state)
+    # Look at the pane again right before the key: same pane and process, the same capture.
+    try:
+        again = read_identity(state["tmux"], state["pane_id"], "inspect-unconfirmed", 3)
+        require_same_pane(state, again)
+        text_again, truncated_again, rows_again = read_capture_rows(state["tmux"], state["pane_id"])
+        if snapshot_hash(again, text_again, truncated_again) != digest:
+            raise Refusal("stale-receipt", "Pane capture changed after the approval was spent.")
+        if not menu_rows_shown(text_again, truncated_again, rows_again, again, lines):
+            raise Refusal("screen-mismatch", "The expected rows left the screen.")
+    except Refusal as refusal:
+        record["outcome"] = "not-sent"
+        write_state(ledger, record)
+        raise Refusal("screen-changed", "The pane changed after the approval was spent (" + refusal.state + "). "
+                      "Nothing was sent. The approval stays spent; a new approval is needed.")
+    try:
+        failed = run([state["tmux"], "send-keys", "-t", state["pane_id"], key]).returncode != 0
+    except (subprocess.TimeoutExpired, OSError, UnicodeError):
+        failed = True
+    record["outcome"] = "uncertain" if failed else "sent"
+    write_state(ledger, record)
+    if failed:
+        raise Refusal("key-unconfirmed", "The key's outcome is unknown. Do not retry this receipt or send another key. Re-inspect.", 3)
+    return {
+        "state": "key-sent", "name": state["name"], "kind": args.expect_kind, "key": key,
+        "approval_ref": args.approval_ref, "used_at": record["used_at"],
+        "detail": ("Exactly one " + key + " was sent to the owned pane whose receipt matched. The helper recorded the "
+                   "approval reference but did not verify the approval. This receipt is now spent. Inspect again."),
     }
 
 
@@ -1441,6 +1557,21 @@ def build_parser():
     answer.add_argument("--choice", required=True, help="one key shown as [key] in the expected text; on Cursor's "
                         "command prompt, y (Run once) or ctrl-c (reject the shown command)")
     answer.add_argument("--trust-path", help="for modal-trust: the one directory the approval covers; must be the recorded worktree")
+    menu = sub.add_parser(
+        "menu-key", help="send exactly one Enter to an allowlisted slash-menu row (/run-everything, only while it reads currently disabled)",
+        description=(
+            "Send one Enter, once per approval, to the live slash menu of the inspected pane. run-everything-menu sends only Enter "
+            "and needs the selected row '<marker> /run-everything  Toggle Run Everything (currently disabled)' directly above "
+            "the typed /run-everything draft, which must be the last composer row on the visible screen. "
+            "The caller is responsible for a verified approval of this exact action; "
+            "--approval-ref is audit metadata, not proof."))
+    menu.add_argument("--name", required=True)
+    menu.add_argument("--tmux", required=True)
+    menu.add_argument("--receipt", required=True)
+    menu.add_argument("--approval-ref", required=True,
+                      help="audit reference to the caller's verified approval; recorded once, never verified")
+    menu.add_argument("--expect-kind", required=True, help="run-everything-menu (sends Enter)")
+    menu.add_argument("--expect-text-file", required=True, help="the exact visible rows that must be shown, in order, as one block")
     return parser
 
 
@@ -1455,6 +1586,8 @@ def main(argv=None):
             payload = inspect_session(args)
         elif args.command == "answer":
             payload = answer_session(args)
+        elif args.command == "menu-key":
+            payload = menu_key_session(args)
         else:
             payload = reply_session(args)
     except Refusal as error:
