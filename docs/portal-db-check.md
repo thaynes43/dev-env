@@ -287,6 +287,7 @@ job=dev-env-v2-portal-db-check-20261106   # the manifest's name
 #    GitRepository fetch (30 min) can come first, so check what Flux applied.
 if ! kubectl -n dev-agents wait --for=create --timeout=35m "job/$job"; then
   rev=$(kubectl -n flux-system get kustomization cluster-apps -o jsonpath='{.status.lastAppliedRevision}')
+  rev=${rev##*:}   # Flux writes main@sha1:<sha>; keep the bare SHA
   echo "$job not created within 35 min; cluster-apps applied $rev"; exit 1
 fi
 
@@ -316,8 +317,10 @@ Record these in the tracker story or handoff before any cleanup:
 `NOT RUN` (no output, or `INTERRUPTED`). Never paste other log text.
 
 If step 1 times out, compare the revision it printed with the merge
-commit. A later main commit that contains the merge counts as applied
-(`git merge-base --is-ancestor <merge> <printed sha>`).
+commit. A later main commit that contains the merge counts as applied:
+in a haynes-ops checkout with `main` fetched, `git merge-base
+--is-ancestor <merge> <printed sha>` exits 0. The printed value is already
+the bare SHA; Flux's own `main@sha1:` prefix would make that command fail.
 
 - If `cluster-apps` has not applied the merge yet, Flux is still on its
   way: rerun the record step, and record nothing.

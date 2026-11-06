@@ -147,6 +147,11 @@ func TestDBCheckDocJobMountsOnlyWhatItReads(t *testing.T) {
 	if strings.Contains(text, "reconcile kustomization dev-env-v2-portal-db-check") || !strings.Contains(text, "wait --for=create --timeout=35m") {
 		t.Fatal("the record step must not reconcile the Job's own Kustomization and must wait 35m for the Job to exist")
 	}
+	// On a create timeout the step prints cluster-apps' applied revision as a
+	// bare SHA, so git merge-base can compare it with the merge commit.
+	if !strings.Contains(text, "jsonpath='{.status.lastAppliedRevision}'") || !strings.Contains(text, "rev=${rev##*:}") {
+		t.Fatal("the record step must print cluster-apps' lastAppliedRevision as a bare SHA on a create timeout")
+	}
 
 	// The record step classifies INTERRUPTED as no result, like no output,
 	// never as PASS or a db-check FAIL; the PDB is rechecked in a preflight
