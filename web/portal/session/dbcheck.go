@@ -90,9 +90,11 @@ type dbCheckSeams struct {
 	lookup                                            func(context.Context, string) ([]string, error)
 	dial                                              func(context.Context, string, string) (net.Conn, error)
 	connectTimeout, queryTimeout, total, closeTimeout time.Duration
-	// closed observes the end of the close with pgx's own cleanup channel and
-	// the number of dials refused after the one connection. Tests only.
-	closed func(cleanup <-chan struct{}, refusedDials int)
+	// closing runs as the close starts; closed observes its end with pgx's own
+	// cleanup channel and the number of dials refused after the one
+	// connection. Tests only.
+	closing func()
+	closed  func(cleanup <-chan struct{}, refusedDials int)
 }
 
 // dbCheckProgress records how far a connection attempt got, so a failure is
@@ -146,16 +148,11 @@ func (p *dbCheckProgress) snapshot() (resolved, dialed, upgraded bool) {
 	return p.resolved, p.dialed, p.upgraded
 }
 
-func checkDatabase(ctx context.Context, root string, s dbCheckSeams) (class string) {
-	// A cancelled caller (SIGTERM) interrupts the check: whatever phase was
-	// cut short, it reports no result rather than a timeout. A config fault is
-	// found before any network and stays a result.
+func checkDatabase(ctx context.Context, root string, s dbCheckSeams) string {
+	// The class is decided when the operation ends, before the close, and is
+	// never changed afterwards. Only an operation that ended because the
+	// caller cancelled (SIGTERM) is INTERRUPTED; see dbCheckEnd.
 	parent := ctx
-	defer func() {
-		if class != "" && class != DBCheckConfig && errors.Is(parent.Err(), context.Canceled) {
-			class = DBCheckInterrupted
-		}
-	}()
 	if s.total <= 0 {
 		s.total = dbCheckTotalTimeout
 	}
@@ -235,12 +232,15 @@ func checkDatabase(ctx context.Context, root string, s dbCheckSeams) (class stri
 
 	db, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
-		return dbCheckConnectClass(ctx, err, progress)
+		return dbCheckEnd(parent, ctx, err, dbCheckConnectPhase(err, progress))
 	}
 	// Close after the operation, success or not, within its own bound. A slow
 	// or failed close, or a refused cancel dial, changes neither the result
 	// nor the line.
 	defer func() {
+		if s.closing != nil {
+			s.closing()
+		}
 		dbCheckClose(db, progress.transportConn(), s.closeTimeout)
 		if s.closed != nil {
 			s.closed(db.PgConn().CleanupDone(), progress.refusedDials())
@@ -250,19 +250,23 @@ func checkDatabase(ctx context.Context, root string, s dbCheckSeams) (class stri
 	defer queryCancel()
 	tx, err := db.BeginTx(queryCtx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return dbCheckQueryClass(queryCtx, err)
+		return dbCheckEnd(parent, queryCtx, err, DBCheckQuery)
 	}
+	// SELECT 1 decides the result as soon as it ends; the rollback that
+	// follows cannot change a decided failure.
 	var one int
-	scanErr := tx.QueryRow(queryCtx, "SELECT 1").Scan(&one)
+	decided := ""
+	if scanErr := tx.QueryRow(queryCtx, "SELECT 1").Scan(&one); scanErr != nil {
+		decided = dbCheckEnd(parent, queryCtx, scanErr, DBCheckQuery)
+	} else if one != 1 {
+		decided = DBCheckQuery
+	}
 	rollbackErr := tx.Rollback(queryCtx)
-	if scanErr != nil {
-		return dbCheckQueryClass(queryCtx, scanErr)
+	if decided != "" {
+		return decided
 	}
 	if rollbackErr != nil {
-		return dbCheckQueryClass(queryCtx, rollbackErr)
-	}
-	if one != 1 {
-		return DBCheckQuery
+		return dbCheckEnd(parent, queryCtx, rollbackErr, DBCheckQuery)
 	}
 	return ""
 }
@@ -298,17 +302,36 @@ func dbCheckClose(db *pgx.Conn, transport net.Conn, bound time.Duration) {
 	}
 }
 
-func dbCheckTimedOut(ctx context.Context, err error) bool {
+// dbCheckEnd classifies the error that ended the operation, at the moment it
+// ended. A server's answer (a PgError) keeps its own class. An error that is
+// itself the end of a context is INTERRUPTED when it is the caller's
+// cancellation, and timeout when it is a deadline. Anything else keeps its own
+// class. The check's own contexts are cancelled only after it returns, so a
+// cancellation seen here is the caller's.
+func dbCheckEnd(parent, ctx context.Context, err error, otherwise string) string {
+	var pgErr *pgconn.PgError
 	var netErr net.Error
-	return ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
+	switch {
+	case errors.As(err, &pgErr):
+		return otherwise
+	case errors.Is(err, context.DeadlineExceeded):
+		return DBCheckTimeout
+	case errors.Is(err, context.Canceled):
+		return DBCheckInterrupted
+	case (errors.As(err, &netErr) && netErr.Timeout()) || ctx.Err() != nil:
+		if errors.Is(parent.Err(), context.Canceled) {
+			return DBCheckInterrupted
+		}
+		return DBCheckTimeout
+	default:
+		return otherwise
+	}
 }
 
-// dbCheckConnectClass names the phase that failed: the name lookup, the dial,
-// the TLS handshake (before AfterNetConnect), or the login and session check.
-func dbCheckConnectClass(ctx context.Context, err error, progress *dbCheckProgress) string {
-	if dbCheckTimedOut(ctx, err) {
-		return DBCheckTimeout
-	}
+// dbCheckConnectPhase names the connect phase that failed: the name lookup,
+// the dial, the TLS handshake (before AfterNetConnect), or the login and
+// session check.
+func dbCheckConnectPhase(err error, progress *dbCheckProgress) string {
 	resolved, dialed, upgraded := progress.snapshot()
 	var dnsErr *net.DNSError
 	switch {
@@ -323,11 +346,4 @@ func dbCheckConnectClass(ctx context.Context, err error, progress *dbCheckProgre
 	default:
 		return DBCheckAuth
 	}
-}
-
-func dbCheckQueryClass(ctx context.Context, err error) string {
-	if dbCheckTimedOut(ctx, err) {
-		return DBCheckTimeout
-	}
-	return DBCheckQuery
 }

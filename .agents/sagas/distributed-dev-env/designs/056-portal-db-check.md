@@ -105,7 +105,13 @@ A usage error (an extra argument or flag) prints nothing on stdout,
 `portal usage unavailable` on stderr, and exits 2.
 
 `INTERRUPTED` is no verified database result. It does not claim that no
-query ran, only that the check did not finish. A config fault is found
+query ran, only that the check did not finish.
+
+The class is decided when the operation ends, before the close, and never
+changes afterwards. Only an operation that ended because the caller
+cancelled is `INTERRUPTED`. A failure already decided (for example
+`FAIL query`) or a `PASS` stays as it is when the caller cancels during the
+rollback or the close. A config fault is found
 before any network and stays `FAIL config` even then. The command's context
 is SIGTERM-aware, and a cancelled context is told apart from an expired
 deadline: only a deadline is `FAIL timeout`.

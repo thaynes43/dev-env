@@ -24,7 +24,9 @@ Exactly one line:
 | `INTERRUPTED` | 4 | the check was cancelled from outside (SIGTERM, for example a node drain) before it finished |
 
 `INTERRUPTED` is no verified result. It does not claim that no query ran,
-only that the check did not finish; record it as not run. Only an expired
+only that the check did not finish; record it as not run. A cancel that
+comes after the verdict is decided, during the rollback or the close, does
+not change a `PASS` or a `FAIL` line. Only an expired
 deadline is `FAIL timeout`.
 
 `FAIL auth` does not only mean a bad password. It covers anything that ends

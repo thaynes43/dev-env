@@ -809,3 +809,78 @@ func TestDBCheckCallerCancelIsInterruptedNotTimeout(t *testing.T) {
 		t.Fatalf("config fault under a cancelled caller: %q", got)
 	}
 }
+
+// TestDBCheckDecidedResultSurvivesACallerCancel: the class is decided when
+// the operation ends. A caller that cancels afterwards, during the rollback or
+// during the close, cannot turn a decided FAIL query or a decided PASS into
+// INTERRUPTED. Only a cancel that ends the operation is INTERRUPTED
+// (TestDBCheckCallerCancelIsInterruptedNotTimeout). One connection, the
+// bounded close and one fixed line hold throughout.
+func TestDBCheckDecidedResultSurvivesACallerCancel(t *testing.T) {
+	interceptDBCheckResolver(t)
+	ca := newDBCheckCA(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	const closeBound = 200 * time.Millisecond
+	for _, tc := range []struct {
+		name, mode, event string // event: a server event that cancels; "" cancels as the close starts
+		want              string
+	}{
+		{name: "query fails, cancel during the close", mode: "query-error", want: DBCheckQuery},
+		{name: "query fails, cancel during the rollback", mode: "query-error", event: "rollback", want: DBCheckQuery},
+		{name: "pass, cancel during the close", mode: "", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			server := newFakePostgres(ca.leaf(t, productionDBHost), tc.mode)
+			t.Cleanup(func() { close(server.release) })
+			network := &dbCheckNet{server: server}
+			seams := network.seams()
+			seams.closeTimeout = closeBound
+			if tc.event != "" {
+				server.onEvent = func(event string) {
+					if event == tc.event {
+						cancel()
+					}
+				}
+			} else {
+				seams.closing = cancel
+			}
+			closes, cleanedUp := 0, false
+			seams.closed = func(cleanup <-chan struct{}, _ int) {
+				closes++
+				select {
+				case <-cleanup:
+					cleanedUp = true
+				default:
+				}
+			}
+			done := make(chan string, 1)
+			started := time.Now()
+			go func() { done <- checkDatabase(ctx, writeDBCheckRoot(t, dbCheckFiles(ca.pem)), seams) }()
+			var got string
+			select {
+			case got = <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("db-check did not return")
+			}
+			if got != tc.want || time.Since(started) > closeBound+1500*time.Millisecond {
+				t.Fatalf("class %q in %v, want %q", got, time.Since(started), tc.want)
+			}
+			if ctx.Err() == nil {
+				t.Fatal("the caller cancel never fired")
+			}
+			line, code := DBCheckLine(got)
+			if wantLine, wantCode := DBCheckLine(tc.want); line != wantLine || code != wantCode {
+				t.Fatalf("line %q code %d", line, code)
+			}
+			if closes != 1 || !cleanedUp {
+				t.Fatalf("close ran %d times, cleanup finished %v", closes, cleanedUp)
+			}
+			network.mu.Lock()
+			defer network.mu.Unlock()
+			if len(network.dials) != 1 {
+				t.Fatalf("dials %v: only one connection may reach the wire", network.dials)
+			}
+		})
+	}
+}
