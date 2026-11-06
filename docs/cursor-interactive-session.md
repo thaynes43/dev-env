@@ -369,8 +369,9 @@ The pinned Cursor 2026.10.14 command decision can also show the separate
 command prompt bound under its full-width divider, the trailing rows must be
 blank or contain exactly one such footer, with only ASCII spaces trimmed.
 Changed text, duplicate hints, tabs, nonbreaking spaces, box padding, error
-rows or other trailing content still refuse. The footer is UI chrome, excluded
-from the expected command text; it grants no approval and changes no receipt,
+rows or other trailing content still refuse approval. The footer is UI chrome,
+not part of the command. Normally it is excluded from the expected text; the
+rejection-only Error layout below explicitly includes it. It grants no approval and changes no receipt,
 pane/process/owner, one-key or spent-ledger check. It does not qualify another
 client version or arbitrary trailing UI. The complete sanitized 80x24 capture
 and its renderer reference are in `command-approval-review-footer.json`.
@@ -617,6 +618,15 @@ any nonblank row after the Skip row or the hint refuses `y`, and refuses
 `ctrl-c` unless those rows start with one `Error: ` line: a command whose turn may have ended is never approved. After one rejection,
 the last decision shows alone, without the counter row or hint, and needs a
 fresh `inspect` and its own approval reference.
+
+The pinned client can instead draw its exact review footer immediately before
+that Error block (captured queued decision, 2026-11-06T20:37Z). Only a rejection
+can bind this layout: include the exact review row and the complete Error block
+in the expected text after the Skip/switch hint. The footer must occur once;
+the full command start, question, Skip and queue boundaries remain required.
+An Error block always prohibits `y`, including when the review footer precedes
+it. Omitting either block, changing the footer or any unbound trailing content
+still refuses. This does not permit an unguarded Ctrl+C.
 
 #### Lesson: qualify a prompt class on a real capture first
 

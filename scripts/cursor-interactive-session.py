@@ -882,6 +882,13 @@ def validate_answer(args):
         # Rows after the Skip row or the hint can only be one turn error footer, and only a
         # rejection is answered under it. An error line inside the prompt is refused too.
         tail = lines[prompt_end(lines):]
+        # The pinned client may put its exact review hint before a turn error.
+        # Bind both rows in the expected text; this never permits an approval.
+        if tail and tail[0] == COMMAND_REVIEW_FOOTER:
+            if choice != REJECT_CHOICE or len(tail) < 2 or lines.count(COMMAND_REVIEW_FOOTER) != 1:
+                raise Refusal("invalid-input", "A review hint before an error is rejection-only and must precede an "
+                                               "explicit Error block. Nothing was sent.")
+            tail = tail[1:]
         errors = sum(line.startswith(ERROR_PREFIX) for line in lines)
         if (any(line.startswith(ERROR_PREFIX) for line in prompt_rows(lines))
                 or tail and (choice != REJECT_CHOICE or not tail[0].startswith(ERROR_PREFIX) or errors != 1)):
@@ -1127,7 +1134,9 @@ def check_divider_prompt(visible, boxes, first, last, width, lines):
     tail = [row.strip(" ") for row in visible[last + 1:] if row.strip(" ")]
     if tail not in ([], [COMMAND_REVIEW_FOOTER]):
         raise Refusal("prompt-unclear", "Something follows the command prompt before the pane bottom. Nothing was sent.")
-    if tail:
+    if tail or COMMAND_REVIEW_FOOTER in lines:
+        if tail.count(COMMAND_REVIEW_FOOTER) + lines.count(COMMAND_REVIEW_FOOTER) != 1:
+            raise Refusal("prompt-unclear", "The command review footer must appear only once. Nothing was sent.")
         # Unlike a blank tail, this exception must not make a cropped command
         # answerable when the caller also crops its expected text. Bind the
         # pinned renderer's command start, question and full decision end.

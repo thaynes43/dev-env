@@ -693,6 +693,9 @@ COMMAND_ROWS = COMMAND["capture"].split("\n")
 REVIEW_FOOTER = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") /
                            "command-approval-review-footer.json").read_text(encoding="utf-8"))
 REVIEW_FOOTER_ROWS = REVIEW_FOOTER["capture"].split("\n")
+REVIEW_ERROR = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") /
+                          "command-approval-review-footer-error.json").read_text(encoding="utf-8"))
+REVIEW_ERROR_ROWS = REVIEW_ERROR["capture"].split("\n")
 # The same prompt with three approvals queued (2026-11-05T20:36:55Z, Cursor CLI 2026.10.14-0f9edde),
 # anonymized: "Approval 1 of 3" under the divider and "←/→ to switch approval" after the Skip row.
 QUEUE = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") / "g1-command-approval-queue.json")
@@ -2465,6 +2468,60 @@ class AnswerTests(AnswerFixture):
         code, refused = self.answer_command(newer["receipt"], text=REVIEW_FOOTER["expectedText"])
         self.assertEqual((code, refused["state"]), (2, "approval-spent"))
         self.assertEqual(self.sends(), [])
+
+    def test_review_footer_before_error_is_rejection_only(self):
+        self.assertEqual(__import__("hashlib").sha256(REVIEW_ERROR["capture"].encode()).hexdigest(),
+                         REVIEW_ERROR["captureSha256"])
+        self.screen(REVIEW_ERROR["capture"] + "\n", visible=24)
+        inspected = self.start_and_inspect()
+        code, answered = self.answer_command(inspected["receipt"], choice="ctrl-c", text=REVIEW_ERROR["expectedText"])
+        self.assertEqual((code, answered["state"]), (0, "answered"), answered.get("detail"))
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "C-c"]])
+        self.answer_command(inspected["receipt"], choice="ctrl-c", text=REVIEW_ERROR["expectedText"])
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_review_footer_before_error_keeps_error_and_command_binding(self):
+        original = REVIEW_ERROR_ROWS
+        expected = REVIEW_ERROR["expectedText"].splitlines()
+        first = len(original) - 24
+        def omit(label, index):
+            rows = list(original); del rows[first + index]; rows.append("")
+            line = original[first + index].strip(" ")
+            return label, rows, [r for r in expected if r != line], "ctrl-c"
+        cases = [
+            ("never approve Error", original, expected, "y"),
+            ("Error omitted from expected", original, expected[:-4], "ctrl-c"),
+            ("footer omitted from expected", original, [r for r in expected if r != helper.COMMAND_REVIEW_FOOTER], "ctrl-c"),
+            omit("command co-omitted", 4), omit("Skip co-omitted", 13),
+            omit("queue hint co-omitted", 15), omit("queue header co-omitted", 2),
+        ]
+        for label, footer in (("changed footer", "ctrl+R to review changed files"),
+                              ("non-ASCII padding", "\u00a0ctrl+r to review changed files"),
+                              ("footer prefix", "extra ctrl+r to review changed files")):
+            rows = list(original); rows[first + 17] = footer
+            text = [footer if r == helper.COMMAND_REVIEW_FOOTER else r for r in expected]
+            cases.append((label, rows, text, "ctrl-c"))
+        for label, changes in (("command changed", {4: original[first + 4].replace("date", "echo")}),
+                               ("queue index changed", {2: " Approval 2 of 3"}),
+                               ("second footer after Error", {23: "ctrl+r to review changed files"}),
+                               ("another modal", {23: " Permission required"}),
+                               ("extra tail", {23: "  queued: git push"})):
+            rows = list(original)
+            for i, row in changes.items(): rows[first + i] = row
+            cases.append((label, rows, expected, "ctrl-c"))
+        # The footer cannot make a footer-only tail into an Error block.
+        without_error = [r for r in expected if not r.startswith("Error: ") and r not in expected[-3:]]
+        cases.append(("no explicit Error", original, without_error, "ctrl-c"))
+        for label, rows, text, choice in cases:
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen("\n".join(rows) + "\n", visible=24)
+                inspected = self.start_and_inspect()
+                approval = self.case_approval("review Error " + label)
+                code, refused = self.answer_command(inspected["receipt"], choice=choice, text="\n".join(text) + "\n", approval=approval)
+                self.assertEqual(code, 2, refused)
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.ledger(approval).exists())
 
     def test_command_fixture_is_the_captured_shape(self):
         geometry = COMMAND["geometry"]
