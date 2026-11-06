@@ -146,12 +146,14 @@ does not count. Outcomes:
   it can only be caught by the text check (its rows hide the typed text).
 - The pane, its process or its owner changes during the wait, or the screen can
   no longer be read: Enter is not sent, and the reply ends with that state (for
-  example `pane-replaced`), saying the text was already typed.
+  example `pane-replaced` or `prompt-unclear`), saying the text was already typed.
 - The instruction contains a known prompt phrase (such as `yes/no` or `Run this
   command?`): refused before anything is typed (`invalid-input`), because its
-  echo could not be told apart from a real prompt with the same words.
-- The text never shows, or the screen cannot be read: Enter is not sent, and the
-  reply ends `send-unconfirmed`.
+  echo could not be told apart from a real prompt with the same words. This is a
+  limitation: such an instruction cannot be submitted with `--submit` at all.
+- The text never shows: Enter is not sent, and the reply ends
+  `send-unconfirmed`. (A screen that cannot be read during the wait ends with its
+  own state, such as `prompt-unclear`, as in the next item.)
 - The instruction is over 800 characters: refused before anything is typed
   (`invalid-input`), because Cursor shows a longer paste as `[Pasted text #N +M
   lines]` and its end would never show.
