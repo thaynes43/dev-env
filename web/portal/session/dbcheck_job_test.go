@@ -141,6 +141,12 @@ func TestDBCheckDocJobMountsOnlyWhatItReads(t *testing.T) {
 	if create < 0 || complete < 0 || failed < 0 || create > complete || complete > failed {
 		t.Fatal("the record step must wait for the Job to exist, then for Complete or Failed, each with a timeout")
 	}
+	// The child Kustomization does not exist until cluster-apps (30 min
+	// interval) applies the merged commit, so the record step reconciles
+	// nothing and waits for the Job longer than that interval.
+	if strings.Contains(text, "reconcile kustomization dev-env-v2-portal-db-check") || !strings.Contains(text, "wait --for=create --timeout=35m") {
+		t.Fatal("the record step must not reconcile the Job's own Kustomization and must wait 35m for the Job to exist")
+	}
 
 	// The record step classifies INTERRUPTED as no result, like no output,
 	// never as PASS or a db-check FAIL; the PDB is rechecked in a preflight

@@ -181,7 +181,7 @@ spec:
           imagePullPolicy: IfNotPresent
           args: ["db-check"]
           # No container port: the portal Service targets the named port
-          # "https", so this pod never becomes its endpoint. The probe on the
+          # "https", so this pod is never a ready or routable endpoint. The probe on the
           # unused port keeps the pod never-Ready, so the PDB's healthy count
           # is unchanged (see "The portal PDB" below).
           readinessProbe:
@@ -279,10 +279,13 @@ exist yet fails at once, and that would record a premature `NOT RUN`.
 ```sh
 job=dev-env-v2-portal-db-check-20261106   # the manifest's name
 
-# 1. Flux applies it: reconcile once, then wait at most 5 min for the Job.
-flux -n dev-env-system reconcile kustomization dev-env-v2-portal-db-check --with-source --timeout=5m
-if ! kubectl -n dev-agents wait --for=create --timeout=5m "job/$job"; then
-  echo "$job NOT APPLIED (Flux did not create the Job; nothing ran)"; exit 1
+# 1. Flux applies it on its own: no reconcile command. The child
+#    Kustomization does not exist until cluster-apps (flux-system,
+#    30 min interval) applies the merged commit, so a reconcile of it
+#    fails; the GitHub webhook usually starts cluster-apps sooner. Wait at
+#    most 35 min for the Job.
+if ! kubectl -n dev-agents wait --for=create --timeout=35m "job/$job"; then
+  echo "$job NOT APPLIED (no Job within 35 min; re-check before recording)"; exit 1
 fi
 
 # 2. At most 90 s for Complete, then at most 5 s more for Failed.
@@ -308,10 +311,14 @@ Record these in the tracker story or handoff before any cleanup:
 - `$result`.
 
 `$result` is sanitized by construction: one of the eight result lines, or
-`NOT RUN` (no output, or `INTERRUPTED`). `NOT APPLIED` means Flux did not create the Job; nothing ran, so
-nothing is recorded as a check result. Never paste other log text. Then open the follow-up PR that
-removes the Job's manifest and Kustomization; Flux prunes the Job and its
-pod.
+`NOT RUN` (no output, or `INTERRUPTED`). Never paste other log text.
+
+`NOT APPLIED` means no Job existed within 35 minutes, so nothing is
+recorded as a check result. Before recording it, check once more that the
+Job still does not exist: a late Flux apply would still run the check.
+
+Then open the follow-up PR that removes the Job's manifest and
+Kustomization; Flux prunes the Job and its pod.
 
 **No output and `INTERRUPTED` are "not run", not a db-check result.**
 
@@ -328,8 +335,12 @@ pod.
   - the Job cannot run on a node that already runs a portal replica;
   - a new portal replica cannot run on the Job's node.
 
-  With four workers and two replicas it fits. Do not merge the Job during a
-  portal rollout.
+  Six of the eight untainted nodes run no portal replica, so it fits. Do
+  not merge the Job during a portal rollout.
+- A Failed Job (any `FAIL`, `INTERRUPTED` or `DeadlineExceeded`) has no
+  TTL, so the warning `KubeJobFailed` fires after 15 minutes and stays
+  until the cleanup PR prunes the Job. That is expected, not an incident;
+  warnings page nobody.
 
 ## Notes
 

@@ -190,7 +190,8 @@ cleanup steps are in the how-to.
   Postgres and DNS, so no policy change is needed.
 - **Service.** The same label is in the portal Service's selector, but the
   Service's `targetPort` is the named port `https`. The Job pod declares no
-  container port, so no endpoint is created for it.
+  container port and is never Ready, so it is never a ready or routable
+  endpoint.
 - **PDB.** The portal PodDisruptionBudget selects the same label, so it
   also selects the Job pod. Source:
   - haynes-ops `kubernetes/main/apps/dev-env-system/portal/app/pdb.yaml`
@@ -219,7 +220,8 @@ cleanup steps are in the how-to.
     replica;
   - a new replica cannot be scheduled on the Job's node.
 
-  With four workers and two replicas it fits. If it cannot be scheduled,
+  Six of the eight untainted nodes run no portal replica, so it fits. If
+  it cannot be scheduled,
   the Job ends `DeadlineExceeded` after 60 s with no output line. That is
   recorded as "not run", never as a db-check failure.
 - **Follow-up, not in this change:** the check could get its own pod label,
