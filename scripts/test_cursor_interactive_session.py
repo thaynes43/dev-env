@@ -3458,14 +3458,71 @@ class MenuKeyTests(AnswerFixture):
                 self.assertEqual(self.commands("tmux"), [])
 
 
-USAGE_ROWS = [
-    "Cursor Agent v2026.10.14-0f9edde",
-    "\u2192 /usage    Show plan and on-demand usage",
-    "\u2192 /usage",
-    "  Grok 4.7 256K Extra High \u00b7 7.3%",
-    "  ~/work/example-task",
+# The live inline /usage menu, from a real 80x24 capture of the pinned client (2026.10.14-0f9edde): the draft FIRST, two
+# blank rows (the input box's own), the menu BELOW it with the selected row marked by the arrow, and no status footer
+# while the menu is open. The layout rows are verbatim; the answered trust box in history keeps its shape with an example
+# path, and the transcript text is replaced by synthetic lines of the same shape. 55 rows = 31 history + the 24 visible.
+LIVE_USAGE_CAPTURE_ROWS = [
+    "",
+    "  ╭──────────────────────────────────────────────────────────────────────────╮",
+    "  │                                                                          │",
+    "  │  ⚠ Workspace Trust Required                                              │",
+    "  │                                                                          │",
+    "  │  Cursor Agent can execute code and access files in this directory.       │",
+    "  │                                                                          │",
+    "  │  Do you trust the contents of this directory?                            │",
+    "  │                                                                          │",
+    "  │    /home/dev/work/example-task                                           │",
+    "  │                                                                          │",
+    "  │                                                                          │",
+    "  │    [a] Trust this workspace                                              │",
+    "  │    [q] Quit                                                              │",
+    "  │                                                                          │",
+    "  │  ⏳ Trusting workspace...                                                │",
+    "  │                                                                          │",
+    "  ╰──────────────────────────────────────────────────────────────────────────╯",
+    "",
+    "",
+    "  Cursor Agent",
+    "  v2026.10.14-0f9edde",
+    "  Tip: Use /run-everything to skip all approvals.",
+    "",
+    "",
+    "  Synthetic review text, line 01.",
+    "  Synthetic review text, line 02.",
+    "  Synthetic review text, line 03.",
+    "  Synthetic review text, line 04.",
+    "  Synthetic review text, line 05.",
+    "  Synthetic review text, line 06.",
+    "  Synthetic review text, line 07.",
+    "  Synthetic review text, line 08.",
+    "  Synthetic review text, line 09.",
+    "  Synthetic review text, line 10.",
+    "  Synthetic review text, line 11.",
+    "  Synthetic review text, line 12.",
+    "",
+    "",
+    "  Synthetic review text, line 13.",
+    "  Synthetic review text, line 14.",
+    "  Synthetic review text, line 15.",
+    "  Synthetic review text, line 16.",
+    "  Synthetic review text, line 17.",
+    "",
+    "",
+    "",
+    "",
+    "  → /usage",
+    "",
+    "",
+    "   → /usage                    Show plan and on-demand usage",
+    "     /context                  Show context usage breakdown",
+    "     /create-subagent          Create custom subagents for specialized AI…",
+    "",
 ]
-USAGE_EXPECT = "\u2192 /usage    Show plan and on-demand usage\n\u2192 /usage\n"
+LIVE_HEIGHT = 24
+USAGE_DRAFT = "\u2192 /usage"
+USAGE_SELECTED = "\u2192 /usage                    Show plan and on-demand usage"
+USAGE_EXPECT = USAGE_DRAFT + "\n" + USAGE_SELECTED + "\n"
 USAGE_VIEW_ROWS = ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "  Included  42% used", "", "View in dashboard: example.test/usage",
                    "Esc to close"]
 USAGE_VIEW_EXPECT = "Usage\n  Included  42% used\nView in dashboard: example.test/usage\nEsc to close\n"
@@ -3518,7 +3575,22 @@ class UsageKeyTests(AnswerFixture):
         self.view_expect.write_text(USAGE_VIEW_EXPECT)
         self.back = self.root / "composer-back"
         self.back.write_text("\n".join(COMPOSER_BACK_ROWS) + "\n\n")
-        self.show(USAGE_ROWS)
+        self.live_show(LIVE_USAGE_CAPTURE_ROWS)
+
+    def live_show(self, rows, cursor=None):
+        """Show a full capture (history + the last LIVE_HEIGHT visible rows) the way tmux reports it."""
+        self.capture.write_text("\n".join(rows) + "\n")  # tmux ends its output with a newline
+        for typed in (".echo", ".stale"):
+            Path(str(self.capture) + typed).unlink(missing_ok=True)
+        draft = [i for i, row in enumerate(rows[-LIVE_HEIGHT:]) if row.strip() == USAGE_DRAFT]
+        self.env["FAKE_HEIGHT"] = str(LIVE_HEIGHT)
+        self.env["FAKE_HISTORY"] = str(len(rows) - LIVE_HEIGHT)
+        self.env["FAKE_CURSOR_Y"] = str(cursor if cursor is not None else (draft[0] if draft else LIVE_HEIGHT - 1))
+
+    def live_visible(self, rows):
+        """The live capture with its last LIVE_HEIGHT rows replaced (same geometry, same history)."""
+        assert len(rows) == LIVE_HEIGHT, len(rows)
+        return LIVE_USAGE_CAPTURE_ROWS[:-LIVE_HEIGHT] + rows
 
     def args(self, receipt, kind="usage-menu", approval=MENU_APPROVAL, expect=None):
         default = self.view_expect if kind == "usage-view" else self.usage_expect
@@ -3615,8 +3687,30 @@ class UsageKeyTests(AnswerFixture):
             self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
             self.assertEqual(self.sends(), [])
 
-    def test_usage_menu_sends_exactly_one_enter(self):
+    def refused_menu(self, rows, label, state="screen-mismatch", cursor=None):
+        self.restart_case()
+        self.log.write_text("")
+        for path in (self.root / "state" / "cursor-interactive-session" / "approvals").glob("*"):
+            path.unlink()
+        self.live_show(rows, cursor)
         inspected = self.start_and_inspect()
+        self.log.write_text("")
+        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
+        self.assertEqual((code, refused["state"]), (2, state), label)
+        self.assertEqual(self.sends(), [], label)
+        self.assertFalse(self.menu_ledger().exists(), label)
+
+    def test_the_real_capture_is_the_fixture(self):
+        # The layout rows are the live capture's, byte for byte: draft, two blank rows, then the menu.
+        visible = LIVE_USAGE_CAPTURE_ROWS[-LIVE_HEIGHT:]
+        self.assertEqual(len(LIVE_USAGE_CAPTURE_ROWS), 55)
+        self.assertEqual(visible[17:], ["  \u2192 /usage", "", "", "   \u2192 /usage                    Show plan and on-demand usage",
+                                        "     /context                  Show context usage breakdown",
+                                        "     /create-subagent          Create custom subagents for specialized AI\u2026", ""])
+
+    def test_usage_menu_on_the_real_layout_sends_exactly_one_enter(self):
+        inspected = self.start_and_inspect()
+        self.assertNotIn(inspected["classification"], {"modal-trust", "modal-permission", "modal-approval", "modal-unknown"})
         code, sent = self.invoke("menu-key", self.args(inspected["receipt"]))
         self.assertEqual((code, sent["state"], sent["key"]), (0, "key-sent", "Enter"))
         self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "Enter"]])
@@ -3625,59 +3719,122 @@ class UsageKeyTests(AnswerFixture):
         self.assertEqual((code, again["state"]), (2, "approval-spent"))
         self.assertEqual(len(self.sends()), 1)
 
+    def test_the_gate_does_not_depend_on_where_the_cursor_is(self):
+        for cursor in (0, 17, 23):
+            with self.subTest(cursor=cursor):
+                self.restart_case()
+                for path in (self.root / "state" / "cursor-interactive-session" / "approvals").glob("*"):
+                    path.unlink()
+                self.log.write_text("")
+                self.live_show(LIVE_USAGE_CAPTURE_ROWS, cursor)
+                inspected = self.start_and_inspect()
+                code, sent = self.invoke("menu-key", self.args(inspected["receipt"]))
+                self.assertEqual((code, sent["state"]), (0, "key-sent"))
+
     def test_usage_menu_refusals_send_nothing(self):
-        row = USAGE_ROWS[1]
+        v = LIVE_USAGE_CAPTURE_ROWS[-LIVE_HEIGHT:]
+        head, menu_at = v[:17], 17
+        selected, context, subagent = v[20], v[21], v[22]
+        marked_context = "   \u2192 /context                  Show context usage breakdown"
+        unmarked_usage = "     /usage                    Show plan and on-demand usage"
         cases = {
-            "wrong row": [USAGE_ROWS[0], "\u2192 /model    Switch model", "\u2192 /usage"] + USAGE_ROWS[3:],
-            "run-everything menu": [USAGE_ROWS[0], RUN_ROWS[1], RUN_ROWS[2]] + USAGE_ROWS[3:],
-            "argument draft": USAGE_ROWS[:2] + ["\u2192 /usage now"] + USAGE_ROWS[3:],
-            "duplicate row": USAGE_ROWS[:2] + [row, USAGE_ROWS[2]] + USAGE_ROWS[3:],
-            "duplicate draft": USAGE_ROWS[:3] + [USAGE_ROWS[2]] + USAGE_ROWS[3:],
-            "plain composer": COMPOSER_BACK_ROWS,
-            "unmarked row": [USAGE_ROWS[0], "  /usage    Show plan and on-demand usage", USAGE_ROWS[2]] + USAGE_ROWS[3:],
-            "loading text": [USAGE_ROWS[0], "Loading usage data...", USAGE_ROWS[2]] + USAGE_ROWS[3:],
+            "wrong row selected": head + [v[17], "", "", unmarked_usage, marked_context, subagent, ""],
+            "another command's menu": head + [v[17], "", "", "   \u2192 /model                    Switch model", context, subagent, ""],
+            "run-everything menu": head + ["  \u2192 /run-everything", "", "",
+                                           "   \u2192 /run-everything         Toggle Run Everything (currently disabled)", context, subagent, ""],
+            "argument draft": head + ["  \u2192 /usage now", "", "", selected, context, subagent, ""],
+            "draft with no menu": head + [v[17], "", "", "", "", "", ""],
+            "menu above the draft": head[:13] + [selected, context, subagent, "", "", v[17], "", "", "", "", ""],
+            "no blank row between": head + [v[17], selected, context, subagent, "", "", ""],
+            "four blank rows between": head[:16] + [v[17], "", "", "", "", selected, context, subagent],
+            # Each of the next two ends on a blank last pane row, so only its own check can refuse it.
+            "four blank rows between, blank last row": head[2:] + [v[17], "", "", "", "", selected, context, subagent, ""],
+            "output below the menu after a blank row, blank last row": head[1:] + [v[17], "", "", selected, context, "", "  stray output", ""],
+            # The selected row copied above the draft, and a block of only unmarked rows: the row is not IN the menu.
+            "selected row only as a copy above the draft": v[:16] + [selected] + [v[17], "", "", unmarked_usage, "     /context                  Show context usage breakdown", subagent, ""],
+            "two marked rows": head + [v[17], "", "", selected, "   \u2192 /context                  Show context usage breakdown", subagent, ""],
+            "selected row twice": head + [v[17], "", "", selected, selected, subagent, ""],
+            "draft twice": head[:16] + ["  \u2192 /usage"] + [v[17], "", "", selected, context, ""] + [""],
+            "output under the menu after a blank row": head + [v[17], "", "", selected, context, "", "  trailing output"],
+            "menu block of eleven rows": head[:9] + [v[17], "", ""] + [selected] + ["     /row%d" % i for i in range(10)] + [""],
+            "status row directly under the menu": head + [v[17], "", "", selected, context, "  ~/work/example-task", ""],
+            "model row directly under the menu": head + [v[17], "", "", selected, context, "  Grok 4.7 256K Extra High \u00b7 7.3%", ""],
+            "output row inside the menu": head + [v[17], "", "", selected, "  Done.", subagent, ""],
+            "more-above row not first": head + [v[17], "", "", selected, "\u2191 more above", subagent, ""],
+            "more-below row not last": head + [v[17], "", "", selected, "\u2193 more below", subagent, ""],
+            "a marked scroll look-alike": head + [v[17], "", "", selected, "\u2193 more below now", subagent, ""],
+            "status footer under the menu": head + [v[17], "", "", selected, "", "  Grok 4.7 256K Extra High \u00b7 7.3%", "  ~/work/example-task"],
+            "menu on the last pane row": ["  earlier output"] + head + [v[17], "", "", selected, context, subagent],
+            "loading text instead of the menu": head + [v[17], "", "", "Loading usage data...", "", "", ""],
+            "plain composer": head + ["", "", "\u2192 Add a follow-up", "  ~/work/example-task", "", "", ""],
         }
-        for label, rows in cases.items():
+        for label, visible in cases.items():
+            with self.subTest(label=label):
+                self.refused_menu(self.live_visible(visible), label)
+
+    def test_a_scrolled_menu_with_more_above_and_below_rows_still_passes(self):
+        v = LIVE_USAGE_CAPTURE_ROWS[-LIVE_HEIGHT:]
+        menu = [v[20], v[21], "     /create-subagent          Create custom subagents for specialized AI\u2026"]
+        for label, block in (("both", ["\u2191 more above"] + menu + ["\u2193 more below"]), ("above", ["\u2191 more above"] + menu),
+                             ("below", menu + ["\u2193 more below"])):
             with self.subTest(label=label):
                 self.restart_case()
-                self.show(rows)
+                for path in (self.root / "state" / "cursor-interactive-session" / "approvals").glob("*"):
+                    path.unlink()
+                self.log.write_text("")
+                rows = v[:17][len(block) - 3:] + [v[17], "", ""] + block + [""]
+                self.assertEqual(len(rows), LIVE_HEIGHT)
+                self.live_show(self.live_visible(rows))
                 inspected = self.start_and_inspect()
-                code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
-                self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
+                code, sent = self.invoke("menu-key", self.args(inspected["receipt"]))
+                self.assertEqual((code, sent["state"]), (0, "key-sent"))
+
+    def test_a_copy_in_the_transcript_or_in_history_is_not_the_live_menu(self):
+        v = LIVE_USAGE_CAPTURE_ROWS[-LIVE_HEIGHT:]
+        composer = v[:17] + ["", "", "", "\u2192 Add a follow-up", "  ~/work/example-task", "", ""]
+        # the draft and menu only in the scrolled history, a plain composer on the visible screen
+        history = LIVE_USAGE_CAPTURE_ROWS[:20] + v[17:] + LIVE_USAGE_CAPTURE_ROWS[27:31]
+        self.refused_menu(history[:31] + composer, "copy in history")
+        # an old visible copy above a later plain composer
+        old = v[:5] + v[17:23] + ["  Review: no findings."] + composer[12:] 
+        self.refused_menu(self.live_visible(old[:LIVE_HEIGHT] + [""] * (LIVE_HEIGHT - len(old[:LIVE_HEIGHT]))), "old visible copy")
+        # a copy of the draft in the transcript while the live menu is open
+        copy = ["  \u2192 /usage"] + v[1:]
+        self.refused_menu(self.live_visible(copy), "draft copy above the live menu")
+
+    def test_a_prompt_on_screen_is_never_answered_with_a_key(self):
+        v = LIVE_USAGE_CAPTURE_ROWS[-LIVE_HEIGHT:]
+        visible = v[:-4] + ["  Allow this command: git push", "  (y) Run once", "", ""]
+        self.refused_menu(self.live_visible(visible), "prompt over the menu", state="modal-approval")
+
+    def test_a_prompt_or_change_after_the_approval_is_spent_gets_no_key(self):
+        v = LIVE_USAGE_CAPTURE_ROWS[-LIVE_HEIGHT:]
+        changes = {
+            "a prompt appeared": v[:-4] + ["  Allow this command: git push", "  (y) Run once", "", ""],
+            "the menu row was replaced": v[:20] + ["   \u2192 /usage-credits           Configure"] + v[21:],
+            "the menu closed": v[:17] + [""] * 7,
+        }
+        for label, visible in changes.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                for path in (self.root / "state" / "cursor-interactive-session" / "approvals").glob("*"):
+                    path.unlink()
+                self.live_show(LIVE_USAGE_CAPTURE_ROWS)
+                inspected = self.start_and_inspect()
+                args = argparse.Namespace(name=self.name, tmux=self.tmux, receipt=inspected["receipt"],
+                                          approval_ref=MENU_APPROVAL, expect_kind="usage-menu", expect_text_file=str(self.usage_expect))
+                original = helper.spend_approval
+
+                def spend_then_change(path, entry):
+                    original(path, entry)
+                    self.capture.write_text("\n".join(self.live_visible(visible)) + "\n")
+
+                with mock.patch.dict(os.environ, self.env), mock.patch.object(helper, "spend_approval", spend_then_change):
+                    with self.assertRaises(helper.Refusal) as caught:
+                        helper.menu_key_session(args)
+                self.assertEqual((caught.exception.state, caught.exception.code), ("screen-changed", 2))
                 self.assertEqual(self.sends(), [])
-                self.assertFalse(self.menu_ledger().exists())
-
-    def test_usage_menu_only_in_history_is_not_the_live_menu(self):
-        history = [USAGE_ROWS[1], USAGE_ROWS[2]] * 3
-        self.history_show(history, COMPOSER_BACK_ROWS)
-        inspected = self.start_and_inspect()
-        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
-        self.assertEqual((code, refused["state"]), (2, "screen-mismatch"))
-        self.assertEqual(self.sends(), [])
-
-    def test_usage_menu_in_the_real_pane_layout_sends_one_enter(self):
-        trust = boxed(ANSWERED_BOX_ROWS).replace(EXAMPLE_PATH, "/home/dev/work/example-task").split("\n")
-        history = trust + ["", "  Review: no findings."] * 6
-        visible = ["  Done.", "", USAGE_ROWS[1], USAGE_ROWS[2], "", USAGE_ROWS[3], USAGE_ROWS[4]]
-        self.history_show(history, visible)
-        inspected = self.start_and_inspect()
-        code, sent = self.invoke("menu-key", self.args(inspected["receipt"]))
-        self.assertEqual((code, sent["state"]), (0, "key-sent"))
-        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "Enter"]])
-
-    def test_a_prompt_before_or_after_the_approval_gets_no_key(self):
-        self.show(USAGE_ROWS + ["  Allow this command: git push", "  (y) Run once"])
-        inspected = self.start_and_inspect()
-        code, refused = self.invoke("menu-key", self.args(inspected["receipt"]))
-        self.assertEqual(code, 2)
-        self.assertTrue(refused["state"].startswith("modal-"))
-        self.assertEqual(self.sends(), [])
-        # The prompt appears after the approval is spent: the pre-key look refuses.
-        self.restart_case()
-        self.show(USAGE_ROWS)
-        inspected = self.start_and_inspect()
-        self.spend_then(inspected["receipt"], "usage-menu", self.usage_expect,
-                        "\n".join(USAGE_ROWS + ["  Allow this command: git push", "  (y) Run once"]) + "\n\n")
+                self.assertEqual(json.loads(self.menu_ledger().read_text())["outcome"], "not-sent")
 
     def test_usage_view_escape_sends_one_escape_and_checks_the_composer(self):
         self.view()
@@ -3795,7 +3952,7 @@ class UsageKeyTests(AnswerFixture):
             "no footer": USAGE_VIEW_ROWS[:-1] + [""],
             "composer under the view": USAGE_VIEW_ROWS[:-2] + ["\u2192 Add a follow-up", "Esc to close"],
             "plain composer": COMPOSER_BACK_ROWS,
-            "the slash menu": USAGE_ROWS,
+            "the slash menu": LIVE_USAGE_CAPTURE_ROWS[-LIVE_HEIGHT:],
             "duplicate title": USAGE_VIEW_ROWS[:3] + ["Usage"] + USAGE_VIEW_ROWS[3:],
             "another view with copied usage rows above": USAGE_VIEW_ROWS[:2] + [
                 "Usage", "  Included  42% used", "View in dashboard: example.test/usage", "", "Other view", "Esc to close"],
@@ -3836,7 +3993,10 @@ class UsageKeyTests(AnswerFixture):
     def test_the_expected_text_is_checked_before_any_tmux_call(self):
         bad = {
             "usage-menu one line": USAGE_EXPECT.split("\n")[0] + "\n",
-            "usage-menu swapped": "\u2192 /usage\n" + USAGE_EXPECT.split("\n")[0] + "\n",
+            "usage-menu swapped (the old order)": USAGE_SELECTED + "\n" + USAGE_DRAFT + "\n",
+            "usage-menu draft with an argument": "\u2192 /usage now\n" + USAGE_SELECTED + "\n",
+            "usage-menu three lines": USAGE_EXPECT + "     /context  Show context usage breakdown\n",
+            "usage-menu unmarked row": USAGE_DRAFT + "\n/usage  Show plan and on-demand usage\n",
         }
         for label, text in bad.items():
             with self.subTest(label=label):

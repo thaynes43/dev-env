@@ -259,11 +259,19 @@ Two more allowlist entries let a supervised session open Cursor's `/usage` view 
 once per approval, with the same receipt, ledger, modal and last-look rules as above.
 
 1. `reply` with the literal text `/usage` and **no** `--submit`, then `inspect`.
-2. `menu-key --expect-kind usage-menu`: one `Enter`. The expected text is EXACTLY two lines, in order: the selected row
-   `<marker> /usage  Show plan and on-demand usage` and the bare draft `→ /usage`. The live-row rules are the
-   run-everything rules (each row once on the visible screen, the draft directly under the row, the composer's own tail
-   below, nothing in history counts). If the inline menu is not shown, no `Enter` is sent: an unregistered command
-   would otherwise go to the model as a chat message.
+2. `menu-key --expect-kind usage-menu`: one `Enter`. The pinned client renders the typed draft FIRST and the inline
+   menu BELOW it (the prompt column: input box, then the menu; the model and `~` status footer render only while no
+   menu is open). The expected text is EXACTLY two lines, in render order: the bare draft `→ /usage`, then the
+   selected row `<marker> /usage  Show plan and on-demand usage`. On the visible screen: each row appears exactly once;
+   one to three blank rows (two in the live capture) separate the draft from the menu; the menu is a block of at most
+   10 consecutive nonblank rows (one row per item, descriptions cut with an ellipsis, never wrapped; the block counts any
+   "more above/below" rows) with exactly one arrow-marked row, the expected selected row; nothing is below the block,
+   not a status or model row, and the last pane row is blank. A menu above the draft, a draft with no menu, a second
+   marked row, a copy in the transcript or in history, an argument draft or another command's menu does not match.
+   Binding of the live input: there is none on the cursor. `cursor_y` is not used on this path (the retained capture
+   carries none), so the draft's being the live composer rests on the menu itself being open below it, which the
+   client renders only for a focused slash draft, plus the fresh receipt, the unchanged capture and the last-moment
+   re-check. `run-everything-menu` keeps its older layout rule unchanged (a recorded follow-up).
 3. `inspect`: the screen must now show the usage view. Read the figures there.
 4. `menu-key --expect-kind usage-view` on that fresh receipt: one `Escape`. The expected text is 3 to 14 distinct lines (the pinned client's plan view has 10 nonblank rows; 11 when the reset date stacks onto its own row in a pane under 58 columns; 12 to 13 when the dashboard URL and subtitle wrap in a pane under 49 or 40 columns)
    in order: a `Usage` title row first, then the view rows, the usage view's own `View in dashboard:` row (followed by at most two rows of a wrapped URL), and exactly
