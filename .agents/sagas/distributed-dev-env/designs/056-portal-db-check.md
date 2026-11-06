@@ -51,9 +51,13 @@ is the usage error (exit 2), as for `pages-source-check`.
    `statement_timeout` of 5 s also applies on the server.
 
    After a successful connect, the close has its own deadline of at most
-   1 s. That includes pgx's background cleanup of an interrupted
-   connection. The check waits for pgx's `CleanupDone`, not for `Close` to
-   return or `IsClosed`.
+   1 s. Within 1 s the check closes its one TCP connection. It waits for
+   pgx's `CleanupDone`, not for `Close` to return or for `IsClosed`, and at
+   four fifths of the bound it closes the dialed transport itself.
+
+   pgx's own background cleanup may still be running when the line prints.
+   It can no longer reach the network: its cancel dial is refused and its
+   writes fail on the closed connection. It ends with the process.
 
    Two things would otherwise outlast the bound on a stalled peer:
    - after a deadline, pgx's `asyncClose` drains under its own 15 s
@@ -61,9 +65,8 @@ is the usage error (exit 2), as for `pages-source-check`.
    - crypto/tls writes its close_notify alert under its own 5 s write
      deadline.
 
-   So at four fifths of the bound the dialed transport underneath is
-   closed, which ends them at once. The check therefore returns within
-   11 s.
+   Closing the dialed transport makes both fail at once. The check
+   therefore returns within 11 s.
 
    The check opens exactly one connection. When a deadline interrupts a
    statement, pgx abandons the connection in a background goroutine
@@ -79,7 +82,9 @@ is the usage error (exit 2), as for `pages-source-check`.
    Service name resolves to one address. Tests pin all of this:
    - exactly one dial on every deadline path, with the refused cancel
      attempt counted;
-   - cleanup finished before the check returns;
+   - the TCP connection closed within the bound (in the fixture pgx's
+     cleanup has also finished by then; that is a test observation, not a
+     production guarantee);
    - with two addresses, the first connection's class.
 
 ## 3. Output and exit codes

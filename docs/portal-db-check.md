@@ -43,10 +43,12 @@ connect, the read-only transaction and its rollback. Inside it:
 - the connect has the store's 5 s `connect_timeout`;
 - the read-only transaction has 3 s.
 
-After a successful connect, the close has its own deadline of at most 1 s,
-including the driver's background cleanup of an interrupted connection. If
-the peer stalls, the connection is cut inside that deadline. So the check
-returns within 11 s. A failed connect is closed by the driver at once.
+After a successful connect, the check closes its one TCP connection within
+1 s; if the peer stalls, the check cuts the connection. So the check returns
+within 11 s. The driver's own background cleanup may still be running when
+the line prints. It can no longer reach the network (its cancel dial is
+refused and its writes fail on the closed connection), and it ends with the
+process. A failed connect is closed by the driver at once.
 
 The check opens exactly one connection. If a deadline interrupts the query,
 the driver would dial again to send a cancel request; the check refuses that
@@ -231,12 +233,20 @@ spec:
 
 ### Record the result, then clean up
 
-After Flux has applied the Job, read its result with bounded waits:
+After the PR with the Job merges, read the result with bounded waits. First
+make sure Flux has created the Job: `kubectl wait` on a Job that does not
+exist yet fails at once, and that would record a premature `NOT RUN`.
 
 ```sh
 job=dev-env-v2-portal-db-check-20261106   # the manifest's name
 
-# At most 90 s for Complete, then at most 5 s more for Failed. Both are bounded.
+# 1. Flux applies it: reconcile once, then wait at most 5 min for the Job.
+flux -n dev-env-system reconcile kustomization dev-env-v2-portal-db-check --with-source --timeout=5m
+if ! kubectl -n dev-agents wait --for=create --timeout=5m "job/$job"; then
+  echo "$job NOT APPLIED (Flux did not create the Job; nothing ran)"; exit 1
+fi
+
+# 2. At most 90 s for Complete, then at most 5 s more for Failed.
 kubectl -n dev-agents wait --for=condition=complete --timeout=90s "job/$job" \
   || kubectl -n dev-agents wait --for=condition=failed --timeout=5s "job/$job"
 
@@ -258,7 +268,8 @@ Record these in the tracker story or handoff before any cleanup:
 - `$result`.
 
 `$result` is sanitized by construction: one of the eight fixed lines, or
-`NOT RUN`. Never paste other log text. Then open the follow-up PR that
+`NOT RUN`. `NOT APPLIED` means Flux did not create the Job; nothing ran, so
+nothing is recorded as a check result. Never paste other log text. Then open the follow-up PR that
 removes the Job's manifest and Kustomization; Flux prunes the Job and its
 pod.
 

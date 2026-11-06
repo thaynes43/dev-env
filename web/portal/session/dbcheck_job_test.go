@@ -133,6 +133,15 @@ func TestDBCheckDocJobMountsOnlyWhatItReads(t *testing.T) {
 		}
 	}
 
+	// The record step waits, bounded, for Flux to create the Job before it
+	// waits, bounded, for Complete or Failed; a wait on a missing Job would
+	// record a premature NOT RUN.
+	text := string(doc)
+	create, complete, failed := strings.Index(text, "wait --for=create --timeout="), strings.Index(text, "wait --for=condition=complete --timeout="), strings.Index(text, "wait --for=condition=failed --timeout=")
+	if create < 0 || complete < 0 || failed < 0 || create > complete || complete > failed {
+		t.Fatal("the record step must wait for the Job to exist, then for Complete or Failed, each with a timeout")
+	}
+
 	want := []string{path.Join(ProductionRoot, dbCheckMountedFiles.user), path.Join(ProductionRoot, dbCheckMountedFiles.password), path.Join(ProductionRoot, dbCheckMountedFiles.ca)}
 	if len(mounted) != len(want) {
 		t.Fatalf("mounted files %v, want exactly %v", mounted, want)
