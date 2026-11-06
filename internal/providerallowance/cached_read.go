@@ -13,9 +13,14 @@ import (
 // freshness labels are not authority: a provider is current only when exactly
 // one caller-owned context validates it. Current known and uncapped values are
 // withheld when trust, freshness, or a passed reset blocks them. A nil
-// document or a paged document is left unchanged.
+// document is left unchanged. A paged document is not reprojected; only this
+// package's reported-exhaustion suffix is removed from current-measure reasons.
 func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registry, maxAge time.Duration, maxAgeSet bool, now time.Time) {
-	if doc == nil || doc.NextCursor != nil {
+	if doc == nil {
+		return
+	}
+	cachedStripReportedExhaustion(doc)
+	if doc.NextCursor != nil {
 		return
 	}
 	untrusted := map[string]bool{}
@@ -44,10 +49,11 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 		freshHold[provider] = item.Freshness
 		if cachedFreshnessBlocks(item.Freshness) {
 			cachedWithholdCurrent(item)
-			continue
+		} else {
+			cachedExpireResets(item, now)
+			cachedPreserveConflicts(item)
 		}
-		cachedExpireResets(item, now)
-		cachedPreserveConflicts(item)
+		cachedNoteReportedExhaustion(item, now)
 	}
 	for i := range doc.SourceStatuses {
 		status := &doc.SourceStatuses[i]
@@ -315,4 +321,139 @@ func cachedTime(raw *string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return at.UTC(), true
+}
+
+// reportedExhaustionNotice is advisory prose for one qualified historical
+// Claude report. It is not a routing code, a current-capacity claim, or a
+// review exemption. The leading space is added only after a primary reason.
+const reportedExhaustionNotice = "Last qualified report shows this allowance exhausted. Do not wait for Claude code reviews; choose a verified available non-Claude reviewer."
+
+func cachedStripReportedExhaustion(doc *ReadResponse) {
+	for i := range doc.Items {
+		for j := range doc.Items[i].CurrentMeasures {
+			doc.Items[i].CurrentMeasures[j].Reason = stripReportedExhaustion(doc.Items[i].CurrentMeasures[j].Reason)
+		}
+	}
+}
+
+func stripReportedExhaustion(reason string) string {
+	spaced := " " + reportedExhaustionNotice
+	for strings.HasSuffix(reason, spaced) {
+		reason = strings.TrimSuffix(reason, spaced)
+	}
+	if reason == reportedExhaustionNotice {
+		return ""
+	}
+	return reason
+}
+
+func cachedNoteReportedExhaustion(item *ReadItem, now time.Time) {
+	if !reportedExhaustionQualified(item, now) {
+		return
+	}
+	for i := range item.CurrentMeasures {
+		item.CurrentMeasures[i].Reason = appendReportedExhaustion(item.CurrentMeasures[i].Reason)
+	}
+}
+
+func appendReportedExhaustion(reason string) string {
+	reason = stripReportedExhaustion(reason)
+	if reason == "" {
+		return reportedExhaustionNotice
+	}
+	return reason + " " + reportedExhaustionNotice
+}
+
+// reportedExhaustionQualified is read-time explanation only. Caller-owned trust
+// and aging have already run. A historical 100 or 100.0 does not become current
+// capacity, and a missing reset is left unknown.
+func reportedExhaustionQualified(item *ReadItem, now time.Time) bool {
+	obs := item.Observation
+	if obs.Provider != "anthropic" || obs.ProviderObservedAt != nil || obs.Source.Kind != SourceNativeRPC || obs.Source.Version != ClaudeSDKSourceVersion || obs.Source.CapabilityRef != "claude-sdk:usage-report" {
+		return false
+	}
+	if item.CollectionFreshness == nil || item.CollectionFreshness.State != FreshFresh {
+		return false
+	}
+	if item.Binding.State != BindingVerified || item.Validation.State != ValidationSourceFields || int64(item.Binding.Generation) != int64(obs.BindingGeneration) || !stringPtrEqual(item.Binding.AccountRef, obs.Scope.AccountRef) || !stringPtrEqual(item.Binding.WorkspaceRef, obs.Scope.WorkspaceRef) {
+		return false
+	}
+	if len(obs.Measures) == 0 || len(item.CurrentMeasures) != len(obs.Measures) {
+		return false
+	}
+	for _, measure := range obs.Measures {
+		if claudeMeasureBlocked(obs, measure) || !claudeAccountExhausted(obs, measure) || exactResetPassed(measure, now) {
+			return false
+		}
+		current, ok := currentForMeasure(item, measure.ID)
+		if !ok || current.State != CurrentUnknown || current.Value.State != ValueUnknown || current.Value.Decimal != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func currentForMeasure(item *ReadItem, id string) (CurrentMeasure, bool) {
+	var found CurrentMeasure
+	n := 0
+	for _, current := range item.CurrentMeasures {
+		if current.MeasureID != id {
+			continue
+		}
+		found = current
+		n++
+	}
+	return found, n == 1
+}
+
+func claudeMeasureBlocked(obs Observation, measure Measure) bool {
+	if measure.Category == CategoryAdvisory || obs.Availability == AvailabilityConflict {
+		return true
+	}
+	for _, field := range obs.DirectFields {
+		if field.Field == measure.ID+"-model" || field.Field == measure.ID+"-surface" {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeAccountExhausted(obs Observation, measure Measure) bool {
+	kind, ok := directLexical(obs, measure.ID+"-kind")
+	if !ok || (kind != "weekly_all" && kind != "session") {
+		return false
+	}
+	if measure.Category != CategoryIncluded || measure.Unit != UnitPercent || measure.Direction != DirectionUsed || measure.Value.State != ValueKnown || measure.Value.Decimal == nil {
+		return false
+	}
+	switch *measure.Value.Decimal {
+	case "100", "100.0":
+		return true
+	default:
+		return false
+	}
+}
+
+func directLexical(obs Observation, field string) (string, bool) {
+	var value string
+	n := 0
+	for _, direct := range obs.DirectFields {
+		if direct.Field != field || direct.LexicalValue == nil {
+			continue
+		}
+		value = *direct.LexicalValue
+		n++
+	}
+	return value, n == 1
+}
+
+func exactResetPassed(measure Measure, now time.Time) bool {
+	if measure.Window.ResetPrecision != ResetInstant {
+		return false
+	}
+	at, ok := cachedTime(measure.Window.ResetAt)
+	if !ok {
+		return true
+	}
+	return !now.Before(at)
 }
