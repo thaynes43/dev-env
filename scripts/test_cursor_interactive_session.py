@@ -2812,6 +2812,8 @@ class AnswerTests(AnswerFixture):
         self.assertEqual((code, refused["state"]), (3, "pane-replaced"))
         self.assertIn("Enter was NOT sent", refused["detail"])
         self.assertIn("Do not resend it", refused["detail"])
+        self.assertNotIn("Nothing was sent", refused["detail"])
+        self.assertNotIn("..", refused["detail"])
         self.assertNotIn(["send-keys", "-t", "%7", "Enter"], self.sends())
 
     def test_submit_refuses_a_text_cursor_would_paste_as_a_placeholder(self):
