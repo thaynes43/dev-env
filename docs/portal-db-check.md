@@ -283,9 +283,11 @@ job=dev-env-v2-portal-db-check-20261106   # the manifest's name
 #    Kustomization does not exist until cluster-apps (flux-system,
 #    30 min interval) applies the merged commit, so a reconcile of it
 #    fails; the GitHub webhook usually starts cluster-apps sooner. Wait at
-#    most 35 min for the Job.
+#    most 35 min for the Job. A timeout alone is not NOT APPLIED: the
+#    GitRepository fetch (30 min) can come first, so check what Flux applied.
 if ! kubectl -n dev-agents wait --for=create --timeout=35m "job/$job"; then
-  echo "$job NOT APPLIED (no Job within 35 min; re-check before recording)"; exit 1
+  rev=$(kubectl -n flux-system get kustomization cluster-apps -o jsonpath='{.status.lastAppliedRevision}')
+  echo "$job not created within 35 min; cluster-apps applied $rev"; exit 1
 fi
 
 # 2. At most 90 s for Complete, then at most 5 s more for Failed.
@@ -313,9 +315,12 @@ Record these in the tracker story or handoff before any cleanup:
 `$result` is sanitized by construction: one of the eight result lines, or
 `NOT RUN` (no output, or `INTERRUPTED`). Never paste other log text.
 
-`NOT APPLIED` means no Job existed within 35 minutes, so nothing is
-recorded as a check result. Before recording it, check once more that the
-Job still does not exist: a late Flux apply would still run the check.
+If step 1 times out, compare the revision it printed with the merge
+commit. If `cluster-apps` has not applied the merge commit yet, Flux is
+still on its way: rerun the record step, and record nothing. Record
+`NOT APPLIED` only when `cluster-apps` has applied the merge commit, the
+`dev-env-v2-portal-db-check` Kustomization is Ready, and the Job still does
+not exist. `NOT APPLIED` is not a check result.
 
 Then open the follow-up PR that removes the Job's manifest and
 Kustomization, and the `DB_CHECK_KS` exception in haynes-ops
