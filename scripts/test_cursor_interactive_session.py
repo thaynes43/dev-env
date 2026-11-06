@@ -2302,6 +2302,57 @@ class AnswerTests(AnswerFixture):
     def review_footer_screen(self, rows=None):
         self.screen("\n".join(REVIEW_FOOTER_ROWS if rows is None else rows) + "\n", visible=24, cursor=23)
 
+    def long_rejection_fixture(self):
+        return json.loads((SCRIPT.parent / "cursor-interactive-session-fixtures" /
+                           "command-long-pr-rejection.json").read_text())
+
+    def test_long_command_rejection_requires_complete_current_screen(self):
+        fixture = self.long_rejection_fixture()
+        self.assertEqual(__import__("hashlib").sha256(fixture["capture"].encode()).hexdigest(),
+                         fixture["captureSha256"])
+        self.assertEqual(len([r for r in fixture["expectedText"].splitlines() if r.strip()]), 32)
+        # Actual retained viewport: the start of the command is in history.
+        self.screen(fixture["capture"], visible=24, cursor=23)
+        inspected = self.start_and_inspect()
+        code, refused = self.answer_command(inspected["receipt"], choice="ctrl-c",
+                                            text=fixture["expectedText"])
+        self.assertEqual((code, refused["state"]), (2, "stale-prompt"), refused)
+        self.assertEqual(self.sends(), [])
+        self.assertFalse(self.ledger().exists())
+        # Synthetic larger viewport, NOT a claim that the live pane was resized.
+        self.screen(fixture["capture"], visible=48, cursor=47)
+        code, inspected = self.invoke("inspect")
+        self.assertEqual(code, 0)
+        code, answered = self.answer_command(inspected["receipt"], choice="ctrl-c",
+                                             text=fixture["expectedText"])
+        self.assertEqual((code, answered["state"]), (0, "answered"), answered)
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "C-c"]])
+        self.answer_command(inspected["receipt"], choice="ctrl-c", text=fixture["expectedText"])
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_long_command_never_expands_approval_or_other_kind_limits(self):
+        fixture = self.long_rejection_fixture()
+        self.screen(fixture["capture"], visible=48, cursor=47)
+        inspected = self.start_and_inspect()
+        for choice, kind in (("y", "modal-approval"), ("ctrl-c", "modal-trust"),
+                             ("ctrl-c", "modal-permission")):
+            with self.subTest(choice=choice, kind=kind):
+                code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], choice=choice,
+                    kind=kind, expect=self.command_expect(fixture["expectedText"])))
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"), refused)
+        self.assertEqual(self.sends(), [])
+        self.assertFalse(self.ledger().exists())
+
+    def test_long_rejection_retains_byte_and_line_bounds(self):
+        fixture = self.long_rejection_fixture()
+        self.screen(fixture["capture"], visible=48, cursor=47)
+        inspected = self.start_and_inspect()
+        for text in ("x\n" * 65, "x" * 4097):
+            code, refused = self.answer_command(inspected["receipt"], choice="ctrl-c", text=text)
+            self.assertEqual((code, refused["state"]), (2, "invalid-input"), refused)
+        self.assertEqual(self.sends(), [])
+        self.assertFalse(self.ledger().exists())
+
     def test_review_footer_capture_sends_only_one_literal_y(self):
         fixture = REVIEW_FOOTER
         self.assertEqual(__import__("hashlib").sha256(fixture["capture"].encode()).hexdigest(), fixture["captureSha256"])
