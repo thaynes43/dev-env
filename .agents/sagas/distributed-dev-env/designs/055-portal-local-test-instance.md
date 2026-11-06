@@ -229,8 +229,9 @@ and pass now. Each checks:
 `web/portal/localtest/smoke-flows.cjs` drives the same flows in an
 unmodified headless Chromium at 320, 390 and 1280 px. It starts a fresh
 instance per width. Its default run is the acceptance run. While #480 is
-open, it reports send, launch and the Asks answer as `NOT ACCEPTED (#480)`
-and exits 1 (section 9.4); history, a GET flow, passes.
+open, the three POST flows (send, launch, Asks answer) report
+`NOT ACCEPTED (#480)` and the run exits 1 (section 9.4). History is a GET
+flow and passes.
 
 ### 9.4 Finding: Chromium sends `Origin: null` on the portal's forms
 
@@ -251,13 +252,16 @@ The local instance reproduces this, because it runs the same handlers.
 Verified with Playwright's Chromium 1247 on 2026-11-05. Other engines were
 not checked.
 
-The flow smoke's default run reports each refused post as
-`NOT ACCEPTED (#480)` and exits 1. It cannot pass because of a header
+The flow smoke's default run reports each refused post of the three POST
+flows (send, launch, Asks answer) as `NOT ACCEPTED (#480)` and exits 1.
+History, a GET, passes. It cannot pass because of a header
 override. The flag `--diagnostic-referrer-same-origin` serves each page with
 `Referrer-Policy: same-origin` through a harness-only override; see
 [Referrer Policy, `same-origin`](https://w3c.github.io/webappsec-referrer-policy/#referrer-policy-same-origin). Chromium then sends the page origin, and every flow
-completes. That run labels every line `DIAGNOSTIC`, exits 3 when its checks
-hold, and is never acceptance evidence. The fix is a production decision
+completes. That run labels every line `DIAGNOSTIC`. A post refused even
+under the override is printed `DIAGNOSTIC NOT ACCEPTED (#480)` and fails the
+run. It exits 3 only when every diagnostic check holds, and it is never
+acceptance evidence. The fix is a production decision
 outside OP479, tracked in [OpenProject #480](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/480) ("Portal forms refused in
 Chromium: Referrer-Policy no-referrer makes Origin null on same-origin
 posts"). Options include a referrer policy that keeps same-origin `Origin`

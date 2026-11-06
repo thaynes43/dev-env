@@ -7,14 +7,16 @@
 // Default run (acceptance): the production pages are served unchanged. While
 // OpenProject #480 is open, Chromium sends "Origin: null" on the portal's
 // form posts (every page sets Referrer-Policy: no-referrer) and the production
-// origin checks refuse them. The smoke then prints "NOT ACCEPTED (#480)" for
-// send, launch and the Asks answer, and exits 1. It never reports those flows
-// as PASS unless the unmodified instance accepts them.
+// origin checks refuse them. The three POST flows (send, launch, Asks answer)
+// then print "NOT ACCEPTED (#480)" and the run exits 1. History is a GET flow
+// and passes. A POST flow is never reported as PASS unless the unmodified
+// instance accepts it.
 //
 // --diagnostic-referrer-same-origin: serves every page with
 // Referrer-Policy: same-origin through a harness override, so Chromium sends
-// the page origin. Every line is labelled DIAGNOSTIC; the run exits 3 when all
-// diagnostic checks hold and 1 otherwise. It is never acceptance evidence.
+// the page origin. Every line is labelled DIAGNOSTIC, a refused post included,
+// and a refused post fails the run. It exits 3 when every diagnostic check
+// holds and 1 otherwise. It is never acceptance evidence.
 //
 // Usage, from the repository root:
 //   go build -tags portallocaltest -o ~/.local/bin/portal-localtest ./web/portal/localtest
@@ -42,11 +44,13 @@ function check(width, name, ok, detail) {
 }
 
 // accepted reports whether the server took a form post. A refusal by the
-// production origin check is NOT ACCEPTED (#480), never a pass.
+// production origin check is NOT ACCEPTED (#480), never a pass; in the
+// diagnostic run it is also a failed diagnostic check.
 function accepted(width, flow, body, origin) {
   if (!body.includes(refused)) return true;
   notAccepted++;
-  console.log(`NOT ACCEPTED (#480) ${width}px ${flow}: the production origin check refused Chromium's form post (Origin=${origin})`);
+  if (diagnostic) failed++;
+  console.log(`${diagnostic ? 'DIAGNOSTIC ' : ''}NOT ACCEPTED (#480) ${width}px ${flow}: the production origin check refused Chromium's form post (Origin=${origin})`);
   return false;
 }
 
@@ -192,9 +196,9 @@ async function run(width) {
   }
   for (const width of [320, 390, 1280]) await run(width);
   if (diagnostic) {
-    console.log(`DIAGNOSTIC ${failed ? 'FAILED' : 'COMPLETE'}: ${failed} failed checks; never acceptance.`);
+    console.log(`DIAGNOSTIC ${failed ? 'FAILED' : 'COMPLETE'}: ${failed} failed checks, ${notAccepted} refused posts; never acceptance.`);
     process.exit(failed ? 1 : 3);
   }
-  if (notAccepted) console.log(`NOT ACCEPTED (#480): ${notAccepted} write-flow posts refused by the production origin check.`);
+  if (notAccepted) console.log(`NOT ACCEPTED (#480): ${notAccepted} POST-flow submissions (send, launch, Asks answer) refused by the production origin check; history (GET) is not affected.`);
   process.exit(failed || notAccepted ? 1 : 0);
 })();

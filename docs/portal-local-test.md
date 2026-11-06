@@ -117,15 +117,17 @@ is tracked in
 
 So the default run is not green while #480 is open. It prints:
 
-- `NOT ACCEPTED (#480)` for send, launch and the Asks answer at each width;
-- `PASS` for history, which only reads.
+- `NOT ACCEPTED (#480)` for the three POST flows (send, launch, Asks answer)
+  at each width;
+- `PASS` for history, which is a GET flow.
 
-It then exits 1. It never reports a refused flow as `PASS`.
+It then exits 1. It never reports a refused POST flow as `PASS`.
 
 `--diagnostic-referrer-same-origin` reruns the flows with a harness-only
 override that serves each page with `Referrer-Policy: same-origin`, so
-Chromium sends the page origin. Every line is labelled `DIAGNOSTIC`, and the
-run exits 3 when its checks hold. It shows what the flows do once #480 is
+Chromium sends the page origin. Every line is labelled `DIAGNOSTIC`. A post
+refused even under the override is printed `DIAGNOSTIC NOT ACCEPTED (#480)`
+and fails the run. The run exits 3 only when every diagnostic check holds. It shows what the flows do once #480 is
 fixed. It is not acceptance evidence:
 
 ```sh
