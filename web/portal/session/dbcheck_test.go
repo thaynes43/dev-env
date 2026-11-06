@@ -157,6 +157,10 @@ func (f *fakePostgres) serve(conn net.Conn) {
 		_, _ = tlsConn.Read(make([]byte, 1))
 		return
 	}
+	if f.mode == "drop-after-tls" {
+		// The session ends after a good handshake, before any login answer.
+		return
+	}
 	backend.Send(&pgproto3.AuthenticationCleartextPassword{})
 	if backend.Flush() != nil || backend.SetAuthType(pgproto3.AuthTypeCleartextPassword) != nil {
 		return
@@ -320,6 +324,29 @@ func interceptDBCheckResolver(t *testing.T) {
 	})
 }
 
+// checkDatabaseWithin runs one check and fails the test cleanly if it does not
+// return within limit, so a regression cannot hang the suite.
+func checkDatabaseWithin(t *testing.T, limit time.Duration, root string, seams dbCheckSeams) (string, time.Duration) {
+	t.Helper()
+	type outcome struct {
+		class   string
+		elapsed time.Duration
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		started := time.Now()
+		class := checkDatabase(context.Background(), root, seams)
+		done <- outcome{class, time.Since(started)}
+	}()
+	select {
+	case o := <-done:
+		return o.class, o.elapsed
+	case <-time.After(limit):
+		t.Fatalf("db-check did not return within %v", limit)
+		return "", 0
+	}
+}
+
 func newFakePostgres(cert tls.Certificate, mode string) *fakePostgres {
 	return &fakePostgres{cert: cert, mode: mode, done: make(chan struct{}), release: make(chan struct{})}
 }
@@ -408,7 +435,7 @@ func TestDBCheckClassifiesEveryFailure(t *testing.T) {
 			if strings.HasPrefix(tc.name, "login never") || strings.HasSuffix(tc.name, "never answers") {
 				seams.connectTimeout, seams.queryTimeout = 300*time.Millisecond, 300*time.Millisecond
 			}
-			got := checkDatabase(context.Background(), writeDBCheckRoot(t, dbCheckFiles(ca.pem)), seams)
+			got, _ := checkDatabaseWithin(t, 10*time.Second, writeDBCheckRoot(t, dbCheckFiles(ca.pem)), seams)
 			if got != tc.want {
 				t.Fatalf("class %q, want %q", got, tc.want)
 			}
@@ -559,9 +586,21 @@ func TestDBCheckAuthCoversEveryRefusalAfterTLS(t *testing.T) {
 		server := newFakePostgres(ca.leaf(t, productionDBHost), "")
 		server.loginError = code
 		network := &dbCheckNet{server: server}
-		if got := checkDatabase(context.Background(), writeDBCheckRoot(t, dbCheckFiles(ca.pem)), network.seams()); got != DBCheckAuth {
+		if got, _ := checkDatabaseWithin(t, 10*time.Second, writeDBCheckRoot(t, dbCheckFiles(ca.pem)), network.seams()); got != DBCheckAuth {
 			t.Fatalf("SQLSTATE %s: class %q, want auth", code, got)
 		}
+	}
+	// A connection dropped after the handshake, before any login answer.
+	server := newFakePostgres(ca.leaf(t, productionDBHost), "drop-after-tls")
+	network := &dbCheckNet{server: server}
+	if got, _ := checkDatabaseWithin(t, 10*time.Second, writeDBCheckRoot(t, dbCheckFiles(ca.pem)), network.seams()); got != DBCheckAuth {
+		t.Fatalf("dropped after TLS: class %q, want auth", got)
+	}
+	<-server.done
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.serverName != productionDBHost || server.startup == nil {
+		t.Fatal("the dropped case must complete TLS and send the startup message first")
 	}
 }
 
@@ -575,8 +614,11 @@ func TestDBCheckCloseIsBounded(t *testing.T) {
 		t.Fatal("close bound changed")
 	}
 	ca := newDBCheckCA(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	// Bounds are measured against each case's own deadline. The slack allows a
+	// CPU-starved runner, and stays far below crypto/tls's 5 s close_notify
+	// deadline that an unbounded close would wait for.
 	const closeBound = 200 * time.Millisecond
-	const slack = 600 * time.Millisecond
+	const slack = 1500 * time.Millisecond
 	for _, tc := range []struct {
 		name, mode     string
 		connect, query time.Duration
@@ -594,9 +636,7 @@ func TestDBCheckCloseIsBounded(t *testing.T) {
 			network := &dbCheckNet{server: server}
 			seams := network.seams()
 			seams.connectTimeout, seams.queryTimeout, seams.total, seams.closeTimeout = tc.connect, tc.query, tc.total, closeBound
-			started := time.Now()
-			got := checkDatabase(context.Background(), writeDBCheckRoot(t, dbCheckFiles(ca.pem)), seams)
-			elapsed := time.Since(started)
+			got, elapsed := checkDatabaseWithin(t, 10*time.Second, writeDBCheckRoot(t, dbCheckFiles(ca.pem)), seams)
 			if got != tc.want || elapsed < tc.least || elapsed > tc.most {
 				t.Fatalf("class %q in %v, want %q within [%v, %v]", got, elapsed, tc.want, tc.least, tc.most)
 			}

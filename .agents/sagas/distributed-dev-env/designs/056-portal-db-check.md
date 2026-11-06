@@ -90,28 +90,34 @@ value is ever printed.
 
 ## 4. Running it in the cluster
 
-A single imperative `kubectl create` of a one-shot Job in `dev-agents`, never
-a GitOps manifest. The full spec and the run, record and delete steps are in
-the how-to.
+The live run uses the normal GitOps route (coordinator decision, recorded on
+OP477), not a direct `kubectl create`. The full manifests and the record and
+cleanup steps are in the how-to.
 
-- **Single shot.** The Job has a `generateName`, `backoffLimit: 0`,
-  `activeDeadlineSeconds: 60` and no `ttlSecondsAfterFinished`. Nothing
-  re-creates it, and nothing deletes it before its one sanitized line and
-  its status are recorded. The person who ran it records the result and
-  then deletes it.
-
-  A Flux-managed Job with a TTL would be re-applied after each TTL deletion
-  and would probe again, so this is not proposed.
+- **One fixed-name Job,** `dev-env-v2-portal-db-check-<yyyymmdd>`, with
+  `backoffLimit: 0`, `activeDeadlineSeconds: 60`, no
+  `ttlSecondsAfterFinished`, and the portal image by its signed digest.
+- **Its own small Flux Kustomization,** with `wait: false` and no health
+  checks. It depends only on the portal's network policy, and the portal
+  Kustomization does not depend on it. A failed check cannot block or gate
+  the portal.
+- **No TTL, so the run cannot repeat.** Nothing deletes the Job, so Flux
+  never re-creates it, and its one line and status stay until they are
+  recorded.
+  - The result is read with bounded `kubectl wait` steps and recorded
+    first.
+  - The cleanup is a follow-up PR that removes the manifest; Flux prunes
+    the Job.
+  - A later run is a new manifest with a new date, since a Job's spec
+    cannot change.
 - **Mounts.** Only what `db-check` reads: the existing keys `DB_USERNAME`
   and `DB_PASSWORD` of the existing Secret `dev-env-v2-portal-runtime`, and
-  `ca.crt` of the existing ConfigMap `dev-env-v2-portal-postgres-ca`. It
-  mounts no OIDC secret, session key, OpenProject token, TLS key or
-  projected token.
+  `ca.crt` of the existing ConfigMap `dev-env-v2-portal-postgres-ca`. No OIDC
+  secret, session key, OpenProject token, TLS key or projected token.
 
   The portal ServiceAccount stays, with `automountServiceAccountToken:
-  false`. A test parses the how-to's YAML and pins the mounted files to the
-  three `db-check` reads.
-
+  false`. A test parses the how-to's YAML and pins the mounted files, the
+  single-shot shape and the Kustomization's independence from the portal.
 - **Label.** The pod carries `app.kubernetes.io/name: dev-env-v2-portal`.
   That is the only way the existing `CiliumNetworkPolicy` lets it reach
   Postgres and DNS, so no policy change is needed.
@@ -156,8 +162,10 @@ interceptor fails any DNS query.
 - **Bounded close:** a stalled close after a pass, a query deadline and the
   total deadline each return within their bounds with one sanitized line,
   and none dials a second connection.
-- **The how-to's Job:** it parses, and it mounts exactly the three files
-  `db-check` reads. It has no TTL and no retry.
+- **The how-to's manifests:**
+  - the Job has a fixed name and mounts exactly the three files `db-check`
+    reads, with no TTL and no retry;
+  - its Kustomization is independent of the portal and does not wait.
 - **Sanitization:** the output of every case is exactly one of the lines
   above.
 - **No-write:** the server sees exactly the four statements, over the simple

@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -11,30 +12,58 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// TestDBCheckDocJobMountsOnlyWhatItReads parses the Job example in
-// docs/portal-db-check.md. It mounts exactly the files db-check reads (the two
-// DB keys of the existing runtime Secret and the existing Postgres CA), no
-// token, OIDC secret, session key or TLS key; and it runs once: a generated
-// name, no TTL, no retry.
+// TestDBCheckDocJobMountsOnlyWhatItReads parses the manifests in
+// docs/portal-db-check.md (DESIGN-056 section 4). The Job mounts exactly the
+// files db-check reads (the two DB keys of the existing runtime Secret and the
+// existing Postgres CA): no token, OIDC secret, session key or TLS key. It runs
+// once: one fixed name, no TTL, no retry. Its own Flux Kustomization neither
+// waits on it nor gates the portal.
 func TestDBCheckDocJobMountsOnlyWhatItReads(t *testing.T) {
 	doc, err := os.ReadFile("../../../docs/portal-db-check.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(doc)
-	start := strings.Index(text, "```yaml\n")
-	if start < 0 || strings.Count(text, "```yaml\n") != 1 {
-		t.Fatal("the how-to must hold exactly one yaml block, the Job")
+	var blocks []string
+	for rest := string(doc); ; {
+		start := strings.Index(rest, "```yaml\n")
+		if start < 0 {
+			break
+		}
+		rest = rest[start+len("```yaml\n"):]
+		end := strings.Index(rest, "```")
+		blocks, rest = append(blocks, rest[:end]), rest[end+3:]
 	}
-	body := text[start+len("```yaml\n"):]
-	body = body[:strings.Index(body, "```")]
 	var job batchv1.Job
-	if err := yaml.UnmarshalStrict([]byte(body), &job); err != nil {
-		t.Fatalf("Job example does not parse: %v", err)
+	var ks map[string]any
+	jobs, kustomizations := 0, 0
+	for _, block := range blocks {
+		var head struct {
+			Kind string `json:"kind"`
+		}
+		if err := yaml.Unmarshal([]byte(block), &head); err != nil {
+			t.Fatalf("yaml block does not parse: %v", err)
+		}
+		switch head.Kind {
+		case "Job":
+			jobs++
+			if err := yaml.UnmarshalStrict([]byte(block), &job); err != nil {
+				t.Fatalf("Job example does not parse: %v", err)
+			}
+		case "Kustomization":
+			kustomizations++
+			if err := yaml.Unmarshal([]byte(block), &ks); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatalf("unexpected yaml block kind %q", head.Kind)
+		}
+	}
+	if jobs != 1 || kustomizations != 1 {
+		t.Fatalf("the how-to must hold one Job and one Flux Kustomization, found %d and %d", jobs, kustomizations)
 	}
 	spec, pod := job.Spec, job.Spec.Template.Spec
-	if job.Kind != "Job" || job.Namespace != "dev-agents" || job.Name != "" || job.GenerateName != "dev-env-v2-portal-db-check-" {
-		t.Fatalf("Job identity %s %s/%s %q", job.Kind, job.Namespace, job.Name, job.GenerateName)
+	if job.Namespace != "dev-agents" || job.GenerateName != "" || !regexp.MustCompile(`^dev-env-v2-portal-db-check-[0-9]{8}$`).MatchString(job.Name) {
+		t.Fatalf("Job identity %s/%s %q: one fixed dated name, no generateName", job.Namespace, job.Name, job.GenerateName)
 	}
 	if spec.TTLSecondsAfterFinished != nil || spec.BackoffLimit == nil || *spec.BackoffLimit != 0 || spec.ActiveDeadlineSeconds == nil || *spec.ActiveDeadlineSeconds != 60 || pod.RestartPolicy != "Never" {
 		t.Fatal("the Job must run once: no TTL, backoffLimit 0, activeDeadlineSeconds 60, restartPolicy Never")
@@ -87,6 +116,23 @@ func TestDBCheckDocJobMountsOnlyWhatItReads(t *testing.T) {
 			t.Fatalf("mount %q must be a read-only whole volume", m.Name)
 		}
 	}
+	// The Kustomization: its own, applying only the db-check app path, no wait
+	// or health checks, depending on nothing but the portal's egress policy.
+	ksSpec, _ := ks["spec"].(map[string]any)
+	meta, _ := ks["metadata"].(map[string]any)
+	if ks["apiVersion"] != "kustomize.toolkit.fluxcd.io/v1" || meta["name"] != "dev-env-v2-portal-db-check" || ksSpec == nil || ksSpec["wait"] != false || ksSpec["prune"] != true || ksSpec["healthChecks"] != nil || ksSpec["healthCheckExprs"] != nil {
+		t.Fatalf("Kustomization must be its own, prune true, wait false, no health checks: %v", ks)
+	}
+	if p, _ := ksSpec["path"].(string); !strings.HasSuffix(p, "/portal-db-check/app") {
+		t.Fatalf("Kustomization path %q must be the db-check app only", p)
+	}
+	deps, _ := ksSpec["dependsOn"].([]any)
+	for _, d := range deps {
+		if dep, _ := d.(map[string]any); dep["name"] != "dev-env-v2-portal-policy" {
+			t.Fatalf("Kustomization depends on %v; only the portal's egress policy is allowed", dep)
+		}
+	}
+
 	want := []string{path.Join(ProductionRoot, dbCheckMountedFiles.user), path.Join(ProductionRoot, dbCheckMountedFiles.password), path.Join(ProductionRoot, dbCheckMountedFiles.ca)}
 	if len(mounted) != len(want) {
 		t.Fatalf("mounted files %v, want exactly %v", mounted, want)

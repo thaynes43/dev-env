@@ -64,41 +64,56 @@ The target is fixed in source:
   as the store does;
 - `target_session_attrs=read-write`.
 
-## Run it once in the cluster
+## Run it once in the cluster, through GitOps
 
-**Chosen approach: a single imperative `kubectl create`, never a GitOps
-manifest.** The Job is not committed to any Flux kustomization:
+The live run uses the normal GitOps route (coordinator decision, recorded on
+OP477). It is not a direct `kubectl create`.
 
-- each run gets a new `generateName` name, so Flux never creates or recreates
-  it, and nothing can repeat it;
-- it has no `ttlSecondsAfterFinished`, so nothing deletes it, or its single
-  output line, before the result is recorded;
-- the person who runs it records the result and then deletes the Job
-  explicitly.
+- **One fixed-name Job.** `dev-env-v2-portal-db-check-<yyyymmdd>`, named for
+  the run date. It has no `ttlSecondsAfterFinished`, `backoffLimit: 0` and
+  `activeDeadlineSeconds: 60`, and it runs the portal image by its signed
+  digest.
+  - **Image:** the image must be built from a commit that contains
+    `db-check`. The Deployment's current pin, `sha-ce6edc5`, predates it.
+    Verify the digest's signature as for any portal pin.
+  - **Mounts:** only the existing keys `DB_USERNAME` and `DB_PASSWORD` of
+    the existing Secret `dev-env-v2-portal-runtime`, and `ca.crt` of the
+    existing ConfigMap `dev-env-v2-portal-postgres-ca`. No OIDC secret,
+    session key, OpenProject token, TLS key or projected token.
+  - **Identity:** the portal ServiceAccount, with
+    `automountServiceAccountToken: false`.
+  - **Network:** the pod label that the existing network policy selects. No
+    new Secret, RBAC rule or network policy.
+- **Its own small Flux Kustomization.**
+  - It has `wait: false` and no health checks.
+  - It depends only on the portal's network policy Kustomization.
+  - The portal Kustomization does not depend on it.
 
-If it ever had to go through git, a Flux-managed Job with a TTL would be
-re-applied after each TTL deletion and would probe again. It would then need
-a fixed name, no TTL, and removal in the same change that records the
-result. That variant is not proposed.
+  So a failed check cannot block or gate the portal.
+- **No TTL, so the run cannot repeat.** Nothing deletes the Job, so Flux has
+  nothing to re-create, and its single line and status stay readable until
+  they are recorded.
+  - Do not delete the Job by hand while its manifest is in git: Flux would
+    re-create it and probe again.
+  - The cleanup is a follow-up PR that removes the manifest, and Flux prunes
+    the Job.
+  - A Job's spec cannot change, so a later run is a new manifest with a new
+    date.
 
-The Job needs a portal image built from a commit that contains `db-check`.
-The Deployment's current pin, `sha-ce6edc5`, predates it.
+A test (`TestDBCheckDocJobMountsOnlyWhatItReads`) parses the YAML below. It
+pins the mounted files to the three `db-check` reads, the single-shot shape
+and the Kustomization's independence from the portal.
 
-It mounts only what `db-check` reads: the two existing keys `DB_USERNAME` and
-`DB_PASSWORD` of the existing Secret `dev-env-v2-portal-runtime`, and
-`ca.crt` of the existing ConfigMap `dev-env-v2-portal-postgres-ca`. It mounts
-no OIDC secret, session key, OpenProject token, TLS key or projected
-ServiceAccount token. It keeps the portal's ServiceAccount with
-`automountServiceAccountToken: false`, and the pod label that the existing
-network policy selects. It adds no Secret, RBAC rule or network policy. A
-test (`TestDBCheckDocJobMountsOnlyWhatItReads`) parses this example and pins
-that.
+The Job, for example
+`kubernetes/main/apps/dev-env-system/portal-db-check/app/job.yaml` in
+haynes-ops:
 
 ```yaml
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: dev-env-v2-portal-db-check-
+  # One fixed name per run; replace the date with the run date.
+  name: dev-env-v2-portal-db-check-20261106
   namespace: dev-agents
   labels:
     app.kubernetes.io/component: db-check
@@ -131,7 +146,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: db-check
-          image: ghcr.io/thaynes43/dev-env-portal:sha-<short>@sha256:<digest of an image with db-check>
+          # The signed digest of a portal image that contains db-check.
+          image: ghcr.io/thaynes43/dev-env-portal:sha-<short>@sha256:<signed digest>
           imagePullPolicy: IfNotPresent
           args: ["db-check"]
           # No container port: the portal Service targets the named port
@@ -180,19 +196,47 @@ spec:
                 path: ca.crt
 ```
 
-### Run, record, delete
+Its own Flux Kustomization, for example
+`kubernetes/main/apps/dev-env-system/portal-db-check/ks.yaml`, with a
+`kustomization.yaml` in `app/` that lists `job.yaml`:
 
-Save the YAML above as `portal-db-check-job.yaml` with the image filled in.
-Then run, as an identity allowed to create Jobs in `dev-agents`:
+```yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: dev-env-v2-portal-db-check
+  namespace: dev-env-system
+spec:
+  # Only the egress policy the Job relies on. The portal Kustomization does
+  # not depend on this one, and this one does not gate on the Job.
+  dependsOn:
+    - name: dev-env-v2-portal-policy
+      namespace: dev-env-system
+  path: ./kubernetes/main/apps/dev-env-system/portal-db-check/app
+  prune: true
+  wait: false
+  sourceRef:
+    kind: GitRepository
+    name: haynes-ops
+    namespace: flux-system
+  interval: 30m
+  retryInterval: 1m
+  timeout: 2m
+```
+
+### Record the result, then clean up
+
+After Flux has applied the Job, read its result with bounded waits:
 
 ```sh
-job=$(kubectl -n dev-agents create -f portal-db-check-job.yaml -o name)   # job.batch/dev-env-v2-portal-db-check-xxxxx
+job=dev-env-v2-portal-db-check-20261106   # the manifest's name
 
-# Wait for an end: Complete, Failed, or DeadlineExceeded after 60 s.
-until kubectl -n dev-agents get "$job" -o jsonpath='{.status.conditions[*].type}' | grep -Eq 'Complete|Failed'; do sleep 3; done
+# At most 90 s for Complete, then at most 5 s more for Failed. Both are bounded.
+kubectl -n dev-agents wait --for=condition=complete --timeout=90s "job/$job" \
+  || kubectl -n dev-agents wait --for=condition=failed --timeout=5s "job/$job"
 
-line=$(kubectl -n dev-agents logs "$job" --tail=1 2>/dev/null)
-status=$(kubectl -n dev-agents get "$job" -o jsonpath='{.status.conditions[*].reason}')
+line=$(kubectl -n dev-agents logs "job/$job" --tail=1 2>/dev/null)
+status=$(kubectl -n dev-agents get "job/$job" -o jsonpath='{.status.conditions[*].reason}')
 case "$line" in
   "PASS"|"FAIL config"|"FAIL dns"|"FAIL refused"|"FAIL tls"|"FAIL auth"|"FAIL timeout"|"FAIL query") result="$line" ;;
   "") result="NOT RUN (no output; $status)" ;;
@@ -201,7 +245,7 @@ esac
 echo "$job $result"
 ```
 
-Record these in the tracker story or handoff before deleting anything:
+Record these in the tracker story or handoff before any cleanup:
 
 - the Job name;
 - the image digest;
@@ -209,12 +253,9 @@ Record these in the tracker story or handoff before deleting anything:
 - `$result`.
 
 `$result` is sanitized by construction: one of the eight fixed lines, or
-`NOT RUN`. Never paste other log text. Then delete the Job, which also
-removes its pod:
-
-```sh
-kubectl -n dev-agents delete "$job"
-```
+`NOT RUN`. Never paste other log text. Then open the follow-up PR that
+removes the Job's manifest and Kustomization; Flux prunes the Job and its
+pod.
 
 **No output is "not run", not a db-check failure.**
 
@@ -227,8 +268,8 @@ kubectl -n dev-agents delete "$job"
   - the Job cannot run on a node that already runs a portal replica;
   - a new portal replica cannot run on the Job's node.
 
-  With four workers and two replicas it fits. Do not run it during a portal
-  rollout.
+  With four workers and two replicas it fits. Do not merge the Job during a
+  portal rollout.
 
 ## Notes
 
