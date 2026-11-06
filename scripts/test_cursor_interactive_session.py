@@ -62,6 +62,9 @@ if args and args[0] == "display-message":
     if mode == "foreign-owner":
         owner = "foreign"
     pid = "999" if mode == "replaced" else os.environ.get("FAKE_PID", "123")
+    # FAKE_PID_FILE, when the file exists, replaces the pane process mid-command.
+    if os.environ.get("FAKE_PID_FILE") and Path(os.environ["FAKE_PID_FILE"]).exists():
+        pid = Path(os.environ["FAKE_PID_FILE"]).read_text().strip()
     pane = "%8" if mode == "new-pane" else os.environ.get("FAKE_PANE", "%7")
     dead = "1" if mode == "dead" else "0"
     command = "bash" if mode == "foreign-command" else os.environ.get("FAKE_COMMAND", "client")
@@ -2787,6 +2790,29 @@ class AnswerTests(AnswerFixture):
     def test_submit_counts_the_text_only_after_the_last_composer_row(self):
         screen = ["> continue the source helper", "", "  \u2192 Add a follow-up", ""]
         self.assertEqual(helper.tail_count(screen, "continue the source helper"), 0)
+
+    def test_submit_keeps_a_replaced_pane_state_after_the_text_is_typed(self):
+        # The pane process changes while the fence waits: the reply ends pane-replaced (not
+        # send-unconfirmed) and still says the text was sent and Enter was not.
+        self.screen("  Cursor Agent\n\n> \n")
+        self.text_path.write_text("continue the source helper")
+        inspected = self.start_and_inspect()
+        pid_file = self.root / "pid"
+        self.env["FAKE_PID_FILE"] = str(pid_file)
+        self.env["FAKE_ECHO_DELAY"] = "60"
+
+        def swap():
+            __import__("time").sleep(0.1)
+            pid_file.write_text("999")
+        thread = threading.Thread(target=swap)
+        thread.start()
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                              "--submit"])
+        thread.join()
+        self.assertEqual((code, refused["state"]), (3, "pane-replaced"))
+        self.assertIn("Enter was NOT sent", refused["detail"])
+        self.assertIn("Do not resend it", refused["detail"])
+        self.assertNotIn(["send-keys", "-t", "%7", "Enter"], self.sends())
 
     def test_submit_refuses_a_text_cursor_would_paste_as_a_placeholder(self):
         code, refused = self.submit("x" * 801)

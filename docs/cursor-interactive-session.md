@@ -138,8 +138,15 @@ does not count. Outcomes:
   than before typing: Enter is sent.
 - A prompt row appears above the composer that the verified screen did not have,
   such as Cursor's command prompt: Enter is not sent, and the reply ends with that
-  prompt's kind. Every visible row is checked, the composer rows included, so a
-  prompt drawn below the composer is seen too.
+  prompt's kind. A "prompt row" is a row holding one of the helper's known prompt
+  phrases (the trust, permission, approval and confirmation phrases it
+  classifies, such as `Run this command?` or `(y/n)`). Every visible row is
+  checked, the composer rows included, so such a prompt drawn below the composer
+  is seen too. A prompt worded in some other way is not recognised by this check;
+  it can only be caught by the text check (its rows hide the typed text).
+- The pane, its process or its owner changes during the wait, or the screen can
+  no longer be read: Enter is not sent, and the reply ends with that state (for
+  example `pane-replaced`), saying the text was already typed.
 - The instruction contains a known prompt phrase (such as `yes/no` or `Run this
   command?`): refused before anything is typed (`invalid-input`), because its
   echo could not be told apart from a real prompt with the same words.

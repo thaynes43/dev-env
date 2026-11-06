@@ -715,7 +715,11 @@ def send_instruction(state, text, submit, before=(0, frozenset())):
     except Refusal as refusal:
         if refusal.state.startswith("modal-"):
             raise
-        shown = False
+        # The pane, owner or process changed, or the screen could not be read, after the
+        # text was typed: keep that state, and say that Enter was not sent.
+        raise Refusal(refusal.state, refusal.detail.rstrip(". ").removesuffix(" Nothing was sent")
+                      + ". The literal text was already sent, so Enter was NOT sent. The text may be in the "
+                      "composer. Do not resend it or send Enter. Re-inspect.", 3)
     if not shown:
         raise Refusal("send-unconfirmed", "The literal text was sent but its end did not show in the pane, so Enter was "
                       "NOT sent. The text may be in the composer. Do not resend it or send Enter. Re-inspect.", 3)
