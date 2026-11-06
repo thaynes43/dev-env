@@ -12,8 +12,11 @@ import (
 
 // TestOfficialClaudeSDKReadingReachesLastReportedWithoutCurrentCapacity is the
 // Claude analog of the Codex test: a retained SDK usage capture with no
-// provider observation time (freshness unknown, "provider time missing") must
-// surface only as a last-reported reading, never as current capacity.
+// provider observation time must surface only as a last-reported reading, never
+// as current capacity. The test pins that outcome (no window, value Unknown, one
+// last-reported row with the receipt time and no provider time); it does not pin
+// which gate withholds the current value (the source status stays unverified and
+// the freshness is capture only).
 func TestOfficialClaudeSDKReadingReachesLastReportedWithoutCurrentCapacity(t *testing.T) {
 	at := time.Date(2026, 11, 2, 18, 2, 10, 0, time.UTC)
 	account := "anthropic-org-sha256:" + strings.Repeat("c", 64)
@@ -52,7 +55,7 @@ func TestOfficialClaudeSDKReadingReachesLastReportedWithoutCurrentCapacity(t *te
 				t.Fatalf("reading lost or made current at %s: %+v", now.Format(time.RFC3339), card)
 			}
 			got := card.LastReported[0]
-			if got.Percent != "31% used" || got.ReadAtExact != received || got.ProviderAtExact != "" {
+			if got.Percent != "31% used" || got.ReadAtExact != received || got.ProviderAtExact != "" || got.Why != "Not current: the provider did not report when it measured this." {
 				t.Fatalf("last-reported row wrong at %s: %+v", now.Format(time.RFC3339), got)
 			}
 		}
@@ -65,7 +68,7 @@ func TestOfficialClaudeSDKReadingReachesLastReportedWithoutCurrentCapacity(t *te
 	foreign.AccountRef = &different
 	refused := NewCachedAllowanceReader(body, pa.FixtureParseLimits, []pa.TrustedContext{foreign}, reg, policy).Allowances(at.Add(time.Minute))
 	for _, card := range refused {
-		if card.Provider == "Claude" && len(card.LastReported) != 0 {
+		if card.Provider == "Claude" && (len(card.LastReported) != 0 || len(card.Windows) != 0) {
 			t.Fatal("wrong-account historical reading exposed")
 		}
 	}
