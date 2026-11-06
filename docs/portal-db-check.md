@@ -316,11 +316,20 @@ Record these in the tracker story or handoff before any cleanup:
 `NOT RUN` (no output, or `INTERRUPTED`). Never paste other log text.
 
 If step 1 times out, compare the revision it printed with the merge
-commit. If `cluster-apps` has not applied the merge commit yet, Flux is
-still on its way: rerun the record step, and record nothing. Record
-`NOT APPLIED` only when `cluster-apps` has applied the merge commit, the
-`dev-env-v2-portal-db-check` Kustomization is Ready, and the Job still does
-not exist. `NOT APPLIED` is not a check result.
+commit. A later main commit that contains the merge counts as applied
+(`git merge-base --is-ancestor <merge> <printed sha>`).
+
+- If `cluster-apps` has not applied the merge yet, Flux is still on its
+  way: rerun the record step, and record nothing.
+- If it has, read the `dev-env-v2-portal-db-check` Kustomization's Ready
+  condition. When that Kustomization is missing or not Ready (for
+  example a dependency is not ready, or admission refused the Job), and
+  no Job exists, record `NOT APPLIED (Flux: <Ready reason>)`. That is a
+  Flux apply failure to fix, not a check result.
+- When the Kustomization is Ready, the Job was applied: rerun the record
+  step to read it.
+
+`NOT APPLIED` is never a db-check result.
 
 Then open the follow-up PR that removes the Job's manifest and
 Kustomization, and the `DB_CHECK_KS` exception in haynes-ops
