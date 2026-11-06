@@ -247,11 +247,22 @@ func (f *fakePostgres) answer(backend *pgproto3.Backend, conn net.Conn, statemen
 			backend.Send(&pgproto3.ErrorResponse{Severity: "ERROR", Code: "42501", Message: "permission denied for fixture"})
 			backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'E'})
 		default:
+			value := "1"
+			if f.mode == "select-two" {
+				value = "2"
+			}
 			backend.Send(&pgproto3.RowDescription{Fields: []pgproto3.FieldDescription{{Name: []byte("?column?"), DataTypeOID: 23, DataTypeSize: 4, TypeModifier: -1}}})
-			backend.Send(&pgproto3.DataRow{Values: [][]byte{[]byte("1")}})
+			backend.Send(&pgproto3.DataRow{Values: [][]byte{[]byte(value)}})
 			backend.Send(&pgproto3.CommandComplete{CommandTag: []byte("SELECT 1")})
 			backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'T'})
 		}
+	case statement == "rollback" && f.mode == "hold-rollback":
+		// Hold the reply, and stop reading, until the test releases it.
+		<-f.release
+		return false
+	case statement == "rollback" && f.mode == "rollback-error":
+		backend.Send(&pgproto3.ErrorResponse{Severity: "ERROR", Code: "XX000", Message: "fixture rollback failure"})
+		backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
 	case statement == "rollback":
 		backend.Send(&pgproto3.CommandComplete{CommandTag: []byte("ROLLBACK")})
 		backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
@@ -810,12 +821,13 @@ func TestDBCheckCallerCancelIsInterruptedNotTimeout(t *testing.T) {
 	}
 }
 
-// TestDBCheckDecidedResultSurvivesACallerCancel: the class is decided when
-// the operation ends. A caller that cancels afterwards, during the rollback or
-// during the close, cannot turn a decided FAIL query or a decided PASS into
-// INTERRUPTED. Only a cancel that ends the operation is INTERRUPTED
-// (TestDBCheckCallerCancelIsInterruptedNotTimeout). One connection, the
-// bounded close and one fixed line hold throughout.
+// TestDBCheckDecidedResultSurvivesACallerCancel pins the verdict boundary
+// (DESIGN-056 section 3). A FAIL decided at SELECT 1 survives a caller cancel
+// during the rollback or the close. A cancel during the close never changes
+// the class, PASS included. PASS needs the read-only transaction to finish
+// with a successful rollback, so a cancel that ends the rollback after a good
+// SELECT 1 is INTERRUPTED. One connection, the bounded close with pgx's
+// cleanup finished, and one fixed line hold throughout.
 func TestDBCheckDecidedResultSurvivesACallerCancel(t *testing.T) {
 	interceptDBCheckResolver(t)
 	ca := newDBCheckCA(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
@@ -827,6 +839,8 @@ func TestDBCheckDecidedResultSurvivesACallerCancel(t *testing.T) {
 		{name: "query fails, cancel during the close", mode: "query-error", want: DBCheckQuery},
 		{name: "query fails, cancel during the rollback", mode: "query-error", event: "rollback", want: DBCheckQuery},
 		{name: "pass, cancel during the close", mode: "", want: ""},
+		// PASS needs the rollback to finish: a cancel that ends it is no result.
+		{name: "good SELECT 1, cancel ends the rollback", mode: "hold-rollback", event: "rollback", want: DBCheckInterrupted},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -882,5 +896,28 @@ func TestDBCheckDecidedResultSurvivesACallerCancel(t *testing.T) {
 				t.Fatalf("dials %v: only one connection may reach the wire", network.dials)
 			}
 		})
+	}
+}
+
+// TestDBCheckRollbackAndValueAreQueryFailures: after a good login, a server
+// error on the rollback following a good SELECT 1, and a SELECT 1 that
+// returns another value, are FAIL query.
+func TestDBCheckRollbackAndValueAreQueryFailures(t *testing.T) {
+	interceptDBCheckResolver(t)
+	ca := newDBCheckCA(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	for _, mode := range []string{"rollback-error", "select-two"} {
+		server := newFakePostgres(ca.leaf(t, productionDBHost), mode)
+		network := &dbCheckNet{server: server}
+		got, _ := checkDatabaseWithin(t, 10*time.Second, writeDBCheckRoot(t, dbCheckFiles(ca.pem)), network.seams())
+		if line, code := DBCheckLine(got); got != DBCheckQuery || line != "FAIL query" || code != 3 {
+			t.Fatalf("%s: class %q line %q code %d, want FAIL query", mode, got, line, code)
+		}
+		<-server.done
+		server.mu.Lock()
+		statements := strings.Join(server.statements, "|")
+		server.mu.Unlock()
+		if statements != "show transaction_read_only|begin read only|SELECT 1|rollback" {
+			t.Fatalf("%s: statements %q", mode, statements)
+		}
 	}
 }

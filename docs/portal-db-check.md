@@ -13,21 +13,32 @@ Exactly one line:
 
 | Line | Exit code | Meaning |
 | --- | --- | --- |
-| `PASS` | 0 | connected, the session is read-write, `SELECT 1` returned 1 |
+| `PASS` | 0 | connected, the session is read-write, `SELECT 1` returned 1, and the read-only transaction rolled back successfully |
 | `FAIL config` | 3 | `secrets/DB_USERNAME`, `secrets/DB_PASSWORD` or `ca/ca.crt` is missing or invalid, or an ambient `PG*` setting is present |
 | `FAIL dns` | 3 | `postgres16-rw.database.svc.cluster.local` did not resolve |
 | `FAIL refused` | 3 | the connection was refused or reset, or the network was unreachable |
 | `FAIL tls` | 3 | the server refused TLS or its certificate failed verification against `ca/ca.crt` |
 | `FAIL auth` | 3 | the TLS handshake succeeded, but the server ended the session before the login completed |
 | `FAIL timeout` | 3 | the connect, query or total deadline expired |
-| `FAIL query` | 3 | logged in, but the session is read-only or `SELECT 1` failed |
+| `FAIL query` | 3 | logged in, but the session is read-only; or `BEGIN`, `SELECT 1` or the rollback failed with a server error or a dropped connection; or `SELECT 1` returned another value |
 | `INTERRUPTED` | 4 | the check was cancelled from outside (SIGTERM, for example a node drain) before it finished |
 
 `INTERRUPTED` is no verified result. It does not claim that no query ran,
-only that the check did not finish; record it as not run. A cancel that
-comes after the verdict is decided, during the rollback or the close, does
-not change a `PASS` or a `FAIL` line. Only an expired
+only that the check did not finish; record it as not run. Only an expired
 deadline is `FAIL timeout`.
+
+**The verdict boundary.**
+- `PASS` requires the read-only transaction to finish with a successful
+  rollback. A caller cancel that ends the rollback, even after a good
+  `SELECT 1`, is `INTERRUPTED`.
+- A `FAIL` decided at `BEGIN` or at `SELECT 1` stays that `FAIL` if the
+  caller cancels during the rollback or the close.
+- A cancel during the close never changes the line.
+- The class is fixed at the moment the ending error is classified. The
+  check reads its context's state then, so in the microsecond window
+  between a non-server error (for example a dropped connection) and its
+  classification, a cancel arriving can turn that `FAIL query` into
+  `INTERRUPTED`. That is fail-safe: no result.
 
 `FAIL auth` does not only mean a bad password. It covers anything that ends
 the session after the TLS handshake and before the login completes:
@@ -41,7 +52,8 @@ the session after the TLS handshake and before the login completes:
 The check prints no SQLSTATE, so tell these apart from the database's logs.
 
 Exit code 2 means a usage error: `db-check` takes no other argument and no
-flag. The output never contains a host, user, password, DSN, certificate
+flag. Exit code 1 with no line means the line itself could not be written
+to stdout; record it as not run. The output never contains a host, user, password, DSN, certificate
 detail or driver error.
 
 **Bounds:** the operation has a 10 s total deadline, covering resolve,
@@ -57,9 +69,9 @@ the line prints. It can no longer reach the network (its cancel dial is
 refused and its writes fail on the closed connection), and it ends with the
 process. A failed connect is closed by the driver at once.
 
-The check opens exactly one connection. If a deadline interrupts the query,
-the driver would dial again to send a cancel request; the check refuses that
-dial, so it never reaches the database.
+The check opens exactly one connection. If a deadline or a caller cancel
+interrupts a statement, the driver would dial again to send a cancel
+request; the check refuses that dial, so it never reaches the database.
 
 ## What it reads
 

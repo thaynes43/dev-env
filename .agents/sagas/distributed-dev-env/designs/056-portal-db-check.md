@@ -68,8 +68,8 @@ is the usage error (exit 2), as for `pages-source-check`.
    Closing the dialed transport makes both fail at once. The check
    therefore returns within 11 s.
 
-   The check opens exactly one connection. When a deadline interrupts a
-   statement, pgx abandons the connection in a background goroutine
+   The check opens exactly one connection. When a deadline or a caller
+   cancel interrupts a statement, pgx abandons the connection in a background goroutine
    (`pgconn.asyncClose`). That goroutine first dials the server again to
    send a cancel request, then sends Terminate, drains and closes. The
    check's dialer refuses every dial after the first successful one, so that
@@ -91,30 +91,45 @@ is the usage error (exit 2), as for `pages-source-check`.
 
 | Output | Exit | Meaning |
 | --- | --- | --- |
-| `PASS` | 0 | connected, the read-write check passed, `SELECT 1` returned 1 |
+| `PASS` | 0 | connected, the read-write check passed, `SELECT 1` returned 1, and the read-only transaction rolled back successfully |
 | `FAIL config` | 3 | a mounted file is missing or invalid, or an ambient `PG*` setting is present |
 | `FAIL dns` | 3 | the fixed host did not resolve |
 | `FAIL refused` | 3 | the TCP connection was refused or reset, or the network was unreachable |
 | `FAIL tls` | 3 | TLS was refused or the server certificate failed verification |
 | `FAIL auth` | 3 | after a good TLS handshake, the server ended the session before the login completed |
 | `FAIL timeout` | 3 | a connect, query or total deadline expired |
-| `FAIL query` | 3 | logged in, but the session is read-only or `SELECT 1` failed |
+| `FAIL query` | 3 | logged in, but the session is read-only; or `BEGIN`, `SELECT 1` or the rollback failed with a server error or a dropped connection; or `SELECT 1` returned another value |
 | `INTERRUPTED` | 4 | the caller cancelled the check (SIGTERM, for example during a node drain) before it finished |
 
 A usage error (an extra argument or flag) prints nothing on stdout,
-`portal usage unavailable` on stderr, and exits 2.
+`portal usage unavailable` on stderr, and exits 2. If the one line cannot be
+written to stdout, the command exits 1 (`cmd/dev-env-portal/main.go`), which
+is no result.
 
 `INTERRUPTED` is no verified database result. It does not claim that no
 query ran, only that the check did not finish.
 
-The class is decided when the operation ends, before the close, and never
-changes afterwards. Only an operation that ended because the caller
-cancelled is `INTERRUPTED`. A failure already decided (for example
-`FAIL query`) or a `PASS` stays as it is when the caller cancels during the
-rollback or the close. A config fault is found
-before any network and stays `FAIL config` even then. The command's context
-is SIGTERM-aware, and a cancelled context is told apart from an expired
-deadline: only a deadline is `FAIL timeout`.
+**The verdict boundary** (coordinator ruling, 2026-11-06). The class is
+decided when the operation ends, before the close.
+
+- `PASS` is decided only when the read-only transaction finishes with a
+  successful rollback. A caller cancel that ends the rollback, even after a
+  good `SELECT 1`, is `INTERRUPTED`.
+- A `FAIL` decided at `BEGIN` or at `SELECT 1` survives a caller cancel
+  during the rollback or the close.
+- A cancel during the close never changes the class.
+- Only an operation that ended because the caller cancelled is
+  `INTERRUPTED`.
+
+The class is fixed when `dbCheckEnd` classifies the ending error. It reads
+the context's state at that moment. So in the microsecond window between a
+non-server error (for example a dropped connection) and its classification,
+a caller cancel can turn that `FAIL query` into `INTERRUPTED`. That is
+fail-safe (no result) and is documented rather than changed.
+
+A config fault is found before any network and stays `FAIL config` even
+then. The command's context is SIGTERM-aware, and a cancelled context is
+told apart from an expired deadline: only a deadline is `FAIL timeout`.
 
 `auth` covers any end of the session after a good TLS handshake and before
 the login completes, not only a bad password:
@@ -222,6 +237,18 @@ interceptor fails any DNS query.
   - dns;
   - query: an error from `SELECT 1`, a read-only session;
   - config: each missing or invalid file, an ambient `PGSSLROOTCERT`.
+- **Caller cancel** (`TestDBCheckCallerCancelIsInterruptedNotTimeout`): a
+  cancel that ends the connect or the query is `INTERRUPTED`.
+- **The verdict boundary** (`TestDBCheckDecidedResultSurvivesACallerCancel`):
+  - a cancel during the close keeps `FAIL query` and `PASS`;
+  - a cancel during the rollback keeps a `FAIL query` decided at
+    `SELECT 1`;
+  - a cancel that ends the rollback after a good `SELECT 1` is
+    `INTERRUPTED`;
+  - a rollback server error after a good `SELECT 1`, and a wrong `SELECT 1`
+    value, are `FAIL query`.
+
+  Each case keeps one wire connection and a finished cleanup.
 - **Bounded close:** a stalled close after a pass, a query deadline and the
   total deadline each return within their bounds with one sanitized line,
   and none dials a second connection.
