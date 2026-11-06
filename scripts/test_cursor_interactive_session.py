@@ -2373,6 +2373,42 @@ class AnswerTests(AnswerFixture):
         self.assertEqual((code, refused["state"]), (2, "feedback-required"), refused)
         self.assertEqual(self.sends(), before)
 
+    def test_feedback_aborted_other_answer_cannot_clear_pending_guard(self):
+        self.prepare_feedback()
+        skip_ref = self.feedback_ref
+        self.env["FAKE_WIDTH"] = "80"
+        self.review_footer_screen()
+        inspected = self.inspect_now()
+        expected = self.command_expect(REVIEW_FOOTER["expectedText"])
+        args = helper.build_parser().parse_args(["answer", "--name", self.name, "--tmux", self.tmux,
+            "--receipt", inspected["receipt"], "--approval-ref", "other-answer-attempt",
+            "--expect-kind", "modal-approval", "--expect-text-file", str(expected), "--choice", "y"])
+        original = helper.read_identity
+        calls = 0
+        def changed_before_key(*a, **kw):
+            nonlocal calls
+            ident = original(*a, **kw)
+            calls += 1
+            if calls == 2:
+                self.screen("\n\n  → " + helper.REASON_PLACEHOLDER + "\n\n\n\n", visible=6)
+            return ident
+        before = list(self.sends())
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(helper, "read_identity", side_effect=changed_before_key):
+            with self.assertRaises(helper.Refusal) as stopped:
+                helper.answer_session(args)
+        self.assertIn(stopped.exception.state, ("prompt-changed", "feedback-pending"))
+        self.assertEqual(self.sends(), before)  # The later answer never sent a key.
+        self.screen("\n\n  → " + helper.REASON_PLACEHOLDER + "\n\n\n\n", visible=6)
+        self.env.update(FAKE_WIDTH="240", FAKE_ECHO_ROW="2")
+        inspected = self.inspect_now()
+        self.text_path.write_text("Read the correction file.")
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                             "--observed-ready", "--submit"])
+        self.assertEqual((code, refused["state"]), (2, "feedback-required"), refused)
+        self.assertEqual(self.sends(), before)
+        self.assertEqual(self.state()["feedback_pending"], skip_ref)
+        self.assertEqual(self.state()["answers"][-1]["approval_ref"], skip_ref)
+
     def feedback(self, receipt, text="Read RELAY-QA-FINDINGS.md; fix per-measure matching and exact decimal equality.", **kwargs):
         self.text_path.write_text(text)
         return self.invoke("feedback", ["--receipt", receipt, "--skip-ref", self.feedback_ref,

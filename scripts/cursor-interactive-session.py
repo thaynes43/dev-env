@@ -1364,6 +1364,8 @@ def answer_locked(args, choice, raw, lines, trust_path):
     if ledger.exists():
         raise Refusal("approval-spent", "This approval reference was already used. One approval answers one prompt once. Nothing was sent.")
     path, state = load_owned(args.name, args.tmux)
+    if state.get("feedback_pending"):
+        raise Refusal("feedback-pending", "A Skip reason is pending. Other answers cannot replace its decision or clear its fence. Nothing was sent.")
     # The approval covers one directory: the worktree this task's start recorded.
     if args.expect_kind == "modal-trust" and trust_path != state["worktree"]:
         raise Refusal("trust-path-mismatch", "--trust-path is not the worktree this task's start recorded. Nothing was sent.")
@@ -1396,7 +1398,6 @@ def answer_locked(args, choice, raw, lines, trust_path):
     state["answers"] = (answers + [record])[-MAX_ANSWERS:]
     # Arm before the key can execute: a lost/failed n response may still have
     # opened the reason field. Generic reply must remain blocked in that case.
-    state.pop("feedback_pending", None)
     if choice == SKIP_CHOICE:
         state["feedback_pending"] = args.approval_ref
     clear_receipt(path, state)

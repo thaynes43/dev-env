@@ -627,6 +627,9 @@ rows, the normal 20-row/4096-byte bounds, and the existing custody, receipt
 and one-shot checks. Queued decisions, Error footers and other prompt kinds
 refuse. This opens the reason field; it neither executes nor yet rejects
 the command. It records the pending reference so generic `reply` refuses.
+Other `answer` attempts also refuse while that reference is pending, before
+they can alter the decision record or fence. Only confirmed guarded feedback
+submission clears it; an aborted or uncertain action leaves it in place.
 
 After a fresh inspect, submit the reason through the specific route:
 
