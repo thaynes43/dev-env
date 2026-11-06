@@ -64,6 +64,47 @@ Expiry stops collection without host/slot IO, including after an operator
 restart. A well-formed expired collector configuration leaves the core API and
 historical GET service able to start; it does not renew the collection window.
 
+## Reading the report: last reported, not current
+
+The cached report has two views of every measure, and they answer different
+questions.
+
+- **Last reported** is `items[].observation.measures[]`: the value the provider's
+  own supported read returned, validated and bound to the expected account, with
+  the window and reset exactly as the provider reported them (an unreported
+  window or reset stays `unknown`) and `capturedAt`, the time this system
+  received it. It is trusted history. The portal shows it as "Last reported, not
+  current".
+- **Current** is `items[].currentMeasures[]`: capacity that may be acted on now.
+  Every collector measure is registered `historicalOnly`, because no supported
+  read exposes a provider measurement clock (`providerObservedAt` stays null). So
+  each current measure is `unknown` with the reason `provider time missing`. That
+  is by design, not a fault of a given capture: the config parser refuses a metric
+  rule that is not historical-only. Two places act on a current label that sits on
+  a historical measure, and they differ. The cached reader resets only that current
+  measure to `unknown`; the observation stays, so the last-reported value is still
+  shown. The publish path refuses the whole report. The guard is not weakened to
+  make a current value appear, and no provider time, period or reset is ever
+  invented.
+
+Collection recency is a third, independent fact: `collectionFreshness` says
+whether the last supported read succeeded (`fresh`, with the reason that the
+provider data time is unknown), whatever the measures' own state.
+
+A row is **usable** when its observation validates and binds to the expected
+account, carries at least one known measure value with its window as reported,
+and its collection freshness shows a local successful read. Unknown measures,
+windows and resets in the same row stay unknown and are shown as such; a known
+last-reported value is not turned into a current one. A row with a fresh
+collection but only unknown current measures is therefore usable as last
+reported, and not usable as current capacity. A refused or empty read is neither
+(the previous last-good capture, with its original time, stays visible and stale).
+
+Example shape (no identifiers): a Codex read reports its primary measure as used,
+as a percent, over a window of 10080 minutes with an instant reset time; no
+secondary window exists, so the secondary measure is `unknown`. Both current
+measures read `unknown` / `provider time missing`.
+
 ## Readers and process ownership
 
 The operator image carries its source-matched `agent-run` helper. Fixed Python
