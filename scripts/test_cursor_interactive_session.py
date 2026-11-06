@@ -3750,6 +3750,8 @@ class UsageKeyTests(AnswerFixture):
             # Each of the next two ends on a blank last pane row, so only its own check can refuse it.
             "four blank rows between, blank last row": head[2:] + [v[17], "", "", "", "", selected, context, subagent, ""],
             "output below the menu after a blank row, blank last row": head[1:] + [v[17], "", "", selected, context, "", "  stray output", ""],
+            # The selected row copied above the draft, and a block of only unmarked rows: the row is not IN the menu.
+            "selected row only as a copy above the draft": v[:16] + [selected] + [v[17], "", "", unmarked_usage, "     /context                  Show context usage breakdown", subagent, ""],
             "two marked rows": head + [v[17], "", "", selected, "   \u2192 /context                  Show context usage breakdown", subagent, ""],
             "selected row twice": head + [v[17], "", "", selected, selected, subagent, ""],
             "draft twice": head[:16] + ["  \u2192 /usage"] + [v[17], "", "", selected, context, ""] + [""],

@@ -1511,8 +1511,8 @@ def inline_menu_shown(text, truncated, rows_total, ident, lines):
 
     lines[0] is the typed draft, lines[1] the selected menu row. Each appears exactly once on the visible screen
     (history above it is never searched). Below the draft come one to MENU_GAP_ROWS blank rows and then the menu: a
-    block of at most MENU_BLOCK_MAX consecutive nonblank rows that holds the selected row and no other arrow-marked
-    row; every other row is an unmarked menu item ('/command ...') or the scroll row 'more above' first or 'more below' last. Below the block there is nothing, down to a blank last pane row (no status footer, no model row, no output). A copy of these rows in the transcript, a menu of another command, an
+    block of at most MENU_BLOCK_MAX consecutive nonblank rows that holds the selected row exactly once and no other
+    arrow-marked row; every other row is an unmarked menu item ('/command ...') or the scroll row 'more above' first or 'more below' last. Below the block there is nothing, down to a blank last pane row (no status footer, no model row, no output). A copy of these rows in the transcript, a menu of another command, an
     argument draft, free text in the composer, a draft with no menu (nothing would be selected) or a menu above the
     draft does not match."""
     shown = [prompt_text(row) for row in visible_screen(text, truncated, rows_total, ident)]
@@ -1531,7 +1531,10 @@ def inline_menu_shown(text, truncated, rows_total, ident, lines):
         block.append(row)
     if not block or len(block) > MENU_BLOCK_MAX or any(below[gap + len(block):]) or shown[-1]:
         return False
-    # Every other row is a menu item (an unmarked row starting with the slash command) or a scroll row at its end.
+    # The selected row is IN the menu block (a copy of it elsewhere on the screen does not count); every other row is a
+    # menu item (an unmarked row starting with '/') or a scroll row at its end.
+    if block.count(lines[1]) != 1:
+        return False
     for index, row in enumerate(block):
         if row == lines[1] or (row.startswith("/") and not MENU_MARKER.match(row)):
             continue
