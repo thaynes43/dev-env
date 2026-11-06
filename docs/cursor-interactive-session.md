@@ -265,15 +265,22 @@ once per approval, with the same receipt, ledger, modal and last-look rules as a
    below, nothing in history counts). If the inline menu is not shown, no `Enter` is sent: an unregistered command
    would otherwise go to the model as a chat message.
 3. `inspect`: the screen must now show the usage view. Read the figures there.
-4. `menu-key --expect-kind usage-view` on that fresh receipt: one `Escape`. The expected text is 2 to 8 distinct lines
-   in order, the first a `Usage` title row and the last exactly `Esc to close`, with no composer arrow row and no
-   loading or error line. On screen, each expected line appears exactly once, the footer is the last nonblank row, no
-   row of the visible screen is a composer arrow row, and none of `Loading usage data`, `Failed to load usage data`,
-   `Not logged in` or an unavailable-plan line is shown. A view that is not (yet) fully shown gets no `Escape`.
-5. After the `Escape` the helper looks at the pane again (up to five looks, 0.3 s apart): the footer is gone, the last
-   arrow row is an empty composer (`→ Plan, search, build anything` or `→ Add a follow-up`) and no prompt shows. It
-   reports `postcheck: composer-restored`. Otherwise it exits 3 with `post-check-unconfirmed`; the approval stays spent
-   and nothing more is sent. Inspect the pane.
+4. `menu-key --expect-kind usage-view` on that fresh receipt: one `Escape`. The expected text is 3 to 8 distinct lines
+   in order: a `Usage` title row first, then the view rows, the usage view's own `View in dashboard:` row, and exactly
+   `Esc to close` last. No composer arrow row and no loading or error line. `Esc to close` is shared by every Cursor
+   view, so the dashboard row directly above it is what marks this one. On screen, the expected lines are one
+   contiguous block at the bottom of the visible screen, ending in the footer (blank rows between them do not count;
+   conversation text above the block is ignored), each line appears exactly once, no row of the visible screen is a
+   composer arrow row, and none of `Loading usage data`, `Failed to load usage data`, `Not logged in` or an
+   unavailable-plan line is shown. Another view that shares the footer, or a view that is not (yet) fully shown, gets no
+   `Escape`.
+5. After the `Escape` the helper only reads the pane, up to five looks 0.3 s apart. It succeeds when the footer is gone
+   and the last arrow row is an empty composer: `→ Plan, search, build anything`, `→ Add a follow-up` or
+   `→ Add a follow-up — /plan to review and build`, each optionally followed by `ctrl+c to stop`. A change of pane, pid
+   or owner, or a lost pane, ends the check at once. A capture or locate failure, or a redraw in progress, only costs
+   that look. A real prompt ends the check at once. It reports `postcheck: composer-restored`; otherwise it exits 3 with
+   `post-check-unconfirmed`. The approval stays spent, and no second key and no input is ever sent from the check.
+   Inspect the pane.
 
 The helper sends no key but `Enter` (menu rows) and `Escape` (the checked view). It reads figures from nothing and
 claims no provider measurement time: the figures are whatever the visible view shows at that moment.

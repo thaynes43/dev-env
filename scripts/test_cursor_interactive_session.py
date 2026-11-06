@@ -3466,9 +3466,10 @@ USAGE_ROWS = [
     "  ~/work/example-task",
 ]
 USAGE_EXPECT = "\u2192 /usage    Show plan and on-demand usage\n\u2192 /usage\n"
-USAGE_VIEW_ROWS = ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "  Included  42% used", "", "Esc to close"]
-USAGE_VIEW_EXPECT = "Usage\nEsc to close\n"
-COMPOSER_BACK_ROWS = ["Cursor Agent v2026.10.14-0f9edde", "", "", "\u2192 Add a follow-up", "  ~/work/example-task", ""]
+USAGE_VIEW_ROWS = ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "  Included  42% used", "", "View in dashboard: example.test/usage",
+                   "Esc to close"]
+USAGE_VIEW_EXPECT = "Usage\n  Included  42% used\nView in dashboard: example.test/usage\nEsc to close\n"
+COMPOSER_BACK_ROWS = ["Cursor Agent v2026.10.14-0f9edde", "", "", "", "\u2192 Add a follow-up", "  ~/work/example-task", ""]
 
 
 class UsageKeyTests(AnswerFixture):
@@ -3602,6 +3603,89 @@ class UsageKeyTests(AnswerFixture):
         self.assertEqual((code, again["state"]), (2, "approval-spent"))
         self.assertEqual(len(self.sends()), 1)
 
+    def test_other_empty_composer_forms_are_a_good_escape_and_free_text_is_not(self):
+        forms = {
+            "plan placeholder": ("\u2192 Add a follow-up \u2014 /plan to review and build", "composer-restored"),
+            "first prompt": ("\u2192 Plan, search, build anything", "composer-restored"),
+            "busy hint": ("\u2192 Add a follow-up  ctrl+c to stop", "composer-restored"),
+            "busy hint on the first prompt": ("\u2192 Plan, search, build anything  ctrl+c to stop", "composer-restored"),
+            "typed text": ("\u2192 Add a follow-up now", None),
+            "other text with the hint": ("\u2192 do something  ctrl+c to stop", None),
+            "wrong dash text": ("\u2192 Add a follow-up \u2014 /plan to delete everything", None),
+        }
+        for label, (row, expected) in forms.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                for path in (self.root / "state" / "cursor-interactive-session" / "approvals").glob("*"):
+                    path.unlink()
+                self.view()
+                back = COMPOSER_BACK_ROWS[:4] + [row] + COMPOSER_BACK_ROWS[5:]
+                self.back.write_text("\n".join(back) + "\n\n")
+                inspected = self.start_and_inspect()
+                code, out = self.invoke("menu-key", self.args(inspected["receipt"], kind="usage-view"))
+                if expected:
+                    self.assertEqual((code, out["postcheck"]), (0, expected))
+                else:
+                    self.assertEqual((code, out["state"]), (3, "post-check-unconfirmed"))
+                self.assertEqual(len(self.sends()), 1)
+
+    def post_escape_run(self, fault):
+        """Run the Escape in process; `fault(kind, calls_since_send)` may raise inside the helper's reads."""
+        self.view()
+        inspected = self.start_and_inspect()
+        args = argparse.Namespace(name=self.name, tmux=self.tmux, receipt=inspected["receipt"],
+                                  approval_ref=MENU_APPROVAL, expect_kind="usage-view", expect_text_file=str(self.view_expect))
+        reads = {"identity": 0, "capture": 0}
+        real_identity, real_capture = helper.read_identity, helper.read_capture_rows
+
+        def identity(*a, **k):
+            if self.sends():
+                reads["identity"] += 1
+                fault("identity", reads)
+            return real_identity(*a, **k)
+
+        def capture(*a, **k):
+            if self.sends():
+                reads["capture"] += 1
+                fault("capture", reads)
+            return real_capture(*a, **k)
+
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(helper, "read_identity", identity), \
+                mock.patch.object(helper, "read_capture_rows", capture):
+            try:
+                return helper.menu_key_session(args), reads
+            except helper.Refusal as refusal:
+                return refusal, reads
+
+    def test_a_transient_unclear_look_after_the_escape_is_looked_at_again(self):
+        def fault(kind, reads):
+            if kind == "capture" and reads["capture"] <= 2:
+                raise helper.Refusal("prompt-unclear", "redraw")
+        result, reads = self.post_escape_run(fault)
+        self.assertEqual(result["postcheck"], "composer-restored")
+        self.assertEqual((reads["capture"], len(self.sends())), (3, 1))
+
+    def test_an_identity_failure_after_the_escape_stops_at_once(self):
+        def fault(kind, reads):
+            if kind == "identity":
+                raise helper.Refusal("pane-changed", "pid changed")
+        result, reads = self.post_escape_run(fault)
+        self.assertEqual((result.state, result.code), ("post-check-unconfirmed", 3))
+        self.assertEqual((reads["identity"], reads["capture"], len(self.sends())), (1, 0, 1))
+
+    def test_unlocatable_looks_stop_after_the_five_looks_and_a_prompt_stops_at_once(self):
+        def always(kind, reads):
+            if kind == "capture":
+                raise helper.Refusal("prompt-unclear", "redraw")
+        result, reads = self.post_escape_run(always)
+        self.assertEqual((result.state, reads["capture"], len(self.sends())), ("post-check-unconfirmed", 5, 1))
+        self.restart_case()
+        for path in (self.root / "state" / "cursor-interactive-session" / "approvals").glob("*"):
+            path.unlink()
+        self.back.write_text("\n".join(USAGE_VIEW_ROWS[:-3] + ["  Allow this command: git push", "  (y) Run once"] + [""]) + "\n\n")
+        result, reads = self.post_escape_run(lambda kind, reads: None)
+        self.assertEqual((result.state, reads["capture"], len(self.sends())), ("post-check-unconfirmed", 1, 1))
+
     def test_escape_that_leaves_the_footer_beside_a_composer_is_unconfirmed(self):
         self.view()
         self.back.write_text("\n".join(USAGE_VIEW_ROWS[:-2] + ["\u2192 Add a follow-up", "Esc to close"]) + "\n\n")
@@ -3611,13 +3695,17 @@ class UsageKeyTests(AnswerFixture):
 
     def test_a_view_that_is_not_shown_gets_no_escape(self):
         cases = {
-            "loading": ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "Loading usage data...", "", "Esc to close"],
-            "error": ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "Failed to load usage data", "", "Esc to close"],
-            "no footer": ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "  Included  42% used", ""],
-            "composer under the view": USAGE_VIEW_ROWS[:-1] + ["\u2192 Add a follow-up", "Esc to close"],
+            "loading": ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "Loading usage data...", "", "", "Esc to close"],
+            "error": ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "Failed to load usage data", "", "", "Esc to close"],
+            "no footer": USAGE_VIEW_ROWS[:-1] + [""],
+            "composer under the view": USAGE_VIEW_ROWS[:-2] + ["\u2192 Add a follow-up", "Esc to close"],
             "plain composer": COMPOSER_BACK_ROWS,
             "the slash menu": USAGE_ROWS,
             "duplicate title": USAGE_VIEW_ROWS[:3] + ["Usage"] + USAGE_VIEW_ROWS[3:],
+            "another view with copied usage rows above": USAGE_VIEW_ROWS[:2] + [
+                "Usage", "  Included  42% used", "View in dashboard: example.test/usage", "", "Other view", "Esc to close"],
+            "a stale draft row above the view": ["\u2192 old draft"] + USAGE_VIEW_ROWS[1:],
+            "a loading row above the view": ["Loading usage data..."] + USAGE_VIEW_ROWS[1:],
             "footer not last": USAGE_VIEW_ROWS + ["  Stray row"],
             "view only in history": None,
         }
@@ -3647,7 +3735,7 @@ class UsageKeyTests(AnswerFixture):
     def test_a_view_that_changes_after_the_approval_is_spent_gets_no_escape(self):
         self.view()
         inspected = self.start_and_inspect()
-        loading = ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "Loading usage data...", "", "Esc to close"]
+        loading = ["Cursor Agent v2026.10.14-0f9edde", "", "Usage", "Loading usage data...", "", "", "Esc to close"]
         self.spend_then(inspected["receipt"], "usage-view", self.view_expect, "\n".join(loading) + "\n\n")
 
     def test_the_expected_text_is_checked_before_any_tmux_call(self):
@@ -3666,13 +3754,14 @@ class UsageKeyTests(AnswerFixture):
         code, refused = self.invoke("menu-key", self.args("x", expect=path))
         self.assertEqual((code, refused["state"]), (2, "invalid-input"))
         views = {
-            "no title": "Included\nEsc to close\n",
-            "no footer": "Usage\nIncluded\n",
-            "arrow row": "Usage\n\u2192 Add a follow-up\nEsc to close\n",
-            "loading": "Usage\nLoading usage data...\nEsc to close\n",
-            "duplicate": "Usage\nUsage\nEsc to close\n",
+            "no title": "Included\nView in dashboard: x\nEsc to close\n",
+            "no dashboard row": "Usage\nIncluded\nEsc to close\n",
+            "no footer": "Usage\nIncluded\nView in dashboard: x\n",
+            "arrow row": "Usage\n\u2192 Add a follow-up\nView in dashboard: x\nEsc to close\n",
+            "loading": "Usage\nLoading usage data...\nView in dashboard: x\nEsc to close\n",
+            "duplicate": "Usage\nUsage\nView in dashboard: x\nEsc to close\n",
             "footer only": "Esc to close\n",
-            "wrong footer": "Usage\nEsc\n",
+            "wrong footer": "Usage\nView in dashboard: x\nEsc\n",
         }
         for label, text in views.items():
             with self.subTest(label=label):

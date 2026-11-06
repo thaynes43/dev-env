@@ -1405,16 +1405,20 @@ MENU_ROWS = {
     "usage-menu": ("/usage", re.compile(
         r"^[\u2192\u25b6\u276f\u203a>]\s*/usage\s+Show plan and on-demand usage$")),
 }
-# The usage view (opened by the usage-menu Enter) closes on one Escape. Its checked shape: a Usage title
-# row, the footer, in order, and no composer arrow row anywhere on the visible screen.
+# The usage view (opened by the usage-menu Enter) closes on one Escape. Its checked shape: a Usage title row,
+# the view rows, its own dashboard row and the footer, as one block at the bottom of the visible screen, and no
+# composer arrow row anywhere on it.
 USAGE_TITLE = re.compile(r"^Usage(\s|$)")
 USAGE_FOOTER = "Esc to close"
 USAGE_VIEW_MAX_LINES = 8
 # Rows that mean the view is not (yet) shown: loading, an error line, or an unavailable plan.
 USAGE_NOT_READY = ("Loading usage data", "Failed to load usage data", "Not logged in",
                    "Usage details are not available", "Enterprise spend details are not available")
-# What an empty composer shows (the first prompt, and after a turn).
-EMPTY_COMPOSERS = ("Plan, search, build anything", "Add a follow-up")
+USAGE_DASHBOARD = "View in dashboard:"  # the usage view's own row, directly above the footer (other views lack it)
+# What an empty composer shows (the first prompt, after a turn, in plan mode), with the busy hint when a turn runs.
+EMPTY_COMPOSER = re.compile(
+    r"^" + CURSOR_COMPOSER_ARROW + r" (?:Plan, search, build anything|Add a follow-up(?: \u2014 /plan to review and build)?)"
+    r"(?:\s+ctrl\+c to stop)?$")
 POSTCHECK_SETTLE_SECONDS = 0.3
 POSTCHECK_CHECKS = 5
 
@@ -1429,12 +1433,14 @@ def validate_menu_key(args):
     if modal_kind(lines):
         raise Refusal("invalid-input", "The expected text contains a prompt phrase. This command never answers a prompt. Nothing was sent.")
     if args.expect_kind == "usage-view":
-        # The checked view: a Usage title row first, the footer last, 2..8 distinct lines, no composer arrow row.
-        if (not 2 <= len(lines) <= USAGE_VIEW_MAX_LINES or not USAGE_TITLE.match(lines[0]) or lines[-1] != USAGE_FOOTER
+        # The checked view: a Usage title row first, the dashboard row and the footer last, 3..8 distinct lines, no arrow row.
+        if (not 3 <= len(lines) <= USAGE_VIEW_MAX_LINES or not lines[-2].startswith(USAGE_DASHBOARD)
+                or not USAGE_TITLE.match(lines[0]) or lines[-1] != USAGE_FOOTER
                 or len(set(lines)) != len(lines) or any(MENU_MARKER.match(line) for line in lines)
                 or any(line.startswith(USAGE_NOT_READY) for line in lines)):
-            raise Refusal("invalid-input", "For usage-view the expected text must be 2..8 distinct lines in order: a 'Usage' "
-                                           "title row first, then the view rows, and '" + USAGE_FOOTER + "' last, with no "
+            raise Refusal("invalid-input", "For usage-view the expected text must be 3..8 distinct lines in order: a 'Usage' "
+                                           "title row first, then the view rows, a '" + USAGE_DASHBOARD + "' row and '" + USAGE_FOOTER
+                                           + "' last, with no "
                                            "composer arrow row and no loading or error line. Nothing was sent.")
         return raw, lines
     # Exactly two lines, in order: the allowlisted selected row, then the bare draft (no argument).
@@ -1476,21 +1482,15 @@ def menu_rows_shown(text, truncated, rows_total, ident, lines):
 def usage_view_shown(text, truncated, rows_total, ident, lines):
     """True when the expected rows are the CHECKED usage view on the visible screen.
 
-    Each expected line appears exactly once, in order; the footer is the last nonblank row; no row of the visible
+    Each expected line appears exactly once, as one block that ends in the footer; no row of the visible
     screen is a composer arrow row (the view replaces the composer); no loading, error or unavailable line is shown."""
     shown = [prompt_text(row) for row in visible_screen(text, truncated, rows_total, ident)]
     if any(MENU_MARKER.match(row) or row.startswith(USAGE_NOT_READY) for row in shown):
         return False
-    position = 0
-    for line in lines:
-        if shown.count(line) != 1:
-            return False
-        index = shown.index(line)
-        if index < position:
-            return False
-        position = index
+    # The block is contiguous among the nonblank rows and ends at the bottom with the footer: another view that
+    # shares the footer, with copied usage rows above it, does not match. Text above the block is ignored.
     filled = [row for row in shown if row]
-    return bool(filled) and filled[-1] == USAGE_FOOTER
+    return filled[-len(lines):] == lines and all(shown.count(line) == 1 for line in lines)
 
 
 def rows_shown(kind, text, truncated, rows_total, ident, lines):
@@ -1499,30 +1499,38 @@ def rows_shown(kind, text, truncated, rows_total, ident, lines):
     return menu_rows_shown(text, truncated, rows_total, ident, lines)
 
 
-def composer_restored(text, truncated, rows_total, ident):
-    """True when the usage view is gone and an empty composer is back: no footer row, the last arrow row is Cursor's
-    empty composer, and no prompt is showing."""
-    if classify(text, truncated, rows_total, ident, None)[0].startswith("modal-"):
-        return False
+def post_escape_state(text, truncated, rows_total, ident):
+    """What one look at the pane after the Escape shows: 'restored' (the view is gone and an empty composer is
+    back), 'prompt' (a real prompt is showing) or 'waiting'. An unlocatable screen raises Refusal."""
     shown = [prompt_text(row) for row in visible_screen(text, truncated, rows_total, ident)]
+    if classify(text, truncated, rows_total, ident, None)[0].startswith("modal-"):
+        return "prompt"
     arrows = [row for row in shown if MENU_MARKER.match(row)]
     if USAGE_FOOTER in shown or not arrows:
-        return False
-    return arrows[-1] in [CURSOR_COMPOSER_ARROW + " " + placeholder for placeholder in EMPTY_COMPOSERS]
+        return "waiting"
+    return "restored" if EMPTY_COMPOSER.match(arrows[-1]) else "waiting"
 
 
 def postcheck_composer(state):
-    """Look at the pane after the Escape. True when the empty composer is back."""
+    """Look at the pane after the Escape, read only: True when the empty composer is back.
+
+    Up to POSTCHECK_CHECKS looks. A pane that is not the owned one (identity, pid, owner, a lost pane) stops at
+    once. A capture or locate failure or a redraw in progress is only a look that shows nothing: look again. A
+    real prompt stops the check. No key is ever sent from here."""
     for _ in range(POSTCHECK_CHECKS):
         time.sleep(POSTCHECK_SETTLE_SECONDS)
         try:
             ident = read_identity(state["tmux"], state["pane_id"], "inspect-unconfirmed", 3)
             require_same_pane(state, ident)
-            text, truncated, rows_total = read_capture_rows(state["tmux"], state["pane_id"])
-            if composer_restored(text, truncated, rows_total, ident):
-                return True
         except (Refusal, subprocess.TimeoutExpired, OSError, UnicodeError, ValueError):
             return False
+        try:
+            text, truncated, rows_total = read_capture_rows(state["tmux"], state["pane_id"])
+            seen = post_escape_state(text, truncated, rows_total, ident)
+        except (Refusal, subprocess.TimeoutExpired, OSError, UnicodeError, ValueError):
+            continue
+        if seen != "waiting":
+            return seen == "restored"
     return False
 
 
@@ -1651,7 +1659,7 @@ def build_parser():
                         "command prompt, y (Run once) or ctrl-c (reject the shown command)")
     answer.add_argument("--trust-path", help="for modal-trust: the one directory the approval covers; must be the recorded worktree")
     menu = sub.add_parser(
-        "menu-key", help="send exactly one Enter to an allowlisted slash-menu row (/run-everything, only while it reads currently disabled)",
+        "menu-key", help="send exactly one allowlisted key: Enter to the /run-everything (while currently disabled) or /usage menu row, or Escape to the checked usage view",
         description=(
             "Send one Enter, once per approval, to the live slash menu of the inspected pane. run-everything-menu sends only Enter "
             "and needs the selected row '<marker> /run-everything  Toggle Run Everything (currently disabled)' directly above "
