@@ -2746,6 +2746,11 @@ class AnswerTests(AnswerFixture):
         self.assertIn("Enter was NOT sent", refused["detail"])
         self.assertNotIn(["send-keys", "-t", "%7", "Enter"], self.sends())
 
+    def test_submit_sends_an_instruction_that_contains_a_prompt_phrase(self):
+        # The composer shows the typed instruction; its own words are not a new prompt.
+        code, sent = self.submit("answer yes/no: are you sure the tests pass (y/n)")
+        self.assertEqual((code, sent["state"], sent["submitted"]), (0, "sent", True))
+
     def test_submit_refuses_a_text_cursor_would_paste_as_a_placeholder(self):
         code, refused = self.submit("x" * 801)
         self.assertEqual((code, refused["state"]), (2, "invalid-input"))

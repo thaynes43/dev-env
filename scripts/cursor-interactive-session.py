@@ -671,8 +671,11 @@ def tail_count(visible, text):
     return composer_text(visible).count("".join(text.split())[-SUBMIT_TAIL:])
 
 
-def phrase_rows(rows):
-    """The rows that hold a known prompt phrase."""
+def phrase_rows(visible):
+    """The rows above the composer that hold a known prompt phrase. The composer rows hold
+    the typed instruction, so a phrase in its own text is never taken for a prompt."""
+    starts = [index for index, row in enumerate(visible) if COMPOSER_ROW.match(row)]
+    rows = visible[:starts[-1]] if starts else visible
     return {row.strip() for row in rows if modal_kinds([row])}
 
 

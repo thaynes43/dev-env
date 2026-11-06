@@ -122,27 +122,32 @@ newlines, tabs, carriage returns, Escape, Ctrl-C, and Backspace. Neither flag
 is passed to Cursor.
 
 **Submit fence.** Cursor 2026.10.14 holds fast literal input in a 75 ms paste
-buffer. An Enter that arrives inside that window still submits the whole text,
-but the text box keeps its own copy: the text stays in the composer as a stale
-draft. That happened on the G1 pane on 2026-11-05 at 23:43Z. The transcript
-held the full 565-byte prompt and the turn succeeded, while the composer still
-showed its last wrapped lines. The mechanism was read from Cursor's UI code
-(a 6-line viewport, the paste buffer, and a text box that resyncs only when its
-value prop changes), not observed by pressing keys. So, with `--submit`, the
-helper waits 0.3 s after the text and reads the pane, up to five times. Before
-each read it checks the same pane, process and owner. It sends Enter only once
-the composer shows the instruction's last 24 non-space characters more often
-than before the text was typed. The composer is the visible screen from its
-last `→`, `>`, `›` or `❯` row down; wrapping whitespace is ignored. The same
-text in the transcript or history above it does not count. If a prompt row
-appears during the wait that the verified screen did not have (for example
-Cursor's command prompt), Enter is not sent and the reply ends with that
-prompt's kind. If the text never shows, Enter is not sent and the reply ends
-`send-unconfirmed`. In both cases the text may be in the composer: do not
-resend it or send Enter; inspect again. An instruction over 800 characters is
-refused with `--submit`, because Cursor shows a longer paste as `[Pasted text
-#N +M lines]` and its end would never show. The fence narrows the
-race; it does not prove Cursor cleared the box, so inspect after every reply.
+buffer. An Enter inside that window still submits the whole text, but the text
+box keeps a copy as a stale draft. This happened on the G1 pane on 2026-11-05 at
+23:43Z: the turn succeeded with the full 565-byte prompt, and the composer still
+held it. The mechanism was read from Cursor's UI code, not observed by pressing
+keys.
+
+So with `--submit`, the helper waits 0.3 s after the text, then reads the pane up
+to five times. On each read it checks the same pane, process and owner, and looks
+only at the composer: the visible screen from its last `→`, `>`, `›` or `❯` row
+down, ignoring wrapping whitespace. The same text in the transcript or history
+does not count. Outcomes:
+
+- The composer shows the instruction's last 24 non-space characters more often
+  than before typing: Enter is sent.
+- A prompt row appears above the composer that the verified screen did not have,
+  such as Cursor's command prompt: Enter is not sent, and the reply ends with that
+  prompt's kind. Words in the instruction itself are never taken for a prompt.
+- The text never shows, or the screen cannot be read: Enter is not sent, and the
+  reply ends `send-unconfirmed`.
+- The instruction is over 800 characters: refused before anything is typed
+  (`invalid-input`), because Cursor shows a longer paste as `[Pasted text #N +M
+  lines]` and its end would never show.
+
+When Enter is not sent, the text may be in the composer: do not resend it or send
+Enter; inspect again. The fence narrows the race; it does not prove Cursor
+cleared the box, so inspect after every reply.
 
 Fail closed, with no keys and no Enter:
 
