@@ -151,9 +151,10 @@ does not count. Outcomes:
   command?`): refused before anything is typed (`invalid-input`), because its
   echo could not be told apart from a real prompt with the same words. This is a
   limitation: such an instruction cannot be submitted with `--submit` at all.
-- The text never shows: Enter is not sent, and the reply ends
-  `send-unconfirmed`. (A screen that cannot be read during the wait ends with its
-  own state, such as `prompt-unclear`, as in the next item.)
+- The text never shows, or tmux cannot report the pane's identity during the
+  wait: Enter is not sent, and the reply ends `send-unconfirmed`. (A screen that
+  cannot be read during the wait ends with its own state, such as
+  `prompt-unclear`, as in the previous item.)
 - The instruction is over 800 characters: refused before anything is typed
   (`invalid-input`), because Cursor shows a longer paste as `[Pasted text #N +M
   lines]` and its end would never show.

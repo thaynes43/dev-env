@@ -2702,6 +2702,16 @@ class AnswerTests(AnswerFixture):
         self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
         self.assertEqual(self.sends(), [])
 
+    def wait_for_literal_send(self, timeout=20):
+        """Block until the helper has typed the literal text (a send-keys -l in the fake log),
+        so a test changes the pane only after the pre-send checks, never during them."""
+        deadline = __import__("time").monotonic() + timeout
+        while __import__("time").monotonic() < deadline:
+            if any(args[0] == "send-keys" and "-l" in args for args in self.commands("tmux")):
+                return
+            __import__("time").sleep(0.01)
+        raise AssertionError("the helper never typed the literal text")
+
     def submit(self, text, *flags, screen="  Cursor Agent\n\n> \n"):
         if screen is not None:
             self.screen(screen)
@@ -2737,7 +2747,7 @@ class AnswerTests(AnswerFixture):
         original = self.capture.read_text()
 
         def swap():
-            __import__("time").sleep(0.1)
+            self.wait_for_literal_send()
             # Same row count, so the visible screen is still located.
             self.capture.write_text(original.replace("  Cursor Agent", "  Run this command?", 1))
         thread = threading.Thread(target=swap)
@@ -2769,7 +2779,7 @@ class AnswerTests(AnswerFixture):
         original = self.capture.read_text()
 
         def swap():
-            __import__("time").sleep(0.1)
+            self.wait_for_literal_send()
             self.capture.write_text(original.replace("  Cursor Agent", "  Run this command?", 1))
         thread = threading.Thread(target=swap)
         thread.start()
@@ -2802,7 +2812,7 @@ class AnswerTests(AnswerFixture):
         self.env["FAKE_ECHO_DELAY"] = "60"
 
         def swap():
-            __import__("time").sleep(0.1)
+            self.wait_for_literal_send()
             pid_file.write_text("999")
         thread = threading.Thread(target=swap)
         thread.start()
