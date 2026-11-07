@@ -992,12 +992,18 @@ def check_write_prompt(visible, ident, rows):
     """Require the complete exact Write block once on the current screen."""
     if int(ident["width"]) != 80 or modal_kinds(visible) != {"modal-file-write"}:
         raise Refusal("prompt-unclear", "Only the captured native Write layout may be answered. Nothing was sent.")
+    # The Write-specific path must retain the ordinary current_prompt border
+    # check. An unknown modal can have no recognized phrase and an unmatched
+    # border while the entire expected Write block remains unchanged.
+    if visible_boxes(visible, [prompt_text(row) for row in visible]) is None:
+        raise Refusal("prompt-unclear", "The box borders on the visible screen do not pair up. Nothing was sent.")
     starts = [i for i in range(len(visible) - len(rows) + 1) if visible[i:i + len(rows)] == rows]
     if len(starts) != 1:
         raise Refusal("prompt-unclear", "The complete Write preview is not shown exactly once on the current screen. Nothing was sent.")
     first = starts[0]
     above, below = visible[:first], visible[first + len(rows):]
     if (any(row.strip(" ") for row in below)
+            or any(character in row for row in above + below for character in CORNERS + SIDE_BARS)
             or any(phrases(row) or QUEUE_HEADER.fullmatch(row.strip(" "))
                    or row.lstrip(" ").startswith(("→", ">", "›", "❯", "Error:")) for row in above)
             or sum(row.strip(" ") == "Write to this file?" for row in visible) != 1

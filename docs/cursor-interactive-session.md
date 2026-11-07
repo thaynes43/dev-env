@@ -324,7 +324,8 @@ normalized absolute path and match the complete destination rows and title suffi
 
 The full exact block must appear once on the current locatable screen. A cropped
 preview, history-only copy, truncation indicator, changed content/path/queue,
-another prompt, error or unbound trailing row refuses. Other layouts, widths and
+another prompt, unmatched box borders, boxed chrome outside the bound preview,
+error or unbound trailing row refuses. Other layouts, widths and
 choices refuse. This binds the displayed preview, not hidden original file bytes.
 As with Shell decisions, the caller verifies authorization for the exact action;
 the receipt, same-pane/process/owner, spent ledger and last-capture checks remain

@@ -827,6 +827,25 @@ class AnswerTests(AnswerFixture):
         self.assertEqual((code, again["state"]), (2, "approval-spent"))
         self.assertEqual(len(self.sends()), 1)
 
+    def test_native_write_refuses_unmatched_competing_box(self):
+        cases = {
+            "unmatched": ["╭─ Confirm action ─╮", "│ ▶ [y] Yes         │"],
+            "complete": ["╭─ Confirm action ─╮", "│ ▶ [y] Yes         │", "╰──────────────────╯"],
+            "cropped sides": ["│ ▶ [y] Yes         │"],
+        }
+        for label, chrome in cases.items():
+            with self.subTest(chrome=label):
+                self.restart_case()
+                fixture = self.native_write_fixture()
+                rows = fixture["capture"].splitlines()
+                rows[:len(chrome)] = chrome
+                self.screen("\n".join(rows) + "\n", visible=48, cursor=47, history=fixture["history"])
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("answer", self.native_write_args(inspected["receipt"], fixture))
+                self.assertEqual((code, refused["state"]), (2, "prompt-unclear"), refused)
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.ledger().exists())
+
     def test_native_write_refuses_incomplete_changed_and_interfering_frames(self):
         for change in ("cropped", "history", "truncated", "duplicate", "path", "content", "queue", "error"):
             with self.subTest(change=change):
