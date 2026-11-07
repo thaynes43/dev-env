@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.91.1](https://github.com/thaynes43/dev-env/compare/v2.91.0...v2.91.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **openproject:** sync missing and permission-denied helper launch handling ([#978](https://github.com/thaynes43/dev-env/issues/978)) ([072807b](https://github.com/thaynes43/dev-env/commit/072807b0d346d10fd49470b53b73ad8d5d06d4d5))
+
 ## [2.91.0](https://github.com/thaynes43/dev-env/compare/v2.90.0...v2.91.0) (2026-11-07)
 
 
