@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.91.2](https://github.com/thaynes43/dev-env/compare/v2.91.1...v2.91.2) (2026-11-07)
+
+
+### Bug Fixes
+
+* **openproject:** sync truthful flush exit handling ([#980](https://github.com/thaynes43/dev-env/issues/980)) ([f93413b](https://github.com/thaynes43/dev-env/commit/f93413b079ef25d5fcc6f561ea82608b1f0c03a0))
+
 ## [2.91.1](https://github.com/thaynes43/dev-env/compare/v2.91.0...v2.91.1) (2026-11-07)
 
 
