@@ -130,7 +130,7 @@ the existing Remote Control launch's keeper-owned login path.
 
 Codex 0.160.1 returns one top-level nullable `ordinaryUsageAllowed` boolean in
 `GetAccountRateLimitsResponse`; see the pinned official
-[account processor](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/app-server/src/account_processor.rs)
+[account processor](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/app-server/src/request_processors/account_processor.rs)
 and [response contract](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/app-server-protocol/src/protocol/v2/account.rs)
 for `rust-v0.160.1`. Explicit `false` is preserved; missing or null remains
 unknown. Valid percentages alongside null are legitimate: the app server only
