@@ -23,6 +23,49 @@ echoing its contents. The API must be enabled and the Session namespace must be
 | `maxAgeSeconds` | A positive bound of at most 1800 seconds; it does not enable the route |
 | `contexts`, `registry` | Caller-owned provider/source/account binding and normalization rules, parsed by `ParseAggregateTrust` |
 
+`--aggregate-allowance-supplemental-reader` is a separate public argument.
+Omitting the argument, the default, adds no reader. An explicitly empty argument
+refuses startup. The argument does not change the private selection
+schema, `readerSessionUIDs`, `SessionServiceAccount`, the portal reader, the
+publisher, or PUT. The route still requires the existing complete private
+selection, either the inline document or `--aggregate-allowance-config-file`.
+Deployment keeps using the private file. The value is one JSON object with
+exactly `namespace`, `name`, `sessionUID`, `serviceAccount`, and
+`serviceAccountUID`. A repeated argument, unknown, duplicate, partial, null, or
+aliased field, an overlap with a private reader UID, or a combined
+private-plus-public count of nine refuses startup before the process creates
+its manager or runnables. The refusal text does not include the submitted
+value. Startup does not read the Session, Pod, or ServiceAccount.
+
+Remove `--aggregate-allowance-supplemental-reader` before downgrading the
+operator binary. The binding lasts only until that argument is removed, the
+bound Session is deleted, or its namespace, name, UID, ServiceAccount, or
+ServiceAccount UID changes. A later Session created with the same name does
+not inherit it.
+
+The binding admits one `kindSession` caller to cached `GET /v1/provider-allowances`
+only, using that caller's existing operator-audience token. Each request takes
+a fresh TokenReview. The authenticated ServiceAccount UID must equal
+`serviceAccountUID`. A recreated ServiceAccount, whose new token presents a
+different UID, is refused. Kubernetes may briefly keep authenticating a removed
+token as its previous UID (upstream v1.35's default is about 10 seconds; this
+cluster's authentication cache is unverified). Matching the previous UID does
+not claim instantaneous revocation, and this path does not read the
+ServiceAccount or add RBAC.
+
+`resolveCaller`'s cached Session and Pod are not the admission decision. An
+uncached read must show the bound namespace, name, and UID; the Pod UID must
+equal the authenticated Pod UID; the Pod's controller owner must be that
+AgentSession in kind, API version, name, and UID; neither object may be
+deleting; the Session operating mode and the Pod phase must be Running; the
+Session phase may be Running or Idle; and `status.podName` must name that Pod.
+Idle does not remove the binding. Failure returns before the allowance slot is
+read. The approved initial binding is namespace `dev-agents`,
+name `dev-env-1104-010332`, session UID `9323443a-4a8f-404f-8b41-b583e3bcc1a9`,
+ServiceAccount `dev-env-workbench`, and ServiceAccount UID
+`55cc1f98-5b17-46e7-8770-c8bf9de85437`. Those public IDs are configuration for
+a later GitOps change. This source does not deploy them.
+
 Trust is configured independently of the published report. A payload cannot
 verify its own account, source, measures or freshness. Providers with no stored
 observation remain explicit gaps. After an observation has been stored, retain

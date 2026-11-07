@@ -31,6 +31,10 @@ const (
 // It contains no submitted text.
 var errAggregateAllowanceConfig = errors.New("aggregate allowance configuration was refused")
 
+// errSupplementalAllowanceReader is the only refusal for the public binding.
+// It contains no submitted text.
+var errSupplementalAllowanceReader = errors.New("supplemental allowance reader was refused")
+
 var aggregateConfigFields = []string{
 	"slot", "namespace", "name",
 	"publisherSessionUID", "publisherServiceAccount",
@@ -47,6 +51,110 @@ type aggregateAllowanceSelection struct {
 	readerSA     string
 	readerUIDs   []types.UID
 	trust        providerallowance.AggregateTrust
+	supplemental *apiserver.SupplementalAllowanceReader
+}
+
+var supplementalReaderFields = []string{
+	"namespace", "name", "sessionUID", "serviceAccount", "serviceAccountUID",
+}
+
+// supplementalReaderFlag retains the first public binding without failing Set.
+// A flag.Value error makes the flag parser write the raw argument.
+type supplementalReaderFlag struct {
+	raw   string
+	count int
+}
+
+func (f *supplementalReaderFlag) String() string { return "" }
+
+func (f *supplementalReaderFlag) Set(raw string) error {
+	f.count++
+	if f.count == 1 {
+		f.raw = raw
+		return nil
+	}
+	f.raw = ""
+	return nil
+}
+
+// parseAggregateAllowanceSelection requires one complete private selection,
+// inline or file, before accepting the separate public binding. A repeated,
+// malformed, overlapping, or ninth binding refuses without reading a Session,
+// Pod, or ServiceAccount. The refusal does not contain the submitted text.
+func parseAggregateAllowanceSelection(enabled bool, inline, path, apiAddr, sessionNamespace string, supplemental *supplementalReaderFlag) (*aggregateAllowanceSelection, error) {
+	if supplemental != nil && supplemental.count > 1 {
+		return nil, errSupplementalAllowanceReader
+	}
+	var binding *apiserver.SupplementalAllowanceReader
+	if supplemental != nil && supplemental.count == 1 {
+		var err error
+		binding, err = parseSupplementalAllowanceReader(supplemental.raw, sessionNamespace)
+		if err != nil {
+			return nil, err
+		}
+	}
+	sel, err := parseAggregateAllowanceInput(enabled, inline, path, apiAddr, sessionNamespace)
+	if err != nil {
+		return nil, err
+	}
+	if binding == nil {
+		return sel, nil
+	}
+	if sel == nil || !supplementalFits(sel, binding) {
+		return nil, errSupplementalAllowanceReader
+	}
+	sel.supplemental = binding
+	return sel, nil
+}
+
+func parseSupplementalAllowanceReader(raw, sessionNamespace string) (*apiserver.SupplementalAllowanceReader, error) {
+	if raw == "" || len(raw) > aggregateConfigMaxBytes || !utf8.ValidString(raw) || bytes.HasPrefix([]byte(raw), []byte{0xEF, 0xBB, 0xBF}) {
+		return nil, errSupplementalAllowanceReader
+	}
+	if !providerallowance.ExactObjectKeys([]byte(raw), supplementalReaderFields) {
+		return nil, errSupplementalAllowanceReader
+	}
+	dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
+	dec.DisallowUnknownFields()
+	var doc struct {
+		Namespace         string `json:"namespace"`
+		Name              string `json:"name"`
+		SessionUID        string `json:"sessionUID"`
+		ServiceAccount    string `json:"serviceAccount"`
+		ServiceAccountUID string `json:"serviceAccountUID"`
+	}
+	if err := dec.Decode(&doc); err != nil {
+		return nil, errSupplementalAllowanceReader
+	}
+	var extra any
+	if dec.Decode(&extra) != io.EOF {
+		return nil, errSupplementalAllowanceReader
+	}
+	if doc.Namespace != sessionNamespace || doc.Namespace != aggregatePortalNamespace {
+		return nil, errSupplementalAllowanceReader
+	}
+	if len(validation.IsDNS1123Subdomain(doc.Name)) != 0 || len(validation.IsDNS1123Subdomain(doc.ServiceAccount)) != 0 {
+		return nil, errSupplementalAllowanceReader
+	}
+	if !aggregateUID(doc.SessionUID) || !aggregateUID(doc.ServiceAccountUID) {
+		return nil, errSupplementalAllowanceReader
+	}
+	return &apiserver.SupplementalAllowanceReader{
+		Namespace: doc.Namespace, Name: doc.Name, SessionUID: types.UID(doc.SessionUID),
+		ServiceAccount: doc.ServiceAccount, ServiceAccountUID: doc.ServiceAccountUID,
+	}, nil
+}
+
+func supplementalFits(sel *aggregateAllowanceSelection, binding *apiserver.SupplementalAllowanceReader) bool {
+	if sel == nil || binding == nil || len(sel.readerUIDs) >= 8 {
+		return false
+	}
+	for _, uid := range sel.readerUIDs {
+		if uid == binding.SessionUID {
+			return false
+		}
+	}
+	return true
 }
 
 // parseAggregateAllowanceInput selects inline or private file configuration.
@@ -214,5 +322,6 @@ func aggregateAllowanceReports(sel *aggregateAllowanceSelection, writer client.C
 		SessionNamespace: aggregatePortalNamespace, SessionServiceAccount: sel.readerSA, SessionUIDs: append([]types.UID(nil), sel.readerUIDs...),
 		PublisherSessionUID: sel.publisherUID, PublisherServiceAccount: sel.publisherSA,
 		PortalNamespace: aggregatePortalNamespace, PortalServiceAccount: aggregatePortalAccount,
+		Supplemental: sel.supplemental,
 	}, nil
 }
