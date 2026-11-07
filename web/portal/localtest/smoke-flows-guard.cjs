@@ -127,13 +127,55 @@ function connectFixtureTarget(target, allowedOrigin, dial) {
   return { ok: true, host: endpoint.host, port: endpoint.port, path: endpoint.path, socket: dial(endpoint) };
 }
 
+// connectAuthority accepts only an HTTP proxy CONNECT authority: 127.0.0.1:port
+// or [::1]:port. Credentials, a URL, a path, and any other host are refused
+// before dial.
+function connectAuthority(target) {
+  const raw = String(target || '');
+  if (!raw || raw.includes('@') || raw.includes('/') || raw.includes('?') || raw.includes('#') || raw.includes('\\') || /\s/.test(raw)) {
+    return { ok: false, reason: 'form' };
+  }
+  let host = '';
+  let port = '';
+  if (raw.startsWith('[')) {
+    const end = raw.indexOf(']');
+    if (end <= 1 || raw[end + 1] !== ':' || raw.indexOf('[', 1) !== -1) return { ok: false, reason: 'form' };
+    host = raw.slice(1, end);
+    port = raw.slice(end + 2);
+    if (host !== '::1') return { ok: false, reason: 'host' };
+  } else {
+    const colon = raw.lastIndexOf(':');
+    if (colon <= 0 || raw.indexOf(':') !== colon) return { ok: false, reason: 'form' };
+    host = raw.slice(0, colon);
+    port = raw.slice(colon + 1);
+    if (host !== '127.0.0.1') return { ok: false, reason: 'host' };
+  }
+  if (!/^[1-9][0-9]*$/.test(port)) return { ok: false, reason: 'port' };
+  const number = Number(port);
+  if (!Number.isInteger(number) || number < 1 || number > 65535) return { ok: false, reason: 'port' };
+  return { ok: true, host, port };
+}
+
 // proxyRequestDecision is what the loopback proxy calls for a browser request
-// line, including a hop Chromium continued from a redirect.
+// line, including a hop Chromium continued from a redirect. CONNECT is accepted
+// only for the exact fixture loopback authority and port. The dial is that
+// fixed endpoint. Every foreign, wrong-port, malformed, or credential-bearing
+// authority is refused with no dial.
 function proxyRequestDecision(startLine, allowedOrigin, dial) {
+  if (typeof dial !== 'function') throw new Error('dial required');
   const parts = String(startLine || '').split(' ');
   const method = parts[0] || '';
   const target = parts[1] || '';
-  if (method === 'CONNECT' || !target.startsWith('http://')) return { ok: false, reason: 'form' };
+  if (method === 'CONNECT') {
+    const base = parseFixtureBase(allowedOrigin);
+    if (!base.ok) return { ok: false, reason: base.reason };
+    const authority = connectAuthority(target);
+    if (!authority.ok) return { ok: false, reason: authority.reason };
+    if (authority.host !== base.hostname || authority.port !== base.port) return { ok: false, reason: 'origin' };
+    const endpoint = { host: base.hostname, port: base.port, path: '' };
+    return { ok: true, tunnel: true, host: endpoint.host, port: endpoint.port, path: '', socket: dial(endpoint) };
+  }
+  if (!target.startsWith('http://')) return { ok: false, reason: 'form' };
   return connectFixtureTarget(target, allowedOrigin, dial);
 }
 

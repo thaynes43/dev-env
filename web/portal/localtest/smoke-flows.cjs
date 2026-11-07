@@ -290,8 +290,8 @@ async function flows(browser, base, width) {
   await submit(page, composer.locator('button[type="submit"]'), true);
   let body = await text(page);
   if (accepted(width, 'send', body, postOrigin)) {
-    check(width, 'send: double submit shows one Delivered receipt', body.includes('Delivered') && body.includes(requestID) && await marked(page), body.slice(0, 160));
     const sends = await sendCount();
+    check(width, 'send: double submit shows one Delivered receipt', body.includes('Delivered') && body.includes(requestID) && sends === beforeSend + 1 && await marked(page), 'sends ' + String(sends) + ' ' + body.slice(0, 160));
     let navErr = '';
     try {
       await page.goBack({ waitUntil: 'load' });
@@ -491,58 +491,251 @@ function closeTrackedProxy(server, tracked, deadlineMs) {
   });
 }
 
-// Chromium continues a fulfilled redirect outside page.route. This proxy is the
-// gate for that later hop: only the exact fixture origin is dialed, and
-// <-loopback stops Chromium from bypassing the proxy for 127.0.0.1.
-function startFixtureProxy(allowedOrigin) {
-  const tracked = { sockets: new Set(), upstreams: new Set() };
-  const server = net.createServer((socket) => {
-    trackProxyPeer(tracked, socket, 'socket');
-    let buf = Buffer.alloc(0);
-    let opened = false;
-    const fail = () => { socket.destroy(); };
-    socket.on('error', fail);
-    socket.on('data', (chunk) => {
-      if (opened) return;
-      buf = Buffer.concat([buf, chunk]);
-      const at = buf.indexOf('\r\n\r\n');
-      if (at < 0) {
-        if (buf.length > 65536) fail();
-        return;
+const proxyHeaderLimit = 65536;
+const proxyBodyLimit = 1048576;
+
+function destroyPeer(peer) {
+  try { if (peer && typeof peer.destroy === 'function') peer.destroy(); } catch (err) { /* already closing */ }
+}
+
+function proxyStatus(socket, status) {
+  if (!socket || socket.destroyed) return;
+  socket.resume();
+  socket.end('HTTP/1.1 ' + status + '\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+}
+
+// requestContentLength accepts one decimal length and refuses chunked or
+// duplicated lengths before any of the body is forwarded.
+function requestContentLength(head) {
+  let seen = false;
+  let length = 0;
+  for (const line of head.split('\r\n').slice(1)) {
+    if (/^transfer-encoding:/i.test(line)) return { ok: false };
+    const match = /^content-length:\s*([0-9]+)\s*$/i.exec(line);
+    if (!match) continue;
+    if (seen) return { ok: false };
+    seen = true;
+    length = Number(match[1]);
+    if (!Number.isInteger(length) || String(length) !== match[1] || length > proxyBodyLimit) return { ok: false };
+  }
+  return { ok: true, length };
+}
+
+function rewriteOriginRequest(head, decision) {
+  const lines = head.split('\r\n');
+  const request = lines[0].split(' ');
+  if (request.length < 2 || !decision.path || !decision.path.startsWith('/')) return '';
+  request[1] = decision.path;
+  const kept = [request.join(' ')];
+  let sawHost = false;
+  for (let i = 1; i < lines.length; i++) {
+    if (/^(?:connection|proxy-connection|keep-alive):/i.test(lines[i])) continue;
+    if (/^host:/i.test(lines[i])) {
+      kept.push('Host: ' + decision.host + ':' + decision.port);
+      sawHost = true;
+      continue;
+    }
+    kept.push(lines[i]);
+  }
+  if (!sawHost) kept.splice(1, 0, 'Host: ' + decision.host + ':' + decision.port);
+  kept.push('Connection: close');
+  return kept.join('\r\n') + '\r\n\r\n';
+}
+
+function createPull(socket) {
+  let buf = Buffer.alloc(0);
+  let ended = false;
+  let failed = null;
+  let notify = null;
+  const onData = (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    if (notify) { const fn = notify; notify = null; fn(); }
+  };
+  const onEnd = () => {
+    ended = true;
+    if (notify) { const fn = notify; notify = null; fn(); }
+  };
+  const onError = (err) => {
+    failed = err || new Error('socket');
+    if (notify) { const fn = notify; notify = null; fn(); }
+  };
+  socket.on('data', onData);
+  socket.on('end', onEnd);
+  socket.on('error', onError);
+  // Wait for a newer data, end, or error event. Bytes already in buf are not
+  // a new event: headers() and bytes() call this only after judging them
+  // incomplete, and resolving again would spin without reaching the socket.
+  function waitForMore() {
+    return new Promise((resolve) => {
+      if (ended || failed) { resolve(); return; }
+      notify = resolve;
+    });
+  }
+  return {
+    detach() {
+      socket.off('data', onData);
+      socket.off('end', onEnd);
+      socket.off('error', onError);
+      notify = null;
+    },
+    remainder() {
+      const out = buf;
+      buf = Buffer.alloc(0);
+      return out;
+    },
+    async headers(limit) {
+      for (;;) {
+        if (failed) throw failed;
+        const at = buf.indexOf('\r\n\r\n');
+        if (at >= 0) {
+          const head = buf.slice(0, at).toString('latin1');
+          buf = buf.slice(at + 4);
+          return head;
+        }
+        if (buf.length > limit) throw new Error('headers');
+        if (ended) throw new Error('ended');
+        await waitForMore();
       }
-      opened = true;
-      const head = buf.slice(0, at).toString('latin1');
-      const rest = buf.slice(at + 4);
+    },
+    async bytes(count) {
+      if (count === 0) return Buffer.alloc(0);
+      for (;;) {
+        if (failed) throw failed;
+        if (buf.length >= count) {
+          const body = buf.slice(0, count);
+          buf = buf.slice(count);
+          return body;
+        }
+        if (ended) throw new Error('ended');
+        await waitForMore();
+      }
+    },
+  };
+}
+
+function exchangeClose(upstream, gate, head, body) {
+  return new Promise((resolve) => {
+    if (gate.error || upstream.destroyed) { resolve(null); return; }
+    const chunks = [];
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    upstream.on('data', (chunk) => chunks.push(chunk));
+    upstream.on('error', () => finish(null));
+    upstream.on('end', () => finish(Buffer.concat(chunks)));
+    try {
+      upstream.write(Buffer.concat([head, body]));
+      upstream.end();
+    } catch (err) {
+      finish(null);
+    }
+  });
+}
+
+// openTunnel writes 200 only after the fixture TCP connection succeeds, then
+// carries the client's bytes unchanged. A refused dial never writes 200.
+function openTunnel(socket, upstream, rest) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    const refuse = () => {
+      if (settled) return;
+      proxyStatus(socket, 403);
+      destroyPeer(upstream);
+      finish();
+    };
+    const onClientGone = () => {
+      if (settled) return;
+      destroyPeer(upstream);
+      finish();
+    };
+    let started = false;
+    const startTunnel = () => {
+      if (settled || started) return;
+      started = true;
+      socket.removeListener('close', onClientGone);
+      upstream.removeListener('error', refuse);
+      upstream.on('error', () => { destroyPeer(socket); destroyPeer(upstream); });
+      socket.on('error', () => { destroyPeer(socket); destroyPeer(upstream); });
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (rest.length) upstream.write(rest);
+      socket.pipe(upstream);
+      upstream.pipe(socket);
+      socket.resume();
+      upstream.once('close', finish);
+      socket.once('close', finish);
+    };
+    socket.once('close', onClientGone);
+    upstream.once('error', refuse);
+    upstream.once('connect', startTunnel);
+    if (upstream.readyState === 'open') startTunnel();
+  });
+}
+
+async function serveProxyClient(socket, allowedOrigin, tracked) {
+  trackProxyPeer(tracked, socket, 'socket');
+  const pull = createPull(socket);
+  let current = null;
+  try {
+    for (;;) {
+      const head = await pull.headers(proxyHeaderLimit);
       const decision = proxyRequestDecision(head.split('\r\n', 1)[0], allowedOrigin, (endpoint) => {
         return trackProxyPeer(tracked, net.connect({ host: endpoint.host, port: Number(endpoint.port) }), 'upstream');
       });
-      if (!decision.ok) {
-        socket.end('HTTP/1.1 403\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+      if (!decision.ok || !decision.socket) {
+        proxyStatus(socket, 403);
         return;
       }
-      const upstream = decision.socket;
-      upstream.on('error', fail);
-      socket.pause();
-      upstream.on('connect', () => {
-        const lines = head.split('\r\n');
-        const request = lines[0].split(' ');
-        request[1] = decision.path;
-        lines[0] = request.join(' ');
-        let sawHost = false;
-        for (let i = 1; i < lines.length; i++) {
-          if (/^host:/i.test(lines[i])) {
-            lines[i] = 'Host: ' + decision.host + ':' + decision.port;
-            sawHost = true;
-          }
-        }
-        if (!sawHost) lines.splice(1, 0, 'Host: ' + decision.host + ':' + decision.port);
-        upstream.write(lines.join('\r\n') + '\r\n\r\n');
-        if (rest.length) upstream.write(rest);
-        socket.resume();
-        socket.pipe(upstream);
-        upstream.pipe(socket);
-      });
-    });
+      current = decision.socket;
+      if (decision.tunnel) {
+        socket.pause();
+        pull.detach();
+        const rest = pull.remainder();
+        await openTunnel(socket, current, rest);
+        return;
+      }
+      const gate = { error: null };
+      current.on('error', (err) => { gate.error = err || new Error('upstream'); });
+      const length = requestContentLength(head);
+      const rewritten = rewriteOriginRequest(head, decision);
+      if (!length.ok || !rewritten) {
+        destroyPeer(current);
+        current = null;
+        proxyStatus(socket, 403);
+        return;
+      }
+      const body = await pull.bytes(length.length);
+      const response = await exchangeClose(current, gate, Buffer.from(rewritten, 'latin1'), body);
+      current = null;
+      if (!response || !response.length) {
+        proxyStatus(socket, 403);
+        return;
+      }
+      socket.write(response);
+    }
+  } catch (err) {
+    destroyPeer(current);
+    destroyPeer(socket);
+  }
+}
+
+// Chromium continues a fulfilled redirect outside page.route. This proxy is the
+// gate for that later hop: only the exact fixture origin is dialed, and
+// <-loopback stops Chromium from bypassing the proxy for 127.0.0.1. Each
+// absolute-form request on a kept-alive connection is rewritten to origin-form
+// before a new fixture exchange. CONNECT becomes a tunnel only after that
+// fixed endpoint connects.
+function startFixtureProxy(allowedOrigin) {
+  const tracked = { sockets: new Set(), upstreams: new Set() };
+  const server = net.createServer((socket) => {
+    serveProxyClient(socket, allowedOrigin, tracked);
   });
   return new Promise((resolve, reject) => {
     const onError = (err) => { server.close(() => reject(err)); };
@@ -617,4 +810,4 @@ if (require.main === module) {
   })();
 }
 
-module.exports = { run, closeTrackedProxy, trackProxyPeer };
+module.exports = { run, closeTrackedProxy, trackProxyPeer, startFixtureProxy, createPull, openTunnel };
