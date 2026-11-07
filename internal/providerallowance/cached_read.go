@@ -15,6 +15,9 @@ import (
 // withheld when trust, freshness, or a passed reset blocks them. A nil
 // document is left unchanged. A paged document is not reprojected; only this
 // package's reported-exhaustion suffix is removed from current-measure reasons.
+// A real failed attempt with no last good does not keep the literal
+// "source not configured" freshness reason. The stored attempt, times,
+// binding, generation, and availability stay as they were.
 func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registry, maxAge time.Duration, maxAgeSet bool, now time.Time) {
 	if doc == nil {
 		return
@@ -59,6 +62,7 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 		status := &doc.SourceStatuses[i]
 		if untrusted[status.Provider] {
 			cachedMarkStatus(status)
+			cachedSeparateFailedAttempt(status)
 			continue
 		}
 		if ctx, ok := trustedStatus[status.Provider]; ok {
@@ -77,7 +81,31 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 		if at, ok := cachedTime(&status.Freshness.AsOf); !ok || at.After(now) {
 			cachedExpireLabel(&status.Freshness)
 		}
+		cachedSeparateFailedAttempt(status)
 	}
+}
+
+// cachedSeparateFailedAttempt corrects one current report: a real failed
+// attempt with no last good does not keep the literal unconfigured freshness
+// reason. Attempt result and code, freshness times, binding, generation, and
+// availability stay as stored. A contradictory stored row is not evidence of
+// which writer produced it. A genuine unconfigured attempt and any last good
+// are left unchanged.
+func cachedSeparateFailedAttempt(status *SourceStatus) {
+	if status.LastGood != nil || status.Freshness.Reason != reasonUnconfigured {
+		return
+	}
+	if !cachedRealAcquisitionFailure(status.LastAttempt) {
+		return
+	}
+	status.Freshness.Reason = reasonAttempt
+}
+
+func cachedRealAcquisitionFailure(attempt LastAttempt) bool {
+	if attempt.Result != AttemptError && attempt.Result != AttemptUnavailable {
+		return false
+	}
+	return attempt.Code != nil && *attempt.Code != "" && *attempt.Code != codeSourceUnconfigured
 }
 
 func cachedContexts(contexts []TrustedContext, provider string) []TrustedContext {
