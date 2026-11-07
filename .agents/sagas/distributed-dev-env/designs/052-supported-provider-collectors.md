@@ -205,3 +205,37 @@ applicable. It does not ignore any reported workspace: a non-null mismatch still
 refuses, and account-only captures cannot resolve a shared entitlement through
 the workspace-bound shared-pool rules. The deployment selection remains independent
 of the provider payload and its actual account metadata must be qualified.
+
+## Supplemental cached reader (2026-11-07)
+
+`--aggregate-allowance-supplemental-reader` is default empty and stays outside
+the private selection schema. Empty preserves today's readers. One object names
+exactly `namespace`, `name`, `sessionUID`, `serviceAccount`, and
+`serviceAccountUID`. A complete private selection remains mandatory and may be
+the existing inline document or the private file. Deployment keeps using the
+private file. The public UID and the private UID list are disjoint, and the
+combined count is at most eight. Repeated, malformed, unknown, duplicate,
+partial, null, aliased, overlapping, or nine-reader input refuses before the
+manager and its runnables, with a sanitized error and no ServiceAccount,
+Session, or Pod read at startup. Remove the supplemental argument before
+downgrading the operator binary. The binding lasts only until that removal,
+deletion of the bound Session, or a change of its identity. A recreated Session
+does not inherit it.
+
+Admission is one additional `kindSession` cached aggregate GET. It uses a fresh
+TokenReview and the existing audience, `resolveCaller`, and token transport.
+The authenticated ServiceAccount UID must match the binding. A different UID
+refuses. Upstream can retain a deleted token's previous UID for about 10
+seconds in the v1.35 default, and this cluster's cache is unverified, so a
+match of that retained UID is not described as instantaneous revocation. There
+is no live ServiceAccount read and no new RBAC. Cached `resolveCaller` objects
+do not decide admission. Uncached Pod and AgentSession reads must match the
+bound identity, controller owner, and nondeletion. The operating mode and Pod
+phase must be Running. The Session phase may be Running or Idle; Idle does not
+remove the binding. `status.podName` must name the owned Pod. A mismatch returns before the slot
+read. Portal, publisher, private readers, and every other route stay as they
+are. The
+approved initial public identity is `dev-agents/dev-env-1104-010332`, session
+UID `9323443a-4a8f-404f-8b41-b583e3bcc1a9`, ServiceAccount `dev-env-workbench`,
+ServiceAccount UID `55cc1f98-5b17-46e7-8770-c8bf9de85437`. Publication and
+rollout stay with Root.

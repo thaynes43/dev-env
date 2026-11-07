@@ -318,6 +318,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&aggregateAllowanceEnabled, "enable-aggregate-allowance-reports", false, "HELD SOURCE ONLY: serve the fixed aggregate allowance slot when --aggregate-allowance-config is exact; default off, does not enable the API or infer enable from max age")
 	aggregateAllowanceRaw := fs.String("aggregate-allowance-config", "", "HELD SOURCE ONLY: inline JSON selection for --enable-aggregate-allowance-reports; empty leaves the route off and is not a file path")
 	aggregateAllowanceFile := fs.String("aggregate-allowance-config-file", "", "default-off deployment-owned private aggregate selection file; mutually exclusive with inline config; does not create or authorize a private config mount")
+	supplementalReader := &supplementalReaderFlag{}
+	fs.Var(supplementalReader, "aggregate-allowance-supplemental-reader", "default-off public cached aggregate reader; one JSON object with namespace, name, sessionUID, serviceAccount, and serviceAccountUID; requires the existing private selection and does not read a Session, Pod, or ServiceAccount at startup")
 	collectorEnabled := fs.Bool("enable-operator-allowance-collector", false, "default-off elected-operator recurring supported allowance acquisition; requires independent private configuration and existing selected host; grants no access")
 	collectorFile := fs.String("allowance-collector-config-file", "", "absolute private operator-owned collector configuration; requires explicit enable and aggregate selection")
 	handoffFile := fs.String("allowance-handoff-file", "", "absolute private file with one human-approved allowance handoff request, applied once by the elected operator that already holds the slot write authority; requires the enabled collector and an absolute path (a misuse of the flag is a startup error); an unreadable or invalid file is refused and logged without stopping the operator")
@@ -696,7 +698,7 @@ func parseFlags(args []string) (options, error) {
 	if o.providerSource, err = parseProviderSourceConfig(providerSourceEnabled, *providerSourceRaw, o.apiAddr, o.sessionNamespace); err != nil {
 		return o, err
 	}
-	if o.aggregateAllowance, err = parseAggregateAllowanceInput(aggregateAllowanceEnabled, *aggregateAllowanceRaw, *aggregateAllowanceFile, o.apiAddr, o.sessionNamespace); err != nil {
+	if o.aggregateAllowance, err = parseAggregateAllowanceSelection(aggregateAllowanceEnabled, *aggregateAllowanceRaw, *aggregateAllowanceFile, o.apiAddr, o.sessionNamespace, supplementalReader); err != nil {
 		return o, err
 	}
 	if o.allowanceCollector, err = parseAllowanceCollector(*collectorEnabled, *collectorFile, o.aggregateAllowance, o.leaderElect); err != nil {

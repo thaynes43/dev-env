@@ -51,7 +51,21 @@ type AggregateAllowanceReports struct {
 	OperatorProducer     bool
 	PortalNamespace      string
 	PortalServiceAccount string
-	Now                  func() time.Time
+	// Supplemental is the separate public cached-GET binding. It is not added
+	// to SessionUIDs and it cannot publish.
+	Supplemental *SupplementalAllowanceReader
+	Now          func() time.Time
+}
+
+// SupplementalAllowanceReader is one public kindSession cached aggregate GET.
+// Startup parses it; each request checks the fresh TokenReview identity against
+// the uncached Pod and AgentSession.
+type SupplementalAllowanceReader struct {
+	Namespace         string
+	Name              string
+	SessionUID        types.UID
+	ServiceAccount    string
+	ServiceAccountUID string
 }
 
 // RouteEnabled reports whether Handler may mount the path.
@@ -137,7 +151,7 @@ func (h *AggregateAllowanceReports) Handle(ctx context.Context, w http.ResponseW
 	if err := rejectAllowanceBody(w, r); err != nil {
 		return 0, nil, err
 	}
-	if err := h.allow(c); err != nil {
+	if err := h.allow(ctx, c); err != nil {
 		return 0, nil, err
 	}
 	return h.readSource(ctx)
@@ -149,7 +163,7 @@ func (h *AggregateAllowanceReports) handleStored(ctx context.Context, w http.Res
 		if err := rejectAllowanceBody(w, r); err != nil {
 			return 0, nil, err
 		}
-		if err := h.allow(c); err != nil {
+		if err := h.allow(ctx, c); err != nil {
 			return 0, nil, err
 		}
 		return h.readStored(ctx)
@@ -232,7 +246,7 @@ func allowanceDocument(doc providerallowance.ReadResponse) (int, any, error) {
 	return http.StatusOK, cloned, nil
 }
 
-func (h *AggregateAllowanceReports) allow(c *caller) error {
+func (h *AggregateAllowanceReports) allow(ctx context.Context, c *caller) error {
 	if c == nil {
 		return forbidden("the allowance reader is not allowlisted")
 	}
@@ -240,10 +254,61 @@ func (h *AggregateAllowanceReports) allow(c *caller) error {
 	case kindPortalReader:
 		return h.allowPortal(c)
 	case kindSession:
-		return h.allowSession(c)
+		if h.allowSession(c) == nil {
+			return nil
+		}
+		return h.allowSupplemental(ctx, c)
 	default:
 		return forbidden("the allowance reader is not allowlisted")
 	}
+}
+
+// allowSupplemental admits the public binding to cached GET only.
+// The authenticated ServiceAccount UID must match. A recreated ServiceAccount
+// presents a different UID and is refused. Upstream can keep authenticating a
+// removed token as its previous UID for about 10 seconds at the v1.35 default;
+// this cluster's authentication cache is unverified, so a match is not
+// instantaneous revocation. This path does not read a ServiceAccount.
+// Cached resolveCaller objects are not the decision. The uncached Pod and
+// AgentSession must match the binding and controller owner, must not be
+// deleting, and must be running. Idle session phase stays admitted.
+func (h *AggregateAllowanceReports) allowSupplemental(ctx context.Context, c *caller) error {
+	denied := forbidden("the allowance reader is not allowlisted")
+	if h == nil || c == nil || c.kind != kindSession || h.Supplemental == nil || h.Source != nil || h.Store == nil || h.Live == nil {
+		return denied
+	}
+	b := h.Supplemental
+	if b.Namespace == "" || b.Name == "" || b.SessionUID == "" || b.ServiceAccount == "" || b.ServiceAccountUID == "" {
+		return denied
+	}
+	if c.identity.Namespace != b.Namespace || c.identity.ServiceAccount != b.ServiceAccount || c.identity.ServiceAccountUID == "" || c.identity.ServiceAccountUID != b.ServiceAccountUID || c.identity.PodName == "" || c.identity.PodUID == "" || c.identity.PodName != b.Name {
+		return denied
+	}
+	var pod corev1.Pod
+	if h.Live.Get(ctx, types.NamespacedName{Namespace: b.Namespace, Name: b.Name}, &pod) != nil {
+		return denied
+	}
+	if pod.Namespace != b.Namespace || pod.Name != b.Name || pod.UID == "" || string(pod.UID) != c.identity.PodUID || pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning || pod.Spec.ServiceAccountName != b.ServiceAccount {
+		return denied
+	}
+	owner := metav1.GetControllerOf(&pod)
+	if owner == nil || owner.Kind != "AgentSession" || owner.APIVersion != v1alpha1.GroupVersion.String() || owner.Name != b.Name || owner.UID != b.SessionUID {
+		return denied
+	}
+	var sess v1alpha1.AgentSession
+	if h.Live.Get(ctx, types.NamespacedName{Namespace: b.Namespace, Name: b.Name}, &sess) != nil {
+		return denied
+	}
+	if sess.Namespace != b.Namespace || sess.Name != b.Name || sess.UID != b.SessionUID || !sess.DeletionTimestamp.IsZero() || sess.Spec.OperatingMode != v1alpha1.OperatingModeRunning || sess.Status.PodName != pod.Name {
+		return denied
+	}
+	if sess.Status.Phase != v1alpha1.PhaseRunning && sess.Status.Phase != v1alpha1.PhaseIdle {
+		return denied
+	}
+	if !metav1.IsControlledBy(&pod, &sess) {
+		return denied
+	}
+	return nil
 }
 
 func (h *AggregateAllowanceReports) allowSession(c *caller) error {
