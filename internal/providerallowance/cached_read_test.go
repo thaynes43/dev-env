@@ -178,6 +178,77 @@ func TestProjectCachedReadWithholdsUntrustedCurrentDecimal(t *testing.T) {
 	}
 }
 
+func TestProjectCachedReadSeparatesCursorFailedAttemptFromUnconfiguredReason(t *testing.T) {
+	// Synthetic mixed row. It is not a retained capture and does not identify a writer.
+	asOf := "2026-11-07T08:00:00Z"
+	attempted := "2026-11-07T08:10:00Z"
+	completed := "2026-11-07T08:10:01Z"
+	code := "acquisition_unavailable"
+	base := SourceStatus{
+		Provider: "cursor", ProducerRef: "synthetic-cursor-producer", Availability: AvailabilityUnavailable,
+		LastAttempt: LastAttempt{AttemptedAt: attempted, CompletedAt: &completed, Result: AttemptError, Code: &code},
+		Freshness:   Freshness{State: FreshUnknown, AsOf: asOf, Basis: BasisNone, Reason: "source not configured"},
+		Validation:  ValidationRecord{State: ValidationUnverified, ValidationRefs: []string{}},
+		Binding:     BindingRecord{State: BindingUnknown, Generation: 0},
+	}
+	project := func(status SourceStatus) SourceStatus {
+		t.Helper()
+		doc := ReadResponse{
+			Schema: SchemaRead, SnapshotRevision: "synthetic-cursor-cached", ServedAt: "2026-11-07T08:12:00Z",
+			Items: []ReadItem{}, SourceStatuses: []SourceStatus{status},
+		}
+		ProjectCachedRead(&doc, nil, nil, 30*time.Minute, true, time.Date(2026, 11, 7, 8, 12, 0, 0, time.UTC))
+		if len(doc.Items) != 0 || len(doc.SourceStatuses) != 1 {
+			t.Fatalf("projection invented rows: items=%d statuses=%d", len(doc.Items), len(doc.SourceStatuses))
+		}
+		return doc.SourceStatuses[0]
+	}
+	got := project(base)
+	if got.Freshness.Reason != "acquisition failed" || got.Freshness.Reason == "source not configured" {
+		t.Fatalf("current reason stayed unconfigured: %+v", got.Freshness)
+	}
+	if got.Freshness.State != FreshUnknown || got.Freshness.Basis != BasisNone || got.Freshness.AsOf != asOf {
+		t.Fatalf("freshness times or basis moved: %+v", got.Freshness)
+	}
+	if got.LastAttempt.Result != AttemptError || got.LastAttempt.Code == nil || *got.LastAttempt.Code != code || got.LastAttempt.AttemptedAt != attempted || got.LastAttempt.CompletedAt == nil || *got.LastAttempt.CompletedAt != completed {
+		t.Fatalf("attempt rewritten: %+v", got.LastAttempt)
+	}
+	if strings.Contains(got.Freshness.Reason, code) || strings.Contains(got.Freshness.Reason, "unavailable") {
+		t.Fatalf("reason stringified the stored code: %s", got.Freshness.Reason)
+	}
+	if got.LastGood != nil || got.Availability != AvailabilityUnavailable || got.Binding.State != BindingUnknown || got.Binding.Generation != 0 || got.Binding.AccountRef != nil || got.ProducerRef != base.ProducerRef || got.Validation.State != ValidationUnverified {
+		t.Fatalf("structured status changed: %+v", got)
+	}
+	timeout := "acquisition_timeout"
+	timed := base
+	timed.LastAttempt.Result = AttemptUnavailable
+	timed.LastAttempt.Code = &timeout
+	if reason := project(timed).Freshness.Reason; reason != "acquisition failed" || strings.Contains(reason, timeout) {
+		t.Fatalf("timeout code became the reason: %s", reason)
+	}
+	unconfigured := "source_unconfigured"
+	plain := base
+	plain.Availability = AvailabilityUnconfigured
+	plain.LastAttempt = LastAttempt{AttemptedAt: asOf, CompletedAt: &asOf, Result: AttemptUnknown, Code: &unconfigured}
+	if kept := project(plain); kept.Freshness.Reason != "source not configured" || kept.Availability != AvailabilityUnconfigured || kept.Binding.State != BindingUnknown || kept.Binding.Generation != 0 || kept.LastGood != nil {
+		t.Fatalf("genuine unconfigured cursor row changed: %+v", kept)
+	}
+	heldAt := "2026-11-07T07:00:00Z"
+	held := base
+	held.LastGood = &LastGood{ObservationID: "synthetic-obs", CapturedAt: heldAt, ReceivedAt: heldAt}
+	if kept := project(held); kept.Freshness.Reason != "source not configured" || kept.LastGood == nil || kept.LastGood.CapturedAt != heldAt || kept.LastGood.ReceivedAt != heldAt || kept.LastGood.ProviderObservedAt != nil {
+		t.Fatalf("last good history was rewritten: %+v", kept)
+	}
+	paged := ReadResponse{
+		Schema: SchemaRead, SnapshotRevision: "synthetic-cursor-cached", ServedAt: "2026-11-07T08:12:00Z",
+		Items: []ReadItem{}, SourceStatuses: []SourceStatus{base}, NextCursor: repairStr("synthetic-page"),
+	}
+	ProjectCachedRead(&paged, nil, nil, 30*time.Minute, true, time.Date(2026, 11, 7, 8, 12, 0, 0, time.UTC))
+	if paged.SourceStatuses[0].Freshness.Reason != "source not configured" || paged.NextCursor == nil || *paged.NextCursor != "synthetic-page" {
+		t.Fatal("paged historical row was reprojected")
+	}
+}
+
 func TestProjectCachedReadLeavesUnknownGap(t *testing.T) {
 	_, ctx, reg := repairAllowanceFixture(t)
 	asOf := "1970-01-01T00:00:00Z"
