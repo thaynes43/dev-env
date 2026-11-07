@@ -200,8 +200,22 @@ function followBrowserRedirects(startURL, method, hop, allowedOrigin, dial) {
   return { refused: url, reason: 'limit', attempts, method: current };
 }
 
+const authFailureSentence = 'Portal authentication unavailable or denied';
+
+// submissionPhase separates a production origin refusal from the shared
+// unavailable sentence. HTTP 503 uses that sentence after containment cancels
+// a request; only an actual 403 with the sentence is an origin refusal.
+function submissionPhase(status, body) {
+  const code = Number(status);
+  const known = Number.isInteger(code) && code >= 100 && code <= 599;
+  const hasAuthText = String(body || '').includes(authFailureSentence);
+  if (known && code === 403 && hasAuthText) return { ok: false, originRefusal: true, phase: 'origin', status: 403 };
+  if ((known && code >= 500) || hasAuthText) return { ok: false, originRefusal: false, phase: 'unavailable', status: known ? code : 0 };
+  return { ok: true, originRefusal: false, phase: 'accepted', status: known ? code : 0 };
+}
+
 module.exports = {
-  sameFixtureOrigin, redirectOrigin, parseFixtureBase, announcedFixtureBase,
+  sameFixtureOrigin, redirectOrigin, parseFixtureBase, announcedFixtureBase, submissionPhase,
   fixtureWorkerPath, fixtureWorkerSource, fixtureContextOptions, fixtureBrowserLaunch,
   applyFixtureResponse, serviceWorkerClaim, localRequest,
   connectFixtureTarget, proxyRequestDecision, followBrowserRedirects,

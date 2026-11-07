@@ -250,6 +250,90 @@ async function provePullAndTunnelSettle() {
   return checks;
 }
 
+function proveSubmissionLabels() {
+  const sentence = 'Portal authentication unavailable or denied';
+  const origin = guard.submissionPhase(403, sentence + '.\n');
+  assert.equal(origin.originRefusal, true);
+  assert.equal(origin.phase, 'origin');
+  const unavailable = guard.submissionPhase(503, 'Local test instance (fixture data, not production).\n' + sentence + '.\n');
+  assert.equal(unavailable.ok, false);
+  assert.equal(unavailable.originRefusal, false);
+  assert.equal(unavailable.phase, 'unavailable');
+  assert.equal(unavailable.status, 503);
+  const textOnly = guard.submissionPhase(undefined, sentence);
+  assert.equal(textOnly.originRefusal, false);
+  assert.equal(textOnly.phase, 'unavailable');
+  const accepted = guard.submissionPhase(200, 'Recorded answer');
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.originRefusal, false);
+  return 4;
+}
+
+async function proveHeaderBound() {
+  const socket = fakePeer();
+  const pull = flows.createPull(socket);
+  const oversized = 'GET / HTTP/1.1\r\nX-Pad: ' + 'A'.repeat(70000) + '\r\n\r\nbody';
+  const pending = pull.headers(65536);
+  socket.emit('data', Buffer.from(oversized));
+  await assert.rejects(bound(pending, 'oversized complete headers', 200), /headers/);
+  const small = fakePeer();
+  const smallPull = flows.createPull(small);
+  const body = 'B'.repeat(70000);
+  const pendingHead = smallPull.headers(65536);
+  small.emit('data', Buffer.from('GET /ready HTTP/1.1\r\nContent-Length: ' + body.length + '\r\n\r\n' + body));
+  assert.equal(await bound(pendingHead, 'small header beside large body', 200), 'GET /ready HTTP/1.1\r\nContent-Length: ' + body.length);
+  assert.equal((await smallPull.bytes(body.length)).toString('latin1'), body);
+}
+
+// proveDelayedGetNoEarlyFIN is the bodyless redirected GET: the fixture waits,
+// and an early FIN is answered 503. The proxy must keep the write side open
+// until that delayed response, while still sending Connection: close.
+async function proveDelayedGetNoEarlyFIN() {
+  let earlyFIN = false;
+  let responded = false;
+  let upstreamHead = '';
+  const upstream = net.createServer((socket) => {
+    let buf = Buffer.alloc(0);
+    socket.on('error', () => {});
+    socket.on('end', () => { if (!responded) earlyFIN = true; });
+    socket.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      const at = buf.indexOf('\r\n\r\n');
+      if (responded || at < 0) return;
+      upstreamHead = buf.slice(0, at).toString('latin1');
+      setTimeout(() => {
+        const status = earlyFIN ? 503 : 200;
+        const payload = earlyFIN ? '' : 'ready';
+        responded = true;
+        socket.end('HTTP/1.1 ' + status + (status === 200 ? ' OK' : ' Service Unavailable') + '\r\nContent-Length: ' + payload.length + '\r\nConnection: close\r\n\r\n' + payload);
+      }, 150);
+    });
+  });
+  const port = await listenLoopback(upstream);
+  const origin = 'http://127.0.0.1:' + port;
+  const proxy = await flows.startFixtureProxy(origin);
+  const proxyPort = Number(new URL(proxy.url).port);
+  const client = net.connect({ host: '127.0.0.1', port: proxyPort });
+  client.on('error', () => {});
+  try {
+    await onceConnect(client);
+    client.write('GET ' + origin + '/ready HTTP/1.1\r\nHost: 127.0.0.1:' + port + '\r\nConnection: keep-alive\r\n\r\n');
+    const response = await readHttpResponse(client);
+    assert.equal(earlyFIN, false);
+    assert.equal(response.status, 'HTTP/1.1 200 OK');
+    assert.equal(response.body, 'ready');
+    const raw = response.head + '\r\n\r\n';
+    assert.equal(raw.includes('503'), false);
+    assert.match(upstreamHead, /^GET \/ready HTTP\/1\.1/);
+    assert.ok(upstreamHead.split('\r\n').includes('Connection: close'));
+    assert.equal(upstreamHead.includes('http://'), false);
+  } finally {
+    client.destroy();
+    await proxy.close();
+    await closeServer(upstream);
+  }
+}
+
 // proveProxyReuseAndConnect dials only the allowed fixture port. A second
 // absolute-form request on the same socket must arrive as origin-form, and a
 // CONNECT tunnel answers 200 only after that endpoint accepts.
@@ -600,6 +684,12 @@ async function proveProxyReuseAndConnect() {
   assert.ok(Date.now() - began < 100);
   const protocolChecks = await provePullAndTunnelSettle();
   console.log('protocol settle tests passed: ' + protocolChecks + ' checks, no socket');
+  const labelChecks = proveSubmissionLabels();
+  console.log('submission label tests passed: ' + labelChecks + ' checks, no socket');
+  await proveHeaderBound();
+  console.log('header bound tests passed: oversized complete header rejected, large body kept');
+  await proveDelayedGetNoEarlyFIN();
+  console.log('delayed bodyless GET passed: no early FIN, HTTP 200, origin-form, Connection: close');
   await proveProxyReuseAndConnect();
   console.log('smoke-flows guard tests passed: no forbidden dial, no browser');
 })().catch((err) => {

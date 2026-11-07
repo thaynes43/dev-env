@@ -32,7 +32,7 @@ const path = require('path');
 const readline = require('readline');
 const {
   parseFixtureBase, announcedFixtureBase, localRequest, applyFixtureResponse, serviceWorkerClaim,
-  fixtureWorkerPath, fixtureWorkerSource, fixtureContextOptions, fixtureBrowserLaunch, sameFixtureOrigin, proxyRequestDecision,
+  fixtureWorkerPath, fixtureWorkerSource, fixtureContextOptions, fixtureBrowserLaunch, sameFixtureOrigin, proxyRequestDecision, submissionPhase,
 } = require('./smoke-flows-guard.cjs');
 
 const args = process.argv.slice(2);
@@ -74,14 +74,22 @@ function check(width, name, ok, detail) {
   console.log(`${status} ${width}px ${name}${!ok && detail ? ': ' + detail : ''}`);
 }
 
-// accepted reports whether the server took a form post. A refusal by the
-// production origin check is NOT ACCEPTED (#480), never a pass; in the
-// diagnostic run it is also a failed diagnostic check.
-function accepted(width, flow, body, origin) {
-  if (!body.includes(refused)) return true;
-  notAccepted++;
-  if (diagnostic) failed++;
-  console.log(`${diagnostic ? 'DIAGNOSTIC ' : ''}NOT ACCEPTED (#480) ${width}px ${flow}: the production origin check refused Chromium's form post (Origin=${origin})`);
+// accepted reports whether the server took a form post. A 403 whose body is the
+// shared auth sentence is NOT ACCEPTED (#480). A 503 or any other unavailable
+// result is a hard failure with its status and phase, never an origin refusal.
+function accepted(width, flow, body, origin, status) {
+  const verdict = submissionPhase(status, body);
+  if (verdict.ok) return true;
+  const prefix = diagnostic ? 'DIAGNOSTIC ' : '';
+  if (verdict.originRefusal) {
+    notAccepted++;
+    if (diagnostic) failed++;
+    console.log(`${prefix}NOT ACCEPTED (#480) ${width}px ${flow}: the production origin check refused Chromium's form post (Origin=${origin})`);
+    return false;
+  }
+  failed++;
+  const shown = verdict.status > 0 ? String(verdict.status) : 'unknown';
+  console.log(`${prefix}FAIL ${width}px ${flow}: HTTP ${shown} ${verdict.phase} after submit; not an origin refusal. Origin=${origin}; body ${String(body || '').slice(0, 120).replace(/\s+/g, ' ')}`);
   return false;
 }
 
@@ -120,8 +128,12 @@ async function text(page) {
 // submit clicks (or double-clicks) a submit button and waits for the page
 // that the last submission produced.
 async function submit(page, button, twice) {
-  await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), twice ? button.dblclick() : button.click()]);
+  const [response] = await Promise.all([
+    page.waitForNavigation({ waitUntil: 'load' }),
+    twice ? button.dblclick() : button.click(),
+  ]);
   await page.waitForLoadState('load');
+  return response || null;
 }
 
 async function composerFields(page) {
@@ -287,9 +299,9 @@ async function flows(browser, base, width) {
   });
   check(width, 'send: wrong origin refused before acceptance', evil.status === 403 && await sendCount() === beforeSend && !evil.body.includes(receiptText), String(evil.status));
   await composer.locator('textarea[name="text"]').fill('Fixture message from the flow smoke.');
-  await submit(page, composer.locator('button[type="submit"]'), true);
+  const sendNav = await submit(page, composer.locator('button[type="submit"]'), true);
   let body = await text(page);
-  if (accepted(width, 'send', body, postOrigin)) {
+  if (accepted(width, 'send', body, postOrigin, sendNav && sendNav.status())) {
     const sends = await sendCount();
     check(width, 'send: double submit shows one Delivered receipt', body.includes('Delivered') && body.includes(requestID) && sends === beforeSend + 1 && await marked(page), 'sends ' + String(sends) + ' ' + body.slice(0, 160));
     let navErr = '';
@@ -322,10 +334,10 @@ async function flows(browser, base, width) {
   await launch.locator('select[name="repo"]').selectOption('dev-env');
   await launch.locator('select[name="mode"]').selectOption('task');
   await launch.locator('textarea[name="prompt"]').fill('Fixture task from the flow smoke.');
-  await submit(page, launch.locator('button[type="submit"]'), true);
+  const launchNav = await submit(page, launch.locator('button[type="submit"]'), true);
   const launched = page.url();
   body = await text(page);
-  if (accepted(width, 'launch', body, postOrigin)) {
+  if (accepted(width, 'launch', body, postOrigin, launchNav && launchNav.status())) {
     check(width, 'launch: double submit selects one new session', /session=fixture-uid-launch-1$/.test(launched) && body.includes('fixture-launch-1') && !body.includes('fixture-launch-2') && await marked(page), launched);
     await page.reload();
     check(width, 'launch: reload after submit', page.url() === launched && (await text(page)).includes('fixture-launch-1'));
@@ -344,9 +356,9 @@ async function flows(browser, base, width) {
   const answer = page.locator('form.ask-answer:has(input[name="askID"][value="ask-0000000000000001"])');
   await answer.locator('input[name="optionId"][value="small"]').check();
   await answer.locator('textarea[name="text"]').fill('Fixture answer from the flow smoke.');
-  await submit(page, answer.locator('button[type="submit"]'), true);
+  const asksNav = await submit(page, answer.locator('button[type="submit"]'), true);
   body = await text(page);
-  if (accepted(width, 'asks answer', body, postOrigin)) {
+  if (accepted(width, 'asks answer', body, postOrigin, asksNav && asksNav.status())) {
     check(width, 'asks: double submit records one answer', /asks\?ask=ask-0000000000000001$/.test(page.url()) && body.includes('Recorded answer') && await marked(page), page.url() + ' ' + body.slice(0, 160));
     await page.reload();
     const reopened = await page.locator('form.ask-answer:has(input[name="askID"][value="ask-0000000000000001"])').count();
@@ -588,6 +600,10 @@ function createPull(socket) {
         if (failed) throw failed;
         const at = buf.indexOf('\r\n\r\n');
         if (at >= 0) {
+          // The limit is the header block itself. A complete oversized header
+          // must not pass just because the delimiter is already buffered, and
+          // a small header must not be refused because the body shares the buffer.
+          if (at > limit) throw new Error('headers');
           const head = buf.slice(0, at).toString('latin1');
           buf = buf.slice(at + 4);
           return head;
@@ -627,8 +643,10 @@ function exchangeClose(upstream, gate, head, body) {
     upstream.on('error', () => finish(null));
     upstream.on('end', () => finish(Buffer.concat(chunks)));
     try {
+      // Connection: close is already on the request. Do not FIN before the
+      // fixture finishes: Go cancels a bodyless GET when that background read
+      // sees EOF, and portal containment then answers 503.
       upstream.write(Buffer.concat([head, body]));
-      upstream.end();
     } catch (err) {
       finish(null);
     }
@@ -713,11 +731,13 @@ async function serveProxyClient(socket, allowedOrigin, tracked) {
       }
       const body = await pull.bytes(length.length);
       const response = await exchangeClose(current, gate, Buffer.from(rewritten, 'latin1'), body);
-      current = null;
       if (!response || !response.length) {
+        destroyPeer(current);
+        current = null;
         proxyStatus(socket, 403);
         return;
       }
+      current = null;
       socket.write(response);
     }
   } catch (err) {
@@ -805,7 +825,7 @@ if (require.main === module) {
       console.log(`DIAGNOSTIC ${failed ? 'FAILED' : 'COMPLETE'}: ${failed} failed checks, ${notAccepted} refused posts; never acceptance.`);
       process.exit(failed ? 1 : 3);
     }
-    if (notAccepted) console.log(`NOT ACCEPTED (#480): ${notAccepted} POST-flow submissions (send, launch, Asks answer) refused by the production origin check; history (GET) is not affected.`);
+    if (notAccepted) console.log(`NOT ACCEPTED (#480): ${notAccepted} POST-flow submissions refused by the production origin check; history (GET) is not affected.`);
     process.exit(failed || notAccepted ? 1 : 0);
   })();
 }
