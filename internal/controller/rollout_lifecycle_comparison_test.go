@@ -139,7 +139,7 @@ func (f *futureForwarder) Delete(ctx context.Context, obj client.Object, opts ..
 	if pod, ok := obj.(*corev1.Pod); ok {
 		proof.image = agentImage(pod)
 		var stored corev1.Pod
-		if err := f.Client.Get(ctx, client.ObjectKeyFromObject(pod), &stored); err == nil {
+		if err := f.Get(ctx, client.ObjectKeyFromObject(pod), &stored); err == nil {
 			proof.storedUID = string(stored.UID)
 			proof.storedRV = stored.ResourceVersion
 			proof.hold = isHoldPod(&stored)
@@ -148,7 +148,7 @@ func (f *futureForwarder) Delete(ctx context.Context, obj client.Object, opts ..
 			}
 		}
 		var session v1alpha1.AgentSession
-		if err := f.Client.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: pod.Name}, &session); err == nil && session.Status.Rescue != nil && session.Status.Rescue.Result != "" {
+		if err := f.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: pod.Name}, &session); err == nil && session.Status.Rescue != nil && session.Status.Rescue.Result != "" {
 			proof.rescueSeen = true
 			proof.rescueResult = string(session.Status.Rescue.Result)
 			proof.rescuePodUID = session.Status.Rescue.PodUID
@@ -161,7 +161,7 @@ func (f *futureForwarder) Delete(ctx context.Context, obj client.Object, opts ..
 		f.mu.Unlock()
 		if homeName != "" {
 			var storedHome corev1.PersistentVolumeClaim
-			if err := f.Client.Get(ctx, client.ObjectKey{Namespace: homeNamespace, Name: homeName}, &storedHome); err == nil {
+			if err := f.Get(ctx, client.ObjectKey{Namespace: homeNamespace, Name: homeName}, &storedHome); err == nil {
 				proof.homeUID = string(storedHome.UID)
 				proof.homeOK = proof.homeUID == homeUID && reflect.DeepEqual(storedHome.Finalizers, homeFinalizers) && apiequality.Semantic.DeepEqual(&storedHome.Spec, &homeSpec)
 			}
@@ -604,7 +604,7 @@ func TestFutureOnlyLifecycleComparisonRunningReap(t *testing.T) {
 			t.Fatalf("home changed old %s held %s", a.homeUID, b.homeUID)
 		}
 		for _, res := range a.results {
-			if res.RequeueAfter != 0 || res.Requeue {
+			if res != (ctrl.Result{}) {
 				t.Fatalf("permitted requeue %+v", res)
 			}
 		}
@@ -651,7 +651,7 @@ func TestFutureOnlyLifecycleComparisonRunningReap(t *testing.T) {
 			}
 			for _, next := range []reapObservation{oldNext, heldNext} {
 				for _, res := range next.results {
-					if res.Requeue || res.RequeueAfter < time.Minute || res.RequeueAfter > HoldRescueRetry {
+					if res != (ctrl.Result{RequeueAfter: res.RequeueAfter}) || res.RequeueAfter < time.Minute || res.RequeueAfter > HoldRescueRetry {
 						t.Fatalf("hold Failed requeue %+v, want between one minute and %s without immediate requeue", res, HoldRescueRetry)
 					}
 				}
