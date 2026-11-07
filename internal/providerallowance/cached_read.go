@@ -108,6 +108,33 @@ func cachedRealAcquisitionFailure(attempt LastAttempt) bool {
 	return attempt.Code != nil && *attempt.Code != "" && *attempt.Code != codeSourceUnconfigured
 }
 
+// cachedOrdinaryUsageReader gates ordinaryUsageAllowed only for the account
+// capture source: openai, native_rpc, CodexRPCSourceVersion, and
+// CodexRPCCapability. Every other observation skips this gate and uses
+// normal validation, including another source that stores the same field
+// name under its own boolean signal rule. When this source carries the
+// field, the reader registry must have the one exact boolean signal rule.
+// An empty capability, a different capability, or class display does not
+// qualify. The stored field is left in place.
+func cachedOrdinaryUsageReader(obs Observation, reg Registry) bool {
+	if obs.Provider != "openai" || obs.Source.Kind != SourceNativeRPC || obs.Source.Version != CodexRPCSourceVersion || obs.Source.CapabilityRef != CodexRPCCapability {
+		return true
+	}
+	if !observationHasDirectField(obs, codexOrdinaryUsageField) {
+		return true
+	}
+	return codexOrdinaryUsageQualified(reg)
+}
+
+func observationHasDirectField(obs Observation, name string) bool {
+	for _, field := range obs.DirectFields {
+		if field.Field == name {
+			return true
+		}
+	}
+	return false
+}
+
 func cachedContexts(contexts []TrustedContext, provider string) []TrustedContext {
 	var matched []TrustedContext
 	for _, ctx := range contexts {
@@ -119,6 +146,9 @@ func cachedContexts(contexts []TrustedContext, provider string) []TrustedContext
 }
 
 func cachedObservationTrusted(obs Observation, trusted TrustedContext, reg Registry) bool {
+	if !cachedOrdinaryUsageReader(obs, reg) {
+		return false
+	}
 	assessment := ValidateObservation(obs, trusted, reg)
 	if len(assessment.Issues) != 0 || assessment.TrustedBinding != BindingVerified || assessment.ObservationBinding != BindingVerified {
 		return false

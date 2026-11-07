@@ -82,7 +82,7 @@ func AssembleCaptureBundle(raw []byte, trust AggregateTrust, now time.Time) (Rea
 			c.baseline = base
 		}
 		selected, has := contexts[e.Provider]
-		obs, err := projectCapture(e, selected, has, received)
+		obs, err := projectCapture(e, selected, has, received, trust.Registry)
 		if err != nil {
 			return fail()
 		}
@@ -132,7 +132,7 @@ func AssembleCaptureBundle(raw []byte, trust AggregateTrust, now time.Time) (Rea
 
 func mustCaptureTime(v string) time.Time { t, _ := time.Parse(time.RFC3339Nano, v); return t }
 
-func projectCapture(e captureEntry, selected TrustedContext, has bool, received time.Time) (Observation, error) {
+func projectCapture(e captureEntry, selected TrustedContext, has bool, received time.Time, reg Registry) (Observation, error) {
 	var obs Observation
 	switch e.Provider {
 	case "cursor":
@@ -230,6 +230,9 @@ func projectCapture(e captureEntry, selected TrustedContext, has bool, received 
 		obs.Scope.BindingState = selected.BindingState
 		obs.Scope.AccountRef, obs.Scope.WorkspaceRef = cloneString(selected.AccountRef), cloneString(selected.WorkspaceRef)
 	}
+	// Qualified boolean projection is part of the normalized observation. It is
+	// applied before the ID hash. No exact rule leaves the legacy observation.
+	obs = projectCodexOrdinaryUsage(obs, e.Payload, reg)
 	// Stable ID follows the canonical normalized capture, never the serving clock.
 	obs.ObservationID = "capture-pending"
 	identity, err := json.Marshal(obs)

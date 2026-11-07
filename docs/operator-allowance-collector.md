@@ -128,6 +128,33 @@ with the closed reason `builtin_model_usage_unqualified`.
 The static Claude OAuth environment token is excluded from that child, matching
 the existing Remote Control launch's keeper-owned login path.
 
+Codex 0.160.1 returns one top-level nullable `ordinaryUsageAllowed` boolean in
+`GetAccountRateLimitsResponse`; see the pinned official
+[account processor](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/app-server/src/request_processors/account_processor.rs)
+and [response contract](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/app-server-protocol/src/protocol/v2/account.rs)
+for `rust-v0.160.1`. Explicit `false` is preserved; missing or null remains
+unknown. Valid percentages alongside null are legitimate: the app server only
+supplies the flag for a matching current account and user outside FedRAMP. This
+read exposes no provider measurement clock, so `providerObservedAt` remains
+null and strict current-freshness requirements are unchanged. `true` means only
+that ordinary included usage was reported allowed at that read, not execution
+permission, successful work, paid capacity or a recovery promise; `false` means
+ordinary included usage was reported unavailable at that read. Neither value is
+inferred from percentages or resets. Capture projects the flag only under the
+existing exact `SourceRule.DirectFields` Boolean/`ClassSignal` and capability
+qualification; without that qualification, legacy observations and their IDs
+remain unchanged. Independent readers revalidate that qualification. This source
+support performs no collection and changes no private qualification rules.
+
+The optional sanitized-capture key is a wire-format addition even when its value
+is `null` or normalized projection is dormant: older closed capture decoders
+reject it. Upgrade every receiving capture-assembly consumer before upgrading
+or enabling extended-capture producers. Keep collection expired while receiving
+consumers are mixed. Before downgrading receivers, stop extended producers and
+settle in-flight extended bundles with a compatible receiver, preserving every
+retry and uncertainty fence. Do not edit an in-flight artifact or clear a fence
+to force a downgrade. The `providerallowance.read.v1` response schema is unchanged.
+
 Cursor uses normal `about --format json` before/after its own fresh empty
 workspace and PTY. Only the qualified current visible terminal states permit
 workspace trust, typing `/usage`, or a single Enter after its exact autocomplete
