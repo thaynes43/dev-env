@@ -309,6 +309,31 @@ claims no provider measurement time: the figures are whatever the visible view s
 
 ## Answering one approved prompt
 
+### Native file-write decisions
+
+`answer --expect-kind modal-file-write --choice y --write-path /exact/destination`
+answers one separately approved native Write decision. The pinned 2026.10.14
+fixture qualifies only its queued, 80-column layout. Supply the complete literal
+rendered block in `--expect-text-file`, from its full-width divider through the
+review footer: queue index/count, abbreviated title, entire content preview,
+destination (including its displayed wrapping), selected Proceed row, rejection,
+allowlist, Run Everything and switch rows. Blank rows and indentation are
+significant. The expected block is limited to 4096 UTF-8 bytes and 64 rows; Shell
+approval limits stay unchanged. The separately supplied destination must be one
+normalized absolute path and match the complete destination rows and title suffix.
+
+The full exact block must appear once on the current locatable screen. A cropped
+preview, history-only copy, truncation indicator, changed content/path/queue,
+another prompt, error or unbound trailing row refuses. Other layouts, widths and
+choices refuse. This binds the displayed preview, not hidden original file bytes.
+As with Shell decisions, the caller verifies authorization for the exact action;
+the receipt, same-pane/process/owner, spent ledger and last-capture checks remain
+required. It sends one literal `y`, without Enter, and never changes an allowlist.
+Inspect afterward; another queued decision requires its own fresh qualification.
+
+The sanitized real capture is `native-write-approval.json`. Its 80x48 current
+frame holds the complete preview; the original 80x24 cropped frame cannot qualify.
+
 `answer` sends one approved, specific prompt choice, and nothing else. `reply`
 still refuses every prompt.
 

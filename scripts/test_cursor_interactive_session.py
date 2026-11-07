@@ -1,6 +1,7 @@
 """Offline fixtures. No installed Cursor client, tmux server, or account is contacted."""
 
 import argparse
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import json
@@ -799,6 +800,152 @@ class AnswerTests(AnswerFixture):
     def restart_case(self):
         self.log.unlink(missing_ok=True)
         (self.root / "state" / "cursor-interactive-session" / self.name).unlink(missing_ok=True)
+
+    def native_write_fixture(self):
+        fixture = json.loads((SCRIPT.parent / "cursor-interactive-session-fixtures" /
+                              "native-write-approval.json").read_text())
+        self.assertEqual(hashlib.sha256(fixture["capture"].encode()).hexdigest(), fixture["captureSHA256"])
+        self.env["FAKE_WIDTH"] = str(fixture["width"])
+        self.screen(fixture["capture"], visible=fixture["height"], cursor=fixture["cursor"],
+                    history=fixture["history"])
+        self.expect_path.write_text(fixture["expectedText"])
+        return fixture
+
+    def native_write_args(self, receipt, fixture, **kwargs):
+        return self.answer_args(receipt, choice="y", kind="modal-file-write", **kwargs) + [
+            "--write-path", fixture["writePath"]]
+
+    def test_native_write_real_capture_sends_only_one_y(self):
+        fixture = self.native_write_fixture()
+        inspected = self.start_and_inspect()
+        self.assertEqual(inspected["classification"], "modal-file-write")
+        code, answered = self.invoke("answer", self.native_write_args(inspected["receipt"], fixture))
+        self.assertEqual((code, answered["state"]), (0, "answered"), answered)
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "y"]])
+        self.assertEqual(json.loads(self.ledger().read_text())["write_path"], fixture["writePath"])
+        code, again = self.invoke("answer", self.native_write_args(inspected["receipt"], fixture))
+        self.assertEqual((code, again["state"]), (2, "approval-spent"))
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_native_write_refuses_incomplete_changed_and_interfering_frames(self):
+        for change in ("cropped", "history", "truncated", "duplicate", "path", "content", "queue", "error"):
+            with self.subTest(change=change):
+                self.restart_case()
+                fixture = self.native_write_fixture()
+                captured = fixture["capture"]
+                if change == "cropped":
+                    self.screen(captured, visible=24, cursor=23, history=24)
+                elif change == "history":
+                    self.screen(fixture["expectedText"] + "\n" * 80, visible=48, cursor=47)
+                elif change == "truncated":
+                    self.screen("\n".join(captured.splitlines()[:-1]) + "\n", visible=48, cursor=47, history=fixture["history"])
+                elif change in ("duplicate", "error"):
+                    rows = captured.splitlines()
+                    rows[0] = " Write to this file?" if change == "duplicate" else "Error: Agent stopped retrying"
+                    self.screen("\n".join(rows) + "\n", visible=48, cursor=47, history=fixture["history"])
+                else:
+                    replacements = {
+                        "path": ("20261107/ACK.md", "20261107/OTHER.md"),
+                        "content": ("# ACK reply-viewport helper source/test", "# Changed content"),
+                        "queue": ("Approval 1 of 2", "Approval 2 of 2"),
+                    }
+                    old, new = replacements[change]
+                    self.assertIn(old, captured)
+                    self.screen(captured.replace(old, new), visible=48, cursor=47, history=fixture["history"])
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("answer", self.native_write_args(inspected["receipt"], fixture))
+                self.assertEqual(code, 2, refused)
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.ledger().exists())
+
+    def test_native_write_requires_exact_path_choice_and_bounded_expectation(self):
+        fixture = self.native_write_fixture()
+        inspected = self.start_and_inspect()
+        cases = [
+            ("path", ["--write-path", fixture["writePath"] + "-other"]),
+            ("tab", ["--choice", "tab"]), ("skip", ["--choice", "skip"]),
+            ("ctrl-c", ["--choice", "ctrl-c"]),
+        ]
+        for label, extra in cases:
+            with self.subTest(label=label):
+                code, refused = self.invoke("answer", self.native_write_args(inspected["receipt"], fixture) + extra)
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"), refused)
+                self.assertEqual(self.sends(), [])
+        for content in ("x" * 4097, fixture["expectedText"] + "\n" * 64):
+            self.expect_path.write_text(content)
+            code, refused = self.invoke("answer", self.native_write_args(inspected["receipt"], fixture))
+            self.assertEqual((code, refused["state"]), (2, "invalid-input"), refused)
+            self.assertEqual(self.sends(), [])
+
+    def test_native_write_preserves_receipt_process_and_owner_guards(self):
+        for mode in ("replaced", "foreign-owner", "copy-mode"):
+            with self.subTest(mode=mode):
+                self.restart_case()
+                fixture = self.native_write_fixture()
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("answer", self.native_write_args(inspected["receipt"], fixture), mode=mode)
+                self.assertEqual(code, 2, refused)
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.ledger().exists())
+        self.restart_case()
+        fixture = self.native_write_fixture()
+        inspected = self.start_and_inspect()
+        self.capture.write_text(self.capture.read_text().replace("# ACK", "# NEW"))
+        code, refused = self.invoke("answer", self.native_write_args(inspected["receipt"], fixture))
+        self.assertEqual((code, refused["state"]), (2, "stale-receipt"))
+        self.assertEqual(self.sends(), [])
+
+    def test_native_write_blocks_generic_reply(self):
+        self.native_write_fixture()
+        inspected = self.start_and_inspect()
+        self.text_path.write_text("continue")
+        code, refused = self.invoke("reply", ["--receipt", inspected["receipt"], "--text-file", str(self.text_path),
+                                               "--observed-ready", "--submit"])
+        self.assertEqual((code, refused["state"]), (2, "modal-file-write"))
+        self.assertEqual(self.sends(), [])
+
+    def test_native_write_final_capture_change_spends_but_sends_nothing(self):
+        for old, new in (("# ACK reply-viewport", "# Changed preview"), ("20261107/ACK.md", "20261107/OTHER.md")):
+            with self.subTest(change=old):
+                self.restart_case()
+                fixture = self.native_write_fixture()
+                inspected = self.start_and_inspect()
+                approval = self.case_approval(old)
+                args = helper.build_parser().parse_args([
+                    "answer", "--name", self.name, "--tmux", self.tmux,
+                    *self.native_write_args(inspected["receipt"], fixture, approval=approval)])
+                original = helper.spend_approval
+
+                def spend_then_change(path, entry):
+                    original(path, entry)
+                    self.capture.write_text(fixture["capture"].replace(old, new))
+
+                with mock.patch.dict(os.environ, self.env), mock.patch.object(helper, "spend_approval", spend_then_change):
+                    with self.assertRaises(helper.Refusal) as caught:
+                        helper.answer_session(args)
+                self.assertEqual(caught.exception.state, "prompt-changed")
+                self.assertEqual(self.sends(), [])
+                self.assertEqual(json.loads(self.ledger(approval).read_text())["outcome"], "not-sent")
+                self.assertEqual(self.state()["answers"][-1]["outcome"], "not-sent")
+                self.assertEqual(self.state()["receipt_id"], "")
+                self.native_write_fixture()
+                newer = self.inspect_now()
+                code, refused = self.invoke("answer", self.native_write_args(newer["receipt"], fixture, approval=approval))
+                self.assertEqual((code, refused["state"]), (2, "approval-spent"))
+                self.assertEqual(self.sends(), [])
+
+    def test_native_write_cannot_clear_pending_feedback(self):
+        fixture = self.native_write_fixture()
+        inspected = self.start_and_inspect()
+        state = self.state()
+        state["feedback_pending"] = "prior-skip-reference"
+        path = self.root / "state" / "cursor-interactive-session" / self.name
+        path.write_text(json.dumps(state))
+        code, refused = self.invoke("answer", self.native_write_args(inspected["receipt"], fixture))
+        self.assertEqual((code, refused["state"]), (2, "feedback-pending"))
+        self.assertEqual(self.state()["feedback_pending"], "prior-skip-reference")
+        self.assertFalse(self.ledger().exists())
+        self.assertEqual(self.sends(), [])
 
     def test_answer_sends_exactly_one_key_and_records_it(self):
         inspected = self.start_and_inspect()
