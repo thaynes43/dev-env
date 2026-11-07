@@ -146,6 +146,15 @@ qualification; without that qualification, legacy observations and their IDs
 remain unchanged. Independent readers revalidate that qualification. This source
 support performs no collection and changes no private qualification rules.
 
+The optional sanitized-capture key is a wire-format addition even when its value
+is `null` or normalized projection is dormant: older closed capture decoders
+reject it. Upgrade every receiving capture-assembly consumer before upgrading
+or enabling extended-capture producers. Keep collection expired while receiving
+consumers are mixed. Before downgrading receivers, stop extended producers and
+settle in-flight extended bundles with a compatible receiver, preserving every
+retry and uncertainty fence. Do not edit an in-flight artifact or clear a fence
+to force a downgrade. The `providerallowance.read.v1` response schema is unchanged.
+
 Cursor uses normal `about --format json` before/after its own fresh empty
 workspace and PTY. Only the qualified current visible terminal states permit
 workspace trust, typing `/usage`, or a single Enter after its exact autocomplete
