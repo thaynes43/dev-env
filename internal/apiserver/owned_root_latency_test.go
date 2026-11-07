@@ -32,14 +32,14 @@ import (
 )
 
 // Real scheduling delays. The handler and metadata reads sit outside the
-// one-second CRI proof. The exec delay is only the slack that proof still
-// has above the evidence server's 500ms socket budget (evidence_linux.go).
-// A fixed 650ms sleep inside that proof leaves 350ms, short of the socket
-// budget: the proof is refused, ObserveNative latches, and the API answers
-// 503 while the outer roundtrip is still inside the two-second envelope.
-// CI 41866791721 logged complete authority roundtrip=1.27s and then that
-// refusal. The success composition therefore waits the real slack, and the
-// 1-2s assertion is wall time of that delayed request.
+// one-second CRI proof. The exec delay keeps the evidence server's 500ms
+// socket deadline as a conservative reserve (evidence_linux.go). That
+// deadline is an upper bound, not a minimum service time. A fixed 650ms
+// sleep inside the proof can leave less margin than the reserve. It does
+// not invariably force refusal. CI 41866791721 logged complete authority
+// roundtrip=1.27s and then process-proof refusal with HTTP 503. The success
+// composition waits the real slack, and the 1-2s assertion is wall time of
+// that delayed request.
 const (
 	latencyHandlerDelay   = 120 * time.Millisecond
 	latencyMetadataDelay  = 60 * time.Millisecond
@@ -75,10 +75,11 @@ func ownedLatencyWait(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// waitAboveEvidenceReserve holds only the portion of the proof context that
-// remains after the evidence socket budget. The real probe then runs in that
-// reserved window. A fixed sleep is not used: 650ms plus the 500ms socket
-// budget does not fit in the one-second proof.
+// waitAboveEvidenceReserve holds the proof context's spare time above the
+// evidence socket's upper bound. The real probe then runs in what remains.
+// The 500ms socket deadline is a conservative reserve, not a minimum. A
+// fixed 650ms sleep can leave insufficient margin; it does not invariably
+// force refusal.
 func waitAboveEvidenceReserve(ctx context.Context, reserve time.Duration) error {
 	deadline, ok := ctx.Deadline()
 	if !ok {
@@ -462,11 +463,12 @@ func TestEnvtestOwnedAuthorityProofDeadlineRefusal(t *testing.T) {
 	run.waitReady()
 	run.logs.reset()
 	run.armed.Store(true)
+	// Observe the buffered refusal before reading done. Both can be ready, and
+	// a select that includes done can report a correct stop as a missing
+	// observation.
 	var rt latencyRoundtrip
 	select {
 	case rt = <-run.completed:
-	case e := <-run.done:
-		t.Fatal("guard stopped before the proof refusal was observed", e)
 	case <-time.After(4 * time.Second):
 		t.Fatal("proof deadline roundtrip did not complete")
 	}
