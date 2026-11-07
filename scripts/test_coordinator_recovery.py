@@ -1397,6 +1397,45 @@ class RecoveryAdapterTests(unittest.TestCase):
             self.assertIsNone(capped["verdict"])
             self.assertIsNone(cache_entry(store, body))
 
+    def test_retry_rearm_fires_at_original_deadline(self):
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show(), sendExit=5))
+            window = "2026-11-02T03:05:10Z"
+            deadline = "2026-11-02T03:05:20Z"
+            body = request(observedAt="2026-11-02T03:05:00Z", windowExpiresAt=window, deadline=deadline)
+            code, armed = self.run_adapter(store, body)
+            self.assertEqual(code, 0)
+            self.assertEqual(armed["status"], "retrying")
+            self.assertEqual(armed["reason"], "not-sent-retry")
+            self.assertEqual(armed["attempt"], 1)
+            self.assertEqual(armed["nextAttemptAt"], "2026-11-02T03:05:30Z")
+            self.assertEqual(armed["schedulingUntil"], window)
+            self.assertEqual(self.send_keys(store), [armed["logicalKey"]])
+            self.assertEqual(self.load_state(store)["sent"], [])
+            entry = cache_entry(store, body)
+            self.assertEqual(entry["class"], "retry")
+            self.assertEqual(entry["attempts"], 1)
+            self.assertEqual(entry["nextAttemptAt"], "2026-11-02T03:05:30Z")
+
+            fired = request(observedAt=deadline, windowExpiresAt=window, deadline=deadline)
+            code, done = self.run_adapter(store, fired)
+            self.assertEqual(code, 0)
+            self.assertEqual(done["status"], "blocked")
+            self.assertEqual(done["reason"], "deadline-elapsed")
+            self.assertFalse(done["windowRenewed"])
+            self.assertEqual(done["schedulingUntil"], "")
+            self.assertEqual(done["notificationsSent"], 0)
+            self.assertEqual(done["publication"], "not-authorized")
+            self.assertEqual(done["deployment"], "not-performed")
+            self.assertEqual(done["taskClaim"], "unchanged")
+            self.assertEqual(self.send_keys(store), [armed["logicalKey"]])
+            self.assertEqual(self.load_state(store)["sent"], [])
+            kept = cache_entry(store, fired)
+            self.assertEqual(kept["class"], "retry")
+            self.assertEqual(kept["attempts"], 1)
+            self.assertEqual(kept["nextAttemptAt"], "2026-11-02T03:05:30Z")
+
 
 if __name__ == "__main__":
     unittest.main()
