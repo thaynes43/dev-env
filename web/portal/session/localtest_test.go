@@ -239,6 +239,20 @@ func TestLocalTestLoginAndCrossOriginPostsStayClosed(t *testing.T) {
 	}
 }
 
+// TestLocalTestRoutesSendSameOriginReferrerPolicy reads the local sessions,
+// Asks answer and logout responses. Each carries the session policy once.
+// Attention's no-referrer boundary is a different route and is not changed here.
+func TestLocalTestRoutesSendSameOriginReferrerPolicy(t *testing.T) {
+	instance := newLocalTestForTest(t)
+	for _, path := range []string{SessionsPath, AsksPath + "?ask=ask-0000000000000001", "/auth/logout"} {
+		w := serveLocalTest(instance, localTestRequest(http.MethodGet, path))
+		got := w.Header().Values("Referrer-Policy")
+		if w.Code != http.StatusOK || len(got) != 1 || got[0] != "same-origin" || w.Header().Get("X-Portal-Local-Test") != "fixture" {
+			t.Fatalf("%s: status %d Referrer-Policy %q", path, w.Code, got)
+		}
+	}
+}
+
 func TestLocalTestNetworkRefusesEveryOtherDestination(t *testing.T) {
 	// Only .invalid names: a regression that dials for real cannot reach a
 	// real address, and the deadline stops it from hanging.

@@ -106,6 +106,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Portal smoke guard
+        run: |
+          node --version
+          node web/portal/localtest/smoke-flows-guard.test.cjs
       - name: Checkout pinned shared guard
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -189,6 +193,35 @@ jobs:
         run: make build-portal
       - name: Build agent-run for darwin/arm64
         run: make build-agent-run-darwin
+      - name: Build source-bound portal-localtest harness
+        run: |
+          set -eu
+          out="${RUNNER_TEMP}/portal-localtest"
+          mkdir -p "$out"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags portallocaltest -o "$out/portal-localtest" ./web/portal/localtest
+          go version > "$out/go-version.txt"
+          {
+            printf 'commit %s\n' "$(git rev-parse HEAD)"
+            printf 'goos %s\n' linux
+            printf 'goarch %s\n' amd64
+            printf 'cgo %s\n' 0
+            printf 'tags %s\n' portallocaltest
+            printf 'go_version %s\n' "$(go env GOVERSION)"
+            printf 'gomod_sha256 %s\n' "$(sha256sum go.mod | awk '{print $1}')"
+            printf 'gosum_sha256 %s\n' "$(sha256sum go.sum | awk '{print $1}')"
+            printf 'binary_sha256 %s\n' "$(sha256sum "$out/portal-localtest" | awk '{print $1}')"
+          } > "$out/manifest.txt"
+          (
+            cd "$out"
+            sha256sum portal-localtest manifest.txt go-version.txt > SHA256SUMS
+          )
+      - name: Upload portal-localtest harness
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: portal-localtest-${{ github.sha }}
+          path: ${{ runner.temp }}/portal-localtest
+          if-no-files-found: error
+          retention-days: 7
 
   # Stale generated code (deep-copy, CRDs) fails here. A separate job so the lint
   # and test jobs do not wait on controller-gen.
