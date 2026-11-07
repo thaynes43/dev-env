@@ -147,7 +147,12 @@ types nothing when one fails. Two refuse with `invalid-input`:
   as `[Pasted text #N +M lines]`, so its end would never show.
 
 The third: the visible screen of the verified capture must be locatable, or the
-reply ends `prompt-unclear`.
+reply ends `prompt-unclear`. It must stay locatable after the instruction is
+echoed onto the last captured row. The 8192-byte cap keeps the tail of the
+bounded capture, so a draft that pushes the visible screen past that cap would
+leave the fence unable to see the viewport. That reply also ends
+`prompt-unclear`, and it types nothing. An unexpected later capture that
+cannot locate the screen still happens after typing, and then Enter is not sent.
 
 After typing, the helper waits 0.3 s and reads the pane, up to five times. Each
 read does three things:

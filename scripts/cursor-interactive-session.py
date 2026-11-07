@@ -400,6 +400,18 @@ def visible_screen(text, truncated, rows_total, ident):
     return rows[-rows_needed:]
 
 
+def echo_bounded(text, instruction):
+    """The bounded capture after `instruction` is echoed onto its last row.
+
+    The submit fence reads the pane again after typing. The draft stays on the
+    composer row, so the capture grows by the instruction's UTF-8 bytes and the
+    row count does not change. Re-bounding that capture shows whether the
+    8192-byte cap would cut into the visible screen."""
+    rows = text.split("\n")
+    rows[-1] += instruction
+    return bound_text("\n".join(rows))
+
+
 def classify(text, truncated, rows_total, ident, answered=None):
     """(kind, located, answered reference) for one bounded capture. Transcript lines are never user drafts.
 
@@ -790,10 +802,16 @@ def reply_locked(args, instruction, answered_text=None):
     if args.submit:
         try:
             verified = visible_screen(text, truncated, rows_total, ident)
-            before = (tail_count(verified, instruction), frozenset(phrase_rows(verified)))
         except Refusal:
             raise Refusal("prompt-unclear", "The visible screen cannot be located, so a submit cannot be fenced. "
                                             "Nothing was sent.")
+        try:
+            echo_text, echo_truncated = echo_bounded(text, instruction)
+            visible_screen(echo_text, echo_truncated, rows_total, ident)
+        except Refusal:
+            raise Refusal("prompt-unclear", "The visible screen cannot be established once this draft is echoed, "
+                                            "so a submit cannot be fenced. Nothing was sent.")
+        before = (tail_count(verified, instruction), frozenset(phrase_rows(verified)))
     clear_receipt(path, state)
     submitted = send_instruction(state, instruction, args.submit, before)
     return {

@@ -3503,6 +3503,56 @@ class AnswerTests(AnswerFixture):
         self.assertNotIn("..", refused["detail"])
         self.assertNotIn(["send-keys", "-t", "%7", "Enter"], self.sends())
 
+    def wide_viewport(self, composer):
+        """Synthetic pane that locates until a draft overflows the 8192-byte cap.
+
+        Only width 400 and height 48 are parent-attested. History 80, the
+        cursor, the raw row count and the filler rows are synthetic, not
+        historical measurements. This is not the retained capture."""
+        height, history, width = 48, 80, 400
+        visible = ["x" * 168] * (height - 1) + [composer]
+        capture = "\n".join(["h"] * history + visible)
+        self.env["FAKE_WIDTH"] = str(width)
+        self.screen(capture, visible=height, history=history)
+        kept = "\n".join(capture.split("\n")[-80:])
+        self.assertLess(len(kept.encode("utf-8")), helper.MAX_CAPTURE)
+        self.assertEqual(self.env["FAKE_HEIGHT"], "48")
+        self.assertEqual(self.env["FAKE_HISTORY"], "80")
+        return capture
+
+    def test_submit_refuses_before_typing_when_the_draft_hides_the_viewport(self):
+        # The verified screen locates (last 80 rows fit in 8192 bytes, and the
+        # last 48 of them are the pane). Echoing a draft onto the composer
+        # pushes those rows past the cap, so the fence cannot establish the
+        # viewport. Reply must refuse before send-keys. A shorter draft that
+        # still fits must still submit. --observed-ready on Cursor's arrow
+        # composer is the same preflight.
+        overflow = "y" * 300
+        fitting = "y" * 100
+        cases = {
+            "active composer": (">", ()),
+            "observed-ready arrow composer": ("\u2192", ("--observed-ready",)),
+        }
+        for label, (composer, flags) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.wide_viewport(composer)
+                self.text_path.write_text(overflow)
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("reply", ["--receipt", inspected["receipt"],
+                                                      "--text-file", str(self.text_path), "--submit", *flags])
+                self.assertEqual((code, refused["state"]), (2, "prompt-unclear"))
+                self.assertIn("once this draft is echoed", refused["detail"])
+                self.assertIn("Nothing was sent", refused["detail"])
+                self.assertNotIn("already sent", refused["detail"])
+                self.assertEqual(self.sends(), [])
+                self.assertEqual(self.state()["receipt_id"], helper.parse_receipt(inspected["receipt"])["id"])
+        self.restart_case()
+        self.wide_viewport(">")
+        code, sent = self.submit(fitting, screen=None)
+        self.assertEqual((code, sent["state"], sent["submitted"]), (0, "sent", True))
+        self.assertEqual([args[-1] for args in self.sends()], [fitting, "Enter"])
+
     def test_observed_ready_submit_on_an_unlocatable_screen_types_nothing(self):
         # An unclassified screen whose row count does not match tmux's history and pane
         # height: the visible screen cannot be located, so a fenced submit cannot be bound.
