@@ -125,8 +125,10 @@ Reply sends `tmux send-keys -t <pane> -l -- <exact instruction>`. It does not
 split the instruction into key names. `--submit` then sends one separate
 `Enter`, but only after a submit fence (below). Without `--submit`, Enter is not sent. All C0 and C1 control
 characters and DEL are refused, even with `--observed-ready`. This includes
-newlines, tabs, carriage returns, Escape, Ctrl-C, and Backspace. Neither flag
-is passed to Cursor.
+newlines, tabs, carriage returns, Escape, Ctrl-C, and Backspace. U+2028 and U+2029
+are refused anywhere in the original instruction, including an input that contains
+only those separators, before trimming could remove them. Other non-ASCII text is
+still accepted. Neither flag is passed to Cursor.
 
 **Submit fence.** Cursor 2026.10.14 holds fast literal input in a 75 ms paste
 buffer. An Enter inside that window still submits the whole text, but the text
@@ -147,12 +149,14 @@ types nothing when one fails. Two refuse with `invalid-input`:
   as `[Pasted text #N +M lines]`, so its end would never show.
 
 The third: the visible screen of the verified capture must be locatable, or the
-reply ends `prompt-unclear`. It must stay locatable after the instruction is
-echoed onto the last captured row. The 8192-byte cap keeps the tail of the
-bounded capture, so a draft that pushes the visible screen past that cap would
-leave the fence unable to see the viewport. That reply also ends
-`prompt-unclear`, and it types nothing. An unexpected later capture that
-cannot locate the screen still happens after typing, and then Enter is not sent.
+reply ends `prompt-unclear`. It must stay locatable after the supported renderer
+replaces the last captured row with `→ ` plus the draft. The preflight counts
+that prefix overhead, so a shorter old composer prefix cannot hide it. When the
+old row is longer than the prefix, the draft is still counted on that row. The
+8192-byte cap keeps the tail of the bounded capture, so a draft that pushes the
+visible screen past that cap ends `prompt-unclear` and types nothing. This is
+not a wrapping, cell-width, or grapheme-cluster rule. An unexpected later capture
+that cannot locate the screen still happens after typing, and then Enter is not sent.
 
 After typing, the helper waits 0.3 s and reads the pane, up to five times. Each
 read does three things:

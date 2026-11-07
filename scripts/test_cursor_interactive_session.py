@@ -533,6 +533,44 @@ class CursorInteractiveTests(unittest.TestCase):
                 self.assertEqual((code, refused["state"]), (2, "invalid-input"))
         self.assertFalse(any(args[0] == "send-keys" for args in self.commands("tmux")))
 
+    def test_unicode_line_separators_are_refused_before_trim(self):
+        # U+2028 and U+2029 are rejected on the original input, before a trim
+        # can drop a leading, trailing, or only-separator instruction. Ordinary
+        # non-ASCII stays accepted. Submit and observed-ready do not bypass it.
+        samples = {
+            "embedded": "ab\u2028cd",
+            "leading": "\u2028ab",
+            "trailing": "ab\u2029",
+            "single line separator": "\u2028",
+            "single paragraph separator": "\u2029",
+            "repeated": "\u2028\u2029\u2028",
+            "spaces around a separator": " \u2028 ",
+        }
+        for label, text in samples.items():
+            with self.subTest(label=label):
+                self.text_path.write_text(text)
+                with self.assertRaises(helper.Refusal) as caught:
+                    helper.read_instruction(str(self.text_path))
+                self.assertEqual(caught.exception.state, "invalid-input")
+                self.assertNotIn("1..4096", caught.exception.detail)
+        self.text_path.write_text("hello\nworld")
+        with self.assertRaises(helper.Refusal) as caught:
+            helper.read_instruction(str(self.text_path))
+        self.assertIn("C0", caught.exception.detail)
+        self.text_path.write_text("caf\u00e9 \u2014 ok")
+        self.assertEqual(helper.read_instruction(str(self.text_path)), "caf\u00e9 \u2014 ok")
+        inspected = self.start_and_inspect()
+        self.text_path.write_text("go\u2028on")
+        for flags in ((), ("--submit",), ("--observed-ready",), ("--submit", "--observed-ready")):
+            with self.subTest(flags=flags):
+                self.log.write_text("")
+                code, refused = self.invoke("reply", ["--receipt", inspected["receipt"],
+                                                      "--text-file", str(self.text_path), *flags])
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+                self.assertFalse(any(args[0] == "send-keys" for args in self.commands("tmux")))
+                stored = json.loads((self.root / "state" / "cursor-interactive-session" / self.name).read_text())
+                self.assertEqual(stored["receipt_id"], helper.parse_receipt(inspected["receipt"])["id"])
+
     def send_barrier(self):
         ready, gate = self.root / "send-ready", self.root / "send-gate"
         os.mkfifo(ready, 0o600)
@@ -3520,38 +3558,56 @@ class AnswerTests(AnswerFixture):
         self.assertEqual(self.env["FAKE_HISTORY"], "80")
         return capture
 
+    def test_echo_bounded_counts_the_rendered_prefix(self):
+        # Pure boundary on the synthetic pane. The supported echo replaces the
+        # composer row with "→ " plus the draft. 244 ASCII characters still
+        # locate; 245 do not. Appending onto ">" or "→" still locates at 245.
+        # Not a wrapping, cell-width, or grapheme rule.
+        height, history = 48, 80
+        ident = {"height": "48", "history": "80"}
+        for composer, count, expected in (
+            (">", 244, True), (">", 245, False), ("\u2192", 244, True), ("\u2192", 245, False),
+        ):
+            with self.subTest(composer=composer, count=count):
+                visible = ["x" * 168] * (height - 1) + [composer]
+                capture = "\n".join(["h"] * history + visible)
+                text, _truncated = helper.bound_text(capture)
+                echoed, flag = helper.echo_bounded(text, "y" * count)
+                try:
+                    helper.visible_screen(echoed, flag, helper.capture_rows(capture), ident)
+                    located = True
+                except helper.Refusal:
+                    located = False
+                self.assertEqual(located, expected)
+
     def test_submit_refuses_before_typing_when_the_draft_hides_the_viewport(self):
-        # The verified screen locates (last 80 rows fit in 8192 bytes, and the
-        # last 48 of them are the pane). Echoing a draft onto the composer
-        # pushes those rows past the cap, so the fence cannot establish the
-        # viewport. Reply must refuse before send-keys. A shorter draft that
-        # still fits must still submit. --observed-ready on Cursor's arrow
-        # composer is the same preflight.
-        overflow = "y" * 300
-        fitting = "y" * 100
+        # Same boundary through reply. 244 ASCII characters still submit. 245
+        # must send no keys and keep the receipt, on the active ">" path and
+        # the observed-ready "→" path. History, cursor, and filler are synthetic.
         cases = {
             "active composer": (">", ()),
             "observed-ready arrow composer": ("\u2192", ("--observed-ready",)),
         }
         for label, (composer, flags) in cases.items():
-            with self.subTest(label=label):
-                self.restart_case()
-                self.wide_viewport(composer)
-                self.text_path.write_text(overflow)
-                inspected = self.start_and_inspect()
-                code, refused = self.invoke("reply", ["--receipt", inspected["receipt"],
-                                                      "--text-file", str(self.text_path), "--submit", *flags])
-                self.assertEqual((code, refused["state"]), (2, "prompt-unclear"))
-                self.assertIn("once this draft is echoed", refused["detail"])
-                self.assertIn("Nothing was sent", refused["detail"])
-                self.assertNotIn("already sent", refused["detail"])
-                self.assertEqual(self.sends(), [])
-                self.assertEqual(self.state()["receipt_id"], helper.parse_receipt(inspected["receipt"])["id"])
-        self.restart_case()
-        self.wide_viewport(">")
-        code, sent = self.submit(fitting, screen=None)
-        self.assertEqual((code, sent["state"], sent["submitted"]), (0, "sent", True))
-        self.assertEqual([args[-1] for args in self.sends()], [fitting, "Enter"])
+            for kind, count in (("fits", 244), ("hides", 245)):
+                with self.subTest(label=label, kind=kind):
+                    self.restart_case()
+                    self.wide_viewport(composer)
+                    text = "y" * count
+                    self.text_path.write_text(text)
+                    inspected = self.start_and_inspect()
+                    code, payload = self.invoke("reply", ["--receipt", inspected["receipt"],
+                                                          "--text-file", str(self.text_path), "--submit", *flags])
+                    if kind == "hides":
+                        self.assertEqual((code, payload["state"]), (2, "prompt-unclear"))
+                        self.assertIn("once this draft is echoed", payload["detail"])
+                        self.assertIn("Nothing was sent", payload["detail"])
+                        self.assertNotIn("already sent", payload["detail"])
+                        self.assertEqual(self.sends(), [])
+                        self.assertEqual(self.state()["receipt_id"], helper.parse_receipt(inspected["receipt"])["id"])
+                    else:
+                        self.assertEqual((code, payload["state"], payload["submitted"]), (0, "sent", True))
+                        self.assertEqual([args[-1] for args in self.sends()], [text, "Enter"])
 
     def test_observed_ready_submit_on_an_unlocatable_screen_types_nothing(self):
         # An unclassified screen whose row count does not match tmux's history and pane
