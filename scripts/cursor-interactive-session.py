@@ -31,8 +31,9 @@ MAX_COMMAND_BYTES = 8192
 MAX_EXPECT = 4096
 MAX_EXPECT_LINES = 20
 MAX_REJECT_EXPECT_LINES = 64
+MAX_WRITE_EXPECT_LINES = 64
 MAX_ANSWERS = 32
-ANSWER_KINDS = ("modal-trust", "modal-permission", "modal-approval")
+ANSWER_KINDS = ("modal-trust", "modal-permission", "modal-approval", "modal-file-write")
 APPROVAL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@#-]{7,199}")
 MAX_TRUST_PATH = 1024
 TOP_CORNERS = "\u256d\u250c\u2554\u250f"
@@ -76,6 +77,7 @@ SKIP_CHOICE = "skip"  # One literal n: opens the command's reason field, never a
 ERROR_PREFIX = "Error: "
 SKIP_SUFFIX = "(esc or n)"
 MODALS = (
+    ("modal-file-write", ("write to this file?",)),
     ("modal-trust", ("trust this workspace", "trust the contents of", "workspace trust", "do you trust")),
     ("modal-permission", ("permission required", "needs permission", "requesting permission")),
     ("modal-approval", ("allow this command", "run this command?", "approval required",
@@ -107,6 +109,7 @@ CLASSIFICATION_DETAILS = {
     "modal-permission": "Known permission phrasing is on the visible screen.",
     "modal-approval": "Known approval phrasing is on the visible screen.",
     "modal-unknown": "An unrecognized confirmation prompt is on the visible screen.",
+    "modal-file-write": "A native file-write decision is on the visible screen.",
 }
 # When the visible screen cannot be located, a phrase may be anywhere in the capture.
 UNLOCATED_DETAILS = {
@@ -373,7 +376,7 @@ def modal_kind(rows):
             if any(phrase in folded for phrase in phrases):
                 found.append(kind)
                 break
-    for kind in ("modal-trust", "modal-permission", "modal-approval", "modal-unknown"):
+    for kind in ("modal-trust", "modal-permission", "modal-approval", "modal-unknown", "modal-file-write"):
         if kind in found:
             return kind
     return None
@@ -829,6 +832,8 @@ def prompt_shape(expect_kind, choice, lines):
     """"box" when the expected text shows the choice as [key]; "divider" for Cursor's command
     prompt, a modal-approval whose expected text shows (y) at the end of exactly one row and
     the choice is y; otherwise None."""
+    if expect_kind == "modal-file-write":
+        return "modal-file-write" if choice == "y" else None
     if choice not in (REJECT_CHOICE, SKIP_CHOICE) and any("[" + choice + "]" in line for line in lines):
         return "box"
     if expect_kind == "modal-approval" and choice in (COMMAND_CHOICE, REJECT_CHOICE, SKIP_CHOICE) and sum(
@@ -877,7 +882,23 @@ def validate_answer(args):
     # A rejection can bind a longer command, but never authorizes its execution.
     # The byte cap and complete-current-screen checks remain identical.
     max_lines = MAX_REJECT_EXPECT_LINES if args.expect_kind == "modal-approval" and choice == REJECT_CHOICE else MAX_EXPECT_LINES
-    raw, lines = read_expected(args.expect_text_file, max_lines)
+    write_path = getattr(args, "write_path", None)
+    if args.expect_kind == "modal-file-write":
+        if choice != "y" or getattr(args, "trust_path", None) is not None:
+            raise Refusal("invalid-input", "A file-write decision accepts only y, without a trust path. Nothing was sent.")
+        if (not isinstance(write_path, str) or len(write_path.encode()) > MAX_TRUST_PATH
+                or not TRUST_PATH_RE.fullmatch(write_path)
+                or any(part in {".", ".."} for part in write_path.split("/"))):
+            raise Refusal("invalid-input", "A file-write decision needs one exact normalized --write-path. Nothing was sent.")
+        raw, _trimmed = read_expected(args.expect_text_file, MAX_WRITE_EXPECT_LINES)
+        # File content, blank rows and UI indentation are significant. Unlike
+        # Shell/box prompts, no row or padding is stripped from this contract.
+        lines = raw.decode("utf-8").splitlines()
+        validate_write_rows(lines, write_path)
+    else:
+        if write_path is not None:
+            raise Refusal("invalid-input", "--write-path applies only to file-write. Nothing was sent.")
+        raw, lines = read_expected(args.expect_text_file, max_lines)
     if choice == SKIP_CHOICE:
         skip_row = "Skip & tell the agent what to do instead " + SKIP_SUFFIX
         if (args.expect_kind != "modal-approval" or not lines[0].startswith("$ ")
@@ -924,6 +945,70 @@ def validate_answer(args):
         raise Refusal("invalid-input", "--trust-path applies only to a modal-trust answer. Nothing was sent.")
     parse_receipt(args.receipt)
     return choice, raw, lines, trust_path
+
+
+def validate_write_rows(rows, write_path):
+    """The captured 80-column queued native Write renderer, not a generic modal.
+
+    The caller supplies every rendered row, including preview whitespace, and
+    the full exact destination separately. This binds displayed content only;
+    it does not recover hidden file bytes or verify the caller's approval.
+    """
+    def refuse():
+        raise Refusal("invalid-input", "Expected text must be one complete captured native Write decision. Nothing was sent.")
+
+    if (not 12 <= len(rows) <= MAX_WRITE_EXPECT_LINES or rows[0] != DIVIDER * 80
+            or len(rows) < 5 or rows[2] != "" or rows[4] != " " + DIVIDER * 78):
+        refuse()
+    queue = QUEUE_HEADER.fullmatch(rows[1].strip(" "))
+    if (not queue or rows[1] != " " + queue.group(0)
+            or not 1 <= int(queue[1]) <= int(queue[2]) or int(queue[2]) < 2):
+        refuse()
+    title = rows[3]
+    if not title.startswith(" ...") or not title[4:] or not write_path.endswith(title[4:]):
+        refuse()
+    if rows.count(" Write to this file?") != 1 or rows.count("  → Proceed (y)") != 1:
+        refuse()
+    question, proceed = rows.index(" Write to this file?"), rows.index("  → Proceed (y)")
+    preview = rows[5:question]
+    if (not preview or preview[-1] != "" or not any(preview)
+            or any(row and not row.startswith("  ") for row in preview)
+            or any(phrases(row) or "…" in row or row.startswith("Error:") for row in preview)):
+        refuse()
+    path_rows = rows[question + 1:proceed]
+    if (not path_rows or not path_rows[0].startswith(" in /")
+            or any(not row.startswith(" ") or row.startswith("  ") for row in path_rows)
+            or path_rows[0][4:] + "".join(row[1:] for row in path_rows[1:]) != write_path):
+        refuse()
+    allow = "    Add Write(/home/dev/.../" + Path(write_path).name + ") to allowlist? (tab)"
+    tail = ["  → Proceed (y)", "    Reject & propose changes (esc or n or p)", allow,
+            "    Run Everything (shift+tab)", "", " " + QUEUE_HINT, "",
+            " " * 48 + COMMAND_REVIEW_FOOTER]
+    if rows[proceed:] != tail:
+        refuse()
+
+
+def check_write_prompt(visible, ident, rows):
+    """Require the complete exact Write block once on the current screen."""
+    if int(ident["width"]) != 80 or modal_kinds(visible) != {"modal-file-write"}:
+        raise Refusal("prompt-unclear", "Only the captured native Write layout may be answered. Nothing was sent.")
+    # The Write-specific path must retain the ordinary current_prompt border
+    # check. An unknown modal can have no recognized phrase and an unmatched
+    # border while the entire expected Write block remains unchanged.
+    if visible_boxes(visible, [prompt_text(row) for row in visible]) is None:
+        raise Refusal("prompt-unclear", "The box borders on the visible screen do not pair up. Nothing was sent.")
+    starts = [i for i in range(len(visible) - len(rows) + 1) if visible[i:i + len(rows)] == rows]
+    if len(starts) != 1:
+        raise Refusal("prompt-unclear", "The complete Write preview is not shown exactly once on the current screen. Nothing was sent.")
+    first = starts[0]
+    above, below = visible[:first], visible[first + len(rows):]
+    if (any(row.strip(" ") for row in below)
+            or any(character in row for row in above + below for character in CORNERS + SIDE_BARS)
+            or any(phrases(row) or QUEUE_HEADER.fullmatch(row.strip(" "))
+                   or row.lstrip(" ").startswith(("→", ">", "›", "❯", "Error:")) for row in above)
+            or sum(row.strip(" ") == "Write to this file?" for row in visible) != 1
+            or sum(row.strip(" ") == "→ Proceed (y)" for row in visible) != 1):
+        raise Refusal("prompt-unclear", "Another prompt, duplicate or unbound tail surrounds the Write decision. Nothing was sent.")
 
 
 def prompt_text(row):
@@ -1064,6 +1149,9 @@ def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust
     fails closed."""
     rows = text.split("\n")
     visible = visible_screen(text, truncated, rows_total, ident)
+    if shape == "modal-file-write":
+        check_write_prompt(visible, ident, lines)
+        return "modal-file-write"
     kinds = modal_kinds(visible)
     # The expected prompt exists in the capture, but maybe not as the current state.
     stale = expect_kind in modal_kinds(rows) and bool(prompt_blocks([prompt_text(row) for row in rows], lines))
@@ -1389,6 +1477,8 @@ def answer_locked(args, choice, raw, lines, trust_path):
     }
     if trust_path is not None:
         record["trust_path"] = trust_path
+    if args.expect_kind == "modal-file-write":
+        record["write_path"] = args.write_path
     # Evidence that inspect and reply need to know this box again once it is answered.
     record.update(box_evidence(lines), format=LEDGER_FORMAT, worktree=state["worktree"])
     entry = dict(record, name=state["name"])
@@ -1882,6 +1972,7 @@ def build_parser():
     answer.add_argument("--choice", required=True, help="one key shown as [key] in the expected text; on Cursor's "
                         "command prompt, y (Run once) or ctrl-c (reject the shown command)")
     answer.add_argument("--trust-path", help="for modal-trust: the one directory the approval covers; must be the recorded worktree")
+    answer.add_argument("--write-path", help="for file-write only: the exact normalized destination bound by the complete preview")
     feedback = sub.add_parser("feedback", help="submit one reason for the latest bound Skip, never a generic follow-up")
     feedback.add_argument("--name", required=True)
     feedback.add_argument("--tmux", required=True)
