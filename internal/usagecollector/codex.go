@@ -314,7 +314,13 @@ func sanitizeCodexQuota(account codexAccount, raw []byte, received time.Time) (C
 		RateLimits bucket            `json:"rateLimits"`
 		ByID       map[string]bucket `json:"rateLimitsByLimitId"`
 	}
-	if !providerallowance.CanonicalFieldNames(raw, "rateLimits", "rateLimitsByLimitId") || json.Unmarshal(raw, &result) != nil {
+	if !providerallowance.CanonicalFieldNames(raw, "rateLimits", "rateLimitsByLimitId", "ordinaryUsageAllowed") || json.Unmarshal(raw, &result) != nil {
+		return CodexAccountCapture{}, ErrCapture
+	}
+	// Top-level only. A bucket copy is not a second flag and is not a boolean
+	// when the top-level scalar is missing. Null stays null; it is not false.
+	usage, err := codexOrdinaryUsage(raw)
+	if err != nil {
 		return CodexAccountCapture{}, ErrCapture
 	}
 	var rawResult map[string]json.RawMessage
@@ -351,7 +357,54 @@ func sanitizeCodexQuota(account codexAccount, raw []byte, received time.Time) (C
 			return CodexAccountCapture{}, ErrCapture
 		}
 	}
-	return CodexAccountCapture{Schema: CodexRPCSchema, AccountRef: account.ref, IdentityBasis: "provider_email_sha256", PlanType: account.plan, ReceivedAt: received.UTC().Format(time.RFC3339Nano), Primary: selected.Primary, Secondary: selected.Secondary}, nil
+	return CodexAccountCapture{Schema: CodexRPCSchema, AccountRef: account.ref, IdentityBasis: "provider_email_sha256", PlanType: account.plan, ReceivedAt: received.UTC().Format(time.RFC3339Nano), Primary: selected.Primary, Secondary: selected.Secondary, OrdinaryUsageAllowed: usage}, nil
+}
+
+// codexOrdinaryUsage reads the top-level ordinaryUsageAllowed scalar. Absence
+// returns nil. JSON null, true, and false are preserved. A duplicate key, a
+// case alias, or any other JSON type is refused.
+func codexOrdinaryUsage(raw []byte) (json.RawMessage, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return nil, ErrCapture
+	}
+	var found json.RawMessage
+	seen := false
+	for dec.More() {
+		keyTok, keyErr := dec.Token()
+		key, ok := keyTok.(string)
+		if keyErr != nil || !ok {
+			return nil, ErrCapture
+		}
+		var value json.RawMessage
+		if dec.Decode(&value) != nil {
+			return nil, ErrCapture
+		}
+		if key != "ordinaryUsageAllowed" {
+			if strings.EqualFold(key, "ordinaryUsageAllowed") {
+				return nil, ErrCapture
+			}
+			continue
+		}
+		if seen {
+			return nil, ErrCapture
+		}
+		seen = true
+		found = append(json.RawMessage(nil), value...)
+	}
+	end, endErr := dec.Token()
+	if endErr != nil || end != json.Delim('}') {
+		return nil, ErrCapture
+	}
+	if !seen {
+		return nil, nil
+	}
+	canonical, err := providerallowance.CanonicalCodexOrdinaryUsage(found)
+	if err != nil || len(canonical) == 0 {
+		return nil, ErrCapture
+	}
+	return canonical, nil
 }
 
 func rpcAccountPlanMismatch(account codexAccount, plan *string) bool {

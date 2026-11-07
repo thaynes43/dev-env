@@ -128,6 +128,24 @@ with the closed reason `builtin_model_usage_unqualified`.
 The static Claude OAuth environment token is excluded from that child, matching
 the existing Remote Control launch's keeper-owned login path.
 
+Codex 0.160.1 returns one top-level nullable `ordinaryUsageAllowed` boolean in
+`GetAccountRateLimitsResponse`; see the pinned official
+[account processor](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/app-server/src/account_processor.rs)
+and [response contract](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/app-server-protocol/src/protocol/v2/account.rs)
+for `rust-v0.160.1`. Explicit `false` is preserved; missing or null remains
+unknown. Valid percentages alongside null are legitimate: the app server only
+supplies the flag for a matching current account and user outside FedRAMP. This
+read exposes no provider measurement clock, so `providerObservedAt` remains
+null and strict current-freshness requirements are unchanged. `true` means only
+that ordinary included usage was reported allowed at that read, not execution
+permission, successful work, paid capacity or a recovery promise; `false` means
+ordinary included usage was reported unavailable at that read. Neither value is
+inferred from percentages or resets. Capture projects the flag only under the
+existing exact `SourceRule.DirectFields` Boolean/`ClassSignal` and capability
+qualification; without that qualification, legacy observations and their IDs
+remain unchanged. Independent readers revalidate that qualification. This source
+support performs no collection and changes no private qualification rules.
+
 Cursor uses normal `about --format json` before/after its own fresh empty
 workspace and PTY. Only the qualified current visible terminal states permit
 workspace trust, typing `/usage`, or a single Enter after its exact autocomplete

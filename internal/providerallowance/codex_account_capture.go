@@ -1,8 +1,10 @@
 package providerallowance
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"regexp"
 	"strconv"
 	"time"
@@ -17,18 +19,29 @@ const (
 var ErrCodexRPCReport = errors.New("codex account capture unavailable")
 var codexAccountHash = regexp.MustCompile(`^openai-email-sha256:[a-f0-9]{64}$`)
 
+const codexOrdinaryUsageField = "ordinaryUsageAllowed"
+
+var codexAccountCaptureKeys = []string{"schema", "accountRef", "identityBasis", "planType", "receivedAt", "providerObservedAt", "primary", "secondary"}
+var codexAccountCaptureExtendedKeys = []string{"schema", "accountRef", "identityBasis", "planType", "receivedAt", "providerObservedAt", "primary", "secondary", "ordinaryUsageAllowed"}
+
 // CodexAccountCapture is the sanitized result of a successful official quota
 // RPC bracketed by matching personal account reads. ReceivedAt is collection
-// time; ProviderObservedAt is unavailable. This document does not create trust.
+// time; ProviderObservedAt is unavailable. OrdinaryUsageAllowed is the optional
+// top-level scalar: omitted when the source omitted it, JSON null when the
+// provider had no boolean, and JSON true or false only for those booleans.
+// Null is not false. False means ordinary included usage was reported
+// unavailable at that read. True is not execution permission, recovery, paid
+// capacity, or a provider clock. This document does not create trust.
 type CodexAccountCapture struct {
-	Schema             string       `json:"schema"`
-	AccountRef         string       `json:"accountRef"`
-	IdentityBasis      string       `json:"identityBasis"`
-	PlanType           string       `json:"planType"`
-	ReceivedAt         string       `json:"receivedAt"`
-	ProviderObservedAt *string      `json:"providerObservedAt"`
-	Primary            *CodexWindow `json:"primary"`
-	Secondary          *CodexWindow `json:"secondary"`
+	Schema               string          `json:"schema"`
+	AccountRef           string          `json:"accountRef"`
+	IdentityBasis        string          `json:"identityBasis"`
+	PlanType             string          `json:"planType"`
+	ReceivedAt           string          `json:"receivedAt"`
+	ProviderObservedAt   *string         `json:"providerObservedAt"`
+	Primary              *CodexWindow    `json:"primary"`
+	Secondary            *CodexWindow    `json:"secondary"`
+	OrdinaryUsageAllowed json.RawMessage `json:"ordinaryUsageAllowed,omitempty"`
 }
 type CodexWindow struct {
 	UsedPercent        int    `json:"usedPercent"`
@@ -70,9 +83,16 @@ func (w *CodexWindow) UnmarshalJSON(raw []byte) error {
 
 func DecodeCodexAccountCapture(raw []byte) (CodexAccountCapture, error) {
 	var report CodexAccountCapture
-	if checkDocument(raw, FixtureParseLimits) != nil || !ExactObjectKeys(raw, []string{"schema", "accountRef", "identityBasis", "planType", "receivedAt", "providerObservedAt", "primary", "secondary"}) || strictDecode(raw, &report) != nil {
+	legacy := ExactObjectKeys(raw, codexAccountCaptureKeys)
+	extended := ExactObjectKeys(raw, codexAccountCaptureExtendedKeys)
+	if checkDocument(raw, FixtureParseLimits) != nil || (!legacy && !extended) || strictDecode(raw, &report) != nil {
 		return report, ErrCodexRPCReport
 	}
+	usage, err := CanonicalCodexOrdinaryUsage(report.OrdinaryUsageAllowed)
+	if err != nil {
+		return CodexAccountCapture{}, ErrCodexRPCReport
+	}
+	report.OrdinaryUsageAllowed = usage
 	if report.Schema != CodexRPCSchema || !codexAccountHash.MatchString(report.AccountRef) || report.IdentityBasis != "provider_email_sha256" || report.ProviderObservedAt != nil || !PersonalCodexPlan(report.PlanType) {
 		return report, ErrCodexRPCReport
 	}
@@ -137,6 +157,91 @@ func projectCodexAccountCapture(raw []byte, captured string) (Observation, error
 		obs.Measures = append(obs.Measures, m)
 	}
 	return obs, nil
+}
+
+// CanonicalCodexOrdinaryUsage canonicalizes one ordinaryUsageAllowed JSON
+// scalar. Empty raw is an omitted field. JSON null stays null. A JSON boolean
+// stays true or false. Strings, numbers, objects, and arrays are refused, so
+// null and 0 are never coerced to false or true.
+func CanonicalCodexOrdinaryUsage(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, ErrCodexRPCReport
+	}
+	var extra any
+	if dec.Decode(&extra) != io.EOF {
+		return nil, ErrCodexRPCReport
+	}
+	switch tok {
+	case nil:
+		return json.RawMessage("null"), nil
+	case true:
+		return json.RawMessage("true"), nil
+	case false:
+		return json.RawMessage("false"), nil
+	default:
+		return nil, ErrCodexRPCReport
+	}
+}
+
+// projectCodexOrdinaryUsage appends ordinaryUsageAllowed only when reg has
+// one exact openai/native_rpc/CodexRPCSourceVersion/CodexRPCCapability rule
+// whose ordinaryUsageAllowed field is boolean signal, and the capture has an
+// explicit JSON boolean. Missing and null omit the normalized field, so the
+// legacy observation and its ID stay the same. TrustedContext is not consulted.
+// An absent, wrong, or duplicate rule does not inject the field or relax
+// ValidateObservation. The boolean authorizes no execution and proves no recovery.
+func projectCodexOrdinaryUsage(obs Observation, payload []byte, reg Registry) Observation {
+	if !codexOrdinaryUsageQualified(reg) || obs.Provider != "openai" || obs.Source.Kind != SourceNativeRPC || obs.Source.Version != CodexRPCSourceVersion || obs.Source.CapabilityRef != CodexRPCCapability {
+		return obs
+	}
+	report, err := DecodeCodexAccountCapture(payload)
+	if err != nil {
+		return obs
+	}
+	value, ok := codexOrdinaryUsageBool(report.OrdinaryUsageAllowed)
+	if !ok {
+		return obs
+	}
+	lexical := "false"
+	if value {
+		lexical = "true"
+	}
+	obs.DirectFields = append(obs.DirectFields, DirectField{Field: codexOrdinaryUsageField, OriginalType: TypeBoolean, LexicalValue: stringRef(lexical)})
+	return obs
+}
+
+func codexOrdinaryUsageQualified(reg Registry) bool {
+	parts := snapshotRegistry(reg)
+	var found SourceRule
+	matched := 0
+	for _, src := range parts.Sources {
+		if src.Provider != "openai" || src.Kind != SourceNativeRPC || src.Version != CodexRPCSourceVersion {
+			continue
+		}
+		matched++
+		found = src
+	}
+	if matched != 1 || found.CapabilityRef != CodexRPCCapability || found.DirectFields == nil {
+		return false
+	}
+	rule, ok := found.DirectFields[codexOrdinaryUsageField]
+	return ok && rule.OriginalType == TypeBoolean && rule.Class == ClassSignal
+}
+
+func codexOrdinaryUsageBool(raw json.RawMessage) (bool, bool) {
+	switch string(raw) {
+	case "true":
+		return true, true
+	case "false":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 // A successful official RPC can be recently checked while its underlying
