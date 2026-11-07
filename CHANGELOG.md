@@ -1,5 +1,52 @@
 # Changelog
 
+## [2.91.0](https://github.com/thaynes43/dev-env/compare/v2.90.0...v2.91.0) (2026-11-07)
+
+
+### Features
+
+* **agentd:** skip the automatic Claude continue when the projected account changes ([#918](https://github.com/thaynes43/dev-env/issues/918)) ([cdafa51](https://github.com/thaynes43/dev-env/commit/cdafa51b09fd9bc45239a6e6e3fce1bad9d8bc9c))
+* **apiserver:** serve the scheduled-work routes (DESIGN-054 S5b) ([#916](https://github.com/thaynes43/dev-env/issues/916)) ([14160aa](https://github.com/thaynes43/dev-env/commit/14160aad760b262fc6e5cc20d69f9908cb4c4569))
+* **cursor:** menu-key opens /usage and closes it with one checked Escape ([#960](https://github.com/thaynes43/dev-env/issues/960)) ([e753cb7](https://github.com/thaynes43/dev-env/commit/e753cb7166953d47f95b0e3a548314a121b2c7f6))
+* **portal:** dev-env-portal db-check, a read-only database probe (OP477) ([#950](https://github.com/thaynes43/dev-env/issues/950)) ([8daf137](https://github.com/thaynes43/dev-env/commit/8daf137a44b07df93a9889b74914192d2435e87e))
+* **portal:** local test instance drives send, launch, history and Asks answers (OP479) ([#946](https://github.com/thaynes43/dev-env/issues/946)) ([92845ab](https://github.com/thaynes43/dev-env/commit/92845ab55fa1e7f3e79f4c4c8d8b0c3b430ba364))
+* **portal:** local test instance on loopback with fixture data (DESIGN-055) ([#944](https://github.com/thaynes43/dev-env/issues/944)) ([db04029](https://github.com/thaynes43/dev-env/commit/db04029e59d1bec08beb2f97e8a1f63be6327714))
+* **recovery:** add partial source checkpoint handoff foundation ([#976](https://github.com/thaynes43/dev-env/issues/976)) ([5036426](https://github.com/thaynes43/dev-env/commit/50364263c5d1eb7564876d037b06acfb4dc60c38))
+* **scheduledwork:** emit pages from the executor and releaser (DESIGN-054 S4b) ([#914](https://github.com/thaynes43/dev-env/issues/914)) ([790191b](https://github.com/thaynes43/dev-env/commit/790191bce00cb6a4e7596c65014e65742bbc5705))
+* **scripts:** cursor-interactive-session answer, one approved prompt choice under the helper lock (OP399 SK3) ([#924](https://github.com/thaynes43/dev-env/issues/924)) ([ece3e83](https://github.com/thaynes43/dev-env/commit/ece3e83d3cca7f5eab02398a6eae2b4a44ae01e2))
+* **scripts:** menu-key sends one guarded Enter to the live /run-everything row (OP192) ([#959](https://github.com/thaynes43/dev-env/issues/959)) ([209411d](https://github.com/thaynes43/dev-env/commit/209411d1c32b063f329107d91d5c5fe30a562f9c))
+* **templates:** a rollout can hold automatic drain for one image (OP385 DR1) ([#925](https://github.com/thaynes43/dev-env/issues/925)) ([186d657](https://github.com/thaynes43/dev-env/commit/186d657722f64064883936789ba6028c75830b92))
+* **usage:** add exact supplemental native reader binding ([#973](https://github.com/thaynes43/dev-env/issues/973)) ([a05002d](https://github.com/thaynes43/dev-env/commit/a05002d86991abc9767854f98ee73c0c1cd43339))
+* **usage:** OP192 S1 shows a Not connected Grok row; store accepts it (R1, no producer change) ([#940](https://github.com/thaynes43/dev-env/issues/940)) ([a33a927](https://github.com/thaynes43/dev-env/commit/a33a9274af23d1216aff85a9e6a39c2964a1a5fc))
+* **usage:** preserve Codex ordinary usage diagnostic ([#975](https://github.com/thaynes43/dev-env/issues/975)) ([1db8599](https://github.com/thaynes43/dev-env/commit/1db859949f758ed0952dc36ba04a647ccef5ecd3))
+
+
+### Bug Fixes
+
+* **agent:** sync opwork Formattable update fix from haynes-ops (Studio [#423](https://github.com/thaynes43/dev-env/issues/423)) ([#933](https://github.com/thaynes43/dev-env/issues/933)) ([a41fb67](https://github.com/thaynes43/dev-env/commit/a41fb675bada7858dc1cdf1b7d9cff3e6d7a3b00))
+* **allowance:** label exhausted windows individually ([#965](https://github.com/thaynes43/dev-env/issues/965)) ([c272a83](https://github.com/thaynes43/dev-env/commit/c272a83f2f313b841a8370b20dcce0892b36e2d1))
+* **apiserver:** send the task budget stall field only to clients that ask (OP385 C3) ([#922](https://github.com/thaynes43/dev-env/issues/922)) ([2289205](https://github.com/thaynes43/dev-env/commit/2289205f1cd2363d4744bb3236007c20c4720030))
+* **controller:** keep RemovalBlocked's transition time so an unchanged session writes no status (haynes-ops[#4663](https://github.com/thaynes43/dev-env/issues/4663)) ([#934](https://github.com/thaynes43/dev-env/issues/934)) ([ce38fd8](https://github.com/thaynes43/dev-env/commit/ce38fd83536fcc11350f47cf271c39558caed9d8))
+* **controller:** never auto-drain a waiting session on a revision change (OP385) ([#923](https://github.com/thaynes43/dev-env/issues/923)) ([3aecbaf](https://github.com/thaynes43/dev-env/commit/3aecbaf7175a56ffd4c3edd881f4426eebe6b0a1))
+* **cursor:** bind exact changed-files footer in command decisions ([#962](https://github.com/thaynes43/dev-env/issues/962)) ([2218d66](https://github.com/thaynes43/dev-env/commit/2218d6657f1c4b4efc9d7b74a693db91a845ad8c))
+* **cursor:** bind longer command prompts for rejection only ([#963](https://github.com/thaynes43/dev-env/issues/963)) ([985750a](https://github.com/thaynes43/dev-env/commit/985750ad04720cee452c7cef30e417bdb779a473))
+* **cursor:** deliver bound Skip feedback without a new turn ([#964](https://github.com/thaynes43/dev-env/issues/964)) ([bf3f249](https://github.com/thaynes43/dev-env/commit/bf3f2493600c680959bfd60d90a81768d28e9674))
+* **cursor:** qualify one native file-write approval ([#968](https://github.com/thaynes43/dev-env/issues/968)) ([ede2435](https://github.com/thaynes43/dev-env/commit/ede243549d7c7095a4e390ff9266da50203407df))
+* **cursor:** refuse drafts that would hide the viewport ([#971](https://github.com/thaynes43/dev-env/issues/971)) ([044d4df](https://github.com/thaynes43/dev-env/commit/044d4df9c8969cb8e21761f48ee62edb8e9190c2))
+* **cursor:** usage-menu binds the live layout (draft first, inline menu below) ([#961](https://github.com/thaynes43/dev-env/issues/961)) ([f947e3b](https://github.com/thaynes43/dev-env/commit/f947e3b30c97576a5045a46427763b59a4a2306d))
+* **deps:** update module github.com/go-jose/go-jose/v4 to v4.1.9 ([#954](https://github.com/thaynes43/dev-env/issues/954)) ([8813f9a](https://github.com/thaynes43/dev-env/commit/8813f9ab8edae48bf0277602000b1cdc85099c4e))
+* **portal:** send the session pages' Referrer-Policy as same-origin (OP480) ([#948](https://github.com/thaynes43/dev-env/issues/948)) ([1a705e7](https://github.com/thaynes43/dev-env/commit/1a705e7a7938f6e9b84884039062768c3a2adf49))
+* **scripts:** cursor-interactive-session answer binds one paired box and refuses nested boxes (OP399 SK3) ([#932](https://github.com/thaynes43/dev-env/issues/932)) ([8326e2d](https://github.com/thaynes43/dev-env/commit/8326e2d27d3dc88ca544458c8f414156ddfb36fd))
+* **scripts:** cursor-interactive-session answer binds the exact prompt and one trust path (OP399 SK3) ([#926](https://github.com/thaynes43/dev-env/issues/926)) ([7a521bc](https://github.com/thaynes43/dev-env/commit/7a521bcbf41dea2336e38da8ffd342aee51612dc))
+* **scripts:** cursor-interactive-session answers Cursor's command-approval prompt with Run once only (OP399 SK3) ([#942](https://github.com/thaynes43/dev-env/issues/942)) ([77f51c1](https://github.com/thaynes43/dev-env/commit/77f51c15b46cfe5610a23b46d1e1c11974334729))
+* **scripts:** cursor-interactive-session binds Cursor's queued command approvals (OP399 SK3) ([#943](https://github.com/thaynes43/dev-env/issues/943)) ([7e2fe46](https://github.com/thaynes43/dev-env/commit/7e2fe46827144210f5d7bcf8b6146b069bf71e07))
+* **scripts:** cursor-interactive-session classifies prompts on the visible screen only (OP399 SK3) ([#936](https://github.com/thaynes43/dev-env/issues/936)) ([5bf24fe](https://github.com/thaynes43/dev-env/commit/5bf24fec3fc534f1c9901b5f8d14baa2fd1d2fde))
+* **scripts:** cursor-interactive-session reads an answered trust box across history (OP399 SK3) ([#939](https://github.com/thaynes43/dev-env/issues/939)) ([832963e](https://github.com/thaynes43/dev-env/commit/832963e74b76f88b77a1d41be4a62f909f98153d))
+* **scripts:** cursor-interactive-session recognizes the trust box it already answered (OP399 SK3) ([#937](https://github.com/thaynes43/dev-env/issues/937)) ([6775ec2](https://github.com/thaynes43/dev-env/commit/6775ec2341390637baa5166c4ed05070089cbe24))
+* **scripts:** cursor-interactive-session rejects the shown Cursor command with one ctrl-c (OP399 SK3) ([#945](https://github.com/thaynes43/dev-env/issues/945)) ([96aff8c](https://github.com/thaynes43/dev-env/commit/96aff8cad2a24e80fdf49bc03e1f5bb591d22c19))
+* **scripts:** cursor-interactive-session reply waits for the text to show before Enter (OP399 SK3) ([#947](https://github.com/thaynes43/dev-env/issues/947)) ([52e0f93](https://github.com/thaynes43/dev-env/commit/52e0f93e0333bb6f07160d6c8285f092741f1da4))
+* **usage:** distinguish failed attempts in cached status ([#974](https://github.com/thaynes43/dev-env/issues/974)) ([0094431](https://github.com/thaynes43/dev-env/commit/0094431cf4076bf7a77ed646c56a37a117ea8bc2))
+
 ## [2.90.0](https://github.com/thaynes43/dev-env/compare/v2.89.1...v2.90.0) (2026-11-04)
 
 
