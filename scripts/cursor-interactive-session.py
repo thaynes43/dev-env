@@ -400,6 +400,26 @@ def visible_screen(text, truncated, rows_total, ident):
     return rows[-rows_needed:]
 
 
+def echo_bounded(text, instruction):
+    """Bounded capture after the supported composer echo replaces the last row.
+
+    The submit fence reads the pane again after typing. The supported renderer
+    replaces that row with "→ " plus the draft. A shorter old prefix does not
+    pay for those prefix bytes. When the old row is longer than that prefix,
+    the draft is still counted on the old row, so the projection is never
+    smaller than either form. The row count does not change. This is not a
+    wrapping, cell-width, or grapheme-cluster rule. Re-bounding shows whether
+    the 8192-byte cap would cut into the visible screen."""
+    rows = text.split("\n")
+    rendered = "\u2192 " + instruction
+    appended = rows[-1] + instruction
+    if len(rendered.encode("utf-8")) >= len(appended.encode("utf-8")):
+        rows[-1] = rendered
+    else:
+        rows[-1] = appended
+    return bound_text("\n".join(rows))
+
+
 def classify(text, truncated, rows_total, ident, answered=None):
     """(kind, located, answered reference) for one bounded capture. Transcript lines are never user drafts.
 
@@ -639,12 +659,18 @@ def read_instruction(path):
     else:
         with open(path, "rb") as handle:
             raw = handle.read(MAX_TEXT + 1)
-    if not raw.strip() or len(raw) > MAX_TEXT:
+    if len(raw) > MAX_TEXT:
         raise Refusal("invalid-input", "Instruction must contain 1..4096 UTF-8 bytes.")
     try:
         instruction = raw.decode("utf-8")
     except UnicodeError:
         raise Refusal("invalid-input", "Instruction must be UTF-8.")
+    # Before any trim. str.strip() would drop U+2028 and U+2029, including an
+    # input that contains only those separators.
+    if "\u2028" in instruction or "\u2029" in instruction:
+        raise Refusal("invalid-input", "Instruction must be a single line without Unicode line or paragraph separators. Nothing was sent.")
+    if not raw.strip():
+        raise Refusal("invalid-input", "Instruction must contain 1..4096 UTF-8 bytes.")
     if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in instruction):
         raise Refusal("invalid-input", "Instruction must be a single line without C0, DEL, or C1 control characters. Nothing was sent.")
     return instruction
@@ -790,10 +816,16 @@ def reply_locked(args, instruction, answered_text=None):
     if args.submit:
         try:
             verified = visible_screen(text, truncated, rows_total, ident)
-            before = (tail_count(verified, instruction), frozenset(phrase_rows(verified)))
         except Refusal:
             raise Refusal("prompt-unclear", "The visible screen cannot be located, so a submit cannot be fenced. "
                                             "Nothing was sent.")
+        try:
+            echo_text, echo_truncated = echo_bounded(text, instruction)
+            visible_screen(echo_text, echo_truncated, rows_total, ident)
+        except Refusal:
+            raise Refusal("prompt-unclear", "The visible screen cannot be established once this draft is echoed, "
+                                            "so a submit cannot be fenced. Nothing was sent.")
+        before = (tail_count(verified, instruction), frozenset(phrase_rows(verified)))
     clear_receipt(path, state)
     submitted = send_instruction(state, instruction, args.submit, before)
     return {
