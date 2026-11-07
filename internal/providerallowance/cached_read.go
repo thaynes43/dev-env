@@ -407,7 +407,10 @@ func conflictingExhaustionIDs(item *ReadItem) map[string]bool {
 	}
 	kindIDs := map[string][]string{}
 	for _, measure := range item.Observation.Measures {
-		if blocked[measure.ID] || claudeMeasureBlocked(item.Observation, measure) {
+		// CurrentConflict and duplicate rows stay in this group. Skipping them
+		// would let the other included row of the same kind look unambiguous.
+		// Advisory and model rows stay out, so they cannot veto another kind.
+		if claudeMeasureBlocked(item.Observation, measure) {
 			continue
 		}
 		kind, ok := directLexical(item.Observation, measure.ID+"-kind")

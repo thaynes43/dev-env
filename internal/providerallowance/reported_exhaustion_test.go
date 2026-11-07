@@ -212,6 +212,53 @@ func TestProjectCachedReadExhaustionLabelsEachWindow(t *testing.T) {
 			}
 		}
 	})
+	t.Run("conflict blocked weekly still suppresses its sibling", func(t *testing.T) {
+		doc, trust := claudeExhaustionDoc(t, []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, nil), claudeExhaustionLimit("weekly_all", "20", &reset, nil)}, at)
+		item := &doc.Items[0]
+		if len(item.CurrentMeasures) != 2 || len(item.Observation.Measures) != 2 || item.CurrentMeasures[1].Value.State != ValueUnknown || item.CurrentMeasures[1].Value.Decimal != nil {
+			t.Fatalf("precondition %+v", item.CurrentMeasures)
+		}
+		if item.Observation.Measures[0].Value.Decimal == nil || *item.Observation.Measures[0].Value.Decimal != "100" || item.Observation.Measures[1].Value.Decimal == nil || *item.Observation.Measures[1].Value.Decimal != "20" || item.Observation.Measures[1].ID != item.CurrentMeasures[1].MeasureID {
+			t.Fatal("rows are not weekly_all 100 then weekly_all 20")
+		}
+		item.CurrentMeasures[1].State = CurrentConflict
+		before := string(mustJSON(t, item.Observation))
+		ProjectCachedRead(&doc, trust.Contexts, trust.Registry, 30*time.Minute, true, now)
+		if string(mustJSON(t, doc.Items[0].Observation)) != before || doc.Items[0].Observation.ProviderObservedAt != nil {
+			t.Fatal("conflict projection rewrote the observation or provider clock")
+		}
+		if doc.Items[0].CurrentMeasures[1].State != CurrentConflict || doc.Items[0].CurrentMeasures[1].Value.State != ValueUnknown || doc.Items[0].CurrentMeasures[1].Value.Decimal != nil {
+			t.Fatalf("conflict row changed value %+v", doc.Items[0].CurrentMeasures[1])
+		}
+		for _, current := range doc.Items[0].CurrentMeasures {
+			if strings.Contains(current.Reason, reportedExhaustionNotice) || current.Value.Decimal != nil || current.State == CurrentKnown {
+				t.Fatalf("conflict-blocked weekly sibling was labelled: %+v", current)
+			}
+		}
+	})
+	t.Run("session conflict does not veto weekly", func(t *testing.T) {
+		doc, trust := claudeExhaustionDoc(t, []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, nil), claudeExhaustionLimit("session", "100", &reset, nil)}, at)
+		session := measureIDByKind(t, doc.Items[0], "session", false)
+		for i := range doc.Items[0].CurrentMeasures {
+			if doc.Items[0].CurrentMeasures[i].MeasureID != session {
+				continue
+			}
+			if doc.Items[0].CurrentMeasures[i].Value.State != ValueUnknown || doc.Items[0].CurrentMeasures[i].Value.Decimal != nil {
+				t.Fatalf("session precondition %+v", doc.Items[0].CurrentMeasures[i])
+			}
+			doc.Items[0].CurrentMeasures[i].State = CurrentConflict
+		}
+		before := string(mustJSON(t, doc.Items[0].Observation))
+		ProjectCachedRead(&doc, trust.Contexts, trust.Registry, 30*time.Minute, true, now)
+		if string(mustJSON(t, doc.Items[0].Observation)) != before {
+			t.Fatal("session conflict rewrote the observation")
+		}
+		assertKindNotice(t, doc.Items[0], "weekly_all", true)
+		current, ok := currentForMeasure(&doc.Items[0], session)
+		if !ok || current.State != CurrentConflict || current.Value.Decimal != nil || strings.Contains(current.Reason, reportedExhaustionNotice) {
+			t.Fatalf("session conflict vetoed or was labelled: %+v", current)
+		}
+	})
 	t.Run("conflict row does not veto sibling", func(t *testing.T) {
 		doc, trust := claudeExhaustionDoc(t, []ClaudeUsageLimit{claudeExhaustionLimit("weekly_all", "100", &reset, nil), claudeExhaustionLimit("session", "100", &reset, nil)}, at)
 		weekly := measureIDByKind(t, doc.Items[0], "weekly_all", false)
