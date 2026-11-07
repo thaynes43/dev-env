@@ -52,7 +52,9 @@ spec:
           metadata:
             type: object
           spec:
-            description: ReminderSpec is what the owner asked for.
+            description: |-
+              ReminderSpec is what the owner asked for.
+              A projection reminder (DESIGN-054 S4) is a calendar image only.
             properties:
               body:
                 description: |-
@@ -86,6 +88,13 @@ spec:
                 x-kubernetes-validations:
                 - message: the owner of a reminder never changes
                   rule: self == oldSelf
+              projection:
+                description: |-
+                  Projection marks a calendar projection of scheduled work (DESIGN-054 S4).
+                  The CRD allows calendar targets only. The scheduler keeps the reminder
+                  pending until it is cancelled or its until passes, and does not finish
+                  it at the last occurrence.
+                type: boolean
               recurrence:
                 description: Recurrence repeats the reminder; absent is one-shot.
                 properties:
@@ -172,6 +181,10 @@ spec:
             - timeZone
             - title
             type: object
+            x-kubernetes-validations:
+            - message: a projection reminder has calendar targets only
+              rule: '!has(self.projection) || !self.projection || self.targets.all(t,
+                t.startsWith(''calendar:''))'
           status:
             description: ReminderStatus is what the scheduler did.
             properties:

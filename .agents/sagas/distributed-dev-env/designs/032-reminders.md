@@ -83,7 +83,11 @@ subresource. Bounds on every string, list and number are in the schema and teste
 - `spec`: `title` (1 to 120), `body` (up to 1024 bytes, Pushover's message limit), `owner` (from the token, immutable; for a session `session/<name>/<uid>`, so a later session that reuses the name inherits no reminders),
   `due` (local `YYYY-MM-DDTHH:MM`) with `timeZone` (IANA), optional `recurrence`
   (`freq` daily, weekly or monthly; `byDay` or `byMonthDay`; `until` or `count`),
-  `targets` by reference, `cancelled`.
+  `targets` by reference, `cancelled`, and optional `projection`.
+- `projection` marks the calendar image of one ScheduledWork series
+  ([DESIGN-054](054-scheduled-agent-work.md) S4). The CRD accepts it only when
+  every target is `calendar:<ref>`. A Pushover target is refused. The rules are
+  below.
 - `status`: `state` (pending, sent, failed, skipped, cancelled), `nextDue`, `occurrence` (the
   1-based index in the series), `planHash`, `deliveries` (one per Pushover target for
   the current occurrence: claimed, retry, sent, failed, ambiguous, skipped, with
@@ -134,11 +138,47 @@ subresource. Bounds on every string, list and number are in the schema and teste
 
 A reminder is `sent` ONLY if at least one delivery was actually sent. It is `failed`
 if a delivery failed, was left ambiguous or was claimed and never resolved. Otherwise
-it ends `skipped`: nothing was deliverable or configured (a calendar-only reminder, an
-unconfigured Pushover, a target an edit removed), and the message says nothing was
-delivered. For a series, `skipped` and `failed` describe the occurrence and the series
-continues. An edit that removes a Pushover target while its delivery is backing off
-drops the retry as "superseded by an edit" and the reminder ends `skipped`.
+it ends `skipped`: nothing was deliverable or configured (an ordinary calendar-only
+reminder, an unconfigured Pushover, a target an edit removed), and the message says
+nothing was delivered. For a series, `skipped` and `failed` describe the occurrence
+and the series continues. An edit that removes a Pushover target while its delivery
+is backing off drops the retry as "superseded by an edit" and the reminder ends
+`skipped`. A projection reminder is the exception: it does not end at its last
+occurrence. See below.
+
+### Projection reminders (DESIGN-054 S4)
+
+`spec.projection` is the companion calendar image of one ScheduledWork item. It is
+not a page. The CRD rule is `a projection reminder has calendar targets only`:
+every target must be `calendar:<ref>`. `ValidateProjection` applies the same
+refusal in the reminder package. The scheduler never sends Pushover for a
+projection, including when a Pushover target is present on an object the CRD did
+not see.
+
+A projection stays `pending` until it is cancelled or its `until` passes. Passing
+means `now` is strictly after `spec.recurrence.until`. It does not finish at its
+last occurrence, so an edit or a cancel still applies, and the scheduler keeps
+synchronising that one calendar event. An ordinary calendar-only reminder, with
+`projection` unset, still ends `skipped` at its last occurrence. The public
+remind API does not set the marker. The ScheduledWork executor stores it on the
+companion object. An API edit copies the spec, so a later text edit keeps it.
+
+The event is one series entry with an RRULE, keyed by the Reminder's namespace
+and name (`EventID`). An edit rewrites it. A cancel deletes it before the state
+becomes `cancelled`, and a failed delete stays pending so the next pass retries.
+The event ID, the spec hash, the five-minute failure backoff and the
+delete-on-cancel record stay in `status.calendar`. When `until` passes, the state
+becomes `skipped` and the message is `projection until passed`. The event is left
+in place: its RRULE has ended, and deletion remains the cancel path. A projection
+with no `until` stays pending after its last occurrence until it is cancelled.
+
+DESIGN-032 refuses `count` together with `until`. `ProjectionRecurrence` converts
+a count to the `until` of the last occurrence, then caps that `until` at the
+caller's `notAfter` when `notAfter` is non-zero. An open-ended series takes
+`notAfter` as its `until`. A zero `notAfter` does not cap. The result has no
+count. A one-shot stays a one-shot. The scheduler does not convert; the caller
+stores the result. Losing the calendar never changes the ScheduledWork. The real
+calendar adapter is still absent, and this source does not start the keeper.
 
 ### Edit and cancel against the due time
 
