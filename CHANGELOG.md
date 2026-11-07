@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.91.3](https://github.com/thaynes43/dev-env/compare/v2.91.2...v2.91.3) (2026-11-07)
+
+
+### Bug Fixes
+
+* **openproject:** sync original failure diagnostics ([#982](https://github.com/thaynes43/dev-env/issues/982)) ([bc00617](https://github.com/thaynes43/dev-env/commit/bc006170e7d6ab002f0703dca60dedf8c8a1adcd))
+
 ## [2.91.2](https://github.com/thaynes43/dev-env/compare/v2.91.1...v2.91.2) (2026-11-07)
 
 
