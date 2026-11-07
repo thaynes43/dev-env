@@ -24,6 +24,7 @@ CUR = "c" * 40
 OWNER = "dev-env-1102-021002"
 SENDER = {"namespace": "dev-agents", "name": OWNER, "uid": "owner-uid-355"}
 RECIPIENT = {"namespace": "dev-agents", "name": "review-355", "uid": "recipient-uid-355"}
+SUCCESSOR = {"namespace": "dev-agents", "name": "successor-383", "uid": "successor-uid-383"}
 
 FIXTURE = r'''#!/usr/bin/env python3
 import fcntl, hashlib, json, os, sys, time
@@ -1435,6 +1436,421 @@ class RecoveryAdapterTests(unittest.TestCase):
             self.assertEqual(kept["class"], "retry")
             self.assertEqual(kept["attempts"], 1)
             self.assertEqual(kept["nextAttemptAt"], "2026-11-02T03:05:30Z")
+
+    def checkpoint_messages(self, store):
+        state = self.load_state(store)
+        return [item for item in state["sent"] if item["recipient"]["uid"] == SUCCESSOR["uid"]]
+
+    def successor_sends(self, store):
+        return [call for call in self.sends(store)[0] if "--recipient-uid" in call and call[call.index("--recipient-uid") + 1] == SUCCESSOR["uid"]]
+
+    def test_source_threshold_checkpoints_and_acks_only_to_named_successor(self):
+        # Synthetic source state. Capacity and the source deadline are not a credential,
+        # grant, or collector expiry, and the clock is the request's observedAt.
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            below = request(sourceCheckpoint={"kind": "source-capacity", "remaining": 11, "threshold": 10, "successor": dict(SUCCESSOR)})
+            code, quiet = self.run_adapter(store, below)
+            self.assertEqual(code, 0)
+            self.assertNotIn("custody", quiet)
+            self.assertEqual(self.checkpoint_messages(store), [])
+            self.assertEqual(quiet["owner"], OWNER)
+            self.assertEqual(quiet["taskClaim"], "unchanged")
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            due = request(sourceCheckpoint={"kind": "source-capacity", "remaining": 10, "threshold": 10, "successor": dict(SUCCESSOR)})
+            code, offered = self.run_adapter(store, due)
+            self.assertEqual(code, 0)
+            self.assertEqual(offered["custody"]["state"], "offered")
+            self.assertFalse(offered["custody"]["transferred"])
+            self.assertEqual(offered["custody"]["holder"], OWNER)
+            self.assertEqual(offered["custody"]["successor"], SUCCESSOR["name"])
+            self.assertEqual(offered["owner"], OWNER)
+            self.assertEqual(offered["taskClaim"], "unchanged")
+            self.assertEqual(offered["notificationsSent"], 0)
+            self.assertNotIn(offered["status"], {"completed", "recovered"})
+            messages = self.checkpoint_messages(store)
+            self.assertEqual(len(messages), 1)
+            body = json.loads(messages[0]["text"])
+            self.assertEqual(body["schema"], "dev-env.workflow-recovery-checkpoint/v1")
+            self.assertEqual(body["kind"], "source-capacity")
+            self.assertEqual(body["successorUID"], SUCCESSOR["uid"])
+            self.assertEqual(body["head"], CUR)
+            self.assertEqual(body["commit"], CUR)
+            self.assertEqual(body["branch"], "unknown")
+            self.assertEqual(body["ci"], "unknown")
+            self.assertEqual(body["reviewState"], "absent")
+            self.assertEqual(body["openQuestions"], "none")
+            self.assertEqual(body["nextSafeStep"], "unknown")
+            self.assertEqual(len([call for call in self.sends(store)[0] if "--recipient-uid" in call and call[call.index("--recipient-uid") + 1] == SUCCESSOR["uid"]]), 1)
+            code, again = self.run_adapter(store, due)
+            self.assertEqual(again["custody"]["state"], "offered")
+            self.assertFalse(again["custody"]["transferred"])
+            self.assertEqual(len(self.checkpoint_messages(store)), 1)
+            self.assertEqual(len([call for call in self.sends(store)[0] if "--recipient-uid" in call and call[call.index("--recipient-uid") + 1] == SUCCESSOR["uid"]]), 1)
+            state = self.load_state(store)
+            state["acks"] = []
+            add_ack(state, messages[0], dict(SENDER), "2026-11-02T03:04:00Z")
+            self.write_state(store, state)
+            code, owner_ack = self.run_adapter(store, due)
+            self.assertFalse(owner_ack["custody"]["transferred"])
+            self.assertEqual(owner_ack["custody"]["holder"], OWNER)
+            state = self.load_state(store)
+            state["acks"] = []
+            add_ack(state, messages[0], dict(SUCCESSOR), "2026-11-02T03:06:00Z")
+            self.write_state(store, state)
+            code, future = self.run_adapter(store, due)
+            self.assertFalse(future["custody"]["transferred"])
+            state = self.load_state(store)
+            state["acks"] = []
+            add_ack(state, messages[0], dict(SUCCESSOR), "2026-11-02T03:04:30Z")
+            self.write_state(store, state)
+            code, acked = self.run_adapter(store, due)
+            self.assertEqual(acked["custody"]["state"], "acknowledged")
+            self.assertTrue(acked["custody"]["transferred"])
+            self.assertEqual(acked["custody"]["holder"], SUCCESSOR["name"])
+            self.assertEqual(acked["owner"], OWNER)
+            self.assertEqual(acked["taskClaim"], "unchanged")
+            self.assertNotIn(acked["status"], {"completed", "recovered"})
+            self.assertEqual(len(self.checkpoint_messages(store)), 1)
+            code, replay = self.run_adapter(store, due)
+            self.assertTrue(replay["custody"]["transferred"])
+            self.assertEqual(len(self.checkpoint_messages(store)), 1)
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            early = request(
+                observedAt="2026-11-02T03:54:59Z",
+                sourceCheckpoint={"kind": "source-deadline", "leadSeconds": 900, "successor": dict(SUCCESSOR)},
+            )
+            code, waiting = self.run_adapter(store, early)
+            self.assertEqual(code, 0)
+            self.assertNotIn("custody", waiting)
+            self.assertEqual(self.checkpoint_messages(store), [])
+            at_lead = request(
+                observedAt="2026-11-02T03:55:00Z",
+                sourceCheckpoint={"kind": "source-deadline", "leadSeconds": 900, "successor": dict(SUCCESSOR)},
+            )
+            code, led = self.run_adapter(store, at_lead)
+            self.assertEqual(led["custody"]["state"], "offered")
+            self.assertFalse(led["custody"]["transferred"])
+            self.assertEqual(len(self.checkpoint_messages(store)), 1)
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            elapsed = request(
+                observedAt="2026-11-02T04:10:00Z",
+                ownerLiveness="killed",
+                sourceCheckpoint={"kind": "source-deadline", "leadSeconds": 900, "successor": dict(SUCCESSOR)},
+            )
+            code, late = self.run_adapter(store, elapsed)
+            self.assertEqual(late["status"], "blocked")
+            self.assertEqual(late["reason"], "deadline-elapsed")
+            self.assertEqual(late["custody"]["state"], "offered")
+            self.assertFalse(late["custody"]["transferred"])
+            self.assertEqual(late["custody"]["holder"], OWNER)
+            self.assertEqual(late["taskClaim"], "unchanged")
+            self.assertEqual(len(self.checkpoint_messages(store)), 1)
+            code, killed = self.run_adapter(store, elapsed)
+            self.assertFalse(killed["custody"]["transferred"])
+            self.assertEqual(len(self.checkpoint_messages(store)), 1)
+            names = {item["name"] for item in killed["evidence"]}
+            self.assertIn("checkpoint-reoffer-suppressed", names)
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show(), sendExit=5))
+            failed = request(
+                ownerLiveness="expired",
+                sourceCheckpoint={"kind": "source-capacity", "remaining": 0, "threshold": 0, "successor": dict(SUCCESSOR)},
+            )
+            code, first = self.run_adapter(store, failed)
+            self.assertEqual(first["status"], "retrying")
+            self.assertEqual(first["reason"], "checkpoint-backoff")
+            self.assertFalse(first["custody"]["transferred"])
+            self.assertEqual(self.checkpoint_messages(store), [])
+            self.assertEqual(first["attempt"], 1)
+            early = request(
+                observedAt="2026-11-02T03:05:29Z",
+                ownerLiveness="expired",
+                sourceCheckpoint=failed["sourceCheckpoint"],
+            )
+            code, held = self.run_adapter(store, early)
+            self.assertEqual(held["reason"], "checkpoint-backoff")
+            self.assertEqual(len(self.sends(store)[0]), 1)
+            retry = request(
+                observedAt="2026-11-02T03:05:30Z",
+                ownerLiveness="expired",
+                sourceCheckpoint=failed["sourceCheckpoint"],
+            )
+            code, capped = self.run_adapter(store, retry)
+            self.assertEqual(capped["status"], "blocked")
+            self.assertEqual(capped["reason"], "checkpoint-reoffer-cap")
+            self.assertFalse(capped["custody"]["transferred"])
+            self.assertEqual(capped["custody"]["successor"], SUCCESSOR["name"])
+            self.assertEqual(self.checkpoint_messages(store), [])
+            code, stopped = self.run_adapter(store, request(
+                observedAt="2026-11-02T04:10:00Z",
+                ownerLiveness="killed",
+                sourceCheckpoint=failed["sourceCheckpoint"],
+            ))
+            self.assertEqual(stopped["reason"], "checkpoint-reoffer-cap")
+            self.assertFalse(stopped["custody"]["transferred"])
+            self.assertEqual(len(self.sends(store)[0]), 2)
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            seeded = request(
+                observedAt="2026-11-02T04:10:00Z",
+                ownerLiveness="killed",
+                sourceCheckpoint={"kind": "source-capacity", "remaining": 1, "threshold": 1, "successor": dict(SUCCESSOR)},
+            )
+            text = mod.checkpoint_text(seeded, CUR)
+            key = mod.checkpoint_key(seeded, CUR)
+            cache = {
+                "schema": mod.CACHE_SCHEMA,
+                "entries": {},
+                "checkpoints": {
+                    mod.family_key(seeded): {
+                        "class": "uncertain",
+                        "attempts": 1,
+                        "nextAttemptAt": "",
+                        "successorUID": SUCCESSOR["uid"],
+                        "intentKey": key,
+                        "digest": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                        "messageName": "",
+                        "messageUID": "",
+                        "at": seeded["observedAt"],
+                        "correlation": seeded["correlation"],
+                    }
+                },
+            }
+            (store / "cache.json").write_text(json.dumps(cache), encoding="utf-8")
+            code, unclear = self.run_adapter(store, seeded)
+            self.assertEqual(unclear["reason"], "uncertain-not-replayed")
+            self.assertFalse(unclear["custody"]["transferred"])
+            self.assertEqual(unclear["owner"], OWNER)
+            self.assertEqual(self.checkpoint_messages(store), [])
+            self.assertEqual(self.sends(store)[0], [])
+            kept = json.loads((store / "cache.json").read_text(encoding="utf-8"))["checkpoints"][mod.family_key(seeded)]
+            self.assertEqual(kept["class"], "uncertain")
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            body = request(sourceCheckpoint={"kind": "source-capacity", "remaining": 1, "threshold": 1, "successor": dict(SUCCESSOR)})
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                one, two = pool.map(lambda _: self.run_adapter(store, body), (1, 2))
+            self.assertEqual(one[0], 0)
+            self.assertEqual(two[0], 0)
+            self.assertEqual(len(self.checkpoint_messages(store)), 1)
+            self.assertFalse(one[1]["custody"]["transferred"] or two[1]["custody"]["transferred"])
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            code, refused = self.run_adapter(store, request(sourceCheckpoint={"kind": "collector", "remaining": 0, "threshold": 0, "successor": dict(SUCCESSOR)}))
+            self.assertEqual(code, 2)
+            self.assertEqual(refused["status"], "refused")
+            self.assertEqual(self.load_state(store)["calls"], [])
+            for kind in (["source-capacity"], {"kind": "source-capacity"}):
+                code, malformed = self.run_adapter(store, request(sourceCheckpoint={"kind": kind, "remaining": 0, "threshold": 0, "successor": dict(SUCCESSOR)}))
+                self.assertEqual(code, 2)
+                self.assertEqual(malformed["status"], "refused")
+                self.assertEqual(malformed["reason"], "sourceCheckpoint kind is invalid")
+                self.assertEqual(self.load_state(store)["calls"], [])
+            code, source_only = self.run_adapter(store, request(sourceCheckpoint={"kind": "source-capacity", "remaining": 0, "threshold": 0, "successor": dict(SUCCESSOR)}), observe=False)
+            self.assertEqual(source_only["executed"], False)
+            self.assertEqual(self.load_state(store)["calls"], [])
+
+    def test_rebound_reconciles_checkpoint_without_a_new_offer(self):
+        spec = {"kind": "source-capacity", "remaining": 10, "threshold": 10, "successor": dict(SUCCESSOR)}
+        rebound_spec = {"kind": "source-capacity", "remaining": 11, "threshold": 10, "successor": dict(SUCCESSOR)}
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            code, offered = self.run_adapter(store, request(sourceCheckpoint=spec))
+            self.assertEqual(offered["custody"]["state"], "offered")
+            self.assertFalse(offered["custody"]["transferred"])
+            code, still = self.run_adapter(store, request(sourceCheckpoint=rebound_spec))
+            self.assertEqual(code, 0)
+            self.assertEqual(still["custody"]["state"], "offered")
+            self.assertFalse(still["custody"]["transferred"])
+            self.assertEqual(still["owner"], OWNER)
+            self.assertEqual(len(self.checkpoint_messages(store)), 1)
+            self.assertEqual(len([call for call in self.sends(store)[0] if "--recipient-uid" in call and call[call.index("--recipient-uid") + 1] == SUCCESSOR["uid"]]), 1)
+            state = self.load_state(store)
+            state["acks"] = []
+            add_ack(state, self.checkpoint_messages(store)[0], dict(SUCCESSOR), "2026-11-02T03:04:30Z")
+            self.write_state(store, state)
+            code, acked = self.run_adapter(store, request(sourceCheckpoint=rebound_spec))
+            self.assertEqual(acked["custody"]["state"], "acknowledged")
+            self.assertTrue(acked["custody"]["transferred"])
+            self.assertEqual(acked["custody"]["holder"], SUCCESSOR["name"])
+            self.assertEqual(acked["taskClaim"], "unchanged")
+            self.assertNotIn(acked["status"], {"completed", "recovered"})
+            self.assertEqual(len(self.checkpoint_messages(store)), 1)
+            code, later = self.run_adapter(store, request(sourceCheckpoint=rebound_spec))
+            self.assertEqual(code, 0)
+            self.assertEqual(later["custody"]["state"], "acknowledged")
+            self.assertTrue(later["custody"]["transferred"])
+            self.assertEqual(later["custody"]["holder"], SUCCESSOR["name"])
+            self.assertEqual(later["taskClaim"], "unchanged")
+            self.assertEqual(len(self.checkpoint_messages(store)), 1)
+            successor_sends = [call for call in self.sends(store)[0] if "--recipient-uid" in call and call[call.index("--recipient-uid") + 1] == SUCCESSOR["uid"]]
+            self.assertEqual(len(successor_sends), 1)
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            seeded = request(sourceCheckpoint=rebound_spec)
+            text = mod.checkpoint_text(seeded, CUR)
+            key = mod.checkpoint_key(seeded, CUR)
+            cache = {
+                "schema": mod.CACHE_SCHEMA,
+                "entries": {},
+                "checkpoints": {
+                    mod.family_key(seeded): {
+                        "class": "uncertain",
+                        "attempts": 1,
+                        "nextAttemptAt": "",
+                        "successorUID": SUCCESSOR["uid"],
+                        "intentKey": key,
+                        "digest": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                        "messageName": "",
+                        "messageUID": "",
+                        "at": seeded["observedAt"],
+                        "correlation": seeded["correlation"],
+                    }
+                },
+            }
+            (store / "cache.json").write_text(json.dumps(cache), encoding="utf-8")
+            code, unclear = self.run_adapter(store, seeded)
+            self.assertEqual(unclear["reason"], "uncertain-not-replayed")
+            self.assertFalse(unclear["custody"]["transferred"])
+            self.assertEqual(unclear["owner"], OWNER)
+            self.assertEqual(self.sends(store)[0], [])
+            kept = json.loads((store / "cache.json").read_text(encoding="utf-8"))["checkpoints"][mod.family_key(seeded)]
+            self.assertEqual(kept["class"], "uncertain")
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            code, offered = self.run_adapter(store, request(sourceCheckpoint=spec))
+            self.assertFalse(offered["custody"]["transferred"])
+            state = self.load_state(store)
+            state["headRefOid"] = NEW
+            state["acks"] = []
+            add_ack(state, self.checkpoint_messages(store)[0], dict(SUCCESSOR), "2026-11-02T03:04:30Z")
+            self.write_state(store, state)
+            code, moved = self.run_adapter(store, request(sourceCheckpoint=spec))
+            self.assertEqual(moved["status"], "blocked")
+            self.assertEqual(moved["reason"], "checkpoint-conflict")
+            self.assertFalse(moved["custody"]["transferred"])
+            self.assertEqual(moved["custody"]["holder"], OWNER)
+            self.assertEqual(len(self.checkpoint_messages(store)), 1)
+
+    def test_same_head_progress_keeps_offered_checkpoint(self):
+        spec = {"kind": "source-capacity", "remaining": 10, "threshold": 10, "successor": dict(SUCCESSOR)}
+        progressed = request(
+            sourceCheckpoint=spec,
+            handoffEvents=[review_event("obs-current", CUR, "2026-11-02T03:00:00Z")],
+            verdictArtifacts=[artifact("obs-current", CUR, "2026-11-02T03:00:00Z")],
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            code, offered = self.run_adapter(store, request(sourceCheckpoint=spec))
+            self.assertEqual(offered["custody"]["state"], "offered")
+            original = self.checkpoint_messages(store)[0]["text"]
+            self.assertEqual(json.loads(original)["reviewState"], "absent")
+            state = self.load_state(store)
+            state["acks"] = []
+            add_ack(state, self.checkpoint_messages(store)[0], dict(SUCCESSOR), "2026-11-02T03:04:30Z")
+            self.write_state(store, state)
+            code, acked = self.run_adapter(store, progressed)
+            self.assertEqual(code, 0)
+            self.assertEqual(acked["custody"]["state"], "acknowledged")
+            self.assertTrue(acked["custody"]["transferred"])
+            self.assertEqual(acked["custody"]["holder"], SUCCESSOR["name"])
+            self.assertEqual(acked["taskClaim"], "unchanged")
+            self.assertEqual(self.checkpoint_messages(store)[0]["text"], original)
+            self.assertEqual(len(self.successor_sends(store)), 1)
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            self.run_adapter(store, request(sourceCheckpoint=spec))
+            original = self.checkpoint_messages(store)[0]["text"]
+            self.assertEqual(json.loads(original)["openQuestions"], "none")
+            state = self.load_state(store)
+            add_question(state, "Answered")
+            state["acks"] = []
+            add_ack(state, self.checkpoint_messages(store)[0], dict(SUCCESSOR), "2026-11-02T03:04:30Z")
+            self.write_state(store, state)
+            code, answered = self.run_adapter(store, request(sourceCheckpoint=spec))
+            self.assertEqual(code, 0)
+            self.assertEqual(answered["custody"]["state"], "acknowledged")
+            self.assertTrue(answered["custody"]["transferred"])
+            self.assertEqual(answered["custody"]["holder"], SUCCESSOR["name"])
+            self.assertEqual(answered["taskClaim"], "unchanged")
+            self.assertEqual(self.checkpoint_messages(store)[0]["text"], original)
+            self.assertEqual(len(self.successor_sends(store)), 1)
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            self.run_adapter(store, request(sourceCheckpoint=spec))
+            state = self.load_state(store)
+            state["acks"] = []
+            add_ack(state, self.checkpoint_messages(store)[0], dict(SENDER), "2026-11-02T03:04:30Z")
+            self.write_state(store, state)
+            code, foreign = self.run_adapter(store, progressed)
+            self.assertEqual(code, 0)
+            self.assertFalse(foreign["custody"]["transferred"])
+            self.assertEqual(foreign["custody"]["holder"], OWNER)
+            self.assertEqual(foreign["taskClaim"], "unchanged")
+            self.assertEqual(len(self.successor_sends(store)), 1)
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            self.run_adapter(store, request(sourceCheckpoint=spec))
+            state = self.load_state(store)
+            for item in state["sent"]:
+                if item["recipient"]["uid"] == SUCCESSOR["uid"]:
+                    item["text"] = item["text"][:-1] + " "
+            state["acks"] = []
+            add_ack(state, self.checkpoint_messages(store)[0], dict(SUCCESSOR), "2026-11-02T03:04:30Z")
+            self.write_state(store, state)
+            code, altered = self.run_adapter(store, request(sourceCheckpoint=spec))
+            self.assertEqual(altered["status"], "blocked")
+            self.assertEqual(altered["reason"], "checkpoint-conflict")
+            self.assertFalse(altered["custody"]["transferred"])
+            self.assertEqual(len(self.successor_sends(store)), 1)
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(CUR, show()))
+            self.run_adapter(store, request(sourceCheckpoint=spec))
+            state = self.load_state(store)
+            state["headRefOid"] = NEW
+            state["acks"] = []
+            add_ack(state, self.checkpoint_messages(store)[0], dict(SUCCESSOR), "2026-11-02T03:04:30Z")
+            self.write_state(store, state)
+            code, moved = self.run_adapter(store, request(sourceCheckpoint=spec))
+            self.assertEqual(moved["status"], "blocked")
+            self.assertEqual(moved["reason"], "checkpoint-conflict")
+            self.assertFalse(moved["custody"]["transferred"])
+            self.assertEqual(moved["custody"]["holder"], OWNER)
+            self.assertEqual(len(self.checkpoint_messages(store)), 1)
+            self.assertEqual(len(self.successor_sends(store)), 1)
 
 
 if __name__ == "__main__":

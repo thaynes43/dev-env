@@ -4,6 +4,12 @@
 Default mode validates the request and starts nothing. --observe calls gh,
 agent-run, and the existing workflow_handoff checker. It does not launch a
 worker, send a notification, grant a credential, or keep a second queue.
+
+A source-capacity or source-deadline threshold can record one durable
+checkpoint and offer it to the named successor. Later source readings reconcile
+that offer. Custody moves only when that successor's acknowledgement matches
+the observed head. The clock, a rebound, a killed or expired owner, and an
+uncertain send do not move it. Branch, CI, and the next safe step stay unknown.
 """
 
 import hashlib
@@ -19,6 +25,7 @@ from pathlib import Path
 
 SCHEMA = "dev-env.workflow-recovery/v1"
 INTENT = "dev-env.workflow-recovery-intent/v1"
+CHECKPOINT = "dev-env.workflow-recovery-checkpoint/v1"
 CACHE_SCHEMA = "dev-env.workflow-recovery-observation-cache/v1"
 TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 HEAD_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -39,6 +46,7 @@ GAPS = [
     "show task exit is recipient-session evidence, not a review verdict by itself",
     "a complete inbox list above 8 rows is blocked, including unrelated history",
     "source fixtures are not installed or accepted",
+    "a source checkpoint transfers custody only after the named successor's explicit acknowledgement",
 ]
 CLI_ENV = (
     "DEV_ENV_API_URL",
@@ -271,10 +279,67 @@ def validate_request(raw):
     req["handoffEvents"] = events
     req["verdictArtifacts"] = artifacts
     req["custodyMessage"] = custody_message
+    req["sourceCheckpoint"] = validate_source_checkpoint(raw)
+    req["ownerLiveness"] = validate_owner_liveness(raw)
     req["_observed"] = observed
     req["_deadline"] = deadline
     req["_window"] = window
     return req
+
+
+def validate_owner_liveness(raw):
+    liveness = raw.get("ownerLiveness", "running")
+    if liveness is None:
+        liveness = "running"
+    if not isinstance(liveness, str) or liveness not in {"running", "killed", "expired"}:
+        raise ValueError("ownerLiveness is invalid")
+    return liveness
+
+
+def validate_source_checkpoint(raw):
+    spec = raw.get("sourceCheckpoint", None)
+    if spec is None:
+        return None
+    if not isinstance(spec, dict):
+        raise ValueError("sourceCheckpoint is malformed")
+    allowed = {"kind", "successor", "remaining", "threshold", "leadSeconds"}
+    if any(key not in allowed for key in spec):
+        raise ValueError("sourceCheckpoint is malformed")
+    kind = spec.get("kind")
+    if not isinstance(kind, str):
+        raise ValueError("sourceCheckpoint kind is invalid")
+    if kind in {"access-ttl", "authorization-ttl", "credential", "grant", "collector", "collector-window"}:
+        raise ValueError("source checkpoint is not credential, grant, or collector expiry")
+    if kind not in {"source-capacity", "source-deadline"}:
+        raise ValueError("sourceCheckpoint kind is invalid")
+    successor = spec.get("successor")
+    if not isinstance(successor, dict):
+        raise ValueError("sourceCheckpoint successor is malformed")
+    for field in ("namespace", "name", "uid"):
+        if not isinstance(successor.get(field), str):
+            raise ValueError("sourceCheckpoint successor is malformed")
+    if not DNS_RE.fullmatch(successor["namespace"]) or not identity_name(successor["name"]) or not UID_RE.fullmatch(successor["uid"]):
+        raise ValueError("sourceCheckpoint successor is invalid")
+    owner = raw["claim"]["owner"]
+    if successor["uid"] == owner["uid"] or successor["name"] == owner["name"]:
+        raise ValueError("sourceCheckpoint successor must be a named dedicated session")
+    successor = {"namespace": successor["namespace"], "name": successor["name"], "uid": successor["uid"]}
+    if kind == "source-capacity":
+        if "leadSeconds" in spec:
+            raise ValueError("sourceCheckpoint is malformed")
+        remaining = spec.get("remaining")
+        threshold = spec.get("threshold")
+        if isinstance(remaining, bool) or not isinstance(remaining, int) or remaining < 0 or remaining > 1000000:
+            raise ValueError("sourceCheckpoint remaining is invalid")
+        if isinstance(threshold, bool) or not isinstance(threshold, int) or threshold < 0 or threshold > 1000000:
+            raise ValueError("sourceCheckpoint threshold is invalid")
+        return {"kind": kind, "remaining": remaining, "threshold": threshold, "successor": successor}
+    if "remaining" in spec or "threshold" in spec:
+        raise ValueError("sourceCheckpoint is malformed")
+    lead = spec.get("leadSeconds")
+    if isinstance(lead, bool) or not isinstance(lead, int) or lead < 1 or lead > 86400:
+        raise ValueError("sourceCheckpoint leadSeconds is invalid")
+    return {"kind": kind, "leadSeconds": lead, "successor": successor}
 
 
 def identity_name(value):
@@ -530,6 +595,7 @@ def observe(req, cache, persist):
         result["schedulingUntil"] = req["windowExpiresAt"]
     else:
         result["_renew"] = True
+    apply_source_checkpoint(req, result, cache, messages, persist, head, reduction)
     picked = picked_review(reduction, req, head, result)
     if picked is not None:
         finish_verdict(req, result, picked, current, native)
@@ -1258,6 +1324,300 @@ def publish(req, result, cache, key, text, messages, native, persist):
         remember(cache, req, key, text, "conflict", 1)
         stop(result, "blocked", "conflict-not-replayed", detail=detail)
     remember(cache, req, key, text, "denied", code)
+    stop(result, "blocked", "denied-not-replayed", detail=detail or "exit %s" % code)
+
+
+def checkpoint_due(req):
+    spec = req.get("sourceCheckpoint")
+    if not spec:
+        return False
+    if spec["kind"] == "source-capacity":
+        return spec["remaining"] <= spec["threshold"]
+    return req["_observed"] >= req["_deadline"] - timedelta(seconds=spec["leadSeconds"])
+
+
+def checkpoint_review_state(reduction):
+    if not isinstance(reduction, dict):
+        return "unknown"
+    reviews = reduction.get("reviews", [])
+    if reviews is None:
+        reviews = []
+    if not isinstance(reviews, list):
+        return "unknown"
+    picked = [item for item in reviews if isinstance(item, dict) and item.get("picked") is True]
+    if not picked:
+        return "absent"
+    if len(picked) == 1:
+        return "picked"
+    return "unknown"
+
+
+def checkpoint_key(req, head):
+    spec = req["sourceCheckpoint"]
+    lines = identity_lines(req, head) + [spec["successor"]["uid"], spec["kind"]]
+    return "chk-" + hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:48]
+
+
+def checkpoint_text(req, head, question="none", review_state="absent"):
+    spec = req["sourceCheckpoint"]
+    owner = req["claim"]["owner"]
+    if question not in {"none", "answered"}:
+        question = "unknown"
+    if review_state not in {"absent", "picked", "unknown"}:
+        review_state = "unknown"
+    body = {
+        "schema": CHECKPOINT,
+        "kind": spec["kind"],
+        "repository": req["repository"],
+        "pullRequest": req["pullRequest"],
+        "task": req["task"],
+        "taskUID": req["taskUID"],
+        "claimUID": req["claim"]["uid"],
+        "correlation": req["correlation"],
+        "ownerUID": owner["uid"],
+        "successorUID": spec["successor"]["uid"],
+        "deadline": req["deadline"],
+        "head": head,
+        "commit": head,
+        "logicalKey": logical_key(req, head),
+        "branch": "unknown",
+        "ci": "unknown",
+        "reviewState": review_state,
+        "openQuestions": question,
+        "nextSafeStep": "unknown",
+    }
+    return json.dumps(body, sort_keys=True, separators=(",", ":"))
+
+
+def note_custody(result, req, state, transferred):
+    successor = req["sourceCheckpoint"]["successor"]
+    result["custody"] = {
+        "state": state,
+        "holder": successor["name"] if transferred else req["owner"],
+        "successor": successor["name"],
+        "transferred": bool(transferred),
+    }
+    result["taskClaim"] = "unchanged"
+
+
+def remember_checkpoint(slots, fam, req, key, digest, klass, attempts, nxt, message=None):
+    slots[fam] = {
+        "class": klass,
+        "attempts": attempts,
+        "nextAttemptAt": nxt,
+        "successorUID": req["sourceCheckpoint"]["successor"]["uid"],
+        "intentKey": key,
+        "digest": digest,
+        "messageName": message.get("name", "") if isinstance(message, dict) else "",
+        "messageUID": message.get("uid", "") if isinstance(message, dict) else "",
+        "at": req["observedAt"],
+        "correlation": req["correlation"],
+    }
+
+
+def snapshot_head(text):
+    try:
+        body = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(body, dict) or not isinstance(body.get("head"), str):
+        return None
+    if body.get("commit") != body["head"]:
+        return None
+    return body["head"]
+
+
+def checkpoint_message(messages, req, key, digest, head, result):
+    found = [item for item in messages if item.get("key") == key]
+    if not found:
+        return None
+    if len(found) != 1:
+        note_custody(result, req, "requested", False)
+        stop(result, "blocked", "duplicate-inbox-message")
+    current = found[0]
+    actual = current.get("text")
+    successor = req["sourceCheckpoint"]["successor"]
+    if not isinstance(actual, str) or hashlib.sha256(actual.encode("utf-8")).hexdigest() != digest or snapshot_head(actual) != head:
+        note_custody(result, req, "requested", False)
+        stop(result, "blocked", "checkpoint-conflict")
+    if current.get("sender") != req["authenticatedSender"] or current.get("recipient") != successor:
+        note_custody(result, req, "requested", False)
+        stop(result, "blocked", "checkpoint-conflict")
+    return current
+
+
+def checkpoint_acknowledged(req, message, result):
+    ack, kind = read_ack(req, message["name"], result)
+    if kind == "missing":
+        return False
+    if kind == "unconfirmed":
+        note_custody(result, req, "offered", False)
+        result["escalated"] = True
+        stop(result, "blocked", "lost-ack", detail=message["name"])
+    if kind != "ok":
+        note_custody(result, req, "offered", False)
+        stop(result, "blocked", "ack-status-failed", detail=kind)
+    successor = req["sourceCheckpoint"]["successor"]
+    created = parse_time(ack.get("createdAt"))
+    if created is None or created > req["_observed"]:
+        result["evidence"].append({"name": "future-ack-rejected", "at": ack.get("createdAt", ""), "detail": message["name"]})
+        return False
+    if ack.get("recipient") != successor or ack.get("messageUID") != message.get("uid"):
+        result["evidence"].append({"name": "foreign-ack-rejected", "at": ack.get("createdAt", ""), "detail": message["name"]})
+        return False
+    return True
+
+
+def adopt_checkpoint(req, result, slots, fam, slot, current, key, digest):
+    transferred = checkpoint_acknowledged(req, message=current, result=result)
+    state = "acknowledged" if transferred else "offered"
+    note_custody(result, req, state, transferred)
+    attempts = slot.get("attempts") if isinstance(slot, dict) and isinstance(slot.get("attempts"), int) else 1
+    remember_checkpoint(slots, fam, req, key, digest, state, attempts, "", current)
+    if transferred:
+        result["evidence"].append({"name": "checkpoint-acknowledged", "at": result["observedAt"], "detail": current["name"]})
+        return
+    if req["ownerLiveness"] in {"killed", "expired"}:
+        result["evidence"].append({"name": "checkpoint-reoffer-suppressed", "at": result["observedAt"], "detail": "existing-message"})
+
+
+def apply_source_checkpoint(req, result, cache, messages, persist, head, reduction):
+    if not req.get("sourceCheckpoint"):
+        return
+    due = checkpoint_due(req)
+    spec = req["sourceCheckpoint"]
+    successor = spec["successor"]
+    question = result.get("states", {}).get("question", "unknown")
+    text = checkpoint_text(req, head, question, checkpoint_review_state(reduction))
+    key = checkpoint_key(req, head)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    fam = family_key(req)
+    stored = cache.get("checkpoints")
+    if stored is None:
+        slots = {}
+        slot = None
+    elif not isinstance(stored, dict):
+        note_custody(result, req, "requested", False)
+        stop(result, "blocked", "checkpoint-cache-malformed")
+    else:
+        slots = stored
+        slot = slots.get(fam)
+    if isinstance(slot, dict) and slot.get("successorUID") not in (None, "", successor["uid"]):
+        note_custody(result, req, "requested", False)
+        stop(result, "blocked", "checkpoint-successor-conflict")
+    persisted_key = slot.get("intentKey") if isinstance(slot, dict) else ""
+    persisted_digest = slot.get("digest") if isinstance(slot, dict) else ""
+    if isinstance(persisted_key, str) and persisted_key and isinstance(persisted_digest, str) and persisted_digest:
+        if persisted_key != key:
+            note_custody(result, req, "requested", False)
+            stop(result, "blocked", "checkpoint-conflict")
+        current = checkpoint_message(messages, req, persisted_key, persisted_digest, head, result)
+        if current is not None:
+            cache["checkpoints"] = slots
+            adopt_checkpoint(req, result, slots, fam, slot, current, persisted_key, persisted_digest)
+            return
+        if slot.get("class") == "retry" and digest != persisted_digest:
+            note_custody(result, req, "requested", False)
+            stop(result, "blocked", "checkpoint-conflict")
+    if isinstance(slot, dict) and slot.get("class") in {"uncertain", "unconfirmed", "pending", "denied", "conflict", "acknowledged"}:
+        note_custody(result, req, "uncertain" if slot.get("class") == "uncertain" else "requested", False)
+        result["escalated"] = slot.get("class") in {"uncertain", "unconfirmed", "pending"}
+        stop(result, "blocked", slot["class"] + "-not-replayed")
+    if isinstance(slot, dict) and slot.get("class") == "offered":
+        note_custody(result, req, "offered", False)
+        stop(result, "blocked", "checkpoint-unconfirmed")
+    attempt = 0
+    if isinstance(slot, dict) and slot.get("class") == "retry":
+        attempt = slot.get("attempts") if isinstance(slot.get("attempts"), int) else 0
+        if attempt >= 2:
+            note_custody(result, req, "requested", False)
+            result["escalated"] = True
+            result["attempt"] = attempt
+            stop(result, "blocked", "checkpoint-reoffer-cap")
+        nxt = parse_time(slot.get("nextAttemptAt"))
+        if not due or (nxt is not None and req["_observed"] < nxt):
+            note_custody(result, req, "requested", False)
+            result["status"] = "retrying"
+            result["reason"] = "checkpoint-backoff"
+            result["attempt"] = attempt
+            result["nextAttemptAt"] = slot.get("nextAttemptAt") or ""
+            raise Stop(result)
+    if not due:
+        return
+    cache["checkpoints"] = slots
+    remember_checkpoint(slots, fam, req, key, digest, "uncertain", attempt, "")
+    persist()
+
+    def on_timeout():
+        note_custody(result, req, "uncertain", False)
+        result["escalated"] = True
+        result["evidence"].append({"name": "unknown-send", "at": result["observedAt"], "detail": key})
+        stop(result, "blocked", "uncertain-not-replayed", detail="timeout")
+
+    code, out, detail = run_cmd(
+        result,
+        [
+            "agent-run", "inbox", "send",
+            "--project", req["project"],
+            "--recipient-namespace", successor["namespace"],
+            "--recipient-name", successor["name"],
+            "--recipient-uid", successor["uid"],
+            "--key", key,
+        ],
+        stdin=text,
+        on_timeout=on_timeout,
+    )
+    if code == 0:
+        try:
+            receipt = json.loads(out)
+        except json.JSONDecodeError:
+            receipt = None
+        message = receipt.get("message") if isinstance(receipt, dict) else None
+        recipient_ok = isinstance(message, dict) and message.get("recipient") == successor
+        if not isinstance(receipt, dict) or receipt.get("outcome") not in {"Created", "Confirmed"} or not recipient_ok or message.get("key") != key:
+            remember_checkpoint(slots, fam, req, key, digest, "unconfirmed", max(attempt, 1), "")
+            note_custody(result, req, "uncertain", False)
+            result["escalated"] = True
+            stop(result, "blocked", "unconfirmed-not-replayed")
+        if message.get("sender") != req["authenticatedSender"]:
+            remember_checkpoint(slots, fam, req, key, digest, "unconfirmed", max(attempt, 1), "")
+            note_custody(result, req, "uncertain", False)
+            stop(result, "blocked", "inbox-provenance-mismatch")
+        remember_checkpoint(slots, fam, req, key, digest, "offered", max(attempt, 1), "", message)
+        note_custody(result, req, "offered", False)
+        result["evidence"].append({"name": "checkpoint-offered", "at": result["observedAt"], "detail": message.get("name", "")})
+        return
+    if code == 5:
+        attempt += 1
+        nxt = (req["_observed"] + timedelta(seconds=BACKOFF[0])).strftime("%Y-%m-%dT%H:%M:%SZ")
+        remember_checkpoint(slots, fam, req, key, digest, "retry", attempt, nxt)
+        note_custody(result, req, "requested", False)
+        result["attempt"] = attempt
+        result["nextAttemptAt"] = nxt
+        if attempt >= 2:
+            result["escalated"] = True
+            result["status"] = "blocked"
+            result["reason"] = "checkpoint-reoffer-cap"
+            raise Stop(result)
+        result["status"] = "retrying"
+        result["reason"] = "checkpoint-backoff"
+        raise Stop(result)
+    if code == 6:
+        remember_checkpoint(slots, fam, req, key, digest, "unconfirmed", max(attempt, 1), "")
+        note_custody(result, req, "uncertain", False)
+        result["escalated"] = True
+        stop(result, "blocked", "unconfirmed-not-replayed", detail=detail)
+    if code == 7:
+        remember_checkpoint(slots, fam, req, key, digest, "pending", max(attempt, 1), "")
+        note_custody(result, req, "uncertain", False)
+        result["escalated"] = True
+        stop(result, "blocked", "pending-not-replayed", detail=detail)
+    if code == 1 and "conflict" in detail:
+        remember_checkpoint(slots, fam, req, key, digest, "conflict", max(attempt, 1), "")
+        note_custody(result, req, "requested", False)
+        stop(result, "blocked", "conflict-not-replayed", detail=detail)
+    remember_checkpoint(slots, fam, req, key, digest, "denied", code or 1, "")
+    note_custody(result, req, "requested", False)
     stop(result, "blocked", "denied-not-replayed", detail=detail or "exit %s" % code)
 
 
