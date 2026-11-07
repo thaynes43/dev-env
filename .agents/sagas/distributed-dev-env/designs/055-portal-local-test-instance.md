@@ -170,7 +170,7 @@ OpenProject
 [#479](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/479)
 (section 9).
 
-- The Origin finding in section 9.4 is tracked in [OpenProject #480](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/480).
+- The historical Origin finding in section 9.4 was tracked in [OpenProject #480](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/480). Session routes now send `Referrer-Policy: same-origin` (PR #948). Attention remains `no-referrer`.
 - An Attention metadata fixture, if Attention is wired in production.
 - Selecting other fixture scenarios, for example the preview's product states.
 
@@ -228,19 +228,23 @@ and pass now. Each checks:
 
 `web/portal/localtest/smoke-flows.cjs` drives the same flows in an
 unmodified headless Chromium at 320, 390 and 1280 px. It starts a fresh
-instance per width. Its default run is the acceptance run. While #480 is
-open, the three POST flows (send, launch, Asks answer) report
-`NOT ACCEPTED (#480)` and the run exits 1 (section 9.4). History is a GET
-flow and passes.
+instance per width. Its default run is the acceptance run. Session routes
+set `Referrer-Policy: same-origin`, so a refused POST is a failure rather
+than the expected #480 result. The script also covers back/forward on a send
+receipt, an abort before the POST is sent, a response dropped only after the
+fixture receipt exists, wrong-target refusals, and fixture logout. A browser
+run of those added checks is not claimed from this text. History is a GET
+flow. A refused POST still reports `NOT ACCEPTED (#480)` and the run exits 1
+(section 9.4).
 
-### 9.4 Finding: Chromium sends `Origin: null` on the portal's forms
+### 9.4 Historical finding: Chromium sent `Origin: null` under `no-referrer`
 
-Every portal page sets `Referrer-Policy: no-referrer` (`authHeaders`). Under
-that policy Chromium sends `Origin: null` on a same-origin form POST. This is
-specified behaviour: the [Fetch Standard, "append a request `Origin` header"](https://fetch.spec.whatwg.org/#append-a-request-origin-header) sets the
+On 2026-11-05, session pages set `Referrer-Policy: no-referrer` through
+`authHeaders`. Under that policy Chromium sent `Origin: null` on a
+same-origin form POST. This is specified behaviour: the [Fetch Standard, "append a request `Origin` header"](https://fetch.spec.whatwg.org/#append-a-request-origin-header) sets the
 serialized origin to `null` for a request whose mode is not `cors`, whose
 method is not GET or HEAD, and whose referrer policy is `no-referrer`. The
-production origin checks accept only the configured origin, so they refuse
+production origin checks accept only the configured origin, so they refused
 these posts:
 
 - send (`commands.go`);
@@ -248,21 +252,21 @@ these posts:
 - Asks answers (`asks.go`);
 - logout (`engine.go`).
 
-The local instance reproduces this, because it runs the same handlers.
+The local instance reproduced this, because it runs the same handlers.
 Verified with Playwright's Chromium 1247 on 2026-11-05. Other engines were
-not checked.
+not checked. PR #948 changed `authHeaders` to `same-origin`. Attention's
+boundary still sets `no-referrer` and was not part of that change.
 
-The flow smoke's default run reports each refused post of the three POST
-flows (send, launch, Asks answer) as `NOT ACCEPTED (#480)` and exits 1.
-History, a GET, passes. It cannot pass because of a header
-override. The flag `--diagnostic-referrer-same-origin` serves each page with
+The current default smoke accepts a POST only when the unmodified instance
+accepts it. A refused post of send, launch or Asks is still
+`NOT ACCEPTED (#480)` and the run exits 1. The flag
+`--diagnostic-referrer-same-origin` serves each document with
 `Referrer-Policy: same-origin` through a harness-only override; see
-[Referrer Policy, `same-origin`](https://w3c.github.io/webappsec-referrer-policy/#referrer-policy-same-origin). Chromium then sends the page origin, and every flow
-completes. That run labels every line `DIAGNOSTIC`. A post refused even
+[Referrer Policy, `same-origin`](https://w3c.github.io/webappsec-referrer-policy/#referrer-policy-same-origin). That run labels every line `DIAGNOSTIC`. A post refused even
 under the override is printed `DIAGNOSTIC NOT ACCEPTED (#480)` and fails the
 run. It exits 3 only when every diagnostic check holds, and it is never
-acceptance evidence. The fix is a production decision
-outside OP479, tracked in [OpenProject #480](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/480) ("Portal forms refused in
+acceptance evidence. The server policy is already `same-origin`; the flag
+does not turn a diagnostic run into acceptance. The historical fix was a
+production decision outside OP479, tracked in [OpenProject #480](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/480) ("Portal forms refused in
 Chromium: Referrer-Policy no-referrer makes Origin null on same-origin
-posts"). Options include a referrer policy that keeps same-origin `Origin`
-headers, or an origin check that also accepts `Sec-Fetch-Site: same-origin`.
+posts").

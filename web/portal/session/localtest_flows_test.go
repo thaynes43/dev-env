@@ -98,6 +98,85 @@ func TestLocalTestSendFlow(t *testing.T) {
 	}
 }
 
+func localTestWitnessCount(t *testing.T, instance *LocalTest, method, path string) int {
+	t.Helper()
+	w := serveLocalTest(instance, localTestRequest(http.MethodGet, localTestFixtureCallsPath))
+	got := w.Header().Values("Referrer-Policy")
+	if w.Code != http.StatusOK || len(got) != 1 || got[0] != "same-origin" || w.Header().Get("X-Portal-Local-Test") != "fixture" {
+		t.Fatalf("witness %d policy %q", w.Code, got)
+	}
+	var snap struct {
+		Calls []struct {
+			Method string `json:"method"`
+			Path   string `json:"path"`
+			Count  int    `json:"count"`
+		} `json:"calls"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &snap); err != nil || strings.Contains(w.Body.String(), "Fixture message") || strings.Contains(w.Body.String(), localTestAccessToken) {
+		t.Fatalf("witness body: %v %.200s", err, w.Body.String())
+	}
+	n := 0
+	for _, call := range snap.Calls {
+		if call.Method == method && call.Path == path {
+			n += call.Count
+		}
+	}
+	return n
+}
+
+// TestLocalTestFixtureCallWitness is the loopback count a browser uses to
+// tell an unsent post from a post the fixture already accepted. It returns
+// counts only, and a wrong target never adds a send.
+func TestLocalTestFixtureCallWitness(t *testing.T) {
+	instance := newLocalTestForTest(t)
+	if localTestWitnessCount(t, instance, http.MethodPost, apiv1.PortalSessionMessagesPath) != 0 {
+		t.Fatal("fixture already saw a send")
+	}
+	page := serveLocalTest(instance, localTestRequest(http.MethodGet, SessionsPath))
+	var form url.Values
+	for _, m := range localTestSendForm.FindAllStringSubmatch(page.Body.String(), -1) {
+		if m[4] == "fixture-coordinator" {
+			form = url.Values{"csrf": {m[2]}, "requestID": {m[3]}, "session": {m[4]}, "sessionUID": {m[5]}, "text": {"Fixture message from the witness."}}
+		}
+	}
+	if form == nil {
+		t.Fatal("no send form for fixture-coordinator")
+	}
+	origin := "http://" + localTestListen.String()
+	if w := localTestPost(instance, SessionMessagesPath, "https://evil.example", form); w.Code != http.StatusForbidden || localTestWitnessCount(t, instance, http.MethodPost, apiv1.PortalSessionMessagesPath) != 0 {
+		t.Fatalf("wrong-target send status %d", w.Code)
+	}
+	if w := localTestPost(instance, SessionMessagesPath, origin, form); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Delivered to the agent") {
+		t.Fatalf("send %d", w.Code)
+	}
+	if localTestWitnessCount(t, instance, http.MethodPost, apiv1.PortalSessionMessagesPath) != 1 {
+		t.Fatal("accepted send was not counted once")
+	}
+	if again := localTestPost(instance, SessionMessagesPath, origin, form); again.Code != http.StatusOK || localTestWitnessCount(t, instance, http.MethodPost, apiv1.PortalSessionMessagesPath) != 1 {
+		t.Fatal("replay of an accepted send counted another fixture call")
+	}
+	denied := localTestRequest(http.MethodGet, localTestFixtureCallsPath+"?body=Fixture+message")
+	if w := serveLocalTest(instance, denied); w.Code != http.StatusForbidden {
+		t.Fatalf("witness query %d", w.Code)
+	}
+	if w := serveLocalTest(instance, localTestRequest(http.MethodPost, localTestFixtureCallsPath)); w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != "GET" {
+		t.Fatalf("witness post %d allow %q", w.Code, w.Header().Get("Allow"))
+	}
+	off := localTestRequest(http.MethodGet, localTestFixtureCallsPath)
+	off.Host = productionHost
+	if w := serveLocalTest(instance, off); w.Code != http.StatusForbidden {
+		t.Fatalf("production host witness %d", w.Code)
+	}
+	remote := localTestRequest(http.MethodGet, localTestFixtureCallsPath)
+	remote.RemoteAddr = "192.0.2.1:50000"
+	if w := serveLocalTest(instance, remote); w.Code != http.StatusForbidden {
+		t.Fatalf("non-loopback witness %d", w.Code)
+	}
+	if localTestWitnessCount(t, instance, http.MethodPost, apiv1.PortalSessionMessagesPath) != 1 {
+		t.Fatal("refused witness reads changed the send count")
+	}
+}
+
 var localTestLaunchForm = regexp.MustCompile(`<form class="launch" method="post" action="([^"]+)"><input type="hidden" name="csrf" value="([^"]+)"><input type="hidden" name="requestID" value="([^"]+)">`)
 
 // TestLocalTestLaunchFlow drives the production launch handler: the Sessions

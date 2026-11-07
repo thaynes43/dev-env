@@ -98,7 +98,10 @@ on a failure.
 The flow smoke drives send, launch, history and the Asks answer form in an
 unmodified Chromium at the same widths. For each width it starts a fresh
 instance from the binary. It double-clicks each submit, reloads after
-submitting, and repeats a launch request:
+submitting, and repeats a launch request. It also goes back and forward on a
+send receipt, aborts one POST before it is sent, drops one response only
+after the fixture has stored the receipt, refuses a production Host and a
+cross-origin post, and logs out of the fixture session last:
 
 ```sh
 GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
@@ -107,28 +110,32 @@ NODE_PATH=/usr/local/lib/node_modules/@playwright/mcp/node_modules \
   nice -n 19 node web/portal/localtest/smoke-flows.cjs ~/.local/bin/portal-localtest
 ```
 
-**Chromium sends `Origin: null` on the portal's forms.** Every portal page
-sets `Referrer-Policy: no-referrer`. Under that policy Chromium sends
-`Origin: null` on a same-origin form post, as the
-[Fetch Standard, "append a request `Origin` header"](https://fetch.spec.whatwg.org/#append-a-request-origin-header) specifies, and the production
-origin check refuses it. The local instance shows the same refusal. The fix
-is tracked in
-[OpenProject #480](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/480).
+Session pages, Asks and logout set one `Referrer-Policy: same-origin`
+(`authHeaders`, PR #948). Under that policy Chromium sends the page origin
+on a same-origin form post, and the production origin check can accept it.
+Attention keeps `Referrer-Policy: no-referrer` and is outside this smoke.
 
-So the default run is not green while #480 is open. It prints:
+Historical finding, 2026-11-05, Playwright Chromium 1247, OpenProject
+[#480](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/480):
+while those pages set `no-referrer`, Chromium sent `Origin: null` on the
+same posts, as the
+[Fetch Standard, "append a request `Origin` header"](https://fetch.spec.whatwg.org/#append-a-request-origin-header)
+specifies, and the origin check refused them. A parent-verified default run
+after #948 reported the then-current 36 checks passing. This document does
+not repeat that run and does not count a source change as a new browser pass.
 
-- `NOT ACCEPTED (#480)` for the three POST flows (send, launch, Asks answer)
-  at each width;
-- `PASS` for history, which is a GET flow.
-
-It then exits 1. It never reports a refused POST flow as `PASS`.
+The default run is acceptance only for posts the unmodified instance accepts.
+A refused POST still prints `NOT ACCEPTED (#480)` and is never `PASS`. The
+run exits 1 when any check fails or any POST flow is refused. History is a
+GET flow. An abort before the POST is sent is not acceptance. A dropped
+response counts as acceptance only after the fixture receipt is read back,
+and the replay must keep that same fixture send count.
 
 `--diagnostic-referrer-same-origin` reruns the flows with a harness-only
-override that serves each page with `Referrer-Policy: same-origin`, so
-Chromium sends the page origin. Every line is labelled `DIAGNOSTIC`. A post
-refused even under the override is printed `DIAGNOSTIC NOT ACCEPTED (#480)`
-and fails the run. The run exits 3 only when every diagnostic check holds. It shows what the flows do once #480 is
-fixed. It is not acceptance evidence:
+override that serves each document with `Referrer-Policy: same-origin`.
+Every line is labelled `DIAGNOSTIC`. A post refused even under the override
+is printed `DIAGNOSTIC NOT ACCEPTED (#480)` and fails the run. The run exits
+3 only when every diagnostic check holds. It is not acceptance evidence:
 
 ```sh
 NODE_PATH=/usr/local/lib/node_modules/@playwright/mcp/node_modules \
@@ -149,8 +156,15 @@ check's code against a fixture UserInfo, the source clients and decoders,
 the send, launch, history and Asks answer handlers with their replay and
 idempotency rules, templates, CSS, CSP and responsive layout.
 
+The flow script also drives fixture logout, back/forward, an unsent POST,
+and a response dropped after fixture acceptance. Those checks are not proved
+by reading the script. They count only after a run uses a harness built from
+the same commit.
+
 It does not prove:
 
+- production login, identity-provider logout, or production session invalidation
+  (fixture logout revokes only this instance's fixed session);
 - live Authentik login or the live group check (UserInfo);
 - live group membership: the fixture UserInfo always admits the fixed
   principal;

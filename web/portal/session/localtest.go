@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +58,9 @@ const (
 	// localTestAccessToken is the seeded session's fixture access token. Only
 	// the fixture UserInfo route accepts it.
 	localTestAccessToken = "local-test-fixture-access-token"
+	// localTestFixtureCallsPath is the loopback-only count of fixture upstream
+	// calls. It is not a portal route and it returns no request bodies.
+	localTestFixtureCallsPath = "/portal-localtest/fixture-calls"
 )
 
 var errLocalTestNetwork = errors.New("portal local test instance opens no network connection")
@@ -205,7 +209,7 @@ func assembleLocalTest(listen netip.AddrPort, dir string, at time.Time, now func
 	assembly := productionGate(NewAssembly(config), localTestHost)
 
 	hosts := map[string]bool{listen.String(): true, net.JoinHostPort("localhost", portText(listen)): true}
-	return &localTestGate{next: assembly, hosts: hosts, cookie: cookieValue}, nil
+	return &localTestGate{next: assembly, hosts: hosts, cookie: cookieValue, calls: calls}, nil
 }
 
 // localTestDialersFixtureOnly refuses to build the instance unless every
@@ -277,6 +281,7 @@ type localTestGate struct {
 	next   http.Handler
 	hosts  map[string]bool
 	cookie string
+	calls  *localTestCalls
 }
 
 func (g *localTestGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -286,6 +291,10 @@ func (g *localTestGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = io.WriteString(w, localTestText+"Refused: loopback clients that name this instance only.\n")
+		return
+	}
+	if r.URL.Path == localTestFixtureCallsPath {
+		g.serveFixtureCalls(w, r)
 		return
 	}
 	inner := r.Clone(r.Context())
@@ -314,6 +323,59 @@ func (g *localTestGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(code)
 	_, _ = w.Write(markLocalTest(buffer.header.Get("Content-Type"), buffer.body.Bytes()))
+}
+
+// serveFixtureCalls reports how many times each fixture upstream path was
+// called. Counts only: request bodies, tokens and receipts stay in the
+// instance. An aborted browser post never reaches this list; a post whose
+// response was dropped still does, once the fixture handler has returned.
+func (g *localTestGate) serveFixtureCalls(w http.ResponseWriter, r *http.Request) {
+	authHeaders(w)
+	w.Header().Set("X-Portal-Local-Test", "fixture")
+	w.Header().Set("Content-Type", "application/json")
+	if g == nil || g.calls == nil || r.URL.RawQuery != "" || r.URL.RawPath != "" || r.URL.ForceQuery {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"calls":[]}`)
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = io.WriteString(w, `{"calls":[]}`)
+		return
+	}
+	type countedCall struct {
+		Method string `json:"method"`
+		Path   string `json:"path"`
+		Count  int    `json:"count"`
+	}
+	byKey := map[string]*countedCall{}
+	var keys []string
+	for _, call := range g.calls.snapshot() {
+		key := call.Method + " " + call.Path
+		row := byKey[key]
+		if row == nil {
+			row = &countedCall{Method: call.Method, Path: call.Path}
+			byKey[key] = row
+			keys = append(keys, key)
+		}
+		row.Count++
+	}
+	sort.Strings(keys)
+	rows := make([]countedCall, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, *byKey[key])
+	}
+	raw, err := json.Marshal(struct {
+		Calls []countedCall `json:"calls"`
+	}{Calls: rows})
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"calls":[]}`)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
 }
 
 // markLocalTest puts the banner at the top of every HTML page and a first line
