@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"strconv"
 	"unicode/utf8"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -51,9 +53,11 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 			Message *string `json:"message"`
 		} `json:"error"`
 		Item struct {
-			Type             string `json:"type"`
-			Text             string `json:"text"`
-			AggregatedOutput string `json:"aggregated_output"`
+			Type             string          `json:"type"`
+			Text             string          `json:"text"`
+			AggregatedOutput string          `json:"aggregated_output"`
+			Status           json.RawMessage `json:"status"`
+			ExitCode         json.RawMessage `json:"exit_code"`
 		} `json:"item"`
 		Usage *struct {
 			Input      json.RawMessage `json:"input_tokens"`
@@ -107,6 +111,8 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 				_, _ = fmt.Fprintln(out, e.Item.Text)
 				s.capture.text(e.Item.Text)
 			case "command_execution":
+				// Status and exit are advisory. A failed command does not fail the turn.
+				_, _ = fmt.Fprintf(out, "[agentd] native Codex command outcome status=%s exit=%s\n", commandStatus(e.Item.Status), commandExit(e.Item.ExitCode))
 				_, _ = fmt.Fprintln(out, e.Item.AggregatedOutput)
 			}
 		}
@@ -164,6 +170,56 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 		return errors.New("unknown pinned native Codex event")
 	}
 	return nil
+}
+
+// commandStatus keeps only the pinned CommandExecutionStatus spellings.
+// Anything missing, null, or otherwise not one of those four stays Unknown.
+func commandStatus(raw json.RawMessage) string {
+	var status string
+	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &status) != nil {
+		return "Unknown"
+	}
+	switch status {
+	case "in_progress", "completed", "failed", "declined":
+		return status
+	default:
+		return "Unknown"
+	}
+}
+
+// commandExit reads only the pinned exec protocol's optional i32 exit_code.
+// A missing, null, nonnumeric or out-of-range value stays Unknown.
+func commandExit(raw json.RawMessage) string {
+	if value, ok := advisoryInt32(raw); ok && value != "" {
+		return value
+	}
+	return "Unknown"
+}
+
+func advisoryInt32(raw json.RawMessage) (string, bool) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return "", true
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var token any
+	if dec.Decode(&token) != nil {
+		return "", false
+	}
+	number, ok := token.(json.Number)
+	if !ok {
+		return "", false
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		return "", false
+	}
+	value, err := number.Int64()
+	if err != nil || value < math.MinInt32 || value > math.MaxInt32 {
+		return "", false
+	}
+	return strconv.FormatInt(value, 10), true
 }
 
 // codexServedModel records the terminal event's explicit served model, with
