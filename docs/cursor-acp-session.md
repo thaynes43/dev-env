@@ -41,8 +41,8 @@ current doc or a live run:
   `7000.index.js` characters 16833–19033 show a CLI boot check when
   `requiresCursorAuth` is set: an existing auth token, API key, or login, unless
   a boot-smoke or e2e bypass is set. That window does not name an ACP JSON-RPC
-  `authenticate` method. The module's first `authenticate` hit, at character
-  15404, is an unauthenticated error string. Whether the ACP server requires an
+  `authenticate` method. The first `authenticate` hit in `6136.index.js`, at
+  character 15404, is an unauthenticated error string. Whether the ACP server requires an
   `authenticate` request remains Unknown.
 - Whether Cursor sends `session/update` before answering `session/new`. The
   literals `session/new` and `session/update` are absent from `6136.index.js`,
