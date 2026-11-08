@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.92.1](https://github.com/thaynes43/dev-env/compare/v2.92.0...v2.92.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* **agentd:** preserve bounded Codex command outcomes ([#987](https://github.com/thaynes43/dev-env/issues/987)) ([6b3d765](https://github.com/thaynes43/dev-env/commit/6b3d7651c90b9a1e79dc305a9ac16896efe24aaa))
+
 ## [2.92.0](https://github.com/thaynes43/dev-env/compare/v2.91.3...v2.92.0) (2026-11-08)
 
 
