@@ -44,6 +44,7 @@ Claude Code.
 | Component | License | Notes |
 |---|---|---|
 | Claude Code (`@anthropic-ai/claude-code`, from npm) | Proprietary: "© Anthropic PBC. All rights reserved. Use is subject to Anthropic's [Commercial Terms of Service](https://www.anthropic.com/legal/commercial-terms)." | Not open source, and not covered by this repo's MIT license. Running it needs your own Anthropic account, under Anthropic's terms. |
+| Cursor CLI (official Linux x64 `2026.10.22-27dcf5f`) | Not bundled | Official terms at https://cursor.com/terms-of-service §§1.5(ii) and 5.1 restrict reproduction. No container redistribution grant is evidenced. An official download and its digest are not that grant. The image does not contain the executable. |
 
 ### Source-available
 
@@ -59,6 +60,7 @@ Claude Code.
 | `pve`, `hw-ssh` | MIT | This repo (copies of the v1 scripts from [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops), also MIT) |
 | `opwork`, `agent-api.py` | MIT | This repo (copies of `scripts/openproject/` in [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops), also MIT, the source of truth) |
 | `claude-statusline-usage` | MIT | This repo |
+| `cursor-acp-session.py`, `cursor-acp-smoke-check.py` | MIT | This repo. Installed together at `/usr/local/lib/dev-env-cursor-acp/`. They do not include the Cursor CLI. |
 | `tini` | MIT | [krallin/tini](https://github.com/krallin/tini) |
 | Codex CLI | Apache-2.0 | [openai/codex](https://github.com/openai/codex) |
 | `kubectl` | Apache-2.0 | [kubernetes/kubernetes](https://github.com/kubernetes/kubernetes) |

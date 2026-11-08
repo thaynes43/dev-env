@@ -74,6 +74,9 @@ jobs:
               # Copied into the image (#55): a change to either is a change to the image.
               - 'LICENSE'
               - 'images/THIRD_PARTY.md'
+              # Dockerfile copies these MIT helpers. A helper edit rebuilds the image.
+              - 'scripts/cursor-acp-session.py'
+              - 'scripts/cursor-acp-smoke-check.py'
 
   lint:
     name: Lint
@@ -390,7 +393,8 @@ jobs:
           grep -q '^usr/share/licenses/dev-env/go-modules/.*LICEN[CS]E' "${RUNNER_TEMP}/codex-login-files" \
             || { echo "no keeper Go module license texts in helper image" >&2; exit 1; }
 
-  # Agent image inputs include its Dockerfile/tools and Go sources/dependencies.
+  # Agent image inputs include its Dockerfile/tools, Go sources/dependencies,
+  # and scripts/cursor-acp-session.py plus scripts/cursor-acp-smoke-check.py.
   # This ~3 GB image builds, loads and smoke-tests only in hosted CI; it never
   # pushes (publish-agent.yml pushes from a release tag). The PR head COMMIT
   # also lets the smoke test prove the image contains the current agentd.
