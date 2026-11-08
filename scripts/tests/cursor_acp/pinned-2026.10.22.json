@@ -1,0 +1,66 @@
+{
+  "cursorVersion": "2026.10.22-27dcf5f",
+  "platform": "linux/x64",
+  "archiveSHA256": "85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294",
+  "acpModuleSHA256": "c44d851dafdf5f0c11d37b2e8b96d5a1ce171a8e5e2243c813a5bc1dfdf36492",
+  "extraction": "One-time character slices of the pinned public files. No vendor process. The normal test hashes these committed slices and does not open .task-receipts.",
+  "modelPlacementHonoured": "Unknown",
+  "jsonRpcAuthenticateRequired": "Unknown",
+  "sessionOrder": "Unknown",
+  "servedModel": "Unknown",
+  "surfaceClassifiesDispatch": false,
+  "adapterArgvTail": [
+    "--model",
+    "fixture-model",
+    "acp"
+  ],
+  "permissionAnswer": {
+    "outcome": {
+      "outcome": "selected",
+      "optionId": "reject-once"
+    }
+  },
+  "excerpts": [
+    {
+      "characterOffset": 19476,
+      "id": "permission-options",
+      "file": "6136.index.js",
+      "sha256": "68cdb5b5f5592ec52dfe074af834d714234ff3fd8a65318f2d8bf80032bc49ef",
+      "text": "options:[{optionId:\"allow-once\",name:\"Allow once\",kind:\"allow_once\"},{optionId:\"allow-always\",name:\"Allow always\",kind:\"allow_always\"},{optionId:\"reject-once\",name:\"Reject\",kind:\"reject_once\"}]};try{const e=await this.connection.requestPermission(r);if(\"cancelled\"===e.outcome.outcome)return\"fetch\"===s?c.x1.webFetchRejected(t,\"Cancelled\"):c.x1.webSearchRejected(t,\"Cancelled\");if(\"selected\"===e.outcome.outcome){const a"
+    },
+    {
+      "characterOffset": 28100,
+      "id": "mcp-servers",
+      "file": "6136.index.js",
+      "sha256": "1e2a61f92663b5f41bb9d0ac5121f777caefa94611548c4792ca762440674530",
+      "text": "vices.teamSettingsService),r={sessionId:t,cwd:e.cwd,mcpServers:e.mcpServers,clientCapabilities:this.clientCapabilities,c"
+    },
+    {
+      "characterOffset": 15390,
+      "id": "unauthenticated-error",
+      "file": "6136.index.js",
+      "sha256": "0882bdb741de149725e613feb5a9a767e5df5209e62b8064ba7e136ca883e9b9",
+      "text": ".code===f.C.Unauthenticated)return void await this.sendAgentMessageChunk(\"\\n\\nError: [unau"
+    },
+    {
+      "characterRange": [
+        1641909,
+        1644109
+      ],
+      "id": "argv-surface",
+      "file": "index.js",
+      "sha256": "b6a0e97d310da593018f7888d08ddc285fbf1f93fa9a8429a0c6c6cdd08a7053",
+      "text": "ow new Error(\"AGENT_CLI_WORKER_OPTIONS is missing endpoint fields\");return{enableCodebaseTelemetrySync:!0===t.enableCodebaseTelemetrySync,endpoint:t.endpoint,insecure:!0===t.insecure,httpVersion:wt(\"string\"==typeof t.httpVersion?t.httpVersion:void 0),repoEndpoint:t.repoEndpoint,repoInsecure:!0===t.repoInsecure,repoHttpVersion:wt(\"string\"==typeof t.repoHttpVersion?t.repoHttpVersion:void 0)}}async function St({localWorkerClientFactory:t,localAgentRuntime:e}){const n=process.argv.slice(2),i=process.env.CURSOR_CLI&&\"agent\"===n[0]?n.slice(1):n,B=void 0!==(j={localAgentRuntime:e,argv:i,env:process.env}).localAgentRuntime&&(_t(j.argv,\"--authless\")||_t(j.argv,\"--enable-bedrock\")||_t(j.argv,\"--enable-local-bedrock\")||\"1\"===j.env[P.DS]||\"1\"===j.env[P.ur]||\"1\"===j.env[P.Ik]);var j;(0,z.rd)({surface:\"acp\"===i[0]?\"acp\":\"cli\",hostClientName:void 0,hostClientVersion:void 0});const Q=(0,it.zS)(process.env),nt={log:(t,{message:e,error:r,metadata:n})=>{(0,k.cY)(\"logger\",{message:e,error:r,metadata:n})}},st=(0,u.q6)().withName(\"cli\").with(l._O,nt);(0,_.sx)(\"cli.launch\"),performance.mark(F.Yv.WILL_LOAD_CONFIG);const at=ht(),lt=await d.F.loadFromDefaults(st,{onDebugLog:k.cY,onError:(t,e)=>{(0,I.p2)(e),process.exit(t)},skipGitRootDetection:Q,disableProjectConfigs:at});performance.mark(F.Yv.DID_LOAD_CONFIG),(()=>{if(!(0,V.qY)())return;const t=(0,W.lo)();process.stdout.isTTY&&!0!==t.hasShownAgentCommandTip&&((0,I.p2)(`${x.oH}Tip: You can start the Cursor CLI with \\`agent\\` (same as \\`cursor-agent\\`).${x.Sj}`),(0,W.up)({...t,version:1,hasShownAgentCommandTip:!0}))})();let dt,mt=!1;const St=async(t,e,r=\"error\")=>{const{message:n,stack:s}=(0,tt.q)(e);if((0,k.cY)(`${t}: ${n}`,{stack:s,error:e}),!(e instanceof a.cc))if((0,T.Fb)(e,r),e instanceof g.T){const t=(0,a.mb)(e);t&&(0,Z.DL)(t)}else x.Cu&&mt&&vt.opts().stderr&&(0,I.p2)(`\\nError (${t}): ${n}\\n${s??\"\"}`)};process.on(\"uncaughtException\",(t=>{St(\"uncaughtException\",t,\"fatal\")})),process.on(\"unhandledRejection\",(t=>{const e=t instanceof Error?t:new Error(`Unhandled rejection: ${String(t)}`);St(\"unhandledRejection\",e,\"fatal\")}));const Ct=(0,Y.SI)(),bt=(0,c.jo)({domain:\"cursor\",store:Ct});if((0,Y.it)({likelySshSession:(0,ot.lf)(),isCI:Q,cre"
+    },
+    {
+      "characterRange": [
+        16833,
+        19033
+      ],
+      "id": "auth-boot",
+      "file": "7000.index.js",
+      "sha256": "8527193506193e61a828b47be11d82f374419003b77516a1b98ca0e54abac33c",
+      "text": "ss.env.AGENT_CLI_BYPASS_AUTH_FOR_BOOT_SMOKE,we=\"true\"===process.env.AGENT_CLI_E2E;let ye=!1,ke=!1;if(ne.capabilities.requiresCursorAuth){performance.mark(A.Yv.WILL_AUTH);const e=await(0,l.D)(j,{authToken:s.authToken});ye=e.usingAuthTokenFromEnv;const t=e.isAuthenticated?{isAuthenticated:!1,usingApiKeyFromEnv:!1}:await(0,l.T)(j,{apiKey:s.apiKey,endpoint:ae});if(ke=t.usingApiKeyFromEnv,!(be||we||e.isAuthenticated||t.isAuthenticated||await(0,C.h4)(j,C.hT.LOGIN))){me&&(0,m.uQ)(1,`Error: Authentication required. Please run '${(0,L.mf)()} login' first, or set CURSOR_API_KEY environment variable.`);const e=(0,g.m)({credentialManager:j,endpoint:ae,configProvider:k}),t=await(0,C.f4)(j,ie,k,e);(0,A.hg)(),t||(0,m.uQ)(1,`Authentication required to use Cursor Agent. Please run '${(0,L.mf)()} login' to authenticate.`)}performance.mark(A.Yv.DID_AUTH),performance.mark(A.Yv.WILL_PREPARE_STATSIG),await(0,P.RX)(),performance.mark(A.Yv.DID_PREPARE_STATSIG);const n=k.get().authInfo?.authId;void 0!==n&&\"\"!==n||(performance.mark(A.Yv.WILL_REFRESH_AUTH),await(0,d.d)(k,j,ae),performance.mark(A.Yv.DID_REFRESH_AUTH)),oe&&(0,v.an)({credentialManager:j,apiUrl:ae,insecure:s.insecure,channel:k.get().channel,configProvider:k}),(0,_.T7)(s.statsigOverrides)?(0,_.b8)(await(0,_.mV)(s.statsigOverrides,(async()=>{const e=(0,u.ms)(j,ae,Boolean(s.insecure),k),t=new i.J1L(e);return(await t.fetchServerConfig()).isDevDoNotUseForSecretThingsBecauseCanBeSpoofedByUsers}))):(0,_.b8)(!1);try{(0,_.C$)(k)}catch(e){(0,m.uQ)(1,e instanceof Error?e.message:String(e))}}else performance.mark(A.Yv.WILL_AUTH),performance.mark(A.Yv.DID_AUTH),(0,_.b8)(!1);Z||(async()=>{const[{importCcMarketplaces:e},{CliMetricsBuffer:t}]=await Promise.all([n.e(7351).then(n.bind(n,\"./src/cc-marketplace-import.ts\")),n.e(7627).then(n.bind(n,\"./src/telemetry/metrics-buffer.ts\"))]),s=new t({metricsUrl:(0,F.to)(ae)}),r={reason:\"chat_startup\",surface:\"cli\"},o=performance.now();let i=!1;try{const t=(0,g.m)({credentialManager:j,endpoint:ae,configProvider:k});await e(t),i=!0,s.increment(\"marketplace.importClaudeMarketplaces.success\",1,r)}catch{s.increment(\"marketplace.importClaudeMarketplaces.error\",1,r)}finally{s.distribution(\"marketplace.import"
+    }
+  ]
+}
