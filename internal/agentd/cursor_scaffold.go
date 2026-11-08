@@ -34,10 +34,10 @@ const (
 )
 
 var (
-	errCursorScaffoldRefused = errors.New("Cursor scaffold input refused")
-	errCursorScaffoldReplay  = errors.New("Cursor scaffold invocation already attempted")
-	errCursorScaffoldReceipt = errors.New("Cursor scaffold receipt unconfirmed")
-	errCursorScaffoldProcess = errors.New("Cursor scaffold helper exit unconfirmed")
+	errCursorScaffoldRefused = errors.New("cursor scaffold input refused")
+	errCursorScaffoldReplay  = errors.New("cursor scaffold invocation already attempted")
+	errCursorScaffoldReceipt = errors.New("cursor scaffold receipt unconfirmed")
+	errCursorScaffoldProcess = errors.New("cursor scaffold helper exit unconfirmed")
 	cursorScaffoldLabel      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 )
 
@@ -252,7 +252,7 @@ func startCursorScaffoldHelper(c cursorScaffoldCommand) (cursorScaffoldPeer, err
 
 func stopCursorScaffoldPeer(peer cursorScaffoldPeer, waited <-chan error, grace, killWait time.Duration) {
 	select {
-	case <-waited:
+	case _ = <-waited:
 		return
 	default:
 	}
@@ -260,7 +260,7 @@ func stopCursorScaffoldPeer(peer cursorScaffoldPeer, waited <-chan error, grace,
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
 	select {
-	case <-waited:
+	case _ = <-waited:
 		return
 	case <-timer.C:
 	}
@@ -269,7 +269,7 @@ func stopCursorScaffoldPeer(peer cursorScaffoldPeer, waited <-chan error, grace,
 	_ = peer.signal(syscall.SIGKILL)
 	timer.Reset(killWait)
 	select {
-	case <-waited:
+	case _ = <-waited:
 	case <-timer.C:
 	}
 }
