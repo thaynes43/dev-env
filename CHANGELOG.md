@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.92.0](https://github.com/thaynes43/dev-env/compare/v2.91.3...v2.92.0) (2026-11-08)
+
+
+### Features
+
+* **agent:** package ACP helpers with offline smoke coverage ([#985](https://github.com/thaynes43/dev-env/issues/985)) ([1c12518](https://github.com/thaynes43/dev-env/commit/1c12518bbf5b7f84803e1b4a432575ca50fa4e4c))
+
 ## [2.91.3](https://github.com/thaynes43/dev-env/compare/v2.91.2...v2.91.3) (2026-11-07)
 
 
