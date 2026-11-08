@@ -118,6 +118,32 @@ run --entrypoint /bin/bash "${image}" -euc '
 '
 echo "::endgroup::"
 
+echo "::group::cursor acp helpers"
+# Same read-only, network-none, empty-HOME run as the toolchain group.
+# Checker exit 0 is not protocol or task success. This group does not launch Cursor.
+run --entrypoint /bin/bash "${image}" -euc '
+  helper=/usr/local/lib/dev-env-cursor-acp
+  test -x $helper/cursor-acp-session.py
+  test -x $helper/cursor-acp-smoke-check.py
+  case $helper in
+    /home/*|/opt/dev-env/scripts/*) echo "ACP helpers are not image-owned" >&2; exit 1 ;;
+  esac
+  test ! -e /opt/dev-env/scripts/cursor-acp-session.py
+  test ! -e $HOME/cursor-acp-session.py
+  test ! -e /usr/local/bin/cursor-agent
+  python3 -c "import importlib.util, pathlib; root=pathlib.Path(\"/usr/local/lib/dev-env-cursor-acp\"); session=root/\"cursor-acp-session.py\"; checker=root/\"cursor-acp-smoke-check.py\"; spec=importlib.util.spec_from_file_location(\"cursor_acp_session\", session); mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); assert \"reject_once\" in mod.PERMISSION_KINDS; other=importlib.util.spec_from_file_location(\"cursor_acp_smoke_check\", checker); checker_mod=importlib.util.module_from_spec(other); other.loader.exec_module(checker_mod); assert checker_mod.__file__ == str(checker)"
+  python3 $helper/cursor-acp-session.py --help > /tmp/acp-session-help.txt
+  grep -q -- "--client" /tmp/acp-session-help.txt
+  code=0
+  python3 $helper/cursor-acp-smoke-check.py - </dev/null > /tmp/acp-smoke-empty.txt || code=$?
+  test "$code" = 2
+  grep -q empty-input /tmp/acp-smoke-empty.txt
+  code=0
+  python3 $helper/cursor-acp-smoke-check.py --help > /tmp/acp-smoke-help.txt || code=$?
+  test "$code" = 2
+'
+echo "::endgroup::"
+
 echo "::group::tini reaps"
 # An orphan whose parent exits is re-parented to PID 1. Under tini it is reaped, so no
 # defunct process is left behind (v1's PID 1 left thousands).

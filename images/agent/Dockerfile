@@ -12,7 +12,9 @@
 #     github-app-token.sh (only the keeper mints tokens, D-11);
 #   * changed: the ENTRYPOINT, and the Codex install path (below).
 # Everything the pod mounts or sets at runtime (config, scripts, credentials, the
-# session) comes from haynes-ops; the image holds binaries only.
+# session) comes from haynes-ops; the image holds binaries only, plus the two
+# MIT Cursor ACP helpers below. Those stay outside the runtime script mount.
+# The proprietary Cursor CLI is not installed.
 #
 # Unlike v1 this file is built from this repo's root (`docker build -f
 # images/agent/Dockerfile --build-arg COMMIT=$(git rev-parse HEAD) .`). It is about
@@ -441,6 +443,13 @@ RUN chmod 0755 /usr/local/bin/claude-statusline-usage
 COPY images/agent/tools/openproject/agent-api.py images/agent/tools/openproject/opwork.py /usr/local/lib/opwork/
 COPY images/agent/tools/opwork.sh /usr/local/bin/opwork
 RUN chmod 0755 /usr/local/bin/opwork && chmod 0644 /usr/local/lib/opwork/*.py
+
+# Cursor ACP helpers from this repo. They stay in one directory so the session
+# module and the receipt checker keep their sibling import paths. /home/dev and
+# /opt/dev-env/scripts are runtime mounts, so neither path is used. No Cursor
+# executable, archive, startup hook, or terms-acceptance step is added.
+COPY scripts/cursor-acp-session.py scripts/cursor-acp-smoke-check.py /usr/local/lib/dev-env-cursor-acp/
+RUN chmod 0755 /usr/local/lib/dev-env-cursor-acp/cursor-acp-session.py /usr/local/lib/dev-env-cursor-acp/cursor-acp-smoke-check.py
 
 # The binaries of this repo come last, so a Go change rebuilds only these layers.
 # agentd is the one thing tini starts; agent-run is the v2 CLI (D-50).

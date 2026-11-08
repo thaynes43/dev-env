@@ -104,6 +104,45 @@ caller's identity and workspace; it does not become an authenticated dev-env
 session or gain inbox permissions. There is no daemon, listener, registry, or
 new API endpoint.
 
+## Image paths and the unbundled client
+
+The agent image installs these two MIT helpers together at
+`/usr/local/lib/dev-env-cursor-acp/cursor-acp-session.py` and
+`/usr/local/lib/dev-env-cursor-acp/cursor-acp-smoke-check.py`. Those paths are
+outside `HOME` and outside `/opt/dev-env/scripts`, which a Pod can mount over
+at runtime. Changing either helper is an agent-image build input. Hosted CI
+runs `images/agent/smoke-test.sh`; this Pod does not build that image.
+
+`cursor-acp-session.py --help` prints usage and does not start a provider.
+`cursor-acp-smoke-check.py` has no `--help`. Empty stdin on `-` is refused with
+`empty-input` and exit 2. Exit 0 from that checker only classifies a receipt
+stream. It is not protocol or task success. Vendor argv dispatch,
+authentication, session-update order, and live interoperation remain Unknown.
+
+The proprietary Cursor client is not in the image. This repository does not
+install it. The pinned user-supplied archive is Linux x64 `2026.10.22-27dcf5f`:
+
+https://downloads.cursor.com/lab/2026.10.22-27dcf5f/linux/x64/agent-cli-package.tar.gz
+
+SHA256 `85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294`.
+
+Do not substitute `latest` or another unreviewed build. The user needs
+applicable rights under Cursor's terms and an existing writable location they
+are permitted to use. A managed read-only Pod may have no such location. This
+recipe does not create one, and it does not install the client there.
+
+```sh
+# User-run only, in a writable directory the user is allowed to use.
+curl -fsSL -o agent-cli-package.tar.gz \
+  https://downloads.cursor.com/lab/2026.10.22-27dcf5f/linux/x64/agent-cli-package.tar.gz
+echo "85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294  agent-cli-package.tar.gz" | sha256sum -c -
+```
+
+After that digest matches, extract in the same permitted directory and pass
+the resulting official executable to `--client`. This page does not name an
+archive member as verified. No image build, startup hook, or Pod mount
+performs these steps.
+
 ## Child environment
 
 The child does not inherit the caller's environment. It receives exactly these

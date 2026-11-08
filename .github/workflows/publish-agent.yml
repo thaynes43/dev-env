@@ -133,6 +133,8 @@ jobs:
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
 
+      # Tag builds have no path filter. The Dockerfile copies
+      # scripts/cursor-acp-session.py and scripts/cursor-acp-smoke-check.py.
       # provenance and sbom are off so the pushed digest is one plain image manifest,
       # as v1's `docker push` produced, and not an index with attestation manifests.
       - name: Build the agent image
