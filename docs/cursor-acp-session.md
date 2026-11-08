@@ -24,17 +24,31 @@ follow the generic ACP schema. They have not been checked against Cursor's
 current doc or a live run:
 
 - The `--model` flag placed before the `acp` subcommand, and whether `acp` honours it.
-- Permission option spelling. The client requires ACP schema kinds
-  (`allow_once`, `allow_always`, `reject_once`, `reject_always`). If Cursor sends
-  another spelling, such as `allow-once`, the request fails closed with
-  `invalid-permission-options`. The client accepts only a `reject_once` decision.
+  Pinned `index.js` characters 1641909–1644109 select surface `acp` only when the
+  first user argv token is exactly `acp`. This client's child argv is
+  `<client> --model <model> acp`, so that window's first token is `--model`.
+  Whether a later parser still selects ACP and honours `--model` is outside the
+  window and remains Unknown. The client argv is unchanged.
+- Permission option spelling. Pinned ACP module `6136.index.js` at character
+  19476 builds three options: `allow-once`/`allow_once`, `allow-always`/`allow_always`,
+  and `reject-once`/`reject_once`. The client matches those kind spellings and
+  answers only `reject_once`, returning that option's id. `reject_always` is not
+  in that literal; whether the package emits it elsewhere is Unknown. A kind
+  outside the client's four names still fails closed with `invalid-permission-options`.
 - The skipped ACP `authenticate` step. The client relies on an existing CLI login.
   If Cursor requires `authenticate`, `session/new` fails with
-  `provider-error-session-new`; the client does not authenticate.
+  `provider-error-session-new`; the client does not authenticate. Pinned
+  `7000.index.js` characters 16833–19033 show a CLI boot check when
+  `requiresCursorAuth` is set: an existing auth token, API key, or login, unless
+  a boot-smoke or e2e bypass is set. That window does not name an ACP JSON-RPC
+  `authenticate` method. The module's first `authenticate` hit, at character
+  15404, is an unauthenticated error string. Whether the ACP server requires an
+  `authenticate` request remains Unknown.
 - Whether Cursor sends `session/update` before answering `session/new`. The
-  client fails closed on that with `early-session-update`, because no session id
-  exists yet to correlate it. A live run that shows this order needs a separate
-  reviewed change, not a silent ignore.
+  literals `session/new` and `session/update` are absent from `6136.index.js`,
+  so that send order is Unknown. The client fails closed on an update before it
+  has a session id, with `early-session-update`. A live run that shows this
+  order needs a separate reviewed change, not a silent ignore.
 
 None of this is live acceptance.
 

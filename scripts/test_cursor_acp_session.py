@@ -1204,6 +1204,10 @@ import json,os,sys,time
 from pathlib import Path
 mode=MODE
 tool_context=CONTEXT
+launch_argv=sys.argv[1:]
+Path("fake-launch-argv.json").write_text(json.dumps(launch_argv))
+if launch_argv!=["--model","fixture-model","acp"]:
+ sys.exit(2)
 # Names only, never values. /proc gives the exact exec-time environment on Linux.
 try:
  raw=open("/proc/self/environ","rb").read()
@@ -1224,6 +1228,9 @@ def write(value):
 for line in sys.stdin:
  msg=json.loads(line)
  method=msg.get("method")
+ if mode=="pinned-permission":
+  with Path("fake-inbound.jsonl").open("a",encoding="utf-8") as inbound:
+   inbound.write(json.dumps(msg)+"\\n")
  if method=="initialize":
   if mode=="hang": time.sleep(60)
   if mode=="oversize": print("x"*70000,flush=True); continue
@@ -1273,6 +1280,9 @@ for line in sys.stdin:
   if mode=="permission" or mode.startswith("context-"):
    write({"jsonrpc":"2.0","id":41,"method":"session/request_permission","params":{"sessionId":"fixture-session","toolCall":tool_context,"options":[{"optionId":"allow","kind":"allow_once","name":"Allow"},{"optionId":"deny","kind":"reject_once","name":"Deny"}]}})
    continue
+  if mode=="pinned-permission":
+   write({"jsonrpc":"2.0","id":41,"method":"session/request_permission","params":{"sessionId":"fixture-session","toolCall":{"toolCallId":"fixture-call","title":"Run fixture checks","kind":"execute","status":"pending"},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"allow-always","name":"Allow always","kind":"allow_always"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}})
+   continue
   if mode=="callbacks":
    write({"jsonrpc":"2.0","id":50,"method":"fs/read_text_file","params":{"sessionId":"fixture-session","path":"/PRIVATE_PATH"}})
    write({"jsonrpc":"2.0","id":51,"method":"fs/write_text_file","params":{"sessionId":"fixture-session","path":"/PRIVATE_PATH","content":"PRIVATE_CONTENT"}})
@@ -1282,13 +1292,19 @@ for line in sys.stdin:
  elif (mode in ("permission","partial-id","opaque-id") or mode.startswith("context-")) and msg.get("id")==41:
   if msg.get("result")=={"outcome":{"outcome":"selected","optionId":"deny"}}: write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}})
   else: write({"jsonrpc":"2.0","id":3,"error":{"message":"fixture expected rejection"}})
+ elif mode=="pinned-permission" and msg.get("id")==41:
+  if msg.get("result")=={"outcome":{"outcome":"selected","optionId":"reject-once"}}: write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}})
+  else: write({"jsonrpc":"2.0","id":3,"error":{"message":"fixture expected permission envelope"}})
  elif mode=="callbacks" and msg.get("id") in (50,51,52):
   codes[msg["id"]]=msg.get("error",{}).get("code")
   if len(codes)==3:
    Path("callback-codes.json").write_text(json.dumps([codes[x] for x in (50,51,52)]))
    write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}})
  elif msg.get("id")==40:
-  write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}})
+  if msg.get("result")=={"outcome":{"outcome":"answered","answers":[{"questionId":"q1","selectedOptionIds":["a"]}]}}:
+   write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}})
+  else:
+   write({"jsonrpc":"2.0","id":3,"error":{"message":"fixture expected question envelope"}})
 '''
 
 CLIENT = Path(__file__).with_name("cursor-acp-session.py")
@@ -2121,6 +2137,144 @@ raise SystemExit(acp.main())
             stdout, stderr = process.communicate(timeout=15)
             self.assertEqual(process.returncode, 2)
             self.assertEqual(json.loads(stdout.splitlines()[-1])["reason"], "decision-input-closed")
+
+    def drive_fake(self, mode, reply):
+        with tempfile.TemporaryDirectory() as directory:
+            client, _prompt = self.fake(directory, mode)
+            process = subprocess.Popen(
+                [sys.executable, "-I", "-B", str(client), "--model", "fixture-model", "acp"],
+                cwd=directory, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                handshake = [
+                    {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1}},
+                    {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": directory, "mcpServers": []}},
+                    {"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": {"prompt": []}},
+                ]
+                process.stdin.write("".join(json.dumps(item) + "\n" for item in handshake))
+                process.stdin.flush()
+                for _ in range(3):
+                    self.assertTrue(process.stdout.readline(), "fake ended during handshake")
+                process.stdin.write(json.dumps(reply) + "\n")
+                process.stdin.flush()
+                answer = process.stdout.readline()
+                self.assertTrue(answer, "fake sent no envelope result")
+                return json.loads(answer)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=5)
+
+    def test_pinned_source_launch_argv_and_permission_envelope(self):
+        """Pinned 2026.10.22 bytes: launch argv and the reject-once answer envelope.
+
+        An ACP authenticate request and session/update-before-session/new stay Unknown.
+        Smoke-check exit 0 only classifies the receipt stream.
+        """
+        import hashlib
+        fixture_path = Path(__file__).resolve().parent / "tests" / "cursor_acp" / "pinned-2026.10.22.json"
+        pinned = json.loads(fixture_path.read_text(encoding="utf-8"))
+        self.assertEqual(pinned["cursorVersion"], "2026.10.22-27dcf5f")
+        self.assertEqual(pinned["platform"], "linux/x64")
+        self.assertEqual(pinned["archiveSHA256"], "85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294")
+        self.assertEqual(pinned["acpModuleSHA256"], "c44d851dafdf5f0c11d37b2e8b96d5a1ce171a8e5e2243c813a5bc1dfdf36492")
+        for field in ("modelPlacementHonoured", "jsonRpcAuthenticateRequired", "sessionOrder", "servedModel"):
+            self.assertEqual(pinned[field], "Unknown", field)
+        self.assertIs(pinned["surfaceClassifiesDispatch"], False)
+        excerpts = {item["id"]: item for item in pinned["excerpts"]}
+        self.assertEqual(set(excerpts), {"permission-options", "mcp-servers", "unauthenticated-error", "argv-surface", "auth-boot"})
+        for item in excerpts.values():
+            self.assertEqual(hashlib.sha256(item["text"].encode()).hexdigest(), item["sha256"])
+        options = [
+            ("allow-once", "Allow once", "allow_once"),
+            ("allow-always", "Allow always", "allow_always"),
+            ("reject-once", "Reject", "reject_once"),
+        ]
+        permission = excerpts["permission-options"]["text"]
+        self.assertEqual(excerpts["permission-options"]["characterOffset"], 19476)
+        literal = "options:[" + ",".join('{optionId:"%s",name:"%s",kind:"%s"}' % item for item in options) + "]"
+        self.assertIn(literal, permission)
+        self.assertIn("requestPermission", permission)
+        self.assertNotIn("reject_always", permission)
+        self.assertIn("mcpServers:e.mcpServers,clientCapabilities:", excerpts["mcp-servers"]["text"])
+        self.assertIn("Unauthenticated", excerpts["unauthenticated-error"]["text"])
+        surface = excerpts["argv-surface"]
+        self.assertEqual(surface["characterRange"], [1641909, 1644109])
+        self.assertEqual(surface["sha256"], "b6a0e97d310da593018f7888d08ddc285fbf1f93fa9a8429a0c6c6cdd08a7053")
+        self.assertIn('"acp"===i[0]?"acp":"cli"', surface["text"])
+        boot = excerpts["auth-boot"]
+        self.assertEqual(boot["characterRange"], [16833, 19033])
+        self.assertEqual(boot["sha256"], "8527193506193e61a828b47be11d82f374419003b77516a1b98ca0e54abac33c")
+        self.assertIn("requiresCursorAuth", boot["text"])
+        self.assertIn("CURSOR_API_KEY", boot["text"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            client, _prompt = self.fake(directory, "question")
+            ignored = subprocess.run([sys.executable, "-I", "-B", str(client)], cwd=directory, input="", text=True, capture_output=True, timeout=5)
+            self.assertEqual(ignored.returncode, 2)
+            self.assertEqual(json.loads((Path(directory) / "fake-launch-argv.json").read_text()), [])
+
+        question = {"outcome": {"outcome": "answered", "answers": [{"questionId": "q1", "selectedOptionIds": ["a"]}]}}
+        wrong = self.drive_fake("question", {"jsonrpc": "2.0", "id": 40, "result": {"anything": True}})
+        self.assertEqual(wrong["error"]["message"], "fixture expected question envelope")
+        self.assertNotIn("stopReason", wrong)
+        exact = self.drive_fake("question", {"jsonrpc": "2.0", "id": 40, "result": question})
+        self.assertEqual(exact, {"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}})
+        loose = self.drive_fake("pinned-permission", {"jsonrpc": "2.0", "id": 41, "result": {"outcome": "selected"}})
+        self.assertEqual(loose["error"]["message"], "fixture expected permission envelope")
+        accepted = self.drive_fake("pinned-permission", {"jsonrpc": "2.0", "id": 41, "result": pinned["permissionAnswer"]})
+        self.assertEqual(accepted, {"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}})
+
+        with tempfile.TemporaryDirectory() as directory:
+            process = self.launch(directory, "pinned-permission")
+            try:
+                while json.loads(process.stdout.readline())["event"] != "permission-required":
+                    pass
+                process.stdin.write(json.dumps({"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "allow-once"}) + "\n")
+                process.stdin.flush()
+            finally:
+                refused, refused_output = self.finish(process)
+            self.assertEqual(process.returncode, 2)
+            self.assertEqual(refused[-1], {"event": "failed", "reason": "permission-approval-not-supported"})
+            self.assertNotIn("decision-sent", refused_output)
+
+        with tempfile.TemporaryDirectory() as directory:
+            process = self.launch(directory, "pinned-permission")
+            observed = []
+            try:
+                while True:
+                    event = json.loads(process.stdout.readline())
+                    observed.append(event)
+                    if event["event"] == "permission-required":
+                        break
+                self.assertEqual(observed[0]["servedModel"], pinned["servedModel"])
+                self.assertEqual(event["options"], [{"optionID": option_id, "kind": kind} for option_id, _name, kind in options])
+                process.stdin.write(json.dumps({"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "reject-once"}) + "\n")
+                process.stdin.flush()
+                stdout, stderr = process.communicate(timeout=15)
+                observed.extend(json.loads(line) for line in stdout.splitlines())
+                self.assertEqual(process.returncode, 0, stderr)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+            self.assertEqual([item["event"] for item in observed], ["starting", "session-created", "permission-required", "decision-sent", "prompt-complete"])
+            self.assertEqual(json.loads((Path(directory) / "fake-launch-argv.json").read_text()), pinned["adapterArgvTail"])
+            inbound = [json.loads(line) for line in (Path(directory) / "fake-inbound.jsonl").read_text().splitlines()]
+            self.assertEqual([item.get("method") for item in inbound], ["initialize", "session/new", "session/prompt", None])
+            capabilities = inbound[0]["params"]["clientCapabilities"]
+            self.assertEqual(capabilities["fs"], {"readTextFile": False, "writeTextFile": False})
+            self.assertIs(capabilities["terminal"], False)
+            self.assertEqual(inbound[1]["params"]["mcpServers"], [])
+            self.assertEqual(inbound[3]["result"], pinned["permissionAnswer"])
+            raw = "".join(json.dumps(item) + "\n" for item in observed)
+            checked = subprocess.run([sys.executable, "-I", "-B", str(CLIENT.with_name("cursor-acp-smoke-check.py")), "-"], input=raw, text=True, capture_output=True, timeout=5)
+            self.assertEqual(checked.returncode, 0, checked.stdout)
+            verdict = json.loads(checked.stdout)
+            self.assertEqual(verdict["servedModel"], "not-inferred")
+            self.assertEqual(verdict["permissionApproval"], "not-inferred")
+            self.assertEqual(verdict["permissionDecisionMeaning"], "client-reject-once-only-not-approval")
+            self.assertNotIn("taskSuccess", verdict)
+            self.assertNotIn("protocolSuccess", verdict)
 
 
 if __name__ == "__main__":
