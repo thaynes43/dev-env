@@ -331,6 +331,46 @@ opwork show <id>
 - Proof: declared/configured. Not observed in this task. A historical
   successful search or show is Unknown in the sources read here.
 
+### opwork-mcp
+
+The same OpenProject access as `opwork`, as an MCP stdio server for Claude and
+Codex. The image command `opwork-mcp` runs
+[`opwork_mcp.py`](../images/agent/tools/openproject/opwork_mcp.py) through
+[`opwork-mcp.sh`](../images/agent/tools/opwork-mcp.sh). The server name in
+`mcp.json` is `openproject`; the image alone registers nothing, the GitOps
+`mcp.json` entry does (`{"command": "opwork-mcp"}`).
+
+It imports `opwork.py` and runs its `main()` in process, over the same client and
+token route: `agent-api.py` reads the token with `kubectl exec` and keeps it in this
+process's memory. It adds no credential, RBAC rule or egress. Writes keep opwork's
+attribution and read back. A result is opwork's own text, including `UNCONFIRMED`
+(exit 6), and a non-zero opwork exit is a tool error (`isError: true`) with the exit
+meaning appended. A result over 24,000 characters is cut with a marker. opwork's
+local pending records are unchanged.
+
+| Tool | opwork command |
+|---|---|
+| `openproject_ping` | `ping` |
+| `openproject_search` (`text`, `status`, `type`, `parent`, `limit`) | `search` |
+| `openproject_show` (`id`, `history`, `relations`) | `show` |
+| `openproject_comment` (`id`, `text`) | `comment` |
+| `openproject_status` (`id`, `status`, `note`) | `status` |
+| `openproject_claim` (`id`, `note`) | `claim` |
+| `openproject_checkpoint` (`id`, `text`) | `checkpoint` (saved locally; not in the tracker until `opwork flush`) |
+| `openproject_create_followup` (`epic`, `subject`, `source_key`, `origin`, `description`, `acceptance`, `constraints`, `confirm_new`) | `create` |
+
+Not exposed: `--force` overrides, `complete`, `relate`, `flush` and description
+changes. Use the `opwork` command for those.
+
+- Prerequisite: an agent image that contains `opwork-mcp`, an `openproject` entry
+  in the session-config `mcp.json`, and the same network path `opwork` needs. A
+  stdio server gets Codex's core environment only, so the entry forwards
+  `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT` for `kubectl exec`.
+- Proof: offline unit tests
+  (`images/agent/tools/openproject/test_opwork_mcp.py`) and the image smoke test
+  (initialize and tools/list). Not observed against the live tracker from a Claude
+  or Codex MCP session.
+
 ### git
 
 Read-only inspection. The image installs Debian `git` from apt and does not

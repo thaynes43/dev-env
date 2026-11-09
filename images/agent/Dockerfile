@@ -442,7 +442,13 @@ RUN chmod 0755 /usr/local/bin/claude-statusline-usage
 # TRACKER UNAVAILABLE and keeps local checkpoints. No credential is baked or stored.
 COPY images/agent/tools/openproject/agent-api.py images/agent/tools/openproject/opwork.py /usr/local/lib/opwork/
 COPY images/agent/tools/opwork.sh /usr/local/bin/opwork
-RUN chmod 0755 /usr/local/bin/opwork && chmod 0644 /usr/local/lib/opwork/*.py
+# opwork-mcp (#485): an MCP stdio server that runs opwork's own main() in process. This
+# repo owns it (it is not a haynes-ops copy). It loads opwork.py and agent-api.py from its
+# own directory, so the token route, attribution and read back are opwork's; it adds no
+# credential, RBAC or egress. Nothing registers it: the GitOps mcp.json entry does.
+COPY images/agent/tools/openproject/opwork_mcp.py /usr/local/lib/opwork/
+COPY images/agent/tools/opwork-mcp.sh /usr/local/bin/opwork-mcp
+RUN chmod 0755 /usr/local/bin/opwork /usr/local/bin/opwork-mcp && chmod 0644 /usr/local/lib/opwork/*.py
 
 # Cursor ACP helpers from this repo. They stay in one directory so the session
 # module and the receipt checker keep their sibling import paths. /home/dev and

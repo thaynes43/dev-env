@@ -87,6 +87,18 @@ run --entrypoint /bin/bash "${image}" -euc '
   hw-ssh list >/dev/null
   opwork --help >/dev/null
   opwork pending | grep -q "no pending records"
+  # opwork-mcp (#485): offline. initialize and tools/list over stdio only; no tool call, so no
+  # tracker request, kubectl exec or token. Every tool name must be listed.
+  mcp_out="$(opwork-mcp <<EOF
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+EOF
+)"
+  for tool in ping search show comment status claim checkpoint create_followup; do
+    printf '%s\n' "$mcp_out" | grep -q "\"name\":\"openproject_$tool\"" || { echo "opwork-mcp does not list openproject_$tool" >&2; exit 1; }
+  done
+  test "$(printf '%s\n' "$mcp_out" | wc -l)" = 2
   # Baked in the image, not downloaded at boot, and installed outside CODEX_HOME so the
   # session volume cannot hide it.
   case "$(readlink -f "$(command -v codex)")" in /opt/dev-env/codex/*) ;; *) echo "codex is not under /opt/dev-env/codex" >&2; exit 1 ;; esac
