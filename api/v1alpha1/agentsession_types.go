@@ -1781,6 +1781,23 @@ type RescueStatus struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	OmittedRefs int32 `json:"omittedRefs,omitempty"`
+
+	// TransientFailures counts the rescues in a row, this one included, that
+	// failed for a transient reason only (FetchFailed: origin could not be
+	// fetched). The operator runs such a rescue again by itself at
+	// NextRetryAt, in a hold pod when the session has no pod (D-55), after a
+	// wait that doubles with each failure up to a cap (DESIGN-001 4.4,
+	// "Transient rescue retry"). Zero for any other verdict.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	TransientFailures int32 `json:"transientFailures,omitempty"`
+
+	// NextRetryAt is when the operator runs a rescue that failed for a
+	// transient reason only again. Unset for any other verdict: a permanent
+	// failure keeps the volume for a human, and only a hold pod's fixed
+	// retry runs it again (D-55).
+	// +optional
+	NextRetryAt *metav1.Time `json:"nextRetryAt,omitempty"`
 }
 
 // SharedRescueProof is the controller-checked evidence for retaining a shared

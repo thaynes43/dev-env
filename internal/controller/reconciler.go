@@ -95,7 +95,9 @@ const rescueRetry = time.Minute
 
 // HoldRescueRetry is how soon a failed rescue in a hold pod runs again (D-55).
 // A failure can pass on its own (CephFS or GitHub was down) or wait for a
-// human to fix the worktree in the pod; either way the next try finds out.
+// human to fix the worktree in the pod; either way the next try finds out. It
+// is also the first wait of the transient retry, which doubles from there
+// (transientRetryDelay).
 const HoldRescueRetry = 15 * time.Minute
 
 // MaxConcurrentReconciles lets a rescue, which can take minutes, run while other
@@ -226,8 +228,8 @@ type Reconciler struct {
 	// Recorder emits the rescue's and the archive's events on the session; nil
 	// emits none.
 	Recorder events.EventRecorder
-	// HoldRetry is how soon a failed rescue in a hold pod runs again; zero
-	// means HoldRescueRetry (D-55).
+	// HoldRetry is how soon a failed rescue in a hold pod runs again, and the
+	// transient retry's first wait; zero means HoldRescueRetry (D-55).
 	HoldRetry time.Duration
 	// ScheduledWorkReleaseHolds counts the scheduled-work release attempts held
 	// back (MetricScheduledWorkReleaseHolds, DESIGN-054 S3a); nil counts
@@ -598,6 +600,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 			if wait > 0 {
 				result = ctrl.Result{RequeueAfter: wait}
 			}
+			// A rescue that failed for a transient reason only runs again
+			// before the timer, in a hold pod (D-55, DESIGN-001 4.4).
+			res, err := r.retryTransientRescue(ctx, &s, &obs)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			result = sooner(result, res)
 			break
 		}
 		res, done, err := r.archive(ctx, &s, &obs, true)
@@ -676,6 +685,9 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 			obs.removalBlocked = fmt.Errorf("the rescue could not run in pod %s, so the pod stays; retrying in %s: %w", pod.Name, rescueRetry, err)
 			return ctrl.Result{RequeueAfter: rescueRetry}, false, nil
 		}
+		// A failure for a transient reason only runs again by itself
+		// (DESIGN-001 4.4, #486).
+		scheduleTransientRetry(s, rec, reason, r.holdRetry())
 		// The record goes to the API server before the pod is deleted, so a
 		// fresh operator never deletes a pod on a rescue it cannot see.
 		if written, err := r.recordRescue(ctx, s, rec, reason); err != nil || !written {
@@ -781,18 +793,21 @@ func idleDeadline(s *v1alpha1.AgentSession, t *templates.Templates, pod owned[*c
 
 // holdWait says why a hold pod stays and when to look at it again (D-55). A
 // pod that is starting is looked at when it changes; a failed rescue runs
-// again HoldRetry after it ended.
+// again HoldRetry after it ended, or at its backoff when it failed for a
+// transient reason only.
 func (r *Reconciler) holdWait(s *v1alpha1.AgentSession, pod *corev1.Pod, obs *observation) ctrl.Result {
 	rec := s.Status.Rescue
 	switch {
 	case errors.Is(obs.removalBlocked, errHoldStarting):
 		_, msg := pendingReason(pod)
 		obs.removalBlocked = fmt.Errorf("%w: %s", errHoldStarting, msg)
-		if why := volumeRemovalAllowed(s, false, true); why != nil {
+		if _, transient := transientRetryAt(s, r.holdRetry()); transient {
+			obs.removalBlocked = fmt.Errorf("%w; it is there because %w: %s", obs.removalBlocked, errTransientRetry, rec.Message)
+		} else if why := volumeRemovalAllowed(s, false, true); why != nil {
 			obs.removalBlocked = fmt.Errorf("%w; it is there because %w", obs.removalBlocked, why)
 		}
 	case rec != nil && rec.Result == v1alpha1.RescueFailed && rec.At != nil && rescueRanIn(s, pod):
-		next := rec.At.Add(r.holdRetry())
+		next, _ := nextRescueRetry(s, r.holdRetry())
 		obs.removalBlocked = fmt.Errorf("%w; the rescue in it failed and runs again at %s: %s", errHoldRescuing, next.UTC().Format(time.RFC3339), rec.Message)
 		return ctrl.Result{RequeueAfter: max(time.Second, time.Until(next))}
 	}

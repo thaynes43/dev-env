@@ -1772,7 +1772,8 @@ operator runs the usual exec rescue.**
   verdict is `Verified` or `CleanAndPushed`, the hold pod goes; then archive deletes
   the volume and the session goes. While the rescue fails, the hold pod stays, so a
   human can exec in and fix the worktree, and the operator runs the rescue again
-  every 15 minutes (`HoldRescueRetry`). A passing failure, such as CephFS or GitHub
+  every 15 minutes (`HoldRescueRetry`; a failure for a transient reason only backs
+  off instead, see *Transient rescue retry* below). A passing failure, such as CephFS or GitHub
   being down, clears on its own. A rescue that cannot run at all is retried every
   minute, as before.
 - **An empty volume.** A pod that never started leaves a volume with nothing on it
@@ -1844,6 +1845,76 @@ removed first, because the hold pod takes its name. The hold pod is bound to the
 HOME's UID: an annotation names it, and the operator checks the claim's UID
 before it creates the pod, once it runs, and before each later step. The rescue
 in it is this one.*
+
+**Transient rescue retry (2026-11-09, OpenProject #486; amends D-55 and D-62).**
+Tom ruled by phone on 2026-11-09: "Yes, auto-retry transient (Recommended)". A
+rescue that failed for a transient reason only runs again by itself, with a capped
+backoff, through the same exec rescue (D-51) in a hold pod (D-55).
+
+- **Why.** A suspend's rescue runs once, in the session pod. When it fails, the
+  suspend still deletes the pod (D-10), and nothing ran the rescue again until the
+  archive timer's hold pod, days later (D-62), while `DevEnvRescueFailed` paged. On
+  2026-11-09 a router outage failed `dev-env-1103-181528`'s rescue with `FetchFailed`
+  ("Could not resolve host: github.com") for every clone, and it stayed failed after
+  DNS came back.
+- **Which reasons are transient.** Only `FetchFailed`: `git fetch origin` failed, a
+  cause outside the volume (DNS, the network, GitHub, an expired token). A reason is
+  transient only if a rerun can neither lose work nor change the volume beyond what
+  the first run did. The rescue commits through a copy of the index, only adds
+  rescue branches and a new bundle stamp, and deletes nothing (D-43, D-48), and the
+  shelf's prune keeps every existing session's rescues (D-67), so earlier bundles
+  stay. Every other reason stays permanent: `WorktreeRefused`, `NotProven` and
+  `BootstrapInterrupted` need a human or a source change; `ReportMismatch`,
+  `AgentNotStopped` and the bare `RescueFailed` mean agentd and the operator
+  disagree; `AgentStillRunning` means the agent may have written after the rescue;
+  `RepoError` is a local git failure; `BundleFailed` can be a full or broken shared
+  volume as easily as a passing outage. When in doubt a reason is permanent.
+- **The verdict's reason.** It is still the first problem's, except that a permanent
+  problem now replaces a transient one, so `FetchFailed` means every problem was a
+  fetch failure, and a fetch failure beside a refused worktree reads
+  `WorktreeRefused`, the problem a human must fix. An agentd report that is not ok
+  with fetch failures only (which agentd never sends) reads `RescueFailed`.
+- **The backoff.** 15 minutes (`HoldRescueRetry`) after the first failure, doubling
+  per transient failure in a row to a cap of one hour: retries 15, 45 and 105
+  minutes after it, then every hour, with no cap on attempts. An outage that ends is
+  cleared within the hour, the first retry comes inside the alert's 20 minutes, and a
+  long outage costs one fetch per clone an hour. A permanent verdict ends the
+  backoff, and a resume (which supersedes the record) starts the count again.
+- **Where it runs.** A suspended session with no pod, whose archive timer is not due,
+  gets a hold pod once the retry is due. Before it creates one the operator makes the
+  checks archive makes: the session and the absence of a pod as the API server has
+  them, no original-HOME restriction (OP252, `internal/homeguard`), no retained private history,
+  and a volume that is the session's and is not being deleted. The hold pod then runs
+  the rescue as any hold pod does. In a hold pod, a transient failure runs again at
+  its backoff instead of every 15 minutes; a permanent one keeps the fixed 15 minutes.
+  A reap, or a due archive timer, still starts its hold pod at once.
+- **Status.** `status.rescue.transientFailures` counts the transient failures in a
+  row, this one included, and `status.rescue.nextRetryAt` says when the rescue runs
+  again; both are unset for any other verdict. The record's message, and so the
+  `RescueFailed` condition and the `Rescue` event, ends with when it runs again.
+  `RemovalBlocked` says why a hold pod is there and when its rescue runs again, as
+  for any hold pod.
+- **Clearing.** A good retry records `Verified` or `CleanAndPushed`, so
+  `RescueFailed` turns False, `dev_env_session_rescue_failed` drops the session and
+  `DevEnvRescueFailed` resolves. The hold pod goes through the guard, and the volume
+  waits for its archive timer as after any good rescue. A retry that turns up a
+  permanent reason keeps the hold pod and its 15-minute retry (D-55), and the page
+  stays.
+- **What it never does.** It only creates a hold pod and runs the exec rescue in it.
+  It deletes and archives nothing: `deletePod`'s and `deleteVolume`'s guards (5.1)
+  decide as before, and suspend, reap and resume are otherwise unchanged.
+- **Older records.** A `Failed` record with `FetchFailed` on its condition and no
+  retry fields, as an operator before this change wrote `dev-env-1103-181528`'s, or as
+  a stale CRD that prunes the fields leaves it, counts as a first transient failure,
+  due 15 minutes after it ran. Such a record may hide a second, permanent problem
+  (the old verdict named the first); its one retry then reports it truthfully.
+- **Scope.** Ordinary sessions only. Shared workspace tasks (D-77) and private
+  Sessions with retained history (DESIGN-025) keep their own rescue paths and their
+  fixed hold-pod retry.
+- **Deploy order.** The two status fields are new in the AgentSession CRD, so
+  haynes-ops' copy of `config/crd/` lands before the operator pin. With an older CRD
+  the API server prunes them and the backoff falls back to a fixed 15 minutes (the
+  older-record rule above).
 
 **D-62 (2026-10-07, plan 02 step 7). A suspended session's volume is archived on
 its timer after a valid rescue, and the session stays as an Archived record that
