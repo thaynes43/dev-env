@@ -676,6 +676,35 @@ record holds it. This is a proposal only: an unsupported contract, recorded as
 an OP402 follow-up, that blocks acceptance only if acceptance requires
 retrieval after release.
 
+### Start an owner-interactive Codex task on a paired v2 host
+
+Use this when Tom must see and drive the thread on his phone.
+
+1. **Start it as an interactive thread.** Tom starts it from the ChatGPT app on
+   the paired host. Or an agent on that host starts it with the remote TUI,
+   `codex --remote unix://<control socket>`, or with
+   [`scripts/codex-clean-session.py`](codex-clean-session.md), which wraps that
+   TUI.
+2. **Not `codex exec` or `codex queue`.** Their threads have the exec source,
+   and the phone's default thread list hides it
+   (`ThreadListParams.sourceKinds`). They never show on the phone.
+3. **Pass no sandbox or approval flag.** Never pass `-s`/`--sandbox`,
+   `-a`/`--ask-for-approval`, `--approve-for-me` or `--full-auto`. Leave them
+   out, so the host default applies (approval `never`, sandbox
+   `danger-full-access`), or pass `--dangerously-bypass-approvals-and-sandbox`
+   as the managed routes do (`internal/agentd/managed_codex.go`). The
+   requirements allow only `read-only` and `danger-full-access`. A request for
+   `workspace-write` (`-s workspace-write` or `--approve-for-me`) is refused.
+   Codex then falls back to `read-only`, not to the configured default. bwrap
+   cannot run in a session pod, so a `read-only` thread fails every shell
+   command and MCP call. The agent image smoke test
+   (`images/agent/smoke-test.sh`) pins this fallback. Current Codex rejects
+   `--full-auto` as an unknown flag.
+4. **`agent-run rc fresh` is not available yet.** It needs agent-run v2.71 or
+   later, the operator flag `--enable-codex-rc-thread` and a qualified target.
+   The flag was off in the live operator on 2026-11-09. Enabling it is
+   OpenProject #272, which needs Tom's approval. Do not enable it.
+
 ## 4. The everyday workflow
 
 ```mermaid

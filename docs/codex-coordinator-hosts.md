@@ -163,6 +163,21 @@ reduce v1 parity. Child sessions keep their existing self-service grant and
 owner approval rules. The first acceptance launches at most two task fixtures;
 this is a test bound, not a new global fleet cap.
 
+## Launch an owner-interactive task
+
+For a thread Tom drives on his phone, follow the
+[owner-interactive Codex recipe](workflow-guide.md#start-an-owner-interactive-codex-task-on-a-paired-v2-host):
+
+- Tom starts it from the phone, or an agent on the host uses the
+  `codex --remote unix://…` TUI or `scripts/codex-clean-session.py`.
+- `codex exec` and `codex queue` never give a phone-visible thread.
+- Never pass `-s`, `-a`, `--approve-for-me` or `--full-auto`. Omit them, or pass
+  `--dangerously-bypass-approvals-and-sandbox`. A `workspace-write` request
+  falls back to `read-only`, where every shell and MCP call fails.
+- `agent-run rc fresh` needs v2.71 or later, `--enable-codex-rc-thread` and a
+  qualified target. The flag was off live on 2026-11-09; enabling it is
+  OpenProject #272 and needs Tom's approval.
+
 ## Provider and phone acceptance
 
 Codex task launch needs native JSONL parsing and durable `thread.started` identity,
