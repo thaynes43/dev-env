@@ -107,11 +107,15 @@ var ErrNotInPlan01 = errors.New("not built yet")
 //     fresh one from agentd's wrapper instead, and git from its credential
 //     helper; both read /creds/gh_token at each call (D-42).
 //   - AGENTD_SESSION: the agent does not need the session document.
+//   - CURSOR_API_KEY: only a cursor pod's agent holds the Cursor key
+//     (DESIGN-058); a profile's envFrom Secret must not hand it to Claude or
+//     Codex. cursorUnset keeps it for the Cursor CLI.
 var unsetForAgent = []string{
 	"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
 	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "DISABLE_GROWTHBOOK", "DISABLE_TELEMETRY", "DO_NOT_TRACK",
 	"GH_TOKEN",
 	protocol.SessionEnv,
+	cursorAPIKeyEnv,
 }
 
 // unsetForRemote is unsetForAgent plus the static plan token: a remote
@@ -174,12 +178,21 @@ func sharedGuard(ws protocol.Workspace, task bool) string {
 	return guard
 }
 
-// BuildLaunch builds a first Claude launch on its admitted static token, or an
-// explicitly enabled project task on native Codex with keeper access material.
-// Managed Codex never admits interactive first launches or enrollment reuse.
+// BuildLaunch builds a first Claude launch on its admitted static token, an
+// explicitly enabled project task on native Codex with keeper access material,
+// or a cursor project task on the pod's Cursor key (DESIGN-058). Managed
+// Codex never admits interactive first launches or enrollment reuse. Each
+// agent is named: an agent this agentd does not know is refused, never run
+// as Claude.
 func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootID string, now time.Time) (Launch, error) {
-	if sess.Agent == protocol.AgentCodex {
+	switch sess.Agent {
+	case protocol.AgentCodex:
 		return buildCodexLaunch(s, sess, ws, nil, bootID, now)
+	case protocol.AgentCursor:
+		return buildCursorLaunch(s, sess, ws, bootID, now)
+	case protocol.AgentClaude:
+	default:
+		return Launch{}, fmt.Errorf("%w: agent %q has no launch in this agentd", ErrNotInPlan01, sess.Agent)
 	}
 	if err := claudeCredentialCheck(s, sess); err != nil {
 		return Launch{}, err
@@ -273,8 +286,16 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 	if retainedPrivateTask(s, sess) {
 		return Launch{}, errors.New("a terminal private task cannot automatically resume its provider")
 	}
-	if sess.Agent == protocol.AgentCodex {
+	switch sess.Agent {
+	case protocol.AgentCodex:
 		return buildCodexLaunch(s, sess, ws, &first, bootID, now)
+	case protocol.AgentCursor:
+		// DESIGN-058: a cursor task runs once. Nothing here resumes a Cursor
+		// conversation, and the prompt is never run a second time (D-42).
+		return Launch{}, errors.New("a cursor task does not resume: its prompt is not run again (D-42), and no Cursor resume is built")
+	case protocol.AgentClaude:
+	default:
+		return Launch{}, fmt.Errorf("%w: agent %q has no resume in this agentd", ErrNotInPlan01, sess.Agent)
 	}
 	if err := claudeCredentialCheck(s, sess); err != nil {
 		return Launch{}, err

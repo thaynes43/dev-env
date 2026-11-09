@@ -44,7 +44,7 @@ Claude Code.
 | Component | License | Notes |
 |---|---|---|
 | Claude Code (`@anthropic-ai/claude-code`, from npm) | Proprietary: "© Anthropic PBC. All rights reserved. Use is subject to Anthropic's [Commercial Terms of Service](https://www.anthropic.com/legal/commercial-terms)." | Not open source, and not covered by this repo's MIT license. Running it needs your own Anthropic account, under Anthropic's terms. |
-| Cursor CLI (official Linux x64 `2026.10.22-27dcf5f`) | Not bundled | Official terms at https://cursor.com/terms-of-service §§1.5(ii) and 5.1 restrict reproduction. No container redistribution grant is evidenced. An official download and its digest are not that grant. The image does not contain the executable. |
+| Cursor CLI (official Linux x64 `2026.10.22-27dcf5f`) | Not bundled | Official terms at https://cursor.com/terms-of-service §§1.5(ii) and 5.1 restrict reproduction. No container redistribution grant is evidenced. An official download and its digest are not that grant. The image does not contain the executable. For a cursor task ([DESIGN-058](../.agents/sagas/distributed-dev-env/designs/058-cursor-task-provider.md)), agentd fetches the pinned official Linux x64 `2026.10.14-0f9edde` archive at run time onto that session's own volume, checks its SHA-256, and runs it there under Cursor's own terms. It is never copied into an image. |
 
 ### Source-available
 

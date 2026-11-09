@@ -31,7 +31,7 @@ Usage:
                                               export selected usage evidence privately
   agent-run log <name> [--tail N]                 print the end of a session's log
   agent-run msg <name> "<text>"                   send a message into a session's TUI
-  agent-run reap <name>...                        rescue, stop and archive sessions
+  agent-run reap <name>...                        end sessions: rescue and archive, or stop a private one
   agent-run suspend <name>...                     rescue and stop sessions, keeping their volumes
   agent-run resume <name>                         start a suspended session again, conversation intact
   agent-run rescue list [--session <name>]        list the rescues on the shelf
@@ -428,8 +428,13 @@ Flags:
                              qualified control client for a fresh ordinary dev
                              project parent created by a trusted client. Default
                              off; does not enroll a receiver or change depth.
-  --agent claude             the agent (default claude; codex and opencode arrive
-                             in plans 04 and 09)
+  --agent claude             the agent: claude (default), codex or cursor; opencode
+                             arrives in plan 09. cursor runs a headless --project
+                             task only, needs --model (a Cursor model id; Grok is
+                             one), and takes no --effort: Cursor puts effort in
+                             the model id. Cursor takes the prompt as one exec
+                             argument, so a task over 64 KiB is refused as for
+                             every agent
   --model <id>               a full model id, never an alias such as opus (default
                              $DEV_ENV_CLAUDE_MODEL, else ` + DefaultClaudeModel + `)
   --effort <level>           low, medium, high, xhigh, max or ultracode, as the
@@ -863,6 +868,15 @@ volume, then stops its pod and archives its volume (D-10, D-45). Nothing skips
 the rescue, so a reap loses no work; --force is accepted for v1's sake and
 changes nothing. Any caller may reap any session. agent-run asks for no
 confirmation: it reaps the sessions it is given.
+
+A private session (one with a privateHistory record) is reaped differently
+(DESIGN-025): the operator asks its agent to stop and keeps its private HOME.
+It makes no rescue bundle and archives or deletes nothing then. The session
+stays, reaping, until the HOME expiry has archived its history and deleted the
+HOME. Its RemovalBlocked condition usually says ExecutorEnded once the agent's
+stop is recorded, and RetentionPending, with the reason, while it is not. The
+other reasons (TaskComputeReclaimed, PreservationUnknown, HomeDeleting,
+HomeExpired) say what they mean in their text.
 
 A reap returns at once; agent-run show <name> follows it until the session is gone.
 `,

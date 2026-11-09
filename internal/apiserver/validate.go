@@ -87,7 +87,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	}
 
 	if c.kind == kindCoordinator {
-		if req.Profile != "dev" || (req.Size != "S" && req.Size != "M") || req.Mode != "task" || req.Restore != "" || req.Base != "" || req.Project == "" || (req.Agent != "claude" && req.Agent != "codex") {
+		if req.Profile != "dev" || (req.Size != "S" && req.Size != "M") || req.Mode != "task" || req.Restore != "" || req.Base != "" || req.Project == "" || (req.Agent != "claude" && req.Agent != "codex" && req.Agent != "cursor") {
 			return nil, coordinatorDenied()
 		}
 		if s.Templates == nil {
@@ -120,6 +120,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	}
 	var fields []apiv1.FieldError
 	add := func(field, format string, args ...any) { fields = append(fields, fieldError(field, format, args...)) }
+	var cursorRefusal error
 
 	// What the built plans serve: Claude task sessions (plan 01) and local
 	// sessions (plan 02, D-58). Each later plan lifts its own line.
@@ -153,12 +154,36 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 				add("model", "%v", err)
 			}
 		}
+	case v1alpha1.AgentCursor:
+		// DESIGN-058: a headless Cursor task in a private project worktree.
+		// The model is checked for shape only; the CLI refuses an unknown id.
+		if req.Mode != "task" {
+			add("mode", "%s", protocol.CursorModeRefusal)
+		}
+		if len(snapshot) == 0 {
+			add("project", "a cursor task needs an accepted project snapshot: --project <name>")
+		}
+		if err := protocol.ValidateCursorModel(req.Model); err != nil {
+			add("model", "%v", err)
+		}
+		if req.Effort != "" {
+			add("effort", "%s", protocol.CursorEffortRefusal)
+		}
+		if l := req.Limits; l != nil && l.MaxTurns != 0 {
+			add("limits.maxTurns", "the Cursor CLI has no max-turns flag; use limits.timeout")
+		}
+		if s.callerHasTaskBudget(c) {
+			add("agent", "a budget-bound caller cannot dispatch a cursor task: budgeted dispatch binds retained common inputs, which Cursor does not take")
+		}
+		// Checked after the field errors: a malformed request is invalid,
+		// and only a well-formed one learns that cursor is not enabled.
+		cursorRefusal = s.cursorEnabled(ctx)
 	case v1alpha1.AgentOpencode:
 		add("agent", "opencode sessions arrive in plan 09; plan 01 runs claude")
 	case "":
 		add("agent", "required: claude")
 	default:
-		add("agent", "%q is not claude, codex or opencode", req.Agent)
+		add("agent", "%q is not claude, codex, cursor or opencode", req.Agent)
 	}
 	switch v1alpha1.SessionMode(req.Mode) {
 	case v1alpha1.ModeTask, v1alpha1.ModeLocal:
@@ -301,6 +326,9 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	if len(fields) > 0 {
 		return nil, invalid(fields...)
 	}
+	if cursorRefusal != nil {
+		return nil, cursorRefusal
+	}
 	identity := s.profileIdentity(ctx, spec.Profile)
 	if identity != "" {
 		if !s.mayLaunchNamedCoordinator(c) {
@@ -362,6 +390,24 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		return nil, err
 	}
 	return sess, nil
+}
+
+// cursorEnabled refuses a cursor session unless the templates name the Secret
+// key that holds the Cursor API key (DESIGN-058). It is configuration, not a
+// flag, and the refusal comes before any session or pod exists. The API reads
+// only the reference, never the Secret.
+func (s *Server) cursorEnabled(ctx context.Context) error {
+	if s.Templates == nil {
+		return newError(http.StatusUnprocessableEntity, apiv1.CodeProviderUnconfigured, "cursor sessions are not enabled: the operator has no templates")
+	}
+	t, err := s.Templates(ctx)
+	if err != nil {
+		return newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the templates cannot be read, so cursor enablement is unconfirmed; retry")
+	}
+	if t.Cursor == nil || t.Cursor.APIKey.Name == "" || t.Cursor.APIKey.Key == "" {
+		return newError(http.StatusUnprocessableEntity, apiv1.CodeProviderUnconfigured, "cursor sessions are not enabled: the templates name no cursor.apiKey Secret key")
+	}
+	return nil
 }
 
 // admitCoordinatorInstructionOptIn accepts only an ordinary private catalog

@@ -179,7 +179,9 @@ func (a *app) printSession(s apiv1.Session) {
 	if s.Node != "" {
 		phase += " on " + s.Node
 	}
-	if s.Reaping {
+	if s.Reaping && s.PrivateHistory != nil {
+		phase += ", reaping: stop the agent, keep its private HOME"
+	} else if s.Reaping {
 		phase += ", reaping: rescue, then suspend and archive"
 	}
 	row("phase", "%s", phase)
@@ -446,7 +448,7 @@ func (a *app) reap(ctx context.Context, args []string) error {
 		return usageError("reap takes the names of the sessions to reap; agent-run list shows them")
 	}
 	if force {
-		a.errf("--force changes nothing in v2: every reap rescues the session's work first, and nothing skips that (D-45)")
+		a.errf("--force changes nothing in v2: no reap skips what it keeps, the rescue of the session's work or a private session's HOME (D-45, DESIGN-025)")
 	}
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
@@ -469,7 +471,7 @@ func (a *app) reap(ctx context.Context, args []string) error {
 		}
 		reaped = append(reaped, s)
 		if cmd.c.output == outputText {
-			a.outf("reaping %s: the operator rescues its work to a bundle, then stops its pod and archives its volume\n", s.Name)
+			a.outf("reaping %s: %s\n", s.Name, reapText(s))
 		}
 	}
 	if cmd.c.output == outputJSON {
@@ -486,6 +488,32 @@ func (a *app) reap(ctx context.Context, args []string) error {
 		return &exitError{code: ExitFailed}
 	}
 	return first
+}
+
+// reapText is what a reap means for the session the API returned. A private
+// session (it has a privateHistory record) keeps its HOME: the operator asks
+// its agent to stop and makes no rescue bundle and no archive (DESIGN-025
+// 25). Once the operator has judged the reap, its RemovalBlocked condition
+// says what is true, and that is printed as it is.
+func reapText(s apiv1.Session) string {
+	if s.PrivateHistory == nil {
+		return "the operator rescues its work to a bundle, then stops its pod and archives its volume"
+	}
+	for _, c := range s.Conditions {
+		if c.Type != "RemovalBlocked" || c.Status != "True" || c.Message == "" || !s.Reaping {
+			continue
+		}
+		// A condition from before this reap (a suspend's) does not say what
+		// the reap does; only these do.
+		switch {
+		case strings.HasPrefix(c.Message, "reap accepted"):
+			return c.Message
+		case c.Reason == "PreservationUnknown" || c.Reason == "HomeDeleting" || c.Reason == "HomeExpired":
+			return "reap accepted; it is a private session: " + c.Message
+		}
+	}
+	return "reap accepted; it is a private session, so the operator asks its agent to stop and keeps its private HOME; " +
+		"no rescue bundle is made, and nothing is archived or deleted now; agent-run show " + s.Name + " says when the stop is proven"
 }
 
 func (a *app) fleet(ctx context.Context, args []string) error {

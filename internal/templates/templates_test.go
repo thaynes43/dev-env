@@ -188,6 +188,11 @@ func TestValidateRefuses(t *testing.T) {
 		{"original HOME binding in profile env", "      - name: CIGAR_JOURNAL_TOKEN", "      - name: AGENTD_ORIGINAL_HOME_BINDING", "AGENTD_ORIGINAL_HOME_BINDING is set by the operator"},
 		{"the start deadline in template env", "  - { name: CODEX_HOME, value: /home/dev/.codex }", "  - { name: AGENTD_START_DEADLINE, value: \"2026-11-04T10:05:00Z\" }", "AGENTD_START_DEADLINE is set by the operator"},
 		{"the start deadline in profile env", "      - name: CIGAR_JOURNAL_TOKEN", "      - name: AGENTD_START_DEADLINE", "AGENTD_START_DEADLINE is set by the operator"},
+		// DESIGN-058: only the operator places the Cursor key, on cursor pods.
+		{"the Cursor key in template env", "  - { name: CODEX_HOME, value: /home/dev/.codex }", "  - { name: CURSOR_API_KEY, value: x }", "CURSOR_API_KEY is set by the operator"},
+		{"the Cursor key in profile env", "      - name: CIGAR_JOURNAL_TOKEN", "      - name: CURSOR_API_KEY", "CURSOR_API_KEY is set by the operator"},
+		{"a Cursor key reference without a key", "sharedClaim: dev-env-shared", "sharedClaim: dev-env-shared\ncursor: { apiKey: { name: dev-env-cursor, key: \"\" } }", "cursor.apiKey needs a name and a key"},
+		{"a Cursor key reference without a Secret", "sharedClaim: dev-env-shared", "sharedClaim: dev-env-shared\ncursor: { apiKey: { key: CURSOR_MEATBALL_KEY } }", "cursor.apiKey needs a name and a key"},
 		{"session input mount path", "path: /opt/dev-env/config/codex }", "path: /opt/dev-env/session }", "overlaps /opt/dev-env/session"},
 		{"session input mount ancestor", "path: /opt/dev-env/config/codex }", "path: /opt/dev-env }", "overlaps /opt/dev-env/session"},
 		{"the grants volume name", "name: config-codex,", "name: grants,", `volume name "grants" is already used by the operator`},
@@ -227,6 +232,29 @@ func TestValidateRefuses(t *testing.T) {
 				t.Fatalf("want an error containing %q, got %v", c.want, err)
 			}
 		})
+	}
+}
+
+// The cursor key reference is optional configuration (DESIGN-058): absent,
+// the templates parse as before; present, it is read and is pod content.
+func TestCursorKeyReference(t *testing.T) {
+	without, err := parse(t, example(t))
+	if err != nil || without.Cursor != nil {
+		t.Fatal("the example names a Cursor key", err)
+	}
+	doc := strings.Replace(example(t), "sharedClaim: dev-env-shared", "sharedClaim: dev-env-shared\ncursor: { apiKey: { name: dev-env-cursor, key: CURSOR_MEATBALL_KEY } }", 1)
+	with, err := parse(t, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if with.Cursor == nil || with.Cursor.APIKey != (SecretKey{Name: "dev-env-cursor", Key: "CURSOR_MEATBALL_KEY"}) {
+		t.Fatalf("cursor %+v", with.Cursor)
+	}
+	if with.Revision() == without.Revision() {
+		t.Error("the Cursor key reference is pod content, so it is part of the revision")
+	}
+	if !slices.Contains(ReservedEnv, CursorAPIKeyEnv) {
+		t.Error("CURSOR_API_KEY is not reserved")
 	}
 }
 

@@ -90,7 +90,24 @@ func TestValidate(t *testing.T) {
 		{"repo traversal", func(s *Session) { s.Repo = ".." }, "repository name"},
 		{"repo slash", func(s *Session) { s.Repo = "a/b" }, "repository name"},
 		{"base option", func(s *Session) { s.Base = "--upload-pack=x" }, "not a ref"},
-		{"agent", func(s *Session) { s.Agent = "gemini" }, "not claude, codex or opencode"},
+		{"agent", func(s *Session) { s.Agent = "gemini" }, "not claude, codex, cursor or opencode"},
+		{"valid cursor", func(s *Session) { s.Agent, s.Model, s.Effort = AgentCursor, "grok-code-fast-1", "" }, ""},
+		{"cursor model with a vendor path", func(s *Session) { s.Agent, s.Model, s.Effort = AgentCursor, "claude-4.5-opus-high-thinking", "" }, ""},
+		{"cursor without a model", func(s *Session) { s.Agent, s.Model, s.Effort = AgentCursor, "", "" }, "needs a Cursor model id"},
+		{"cursor model like a flag", func(s *Session) { s.Agent, s.Model, s.Effort = AgentCursor, "--force", "" }, "not a Cursor model id"},
+		{"cursor model with a plus", func(s *Session) { s.Agent, s.Model, s.Effort = AgentCursor, "gpt+5", "" }, "not a Cursor model id"},
+		{"cursor model with a space", func(s *Session) { s.Agent, s.Model, s.Effort = AgentCursor, "gpt 5", "" }, "not a Cursor model id"},
+		{"cursor model too long", func(s *Session) {
+			s.Agent, s.Model, s.Effort = AgentCursor, strings.Repeat("m", MaxCursorModelBytes+1), ""
+		}, "not a Cursor model id"},
+		{"cursor with an effort", func(s *Session) { s.Agent, s.Model = AgentCursor, "grok-code-fast-1" }, "Cursor encodes effort in the model id"},
+		{"cursor local", func(s *Session) {
+			s.Agent, s.Model, s.Effort, s.Mode, s.Prompt = AgentCursor, "grok-code-fast-1", "", ModeLocal, ""
+		}, "task mode only"},
+		{"cursor shared workspace", func(s *Session) {
+			s.Agent, s.Model, s.Effort = AgentCursor, "grok-code-fast-1", ""
+			s.Workspace = &WorkspaceBinding{ID: "shared", SessionUID: "uid-1"}
+		}, "private worktree"},
 		{"mode", func(s *Session) { s.Mode = "both" }, "not task, local or remote"},
 		{"task without prompt", func(s *Session) { s.Prompt = "  " }, "needs a prompt"},
 		{"prompt outside task", func(s *Session) { s.Mode = ModeRemote }, "task mode only"},

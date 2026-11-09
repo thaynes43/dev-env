@@ -388,8 +388,35 @@ A headless `-p` task runs its prompt once. `msg` applies to a local TUI session;
 
 Follow transitions with `show`/`list`; `reap` returning does not mean cleanup has
 already finished. An archived session is restored into a new session, not resumed.
-Rescue preserves Git work. **The ordinary private reap path deletes the home;
-it does not retain the provider transcript or memory.** Suspend preserves the home temporarily, but private sessions auto-archive
+
+**Reaping a private session (DESIGN-025 section 25).** With private history
+retention on, as the live operator runs, a reaped private task session is not
+rescued to a bundle and its volume is not archived. The operator asks its agent
+to stop and keeps its private HOME. Nothing is archived or deleted at the reap.
+The session stays, reaping and `Pending`, until the HOME expiry has archived
+its history and deleted the HOME; that archive is not switched on yet
+(2026-11-09).
+`agent-run reap`, `show` and `list` print the operator's own words for it, and
+its `RemovalBlocked` condition usually gives one of two reasons:
+
+- `ExecutorEnded`: the agent stopped. The text gives the time the operator
+  recorded it, and how: "stopped as the reap asked" when the reap's own stop
+  request ended its Pod, else how its Pod ended.
+- `RetentionPending`: the stop is not proven yet, and the text says why: the
+  stop request is still in flight, the agent still runs, or its Pod ended but
+  the operator cannot confirm that yet. In the last case the operator checks
+  again after a wait that doubles from 30 seconds to at most 30 minutes.
+
+The other reasons stay as they were and say what they mean in their text:
+`TaskComputeReclaimed`, `PreservationUnknown`, `HomeDeleting` and `HomeExpired`.
+
+The gauges `dev_env_reaped_sessions_retained{reason}` and
+`dev_env_reaped_sessions_oldest_seconds{reason}` count these sessions and the
+age of the oldest reap.
+
+Rescue preserves Git work. **Without private history retention, the ordinary
+private reap path deletes the home; it does not retain the provider transcript
+or memory.** Suspend preserves the home temporarily, but private sessions auto-archive
 after their configured `archiveAfter` (default 168 hours). Verify required
 history retention before that deadline; suspend is not an indefinite backup.
 Archive/history retention is a remaining feature. Rescue does not back up ignored files or every home file; snapshots
@@ -499,6 +526,37 @@ dry run. The checks before a launch are reading checks: the work record names
 the project and the provider, `agent-run help run` gives the flags, and the
 [launch-profile preflight](launch-profile-preflight.md) covers the profile. The
 create is the admission check.
+
+#### A Cursor or Grok child
+
+*DESIGN-058, 2026-11-09. Source only: not deployed or run live yet.*
+
+`cursor` is the third task provider. Grok and other vendors are Cursor model
+ids, not providers of their own.
+
+```bash
+agent-run --project haynes-studio --agent cursor \
+  --model <cursor-model-id> --prompt-file work-order.md --timeout 2h --wait 3m
+```
+
+- It is a headless `--project` task only. `--local` and `--interactive` are
+  refused.
+- `--model` is required and checked for shape only. The Cursor CLI refuses an
+  id it does not know.
+- `--effort` is refused: Cursor puts effort in the model id. `--max-turns` is
+  refused: use `--timeout`.
+- The pod runs the pinned Cursor CLI always-allow. agentd fetches it at boot
+  and checks its SHA-256; the image does not contain it.
+- Usage, cost and the served model are Unknown. The log shows the model the
+  CLI names at start as "CLI-reported", never as provider reported.
+- Cursor takes the prompt as one exec argument. The usual 64 KiB prompt limit
+  keeps it under the kernel's 128 KiB limit; agentd also refuses a composed
+  prompt that would not fit. Put long material in a repository file and name
+  it in the prompt.
+- A cursor task never resumes.
+- If the templates name no Cursor key, the create is refused with
+  `provider_unconfigured` and no Session is created. Record it and stop: it
+  is a deploy step, not a flag to work around.
 
 #### Never run another provider inside your own pod
 

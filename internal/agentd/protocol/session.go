@@ -24,8 +24,10 @@ const (
 
 // Agent kinds and modes, as in the AgentSession spec (DESIGN-001 3.3).
 const (
-	AgentClaude   = "claude"
-	AgentCodex    = "codex"
+	AgentClaude = "claude"
+	AgentCodex  = "codex"
+	// AgentCursor runs the Cursor CLI headless on one task (DESIGN-058).
+	AgentCursor   = "cursor"
 	AgentOpencode = "opencode"
 
 	ModeTask   = "task"
@@ -211,7 +213,16 @@ var (
 	gitRef = regexp.MustCompile(`^[^-\s][^\s]*$`)
 	// effortLevel is a level name such as xhigh; the API checks it per model.
 	effortLevel = regexp.MustCompile(`^[a-z]+$`)
+	// cursorModelID is the shape of a Cursor model id: letters, digits and
+	// . _ : / -, starting with a letter or digit, so it can never read as a
+	// CLI flag. It is a subset of the inbox's requested-model pattern, so a
+	// cursor session's messages are not refused for their model. There is no
+	// allowlist: the CLI refuses an id it does not know (DESIGN-058).
+	cursorModelID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`)
 )
+
+// MaxCursorModelBytes bounds a Cursor model id, as the spec bounds every model.
+const MaxCursorModelBytes = 128
 
 // Validate checks the fields agentd relies on.
 func (s Session) Validate() error {
@@ -264,12 +275,25 @@ func (s Session) Validate() error {
 		if err := ValidateCodexEffort(s.Model, s.Effort); err != nil {
 			errs = append(errs, err)
 		}
+	case AgentCursor:
+		if err := ValidateCursorModel(s.Model); err != nil {
+			errs = append(errs, err)
+		}
+		if s.Effort != "" {
+			errs = append(errs, errors.New(CursorEffortRefusal))
+		}
+		if s.Mode != ModeTask {
+			errs = append(errs, errors.New(CursorModeRefusal))
+		}
+		if s.Workspace != nil {
+			errs = append(errs, errors.New("a cursor task runs in its own private worktree, never a shared workspace"))
+		}
 	case AgentOpencode:
 		if strings.TrimSpace(s.Model) == "" {
 			errs = append(errs, errors.New("model is empty"))
 		}
 	default:
-		errs = append(errs, fmt.Errorf("agent %q is not claude, codex or opencode", s.Agent))
+		errs = append(errs, fmt.Errorf("agent %q is not claude, codex, cursor or opencode", s.Agent))
 	}
 	switch s.Mode {
 	case ModeTask:
@@ -323,6 +347,27 @@ func ValidateCodexModel(id string) error {
 	default:
 		return fmt.Errorf("model must be a full supported Codex model id")
 	}
+}
+
+// CursorEffortRefusal and CursorModeRefusal are the one wording agentd, the
+// API and agent-run give a cursor session that names an effort or another
+// mode (DESIGN-058).
+const (
+	CursorEffortRefusal = "a cursor session takes no effort: Cursor encodes effort in the model id, so pick a model id that names it"
+	CursorModeRefusal   = "a cursor session runs in task mode only (-p); --local and --interactive are not built for Cursor"
+)
+
+// ValidateCursorModel checks a Cursor model id for shape only (DESIGN-058).
+// There is no allowlist: the Cursor CLI refuses an id it does not know, and a
+// Grok or other vendor model is selected by its Cursor id.
+func ValidateCursorModel(id string) error {
+	if id == "" {
+		return errors.New("model is empty: a cursor session needs a Cursor model id")
+	}
+	if len(id) > MaxCursorModelBytes || !cursorModelID.MatchString(id) {
+		return fmt.Errorf("model %q is not a Cursor model id: at most %d letters, digits and . _ : / -, starting with a letter or digit", id, MaxCursorModelBytes)
+	}
+	return nil
 }
 
 // ValidateCodexEffort follows the pinned native model manifest. An empty
