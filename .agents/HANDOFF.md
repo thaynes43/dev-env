@@ -211,8 +211,11 @@ the workbench write tier as existing authority under Q-16.
   `dev-env-h7-metadata-audit` Job; the `TZ` test.
 - **Cleanup after the 30 days, before `apps/dev/dev-env` is deleted:** listed in
   plan 05's scope (the `dev-env-operator` ClusterRole that dev-env-ops binds,
-  `openproject-agent-credentials`, the v1 image used by dev-env-ops and vexa,
-  operator arguments and policies naming `dev/dev-env`, and more).
+  the v1 image used by dev-env-ops and vexa, operator arguments and policies naming
+  `dev/dev-env`, and more). Do not delete the OpenProject token route with v1: v2's
+  `opwork` execs into `dev/openproject-agent-credentials`. It moves to its own
+  retained Flux app, `apps/dev/openproject-agent` (haynes-ops #4714, OpenProject
+  #484); only the v1-only CNP `openproject-agent-api` goes with `apps/dev/dev-env`.
 
 **Held for Tom (one question each, at the moment it is needed):** the written
 cutover approval (runbook step 5); the `dev-env-system` fence for the workbench

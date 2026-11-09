@@ -124,7 +124,8 @@ The CR-1020 result files sit in the coordinator's order directory,
     dev-env-ops (`dev-env-ops-operator`), whose Kustomization `dependsOn` the v1
     app: move the role and drop the dependency;
   - the `openproject-agent-credentials` Deployment and its ExternalSecret live in
-    the v1 app, and v2's `opwork` execs into it by that name: relocate it;
+    the v1 app, and v2's `opwork` execs into it by that name: relocate it (done in
+    haynes-ops #4714, retained app `apps/dev/openproject-agent`, OpenProject #484);
   - dev-env-ops and vexa's scribe-notes Job run the v1 image `dev-env:0.6.8`: keep
     the v1 image, its build workflow and the Kyverno `dev-env:0.*` rule until plan
     10 moves them;
