@@ -63,6 +63,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/eventnote"
 	"github.com/thaynes43/dev-env/internal/homeguard"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
@@ -1105,7 +1106,7 @@ func (r *Reconciler) event(s *v1alpha1.AgentSession, typ, action, reason, note s
 	if r.Recorder == nil {
 		return
 	}
-	r.Recorder.Eventf(s, nil, typ, reason, action, "%s", truncate(note))
+	r.Recorder.Eventf(s, nil, typ, reason, action, "%s", eventnote.Bound(note))
 }
 
 func eventType(rec *v1alpha1.RescueStatus) string {

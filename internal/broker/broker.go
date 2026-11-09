@@ -57,6 +57,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/eventnote"
 	"github.com/thaynes43/dev-env/internal/grantattest"
 )
 
@@ -614,7 +615,7 @@ func (b *Broker) event(g *v1alpha1.AccessGrant, typ, action, reason, note string
 	if b.Recorder == nil {
 		return
 	}
-	b.Recorder.Eventf(g, nil, typ, reason, action, "%s", truncate(note))
+	b.Recorder.Eventf(g, nil, typ, reason, action, "%s", eventnote.Bound(note))
 }
 
 // grantFields are the log fields of every decision and revoke line. Never a
