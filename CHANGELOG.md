@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.96.0](https://github.com/thaynes43/dev-env/compare/v2.95.0...v2.96.0) (2026-11-09)
+
+
+### Features
+
+* **apiserver:** start a Codex thread for a session caller through the API (OP495) ([#1007](https://github.com/thaynes43/dev-env/issues/1007)) ([0864805](https://github.com/thaynes43/dev-env/commit/0864805ce809a7ecac55acf515929c9860cf22f4))
+
 ## [2.95.0](https://github.com/thaynes43/dev-env/compare/v2.94.0...v2.95.0) (2026-11-09)
 
 
