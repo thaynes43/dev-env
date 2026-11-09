@@ -139,6 +139,13 @@ build-portal: ## Build only the portal BFF. The agent and operator images do not
 	@mkdir -p $(BIN_DIR)
 	$(NICE) $(GO) build -p $(GO_PARALLELISM) -tags= -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/dev-env-portal ./cmd/dev-env-portal
 
+# The CLI also ships as release assets (publish-agent.yml, the cli-assets job): a
+# named linux/amd64 binary beside the macOS one. Static like the bin/agent-run
+# that `make build` makes, with the same version stamp.
+.PHONY: build-agent-run-linux
+build-agent-run-linux: ## Cross-build agent-run for linux/amd64 into bin/ (release asset name).
+	GOOS=linux GOARCH=amd64 $(NICE) $(GO) build -p $(GO_PARALLELISM) -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/agent-run-linux-amd64 ./cmd/agent-run
+
 # The CLI also ships as a macOS binary (laptops). Static like the Linux one.
 .PHONY: build-agent-run-darwin
 build-agent-run-darwin: ## Cross-build agent-run for darwin/arm64 into bin/.
@@ -171,4 +178,4 @@ $(SETUP_ENVTEST):
 
 .PHONY: clean
 clean: ## Remove the built binaries. The tools in bin/tools/ stay.
-	rm -f $(addprefix $(BIN_DIR)/,$(BINARIES)) $(BIN_DIR)/agent-run-darwin-arm64
+	rm -f $(addprefix $(BIN_DIR)/,$(BINARIES)) $(BIN_DIR)/agent-run-darwin-arm64 $(BIN_DIR)/agent-run-linux-amd64

@@ -3,6 +3,7 @@ package agentrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -287,7 +288,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		var raw json.RawMessage
 		status, err := a.callWith(ctx, &one, http.MethodPost, apiv1.PilotPreflightPath, nil, req, &raw, false)
 		if err != nil {
-			return err
+			return codexProjectHint(err, req)
 		}
 		var result apiv1.PilotPreflight
 		d := json.NewDecoder(strings.NewReader(string(raw)))
@@ -311,7 +312,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		var raw json.RawMessage
 		status, err := a.callWith(ctx, &one, http.MethodPost, apiv1.SessionsPath, nil, req, &raw, false)
 		if err != nil {
-			return err
+			return codexProjectHint(err, req)
 		}
 		if (status != http.StatusOK && status != http.StatusCreated) || !strictWireJSON(raw, reflect.TypeFor[apiv1.Session]()) {
 			return unconfirmed(http.MethodPost, apiv1.SessionsPath, "invalid one-shot Session receipt")
@@ -321,7 +322,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	var sess apiv1.Session
 	status, err := a.call(ctx, c, http.MethodPost, apiv1.SessionsPath, nil, req, &sess)
 	if err != nil {
-		return err
+		return codexProjectHint(err, req)
 	}
 	if cmd.c.output == outputText {
 		if status == http.StatusOK && givenKey {
@@ -371,6 +372,23 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		return fail(ExitFailed, "%s failed: %s", final.Name, firstOf(podReadyMessage(final), "see agent-run show "+final.Name))
 	}
 	return nil
+}
+
+// codexProjectRefusal is the part of the API's 422 for a Codex task that has no
+// accepted project snapshot (internal/apiserver/validate.go).
+const codexProjectRefusal = "managed codex tasks require the enabled feature and an accepted project snapshot"
+
+// codexProjectHint adds one line to that refusal when the caller gave --repo
+// and no --project: a managed Codex task is a project task, so the usual fix
+// is to name the repository as the project. The server stays the authority;
+// this only reads its answer and never changes the request or the exit code.
+func codexProjectHint(err error, req apiv1.CreateSessionRequest) error {
+	var ee *exitError
+	if !errors.As(err, &ee) || req.Agent != protocol.AgentCodex || req.Project != "" || req.Repo == "" ||
+		!strings.Contains(ee.msg, codexProjectRefusal) {
+		return err
+	}
+	return &exitError{code: ee.code, msg: ee.msg + "\nhint: a Codex task runs against a project; try --project " + req.Repo}
 }
 
 // isCommand reports whether word is one of agent-run's commands.

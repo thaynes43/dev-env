@@ -272,10 +272,32 @@ v2run=(/path/to/an/already-installed/agent-run-v2)
 "${v2run[@]}" help run
 ```
 
-This repository documents neither a general release asset nor a general client
-installation route. Use the release-approved binary made available to the
-caller; do not infer an asset URL from a source branch or choose a filename by
-version sorting.
+Each `v2.x.y` release carries `agent-run-linux-amd64`, `agent-run-darwin-arm64`
+and `SHA256SUMS` as release assets (the `cli-assets` job in `publish-agent.yml`;
+a release made before it has none). Name the version you want; do not choose a
+file by sorting versions or take a URL from a source branch. Download, verify
+against `SHA256SUMS`, install, then check what you installed:
+
+```bash
+# Linux (amd64). Replace v2.x.y with the release you want.
+v=v2.x.y; u=https://github.com/thaynes43/dev-env/releases/download/$v; d=$(mktemp -d) &&
+(cd "$d" && curl -fsSLO "$u/agent-run-linux-amd64" -O "$u/SHA256SUMS" &&
+  sha256sum -c --ignore-missing SHA256SUMS) &&
+install -D -m 0755 "$d/agent-run-linux-amd64" ~/.local/bin/agent-run && agent-run version
+
+# macOS (Apple silicon)
+v=v2.x.y; u=https://github.com/thaynes43/dev-env/releases/download/$v; d=$(mktemp -d) &&
+(cd "$d" && curl -fsSLO "$u/agent-run-darwin-arm64" -O "$u/SHA256SUMS" &&
+  grep ' agent-run-darwin-arm64$' SHA256SUMS | shasum -a 256 -c -) &&
+install -d ~/.local/bin && install -m 0755 "$d/agent-run-darwin-arm64" ~/.local/bin/agent-run && agent-run version
+```
+
+`agent-run version` must print the release you asked for (`agent-run v2.x.y
+(commit ...)`). If a release has no assets, re-run its publish with
+`gh workflow run publish-agent.yml --ref v2.x.y`: the image job leaves the
+existing image alone and the assets job uploads them (replacing any). The managed
+`rc fresh` route needs 2.71 or later. A Codex `-p` task is a project task: pass
+`--project <repo>`, and the CLI says so when the API refuses one that has none.
 
 Connection is caller-specific. A session pod discovers its projected API
 identity. An already-authorized in-cluster caller, including v1, uses its own
