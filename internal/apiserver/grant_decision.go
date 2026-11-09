@@ -272,21 +272,51 @@ func (s *Server) delegateReach(ctx context.Context, g *v1alpha1.AccessGrant, d *
 	if d.session == nil {
 		return forbidden("%s", outside)
 	}
-	parent := r.Spec.Parent
+	switch s.sessionAncestry(ctx, &r, d.session.Name, d.session.UID) {
+	case ancestryFound:
+		return nil
+	case ancestryTooDeep:
+		return forbidden("the requesting session's ancestry is deeper than sessions may sit")
+	case ancestryUnverified:
+		return forbidden("the requesting session's ancestry cannot be verified")
+	}
+	return forbidden("%s", outside)
+}
+
+// ancestry is what a walk up a session's chain of session parents found.
+type ancestry int
+
+const (
+	// ancestryOutside: the chain ended without reaching the session sought.
+	ancestryOutside ancestry = iota
+	ancestryFound
+	// ancestryTooDeep: the chain is longer than sessions may sit.
+	ancestryTooDeep
+	// ancestryUnverified: a parent on the chain could not be read.
+	ancestryUnverified
+)
+
+// sessionAncestry walks start's chain of session parents, read live, for the
+// session named name with uid, within maxDelegateAncestry steps. Only strict
+// ancestors are found: start is never its own, and a parent that is a
+// ServiceAccount ("<namespace>/<name>") ends the chain. The UID guards against a
+// reused name. delegateReach and the thread route's profile fence share it.
+func (s *Server) sessionAncestry(ctx context.Context, start *v1alpha1.AgentSession, name string, uid types.UID) ancestry {
+	parent := start.Spec.Parent
 	for i := 0; parent != "" && !strings.Contains(parent, "/"); i++ {
 		if i >= maxDelegateAncestry {
-			return forbidden("the requesting session's ancestry is deeper than sessions may sit")
+			return ancestryTooDeep
 		}
 		var a v1alpha1.AgentSession
-		if err := s.Live.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: parent}, &a); err != nil {
-			return forbidden("the requesting session's ancestry cannot be verified")
+		if err := s.Live.Get(ctx, types.NamespacedName{Namespace: start.Namespace, Name: parent}, &a); err != nil {
+			return ancestryUnverified
 		}
-		if a.Name == d.session.Name && a.UID == d.session.UID {
-			return nil
+		if a.Name == name && a.UID == uid {
+			return ancestryFound
 		}
 		parent = a.Spec.Parent
 	}
-	return forbidden("%s", outside)
+	return ancestryOutside
 }
 
 // validDecisionReason: at most maxDecisionReason characters of valid UTF-8,

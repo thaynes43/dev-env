@@ -111,12 +111,12 @@ internal/controller/     the AgentSession reconciler: each session's pod and vol
                          (scheduled_work_release.go, no flag): records an ended or reaped scheduled session's occurrence
                          in its ScheduledWork (uncached reads, no watch) and lifts only the scheduled-work finalizer
 internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,
-                         heartbeat, suspend and resume (D-60), fleet, grants (D-56), activities (D-66) and rescues (D-67) handlers;
+                         heartbeat, suspend and resume (D-60), fleet, grants (D-56), activities (D-66), rescues (D-67) and the Codex thread route (DESIGN-057 10, threads.go) handlers;
                          also decisions, project canaries and their results, task claims, the inbox, published contexts, the
                          session directory, task budgets and archived history (DESIGN-025 8); CreateScheduledSession, the scheduled-work executor's fixed-name
                          creation entry beside CreateStandby, with createSessionMode's checks (DESIGN-054 S3b); the /v1/scheduled-work routes (S5b), behind `--enable-scheduled-work-api` (default off, 404 while off, independent of `--enable-scheduled-work`). Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
-internal/podexec/        the one pods/exec client (WebSocket, SPDY fallback): the rescue, and the API's log and message routes (D-65)
+internal/podexec/        the one pods/exec client (WebSocket, SPDY fallback): the rescue, and the API's log, message (D-65) and thread (DESIGN-057 10) routes
 internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library and agentd's standard-library protocol only, for agent-run
 internal/activity/       the reaper of expired declare-activity declarations (D-66), a leader-only runnable in the operator
 internal/reminders/      the reminder engine (DESIGN-032, #206): schedule arithmetic with explicit DST rules, target allowlist, a CalendarAdapter interface with a fake, and the leader-only Scheduler over the Reminder CRD; the keeper hosts it behind `--enable-reminders` (default off), the operator serves `/v1/reminders` behind `--enable-reminders-api` (default off)
