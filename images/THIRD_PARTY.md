@@ -64,6 +64,7 @@ Claude Code.
 | `cursor-acp-session.py`, `cursor-acp-smoke-check.py` | MIT | This repo. Installed together at `/usr/local/lib/dev-env-cursor-acp/`. They do not include the Cursor CLI. |
 | `codex-clean-session.py` | MIT | This repo. Installed at `/usr/local/lib/dev-env-codex/` for `agentd ctl thread-start` (DESIGN-057). It runs the image's Codex CLI and tmux; it bundles neither. |
 | `tini` | MIT | [krallin/tini](https://github.com/krallin/tini) |
+| Go toolchain (`go`, `gofmt`) | BSD-3-Clause | [go.dev](https://go.dev), license at [go.dev/LICENSE](https://go.dev/LICENSE). The image copies the official `golang` image's toolchain from the build stage into `/usr/local/go`, with its own `LICENSE` at `/usr/local/go/LICENSE`. |
 | Codex CLI | Apache-2.0 | [openai/codex](https://github.com/openai/codex) |
 | `kubectl` | Apache-2.0 | [kubernetes/kubernetes](https://github.com/kubernetes/kubernetes) |
 | `flux` | Apache-2.0 | [fluxcd/flux2](https://github.com/fluxcd/flux2) |

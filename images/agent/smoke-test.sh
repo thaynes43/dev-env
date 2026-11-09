@@ -42,6 +42,11 @@ if [ -n "${expect_commit}" ]; then
 fi
 echo "::endgroup::"
 
+# The Go toolchain (OP504) is the golang stage's, so the expected version is that stage's
+# tag: read it from the Dockerfile, and a Go bump needs no edit here.
+expect_go="$(sed -n 's/^FROM golang:\([0-9][0-9.]*\)[@ ].*/\1/p' "${here}/Dockerfile" | head -n 1)"
+[ -n "${expect_go}" ] || { echo "FAIL: no 'FROM golang:<version>' line in ${here}/Dockerfile" >&2; exit 1; }
+
 echo "::group::toolchain as the runtime user"
 run --entrypoint /bin/bash "${image}" -euc '
   test "$(id -u)" = 1000
@@ -77,6 +82,13 @@ run --entrypoint /bin/bash "${image}" -euc '
   flux --version
   helm version --short
   node --version
+  # Go (OP504): the golang stage's toolchain, found on PATH and through the /usr/local/bin
+  # links (a login shell resets PATH), never replaced by a download (GOTOOLCHAIN=local).
+  test "$(go version)" = "go version go'"${expect_go}"' linux/amd64"
+  test "$(PATH=/usr/local/bin:/usr/bin:/bin go version)" = "$(go version)"
+  test "$(go env GOTOOLCHAIN)" = local
+  test "$(go env GOROOT)" = /usr/local/go
+  echo "package p" | gofmt >/dev/null
   python3 --version
   uv --version
   pnpm --version
