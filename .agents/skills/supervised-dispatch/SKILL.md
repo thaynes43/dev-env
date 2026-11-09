@@ -107,6 +107,17 @@ may not reach. So:
   only and is not a general preflight. Do not retry a refusal or route around
   it. Never run the other provider inside your own pod, such as `codex exec` in
   a Claude pod, as a stand-in for a managed session.
+- **An owner-interactive Codex thread on a paired v2 host.** Tom starts it from
+  the phone, or an agent on that host uses the `codex --remote unix://…` TUI or
+  `scripts/codex-clean-session.py`. `codex exec` and `codex queue` threads never
+  show on the phone. Never pass `-s`, `-a`, `--approve-for-me` or
+  `--full-auto`: omit them, or pass `--dangerously-bypass-approvals-and-sandbox`.
+  A `workspace-write` request falls back to `read-only`, where every shell and
+  MCP call fails. `agent-run rc fresh` needs v2.71 or later,
+  `--enable-codex-rc-thread` (off live; OpenProject #272, needs Tom's approval)
+  and a qualified target. The
+  [workflow guide](../../../docs/workflow-guide.md#start-an-owner-interactive-codex-task-on-a-paired-v2-host)
+  has the recipe.
 - **Native subagent.** Its task title and the launch settings you asked for, such
   as `subagent_type: opus-worker`. Label the model as the launch setting, not as a
   verified fact, unless you observed it.
