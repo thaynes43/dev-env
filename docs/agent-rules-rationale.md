@@ -77,6 +77,12 @@ Tom chose "Merge after your review (Recommended)" by phone prompt for two change
   `go.mod`'s client libraries.
 - CEL rules without `MaxLength` or `MaxItems` on what they read exceed the API
   server's cost budget, and the CRD install fails in envtest.
+- 2026-11-09 (OP506): the agent image sets `GOTMPDIR=/home/dev/.cache/go-tmp`, and in
+  Go 1.27 `t.TempDir()` follows `GOTMPDIR` whatever `TMPDIR` says. With `GOTMPDIR` set,
+  `t.TempDir()` is `/home/dev/.cache/go-tmp/<Test><random>/001` while `os.TempDir()` is
+  `/tmp`; with it unset, `t.TempDir()` is `/tmp/<Test><random>/001`. A Unix socket
+  can pass the 108-byte `sun_path` limit, and `bind` fails with "invalid argument".
+  CI has no `GOTMPDIR`, so it stayed green. Socket tests use `internal/testsock`.
 
 ### Coordination
 

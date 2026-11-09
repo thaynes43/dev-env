@@ -30,6 +30,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 // ownedFixtureChildRaceExit marks a helper that already applied its own
@@ -258,7 +259,8 @@ func prepareOwnedWorkflowNamed(t *testing.T, live client.Client, now func() time
 		return name
 	}
 	ctx := context.Background()
-	home := t.TempDir()
+	// The control and evidence sockets live under home; keep it short.
+	home := testsock.ShortDir(t, "ow")
 	if os.Chmod(home, 0700) != nil || os.Mkdir(filepath.Join(home, ".codex"), 0700) != nil || os.Mkdir(filepath.Join(home, ".agentd"), 0700) != nil {
 		t.Fatal("private directories")
 	}

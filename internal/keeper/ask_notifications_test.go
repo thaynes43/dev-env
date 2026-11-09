@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +22,7 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/pages"
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 type askNoticeReaderFake struct {
@@ -509,11 +509,7 @@ func TestAskNotificationsInvalidConfigKeepsTokenKeeperRunning(t *testing.T) {
 	app := gh.app(writeAppDir(t, k[0]))
 	// Keep the synthetic login worker's Unix socket path short. Its journal
 	// is absent in envtest, so it cannot refresh or publish any credential.
-	loginDir, err := os.MkdirTemp("", "ask-notify-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(loginDir) })
+	loginDir := testsock.ShortDir(t, "an")
 	ctx, cancel := context.WithCancel(ctx)
 	r := &running{cancel: cancel, done: make(chan error, 1), logs: &logBuffer{}}
 	t.Cleanup(func() { r.stop(t) })

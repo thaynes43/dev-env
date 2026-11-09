@@ -46,6 +46,7 @@ cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); comma
 cmd/home-retention-dry-run/  standalone bounded offline HOME policy report (DESIGN-044); no collector, runtime integration or deletion
 internal/version/        the build identity every binary's `version` prints
 internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites
+internal/testsock/       ShortDir: a short /tmp directory for a test's Unix socket (108-byte sun_path; t.TempDir follows GOTMPDIR in a session pod); test support, imported only from _test.go files (OP506)
 internal/templates/      parses and checks dev-env-templates, the GitOps data pods are built from; its revision (D-44)
 internal/controller/     the AgentSession reconciler: each session's pod and volume (D-44), the reap finalizer and the
                          guarded deletes (D-45): the rescue by exec before a suspend deletes a pod, and the archive of

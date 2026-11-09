@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/thaynes43/dev-env/internal/codexauth"
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 func syntheticCodexAccess(t *testing.T, now time.Time, generation uint64, account string, life time.Duration) codexauth.Access {
@@ -72,7 +73,7 @@ func codexFixture(t *testing.T) (*codexWorker, *codexTestTransport, *codexTestPu
 	jname := types.NamespacedName{Namespace: "system", Name: DefaultCodexJournalSecret}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: jname.Namespace, Name: jname.Name}}).Build()
 	now := time.Date(2026, 10, 9, 20, 0, 0, 0, time.UTC)
-	w := &codexWorker{Journal: &codexJournal{Client: c, Secret: jname}, Clock: clocktesting.NewFakeClock(now), Fence: func(context.Context, time.Duration) error { return nil }, LoginDir: t.TempDir(), Identity: "keeper-synthetic", Log: logr.Discard()}
+	w := &codexWorker{Journal: &codexJournal{Client: c, Secret: jname}, Clock: clocktesting.NewFakeClock(now), Fence: func(context.Context, time.Duration) error { return nil }, LoginDir: testsock.ShortDir(t, "ca"), Identity: "keeper-synthetic", Log: logr.Discard()}
 	x := &codexTestTransport{}
 	p := &codexTestPublisher{}
 	w.Transport, w.Publisher = x, p

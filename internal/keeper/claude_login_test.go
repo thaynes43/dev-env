@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/thaynes43/dev-env/internal/claudelogin"
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 const (
@@ -105,11 +106,7 @@ func newLoginFix(t *testing.T) *loginFix {
 	f.tr.Prof = &claudeProfile{AccountUUID: "acct-1", OrganizationUUID: "org-1", SubscriptionType: "max", RateLimitTier: "default_claude_max_20x"}
 	logs := &lockedBuffer{}
 	f.w.Log = funcr.New(func(prefix, args string) { logs.add(prefix + " " + args) }, funcr.Options{Verbosity: 9})
-	dir, err := os.MkdirTemp("", "cl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := testsock.ShortDir(t, "cl")
 	f.w.LoginDir = dir
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 // Opt-in actual pinned daemon, ONE scripted loopback Responses exchange, no
@@ -81,7 +82,7 @@ func TestPinnedNativeTurnSurvivesControlDisconnectAndHistoryReconnect(t *testing
 		t.Fatal(err)
 	}
 	// Unix path is short and isolated; no shared daemon enrollment/client.
-	socket := filepath.Join(home, "n.sock")
+	socket := filepath.Join(testsock.ShortDir(t, "np"), "n.sock")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cmd := nativeCommand(Config{NativeBinary: binary, Home: home, SocketPath: socket})

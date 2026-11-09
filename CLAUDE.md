@@ -64,6 +64,10 @@ These large files are references. Search them for the item you need:
   kube-apiserver, etcd and kubectl into `bin/tools/envtest/`. `ENVTEST_K8S_VERSION` in
   the Makefile follows the main cluster's Kubernetes minor (1.35); bump it when the
   cluster moves. After `make envtest` once, a plain `go test` finds the binaries.
+- In a session pod the image sets `GOTMPDIR` under HOME, and `t.TempDir()` follows it
+  whatever `TMPDIR` says, so its paths are long. A test that binds a Unix socket (108
+  bytes) makes the socket's directory with `testsock.ShortDir` from
+  `internal/testsock`, not `t.TempDir()`.
 - A schema rule gets a case in `api/v1alpha1/agentsession_validation_test.go` that
   shows it accepting and refusing. CEL rules must fit the API server's cost budget:
   give every string, list and map a rule reads a `MaxLength` or `MaxItems`.

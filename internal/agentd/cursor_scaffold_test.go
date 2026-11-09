@@ -307,6 +307,22 @@ func TestCursorScaffoldResultDoesNotExposeAnswerPayload(t *testing.T) {
 	}
 }
 
+// startedDeadline is a context whose deadline passes when done is closed.
+type startedDeadline struct {
+	context.Context
+	done chan struct{}
+}
+
+func (c *startedDeadline) Done() <-chan struct{} { return c.done }
+func (c *startedDeadline) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
 func TestCursorScaffoldActiveDeadline(t *testing.T) {
 	p := cursorScaffoldFixture(t)
 	decisions, _ := cursorScaffoldDecisionPipe(t)
@@ -318,9 +334,15 @@ func TestCursorScaffoldActiveDeadline(t *testing.T) {
 			peer.done <- nil
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-	result, err := runCursorScaffold(ctx, p, decisions, func(cursorScaffoldCommand) (cursorScaffoldPeer, error) { return peer, nil })
+	// The deadline must pass while the helper runs. runCursorScaffold fsyncs its
+	// fence before it starts the helper, which takes more than 10ms on a session
+	// pod's volume, so a deadline fixed at the start of the test could expire
+	// first and the helper would never start. Arm it when the helper starts.
+	ctx := &startedDeadline{Context: context.Background(), done: make(chan struct{})}
+	result, err := runCursorScaffold(ctx, p, decisions, func(cursorScaffoldCommand) (cursorScaffoldPeer, error) {
+		time.AfterFunc(10*time.Millisecond, func() { close(ctx.done) })
+		return peer, nil
+	})
 	if !errors.Is(err, context.DeadlineExceeded) || result.promptComplete {
 		t.Fatal("deadline became completion")
 	}
