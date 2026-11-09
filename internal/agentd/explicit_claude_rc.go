@@ -406,7 +406,7 @@ func buildExplicitClaudeRCLaunch(s Settings, sess protocol.Session, ws protocol.
 		return Launch{}, err
 	}
 	l := Launch{CommonInputs: common, Session: sess.Name, Provider: protocol.AgentClaude, SessionUID: sess.SessionUID, PodUID: s.PodUID,
-		Argv: argv, Dir: ws.Worktree, Env: claudeLaunchEnv(s), Unset: append([]string(nil), unsetForRemote...),
+		Argv: argv, Dir: ws.Worktree, Env: []string{"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env"}, Unset: append([]string(nil), unsetForRemote...),
 		LogPath: s.LogPath(sess.Name), EventsPath: s.statePath(eventsFile), ConversationID: first.ConversationID,
 		BootID: bootID, CreatedAt: now.UTC(), TUI: true, Resume: true,
 		ExplicitClaudeRC: &ExplicitClaudeRCLaunch{Version: 1, RequestID: req.RequestID, SessionUID: req.SessionUID, NativeConversation: req.NativeConversation, Title: req.Title},

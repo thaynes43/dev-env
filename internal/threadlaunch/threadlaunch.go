@@ -42,8 +42,8 @@ type Provider struct {
 var (
 	codexPermission = apiv1.ThreadPermission{Mode: apiv1.ThreadPermissionAlwaysAllow, Flag: "--dangerously-bypass-approvals-and-sandbox", Source: "wrapper_argv", NotBypassed: []string{}}
 	// Claude's critical-path check (rm inside sh -c and the like) is not
-	// covered by bypass mode; only agentd's default-off
-	// AGENTD_CLAUDE_SKIP_CRITICAL_PATH_PROMPT lifts it.
+	// covered by bypass mode, and it stays on (Tom, 2026-11-09: "Keep the
+	// check").
 	claudePermission = apiv1.ThreadPermission{Mode: apiv1.ThreadPermissionAlwaysAllow, Flag: "--dangerously-skip-permissions", Source: "agentd_launch_argv", NotBypassed: []string{"claude_critical_path_check"}}
 	// The Cursor helpers never approve: ACP permission requests are answered
 	// reject_once only, and cursor-agent gets no --force or --yolo.
@@ -116,7 +116,8 @@ var messages = map[string]string{
 	"observation_unavailable":          "The host's thread observation failed",
 	"launch_deadline":                  "The launch wait ended; phases show how far it got. Never resend",
 	"unauthenticated":                  "API authentication is unavailable or was refused",
-	"exec_failed":                      "The exec into the host failed",
+	"exec_failed":                      "The exec into the host failed before its thread-start ran; nothing was launched",
+	"host_result_unconfirmed":          "The host returned no valid result; the launch may have happened. Inspect the host before any retry",
 	"provider_readiness_unavailable":   "Provider readiness is unavailable",
 	"session_launch_failed":            "The session launch did not reach a registered link",
 	"provider_observation_unavailable": "This provider's first response is not observable by this command",

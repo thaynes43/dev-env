@@ -71,10 +71,6 @@ type Settings struct {
 	CodexBin            string
 	RetainedCommonRules bool
 	ManagedCodexTasks   bool
-	// ClaudeSkipCriticalPathPrompt (AGENTD_CLAUDE_SKIP_CRITICAL_PATH_PROMPT=true)
-	// sets CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1 on every Claude
-	// launch. Off by default; enabling it needs Tom's explicit approval.
-	ClaudeSkipCriticalPathPrompt bool
 	// ManagedChildDecisions opts a managed native task into private decision
 	// records and same-owner sequential continuation. It defaults off.
 	ManagedChildDecisions bool
@@ -163,26 +159,25 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		CodexAccessFile:   getenv("AGENTD_CODEX_ACCESS_FILE"),
 		CodexHome:         or("CODEX_HOME", filepath.Join(home, ".codex")),
 		CodexBin:          "codex", ManagedCodexTasks: getenv("AGENTD_ENABLE_CODEX_TASKS") == "true",
-		ClaudeSkipCriticalPathPrompt: getenv("AGENTD_CLAUDE_SKIP_CRITICAL_PATH_PROMPT") == "true",
-		RetainedCommonRules:          getenv("AGENTD_ENABLE_RETAINED_COMMON_RULES") == "true",
-		ManagedChildDecisions:        getenv("AGENTD_ENABLE_CHILD_DECISIONS") == "true",
-		PrivateProjectBootstrap:      getenv("AGENTD_ENABLE_PRIVATE_PROJECT_BOOTSTRAP") == "true",
-		PrivateProjectRoots:          getenv("AGENTD_ENABLE_PRIVATE_PROJECT_ROOTS") == "true",
-		PrivateCodexHost:             getenv("AGENTD_ENABLE_PRIVATE_CODEX_HOST") == "true",
-		ProjectCatalog:               getenv("AGENTD_PROJECT_CATALOG"),
-		ProjectCloneOwner:            getenv("AGENTD_PROJECT_CLONE_OWNER"),
-		HWSSHKeyB64:                  getenv("HW_SSH_PRIVATE_KEY_B64"),
-		UserBin:                      filepath.Join(home, ".local", "bin"),
-		SystemBin:                    "/usr/local/bin",
-		ClaudeBin:                    "claude",
-		TmuxBin:                      "tmux",
-		RemoteBase:                   strings.TrimSuffix(or("AGENTD_REMOTE_BASE", "https://github.com/thaynes43"), "/"),
-		TokenWait:                    90 * time.Second,
-		APIURL:                       strings.TrimSuffix(getenv("AGENTD_API_URL"), "/"),
-		APITokenFile:                 or("AGENTD_API_TOKEN_FILE", "/var/run/secrets/dev-env/token"),
-		APICAFile:                    getenv("AGENTD_API_CA_FILE"),
-		Getenv:                       getenv,
-		StartDeadline:                getenv(protocol.StartDeadlineEnv),
+		RetainedCommonRules:     getenv("AGENTD_ENABLE_RETAINED_COMMON_RULES") == "true",
+		ManagedChildDecisions:   getenv("AGENTD_ENABLE_CHILD_DECISIONS") == "true",
+		PrivateProjectBootstrap: getenv("AGENTD_ENABLE_PRIVATE_PROJECT_BOOTSTRAP") == "true",
+		PrivateProjectRoots:     getenv("AGENTD_ENABLE_PRIVATE_PROJECT_ROOTS") == "true",
+		PrivateCodexHost:        getenv("AGENTD_ENABLE_PRIVATE_CODEX_HOST") == "true",
+		ProjectCatalog:          getenv("AGENTD_PROJECT_CATALOG"),
+		ProjectCloneOwner:       getenv("AGENTD_PROJECT_CLONE_OWNER"),
+		HWSSHKeyB64:             getenv("HW_SSH_PRIVATE_KEY_B64"),
+		UserBin:                 filepath.Join(home, ".local", "bin"),
+		SystemBin:               "/usr/local/bin",
+		ClaudeBin:               "claude",
+		TmuxBin:                 "tmux",
+		RemoteBase:              strings.TrimSuffix(or("AGENTD_REMOTE_BASE", "https://github.com/thaynes43"), "/"),
+		TokenWait:               90 * time.Second,
+		APIURL:                  strings.TrimSuffix(getenv("AGENTD_API_URL"), "/"),
+		APITokenFile:            or("AGENTD_API_TOKEN_FILE", "/var/run/secrets/dev-env/token"),
+		APICAFile:               getenv("AGENTD_API_CA_FILE"),
+		Getenv:                  getenv,
+		StartDeadline:           getenv(protocol.StartDeadlineEnv),
 	}
 	s.CoordinatorInstructions = getenv("AGENTD_ENABLE_COORDINATOR_INSTRUCTIONS") == "true"
 	if dir := getenv("CLAUDE_CONFIG_DIR"); dir != "" {

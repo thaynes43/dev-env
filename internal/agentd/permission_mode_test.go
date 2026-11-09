@@ -54,37 +54,15 @@ func TestClaudeLaunchPathsAreAlwaysAllow(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for name, l := range map[string]Launch{"first": first, "resume": resume} {
+			for _, l := range []Launch{first, resume} {
 				assertOnce(t, l.Argv, "--dangerously-skip-permissions")
-				// The critical-path override is off by default and cannot come
-				// in from the pod's own environment.
-				if !slices.Contains(l.Unset, claudeCriticalPathEnv) || slices.ContainsFunc(l.Env, func(e string) bool { return strings.HasPrefix(e, claudeCriticalPathEnv) }) {
-					t.Fatalf("%s: critical-path override not default-off: env %q", name, l.Env)
+				// Tom, 2026-11-09: "Keep the check". No launch sets the
+				// critical-path override.
+				if slices.ContainsFunc(l.Env, func(e string) bool { return strings.HasPrefix(e, "CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS") }) {
+					t.Fatalf("a launch sets the critical-path override: %q", l.Env)
 				}
 			}
-			s.ClaudeSkipCriticalPathPrompt = true
-			on, err := BuildLaunch(s, sess, ws, "boot3", now)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !slices.Contains(on.Env, claudeCriticalPathEnv+"=1") {
-				t.Fatalf("the enabled override is missing: %q", on.Env)
-			}
 		})
-	}
-}
-
-// The setting is read from one clearly named variable and is off otherwise.
-func TestClaudeCriticalPathSettingDefaultOff(t *testing.T) {
-	home := t.TempDir()
-	for value, want := range map[string]bool{"": false, "1": false, "TRUE": false, "true": true} {
-		s, err := LoadSettings(envOf(map[string]string{"HOME": home, "AGENTD_CLAUDE_SKIP_CRITICAL_PATH_PROMPT": value}))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if s.ClaudeSkipCriticalPathPrompt != want {
-			t.Errorf("%q gave %v", value, s.ClaudeSkipCriticalPathPrompt)
-		}
 	}
 }
 
@@ -114,8 +92,8 @@ func TestEveryClaudeAgentArgvUsesClaudeArgs(t *testing.T) {
 		}
 	}
 	explicit, err := os.ReadFile("explicit_claude_rc.go")
-	if err != nil || !strings.Contains(string(explicit), "argv := append(claudeArgs(s, sess),") || !strings.Contains(string(explicit), "Env: claudeLaunchEnv(s)") {
-		t.Fatal("the explicit RC continuation no longer builds on claudeArgs and claudeLaunchEnv")
+	if err != nil || !strings.Contains(string(explicit), "argv := append(claudeArgs(s, sess),") {
+		t.Fatal("the explicit RC continuation no longer builds on claudeArgs")
 	}
 }
 

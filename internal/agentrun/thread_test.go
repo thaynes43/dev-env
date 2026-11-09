@@ -29,6 +29,9 @@ func hostResult(t *testing.T, outcome, code string) []byte {
 	t.Helper()
 	rec := threadlaunch.NewRecorder("codex", func() time.Time { return testNow })
 	rec.Result.Host, rec.Result.ThreadID, rec.Result.Source = threadHostName, "0199a000-0000-7000-8000-000000000002", "vscode"
+	if outcome == apiv1.ThreadResponded {
+		rec.Phase(apiv1.ThreadPhaseFirstResponse, "ok", "thread_items", "agent_message")
+	}
 	b, err := threadlaunch.Encode(rec.Finish(outcome, code, apiv1.ThreadPhaseFirstResponse, 5*time.Minute))
 	if err != nil {
 		t.Fatal(err)
@@ -37,9 +40,10 @@ func hostResult(t *testing.T, outcome, code string) []byte {
 }
 
 type capture struct {
-	argv  []string
-	stdin string
-	calls int
+	argv   []string
+	stdin  string
+	stderr string // what the fake exec writes to stderr
+	calls  int
 }
 
 // threadHarness serves the host view and answers the exec with code/out.
@@ -49,11 +53,12 @@ func threadHarness(t *testing.T, view apiv1.Session, code int, out []byte) (*har
 	h.kubectl = func([]string) int { return 0 }
 	serveSession(h, view)
 	c := &capture{}
-	h.env.RunCapture = func(_ context.Context, argv []string, stdin io.Reader, _ io.Writer) (int, []byte, error) {
+	h.env.RunCapture = func(_ context.Context, argv []string, stdin io.Reader, stderr io.Writer) (int, []byte, error) {
 		c.calls++
 		c.argv = argv
 		b, _ := io.ReadAll(stdin)
 		c.stdin = string(b)
+		_, _ = io.WriteString(stderr, c.stderr)
 		return code, out, nil
 	}
 	return h, c
@@ -108,17 +113,22 @@ func TestThreadStartCodexHostAnswers(t *testing.T) {
 		name          string
 		code          int
 		out           []byte
+		stderr        string
 		exit          int
 		outcome, want string
 	}{
-		{"old agentd", 2, nil, ExitFailed, apiv1.ThreadFailed, "host_unsupported"},
-		{"exit mismatch", 0, hostResult(t, apiv1.ThreadVisible, "response_pending"), ExitUnconfirmed, apiv1.ThreadUnconfirmed, "exec_failed"},
-		{"garbage", 1, []byte("error: unable to upgrade connection\n"), ExitUnconfirmed, apiv1.ThreadUnconfirmed, "exec_failed"},
-		{"two lines", 0, append(hostResult(t, apiv1.ThreadResponded, ""), hostResult(t, apiv1.ThreadResponded, "")...), ExitUnconfirmed, apiv1.ThreadUnconfirmed, "exec_failed"},
+		{"old agentd", 2, nil, "agentd: usage: ctl status | rescue\n", ExitFailed, apiv1.ThreadFailed, "host_unsupported"},
+		{"crash", 2, nil, "panic: boom\n", ExitUnconfirmed, apiv1.ThreadUnconfirmed, "host_result_unconfirmed"},
+		{"kubectl refused", 1, nil, "error: unable to upgrade connection: Forbidden\n", ExitFailed, apiv1.ThreadFailed, "exec_failed"},
+		{"exit mismatch", 0, hostResult(t, apiv1.ThreadVisible, "response_pending"), "", ExitUnconfirmed, apiv1.ThreadUnconfirmed, "host_result_unconfirmed"},
+		{"garbage", 1, []byte("not a result\n"), "", ExitUnconfirmed, apiv1.ThreadUnconfirmed, "host_result_unconfirmed"},
+		{"two lines", 0, append(hostResult(t, apiv1.ThreadResponded, ""), hostResult(t, apiv1.ThreadResponded, "")...), "", ExitUnconfirmed, apiv1.ThreadUnconfirmed, "host_result_unconfirmed"},
+		{"trailing brace", 0, append(bytes.TrimSuffix(hostResult(t, apiv1.ThreadResponded, ""), []byte("\n")), '}', '\n'), "", ExitUnconfirmed, apiv1.ThreadUnconfirmed, "host_result_unconfirmed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := threadHarness(t, runningOn(codexHostView(""), "talosw02"), tc.code, tc.out)
+			h, c := threadHarness(t, runningOn(codexHostView(""), "talosw02"), tc.code, tc.out)
+			c.stderr = tc.stderr
 			h.mustRun(tc.exit, codexThreadArgs(h)...)
 			if r := threadResult(t, h); r.Outcome != tc.outcome || r.Error.Code != tc.want {
 				t.Fatalf("result %+v", r.Error)
@@ -188,6 +198,7 @@ func TestThreadStartInvalidInput(t *testing.T) {
 		"text output":    {"thread", "start", "--agent", "codex", "--host", "h-1", "--model", "gpt-6-astra", "--effort", "high", "--handoff", good, "-o", "text"},
 		"claude host":    {"thread", "start", "--agent", "claude", "--host", "h-1", "--project", "sample", "--model", "claude-opus-5-5", "--handoff", good},
 		"claude project": {"thread", "start", "--agent", "claude", "--model", "claude-opus-5-5", "--handoff", good},
+		"claude long":    {"thread", "start", "--agent", "claude", "--project", "sample", "--model", "claude-opus-5-5", "--handoff", long},
 		"positional":     {"thread", "start", "--agent", "codex", "--host", "h-1", "--model", "gpt-6-astra", "--effort", "high", "--handoff", good, "extra"},
 	} {
 		t.Run(name, func(t *testing.T) {

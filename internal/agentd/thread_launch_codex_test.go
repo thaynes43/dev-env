@@ -110,8 +110,9 @@ func (f *threadFake) deps() codexThreadDeps {
 			}
 			return []byte(`{"state":"` + state + `","name":"x","detail":"d"}` + "\n"), nil
 		},
-		python: func() (string, error) { return "/usr/bin/python3", nil },
-		now:    func() time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.now },
+		python:  func() (string, error) { return "/usr/bin/python3", nil },
+		wrapper: func() (string, error) { return CodexThreadWrapper, nil },
+		now:     func() time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.now },
 		sleep: func(ctx context.Context, d time.Duration) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -214,7 +215,8 @@ func TestCodexThreadResponded(t *testing.T) {
 // Regression for OP481 item 2: a thread with a source the phone hides (exec)
 // is reported hidden, never responded or visible.
 func TestCodexThreadHiddenSourceNeverSucceeds(t *testing.T) {
-	for _, source := range []string{"exec", "appServer", "subAgent"} {
+	// A sub-agent thread is never adopted at all (TestCodexThreadObservationEnds).
+	for _, source := range []string{"exec", "appServer", "unknown"} {
 		t.Run(source, func(t *testing.T) {
 			s, sess, cwd := threadHost(t)
 			f := newThreadFake(cwd)
@@ -305,6 +307,7 @@ func TestCodexThreadWrapperStates(t *testing.T) {
 }
 
 func TestCodexThreadObservationEnds(t *testing.T) {
+	const cwd0 = "/placeholder"
 	t.Run("no thread appears", func(t *testing.T) {
 		s, sess, cwd := threadHost(t)
 		f := newThreadFake(cwd)
@@ -326,10 +329,47 @@ func TestCodexThreadObservationEnds(t *testing.T) {
 	t.Run("ambiguous", func(t *testing.T) {
 		s, sess, cwd := threadHost(t)
 		f := newThreadFake(cwd)
-		f.all = append(f.all, codexThreadSummary{ID: twoThread, Cwd: cwd, Source: "vscode", Preview: "something else", CreatedAt: threadNow.Unix()})
-		f.all[0].Preview = "also different"
+		f.all = append(f.all, codexThreadSummary{ID: twoThread, Cwd: cwd, Source: "vscode", CreatedAt: threadNow.Unix()})
+		f.all[0].Preview = ""
 		got := launchThread(t, f, s, sess, goodThreadRequest())
 		if got.Outcome != apiv1.ThreadUnconfirmed || got.Error.Code != "thread_ambiguous" {
+			t.Fatalf("got %s/%+v", got.Outcome, got.Error)
+		}
+	})
+	t.Run("a foreign thread is never adopted", func(t *testing.T) {
+		for name, foreign := range map[string]codexThreadSummary{
+			"other preview": {ID: newThread, Cwd: cwd0, Source: "vscode", Preview: "Tom asked something else", CreatedAt: threadNow.Unix()},
+			"sub-agent":     {ID: newThread, Cwd: cwd0, Source: "subAgent", Preview: "", CreatedAt: threadNow.Unix()},
+		} {
+			t.Run(name, func(t *testing.T) {
+				s, sess, cwd := threadHost(t)
+				f := newThreadFake(cwd)
+				foreign.Cwd = cwd
+				f.all = []codexThreadSummary{foreign}
+				got := launchThread(t, f, s, sess, goodThreadRequest())
+				if got.Outcome != apiv1.ThreadTimedOut || got.ThreadID != "" || got.Error.Code != "thread_not_observed" {
+					t.Fatalf("got %s %s/%+v", got.Outcome, got.ThreadID, got.Error)
+				}
+			})
+		}
+	})
+	t.Run("whitespace in the preview still matches", func(t *testing.T) {
+		s, sess, cwd := threadHost(t)
+		f := newThreadFake(cwd)
+		req := goodThreadRequest()
+		req.Handoff = "Make a worktree,\n\nthen summarize."
+		f.all[0].Preview = "Make a worktree, then"
+		if got := launchThread(t, f, s, sess, req); got.Outcome != apiv1.ThreadResponded {
+			t.Fatalf("got %s/%+v", got.Outcome, got.Error)
+		}
+	})
+	t.Run("missing wrapper launches nothing", func(t *testing.T) {
+		s, sess, cwd := threadHost(t)
+		f := newThreadFake(cwd)
+		d := f.deps()
+		d.wrapper = func() (string, error) { return "", errCodexHostUnknown }
+		got := startCodexThread(context.Background(), s, sess, goodThreadRequest(), d)
+		if got.Outcome != apiv1.ThreadFailed || got.Error.Code != "client_unavailable" || len(f.launches) != 0 {
 			t.Fatalf("got %s/%+v", got.Outcome, got.Error)
 		}
 	})

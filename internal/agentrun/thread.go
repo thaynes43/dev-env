@@ -159,18 +159,30 @@ func (a *app) threadOnHost(ctx context.Context, cmd *command, t threadArgs) erro
 	// The host bounds its own wait; this one only stops a stuck exec.
 	execCtx, cancel := context.WithTimeout(ctx, t.wait+time.Minute)
 	defer cancel()
-	code, out, err := a.env.RunCapture(execCtx, argv, bytes.NewReader(handoff), a.env.Stderr)
-	if err != nil {
-		// kubectl did not start or overflowed: the host may still have run.
-		return a.threadEmit(rec.Finish(apiv1.ThreadUnconfirmed, "exec_failed", apiv1.ThreadPhaseClientStarted, t.wait), apiv1.ThreadLaunchExit(apiv1.ThreadUnconfirmed))
+	// stderr (kubectl's and agentd's fixed text) reaches the caller and a
+	// bounded copy tells an old agentd's usage line from other failures.
+	errCopy := &cappedOutput{}
+	code, out, err := a.env.RunCapture(execCtx, argv, bytes.NewReader(handoff), io.MultiWriter(a.env.Stderr, errCopy))
+	unconfirmed := func() error {
+		return a.threadEmit(rec.Finish(apiv1.ThreadUnconfirmed, "host_result_unconfirmed", apiv1.ThreadPhaseClientStarted, t.wait), apiv1.ThreadLaunchExit(apiv1.ThreadUnconfirmed))
 	}
+	if err != nil {
+		// kubectl overflowed or did not start: the host may still have run.
+		return unconfirmed()
+	}
+	empty := len(bytes.TrimSpace(out)) == 0
 	res, decodeErr := apiv1.DecodeThreadLaunch(bytes.TrimSuffix(out, []byte("\n")))
 	switch {
-	case decodeErr != nil && code == 2 && len(bytes.TrimSpace(out)) == 0:
+	case decodeErr != nil && empty && code == 2 && bytes.Contains(errCopy.data, []byte("usage: ctl")):
 		// agentd's ctl answers an unknown verb with its usage and exit 2.
 		return a.threadEmit(rec.Finish(apiv1.ThreadFailed, "host_unsupported", apiv1.ThreadPhaseHostReady, t.wait), ExitFailed)
+	case decodeErr != nil && empty && code == 1:
+		// thread-start prints a result on every path it reaches, so exit 1
+		// with nothing on stdout is kubectl's own refusal (forbidden, not
+		// found, connection): nothing ran on the host.
+		return a.threadEmit(rec.Finish(apiv1.ThreadFailed, "exec_failed", apiv1.ThreadPhaseHostReady, t.wait), ExitFailed)
 	case decodeErr != nil || code != apiv1.ThreadLaunchExit(res.Outcome) || res.Provider != "codex" || (res.Host != "" && res.Host != t.host):
-		return a.threadEmit(rec.Finish(apiv1.ThreadUnconfirmed, "exec_failed", apiv1.ThreadPhaseClientStarted, t.wait), apiv1.ThreadLaunchExit(apiv1.ThreadUnconfirmed))
+		return unconfirmed()
 	}
 	return a.threadEmit(res, code)
 }
@@ -181,6 +193,9 @@ func (a *app) threadOnHost(ctx context.Context, cmd *command, t threadArgs) erro
 func (a *app) threadInSession(ctx context.Context, cmd *command, t threadArgs) error {
 	if t.host != "" || t.name != "" {
 		_, _ = io.WriteString(a.env.Stderr, "agent-run: claude starts a new remote session per conversation: give --project, not --host or --name\n")
+		return a.threadRefuse("claude", apiv1.ThreadFailed, "invalid_input", ExitUsage)
+	}
+	if _, ok := threadReadHandoff(t.handoff); !ok {
 		return a.threadRefuse("claude", apiv1.ThreadFailed, "invalid_input", ExitUsage)
 	}
 	r := newRCRun(a)

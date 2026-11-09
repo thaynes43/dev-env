@@ -74,7 +74,9 @@ thread-launch runbook).
   exec's stdin, never in an argument. agentd prints the result; agent-run
   checks it is one valid `thread-launch.v1` document whose exit code matches
   its outcome. A host whose agentd predates `thread-start` prints nothing valid
-  and agent-run says so (`host_unsupported`: move the host to a newer image).
+  and agent-run says so (`host_unsupported`: move the host to a newer image). Inside the host the
+  wrapper passes the handoff to the TUI as its initial prompt argument, as it
+  always has; it is never in agent-run's or agentd's argv, log or output.
 - **Claude** takes `--project` and optional `--repo`; `--host` is refused.
   Claude's supervisor owns one conversation per session (DESIGN-038), so a fresh
   Claude conversation is a fresh remote session: the existing `rc start` flow,
@@ -127,7 +129,8 @@ one adapter and one registry row.
 4. **Visible.** A thread not in the snapshot, with the same cwd and
    `createdAt` at or after the launch, is `thread_created`. More than one
    candidate is narrowed by the handoff matching its `preview`; still more is
-   `unconfirmed` (`thread_ambiguous`). The same id must then be in the default
+   `unconfirmed` (`thread_ambiguous`). A thread whose non-empty preview does
+   not match the handoff, or a sub-agent's thread, is never adopted. The same id must then be in the default
    `thread/list` (no `sourceKinds`: the interactive sources the phone lists):
    `source_visible` `ok`, reason the source (for example `vscode`). Present only
    in the all-sources list is `hidden` with code `hidden_source`: a failure,
@@ -183,13 +186,9 @@ command differently than it was parsed, such as `rm` inside `sh -c`.
 auto-denies after two minutes in a TUI and is denied under `-p` (Claude Code
 docs, permission modes, "Critical paths"). Results report it as
 `notBypassed: ["claude_critical_path_check"]`. Agents avoid it by not running
-`rm` inside `sh -c`. The only switch is the launch variable
-`CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1` (Claude Code 2.1.311 or
-later; the v2 image pins 2.1.312). agentd now has one default-off setting for
-it, `AGENTD_CLAUDE_SKIP_CRITICAL_PATH_PROMPT=true`, which adds the variable to
-every Claude launch; the variable is otherwise unset from every agent
-environment. Turning it on is one GitOps change and needs Tom's explicit
-approval: the pods hold gh, kubectl and Max credentials.
+`rm` inside `sh -c`. Claude Code's only switch for it is the launch variable
+`CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS`. Tom ruled on 2026-11-09:
+"Keep the check". No launch sets that variable and no option for it exists.
 
 **Cursor.** An always-allow Cursor launch would pass cursor-agent's
 `--force`/`--yolo` or answer ACP `session/request_permission` with the

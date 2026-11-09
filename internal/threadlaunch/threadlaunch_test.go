@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +42,7 @@ func (f *fakeAdapter) Visible(_ context.Context, r *Recorder) (bool, error) {
 		return false, f.visibleErr
 	}
 	if f.visible > f.visibleAfter {
+		r.Result.ThreadID = "0199a000-0000-7000-8000-000000000002"
 		r.Phase(apiv1.ThreadPhaseThreadCreated, "ok", "fake", "new")
 		r.Phase(apiv1.ThreadPhaseSourceVisible, "ok", "fake", "vscode")
 		return true, nil
@@ -190,6 +192,7 @@ func TestDecodeRefuses(t *testing.T) {
 	for name, raw := range map[string]string{
 		"empty":    "",
 		"trailing": string(good) + "{}",
+		"brace":    strings.TrimSuffix(string(good), "\n") + "}",
 		"unknown":  `{"version":"thread-launch.v1","outcome":"failed","provider":"codex","phases":{},"extra":1}`,
 		"version":  `{"version":"rc-launch.v1","outcome":"failed","provider":"codex","phases":{}}`,
 		"phases":   `{"link":null,"version":"thread-launch.v1","outcome":"failed","provider":"codex","phases":{},"totalMs":0,"deadlineMs":0,"error":{"code":"x","message":"y"}}`,
@@ -209,6 +212,13 @@ func TestDecodeRefuses(t *testing.T) {
 	if b, _ := Encode(noPerm); b != nil {
 		if _, err := apiv1.DecodeThreadLaunch(b); err == nil {
 			t.Error("a result without its permission mode accepted")
+		}
+	}
+	unobserved := NewRecorder("codex", c.Now)
+	unobserved.Result.ThreadID = "0199a000-0000-7000-8000-000000000002"
+	if b, _ := Encode(unobserved.Finish(apiv1.ThreadResponded, "", "", time.Minute)); b != nil {
+		if _, err := apiv1.DecodeThreadLaunch(b); err == nil {
+			t.Error("responded without an observed first response accepted")
 		}
 	}
 	ok := NewRecorder("codex", c.Now)

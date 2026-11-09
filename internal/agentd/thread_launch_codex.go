@@ -74,16 +74,17 @@ type codexWrapperCall struct {
 }
 
 type codexThreadDeps struct {
-	access func(Settings, time.Time) error
-	daemon func(Settings) (codexHostProcess, error)
-	remote func(context.Context, Settings, int) (string, error)
-	paired func(Settings) bool
-	list   func(ctx context.Context, s Settings, pid int, cwd string, all bool) ([]codexThreadSummary, error)
-	turn   func(ctx context.Context, s Settings, pid int, threadID string) (codexTurnObservation, error)
-	launch func(context.Context, codexWrapperCall) ([]byte, error)
-	python func() (string, error)
-	now    func() time.Time
-	sleep  func(context.Context, time.Duration) error
+	access  func(Settings, time.Time) error
+	daemon  func(Settings) (codexHostProcess, error)
+	remote  func(context.Context, Settings, int) (string, error)
+	paired  func(Settings) bool
+	list    func(ctx context.Context, s Settings, pid int, cwd string, all bool) ([]codexThreadSummary, error)
+	turn    func(ctx context.Context, s Settings, pid int, threadID string) (codexTurnObservation, error)
+	launch  func(context.Context, codexWrapperCall) ([]byte, error)
+	python  func() (string, error)
+	wrapper func() (string, error)
+	now     func() time.Time
+	sleep   func(context.Context, time.Duration) error
 }
 
 func realCodexThreadDeps() codexThreadDeps {
@@ -101,7 +102,14 @@ func realCodexThreadDeps() codexThreadDeps {
 		turn:   readCodexFirstTurn,
 		launch: runCodexThreadWrapper,
 		python: func() (string, error) { return exec.LookPath("python3") },
-		now:    time.Now,
+		wrapper: func() (string, error) {
+			info, err := os.Stat(CodexThreadWrapper)
+			if err != nil || !info.Mode().IsRegular() {
+				return "", errCodexHostUnknown
+			}
+			return CodexThreadWrapper, nil
+		},
+		now: time.Now,
 		sleep: func(ctx context.Context, d time.Duration) error {
 			t := time.NewTimer(d)
 			defer t.Stop()
@@ -220,13 +228,14 @@ type wrapperState struct {
 
 func (a *codexThreadAdapter) Create(ctx context.Context, r *threadlaunch.Recorder) error {
 	python, err := a.d.python()
-	if err != nil {
-		r.Phase(apiv1.ThreadPhaseClientStarted, "error", "wrapper", "python_unavailable")
+	wrapper, werr := a.d.wrapper()
+	if err != nil || werr != nil {
+		r.Phase(apiv1.ThreadPhaseClientStarted, "error", "wrapper", "wrapper_unavailable")
 		return threadlaunch.Halt(apiv1.ThreadFailed, "client_unavailable", apiv1.ThreadPhaseClientStarted)
 	}
 	socket := filepath.Join(a.s.CodexHome, "app-server-control", "app-server-control.sock")
 	call := codexWrapperCall{
-		Argv: []string{python, "-I", "-B", CodexThreadWrapper, "--repo", a.cwd, "--socket", socket, "--model", a.req.Model,
+		Argv: []string{python, "-I", "-B", wrapper, "--repo", a.cwd, "--socket", socket, "--model", a.req.Model,
 			"--effort", a.req.Effort, "--name", a.req.Name, "--client", a.s.CodexBin, "--task-file", "-", "--observe-seconds", "2"},
 		Env:   codexThreadEnv(a.s),
 		Stdin: []byte(a.req.Handoff),
@@ -312,34 +321,38 @@ func retryable(err error) error {
 	return err
 }
 
-// bind picks the one new thread for this launch's cwd. None is "poll again";
-// several are narrowed by the handoff matching their preview.
+// bind picks the one new thread for this launch's cwd. A candidate is new,
+// in the cwd, created at or after the launch and not a sub-agent's. A
+// non-empty preview must match the handoff, so another thread started there
+// meanwhile (from the phone, say) is never adopted. None is "poll again";
+// several, after preferring preview matches, is ambiguous.
 func (a *codexThreadAdapter) bind(all []codexThreadSummary) (string, error) {
-	var fresh []codexThreadSummary
+	handoff := normalizedText(a.req.Handoff)
+	var matched, unknown []codexThreadSummary
 	for _, t := range all {
-		if !a.before[t.ID] && t.Cwd == a.cwd && t.CreatedAt >= a.launched.Unix()-1 {
-			fresh = append(fresh, t)
+		if a.before[t.ID] || t.Cwd != a.cwd || t.CreatedAt < a.launched.Unix()-1 || strings.HasPrefix(t.Source, "subAgent") {
+			continue
+		}
+		switch p := normalizedText(t.Preview); {
+		case p == "":
+			unknown = append(unknown, t)
+		case strings.HasPrefix(handoff, p) || strings.HasPrefix(p, handoff):
+			matched = append(matched, t)
 		}
 	}
-	if len(fresh) > 1 {
-		var matched []codexThreadSummary
-		handoff := strings.TrimSpace(a.req.Handoff)
-		for _, t := range fresh {
-			p := strings.TrimSpace(t.Preview)
-			if p != "" && (strings.HasPrefix(handoff, p) || strings.HasPrefix(p, handoff)) {
-				matched = append(matched, t)
-			}
-		}
-		if len(matched) != 1 {
-			return "", threadlaunch.Halt(apiv1.ThreadUnconfirmed, "thread_ambiguous", apiv1.ThreadPhaseThreadCreated)
-		}
-		fresh = matched
+	switch {
+	case len(matched) == 1:
+		return matched[0].ID, nil
+	case len(matched) > 1 || len(unknown) > 1:
+		return "", threadlaunch.Halt(apiv1.ThreadUnconfirmed, "thread_ambiguous", apiv1.ThreadPhaseThreadCreated)
+	case len(unknown) == 1:
+		return unknown[0].ID, nil
 	}
-	if len(fresh) == 0 {
-		return "", nil
-	}
-	return fresh[0].ID, nil
+	return "", nil
 }
+
+// normalizedText collapses whitespace, as a thread preview may.
+func normalizedText(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func (a *codexThreadAdapter) FirstResponse(ctx context.Context, r *threadlaunch.Recorder) (bool, error) {
 	obs, err := a.d.turn(ctx, a.s, a.pid, a.thread)
@@ -364,8 +377,10 @@ func (a *codexThreadAdapter) FirstResponse(ctx context.Context, r *threadlaunch.
 	return false, nil
 }
 
-// codexThreadEnv is the managed Codex launch's scrubbed environment: no
-// alternate auth, backend or agentd channel reaches the client or its tmux.
+// codexThreadEnv is the managed Codex launch's scrubbed environment for the
+// wrapper. When the wrapper starts the host's tmux server (a Codex host runs
+// no other tmux), the client inherits it; a tmux server that already runs
+// keeps its own global environment, which the same route set before.
 func codexThreadEnv(s Settings) []string {
 	unset := append(append(append([]string{}, unsetForAgent...), codexUnset...), "CODEX_SQLITE_HOME", "CODEX_APP_SERVER_TRANSPORT", "CODEX_APP_SERVER_SOCKET", "CODEX_REMOTE_CONTROL_SOCKET", "CODEX_APP_SERVER_DAEMON_BACKEND", "XDG_STATE_HOME", "TMUX", "TMUX_PANE")
 	return agentEnv(os.Environ(), Launch{Unset: unset, Env: []string{"HOME=" + s.Home, "CODEX_HOME=" + s.CodexHome, "XDG_STATE_HOME=" + filepath.Join(s.Home, ".local", "state")}})

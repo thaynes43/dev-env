@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"regexp"
 )
 
@@ -111,7 +112,7 @@ func DecodeThreadLaunch(raw []byte) (ThreadLaunchResult, error) {
 	if err := dec.Decode(&r); err != nil {
 		return ThreadLaunchResult{}, errors.New("thread launch result is not valid JSON")
 	}
-	if dec.More() {
+	if dec.Decode(&struct{}{}) != io.EOF {
 		return ThreadLaunchResult{}, errors.New("thread launch result has trailing data")
 	}
 	if r.Version != ThreadLaunchVersion || !threadLaunchToken.MatchString(r.Provider) || len(r.Phases) != len(ThreadLaunchPhases) {
@@ -132,6 +133,9 @@ func DecodeThreadLaunch(raw []byte) (ThreadLaunchResult, error) {
 	}
 	if r.Outcome == ThreadResponded && r.Permission.Mode != ThreadPermissionAlwaysAllow {
 		return ThreadLaunchResult{}, errors.New("thread launch result responded without always-allow")
+	}
+	if r.Outcome == ThreadResponded && (r.Phases[ThreadPhaseFirstResponse].State != "ok" || r.ThreadID == "") {
+		return ThreadLaunchResult{}, errors.New("thread launch result responded without an observed response")
 	}
 	if (r.Outcome == ThreadResponded) != (r.Error == nil) {
 		return ThreadLaunchResult{}, errors.New("thread launch result error disagrees with outcome")

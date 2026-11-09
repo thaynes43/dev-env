@@ -107,31 +107,11 @@ var ErrNotInPlan01 = errors.New("not built yet")
 //     fresh one from agentd's wrapper instead, and git from its credential
 //     helper; both read /creds/gh_token at each call (D-42).
 //   - AGENTD_SESSION: the agent does not need the session document.
-//   - CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS: only agentd's own
-//     default-off setting may turn it on (claudeLaunchEnv), never a pod env.
 var unsetForAgent = []string{
 	"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
 	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "DISABLE_GROWTHBOOK", "DISABLE_TELEMETRY", "DO_NOT_TRACK",
 	"GH_TOKEN",
 	protocol.SessionEnv,
-	claudeCriticalPathEnv,
-}
-
-// claudeCriticalPathEnv makes Claude Code (2.1.311 and later) skip the
-// critical-path check that --dangerously-skip-permissions does not cover: the
-// "dangerous rm not ruled out" prompt for a command the shell may read
-// differently than it was parsed, such as rm inside sh -c (DESIGN-057 section
-// 6a). It is set only when Settings.ClaudeSkipCriticalPathPrompt is on, which
-// is off by default and needs Tom's explicit approval to enable.
-const claudeCriticalPathEnv = "CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS"
-
-// claudeLaunchEnv is every Claude launch's added environment.
-func claudeLaunchEnv(s Settings) []string {
-	env := []string{"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env"}
-	if s.ClaudeSkipCriticalPathPrompt {
-		env = append(env, claudeCriticalPathEnv+"=1")
-	}
-	return env
 }
 
 // unsetForRemote is unsetForAgent plus the static plan token: a remote
@@ -213,7 +193,7 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 	l := Launch{
 		Session:        sess.Name,
 		Dir:            ws.Worktree,
-		Env:            claudeLaunchEnv(s),
+		Env:            []string{"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env"},
 		Unset:          unsetFor(sess),
 		LogPath:        s.LogPath(sess.Name),
 		EventsPath:     s.statePath(eventsFile),
@@ -330,7 +310,7 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 		CommonInputs: common, Session: sess.Name,
 		Argv:           argv,
 		Dir:            ws.Worktree,
-		Env:            claudeLaunchEnv(s),
+		Env:            []string{"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env"},
 		Unset:          unsetFor(sess),
 		LogPath:        s.LogPath(sess.Name),
 		EventsPath:     s.statePath(eventsFile),
@@ -352,7 +332,8 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 // effort and no approval prompts (D-23). Every Claude launch path (task,
 // local, remote and so the standby, resume, rescue restore, the explicit RC
 // continuation) builds its argv here, so --dangerously-skip-permissions is
-// the always-allow launch contract (DESIGN-057 section 6a).
+// the always-allow launch contract (DESIGN-057 section 6a). Claude Code's
+// critical-path check is not covered by it and stays on (Tom, 2026-11-09).
 func claudeArgs(s Settings, sess protocol.Session) []string {
 	argv := []string{s.ClaudeBin, "--model", sess.Model}
 	if sess.Effort != "" {
