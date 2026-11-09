@@ -40,9 +40,37 @@ const (
 )
 
 // privateTerminalRetry is how soon a terminal executor whose checks failed is
-// observed again (DESIGN-025 3.3). Pod status changes reconcile the Session
-// anyway; node and lease changes do not.
-const privateTerminalRetry = 30 * time.Second
+// first observed again (DESIGN-025 3.3). Each further refusal of the same Pod
+// revision doubles the wait, up to privateTerminalRetryMax (DESIGN-025 25,
+// OP490). Pod status changes reconcile the Session anyway, and a Pod whose
+// revision changed is checked at once; node and lease changes do not
+// reconcile it, so they wait for the backoff.
+const (
+	privateTerminalRetry    = 30 * time.Second
+	privateTerminalRetryMax = 30 * time.Minute
+)
+
+// terminalRetryAfter is the wait after the n-th refusal in a row of one
+// executor: 30s, 1m, 2m, 4m, 8m, 16m, then 30m.
+func terminalRetryAfter(n int) time.Duration {
+	d := privateTerminalRetry
+	for i := 1; i < n && d < privateTerminalRetryMax; i++ {
+		d *= 2
+	}
+	return min(d, privateTerminalRetryMax)
+}
+
+// terminalRefusal is the last refused terminal check of one Session's
+// recorded executor. It lives in memory only: a new operator checks once at
+// once and then backs off from the start again. It changes nothing that is
+// refused, only how often the same refusal is checked again.
+type terminalRefusal struct {
+	sessionUID          types.UID
+	podUID, podRevision string
+	refusals            int
+	reason              string
+	next                time.Time
+}
 
 // podGCDeletionReason is the DisruptionTarget reason the Pod garbage collector
 // sets when it marks a Pod of a lost node Failed. Such a status never counts.
@@ -245,20 +273,89 @@ func executorProviderDirs(p *corev1.Pod) (claudeConfigDir, codexHome string) {
 // every check passes. applies is terminalRecordApplies of the record as stored,
 // before this observation rebuilt lastExecutor; recorded is that stored
 // lastExecutor. The caller's confirmed write stores the record, and the count
-// follows that write. A failed check writes nothing and asks again in 30s.
+// follows that write. A failed check writes nothing and asks again after a
+// wait that doubles from 30 seconds to 30 minutes while the same Pod revision
+// is refused; until then a reconcile reuses the remembered refusal and checks
+// nothing (DESIGN-025 25). The refusal goes into the Session's conditions.
 func (r *Reconciler) observeExecutorTerminal(ctx context.Context, s *v1alpha1.AgentSession, applies bool, recorded *v1alpha1.PrivateExecutorStatus, pod *corev1.Pod, obs *observation) {
 	if !applies || recorded == nil || recorded.PodUID != string(pod.UID) || !podPhaseTerminal(pod) {
+		// No check is due for this Pod: a mark exists, the gate is shut or
+		// the Pod is not the terminal recorded executor. A remembered
+		// refusal has nothing left to back off.
+		r.forgetTerminalRefusal(client.ObjectKeyFromObject(s))
+		return
+	}
+	now := r.clock()
+	if reason, wait := r.terminalBackoff(s, pod, now); wait > 0 {
+		obs.privateTerminalRetry, obs.privateTerminalRefusal = wait, reason
 		return
 	}
 	rec, err := r.verifyExecutorTerminated(ctx, s, pod.UID)
 	if err != nil {
 		r.countTerminal(terminalRefused)
-		obs.privateTerminalRetry = true
-		log.FromContext(ctx).Info("the recorded private executor is terminal, but its terminal record is refused for now", "podUID", string(pod.UID), "reason", err.Error())
+		reason := boundText(err.Error(), 256)
+		refusals, wait := r.noteTerminalRefusal(s, pod, reason, now)
+		obs.privateTerminalRetry, obs.privateTerminalRefusal = wait, reason
+		log.FromContext(ctx).Info("the recorded private executor is terminal, but its terminal record is refused for now", "podUID", string(pod.UID), "reason", reason,
+			"refusals", refusals, "retryAfter", wait.String())
 		return
 	}
+	r.forgetTerminalRefusal(client.ObjectKeyFromObject(s))
 	s.Status.PrivateHistory.ExecutorTerminal = rec
 	obs.privateTerminal = terminalRecorded
+}
+
+// terminalBackoff returns the remembered refusal of this exact executor Pod
+// revision and how long to wait before checking it again; a zero wait means
+// check now. A changed Pod revision is checked at once.
+func (r *Reconciler) terminalBackoff(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) (string, time.Duration) {
+	r.terminalMu.Lock()
+	defer r.terminalMu.Unlock()
+	b := r.terminalRefusals[client.ObjectKeyFromObject(s)]
+	if b == nil || b.sessionUID != s.UID || b.podUID != string(pod.UID) || b.podRevision != pod.ResourceVersion || !now.Before(b.next) {
+		return "", 0
+	}
+	// A clock that stepped back never stretches the wait past the cap.
+	return b.reason, min(b.next.Sub(now), privateTerminalRetryMax)
+}
+
+// noteTerminalRefusal remembers a refused check of the executor Pod and
+// returns how many refusals in a row it has had and the wait before the next
+// check. A Session that is gone has its entry dropped by Reconcile's NotFound
+// read; as a backstop, entries no reconcile came back for within the cap
+// after their due time are dropped here too.
+func (r *Reconciler) noteTerminalRefusal(s *v1alpha1.AgentSession, pod *corev1.Pod, reason string, now time.Time) (int, time.Duration) {
+	r.terminalMu.Lock()
+	defer r.terminalMu.Unlock()
+	if r.terminalRefusals == nil {
+		r.terminalRefusals = map[types.NamespacedName]*terminalRefusal{}
+	}
+	for key, b := range r.terminalRefusals {
+		if now.Sub(b.next) > privateTerminalRetryMax {
+			delete(r.terminalRefusals, key)
+		}
+	}
+	key := client.ObjectKeyFromObject(s)
+	b := r.terminalRefusals[key]
+	if b == nil || b.sessionUID != s.UID || b.podUID != string(pod.UID) {
+		b = &terminalRefusal{sessionUID: s.UID, podUID: string(pod.UID)}
+		r.terminalRefusals[key] = b
+	}
+	b.refusals++
+	b.podRevision, b.reason = pod.ResourceVersion, reason
+	wait := terminalRetryAfter(b.refusals)
+	b.next = now.Add(wait)
+	return b.refusals, wait
+}
+
+// forgetTerminalRefusal drops the remembered refusal of the Session of this
+// name: once its terminal record is taken, once no check is due for it any
+// more (its executor is gone, or a mark exists), and once the Session itself
+// is gone (released or deleted), whatever UID the entry holds.
+func (r *Reconciler) forgetTerminalRefusal(key types.NamespacedName) {
+	r.terminalMu.Lock()
+	defer r.terminalMu.Unlock()
+	delete(r.terminalRefusals, key)
 }
 
 // observeExecutorAbsent handles an uncached NotFound for the recorded
@@ -266,6 +363,7 @@ func (r *Reconciler) observeExecutorTerminal(ctx context.Context, s *v1alpha1.Ag
 // expected (ExecutorEnded). Without one the absence is Unknown, and when
 // applies the missed marker is added, once: absence never yields a record.
 func (r *Reconciler) observeExecutorAbsent(s *v1alpha1.AgentSession, applies bool, obs *observation) {
+	r.forgetTerminalRefusal(client.ObjectKeyFromObject(s))
 	h := s.Status.PrivateHistory
 	if executorTerminalRecorded(h) {
 		obs.privateExecutorEnded = true

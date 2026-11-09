@@ -46,6 +46,11 @@ archived-history read is accepted on the installed system.
 compute-only exception for a terminal headless task. It preserves the original
 HOME and history and does not activate or shorten the HOME expiry policy.
 
+**2026-11-09, OpenProject #490:** section 25 makes a protected private
+Session's conditions and `agent-run reap` say what is true, backs off a refused
+terminal check, and adds a gauge of reaped Sessions still kept. Lifecycle and
+retention are unchanged.
+
 ## 1. What runs, in one picture
 
 ```mermaid
@@ -204,7 +209,9 @@ record it. Nothing here depends on that.
   reconcile the Session, so the write usually lands within a second of the
   kubelet's report.
 - **While a check fails** (node not Ready, lease stale, a read error), the
-  reconcile asks again in 30 seconds and writes nothing.
+  reconcile asks again in 30 seconds and writes nothing. *Amended 2026-11-09
+  (section 25.3):* each further refusal of the same Pod revision doubles the
+  wait, up to 30 minutes; a changed Pod is checked at once.
 - **Before anything else in that reconcile.** No step that could remove or
   change the Pod runs in a reconcile that has not first confirmed the record.
 - **With today's confirmed write** (`writePrivateHistory`): a status update, then
@@ -287,7 +294,10 @@ lease checks are `executorNodeLive` in `workspace_stop.go`, which
   `Failed`, `PodReady` reason `ExecutorEnded`, as it was while the ended Pod
   stood (`PodEnded`); the executor latch still refuses a replacement. A Session
   that wants its Pod gone keeps `RetentionPending`, and `RemovalBlocked` keeps
-  that reason.
+  that reason. *Amended 2026-11-09 (section 25.1):* a Session that wants its
+  Pod gone now says `ExecutorEnded` in `PodReady`, `PrivateHistoryRetained`
+  and `RemovalBlocked` once the record exists, whether its Pod stands or not;
+  `RetentionPending` means its stop is not proven yet.
 - **Counting.** `dev_env_private_executor_terminal_total` is registered at start
   whatever the flag, each result at 0. `recorded` and `missed` count when the API
   server acknowledges the status update with the mark: its response holds
@@ -1702,6 +1712,8 @@ Exported by the leader:
 | `dev_env_home_expiry_refusing` | gauge | `reason`: the number of Sessions whose current `refusal` is that reason, from the last reconcile of each; the reasons below. A Session leaves it when a step passes (which clears `refusal`), when its expiry record is removed, or when the Session is gone |
 | `dev_env_home_expiry_refused_total` | counter | `reason`: `unknown`, `identity_changed`, `home_replaced`, `claim_in_use`, `canary`, `override_invalid`, `layout_unknown`, `unknown_entry`, `unexpected_entry`, `credential_in_tree`, `export_too_large`, `export_changed`, `export_invalid` (agentd's `invalid`: a rescue directory or a manifest that does not fit; added in H5, 5.4), `plan_too_large` (a plan over the operator's own 16 MiB cap; added in H5, 5.4), `shelf_unavailable`, `archive_conflict`, `archive_missing`, `archive_mismatch`, `precondition_failed`, `forbidden` |
 | `dev_env_home_expiry_overdue_seconds` | gauge | none; the largest `now - dueAt` over triggered, unheld Sessions not yet `Archived` (or `Expired` with deletion on) |
+| `dev_env_reaped_sessions_retained` | gauge | `reason`: the `RemovalBlocked` reason of each reaped Session still kept (section 25.4) |
+| `dev_env_reaped_sessions_oldest_seconds` | gauge | `reason`: seconds since the oldest such reap; 0 when none (section 25.4) |
 
 Rescue failures keep their own condition and page (D-57).
 
@@ -2565,3 +2577,196 @@ fresh-heartbeat checks are required (the heartbeat only while the Pod is not
 terminal). The templates now pin 2.71.0; once the
 legacy backlog clears this extra flag can be retired. The normal 2.71+ exit
 proof, Pod rendering, retention latch and HOME-expiry policy are unchanged.
+
+## 25. What a reaped private Session says — 2026-11-09 (OP490)
+
+**The problem.** On 2026-11-09, 30 reaped private task Sessions stood in phase
+`Pending` with `RemovalBlocked=True`, reason `RetentionPending`. Their
+executors had stopped as section 4 asks: the status of 29 of them holds a stop
+request and a terminal record. Release waits for the HOME expiry, whose history
+archive is not switched on yet. Three things were wrong:
+
+- The conditions printed the same text for every protected Session: "private
+  stop evidence is unknown" and "private stop state is Unknown". That echoed
+  `stopState`, whose single value is `Unknown` by design (3.1), not the
+  Session's real state.
+- `agent-run reap` said the operator rescues the work to a bundle, stops the
+  pod and archives the volume. None of that happens to a private Session.
+- One Session's Pod was `Failed`, but one container status was not
+  terminated. Its terminal record was refused, rightly, every 30 seconds: about
+  420 refusals in 3.5 hours, seen only in the operator log.
+
+**What changes: words, two reasons, a backoff and a gauge.** Lifecycle and
+retention do not change. Nothing new is deleted, released, rescued, archived or
+stopped. No finalizer, guard, flag, CRD field, API field or RBAC changes.
+`stopState` keeps its single value; the conditions read the terminal record
+instead.
+
+### 25.1 Conditions
+
+A protected Session that wants its Pod gone, reaped or suspended, gives one of
+two reasons in `PodReady`, `PrivateHistoryRetained` and `RemovalBlocked`, with
+the same text in each (`privateRetention` in
+`internal/controller/private_history.go`):
+
+| Reason | When | The text says |
+|---|---|---|
+| `ExecutorEnded` | `executorTerminal` names the recorded executor | the agent stopped, how and the record's `observedAt`; its HOME is kept and nothing is archived or deleted yet; for a reap, that release waits for the HOME expiry to archive the history and delete the HOME, and whether that archive is switched on |
+| `RetentionPending` | no terminal record | the stop is not proven yet, and why: no executor recorded; executor not observed; its Pod ended but the record is refused, with the refusal and the backoff; its Pod ended and no record is written yet; a stop was requested at `requestedAt`; still running with no stop request; or, suspended, a suspend does not stop a private agent |
+
+`RetentionPending` keeps the meaning its old text gave it: the stop is not
+proven. `ExecutorEnded` is the reason 3.6 already gives a recorded end. So the
+one reason change is this: a reaped or suspended private Session with a
+terminal record moves from `RetentionPending` to `ExecutorEnded`. A search of
+this repository (portal, CLI, API and tests) found nothing outside the
+controller's own tests that matches `RetentionPending`. The other reasons stay:
+`PreservationUnknown`, `HomeDeleting`, `HomeExpired` and
+`TaskComputeReclaimed`. On a reaped Session, `TaskComputeReclaimed` now uses
+the `ExecutorEnded` text, plus that its Pod was removed to free compute. The
+phase stays `Pending` for a reap and `Suspended` for a suspend.
+
+A reaped Session whose agent the reap's own stop request ended says:
+
+> reap accepted; the agent was stopped as the reap asked (its Pod ended at the
+> operator's stop deadline), recorded 2026-11-09T17:31:21Z; its private HOME is
+> kept, and nothing is archived or deleted yet; the session is released only
+> after the HOME expiry (DESIGN-025) archives its history and deletes the HOME,
+> and the history archive is not switched on yet
+
+**How the stop is told** (`agentStoppedText`). A Pod that the operator's stop
+request ended reports `Failed` with reason `DeadlineExceeded` (section 4). That
+reads as a failed task, but it is a stop. So when `stopRequest` names the
+recorded executor and the record is that ending, the text says "the agent was
+stopped as the reap asked (its Pod ended at the operator's stop deadline)".
+When the request came before the reap, from the terminal task reclaim
+(section 24), it says "the agent was stopped after its task ended". Any other
+ending keeps its raw phase and reason, for example "the agent stopped: its Pod
+ended Failed (Evicted)", or `DeadlineExceeded` with no stop request of the
+operator's, such as a canary's own deadline.
+
+A reaped Session whose record is refused says:
+
+> reap accepted; the agent's stop is not proven yet: its Pod ended Failed, but
+> the operator cannot confirm that yet (executor has a duplicate, uncertain or
+> nonterminated current container); it checks again after a wait that doubles
+> from 30 seconds to at most 30 minutes; its private HOME is kept, and nothing
+> is archived or deleted yet; the session is released only after its stop is
+> proven and the HOME expiry (DESIGN-025) archives its history and deletes the
+> HOME, and the history archive is not switched on yet
+
+Other texts that echoed `stopState` now say what they know. A running
+protected Session: "the private HOME and the session's record are protected
+(DESIGN-025)", plus a refused check when there is one. `ExecutorEnded` on a
+Session that still wants its Pod: the stop, then "its Pod is gone; its private
+HOME is kept, and the agent is not started again". `HomeDeleting` and
+`HomeExpired`: the archive entry, the stop, then "the session's record is
+kept".
+
+The text reads only the Session's status and the observation, so every operator
+writes the same. It holds no counter or clock of its own, so it changes only
+when a fact changes. A steady Session writes no status (haynes-ops#4663;
+`TestReconcileOfAnUnchangedSessionWritesNoStatus` still passes). The rollout
+rewrites each protected Session's text once.
+
+### 25.2 agent-run
+
+A Session with a `privateHistory` record is private. `agent-run reap` then
+prints:
+
+> reaping NAME: reap accepted; it is a private session, so the operator asks its
+> agent to stop and keeps its private HOME; no rescue bundle is made, and
+> nothing is archived or deleted now; agent-run show NAME says when the stop is
+> proven
+
+When the operator has already judged the reap, `reap` prints its
+`RemovalBlocked` text instead. It skips a condition left from an earlier
+suspend, which says nothing about the reap. `show` prints the phase as
+"Pending, reaping: stop the agent, keep its private HOME". `show` and `list`
+print `PodReady`'s text as before, which is now the text above. No API field is
+added: `privateHistory` marks a private Session, and the `RemovalBlocked`
+reason tells the two cases apart. Without the record, the reap text is v2's
+usual one.
+
+### 25.3 Terminal record backoff
+
+A refused terminal check (3.2) waits 30 seconds, then 1, 2, 4, 8 and 16
+minutes, then 30 minutes for every further refusal of the same Pod revision
+(`terminalRetryAfter` in `internal/controller/private_terminal.go`). What is
+refused does not change, and neither does the check.
+
+- **Kept in memory**, per Session UID, beside the Pod UID and resourceVersion
+  it judged. A new operator or leader checks once at once, then backs off from
+  30 seconds again.
+- **Inside the wait**, a reconcile, such as one from its own status write,
+  reuses the remembered refusal, checks nothing and counts nothing. It asks to
+  be reconciled again when the wait ends. So `refused` counts the checks made,
+  not the reconciles.
+- **A changed Pod** (a new resourceVersion) is checked at once. Its count goes
+  on from where it was. A Pod event still reconciles the Session at once, so
+  the backoff never delays the check of a Pod that is being deleted. Node and
+  lease changes do not reconcile the Session; they wait for the backoff.
+- **Visible once.** The refusal and the backoff are in the `RetentionPending`
+  text (or the `HomeProtected` text of a Session that runs). They change only
+  when the refusal does. The log line now carries the refusal count and the
+  wait.
+- **Cleanup.** The map is keyed by Session name, and each entry holds its
+  Session UID, so a new Session of the same name starts afresh. An entry is
+  dropped when the record is taken, when no check is due any more (a mark
+  exists, the gate is shut, or the executor Pod is gone), and when Reconcile's
+  read of the Session's name is NotFound, which is how a released or deleted
+  Session reaches it. As a backstop, an entry that no reconcile came back for
+  within 30 minutes after it was due is dropped on the next refusal.
+
+### 25.4 The gauge
+
+Checked first, and neither fits. `dev_env_terminal_task_pods_retained` counts
+terminal task compute whose Pod still stands, and only with the reclaim flag
+on. `dev_env_home_expiry_sessions` counts by expiry phase; a Session with a
+terminal record and no expiry record, as 29 of the 30 are, is in no phase.
+Neither knows a reap or its age. So `SessionCollector` adds two gauges, read
+from the cache at scrape time like its others:
+
+- `dev_env_reaped_sessions_retained{reason}`: the reaped Sessions (deletion
+  requested, still present) whose `RemovalBlocked` is True, by its reason.
+- `dev_env_reaped_sessions_oldest_seconds{reason}`: seconds since the reap of
+  the oldest of them, from `deletionTimestamp`; 0 when none.
+
+The reasons are `RetentionPending`, `ExecutorEnded`, `TaskComputeReclaimed`,
+`PreservationUnknown`, `HomeDeleting`, `HomeExpired`, `DeleteNeedsRescue` and
+`Other`. Each is reported even at 0, so an alert never reads a missing series.
+
+The alert goes in haynes-ops `operator/app/prometheusrule.yaml`, in a later PR
+after the operator pin:
+
+```yaml
+- alert: DevEnvReapedStopUnproven        # warning
+  expr: max(dev_env_reaped_sessions_oldest_seconds{reason=~"RetentionPending|PreservationUnknown"}) > 3600
+  for: 15m
+```
+
+A stop normally lands within a minute of the reap (section 4), so an hour
+without proof needs a look. Nothing is at risk: the HOME is kept. Its
+description says to read the Session's `RemovalBlocked` text, which names the
+refusal; an automated responder reports and changes nothing. For a dashboard:
+`sum by (reason) (dev_env_reaped_sessions_retained)`.
+
+### 25.5 Tests and deploy
+
+Tests in `internal/controller`: `TestReapedPrivateSessionSaysWhatIsTrue`
+(stopped by the reap with the Pod standing and gone, a deadline with no stop
+request, a stop request overtaken by an eviction, a refused record, a stop
+requested while running, task compute reclaimed after the reclaim's own stop:
+each condition's reason and exact text, and the Pod, HOME, finalizer and
+`stopState` untouched),
+`TestSuspendedAndRunningPrivateSessionsSayWhatIsTrue`,
+`TestTerminalRetryAfterDoublesToThirtyMinutes`,
+`TestPrivateTerminalRefusalBacksOff` (a fake clock through the whole schedule,
+a reconcile inside the wait, a changed Pod, then the record),
+`TestPrivateTerminalRefusalForgottenWhenItsSessionOrPodGoes` and
+`TestReapedSessionsRetainedCountAndAge`. In `internal/agentrun`:
+`TestReapPrivateSessionSaysWhatIsTrue` (the reap text before and after the
+operator judged it, and `show` and `list`).
+
+Deploy needs an operator pin (conditions, backoff, gauges) and an agent image
+for `agent-run`. No CRD changed, so no CRD copy goes to haynes-ops first. The
+alert is a separate haynes-ops PR.

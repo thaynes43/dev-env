@@ -263,6 +263,12 @@ type Reconciler struct {
 	expiryMu      sync.Mutex
 	expiryCounted map[string]time.Time
 
+	// terminalRefusals backs off the refused terminal checks of a private
+	// executor, by Session name, each entry bound to its Session UID
+	// (observeExecutorTerminal, DESIGN-025 25).
+	terminalMu       sync.Mutex
+	terminalRefusals map[types.NamespacedName]*terminalRefusal
+
 	// rolloutHoldLogged is the last rollout hold state noteRolloutHold logged.
 	rolloutHoldMu     sync.Mutex
 	rolloutHoldLogged string
@@ -330,6 +336,11 @@ func (r *Reconciler) sessionsForTemplates(ctx context.Context, o client.Object) 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.Result, outcomeErr error) {
 	var s v1alpha1.AgentSession
 	if err := r.Client.Get(ctx, req.NamespacedName, &s); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Released or deleted: a refusal still remembered for it has
+			// nothing left to back off (DESIGN-025 25.3).
+			r.forgetTerminalRefusal(req.NamespacedName)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	// DESIGN-054's releaser comes first and on its own: it lifts only the
@@ -452,7 +463,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	}
 
 	t, tErr := r.loadTemplates(ctx)
-	obs := observation{pod: pod, claim: claim, templates: t, templatesErr: tErr, now: time.Now()}
+	obs := observation{pod: pod, claim: claim, templates: t, templatesErr: tErr, now: time.Now(), homeExpiryOn: r.homeExpiryOn()}
 	if s.Spec.Workspace != nil {
 		result, err := r.reconcileSharedWorkspace(ctx, &s, &obs)
 		if err != nil {
@@ -501,10 +512,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 			}
 			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}
-		if obs.privateTerminalRetry {
+		if wait := obs.privateTerminalRetry; wait > 0 {
 			defer func() {
-				if outcomeErr == nil && (out.RequeueAfter == 0 || out.RequeueAfter > privateTerminalRetry) {
-					out.RequeueAfter = privateTerminalRetry
+				if outcomeErr == nil && (out.RequeueAfter == 0 || out.RequeueAfter > wait) {
+					out.RequeueAfter = wait
 				}
 			}()
 		}
@@ -1503,8 +1514,14 @@ type observation struct {
 	// confirmed write lands (DESIGN-025 3).
 	privateTerminal string
 	// privateTerminalRetry: the recorded executor is terminal but a check
-	// failed; the reconcile asks again within privateTerminalRetry.
-	privateTerminalRetry bool
+	// failed, now or within its backoff; the reconcile asks again after this
+	// wait (30 seconds doubling to 30 minutes, DESIGN-025 25).
+	privateTerminalRetry time.Duration
+	// privateTerminalRefusal is why that check failed, for the conditions.
+	privateTerminalRefusal string
+	// homeExpiryOn is whether this operator runs the HOME expiry's history
+	// archive (homeExpiryOn), for the conditions' next step.
+	homeExpiryOn bool
 	// privateExecutorEnded: the recorded executor is gone after its confirmed
 	// terminal record, so its absence is ExecutorEnded, not Unknown.
 	privateExecutorEnded bool
@@ -1708,10 +1725,13 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 		s.Status.PrivateHistory.TaskTerminal != nil && executorTerminalRecorded(s.Status.PrivateHistory):
 		return v1alpha1.PhaseSuspended, notReady("TaskPodReclaimed", "terminal task compute is absent with confirmed stop proof; original HOME, history and outcome remain retained")
 	case privateHistoryProtected(s) && wantsPodGone(s):
+		// DESIGN-025 25: ExecutorEnded when the terminal record proves the
+		// agent stopped, RetentionPending and why when nothing proves it yet.
+		phase := v1alpha1.PhasePending
 		if s.DeletionTimestamp.IsZero() {
-			return v1alpha1.PhaseSuspended, notReady("RetentionPending", "private HOME and durable identity remain retained; private stop evidence is unknown")
+			phase = v1alpha1.PhaseSuspended
 		}
-		return v1alpha1.PhasePending, notReady("RetentionPending", "reap preserves private HOME and durable identity; private stop evidence is unknown")
+		return phase, notReady(privateRetention(s, obs))
 	case obs.pod.foreign != "":
 		return v1alpha1.PhasePending, notReady("NameTaken", fmt.Sprintf("a pod named %s exists and its controller is %s, not this session; the operator leaves it alone", s.Name, obs.pod.foreign))
 	case obs.claim.foreign != "":
