@@ -175,8 +175,8 @@ For a thread Tom drives on his phone, follow the
   `--dangerously-bypass-approvals-and-sandbox`. A `workspace-write` request
   falls back to `read-only`, where every shell and MCP call fails.
 - `agent-run rc fresh` needs v2.71 or later, `--enable-codex-rc-thread` and a
-  qualified target. The flag is off live; enabling it is OpenProject #272 and
-  needs Tom's approval.
+  qualified target. The flag was off live on 2026-11-09; enabling it is
+  OpenProject #272 and needs Tom's approval.
 
 ## Provider and phone acceptance
 

@@ -157,7 +157,9 @@ codex_effective='
 effective() {
   rm -rf "$CODEX_HOME"; mkdir -p "$CODEX_HOME"
   cp /opt/codex-policy/config.toml "$CODEX_HOME/config.toml"
-  timeout 30 codex "$@" debug prompt-input >/tmp/prompt.json || echo "codex $* exited $?" >&2
+  rc=0
+  timeout 30 codex "$@" debug prompt-input >/tmp/prompt.json || rc=$?
+  if [ "$rc" != 0 ]; then echo "exit-$rc"; return; fi
   sandbox="$(grep -o "sandbox_mode. is .[a-z-]*" /tmp/prompt.json | sed "s/.*[^a-z-]//" | sort -u | paste -sd, -)"
   approval="$(grep -o "Approval policy is currently [a-z-]*" /tmp/prompt.json | sed "s/.* //" | sort -u | paste -sd, -)"
   echo "${sandbox:-none} ${approval:-none}"

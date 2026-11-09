@@ -114,8 +114,8 @@ may not reach. So:
   `--full-auto`: omit them, or pass `--dangerously-bypass-approvals-and-sandbox`.
   A `workspace-write` request falls back to `read-only`, where every shell and
   MCP call fails. `agent-run rc fresh` needs v2.71 or later,
-  `--enable-codex-rc-thread` (off live; OpenProject #272, needs Tom's approval)
-  and a qualified target. The
+  `--enable-codex-rc-thread` (off live on 2026-11-09; OpenProject #272, needs
+  Tom's approval) and a qualified target. The
   [workflow guide](../../../docs/workflow-guide.md#start-an-owner-interactive-codex-task-on-a-paired-v2-host)
   has the recipe.
 - **Native subagent.** Its task title and the launch settings you asked for, such
