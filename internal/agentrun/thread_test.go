@@ -409,3 +409,19 @@ func TestThreadHelpNamesTheAPIRoute(t *testing.T) {
 	h.mustRun(ExitOK, "help", "thread")
 	contains(t, "help", h.stdout.String(), "ordinary session pod", "/v1/sessions/<host>/threads")
 }
+
+// The operator's profile fence is a 403: caller_not_allowed, with the
+// operator's own reason on stderr so the caller can act on it.
+func TestThreadStartCodexViaAPIProfileFence(t *testing.T) {
+	msg := `a session starts a thread only on a Codex host of its own profile, or on one it or its children started: you run profile "dev" and ` + threadHostName + ` runs "full"`
+	raw, _ := json.Marshal(apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeForbidden, Message: msg}})
+	h, c := threadAPIHarness(t, serveThread(http.StatusForbidden, raw))
+	h.mustRun(ExitFailed, codexThreadArgs(h)...)
+	if r := threadResult(t, h); r.Outcome != apiv1.ThreadFailed || r.Error.Code != "caller_not_allowed" || len(h.api.requests()) != 1 || c.calls != 0 {
+		t.Fatalf("result %+v", r.Error)
+	}
+	want := "agent-run: thread start: the API answered 403 forbidden: " + msg + "\n"
+	if h.stderr.String() != want {
+		t.Fatalf("stderr %q\nwant %q", h.stderr.String(), want)
+	}
+}

@@ -207,8 +207,8 @@ qualification story and needs Tom's approval.
 No new authority. The Codex route is `sessionExecBase` where RBAC already lets
 the caller create `pods/exec` in `dev-agents` (the v1 pod's ServiceAccount, a
 workbench session, Tom's kubeconfig). An ordinary session pod has no exec
-(D-19); since 2026-11-09 it goes through the operator's API, under the message
-route's rule (section 10). The Claude route is the existing create API and its
+(D-19); since 2026-11-09 it goes through the operator's API, under a narrower
+form of the message route's rule with a profile fence (section 10). The Claude route is the existing create API and its
 caller checks. agentd re-checks inside the host that it is a Codex remote
 session.
 
@@ -286,18 +286,39 @@ stream or anything else is `unconfirmed` (`host_result_unconfirmed`), never
 retried. Once the host check has run, the answer is 200 with one
 `thread-launch.v1` result. Every other status is an API error sent before any
 exec: a bad body (400, 422), a missing session (404), a caller refused (401,
-403), a latched task budget, or an API that cannot exec (503).
+403, including the profile fence below), a latched task budget, or an API
+that cannot exec (503).
 
-**Authorization.** The message route's rule (D-65): any authenticated caller
-may reach any session (Tom, a trusted client, any session). The portal reader
-is refused, as on every route not listed for it. One narrowing: a coordinator
-host (`kindCoordinator`) is refused. The message route admits it for its own
-children only, by passing `--expected-pod-uid` and `--expected-session-uid` to
-agentd, and `ctl thread-start` takes neither flag, so the narrower rule
-applies. The target's task budget is checked as for a message. The operator
-logs the caller and the handoff's byte length, never its text. No RBAC,
-admission, network policy or CRD changes: the operator already execs into
-`dev-agents` pods for messages.
+**Authorization.** It starts from the message route's rule (D-65), where any
+authenticated caller may reach any session, and is narrower in two ways. Tom
+and the trusted clients keep that rule. The portal reader is refused, as on
+every route not listed for it.
+
+- **Coordinator hosts are refused** (`kindCoordinator`). The message route
+  admits one for its own children only, by passing `--expected-pod-uid` and
+  `--expected-session-uid` to agentd, and `ctl thread-start` takes neither
+  flag.
+- **A session caller passes a profile fence.** A message is information from
+  its sender. A handoff is the first instruction of an always-allow thread,
+  which then acts with the host's profile: its credentials and egress. Without
+  a fence, a session on a narrower profile could make a host on a wider one
+  act for it. So a session is admitted only when its profile equals the
+  host's, or when it is a strict ancestor of the host through `spec.parent`
+  (it, or a child of it, started the host). Each profile is the pod's
+  `dev-env.haynesops.com/profile` label, else `spec.profile`, as the API reads
+  a caller's. The controller labels every pod it builds with the resolved
+  profile name, the templates' default when the spec names none, so an empty
+  profile is unresolved and never equals another, even another empty one. The
+  ancestor walk is the grant delegates' (`sessionAncestry`): live reads, the
+  name and UID of each parent, at most `maxSessionDepth + 2` steps. A refusal
+  is a 403 before any exec that names both profiles; agent-run reports
+  `caller_not_allowed` with that reason. Added 2026-11-09 at the
+  coordinator's review of #1007.
+
+The target's task budget is checked as for a message. The operator logs the
+caller and the handoff's byte length, never its text. No RBAC, admission,
+network policy or CRD changes: the operator already execs into `dev-agents`
+pods for messages.
 
 **Waiting.** The listener cuts a request at 30 seconds of read and 60 of write
 (`Runner`). A launch may wait up to 10 minutes, so this route moves both
@@ -309,8 +330,10 @@ agent-run reports `unconfirmed` (`api_result_unconfirmed`) and never resends.
 Each launch holds one exec stream for its wait; no extra limit is added.
 
 **Client.** agent-run in an ordinary session pod (the projected token, not the
-workbench) sends the one POST; Tom's laptop, the v1 pod and a workbench
-session keep the exec route. agent-run checks the result again and prints it.
+workbench) sends the one POST. Tom's laptop, the v1 pod and a workbench
+session keep the exec route (a workbench session is a session caller, so the
+fence would apply to it on this route). agent-run checks the result again and
+prints it.
 A lost answer or a 5xx is `unconfirmed`; nothing is retried. An operator
 without the route answers its catch-all 404 (`no route POST ...`) before
 authentication, and agent-run reports `route_unsupported`, naming the route
@@ -321,8 +344,10 @@ secret code, and this route does not carry one. Also excluded: the Claude path
 (it already uses the API), `thread status` (OP492), the Cursor/Grok adapter
 (OP491) and any change to launch permission flags (section 6a).
 
-**Acceptance.** Source tests use the API's fake exec and fake client, a real
-listener with short timeouts over HTTP/1.1 and HTTP/2, and agent-run against a
-fake API. Live proof waits for a paired host: from an ordinary session pod,
+**Acceptance.** Source tests use the API's fake exec and fake client (the
+profile fence among them: same profile, parent and grandparent admitted;
+another profile, a sibling, a child and empty profiles refused before exec;
+Tom and trusted clients on any profile), a real listener with short timeouts
+over HTTP/1.1 and HTTP/2, and agent-run against a fake API. Live proof waits for a paired host: from an ordinary session pod,
 `thread start --agent codex --host <host>` must print `responded` and Tom must
 see the thread on his phone.

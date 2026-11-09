@@ -658,7 +658,11 @@ worktree, as on the phone. --wait (at most 10m) bounds the whole launch.
                   uses. An ordinary session pod has no exec (D-19), so the operator's API
                   runs it there instead (POST /v1/sessions/<host>/threads, as it delivers
                   agent-run msg); an operator released before that route is a refusal
-                  (route_unsupported), never a fallback. The thread is the
+                  (route_unsupported), never a fallback. The API is narrower than msg:
+                  a session reaches only a host of its own profile, or one it or its
+                  children started, because the handoff is the first instruction of an
+                  always-allow thread that acts with the host's profile; anything else
+                  is caller_not_allowed. The thread is the
                   native codex --remote TUI (scripts/codex-clean-session.py) in a tmux
                   session named --name (default thread-<UTC mmdd-HHMMSS>) in
                   ~/repos/<repo> on the host (default: the host's repo). Never codex exec

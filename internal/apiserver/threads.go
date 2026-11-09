@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	utilexec "k8s.io/client-go/util/exec"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -21,11 +22,13 @@ import (
 // no exec into another pod (D-19), so `agent-run thread start --agent codex`
 // from one asks the operator, which runs the host's own `agentd ctl
 // thread-start` there by exec, as it delivers a message (D-65). The caller gets
-// no exec and no new right: the rule is the message route's, any caller may
-// reach any session, except a coordinator host, which this route refuses.
-// thread-start takes none of the target fences (--expected-pod-uid and
-// --expected-session-uid) a coordinator's exec carries, so the narrower rule
-// applies.
+// no exec. The rule is narrower than the message route's in two ways. A
+// coordinator host is refused: thread-start takes none of the target fences
+// (--expected-pod-uid and --expected-session-uid) a coordinator's exec carries.
+// A session caller passes a profile fence (threadProfileFence): a handoff is
+// the first instruction of an always-allow thread, stronger than a message, so
+// a session reaches only a host of its own profile or one below it. Tom and
+// the trusted clients keep the message route's rule: any session.
 
 const (
 	// threadExecGrace stops a stuck exec this long after the host's own wait
@@ -91,6 +94,9 @@ func (s *Server) startThread(ctx context.Context, w http.ResponseWriter, r *http
 	if err != nil {
 		return 0, nil, err
 	}
+	if err := s.threadProfileFence(ctx, c, sess, pod); err != nil {
+		return 0, nil, err
+	}
 	if s.Exec == nil {
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "this API cannot exec into pods")
 	}
@@ -107,6 +113,34 @@ func (s *Server) startThread(ctx context.Context, w http.ResponseWriter, r *http
 	// The handoff goes on stdin only, exactly as given: never in argv or a log.
 	err = s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, argv, strings.NewReader(req.Handoff), stdout, stderr)
 	return answer(hostThreadResult(rec, sess.Name, wait, []byte(stdout.String()), stderr.String(), err))
+}
+
+// threadProfileFence admits a session caller only to a host of its own profile
+// or to a host it is a strict ancestor of (DESIGN-057 section 10). A handoff is
+// the first instruction of an always-allow thread, which then acts with the
+// host's profile: its credentials and egress. So a session on a narrower
+// profile must not drive a host on a wider one. Each side's profile is its
+// pod's label, else its spec, as resolveSession reads the caller's. The
+// controller labels every pod it builds with the resolved profile name (the
+// templates' default when the spec names none), so an empty profile is
+// unresolved and never equal to another, even another empty one. Callers that
+// are not sessions keep the message route's rule.
+func (s *Server) threadProfileFence(ctx context.Context, c *caller, host *v1alpha1.AgentSession, pod *corev1.Pod) error {
+	if c.kind != kindSession {
+		return nil
+	}
+	hostProfile := pod.Labels[v1alpha1.LabelProfile]
+	if hostProfile == "" {
+		hostProfile = host.Spec.Profile
+	}
+	if c.profile != "" && c.profile == hostProfile {
+		return nil
+	}
+	if c.session != nil && s.sessionAncestry(ctx, host, c.session.Name, c.session.UID) == ancestryFound {
+		return nil
+	}
+	return forbidden("a session starts a thread only on a Codex host of its own profile, or on one it or its children started: you run profile %q and %s runs %q",
+		c.profile, host.Name, hostProfile)
 }
 
 // validThreadStart applies agent-run's own input rules again; no message

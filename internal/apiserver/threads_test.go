@@ -433,3 +433,74 @@ func (f *fixture) deletePod(name string) {
 		f.t.Fatal(err)
 	}
 }
+
+// The profile fence (DESIGN-057 section 10): a session reaches only a host of
+// its own profile, or one below it on its chain of children, because a handoff
+// is the first instruction of an always-allow thread that acts with the host's
+// profile. Tom and trusted clients keep the message route's rule. A refusal is
+// a 403 before any exec.
+func TestStartThreadProfileFence(t *testing.T) {
+	f := newFixture(t)
+	ex := &threadExec{}
+	f.srv.Exec = ex
+	post := func(host, tok string) *httptest.ResponseRecorder {
+		ex.out = hostThreadOutput(t, host, apiv1.ThreadResponded, "")
+		return f.do(http.MethodPost, apiv1.SessionThreadsPath(host), tok, threadRequest())
+	}
+	admitted := func(name, host, tok string) {
+		t.Helper()
+		before := ex.calls()
+		if res := threadAnswer(t, post(host, tok)); res.Outcome != apiv1.ThreadResponded || ex.calls() != before+1 {
+			t.Fatalf("%s: result %+v, %d execs", name, res.Error, ex.calls()-before)
+		}
+	}
+	refused := func(name, host, tok string) {
+		t.Helper()
+		before := ex.calls()
+		e := wantError(t, post(host, tok), http.StatusForbidden, apiv1.CodeForbidden)
+		if !strings.Contains(e.Message, "own profile") || ex.calls() != before {
+			t.Fatalf("%s: %q, %d execs", name, e.Message, ex.calls()-before)
+		}
+	}
+	f.codexHostPod("codex-full") // profile full, parent Tom
+	same := f.sessionPod("s-full", "full", 0)
+	narrow := f.sessionPod("s-dev", "dev", 0)
+	admitted("same profile", "codex-full", same)
+	refused("other profile", "codex-full", narrow)
+	if e := wantError(t, post("codex-full", narrow), http.StatusForbidden, apiv1.CodeForbidden); !strings.Contains(e.Message, `"dev"`) || !strings.Contains(e.Message, `"full"`) {
+		t.Fatalf("the refusal does not name both profiles: %q", e.Message)
+	}
+
+	// A host the caller started, directly or through a child, is admitted on
+	// any profile; a sibling's is not.
+	f.codexHostPod("codex-child")
+	f.editSession("codex-child", func(s *v1alpha1.AgentSession) { s.Spec.Parent = "s-dev" })
+	admitted("direct parent", "codex-child", narrow)
+	f.sessionPod("s-mid", "dev", 1)
+	f.editSession("s-mid", func(s *v1alpha1.AgentSession) { s.Spec.Parent = "s-dev" })
+	f.codexHostPod("codex-grandchild")
+	f.editSession("codex-grandchild", func(s *v1alpha1.AgentSession) { s.Spec.Parent = "s-mid" })
+	admitted("grandparent", "codex-grandchild", narrow)
+	sibling := f.sessionPod("s-sibling", "dev", 1)
+	f.editSession("s-sibling", func(s *v1alpha1.AgentSession) { s.Spec.Parent = "s-dev" })
+	refused("sibling", "codex-child", sibling)
+	// The child does not reach its parent's host either.
+	refused("descendant", "codex-child", f.sessionPod("s-down", "dev", 2))
+
+	// Tom and a trusted client keep the message route's rule on any profile.
+	f.editPod("codex-full", func(p *corev1.Pod) { p.Labels[v1alpha1.LabelProfile] = "ops" })
+	admitted("human", "codex-full", tokHuman)
+	admitted("client", "codex-full", tokClient)
+	refused("ops host", "codex-full", same)
+
+	// A pod without the label falls back to spec.profile, as resolveSession
+	// does for the caller.
+	f.editPod("codex-full", func(p *corev1.Pod) { delete(p.Labels, v1alpha1.LabelProfile) })
+	f.editSession("codex-full", func(s *v1alpha1.AgentSession) { s.Spec.Profile = "full" })
+	admitted("spec profile", "codex-full", same)
+
+	// The controller labels every pod with its resolved profile, so an empty
+	// one is unresolved: it never equals another, even an empty one.
+	f.editSession("codex-full", func(s *v1alpha1.AgentSession) { s.Spec.Profile = "" })
+	refused("both empty", "codex-full", f.sessionPod("s-empty", "", 0))
+}

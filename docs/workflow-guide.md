@@ -746,8 +746,12 @@ Use this when Tom must see and drive the thread on his phone.
    uses. An ordinary session pod has no exec (D-19), so there agent-run asks
    the operator's API instead (`POST /v1/sessions/<host>/threads`, DESIGN-057
    section 10), which runs the same command in the host as it delivers
-   `agent-run msg`. An operator released before that route answers
-   `route_unsupported`; agent-run never falls back or retries:
+   `agent-run msg`. It is narrower than `msg`: a session reaches only a
+   host of its own profile, or one it or its children started, because the
+   handoff is the first instruction of an always-allow thread that acts with
+   the host's profile (otherwise `caller_not_allowed`). An operator released
+   before that route answers `route_unsupported`; agent-run never falls back
+   or retries:
 
    ```bash
    "${v2run[@]}" thread start --agent codex --host <codex-host> \
