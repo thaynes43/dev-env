@@ -3,7 +3,9 @@ package apiserver
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -126,4 +128,101 @@ func TestWorkbenchSessionCreatesCodexHost(t *testing.T) {
 	if w := f.do(http.MethodPost, protocol.HeartbeatPath("haynes-ops-1019-100002"), wbTok, status("haynes-ops-1019-100002")); w.Code != http.StatusNoContent {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
+}
+
+// OP502 (Tom, 2026-11-09): a workbench session is the superuser class, so its
+// workers run guarded unless it says otherwise. Its child runs on the default
+// profile when the request names none, as a trusted client's does, and on a
+// named profile when that profile is valid, workbench included. The Codex host
+// rule and an ordinary session's parent-profile rule are unchanged.
+func TestWorkbenchSessionChildProfile(t *testing.T) {
+	f := newFixture(t)
+	wb := workbenchSessionToken(t, f, "haynes-ops-1109-100000")
+	create := func(tok string, req apiv1.CreateSessionRequest) *v1alpha1.AgentSession {
+		t.Helper()
+		f.now = f.now.Add(time.Second)
+		w := f.do(http.MethodPost, apiv1.SessionsPath, tok, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("profile %q: %d %s", req.Profile, w.Code, w.Body.String())
+		}
+		v := decode[apiv1.Session](t, w)
+		s := f.session(v.Name)
+		if v.Profile != s.Spec.Profile {
+			t.Fatalf("the response says profile %q, the session %q", v.Profile, s.Spec.Profile)
+		}
+		return s
+	}
+
+	// No profile: the templates' default, not the workbench's.
+	s := create(wb, task())
+	if s.Spec.Profile != "" || s.Spec.Parent != "haynes-ops-1109-100000" || s.Labels[v1alpha1.LabelDepth] != "1" {
+		t.Fatalf("no profile: profile %q, parent %q, depth %q", s.Spec.Profile, s.Spec.Parent, s.Labels[v1alpha1.LabelDepth])
+	}
+	if name, _, err := f.tmpl.Profile(s.Spec.Profile); err != nil || name != "full" {
+		t.Fatalf("the default resolves to %q (%v), want the templates' default full", name, err)
+	}
+	// An explicit workbench: honoured.
+	if s := create(wb, withProfile(task(), "workbench")); s.Spec.Profile != "workbench" || s.Labels[templates.CoordinatorIdentityLabel] != "" {
+		t.Fatalf("workbench: profile %q, admission %q", s.Spec.Profile, s.Labels[templates.CoordinatorIdentityLabel])
+	}
+	// Another valid profile: honoured.
+	if s := create(wb, withProfile(task(), "dev")); s.Spec.Profile != "dev" {
+		t.Fatalf("dev: profile %q", s.Spec.Profile)
+	}
+	// ops, the summoned route's profile: honoured too, as for a trusted
+	// client's create. It holds less than workbench, so it is no escalation.
+	if _, _, err := f.tmpl.Profile("ops"); err != nil {
+		t.Fatalf("the fixture templates have no ops profile: %v", err)
+	}
+	if s := create(wb, withProfile(task(), "ops")); s.Spec.Profile != "ops" {
+		t.Fatalf("ops: profile %q", s.Spec.Profile)
+	}
+	// A profile the templates lack: refused, and nothing is created.
+	before := f.sessionCount()
+	e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, wb, withProfile(task(), "root")), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	if len(e.Fields) != 1 || e.Fields[0].Field != "profile" || f.sessionCount() != before {
+		t.Fatalf("unknown profile: %+v, %d sessions created", e, f.sessionCount()-before)
+	}
+
+	// The Codex host a workbench session starts still runs on the default
+	// profile, and naming any profile, workbench included, is still refused.
+	host := apiv1.CreateSessionRequest{Repo: "haynes-ops", Agent: "codex", Mode: "remote", Model: "gpt-6-luna"}
+	if s := create(wb, host); s.Spec.Profile != "" {
+		t.Fatalf("codex host: profile %q, want the default", s.Spec.Profile)
+	}
+	for _, profile := range []string{"workbench", "full", "dev"} {
+		e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, wb, withProfile(host, profile)), http.StatusForbidden, apiv1.CodeForbidden)
+		if !strings.Contains(e.Message, "omit the profile") {
+			t.Fatalf("codex host on %s: %q", profile, e.Message)
+		}
+	}
+
+	// A workbench session that is itself a child follows the same rule.
+	deep := workbenchSessionToken(t, f, "haynes-ops-1109-100001")
+	deepSess := f.session("haynes-ops-1109-100001")
+	deepSess.Labels[v1alpha1.LabelDepth] = "1"
+	if err := f.c.Update(context.Background(), deepSess); err != nil {
+		t.Fatal(err)
+	}
+	if s := create(deep, task()); s.Spec.Profile != "" || s.Labels[v1alpha1.LabelDepth] != "2" {
+		t.Fatalf("deep workbench child: profile %q, depth %q", s.Spec.Profile, s.Labels[v1alpha1.LabelDepth])
+	}
+
+	// An ordinary session's child still inherits its parent's profile, and
+	// another profile, workbench included, is still refused.
+	plain := f.sessionPod("haynes-ops-1109-100002", "dev", 0)
+	if s := create(plain, task()); s.Spec.Profile != "dev" {
+		t.Fatalf("ordinary child: profile %q, want its parent's dev", s.Spec.Profile)
+	}
+	for _, profile := range []string{"workbench", "full"} {
+		e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, plain, withProfile(task(), profile)), http.StatusForbidden, apiv1.CodeForbidden)
+		if !strings.Contains(e.Message, "parent's profile dev") {
+			t.Fatalf("ordinary child on %s: %q", profile, e.Message)
+		}
+	}
+}
+
+func withProfile(r apiv1.CreateSessionRequest, profile string) apiv1.CreateSessionRequest {
+	r.Profile = profile
+	return r
 }

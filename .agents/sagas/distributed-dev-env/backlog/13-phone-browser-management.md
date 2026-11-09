@@ -140,7 +140,9 @@ These remain now that NB-01 and NB-02 are installed.
 
 **Note for Tom.** With NB-02 installed, every workbench session can restart the v2
 services. That includes the standby and every session it starts, because a child
-gets its parent's profile. The guard keeps that to a restart: no workbench session
+gets its parent's profile. *(Since 2026-11-09, OP502, a workbench session's child
+gets the workbench profile only when it names it; otherwise it runs on the
+default profile.)* The guard keeps that to a restart: no workbench session
 can change those services' image, arguments or service account. With NB-01
 installed, workbench sessions can also start a keeper login ceremony; the sign-in still needs
 Tom. The v1 pod can do both today, so this is parity, and this plan adds no gate.
