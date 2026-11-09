@@ -124,11 +124,12 @@ These large files are references. Search them for the item you need:
   Routine coordination needs no phone prompt and grants no authority to answer for
   Tom.
 - **User questions and decisions go to Tom one at a time through the native phone
-  prompt** (Claude: AskUserQuestion), when they arise. Commentary, final-message lists,
-  PR comments and a `Q-NN` record are not delivery: record the question, push the
-  prompt, then fold the answer back as a dated ruling. Codex phone delivery is not
-  yet verified; a Codex session reports that gap, keeps the decision pending and
-  continues independent authorized work.
+  prompt** (Claude: AskUserQuestion), when they arise. Verify the premise before
+  asking. Commentary, final-message lists, PR comments and a `Q-NN` record are not
+  delivery: record the question, push the prompt, then fold the answer back as a
+  dated ruling. A client that cannot deliver the phone prompt (Codex delivery is not
+  yet verified) reports that gap, keeps the decision pending, invents no notification
+  channel and continues independent authorized work.
 - **Worktree per task.** Branch `agent/<task>`, a ready PR, and a squash merge by you
   once required checks are green and findings are handled. Never push to main.
 - **Agent-loop skills** live in `.agents/skills/`: `supervised-dispatch` before you
