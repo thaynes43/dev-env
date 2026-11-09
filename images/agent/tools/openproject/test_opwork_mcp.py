@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import types
 import tempfile
 import unittest
 from unittest import mock
@@ -368,6 +369,26 @@ class Calls(Harness, unittest.TestCase):
         result = self.call("openproject_ping")
         self.assertTrue(result["isError"])
         self.assertIn("internal error: ValueError", text(result))
+
+    def test_a_401_drops_the_cached_token_and_the_next_call_reads_it_again(self):
+        api = types.SimpleNamespace(_token="cached")
+        self.runner.api = api
+        real = self.fake.request
+        self.runner.tracker.request = lambda method, path, payload=None: (401, {"message": "unauthorized"})
+        failed = self.call("openproject_show", id=485)
+        self.assertTrue(failed["isError"])
+        self.assertIn("HTTP 401", text(failed))
+        self.assertIn("cached API token was dropped", text(failed))
+        self.assertIsNone(api._token)
+        self.runner.tracker.request = real
+        self.assertFalse(self.call("openproject_show", id=485)["isError"])
+        self.assertIsNone(api._token)  # no 401, nothing to drop, and nothing was re-set by the fake
+
+    def test_other_errors_keep_the_cached_token(self):
+        api = types.SimpleNamespace(_token="cached")
+        self.runner.api = api
+        self.assertTrue(self.call("openproject_show", id=999)["isError"])  # an internal error, not a 401
+        self.assertEqual(api._token, "cached")
 
     def test_argparse_refusal_is_an_error(self):
         code, out, err = self.runner.run(["show", "not-a-number"])

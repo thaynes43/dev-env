@@ -188,6 +188,7 @@ class Opwork:
         self.module = None
         self.tracker = None
         self.unavailable = None
+        self.api = None  # agent-api.py's module, whose `_token` is this process's cached token
 
     def load(self):
         if self.module is None:
@@ -208,7 +209,7 @@ class Opwork:
             try:
                 project = os.environ.get("OPWORK_PROJECT", opwork.PROJECT)
                 if self.tracker is None and argv[0] not in ("checkpoint", "pending"):
-                    api = opwork.load_api()
+                    api = self.api = opwork.load_api()
                     self.unavailable = api.ApiUnavailable
                     self.tracker = opwork.Tracker(api.request, api.ApiUnavailable, project)
                 code = opwork.main(["--project", project, *argv], self.tracker, self.unavailable)
@@ -219,7 +220,14 @@ class Opwork:
                 code = 1
             finally:
                 sys.stdin = saved_stdin
-        return code, out.getvalue(), err.getvalue()
+        out, err = out.getvalue(), err.getvalue()
+        if code and re.search(r"HTTP 401\b", out + err):
+            # The helper may have issued a new token. opwork reads it once per CLI run; this
+            # process is long-lived, so drop the cached one. Nothing is replayed: the agent retries.
+            if self.api is not None:
+                self.api._token = None
+            err += "\nThe cached API token was dropped; the next call reads it again."
+        return code, out, err
 
 
 def call_tool(runner, name, args):
