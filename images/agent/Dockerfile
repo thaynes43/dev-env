@@ -153,8 +153,14 @@ ARG CNPG_PLUGIN_VERSION=1.30.1
 # >=2.1.284, and this version also repoints the `sonnet` alias to it. That floor is
 # load-bearing: Sonnet 5.5 is the subagent tier for routine coding and tests in
 # config/claude/CLAUDE.md, and it has an agent-run picker row.
+# 2.1.321 (2026-11-09): Claude Fable 5.2. 2.1.321 is the first release whose binary
+# contains `claude-fable-5-2`; 2.1.319 (npm `latest`) knows only `claude-fable-5-1`.
+# An older CLI still sends the id and the server serves it, but warns "doesn't
+# recognize the model" and assumes a 200k context window. This is a `next`-channel
+# build (the changelog has no 2.1.320 or 2.1.321 entries yet). The usage collector's
+# exact-version set does not include it: see docs/operator-allowance-collector.md.
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_CODE_VERSION=2.1.312
+ARG CLAUDE_CODE_VERSION=2.1.321
 # Codex is the managed STANDALONE, not the npm package — only the standalone can run
 # `codex remote-control`. v1 installed it at boot onto the PVC (dev-init.sh); here the
 # image installs it, under /opt/dev-env/codex (never under CODEX_HOME, which is the
