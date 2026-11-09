@@ -117,7 +117,9 @@ The helper accepts only the qualified versions: Codex 0.160.1, Claude Code
 2.1.296 or 2.1.312, and Cursor 2026.10.22-27dcf5f. The Claude versions are an
 exact set of full `--version` strings, not a range: each is added only with its
 own recorded evidence (see the verification notes), and every other version
-refuses. Codex uses its
+refuses. The agent image's Claude Code pin can be ahead of this set (2.1.321 from
+2026-11-09, for Fable 5.2); a host on an unqualified version reports
+`version_unqualified` for Claude until its own evidence is recorded. Codex uses its
 official account/quota RPC with non-forced matching account barriers. Claude
 uses normal `auth status` before/after the isolated local `/usage` builtin;
 the result must explicitly report success with zero turns, tokens and cost. A
