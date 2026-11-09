@@ -346,7 +346,7 @@ func TestDecodeAssistantAnswerFailures(t *testing.T) {
 				}
 			}
 			got, err := decodeFixture(tc.raw, use)
-			if err != tc.want {
+			if !errors.Is(err, tc.want) {
 				t.Fatalf("got %v want %v", err, tc.want)
 			}
 			if got != (answerResult{}) {
@@ -365,7 +365,7 @@ func TestDecodeAssistantAnswerBoundsAndPrivacy(t *testing.T) {
 	canary := "CANARY-ANSWER-TEXT"
 	oversized := bytes.Repeat([]byte("x"), maxAnswerEncoded+1)
 	got, err := decodeAssistantAnswer(bytes.NewReader(oversized), expect)
-	if err != errOversized || got != (answerResult{}) {
+	if !errors.Is(err, errOversized) || got != (answerResult{}) {
 		t.Fatalf("oversized got %v %q", err, got.Text)
 	}
 	if strings.Contains(err.Error(), "x") && len(err.Error()) > len("oversized") {
@@ -374,7 +374,7 @@ func TestDecodeAssistantAnswerBoundsAndPrivacy(t *testing.T) {
 	invalid := []byte(producerDoc(expect, "hello", 1))
 	invalid = append(invalid, 0xff)
 	got, err = decodeAssistantAnswer(bytes.NewReader(invalid), expect)
-	if err != errInvalidUTF8 || got.Text != "" {
+	if !errors.Is(err, errInvalidUTF8) || got.Text != "" {
 		t.Fatalf("utf8 got %v %q", err, got.Text)
 	}
 	raw := producerDoc(expect, canary, 1)
@@ -383,13 +383,13 @@ func TestDecodeAssistantAnswerBoundsAndPrivacy(t *testing.T) {
 		PromptSHA256:   expect.PromptSHA256,
 		ModelRequested: expect.ModelRequested,
 	})
-	if err != errBinding || got != (answerResult{}) {
+	if !errors.Is(err, errBinding) || got != (answerResult{}) {
 		t.Fatalf("binding got %v %#v", err, got)
 	}
 	if strings.Contains(err.Error(), canary) || strings.Contains(err.Error(), "CANARYSESSION") {
 		t.Fatalf("binding error echoes identifiers")
 	}
-	if _, err = decodeAssistantAnswer(nil, expect); err != errRead {
+	if _, err = decodeAssistantAnswer(nil, expect); !errors.Is(err, errRead) {
 		t.Fatalf("nil reader %v", err)
 	}
 }
@@ -440,7 +440,7 @@ func TestDecodeAssistantAnswerReadError(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := decodeAssistantAnswer(tc.r, expect)
-			if err != errRead || got != (answerResult{}) {
+			if !errors.Is(err, errRead) || got != (answerResult{}) {
 				t.Fatalf("got %v %#v", err, got)
 			}
 			if err.Error() != "read-error" || strings.Contains(err.Error(), "CANARY-READ") || strings.Contains(err.Error(), "hello") {
@@ -455,7 +455,7 @@ func TestDecodeAssistantAnswerMismatchedLowercaseHash(t *testing.T) {
 	use := expect
 	use.PromptSHA256 = strings.Repeat("cd", 32)
 	got, err := decodeFixture(producerDoc(expect, "hello", 1), use)
-	if err != errBinding || got != (answerResult{}) {
+	if !errors.Is(err, errBinding) || got != (answerResult{}) {
 		t.Fatalf("got %v %#v", err, got)
 	}
 	if strings.Contains(err.Error(), expect.PromptSHA256) || strings.Contains(err.Error(), use.PromptSHA256) {
@@ -468,7 +468,7 @@ func TestDecodeAssistantAnswerEscapedDuplicateKey(t *testing.T) {
 	doc := producerDoc(expect, "hello", 1)
 	raw := `{"\u0072eceipt":"assistant-answer-v1",` + doc[1:]
 	got, err := decodeFixture(raw, expect)
-	if err != errDuplicateField || got != (answerResult{}) {
+	if !errors.Is(err, errDuplicateField) || got != (answerResult{}) {
 		t.Fatalf("got %v %#v", err, got)
 	}
 	if strings.Contains(err.Error(), "receipt") || strings.Contains(err.Error(), "hello") {
@@ -482,7 +482,7 @@ func TestDecodeAssistantAnswerEveryOmission(t *testing.T) {
 	for _, name := range answerFields {
 		t.Run(name, func(t *testing.T) {
 			got, err := decodeFixture(answerObject(withoutField(base, name)), expect)
-			if err != errMissingField || got != (answerResult{}) {
+			if !errors.Is(err, errMissingField) || got != (answerResult{}) {
 				t.Fatalf("got %v %#v", err, got)
 			}
 			if strings.Contains(err.Error(), name) || strings.Contains(err.Error(), "hello") {
@@ -516,7 +516,7 @@ func TestDecodeAssistantAnswerInvalidUTF8InsideText(t *testing.T) {
 	}
 	raw[idx] = 0xff
 	got, err := decodeAssistantAnswer(bytes.NewReader(raw), expect)
-	if err != errInvalidUTF8 || got != (answerResult{}) {
+	if !errors.Is(err, errInvalidUTF8) || got != (answerResult{}) {
 		t.Fatalf("got %v %#v", err, got)
 	}
 	if strings.Contains(got.Text, "\uFFFD") || strings.Contains(err.Error(), "hello") {

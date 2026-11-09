@@ -72,7 +72,7 @@ func TestCursorAnswerTaskExclusive(t *testing.T) {
 		return nil, errors.New("CANARY-EXCL")
 	}
 	got, err := runCursorAnswerTask(context.Background(), task, sameAnswerContext(current), decisions, start)
-	if starts != 1 || err != errCursorScaffoldProcess || got != (cursorBoundAnswer{}) {
+	if starts != 1 || !errors.Is(err, errCursorScaffoldProcess) || got != (cursorBoundAnswer{}) {
 		t.Fatalf("starts=%d err=%v", starts, err)
 	}
 	msg := err.Error()
@@ -85,7 +85,7 @@ func TestCursorAnswerTaskExclusive(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = runCursorAnswerTask(context.Background(), task, sameAnswerContext(current), decisions, start)
-	if starts != 1 || err != errCursorScaffoldReplay || got != (cursorBoundAnswer{}) {
+	if starts != 1 || !errors.Is(err, errCursorScaffoldReplay) || got != (cursorBoundAnswer{}) {
 		t.Fatalf("replay starts=%d err=%v", starts, err)
 	}
 	if strings.Contains(err.Error(), text) || strings.Contains(err.Error(), path) || strings.Contains(err.Error(), "CANARY-EXCL") {

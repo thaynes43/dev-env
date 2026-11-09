@@ -5,6 +5,7 @@ package agentd
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,7 +112,7 @@ func advTaskDrive(t *testing.T, text string, alter func(call int, run *advTaskRu
 		signals = len(run.peer.signals)
 		run.peer.mu.Unlock()
 	}
-	if run.starts != 1 || run.peer == nil || signals != 0 || !run.sawOriginal || err != want {
+	if run.starts != 1 || run.peer == nil || signals != 0 || !run.sawOriginal || !errors.Is(err, want) {
 		t.Fatalf("starts=%d calls=%d signals=%d saw=%v err=%v", run.starts, run.calls, signals, run.sawOriginal, err)
 	}
 	return run

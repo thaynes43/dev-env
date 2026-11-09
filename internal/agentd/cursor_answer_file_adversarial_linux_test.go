@@ -79,7 +79,7 @@ func TestCursorAnswerFileAdversarialIdentityIsNotAPath(t *testing.T) {
 	}
 	nulled := task.binding
 	nulled.native.InvocationID = id + "\x00"
-	if _, err := cursorAnswerBasename(nulled); err != errCursorAnswerPath {
+	if _, err := cursorAnswerBasename(nulled); !errors.Is(err, errCursorAnswerPath) {
 		t.Fatal(err)
 	}
 	decoy := "CANARY-IDENTITY-PATH"
@@ -112,7 +112,7 @@ func TestCursorAnswerFileAdversarialIdentityIsNotAPath(t *testing.T) {
 	opened := false
 	got, err = acceptCursorAnswerFileAt(context.Background(), swapped, done, nil, sameAnswerContext(current), &cursorAnswerHooks{onRead: func() { opened = true }})
 	advAnswerZero(t, got, err, "CANARY-OTHER-WORKTREE", other, text)
-	if opened || err != errCursorTaskBinding {
+	if opened || !errors.Is(err, errCursorTaskBinding) {
 		t.Fatalf("opened=%v err=%v", opened, err)
 	}
 }
@@ -138,7 +138,7 @@ func TestCursorAnswerFileAdversarialRefusesUncleanPaths(t *testing.T) {
 			fds.close(fd)
 			t.Fatalf("opened %q", path)
 		}
-		if err != errCursorAnswerPath || strings.Contains(err.Error(), root) || strings.Contains(err.Error(), "CANARY-UNCLEAN-PATH") {
+		if !errors.Is(err, errCursorAnswerPath) || strings.Contains(err.Error(), root) || strings.Contains(err.Error(), "CANARY-UNCLEAN-PATH") {
 			t.Fatal(err)
 		}
 	}
@@ -164,7 +164,7 @@ func TestCursorAnswerFileAdversarialSymlinkToOwnedTarget(t *testing.T) {
 	}
 	got, err := acceptCursorAnswerFile(context.Background(), task, completed, nil, sameAnswerContext(current))
 	advAnswerZero(t, got, err, text, target, "owned-target")
-	if err != errCursorAnswerSymlink {
+	if !errors.Is(err, errCursorAnswerSymlink) {
 		t.Fatal(err)
 	}
 	info, statErr := os.Lstat(leaf)
@@ -208,7 +208,7 @@ func TestCursorAnswerFileAdversarialObservedGrowth(t *testing.T) {
 		grew = true
 	}})
 	advAnswerZero(t, got, err, text, "GROWTH-CANARY", path)
-	if !grew || err != errCursorAnswerChanged {
+	if !grew || !errors.Is(err, errCursorAnswerChanged) {
 		t.Fatal(err)
 	}
 }
@@ -235,7 +235,7 @@ func TestCursorAnswerFileAdversarialObservedLeafLink(t *testing.T) {
 		replaced = true
 	}})
 	advAnswerZero(t, got, err, text, "CANARY-LINK-TARGET", target)
-	if !replaced || err != errCursorAnswerChanged {
+	if !replaced || !errors.Is(err, errCursorAnswerChanged) {
 		t.Fatal(err)
 	}
 	info, statErr := os.Lstat(path)
@@ -264,7 +264,7 @@ func TestCursorAnswerFileAdversarialObservedFifo(t *testing.T) {
 		replaced = true
 	}})
 	advAnswerZero(t, got, err, text, path)
-	if !replaced || err != errCursorAnswerChanged {
+	if !replaced || !errors.Is(err, errCursorAnswerChanged) {
 		t.Fatal(err)
 	}
 	info, statErr := os.Lstat(path)
@@ -286,7 +286,7 @@ func TestCursorAnswerFileAdversarialRegularClose(t *testing.T) {
 		return advCloseSupplied(fd, true, &closes)
 	}})
 	advAnswerZero(t, got, err, text, "synthetic-regular-close", task.plan.worktree)
-	if err != errCursorAnswerChanged {
+	if !errors.Is(err, errCursorAnswerChanged) {
 		t.Fatal(err)
 	}
 	if len(closes) == 0 || !closes[0].dir || closes[0].regular || closes[0].hookErr != nil {

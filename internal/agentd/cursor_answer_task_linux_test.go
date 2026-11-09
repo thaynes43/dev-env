@@ -171,7 +171,7 @@ func TestCursorAnswerTaskRefusesBeforeStart(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := runCursorAnswerTask(tc.ctx, task, tc.current, tc.file, tc.start)
 			assertAnswerTaskZero(t, got, err, task.plan.prompt)
-			if err != tc.want {
+			if !errors.Is(err, tc.want) {
 				t.Fatal(err)
 			}
 		})
@@ -202,7 +202,7 @@ func TestCursorAnswerTaskSyntheticFailures(t *testing.T) {
 				return tc.peer(task)
 			})
 			assertAnswerTaskZero(t, got, err, "CANARY-START", "CANARY-WAIT", task.plan.prompt)
-			if err != tc.want {
+			if !errors.Is(err, tc.want) {
 				t.Fatal(err)
 			}
 		})
@@ -241,7 +241,7 @@ func TestCursorAnswerTaskAnswerFile(t *testing.T) {
 				return cursorScaffoldExited(cursorScaffoldStream(cursorScaffoldFrames(task.plan)), nil), nil
 			})
 			assertAnswerTaskZero(t, got, err, text, task.plan.prompt)
-			if err != tc.want {
+			if !errors.Is(err, tc.want) {
 				t.Fatal(err)
 			}
 		})
@@ -262,7 +262,7 @@ func TestCursorAnswerTaskContext(t *testing.T) {
 			return nil, nil
 		})
 		assertAnswerTaskZero(t, got, err, text)
-		if err != errCursorTaskBinding {
+		if !errors.Is(err, errCursorTaskBinding) {
 			t.Fatal(err)
 		}
 	})
@@ -286,7 +286,7 @@ func TestCursorAnswerTaskContext(t *testing.T) {
 			return cursorScaffoldExited(cursorScaffoldStream(cursorScaffoldFrames(task.plan)), nil), nil
 		})
 		assertAnswerTaskZero(t, got, err, text)
-		if err != errCursorTaskBinding || calls != 2 {
+		if !errors.Is(err, errCursorTaskBinding) || calls != 2 {
 			t.Fatalf("calls=%d err=%v", calls, err)
 		}
 		if _, statErr := os.Stat(answerPath); statErr != nil {
@@ -310,7 +310,7 @@ func TestCursorAnswerTaskContext(t *testing.T) {
 			return cursorScaffoldExited(cursorScaffoldStream(cursorScaffoldFrames(task.plan)), nil), nil
 		})
 		assertAnswerTaskZero(t, got, err, text)
-		if err != errCursorTaskBinding || calls != 2 {
+		if !errors.Is(err, errCursorTaskBinding) || calls != 2 {
 			t.Fatalf("calls=%d err=%v", calls, err)
 		}
 	})
@@ -340,7 +340,7 @@ func TestCursorAnswerTaskReplayAndDefaultCommand(t *testing.T) {
 	}
 	got, err := runCursorAnswerTask(context.Background(), task, sameAnswerContext(current), decisions, start)
 	assertAnswerTaskZero(t, got, err, task.plan.prompt)
-	if err != errCursorScaffoldReplay || starts != 1 {
+	if !errors.Is(err, errCursorScaffoldReplay) || starts != 1 {
 		t.Fatalf("starts=%d err=%v", starts, err)
 	}
 	if _, err := os.Stat(filepath.Join(task.plan.stateRoot, "cursor-scaffold-"+task.plan.invocation+".json")); err != nil {

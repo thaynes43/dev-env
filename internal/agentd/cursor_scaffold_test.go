@@ -574,7 +574,7 @@ func TestCursorScaffoldCleanupWaitErrorsRemainExplicit(t *testing.T) {
 		peer := &cursorScaffoldFakePeer{done: make(chan error, 1)}
 		waited := make(chan error, 1)
 		waited <- waitErr
-		if got := stopCursorScaffoldPeer(peer, waited, time.Millisecond, time.Millisecond); got != waitErr {
+		if got := stopCursorScaffoldPeer(peer, waited, time.Millisecond, time.Millisecond); !errors.Is(got, waitErr) {
 			t.Fatal("cleanup wait status lost")
 		}
 		if len(peer.signals) != 0 {

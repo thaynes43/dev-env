@@ -156,7 +156,7 @@ func TestCursorBoundAnswerRejectsRunAndHelperBeforeRead(t *testing.T) {
 				want = errBoundAnswerRun
 			}
 			assertBoundAnswerZero(t, got, err, canary, "private bounded work order", "synthetic-session")
-			if err != want || (tc.run != nil && errors.Is(err, tc.run)) {
+			if !errors.Is(err, want) || (tc.run != nil && errors.Is(err, tc.run)) {
 				t.Fatalf("got %v want %v", err, want)
 			}
 		})
@@ -190,7 +190,7 @@ func TestCursorBoundAnswerRejectsReader(t *testing.T) {
 				return copyCursorTaskContext(current), nil
 			}, tc.raw)
 			assertBoundAnswerZero(t, got, err, "CANARY-ANSWER-TEXT", "CANARY-READ", "private bounded work order", expect.PromptSHA256)
-			if err != tc.want {
+			if !errors.Is(err, tc.want) {
 				t.Fatalf("got %v want %v", err, tc.want)
 			}
 		})
@@ -248,18 +248,18 @@ func TestCursorBoundAnswerRejectsContext(t *testing.T) {
 		spy := &boundAnswerSpy{fail: t}
 		got, err := acceptCursorBoundAnswer(context.Background(), task, completed, nil, nil, spy)
 		assertBoundAnswerZero(t, got, err, "private bounded work order")
-		if err != errBoundAnswerContext {
+		if !errors.Is(err, errBoundAnswerContext) {
 			t.Fatal(err)
 		}
 	})
 	t.Run("nil context", func(t *testing.T) {
 		task, current, completed := boundAnswerFixture(t)
 		spy := &boundAnswerSpy{fail: t}
-		got, err := acceptCursorBoundAnswer(nil, task, completed, nil, func() (cursorTaskContext, error) {
+		got, err := acceptCursorBoundAnswer(nil, task, completed, nil, func() (cursorTaskContext, error) { //nolint:staticcheck // SA1012: this case asserts that a nil Context is refused
 			return current, nil
 		}, spy)
 		assertBoundAnswerZero(t, got, err)
-		if err != errBoundAnswerContext {
+		if !errors.Is(err, errBoundAnswerContext) {
 			t.Fatal(err)
 		}
 	})
@@ -270,7 +270,7 @@ func TestCursorBoundAnswerRejectsContext(t *testing.T) {
 			return cursorTaskContext{}, canary
 		}, spy)
 		assertBoundAnswerZero(t, got, err, "CANARY-CONTEXT")
-		if err != errBoundAnswerContext || errors.Is(err, canary) {
+		if !errors.Is(err, errBoundAnswerContext) || errors.Is(err, canary) {
 			t.Fatal(err)
 		}
 	})
@@ -285,7 +285,7 @@ func TestCursorBoundAnswerRejectsContext(t *testing.T) {
 			return cursorTaskContext{}, canary
 		}, strings.NewReader(boundAnswerDoc(task, completed, text, 1)))
 		assertBoundAnswerZero(t, got, err, "CANARY-CONTEXT", text)
-		if err != errBoundAnswerContext || errors.Is(err, canary) || calls != 2 {
+		if !errors.Is(err, errBoundAnswerContext) || errors.Is(err, canary) || calls != 2 {
 			t.Fatalf("calls=%d err=%v", calls, err)
 		}
 	})
@@ -299,7 +299,7 @@ func TestCursorBoundAnswerRejectsContext(t *testing.T) {
 			return current, nil
 		}, spy)
 		assertBoundAnswerZero(t, got, err)
-		if err != errBoundAnswerContext {
+		if !errors.Is(err, errBoundAnswerContext) {
 			t.Fatal(err)
 		}
 	})
@@ -312,7 +312,7 @@ func TestCursorBoundAnswerRejectsContext(t *testing.T) {
 			return copyCursorTaskContext(current), nil
 		}, reader)
 		assertBoundAnswerZero(t, got, err, text)
-		if err != errBoundAnswerContext || reader.n == 0 {
+		if !errors.Is(err, errBoundAnswerContext) || reader.n == 0 {
 			t.Fatalf("reads=%d err=%v", reader.n, err)
 		}
 	})

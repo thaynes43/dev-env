@@ -106,7 +106,7 @@ func TestCursorAnswerFileBasename(t *testing.T) {
 	if err != nil || second == name {
 		t.Fatal("digest did not change the leaf")
 	}
-	if _, err := cursorAnswerBasename(cursorTaskBinding{}); err != errCursorAnswerPath {
+	if _, err := cursorAnswerBasename(cursorTaskBinding{}); !errors.Is(err, errCursorAnswerPath) {
 		t.Fatal(err)
 	}
 	if containsString(name, completed.binding.native.InvocationID) || containsString(name, completed.binding.native.LaunchDigest) {
@@ -187,7 +187,7 @@ func TestCursorAnswerFileRejectsBeforeOpen(t *testing.T) {
 			opened := false
 			got, err := acceptCursorAnswerFileAt(ctx, task, completed, tc.run, currentFn, &cursorAnswerHooks{onRead: func() { opened = true }})
 			assertAnswerFileZero(t, got, err, "CANARY-RUN", "CANARY-ANSWER-TEXT", "private bounded work order")
-			if opened || err != tc.want || (tc.run != nil && errors.Is(err, tc.run)) {
+			if opened || !errors.Is(err, tc.want) || (tc.run != nil && errors.Is(err, tc.run)) {
 				t.Fatalf("opened=%v got %v", opened, err)
 			}
 		})
@@ -210,14 +210,14 @@ func TestCursorAnswerFileRejectsArtifact(t *testing.T) {
 		}
 		got, err := acceptCursorAnswerFile(context.Background(), task, completed, nil, sameAnswerContext(current))
 		assertAnswerFileZero(t, got, err, canary, "answer.json")
-		if err != errCursorAnswerAbsent {
+		if !errors.Is(err, errCursorAnswerAbsent) {
 			t.Fatal(err)
 		}
 	})
 	t.Run("absent", func(t *testing.T) {
 		got, err := acceptCursorAnswerFile(context.Background(), task, completed, nil, sameAnswerContext(current))
 		assertAnswerFileZero(t, got, err, canary)
-		if err != errCursorAnswerAbsent {
+		if !errors.Is(err, errCursorAnswerAbsent) {
 			t.Fatal(err)
 		}
 	})
@@ -225,28 +225,28 @@ func TestCursorAnswerFileRejectsArtifact(t *testing.T) {
 		writeCursorAnswer(t, task, []byte(`{"receipt":"assistant-answer-v1"`))
 		got, err := acceptCursorAnswerFile(context.Background(), task, completed, nil, sameAnswerContext(current))
 		assertAnswerFileZero(t, got, err, canary)
-		if err != errTruncated {
+		if !errors.Is(err, errTruncated) {
 			t.Fatal(err)
 		}
-		os.Remove(path)
+		_ = os.Remove(path)
 	})
 	t.Run("malformed", func(t *testing.T) {
 		writeCursorAnswer(t, task, []byte("{x}"))
 		got, err := acceptCursorAnswerFile(context.Background(), task, completed, nil, sameAnswerContext(current))
 		assertAnswerFileZero(t, got, err, canary)
-		if err != errMalformed {
+		if !errors.Is(err, errMalformed) {
 			t.Fatal(err)
 		}
-		os.Remove(path)
+		_ = os.Remove(path)
 	})
 	t.Run("oversized", func(t *testing.T) {
 		writeCursorAnswer(t, task, bytes.Repeat([]byte("x"), maxAnswerEncoded+1))
 		got, err := acceptCursorAnswerFile(context.Background(), task, completed, nil, sameAnswerContext(current))
 		assertAnswerFileZero(t, got, err, canary)
-		if err != errOversized {
+		if !errors.Is(err, errOversized) {
 			t.Fatal(err)
 		}
-		os.Remove(path)
+		_ = os.Remove(path)
 	})
 	t.Run("wrong mode", func(t *testing.T) {
 		writeCursorAnswer(t, task, []byte(valid))
@@ -256,10 +256,10 @@ func TestCursorAnswerFileRejectsArtifact(t *testing.T) {
 		got, err := acceptCursorAnswerFile(context.Background(), task, completed, nil, sameAnswerContext(current))
 		assertAnswerFileZero(t, got, err, canary)
 		info, statErr := os.Lstat(path)
-		if statErr != nil || info.Mode().Perm() != 0o644 || err != errCursorAnswerType {
+		if statErr != nil || info.Mode().Perm() != 0o644 || !errors.Is(err, errCursorAnswerType) {
 			t.Fatalf("mode %v err %v", info.Mode(), err)
 		}
-		os.Remove(path)
+		_ = os.Remove(path)
 	})
 	t.Run("symlink leaf", func(t *testing.T) {
 		if err := os.Symlink("CANARY-PATH", path); err != nil {
@@ -267,10 +267,10 @@ func TestCursorAnswerFileRejectsArtifact(t *testing.T) {
 		}
 		got, err := acceptCursorAnswerFile(context.Background(), task, completed, nil, sameAnswerContext(current))
 		assertAnswerFileZero(t, got, err, "CANARY-PATH", canary)
-		if err != errCursorAnswerSymlink {
+		if !errors.Is(err, errCursorAnswerSymlink) {
 			t.Fatal(err)
 		}
-		os.Remove(path)
+		_ = os.Remove(path)
 	})
 	t.Run("hard link", func(t *testing.T) {
 		writeCursorAnswer(t, task, []byte(valid))
@@ -279,11 +279,11 @@ func TestCursorAnswerFileRejectsArtifact(t *testing.T) {
 		}
 		got, err := acceptCursorAnswerFile(context.Background(), task, completed, nil, sameAnswerContext(current))
 		assertAnswerFileZero(t, got, err, canary)
-		if err != errCursorAnswerType {
+		if !errors.Is(err, errCursorAnswerType) {
 			t.Fatal(err)
 		}
-		os.Remove(path + ".link")
-		os.Remove(path)
+		_ = os.Remove(path + ".link")
+		_ = os.Remove(path)
 	})
 	t.Run("directory", func(t *testing.T) {
 		if err := os.Mkdir(path, 0o700); err != nil {
@@ -291,10 +291,10 @@ func TestCursorAnswerFileRejectsArtifact(t *testing.T) {
 		}
 		got, err := acceptCursorAnswerFile(context.Background(), task, completed, nil, sameAnswerContext(current))
 		assertAnswerFileZero(t, got, err, canary)
-		if err != errCursorAnswerType {
+		if !errors.Is(err, errCursorAnswerType) {
 			t.Fatal(err)
 		}
-		os.Remove(path)
+		_ = os.Remove(path)
 	})
 	t.Run("fifo", func(t *testing.T) {
 		if err := unix.Mkfifo(path, 0o600); err != nil {
@@ -302,10 +302,10 @@ func TestCursorAnswerFileRejectsArtifact(t *testing.T) {
 		}
 		got, err := acceptCursorAnswerFile(context.Background(), task, completed, nil, sameAnswerContext(current))
 		assertAnswerFileZero(t, got, err, canary)
-		if err != errCursorAnswerType {
+		if !errors.Is(err, errCursorAnswerType) {
 			t.Fatal(err)
 		}
-		os.Remove(path)
+		_ = os.Remove(path)
 	})
 	t.Run("symlink ancestor", func(t *testing.T) {
 		root := t.TempDir()
@@ -324,7 +324,7 @@ func TestCursorAnswerFileRejectsArtifact(t *testing.T) {
 			fds.close(fd)
 		}
 		sameFDSet(t, before, answerFDs(t))
-		if err != errCursorAnswerSymlink && err != errCursorAnswerPath {
+		if !errors.Is(err, errCursorAnswerSymlink) && !errors.Is(err, errCursorAnswerPath) {
 			t.Fatal(err)
 		}
 		if containsString(err.Error(), real) || containsString(err.Error(), "CANARY-PATH") {
@@ -340,13 +340,13 @@ func TestCursorAnswerFileRejectsArtifact(t *testing.T) {
 		}})
 		info, statErr := os.Lstat(task.plan.worktree)
 		assertAnswerFileZero(t, got, err, canary)
-		if statErr != nil || info.Mode().Perm() != 0o777 || err != errCursorAnswerPath {
+		if statErr != nil || info.Mode().Perm() != 0o777 || !errors.Is(err, errCursorAnswerPath) {
 			t.Fatalf("dir mode %v err %v", info.Mode(), err)
 		}
 		if err := os.Chmod(task.plan.worktree, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		os.Remove(path)
+		_ = os.Remove(path)
 	})
 }
 
@@ -374,7 +374,7 @@ func TestCursorAnswerFileStatValidator(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := cursorAnswerFileStatOK(tc.st, uid)
-			if err != tc.want || containsString(err.Error(), "CANARY") {
+			if !errors.Is(err, tc.want) || containsString(err.Error(), "CANARY") {
 				t.Fatal(err)
 			}
 		})
@@ -384,12 +384,12 @@ func TestCursorAnswerFileStatValidator(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir.Mode = unix.S_IFDIR | 0o770
-	if err := cursorAnswerDirStatOK(dir, uid); err != errCursorAnswerPath {
+	if err := cursorAnswerDirStatOK(dir, uid); !errors.Is(err, errCursorAnswerPath) {
 		t.Fatal(err)
 	}
 	dir.Mode = unix.S_IFDIR | 0o700
 	dir.Uid = uint32(uid) + 1
-	if err := cursorAnswerDirStatOK(dir, uid); err != errCursorAnswerPath {
+	if err := cursorAnswerDirStatOK(dir, uid); !errors.Is(err, errCursorAnswerPath) {
 		t.Fatal(err)
 	}
 }
@@ -412,10 +412,10 @@ func TestCursorAnswerFileObservesReplacement(t *testing.T) {
 			}
 		}})
 		assertAnswerFileZero(t, got, err, text, "private bounded work order")
-		if err != errCursorAnswerChanged {
+		if !errors.Is(err, errCursorAnswerChanged) {
 			t.Fatal(err)
 		}
-		os.Remove(path)
+		_ = os.Remove(path)
 	})
 	t.Run("leaf replace", func(t *testing.T) {
 		writeCursorAnswer(t, task, doc)
@@ -428,10 +428,10 @@ func TestCursorAnswerFileObservesReplacement(t *testing.T) {
 			}
 		}})
 		assertAnswerFileZero(t, got, err, text, "CANARY-ANSWER-TEXT")
-		if err != errCursorAnswerChanged {
+		if !errors.Is(err, errCursorAnswerChanged) {
 			t.Fatal(err)
 		}
-		os.Remove(path)
+		_ = os.Remove(path)
 	})
 	t.Run("directory replace", func(t *testing.T) {
 		writeCursorAnswer(t, task, doc)
@@ -448,7 +448,7 @@ func TestCursorAnswerFileObservesReplacement(t *testing.T) {
 			}
 		}})
 		assertAnswerFileZero(t, got, err, text, "CANARY-ANSWER-TEXT")
-		if err != errCursorAnswerChanged {
+		if !errors.Is(err, errCursorAnswerChanged) {
 			t.Fatal(err)
 		}
 	})
@@ -458,7 +458,7 @@ func TestCursorAnswerFileObservesReplacement(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		got, err := acceptCursorAnswerFileAt(ctx, task, completed, nil, sameAnswerContext(current), &cursorAnswerHooks{afterRead: cancel})
 		assertAnswerFileZero(t, got, err, text)
-		if err != errBoundAnswerContext {
+		if !errors.Is(err, errBoundAnswerContext) {
 			t.Fatal(err)
 		}
 	})
@@ -521,7 +521,7 @@ func TestCursorAnswerFileAncestorChain(t *testing.T) {
 		}
 	}})
 	assertAnswerFileZero(t, got, err, text, "private bounded work order")
-	if err != errCursorAnswerChanged {
+	if !errors.Is(err, errCursorAnswerChanged) {
 		t.Fatal(err)
 	}
 	if _, err := bindCursorTask(plan, current); err != nil {
@@ -551,7 +551,7 @@ func TestCursorAnswerFileDescriptors(t *testing.T) {
 	got, err := acceptCursorAnswerFile(context.Background(), task, completed, nil, sameAnswerContext(current))
 	sameFDSet(t, before, answerFDs(t))
 	assertAnswerFileZero(t, got, err, "snow")
-	if err != errCursorAnswerAbsent {
+	if !errors.Is(err, errCursorAnswerAbsent) {
 		t.Fatal(err)
 	}
 
@@ -563,7 +563,7 @@ func TestCursorAnswerFileDescriptors(t *testing.T) {
 	}})
 	sameFDSet(t, before, answerFDs(t))
 	assertAnswerFileZero(t, got, err, "snow", "CANARY-CLOSE")
-	if err != errCursorAnswerChanged {
+	if !errors.Is(err, errCursorAnswerChanged) {
 		t.Fatal(err)
 	}
 }

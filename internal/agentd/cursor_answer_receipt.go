@@ -1,5 +1,6 @@
 // Package agentd holds the in-pod supervisor. This file is a standalone,
 // unexported decoder for assistant-answer-v1. Production code does not call it.
+
 package agentd
 
 import (

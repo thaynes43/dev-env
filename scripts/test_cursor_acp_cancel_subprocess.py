@@ -262,6 +262,10 @@ class RunstateNotReady(Exception):
         super().__init__(f"helper={helper_kind}:{helper_state} child={child_kind}:{child_state}")
 
 
+@unittest.skipUnless(
+    os.environ.get("DEV_ENV_RUN_HELD_CURSOR_SUBPROCESS") == "1",
+    "held: source only until Root clears execution (Studio custody 2026-11-09)",
+)
 class PendingPermissionSubprocessTests(unittest.TestCase):
     def test_cancel_while_permission_pending_reaps_owned_child(self):
         """SIGTERM the helper after permission-required. Do not dispatch the terminal."""
