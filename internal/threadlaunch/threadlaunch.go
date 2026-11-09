@@ -116,6 +116,7 @@ var messages = map[string]string{
 	"observation_unavailable":          "The host's thread observation failed",
 	"launch_deadline":                  "The launch wait ended; phases show how far it got. Never resend",
 	"unauthenticated":                  "API authentication is unavailable or was refused",
+	"caller_not_allowed":               "thread start for a Codex host runs from the workbench, the v1 pod or a laptop: an ordinary session pod has no exec into another pod (D-19)",
 	"exec_failed":                      "The exec into the host failed before its thread-start ran; nothing was launched",
 	"host_result_unconfirmed":          "The host returned no valid result; the launch may have happened. Inspect the host before any retry",
 	"provider_readiness_unavailable":   "Provider readiness is unavailable",

@@ -160,7 +160,7 @@ func TestThreadStartCodexRefusesBeforeExec(t *testing.T) {
 		"claude host":  {claude, false, "not_codex_host"},
 		"codex task":   {task, false, "not_codex_host"},
 		"not running":  {codexHostView("Suspended"), false, "host_not_running"},
-		"session pod":  {runningOn(codexHostView(""), "talosw02"), true, "unauthenticated"},
+		"session pod":  {runningOn(codexHostView(""), "talosw02"), true, "caller_not_allowed"},
 		"not anywhere": {apiv1.Session{Name: "missing"}, false, "exec_failed"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -181,6 +181,7 @@ func TestThreadStartInvalidInput(t *testing.T) {
 	long := h.write("long.txt", strings.Repeat("x", 4097))
 	blank := h.write("blank.txt", " \n")
 	nul := h.write("nul.txt", "a\x00b")
+	ctrl := h.write("ctrl.txt", "a\x1bb")
 	good := h.write("good.txt", threadHandoff)
 	for name, args := range map[string][]string{
 		"no verb":        {"thread"},
@@ -192,6 +193,8 @@ func TestThreadStartInvalidInput(t *testing.T) {
 		"long handoff":   {"thread", "start", "--agent", "codex", "--host", "h-1", "--model", "gpt-6-astra", "--effort", "high", "--handoff", long},
 		"blank handoff":  {"thread", "start", "--agent", "codex", "--host", "h-1", "--model", "gpt-6-astra", "--effort", "high", "--handoff", blank},
 		"nul handoff":    {"thread", "start", "--agent", "codex", "--host", "h-1", "--model", "gpt-6-astra", "--effort", "high", "--handoff", nul},
+		"ctrl handoff":   {"thread", "start", "--agent", "codex", "--host", "h-1", "--model", "gpt-6-astra", "--effort", "high", "--handoff", ctrl},
+		"claude ctrl":    {"thread", "start", "--agent", "claude", "--project", "sample", "--model", "claude-opus-5-5", "--handoff", ctrl},
 		"bad name":       {"thread", "start", "--agent", "codex", "--host", "h-1", "--model", "gpt-6-astra", "--effort", "high", "--handoff", good, "--name", "a b"},
 		"codex project":  {"thread", "start", "--agent", "codex", "--host", "h-1", "--project", "p", "--model", "gpt-6-astra", "--effort", "high", "--handoff", good},
 		"long wait":      {"thread", "start", "--agent", "codex", "--host", "h-1", "--model", "gpt-6-astra", "--effort", "high", "--handoff", good, "--wait", "11m"},

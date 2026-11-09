@@ -648,7 +648,8 @@ it was. Renew well before the login lapses (status says when).
 
 Starts one fresh interactive thread that Tom can see in his provider's phone app
 (DESIGN-057) and prints one thread-launch.v1 JSON line. The handoff is the
-thread's first message: 1 to 4096 UTF-8 bytes. Ask the thread to make its own
+thread's first message, one rule for every provider: 1 to 4096 UTF-8 bytes,
+not blank, no control character but newline and tab. Ask the thread to make its own
 worktree, as on the phone. --wait (at most 10m) bounds the whole launch.
 
 --agent codex     an existing Codex --interactive session (--host), paired once with

@@ -49,7 +49,7 @@ thread-launch runbook).
 
 | Piece | What it does | Status | Here |
 | --- | --- | --- | --- |
-| `scripts/codex-clean-session.py` (#731) | Validates inputs, reserves a one-use name, runs `codex --remote unix://<socket> -C <repo> -m <model> -c model_reasoning_effort=<e> --no-alt-screen -- <task>` in a detached tmux session, checks the pane is alive. Never resumes, pairs or retries. | Merged, proven 2026-10-30; was not in the agent image | **Reused as the Codex create step**, unchanged. The image now ships it at `/usr/local/lib/dev-env-codex/`. |
+| `scripts/codex-clean-session.py` (#731) | Validates inputs, reserves a one-use name, runs `codex --remote unix://<socket> -C <repo> -m <model> -c model_reasoning_effort=<e> --no-alt-screen -- <task>` in a detached tmux session, checks the pane is alive. Never resumes, pairs or retries. | Merged, proven 2026-10-30; was not in the agent image | **Reused as the Codex create step**, with one change: it now always passes `--dangerously-bypass-approvals-and-sandbox` (section 6a). The image now ships it at `/usr/local/lib/dev-env-codex/`. |
 | `agent-run pair` / `sessionExecBase` | Execs `agentd ctl …` in a session pod over SPDY; refuses inside an ordinary session pod (D-19); workbench and v1 pass by RBAC. | Live | **Reused as the only route and caller check.** |
 | `internal/agentd/codex_host_rpc.go` | Peer-PID-verified WebSocket client to the daemon's control socket; `initialize`, `remoteControl/status/read`. | Live | **Reused** for host readiness and the new read-only `thread/list`, `thread/turns/list`, `thread/items/list` observer. |
 | `internal/agentd/codex_remote.go` | The host's daemon supervisor, `ctl codex-pair`, the pair-issued marker. | Live | **Reused** for the daemon PID and pairing knowledge. |
@@ -63,7 +63,8 @@ thread-launch runbook).
 ## 3. Command and route
 
 `agent-run thread start` takes `--agent` (provider), `--model` (full id),
-`--effort`, `--handoff FILE` (UTF-8, 1 to 4096 bytes, no NUL), `--wait`
+`--effort`, `--handoff FILE` (one rule for every provider: UTF-8, 1 to 4096
+bytes, not blank, no control character but newline and tab), `--wait`
 (default 5m, at most 10m) and the provider's target:
 
 - **Codex** takes `--host NAME`, an existing `codex --interactive` session, and

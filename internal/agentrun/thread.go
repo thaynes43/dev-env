@@ -96,8 +96,9 @@ func (a *app) threadStart(ctx context.Context, args []string) error {
 	return a.threadRefuse(p.Name, apiv1.ThreadBlocked, "provider_not_qualified", apiv1.ThreadLaunchExit(apiv1.ThreadBlocked))
 }
 
-// threadReadHandoff is the Codex wrapper's task rule: 1 to 4096 UTF-8 bytes,
-// not blank, no NUL.
+// threadReadHandoff is the one handoff rule for every provider: the Codex
+// wrapper's 1 to 4096 UTF-8 bytes, not blank, and rc start's rule of no
+// control character but newline and tab.
 func threadReadHandoff(path string) ([]byte, bool) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -105,7 +106,7 @@ func threadReadHandoff(path string) ([]byte, bool) {
 	}
 	defer func() { _ = f.Close() }()
 	b, err := io.ReadAll(io.LimitReader(f, threadMaxHandoff+1))
-	if err != nil || len(b) > threadMaxHandoff || !utf8.Valid(b) || strings.TrimSpace(string(b)) == "" || bytes.IndexByte(b, 0) >= 0 {
+	if err != nil || len(b) > threadMaxHandoff || !utf8.Valid(b) || strings.TrimSpace(string(b)) == "" || !rcNoControl(string(b)) {
 		return nil, false
 	}
 	return b, true
@@ -129,6 +130,11 @@ func (a *app) threadOnHost(ctx context.Context, cmd *command, t threadArgs) erro
 	}
 	rec := threadlaunch.NewRecorder("codex", a.env.Now)
 	rec.Result.Host, rec.Result.SessionName, rec.Result.Name, rec.Result.RequestedModel = t.host, t.host, t.name, t.model
+	if a.inSessionPod() && !a.inWorkbenchPod() {
+		// D-19: an agent in an ordinary session pod has no exec into another pod.
+		rec.Phase(apiv1.ThreadPhaseHostReady, "error", "client", "caller_not_allowed")
+		return a.threadEmit(rec.Finish(apiv1.ThreadFailed, "caller_not_allowed", apiv1.ThreadPhaseHostReady, t.wait), ExitFailed)
+	}
 	argv, s, err := a.sessionExecTarget(ctx, cmd, "thread start", t.host)
 	if err != nil {
 		// The message is agent-run's own fixed text; it explains the refusal.
