@@ -125,6 +125,11 @@ it can:
 - use GCP with the same credentials as v1 (`tofu`), and all ten MCP servers;
 - get standing access grants for the LAN and Proxmox, as below.
 
+Its children do not inherit any of this (OP502, 2026-11-09). A child it starts
+with no `--profile` runs on the default profile, guarded. To give a child the
+workbench profile, name it: `agent-run --profile workbench ...`. Native
+subagents inside the workbench session's own pod share its identity.
+
 The cluster read, Omni, GCP and the MCP credentials came with 2.38.0 (haynes-ops
 #4127, installed with #4131). A workbench session started before that keeps its
 old settings until its pod is replaced. Proven from a session on 2026-10-20, in
@@ -355,7 +360,9 @@ agent-run --project dev-env --agent codex --model gpt-6-luna -p "Summarize the o
   headless task**. It cannot be combined with `--local` or `--interactive`.
   The server, rather than this flag, remains authoritative for catalog
   admission. `--profile` is separate: a child task inherits its parent's
-  profile. Starting a native thread does not choose a profile.
+  profile, except that a workbench session's child runs on the profile it
+  names, or on the default profile when it names none (OP502). Starting a
+  native thread does not choose a profile.
 - Every session clones the catalog repos when it starts. With eight repos, one
   slow clone sometimes hit the two-minute limit and the step reported
   `Partial`. The session still ran. 2.38.0 abandons a stalled clone and retries

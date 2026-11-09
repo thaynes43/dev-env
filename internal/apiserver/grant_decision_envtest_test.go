@@ -94,7 +94,16 @@ func TestEnvtestGrantDecisionNamedCoordinatorLaunch(t *testing.T) {
 	g := request(childTok)
 	ancestor := request(wb)
 	l.want(http.MethodPost, apiv1.GrantDecisionPath(ancestor.Name), leadTok, decisionFor(ancestor, true), http.StatusForbidden)
-	sibling := launch(wb, task())
+	// The workbench session's own worker runs on the default profile (OP502),
+	// which is full here; it would run on workbench only by naming it.
+	siblingView := unmarshal[apiv1.Session](t, l.want(http.MethodPost, apiv1.SessionsPath, wb, task(), http.StatusCreated))
+	if siblingView.Profile != "" {
+		t.Fatalf("workbench worker profile %q, want the default", siblingView.Profile)
+	}
+	sibling := siblingView.Name
+	if v := unmarshal[apiv1.Session](t, l.want(http.MethodPost, apiv1.SessionsPath, wb, wbReq, http.StatusCreated)); v.Profile != "workbench" {
+		t.Fatalf("explicit workbench worker profile %q", v.Profile)
+	}
 	siblingGrant := request(materialize(sibling, controller.ServiceAccountName, "full"))
 	l.want(http.MethodPost, apiv1.GrantDecisionPath(siblingGrant.Name), leadTok, decisionFor(siblingGrant, true), http.StatusForbidden)
 	plain := launch(human, task())

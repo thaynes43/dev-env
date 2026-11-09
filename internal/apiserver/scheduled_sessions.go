@@ -51,12 +51,13 @@ const ScheduledWorkParent = "dev-env-system/scheduled-work"
 // With d.Owner nil the caller is the fixed client ScheduledWorkParent, at depth
 // 0. With d.Owner set it is that live owner session, resolved from its own pod
 // as resolveCaller resolves the pod's projected token, so the session is the
-// owner's child, on the owner's profile, within the owner's depth and child
-// cap, exactly as if the owner created it now. A scheduled session never runs
-// as a named coordinator identity, carries no idempotency key, restore,
-// project, canary or coordinator instructions, and is never charged to a task
-// budget: a budget-bound caller is refused rather than dispatched outside its
-// reservation.
+// owner's child, on the profile the owner's own create gets (the owner's, or
+// for a workbench owner the one named or the default), within the owner's
+// depth and child cap, exactly as if the owner created it now. A scheduled
+// session never runs as a named coordinator identity, carries no idempotency
+// key, restore, project, canary or coordinator instructions, and is never
+// charged to a task budget: a budget-bound caller is refused rather than
+// dispatched outside its reservation.
 func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSessionRequest, d scheduledwork.Dispatch) (name string, uid types.UID, adopted bool, err error) {
 	name, err = scheduledwork.SessionName(string(d.ItemUID), d.At)
 	if err != nil {

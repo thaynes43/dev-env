@@ -138,14 +138,24 @@ func TestNamedCoordinatorLaunchRules(t *testing.T) {
 	if child.Spec.Profile != "" || child.Labels[templates.CoordinatorIdentityLabel] != "" || child.Spec.Parent != "haynes-ops-1031-150002" {
 		t.Fatalf("lead child: profile %q, admission %q, parent %q", child.Spec.Profile, child.Labels[templates.CoordinatorIdentityLabel], child.Spec.Parent)
 	}
-	// A workbench session's own children keep inheriting the workbench
-	// profile, unlabelled, as before.
+	// A workbench session's own child that names no profile runs on the
+	// default profile, unlabelled (OP502); one that names workbench gets it,
+	// unlabelled too.
 	w = f.do(http.MethodPost, apiv1.SessionsPath, wb, task())
 	if w.Code != http.StatusCreated {
 		t.Fatalf("workbench child: %d %s", w.Code, w.Body.String())
 	}
-	if s := f.session(decode[apiv1.Session](t, w).Name); s.Spec.Profile != "workbench" || s.Labels[templates.CoordinatorIdentityLabel] != "" {
+	if s := f.session(decode[apiv1.Session](t, w).Name); s.Spec.Profile != "" || s.Labels[templates.CoordinatorIdentityLabel] != "" {
 		t.Fatalf("workbench child: profile %q, admission %q", s.Spec.Profile, s.Labels[templates.CoordinatorIdentityLabel])
+	}
+	onWorkbench := task()
+	onWorkbench.Profile = "workbench"
+	w = f.do(http.MethodPost, apiv1.SessionsPath, wb, onWorkbench)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("explicit workbench child: %d %s", w.Code, w.Body.String())
+	}
+	if s := f.session(decode[apiv1.Session](t, w).Name); s.Spec.Profile != "workbench" || s.Labels[templates.CoordinatorIdentityLabel] != "" {
+		t.Fatalf("explicit workbench child: profile %q, admission %q", s.Spec.Profile, s.Labels[templates.CoordinatorIdentityLabel])
 	}
 	// The other callers never may.
 	for _, k := range []callerKind{kindCoordinator, kindPortalLaunch, kindPortalReader, kindSession} {

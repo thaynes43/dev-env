@@ -361,8 +361,10 @@ headless managed-task entrypoint: the server selects the declared repository and
 rules and remains authoritative for catalog admission. It cannot combine with
 `--local` or `--interactive`. `--profile` selects a template profile only where
 the caller is allowed to choose it. A session child normally inherits its
-parent's profile. The exception is a Codex remote host created by a workbench
-session: omit `--profile`; the server uses the default profile, not workbench.
+parent's profile. A workbench session's child is the exception (OP502): it runs
+on the profile it names, `workbench` included, or on the default profile when it
+names none. A Codex remote host created by a workbench session takes no
+`--profile` at all; the server uses the default profile, not workbench.
 Starting a native thread does not select a Kubernetes profile.
 
 A headless `-p` task runs its prompt once. `msg` applies to a local TUI session; a headless task does not accept messages. Coordinator custody of that result is recorded separately in the [coordinator result handoff](coordinator-result-handoff.md). A delivery receipt is not acknowledgment, ownership, or completion. The offline checker only validates a bounded handoff record.

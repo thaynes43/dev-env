@@ -8,9 +8,9 @@ The current profiles, their ServiceAccounts, profile labels, mounts, and standin
 
 | Declared work scope | Existing profile selection | What must still be true before use |
 | --- | --- | --- |
-| Routine repository work and public-web access | Use the caller's resolved profile. For a trusted client, an omitted profile resolves through the templates' default (`full` unless the deployed templates say otherwise). | Normal session and repository authorization rules apply. A program included in the image is not evidence of a credential or network capability. |
+| Routine repository work and public-web access | Use the caller's resolved profile. For a trusted client or a workbench session, an omitted profile resolves through the templates' default (`full` unless the deployed templates say otherwise). | Normal session and repository authorization rules apply. A program included in the image is not evidence of a credential or network capability. |
 | Bounded cluster reads or routine runtime verbs | Use the caller's resolved profile; this scope alone does not select `workbench`. | `full` retains its documented bounded cluster/runtime access. Check the required operation's existing policy instead of treating all cluster work as a profile escalation. |
-| Explicit workbench-only control or hardware/host operations | Start from, or dispatch to, an existing authorized `workbench`-profile session when the work record explicitly names that role. | `workbench` uses `dev-env-workbench`, `DEV_ENV_WORKBENCH`, and its workbench-specific mounts and profile labels. The required grant or standing policy, egress, target authorization, and any action-specific approval remain separate checks. |
+| Explicit workbench-only control or hardware/host operations | Start from, or dispatch to, an existing authorized `workbench`-profile session when the work record explicitly names that role. A workbench session's child runs on `workbench` only when the request names it. | `workbench` uses `dev-env-workbench`, `DEV_ENV_WORKBENCH`, and its workbench-specific mounts and profile labels. The required grant or standing policy, egress, target authorization, and any action-specific approval remain separate checks. |
 | Accepted-project task from a configured coordinator host | The existing coordinator API ceiling permits only `dev`, task mode, S/M sizes, and a declared project. | `dev` is the accepted-project executor profile for this narrowly configured route; it is not an automatic substitute for `workbench`. |
 | Summoned automation | `ops` is reserved for the restricted `dev-env-ops`/summoned-session route. | `ops` is not a manual escalation profile and is excluded from the ordinary grant-policy match. |
 | A remote Codex coordinator host | A workbench-session origin must omit `profile`, which selects the templates' default. A human or trusted client may explicitly select a valid profile. | A workbench-origin host does not inherit workbench capability. Every later native thread or turn has the host's already-selected resolved profile; it cannot choose a Kubernetes profile. Dispatch hardware/host work to an authorized workbench session instead of treating a coordinator host as workbench. |
@@ -23,17 +23,27 @@ identity, including its pod-exec capability. It is not a hardware/SSH
 eligibility check. In particular, that downscoped remote host must not be
 treated as having the workbench `hw-ssh` mount or its LAN-policy eligibility.
 
+Since 2026-11-09 (OP502), a workbench session's other children do not inherit
+`workbench` either. One that names no profile runs on the deployed template
+default; one that names a valid profile, `workbench` included, runs on it. The
+coordinator stays unguarded and its workers run guarded unless it says
+otherwise. Native in-pod subagents are not sessions: they share the
+coordinator's pod and identity, and no profile rule applies to them. The rule
+and the owner's direction are recorded in
+[DESIGN-001](../.agents/sagas/distributed-dev-env/designs/001-dev-env-v2.md),
+"D-19 and D-46, workbench workers on the default profile".
+
 ## Entry-point inventory
 
 | Entry point | Where profile is selected | Current protection and limit |
 | --- | --- | --- |
 | Native Codex thread or turn on an existing host | Nowhere in the native thread/turn operation. The host's pod was already created with its resolved profile. | The dispatcher must select an already-authorized host and inspect its resolved profile and relevant existing capability metadata before starting the task. Native start cannot change that profile. |
-| `agent-run` CLI | `--profile` is the only structured profile input, sent in `CreateSessionRequest`. An omitted profile uses the deployed template default for a trusted client, the parent's resolved profile for a session child, and the deployed template default for the workbench-origin Codex-remote exception. | The CLI has no declared capability or role field and must not scan the prompt for words such as `ssh`, `Unraid`, or `hardware`. A child normally inherits its parent's profile, so a session cannot self-upgrade. |
-| Managed session API | `CreateSessionRequest.profile`, validated against the deployed templates. | A session child is pinned to its parent profile. The explicit Codex-remote exception above is enforced by the API only for a workbench-session origin: it must omit the profile and then uses the deployed template default. |
+| `agent-run` CLI | `--profile` is the only structured profile input, sent in `CreateSessionRequest`. An omitted profile uses the deployed template default for a trusted client and for a workbench session's child, its Codex remote host included, and the parent's resolved profile for an ordinary session's child. | The CLI has no declared capability or role field and must not scan the prompt for words such as `ssh`, `Unraid`, or `hardware`. An ordinary session's child inherits its parent's profile, so it cannot self-upgrade. |
+| Managed session API | `CreateSessionRequest.profile`, validated against the deployed templates. | An ordinary session's child is pinned to its parent profile. A workbench session's child runs on the profile it names, or on the deployed template default when it names none. The explicit Codex-remote exception above is enforced by the API only for a workbench-session origin: it must omit the profile and then uses the deployed template default. |
 | `agent-run mcp` toolbox | It does not select a profile or launch a session. | Its three tools only use existing grant routes; they do not approve or install grants. An external terminal wrapper has the same already-selected host/CLI profile rules and no inferred selector. |
 | Phone/browser UI | No v2 web UI currently selects a profile. Phone remote-control opens an existing session or host. | A future UI needs a reviewed structured role/capability contract before it can choose profiles. It must not claim enforcement merely by displaying this map. |
 
-These statements describe the existing contracts in `internal/agentrun/create.go`, `internal/apiserver/apiv1/types.go`, and `internal/apiserver/validate.go`. The Codex-host exception has a focused regression in `internal/apiserver/workbench_test.go`. The deployed workbench behavior, network/Proxmox access, and `hw-ssh` mount are documented in the [v2 quick start](v2-quickstart.md#what-a-workbench-session-can-do).
+These statements describe the existing contracts in `internal/agentrun/create.go`, `internal/apiserver/apiv1/types.go`, and `internal/apiserver/validate.go`. The Codex-host exception and the workbench child default have focused regressions in `internal/apiserver/workbench_test.go`. The deployed workbench behavior, network/Proxmox access, and `hw-ssh` mount are documented in the [v2 quick start](v2-quickstart.md#what-a-workbench-session-can-do).
 
 ## Existing enforced cases
 
@@ -43,7 +53,9 @@ does not substitute its own profile policy.
 
 | Explicit request | Existing result | Remedy |
 | --- | --- | --- |
-| A session tries to create a child with a profile other than its own | `403`: `a session's child runs on its parent's profile <parent>, not <asked>`. | Use the inherited profile, or have a separately authorized trusted client dispatch the intended profile. A child cannot elevate itself. |
+| A session that is not a workbench session tries to create a child with a profile other than its own | `403`: `a session's child runs on its parent's profile <parent>, not <asked>`. | Use the inherited profile, or have a separately authorized trusted client dispatch the intended profile. A child cannot elevate itself. |
+| A workbench session creates a child (not a Codex remote host) and names no profile | Created on the deployed template default, not `workbench`. | Name `--profile workbench` only when the work record explicitly needs a workbench child. Workbench automation that relied on inheritance must pass it. |
+| A workbench session creates a child (not a Codex remote host) and names a valid profile, `workbench` included | Created on that profile, subject to the later checks (an unknown profile is a `422`; a named coordinator profile keeps its own launch rule). | None needed. |
 | A workbench session creates a Codex remote host and sends any `profile` | `403`: `a codex host started by a workbench session runs on the default profile; omit the profile`. | Omit `--profile`; that creates the intentionally downscoped host on the deployed template default. Dispatch hardware/host work separately to an authorized workbench session. |
 | A client explicitly names a profile missing from the deployed templates | `422` profile validation; the profile lookup says it is not in the templates. | Choose a current deployed profile after inspecting its metadata. Do not add or guess a profile at launch time. |
 
@@ -87,7 +99,7 @@ change its resolved profile, or authorize it as a workaround for a managed-task
 `422`.
 The configured coordinator route remains separate as well: its accepted-project
 tasks retain the `dev` profile ceiling described above, including its own caller
-and size restrictions. Session children still retain the parent-profile ceiling.
+and size restrictions. Ordinary session children still retain the parent-profile ceiling.
 
 ## Dispatcher preflight
 
@@ -95,8 +107,8 @@ Run this before a native task/thread start or before asking another launcher to 
 
 1. Read the work record's explicit scope or role. Do not infer hardware or host-operations intent from a task name, prompt, repository, binary, or model.
 2. For explicitly declared hardware/host-operations scope, select an existing authorized `workbench` session/host. Before task start, use an authorized read-only client to inspect `agent-run show <session> -o json` and confirm its `profile`, then compare it with the deployed template's ServiceAccount, labels, mounts, and profile policies. A missing stored `profile` field is not proof of `workbench` or any capability: resolve it only through the deployed template default for that caller's route. Do not read a key or other credential to infer capability.
-3. Resolve an omitted profile by caller before launch: a trusted client gets the deployed template default; a session child gets its parent's resolved profile; and a Codex remote host created by a workbench session gets the deployed template default. If the dispatcher cannot make the authorized host selection and readback, stop rather than infer `workbench` or a capability from an omitted profile.
-4. For `agent-run`, make profile selection explicit only where that client is authorized to do so. Preserve the server's parent-profile ceiling and its Codex-remote default-profile rule. Never translate `full` to `workbench` automatically.
+3. Resolve an omitted profile by caller before launch: a trusted client gets the deployed template default; a workbench session's child, its Codex remote host included, gets the deployed template default; and an ordinary session's child gets its parent's resolved profile. If the dispatcher cannot make the authorized host selection and readback, stop rather than infer `workbench` or a capability from an omitted profile.
+4. For `agent-run`, make profile selection explicit only where that client is authorized to do so. Preserve the server's parent-profile ceiling for ordinary sessions and its Codex-remote default-profile rule. A workbench session that needs a workbench child names `--profile workbench`. Never translate `full` to `workbench` automatically.
 5. Separately verify the required existing grant/policy, egress, target authorization, and action-specific approval. Do not inspect or print credential material while doing this preflight.
 6. Where the task has no structured scope/role, state the limitation to the requester and obtain a dispatch decision outside the native thread/turn path. Current clients cannot enforce intent from free-form text.
 

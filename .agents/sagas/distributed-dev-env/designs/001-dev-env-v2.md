@@ -435,7 +435,9 @@ call, what a create checks, and how a reap and a heartbeat reach the objects.**
   Tom or a client starts; 403 beyond 2); and on its parent's profile, the profile
   label on the parent's pod. A request for another profile is a 403, and one with
   none gets the parent's: a session cannot widen what it may read or reach by
-  starting another. A replica serialises its creates and reads keys and children from
+  starting another. *(2026-11-09, OP502: a workbench session's child runs on the
+  profile it names, or on the default profile when it names none. See "D-19 and
+  D-46, workbench workers on the default profile".)* A replica serialises its creates and reads keys and children from
   the API server, not its cache, so these checks see each other's writes. Two
   replicas can still race between their list and create, so the bound can be
   exceeded; plan 10's summoned sessions carry their own name,
@@ -3534,6 +3536,39 @@ not ruled by Tom. The earlier condition that exec into the keeper stay
 impossible is not met. A fence around `dev-env-system` (review F2) would reduce
 today's parity rights; it is held for Tom's decision and is not a cutover
 prerequisite.
+
+**D-19 and D-46, workbench workers on the default profile (2026-11-09, OP502;
+source only).** This replaces the inheritance sentences in the two D-19 workbench
+paragraphs above.
+
+- **Old rule.** A session's child ran on its parent's profile (D-46). So every
+  child of a workbench session ran on `workbench` too: as `dev-env-workbench`,
+  outside the identity and exec guards, with the `hw-ssh` key mounted. An audit
+  counted 110 of 306 recent sessions on `workbench`, 98 of them Codex tasks.
+- **Owner's direction.** Tom, 2026-11-09: the coordinator gets "super user
+  abilities so it can act as an unblocked coordinator and help build out the
+  tool, with it's safeguards, without being encumbered by them." The coordinator
+  is unguarded. Its workers are guarded unless it says otherwise.
+- **New rule.** A workbench session's child that names no profile runs on the
+  templates' default profile, as a trusted client's child does. One that names a
+  profile runs on it if the templates have it. That includes `workbench`, so a
+  workbench child is still possible: name the profile (`agent-run --profile
+  workbench`). Workbench automation that relied on inheritance must now pass the
+  profile.
+- **Unchanged.** A Codex remote host a workbench session starts runs on the
+  default profile, and naming any profile is a 403. A child of a session on a
+  named coordinator profile runs on the default profile. The named coordinator
+  launch rule still applies after the profile is chosen. An unknown profile is a
+  422. Depth, the child cap and every later check are as before. An ordinary
+  session's child runs on its parent's profile, and another profile is a 403.
+  Scheduled work owned by a workbench session follows the same rule, as if the
+  owner created the session.
+- **Not affected.** Native in-pod subagents (Claude Code's Agent tool, Codex
+  collaboration subagents) run in the coordinator's own pod, as its identity.
+  This rule covers only sessions created through the API.
+- **Nothing else changes.** No RBAC, admission, template, CRD or network change,
+  and no flag. The rule takes effect with the operator pin in haynes-ops, a
+  separate step.
 
 **D-19, named coordinator identity (2026-10-31, DESIGN-042 6.4, S4; source only,
 inert).** A profile's `serviceAccount` may also name `dev-env-coordinator-<name>`,

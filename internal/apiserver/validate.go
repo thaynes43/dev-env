@@ -266,6 +266,12 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	// child of a session on such a profile runs on the default profile, which
 	// cannot name one. Only the workbench among sessions launches one, by naming
 	// its profile.
+	// Any other child of a workbench session (OP502, 2026-11-09) runs on the
+	// profile it names, workbench included, or on the default profile when it
+	// names none, as a trusted client's create does. The workbench is the
+	// superuser class, so its workers run guarded unless it asks otherwise.
+	// The checks below still apply: the profile must be in the templates, and
+	// a named coordinator identity keeps its own launch rule.
 	switch {
 	case s.isWorkbenchSession(c) && v1alpha1.AgentKind(req.Agent) == v1alpha1.AgentCodex && req.Mode == "remote":
 		if spec.Profile != "" {
@@ -275,7 +281,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		if spec.Profile != "" {
 			return nil, forbidden("a child of a session on profile %s, which runs as a named coordinator identity, runs on the default profile; omit the profile", c.profile)
 		}
-	case s.isWorkbenchSession(c) && spec.Profile != "" && s.profileIdentity(ctx, spec.Profile) != "":
+	case s.isWorkbenchSession(c):
 	case c.kind == kindSession && c.profile != "":
 		switch spec.Profile {
 		case "":
