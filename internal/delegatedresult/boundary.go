@@ -13,7 +13,7 @@ import "context"
 // server-owned evidence; otherwise it must remain nil/Unknown.
 // A return value is an observation, NOT a transferable lease or commit fence.
 type Admission interface {
- Resolve(context.Context, Key) (Key, Provenance, error)
+	Resolve(context.Context, Key) (Key, Provenance, error)
 }
 
 // Store is an unimplemented durable boundary. Commit MUST reauthorize initial
@@ -28,7 +28,7 @@ type Admission interface {
 // may be returned only under the same answer-payload authorization as content.
 // Implementing this interface alone is NOT evidence these requirements hold.
 type Store interface {
- Commit(context.Context, Attempt) (Receipt, error)
+	Commit(context.Context, Attempt) (Receipt, error)
 }
 
 // Disabled is the only included adapter. Its zero value refuses all operations.
@@ -36,19 +36,19 @@ type Store interface {
 type Disabled struct{}
 
 func (Disabled) Resolve(context.Context, Key) (Key, Provenance, error) {
- return Key{}, Provenance{}, ErrDisabled
+	return Key{}, Provenance{}, ErrDisabled
 }
 
 func (Disabled) Commit(context.Context, Attempt) (Receipt, error) {
- return Receipt{}, ErrDisabled
+	return Receipt{}, ErrDisabled
 }
 
 // Values supplies a private adapter with a defensive copy, not authorization.
 // These values contain payload/provenance and must never be logged or exposed to
 // metadata-only readers. Calling Values cannot acknowledge execution or storage.
 func (a Attempt) Values() (Key, Provenance, Request, string) {
- p := a.provenance
- p.Host = copyAttribution(p.Host)
- p.Delegate = copyAttribution(p.Delegate)
- return a.key, p, Request{SchemaVersion: a.key.SchemaVersion, Answer: a.answer}, a.digest
+	p := a.provenance
+	p.Host = copyAttribution(p.Host)
+	p.Delegate = copyAttribution(p.Delegate)
+	return a.key, p, Request{SchemaVersion: a.key.SchemaVersion, Answer: a.answer}, a.digest
 }
