@@ -28,7 +28,7 @@ if Path(sys.argv[0]).name == 'client':
     if mode == 'unsupported':
         print('old client')
     else:
-        print('--remote --no-alt-screen')
+        print('--remote --no-alt-screen --dangerously-bypass-approvals-and-sandbox')
     sys.exit(1 if mode == 'client-error' else 0)
 if args == ['-V']:
     print('tmux fixture')
@@ -101,7 +101,11 @@ class LauncherTests(unittest.TestCase):
         argv = json.loads((self.root / 'argv').read_text())
         self.assertEqual(argv, [str(self.root / 'client'), '--remote', 'unix://' + str(self.socket_path),
                                '-C', str(self.repo), '-m', 'gpt-6.1-sol', '-c',
-                               'model_reasoning_effort="medium"', '--no-alt-screen', '--', self.text])
+                               'model_reasoning_effort="medium"', '--dangerously-bypass-approvals-and-sandbox',
+                               '--no-alt-screen', '--', self.text])
+        # Always-allow is the contract: the bypass flag, never a sandbox or approval choice.
+        for banned in ('-s', '--sandbox', '-a', '--ask-for-approval', '--approve-for-me', '--full-auto'):
+            self.assertNotIn(banned, argv[:-1])
         command = self.calls()[2][1][-1]
         # Actually parse the shell command with a harmless argv printer. This
         # catches expansion/injection that shlex.split alone would not expose.
@@ -194,7 +198,7 @@ class LauncherTests(unittest.TestCase):
                 calls.append(argv)
                 if argv[1] == phase:
                     raise subprocess.TimeoutExpired(argv, 5)
-                return subprocess.CompletedProcess(argv, 0, '%7' if argv[1] == 'new-session' else '--remote --no-alt-screen', '')
+                return subprocess.CompletedProcess(argv, 0, '%7' if argv[1] == 'new-session' else '--remote --no-alt-screen --dangerously-bypass-approvals-and-sandbox', '')
             with self.subTest(phase=phase), mock.patch.dict(os.environ, XDG_STATE_HOME=str(self.root / phase)), mock.patch.object(launcher, 'run', fake_run):
                 with self.assertRaises(launcher.Refusal) as caught:
                     launcher.launch(args)

@@ -86,30 +86,40 @@ func (a *app) tmuxExec(ctx context.Context, verb string, args []string, interact
 // after the checks attach, detach and login share: not inside a session pod,
 // kubectl on PATH, the API names the pod and it runs.
 func (a *app) sessionExecBase(ctx context.Context, cmd *command, verb, name string) ([]string, error) {
+	argv, s, err := a.sessionExecTarget(ctx, cmd, verb, name)
+	if err != nil {
+		return nil, err
+	}
+	if s.Phase != "Running" {
+		return nil, fail(ExitFailed, "%s is %s, so it has no running agent to %s; agent-run show %s says why", s.Name, firstOf(s.Phase, "not observed yet"), verb, s.Name)
+	}
+	return argv, nil
+}
+
+// sessionExecTarget is sessionExecBase without the Running check: the exec
+// argv and the session view it was built from. Callers check the phase.
+func (a *app) sessionExecTarget(ctx context.Context, cmd *command, verb, name string) ([]string, apiv1.Session, error) {
+	var s apiv1.Session
 	if a.inSessionPod() && !a.inWorkbenchPod() {
-		return nil, fail(ExitAuth, "%s is for Tom, from the workbench, a laptop or the v1 pod: an agent has no exec into another session's pod (D-19). Send it a message instead: agent-run msg %s \"<text>\"", verb, name)
+		return nil, s, fail(ExitAuth, "%s is for Tom, from the workbench, a laptop or the v1 pod: an agent has no exec into another session's pod (D-19). Send it a message instead: agent-run msg %s \"<text>\"", verb, name)
 	}
 	kubectl, err := a.env.LookPath("kubectl")
 	if err != nil {
-		return nil, fail(ExitFailed, "%s runs kubectl exec, and kubectl is not on PATH", verb)
+		return nil, s, fail(ExitFailed, "%s runs kubectl exec, and kubectl is not on PATH", verb)
 	}
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
-		return nil, err
+		return nil, s, err
 	}
 	// Outside a pod, exec must use the context captured for CA/token/forward.
 	// connect rejects selectors with automatic in-pod API/identity discovery.
 	if a.env.Getenv(envKubeHost) == "" || cmd.c.conn.kubeconfig != "" || cmd.c.conn.context != "" {
 		if _, err := a.kubectl(ctx, cmd.c.conn); err != nil {
-			return nil, err
+			return nil, s, err
 		}
 	}
-	var s apiv1.Session
 	if _, err := a.call(ctx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(name)), nil, nil, &s); err != nil {
-		return nil, err
-	}
-	if s.Phase != "Running" {
-		return nil, fail(ExitFailed, "%s is %s, so it has no running agent to %s; agent-run show %s says why", s.Name, firstOf(s.Phase, "not observed yet"), verb, s.Name)
+		return nil, s, err
 	}
 	argv := []string{kubectl, "exec", "-n", SessionNamespace, s.Name, "-c", agentContainer}
 	if a.kube != nil {
@@ -119,7 +129,7 @@ func (a *app) sessionExecBase(ctx context.Context, cmd *command, verb, name stri
 	// begins as a GET, and the v1 pod's service account may create pods/exec in
 	// dev-agents but not get it (ClusterRoleBinding dev-env-operator), so the
 	// default would answer 403. Not a new RBAC need: this uses the verb it has.
-	return append([]string{"env", kubectlSPDYEnv}, argv...), nil
+	return append([]string{"env", kubectlSPDYEnv}, argv...), s, nil
 }
 
 // kubectlSPDYEnv turns off kubectl's WebSocket exec (honoured by kubectl 1.29

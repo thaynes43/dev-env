@@ -14,6 +14,7 @@ Usage:
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
   agent-run rc start|status|fresh -o json         launch or observe Remote Control
+  agent-run thread start --agent <provider> ...   start a fresh phone-visible thread (Codex on a host, Claude as a session)
   agent-run inbox send|ask|reply|list|read|ack|ack-status
                                                   durable inbox
   agent-run instruction send|read|checkpoint|consume|address|attempt designated parent delivery and native consumption
@@ -138,6 +139,7 @@ The idempotency key is always sent and printed; retain it and the session handle
 timed_out with the session handle. Status makes one read and never submits a handoff.
 Codex is blocked locally with codex_adapter_not_implemented:
 Codex remote launch is not implemented in 2a; no inventory was probed
+For a fresh Codex thread on a paired v2 host, use agent-run thread start.
 
 The handoff file must contain 1 to 8192 bytes of UTF-8 text, with no control
 characters except newline and tab. It is submitted at most once after the link
@@ -638,6 +640,45 @@ operator's leader holds a ceremony, so the command reconnects by itself while a
 follower answers; if the operator restarts mid-ceremony, run url again. Adoption
 needs a valid code and the same account: a wrong code leaves the current login as
 it was. Renew well before the login lapses (status says when).
+`,
+	"thread": `Usage: agent-run thread start --agent codex --host <codex-host> --model <full id> --effort <e>
+                         --handoff FILE [--repo R] [--name N] [--wait 5m] [-o json]
+       agent-run thread start --agent claude --project P [--repo R] --model <full id> [--effort e]
+                         --handoff FILE [--wait 5m] [--idempotency-key K] [-o json]
+
+Starts one fresh interactive thread that Tom can see in his provider's phone app
+(DESIGN-057) and prints one thread-launch.v1 JSON line. The handoff is the
+thread's first message: 1 to 4096 UTF-8 bytes. Ask the thread to make its own
+worktree, as on the phone. --wait (at most 10m) bounds the whole launch.
+
+--agent codex     an existing Codex --interactive session (--host), paired once with
+                  agent-run pair. It runs agentd ctl thread-start in that pod over the
+                  exec route pair uses, so it is for Tom, the v1 pod or a workbench
+                  session; an ordinary session pod is refused (D-19). The thread is the
+                  native codex --remote TUI (scripts/codex-clean-session.py) in a tmux
+                  session named --name (default thread-<UTC mmdd-HHMMSS>) in
+                  ~/repos/<repo> on the host (default: the host's repo). Never codex exec
+                  or queue, and no sandbox or approval flag.
+--agent claude    a new remote session, through rc start's flow (about two minutes).
+--agent cursor|grok
+                  refused: not yet qualified.
+
+Every launch is always-allow, as in v1; no flag is the caller's to pick. The
+result's permission field says so: Codex --dangerously-bypass-approvals-and-sandbox,
+Claude --dangerously-skip-permissions (its critical-path check, such as rm inside
+sh -c, is the one prompt that mode does not cover), Cursor not qualified.
+
+Phases: host_ready, paired, client_started, thread_created, source_visible
+(in the phone's default list), handoff, first_response. Outcomes and exits:
+  responded 0         the first owner-visible response was observed
+  visible 7           created and listed; the response is pending or not observable
+  action_required 7   pairing or login needs Tom; nothing was created
+  timed_out 7         the wait ended first; phases show where
+  hidden 1            created with a source the phone hides
+  unconfirmed 6       the launch may have happened: inspect the host, never retry
+  failed 1, blocked 1 refused; nothing created unless phases say otherwise
+  (invalid input that agent-run itself refuses exits 2)
+Never resend a handoff after 6 or 7.
 `,
 	"pair": `Usage: agent-run pair <name>
 

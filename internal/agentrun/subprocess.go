@@ -52,6 +52,27 @@ func execOutput(ctx context.Context, argv []string) (int, string, string, error)
 	return 0, string(stdout.data), string(stderr.data), nil
 }
 
+// runCapture runs argv with stdin and the caller's stderr, keeping a bounded
+// stdout. A non-zero exit is not an error.
+func runCapture(ctx context.Context, argv []string, stdin io.Reader, stderr io.Writer) (int, []byte, error) {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	var stdout cappedOutput
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, &stdout, stderr
+	cmd.WaitDelay = time.Second
+	err := cmd.Run()
+	if stdout.overflow {
+		return 0, nil, errors.New("command output exceeded limit")
+	}
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode(), stdout.data, nil
+		}
+		return 0, nil, err
+	}
+	return 0, stdout.data, nil
+}
+
 func commandOutput(ctx context.Context, argv []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	var out cappedOutput

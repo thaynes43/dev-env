@@ -9,6 +9,15 @@ separate from operator-backed `agent-run rc fresh`. It creates a uniquely named
 detached tmux client using the supported interactive `codex --remote unix://…`
 route. No project ID is required. It never forks, resumes, selects an old thread,
 starts a daemon, pairs a host or changes credentials, configuration or trust.
+It always passes `--dangerously-bypass-approvals-and-sandbox` (always-allow, as
+the managed launches do; Tom, 2026-11-09) and never a sandbox or approval
+choice; a client whose `--help` lacks that flag is `unsupported-client`.
+
+The agent image installs this wrapper at
+`/usr/local/lib/dev-env-codex/codex-clean-session.py`. `agentd ctl
+thread-start`, which `agent-run thread start` runs in a paired v2 host
+(DESIGN-057), calls it once per launch and then confirms the new thread, its
+phone-visible source and its first answer over the daemon's control socket.
 
 ```sh
 python3 scripts/codex-clean-session.py \

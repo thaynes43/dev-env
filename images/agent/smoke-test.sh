@@ -131,6 +131,21 @@ EOF
 '
 echo "::endgroup::"
 
+echo "::group::codex thread wrapper"
+# agentd ctl thread-start runs this exact path (internal/agentd CodexThreadWrapper).
+# --dry-run checks inputs only: no client, tmux server or socket connection.
+run --entrypoint /bin/bash "${image}" -euc '
+  wrapper=/usr/local/lib/dev-env-codex/codex-clean-session.py
+  test -x $wrapper
+  python3 -I -B $wrapper --help > /tmp/clean-help.txt
+  grep -q -- "--task-file" /tmp/clean-help.txt
+  mkdir -p /tmp/thread-repo /tmp/thread-sock
+  python3 -c "import socket; s=socket.socket(socket.AF_UNIX); s.bind(\"/tmp/thread-sock/s.sock\")"
+  out=$(printf "task" | XDG_STATE_HOME=/tmp/thread-state python3 -I -B $wrapper --repo /tmp/thread-repo --socket /tmp/thread-sock/s.sock --model gpt-6-astra --effort high --name smoke-1 --client codex --task-file - --dry-run)
+  echo "$out" | grep -q "\"state\": \"dry-run\""
+'
+echo "::endgroup::"
+
 echo "::group::cursor acp helpers"
 # Same read-only, network-none, empty-HOME run as the toolchain group.
 # Checker exit 0 is not protocol or task success. This group does not launch Cursor.

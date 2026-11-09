@@ -62,6 +62,7 @@ Claude Code.
 | `opwork_mcp.py` (`opwork-mcp`) | MIT | This repo (an MCP stdio server over `opwork`; standard library only) |
 | `claude-statusline-usage` | MIT | This repo |
 | `cursor-acp-session.py`, `cursor-acp-smoke-check.py` | MIT | This repo. Installed together at `/usr/local/lib/dev-env-cursor-acp/`. They do not include the Cursor CLI. |
+| `codex-clean-session.py` | MIT | This repo. Installed at `/usr/local/lib/dev-env-codex/` for `agentd ctl thread-start` (DESIGN-057). It runs the image's Codex CLI and tmux; it bundles neither. |
 | `tini` | MIT | [krallin/tini](https://github.com/krallin/tini) |
 | Codex CLI | Apache-2.0 | [openai/codex](https://github.com/openai/codex) |
 | `kubectl` | Apache-2.0 | [kubernetes/kubernetes](https://github.com/kubernetes/kubernetes) |

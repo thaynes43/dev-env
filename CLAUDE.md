@@ -91,7 +91,7 @@ web/portal/localtest/    the portal local test instance (DESIGN-055): real handl
 cmd/agentd/              the in-pod supervisor: `run`, `home-verify` (the original-HOME init check, OP252), `hold` (the rescue pod, D-55), `shelf [--history-archive]` (the shelf pod,
                          D-67, DESIGN-025), `run-agent`
                          (a task, or a TUI, D-58), `claude-login[-status|-idle]` (the keeper pod's Claude login helper, T09 increment 5), `render`, `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43,
-                         D-48, D-58), `ctl deliver|log` (D-65), `ctl codex-pair` (Story110 T17), `ctl login url|code|status` (remote sessions), `ctl rescues|hold-rescue|prune` (D-67),
+                         D-48, D-58), `ctl deliver|log` (D-65), `ctl codex-pair` (Story110 T17), `ctl thread-start` (DESIGN-057), `ctl login url|code|status` (remote sessions), `ctl rescues|hold-rescue|prune` (D-67),
                          `ctl grant-install|grant-remove|grant-list|grant-use` (D-63),
                          `ctl history-export|history-archive` (DESIGN-025 H4), `ctl coord-archive put [--mark]|mark|lookup|get` (DESIGN-024 R2; journal grace, recorded-time or pinned get)
 cmd/dev-env-allowance-handoff/  explicitly invoked one-time collector fingerprint handoff preparation and guarded apply; the elected operator runs the same fenced apply from `--allowance-handoff-file` (default off, in-slot backup)
@@ -129,7 +129,7 @@ internal/scheduledwork/pages/  DESIGN-054 S4a's page Reminders: Key (the determi
 internal/shelf/          the operator's side of the shelf pod (D-67): finds it, lists and prunes rescues there by exec; the pruner is
                          a leader-only runnable; ExecSlots, the per-replica limit on archive execs (DESIGN-024 5, DESIGN-025 6.4);
                          HistoryReader, the history archive's reads for the API (DESIGN-025 8)
-internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, login, fleet, rc start|status (DESIGN-038, client observations), maintenance check, pages list|show (offline, DESIGN-031), schedule create|list|show|edit|cancel|approve|retry (DESIGN-054); finds the API and a token in a session
+internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, login, fleet, rc start|status (DESIGN-038, client observations), thread start (DESIGN-057), maintenance check, pages list|show (offline, DESIGN-031), schedule create|list|show|edit|cancel|approve|retry (DESIGN-054); finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol, and the standard-library helpers maintenancecontract, pages, version, and tokenfile (`make build` checks the binary does not link Kubernetes); tests run against an httptest TLS server
 internal/keeper/         the keeper (D-52), including the default-off Ask notifier (DESIGN-034): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes
@@ -158,6 +158,7 @@ internal/agentd/protocol/  what agentd and the operator exchange: the session do
                          archive's wire types and the canonical JSON both sides hash (canonical.go, DESIGN-025 5.4)
 internal/agentd/hostexecutor/  owns one foreground native computer for one immutable budget binding (no budget authority, no pairing)
 internal/codexrc/        pure pinned Codex project/host discovery and rc-launch error mapping; no I/O, launch or pairing authority
+internal/threadlaunch/   DESIGN-057's provider-neutral thread launch: registry (codex host, claude session, cursor/grok unqualified), Adapter interface, phase recorder and driver; pure, no I/O
 internal/codexauth/      the access-only Codex document the keeper publishes and agentd reads; it cannot carry a refresh token
 internal/claudeauth/     the access-only Claude projection document (dev-env-claude-live) and the merge of its access fields into a pod's .credentials.json; it cannot carry a refresh token; pure, no I/O (Story110 T09 increment 1)
 internal/claudelogin/    the keeper-owned Claude login ceremony (Story110 T09 increment 5): the control socket's wire types and client, and the helper that runs the pinned `claude auth login` in a memory-backed staging HOME, prints only the sign-in link and reads the one-time code on stdin; reads no credential

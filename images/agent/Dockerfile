@@ -457,6 +457,11 @@ RUN chmod 0755 /usr/local/bin/opwork /usr/local/bin/opwork-mcp && chmod 0644 /us
 COPY scripts/cursor-acp-session.py scripts/cursor-acp-smoke-check.py /usr/local/lib/dev-env-cursor-acp/
 RUN chmod 0755 /usr/local/lib/dev-env-cursor-acp/cursor-acp-session.py /usr/local/lib/dev-env-cursor-acp/cursor-acp-smoke-check.py
 
+# The Codex clean-session wrapper (the native codex --remote TUI in tmux) for
+# agentd ctl thread-start, DESIGN-057. Image-owned, like the ACP helpers above.
+COPY scripts/codex-clean-session.py /usr/local/lib/dev-env-codex/
+RUN chmod 0755 /usr/local/lib/dev-env-codex/codex-clean-session.py
+
 # The binaries of this repo come last, so a Go change rebuilds only these layers.
 # agentd is the one thing tini starts; agent-run is the v2 CLI (D-50).
 COPY --from=go /src/bin/agentd /src/bin/agent-run /usr/local/bin/
