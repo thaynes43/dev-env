@@ -350,8 +350,10 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 			// Codex remote is a phone-pairing daemon, not a TUI: there is
 			// nothing to attach to and no login to run (the keeper owns it).
 			a.outf("It runs Codex's phone daemon, not a TUI. Once agent-run show %s says running, pair a phone with: agent-run pair %s\n", sess.Name, sess.Name)
+			a.outf("Then start each thread in the ChatGPT app (Remote, then the paired computer). Threads from codex exec or codex queue never show on the phone.\n")
 		case interactive:
-			a.outf("Its Claude login lives in its own pod. If agent-run show %s says login-required, run: agent-run login %s url\n", sess.Name, sess.Name)
+			a.outf("It shows in the Claude app as %s once agent-run show %s says remote control: registered (about two minutes).\n", sess.Name, sess.Name)
+			a.outf("If it says login-required instead, agent-run login %s status says which login it uses: renew the keeper's shared login (Tom signs in; a workbench session runs agent-run keeper-login claude url), or, for a pod with its own login, agent-run login %s url\n", sess.Name, sess.Name)
 			a.outf("Attach to its TUI with: agent-run attach %s (detach with ctrl-b d)\n", sess.Name)
 		case local:
 			a.outf("Attach to its TUI with: agent-run attach %s (detach with ctrl-b d)\n", sess.Name)

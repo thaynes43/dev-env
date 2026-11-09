@@ -141,7 +141,7 @@ func (a *app) callWithRetryObserver(ctx context.Context, c *conn, method, path s
 		}
 		var certErr *tls.CertificateVerificationError
 		if errors.As(err, &certErr) {
-			return 0, fail(ExitAuth, "the API at %s has a certificate agent-run does not trust: %v; give its CA with --ca-file or %s", c.url, certErr.Err, envCAFile)
+			return 0, fail(ExitAuth, "the API at %s has a certificate agent-run does not trust: %v; give its CA with --ca-file or %s (in the cluster, such as the v1 pod, the pinned CA is in ConfigMap %s/%s, key ca.crt)", c.url, certErr.Err, envCAFile, SessionNamespace, apiCAConfigMap)
 		}
 		// A one-shot write whose answer cannot be read may still have taken
 		// effect; a read with an unreadable answer simply failed.

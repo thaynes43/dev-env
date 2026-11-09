@@ -23,7 +23,9 @@ func serveSession(h *harness, s apiv1.Session) {
 }
 
 // --interactive creates a remote-mode session (Story110 T03): no prompt, no
-// limits, the model as given, and hints for the pod-owned login and attach.
+// limits, the model as given, and hints for the phone entry, the login and
+// attach. The login hint names the keeper's shared login first: the default
+// profile follows it, and login url is only for a pod with its own login.
 func TestCreateInteractive(t *testing.T) {
 	h := newHarness(t)
 	serveCreate(h, runningOn(testSession(name, ""), "talosw02"))
@@ -32,8 +34,13 @@ func TestCreateInteractive(t *testing.T) {
 	if got.Mode != "remote" || got.Prompt != "" || got.Limits != nil || got.Agent != "claude" || got.Model != "claude-haiku-4-5" || got.Effort != "" {
 		t.Errorf("create %+v", got)
 	}
-	contains(t, "stdout", h.stdout.String(), "agent-run login "+name+" url")
-	contains(t, "stdout", h.stdout.String(), "agent-run attach "+name)
+	out := h.stdout.String()
+	contains(t, "stdout", out, "shows in the Claude app as "+name, "remote control: registered")
+	contains(t, "stdout", out, "agent-run login "+name+" status", "agent-run keeper-login claude url", "agent-run login "+name+" url")
+	contains(t, "stdout", out, "agent-run attach "+name)
+	if strings.Contains(out, "lives in its own pod") {
+		t.Errorf("the hint must not say every remote login lives in its pod: %q", out)
+	}
 }
 
 // --interactive with codex creates a remote-mode session too (Story110 T17): the
@@ -46,7 +53,7 @@ func TestCreateInteractiveCodex(t *testing.T) {
 	if got.Mode != "remote" || got.Prompt != "" || got.Limits != nil || got.Agent != "codex" || got.Model != "gpt-6-luna" {
 		t.Errorf("create %+v", got)
 	}
-	contains(t, "stdout", h.stdout.String(), "agent-run pair "+name)
+	contains(t, "stdout", h.stdout.String(), "agent-run pair "+name, "start each thread in the ChatGPT app", "codex exec or codex queue")
 	if strings.Contains(h.stdout.String(), "agent-run attach") || strings.Contains(h.stdout.String(), "agent-run login") {
 		t.Errorf("a codex remote session has no TUI and no pod login: %q", h.stdout.String())
 	}

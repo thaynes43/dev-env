@@ -128,6 +128,9 @@ func TestShow(t *testing.T) {
 	}
 
 	h.mustRun(ExitOK, "show", name)
+	if strings.Contains(h.stdout.String(), "remote control:") {
+		t.Errorf("a task session without a Remote Control entry printed one: %q", h.stdout.String())
+	}
 	contains(t, "show", h.stdout.String(),
 		"name:", name,
 		"phase:", "Running on talosw02",
@@ -158,6 +161,48 @@ func TestShow(t *testing.T) {
 
 	h.mustRun(ExitUsage, "show")
 	h.mustRun(ExitUsage, "show", "a", "b")
+}
+
+// show prints the Remote Control state in its text form, so a launcher can see
+// that a remote session reached the phone without -o json. The link stays in
+// -o json only.
+func TestShowRemoteControl(t *testing.T) {
+	const link = "https://claude.ai/code/session_0123456789abcdef"
+	cases := []struct {
+		agent, state, want string
+	}{
+		{"claude", "registered", "registered as " + name + ": registered with the Claude app (-o json has the link)"},
+		{"claude", "starting", "starting as " + name + ": not registered with the Claude app yet"},
+		{"claude", "offline", "offline as " + name + ": agentd records no live CLI process"},
+		{"codex", "starting", "the Codex daemon is not connected yet"},
+		{"codex", "offline", "the Codex daemon is not running"},
+		{"claude", "login-required", "agent-run login " + name + " status says which login it uses"},
+		{"codex", "login-required", "no current keeper Codex login"},
+		{"codex", "unpaired", "pair a phone with agent-run pair " + name},
+		{"codex", "pair-code-issued", "Codex cannot confirm a phone paired"},
+		{"codex", "errored", "connection as errored"},
+		{"claude", "something-new", "something-new as " + name + "\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.agent+"/"+tc.state, func(t *testing.T) {
+			h := newHarness(t)
+			s := runningOn(testSession(name, ""), "talosw02")
+			s.Agent, s.Mode = tc.agent, "remote"
+			s.RemoteControl = &apiv1.RemoteControl{Name: name, State: tc.state, URL: link}
+			serveSession(h, s)
+			h.mustRun(ExitOK, "show", name)
+			out := h.stdout.String()
+			contains(t, "show", out, "remote control:", tc.want)
+			if strings.Contains(out, link) {
+				t.Errorf("show's text form printed the Remote Control link: %q", out)
+			}
+			h.mustRun(ExitOK, "show", name, "-o", "json")
+			var got apiv1.Session
+			if err := json.Unmarshal(h.stdout.Bytes(), &got); err != nil || got.RemoteControl == nil || got.RemoteControl.URL != link {
+				t.Errorf("-o json lost the link: %v, %+v", err, got.RemoteControl)
+			}
+		})
+	}
 }
 
 func TestReap(t *testing.T) {

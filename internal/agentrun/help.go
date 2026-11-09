@@ -385,9 +385,13 @@ Starts a session: a pod on a worker node clones the repository and keeps its
 work on the session's volume. With -p it runs the agent once on the task,
 headless. With --local it starts the agent's TUI in tmux, which Tom attaches to
 with agent-run attach. With --interactive it starts the same TUI with Remote
-Control, so the session also shows in the Claude app; its Claude login lives in
-its own pod, and agent-run login sets it up (an idle one is suspended after 72h,
-which archives its phone entry until it resumes). When a session's pod starts
+Control, so the session also shows in the Claude app, about two minutes after it
+is created (agent-run show says remote control: registered). A profile that
+mounts the keeper's projection (today the default and workbench profiles)
+follows the keeper's shared Claude login, so nobody signs in; agent-run login
+<name> status says which login a session uses, and its url and code are only for
+a pod that holds its own login. An idle one is suspended after 72h, which
+archives its phone entry until it resumes. When a session's pod starts
 again later, the agent resumes the same conversation in the TUI; a task is never run twice.
 agent-run prints the session's name, then waits up to --wait for the pod to
 start. If the scheduler cannot place the pod, it prints the scheduler's reason
@@ -405,8 +409,9 @@ Flags:
                              --idempotency-key, --wait=0 and -o json
   -p, --prompt <task>        the task, at most 64 KiB
   --local                    an interactive session instead of a task: the TUI, no prompt
-  --interactive              --local plus Remote Control (claude: needs agent-run login; codex: a
-                             phone daemon with no TUI, paired with agent-run pair)
+  --interactive              --local plus Remote Control (claude: the keeper's shared login on
+                             the default profile; codex: a phone daemon with no TUI, paired
+                             with agent-run pair)
   --prompt-file <path>       read the task from a file instead; - reads stdin
   --repo <name>              the repository under the GitHub owner, such as haynes-ops;
                              or give it as the first argument. With --project,

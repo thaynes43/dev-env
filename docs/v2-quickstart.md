@@ -81,12 +81,22 @@ agent-run --repo haynes-ops --interactive --model claude-opus-5-5
   the v1 pod, add `--profile workbench` for one; without it you get the default
   profile.
 - The session is named after the repo and the time. After a minute or two it
-  appears in the Claude app under that name.
-- It uses the shared Claude login (section 6). Nobody signs in per session.
-  agent-run still prints a hint about `agent-run login`. Ignore it: a session on
-  the shared login refuses `login`.
-- To check from a terminal: `agent-run show <name> -o json` has
-  `remoteControl.state`. `registered` means it is on your phone.
+  appears in the Claude app under that name. Measured on 2026-11-09 from the v1
+  pod with agent-run 2.93.0 (a Sonnet 5.5 probe on dev-env, size S): created at
+  +0 s, pod Running at +6 s, nine repositories bootstrapped by +68 s, Remote
+  Control registered at +128 s.
+- It uses the shared Claude login (section 6) on the default and workbench
+  profiles. Nobody signs in per session. `agent-run login <name> status` says
+  "logged in on the keeper's projection" for such a session, and its `url` is
+  refused. agent-run releases after 2.93.0 say so in the create hint; 2.93.0 and
+  older print a hint about `agent-run login <name> url` that does not apply here.
+- To check from a terminal: `agent-run show <name>` prints a `remote control:`
+  line (releases after 2.93.0), and `agent-run show <name> -o json` has
+  `remoteControl.state` and the link. `registered` means it is on your phone.
+  `starting` is the normal wait. On the 2026-11-09 probe it read `offline`
+  (agentd recorded no live CLI process) for about 50 seconds while the agent
+  was busy, then `registered`. Wait for `registered` before telling anyone it
+  is on the phone.
   `login-required` means the shared login has lapsed (section 6). While the keeper's next generation is still on its way, `agentStatus.message` (not `remoteControl.message`) reads `refreshing:` for the first 3 minutes after the access token expires, and no sign-in is needed then.
 - During boot, `agentStatus.boot=booting` and `agentStatus.state=pending`; `agentStatus.message` names the current step (rendering configuration, bootstrapping projects with counts, or preparing the repo) until the agent can check its login.
 - After 72 hours idle it suspends itself, and its phone entry is archived.
