@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -89,7 +90,7 @@ func InstallCursorCLI(ctx context.Context, s Settings) error {
 	dir := filepath.Join(cursorVersionsDir(s), pin.Version)
 	bin := filepath.Join(dir, cursorCLIBinary)
 	if _, err := os.Lstat(dir); err == nil {
-		if err := checkCursorVersion(ctx, bin, cursorVersionEnv(os.Environ())); err != nil {
+		if err := checkCursorVersion(ctx, bin, cursorVersionEnv(os.Environ(), nil)); err != nil {
 			return fmt.Errorf("the pinned Cursor CLI at %s is not intact (%w); it is preserved for inspection and the task is not started", dir, err)
 		}
 		return nil
@@ -99,6 +100,14 @@ func InstallCursorCLI(ctx context.Context, s Settings) error {
 	root := cursorVersionsDir(s)
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return fmt.Errorf("cursor CLI install directory: %w", err)
+	}
+	// A staging directory left by an install that agentd did not live to
+	// finish (a preemption, a kill) is agentd's own; remove it before trying
+	// again, so retries cannot fill the volume.
+	if left, err := filepath.Glob(filepath.Join(root, ".install-*")); err == nil {
+		for _, old := range left {
+			_ = os.RemoveAll(old)
+		}
 	}
 	stage, err := os.MkdirTemp(root, ".install-")
 	if err != nil {
@@ -115,7 +124,7 @@ func InstallCursorCLI(ctx context.Context, s Settings) error {
 	if err := unpackCursorArchive(archive, pkg); err != nil {
 		return fmt.Errorf("the pinned Cursor CLI archive did not unpack: %w", err)
 	}
-	if err := checkCursorVersion(ctx, filepath.Join(pkg, cursorCLIBinary), cursorVersionEnv(os.Environ())); err != nil {
+	if err := checkCursorVersion(ctx, filepath.Join(pkg, cursorCLIBinary), cursorVersionEnv(os.Environ(), nil)); err != nil {
 		return fmt.Errorf("the unpacked Cursor CLI is not the pin: %w", err)
 	}
 	if err := os.Rename(pkg, dir); err != nil {
@@ -165,8 +174,8 @@ func downloadCursorArchive(ctx context.Context, pin cursorPin, dst string) error
 
 // unpackCursorArchive unpacks a gzip tar into dst, dropping the top directory
 // as v1's tar --strip-components=1 did. It takes regular files, directories
-// and relative symlinks that stay inside the package, writes nothing through
-// a symlink, and refuses any other entry.
+// and relative symlinks that resolve inside the package, chains included,
+// writes nothing through a symlink, and refuses any other entry.
 func unpackCursorArchive(archive, dst string) error {
 	f, err := os.Open(archive)
 	if err != nil {
@@ -187,7 +196,7 @@ func unpackCursorArchive(archive, dst string) error {
 	for entries := 0; ; entries++ {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			return linksStayInside(dst, links)
 		}
 		if err != nil {
 			return err
@@ -250,6 +259,27 @@ func unpackCursorArchive(archive, dst string) error {
 	}
 }
 
+// linksStayInside resolves every unpacked symlink, chains included, and
+// refuses one that does not resolve to a path inside dst. Each link's own
+// target was checked lexically; a chain of links can still climb out, which
+// only the resolved path shows.
+func linksStayInside(dst string, links []string) error {
+	root, err := filepath.EvalSymlinks(dst)
+	if err != nil {
+		return err
+	}
+	for _, rel := range links {
+		resolved, err := filepath.EvalSymlinks(filepath.Join(dst, filepath.FromSlash(rel)))
+		if err != nil {
+			return fmt.Errorf("symlink %q does not resolve inside the package", rel)
+		}
+		if resolved != root && !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
+			return fmt.Errorf("symlink %q resolves outside the package", rel)
+		}
+	}
+	return nil
+}
+
 // strippedArchivePath drops an entry's first path element. It reports false
 // for an absolute name or one that climbs out of the package.
 func strippedArchivePath(name string) (string, bool) {
@@ -265,18 +295,22 @@ func strippedArchivePath(name string) (string, bool) {
 }
 
 // checkCursorVersion runs `<bin> --version` and compares it with the pin. It
-// reads at most a small bounded output and never authenticates.
+// keeps at most cursorVersionOutput bytes of stdout, discards stderr, gets no
+// API key, and on timeout kills the launcher's whole process group.
 func checkCursorVersion(ctx context.Context, bin string, env []string) error {
 	ctx, cancel := context.WithTimeout(ctx, cursorVersionTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "--version")
 	cmd.Env = env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = time.Second
-	out, err := cmd.Output()
-	if err != nil {
+	out := &cappedBuffer{limit: cursorVersionOutput}
+	cmd.Stdout = out
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("it did not report its version: %w", err)
 	}
-	got := strings.TrimSpace(string(out))
+	got := strings.TrimSpace(out.String())
 	if got != cursorCLIPin.Version {
 		if len(got) > 64 || strings.ContainsFunc(got, func(r rune) bool { return r < ' ' || r == 0x7f }) {
 			got = "an unreadable version"
@@ -286,13 +320,30 @@ func checkCursorVersion(ctx context.Context, bin string, env []string) error {
 	return nil
 }
 
-// cursorVersionEnv is the environment of a version check at install: the
-// pod's, without the API key, which a version check does not need.
-func cursorVersionEnv(base []string) []string {
-	return slices.DeleteFunc(slices.Clone(base), func(kv string) bool {
-		k, _, _ := strings.Cut(kv, "=")
-		return k == cursorAPIKeyEnv
-	})
+// cursorVersionOutput bounds what a version check keeps of stdout.
+const cursorVersionOutput = 4 << 10
+
+// cappedBuffer keeps the first limit bytes written to it and drops the rest,
+// so a launcher that prints without end cannot grow agentd's memory.
+type cappedBuffer struct {
+	limit int
+	buf   []byte
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - len(b.buf); room > 0 {
+		b.buf = append(b.buf, p[:min(room, len(p))]...)
+	}
+	return len(p), nil
+}
+
+func (b *cappedBuffer) String() string { return string(b.buf) }
+
+// cursorVersionEnv is a version check's environment: the pod's, with
+// everything a cursor agent loses and, on top, the API key, which a version
+// check does not need. A launch's own Env is added back.
+func cursorVersionEnv(base []string, extra []string) []string {
+	return agentEnv(base, Launch{Unset: append(slices.Clone(cursorUnset), cursorAPIKeyEnv), Env: extra})
 }
 
 // verifyCursorCLI is run-agent's check before it starts a cursor launch: the
@@ -303,7 +354,7 @@ func verifyCursorCLI(l Launch) error {
 	if len(l.Argv) == 0 {
 		return errors.New("the cursor launch has no command")
 	}
-	if err := checkCursorVersion(context.Background(), l.Argv[0], agentEnv(os.Environ(), l)); err != nil {
+	if err := checkCursorVersion(context.Background(), l.Argv[0], cursorVersionEnv(os.Environ(), l.Env)); err != nil {
 		return fmt.Errorf("the Cursor CLI no longer matches the pin, so the task is not started: %w", err)
 	}
 	return nil

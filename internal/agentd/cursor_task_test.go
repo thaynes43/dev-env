@@ -153,7 +153,7 @@ func fakeCursorCLI(t *testing.T, dir, version, stream string, code int, marker s
 	writeFile(t, filepath.Join(dir, "stream.jsonl"), stream)
 	p := filepath.Join(dir, "fake-cursor-agent")
 	body := `#!/bin/sh
-if [ "$1" = "--version" ]; then echo "` + version + `"; exit 0; fi
+if [ "$1" = "--version" ]; then [ -z "$CURSOR_API_KEY$ANTHROPIC_API_KEY$CLAUDE_CODE_OAUTH_TOKEN" ] || exit 80; echo "` + version + `"; exit 0; fi
 : > "` + marker + `"
 [ "$CURSOR_API_KEY" = "` + syntheticCursorKey + `" ] || { echo "no cursor key" >&2; exit 90; }
 [ -z "$ANTHROPIC_API_KEY" ] || { echo "metered key leaked" >&2; exit 91; }
@@ -341,7 +341,9 @@ func cursorArchive(t *testing.T, version string, extra ...tar.Header) []byte {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	launcher := "#!/bin/sh\necho " + version + "\n"
+	// The launcher prints its version only when no key or other provider's
+	// credential reached it.
+	launcher := "#!/bin/sh\n[ -z \"$CURSOR_API_KEY$ANTHROPIC_API_KEY$OPENAI_API_KEY\" ] || exit 80\necho " + version + "\n"
 	for _, h := range append([]tar.Header{
 		{Name: "dist-package/", Typeflag: tar.TypeDir, Mode: 0o755},
 		{Name: "dist-package/cursor-agent", Typeflag: tar.TypeReg, Mode: 0o755, Size: int64(len(launcher))},
@@ -389,11 +391,16 @@ func TestInstallCursorCLI(t *testing.T) {
 	archive := cursorArchive(t, "2026.10.14-fixture")
 	hits := serveCursorArchive(t, archive, sha256Hex(archive))
 	s := testSettings(t, t.TempDir())
+	t.Setenv(cursorAPIKeyEnv, syntheticCursorKey)
+	t.Setenv("ANTHROPIC_API_KEY", "metered")
+	t.Setenv("OPENAI_API_KEY", "metered")
+	// An install agentd did not live to finish left its staging behind.
+	writeFile(t, filepath.Join(cursorVersionsDir(s), ".install-left", "package.tgz"), "partial")
 	if err := InstallCursorCLI(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 	bin := cursorCLIPath(s)
-	if err := checkCursorVersion(context.Background(), bin, os.Environ()); err != nil {
+	if err := checkCursorVersion(context.Background(), bin, cursorVersionEnv(os.Environ(), nil)); err != nil {
 		t.Fatal("installed launcher", err)
 	}
 	if target, err := os.Readlink(filepath.Join(filepath.Dir(bin), "agent")); err != nil || target != "cursor-agent" {
@@ -457,6 +464,48 @@ func TestInstallCursorCLIRefusesUnsafeArchives(t *testing.T) {
 				t.Fatal("an unsafe archive left an install", err)
 			}
 		})
+	}
+}
+
+// Each link of a chain stays inside the package on its own, but together they
+// climb out. Only the resolved path shows it, so the install is refused.
+func TestInstallCursorCLIRefusesASymlinkChainOut(t *testing.T) {
+	const depth = 11
+	dirs := make([]string, depth)
+	for i := range dirs {
+		dirs[i] = "a" + itoaInt(i)
+	}
+	nest := strings.Join(dirs, "/")
+	up := tar.Header{Name: "dist-package/" + nest + "/up", Typeflag: tar.TypeSymlink, Linkname: strings.TrimSuffix(strings.Repeat("../", depth), "/")}
+	esc := tar.Header{Name: "dist-package/esc", Typeflag: tar.TypeSymlink, Linkname: nest + "/up/" + strings.Repeat("../", depth+1) + "etc/passwd"}
+	archive := cursorArchive(t, "2026.10.14-fixture", up, esc)
+	serveCursorArchive(t, archive, sha256Hex(archive))
+	s := testSettings(t, t.TempDir())
+	err := InstallCursorCLI(context.Background(), s)
+	if err == nil || !strings.Contains(err.Error(), `symlink "esc"`) {
+		t.Fatal("a symlink chain out of the package was installed", err)
+	}
+	if _, err := os.Lstat(filepath.Dir(cursorCLIPath(s))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the chain left an install", err)
+	}
+}
+
+// A launcher that prints without end is cut off at the bound, not buffered.
+func TestCursorVersionOutputIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "chatty")
+	writeFile(t, bin, "#!/bin/sh\nhead -c 1048576 /dev/zero | tr '\\0' x\n")
+	if err := os.Chmod(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := checkCursorVersion(context.Background(), bin, os.Environ())
+	if err == nil || !strings.Contains(err.Error(), "an unreadable version") {
+		t.Fatal("unbounded version output", err)
+	}
+	b := &cappedBuffer{limit: 3}
+	_, _ = b.Write([]byte("abcdef"))
+	if b.String() != "abc" {
+		t.Fatal("cap", b.String())
 	}
 }
 

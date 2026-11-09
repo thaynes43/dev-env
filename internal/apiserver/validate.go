@@ -120,6 +120,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	}
 	var fields []apiv1.FieldError
 	add := func(field, format string, args ...any) { fields = append(fields, fieldError(field, format, args...)) }
+	var cursorRefusal error
 
 	// What the built plans serve: Claude task sessions (plan 01) and local
 	// sessions (plan 02, D-58). Each later plan lifts its own line.
@@ -174,9 +175,9 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		if s.callerHasTaskBudget(c) {
 			add("agent", "a budget-bound caller cannot dispatch a cursor task: budgeted dispatch binds retained common inputs, which Cursor does not take")
 		}
-		if err := s.cursorEnabled(ctx); err != nil {
-			return nil, err
-		}
+		// Checked after the field errors: a malformed request is invalid,
+		// and only a well-formed one learns that cursor is not enabled.
+		cursorRefusal = s.cursorEnabled(ctx)
 	case v1alpha1.AgentOpencode:
 		add("agent", "opencode sessions arrive in plan 09; plan 01 runs claude")
 	case "":
@@ -318,6 +319,9 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	}
 	if len(fields) > 0 {
 		return nil, invalid(fields...)
+	}
+	if cursorRefusal != nil {
+		return nil, cursorRefusal
 	}
 	identity := s.profileIdentity(ctx, spec.Profile)
 	if identity != "" {

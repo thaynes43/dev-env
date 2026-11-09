@@ -95,6 +95,7 @@ func TestValidate(t *testing.T) {
 		{"cursor model with a vendor path", func(s *Session) { s.Agent, s.Model, s.Effort = AgentCursor, "claude-4.5-opus-high-thinking", "" }, ""},
 		{"cursor without a model", func(s *Session) { s.Agent, s.Model, s.Effort = AgentCursor, "", "" }, "needs a Cursor model id"},
 		{"cursor model like a flag", func(s *Session) { s.Agent, s.Model, s.Effort = AgentCursor, "--force", "" }, "not a Cursor model id"},
+		{"cursor model with a plus", func(s *Session) { s.Agent, s.Model, s.Effort = AgentCursor, "gpt+5", "" }, "not a Cursor model id"},
 		{"cursor model with a space", func(s *Session) { s.Agent, s.Model, s.Effort = AgentCursor, "gpt 5", "" }, "not a Cursor model id"},
 		{"cursor model too long", func(s *Session) {
 			s.Agent, s.Model, s.Effort = AgentCursor, strings.Repeat("m", MaxCursorModelBytes+1), ""

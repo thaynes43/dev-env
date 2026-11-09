@@ -213,11 +213,12 @@ var (
 	gitRef = regexp.MustCompile(`^[^-\s][^\s]*$`)
 	// effortLevel is a level name such as xhigh; the API checks it per model.
 	effortLevel = regexp.MustCompile(`^[a-z]+$`)
-	// cursorModelID is the shape of a Cursor model id: printable ASCII with
-	// no space, quote or shell metacharacter, starting with a letter or digit,
-	// so it can never read as a CLI flag. There is no allowlist: the CLI
-	// refuses an id it does not know (DESIGN-058).
-	cursorModelID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$`)
+	// cursorModelID is the shape of a Cursor model id: letters, digits and
+	// . _ : / -, starting with a letter or digit, so it can never read as a
+	// CLI flag. It is a subset of the inbox's requested-model pattern, so a
+	// cursor session's messages are not refused for their model. There is no
+	// allowlist: the CLI refuses an id it does not know (DESIGN-058).
+	cursorModelID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`)
 )
 
 // MaxCursorModelBytes bounds a Cursor model id, as the spec bounds every model.
@@ -364,7 +365,7 @@ func ValidateCursorModel(id string) error {
 		return errors.New("model is empty: a cursor session needs a Cursor model id")
 	}
 	if len(id) > MaxCursorModelBytes || !cursorModelID.MatchString(id) {
-		return fmt.Errorf("model %q is not a Cursor model id: at most %d printable characters with no space or quote, starting with a letter or digit", id, MaxCursorModelBytes)
+		return fmt.Errorf("model %q is not a Cursor model id: at most %d letters, digits and . _ : / -, starting with a letter or digit", id, MaxCursorModelBytes)
 	}
 	return nil
 }
