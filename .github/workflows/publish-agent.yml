@@ -220,8 +220,6 @@ jobs:
     # Uploading release assets needs contents: write. No packages, no OIDC token.
     permissions:
       contents: write
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -268,6 +266,9 @@ jobs:
 
       # --clobber lets a dispatch on the same tag replace the assets (the fallback path).
       - name: Attach the assets to the release
+        # The token reaches only this step; checkout, Go and the build never see it.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${GITHUB_REF_NAME}" \
             dist/agent-run-linux-amd64 dist/agent-run-darwin-arm64 dist/SHA256SUMS \
