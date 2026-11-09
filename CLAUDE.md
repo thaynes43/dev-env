@@ -135,10 +135,12 @@ These large files are references. Search them for the item you need:
   dispatch or supervise long work, `worker-qa-loop` for a coordinator running workers
   and QA, `timer-checkin` for timed check-ins, and `tmux-cli-handoff` for delivering
   work into a provider CLI in tmux. Open the `SKILL.md` yourself; no provider loads it.
-- **Pod-exec commands.** `agent-run attach`, `detach`, `login`, `pair` and
-  `thread start --agent codex` run through pod exec. They work for Tom, the v1 pod
-  and a workbench session; an ordinary session pod is refused unless the command's
-  help says otherwise.
+- **Pod-exec commands.** `agent-run attach`, `detach`, `login` and `pair` run
+  through pod exec, so they work for Tom, the v1 pod and a workbench session, and not
+  from an ordinary session pod. From a session pod, `thread start --agent codex` goes
+  through the operator's API instead, fenced to a host on the caller's profile or one
+  it or its children started; an operator without that route refuses it
+  (`route_unsupported`). See `agent-run help thread`.
 - **Plain writing.** Short sentences, concrete nouns, no filler. Use Mermaid for
   editable diagrams; SVG or PNG workflow drawings also work.
 

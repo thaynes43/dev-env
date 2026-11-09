@@ -8,6 +8,8 @@
 //	GET    /v1/sessions/{name}             one session
 //	DELETE /v1/sessions/{name}             reap: rescue, suspend, archive (D-45)
 //	POST   /v1/sessions/{name}/heartbeat   agentd's status (D-41), the session's own pod only
+//	POST   /v1/sessions/{name}/threads     start one Codex thread on that host (DESIGN-057 10), by exec;
+//	                                       a session only on a host of its own profile or below it
 //	GET    /v1/fleet                       what runs and waits, and on which revision
 //	/v1/scheduled-work[/{name}[/cancel|/approve|/retry]]  scheduled agent work (DESIGN-054); off unless ScheduledWork is set
 //	POST   /v1/asks                        create an ask (session); off unless Asks is set
@@ -319,6 +321,12 @@ func (s *Server) Handler() http.Handler {
 	}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/messages", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodPost: s.sendMessage,
+	}}))
+	// Narrower than messages (threads.go): no coordinator, since thread-start
+	// takes no target fences, and a session reaches only a host of its own
+	// profile or one below it, since a handoff is an always-allow first instruction.
+	mux.Handle(apiv1.SessionsPath+"/{name}/threads", s.serve(route{methods: map[string]handler{
+		http.MethodPost: s.startThread,
 	}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/decision", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodGet:  s.readChildDecision,
