@@ -386,8 +386,31 @@ A headless `-p` task runs its prompt once. `msg` applies to a local TUI session;
 
 Follow transitions with `show`/`list`; `reap` returning does not mean cleanup has
 already finished. An archived session is restored into a new session, not resumed.
-Rescue preserves Git work. **The ordinary private reap path deletes the home;
-it does not retain the provider transcript or memory.** Suspend preserves the home temporarily, but private sessions auto-archive
+
+**Reaping a private session (DESIGN-025 section 25).** With private history
+retention on, as the live operator runs, a reaped private task session is not
+rescued to a bundle and its volume is not archived. The operator asks its agent
+to stop and keeps its private HOME. Nothing is archived or deleted at the reap.
+The session stays, reaping and `Pending`, until the HOME expiry has archived
+its history and deleted the HOME; that archive is not switched on yet
+(2026-11-09).
+`agent-run reap`, `show` and `list` print the operator's own words for it, and
+its `RemovalBlocked` condition gives one of two reasons:
+
+- `ExecutorEnded`: the agent stopped. The text gives how its Pod ended and the
+  time the operator recorded it.
+- `RetentionPending`: the stop is not proven yet, and the text says why: the
+  stop request is still in flight, the agent still runs, or its Pod ended but
+  the operator cannot confirm that yet. In the last case the operator checks
+  again after a wait that doubles from 30 seconds to at most 30 minutes.
+
+The gauges `dev_env_reaped_sessions_retained{reason}` and
+`dev_env_reaped_sessions_oldest_seconds{reason}` count these sessions and the
+age of the oldest reap.
+
+Rescue preserves Git work. **Without private history retention, the ordinary
+private reap path deletes the home; it does not retain the provider transcript
+or memory.** Suspend preserves the home temporarily, but private sessions auto-archive
 after their configured `archiveAfter` (default 168 hours). Verify required
 history retention before that deadline; suspend is not an indefinite backup.
 Archive/history retention is a remaining feature. Rescue does not back up ignored files or every home file; snapshots

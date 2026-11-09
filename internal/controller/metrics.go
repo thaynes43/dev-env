@@ -30,6 +30,8 @@ const (
 	MetricSessions                = "dev_env_sessions"
 	MetricTerminalTaskRetained    = "dev_env_terminal_task_pods_retained"
 	MetricTerminalTaskRetainedAge = "dev_env_terminal_task_pods_oldest_seconds"
+	MetricReapedRetained          = "dev_env_reaped_sessions_retained"
+	MetricReapedRetainedAge       = "dev_env_reaped_sessions_oldest_seconds"
 )
 
 // collectTimeout bounds one scrape's read of the sessions.
@@ -51,9 +53,19 @@ var (
 		"Terminal headless task compute retained by current reclaim reason (DESIGN-025 24).", []string{"reason"}, nil)
 	terminalTaskRetainedAgeDesc = prometheus.NewDesc(MetricTerminalTaskRetainedAge,
 		"Oldest retained terminal headless task compute age in seconds by current reclaim reason.", []string{"reason"}, nil)
+	reapedRetainedDesc = prometheus.NewDesc(MetricReapedRetained,
+		"Reaped sessions the operator still keeps, by the reason of their RemovalBlocked condition (DESIGN-025 25). RetentionPending: a private agent's stop is not proven yet; ExecutorEnded: it stopped, and its HOME waits for the HOME expiry.",
+		[]string{"reason"}, nil)
+	reapedRetainedAgeDesc = prometheus.NewDesc(MetricReapedRetainedAge,
+		"Seconds since the reap of the oldest reaped session still kept, by the reason of its RemovalBlocked condition; 0 when none.", []string{"reason"}, nil)
 )
 
 var terminalTaskRetainedReasons = []string{"ProofUnknown", "IdentityUnknown", "Protected", "Held", "ChildrenActive", "Grace", "Stopping"}
+
+// reapedRetainedReasons are the RemovalBlocked reasons a reaped session can
+// show, each reported even at 0; any other reason counts as Other.
+var reapedRetainedReasons = []string{reasonRetentionPending, reasonExecutorEnded, "TaskComputeReclaimed", "PreservationUnknown",
+	"HomeDeleting", "HomeExpired", "DeleteNeedsRescue", "Other"}
 
 // allReportedPhases are the phases dev_env_sessions always reports, with "" as
 // "Unknown" for a session the operator has not observed yet.
@@ -81,6 +93,8 @@ func (c *SessionCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- sessionsDesc
 	ch <- terminalTaskRetainedDesc
 	ch <- terminalTaskRetainedAgeDesc
+	ch <- reapedRetainedDesc
+	ch <- reapedRetainedAgeDesc
 }
 
 // Collect implements prometheus.Collector. A failed list reports an invalid
@@ -97,6 +111,7 @@ func (c *SessionCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	counts := map[string]int{"Unknown": 0}
 	retained, oldest := map[string]float64{}, map[string]float64{}
+	reaped, reapedOldest := map[string]float64{}, map[string]float64{}
 	now := time.Now()
 	if c.Now != nil {
 		now = c.Now()
@@ -125,6 +140,14 @@ func (c *SessionCollector) Collect(ch chan<- prometheus.Metric) {
 				oldest[reason] = max(oldest[reason], max(0, now.Sub(at).Seconds()))
 			}
 		}
+		if cond := meta.FindStatusCondition(s.Status.Conditions, ConditionRemovalBlocked); !s.DeletionTimestamp.IsZero() && cond != nil && cond.Status == metav1.ConditionTrue {
+			reason := cond.Reason
+			if !slices.Contains(reapedRetainedReasons, reason) {
+				reason = "Other"
+			}
+			reaped[reason]++
+			reapedOldest[reason] = max(reapedOldest[reason], max(0, now.Sub(s.DeletionTimestamp.Time).Seconds()))
+		}
 		if cond := meta.FindStatusCondition(s.Status.Conditions, ConditionRescueFailed); cond != nil && cond.Status == metav1.ConditionTrue {
 			ch <- prometheus.MustNewConstMetric(rescueFailedDesc, prometheus.GaugeValue, 1, s.Name, cond.Reason)
 			key := "unclassified"
@@ -140,6 +163,10 @@ func (c *SessionCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	for phase, n := range counts {
 		ch <- prometheus.MustNewConstMetric(sessionsDesc, prometheus.GaugeValue, float64(n), phase)
+	}
+	for _, reason := range reapedRetainedReasons {
+		ch <- prometheus.MustNewConstMetric(reapedRetainedDesc, prometheus.GaugeValue, reaped[reason], reason)
+		ch <- prometheus.MustNewConstMetric(reapedRetainedAgeDesc, prometheus.GaugeValue, reapedOldest[reason], reason)
 	}
 	if c.TerminalTaskReclaim {
 		for _, reason := range terminalTaskRetainedReasons {

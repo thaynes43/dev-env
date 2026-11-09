@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -381,6 +383,123 @@ func privateExecutorUsesHome(pod *corev1.Pod, claim string) bool {
 	return false
 }
 
+// The reasons a protected Session that wants its pod gone gives in
+// PrivateHistoryRetained, RemovalBlocked and PodReady (DESIGN-025 25, OP490):
+// the terminal record proves its agent stopped, or nothing proves that yet.
+// RetentionPending keeps the meaning its old text gave it, stop not proven;
+// ExecutorEnded is the name section 3.6 already gives a recorded end.
+const (
+	reasonRetentionPending = "RetentionPending"
+	reasonExecutorEnded    = "ExecutorEnded"
+)
+
+// privateRetention is what a protected Session that wants its pod gone says,
+// in words its owner reads without the design: that the reap was accepted (or
+// the Session is suspended), whether its agent's stop is proven and how, that
+// its HOME is kept and nothing is archived or deleted, and what releases it.
+// It reads only the Session and the observation, so a new operator says the
+// same; stopState stays its schema's single value Unknown (DESIGN-025 3.1).
+func privateRetention(s *v1alpha1.AgentSession, obs observation) (reason, message string) {
+	return privateRetentionNoted(s, obs, "")
+}
+
+// privateRetentionNoted is privateRetention with note, when not empty, told
+// right after the agent's stop.
+func privateRetentionNoted(s *v1alpha1.AgentSession, obs observation, note string) (reason, message string) {
+	h := s.Status.PrivateHistory
+	reaped := !s.DeletionTimestamp.IsZero()
+	proven := h != nil && executorTerminalRecorded(h)
+	parts := []string{"suspended"}
+	if reaped {
+		parts[0] = "reap accepted"
+	}
+	reason = reasonRetentionPending
+	if proven {
+		reason = reasonExecutorEnded
+		parts = append(parts, agentStoppedText(h.ExecutorTerminal))
+	} else {
+		parts = append(parts, "the agent's stop is not proven yet: "+stopNotProvenText(s, obs))
+	}
+	if note != "" {
+		parts = append(parts, note)
+	}
+	var e *v1alpha1.PrivateHomeExpiryStatus
+	if h != nil {
+		e = h.Expiry
+	}
+	archived := e != nil && e.Archive != nil
+	if archived {
+		parts = append(parts, "its history is archived as "+e.Archive.Entry+", and its private HOME is kept")
+	} else {
+		parts = append(parts, "its private HOME is kept, and nothing is archived or deleted yet")
+	}
+	next := ""
+	switch {
+	case reaped && archived:
+		next = "the session is released only after the HOME expiry (DESIGN-025) deletes the HOME"
+	case reaped && proven:
+		next = "the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME"
+	case reaped:
+		next = "the session is released only after its stop is proven and the HOME expiry (DESIGN-025) archives its history and deletes the HOME"
+	case e != nil:
+		next = "the HOME expiry (DESIGN-025) is at " + e.Phase
+	}
+	if reaped {
+		switch {
+		case !obs.homeExpiryOn:
+			next += ", and the history archive is not switched on yet"
+		case e == nil:
+			next += "; the HOME expiry has not started yet"
+		default:
+			next += "; the HOME expiry is at " + e.Phase
+		}
+	}
+	if next != "" {
+		parts = append(parts, next)
+	}
+	return reason, strings.Join(parts, "; ")
+}
+
+// agentStoppedText is the executor's terminal record as its owner reads it:
+// how its Pod ended and when the operator recorded that.
+func agentStoppedText(t *v1alpha1.PrivateExecutorTerminalStatus) string {
+	how := t.Phase
+	if t.Reason != "" {
+		how += " (" + t.Reason + ")"
+	}
+	return fmt.Sprintf("the agent stopped: its Pod ended %s, recorded %s", how, t.ObservedAt.UTC().Format(time.RFC3339))
+}
+
+// stopNotProvenText says why no terminal record proves the agent's stop.
+func stopNotProvenText(s *v1alpha1.AgentSession, obs observation) string {
+	h := s.Status.PrivateHistory
+	pod := obs.pod.obj
+	standing := h != nil && h.LastExecutor != nil && !obs.pod.missing && obs.pod.foreign == "" && pod != nil &&
+		!isHoldPod(pod) && string(pod.UID) == h.LastExecutor.PodUID
+	switch {
+	case h == nil || h.LastExecutor == nil:
+		return "no agent Pod is recorded for it"
+	case !standing:
+		return "its recorded agent Pod is not observed"
+	case podPhaseTerminal(pod) && obs.privateTerminalRefusal != "":
+		return terminalRefusalText(pod, obs.privateTerminalRefusal)
+	case podPhaseTerminal(pod):
+		return fmt.Sprintf("its Pod ended %s, and no record of that is written yet", pod.Status.Phase)
+	case h.StopRequest != nil:
+		return fmt.Sprintf("a stop was requested at %s, and its Pod has not ended yet", h.StopRequest.RequestedAt.UTC().Format(time.RFC3339))
+	case !s.DeletionTimestamp.IsZero():
+		return "its Pod is still running, and no stop request is recorded"
+	}
+	return "its Pod keeps running, because a suspend does not stop a private agent"
+}
+
+// terminalRefusalText says that the Pod ended but its terminal record was
+// refused, why, and when the operator looks again (DESIGN-025 25).
+func terminalRefusalText(pod *corev1.Pod, refusal string) string {
+	return fmt.Sprintf("its Pod ended %s, but the operator cannot confirm that yet (%s); it checks again after a wait that doubles from 30 seconds to at most 30 minutes",
+		pod.Status.Phase, refusal)
+}
+
 // setPrivateHistoryConditions sets PrivateHistory for a protected Session and,
 // when it wants its pod gone, RemovalBlocked; removalSet reports the latter, so
 // observe does not remove the condition this sets.
@@ -389,19 +508,28 @@ func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *
 		return false
 	}
 	c := metav1.Condition{Type: ConditionPrivateHistory, Status: metav1.ConditionTrue, Reason: "HomeProtected",
-		Message: "original private HOME and durable Session identity remain protected; private stop state is Unknown", ObservedGeneration: s.Generation}
+		Message: "the private HOME and the session's record are protected (DESIGN-025)", ObservedGeneration: s.Generation}
+	if pod := obs.pod.obj; obs.privateTerminalRefusal != "" && !obs.pod.missing && pod != nil {
+		c.Message += "; " + terminalRefusalText(pod, obs.privateTerminalRefusal)
+	}
 	if wantsPodGone(s) {
-		c.Reason = "RetentionPending"
+		c.Reason, c.Message = privateRetention(s, obs)
 	}
 	removal := c
 	if obs.privateExecutorEnded {
 		// DESIGN-025 3.4: with the terminal record confirmed, a missing
-		// executor Pod is expected. The HOME stays protected.
-		c.Reason = "ExecutorEnded"
-		c.Message = "original private HOME and durable Session identity remain protected; the recorded private executor ended (executorTerminal); private stop state is Unknown"
+		// executor Pod is expected. The HOME stays protected. A Session
+		// that wants its pod gone already says ExecutorEnded.
+		if !wantsPodGone(s) {
+			c.Reason = reasonExecutorEnded
+			c.Message = agentStoppedText(s.Status.PrivateHistory.ExecutorTerminal) + "; its Pod is gone; its private HOME is kept, and the agent is not started again"
+		}
 		if s.Status.PrivateHistory.TaskTerminal != nil {
 			c.Reason = "TaskComputeReclaimed"
 			c.Message = "terminal task compute is absent with confirmed executor proof; original HOME, history, task outcome and durable Session identity remain retained"
+			if !s.DeletionTimestamp.IsZero() {
+				_, c.Message = privateRetentionNoted(s, obs, "its Pod was then removed to free compute")
+			}
 			removal = c
 		}
 	}
@@ -413,7 +541,10 @@ func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *
 		if h.Expiry.Archive != nil {
 			c.Message += " as " + h.Expiry.Archive.Entry
 		}
-		c.Message += "; durable Session identity remains protected; private stop state is Unknown"
+		if executorTerminalRecorded(h) {
+			c.Message += "; " + agentStoppedText(h.ExecutorTerminal)
+		}
+		c.Message += "; the session's record is kept"
 		removal = c
 	}
 	if obs.privateHistoryUnknown != nil {

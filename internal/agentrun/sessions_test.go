@@ -250,6 +250,79 @@ func TestReap(t *testing.T) {
 	}
 }
 
+// DESIGN-025 25: a private session's reap keeps its HOME, so agent-run never
+// claims a rescue bundle or a volume archive for it. Before the operator has
+// judged the reap it says what the reap does; after, it prints the operator's
+// RemovalBlocked text, and list and show carry the same.
+func TestReapPrivateSessionSaysWhatIsTrue(t *testing.T) {
+	const stopped = "reap accepted; the agent stopped: its Pod ended Failed (DeadlineExceeded), recorded 2026-11-09T17:31:21Z; " +
+		"its private HOME is kept, and nothing is archived or deleted yet; " +
+		"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
+	private := func(s apiv1.Session) apiv1.Session {
+		s.Reaping = true
+		s.PrivateHistory = &apiv1.PrivateHistory{Version: 1, HomeClaim: "home-" + s.Name, Admission: "Started", StopState: "Unknown"}
+		return s
+	}
+	judged := func(s apiv1.Session) apiv1.Session {
+		s = private(pendingOn(s, "ExecutorEnded", stopped))
+		s.Conditions = append(s.Conditions, apiv1.Condition{Type: "RemovalBlocked", Status: "True", Reason: "ExecutorEnded", Message: stopped})
+		return s
+	}
+	suspendedEarlier := func(s apiv1.Session) apiv1.Session {
+		s = private(s)
+		s.Phase = "Suspended"
+		s.Conditions = []apiv1.Condition{{Type: "RemovalBlocked", Status: "True", Reason: "RetentionPending", Message: "suspended; the agent's stop is not proven yet: its Pod keeps running"}}
+		return s
+	}
+	for _, tc := range []struct {
+		name    string
+		session func(apiv1.Session) apiv1.Session
+		want    string
+	}{
+		{name: "just reaped", session: func(s apiv1.Session) apiv1.Session { return private(runningOn(s, "talosw02")) },
+			want: "reaping " + name + ": reap accepted; it is a private session, so the operator asks its agent to stop and keeps its private HOME; " +
+				"no rescue bundle is made, and nothing is archived or deleted now; agent-run show " + name + " says when the stop is proven\n"},
+		{name: "suspended before the reap", session: suspendedEarlier,
+			want: "reaping " + name + ": reap accepted; it is a private session, so the operator asks its agent to stop and keeps its private HOME; " +
+				"no rescue bundle is made, and nothing is archived or deleted now; agent-run show " + name + " says when the stop is proven\n"},
+		{name: "already judged", session: judged, want: "reaping " + name + ": " + stopped + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+				writeTestJSON(w, http.StatusAccepted, tc.session(testSession(name, "")))
+			}
+			h.mustRun(ExitOK, "reap", name)
+			if got := h.stdout.String(); got != tc.want {
+				t.Errorf("stdout\n got %q\nwant %q", got, tc.want)
+			}
+			for _, wrong := range []string{"bundle, then", "archives its volume"} {
+				if strings.Contains(h.stdout.String(), wrong) {
+					t.Errorf("a private reap claims %q", wrong)
+				}
+			}
+		})
+	}
+
+	h := newHarness(t)
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		s := judged(testSession(name, ""))
+		if r.URL.Path == apiv1.SessionsPath {
+			writeTestJSON(w, http.StatusOK, apiv1.SessionList{Sessions: []apiv1.Session{s}})
+			return
+		}
+		writeTestJSON(w, http.StatusOK, s)
+	}
+	h.mustRun(ExitOK, "show", name)
+	contains(t, "show", h.stdout.String(), "Pending, reaping: stop the agent, keep its private HOME", "pending:             "+stopped,
+		"RemovalBlocked=True ExecutorEnded: "+stopped)
+	if strings.Contains(h.stdout.String(), "rescue, then suspend and archive") {
+		t.Errorf("show claims a rescue and archive for a private reap:\n%s", h.stdout.String())
+	}
+	h.mustRun(ExitOK, "list")
+	contains(t, "list", h.stdout.String(), "reaping; "+stopped)
+}
+
 func TestFleet(t *testing.T) {
 	h := newHarness(t)
 	beat := testNow.Add(-20 * time.Second)

@@ -67,6 +67,22 @@ func TestSessionCollector(t *testing.T) {
 	c := &SessionCollector{Reader: fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...).Build(), Namespace: "dev-agents"}
 	got := gather(t, c)
 	want := []string{
+		"dev_env_reaped_sessions_oldest_seconds{reason=DeleteNeedsRescue} 0",
+		"dev_env_reaped_sessions_oldest_seconds{reason=ExecutorEnded} 0",
+		"dev_env_reaped_sessions_oldest_seconds{reason=HomeDeleting} 0",
+		"dev_env_reaped_sessions_oldest_seconds{reason=HomeExpired} 0",
+		"dev_env_reaped_sessions_oldest_seconds{reason=Other} 0",
+		"dev_env_reaped_sessions_oldest_seconds{reason=PreservationUnknown} 0",
+		"dev_env_reaped_sessions_oldest_seconds{reason=RetentionPending} 0",
+		"dev_env_reaped_sessions_oldest_seconds{reason=TaskComputeReclaimed} 0",
+		"dev_env_reaped_sessions_retained{reason=DeleteNeedsRescue} 0",
+		"dev_env_reaped_sessions_retained{reason=ExecutorEnded} 0",
+		"dev_env_reaped_sessions_retained{reason=HomeDeleting} 0",
+		"dev_env_reaped_sessions_retained{reason=HomeExpired} 0",
+		"dev_env_reaped_sessions_retained{reason=Other} 0",
+		"dev_env_reaped_sessions_retained{reason=PreservationUnknown} 0",
+		"dev_env_reaped_sessions_retained{reason=RetentionPending} 0",
+		"dev_env_reaped_sessions_retained{reason=TaskComputeReclaimed} 0",
 		"dev_env_session_rescue_failed{reason=WorktreeRefused,session=b} 1",
 		"dev_env_session_rescue_notification{owner_uid=,pending_delete=false,reason=WorktreeRefused,risk_key=unclassified,session=b,session_generation=0,session_uid=} 1",
 		"dev_env_sessions{phase=Archived} 0",
@@ -94,6 +110,41 @@ func TestTerminalTaskReclaimCollectorRetainedCountAndAge(t *testing.T) {
 	for _, want := range []string{"dev_env_terminal_task_pods_retained{reason=Held} 1", "dev_env_terminal_task_pods_oldest_seconds{reason=Held} 3600", "dev_env_terminal_task_pods_retained{reason=ProofUnknown} 0"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %s in %s", want, got)
+		}
+	}
+}
+
+// DESIGN-025 25: reaped sessions still kept, by RemovalBlocked reason, with
+// the age of the oldest reap. A session not reaped, or whose RemovalBlocked
+// is not True, is not counted; an unknown reason counts as Other.
+func TestReapedSessionsRetainedCountAndAge(t *testing.T) {
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	reaped := func(name string, ago time.Duration, reason string, status metav1.ConditionStatus) *v1alpha1.AgentSession {
+		s := sessionWith(name, v1alpha1.PhasePending, metav1.Condition{Type: ConditionRemovalBlocked, Status: status, Reason: reason})
+		s.DeletionTimestamp = &metav1.Time{Time: now.Add(-ago)}
+		s.Finalizers = []string{Finalizer}
+		return s
+	}
+	suspended := sessionWith("suspended", v1alpha1.PhaseSuspended, metav1.Condition{Type: ConditionRemovalBlocked, Status: metav1.ConditionTrue, Reason: "RetentionPending"})
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		reaped("stopped-old", 3*time.Hour, "ExecutorEnded", metav1.ConditionTrue),
+		reaped("stopped-new", time.Hour, "ExecutorEnded", metav1.ConditionTrue),
+		reaped("unproven", 2*time.Hour, "RetentionPending", metav1.ConditionTrue),
+		reaped("odd", time.Minute, "SomethingNew", metav1.ConditionTrue),
+		reaped("released", 4*time.Hour, "RetentionPending", metav1.ConditionFalse),
+		suspended).Build()
+	got := strings.Join(gather(t, &SessionCollector{Reader: c, Namespace: "dev-agents", Now: func() time.Time { return now }}), "\n")
+	for _, want := range []string{
+		"dev_env_reaped_sessions_retained{reason=ExecutorEnded} 2",
+		"dev_env_reaped_sessions_oldest_seconds{reason=ExecutorEnded} 10800",
+		"dev_env_reaped_sessions_retained{reason=RetentionPending} 1",
+		"dev_env_reaped_sessions_oldest_seconds{reason=RetentionPending} 7200",
+		"dev_env_reaped_sessions_retained{reason=Other} 1",
+		"dev_env_reaped_sessions_oldest_seconds{reason=Other} 60",
+		"dev_env_reaped_sessions_retained{reason=DeleteNeedsRescue} 0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in\n%s", want, got)
 		}
 	}
 }

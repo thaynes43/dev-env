@@ -253,7 +253,9 @@ type Session struct {
 	// Restore is the rescue the session was restored from (D-67).
 	Restore string `json:"restore,omitempty"`
 	// Reaping is set once the session is deleted: the operator rescues it,
-	// suspends it and archives it (D-10, D-45).
+	// suspends it and archives it (D-10, D-45). A private session (one with
+	// PrivateHistory) keeps its HOME instead: its agent is asked to stop, and
+	// it stays until its HOME expiry (DESIGN-025 25).
 	Reaping bool `json:"reaping,omitempty"`
 
 	Phase string `json:"phase,omitempty"`
