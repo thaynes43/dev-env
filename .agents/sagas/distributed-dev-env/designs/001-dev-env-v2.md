@@ -1884,10 +1884,12 @@ backoff, through the same exec rescue (D-51) in a hold pod (D-55).
   gets a hold pod once the retry is due. Before it creates one the operator makes the
   checks archive makes: the session and the absence of a pod as the API server has
   them, no original-HOME restriction (OP252, `internal/homeguard`), no retained private history,
-  and a volume that is the session's and is not being deleted. The hold pod then runs
-  the rescue as any hold pod does. In a hold pod, a transient failure runs again at
-  its backoff instead of every 15 minutes; a permanent one keeps the fixed 15 minutes.
-  A reap, or a due archive timer, still starts its hold pod at once.
+  and a volume that is the session's and is not being deleted. A session archive would
+  give no hold pod gets no retry time in its record, and `RemovalBlocked` says why. The
+  hold pod then runs the rescue as any hold pod does. In a suspended session's hold
+  pod, a transient failure runs again at its backoff instead of every 15 minutes; a
+  permanent one keeps the fixed 15 minutes. A due archive timer still starts its hold
+  pod at once.
 - **Status.** `status.rescue.transientFailures` counts the transient failures in a
   row, this one included, and `status.rescue.nextRetryAt` says when the rescue runs
   again; both are unset for any other verdict. The record's message, and so the
@@ -1908,9 +1910,16 @@ backoff, through the same exec rescue (D-51) in a hold pod (D-55).
   a stale CRD that prunes the fields leaves it, counts as a first transient failure,
   due 15 minutes after it ran. Such a record may hide a second, permanent problem
   (the old verdict named the first); its one retry then reports it truthfully.
-- **Scope.** Ordinary sessions only. Shared workspace tasks (D-77) and private
-  Sessions with retained history (DESIGN-025) keep their own rescue paths and their
-  fixed hold-pod retry.
+- **Scope.** Suspended ordinary sessions only. A reap is unchanged: its hold pod
+  starts at once and retries every 15 minutes, whatever the reason. Shared workspace
+  tasks (D-77) and private Sessions with retained history (DESIGN-025) keep their own
+  rescue paths and their fixed hold-pod retry.
+- **What a long outage costs.** Each retry is a whole rescue: a new rescue branch per
+  dirty worktree and a new bundle stamp when refs are unpushed, kept while the session
+  exists (D-67). With hourly retries that is at most one of each an hour, a quarter of
+  what a hold pod's fixed 15-minute retry adds for any failure today. A `FetchFailed`
+  that never clears, such as a token the keeper stopped minting, keeps retrying
+  hourly and keeps the page, whose message names the fetch error.
 - **Deploy order.** The two status fields are new in the AgentSession CRD, so
   haynes-ops' copy of `config/crd/` lands before the operator pin. With an older CRD
   the API server prunes them and the backoff falls back to a fixed 15 minutes (the

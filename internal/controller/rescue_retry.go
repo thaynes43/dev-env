@@ -64,11 +64,30 @@ func transientRetryDelay(base time.Duration, failures int32) time.Duration {
 }
 
 // transientRetryApplies reports whether the transient retry covers the
-// session: an ordinary session, whose suspend runs the rescue path of D-51.
-// A shared workspace task and a private Session with retained history keep
-// their own rescue paths and their fixed hold-pod retry (D-77, DESIGN-025).
+// session: an ordinary session that is suspended, not reaped, whose suspend
+// runs the rescue path of D-51. A reap keeps its hold pod's fixed retry
+// (D-55), and a shared workspace task and a private Session with retained
+// history keep their own rescue paths and fixed retry (D-77, DESIGN-025).
 func transientRetryApplies(s *v1alpha1.AgentSession) bool {
-	return s.Spec.Workspace == nil && !privateHistoryProtected(s)
+	return s.DeletionTimestamp.IsZero() && s.Spec.Workspace == nil && !privateHistoryProtected(s)
+}
+
+// transientRetryRefused says why a session the retry covers gets no hold pod
+// for it, as archive gives it none (DESIGN-001 5.1, OP252): a private
+// lifecycle the retention flag marks, or an original-HOME restriction. Nil
+// means none. The record of a refused session gets no retry time, so its
+// message never promises one.
+func (r *Reconciler) transientRetryRefused(s *v1alpha1.AgentSession) error {
+	if r.privateHistoryEnabled(s) {
+		return errPrivateHistoryRetained
+	}
+	if _, exists := s.Annotations[homeguard.Annotation]; exists {
+		return homeguard.ErrUnsafe
+	}
+	if b, err := homeguard.Select(r.OriginalHome, s.Namespace, s.Name, string(s.UID), s.Annotations); b != nil || err != nil {
+		return homeguard.ErrUnsafe
+	}
+	return nil
 }
 
 // transientFailures is how many rescues in a row, the newest included, failed
@@ -166,19 +185,10 @@ func (r *Reconciler) retryTransientRescue(ctx context.Context, s *v1alpha1.Agent
 		return ctrl.Result{RequeueAfter: wait + time.Second}, nil
 	}
 	// The sessions archive gives no hold pod get none here either, and
-	// RemovalBlocked says why the record's retry does not run.
-	refuse := func(why error) (ctrl.Result, error) {
+	// RemovalBlocked says why an older record's retry does not run.
+	if why := r.transientRetryRefused(s); why != nil {
 		obs.removalBlocked = fmt.Errorf("%w only in a hold pod, which this session does not get: %w", errTransientRetry, why)
 		return ctrl.Result{}, nil
-	}
-	if r.privateHistoryEnabled(s) {
-		return refuse(errPrivateHistoryRetained)
-	}
-	if _, exists := s.Annotations[homeguard.Annotation]; exists {
-		return refuse(homeguard.ErrUnsafe)
-	}
-	if b, err := homeguard.Select(r.OriginalHome, s.Namespace, s.Name, string(s.UID), s.Annotations); b != nil || err != nil {
-		return refuse(homeguard.ErrUnsafe)
 	}
 	// Judge the newest session, and ask the API server that no pod exists: a
 	// lagging cache must not make a second hold pod, or one for a session that

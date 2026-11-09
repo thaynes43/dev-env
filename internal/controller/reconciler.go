@@ -686,8 +686,10 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 			return ctrl.Result{RequeueAfter: rescueRetry}, false, nil
 		}
 		// A failure for a transient reason only runs again by itself
-		// (DESIGN-001 4.4, #486).
-		scheduleTransientRetry(s, rec, reason, r.holdRetry())
+		// (DESIGN-001 4.4, #486), where a hold pod may run it.
+		if r.transientRetryRefused(s) == nil {
+			scheduleTransientRetry(s, rec, reason, r.holdRetry())
+		}
 		// The record goes to the API server before the pod is deleted, so a
 		// fresh operator never deletes a pod on a rescue it cannot see.
 		if written, err := r.recordRescue(ctx, s, rec, reason); err != nil || !written {

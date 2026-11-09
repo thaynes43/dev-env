@@ -202,8 +202,9 @@ func TestScheduleTransientRetry(t *testing.T) {
 			t.Errorf("a verified rescue has a retry: %+v", rec)
 		}
 	})
-	t.Run("shared and retained-history sessions keep their own retry", func(t *testing.T) {
+	t.Run("reaped, shared and retained-history sessions keep their own retry", func(t *testing.T) {
 		for name, edit := range map[string]func(*v1alpha1.AgentSession){
+			"reaped":    func(s *v1alpha1.AgentSession) { s.DeletionTimestamp = at(0) },
 			"shared":    func(s *v1alpha1.AgentSession) { s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "w1"} },
 			"retention": func(s *v1alpha1.AgentSession) { s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{} },
 		} {
@@ -218,6 +219,10 @@ func TestScheduleTransientRetry(t *testing.T) {
 			setRescueCondition(s, &s.Status, "FetchFailed")
 			if _, ok := transientRetryAt(s, base); ok {
 				t.Errorf("%s: a legacy-shaped record is retried", name)
+			}
+			s.Status.Rescue.TransientFailures, s.Status.Rescue.NextRetryAt = 2, at(30)
+			if got := holdRetryDue(s, at(22).Time, base); !got {
+				t.Errorf("%s: the hold pod's fixed retry is not due 16 minutes after the failure", name)
 			}
 		}
 	})
