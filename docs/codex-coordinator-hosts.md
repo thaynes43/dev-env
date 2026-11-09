@@ -169,7 +169,9 @@ For a thread Tom drives on his phone, follow the
 [owner-interactive Codex recipe](workflow-guide.md#start-an-owner-interactive-codex-task-on-a-paired-v2-host):
 
 - Tom starts it from the phone, or an agent on the host uses the
-  `codex --remote unix://…` TUI or `scripts/codex-clean-session.py`.
+  `codex --remote unix://…` TUI or `scripts/codex-clean-session.py`. From the v1
+  pod or a workbench session, `agent-run thread start --agent codex --host <name>`
+  does the same on a v2 host and reports when the thread has answered.
 - `codex exec` and `codex queue` never give a phone-visible thread.
 - Never pass `-s`, `-a`, `--approve-for-me` or `--full-auto`. Omit them, or pass
   `--dangerously-bypass-approvals-and-sandbox`. With the #487 requirements, a

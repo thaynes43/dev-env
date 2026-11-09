@@ -38,6 +38,9 @@ type rcRun struct {
 	reused   bool
 	wait     time.Duration
 	result   apiv1.RCLaunchResult
+	// sink, when set, receives the finished result instead of stdout:
+	// agent-run thread start translates it (DESIGN-057).
+	sink func(apiv1.RCLaunchResult)
 }
 
 func newRCRun(a *app) *rcRun {
@@ -79,6 +82,10 @@ func (r *rcRun) finish(outcome, code, phase string, exit int) error {
 	r.result.DeadlineMs = max(0, r.wait.Milliseconds())
 	if code != "" {
 		r.result.Error = &apiv1.RCLaunchError{Code: code, Message: rcErrorMessages[code], Phase: phase}
+	}
+	if r.sink != nil {
+		r.sink(r.result)
+		return &exitError{code: exit}
 	}
 	b, err := json.Marshal(r.result)
 	if err != nil || len(b)+1 > 32<<10 {
@@ -161,7 +168,16 @@ func (r *rcRun) start(ctx context.Context, args []string) error {
 	if agent == "codex" {
 		return r.finish("blocked", "codex_adapter_not_implemented", "", ExitFailed)
 	}
-	if len(pos) != 0 || cmd.c.output != outputJSON || !projectName.MatchString(project) || (repo != "" && !apiv1.ValidRepoName(repo)) || agent != "claude" || apiv1.CheckClaudeModel(model) != apiv1.ClaudeModelOK || len(model) > 128 || (effort != "" && !apiv1.ClaudeEffortAccepted(model, effort)) || handoff == "" || (key != "" && !rcKeyPattern.MatchString(key)) {
+	if len(pos) != 0 || cmd.c.output != outputJSON {
+		return r.finish("failed", "invalid_input", "", ExitUsage)
+	}
+	return r.startClaude(ctx, cmd.c.conn, project, repo, agent, model, effort, handoff, key)
+}
+
+// startClaude is rc start after its flags: validation, the create, the follow
+// and the one handoff. agent-run thread start's Claude adapter calls it too.
+func (r *rcRun) startClaude(ctx context.Context, conn connOpts, project, repo, agent, model, effort, handoff, key string) error {
+	if !projectName.MatchString(project) || (repo != "" && !apiv1.ValidRepoName(repo)) || agent != "claude" || apiv1.CheckClaudeModel(model) != apiv1.ClaudeModelOK || len(model) > 128 || (effort != "" && !apiv1.ClaudeEffortAccepted(model, effort)) || handoff == "" || (key != "" && !rcKeyPattern.MatchString(key)) {
 		return r.finish("failed", "invalid_input", "", ExitUsage)
 	}
 	text, ok := rcReadHandoff(handoff)
@@ -182,7 +198,7 @@ func (r *rcRun) start(ctx context.Context, args []string) error {
 		ctx, cancel = context.WithTimeout(ctx, max(0, r.wait-r.elapsed()))
 		defer cancel()
 	}
-	c, err := r.connection(ctx, cmd.c.conn)
+	c, err := r.connection(ctx, conn)
 	if err != nil {
 		return r.finish("failed", "unauthenticated", "api_accepted", ExitAuth)
 	}

@@ -329,7 +329,11 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 }
 
 // claudeArgs are the CLI's arguments every launch shares: the model, the
-// effort and no approval prompts (D-23).
+// effort and no approval prompts (D-23). Every Claude launch path (task,
+// local, remote and so the standby, resume, rescue restore, the explicit RC
+// continuation) builds its argv here, so --dangerously-skip-permissions is
+// the always-allow launch contract (DESIGN-057 section 6a). Claude Code's
+// critical-path check is not covered by it and stays on (Tom, 2026-11-09).
 func claudeArgs(s Settings, sess protocol.Session) []string {
 	argv := []string{s.ClaudeBin, "--model", sess.Model}
 	if sess.Effort != "" {

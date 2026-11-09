@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Launch one fresh native Codex client; never resume, pair, or alter trust."""
+"""Launch one fresh native Codex client; never resume, pair, or alter trust.
+
+Always-allow is the launch contract (Tom, 2026-11-09; DESIGN-057): the client
+always gets --dangerously-bypass-approvals-and-sandbox, the managed launches'
+flag, and the caller never picks a sandbox or approval flag. The host
+requirements already default to danger-full-access with approval never (#487).
+"""
 
 import argparse
 import json
@@ -14,6 +20,8 @@ import sys
 import time
 
 MAX_TASK = 4096
+# The one permission flag, always passed; never -s, -a or --full-auto.
+BYPASS = "--dangerously-bypass-approvals-and-sandbox"
 MAX_COMMAND_BYTES = 8192
 COMMAND_TIMEOUT = 5
 
@@ -59,7 +67,7 @@ def prepare(args):
     client, tmux = executable(args.client), executable(args.tmux)
     argv = [client, "--remote", "unix://" + args.socket, "-C", str(repo),
             "-m", args.model, "-c", f'model_reasoning_effort="{args.effort}"',
-            "--no-alt-screen", "--", task]
+            BYPASS, "--no-alt-screen", "--", task]
     # Requires a POSIX tmux default-shell (documented prerequisite).
     # tmux's single shell-command is parsed by a shell. Quote EVERY argument,
     # including the executable and multiline task. Never send keys to a pane.
@@ -88,7 +96,7 @@ def launch(args):
         result = run([tool, flag])
         if result.returncode:
             raise Refusal("prerequisite-unavailable", "Client/tmux probe failed; inspect the explicit executable before launching.")
-        if tool == client and not all(option in result.stdout for option in ("--remote", "--no-alt-screen")):
+        if tool == client and not all(option in result.stdout for option in ("--remote", "--no-alt-screen", BYPASS)):
             raise Refusal("unsupported-client", "Installed client lacks required native flags; no launch attempted.")
     # Keep an empty exclusive name marker, including uncertain outcomes. This
     # also prevents accidental reuse after tmux has removed an exited client.

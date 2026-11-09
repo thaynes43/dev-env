@@ -23,7 +23,24 @@ type codexHostRPC struct {
 	conn  *websocket.Conn
 	next  int
 	churn bool
+	// bound is the largest accepted frame; zero is codexHostRPCBound.
+	bound int
 }
+
+// widen raises the frame bound for a read-only observer whose answers carry
+// thread lists (DESIGN-057). Mutating callers keep the default.
+func (r *codexHostRPC) widen(n int) {
+	r.bound = n
+	r.conn.SetReadLimit(int64(n))
+}
+
+func (r *codexHostRPC) frameBound() int {
+	if r.bound > 0 {
+		return r.bound
+	}
+	return codexHostRPCBound
+}
+
 type codexHostRemote struct {
 	Version    string
 	Connection string
@@ -88,7 +105,7 @@ func (r *codexHostRPC) call(method string, params any, result any) error {
 	}
 	for message := 0; message < 32; message++ {
 		kind, data, err := r.conn.ReadMessage()
-		if err != nil || kind != websocket.TextMessage || len(data) > codexHostRPCBound {
+		if err != nil || kind != websocket.TextMessage || len(data) > r.frameBound() {
 			return errCodexHostUnknown
 		}
 		var envelope struct {

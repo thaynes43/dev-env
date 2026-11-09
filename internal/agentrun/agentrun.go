@@ -96,6 +96,10 @@ type Env struct {
 	// ExecOutput runs a program and returns its exit code and captured
 	// streams. A non-nil error means it did not start.
 	ExecOutput func(ctx context.Context, argv []string) (int, string, string, error)
+	// RunCapture runs a program with stdin, passes its stderr through and
+	// returns its exit code and bounded stdout. A non-nil error means it did
+	// not start or its output exceeded the cap.
+	RunCapture func(ctx context.Context, argv []string, stdin io.Reader, stderr io.Writer) (int, []byte, error)
 	// PortForward starts a loopback forward and waits for its readiness. Stop
 	// terminates and reaps it; the process also ends when ctx is canceled.
 	PortForward func(ctx context.Context, argv []string) (address string, stop func(), err error)
@@ -118,6 +122,7 @@ func DefaultEnv() Env {
 		Run:               runProcess,
 		Output:            commandOutput,
 		ExecOutput:        execOutput,
+		RunCapture:        runCapture,
 		PortForward:       startPortForward,
 	}
 }
@@ -212,6 +217,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.help(rest)
 	case "rc":
 		return a.rc(ctx, rest)
+	case "thread":
+		return a.thread(ctx, rest)
 	case "run":
 		return a.create(ctx, rest)
 	case "list":
@@ -296,7 +303,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 }
 
 // commands are the words agent-run takes first, built or not yet.
-var commands = []string{"run", "rc", "list", "inbox", "instruction", "directory", "canary", "show", "usage", "usage-source", "usage-export", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "budget", "mcp", "pages-mcp", "breakglass", "declare-activity", "maintenance", "pages", "remind", "schedule", "fleet", "version", "help", "attach", "detach", "login", "pair", "auth", "keeper-login", "prune", "sweep", "codex-remote"}
+var commands = []string{"run", "rc", "thread", "list", "inbox", "instruction", "directory", "canary", "show", "usage", "usage-source", "usage-export", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "budget", "mcp", "pages-mcp", "breakglass", "declare-activity", "maintenance", "pages", "remind", "schedule", "fleet", "version", "help", "attach", "detach", "login", "pair", "auth", "keeper-login", "prune", "sweep", "codex-remote"}
 
 // nearestCommand is the command within two edits of word, or "". The
 // distance must also be shorter than the command, so a short repository name

@@ -25,6 +25,8 @@ refusals apply. The ordinary create command's project restrictions stay intact.
 Codex returns `blocked` / `codex_adapter_not_implemented` locally, with exit 1
 and the fixed message "Codex remote launch is not implemented in 2a; no inventory
 was probed".
+For a fresh Codex thread on a paired v2 host, use `agent-run thread start`
+([DESIGN-057](../.agents/sagas/distributed-dev-env/designs/057-generic-thread-launch.md)).
 There is no operator, CRD, runtime or flag change. `--enable-rc-launches` remains
 reserved. Nothing runs until the command is invoked.
 

@@ -308,7 +308,12 @@ pair a phone with it once.
 3. In the ChatGPT app choose Remote, add a computer and type the code. The
    computer has the session's name.
 4. Start a thread. As in v1, the phone picks the thread's folder; for repo work,
-   ask the thread to make a worktree first.
+   ask the thread to make a worktree first. An agent in the v1 pod or a
+   workbench session can start one for you on the paired host with
+   `agent-run thread start --agent codex --host <name> --model <id> --effort
+   <e> --handoff <file>`; it reports `responded` once the thread has answered,
+   and the thread is in your phone's list ([workflow guide section
+   3](workflow-guide.md#start-an-owner-interactive-codex-task-on-a-paired-v2-host)).
 
 - The pairing lives on the session's volume. Suspend and resume keep it;
   reaping the host loses it.

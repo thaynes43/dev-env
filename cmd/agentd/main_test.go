@@ -14,6 +14,7 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/agentd"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
 var versionLine = regexp.MustCompile(`^agentd \S+ \(commit \S+, go\S+, [a-z0-9]+/[a-z0-9]+\)\n$`)
@@ -351,5 +352,31 @@ func TestPortalConversationCtlCodexChannelPrivacy(t *testing.T) {
 	var got protocol.PortalConversation
 	if code != exitOK || json.Unmarshal([]byte(out), &got) != nil || len(got.Turns) != 1 || got.Turns[0].Text != "visible" || strings.Contains(out, "PRIVATE-") {
 		t.Fatal("channel privacy failed")
+	}
+}
+
+// ctl thread-start (DESIGN-057) answers every refusal with one decodable
+// thread-launch.v1 line and that outcome's exit code; only a usage error
+// prints nothing on stdout.
+func TestCtlThreadStart(t *testing.T) {
+	home := t.TempDir()
+	claudeRemote := map[string]string{"HOME": home, "AGENTD_SESSION": `{"name":"r-1","repo":"r","agent":"claude","mode":"remote","model":"claude-haiku-4-5"}`}
+	codexHost := map[string]string{"HOME": home, "AGENTD_SESSION": `{"name":"r-1","repo":"r","agent":"codex","mode":"remote","model":"gpt-6-luna"}`}
+	flags := []string{"ctl", "thread-start", "--model", "gpt-6-luna", "--effort", "high", "--name", "t-1"}
+	if code, out, errOut := runArgs(append(flags, "extra"), codexHost); code != exitUsage || out != "" || !strings.Contains(errOut, "usage: ctl thread-start") {
+		t.Errorf("extra argument: %d %q %q", code, out, errOut)
+	}
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		code string
+	}{
+		"claude host":   {claudeRemote, "not_codex_host"},
+		"empty handoff": {codexHost, "invalid_input"},
+	} {
+		code, out, _ := runArgs(flags, tc.env)
+		r, err := apiv1.DecodeThreadLaunch([]byte(out))
+		if err != nil || code != exitFailure || r.Outcome != apiv1.ThreadFailed || r.Error.Code != tc.code {
+			t.Errorf("%s: %d %v %q", name, code, err, out)
+		}
 	}
 }

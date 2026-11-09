@@ -702,11 +702,12 @@ awake. A suspended standby has an archived phone entry until it is resumed.
 
 Use this when Tom must see and drive the thread on his phone.
 
-1. **Start it as an interactive thread.** Tom starts it from the ChatGPT app on
-   the paired host. Or an agent on that host starts it with the remote TUI,
-   `codex --remote unix://<control socket>`, or with
-   [`scripts/codex-clean-session.py`](codex-clean-session.md), which wraps that
-   TUI.
+1. **Start it as an interactive thread.** From the v1 pod, a workbench session
+   or Tom's laptop, run `agent-run thread start` (below, DESIGN-057). Tom can
+   also start it from the ChatGPT app on the paired host, or an agent on that
+   host can start it with the remote TUI, `codex --remote unix://<control
+   socket>`, or with [`scripts/codex-clean-session.py`](codex-clean-session.md),
+   which wraps that TUI and which `thread start` runs.
 2. **Not `codex exec` or `codex queue`.** Their threads have the exec source,
    and the phone's default thread list hides it
    (`ThreadListParams.sourceKinds`). They never show on the phone.
@@ -739,12 +740,33 @@ Use this when Tom must see and drive the thread on his phone.
    at most 15 minutes after it was verified. The host must mount the same
    packet at `/opt/dev-env/config/codex/rc-target.json`. So it cannot serve
    "give me another thread", and a daemon or pod restart invalidates it.
-5. **Reaching the host from elsewhere.** No agent-run command yet starts a thread
-   on a paired host from outside it. A session pod cannot exec into another pod
-   (D-19). The v1 pod and a workbench session can (`agent-run pair` uses that
-   exec), but running the remote TUI that way is not a supported, tested route.
-   Until one exists, ask Tom to start the thread on his phone, or ask a thread
-   already running on that host to start the new one.
+5. **Reaching the host from elsewhere: `agent-run thread start`.** From the v1
+   pod, a workbench session or a laptop (the exec route `agent-run pair` uses; an
+   ordinary session pod is refused, D-19):
+
+   ```bash
+   "${v2run[@]}" thread start --agent codex --host <codex-host> \
+     --model gpt-6-astra --effort xhigh --handoff task.md [--repo dev-env]
+   ```
+
+   It execs `agentd ctl thread-start` in the host, which checks the daemon is
+   connected and the host was paired, runs the clean-session wrapper once (the
+   handoff on stdin), and watches the daemon's thread list. It prints one
+   `thread-launch.v1` JSON line with the phases `host_ready`, `paired`,
+   `client_started`, `thread_created`, `source_visible` (in the phone's default
+   list), `handoff` and `first_response`, and the effective `permission` mode:
+   always-allow (`--dangerously-bypass-approvals-and-sandbox`, which the wrapper
+   always passes; nobody picks a flag by hand). Only `responded` exits 0. `visible`
+   (exit 7) means the thread is listed and its answer was not seen before
+   `--wait`; never resend. `hidden` means the thread got a source the phone
+   hides. `action_required` with `pairing_required` means run `agent-run pair`
+   first. A host started from an image before this command answers
+   `host_unsupported`: move it to a newer image. The thread runs in a tmux
+   session named `--name` in `~/repos/<repo>` on the host, so the handoff should
+   ask it to make its own worktree. `--agent claude --project P` starts a new
+   remote Claude session through `rc start`'s flow instead; `--agent cursor` or
+   `grok` is refused as not yet qualified. `agent-run help thread` has the
+   outcome table.
 
 ## 4. The everyday workflow
 
