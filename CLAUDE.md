@@ -178,6 +178,7 @@ internal/taskclaim/      the TaskClaim store: immutable explicit ownership, Crea
 internal/inbox/          the inbox store: immutable API messages and explicit read acknowledgements, Create only, uncached reads
 internal/asks/           the Ask store: create, list, withdraw, a set-once answer and the operator's leader-only CAS expiry sweeper behind --enable-asks; no inbox delivery in v1 (OpenProject Epic #254)
 internal/contextpublication/  the PublishedContext store: immutable published excerpts, Create only, uncached reads
+internal/delegatedresult/  pure delegated-result codec: strict bounded request and receipt decoding, frozen attempt identity and digest; Admission and Store have only the refusing Disabled implementation; no route, storage, provider or caller
 internal/sessiondirectory/  the SessionDirectory store: bounded original session metadata and CAS witnesses
 internal/taskbudget/     the task budget ledger: retained, deterministic task admission in ConfigMaps behind CAS (KubeStore)
 internal/coordretention/ read-only paged coordination-record summaries and fail-closed release eligibility evaluation (DESIGN-024 R3 prerequisite)
