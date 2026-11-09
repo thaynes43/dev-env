@@ -190,6 +190,8 @@ choice in source.
   `cursor.apiKey` field, the operator and agent image pins, and the live run.
   Adding `cursor.apiKey` changes the templates revision, so running sessions
   drain at their next idle moment unless the rollout hold is used.
+  The templates are decoded strictly, so the `cursor:` stanza lands only
+  after the operator pin that knows the field.
 - No RBAC, admission or network policy change. Cursor's hosts are public on
   443, which the web egress tier allows.
 - Resume, `--local`, `--interactive`, MCP servers for Cursor, usage and cost
