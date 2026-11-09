@@ -3558,6 +3558,13 @@ paragraphs above.
   workbench child is still possible: name the profile (`agent-run --profile
   workbench`). Workbench automation that relied on inheritance must now pass the
   profile.
+- **Every profile, `ops` included.** Before this change a workbench session's
+  child could run only on `workbench` or a named coordinator profile. Now it can
+  name any profile in the templates, as a trusted client's create already can:
+  `full`, `dev`, `ops` and the rule-canary profiles. Each holds less than
+  `workbench`, and a workbench session can already exec into any session pod, so
+  this is no escalation. `ops` stays the summoned route's profile: this rule only
+  stops refusing it to the one caller that could reach it anyway.
 - **Unchanged.** A Codex remote host a workbench session starts runs on the
   default profile, and naming any profile is a 403. A child of a session on a
   named coordinator profile runs on the default profile. The named coordinator

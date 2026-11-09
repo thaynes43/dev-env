@@ -169,6 +169,14 @@ func TestWorkbenchSessionChildProfile(t *testing.T) {
 	if s := create(wb, withProfile(task(), "dev")); s.Spec.Profile != "dev" {
 		t.Fatalf("dev: profile %q", s.Spec.Profile)
 	}
+	// ops, the summoned route's profile: honoured too, as for a trusted
+	// client's create. It holds less than workbench, so it is no escalation.
+	if _, _, err := f.tmpl.Profile("ops"); err != nil {
+		t.Fatalf("the fixture templates have no ops profile: %v", err)
+	}
+	if s := create(wb, withProfile(task(), "ops")); s.Spec.Profile != "ops" {
+		t.Fatalf("ops: profile %q", s.Spec.Profile)
+	}
 	// A profile the templates lack: refused, and nothing is created.
 	before := f.sessionCount()
 	e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, wb, withProfile(task(), "root")), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
