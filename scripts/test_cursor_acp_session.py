@@ -2277,5 +2277,1520 @@ raise SystemExit(acp.main())
             self.assertNotIn("protocolSuccess", verdict)
 
 
+class AnswerReceiptTests(unittest.TestCase):
+    SECRET = "PRIVATE_ANSWER_TEXT"
+
+    def arm(self, prompt="fixture prompt"):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        path = root / "answer.json"
+        deadline = time.monotonic() + 30
+        receipt = ACP.AssistantAnswerReceipt(
+            str(root), path.name, deadline,
+        )
+        self.addCleanup(receipt.close)
+        sent, events = [], []
+        session = ACP.Session(
+            sent.append,
+            events.append,
+            str(root),
+            prompt,
+            "grok-synthetic",
+        )
+        session.answer = receipt
+        session.start()
+        return session, receipt, path, sent, events
+
+    def ready(self, session):
+        session.provider({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"protocolVersion": 1},
+        })
+        session.provider({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {"sessionId": "fixture-session"},
+        })
+
+    def update(self, kind, text):
+        content = {"type": "text", "text": text}
+        body = {
+            "sessionUpdate": kind,
+            "content": content,
+        }
+        return {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "fixture-session",
+                "update": body,
+            },
+        }
+
+    def feed(self, session, kind, text):
+        message = self.update(kind, text)
+        session.provider(message)
+
+    def stop(self, session):
+        session.provider({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": {"stopReason": "end_turn"},
+        })
+
+    def document(self, session, receipt, path):
+        self.stop(session)
+        receipt.finalize(session)
+        return json.loads(path.read_text())
+
+    def test_default_ignores_untyped_chunks(self):
+        sent, events = [], []
+        session = ACP.Session(
+            sent.append,
+            events.append,
+            "/synthetic/project",
+            "fixture",
+            "grok-synthetic",
+        )
+        session.start()
+        self.assertIsNone(session.answer)
+        self.ready(session)
+        self.feed(
+            session, "agent_message_chunk", self.SECRET,
+        )
+        loose = self.update(
+            "agent_message_chunk", self.SECRET,
+        )
+        body = loose["params"]["update"]
+        body["content"] = {"text": self.SECRET}
+        session.provider(loose)
+        blob = json.dumps(events)
+        self.assertNotIn(self.SECRET, blob)
+
+    def test_repeats_bindings_and_hidden_channels(self):
+        armed = self.arm()
+        session, receipt, path, sent, events = armed
+        diag_path = path.parent / "shape.jsonl"
+        diag = ACP.StructuralDiagnostic(
+            str(path.parent), diag_path.name,
+            time.monotonic() + 30,
+        )
+        self.addCleanup(diag.close)
+        session.diagnostic = diag
+        self.ready(session)
+        kinds = (
+            "agent_thought_chunk",
+            "user_message_chunk",
+            "history",
+            "unknown_block",
+            "tool_call",
+        )
+        for kind in kinds:
+            self.feed(session, kind, self.SECRET)
+        self.feed(session, "agent_message_chunk", "SAME")
+        self.feed(session, "agent_message_chunk", "SAME")
+        self.feed(
+            session, "agent_message_chunk", self.SECRET,
+        )
+        tool = dict(VALID_CONTEXT)
+        tool["sessionUpdate"] = "tool_call"
+        tool["status"] = "pending"
+        session.provider({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "fixture-session",
+                "update": tool,
+            },
+        })
+        cached = session.tool_cache["fixture-call"]
+        self.assertEqual(cached["state"], "open")
+        got = self.document(session, receipt, path)
+        self.assertEqual(got["receipt"], ACP.ANSWER_RECEIPT)
+        self.assertEqual(got["stage"], "complete")
+        self.assertEqual(got["chunkCount"], 3)
+        expected = "SAMESAME" + self.SECRET
+        self.assertEqual(got["text"], expected)
+        size = len(expected.encode())
+        self.assertEqual(got["utf8Bytes"], size)
+        self.assertEqual(got["servedModel"], "Unknown")
+        self.assertEqual(got["stopReason"], "end_turn")
+        self.assertEqual(
+            got["modelRequested"], "grok-synthetic",
+        )
+        self.assertEqual(got["sessionID"], "fixture-session")
+        digest = events[0]["promptSHA256"]
+        self.assertEqual(got["promptSHA256"], digest)
+        self.assertEqual(events[0]["servedModel"], "Unknown")
+        blob = json.dumps(events)
+        self.assertNotIn(self.SECRET, blob)
+        self.assertNotIn("SAME", blob)
+        shape = self.update(
+            "agent_message_chunk", self.SECRET,
+        )
+        encoded = json.dumps(ACP.structural_shape(shape))
+        self.assertNotIn(self.SECRET, encoded)
+        diag.output.join()
+        diag.close()
+        diag.writer.join(timeout=2)
+        raw = diag_path.read_text()
+        self.assertNotIn(self.SECRET, raw)
+        self.assertNotIn("SAME", raw)
+        bits = path.stat().st_mode & 0o777
+        self.assertEqual(bits, 0o600)
+
+    def test_reject_once_still_sends(self):
+        armed = self.arm()
+        session, receipt, path, sent, events = armed
+        self.ready(session)
+        self.feed(
+            session, "agent_message_chunk", self.SECRET,
+        )
+        session.provider({
+            "jsonrpc": "2.0",
+            "id": 41,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "fixture-session",
+                "options": [{
+                    "optionId": "no",
+                    "kind": "reject_once",
+                }, {
+                    "optionId": "yes",
+                    "kind": "allow_once",
+                }],
+            },
+        })
+        before = len(sent)
+        with self.assertRaisesRegex(
+            ACP.Refusal, "approval-not-supported",
+        ):
+            session.decision({
+                "requestID": 41,
+                "sessionID": "fixture-session",
+                "kind": "permission",
+                "optionID": "yes",
+            })
+        self.assertEqual(len(sent), before)
+        session.decision({
+            "requestID": 41,
+            "sessionID": "fixture-session",
+            "kind": "permission",
+            "optionID": "no",
+        })
+        outcome = sent[-1]["result"]["outcome"]
+        self.assertEqual(outcome["optionId"], "no")
+        self.assertNotIn(self.SECRET, json.dumps(events))
+
+    def test_early_cross_late_and_duplicate(self):
+        session, receipt, path, sent, events = self.arm()
+        with self.assertRaisesRegex(
+            ACP.Refusal, "early-session-update",
+        ):
+            self.feed(
+                session, "agent_message_chunk", "EARLY",
+            )
+        self.assertTrue(receipt.failed)
+        self.assertEqual(path.read_bytes(), b"")
+        session, receipt, path, sent, events = self.arm()
+        self.ready(session)
+        foreign = self.update(
+            "agent_message_chunk", "FOREIGN",
+        )
+        foreign["params"]["sessionId"] = "other-session"
+        with self.assertRaisesRegex(
+            ACP.Refusal, "cross-session-update",
+        ):
+            session.provider(foreign)
+        self.assertTrue(receipt.failed)
+        self.assertNotIn(b"FOREIGN", path.read_bytes())
+        session, receipt, path, sent, events = self.arm()
+        self.ready(session)
+        self.feed(session, "agent_message_chunk", "KEPT")
+        self.stop(session)
+        with self.assertRaisesRegex(
+            ACP.Refusal, "late-session-update",
+        ):
+            self.feed(
+                session, "agent_message_chunk", "LATE",
+            )
+        self.assertTrue(receipt.failed)
+        with self.assertRaisesRegex(
+            ACP.Refusal, "answer-incomplete",
+        ):
+            receipt.finalize(session)
+        raw = path.read_bytes()
+        self.assertNotIn(b"complete", raw)
+        self.assertNotIn(b"KEPT", raw)
+        self.assertNotIn(b"LATE", raw)
+        session, receipt, path, sent, events = self.arm()
+        self.ready(session)
+        self.stop(session)
+        with self.assertRaisesRegex(
+            ACP.Refusal, "unexpected-response",
+        ):
+            self.stop(session)
+        self.assertTrue(receipt.failed)
+        with self.assertRaisesRegex(
+            ACP.Refusal, "answer-incomplete",
+        ):
+            receipt.finalize(session)
+
+    def test_malformed_chunks_do_not_complete(self):
+        names = (
+            "missing-type",
+            "image",
+            "list",
+            "number",
+            "extra",
+        )
+        for name in names:
+            with self.subTest(name=name):
+                armed = self.arm()
+                session = armed[0]
+                receipt = armed[1]
+                path = armed[2]
+                self.ready(session)
+                message = self.update(
+                    "agent_message_chunk", "BAD",
+                )
+                update = message["params"]["update"]
+                if name == "missing-type":
+                    update["content"] = {"text": "BAD"}
+                elif name == "image":
+                    update["content"] = {
+                        "type": "image",
+                        "text": "BAD",
+                    }
+                elif name == "list":
+                    update["content"] = ["BAD"]
+                elif name == "number":
+                    update["content"] = {
+                        "type": "text",
+                        "text": 5,
+                    }
+                else:
+                    update["rawInput"] = "BAD"
+                with self.assertRaisesRegex(
+                    ACP.Refusal,
+                    "invalid-answer-chunk",
+                ):
+                    session.provider(message)
+                self.assertTrue(receipt.failed)
+                self.assertNotIn(b"BAD", path.read_bytes())
+
+    def test_utf8_bound_is_not_a_short_file(self):
+        session, receipt, path, sent, events = self.arm()
+        self.ready(session)
+        self.feed(session, "agent_message_chunk", "KEEP")
+        overflow = "x" * ACP.MAX_ANSWER_UTF8
+        with self.assertRaisesRegex(
+            ACP.Refusal, "answer-truncated",
+        ):
+            self.feed(
+                session, "agent_message_chunk", overflow,
+            )
+        self.assertTrue(receipt.failed)
+        self.assertNotIn(b"KEEP", path.read_bytes())
+        again = self.arm()
+        session = again[0]
+        receipt = again[1]
+        path = again[2]
+        self.ready(session)
+        fill = "y" * (ACP.MAX_ANSWER_UTF8 - 1)
+        self.feed(session, "agent_message_chunk", fill)
+        with self.assertRaisesRegex(
+            ACP.Refusal, "answer-truncated",
+        ):
+            self.feed(
+                session,
+                "agent_message_chunk",
+                "雪",
+            )
+        self.assertTrue(receipt.failed)
+        third = self.arm()
+        session = third[0]
+        receipt = third[1]
+        path = third[2]
+        self.ready(session)
+        block = "z" * ACP.MAX_ANSWER_UTF8
+        self.feed(session, "agent_message_chunk", block)
+        got = self.document(session, receipt, path)
+        self.assertEqual(
+            got["utf8Bytes"], len(block.encode()),
+        )
+
+    def test_exclusive_private_no_follow(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        deadline = time.monotonic() + 30
+        made = ACP.AssistantAnswerReceipt(
+            str(root), "answer.json", deadline,
+        )
+        self.addCleanup(made.close)
+        path = root / "answer.json"
+        bits = path.stat().st_mode & 0o777
+        self.assertEqual(bits, 0o600)
+        with self.assertRaises(FileExistsError):
+            ACP.AssistantAnswerReceipt(
+                str(root), "answer.json", deadline,
+            )
+        link = root / "link.json"
+        link.symlink_to(path)
+        with self.assertRaises(OSError):
+            ACP.AssistantAnswerReceipt(
+                str(root), link.name, deadline,
+            )
+        for name in ("../x", "/tmp/x", "a/b", ".", ".."):
+            with self.subTest(name=name):
+                with self.assertRaises(ACP.Refusal):
+                    ACP.AssistantAnswerReceipt(
+                        str(root), name, deadline,
+                    )
+
+    def write_fake(self, root):
+        lines = [
+            "#!/usr/bin/env python3",
+            "import json,os,sys,time",
+            "from pathlib import Path",
+            "raw=json.dumps(sys.argv[1:])",
+            'open("argv.json","w").write(raw)',
+            'open("child.pid","w").write(str(os.getpid()))',
+            'open("child-exit.txt","w").write("running")',
+            'mode=Path("mode.txt").read_text().strip()',
+            "def emit(v):",
+            "    print(json.dumps(v),flush=True)",
+            "def deliver(update):",
+            '    params={"sessionId":"fixture-session"}',
+            '    params["update"]=update',
+            '    outer={"jsonrpc":"2.0"}',
+            '    outer["method"]="session/update"',
+            '    outer["params"]=params',
+            "    emit(outer)",
+            "for line in sys.stdin:",
+            "    m=json.loads(line)",
+            '    k=m.get("method")',
+            '    i=m.get("id")',
+            '    if k=="initialize":',
+            '        res={"protocolVersion":1}',
+            '        out={"jsonrpc":"2.0","id":i}',
+            '        out["result"]=res',
+            "        emit(out)",
+            "        continue",
+            '    if k=="session/new":',
+            '        res={"sessionId":"fixture-session"}',
+            '        out={"jsonrpc":"2.0","id":i}',
+            '        out["result"]=res',
+            "        emit(out)",
+            "        continue",
+            '    if k!="session/prompt":',
+            "        continue",
+            '    open("prompt-id.txt","w").write(str(i))',
+            '    if mode=="exit":',
+            "        sys.exit(0)",
+            '    if mode=="error":',
+            '        secret="PRIVATE_PROVIDER_ERROR"',
+            '        err={"message":secret}',
+            '        out={"jsonrpc":"2.0","id":3}',
+            '        out["error"]=err',
+            "        emit(out)",
+            "        continue",
+            '    if mode=="sleep":',
+            "        time.sleep(30)",
+            "        continue",
+            '    if mode=="bad":',
+            '        content={"text":"PRIVATE_ANSWER_TEXT"}',
+            '        update={"content":content}',
+            '        update["sessionUpdate"]="agent_message_chunk"',
+            "        deliver(update)",
+            "        continue",
+            '    if mode=="huge":',
+            '        content={"type":"text"}',
+            '        content["text"]="T"*70000',
+            '        update={"content":content}',
+            '        update["sessionUpdate"]="agent_message_chunk"',
+            "        deliver(update)",
+            "        continue",
+            '    if mode=="sid":',
+            '        bad={"jsonrpc":"2.0","id":99}',
+            '        bad["result"]={"stopReason":"end_turn"}',
+            '        bad["result"]["sessionId"]="fixture-session"',
+            "        emit(bad)",
+            "        continue",
+            '    if mode=="empty":',
+            '        done={"jsonrpc":"2.0","id":i}',
+            '        done["result"]={"stopReason":"end_turn"}',
+            "        emit(done)",
+            "        continue",
+            '    if mode=="blanks":',
+            '        content={"type":"text","text":""}',
+            '        update={"content":content}',
+            '        update["sessionUpdate"]="agent_message_chunk"',
+            "        deliver(update)",
+            "        deliver(update)",
+            '        done={"jsonrpc":"2.0","id":i}',
+            '        done["result"]={"stopReason":"end_turn"}',
+            "        emit(done)",
+            "        continue",
+            '    if mode in ("max_tokens","cancelled","refusal","unknown"):',
+            '        content={"type":"text","text":"PRIVATE_ANSWER_TEXT"}',
+            '        update={"content":content}',
+            '        update["sessionUpdate"]="agent_message_chunk"',
+            "        deliver(update)",
+            '        done={"jsonrpc":"2.0","id":i}',
+            '        done["result"]={"stopReason":mode}',
+            "        emit(done)",
+            "        continue",
+            '    if mode=="partial":',
+            '        content={"type":"text","text":"PRIVATE_ANSWER_TEXT"}',
+            '        update={"content":content}',
+            '        update["sessionUpdate"]="agent_message_chunk"',
+            "        deliver(update)",
+            '        done={"jsonrpc":"2.0","id":i}',
+            '        done["result"]={"stopReason":"end_turn"}',
+            '        tail="{\\"PRIVATE_FRAME\\":"',
+            '        blob=(json.dumps(done)+"\\n"+tail).encode()',
+            "        sys.stdout.buffer.write(blob)",
+            "        sys.stdout.buffer.flush()",
+            "        os.close(sys.stdout.fileno())",
+            "        continue",
+            '    if mode=="die-during-drain":',
+            '        content={"type":"text","text":"PRIVATE_ANSWER_TEXT"}',
+            '        update={"content":content}',
+            '        update["sessionUpdate"]="agent_message_chunk"',
+            "        deliver(update)",
+            '        done={"jsonrpc":"2.0","id":i}',
+            '        done["result"]={"stopReason":"end_turn"}',
+            "        emit(done)",
+            '        while not Path("drain-entered").exists():',
+            "            time.sleep(0.01)",
+            '        open("child-exit.txt","w").write("spontaneous-1")',
+            "        sys.stdout.close()",
+            "        os._exit(1)",
+            '    if mode in ("late","duplicate","framing"):',
+            '        content={"type":"text","text":"PRIVATE_ANSWER_TEXT"}',
+            '        update={"content":content}',
+            '        update["sessionUpdate"]="agent_message_chunk"',
+            "        deliver(update)",
+            '        done={"jsonrpc":"2.0","id":i}',
+            '        done["result"]={"stopReason":"end_turn"}',
+            "        parts=[json.dumps(done)]",
+            '        if mode=="late":',
+            '            late={"jsonrpc":"2.0"}',
+            '            late["method"]="session/update"',
+            '            body={"sessionUpdate":"agent_message_chunk"}',
+            '            body["content"]={"type":"text"}',
+            '            body["content"]["text"]="LATE_PRIVATE_TEXT"',
+            '            late["params"]={"sessionId":"fixture-session"}',
+            '            late["params"]["update"]=body',
+            "            parts.append(json.dumps(late))",
+            '        elif mode=="duplicate":',
+            "            parts.append(json.dumps(done))",
+            "        else:",
+            '            parts.append("{\\"PRIVATE_FRAME\\":}")',
+            '        raw=("\\n".join(parts)+"\\n").encode()',
+            "        sys.stdout.buffer.write(raw)",
+            "        sys.stdout.buffer.flush()",
+            "        continue",
+            '    content={"type":"text"}',
+            '    content["text"]="PRIVATE_ANSWER_TEXT"',
+            '    update={"content":content}',
+            '    update["sessionUpdate"]="agent_thought_chunk"',
+            "    deliver(update)",
+            '    update["sessionUpdate"]="user_message_chunk"',
+            "    deliver(update)",
+            '    update["sessionUpdate"]="history"',
+            "    deliver(update)",
+            '    update["sessionUpdate"]="unknown_block"',
+            "    deliver(update)",
+            '    update["sessionUpdate"]="tool_call"',
+            "    deliver(update)",
+            '    content["text"]="SAME"',
+            '    update["sessionUpdate"]="agent_message_chunk"',
+            "    deliver(update)",
+            "    deliver(update)",
+            '    content["text"]="PRIVATE_ANSWER_TEXT"',
+            "    deliver(update)",
+            '    done={"jsonrpc":"2.0","id":i}',
+            '    done["result"]={"stopReason":"end_turn"}',
+            '    if mode=="with-sid":',
+            '        done["result"]["sessionId"]="fixture-session"',
+            "    emit(done)",
+        ]
+        path = root / "fake-cursor"
+        path.write_text("\n".join(lines) + "\n")
+        path.chmod(0o700)
+
+    def launch(
+        self, root, mode, answer, timeout="10",
+        prefix=(), diagnostic=None,
+    ):
+        (root / "mode.txt").write_text(mode)
+        self.write_fake(root)
+        prompt = root / "prompt.txt"
+        prompt.write_text("Synthetic offline task")
+        command = [
+            sys.executable, "-I", "-B",
+            *prefix,
+            str(CLIENT), "run",
+            "--client",
+            str(root / "fake-cursor"),
+            "--worktree", str(root),
+            "--model", "fixture-model",
+            "--prompt-file", str(prompt),
+            "--timeout", timeout,
+        ]
+        if answer:
+            command.append("--assistant-answer-file")
+            command.append(answer)
+        if diagnostic:
+            command.append("--diagnostic-file")
+            command.append(diagnostic)
+        return subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def finish(self, process):
+        try:
+            stdout, stderr = process.communicate(timeout=20)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+        events = []
+        for line in stdout.splitlines():
+            if line.strip():
+                events.append(json.loads(line))
+        return events, stdout + stderr
+
+    def test_cli_success_hides_stdio(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        process = self.launch(root, "ok", "answer.json")
+        events, blob = self.finish(process)
+        self.assertEqual(process.returncode, 0, blob)
+        self.assertNotIn(self.SECRET, blob)
+        self.assertNotIn("SAME", blob)
+        names = json.loads((root / "argv.json").read_text())
+        self.assertEqual(
+            names, ["--model", "fixture-model", "acp"],
+        )
+        path = root / "answer.json"
+        bits = path.stat().st_mode & 0o777
+        self.assertEqual(bits, 0o600)
+        got = json.loads(path.read_text())
+        self.assertEqual(got["stage"], "complete")
+        self.assertEqual(got["chunkCount"], 3)
+        text = "SAMESAME" + self.SECRET
+        self.assertEqual(got["text"], text)
+        self.assertEqual(got["servedModel"], "Unknown")
+        self.assertEqual(got["stopReason"], "end_turn")
+        self.assertEqual(got["sessionID"], "fixture-session")
+        self.assertEqual(
+            (root / "prompt-id.txt").read_text(), "3",
+        )
+        pid = int((root / "child.pid").read_text())
+        self.assertTrue(pid_gone(pid))
+        exit_mark = (root / "child-exit.txt").read_text()
+        self.assertEqual(exit_mark, "running")
+        for banned in (
+            "exitCode", "returncode", "cleanExit", "childExit",
+        ):
+            self.assertNotIn(banned, got)
+        self.assertEqual(
+            got["modelRequested"], "fixture-model",
+        )
+        digest = events[0]["promptSHA256"]
+        self.assertEqual(got["promptSHA256"], digest)
+        seen = [item["event"] for item in events]
+        self.assertEqual(seen[0], "starting")
+        self.assertEqual(seen[1], "session-created")
+        self.assertEqual(seen[2], "prompt-complete")
+        self.assertEqual(len(seen), 3)
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        root2 = Path(other.name)
+        process = self.launch(root2, "ok", None)
+        events, blob = self.finish(process)
+        self.assertEqual(process.returncode, 0, blob)
+        self.assertNotIn(self.SECRET, blob)
+        self.assertFalse((root2 / "answer.json").exists())
+
+    def test_cli_failures_leave_no_complete_file(self):
+        cases = (
+            (
+                "exit",
+                "provider-ended-before-result",
+                "10",
+            ),
+            (
+                "error",
+                "provider-error-prompt",
+                "10",
+            ),
+            (
+                "bad",
+                "invalid-answer-chunk",
+                "10",
+            ),
+            (
+                "huge",
+                "answer-truncated",
+                "10",
+            ),
+            (
+                "sleep",
+                "deadline-exceeded",
+                "1",
+            ),
+        )
+        for mode, reason, limit in cases:
+            with self.subTest(mode=mode):
+                folder = tempfile.TemporaryDirectory()
+                self.addCleanup(folder.cleanup)
+                root = Path(folder.name)
+                process = self.launch(
+                    root, mode, "answer.json", limit,
+                )
+                events, blob = self.finish(process)
+                code = process.returncode
+                self.assertEqual(code, 2, blob)
+                found = events[-1]["reason"]
+                self.assertEqual(found, reason)
+                self.assertNotIn(self.SECRET, blob)
+                hidden = "PRIVATE_PROVIDER_ERROR"
+                self.assertNotIn(hidden, blob)
+                self.assertNotIn("TTTT", blob)
+                raw = (root / "answer.json").read_bytes()
+                self.assertNotIn(b"complete", raw)
+                self.assertNotIn(self.SECRET.encode(), raw)
+                self.assertNotIn(b"TTTT", raw)
+
+    def test_cli_refuses_escape_before_child(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        (root / "answer.json").write_text("PRESERVE")
+        process = self.launch(root, "ok", "answer.json")
+        events, blob = self.finish(process)
+        self.assertEqual(process.returncode, 2)
+        self.assertEqual(
+            events[-1]["reason"], "process-io-failed",
+        )
+        kept = (root / "answer.json").read_text()
+        self.assertEqual(kept, "PRESERVE")
+        self.assertFalse((root / "argv.json").exists())
+        process = self.launch(root, "ok", "../out")
+        events, blob = self.finish(process)
+        self.assertEqual(process.returncode, 2)
+        self.assertEqual(
+            events[-1]["reason"], "invalid-answer-target",
+        )
+        self.assertFalse((root / "argv.json").exists())
+        self.assertNotIn("../out", blob)
+
+    def test_empty_chunks_count_without_dedup(self):
+        session, receipt, path, sent, events = self.arm()
+        self.ready(session)
+        self.feed(session, "agent_message_chunk", "")
+        self.feed(session, "agent_message_chunk", "A")
+        self.feed(session, "agent_message_chunk", "")
+        self.feed(session, "agent_message_chunk", "A")
+        got = self.document(session, receipt, path)
+        self.assertEqual(got["text"], "AA")
+        self.assertEqual(got["chunkCount"], 4)
+        self.assertEqual(got["utf8Bytes"], 2)
+        self.assertEqual(got["stopReason"], "end_turn")
+        blank = {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": ""},
+        }
+        session, receipt, path, sent, events = self.arm()
+        self.ready(session)
+        for _ in range(ACP.MAX_ANSWER_CHUNKS):
+            receipt.observe(blank)
+        with self.assertRaisesRegex(
+            ACP.Refusal, "answer-truncated",
+        ):
+            receipt.observe(blank)
+        self.assertTrue(receipt.failed)
+        self.assertEqual(path.read_bytes(), b"")
+        self.stop(session)
+        with self.assertRaisesRegex(
+            ACP.Refusal, "answer-incomplete",
+        ):
+            receipt.finalize(session)
+
+    def test_only_end_turn_with_text_completes(self):
+        reasons = (
+            "max_tokens", "cancelled", "refusal", "unknown",
+        )
+        for reason in reasons:
+            with self.subTest(reason=reason):
+                armed = self.arm()
+                session, receipt, path = armed[:3]
+                events = armed[4]
+                self.ready(session)
+                self.feed(
+                    session, "agent_message_chunk", "TEXT",
+                )
+                session.provider({
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "result": {"stopReason": reason},
+                })
+                self.assertTrue(session.complete)
+                self.assertEqual(events[-1]["stopReason"], reason)
+                with self.assertRaisesRegex(
+                    ACP.Refusal, "answer-incomplete",
+                ):
+                    receipt.finalize(session)
+                raw = path.read_bytes()
+                self.assertNotIn(b"complete", raw)
+                self.assertNotIn(b"TEXT", raw)
+        session, receipt, path, sent, events = self.arm()
+        self.ready(session)
+        self.stop(session)
+        with self.assertRaisesRegex(
+            ACP.Refusal, "answer-incomplete",
+        ):
+            receipt.finalize(session)
+        self.assertEqual(path.read_bytes(), b"")
+        sent, events = [], []
+        plain = ACP.Session(
+            sent.append, events.append,
+            "/synthetic/project", "fixture", "grok-synthetic",
+        )
+        plain.start()
+        self.ready(plain)
+        plain.provider({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": {"stopReason": "max_tokens"},
+        })
+        self.assertTrue(plain.complete)
+        self.assertIsNone(plain.answer)
+        self.assertEqual(events[-1]["stopReason"], "max_tokens")
+
+    def test_session_id_is_not_prompt_correlation(self):
+        session, receipt, path, sent, events = self.arm()
+        self.ready(session)
+        self.feed(session, "agent_message_chunk", "KEPT")
+        with self.assertRaisesRegex(
+            ACP.Refusal, "unexpected-response",
+        ):
+            session.provider({
+                "jsonrpc": "2.0",
+                "id": 99,
+                "result": {
+                    "stopReason": "end_turn",
+                    "sessionId": "fixture-session",
+                },
+            })
+        self.assertFalse(session.complete)
+        self.assertTrue(receipt.failed)
+        with self.assertRaisesRegex(
+            ACP.Refusal, "answer-incomplete",
+        ):
+            receipt.finalize(session)
+        self.assertNotIn(b"KEPT", path.read_bytes())
+
+    def test_observe_child_uses_a_real_pid(self):
+        with self.assertRaises(ACP.Refusal):
+            ACP.observe_child(None)
+        class Manufactured:
+            pid = os.getpid()
+            returncode = 0
+            def poll(self):
+                return 0
+        with self.assertRaises(ACP.Refusal):
+            ACP.observe_child(Manufactured())
+        proc = subprocess.Popen(
+            [sys.executable, "-I", "-c", "import time; time.sleep(30)"],
+        )
+        try:
+            self.assertEqual(ACP.observe_child(proc), proc.pid)
+            self.assertIsNone(proc.returncode)
+            proc.returncode = 0
+            with self.assertRaises(ACP.Refusal):
+                ACP.observe_child(proc)
+            proc.returncode = None
+            self.assertEqual(ACP.observe_child(proc), proc.pid)
+            self.assertIsNone(proc.poll())
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+        spontaneous = subprocess.Popen(
+            [sys.executable, "-I", "-c", "import sys; sys.exit(1)"],
+        )
+        spontaneous.wait(timeout=5)
+        self.assertEqual(spontaneous.returncode, 1)
+        with self.assertRaisesRegex(ACP.Refusal, "answer-incomplete"):
+            ACP.observe_child(spontaneous)
+        clean = subprocess.Popen(
+            [sys.executable, "-I", "-c", "import sys; sys.exit(0)"],
+        )
+        clean.wait(timeout=5)
+        self.assertEqual(ACP.observe_child(clean), clean.pid)
+        live = subprocess.Popen(
+            [sys.executable, "-I", "-c", "import time; time.sleep(30)"],
+        )
+        try:
+            self.assertEqual(ACP.observe_child(live), live.pid)
+            live.kill()
+            live.wait(timeout=5)
+            self.assertNotEqual(live.returncode, 0)
+        finally:
+            if live.poll() is None:
+                live.kill()
+                live.wait(timeout=5)
+
+    def test_captures_close_independently(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        deadline = time.monotonic() + 30
+        diagnostic = ACP.StructuralDiagnostic(
+            str(root), "shape.jsonl", deadline,
+        )
+        answer = ACP.AssistantAnswerReceipt(
+            str(root), "answer.json", deadline,
+        )
+        ACP.close_captures(diagnostic, answer)
+        diagnostic.writer.join(timeout=2)
+        self.assertTrue(diagnostic.closed)
+        self.assertTrue(answer.closed)
+        shape = (root / "shape.jsonl").read_text()
+        self.assertIn("capture-end", shape)
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        only = ACP.StructuralDiagnostic(
+            other.name, "shape.jsonl", deadline,
+        )
+        ACP.close_captures(only, None)
+        only.writer.join(timeout=2)
+        self.assertTrue(only.closed)
+        self.assertIn(
+            "capture-end",
+            (Path(other.name) / "shape.jsonl").read_text(),
+        )
+
+    def run_mode(self, mode, answer, timeout="10", prefix=(), diagnostic=None):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        process = self.launch(
+            root, mode, answer, timeout,
+            prefix=prefix, diagnostic=diagnostic,
+        )
+        events, blob = self.finish(process)
+        return root, process, events, blob
+
+    def test_transport_refuses_queued_followups(self):
+        cases = (
+            ("late", "late-session-update", "answer.json"),
+            ("sid", "unexpected-response", "answer.json"),
+        )
+        hidden = (
+            self.SECRET, "LATE_PRIVATE_TEXT", "PRIVATE_FRAME",
+        )
+        for mode, reason, answer in cases:
+            with self.subTest(mode=mode, answer=answer):
+                root, process, events, blob = self.run_mode(
+                    mode, answer,
+                )
+                self.assertEqual(process.returncode, 2, blob)
+                self.assertEqual(events[-1]["reason"], reason)
+                for secret in hidden:
+                    self.assertNotIn(secret, blob)
+                self.assertEqual(
+                    (root / "prompt-id.txt").read_text(), "3",
+                )
+                if answer:
+                    raw = (root / answer).read_bytes()
+                    self.assertNotIn(b"complete", raw)
+                    self.assertNotIn(self.SECRET.encode(), raw)
+                else:
+                    self.assertFalse((root / "answer.json").exists())
+                if mode == "sid":
+                    names = [item["event"] for item in events]
+                    self.assertNotIn("prompt-complete", names)
+        root, process, events, blob = self.run_mode("late", None)
+        self.assertEqual(process.returncode, 0, blob)
+        self.assertNotIn("LATE_PRIVATE_TEXT", blob)
+        self.assertNotIn(self.SECRET, blob)
+        self.assertEqual(events[-1]["event"], "prompt-complete")
+        self.assertFalse((root / "answer.json").exists())
+
+    def test_duplicate_and_malformed_follow_the_flag(self):
+        hidden = (self.SECRET, "PRIVATE_FRAME")
+        for mode in ("duplicate", "framing"):
+            for answer, code in (("answer.json", 2), (None, 0)):
+                with self.subTest(mode=mode, answer=bool(answer)):
+                    root, process, events, blob = self.run_mode(
+                        mode, answer,
+                    )
+                    self.assertEqual(process.returncode, code, blob)
+                    for secret in hidden:
+                        self.assertNotIn(secret, blob)
+                    if answer:
+                        self.assertEqual(process.returncode, 2)
+                        reason = events[-1]["reason"]
+                        if mode == "duplicate":
+                            self.assertEqual(
+                                reason, "unexpected-response",
+                            )
+                        else:
+                            self.assertEqual(reason, "invalid-frame")
+                        raw = (root / answer).read_bytes()
+                        self.assertNotIn(b"complete", raw)
+                    else:
+                        self.assertEqual(
+                            events[-1]["event"], "prompt-complete",
+                        )
+                        self.assertFalse(
+                            (root / "answer.json").exists(),
+                        )
+
+    def test_partial_tail_is_answer_file_only(self):
+        for answer, code in (("answer.json", 2), (None, 0)):
+            with self.subTest(answer=bool(answer)):
+                root, process, events, blob = self.run_mode(
+                    "partial", answer,
+                )
+                self.assertEqual(process.returncode, code, blob)
+                self.assertNotIn("PRIVATE_FRAME", blob)
+                self.assertNotIn(self.SECRET, blob)
+                if answer:
+                    self.assertEqual(
+                        events[-1]["detail"], "frame-truncated-eof",
+                    )
+                    raw = (root / answer).read_bytes()
+                    self.assertNotIn(b"complete", raw)
+                else:
+                    self.assertEqual(
+                        events[-1]["event"], "prompt-complete",
+                    )
+
+    def test_drain_deadline_covers_ignored_input(self):
+        events = ACP.FrameQueue()
+        for _ in range(8):
+            events.put(("decision", {"ignored": True}))
+        events.publish_reader(True, False, b"")
+        with self.assertRaisesRegex(
+            ACP.Refusal, "deadline-exceeded",
+        ):
+            ACP.drain_queued_after_prompt(
+                events, None, None, -1, lambda: 0,
+            )
+        self.assertEqual(events.qsize(), 8)
+
+    def test_drain_deadline_crosses_while_input_remains(self):
+        events = ACP.FrameQueue()
+        for _ in range(6):
+            events.put(("decision", {"ignored": True}))
+        events.publish_reader(True, False, b"")
+        samples = iter((0, 3, 6, 9, 12))
+
+        def clock():
+            return next(samples)
+
+        with self.assertRaisesRegex(
+            ACP.Refusal, "deadline-exceeded",
+        ):
+            ACP.drain_queued_after_prompt(
+                events, None, None, 10, clock,
+            )
+        self.assertGreater(events.qsize(), 0)
+        self.assertLess(events.qsize(), 6)
+
+    def test_second_empty_does_not_drop_a_queued_failure(self):
+        # The queue is empty and the reader is idle. Before that
+        # snapshot is read, the producer queues a failure. Returning
+        # here would leave the failure queued.
+        failure = (
+            "failure",
+            ACP.FrameRefusal(
+                "frame-malformed-json", source="provider",
+            ),
+        )
+
+        class SecondEmpty(ACP.FrameQueue):
+            def __init__(self):
+                super().__init__()
+                self.idle = True
+                self.saw_empty_idle = False
+
+            def _before_decision(self):
+                if self.saw_empty_idle:
+                    return
+                self.saw_empty_idle = (
+                    not self._items and self.idle and not self.partial
+                )
+                self._items.append(failure)
+                self.idle = True
+                self.partial = False
+
+        events = SecondEmpty()
+        with self.assertRaisesRegex(ACP.Refusal, "invalid-frame"):
+            ACP.drain_queued_after_prompt(
+                events, None, None, 10, lambda: 0,
+            )
+        self.assertTrue(events.saw_empty_idle)
+        self.assertEqual(events.qsize(), 0)
+
+    def test_partial_buffer_before_empty_is_not_completion(self):
+        # Empty and idle, then the producer clears idle and buffers
+        # unterminated bytes before the emptiness snapshot is read.
+        # provider idle is false and those bytes are already buffered.
+        class PartialRace(ACP.FrameQueue):
+            def __init__(self):
+                super().__init__()
+                self.idle = True
+                self.saw_empty_idle = False
+                self.released = False
+
+            def _before_decision(self):
+                if self.saw_empty_idle:
+                    return
+                self.saw_empty_idle = (
+                    not self._items and self.idle and not self.partial
+                )
+                self.idle = False
+                self.partial = True
+                self.buffered = b'{"PRIVATE_FRAME":'
+
+            def wait_for_change(self, timeout):
+                self.released = True
+
+        events = PartialRace()
+
+        def clock():
+            return 100 if events.released else 0
+
+        with self.assertRaisesRegex(
+            ACP.Refusal, "deadline-exceeded",
+        ):
+            ACP.drain_queued_after_prompt(
+                events, None, None, 10, clock,
+            )
+        self.assertTrue(events.saw_empty_idle)
+        self.assertFalse(events.idle)
+        self.assertTrue(events.partial)
+        self.assertEqual(events.buffered, b'{"PRIVATE_FRAME":')
+
+    def test_failure_published_during_wait_is_not_dropped(self):
+        events = ACP.FrameQueue()
+        events.publish_reader(False, False, b"")
+        failure = (
+            "failure",
+            ACP.FrameRefusal(
+                "frame-malformed-json", source="provider",
+            ),
+        )
+
+        def producer():
+            with events.condition:
+                while not events.waiting:
+                    events.condition.wait()
+            events.put(failure)
+
+        thread = threading.Thread(target=producer)
+        thread.start()
+        try:
+            with self.assertRaisesRegex(ACP.Refusal, "invalid-frame"):
+                ACP.drain_queued_after_prompt(
+                    events, None, None,
+                    time.monotonic() + 2, time.monotonic,
+                )
+        finally:
+            thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+
+    def test_partial_published_during_wait_is_not_completion(self):
+        events = ACP.FrameQueue()
+        events.publish_reader(False, False, b"")
+        events.expire = False
+
+        def producer():
+            with events.condition:
+                while not events.waiting:
+                    events.condition.wait()
+            events.expire = True
+            events.publish_reader(False, True, b'{"PRIVATE_FRAME":')
+
+        def clock():
+            return 100 if events.expire else 0
+
+        thread = threading.Thread(target=producer)
+        thread.start()
+        try:
+            with self.assertRaisesRegex(
+                ACP.Refusal, "deadline-exceeded",
+            ):
+                ACP.drain_queued_after_prompt(
+                    events, None, None, 10, clock,
+                )
+        finally:
+            thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(events.idle)
+        self.assertTrue(events.partial)
+        self.assertEqual(events.buffered, b'{"PRIVATE_FRAME":')
+
+    def test_idle_empty_boundary_returns(self):
+        events = ACP.FrameQueue()
+        events.publish_reader(True, False, b"")
+        ACP.drain_queued_after_prompt(
+            events, None, None, 10, lambda: 0,
+        )
+
+    def owned_process(self, wait):
+        class Owned:
+            pid = 4242
+
+            def wait(self, timeout=None):
+                return wait(timeout)
+
+        return Owned()
+
+    def test_default_stop_group_suppresses_signal_and_reap_errors(self):
+        def wait(timeout=None):
+            raise subprocess.TimeoutExpired(["owned"], timeout or 2)
+
+        with mock.patch.object(
+            ACP.os, "killpg", side_effect=PermissionError(1, "SYNTHETIC"),
+        ):
+            with mock.patch.object(ACP, "leader_exited", return_value=True):
+                ACP.stop_group(
+                    self.owned_process(wait), grace=0, clock=lambda: 0,
+                )
+
+    def test_answer_stop_accepts_already_gone(self):
+        seen = []
+
+        def wait(timeout=None):
+            seen.append(timeout)
+            return 0
+
+        with mock.patch.object(
+            ACP.os, "killpg",
+            side_effect=ProcessLookupError(3, "gone"),
+        ):
+            ACP.stop_answer_group(
+                self.owned_process(wait),
+                grace=0, clock=lambda: 0, wait_timeout=0.01,
+            )
+        self.assertEqual(seen, [0.01])
+
+    def test_answer_stop_rejects_unexpected_signal_error(self):
+        def wait(timeout=None):
+            raise AssertionError("reap after an unknown signal error")
+
+        with mock.patch.object(
+            ACP.os, "killpg",
+            side_effect=PermissionError(1, "SYNTHETIC_SIGNAL_DENIED"),
+        ):
+            with self.assertRaisesRegex(
+                ACP.Refusal, "^cleanup-signal-failed$",
+            ):
+                ACP.stop_answer_group(
+                    self.owned_process(wait),
+                    grace=5, clock=time.monotonic,
+                )
+
+    def test_answer_stop_rejects_reap_timeout(self):
+        def wait(timeout=None):
+            raise subprocess.TimeoutExpired(["owned"], timeout or 2)
+
+        with mock.patch.object(ACP.os, "killpg", return_value=None):
+            with self.assertRaisesRegex(
+                ACP.Refusal, "^cleanup-timeout$",
+            ):
+                ACP.stop_answer_group(
+                    self.owned_process(wait),
+                    grace=0, clock=lambda: 0, wait_timeout=0.01,
+                )
+
+    def test_answer_file_skips_finalize_when_cleanup_is_uncertain(self):
+        cases = {
+            "signal": "cleanup-signal-failed",
+            "timeout": "cleanup-timeout",
+        }
+        for kind, reason in cases.items():
+            with self.subTest(kind=kind):
+                if kind == "signal":
+                    body = (
+                        "    saved=mod.os.killpg\n"
+                        "    def killpg(group, number):\n"
+                        "        raise PermissionError("
+                        "1, 'SYNTHETIC_SIGNAL_DENIED')\n"
+                        "    mod.os.killpg=killpg\n"
+                        "    try:\n"
+                        "        return real("
+                        "process, grace, clock, wait_timeout)\n"
+                        "    finally:\n"
+                        "        mod.os.killpg=saved\n"
+                    )
+                else:
+                    body = (
+                        "    saved_kill=mod.os.killpg\n"
+                        "    saved_wait=process.wait\n"
+                        "    mod.os.killpg=lambda group, number: None\n"
+                        "    def wait(timeout=None):\n"
+                        "        raise subprocess.TimeoutExpired("
+                        "process.args, 0.01)\n"
+                        "    process.wait=wait\n"
+                        "    try:\n"
+                        "        return real(process, grace=0, "
+                        "clock=lambda: 0, wait_timeout=0.01)\n"
+                        "    finally:\n"
+                        "        mod.os.killpg=saved_kill\n"
+                        "        process.wait=saved_wait\n"
+                    )
+                driver = (
+                    "import importlib.util,subprocess,sys\n"
+                    "spec=importlib.util.spec_from_file_location("
+                    "'acp',sys.argv[1])\n"
+                    "mod=importlib.util.module_from_spec(spec)\n"
+                    "spec.loader.exec_module(mod)\n"
+                    "real=mod.stop_answer_group\n"
+                    "def wrapped(process, grace=1.0, "
+                    "clock=mod.time.monotonic, wait_timeout=2):\n"
+                    + body +
+                    "mod.stop_answer_group=wrapped\n"
+                    "raise SystemExit(mod.main(sys.argv[2:]))\n"
+                )
+                root, process, events, blob = self.run_mode(
+                    "ok", "answer.json", prefix=("-c", driver),
+                )
+                self.assertEqual(process.returncode, 2, blob)
+                self.assertEqual(events[-1]["reason"], reason)
+                self.assertEqual(
+                    events[-2]["event"], "prompt-complete",
+                )
+                raw = (root / "answer.json").read_bytes()
+                self.assertNotIn(b"complete", raw)
+                self.assertNotIn(self.SECRET.encode(), raw)
+                self.assertNotIn(self.SECRET, blob)
+                self.assertNotIn("SYNTHETIC_SIGNAL_DENIED", blob)
+                self.assertNotIn("TimeoutExpired", blob)
+                pid = int((root / "child.pid").read_text())
+                self.assertTrue(pid_gone(pid))
+
+    def test_terminal_reasons_do_not_complete_the_file(self):
+        reasons = (
+            "max_tokens", "cancelled", "refusal", "unknown",
+            "empty", "blanks",
+        )
+        for mode in reasons:
+            with self.subTest(mode=mode):
+                root, process, events, blob = self.run_mode(
+                    mode, "answer.json",
+                )
+                self.assertEqual(process.returncode, 2, blob)
+                self.assertEqual(
+                    events[-1]["reason"], "answer-incomplete",
+                )
+                self.assertNotIn(self.SECRET, blob)
+                raw = (root / "answer.json").read_bytes()
+                self.assertNotIn(b"complete", raw)
+                self.assertNotIn(self.SECRET.encode(), raw)
+                self.assertEqual(
+                    events[-2]["event"], "prompt-complete",
+                )
+        root, process, events, blob = self.run_mode(
+            "max_tokens", None,
+        )
+        self.assertEqual(process.returncode, 0, blob)
+        self.assertEqual(events[-1]["stopReason"], "max_tokens")
+        self.assertFalse((root / "answer.json").exists())
+        self.assertNotIn(self.SECRET, blob)
+
+    def test_with_session_id_field_still_uses_prompt_id(self):
+        root, process, events, blob = self.run_mode(
+            "with-sid", "answer.json",
+        )
+        self.assertEqual(process.returncode, 0, blob)
+        got = json.loads((root / "answer.json").read_text())
+        self.assertEqual(got["stopReason"], "end_turn")
+        self.assertEqual(got["servedModel"], "Unknown")
+        self.assertEqual(
+            (root / "prompt-id.txt").read_text(), "3",
+        )
+        self.assertNotIn("exitCode", got)
+
+    def test_nonzero_exit_during_drain_is_not_complete(self):
+        # The child stays alive until drain starts, then closes the
+        # pipe and exits 1. EOF during that pass is not a failure by
+        # itself. The look after the pass, before stop_group, must
+        # refuse. A direct poll of observe_child is not this case.
+        driver = (
+            "import importlib.util,os,sys,time\n"
+            "from pathlib import Path\n"
+            "spec=importlib.util.spec_from_file_location("
+            "'acp',sys.argv[1])\n"
+            "mod=importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(mod)\n"
+            "real=mod.drain_queued_after_prompt\n"
+            "def wrapped(events, session, budget, deadline, clock):\n"
+            "    args=sys.argv[2:]\n"
+            "    root=Path(args[args.index('--worktree')+1])\n"
+            "    (root/'drain-entered').write_text('1')\n"
+            "    pid=int((root/'child.pid').read_text())\n"
+            "    end=time.monotonic()+5\n"
+            "    while time.monotonic()<end:\n"
+            "        try:\n"
+            "            info=os.waitid(os.P_PID, pid, "
+            "os.WEXITED|os.WNOHANG|os.WNOWAIT)\n"
+            "        except OSError:\n"
+            "            info=None\n"
+            "        if info is not None:\n"
+            "            break\n"
+            "        time.sleep(0.01)\n"
+            "    return real(events, session, budget, deadline, clock)\n"
+            "mod.drain_queued_after_prompt=wrapped\n"
+            "raise SystemExit(mod.main(sys.argv[2:]))\n"
+        )
+        root, process, events, blob = self.run_mode(
+            "die-during-drain", "answer.json", prefix=("-c", driver),
+        )
+        self.assertEqual(process.returncode, 2, blob)
+        self.assertEqual(events[-1]["reason"], "answer-incomplete")
+        self.assertEqual(events[-2]["event"], "prompt-complete")
+        self.assertEqual(
+            (root / "child-exit.txt").read_text(), "spontaneous-1",
+        )
+        raw = (root / "answer.json").read_bytes()
+        self.assertNotIn(b"complete", raw)
+        self.assertNotIn(self.SECRET.encode(), raw)
+        self.assertNotIn(self.SECRET, blob)
+        self.assertEqual(events[0]["servedModel"], "Unknown")
+        self.assertNotIn("servedModel", events[-1])
+        self.assertNotIn("cleanExit", blob)
+        self.assertNotIn("exitCode", blob)
+
+    def test_completion_observes_the_live_child(self):
+        driver = (
+            "import importlib.util,sys\n"
+            "from pathlib import Path\n"
+            "spec=importlib.util.spec_from_file_location("
+            "'acp',sys.argv[1])\n"
+            "mod=importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(mod)\n"
+            "real=mod.observe_child\n"
+            "def wrapped(process):\n"
+            "    pid=real(process)\n"
+            "    args=sys.argv[2:]\n"
+            "    root=Path(args[args.index('--worktree')+1])\n"
+            "    (root/'observed-pid').write_text(str(pid))\n"
+            "    status=process.poll()\n"
+            "    label='running' if status is None else "
+            "'status-%s'%status\n"
+            "    (root/'observed-status').write_text(label)\n"
+            "    return pid\n"
+            "mod.observe_child=wrapped\n"
+            "raise SystemExit(mod.main(sys.argv[2:]))\n"
+        )
+        root, process, events, blob = self.run_mode(
+            "ok", "answer.json", prefix=("-c", driver),
+        )
+        self.assertEqual(process.returncode, 0, blob)
+        child = int((root / "child.pid").read_text())
+        self.assertEqual(
+            (root / "observed-pid").read_text(), str(child),
+        )
+        self.assertEqual(
+            (root / "observed-status").read_text(), "running",
+        )
+        self.assertTrue(pid_gone(child))
+        self.assertEqual(
+            (root / "child-exit.txt").read_text(), "running",
+        )
+        got = json.loads((root / "answer.json").read_text())
+        self.assertEqual(got["servedModel"], "Unknown")
+        self.assertEqual(got["stopReason"], "end_turn")
+        self.assertNotIn("cleanExit", got)
+        self.assertNotIn(self.SECRET, blob)
+
+    def test_stalled_answer_disk_does_not_hold_the_child(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        marker = root / "write-stalled"
+        release = root / "release-write"
+        driver = (
+            "import importlib.util,os,sys,time\n"
+            "from pathlib import Path\n"
+            "spec=importlib.util.spec_from_file_location("
+            "'acp',sys.argv[1])\n"
+            "mod=importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(mod)\n"
+            "args=sys.argv[2:]\n"
+            "root=Path(args[args.index('--worktree')+1])\n"
+            "marker=root/'write-stalled'\n"
+            "release=root/'release-write'\n"
+            "real=os.write\n"
+            "def stalled(fd,data):\n"
+            "    if b'assistant-answer-v1' in data:\n"
+            "        marker.write_text('stalled')\n"
+            "        end=time.monotonic()+20\n"
+            "        while not release.exists():\n"
+            "            if time.monotonic()>end:\n"
+            "                break\n"
+            "            time.sleep(0.02)\n"
+            "    return real(fd,data)\n"
+            "os.write=stalled\n"
+            "mod.os.write=stalled\n"
+            "raise SystemExit(mod.main(sys.argv[2:]))\n"
+        )
+        process = self.launch(
+            root, "ok", "answer.json", prefix=("-c", driver),
+        )
+        try:
+            end = time.monotonic() + 15
+            while not marker.exists() and time.monotonic() < end:
+                if process.poll() is not None:
+                    break
+                time.sleep(0.02)
+            self.assertTrue(
+                marker.exists(), "answer write never stalled",
+            )
+            pid = int((root / "child.pid").read_text())
+            self.assertTrue(
+                pid_gone(pid),
+                "child stayed alive while the answer write blocked",
+            )
+        finally:
+            release.write_text("go")
+        events, blob = self.finish(process)
+        self.assertEqual(process.returncode, 0, blob)
+        got = json.loads((root / "answer.json").read_text())
+        self.assertEqual(got["stage"], "complete")
+        self.assertEqual(got["servedModel"], "Unknown")
+        self.assertNotIn(self.SECRET, blob)
+
+    def test_diagnostic_and_answer_close_on_success(self):
+        root, process, events, blob = self.run_mode(
+            "ok", "answer.json", diagnostic="shape.jsonl",
+        )
+        self.assertEqual(process.returncode, 0, blob)
+        got = json.loads((root / "answer.json").read_text())
+        self.assertEqual(got["receipt"], "assistant-answer-v1")
+        self.assertEqual(got["stopReason"], "end_turn")
+        shape = (root / "shape.jsonl").read_text()
+        self.assertIn("capture-end", shape)
+        self.assertNotIn(self.SECRET, shape)
+        self.assertNotIn(self.SECRET, blob)
+        self.assertNotIn("SAME", blob)
+
 if __name__ == "__main__":
     unittest.main()
