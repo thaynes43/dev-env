@@ -1,4 +1,8 @@
-# HANDOFF: start here
+# HANDOFF: dated delivery log
+
+> **Reference log, 2026-11-09 (OP499).** This file is a dated delivery log and ruling
+> index, too large to read whole: search it for the entry you need. Current work and
+> state live in OpenProject (epic #91) and `agent-run fleet`; see [CLAUDE.md](../CLAUDE.md).
 
 ## HOME retention source slice — 2026-11-01 (OP350)
 

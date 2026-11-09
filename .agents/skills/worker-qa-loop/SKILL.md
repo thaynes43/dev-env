@@ -34,7 +34,7 @@ the supported routes instead: `agent-run inbox`, the tracker, its PR, or a
 headless task's outcome file. See supervised-dispatch, section 2.
 
 Claims are disjoint. Each worker writes only its named paths, in its own worktree
-on its own branch. A shared file (CLAUDE.md's Layout block, generated CRDs, a
+on its own branch. A shared file (`docs/repo-layout.md`, generated CRDs, a
 design document) has exactly one named owner. When two stories must touch the same
 file, run them in order. Example from 2026-11-04: S3c (#900) merged first with the
 single definitions, then S3a (#901) rebased and deleted its duplicates before

@@ -1,5 +1,9 @@
 # Claude continuation: dev-env v2 toward a working multi-provider MVP
 
+> **Historical brief (note added 2026-11-09, OP499).** Search it for requirement
+> history and stopped routes; do not read it in full or treat it as current state.
+> Current work and state live in OpenProject (epic #91) and `agent-run fleet`.
+
 > **Superseded for current state, 2026-10-13.** The
 > [2026-10-13 brief](CLAUDE-RESUME-2026-10-13.md) has the current deployed
 > state, counters, rulings, next work and open questions. This brief still
