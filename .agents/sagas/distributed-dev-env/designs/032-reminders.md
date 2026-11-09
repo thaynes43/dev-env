@@ -168,8 +168,8 @@ store it on the companion object; that wiring is not built yet. An API edit copi
 keeps it.
 
 The event is one series entry with an RRULE, keyed by the Reminder's namespace
-and name (`EventID`). Its series end, `recurrence.until`, is the end of the last
-occurrence; the Reminder's own end is `projectionRetainUntil`. An edit rewrites the
+and name (`EventID`). Its series end, `recurrence.until`, is the last occurrence (or the
+item's `notAfter`, when that is earlier or the series is open-ended); the Reminder's own end is `projectionRetainUntil`. An edit rewrites the
 event. A cancel deletes it before the state becomes `cancelled`, and a failed delete
 stays pending so the next pass retries. The event ID, the spec hash, the five-minute
 failure backoff and the delete-on-cancel record stay in `status.calendar`.

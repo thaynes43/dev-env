@@ -179,7 +179,7 @@ func TestProjectionRetentionEndDeletesTheEventAndEnds(t *testing.T) {
 
 // A one-shot projection leaves pending too: it has a retention end like every
 // other (F1).
-func TestOneShotProjectionLeavesPending(t *testing.T) {
+func TestOneShotProjectionEndsAtItsRetentionEnd(t *testing.T) {
 	e := newEnv(t)
 	e.create("rem-proj", func(s *v1alpha1.ReminderSpec) {
 		s.Projection = true
@@ -187,6 +187,9 @@ func TestOneShotProjectionLeavesPending(t *testing.T) {
 		retainTo(s, "2026-11-04T00:00:00Z")
 	})
 	e.tick()
+	e.advance(time.Hour) // the only occurrence has passed
+	e.tick()
+	e.wantState("rem-proj", v1alpha1.ReminderPending)
 	e.advance(400 * 24 * time.Hour)
 	e.tick()
 	e.wantState("rem-proj", v1alpha1.ReminderSkipped)
@@ -210,6 +213,11 @@ func TestProjectionPlanKeepsAPastSeriesPending(t *testing.T) {
 	r := e.wantState("rem-proj", v1alpha1.ReminderPending)
 	if r.Status.Message != ProjectionPendingMessage || r.Status.NextDue != nil {
 		t.Fatalf("%+v", r.Status)
+	}
+	// The plan hash is recorded, so the next pass does not plan again.
+	e.tick()
+	if again := e.get("rem-proj"); again.ResourceVersion != r.ResourceVersion {
+		t.Fatalf("the next pass rewrote a settled projection: %s then %s", r.ResourceVersion, again.ResourceVersion)
 	}
 	// The same series on an ordinary reminder fails.
 	e.create("rem-plain", func(s *v1alpha1.ReminderSpec) {
