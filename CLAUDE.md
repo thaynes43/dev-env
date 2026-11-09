@@ -162,6 +162,7 @@ internal/codexauth/      the access-only Codex document the keeper publishes and
 internal/claudeauth/     the access-only Claude projection document (dev-env-claude-live) and the merge of its access fields into a pod's .credentials.json; it cannot carry a refresh token; pure, no I/O (Story110 T09 increment 1)
 internal/claudelogin/    the keeper-owned Claude login ceremony (Story110 T09 increment 5): the control socket's wire types and client, and the helper that runs the pinned `claude auth login` in a memory-backed staging HOME, prints only the sign-in link and reads the one-time code on stdin; reads no credential
 internal/tokenfile/      bounded reads of rotating projected bearer-token files
+internal/eventnote/      bounds an Event note to the API's 1024-byte limit on a UTF-8 rune boundary; pure, shared by the controller and the broker
 internal/projectcatalog/ parses and validates the GitOps project catalog and its per-task snapshot; no filesystem or network authority
 internal/projectsync/    agentd's bounded, model-free GitOps project management (`agentd project-sync|project-refresh`): actor, API, receipt
 internal/pages/          bounded keeper Pushover page records, Alertmanager snapshots, Gatus current checks and shared existing-order/canonical-claim response projection (DESIGN-031); read-only source interfaces, no production adapters; standard library only
