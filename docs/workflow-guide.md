@@ -397,8 +397,9 @@ its history and deleted the HOME; that archive is not switched on yet
 `agent-run reap`, `show` and `list` print the operator's own words for it, and
 its `RemovalBlocked` condition gives one of two reasons:
 
-- `ExecutorEnded`: the agent stopped. The text gives how its Pod ended and the
-  time the operator recorded it.
+- `ExecutorEnded`: the agent stopped. The text gives the time the operator
+  recorded it, and how: "stopped as the reap asked" when the reap's own stop
+  request ended its Pod, else how its Pod ended.
 - `RetentionPending`: the stop is not proven yet, and the text says why: the
   stop request is still in flight, the agent still runs, or its Pod ended but
   the operator cannot confirm that yet. In the last case the operator checks

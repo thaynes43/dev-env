@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -59,10 +60,26 @@ func TestReapedPrivateSessionSaysWhatIsTrue(t *testing.T) {
 		requested = "reap accepted; the agent's stop is not proven yet: a stop was requested at 2026-10-12T11:59:30Z, and its Pod has not ended yet; " +
 			"its private HOME is kept, and nothing is archived or deleted yet; " +
 			"the session is released only after its stop is proven and the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
-		reclaimed = "reap accepted; the agent stopped: its Pod ended Failed (DeadlineExceeded), recorded 2026-10-12T12:00:00Z; its Pod was then removed to free compute; " +
+		reapStopped = "reap accepted; the agent was stopped as the reap asked (its Pod ended at the operator's stop deadline), recorded 2026-10-12T12:00:00Z; " +
+			"its private HOME is kept, and nothing is archived or deleted yet; " +
+			"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
+		evicted = "reap accepted; the agent stopped: its Pod ended Failed (Evicted), recorded 2026-10-12T12:00:00Z; " +
+			"its private HOME is kept, and nothing is archived or deleted yet; " +
+			"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
+		taskStopped = "reap accepted; the agent was stopped after its task ended (its Pod ended at the operator's stop deadline), recorded 2026-10-12T12:00:00Z; " +
+			"its private HOME is kept, and nothing is archived or deleted yet; " +
+			"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
+		reclaimed = "reap accepted; the agent was stopped after its task ended (its Pod ended at the operator's stop deadline), recorded 2026-10-12T12:00:00Z; " +
+			"its Pod was then removed to free compute; " +
 			"its private HOME is kept, and nothing is archived or deleted yet; " +
 			"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
 	)
+	// stopRequested stores the operator's stop request at the given time
+	// before the fixture's clock.
+	stopRequested := func(f *terminalFixture, before time.Duration) {
+		h := f.s.Status.PrivateHistory
+		h.StopRequest = &v1alpha1.PrivateExecutorStopRequestStatus{Version: 1, PodUID: h.LastExecutor.PodUID, RequestedAt: recordTime(f.now.Add(-before))}
+	}
 	running := func(f *terminalFixture) {
 		f.pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, StartTime: &metav1.Time{Time: f.now.Add(-time.Hour)},
 			ContainerStatuses: []corev1.ContainerStatus{{Name: ContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(f.now.Add(-time.Hour))}}}}}
@@ -76,8 +93,21 @@ func TestReapedPrivateSessionSaysWhatIsTrue(t *testing.T) {
 		// PodReady's, when they differ from RemovalBlocked's.
 		readyReason, readyMessage string
 	}{
-		{name: "terminal record, Pod standing", edit: func(f *terminalFixture) { recordTerminal(*f) }, reason: "ExecutorEnded", message: stopped, history: "ExecutorEnded"},
-		{name: "terminal record, Pod gone", edit: func(f *terminalFixture) { recordTerminal(*f) }, podGone: true, reason: "ExecutorEnded", message: stopped, history: "ExecutorEnded"},
+		// The live case: the reap's own stop request ended the Pod at its
+		// deadline. That is a stop, not a failure.
+		{name: "stopped by the reap, Pod standing", edit: func(f *terminalFixture) { stopRequested(f, 30*time.Second); recordTerminal(*f) },
+			reason: "ExecutorEnded", message: reapStopped, history: "ExecutorEnded"},
+		{name: "stopped by the reap, Pod gone", edit: func(f *terminalFixture) { stopRequested(f, 30*time.Second); recordTerminal(*f) }, podGone: true,
+			reason: "ExecutorEnded", message: reapStopped, history: "ExecutorEnded"},
+		// Any other ending keeps its raw phase and reason: a deadline with no
+		// stop request of the operator's, and a stop request overtaken by an
+		// eviction.
+		{name: "deadline without a stop request", edit: func(f *terminalFixture) { recordTerminal(*f) }, reason: "ExecutorEnded", message: stopped, history: "ExecutorEnded"},
+		{name: "stop requested, Pod evicted", edit: func(f *terminalFixture) {
+			stopRequested(f, 30*time.Second)
+			recordTerminal(*f)
+			f.s.Status.PrivateHistory.ExecutorTerminal.Reason = "Evicted"
+		}, reason: "ExecutorEnded", message: evicted, history: "ExecutorEnded"},
 		// The live case: the Pod is Failed, but a container status is
 		// unknown, so the record is refused and the condition says why.
 		{name: "terminal Pod, record refused", edit: func(f *terminalFixture) {
@@ -89,11 +119,13 @@ func TestReapedPrivateSessionSaysWhatIsTrue(t *testing.T) {
 			h.StopRequest = &v1alpha1.PrivateExecutorStopRequestStatus{Version: 1, PodUID: h.LastExecutor.PodUID, RequestedAt: recordTime(f.now.Add(-30 * time.Second))}
 		}, reason: "RetentionPending", message: requested, history: "RetentionPending"},
 		// Reaped after the terminal task reclaim removed its ended Pod.
+		// The terminal task reclaim stopped it, suspended, before the reap.
 		{name: "task compute reclaimed", edit: func(f *terminalFixture) {
 			*f = terminalTaskFixture(true)
 			f.s.DeletionTimestamp = &metav1.Time{Time: f.now.Add(-time.Minute)}
+			stopRequested(f, 10*time.Minute)
 			recordTerminal(*f)
-		}, podGone: true, reason: "TaskComputeReclaimed", message: reclaimed, history: "TaskComputeReclaimed", readyReason: "ExecutorEnded", readyMessage: stopped},
+		}, podGone: true, reason: "TaskComputeReclaimed", message: reclaimed, history: "TaskComputeReclaimed", readyReason: "ExecutorEnded", readyMessage: taskStopped},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := reapedTerminalFixture()
@@ -281,4 +313,66 @@ func TestPrivateTerminalRefusalBacksOff(t *testing.T) {
 	if left != 0 {
 		t.Fatalf("the backoff kept %d entries after the record", left)
 	}
+}
+
+// DESIGN-025 25.3: a remembered refusal never outlives what it backs off. It
+// goes when the executor Pod goes (the missed marker is written instead), and
+// when the Session itself is released or deleted while still refused, so the
+// map holds no dead Sessions.
+func TestPrivateTerminalRefusalForgottenWhenItsSessionOrPodGoes(t *testing.T) {
+	entries := func(r *Reconciler) int {
+		r.terminalMu.Lock()
+		defer r.terminalMu.Unlock()
+		return len(r.terminalRefusals)
+	}
+	refused := func(t *testing.T) (terminalFixture, client.WithWatch, *Reconciler) {
+		t.Helper()
+		f := reapedTerminalFixture()
+		f.node.Status.Conditions[0].Status = corev1.ConditionFalse
+		c := f.client()
+		r := f.reconciler(c, c, NewPrivateExecutorTerminalCounter())
+		reconcileSession(t, r, f.s, 1)
+		if n := entries(r); n != 1 {
+			t.Fatalf("a refused check left %d entries, want 1", n)
+		}
+		return f, c, r
+	}
+	t.Run("the executor Pod goes", func(t *testing.T) {
+		f, c, r := refused(t)
+		if err := c.Delete(context.Background(), f.pod); err != nil {
+			t.Fatal(err)
+		}
+		reconcileSession(t, r, f.s, 1)
+		if got := storedHistory(t, c, f.s); got.Status.PrivateHistory.ExecutorMissed == nil {
+			t.Fatal("the gone executor got no missed marker")
+		}
+		if n := entries(r); n != 0 {
+			t.Fatalf("%d entries left after the executor went", n)
+		}
+	})
+	t.Run("the Session is released", func(t *testing.T) {
+		f, c, r := refused(t)
+		// Its finalizer goes, as a release lifts it, so the reaped Session
+		// is deleted; the reconcile of its name reads NotFound.
+		got := storedHistory(t, c, f.s)
+		got.Finalizers = nil
+		if err := c.Update(context.Background(), got); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.s), &v1alpha1.AgentSession{}); !apierrors.IsNotFound(err) {
+			t.Fatal("the released Session is still there:", err)
+		}
+		reconcileSession(t, r, f.s, 1)
+		if n := entries(r); n != 0 {
+			t.Fatalf("%d entries left after the Session was released", n)
+		}
+	})
+	t.Run("a new Session of the same name starts afresh", func(t *testing.T) {
+		f, _, r := refused(t)
+		next := f.s.DeepCopy()
+		next.UID = "another-session"
+		if reason, wait := r.terminalBackoff(next, f.pod, f.now); reason != "" || wait != 0 {
+			t.Fatalf("another Session of the name inherited the backoff: %q %v", reason, wait)
+		}
+	})
 }

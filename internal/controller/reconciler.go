@@ -264,9 +264,10 @@ type Reconciler struct {
 	expiryCounted map[string]time.Time
 
 	// terminalRefusals backs off the refused terminal checks of a private
-	// executor, by Session UID (observeExecutorTerminal, DESIGN-025 25).
+	// executor, by Session name, each entry bound to its Session UID
+	// (observeExecutorTerminal, DESIGN-025 25).
 	terminalMu       sync.Mutex
-	terminalRefusals map[types.UID]*terminalRefusal
+	terminalRefusals map[types.NamespacedName]*terminalRefusal
 
 	// rolloutHoldLogged is the last rollout hold state noteRolloutHold logged.
 	rolloutHoldMu     sync.Mutex
@@ -335,6 +336,11 @@ func (r *Reconciler) sessionsForTemplates(ctx context.Context, o client.Object) 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.Result, outcomeErr error) {
 	var s v1alpha1.AgentSession
 	if err := r.Client.Get(ctx, req.NamespacedName, &s); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Released or deleted: a refusal still remembered for it has
+			// nothing left to back off (DESIGN-025 25.3).
+			r.forgetTerminalRefusal(req.NamespacedName)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	// DESIGN-054's releaser comes first and on its own: it lifts only the

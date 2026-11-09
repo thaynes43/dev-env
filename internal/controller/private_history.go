@@ -416,7 +416,7 @@ func privateRetentionNoted(s *v1alpha1.AgentSession, obs observation, note strin
 	reason = reasonRetentionPending
 	if proven {
 		reason = reasonExecutorEnded
-		parts = append(parts, agentStoppedText(h.ExecutorTerminal))
+		parts = append(parts, agentStoppedText(s))
 	} else {
 		parts = append(parts, "the agent's stop is not proven yet: "+stopNotProvenText(s, obs))
 	}
@@ -460,14 +460,28 @@ func privateRetentionNoted(s *v1alpha1.AgentSession, obs observation, note strin
 	return reason, strings.Join(parts, "; ")
 }
 
-// agentStoppedText is the executor's terminal record as its owner reads it:
-// how its Pod ended and when the operator recorded that.
-func agentStoppedText(t *v1alpha1.PrivateExecutorTerminalStatus) string {
+// agentStoppedText is the Session's executor terminal record as its owner
+// reads it: how its Pod ended and when the operator recorded that. A Pod that
+// ended at the deadline of the operator's own stop request did not fail: it
+// was stopped, as the reap asked (section 4) or, when the request came before
+// the reap, after its task ended (section 24). Any other ending shows its raw
+// phase and reason. Call it only with a terminal record.
+func agentStoppedText(s *v1alpha1.AgentSession) string {
+	h := s.Status.PrivateHistory
+	t := h.ExecutorTerminal
+	at := t.ObservedAt.UTC().Format(time.RFC3339)
+	if r := h.StopRequest; r != nil && r.PodUID == t.PodUID && t.Phase == string(corev1.PodFailed) && t.Reason == "DeadlineExceeded" {
+		why := "after its task ended"
+		if !s.DeletionTimestamp.IsZero() && !r.RequestedAt.Time.Before(s.DeletionTimestamp.Truncate(time.Second)) {
+			why = "as the reap asked"
+		}
+		return fmt.Sprintf("the agent was stopped %s (its Pod ended at the operator's stop deadline), recorded %s", why, at)
+	}
 	how := t.Phase
 	if t.Reason != "" {
 		how += " (" + t.Reason + ")"
 	}
-	return fmt.Sprintf("the agent stopped: its Pod ended %s, recorded %s", how, t.ObservedAt.UTC().Format(time.RFC3339))
+	return fmt.Sprintf("the agent stopped: its Pod ended %s, recorded %s", how, at)
 }
 
 // stopNotProvenText says why no terminal record proves the agent's stop.
@@ -522,7 +536,7 @@ func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *
 		// that wants its pod gone already says ExecutorEnded.
 		if !wantsPodGone(s) {
 			c.Reason = reasonExecutorEnded
-			c.Message = agentStoppedText(s.Status.PrivateHistory.ExecutorTerminal) + "; its Pod is gone; its private HOME is kept, and the agent is not started again"
+			c.Message = agentStoppedText(s) + "; its Pod is gone; its private HOME is kept, and the agent is not started again"
 		}
 		if s.Status.PrivateHistory.TaskTerminal != nil {
 			c.Reason = "TaskComputeReclaimed"
@@ -542,7 +556,7 @@ func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *
 			c.Message += " as " + h.Expiry.Archive.Entry
 		}
 		if executorTerminalRecorded(h) {
-			c.Message += "; " + agentStoppedText(h.ExecutorTerminal)
+			c.Message += "; " + agentStoppedText(s)
 		}
 		c.Message += "; the session's record is kept"
 		removal = c

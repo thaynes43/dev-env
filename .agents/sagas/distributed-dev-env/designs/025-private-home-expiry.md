@@ -2611,7 +2611,7 @@ the same text in each (`privateRetention` in
 
 | Reason | When | The text says |
 |---|---|---|
-| `ExecutorEnded` | `executorTerminal` names the recorded executor | the agent stopped; how its Pod ended and the record's `observedAt`; its HOME is kept and nothing is archived or deleted yet; for a reap, that release waits for the HOME expiry to archive the history and delete the HOME, and whether that archive is switched on |
+| `ExecutorEnded` | `executorTerminal` names the recorded executor | the agent stopped, how and the record's `observedAt`; its HOME is kept and nothing is archived or deleted yet; for a reap, that release waits for the HOME expiry to archive the history and delete the HOME, and whether that archive is switched on |
 | `RetentionPending` | no terminal record | the stop is not proven yet, and why: no executor recorded; executor not observed; its Pod ended but the record is refused, with the refusal and the backoff; its Pod ended and no record is written yet; a stop was requested at `requestedAt`; still running with no stop request; or, suspended, a suspend does not stop a private agent |
 
 `RetentionPending` keeps the meaning its old text gave it: the stop is not
@@ -2625,13 +2625,24 @@ controller's own tests that matches `RetentionPending`. The other reasons stay:
 the `ExecutorEnded` text, plus that its Pod was removed to free compute. The
 phase stays `Pending` for a reap and `Suspended` for a suspend.
 
-A reaped Session with its record says:
+A reaped Session whose agent the reap's own stop request ended says:
 
-> reap accepted; the agent stopped: its Pod ended Failed (DeadlineExceeded),
-> recorded 2026-11-09T17:31:21Z; its private HOME is kept, and nothing is
-> archived or deleted yet; the session is released only after the HOME expiry
-> (DESIGN-025) archives its history and deletes the HOME, and the history
-> archive is not switched on yet
+> reap accepted; the agent was stopped as the reap asked (its Pod ended at the
+> operator's stop deadline), recorded 2026-11-09T17:31:21Z; its private HOME is
+> kept, and nothing is archived or deleted yet; the session is released only
+> after the HOME expiry (DESIGN-025) archives its history and deletes the HOME,
+> and the history archive is not switched on yet
+
+**How the stop is told** (`agentStoppedText`). A Pod that the operator's stop
+request ended reports `Failed` with reason `DeadlineExceeded` (section 4). That
+reads as a failed task, but it is a stop. So when `stopRequest` names the
+recorded executor and the record is that ending, the text says "the agent was
+stopped as the reap asked (its Pod ended at the operator's stop deadline)".
+When the request came before the reap, from the terminal task reclaim
+(section 24), it says "the agent was stopped after its task ended". Any other
+ending keeps its raw phase and reason, for example "the agent stopped: its Pod
+ended Failed (Evicted)", or `DeadlineExceeded` with no stop request of the
+operator's, such as a canary's own deadline.
 
 A reaped Session whose record is refused says:
 
@@ -2698,8 +2709,13 @@ refused does not change, and neither does the check.
   text (or the `HomeProtected` text of a Session that runs). They change only
   when the refusal does. The log line now carries the refusal count and the
   wait.
-- **Cleanup.** A taken record drops the entry. An entry that no reconcile came
-  back for within 30 minutes after it was due is dropped on the next refusal.
+- **Cleanup.** The map is keyed by Session name, and each entry holds its
+  Session UID, so a new Session of the same name starts afresh. An entry is
+  dropped when the record is taken, when no check is due any more (a mark
+  exists, the gate is shut, or the executor Pod is gone), and when Reconcile's
+  read of the Session's name is NotFound, which is how a released or deleted
+  Session reaches it. As a backstop, an entry that no reconcile came back for
+  within 30 minutes after it was due is dropped on the next refusal.
 
 ### 25.4 The gauge
 
@@ -2737,13 +2753,16 @@ refusal; an automated responder reports and changes nothing. For a dashboard:
 ### 25.5 Tests and deploy
 
 Tests in `internal/controller`: `TestReapedPrivateSessionSaysWhatIsTrue`
-(record with the Pod standing and gone, a refused record, a stop requested
-while running, task compute reclaimed: each condition's reason and exact text,
-and the Pod, HOME, finalizer and `stopState` untouched),
+(stopped by the reap with the Pod standing and gone, a deadline with no stop
+request, a stop request overtaken by an eviction, a refused record, a stop
+requested while running, task compute reclaimed after the reclaim's own stop:
+each condition's reason and exact text, and the Pod, HOME, finalizer and
+`stopState` untouched),
 `TestSuspendedAndRunningPrivateSessionsSayWhatIsTrue`,
 `TestTerminalRetryAfterDoublesToThirtyMinutes`,
 `TestPrivateTerminalRefusalBacksOff` (a fake clock through the whole schedule,
-a reconcile inside the wait, a changed Pod, then the record) and
+a reconcile inside the wait, a changed Pod, then the record),
+`TestPrivateTerminalRefusalForgottenWhenItsSessionOrPodGoes` and
 `TestReapedSessionsRetainedCountAndAge`. In `internal/agentrun`:
 `TestReapPrivateSessionSaysWhatIsTrue` (the reap text before and after the
 operator judged it, and `show` and `list`).

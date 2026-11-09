@@ -255,7 +255,7 @@ func TestReap(t *testing.T) {
 // judged the reap it says what the reap does; after, it prints the operator's
 // RemovalBlocked text, and list and show carry the same.
 func TestReapPrivateSessionSaysWhatIsTrue(t *testing.T) {
-	const stopped = "reap accepted; the agent stopped: its Pod ended Failed (DeadlineExceeded), recorded 2026-11-09T17:31:21Z; " +
+	const stopped = "reap accepted; the agent was stopped as the reap asked (its Pod ended at the operator's stop deadline), recorded 2026-11-09T17:31:21Z; " +
 		"its private HOME is kept, and nothing is archived or deleted yet; " +
 		"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
 	private := func(s apiv1.Session) apiv1.Session {
