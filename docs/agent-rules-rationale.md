@@ -68,10 +68,11 @@ Tom chose "Merge after your review (Recommended)" by phone prompt for two change
 - The agent image (`images/agent/Dockerfile`, D-53) is v1's Dockerfile plus `tini`,
   agentd, `agent-run`, Codex and `kubectl-cnpg`, with `pve` and `hw-ssh` in
   `images/agent/tools/`. `ci.yml` smoke-tests it with `images/agent/smoke-test.sh`.
-  Since the release that carries OP504 (2026-11-09) the image also carries the Go
-  toolchain, copied from the build stage into `/usr/local/go`, with
-  `GOTOOLCHAIN=local`. Before that release Go appeared only in the build stage, so a
-  session pod had no Go toolchain.
+  Since release 2.97.0 (OP504, 2026-11-09) the image also carries the Go toolchain,
+  copied from the build stage into `/usr/local/go`, with `GOTOOLCHAIN=local`. Under
+  that setting `go` ignores a newer `toolchain` line in `go.mod` and refuses a newer
+  `go` line. Before that release Go appeared only in the build stage, so a session pod
+  had no Go toolchain.
 - The envtest API server version follows the main cluster's Kubernetes minor, not
   `go.mod`'s client libraries.
 - CEL rules without `MaxLength` or `MaxItems` on what they read exceed the API

@@ -504,9 +504,10 @@ WORKDIR /home/dev
 # HOME, XDG_RUNTIME_DIR and AGENTD_*; the templates set CLAUDE_CONFIG_DIR, CODEX_HOME
 # and DEV_ENV_CLAUDE_MODEL (D-44), and they are repeated here so a bare
 # `docker run` behaves the same. ~/.local/bin leads PATH so agentd's `gh` wrapper
-# (token injection) shadows /usr/local/bin/gh in every context. GOTOOLCHAIN=local makes
-# `go` fail loudly when go.mod's `toolchain` line moves ahead of the image's Go, rather
-# than download another toolchain into the session volume.
+# (token injection) shadows /usr/local/bin/gh in every context. GOTOOLCHAIN=local keeps
+# `go` on the image's toolchain: it downloads no other one into the session volume, it
+# ignores a newer `toolchain` line in go.mod, and it refuses a go.mod whose `go` line is
+# newer than the image's Go (checked on Go 1.27.3, 2026-11-09).
 ENV HOME=/home/dev \
     CLAUDE_CONFIG_DIR=/home/dev/.claude \
     CODEX_HOME=/home/dev/.codex \
