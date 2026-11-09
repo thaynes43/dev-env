@@ -82,8 +82,9 @@ run --entrypoint /bin/bash "${image}" -euc '
   flux --version
   helm version --short
   node --version
-  # Go (OP504): the golang stage's toolchain, found on PATH and through the /usr/local/bin
-  # links (a login shell resets PATH), never replaced by a download (GOTOOLCHAIN=local).
+  # Go (OP504): the toolchain of the golang stage, found on PATH and through the
+  # /usr/local/bin links (a login shell resets PATH), never replaced by a download
+  # (GOTOOLCHAIN=local). No apostrophe in these comments: this script is single-quoted.
   test "$(go version)" = "go version go'"${expect_go}"' linux/amd64"
   test "$(PATH=/usr/local/bin:/usr/bin:/bin go version)" = "$(go version)"
   test "$(go env GOTOOLCHAIN)" = local
