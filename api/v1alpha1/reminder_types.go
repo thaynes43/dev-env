@@ -113,6 +113,13 @@ type ReminderRecurrence struct {
 }
 
 // ReminderSpec is what the owner asked for.
+// A projection reminder (DESIGN-054 S4) is a calendar image only. It has a
+// retention end, so it always leaves pending, and it never changes into or out
+// of a projection.
+// +kubebuilder:validation:XValidation:rule="!has(self.projection) || !self.projection || self.targets.all(t, t.startsWith('calendar:'))",message="a projection reminder has calendar targets only"
+// +kubebuilder:validation:XValidation:rule="!has(self.projection) || !self.projection || has(self.projectionRetainUntil)",message="a projection reminder needs projectionRetainUntil"
+// +kubebuilder:validation:XValidation:rule="!has(self.projectionRetainUntil) || (has(self.projection) && self.projection)",message="projectionRetainUntil is for a projection reminder only"
+// +kubebuilder:validation:XValidation:rule="(has(self.projection) && self.projection) == (has(oldSelf.projection) && oldSelf.projection)",message="projection never changes"
 type ReminderSpec struct {
 	// Title is the notification and calendar title.
 	// +kubebuilder:validation:MinLength=1
@@ -164,6 +171,23 @@ type ReminderSpec struct {
 	// cancelled state and removes the calendar entry.
 	// +optional
 	Cancelled bool `json:"cancelled,omitempty"`
+
+	// Projection marks a calendar projection of scheduled work (DESIGN-054 S4).
+	// The CRD allows calendar targets only, requires ProjectionRetainUntil, and
+	// refuses any change of this field after creation. The scheduler keeps the
+	// reminder pending until it is cancelled or ProjectionRetainUntil passes,
+	// and does not finish it at the last occurrence.
+	// +optional
+	Projection bool `json:"projection,omitempty"`
+
+	// ProjectionRetainUntil is how long a projection reminder lives: the
+	// item's notAfter (DESIGN-054 G1-R1). It is separate from the recurrence's
+	// until, which ends the calendar event's own series at its last
+	// occurrence. Once it is strictly in the past, the scheduler deletes the
+	// event and the reminder ends skipped. It can be edited, because the item's
+	// notAfter can be.
+	// +optional
+	ProjectionRetainUntil *metav1.Time `json:"projectionRetainUntil,omitempty"`
 }
 
 // ReminderDelivery is one target's delivery of the current occurrence.
