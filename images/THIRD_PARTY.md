@@ -59,6 +59,7 @@ Claude Code.
 | `agentd`, `agent-run` | MIT | This repo, plus the Go standard library and runtime (BSD-3-Clause, [go.dev/LICENSE](https://go.dev/LICENSE)). `agentd` links `github.com/pelletier/go-toml/v2` under MIT; `agent-run` links `golang.org/x/sys` under BSD-3-Clause. Linked module license texts are retained by the image build. |
 | `pve`, `hw-ssh` | MIT | This repo (copies of the v1 scripts from [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops), also MIT) |
 | `opwork`, `agent-api.py` | MIT | This repo (copies of `scripts/openproject/` in [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops), also MIT, the source of truth) |
+| `opwork_mcp.py` (`opwork-mcp`) | MIT | This repo (an MCP stdio server over `opwork`; standard library only) |
 | `claude-statusline-usage` | MIT | This repo |
 | `cursor-acp-session.py`, `cursor-acp-smoke-check.py` | MIT | This repo. Installed together at `/usr/local/lib/dev-env-cursor-acp/`. They do not include the Cursor CLI. |
 | `tini` | MIT | [krallin/tini](https://github.com/krallin/tini) |
