@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.94.0](https://github.com/thaynes43/dev-env/compare/v2.93.0...v2.94.0) (2026-11-09)
+
+
+### Features
+
+* **agent:** add opwork-mcp, an OpenProject MCP server ([#485](https://github.com/thaynes43/dev-env/issues/485)) ([#998](https://github.com/thaynes43/dev-env/issues/998)) ([0fa6c6b](https://github.com/thaynes43/dev-env/commit/0fa6c6be3e643adf9b112ed70ee41e116e1b0d35))
+* **controller:** retry a rescue that failed for a transient reason only, with backoff ([#486](https://github.com/thaynes43/dev-env/issues/486)) ([#1000](https://github.com/thaynes43/dev-env/issues/1000)) ([b130880](https://github.com/thaynes43/dev-env/commit/b130880186c0a1d6af9c60d4cd80e0f96a74fd72))
+
 ## [2.93.0](https://github.com/thaynes43/dev-env/compare/v2.92.1...v2.93.0) (2026-11-09)
 
 
