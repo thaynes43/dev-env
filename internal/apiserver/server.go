@@ -93,7 +93,7 @@ type Server struct {
 	PortalLaunchProfile string
 	// Reminders turns on /v1/reminders (DESIGN-032); nil leaves the routes off.
 	Reminders *ReminderConfig
-	// ScheduledWork turns on /v1/scheduled-work (DESIGN-054 S5; the proposed
+	// ScheduledWork turns on /v1/scheduled-work (DESIGN-054 S5; the
 	// --enable-scheduled-work-api flag sets it); nil leaves every route off (404).
 	ScheduledWork *ScheduledWorkConfig
 	// PortalLaunchMaxUnfinished caps the unfinished sessions whose parent starts

@@ -859,7 +859,7 @@ template digest (Data contract) is S5b's, with the route.
 
 These are the server routes' exact rules, recorded from the implementation; where they differ, they refine the API text above.
 
-1. **Flag.** `--enable-scheduled-work-api` is proposed, default off, and not wired. `Server.ScheduledWork` nil, or a config with an empty Namespace, leaves every route 404. `apiserver.ScheduledWorkAPI(enabled, namespace)` builds the config.
+1. **Flag.** `--enable-scheduled-work-api` is wired in `cmd/dev-env-operator` and default off (it was wired after the routes merged, in a follow-up to OP397). It is independent of `--enable-scheduled-work`: it serves the routes only, which record, edit, cancel and approve items, and nothing dispatches until the executor flag is also on. It needs the API (`--api-bind-address` not `0`), refused at start otherwise, and no leader election: every replica serves the routes and each write is a compare-and-set. Its namespace is the operator's own (`--templates-namespace`, where the executor and the releaser read items). Turning it on in the cluster is S6's decision, with the Role on `scheduledworks` and the `get` rights named there; it is not part of the source change. `Server.ScheduledWork` nil, or a config with an empty Namespace, leaves every route 404. `apiserver.ScheduledWorkAPI(enabled, namespace)` builds the config.
 2. **Names and the per-owner cap.** An item's name is `sched-` plus the first 20 hex characters of SHA-256(owner, NUL, key), or 20 random hex characters without a key. An owner may hold at most 32 active items (neither cancelled nor ended); one more is a 429.
 3. **Create.**
    - The same key and spec answer 200 with the first item, even after its due time has passed.
