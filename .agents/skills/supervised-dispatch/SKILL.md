@@ -112,8 +112,9 @@ may not reach. So:
   `scripts/codex-clean-session.py`. `codex exec` and `codex queue` threads never
   show on the phone. Never pass `-s`, `-a`, `--approve-for-me` or
   `--full-auto`: omit them, or pass `--dangerously-bypass-approvals-and-sandbox`.
-  A `workspace-write` request falls back to `read-only`, where every shell and
-  MCP call fails. `agent-run rc fresh` needs v2.71 or later,
+  With the #487 requirements, a `workspace-write` or `read-only` request falls
+  back to full access with approval `never`; before them it fell back to
+  `read-only`, where every shell and MCP call fails. `agent-run rc fresh` needs v2.71 or later,
   `--enable-codex-rc-thread` (off live on 2026-11-09; OpenProject #272, needs
   Tom's approval) and a qualified target. The
   [workflow guide](../../../docs/workflow-guide.md#start-an-owner-interactive-codex-task-on-a-paired-v2-host)

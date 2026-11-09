@@ -693,13 +693,17 @@ Use this when Tom must see and drive the thread on his phone.
    out, so the host default applies (approval `never`, sandbox
    `danger-full-access`), or pass `--dangerously-bypass-approvals-and-sandbox`
    as the managed routes do (`internal/agentd/managed_codex.go`). The
-   requirements allow only `read-only` and `danger-full-access`. A request for
-   `workspace-write` (`-s workspace-write` or `--approve-for-me`) is refused.
-   Codex then falls back to `read-only`, not to the configured default. bwrap
-   cannot run in a session pod, so a `read-only` thread fails every shell
-   command and MCP call. The agent image smoke test
-   (`images/agent/smoke-test.sh`) pins this fallback. Current Codex rejects
-   `--full-auto` as an unknown flag.
+   requirements allow only `read-only` and `danger-full-access`, and set
+   `default_permissions = ":danger-full-access"` (OpenProject #487, Tom
+   approved 2026-11-09). A request they refuse, such as `workspace-write`
+   (`-s workspace-write` or `--approve-for-me`), now falls back to full access
+   with approval `never`. An explicit `-s read-only` request also becomes full
+   access. Before #487 the fallback was `read-only`, where bwrap cannot run in
+   a session pod and every shell command and MCP call failed; a pod that still
+   mounts the older requirements has that trap. The agent image smoke test
+   (`images/agent/smoke-test.sh`) pins the new results and that `codex
+   app-server` and `codex remote-control` still load the requirements. Current
+   Codex rejects `--full-auto` as an unknown flag.
 4. **`agent-run rc fresh` is not available yet.** It needs agent-run v2.71 or
    later, the operator flag `--enable-codex-rc-thread` and a qualified target.
    The flag was off in the live operator on 2026-11-09. Enabling it is
