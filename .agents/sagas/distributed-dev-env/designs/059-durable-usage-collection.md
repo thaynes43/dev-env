@@ -1,7 +1,13 @@
 # DESIGN-059: Durable usage collection
 
-- **Status:** Proposed, 2026-11-09. Design only. Nothing built, deployed or
-  run. The owner questions in section 10 are open.
+- **Status:** Accepted for the first slice, 2026-11-09 (coordinator
+  dev-env-fable-coordinator-1109). Option B is taken: it adds no provider
+  request, login or access, so it needs no owner approval. The questions in
+  section 10 are settled the same way: no timer reads, Cursor and Grok stay
+  "not connected". Each is the option that adds nothing, and Tom is told;
+  timer reads or a Cursor reader would be a new story with his ruling. Both
+  passive sources were checked with real data (section 11). Nothing is built
+  or deployed yet.
 - **Tracking:** [Story OP509](https://work.haynesnetwork.com/work_packages/509),
   project haynes-engineering: "Usage reporting that keeps working: weekly
   usage and resets without approval windows or a host session that
@@ -386,8 +392,30 @@ offline with an empty `CODEX_HOME`; the upstream Codex source at
 `rust-v0.160.1`; the public statusline and Agent SDK reference pages; the
 tracker records of OP187, OP190, OP191, OP192, OP193, OP323 and OP509.
 
-Not checked: that Codex rollouts for this account carry `rate_limits`; that
-the statusline runs, and carries `rate_limits`, in a v2 remote session on
-2.1.321; that Codex remote host sessions write rollouts; the live portal
-page (behind sign-in). No provider request, login, model call, rollout or
-transcript read was made.
+Not checked by the designer: that Codex rollouts for this account carry
+`rate_limits`; that the statusline runs, and carries `rate_limits`, in a v2
+remote session on 2.1.321; that Codex remote host sessions write rollouts;
+the live portal page (behind sign-in). The designer made no provider request,
+login, model call, rollout or transcript read.
+
+**Checked by the coordinator, 2026-11-09T23:42Z, in its own session pod**
+(a Claude remote session on the workbench profile, image 2.95.0, Claude Code
+2.1.321, `codex-cli 0.160.1`). Both passive sources carry the data. The
+values are on OP509, not here.
+
+- **Codex.** One `codex exec` with a one-word prompt, on the pod's access-only
+  login, wrote a rollout with one `token_count` record. Its `rate_limits` has
+  `primary` with `used_percent`, `window_minutes` 10080 and `resets_at` (Unix
+  seconds), `secondary` null, and a `plan_type`. So the weekly window was
+  `primary` again, and the slice's first risk is retired for task sessions.
+- **Claude.** A `statusLine` command added to the session's
+  `~/.claude/settings.json` ran at the next reply without a restart: Claude
+  Code picked the setting up live. The callback input named version 2.1.321
+  and carried `rate_limits.seven_day` with `used_percentage` and `resets_at`;
+  `five_hour` was absent at that moment. The image's
+  `/usr/local/bin/claude-statusline-usage --output <file>` accepted that real
+  input (exit 0) and wrote a `providerallowance.read.v1` document.
+- Both probes were removed afterwards and the settings file restored.
+
+Still not checked: that Codex remote host sessions write rollouts; the live
+portal page.
