@@ -858,8 +858,10 @@ A private session (one with a privateHistory record) is reaped differently
 (DESIGN-025): the operator asks its agent to stop and keeps its private HOME.
 It makes no rescue bundle and archives or deletes nothing then. The session
 stays, reaping, until the HOME expiry has archived its history and deleted the
-HOME. Its RemovalBlocked condition says ExecutorEnded once the agent's stop is
-recorded, and RetentionPending, with the reason, while it is not.
+HOME. Its RemovalBlocked condition usually says ExecutorEnded once the agent's
+stop is recorded, and RetentionPending, with the reason, while it is not. The
+other reasons (TaskComputeReclaimed, PreservationUnknown, HomeDeleting,
+HomeExpired) say what they mean in their text.
 
 A reap returns at once; agent-run show <name> follows it until the session is gone.
 `,

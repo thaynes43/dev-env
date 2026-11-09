@@ -395,7 +395,7 @@ The session stays, reaping and `Pending`, until the HOME expiry has archived
 its history and deleted the HOME; that archive is not switched on yet
 (2026-11-09).
 `agent-run reap`, `show` and `list` print the operator's own words for it, and
-its `RemovalBlocked` condition gives one of two reasons:
+its `RemovalBlocked` condition usually gives one of two reasons:
 
 - `ExecutorEnded`: the agent stopped. The text gives the time the operator
   recorded it, and how: "stopped as the reap asked" when the reap's own stop
@@ -404,6 +404,9 @@ its `RemovalBlocked` condition gives one of two reasons:
   stop request is still in flight, the agent still runs, or its Pod ended but
   the operator cannot confirm that yet. In the last case the operator checks
   again after a wait that doubles from 30 seconds to at most 30 minutes.
+
+The other reasons stay as they were and say what they mean in their text:
+`TaskComputeReclaimed`, `PreservationUnknown`, `HomeDeleting` and `HomeExpired`.
 
 The gauges `dev_env_reaped_sessions_retained{reason}` and
 `dev_env_reaped_sessions_oldest_seconds{reason}` count these sessions and the
