@@ -429,6 +429,15 @@ RUN npm install -g "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" \
  && chmod -R a+rX /opt/dev-env/ms-playwright \
  && npm cache clean --force && rm -rf /var/lib/apt/lists/*
 
+# The Go toolchain (OP504), copied from the pinned build stage above, so the image's Go is
+# always the one that built agentd and Renovate keeps one pin. It is the pristine
+# toolchain: no build or module cache (GOCACHE and GOMODCACHE default under the session
+# volume's HOME). The symlinks keep `go` and `gofmt` on PATH in a login shell too, where
+# Debian's /etc/profile resets PATH; Go finds its root through the link.
+COPY --from=go /usr/local/go /usr/local/go
+RUN ln -s /usr/local/go/bin/go /usr/local/bin/go \
+ && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+
 # pve and hw-ssh: copies of v1's scripts (haynes-ops dev-env app resources), byte for
 # byte, so a fix lands in both places until v1 is retired. They read their credentials
 # from the environment and from ~/.ssh/dev-env-hw, which agentd writes; Q-07 moves
@@ -495,14 +504,18 @@ WORKDIR /home/dev
 # HOME, XDG_RUNTIME_DIR and AGENTD_*; the templates set CLAUDE_CONFIG_DIR, CODEX_HOME
 # and DEV_ENV_CLAUDE_MODEL (D-44), and they are repeated here so a bare
 # `docker run` behaves the same. ~/.local/bin leads PATH so agentd's `gh` wrapper
-# (token injection) shadows /usr/local/bin/gh in every context.
+# (token injection) shadows /usr/local/bin/gh in every context. GOTOOLCHAIN=local keeps
+# `go` on the image's toolchain: it downloads no other one into the session volume, it
+# ignores a newer `toolchain` line in go.mod, and it refuses a go.mod whose `go` line is
+# newer than the image's Go (checked on Go 1.27.3, 2026-11-09).
 ENV HOME=/home/dev \
     CLAUDE_CONFIG_DIR=/home/dev/.claude \
     CODEX_HOME=/home/dev/.codex \
     CODEX_VERSION=${CODEX_VERSION} \
     PLAYWRIGHT_BROWSERS_PATH=/home/dev/.cache/ms-playwright \
     GOTMPDIR=/home/dev/.cache/go-tmp \
-    PATH=/home/dev/.local/bin:/usr/local/bin:/usr/bin:/bin
+    GOTOOLCHAIN=local \
+    PATH=/home/dev/.local/bin:/usr/local/bin:/usr/local/go/bin:/usr/bin:/bin
 
 # Provenance. `source` also links the GHCR package to this repo. Declared last so a
 # new commit or version changes only this metadata layer, never a tool layer.

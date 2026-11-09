@@ -50,9 +50,12 @@ These large files are references. Search them for the item you need:
 
 ## Build and test
 
-- The agent image has no Go toolchain. Install the `toolchain` version from `go.mod`
-  (go.dev/dl) under `~/.local/go` and put `~/.local/go/bin` on `PATH`. Keep
-  `GOCACHE` and `GOMODCACHE` under `~`, and leave `TMPDIR` at its default.
+- From release 2.97.0 the agent image carries Go, the version that built agentd, with
+  `GOTOOLCHAIN=local`: `go` downloads no other toolchain and refuses a `go.mod` whose
+  `go` line is newer (then set `GOTOOLCHAIN=auto`). On an older image, install
+  `go.mod`'s `toolchain` version (go.dev/dl) under `~/.local/go` and put
+  `~/.local/go/bin` on `PATH`. Keep `GOCACHE` and `GOMODCACHE` under `~`, and leave
+  `TMPDIR` at its default.
 - The module is `github.com/thaynes43/dev-env`. Built binaries and pinned tools
   (controller-gen, golangci-lint, setup-envtest) go to `bin/`, which git ignores.
 - Run `make generate` after any change to `api/`. It rewrites
