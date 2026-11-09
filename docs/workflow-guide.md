@@ -702,9 +702,10 @@ awake. A suspended standby has an archived phone entry until it is resumed.
 
 Use this when Tom must see and drive the thread on his phone.
 
-1. **Start it as an interactive thread.** From any v2 session pod, the v1 pod,
-   a workbench session or Tom's laptop, run `agent-run thread start` (below,
-   DESIGN-057). Tom can
+1. **Start it as an interactive thread.** From a v2 session pod on the host's
+   profile or one that started the host (the profile fence, step 5), the v1
+   pod, a workbench session or Tom's laptop, run `agent-run thread start`
+   (below, DESIGN-057). Tom can
    also start it from the ChatGPT app on the paired host, or an agent on that
    host can start it with the remote TUI, `codex --remote unix://<control
    socket>`, or with [`scripts/codex-clean-session.py`](codex-clean-session.md),
