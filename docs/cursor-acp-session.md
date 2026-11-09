@@ -506,6 +506,103 @@ does not record a run of those tests and it is not live provider acceptance.
 Reject-once is unchanged. Recovered context does not approve an action. See
 [the source note](../.agents/sagas/distributed-dev-env/verification/op318-permission-context-2026-11-01.md).
 
+## Optional assistant answer receipt
+
+`--assistant-answer-file BASENAME` is the explicit opt-in
+for format `assistant-answer-v1`. It is off by default.
+The version tag is the document field `receipt`. Stdout,
+stderr, permissions, and child argv stay as they are.
+With the option, the helper creates one exclusive 0600
+regular file in the selected worktree. It refuses an
+existing file, a symlink, or a basename that escapes the
+worktree, and it does that before the child starts.
+
+The accepted update interface is only `session/update`
+whose `sessionUpdate` is `agent_message_chunk` and whose
+`content` is exactly `type` `text` plus a string `text`.
+Identical chunks are kept again, including empty ones.
+Thought, tool, user, history, and unknown updates are
+not answer text. Any other claimed assistant chunk fails
+the receipt. Assistant, thought, and tool text are not
+written to stdout, stderr, or the structural diagnostic.
+Those chunks are not diagnostic records, and content
+stays opaque.
+
+A stage `complete` document requires `stopReason`
+`end_turn` and at least one UTF-8 byte of accepted text.
+The document records that `stopReason`, `sessionID`, the
+prompt SHA-256, `modelRequested`, and `servedModel` set
+to `Unknown`. The served model is not inferred from the
+provider, from a prompt result, or from stopping the
+child. `max_tokens`, `cancelled`, `refusal`, `unknown`,
+and an empty `end_turn` do not write a complete answer.
+Without the file, a label-shaped stop reason still emits
+`prompt-complete` and does not create the file.
+
+The UTF-8 text limit is 65536 bytes. Empty chunks add no
+bytes, so the retained chunk list is also capped at 65536.
+Passing either cap fails the run. The file is not a
+shortened success. Early updates, cross-session updates,
+late updates, and a second prompt result fail closed.
+
+Completion is the response to the one outstanding prompt
+request. A session id on some other result is not that
+correlation. With the file off, the helper still returns
+at that prompt result. A queued duplicate terminal, a
+queued malformed frame, or a late chunk is not given the
+stricter answer-file refusal, and a late chunk is still
+omitted from stdout.
+
+With the file on, frames already read after that result
+are still handled. A late assistant chunk fails the file.
+A second terminal or a framing error fails the run. The
+deadline is checked before every one of those queued
+items, including ignored coordinator input, so a stream
+of them cannot postpone child cleanup past the deadline.
+The return from that pass is one observation, under one
+lock, that the queue is empty, the provider reader is
+idle, and no partial frame has already been read into its
+buffer. A frame or a partial buffer published under that
+lock before the observation is part of the pass. Bytes
+read after that observation are outside it. The following
+EOF on a partial frame already buffered reports truncation
+and does not leave a complete file. The same partial tail
+is not a failure when the answer file is off.
+
+The transport does not treat the prompt result as a child
+exit. Provider EOF is the pipe ending, not an exit code.
+After queued frames and that EOF have been handled, and
+before `stop_group`, it observes the owned child pid once.
+A return code preset while that pid is alive is refused.
+A spontaneous nonzero status seen in that observation
+does not leave a complete answer. That look is only what
+was true before cleanup. It does not promise that a later
+spontaneous exit, after the snapshot, is impossible.
+`stop_group` runs after that check on the default path.
+Its signal is cleanup. It is not provider exit 0 and it
+is not served-model proof.
+
+With the answer file on, finalization waits for a known
+stop of the owned group. The signals were delivered, or
+the group was already gone. A reap that times out, or any
+other signal error, fails the run with a fixed reason and
+does not leave a complete file. Ownership stays with the
+default cleanup until that outcome is known. The default
+path still suppresses those signal and reap errors.
+
+The child group is stopped before the answer file is
+written or fsynced. The deadline is checked before that
+write. `write` and `fsync` are not cancelled once started,
+so a stalled disk can delay the client after the child is
+gone. That delay is not a bound on the child's life, and
+it is not a promise that the bytes land inside the
+deadline. Transport failure, native failure, truncation,
+and an uncertain exit do not leave a complete document.
+
+Answer text is stored unchanged. It is not scanned or
+redacted, and it can contain secrets. The file does not
+approve an action or prove a live provider exchange.
+
 ## Optional private structural diagnostic
 
 `--diagnostic-file BASENAME` is off by default. When explicitly selected, the

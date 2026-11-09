@@ -202,6 +202,12 @@ DIAGNOSTIC_ENUMS = {
 MAX_DIAGNOSTIC_RECORDS = 64
 MAX_DIAGNOSTIC_BYTES = 96 * 1024
 MAX_DIAGNOSTIC_RECORD = 8192
+# Version tag in the receipt field. The CLI flag is the only selector.
+# The served model stays Unknown.
+ANSWER_RECEIPT = "assistant-answer-v1"
+MAX_ANSWER_UTF8 = 65536
+# Empty chunks add no UTF-8 bytes. The list itself still needs a cap.
+MAX_ANSWER_CHUNKS = 65536
 
 
 def structural_shape(value, depth=0, work=None):
@@ -376,6 +382,169 @@ class StructuralDiagnostic:
         self.output.put_nowait(raw)
         self.records += 1
         self.bytes += len(raw)
+
+
+def strict_text_chunk(update):
+    """Return assistant text, or None for other updates.
+
+    Thought, tool, history and unknown updates return None.
+    A claimed agent_message_chunk must be exactly
+    sessionUpdate plus content type text and a string.
+    This does not decide whether text is secret.
+    """
+    kind = update.get("sessionUpdate")
+    if kind != "agent_message_chunk":
+        return None
+    content = update.get("content")
+    keys = (
+        set(update) == {"sessionUpdate", "content"}
+    )
+    if not isinstance(content, dict):
+        raise Refusal("invalid-answer-chunk")
+    fields = (
+        set(content) == {"type", "text"}
+    )
+    text = content.get("text")
+    typed = content.get("type") == "text"
+    if not keys or not fields or not typed:
+        raise Refusal("invalid-answer-chunk")
+    if not isinstance(text, str):
+        raise Refusal("invalid-answer-chunk")
+    return text
+
+
+class AssistantAnswerReceipt:
+    """Exclusive 0600 assistant-answer-v1 worktree file.
+
+    `--assistant-answer-file` selects this format. `receipt` is the
+    version tag. Accepted updates are only strict text chunks.
+    Stage complete is stopReason end_turn plus nonempty text.
+    The served model stays Unknown. write and fsync are not
+    cancellable: the deadline is checked before they start, and a
+    stalled disk can delay this process after the child is gone.
+    That delay is not a child-lifetime bound.
+    """
+
+    def __init__(self, cwd, filename, deadline):
+        if not label(filename) or filename in {".", ".."}:
+            raise Refusal("invalid-answer-target")
+        directory = os.open(
+            cwd,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+        try:
+            flags = (
+                os.O_WRONLY | os.O_CREAT
+                | os.O_EXCL | os.O_NOFOLLOW
+            )
+            self.fd = os.open(
+                filename, flags, 0o600, dir_fd=directory,
+            )
+        finally:
+            os.close(directory)
+        self.deadline = deadline
+        self.parts = []
+        self.bytes = 0
+        self.failed = False
+        self.written = False
+        self.closed = False
+
+    def observe(self, update):
+        if self.failed or self.written or self.closed:
+            raise Refusal("late-session-update")
+        text = strict_text_chunk(update)
+        if text is None:
+            return
+        try:
+            size = len(text.encode("utf-8"))
+        except UnicodeError:
+            self.failed = True
+            raise Refusal("invalid-answer-chunk") from None
+        if len(self.parts) >= MAX_ANSWER_CHUNKS:
+            self.failed = True
+            raise Refusal("answer-truncated")
+        if self.bytes + size > MAX_ANSWER_UTF8:
+            self.failed = True
+            raise Refusal("answer-truncated")
+        # Identical chunks stay. Empty chunks count toward the cap.
+        self.parts.append(text)
+        self.bytes += size
+
+    def finalize(self, session):
+        ready = (
+            not self.closed
+            and not self.failed
+            and not self.written
+            and session.complete
+            and session.stop_reason == "end_turn"
+            and self.bytes > 0
+            and label(session.session_id)
+            and self.deadline > time.monotonic()
+        )
+        if not ready:
+            self.failed = True
+            raise Refusal("answer-incomplete")
+        text = "".join(self.parts)
+        try:
+            encoded = text.encode("utf-8")
+        except UnicodeError:
+            self.failed = True
+            raise Refusal("answer-incomplete") from None
+        if len(encoded) != self.bytes:
+            self.failed = True
+            raise Refusal("answer-incomplete")
+        document = {
+            "receipt": ANSWER_RECEIPT,
+            "stage": "complete",
+            "stopReason": session.stop_reason,
+            "sessionID": session.session_id,
+            "promptSHA256": session.prompt_sha256,
+            "modelRequested": session.model,
+            "servedModel": "Unknown",
+            "utf8Bytes": self.bytes,
+            "chunkCount": len(self.parts),
+            "text": text,
+        }
+        try:
+            raw = json.dumps(
+                document,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8") + b"\n"
+        except (TypeError, ValueError, UnicodeError):
+            self.failed = True
+            raise Refusal("answer-incomplete") from None
+        # Deadline was checked above. This write and fsync can still
+        # block past it. Callers must already have stopped the child.
+        written = -1
+        try:
+            written = os.write(self.fd, raw)
+            if written == len(raw):
+                os.fsync(self.fd)
+        except OSError:
+            written = -1
+        if written != len(raw):
+            self.failed = True
+            try:
+                os.ftruncate(self.fd, 0)
+            except OSError:
+                pass
+            raise Refusal("answer-write-failed")
+        self.written = True
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        if self.fd is None:
+            return
+        if not self.written:
+            try:
+                os.ftruncate(self.fd, 0)
+            except OSError:
+                pass
+        os.close(self.fd)
+        self.fd = None
 
 
 class Redacted(Exception):
@@ -610,6 +779,7 @@ class Session:
         self.pending = {}
         self.seen_requests = set()
         self.complete = False
+        self.stop_reason = None
         self.clock = time.monotonic if clock is None else clock
         self.tool_cache = {}
         self.tool_dropped = set()
@@ -618,6 +788,10 @@ class Session:
         self.tool_cache_closed = False
         self.tool_untracked_closed = False
         self.diagnostic = diagnostic
+        self.answer = getattr(self.emit, "answer", None)
+        self.prompt_sha256 = hashlib.sha256(
+            self.prompt.encode()
+        ).hexdigest()
 
     def start(self):
         self.emit({"event": "starting", "modelRequested": self.model, "servedModel": "Unknown", "promptSHA256": hashlib.sha256(self.prompt.encode()).hexdigest()})
@@ -629,12 +803,25 @@ class Session:
     def response(self, ident, result):
         self.send({"jsonrpc": "2.0", "id": ident, "result": result})
 
+    def _keep_answer(self, update):
+        active = "prompt" in self.expected.values()
+        if self.complete or not active:
+            self.answer.failed = True
+            raise Refusal("late-session-update")
+        try:
+            self.answer.observe(update)
+        except Refusal:
+            self.answer.failed = True
+            raise
+
     def provider(self, message):
         if message.get("jsonrpc") != "2.0":
             raise Refusal("invalid-jsonrpc")
         if "method" not in message:
             ident = message.get("id")
             if type(ident) is not int or ident not in self.expected or ("result" in message) == ("error" in message):
+                if self.answer is not None:
+                    self.answer.failed = True
                 raise Refusal("unexpected-response")
             method = self.expected.pop(ident)
             if "error" in message:
@@ -654,12 +841,18 @@ class Session:
                 self.emit({"event": "session-created", "sessionID": self.session_id})
                 self.expected[3] = "prompt"
                 self.call(3, "session/prompt", {"sessionId": self.session_id, "prompt": [{"type": "text", "text": self.prompt}]})
-            else:
-                if not label(result.get("stopReason")) or self.pending:
+            elif method == "prompt":
+                # This id is the one outstanding prompt. A session id in
+                # the result is not correlation and is not required.
+                reason = result.get("stopReason")
+                if not label(reason) or self.pending:
                     raise Refusal("invalid-prompt-result")
+                self.stop_reason = reason
                 self.close_tool_cache()
                 self.complete = True
-                self.emit({"event": "prompt-complete", "sessionID": self.session_id, "stopReason": result["stopReason"]})
+                self.emit({"event": "prompt-complete", "sessionID": self.session_id, "stopReason": reason})
+            else:
+                raise Refusal("unexpected-response")
             return
         method, params = message["method"], message.get("params")
         if not isinstance(method, str) or not isinstance(params, dict):
@@ -673,12 +866,20 @@ class Session:
             if method == "session/update":
                 # Fail closed: before session/new answers, no session id exists to correlate.
                 if not self.session_id:
+                    if self.answer is not None:
+                        self.answer.failed = True
                     raise Refusal("early-session-update")
                 if params.get("sessionId") != self.session_id:
+                    if self.answer is not None:
+                        self.answer.failed = True
                     raise Refusal("cross-session-update")
                 update = params.get("update", {})
                 if not isinstance(update, dict) or not label(update.get("sessionUpdate")):
+                    if self.answer is not None:
+                        self.answer.failed = True
                     raise Refusal("invalid-update")
+                if self.answer is not None:
+                    self._keep_answer(update)
                 # Keep sanitized tool metadata only. Never emit content, output or text.
                 self.observe_tool_update(update)
             return
@@ -1061,18 +1262,112 @@ class ByteBudget:
             self.condition.notify_all()
 
 
-def read_frames(stream, events, source, budget=None):
+class FrameQueue:
+    """Queued frames and the provider reader's idle/partial state, one lock.
+
+    Drain returns only while holding this lock and seeing an empty queue,
+    an idle reader, and no bytes already read into the partial buffer.
+    A publish that takes the lock first is visible to that decision.
+    Bytes read after the decision are outside the pass.
+    """
+
+    def __init__(self, maxsize=128):
+        self.maxsize = maxsize
+        self._items = collections.deque()
+        self.condition = threading.Condition(threading.RLock())
+        self.idle = False
+        self.partial = False
+        self.buffered = b""
+        self.waiting = False
+        self._generation = 0
+        self._seen = 0
+
+    def publish_reader(self, idle, partial, buffered):
+        with self.condition:
+            self.idle = bool(idle)
+            self.partial = bool(partial)
+            self.buffered = buffered
+            self._generation += 1
+            self.condition.notify_all()
+
+    def put(self, item):
+        with self.condition:
+            while len(self._items) >= self.maxsize:
+                self.condition.wait()
+            self._items.append(item)
+            self._generation += 1
+            self.condition.notify_all()
+
+    def qsize(self):
+        with self.condition:
+            return len(self._items)
+
+    def get(self, timeout=None):
+        """Main-loop pop. Idle is not completion on this path."""
+        with self.condition:
+            if not self._items:
+                self.condition.wait(timeout)
+            if not self._items:
+                raise queue.Empty
+            item = self._items.popleft()
+            self.condition.notify_all()
+            return item
+
+    def _before_decision(self):
+        """Runs under the lock, before the snapshot. Tests override it."""
+        return
+
+    def observe(self):
+        """One snapshot: ('item', value), ('done', None), or ('wait', None)."""
+        with self.condition:
+            self._before_decision()
+            if self._items:
+                item = self._items.popleft()
+                self.condition.notify_all()
+                return ("item", item)
+            if self.idle and not self.partial:
+                return ("done", None)
+            self._seen = self._generation
+            return ("wait", None)
+
+    def wait_for_change(self, timeout):
+        with self.condition:
+            self.waiting = True
+            self.condition.notify_all()
+            if (
+                self._generation != self._seen
+                or self._items
+                or (self.idle and not self.partial)
+            ):
+                self.waiting = False
+                return
+            self.condition.wait(timeout)
+            self.waiting = False
+
+
+def read_frames(stream, events, source, budget=None, idle=None):
     # Do not hold a BufferedReader lock on sys.stdin while the process exits.
     # A coordinator may leave its input pipe open after the total deadline.
+    # `idle` is the provider FrameQueue. Publishing it shares the queue lock.
+    # Coordinator reads pass None and must not clear the provider snapshot.
     buffer = b""
     limit = MAX_PROVIDER_FRAME if source == "provider" else MAX_FRAME
     origin = FRAME_SOURCES[source]
+
+    def note(reading):
+        if idle is None:
+            return
+        idle.publish_reader(not reading and not buffer, bool(buffer), buffer)
+
     try:
         descriptor = stream.fileno()
         while True:
+            # Idle only with no partial frame buffered and no read in progress.
+            note(False)
             readable, _, _ = select.select([descriptor], [], [], 0.25)
             if not readable:
                 continue
+            note(True)
             raw = os.read(descriptor, min(4096, limit + 1 - len(buffer)))
             if not raw:
                 if buffer:
@@ -1090,6 +1385,7 @@ def read_frames(stream, events, source, budget=None):
                 events.put((source, strict_object(frame, maximum=limit)))
             if len(buffer) > limit:
                 raise FrameRefusal("frame-too-large", source=origin, byte_count=len(buffer), limit=limit)
+            note(False)
     except FrameRefusal as error:
         events.put(("failure", error))
     except Refusal as error:
@@ -1099,14 +1395,117 @@ def read_frames(stream, events, source, budget=None):
         events.put(("failure", "invalid-frame"))
     except Exception:
         events.put(("failure", "internal-error"))
+    finally:
+        note(False)
+
+
+def observe_child(process):
+    """One look at the owned child before cleanup. Do not invent its exit.
+
+    A prompt result is not exit 0. A return code set while the pid is
+    still alive is manufactured. Callers use this as the last look
+    after queued frames and provider EOF, and before stop_group.
+    A spontaneous nonzero status seen here does not leave a complete
+    answer. The look is only what was true before cleanup. It cannot
+    promise that a later spontaneous exit, after this snapshot, is
+    impossible. This does not reap the child. stop_group runs later.
+    Its signal is cleanup, not provider exit 0, and is not read back
+    here. It is not served-model proof.
+    """
+    if process is None:
+        raise Refusal("answer-incomplete")
+    pid = getattr(process, "pid", None)
+    if type(pid) is not int or pid <= 0:
+        raise Refusal("answer-incomplete")
+    alive = True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        alive = False
+    except OSError:
+        raise Refusal("answer-incomplete") from None
+    if alive and hasattr(os, "waitid"):
+        try:
+            info = os.waitid(
+                os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT,
+            )
+        except ChildProcessError:
+            info = None
+        except OSError:
+            raise Refusal("answer-incomplete") from None
+        if info is not None:
+            code = getattr(info, "si_code", None)
+            status = getattr(info, "si_status", None)
+            if code == getattr(os, "CLD_EXITED", None) and status == 0:
+                return pid
+            raise Refusal("answer-incomplete")
+        # Still signalable. A stored code was not collected from this pid.
+        if getattr(process, "returncode", None) is not None:
+            raise Refusal("answer-incomplete")
+        return pid
+    if alive:
+        if getattr(process, "returncode", None) is not None:
+            raise Refusal("answer-incomplete")
+        return pid
+    # Already gone. Nonzero is a spontaneous exit, not later cleanup.
+    if getattr(process, "returncode", None) != 0:
+        raise Refusal("answer-incomplete")
+    return pid
+
+
+def drain_queued_after_prompt(events, session, budget, deadline, clock):
+    """Answer opt-in: frames already read after the one prompt result.
+
+    The deadline is checked before every item, including ignored
+    coordinator input, so a nonempty queue cannot run past it.
+    Return only from one locked observation that the queue is empty,
+    the provider reader is idle, and no partial frame is already
+    buffered. A publish that holds that lock first is visible here.
+    Bytes read after that observation are outside this pass.
+    Provider EOF is the pipe ending, not a clean exit copied from
+    stopReason.
+    """
+    while True:
+        if deadline - clock() <= 0:
+            raise Refusal("deadline-exceeded")
+        action, item = events.observe()
+        if action == "done":
+            return
+        if action == "wait":
+            remaining = deadline - clock()
+            if remaining <= 0:
+                raise Refusal("deadline-exceeded")
+            events.wait_for_change(min(remaining, 0.25))
+            continue
+        source, value = item
+        if source == "provider":
+            try:
+                session.provider(value)
+            finally:
+                value = None
+                budget.release_next()
+        elif source == "failure":
+            if isinstance(value, Refusal):
+                raise value
+            raise Refusal(value)
+        # provider-closed and late coordinator frames are not a new turn.
 
 
 def run_transport(process, coordinator_input, session, timeout, clock=time.monotonic, deadline=None):
-    events = queue.Queue(maxsize=128)
+    """Run one outstanding prompt. Completion is that prompt's result id."""
+    events = FrameQueue(maxsize=128)
     # Only provider frames take the byte budget; coordinator frames keep the 64 KiB bound.
     budget = ByteBudget(MAX_PROVIDER_FRAME)
-    for stream, source, frames in [(process.stdout, "provider", budget), (coordinator_input, "decision", None)]:
-        threading.Thread(target=read_frames, args=(stream, events, source, frames), daemon=True).start()
+    readers = (
+        (process.stdout, "provider", budget, events),
+        (coordinator_input, "decision", None, None),
+    )
+    for stream, source, frames, idle in readers:
+        threading.Thread(
+            target=read_frames,
+            args=(stream, events, source, frames, idle),
+            daemon=True,
+        ).start()
     deadline = clock() + timeout if deadline is None else deadline
     session.start()
     input_closed = False
@@ -1134,6 +1533,12 @@ def run_transport(process, coordinator_input, session, timeout, clock=time.monot
             raise Refusal(value)
         if input_closed and session.pending:
             raise Refusal("decision-input-closed")
+    # Default-off keeps the historical return at the prompt result.
+    # Stricter follow-up handling is only for the answer file.
+    # The native look is after this return, before stop_group.
+    if session.answer is None:
+        return
+    drain_queued_after_prompt(events, session, budget, deadline, clock)
 
 
 def child_environment(source=None):
@@ -1180,9 +1585,52 @@ def stop_group(process, grace=SHUTDOWN_GRACE, clock=time.monotonic):
             pass  # The group is already SIGKILLed; reaping must not raise past cleanup.
 
 
+def stop_answer_group(process, grace=SHUTDOWN_GRACE, clock=time.monotonic, wait_timeout=2):
+    """Owned-group stop before an answer file can be finalized.
+
+    ProcessLookupError means the group is already gone. Any other signal
+    error, and a reap that times out, is not a known cleanup. Callers
+    keep the process and do not finalize. Default stop_group still
+    suppresses these errors and is unchanged.
+    """
+    group = process.pid
+    signal_error = None
+
+    def deliver(number):
+        nonlocal signal_error
+        try:
+            os.killpg(group, number)
+        except ProcessLookupError:
+            return
+        except OSError:
+            signal_error = Refusal("cleanup-signal-failed")
+
+    try:
+        deliver(signal.SIGTERM)
+        end = clock() + grace
+        while signal_error is None and clock() < end and not leader_exited(process):
+            time.sleep(0.02)
+    finally:
+        deliver(signal.SIGKILL)
+    if signal_error is not None:
+        raise signal_error
+    try:
+        process.wait(timeout=wait_timeout)
+    except subprocess.TimeoutExpired:
+        raise Refusal("cleanup-timeout") from None
+
+
 def exit_on_signal(signum, frame):
     """Turn SIGTERM/SIGHUP to the client into SystemExit so cleanup stops the child group."""
     raise SystemExit(128 + signum)
+
+
+def close_captures(diagnostic, answer):
+    """Close each capture. A missing one does not skip the other."""
+    if diagnostic is not None:
+        diagnostic.close()
+    if answer is not None:
+        answer.close()
 
 
 def main(argv=None):
@@ -1190,6 +1638,7 @@ def main(argv=None):
     session = None
     deadline = None
     diagnostic = None
+    answer = None
     def emit(value, best_effort=False):
         raw = json.dumps(value, ensure_ascii=True, separators=(",", ":"))
         if len(raw.encode("utf-8")) + 1 > MAX_FRAME:
@@ -1213,6 +1662,10 @@ def main(argv=None):
         parser.add_argument("--model", required=True)
         parser.add_argument("--prompt-file", required=True)
         parser.add_argument("--timeout", type=int, default=600)
+        parser.add_argument(
+            "--assistant-answer-file",
+            help="Explicit opt-in for the assistant-answer-v1 file",
+        )
         parser.add_argument("--diagnostic-file", help="Opt-in structural JSONL; exclusive private basename in --worktree")
         args = parser.parse_args(argv)
         deadline = time.monotonic() + max(1, min(args.timeout, 3600))
@@ -1232,6 +1685,13 @@ def main(argv=None):
         # A signal to the client must still reach the finally that stops the child
         # group. While Popen runs, the child exists but is not owned yet, so only
         # record the signal there and replay it once `process` is assigned.
+        if args.assistant_answer_file is not None:
+            answer = AssistantAnswerReceipt(
+                str(cwd.resolve()),
+                args.assistant_answer_file,
+                deadline,
+            )
+        emit.answer = answer
         pending = []
         signal.signal(signal.SIGTERM, lambda signum, frame: pending.append(signum))
         signal.signal(signal.SIGHUP, lambda signum, frame: pending.append(signum))
@@ -1248,6 +1708,22 @@ def main(argv=None):
         session = Session(send, emit, str(cwd.resolve()), prompt, args.model, diagnostic=diagnostic)
         try:
             run_transport(process, sys.stdin.buffer, session, args.timeout, deadline=deadline)
+            if answer is not None:
+                # Queued frames and provider EOF are already handled.
+                # This is the last look before intentional signals. A
+                # nonzero status here is spontaneous. stop_group is
+                # cleanup, not provider exit 0 and not served-model proof.
+                observe_child(process)
+                # Known cleanup only. A reap timeout or an unexpected
+                # signal error keeps ownership for the default finally
+                # path and does not finalize. stop_group there still
+                # suppresses those errors.
+                stop_answer_group(process)
+                process = None
+                # Stop finished before answer write/fsync. A stalled disk
+                # must not extend the child's lifetime. The deadline does
+                # not interrupt that write once it has started.
+                answer.finalize(session)
             return 0
         finally:
             session.close_tool_cache()
@@ -1265,8 +1741,7 @@ def main(argv=None):
     finally:
         if process is not None:
             stop_group(process)
-        if diagnostic is not None:
-            diagnostic.close()
+        close_captures(diagnostic, answer)
 
 
 if __name__ == "__main__":
