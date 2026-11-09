@@ -755,8 +755,8 @@ receiver session would route agent-written text into sessions the owner does not
   `scheduledworks`, so it cannot keep sync state there. With `calendar:` set, the
   executor keeps one companion `Reminder` per ScheduledWork, with a calendar-only
   target and the same schedule. It updates the Reminder when the item is edited and
-  cancels it when the item is cancelled. **Ruling 2026-11-04 for G1 (PR 917), not yet
-  implemented:**
+  cancels it when the item is cancelled. **Ruling 2026-11-04 for G1 (PR 917), implemented in the reminders
+  source and CRD by PR 917; no executor code creates the companion Reminder yet:**
   - G1-R1: a projection Reminder carries a separate retention end, `spec.projectionRetainUntil`,
     always set to the item's `notAfter`, one-shot items included. A `notAfter` before the
     first occurrence is refused. `recurrence.until` (when there is a recurrence) stays the

@@ -85,9 +85,12 @@ subresource. Bounds on every string, list and number are in the schema and teste
   (`freq` daily, weekly or monthly; `byDay` or `byMonthDay`; `until` or `count`),
   `targets` by reference, `cancelled`, and optional `projection`.
 - `projection` marks the calendar image of one ScheduledWork series
-  ([DESIGN-054](054-scheduled-agent-work.md) S4). The CRD accepts it only when
-  every target is `calendar:<ref>`. A Pushover target is refused. The rules are
-  below.
+  ([DESIGN-054](054-scheduled-agent-work.md) S4), and `projectionRetainUntil` is its
+  retention end, the item's `notAfter`. The CRD accepts a projection only when every
+  target is `calendar:<ref>` (a Pushover target is refused) and only with a
+  `projectionRetainUntil`, which in turn is refused on anything that is not a
+  projection. `projection` never changes after creation; `projectionRetainUntil`
+  can be edited, because the item's `notAfter` can. The rules are below.
 - `status`: `state` (pending, sent, failed, skipped, cancelled), `nextDue`, `occurrence` (the
   1-based index in the series), `planHash`, `deliveries` (one per Pushover target for
   the current occurrence: claimed, retry, sent, failed, ambiguous, skipped, with
@@ -155,30 +158,44 @@ refusal in the reminder package. The scheduler never sends Pushover for a
 projection, including when a Pushover target is present on an object the CRD did
 not see.
 
-A projection stays `pending` until it is cancelled or its `until` passes. Passing
-means `now` is strictly after `spec.recurrence.until`. It does not finish at its
-last occurrence, so an edit or a cancel still applies, and the scheduler keeps
-synchronising that one calendar event. An ordinary calendar-only reminder, with
-`projection` unset, still ends `skipped` at its last occurrence. The public
-remind API does not set the marker. The ScheduledWork executor stores it on the
-companion object. An API edit copies the spec, so a later text edit keeps it.
+A projection stays `pending` until it is cancelled or its `projectionRetainUntil`
+is strictly in the past. It does not finish at its last occurrence, so an edit or a
+cancel made between the last occurrence and `projectionRetainUntil` still reaches the
+event, and the scheduler keeps synchronising that one calendar event. An ordinary
+calendar-only reminder, with `projection` unset, still ends `skipped` at its last
+occurrence. The public remind API does not set the marker. The ScheduledWork executor will
+store it on the companion object; that wiring is not built yet. An API edit copies the spec, so a later text edit
+keeps it.
 
 The event is one series entry with an RRULE, keyed by the Reminder's namespace
-and name (`EventID`). An edit rewrites it. A cancel deletes it before the state
-becomes `cancelled`, and a failed delete stays pending so the next pass retries.
-The event ID, the spec hash, the five-minute failure backoff and the
-delete-on-cancel record stay in `status.calendar`. When `until` passes, the state
-becomes `skipped` and the message is `projection until passed`. The event is left
-in place: its RRULE has ended, and deletion remains the cancel path. A projection
-with no `until` stays pending after its last occurrence until it is cancelled.
+and name (`EventID`). Its series end, `recurrence.until`, is the end of the last
+occurrence; the Reminder's own end is `projectionRetainUntil`. An edit rewrites the
+event. A cancel deletes it before the state becomes `cancelled`, and a failed delete
+stays pending so the next pass retries. The event ID, the spec hash, the five-minute
+failure backoff and the delete-on-cancel record stay in `status.calendar`.
+
+When `projectionRetainUntil` passes, the scheduler itself deletes the event and then
+ends the Reminder as `skipped`, message `projection retention ended`. A failed delete
+leaves it pending, so the next pass retries. This is the one place the scheduler
+deletes an event outside a cancel, so past runs leave the calendar at the end of the
+item's window. After that the Reminder is final: the API refuses a cancel with 409,
+and nothing else deletes the event. Every projection has a retention end, one-shots
+included, so none stays pending forever or counts against its owner's 100 live
+reminders for good. The CRD refuses a projection without one. `ProjectionRetainUntil`
+builds the value from the item's `notAfter` and refuses a `notAfter` that is zero or
+before the first occurrence.
 
 DESIGN-032 refuses `count` together with `until`. `ProjectionRecurrence` converts
 a count to the `until` of the last occurrence, then caps that `until` at the
 caller's `notAfter` when `notAfter` is non-zero. An open-ended series takes
 `notAfter` as its `until`. A zero `notAfter` does not cap. The result has no
-count. A one-shot stays a one-shot. The scheduler does not convert; the caller
-stores the result. Losing the calendar never changes the ScheduledWork. The real
-calendar adapter is still absent, and this source does not start the keeper.
+count. A one-shot stays a one-shot. A `notAfter` before the first occurrence is
+refused rather than returning a series with no occurrence. The scheduler does not
+convert; the caller stores the result. `ValidateProjection` repeats the CRD's two
+refusals for a caller that wants them before it writes; the executor wiring in
+DESIGN-054 S4/S5 is its intended caller, and it has none yet. Losing the calendar
+never changes the ScheduledWork. The real calendar adapter is still absent, and this
+source does not start the keeper.
 
 ### Edit and cancel against the due time
 

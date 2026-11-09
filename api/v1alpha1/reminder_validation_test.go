@@ -49,12 +49,21 @@ func TestReminderAccepts(t *testing.T) {
 	if err := k8s.Create(ctx(t), monthly); err != nil {
 		t.Fatalf("a monthly recurrence: %v", err)
 	}
-	projection := reminder()
-	projection.Spec.Projection = true
-	projection.Spec.Targets = []string{"calendar:haynesnetwork"}
+	projection := projectionReminder()
 	if err := k8s.Create(ctx(t), projection); err != nil {
 		t.Fatalf("a projection reminder: %v", err)
 	}
+}
+
+// projectionReminder is a valid calendar-only projection with its retention
+// end (DESIGN-054 G1-R1).
+func projectionReminder() *v1alpha1.Reminder {
+	r := reminder()
+	retain := metav1.NewTime(time.Now().Add(30 * 24 * time.Hour))
+	r.Spec.Projection = true
+	r.Spec.ProjectionRetainUntil = &retain
+	r.Spec.Targets = []string{"calendar:haynesnetwork"}
+	return r
 }
 
 func TestProjectionReminderRefusesPushover(t *testing.T) {
@@ -63,11 +72,77 @@ func TestProjectionReminderRefusesPushover(t *testing.T) {
 		"mixed":         {"calendar:haynesnetwork", "pushover:default"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r := reminder()
-			r.Spec.Projection = true
+			r := projectionReminder()
 			r.Spec.Targets = targets
 			wantInvalid(t, k8s.Create(ctx(t), r), "a projection reminder has calendar targets only")
 		})
+	}
+	// An update that adds a Pushover target is refused too.
+	r := projectionReminder()
+	if err := k8s.Create(ctx(t), r); err != nil {
+		t.Fatal(err)
+	}
+	r.Spec.Targets = append(r.Spec.Targets, "pushover:default")
+	wantInvalid(t, k8s.Update(ctx(t), r), "a projection reminder has calendar targets only")
+}
+
+func TestProjectionReminderNeedsItsRetentionEnd(t *testing.T) {
+	r := projectionReminder()
+	r.Spec.ProjectionRetainUntil = nil
+	wantInvalid(t, k8s.Create(ctx(t), r), "a projection reminder needs projectionRetainUntil")
+
+	plain := reminder()
+	retain := metav1.NewTime(time.Now().Add(time.Hour))
+	plain.Spec.ProjectionRetainUntil = &retain
+	wantInvalid(t, k8s.Create(ctx(t), plain), "projectionRetainUntil is for a projection reminder only")
+
+	// The retention end follows the item's notAfter, so it can be edited, but
+	// not removed.
+	ok := projectionReminder()
+	if err := k8s.Create(ctx(t), ok); err != nil {
+		t.Fatal(err)
+	}
+	later := metav1.NewTime(time.Now().Add(60 * 24 * time.Hour))
+	ok.Spec.ProjectionRetainUntil = &later
+	ok.Spec.Title = "Plan the week now"
+	if err := k8s.Update(ctx(t), ok); err != nil {
+		t.Fatalf("an edit of the retention end and the title: %v", err)
+	}
+	ok.Spec.ProjectionRetainUntil = nil
+	wantInvalid(t, k8s.Update(ctx(t), ok), "a projection reminder needs projectionRetainUntil")
+}
+
+func TestProjectionMarkerNeverChanges(t *testing.T) {
+	// true to false, with the retention end dropped so only the marker rule
+	// is in play.
+	p := projectionReminder()
+	if err := k8s.Create(ctx(t), p); err != nil {
+		t.Fatal(err)
+	}
+	p.Spec.Projection = false
+	p.Spec.ProjectionRetainUntil = nil
+	wantInvalid(t, k8s.Update(ctx(t), p), "projection never changes")
+
+	// false to true, with a retention end and calendar targets so only the
+	// marker rule is in play.
+	o := reminder()
+	o.Spec.Targets = []string{"calendar:haynesnetwork"}
+	if err := k8s.Create(ctx(t), o); err != nil {
+		t.Fatal(err)
+	}
+	retain := metav1.NewTime(time.Now().Add(time.Hour))
+	o.Spec.Projection = true
+	o.Spec.ProjectionRetainUntil = &retain
+	wantInvalid(t, k8s.Update(ctx(t), o), "projection never changes")
+
+	// A projection that keeps its marker edits freely.
+	k := projectionReminder()
+	if err := k8s.Create(ctx(t), k); err != nil {
+		t.Fatal(err)
+	}
+	k.Spec.Cancelled = true
+	if err := k8s.Update(ctx(t), k); err != nil {
+		t.Fatalf("an edit that keeps the marker: %v", err)
 	}
 }
 

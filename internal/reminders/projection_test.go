@@ -14,8 +14,15 @@ func TestValidateProjectionRejectsPushover(t *testing.T) {
 	ok := spec("2026-10-28T09:00", "UTC", nil)
 	ok.Projection = true
 	ok.Targets = []string{"calendar:haynesnetwork"}
+	retain := metav1.NewTime(utc("2026-11-30T00:00:00Z"))
+	ok.ProjectionRetainUntil = &retain
 	if err := ValidateProjection(ok); err != nil {
 		t.Fatalf("calendar only: %v", err)
+	}
+	none := ok
+	none.ProjectionRetainUntil = nil
+	if err := ValidateProjection(none); err == nil || !strings.Contains(err.Error(), "projectionRetainUntil") {
+		t.Fatalf("no retention end: %v", err)
 	}
 	page := ok
 	page.Targets = []string{"pushover:default"}
@@ -120,5 +127,46 @@ func TestProjectionRecurrenceUsesTheResolvedLastInstant(t *testing.T) {
 	first, ok := sch.Next(time.Time{})
 	if !ok || got.Until == nil || !got.Until.Time.Equal(first.At.UTC()) || got.Count != 0 {
 		t.Fatalf("until %v first %v ok %v", got.Until, first.At, ok)
+	}
+}
+
+// F5: a notAfter before the first occurrence is refused, for a series and for a
+// one-shot, rather than returning a series with no occurrence.
+func TestProjectionRecurrenceRefusesANotAfterBeforeTheFirstOccurrence(t *testing.T) {
+	notAfter := metav1.NewTime(utc("2026-10-30T00:00:00Z"))
+	due := "2026-11-02T09:00"
+	for name, rec := range map[string]*v1alpha1.ReminderRecurrence{
+		"a count":  {Freq: v1alpha1.ReminderDaily, Count: 3},
+		"open":     {Freq: v1alpha1.ReminderDaily},
+		"one-shot": nil,
+	} {
+		if _, err := ProjectionRecurrence(due, "UTC", rec, notAfter); err == nil || !strings.Contains(err.Error(), "before the first occurrence") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// notAfter equal to the first occurrence is allowed: the first one runs.
+	atFirst := metav1.NewTime(utc("2026-11-02T09:00:00Z"))
+	got, err := ProjectionRecurrence(due, "UTC", &v1alpha1.ReminderRecurrence{Freq: v1alpha1.ReminderDaily, Count: 3}, atFirst)
+	if err != nil || got.Until == nil || !got.Until.Time.Equal(atFirst.Time) {
+		t.Fatalf("notAfter at the first occurrence: %+v %v", got, err)
+	}
+}
+
+// G1-R1: every projection has a retention end, one-shots included.
+func TestProjectionRetainUntil(t *testing.T) {
+	due := "2026-11-02T09:00"
+	notAfter := metav1.NewTime(utc("2026-12-01T00:00:00Z").In(time.FixedZone("x", 3600)))
+	got, err := ProjectionRetainUntil(due, "UTC", notAfter)
+	if err != nil || got == nil || !got.Time.Equal(notAfter.Time) || got.Location() != time.UTC {
+		t.Fatalf("%v %v", got, err)
+	}
+	if _, err := ProjectionRetainUntil(due, "UTC", metav1.Time{}); err == nil {
+		t.Error("a zero notAfter was accepted")
+	}
+	if _, err := ProjectionRetainUntil(due, "UTC", metav1.NewTime(utc("2026-11-01T00:00:00Z"))); err == nil || !strings.Contains(err.Error(), "before the first occurrence") {
+		t.Errorf("notAfter before the first occurrence: %v", err)
+	}
+	if _, err := ProjectionRetainUntil("not-a-time", "UTC", notAfter); err == nil {
+		t.Error("a bad due was accepted")
 	}
 }

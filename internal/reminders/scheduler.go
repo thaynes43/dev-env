@@ -169,6 +169,15 @@ func (s *Scheduler) tickOne(ctx context.Context, r *v1alpha1.Reminder) {
 		s.cancel(ctx, r, now)
 		return
 	}
+	if r.Spec.Projection && projectionRetentionEnded(r, now) {
+		// A projection stays pending through its last occurrence, so an edit or
+		// a cancel still reaches the event. Once its retention end is strictly
+		// in the past the scheduler takes the event down itself (DESIGN-054
+		// G1-R3) and ends the reminder. This is not a cancel: nothing else
+		// deletes the event after this.
+		s.endProjection(ctx, r, now)
+		return
+	}
 	changed := false
 	if r.Status.PlanHash != PlanHash(r.Spec) && len(r.Status.Deliveries) == 0 {
 		s.plan(r, now)
@@ -188,16 +197,6 @@ func (s *Scheduler) tickOne(ctx context.Context, r *v1alpha1.Reminder) {
 	}
 	if s.syncCalendar(ctx, r, now) {
 		changed = true
-	}
-	// A projection stays pending through its last occurrence. It leaves pending
-	// only once until is strictly in the past, and the calendar event stays:
-	// delete remains the cancel path.
-	if r.Spec.Projection && projectionUntilPassed(r, now) {
-		r.Status.State = v1alpha1.ReminderSkipped
-		r.Status.NextDue = nil
-		r.Status.Message = ProjectionUntilMessage
-		s.write(ctx, r)
-		return
 	}
 	if changed && !s.write(ctx, r) {
 		return
@@ -294,11 +293,15 @@ func pageTargets(spec v1alpha1.ReminderSpec) []string {
 	return pushoverTargets(spec)
 }
 
-func projectionUntilPassed(r *v1alpha1.Reminder, now time.Time) bool {
-	if r.Spec.Recurrence == nil || r.Spec.Recurrence.Until == nil {
+// projectionRetentionEnded reports whether now is strictly after the
+// projection's retention end. The CRD refuses a projection without one, so a
+// missing value means an object the CRD never saw; it stays pending rather
+// than lose an event on a guess.
+func projectionRetentionEnded(r *v1alpha1.Reminder, now time.Time) bool {
+	if r.Spec.ProjectionRetainUntil == nil {
 		return false
 	}
-	return now.After(r.Spec.Recurrence.Until.Time)
+	return now.After(r.Spec.ProjectionRetainUntil.Time)
 }
 
 func syncEntry(r *v1alpha1.Reminder, target string) *v1alpha1.ReminderCalendarSync {
@@ -416,6 +419,32 @@ func (s *Scheduler) pruneCalendar(r *v1alpha1.Reminder, want map[string]bool) bo
 // calendar entries first. A delete that fails leaves the reminder pending-
 // cancelled, so the next pass retries, and nothing fires meanwhile.
 func (s *Scheduler) cancel(ctx context.Context, r *v1alpha1.Reminder, now time.Time) {
+	if !s.deleteEvents(ctx, r, now, "reminder cancelled") {
+		return
+	}
+	r.Status.State = v1alpha1.ReminderCancelled
+	r.Status.NextDue = nil
+	r.Status.Message = "cancelled by its owner"
+	s.write(ctx, r)
+}
+
+// endProjection ends a projection whose retention end has passed: it deletes
+// the calendar events first, and a delete that fails leaves the reminder
+// pending, so the next pass retries. Only then is the reminder skipped.
+func (s *Scheduler) endProjection(ctx context.Context, r *v1alpha1.Reminder, now time.Time) {
+	if !s.deleteEvents(ctx, r, now, "projection retention ended") {
+		return
+	}
+	r.Status.State = v1alpha1.ReminderSkipped
+	r.Status.NextDue = nil
+	r.Status.Deliveries = nil
+	r.Status.Message = ProjectionUntilMessage
+	s.write(ctx, r)
+}
+
+// deleteEvents takes down every calendar entry still standing, recording why.
+// It reports false, having stopped at the first failure, when a delete failed.
+func (s *Scheduler) deleteEvents(ctx context.Context, r *v1alpha1.Reminder, now time.Time, reason string) bool {
 	stamp := metav1.NewTime(now.UTC())
 	for i := range r.Status.Calendar {
 		e := &r.Status.Calendar[i]
@@ -428,14 +457,11 @@ func (s *Scheduler) cancel(ctx context.Context, r *v1alpha1.Reminder, now time.T
 		}
 		if err := s.Calendar.Delete(ctx, t, e.EventID); err != nil {
 			s.Log.Info("calendar delete failed", "reminder", r.Name, "target", e.Target)
-			return
+			return false
 		}
-		*e = v1alpha1.ReminderCalendarSync{Target: e.Target, State: v1alpha1.CalendarDeleted, Reason: "reminder cancelled", UpdatedAt: stamp}
+		*e = v1alpha1.ReminderCalendarSync{Target: e.Target, State: v1alpha1.CalendarDeleted, Reason: reason, UpdatedAt: stamp}
 	}
-	r.Status.State = v1alpha1.ReminderCancelled
-	r.Status.NextDue = nil
-	r.Status.Message = "cancelled by its owner"
-	s.write(ctx, r)
+	return true
 }
 
 func findDelivery(r *v1alpha1.Reminder, target string, occ int32) *v1alpha1.ReminderDelivery {

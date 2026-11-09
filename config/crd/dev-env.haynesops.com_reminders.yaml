@@ -54,7 +54,9 @@ spec:
           spec:
             description: |-
               ReminderSpec is what the owner asked for.
-              A projection reminder (DESIGN-054 S4) is a calendar image only.
+              A projection reminder (DESIGN-054 S4) is a calendar image only. It has a
+              retention end, so it always leaves pending, and it never changes into or out
+              of a projection.
             properties:
               body:
                 description: |-
@@ -91,10 +93,21 @@ spec:
               projection:
                 description: |-
                   Projection marks a calendar projection of scheduled work (DESIGN-054 S4).
-                  The CRD allows calendar targets only. The scheduler keeps the reminder
-                  pending until it is cancelled or its until passes, and does not finish
-                  it at the last occurrence.
+                  The CRD allows calendar targets only, requires ProjectionRetainUntil, and
+                  refuses any change of this field after creation. The scheduler keeps the
+                  reminder pending until it is cancelled or ProjectionRetainUntil passes,
+                  and does not finish it at the last occurrence.
                 type: boolean
+              projectionRetainUntil:
+                description: |-
+                  ProjectionRetainUntil is how long a projection reminder lives: the
+                  item's notAfter (DESIGN-054 G1-R1). It is separate from the recurrence's
+                  until, which ends the calendar event's own series at its last
+                  occurrence. Once it is strictly in the past, the scheduler deletes the
+                  event and the reminder ends skipped. It can be edited, because the item's
+                  notAfter can be.
+                format: date-time
+                type: string
               recurrence:
                 description: Recurrence repeats the reminder; absent is one-shot.
                 properties:
@@ -185,6 +198,14 @@ spec:
             - message: a projection reminder has calendar targets only
               rule: '!has(self.projection) || !self.projection || self.targets.all(t,
                 t.startsWith(''calendar:''))'
+            - message: a projection reminder needs projectionRetainUntil
+              rule: '!has(self.projection) || !self.projection || has(self.projectionRetainUntil)'
+            - message: projectionRetainUntil is for a projection reminder only
+              rule: '!has(self.projectionRetainUntil) || (has(self.projection) &&
+                self.projection)'
+            - message: projection never changes
+              rule: (has(self.projection) && self.projection) == (has(oldSelf.projection)
+                && oldSelf.projection)
           status:
             description: ReminderStatus is what the scheduler did.
             properties:

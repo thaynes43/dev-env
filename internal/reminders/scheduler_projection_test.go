@@ -9,6 +9,12 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
 
+// retainTo gives a projection its retention end (DESIGN-054 G1-R1).
+func retainTo(s *v1alpha1.ReminderSpec, at string) {
+	t := metav1.NewTime(utc(at))
+	s.ProjectionRetainUntil = &t
+}
+
 func TestProjectionSyncEditCancelDelete(t *testing.T) {
 	e := newEnv(t)
 	e.create("rem-proj", func(s *v1alpha1.ReminderSpec) {
@@ -19,6 +25,7 @@ func TestProjectionSyncEditCancelDelete(t *testing.T) {
 		s.TimeZone = "America/New_York"
 		s.Title = "Plan the week"
 		s.Body = "work order"
+		retainTo(s, "2026-12-01T00:00:00Z")
 	})
 	e.tick()
 	e.tick()
@@ -63,6 +70,7 @@ func TestProjectionStaysPendingPastItsLastOccurrence(t *testing.T) {
 		s.Projection = true
 		s.Targets = []string{"calendar:haynesnetwork"}
 		s.Recurrence = &v1alpha1.ReminderRecurrence{Freq: v1alpha1.ReminderDaily, Count: 1}
+		retainTo(s, "2026-11-30T00:00:00Z")
 	})
 	e.tick()
 	e.advance(time.Hour)
@@ -84,37 +92,152 @@ func TestProjectionStaysPendingPastItsLastOccurrence(t *testing.T) {
 	}
 }
 
-func TestProjectionEndsWhenUntilPassesAndKeepsTheEvent(t *testing.T) {
+// G1-R2: the series event ends at the last occurrence (recurrence.until), but
+// the reminder lives to its retention end, so an edit or a cancel made after
+// the last occurrence still reaches the event.
+func TestProjectionEditAfterTheLastOccurrenceStillReachesTheEvent(t *testing.T) {
 	e := newEnv(t)
-	until := metav1.NewTime(utc("2026-10-29T13:00:00Z"))
 	e.create("rem-proj", func(s *v1alpha1.ReminderSpec) {
 		s.Projection = true
 		s.Targets = []string{"calendar:haynesnetwork"}
-		s.Recurrence = &v1alpha1.ReminderRecurrence{Freq: v1alpha1.ReminderDaily, Until: &until}
+		retainTo(s, "2026-11-30T00:00:00Z") // a one-shot: due 2026-10-28T13:00Z
 	})
 	e.tick()
-	e.advance(time.Hour) // first occurrence, 2026-10-28T13:00Z
+	e.advance(time.Hour) // the only occurrence has passed
 	e.tick()
-	e.advance(24 * time.Hour) // second occurrence, equal to until
+	e.wantState("rem-proj", v1alpha1.ReminderPending)
+	e.mutate("rem-proj", func(r *v1alpha1.Reminder) { r.Spec.Title = "Renamed after the run" })
+	e.tick()
+	if e.cal.Upserts != 2 || e.cal.Events["haynesnetwork/"+EventID(testNS, "rem-proj")].Title != "Renamed after the run" {
+		t.Fatalf("an edit after the last occurrence: upserts %d events %+v", e.cal.Upserts, e.cal.Events)
+	}
+	e.wantState("rem-proj", v1alpha1.ReminderPending)
+}
+
+func TestProjectionCancelAfterTheLastOccurrenceDeletesTheEvent(t *testing.T) {
+	e := newEnv(t)
+	e.create("rem-proj", func(s *v1alpha1.ReminderSpec) {
+		s.Projection = true
+		s.Targets = []string{"calendar:haynesnetwork"}
+		retainTo(s, "2026-11-30T00:00:00Z")
+	})
+	e.tick()
+	e.advance(time.Hour)
+	e.tick()
+	e.mutate("rem-proj", func(r *v1alpha1.Reminder) { r.Spec.Cancelled = true })
+	e.tick()
+	e.wantState("rem-proj", v1alpha1.ReminderCancelled)
+	if e.cal.Count() != 0 || e.cal.Deletes != 1 {
+		t.Fatalf("after cancel: entries %d deletes %d", e.cal.Count(), e.cal.Deletes)
+	}
+}
+
+// G1-R3: when the retention end is strictly in the past, the scheduler deletes
+// the event itself and ends the reminder. A failed delete keeps it pending for
+// the next pass.
+func TestProjectionRetentionEndDeletesTheEventAndEnds(t *testing.T) {
+	e := newEnv(t)
+	e.create("rem-proj", func(s *v1alpha1.ReminderSpec) {
+		s.Projection = true
+		s.Targets = []string{"calendar:haynesnetwork"}
+		s.Recurrence = &v1alpha1.ReminderRecurrence{Freq: v1alpha1.ReminderDaily, Count: 2}
+		retainTo(s, "2026-10-30T12:00:00Z")
+	})
+	e.tick()
+	e.advance(time.Hour)
+	e.tick()
+	e.advance(24 * time.Hour) // second occurrence
+	e.tick()
+	e.now = utc("2026-10-30T12:00:00Z") // exactly the retention end: not yet past
 	e.tick()
 	r := e.wantState("rem-proj", v1alpha1.ReminderPending)
-	if r.Status.Message != ProjectionPendingMessage || e.cal.Count() != 1 {
-		t.Fatalf("at until: %+v entries %d", r.Status, e.cal.Count())
+	if r.Status.Message != ProjectionPendingMessage || e.cal.Count() != 1 || e.cal.Deletes != 0 {
+		t.Fatalf("at the retention end (not yet past): %+v entries %d deletes %d", r.Status, e.cal.Count(), e.cal.Deletes)
 	}
 	e.advance(time.Minute)
+	e.cal.FailDelete = true
+	e.tick()
+	e.wantState("rem-proj", v1alpha1.ReminderPending)
+	if e.cal.Count() != 1 {
+		t.Fatal("a failed delete removed the entry")
+	}
+	e.cal.FailDelete = false
 	e.tick()
 	r = e.wantState("rem-proj", v1alpha1.ReminderSkipped)
 	if r.Status.Message != ProjectionUntilMessage || r.Status.NextDue != nil {
-		t.Fatalf("after until: %+v", r.Status)
+		t.Fatalf("after the retention end: %+v", r.Status)
 	}
-	if e.cal.Count() != 1 || e.cal.Deletes != 0 {
-		t.Fatalf("until passed deleted the event: entries %d deletes %d", e.cal.Count(), e.cal.Deletes)
+	if e.cal.Count() != 0 || e.cal.Deletes != 1 || r.Status.Calendar[0].State != v1alpha1.CalendarDeleted {
+		t.Fatalf("entries %d deletes %d calendar %+v", e.cal.Count(), e.cal.Deletes, r.Status.Calendar)
 	}
+	e.tick()
 	e.wantSends(0)
+	if e.cal.Deletes != 1 {
+		t.Fatal("a final reminder deleted again")
+	}
+}
+
+// A one-shot projection leaves pending too: it has a retention end like every
+// other (F1).
+func TestOneShotProjectionLeavesPending(t *testing.T) {
+	e := newEnv(t)
+	e.create("rem-proj", func(s *v1alpha1.ReminderSpec) {
+		s.Projection = true
+		s.Targets = []string{"calendar:haynesnetwork"}
+		retainTo(s, "2026-11-04T00:00:00Z")
+	})
+	e.tick()
+	e.advance(400 * 24 * time.Hour)
+	e.tick()
+	e.wantState("rem-proj", v1alpha1.ReminderSkipped)
+	if e.cal.Count() != 0 {
+		t.Fatal("the event outlived the projection")
+	}
+}
+
+// plan's projection branch: a projection whose whole series is already past
+// stays pending with its own message, not failed as an ordinary reminder would.
+func TestProjectionPlanKeepsAPastSeriesPending(t *testing.T) {
+	e := newEnv(t)
+	e.create("rem-proj", func(s *v1alpha1.ReminderSpec) {
+		s.Projection = true
+		s.Targets = []string{"calendar:haynesnetwork"}
+		s.Due = "2026-10-20T09:00"
+		s.Recurrence = &v1alpha1.ReminderRecurrence{Freq: v1alpha1.ReminderDaily, Count: 2}
+		retainTo(s, "2026-11-30T00:00:00Z")
+	})
+	e.tick()
+	r := e.wantState("rem-proj", v1alpha1.ReminderPending)
+	if r.Status.Message != ProjectionPendingMessage || r.Status.NextDue != nil {
+		t.Fatalf("%+v", r.Status)
+	}
+	// The same series on an ordinary reminder fails.
+	e.create("rem-plain", func(s *v1alpha1.ReminderSpec) {
+		s.Due = "2026-10-20T09:00"
+		s.Recurrence = &v1alpha1.ReminderRecurrence{Freq: v1alpha1.ReminderDaily, Count: 2}
+	})
+	e.tick()
+	e.wantState("rem-plain", v1alpha1.ReminderFailed)
+}
+
+// The projection gate: an ordinary reminder never ends on a retention end,
+// even if one is stored on it (the CRD refuses it; the scheduler must not
+// depend on that). It still sends and ends sent.
+func TestOrdinaryReminderIgnoresARetentionEnd(t *testing.T) {
+	e := newEnv(t)
+	e.create("rem-plain", func(s *v1alpha1.ReminderSpec) {
+		retainTo(s, "2026-10-28T00:00:00Z") // already in the past
+	})
+	e.tick()
+	e.advance(time.Hour)
+	e.tick()
+	e.wantSends(1)
+	e.wantState("rem-plain", v1alpha1.ReminderSent)
 }
 
 func TestProjectionDoesNotSendPushover(t *testing.T) {
 	spec := v1alpha1.ReminderSpec{Projection: true, Targets: []string{"pushover:default", "calendar:haynesnetwork"}}
+	retainTo(&spec, "2026-11-30T00:00:00Z")
 	if err := ValidateProjection(spec); err == nil {
 		t.Fatal("validation accepted Pushover")
 	}
@@ -122,6 +245,7 @@ func TestProjectionDoesNotSendPushover(t *testing.T) {
 	e.create("rem-proj", func(s *v1alpha1.ReminderSpec) {
 		s.Projection = true
 		s.Targets = []string{"pushover:default", "calendar:haynesnetwork"}
+		retainTo(s, "2026-11-30T00:00:00Z")
 	})
 	e.tick()
 	e.advance(time.Hour)
@@ -141,6 +265,7 @@ func TestProjectionCalendarFailureBacksOff(t *testing.T) {
 		s.Projection = true
 		s.Targets = []string{"calendar:haynesnetwork"}
 		s.Recurrence = &v1alpha1.ReminderRecurrence{Freq: v1alpha1.ReminderDaily, Count: 2}
+		retainTo(s, "2026-11-30T00:00:00Z")
 	})
 	e.tick()
 	r := e.get("rem-proj")
