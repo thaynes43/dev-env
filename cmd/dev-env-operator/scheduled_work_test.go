@@ -134,6 +134,15 @@ func TestScheduledWorkAPIFlag(t *testing.T) {
 	if _, err = parseFlags([]string{"--enable-scheduled-work-api", "--api-bind-address=0"}); err == nil {
 		t.Error("the routes were accepted without the API")
 	}
+	// Both on: the executor's own needs still apply. An empty
+	// --templates-namespace is already refused by parseFlags, so the config
+	// cannot come out nil for want of it.
+	if _, err = parseFlags([]string{"--enable-scheduled-work-api", "--enable-scheduled-work", "--leader-elect=false"}); err == nil {
+		t.Error("both flags without leader election were accepted")
+	}
+	if _, err = parseFlags([]string{"--enable-scheduled-work-api", "--templates-namespace="}); err == nil {
+		t.Error("an empty namespace was accepted with the routes on")
+	}
 	o, err = parseFlags([]string{"--enable-scheduled-work"})
 	if err != nil || scheduledWorkAPIConfig(o) != nil {
 		t.Errorf("the executor flag turned the routes on: %v", err)
