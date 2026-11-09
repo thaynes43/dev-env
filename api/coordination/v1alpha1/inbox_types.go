@@ -37,7 +37,7 @@ type InboxMessageSpec struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
 	Repository string `json:"repository"`
 	// Configured provider and requested model, never actual model execution.
-	// +kubebuilder:validation:Enum=claude;codex;opencode
+	// +kubebuilder:validation:Enum=claude;codex;cursor;opencode
 	Provider string `json:"provider"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128

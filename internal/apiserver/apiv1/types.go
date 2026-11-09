@@ -774,6 +774,10 @@ const (
 	// at least 30 days after the required Sessions are absent; immediate retry
 	// does not help.
 	CodeLimitExceeded = "limit_exceeded"
+	// CodeProviderUnconfigured (422): the templates do not enable the agent
+	// the request names, so no session or pod is created. A cursor session
+	// needs the templates' cursor.apiKey reference (DESIGN-058).
+	CodeProviderUnconfigured = "provider_unconfigured"
 	// CodeInternal (500).
 	CodeInternal = "internal"
 	// CodeUnavailable (503): the API server could not be reached; retry.

@@ -401,6 +401,14 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	if why := startDeadlineRefusal(d.S.StartDeadline, false, d.now()); why != "" {
 		return d.refuseLaunch(ctx, why)
 	}
+	if d.Session.Agent == protocol.AgentCursor {
+		// DESIGN-058: the pinned Cursor CLI, fetched onto the session volume
+		// and checked by SHA-256 before its first use. A failure fails the
+		// task closed before any launch record exists.
+		if err := InstallCursorCLI(ctx, d.S); err != nil {
+			return newStep(name, nil, err), err.Error()
+		}
+	}
 	launch, err := BuildLaunch(d.S, d.Session, ws, bootID, d.now())
 	if err != nil {
 		return newStep(name, nil, err), err.Error()
@@ -417,6 +425,10 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	}
 	if err := StartAgent(ctx, d.R, d.S, launch, d.Self); err != nil {
 		return newStep(name, nil, err), err.Error()
+	}
+	if launch.Provider == protocol.AgentCursor {
+		// The Cursor CLI names its own session; the task log records it.
+		return newStep(name, []string{fmt.Sprintf("cursor task started in tmux session %q on the pinned Cursor CLI %s", TmuxSession, cursorCLIPin.Version)}, nil), ""
 	}
 	what := "claude task"
 	if launch.TUI {

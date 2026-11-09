@@ -63,6 +63,9 @@ const (
 const (
 	HistoryProviderClaude = "claude"
 	HistoryProviderCodex  = "codex"
+	// HistoryProviderCursor is a cursor task (DESIGN-058). Its HOME has the
+	// same four roots; the Cursor CLI's own directories are not among them.
+	HistoryProviderCursor = "cursor"
 )
 
 // Bounds (DESIGN-025 6.3 and 7).

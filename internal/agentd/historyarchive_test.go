@@ -852,3 +852,20 @@ func TestHistoryArchiveChecksTheGitRescueItCopies(t *testing.T) {
 		t.Errorf("a refused put published an entry")
 	}
 }
+
+// A cursor task's HOME archives like any other (DESIGN-058): its provider is
+// accepted, so its expiry and cleanup are never blocked on the name. An
+// unknown provider is still refused.
+func TestHistoryArchiveAcceptsACursorTask(t *testing.T) {
+	r := newHistoryRig(t)
+	r.o.Rescue = writeTestRescue(t, r, "20261012-0102", nil)
+	c := testContent(t, r.plan(t), "dev-env", testSessionUID)
+	c.Provider = protocol.HistoryProviderCursor
+	if err := validateHistoryContent(c); err != nil {
+		t.Fatal("a cursor task's content was refused", err)
+	}
+	c.Provider = "gemini"
+	if err := validateHistoryContent(c); err == nil || !strings.Contains(err.Error(), "is not claude, codex or cursor") {
+		t.Fatal("an unknown provider was accepted", err)
+	}
+}

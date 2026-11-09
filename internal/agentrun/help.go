@@ -428,8 +428,11 @@ Flags:
                              qualified control client for a fresh ordinary dev
                              project parent created by a trusted client. Default
                              off; does not enroll a receiver or change depth.
-  --agent claude             the agent (default claude; codex and opencode arrive
-                             in plans 04 and 09)
+  --agent claude             the agent: claude (default), codex or cursor; opencode
+                             arrives in plan 09. cursor runs a headless --project
+                             task only, needs --model (a Cursor model id; Grok is
+                             one), and takes no --effort: Cursor puts effort in
+                             the model id
   --model <id>               a full model id, never an alias such as opus (default
                              $DEV_ENV_CLAUDE_MODEL, else ` + DefaultClaudeModel + `)
   --effort <level>           low, medium, high, xhigh, max or ultracode, as the

@@ -498,6 +498,33 @@ the project and the provider, `agent-run help run` gives the flags, and the
 [launch-profile preflight](launch-profile-preflight.md) covers the profile. The
 create is the admission check.
 
+#### A Cursor or Grok child
+
+*DESIGN-058, 2026-11-09. Source only: not deployed or run live yet.*
+
+`cursor` is the third task provider. Grok and other vendors are Cursor model
+ids, not providers of their own.
+
+```bash
+agent-run --project haynes-studio --agent cursor \
+  --model <cursor-model-id> --prompt-file work-order.md --timeout 2h --wait 3m
+```
+
+- It is a headless `--project` task only. `--local` and `--interactive` are
+  refused.
+- `--model` is required and checked for shape only. The Cursor CLI refuses an
+  id it does not know.
+- `--effort` is refused: Cursor puts effort in the model id. `--max-turns` is
+  refused: use `--timeout`.
+- The pod runs the pinned Cursor CLI always-allow. agentd fetches it at boot
+  and checks its SHA-256; the image does not contain it.
+- Usage, cost and the served model are Unknown. The log shows the model the
+  CLI names at start as "CLI-reported", never as provider reported.
+- A cursor task never resumes.
+- If the templates name no Cursor key, the create is refused with
+  `provider_unconfigured` and no Session is created. Record it and stop: it
+  is a deploy step, not a flag to work around.
+
 #### Never run another provider inside your own pod
 
 The agent image carries both `claude` and `codex`. Running the other provider

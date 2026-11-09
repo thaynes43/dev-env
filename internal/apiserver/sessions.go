@@ -241,7 +241,7 @@ func (s *Server) runningChildren(ctx context.Context, parent string, agent v1alp
 	n := 0
 	for i := range list.Items {
 		child := &list.Items[i]
-		if child.Spec.Parent == parent && unfinished(child) && (child.Spec.Agent == agent || (child.Spec.Agent != v1alpha1.AgentClaude && child.Spec.Agent != v1alpha1.AgentCodex && child.Spec.Agent != v1alpha1.AgentOpencode)) {
+		if child.Spec.Parent == parent && unfinished(child) && (child.Spec.Agent == agent || (child.Spec.Agent != v1alpha1.AgentClaude && child.Spec.Agent != v1alpha1.AgentCodex && child.Spec.Agent != v1alpha1.AgentCursor && child.Spec.Agent != v1alpha1.AgentOpencode)) {
 			n++
 		}
 	}
