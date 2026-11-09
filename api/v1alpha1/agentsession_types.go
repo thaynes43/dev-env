@@ -17,6 +17,7 @@ import (
 //   - prompt is set in task mode and only there; limits are task mode only;
 //   - llm is set for opencode and only there;
 //   - a Claude model is a full id (claude-...), never an alias;
+//   - a cursor session runs in task mode and names no effort (DESIGN-058);
 //   - caller and lane go together and mark a summoned session; idempotencyKey
 //     needs them; a summoned session runs in task or remote mode and names a
 //     profile other than full (3.7, D-36);
@@ -28,12 +29,15 @@ import (
 // The envtest suite in this package proves each rule against a real API server.
 
 // AgentKind is the agent CLI a session runs.
-// +kubebuilder:validation:Enum=claude;codex;opencode
+// +kubebuilder:validation:Enum=claude;codex;cursor;opencode
 type AgentKind string
 
 const (
 	AgentClaude AgentKind = "claude"
 	AgentCodex  AgentKind = "codex"
+	// AgentCursor runs the Cursor CLI headless on one task (DESIGN-058). Task
+	// mode only; Cursor encodes effort in the model id, so effort is empty.
+	AgentCursor AgentKind = "cursor"
 	// AgentOpencode runs a local model through an LLM pool (DESIGN-001 6.13).
 	AgentOpencode AgentKind = "opencode"
 )
@@ -136,6 +140,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.limits) || self.mode == 'task'",message="limits apply to task mode only"
 // +kubebuilder:validation:XValidation:rule="self.agent == 'opencode' ? has(self.llm) : !has(self.llm)",message="llm is required for agent opencode and not allowed for claude or codex"
 // +kubebuilder:validation:XValidation:rule="self.agent != 'claude' || self.model.startsWith('claude-')",message="a Claude model is a full id such as claude-opus-5-5, never an alias"
+// +kubebuilder:validation:XValidation:rule="self.agent != 'cursor' || (self.mode == 'task' && !has(self.effort))",message="a cursor session runs in task mode only, and Cursor encodes effort in the model id, so effort is empty"
 // +kubebuilder:validation:XValidation:rule="has(self.caller) == has(self.lane)",message="caller and lane go together: a summoned session sets both, Tom's own sessions neither"
 // +kubebuilder:validation:XValidation:rule="!has(self.idempotencyKey) || has(self.caller)",message="idempotencyKey is for summoned sessions only: set caller and lane"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.mode != 'local'",message="a summoned session runs in task or remote mode, never local"
@@ -1460,7 +1465,7 @@ type UsageSourceStatus struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
 	PodUID string `json:"podUID"`
-	// +kubebuilder:validation:Enum=claude;codex
+	// +kubebuilder:validation:Enum=claude;codex;cursor
 	// +kubebuilder:validation:MaxLength=64
 	Provider string `json:"provider"`
 	// +kubebuilder:validation:MinLength=1
@@ -1478,6 +1483,7 @@ type UsageSourceStatus struct {
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="original usage observation cannot change"
 // +kubebuilder:validation:XValidation:rule="has(self.logicalTaskUID) == has(self.logicalTaskEpoch) && has(self.logicalTaskUID) == has(self.workerID)",message="logical task provenance requires one complete server binding"
 // +kubebuilder:validation:XValidation:rule="self.source.provider != 'codex' || (self.cost.state == 'Unknown' && (!has(self.servedModels) || self.servedModels.all(m, m.cost.state == 'Unknown')))",message="Codex token-only usage cannot assert cost"
+// +kubebuilder:validation:XValidation:rule="self.source.provider != 'cursor' || (self.cost.state == 'Unknown' && self.inputTokens.state == 'Unknown' && self.outputTokens.state == 'Unknown' && self.cacheReadInputTokens.state == 'Unknown' && self.cacheCreationInputTokens.state == 'Unknown' && self.actualModelState == 'Unknown')",message="Cursor reports no usage, cost or served model; every metric is Unknown"
 // +kubebuilder:validation:XValidation:rule="self.version == 1 ? (!has(self.provenance) && !has(self.billingBasis) && !has(self.servedModels) && self.actualModelState == 'Unknown') : (has(self.provenance) && has(self.billingBasis))",message="version 2 requires provenance and billing basis; version 1 carries neither"
 // +kubebuilder:validation:XValidation:rule="(self.actualModelState == 'ProviderReported') == (has(self.servedModels) && size(self.servedModels) > 0)",message="actual model is ProviderReported exactly when served models are listed"
 type UsageObservationStatus struct {

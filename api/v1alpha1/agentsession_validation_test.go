@@ -130,6 +130,15 @@ func summonedRemote() *v1alpha1.AgentSession {
 	return s
 }
 
+// cursorSession is a cursor task (DESIGN-058): a Cursor model id, no effort.
+func cursorSession() *v1alpha1.AgentSession {
+	s := taskSession()
+	s.Spec.Agent = v1alpha1.AgentCursor
+	s.Spec.Model = "grok-code-fast-1"
+	s.Spec.Profile = "dev"
+	return s
+}
+
 func opencodeSession() *v1alpha1.AgentSession {
 	s := taskSession()
 	s.Spec.Agent = v1alpha1.AgentOpencode
@@ -210,6 +219,7 @@ func TestCreateAccepts(t *testing.T) {
 			return s
 		}(),
 		"an opencode task on an LLM pool": opencodeSession(),
+		"a cursor task":                   cursorSession(),
 		"a summoned remediation task":     summonedTask(),
 		"a summoned escalation":           summonedRemote(),
 		"a summoned upgrade without an idempotency key": func() *v1alpha1.AgentSession {
@@ -311,6 +321,15 @@ func TestCreateRejects(t *testing.T) {
 		{"opencode without an LLM pool", func(s *v1alpha1.AgentSession) {
 			s.Spec.Agent, s.Spec.Model = v1alpha1.AgentOpencode, "qwen3-coder-30b-a3b-instruct-q4_k_m"
 		}, "llm is required for agent opencode"},
+		{"a cursor session in local mode", func(s *v1alpha1.AgentSession) {
+			s.Spec.Agent, s.Spec.Model, s.Spec.Mode, s.Spec.Prompt = v1alpha1.AgentCursor, "grok-code-fast-1", v1alpha1.ModeLocal, ""
+		}, "a cursor session runs in task mode only"},
+		{"a cursor session in remote mode", func(s *v1alpha1.AgentSession) {
+			s.Spec.Agent, s.Spec.Model, s.Spec.Mode, s.Spec.Prompt = v1alpha1.AgentCursor, "grok-code-fast-1", v1alpha1.ModeRemote, ""
+		}, "a cursor session runs in task mode only"},
+		{"a cursor task with an effort", func(s *v1alpha1.AgentSession) {
+			s.Spec.Agent, s.Spec.Model, s.Spec.Effort = v1alpha1.AgentCursor, "grok-code-fast-1", "high"
+		}, "Cursor encodes effort in the model id"},
 		{"an LLM pool with an empty name", func(s *v1alpha1.AgentSession) {
 			s.Spec.Agent, s.Spec.Model = v1alpha1.AgentOpencode, "qwen3-coder-30b-a3b-instruct-q4_k_m"
 			s.Spec.LLM = &v1alpha1.LLMSpec{}

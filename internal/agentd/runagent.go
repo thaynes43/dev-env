@@ -124,6 +124,18 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	}
 	defer func() { _ = events.Close() }()
 	out := &lockedWriter{w: io.MultiWriter(pane, logf)}
+	if l.Provider == protocol.AgentCursor {
+		// DESIGN-058: the Cursor CLI updates itself by default. A launcher that
+		// no longer reports the pin fails the task with that reason, recorded
+		// like a start failure, and is never run.
+		if err := verifyCursorCLI(l); err != nil {
+			started := time.Now().UTC()
+			_, _ = fmt.Fprintf(out, "[agentd] task %s: %v\n", l.Session, err)
+			writeResult(stateDir, l, started, 1, false, streamResult{Subtype: "cli_version_mismatch", IsError: true}, false)
+			_, _ = fmt.Fprintf(out, "TASK-EXIT:%d\n", 1)
+			return 1
+		}
+	}
 
 	// Only native stdout enters the event parser. Stderr remains diagnostic,
 	// with bounded draining even when a child inherits the descriptor.
@@ -181,6 +193,7 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	registrationLaunch := l
 	taskTimeout := l.Timeout
 	codex := codexStream{capture: capture}
+	cursor := cursorStream{}
 	parseFailed := make(chan error, 1)
 	readDone := make(chan struct{})
 	go func() {
@@ -193,7 +206,8 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		for sc.Scan() {
 			line := sc.Bytes()
 			_, _ = events.Write(append(append([]byte(nil), line...), '\n'))
-			if l.Provider == protocol.AgentCodex {
+			switch l.Provider {
+			case protocol.AgentCodex:
 				if err := codex.line(line, launchPath, &l, out, &res); err != nil {
 					codex.failed = true
 					protocolRefused = true
@@ -201,7 +215,10 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 					_, _ = io.Copy(io.Discard, pr)
 					return
 				}
-			} else {
+			case protocol.AgentCursor:
+				cursor.line(line, out, &res)
+			default:
+				// Claude, including legacy launches that record no provider.
 				renderStreamLine(line, out, &res)
 				capture.claude(line)
 			}
@@ -335,6 +352,15 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	}
 	if l.Provider == protocol.AgentCodex && codex.failed && code == 0 {
 		code = 1
+	}
+	// DESIGN-058: Cursor may end its stream early without a result event when
+	// it fails. A stream with no result is a failed task, whatever the exit.
+	if l.Provider == protocol.AgentCursor && !cursor.result {
+		res.IsError, res.Subtype = true, "missing_result"
+		if code == 0 {
+			code = 1
+		}
+		_, _ = fmt.Fprintln(out, "[agentd] the Cursor stream ended without a result event, so the task failed")
 	}
 	// The exec stream names no served model; the thread's rollout does.
 	if l.Provider == protocol.AgentCodex && res.Seen && !protocolRefused && codex.thread && codex.terminal {
@@ -536,7 +562,9 @@ func writeResult(stateDir string, l Launch, started time.Time, code int, timedOu
 		source := *l.UsageSource
 		tr.ExitSource = &source
 	}
-	if res.Seen {
+	// Cursor reports no usage (DESIGN-058): its task result carries none, so
+	// no zero can read as a measured count or cost.
+	if res.Seen && l.Provider != protocol.AgentCursor {
 		u := res.Usage
 		tr.Usage = &u
 	}

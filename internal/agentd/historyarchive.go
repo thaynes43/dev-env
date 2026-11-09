@@ -152,8 +152,8 @@ func validateHistoryContent(c protocol.HistoryContent) error {
 		return bad("the Session's namespace, name or UID is not valid")
 	case !protocol.ValidHistoryProject(c.Project) || c.Project == protocol.HistoryNoProject:
 		return bad("project %q is not valid", c.Project)
-	case c.Provider != protocol.HistoryProviderClaude && c.Provider != protocol.HistoryProviderCodex:
-		return bad("provider %q is not claude or codex", c.Provider)
+	case c.Provider != protocol.HistoryProviderClaude && c.Provider != protocol.HistoryProviderCodex && c.Provider != protocol.HistoryProviderCursor:
+		return bad("provider %q is not claude, codex or cursor", c.Provider)
 	case !protocol.ValidKubeUID(c.HomeUID):
 		return bad("homeUID is not a UID")
 	case !protocol.ValidKubeUID(c.Terminal.PodUID) || (c.Terminal.Phase != "Succeeded" && c.Terminal.Phase != "Failed") || len(c.Terminal.Reason) > 128 || len(c.Terminal.NodeName) > 253 || c.Terminal.ObservedAt.IsZero():

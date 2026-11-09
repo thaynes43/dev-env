@@ -328,7 +328,8 @@ func TestTheOperatorSetsEveryReservedVariable(t *testing.T) {
 		}
 		for _, name := range templates.ReservedEnv {
 			e := envOf(pod.Spec.Containers[0], name)
-			if name == homeguard.Env || name == protocol.StartDeadlineEnv || name == "CLAUDE_CODE_OAUTH_TOKEN" && mode == v1alpha1.ModeRemote {
+			// The Cursor key goes to cursor pods only (DESIGN-058).
+			if name == homeguard.Env || name == protocol.StartDeadlineEnv || name == templates.CursorAPIKeyEnv || name == "CLAUDE_CODE_OAUTH_TOKEN" && mode == v1alpha1.ModeRemote {
 				if e != nil {
 					t.Errorf("%s: %s is set", mode, name)
 				}
@@ -338,6 +339,52 @@ func TestTheOperatorSetsEveryReservedVariable(t *testing.T) {
 				t.Errorf("%s: %s is not in the container's env, so an envFrom source could supply it", mode, name)
 			}
 		}
+	}
+}
+
+// DESIGN-058: a cursor pod gets CURSOR_API_KEY from the templates' reference
+// and no Claude token; Claude and Codex pods never get the Cursor key; without
+// the reference there is no cursor pod; a rescue pod gets no key.
+func TestCursorKeyGoesToCursorPodsOnly(t *testing.T) {
+	tmpl := exampleTemplates(t)
+	tmpl.Cursor = &templates.Cursor{APIKey: templates.SecretKey{Name: "dev-env-cursor", Key: "CURSOR_MEATBALL_KEY"}}
+	cursor := taskSession()
+	cursor.Spec.Agent, cursor.Spec.Model, cursor.Spec.Effort = v1alpha1.AgentCursor, "grok-code-fast-1", ""
+	cursor.Spec.Limits = &v1alpha1.SessionLimits{Timeout: &metav1.Duration{Duration: 40 * time.Minute}}
+	pod, err := buildPod(cursor, tmpl, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := envOf(pod.Spec.Containers[0], templates.CursorAPIKeyEnv)
+	if e == nil || e.Value != "" || e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil ||
+		e.ValueFrom.SecretKeyRef.Name != "dev-env-cursor" || e.ValueFrom.SecretKeyRef.Key != "CURSOR_MEATBALL_KEY" {
+		t.Fatalf("cursor pod key env %+v", e)
+	}
+	if envOf(pod.Spec.Containers[0], "CLAUDE_CODE_OAUTH_TOKEN") != nil {
+		t.Error("a cursor pod got the Claude static token")
+	}
+	codex := taskSession()
+	codex.Spec.Agent, codex.Spec.Model, codex.Spec.Effort = v1alpha1.AgentCodex, "gpt-6.1-sol", ""
+	codex.Spec.Limits.MaxTurns = 0
+	for _, s := range []*v1alpha1.AgentSession{taskSession(), codex} {
+		pod, err := buildPod(s, tmpl, "")
+		if err != nil {
+			t.Fatal(s.Spec.Agent, err)
+		}
+		if envOf(pod.Spec.Containers[0], templates.CursorAPIKeyEnv) != nil {
+			t.Errorf("a %s pod got the Cursor key", s.Spec.Agent)
+		}
+	}
+	hold, err := buildHoldPod(cursor, tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envOf(hold.Spec.Containers[0], templates.CursorAPIKeyEnv) != nil {
+		t.Error("a rescue pod got the Cursor key")
+	}
+	tmpl.Cursor = nil
+	if _, err := buildPod(cursor, tmpl, ""); err == nil || !strings.Contains(err.Error(), "cursor.apiKey") {
+		t.Fatal("a cursor pod was built without the templates' key reference", err)
 	}
 }
 

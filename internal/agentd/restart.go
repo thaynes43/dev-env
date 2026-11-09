@@ -22,12 +22,18 @@ func launchRestart(s Settings, session string) protocol.RestartReport {
 	if readJSONFile(s.statePath(launchFile), &first) != nil || first.ConversationID == "" {
 		return rep
 	}
-	if first.Provider == protocol.AgentCodex {
+	switch first.Provider {
+	case protocol.AgentCodex:
 		if !first.NativeThreadConfirmed || first.Session != session || !nativeThreadID.MatchString(first.ConversationID) {
 			return rep
 		}
-	} else if !transcriptWritten(s, first.ConversationID) {
+	case protocol.AgentCursor:
+		// A cursor task never resumes (DESIGN-058), so drain keeps its pod.
 		return rep
+	default:
+		if !transcriptWritten(s, first.ConversationID) {
+			return rep
+		}
 	}
 	rep.ConversationID, rep.Resumable = first.ConversationID, true
 	return rep

@@ -98,7 +98,16 @@ var ReservedEnv = []string{
 	// (DESIGN-001 6.1, 6.2), so only the operator places it: see Claude.
 	"CLAUDE_CODE_OAUTH_TOKEN",
 	WorkspaceIDEnv,
+	// The Cursor CLI's API key goes to cursor pods only, from the templates'
+	// cursor.apiKey reference (DESIGN-058). Like the HOME binding, it is
+	// omitted from every other pod to keep legacy Pod bytes, and agentd
+	// removes it from a Claude or Codex agent's environment.
+	CursorAPIKeyEnv,
 }
+
+// CursorAPIKeyEnv is the variable the Cursor CLI reads its API key from
+// (https://cursor.com/docs/cli/reference/authentication, DESIGN-058).
+const CursorAPIKeyEnv = "CURSOR_API_KEY"
 
 // WorkbenchServiceAccount is a non-default identity a profile may name
 // (DESIGN-001 6.11, D-46): the trusted client the operator already knows, exempt from
@@ -192,6 +201,10 @@ type Templates struct {
 
 	// Claude holds what the operator gives Claude sessions by mode.
 	Claude Claude `json:"claude"`
+
+	// Cursor enables cursor sessions (DESIGN-058). Absent, the API refuses a
+	// cursor session before any pod exists. It is configuration, not a flag.
+	Cursor *Cursor `json:"cursor,omitempty"`
 
 	// Lifecycle holds D-09's timers. Each one is optional, and a missing one
 	// takes D-09's default (D-60). A session's spec.lifecycle overrides them.
@@ -361,6 +374,13 @@ type Claude struct {
 	// only: remote pods run on the keeper's access token and must not have it
 	// (6.2).
 	StaticToken SecretKey `json:"staticToken"`
+}
+
+// Cursor holds what the operator gives cursor sessions.
+type Cursor struct {
+	// APIKey is the Secret key holding the Cursor API key. The operator sets
+	// it as CURSOR_API_KEY on pods whose agent is cursor, and on no other pod.
+	APIKey SecretKey `json:"apiKey"`
 }
 
 // SecretKey is one key of one Secret in the sessions' namespace.
@@ -549,6 +569,9 @@ func (t *Templates) Validate() error {
 	}
 	if t.Claude.StaticToken.Name == "" || t.Claude.StaticToken.Key == "" {
 		add("claude.staticToken needs a name and a key")
+	}
+	if t.Cursor != nil && (t.Cursor.APIKey.Name == "" || t.Cursor.APIKey.Key == "") {
+		add("cursor.apiKey needs a name and a key")
 	}
 
 	names := map[string]string{}

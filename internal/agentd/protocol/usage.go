@@ -138,7 +138,7 @@ func UsageObservationID(source UsageSource) string {
 
 func (s UsageSource) Valid() bool {
 	return ValidTaskBudgetIdentifier(s.SessionUID) && ValidTaskBudgetIdentifier(s.PodUID) &&
-		(s.Provider == AgentClaude || s.Provider == AgentCodex) && s.RequestedModel != "" && len(s.RequestedModel) <= 256 &&
+		(s.Provider == AgentClaude || s.Provider == AgentCodex || s.Provider == AgentCursor) && s.RequestedModel != "" && len(s.RequestedModel) <= 256 &&
 		usageDigest.MatchString(s.AttemptID)
 }
 
@@ -152,7 +152,9 @@ func (m CostObservation) Valid() bool {
 }
 
 func (m ModelUsage) Valid(provider string) bool {
-	return ValidUsageModelID(m.Model) && m.InputTokens.Valid() && m.OutputTokens.Valid() && m.CacheReadInputTokens.Valid() && m.CacheCreationInputTokens.Valid() && m.Cost.Valid() &&
+	// Cursor's stream reports no served model (DESIGN-058), so a Cursor
+	// observation lists none.
+	return provider != AgentCursor && ValidUsageModelID(m.Model) && m.InputTokens.Valid() && m.OutputTokens.Valid() && m.CacheReadInputTokens.Valid() && m.CacheCreationInputTokens.Valid() && m.Cost.Valid() &&
 		(provider != AgentCodex || m.Cost.State == UsageUnknown)
 }
 
@@ -175,6 +177,7 @@ func (u UsageObservation) Validate() error {
 		u.Coverage != UsageInitial || u.CounterSemantics != UsageFinalTotal || (u.ResultState != "Final" && u.ResultState != "Partial") ||
 		!u.InputTokens.Valid() || !u.OutputTokens.Valid() || !u.CacheReadInputTokens.Valid() || !u.CacheCreationInputTokens.Valid() || !u.Cost.Valid() ||
 		(u.Source.Provider == AgentCodex && u.Cost.State != UsageUnknown) ||
+		(u.Source.Provider == AgentCursor && !u.allUnknown()) ||
 		u.AggregationScope != UsageUnknown || u.SubscriptionQuotaState != UsageUnknown || u.APIBillingState != UsageUnknown || u.LocalResourceState != UsageUnknown {
 		return errors.New("initial usage observation is unconfirmed")
 	}
@@ -190,6 +193,17 @@ func (u UsageObservation) Validate() error {
 		return errors.New("initial usage task binding is unconfirmed")
 	}
 	return nil
+}
+
+// allUnknown reports that no metric, cost or served model is asserted: what a
+// Cursor observation must be, because its stream reports none (DESIGN-058).
+func (u UsageObservation) allUnknown() bool {
+	for _, m := range []TokenObservation{u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens} {
+		if m.State != UsageUnknown {
+			return false
+		}
+	}
+	return u.Cost.State == UsageUnknown && u.ActualModelState == UsageUnknown && len(u.ServedModels) == 0
 }
 
 // UnknownUsage is a version 2 observation with every metric Unknown. Parsers

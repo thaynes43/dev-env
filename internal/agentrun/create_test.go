@@ -200,7 +200,17 @@ func TestCreateUsageErrors(t *testing.T) {
 		{"xhigh on 4.6", []string{"--repo", "r", "-p", "t", "--model", "claude-opus-4-6", "--effort", "xhigh"}, "model claude-opus-4-6 takes low, medium, high, max"},
 		{"ultracode on 4.6", []string{"--repo", "r", "-p", "t", "--model", "claude-opus-4-6", "--effort", "ultracode"}, "takes low, medium, high, max"},
 		{"a made-up level", []string{"--repo", "r", "-p", "t", "--effort", "ultra"}, "takes low, medium, high, xhigh, max or ultracode"},
-		{"unknown agent", []string{"--repo", "r", "-p", "t", "--agent", "gemini"}, `--agent is claude, codex or opencode, not "gemini"`},
+		{"unknown agent", []string{"--repo", "r", "-p", "t", "--agent", "gemini"}, `--agent is claude, codex, cursor or opencode, not "gemini"`},
+		// DESIGN-058: a cursor task needs --model and --project, takes no
+		// effort or turn cap, and is never a TUI.
+		{"cursor without a model", []string{"--project", "dev-env", "-p", "t", "--agent", "cursor"}, "--agent cursor needs --model: a Cursor model id"},
+		{"cursor with a flag for a model", []string{"--project", "dev-env", "-p", "t", "--agent", "cursor", "--model", "-yolo"}, "not a Cursor model id"},
+		{"cursor with a spaced model", []string{"--project", "dev-env", "-p", "t", "--agent", "cursor", "--model", "gpt 5"}, "not a Cursor model id"},
+		{"cursor with an effort", []string{"--project", "dev-env", "-p", "t", "--agent", "cursor", "--model", "grok-code-fast-1", "--effort", "high"}, "--effort: a cursor session takes no effort: Cursor encodes effort in the model id"},
+		{"cursor with a turn cap", []string{"--project", "dev-env", "-p", "t", "--agent", "cursor", "--model", "grok-code-fast-1", "--max-turns", "3"}, "the Cursor CLI has no max-turns flag"},
+		{"cursor without a project", []string{"--repo", "r", "-p", "t", "--agent", "cursor", "--model", "grok-code-fast-1"}, "--agent cursor needs --project <name>"},
+		{"cursor --local", []string{"--project", "dev-env", "--local", "--agent", "cursor", "--model", "grok-code-fast-1"}, "a cursor session runs in task mode only (-p); --local and --interactive are not built for Cursor"},
+		{"cursor --interactive", []string{"--repo", "r", "--interactive", "--agent", "cursor", "--model", "grok-code-fast-1"}, "a cursor session runs in task mode only"},
 		{"codex without a model", []string{"--repo", "r", "-p", "t", "--agent", "codex"}, "--agent codex needs --model"},
 		{"bad size", []string{"--repo", "r", "-p", "t", "--size", "XL"}, `--size is S, M or L, not "XL"`},
 		{"bad timeout", []string{"--repo", "r", "-p", "t", "--timeout", "forever"}, `--timeout "forever" is not a positive duration`},
@@ -228,6 +238,17 @@ func TestCreateUsageErrors(t *testing.T) {
 				t.Errorf("sent %d requests, want none", n)
 			}
 		})
+	}
+}
+
+// A cursor task sends its Cursor model id as given, with no effort.
+func TestCreateCursorTask(t *testing.T) {
+	h := newHarness(t)
+	serveCreate(h, runningOn(testSession(name, ""), "talosw02"))
+	h.mustRun(ExitOK, "--project", "dev-env", "-p", "t", "--agent", "cursor", "--model", "grok-code-fast-1", "--wait", "0")
+	req := decodeCreate(t, h.api.requests()[0].body)
+	if req.Agent != "cursor" || req.Model != "grok-code-fast-1" || req.Effort != "" || req.Mode != "task" || req.Project != "dev-env" {
+		t.Errorf("request %+v", req)
 	}
 }
 

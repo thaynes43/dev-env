@@ -63,6 +63,7 @@ spec:
                   enum:
                   - claude
                   - codex
+                  - cursor
                   - opencode
                   type: string
                 maxItems: 3
@@ -87,6 +88,7 @@ spec:
                       enum:
                       - claude
                       - codex
+                      - cursor
                       - opencode
                       type: string
                     maxItems: 3
@@ -164,6 +166,7 @@ spec:
                       enum:
                       - claude
                       - codex
+                      - cursor
                       - opencode
                       type: string
                     maxItems: 3
