@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.93.0](https://github.com/thaynes43/dev-env/compare/v2.92.1...v2.93.0) (2026-11-09)
+
+
+### Features
+
+* **agentd:** disabled local Cursor answer task integration (frozen Studio packet) ([#993](https://github.com/thaynes43/dev-env/issues/993)) ([b880397](https://github.com/thaynes43/dev-env/commit/b88039709489af8735b65388c53cb84b3e20a922))
+* **delegatedresult:** pure delegated-result codec (frozen Studio slice) ([#995](https://github.com/thaynes43/dev-env/issues/995)) ([1f6c01a](https://github.com/thaynes43/dev-env/commit/1f6c01aae636f3953895ed820b1e8b6e4b43f633))
+* **release:** ship agent-run binaries with each release; hint --project for Codex tasks ([#994](https://github.com/thaynes43/dev-env/issues/994)) ([9b285cc](https://github.com/thaynes43/dev-env/commit/9b285cc773ad8372889625a5f0b9c7e5d6eed9db))
+
+
+### Bug Fixes
+
+* **operator:** bound Event notes to the API limit ([#991](https://github.com/thaynes43/dev-env/issues/991)) ([9a37227](https://github.com/thaynes43/dev-env/commit/9a37227f042afe32f0a35ff34fb8e84458b9f8ca))
+
 ## [2.92.1](https://github.com/thaynes43/dev-env/compare/v2.92.0...v2.92.1) (2026-11-08)
 
 
