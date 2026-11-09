@@ -50,9 +50,13 @@ Cursor model id; it is not a separate provider.
    at boot into `~/.local/share/cursor-agent/versions/<version>/` on the
    session volume, Cursor's own layout and v1's. It downloads over https
    only, checks the SHA-256 before it unpacks anything, unpacks in a staging
-   directory (regular files, directories and relative in-package symlinks;
-   nothing written through a symlink), checks that the launcher prints the
-   pinned version, then moves it into place. A mismatch, an unsafe archive or
+   directory (regular files, directories and relative symlinks that resolve
+   inside the package, chains included; nothing written through a symlink),
+   checks that the launcher prints the pinned version, then moves it into
+   place. A staging directory left by an interrupted install is removed
+   before a retry. Every version check runs with the cursor agent's scrubbed
+   environment and no API key, keeps at most 4 KiB of output, and kills the
+   launcher's process group on timeout. A mismatch, an unsafe archive or
    an unexpected install at the pinned path fails the boot with that reason,
    before any launch record exists. An unexpected install is kept for
    inspection, never replaced.
@@ -79,8 +83,9 @@ Cursor model id; it is not a separate provider.
    and the task's saved project rules. The platform's task guard follows, as
    Claude gets it in its system prompt. Then the task.
 9. **agent-run.** `--agent cursor` needs `--model` and `--project`. The model
-   is checked for shape only: printable, no space or quote, starts with a
-   letter or digit, at most 128 bytes. `--effort` and `--max-turns` are
+   is checked for shape only: letters, digits and `. _ : / -`, starting with
+   a letter or digit, at most 128 bytes (a subset of the inbox's model
+   pattern). `--effort` and `--max-turns` are
    refused. `--local` and `--interactive` are refused.
 10. **Rights.** A cursor session's pod runs as `dev-env-agent` on its
     profile, like any task. Its API token has the same caller class and
