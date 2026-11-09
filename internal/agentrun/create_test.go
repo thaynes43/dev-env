@@ -563,3 +563,35 @@ func TestCreateCoordinatorInstructionsRejectsUnsupportedLaunch(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateCodexWithoutProjectHintsAtProject(t *testing.T) {
+	refusal := "managed codex tasks require the enabled feature and an accepted project snapshot"
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		wantHint bool
+	}{
+		{"codex repo without project", []string{"--repo", "haynes-ops", "-p", "task", "--agent", "codex", "--model", "gpt-6.1-sol"}, true},
+		{"codex with project", []string{"--repo", "haynes-ops", "--project", "sample", "-p", "task", "--agent", "codex", "--model", "gpt-6.1-sol"}, false},
+		{"claude repo without project", []string{"--repo", "haynes-ops", "-p", "task"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+				if r.Method != http.MethodPost || r.URL.Path != apiv1.SessionsPath {
+					t.Fatal("refusal sent an unrelated request")
+				}
+				apiError(w, http.StatusUnprocessableEntity, apiv1.CodeInvalid, "invalid request", apiv1.FieldError{Field: "agent", Message: refusal})
+			}
+			h.mustRun(ExitFailed, tc.args...)
+			if len(h.api.requests()) != 1 {
+				t.Fatal("client retried a refusal")
+			}
+			contains(t, "stderr", h.stderr.String(), refusal)
+			hint := "--project haynes-ops"
+			if got := strings.Contains(h.stderr.String(), hint); got != tc.wantHint {
+				t.Fatalf("hint %q present = %v, want %v; stderr:\n%s", hint, got, tc.wantHint, h.stderr.String())
+			}
+		})
+	}
+}
