@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -526,22 +527,22 @@ func TestHistoryExportRefusesUnexpectedEntries(t *testing.T) {
 			}
 		},
 		"a socket in projects": func(t *testing.T, r *historyRig) {
-			// A socket path must be short, so bind it in a short directory
-			// and move it into the tree.
+			// The tree's path is too long for a socket (108 bytes) when
+			// GOTMPDIR puts it under HOME, and a socket cannot be renamed
+			// across file systems from a short /tmp directory. Bind through
+			// the open directory's /proc/self/fd path, which is short and
+			// creates the socket inode inside the tree.
 			r.mkdir(t, ".claude/projects/s")
-			short, err := os.MkdirTemp("", "h4")
+			dir, err := os.Open(r.path(".claude/projects/s"))
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = os.RemoveAll(short) })
-			l, err := net.Listen("unix", filepath.Join(short, "s"))
+			t.Cleanup(func() { _ = dir.Close() })
+			l, err := net.Listen("unix", fmt.Sprintf("/proc/self/fd/%d/sock", dir.Fd()))
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = l.Close() })
-			if err := os.Rename(filepath.Join(short, "s"), r.path(".claude/projects/s/sock")); err != nil {
-				t.Fatal(err)
-			}
 		},
 		"history of the wrong kind": func(t *testing.T, r *historyRig) {
 			if err := os.RemoveAll(r.path(".claude/jobs")); err != nil {

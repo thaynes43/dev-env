@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 // A finite inert Unix listener exercises the actual peer credential and native
@@ -28,7 +30,7 @@ func TestNativeReadinessPeerAndVersion(t *testing.T) {
 		{"wrong-peer", PinnedNativeVersion, true, false, "peer-identity-refused"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "control.sock")
+			path := filepath.Join(testsock.ShortDir(t, "rd"), "control.sock")
 			listener, err := net.Listen("unix", path)
 			if err != nil {
 				t.Fatal(err)
@@ -182,7 +184,7 @@ func TestNativeReadinessCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
-	if probeNative(ctx, filepath.Join(t.TempDir(), "absent.sock"), root, PinnedNativeVersion) == nil || time.Since(start) > 100*time.Millisecond {
+	if probeNative(ctx, filepath.Join(testsock.ShortDir(t, "rd"), "absent.sock"), root, PinnedNativeVersion) == nil || time.Since(start) > 100*time.Millisecond {
 		t.Fatal("canceled readiness did not refuse promptly")
 	}
 }

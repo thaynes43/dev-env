@@ -17,6 +17,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/codexauth"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 // The terminal worker reads only the synthetic recorded answer. The run-agent
@@ -208,7 +209,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens
 	serveDecisionAuthority(t, &s, *answered.Decision)
 	self := fakeCLI(t, t.TempDir(), `exec /usr/bin/env DECISION_JOURNEY_STAGE=run-agent DECISION_JOURNEY_LAUNCH="$3" "$DECISION_JOURNEY_TESTBIN" -test.run=^TestDecisionActualHeadlessToOwnedTTYJourney$
 `)
-	socket := filepath.Join(s.Home, "decision-tmux.sock")
+	socket := filepath.Join(testsock.ShortDir(t, "dj"), "decision-tmux.sock")
 	base := []string{}
 	for key, value := range env {
 		base = append(base, key+"="+value)

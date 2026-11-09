@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 func TestProbeRefusalCodesNeverGrantEvidence(t *testing.T) {
@@ -54,12 +56,7 @@ func TestProbeEvidenceAuthenticatedResponseFailures(t *testing.T) {
 		{"finite-read-deadline", true, "", true, ProbeRefusedResponseTimeout},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir, err := os.MkdirTemp("", "evidence-response-")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = os.RemoveAll(dir) }()
-			path := filepath.Join(dir, "guard.sock")
+			path := filepath.Join(testsock.ShortDir(t, "ev"), "guard.sock")
 			listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 			if err != nil {
 				t.Fatal(err)
@@ -308,7 +305,7 @@ func TestProbeEvidenceRetainsSpecificRefusal(t *testing.T) {
 		{"socket-connect", os.Getpid(), strings.Repeat("a", 64), ProbeRefusedConnect},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ProbeEvidence(ctx, filepath.Join(t.TempDir(), "absent.sock"), tc.anchor, b, tc.challenge)
+			_, err := ProbeEvidence(ctx, filepath.Join(testsock.ShortDir(t, "ev"), "absent.sock"), tc.anchor, b, tc.challenge)
 			if err == nil || ProbeRefusalExit(err) != tc.want {
 				t.Fatalf("refusal=%d err=%v", ProbeRefusalExit(err), err)
 			}

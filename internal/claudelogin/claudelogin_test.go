@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 const goodLink = "https://claude.com/cai/oauth/authorize?client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&state=s&code_challenge=c"
@@ -75,11 +77,7 @@ func TestEnvironmentInheritsNothing(t *testing.T) {
 }
 
 func TestControlRefusesUnknownCodesAndOversizeAnswers(t *testing.T) {
-	dir, err := os.MkdirTemp("", "cc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.RemoveAll(dir) }()
+	dir := testsock.ShortDir(t, "cc")
 	l, err := net.Listen("unix", filepath.Join(dir, ControlSocket))
 	if err != nil {
 		t.Fatal(err)

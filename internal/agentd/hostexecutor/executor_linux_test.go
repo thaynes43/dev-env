@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 // TestMain supplies inert foreground, intermediate and leaf processes. The
@@ -148,10 +150,10 @@ func (g fixtureGate) Observe(context.Context, Binding) (bool, error) {
 }
 func config(t *testing.T) Config {
 	t.Helper()
-	home := t.TempDir()
-	if err := os.Chmod(home, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	// The rc socket and the evidence socket (beside the receipt) live in HOME,
+	// and validate requires the rc socket inside HOME. A HOME under t.TempDir
+	// passes the 108-byte sun_path limit when GOTMPDIR is set, so use a short one.
+	home := testsock.ShortDir(t, "he")
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

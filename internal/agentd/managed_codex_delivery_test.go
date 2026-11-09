@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 func saveManagedDelivery(t *testing.T, s Settings) protocol.Session {
@@ -144,7 +145,7 @@ func TestManagedCodexDeliveryActualTTY(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess := saveManagedDelivery(t, s)
-	socket, receipt := filepath.Join(home, "tmux.sock"), filepath.Join(home, "input.receipt")
+	socket, receipt := filepath.Join(testsock.ShortDir(t, "mc"), "tmux.sock"), filepath.Join(home, "input.receipt")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	start := exec.CommandContext(ctx, s.TmuxBin, "-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", TmuxSession,

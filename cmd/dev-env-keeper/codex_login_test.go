@@ -10,6 +10,9 @@ import (
 )
 
 func TestCodexAuthDefaultsAndExplicitPrerequisites(t *testing.T) {
+	// The rejected --secret-namespace=dev-env-system case relies on the keeper's own
+	// namespace defaulting to dev-env-system; a session pod sets POD_NAMESPACE.
+	t.Setenv("POD_NAMESPACE", "")
 	o, err := parseFlags(nil)
 	if err != nil || o.codexAuth.Enabled {
 		t.Fatal("Codex auth enabled by default")
@@ -75,6 +78,9 @@ func TestCodexRefreshOnceRequiresPositiveExpectedGenerationBeforeControl(t *test
 }
 
 func TestClaudeAuthDefaultsAndExplicitPrerequisites(t *testing.T) {
+	// The rejected --secret-namespace=dev-env-system case relies on the keeper's own
+	// namespace defaulting to dev-env-system; a session pod sets POD_NAMESPACE.
+	t.Setenv("POD_NAMESPACE", "")
 	o, err := parseFlags(nil)
 	if err != nil || o.claudeAuth.Enabled {
 		t.Fatal("Claude auth enabled by default")

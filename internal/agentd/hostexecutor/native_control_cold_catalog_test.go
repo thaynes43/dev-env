@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 // Opt-in regression: real pinned native, frozen public config/rules,
@@ -85,7 +86,7 @@ func TestPinnedNativeColdCatalogFallbackWithinOwnerBound(t *testing.T) {
 	if e = os.WriteFile(filepath.Join(ch, "auth.json"), auth, 0600); e != nil {
 		t.Fatal(e)
 	}
-	socket := filepath.Join(home, "n.sock")
+	socket := filepath.Join(testsock.ShortDir(t, "nc"), "n.sock")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cmd := nativeCommand(Config{NativeBinary: binary, Home: home, SocketPath: socket})

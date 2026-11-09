@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/testsock"
 )
 
 // Actual Unix credentials/WebSocket protocol, inert local server only: no CLI,
@@ -24,7 +25,7 @@ import (
 func TestOwnerNativeProtocolAndLostAcknowledgement(t *testing.T) {
 	for _, scenario := range []string{"start", "resume", "history", "turn", "interrupt", "lost-ack", "wrong-thread", "wrong-peer", "wrong-version", "cancel", "server-request", "oversize", "rpc-rejected", "rpc-timeout", "original-deadline", "cancel-after-dispatch"} {
 		t.Run(scenario, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "n.sock")
+			path := filepath.Join(testsock.ShortDir(t, "nc"), "n.sock")
 			listener, err := net.Listen("unix", path)
 			if err != nil {
 				t.Fatal(err)
