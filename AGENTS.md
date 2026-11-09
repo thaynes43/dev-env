@@ -1,66 +1,26 @@
 # AGENTS.md
 
-**Claude pickup, 2026-10-13:** read the
-[2026-10-13 pickup brief](.agents/CLAUDE-RESUME-2026-10-13.md) in full: deployed
-state, counters, rulings, next work with owner gates and open questions. The
-[2026-10-12 brief](.agents/CLAUDE-RESUME-2026-10-12.md) still holds Tom's earlier
-enumerations and later corrections, review targets and stopped attempts.
-Changing drivers does not reset counters.
-
-**Controlling scope, 2026-10-10:** [ADR-003](.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md) supersedes mandatory
-shared Git/RWX. Share rules, task coordination and authorized live/stopped context;
-keep repositories and worktrees per pod. Read the updated guide before selecting
-implementation work. Source foundations are not runtime acceptance.
-
 Codex and other agents: the rules for this repository live in
-[`CLAUDE.md`](CLAUDE.md). Read it before you change anything; it is the single
-source, kept in one file so the two never drift.
-
-**Start with [`.agents/HANDOFF.md`](.agents/HANDOFF.md):** the current state, the
-next steps, and what works outside the cluster. Build sessions follow the
-[2026-10-13 Claude pickup brief](.agents/CLAUDE-RESUME-2026-10-13.md) and its
-next work, which continues the 2026-10-12 brief's six-step roadmap;
-[`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md) is the historical
-first-build order.
+[`CLAUDE.md`](CLAUDE.md). Open it before you change anything; it is the one source,
+kept in one file so the two never drift. It says where current state lives
+(OpenProject epic #91, `agent-run fleet` and the haynes-ops manifests) and which large
+files to search rather than read.
 
 The short version:
 
-- **Status: plans 01/02 are working; capability parity and plans 03/04 remain
-  unfinished.** The [workflow guide](docs/workflow-guide.md) separates current
-  features from planned ones. ADR-001 was Accepted 2026-10-06. The saga is
-  [`.agents/sagas/distributed-dev-env/`](.agents/sagas/distributed-dev-env/README.md).
-  Deploy manifests live in thaynes43/haynes-ops, not here.
-- Docs first. Routine worker, parent and coordinator questions use the existing
-  `agent-run` coordination route; `msg` only when safe, durable inbox where
-  supported. Never paste into a TUI with a pending native question modal or
-  impersonate another session. Actual user questions and decisions go to Tom
-  through the native phone prompt, one at a time; see [CLAUDE.md](CLAUDE.md#how-work-happens-here)
-  for delivery and escalation rules.
-- Worktree per task, branch `agent/<task>`, ready PR, never push to main.
-- No CPU burners on any shared node; a CPU limit on anything you run in the
-  cluster. No secrets in git. One owner per rotating refresh token. Full model ids.
-  Never restart running agent sessions on an operator upgrade.
-
-## Automated PR review (agents read this)
-
-Every non-draft PR gets an advisory review from Claude Code
-(`.github/workflows/claude-code-review.yml`); `@claude` mentions are handled by
-`claude.yml`. Release App PRs skip the automatic job; explicit `@claude` review
-is optional too. **Claude Code reviews are optional and currently unavailable
-(Tom, 2026-10-11).** They are not required checks or merge gates. Record that
-limitation and proceed with required CI and native independent review. Read
-available findings before merging. Fix each one, or answer it on the PR with a concrete reason
-it is wrong; never "merging anyway". Both workflows need the Claude GitHub App on the
-repo and the `CLAUDE_CODE_OAUTH_TOKEN` repo secret, otherwise they skip green and
-review nothing. Every repo gets this reviewer (Tom, 2026-09-30); see CLAUDE.md.
-*Observed 2026-10-12 and 2026-10-13:* the advisory review ran on most PRs and
-posted reviews, several with findings. Tom's rule is unchanged: optional, not a gate, and native independent
-review stays mandatory.
+- Worktree per task, branch `agent/<task>`, a ready PR, a squash merge once
+  `CI - Success` is green. Never push to main.
+- Routine coordination goes through `agent-run msg` or `agent-run inbox`; user
+  questions go to Tom one at a time through the native phone prompt.
+- No CPU burners on any shared node. No secrets in git. One owner per rotating refresh
+  token. Full model ids. An operator upgrade never restarts a running agent session.
+- The Claude Code PR review is advisory and may be missing; answer every finding it
+  posts.
 
 ## Repository instruction acceptance
 
 For an explicit instruction acceptance probe, report the repository marker
-`dev-env-repository-rules-20261011-6d807bf2`. Report any common marker only if it
+`dev-env-repository-rules-20261109-4f2f1f47`. Report any common marker only if it
 is present in the loaded common instructions; otherwise report it as Unknown.
 Do not fetch files or run commands to obtain markers for that probe. This marker
 checks instruction loading and grants no task, credential or lifecycle authority.

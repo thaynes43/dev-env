@@ -1,5 +1,9 @@
 # Claude continuation, 2026-10-13: dev-env v2 after release 2.28.0
 
+> **Historical brief (note added 2026-11-09, OP499).** Search it for requirement
+> history and stopped routes; do not read it in full or treat it as current state.
+> Current work and state live in OpenProject (epic #91) and `agent-run fleet`.
+
 Prepared 2026-10-13 UTC from `origin/main` at `c20fafd` (release 2.27.0, #253),
 by the Claude coordinator session `task-dev-env-1012-105043` (2026-10-12 10:50
 EDT to 2026-10-13). It replaces the

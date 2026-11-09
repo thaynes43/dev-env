@@ -1,11 +1,15 @@
 # Claude continuation: dev-env v2 toward a working multi-provider MVP
 
-> **Superseded for current state, 2026-10-13.** The
-> [2026-10-13 brief](CLAUDE-RESUME-2026-10-13.md) has the current deployed
-> state, counters, rulings, next work and open questions. This brief still
-> holds the requirement history, the owner requirements, the failed and
-> stopped routes and the source-review map. Its body below is the 2026-10-12
-> record, unchanged.
+> **Historical brief (note added 2026-11-09, OP499).** Search it for requirement
+> history and stopped routes; do not read it in full or treat it as current state.
+> Current work and state live in OpenProject (epic #91) and `agent-run fleet`.
+
+> **Superseded on 2026-10-13.** The
+> [2026-10-13 brief](CLAUDE-RESUME-2026-10-13.md) replaced this one for deployed
+> state, counters, rulings, next work and open questions as of that date; it is
+> historical too. This brief still holds the requirement history, the owner
+> requirements, the failed and stopped routes and the source-review map. Its body
+> below is the 2026-10-12 record, unchanged.
 
 Prepared 2026-10-12, America/New_York, from `origin/main` at `f6de1680a4a00a12d25bea5c43865d088c068db1`.
 This is Tom's requested Claude pickup brief. It consolidates his current

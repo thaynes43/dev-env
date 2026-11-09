@@ -82,12 +82,12 @@ check-maintenance-policy: ## Compile/evaluate the UNAPPLIED executor packet with
 	$(NICE) python3 scripts/check_maintenance_policy.py
 
 .PHONY: check-layout
-check-layout: ## Fail if a Go package under api/, cmd/, internal/ or scripts/ has no line in CLAUDE.md's Layout.
-	@layout="$$(awk '/^## Layout/ {in_section = 1} in_section && /^```/ {fence++; if (fence == 2) exit; next} fence == 1' CLAUDE.md)"; \
+check-layout: ## Fail if a Go package under api/, cmd/, internal/ or scripts/ has no line in docs/repo-layout.md.
+	@layout="$$(awk '/^## Layout/ {in_section = 1} in_section && /^```/ {fence++; if (fence == 2) exit; next} fence == 1' docs/repo-layout.md)"; \
 	missing=0; \
 	for dir in $$(find api cmd internal scripts -name '*.go' -not -path '*/testdata/*' -exec dirname {} \; | sort -u); do \
 		if ! grep -q "^$$dir/ " <<<"$$layout"; then \
-			echo "CLAUDE.md Layout has no line for $$dir/"; missing=1; \
+			echo "docs/repo-layout.md has no line for $$dir/"; missing=1; \
 		fi; \
 	done; \
 	exit $$missing
