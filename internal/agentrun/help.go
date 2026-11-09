@@ -443,7 +443,8 @@ Flags:
   --profile <name>           a profile in dev-env-templates (default: the templates'
                              default). A session's child runs on its parent's; a
                              workbench session's child runs on the one it names, or
-                             the default, so name workbench to keep it
+                             the default, so name workbench to keep it. A Codex
+                             host a workbench session starts takes no profile
   --timeout <duration>       stop the task after this long, such as 40m (tasks only)
   --max-turns <n>            stop the task after this many turns (tasks only)
   --idempotency-key <key>    a repeat of the same request with the same key returns

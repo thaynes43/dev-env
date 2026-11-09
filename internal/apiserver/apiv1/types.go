@@ -156,7 +156,8 @@ type CreateSessionRequest struct {
 	Size string `json:"size,omitempty"`
 	// Profile is a profile in dev-env-templates. Empty means the templates'
 	// default; a session's child runs on its parent's profile, except that a
-	// workbench session's child runs on the one it names, or the default.
+	// workbench session's child runs on the one it names, or the default. A
+	// Codex remote host a workbench session starts names none.
 	Profile string `json:"profile,omitempty"`
 	// Tools are tool pools (plan 08). Plan 01 refuses a non-empty list.
 	Tools []string `json:"tools,omitempty"`

@@ -231,6 +231,20 @@ func TestCreateScheduledSessionAsTheOwnersChild(t *testing.T) {
 			t.Errorf("child: parent %q depth %q profile %q", s.Spec.Parent, s.Labels[v1alpha1.LabelDepth], s.Spec.Profile)
 		}
 	})
+	// OP502: a workbench owner's child runs on the profile the request names,
+	// as the owner's own create would, not on the workbench profile.
+	t.Run("a workbench owner's child", func(t *testing.T) {
+		f := newFixture(t)
+		workbenchSessionToken(t, f, "owner")
+		name, _, _, err := f.srv.CreateScheduledSession(ctx, swRequest(), owned(f, "owner"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := f.session(name)
+		if s.Spec.Parent != "owner" || s.Labels[v1alpha1.LabelDepth] != "1" || s.Spec.Profile != "dev" {
+			t.Errorf("child: parent %q depth %q profile %q", s.Spec.Parent, s.Labels[v1alpha1.LabelDepth], s.Spec.Profile)
+		}
+	})
 	t.Run("another profile than the owner's", func(t *testing.T) {
 		f := newFixture(t)
 		f.sessionPod("owner", "ops", 0)

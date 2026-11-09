@@ -197,6 +197,10 @@ occurrence ("no template digest to match the decision against"): a source that
 cannot name its template's content is a defect, not an edit, and two empty
 digests never match. `Sources` keeps no state between calls. A session owner's child runs on the owner's profile, so a
 template that admits `session` dispatches only for owners on the profile it names.
+*(2026-11-09, OP502: a workbench owner is the exception. Its child runs on the
+profile the template names, so such a template dispatches for a workbench owner
+on that profile. See DESIGN-001, "D-19 and D-46, workbench workers on the default
+profile".)*
 
 **RBAC the executor needs (S6).** Read from haynes-ops `main`
 (`kubernetes/main/apps/dev-env-system/rbac/app/operator.yaml`, last changed

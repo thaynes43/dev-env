@@ -3516,7 +3516,9 @@ model-driven session; keep the profile to Tom's ceremony sessions. It does not s
 to a client: the API treats a workbench token bound to a session's pod as that
 session (child, depth and profile limits apply), and the account cannot mint a token
 (no `serviceaccounts/token`), so an unbound client token is unreachable from a pod. A
-workbench session's children inherit the profile (up to the usual four). Open
+workbench session's children inherit the profile (up to the usual four).
+*(Replaced 2026-11-09, OP502: see "D-19 and D-46, workbench workers on the
+default profile" below.)* Open
 hardening, not built: a Kyverno rule on the caller's pod-name claim to limit what a
 workbench pod may exec into. Every other profile keeps `dev-env-agent` and D-19 as
 written.
@@ -3531,7 +3533,8 @@ a workbench session can exec into pods in every namespace, the keeper's
 included, as the v1 pod can. `dev-env-workbench-admin-guard` still limits its
 workload patches to the restart annotation. The profile is also no longer kept
 to ceremony sessions: the operator's standby runs on it, and children inherit
-it (CR-1020 review F1). This is parity under Q-16, recorded by the coordinator,
+it (CR-1020 review F1). *(Children no longer inherit it since 2026-11-09, OP502:
+see the next section.)* This is parity under Q-16, recorded by the coordinator,
 not ruled by Tom. The earlier condition that exec into the keeper stay
 impossible is not met. A fence around `dev-env-system` (review F2) would reduce
 today's parity rights; it is held for Tom's decision and is not a cutover
@@ -5841,7 +5844,7 @@ blocks only the step it names.
 | D-43 | `agentd ctl rescue` keeps v1's rules but commits through a copy of the index, leaving the worktree as it was, and prints the refs origin lacks for step 5's bundle | 3.6 |
 | D-44 | The operator builds one bare pod and one volume per session from `dev-env-templates` (strict format, revision = hash of the parsed content), places it per D-20 in code, and never updates or deletes either; no probes, 60 s grace, `Outdated` reported for plan 04 | 3.6 |
 | D-45 | Deleting an `AgentSession` is a reap: a finalizer on the session and its volume holds both until rescue; one guarded function deletes pods (Draining, or Suspended after rescue); `RemovalBlocked` reports the wait | 5.1 |
-| D-46 | The `/v1` API of plan 01: HTTPS on 8443 on every replica; TokenReview per request; callers by class (human, client, session; the v1 pod a client until cutover); create checks what only the API knows and leaves the schema and agentd their own rules; idempotency by label per parent; children bounded by count, depth and the parent's profile; reap is a delete held by the rescue finalizer; heartbeat merged into `status.agent` | 3.4 |
+| D-46 | The `/v1` API of plan 01: HTTPS on 8443 on every replica; TokenReview per request; callers by class (human, client, session; the v1 pod a client until cutover); create checks what only the API knows and leaves the schema and agentd their own rules; idempotency by label per parent; children bounded by count, depth and the parent's profile (a workbench session's child excepted since 2026-11-09, OP502); reap is a delete held by the rescue finalizer; heartbeat merged into `status.agent` | 3.4 |
 | D-47 | The `dev-agents` CPU and memory ceiling is a Kyverno policy, not a LimitRange, because a LimitRange fills every unset limit with its default, so the "no CPU limit" rule could never fire | 7.2 |
 | D-48 | `agentd ctl rescue` writes one bundle per clone of its unpushed refs, thin against `origin/HEAD`, to `rescue/<session>/<stamp>/` on the shared volume with `manifest.json` last; it checks each bundle there before it reports `ok`; `--stop-agent` stops the CLI first | 3.6 |
 | D-49 | The session config: four ConfigMaps in `dev-agents` built from v2 copies of v1's files, with a new `CLAUDE.md` for a session pod; `requirements.toml` keeps v1's floor, in its own ConfigMap at `/etc/codex` in every pod; `bashrc.sh` exports no `GH_TOKEN` | 3.6 |

@@ -99,7 +99,8 @@ type caller struct {
 	session *v1alpha1.AgentSession
 	pod     *corev1.Pod
 	// profile is the calling session's profile, as its pod was built with:
-	// the profile its children run on.
+	// the profile an ordinary session's children run on. A workbench
+	// session's children do not inherit it (OP502).
 	profile string
 }
 
