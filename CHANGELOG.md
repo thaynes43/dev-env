@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.97.0](https://github.com/thaynes43/dev-env/compare/v2.96.0...v2.97.0) (2026-11-09)
+
+
+### Features
+
+* **agent:** carry the Go toolchain in the agent image (OP504) ([#1013](https://github.com/thaynes43/dev-env/issues/1013)) ([69662d4](https://github.com/thaynes43/dev-env/commit/69662d4ffae333abd0019cf60d9b6008aaceb24c))
+* **agentd:** Cursor as a v2 task provider (OP500) ([#1009](https://github.com/thaynes43/dev-env/issues/1009)) ([2b2ec45](https://github.com/thaynes43/dev-env/commit/2b2ec45539b9103d8d8871661b5f24406927acfb))
+* **apiserver:** run a workbench session's workers on the default profile unless it names one (OP502) ([#1014](https://github.com/thaynes43/dev-env/issues/1014)) ([f002f49](https://github.com/thaynes43/dev-env/commit/f002f49512682f291d5eb7e0a89421988780355c))
+
+
+### Bug Fixes
+
+* **operator:** say what is true of a reaped private session (OP490) ([#1011](https://github.com/thaynes43/dev-env/issues/1011)) ([37b8de7](https://github.com/thaynes43/dev-env/commit/37b8de75863b2d599f269fedf5a0039d17276530))
+
 ## [2.96.0](https://github.com/thaynes43/dev-env/compare/v2.95.0...v2.96.0) (2026-11-09)
 
 
