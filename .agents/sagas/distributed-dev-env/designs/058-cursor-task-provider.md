@@ -148,6 +148,36 @@ The agent's environment loses every Claude and Codex credential and override
 keeps `CURSOR_API_KEY`. gh and git read the minted token file, as for every
 agent.
 
+Cursor takes the prompt as one exec argument, not on stdin. Linux refuses an
+argument of 131072 bytes or more (`MAX_ARG_STRLEN`, which counts the NUL).
+The task is already capped at `protocol.MaxPromptBytes` (64 KiB) by the API,
+agent-run and `Session.Validate`, so the rules line and the guard leave
+about 64 KiB of room. As a backstop, `buildCursorLaunch` refuses a composed
+prompt of 131072 bytes or more before it returns a launch. The CRD's 262144
+byte `spec.prompt` limit is not the effective cap.
+
+### 4.1 What a cursor pod holds
+
+The environment strip above covers the agent's environment only. Credential
+mounts and profile env come from the session's profile, not from its agent.
+
+On the live templates of 2026-11-09:
+
+- Profile `full` mounts the keeper's Claude and Codex access projections and
+  the GCP service-account key. It also carries profile env, such as the Omni
+  service-account key.
+- Profile `dev` mounts the Codex access projection.
+- Every profile mounts the GitHub token, which a task needs.
+
+An always-allow Cursor agent can read every file and variable its pod holds,
+as a Claude or Codex agent can. The difference is the vendor that sees the
+task's context.
+
+Dispatch rule: run a cursor worker on a profile that mounts only what its task
+needs, which is the GitHub token. That profile is chosen at deploy, together
+with OpenProject #502 (a workbench coordinator names its children's profile).
+This change adds no source enforcement of the rule.
+
 ## 5. UNCONFIRMED
 
 None of these is settled by Cursor's documentation. Each has the conservative

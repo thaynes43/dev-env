@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -65,6 +66,9 @@ func buildCursorLaunch(s Settings, sess protocol.Session, ws protocol.Workspace,
 		common = ""
 	}
 	prompt := cursorPrompt(common, projectRules, taskGuard(ws, s.WorkDir()), sess.Prompt)
+	if err := checkCursorArgLength(prompt); err != nil {
+		return Launch{}, err
+	}
 	l := Launch{
 		Provider: protocol.AgentCursor,
 		Session:  sess.Name,
@@ -82,6 +86,23 @@ func buildCursorLaunch(s Settings, sess protocol.Session, ws protocol.Workspace,
 		return Launch{}, err
 	}
 	return l, nil
+}
+
+// cursorArgLimit is Linux's MAX_ARG_STRLEN: one exec argument may not reach
+// 131072 bytes, and the count includes the terminating NUL, so a string of
+// that length already fails with E2BIG. Cursor takes the prompt as one
+// argument, unlike Claude and Codex, which read it on stdin.
+const cursorArgLimit = 128 << 10
+
+// checkCursorArgLength refuses a composed prompt that one exec argument cannot
+// carry, before any launch exists. Session.Validate already caps the task at
+// protocol.MaxPromptBytes (64 KiB), which leaves the rules line and the guard
+// about 64 KiB of room; this is the backstop for a long path or guard.
+func checkCursorArgLength(prompt string) error {
+	if len(prompt) >= cursorArgLimit {
+		return fmt.Errorf("the composed cursor prompt (rules line, task guard and task) is %d bytes, too long for one exec argument (limit %d); shorten the task or put the long material in a file in the repository and name it in the prompt", len(prompt), cursorArgLimit-1)
+	}
+	return nil
 }
 
 // cursorPrompt is the prompt a cursor task gets: one line naming the rules to

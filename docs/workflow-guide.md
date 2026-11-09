@@ -520,6 +520,10 @@ agent-run --project haynes-studio --agent cursor \
   and checks its SHA-256; the image does not contain it.
 - Usage, cost and the served model are Unknown. The log shows the model the
   CLI names at start as "CLI-reported", never as provider reported.
+- Cursor takes the prompt as one exec argument. The usual 64 KiB prompt limit
+  keeps it under the kernel's 128 KiB limit; agentd also refuses a composed
+  prompt that would not fit. Put long material in a repository file and name
+  it in the prompt.
 - A cursor task never resumes.
 - If the templates name no Cursor key, the create is refused with
   `provider_unconfigured` and no Session is created. Record it and stop: it

@@ -525,3 +525,45 @@ func TestCursorPinMatchesV1(t *testing.T) {
 		t.Fatal("the Cursor CLI pin changed")
 	}
 }
+
+// A cursor prompt is one exec argument. The longest task Session.Validate
+// accepts still builds a launch whose argument is under the kernel's limit,
+// and a composed prompt that reaches the limit is refused before any launch.
+func TestCursorPromptFitsOneExecArgument(t *testing.T) {
+	s, sess, ws := cursorFixture(t)
+	sess.Prompt = strings.Repeat("x", protocol.MaxPromptBytes)
+	l, err := buildCursorLaunch(s, sess, ws, "boot-1", rescueNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := l.Argv[len(l.Argv)-1]; len(last) >= cursorArgLimit || !strings.HasSuffix(last, sess.Prompt) {
+		t.Fatalf("an at-limit task built a %d-byte argument", len(last))
+	}
+
+	// A one byte longer task is refused by Session.Validate, before the backstop.
+	sess.Prompt += "x"
+	if _, err := buildCursorLaunch(s, sess, ws, "boot-1", rescueNow); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("an over-limit task was built: %v", err)
+	}
+
+	// The backstop: a task inside the limit with a worktree path so long that
+	// the composed prompt reaches the argument limit.
+	sess.Prompt = strings.Repeat("x", protocol.MaxPromptBytes)
+	ws.Worktree = filepath.Join(ws.Worktree, strings.Repeat("d", cursorArgLimit))
+	l, err = buildCursorLaunch(s, sess, ws, "boot-1", rescueNow)
+	if err == nil || !strings.Contains(err.Error(), "too long for one exec argument") {
+		t.Fatalf("a composed prompt over the argument limit was built: %v", err)
+	}
+	if len(l.Argv) != 0 {
+		t.Fatalf("a refused prompt returned a launch: %q", l.Argv)
+	}
+}
+
+func TestCheckCursorArgLength(t *testing.T) {
+	if err := checkCursorArgLength(strings.Repeat("x", cursorArgLimit-1)); err != nil {
+		t.Fatalf("131071 bytes plus the NUL fits: %v", err)
+	}
+	if err := checkCursorArgLength(strings.Repeat("x", cursorArgLimit)); err == nil {
+		t.Fatal("131072 bytes passed, but the NUL makes it E2BIG")
+	}
+}
