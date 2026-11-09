@@ -8,6 +8,7 @@ import (
 	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/thaynes43/dev-env/internal/apiserver"
 	"github.com/thaynes43/dev-env/internal/scheduledwork/authority"
 	"github.com/thaynes43/dev-env/internal/scheduledwork/executor"
 )
@@ -16,6 +17,7 @@ import (
 // S3b).
 type scheduledWorkOptions struct {
 	enabled                         bool
+	apiEnabled                      bool
 	maxHeadless, maxInteractive     int
 	headlessGrace, interactiveGrace time.Duration
 }
@@ -28,6 +30,10 @@ const (
 	maxScheduledWorkGrace = 12 * time.Hour
 )
 
+// validate checks the flags' bounds, then what each enabled part needs. The
+// routes (--enable-scheduled-work-api) are served by the API, so they need it;
+// they need no leader election, since every replica serves them and each write
+// is a compare-and-set.
 func (o scheduledWorkOptions) validate(apiAddr string, leaderElect bool) error {
 	for name, v := range map[string]int{"--scheduled-work-max-headless": o.maxHeadless, "--scheduled-work-max-interactive": o.maxInteractive} {
 		if v < 1 || v > maxScheduledWorkCap {
@@ -40,6 +46,8 @@ func (o scheduledWorkOptions) validate(apiAddr string, leaderElect bool) error {
 		}
 	}
 	switch {
+	case o.apiEnabled && apiAddr == "0":
+		return errors.New("--enable-scheduled-work-api requires the API (--api-bind-address): the routes are served by it")
 	case !o.enabled:
 		return nil
 	case apiAddr == "0":
@@ -48,6 +56,17 @@ func (o scheduledWorkOptions) validate(apiAddr string, leaderElect bool) error {
 		return errors.New("--enable-scheduled-work requires leader election: the executor runs in the leader only")
 	}
 	return nil
+}
+
+// scheduledWorkAPIConfig is the Server's setting for /v1/scheduled-work
+// (DESIGN-054 S5b): nil while --enable-scheduled-work-api is off, so every route
+// answers 404. The items and the dispatch templates ConfigMap live in the
+// operator's own namespace, where the executor and the releaser read them. The
+// flag is independent of --enable-scheduled-work: the routes only record,
+// edit, cancel and approve items, and nothing dispatches until the executor is
+// enabled.
+func scheduledWorkAPIConfig(o options) *apiserver.ScheduledWorkConfig {
+	return apiserver.ScheduledWorkAPI(o.scheduledWork.apiEnabled, o.templatesNamespace)
 }
 
 // newScheduledWorkExecutor builds the default-off scheduled-work executor. A

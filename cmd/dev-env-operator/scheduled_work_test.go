@@ -107,3 +107,44 @@ func scheduledWorkPagerSplitsReadsAndWrites(t *testing.T, o options) {
 		t.Errorf("the pager read through the writing client, not the uncached reader: %v", err)
 	}
 }
+
+// The scheduled-work routes are default off, separate from the executor flag:
+// off, the Server gets no config and every route answers 404; on, the items
+// and templates are in the operator's namespace. Neither flag implies the
+// other, and the routes need the API but not leader election.
+func TestScheduledWorkAPIFlag(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.scheduledWork.apiEnabled || scheduledWorkAPIConfig(o) != nil {
+		t.Fatalf("--enable-scheduled-work-api must be off by default: %+v, %v", o.scheduledWork, err)
+	}
+	o, err = parseFlags([]string{"--enable-scheduled-work-api"})
+	if err != nil || !o.scheduledWork.apiEnabled || o.scheduledWork.enabled {
+		t.Fatalf("the API flag alone: %+v, %v", o.scheduledWork, err)
+	}
+	cfg := scheduledWorkAPIConfig(o)
+	if cfg == nil || cfg.Namespace != o.templatesNamespace || cfg.Namespace == "" {
+		t.Fatalf("config %+v, want the operator's namespace %q", cfg, o.templatesNamespace)
+	}
+	if ex := newScheduledWorkExecutor(o, nil, nil, nil, logr.Discard()); ex != nil {
+		t.Fatal("the API flag started the executor")
+	}
+	if _, err = parseFlags([]string{"--enable-scheduled-work-api", "--leader-elect=false"}); err != nil {
+		t.Errorf("the routes need no leader election: %v", err)
+	}
+	if _, err = parseFlags([]string{"--enable-scheduled-work-api", "--api-bind-address=0"}); err == nil {
+		t.Error("the routes were accepted without the API")
+	}
+	// Both on: the executor's own needs still apply. An empty
+	// --templates-namespace is already refused by parseFlags, so the config
+	// cannot come out nil for want of it.
+	if _, err = parseFlags([]string{"--enable-scheduled-work-api", "--enable-scheduled-work", "--leader-elect=false"}); err == nil {
+		t.Error("both flags without leader election were accepted")
+	}
+	if _, err = parseFlags([]string{"--enable-scheduled-work-api", "--templates-namespace="}); err == nil {
+		t.Error("an empty namespace was accepted with the routes on")
+	}
+	o, err = parseFlags([]string{"--enable-scheduled-work"})
+	if err != nil || scheduledWorkAPIConfig(o) != nil {
+		t.Errorf("the executor flag turned the routes on: %v", err)
+	}
+}

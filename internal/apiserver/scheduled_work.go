@@ -41,7 +41,7 @@ import (
 //	POST   /v1/scheduled-work/{name}/retry     a human only: one Parked occurrence again, from now
 //
 // They are served only when Server.ScheduledWork is set, which the
-// operator's proposed --enable-scheduled-work-api flag does; nil, the
+// operator's --enable-scheduled-work-api flag does; nil, the
 // default, leaves every route 404.
 //
 // Every read is uncached (Live) and every write carries the resourceVersion it
@@ -67,7 +67,7 @@ type ScheduledWorkConfig struct {
 	DecisionWindow time.Duration
 }
 
-// ScheduledWorkAPI is the Server's setting for the operator's proposed,
+// ScheduledWorkAPI is the Server's setting for the operator's
 // default-off --enable-scheduled-work-api flag: nil while the flag is off,
 // and nil without a namespace, so the routes are never served unscoped.
 func ScheduledWorkAPI(enabled bool, namespace string) *ScheduledWorkConfig {
