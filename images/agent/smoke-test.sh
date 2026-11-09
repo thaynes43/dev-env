@@ -181,13 +181,47 @@ run -v "${policy}/requirements.toml:/etc/codex/requirements.toml:ro" \
   expect "danger-full-access never" --dangerously-bypass-approvals-and-sandbox
   # A request for approvals is refused; approval stays never.
   expect "danger-full-access never" -a on-request
-  # KNOWN TRAP (#482): a workspace-write request is refused, and Codex falls back to
-  # read-only, not to the configured danger-full-access. bwrap cannot run in a session
-  # pod, so that thread fails every shell and MCP call. These two lines pin the current
-  # behaviour. If a Codex bump changes it they fail: update them and the
-  # owner-interactive Codex recipe in docs/workflow-guide.md together.
-  expect "read-only never" -s workspace-write
-  expect "read-only never" --approve-for-me
+  # CLOSED TRAP (#482, #487): these requests used to be refused and fall back to
+  # read-only, which fails every shell and MCP call because bwrap cannot run in a session
+  # pod. The requirements now set default_permissions = ":danger-full-access", so a
+  # disallowed sandbox request falls back to full access. An explicit read-only request
+  # also becomes full access (Tom approved 2026-11-09, OpenProject #487). If a Codex bump
+  # changes this, these lines fail: update them and the owner-interactive Codex recipe in
+  # docs/workflow-guide.md together.
+  expect "danger-full-access never" -s workspace-write
+  expect "danger-full-access never" --approve-for-me
+  expect "danger-full-access never" -s read-only
+'
+echo "::endgroup::"
+
+echo "::group::codex daemon surfaces load the GitOps requirements (#487)"
+# default_permissions and [allowed_permission_profiles] are new keys in the requirements
+# file. A requirements file Codex dislikes once stopped `codex remote-control start` at
+# every boot (haynes-ops #2829), so prove the daemon surfaces still load it. Empty
+# CODEX_HOME, no auth, no network: app-server over stdio answers `initialize` and exits
+# at end of input. A bad requirements or config file shows up as a configWarning
+# ("Invalid configuration; using defaults") or a refused initialize. The bubblewrap
+# warning is expected in the image and is not matched.
+run -v "${policy}/requirements.toml:/etc/codex/requirements.toml:ro" \
+  --entrypoint /bin/bash "${image}" -euc '
+  mkdir -p "$CODEX_HOME"
+  rc=0
+  printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"smoke\",\"version\":\"0\"}}}" \
+    | timeout 30 codex app-server --listen stdio:// >/tmp/app-server.out 2>&1 || rc=$?
+  echo "codex app-server --listen stdio:// -> exit ${rc}"
+  test "${rc}" = 0 || { echo "FAIL: app-server exited ${rc}" >&2; cat /tmp/app-server.out >&2; exit 1; }
+  grep -q "\"id\":1,\"result\"" /tmp/app-server.out \
+    || { echo "FAIL: app-server did not answer initialize" >&2; cat /tmp/app-server.out >&2; exit 1; }
+  if grep -iE "invalid configuration|invalid value|disallowed|not in the allowed set|requirements.toml" /tmp/app-server.out; then
+    echo "FAIL: app-server complained about its configuration or requirements" >&2; exit 1
+  fi
+  echo "codex app-server initialize -> ok, requirements loaded without warnings"
+  for sub in "" start pair; do
+    rc=0
+    timeout 20 codex remote-control ${sub:+$sub} --help >/tmp/rc.out 2>&1 || rc=$?
+    echo "codex remote-control ${sub} --help -> exit ${rc}"
+    test "${rc}" = 0 || { echo "FAIL: codex remote-control ${sub} --help exited ${rc}" >&2; cat /tmp/rc.out >&2; exit 1; }
+  done
 '
 echo "::endgroup::"
 

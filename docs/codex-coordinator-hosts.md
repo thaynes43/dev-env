@@ -172,8 +172,10 @@ For a thread Tom drives on his phone, follow the
   `codex --remote unix://…` TUI or `scripts/codex-clean-session.py`.
 - `codex exec` and `codex queue` never give a phone-visible thread.
 - Never pass `-s`, `-a`, `--approve-for-me` or `--full-auto`. Omit them, or pass
-  `--dangerously-bypass-approvals-and-sandbox`. A `workspace-write` request
-  falls back to `read-only`, where every shell and MCP call fails.
+  `--dangerously-bypass-approvals-and-sandbox`. With the #487 requirements, a
+  `workspace-write` or `read-only` request falls back to full access with approval
+  `never`; before them it fell back to `read-only`, where every shell and MCP call
+  fails.
 - `agent-run rc fresh` needs v2.71 or later, `--enable-codex-rc-thread` and a
   qualified target. The flag was off live on 2026-11-09; enabling it is
   OpenProject #272 and needs Tom's approval.
