@@ -1,0 +1,17 @@
+# Test copy of the dev-env v2 Codex config, for images/agent/smoke-test.sh.
+# Source: thaynes43/haynes-ops
+#   kubernetes/main/apps/dev-env-system/session-config/app/config/codex/config.toml
+# agentd copies the source into ~/.codex/config.toml and appends the generated
+# [mcp_servers.*] tables; the smoke test copies this file into an empty CODEX_HOME.
+# Keep the settings below identical to the source. The source's comments are left out.
+model = "gpt-6-astra"
+model_reasoning_effort = "max"
+
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+project_doc_fallback_filenames = ["CLAUDE.md"]
+project_doc_max_bytes = 131072
+
+[history]
+persistence = "save-all"

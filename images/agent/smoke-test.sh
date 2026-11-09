@@ -13,6 +13,7 @@ set -euo pipefail
 
 image="${1:?usage: smoke-test.sh <image> [expected-commit]}"
 expect_commit="${2:-}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 run() {
   docker run --rm --read-only --network none \
@@ -142,6 +143,65 @@ run --entrypoint /bin/bash "${image}" -euc '
   python3 $helper/cursor-acp-smoke-check.py --help > /tmp/acp-smoke-help.txt || code=$?
   test "$code" = 2
 '
+echo "::endgroup::"
+
+echo "::group::codex launch policy from the GitOps requirements (#482)"
+# Session pods get /etc/codex/requirements.toml and the base of ~/.codex/config.toml
+# from haynes-ops; testdata/codex-policy holds test copies. `codex debug prompt-input`
+# prints the instructions a new thread's model would get, and they name the effective
+# sandbox and approval policy. It needs no login and calls no model.
+policy="${here}/testdata/codex-policy"
+# effective FLAGS...: "<sandbox> <approval>" for a new thread started with those root
+# flags, from a fresh CODEX_HOME holding the test config. Runs inside the image.
+codex_effective='
+effective() {
+  rm -rf "$CODEX_HOME"; mkdir -p "$CODEX_HOME"
+  cp /opt/codex-policy/config.toml "$CODEX_HOME/config.toml"
+  timeout 30 codex "$@" debug prompt-input >/tmp/prompt.json || echo "codex $* exited $?" >&2
+  sandbox="$(grep -o "sandbox_mode. is .[a-z-]*" /tmp/prompt.json | sed "s/.*[^a-z-]//" | sort -u | paste -sd, -)"
+  approval="$(grep -o "Approval policy is currently [a-z-]*" /tmp/prompt.json | sed "s/.* //" | sort -u | paste -sd, -)"
+  echo "${sandbox:-none} ${approval:-none}"
+}
+'
+run -v "${policy}/requirements.toml:/etc/codex/requirements.toml:ro" \
+  -v "${policy}/config.toml:/opt/codex-policy/config.toml:ro" \
+  --entrypoint /bin/bash "${image}" -euc "${codex_effective}"'
+  expect() {
+    want="$1"; shift
+    got="$(effective "$@")"
+    echo "codex $* -> ${got}"
+    test "${got}" = "${want}" || { echo "FAIL: codex $* gives \"${got}\", want \"${want}\"" >&2; exit 1; }
+  }
+  codex --version
+  # The default (a phone thread, a bare codex) and what the managed routes pass.
+  expect "danger-full-access never"
+  expect "danger-full-access never" --dangerously-bypass-approvals-and-sandbox
+  # A request for approvals is refused; approval stays never.
+  expect "danger-full-access never" -a on-request
+  # KNOWN TRAP (#482): a workspace-write request is refused, and Codex falls back to
+  # read-only, not to the configured danger-full-access. bwrap cannot run in a session
+  # pod, so that thread fails every shell and MCP call. These two lines pin the current
+  # behaviour. If a Codex bump changes it they fail: update them and the
+  # owner-interactive Codex recipe in docs/workflow-guide.md together.
+  expect "read-only never" -s workspace-write
+  expect "read-only never" --approve-for-me
+'
+echo "::endgroup::"
+
+echo "::group::TEMPORARY #482 evidence: requirements candidates (report only)"
+for cand in order profiles; do
+  run -v "${policy}/candidates/${cand}/requirements.toml:/etc/codex/requirements.toml:ro" \
+    -v "${policy}/config.toml:/opt/codex-policy/config.toml:ro" \
+    --entrypoint /bin/bash "${image}" -uc "${codex_effective}"'
+    for flags in "" "-s workspace-write" "--approve-for-me" "-s read-only" "-a on-request" \
+        "--dangerously-bypass-approvals-and-sandbox" \
+        "-c default_permissions=\":read-only\"" "-c default_permissions=\":workspace\""; do
+      echo "candidate '"${cand}"': codex ${flags} -> $(effective ${flags})"
+    done
+    effective -s workspace-write >/dev/null
+    grep -o "Filesystem sandboxing[^\\\\]*" /tmp/prompt.json | head -2
+  ' || echo "candidate ${cand}: run failed"
+done
 echo "::endgroup::"
 
 echo "::group::tini reaps"

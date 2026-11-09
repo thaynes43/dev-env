@@ -1,0 +1,8 @@
+# Test copy of the dev-env v2 Codex requirements, for images/agent/smoke-test.sh.
+# Source: thaynes43/haynes-ops
+#   kubernetes/main/apps/dev-env-system/session-config/app/config/codex/requirements.toml
+# The smoke test mounts this at /etc/codex/requirements.toml. Keep the settings below
+# identical to the source; when they change there, change them here too, so the test
+# checks the policy the session pods get. The source's comments are left out.
+allowed_approval_policies = ["never"]
+allowed_sandbox_modes = ["read-only", "danger-full-access"]
