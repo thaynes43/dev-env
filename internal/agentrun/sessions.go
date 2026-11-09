@@ -372,13 +372,20 @@ func remoteControlLine(s apiv1.Session, rc apiv1.RemoteControl) string {
 	if rc.Name != "" {
 		line += " as " + rc.Name
 	}
+	codex := s.Agent == protocol.AgentCodex
 	switch rc.State {
 	case protocol.RemoteRegistered:
-		return line + ": in the Claude app (-o json has the link)"
+		return line + ": registered with the Claude app (-o json has the link)"
 	case protocol.RemoteStarting:
-		return line + ": not on the phone yet"
+		if codex {
+			return line + ": the Codex daemon is not connected yet"
+		}
+		return line + ": not registered with the Claude app yet"
 	case protocol.RemoteOffline:
-		return line + ": its CLI is not running, so the entry is offline"
+		if codex {
+			return line + ": the Codex daemon is not running; agentd restarts it"
+		}
+		return line + ": agentd records no live CLI process, so the entry is offline"
 	case protocol.RemoteLoginRequired:
 		if s.Agent == protocol.AgentCodex {
 			return line + ": no current keeper Codex login, so no phone entry"

@@ -128,6 +128,9 @@ func TestShow(t *testing.T) {
 	}
 
 	h.mustRun(ExitOK, "show", name)
+	if strings.Contains(h.stdout.String(), "remote control:") {
+		t.Errorf("a task session without a Remote Control entry printed one: %q", h.stdout.String())
+	}
 	contains(t, "show", h.stdout.String(),
 		"name:", name,
 		"phase:", "Running on talosw02",
@@ -158,9 +161,6 @@ func TestShow(t *testing.T) {
 
 	h.mustRun(ExitUsage, "show")
 	h.mustRun(ExitUsage, "show", "a", "b")
-	if strings.Contains(h.stdout.String(), "remote control:") {
-		t.Errorf("a task session without a Remote Control entry printed one: %q", h.stdout.String())
-	}
 }
 
 // show prints the Remote Control state in its text form, so a launcher can see
@@ -171,9 +171,11 @@ func TestShowRemoteControl(t *testing.T) {
 	cases := []struct {
 		agent, state, want string
 	}{
-		{"claude", "registered", "registered as " + name + ": in the Claude app (-o json has the link)"},
-		{"claude", "starting", "starting as " + name + ": not on the phone yet"},
-		{"claude", "offline", "offline as " + name + ": its CLI is not running"},
+		{"claude", "registered", "registered as " + name + ": registered with the Claude app (-o json has the link)"},
+		{"claude", "starting", "starting as " + name + ": not registered with the Claude app yet"},
+		{"claude", "offline", "offline as " + name + ": agentd records no live CLI process"},
+		{"codex", "starting", "the Codex daemon is not connected yet"},
+		{"codex", "offline", "the Codex daemon is not running"},
 		{"claude", "login-required", "agent-run login " + name + " status says which login it uses"},
 		{"codex", "login-required", "no current keeper Codex login"},
 		{"codex", "unpaired", "pair a phone with agent-run pair " + name},

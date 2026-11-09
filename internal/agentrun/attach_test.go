@@ -36,7 +36,7 @@ func TestCreateInteractive(t *testing.T) {
 	}
 	out := h.stdout.String()
 	contains(t, "stdout", out, "shows in the Claude app as "+name, "remote control: registered")
-	contains(t, "stdout", out, "agent-run login "+name+" status", "agent-run keeper-login claude", "agent-run login "+name+" url")
+	contains(t, "stdout", out, "agent-run login "+name+" status", "agent-run keeper-login claude url", "agent-run login "+name+" url")
 	contains(t, "stdout", out, "agent-run attach "+name)
 	if strings.Contains(out, "lives in its own pod") {
 		t.Errorf("the hint must not say every remote login lives in its pod: %q", out)

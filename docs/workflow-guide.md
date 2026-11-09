@@ -692,7 +692,8 @@ keeper's shared login. Tell Tom the session name once `show` reads
 `registered` (about two minutes; [quickstart section
 1](v2-quickstart.md#1-a-claude-session-on-your-phone) has the measured
 timings). If it reads `login-required`, the keeper's login needs renewing
-(quickstart section 6), which only Tom can do. The phone list itself is Tom's
+(quickstart section 6): Tom signs in, and a workbench session drives it with
+`agent-run keeper-login claude url`. The phone list itself is Tom's
 check: `registered` proves the CLI registered its entry, not that he saw it.
 The standby (quickstart section 1) is the zero-step alternative when it is
 awake. A suspended standby has an archived phone entry until it is resumed.
