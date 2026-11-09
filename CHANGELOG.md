@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.95.0](https://github.com/thaynes43/dev-env/compare/v2.94.0...v2.95.0) (2026-11-09)
+
+
+### Features
+
+* **agent-run:** generic phone-visible thread launch, always-allow by contract (OP489) ([#1005](https://github.com/thaynes43/dev-env/issues/1005)) ([6acc6ca](https://github.com/thaynes43/dev-env/commit/6acc6ca9a7ef83f37bafa0210458411fac9bcef4))
+* **operator:** wire --enable-scheduled-work-api, default off (DESIGN-054 S5b) ([#1004](https://github.com/thaynes43/dev-env/issues/1004)) ([43bccbd](https://github.com/thaynes43/dev-env/commit/43bccbd9c206c62ac43d75a264931ee7db893826))
+* **reminders:** projection Reminder for scheduled-work calendar sync (DESIGN-054 S4) ([#917](https://github.com/thaynes43/dev-env/issues/917)) ([57073d7](https://github.com/thaynes43/dev-env/commit/57073d74ab57ec640d038ca8c1fe3fc37ca4cf17))
+
+
+### Bug Fixes
+
+* **agent-run:** show Remote Control state and correct the remote login hints ([#1002](https://github.com/thaynes43/dev-env/issues/1002)) ([276cba2](https://github.com/thaynes43/dev-env/commit/276cba20370eb38078254c46d849e1a0be9243d4))
+* **agent:** pin Claude Code 2.1.321 for Fable 5.2 ([#1006](https://github.com/thaynes43/dev-env/issues/1006)) ([57fb138](https://github.com/thaynes43/dev-env/commit/57fb138d104e2f9eb6da47ae989e9e2e0bcfedcd))
+
 ## [2.94.0](https://github.com/thaynes43/dev-env/compare/v2.93.0...v2.94.0) (2026-11-09)
 
 
