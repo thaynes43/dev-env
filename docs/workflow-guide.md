@@ -676,6 +676,27 @@ record holds it. This is a proposal only: an unsupported contract, recorded as
 an OP402 follow-up, that blocks acceptance only if acceptance requires
 retrieval after release.
 
+### Start an owner-interactive Claude session
+
+When Tom asks for a remote Claude agent on a repository, any caller that can
+create sessions (a v2 session, a workbench session or the v1 pod) runs:
+
+```bash
+"${v2run[@]}" --repo <repo> --interactive --agent claude \
+  --model claude-opus-5-5 --effort xhigh
+"${v2run[@]}" show <name>    # wait for "remote control: registered"
+```
+
+It needs no flag, pairing or sign-in on the default profile, which follows the
+keeper's shared login. Tell Tom the session name once `show` reads
+`registered` (about two minutes; [quickstart section
+1](v2-quickstart.md#1-a-claude-session-on-your-phone) has the measured
+timings). If it reads `login-required`, the keeper's login needs renewing
+(quickstart section 6), which only Tom can do. The phone list itself is Tom's
+check: `registered` proves the CLI registered its entry, not that he saw it.
+The standby (quickstart section 1) is the zero-step alternative when it is
+awake. A suspended standby has an archived phone entry until it is resumed.
+
 ### Start an owner-interactive Codex task on a paired v2 host
 
 Use this when Tom must see and drive the thread on his phone.
@@ -704,10 +725,25 @@ Use this when Tom must see and drive the thread on his phone.
    (`images/agent/smoke-test.sh`) pins the new results and that `codex
    app-server` and `codex remote-control` still load the requirements. Current
    Codex rejects `--full-auto` as an unknown flag.
-4. **`agent-run rc fresh` is not available yet.** It needs agent-run v2.71 or
-   later, the operator flag `--enable-codex-rc-thread` and a qualified target.
-   The flag was off in the live operator on 2026-11-09. Enabling it is
-   OpenProject #272, which needs Tom's approval. Do not enable it.
+4. **`agent-run rc fresh` is not available, and it is not a repeatable route.**
+   It needs agent-run v2.71 or later, the operator flag
+   `--enable-codex-rc-thread` and a qualified target. The flag was off in the
+   live operator on 2026-11-09, and enabling it is OpenProject #272, which needs
+   Tom's approval. Do not enable it. Even when enabled it starts at most **one**
+   thread per host: the operator keeps a one-use reservation annotation on the
+   Session and agentd a one-use marker on the host, and neither is ever cleared
+   (`internal/apiserver/codex_rc.go`, `internal/agentd/codex_rc_ctl.go`). The
+   qualified target (`apiv1.CodexRCTarget`) is a deployment-owned packet pinned
+   to one Session UID, pod UID, daemon PID, boot ID and pairing, and it expires
+   at most 15 minutes after it was verified. The host must mount the same
+   packet at `/opt/dev-env/config/codex/rc-target.json`. So it cannot serve
+   "give me another thread", and a daemon or pod restart invalidates it.
+5. **Reaching the host from elsewhere.** No agent-run command yet starts a thread
+   on a paired host from outside it. A session pod cannot exec into another pod
+   (D-19). The v1 pod and a workbench session can (`agent-run pair` uses that
+   exec), but running the remote TUI that way is not a supported, tested route.
+   Until one exists, ask Tom to start the thread on his phone, or ask a thread
+   already running on that host to start the new one.
 
 ## 4. The everyday workflow
 

@@ -126,12 +126,14 @@ func TestConnectErrors(t *testing.T) {
 }
 
 // A certificate agent-run does not trust is not retried: it will not change.
+// The error names the pinned CA ConfigMap, which an in-cluster caller such as
+// the v1 pod reads to fill DEV_ENV_API_CA_FILE.
 func TestConnectUntrustedCertificate(t *testing.T) {
 	h := newHarness(t)
 	serveList(h)
 	delete(h.vars, envCAFile)
 	h.mustRun(ExitAuth, "list")
-	contains(t, "stderr", h.stderr.String(), "has a certificate agent-run does not trust", "--ca-file or DEV_ENV_API_CA_FILE")
+	contains(t, "stderr", h.stderr.String(), "has a certificate agent-run does not trust", "--ca-file or DEV_ENV_API_CA_FILE", "ConfigMap dev-agents/dev-env-api-ca, key ca.crt")
 	if len(h.sleeps) != 0 {
 		t.Errorf("retried %d times, want none", len(h.sleeps))
 	}

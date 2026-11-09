@@ -213,6 +213,9 @@ func (a *app) printSession(s apiv1.Session) {
 		}
 		row("revision", "%s", rev)
 	}
+	if rc := s.RemoteControl; rc != nil && rc.State != "" {
+		row("remote control", "%s", remoteControlLine(s, *rc))
+	}
 	if st := s.AgentStatus; st != nil {
 		row("agent state", "%s", firstOf(st.State, "-"))
 		if st.Branch != "" {
@@ -359,6 +362,36 @@ func (a *app) printSession(s apiv1.Session) {
 			a.outf("  %s\n", line)
 		}
 	}
+}
+
+// remoteControlLine is show's one-line reading of status.remoteControl. The
+// link stays in -o json only: a show pasted into a ticket or log carries no
+// session URL. The Codex states are agentd's free text (codex_remote.go).
+func remoteControlLine(s apiv1.Session, rc apiv1.RemoteControl) string {
+	line := rc.State
+	if rc.Name != "" {
+		line += " as " + rc.Name
+	}
+	switch rc.State {
+	case protocol.RemoteRegistered:
+		return line + ": in the Claude app (-o json has the link)"
+	case protocol.RemoteStarting:
+		return line + ": not on the phone yet"
+	case protocol.RemoteOffline:
+		return line + ": its CLI is not running, so the entry is offline"
+	case protocol.RemoteLoginRequired:
+		if s.Agent == protocol.AgentCodex {
+			return line + ": no current keeper Codex login, so no phone entry"
+		}
+		return line + ": no usable login, so no phone entry; agent-run login " + s.Name + " status says which login it uses"
+	case "unpaired":
+		return line + ": the Codex daemon is connected and no pairing code was ever issued; pair a phone with agent-run pair " + s.Name
+	case "pair-code-issued":
+		return line + ": the Codex daemon is connected and a pairing code was issued (Codex cannot confirm a phone paired); start threads from the ChatGPT app"
+	case "errored":
+		return line + ": the Codex daemon reports its connection as errored"
+	}
+	return line
 }
 
 // servedModelsText names the provider-reported served models, or Unknown.
