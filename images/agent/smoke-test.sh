@@ -96,9 +96,9 @@ run --entrypoint /bin/bash "${image}" -euc '
 EOF
 )"
   for tool in ping search show comment status claim checkpoint create_followup; do
-    printf '%s\n' "$mcp_out" | grep -q "\"name\":\"openproject_$tool\"" || { echo "opwork-mcp does not list openproject_$tool" >&2; exit 1; }
+    printf "%s\n" "$mcp_out" | grep -q "\"name\":\"openproject_$tool\"" || { echo "opwork-mcp does not list openproject_$tool" >&2; exit 1; }
   done
-  test "$(printf '%s\n' "$mcp_out" | wc -l)" = 2
+  test "$(printf "%s\n" "$mcp_out" | wc -l)" = 2
   # Baked in the image, not downloaded at boot, and installed outside CODEX_HOME so the
   # session volume cannot hide it.
   case "$(readlink -f "$(command -v codex)")" in /opt/dev-env/codex/*) ;; *) echo "codex is not under /opt/dev-env/codex" >&2; exit 1 ;; esac
