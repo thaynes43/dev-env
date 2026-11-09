@@ -549,7 +549,8 @@ func TestStatusSubresource(t *testing.T) {
 		},
 		Outcome: &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeRunning, At: &now},
 		Usage:   &v1alpha1.UsageStatus{CostUSD: "0.42", InputTokens: 1200, OutputTokens: 300},
-		Rescue:  &v1alpha1.RescueStatus{LastBundle: "rescue/" + s.Name + "/20261006-0130.bundle"},
+		Rescue: &v1alpha1.RescueStatus{LastBundle: "rescue/" + s.Name + "/20261006-0130.bundle",
+			Result: v1alpha1.RescueFailed, TransientFailures: 2, NextRetryAt: &now},
 		Conditions: []metav1.Condition{{
 			Type: "Ready", Status: metav1.ConditionTrue, Reason: "PodReady", Message: "agent started",
 			LastTransitionTime: now, ObservedGeneration: 1,
@@ -560,6 +561,10 @@ func TestStatusSubresource(t *testing.T) {
 	}
 	if s.Generation != 1 {
 		t.Errorf("generation = %d after a status update, want 1", s.Generation)
+	}
+	// The transient retry's fields are kept, not pruned (#486).
+	if r := get(t, s).Status.Rescue; r.TransientFailures != 2 || r.NextRetryAt == nil || !r.NextRetryAt.Equal(&now) {
+		t.Errorf("rescue %+v, want the transient retry's fields kept", r)
 	}
 
 	t.Run("an object update ignores status", func(t *testing.T) {
@@ -602,6 +607,7 @@ func TestStatusSubresource(t *testing.T) {
 		{"an unknown phase", func(st *v1alpha1.AgentSessionStatus) { st.Phase = "Sleeping" }, "status.phase: Unsupported value"},
 		{"an unknown outcome", func(st *v1alpha1.AgentSessionStatus) { st.Outcome.State = "maybe" }, "status.outcome.state: Unsupported value"},
 		{"negative tokens", func(st *v1alpha1.AgentSessionStatus) { st.Usage.InputTokens = -1 }, "status.usage.inputTokens"},
+		{"a negative transient failure count", func(st *v1alpha1.AgentSessionStatus) { st.Rescue.TransientFailures = -1 }, "status.rescue.transientFailures"},
 		{"a cost in exponent form", func(st *v1alpha1.AgentSessionStatus) { st.Usage.CostUSD = "1e3" }, "status.usage.costUSD"},
 		{"a condition without a reason", func(st *v1alpha1.AgentSessionStatus) { st.Conditions[0].Reason = "" }, "status.conditions[0].reason"},
 		{"a condition status that is not True, False or Unknown", func(st *v1alpha1.AgentSessionStatus) {

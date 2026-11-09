@@ -234,9 +234,13 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 	}
 	var problems []string
 	add := func(format string, a ...any) { problems = append(problems, fmt.Sprintf(format, a...)) }
+	// The reason is the first problem's, except that a permanent problem
+	// replaces a transient one: a transient reason then means every problem
+	// was transient, which the retry needs (scheduleTransientRetry), and the
+	// condition names the problem a human must fix.
 	reason := "RescueFailed"
 	setReason := func(r string) {
-		if reason == "RescueFailed" {
+		if reason == "RescueFailed" || transientRescueReason(reason) && !transientRescueReason(r) {
 			reason = r
 		}
 	}
@@ -404,7 +408,11 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 		}
 		add("bundle: %s", msg)
 	}
-	if !rep.OK && len(problems) == 0 {
+	if !rep.OK && (len(problems) == 0 || transientRescueReason(reason)) {
+		// agentd's not-ok has a cause this verdict does not name: no problem
+		// above, or transient ones only, which never make agentd not ok. An
+		// unknown cause is permanent.
+		setReason("RescueFailed")
 		add("agentd reported the rescue not ok")
 	}
 

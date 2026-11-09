@@ -282,8 +282,8 @@ func podEnded(p *corev1.Pod) bool {
 // needsRescue reports whether the operator must run a rescue in the pod before
 // it may go: an agent may run in it, and no rescue has since the session last
 // changed. In a hold pod (D-55) it is the volume's rescue: it runs while the
-// session still wants its pod gone, once the pod has started, and again every
-// retry while the last one failed.
+// session still wants its pod gone, once the pod has started, and again while
+// the last one failed, every retry or at a transient failure's backoff.
 func needsRescue(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time, retry time.Duration) bool {
 	switch {
 	case podNeverStarted(pod) || originalHomeAgentNeverStarted(s, pod) || podEnded(pod):
@@ -299,11 +299,12 @@ func needsRescue(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time, retry
 	}
 }
 
-// holdRetryDue reports whether the newest rescue failed at least retry ago,
-// so a hold pod's rescue runs again (D-55).
+// holdRetryDue reports whether the newest rescue failed and its retry is due,
+// so a hold pod's rescue runs again (D-55): retry after it ran, or at its
+// backoff when it failed for a transient reason only (nextRescueRetry).
 func holdRetryDue(s *v1alpha1.AgentSession, now time.Time, retry time.Duration) bool {
-	r := s.Status.Rescue
-	return r != nil && r.Result == v1alpha1.RescueFailed && (r.At == nil || !now.Before(r.At.Add(retry)))
+	at, failed := nextRescueRetry(s, retry)
+	return failed && !now.Before(at)
 }
 
 // volumeRemovalAllowed is nil only when archive may delete the session's volume
