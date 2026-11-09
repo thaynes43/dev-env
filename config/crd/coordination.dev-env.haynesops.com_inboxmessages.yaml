@@ -153,6 +153,7 @@ spec:
                 enum:
                 - claude
                 - codex
+                - cursor
                 - opencode
                 type: string
               recipient:

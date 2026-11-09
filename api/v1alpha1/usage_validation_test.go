@@ -386,3 +386,43 @@ func TestCapturedUsageStatusRemovalRefused(t *testing.T) {
 		})
 	}
 }
+
+// A cursor task's observation asserts nothing: Cursor's stream reports no
+// usage, cost or served model (DESIGN-058). An all-Unknown one is accepted;
+// any reported metric or a provider-reported model is refused.
+func TestCursorUsageSchemaAcceptsOnlyUnknown(t *testing.T) {
+	cursorUsage := func() *v1alpha1.UsageObservationStatus {
+		unknown := v1alpha1.TokenObservationStatus{State: "Unknown"}
+		u := schemaUsage()
+		u.Source.Provider, u.Source.RequestedModel = "cursor", "grok-code-fast-1"
+		u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens = unknown, unknown, unknown, unknown
+		u.Cost = v1alpha1.CostObservationStatus{State: "Unknown", Kind: "Unknown"}
+		return u
+	}
+	for _, boundary := range []string{"accepted", "tokens", "cost"} {
+		t.Run(boundary, func(t *testing.T) {
+			c := ctx(t)
+			s := cursorSession()
+			if err := k8s.Create(c, s); err != nil {
+				t.Fatal(err)
+			}
+			u := cursorUsage()
+			zero := int64(0)
+			switch boundary {
+			case "tokens":
+				u.OutputTokens = v1alpha1.TokenObservationStatus{State: "Reported", Amount: &zero}
+			case "cost":
+				u.Cost = v1alpha1.CostObservationStatus{State: "Reported", Amount: "0", Unit: "USD", Kind: "ProviderCLIEquivalentEstimate"}
+			}
+			s.Status.UsageObservation = u
+			err := k8s.Status().Update(c, s)
+			if boundary == "accepted" {
+				if err != nil {
+					t.Fatal("an all-Unknown cursor observation was refused", err)
+				}
+				return
+			}
+			wantInvalid(t, err, "Cursor reports no usage, cost or served model")
+		})
+	}
+}

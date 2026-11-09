@@ -54,3 +54,32 @@ func TestUsageMalformedMetadataDoesNotRejectHeartbeat(t *testing.T) {
 		}
 	}
 }
+
+// A cursor observation is valid only when it asserts nothing (DESIGN-058).
+func TestCursorUsageObservationIsAllUnknown(t *testing.T) {
+	u := UnknownUsage()
+	u.ResultState = "Final"
+	u.Source = UsageSource{SessionUID: "session", PodUID: "pod", Provider: AgentCursor, RequestedModel: "grok-code-fast-1", AttemptID: strings.Repeat("a", 64)}
+	u.ID, u.ObservedAt = UsageObservationID(u.Source), time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	if !u.Source.Valid() || u.Validate() != nil {
+		t.Fatal("an all-Unknown cursor observation was refused", u.Validate())
+	}
+	zero := int64(0)
+	for name, mutate := range map[string]func(*UsageObservation){
+		"tokens": func(o *UsageObservation) { o.InputTokens = TokenObservation{State: UsageReported, Amount: &zero} },
+		"cost": func(o *UsageObservation) {
+			o.Cost = CostObservation{State: UsageReported, Amount: "0", Unit: "USD", Kind: UsageCLIEstimate}
+		},
+		"served model": func(o *UsageObservation) {
+			o.ActualModelState = UsageProviderReported
+			o.ServedModels = []ModelUsage{{Model: "grok-code-fast-1", InputTokens: TokenObservation{State: UsageUnknown}, OutputTokens: TokenObservation{State: UsageUnknown},
+				CacheReadInputTokens: TokenObservation{State: UsageUnknown}, CacheCreationInputTokens: TokenObservation{State: UsageUnknown}, Cost: CostObservation{State: UsageUnknown, Kind: UsageUnknown}}}
+		},
+	} {
+		o := u
+		mutate(&o)
+		if o.Validate() == nil {
+			t.Errorf("%s: a cursor observation asserted what Cursor never reports", name)
+		}
+	}
+}

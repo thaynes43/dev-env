@@ -95,6 +95,9 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	if err != nil {
 		return err
 	}
+	if agent == protocol.AgentCursor && (local || interactive) {
+		return usageError("%s", protocol.CursorModeRefusal)
+	}
 	projectGiven, dryRunGiven := false, false
 	fs.Visit(func(f *flag.Flag) {
 		projectGiven = projectGiven || f.Name == "project"
@@ -199,13 +202,31 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		if effort, err = claudeEffort(model, effort); err != nil {
 			return err
 		}
+	case protocol.AgentCursor:
+		// DESIGN-058: a shape check only, no allowlist; the Cursor CLI refuses
+		// an id it does not know. Grok and other vendors are Cursor model ids.
+		if model == "" {
+			return usageError("--agent cursor needs --model: a Cursor model id, such as one the Cursor CLI's --list-models prints")
+		}
+		if err := protocol.ValidateCursorModel(model); err != nil {
+			return usageError("--model: %v", err)
+		}
+		if effort != "" {
+			return usageError("--effort: %s", protocol.CursorEffortRefusal)
+		}
+		if maxTurns != 0 {
+			return usageError("--max-turns: the Cursor CLI has no max-turns flag; use --timeout")
+		}
+		if project == "" && !restoring {
+			return usageError("--agent cursor needs --project <name>: a cursor task runs in a declared project's private worktree")
+		}
 	case protocol.AgentCodex, protocol.AgentOpencode:
 		// The API says which plan serves these; agent-run does not restate it.
 		if model == "" {
 			return usageError("--agent %s needs --model: its model id or LLM pool model", agent)
 		}
 	default:
-		return usageError("--agent is claude, codex or opencode, not %q", agent)
+		return usageError("--agent is claude, codex, cursor or opencode, not %q", agent)
 	}
 	if size != "" {
 		size = strings.ToUpper(size)

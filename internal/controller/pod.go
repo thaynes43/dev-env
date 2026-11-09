@@ -414,6 +414,19 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 			},
 		}})
 	}
+	if s.Spec.Agent == v1alpha1.AgentCursor && !hold {
+		// DESIGN-058: the Cursor API key goes to a cursor pod only, from the
+		// templates' reference. Without one there is no cursor pod at all.
+		if t.Cursor == nil {
+			return nil, sessionInvalidError{errors.New("cursor sessions need the templates' cursor.apiKey reference, and none is configured")}
+		}
+		env = append(env, corev1.EnvVar{Name: templates.CursorAPIKeyEnv, ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: t.Cursor.APIKey.Name},
+				Key:                  t.Cursor.APIKey.Key,
+			},
+		}})
+	}
 	env = append(env, t.Env...)
 	envFrom := []corev1.EnvFromSource{}
 	if !hold {

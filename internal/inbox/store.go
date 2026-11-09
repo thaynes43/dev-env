@@ -121,7 +121,7 @@ func validMessageSpec(s coord.InboxMessageSpec, archived bool) bool {
 		textOK = s.Text == ""
 	}
 	return taskclaim.ValidSpec(claim) && s.Actor.Kind == "session" && ValidSession(s.Recipient) && ValidKey(s.Key) && textOK &&
-		(s.Provider == "claude" || s.Provider == "codex" || s.Provider == "opencode") && modelPattern.MatchString(s.RequestedModel) && validCorrelation(s)
+		(s.Provider == "claude" || s.Provider == "codex" || s.Provider == "cursor" || s.Provider == "opencode") && modelPattern.MatchString(s.RequestedModel) && validCorrelation(s)
 }
 
 // validCorrelation mirrors the schema: every reply, and only a reply, names one

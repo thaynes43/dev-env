@@ -60,7 +60,7 @@ func realCodexHostDeps() codexHostDeps {
 func runCodexHostNative(ctx context.Context, s Settings, bin string, args []string, caller io.Writer) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = s.Home
-	unset := append(append([]string{}, codexUnset...), "CODEX_SQLITE_HOME", "CODEX_APP_SERVER_TRANSPORT", "CODEX_APP_SERVER_SOCKET", "CODEX_REMOTE_CONTROL_SOCKET", "CODEX_APP_SERVER_DAEMON_BACKEND")
+	unset := append(append([]string{}, codexUnset...), cursorAPIKeyEnv, "CODEX_SQLITE_HOME", "CODEX_APP_SERVER_TRANSPORT", "CODEX_APP_SERVER_SOCKET", "CODEX_REMOTE_CONTROL_SOCKET", "CODEX_APP_SERVER_DAEMON_BACKEND")
 	cmd.Env = agentEnv(os.Environ(), Launch{Unset: unset, Env: []string{"HOME=" + s.Home, "CODEX_HOME=" + s.CodexHome}})
 	cmd.Stdin = nil
 	cmd.Stderr = io.Discard

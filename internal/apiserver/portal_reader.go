@@ -289,7 +289,7 @@ func portalActivity(s *v1alpha1.AgentSession, now time.Time) *apiv1.PortalSessio
 		a.Mode = string(s.Spec.Mode)
 	}
 	switch s.Spec.Agent {
-	case v1alpha1.AgentClaude, v1alpha1.AgentCodex, v1alpha1.AgentOpencode:
+	case v1alpha1.AgentClaude, v1alpha1.AgentCodex, v1alpha1.AgentCursor, v1alpha1.AgentOpencode:
 		a.Provider = string(s.Spec.Agent)
 	}
 	if s.Spec.Mode == v1alpha1.ModeTask {
