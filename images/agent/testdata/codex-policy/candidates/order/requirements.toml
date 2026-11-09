@@ -1,3 +1,0 @@
-# TEMPORARY candidate for #482 evidence only: the GitOps list in reverse order.
-allowed_approval_policies = ["never"]
-allowed_sandbox_modes = ["danger-full-access", "read-only"]

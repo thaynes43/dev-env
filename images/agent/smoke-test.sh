@@ -172,8 +172,9 @@ run -v "${policy}/requirements.toml:/etc/codex/requirements.toml:ro" \
     echo "codex $* -> ${got}"
     test "${got}" = "${want}" || { echo "FAIL: codex $* gives \"${got}\", want \"${want}\"" >&2; exit 1; }
   }
+  mkdir -p "$CODEX_HOME"
   codex --version
-  # The default (a phone thread, a bare codex) and what the managed routes pass.
+  # A thread that asks for no sandbox or approval, and what the managed routes pass.
   expect "danger-full-access never"
   expect "danger-full-access never" --dangerously-bypass-approvals-and-sandbox
   # A request for approvals is refused; approval stays never.
@@ -186,22 +187,6 @@ run -v "${policy}/requirements.toml:/etc/codex/requirements.toml:ro" \
   expect "read-only never" -s workspace-write
   expect "read-only never" --approve-for-me
 '
-echo "::endgroup::"
-
-echo "::group::TEMPORARY #482 evidence: requirements candidates (report only)"
-for cand in order profiles; do
-  run -v "${policy}/candidates/${cand}/requirements.toml:/etc/codex/requirements.toml:ro" \
-    -v "${policy}/config.toml:/opt/codex-policy/config.toml:ro" \
-    --entrypoint /bin/bash "${image}" -uc "${codex_effective}"'
-    for flags in "" "-s workspace-write" "--approve-for-me" "-s read-only" "-a on-request" \
-        "--dangerously-bypass-approvals-and-sandbox" \
-        "-c default_permissions=\":read-only\"" "-c default_permissions=\":workspace\""; do
-      echo "candidate '"${cand}"': codex ${flags} -> $(effective ${flags})"
-    done
-    effective -s workspace-write >/dev/null
-    grep -o "Filesystem sandboxing[^\\\\]*" /tmp/prompt.json | head -2
-  ' || echo "candidate ${cand}: run failed"
-done
 echo "::endgroup::"
 
 echo "::group::tini reaps"

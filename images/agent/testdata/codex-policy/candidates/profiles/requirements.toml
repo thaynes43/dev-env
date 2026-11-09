@@ -1,9 +1,0 @@
-# TEMPORARY candidate for #482 evidence only: the GitOps modes plus a required
-# permission-profile default.
-allowed_approval_policies = ["never"]
-allowed_sandbox_modes = ["read-only", "danger-full-access"]
-default_permissions = ":danger-full-access"
-
-[allowed_permission_profiles]
-":danger-full-access" = true
-":read-only" = true
