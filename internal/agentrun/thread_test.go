@@ -3,6 +3,7 @@ package agentrun
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -145,8 +146,8 @@ func TestThreadStartCodexHostAnswers(t *testing.T) {
 	}
 }
 
-// The host must be a Running Codex remote session, and the caller must not be
-// an ordinary session pod (D-19): none of these refusals execs anything.
+// On the exec path the host must be a Running Codex remote session: none of
+// these refusals execs anything.
 func TestThreadStartCodexRefusesBeforeExec(t *testing.T) {
 	claude := runningOn(codexHostView(""), "talosw02")
 	claude.Agent = "claude"
@@ -154,20 +155,15 @@ func TestThreadStartCodexRefusesBeforeExec(t *testing.T) {
 	task.Mode = "task"
 	for name, tc := range map[string]struct {
 		view apiv1.Session
-		pod  bool
 		code string
 	}{
-		"claude host":  {claude, false, "not_codex_host"},
-		"codex task":   {task, false, "not_codex_host"},
-		"not running":  {codexHostView("Suspended"), false, "host_not_running"},
-		"session pod":  {runningOn(codexHostView(""), "talosw02"), true, "caller_not_allowed"},
-		"not anywhere": {apiv1.Session{Name: "missing"}, false, "exec_failed"},
+		"claude host":  {claude, "not_codex_host"},
+		"codex task":   {task, "not_codex_host"},
+		"not running":  {codexHostView("Suspended"), "host_not_running"},
+		"not anywhere": {apiv1.Session{Name: "missing"}, "exec_failed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h, c := threadHarness(t, tc.view, 0, nil)
-			if tc.pod {
-				h.vars[envAgentdTokenFile] = h.write("pod-token", "x")
-			}
 			h.mustRun(ExitFailed, codexThreadArgs(h)...)
 			if r := threadResult(t, h); r.Outcome != apiv1.ThreadFailed || r.Error.Code != tc.code || c.calls != 0 {
 				t.Fatalf("result %+v calls %d", r.Error, c.calls)
@@ -264,4 +260,152 @@ func TestThreadStartClaudeMapsRCStart(t *testing.T) {
 	if err != nil || r.Outcome != apiv1.ThreadTimedOut || r.Error.Code != "launch_deadline" || r.Phases[apiv1.ThreadPhaseSourceVisible].State == "ok" {
 		t.Fatalf("result %v %+v", err, r)
 	}
+}
+
+// threadAPIHarness is an ordinary session pod: its API answers the thread
+// route with answer, and any kubectl exec fails the test.
+func threadAPIHarness(t *testing.T, answer func(w http.ResponseWriter, r *http.Request, body []byte)) (*harness, *capture) {
+	t.Helper()
+	h := newHarness(t)
+	h.vars[envAgentdTokenFile] = h.write("pod-token", "x")
+	c := &capture{}
+	h.env.RunCapture = func(context.Context, []string, io.Reader, io.Writer) (int, []byte, error) {
+		c.calls++
+		return 1, nil, errors.New("a session pod has no exec")
+	}
+	h.api.handle = answer
+	return h, c
+}
+
+// serveThread answers the host's thread route with status and raw.
+func serveThread(status int, raw []byte) func(http.ResponseWriter, *http.Request, []byte) {
+	return func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if r.Method != http.MethodPost || r.URL.Path != apiv1.SessionThreadsPath(threadHostName) {
+			apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "no route "+r.Method+" "+r.URL.Path)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write(raw)
+	}
+}
+
+// From an ordinary session pod the Codex route is the operator's API (OP495):
+// one POST with the handoff in the body, no kubectl, and the operator's
+// thread-launch.v1 result printed unchanged.
+func TestThreadStartCodexViaAPIInSessionPod(t *testing.T) {
+	out := hostResult(t, apiv1.ThreadResponded, "")
+	h, c := threadAPIHarness(t, serveThread(http.StatusOK, out))
+	h.mustRun(ExitOK, codexThreadArgs(h, "--repo", "dev-env")...)
+	reqs := h.api.requests()
+	if len(reqs) != 1 || reqs[0].method != http.MethodPost || reqs[0].path != apiv1.SessionThreadsPath(threadHostName) || reqs[0].auth != "Bearer "+testToken || c.calls != 0 {
+		t.Fatalf("requests %+v, execs %d", reqs, c.calls)
+	}
+	dec := json.NewDecoder(bytes.NewReader(reqs[0].body))
+	dec.DisallowUnknownFields()
+	var got apiv1.ThreadStartRequest
+	if err := dec.Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	want := apiv1.ThreadStartRequest{Model: "gpt-6-astra", Effort: "xhigh", Name: "thread-1006-210000", Repo: "dev-env", Wait: "5m0s", Handoff: threadHandoff}
+	if got != want {
+		t.Fatalf("request %+v, want %+v", got, want)
+	}
+	r := threadResult(t, h)
+	if g, _ := json.Marshal(r); !bytes.Equal(append(g, '\n'), out) {
+		t.Fatalf("the result changed on the way\n got %s\nwant %s", g, out)
+	}
+
+	// A pending result keeps its outcome and exit; agent-run never resends.
+	h, _ = threadAPIHarness(t, serveThread(http.StatusOK, hostResult(t, apiv1.ThreadVisible, "response_pending")))
+	h.mustRun(ExitPending, codexThreadArgs(h, "--wait", "90s")...)
+	if r := threadResult(t, h); r.Outcome != apiv1.ThreadVisible || r.Error.Code != "response_pending" || len(h.api.requests()) != 1 {
+		t.Fatalf("result %+v", r)
+	}
+	if !strings.Contains(string(h.api.requests()[0].body), `"wait":"1m30s"`) {
+		t.Fatalf("body %s", h.api.requests()[0].body)
+	}
+
+	// A workbench session keeps the exec route.
+	h, c = threadHarness(t, runningOn(codexHostView(""), "talosw02"), 0, out)
+	h.vars[envAgentdTokenFile] = h.write("pod-token", "x")
+	h.vars[envWorkbench] = "1"
+	h.mustRun(ExitOK, codexThreadArgs(h)...)
+	for _, req := range h.api.requests() {
+		if req.method == http.MethodPost {
+			t.Fatalf("a workbench session used the API route: %+v", req)
+		}
+	}
+	if c.calls != 1 || c.stdin != threadHandoff {
+		t.Fatalf("execs %d", c.calls)
+	}
+}
+
+// Every answer but one valid result is a refusal or unconfirmed, sent once:
+// an operator without the route says so by name, a 5xx or an unreadable
+// result is unconfirmed, and none is retried or falls back to kubectl.
+func TestThreadStartCodexViaAPIAnswers(t *testing.T) {
+	refusal := func(code, msg string) []byte {
+		b, _ := json.Marshal(apiv1.ErrorResponse{Error: apiv1.Error{Code: code, Message: msg}})
+		return b
+	}
+	otherHost := bytes.ReplaceAll(hostResult(t, apiv1.ThreadVisible, "response_pending"), []byte(threadHostName), []byte("other-host"))
+	refused := threadlaunch.NewRecorder("codex", func() time.Time { return testNow })
+	refused.Result.Host = threadHostName
+	refused.Phase(apiv1.ThreadPhaseHostReady, "error", "api", "not_codex_host")
+	hostRefusal, _ := threadlaunch.Encode(refused.Finish(apiv1.ThreadFailed, "not_codex_host", apiv1.ThreadPhaseHostReady, 5*time.Minute))
+	for name, tc := range map[string]struct {
+		status        int
+		raw           []byte
+		exit          int
+		outcome, code string
+	}{
+		"old operator":    {http.StatusNotFound, refusal(apiv1.CodeNotFound, "no route POST /v1/sessions/"+threadHostName+"/threads"), ExitFailed, apiv1.ThreadFailed, "route_unsupported"},
+		"not the API":     {http.StatusNotFound, []byte("404 page not found\n"), ExitFailed, apiv1.ThreadFailed, "route_unsupported"},
+		"no such host":    {http.StatusNotFound, refusal(apiv1.CodeNotFound, "session "+threadHostName+": not found"), ExitFailed, apiv1.ThreadFailed, "host_not_found"},
+		"unauthenticated": {http.StatusUnauthorized, refusal(apiv1.CodeUnauthenticated, "no"), ExitFailed, apiv1.ThreadFailed, "unauthenticated"},
+		"forbidden":       {http.StatusForbidden, refusal(apiv1.CodeForbidden, "coordinator access is limited"), ExitFailed, apiv1.ThreadFailed, "caller_not_allowed"},
+		"invalid":         {http.StatusUnprocessableEntity, refusal(apiv1.CodeInvalid, "wait: too long"), ExitUsage, apiv1.ThreadFailed, "invalid_input"},
+		"budget":          {http.StatusConflict, refusal(apiv1.CodeConflict, "task budget latched"), ExitFailed, apiv1.ThreadFailed, "api_refused"},
+		"unavailable":     {http.StatusServiceUnavailable, refusal(apiv1.CodeUnavailable, "this API cannot exec into pods"), ExitUnconfirmed, apiv1.ThreadUnconfirmed, "api_result_unconfirmed"},
+		"internal":        {http.StatusInternalServerError, refusal(apiv1.CodeInternal, "boom"), ExitUnconfirmed, apiv1.ThreadUnconfirmed, "api_result_unconfirmed"},
+		"not a result":    {http.StatusOK, []byte("{}\n"), ExitUnconfirmed, apiv1.ThreadUnconfirmed, "api_result_unconfirmed"},
+		"other host":      {http.StatusOK, otherHost, ExitUnconfirmed, apiv1.ThreadUnconfirmed, "api_result_unconfirmed"},
+		"host refused":    {http.StatusOK, hostRefusal, ExitFailed, apiv1.ThreadFailed, "not_codex_host"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, c := threadAPIHarness(t, serveThread(tc.status, tc.raw))
+			h.mustRun(tc.exit, codexThreadArgs(h)...)
+			r := threadResult(t, h)
+			if r.Outcome != tc.outcome || r.Error.Code != tc.code || len(h.api.requests()) != 1 || c.calls != 0 {
+				t.Fatalf("result %+v, %d requests, %d execs", r.Error, len(h.api.requests()), c.calls)
+			}
+			if tc.code == "route_unsupported" && (!strings.Contains(r.Error.Message, "/v1/sessions/<host>/threads") || !strings.Contains(r.Error.Message, "2.95.0")) {
+				t.Fatalf("message %q names neither the route nor the version", r.Error.Message)
+			}
+		})
+	}
+}
+
+// A request whose answer is lost after it was sent is unconfirmed and never
+// repeated; one that never left agent-run failed and launched nothing.
+func TestThreadStartCodexViaAPITransport(t *testing.T) {
+	h, _ := threadAPIHarness(t, func(http.ResponseWriter, *http.Request, []byte) { panic(http.ErrAbortHandler) })
+	h.mustRun(ExitUnconfirmed, codexThreadArgs(h)...)
+	if r := threadResult(t, h); r.Outcome != apiv1.ThreadUnconfirmed || r.Error.Code != "api_result_unconfirmed" || len(h.api.requests()) != 1 {
+		t.Fatalf("result %+v, %d requests", r.Error, len(h.api.requests()))
+	}
+	h, _ = threadAPIHarness(t, serveThread(http.StatusOK, nil))
+	h.vars[envAPIURL] = "https://127.0.0.1:1"
+	h.mustRun(ExitFailed, codexThreadArgs(h)...)
+	if r := threadResult(t, h); r.Outcome != apiv1.ThreadFailed || r.Error.Code != "api_unreachable" || len(h.api.requests()) != 0 {
+		t.Fatalf("result %+v", r.Error)
+	}
+}
+
+// agent-run help thread says how a session pod is served.
+func TestThreadHelpNamesTheAPIRoute(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun(ExitOK, "help", "thread")
+	contains(t, "help", h.stdout.String(), "ordinary session pod", "/v1/sessions/<host>/threads")
 }

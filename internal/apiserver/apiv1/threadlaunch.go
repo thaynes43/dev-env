@@ -6,11 +6,66 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"strings"
+	"time"
+	"unicode/utf8"
 )
 
 // ThreadLaunchVersion identifies `agent-run thread start`'s result (DESIGN-057).
-// It is a client and in-host observation contract, not an operator API.
+// The host's agentd prints it; the operator's thread route (section 10) relays
+// the same document to a caller with no exec of its own.
 const ThreadLaunchVersion = "thread-launch.v1"
+
+// SessionThreadsPath is a Codex host session's thread route, POST (DESIGN-057
+// section 10): the operator runs agentd ctl thread-start in that host for the
+// caller, as it delivers a message (D-65). It answers 200 with one
+// ThreadLaunchResult once it has refused the host or run the exec; any other
+// status is an Error, sent before any exec.
+func SessionThreadsPath(name string) string { return SessionPath(name) + "/threads" }
+
+// Thread start bounds, one rule for every caller and every provider.
+const (
+	// ThreadMaxHandoffBytes caps the handoff, the thread's first message.
+	ThreadMaxHandoffBytes = 4096
+	// ThreadMaxWait caps --wait, the whole launch.
+	ThreadMaxWait = 10 * time.Minute
+)
+
+// ThreadStartRequest is the body of POST /v1/sessions/{name}/threads. The
+// operator takes the caller from the token; nothing here names one.
+type ThreadStartRequest struct {
+	// Model is a full Codex model id and Effort a level it takes.
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
+	// Name is the thread's one-use tmux session name on the host (ValidThreadName).
+	Name string `json:"name"`
+	// Repo is the host's ~/repos/<repo>; empty is the host's own repo.
+	Repo string `json:"repo,omitempty"`
+	// Wait is a positive Go duration, at most ThreadMaxWait, for example 5m0s.
+	Wait string `json:"wait"`
+	// Handoff travels to the host on the exec's stdin only (ValidThreadHandoff).
+	Handoff string `json:"handoff"`
+}
+
+var threadName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+
+// ValidThreadName is the rule for a thread's name on its host.
+func ValidThreadName(s string) bool { return threadName.MatchString(s) }
+
+// ValidThreadHandoff is the one handoff rule: 1 to ThreadMaxHandoffBytes UTF-8
+// bytes, not blank, and no control character but newline and tab (C0, DEL and
+// C1 are refused, as a message's are, D-65).
+func ValidThreadHandoff(s string) bool {
+	if len(s) == 0 || len(s) > ThreadMaxHandoffBytes || !utf8.ValidString(s) || strings.TrimSpace(s) == "" {
+		return false
+	}
+	for _, r := range s {
+		if r != '\n' && r != '\t' && (r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)) {
+			return false
+		}
+	}
+	return true
+}
 
 // ThreadLaunchMaxBytes bounds one encoded result, newline included.
 const ThreadLaunchMaxBytes = 32 << 10

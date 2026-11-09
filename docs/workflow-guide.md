@@ -702,8 +702,9 @@ awake. A suspended standby has an archived phone entry until it is resumed.
 
 Use this when Tom must see and drive the thread on his phone.
 
-1. **Start it as an interactive thread.** From the v1 pod, a workbench session
-   or Tom's laptop, run `agent-run thread start` (below, DESIGN-057). Tom can
+1. **Start it as an interactive thread.** From any v2 session pod, the v1 pod,
+   a workbench session or Tom's laptop, run `agent-run thread start` (below,
+   DESIGN-057). Tom can
    also start it from the ChatGPT app on the paired host, or an agent on that
    host can start it with the remote TUI, `codex --remote unix://<control
    socket>`, or with [`scripts/codex-clean-session.py`](codex-clean-session.md),
@@ -741,15 +742,19 @@ Use this when Tom must see and drive the thread on his phone.
    packet at `/opt/dev-env/config/codex/rc-target.json`. So it cannot serve
    "give me another thread", and a daemon or pod restart invalidates it.
 5. **Reaching the host from elsewhere: `agent-run thread start`.** From the v1
-   pod, a workbench session or a laptop (the exec route `agent-run pair` uses; an
-   ordinary session pod is refused, D-19):
+   pod, a workbench session or a laptop it uses the exec route `agent-run pair`
+   uses. An ordinary session pod has no exec (D-19), so there agent-run asks
+   the operator's API instead (`POST /v1/sessions/<host>/threads`, DESIGN-057
+   section 10), which runs the same command in the host as it delivers
+   `agent-run msg`. An operator released before that route answers
+   `route_unsupported`; agent-run never falls back or retries:
 
    ```bash
    "${v2run[@]}" thread start --agent codex --host <codex-host> \
      --model gpt-6-astra --effort xhigh --handoff task.md [--repo dev-env]
    ```
 
-   It execs `agentd ctl thread-start` in the host, which checks the daemon is
+   Either way `agentd ctl thread-start` runs in the host, which checks the daemon is
    connected and the host was paired, runs the clean-session wrapper once (the
    handoff on stdin), and watches the daemon's thread list. It prints one
    `thread-launch.v1` JSON line with the phases `host_ready`, `paired`,

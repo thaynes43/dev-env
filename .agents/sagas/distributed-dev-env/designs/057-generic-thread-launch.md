@@ -1,11 +1,14 @@
 # DESIGN-057: Generic thread launch on an existing v2 host
 
 - **Status:** Proposed, 2026-11-09. Codex adapter in source; live acceptance pending.
+  Section 10 (session-pod callers through the operator's API, OP495) in source,
+  2026-11-09; live acceptance pending.
 - **Tracking:** [Story OP489](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/489),
   under [Epic #91](https://work.haynesnetwork.com/work_packages/91). It supersedes
   [OP272](https://work.haynesnetwork.com/work_packages/272)'s runtime activation
   (journal 5990) and meets [OP481](https://work.haynesnetwork.com/work_packages/481)
-  acceptance item 2 for this route.
+  acceptance item 2 for this route. [Story OP495](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/495)
+  adds section 10.
 - **Origin:** Tom, 2026-11-09: "Yes build it but meatball has been starting these
   so check to see what's built already don't duplicate what they have but you need
   that ability too. You need to be able to start Grok too and other providers as we
@@ -17,7 +20,8 @@
 
 ## 1. Goal and non-goals
 
-An authorized caller (Tom, the v1 pod or a workbench session) runs one command
+An authorized caller (Tom, the v1 pod, a workbench session or, since section 10,
+an ordinary v2 session pod) runs one command
 and gets a fresh interactive thread that Tom can see in his provider's phone app:
 
 ```bash
@@ -75,7 +79,9 @@ bytes, not blank, no control character but newline and tab), `--wait`
   exec's stdin, never in an argument. agentd prints the result; agent-run
   checks it is one valid `thread-launch.v1` document whose exit code matches
   its outcome. A host whose agentd predates `thread-start` prints nothing valid
-  and agent-run says so (`host_unsupported`: move the host to a newer image). Inside the host the
+  and agent-run says so (`host_unsupported`: move the host to a newer image).
+  From an ordinary session pod, which has no exec, the operator's API runs the
+  same command instead (section 10). Inside the host the
   wrapper passes the handoff to the TUI as its initial prompt argument, as it
   always has; it is never in agent-run's or agentd's argv, log or output.
 - **Claude** takes `--project` and optional `--repo`; `--host` is refused.
@@ -198,11 +204,13 @@ qualification story and needs Tom's approval.
 
 ## 7. Authorization
 
-No new authority. The Codex route is `sessionExecBase`: refused in an ordinary
-session pod (D-19), allowed where RBAC already lets the caller create
-`pods/exec` in `dev-agents` (the v1 pod's ServiceAccount, a workbench session,
-Tom's kubeconfig). The Claude route is the existing create API and its caller
-checks. agentd re-checks inside the host that it is a Codex remote session.
+No new authority. The Codex route is `sessionExecBase` where RBAC already lets
+the caller create `pods/exec` in `dev-agents` (the v1 pod's ServiceAccount, a
+workbench session, Tom's kubeconfig). An ordinary session pod has no exec
+(D-19); since 2026-11-09 it goes through the operator's API, under the message
+route's rule (section 10). The Claude route is the existing create API and its
+caller checks. agentd re-checks inside the host that it is a Codex remote
+session.
 
 ## 8. Result and outcomes
 
@@ -247,3 +255,74 @@ Live acceptance is the coordinator's: a fresh Codex host on the image that
 ships this, Tom types one pairing code, then `thread start` from the v1 pod or
 a workbench session must print `responded` and Tom sees the thread on his
 phone. No host is created and no pairing is run by the build story.
+
+## 10. Session-pod callers through the operator's API (2026-11-09, OP495)
+
+**The gap.** Section 3's Codex route execs into the host from the caller. An
+ordinary v2 session pod has no `pods/exec` in `dev-agents` (D-19), so an
+agent coordinating from one could not start a Codex thread at all: agent-run
+refused it with `caller_not_allowed`.
+
+**Ruling.** Tom, 2026-11-09, by phone prompt in session dev-env-1109-202321:
+"why are you unable to do so? A coordinator should have this ability ... Your
+job as Fable 5.2 is to get dev-env v2 up to speed so an agentic coordinator can
+dispatch Cursor/Codex/Claude bots to build the studio platform". The fix gives
+no caller exec. The operator's API runs the host's own command for it, as it
+already delivers `agent-run msg` and reads `agent-run log` (D-65). The ruling
+is the enablement: the route is on by default, with no flag.
+
+**Route.** `POST /v1/sessions/{host}/threads`, body
+`apiv1.ThreadStartRequest` (`model`, `effort`, `name`, optional `repo`,
+`wait` as a Go duration, `handoff`). The operator checks the body by
+agent-run's own rules (section 3), then the host: a Codex `remote` session,
+phase Running, not suspended, with its own Running and Ready pod. Anything
+else answers a `failed` result (`not_codex_host` or `host_not_running`) before
+any exec. It then runs `agentd ctl thread-start` in the host through
+`internal/podexec`, with the same arguments agent-run passes and the handoff
+on stdin, and reads the answer as agent-run does: one valid result whose exit
+code matches its outcome passes through unchanged (phases, permission and
+all); an agentd without `thread-start` is `host_unsupported`; a lost exec
+stream or anything else is `unconfirmed` (`host_result_unconfirmed`), never
+retried. Once the host check has run, the answer is 200 with one
+`thread-launch.v1` result. Every other status is an API error sent before any
+exec: a bad body (400, 422), a missing session (404), a caller refused (401,
+403), a latched task budget, or an API that cannot exec (503).
+
+**Authorization.** The message route's rule (D-65): any authenticated caller
+may reach any session (Tom, a trusted client, any session). The portal reader
+is refused, as on every route not listed for it. One narrowing: a coordinator
+host (`kindCoordinator`) is refused. The message route admits it for its own
+children only, by passing `--expected-pod-uid` and `--expected-session-uid` to
+agentd, and `ctl thread-start` takes neither flag, so the narrower rule
+applies. The target's task budget is checked as for a message. The operator
+logs the caller and the handoff's byte length, never its text. No RBAC,
+admission, network policy or CRD changes: the operator already execs into
+`dev-agents` pods for messages.
+
+**Waiting.** The listener cuts a request at 30 seconds of read and 60 of write
+(`Runner`). A launch may wait up to 10 minutes, so this route moves both
+deadlines for its own request (`http.ResponseController`) to the wait plus 90
+seconds. The exec stops a minute after the wait, as agent-run's kubectl exec
+does, and the host bounds the launch itself. agent-run waits the wait plus two
+minutes for the answer. An operator restart during a wait ends the request:
+agent-run reports `unconfirmed` (`api_result_unconfirmed`) and never resends.
+Each launch holds one exec stream for its wait; no extra limit is added.
+
+**Client.** agent-run in an ordinary session pod (the projected token, not the
+workbench) sends the one POST; Tom's laptop, the v1 pod and a workbench
+session keep the exec route. agent-run checks the result again and prints it.
+A lost answer or a 5xx is `unconfirmed`; nothing is retried. An operator
+without the route answers its catch-all 404 (`no route POST ...`) before
+authentication, and agent-run reports `route_unsupported`, naming the route
+and an operator released after 2.95.0, with no fallback.
+
+**Excluded.** Pairing stays on the exec route: `agent-run pair` prints a
+secret code, and this route does not carry one. Also excluded: the Claude path
+(it already uses the API), `thread status` (OP492), the Cursor/Grok adapter
+(OP491) and any change to launch permission flags (section 6a).
+
+**Acceptance.** Source tests use the API's fake exec and fake client, a real
+listener with short timeouts over HTTP/1.1 and HTTP/2, and agent-run against a
+fake API. Live proof waits for a paired host: from an ordinary session pod,
+`thread start --agent codex --host <host>` must print `responded` and Tom must
+see the thread on his phone.

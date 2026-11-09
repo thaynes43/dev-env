@@ -1,7 +1,8 @@
 // Package podexec runs a command in a session pod's container through the API
 // server's pods/exec subresource (D-08: commands go operator to pod by exec),
 // over WebSocket with the SPDY fallback. The operator's rescue (D-51), the
-// API's log and message routes (D-65) use it; the operator's RBAC grants
+// API's log and message routes (D-65) and its thread route (DESIGN-057 10)
+// use it; the operator's RBAC grants
 // pods/exec in dev-agents only (DESIGN-001 6.11).
 package podexec
 

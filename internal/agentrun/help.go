@@ -653,9 +653,12 @@ not blank, no control character but newline and tab. Ask the thread to make its 
 worktree, as on the phone. --wait (at most 10m) bounds the whole launch.
 
 --agent codex     an existing Codex --interactive session (--host), paired once with
-                  agent-run pair. It runs agentd ctl thread-start in that pod over the
-                  exec route pair uses, so it is for Tom, the v1 pod or a workbench
-                  session; an ordinary session pod is refused (D-19). The thread is the
+                  agent-run pair. It runs agentd ctl thread-start in that pod. From Tom's
+                  laptop, the v1 pod or a workbench session it uses the exec route pair
+                  uses. An ordinary session pod has no exec (D-19), so the operator's API
+                  runs it there instead (POST /v1/sessions/<host>/threads, as it delivers
+                  agent-run msg); an operator released before that route is a refusal
+                  (route_unsupported), never a fallback. The thread is the
                   native codex --remote TUI (scripts/codex-clean-session.py) in a tmux
                   session named --name (default thread-<UTC mmdd-HHMMSS>) in
                   ~/repos/<repo> on the host (default: the host's repo). Never codex exec
