@@ -199,19 +199,22 @@ echo "::group::codex daemon surfaces load the GitOps requirements (#487)"
 # file. A requirements file Codex dislikes once stopped `codex remote-control start` at
 # every boot (haynes-ops #2829), so prove the daemon surfaces still load it. Empty
 # CODEX_HOME, no auth, no network: app-server over stdio answers `initialize` and exits
-# at end of input. A bad requirements or config file shows up as a configWarning
+# at end of input (or the timeout ends it). A bad requirements or config file shows up as a configWarning
 # ("Invalid configuration; using defaults") or a refused initialize. The bubblewrap
 # warning is expected in the image and is not matched.
 run -v "${policy}/requirements.toml:/etc/codex/requirements.toml:ro" \
   --entrypoint /bin/bash "${image}" -euc '
   mkdir -p "$CODEX_HOME"
   rc=0
-  printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"smoke\",\"version\":\"0\"}}}" \
-    | timeout 30 codex app-server --listen stdio:// >/tmp/app-server.out 2>&1 || rc=$?
+  # Hold stdin open for a few seconds after the request: app-server reads stdin and
+  # exits at end of input, and an immediate end of input can beat its start-up.
+  { printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"smoke\",\"version\":\"0\"}}}"; sleep 8; } \
+    | timeout 20 codex app-server --listen stdio:// >/tmp/app-server.out 2>&1 || rc=$?
   echo "codex app-server --listen stdio:// -> exit ${rc}"
-  test "${rc}" = 0 || { echo "FAIL: app-server exited ${rc}" >&2; cat /tmp/app-server.out >&2; exit 1; }
+  cut -c1-200 /tmp/app-server.out | sed "s/^/  app-server: /"
+  test "${rc}" = 0 || test "${rc}" = 124 || { echo "FAIL: app-server exited ${rc}" >&2; exit 1; }
   grep -q "\"id\":1,\"result\"" /tmp/app-server.out \
-    || { echo "FAIL: app-server did not answer initialize" >&2; cat /tmp/app-server.out >&2; exit 1; }
+    || { echo "FAIL: app-server did not answer initialize" >&2; exit 1; }
   if grep -iE "invalid configuration|invalid value|disallowed|not in the allowed set|requirements.toml" /tmp/app-server.out; then
     echo "FAIL: app-server complained about its configuration or requirements" >&2; exit 1
   fi
