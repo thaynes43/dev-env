@@ -167,7 +167,7 @@ The portal does not call `Decide`. The broker does, in process, when it
 sees that Ask answered. `Decide` runs only when the live grant's UID equals
 `grant.uid` and `grantattest.ScopeDigest` of the live object equals
 `grant.scopeDigest`, the type and target match, and `spec.ttl` equals
-`grant.ttl`. `Decision.By` is `authentik/<username>` as section 3 defines.
+`grant.ttl`. `Decision.By` is `authentik/<username>` as defined below.
 `Decision.TTL` is 0.
 
 That call is one use. `Decide` refuses a grant that is not pending
@@ -520,7 +520,7 @@ GrantPolicies or haynes-ops.
 | Let a caller-supplied `authentik/tom` approve a credential | The pinned tests refuse exactly that, and they say the future path is default-off. The Ask binding is the verified decision. The string alone is not. |
 | Give grant Asks the 16 open slots, or a 24-hour expiry | They do not expire, so they would fill the question quota, or they would turn a missed request into a no, which Tom refused. The caps are 3 and 48, taken from the pending-grant cap and the open-Ask cap. |
 | Change the whole board to oldest first | Info and approval stay newest first, as DESIGN-034 section 3 ships them. Open grant Asks are placed ahead of them so a missed grant stays visible. |
-| An AccessGrant spec or status field pointing at the Ask | The Ask already points at the grant. A spec change is the story's stop. A status field would be an AccessGrant CRD change this story's reach does not include. The broker finds its Ask by the grant UID label. |
+| An AccessGrant spec or status field pointing at the Ask | The Ask already points at the grant. A spec change is the story's stop. A status field would be an AccessGrant CRD change this story's reach does not include. The broker finds its Ask by `requestId`, which is `grant-` plus the grant UID, as section 1 defines. |
 | Approve reserved scope only through the delegate | Tom's phone is the path DESIGN-060 chose for risky access, and reserved scope is in that class. The delegate path stays for delegates. The phone path is an additional verified human decision, flag off by default. |
 
 ## Consequences
