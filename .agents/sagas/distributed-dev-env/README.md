@@ -1,5 +1,11 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+**2026-11-10 reuse paired Codex hosts, OP696:**
+[DESIGN-063](designs/063-reuse-paired-codex-hosts.md) is proposed. When a
+thread needs a Codex host, use a suitable paired one, resume an eligible
+suspended one onto the current image, and create a host only as a stated
+fallback. Design only. No ADR. The coordinator reviews the open questions.
+
 **2026-11-10 Meatball front door and one approval path, OP516:**
 [decisions 97 to 99](#decision-log) record Tom's rulings of that day.
 [DESIGN-060](designs/060-meatball-front-door.md) is the front door: Meatball
