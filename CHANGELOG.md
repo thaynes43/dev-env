@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.101.0](https://github.com/thaynes43/dev-env/compare/v2.100.0...v2.101.0) (2026-11-10)
+
+
+### Features
+
+* **agent-run:** thread status, an observe-only recheck of a Codex thread's first response (OP492) ([#1052](https://github.com/thaynes43/dev-env/issues/1052)) ([9204125](https://github.com/thaynes43/dev-env/commit/92041252ac5bc285fa0f112989410806f2b0d5fc))
+* **broker:** open a grant Ask and apply one answer (ADR-021) (OP525) ([#1041](https://github.com/thaynes43/dev-env/issues/1041)) ([7980695](https://github.com/thaynes43/dev-env/commit/7980695c3605b876f249837ce5b97c891b9fa4ed))
+* **coordination:** store a parent note without refusing today's inbox (OP684) ([#1055](https://github.com/thaynes43/dev-env/issues/1055)) ([8b5419e](https://github.com/thaynes43/dev-env/commit/8b5419e967156ef9f53e6e60d02b12df313ab3ec))
+* **frontdoor:** annotate tools and serve standing authority (OP546) ([#1051](https://github.com/thaynes43/dev-env/issues/1051)) ([362ad2d](https://github.com/thaynes43/dev-env/commit/362ad2d2225bda56b520bd3ad80310d877f6ed34))
+* **parent:** let a child reach its session parent (OP685) ([#1057](https://github.com/thaynes43/dev-env/issues/1057)) ([4a2266c](https://github.com/thaynes43/dev-env/commit/4a2266c88fd100bb4b9974f4bfa9efd466112213))
+
+
+### Bug Fixes
+
+* **agent-run:** return at once when a Claude agent is login-required (OP539) ([#1047](https://github.com/thaynes43/dev-env/issues/1047)) ([d644086](https://github.com/thaynes43/dev-env/commit/d6440863a87fabb13475b49fc642cd34d92157d6))
+* **cleanup:** keep a task clean-up refusal out of DevEnvRescueFailed (OP544) ([#1049](https://github.com/thaynes43/dev-env/issues/1049)) ([4118ac8](https://github.com/thaynes43/dev-env/commit/4118ac83598049852fbd5650a4d66873c7047680))
+* **frontdoor:** close work left by the caller’s finished coordinator ([#1054](https://github.com/thaynes43/dev-env/issues/1054)) ([50d13f0](https://github.com/thaynes43/dev-env/commit/50d13f059206e3a8bf69a4b2313e5e334dd6adf8))
+
 ## [2.100.0](https://github.com/thaynes43/dev-env/compare/v2.99.0...v2.100.0) (2026-11-10)
 
 
