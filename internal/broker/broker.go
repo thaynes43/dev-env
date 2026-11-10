@@ -236,6 +236,12 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !g.DeletionTimestamp.IsZero() {
+		// A retention Delete can commit and then lose its response. That
+		// error leaves the cleanup wait in place, and retain does not run
+		// again once this timestamp is set. Clear the wait before
+		// finalization. A conflicting Delete does not set the timestamp,
+		// so its wait stays.
+		b.clearGrantAskCleanupBackoff(g.UID)
 		return b.finalize(ctx, &g)
 	}
 	if !controllerutil.ContainsFinalizer(&g, Finalizer) {

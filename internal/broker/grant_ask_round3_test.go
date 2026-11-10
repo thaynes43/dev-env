@@ -1026,17 +1026,165 @@ func TestGrantAskInfoEventDoesNotDrainHeldOwners(t *testing.T) {
 	if res.RequeueAfter == 0 || len(q.added) != added {
 		t.Fatalf("due retry requeue %s added %d", res.RequeueAfter, len(q.added))
 	}
+
+	// An arrival during a failing retry stays behind the older keys when the
+	// snapshot has room. The retry lists once; the arrival lists for itself.
+	f.b.grantAskOwnerHeld = f.b.grantAskOwnerHeld[:grantAskOwnerHeldMax-1]
+	arrivedKey := asks.Namespace + "/ask-during-retry"
+	listed = reader.lists
+	reader.onList = func() {
+		reader.onList = nil
+		f.b.deliverGrantAsk(f.ctx, &coord.Ask{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "ask-during-retry", Namespace: asks.Namespace,
+				Labels: map[string]string{asks.OriginLabel: grantAskOriginBroker},
+			},
+			Spec: coord.AskSpec{Grant: &coord.AskGrant{UID: "uid-during"}, Question: "arrived"},
+		}, q)
+	}
+	res, err = f.b.Reconcile(f.ctx, reconcile.Request{NamespacedName: types.NamespacedName{
+		Namespace: f.b.SessionNamespace, Name: grantAskOwnerRetryName,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reader.lists != listed+2 {
+		t.Fatalf("arrival during the failing retry listed %d, want 2", reader.lists-listed)
+	}
+	if len(f.b.grantAskOwnerHeld) != grantAskOwnerHeldMax || f.b.grantAskOwnerHeld[0].key != oldest || f.b.grantAskOwnerHeld[len(f.b.grantAskOwnerHeld)-1].key != arrivedKey {
+		t.Fatalf("after the arrival held %d first %s last %s", len(f.b.grantAskOwnerHeld), f.b.grantAskOwnerHeld[0].key, f.b.grantAskOwnerHeld[len(f.b.grantAskOwnerHeld)-1].key)
+	}
+
+	// A duplicate update keeps its place and takes the newer object. A new
+	// key past the merge bound of 32 is dropped.
+	listed = reader.lists
+	overflowKey := asks.Namespace + "/ask-overflow"
+	reader.onList = func() {
+		reader.onList = nil
+		f.b.deliverGrantAsk(f.ctx, &coord.Ask{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "ask-held-00", Namespace: asks.Namespace,
+				Labels: map[string]string{asks.OriginLabel: grantAskOriginBroker},
+			},
+			Spec: coord.AskSpec{Grant: &coord.AskGrant{UID: "uid-00"}, Question: "replaced"},
+		}, q)
+		f.b.deliverGrantAsk(f.ctx, &coord.Ask{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "ask-overflow", Namespace: asks.Namespace,
+				Labels: map[string]string{asks.OriginLabel: grantAskOriginBroker},
+			},
+			Spec: coord.AskSpec{Grant: &coord.AskGrant{UID: "uid-overflow"}},
+		}, q)
+		if len(f.b.grantAskOwnerHeld) != 2 {
+			t.Fatalf("arrivals during the failing list: %d", len(f.b.grantAskOwnerHeld))
+		}
+	}
+	res, err = f.b.Reconcile(f.ctx, reconcile.Request{NamespacedName: types.NamespacedName{
+		Namespace: f.b.SessionNamespace, Name: grantAskOwnerRetryName,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reader.lists != listed+3 {
+		t.Fatalf("duplicate and overflow listed %d, want 3", reader.lists-listed)
+	}
+	if len(f.b.grantAskOwnerHeld) != grantAskOwnerHeldMax || f.b.grantAskOwnerHeld[0].key != oldest {
+		t.Fatalf("merge bound held %d first %s", len(f.b.grantAskOwnerHeld), f.b.grantAskOwnerHeld[0].key)
+	}
+	replaced, ok := f.b.grantAskOwnerHeld[0].obj.(*coord.Ask)
+	if !ok || replaced.Spec.Question != "replaced" {
+		t.Fatalf("duplicate update was not kept in place: %#v", f.b.grantAskOwnerHeld[0].obj)
+	}
+	sawArrived := false
+	for _, h := range f.b.grantAskOwnerHeld {
+		if h.key == overflowKey {
+			t.Fatal("overflow past 32 was held")
+		}
+		if h.key == arrivedKey {
+			sawArrived = true
+		}
+	}
+	if !sawArrived {
+		t.Fatal("the arrival was dropped from the older snapshot")
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatal("the failing retry did not requeue")
+	}
+
+	// A successful retry matches several owners with one list.
+	f.b.grantAskOwnerHeld = nil
+	const owners = 3
+	want := map[string]bool{}
+	for i := range owners {
+		name := fmt.Sprintf("grant-owner-%d", i)
+		uid := fmt.Sprintf("33333333-3333-4333-8333-%012d", i)
+		if err := f.base.Create(f.ctx, &v1alpha1.AccessGrant{ObjectMeta: metav1.ObjectMeta{
+			Namespace: sessionNS, Name: name, UID: types.UID(uid),
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		want[name] = true
+		f.b.deliverGrantAsk(f.ctx, &coord.Ask{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: fmt.Sprintf("ask-owner-%d", i), Namespace: asks.Namespace,
+				Labels: map[string]string{asks.OriginLabel: grantAskOriginBroker},
+			},
+			Spec: coord.AskSpec{Grant: &coord.AskGrant{UID: uid}},
+		}, q)
+	}
+	f.b.deliverGrantAsk(f.ctx, &coord.Ask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ask-owner-none", Namespace: asks.Namespace,
+			Labels: map[string]string{asks.OriginLabel: grantAskOriginBroker},
+		},
+		Spec: coord.AskSpec{Grant: &coord.AskGrant{UID: "uid-none"}},
+	}, q)
+	if len(f.b.grantAskOwnerHeld) != owners+1 {
+		t.Fatalf("held owners before the successful retry: %d", len(f.b.grantAskOwnerHeld))
+	}
+	reader.fail = false
+	reader.onList = nil
+	listed = reader.lists
+	added = len(q.added)
+	res, err = f.b.Reconcile(f.ctx, reconcile.Request{NamespacedName: types.NamespacedName{
+		Namespace: f.b.SessionNamespace, Name: grantAskOwnerRetryName,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reader.lists != listed+1 {
+		t.Fatalf("successful retry listed %d, want 1", reader.lists-listed)
+	}
+	if len(f.b.grantAskOwnerHeld) != 0 || res.RequeueAfter != 0 {
+		t.Fatalf("after the successful retry held %d requeue %s", len(f.b.grantAskOwnerHeld), res.RequeueAfter)
+	}
+	if len(q.added) != added+owners {
+		t.Fatalf("enqueued %d, want %d", len(q.added)-added, owners)
+	}
+	for _, req := range q.added[added:] {
+		if req.Namespace != sessionNS || !want[req.Name] {
+			t.Fatalf("enqueued %s/%s", req.Namespace, req.Name)
+		}
+		delete(want, req.Name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing owners %v", want)
+	}
 }
 
 type countingGrantList struct {
 	client.Client
-	fail  bool
-	lists int
+	fail   bool
+	lists  int
+	onList func()
 }
 
 func (c *countingGrantList) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
 	if _, ok := list.(*v1alpha1.AccessGrantList); ok {
 		c.lists++
+		if c.onList != nil {
+			c.onList()
+		}
 		if c.fail {
 			return apierrors.NewServiceUnavailable("grants were not listed")
 		}
@@ -1077,6 +1225,29 @@ func TestGrantAskDeleteConflictKeepsCleanupBackoff(t *testing.T) {
 			t.Fatalf("conflict %d requeue %s want %s deleted %v phase %s approvedBy %q", i, res.RequeueAfter, wait, !got.DeletionTimestamp.IsZero(), got.Status.Phase, got.Status.ApprovedBy)
 		}
 	}
+	kept := f.grant()
+	if stored, ok := f.b.grantAskCleanupWait[kept.UID]; !ok || stored != 8*time.Second {
+		t.Fatalf("cleanup wait after conflicts: %v", f.b.grantAskCleanupWait)
+	}
+	f.b.Client = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*v1alpha1.AccessGrant); ok {
+				return apierrors.NewNotFound(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "accessgrants"}, obj.GetName())
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	res, err := f.reconcile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.grant()
+	if len(f.b.grantAskCleanupWait) != 0 || !got.DeletionTimestamp.IsZero() || got.Status.Phase != v1alpha1.GrantDenied || got.Status.ApprovedBy != "" {
+		t.Fatalf("NotFound left wait %v deleted %v phase %s approvedBy %q", f.b.grantAskCleanupWait, !got.DeletionTimestamp.IsZero(), got.Status.Phase, got.Status.ApprovedBy)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("NotFound requeue %s", res.RequeueAfter)
+	}
 }
 
 func TestGrantAskCleanupBackoffDoesNotBlockRetention(t *testing.T) {
@@ -1107,6 +1278,9 @@ func TestGrantAskCleanupBackoffDoesNotBlockRetention(t *testing.T) {
 			t.Fatalf("step %d requeue %s want %s phase %s deleted %v ask %s", i, res.RequeueAfter, wait, got.Status.Phase, got.DeletionTimestamp, f.onlyAsk().Status.State)
 		}
 	}
+	if len(f.b.grantAskCleanupWait) == 0 {
+		t.Fatal("cleanup wait was empty before retention")
+	}
 	f.clk.Step(Retention)
 	res, err := f.reconcile()
 	if err != nil {
@@ -1119,6 +1293,57 @@ func TestGrantAskCleanupBackoffDoesNotBlockRetention(t *testing.T) {
 	ask := f.onlyAsk()
 	if res.RequeueAfter != 0 || got.DeletionTimestamp.IsZero() || got.Status.Phase != v1alpha1.GrantDenied || got.Status.DeniedBy != DeniedByBroker || got.Status.ApprovedBy != "" || ask.Status.State != string(apiv1.AskStateOpen) || ask.Labels[asks.StateLabel] == string(apiv1.AskStateWithdrawn) {
 		t.Fatalf("retention requeue %s deleted %v grant %+v ask %s label %s", res.RequeueAfter, got.DeletionTimestamp, got.Status, ask.Status.State, ask.Labels[asks.StateLabel])
+	}
+	if len(f.b.grantAskCleanupWait) != 0 {
+		t.Fatalf("successful delete left %v", f.b.grantAskCleanupWait)
+	}
+}
+
+func TestGrantAskCommittedDeleteWithLostResponseClearsCleanupBackoff(t *testing.T) {
+	f := newGrantAskFixture(t, true)
+	f.openAsk()
+	g := f.grant()
+	ended := f.b.now()
+	g.Status.Phase = v1alpha1.GrantDenied
+	g.Status.DeniedBy = DeniedByBroker
+	g.Status.Message = "the scope no longer matches"
+	g.Status.EndedAt = &ended
+	if err := f.base.Status().Update(f.ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	f.meta.failAskGet = apierrors.NewServiceUnavailable("ask was not read")
+	res, err := f.reconcile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid := f.grant().UID
+	if res.RequeueAfter != time.Second || f.b.grantAskCleanupWait[uid] == 0 {
+		t.Fatalf("before retention requeue %s wait %v", res.RequeueAfter, f.b.grantAskCleanupWait)
+	}
+	f.clk.Step(Retention)
+	f.b.Client = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*v1alpha1.AccessGrant); ok {
+				if err := c.Delete(ctx, obj, opts...); err != nil {
+					return err
+				}
+				return errors.New("read the delete response: EOF")
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	if _, err := f.reconcile(); err == nil || !strings.Contains(err.Error(), "read the delete response") {
+		t.Fatalf("lost response: %v", err)
+	}
+	lost := f.grant()
+	if lost.DeletionTimestamp.IsZero() || lost.Status.Phase != v1alpha1.GrantDenied || lost.Status.ApprovedBy != "" || f.b.grantAskCleanupWait[uid] == 0 {
+		t.Fatalf("committed delete deleted %v phase %s approvedBy %q wait %v", lost.DeletionTimestamp, lost.Status.Phase, lost.Status.ApprovedBy, f.b.grantAskCleanupWait)
+	}
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.b.grantAskCleanupWait[uid]; ok || len(f.b.grantAskCleanupWait) != 0 {
+		t.Fatalf("finalized grant left cleanup wait %v", f.b.grantAskCleanupWait)
 	}
 }
 

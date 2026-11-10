@@ -83,7 +83,10 @@ set is full, and the next reconcile of its grant still finds it: that
 reconcile loads the Ask from the grant and does not use the held set. The
 grant is already terminal, so the enqueue cannot approve it. A pending grant
 the requester releases is stored Released first. The Ask is then withdrawn
-from that terminal path, with the same backoff as a deny.
+from that terminal path, with the same backoff as a deny. An answered Ask
+on a Pending grant can wait up to the controller's error backoff when its
+wake was dropped during an outage. A dropped wake for a terminal grant
+waits for that grant's next reconcile.
 
 The store accepts a grant ask and applies the caps below. It records the
 requester, the open state and the ask type. It records `ask-origin=broker`
