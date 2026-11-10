@@ -167,3 +167,33 @@ so agent images can roll at any time.
 
 To turn it off, remove the flag. The ConfigMap keeps its last readings and is
 no longer read or written.
+
+## Task usage totals
+
+These counters are separate from the allowance readings above. A finished
+task Session is deleted after clean-up, and the tokens and cost in its
+status go with it (ADR-020 C-54). The operator's leader adds that Session
+to the counters below once, then writes the annotation
+`dev-env.haynesops.com/task-usage-counted`. Prometheus keeps the totals
+after the Session is gone. The design, including the annotation value and
+the known limits, is DESIGN-059's section "Totals that survive clean-up".
+
+| Metric | Labels | Unit |
+| --- | --- | --- |
+| `dev_env_task_usage_tokens_total` | `agent`, `model`, `repository`, `cost_kind`, `token` (`input`, `output`, `cache_read`, `cache_write`) | tokens |
+| `dev_env_task_usage_cost_usd_total` | `agent`, `model`, `repository`, `cost_kind` | USD |
+| `dev_env_task_usage_sessions_total` | `agent`, `model` (the requested model) | sessions |
+| `dev_env_task_usage_seconds_total` | `agent`, `model` (the requested model) | seconds |
+
+Cursor adds sessions and seconds only. The series are on the operator's
+existing metrics endpoint. A replica that is not the leader stays at zero.
+
+Cost for one week:
+
+```promql
+sum by (agent, model, repository) (increase(dev_env_task_usage_cost_usd_total[7d]))
+```
+
+`increase` keeps the week across an operator restart: the new process
+starts its counters at zero and does not add a Session that already has
+the annotation.

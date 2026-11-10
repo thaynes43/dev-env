@@ -65,6 +65,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/templates"
+	"github.com/thaynes43/dev-env/internal/usagetotals"
 	"github.com/thaynes43/dev-env/internal/version"
 )
 
@@ -916,6 +917,21 @@ func run(args []string) error {
 	// time. The flag selects enabled or disabled; registration itself is unconditional.
 	if err := standby.RegisterCollector(ctrlmetrics.Registry, standbyCollector(o, mgr.GetAPIReader())); err != nil {
 		return fmt.Errorf("register standby metrics: %w", err)
+	}
+	// Task usage totals outlive Session clean-up (DESIGN-059, OP524). Every
+	// replica registers the counters. Only the leader adds. With leader
+	// election off, leaderNow is nil and nothing is added.
+	usageTotals := usagetotals.NewCounters()
+	if err := usageTotals.Register(ctrlmetrics.Registry); err != nil {
+		return fmt.Errorf("register task usage totals: %w", err)
+	}
+	if err := (&usagetotals.Reconciler{
+		Client:           mgr.GetClient(),
+		Counters:         usageTotals,
+		SessionNamespace: o.sessionNamespace,
+		Elected:          leaderNow(mgr, o.leaderElect),
+	}).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("task usage totals: %w", err)
 	}
 	// Expired declare-activity declarations go within a minute (D-17, D-66).
 	if err := mgr.Add(&activity.Reaper{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Namespace: o.templatesNamespace,
