@@ -1,8 +1,11 @@
 package controller
 
 // DESIGN-061 section 4 on a real API server: the queue's cap holds with two
-// operators reconciling the same Sessions, each with its own memory, as an
-// old leader's last reconciles and a new leader's first ones overlap. envtest
+// operators taking turns on the same Sessions, each with its own memory, as an
+// old leader's last reconciles and a new leader's first ones interleave. Each
+// reads the API server directly, so this shows the memory of one operator is
+// never needed by the other; the four workers of one operator on a cache that
+// lags are TestTaskCleanupFourWorkersOnALaggingCacheStayUnderTheCap's. envtest
 // has no kubelet, PV controller or pvc-protection controller, so the test
 // plays them: it runs hold pods, removes Pods being deleted and lifts
 // pvc-protection from a claim no Pod uses.
@@ -10,6 +13,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +25,7 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -32,8 +37,8 @@ import (
 // whose executors ended, and lets two operators, each with its own memory,
 // take turns on every Session with --task-cleanup-max-active 2 until all four
 // are cleaned up and released. After every reconcile no more than two records
-// hold a slot, and two do at some point; every HOME is deleted with its UID
-// and resourceVersion, and every Session is gone.
+// hold a slot, and two do at some point; every HOME is deleted once, with its
+// UID and resourceVersion as preconditions, and every Session is gone.
 func TestTaskCleanupQueueCapWithTwoOperators(t *testing.T) {
 	ctx := context.Background()
 	if err := k8s.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-node-lease"}}); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -125,8 +130,21 @@ func TestTaskCleanupQueueCapWithTwoOperators(t *testing.T) {
 	now := func() time.Time { return clock }
 	rescuer := &expiryRescuer{}
 	verifier := &fakeVerifier{free: 10 << 30, answers: map[string]protocol.RescueVerifyResult{}}
+	var mu sync.Mutex
+	claimDeletes := map[string][]bool{}
 	operator := func() *Reconciler {
-		c := k8sWatch(t)
+		c := interceptor.NewClient(k8sWatch(t), interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) error {
+			err := c.Delete(ctx, o, opts...)
+			if _, ok := o.(*corev1.PersistentVolumeClaim); ok && err == nil {
+				var do client.DeleteOptions
+				do.ApplyOptions(opts)
+				p := do.Preconditions
+				mu.Lock()
+				claimDeletes[o.GetName()] = append(claimDeletes[o.GetName()], p != nil && p.UID != nil && *p.UID != "" && p.ResourceVersion != nil && *p.ResourceVersion != "")
+				mu.Unlock()
+			}
+			return err
+		}})
 		return &Reconciler{Client: c, APIReader: c, Templates: templatesKey, PrivateTerminalRecord: true, PrivateExecutorStop: true,
 			PrivateExecutorTerminal: NewPrivateExecutorTerminalCounter(), HomeExpiryCounters: NewHomeExpiryCounters(), Rescuer: rescuer,
 			HistoryRelay:       &ExecHistoryRelay{Exec: newAgentdExec(t, "tq"), Shelf: &shelf.Shelf{Reader: c, Namespace: sessionNS}, Slots: shelf.NewExecSlots(shelf.DefaultExecSlots)},
@@ -209,6 +227,9 @@ func TestTaskCleanupQueueCapWithTwoOperators(t *testing.T) {
 	for _, name := range names {
 		if err := k8s.Get(ctx, client.ObjectKey{Namespace: sessionNS, Name: HomeClaimName(name)}, &corev1.PersistentVolumeClaim{}); !apierrors.IsNotFound(err) {
 			t.Fatalf("the HOME of %s stays: %v", name, err)
+		}
+		if d := claimDeletes[HomeClaimName(name)]; len(d) != 1 || !d[0] {
+			t.Fatalf("the HOME of %s was deleted %v; want once, with UID and resourceVersion preconditions", name, d)
 		}
 	}
 }

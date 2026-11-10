@@ -374,7 +374,9 @@ is off, and nothing is installed. Details the sections above leave open:
   minutes again, so it waits longer, never shorter, and still mounts nothing.
   A volume that is not CSI, a PersistentVolume that is not bound to the claim,
   or a read that fails (the cluster-wide `get` on PersistentVolumes is H1's)
-  never shows the release.
+  never shows the release. Before a second hold pod, the node the last one
+  stood on, when the leader saw it and it is another node, must not list the
+  volume either (review of #520).
 - **Grading** (`gradeTaskRescue`). A non-empty `strictHome.refused` is
   `StrictHomeRefused`, graded first. A report without `strictHome`, or agentd
   refusing `--strict-home` as a usage error (exit 2, an agent image from before
@@ -390,15 +392,36 @@ is off, and nothing is installed. Details the sections above leave open:
   hold intent, so a new hold pod, of the templates' image then, is the one
   judged. A rescue that could not run at all (no exec) is Unknown, as in
   DESIGN-025: nothing is recorded, and it is asked again in a minute.
+- **Only the strict rescue is kept.** The leader remembers which hold pods'
+  rescues it ran with `--strict-home` and graded. A rescue in the hold pod
+  that it did not (an earlier leader's, or DESIGN-025's) runs again before
+  anything is kept, so after a leader change one rescue per active clean-up
+  runs twice.
+- **A stuck attempt ends** (`attempt_stuck`, review of #520). When the
+  clean-up's hold pods run no rescue for 30 minutes (a pod that never runs,
+  keeps ending, or cannot be reached by exec), the attempt is refused, its
+  hold pod goes, the breaker counts it, and it is tried again an hour later,
+  last in the queue. A rescue that failed for a transient reason keeps its
+  hold pod and retries, as section 3 says, however long that takes.
 - **The queue.** Judged from the cache, without copying it, in one list that
   serves every reconcile for 10 seconds; an admission always lists again and
   then holds an in-memory reservation until the cache shows its record active
   (at most 2 minutes). So the four workers never overshoot, and a second
   operator, which ranks the same queue from its own cache, admits the same
-  head and no other. Records refused `volume_not_released` or `rescue_refused`
-  hold no slot and come back in through the queue at their retry. A finished
-  parent whose descendants run is remembered for 15 minutes, so it does not
-  block the queue behind it.
+  head and no other. **A slot** is held by a record at `Rescuing`, `Archived`
+  or `Deleting` that is neither refused nor held by the owner (review of
+  #520: a refusal waits for a person, and must not stop the backlog). A
+  refusal at `Rescuing` ends the attempt: its hold pod goes, and at its retry
+  (a day for `rescue_refused`, an hour for `attempt_stuck`, 15 minutes for the
+  rest) it comes back in through the queue with a new hold intent. A refusal
+  at `Archived` or `Deleting`, where no hold pod stands, is re-checked in
+  place every 15 minutes, as DESIGN-025's are; when its cause is fixed, or an
+  owner hold is lifted, it goes on without waiting in the queue, so the cap
+  can be passed by one for its last minutes. A finished parent whose
+  descendants run is remembered for 15 minutes, so it does not block the
+  queue behind it; the descendants' uncached check runs only once the queue
+  would admit it, and a busy shelf is an answer kept for the minute like any
+  other, so a queued backlog makes no uncached reads.
 - **Texts name no queue position.** Section 6's example ("2 run now ... 5 are
   ahead of it") would rewrite the status of every queued Session each time
   the queue moved. The text says "the clean-up is queued: at most 2 run at
@@ -421,10 +444,17 @@ is off, and nothing is installed. Details the sections above leave open:
 - **Metrics.** `dev_env_task_cleanup_sessions{state}` and
   `..._oldest_seconds{state}` read 0 everywhere while the clean-up is off.
   While it is on, DESIGN-025's three gauges leave out the Sessions the
-  clean-up owns, so no alert counts one twice. `..._duration_seconds` counts
-  from the start this leader saw to the Session's removal; after a leader
-  change that clean-up is not observed. `..._paused{reason}` reads the
-  leader's memory; another replica reports only `max_active_zero`.
+  clean-up owns, and its counters count none of their refusals or deletes,
+  so no alert counts one twice. `..._deleted_total{cause}` counts each Session
+  once, at its release: `purged` when it was reaped before its HOME's delete
+  began, else `finished`. `..._duration_seconds` counts from the first start
+  this leader saw to the release; after a leader change that clean-up is not
+  observed. `..._paused{reason}` reads the leader's memory; another replica
+  reports only `max_active_zero`. The breaker starts over after its hour.
+- **A denied Session delete** (Forbidden) is said in the HomeExpiry condition
+  and a Warning event and looked at again in 15 minutes; an `Expired` record
+  never changes, so nothing is recorded. The Session's guard also refuses
+  while the owner holds it.
 - **Rollout needs, in order (#521):** the CRD copy of part 1 (H1, before any
   pin); the operator's cluster-wide `get` on `persistentvolumes` (H1); the
   templates' agent image and the shelf at a release with `--strict-home`,

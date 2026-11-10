@@ -245,4 +245,20 @@ func TestTaskCleanupFourWorkersOnALaggingCacheStayUnderTheCap(t *testing.T) {
 	if !admitted[0] || !admitted[1] {
 		t.Fatalf("admitted %v; want the two oldest", admitted)
 	}
+	// A Session reaped before them all shows up in the cache, which still
+	// shows the two admitted ones Waiting: it heads the queue, but both
+	// slots are reserved, so it waits.
+	early := frozen.Items[0].DeepCopy()
+	for i := range frozen.Items {
+		if frozen.Items[i].Name == "lag-3" {
+			early = frozen.Items[i].DeepCopy()
+		}
+	}
+	early.Name, early.UID = "reaped-first", "uid-reaped-first"
+	first := metav1.NewTime(early.DeletionTimestamp.Add(-time.Hour))
+	early.DeletionTimestamp = &first
+	frozen.Items = append(frozen.Items, *early)
+	if r.taskCleanupAdmittable(ctx, early, f.clock.Add(time.Second), true) {
+		t.Fatal("a third clean-up is admitted while the cache has not shown the two reserved ones")
+	}
 }
