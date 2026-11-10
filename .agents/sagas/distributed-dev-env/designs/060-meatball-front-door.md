@@ -254,6 +254,79 @@ the workbench profile. Tool descriptions stay under 30 words each.
   rest and ends "blocked: <refusal>". Budget spent: it records where it stopped
   and ends.
 
+### 7.1 First CallerPolicy contract (OP526, 2026-11-10)
+
+This implements the Meatball part of D-36, not the other summoning lanes in
+DESIGN-001. One namespaced `CallerPolicy`, `dev-env-system/meatball`, admits
+one ServiceAccount. Installing it and that account belongs to haynes-ops; this
+source change installs neither. The complete spec is:
+
+```yaml
+apiVersion: dev-env.haynesops.com/v1alpha1
+kind: CallerPolicy
+metadata:
+  name: meatball
+  namespace: dev-env-system
+spec:
+  serviceAccount: dev-env-system/dev-env-meatball
+  mode: task
+  profile: dev
+  models: [claude-opus-5-5, gpt-6-astra, claude-fable-5-2]
+  maxConcurrent: 2
+  maxTimeout: 4h
+  maxWorkers: 4
+```
+
+All seven fields are required, with no defaults. The schema fixes the account,
+mode and profile to those values. `models` is a nonempty set drawn only from
+the three shown full IDs. `maxConcurrent` is 1–2, `maxWorkers` is 1–4, and
+`maxTimeout` is a positive Go duration no greater than 4h. Thus a policy may
+tighten these bounds, never widen them. It has no effort field or configurable
+rights. Other policy names or namespaces do not enroll a caller.
+
+The new API caller class is `policy`, resolved after every existing class,
+using an uncached policy read. An absent policy leaves the existing unknown
+ServiceAccount 403 intact. A policy read failure refuses access. Existing
+human, client, session, workbench, coordinator-host and named-coordinator
+classification and rights stay as they are.
+
+For OP527, the existing `POST /v1/sessions` is the enforcement seam. It requires
+an explicit allowed `model`, its matching `agent` (`claude` or `codex`),
+`mode: task`, `profile: dev`, `limits.timeout` and `limits.maxWorkers`. It
+refuses every supplied `effort` key, even empty or null. The API writes `xhigh`
+for either Claude model and `max` for `gpt-6-astra`. Existing Codex feature and
+accepted-project gates still apply. Restore, canary, pilot and instruction
+publisher routes grant no alternate entrance. OP527 supplies the tracker
+brief and idempotency key; this story adds no coordinator route or CLI.
+
+The API writes the authenticated account as `spec.parent`, at depth 0. The
+immutable `spec.limits.maxWorkers` caps its unfinished **direct workers across
+all agent kinds**, in addition to the unchanged per-agent child and depth
+rules. Workers remain ordinary session callers at depth 1, and their children
+at depth 2. Existing sessions without this field retain their existing rules.
+Only policy callers may set this new request field. Neither model nor effort
+defaults from a CLI or a template can substitute for the required model.
+
+Root concurrency counts all unfinished sessions with that account as parent,
+across models and repositories. It uses the existing unfinished-session rule:
+pending, running, idle and draining count; reaping, suspended, archived,
+failed or exited sessions do not. Idempotent repeats return their existing
+session before checking capacity. Admission for this caller and each bounded
+parent takes an atomic Kubernetes ConfigMap lock in the session namespace,
+held across the live count and create. This also fences concurrent API replicas.
+A crash or uncertain unlock leaves a closed gate, not a timed lease that could
+permit two writers. An operator must verify no admission is still in flight
+before removing such a stale lock. These locks grant no caller Kubernetes rights.
+
+Only `GET/POST /v1/sessions` and `GET/DELETE /v1/sessions/{name}` accept the new
+class. Lists always filter to its own direct sessions, regardless of query
+filters. Detail and reap use live parent checks; missing and foreign names get
+the same refusal. Detail returns the session and retained outcome, without
+descendant or project-wide reads. Reap preserves the existing rescue finalizer
+and UID precondition. No log route (it execs), message, thread, resume, suspend,
+grant, keeper-login, fleet or other client route is exposed. OP527 must reuse
+these fences when adding its start/status/stop facade.
+
 ## 8. One approval path
 
 ### The list (ruled by Tom, 2026-11-10)
