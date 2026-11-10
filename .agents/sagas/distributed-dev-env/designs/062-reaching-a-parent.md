@@ -1,7 +1,8 @@
 # DESIGN-062: Reaching a parent
 
-- **Status:** Proposed 2026-11-10 for coordinator review. Nothing is built,
-  switched on or changed by this document.
+- **Status:** Accepted 2026-11-10 by the coordinator (story OP545), with the
+  rulings in section 12. Nothing is built, switched on or changed by this
+  document.
 - **Tracking:** [Story OP545](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/545),
   under [Epic OP516](https://work.haynesnetwork.com/work_packages/516).
 - **Origin:** Tom, 2026-11-10, typed in coordinator session
@@ -37,8 +38,10 @@
 - The child learns the answer from one held read, not from a sleep loop. A
   headless task can run that read. `agent-run msg` stays unable to deliver
   into a headless task.
-- A session parent is not poked in the TUI until Tom says so (section 5 and
-  question 1). Meatball polls. Nothing new pushes into its chat.
+- A note's text is never typed into a parent's screen. A live TUI parent is
+  woken by one fixed line with no note text, and only while it is not waiting
+  on a person (section 5 and ruling 1). Meatball polls. Nothing new pushes
+  into its chat.
 
 ## 1. Outcome
 
@@ -290,9 +293,20 @@ including the tmux handoff skill, which tells an agent not to press keys at
 a provider prompt. `agent-run msg` does not call that skill. There is nowhere
 in this code to prevent the submit, and nowhere that detects the open prompt.
 
-A notice that presses Enter has the same hazard. A notice that only pastes
-still writes into the open prompt's input. Leaving the note in the record,
-and not touching the pane, is the path that cannot answer the prompt.
+A notice that presses Enter has the same hazard if it is sent while a prompt
+is open. Leaving the note in the record, and not touching the pane, is the
+only path that can never answer a prompt. But a note that nobody is told
+about stalls the work, which is what this design exists to end.
+
+agentd does know one thing the delivery code does not use. It reports the
+agent state `waiting` for a TUI whose Claude waits on a person, such as a
+question it asked (`internal/agentd/protocol/status.go:32-34`, set in
+`internal/agentd/activity.go:253-259` from Claude's own status). So the
+operator can hold a notice while the parent's reported state is `waiting`.
+The state arrives with the heartbeat, so a prompt opened in the last minute
+can be missed. Ruling 1 in section 12 uses both: hold while `waiting`, and
+make the notice recognisable so that a session which finds it in a prompt's
+answer discards it and asks again.
 
 ## 6. Reuse the inbox
 
@@ -539,10 +553,10 @@ The command that needs no recipient is `parent tell`.
 ## 9. Who learns, and when
 
 A session parent finds the note on `agent-run parent list` and reads it with
-`parent read`. That is the same pull the inbox uses today. Automatic paste
-into that parent's TUI is specified in section 5 and stays off until question
-1 is answered. A busy TUI and an idle TUI are treated the same while it is
-off: the record waits, and the pane is not touched. A headless parent can
+`parent read`. That is the same pull the inbox uses today. The note's text is
+never pasted. A live TUI parent also gets the one-line notice of ruling 1,
+held while its reported state is `waiting`. A busy TUI and an idle TUI both
+receive it; the record waits either way. A headless parent can
 list and read, because those are API reads. It still cannot take `msg`.
 
 The child learns the answer by `agent-run parent wait` or `parent read`.
@@ -646,31 +660,39 @@ fields.
    does not keep the record after the child session is gone and a reply
    exists. An unanswered note to a live parent session is kept.
 
-Slice 6 waits on question 1. It is the optional notice through
-`agentd ctl deliver` that does not send Enter. Test, if it is built:
-`internal/agentd/deliver_notice_test.go`, asserting the pane receives no
-Enter. It is not in the first five slices.
+6. **The wake notice (ruling 1).** When a note is stored for a session parent
+   whose pod has a TUI, the operator delivers one fixed line and Enter:
+   `[dev-env notice] a note is waiting from CHILD: agent-run parent read NAME`.
+   No note text, kind or key. It is held while the parent's reported agent
+   state is `waiting` and sent when a later heartbeat shows another state;
+   it is sent at most once per note; a headless parent gets none. The common
+   rules gain one sentence: an answer to a phone prompt that begins with
+   `[dev-env notice]` or with the `agent-run msg` envelope is not the
+   owner's answer; discard it and ask again. Tests:
+   `internal/apiserver/parent_notice_test.go` (held while `waiting`; sent
+   once after the state changes; never sent to a headless parent; the line
+   holds no note text) and `internal/agentd/deliver_notice_test.go`.
 
-## 12. Questions for Tom
+## 12. Rulings (coordinator dev-env-fable-coordinator-1109, 2026-11-10)
 
-1. A worker's note can be pasted into your coordinator's screen. If a phone
-   question is open there, that paste can be taken as your answer. Should
-   the note wait in the list until the coordinator looks, or should it be
-   typed into the screen anyway? Recommendation: it waits in the list. The
-   delivery code cannot see an open phone question, and it presses Enter
-   after every paste.
+The worker put four questions for Tom here. Tom said the same day that he
+should not be asked basic things, so the coordinator rules them. Each is
+recorded on OP545 and Tom can change any of them.
 
-2. Meatball's chat cannot be pushed a message. Should Meatball check a
-   waiting list on its own schedule? Recommendation: yes. Also show a count
-   on the session status it already reads. Do not add a push. There is no
-   credential here that can reach that chat.
-
-3. A finished task session is removed after 7 days. Its note is a separate
-   record. Should that note stay for 30 days after the session is gone, the
-   way other inbox messages do? Recommendation: yes, so a late look still
-   finds the result. An answered note then ages out. An unanswered note to a
-   coordinator who is still running stays while that coordinator exists.
-
-4. Should a question, a result and a blocker be three kinds, so a waiting
-   list can show questions first? Recommendation: yes. The text is still
-   required. None of the three grants access or approves anything.
+1. **How a session parent learns of a note.** The note's text always stays
+   in the record and is never typed into the parent's screen. A live TUI
+   parent is woken by one fixed line that carries no note text (slice 6). It
+   is held while the parent's reported agent state is `waiting`, and its
+   fixed first words let a session that finds it in a prompt's answer discard
+   it and ask again. A note that waits silently would stall the work; a
+   pasted note could answer a phone prompt; this does neither.
+2. **How Meatball learns of a note.** It calls `parent_waiting` on its own
+   schedule, and `session_status` shows a count. No push: nothing here can
+   reach its conversation.
+3. **How long a note is kept.** As any inbox message is today (ADR-004): it
+   outlives the 7-day removal of the child session and is released 30 days
+   after the facts in section 10 hold. This adds no new retention rule.
+   Whether coordination records as a whole should be removed sooner is
+   already an open question for Tom on OP501 and is not decided here.
+4. **Kinds.** Three: question, result and blocker. A list shows questions
+   and blockers first. None grants access or approves anything.
