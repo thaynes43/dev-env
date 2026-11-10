@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	utilexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -283,13 +284,25 @@ func TestTaskCleanupReleaseCheck(t *testing.T) {
 			t.Fatalf("record %+v; want it waiting with its slot", e)
 		}
 		f.tick(t, f.clock.Add(taskReleaseWait+time.Minute))
+		rec := events.NewFakeRecorder(16)
+		f.r.Recorder = rec
 		f.run(t, 2)
 		e := f.expiry(t)
 		if e.Refusal != expiryVolumeNotReleased || taskActive(f.session(t)) || f.named(t) != nil {
 			t.Fatalf("record %+v, pod %v; want volume_not_released, the slot free, no hold pod", e, f.named(t))
 		}
-		if c := f.condition(t, ConditionPodReady); c == nil || !strings.Contains(c.Message, "did not show the HOME's volume released within 30m0s, so the stop is unproven") {
-			t.Fatalf("PodReady %+v", c)
+		// The record stores the reason code only, so the condition carries the
+		// check read again on the next reconcile and does not invent "within
+		// 30m0s". The event, written when the refusal was recorded, names the
+		// wait that path ran: here the attempt bound, which is reached at the
+		// same moment as the release wait and is checked first.
+		why, ev := taskRescueReleaseRefusal(taskDrainEvents(rec))
+		c := f.condition(t, ConditionPodReady)
+		if c == nil || why == "" || !strings.Contains(c.Message, why) || strings.Contains(c.Message, "within 30m0s") {
+			t.Fatalf("PodReady %+v; want the check's reason %q and no fixed 30-minute claim; event %q", c, why, ev)
+		}
+		if !strings.Contains(ev, why) || (!strings.Contains(ev, "for "+taskReleaseWait.String()) && !strings.Contains(ev, "at the attempt's "+taskAttemptDeadline.String()+" bound")) {
+			t.Fatalf("rescue refusal event %q; want the check's reason and the wait that ran", ev)
 		}
 		counts, _ := f.r.taskCleanupGauges([]v1alpha1.AgentSession{*f.session(t)}, *f.clock)
 		if counts[taskStateUnproven] != 1 {

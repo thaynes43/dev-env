@@ -57,11 +57,22 @@ const (
 )
 
 const (
-	// taskReleaseWait: how long a clean-up holds its slot waiting for the old
-	// node to release the HOME's volume (DESIGN-061 1.1), looking every
-	// taskReleasePoll; then it records volume_not_released and frees it.
+	// taskReleaseWait: how long the rescue step holds its slot waiting for
+	// every node to release the HOME's volume (DESIGN-061 1.1), looking every
+	// taskReleasePoll; then it records volume_not_released and frees the slot.
 	taskReleaseWait = 30 * time.Minute
 	taskReleasePoll = 30 * time.Second
+	// taskDeleteReleaseWait: how long the delete step waits, looking every
+	// taskDeleteReleasePoll, for a node to drop the HOME's volume after the
+	// hold pod is gone, before it records volume_not_released. The kubelet
+	// still lists the volume for a few seconds after that pod is removed
+	// (H4 probes, 2026-11-10: four of five refused about one second later).
+	// The start time is this leader's memory. A restart loses it and the
+	// delete step starts a new wait of this length; it does not refuse early.
+	taskDeleteReleaseWait = 5 * time.Minute
+	taskDeleteReleasePoll = 5 * time.Second
+	// taskDeleteReleaseWaiting is the clean-up note while that wait runs.
+	taskDeleteReleaseWaiting = "the clean-up is waiting for the node to release the HOME's volume after its hold pod was removed"
 	// taskRescueRefusedRetry: a refused rescue is tried again once a day,
 	// last in the queue, in case a newer agent image handles it (section 3).
 	taskRescueRefusedRetry = 24 * time.Hour
@@ -160,7 +171,14 @@ type taskCleanupState struct {
 	reserved    map[types.UID]time.Time
 	admittedAt  map[types.UID]time.Time
 	releaseWait map[types.UID]time.Time
-	children    map[types.UID]time.Time
+	// deleteReleaseWait is the delete step's clock, not releaseWait. The
+	// rescue step can leave a start time in releaseWait: a refusal at the
+	// attempt deadline does not forget it. Sharing the session UID would let
+	// a rescue start older than taskDeleteReleaseWait refuse the delete on
+	// the first look. A restart drops this map, and the next delete wait is
+	// a new taskDeleteReleaseWait.
+	deleteReleaseWait map[types.UID]time.Time
+	children          map[types.UID]time.Time
 	// attempt: by hold pod, its first observation (older intents only)
 	// (taskAttemptDeadline); ended: by Session, how many of this attempt's
 	// hold pods ended with none graded; graded: the hold
@@ -188,6 +206,9 @@ func (st *taskCleanupState) init() {
 		st.attempt, st.graded = map[types.UID]time.Time{}, map[types.UID]string{}
 		st.ended = map[types.UID]int{}
 	}
+	if st.deleteReleaseWait == nil {
+		st.deleteReleaseWait = map[types.UID]time.Time{}
+	}
 }
 
 // prune forgets what the leader remembers of Sessions it has not heard from
@@ -201,6 +222,11 @@ func (st *taskCleanupState) prune(now time.Time) {
 	for uid, at := range st.releaseWait {
 		if now.Sub(at) > taskMemoryKeep {
 			delete(st.releaseWait, uid)
+		}
+	}
+	for uid, at := range st.deleteReleaseWait {
+		if now.Sub(at) > taskMemoryKeep {
+			delete(st.deleteReleaseWait, uid)
 		}
 	}
 	for uid, at := range st.attempt {
@@ -547,6 +573,9 @@ func (r *Reconciler) stepTaskCleanup(ctx context.Context, v *expiryView, obs *ob
 		return r.removeExpiryHold(ctx, v, obs, p, holdReleaseRefused)
 	}
 	if retry := taskAttemptRefusalRetry(e); e.Refusal != "" && e.RefusalAt != nil && v.now.Before(e.RefusalAt.Add(retry)) && !v.now.Before(e.RefusalAt.Time) {
+		// The sentence a person reads is built again on this reconcile. The
+		// record stores the reason code only, so read the check once more.
+		r.noteVolumeRefusal(ctx, v, obs)
 		return ctrl.Result{RequeueAfter: min(e.RefusalAt.Add(retry).Sub(v.now)+time.Second, homeExpiryMaxWait)}, false, nil
 	}
 	if ref := expiryRecheck(v); ref != nil {
@@ -1340,6 +1369,22 @@ func (r *Reconciler) taskVolumeReleased(ctx context.Context, v *expiryView) stri
 	return ""
 }
 
+// noteVolumeRefusal copies the release check's reason onto the note when a
+// volume_not_released refusal is already recorded. The record stores the
+// reason code and the time, not which node listed the volume and not how
+// long the wait ran. The sentence uses this note and states no duration.
+// An empty check (the volume is released now) leaves the generic sentence.
+func (r *Reconciler) noteVolumeRefusal(ctx context.Context, v *expiryView, obs *observation) {
+	if obs == nil || obs.homeExpiry != nil || v.record() == nil || v.record().Refusal != expiryVolumeNotReleased {
+		return
+	}
+	why := r.taskVolumeReleased(ctx, v)
+	if why == "" {
+		return
+	}
+	obs.homeExpiry = &homeExpiryNote{reason: taskReasonRefused, message: why}
+}
+
 // taskSessionRemovalAllowed is nil only for a finished task Session the
 // clean-up may delete (DESIGN-061 2, item 5): in scope, private with its
 // retention identity, not Reaping, and its record Expired for the bound HOME
@@ -1624,6 +1669,41 @@ func (r *Reconciler) taskBreaker(failed bool, now time.Time) {
 	}
 	st.failures++
 	st.lastFailure = now
+}
+
+// taskDeleteReleaseRemembered is the delete step's start, if this leader
+// has one. A restart has none.
+func (r *Reconciler) taskDeleteReleaseRemembered(uid types.UID) (time.Time, bool) {
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.init()
+	at, ok := st.deleteReleaseWait[uid]
+	return at, ok
+}
+
+// taskDeleteReleaseWaitSince is the delete step's first look at a volume
+// that is still listed, remembered for this leader only. A restart returns
+// a new start, so the wait runs for taskDeleteReleaseWait again.
+func (r *Reconciler) taskDeleteReleaseWaitSince(uid types.UID, now time.Time) time.Time {
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.init()
+	at, ok := st.deleteReleaseWait[uid]
+	if !ok || now.Before(at) {
+		st.deleteReleaseWait[uid] = now
+		return now
+	}
+	return at
+}
+
+func (r *Reconciler) taskForgetDeleteReleaseWait(uid types.UID) {
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.init()
+	delete(st.deleteReleaseWait, uid)
 }
 
 func (r *Reconciler) taskReleaseWaitSince(uid types.UID, now time.Time) time.Time {
