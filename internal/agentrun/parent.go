@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -22,8 +23,11 @@ func (a *app) parent(ctx context.Context, args []string) error {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		return a.help([]string{"parent"})
 	}
+	if len(args) > 0 && (args[0] == "answer" || args[0] == "wait") {
+		return a.parentAnswerWait(ctx, args[0], args[1:])
+	}
 	if len(args) == 0 || (args[0] != "tell" && args[0] != "list" && args[0] != "read") {
-		return usageError("parent requires tell, list or read; see agent-run help parent")
+		return usageError("parent requires tell, list, read, answer or wait; see agent-run help parent")
 	}
 	verb := args[0]
 	cmd := newCommand("parent", outputJSON)
@@ -62,19 +66,15 @@ func (a *app) parent(ctx context.Context, args []string) error {
 	}
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
-		return parentNoteError(0, err, verb == "tell")
+		return parentNoteError(0, err, verb)
 	}
-	hc := *c.http
-	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	one := *c
-	one.http = &hc
-	one.rejectOversizeResponse = true
+	one := parentNoteClient(c, 0)
 	switch verb {
 	case "tell":
 		var result apiv1.InboxResult
-		status, err := a.callWith(ctx, &one, http.MethodPost, apiv1.ParentNotesPath, nil, req, &result, false)
+		status, err := a.callWith(ctx, one, http.MethodPost, apiv1.ParentNotesPath, nil, req, &result, false)
 		if err != nil {
-			return parentNoteError(status, err, true)
+			return parentNoteError(status, err, verb)
 		}
 		if (status != http.StatusCreated || result.Outcome != "Created") && (status != http.StatusOK || result.Outcome != "Confirmed") {
 			return fail(ExitUnconfirmed, "parent tell returned an unconfirmed receipt; retry only the identical intent with the same key")
@@ -93,9 +93,9 @@ func (a *app) parent(ctx context.Context, args []string) error {
 			q.Set("continue", cursor)
 		}
 		var result apiv1.InboxList
-		status, err := a.callWith(ctx, &one, http.MethodGet, apiv1.ParentNotesPath, q, nil, &result, false)
+		status, err := a.callWith(ctx, one, http.MethodGet, apiv1.ParentNotesPath, q, nil, &result, false)
 		if err != nil {
-			return parentNoteError(status, err, false)
+			return parentNoteError(status, err, verb)
 		}
 		if status != http.StatusOK || result.Box != box || result.Items == nil || len(result.Items) > limit || len(result.Continue) > 4096 {
 			return fail(ExitFailed, "parent list returned an unconfirmed box or page")
@@ -108,11 +108,11 @@ func (a *app) parent(ctx context.Context, args []string) error {
 		return a.printJSON(result)
 	default: // read
 		var result apiv1.InboxMessage
-		status, err := a.callWith(ctx, &one, http.MethodGet, apiv1.ParentNotesPath+"/"+pos[0], nil, nil, &result, false)
+		status, err := a.callWith(ctx, one, http.MethodGet, apiv1.ParentNotesPath+"/"+pos[0], nil, nil, &result, false)
 		if err != nil {
-			return parentNoteError(status, err, false)
+			return parentNoteError(status, err, verb)
 		}
-		if status != http.StatusOK || !validParentNoteMetadata(result.InboxMetadata) || result.Name != pos[0] || len(result.Text) == 0 || len(result.Text) > 16<<10 || !utf8.ValidString(result.Text) {
+		if status != http.StatusOK || (!validParentNoteMetadata(result.InboxMetadata) && !validParentReplyMetadata(result.InboxMetadata, "")) || result.Name != pos[0] || len(result.Text) == 0 || len(result.Text) > 16<<10 || !utf8.ValidString(result.Text) {
 			return fail(ExitFailed, "parent read returned an unconfirmed note")
 		}
 		if cmd.c.output == outputJSON {
@@ -124,27 +124,49 @@ func (a *app) parent(ctx context.Context, args []string) error {
 }
 
 func validParentNoteMetadata(m apiv1.InboxMetadata) bool {
+	return validParentMetadata(m) && parentNoteKind(m.Kind) && m.InReplyTo == nil
+}
+
+func validParentReplyMetadata(m apiv1.InboxMetadata, note string) bool {
+	return validParentMetadata(m) && m.Kind == apiv1.InboxKindReply && m.InReplyTo != nil &&
+		inboxMessagePattern.MatchString(m.InReplyTo.Name) && inboxUIDPattern.MatchString(m.InReplyTo.UID) &&
+		(note == "" || m.InReplyTo.Name == note)
+}
+
+func validParentMetadata(m apiv1.InboxMetadata) bool {
 	validParty := func(p apiv1.TaskClaimOwner) bool {
 		return len(p.Namespace) <= 63 && directoryProjectName.MatchString(p.Namespace) && inboxDNSName(p.Name) && inboxUIDPattern.MatchString(p.UID)
 	}
 	return inboxMessagePattern.MatchString(m.Name) && inboxUIDPattern.MatchString(m.UID) &&
 		len(m.Project) <= 63 && directoryProjectName.MatchString(m.Project) && inboxKeyPattern.MatchString(m.Key) &&
-		parentNoteKind(m.Kind) && m.InReplyTo == nil && validParty(m.Sender) && validParty(m.Recipient)
+		validParty(m.Sender) && validParty(m.Recipient)
+}
+
+// Copy both layers: the long wait changes only this request's timeout. All
+// parent commands refuse redirects and oversized receipts before printing.
+func parentNoteClient(c *conn, wait time.Duration) *conn {
+	one, hc := *c, *c.http
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if wait > 0 {
+		hc.Timeout = wait + 2*time.Minute
+	}
+	one.http, one.rejectOversizeResponse = &hc, true
+	return &one
 }
 
 // Refusals never echo an API body, which may contain private note text.
 // Tell sends once and preserves the shared client's uncertainty exit status.
-func parentNoteError(status int, err error, mutation bool) error {
+func parentNoteError(status int, err error, verb string) error {
 	code := ExitFailed
 	var ee *exitError
 	if errors.As(err, &ee) {
 		code = ee.code
 	}
-	if mutation && code == ExitUnconfirmed {
+	if (verb == "tell" || verb == "answer") && code == ExitUnconfirmed {
 		if status == http.StatusServiceUnavailable {
-			return fail(code, "parent tell outcome Unknown (503): parent notes or the durable inbox may not be enabled on this operator. No request was repeated. Retry only the identical intent with the same key")
+			return fail(code, "parent %s outcome Unknown (503): parent notes or the durable inbox may not be enabled on this operator. No request was repeated. Retry only the identical intent with the same key", verb)
 		}
-		return fail(code, "parent tell outcome Unknown; no request was repeated. Retry only the identical intent with the same key")
+		return fail(code, "parent %s outcome Unknown; no request was repeated. Retry only the identical intent with the same key", verb)
 	}
 	switch status {
 	case http.StatusBadRequest:
@@ -156,9 +178,12 @@ func parentNoteError(status int, err error, mutation bool) error {
 	case http.StatusServiceUnavailable:
 		return fail(code, "parent request was refused (503); parent notes or the durable inbox are not enabled on this operator, or the inbox is unavailable")
 	case http.StatusConflict:
+		if verb == "answer" {
+			return fail(code, "parent answer conflicts with the existing key or answer (409); nothing was replaced and no new key was generated")
+		}
 		return fail(code, "parent tell conflicts with the existing key (409); nothing was replaced and no new key was generated")
 	case http.StatusTooManyRequests:
-		return fail(code, "parent request was refused (429); review the sender and project inbox limits before retrying")
+		return fail(code, "parent request was refused (429); review held waits and the sender and project inbox limits before retrying")
 	case 0:
 		return fail(code, "parent request has no confirmed HTTP response; check connectivity, token access and the API certificate or --ca-file")
 	default:

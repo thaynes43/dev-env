@@ -6,8 +6,10 @@ import (
 	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/watch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
@@ -32,8 +34,9 @@ func peerMessageSelector(match map[string]string) (client.MatchingLabelsSelector
 
 func validParentNoteSpec(spec coord.InboxMessageSpec) bool {
 	return ValidSession(spec.Sender) && ValidSession(spec.Recipient) &&
-		spec.CallerSender == nil && spec.CallerRecipient == nil && spec.InReplyTo == nil &&
-		(spec.Kind == KindQuestion || spec.Kind == KindResult || spec.Kind == KindBlocker)
+		spec.CallerSender == nil && spec.CallerRecipient == nil &&
+		((spec.InReplyTo == nil && (spec.Kind == KindQuestion || spec.Kind == KindResult || spec.Kind == KindBlocker)) ||
+			(spec.Kind == KindReply && spec.InReplyTo != nil && ValidRef(*spec.InReplyTo)))
 }
 
 func parentNoteLabels(spec coord.InboxMessageSpec) map[string]string {
@@ -75,6 +78,54 @@ func (s KubeStore) GetParentNote(ctx context.Context, name string, party coord.S
 		return nil, ErrUnavailable
 	}
 	return &m, nil
+}
+
+func parentReplyLabels(q *coord.InboxMessage) map[string]string {
+	return map[string]string{
+		ParentNoteLabel: "true", taskclaim.ProjectLabel: q.Spec.Project,
+		KindLabel: KindReply, InReplyToLabel: inReplyToLabel(Ref(q)),
+	}
+}
+
+// ValidParentReply checks the full stored binding, not just the watch labels.
+func (s KubeStore) ValidParentReply(q, reply *coord.InboxMessage) bool {
+	return IsParentNote(reply) && s.validMessage(reply) && reply.Spec.Kind == KindReply &&
+		reply.Spec.Project == q.Spec.Project && reply.Spec.InReplyTo != nil && *reply.Spec.InReplyTo == Ref(q) &&
+		reply.Spec.Sender == q.Spec.Recipient && reply.Spec.Recipient == q.Spec.Sender
+}
+
+// ParentReplies returns a bounded snapshot and its resourceVersion. Starting
+// the watch at that version cannot lose an answer between the list and watch.
+// Like peer replies, a race can store multiple answers; the oldest wins.
+func (s KubeStore) ParentReplies(ctx context.Context, q *coord.InboxMessage) ([]coord.InboxMessage, string, error) {
+	if !s.ready() || !IsParentNote(q) || !s.validMessage(q) || q.Spec.Kind == KindReply {
+		return nil, "", ErrUnavailable
+	}
+	var list coord.InboxMessageList
+	if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels(parentReplyLabels(q)), client.Limit(MaxReplies+1)) != nil || list.Continue != "" {
+		return nil, "", ErrUnavailable
+	}
+	for i := range list.Items {
+		if !s.ValidParentReply(q, &list.Items[i]) {
+			return nil, "", ErrUnavailable
+		}
+	}
+	replies, err := RepliesOf(q, list.Items)
+	return replies, list.ResourceVersion, err
+}
+
+// WatchParentReplies opens exactly one stream. A closed or expired stream is
+// unconfirmed; callers do not silently reconnect or poll.
+func (s KubeStore) WatchParentReplies(ctx context.Context, q *coord.InboxMessage, version string) (watch.Interface, error) {
+	if s.Watcher == nil || version == "" || !s.ready() || !IsParentNote(q) || !s.validMessage(q) || q.Spec.Kind == KindReply {
+		return nil, ErrUnavailable
+	}
+	stream, err := s.Watcher.Watch(ctx, &coord.InboxMessageList{}, client.InNamespace(s.Namespace),
+		client.MatchingLabels(parentReplyLabels(q)), &client.ListOptions{Raw: &metav1.ListOptions{ResourceVersion: version}})
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	return stream, nil
 }
 
 // Parent-note pagination visits questions/blockers, then results. The prefix

@@ -259,8 +259,11 @@ func ValidAck(s coord.InboxReadAckSpec) bool {
 }
 
 type KubeStore struct {
-	Client    client.Client
-	Live      client.Reader
+	Client client.Client
+	Live   client.Reader
+	// Watcher uses the same cluster and identity as Live, without its cache.
+	// Nil refuses held parent-note reads; it never creates an implicit client.
+	Watcher   client.WithWatch
 	Namespace string
 	Limits    taskclaim.Limits // zero fields take DefaultLimits; they bound messages, not acks
 }
