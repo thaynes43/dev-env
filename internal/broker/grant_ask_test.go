@@ -369,6 +369,10 @@ type askMetadataClient struct {
 	// plantForeignOnCreate stores the Ask without the broker origin and
 	// reports that the name was already taken.
 	plantForeignOnCreate bool
+	// plantRouteAfter leaves that many grant reads unchanged, then sets
+	// status.ask on the object later reads return. It does not write the store.
+	plantRouteAfter int
+	grantGetsSeen   int
 }
 
 func (m *askMetadataClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -387,6 +391,14 @@ func (m *askMetadataClient) Get(ctx context.Context, key client.ObjectKey, obj c
 	}
 	if err := m.Client.Get(ctx, key, obj, opts...); err != nil {
 		return err
+	}
+	if g, ok := obj.(*v1alpha1.AccessGrant); ok && m.plantRouteAfter > 0 {
+		m.grantGetsSeen++
+		if m.grantGetsSeen > m.plantRouteAfter {
+			if name, ok := grantAskObjectName(asks.Namespace, g); ok {
+				g.Status.Ask = name
+			}
+		}
 	}
 	if m.sessionDeleting {
 		if sess, ok := obj.(*v1alpha1.AgentSession); ok && sess.DeletionTimestamp.IsZero() {

@@ -283,3 +283,54 @@ func (f *grantAskFixture) plantOwnedAsk(detail string, approved *bool, user stri
 		f.t.Fatal(err)
 	}
 }
+
+// The route is planted on the live re-read, after Decide has loaded a grant
+// that has no route. The decision is one the delegate path approves inside
+// the window when no route is set. A reserved decision calls this same Decide.
+func TestGrantAskRoutedDelegateDecideStaysPendingInsideTheWindow(t *testing.T) {
+	f := newGrantAskFixture(t, true)
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if f.grant().Status.Phase != v1alpha1.GrantPending || f.grant().Status.Ask != "" {
+		t.Fatalf("not pending without a route: %+v", f.grant().Status)
+	}
+	f.armDelegate(f.b.now().Time)
+	g := f.grant()
+	f.meta.plantRouteAfter = 1
+	f.meta.grantGetsSeen = 0
+	err := f.b.Decide(f.ctx, g.Name, Decision{
+		Approve: true, By: dgBy, TTL: g.Spec.TTL.Duration,
+		GrantUID: string(g.UID), ScopeDigest: grantattest.ScopeDigest(g), Ref: dgRef, Policy: dgPolicy,
+	})
+	if !errors.Is(err, ErrRefused) {
+		t.Fatalf("routed delegate Decide: %v", err)
+	}
+	got := f.grant()
+	if got.Status.Phase != v1alpha1.GrantPending || got.Status.ApprovedBy != "" || got.Status.Ask != "" {
+		t.Fatalf("routed delegate wrote %+v", got.Status)
+	}
+}
+
+// A matching policy is visible on the object pending already read. The route
+// appears on the live re-read inside the policy write.
+func TestGrantAskPolicyWriteSeesRouteAfterTheFirstRead(t *testing.T) {
+	f := newGrantAskFixture(t, true)
+	p := kubePolicy("frontend-workloads", []string{v1alpha1.RoleWorkloads}, "frontend")
+	if err := f.base.Create(f.ctx, &p); err != nil {
+		t.Fatal(err)
+	}
+	f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantPending })
+	f.meta.plantRouteAfter = 1
+	f.meta.grantGetsSeen = 0
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	got := f.grant()
+	if got.Status.Phase != v1alpha1.GrantPending || got.Status.ApprovedBy != "" || got.Status.Ask != "" {
+		t.Fatalf("policy write after the route: %+v", got.Status)
+	}
+	if f.askCount() != 0 {
+		t.Fatalf("policy path opened %d asks", f.askCount())
+	}
+}
