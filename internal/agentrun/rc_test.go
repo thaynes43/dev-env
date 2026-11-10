@@ -484,9 +484,8 @@ func TestRCPendingRefreshThenLapseStillEndsInOwnerAction(t *testing.T) {
 }
 
 // A refresh that never lands is not an owner action. Agent start follows
-// --wait, so the wait wins (launch_deadline, phase agent_started) and the
-// handoff is not sent. A shorter stage budget would still name
-// auth_refresh_pending; agent start no longer has one.
+// --wait, and a status that still says refreshing: keeps auth_refresh_pending
+// when that wait ends. The phase is named and the handoff is not sent.
 func TestRCPendingRefreshOutlastingTheWaitIsNotAnOwnerAction(t *testing.T) {
 	h := newHarness(t)
 	rcServe(h, http.StatusCreated, func(int) apiv1.Session {
@@ -496,8 +495,8 @@ func TestRCPendingRefreshOutlastingTheWaitIsNotAnOwnerAction(t *testing.T) {
 	}, http.StatusAccepted)
 	h.mustRun(ExitPending, rcArgs(h, "--wait", "2m")...)
 	r := rcResult(t, h)
-	if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "launch_deadline" || r.Error.Phase != "agent_started" || r.TotalMs != 120000 || r.Link == nil || rcCountMessages(h) != 0 {
-		t.Fatal("a pending refresh was an owner action or ended before --wait", r)
+	if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "auth_refresh_pending" || r.Error.Phase != "agent_started" || r.TotalMs != 120000 || r.Link == nil || rcCountMessages(h) != 0 {
+		t.Fatal("a pending refresh was an owner action, a bare deadline, or ended before --wait", r)
 	}
 }
 
@@ -840,12 +839,12 @@ func TestRCStageTimeoutCodeUsesTheLastObservedRefreshStatus(t *testing.T) {
 		atWait   bool
 		want     string
 	}{
-		"refresh pending at agent start":       {agent, "auth_refresh_pending", false, "auth_refresh_pending"},
-		"global wait wins over the reason":     {agent, "auth_refresh_pending", true, "launch_deadline"},
-		"no auth status keeps the stage code":  {agent, "", false, "agent_start_timeout"},
-		"projection wait keeps the stage code": {agent, "auth_projection_unavailable", false, "agent_start_timeout"},
-		"other stages never take the reason":   {podReady, "auth_refresh_pending", false, "pod_ready_timeout"},
-		"global wait in any stage":             {podReady, "", true, "launch_deadline"},
+		"refresh pending at agent start":               {agent, "auth_refresh_pending", false, "auth_refresh_pending"},
+		"refresh pending keeps its reason at the wait": {agent, "auth_refresh_pending", true, "auth_refresh_pending"},
+		"no auth status keeps the stage code":          {agent, "", false, "agent_start_timeout"},
+		"projection wait keeps the stage code":         {agent, "auth_projection_unavailable", false, "agent_start_timeout"},
+		"other stages never take the reason":           {podReady, "auth_refresh_pending", false, "pod_ready_timeout"},
+		"global wait in any stage":                     {podReady, "", true, "launch_deadline"},
 	} {
 		if got := rcStageTimeoutCode(tc.stage, tc.authCode, tc.atWait); got != tc.want {
 			t.Errorf("%s: got %q want %q", name, got, tc.want)
