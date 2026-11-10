@@ -1170,9 +1170,13 @@ func (r *Reconciler) removeExpiryHold(ctx context.Context, v *expiryView, obs *o
 		}
 		return ctrl.Result{RequeueAfter: time.Second}, true, err
 	}
-	log.FromContext(ctx).Info("deleted the HOME expiry's hold pod", "pod", pod.Name, "uid", pod.UID, "why", string(why))
+	shown := string(why)
+	if ev.task && why == holdReleaseArchived {
+		shown = taskHoldReleaseSaved
+	}
+	log.FromContext(ctx).Info("deleted the HOME expiry's hold pod", "pod", pod.Name, "uid", pod.UID, "why", shown)
 	if ev.task {
-		r.event(v.s, corev1.EventTypeNormal, "TaskCleanup", "HoldPodRemoved", fmt.Sprintf("deleted the clean-up's hold pod %s: %s (DESIGN-061)", pod.Name, why))
+		r.event(v.s, corev1.EventTypeNormal, "TaskCleanup", "HoldPodRemoved", fmt.Sprintf("deleted the clean-up's hold pod %s: %s (DESIGN-061)", pod.Name, shown))
 	} else {
 		r.event(v.s, corev1.EventTypeNormal, "HomeExpiry", "HoldPodRemoved", fmt.Sprintf("deleted the expiry's hold pod %s: %s (DESIGN-025 6.1)", pod.Name, why))
 	}

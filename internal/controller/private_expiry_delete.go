@@ -81,6 +81,12 @@ func (r *Reconciler) stepExpiryDelete(ctx context.Context, v *expiryView, obs *o
 		return r.releaseExpiredSession(ctx, v, obs)
 	}
 	if e.Refusal != "" && e.RefusalAt != nil && v.now.Before(e.RefusalAt.Add(homeExpiryRefusalRetry)) && !v.now.Before(e.RefusalAt.Time) {
+		if task {
+			// The record stores the reason code only. Read the check again so
+			// the sentence names the node that lists the volume, and no wait
+			// the record does not store.
+			r.noteVolumeRefusal(ctx, v, obs)
+		}
 		return ctrl.Result{RequeueAfter: e.RefusalAt.Add(homeExpiryRefusalRetry).Sub(v.now) + time.Second}, false, nil
 	}
 	if task && taskRetryRefusal(e) {
@@ -262,8 +268,10 @@ func (r *Reconciler) recheckArchivedRefusal(ctx context.Context, v *expiryView, 
 // removeExpiredHome is Deleting's step, on every attempt (6.5 points 1, 2, 4
 // and 5): the verify, the re-check and the Pod check, in this call path, then
 // the claim's delete with its UID and resourceVersion and the finalizer's lift
-// (deleteExpiryHome). A claim that is gone makes the record Expired once a
-// task record's kept work verifies again; a refusal leaves the record and the
+// (deleteExpiryHome). A task record whose volume is still listed waits up to
+// taskDeleteReleaseWait before volume_not_released; the other checks stay in
+// this order. A claim that is gone makes the record Expired once a task
+// record's kept work verifies again; a refusal leaves the record and the
 // Session. A claim whose delete has started and whose finalizer is already
 // lifted waits for Kubernetes, with nothing left for the operator to remove.
 func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
@@ -310,8 +318,22 @@ func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *
 	}
 	if r.taskPolicy(after.s) {
 		if why := r.taskVolumeReleased(ctx, after); why != "" {
+			// The record stays at Deleting with no refusal, so taskActive
+			// keeps its slot: the queue counts a Deleting record whose
+			// refusal is empty. The rescue step's wait holds its slot the
+			// same way. The start is this leader's deleteReleaseWait, not
+			// the rescue step's clock. A restart loses it and starts a new
+			// taskDeleteReleaseWait; it does not refuse on the first look.
+			first := r.taskDeleteReleaseWaitSince(after.s.UID, after.now)
+			if after.now.Sub(first) < taskDeleteReleaseWait {
+				obs.homeExpiry = &homeExpiryNote{reason: taskReasonDeleting, message: taskDeleteReleaseWaiting}
+				log.FromContext(ctx).Info("the task clean-up waits for the HOME's volume to be released after its hold pod was removed", "reason", why)
+				return ctrl.Result{RequeueAfter: taskDeleteReleasePoll}, false, nil
+			}
+			r.taskForgetDeleteReleaseWait(after.s.UID)
 			return r.refuseHomeExpiry(ctx, after, obs, refusal(expiryVolumeNotReleased, "%s", why))
 		}
+		r.taskForgetDeleteReleaseWait(after.s.UID)
 		if r.taskCleanupParked(after.s, obs) {
 			return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
 		}

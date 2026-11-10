@@ -423,6 +423,12 @@ const (
 	holdReleaseRefused       expiryHoldRelease = "the clean-up's attempt is refused, so it keeps the HOME and frees its slot"
 )
 
+// taskHoldReleaseSaved is what a person reads when the task clean-up removes
+// its hold pod after the rescue is kept. holdReleaseArchived stays the guard
+// identifier for both policies. The archive path's event still prints that
+// identifier. The task policy archives nothing.
+const taskHoldReleaseSaved = "the rescue is saved, or every repository was clean and pushed"
+
 // expiryHoldEvidence is what the HOME expiry's hold pod guard judges a
 // release by: why the caller says the hold pod is no longer needed, and the
 // reads that must show it. The guard checks the reason against them itself.

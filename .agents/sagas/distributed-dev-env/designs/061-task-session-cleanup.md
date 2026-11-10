@@ -100,7 +100,13 @@ When release is unproven, nothing mounts the HOME. The clean-up looks again
 every 30 seconds, bounded by the remaining attempt time. At the 30-minute
 attempt deadline it records `volume_not_released`, frees
 its slot and keeps the HOME, re-checking every 15 minutes. Before a delete,
-an unproven release also records a refusal and keeps the HOME.
+the clean-up waits up to 5 minutes, looking every 5 seconds, for the node to
+drop the HOME's volume after the hold pod is removed, and only then records
+`volume_not_released` and keeps the HOME. The H4 probes of 2026-11-10 refused
+four of five deletes about one second after the hold pod was removed, while
+that pod's node still listed the volume. The wait is the leader's memory,
+separate from the rescue step's clock, so a restart starts a new 5 minutes,
+and the record keeps its slot while it waits.
 
 ## 2. The smallest change
 
