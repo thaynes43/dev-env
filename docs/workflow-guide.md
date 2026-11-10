@@ -470,11 +470,13 @@ whole numbers from 1 to 4. Claude also accepts `--repo NAME` instead of
 `--project`; Codex needs a declared project. The launcher needs no tracker
 credential: the coordinator reads and claims its item when it runs.
 
-The same item returns the caller's existing run, including its retained result
-after exit. To deliberately run it again, add `--run retry-2` to start and to
-item-based status. Keep that label when retrying. This lookup lasts while the
-Session record is retained; the API deduplicates concurrent creates only while
-unfinished. Status prints the task verdict and retained summary, PR links and
+Start looks up the caller's existing run for the same item, including retained
+results after exit. To deliberately run it again, add `--run retry-2` to start
+and to item-based status. Keep that label when retrying. Start sends one POST;
+exit 6 means its result is unconfirmed. Inspect status before repeating start.
+This lookup lasts while the Session record is retained. Cached lists and
+concurrent creates on different replicas have the race limits in section 7.2.
+Status prints the task verdict and retained summary, PR links and
 head SHAs when present. Start/status JSON is one object with `item` and
 `session`; stop uses the existing reap and returns one Session object.
 

@@ -131,8 +131,14 @@ func (a *app) coordinatorStart(ctx context.Context, args []string) error {
 		Prompt: fmt.Sprintf(coordinatorBriefTemplate, strconv.FormatInt(item, 10), strconv.Itoa(hours), strconv.Itoa(workers)),
 		Limits: &apiv1.Limits{Timeout: fmt.Sprintf("%dh", hours), MaxWorkers: &cap}, IdempotencyKey: key,
 	}
+	// POST dedupes only unfinished tasks. An automatic retry could create
+	// again after the first task exits; explicit retries redo the lookup.
+	hc := *c.http
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	one := *c
+	one.http, one.rejectOversizeResponse = &hc, true
 	var s apiv1.Session
-	if _, err := a.call(ctx, c, http.MethodPost, apiv1.SessionsPath, nil, req, &s); err != nil {
+	if _, err := a.callOnce(ctx, &one, http.MethodPost, apiv1.SessionsPath, req, &s); err != nil {
 		return codexProjectHint(err, req)
 	}
 	return a.printCoordinator(s, item, cmd.c.output)

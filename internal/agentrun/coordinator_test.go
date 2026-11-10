@@ -135,6 +135,41 @@ func TestCoordinatorStartProjectAndExplicitRun(t *testing.T) {
 	h.mustRun(ExitOK, "coordinator", "start", "--item", "527", "--project", "dev-env", "--model", "gpt-6-astra", "--hours", "4", "--workers", "4", "--run", "retry-2")
 }
 
+func TestCoordinatorStartLostResponseDoesNotCreateAgain(t *testing.T) {
+	h := newHarness(t)
+	posts := 0
+	ended := apiv1.Session{Name: "completed", Phase: "Failed", IdempotencyKey: "coordinator-527"}
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		switch {
+		case r.Method == http.MethodPost:
+			posts++
+			// The original session has already exited by the time a proxy
+			// reports an error. POST's unfinished-only dedupe cannot help.
+			apiError(w, 503, apiv1.CodeUnavailable, "create response lost")
+		case r.URL.Path == apiv1.SessionsPath:
+			list := apiv1.SessionList{Sessions: []apiv1.Session{}}
+			if posts > 0 {
+				list.Sessions = append(list.Sessions, ended)
+			}
+			writeTestJSON(w, 200, list)
+		case r.URL.Path == apiv1.SessionPath(ended.Name):
+			writeTestJSON(w, 200, ended)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+		}
+	}
+	h.mustRun(ExitUnconfirmed, coordinatorArgs()...)
+	contains(t, "uncertain create", h.stderr.String(), "create response lost", "did not repeat")
+	if posts != 1 {
+		t.Fatalf("start sent %d POSTs after an uncertain response", posts)
+	}
+	h.mustRun(ExitOK, coordinatorArgs()...)
+	contains(t, "retained repeat", h.stdout.String(), ended.Name, "527")
+	if posts != 1 {
+		t.Fatalf("repeat created again: %d POSTs", posts)
+	}
+}
+
 func TestCoordinatorStatusRetainedOutcome(t *testing.T) {
 	for _, selector := range [][]string{{"ended"}, {"--item", "527", "--run", "retry-2"}} {
 		h := newHarness(t)

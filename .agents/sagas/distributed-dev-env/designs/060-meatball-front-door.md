@@ -389,14 +389,25 @@ the authenticated caller, not global across identities.
 Start first reads `GET /v1/sessions?mine=true` for that exact key. If one
 retained session exists, it returns its detail without starting again, even
 after exit and even if start options changed. Multiple matches refuse with
-their names; inspect by name. Otherwise start posts the request. The existing
-API makes simultaneous identical creates idempotent while unfinished; a
-different request with the same active key conflicts. Its dedupe does not
-cover completed tasks. Therefore the read-before-create cannot guarantee
-exactly one run if another run starts and ends between the read and POST, or
-after its Session record is deleted. This preserves the existing API contract
-and avoids adding a lock or a schema field in this story. Retained outcomes
-remain available while the Session record exists, after pod reclaim.
+their names; inspect by name. Otherwise start posts the request once, without
+automatic retries or redirects. A lost response or 5xx returns exit 6
+(unconfirmed); inspect `status --item ID [--run LABEL]`, then repeat the same
+start to recover through the retained lookup. Never change the run label to
+recover an uncertain request. An automatic POST retry could duplicate a task
+that completed before the retry, since the API dedupe covers unfinished tasks.
+
+Within one operator replica the existing API serializes identical creates and
+returns the unfinished session; a different request with the same active key
+conflicts. The create lock is replica-local: two replicas can both miss the
+live key lookup and create duplicate active runs. Human/client lists also use
+the Kubernetes cache, so a retained run can be absent from the initial lookup
+during cache lag. The CLI therefore cannot guarantee exactly one run across
+replicas, if another run starts and ends between the read and POST, during
+cache lag after exit, or after its Session record is deleted. Section 7.2
+provides ordinary retry protection within those existing API limits; stronger
+idempotency needs a separately scoped API change. This preserves the existing
+contract and avoids adding a lock or a schema field in this story. Retained
+outcomes remain available while the Session record exists, after pod reclaim.
 
 `status --item` uses the same caller-scoped exact key lookup, then the ordinary
 detail route. `status NAME` reads that name under the caller's existing ACL.
