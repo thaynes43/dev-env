@@ -24,7 +24,8 @@ func (h *handler) closeCoordinatorItem(ctx context.Context, id int64, evidence s
 	// Preserve the initial refusal and diagnostic verbatim. A failed proof adds
 	// one sentence and never falls through to a mutation or alternate lookup.
 	refuse := func(reason string) (string, error) {
-		return text, fmt.Errorf("%w\nTakeover not attempted: %s.", err, reason)
+		sentence := "Takeover not attempted: " + reason + "."
+		return text, fmt.Errorf("%w\n%s", err, sentence)
 	}
 	var failure *opworkFailure
 	if !errors.As(err, &failure) || failure.guard == nil {
@@ -77,7 +78,7 @@ func (h *handler) closeCoordinatorItem(ctx context.Context, id int64, evidence s
 func (h *handler) closeReadBack(ctx context.Context, item, text string, err error) (string, error) {
 	state, readErr := h.work.call(ctx, "show", item)
 	if readErr != nil {
-		return text, fmt.Errorf("%w; current tracker state is unconfirmed: %v", err, readErr)
+		return text, fmt.Errorf("%w; current tracker state is unconfirmed: %w", err, readErr)
 	}
 	return text + "\nCurrent tracker state (read back):\n" + state, err
 }
