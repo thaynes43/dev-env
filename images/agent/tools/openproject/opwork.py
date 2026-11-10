@@ -12,6 +12,8 @@ scope, the routine lifecycle writes are yours. Run `opwork.py --help` for the co
   opwork.py status 97 "In review" --note "PR #1"
   opwork.py complete 97 --evidence "tests ..."  # evidence comment + Accepted
   opwork.py create --epic 95 --origin 97 --source-key followup:97:x --subject "..."
+  opwork.py groom 97 --description scope.md --acceptance -   # one field may be stdin
+  opwork.py order 97 --priority High            # what goes next
   opwork.py checkpoint 97 "state..."            # explicit local record, no tracker needed
   opwork.py checkins [--owner OWNER] [--status S] -o json
   opwork.py checkpoint-update 97 --next-action TEXT --check-after UTC --evidence TEXT
@@ -33,7 +35,16 @@ and reuses the item only on a match.
 Scripts that call Tracker.patch directly pass Markdown text or exactly {"raw": text}. An omitted
 field is not sent. None, empty or blank text would clear the field, so it is refused (exit 3)
 before any request unless the call names the field in allow_clear; then it is sent as {"raw": ""}.
-Any other value is refused (exit 1) before any request. No command here changes a description.
+Any other value is refused (exit 1) before any request. `groom` changes description, acceptance and
+constraints, each from a file path or from stdin (`-`), and reads the item back. `order` sets
+priority and reads the item back. No other command changes a description. A write never uses the
+session identity Tom. When OPWORK_WRITE_ORIGIN is a short lowercase name, every comment and a
+create's provenance carry a line `Origin: <name>`.
+`show`, `groom`, `order`, `complete` and the parent epic of `create` refuse, before they print the
+item or write, when that item is not in `--project`. `groom` and `order` are mutations: an applied
+or uncertain change is an unconfirmed mutation with the intent retained, never "the read failed".
+The retained groom record stores the field text, not the path of a temporary file. `flush` retries
+the attribution note with that original text.
 
 Every item line carries the canonical OpenProject link, for example
 https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/97. OPWORK_BASE_URL
@@ -91,6 +102,16 @@ HOLDS = ("Needs answer", "Needs approval", "Paused")  # an explicit hold or paus
 RELATIONS = ("relates", "follows", "precedes", "blocks", "blocked")
 REVERSE = {"follows": "precedes", "precedes": "follows", "blocks": "blocked", "blocked": "blocks", "relates": "relates"}
 PARENT_OF = {"Epic": "Saga", "Story": "Epic"}
+WRITE_CMDS = {"claim", "comment", "status", "complete", "relate", "create", "groom", "order", "checkpoint-update", "checkpoint", "flush"}
+ORIGIN_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}\Z")
+MAX_FIELD = 200000
+# A scan (search by source key or owner, create's source-key and duplicate checks) reads the
+# filtered set one page at a time and keeps only the rows its caller asks for. Memory is one page
+# plus the kept rows, however large the backlog is. Past a bound it refuses: a partial list would
+# hide a source key and let create write a second item.
+SCAN_PAGE_SIZE = 100
+SCAN_MAX_PAGES = 500  # 50,000 items read
+SCAN_MAX_ROWS = 2000  # rows kept, not rows read
 
 
 class Fail(Exception):
@@ -112,6 +133,30 @@ def load_api():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def refuse_tom(session):
+    """A tracker write is never attributed to Tom."""
+    folded = session.strip().lower()
+    if folded == "tom" or folded.startswith("tom ") or folded.startswith("tom|"):
+        raise Fail("REFUSED: opwork never writes as Tom. Nothing was sent.", 3)
+
+
+def write_origin():
+    """The Origin line for this process, or "" when unset. A bad name is refused before a request."""
+    raw = os.environ.get("OPWORK_WRITE_ORIGIN", "")
+    if not raw:
+        return ""
+    if not ORIGIN_NAME.match(raw):
+        raise Fail("REFUSED: OPWORK_WRITE_ORIGIN must be a short lowercase name. Nothing was sent.", 3)
+    return "Origin: " + raw
+
+
+def with_origin(text):
+    line = write_origin()
+    if not line or line in text.splitlines():
+        return text
+    return text.rstrip("\n") + "\n\n" + line
 
 
 def session_id():
@@ -225,16 +270,58 @@ class Tracker:
     def wp(self, wp_id):
         return self.get("/api/v3/work_packages/%d" % int(wp_id))
 
+    def project_hrefs(self):
+        """Hrefs that mean this tracker's project: its id, its identifier, and the configured name."""
+        cached = getattr(self, "_project_hrefs", None)
+        if cached:
+            return cached
+        data = self.get("/api/v3/projects/%s" % urllib.parse.quote(str(self.project), safe=""))
+        hrefs = set()
+        for value in (self.project, data.get("identifier")):
+            if isinstance(value, str) and value and "/" not in value and ".." not in value:
+                hrefs.add("/api/v3/projects/" + value)
+        pid = data.get("id")
+        if type(pid) is int and pid > 0:
+            hrefs.add("/api/v3/projects/%d" % pid)
+        self._project_hrefs = hrefs
+        return hrefs
+
+    def resolve_item(self, wp_id):
+        """The item, after it is shown to be in this project.
+
+        show, groom, order, complete and create's epic use this. A miss is exit 3
+        and names neither the subject nor the body. The caller writes nothing.
+        """
+        item = self.wp(wp_id)
+        href = ""
+        links = item.get("_links") if isinstance(item, dict) else None
+        link = links.get("project") if isinstance(links, dict) else None
+        if isinstance(link, dict) and isinstance(link.get("href"), str):
+            href = link["href"]
+        if href not in self.project_hrefs():
+            raise Fail("REFUSED: #%s is not in project %s. Nothing was returned or written. An item of another project needs --project." % (wp_id, self.project), 3)
+        return item
+
     def listing(self, filters, page=1, size=20):
         query = urllib.parse.urlencode({"filters": json.dumps(filters), "pageSize": size, "offset": page, "sortBy": '[["id","asc"]]'})
         return self.get("/api/v3/projects/%s/work_packages?%s" % (self.project, query))
 
-    def scan(self, filters):  # every page, for client-side matching (source keys are not server filters)
-        rows, page = [], 1
+    def scan(self, filters, keep=None):  # client-side matching: source keys are not server filters
+        """Every page of the filtered set; the rows `keep` accepts (every row without it).
+
+        Only kept rows are held, so a large backlog costs requests, not memory. Past the page
+        bound or the kept-row bound it refuses. Returning a partial list would hide a source key."""
+        rows, page, read = [], 1, 0
         while True:
-            data = self.listing(filters, page, 200)
-            rows += data["_embedded"]["elements"]
-            if len(rows) >= data["total"] or not data["_embedded"]["elements"]:
+            if page > SCAN_MAX_PAGES:
+                raise Fail(scan_limited(), 3)
+            data = self.listing(filters, page, SCAN_PAGE_SIZE)
+            elements = data["_embedded"]["elements"]
+            read += len(elements)
+            rows += [w for w in elements if keep is None or keep(w)]
+            if len(rows) > SCAN_MAX_ROWS:
+                raise Fail(scan_limited(), 3)
+            if read >= data["total"] or not elements:
                 return rows
             page += 1
 
@@ -254,9 +341,9 @@ class Tracker:
         return self.get("/api/v3/relations?" + query)["_embedded"]["elements"]
 
     def by_source_key(self, key):
-        return [w for w in self.scan([{"status": {"operator": "*", "values": []}}]) if text_of(w.get(SOURCE_KEY)) == key]
+        return self.scan([{"status": {"operator": "*", "values": []}}], lambda w: text_of(w.get(SOURCE_KEY)) == key)
 
-    def patch(self, wp, fields=None, status=None, lock=None, assignee=None, allow_clear=()):
+    def patch(self, wp, fields=None, status=None, lock=None, assignee=None, allow_clear=(), priority=None):
         """PATCH only the supplied fields, with lockVersion, then read back. Conflict re-reads and
         refuses; never overwrites, never retries. Formattable fields (MARKDOWN) go out as
         {"raw": text}, checked by formattable() before any request: an omitted field is not sent,
@@ -271,6 +358,8 @@ class Tracker:
             links["status"] = {"href": "/api/v3/statuses/%d" % self.resolve("statuses", status)}
         if assignee:
             links["assignee"] = {"href": "/api/v3/users/%d" % assignee}
+        if priority:
+            links["priority"] = {"href": "/api/v3/priorities/%d" % self.resolve("priorities", priority)}
         if links:
             payload["_links"] = links
         try:
@@ -283,8 +372,10 @@ class Tracker:
         if code is not None and code >= 400:
             raise Fail("PATCH #%d rejected HTTP %s: %s" % (wp["id"], code, data.get("message", data.get("raw", ""))))
         now = self.wp(wp["id"])  # tracker still down: the caller reports unavailable
+        priority_title = ((now.get("_links") or {}).get("priority") or {}).get("title", "")
         ok = all(text_of(now.get(k)) == texts.get(k, v) for k, v in fields.items()) and (not status or now["_links"]["status"]["title"].lower() == status.lower()) \
-            and (not assignee or (now["_links"].get("assignee") or {}).get("href") == "/api/v3/users/%d" % assignee)
+            and (not assignee or (now["_links"].get("assignee") or {}).get("href") == "/api/v3/users/%d" % assignee) \
+            and (not priority or priority_title.lower() == priority.lower())
         if not ok and code is None:
             raise Fail("NOT APPLIED: tracker error on the update of #%d; read back shows no change, safe to retry: %s" % (wp["id"], line(now)), 5)
         if not ok:
@@ -293,7 +384,7 @@ class Tracker:
 
     def comment(self, wp_id, text, session):
         token = uuid.uuid4().hex[:12]
-        body = "**[%s]** %s\n\n(opwork:note=%s)" % (session, text, token)
+        body = "**[%s]** %s\n\n(opwork:note=%s)" % (session, with_origin(text), token)
         return self.post_note(wp_id, body, token)
 
     def post_note(self, wp_id, body, token):
@@ -368,7 +459,7 @@ def cmd_search(t, a, session):
     if a.text:
         filters.append({"subjectOrId": {"operator": "**", "values": [a.text]}})
     if a.source_key or a.owner:  # not server filters: scan the filtered set and match here
-        rows = [w for w in t.scan(filters) if (not a.source_key or text_of(w.get(SOURCE_KEY)) == a.source_key) and (not a.owner or a.owner.lower() in text_of(w.get(OWNER)).lower())]
+        rows = t.scan(filters, lambda w: (not a.source_key or text_of(w.get(SOURCE_KEY)) == a.source_key) and (not a.owner or a.owner.lower() in text_of(w.get(OWNER)).lower()))
         total, rows = len(rows), rows[(a.page - 1) * a.limit:a.page * a.limit]
     else:
         data = t.listing(filters, a.page, a.limit)
@@ -502,8 +593,13 @@ def clip(text, limit, full):
     return text if full or len(text) <= limit else "%s [truncated %d chars; use --full]" % (text[:limit], len(text) - limit)
 
 
+def scan_limited():
+    return "REFUSED: the scan stopped at its limit (%d pages of %d items, or %d matching rows). Nothing more was read or written." % (
+        SCAN_MAX_PAGES, SCAN_PAGE_SIZE, SCAN_MAX_ROWS)
+
+
 def cmd_show(t, a, session):
-    w = t.wp(a.id)
+    w = t.resolve_item(a.id)
     out = [line(w), "  source-key: %s" % text_of(w.get(SOURCE_KEY)), "  repos: %s" % text_of(w.get(REPOS)),
            "  acceptance: %s" % text_of(w.get(ACCEPT)).replace("\n", "\n    "), "  constraints: %s" % text_of(w.get(CONSTRAINTS)).replace("\n", "\n    "),
            "  description: %s" % text_of(w.get("description")).replace("\n", "\n    ")]
@@ -516,6 +612,64 @@ def cmd_show(t, a, session):
             out.append("  [%s %s] %s %s" % (act.get("id"), when, who, clip(text_of(act.get("comment")).replace("\n", " "), 600, a.full)))
             out += ["      change: " + clip(text_of(d).replace("\n", " "), 200, a.full) for d in act.get("details", [])]
     return "\n".join(out)
+
+
+def read_field(spec, label):
+    """One groom field: a file path, or '-' for stdin. The text is never echoed in an error."""
+    try:
+        if spec == "-":
+            data = sys.stdin.read(MAX_FIELD + 1)
+        else:
+            with open(spec, "r", encoding="utf-8") as handle:
+                data = handle.read(MAX_FIELD + 1)
+    except (OSError, UnicodeError):
+        raise Fail("REFUSED: could not read %s. Nothing was sent." % label, 3) from None
+    if len(data) > MAX_FIELD:
+        raise Fail("REFUSED: %s is too long. Nothing was sent." % label, 3)
+    return data
+
+
+def field_block(w):
+    return "\n".join(["  acceptance: %s" % text_of(w.get(ACCEPT)).replace("\n", "\n    "),
+                      "  constraints: %s" % text_of(w.get(CONSTRAINTS)).replace("\n", "\n    "),
+                      "  description: %s" % text_of(w.get(DESCRIPTION)).replace("\n", "\n    ")])
+
+
+def cmd_groom(t, a, session):
+    specs = (("description", DESCRIPTION, a.description), ("acceptance", ACCEPT, a.acceptance), ("constraints", CONSTRAINTS, a.constraints))
+    chosen = [(label, field, spec) for label, field, spec in specs if spec is not None]
+    if not chosen:
+        raise Fail("REFUSED: groom needs at least one of --description, --acceptance or --constraints. Nothing was sent.", 3)
+    if sum(1 for _, _, spec in chosen if spec == "-") > 1:
+        raise Fail("REFUSED: only one field can be read from stdin. Nothing was sent.", 3)
+    fields = {field: read_field(spec, label) for label, field, spec in chosen}
+    note = "Groomed %s." % ", ".join(label for label, _, _ in chosen)
+    # Text, not the temp path the front door removes after this process exits.
+    a.retained = {"fields": {label: fields[field] for label, field, _ in chosen}, "note": note}
+    w = t.resolve_item(a.id)
+    t.patch(w, fields, lock=a.expect_lock)
+    t.comment(a.id, note, session)
+    now = t.wp(a.id)
+    return "groomed (read back): " + line(now) + "\n" + field_block(now)
+
+
+def cmd_order(t, a, session):
+    if not isinstance(a.priority, str) or not a.priority.strip():
+        raise Fail("REFUSED: --priority is required. Nothing was sent.", 3)
+    a.retained = {"priority": a.priority, "note": "Priority -> %s." % a.priority.strip()}
+    w = t.resolve_item(a.id)
+    current = ((w.get("_links") or {}).get("priority") or {}).get("title", "")
+    if current.lower() == a.priority.lower():
+        return "ordered (read back): " + line(w) + "\n  priority: " + current
+    t.patch(w, priority=a.priority, lock=a.expect_lock)
+    now = t.wp(a.id)
+    title = ((now.get("_links") or {}).get("priority") or {}).get("title", "")
+    note = "Priority -> %s." % title
+    a.retained["note"] = note
+    t.comment(a.id, note, session)
+    now = t.wp(a.id)
+    title = ((now.get("_links") or {}).get("priority") or {}).get("title", title)
+    return "ordered (read back): " + line(now) + "\n  priority: " + title
 
 
 def guard(w, session, force):
@@ -574,7 +728,7 @@ def refresh(t, w, expect_lock):
 
 
 def cmd_complete(t, a, session):
-    w = t.wp(a.id)
+    w = t.resolve_item(a.id)
     if w["_links"]["status"]["title"] == "Accepted":
         return "already Accepted: " + line(w)
     guard(w, session, a.force)
@@ -673,6 +827,7 @@ def not_confirmed(now, key, state, problems, label):
 
 
 def cmd_create(t, a, session):
+    epic = t.resolve_item(a.epic)  # refuse a foreign epic before a scan, a print or a write
     existing = t.by_source_key(a.source_key)  # search first: the stable key is the identity
     if len(existing) == 1:  # reuse only an item whose read back shows what this run asks for
         found = positive_id(existing[0].get("id")) if isinstance(existing[0], dict) else None
@@ -693,16 +848,16 @@ def cmd_create(t, a, session):
         return "\n".join(out)
     if existing:  # several items carry the key: listed, nothing written
         return "REUSED, not created: " + "; ".join(line(w) for w in existing)
-    epic = t.wp(a.epic)
     kind = a.type
     if epic["_links"]["type"]["title"] != PARENT_OF[kind]:
         raise Fail("Grammar: a %s goes under a %s, but #%d is a %s" % (kind, PARENT_OF[kind], a.epic, epic["_links"]["type"]["title"]))
     words = [x for x in a.subject.lower().split() if len(x) > 3]
-    similar = [w for w in t.scan([{"parent": {"operator": "=", "values": [str(a.epic)]}}, {"status": {"operator": "*", "values": []}}]) if words and sum(x in w["subject"].lower() for x in words) * 2 >= len(words)]
+    similar = t.scan([{"parent": {"operator": "=", "values": [str(a.epic)]}}, {"status": {"operator": "*", "values": []}}],
+                     lambda w: bool(words) and sum(x in w["subject"].lower() for x in words) * 2 >= len(words))
     if similar and not a.confirm_new:
         raise Fail("POSSIBLE DUPLICATE under #%d:\n  %s\nReuse one, or repeat with --confirm-new if this is genuinely separate work." % (a.epic, "\n  ".join(line(w) for w in similar)), 4)
     payload = {"subject": a.subject, "description": {"raw": a.description or ""}, SOURCE_KEY: a.source_key,
-               PROVENANCE: {"raw": "Created by <%s>%s as a follow-up. Not groomed or approved for execution." % (session, " from #%d" % a.origin if a.origin else "")},
+               PROVENANCE: {"raw": with_origin("Created by <%s>%s as a follow-up. Not groomed or approved for execution." % (session, " from #%d" % a.origin if a.origin else ""))},
                "_links": {"type": {"href": "/api/v3/types/%d" % t.resolve("types", kind)}, "status": {"href": "/api/v3/statuses/%d" % t.resolve("statuses", "Ungroomed")},
                           "parent": {"href": "/api/v3/work_packages/%d" % a.epic}}}
     for field, value in ((REPOS, a.repos), (ACCEPT, a.acceptance), (CONSTRAINTS, a.constraints)):
@@ -868,7 +1023,8 @@ def cmd_pending(t, a, session):
 def flush_note(t, path, rec):
     """Post one saved note once, or confirm it already landed; remove the record only after a read back.
     A record whose POST was accepted (2xx) or was started (marker written before the POST) is never reposted:
-    history is checked, else it needs manual review."""
+    history is checked, else it needs manual review. A note stored under Tom is refused before any request."""
+    refuse_tom(rec.get("session") or "")
     wp, token, structured, accepted, started = int(rec["wp"]), rec["token"], rec["kind"] == "structured_note", rec.get("post_status"), rec.get("post_started")
     if structured and not accepted and not started:
         w = t.wp(wp)
@@ -970,7 +1126,8 @@ def build_parser():
     p = argparse.ArgumentParser(prog="opwork", description=__doc__.split("\n\n")[0], epilog=(
         'Updates send only the fields given, with lockVersion. Formattable fields (description, acceptance, '
         'constraints, provenance) go out as {"raw": markdown}; for Tracker.patch, a null, empty or blank value '
-        'is refused unless allow_clear names the field. No command here changes a description.'))
+        'is refused unless allow_clear names the field. groom changes description, acceptance and constraints '
+        'from a file or stdin. order sets priority. Both read the item back. No other command changes a description.'))
     p.add_argument("--project", default=os.environ.get("OPWORK_PROJECT", PROJECT))
     sub = p.add_subparsers(dest="cmd", required=True)
     def add(name, fn, *args, **kw):
@@ -987,6 +1144,9 @@ def build_parser():
     add("checkins", cmd_checkins, (("--owner",), {}), (("--status",), {}), (("-o", "--output"), {"choices": ["json"], "required": True}), (("--page",), {"type": int, "default": 1}), (("--limit",), {"type": int, "default": 100}), help="bounded check-in view; owner filter applies to selected page, use has_more for global continuation")
     add("checkpoint-update", cmd_checkpoint_update, wp, (("--next-action",), {"required": True}), (("--check-after",), {"required": True}), (("--evidence",), {"required": True}), (("--last-verified",), {}), (("--handoff",), {}), (("--ack",), {"action": "store_true", "default": None}), (("--missing-ack",), {"dest": "ack", "action": "store_false"}), (("--stale",), {"action": "store_true", "default": None}), (("--blocked",), {"action": "store_true", "default": None}), (("--deployed",), {"action": "store_true", "default": None}), help="post attributed structured checkpoint")
     add("show", cmd_show, wp, (("--history",), {"action": "store_true"}), (("--relations",), {"action": "store_true"}), (("--full",), {"action": "store_true", "help": "no truncation of history text"}), help="read one item (read-only)")
+    add("groom", cmd_groom, wp, (("--description",), {"help": "scope file path, or - for stdin"}), (("--acceptance",), {"help": "acceptance file path, or - for stdin"}),
+        (("--constraints",), {"help": "constraints file path, or - for stdin"}), lock, help="edit scope, acceptance and constraints, then read the item back")
+    add("order", cmd_order, wp, (("--priority",), {"required": True, "help": "priority name, for example High"}), lock, help="set what goes next, then read the item back")
     add("claim", cmd_claim, wp, (("--note",), {}), (("--assignee",), {"help": "also set the native assignee: me, or a user id available on the item"}), lock, force, help="set Execution owner to this session, In progress")
     add("comment", cmd_comment, wp, (("text",), {"help": "or - to read stdin"}), help="attributed progress note")
     add("status", cmd_status, wp, (("state",), {}), (("--note",), {}), lock, force, help="explicit status change")
@@ -999,6 +1159,56 @@ def build_parser():
     add("pending", cmd_pending, help="list locally saved records")
     add("flush", cmd_flush, help="post saved notes to the tracker, with dedupe and read back")
     return p
+
+
+# An applied or uncertain change keeps an intent. Comment keeps its own note.
+UNCERTAIN_MUTATIONS = (cmd_claim, cmd_status, cmd_complete, cmd_create, cmd_relate, cmd_groom, cmd_order)
+# A tracker outage during these is an unconfirmed mutation, never "the read failed".
+UNAVAILABLE_MUTATIONS = (cmd_claim, cmd_comment, cmd_status, cmd_complete, cmd_create, cmd_relate, cmd_groom, cmd_order)
+
+
+def attribution_to_retry(args, error):
+    """The groom or order note to retry, as (token, original text, body), or None.
+
+    The text is the sentence opwork wrote, never the path of a field file.
+    """
+    if args.fn not in (cmd_groom, cmd_order):
+        return None
+    body, token = getattr(error, "body", None), getattr(error, "token", None)
+    if not isinstance(body, str) or not isinstance(token, str) or not token:
+        return None
+    retained = getattr(args, "retained", None)
+    text = retained.get("note") if isinstance(retained, dict) else ""
+    if not isinstance(text, str) or not text:
+        text = body
+    return token, text, body
+
+
+def intent_spec(args, command_argv, error):
+    """The pending intent. Groom stores field text; order stores the priority. Neither stores a temp path."""
+    wp = getattr(args, "id", None) or getattr(error, "wp", None)
+    retained = getattr(args, "retained", None)
+    if args.fn is cmd_groom and isinstance(retained, dict):
+        raw = retained.get("fields")
+        fields = {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(raw, dict) else {}
+        return {"wp": getattr(args, "id", None), "argv": ["groom", str(getattr(args, "id", ""))],
+                "text": json.dumps(fields, sort_keys=True, ensure_ascii=False), "fields": fields}
+    if args.fn is cmd_order and isinstance(retained, dict) and isinstance(retained.get("priority"), str):
+        priority = retained["priority"]
+        return {"wp": getattr(args, "id", None), "argv": ["order", str(getattr(args, "id", "")), "--priority", priority], "text": priority}
+    return {"wp": wp, "argv": list(command_argv)}
+
+
+def save_unconfirmed(args, session, command_argv, error):
+    """Retain the mutation. A groom or order attribution note is stored so flush retries its original text."""
+    note = attribution_to_retry(args, error)
+    if note is not None:
+        token, text, body = note
+        save_pending("note", token, wp=getattr(args, "id", None), session=session, text=text, body=body, **posted_fields(error))
+    # A fresh intent token when the note already uses the activity token, so the two records do not collide.
+    token = None if note is not None else getattr(error, "token", None)
+    path, _ = save_pending("intent", token, session=session, body=getattr(error, "body", None), **posted_fields(error), **intent_spec(args, command_argv, error))
+    return path
 
 
 def main(argv=None, tracker=None, unavailable=None):
@@ -1023,6 +1233,9 @@ def run(argv, tracker, unavailable):
     if args.fn in (cmd_checkpoint, cmd_pending):
         tracker = None
     try:
+        if args.cmd in WRITE_CMDS:
+            refuse_tom(session)
+            write_origin()  # a bad name is refused before the tracker is opened
         if args.fn not in (cmd_checkpoint, cmd_pending):  # these print no item lines; validate before any tracker object or request
             LINK_BASE = base_url()
         if tracker is None and args.fn not in (cmd_checkpoint, cmd_pending):
@@ -1034,35 +1247,37 @@ def run(argv, tracker, unavailable):
         if getattr(failure, "output", None):
             print(failure.output)  # partial results (e.g. the notes flush had already recorded)
         print(failure, file=sys.stderr)  # the original failure first: a failing local save must not hide it
-        if failure.code == 6 and args.fn in (cmd_claim, cmd_status, cmd_complete, cmd_create, cmd_relate):
+        if failure.code == 6 and args.fn in UNCERTAIN_MUTATIONS:
             try:
-                path, _ = save_pending("intent", getattr(failure, "token", None), wp=getattr(args, "id", None) or getattr(failure, "wp", None),
-                                       session=session, argv=command_argv, body=getattr(failure, "body", None), **posted_fields(failure))
+                path = save_unconfirmed(args, session, command_argv, failure)
             except LocalWriteFail as saving:
                 print(saving, file=sys.stderr)
                 return failure.code
-            print("UNCONFIRMED: intent retained locally: %s. Inspect with `search`/`show` before repeating." % path, file=sys.stderr)
+            note = " The attribution note is retained for `flush` with its original text." if args.fn in (cmd_groom, cmd_order) else ""
+            print("UNCONFIRMED: intent retained locally: %s.%s Inspect with `search`/`show` before repeating." % (path, note), file=sys.stderr)
         return failure.code
     except (unavailable or ()) as down:
         if args.fn is cmd_checkpoint_update and hasattr(down, "token"):
             print("TRACKER UNAVAILABLE: structured checkpoint queued locally; write is UNCONFIRMED and flush deduplicates by token.", file=sys.stderr)
             return 5
-        mutating = args.fn in (cmd_claim, cmd_comment, cmd_status, cmd_complete, cmd_create, cmd_relate)
-        if not mutating:
+        if args.fn not in UNAVAILABLE_MUTATIONS:
             print("TRACKER UNAVAILABLE: %s. The read failed; authorized bounded work can continue." % down, file=sys.stderr)
             return 5
         print("TRACKER UNAVAILABLE: %s.\nWhether the write reached OpenProject is UNCONFIRMED." % down, file=sys.stderr)  # before the save: a failing save must not hide it
         try:
             if args.fn is cmd_comment:
-                path, rec = save_pending("note", getattr(down, "token", None), wp=args.id, session=session, text=args.text, body=getattr(down, "body", None), **posted_fields(down))
+                path, _ = save_pending("note", getattr(down, "token", None), wp=args.id, session=session, text=args.text, body=getattr(down, "body", None), **posted_fields(down))
+                follow = "`flush` posts it unless it already landed (deduped by token); it never reposts a note whose POST was accepted."
             else:
-                path, rec = save_pending("intent", getattr(down, "token", None), wp=getattr(args, "id", None),
-                                         session=session, argv=command_argv, body=getattr(down, "body", None), **posted_fields(down))
+                path = save_unconfirmed(args, session, command_argv, down)
+                if args.fn in (cmd_groom, cmd_order):
+                    follow = "`flush` retries the attribution note with the original text. The retained intent keeps that text, not a temporary file path. Re-run the command only if the change is missing."
+                else:
+                    follow = "When the tracker is back, `search`/`show` the item, then re-run the command only if the change is missing."
         except LocalWriteFail as saving:
             print(saving, file=sys.stderr)
             return 5  # the original failure's exit code
-        print("Saved locally: %s\n%s\nAuthorized bounded work can continue." % (
-            path, "`flush` posts it unless it already landed (deduped by token); it never reposts a note whose POST was accepted." if args.fn is cmd_comment else "When the tracker is back, `search`/`show` the item, then re-run the command only if the change is missing."), file=sys.stderr)
+        print("Saved locally: %s\n%s\nAuthorized bounded work can continue." % (path, follow), file=sys.stderr)
         return 5
 
 

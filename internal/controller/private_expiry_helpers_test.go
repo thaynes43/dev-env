@@ -230,6 +230,8 @@ type expiryRescuer struct {
 	mu     sync.Mutex
 	report func(*corev1.Pod) (protocol.RescueReport, error)
 	pods   []string
+	// dropped are the pods drop-log ran in (the task clean-up's).
+	dropped []string
 }
 
 func (f *expiryRescuer) Rescue(_ context.Context, pod *corev1.Pod) (protocol.RescueReport, error) {

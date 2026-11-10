@@ -10,6 +10,7 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -97,6 +98,10 @@ type HomeExpiryCollector struct {
 	// DeleteOn is the operator's --enable-home-expiry-delete: with it, a
 	// record is overdue until Expired, not until Archived (DESIGN-025 10).
 	DeleteOn bool
+	// TaskCleanupOn is the operator's task clean-up (DESIGN-061): the
+	// Sessions it owns are counted by its own gauges
+	// (dev_env_task_cleanup_*), not these, so no alert counts one twice.
+	TaskCleanupOn bool
 }
 
 // Describe implements prometheus.Collector.
@@ -120,7 +125,11 @@ func (c *HomeExpiryCollector) Collect(ch chan<- prometheus.Metric) {
 	if c.Now != nil {
 		now = c.Now()
 	}
-	phases, refusing, overdue := homeExpiryGauges(list.Items, now, c.DeleteOn)
+	items := list.Items
+	if c.TaskCleanupOn {
+		items = slices.DeleteFunc(slices.Clone(items), func(s v1alpha1.AgentSession) bool { return taskPolicyOf(&s, true) })
+	}
+	phases, refusing, overdue := homeExpiryGauges(items, now, c.DeleteOn)
 	for _, p := range homeExpiryGaugePhases {
 		ch <- prometheus.MustNewConstMetric(homeExpirySessionsDesc, prometheus.GaugeValue, float64(phases[p]), p)
 	}

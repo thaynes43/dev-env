@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.99.0](https://github.com/thaynes43/dev-env/compare/v2.98.0...v2.99.0) (2026-11-10)
+
+
+### Features
+
+* **agent-run:** start a bounded coordinator with one command (DESIGN-060 7.2) (OP527) ([#1033](https://github.com/thaynes43/dev-env/issues/1033)) ([a2c72b3](https://github.com/thaynes43/dev-env/commit/a2c72b3acb779fcea49c5879965e003b14ecf229))
+* **api:** Meatball's own caller identity, the first CallerPolicy (DESIGN-060 7.1) (OP526) ([#1027](https://github.com/thaynes43/dev-env/issues/1027)) ([2958e1a](https://github.com/thaynes43/dev-env/commit/2958e1a0638434d8eaf0c93e6930796ef1312765))
+* **asks:** the grant Ask kind, its typed scope and limits; sessions cannot create one (ADR-021 build steps 1 and 2) (OP525) ([#1037](https://github.com/thaynes43/dev-env/issues/1037)) ([d0927fc](https://github.com/thaynes43/dev-env/commit/d0927fc2353a66c726cd419d0c606141652c5deb))
+* **cleanup:** the expiry record's bundle field and agentd's strict rescue, rescue-verify and drop-log (DESIGN-061 part 1) (OP519) ([#1022](https://github.com/thaynes43/dev-env/issues/1022)) ([376cd9b](https://github.com/thaynes43/dev-env/commit/376cd9bd21e89ab4bbbf101b888d1bbb193f5d1c))
+* **cleanup:** the operator's task-session clean-up path, default off (DESIGN-061 part 2) (OP520) ([#1036](https://github.com/thaynes43/dev-env/issues/1036)) ([8342820](https://github.com/thaynes43/dev-env/commit/83428207d7662a079ddcdcfe3a3484442040d115))
+* **portal:** a session usage reading leads with the week's percent, its reset and its age; plain Cursor tile (OP534, OP532) ([#1039](https://github.com/thaynes43/dev-env/issues/1039)) ([413c01c](https://github.com/thaynes43/dev-env/commit/413c01c6284196fe67347331b8527fe2aff452dc))
+* **portal:** age a last-reported usage percent, and drop it after its reset (DESIGN-059 section 8) (OP523) ([#1034](https://github.com/thaynes43/dev-env/issues/1034)) ([257061d](https://github.com/thaynes43/dev-env/commit/257061ddff7d9df6701ef58cbd98824e7c17b0a9))
+
+
+### Bug Fixes
+
+* **agent-run:** agent start follows --wait when starting a remote Claude session (OP531) ([#1028](https://github.com/thaynes43/dev-env/issues/1028)) ([20ceb2b](https://github.com/thaynes43/dev-env/commit/20ceb2b9b0399f7a1a2765cc624947d33bc08c37))
+* **apiserver:** make TestEnvtestOwnedAuthorityLatencyComposition deterministic (OP533) ([#1035](https://github.com/thaynes43/dev-env/issues/1035)) ([1c5f191](https://github.com/thaynes43/dev-env/commit/1c5f191c74cb48267ef86a99368ebe016376ab00))
+* **deps:** update module golang.org/x/oauth2 to v0.38.0 ([#1024](https://github.com/thaynes43/dev-env/issues/1024)) ([028776f](https://github.com/thaynes43/dev-env/commit/028776f50d2bcf2ba33155ebb9386ccbf52d0ce9))
+* **deps:** update module golang.org/x/sys to v0.50.0 ([#1025](https://github.com/thaynes43/dev-env/issues/1025)) ([33cc8ff](https://github.com/thaynes43/dev-env/commit/33cc8ff414f302957bc1044af424ffa5254d6cdc))
+
 ## [2.98.0](https://github.com/thaynes43/dev-env/compare/v2.97.0...v2.98.0) (2026-11-10)
 
 

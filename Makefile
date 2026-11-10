@@ -24,8 +24,10 @@ export CGO_ENABLED := 0
 
 BIN_DIR := $(CURDIR)/bin
 TOOLS_DIR := $(BIN_DIR)/tools
-# The portal binary is build-portal, not this list. The agent image runs make build
-# after copying only api, cmd, and internal, so a portal entry here breaks that image.
+# The portal binary is build-portal, and the front door is build-frontdoor, not
+# this list. The agent image runs make build after copying only api, cmd, and
+# internal, so a portal entry here breaks that image. The front door is its own
+# image; the agent and operator images do not copy it out.
 BINARIES := agent-run agentd dev-env-keeper dev-env-operator
 
 # Stamped into every binary (internal/version). VERSION is the release tag; there
@@ -139,6 +141,11 @@ build-portal: ## Build only the portal BFF. The agent and operator images do not
 	@mkdir -p $(BIN_DIR)
 	$(NICE) $(GO) build -p $(GO_PARALLELISM) -tags= -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/dev-env-portal ./cmd/dev-env-portal
 
+.PHONY: build-frontdoor
+build-frontdoor: ## Build only the front-door server. The agent and operator images do not run this target.
+	@mkdir -p $(BIN_DIR)
+	$(NICE) $(GO) build -p $(GO_PARALLELISM) -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/dev-env-frontdoor ./cmd/dev-env-frontdoor
+
 # The CLI also ships as release assets (publish-agent.yml, the cli-assets job): a
 # named linux/amd64 binary beside the macOS one. Static like the bin/agent-run
 # that `make build` makes, with the same version stamp.
@@ -178,4 +185,4 @@ $(SETUP_ENVTEST):
 
 .PHONY: clean
 clean: ## Remove the built binaries. The tools in bin/tools/ stay.
-	rm -f $(addprefix $(BIN_DIR)/,$(BINARIES)) $(BIN_DIR)/agent-run-darwin-arm64 $(BIN_DIR)/agent-run-linux-amd64
+	rm -f $(addprefix $(BIN_DIR)/,$(BINARIES)) $(BIN_DIR)/dev-env-portal $(BIN_DIR)/dev-env-frontdoor $(BIN_DIR)/agent-run-darwin-arm64 $(BIN_DIR)/agent-run-linux-amd64

@@ -469,3 +469,53 @@ func TestTablesHaveNoTrailingSpaces(t *testing.T) {
 		t.Errorf("list = %q, want the row to end at its last value", h.stdout.String())
 	}
 }
+
+// TestReapTaskSessionUnderTheCleanupSaysWhatIsTrue (DESIGN-061 6): a private
+// task Session whose conditions name the task clean-up is told it is cleaned
+// up, before and after the operator judged the reap, and show names its
+// step. One without the clean-up keeps the private text.
+func TestReapTaskSessionUnderTheCleanupSaysWhatIsTrue(t *testing.T) {
+	const name = "haynes-ops-1110-010101"
+	const promise = "the private HOME and the session's record are protected (DESIGN-025); once its task ends, the task clean-up (DESIGN-061) saves any work"
+	const judgedText = "reap accepted; the agent was stopped as the reap asked (its Pod ended at the operator's stop deadline), recorded 2026-11-10T01:00:00Z; " +
+		"the task clean-up deletes its HOME now, once any work that never reached GitHub is saved as a git bundle (DESIGN-061)"
+	task := func(conds ...apiv1.Condition) apiv1.Session {
+		s := testSession(name, "Pending")
+		s.Reaping = true
+		s.PrivateHistory = &apiv1.PrivateHistory{Version: 1, HomeClaim: "home-" + name, Admission: "Started", StopState: "Unknown"}
+		s.Conditions = conds
+		return s
+	}
+	for _, tc := range []struct {
+		name string
+		s    apiv1.Session
+		want string
+	}{
+		{name: "just reaped", s: task(apiv1.Condition{Type: "PrivateHistoryRetained", Status: "True", Reason: "HomeProtected", Message: promise}),
+			want: "reaping " + name + ": reap accepted; it is a task session, so the operator stops its agent, saves any work that never reached GitHub as a git bundle (kept 30 days), " +
+				"then deletes its HOME and the session, normally within minutes; agent-run show " + name + " follows it\n"},
+		{name: "judged", s: task(apiv1.Condition{Type: "RemovalBlocked", Status: "True", Reason: "ExecutorEnded", Message: judgedText},
+			apiv1.Condition{Type: "HomeExpiry", Status: "True", Reason: "Queued", Message: "task clean-up (DESIGN-061): queued"}),
+			want: "reaping " + name + ": " + judgedText + "\n"},
+		{name: "no clean-up", s: task(apiv1.Condition{Type: "PrivateHistoryRetained", Status: "True", Reason: "HomeProtected", Message: "the private HOME and the session's record are protected (DESIGN-025)"}),
+			want: "reaping " + name + ": reap accepted; it is a private session, so the operator asks its agent to stop and keeps its private HOME; " +
+				"no rescue bundle is made, and nothing is archived or deleted now; agent-run show " + name + " says when the stop is proven\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) { writeTestJSON(w, http.StatusAccepted, tc.s) }
+			h.mustRun(ExitOK, "reap", name)
+			if got := h.stdout.String(); got != tc.want {
+				t.Errorf("stdout\n got %q\nwant %q", got, tc.want)
+			}
+		})
+	}
+	for reason, want := range map[string]string{"Queued": "Pending, reaping: clean-up queued", "Saving": "Pending, reaping: saving unpushed work",
+		"Deleting": "Pending, reaping: deleting the HOME", "Refused": "Pending, reaping: clean-up refused, its HOME is kept"} {
+		s := task(apiv1.Condition{Type: "HomeExpiry", Status: "True", Reason: reason, Message: "task clean-up (DESIGN-061): the step"})
+		h := newHarness(t)
+		h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) { writeTestJSON(w, http.StatusOK, s) }
+		h.mustRun(ExitOK, "show", name)
+		contains(t, "show "+reason, h.stdout.String(), want)
+	}
+}
