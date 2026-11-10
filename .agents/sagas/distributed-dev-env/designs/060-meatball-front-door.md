@@ -307,7 +307,10 @@ DESIGN-034 7 says an approved Ask is a record and carries no machine
 permission, and that each adapter that consumes one needs its own typed
 validator, a one-use reservation and its own story. ADR-010 is still Proposed.
 This is a change to access and to the Ask contract, so story 2 opens with a new
-ADR (ADR-021, since DESIGN-061 takes ADR-020) and an amendment to DESIGN-034,
+ADR (ADR-021: ADR-020 and DESIGN-061 are the task-session clean-up, in work
+under [OP518](https://work.haynesnetwork.com/work_packages/518) and not on main
+yet; if they land later, this takes the next free number) and an amendment to
+DESIGN-034,
 and merges no code before both are accepted. This design's choice, for that
 ADR to record or overturn:
 
