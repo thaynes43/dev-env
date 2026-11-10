@@ -1286,6 +1286,16 @@ func TestGrantAskValidation(t *testing.T) {
 	if err != nil || strings.Contains(string(raw), "username") || strings.Contains(string(raw), "tom") {
 		t.Fatal("session view json", string(raw), err)
 	}
+	grantJSON, err := json.Marshal(grantAskRecord())
+	if err != nil || strings.Contains(string(grantJSON), `"expiresAt"`) {
+		t.Fatal("grant JSON included expiresAt", string(grantJSON), err)
+	}
+	info := askRecord()
+	infoJSON, err := json.Marshal(info)
+	wantExpiry := `"expiresAt":"` + info.ExpiresAt.Format(time.RFC3339) + `"`
+	if err != nil || !strings.Contains(string(infoJSON), wantExpiry) {
+		t.Fatal("info JSON omitted expiresAt", string(infoJSON), err)
+	}
 }
 
 // TestGrantAskAnswer checks ValidateForAt for a grant answer, and that an

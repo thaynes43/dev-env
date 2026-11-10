@@ -317,20 +317,22 @@ type AskDelivery struct {
 
 // Ask is one record as the server returns it.
 type Ask struct {
-	ID            string       `json:"id"`
-	Type          AskType      `json:"type"`
-	Question      string       `json:"question"`
-	Options       []AskOption  `json:"options,omitempty"`
-	Recommended   string       `json:"recommended"`
-	AllowFreeText bool         `json:"allowFreeText"`
-	Context       AskContext   `json:"context"`
-	Scope         *AskScope    `json:"scope,omitempty"`
-	Grant         *AskGrant    `json:"grant,omitempty"`
-	CreatedAt     time.Time    `json:"createdAt"`
-	ExpiresAt     time.Time    `json:"expiresAt,omitempty"`
-	State         AskState     `json:"state"`
-	Answer        *AskAnswer   `json:"answer,omitempty"`
-	Delivery      *AskDelivery `json:"delivery,omitempty"`
+	ID            string      `json:"id"`
+	Type          AskType     `json:"type"`
+	Question      string      `json:"question"`
+	Options       []AskOption `json:"options,omitempty"`
+	Recommended   string      `json:"recommended"`
+	AllowFreeText bool        `json:"allowFreeText"`
+	Context       AskContext  `json:"context"`
+	Scope         *AskScope   `json:"scope,omitempty"`
+	Grant         *AskGrant   `json:"grant,omitempty"`
+	CreatedAt     time.Time   `json:"createdAt"`
+	// omitzero, not omitempty: encoding/json does not treat a zero time.Time
+	// as empty, so omitempty would send 0001-01-01 for a grant ask.
+	ExpiresAt time.Time    `json:"expiresAt,omitzero"`
+	State     AskState     `json:"state"`
+	Answer    *AskAnswer   `json:"answer,omitempty"`
+	Delivery  *AskDelivery `json:"delivery,omitempty"`
 }
 
 // EffectiveState is the state as of now. An open info ask whose expiresAt, or
