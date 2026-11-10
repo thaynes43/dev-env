@@ -61,26 +61,40 @@ bound covers the outer Ask read and the reads inside `Decide` that have to
 succeed before the answer can be consumed. A restarted broker reads the
 stored instant and applies the same two-minute limit. It does not start
 another full wait. The field records the start, not a deadline, so the
-limit stays one constant.
+limit stays one constant. If a live read after the write does not show
+that instant, the grant is denied at once rather than waiting.
 
 A create the apiserver refused before any commit may be retried, and only
 until the grant's original 30-minute deadline (`CreationTimestamp` plus 30
 minutes). That memory is in the process that has not sent the create. There
-is no durable marker for it. Any error after the create request left the
-client, including a failure of the store's status initialisation or its
-final read, may have committed. The broker does not create again. A missing
-Ask then denies the grant. A restart has no memory of an unsent create, and
-a routed grant whose Ask is missing is denied the same way. A grant with no
-route keeps the 30-minute deny, including while Ask reads fail.
+is no durable marker for it. While a pre-create attempt is outstanding, the
+broker checks that deadline with a fresh clock before it branches on the Ask
+read, so a read error cannot open a new unread episode past the deadline.
+It checks the clock again at the create boundary, after the preflight and
+before the create is sent, including the first attempt. It never creates
+after the deadline. Any error after the create request left the client,
+including a failure of the store's status initialisation or its final read,
+may have committed. The broker does not create again. A missing Ask then
+denies the grant. A restart has no memory of an unsent create, and a routed
+grant whose Ask is missing is denied the same way. A grant with no route
+keeps the 30-minute deny, including while Ask reads fail.
 
 The route write is not proof the route was stored. The response is decoded
 into the object that was sent, so a pruned field can remain there. After
 the write, a separate live read into a new object must show the route
-before any Ask is created. If it does not, no Ask is created, the grant
-keeps the 30-minute deny, and a Warning Event says the grant's CRD does
-not store the route. The updated AccessGrant CRD is installed before
-`--enable-grant-asks` is set, and it is not rolled back while a grant with
-a route exists.
+before any Ask is created. If it does not, no Ask is created and the grant
+is denied in that reconcile, by the broker, with the message "the grant's
+CRD does not store the Ask route; update the CRD and request again". A
+Warning Event says the grant's CRD does not store the route. There is no
+wait. A storage failure on the Ask path is an immediate deny. A wait is a
+state, and a state needs its own fence. A deny is terminal and needs none.
+The same rule applies to `status.askUnreadAt`. After writing that instant,
+a separate live read into a new object must show it. If it does not, the
+grant is denied at once, with its own message: the CRD does not store the
+Ask unread time. The two-minute bound applies only when that instant was
+stored. The updated AccessGrant CRD stores both fields. It is installed
+before `--enable-grant-asks` is set, and it is not rolled back while a
+grant with a route exists.
 
 A grant that a policy with an attestation requirement would match gets no
 route and no Ask. The statement need not be present yet. One live,
@@ -94,12 +108,17 @@ When the broker itself denies a routed grant for any reason other than the
 Ask's own answer, it withdraws that Ask if the Ask passes the full identity
 check. The deny is written first and stands whatever the withdraw does. A
 failed withdraw is retried on a later reconcile of the denied grant until
-the Ask is closed or gone. A foreign or unreadable Ask is left alone. An
-Ask that is not open is left as stored: the Ask CRD does not let an
+the Ask is closed or gone. A read failure that is not NotFound returns that
+short retry and leaves the Ask untouched on that pass. The expected Ask UID
+and the full grant identity travel into the withdraw and are checked on
+every attempt, including each conflict retry. A foreign Ask is left alone.
+An Ask that is not open is left as stored: the Ask CRD does not let an
 answered Ask become withdrawn. This amends ADR-021's sentence "The Ask
 stays open" for a broker denial of a routed grant whose session is still
 there. It does not amend section 5. When the session has ended, the card
-stays open for Dismiss.
+stays open for Dismiss. A pending grant the requester releases is stored
+Released first. The Ask is then withdrawn from that terminal path, with the
+same retry as a deny.
 
 This amends ADR-021's build plan. `make generate` commits the deepcopy and
 the CRD. The flag has never been set; docs/asks.md states that no grant Ask
@@ -110,9 +129,9 @@ from an earlier build exists.
 | Id | Consequence |
 |---|---|
 | C-61 | Good: losing sight of the Ask cannot reopen a policy, an attestation, or a delegate or reserved decision. |
-| C-62 | Bad: a routed grant whose Ask is deleted is denied. The session asks again. A create refused before commit is retried only until the original 30-minute deadline, and only in the process that has not sent it. A create that may have committed is not retried. |
+| C-62 | Bad: a routed grant whose Ask is deleted is denied. The session asks again. A create refused before commit is retried only until the original 30-minute deadline, and only in the process that has not sent it. That deadline is a fresh clock reading before the Ask-read branch and again at the create boundary. A create that may have committed is not retried. |
 | C-63 | Neutral: a grant with no route, including flag off, is unchanged. An attested policy still decides the grant without an Ask. |
-| C-64 | Neutral: `status.askUnreadAt` is the start of the unread episode, set once per episode. A restart and a failed deny keep it. The two-minute limit stays one constant. |
+| C-64 | Neutral: `status.askUnreadAt` is the start of the unread episode, set once per episode. A restart and a failed deny keep it. The two-minute limit stays one constant. A live read that does not show the instant denies the grant at once. |
 | C-65 | Neutral: one live GrantPolicy list serves the approval match and the decision that an attested policy could match. A failed list opens no Ask. |
-| C-66 | Bad: if a live read after the route write does not show the route, no Ask is created and the grant is denied at 30 minutes. The AccessGrant CRD that stores the route is installed before the flag is set, and is not rolled back while a routed grant exists. |
-| C-67 | Neutral: a broker denial of a routed grant whose session is still there withdraws the broker's own open Ask after the deny is stored. An answered Ask stays answered. The ended-session card stays open for Dismiss. |
+| C-66 | Bad: if a live read after the route write does not show the route, no Ask is created and the grant is denied at once by the broker. A storage failure on the Ask path is an immediate deny, because a wait is a state and a state needs its own fence. The AccessGrant CRD that stores `status.ask` and `status.askUnreadAt` is installed before the flag is set, and is not rolled back while a routed grant exists. |
+| C-67 | Neutral: a broker denial of a routed grant whose session is still there withdraws the broker's own open Ask after the deny is stored. A pending release is stored Released first and retries the withdraw the same way. A read failure that is not NotFound keeps the short retry and does not touch the Ask. Every attempt checks the Ask UID and the full grant identity. An answered Ask stays answered. The ended-session card stays open for Dismiss. |

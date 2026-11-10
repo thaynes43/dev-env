@@ -41,6 +41,13 @@ const (
 	// grantAskMsgRemake is the denial when the stored scope text is not the
 	// text this build renders for the grant.
 	grantAskMsgRemake = "the request must be made again"
+	// grantAskMsgRouteNotStored is the denial when a live read after the
+	// route write does not show status.ask. The grant is denied in that
+	// reconcile. There is no wait.
+	grantAskMsgRouteNotStored = "the grant's CRD does not store the Ask route; update the CRD and request again"
+	// grantAskMsgUnreadNotStored is the denial when a live read after the
+	// unread-time write does not show status.askUnreadAt.
+	grantAskMsgUnreadNotStored = "the grant's CRD does not store the Ask unread time; update the CRD and request again"
 	// grantAskMsgGone, grantAskMsgForeign and grantAskMsgUnread are the
 	// denials for a routed grant whose Ask is missing, not this grant's, or
 	// unreadable.
@@ -77,8 +84,14 @@ var (
 	// The caller does not create again. A missing Ask denies the grant.
 	errGrantAskUnconfirmed = errors.New("grant ask create was not confirmed")
 	// errGrantAskRouteNotStored means the live grant does not show the route
-	// after the status write. No Ask is created. The 30-minute deny stands.
+	// after the status write. No Ask is created. The caller denies at once.
 	errGrantAskRouteNotStored = errors.New("grant ask route was not stored")
+	// errGrantAskUnreadNotStored means the live grant does not show the
+	// unread time after the status write. The caller denies at once.
+	errGrantAskUnreadNotStored = errors.New("grant ask unread time was not stored")
+	// errGrantAskDeadline means the original deadline passed before the
+	// create was sent. The caller denies and does not create.
+	errGrantAskDeadline = errors.New("grant ask deadline passed before create")
 	// errGrantAskUnreadable means an Ask or grant read needed to consume the
 	// answer failed. It is not NotFound. The unread bound applies.
 	errGrantAskUnreadable = errors.New("grant ask could not be read")
@@ -511,6 +524,12 @@ func (b *Broker) createGrantedAsk(ctx context.Context, g *v1alpha1.AccessGrant, 
 	if err != nil {
 		return err
 	}
+	// The preflight above can move the clock. This is the create boundary,
+	// including the first attempt. Never send the create after the deadline.
+	if !b.now().Time.Before(g.CreationTimestamp.Add(PendingTimeout)) {
+		b.clearGrantAskCreateOutstanding(g.UID)
+		return errGrantAskDeadline
+	}
 	req := asks.Requester{
 		Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session, UID: string(g.Spec.Requester.SessionUID),
 		Origin: grantAskOriginBroker,
@@ -551,16 +570,23 @@ func (b *Broker) followGrantAskRoute(ctx context.Context, g *v1alpha1.AccessGran
 		return reconcile.Result{RequeueAfter: time.Second}, nil
 	}
 	ask, err := b.loadAskByName(ctx, g.Status.Ask)
+	// While a pre-create is outstanding, the original deadline is decided
+	// here, with a fresh clock, before the read result chooses a path. A
+	// read error must not open an unread episode that outlives that
+	// deadline. A successful read means an Ask exists, and this deadline
+	// no longer applies.
+	if err != nil && b.grantAskCreateOutstanding(g.UID) && !b.now().Time.Before(g.CreationTimestamp.Add(PendingTimeout)) {
+		b.clearGrantAskCreateOutstanding(g.UID)
+		return b.denyStillPending(ctx, g, DeniedByTimeout, "no answer in 30 minutes", b.now())
+	}
 	switch {
 	case apierrors.IsNotFound(err):
 		if b.grantAskCreateOutstanding(g.UID) {
-			// The create has not been sent. The grant's original deadline
-			// still ends the wait. Past it, the grant is denied.
-			if !now.Time.Before(g.CreationTimestamp.Add(PendingTimeout)) {
-				return b.denyStillPending(ctx, g, DeniedByTimeout, "no answer in 30 minutes", now)
-			}
 			cerr := b.createGrantedAsk(ctx, g, sess, now)
 			if cerr != nil && !errors.Is(cerr, errGrantAskUnconfirmed) {
+				if errors.Is(cerr, errGrantAskDeadline) {
+					return b.denyStillPending(ctx, g, DeniedByTimeout, "no answer in 30 minutes", b.now())
+				}
 				if errors.Is(cerr, errGrantAskRouteForeign) {
 					b.noteForeignGrantAsk(g)
 					return b.denyRoutedGrant(ctx, g, grantAskMsgForeign, now)
@@ -581,6 +607,9 @@ func (b *Broker) followGrantAskRoute(ctx context.Context, g *v1alpha1.AccessGran
 			return b.denyRoutedGrant(ctx, g, grantAskMsgGone, now)
 		}
 	case err != nil:
+		if b.grantAskCreateOutstanding(g.UID) {
+			return reconcile.Result{RequeueAfter: time.Second}, nil
+		}
 		return b.routedUnread(ctx, g, now)
 	}
 	b.clearGrantAskCreateOutstanding(g.UID)
@@ -599,6 +628,9 @@ func (b *Broker) followGrantAskRoute(ctx context.Context, g *v1alpha1.AccessGran
 
 func (b *Broker) routedUnread(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (reconcile.Result, error) {
 	tooLong, err := b.grantAskUnreadExpired(ctx, g, now.Time)
+	if errors.Is(err, errGrantAskUnreadNotStored) {
+		return b.denyRoutedGrant(ctx, g, grantAskMsgUnreadNotStored, now)
+	}
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second}, nil
 	}
@@ -691,7 +723,23 @@ func (b *Broker) grantAskUnreadExpired(ctx context.Context, g *v1alpha1.AccessGr
 	if !written {
 		return false, errGrantAskLater
 	}
-	*g = *fresh
+	// The update response is decoded into fresh, so a pruned field can remain
+	// there. A new live read is the only proof the unread time was stored.
+	// If it was not, deny at once: a wait would be another state to fence.
+	var stored v1alpha1.AccessGrant
+	if b.APIReader == nil {
+		return false, errGrantAskLater
+	}
+	if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: g.Name}, &stored); err != nil {
+		return false, err
+	}
+	if stored.UID != g.UID {
+		return false, errGrantAskLater
+	}
+	if stored.Status.AskUnreadAt == nil || !stored.Status.AskUnreadAt.Equal(&stamp) {
+		return false, errGrantAskUnreadNotStored
+	}
+	*g = stored
 	return false, nil
 }
 
@@ -735,7 +783,8 @@ func (b *Broker) noteForeignGrantAsk(g *v1alpha1.AccessGrant) {
 
 // withdrawBrokerDenial withdraws the broker's own Ask after the broker has
 // denied a routed grant for a reason other than the Ask's own answer. The
-// deny is already written. A foreign or unreadable Ask is left alone. An
+// deny is already written. A foreign Ask is left alone. A read failure that
+// is not NotFound is returned, and the Ask is not modified on that pass. An
 // Ask that is not open, including one the session ending left for Dismiss,
 // is left as it is. A failed withdraw is returned so a later reconcile retries.
 func (b *Broker) withdrawBrokerDenial(ctx context.Context, g *v1alpha1.AccessGrant) error {
@@ -746,11 +795,13 @@ func (b *Broker) withdrawBrokerDenial(ctx context.Context, g *v1alpha1.AccessGra
 		return nil
 	}
 	obj, err := b.loadDecisionAsk(ctx, g)
-	if apierrors.IsNotFound(err) || errors.Is(err, errGrantAskLater) || errors.Is(err, errGrantAskUnreadable) {
+	if apierrors.IsNotFound(err) || errors.Is(err, errGrantAskLater) {
 		return nil
 	}
+	// A read failure that is not NotFound leaves the Ask untouched and
+	// keeps the short retry. Converting it to success would drop that retry.
 	if err != nil {
-		return nil
+		return err
 	}
 	if !grantAskIdentityOK(g, obj) {
 		return nil
@@ -759,7 +810,7 @@ func (b *Broker) withdrawBrokerDenial(ctx context.Context, g *v1alpha1.AccessGra
 		return nil
 	}
 	req := asks.Requester{Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session, UID: string(g.Spec.Requester.SessionUID)}
-	if _, err := b.askStore().Withdraw(ctx, obj.Name, req, b.now().Time); err != nil {
+	if _, err := b.askStore().Withdraw(ctx, obj.Name, req, b.now().Time, grantAskWithdrawIdentity(g, obj)); err != nil {
 		if errors.Is(err, asks.ErrNotFound) || errors.Is(err, apiv1.ErrAskNotOpen) {
 			return nil
 		}
@@ -787,13 +838,27 @@ func (b *Broker) withdrawOpenGrantAsk(ctx context.Context, g *v1alpha1.AccessGra
 		return nil
 	}
 	req := asks.Requester{Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session, UID: string(g.Spec.Requester.SessionUID)}
-	if _, err := b.askStore().Withdraw(ctx, obj.Name, req, b.now().Time); err != nil {
+	if _, err := b.askStore().Withdraw(ctx, obj.Name, req, b.now().Time, grantAskWithdrawIdentity(g, obj)); err != nil {
 		if errors.Is(err, asks.ErrNotFound) || errors.Is(err, apiv1.ErrAskNotOpen) {
 			return nil
 		}
 		return err
 	}
 	return nil
+}
+
+// grantAskWithdrawIdentity is the Ask the broker has already accepted.
+// Withdraw checks it again on every read, including each conflict retry.
+func grantAskWithdrawIdentity(g *v1alpha1.AccessGrant, ask *coord.Ask) asks.WithdrawIdentity {
+	id, _ := grantAskRequestID(g.UID)
+	return asks.WithdrawIdentity{
+		AskUID:      ask.UID,
+		Origin:      grantAskOriginBroker,
+		RequestID:   id,
+		SessionName: g.Spec.Requester.Session,
+		SessionUID:  string(g.Spec.Requester.SessionUID),
+		GrantUID:    string(g.UID),
+	}
 }
 
 func (b *Broker) loadGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant) (*coord.Ask, error) {

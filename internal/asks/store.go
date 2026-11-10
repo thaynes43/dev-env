@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
@@ -299,10 +300,24 @@ func (s KubeStore) ListNamespace(ctx context.Context) ([]apiv1.Ask, bool, error)
 	return s.list(ctx, nil)
 }
 
+// WithdrawIdentity is the Ask the caller already accepted. Withdraw checks
+// it against the object it has just read, on every attempt, including each
+// conflict retry. The zero value withdraws an ask that is not a grant ask.
+// A grant ask is withdrawn only when every field matches that object.
+type WithdrawIdentity struct {
+	AskUID      types.UID
+	Origin      string
+	RequestID   string
+	SessionName string
+	SessionUID  string
+	GrantUID    string
+}
+
 // Withdraw sets an open ask to withdrawn. The requester must own it. An ask
 // that is not effectively open, including one that has lapsed, is refused
-// with ErrAskNotOpen (409). now is truncated to whole seconds.
-func (s KubeStore) Withdraw(ctx context.Context, id string, req Requester, now time.Time) (apiv1.Ask, error) {
+// with ErrAskNotOpen (409). now is truncated to whole seconds. ident is
+// checked on every read before any write.
+func (s KubeStore) Withdraw(ctx context.Context, id string, req Requester, now time.Time, ident WithdrawIdentity) (apiv1.Ask, error) {
 	if err := s.ready(); err != nil {
 		return apiv1.Ask{}, err
 	}
@@ -317,6 +332,11 @@ func (s KubeStore) Withdraw(ctx context.Context, id string, req Requester, now t
 		}
 		if !owns(obj, req) {
 			return apiv1.Ask{}, ErrNotFound
+		}
+		if obj.Spec.Type == string(apiv1.AskTypeGrant) || ident.AskUID != "" {
+			if !withdrawIdentityOK(obj, ident) {
+				return apiv1.Ask{}, ErrNotFound
+			}
 		}
 		wire, err := toWire(obj)
 		if err != nil {
@@ -403,6 +423,25 @@ func applyAnswer(obj *coord.Ask, in apiv1.AskAnswerRequest, now time.Time) {
 		v := *in.Approved
 		obj.Status.Answer.Approved = &v
 	}
+}
+
+// withdrawIdentityOK reports whether this read is still the Ask the caller
+// named. The origin has to be the broker's, and the grant, the request id,
+// the session and the object UID all have to match.
+func withdrawIdentityOK(obj *coord.Ask, ident WithdrawIdentity) bool {
+	if obj == nil || ident.AskUID == "" || obj.UID != ident.AskUID {
+		return false
+	}
+	if ident.Origin != BrokerOrigin || obj.Labels[OriginLabel] != ident.Origin {
+		return false
+	}
+	if obj.Spec.Type != string(apiv1.AskTypeGrant) || obj.Spec.Grant == nil {
+		return false
+	}
+	if obj.Spec.RequestID != ident.RequestID || obj.Spec.Grant.UID != ident.GrantUID {
+		return false
+	}
+	return obj.Spec.Context.SessionName == ident.SessionName && obj.Spec.Context.SessionUID == ident.SessionUID
 }
 
 func owns(obj *coord.Ask, req Requester) bool {

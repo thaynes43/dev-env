@@ -179,7 +179,7 @@ func (s *Server) withdrawAsk(ctx context.Context, _ http.ResponseWriter, r *http
 		return 0, nil, badRequest("type: a session cannot withdraw a grant ask")
 	}
 	now := s.askNow()
-	ask, err := s.Asks.Withdraw(ctx, r.PathValue("id"), reqr, now)
+	ask, err := s.Asks.Withdraw(ctx, r.PathValue("id"), reqr, now, asks.WithdrawIdentity{})
 	if err != nil {
 		return 0, nil, mapAskError(err)
 	}

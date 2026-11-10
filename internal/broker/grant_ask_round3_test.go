@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -194,39 +195,77 @@ func TestGrantAskCachedPolicyDoesNotOpenAnAsk(t *testing.T) {
 }
 
 func TestGrantAskPrunedRouteCreatesNoAsk(t *testing.T) {
-	f := newGrantAskFixture(t, true)
-	rec := &events.FakeRecorder{Events: make(chan string, 8)}
-	f.b.Recorder = rec
-	f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantPending })
-	f.b.Client = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
-		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
-			if g, ok := obj.(*v1alpha1.AccessGrant); ok && g.Status.Ask != "" {
-				clone := g.DeepCopy()
-				clone.Status.Ask = ""
-				return c.SubResource(sub).Update(ctx, clone, opts...)
-			}
-			return c.SubResource(sub).Update(ctx, obj, opts...)
-		},
+	t.Run("pruned route", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		rec := &events.FakeRecorder{Events: make(chan string, 8)}
+		f.b.Recorder = rec
+		f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantPending })
+		f.b.Client = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if g, ok := obj.(*v1alpha1.AccessGrant); ok && g.Status.Ask != "" && g.Status.Phase != v1alpha1.GrantDenied {
+					clone := g.DeepCopy()
+					clone.Status.Ask = ""
+					return c.SubResource(sub).Update(ctx, clone, opts...)
+				}
+				return c.SubResource(sub).Update(ctx, obj, opts...)
+			},
+		})
+		f.b.APIReader = f.meta
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		g := f.grant()
+		if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Message != grantAskMsgRouteNotStored || g.Status.ApprovedBy != "" || g.Status.Ask != "" || f.askCount() != 0 {
+			t.Fatalf("pruned route: %+v asks=%d", g.Status, f.askCount())
+		}
+		if msgs := strings.Join(eventTexts(rec), "\n"); !strings.Contains(msgs, "the grant's CRD does not store the route") {
+			t.Fatalf("events %q", msgs)
+		}
+		p := kubePolicy("frontend-workloads", []string{v1alpha1.RoleWorkloads}, "frontend")
+		if err := f.base.Create(f.ctx, &p); err != nil {
+			t.Fatal(err)
+		}
+		f.armDelegate(f.b.now().Time)
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		g = f.grant()
+		err := f.b.Decide(f.ctx, g.Name, Decision{
+			Approve: true, By: dgBy, TTL: g.Spec.TTL.Duration,
+			GrantUID: string(g.UID), ScopeDigest: grantattest.ScopeDigest(g), Ref: dgRef, Policy: dgPolicy,
+		})
+		if !errors.Is(err, ErrNotPending) {
+			t.Fatalf("Decide after the deny: %v", err)
+		}
+		g = f.grant()
+		if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.ApprovedBy != "" || g.Status.Message != grantAskMsgRouteNotStored {
+			t.Fatalf("after policy and delegate: %+v", g.Status)
+		}
 	})
-	f.b.APIReader = f.meta
-	if _, err := f.reconcile(); err != nil {
-		t.Fatal(err)
-	}
-	g := f.grant()
-	if g.Status.Ask != "" || f.askCount() != 0 || g.Status.Phase != v1alpha1.GrantPending || g.Status.DeniedBy != "" {
-		t.Fatalf("pruned route: %+v asks=%d", g.Status, f.askCount())
-	}
-	if msgs := strings.Join(eventTexts(rec), "\n"); !strings.Contains(msgs, "the grant's CRD does not store the route") {
-		t.Fatalf("events %q", msgs)
-	}
-	f.clk.Step(PendingTimeout)
-	if _, err := f.reconcile(); err != nil {
-		t.Fatal(err)
-	}
-	g = f.grant()
-	if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByTimeout || g.Status.Message != "no answer in 30 minutes" || g.Status.Ask != "" || f.askCount() != 0 {
-		t.Fatalf("after 30 minutes: %+v asks=%d", g.Status, f.askCount())
-	}
+	t.Run("pruned unread time", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		f.openAsk()
+		route := f.grant().Status.Ask
+		f.b.Client = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if g, ok := obj.(*v1alpha1.AccessGrant); ok && g.Status.AskUnreadAt != nil && g.Status.Phase != v1alpha1.GrantDenied {
+					clone := g.DeepCopy()
+					clone.Status.AskUnreadAt = nil
+					return c.SubResource(sub).Update(ctx, clone, opts...)
+				}
+				return c.SubResource(sub).Update(ctx, obj, opts...)
+			},
+		})
+		f.b.APIReader = f.meta
+		f.meta.failAskGet = apierrors.NewServiceUnavailable("ask was not read")
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		g := f.grant()
+		if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Message != grantAskMsgUnreadNotStored || g.Status.ApprovedBy != "" || g.Status.Ask != route || g.Status.AskUnreadAt != nil {
+			t.Fatalf("pruned unread time: %+v", g.Status)
+		}
+	})
 }
 
 // The route is absent from the grant the writer was given and present only on
@@ -456,29 +495,13 @@ func TestGrantAskBrokerDenyAskState(t *testing.T) {
 		}
 	})
 	t.Run("foreign ask is untouched", func(t *testing.T) {
+		// Same requester and an otherwise valid grant Ask, without the
+		// broker origin. The store's requester check would allow a withdraw.
 		f := newGrantAskFixture(t, true)
-		f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantPending })
-		g := f.grant()
-		name, ok := grantAskObjectName(f.b.SessionNamespace, g)
-		if !ok {
-			t.Fatal("name")
-		}
-		ask := &coord.Ask{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: name, Namespace: asks.Namespace,
-				Labels: map[string]string{"keep": "yes"},
-			},
-			Spec: coord.AskSpec{ID: name, Type: "info", Question: "foreign", RequestID: "foreign-1"},
-		}
-		if err := f.base.Create(f.ctx, ask); err != nil {
-			t.Fatal(err)
-		}
-		ask.Status.State = string(apiv1.AskStateOpen)
-		if err := f.base.Status().Update(f.ctx, ask); err != nil {
-			t.Fatal(err)
-		}
-		g.Status.Ask = name
-		if err := f.base.Status().Update(f.ctx, g); err != nil {
+		f.openAsk()
+		ask := f.onlyAsk()
+		delete(ask.Labels, asks.OriginLabel)
+		if err := f.base.Update(f.ctx, ask); err != nil {
 			t.Fatal(err)
 		}
 		before := f.onlyAsk()
@@ -486,8 +509,79 @@ func TestGrantAskBrokerDenyAskState(t *testing.T) {
 			t.Fatal(err)
 		}
 		after := f.onlyAsk()
-		if f.grant().Status.Message != grantAskMsgForeign || after.Status.State != before.Status.State || after.Labels["keep"] != "yes" || after.Labels[asks.OriginLabel] != "" || after.Spec.Question != before.Spec.Question {
-			t.Fatalf("grant %+v ask state %s labels %v", f.grant().Status, after.Status.State, after.Labels)
+		g := f.grant()
+		if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Message != grantAskMsgForeign || g.Status.ApprovedBy != "" {
+			t.Fatalf("grant %+v", g.Status)
+		}
+		if after.UID != before.UID || after.Status.State != string(apiv1.AskStateOpen) || after.Labels[asks.OriginLabel] != "" || after.Labels[asks.RequesterLabel] == "" {
+			t.Fatalf("ask uid %s state %s labels %v", after.UID, after.Status.State, after.Labels)
+		}
+	})
+	t.Run("replacement between the checks", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		f.openAsk()
+		ask := f.onlyAsk()
+		before := ask.UID
+		ask.Spec.Grant.TTL = "2h0m0s"
+		if err := f.base.Update(f.ctx, ask); err != nil {
+			t.Fatal(err)
+		}
+		swap := &swapAskAfterDeny{Client: f.base, grant: client.ObjectKey{Namespace: sessionNS, Name: f.g.Name}}
+		f.b.APIReader = swap
+		f.b.Client = f.meta
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		after := f.onlyAsk()
+		g := f.grant()
+		if !swap.swapped || after.UID == before || after.UID != swap.newUID {
+			t.Fatalf("swap swapped=%v before %s after %s planted %s", swap.swapped, before, after.UID, swap.newUID)
+		}
+		if g.Status.Phase != v1alpha1.GrantDenied || g.Status.Message != "the scope no longer matches" || g.Status.ApprovedBy != "" || after.Status.State != string(apiv1.AskStateOpen) {
+			t.Fatalf("grant %+v ask %s", g.Status, after.Status.State)
+		}
+	})
+	t.Run("origin change on a withdraw retry", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		f.openAsk()
+		ask := f.onlyAsk()
+		ask.Spec.Grant.TTL = "2h0m0s"
+		if err := f.base.Update(f.ctx, ask); err != nil {
+			t.Fatal(err)
+		}
+		attempts := 0
+		f.b.Client = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				ask, ok := obj.(*coord.Ask)
+				if !ok || ask.Status.State != string(apiv1.AskStateWithdrawn) {
+					return c.SubResource(sub).Update(ctx, obj, opts...)
+				}
+				attempts++
+				if attempts == 1 {
+					var stored coord.Ask
+					if err := f.base.Get(ctx, client.ObjectKeyFromObject(ask), &stored); err != nil {
+						return err
+					}
+					if stored.Labels == nil {
+						stored.Labels = map[string]string{}
+					}
+					stored.Labels[asks.OriginLabel] = "replaced"
+					if err := f.base.Update(ctx, &stored); err != nil {
+						return err
+					}
+					return apierrors.NewConflict(schema.GroupResource{Group: coord.GroupVersion.Group, Resource: "asks"}, ask.Name, errors.New("origin changed"))
+				}
+				return c.SubResource(sub).Update(ctx, obj, opts...)
+			},
+		})
+		f.b.APIReader = f.meta
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		after := f.onlyAsk()
+		g := f.grant()
+		if attempts != 1 || g.Status.Phase != v1alpha1.GrantDenied || g.Status.Message != "the scope no longer matches" || g.Status.ApprovedBy != "" || after.Status.State != string(apiv1.AskStateOpen) || after.Labels[asks.OriginLabel] != "replaced" {
+			t.Fatalf("attempts %d grant %+v ask %s origin %q", attempts, g.Status, after.Status.State, after.Labels[asks.OriginLabel])
 		}
 	})
 	t.Run("unreadable ask stays open", func(t *testing.T) {
@@ -589,16 +683,204 @@ func TestGrantAskFailedWithdrawRetries(t *testing.T) {
 		},
 	})
 	f.b.APIReader = f.meta
-	if _, err := f.reconcile(); err != nil {
+	res, err := f.reconcile()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if f.grant().Status.Phase != v1alpha1.GrantDenied || f.grant().Status.Message != "the scope no longer matches" || f.onlyAsk().Status.State != string(apiv1.AskStateOpen) || failed != 1 {
-		t.Fatalf("first pass: %+v ask %s failed %d", f.grant().Status, f.onlyAsk().Status.State, failed)
+	if res.RequeueAfter != time.Second || f.grant().Status.Phase != v1alpha1.GrantDenied || f.grant().Status.Message != "the scope no longer matches" || f.onlyAsk().Status.State != string(apiv1.AskStateOpen) || failed != 1 {
+		t.Fatalf("first pass: requeue %s %+v ask %s failed %d", res.RequeueAfter, f.grant().Status, f.onlyAsk().Status.State, failed)
 	}
+	f.meta.failAskGet = apierrors.NewServiceUnavailable("ask was not read")
+	res, err = f.reconcile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RequeueAfter != time.Second || failed != 1 || f.grant().Status.Phase != v1alpha1.GrantDenied || f.onlyAsk().Status.State != string(apiv1.AskStateOpen) {
+		t.Fatalf("read failure on the retry: requeue %s failed %d %+v ask %s", res.RequeueAfter, failed, f.grant().Status, f.onlyAsk().Status.State)
+	}
+	f.meta.failAskGet = nil
 	if _, err := f.reconcile(); err != nil {
 		t.Fatal(err)
 	}
 	if f.grant().Status.Phase != v1alpha1.GrantDenied || f.onlyAsk().Status.State != string(apiv1.AskStateWithdrawn) {
-		t.Fatalf("retry: %+v ask %s", f.grant().Status, f.onlyAsk().Status.State)
+		t.Fatalf("recovered: %+v ask %s", f.grant().Status, f.onlyAsk().Status.State)
 	}
+}
+
+// swapAskAfterDeny returns the Ask the broker already accepted, then replaces
+// the stored object with an otherwise identical Ask of a new UID. The store's
+// next read has to refuse that replacement.
+type swapAskAfterDeny struct {
+	client.Client
+	grant   client.ObjectKey
+	swapped bool
+	newUID  types.UID
+}
+
+func (s *swapAskAfterDeny) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if err := s.Client.Get(ctx, key, obj, opts...); err != nil {
+		return err
+	}
+	ask, ok := obj.(*coord.Ask)
+	if !ok || s.swapped {
+		return nil
+	}
+	var g v1alpha1.AccessGrant
+	if err := s.Client.Get(ctx, s.grant, &g); err != nil || g.Status.Phase != v1alpha1.GrantDenied {
+		return nil
+	}
+	snapshot := ask.DeepCopy()
+	s.swapped = true
+	if err := s.Delete(ctx, snapshot); err != nil {
+		return err
+	}
+	replacement := snapshot.DeepCopy()
+	replacement.ResourceVersion = ""
+	replacement.UID = snapshot.UID + "-replaced"
+	replacement.Status = coord.AskStatus{}
+	if err := s.Create(ctx, replacement); err != nil {
+		return err
+	}
+	replacement.Status = snapshot.Status
+	if err := s.Client.Status().Update(ctx, replacement); err != nil {
+		return err
+	}
+	s.newUID = replacement.UID
+	snapshot.DeepCopyInto(ask)
+	return nil
+}
+
+func TestGrantAskInnerReadExpiresAcrossRestartAndConflict(t *testing.T) {
+	f := newGrantAskFixture(t, true)
+	f.openAsk()
+	f.answer(boolPtr(true), "tom", "")
+	reader := &innerAskRead{Client: f.meta}
+	f.b.APIReader = reader
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	got := f.grant()
+	if reader.askGets < 2 || got.Status.Phase != v1alpha1.GrantPending || got.Status.AskUnreadAt == nil || got.Status.ApprovedBy != "" {
+		t.Fatalf("inner read: gets %d %+v", reader.askGets, got.Status)
+	}
+	started := *got.Status.AskUnreadAt
+	f.b = &Broker{
+		Client: f.meta, APIReader: reader, SessionNamespace: sessionNS, PolicyNamespace: systemNS,
+		Clock: f.clk, EnableGrantAsks: true, Notifier: f.note,
+	}
+	reader.askGets = 0
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	got = f.grant()
+	if got.Status.Phase != v1alpha1.GrantPending || got.Status.AskUnreadAt == nil || !got.Status.AskUnreadAt.Equal(&started) || got.Status.ApprovedBy != "" {
+		t.Fatalf("restart: %+v", got.Status)
+	}
+	f.clk.Step(grantAskUnreadLimit)
+	gate := &denyWriteGate{}
+	f.b = &Broker{
+		Client: interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if g, ok := obj.(*v1alpha1.AccessGrant); ok && gate.block && g.Status.Phase == v1alpha1.GrantDenied {
+					return apierrors.NewConflict(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "accessgrants"}, g.Name, errors.New("conflict"))
+				}
+				return c.SubResource(sub).Update(ctx, obj, opts...)
+			},
+		}),
+		APIReader: reader, SessionNamespace: sessionNS, PolicyNamespace: systemNS,
+		Clock: f.clk, EnableGrantAsks: true, Notifier: f.note,
+	}
+	gate.block = true
+	reader.askGets = 0
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	got = f.grant()
+	if got.Status.Phase != v1alpha1.GrantPending || got.Status.AskUnreadAt == nil || !got.Status.AskUnreadAt.Equal(&started) || got.Status.ApprovedBy != "" {
+		t.Fatalf("conflict: %+v", got.Status)
+	}
+	gate.block = false
+	reader.askGets = 0
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	got = f.grant()
+	if got.Status.Phase != v1alpha1.GrantDenied || got.Status.DeniedBy != DeniedByBroker || got.Status.Message != grantAskMsgUnread || got.Status.ApprovedBy != "" || got.Status.AskUnreadAt == nil || !got.Status.AskUnreadAt.Equal(&started) {
+		t.Fatalf("after the bound: %+v", got.Status)
+	}
+	if f.onlyAsk().Status.State != string(apiv1.AskStateAnswered) {
+		t.Fatalf("ask state %s", f.onlyAsk().Status.State)
+	}
+}
+
+type innerAskRead struct {
+	client.Client
+	askGets int
+}
+
+func (r *innerAskRead) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*coord.Ask); ok {
+		r.askGets++
+		if r.askGets > 1 {
+			return apierrors.NewServiceUnavailable("inner ask was not read")
+		}
+	}
+	return r.Client.Get(ctx, key, obj, opts...)
+}
+
+type denyWriteGate struct{ block bool }
+
+func TestGrantAskStoreStatusAndFinalReadAreNotRetried(t *testing.T) {
+	for _, mode := range []string{"status", "read"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newGrantAskFixture(t, true)
+			fault := &askCreateFault{mode: mode}
+			f.b.Client = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if _, ok := obj.(*coord.Ask); ok {
+						fault.creates++
+						fault.created = true
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*coord.Ask); ok && fault.mode == "read" && fault.created && !fault.failedRead {
+						fault.failedRead = true
+						return apierrors.NewServiceUnavailable("ask was not read back")
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					return f.meta.List(ctx, list, opts...)
+				},
+				SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+					if _, ok := obj.(*coord.Ask); ok && fault.mode == "status" {
+						return apierrors.NewServiceUnavailable("ask status was not stored")
+					}
+					return c.SubResource(sub).Update(ctx, obj, opts...)
+				},
+			})
+			f.b.APIReader = f.b.Client
+			f.until(func(g *v1alpha1.AccessGrant) bool {
+				return g.Status.Phase == v1alpha1.GrantPending && fault.creates == 1 && f.askCount() == 1
+			})
+			if err := f.base.Delete(f.ctx, f.onlyAsk()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.reconcile(); err != nil {
+				t.Fatal(err)
+			}
+			g := f.grant()
+			if fault.creates != 1 || f.askCount() != 0 || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Message != grantAskMsgGone || g.Status.ApprovedBy != "" {
+				t.Fatalf("%s: creates=%d asks=%d phase=%s deniedBy=%s message=%q", mode, fault.creates, f.askCount(), g.Status.Phase, g.Status.DeniedBy, g.Status.Message)
+			}
+		})
+	}
+}
+
+type askCreateFault struct {
+	mode       string
+	creates    int
+	created    bool
+	failedRead bool
 }

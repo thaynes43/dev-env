@@ -272,11 +272,9 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 // would match is not given one either.
 func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) (ctrl.Result, error) {
 	if g.Spec.Release {
-		if b.EnableGrantAsks || g.Status.Ask != "" {
-			if err := b.withdrawOpenGrantAsk(ctx, g); err != nil {
-				return ctrl.Result{RequeueAfter: time.Second}, nil
-			}
-		}
+		// Store Released first. The Ask is withdrawn from the terminal path,
+		// with the same retry as a deny. A failed withdraw cannot keep the
+		// grant Pending.
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released before an answer", now)
 	}
 	// The route is read first. A routed grant is never given another path.
@@ -330,6 +328,9 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 			if err := b.claimGrantAskRoute(ctx, g); err != nil {
 				if errors.Is(err, errGrantAskRouteReread) {
 					return ctrl.Result{RequeueAfter: time.Second}, nil
+				}
+				if errors.Is(err, errGrantAskRouteNotStored) {
+					return b.denyPendingGrant(ctx, g, grantAskMsgRouteNotStored, now)
 				}
 				return ctrl.Result{}, err
 			}
@@ -393,8 +394,14 @@ func (b *Broker) pendingUnrouted(ctx context.Context, g *v1alpha1.AccessGrant, s
 			res, derr := b.followGrantAskRoute(ctx, g, sess, now)
 			return res, derr, false
 		case errors.Is(err, errGrantAskRouteNotStored):
-			// The route is not in the stored grant. No Ask is created, and
-			// the 30-minute deny below still applies.
+			// The route is not in the stored grant. No Ask is created. A
+			// wait would be a state other approvals could still use, so the
+			// grant is denied in this reconcile.
+			res, derr := b.denyPendingGrant(ctx, g, grantAskMsgRouteNotStored, now)
+			return res, derr, false
+		case errors.Is(err, errGrantAskDeadline):
+			res, derr := b.denyStillPending(ctx, g, DeniedByTimeout, "no answer in 30 minutes", b.now())
+			return res, derr, false
 		case err != nil:
 			res, herr := b.grantAskHoldError(ctx, g, err)
 			return res, herr, false
@@ -574,8 +581,9 @@ func (b *Broker) end(ctx context.Context, g *v1alpha1.AccessGrant, phase v1alpha
 		return ctrl.Result{}, err
 	}
 	b.decided(ctx, g, msg)
-	// The deny is already stored. A withdraw that fails is retried from retain.
-	if werr := b.withdrawBrokerDenial(ctx, g); werr != nil {
+	// The terminal phase is already stored. A withdraw that fails is retried
+	// from retain. A release uses that same retry.
+	if werr := b.withdrawTerminalAsk(ctx, g); werr != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	return ctrl.Result{RequeueAfter: Retention}, nil
@@ -583,7 +591,7 @@ func (b *Broker) end(ctx context.Context, g *v1alpha1.AccessGrant, phase v1alpha
 
 // retain deletes an ended grant once it has been kept 90 days.
 func (b *Broker) retain(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (ctrl.Result, error) {
-	if werr := b.withdrawBrokerDenial(ctx, g); werr != nil {
+	if werr := b.withdrawTerminalAsk(ctx, g); werr != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	ended := g.CreationTimestamp
@@ -618,6 +626,24 @@ func (b *Broker) finalize(ctx context.Context, g *v1alpha1.AccessGrant) (ctrl.Re
 		return retryOn(err, "lift the finalizer")
 	}
 	return ctrl.Result{}, nil
+}
+
+// withdrawTerminalAsk closes the broker's open Ask after a terminal write.
+// A deny withdraws when the broker denied a routed grant. A pending release
+// withdraws after Released is stored. A read failure that is not NotFound
+// returns an error so the caller keeps the short retry. The Ask is not
+// modified on that pass.
+func (b *Broker) withdrawTerminalAsk(ctx context.Context, g *v1alpha1.AccessGrant) error {
+	if err := b.withdrawBrokerDenial(ctx, g); err != nil {
+		return err
+	}
+	if g == nil || g.Status.Phase != v1alpha1.GrantReleased || !g.Spec.Release || g.Status.Message != "released before an answer" {
+		return nil
+	}
+	if !b.EnableGrantAsks && g.Status.Ask == "" {
+		return nil
+	}
+	return b.withdrawOpenGrantAsk(ctx, g)
 }
 
 // writeStatus writes the grant's status with its resourceVersion. A conflict

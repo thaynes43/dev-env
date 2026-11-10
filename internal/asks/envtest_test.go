@@ -102,14 +102,14 @@ func TestEnvtestAskStore(t *testing.T) {
 	}
 
 	other := Requester{Namespace: Namespace, Name: "ask-sess-b", UID: "uid-ask-b"}
-	if _, err := store.Withdraw(ctx, first.ID, other, now); !errors.Is(err, ErrNotFound) {
+	if _, err := store.Withdraw(ctx, first.ID, other, now, WithdrawIdentity{}); !errors.Is(err, ErrNotFound) {
 		t.Fatal("other session withdrew", err)
 	}
-	withdrawn, err := store.Withdraw(ctx, first.ID, req, now)
+	withdrawn, err := store.Withdraw(ctx, first.ID, req, now, WithdrawIdentity{})
 	if err != nil || withdrawn.State != apiv1.AskStateWithdrawn {
 		t.Fatal(err, withdrawn.State)
 	}
-	if _, err := store.Withdraw(ctx, first.ID, req, now); !errors.Is(err, apiv1.ErrAskNotOpen) {
+	if _, err := store.Withdraw(ctx, first.ID, req, now, WithdrawIdentity{}); !errors.Is(err, apiv1.ErrAskNotOpen) {
 		t.Fatal("second withdraw", err)
 	}
 
@@ -204,7 +204,7 @@ func TestEnvtestAskStore(t *testing.T) {
 	if _, err := store.Answer(ctx, lapsed.ID, apiv1.AskAnswerRequest{OptionID: "a", Actor: actor}, now.Add(time.Minute)); !errors.Is(err, apiv1.ErrAskExpired) {
 		t.Fatal("expired answer", err)
 	}
-	if _, err := store.Withdraw(ctx, lapsed.ID, req, now.Add(time.Minute)); !errors.Is(err, apiv1.ErrAskNotOpen) {
+	if _, err := store.Withdraw(ctx, lapsed.ID, req, now.Add(time.Minute), WithdrawIdentity{}); !errors.Is(err, apiv1.ErrAskNotOpen) {
 		t.Fatal("expired withdraw", err)
 	}
 	fraction := approvalIn
@@ -242,7 +242,7 @@ func TestEnvtestAskStore(t *testing.T) {
 	if _, _, err := one.Create(ctx, slot, infoCreate("request-d2"), now); !errors.Is(err, ErrLimit) {
 		t.Fatal("second open ask", err)
 	}
-	if _, err := one.Withdraw(ctx, held.ID, slot, now); err != nil {
+	if _, err := one.Withdraw(ctx, held.ID, slot, now, WithdrawIdentity{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := one.Create(ctx, slot, infoCreate("request-d2"), now); err != nil {
@@ -255,7 +255,7 @@ func TestEnvtestAskStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := life.Withdraw(ctx, lifeAsk.ID, lifeReq, now); err != nil {
+	if _, err := life.Withdraw(ctx, lifeAsk.ID, lifeReq, now, WithdrawIdentity{}); err != nil {
 		t.Fatal(err)
 	}
 	_, _, err = life.Create(ctx, lifeReq, infoCreate("request-e2"), now)

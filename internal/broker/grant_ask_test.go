@@ -115,6 +115,34 @@ func TestGrantAskReleaseReleases(t *testing.T) {
 	if ask.Status.State != string(apiv1.AskStateWithdrawn) {
 		t.Fatalf("released grant left the ask %s", ask.Status.State)
 	}
+	t.Run("ask read fails", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		f.until(func(g *v1alpha1.AccessGrant) bool {
+			return g.Status.Phase == v1alpha1.GrantPending && f.askCount() == 1
+		})
+		f.meta.failAskGet = apierrors.NewServiceUnavailable("ask was not read")
+		g := f.grant()
+		g.Spec.Release = true
+		if err := f.base.Update(f.ctx, g); err != nil {
+			t.Fatal(err)
+		}
+		res, err := f.reconcile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		g = f.grant()
+		ask := f.onlyAsk()
+		if res.RequeueAfter != time.Second || g.Status.Phase != v1alpha1.GrantReleased || g.Status.Message != "released before an answer" || ask.Status.State != string(apiv1.AskStateOpen) {
+			t.Fatalf("release with a failed read: requeue %s phase %s message %q ask %s", res.RequeueAfter, g.Status.Phase, g.Status.Message, ask.Status.State)
+		}
+		f.meta.failAskGet = nil
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		if f.grant().Status.Phase != v1alpha1.GrantReleased || f.onlyAsk().Status.State != string(apiv1.AskStateWithdrawn) {
+			t.Fatalf("retried withdraw: phase %s ask %s", f.grant().Status.Phase, f.onlyAsk().Status.State)
+		}
+	})
 }
 
 func TestGrantAskMissingSessionDenies(t *testing.T) {
@@ -217,6 +245,71 @@ func TestGrantAskStoreLimitOrUnavailableStaysPending(t *testing.T) {
 			}
 		})
 	}
+	t.Run("ask read error across the deadline", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		stub := &grantAskStub{err: &asks.LimitError{Scope: asks.LimitOpenGrant}}
+		f.b.grantAsks = stub
+		f.until(func(g *v1alpha1.AccessGrant) bool {
+			return g.Status.Phase == v1alpha1.GrantPending && g.Status.Ask != "" && stub.calls >= 1
+		})
+		calls := stub.calls
+		f.b.APIReader = &askReadStepsClock{Client: f.meta, clk: f.clk}
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		g := f.grant()
+		if stub.calls != calls || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByTimeout || g.Status.Message != "no answer in 30 minutes" || g.Status.AskUnreadAt != nil || g.Status.ApprovedBy != "" {
+			t.Fatalf("read across the deadline: calls %d %+v", stub.calls, g.Status)
+		}
+	})
+	t.Run("preflight crosses the deadline", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		reader := &deadlineTaskList{Client: f.meta, clk: f.clk}
+		f.b.APIReader = reader
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		g := f.grant()
+		if reader.lists < 2 || f.askCount() != 0 || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByTimeout || g.Status.Message != "no answer in 30 minutes" || g.Status.ApprovedBy != "" {
+			t.Fatalf("preflight: lists %d asks %d %+v", reader.lists, f.askCount(), g.Status)
+		}
+	})
+}
+
+// askReadStepsClock moves the clock past the original deadline inside an Ask
+// read, then fails that read.
+type askReadStepsClock struct {
+	client.Client
+	clk *clocktesting.FakeClock
+}
+
+func (a *askReadStepsClock) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*coord.Ask); ok {
+		a.clk.Step(PendingTimeout)
+		return apierrors.NewServiceUnavailable("ask was not read")
+	}
+	return a.Client.Get(ctx, key, obj, opts...)
+}
+
+// deadlineTaskList moves the clock past the original deadline during the
+// preflight that runs inside the create, after the route is claimed.
+type deadlineTaskList struct {
+	client.Client
+	clk   *clocktesting.FakeClock
+	lists int
+}
+
+func (d *deadlineTaskList) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*coord.TaskClaimList); ok {
+		d.lists++
+		if d.lists >= 2 {
+			d.clk.Step(PendingTimeout)
+		}
+	}
+	return d.Client.List(ctx, list, opts...)
 }
 
 func TestGrantAskUnfitUIDStaysPending(t *testing.T) {
@@ -377,6 +470,8 @@ type askMetadataClient struct {
 	// status.ask on the object later reads return. It does not write the store.
 	plantRouteAfter int
 	grantGetsSeen   int
+	// nextUID gives each created object a UID. The fake client does not.
+	nextUID int
 }
 
 func (m *askMetadataClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -414,6 +509,10 @@ func (m *askMetadataClient) Get(ctx context.Context, key client.ObjectKey, obj c
 }
 
 func (m *askMetadataClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if obj.GetUID() == "" {
+		m.nextUID++
+		obj.SetUID(types.UID(fmt.Sprintf("aaaaaaaa-aaaa-4aaa-8aaa-%012d", m.nextUID)))
+	}
 	ask, ok := obj.(*coord.Ask)
 	if !ok || !m.plantForeignOnCreate {
 		return m.Client.Create(ctx, obj, opts...)

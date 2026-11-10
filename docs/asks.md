@@ -26,30 +26,43 @@ Rollout precondition: no grant Ask from an earlier build exists.
 `--enable-grant-asks` has never been set in any cluster, so no flag-on grant
 Ask is stored. A stored grant Ask whose scope text is not the text this build
 renders is denied, and the request must be made again. The AccessGrant CRD
-that stores `status.ask` is installed before the flag is set. That CRD is
-not rolled back while a grant with a route exists: a rollback drops the
-route, and the broker then creates no Ask.
+that stores `status.ask` and `status.askUnreadAt` is installed before the
+flag is set. That CRD is not rolled back while a grant with a route exists:
+a rollback drops the route, and the broker then creates no Ask.
 
 The broker writes `status.ask` on the grant, the Ask's object name, before it
 creates that Ask ([ADR-022](../.agents/sagas/distributed-dev-env/adrs/022-grant-ask-route.md)).
 It sets the field once and does not clear it. A separate live read of a new
 object must show the route before the Ask is created. If that read does not
-show it, no Ask is created, the grant is denied at 30 minutes, and a Warning
-Event says the grant's CRD does not store the route. From a stored route on,
-that Ask is the only approval. If it is missing, not this grant's, or
-unreadable for two minutes, the grant is denied. The two minutes start at
-`status.askUnreadAt` and survive a restart. A create the apiserver refused
-before commit is retried only until the grant's original 30-minute deadline.
-A create that may have committed is not retried, and a missing Ask denies
-the grant. A grant with no route is still denied at 30 minutes. A grant an
-attested policy could match, from one live policy list in that reconcile, is
-not given a route or an Ask.
+show it, no Ask is created and the grant is denied in that reconcile, by the
+broker. The message is that the CRD does not store the Ask route. A Warning
+Event says the same. There is no wait. A storage failure on the Ask path is
+an immediate deny: a wait is a state, and a state needs its own fence. From
+a stored route on, that Ask is the only approval. If it is missing, not this
+grant's, or unreadable for two minutes, the grant is denied. The two minutes
+start at `status.askUnreadAt` and survive a restart. After that instant is
+written, a separate live read of a new object must show it. If it does not,
+the grant is denied at once, with its own message, that the CRD does not
+store the Ask unread time. A create the apiserver refused before commit is
+retried only until the grant's original 30-minute deadline. While that
+pre-create is outstanding, the broker checks the deadline with a fresh clock
+before it branches on the Ask read, and again at the create itself, including
+the first attempt. It never creates after the deadline. A read error does not
+open a new unread episode past that deadline. A create that may have
+committed is not retried, and a missing Ask denies the grant. A grant with
+no route is still denied at 30 minutes. A grant an attested policy could
+match, from one live policy list in that reconcile, is not given a route or
+an Ask.
 
 When the broker denies a routed grant for a reason other than that Ask's own
 answer, it withdraws its own open Ask after the deny is stored. A failed
-withdraw is retried later. An answered Ask stays answered. A foreign or
-unreadable Ask is left alone. The card for a session that has ended stays
-open for Dismiss.
+withdraw is retried later. A read that fails and is not NotFound keeps that
+short retry and leaves the Ask untouched on that pass. Every attempt checks
+the expected Ask UID and the full grant identity. An answered Ask stays
+answered. A foreign Ask is left alone. The card for a session that has ended
+stays open for Dismiss. A pending grant the requester releases is stored
+Released first. The Ask is then withdrawn from that terminal path, with the
+same retry as a deny.
 
 The store accepts a grant ask and applies the caps below. It records the
 requester, the open state and the ask type. It records `ask-origin=broker`
