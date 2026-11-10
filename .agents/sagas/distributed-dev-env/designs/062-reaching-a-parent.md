@@ -339,14 +339,65 @@ recipient form.
 | `inReplyTo` | existing message ref | the server, on an answer |
 | `actor.kind` | add `policy` to the ClaimActor enum | the server |
 
-CEL, in addition to the rules already on the object:
+The immutability rule `self == oldSelf` stays
+(`api/coordination/v1alpha1/inbox_types.go:22`).
+
+Replace `self.actor.kind == 'session'`
+(`api/coordination/v1alpha1/inbox_types.go:23`). `sender` and `recipient`
+become optional, so that rule would refuse every `policy` write, and it
+would also refuse an object whose session sender was absent. The replacement
+is one rule: `actor.kind` is `session` when `sender` is set, and `policy`
+when `callerSender` is set. With it:
 
 - Exactly one of `sender` and `callerSender`.
 - Exactly one of `recipient` and `callerRecipient`.
-- `actor.kind` is `session` when `sender` is set, and `policy` when
-  `callerSender` is set.
-- A `reply` has `inReplyTo`. A `question`, `result` or `blocker` has none.
-- A plain message has a `callerSender` and a session `recipient`.
+- The reply rule already on the object stays
+  (`api/coordination/v1alpha1/inbox_types.go:24`): `inReplyTo` is present
+  exactly when `kind` is `reply`.
+- The kind enum grows from `question;reply`
+  (`api/coordination/v1alpha1/inbox_types.go:52`) to
+  `question;result;blocker;reply`. Absent kind stays a plain message.
+- A plain message that sets `callerSender` has a session `recipient`. A
+  plain message between two sessions is unchanged. That is today's peer
+  `inbox send`, and it is `parent send` from a session parent.
+
+Peer inbox answer stays limited to a question
+(`internal/apiserver/inbox_thread.go:140-142`). A parent-note answer accepts
+`question`, `result` and `blocker`.
+
+`InboxReadAck` keeps `actor.kind == 'session'`
+(`api/coordination/v1alpha1/inbox_types.go:89`). Meatball writes no ack
+object. The reply is the retention ack.
+
+`repository`, `provider`, `requestedModel`, `actor` and `provenance` stay
+required. A session writer still fills them from that session
+(`internal/apiserver/inbox.go:183`). A policy writer copies `repository`,
+`provider` and `requestedModel` from the child session, and copies `actor`
+from the caller token. `actor.podName` and `actor.podUID` stay required. The
+front door presents a projected token, so those two are the front-door pod
+(`internal/apiserver/auth.go:39-42`, `internal/apiserver/auth.go:97-98`).
+Provenance stays the child's project snapshot.
+
+A session sender keeps `inbox.MessageName(sender, key)`
+(`internal/inbox/store.go:81-86`). A policy sender uses
+`PolicyMessageName(serviceAccount, policyUID, key)`. Both names are
+`message.` plus 64 hex digits, so the ref pattern stays
+(`api/coordination/v1alpha1/inbox_types.go:64`). Create, the archive readers
+(`internal/apiserver/coordination_inbox_archive_get.go:52`,
+`internal/apiserver/coordination_inbox_archive_list.go:112`) and the
+retention summary (`internal/coordretention/summary.go:187`) call the
+function for the sender form that is set. The archive manifest's recipient
+UID stays the session UID when `recipient` is set
+(`internal/coordretention/archive.go:197`). When `callerRecipient` is set,
+that field holds the CallerPolicy UID, and the readers compare against that
+form.
+
+`validMessageSpec` follows the same exactly-one rules
+(`internal/inbox/store.go:116-125`). It accepts `actor.kind` `policy` only
+for `dev-env-system/dev-env-meatball`. `validActor` grows the same kind
+(`internal/inbox/store.go:161-163`). `validCorrelation` accepts `result` and
+`blocker` with no `inReplyTo`, as it accepts a question
+(`internal/inbox/store.go:129-136`).
 
 `ClaimActor` is shared. TaskClaim and PublishedContext gain a CEL rule that
 refuses `actor.kind == 'policy'`, so the new value cannot land on them.
@@ -384,7 +435,7 @@ which requires `--enable-durable-inbox`. This PR adds no flag.
 | `GET /v1/parent-notes?box=inbox\|sent` | a session, or the Meatball caller | inbox: notes addressed to this caller. sent: notes this caller wrote. `limit` 1 to 100 |
 | `GET /v1/parent-notes/{name}` | the sender or the recipient | one note, including text |
 | `POST /v1/parent-notes/{name}/answer` | the recipient of that note | one reply |
-| `GET /v1/parent-notes/{name}/wait?seconds=N` | the note's sender | holds until the reply exists, or until N seconds. N is 1 to 900 |
+| `GET /v1/parent-notes/{name}/wait?seconds=N` | the note's sender | holds until the reply exists, or until N seconds. N is 1 to 900. The handler sets its own write deadline to that wait before it blocks |
 
 A hidden note is 404, the same shape as today's inbox hide
 (`internal/apiserver/inbox.go:28`). A session does not learn that some other
@@ -396,6 +447,15 @@ The wait uses a watch on the reply, one watch per held request, and returns
 when the reply is stored or the deadline passes. The handler does not spin.
 A second wait on the same note returns the stored reply at once. Over 8
 held waits for one session, the route returns 429.
+
+The API server's `WriteTimeout` is 60 seconds
+(`internal/apiserver/server.go:596`). The connection closes when the
+response is still unwritten at that limit. Before the wait handler blocks,
+it calls `http.ResponseController.SetWriteDeadline` for the end of the
+requested N seconds. A wait of 61 to 900 seconds can then finish with 200.
+Every other route keeps the 60 second server timeout. The client calls wait
+again only when it wants longer than 900 seconds, or when the connection
+closes before the handler answers.
 
 ### 7.3 Failure cases
 
@@ -477,11 +537,13 @@ list and read, because those are API reads. It still cannot take `msg`.
 
 The child learns the answer by `agent-run parent wait` or `parent read`.
 Wait holds on the watch until the reply is stored or the deadline passes.
-The client does not sleep and does not loop. A headless task runs the same
-command. If the work order's wait is longer than 900 seconds, the task runs
-wait again when it is ready to block again. A repeat returns at once when
-the answer is already there. The answer is not pasted into the child's TUI.
-That paste would have the same hazard as section 5.
+The route extends its own write deadline, so one call can last the full 900
+seconds inside the server's 60 second write timeout (section 7.2). The
+client sleeps nothing and polls nothing during that call. A headless task
+runs the same command. If the work order's wait is longer than 900 seconds,
+the task runs wait again when it is ready to block again. A repeat returns
+at once when the answer is already there. The answer stays in the record.
+Pasting it into the child's TUI would have the same hazard as section 5.
 
 Meatball learns by calling `parent_waiting`, and by the count on
 `session_status` when it reads that session.
@@ -534,9 +596,17 @@ fields.
    and the haynes-ops CRD copy. Tests:
    `api/coordination/v1alpha1/inbox_parent_validation_test.go` (accept a
    child note to a session, a child note to the Meatball account, a reply
-   from that account, and a plain message from that account; refuse both
-   sender forms at once, both recipient forms at once, `policy` on a
-   TaskClaim, and a reply with no `inReplyTo`). No HTTP route.
+   from that account, a plain message from that account, and a peer plain
+   message with a session sender and a session recipient; refuse both
+   sender forms at once, both recipient forms at once, a plain message
+   with `callerSender` and `callerRecipient`, `policy` on a TaskClaim, and
+   a reply with no `inReplyTo`). The same slice tests
+   `PolicyMessageName` against `MessageName`: both match the ref pattern,
+   and the same key from the two sender forms produces two names.
+   `validMessageSpec` accepts those objects and still accepts a peer plain
+   message. The archive readers, the retention summary and the archive
+   manifest's recipient UID call the matching sender and recipient form.
+   No HTTP route.
 2. **A session parent with no project snapshot.** `POST` and `GET` for a
    child and for that parent session. Tests:
    `internal/apiserver/parent_note_test.go` with the two live shapes from
@@ -548,7 +618,9 @@ fields.
 3. **Answer and wait.** The reply and the held read. Tests:
    `internal/apiserver/parent_note_wait_test.go` (reply already stored
    returns at once; deadline already passed returns `waiting` without
-   blocking; a second distinct answer is 409) and
+   blocking; a second distinct answer is 409; a server whose write timeout
+   is 200ms still returns 200 when the reply arrives after that timeout,
+   because the handler extended its own deadline). Also
    `internal/agentrun/parent_wait_test.go`.
 4. **Meatball.** The policy allow list, ownership, and the four front-door
    tools plus the count on `session_status`. Tests:
