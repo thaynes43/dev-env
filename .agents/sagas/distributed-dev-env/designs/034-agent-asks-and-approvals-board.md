@@ -224,9 +224,9 @@ The portal-group answer rule is the contract. Q-255-04 is ruled
 (2026-10-29, §13): an approval is a one-off for the exact action, target
 and content, once. Instruction migration waits for installation and
 usable acceptance.
-Revocation authority (Q-255-01) is deferred until F2. Quiet hours
-(Q-255-02) and wider transcript eligibility (Q-255-03) are also unsettled;
-no route in this section resolves them.
+Revocation authority (Q-255-01) is deferred until F2. Wider transcript
+eligibility (Q-255-03) is also unsettled; no route in this section resolves
+either. Quiet hours (Q-255-02) were ruled on 2026-11-10 (section 13).
 
 ## 4. Storage and retention
 
@@ -534,8 +534,8 @@ five minutes, while the selected Ask stays open and caps/windows allow.
 Other 4xx responses are `failed` without automatic retry. Push results never
 affect Ask storage or answer retrieval.
 
-**Q-255-02 is unanswered.** Lane B adds optional source-only
-`--ask-notify-window="09:00-21:00"` and
+**Q-255-02 was ruled on 2026-11-10** (section 13): pushes from 07:00 to
+midnight Eastern. Lane B adds optional `--ask-notify-window` and
 `--ask-notify-timezone="America/New_York"`. The window flag defaults **empty**
 (all hours within caps); timezone defaults America/New_York. The configured
 window is the allowed local delivery window, start inclusive/end exclusive,
@@ -543,9 +543,12 @@ including overnight windows. Outside it, pending Asks defer to the next
 window start, observed on the next poll. DST uses real minutes: a nonexistent
 start defers to the first real minute inside the window; repeated minutes
 are eligible in either occurrence, subject to elapsed UTC caps. No agent
-bypass. The proposed live policy remains 09:00–21:00 America/New_York;
-Tom must rule before activation. Default-off source/tests settle neither
-quiet hours nor Q-255-01/03/04.
+bypass. *Amended 2026-11-10:* the live policy is Tom's ruling, 07:00 to
+midnight America/New_York. The activation sets
+`--ask-notify-window=07:00-00:00`, which the parser reads as a window that
+crosses midnight and so ends at 00:00 (`internal/keeper/ask_notifications.go`,
+`allows`), and `--ask-notify-timezone=America/New_York`. The proposal before
+it was 09:00–21:00. Default-off source/tests settle none of Q-255-01/03/04.
 
 The operator reuses default-off `--enable-asks` for its leader-only expiry
 sweeper, requiring leader election. Once per minute it lists at most nine
