@@ -227,7 +227,7 @@ func TestFrontDoorTools(t *testing.T) {
 			"backlog_create":     {false, false, true, false},
 			"backlog_groom":      {false, false, false, false},
 			"backlog_order":      {false, false, true, false},
-			"backlog_close":      {false, false, true, false},
+			"backlog_close":      {false, false, false, false},
 			"coordinator_start":  {false, false, true, true},
 			"session_status":     {true, false, true, false},
 			"session_stop":       {false, true, true, false},

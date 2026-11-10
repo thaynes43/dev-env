@@ -61,8 +61,8 @@ var frontDoorTools = []map[string]any{
 		"id":       map[string]any{"type": "integer", "minimum": 1},
 		"priority": map[string]any{"type": "string"},
 	}, []string{"id", "priority"}),
-	// Closes an item and keeps it. opwork complete writes nothing once the item is already Accepted.
-	tool("backlog_close", "Close an item with evidence. An explicit hold stays a hold.", hints(false, false, true, false), map[string]any{
+	// Closes an item and keeps it. opwork complete posts another evidence comment when Accepted is not yet allowed, so a repeat is not the same state.
+	tool("backlog_close", "Close an item with evidence. An explicit hold stays a hold.", hints(false, false, false, false), map[string]any{
 		"id":       map[string]any{"type": "integer", "minimum": 1},
 		"evidence": map[string]any{"type": "string"},
 	}, []string{"id", "evidence"}),

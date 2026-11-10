@@ -160,7 +160,7 @@ open-world.
 | `backlog_create` | false | false | true | false | It creates an item and keeps it. A repeat with the same epic and title reuses that source key and writes nothing when the text still matches. |
 | `backlog_groom` | false | false | false | false | It sets field text. `opwork groom` patches and adds a journal note on every call, so a repeat is not the same state. Nothing is deleted. |
 | `backlog_order` | false | false | true | false | It sets priority. `opwork order` writes nothing when that priority already matches. Nothing is deleted. |
-| `backlog_close` | false | false | true | false | It closes an item and keeps it. `opwork complete` writes nothing once the item is already Accepted. |
+| `backlog_close` | false | false | false | false | It closes an item and keeps it. When Accepted is not an allowed transition, `opwork complete` posts another evidence comment on every call. |
 | `coordinator_start` | false | false | true | true | It starts an agent that can reach the web. A repeat returns the retained session for `coordinator-<item>` and does not post another create while that record exists. |
 | `session_status` | true | false | true | false | It only reads one session this caller started. A repeat writes nothing. |
 | `session_stop` | false | true | true | false | It reaps the session. Clean-up then removes the task and keeps only rescued unpushed work. A second reap during that delete changes nothing. |
@@ -180,9 +180,11 @@ Session record is deleted, a repeat starts a new session. The lookup is not a
 cross-replica lock; section 7.2 of the design states that limit. The started
 agent uses profile `dev`, which has web egress, so the tool is open-world.
 
-`opwork complete` writes an evidence comment and then accepts. A repeat after
-Accepted writes nothing, which is why the hint is idempotent. A close that
-stopped short of Accepted can record evidence again.
+`opwork complete` writes an evidence comment and then accepts when that
+transition is allowed. A later call, once the item is Accepted, writes
+nothing. When Accepted is not allowed, each call posts another "Ready for
+acceptance" comment and tells the caller not to re-run, so `idempotentHint`
+is false. A client must not retry it on its own.
 
 ## Instructions
 

@@ -466,7 +466,8 @@ shared object and sets every field. The values come from what the code does:
 | `backlog_find`, `backlog_show`, `session_status`, `waiting_on_tom`, `standing_authority` | true | false | true | false |
 | `backlog_create` | false | false | true | false |
 | `backlog_groom` | false | false | false | false |
-| `backlog_order`, `backlog_close` | false | false | true | false |
+| `backlog_order` | false | false | true | false |
+| `backlog_close` | false | false | false | false |
 | `coordinator_start` | false | false | true | true |
 | `session_stop` | false | true | true | false |
 
@@ -478,9 +479,9 @@ nothing when the subject and the supplied text still match, so a repeat leaves
 the same state. `opwork groom` patches and adds a journal note on every call,
 including a repeat of the same text, so it is not idempotent. `opwork order`
 writes nothing when the priority already matches. `opwork complete` writes
-nothing once the item is Accepted, so a finished close leaves the same state
-when repeated. A close that stopped short of Accepted can record evidence
-again.
+nothing once the item is Accepted. When Accepted is not an allowed transition,
+each call posts another evidence comment and says not to re-run, so
+`backlog_close` is not idempotent. A client must not retry it on its own.
 
 `coordinator_start` calls `ExecuteCoordinatorStart`. That looks up the caller's
 retained session for `coordinator-<item>` and returns it without posting
