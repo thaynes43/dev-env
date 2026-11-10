@@ -33,6 +33,22 @@ Built from [`portal/Dockerfile`](portal/Dockerfile). Everything in it is open so
 | Go standard library and runtime | BSD-3-Clause | [go.dev/LICENSE](https://go.dev/LICENSE) |
 | Base image `gcr.io/distroless/static:nonroot` | Apache-2.0 (the [distroless](https://github.com/GoogleContainerTools/distroless) project) | Its Debian files keep their licenses in `/usr/share/doc/*/copyright` inside the image. |
 
+## Front door: `ghcr.io/thaynes43/dev-env-frontdoor`
+
+Built from [`frontdoor/Dockerfile`](frontdoor/Dockerfile). Everything in it is open
+source. Publication uses `sha-<short>` from `publish.yml` and does not assign `latest`.
+The process is Meatball's MCP server. It runs `opwork` in the same image and does
+not call the Kubernetes API.
+
+| Component | License | Notes |
+|---|---|---|
+| `dev-env-frontdoor` | MIT | This repo. Streamable HTTP at `/mcp`. |
+| `opwork`, `agent-api.py` | MIT | This repo, the same files the agent image installs. |
+| Go modules linked into the binary | BSD-3-Clause | `golang.org/x/sys`, the same module `agent-run` links. License texts are collected during the image build. The binary does not link the Kubernetes client libraries. |
+| Go standard library and runtime | BSD-3-Clause | [go.dev/LICENSE](https://go.dev/LICENSE) |
+| Python 3.13 from `python:3.13-slim-bookworm` | PSF License | [python.org](https://www.python.org/), plus the licenses of the libraries CPython bundles. |
+| Debian packages in that base (`python`, `ca-certificates` and their dependencies) | Each package's own license | Copyright files stay in `/usr/share/doc/<package>/copyright`. Source is in the Debian archive. |
+
 ## Agent image: `ghcr.io/thaynes43/dev-env` (tag line 2.x)
 
 Built from [`agent/Dockerfile`](agent/Dockerfile) (KICKOFF B5, D-53) and published from

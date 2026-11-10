@@ -19,6 +19,8 @@ import urllib.request
 
 ORIGIN = "http://openproject-web.frontend.svc.cluster.local:8082"
 ALLOWED = ("/api/v3/projects", "/api/v3/work_packages", "/api/v3/types", "/api/v3/statuses", "/api/v3/users/me", "/api/v3/relations", "/api/v3/attachments", "/api/v3/queries")
+PRIORITIES = "/api/v3/priorities"  # the collection only; a priority item path is not this route
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024  # one body, rejected before JSON decoding; a 100-item page is about 1.2 MiB (2026-11-10)
 
 GET_BUDGET = 120
 BACKOFF_CAP = 16
@@ -40,13 +42,31 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
+def read_token_file():
+    """One read of OPWORK_TOKEN_FILE: (token, None) or (None, category).
+
+    The path and the bytes are never printed, stored in an exception, or logged. A missing file
+    is launch. A value that is not the API token's shape is invalid. kubectl is not used.
+    """
+    try:
+        with open(os.environ.get("OPWORK_TOKEN_FILE", ""), "r", encoding="utf-8") as handle:
+            value = handle.read().strip()
+    except (OSError, UnicodeError):
+        return None, "launch"
+    if not (len(value) == 70 and value.startswith("opapi-") and all(c in "0123456789abcdefABCDEF" for c in value[6:])):
+        return None, "invalid"
+    return value, None
+
 def read_helper(timeout):
     """One read of the dedicated token-only helper: (token, None) or (None, category).
 
     The category is one of denied, transient, timeout, invalid or launch. A launch failure is a
     missing or non-executable kubectl and is not retried. Neither stdout nor stderr is printed,
     stored or put in an exception: stderr is only matched against a fixed allowlist.
+    OPWORK_TOKEN_FILE, when set, is the only source: a failure does not fall through to kubectl.
     """
+    if os.environ.get("OPWORK_TOKEN_FILE"):
+        return read_token_file()
     try:
         result = subprocess.run(["kubectl", "exec", "-n", "dev", "deploy/openproject-agent-credentials", "-c", "credentials", "--", "cat", "/run/openproject-agent/token"], capture_output=True, check=False, timeout=timeout, env=dict(os.environ, KUBECTL_REMOTE_COMMAND_WEBSOCKETS="false"))
     except subprocess.TimeoutExpired:
@@ -92,9 +112,18 @@ def token(deadline):
         backoff = min(backoff * 2, BACKOFF_CAP)
     return _token
 
+def allowed_path(path):
+    """The fixed API prefixes, plus the exact priorities collection and no other priorities path."""
+    if not isinstance(path, str) or any(x in path for x in ("\r", "\n", "\\", "..")):
+        return False
+    base = path.split("?", 1)[0]
+    if base == PRIORITIES:
+        return True
+    return path.startswith(ALLOWED)
+
 def request(method, path, payload=None):
     assert method in ("GET", "POST", "PATCH"), "No deletion or arbitrary method"
-    assert path.startswith(ALLOWED) and not any(x in path for x in ("\r", "\n", "\\", "..")), "Unsupported API path"
+    assert allowed_path(path), "Unsupported API path"
     body = None if payload is None else json.dumps(payload).encode()
     # A GET shares one budget between the helper read and the request; a mutation retries only the
     # helper read (before anything is sent) and never the HTTP call.
@@ -114,7 +143,10 @@ def request(method, path, payload=None):
                 category = "http_%d" % response.code
                 transient = response.code in (502, 503, 504)
             if response.code < 500:
-                raw = response.read()
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    # Not JSON-decoded, not retried, and the body is not part of the error.
+                    raise ApiUnavailable("OpenProject response exceeds %d bytes" % MAX_RESPONSE_BYTES)
                 result = response.code, raw
         except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
             cause = error.reason if isinstance(error, urllib.error.URLError) else error
