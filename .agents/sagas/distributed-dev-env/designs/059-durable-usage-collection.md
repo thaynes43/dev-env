@@ -664,6 +664,7 @@ sum by (agent, model, repository) (increase(dev_env_task_usage_cost_usd_total[7d
   counter still holds it.
 - Totals appear up to five minutes after a restart, or after a new label
   is first used.
+- A Session deleted before its series have settled is not counted.
 - The same crash before any scrape, while the Session still exists, is
   recovered by the restart's add. The same crash after the Session has
   already been deleted leaves that add out, because the Session is no

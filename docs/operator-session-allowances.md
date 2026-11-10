@@ -199,4 +199,5 @@ at 0 for five minutes, then takes its first add. A Session that already
 has the annotation is not added again. If no scrape lands during the five
 minutes after a series is created in a process, `increase` does not see
 that series' first add; the raw counter still holds it. Totals appear up
-to five minutes after a restart, or after a new label is first used.
+to five minutes after a restart, or after a new label is first used. A
+Session deleted before its series have settled is not counted.
