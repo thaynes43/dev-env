@@ -79,6 +79,15 @@ func bodyError(err error, limit int64) error {
 // messages, and agentd's rules are checked by agentd's own code (D-40). So the
 // API restates neither.
 func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest, c *caller) (*v1alpha1.AgentSession, error) {
+	if c.kind == kindPolicy {
+		var err error
+		req, err = s.preparePolicySession(ctx, req, c)
+		if err != nil {
+			return nil, err
+		}
+	} else if req.Limits != nil && req.Limits.MaxWorkers != nil {
+		return nil, forbidden("limits.maxWorkers is set only by a CallerPolicy caller")
+	}
 	if req.CanaryID != "" {
 		return nil, invalid(fieldError("canaryID", "canaries use the fixed ID-only create route"))
 	}
@@ -251,7 +260,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		if req.Agent == "codex" && l.MaxTurns != 0 {
 			add("limits.maxTurns", "native Codex exec has no exact max-turns contract; use limits.timeout")
 		}
-		spec.Limits = &v1alpha1.SessionLimits{MaxTurns: l.MaxTurns}
+		spec.Limits = &v1alpha1.SessionLimits{MaxTurns: l.MaxTurns, MaxWorkers: l.MaxWorkers}
 		if l.Timeout != "" {
 			d, err := time.ParseDuration(l.Timeout)
 			if err != nil {

@@ -30,6 +30,9 @@ const (
 	// kindSession is a session pod, by its projected token.
 	kindSession     callerKind = "session"
 	kindCoordinator callerKind = "coordinator"
+	// kindPolicy is the first CallerPolicy caller, Meatball (DESIGN-060).
+	// It is never a client or a session and has its own positive route list.
+	kindPolicy callerKind = "policy"
 	// kindPortalReader is the default-off portal ServiceAccount. It is not a
 	// human, client, session, or coordinator.
 	kindPortalReader callerKind = "portal-reader"
@@ -50,7 +53,7 @@ const maxSessionDepth = 2
 const maxRunningChildrenPerAgent = 4
 
 // Policy names the identities the API serves (D-46). Any other caller gets a
-// 403: summoning callers, with their CallerPolicy, arrive in plan 10.
+// 403 unless the first CallerPolicy explicitly admits Meatball (DESIGN-060).
 type Policy struct {
 	// Human is Tom's ServiceAccount, "<namespace>/<name>".
 	Human string
@@ -102,6 +105,8 @@ type caller struct {
 	// the profile an ordinary session's children run on. A workbench
 	// session's children do not inherit it (OP502).
 	profile string
+	// policy is the live policy read for kindPolicy only.
+	policy *v1alpha1.CallerPolicy
 }
 
 // String names the caller in logs: never a token.
@@ -149,6 +154,15 @@ func (s *Server) resolveCaller(ctx context.Context, id Identity) (*caller, error
 			if host.ServiceAccount == ref {
 				return s.resolveCoordinator(ctx, id, host)
 			}
+		}
+	}
+	if ref == meatballAccount {
+		p, err := s.readCallerPolicy(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if p != nil {
+			return &caller{kind: kindPolicy, identity: id, parent: ref, policy: p}, nil
 		}
 	}
 	return nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy) arrive in plan 10", ref)

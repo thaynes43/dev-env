@@ -35,6 +35,8 @@ func addKnownTypes(s *runtime.Scheme) error {
 	s.AddKnownTypes(GroupVersion,
 		&AgentSession{},
 		&AgentSessionList{},
+		&CallerPolicy{},
+		&CallerPolicyList{},
 		&AccessGrant{},
 		&AccessGrantList{},
 		&GrantPolicy{},

@@ -251,6 +251,14 @@ spec:
                     format: int32
                     minimum: 0
                     type: integer
+                  maxWorkers:
+                    description: |-
+                      MaxWorkers caps unfinished direct children across agent kinds for a
+                      CallerPolicy-created coordinator. Absence keeps the existing child rules.
+                    format: int32
+                    maximum: 4
+                    minimum: 1
+                    type: integer
                   timeout:
                     description: Timeout is the wall-clock limit, for example 3h.
                     type: string

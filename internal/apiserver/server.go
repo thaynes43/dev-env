@@ -461,6 +461,9 @@ func (s *Server) serve(rt route) http.Handler {
 			if err := coordinatorAllowed(c, rt.coordinator); err != nil {
 				return 0, err
 			}
+			if err := policyCallerAllowed(c, r); err != nil {
+				return 0, err
+			}
 			if c.kind == kindPortalReader {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionsPath:
@@ -482,6 +485,9 @@ func (s *Server) serve(rt route) http.Handler {
 			}
 			if !providerAttribution(r) {
 				body = legacyUsageShape(body)
+			}
+			if c.kind != kindPolicy && r.Header.Get(apiv1.CallerPolicyLimitsHeader) != apiv1.CallerPolicyLimitsV1 {
+				body = withoutCallerWorkerCap(body)
 			}
 			if r.Header.Get(apiv1.TaskOutcomeHeader) != apiv1.TaskOutcomeV1 {
 				body = withoutTaskOutcome(body)
