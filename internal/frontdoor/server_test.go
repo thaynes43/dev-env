@@ -259,8 +259,8 @@ func TestFrontDoorTools(t *testing.T) {
 				}
 			}
 		}
-		if total != descriptionWordBound || descriptionWordBound != 142 {
-			t.Fatalf("tools/list descriptions have %d words; bound %d; measured contract 142", total, descriptionWordBound)
+		if total != descriptionWordBound || descriptionWordBound != 150 {
+			t.Fatalf("tools/list descriptions have %d words; bound %d; measured contract 150", total, descriptionWordBound)
 		}
 	})
 

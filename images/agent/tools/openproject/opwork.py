@@ -120,6 +120,16 @@ class Fail(Exception):
         self.code = code
 
 
+class GuardRefusal(Fail):
+    """The existing guard's decision and read snapshot; never inferred from message text."""
+    def __init__(self, message, reason, wp):
+        super().__init__(message, 3)
+        self.signal = {"schema": "opwork.guard.v1", "reason": reason, "message": message,
+                       "id": wp["id"], "lockVersion": wp["lockVersion"],
+                       "owner": text_of(wp.get(OWNER)), "status": wp["_links"]["status"]["title"],
+                       "hold": wp["_links"]["status"]["title"] in HOLDS}
+
+
 class LocalWriteFail(Fail):
     """A local record write failed around a POST: UNCONFIRMED (exit 6), the token named, never a traceback."""
     def __init__(self, token, what, error, wp=None):
@@ -675,9 +685,9 @@ def cmd_order(t, a, session):
 def guard(w, session, force):
     status, owner = w["_links"]["status"]["title"], text_of(w.get(OWNER))
     if status in HOLDS and not force:
-        raise Fail("REFUSED: #%d is [%s], an explicit hold. Wait for the answer/approval; --force only with explicit authorization." % (w["id"], status), 3)
+        raise GuardRefusal("REFUSED: #%d is [%s], an explicit hold. Wait for the answer/approval; --force only with explicit authorization." % (w["id"], status), "hold", w)
     if owner and owner != session and not force:
-        raise Fail("REFUSED: #%d is owned by <%s>, not this session. Not overwritten; coordinate or use --force (takeover)." % (w["id"], owner), 3)
+        raise GuardRefusal("REFUSED: #%d is owned by <%s>, not this session. Not overwritten; coordinate or use --force (takeover)." % (w["id"], owner), "ownership", w)
 
 
 def cmd_claim(t, a, session):
@@ -1150,7 +1160,8 @@ def build_parser():
     add("claim", cmd_claim, wp, (("--note",), {}), (("--assignee",), {"help": "also set the native assignee: me, or a user id available on the item"}), lock, force, help="set Execution owner to this session, In progress")
     add("comment", cmd_comment, wp, (("text",), {"help": "or - to read stdin"}), help="attributed progress note")
     add("status", cmd_status, wp, (("state",), {}), (("--note",), {}), lock, force, help="explicit status change")
-    add("complete", cmd_complete, wp, (("--evidence",), {"required": True}), lock, force, help="evidence comment, then Accepted")
+    add("complete", cmd_complete, wp, (("--evidence",), {"required": True}), lock, force,
+        (("--guard-json",), {"action": "store_true", "help": "emit a versioned JSON guard refusal on stderr; other results stay text"}), help="evidence comment, then Accepted")
     add("relate", cmd_relate, (("src",), {"type": int}), (("dst",), {"type": int}), (("--type",), {"default": "relates", "choices": RELATIONS}), help="link two items")
     add("create", cmd_create, (("--epic",), {"type": int, "required": True}), (("--subject",), {"required": True}), (("--source-key",), {"required": True, "help": "stable key, e.g. followup:97:topic"}),
         (("--origin",), {"type": int, "help": "originating Story (relates link)"}), (("--type",), {"default": "Story", "choices": list(PARENT_OF)}), (("--description",), {}), (("--repos",), {}),
@@ -1244,6 +1255,9 @@ def run(argv, tracker, unavailable):
         print(args.fn(tracker, args, session))
         return 0
     except Fail as failure:
+        if isinstance(failure, GuardRefusal) and getattr(args, "guard_json", False):
+            print(json.dumps(failure.signal, ensure_ascii=True), file=sys.stderr)
+            return failure.code
         if getattr(failure, "output", None):
             print(failure.output)  # partial results (e.g. the notes flush had already recorded)
         print(failure, file=sys.stderr)  # the original failure first: a failing local save must not hide it

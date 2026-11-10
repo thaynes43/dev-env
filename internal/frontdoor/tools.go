@@ -20,7 +20,7 @@ import (
 
 // descriptionWordBound is the measured total of the tool descriptions.
 // Each description is at most 30 words.
-const descriptionWordBound = 142
+const descriptionWordBound = 150
 
 // noStandingAuthority is the whole success result when no authority file is installed.
 const noStandingAuthority = "No standing authority is installed for this caller. Ask the owner once, and record the answer on the work item."
@@ -62,7 +62,7 @@ var frontDoorTools = []map[string]any{
 		"priority": map[string]any{"type": "string"},
 	}, []string{"id", "priority"}),
 	// Closes an item and keeps it. opwork complete posts another evidence comment when Accepted is not yet allowed, so a repeat is not the same state.
-	tool("backlog_close", "Close an item with evidence. An explicit hold stays a hold.", hints(false, false, false, false), map[string]any{
+	tool("backlog_close", "Close with evidence; caller's coordinator takeover requires reclaimed pod and stopped workers. Holds stay held; retry reclaim refusals later.", hints(false, false, false, false), map[string]any{
 		"id":       map[string]any{"type": "integer", "minimum": 1},
 		"evidence": map[string]any{"type": "string"},
 	}, []string{"id", "evidence"}),
@@ -290,7 +290,7 @@ func (h *handler) backlogClose(ctx context.Context, args map[string]any) (string
 	if len(evidence) > maxField {
 		return "", errors.New("evidence is too long")
 	}
-	return h.work.call(ctx, "complete", strconv.FormatInt(id, 10), opt("evidence", evidence))
+	return h.closeCoordinatorItem(ctx, id, evidence)
 }
 
 func (h *handler) coordinatorStart(ctx context.Context, args map[string]any) (string, error) {
