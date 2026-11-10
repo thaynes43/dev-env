@@ -38,9 +38,9 @@
 - The child learns the answer from one held read, not from a sleep loop. A
   headless task can run that read. `agent-run msg` stays unable to deliver
   into a headless task.
-- A note's text is never typed into a parent's screen. A live TUI parent is
-  woken by one fixed line with no note text, and only while it is not waiting
-  on a person (section 5 and ruling 1). Meatball polls. Nothing new pushes
+- A note's text is never typed into a parent's screen. A live Claude TUI
+  parent is woken by one fixed line with no note text, and only while it is
+  not waiting on a person (section 5 and ruling 1). Meatball polls. Nothing new pushes
   into its chat.
 
 ## 1. Outcome
@@ -307,6 +307,10 @@ The state arrives with the heartbeat, so a prompt opened in the last minute
 can be missed. Ruling 1 in section 12 uses both: hold while `waiting`, and
 make the notice recognisable so that a session which finds it in a prompt's
 answer discards it and asks again.
+
+That state is reported for a Claude TUI only. A managed Codex TUI goes
+through the same paste and Enter and never reports `waiting`, so the notice
+is for Claude TUI parents only (slice 6).
 
 ## 6. Reuse the inbox
 
@@ -661,17 +665,36 @@ fields.
    exists. An unanswered note to a live parent session is kept.
 
 6. **The wake notice (ruling 1).** When a note is stored for a session parent
-   whose pod has a TUI, the operator delivers one fixed line and Enter:
+   that is a **Claude TUI**, the operator delivers one fixed line and Enter:
    `[dev-env notice] a note is waiting from CHILD: agent-run parent read NAME`.
-   No note text, kind or key. It is held while the parent's reported agent
-   state is `waiting` and sent when a later heartbeat shows another state;
-   it is sent at most once per note; a headless parent gets none. The common
-   rules gain one sentence: an answer to a phone prompt that begins with
-   `[dev-env notice]` or with the `agent-run msg` envelope is not the
-   owner's answer; discard it and ask again. Tests:
-   `internal/apiserver/parent_notice_test.go` (held while `waiting`; sent
-   once after the state changes; never sent to a headless parent; the line
-   holds no note text) and `internal/agentd/deliver_notice_test.go`.
+   No note text, kind or key.
+   - **Claude TUI only.** agentd reports `waiting` only from Claude's own
+     status (`internal/agentd/activity.go:251-259`). A managed Codex TUI
+     takes the same paste and Enter but never reports `waiting`, so a notice
+     could submit an open Codex prompt. A Codex parent therefore gets no
+     notice until Codex reports a pending question; it finds notes with
+     `agent-run parent list` between steps, which its coordinator brief tells
+     it to run. A headless parent gets none either.
+   - **Held** while the parent's reported agent state is `waiting`. Held
+     needs no stored state: on each status change of the parent, the operator
+     looks for notes to it that carry no sent mark.
+   - **Sent at most once, and that survives a restart.** Before it delivers,
+     the operator writes a sent mark on the note with the note's
+     resourceVersion as the precondition; only the writer that wins delivers.
+     A delivery that fails after the mark is not repeated: the note still
+     waits in the list. The InboxMessage's spec and stored acknowledgement
+     are immutable (`api/coordination/v1alpha1/inbox_types.go:22,88`), so the
+     mark is metadata: the annotation `dev-env.haynesops.com/parent-notice`
+     with the time. ADR-023 confirms the schema admits it, or names one
+     status field for it instead; nothing is kept only in memory.
+   - The common rules gain one sentence: an answer to a phone prompt that
+     begins with `[dev-env notice]` or with the `agent-run msg` envelope is
+     not the owner's answer; discard it and ask again.
+   - Tests: `internal/apiserver/parent_notice_test.go` (held while
+     `waiting`; sent once after the state changes; a fresh operator over the
+     same stored objects neither resends a marked note nor drops an unmarked
+     one; a Codex TUI parent and a headless parent get none; the line holds
+     no note text) and `internal/agentd/deliver_notice_test.go`.
 
 ## 12. Rulings (coordinator dev-env-fable-coordinator-1109, 2026-11-10)
 
@@ -680,8 +703,9 @@ should not be asked basic things, so the coordinator rules them. Each is
 recorded on OP545 and Tom can change any of them.
 
 1. **How a session parent learns of a note.** The note's text always stays
-   in the record and is never typed into the parent's screen. A live TUI
-   parent is woken by one fixed line that carries no note text (slice 6). It
+   in the record and is never typed into the parent's screen. A live Claude
+   TUI parent is woken by one fixed line that carries no note text (slice 6);
+   a Codex or headless parent is not typed into and reads its list. The line
    is held while the parent's reported agent state is `waiting`, and its
    fixed first words let a session that finds it in a prompt's answer discard
    it and ask again. A note that waits silently would stall the work; a
