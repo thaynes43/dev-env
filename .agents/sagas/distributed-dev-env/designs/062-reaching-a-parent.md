@@ -558,10 +558,11 @@ The command that needs no recipient is `parent tell`.
 
 A session parent finds the note on `agent-run parent list` and reads it with
 `parent read`. That is the same pull the inbox uses today. The note's text is
-never pasted. A live TUI parent also gets the one-line notice of ruling 1,
-held while its reported state is `waiting`. A busy TUI and an idle TUI both
-receive it; the record waits either way. A headless parent can
-list and read, because those are API reads. It still cannot take `msg`.
+never pasted. A live Claude TUI parent also gets the one-line notice of
+ruling 1, held while its reported state is `waiting`. A busy Claude TUI and an
+idle one both receive it; the record waits either way. A managed Codex TUI
+parent gets no notice and reads its list. A headless parent can list and read,
+because those are API reads. It still cannot take `msg`.
 
 The child learns the answer by `agent-run parent wait` or `parent read`.
 Wait holds on the watch until the reply is stored or the deadline passes.
