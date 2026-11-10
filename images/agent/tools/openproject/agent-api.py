@@ -19,6 +19,8 @@ import urllib.request
 
 ORIGIN = "http://openproject-web.frontend.svc.cluster.local:8082"
 ALLOWED = ("/api/v3/projects", "/api/v3/work_packages", "/api/v3/types", "/api/v3/statuses", "/api/v3/users/me", "/api/v3/relations", "/api/v3/attachments", "/api/v3/queries")
+PRIORITIES = "/api/v3/priorities"  # the collection only; a priority item path is not this route
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024  # one body, rejected before JSON decoding
 
 GET_BUDGET = 120
 BACKOFF_CAP = 16
@@ -110,9 +112,18 @@ def token(deadline):
         backoff = min(backoff * 2, BACKOFF_CAP)
     return _token
 
+def allowed_path(path):
+    """The fixed API prefixes, plus the exact priorities collection and no other priorities path."""
+    if not isinstance(path, str) or any(x in path for x in ("\r", "\n", "\\", "..")):
+        return False
+    base = path.split("?", 1)[0]
+    if base == PRIORITIES:
+        return True
+    return path.startswith(ALLOWED)
+
 def request(method, path, payload=None):
     assert method in ("GET", "POST", "PATCH"), "No deletion or arbitrary method"
-    assert path.startswith(ALLOWED) and not any(x in path for x in ("\r", "\n", "\\", "..")), "Unsupported API path"
+    assert allowed_path(path), "Unsupported API path"
     body = None if payload is None else json.dumps(payload).encode()
     # A GET shares one budget between the helper read and the request; a mutation retries only the
     # helper read (before anything is sent) and never the HTTP call.
@@ -132,7 +143,11 @@ def request(method, path, payload=None):
                 category = "http_%d" % response.code
                 transient = response.code in (502, 503, 504)
             if response.code < 500:
-                raw = response.read()
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    # Not JSON-decoded, not retried, and the body is not part of the error.
+                    raise ApiUnavailable("OpenProject response exceeds %d bytes" % MAX_RESPONSE_BYTES)
+                request.last_body_bytes = len(raw)  # opwork's scan adds these up
                 result = response.code, raw
         except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
             cause = error.reason if isinstance(error, urllib.error.URLError) else error

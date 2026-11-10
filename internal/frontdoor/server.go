@@ -34,6 +34,14 @@ const (
 	sessionHeader  = "Mcp-Session-Id"
 )
 
+// toolDeadline is one deadline for a tool call, shared by the operator client
+// and the opwork process. It starts when the call is admitted and ends early
+// when the client disconnects. toolSlots is how many tool calls may run at once.
+var (
+	toolDeadline = 90 * time.Second
+	toolSlots    = 4
+)
+
 // Config is the process configuration. BearerFile is the one MCP bearer token.
 // TrackerFile is the OpenProject credential. OperatorTokenFile is this
 // ServiceAccount's projected token for the operator. None of the three is logged.
@@ -61,16 +69,7 @@ func Serve(ctx context.Context, cfg Config, logw io.Writer) error {
 		return err
 	}
 	defer op.Close()
-	srv := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           h,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      2 * time.Minute,
-		IdleTimeout:       2 * time.Minute,
-		MaxHeaderBytes:    1 << 16,
-		ErrorLog:          logger,
-	}
+	srv := newHTTPServer(cfg.Listen, h, logger)
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	select {
@@ -87,11 +86,28 @@ func Serve(ctx context.Context, cfg Config, logw io.Writer) error {
 	}
 }
 
+// newHTTPServer is the process's HTTP server. DisableGeneralOptionsHandler
+// makes OPTIONS * go through this handler, so a missing token is 401.
+func newHTTPServer(addr string, h http.Handler, logger *log.Logger) *http.Server {
+	return &http.Server{
+		Addr:                         addr,
+		Handler:                      h,
+		ReadHeaderTimeout:            10 * time.Second,
+		ReadTimeout:                  30 * time.Second,
+		WriteTimeout:                 2 * time.Minute,
+		IdleTimeout:                  2 * time.Minute,
+		MaxHeaderBytes:               1 << 16,
+		ErrorLog:                     logger,
+		DisableGeneralOptionsHandler: true,
+	}
+}
+
 type handler struct {
 	bearerFile string
 	op         *agentrun.Operator
 	work       opwork
 	log        *log.Logger
+	slots      chan struct{}
 }
 
 func listenAddr(listen string) string {
@@ -127,19 +143,73 @@ func newHandler(cfg Config, logger *log.Logger) (*handler, *agentrun.Operator, e
 		op:         op,
 		work:       opwork{path: cfg.Opwork, tokenFile: cfg.TrackerFile, project: cfg.Project},
 		log:        logger,
+		slots:      make(chan struct{}, toolSlots),
 	}
 	return h, op, nil
+}
+
+// fixedLabel is an allowlisted log token. Anything else is the word unknown,
+// so a client-supplied path or method is never copied into the log.
+func fixedLabel(value string, allowed ...string) string {
+	for _, one := range allowed {
+		if value == one {
+			return one
+		}
+	}
+	return "unknown"
+}
+
+func knownMethod(method string) string {
+	return fixedLabel(method,
+		http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodConnect, http.MethodOptions, http.MethodTrace)
+}
+
+func knownPath(path string) string {
+	return fixedLabel(path, mcpPath)
+}
+
+func knownRPC(method string) string {
+	return fixedLabel(method, "initialize", "ping", "tools/list", "tools/call")
+}
+
+func knownTool(name string) string {
+	for _, tool := range frontDoorTools {
+		canonical, _ := tool["name"].(string)
+		if name == canonical && canonical != "" {
+			return canonical
+		}
+	}
+	return "unknown"
+}
+
+// admit takes one tool-call slot. Past the limit it returns false and the
+// caller answers busy without starting operator or opwork work.
+func (h *handler) admit() bool {
+	select {
+	case h.slots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *handler) release() {
+	select {
+	case <-h.slots:
+	default:
+	}
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	bearer, ok := h.authorized(r)
 	if !ok {
-		h.log.Printf("%s %s 401", r.Method, r.URL.Path)
+		h.log.Printf("http %s %s 401", knownMethod(r.Method), knownPath(r.URL.Path))
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 	if r.URL.Path != mcpPath {
-		h.log.Printf("%s %s 404", r.Method, r.URL.Path)
+		h.log.Printf("http %s %s 404", knownMethod(r.Method), knownPath(r.URL.Path))
 		http.NotFound(w, r)
 		return
 	}
@@ -215,7 +285,7 @@ func (h *handler) post(w http.ResponseWriter, r *http.Request, bearer string) {
 	}
 	result, rpcErr, session := h.dispatch(r.Context(), req.Method, req.Params, bearer)
 	if rpcErr != nil {
-		h.log.Printf("POST %s rpc %d", req.Method, rpcErr.Code)
+		h.log.Printf("rpc %s %d", knownRPC(req.Method), rpcErr.Code)
 		h.reply(w, r, mcpError(*req.ID, rpcErr.Code, rpcErr.Message))
 		return
 	}
@@ -224,14 +294,14 @@ func (h *handler) post(w http.ResponseWriter, r *http.Request, bearer string) {
 		h.reply(w, r, mcpError(*req.ID, -32603, "internal error"))
 		return
 	}
-	if req.Method == "tools/call" {
+	if knownRPC(req.Method) == "tools/call" {
 		var call struct {
 			Name string `json:"name"`
 		}
 		_ = json.Unmarshal(req.Params, &call)
-		h.log.Printf("POST tools/call %s", call.Name)
+		h.log.Printf("rpc tools/call %s", knownTool(call.Name))
 	} else {
-		h.log.Printf("POST %s", req.Method)
+		h.log.Printf("rpc %s", knownRPC(req.Method))
 	}
 	if session != "" {
 		w.Header().Set(sessionHeader, session)
@@ -274,6 +344,14 @@ func (h *handler) dispatch(ctx context.Context, method string, params json.RawMe
 		if !known {
 			return nil, &rpcError{-32602, "unknown tool"}, ""
 		}
+		if !h.admit() {
+			return toolError("busy, try again"), nil, ""
+		}
+		defer h.release()
+		// One deadline for the operator client and opwork. The parent is the
+		// request, so a disconnect cancels both. opwork does not extend it.
+		ctx, cancel := context.WithTimeout(ctx, toolDeadline)
+		defer cancel()
 		text, err := h.callTool(ctx, call.Name, call.Arguments)
 		if err != nil {
 			msg := scrub(err.Error(), bearer)

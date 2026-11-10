@@ -30,6 +30,11 @@ func (o opwork) call(ctx context.Context, args ...string) (string, error) {
 	if o.path == "" {
 		return "", errors.New("opwork is not configured")
 	}
+	// A cancelled or expired tool deadline starts no process. WithTimeout
+	// below does not extend the tool call's deadline.
+	if ctx.Err() != nil {
+		return "", errors.New("opwork timed out")
+	}
 	ctx, cancel := context.WithTimeout(ctx, opworkTimeout)
 	defer cancel()
 	argv := append([]string{"--project=" + o.project}, args...)

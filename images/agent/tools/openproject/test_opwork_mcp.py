@@ -41,7 +41,8 @@ def make_wp(number, status="New", owner="", subject="A story", description="", k
             "customField2": owner, "customField3": "thaynes43/dev-env", "customField4": {"raw": "accept"}, "customField5": {"raw": "constrain"},
             "customField6": key, "customField11": {"raw": ""},
             "_links": {"status": {"title": status, "href": "/api/v3/statuses/%d" % status_id}, "type": {"title": kind, "href": "/api/v3/types/3"},
-                       "parent": {"href": "/api/v3/work_packages/95"}}}
+                       "parent": {"href": "/api/v3/work_packages/95"},
+                       "project": {"href": "/api/v3/projects/1", "title": "haynes-engineering"}}}
 
 
 class FakeTracker:
@@ -58,6 +59,8 @@ class FakeTracker:
         if self.down:
             raise Down("tracker down")
         route = path.split("?")[0]
+        if route == "/api/v3/projects/haynes-engineering":
+            return 200, {"id": 1, "identifier": "haynes-engineering"}
         if route == "/api/v3/users/me":
             return 200, {"id": 7, "login": "agent"}
         if route == "/api/v3/statuses":

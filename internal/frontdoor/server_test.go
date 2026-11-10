@@ -2,10 +2,13 @@ package frontdoor
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
@@ -436,6 +440,414 @@ func TestFrontDoorTools(t *testing.T) {
 			t.Fatal("log contains a credential")
 		}
 	}
+}
+
+func startDoor(t *testing.T, script string) (string, *fakeAPI, *bytes.Buffer, http.Handler) {
+	t.Helper()
+	t.Setenv("NO_PROXY", "127.0.0.1,localhost")
+	t.Setenv("no_proxy", "127.0.0.1,localhost")
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "bearer"), testBearer+"\n")
+	writeFile(t, filepath.Join(dir, "operator"), testOperator+"\n")
+	writeFile(t, filepath.Join(dir, "tracker"), testTracker+"\n")
+	stub := filepath.Join(dir, "opwork")
+	writeFile(t, stub, script)
+	if err := os.Chmod(stub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	api := &fakeAPI{}
+	tlsSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		api.mu.Lock()
+		api.reqs = append(api.reqs, recorded{
+			method: r.Method, path: r.URL.Path, auth: r.Header.Get("Authorization"),
+			query: r.URL.Query(), body: body,
+			limits: r.Header.Get(apiv1.CallerPolicyLimitsHeader), outcome: r.Header.Get(apiv1.TaskOutcomeHeader),
+		})
+		fn := api.fn
+		api.mu.Unlock()
+		if fn == nil {
+			writeJSON(w, http.StatusNotFound, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeNotFound, Message: "no handler"}})
+			return
+		}
+		fn(w, r, body)
+	}))
+	t.Cleanup(tlsSrv.Close)
+	ca := filepath.Join(dir, "ca.pem")
+	writeFile(t, ca, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: tlsSrv.Certificate().Raw})))
+	var logs bytes.Buffer
+	h, op, err := newHandler(Config{
+		BearerFile: filepath.Join(dir, "bearer"), TrackerFile: filepath.Join(dir, "tracker"),
+		OperatorTokenFile: filepath.Join(dir, "operator"), APIURL: tlsSrv.URL, CAFile: ca, Opwork: stub,
+	}, log.New(&logs, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(op.Close)
+	mcp := httptest.NewServer(h)
+	t.Cleanup(mcp.Close)
+	return mcp.URL, api, &logs, h
+}
+
+func postMCP(t *testing.T, client *http.Client, base, token, method string, params any) (int, []byte) {
+	t.Helper()
+	status, raw, err := exchange(client, base+"/mcp", token, mustJSON(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status, raw
+}
+
+func postRaw(t *testing.T, client *http.Client, url, token string, body []byte) (int, []byte) {
+	t.Helper()
+	status, raw, err := exchange(client, url, token, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status, raw
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	body, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func exchange(client *http.Client, url, token string, body []byte) (int, []byte, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() { _ = res.Body.Close() }()
+	raw, err := io.ReadAll(res.Body)
+	return res.StatusCode, raw, err
+}
+
+func toolResult(t *testing.T, status int, raw []byte) (string, bool) {
+	t.Helper()
+	if status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("body %q", raw)
+	}
+	result, _ := doc["result"].(map[string]any)
+	content, _ := result["content"].([]any)
+	if result == nil || len(content) != 1 {
+		t.Fatalf("result %#v", doc)
+	}
+	text, _ := content[0].(map[string]any)["text"].(string)
+	isError, _ := result["isError"].(bool)
+	return text, isError
+}
+
+func TestMutatingCallWithoutTokenDoesNoWork(t *testing.T) {
+	dir := t.TempDir()
+	count := filepath.Join(dir, "opwork-invocations")
+	base, api, _, _ := startDoor(t, fmt.Sprintf("#!/bin/sh\nprintf 'x\\n' >> %q\n", count))
+	calls := []struct {
+		name string
+		args map[string]any
+	}{
+		{"coordinator_start", map[string]any{"item": 528, "repo": "dev-env", "model": "claude-opus-5-5", "hours": 2, "workers": 2}},
+		{"backlog_close", map[string]any{"id": 528, "evidence": "tests passed"}},
+	}
+	for _, token := range []string{"", "wrong-token"} {
+		for _, call := range calls {
+			api.reset()
+			status, raw := postMCP(t, nil, base, token, "tools/call", map[string]any{"name": call.name, "arguments": call.args})
+			if status != http.StatusUnauthorized || len(raw) != 0 {
+				t.Fatalf("%s token rejected as status %d body %d", call.name, status, len(raw))
+			}
+			if len(api.requests()) != 0 {
+				t.Fatalf("%s reached the operator", call.name)
+			}
+			if _, err := os.Stat(count); !os.IsNotExist(err) {
+				t.Fatalf("%s invoked opwork", call.name)
+			}
+		}
+	}
+	api.reset()
+	status, raw := postMCP(t, nil, base, testBearer, "tools/call", map[string]any{"name": "backlog_close", "arguments": calls[1].args})
+	text, isError := toolResult(t, status, raw)
+	if isError {
+		t.Fatal(text)
+	}
+	got, err := os.ReadFile(count)
+	if err != nil || len(got) == 0 {
+		t.Fatal("a valid close did not invoke opwork")
+	}
+	if len(api.requests()) != 0 {
+		t.Fatal("close reached the operator")
+	}
+	api.reset()
+	status, raw = postMCP(t, nil, base, testBearer, "tools/call", map[string]any{"name": "coordinator_start", "arguments": calls[0].args})
+	_, _ = toolResult(t, status, raw)
+	if len(api.requests()) == 0 {
+		t.Fatal("a valid coordinator start made no operator request")
+	}
+}
+
+func TestToolCallsAreLimited(t *testing.T) {
+	if toolDeadline != 90*time.Second || toolSlots != 4 {
+		t.Fatalf("deadline %s slots %d", toolDeadline, toolSlots)
+	}
+	dir := t.TempDir()
+	pids := filepath.Join(dir, "pids")
+	release := filepath.Join(dir, "release")
+	base, api, _, _ := startDoor(t, fmt.Sprintf("#!/bin/sh\nmkdir -p %q\necho $$ > %q/$$\nwhile [ ! -f %q ]; do sleep 1; done\n", pids, pids, release))
+	t.Cleanup(func() { _ = os.WriteFile(release, []byte("x"), 0o600) })
+	var wg sync.WaitGroup
+	errs := make(chan error, toolSlots)
+	body := mustJSON(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "backlog_show", "arguments": map[string]any{"id": 528}}})
+	for i := 0; i < toolSlots; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			status, raw, err := exchange(nil, base+"/mcp", testBearer, body)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if status != http.StatusOK || strings.Contains(string(raw), "busy, try again") {
+				errs <- fmt.Errorf("admitted call status %d", status)
+			}
+		}()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		entries, _ := os.ReadDir(pids)
+		if len(entries) >= toolSlots {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("started %d opwork processes", len(entries))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	started := time.Now()
+	client := &http.Client{Timeout: 3 * time.Second}
+	status, raw := postMCP(t, client, base, testBearer, "tools/call", map[string]any{
+		"name": "coordinator_start", "arguments": map[string]any{"item": 528, "repo": "dev-env", "model": "claude-opus-5-5", "hours": 2, "workers": 2},
+	})
+	if time.Since(started) > 2*time.Second {
+		t.Fatal("the extra call waited for a slot")
+	}
+	text, isError := toolResult(t, status, raw)
+	if !isError || text != "busy, try again" {
+		t.Fatalf("text %q error %v", text, isError)
+	}
+	entries, _ := os.ReadDir(pids)
+	if len(entries) != toolSlots {
+		t.Fatalf("opwork processes %d", len(entries))
+	}
+	if len(api.requests()) != 0 {
+		t.Fatal("the extra call reached the operator")
+	}
+	if err := os.WriteFile(release, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("admitted calls did not finish")
+	}
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+}
+
+func TestToolCallDeadlineIsShared(t *testing.T) {
+	if toolDeadline != 90*time.Second {
+		t.Fatalf("deadline %s", toolDeadline)
+	}
+	t.Cleanup(func() { toolDeadline = 90 * time.Second })
+	toolDeadline = time.Second
+	base, api, _, _ := startDoor(t, "#!/bin/sh\nprintf 'started\\n'\nexec sleep 8\n")
+	api.set(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(30 * time.Second):
+		}
+		w.WriteHeader(http.StatusGatewayTimeout)
+	})
+	client := &http.Client{Timeout: 8 * time.Second}
+	for _, call := range []struct {
+		name, want string
+		args       map[string]any
+	}{
+		{name: "session_status", args: map[string]any{"name": "coord-1"}, want: "deadline"},
+		{name: "backlog_show", args: map[string]any{"id": 528}, want: "timed out"},
+	} {
+		t.Run(call.name, func(t *testing.T) {
+			started := time.Now()
+			status, raw := postMCP(t, client, base, testBearer, "tools/call", map[string]any{"name": call.name, "arguments": call.args})
+			if time.Since(started) >= 4*time.Second {
+				t.Fatal("the call used more than the tool deadline")
+			}
+			text, isError := toolResult(t, status, raw)
+			if !isError || !strings.Contains(text, call.want) {
+				t.Fatalf("text %q error %v", text, isError)
+			}
+		})
+	}
+}
+
+func TestToolCallStopsWhenTheClientDisconnects(t *testing.T) {
+	if toolDeadline != 90*time.Second {
+		t.Fatalf("deadline %s", toolDeadline)
+	}
+	base, api, _, _ := startDoor(t, "#!/bin/sh\nprintf 'started\\n'\nexec sleep 8\n")
+	entered := make(chan struct{})
+	done := make(chan struct{})
+	var enteredOnce, doneOnce sync.Once
+	api.set(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		enteredOnce.Do(func() { close(entered) })
+		<-r.Context().Done()
+		doneOnce.Do(func() { close(done) })
+		w.WriteHeader(http.StatusGatewayTimeout)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "session_status", "arguments": map[string]any{"name": "coord-1"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/mcp", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+testBearer)
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Content-Type", "application/json")
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		res, err := http.DefaultClient.Do(req)
+		if res != nil {
+			_, _ = io.Copy(io.Discard, res.Body)
+			_ = res.Body.Close()
+		}
+		_ = err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the operator was not called")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the operator request kept running after the client disconnected")
+	}
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the client call did not return")
+	}
+}
+
+func TestLogsUseFixedLabels(t *testing.T) {
+	base, _, logs, _ := startDoor(t, stubScript)
+	status, raw := postRaw(t, nil, base+"/path-secret-value", "", nil)
+	if status != http.StatusUnauthorized || len(raw) != 0 {
+		t.Fatalf("status %d body %d", status, len(raw))
+	}
+	secretMethod, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "method-secret-value\nforged-log-line", "params": map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, _ = postRaw(t, nil, base+"/mcp", testBearer, secretMethod)
+	if status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	logged := logs.String()
+	for _, secret := range []string{"path-secret-value", "method-secret-value", "forged-log-line", testBearer, testOperator, testTracker} {
+		if strings.Contains(logged, secret) {
+			t.Fatal("log retained a request value")
+		}
+	}
+	if !strings.Contains(logged, "unknown") {
+		t.Fatalf("log %q", logged)
+	}
+	if strings.Count(logged, "\n") < 2 {
+		t.Fatalf("log %q", logged)
+	}
+}
+
+func TestOptionsStarIsUnauthorized(t *testing.T) {
+	_, _, logs, h := startDoor(t, stubScript)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newHTTPServer(ln.Addr().String(), h, log.New(logs, "", 0))
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	raw := optionsStar(t, ln.Addr().String(), "")
+	if !strings.Contains(raw, "HTTP/1.1 401") || strings.Contains(raw, "WWW-Authenticate") {
+		t.Fatalf("response %q", raw)
+	}
+	parts := strings.SplitN(raw, "\r\n\r\n", 2)
+	if len(parts) != 2 || parts[1] != "" {
+		t.Fatalf("body %q", raw)
+	}
+	authed := optionsStar(t, ln.Addr().String(), testBearer)
+	if strings.Contains(authed, "HTTP/1.1 200") || !strings.Contains(authed, "HTTP/1.1 404") {
+		t.Fatalf("authenticated response %q", authed)
+	}
+	if strings.Contains(logs.String(), "*") {
+		t.Fatal("log retained the target")
+	}
+}
+
+func optionsStar(t *testing.T, addr, token string) string {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	header := ""
+	if token != "" {
+		header = "Authorization: Bearer " + token + "\r\n"
+	}
+	if _, err := fmt.Fprintf(conn, "OPTIONS * HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n%s\r\n", addr, header); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	tmp := make([]byte, 1024)
+	for {
+		n, err := conn.Read(tmp)
+		if n > 0 {
+			_, _ = buf.Write(tmp[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
+	return buf.String()
 }
 
 func descriptionWords(v any) int {

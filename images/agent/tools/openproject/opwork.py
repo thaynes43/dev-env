@@ -40,6 +40,11 @@ constraints, each from a file path or from stdin (`-`), and reads the item back.
 priority and reads the item back. No other command changes a description. A write never uses the
 session identity Tom. When OPWORK_WRITE_ORIGIN is a short lowercase name, every comment and a
 create's provenance carry a line `Origin: <name>`.
+`show`, `groom`, `order`, `complete` and the parent epic of `create` refuse, before they print the
+item or write, when that item is not in `--project`. `groom` and `order` are mutations: an applied
+or uncertain change is an unconfirmed mutation with the intent retained, never "the read failed".
+The retained groom record stores the field text, not the path of a temporary file. `flush` retries
+the attribution note with that original text.
 
 Every item line carries the canonical OpenProject link, for example
 https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/97. OPWORK_BASE_URL
@@ -100,6 +105,11 @@ PARENT_OF = {"Epic": "Saga", "Story": "Epic"}
 WRITE_CMDS = {"claim", "comment", "status", "complete", "relate", "create", "groom", "order", "checkpoint-update", "checkpoint", "flush"}
 ORIGIN_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}\Z")
 MAX_FIELD = 200000
+# A scan used by search (source key or owner) and by_source_key refuses past these.
+# A partial list would hide a source key and let create write a second item.
+SCAN_MAX_PAGES = 25
+SCAN_MAX_ROWS = 2000
+SCAN_MAX_BYTES = 8 * 1024 * 1024
 
 
 class Fail(Exception):
@@ -258,16 +268,57 @@ class Tracker:
     def wp(self, wp_id):
         return self.get("/api/v3/work_packages/%d" % int(wp_id))
 
+    def project_hrefs(self):
+        """Hrefs that mean this tracker's project: its id, its identifier, and the configured name."""
+        cached = getattr(self, "_project_hrefs", None)
+        if cached:
+            return cached
+        data = self.get("/api/v3/projects/%s" % urllib.parse.quote(str(self.project), safe=""))
+        hrefs = set()
+        for value in (self.project, data.get("identifier")):
+            if isinstance(value, str) and value and "/" not in value and ".." not in value:
+                hrefs.add("/api/v3/projects/" + value)
+        pid = data.get("id")
+        if type(pid) is int and pid > 0:
+            hrefs.add("/api/v3/projects/%d" % pid)
+        self._project_hrefs = hrefs
+        return hrefs
+
+    def resolve_item(self, wp_id):
+        """The item, after it is shown to be in this project.
+
+        show, groom, order, complete and create's epic use this. A miss is exit 3
+        and names neither the subject nor the body. The caller writes nothing.
+        """
+        item = self.wp(wp_id)
+        href = ""
+        links = item.get("_links") if isinstance(item, dict) else None
+        link = links.get("project") if isinstance(links, dict) else None
+        if isinstance(link, dict) and isinstance(link.get("href"), str):
+            href = link["href"]
+        if href not in self.project_hrefs():
+            raise Fail("REFUSED: #%s is not in project %s. Nothing was returned or written." % (wp_id, self.project), 3)
+        return item
+
     def listing(self, filters, page=1, size=20):
         query = urllib.parse.urlencode({"filters": json.dumps(filters), "pageSize": size, "offset": page, "sortBy": '[["id","asc"]]'})
         return self.get("/api/v3/projects/%s/work_packages?%s" % (self.project, query))
 
     def scan(self, filters):  # every page, for client-side matching (source keys are not server filters)
-        rows, page = [], 1
+        """Every page, until the page, row or byte bound. Past a bound, refuse.
+        Returning a partial list would hide a source key."""
+        rows, page, nbytes = [], 1, 0
         while True:
+            if page > SCAN_MAX_PAGES:
+                raise Fail(scan_limited(), 3)
             data = self.listing(filters, page, 200)
-            rows += data["_embedded"]["elements"]
-            if len(rows) >= data["total"] or not data["_embedded"]["elements"]:
+            elements = data["_embedded"]["elements"]
+            page_bytes = scan_page_bytes(self.request, data)
+            if nbytes + page_bytes > SCAN_MAX_BYTES or len(rows) + len(elements) > SCAN_MAX_ROWS:
+                raise Fail(scan_limited(), 3)
+            nbytes += page_bytes
+            rows += elements
+            if len(rows) >= data["total"] or not elements:
                 return rows
             page += 1
 
@@ -539,8 +590,24 @@ def clip(text, limit, full):
     return text if full or len(text) <= limit else "%s [truncated %d chars; use --full]" % (text[:limit], len(text) - limit)
 
 
+def scan_limited():
+    return "REFUSED: the scan stopped at its limit (%d pages, %d rows, %d bytes). Nothing more was read or written." % (
+        SCAN_MAX_PAGES, SCAN_MAX_ROWS, SCAN_MAX_BYTES)
+
+
+def scan_page_bytes(request, data):
+    """Bytes of the page just read. The real client records the raw body; a fake is measured as JSON."""
+    size = getattr(request, "last_body_bytes", None)
+    if type(size) is int and size >= 0:
+        return size
+    try:
+        return len(json.dumps(data, separators=(",", ":")).encode())
+    except (TypeError, ValueError):
+        return 0
+
+
 def cmd_show(t, a, session):
-    w = t.wp(a.id)
+    w = t.resolve_item(a.id)
     out = [line(w), "  source-key: %s" % text_of(w.get(SOURCE_KEY)), "  repos: %s" % text_of(w.get(REPOS)),
            "  acceptance: %s" % text_of(w.get(ACCEPT)).replace("\n", "\n    "), "  constraints: %s" % text_of(w.get(CONSTRAINTS)).replace("\n", "\n    "),
            "  description: %s" % text_of(w.get("description")).replace("\n", "\n    ")]
@@ -584,9 +651,12 @@ def cmd_groom(t, a, session):
     if sum(1 for _, _, spec in chosen if spec == "-") > 1:
         raise Fail("REFUSED: only one field can be read from stdin. Nothing was sent.", 3)
     fields = {field: read_field(spec, label) for label, field, spec in chosen}
-    w = t.wp(a.id)
+    note = "Groomed %s." % ", ".join(label for label, _, _ in chosen)
+    # Text, not the temp path the front door removes after this process exits.
+    a.retained = {"fields": {label: fields[field] for label, field, _ in chosen}, "note": note}
+    w = t.resolve_item(a.id)
     t.patch(w, fields, lock=a.expect_lock)
-    t.comment(a.id, "Groomed %s." % ", ".join(label for label, _, _ in chosen), session)
+    t.comment(a.id, note, session)
     now = t.wp(a.id)
     return "groomed (read back): " + line(now) + "\n" + field_block(now)
 
@@ -594,14 +664,17 @@ def cmd_groom(t, a, session):
 def cmd_order(t, a, session):
     if not isinstance(a.priority, str) or not a.priority.strip():
         raise Fail("REFUSED: --priority is required. Nothing was sent.", 3)
-    w = t.wp(a.id)
+    a.retained = {"priority": a.priority, "note": "Priority -> %s." % a.priority.strip()}
+    w = t.resolve_item(a.id)
     current = ((w.get("_links") or {}).get("priority") or {}).get("title", "")
     if current.lower() == a.priority.lower():
         return "ordered (read back): " + line(w) + "\n  priority: " + current
     t.patch(w, priority=a.priority, lock=a.expect_lock)
     now = t.wp(a.id)
     title = ((now.get("_links") or {}).get("priority") or {}).get("title", "")
-    t.comment(a.id, "Priority -> %s." % title, session)
+    note = "Priority -> %s." % title
+    a.retained["note"] = note
+    t.comment(a.id, note, session)
     now = t.wp(a.id)
     title = ((now.get("_links") or {}).get("priority") or {}).get("title", title)
     return "ordered (read back): " + line(now) + "\n  priority: " + title
@@ -663,7 +736,7 @@ def refresh(t, w, expect_lock):
 
 
 def cmd_complete(t, a, session):
-    w = t.wp(a.id)
+    w = t.resolve_item(a.id)
     if w["_links"]["status"]["title"] == "Accepted":
         return "already Accepted: " + line(w)
     guard(w, session, a.force)
@@ -762,6 +835,7 @@ def not_confirmed(now, key, state, problems, label):
 
 
 def cmd_create(t, a, session):
+    epic = t.resolve_item(a.epic)  # refuse a foreign epic before a scan, a print or a write
     existing = t.by_source_key(a.source_key)  # search first: the stable key is the identity
     if len(existing) == 1:  # reuse only an item whose read back shows what this run asks for
         found = positive_id(existing[0].get("id")) if isinstance(existing[0], dict) else None
@@ -782,7 +856,6 @@ def cmd_create(t, a, session):
         return "\n".join(out)
     if existing:  # several items carry the key: listed, nothing written
         return "REUSED, not created: " + "; ".join(line(w) for w in existing)
-    epic = t.wp(a.epic)
     kind = a.type
     if epic["_links"]["type"]["title"] != PARENT_OF[kind]:
         raise Fail("Grammar: a %s goes under a %s, but #%d is a %s" % (kind, PARENT_OF[kind], a.epic, epic["_links"]["type"]["title"]))
@@ -1095,6 +1168,56 @@ def build_parser():
     return p
 
 
+# An applied or uncertain change keeps an intent. Comment keeps its own note.
+UNCERTAIN_MUTATIONS = (cmd_claim, cmd_status, cmd_complete, cmd_create, cmd_relate, cmd_groom, cmd_order)
+# A tracker outage during these is an unconfirmed mutation, never "the read failed".
+UNAVAILABLE_MUTATIONS = (cmd_claim, cmd_comment, cmd_status, cmd_complete, cmd_create, cmd_relate, cmd_groom, cmd_order)
+
+
+def attribution_to_retry(args, error):
+    """The groom or order note to retry, as (token, original text, body), or None.
+
+    The text is the sentence opwork wrote, never the path of a field file.
+    """
+    if args.fn not in (cmd_groom, cmd_order):
+        return None
+    body, token = getattr(error, "body", None), getattr(error, "token", None)
+    if not isinstance(body, str) or not isinstance(token, str) or not token:
+        return None
+    retained = getattr(args, "retained", None)
+    text = retained.get("note") if isinstance(retained, dict) else ""
+    if not isinstance(text, str) or not text:
+        text = body
+    return token, text, body
+
+
+def intent_spec(args, command_argv, error):
+    """The pending intent. Groom stores field text; order stores the priority. Neither stores a temp path."""
+    wp = getattr(args, "id", None) or getattr(error, "wp", None)
+    retained = getattr(args, "retained", None)
+    if args.fn is cmd_groom and isinstance(retained, dict):
+        raw = retained.get("fields")
+        fields = {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(raw, dict) else {}
+        return {"wp": getattr(args, "id", None), "argv": ["groom", str(getattr(args, "id", ""))],
+                "text": json.dumps(fields, sort_keys=True, ensure_ascii=False), "fields": fields}
+    if args.fn is cmd_order and isinstance(retained, dict) and isinstance(retained.get("priority"), str):
+        priority = retained["priority"]
+        return {"wp": getattr(args, "id", None), "argv": ["order", str(getattr(args, "id", "")), "--priority", priority], "text": priority}
+    return {"wp": wp, "argv": list(command_argv)}
+
+
+def save_unconfirmed(args, session, command_argv, error):
+    """Retain the mutation. A groom or order attribution note is stored so flush retries its original text."""
+    note = attribution_to_retry(args, error)
+    if note is not None:
+        token, text, body = note
+        save_pending("note", token, wp=getattr(args, "id", None), session=session, text=text, body=body, **posted_fields(error))
+    # A fresh intent token when the note already uses the activity token, so the two records do not collide.
+    token = None if note is not None else getattr(error, "token", None)
+    path, _ = save_pending("intent", token, session=session, body=getattr(error, "body", None), **posted_fields(error), **intent_spec(args, command_argv, error))
+    return path
+
+
 def main(argv=None, tracker=None, unavailable=None):
     try:
         return run(argv, tracker, unavailable)
@@ -1131,35 +1254,37 @@ def run(argv, tracker, unavailable):
         if getattr(failure, "output", None):
             print(failure.output)  # partial results (e.g. the notes flush had already recorded)
         print(failure, file=sys.stderr)  # the original failure first: a failing local save must not hide it
-        if failure.code == 6 and args.fn in (cmd_claim, cmd_status, cmd_complete, cmd_create, cmd_relate):
+        if failure.code == 6 and args.fn in UNCERTAIN_MUTATIONS:
             try:
-                path, _ = save_pending("intent", getattr(failure, "token", None), wp=getattr(args, "id", None) or getattr(failure, "wp", None),
-                                       session=session, argv=command_argv, body=getattr(failure, "body", None), **posted_fields(failure))
+                path = save_unconfirmed(args, session, command_argv, failure)
             except LocalWriteFail as saving:
                 print(saving, file=sys.stderr)
                 return failure.code
-            print("UNCONFIRMED: intent retained locally: %s. Inspect with `search`/`show` before repeating." % path, file=sys.stderr)
+            note = " The attribution note is retained for `flush` with its original text." if args.fn in (cmd_groom, cmd_order) else ""
+            print("UNCONFIRMED: intent retained locally: %s.%s Inspect with `search`/`show` before repeating." % (path, note), file=sys.stderr)
         return failure.code
     except (unavailable or ()) as down:
         if args.fn is cmd_checkpoint_update and hasattr(down, "token"):
             print("TRACKER UNAVAILABLE: structured checkpoint queued locally; write is UNCONFIRMED and flush deduplicates by token.", file=sys.stderr)
             return 5
-        mutating = args.fn in (cmd_claim, cmd_comment, cmd_status, cmd_complete, cmd_create, cmd_relate)
-        if not mutating:
+        if args.fn not in UNAVAILABLE_MUTATIONS:
             print("TRACKER UNAVAILABLE: %s. The read failed; authorized bounded work can continue." % down, file=sys.stderr)
             return 5
         print("TRACKER UNAVAILABLE: %s.\nWhether the write reached OpenProject is UNCONFIRMED." % down, file=sys.stderr)  # before the save: a failing save must not hide it
         try:
             if args.fn is cmd_comment:
-                path, rec = save_pending("note", getattr(down, "token", None), wp=args.id, session=session, text=args.text, body=getattr(down, "body", None), **posted_fields(down))
+                path, _ = save_pending("note", getattr(down, "token", None), wp=args.id, session=session, text=args.text, body=getattr(down, "body", None), **posted_fields(down))
+                follow = "`flush` posts it unless it already landed (deduped by token); it never reposts a note whose POST was accepted."
             else:
-                path, rec = save_pending("intent", getattr(down, "token", None), wp=getattr(args, "id", None),
-                                         session=session, argv=command_argv, body=getattr(down, "body", None), **posted_fields(down))
+                path = save_unconfirmed(args, session, command_argv, down)
+                if args.fn in (cmd_groom, cmd_order):
+                    follow = "`flush` retries the attribution note with the original text. The retained intent keeps that text, not a temporary file path. Re-run the command only if the change is missing."
+                else:
+                    follow = "When the tracker is back, `search`/`show` the item, then re-run the command only if the change is missing."
         except LocalWriteFail as saving:
             print(saving, file=sys.stderr)
             return 5  # the original failure's exit code
-        print("Saved locally: %s\n%s\nAuthorized bounded work can continue." % (
-            path, "`flush` posts it unless it already landed (deduped by token); it never reposts a note whose POST was accepted." if args.fn is cmd_comment else "When the tracker is back, `search`/`show` the item, then re-run the command only if the change is missing."), file=sys.stderr)
+        print("Saved locally: %s\n%s\nAuthorized bounded work can continue." % (path, follow), file=sys.stderr)
         return 5
 
 

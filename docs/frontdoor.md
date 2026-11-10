@@ -7,10 +7,13 @@ This repository does not install the cluster objects below and does not create
 a secret.
 
 The process accepts one bearer token. A request without that exact token gets
-401 and an empty body, on every path, with no `WWW-Authenticate` header. The
-token is read from a file on each request and is never logged. Tool text is
-scrubbed of that token and of an OpenProject `opapi-` token before it is
-returned.
+401 and an empty body, on every path, including `OPTIONS *`, with no
+`WWW-Authenticate` header. The token is read from a file on each request and
+is never logged. A log line names a fixed HTTP method, the path `/mcp` or
+`unknown`, and a fixed JSON-RPC method (`initialize`, `ping`, `tools/list`,
+`tools/call`, or `unknown`). It does not contain a raw path or a raw method.
+Tool text is scrubbed of that token and of an OpenProject `opapi-` token
+before it is returned.
 
 ## Flags
 
@@ -78,6 +81,27 @@ One groom field may be stdin (`-`). Both commands read the item back and print
 it. They keep opwork's rules: the write is attributed, it sends `lockVersion`,
 create stays search-first, and nothing writes as Tom.
 
+`backlog_show`, `backlog_groom`, `backlog_order`, `backlog_close`, and the
+epic on `backlog_create` refuse when that item is not in `--project`. opwork
+checks the item when it resolves it, before it prints the item or writes. The
+refusal names the project and does not include the item's text. The same check
+applies to `opwork show`, `groom`, `order`, `complete`, and the parent epic of
+`create`.
+
+`order` reads priority names from the exact path `/api/v3/priorities`. The
+tracker client allows that path and no other priorities path.
+
+If groom or order applied a change, or may have, and the tracker then failed,
+opwork reports an unconfirmed mutation and keeps the intent. It does not say
+the read failed. The retained groom record stores the field text, not the path
+of the temp file this server removes when the process exits. `flush` retries
+the attribution note with the original text.
+
+opwork rejects a tracker HTTP body larger than 4 MiB before it decodes JSON.
+A scan, which `search` uses for a source key or an owner and which create uses
+to find a source key, stops at 25 pages, 2000 rows, or 8 MiB. Past a bound it
+refuses instead of returning a partial list.
+
 ### Coordinator sessions
 
 `coordinator_start` takes `item`, exactly one of `repo` or `project`, `model`,
@@ -108,6 +132,13 @@ then returns the tracker half and one sentence: the operator has no route that
 lists open Asks for sessions this caller started. When a route exists, the
 tool lists open Asks by id, session name, item and question. It does not print
 a session UID.
+
+## Limits
+
+Each tool call has one deadline of 90 seconds. The operator client and the
+opwork process share it, and a client disconnect cancels both. At most 4 tool
+calls run at once. Another call is a tool error, `busy, try again`, and starts
+no operator request and no opwork process.
 
 ## What the cluster needs
 

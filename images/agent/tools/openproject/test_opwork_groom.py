@@ -40,7 +40,8 @@ def make_wp(number):
             "_links": {"status": {"title": "Ungroomed", "href": "/api/v3/statuses/5"},
                        "type": {"title": "Story", "href": "/api/v3/types/3"},
                        "parent": {"href": "/api/v3/work_packages/516"},
-                       "priority": {"title": "Normal", "href": "/api/v3/priorities/2"}}}
+                       "priority": {"title": "Normal", "href": "/api/v3/priorities/2"},
+                       "project": {"title": "haynes-engineering", "href": "/api/v3/projects/1"}}}
 
 
 class FakeTracker:
@@ -50,10 +51,13 @@ class FakeTracker:
         self.calls = []
         self.items = {528: make_wp(528)}
         self.acts = {528: []}
+        self.note_down = False
 
     def request(self, method, path, payload=None):
         self.calls.append((method, path, payload))
         route = path.split("?")[0]
+        if route == "/api/v3/projects/haynes-engineering":
+            return 200, {"id": 1, "identifier": "haynes-engineering"}
         if route == "/api/v3/priorities":
             return 200, {"_embedded": {"elements": [{"name": n, "id": i} for n, i in self.PRIORITIES]}}
         if route == "/api/v3/statuses":
@@ -64,7 +68,9 @@ class FakeTracker:
         number = int(found.group(1))
         if found.group(2):
             if method == "POST":
-                self.acts[number].append({"id": 1, "createdAt": "2026-11-10T06:00:00Z",
+                if self.note_down:
+                    raise Down("note post failed")
+                self.acts.setdefault(number, []).append({"id": 1, "createdAt": "2026-11-10T06:00:00Z",
                                           "comment": payload["comment"], "details": [],
                                           "_links": {"user": {"title": "agent"}}})
                 return 201, {"id": 1}
@@ -227,6 +233,114 @@ class GroomOrder(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertIn("OPWORK_WRITE_ORIGIN", err)
         self.assertEqual(self.fake.calls, [])
+
+    def pending(self, directory):
+        folder = os.path.join(directory, "pending")
+        rows = []
+        if not os.path.isdir(folder):
+            return rows
+        for name in sorted(os.listdir(folder)):
+            if name.endswith(".json"):
+                with open(os.path.join(folder, name), encoding="utf-8") as handle:
+                    rows.append(json.load(handle))
+        return rows
+
+    def test_show_in_project_returns_the_item(self):
+        code, out, err = self.invoke(["show", "528"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("#528", out)
+        self.assertIn("Front door", out)
+
+    def test_project_identifier_href_is_accepted(self):
+        self.fake.items[528]["_links"]["project"] = {"href": "/api/v3/projects/haynes-engineering", "title": "haynes-engineering"}
+        code, out, err = self.invoke(["show", "528"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Front door", out)
+
+    def test_by_id_refuses_another_project_before_contents_or_writes(self):
+        foreign = make_wp(77)
+        foreign["subject"] = "SECRET SUBJECT"
+        foreign["description"] = {"raw": "SECRET SCOPE"}
+        foreign["_links"]["project"] = {"href": "/api/v3/projects/99", "title": "elsewhere"}
+        self.fake.items[77] = foreign
+        with tempfile.TemporaryDirectory() as directory:
+            scope = os.path.join(directory, "scope.md")
+            with open(scope, "w", encoding="utf-8") as handle:
+                handle.write("new scope")
+            commands = [
+                ["show", "77", "--history"],
+                ["groom", "77", "--description", scope],
+                ["order", "77", "--priority", "High"],
+                ["order", "77", "--priority", "Normal"],
+                ["complete", "77", "--evidence", "done"],
+                ["create", "--epic", "77", "--subject", "Child", "--source-key", "child:77", "--confirm-new"],
+            ]
+            for argv in commands:
+                self.fake.calls.clear()
+                code, out, err = self.invoke(argv)
+                self.assertEqual(code, 3, (argv, out, err))
+                self.assertIn("not in project haynes-engineering", err)
+                self.assertIn("Nothing was returned or written", err)
+                self.assertNotIn("SECRET", out + err)
+                self.assertEqual(self.writes(), [], argv)
+                self.assertFalse(any("/activities" in c[1] for c in self.fake.calls), argv)
+
+    def test_groom_partial_failure_keeps_text_and_retries_the_note(self):
+        self.fake.note_down = True
+        with tempfile.TemporaryDirectory() as directory:
+            os.environ["OPWORK_STATE_DIR"] = directory
+            self.addCleanup(os.environ.pop, "OPWORK_STATE_DIR", None)
+            scope = os.path.join(directory, "scope.md")
+            text = "scope-text-kept-for-recovery"
+            with open(scope, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            code, out, err = self.invoke(["groom", "528", "--description", scope])
+            os.remove(scope)
+            self.assertEqual(code, 5, err)
+            self.assertIn("UNCONFIRMED", err)
+            self.assertNotIn("The read failed", err)
+            self.assertNotIn(scope, out + err)
+            records = self.pending(directory)
+            blob = json.dumps(records)
+            self.assertIn(text, blob)
+            self.assertNotIn(scope, blob)
+            note = next(r for r in records if r["kind"] == "note")
+            self.assertEqual(note["text"], "Groomed description.")
+            self.assertIn("Groomed description.", note["body"])
+            self.assertNotIn(scope, note["body"])
+            intent = next(r for r in records if r["kind"] == "intent")
+            self.assertEqual(intent["fields"]["description"], text)
+            self.assertNotIn(scope, " ".join(intent["argv"]))
+            self.assertEqual(self.fake.acts[528], [])
+            self.fake.note_down = False
+            code, _, err = self.invoke(["flush"])
+            posted = self.fake.acts[528][0]["comment"]["raw"]
+            self.assertIn("Groomed description.", posted)
+            self.assertNotIn(scope, posted)
+            self.assertNotIn(text, posted)
+            self.assertEqual(code, 6, err)
+            self.assertFalse(any(r["kind"] == "note" for r in self.pending(directory)))
+            self.assertTrue(any(r["kind"] == "intent" for r in self.pending(directory)))
+
+    def test_order_partial_failure_is_an_unconfirmed_mutation(self):
+        self.fake.note_down = True
+        with tempfile.TemporaryDirectory() as directory:
+            os.environ["OPWORK_STATE_DIR"] = directory
+            self.addCleanup(os.environ.pop, "OPWORK_STATE_DIR", None)
+            code, out, err = self.invoke(["order", "528", "--priority", "High"])
+            self.assertEqual(code, 5, err)
+            self.assertIn("UNCONFIRMED", err)
+            self.assertNotIn("The read failed", out + err)
+            records = self.pending(directory)
+            note = next(r for r in records if r["kind"] == "note")
+            self.assertIn("Priority -> High.", note["text"])
+            intent = next(r for r in records if r["kind"] == "intent")
+            self.assertEqual(intent["text"], "High")
+            self.assertIn("High", " ".join(intent["argv"]))
+            self.fake.note_down = False
+            self.invoke(["flush"])
+            posted = self.fake.acts[528][0]["comment"]["raw"]
+            self.assertIn("Priority -> High.", posted)
 
     def test_invalid_token_file_is_not_echoed(self):
         secret = "not-a-real-token-value"
