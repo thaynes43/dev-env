@@ -98,9 +98,10 @@ Commands:
                            --strict-home (a task clean-up, DESIGN-061) first
                            refuses, changing nothing, when HOME, a directory
                            directly under ~/work, or one directly under ~/repos
-                           or HOME and not hidden, holds .git and is neither a
-                           ~/repos clone nor a worktree one lists: "stray
-                           repository PATH" in the report's strictHome.
+                           or HOME and not hidden, holds .git (or is a bare
+                           repository) and is neither a ~/repos clone nor a
+                           worktree of one: "stray repository PATH" in the
+                           report's strictHome.
   ctl rescue-verify [--id <session>/<stamp>] [--timeout D]
                            In the shelf (DESIGN-061): print the shared volume's
                            free and total bytes as JSON; with --id, also
