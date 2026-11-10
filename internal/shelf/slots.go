@@ -5,7 +5,9 @@ import "context"
 // ExecSlots is the per-replica limit on archive execs into the shelf
 // (DESIGN-024 section 5): every history archive exec (DESIGN-025 6.4) and,
 // once it lands, every coordination archive exec takes one, so archive traffic
-// cannot crowd the shelf. Rescue and prune execs (D-67) take none.
+// cannot crowd the shelf. A task clean-up's rescue-verify (DESIGN-061,
+// RescueVerifier) takes one too. Rescue list, hold and prune execs (D-67) take
+// none.
 type ExecSlots struct {
 	free chan struct{}
 }

@@ -1672,6 +1672,252 @@ func TestPrivateHomeExpiryRecordIsBoundAndForwardOnly(t *testing.T) {
 	})
 }
 
+// DESIGN-061 section 2 item 1: a task Session's clean-up keeps its verified
+// unpushed-work bundle in place of a history archive. The bundle is set once,
+// at Archived, names the record's rescue, and never changes; a record holds an
+// archive or a bundle, never both; and Archived, Deleting and Expired accept
+// either.
+func TestPrivateHomeExpiryTaskBundle(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 11, 3, 17, 31, 21, 0, time.UTC))
+	later := metav1.NewTime(at.Add(168 * time.Hour))
+	const stamp = "20261110-1731"
+	retained := func(s *v1alpha1.AgentSession) *v1alpha1.PrivateHistoryStatus {
+		return &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: "original-home", HomeUID: "original-home-uid",
+			BindingGeneration: s.Generation, Admission: "Started", ExecutorAttempted: true, ExecutorIntent: "synthetic-intent", Provider: string(s.Spec.Agent), StopState: "Unknown",
+			LastExecutor: &v1alpha1.PrivateExecutorStatus{PodUID: "original-executor", PodName: s.Name, NodeName: "worker-a", Revision: "original-template", Generation: s.Generation},
+			ExecutorTerminal: &v1alpha1.PrivateExecutorTerminalStatus{Version: 1, PodUID: "original-executor", Phase: "Succeeded", Reason: "Completed", PodResourceVersion: "42",
+				NodeName: "worker-a", NodeUID: "node-uid", LeaseRenewedAt: at, ObservedAt: at,
+				Containers: []v1alpha1.PrivateExecutorContainerTermination{{Name: "agent", ExitCode: 0, Reason: "Completed", FinishedAt: at}}}}
+	}
+	rescuing := func() *v1alpha1.PrivateHomeExpiryStatus {
+		return &v1alpha1.PrivateHomeExpiryStatus{Version: 1, ExecutorUID: "original-executor", HomeUID: "original-home-uid", GraceStart: at, DueAt: at,
+			Phase: v1alpha1.HomeExpiryRescuing, HoldIntent: "intent-1", HoldPodUID: "hold-1"}
+	}
+	verified := func(name string) *v1alpha1.PrivateHomeBundleStatus {
+		return &v1alpha1.PrivateHomeBundleStatus{Stamp: stamp, Result: string(v1alpha1.RescueVerified),
+			Manifest: "rescue/" + name + "/" + stamp + "/manifest.json", ManifestSHA256: strings.Repeat("ab", 32), Bundles: 2, Bytes: 41 << 10, VerifiedAt: later}
+	}
+	clean := func() *v1alpha1.PrivateHomeBundleStatus {
+		return &v1alpha1.PrivateHomeBundleStatus{Stamp: stamp, Result: string(v1alpha1.RescueCleanAndPushed), VerifiedAt: later}
+	}
+	archive := func() *v1alpha1.PrivateHomeArchiveStatus {
+		return &v1alpha1.PrivateHomeArchiveStatus{Entry: "v1/_none/uid/0123456789abcdef", ContentSHA256: strings.Repeat("ab", 32), Bytes: 42, Files: 3, GitFiles: 2, ArchivedAt: at}
+	}
+	// stored creates a task Session whose record stands at Rescuing.
+	stored := func(t *testing.T) *v1alpha1.AgentSession {
+		t.Helper()
+		s := taskSession()
+		if err := k8s.Create(ctx(t), s); err != nil {
+			t.Fatal(err)
+		}
+		s.Status.PrivateHistory = retained(s)
+		s.Status.PrivateHistory.Expiry = rescuing()
+		if err := k8s.Status().Update(ctx(t), s); err != nil {
+			t.Fatal("a Rescuing record refused:", err)
+		}
+		return get(t, s)
+	}
+	saved := func(e *v1alpha1.PrivateHomeExpiryStatus, b *v1alpha1.PrivateHomeBundleStatus) {
+		e.Phase, e.RescueStamp, e.Bundle = v1alpha1.HomeExpiryArchived, stamp, b
+	}
+
+	t.Run("a Verified bundle carries the record from Rescuing to Expired", func(t *testing.T) {
+		s := stored(t)
+		steps := []func(*v1alpha1.PrivateHomeExpiryStatus){
+			// A task record skips Exporting: Rescuing to Archived in one write.
+			func(e *v1alpha1.PrivateHomeExpiryStatus) { saved(e, verified(s.Name)) },
+			// The hold pod goes; a refusal comes and goes beside the bundle.
+			func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Refusal, e.RefusalAt = "bundle_missing", &later },
+			func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Refusal, e.RefusalAt = "", nil },
+			func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Phase, e.DeletingAt = v1alpha1.HomeExpiryDeleting, &later },
+			func(e *v1alpha1.PrivateHomeExpiryStatus) {
+				e.Phase, e.HomeDeletedAt = v1alpha1.HomeExpiryExpired, &later
+			},
+		}
+		for i, step := range steps {
+			next := get(t, s)
+			step(next.Status.PrivateHistory.Expiry)
+			if err := k8s.Status().Update(ctx(t), next); err != nil {
+				t.Fatalf("step %d refused: %v", i, err)
+			}
+		}
+		got := get(t, s).Status.PrivateHistory.Expiry
+		if got.Phase != v1alpha1.HomeExpiryExpired || got.Archive != nil || !apiequality.Semantic.DeepEqual(got.Bundle, verified(s.Name)) {
+			t.Fatalf("the record was pruned or changed: %+v", got)
+		}
+	})
+
+	t.Run("a CleanAndPushed bundle names no manifest and carries the record to Deleting", func(t *testing.T) {
+		s := stored(t)
+		next := get(t, s)
+		saved(next.Status.PrivateHistory.Expiry, clean())
+		if err := k8s.Status().Update(ctx(t), next); err != nil {
+			t.Fatal("a CleanAndPushed bundle refused:", err)
+		}
+		deleting := get(t, s)
+		deleting.Status.PrivateHistory.Expiry.Phase, deleting.Status.PrivateHistory.Expiry.DeletingAt = v1alpha1.HomeExpiryDeleting, &later
+		if err := k8s.Status().Update(ctx(t), deleting); err != nil {
+			t.Fatal("Deleting on a CleanAndPushed bundle refused:", err)
+		}
+	})
+
+	t.Run("refused when written", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			edit func(e *v1alpha1.PrivateHomeExpiryStatus, name string)
+		}{
+			{"Archived with neither archive nor bundle", func(e *v1alpha1.PrivateHomeExpiryStatus, _ string) {
+				e.Phase, e.RescueStamp = v1alpha1.HomeExpiryArchived, stamp
+			}},
+			{"both an archive and a bundle", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.Archive = archive()
+			}},
+			{"a bundle at Rescuing", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				e.RescueStamp, e.Bundle = stamp, verified(name)
+			}},
+			{"a bundle at Exporting", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.Phase = v1alpha1.HomeExpiryExporting
+			}},
+			{"a bundle of another rescue", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.RescueStamp = "20261110-1732"
+			}},
+			{"Verified without a manifest", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.Bundle.Manifest = ""
+			}},
+			{"Verified without a digest", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.Bundle.ManifestSHA256 = ""
+			}},
+			{"Verified without a bundle", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.Bundle.Bundles = 0
+			}},
+			{"CleanAndPushed with a manifest", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, clean())
+				e.Bundle.Manifest = verified(name).Manifest
+			}},
+			{"CleanAndPushed with a digest", func(e *v1alpha1.PrivateHomeExpiryStatus, _ string) {
+				saved(e, clean())
+				e.Bundle.ManifestSHA256 = strings.Repeat("ab", 32)
+			}},
+			{"CleanAndPushed with bundles", func(e *v1alpha1.PrivateHomeExpiryStatus, _ string) {
+				saved(e, clean())
+				e.Bundle.Bundles = 1
+			}},
+			{"CleanAndPushed with bytes", func(e *v1alpha1.PrivateHomeExpiryStatus, _ string) {
+				saved(e, clean())
+				e.Bundle.Bytes = 1
+			}},
+			{"a Failed result", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.Bundle.Result = string(v1alpha1.RescueFailed)
+			}},
+			{"a manifest outside rescue/", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.Bundle.Manifest = "logs/" + name + ".log"
+			}},
+			{"a manifest path that climbs out", func(e *v1alpha1.PrivateHomeExpiryStatus, _ string) {
+				saved(e, verified(""))
+				e.Bundle.Manifest = "rescue/../" + stamp + "/manifest.json"
+			}},
+			{"a digest that is not one", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.Bundle.ManifestSHA256 = strings.Repeat("AB", 32)
+			}},
+			{"no stamp", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.RescueStamp, e.Bundle.Stamp = stamp, ""
+			}},
+			// The bundle's stamp equals rescueStamp, which has its own
+			// bound; a longer one fails either rule.
+			{"a stamp over 64 characters", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.RescueStamp, e.Bundle.Stamp = strings.Repeat("1", 64), strings.Repeat("1", 65)
+			}},
+			{"a manifest of another rescue", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.Bundle.Manifest = "rescue/" + name + "/20261110-1800/manifest.json"
+			}},
+			{"negative bytes", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.Bundle.Bytes = -1
+			}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := stored(t)
+				bad := get(t, s)
+				tc.edit(bad.Status.PrivateHistory.Expiry, s.Name)
+				if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+					t.Fatalf("invalid bundle accepted: %v", err)
+				}
+			})
+		}
+	})
+
+	t.Run("never changes once set", func(t *testing.T) {
+		s := stored(t)
+		next := get(t, s)
+		saved(next.Status.PrivateHistory.Expiry, verified(s.Name))
+		if err := k8s.Status().Update(ctx(t), next); err != nil {
+			t.Fatal("a Verified bundle refused:", err)
+		}
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHomeExpiryStatus)
+		}{
+			{"another digest", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Bundle.ManifestSHA256 = strings.Repeat("cd", 32) }},
+			{"another count", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Bundle.Bundles = 3 }},
+			{"other bytes", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Bundle.Bytes++ }},
+			{"verified again", func(e *v1alpha1.PrivateHomeExpiryStatus) {
+				e.Bundle.VerifiedAt = metav1.NewTime(later.Add(time.Minute))
+			}},
+			{"another manifest", func(e *v1alpha1.PrivateHomeExpiryStatus) {
+				e.Bundle.Manifest = "rescue/" + s.Name + "/" + stamp + "-2/manifest.json"
+			}},
+			{"dropped", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Bundle = nil }},
+			{"traded for an archive", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Bundle, e.Archive = nil, archive() }},
+			{"traded for CleanAndPushed", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Bundle = clean() }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bad := get(t, s)
+				tc.edit(bad.Status.PrivateHistory.Expiry)
+				if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+					t.Fatalf("bundle change accepted: %v", err)
+				}
+			})
+		}
+	})
+
+	t.Run("an archive record never takes a bundle", func(t *testing.T) {
+		s := stored(t)
+		next := get(t, s)
+		next.Status.PrivateHistory.Expiry.Phase, next.Status.PrivateHistory.Expiry.RescueStamp = v1alpha1.HomeExpiryExporting, stamp
+		if err := k8s.Status().Update(ctx(t), next); err != nil {
+			t.Fatal("Exporting refused:", err)
+		}
+		// A record that exported history goes on to its archive only.
+		swapped := get(t, s)
+		saved(swapped.Status.PrivateHistory.Expiry, verified(s.Name))
+		if err := k8s.Status().Update(ctx(t), swapped); !apierrors.IsInvalid(err) {
+			t.Fatalf("Exporting to Archived with a bundle accepted: %v", err)
+		}
+		archived := get(t, s)
+		archived.Status.PrivateHistory.Expiry.Phase, archived.Status.PrivateHistory.Expiry.Archive = v1alpha1.HomeExpiryArchived, archive()
+		if err := k8s.Status().Update(ctx(t), archived); err != nil {
+			t.Fatal("an archive record refused:", err)
+		}
+		bad := get(t, s)
+		bad.Status.PrivateHistory.Expiry.Bundle = verified(s.Name)
+		if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+			t.Fatalf("a bundle beside an archive accepted: %v", err)
+		}
+	})
+}
+
 func schemaInstruction(key, mark string) v1alpha1.CoordinatorInstructionStatus {
 	return v1alpha1.CoordinatorInstructionStatus{
 		Key:              key,

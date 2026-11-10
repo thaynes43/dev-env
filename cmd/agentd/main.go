@@ -87,7 +87,7 @@ Commands:
                            the original task owner is live.
   ctl codex-pair           Print a phone pairing code from a Codex --interactive
                            session's daemon (stdout only; never logged or stored).
-  ctl rescue [--stop-agent]
+  ctl rescue [--stop-agent] [--strict-home]
                            Commit every worktree's uncommitted work to a local
                            rescue/ branch, write a bundle of every ref origin
                            lacks to the shared volume (rescue/<session>/<stamp>/,
@@ -95,6 +95,24 @@ Commands:
                            worktree could not be rescued or a bundle could not
                            be written (D-43). --stop-agent stops the agent CLI
                            first, as the operator does before a suspend.
+                           --strict-home (a task clean-up, DESIGN-061) first
+                           refuses, changing nothing, when HOME, a directory
+                           directly under ~/work, or one directly under ~/repos
+                           or HOME and not hidden, holds .git (or is a bare
+                           repository) and is neither a ~/repos clone nor a
+                           worktree of one: "stray repository PATH" in the
+                           report's strictHome.
+  ctl rescue-verify [--id <session>/<stamp>] [--timeout D]
+                           In the shelf (DESIGN-061): print the shared volume's
+                           free and total bytes as JSON; with --id, also
+                           re-hash every bundle of that rescue against its
+                           manifest and print the manifest's SHA-256. Exit 1
+                           with a document is a refusal: bundle_missing or
+                           bundle_mismatch. It ends by itself after D
+                           (default 50s, 1s to 30m).
+  ctl drop-log             In a hold pod (DESIGN-061): remove this session's
+                           own log copy, logs/<session>.log, from the shared
+                           volume, and nothing else; print what it did as JSON.
   ctl deliver --from S     Deliver the message on stdin to the agent (D-65): a
                            bracketed paste into the Claude TUI, or codex queue.
                            Exit 3 when the agent takes no message (a headless
@@ -447,6 +465,112 @@ func shelfCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv f
 	return exitOK
 }
 
+// strictHomeFlags accepts `ctl rescue`'s flags when --strict-home is one of
+// them: --strict-home and at most --stop-agent besides, each once, in any
+// order. The forms without --strict-home keep their own exact cases.
+func strictHomeFlags(args []string, stopAgent *bool) bool {
+	strict, stop := false, false
+	for _, a := range args {
+		switch {
+		case a == "--strict-home" && !strict:
+			strict = true
+		case a == "--stop-agent" && !stop:
+			stop = true
+		default:
+			return false
+		}
+	}
+	if strict {
+		*stopAgent = stop
+	}
+	return strict
+}
+
+// rescueVerifyTimeout is rescue-verify's own deadline without --timeout:
+// below the operator's one-minute shelf exec, so agentd ends first.
+const rescueVerifyTimeout = 50 * time.Second
+
+// maxRescueVerifyTimeout bounds --timeout.
+const maxRescueVerifyTimeout = 30 * time.Minute
+
+// rescueVerifyCtl is `ctl rescue-verify [--id <session>/<stamp>] [--timeout D]`
+// in the shelf (DESIGN-061 section 3). It prints one JSON document. Exit 0:
+// ok. Exit 1 with the document on stdout: a refusal (bundle_missing,
+// bundle_mismatch). Exit 1 with nothing on stdout: a failure, said on stderr,
+// such as the deadline (default 50s, 1s to 30m). Exit 2: usage.
+func rescueVerifyCtl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	fs := flag.NewFlagSet("ctl rescue-verify", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	id := fs.String("id", "", "")
+	timeout := fs.Duration("timeout", rescueVerifyTimeout, "")
+	err := fs.Parse(args)
+	idSet := false
+	fs.Visit(func(f *flag.Flag) { idSet = idSet || f.Name == "id" })
+	if err != nil || fs.NArg() != 0 || (idSet && *id == "") || *timeout < time.Second || *timeout > maxRescueVerifyTimeout {
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl rescue-verify [--id <session>/<stamp>] [--timeout D, 1s to 30m]\n", binaryName)
+		return exitUsage
+	}
+	if *id != "" {
+		if _, _, err := protocol.ParseRescueID(*id); err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: rescue-verify: %v\n", binaryName, err)
+			return exitUsage
+		}
+	}
+	s, err := agentd.LoadSettings(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+		return exitFailure
+	}
+	ctx, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+	res, err := agentd.VerifyRescue(ctx, s, *id)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: rescue-verify: %v\n", binaryName, err)
+		return exitFailure
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(res); err != nil {
+		return exitFailure
+	}
+	if !res.OK {
+		return exitFailure
+	}
+	return exitOK
+}
+
+// dropLogCtl is `ctl drop-log` in a hold pod (DESIGN-061 section 3): it removes
+// the session's own logs/<session>.log from the shared volume and prints one
+// JSON document. Exit 0: removed, or there was none. Exit 1: a failure, said
+// on stderr, nothing removed. Exit 2: usage.
+func dropLogCtl(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	if len(args) != 0 {
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl drop-log (the session from AGENTD_SESSION)\n", binaryName)
+		return exitUsage
+	}
+	s, err := agentd.LoadSettings(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+		return exitFailure
+	}
+	sess, err := agentd.LoadSession(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: drop-log needs the session: %v\n", binaryName, err)
+		return exitFailure
+	}
+	res, err := agentd.DropLog(s, sess.Name)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: drop-log: %v\n", binaryName, err)
+		return exitFailure
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(res); err != nil {
+		return exitFailure
+	}
+	return exitOK
+}
+
 // exitNotAddressable is ctl deliver's exit code for a session that takes no
 // message now (agentd.ErrNotAddressable); the API answers it with a 409.
 const exitNotAddressable = 3
@@ -700,6 +824,10 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return contextCtl(ctx, args, stdin, stdout, stderr, getenv)
 		case "rescues", "prune", "hold-rescue":
 			return shelfCtl(args, stdin, stdout, stderr, getenv)
+		case "rescue-verify":
+			return rescueVerifyCtl(ctx, args[1:], stdout, stderr, getenv)
+		case "drop-log":
+			return dropLogCtl(args[1:], stdout, stderr, getenv)
 		case "history-export", "history-archive":
 			return historyCtl(args, stdin, stdout, stderr, getenv)
 		case "coord-archive":
@@ -710,6 +838,7 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	stopAgent := false
 	proofStdin := false
+	strictHome := false
 	dryRun := false
 	switch {
 	case len(args) == 1:
@@ -717,10 +846,12 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		stopAgent = true
 	case len(args) == 3 && args[0] == "rescue" && args[1] == "--stop-agent" && args[2] == "--workspace-stop-proof-stdin":
 		stopAgent, proofStdin = true, true
+	case len(args) > 1 && args[0] == "rescue" && strictHomeFlags(args[1:], &stopAgent):
+		strictHome = true
 	case len(args) == 2 && args[0] == "prepare-restart" && args[1] == "--dry-run":
 		dryRun = true
 	default:
-		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | explicit-claude-rc-continuation | rescue [--stop-agent] | rescues [--session S] | prune | prepare-restart [--dry-run] | grant-install | grant-remove | grant-list | grant-use\n", binaryName)
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | explicit-claude-rc-continuation | rescue [--stop-agent] [--strict-home] | rescues [--session S] | rescue-verify [--id S/STAMP] | drop-log | prune | prepare-restart [--dry-run] | grant-install | grant-remove | grant-list | grant-use\n", binaryName)
 		return exitUsage
 	}
 	switch args[0] {
@@ -754,7 +885,7 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		if sess, err := agentd.LoadSession(getenv); err == nil {
 			name = sess.Name
 		}
-		opt := agentd.RescueOptions{StopAgent: stopAgent, StopGrace: stopGrace}
+		opt := agentd.RescueOptions{StopAgent: stopAgent, StopGrace: stopGrace, StrictHome: strictHome}
 		if proofStdin {
 			proof, err := protocol.ReadWorkspaceStopProof(stdin)
 			if err != nil {
