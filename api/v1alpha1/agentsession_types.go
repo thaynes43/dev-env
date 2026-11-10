@@ -1079,6 +1079,7 @@ type PrivateExecutorTerminalStatus struct {
 }
 
 // PrivateExecutorContainerTermination is one container's terminated state.
+// +kubebuilder:validation:XValidation:rule="has(self.finishedAt) || (has(self.reason) && self.reason == 'ContainerStatusUnknown')",message="only a container the kubelet reported as ContainerStatusUnknown may have no finish time"
 type PrivateExecutorContainerTermination struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -1086,8 +1087,13 @@ type PrivateExecutorContainerTermination struct {
 	ExitCode int32  `json:"exitCode"`
 	// +kubebuilder:validation:MaxLength=128
 	// +optional
-	Reason     string      `json:"reason,omitempty"`
-	FinishedAt metav1.Time `json:"finishedAt"`
+	Reason string `json:"reason,omitempty"`
+	// FinishedAt is the container's finish time as the kubelet reported it.
+	// It is absent only when the kubelet reported the container terminated
+	// with reason ContainerStatusUnknown, which carries no finish time
+	// (DESIGN-025 25.6); the operator never invents one.
+	// +optional
+	FinishedAt metav1.Time `json:"finishedAt,omitempty"`
 }
 
 // PrivateExecutorMissedStatus records once that the recorded executor was
