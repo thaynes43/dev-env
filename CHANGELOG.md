@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.100.0](https://github.com/thaynes43/dev-env/compare/v2.99.0...v2.100.0) (2026-11-10)
+
+
+### Features
+
+* **frontdoor:** Meatball backlog tools and coordinator door ([#1038](https://github.com/thaynes43/dev-env/issues/1038)) ([8b23ee1](https://github.com/thaynes43/dev-env/commit/8b23ee1ec7b58058ad7d5a18c7925720533d370a))
+* keep task usage totals after a Session is cleaned up (OP524) ([#1040](https://github.com/thaynes43/dev-env/issues/1040)) ([55a7aaa](https://github.com/thaynes43/dev-env/commit/55a7aaa94a386a9e2c3546630fa0a681e8b0b544))
+
+
+### Bug Fixes
+
+* **agent-run:** a started agent reports busy, idle or waiting, never "running" (OP531) ([#1045](https://github.com/thaynes43/dev-env/issues/1045)) ([fc58b5c](https://github.com/thaynes43/dev-env/commit/fc58b5ce0a393b4c8934807a9048389c83a25918))
+* **cleanup:** wait for the node to drop the HOME volume before the delete refuses (OP535) ([#1046](https://github.com/thaynes43/dev-env/issues/1046)) ([6a8541b](https://github.com/thaynes43/dev-env/commit/6a8541b25487d2223ddd69905bb6ebf7a0d2c873))
+
 ## [2.99.0](https://github.com/thaynes43/dev-env/compare/v2.98.0...v2.99.0) (2026-11-10)
 
 
