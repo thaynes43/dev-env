@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
@@ -174,4 +176,255 @@ func applyCodexRolloutModels(u *protocol.UsageObservation, l Launch) bool {
 	}
 	u.ServedModels, u.ActualModelState = served, protocol.UsageProviderReported
 	return true
+}
+
+// maxRolloutTail bounds the tail of a rollout read for an allowance reading
+// (DESIGN-059 step 2). The newest token_count record sits near the end, so a
+// record further back than this gives no reading this heartbeat.
+const maxRolloutTail = 1 << 20
+
+var (
+	rolloutTokenCount = []byte(`"type":"token_count"`)
+	rolloutRateLimits = []byte(`"rate_limits"`)
+)
+
+// codexAllowanceRollout picks the rollout a Codex session's reading comes
+// from: the launch's confirmed thread when it has one, else the most recently
+// written rollout of the newest two days. Any rollout in this pod's CODEX_HOME
+// was written by this pod's CLI on this pod's login. Empty means none.
+func codexAllowanceRollout(s Settings) string {
+	home := s.CodexHome
+	var first Launch
+	if readJSONFile(s.statePath(launchFile), &first) == nil {
+		// The launch's own CODEX_HOME, else the pod's: never this process's
+		// environment, which a test or a ctl call may not share.
+		for i := len(first.Env) - 1; i >= 0; i-- {
+			if v, ok := strings.CutPrefix(first.Env[i], "CODEX_HOME="); ok && v != "" {
+				home = v
+				break
+			}
+		}
+		if first.NativeThreadConfirmed {
+			if p := findCodexRollout(home, first.ConversationID); p != "" {
+				return p
+			}
+		}
+	}
+	return newestCodexRollout(home)
+}
+
+// newestCodexRollout returns the regular rollout file with the newest
+// modification time in the newest two day directories under
+// <codexHome>/sessions/YYYY/MM/DD. It follows no symlink and reads a bounded
+// number of entries.
+func newestCodexRollout(codexHome string) string {
+	if codexHome == "" {
+		return ""
+	}
+	const maxEntries = 4096
+	seen := 0
+	dirs := []string{filepath.Join(codexHome, "sessions")}
+	for depth := 0; depth < 3; depth++ {
+		var next []string
+		for _, d := range dirs {
+			entries, err := os.ReadDir(d)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				if seen++; seen > maxEntries {
+					return ""
+				}
+				if e.IsDir() && e.Type()&os.ModeSymlink == 0 {
+					next = append(next, filepath.Join(d, e.Name()))
+				}
+			}
+		}
+		dirs = next
+	}
+	// Day directories are fixed-width numbers, so the path order is the date order.
+	slices.Sort(dirs)
+	if len(dirs) > 2 {
+		dirs = dirs[len(dirs)-2:]
+	}
+	var best string
+	var bestAt int64
+	for _, d := range dirs {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if seen++; seen > maxEntries {
+				return best
+			}
+			n := e.Name()
+			if !e.Type().IsRegular() || !strings.HasPrefix(n, "rollout-") || !strings.HasSuffix(n, ".jsonl") {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			if at := info.ModTime().UnixNano(); best == "" || at > bestAt || (at == bestAt && filepath.Join(d, n) > best) {
+				best, bestAt = filepath.Join(d, n), at
+			}
+		}
+	}
+	return best
+}
+
+// codexRolloutAllowance reads the newest token_count record that carries
+// rate_limits from a bounded tail of one rollout, and returns its allowance
+// reading. It checks the shape of the fields it uses, never the CLI's
+// version, and reads no message text: other lines are skipped on a prefix
+// check, and only the record's time and its rate-limit windows are decoded.
+// The weekly window is picked by its length, never by its position, and
+// either window may be null. No rollout, no such record, or one with no
+// usable window is no reading (nil, ""). A record that does not have the
+// expected shape is refused with a reason.
+func codexRolloutAllowance(path string) (*protocol.AllowanceReading, string) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, ""
+	}
+	defer func() { _ = f.Close() }()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		return nil, ""
+	}
+	off := max(st.Size()-maxRolloutTail, 0)
+	buf := make([]byte, st.Size()-off)
+	n, err := f.ReadAt(buf, off)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, ""
+	}
+	buf = buf[:n]
+	if off > 0 {
+		// The tail starts inside a line; that partial line is not read.
+		i := bytes.IndexByte(buf, '\n')
+		if i < 0 {
+			return nil, ""
+		}
+		buf = buf[i+1:]
+	}
+	// Only whole lines: the CLI may still be writing the last one.
+	i := bytes.LastIndexByte(buf, '\n')
+	if i < 0 {
+		return nil, ""
+	}
+	buf = buf[:i+1]
+	for len(buf) > 0 {
+		end := len(buf) - 1
+		start := bytes.LastIndexByte(buf[:end], '\n') + 1
+		line := buf[start:end]
+		buf = buf[:start]
+		if len(line) > maxRolloutLine || !bytes.Contains(line[:min(len(line), 256)], rolloutTokenCount) || !bytes.Contains(line, rolloutRateLimits) {
+			continue
+		}
+		reading, reason, present := parseCodexTokenCount(line)
+		if !present {
+			continue
+		}
+		return reading, reason
+	}
+	return nil, ""
+}
+
+// parseCodexTokenCount decodes one token_count record. present is false when
+// the line is not such a record, or its rate_limits is null, so an older
+// record may still give the reading.
+func parseCodexTokenCount(line []byte) (reading *protocol.AllowanceReading, reason string, present bool) {
+	top, ok := exactMembers(line, "timestamp", "type", "payload")
+	if !ok || string(top["type"]) != `"event_msg"` {
+		return nil, "", false
+	}
+	payload, ok := exactMembers(top["payload"], "type", "rate_limits")
+	if !ok || string(payload["type"]) != `"token_count"` {
+		return nil, "", false
+	}
+	if jsonNull(payload["rate_limits"]) {
+		return nil, "", false
+	}
+	limits, ok := exactMembers(payload["rate_limits"], "primary", "secondary")
+	if !ok {
+		return nil, allowanceShapeUnrecognized, true
+	}
+	var stamp string
+	if json.Unmarshal(top["timestamp"], &stamp) != nil {
+		return nil, allowanceShapeUnrecognized, true
+	}
+	at, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil || at.IsZero() {
+		return nil, allowanceShapeUnrecognized, true
+	}
+	r := protocol.AllowanceReading{Provider: protocol.AgentCodex, Source: protocol.AllowanceSourceCodexRollout, ReadAt: at.UTC()}
+	for _, name := range []string{"primary", "secondary"} {
+		raw := limits[name]
+		if jsonNull(raw) {
+			continue
+		}
+		w, ok := exactMembers(raw, "used_percent", "window_minutes", "resets_at")
+		if !ok {
+			return nil, allowanceShapeUnrecognized, true
+		}
+		// A window without its length or its reset cannot be labelled or
+		// bounded: it is left out, not refused.
+		if jsonNull(w["window_minutes"]) || jsonNull(w["resets_at"]) {
+			continue
+		}
+		minutes, err := strconv.ParseInt(string(bytes.TrimSpace(w["window_minutes"])), 10, 64)
+		if err != nil || minutes <= 0 || minutes > protocol.MaxAllowanceWindowMinutes {
+			return nil, allowanceShapeUnrecognized, true
+		}
+		usedText := string(bytes.TrimSpace(w["used_percent"]))
+		used, ok := protocol.CanonicalAllowancePercent(usedText)
+		if !ok {
+			if protocol.AllowanceNumber(usedText) {
+				return nil, allowanceOutOfBounds, true
+			}
+			return nil, allowanceShapeUnrecognized, true
+		}
+		reset, ok := protocol.AllowanceResetsAt(string(bytes.TrimSpace(w["resets_at"])))
+		if !ok {
+			return nil, allowanceShapeUnrecognized, true
+		}
+		// A window whose reset had passed when the record was written describes
+		// a window that is over: it is left out, as the Claude reader does, so
+		// the other window still gives a reading.
+		if !reset.After(r.ReadAt) {
+			continue
+		}
+		r.Windows = append(r.Windows, protocol.AllowanceWindow{Minutes: minutes, UsedPercent: used, ResetsAt: reset})
+	}
+	if len(r.Windows) == 0 {
+		return nil, "", true
+	}
+	if !r.Valid() {
+		return nil, allowanceOutOfBounds, true
+	}
+	return &r, "", true
+}
+
+// exactMembers decodes a JSON object and refuses one with a member that
+// differs from a wanted name only in case: Go's struct decoding would match
+// it, and a differently spelled key is not the documented field.
+func exactMembers(raw []byte, keys ...string) (map[string]json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil || m == nil {
+		return nil, false
+	}
+	for k := range m {
+		for _, want := range keys {
+			if k != want && strings.EqualFold(k, want) {
+				return nil, false
+			}
+		}
+	}
+	return m, true
+}
+
+// jsonNull is an absent or null member.
+func jsonNull(raw json.RawMessage) bool {
+	return len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }

@@ -6,6 +6,13 @@ import (
 )
 
 // ProjectCachedRead degrades one cached read for a serving clock.
+// A passive_event item of source version session-v1 (DESIGN-059), and its
+// SessionProducerRef status, are judged by one built-in rule instead of the
+// caller's contexts: shape checked, binding Unknown, never current. The rule
+// cannot tell who built an item: the operator labels rejected each session-v1
+// item it did not merge itself (RejectSessionReadings) before it serves a
+// document, and an item labelled rejected stays rejected here, so a reader
+// of the operator's bytes keeps that rejection.
 // It changes freshness, current-measure state, and derived status binding.
 // Observation timestamps, receipts, provider observed times, and raw
 // observation decimals stay as stored. A receipt ahead of the serving clock
@@ -29,9 +36,23 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 	untrusted := map[string]bool{}
 	trustedStatus := map[string]TrustedContext{}
 	freshHold := map[string]Freshness{}
+	// A session reading (DESIGN-059) is judged by the built-in rule alone: no
+	// private context can trust it or make it current.
+	sessionJudged := map[string]bool{}
 	for i := range doc.Items {
 		item := &doc.Items[i]
 		provider := item.Observation.Provider
+		if SessionReadingSource(item.Observation.Source) {
+			if projectSessionItem(item, now) {
+				sessionJudged[provider] = true
+				continue
+			}
+			item.CollectionFreshness = nil
+			cachedMarkItem(item)
+			cachedWithholdCurrent(item)
+			untrusted[provider] = true
+			continue
+		}
 		matched := cachedContexts(contexts, provider)
 		if len(matched) != 1 || !cachedObservationTrusted(item.Observation, matched[0], reg) {
 			item.CollectionFreshness = nil
@@ -63,6 +84,12 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 		if untrusted[status.Provider] {
 			cachedMarkStatus(status)
 			cachedSeparateFailedAttempt(status)
+			continue
+		}
+		if sessionJudged[status.Provider] && status.ProducerRef == SessionProducerRef {
+			if !projectSessionStatus(status) {
+				cachedMarkStatus(status)
+			}
 			continue
 		}
 		if ctx, ok := trustedStatus[status.Provider]; ok {

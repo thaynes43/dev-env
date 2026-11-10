@@ -191,6 +191,9 @@ type options struct {
 	allowanceCollector            *allowancecollector.Config
 	allowanceHandoff              *allowanceHandoffSelection
 	allowanceHandoffRefused       bool
+	// sessionAllowances stores passive allowance readings from heartbeats
+	// and serves them on the allowance route (DESIGN-059). Default off.
+	sessionAllowances bool
 }
 
 func parseFlags(args []string) (options, error) {
@@ -240,6 +243,7 @@ func parseFlags(args []string) (options, error) {
 	fs.IntVar(&o.scheduledWork.maxInteractive, "scheduled-work-max-interactive", executor.DefaultMaxInteractive, "most unfinished interactive scheduled-work occurrences at once (1 to 16), checked before the claim")
 	fs.DurationVar(&o.scheduledWork.headlessGrace, "scheduled-work-headless-grace", executor.DefaultHeadlessGrace, "how late a headless scheduled-work occurrence may still start (1m to 12h); later it is Skipped, and it is the session's start deadline")
 	fs.DurationVar(&o.scheduledWork.interactiveGrace, "scheduled-work-interactive-grace", executor.DefaultInteractiveGrace, "how late an interactive scheduled-work occurrence may still start (1m to 12h)")
+	fs.BoolVar(&o.sessionAllowances, "enable-session-allowances", false, "store each provider's newest passive allowance reading from session heartbeats in the existing ConfigMap dev-env-system/dev-env-session-allowances, and serve it on GET /v1/provider-allowances to the portal reader (DESIGN-059); default off, the heartbeat field is ignored and the route is unchanged; needs the API, get and update on that ConfigMap, and creates nothing")
 	fs.BoolVar(&o.childUsageCapture, "enable-child-usage-capture", false, "copy an accepted direct child's initial usage observation onto its parent Session; default off (OpenProject #109)")
 	fs.StringVar(&o.standbyRepo, "standby-repo", "haynes-ops", "repository of the standby remote session")
 	fs.StringVar(&o.standbyModel, "standby-model", "claude-opus-5-5", "full model id of the standby remote session")
@@ -1081,6 +1085,23 @@ func run(args []string) error {
 			Asks:                       askStore,
 			ProviderSourceReports:      sourceReports,
 			AggregateAllowanceReports:  aggregateReports,
+		}
+		// Passive allowance readings (DESIGN-059): default off. Reads are
+		// uncached; the one write is an Update with the read resourceVersion.
+		if o.sessionAllowances {
+			sessions := &apiserver.SessionAllowanceStore{Writer: mgr.GetClient(), Live: mgr.GetAPIReader()}
+			api.SessionAllowances = sessions
+			// GET /v1/provider-allowances serves the readings whatever the
+			// slot's state. Without a slot selection the route is GET-only for
+			// the portal reader and takes no trust from any private config.
+			if aggregateReports != nil {
+				aggregateReports.Sessions = sessions
+			} else {
+				api.AggregateAllowanceReports = &apiserver.AggregateAllowanceReports{
+					Enabled: true, Sessions: sessions,
+					PortalNamespace: aggregatePortalNamespace, PortalServiceAccount: aggregatePortalAccount,
+				}
+			}
 		}
 		// The standby session is default off. It is made through the API's own
 		// creation path and found again by its label (Story110 T25, plan 03).

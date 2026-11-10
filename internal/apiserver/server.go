@@ -229,6 +229,11 @@ type Server struct {
 	// Nil leaves the route unregistered. It is not the Codex current-source slot.
 	// PUT is registered only when PublishEnabled is true.
 	AggregateAllowanceReports *AggregateAllowanceReports
+	// SessionAllowances stores passive allowance readings from heartbeats in
+	// dev-env-system/dev-env-session-allowances (DESIGN-059), and the
+	// allowance route serves them. Nil, the default, ignores the heartbeat
+	// field and leaves the route as it was.
+	SessionAllowances *SessionAllowanceStore
 
 	// createMu serialises this replica's creates, so its idempotency,
 	// child-count, grant-merge and pending-grant checks see each other's writes.

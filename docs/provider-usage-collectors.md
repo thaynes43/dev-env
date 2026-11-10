@@ -82,6 +82,11 @@ The output artifact is directly accepted by `usage capture`. Account binding and
 provider observation time remain separate. No global settings or active user
 sessions are changed. A headless invocation is not assumed to run a UI statusline.
 
+This command is separate from the session readings of DESIGN-059. There agentd
+itself sets `statusLine` to the image's `claude-statusline-usage` helper in
+Claude remote and local sessions, and sends the windows on the heartbeat: see
+[Session allowance readings](operator-session-allowances.md).
+
 ## Claude structured SDK report
 
 ```sh

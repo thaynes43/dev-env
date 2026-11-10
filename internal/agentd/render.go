@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -67,6 +68,7 @@ func Render(ctx context.Context, r Runner, s Settings, sess protocol.Session) []
 	steps = append(steps,
 		renderDefaultModel(s, sess),
 		renderBypassPrompt(s),
+		renderClaudeStatusline(s, sess),
 		renderCodexConfig(s, cfg),
 		renderCodexAgentsMD(s, cfg),
 		renderCodexAccess(s, time.Now()),
@@ -262,6 +264,77 @@ func renderBypassPrompt(s Settings) Step {
 		return newStep(name, []string{keySkipBypassPrompt + " already set"}, nil)
 	}
 	return newStep(name, []string{keySkipBypassPrompt + " set"}, nil)
+}
+
+// claudeStatuslineHelper is the image's statusline bridge
+// (images/agent/tools/claude-statusline-usage.py), under SystemBin.
+const claudeStatuslineHelper = "claude-statusline-usage"
+
+// claudeUsageDir is the private directory the helper writes its reading to:
+// on the runtime tmpfs, so it starts empty on every container start.
+func claudeUsageDir(s Settings) string { return filepath.Join(s.RuntimeDir, "dev-env-usage") }
+
+// claudeUsageFile is the helper's --output file.
+func claudeUsageFile(s Settings) string {
+	return filepath.Join(claudeUsageDir(s), "claude-statusline.json")
+}
+
+// renderClaudeStatusline points settings.json's statusLine at the image's
+// usage helper (DESIGN-059 step 3), for a Claude remote or local session only:
+// a headless task is not assumed to run the callback. The helper writes the
+// callback's documented rate-limit windows to claudeUsageFile and nothing
+// else; agentd reads that file at each heartbeat. A display command that is
+// already set is kept: the helper runs it with --display. agentd renders at
+// every boot and resume, so the step is idempotent: it knows its own command
+// by the helper's exact path and never wraps it twice.
+func renderClaudeStatusline(s Settings, sess protocol.Session) Step {
+	const name = "claude-statusline"
+	if sess.Agent != protocol.AgentClaude || (sess.Mode != protocol.ModeLocal && sess.Mode != protocol.ModeRemote) {
+		return skipStep(name, "only an interactive Claude session runs the statusline")
+	}
+	// A reading is only ever sent while the pod's credential is the keeper's
+	// projection, so a pod that does not follow it gains nothing from the
+	// callback.
+	if s.ClaudeLiveFile == "" {
+		return skipStep(name, "this pod does not follow the keeper's Claude projection; no allowance reading")
+	}
+	if s.RuntimeDir == "" || !filepath.IsAbs(s.RuntimeDir) {
+		return skipStep(name, "XDG_RUNTIME_DIR is not set; no allowance reading")
+	}
+	helper := filepath.Join(s.SystemBin, claudeStatuslineHelper)
+	if fi, err := os.Stat(helper); err != nil || !fi.Mode().IsRegular() || fi.Mode()&0o111 == 0 {
+		return skipStep(name, helper+" is not in this image; no allowance reading")
+	}
+	if err := ensurePrivateDir(claudeUsageDir(s)); err != nil {
+		return newStep(name, []string{"WARN no allowance reading: " + err.Error()}, nil)
+	}
+	note, err := assertStatusLine(filepath.Join(s.ClaudeConfigDir, "settings.json"), helper, claudeUsageFile(s))
+	if err != nil {
+		return newStep(name, []string{"WARN statusLine not set: " + err.Error()}, nil)
+	}
+	return newStep(name, []string{note}, nil)
+}
+
+// ensurePrivateDir makes dir with mode 0700 and checks it is a real directory
+// this user owns, so the helper's own owner and mode check passes.
+func ensurePrivateDir(dir string) error {
+	if err := os.Mkdir(dir, 0o700); err != nil && !os.IsExist(err) {
+		return err
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 || !ownedByMe(fi) {
+		return fmt.Errorf("%s is not a directory this user owns", dir)
+	}
+	return os.Chmod(dir, 0o700)
+}
+
+// ownedByMe reports whether this process's user owns the file.
+func ownedByMe(fi os.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == os.Geteuid()
 }
 
 // codexGeneratedHeader separates the GitOps config.toml from the generated
