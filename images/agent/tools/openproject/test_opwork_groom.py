@@ -6,6 +6,7 @@ opwork runs for real. Only its request function is a fake in-memory tracker.
 """
 import importlib.util
 import io
+import json
 import os
 import re
 import subprocess
@@ -181,6 +182,33 @@ class GroomOrder(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("Unknown", err)
         self.assertEqual(self.writes(), [])
+
+    def test_checkpoint_as_tom_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            os.environ["OPWORK_STATE_DIR"] = directory
+            self.addCleanup(os.environ.pop, "OPWORK_STATE_DIR", None)
+            os.environ["OPWORK_SESSION"] = "Tom"
+            code, _, err = self.invoke(["checkpoint", "528", "local note"])
+            self.assertEqual(code, 3)
+            self.assertIn("never writes as Tom", err)
+            self.assertEqual(os.listdir(directory), [])
+            self.assertEqual(self.fake.calls, [])
+
+    def test_flush_refuses_a_saved_tom_note(self):
+        with tempfile.TemporaryDirectory() as directory:
+            os.environ["OPWORK_STATE_DIR"] = directory
+            self.addCleanup(os.environ.pop, "OPWORK_STATE_DIR", None)
+            pending = os.path.join(directory, "pending")
+            os.makedirs(pending)
+            record = {"kind": "note", "token": "abc123abc123", "created": "2026-11-10T06:00:00Z",
+                      "wp": 528, "session": "Tom", "text": "saved as Tom"}
+            with open(os.path.join(pending, "1-abc123abc123.json"), "w", encoding="utf-8") as handle:
+                json.dump(record, handle)
+            code, out, err = self.invoke(["flush"])
+            self.assertEqual(code, 3)
+            self.assertIn("never writes as Tom", out + err)
+            self.assertEqual(self.writes(), [])
+            self.assertTrue(os.path.exists(os.path.join(pending, "1-abc123abc123.json")))
 
     def test_never_writes_as_tom(self):
         os.environ["OPWORK_SESSION"] = "Tom"

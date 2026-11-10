@@ -97,7 +97,7 @@ HOLDS = ("Needs answer", "Needs approval", "Paused")  # an explicit hold or paus
 RELATIONS = ("relates", "follows", "precedes", "blocks", "blocked")
 REVERSE = {"follows": "precedes", "precedes": "follows", "blocks": "blocked", "blocked": "blocks", "relates": "relates"}
 PARENT_OF = {"Epic": "Saga", "Story": "Epic"}
-WRITE_CMDS = {"claim", "comment", "status", "complete", "relate", "create", "groom", "order", "checkpoint-update"}
+WRITE_CMDS = {"claim", "comment", "status", "complete", "relate", "create", "groom", "order", "checkpoint-update", "checkpoint", "flush"}
 ORIGIN_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}\Z")
 MAX_FIELD = 200000
 
@@ -957,7 +957,8 @@ def cmd_pending(t, a, session):
 def flush_note(t, path, rec):
     """Post one saved note once, or confirm it already landed; remove the record only after a read back.
     A record whose POST was accepted (2xx) or was started (marker written before the POST) is never reposted:
-    history is checked, else it needs manual review."""
+    history is checked, else it needs manual review. A note stored under Tom is refused before any request."""
+    refuse_tom(rec.get("session") or "")
     wp, token, structured, accepted, started = int(rec["wp"]), rec["token"], rec["kind"] == "structured_note", rec.get("post_status"), rec.get("post_started")
     if structured and not accepted and not started:
         w = t.wp(wp)

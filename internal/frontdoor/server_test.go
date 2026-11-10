@@ -75,6 +75,12 @@ func (f *fakeAPI) requests() []recorded {
 	return append([]recorded(nil), f.reqs...)
 }
 
+func TestListenAddrDefaultsTo8080(t *testing.T) {
+	if listenAddr("") != ":8080" || listenAddr(":9090") != ":9090" {
+		t.Fatalf("listen %q %q", listenAddr(""), listenAddr(":9090"))
+	}
+}
+
 func TestFrontDoorTools(t *testing.T) {
 	t.Setenv("NO_PROXY", "127.0.0.1,localhost")
 	t.Setenv("no_proxy", "127.0.0.1,localhost")

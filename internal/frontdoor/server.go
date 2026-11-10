@@ -54,6 +54,7 @@ func Serve(ctx context.Context, cfg Config, logw io.Writer) error {
 	if logw == nil {
 		logw = os.Stderr
 	}
+	cfg.Listen = listenAddr(cfg.Listen)
 	logger := log.New(logw, "dev-env-frontdoor: ", log.LstdFlags)
 	h, op, err := newHandler(cfg, logger)
 	if err != nil {
@@ -93,10 +94,14 @@ type handler struct {
 	log        *log.Logger
 }
 
-func newHandler(cfg Config, logger *log.Logger) (*handler, *agentrun.Operator, error) {
-	if cfg.Listen == "" {
-		cfg.Listen = defaultListen
+func listenAddr(listen string) string {
+	if listen == "" {
+		return defaultListen
 	}
+	return listen
+}
+
+func newHandler(cfg Config, logger *log.Logger) (*handler, *agentrun.Operator, error) {
 	if cfg.Opwork == "" {
 		cfg.Opwork = defaultOpwork
 	}
