@@ -218,7 +218,8 @@ func writeReadingAgePages(dir string) error {
 			ReadAtExact:  read.UTC().Format(time.RFC3339),
 			ResetAtExact: reset.UTC().Format(time.RFC3339),
 			Source:       "Passive event", Account: "Account not verified",
-			Why: "Not current or trusted: this reading's account is not verified.",
+			Why:     "Not current or trusted: this reading's account is not verified.",
+			Session: true,
 		}
 	}
 	pages := []struct {

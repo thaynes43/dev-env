@@ -637,8 +637,19 @@ const allowanceWindowOver = "This window is over: the reported reset has passed,
 // allowanceNoReading is the Claude and Codex tile when nothing has reported.
 // The operator serves that empty tile and an unconfigured source as the same
 // value, so the sentence includes the collecting condition. Cursor and Grok
-// stay Not connected; they have no session reading.
+// have no session reading. Grok stays Not connected. Cursor's plan numbers
+// are on Cursor's own page.
 const allowanceNoReading = "Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image and the operator is collecting those readings."
+
+// sessionReadingCaveat is the one plain line under a session reading's percent.
+const sessionReadingCaveat = "Reported by a running session; not checked with the provider."
+
+// cursorPlanSentence is the Cursor tile when no plan reading is connected.
+// cursorPlanURL is Cursor's own dashboard. The portal does not read it.
+const (
+	cursorPlanSentence = "Cursor's plan allowance can only be seen on Cursor's own page."
+	cursorPlanURL      = "https://cursor.com/dashboard"
+)
 
 // ProductAllowanceLastReported is one percent window as a provider last
 // reported it. ReadAt is when the collector received the reading, not a
@@ -664,6 +675,9 @@ type ProductAllowanceLastReported struct {
 	// the last reading.
 	WindowOver bool
 	Over, When string
+	// Session is a passive session-v1 reading. Its Usage tile leads with the
+	// percent. Other last-reported lines keep their layout.
+	Session bool
 }
 
 // ProductAllowanceWindow holds provider-reported display text and optional
@@ -1089,6 +1103,164 @@ func (a ProductAllowance) GlanceNote() string {
 	}
 }
 
+// SessionReading reports that every last-reported line is a session-v1
+// reading, so the Usage tile leads with the percent.
+func (a ProductAllowance) SessionReading() bool {
+	if len(a.LastReported) == 0 || len(a.Windows) > 0 {
+		return false
+	}
+	for _, line := range a.LastReported {
+		if !line.Session {
+			return false
+		}
+	}
+	return true
+}
+
+// CursorDashboard is the Cursor tile when no plan reading is connected.
+// A measured Cursor window, a rejected item, and Grok keep their own words.
+func (a ProductAllowance) CursorDashboard() bool {
+	return a.Provider == "Cursor" && a.Value == AllowanceNotConnected && len(a.Windows) == 0 && len(a.LastReported) == 0
+}
+
+// CursorPlanSentence is the plain sentence on that Cursor tile.
+func (ProductAllowance) CursorPlanSentence() string { return cursorPlanSentence }
+
+// CursorPlanURL is Cursor's own dashboard. It opens in a new tab.
+func (ProductAllowance) CursorPlanURL() string { return cursorPlanURL }
+
+// SessionLine is one line of a session reading's glance, in reading order.
+// Kind is percent, extra, reset, age, over, or when. Stale greys a percent
+// or its age once the reading is older than 30 minutes.
+type SessionLine struct {
+	Kind  string
+	Text  string
+	Stale bool
+}
+
+// SessionDetail is one session window's trust lines, kept off the headline.
+type SessionDetail struct {
+	Received, ReceivedExact     string
+	ProviderAt, ProviderAtExact string
+	Source, Account, Reset, Why string
+	Over                        bool
+}
+
+// SessionTileView is the glance for a session-v1 reading. Lines are the
+// headline. Details keep the trust lines. More counts windows past the bound.
+type SessionTileView struct {
+	Lines   []SessionLine
+	Caveat  string
+	Details []SessionDetail
+	More    int
+}
+
+// SessionTile builds the glance for a session-v1 reading. The week leads.
+// A shorter window is a smaller line in the same form. Nil for any other tile.
+func (a ProductAllowance) SessionTile() *SessionTileView {
+	if !a.SessionReading() {
+		return nil
+	}
+	ordered := sessionWindowOrder(a.LastReported)
+	primary := ordered[0]
+	view := &SessionTileView{
+		Caveat:  sessionReadingCaveat,
+		Details: sessionDetails(ordered),
+		More:    a.LastReportedMore,
+	}
+	if primary.WindowOver {
+		view.Lines = append(view.Lines, SessionLine{Kind: "over", Text: primary.Over})
+		if primary.When != "" {
+			view.Lines = append(view.Lines, SessionLine{Kind: "when", Text: primary.When})
+		}
+	} else {
+		view.Lines = append(view.Lines, SessionLine{Kind: "percent", Text: sessionPercentLine(primary.Percent, primary.Window), Stale: primary.Stale})
+		if reset := sessionResetLine(primary); reset != "" {
+			view.Lines = append(view.Lines, SessionLine{Kind: "reset", Text: reset})
+		}
+		if primary.Age != "" {
+			view.Lines = append(view.Lines, SessionLine{Kind: "age", Text: primary.Age, Stale: primary.Stale})
+		}
+	}
+	seenAge := map[string]bool{}
+	if !primary.WindowOver && primary.Age != "" {
+		seenAge[primary.Age] = true
+	}
+	for _, extra := range ordered[1:] {
+		if extra.WindowOver {
+			if primary.WindowOver {
+				continue
+			}
+			view.Lines = append(view.Lines, SessionLine{Kind: "over", Text: extra.Over})
+			continue
+		}
+		view.Lines = append(view.Lines, SessionLine{Kind: "extra", Text: sessionPercentLine(extra.Percent, extra.Window), Stale: extra.Stale})
+		if extra.Age != "" && !seenAge[extra.Age] {
+			seenAge[extra.Age] = true
+			view.Lines = append(view.Lines, SessionLine{Kind: "age", Text: extra.Age, Stale: extra.Stale})
+		}
+	}
+	return view
+}
+
+// sessionWindowOrder puts a 7-day window first. That window is the week.
+func sessionWindowOrder(lines []ProductAllowanceLastReported) []ProductAllowanceLastReported {
+	week := make([]ProductAllowanceLastReported, 0, 1)
+	rest := make([]ProductAllowanceLastReported, 0, len(lines))
+	for _, line := range lines {
+		if line.Window == "7 days" {
+			week = append(week, line)
+			continue
+		}
+		rest = append(rest, line)
+	}
+	return append(week, rest...)
+}
+
+// sessionPercentLine is "<N>% of the week used", or the same form for another
+// window. It rewrites only a used-percent the portal already displayed.
+func sessionPercentLine(percent, window string) string {
+	if !strings.HasSuffix(percent, " used") {
+		if window == "7 days" {
+			return percent + " of the week"
+		}
+		if window == "" || window == "Unknown" {
+			return percent
+		}
+		return percent + " of the " + window
+	}
+	number := strings.TrimSuffix(percent, " used")
+	if window == "7 days" {
+		return number + " of the week used"
+	}
+	if window == "" || window == "Unknown" {
+		return number + " used"
+	}
+	return number + " of the " + window + " used"
+}
+
+// sessionResetLine is "resets <weekday> <day> <month> <time> UTC".
+func sessionResetLine(l ProductAllowanceLastReported) string {
+	t, ok := parseAllowanceInstantOK(l.ResetAtExact)
+	if !ok {
+		return ""
+	}
+	return "resets " + t.UTC().Format("Monday 2 Jan 15:04 UTC")
+}
+
+func sessionDetails(lines []ProductAllowanceLastReported) []SessionDetail {
+	out := make([]SessionDetail, 0, len(lines))
+	for _, l := range lines {
+		out = append(out, SessionDetail{
+			Received: l.ReadAt, ReceivedExact: l.ReadAtExact,
+			ProviderAt: l.ProviderAt, ProviderAtExact: l.ProviderAtExact,
+			Source: l.Source, Account: l.Account, Reset: l.Reset, Why: l.Why,
+			Over: l.WindowOver,
+		})
+	}
+	return out
+}
+
 // withAllowanceAsOf copies windows and sets the render clock used for
 // countdowns. A zero clock leaves the windows unchanged.
 func withAllowanceAsOf(in []ProductAllowance, now time.Time) []ProductAllowance {
@@ -1228,9 +1400,15 @@ func applyReportedReading(l *ProductAllowanceLastReported) {
 		l.Reset, l.Why = "", ""
 		return
 	}
-	if readOK && !l.AsOf.IsZero() && l.AsOf.Sub(readAt) > allowanceReportedStaleAfter {
-		l.Stale = true
-		l.Age = reportedAgo(l.AsOf.Sub(readAt))
+	if readOK && !l.AsOf.IsZero() {
+		age := l.AsOf.Sub(readAt)
+		if age < 0 {
+			age = 0
+		}
+		l.Age = reportedAgo(age)
+		if l.AsOf.Sub(readAt) > allowanceReportedStaleAfter {
+			l.Stale = true
+		}
 	}
 	if at, ok := parseAllowanceInstantOK(l.ProviderAtExact); ok && !l.AsOf.IsZero() && at.After(l.AsOf) {
 		l.Why += " That observation time is in the future."

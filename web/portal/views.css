@@ -451,6 +451,20 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .allowance-last-stale .allowance-last-value, .allowance-last-stale .allowance-last-value strong, .allowance-last-stale .allowance-last-age { color: var(--muted); }
 .allowance-last-over-line, .glance-gap { color: var(--ink); }
 .glance-gap { margin: 0; }
+.session-read { min-width: 0; }
+.session-headline { margin: 0; color: var(--ink); font-size: 20px; font-weight: 650; letter-spacing: -.4px; line-height: 1.25; overflow-wrap: anywhere; }
+.session-headline strong { color: inherit; font-weight: 650; }
+.session-reset, .session-age, .session-when, .session-caveat, .session-secondary { margin: 2px 0 0; max-width: 100%; letter-spacing: 0; line-height: 1.45; overflow-wrap: anywhere; }
+.session-reset, .session-age, .session-when { color: var(--ink); font-size: 13px; }
+.session-secondary { color: var(--ink); font-size: 13px; font-weight: 650; }
+.session-caveat { color: var(--muted); font-size: 12px; }
+.session-headline.session-stale, .session-headline.session-stale strong, .session-secondary.session-stale, .session-age.session-stale { color: var(--muted); }
+.session-detail { margin-top: 6px; min-width: 0; }
+.session-detail > summary { display: flex; align-items: center; width: fit-content; max-width: 100%; min-height: 24px; color: var(--accent); cursor: pointer; }
+.session-detail p { margin: 2px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.cursor-plan { margin: 0; color: var(--ink); font-size: 13px; font-weight: 400; letter-spacing: 0; line-height: 1.45; overflow-wrap: anywhere; }
+.cursor-plan-link { margin: 6px 0 0; max-width: 100%; overflow-wrap: anywhere; }
+.cursor-plan-link a { overflow-wrap: anywhere; }
 .usage-chart { margin: 12px 0; min-width: 0; }
 .usage-chart ul { list-style: none; margin: 8px 0 0; padding: 0; }
 .usage-chart li { margin: 0 0 8px; }

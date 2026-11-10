@@ -76,8 +76,8 @@ func TestAllowanceGlanceKeepsProvidersFixedAndGapsUnknown(t *testing.T) {
 	}
 
 	k := glanceTile(t, section, "Cursor")
-	if !strings.Contains(k, `tone-muted">Not connected<`) || !strings.Contains(k, "No percent reported") || !strings.Contains(k, "Nothing is estimated.") {
-		t.Errorf("absent Cursor is not shown as an honest gap: %s", k)
+	if !strings.Contains(k, "Cursor&#39;s plan allowance can only be seen on Cursor&#39;s own page.") || !strings.Contains(k, `href="https://cursor.com/dashboard"`) || !strings.Contains(k, `target="_blank"`) || strings.Contains(k, "Not connected") || strings.Contains(k, "No percent reported") {
+		t.Errorf("absent Cursor does not point at Cursor's page: %s", k)
 	}
 	if strings.Contains(k, "meter-fill") || strings.Contains(k, "% used") {
 		t.Errorf("Cursor borrowed a figure: %s", k)

@@ -44,14 +44,35 @@ The At a glance tile shows a compact form: at most two lines with value and
 reason, then "+N more" linking to the account section. The account section
 shows up to four lines and counts any beyond that.
 
-The account badge stays Unknown while a reading is shown. If its reason would
-read "No percent allowance reported" above a shown value, it reads "No current
-percent allowance" instead. With no reading at all, a Claude or Codex tile
-does not say Unknown. It says "Nothing has reported yet. A reading appears
+A reading reported by a running session (source version `session-v1`) uses a
+different glance. The headline is the number: "34% of the week used", then
+"resets Thursday 12 Nov 12:00 UTC", then "reported 12 minutes ago" (or
+"reported just now" under a minute). A window other than 7 days is a smaller
+line in the same form, for example "12% of the 5 hours used". One line under
+that says "Reported by a running session; not checked with the provider."
+The trust lines (received time, passive event, account not verified, reported
+reset) stay in the tile's Details and in the account section. The words
+Unknown and No current percent are not on a tile that shows a percent. The
+30-minute grey, the passed-reset sentence, and the no-reading tile are
+unchanged. A last-reported line from any other source keeps the compact form
+above.
+
+Cursor, when nothing is connected, does not say Not connected. The tile says
+"Cursor's plan allowance can only be seen on Cursor's own page." and links to
+https://cursor.com/dashboard, which opens in a new tab. Grok stays Not
+connected.
+
+The account heading stays Unknown while a last-reported reading from any
+other source is shown. A session reading and the Cursor tile omit that
+heading, so neither says Unknown there. If the reason on that other heading
+would read "No percent allowance reported" above a shown value, it reads
+"No current percent allowance" instead. With no reading at all, a Claude
+or Codex tile does not say Unknown. It says "Nothing has reported yet. A reading appears
 when a new Codex task, or a remote Claude session, runs on a current image
 and the operator is collecting those readings." The operator serves that
-empty tile and an unconfigured source as the same value. Cursor and Grok
-stay Not connected. A last-reported line draws no meter and
+empty tile and an unconfigured source as the same value. On the Usage page
+the portal shows Cursor's own-page sentence for that value, and Grok stays
+Not connected. A last-reported line draws no meter and
 no countdown, and it never moves the page's "as of" time. The compact
 Sessions strip shows only the state.
 
