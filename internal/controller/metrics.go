@@ -39,7 +39,7 @@ const collectTimeout = 10 * time.Second
 
 var (
 	rescueFailedDesc = prometheus.NewDesc(MetricRescueFailed,
-		"1 for each session whose newest rescue failed (condition RescueFailed True): D-10's mark, which keeps the volume and blocks archive until a human looks.",
+		"1 for each session whose newest rescue failed (condition RescueFailed True), except a rescue the task clean-up ran in its own hold pod, which its gauges count instead (DESIGN-061). D-10's mark otherwise keeps the volume and blocks archive until a human looks.",
 		[]string{"session", "reason"}, nil)
 	rescueNotificationDesc = prometheus.NewDesc(MetricRescueNotification,
 		"Notification-only failed rescue identity and bounded native ownership; never preservation or removal authority.",
@@ -79,9 +79,13 @@ type SessionCollector struct {
 	// Reader lists sessions; the manager's cache in the operator.
 	Reader client.Reader
 	// Namespace is where the sessions live (dev-agents).
-	Namespace            string
-	TerminalTaskReclaim  bool
-	Now                  func() time.Time
+	Namespace           string
+	TerminalTaskReclaim bool
+	Now                 func() time.Time
+	// TaskCleanupOn is the operator's task clean-up. A failed rescue that ran
+	// in that clean-up's hold pod is omitted from dev_env_session_rescue_failed,
+	// so DevEnvRescueFailed does not page for it (DESIGN-061 6).
+	TaskCleanupOn        bool
 	RescueIncidentOwners *RescueIncidentOwners
 }
 
@@ -149,7 +153,11 @@ func (c *SessionCollector) Collect(ch chan<- prometheus.Metric) {
 			reapedOldest[reason] = max(reapedOldest[reason], max(0, now.Sub(s.DeletionTimestamp.Time).Seconds()))
 		}
 		if cond := meta.FindStatusCondition(s.Status.Conditions, ConditionRescueFailed); cond != nil && cond.Status == metav1.ConditionTrue {
-			ch <- prometheus.MustNewConstMetric(rescueFailedDesc, prometheus.GaugeValue, 1, s.Name, cond.Reason)
+			// The clean-up's own rescue is counted by dev_env_task_cleanup_*,
+			// not this gauge, so the critical page is not raised for it.
+			if !taskCleanupRescueExcluded(s, c.TaskCleanupOn) {
+				ch <- prometheus.MustNewConstMetric(rescueFailedDesc, prometheus.GaugeValue, 1, s.Name, cond.Reason)
+			}
 			key := "unclassified"
 			if r := s.Status.Rescue; r != nil && rescueKeyPattern.MatchString(r.NotificationKey) {
 				key = r.NotificationKey
@@ -174,4 +182,26 @@ func (c *SessionCollector) Collect(ch chan<- prometheus.Metric) {
 			ch <- prometheus.MustNewConstMetric(terminalTaskRetainedAgeDesc, prometheus.GaugeValue, oldest[reason], reason)
 		}
 	}
+}
+
+// taskCleanupRescueExcluded reports whether this failed rescue is the task
+// clean-up's own, so dev_env_session_rescue_failed leaves it out. The exact
+// test is the clean-up's (taskRescueRefusedIn): under the task policy, the
+// newest rescue ran in the record's hold pod. rescue_refused is that fact
+// stored on the next reconcile, and only for a refusal a retry does not
+// clear, so the gauge drops when the clean-up's rescue replaces an earlier
+// one, including before the refusal is stored and including a transient
+// failure in the same pod. An earlier rescue keeps its own pod UID and still
+// counts. DESIGN-025's hold pod is outside the task policy, so its failure
+// still counts.
+func taskCleanupRescueExcluded(s *v1alpha1.AgentSession, cleanupOn bool) bool {
+	if !taskPolicyOf(s, cleanupOn) {
+		return false
+	}
+	e := s.Status.PrivateHistory.Expiry
+	rec := s.Status.Rescue
+	if e == nil || rec == nil || rec.Superseded || rec.Result != v1alpha1.RescueFailed {
+		return false
+	}
+	return e.HoldPodUID != "" && rec.PodUID == e.HoldPodUID
 }

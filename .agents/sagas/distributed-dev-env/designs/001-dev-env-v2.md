@@ -1623,7 +1623,7 @@ alert on a metric the operator serves.**
   so the series exist whenever the operator is scraped. `SessionCollector` reads both
   from the cache at scrape time. So every replica reports the same values, a new
   leader needs no warm-up, and a reaped session's series end with it (5.1: nothing
-  lives only in memory).
+  lives only in memory). A task clean-up rescue that ran in the record's hold pod is not in `dev_env_session_rescue_failed` while `RescueFailed` stays True (DESIGN-061 6). `DevEnvRescueFailed` does not page for that refusal; the clean-up's gauges count it.
 - **The alert** lives in haynes-ops beside the operator: a ServiceMonitor on the
   metrics port, ingress for Prometheus in the operator's network policy, and a
   PrometheusRule `DevEnvRescueFailed` with severity `critical`, the one severity
@@ -1900,7 +1900,7 @@ backoff, through the same exec rescue (D-51) in a hold pod (D-55).
   for any hold pod.
 - **Clearing.** A good retry records `Verified` or `CleanAndPushed`, so
   `RescueFailed` turns False, `dev_env_session_rescue_failed` drops the session and
-  `DevEnvRescueFailed` resolves. The hold pod goes through the guard, and the volume
+  `DevEnvRescueFailed` resolves. A task clean-up refusal is not in that series even while `RescueFailed` stays True (DESIGN-061 6). The hold pod goes through the guard, and the volume
   waits for its archive timer as after any good rescue. A retry that turns up a
   permanent reason keeps the hold pod and its 15-minute retry (D-55), and the page
   stays.
@@ -5862,7 +5862,7 @@ blocks only the step it names.
 | D-54 | `AccessGrant` lives in `dev-agents`, `GrantPolicy` in `dev-env-system`; a grant's name is its ServiceAccount, bindings and policy; spec immutable but a one-way `release`; status the broker's only; TTL 10 m to the type's longest; in-cluster egress by endpoint, never by name | 6.12 |
 | D-55 | A volume that needs a rescue and has no pod gets a hold pod: the session's pod running `agentd hold` at size S, with no agent credentials; common mounts and the profile mount at `/creds` remain for the rescue's Git credential helper; other profile mounts are omitted; the operator rescues in it, keeps it and retries every 15 minutes while the rescue fails, and archives once it passes; a volume with nothing but an empty `lost+found` is a valid rescue (`VolumeEmpty`) *2026-11-10 (DESIGN-061):* the task clean-up's hold pod runs the rescue with `--strict-home`; a refusal removes it and keeps the HOME, tried again daily | 4.4 |
 | D-56 | `/v1/grants` of plan 07 step 2: only a session requests, for its own pod, with the requester from its token; every caller reads; each type's own fields; TTL 30 m for break-glass and 1 h otherwise; identical pending or active requests merge; at most 3 pending per session, per replica; release by `spec.release`; an approval link from `--grant-approval-url` | 6.12 |
-| D-57 | The page on `RescueFailed` is a Prometheus alert: the operator serves `dev_env_session_rescue_failed` and `dev_env_sessions` from its cache at scrape time; haynes-ops' `DevEnvRescueFailed` (critical, 20 minutes) pages Tom through Alertmanager, and `DevEnvOperatorMetricsAbsent` pages when the series vanish | 4.4 |
+| D-57 | The page on `RescueFailed` is a Prometheus alert: the operator serves `dev_env_session_rescue_failed` and `dev_env_sessions` from its cache at scrape time; haynes-ops' `DevEnvRescueFailed` (critical, 20 minutes) pages Tom through Alertmanager, and `DevEnvOperatorMetricsAbsent` pages when the series vanish. *2026-11-10 (DESIGN-061):* a task clean-up refusal is not in that series | 4.4 |
 | D-58 | Local sessions run Claude's TUI in tmux on the static token; every later boot resumes the first launch's conversation in the TUI (`claude --resume`), so a task's prompt still runs once; run-agent gives a TUI the pane's terminal and records its pid and exit; render seeds `skipDangerousModePermissionPrompt`; `ctl prepare-restart`; `agent-run --local`, and `attach` and `detach` through `kubectl exec` for Tom only | 3.6 |
 | D-59 | Idle detection: agentd reports Claude's own status (`busy`, `idle`, `waiting`) for a TUI and `lastActivity`, the newest of the task's log, Claude's last status change, an attached tmux client (now) and v1's `wt_busy` worktree signals (walked at most every 5 minutes, within 20 seconds and 200,000 entries, else now); the operator's timers judge the window | 4.2 |
 | D-60 | Suspend and resume are `POST /v1/sessions/{name}/suspend` and `/resume`, which set `spec.operatingMode` and the `suspended-by` annotation; the idle timer sets the same field when an agent that is not busy has had no activity for its window (`spec.lifecycle`, else the templates' optional `lifecycle` block, else D-09); the only spec write the operator makes | 4.3 |

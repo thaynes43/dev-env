@@ -569,6 +569,8 @@ hours**. If every rescue ran to its 10-minute limit, it would take under 2 days.
 | `rescue_failures` | three rescues in a row failed; pauses an hour; a valid rescue resets it |
 | `max_active_zero` | the manual pause, `--task-cleanup-max-active=0`, through GitOps |
 
+An answer that is not cached is not one of these pauses. A record judged then stays queued, as it is, until a shelf call fails, free space is low, the breaker is open, or max-active is 0.
+
 ## 5. What is never deleted by this path (counts at 2026-11-10T00:59Z)
 
 | Group | Count | What it means | Who decides |
@@ -640,6 +642,8 @@ unproven Sessions until F6 and OP515 clean them, as intended.
   for: 1h
 ```
 
+A rescue the task clean-up ran in its own hold pod is not in `dev_env_session_rescue_failed`, so `DevEnvRescueFailed` does not page for it. The test is the clean-up's own: `status.rescue.podUID` equals the record's `holdPodUID` while the task policy owns the Session; `RescueFailed` stays True, and once the record says `rescue_refused` the Session is `dev_env_task_cleanup_sessions{state="refused"}`, so the critical alert does not count it twice.
+
 **Events:** `TaskCleanupStarted` (the due time); `ExecutorRemoved`, `HoldPod`
 and `Rescue` as today; `TaskCleanupSaved` (the rescue's name, refs and bytes,
 or "clean and pushed"); `HomeDeleted` ("deleted the HOME home-NAME (uid U) after
@@ -703,7 +707,7 @@ no secret and no transcript. ADR-020 C-54 says why.
 
 **The backlog (H5).** Watch
 `sum by (state) (max without (pod, instance) (dev_env_task_cleanup_sessions))`,
-the paused gauge, `DevEnvRescueFailed`, the clean-up's hold pods (at most 2;
+the paused gauge, `DevEnvRescueFailed` for a rescue outside the clean-up (a task clean-up refusal is not in that alert), the clean-up's hold pods (at most 2;
 `kubectl -n dev-agents get pods -l dev-env.haynesops.com/hold=true`), the shared
 volume and operator memory. To **pause**, set `--task-cleanup-max-active=0`;
 active clean-ups finish. To **stop**, set `--enable-task-session-cleanup=false`;

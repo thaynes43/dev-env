@@ -690,6 +690,70 @@ func (f *taskFixture) sessionNamed(t *testing.T, name string) *v1alpha1.AgentSes
 	return &s
 }
 
+// TestTaskCleanupUncachedShelfSaysQueued: a record judged while the shelf's
+// free-space answer is not cached says it is queued. Nothing is paused until
+// a record that might start asks the shelf and that call fails.
+func TestTaskCleanupUncachedShelfSaysQueued(t *testing.T) {
+	f := newTaskFixture(t, func(tf *terminalFixture) {
+		tf.s.DeletionTimestamp = nil
+		tf.s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+		tf.pod = nil
+	})
+	f.r.TaskCleanupMaxActive = 1
+	f.verifier.err = shelf.ErrNoShelf
+	s := f.session(t).DeepCopy()
+	s.ObjectMeta = metav1.ObjectMeta{Name: "holding", Namespace: s.Namespace, UID: "uid-holding", Finalizers: []string{Finalizer}}
+	st := s.Status.DeepCopy()
+	h := st.PrivateHistory
+	h.SessionUID, h.HomeClaim = string(s.UID), HomeClaimName("holding")
+	obs := h.ExecutorTerminal.ObservedAt
+	h.Expiry = &v1alpha1.PrivateHomeExpiryStatus{Version: 1, ExecutorUID: h.LastExecutor.PodUID, HomeUID: h.HomeUID, GraceStart: obs, DueAt: obs, Phase: v1alpha1.HomeExpiryRescuing, HoldPodUID: "hold-holding"}
+	if err := f.c.Create(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(s), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Status = *st
+	if err := f.c.Status().Update(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	due := f.observed.Add(DefaultTaskCleanupGrace)
+	f.run(t, 2)
+	f.tick(t, due.Add(time.Hour))
+	f.run(t, 3)
+	c := f.condition(t, ConditionHomeExpiry)
+	if c == nil || c.Reason != taskReasonQueued || !strings.Contains(c.Message, "the clean-up is queued") {
+		t.Fatalf("HomeExpiry %+v; want queued", c)
+	}
+	if strings.Contains(c.Message, "the clean-up is paused") || strings.Contains(c.Message, "the shelf does not answer") {
+		t.Fatalf("an uncached shelf was called a pause: %+v", c)
+	}
+	if ready := f.condition(t, ConditionPodReady); ready == nil || !strings.Contains(ready.Message, "the clean-up is queued") {
+		t.Fatalf("PodReady %+v; want the queued text", ready)
+	}
+	if n := len(f.verifier.calls); n != 0 {
+		t.Fatalf("the shelf was asked %d times for a record that is not starting", n)
+	}
+	held := f.sessionNamed(t, "holding")
+	held.Status.PrivateHistory.Expiry.Phase = v1alpha1.HomeExpiryExpired
+	if err := f.c.Status().Update(context.Background(), held); err != nil {
+		t.Fatal(err)
+	}
+	f.r = f.fresh()
+	f.r.TaskCleanupMaxActive = 1
+	f.run(t, 4)
+	if c = f.condition(t, ConditionHomeExpiry); c == nil || c.Reason != taskReasonPaused || !strings.Contains(c.Message, "the shelf does not answer") {
+		t.Fatalf("HomeExpiry %+v; want paused because the shelf call failed", c)
+	}
+	if e := f.expiry(t); e == nil || e.Phase != v1alpha1.HomeExpiryWaiting {
+		t.Fatalf("started without a shelf: %+v", e)
+	}
+	if n := len(f.verifier.calls); n != 1 {
+		t.Fatalf("the shelf was asked %d times; want the one call that failed", n)
+	}
+}
+
 // TestTaskCleanupPausesItself: under 2Gi free, a shelf that does not answer,
 // and three failed rescues in a row each pause new starts with their reason;
 // a valid rescue resets the breaker.
