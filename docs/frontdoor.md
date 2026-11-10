@@ -47,7 +47,7 @@ and the descriptions together are 150 words.
 | `backlog_create` | Create a story under an epic. Search first. The write is attributed to meatball, not Tom. |
 | `backlog_groom` | Replace an item's scope, acceptance, or constraints, then read the item back. |
 | `backlog_order` | Set an item's priority, which decides what goes next, then read it back. |
-| `backlog_close` | Close with evidence; may take over from this caller's own finished coordinator for the item. Explicit holds stay held. |
+| `backlog_close` | Close with evidence; caller's coordinator takeover requires reclaimed pod and stopped workers. Holds stay held; retry reclaim refusals later. |
 | `coordinator_start` | Start one coordinator for an item. Model is required and is the full id Tom named. No effort. |
 | `session_status` | Read one session this caller started, by name or item, including any retained outcome. |
 | `session_stop` | Stop one session this caller started. A refusal from the operator is reported plainly. |
@@ -80,6 +80,23 @@ and branch format. Its task must have exited with a Succeeded or Failed
 result. A starting or running task, missing or unknown result, TimedOut
 result, another caller's session, a different owner, ambiguous lookup or
 operator error writes nothing.
+
+The same session GET must also show phase `Suspended` and exactly one
+`TerminalTaskPodReclaim` condition with reason `Reclaimed`. The caller can
+close its finished coordinator's item only after the operator has reclaimed
+that session's pod, about ten minutes after the task ends and only once
+every worker it started has stopped. Before then, `backlog_close` returns
+the original refusal and one sentence naming what was not proven; the
+caller tries again later. `Grace`, `ChildrenActive`, any other reason or
+phase, and missing or duplicate conditions all refuse takeover. A resume
+resets reclaim to `Grace`. If terminal task reclaim is disabled, the
+condition never appears and takeover never happens.
+
+Accepted residual: the condition records the moment of reclaim. If someone
+else later resumes one of the coordinator's workers by hand, that worker
+can write while the item is Accepted. Checking descendants live at close
+time would need a new field on the operator's session view, a contract
+change for its own story if needed.
 
 The refusal carries an opt-in `complete --guard-json` signal. It contains
 the guard reason and the item snapshot, including the lock and opwork's hold

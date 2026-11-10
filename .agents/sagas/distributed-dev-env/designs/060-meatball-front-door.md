@@ -556,9 +556,29 @@ all of the following are proven from reads made during this call:
 4. The session is in task mode and has a finished task result whose verdict
    is Succeeded or Failed. Starting, running, missing, Unknown and TimedOut
    do not qualify. A failed pod phase alone proves nothing about its task.
-5. The refused item's snapshot has a known status and explicitly says it is
+5. That same session GET has phase `Suspended` and exactly one condition of
+   type `TerminalTaskPodReclaim`, with reason `Reclaimed`. Task exit alone
+   proves neither that its pod is gone nor that its workers stopped. Any
+   other phase or reason, a missing condition or duplicate conditions
+   refuses takeover. In particular, `Grace` and `ChildrenActive` do not
+   qualify; an explicit resume resets reclaim to `Grace`.
+6. The refused item's snapshot has a known status and explicitly says it is
    not a hold. Review work held in Needs answer, Needs approval or Paused
    stays held. In review itself is not an explicit hold in opwork.
+
+The caller can close its finished coordinator's item only after the operator
+has reclaimed that session's pod: about ten minutes after the task ends,
+and only once every worker it started has stopped. Before then,
+`backlog_close` returns the original refusal and one sentence naming what
+was not proven; the caller tries again later. If terminal task reclaim is
+disabled, the condition never appears and takeover never happens.
+
+Accepted residual, per the coordinator's 2026-11-10 review rulings on PR
+#1054: the condition records the moment of reclaim. Someone else may later
+resume one of the coordinator's workers by hand, and that worker can write
+while the item is Accepted. Checking descendants live at close time would
+need a new field on the operator's session view, a contract change for its
+own story if needed.
 
 After these checks, run `claim --force --expect-lock=<refused lock>` with a
 note naming the caller's own finished coordinator and why it is taking over.
@@ -594,7 +614,11 @@ Succeeded and Failed, and no mutation for running/starting/unknown tasks,
 another caller's owner, a mismatched owner, no retained session, operator
 failure, malformed owner, every canonical hold, a stale lock and every other
 opwork refusal. Additional tests cover malformed signals and failure after
-takeover. The coordinator owns the second-family review, merge, image pin,
+takeover, reclaim grace, active children, absent or duplicate reclaim
+conditions, a Running phase with Reclaimed, and Suspended with Grace after
+a resume. Signals with reason hold but hold false, a nil agent status and
+an empty signal message must also refuse without writes. The coordinator
+owns the second-family review, merge, image pin,
 installation and live acceptance. Item 492 is untouched by this story's
 worker and remains the coordinator's live test.
 

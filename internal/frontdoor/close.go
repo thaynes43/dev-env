@@ -11,6 +11,13 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
+// The operator's constants live in Kubernetes packages. Keep those imports
+// out of this binary; TestCloseReclaimConstantsMatchOperator checks parity.
+const (
+	phaseSuspended               = "Suspended"
+	conditionTerminalTaskReclaim = "TerminalTaskPodReclaim"
+)
+
 // session_id() writes this form. Requiring the branch and worktree to agree
 // avoids treating an arbitrary mention of a session as execution ownership.
 var executionOwner = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30} \| worktree ([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?) \| branch agent/([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$`)
@@ -56,6 +63,22 @@ func (h *handler) closeCoordinatorItem(ctx context.Context, id int64, evidence s
 	verdict := sess.AgentStatus.Task.Verdict().State
 	if verdict != apiv1.TaskSucceeded && verdict != apiv1.TaskFailed {
 		return refuse("the coordinator's task did not end with Succeeded or Failed")
+	}
+	if sess.Phase != phaseSuspended {
+		return refuse("the coordinator's phase is not Suspended, so its pod is not proven reclaimed")
+	}
+	reclaimConditions, reclaimReason := 0, ""
+	for _, condition := range sess.Conditions {
+		if condition.Type == conditionTerminalTaskReclaim {
+			reclaimConditions++
+			reclaimReason = condition.Reason
+		}
+	}
+	if reclaimConditions != 1 {
+		return refuse("the operator did not report exactly one TerminalTaskPodReclaim condition proving the coordinator's pod was reclaimed")
+	}
+	if reclaimReason != "Reclaimed" {
+		return refuse("the operator has not confirmed the coordinator's pod was reclaimed after its workers stopped")
 	}
 	note := fmt.Sprintf("Taking over from this caller's own finished coordinator %s for item #%s; task %s.", sess.Name, item, verdict)
 	claimText, claimErr := h.work.call(ctx, "claim", item, "--force", opt("expect-lock", strconv.FormatInt(*g.LockVersion, 10)), opt("note", note))

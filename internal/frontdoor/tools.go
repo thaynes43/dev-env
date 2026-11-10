@@ -62,7 +62,7 @@ var frontDoorTools = []map[string]any{
 		"priority": map[string]any{"type": "string"},
 	}, []string{"id", "priority"}),
 	// Closes an item and keeps it. opwork complete posts another evidence comment when Accepted is not yet allowed, so a repeat is not the same state.
-	tool("backlog_close", "Close with evidence; may take over from this caller's own finished coordinator for the item. Explicit holds stay held.", hints(false, false, false, false), map[string]any{
+	tool("backlog_close", "Close with evidence; caller's coordinator takeover requires reclaimed pod and stopped workers. Holds stay held; retry reclaim refusals later.", hints(false, false, false, false), map[string]any{
 		"id":       map[string]any{"type": "integer", "minimum": 1},
 		"evidence": map[string]any{"type": "string"},
 	}, []string{"id", "evidence"}),

@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/controller"
 )
 
 // Run the real opwork CLI against an offline, persistent tracker transport.
@@ -110,10 +112,20 @@ func newCloseTracker() closeTracker {
 
 func finishedCoordinator() apiv1.Session {
 	return apiv1.Session{
-		Name: "finished-coordinator", IdempotencyKey: "coordinator-528", Mode: "task", Phase: "Running",
+		Name: "finished-coordinator", IdempotencyKey: "coordinator-528", Mode: "task", Phase: phaseSuspended,
+		Conditions: []apiv1.Condition{{Type: conditionTerminalTaskReclaim, Status: "False", Reason: "Reclaimed"}},
 		AgentStatus: &apiv1.AgentStatus{State: "exited", Task: &apiv1.TaskResult{
 			FinishedAt: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC), Subtype: "success",
 		}},
+	}
+}
+
+func TestCloseReclaimConstantsMatchOperator(t *testing.T) {
+	if phaseSuspended != string(v1alpha1.PhaseSuspended) {
+		t.Fatalf("phase %q differs from operator %q", phaseSuspended, v1alpha1.PhaseSuspended)
+	}
+	if conditionTerminalTaskReclaim != controller.ConditionTerminalTaskReclaim {
+		t.Fatalf("condition %q differs from operator %q", conditionTerminalTaskReclaim, controller.ConditionTerminalTaskReclaim)
 	}
 }
 
@@ -229,6 +241,7 @@ func TestBacklogCloseRefusesWithoutWrites(t *testing.T) {
 	}{
 		{"running_owner", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) { s.AgentStatus.State = "running" }, "", "not proven finished"},
 		{"starting_owner", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) { s.AgentStatus.State = "starting" }, "", "not proven finished"},
+		{"nil_agent_status", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) { s.AgentStatus = nil }, "", "not proven finished"},
 		{"unknown_task", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) { s.AgentStatus.Task.Subtype = "" }, "", "Succeeded or Failed"},
 		{"timed_out_task", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) { s.AgentStatus.Task.TimedOut = true }, "", "Succeeded or Failed"},
 		{"missing_task", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) { s.AgentStatus.Task = nil }, "", "not proven finished"},
@@ -236,6 +249,29 @@ func TestBacklogCloseRefusesWithoutWrites(t *testing.T) {
 			s.AgentStatus.Task.FinishedAt = time.Time{}
 		}, "", "not proven finished"},
 		{"interactive_owner", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) { s.Mode = "interactive" }, "", "not proven finished"},
+		{"reclaim_grace", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) {
+			s.Conditions[0].Reason = "Grace"
+			s.Conditions[0].Status = "True"
+		}, "", "reclaimed after its workers stopped"},
+		{"reclaim_children_active", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) {
+			s.Conditions[0].Reason = "ChildrenActive"
+			s.Conditions[0].Status = "True"
+		}, "", "reclaimed after its workers stopped"},
+		{"reclaim_condition_absent", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) { s.Conditions = nil }, "", "exactly one TerminalTaskPodReclaim"},
+		{"running_phase_reclaimed", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) { s.Phase = "Running" }, "", "phase is not Suspended"},
+		{"missing_phase_reclaimed", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) { s.Phase = "" }, "", "phase is not Suspended"},
+		{"resumed_suspended_grace", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) {
+			s.OperatingMode = "Running"
+			s.Conditions[0] = apiv1.Condition{Type: conditionTerminalTaskReclaim, Status: "True", Reason: "Grace", Message: "explicit resume restarted compute grace"}
+		}, "", "reclaimed after its workers stopped"},
+		{"duplicate_reclaim_conditions", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) {
+			s.Conditions = append(s.Conditions, s.Conditions[0])
+		}, "", "exactly one TerminalTaskPodReclaim"},
+		{"conflicting_reclaim_conditions", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) {
+			s.Conditions = append([]apiv1.Condition{{Type: conditionTerminalTaskReclaim, Status: "True", Reason: "Grace"}}, s.Conditions...)
+		}, "", "exactly one TerminalTaskPodReclaim"},
+		{"unknown_reclaim_reason", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) { s.Conditions[0].Reason = "Unknown" }, "", "reclaimed after its workers stopped"},
+		{"unrelated_reclaimed_condition", func(_ *closeTracker, s *apiv1.Session, _ *[]apiv1.Session) { s.Conditions[0].Type = "OtherCondition" }, "", "exactly one TerminalTaskPodReclaim"},
 		{"other_callers_session", func(_ *closeTracker, _ *apiv1.Session, l *[]apiv1.Session) { *l = nil }, "", "could not prove"},
 		{"owner_name_differs", func(_ *closeTracker, s *apiv1.Session, l *[]apiv1.Session) {
 			s.Name = "different-coordinator"
@@ -259,7 +295,8 @@ func TestBacklogCloseRefusesWithoutWrites(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			state, sess := newCloseTracker(), finishedCoordinator()
-			list := []apiv1.Session{sess}
+			// A good list snapshot cannot substitute for proof from the GET.
+			list := []apiv1.Session{finishedCoordinator()}
 			if tc.change != nil {
 				tc.change(&state, &sess, &list)
 			}
@@ -347,6 +384,8 @@ func TestBacklogCloseUnprovenGuardSignal(t *testing.T) {
 		{"negative_lock", func(g map[string]any) { g["lockVersion"] = -1 }, "3", ""},
 		{"missing_hold", func(g map[string]any) { delete(g, "hold") }, "3", ""},
 		{"held_snapshot", func(g map[string]any) { g["hold"] = true }, "3", ""},
+		{"hold_reason_without_hold", func(g map[string]any) { g["reason"] = "hold" }, "3", ""},
+		{"empty_message", func(g map[string]any) { g["message"] = "" }, "3", ""},
 		{"missing_status", func(g map[string]any) { delete(g, "status") }, "3", ""},
 		{"wrong_item", func(g map[string]any) { g["id"] = 999 }, "3", ""},
 		{"unsupported_schema", func(g map[string]any) { g["schema"] = "future" }, "3", ""},
@@ -362,11 +401,15 @@ func TestBacklogCloseUnprovenGuardSignal(t *testing.T) {
 			if tc.change != nil {
 				tc.change(signal)
 			}
-			script := "#!/bin/sh\n" + tc.prefix + "cat <<'SIGNAL' >&2\n" + string(mustJSON(t, signal)) + "\nSIGNAL\nexit " + tc.exit + "\n"
-			base, api, _, _ := startDoor(t, script)
+			script := "#!/bin/sh\nprintf '%s\\n' \"$2\" >> \"$0.calls\"\n" + tc.prefix + "cat <<'SIGNAL' >&2\n" + string(mustJSON(t, signal)) + "\nSIGNAL\nexit " + tc.exit + "\n"
+			base, api, _, raw := startDoor(t, script)
 			text, isError := callClose(t, base)
 			if !isError || !strings.Contains(text, "Takeover not attempted: ") || len(api.requests()) != 0 {
 				t.Fatalf("unproven signal used: error=%v operator requests=%d", isError, len(api.requests()))
+			}
+			commands, err := os.ReadFile(raw.(*handler).work.path + ".calls")
+			if err != nil || string(commands) != "complete\n" {
+				t.Fatalf("unproven signal attempted a write after refusal: commands=%q err=%v", commands, err)
 			}
 		})
 	}
