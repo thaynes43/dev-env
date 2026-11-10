@@ -23,10 +23,11 @@ browser, no cookie, no write, and no second try after a 4xx.
    the identity field names only. Every Admin and Analytics read returned 403
    `permission_denied`. The two undocumented usage routes, called with that
    same key as a Bearer token, returned 401. No plan number came back.
-3. The smallest reader that fits the rules is no plan reader. The usage page
-   should keep counting what dev-env itself sends, and say in plain words that
-   Cursor's plan allowance cannot be read with the key a session pod holds.
-   Adopting the cookie route would be a new choice for Tom. It was not tried.
+3. None of these tools is a reader we can add. The usage page should keep
+   counting what dev-env itself sends, and say in plain words that Cursor's
+   plan allowance cannot be read with the key a session pod holds. Adopting
+   the cookie route would be a new choice for Tom. It was not tried. This
+   does not answer DESIGN-059 Q-02, which is the existing CLI screen reader.
 
 ## 1. Tools and the routes they call
 
@@ -182,9 +183,21 @@ limit and reset were not observed. From the sources, the numbers are:
 
 ## 5. Recommendation
 
-Do not build a plan reader in the #532 build session.
+Do not add any of these API or cookie readers in the #532 build session.
+That is not an answer to DESIGN-059 Q-02.
 
-The smallest thing that fits the rules:
+The repo already has one Cursor reader. It opens the CLI's Usage screen in a
+pseudo-terminal and types `/usage`. DESIGN-059 section 9 records that it has
+never produced a percent: one label glyph is not qualified, and the CLI's
+plan metadata carries no quota or reset. Even when that screen works, the
+percent is a rounded display value and the date is the billing month, not a
+weekly reset. Q-02 still asks Tom whether to run that reader inside a running
+Cursor task pod, at most every 30 minutes, after the glyph is qualified and
+under a standing approval, or to leave Cursor not connected. This note leaves
+that choice open. The community tools do not qualify the glyph or replace
+that screen.
+
+The smallest thing that fits the rules, for the routes this note checked:
 
 - Count Cursor from records dev-env already has: tasks, wall-clock minutes and
   the named model. That needs no Cursor call.
@@ -204,8 +217,9 @@ one. It reports team spend and request counts for an Enterprise team. It does
 not report the included-pool percent the dashboard shows one person. The key
 in this pod is not that key.
 
-This agrees with DESIGN-059 section 9 and with R-07's Cursor rows C3 and C4:
-the CLI output has no usage field, and the Admin API is team spend. R-07's C5
-(a copied JWT on a private `api2.cursor.sh` call) stays rejected. The 2026
-tools do not change that. They reach the individual percent only by sending a
-browser session.
+This agrees with DESIGN-059 section 9 and with R-07's Cursor rows C3 and C4.
+The CLI's plan metadata has no quota field. The `/usage` screen reader stays
+Q-02's choice, and this note does not close it. The Admin API is team spend.
+R-07's C5 (a copied JWT on a private `api2.cursor.sh` call) stays rejected.
+The 2026 tools do not change that. They reach the individual percent only by
+sending a browser session.
