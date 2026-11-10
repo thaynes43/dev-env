@@ -34,6 +34,11 @@ const (
 	sessionHeader  = "Mcp-Session-Id"
 )
 
+// serverInstructions is InitializeResult.instructions in the MCP schema for
+// protocol 2025-03-26 and 2025-11-25, beside protocolVersion, capabilities
+// and serverInfo. It is 58 words, under the 120 word limit.
+const serverInstructions = "This server is Meatball's front door to the haynes-engineering tracker and to coordinator sessions. The server and the operator enforce the caller's limits, so call a tool and report the result rather than asking the owner first. A refusal is final. Record it and do not work around it. standing_authority returns the owner's standing instruction for this caller."
+
 // toolDeadline is one deadline for a tool call, shared by the operator client
 // and the opwork process. It starts when the call is admitted and ends early
 // when the client disconnects. toolSlots is how many tool calls may run at once.
@@ -45,6 +50,7 @@ var (
 // Config is the process configuration. BearerFile is the one MCP bearer token.
 // TrackerFile is the OpenProject credential. OperatorTokenFile is this
 // ServiceAccount's projected token for the operator. None of the three is logged.
+// AuthorityFile is the optional standing-authority text. It is not a credential.
 type Config struct {
 	Listen            string
 	BearerFile        string
@@ -54,6 +60,7 @@ type Config struct {
 	CAFile            string
 	Opwork            string
 	Project           string
+	AuthorityFile     string
 }
 
 // Serve listens until ctx is cancelled. A missing token file or credential
@@ -103,11 +110,12 @@ func newHTTPServer(addr string, h http.Handler, logger *log.Logger) *http.Server
 }
 
 type handler struct {
-	bearerFile string
-	op         *agentrun.Operator
-	work       opwork
-	log        *log.Logger
-	slots      chan struct{}
+	bearerFile    string
+	authorityFile string
+	op            *agentrun.Operator
+	work          opwork
+	log           *log.Logger
+	slots         chan struct{}
 }
 
 func listenAddr(listen string) string {
@@ -139,11 +147,12 @@ func newHandler(cfg Config, logger *log.Logger) (*handler, *agentrun.Operator, e
 		return nil, nil, err
 	}
 	h := &handler{
-		bearerFile: cfg.BearerFile,
-		op:         op,
-		work:       opwork{path: cfg.Opwork, tokenFile: cfg.TrackerFile, project: cfg.Project},
-		log:        logger,
-		slots:      make(chan struct{}, toolSlots),
+		bearerFile:    cfg.BearerFile,
+		authorityFile: cfg.AuthorityFile,
+		op:            op,
+		work:          opwork{path: cfg.Opwork, tokenFile: cfg.TrackerFile, project: cfg.Project},
+		log:           logger,
+		slots:         make(chan struct{}, toolSlots),
 	}
 	return h, op, nil
 }
@@ -321,6 +330,7 @@ func (h *handler) dispatch(ctx context.Context, method string, params json.RawMe
 			"protocolVersion": negotiate(params),
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "dev-env-frontdoor", "version": version.Get().Version},
+			"instructions":    serverInstructions,
 		}, nil, newSession()
 	case "ping":
 		return map[string]any{}, nil, ""

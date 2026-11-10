@@ -3,8 +3,8 @@
 `dev-env-frontdoor` is the MCP server Meatball calls. It serves streamable HTTP
 at `POST /mcp` and speaks JSON-RPC. This page is the behaviour. The design is
 [DESIGN-060](../.agents/sagas/distributed-dev-env/designs/060-meatball-front-door.md).
-This repository does not install the cluster objects below and does not create
-a secret.
+This repository does not install the cluster objects below, does not create
+a secret, and does not install the standing-authority text.
 
 The process accepts one bearer token. A request without that exact token gets
 401 and an empty body, on every path, including `OPTIONS *`, with no
@@ -27,17 +27,18 @@ before it is returned.
 | `--listen` | no | Listen address. Default `:8080`. |
 | `--opwork` | no | opwork executable. Default `opwork`, which the image installs on `PATH`. |
 | `--project` | no | OpenProject project. Default `haynes-engineering`. |
+| `--authority-file` | no | Standing-authority text for this caller. `standing_authority` re-reads it on every call. Absent, missing or empty returns a fixed sentence. |
 
 The operator token is sent only to the operator, as `Authorization: Bearer`.
 The tracker credential is passed to opwork by file path (`OPWORK_TOKEN_FILE`)
 and is not an argument. Neither file is logged. The process does not call the
-Kubernetes API and does not mint a token. A missing file stops it before it
-listens.
+Kubernetes API and does not mint a token. A missing bearer file or tracker
+file stops it before it listens. A missing authority file does not.
 
 ## Tools
 
-`tools/list` returns these ten tools. Each description is at most 30 words, and
-the descriptions together are at most 300 words.
+`tools/list` returns these eleven tools. Each description is at most 30 words,
+and the descriptions together are 142 words.
 
 | Tool | What it does |
 |---|---|
@@ -51,6 +52,7 @@ the descriptions together are at most 300 words.
 | `session_status` | Read one session this caller started, by name or item, including any retained outcome. |
 | `session_stop` | Stop one session this caller started. A refusal from the operator is reported plainly. |
 | `waiting_on_tom` | List open Asks for this caller's sessions and items that need Tom's approval or answer. |
+| `standing_authority` | Read the owner's standing instruction installed for this caller. |
 
 A tool failure is a result with `isError` true and a plain-text message. An
 unknown tool name is a JSON-RPC error.
@@ -138,6 +140,73 @@ lists open Asks for sessions this caller started. When a route exists, the
 tool lists open Asks by id, session name, item and question. It does not print
 a session UID.
 
+## Annotations
+
+Every tool carries an `annotations` object with `readOnlyHint`,
+`destructiveHint`, `idempotentHint` and `openWorldHint`. Those four fields are
+`Tool.annotations` (`ToolAnnotations`) in the MCP schema for protocol
+2025-03-26 and for 2025-11-25. The names and the nesting are the same in both.
+This server follows that shared object and sets every field, so a client does
+not fall back to the schema defaults. In both schemas an omitted
+`readOnlyHint` means false, an omitted `destructiveHint` means true, an
+omitted `idempotentHint` means false, and an omitted `openWorldHint` means
+true. An unannotated tool is therefore not read-only, destructive and
+open-world.
+
+| Tool | readOnlyHint | destructiveHint | idempotentHint | openWorldHint | Why |
+|---|---|---|---|---|---|
+| `backlog_find` | true | false | true | false | It only searches the tracker. A repeat writes nothing and deletes nothing. |
+| `backlog_show` | true | false | true | false | It only reads one item. A repeat writes nothing and deletes nothing. |
+| `backlog_create` | false | false | true | false | It creates an item and keeps it. A repeat with the same epic and title reuses that source key and writes nothing when the text still matches. |
+| `backlog_groom` | false | false | false | false | It sets field text. `opwork groom` patches and adds a journal note on every call, so a repeat is not the same state. Nothing is deleted. |
+| `backlog_order` | false | false | true | false | It sets priority. `opwork order` writes nothing when that priority already matches. Nothing is deleted. |
+| `backlog_close` | false | false | true | false | It closes an item and keeps it. `opwork complete` writes nothing once the item is already Accepted. |
+| `coordinator_start` | false | false | true | true | It starts an agent that can reach the web. A repeat returns the retained session for `coordinator-<item>` and does not post another create while that record exists. |
+| `session_status` | true | false | true | false | It only reads one session this caller started. A repeat writes nothing. |
+| `session_stop` | false | true | true | false | It reaps the session. Clean-up then removes the task and keeps only rescued unpushed work. A second reap during that delete changes nothing. |
+| `waiting_on_tom` | true | false | true | false | It only lists Asks and held items. A repeat writes nothing and deletes nothing. |
+| `standing_authority` | true | false | true | false | It only reads the configured authority file. A repeat writes nothing and reads no other path. |
+
+`backlog_create` builds the source key `meatball-<epic>-` plus the first eight
+bytes of SHA-256 of the epic, a newline and the title. `opwork create` searches
+for that key first. When one item exists and its subject and supplied text
+still match, it reuses the item and writes nothing. When the text no longer
+matches, it refuses and writes nothing.
+
+`coordinator_start` calls `ExecuteCoordinatorStart`, which looks up the
+caller's retained session for `coordinator-<item>` and returns it without
+posting another create. This server does not pass a run label. After that
+Session record is deleted, a repeat starts a new session. The lookup is not a
+cross-replica lock; section 7.2 of the design states that limit. The started
+agent uses profile `dev`, which has web egress, so the tool is open-world.
+
+`opwork complete` writes an evidence comment and then accepts. A repeat after
+Accepted writes nothing, which is why the hint is idempotent. A close that
+stopped short of Accepted can record evidence again.
+
+## Instructions
+
+`initialize` returns `instructions`, the `InitializeResult` field in both
+schemas, beside `protocolVersion`, `capabilities` and `serverInfo`. The text
+is 58 words:
+
+> This server is Meatball's front door to the haynes-engineering tracker and to coordinator sessions. The server and the operator enforce the caller's limits, so call a tool and report the result rather than asking the owner first. A refusal is final. Record it and do not work around it. standing_authority returns the owner's standing instruction for this caller.
+
+## Standing authority
+
+`standing_authority` takes no arguments. On every call it re-reads the file
+named by `--authority-file` (`Config.AuthorityFile`). The path comes only from
+that flag. A call cannot name a path. The file must be a regular file of at
+most 4096 bytes and valid UTF-8. A larger file is a tool error and is never
+truncated. A control character other than newline (U+000A) and tab (U+0009),
+using Go's `unicode.IsControl`, is a tool error. Carriage return is refused.
+With no flag, or a missing or empty file, the tool returns exactly: "No
+standing authority is installed for this caller. Ask the owner once, and
+record the answer on the work item."
+
+The authority text is installed by haynes-ops as a ConfigMap and is Tom's
+text, changed only by a PR he approves. This repository installs none.
+
 ## Limits
 
 Each tool call has one deadline of 90 seconds. The operator client and the
@@ -163,6 +232,10 @@ haynes-ops installs these. This repository does not.
   `--token-file`.
 - **The tracker credential**, a separate file passed as
   `--tracker-token-file`. It is the OpenProject token, not the bearer.
+- **Standing authority**, optional. A ConfigMap of Tom's text, mounted as a
+  file and passed as `--authority-file`. Changed only by a PR Tom approves.
+  This repository does not install it. With no file the tool returns the
+  fixed sentence above.
 
 The image is `ghcr.io/thaynes43/dev-env-frontdoor`. `publish.yml` tags it
 `sha-<short>` from main and signs that digest. A pull request builds the image

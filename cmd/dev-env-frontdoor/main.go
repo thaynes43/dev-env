@@ -1,6 +1,7 @@
 // Command dev-env-frontdoor is Meatball's front-door MCP server (DESIGN-060).
 // It serves streamable HTTP at /mcp. The bearer token and the tracker
-// credential are files; neither is logged.
+// credential are files; neither is logged. The optional authority file is
+// Tom's standing instruction, re-read by standing_authority, and is not a credential.
 package main
 
 import (
@@ -42,6 +43,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&cfg.CAFile, "ca-file", "", "PEM CA for the operator API")
 	fs.StringVar(&cfg.Opwork, "opwork", "", "opwork executable")
 	fs.StringVar(&cfg.Project, "project", "", "OpenProject project")
+	fs.StringVar(&cfg.AuthorityFile, "authority-file", "", "optional standing-authority text, re-read on each standing_authority call")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
