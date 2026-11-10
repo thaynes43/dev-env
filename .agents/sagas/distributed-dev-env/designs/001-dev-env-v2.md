@@ -1623,7 +1623,7 @@ alert on a metric the operator serves.**
   so the series exist whenever the operator is scraped. `SessionCollector` reads both
   from the cache at scrape time. So every replica reports the same values, a new
   leader needs no warm-up, and a reaped session's series end with it (5.1: nothing
-  lives only in memory). A task clean-up rescue that ran in the record's hold pod is not in `dev_env_session_rescue_failed` while `RescueFailed` stays True (DESIGN-061 6). `DevEnvRescueFailed` does not page for that refusal; the clean-up's gauges count it.
+  lives only in memory). A task clean-up rescue that ran in the record's hold pod is not in `dev_env_session_rescue_failed` while `RescueFailed` stays True, including the daily retry's gap before the next rescue replaces it (DESIGN-061 6). `DevEnvRescueFailed` does not page for that refusal; the clean-up's gauges count it.
 - **The alert** lives in haynes-ops beside the operator: a ServiceMonitor on the
   metrics port, ingress for Prometheus in the operator's network policy, and a
   PrometheusRule `DevEnvRescueFailed` with severity `critical`, the one severity

@@ -191,9 +191,11 @@ func (c *SessionCollector) Collect(ch chan<- prometheus.Metric) {
 // stored on the next reconcile, and only for a refusal a retry does not
 // clear, so the gauge drops when the clean-up's rescue replaces an earlier
 // one, including before the refusal is stored and including a transient
-// failure in the same pod. An earlier rescue keeps its own pod UID and still
-// counts. DESIGN-025's hold pod is outside the task policy, so its failure
-// still counts.
+// failure in the same pod. The daily retry clears the hold pod UID before
+// the next rescue is stored; that gap stays out too, unless the failed
+// rescue ran in the recorded executor. An earlier rescue keeps its own pod
+// UID and still counts. DESIGN-025's hold pod is outside the task policy,
+// so its failure still counts.
 func taskCleanupRescueExcluded(s *v1alpha1.AgentSession, cleanupOn bool) bool {
 	if !taskPolicyOf(s, cleanupOn) {
 		return false
@@ -203,5 +205,14 @@ func taskCleanupRescueExcluded(s *v1alpha1.AgentSession, cleanupOn bool) bool {
 	if e == nil || rec == nil || rec.Superseded || rec.Result != v1alpha1.RescueFailed {
 		return false
 	}
-	return e.HoldPodUID != "" && rec.PodUID == e.HoldPodUID
+	if e.HoldPodUID != "" && rec.PodUID == e.HoldPodUID {
+		return true
+	}
+	// The daily retry clears HoldPodUID and writes a new HoldIntent before
+	// the next hold pod's rescue replaces status.rescue (taskCleanupRetry,
+	// and the Rescuing step). The volume-release wait in that gap is 30
+	// minutes, longer than DevEnvRescueFailed's 20 minutes, so the old
+	// rescue must stay out. A failure that ran in the recorded executor is
+	// not the clean-up's and still counts.
+	return e.Phase == v1alpha1.HomeExpiryRescuing && e.HoldIntent != "" && e.HoldPodUID == "" && rec.PodUID != e.ExecutorUID
 }
