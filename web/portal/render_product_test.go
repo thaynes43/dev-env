@@ -1518,7 +1518,7 @@ func TestRenderCursorMissingAllowanceView(t *testing.T) {
 		t.Fatal(err)
 	}
 	section := allowanceBlock(t, body, true)
-	if strings.Count(section, "Not connected") != 4 || !strings.Contains(section, "No Cursor account view is connected. Nothing here is estimated.") || strings.Contains(section, "%") || strings.Contains(section, "meter-fill") || strings.Contains(section, "<table") {
+	if strings.Count(section, "Not connected") != 2 || !strings.Contains(section, allowanceNoReading) || strings.Count(section, ">No reading<") != 2 || !strings.Contains(section, "No Cursor account view is connected. Nothing here is estimated.") || strings.Contains(section, "%") || strings.Contains(section, "meter-fill") || strings.Contains(section, "<table") {
 		t.Fatalf("usage cursor view: %s", section)
 	}
 }

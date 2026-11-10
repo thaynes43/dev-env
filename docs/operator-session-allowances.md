@@ -118,10 +118,12 @@ No entry, or an old one, means one of these:
 - No Codex task or session made a model call, and no Claude remote or local
   session got a reply, since the pod started. Headless Claude tasks never give
   a reading.
-- Nothing has run since the last reading. It ages, with its time shown. After
-  its reset passes, the portal keeps the value and says the reported reset
-  time has passed. The full staleness rule of DESIGN-059 section 8 (a greyed
-  value after 30 minutes, no value after the reset) is a later portal story.
+- Nothing has run since the last reading. It ages, with its time shown. Older
+  than 30 minutes, the portal greys the percent and says how long ago it was
+  reported, in plain words (for example "reported 3 hours ago"). A reading of
+  exactly 30 minutes stays plain. One a few seconds older says "reported 31
+  minutes ago". After its reset passes, the percent is not shown: that window
+  is over, and the page says when the last reading was.
 - A Codex remote host session wrote no rollout. That is not verified yet;
   Codex tasks do write one.
 - agentd refused it: see `status.agent.problems` above.
@@ -131,13 +133,26 @@ No entry, or an old one, means one of these:
 ## The portal
 
 A portal with the built-in rule shows the reading in **Last reported, not
-current**: the percent, the window, the reported reset, "Received" with the
-reading time, "Passive event" and "Account not verified". An older portal, which
-lacks the rule, treats the `session-v1` item like any item no private context
-trusts: the provider's tile shows Unknown with no value, and the slot's older
-last-reported value for that provider is not shown. Nothing breaks. Roll the
-portal first, then the operator with the flag, then the agent image. An older
-operator ignores the heartbeat field, so agent images can roll at any time.
+current**. While the reading is 30 minutes old or newer and its reset is still
+ahead, the percent is shown in normal text, with the window, the reported
+reset, "Received" and the reading time, "Passive event" and "Account not
+verified". A reading of exactly 30 minutes stays plain. Older than 30
+minutes, that percent is greyed and the line says its age in plain words, for
+example "reported 3 hours ago". One a few seconds older says "reported 31
+minutes ago". Once the reported
+reset has passed, the percent is not shown. The line says "This window is
+over: the reported reset has passed, so its percent is not shown." and "Last
+reading was <time>." With no reading, Claude and Codex say "Nothing has
+reported yet. A reading appears when a new Codex task, or a remote Claude
+session, runs on a current image and the operator is collecting those
+readings." Cursor and Grok stay not connected.
+
+An older portal, which lacks the rule, treats the `session-v1` item like any
+item no private context trusts: the provider's tile shows Unknown with no
+value, and the slot's older last-reported value for that provider is not
+shown. Nothing breaks. Roll the portal first, then the operator with the
+flag, then the agent image. An older operator ignores the heartbeat field,
+so agent images can roll at any time.
 
 To turn it off, remove the flag. The ConfigMap keeps its last readings and is
 no longer read or written.

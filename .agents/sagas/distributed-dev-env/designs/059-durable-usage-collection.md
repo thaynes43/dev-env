@@ -353,7 +353,19 @@ greyed with "as of <time>". Once the reset time has passed, it shows no
 percent, only "Reset <time>; no reading since", because the new week's use
 is unknown, not zero. The portal change is a later story. *Amended
 2026-11-10:* not built in slice 1. Until that story, a last-reported line
-keeps the percent and says the reported reset time has passed.
+keeps the percent and says the reported reset time has passed. *Amended
+2026-11-10, OP523:* the portal rule is built. A reading older than 30
+minutes is greyed and says its age in plain words, for example "reported 3
+hours ago". A reading of exactly 30 minutes still shows a plain percent. A
+reading a few seconds past that says "reported 31 minutes ago", so the grey
+line does not use the same words. Once the reported reset has passed, the
+percent is not shown. The line says "This window is over: the reported reset
+has passed, so its percent is not shown." and "Last reading was <time>."
+With no reading, Claude and Codex say "Nothing has reported yet. A reading
+appears when a new Codex task, or a remote Claude session, runs on a current
+image and the operator is collecting those readings." The operator serves
+that empty tile and an unconfigured source as the same value, so the sentence
+includes the collecting condition. Cursor and Grok stay not connected.
 
 ## 9. Cursor and Grok
 
@@ -482,9 +494,10 @@ The coordinator accepted seven differences from sections 4.4, 7 and 8 on
    context.
 6. **Both Codex windows.** Every Codex window in the record is sent, each
    labelled by its length. The weekly window is the one of 10080 minutes.
-7. **Staleness.** Section 8 is not built. The built-in rule marks a measure
-   expired once its reset passes, as data only. The portal keeps the percent
-   on a last-reported line and says the reported reset time has passed.
+7. **Staleness.** Section 8 was not built in slice 1. The built-in rule marks
+   a measure expired once its reset passes, as data only. The portal then
+   kept the percent and said the reported reset time had passed. OP523 builds
+   the portal rule; see the amendment in section 8.
 
 Known limits:
 
@@ -492,5 +505,6 @@ Known limits:
   or local Claude sessions whose pod follows the keeper's projection. With
   no such session running, the Claude numbers age. They are shown as last
   reported, never as current.
-- **Section 8 is a later portal story.** The 30-minute grey and the
-  no-percent-after-reset state are not built.
+- **Section 8 is built (OP523).** A reading older than 30 minutes is greyed
+  with its age in plain words. After the reported reset, the percent is not
+  shown. With no reading, Claude and Codex say nothing has reported yet.

@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -80,14 +81,16 @@ func TestAllowanceLastReportedAfterReset(t *testing.T) {
 	}
 	body := allowanceRender(t, page)
 	for _, want := range []string{"No current percent allowance. Nothing is estimated.", "Unknown · No current percent allowance",
-		"The reported reset time has passed; this value is from before it. Not current: the reported reset time has passed.",
-		`provider measured <time datetime="2026-11-01T09:00:00Z">1 Nov 09:00 UTC</time>`} {
+		"This window is over: the reported reset has passed, so its percent is not shown.",
+		"Last reading was 2 Nov 13:40 UTC.",
+		`provider measured <time datetime="2026-11-01T09:00:00Z">1 Nov 09:00 UTC</time>`,
+		`class="allowance-last-over"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("lacks %q", want)
 		}
 	}
-	if strings.Contains(body, "No percent allowance reported") || strings.Contains(body, "Reported reset: 11 Nov") {
-		t.Error("passed reset still reads as no percent or a future reset")
+	if strings.Contains(body, "95% used") || strings.Contains(body, "No percent allowance reported") || strings.Contains(body, "Reported reset: 11 Nov") || strings.Contains(body, "<strong>") {
+		t.Error("passed reset still shows a percent or a future reset")
 	}
 }
 
@@ -152,7 +155,8 @@ func TestAllowanceLastReportedUnverifiedFutureAndMoreLabel(t *testing.T) {
 	body := allowanceRender(t, page)
 	codex := glanceTile(t, glanceSection(t, body), "Codex")
 	for _, want := range []string{
-		"Not current or trusted: the reported reset time has passed and this reading&#39;s account is not verified.",
+		"This window is over: the reported reset has passed, so its percent is not shown.",
+		"Last reading was 2 Nov 13:40 UTC.",
 		"That observation time is in the future.",
 		`aria-label="Codex: 1 more last-reported value"`,
 	} {
@@ -160,7 +164,186 @@ func TestAllowanceLastReportedUnverifiedFutureAndMoreLabel(t *testing.T) {
 			t.Errorf("Codex tile lacks %q:\n%s", want, codex)
 		}
 	}
+	if strings.Contains(codex, "95% used") || strings.Contains(body, "95% used") {
+		t.Error("a passed reset still shows its percent")
+	}
+	if !strings.Contains(body, "Account not verified") {
+		t.Error("an unverified account was dropped after its reset")
+	}
 	if strings.Contains(body, "a reset has happened") {
 		t.Error("copy claims a reset happened")
+	}
+}
+
+// The four Usage states of DESIGN-059 section 8. The template does not branch
+// on color scheme: both themes paint allowance-last-fresh with --ink and
+// allowance-last-stale with --muted.
+func TestAllowanceReadingAgeFourStates(t *testing.T) {
+	asOf := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	line := func(percent string, read, reset time.Time) ProductAllowanceLastReported {
+		return ProductAllowanceLastReported{
+			Percent: percent, Window: "7 days",
+			Reset:        "Reported reset: " + reset.UTC().Format("2 Jan 15:04 UTC") + ".",
+			ReadAt:       read.UTC().Format("2 Jan 15:04 UTC"),
+			ReadAtExact:  read.UTC().Format(time.RFC3339Nano),
+			ResetAtExact: reset.UTC().Format(time.RFC3339Nano),
+			Source:       "Passive event", Account: "Account not verified",
+			Why: "Not current or trusted: this reading's account is not verified.",
+		}
+	}
+	page := func(rows []ProductAllowance) string {
+		t.Helper()
+		return allowanceRender(t, ProductPage{
+			Title: "Sessions", Connected: true, Complete: true, Filter: ProductFilter{View: "usage"}, AsOf: asOf,
+			Usage: &ProductUsage{Allowance: rows},
+		})
+	}
+	tile := func(body, provider string) string {
+		t.Helper()
+		return glanceTile(t, glanceSection(t, body), provider)
+	}
+
+	freshRead := asOf.Add(-12 * time.Minute)
+	fresh := page([]ProductAllowance{{Provider: "Claude", Value: AllowanceUnknown, Reason: "Allowance freshness unknown or expired",
+		LastReported: []ProductAllowanceLastReported{line("34% used", freshRead, asOf.Add(48*time.Hour))}}})
+	claude := tile(fresh, "Claude")
+	for _, want := range []string{`class="allowance-last-fresh"`, "<strong>34% used</strong>", "Last reported, not current"} {
+		if !strings.Contains(claude, want) {
+			t.Errorf("fresh tile lacks %q:\n%s", want, claude)
+		}
+	}
+	for _, want := range []string{
+		"Received <time datetime=\"2026-11-10T11:48:00Z\">10 Nov 11:48 UTC</time>",
+		"Reported reset: 12 Nov 12:00 UTC.",
+	} {
+		if !strings.Contains(fresh, want) {
+			t.Errorf("fresh account section lacks %q", want)
+		}
+	}
+	if strings.Contains(claude, "allowance-last-stale") || strings.Contains(claude, "allowance-last-age") || strings.Contains(claude, allowanceWindowOver) {
+		t.Errorf("fresh tile is greyed or past its reset:\n%s", claude)
+	}
+
+	// Exactly 30 minutes is still a plain percent. Older than that is greyed.
+	boundary := page([]ProductAllowance{{Provider: "Codex", Value: AllowanceUnknown, Reason: "Allowance freshness unknown or expired",
+		LastReported: []ProductAllowanceLastReported{
+			line("10% used", asOf.Add(-allowanceReportedStaleAfter), asOf.Add(24*time.Hour)),
+			line("11% used", asOf.Add(-allowanceReportedStaleAfter-time.Second), asOf.Add(24*time.Hour)),
+		}}})
+	codex := tile(boundary, "Codex")
+	if !strings.Contains(codex, `class="allowance-last-fresh"`) || !strings.Contains(codex, "<strong>10% used</strong>") {
+		t.Errorf("a 30 minute reading was greyed:\n%s", codex)
+	}
+	if !strings.Contains(codex, `class="allowance-last-stale"`) || !strings.Contains(codex, "<strong>11% used</strong>") || !strings.Contains(codex, "reported 31 minutes ago") {
+		t.Errorf("a reading older than 30 minutes lacks its age:\n%s", codex)
+	}
+	if strings.Contains(codex, "reported 30 minutes ago") {
+		t.Error("a greyed reading says the same age as a plain 30 minute reading")
+	}
+
+	old := page([]ProductAllowance{{Provider: "Claude", Value: AllowanceUnknown, Reason: "Allowance freshness unknown or expired",
+		LastReported: []ProductAllowanceLastReported{line("65% used", asOf.Add(-3*time.Hour), asOf.Add(36*time.Hour))}}})
+	claude = tile(old, "Claude")
+	for _, want := range []string{`class="allowance-last-stale"`, "<strong>65% used</strong>", "reported 3 hours ago"} {
+		if !strings.Contains(claude, want) {
+			t.Errorf("stale tile lacks %q:\n%s", want, claude)
+		}
+	}
+	if strings.Contains(claude, allowanceWindowOver) || strings.Contains(claude, "allowance-last-fresh") {
+		t.Errorf("stale tile dropped its percent:\n%s", claude)
+	}
+
+	past := page([]ProductAllowance{{Provider: "Codex", Value: AllowanceUnknown, Reason: "No percent allowance reported",
+		LastReported: []ProductAllowanceLastReported{line("95% used", asOf.Add(-2*time.Hour), asOf.Add(-time.Minute))}}})
+	codex = tile(past, "Codex")
+	for _, want := range []string{`class="allowance-last-over"`, allowanceWindowOver, "Last reading was 10 Nov 10:00 UTC."} {
+		if !strings.Contains(codex, want) {
+			t.Errorf("past reset tile lacks %q:\n%s", want, codex)
+		}
+	}
+	if strings.Contains(past, "95% used") || strings.Contains(past, "<strong>") {
+		t.Error("past reset still shows a percent")
+	}
+
+	none := page(nil)
+	for _, provider := range []string{"Claude", "Codex"} {
+		got := tile(none, provider)
+		if !strings.Contains(got, `tone-muted">No reading<`) || !strings.Contains(got, allowanceNoReading) {
+			t.Errorf("%s tile lacks the no-reading sentence:\n%s", provider, got)
+		}
+		if strings.Contains(got, ">Unknown<") || strings.Contains(got, "Unknown ·") || strings.Contains(got, "%") {
+			t.Errorf("%s tile still says Unknown or shows a percent:\n%s", provider, got)
+		}
+	}
+	for _, provider := range []string{"Cursor", "Grok"} {
+		got := tile(none, provider)
+		if !strings.Contains(got, `tone-muted">Not connected<`) || strings.Contains(got, allowanceNoReading) {
+			t.Errorf("%s should stay not connected:\n%s", provider, got)
+		}
+	}
+}
+
+func TestReportedAgeWords(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{30 * time.Second, "reported just now"},
+		{time.Minute, "reported 1 minute ago"},
+		{30*time.Minute + time.Second, "reported 31 minutes ago"},
+		{31 * time.Minute, "reported 31 minutes ago"},
+		{time.Hour, "reported 1 hour ago"},
+		{3 * time.Hour, "reported 3 hours ago"},
+		{26 * time.Hour, "reported 1 day ago"},
+		{3 * 24 * time.Hour, "reported 3 days ago"},
+	}
+	for _, tc := range cases {
+		if got := reportedAgo(tc.d); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}
+
+func TestAllowanceReadingColorsExistInBothThemes(t *testing.T) {
+	lightAt := strings.Index(viewsStyle, "@media (prefers-color-scheme: light)")
+	if lightAt < 0 {
+		t.Fatal("light theme missing")
+	}
+	dark := viewsStyle[:lightAt]
+	light := viewsStyle[lightAt:]
+	for name, block := range map[string]string{"dark": dark, "light": light} {
+		if !strings.Contains(block, "--ink:") || !strings.Contains(block, "--muted:") {
+			t.Errorf("%s theme lacks --ink or --muted", name)
+		}
+	}
+	for _, rule := range []string{
+		".allowance-last-fresh .allowance-last-value strong { color: var(--ink);",
+		".allowance-last-stale .allowance-last-value, .allowance-last-stale .allowance-last-value strong, .allowance-last-stale .allowance-last-age { color: var(--muted); }",
+		".allowance-last-over-line, .glance-gap { color: var(--ink); }",
+	} {
+		if !strings.Contains(viewsStyle, rule) {
+			t.Errorf("stylesheet lacks %q", rule)
+		}
+	}
+}
+
+func TestAllowanceReadingCopyWrapsOnAPhone(t *testing.T) {
+	for _, rule := range []string{
+		".allowance-last-age, .allowance-last-over-line, .glance-gap { margin: 2px 0 0; max-width: 100%; font-size: 13px; font-weight: 400; letter-spacing: 0; line-height: 1.45; overflow-wrap: anywhere; }",
+		".glance-gap { margin: 0; }",
+		".glance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));",
+	} {
+		if !strings.Contains(viewsStyle, rule) {
+			t.Errorf("phone layout lacks %q", rule)
+		}
+	}
+	phone := regexp.MustCompile(`(?s)@media \(max-width: 700px\) \{.*?\n\}`).FindString(viewsStyle)
+	if phone == "" || !strings.Contains(phone, "overflow: visible") {
+		t.Fatal("phone layout is missing or clips the page")
+	}
+	for _, sel := range []string{".glance-gap", ".allowance-last-age", ".allowance-last-over-line"} {
+		if strings.Contains(viewsStyle, sel+" {") && strings.Contains(viewsStyle, sel+" { white-space: nowrap") {
+			t.Errorf("%s does not wrap", sel)
+		}
 	}
 }

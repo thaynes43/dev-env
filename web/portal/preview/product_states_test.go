@@ -235,6 +235,51 @@ func TestTaskFailureStatePreviews(t *testing.T) {
 	}
 }
 
+func TestReadingAgePreviewsSayTheFourStates(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeProductStates(dir); err != nil {
+		t.Fatal(err)
+	}
+	checks := map[string][]string{
+		"usage-reading-fresh.html": {"allowance-last-fresh", "<strong>34% used</strong>", "Reported reset:"},
+		"usage-reading-stale.html": {"allowance-last-stale", "<strong>34% used</strong>", "reported 3 hours ago"},
+		"usage-reading-reset.html": {"allowance-last-over", "This window is over: the reported reset has passed, so its percent is not shown.", "Last reading was 10 Nov 10:00 UTC."},
+		"usage-reading-none.html":  {"Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image and the operator is collecting those readings.", ">No reading<"},
+	}
+	for name, wants := range checks {
+		body, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(body)
+		for _, want := range wants {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
+		}
+		if name == "usage-reading-reset.html" && strings.Contains(text, "34% used") {
+			t.Errorf("%s still shows the percent", name)
+		}
+	}
+	none, err := os.ReadFile(filepath.Join(dir, "usage-reading-none.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claude := glanceTileText(string(none), "Claude")
+	if strings.Contains(claude, ">Unknown<") || !strings.Contains(claude, ">No reading<") {
+		t.Errorf("Claude no-reading tile:\n%s", claude)
+	}
+}
+
+func glanceTileText(section, provider string) string {
+	for _, tile := range strings.Split(section, `<li class="glance-tile">`)[1:] {
+		if strings.Contains(tile, `<h3 class="glance-name">`+provider+`</h3>`) {
+			return tile
+		}
+	}
+	return ""
+}
+
 func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 	dir := t.TempDir()
 	if err := writeProductStates(dir); err != nil {
@@ -299,8 +344,13 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 		}
 		// The Grok row (OP192 S1) is Not connected in every preview state.
 		wantNotConnected := 1
-		if tc.disconnected {
+		if tc.disconnected && !strings.HasPrefix(tc.name, "usage") {
 			wantNotConnected = 3
+		}
+		if tc.disconnected && strings.HasPrefix(tc.name, "usage") {
+			if !strings.Contains(block, "Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image and the operator is collecting those readings.") || strings.Count(block, ">No reading<") != 2 {
+				t.Errorf("%s: Claude and Codex should say nothing has reported yet", tc.name)
+			}
 		}
 		if strings.Count(block, "Not connected") != wantNotConnected {
 			t.Errorf("%s: Not connected count %d, want %d: %s", tc.name, strings.Count(block, "Not connected"), wantNotConnected, block)
