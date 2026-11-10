@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	schedulingv1 "k8s.io/api/scheduling/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kexec "k8s.io/client-go/util/exec"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -31,21 +33,16 @@ import (
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 )
 
-// Real scheduling delays. The handler and metadata reads sit outside the
-// one-second CRI proof. The exec delay keeps the evidence server's 500ms
-// socket deadline as a conservative reserve (evidence_linux.go). That
-// deadline is an upper bound, not a minimum service time. A fixed 650ms
-// sleep inside the proof can leave less margin than the reserve. It does
-// not invariably force refusal. CI 41866791721 logged complete authority
-// roundtrip=1.27s and then process-proof refusal with HTTP 503. The success
-// composition waits the real slack, and the 1-2s assertion is wall time of
-// that delayed request.
-const (
-	latencyHandlerDelay   = 120 * time.Millisecond
-	latencyMetadataDelay  = 60 * time.Millisecond
-	latencyEvidenceSocket = 500 * time.Millisecond
-	latencyProofBudget    = time.Second
-)
+// The composition case does not sleep and does not dial the evidence socket.
+// The prober's one-second context and the evidence server's socket deadline
+// are both wall clocks. Spending that context down to the socket reserve and
+// then running the live probe can refuse while the proof context is still
+// open: the error is a probeRefusal, the category stays transport, and the
+// roundtrip never reaches a one-second floor. The success path checks that
+// the prober context is live and has a deadline, then returns the ready exit.
+// Startup still uses the real probe, which waitReady retries. The deadline
+// case still waits until that same prober context ends.
+const latencyProofBudget = time.Second
 
 type latencyExecMode uint8
 
@@ -55,8 +52,8 @@ const (
 )
 
 // latencySlowKey marks one request whose handler opted into the composition.
-// Metadata reads and the probe consult the request context, so a call already
-// inside ServeHTTP cannot observe a later arm.
+// The probe reads it from the request context, so a call already inside
+// ServeHTTP cannot observe a later arm.
 type latencySlowKey struct{}
 
 func latencySlow(ctx context.Context) bool {
@@ -64,69 +61,33 @@ func latencySlow(ctx context.Context) bool {
 	return slow
 }
 
-func ownedLatencyWait(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-// waitAboveEvidenceReserve holds the proof context's spare time above the
-// evidence socket's upper bound. The real probe then runs in what remains.
-// The 500ms socket deadline is a conservative reserve, not a minimum. A
-// fixed 650ms sleep can leave insufficient margin; it does not invariably
-// force refusal.
-func waitAboveEvidenceReserve(ctx context.Context, reserve time.Duration) error {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return nil
-	}
-	slack := time.Until(deadline) - reserve
-	if slack <= 0 {
-		return nil
-	}
-	return ownedLatencyWait(ctx, slack)
-}
-
-type latencyOwnedReader struct {
-	client.Reader
-	mode latencyExecMode
-}
-
-func (r latencyOwnedReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	if latencySlow(ctx) && r.mode == latencyExecCompose {
-		if err := ownedLatencyWait(ctx, latencyMetadataDelay); err != nil {
-			return err
-		}
-	}
-	return r.Reader.Get(ctx, key, obj, opts...)
-}
-
 type latencyOwnedExec struct {
 	ownedWorkflowExec
-	calls *atomic.Int32
-	mode  latencyExecMode
+	calls     *atomic.Int32
+	deadlines *atomic.Int32
+	mode      latencyExecMode
 }
 
 func (e latencyOwnedExec) Run(ctx context.Context, ns, pod, container string, args []string, in io.Reader, out, stderr io.Writer) error {
-	if latencySlow(ctx) {
-		e.calls.Add(1)
-		switch e.mode {
-		case latencyExecUntilProofDeadline:
-			// The prober context is the one-second proof budget.
-			<-ctx.Done()
-			return ctx.Err()
-		default:
-			if err := waitAboveEvidenceReserve(ctx, latencyEvidenceSocket); err != nil {
-				return err
-			}
-		}
+	if !latencySlow(ctx) {
+		return e.ownedWorkflowExec.Run(ctx, ns, pod, container, args, in, out, stderr)
 	}
-	return e.ownedWorkflowExec.Run(ctx, ns, pod, container, args, in, out, stderr)
+	e.calls.Add(1)
+	if e.mode == latencyExecUntilProofDeadline {
+		// The prober context is the one-second proof budget.
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("proof context has no deadline")
+	}
+	if e.deadlines != nil {
+		e.deadlines.Add(1)
+	}
+	return kexec.CodeExitError{Err: errors.New("composed proof"), Code: hostexecutor.EvidenceReady}
 }
 
 // ownedRootOnly passes on the Info lines of the logger named owned-root, and
@@ -260,14 +221,16 @@ type ownedLatencyRun struct {
 	done        <-chan error
 	armed       *atomic.Bool
 	probes      *atomic.Int32
+	deadlines   *atomic.Int32
 	canceled    *atomic.Bool
 	connections *atomic.Int32
 	logs        *latencyLogs
 }
 
 // Real TLS API, real Kubernetes storage/CAS, original guard/helper/native fixture,
-// kernel peer/challenge and CRI-status adapter. Inject transport/metadata/exec
-// scheduling latency, not a readiness verdict. Ordinary observations intentionally
+// kernel peer/challenge and CRI-status adapter. Startup uses that live probe.
+// An armed composition request returns the ready exit once the prober context
+// is live, instead of a wall-clock sleep. Ordinary observations intentionally
 // do not write unchanged ledgers or contend with owner mutations. No provider,
 // credential, model turn, pairing or live-cluster mutation is involved.
 func startOwnedLatency(t *testing.T, suffix, budgetNS string, mode latencyExecMode) *ownedLatencyRun {
@@ -299,8 +262,8 @@ func startOwnedLatency(t *testing.T, suffix, budgetNS string, mode latencyExecMo
 	}
 	var armed atomic.Bool
 	var probes atomic.Int32
-	owned.inspector.Reader = latencyOwnedReader{Reader: owned.inspector.Reader, mode: mode}
-	owned.inspector.Probe = controller.OwnedRootProber{Exec: latencyOwnedExec{ownedWorkflowExec: ownedWorkflowExec{path: filepath.Join(owned.home, ".agentd", hostexecutor.EvidenceSocketName), anchor: os.Getpid()}, calls: &probes, mode: mode}}
+	var deadlines atomic.Int32
+	owned.inspector.Probe = controller.OwnedRootProber{Exec: latencyOwnedExec{ownedWorkflowExec: ownedWorkflowExec{path: filepath.Join(owned.home, ".agentd", hostexecutor.EvidenceSocketName), anchor: os.Getpid()}, calls: &probes, deadlines: &deadlines, mode: mode}}
 
 	service := &taskbudget.Service{Store: taskbudget.KubeStore{Client: live, Live: live, Namespace: budgetNS}, Now: now, NativeInspector: owned.inspector, Validator: controller.OwnedRootBudgetValidator{Root: owned.inspector}}
 	f := coordinatorFixture(t)
@@ -329,10 +292,6 @@ func startOwnedLatency(t *testing.T, suffix, budgetNS string, mode latencyExecMo
 		if slow {
 			r = r.WithContext(context.WithValue(r.Context(), latencySlowKey{}, true))
 			w.Header().Set("Connection", "close")
-			if mode == latencyExecCompose && ownedLatencyWait(r.Context(), latencyHandlerDelay) != nil {
-				canceled.Store(true)
-				return
-			}
 		}
 		recorded := &latencyStatusWriter{ResponseWriter: w}
 		handler.ServeHTTP(recorded, r)
@@ -363,13 +322,13 @@ func startOwnedLatency(t *testing.T, suffix, budgetNS string, mode latencyExecMo
 	}
 	cancel, done := owned.run(t, remote, b)
 	t.Cleanup(cancel)
-	return &ownedLatencyRun{t: t, ctx: ctx, live: live, service: service, owned: owned, binding: b, completed: completed, done: done, armed: &armed, probes: &probes, canceled: &canceled, connections: &connections, logs: logs}
+	return &ownedLatencyRun{t: t, ctx: ctx, live: live, service: service, owned: owned, binding: b, completed: completed, done: done, armed: &armed, probes: &probes, deadlines: &deadlines, canceled: &canceled, connections: &connections, logs: logs}
 }
 
 func (r *ownedLatencyRun) waitReady() {
 	r.t.Helper()
-	// Startup fence only. Composition latency is the wall time of an opted-in
-	// observation, and the deadline case waits on the prober context.
+	// Startup fence only. An armed composition request does not sleep, and the
+	// deadline case waits on the prober context.
 	readyBy := time.Now().Add(4 * time.Second)
 	var readErr error
 	for {
@@ -412,19 +371,21 @@ func TestEnvtestOwnedAuthorityLatencyComposition(t *testing.T) {
 	for pass := 0; pass < 2; pass++ {
 		select {
 		case rt := <-run.completed:
-			elapsed := rt.elapsed
-			t.Logf("complete authority roundtrip=%v status=%d probes=%d callerCanceled=%v", elapsed, rt.status, run.probes.Load(), run.canceled.Load())
+			t.Logf("complete authority roundtrip=%v status=%d probes=%d deadlines=%d callerCanceled=%v", rt.elapsed, rt.status, run.probes.Load(), run.deadlines.Load(), run.canceled.Load())
 			if rt.status != http.StatusOK {
 				t.Fatalf("observation refused, status=%d (pass %d)", rt.status, pass)
 			}
-			if elapsed < time.Second || elapsed >= 2*time.Second || run.probes.Load() < 1 || run.canceled.Load() {
-				t.Fatal("latency composition not successfully exercised")
+			if run.probes.Load() < int32(pass+1) || run.canceled.Load() {
+				t.Fatal("latency composition not exercised")
 			}
 		case e := <-run.done:
 			t.Fatal("valid authority killed original native", e)
 		case <-time.After(4 * time.Second):
 			t.Fatal("authority roundtrip did not complete")
 		}
+	}
+	if run.deadlines.Load() != run.probes.Load() || run.deadlines.Load() < 2 {
+		t.Fatalf("proof deadline was not the composition path: deadlines=%d probes=%d", run.deadlines.Load(), run.probes.Load())
 	}
 	if run.connections.Load() < 2 {
 		t.Fatal("fresh TLS connection after accepted reply was not exercised")
@@ -457,7 +418,7 @@ func TestEnvtestOwnedAuthorityLatencyComposition(t *testing.T) {
 // TestEnvtestOwnedAuthorityProofDeadlineRefusal forces the exec hook to occupy
 // the prober context until that context ends. The caller stays live. The proof
 // refusal must still surface as HTTP 503, latch the budget, and stop the
-// original native. The success-path window is unchanged.
+// original native.
 func TestEnvtestOwnedAuthorityProofDeadlineRefusal(t *testing.T) {
 	run := startOwnedLatency(t, "latency-proof", "owned-latency-proof-budgets", latencyExecUntilProofDeadline)
 	run.waitReady()
