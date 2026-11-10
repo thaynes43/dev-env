@@ -284,6 +284,11 @@ var guardedCalls = []struct {
 	{"RemoveFinalizer", "releaseExpiryHome", "expiryVolumeRemovalAllowed"},
 	{"releaseExpiryHome", "deleteExpiryHome", "expiryVolumeRemovalAllowed"},
 	{"deleteExpiryHome", "removeExpiredHome", "noPodUsesHome"},
+	// The task clean-up's one more (DESIGN-061 2, item 5): a finished task
+	// Session whose record is Expired, deleted with UID and resourceVersion
+	// after its own guard, from the one caller that read it uncached.
+	{"Delete", "deleteCleanedTaskSession", "taskSessionRemovalAllowed"},
+	{"deleteCleanedTaskSession", "removeCleanedTaskSession", "taskSessionRemovalAllowed"},
 	// DESIGN-054's releaser: the scheduled-work finalizer, and only it, lifted
 	// after its own guard, from the one caller that recorded the occurrence's
 	// outcome or proved there is none to record

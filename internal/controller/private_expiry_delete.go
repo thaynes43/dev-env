@@ -51,22 +51,43 @@ func homeExpiryRemovingHome(s *v1alpha1.AgentSession) bool {
 // any more; an owner hold still stops it, and with the delete off it waits.
 func (r *Reconciler) stepExpiryDelete(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
 	e := v.record()
-	if !r.homeExpiryDeleteOn() {
+	task := r.taskPolicy(v.s)
+	if task && r.taskCleanupParked(v.s, obs) {
+		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
+	}
+	if !task && !r.homeExpiryDeleteOn() {
 		obs.homeExpiry = &homeExpiryNote{reason: "DeleteOff", message: "the HOME delete is off (--enable-home-expiry-delete); the record waits at " + e.Phase + " and the HOME, if any, stays"}
 		return ctrl.Result{}, false, nil
 	}
 	if homeExpiryHeld(v.s) {
+		if task && e.Phase == v1alpha1.HomeExpiryDeleting && e.Refusal == "" {
+			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryOwnerHold, "the owner holds the clean-up"))
+		}
 		obs.homeExpiry = heldNote(v.s)
+		if task {
+			obs.homeExpiry.reason = taskReasonHeld
+		}
 		if homeExpiryOverride(v.s) == expiryOverrideInvalid {
 			return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
 		}
 		return ctrl.Result{}, false, nil
 	}
 	if e.Phase == v1alpha1.HomeExpiryExpired {
+		if task && v.s.DeletionTimestamp.IsZero() {
+			// A finished task Session is deleted, then released as a reaped
+			// one is (DESIGN-061 2).
+			return r.removeCleanedTaskSession(ctx, v, obs)
+		}
 		return r.releaseExpiredSession(ctx, v, obs)
 	}
 	if e.Refusal != "" && e.RefusalAt != nil && v.now.Before(e.RefusalAt.Add(homeExpiryRefusalRetry)) && !v.now.Before(e.RefusalAt.Time) {
 		return ctrl.Result{RequeueAfter: e.RefusalAt.Add(homeExpiryRefusalRetry).Sub(v.now) + time.Second}, false, nil
+	}
+	if task && taskRetryRefusal(e) {
+		if ref := expiryDeleteRecheck(v); ref != nil {
+			return r.refuseHomeExpiry(ctx, v, obs, ref)
+		}
+		return r.taskCleanupRetry(ctx, v, obs)
 	}
 	return r.removeExpiredHome(ctx, v, obs)
 }
@@ -118,13 +139,17 @@ func (r *Reconciler) expiryRechecked(ctx context.Context, v *expiryView, obs *ob
 		res, stop, err := r.expiryUnknown(ctx, v.s, obs, err)
 		return nil, res, stop, err
 	}
+	if r.taskPolicy(after.s) && r.taskCleanupParked(after.s, obs) {
+		return nil, ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
+	}
 	e, before := after.record(), v.record()
-	if e == nil || e.Phase != before.Phase || e.Archive == nil || !apiequality.Semantic.DeepEqual(e.Archive, before.Archive) || homeExpiryHeld(after.s) {
+	if e == nil || e.Phase != before.Phase || e.Archive == nil && e.Bundle == nil ||
+		!apiequality.Semantic.DeepEqual(e.Archive, before.Archive) || !apiequality.Semantic.DeepEqual(e.Bundle, before.Bundle) || homeExpiryHeld(after.s) {
 		// The record or the owner's override changed during the verify:
 		// judge again from the start.
 		return nil, ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
-	if trig, _ := homeExpiryTriggered(after.s, obs.templates, after.now); trig != expiryTriggered {
+	if trig, _ := r.expiryTrigger(after.s, obs, after.now); trig != expiryTriggered {
 		return nil, ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
 	if ref := expiryDeleteRecheck(after); ref != nil {
@@ -180,7 +205,7 @@ func noPodUsesHome(v *expiryView) *expiryRefusal {
 // a Session never holds archivedAt without Deleting. A resume is refused from
 // here on, and nothing cancels the record any more.
 func (r *Reconciler) prepareExpiryDelete(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
-	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 		return res, stop, err
 	}
 	after, res, stop, err := r.expiryRechecked(ctx, v, obs)
@@ -201,9 +226,15 @@ func (r *Reconciler) prepareExpiryDelete(ctx context.Context, v *expiryView, obs
 	if err := r.writeExpiry(ctx, after, fresh); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
-	log.FromContext(ctx).Info("the HOME expiry is Deleting: the archive verified again", "entry", next.Archive.Entry, "contentSHA256", next.Archive.ContentSHA256)
+	kept := keptName(fresh, next)
+	log.FromContext(ctx).Info("the HOME expiry is Deleting: the kept work verified again", "kept", kept)
+	if r.taskPolicy(fresh) {
+		r.event(v.s, corev1.EventTypeNormal, "TaskCleanup", "HomeExpiryDeleting",
+			fmt.Sprintf("%s verified again; the HOME is deleted next, and the session can no longer be resumed (DESIGN-061)", kept))
+		return ctrl.Result{RequeueAfter: time.Second}, true, nil
+	}
 	r.event(v.s, corev1.EventTypeNormal, "HomeExpiry", "HomeExpiryDeleting",
-		fmt.Sprintf("the archive %s verified again; the HOME is deleted next, and the Session can no longer be resumed (DESIGN-025 6.5)", next.Archive.Entry))
+		fmt.Sprintf("%s verified again; the HOME is deleted next, and the Session can no longer be resumed (DESIGN-025 6.5)", kept))
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
 }
 
@@ -231,18 +262,31 @@ func (r *Reconciler) recheckArchivedRefusal(ctx context.Context, v *expiryView, 
 // removeExpiredHome is Deleting's step, on every attempt (6.5 points 1, 2, 4
 // and 5): the verify, the re-check and the Pod check, in this call path, then
 // the claim's delete with its UID and resourceVersion and the finalizer's lift
-// (deleteExpiryHome). A claim that is gone makes the record Expired. A claim
-// whose delete has started and whose finalizer is already lifted waits for
-// Kubernetes, with nothing left for the operator to remove.
+// (deleteExpiryHome). A claim that is gone makes the record Expired once a
+// task record's kept work verifies again; a refusal leaves the record and the
+// Session. A claim whose delete has started and whose finalizer is already
+// lifted waits for Kubernetes, with nothing left for the operator to remove.
 func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
+	if r.taskPolicy(v.s) && r.taskCleanupParked(v.s, obs) {
+		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
+	}
 	if homeGone(v) {
+		// The claim is already gone, so there is no volume left to check.
+		// The kept work still has to verify before the record becomes Expired.
+		// The phase is still Deleting, so the schema allows the refusal write.
+		// removeCleanedTaskSession does not write one: its record is already Expired.
+		if r.taskPolicy(v.s) {
+			if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
+				return res, stop, err
+			}
+		}
 		return r.recordHomeExpired(ctx, v, obs)
 	}
 	if c := v.claim; !c.DeletionTimestamp.IsZero() && !controllerutil.ContainsFinalizer(c, Finalizer) {
 		obs.homeExpiry = &homeExpiryNote{reason: "HomeDeleting", message: "the HOME claim " + c.Name + " is being deleted and the operator's finalizer is lifted; waiting for it to go"}
 		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
 	}
-	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 		return res, stop, err
 	}
 	after, res, stop, err := r.expiryRechecked(ctx, v, obs)
@@ -250,6 +294,12 @@ func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *
 		return res, stop, err
 	}
 	if homeGone(after) {
+		// Still Deleting, so the refusal write is allowed, as above.
+		if r.taskPolicy(after.s) {
+			if ok, res, stop, err := r.keptWorkVerified(ctx, after, obs); !ok {
+				return res, stop, err
+			}
+		}
 		return r.recordHomeExpired(ctx, after, obs)
 	}
 	if ref := noPodUsesHome(after); ref != nil {
@@ -258,12 +308,20 @@ func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *
 	if err := expiryVolumeRemovalAllowed(after.s, after.claim); err != nil {
 		return r.refuseHomeExpiry(ctx, after, obs, refusal(expiryIdentityChanged, "the HOME stays: %v", err))
 	}
+	if r.taskPolicy(after.s) {
+		if why := r.taskVolumeReleased(ctx, after); why != "" {
+			return r.refuseHomeExpiry(ctx, after, obs, refusal(expiryVolumeNotReleased, "%s", why))
+		}
+		if r.taskCleanupParked(after.s, obs) {
+			return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
+		}
+	}
 	if err := deleteExpiryHome(ctx, r.Client, r.APIReader, after.s, after.claim); err != nil {
 		switch {
 		case apierrors.IsConflict(err), apierrors.IsInvalid(err):
 			// The claim changed since the read (the delete itself does
 			// that): the next reconcile starts again from the verify.
-			r.countExpiryRefused(expiryPreconditionFailed)
+			r.countRefusedFor(after.s, expiryPreconditionFailed)
 			return ctrl.Result{RequeueAfter: time.Second}, true, nil
 		case apierrors.IsForbidden(err):
 			return r.refuseHomeExpiry(ctx, after, obs, refusal(expiryForbidden, "delete the HOME claim: %v", err))
@@ -271,9 +329,15 @@ func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *
 		return r.expiryUnknown(ctx, after.s, obs, fmt.Errorf("delete the HOME claim: %w", err))
 	}
 	claim := after.claim
-	log.FromContext(ctx).Info("deleted the private HOME after its archive verified again", "claim", claim.Name, "uid", claim.UID, "entry", after.record().Archive.Entry)
+	kept := keptName(after.s, after.record())
+	log.FromContext(ctx).Info("deleted the private HOME after its kept work verified again", "claim", claim.Name, "uid", claim.UID, "kept", kept)
+	if r.taskPolicy(after.s) {
+		r.event(v.s, corev1.EventTypeNormal, "TaskCleanup", "HomeDeleted",
+			fmt.Sprintf("deleted the HOME %s (uid %s) after %s verified again (DESIGN-061)", claim.Name, claim.UID, kept))
+		return ctrl.Result{RequeueAfter: time.Second}, true, nil
+	}
 	r.event(v.s, corev1.EventTypeNormal, "HomeExpiry", "HomeDeleted",
-		fmt.Sprintf("deleted the HOME %s (uid %s) after its archive %s verified again; the archive is the copy that remains (DESIGN-025 6.5)", claim.Name, claim.UID, after.record().Archive.Entry))
+		fmt.Sprintf("deleted the HOME %s (uid %s) after %s verified again; the archive is the copy that remains (DESIGN-025 6.5)", claim.Name, claim.UID, kept))
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
 }
 
@@ -288,16 +352,22 @@ func (r *Reconciler) recordHomeExpired(ctx context.Context, v *expiryView, obs *
 	clearExpiryRefusal(next)
 	target := v.s.DeepCopy()
 	acknowledged, err := r.writePrivateHistoryAcknowledged(ctx, target, fresh)
-	if acknowledged && r.HomeExpiryCounters != nil {
+	if acknowledged && r.HomeExpiryCounters != nil && !r.taskPolicy(fresh) {
+		// A task Session's is counted by the clean-up's own counter, once
+		// the Session is released.
 		r.HomeExpiryCounters.Expired.Inc()
 	}
 	if err != nil {
 		log.FromContext(ctx).Info("the HOME expiry's Expired write is unconfirmed; judging again", "error", err.Error())
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
-	log.FromContext(ctx).Info("the HOME expiry is Expired: the private HOME is gone", "entry", next.Archive.Entry)
+	log.FromContext(ctx).Info("the HOME expiry is Expired: the private HOME is gone", "kept", keptName(fresh, next))
+	if r.taskPolicy(fresh) {
+		r.event(v.s, corev1.EventTypeNormal, "TaskCleanup", "HomeExpiryExpired", "the private HOME is gone; "+bundleKeptText(fresh, next)+"; the session is removed next (DESIGN-061)")
+		return ctrl.Result{RequeueAfter: time.Second}, true, nil
+	}
 	r.event(v.s, corev1.EventTypeNormal, "HomeExpiry", "HomeExpiryExpired",
-		"the private HOME is gone; its history and Git rescue stay in the archive "+next.Archive.Entry+" (DESIGN-025 6.5)")
+		"the private HOME is gone; its history and Git rescue stay in "+keptName(fresh, next)+" (DESIGN-025 6.5)")
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
 }
 
@@ -306,6 +376,9 @@ func (r *Reconciler) recordHomeExpired(ctx context.Context, v *expiryView, obs *
 // and no claim of its names. A suspended Session stays, phase Archived, until
 // it is reaped.
 func (r *Reconciler) releaseExpiredSession(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
+	if r.taskPolicy(v.s) && r.taskCleanupParked(v.s, obs) {
+		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
+	}
 	if v.s.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, false, nil
 	}
@@ -324,5 +397,15 @@ func (r *Reconciler) releaseExpiredSession(ctx context.Context, v *expiryView, o
 		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
 	}
 	log.FromContext(ctx).Info("released a reaped private Session whose HOME expired")
+	if e := v.record(); r.taskPolicy(v.s) {
+		// Counted once, here: a purged Session was reaped before its HOME's
+		// delete began; any other ended on its own first, whoever deleted
+		// the Session after.
+		cause := "finished"
+		if e.DeletingAt != nil && !v.s.DeletionTimestamp.After(e.DeletingAt.Time) {
+			cause = "purged"
+		}
+		r.taskSessionRemovedEvent(v.s, cause)
+	}
 	return ctrl.Result{}, true, nil
 }

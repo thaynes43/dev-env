@@ -4,6 +4,21 @@
 > index, too large to read whole: search it for the entry you need. Current work and
 > state live in OpenProject (epic #91) and `agent-run fleet`; see [CLAUDE.md](../CLAUDE.md).
 
+## Task-session clean-up, the operator's path — 2026-11-10 (OP520)
+
+Source only, default off, nothing installed. ADR-020's policy for task
+Sessions runs on DESIGN-025's expiry pipeline behind
+`--enable-task-session-cleanup` (with `--task-cleanup-grace`,
+`--task-cleanup-max-active`, `--task-cleanup-min-shared-free`,
+`--task-cleanup-sessions`): a purged task's HOME and Session go once its stop
+is proven and the old node has released the volume, a finished one's 7 days
+after its end, after a `--strict-home` rescue in a hold pod and a bundle
+re-hashed on the shelf before `Archived` and again before every delete. What
+it decided where the design left room, and what the rollout (#521) needs, in
+order: [DESIGN-061 3.2](sagas/distributed-dev-env/designs/061-task-session-cleanup.md).
+A finished task's retained outcome now lasts only until its Session is
+cleaned up (CLAUDE.md "Headless task outcome").
+
 ## HOME retention source slice — 2026-11-01 (OP350)
 
 [ADR-018](sagas/distributed-dev-env/adrs/018-two-tier-home-retention.md) and

@@ -15,7 +15,8 @@ import (
 // TestExpiryDeleteNeedsVerify (DESIGN-025 11) reads this package's source. The
 // HOME delete (deleteExpiryHome, which also lifts the finalizer of a claim
 // already deleting) and the write of phase Deleting are each reachable only
-// after, in the same function and in this order: historyArchiveVerified, as
+// after, in the same function and in this order: keptWorkVerified (the
+// archive's verify, or a task record's bundle verify, DESIGN-061 2 item 4), as
 // an if's init whose body returns; expiryRechecked, its view checked against
 // nil with a return; and noPodUsesHome on that view, as an if's init whose
 // body returns. Each of those two ifs must test the check's own answer, and
@@ -109,9 +110,9 @@ func scanExpiryDeleteFunc(fset *token.FileSet, fn *ast.FuncDecl, scan *expiryDel
 				// verify's first result, ref != nil for the Pod check's.
 				result := initResult(x.Init)
 				switch calleeName(call) {
-				case "historyArchiveVerified":
+				case "keptWorkVerified":
 					if !isNot(x.Cond, result) {
-						report(x.Pos(), "historyArchiveVerified's if must test !%s, its first result, and return", result)
+						report(x.Pos(), "keptWorkVerified's if must test !%s, its first result, and return", result)
 						break
 					}
 					if verified == token.NoPos {

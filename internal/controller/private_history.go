@@ -409,6 +409,26 @@ func privateRetentionNoted(s *v1alpha1.AgentSession, obs observation, note strin
 	h := s.Status.PrivateHistory
 	reaped := !s.DeletionTimestamp.IsZero()
 	proven := h != nil && executorTerminalRecorded(h)
+	if taskPolicyOf(s, obs.taskCleanupOn) {
+		// DESIGN-061 6: a task Session the clean-up owns says its step.
+		if proven {
+			return taskCleanupText(s, obs)
+		}
+		head := "suspended"
+		if reaped {
+			head = "reap accepted"
+		}
+		parts := []string{head, "the agent's stop is not proven yet: " + stopNotProvenText(s, obs)}
+		if note != "" {
+			parts = append(parts, note)
+		}
+		if reaped {
+			parts = append(parts, "its private HOME is kept until then", taskCleanupReapPromise())
+		} else {
+			parts = append(parts, "its private HOME is kept", taskCleanupPromise(obs.taskCleanupGrace))
+		}
+		return reasonRetentionPending, strings.Join(parts, "; ")
+	}
 	parts := []string{"suspended"}
 	if reaped {
 		parts[0] = "reap accepted"
@@ -559,6 +579,10 @@ func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *
 	if pod := obs.pod.obj; obs.privateTerminalRefusal != "" && !obs.pod.missing && pod != nil {
 		c.Message += "; " + terminalRefusalText(pod, obs.privateTerminalRefusal)
 	}
+	task := taskPolicyOf(s, obs.taskCleanupOn)
+	if task && !wantsPodGone(s) && !executorTerminalRecorded(s.Status.PrivateHistory) {
+		c.Message += "; " + taskCleanupPromise(obs.taskCleanupGrace)
+	}
 	if wantsPodGone(s) {
 		c.Reason, c.Message = privateRetention(s, obs)
 	}
@@ -580,7 +604,11 @@ func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *
 			removal = c
 		}
 	}
-	if h := s.Status.PrivateHistory; homeExpiryRemovingHome(s) {
+	if h := s.Status.PrivateHistory; task && executorTerminalRecorded(h) {
+		// DESIGN-061 6: the clean-up's one text, whatever the Session wants.
+		c.Reason, c.Message = taskCleanupText(s, obs)
+		removal = c
+	} else if homeExpiryRemovingHome(s) {
 		// DESIGN-025 6.5: the HOME goes, or went, after its history was
 		// archived; the Session's identity stays.
 		c.Reason = map[string]string{v1alpha1.HomeExpiryDeleting: "HomeDeleting", v1alpha1.HomeExpiryExpired: "HomeExpired"}[h.Expiry.Phase]

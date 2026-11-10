@@ -2974,3 +2974,25 @@ In `internal/controller`:
    change, and an older schema that requires `finishedAt` could then refuse
    every later status write of that Session. Rolling back the operator alone is
    safe: it keeps the record and writes no new ones.
+
+## 26. Task Sessions: DESIGN-061's policy on this pipeline — 2026-11-10 (OP520)
+
+For `spec.mode: task` Sessions in its scope, ADR-020 replaces this design's
+policy, and [DESIGN-061](061-task-session-cleanup.md) runs on this pipeline
+behind `--enable-task-session-cleanup`, default off. It keeps the record, its
+forward-only phases, the hold pod with its intent and adoption (6.1), the
+cancel by a new Pod (5.3), the owner's hold and release-now (9), the common
+re-check (5.2), the guarded delete (6.5) and the release (6.6). It changes:
+the trigger (Reaping, or the terminal record, whatever `operatingMode` says;
+5.3's cancel by a resume does not apply); the grace (none after a reap,
+`--task-cleanup-grace` after any other end); no history export, so a record
+goes from `Rescuing` to `Archived` with a `bundle` instead of an `archive`;
+the release check before every hold pod (DESIGN-061 1.1); the rescue's
+`--strict-home`; the verify before each delete (the bundle on the shelf, not
+the archive); and the delete of a finished Session once `Expired`. A record
+holding an `archive` keeps this design's path. A record the clean-up left
+without a bundle, with its flag later off, waits this design's full 720 hours
+from `graceStart` whatever its `dueAt` (5.1's grace is now also a floor,
+`homeExpiryDueAt`). Section 13's flags are unchanged and stay off; F1 of
+DESIGN-061 retires them. Details: DESIGN-061 3.2.
+
