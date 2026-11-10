@@ -879,6 +879,28 @@ Use this when Tom must see and drive the thread on his phone.
    once. `agent-run help thread` has the
    outcome table.
 
+   To recheck a thread that ended `visible`, run `thread status` with the
+   result's `threadId` (and the same `--repo`, if you gave one). It only
+   observes: it runs `agentd ctl thread-status` in the host, which reads the
+   host's state, the thread lists and the first turn once, and prints one
+   `thread-launch.v1` line. It never runs the wrapper or sends the thread
+   anything, so repeating it is safe:
+
+   ```bash
+   "${v2run[@]}" thread status --agent codex --host <codex-host> --thread <threadId>
+   ```
+
+   `responded` (exit 0) means the first response exists now. `visible` with
+   `response_pending` (exit 7) means it is still pending; with
+   `response_not_observable` the first turn completed with no agent message
+   seen, and rechecking will not change that, so look on the phone. `failed` with
+   `turn_failed` means the first turn failed or was interrupted, and with
+   `thread_not_found` that the id is not among the newest 20 threads for that
+   repo on the host. Status uses the exec route only: from an ordinary session
+   pod it answers `status_route_unavailable` (DESIGN-057 section 11), so run it
+   from the v1 pod, a workbench session or a laptop. A host on an image before
+   this command answers `status_unsupported`.
+
 ## 4. The everyday workflow
 
 ```mermaid
