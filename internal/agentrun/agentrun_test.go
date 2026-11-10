@@ -17,7 +17,7 @@ func TestHelp(t *testing.T) {
 			continue
 		}
 		// -h on the command prints the same text and sends nothing.
-		args := []string{cmd, "-h"}
+		args := append(strings.Fields(cmd), "-h")
 		if cmd == "run" {
 			args = []string{"--repo", "x", "-h"}
 		}

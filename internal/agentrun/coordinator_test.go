@@ -141,7 +141,7 @@ func TestCoordinatorStatusRetainedOutcome(t *testing.T) {
 		s := apiv1.Session{Name: "ended", Phase: "Failed", IdempotencyKey: "coordinator-527-retry-2", TaskOutcome: &protocol.TaskOutcome{SessionUID: "session", PodUID: "pod", Record: protocol.TaskOutcomeRecord{Summary: "Ready for review", PRURLs: []string{"https://github.com/thaynes43/dev-env/pull/123"}, HeadSHAs: []string{strings.Repeat("a", 40)}}}}
 		h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 			if r.Method != http.MethodGet {
-				t.Fatal("status mutated a session")
+				t.Error("status mutated a session")
 			}
 			if r.URL.Path == apiv1.SessionsPath {
 				writeTestJSON(w, 200, apiv1.SessionList{Sessions: []apiv1.Session{s}})

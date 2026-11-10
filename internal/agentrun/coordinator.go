@@ -24,8 +24,11 @@ type coordinatorResult struct {
 }
 
 func (a *app) coordinator(ctx context.Context, args []string) error {
-	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		return a.help(append([]string{"coordinator"}, argsAfterHelp(args)...))
+	if len(args) == 0 {
+		return a.help([]string{"coordinator"})
+	}
+	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+		return a.help(append([]string{"coordinator"}, args[1:]...))
 	}
 	switch args[0] {
 	case "start":
@@ -39,13 +42,6 @@ func (a *app) coordinator(ctx context.Context, args []string) error {
 	default:
 		return usageError("coordinator takes start, status, stop or brief")
 	}
-}
-
-func argsAfterHelp(args []string) []string {
-	if len(args) == 0 {
-		return nil
-	}
-	return args[1:]
 }
 
 func coordinatorKey(item int64, run string) (string, error) {

@@ -118,31 +118,31 @@ Exit codes:
 `
 
 var commandHelp = map[string]string{
-	"coordinator": `agent-run coordinator start|status|stop|brief
+	"coordinator": `Usage: agent-run coordinator start|status|stop|brief
 
 Start a bounded task on an OpenProject item, read its state and retained outcome,
 or stop it. brief prints the embedded instructions offline. Use help coordinator
 start, help coordinator status, or help coordinator stop for flags.
 `,
-	"coordinator start": `agent-run coordinator start --item ID (--repo R | --project P) --model FULL_ID --hours H --workers N [--run LABEL] [-o json]
+	"coordinator start": `Usage: agent-run coordinator start --item ID (--repo R | --project P) --model FULL_ID --hours H --workers N [--run LABEL] [-o json]
 
 Start a dev-profile task; no tracker credential needed. Model is required;
 effort is preset. Hours and workers: 1 to 4. Repeating an item returns its
 retained run. Use a new --run label for a deliberate second run.
 `,
-	"coordinator status": `agent-run coordinator status NAME [-o json]
+	"coordinator status": `Usage: agent-run coordinator status NAME [-o json]
 agent-run coordinator status --item ID [--run LABEL] [-o json]
 
 Read state, task verdict and retained outcome: summary, PR links and head SHAs.
 Item lookup finds the caller's run. JSON is one object with item and session.
 `,
-	"coordinator stop": `agent-run coordinator stop NAME [-o json]
+	"coordinator stop": `Usage: agent-run coordinator stop NAME [-o json]
 
 Reap one session through the existing API. The operator preserves work under
 the session's rescue and retention rules. This requests a stop; it does not
 wait for completion. JSON is one Session document.
 `,
-	"coordinator brief": `agent-run coordinator brief [--item ID --hours H --workers N]
+	"coordinator brief": `Usage: agent-run coordinator brief [--item ID --hours H --workers N]
 
 Print the embedded coordinator instructions without connecting. Supply all three
 flags to render a concrete item and budget; otherwise placeholders are shown.
