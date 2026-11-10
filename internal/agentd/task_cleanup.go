@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path"
@@ -57,6 +58,9 @@ func strictHome(ctx context.Context, r Runner, s Settings, clones []string) *pro
 	consider := func(p string) {
 		has, err := holdsGit(p)
 		switch {
+		case err != nil && p == filepath.Join(s.Home, lostAndFound) && errors.Is(err, fs.ErrPermission):
+			// mkfs makes lost+found root's: what this pod's user cannot
+			// search, the agent, the same user, could not write into.
 		case err != nil:
 			problems = append(problems, "cannot inspect "+p+": "+err.Error())
 		case has && !allowed[resolvedPath(p)]:
@@ -192,7 +196,8 @@ func VerifyRescue(s Settings, id string) (protocol.RescueVerifyResult, error) {
 		return res, nil
 	}
 	abs := filepath.Join(s.SharedDir, filepath.FromSlash(dir))
-	for _, d := range []string{filepath.Dir(abs), abs} {
+	// rescue/, rescue/<session> and the rescue itself, none a link.
+	for _, d := range []string{filepath.Join(s.SharedDir, protocol.RescueRoot), filepath.Dir(abs), abs} {
 		fi, err := os.Lstat(d)
 		switch {
 		case isNotExist(err):

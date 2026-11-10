@@ -188,6 +188,26 @@ func TestStrictHomeRefusals(t *testing.T) {
 	}
 }
 
+// A lost+found this pod's user cannot search is mkfs's, not the agent's: it
+// does not refuse, while any other directory it cannot inspect does.
+func TestStrictHomeLetsAnUnreadableLostAndFoundBe(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every directory")
+	}
+	rig := newRescueRig(t)
+	lf := filepath.Join(rig.s.Home, lostAndFound)
+	if err := os.MkdirAll(lf, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lf, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lf, 0o700) })
+	if rep := rig.strictRescue(t); !rep.OK || rep.StrictHome == nil || rep.StrictHome.Refused != "" {
+		t.Fatalf("an unreadable lost+found refused: %+v %+v", rep, rep.StrictHome)
+	}
+}
+
 // A clone whose worktrees cannot be listed refuses, since its worktrees under
 // ~/work could not be told from stray repositories.
 func TestStrictHomeRefusesAnUnlistableClone(t *testing.T) {
@@ -371,6 +391,16 @@ func TestRescueVerifyRefusals(t *testing.T) {
 		}, protocol.RescueVerifyBundleMissing},
 		{"the manifest removed", func(t *testing.T, v verifyRig) {
 			if err := os.Remove(v.abs(v.manifest)); err != nil {
+				t.Fatal(err)
+			}
+		}, protocol.RescueVerifyBundleMissing},
+		{"rescue/ a link to a copy", func(t *testing.T, v verifyRig) {
+			root := filepath.Join(v.s.SharedDir, protocol.RescueRoot)
+			moved := filepath.Join(v.s.SharedDir, "moved")
+			if err := os.Rename(root, moved); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(moved, root); err != nil {
 				t.Fatal(err)
 			}
 		}, protocol.RescueVerifyBundleMissing},

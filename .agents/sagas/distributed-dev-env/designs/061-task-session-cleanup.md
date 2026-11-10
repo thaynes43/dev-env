@@ -203,7 +203,7 @@ with one more field, `strictHome`.
 
 | It looks at | It skips |
 |---|---|
-| HOME itself; every entry directly under `~/work`, hidden ones included; every entry directly under `~/repos` or HOME that is not hidden | hidden entries of HOME (`~/.claude`, `~/.cache`) and of `~/repos` (a clone in progress); the shared volume's mount; files; links to nothing; anything deeper |
+| HOME itself; every entry directly under `~/work`, hidden ones included; every entry directly under `~/repos` or HOME that is not hidden | hidden entries of HOME (`~/.claude`, `~/.cache`) and of `~/repos` (a clone in progress); the shared volume's mount; files; links to nothing; anything deeper; a `~/lost+found` this pod's user cannot search (mkfs makes it root's, so the agent, the same user, could not write into it) |
 
 An entry counts when it is a directory, or a link to one, holding `.git` as a
 directory, a file or a link. It passes when its path, links resolved, is a
@@ -264,7 +264,7 @@ a minute by default.
 |---|---|---|
 | without `--id` | `version`, `ok: true`, the two space figures (statfs: `Bavail` and `Blocks` times the fragment size, as df) | 0 |
 | every bundle matches | as above | 0 |
-| `bundle_missing` | `ok: false`, `refusal`, `detail`: the rescue's directory (or `rescue/<session>`), its manifest or a bundle it names is absent, or is not a regular file (a link counts as not) | 1 |
+| `bundle_missing` | `ok: false`, `refusal`, `detail`: `rescue/`, `rescue/<session>`, the rescue's directory, its manifest or a bundle it names is absent, or is not a directory or regular file as it should be (a link counts as neither) | 1 |
 | `bundle_mismatch` | the same: the manifest is over 4 MiB, not JSON, not version 1, names another session or directory, says `complete: false`, or lists a repo without a verified bundle, or a bundle outside its directory; or a bundle's size or SHA-256 differs from the manifest | 1 |
 | a failure: the shared volume not mounted, statfs failed or contradicts itself, an I/O error | nothing on stdout; stderr says why | 1 |
 
