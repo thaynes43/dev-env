@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -31,6 +32,22 @@ var rcStages = []struct {
 	{"agent_started", "agent_start_timeout", 0},
 	{"rc_ready", "rc_registration_timeout", 90 * time.Second},
 	{"link_available", "link_unavailable", 10 * time.Second},
+}
+
+// rcAgentStarted reports that the session's agent process is up and owns a
+// conversation. agentd reports a started agent as busy, idle or waiting
+// (internal/agentd/protocol/status.go). It has never reported "running": a
+// check for that word waited out every launch on a healthy session and never
+// delivered the handoff (OP531).
+func rcAgentStarted(a *apiv1.AgentStatus) bool {
+	if a == nil || strings.TrimSpace(a.ConversationID) == "" {
+		return false
+	}
+	switch a.State {
+	case protocol.AgentBusy, protocol.AgentIdle, protocol.AgentWaiting:
+		return true
+	}
+	return false
 }
 
 type rcRun struct {
@@ -325,7 +342,7 @@ func (r *rcRun) observe(v apiv1.Session) string {
 		if authCode == "" && (strings.Contains(msg, "auth_projection_unavailable") || strings.Contains(msg, "claude authentication requires a current keeper projection") || strings.Contains(msg, "login-required: waiting for the keeper's claude projection")) {
 			authCode = "auth_projection_unavailable"
 		}
-		if v.AgentStatus.State == "running" && strings.TrimSpace(v.AgentStatus.ConversationID) != "" {
+		if rcAgentStarted(v.AgentStatus) {
 			r.phase("agent_started", "ok", "session_agent_status", "running_with_conversation_id")
 		}
 	}

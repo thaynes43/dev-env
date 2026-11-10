@@ -122,6 +122,7 @@ internal/providerallowance/  typed providerallowance.v1 observation and provider
 internal/usagecollector/  bounded supported provider readers and private callback capture; fixed finite operator helper with durable cleanup receipts; no settings installation, automatic recurrence or publication; normal client auth/cache effects require qualification
 internal/allowancecollector/  default-off elected-operator schedule: exact existing host fences, durable reserved cycles, status-only recovery and validated atomic aggregate publication (DESIGN-053); no session creation, grant or credential copy
 internal/usageconsolidation/  bounded pure report projector over caller-authorized allowance reads and initial-invocation observations; no aggregation, collector, provider, clock, authorization, or I/O
+internal/usagetotals/    leader-only counters of task tokens, cost, sessions and wall-clock seconds that outlive Session clean-up (DESIGN-059, OP524); one annotation on the AgentSession, no CRD change
 internal/projectcanary/  validates the two finite operator-owned project rule canaries and binds a session to one
 internal/projectcanary/testutil/  synthetic canary fixtures for tests
 internal/commonrules/    retains the common instruction inputs (common text, Codex header) bound to an enabled managed task

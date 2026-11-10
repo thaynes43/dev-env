@@ -1170,9 +1170,13 @@ func (r *Reconciler) removeExpiryHold(ctx context.Context, v *expiryView, obs *o
 		}
 		return ctrl.Result{RequeueAfter: time.Second}, true, err
 	}
-	log.FromContext(ctx).Info("deleted the HOME expiry's hold pod", "pod", pod.Name, "uid", pod.UID, "why", string(why))
+	shown := string(why)
+	if ev.task && why == holdReleaseArchived {
+		shown = taskHoldReleaseSaved
+	}
+	log.FromContext(ctx).Info("deleted the HOME expiry's hold pod", "pod", pod.Name, "uid", pod.UID, "why", shown)
 	if ev.task {
-		r.event(v.s, corev1.EventTypeNormal, "TaskCleanup", "HoldPodRemoved", fmt.Sprintf("deleted the clean-up's hold pod %s: %s (DESIGN-061)", pod.Name, why))
+		r.event(v.s, corev1.EventTypeNormal, "TaskCleanup", "HoldPodRemoved", fmt.Sprintf("deleted the clean-up's hold pod %s: %s (DESIGN-061)", pod.Name, shown))
 	} else {
 		r.event(v.s, corev1.EventTypeNormal, "HomeExpiry", "HoldPodRemoved", fmt.Sprintf("deleted the expiry's hold pod %s: %s (DESIGN-025 6.1)", pod.Name, why))
 	}
@@ -1295,6 +1299,11 @@ func (r *Reconciler) refuseHomeExpiry(ctx context.Context, v *expiryView, obs *o
 	}
 	if task {
 		r.taskUnreserve(v.s.UID)
+		// A refusal ends this delete attempt. Drop its clock, or the next
+		// attempt sees a start already older than taskDeleteReleaseWait and
+		// records volume_not_released on the first look. The volume refusal
+		// forgets just before this call; forgetting again changes nothing.
+		r.taskForgetDeleteReleaseWait(v.s.UID)
 		r.countTaskRefused(ref.reason)
 		r.event(v.s, corev1.EventTypeWarning, "TaskCleanup", "TaskCleanupRefused", "the task clean-up keeps the HOME: "+ref.Error())
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil

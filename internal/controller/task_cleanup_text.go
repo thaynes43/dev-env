@@ -92,7 +92,7 @@ func taskCleanupStep(s *v1alpha1.AgentSession, obs observation) string {
 	case homeExpiryHeld(s):
 		return "the owner holds the task clean-up, so its HOME is kept and nothing moves on until the hold is removed"
 	case e.Refusal != "":
-		return taskRefusalText(s, e)
+		return taskRefusalText(s, e, n)
 	}
 	with := func(base string) string {
 		if n != nil && n.message != "" && !n.unknown {
@@ -114,7 +114,11 @@ func taskCleanupStep(s *v1alpha1.AgentSession, obs observation) string {
 		}
 		return "the task clean-up " + bundleSavedText(s.Name, e.Bundle, rescueRefs(s.Status.Rescue)) + "; the HOME is deleted next"
 	case v1alpha1.HomeExpiryDeleting:
-		return fmt.Sprintf("the HOME %s is being deleted and the session can no longer be resumed; %s", h.HomeClaim, taskKeptShort(s, e))
+		base := fmt.Sprintf("the HOME %s is being deleted and the session can no longer be resumed; %s", h.HomeClaim, taskKeptShort(s, e))
+		if n != nil && n.message != "" && !n.unknown && !n.pending {
+			return base + "; " + n.message
+		}
+		return base
 	case v1alpha1.HomeExpiryExpired:
 		return with("the HOME is deleted; this session is removed next; " + bundleKeptText(s, e))
 	}
@@ -130,8 +134,9 @@ func taskKeptShort(s *v1alpha1.AgentSession, e *v1alpha1.PrivateHomeExpiryStatus
 }
 
 // taskRefusalText says why the clean-up keeps the HOME, and when it looks
-// again.
-func taskRefusalText(s *v1alpha1.AgentSession, e *v1alpha1.PrivateHomeExpiryStatus) string {
+// again. n is what this reconcile found; the record's refusal is only the
+// reason code.
+func taskRefusalText(s *v1alpha1.AgentSession, e *v1alpha1.PrivateHomeExpiryStatus, n *homeExpiryNote) string {
 	at := "now"
 	if e.RefusalAt != nil {
 		at = e.RefusalAt.Add(taskAttemptRefusalRetry(e)).UTC().Format(time.RFC3339)
@@ -144,9 +149,16 @@ func taskRefusalText(s *v1alpha1.AgentSession, e *v1alpha1.PrivateHomeExpiryStat
 		}
 		return "the clean-up keeps the HOME: " + why + "; a person decides; it is tried again at " + at
 	case expiryVolumeNotReleased:
-		node := s.Status.PrivateHistory.ExecutorTerminal.NodeName
-		return fmt.Sprintf("the clean-up keeps the HOME: node %s did not show the HOME's volume released within %s, so the stop is unproven; a person decides; it looks again at %s",
-			node, graceWords(taskReleaseWait), at)
+		// The record stores volume_not_released and refusalAt, not the check's
+		// text and not which wait ran. The note, when this reconcile read the
+		// check, names the node that lists the volume. Without that read, do
+		// not name a node or a duration: both steps share this sentence, and
+		// a delete used to claim the first executor's node and 30 minutes
+		// after a one-second look.
+		if n != nil && n.message != "" && !n.unknown {
+			return "the clean-up keeps the HOME: " + n.message + "; a person decides; it looks again at " + at
+		}
+		return "the clean-up keeps the HOME: the HOME's volume was not shown released; a person decides; it looks again at " + at
 	case expiryOwnerHold:
 		return "the owner's hold on the clean-up is lifted; it goes back into the queue at " + at
 	case expiryBundleMissing, expiryBundleMismatch:
