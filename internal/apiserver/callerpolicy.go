@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -290,9 +291,33 @@ func (s *Server) finishCallerAdmission(ctx context.Context, gate *callerAdmissio
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	if err := s.Client.Delete(ctx, &gate.lock, client.Preconditions{UID: &gate.lock.UID, ResourceVersion: &gate.lock.ResourceVersion}); err != nil {
-		s.Log.Error(err, "caller admission unlock failed; verify before recovery", "lock", gate.lock.Name)
+	var err error
+	for attempt := range 3 {
+		if attempt > 0 {
+			timer := time.NewTimer(time.Duration(attempt) * 100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+			case <-timer.C:
+			}
+			timer.Stop()
+			if ctx.Err() != nil {
+				break
+			}
+		}
+		err = s.Client.Delete(ctx, &gate.lock, client.Preconditions{UID: &gate.lock.UID, ResourceVersion: &gate.lock.ResourceVersion})
+		if err == nil || apierrors.IsNotFound(err) {
+			return
+		}
+		// Lost transport replies are safe to retry with the same preconditions.
+		// An explicit denial, identity conflict or other permanent API error is
+		// a stop, never a reason to delete a changed lock or try another route.
+		var status apierrors.APIStatus
+		if errors.As(err, &status) && !apierrors.IsTimeout(err) && !apierrors.IsServerTimeout(err) &&
+			!apierrors.IsTooManyRequests(err) && !apierrors.IsServiceUnavailable(err) && !apierrors.IsInternalError(err) {
+			break
+		}
 	}
+	s.Log.Error(err, "caller admission unlock failed; verify before recovery", "lock", gate.lock.Name)
 }
 
 func (s *Server) createWithCallerAdmission(ctx context.Context, sess *v1alpha1.AgentSession, gate *callerAdmission) error {

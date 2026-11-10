@@ -506,6 +506,57 @@ func TestCallerPolicyUnknownCreateRetainsAdmissionLock(t *testing.T) {
 	}
 }
 
+func TestCallerPolicyAdmissionUnlockRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		failures, wantCalls     int
+		lostResponse, permanent bool
+		wantHeld                bool
+	}{
+		{name: "transient", failures: 2, wantCalls: 3},
+		{name: "lost delete response", lostResponse: true, wantCalls: 2},
+		{name: "bounded exhaustion", failures: 99, wantCalls: 3, wantHeld: true},
+		{name: "permanent denial", permanent: true, wantCalls: 1, wantHeld: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := meatballFixture(t, meatballPolicy())
+			calls := 0
+			f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if _, ok := obj.(*corev1.ConfigMap); !ok {
+					return c.Delete(ctx, obj, opts...)
+				}
+				options := (&client.DeleteOptions{}).ApplyOptions(opts)
+				if options.Preconditions == nil || options.Preconditions.UID == nil || options.Preconditions.ResourceVersion == nil ||
+					*options.Preconditions.UID != obj.GetUID() || *options.Preconditions.ResourceVersion != obj.GetResourceVersion() {
+					t.Fatal("an unlock attempt lost its exact lock preconditions")
+				}
+				calls++
+				if tc.permanent {
+					return apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, obj.GetName(), fmt.Errorf("test denial"))
+				}
+				if tc.lostResponse && calls == 1 {
+					if err := c.Delete(ctx, obj, opts...); err != nil {
+						return err
+					}
+					return apierrors.NewServiceUnavailable("test lost acknowledgement")
+				}
+				if calls <= tc.failures {
+					return apierrors.NewServiceUnavailable("test transient failure")
+				}
+				return c.Delete(ctx, obj, opts...)
+			}})
+			policyCreated(t, f, tokMeatball, meatballRequest())
+			var locks corev1.ConfigMapList
+			if err := f.c.List(context.Background(), &locks, client.InNamespace(sessionNS)); err != nil {
+				t.Fatal(err)
+			}
+			if calls != tc.wantCalls || (len(locks.Items) == 1) != tc.wantHeld {
+				t.Fatalf("unlock calls=%d held=%d; want calls=%d held=%t", calls, len(locks.Items), tc.wantCalls, tc.wantHeld)
+			}
+		})
+	}
+}
+
 func TestCallerPolicyPolicyChangesDuringAdmission(t *testing.T) {
 	f := meatballFixture(t, meatballPolicy())
 	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {

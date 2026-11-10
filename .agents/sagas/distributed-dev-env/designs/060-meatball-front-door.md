@@ -327,6 +327,25 @@ existing start grace; a genuine capacity refusal remains a refusal.
 A crash or uncertain unlock leaves a closed gate, not a timed lease that could
 permit two writers. An operator must verify no admission is still in flight
 before removing such a stale lock. These locks grant no caller Kubernetes rights.
+Unlock retries transient errors at most three times within five seconds, with
+the same UID and resourceVersion preconditions; NotFound means released.
+Permanent errors stop retries. Manual recovery requires operator authority:
+
+1. Locate the ConfigMap named in the API log. Its name is
+   `caller-admission-` plus the first 16 bytes of SHA-256 of the exact parent
+   string, encoded as 32 lowercase hex characters, in the session namespace.
+   Read its `data.parent`, UID and resourceVersion from Kubernetes.
+2. Quiesce admission on **all** serving API replicas and confirm their old
+   create/resume handlers have ended. Read AgentSessions live in that namespace,
+   filter by `spec.parent == data.parent`, and reconcile the uncertain request
+   by its idempotency key or exact session UID, including a resume reservation.
+   Age or an apparently absent session is not proof that a write cannot still
+   commit. If that proof is unavailable, keep the lock and the admission closed.
+3. Re-read the lock and delete only with that exact UID and resourceVersion as
+   Kubernetes DeleteOptions preconditions. NotFound is complete; a changed
+   identity/version stops recovery. Restore admission only after this check;
+   its live count will include every confirmed create and resume reservation.
+
 Creates under this gate request strict Kubernetes field validation so an old
 AgentSession CRD refuses `maxWorkers` instead of pruning the worker cap.
 Installation needs both generated CRDs before the operator rollout, all serving
