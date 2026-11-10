@@ -192,10 +192,11 @@ func (c *SessionCollector) Collect(ch chan<- prometheus.Metric) {
 // clear, so the gauge drops when the clean-up's rescue replaces an earlier
 // one, including before the refusal is stored and including a transient
 // failure in the same pod. The daily retry clears the hold pod UID before
-// the next rescue is stored; that gap stays out too, unless the failed
-// rescue ran in the recorded executor. An earlier rescue keeps its own pod
-// UID and still counts. DESIGN-025's hold pod is outside the task policy,
-// so its failure still counts.
+// the next rescue is stored; that gap stays out when the failed rescue is
+// at or after the record's due time and did not run in the recorded
+// executor. An earlier rescue keeps its own pod UID and still counts.
+// DESIGN-025's hold pod is outside the task policy, so its failure still
+// counts.
 func taskCleanupRescueExcluded(s *v1alpha1.AgentSession, cleanupOn bool) bool {
 	if !taskPolicyOf(s, cleanupOn) {
 		return false
@@ -209,10 +210,12 @@ func taskCleanupRescueExcluded(s *v1alpha1.AgentSession, cleanupOn bool) bool {
 		return true
 	}
 	// The daily retry clears HoldPodUID and writes a new HoldIntent before
-	// the next hold pod's rescue replaces status.rescue (taskCleanupRetry,
-	// and the Rescuing step). The volume-release wait in that gap is 30
-	// minutes, longer than DevEnvRescueFailed's 20 minutes, so the old
-	// rescue must stay out. A failure that ran in the recorded executor is
-	// not the clean-up's and still counts.
-	return e.Phase == v1alpha1.HomeExpiryRescuing && e.HoldIntent != "" && e.HoldPodUID == "" && rec.PodUID != e.ExecutorUID
+	// the next hold pod's rescue replaces status.rescue. The volume-release
+	// wait in that gap is 30 minutes, longer than DevEnvRescueFailed's 20
+	// minutes. The first attempt reaches the same status shape, so the gap
+	// is left out only when this failed rescue is one the clean-up wrote:
+	// at or after the record's due time, and not in the recorded executor.
+	// An earlier failure, including a D-55 hold pod, still counts.
+	return e.Phase == v1alpha1.HomeExpiryRescuing && e.HoldIntent != "" && e.HoldPodUID == "" &&
+		rec.PodUID != e.ExecutorUID && rec.At != nil && !e.DueAt.IsZero() && !rec.At.Time.Before(e.DueAt.Time)
 }

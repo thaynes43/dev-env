@@ -142,21 +142,31 @@ func TestTaskCleanupRescueLeavesTheRescueFailedGauge(t *testing.T) {
 	// The same failed rescue, with no clean-up record.
 	plain := rescue("plain", v1alpha1.ModeRemote, "", "hold-cleanup", "")
 	// The daily retry cleared the hold pod UID and wrote a new intent. The
-	// failed rescue is still the previous hold's, not the executor's.
+	// failed rescue is the clean-up's: after the record's due time, and not
+	// the executor's pod.
 	retry := rescue("retry", v1alpha1.ModeTask, "", "old-hold", "")
 	retry.Status.PrivateHistory.Expiry = &v1alpha1.PrivateHomeExpiryStatus{
-		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-retry", HoldIntent: "20261111T120000Z/retry-intent",
+		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-retry",
+		DueAt: metav1.NewTime(at.Add(-time.Hour)), HoldIntent: "20261111T120000Z/retry-intent",
+	}
+	// The first attempt has the same shape, but the failed rescue is earlier
+	// than the record's due time (a D-55 hold pod, not the clean-up's).
+	before := rescue("before", v1alpha1.ModeTask, "", "d55-hold", "")
+	before.Status.PrivateHistory.Expiry = &v1alpha1.PrivateHomeExpiryStatus{
+		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-before",
+		DueAt: metav1.NewTime(at.Add(time.Hour)), HoldIntent: "20261111T120000Z/first-intent",
 	}
 	// The same gap, but the failed rescue ran in the recorded executor.
 	executor := rescue("executor", v1alpha1.ModeTask, "", "exec-executor", "")
 	executor.Status.PrivateHistory.Expiry = &v1alpha1.PrivateHomeExpiryStatus{
-		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-executor", HoldIntent: "20261111T120000Z/executor-intent",
+		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-executor",
+		DueAt: metav1.NewTime(at.Add(-time.Hour)), HoldIntent: "20261111T120000Z/executor-intent",
 	}
 	series := func(name string) string {
 		return "dev_env_session_rescue_failed{reason=WorktreeRefused,session=" + name + "} 1"
 	}
 	got := strings.Join(gather(t, &SessionCollector{
-		Reader:    fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(cleanup, held, earlier, plain, retry, executor).Build(),
+		Reader:    fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(cleanup, held, earlier, plain, retry, before, executor).Build(),
 		Namespace: "dev-agents", TaskCleanupOn: true,
 	}), "\n")
 	for _, name := range []string{"cleanup", "held", "retry"} {
@@ -164,7 +174,7 @@ func TestTaskCleanupRescueLeavesTheRescueFailedGauge(t *testing.T) {
 			t.Fatalf("the clean-up's rescue %s is in the gauge:\n%s", name, got)
 		}
 	}
-	for _, name := range []string{"earlier", "plain", "executor"} {
+	for _, name := range []string{"earlier", "plain", "executor", "before"} {
 		if !strings.Contains(got, series(name)) {
 			t.Fatalf("missing %s in\n%s", series(name), got)
 		}
