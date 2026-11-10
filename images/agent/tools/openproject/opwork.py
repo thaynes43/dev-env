@@ -12,6 +12,8 @@ scope, the routine lifecycle writes are yours. Run `opwork.py --help` for the co
   opwork.py status 97 "In review" --note "PR #1"
   opwork.py complete 97 --evidence "tests ..."  # evidence comment + Accepted
   opwork.py create --epic 95 --origin 97 --source-key followup:97:x --subject "..."
+  opwork.py groom 97 --description scope.md --acceptance -   # one field may be stdin
+  opwork.py order 97 --priority High            # what goes next
   opwork.py checkpoint 97 "state..."            # explicit local record, no tracker needed
   opwork.py checkins [--owner OWNER] [--status S] -o json
   opwork.py checkpoint-update 97 --next-action TEXT --check-after UTC --evidence TEXT
@@ -33,7 +35,11 @@ and reuses the item only on a match.
 Scripts that call Tracker.patch directly pass Markdown text or exactly {"raw": text}. An omitted
 field is not sent. None, empty or blank text would clear the field, so it is refused (exit 3)
 before any request unless the call names the field in allow_clear; then it is sent as {"raw": ""}.
-Any other value is refused (exit 1) before any request. No command here changes a description.
+Any other value is refused (exit 1) before any request. `groom` changes description, acceptance and
+constraints, each from a file path or from stdin (`-`), and reads the item back. `order` sets
+priority and reads the item back. No other command changes a description. A write never uses the
+session identity Tom. When OPWORK_WRITE_ORIGIN is a short lowercase name, every comment and a
+create's provenance carry a line `Origin: <name>`.
 
 Every item line carries the canonical OpenProject link, for example
 https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/97. OPWORK_BASE_URL
@@ -91,6 +97,9 @@ HOLDS = ("Needs answer", "Needs approval", "Paused")  # an explicit hold or paus
 RELATIONS = ("relates", "follows", "precedes", "blocks", "blocked")
 REVERSE = {"follows": "precedes", "precedes": "follows", "blocks": "blocked", "blocked": "blocks", "relates": "relates"}
 PARENT_OF = {"Epic": "Saga", "Story": "Epic"}
+WRITE_CMDS = {"claim", "comment", "status", "complete", "relate", "create", "groom", "order", "checkpoint-update"}
+ORIGIN_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}\Z")
+MAX_FIELD = 200000
 
 
 class Fail(Exception):
@@ -112,6 +121,30 @@ def load_api():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def refuse_tom(session):
+    """A tracker write is never attributed to Tom."""
+    folded = session.strip().lower()
+    if folded == "tom" or folded.startswith("tom ") or folded.startswith("tom|"):
+        raise Fail("REFUSED: opwork never writes as Tom. Nothing was sent.", 3)
+
+
+def write_origin():
+    """The Origin line for this process, or "" when unset. A bad name is refused before a request."""
+    raw = os.environ.get("OPWORK_WRITE_ORIGIN", "")
+    if not raw:
+        return ""
+    if not ORIGIN_NAME.match(raw):
+        raise Fail("REFUSED: OPWORK_WRITE_ORIGIN must be a short lowercase name. Nothing was sent.", 3)
+    return "Origin: " + raw
+
+
+def with_origin(text):
+    line = write_origin()
+    if not line or line in text.splitlines():
+        return text
+    return text.rstrip("\n") + "\n\n" + line
 
 
 def session_id():
@@ -256,7 +289,7 @@ class Tracker:
     def by_source_key(self, key):
         return [w for w in self.scan([{"status": {"operator": "*", "values": []}}]) if text_of(w.get(SOURCE_KEY)) == key]
 
-    def patch(self, wp, fields=None, status=None, lock=None, assignee=None, allow_clear=()):
+    def patch(self, wp, fields=None, status=None, lock=None, assignee=None, allow_clear=(), priority=None):
         """PATCH only the supplied fields, with lockVersion, then read back. Conflict re-reads and
         refuses; never overwrites, never retries. Formattable fields (MARKDOWN) go out as
         {"raw": text}, checked by formattable() before any request: an omitted field is not sent,
@@ -271,6 +304,8 @@ class Tracker:
             links["status"] = {"href": "/api/v3/statuses/%d" % self.resolve("statuses", status)}
         if assignee:
             links["assignee"] = {"href": "/api/v3/users/%d" % assignee}
+        if priority:
+            links["priority"] = {"href": "/api/v3/priorities/%d" % self.resolve("priorities", priority)}
         if links:
             payload["_links"] = links
         try:
@@ -283,8 +318,10 @@ class Tracker:
         if code is not None and code >= 400:
             raise Fail("PATCH #%d rejected HTTP %s: %s" % (wp["id"], code, data.get("message", data.get("raw", ""))))
         now = self.wp(wp["id"])  # tracker still down: the caller reports unavailable
+        priority_title = ((now.get("_links") or {}).get("priority") or {}).get("title", "")
         ok = all(text_of(now.get(k)) == texts.get(k, v) for k, v in fields.items()) and (not status or now["_links"]["status"]["title"].lower() == status.lower()) \
-            and (not assignee or (now["_links"].get("assignee") or {}).get("href") == "/api/v3/users/%d" % assignee)
+            and (not assignee or (now["_links"].get("assignee") or {}).get("href") == "/api/v3/users/%d" % assignee) \
+            and (not priority or priority_title.lower() == priority.lower())
         if not ok and code is None:
             raise Fail("NOT APPLIED: tracker error on the update of #%d; read back shows no change, safe to retry: %s" % (wp["id"], line(now)), 5)
         if not ok:
@@ -293,7 +330,7 @@ class Tracker:
 
     def comment(self, wp_id, text, session):
         token = uuid.uuid4().hex[:12]
-        body = "**[%s]** %s\n\n(opwork:note=%s)" % (session, text, token)
+        body = "**[%s]** %s\n\n(opwork:note=%s)" % (session, with_origin(text), token)
         return self.post_note(wp_id, body, token)
 
     def post_note(self, wp_id, body, token):
@@ -518,6 +555,58 @@ def cmd_show(t, a, session):
     return "\n".join(out)
 
 
+def read_field(spec, label):
+    """One groom field: a file path, or '-' for stdin. The text is never echoed in an error."""
+    try:
+        if spec == "-":
+            data = sys.stdin.read(MAX_FIELD + 1)
+        else:
+            with open(spec, "r", encoding="utf-8") as handle:
+                data = handle.read(MAX_FIELD + 1)
+    except (OSError, UnicodeError):
+        raise Fail("REFUSED: could not read %s. Nothing was sent." % label, 3) from None
+    if len(data) > MAX_FIELD:
+        raise Fail("REFUSED: %s is too long. Nothing was sent." % label, 3)
+    return data
+
+
+def field_block(w):
+    return "\n".join(["  acceptance: %s" % text_of(w.get(ACCEPT)).replace("\n", "\n    "),
+                      "  constraints: %s" % text_of(w.get(CONSTRAINTS)).replace("\n", "\n    "),
+                      "  description: %s" % text_of(w.get(DESCRIPTION)).replace("\n", "\n    ")])
+
+
+def cmd_groom(t, a, session):
+    specs = (("description", DESCRIPTION, a.description), ("acceptance", ACCEPT, a.acceptance), ("constraints", CONSTRAINTS, a.constraints))
+    chosen = [(label, field, spec) for label, field, spec in specs if spec is not None]
+    if not chosen:
+        raise Fail("REFUSED: groom needs at least one of --description, --acceptance or --constraints. Nothing was sent.", 3)
+    if sum(1 for _, _, spec in chosen if spec == "-") > 1:
+        raise Fail("REFUSED: only one field can be read from stdin. Nothing was sent.", 3)
+    fields = {field: read_field(spec, label) for label, field, spec in chosen}
+    w = t.wp(a.id)
+    t.patch(w, fields, lock=a.expect_lock)
+    t.comment(a.id, "Groomed %s." % ", ".join(label for label, _, _ in chosen), session)
+    now = t.wp(a.id)
+    return "groomed (read back): " + line(now) + "\n" + field_block(now)
+
+
+def cmd_order(t, a, session):
+    if not isinstance(a.priority, str) or not a.priority.strip():
+        raise Fail("REFUSED: --priority is required. Nothing was sent.", 3)
+    w = t.wp(a.id)
+    current = ((w.get("_links") or {}).get("priority") or {}).get("title", "")
+    if current.lower() == a.priority.lower():
+        return "ordered (read back): " + line(w) + "\n  priority: " + current
+    t.patch(w, priority=a.priority, lock=a.expect_lock)
+    now = t.wp(a.id)
+    title = ((now.get("_links") or {}).get("priority") or {}).get("title", "")
+    t.comment(a.id, "Priority -> %s." % title, session)
+    now = t.wp(a.id)
+    title = ((now.get("_links") or {}).get("priority") or {}).get("title", title)
+    return "ordered (read back): " + line(now) + "\n  priority: " + title
+
+
 def guard(w, session, force):
     status, owner = w["_links"]["status"]["title"], text_of(w.get(OWNER))
     if status in HOLDS and not force:
@@ -702,7 +791,7 @@ def cmd_create(t, a, session):
     if similar and not a.confirm_new:
         raise Fail("POSSIBLE DUPLICATE under #%d:\n  %s\nReuse one, or repeat with --confirm-new if this is genuinely separate work." % (a.epic, "\n  ".join(line(w) for w in similar)), 4)
     payload = {"subject": a.subject, "description": {"raw": a.description or ""}, SOURCE_KEY: a.source_key,
-               PROVENANCE: {"raw": "Created by <%s>%s as a follow-up. Not groomed or approved for execution." % (session, " from #%d" % a.origin if a.origin else "")},
+               PROVENANCE: {"raw": with_origin("Created by <%s>%s as a follow-up. Not groomed or approved for execution." % (session, " from #%d" % a.origin if a.origin else ""))},
                "_links": {"type": {"href": "/api/v3/types/%d" % t.resolve("types", kind)}, "status": {"href": "/api/v3/statuses/%d" % t.resolve("statuses", "Ungroomed")},
                           "parent": {"href": "/api/v3/work_packages/%d" % a.epic}}}
     for field, value in ((REPOS, a.repos), (ACCEPT, a.acceptance), (CONSTRAINTS, a.constraints)):
@@ -970,7 +1059,8 @@ def build_parser():
     p = argparse.ArgumentParser(prog="opwork", description=__doc__.split("\n\n")[0], epilog=(
         'Updates send only the fields given, with lockVersion. Formattable fields (description, acceptance, '
         'constraints, provenance) go out as {"raw": markdown}; for Tracker.patch, a null, empty or blank value '
-        'is refused unless allow_clear names the field. No command here changes a description.'))
+        'is refused unless allow_clear names the field. groom changes description, acceptance and constraints '
+        'from a file or stdin. order sets priority. Both read the item back. No other command changes a description.'))
     p.add_argument("--project", default=os.environ.get("OPWORK_PROJECT", PROJECT))
     sub = p.add_subparsers(dest="cmd", required=True)
     def add(name, fn, *args, **kw):
@@ -987,6 +1077,9 @@ def build_parser():
     add("checkins", cmd_checkins, (("--owner",), {}), (("--status",), {}), (("-o", "--output"), {"choices": ["json"], "required": True}), (("--page",), {"type": int, "default": 1}), (("--limit",), {"type": int, "default": 100}), help="bounded check-in view; owner filter applies to selected page, use has_more for global continuation")
     add("checkpoint-update", cmd_checkpoint_update, wp, (("--next-action",), {"required": True}), (("--check-after",), {"required": True}), (("--evidence",), {"required": True}), (("--last-verified",), {}), (("--handoff",), {}), (("--ack",), {"action": "store_true", "default": None}), (("--missing-ack",), {"dest": "ack", "action": "store_false"}), (("--stale",), {"action": "store_true", "default": None}), (("--blocked",), {"action": "store_true", "default": None}), (("--deployed",), {"action": "store_true", "default": None}), help="post attributed structured checkpoint")
     add("show", cmd_show, wp, (("--history",), {"action": "store_true"}), (("--relations",), {"action": "store_true"}), (("--full",), {"action": "store_true", "help": "no truncation of history text"}), help="read one item (read-only)")
+    add("groom", cmd_groom, wp, (("--description",), {"help": "scope file path, or - for stdin"}), (("--acceptance",), {"help": "acceptance file path, or - for stdin"}),
+        (("--constraints",), {"help": "constraints file path, or - for stdin"}), lock, help="edit scope, acceptance and constraints, then read the item back")
+    add("order", cmd_order, wp, (("--priority",), {"required": True, "help": "priority name, for example High"}), lock, help="set what goes next, then read the item back")
     add("claim", cmd_claim, wp, (("--note",), {}), (("--assignee",), {"help": "also set the native assignee: me, or a user id available on the item"}), lock, force, help="set Execution owner to this session, In progress")
     add("comment", cmd_comment, wp, (("text",), {"help": "or - to read stdin"}), help="attributed progress note")
     add("status", cmd_status, wp, (("state",), {}), (("--note",), {}), lock, force, help="explicit status change")
@@ -1023,6 +1116,9 @@ def run(argv, tracker, unavailable):
     if args.fn in (cmd_checkpoint, cmd_pending):
         tracker = None
     try:
+        if args.cmd in WRITE_CMDS:
+            refuse_tom(session)
+            write_origin()  # a bad name is refused before the tracker is opened
         if args.fn not in (cmd_checkpoint, cmd_pending):  # these print no item lines; validate before any tracker object or request
             LINK_BASE = base_url()
         if tracker is None and args.fn not in (cmd_checkpoint, cmd_pending):

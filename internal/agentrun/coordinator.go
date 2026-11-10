@@ -3,6 +3,7 @@ package agentrun
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -61,94 +62,173 @@ func coordinatorKey(item int64, run string) (string, error) {
 	return key, nil
 }
 
-func (a *app) coordinatorStart(ctx context.Context, args []string) error {
-	cmd := newCommand("coordinator start", outputJSON)
-	var item int64
-	var repo, project, model, run string
-	var hours, workers int
-	cmd.fs.Int64Var(&item, "item", 0, "")
-	cmd.fs.StringVar(&repo, "repo", "", "")
-	cmd.fs.StringVar(&project, "project", "", "")
-	cmd.fs.StringVar(&model, "model", "", "")
-	cmd.fs.StringVar(&run, "run", "", "")
-	cmd.fs.IntVar(&hours, "hours", 0, "")
-	cmd.fs.IntVar(&workers, "workers", 0, "")
-	pos, err := cmd.parse(a, args)
+// CoordinatorStartInput is one coordinator session as the caller names it.
+// Model is required. There is no effort field: the platform uses the model's preset.
+type CoordinatorStartInput struct {
+	Item    int64
+	Repo    string
+	Project string
+	Model   string
+	Run     string
+	Hours   int
+	Workers int
+}
+
+// CoordinatorOutcome is a coordinator session and the tracker item it belongs to.
+type CoordinatorOutcome struct {
+	Item    int64
+	Session apiv1.Session
+}
+
+// SessionDoor is the operator session routes coordinator start, status and stop use.
+type SessionDoor interface {
+	ListMine(context.Context) (apiv1.SessionList, error)
+	Get(context.Context, string) (apiv1.Session, error)
+	Create(context.Context, apiv1.CreateSessionRequest) (apiv1.Session, error)
+	Delete(context.Context, string) (apiv1.Session, error)
+}
+
+// PrepareCoordinatorStart checks a start and builds the create body.
+// It does no I/O. A missing or unknown model is refused here, and the body has no effort key.
+func PrepareCoordinatorStart(in CoordinatorStartInput) (apiv1.CreateSessionRequest, error) {
+	key, err := coordinatorKey(in.Item, in.Run)
 	if err != nil {
-		return err
+		return apiv1.CreateSessionRequest{}, err
 	}
-	if len(pos) != 0 {
-		return usageError("coordinator start takes flags only; use --item and --repo or --project")
-	}
-	key, err := coordinatorKey(item, run)
-	if err != nil {
-		return err
-	}
-	if model == "" {
-		return usageError("--model is required; name the full model ID Tom chose")
+	if in.Model == "" {
+		return apiv1.CreateSessionRequest{}, usageError("--model is required; name the full model ID Tom chose")
 	}
 	agent := "claude"
-	switch model {
+	switch in.Model {
 	case "claude-opus-5-5", "claude-fable-5-2":
 	case "gpt-6-astra":
 		agent = "codex"
 	default:
-		return usageError("--model must be a full model ID: claude-opus-5-5, claude-fable-5-2 or gpt-6-astra")
+		return apiv1.CreateSessionRequest{}, usageError("--model must be a full model ID: claude-opus-5-5, claude-fable-5-2 or gpt-6-astra")
 	}
-	if hours < 1 || hours > 4 {
-		return usageError("--hours must be from 1 to 4 (whole hours)")
+	if in.Hours < 1 || in.Hours > 4 {
+		return apiv1.CreateSessionRequest{}, usageError("--hours must be from 1 to 4 (whole hours)")
 	}
-	if workers < 1 || workers > 4 {
-		return usageError("--workers must be from 1 to 4")
+	if in.Workers < 1 || in.Workers > 4 {
+		return apiv1.CreateSessionRequest{}, usageError("--workers must be from 1 to 4")
 	}
-	if (repo == "") == (project == "") {
-		return usageError("give exactly one of --repo or --project")
+	if (in.Repo == "") == (in.Project == "") {
+		return apiv1.CreateSessionRequest{}, usageError("give exactly one of --repo or --project")
 	}
-	if repo != "" && (!coordinatorRepo.MatchString(repo) || len(repo) > 100) {
-		return usageError("--repo must be a repository name under the GitHub owner, not a path")
+	if in.Repo != "" && (!coordinatorRepo.MatchString(in.Repo) || len(in.Repo) > 100) {
+		return apiv1.CreateSessionRequest{}, usageError("--repo must be a repository name under the GitHub owner, not a path")
 	}
-	if project != "" && !projectName.MatchString(project) {
-		return usageError("--project must be a declared project name: lowercase letters, digits and hyphens, at most 63 characters")
+	if in.Project != "" && !projectName.MatchString(in.Project) {
+		return apiv1.CreateSessionRequest{}, usageError("--project must be a declared project name: lowercase letters, digits and hyphens, at most 63 characters")
 	}
-	if agent == "codex" && project == "" {
-		return usageError("gpt-6-astra needs --project: managed Codex tasks run in a declared project")
+	if agent == "codex" && in.Project == "" {
+		return apiv1.CreateSessionRequest{}, usageError("gpt-6-astra needs --project: managed Codex tasks run in a declared project")
 	}
-	c, err := a.connect(ctx, cmd.c.conn)
+	workerCap := int32(in.Workers)
+	return apiv1.CreateSessionRequest{
+		Repo: in.Repo, Project: in.Project, Agent: agent, Model: in.Model, Mode: "task", Profile: "dev", Size: "M",
+		Prompt:         fmt.Sprintf(coordinatorBriefTemplate, strconv.FormatInt(in.Item, 10), strconv.Itoa(in.Hours), strconv.Itoa(in.Workers)),
+		Limits:         &apiv1.Limits{Timeout: fmt.Sprintf("%dh", in.Hours), MaxWorkers: &workerCap},
+		IdempotencyKey: key,
+	}, nil
+}
+
+// ExecuteCoordinatorStart is the shared start: look up the caller's retained
+// session for the item key, or post one create. Validation finishes before any door call.
+func ExecuteCoordinatorStart(ctx context.Context, door SessionDoor, in CoordinatorStartInput) (CoordinatorOutcome, error) {
+	req, err := PrepareCoordinatorStart(in)
 	if err != nil {
-		return err
+		return CoordinatorOutcome{}, err
 	}
-	ctx = withCoordinatorLimits(ctx)
-	existing, err := a.coordinatorByKey(ctx, c, key)
+	existing, err := findCoordinator(ctx, door, req.IdempotencyKey)
 	if err != nil {
-		return err
+		return CoordinatorOutcome{}, err
 	}
 	if existing != nil {
-		return a.coordinatorRead(ctx, c, existing.Name, item, cmd.c.output)
+		sess, err := door.Get(ctx, existing.Name)
+		if err != nil {
+			return CoordinatorOutcome{}, err
+		}
+		return CoordinatorOutcome{Item: in.Item, Session: sess}, nil
 	}
-	cap := int32(workers)
-	req := apiv1.CreateSessionRequest{
-		Repo: repo, Project: project, Agent: agent, Model: model, Mode: "task", Profile: "dev", Size: "M",
-		Prompt: fmt.Sprintf(coordinatorBriefTemplate, strconv.FormatInt(item, 10), strconv.Itoa(hours), strconv.Itoa(workers)),
-		Limits: &apiv1.Limits{Timeout: fmt.Sprintf("%dh", hours), MaxWorkers: &cap}, IdempotencyKey: key,
+	sess, err := door.Create(ctx, req)
+	if err != nil {
+		return CoordinatorOutcome{}, err
 	}
-	// POST dedupes only unfinished tasks. An automatic retry could create
-	// again after the first task exits; explicit retries redo the lookup.
-	hc := *c.http
-	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	one := *c
-	one.http, one.rejectOversizeResponse = &hc, true
-	var s apiv1.Session
-	if _, err := a.callOnce(ctx, &one, http.MethodPost, apiv1.SessionsPath, req, &s); err != nil {
-		return codexProjectHint(err, req)
+	return CoordinatorOutcome{Item: in.Item, Session: sess}, nil
+}
+
+// CoordinatorStatusInput selects one session by name or by tracker item.
+type CoordinatorStatusInput struct {
+	Name string
+	Item int64
+	Run  string
+}
+
+// ExecuteCoordinatorStatus reads one session. A name and an item together are refused
+// before any door call. An unknown item key is a not-found error from the lookup.
+func ExecuteCoordinatorStatus(ctx context.Context, door SessionDoor, in CoordinatorStatusInput) (CoordinatorOutcome, error) {
+	var name string
+	item := in.Item
+	switch {
+	case in.Name == "" && in.Item == 0 && in.Run == "":
+		return CoordinatorOutcome{}, usageError("coordinator status takes one NAME or --item ID [--run LABEL]")
+	case in.Name != "" && (in.Item != 0 || in.Run != ""):
+		return CoordinatorOutcome{}, usageError("coordinator status takes one NAME or --item ID [--run LABEL]")
+	case in.Name != "":
+		if !projectName.MatchString(in.Name) {
+			return CoordinatorOutcome{}, usageError("coordinator status needs a valid session name")
+		}
+		name = in.Name
+		item = 0
+	default:
+		key, err := coordinatorKey(in.Item, in.Run)
+		if err != nil {
+			return CoordinatorOutcome{}, err
+		}
+		found, err := findCoordinator(ctx, door, key)
+		if err != nil {
+			return CoordinatorOutcome{}, err
+		}
+		if found == nil {
+			return CoordinatorOutcome{}, fail(ExitNotFound, "no retained coordinator session for %s under this caller", key)
+		}
+		name = found.Name
 	}
-	return a.printCoordinator(s, item, cmd.c.output)
+	sess, err := door.Get(ctx, name)
+	if err != nil {
+		return CoordinatorOutcome{}, err
+	}
+	if item == 0 && strings.HasPrefix(sess.IdempotencyKey, "coordinator-") {
+		id, _, _ := strings.Cut(strings.TrimPrefix(sess.IdempotencyKey, "coordinator-"), "-")
+		item, _ = strconv.ParseInt(id, 10, 64)
+	}
+	return CoordinatorOutcome{Item: item, Session: sess}, nil
+}
+
+// ExecuteCoordinatorStop reaps one session by name. An invalid name is refused
+// before any door call.
+func ExecuteCoordinatorStop(ctx context.Context, door SessionDoor, name string) (apiv1.Session, error) {
+	if !projectName.MatchString(name) {
+		return apiv1.Session{}, usageError("coordinator stop takes one valid session name")
+	}
+	return door.Delete(ctx, name)
+}
+
+// OperatorRefused reports an operator answer of unauthorized, forbidden or not found.
+func OperatorRefused(err error) bool {
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		return false
+	}
+	return ee.code == ExitAuth || ee.code == ExitNotFound
 }
 
 // The list is caller-scoped by the API. Look at retained completed sessions too:
 // the POST route alone deduplicates only unfinished requests (DESIGN-060 7.2).
-func (a *app) coordinatorByKey(ctx context.Context, c *conn, key string) (*apiv1.Session, error) {
-	var list apiv1.SessionList
-	if _, err := a.call(ctx, c, http.MethodGet, apiv1.SessionsPath, url.Values{apiv1.FilterMine: {"true"}}, nil, &list); err != nil {
+func findCoordinator(ctx context.Context, door SessionDoor, key string) (*apiv1.Session, error) {
+	list, err := door.ListMine(ctx)
+	if err != nil {
 		return nil, err
 	}
 	var found *apiv1.Session
@@ -165,26 +245,54 @@ func (a *app) coordinatorByKey(ctx context.Context, c *conn, key string) (*apiv1
 	return found, nil
 }
 
-func (a *app) coordinatorStatus(ctx context.Context, args []string) error {
-	cmd := newCommand("coordinator status", outputJSON)
-	var item int64
-	var run string
-	cmd.fs.Int64Var(&item, "item", 0, "")
-	cmd.fs.StringVar(&run, "run", "", "")
+func (a *app) coordinatorStart(ctx context.Context, args []string) error {
+	cmd := newCommand("coordinator start", outputJSON)
+	var in CoordinatorStartInput
+	cmd.fs.Int64Var(&in.Item, "item", 0, "")
+	cmd.fs.StringVar(&in.Repo, "repo", "", "")
+	cmd.fs.StringVar(&in.Project, "project", "", "")
+	cmd.fs.StringVar(&in.Model, "model", "", "")
+	cmd.fs.StringVar(&in.Run, "run", "", "")
+	cmd.fs.IntVar(&in.Hours, "hours", 0, "")
+	cmd.fs.IntVar(&in.Workers, "workers", 0, "")
 	pos, err := cmd.parse(a, args)
 	if err != nil {
 		return err
 	}
-	var name, key string
+	if len(pos) != 0 {
+		return usageError("coordinator start takes flags only; use --item and --repo or --project")
+	}
+	if _, err := PrepareCoordinatorStart(in); err != nil {
+		return err
+	}
+	c, err := a.connect(ctx, cmd.c.conn)
+	if err != nil {
+		return err
+	}
+	out, err := ExecuteCoordinatorStart(ctx, &appSessions{a: a, c: c}, in)
+	if err != nil {
+		return err
+	}
+	return a.printCoordinator(out.Session, out.Item, cmd.c.output)
+}
+
+func (a *app) coordinatorStatus(ctx context.Context, args []string) error {
+	cmd := newCommand("coordinator status", outputJSON)
+	var in CoordinatorStatusInput
+	cmd.fs.Int64Var(&in.Item, "item", 0, "")
+	cmd.fs.StringVar(&in.Run, "run", "", "")
+	pos, err := cmd.parse(a, args)
+	if err != nil {
+		return err
+	}
 	switch {
 	case len(pos) == 0:
-		key, err = coordinatorKey(item, run)
-		if err != nil {
+		if _, err := coordinatorKey(in.Item, in.Run); err != nil {
 			return err
 		}
-	case len(pos) == 1 && item == 0 && run == "":
-		name = pos[0]
-		if !projectName.MatchString(name) {
+	case len(pos) == 1 && in.Item == 0 && in.Run == "":
+		in.Name = pos[0]
+		if !projectName.MatchString(in.Name) {
 			return usageError("coordinator status needs a valid session name")
 		}
 	default:
@@ -194,30 +302,11 @@ func (a *app) coordinatorStatus(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx = withCoordinatorLimits(ctx)
-	if key != "" {
-		s, err := a.coordinatorByKey(ctx, c, key)
-		if err != nil {
-			return err
-		}
-		if s == nil {
-			return fail(ExitNotFound, "no retained coordinator session for %s under this caller", key)
-		}
-		name = s.Name
-	}
-	return a.coordinatorRead(ctx, c, name, item, cmd.c.output)
-}
-
-func (a *app) coordinatorRead(ctx context.Context, c *conn, name string, item int64, output string) error {
-	var s apiv1.Session
-	if _, err := a.call(ctx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(name)), nil, nil, &s); err != nil {
+	out, err := ExecuteCoordinatorStatus(ctx, &appSessions{a: a, c: c}, in)
+	if err != nil {
 		return err
 	}
-	if item == 0 && strings.HasPrefix(s.IdempotencyKey, "coordinator-") {
-		id, _, _ := strings.Cut(strings.TrimPrefix(s.IdempotencyKey, "coordinator-"), "-")
-		item, _ = strconv.ParseInt(id, 10, 64)
-	}
-	return a.printCoordinator(s, item, output)
+	return a.printCoordinator(out.Session, out.Item, cmd.c.output)
 }
 
 func (a *app) printCoordinator(s apiv1.Session, item int64, output string) error {
@@ -259,8 +348,8 @@ func (a *app) coordinatorStop(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	var s apiv1.Session
-	if _, err := a.call(withCoordinatorLimits(ctx), c, http.MethodDelete, apiv1.SessionPath(pos[0]), nil, nil, &s); err != nil {
+	s, err := ExecuteCoordinatorStop(ctx, &appSessions{a: a, c: c}, pos[0])
+	if err != nil {
 		return err
 	}
 	if cmd.c.output == outputJSON {
@@ -268,6 +357,45 @@ func (a *app) coordinatorStop(ctx context.Context, args []string) error {
 	}
 	a.outf("reaping %s: %s\n", s.Name, reapText(s))
 	return nil
+}
+
+// appSessions is the CLI's SessionDoor. Creates are one-shot and do not follow redirects.
+type appSessions struct {
+	a *app
+	c *conn
+}
+
+func (s *appSessions) ListMine(ctx context.Context) (apiv1.SessionList, error) {
+	var list apiv1.SessionList
+	_, err := s.a.call(withCoordinatorLimits(ctx), s.c, http.MethodGet, apiv1.SessionsPath, url.Values{apiv1.FilterMine: {"true"}}, nil, &list)
+	return list, err
+}
+
+func (s *appSessions) Get(ctx context.Context, name string) (apiv1.Session, error) {
+	var sess apiv1.Session
+	_, err := s.a.call(withCoordinatorLimits(ctx), s.c, http.MethodGet, apiv1.SessionPath(url.PathEscape(name)), nil, nil, &sess)
+	return sess, err
+}
+
+func (s *appSessions) Create(ctx context.Context, req apiv1.CreateSessionRequest) (apiv1.Session, error) {
+	hc := *s.c.http
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	one := *s.c
+	one.http, one.rejectOversizeResponse = &hc, true
+	var sess apiv1.Session
+	// POST dedupes only unfinished tasks. An automatic retry could create
+	// again after the first task exits; explicit retries redo the lookup.
+	_, err := s.a.callOnce(withCoordinatorLimits(ctx), &one, http.MethodPost, apiv1.SessionsPath, req, &sess)
+	if err != nil {
+		return apiv1.Session{}, codexProjectHint(err, req)
+	}
+	return sess, nil
+}
+
+func (s *appSessions) Delete(ctx context.Context, name string) (apiv1.Session, error) {
+	var sess apiv1.Session
+	_, err := s.a.call(withCoordinatorLimits(ctx), s.c, http.MethodDelete, apiv1.SessionPath(name), nil, nil, &sess)
+	return sess, err
 }
 
 func (a *app) coordinatorBrief(args []string) error {

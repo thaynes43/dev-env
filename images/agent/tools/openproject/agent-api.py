@@ -40,13 +40,31 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
+def read_token_file():
+    """One read of OPWORK_TOKEN_FILE: (token, None) or (None, category).
+
+    The path and the bytes are never printed, stored in an exception, or logged. A missing file
+    is launch. A value that is not the API token's shape is invalid. kubectl is not used.
+    """
+    try:
+        with open(os.environ.get("OPWORK_TOKEN_FILE", ""), "r", encoding="utf-8") as handle:
+            value = handle.read().strip()
+    except (OSError, UnicodeError):
+        return None, "launch"
+    if not (len(value) == 70 and value.startswith("opapi-") and all(c in "0123456789abcdefABCDEF" for c in value[6:])):
+        return None, "invalid"
+    return value, None
+
 def read_helper(timeout):
     """One read of the dedicated token-only helper: (token, None) or (None, category).
 
     The category is one of denied, transient, timeout, invalid or launch. A launch failure is a
     missing or non-executable kubectl and is not retried. Neither stdout nor stderr is printed,
     stored or put in an exception: stderr is only matched against a fixed allowlist.
+    OPWORK_TOKEN_FILE, when set, is the only source: a failure does not fall through to kubectl.
     """
+    if os.environ.get("OPWORK_TOKEN_FILE"):
+        return read_token_file()
     try:
         result = subprocess.run(["kubectl", "exec", "-n", "dev", "deploy/openproject-agent-credentials", "-c", "credentials", "--", "cat", "/run/openproject-agent/token"], capture_output=True, check=False, timeout=timeout, env=dict(os.environ, KUBECTL_REMOTE_COMMAND_WEBSOCKETS="false"))
     except subprocess.TimeoutExpired:
