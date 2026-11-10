@@ -524,6 +524,52 @@ func TestGrantAskBrokerDenyAskState(t *testing.T) {
 	})
 }
 
+func TestGrantAskValidationReadBackIsNotRetried(t *testing.T) {
+	f := newGrantAskFixture(t, true)
+	live := &invalidAskReadBack{Client: f.meta}
+	f.b.Client = live
+	f.b.APIReader = live
+	f.until(func(g *v1alpha1.AccessGrant) bool {
+		return g.Status.Phase == v1alpha1.GrantPending && live.creates == 1 && f.askCount() == 1
+	})
+	if err := f.base.Delete(f.ctx, f.onlyAsk()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	g := f.grant()
+	if live.creates != 1 || f.askCount() != 0 || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Message != grantAskMsgGone || g.Status.ApprovedBy != "" {
+		t.Fatalf("after the invalid read-back and deletion: creates=%d asks=%d phase=%s deniedBy=%s message=%q", live.creates, f.askCount(), g.Status.Phase, g.Status.DeniedBy, g.Status.Message)
+	}
+}
+
+// invalidAskReadBack returns one stored Ask with an empty question, so the
+// store's read-back fails validation after the object has been created.
+type invalidAskReadBack struct {
+	client.Client
+	creates   int
+	corrupted bool
+}
+
+func (c *invalidAskReadBack) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if _, ok := obj.(*coord.Ask); ok {
+		c.creates++
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+func (c *invalidAskReadBack) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if err := c.Client.Get(ctx, key, obj, opts...); err != nil {
+		return err
+	}
+	if ask, ok := obj.(*coord.Ask); ok && !c.corrupted {
+		c.corrupted = true
+		ask.Spec.Question = ""
+	}
+	return nil
+}
+
 func TestGrantAskFailedWithdrawRetries(t *testing.T) {
 	f := newGrantAskFixture(t, true)
 	f.openAsk()

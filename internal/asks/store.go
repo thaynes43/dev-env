@@ -213,7 +213,9 @@ func (s KubeStore) Create(ctx context.Context, req Requester, in apiv1.AskCreate
 	}
 	wire, err := toWire(fresh)
 	if err != nil {
-		return apiv1.Ask{}, false, err
+		// The object is already stored. A validation failure on the read-back
+		// is not proof the create was refused.
+		return apiv1.Ask{}, false, createUnconfirmed(err)
 	}
 	return wire, true, nil
 }
