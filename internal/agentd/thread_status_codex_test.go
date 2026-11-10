@@ -248,18 +248,18 @@ func TestCodexThreadStatusSendsOnlyReads(t *testing.T) {
 		items   []any
 		outcome string
 	}{
-		"completed": {map[string]any{"id": turnID, "status": "completed"}, []any{map[string]any{"type": "agentMessage", "id": "i1", "text": "Done."}}, apiv1.ThreadResponded},
-		"pending":   {map[string]any{"id": turnID, "status": "inProgress"}, []any{map[string]any{"type": "commandExecution", "id": "i2"}}, apiv1.ThreadVisible},
-		"failed":    {map[string]any{"id": turnID, "status": "failed"}, []any{}, apiv1.ThreadFailed},
+		"completed": {map[string]any{"id": turnID, "status": "completed", "items": []any{}}, []any{codexThreadItemEntry(turnID, map[string]any{"id": "i1", "type": "agentMessage", "text": "Done."})}, apiv1.ThreadResponded},
+		"pending":   {map[string]any{"id": turnID, "status": "inProgress", "items": []any{}}, []any{codexThreadItemEntry(turnID, map[string]any{"id": "i2", "type": "contextCompaction"})}, apiv1.ThreadVisible},
+		"failed":    {map[string]any{"id": turnID, "status": "failed", "items": []any{}}, []any{}, apiv1.ThreadFailed},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var cwd string
 			s, seen := threadRPCFixture(t, func(method string, _ map[string]any) any {
 				switch method {
 				case "remoteControl/status/read":
-					return map[string]any{"status": "connected"}
+					return map[string]any{"status": "connected", "installationId": "install-1", "serverName": "fixture", "environmentId": nil}
 				case "thread/list":
-					return map[string]any{"data": []any{map[string]any{"id": newThread, "cwd": cwd, "source": "vscode", "preview": "p", "createdAt": 1762711200}}}
+					return map[string]any{"data": []any{codexThreadFixture(newThread, cwd, "p", 1762711200, "vscode")}}
 				case "thread/turns/list":
 					return map[string]any{"data": []any{tc.turn}}
 				case "thread/items/list":
