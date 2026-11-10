@@ -73,6 +73,15 @@ var (
 	// errGrantAskRouteForeign means the route is set and the object there
 	// is not this grant's Ask. The caller denies. It does not open another.
 	errGrantAskRouteForeign = errors.New("grant ask at the route is not this grant's")
+	// errGrantAskUnconfirmed means the create request may have committed.
+	// The caller does not create again. A missing Ask denies the grant.
+	errGrantAskUnconfirmed = errors.New("grant ask create was not confirmed")
+	// errGrantAskRouteNotStored means the live grant does not show the route
+	// after the status write. No Ask is created. The 30-minute deny stands.
+	errGrantAskRouteNotStored = errors.New("grant ask route was not stored")
+	// errGrantAskUnreadable means an Ask or grant read needed to consume the
+	// answer failed. It is not NotFound. The unread bound applies.
+	errGrantAskUnreadable = errors.New("grant ask could not be read")
 
 	grantAskDigestPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 	grantAskTTLPattern      = regexp.MustCompile(`^([0-9]+(h|m|s))+$`)
@@ -202,6 +211,9 @@ func (b *Broker) decideGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, as
 	case errors.Is(err, ErrRefused):
 		return b.denyPendingGrant(ctx, g, "the answer could not be applied", now)
 	default:
+		if errors.Is(err, errGrantAskUnreadable) {
+			return b.routedUnread(ctx, g, now)
+		}
 		log.FromContext(ctx).Error(err, "grant ask answer was not recorded", "grant", g.Name)
 		return reconcile.Result{RequeueAfter: time.Second}, nil
 	}
@@ -244,6 +256,10 @@ func (b *Broker) denyScopeMismatch(ctx context.Context, g *v1alpha1.AccessGrant,
 }
 
 func (b *Broker) denyPendingGrant(ctx context.Context, g *v1alpha1.AccessGrant, msg string, now metav1.Time) (reconcile.Result, error) {
+	return b.denyStillPending(ctx, g, DeniedByBroker, msg, now)
+}
+
+func (b *Broker) denyStillPending(ctx context.Context, g *v1alpha1.AccessGrant, deniedBy, msg string, now metav1.Time) (reconcile.Result, error) {
 	fresh, err := b.readGrant(ctx, g.Name)
 	if apierrors.IsNotFound(err) {
 		return reconcile.Result{}, nil
@@ -255,7 +271,7 @@ func (b *Broker) denyPendingGrant(ctx context.Context, g *v1alpha1.AccessGrant, 
 	if !grantStillPending(g, fresh) {
 		return reconcile.Result{}, nil
 	}
-	return b.end(ctx, fresh, v1alpha1.GrantDenied, DeniedByBroker, msg, now)
+	return b.end(ctx, fresh, v1alpha1.GrantDenied, deniedBy, msg, now)
 }
 
 func grantStillPending(seen, fresh *v1alpha1.AccessGrant) bool {
@@ -463,7 +479,20 @@ func (b *Broker) claimGrantAskRoute(ctx context.Context, g *v1alpha1.AccessGrant
 		}
 		return err
 	}
-	*g = *fresh
+	// The update response is decoded into fresh, so a pruned field can remain
+	// in that object. A new live read is the only proof the route was stored.
+	var stored v1alpha1.AccessGrant
+	if b.APIReader == nil {
+		return errGrantAskLater
+	}
+	if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: g.Name}, &stored); err != nil {
+		return err
+	}
+	if stored.UID != g.UID || stored.Status.Ask != name {
+		b.event(g, corev1.EventTypeWarning, "GrantAsk", "AskRouteNotStored", "the grant's CRD does not store the route")
+		return errGrantAskRouteNotStored
+	}
+	*g = stored
 	return nil
 }
 
@@ -487,12 +516,17 @@ func (b *Broker) createGrantedAsk(ctx context.Context, g *v1alpha1.AccessGrant, 
 		Origin: grantAskOriginBroker,
 	}
 	wire, created, err := b.askCreator().Create(ctx, req, body, now.Time)
-	if errors.Is(err, asks.ErrConflict) {
-		b.clearGrantAskCreateOutstanding(g.UID)
-		return errGrantAskRouteForeign
-	}
 	if err != nil {
-		return err
+		// A refusal proved to precede commit may be retried until the grant's
+		// original deadline. Anything else may have committed: do not create again.
+		if createRefusedBeforeCommit(err) {
+			return err
+		}
+		b.clearGrantAskCreateOutstanding(g.UID)
+		if errors.Is(err, asks.ErrConflict) {
+			return errGrantAskRouteForeign
+		}
+		return errGrantAskUnconfirmed
 	}
 	b.clearGrantAskCreateOutstanding(g.UID)
 	stored, loadErr := b.loadAskByName(ctx, g.Status.Ask)
@@ -520,7 +554,13 @@ func (b *Broker) followGrantAskRoute(ctx context.Context, g *v1alpha1.AccessGran
 	switch {
 	case apierrors.IsNotFound(err):
 		if b.grantAskCreateOutstanding(g.UID) {
-			if cerr := b.createGrantedAsk(ctx, g, sess, now); cerr != nil {
+			// The create has not been sent. The grant's original deadline
+			// still ends the wait. Past it, the grant is denied.
+			if !now.Time.Before(g.CreationTimestamp.Add(PendingTimeout)) {
+				return b.denyStillPending(ctx, g, DeniedByTimeout, "no answer in 30 minutes", now)
+			}
+			cerr := b.createGrantedAsk(ctx, g, sess, now)
+			if cerr != nil && !errors.Is(cerr, errGrantAskUnconfirmed) {
 				if errors.Is(cerr, errGrantAskRouteForeign) {
 					b.noteForeignGrantAsk(g)
 					return b.denyRoutedGrant(ctx, g, grantAskMsgForeign, now)
@@ -530,6 +570,9 @@ func (b *Broker) followGrantAskRoute(ctx context.Context, g *v1alpha1.AccessGran
 			ask, err = b.loadAskByName(ctx, g.Status.Ask)
 			if err != nil {
 				if apierrors.IsNotFound(err) {
+					if errors.Is(cerr, errGrantAskUnconfirmed) {
+						return b.denyRoutedGrant(ctx, g, grantAskMsgGone, now)
+					}
 					return b.grantAskHoldError(ctx, g, errGrantAskLater)
 				}
 				return b.routedUnread(ctx, g, now)
@@ -540,7 +583,6 @@ func (b *Broker) followGrantAskRoute(ctx context.Context, g *v1alpha1.AccessGran
 	case err != nil:
 		return b.routedUnread(ctx, g, now)
 	}
-	b.clearGrantAskUnread(g.UID)
 	b.clearGrantAskCreateOutstanding(g.UID)
 	if !grantAskIdentityOK(g, ask) {
 		b.noteForeignGrantAsk(g)
@@ -549,18 +591,26 @@ func (b *Broker) followGrantAskRoute(ctx context.Context, g *v1alpha1.AccessGran
 	if done, res, aerr := b.applyLoadedGrantAnswer(ctx, g, ask, now); done {
 		return res, aerr
 	}
+	if err := b.clearGrantAskUnread(ctx, g); err != nil {
+		return reconcile.Result{RequeueAfter: time.Second}, nil
+	}
 	return b.noteGrantAsk(ctx, g, now)
 }
 
 func (b *Broker) routedUnread(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (reconcile.Result, error) {
-	if b.grantAskUnreadTooLong(g.UID, now.Time) {
+	tooLong, err := b.grantAskUnreadExpired(ctx, g, now.Time)
+	if err != nil {
+		return reconcile.Result{RequeueAfter: time.Second}, nil
+	}
+	if tooLong {
 		return b.denyRoutedGrant(ctx, g, grantAskMsgUnread, now)
 	}
 	return reconcile.Result{RequeueAfter: time.Second}, nil
 }
 
 func (b *Broker) denyRoutedGrant(ctx context.Context, g *v1alpha1.AccessGrant, msg string, now metav1.Time) (reconcile.Result, error) {
-	b.clearGrantAskUnread(g.UID)
+	// The unread time stays until the deny write lands. Clearing it first
+	// would start a new wait when that write conflicts.
 	b.clearGrantAskCreateOutstanding(g.UID)
 	return b.denyPendingGrant(ctx, g, msg, now)
 }
@@ -584,17 +634,13 @@ func (b *Broker) classifyUnroutedGrantAsk(ctx context.Context, g *v1alpha1.Acces
 
 // attestedPolicyCouldMatch reports whether a non-deleting policy with an
 // attestation requirement fits this grant. The statement need not be present
-// yet. A failed policy read reports a match, so this pass opens no Ask.
-func (b *Broker) attestedPolicyCouldMatch(ctx context.Context, g *v1alpha1.AccessGrant) bool {
-	if !b.EnableAttestedGrants {
+// yet. policies is the one live list for this reconcile.
+func attestedPolicyCouldMatch(enabled bool, policies []v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
+	if !enabled {
 		return false
 	}
-	var policies v1alpha1.GrantPolicyList
-	if err := b.Client.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
-		return true
-	}
-	for i := range policies.Items {
-		p := &policies.Items[i]
+	for i := range policies {
+		p := &policies[i]
 		if p.DeletionTimestamp.IsZero() && MatchesAttested(p, g) {
 			return true
 		}
@@ -624,28 +670,102 @@ func (b *Broker) grantAskCreateOutstanding(uid types.UID) bool {
 	return ok
 }
 
-func (b *Broker) grantAskUnreadTooLong(uid types.UID, now time.Time) bool {
-	b.grantAskMu.Lock()
-	defer b.grantAskMu.Unlock()
-	if b.grantAskUnreadAt == nil {
-		b.grantAskUnreadAt = map[types.UID]time.Time{}
+// grantAskUnreadExpired reports whether the stored unread episode has reached
+// grantAskUnreadLimit. The first failure stores status.askUnreadAt and is not
+// yet too long. A later broker reads that instant and does not start again.
+func (b *Broker) grantAskUnreadExpired(ctx context.Context, g *v1alpha1.AccessGrant, now time.Time) (bool, error) {
+	fresh, err := b.readGrant(ctx, g.Name)
+	if err != nil {
+		return false, err
 	}
-	started, ok := b.grantAskUnreadAt[uid]
-	if !ok {
-		b.grantAskUnreadAt[uid] = now
-		return false
+	if fresh.Status.AskUnreadAt != nil {
+		*g = *fresh
+		return !now.Before(fresh.Status.AskUnreadAt.Add(grantAskUnreadLimit)), nil
 	}
-	return !now.Before(started.Add(grantAskUnreadLimit))
+	stamp := metav1.NewTime(now)
+	fresh.Status.AskUnreadAt = &stamp
+	written, err := b.writeStatus(ctx, fresh)
+	if err != nil {
+		return false, err
+	}
+	if !written {
+		return false, errGrantAskLater
+	}
+	*g = *fresh
+	return false, nil
 }
 
-func (b *Broker) clearGrantAskUnread(uid types.UID) {
-	b.grantAskMu.Lock()
-	defer b.grantAskMu.Unlock()
-	delete(b.grantAskUnreadAt, uid)
+// clearGrantAskUnread ends the unread episode after a read that can consume
+// the answer. A failed clear leaves the stored instant, so the next failure
+// does not get a new full wait.
+func (b *Broker) clearGrantAskUnread(ctx context.Context, g *v1alpha1.AccessGrant) error {
+	fresh, err := b.readGrant(ctx, g.Name)
+	if err != nil {
+		return err
+	}
+	if fresh.Status.AskUnreadAt == nil {
+		*g = *fresh
+		return nil
+	}
+	fresh.Status.AskUnreadAt = nil
+	written, err := b.writeStatus(ctx, fresh)
+	if err != nil {
+		return err
+	}
+	if !written {
+		return errGrantAskLater
+	}
+	*g = *fresh
+	return nil
+}
+
+// createRefusedBeforeCommit reports a Create error that is proved to precede
+// any commit. ErrCreateUnconfirmed is never in this set, including when it
+// wraps ErrUnavailable from a status initialisation or a final read.
+func createRefusedBeforeCommit(err error) bool {
+	if err == nil || errors.Is(err, asks.ErrCreateUnconfirmed) {
+		return false
+	}
+	return errors.Is(err, asks.ErrLimit) || errors.Is(err, asks.ErrUnavailable) || errors.Is(err, apiv1.ErrAskInvalid)
 }
 
 func (b *Broker) noteForeignGrantAsk(g *v1alpha1.AccessGrant) {
 	b.event(g, corev1.EventTypeWarning, "GrantAsk", "AskNotBroker", "an ask at this grant's name was not opened by the broker")
+}
+
+// withdrawBrokerDenial withdraws the broker's own Ask after the broker has
+// denied a routed grant for a reason other than the Ask's own answer. The
+// deny is already written. A foreign or unreadable Ask is left alone. An
+// Ask that is not open, including one the session ending left for Dismiss,
+// is left as it is. A failed withdraw is returned so a later reconcile retries.
+func (b *Broker) withdrawBrokerDenial(ctx context.Context, g *v1alpha1.AccessGrant) error {
+	if g == nil || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Ask == "" {
+		return nil
+	}
+	if g.Status.Message == "the session ended" {
+		return nil
+	}
+	obj, err := b.loadDecisionAsk(ctx, g)
+	if apierrors.IsNotFound(err) || errors.Is(err, errGrantAskLater) || errors.Is(err, errGrantAskUnreadable) {
+		return nil
+	}
+	if err != nil {
+		return nil
+	}
+	if !grantAskIdentityOK(g, obj) {
+		return nil
+	}
+	if obj.Status.State != "" && obj.Status.State != string(apiv1.AskStateOpen) {
+		return nil
+	}
+	req := asks.Requester{Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session, UID: string(g.Spec.Requester.SessionUID)}
+	if _, err := b.askStore().Withdraw(ctx, obj.Name, req, b.now().Time); err != nil {
+		if errors.Is(err, asks.ErrNotFound) || errors.Is(err, apiv1.ErrAskNotOpen) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // withdrawOpenGrantAsk withdraws the broker's open grant Ask when the session
@@ -697,7 +817,10 @@ func (b *Broker) loadAskByName(ctx context.Context, name string) (*coord.Ask, er
 	}
 	var obj coord.Ask
 	if err := b.APIReader.Get(ctx, client.ObjectKey{Namespace: asks.Namespace, Name: name}, &obj); err != nil {
-		return nil, err
+		if apierrors.IsNotFound(err) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %w", errGrantAskUnreadable, err)
 	}
 	return &obj, nil
 }

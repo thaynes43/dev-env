@@ -175,11 +175,12 @@ type Broker struct {
 	// to prove a pre-check did not decide, or to count one real decision.
 	decideFn func(ctx context.Context, grantName string, d Decision) error
 
-	// grantAskMu guards the in-memory route timers. The route itself is status.ask.
+	// grantAskMu guards grantAskCreateWait. The route and the unread time
+	// are on the grant's status.
 	grantAskMu sync.Mutex
-	// grantAskUnreadAt is when a routed grant's Ask first could not be read.
-	grantAskUnreadAt map[types.UID]time.Time
-	// grantAskCreateWait is a create this process has not seen succeed.
+	// grantAskCreateWait is a create this process has not sent, or that the
+	// apiserver refused before commit. It is not a create that may have
+	// committed, and a restart does not keep it.
 	grantAskCreateWait map[types.UID]struct{}
 
 	// reconciled, when set, hears of every finished reconcile (tests).
@@ -308,11 +309,17 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 		}
 		return ctrl.Result{RequeueAfter: min(5*time.Second, deadline.Sub(now.Time))}, nil
 	}
+	// One live list for this reconcile: the approval match and the decision
+	// to wait for an attestation both use it. A failed list opens no Ask.
+	policies, err := b.liveGrantPolicies(ctx)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("list the grant policies: %w", err)
+	}
 	open := false
 	if b.EnableGrantAsks {
 		switch b.classifyUnroutedGrantAsk(ctx, g) {
 		case grantAskUnread:
-			res, err, waiting := b.pendingUnrouted(ctx, g, sess, now, deadline, false)
+			res, err, waiting := b.pendingUnrouted(ctx, g, sess, now, deadline, false, policies)
 			if waiting {
 				return ctrl.Result{RequeueAfter: time.Second}, nil
 			}
@@ -332,23 +339,31 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 		case grantAskNone:
 			open = g.Spec.Type != v1alpha1.GrantCredential
 		}
-		if open && b.attestedPolicyCouldMatch(ctx, g) {
+		if open && attestedPolicyCouldMatch(b.EnableAttestedGrants, policies, g) {
 			open = false
 		}
 	}
-	res, err, _ := b.pendingUnrouted(ctx, g, sess, now, deadline, open)
+	res, err, _ := b.pendingUnrouted(ctx, g, sess, now, deadline, open, policies)
 	return res, err
+}
+
+// liveGrantPolicies reads GrantPolicies from the API server, not the cache.
+func (b *Broker) liveGrantPolicies(ctx context.Context) ([]v1alpha1.GrantPolicy, error) {
+	if b.APIReader == nil {
+		return nil, errGrantAskLater
+	}
+	var list v1alpha1.GrantPolicyList
+	if err := b.APIReader.List(ctx, &list, client.InNamespace(b.PolicyNamespace)); err != nil {
+		return nil, err
+	}
+	return list.Items, nil
 }
 
 // pendingUnrouted is the path for a grant with no route. open is true only
 // when this pass may create the one Ask. waiting is true when the grant is
 // still pending on Tom.
-func (b *Broker) pendingUnrouted(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time, deadline time.Time, open bool) (ctrl.Result, error, bool) {
-	var policies v1alpha1.GrantPolicyList
-	if err := b.Client.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("list the grant policies: %w", err), false
-	}
-	if p, st := b.attestedApproval(ctx, g, sess, policies.Items, now.Time); p != nil {
+func (b *Broker) pendingUnrouted(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time, deadline time.Time, open bool, policies []v1alpha1.GrantPolicy) (ctrl.Result, error, bool) {
+	if p, st := b.attestedApproval(ctx, g, sess, policies, now.Time); p != nil {
 		msg := "approved by a standing policy"
 		if st != nil {
 			msg = grantattest.Message(p.Name, *st)
@@ -377,6 +392,9 @@ func (b *Broker) pendingUnrouted(ctx context.Context, g *v1alpha1.AccessGrant, s
 		case errors.Is(err, errGrantAskRouteForeign):
 			res, derr := b.followGrantAskRoute(ctx, g, sess, now)
 			return res, derr, false
+		case errors.Is(err, errGrantAskRouteNotStored):
+			// The route is not in the stored grant. No Ask is created, and
+			// the 30-minute deny below still applies.
 		case err != nil:
 			res, herr := b.grantAskHoldError(ctx, g, err)
 			return res, herr, false
@@ -552,15 +570,22 @@ func (b *Broker) end(ctx context.Context, g *v1alpha1.AccessGrant, phase v1alpha
 	g.Status.Message = truncate(msg)
 	g.Status.EndedAt = &now
 	written, err := b.writeStatus(ctx, g)
-	if written {
-		b.decided(ctx, g, msg)
-		return ctrl.Result{RequeueAfter: Retention}, nil
+	if !written {
+		return ctrl.Result{}, err
 	}
-	return ctrl.Result{}, err
+	b.decided(ctx, g, msg)
+	// The deny is already stored. A withdraw that fails is retried from retain.
+	if werr := b.withdrawBrokerDenial(ctx, g); werr != nil {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	return ctrl.Result{RequeueAfter: Retention}, nil
 }
 
 // retain deletes an ended grant once it has been kept 90 days.
 func (b *Broker) retain(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (ctrl.Result, error) {
+	if werr := b.withdrawBrokerDenial(ctx, g); werr != nil {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 	ended := g.CreationTimestamp
 	if g.Status.EndedAt != nil {
 		ended = *g.Status.EndedAt

@@ -65,6 +65,11 @@ var (
 	ErrLimit = errors.New("ask limit reached")
 	// ErrUnavailable means the store could not confirm a read or a write.
 	ErrUnavailable = errors.New("asks are unavailable")
+	// ErrCreateUnconfirmed means the create request left the client and this
+	// call cannot prove the Ask was not stored. That includes a status
+	// initialisation or final read that failed after the object was created.
+	// The caller must not create again. A missing Ask denies the grant.
+	ErrCreateUnconfirmed = errors.New("ask create was not confirmed")
 )
 
 // LimitError is a refused create. Scope is LimitOpen, LimitOpenGrant,
@@ -182,25 +187,46 @@ func (s KubeStore) Create(ctx context.Context, req Requester, in apiv1.AskCreate
 		if apierrors.IsAlreadyExists(err) {
 			existing, rerr := s.load(ctx, made.Name)
 			if rerr != nil {
-				return apiv1.Ask{}, false, rerr
+				return apiv1.Ask{}, false, createUnconfirmed(rerr)
 			}
-			return s.finishExisting(ctx, existing, req, digest)
+			wire, _, ferr := s.finishExisting(ctx, existing, req, digest)
+			if ferr != nil && !errors.Is(ferr, ErrConflict) {
+				return apiv1.Ask{}, false, createUnconfirmed(ferr)
+			}
+			return wire, false, ferr
 		}
 		s.logWrite(err, made.Name)
-		return apiv1.Ask{}, false, fmt.Errorf("%w: ask was not stored", ErrUnavailable)
+		stored := fmt.Errorf("%w: ask was not stored", ErrUnavailable)
+		// A definitive apiserver refusal did not persist the object.
+		// Anything else left the client and may have committed.
+		if createRefusedBeforeCommit(err) {
+			return apiv1.Ask{}, false, stored
+		}
+		return apiv1.Ask{}, false, createUnconfirmed(stored)
 	}
 	if err := s.ensureOpen(ctx, obj); err != nil {
-		return apiv1.Ask{}, false, err
+		return apiv1.Ask{}, false, createUnconfirmed(err)
 	}
 	fresh, err := s.load(ctx, obj.Name)
 	if err != nil {
-		return apiv1.Ask{}, false, err
+		return apiv1.Ask{}, false, createUnconfirmed(err)
 	}
 	wire, err := toWire(fresh)
 	if err != nil {
 		return apiv1.Ask{}, false, err
 	}
 	return wire, true, nil
+}
+
+// createRefusedBeforeCommit reports an apiserver rejection that does not
+// persist the object. The create request was sent, and the refusal is the
+// proof it did not commit.
+func createRefusedBeforeCommit(err error) bool {
+	return apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsMethodNotSupported(err) || apierrors.IsUnsupportedMediaType(err)
+}
+
+func createUnconfirmed(err error) error {
+	return fmt.Errorf("%w: %w", ErrCreateUnconfirmed, err)
 }
 
 func (s KubeStore) finishExisting(ctx context.Context, obj *coord.Ask, req Requester, digest string) (apiv1.Ask, bool, error) {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -378,6 +379,99 @@ func TestAccessGrantAskRoute(t *testing.T) {
 	}
 	if got := getGrant(t, g).Status.Ask; got != "ask-0123456789abcdef" {
 		t.Fatalf("release cleared the route %q", got)
+	}
+
+	started := metav1.NewTime(time.Now().Truncate(time.Second))
+	unread := getGrant(t, g)
+	unread.Status.AskUnreadAt = &started
+	if err := k8s.Status().Update(ctx(t), unread); err != nil {
+		t.Fatalf("unread time: %v", err)
+	}
+	moved := getGrant(t, g)
+	later := metav1.NewTime(started.Add(time.Minute))
+	moved.Status.AskUnreadAt = &later
+	wantInvalid(t, k8s.Status().Update(ctx(t), moved), "the grant ask unread time is set once per episode")
+	kept := getGrant(t, g)
+	kept.Status.AskUnreadAt = nil
+	if err := k8s.Status().Update(ctx(t), kept); err != nil {
+		t.Fatalf("clear unread time: %v", err)
+	}
+	if getGrant(t, g).Status.AskUnreadAt != nil {
+		t.Fatal("clearing the unread time did not end the episode")
+	}
+}
+
+func TestAccessGrantStatusRemovalKeepsARoute(t *testing.T) {
+	// A grant with no route accepts each removal. A routed grant refuses it.
+	for _, tc := range []struct {
+		name  string
+		route bool
+	}{
+		{"no route", false},
+		{"route", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := kubeGrant()
+			if err := k8s.Create(ctx(t), g); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			g = getGrant(t, g)
+			g.Status.Phase = v1alpha1.GrantPending
+			if tc.route {
+				g.Status.Ask = "ask-0123456789abcdef"
+			}
+			if err := k8s.Status().Update(ctx(t), g); err != nil {
+				t.Fatalf("status: %v", err)
+			}
+			g = getGrant(t, g)
+			before := g.ResourceVersion
+			try := func(t *testing.T, err error) {
+				t.Helper()
+				got := getGrant(t, g)
+				if tc.route {
+					wantInvalid(t, err, "the grant ask route is set once")
+					if got.ResourceVersion != before || got.Status.Ask != "ask-0123456789abcdef" {
+						t.Fatalf("refused removal changed the grant: rv %s ask %q", got.ResourceVersion, got.Status.Ask)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("removal without a route: %v", err)
+				}
+				if got.Status.Ask != "" || got.Status.Phase != "" {
+					t.Fatalf("status after removal: %+v", got.Status)
+				}
+			}
+			t.Run("omitted", func(t *testing.T) {
+				omitted := getGrant(t, g)
+				omitted.Status = v1alpha1.AccessGrantStatus{}
+				try(t, k8s.Status().Update(ctx(t), omitted))
+			})
+			if !tc.route {
+				g = getGrant(t, g)
+				g.Status.Phase = v1alpha1.GrantPending
+				if err := k8s.Status().Update(ctx(t), g); err != nil {
+					t.Fatalf("restore: %v", err)
+				}
+				g = getGrant(t, g)
+				before = g.ResourceVersion
+			}
+			t.Run("null", func(t *testing.T) {
+				try(t, k8s.Status().Patch(ctx(t), g.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"status":null}`))))
+			})
+			if !tc.route {
+				g = getGrant(t, g)
+				g.Status.Phase = v1alpha1.GrantPending
+				if err := k8s.Status().Update(ctx(t), g); err != nil {
+					t.Fatalf("restore: %v", err)
+				}
+				g = getGrant(t, g)
+				before = g.ResourceVersion
+			}
+			t.Run("remove", func(t *testing.T) {
+				try(t, k8s.Status().Patch(ctx(t), g.DeepCopy(), client.RawPatch(types.JSONPatchType, []byte(`[{"op":"remove","path":"/status"}]`))))
+			})
+		})
 	}
 }
 

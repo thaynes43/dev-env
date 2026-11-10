@@ -95,7 +95,7 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 			if apierrors.IsNotFound(err) {
 				return fmt.Errorf("%w: grant %s does not exist", ErrNotPending, grantName)
 			}
-			return err
+			return fmt.Errorf("%w: %w", errGrantAskUnreadable, err)
 		}
 		now := b.now()
 		ttl, err := b.decisionAllowed(ctx, &g, d, now.Time)
@@ -180,6 +180,9 @@ func (b *Broker) decisionAllowed(ctx context.Context, g *v1alpha1.AccessGrant, d
 		return 0, fmt.Errorf("%w: grant %s does not exist", ErrNotPending, g.Name)
 	}
 	if err != nil {
+		if g.Status.Ask != "" {
+			return 0, fmt.Errorf("%w: %w", errGrantAskUnreadable, err)
+		}
 		return 0, err
 	}
 	if fresh.UID != g.UID {

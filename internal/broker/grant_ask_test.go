@@ -187,13 +187,17 @@ func TestGrantAskStoreLimitOrUnavailableStaysPending(t *testing.T) {
 				t.Fatalf("store error left %d asks", n)
 			}
 			f.clk.Step(PendingTimeout)
+			calls = stub.calls
 			if _, err := f.reconcile(); err != nil {
 				t.Fatal(err)
 			}
+			if stub.calls != calls {
+				t.Fatalf("create calls = %d, want %d after the deadline", stub.calls, calls)
+			}
 			g := f.grant()
 			name, ok := grantAskObjectName(f.b.SessionNamespace, g)
-			if !ok || g.Status.Phase != v1alpha1.GrantPending || g.Status.Ask != name || g.Status.ApprovedBy != "" || g.Status.DeniedBy != "" {
-				t.Fatalf("routed grant after a failed create: phase %s ask %q approvedBy %s deniedBy %s", g.Status.Phase, g.Status.Ask, g.Status.ApprovedBy, g.Status.DeniedBy)
+			if !ok || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByTimeout || g.Status.Message != "no answer in 30 minutes" || g.Status.Ask != name || g.Status.ApprovedBy != "" {
+				t.Fatalf("routed grant after the deadline: phase %s deniedBy %s message %q ask %q approvedBy %s", g.Status.Phase, g.Status.DeniedBy, g.Status.Message, g.Status.Ask, g.Status.ApprovedBy)
 			}
 			if n := f.askCount(); n != 0 {
 				t.Fatalf("store error left %d asks", n)

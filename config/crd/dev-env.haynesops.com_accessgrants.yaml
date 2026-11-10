@@ -666,6 +666,17 @@ spec:
                 maxLength: 20
                 pattern: ^ask-[0-9a-f]{16}$
                 type: string
+              askUnreadAt:
+                description: |-
+                  AskUnreadAt is when the current unread episode started: the first time
+                  the broker could not read this grant's Ask, on the outer read or on a
+                  read inside Decide. It is the start, not the deadline, so the two-minute
+                  bound stays the one constant in the broker and a restarted broker applies
+                  that same bound to this instant. It is set once per episode. A later
+                  write may keep it or clear it, which ends the episode; it may not move
+                  the instant later. A failed deny does not clear it (ADR-022).
+                format: date-time
+                type: string
               delegateReach:
                 description: DelegateReach records the reviewed policy and identity
                   binding (DESIGN-042 6.6).
@@ -943,8 +954,11 @@ spec:
             ServiceAccount, and the audit log shows it'
           rule: self.metadata.name.matches('^grant-[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
         - message: the grant ask route is set once
-          rule: '!has(self.status) || !has(oldSelf.status) || !has(oldSelf.status.ask)
-            || (has(self.status.ask) && self.status.ask == oldSelf.status.ask)'
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.ask) || (has(self.status)
+            && has(self.status.ask) && self.status.ask == oldSelf.status.ask)'
+        - message: the grant ask unread time is set once per episode
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.askUnreadAt) || (has(self.status)
+            && (!has(self.status.askUnreadAt) || self.status.askUnreadAt == oldSelf.status.askUnreadAt))'
     served: true
     storage: true
     subresources:

@@ -474,6 +474,16 @@ type AccessGrantStatus struct {
 	// +optional
 	Ask string `json:"ask,omitempty"`
 
+	// AskUnreadAt is when the current unread episode started: the first time
+	// the broker could not read this grant's Ask, on the outer read or on a
+	// read inside Decide. It is the start, not the deadline, so the two-minute
+	// bound stays the one constant in the broker and a restarted broker applies
+	// that same bound to this instant. It is set once per episode. A later
+	// write may keep it or clear it, which ends the episode; it may not move
+	// the instant later. A failed deny does not clear it (ADR-022).
+	// +optional
+	AskUnreadAt *metav1.Time `json:"askUnreadAt,omitempty"`
+
 	// ServiceAccount is the kube/breakglass identity name. Reusable admin
 	// credentials retain their namespace in AdminCredential; other identities
 	// live in the session namespace.
@@ -535,7 +545,8 @@ type AdminCredentialStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="metadata.name must be at most 63 characters: it names the grant's ServiceAccount and bindings"
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^grant-[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="metadata.name is grant-<id>, a DNS label: it names the grant's ServiceAccount, and the audit log shows it"
-// +kubebuilder:validation:XValidation:rule="!has(self.status) || !has(oldSelf.status) || !has(oldSelf.status.ask) || (has(self.status.ask) && self.status.ask == oldSelf.status.ask)",message="the grant ask route is set once"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.ask) || (has(self.status) && has(self.status.ask) && self.status.ask == oldSelf.status.ask)",message="the grant ask route is set once"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.askUnreadAt) || (has(self.status) && (!has(self.status.askUnreadAt) || self.status.askUnreadAt == oldSelf.status.askUnreadAt))",message="the grant ask unread time is set once per episode"
 type AccessGrant struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

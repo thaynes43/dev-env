@@ -70,11 +70,11 @@ func (b *Broker) attestedMaintenanceApproval(ctx context.Context, g *v1alpha1.Ac
 	if g.Spec.Maintenance.ExtensionOf != "" {
 		return wait("an extension needs the human route")
 	}
-	var policies v1alpha1.GrantPolicyList
-	if err := b.Client.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
+	policies, err := b.liveGrantPolicies(ctx)
+	if err != nil {
 		return false, fmt.Errorf("list the grant policies: %w", err)
 	}
-	p, st := b.attestedApproval(ctx, g, sess, policies.Items, now.Time)
+	p, st := b.attestedApproval(ctx, g, sess, policies, now.Time)
 	if p == nil || st == nil || p.Spec.Attested == nil {
 		return false, nil
 	}
