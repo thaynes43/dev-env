@@ -210,8 +210,8 @@ func recordedExecutorEnded(s *v1alpha1.AgentSession, obs observation) bool {
 }
 
 // expiryView is one reconcile's uncached reads for the HOME expiry: the
-// Session, the Pod of its name, its HOME claim and the Pods of other names
-// that mount that claim.
+// Session, the Pod of its name, its HOME claim and every Pod that mounts
+// that claim, including the named Pod when it mounts the claim.
 type expiryView struct {
 	s      *v1alpha1.AgentSession
 	pod    *corev1.Pod
@@ -318,7 +318,15 @@ func (r *Reconciler) readExpiryView(ctx context.Context, s *v1alpha1.AgentSessio
 		return nil, fmt.Errorf("list the Pods that may mount the HOME: %w", err)
 	}
 	for _, p := range pods.Items {
-		if p.Name != fresh.Name && podMountsClaim(&p, fresh.Status.PrivateHistory.HomeClaim) {
+		if p.Name == fresh.Name {
+			if v.pod != nil && (v.pod.UID != p.UID || v.pod.ResourceVersion != p.ResourceVersion) {
+				return nil, errors.New("the Session-named Pod changed between GET and LIST")
+			}
+			// A Pod created after GET is still evidence, including a hold
+			// awaiting adoption. A Pod absent from LIST does not erase GET.
+			v.pod = p.DeepCopy()
+		}
+		if podMountsClaim(&p, fresh.Status.PrivateHistory.HomeClaim) {
 			v.mounts = append(v.mounts, p)
 		}
 	}
@@ -586,8 +594,8 @@ func (r *Reconciler) startHomeExpiry(ctx context.Context, v *expiryView, obs *ob
 	task := r.taskPolicy(v.s)
 	if task {
 		// DESIGN-061 1: none after a reap, the clean-up's grace after any
-		// other end. The stored dueAt is shown; the effective due time is
-		// derived from graceStart and the cause (taskCleanupDueAt).
+		// other end. Store the grace now; only a later reap overrides this
+		// deadline (taskCleanupDueAt).
 		grace = r.taskCleanupGrace()
 		if taskCleanupPurged(v.s) {
 			grace = 0
@@ -1276,6 +1284,7 @@ func (r *Reconciler) refuseHomeExpiry(ctx context.Context, v *expiryView, obs *o
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
 	if task {
+		r.taskUnreserve(v.s.UID)
 		r.countTaskRefused(ref.reason)
 		r.event(v.s, corev1.EventTypeWarning, "TaskCleanup", "TaskCleanupRefused", "the task clean-up keeps the HOME: "+ref.Error())
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil

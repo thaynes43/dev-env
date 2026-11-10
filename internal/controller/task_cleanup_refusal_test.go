@@ -322,9 +322,10 @@ func TestTaskCleanupReleaseCheck(t *testing.T) {
 		}
 		toRelease(t, f)
 		f.run(t, 2)
-		if p := f.named(t); p == nil || !isHoldPod(p) {
-			t.Fatalf("the old node released the volume, yet no hold pod: %+v", f.expiry(t))
+		if p := f.named(t); p != nil {
+			t.Fatalf("another node still holds the volume, yet hold pod %s was created", p.UID)
 		}
+		f.kept(t)
 	})
 	t.Run("node gone", func(t *testing.T) {
 		f := newTaskFixture(t, nil)
@@ -523,8 +524,8 @@ func TestTaskCleanupBundleRecordsAreSafeAtEveryArchiveReader(t *testing.T) {
 					}
 					// And the clean-up's.
 					f.run(t, 4)
-					if mode != v1alpha1.ModeTask && !f.claimGone(t) {
-						f.claimIntact(t)
+					if mode != v1alpha1.ModeTask {
+						f.kept(t)
 					}
 				})
 			}
@@ -691,10 +692,7 @@ func TestTaskCleanupRescueOfAnotherOperatorRunsAgain(t *testing.T) {
 // node no longer lists the HOME's volume either.
 func TestTaskCleanupChecksTheLastHoldPodsNode(t *testing.T) {
 	f := newTaskFixture(t, nil)
-	other := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-b", UID: "node-2"}}
-	if err := f.c.Create(context.Background(), other); err != nil {
-		t.Fatal(err)
-	}
+	other := taskReadyOtherNode(t, f)
 	f.run(t, 8)
 	hold := f.named(t)
 	if hold == nil || !isHoldPod(hold) {
@@ -715,7 +713,9 @@ func TestTaskCleanupChecksTheLastHoldPodsNode(t *testing.T) {
 	if err := f.c.Status().Update(context.Background(), other); err != nil {
 		t.Fatal(err)
 	}
-	f.run(t, 5)
+	f.run(t, 1) // delete the ended hold, then lose the leader before unmount
+	f.r = f.fresh()
+	f.run(t, 4)
 	if p := f.named(t); p != nil {
 		t.Fatalf("a new hold pod %s while the last one's node lists the volume", p.UID)
 	}

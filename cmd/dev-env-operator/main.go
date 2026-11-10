@@ -278,16 +278,16 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.legacyTerminalTaskReclaim, "enable-legacy-terminal-task-reclaim", false, "allow authenticated usage proof for terminal task executors older than 2.71.0; requires terminal task pod reclaim (DESIGN-025 24)")
 	fs.DurationVar(&o.terminalTaskReclaimGrace, "terminal-task-pod-reclaim-grace", controller.DefaultTerminalTaskReclaimGrace, "positive grace after the confirmed original task exit observation, before compute reclaim")
 	fs.BoolVar(&o.privateExecutorStop, "enable-private-executor-stop", false, "stop the recorded executor of a Reaping private Session with activeDeadlineSeconds, after a confirmed stop intent; an owner hold blocks it (DESIGN-025 4); needs --enable-private-terminal-record")
-	fs.BoolVar(&o.homeHistoryArchive, "enable-home-history-archive", false, "run the HOME expiry of private Sessions up to Archived: after the grace, rescue in a hold pod bound to the HOME, export the provider history into the shelf's history archive and verify it; deletes no HOME (DESIGN-025 5); needs --enable-private-terminal-record")
-	fs.BoolVar(&o.historyArchiveReads, "enable-history-archive-reads", false, "serve shared archived provider history on /v1/history to configured trusted callers (DESIGN-025 8, D-92); off, those routes answer 404")
+	fs.BoolVar(&o.homeHistoryArchive, "enable-home-history-archive", false, "retired by ADR-020: true refuses operator startup; DESIGN-061 F1 removes this code")
+	fs.BoolVar(&o.historyArchiveReads, "enable-history-archive-reads", false, "retired by ADR-020: true refuses operator startup; DESIGN-061 F1 removes this code")
 	fs.BoolVar(&o.coordinationArchiveReads, "enable-coordination-archive-reads", false, "serve default-off coordination archive fallbacks and archived-only lists to existing authorized callers; creates and ACL scopes stay unchanged (DESIGN-024 6)")
 	fs.BoolVar(&o.coordinationRetention, "enable-coordination-retention", false, "run the leader-only coordination retention pass; default off, and refused unless archive reads are on (DESIGN-024 5)")
 	fs.DurationVar(&o.coordinationRetentionGrace, "coordination-retention-grace", coordretention.DefaultGrace, "coordination retention grace after the latest absence; it may only lengthen 720h (DESIGN-024 5)")
-	fs.BoolVar(&o.homeExpiryDelete, "enable-home-expiry-delete", false, "let the HOME expiry go past Archived: verify the archive again, delete the private HOME with UID and resourceVersion preconditions and release a reaped Session (DESIGN-025 6.5, 6.6); needs --enable-home-history-archive and --enable-history-archive-reads, and stays off until the archived read is accepted on the installed system (#174)")
+	fs.BoolVar(&o.homeExpiryDelete, "enable-home-expiry-delete", false, "retired by ADR-020: true refuses operator startup; DESIGN-061 F1 removes this code")
 	fs.DurationVar(&o.homeExpiryGrace, "home-expiry-grace", controller.DefaultHomeExpiryGrace, "the HOME expiry's grace after the recorded stop; it may only lengthen Q-31's 720h (DESIGN-025 13)")
-	fs.BoolVar(&o.taskSessionCleanup, "enable-task-session-cleanup", false, "clean up finished and purged task Sessions (ADR-020, DESIGN-061): after a strict Git rescue in a hold pod keep only a bundle of unpushed work, delete the HOME, then the Session; needs --enable-private-terminal-record and --enable-private-executor-stop")
-	fs.DurationVar(&o.taskCleanupGrace, "task-cleanup-grace", controller.DefaultTaskCleanupGrace, "how long after a task Session's recorded end that is not a reap the clean-up waits; 1h to 168h (DESIGN-061 1)")
-	fs.IntVar(&o.taskCleanupMaxActive, "task-cleanup-max-active", controller.DefaultTaskCleanupMaxActive, "task clean-ups at once, at most 3; 0 pauses the clean-up (DESIGN-061 4)")
+	fs.BoolVar(&o.taskSessionCleanup, "enable-task-session-cleanup", false, "clean up finished and purged task Sessions (ADR-020, DESIGN-061): after a strict Git rescue in a hold pod keep only a bundle of unpushed work, delete the HOME, then the Session; false is the stop switch; needs --enable-private-terminal-record, --enable-private-executor-stop and --leader-elect")
+	fs.DurationVar(&o.taskCleanupGrace, "task-cleanup-grace", controller.DefaultTaskCleanupGrace, "how long after a task Session's recorded end that is not a reap the clean-up waits when creating new records; existing dueAt is kept; 1h to 168h (DESIGN-061 1)")
+	fs.IntVar(&o.taskCleanupMaxActive, "task-cleanup-max-active", controller.DefaultTaskCleanupMaxActive, "task clean-ups at once, at most 3; 0 pauses admission and active ones finish; --enable-task-session-cleanup=false is the stop switch (DESIGN-061 4)")
 	o.taskCleanupMinSharedFree = *resource.NewQuantity(controller.DefaultTaskCleanupMinSharedFree, resource.BinarySI)
 	fs.Func("task-cleanup-min-shared-free", "pause new task clean-ups while the shared volume has less free than this, for example 2Gi (DESIGN-061 4)", func(v string) error {
 		q, err := resource.ParseQuantity(v)
@@ -297,7 +297,7 @@ func parseFlags(args []string) (options, error) {
 		o.taskCleanupMinSharedFree = q
 		return nil
 	})
-	fs.Func("task-cleanup-sessions", "comma-separated Session names allowed to leave Waiting, empty for all; for a proof (DESIGN-061 8)", func(v string) error {
+	fs.Func("task-cleanup-sessions", "comma-separated Session names allowed at every step and before either delete, empty for all; excluded records park in any phase; --enable-task-session-cleanup=false is the stop switch (DESIGN-061 8)", func(v string) error {
 		o.taskCleanupSessions = nil
 		for _, name := range strings.Split(v, ",") {
 			if name = strings.TrimSpace(name); name != "" {
@@ -699,11 +699,8 @@ func parseFlags(args []string) (options, error) {
 	if o.terminalTaskReclaimGrace < time.Second {
 		return o, errors.New("--terminal-task-pod-reclaim-grace must be at least one second")
 	}
-	if o.homeHistoryArchive && !o.privateTerminalRecord {
-		return o, errors.New("--enable-home-history-archive requires --enable-private-terminal-record: the HOME expiry rests on the terminal record (DESIGN-025 13)")
-	}
-	if o.homeExpiryDelete && (!o.homeHistoryArchive || !o.historyArchiveReads) {
-		return o, errors.New("--enable-home-expiry-delete requires --enable-home-history-archive and --enable-history-archive-reads: a HOME is deleted only after its history is archived and readable (DESIGN-025 13)")
+	if o.homeHistoryArchive || o.historyArchiveReads || o.homeExpiryDelete {
+		return o, errors.New("--enable-home-history-archive, --enable-history-archive-reads and --enable-home-expiry-delete were retired by ADR-020: enabling any of them refuses startup; DESIGN-061 F1 removes their code")
 	}
 	if o.homeExpiryGrace < controller.DefaultHomeExpiryGrace {
 		return o, fmt.Errorf("--home-expiry-grace %s is under %s: the grace may only be lengthened (DESIGN-025 13)", o.homeExpiryGrace, controller.DefaultHomeExpiryGrace)
@@ -1355,6 +1352,8 @@ func parseRemotePilotAgent(image, session string) (*controller.PilotAgent, error
 // negative.
 func validateTaskCleanupOptions(o options) error {
 	switch {
+	case o.taskSessionCleanup && !o.leaderElect:
+		return errors.New("--enable-task-session-cleanup requires --leader-elect=true (DESIGN-061 4)")
 	case o.taskSessionCleanup && (!o.privateTerminalRecord || !o.privateExecutorStop):
 		return errors.New("--enable-task-session-cleanup requires --enable-private-terminal-record and --enable-private-executor-stop: the terminal record is the stop proof, and the stop gives a purged task its record (DESIGN-061)")
 	case o.taskCleanupGrace < controller.MinTaskCleanupGrace || o.taskCleanupGrace > controller.MaxTaskCleanupGrace:

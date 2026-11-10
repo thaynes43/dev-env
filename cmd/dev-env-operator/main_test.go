@@ -199,9 +199,8 @@ func TestPrivateExecutorStopFlagIsExplicitDefaultOffAndNeedsTheRecord(t *testing
 	}
 }
 
-// T17's flag part (DESIGN-025 13): the HOME expiry up to Archived is off by
-// default, refused without the terminal record, and its grace may only be
-// lengthened.
+// ADR-020 retires archive startup; DESIGN-061 F1 will remove its code. The
+// unused legacy grace retains its existing validation until then.
 func TestHomeHistoryArchiveFlagIsExplicitDefaultOffAndNeedsTheRecord(t *testing.T) {
 	o, err := parseFlags(nil)
 	if err != nil || o.homeHistoryArchive || o.homeExpiryGrace != controller.DefaultHomeExpiryGrace {
@@ -216,22 +215,21 @@ func TestHomeHistoryArchiveFlagIsExplicitDefaultOffAndNeedsTheRecord(t *testing.
 		}
 	}
 	o, err = parseFlags([]string{"--enable-private-terminal-record", "--enable-home-history-archive", "--home-expiry-grace", "1000h"})
-	if err != nil || !o.homeHistoryArchive || o.homeExpiryGrace != 1000*time.Hour {
-		t.Fatal("explicit archive setting missing:", err)
+	if err == nil || !strings.Contains(err.Error(), "ADR-020") || !strings.Contains(err.Error(), "DESIGN-061 F1") {
+		t.Fatal("retired archive flag must refuse startup:", err)
 	}
 }
 
-// T17's flag part (DESIGN-025 13): the archived-history reads and the HOME
-// delete are each off unless set, and the delete is refused at start unless
-// the archive and the reads are both on.
+// ADR-020 retires reads and deletion through the legacy archive pipeline.
+// Even their former dependency combinations must refuse startup.
 func TestHistoryReadsAndHomeDeleteFlagsAreExplicitDefaultOff(t *testing.T) {
 	o, err := parseFlags(nil)
 	if err != nil || o.historyArchiveReads || o.homeExpiryDelete {
 		t.Fatalf("defaults: reads %v, delete %v, err %v; want both off", o.historyArchiveReads, o.homeExpiryDelete, err)
 	}
 	o, err = parseFlags([]string{"--enable-history-archive-reads"})
-	if err != nil || !o.historyArchiveReads || o.homeExpiryDelete {
-		t.Fatalf("reads alone: %+v %v", o.historyArchiveReads, err)
+	if err == nil || !strings.Contains(err.Error(), "ADR-020") || !strings.Contains(err.Error(), "DESIGN-061 F1") {
+		t.Fatal("retired reads flag must refuse startup:", err)
 	}
 	for _, args := range [][]string{
 		{"--enable-home-expiry-delete"},
@@ -244,8 +242,8 @@ func TestHistoryReadsAndHomeDeleteFlagsAreExplicitDefaultOff(t *testing.T) {
 		}
 	}
 	o, err = parseFlags([]string{"--enable-home-expiry-delete", "--enable-private-terminal-record", "--enable-home-history-archive", "--enable-history-archive-reads"})
-	if err != nil || !o.homeExpiryDelete {
-		t.Fatalf("delete with archive and reads: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "ADR-020") || !strings.Contains(err.Error(), "DESIGN-061 F1") {
+		t.Fatalf("retired delete flag must refuse startup even with its former dependencies: %v", err)
 	}
 }
 
@@ -627,5 +625,27 @@ func TestTaskCleanupFlagsAreExplicitDefaultOffAndBounded(t *testing.T) {
 	r := reconcilerForOptions(o)
 	if !r.TaskSessionCleanup || r.TaskCleanupGrace != time.Hour || r.TaskCleanupMaxActive != 0 || r.TaskCleanupMinSharedFree != 512<<20 || len(r.TaskCleanupSessions) != 2 {
 		t.Fatalf("the reconciler is not given the flags: %+v", r)
+	}
+}
+
+func TestTaskCleanupRequiresLeaderElection(t *testing.T) {
+	args := []string{"--enable-task-session-cleanup", "--enable-private-terminal-record", "--enable-private-executor-stop", "--leader-elect=false"}
+	if _, err := parseFlags(args); err == nil || !strings.Contains(err.Error(), "--leader-elect") {
+		t.Fatalf("cleanup without leader election accepted: %v", err)
+	}
+	if _, err := parseFlags([]string{"--leader-elect=false"}); err != nil {
+		t.Fatalf("leader election remains optional with cleanup off: %v", err)
+	}
+}
+
+func TestRetiredArchiveFlagsRefuseStartup(t *testing.T) {
+	for _, flag := range []string{"--enable-home-history-archive", "--enable-history-archive-reads", "--enable-home-expiry-delete"} {
+		t.Run(flag, func(t *testing.T) {
+			for _, args := range [][]string{{flag}, {flag, "--enable-private-terminal-record", "--enable-private-executor-stop", "--enable-task-session-cleanup"}} {
+				if _, err := parseFlags(args); err == nil || !strings.Contains(err.Error(), flag) || !strings.Contains(err.Error(), "ADR-020") || !strings.Contains(err.Error(), "DESIGN-061 F1") {
+					t.Fatalf("retired flag lacks its startup refusal: %v", err)
+				}
+			}
+		})
 	}
 }

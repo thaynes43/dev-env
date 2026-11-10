@@ -78,11 +78,13 @@ func taskCleanupStep(s *v1alpha1.AgentSession, obs observation) string {
 			return "the task clean-up deletes its HOME now, once any work that never reached GitHub is saved as a git bundle (DESIGN-061)"
 		}
 		start := h.ExecutorTerminal.ObservedAt.Time
+		grace := obs.taskCleanupGrace
 		if e != nil {
 			start = e.GraceStart.Time
+			grace = e.DueAt.Sub(start)
 		}
 		return fmt.Sprintf("the task clean-up deletes its HOME and this session from %s, %s after that, once any work that never reached GitHub is saved as a git bundle (DESIGN-061)",
-			start.Add(obs.taskCleanupGrace).UTC().Format(time.RFC3339), graceWords(obs.taskCleanupGrace))
+			start.Add(grace).UTC().Format(time.RFC3339), graceWords(grace))
 	}
 	switch {
 	case e == nil:

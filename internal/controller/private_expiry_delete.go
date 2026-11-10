@@ -52,14 +52,17 @@ func homeExpiryRemovingHome(s *v1alpha1.AgentSession) bool {
 func (r *Reconciler) stepExpiryDelete(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
 	e := v.record()
 	task := r.taskPolicy(v.s)
-	if task && !r.taskCleanupOn() {
-		return ctrl.Result{}, false, nil
+	if task && r.taskCleanupParked(v.s, obs) {
+		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
 	}
 	if !task && !r.homeExpiryDeleteOn() {
 		obs.homeExpiry = &homeExpiryNote{reason: "DeleteOff", message: "the HOME delete is off (--enable-home-expiry-delete); the record waits at " + e.Phase + " and the HOME, if any, stays"}
 		return ctrl.Result{}, false, nil
 	}
 	if homeExpiryHeld(v.s) {
+		if task && e.Phase == v1alpha1.HomeExpiryDeleting && e.Refusal == "" {
+			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryOwnerHold, "the owner holds the clean-up"))
+		}
 		obs.homeExpiry = heldNote(v.s)
 		if task {
 			obs.homeExpiry.reason = taskReasonHeld
@@ -79,6 +82,12 @@ func (r *Reconciler) stepExpiryDelete(ctx context.Context, v *expiryView, obs *o
 	}
 	if e.Refusal != "" && e.RefusalAt != nil && v.now.Before(e.RefusalAt.Add(homeExpiryRefusalRetry)) && !v.now.Before(e.RefusalAt.Time) {
 		return ctrl.Result{RequeueAfter: e.RefusalAt.Add(homeExpiryRefusalRetry).Sub(v.now) + time.Second}, false, nil
+	}
+	if task && taskRetryRefusal(e) {
+		if ref := expiryDeleteRecheck(v); ref != nil {
+			return r.refuseHomeExpiry(ctx, v, obs, ref)
+		}
+		return r.taskCleanupRetry(ctx, v, obs)
 	}
 	return r.removeExpiredHome(ctx, v, obs)
 }
@@ -129,6 +138,9 @@ func (r *Reconciler) expiryRechecked(ctx context.Context, v *expiryView, obs *ob
 	if err != nil {
 		res, stop, err := r.expiryUnknown(ctx, v.s, obs, err)
 		return nil, res, stop, err
+	}
+	if r.taskPolicy(after.s) && r.taskCleanupParked(after.s, obs) {
+		return nil, ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
 	}
 	e, before := after.record(), v.record()
 	if e == nil || e.Phase != before.Phase || e.Archive == nil && e.Bundle == nil ||
@@ -254,6 +266,9 @@ func (r *Reconciler) recheckArchivedRefusal(ctx context.Context, v *expiryView, 
 // whose delete has started and whose finalizer is already lifted waits for
 // Kubernetes, with nothing left for the operator to remove.
 func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
+	if r.taskPolicy(v.s) && r.taskCleanupParked(v.s, obs) {
+		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
+	}
 	if homeGone(v) {
 		return r.recordHomeExpired(ctx, v, obs)
 	}
@@ -276,6 +291,14 @@ func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *
 	}
 	if err := expiryVolumeRemovalAllowed(after.s, after.claim); err != nil {
 		return r.refuseHomeExpiry(ctx, after, obs, refusal(expiryIdentityChanged, "the HOME stays: %v", err))
+	}
+	if r.taskPolicy(after.s) {
+		if why := r.taskVolumeReleased(ctx, after); why != "" {
+			return r.refuseHomeExpiry(ctx, after, obs, refusal(expiryVolumeNotReleased, "%s", why))
+		}
+		if r.taskCleanupParked(after.s, obs) {
+			return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
+		}
 	}
 	if err := deleteExpiryHome(ctx, r.Client, r.APIReader, after.s, after.claim); err != nil {
 		switch {
@@ -337,6 +360,9 @@ func (r *Reconciler) recordHomeExpired(ctx context.Context, v *expiryView, obs *
 // and no claim of its names. A suspended Session stays, phase Archived, until
 // it is reaped.
 func (r *Reconciler) releaseExpiredSession(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
+	if r.taskPolicy(v.s) && r.taskCleanupParked(v.s, obs) {
+		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
+	}
 	if v.s.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, false, nil
 	}

@@ -27,6 +27,11 @@
 
 ## 1. Triggers and clocks
 
+**Review correction, 2026-11-10 (OP520).** For a task that was not reaped,
+the stored `dueAt` is the deadline. A changed `--task-cleanup-grace` applies
+only when a new record is made; restarting at hour 24 with 1h cannot shorten
+a record made with 168h. A reap still makes that record due immediately.
+
 | Cause | Live | Starts when | Wait after the clock |
 |---|---|---|---|
 | Purged (`deletionTimestamp` set) | 35 | its terminal record is confirmed | none |
@@ -61,29 +66,40 @@ minutes at worst.
 
 ### 1.1 The stop proof includes the volume's release (Q-OP515-1)
 
-The terminal record proves the containers ended, not that the old kubelet
-finished tearing the Pod down. The API server deletes a terminal Pod at once
-(grace 0, no finalizer). The kubelet unmounts volumes and destroys the cgroup
-after that (DESIGN-025 25.6, PR #1019). So no pod mounts the HOME until an
-uncached read, just before the hold pod is created, shows two things. First,
-the terminal record's node (`nodeName`, same node UID) is Ready with a fresh
-lease, and its `status.volumesInUse` does not list the HOME's volume
-(`kubernetes.io/csi/<driver>^<volumeHandle>` from the claim's PV). Second, no
-Pod mounts the claim (DESIGN-025 5.2).
+**Review correction, 2026-11-10 (OP520).** The terminal record proves the
+containers ended, not that kubelet finished tearing the Pod down. Before the
+first hold pod, every replacement, and the HOME claim's delete, the operator
+makes a stateless release proof through its uncached API reader:
 
-| Choice | Why |
-|---|---|
-| **`volumesInUse` on the old node (chosen)** | the kubelet lists the volume while any Pod on that node has it mounted, and drops it only after the unmount `SyncTerminatedPod` waits for. That covers the **same-node case**, where a ReadWriteOnce volume can serve two Pods and nothing detaches. On **another node**, the attach-detach controller attaches only after the old node has stopped using the volume and it is detached |
-| executor Pod gone (rejected) | the API server deletes it before the teardown |
-| VolumeAttachment (rejected) | it shows the attach, not the mount, and does not change on the same node |
-| limit | the cgroup kill follows the unmount; that is safe only if the CSI driver's unmount is not lazy, so an open file keeps the volume listed; D2's review confirms it for the RBD driver |
-| limit | the PV read needs a cluster-wide `get` on `persistentvolumes`, today granted for one name (haynes-ops `rbac/app/operator.yaml:272-276`); H1 adds it |
+- The executor node still has the recorded name and UID, is Ready with a
+  fresh lease, and does not list the HOME volume in `status.volumesInUse`.
+- It lists **all Nodes**, then reads each Node and its lease. Each must be
+  Ready, not deleting, with a lease owned by that Node UID, renewed within
+  40 seconds and not in the future. None may list the HOME volume. A missing,
+  replaced-during-read, NotReady or stale-lease Node, or a read failure,
+  leaves release unproven. A replacement Node's empty volume list cannot
+  pass using its predecessor's lease.
+- The PV is bound to this claim UID and supplies the CSI name
+  `kubernetes.io/csi/<driver>^<volumeHandle>`. No Pod uses the claim. Every
+  mounting Pod from the LIST counts, including the Session's own name, and
+  that name is reconciled with the earlier GET. These separate Kubernetes
+  reads are not an atomic snapshot.
 
-**When the release cannot be shown, nothing mounts the HOME.** The clean-up
-looks again every 30 s. After 30 minutes it records `volume_not_released`, frees
-its slot and lists the Session as `unproven` for Tom, re-checking every 15
-minutes. A node that is gone or has a new UID never shows the release. Backlog
-records are days old, so they pass at the first look.
+No remembered hold-node name is needed. A new leader therefore checks a
+previous hold's node even after that Pod disappeared from the API. The
+`volumesInUse` check covers same-node mounts, where ReadWriteOnce does not
+require a detach. This still relies on the CSI driver's unmount not being
+lazy; Pod disappearance and VolumeAttachment alone are not release proof.
+
+**Rollout rights (H1).** In addition to cluster-wide `get` on
+`persistentvolumes`, the operator needs cluster-wide `list` and `get` on
+`nodes`, and `get` for every Node's Lease in `kube-node-lease` (no
+`resourceNames` restriction). This story changes no haynes-ops grant.
+
+When release is unproven, nothing mounts the HOME. The clean-up looks again
+every 30 seconds. After 30 minutes it records `volume_not_released`, frees
+its slot and keeps the HOME, re-checking every 15 minutes. Before a delete,
+an unproven release also records a refusal and keeps the HOME.
 
 ## 2. The smallest change
 
@@ -121,7 +137,7 @@ one does not. Every other Session keeps DESIGN-025, which stays off.
 | # | Where | Change | Lines |
 |---|---|---|---|
 | 1 | `api/v1alpha1` | `PrivateHomeExpiryStatus.Bundle`: `stamp`, `result` (`Verified` or `CleanAndPushed`), `manifest`, `manifestSHA256`, `bundles`, `bytes`, `verifiedAt`. CEL `:943` becomes `has(self.archive) \|\| has(self.bundle)`; `bundle` never changes once set; never both. The only CRD change, and unavoidable: `:943` refuses the phases the delete and release need | 50 |
-| 2 | new `controller/task_cleanup.go` | scope; trigger (Reaping, or the terminal record exists, whatever `operatingMode` says; `spec.mode` is always `task`); effective due (`graceStart` if Reaping, else plus `--task-cleanup-grace`; the stored `dueAt` is shown, not obeyed); 1.1's release check; queue, slots, breaker, free-space gate (section 4); removal of a finished Session once `Expired` | 380 |
+| 2 | new `controller/task_cleanup.go` | scope; trigger (Reaping, or the terminal record exists, whatever `operatingMode` says; `spec.mode` is always `task`); effective due (`graceStart` if Reaping, otherwise the stored `dueAt`; changed grace applies to new records only); 1.1's release check; queue, slots, breaker, free-space gate (section 4); removal of a finished Session once `Expired` | 380 |
 | 3 | `private_expiry.go` | `reconcileHomeExpiry` (`:467-533`) picks the policy before `homeExpiryOn()` (`:144`); `startHomeExpiry` (`:538-581`) sets `dueAt` by cause; `expiryWait` (`:680-703`) takes the effective due and the queue; `expiryRescueAndExport` (`:710-794`) checks 1.1 before `createExpiryHold` (`:1041`), goes from a valid rescue to `Archived` with `bundle`, runs `drop-log` before the hold pod goes, never calls the relay; `expiryQuiet` (`:354-390`) and `homeExpiryTriggered` (`:181-199`) follow the policy | 120 |
 | 4 | `private_expiry_delete.go` | `homeExpiryDeleteOn` (`:35`) true for the policy; `historyArchiveVerified` (`:80-103`) becomes `keptWorkVerified`: a shelf re-hash for `Verified`, and for `CleanAndPushed` a check that `status.rescue` still names the hold pod and stamp; `expiryRechecked` (`:122`) compares `bundle` | 80 |
 | 5 | `guard.go` | `expiryVolumeRemovalAllowed` (`:529`) accepts a verified `bundle` on a task record; `expiryHoldRemovalAllowed` (`:449-494`) learns the policy's off state and trigger; new `taskSessionRemovalAllowed` and `deleteCleanedTaskSession` delete an `Expired` finished Session with UID and resourceVersion preconditions and background propagation, like the API's reap (`apiserver/sessions.go:496-498`); two rows in `guardedCalls` (`guard_test.go:253-293`); RBAC already allows it (haynes-ops `rbac/app/operator.yaml:58-60`) | 90 |
@@ -135,18 +151,23 @@ one does not. Every other Session keeps DESIGN-025, which stays off.
 
 | Flag | Change | Code default | Live after rollout |
 |---|---|---|---|
-| `--enable-task-session-cleanup` | new; needs the terminal record and executor stop flags | false | true |
-| `--task-cleanup-grace` | new; 1h to 168h, else refused | 168h | 168h |
-| `--task-cleanup-max-active` | new; 0 pauses; at most 3, so one of the 4 reconcile workers stays free (`reconciler.go:105`) | 2 | 2 |
+| `--enable-task-session-cleanup` | new; needs terminal record, executor stop and leader election; false is the stop switch | false | true |
+| `--task-cleanup-grace` | new; 1h to 168h, else refused; new records only | 168h | 168h |
+| `--task-cleanup-max-active` | new; 0 pauses admission, active ones finish; enable=false stops; at most 3, so one of the 4 reconcile workers stays free (`reconciler.go:105`) | 2 | 2 |
 | `--task-cleanup-min-shared-free` | new | 2Gi | 2Gi |
-| `--task-cleanup-sessions` | new; names allowed to leave `Waiting`, empty for all; proof only | empty | empty |
-| unchanged: `--home-expiry-grace` (720h floor, `main.go:672-673`, non-task only); `--enable-home-history-archive`, `-history-archive-reads`, `-home-expiry-delete` (F1 retires them); `--enable-private-terminal-record`, `-private-executor-stop`, `-terminal-task-pod-reclaim` (the reclaim gives a finished task its record) | - | 720h; false; false | 720h; false; true, as now |
+| `--task-cleanup-sessions` | new; names allowed at every step and before claim/Session deletion, empty for all; excluded records park in any phase; enable=false stops all | empty | empty |
+| `--enable-home-history-archive` | retired by ADR-020; true refuses startup; DESIGN-061 F1 removes the code | false | false |
+| `--enable-history-archive-reads` | retired by ADR-020; true refuses startup; DESIGN-061 F1 removes the code | false | false |
+| `--enable-home-expiry-delete` | retired by ADR-020; true refuses startup; DESIGN-061 F1 removes the code | false | false |
+| unchanged: `--home-expiry-grace`; `--enable-private-terminal-record`, `-private-executor-stop`, `-terminal-task-pod-reclaim` | archive grace retains its 720h floor; terminal flags supply the task's stop proof | 720h; false | 720h; true, as now |
 
-**Records made under 720h.** None exist: no Session of the 502 has
-`status.privateHistory.expiry`. A `dueAt` cannot change (`:937`), but the task
-policy derives the due time from `graceStart` and the cause and ignores a later
-`dueAt`. So nothing is re-dated, and the archive flag can never trap a task
-Session. A task record already holding `archive` keeps DESIGN-025's delete.
+**Review correction, 2026-11-10 (OP520).** No record ownership changes.
+The three retired flags above refuse operator startup, even when their old
+dependencies are set. Thus DESIGN-025 cannot pick up a task left at
+`Rescuing` when cleanup is switched off. Its direct-reconciler unit tests
+remain as they are until F1 removes the code. Private interactive Sessions
+keep their HOME, as ADR-020 point 6 requires. A stored non-reaped `dueAt`,
+including one made with 720h, is obeyed; a reap remains immediately due.
 
 ## 3. The unpushed-work bundle
 
@@ -187,7 +208,7 @@ templates): 30 days from the bundle, written minutes before the release.
 | Rescue says | Then |
 |---|---|
 | a merge, rebase, cherry-pick or revert in progress (`rescue.go:257-261`); an untracked nested repository (`:374-378`); over 50 MiB untracked (`:383-385`); a submodule off its commit, dirty, stashed or unpushed (`:319-360`); a stray repository | refused `rescue_refused`; the hold pod is removed, the slot freed and the HOME kept; listed (section 6) and tried once a day, last in the queue, in case a newer agent image handles it |
-| a fetch or a bundle write failed (transient) | the hold pod is kept and retried every 15 minutes (`HoldRetry`); `DevEnvRescueFailed` after 20 minutes; the breaker counts it |
+| a fetch or a bundle write failed (transient) | retries every 15 minutes (`HoldRetry`) within the attempt's total 30-minute limit (section 4); failures never restart that clock; the breaker counts them |
 
 ### 3.1 Command contract
 
@@ -350,15 +371,11 @@ is off, and nothing is installed. Details the sections above leave open:
   goes and the record stays where it is (section 8's stop). A record holding
   an `archive`, or at `Exporting`, keeps DESIGN-025. Any other Session in the
   scope of section 2 is the clean-up's while the flag is on. With the flag off
-  a record the clean-up made without a bundle falls back to DESIGN-025, whose
-  wait is now never shorter than 720 hours after `graceStart`
-  (`homeExpiryDueAt`), so a task record's short `dueAt` can never hurry
-  DESIGN-025. Every DESIGN-025 record already has a `dueAt` at least that far.
-- **Due time.** The record's `dueAt` is written as `graceStart` for a purged
-  Session and `graceStart` plus the grace for any other; the effective due time
-  is derived again on every judgement (`taskCleanupDueAt`), so a reap during
-  the wait makes it due at once and nothing else moves it. The owner's
-  release-now still skips the wait; a hold still stops every step.
+  a record without a bundle reaches no active pipeline: startup refuses all
+  three retired archive flags (review correction, 2026-11-10).
+- **Due time (review correction, 2026-11-10).** The stored `dueAt` is obeyed
+  except after a reap, which is immediately due. The owner's release-now
+  still skips the wait; a hold still stops every step.
 - **A Session the clean-up owns is never given a Pod again**, and its rescue is
   never marked superseded, whatever `operatingMode` says: a Failed task's
   `operatingMode` is Running, and a resume patches it, but a private task never
@@ -374,15 +391,11 @@ is off, and nothing is installed. Details the sections above leave open:
   minutes again, so it waits longer, never shorter, and still mounts nothing.
   A volume that is not CSI, a PersistentVolume that is not bound to the claim,
   or a read that fails (the cluster-wide `get` on PersistentVolumes is H1's)
-  never shows the release. Before a second hold pod, the node the last one
-  stood on, when the leader saw it and it is another node, must not list the
-  volume either (review of #520). That node lives in the leader's memory
-  only: after a leader change the next hold pod is checked against the
-  executor's node alone, as the section asks; recording it would need a CRD
-  field. Known limit, as for DESIGN-025's intents: two operators overlapping
-  at a leader change can leave a hold pod made for an older intent, which
-  then cancels the record as a new Pod (PreservationUnknown, HOME kept) and
-  needs a person.
+  never shows the release. Before every hold and before deleting the claim,
+  all Nodes and their leases are read uncached (section 1.1); no hold-node
+  state is kept in memory (review correction, 2026-11-10). An overlapping
+  leader's hold for an older intent can still cancel a pre-delete record as
+  a new Pod, keeping the HOME.
 - **Grading** (`gradeTaskRescue`). A non-empty `strictHome.refused` is
   `StrictHomeRefused`, graded first. A report without `strictHome`, or agentd
   refusing `--strict-home` as a usage error (exit 2, an agent image from before
@@ -403,38 +416,27 @@ is off, and nothing is installed. Details the sections above leave open:
   that it did not (an earlier leader's, or DESIGN-025's) runs again before
   anything is kept, so after a leader change one rescue per active clean-up
   runs twice.
-- **A stuck attempt ends** (`attempt_stuck`, review of #520). A hold pod
-  that grades no rescue for 30 minutes after it was first seen, or after its
-  last graded rescue (so a retry whose exec never runs counts too), and an
-  attempt whose hold pods ended three times with none graded, are refused:
-  the hold pod goes, the breaker counts it, and it is tried again an hour
-  later, last in the queue. A rescue that keeps failing for a transient
-  reason, graded each time, keeps its hold pod and retries, as section 3
-  says, however long that takes.
-- **The queue.** Judged from the cache, without copying it, in one list that
-  serves every reconcile for 10 seconds; an admission always lists again and
-  then holds an in-memory reservation until the cache shows its record active
-  (at most 2 minutes). So the four workers never overshoot, and a second
-  operator, which ranks the same queue from its own cache, admits the same
-  head and no other. **A slot** is held by a record at `Rescuing`, `Archived`
-  or `Deleting` that is neither refused nor held by the owner (review of
-  #520: a refusal waits for a person, and must not stop the backlog). A
-  refusal at `Rescuing` ends the attempt: its hold pod goes, and at its retry
-  (a day for `rescue_refused`, an hour for `attempt_stuck`, 15 minutes for the
-  rest) it comes back in through the queue with a new hold intent. A refusal
-  at `Archived` or `Deleting`, where no hold pod stands, is re-checked in
-  place every 15 minutes, as DESIGN-025's are; when its cause is fixed, or an
-  owner hold is lifted, it goes on without waiting in the queue, so the cap
-  can be passed by one for its last minutes. An owner hold at `Rescuing`
-  removes the hold pod and records `owner_hold`, so once the hold is lifted
-  the record comes back in through the queue and lifting holds never starts
-  rescues past the cap. A refusal of the shelf or the bundle at `Rescuing`
-  waits an hour before its retry, so a broken shared volume does not rerun
-  every rescue every 15 minutes. A finished parent whose
-  descendants run is remembered for 15 minutes, so it does not block the
-  queue behind it; the descendants' uncached check runs only once the queue
-  would admit it, and a busy shelf is an answer kept for the minute like any
-  other, so a queued backlog makes no uncached reads.
+- **A stuck attempt ends (review correction, 2026-11-10).** The attempt's
+  total age is capped at 30 minutes, including failed reports, replacements
+  and a terminating hold. The hold intent carries its start time plus a new
+  unique suffix for each replacement, within the existing 64-character
+  field. Restarting the operator cannot reset that time. Older intents use
+  the hold's creation time, or the first observation if no time is available.
+  A retry admitted through the queue starts a new attempt. At the bound,
+  `attempt_stuck` frees the slot and keeps the HOME; the operator requests
+  removal of its hold, and retries no earlier than an hour later. A
+  replacement still requires section 1.1's release proof. Three ended holds
+  with no graded rescue also end an attempt.
+- **The queue (review correction, 2026-11-10).** A record at `Rescuing`,
+  `Archived` or `Deleting` holds a slot unless refused or held by its owner.
+  Every inactive record needs queue admission again before resuming,
+  including after a refusal clears or an owner hold is lifted. Rescuing
+  retries get a new hold intent; later phases keep their verified bundle.
+  Refusals wait a day for `rescue_refused`, an hour for `attempt_stuck` or a
+  shelf/bundle failure at Rescuing, and 15 minutes otherwise. The cache and
+  per-leader reservations bound ordinary admission; section 4 states the
+  remaining overlap window. A finished parent's descendants are checked
+  before admission and a known running descendant delays it 15 minutes.
 - **Texts name no queue position.** Section 6's example ("2 run now ... 5 are
   ahead of it") would rewrite the status of every queued Session each time
   the queue moved. The text says "the clean-up is queued: at most 2 run at
@@ -485,6 +487,25 @@ in `cmd/dev-env-operator`; `TestReapTaskSessionUnderTheCleanupSaysWhatIsTrue`
 in `internal/agentrun`. The PR lists each against #520's acceptance.
 
 ## 4. How many at once, and the backlog
+
+**Review correction, 2026-11-10 (OP520).** Cleanup requires leader election;
+the operator refuses startup with cleanup on and `--leader-elect=false`.
+Within a leader, the queue counts active records and local reservations.
+**Remaining window:** two leaders briefly overlapping with lagging caches
+can still admit different records above the cap. Election and re-admission
+reduce the ordinary exposure; this is not a distributed reservation or a
+strict cross-leader cap. No lock needs a person to clear it.
+
+Every refusal or owner hold frees its slot, and the record must be admitted
+again before resuming in any active phase. An attempt lasts at most 30
+minutes: failed fetch/bundle reports never renew it, and a terminating hold
+is included. At the bound it records a refusal, retains HOME, frees the slot,
+and cannot mount a replacement until all-node release is proven (1.1).
+The non-empty session allowlist parks excluded records in every phase and
+is checked immediately before claim and Session deletion. `max-active=0`
+pauses new admissions; active records finish. `enable-task-session-cleanup=false`
+is the stop switch.
+
 
 **Cap and order.** `--task-cleanup-max-active=2` counts task records at
 `Rescuing`, `Archived` or `Deleting`. A due record leaves `Waiting` only when
@@ -628,7 +649,7 @@ One PR per step, squash-merged after `CI - Success`; each waits for the last.
 |---|---|---|---|---|
 | D1 | dev-env | this ADR and design | review | - |
 | D2 | dev-env | section 2, items 1 to 12, default off; then a release. It may land as two PRs, each one worker session: first items 1 and 7 (the record's `bundle` field and the three agentd commands, which change nothing until called), then the rest | `make test` (unit and envtest), CI, native review | revert |
-| H1 | haynes-ops | CRD copy of the release (`crds/app/agentsessions.yaml`), before any pin (haynes-ops #3502); the operator's cluster-wide `get` on `persistentvolumes` (1.1) | the CRD has `bundle`; no status changes; `kubectl auth can-i` shows the new `get` for the operator | revert |
+| H1 | haynes-ops | CRD copy of the release (`crds/app/agentsessions.yaml`), before any pin (haynes-ops #3502); the operator's cluster-wide `get` on `persistentvolumes`, `get/list` on all Nodes and `get` on all their leases in `kube-node-lease` (1.1) | the CRD has `bundle`; no status changes; `kubectl auth can-i` shows the new `get` for the operator | revert |
 | H2 | haynes-ops | templates image to the release (hold pods need `--strict-home`, `drop-log`); shelf image from 2.9.1 to the release, no archive mount | the new shelf pod is Ready; `agent-run rescue list` answers; idle Sessions drain as on any template bump | revert |
 | H3 | haynes-ops | operator pin, flags unchanged | 2/2 Ready; session pod UIDs and restarts unchanged; no `expiry` written | previous pin |
 | H4 | haynes-ops | the alert; `--enable-task-session-cleanup=true`, `--task-cleanup-max-active=1`, `--task-cleanup-sessions=` the probes | the proof below | flag off |

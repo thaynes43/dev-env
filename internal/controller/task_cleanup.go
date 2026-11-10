@@ -7,13 +7,13 @@ package controller
 // Reaping, or the confirmed terminal record, whatever operatingMode says, so a
 // resume cancels nothing. The wait is none after a reap, and
 // --task-cleanup-grace (168h) after any other end, both from the record's
-// graceStart; the stored dueAt is shown, not obeyed. There is no history
+// graceStart when recorded; the stored dueAt is obeyed until a reap. There is no history
 // export: a valid rescue in the hold pod (agentd's --strict-home), with a
 // Verified bundle re-hashed on the shelf, goes straight from Rescuing to
 // Archived with the record's bundle. And once Expired, a finished Session is
 // deleted (UID and resourceVersion preconditions), so it is released as a
-// reaped one is. Before any hold pod mounts the HOME, the old node must show
-// the HOME's volume released (DESIGN-061 1.1). At most --task-cleanup-max-active
+// reaped one is. Before any hold mounts HOME and before the claim is deleted,
+// all Nodes must show the volume released (DESIGN-061 1.1). At most --task-cleanup-max-active
 // run at once, purged first, and the clean-up pauses itself (section 4).
 // Default off (--enable-task-session-cleanup).
 
@@ -83,11 +83,9 @@ const (
 	// taskChildrenRetry: a finished parent whose descendants run is looked
 	// at again this soon.
 	taskChildrenRetry = 15 * time.Minute
-	// taskAttemptDeadline: a clean-up whose hold pods ran no rescue for this
-	// long (a hold pod that never runs, keeps ending, or cannot be reached by
-	// exec) is refused attempt_stuck: its hold pod goes, its slot frees, and
-	// it is tried again an hour later. A hold pod starts in minutes and a
-	// rescue takes at most RescueTimeout.
+	// taskAttemptDeadline bounds total attempt age, including failed reports,
+	// replacement holds and termination. It records attempt_stuck, frees the
+	// slot and keeps HOME; queue admission may retry an hour later.
 	taskAttemptDeadline = 30 * time.Minute
 	taskAttemptRetry    = time.Hour
 	// taskHoldsEndedMax: an attempt whose hold pods ended this many times
@@ -163,14 +161,12 @@ type taskCleanupState struct {
 	admittedAt  map[types.UID]time.Time
 	releaseWait map[types.UID]time.Time
 	children    map[types.UID]time.Time
-	// attempt: by hold pod, since when it graded no new rescue
+	// attempt: by hold pod, its first observation (older intents only)
 	// (taskAttemptDeadline); ended: by Session, how many of this attempt's
-	// hold pods ended with none graded; holdNode: the node each Session's
-	// last hold pod stood on, for the next release check; graded: the hold
+	// hold pods ended with none graded; graded: the hold
 	// pods whose rescue this operator ran with --strict-home and graded, by
 	// stamp.
 	attempt     map[types.UID]time.Time
-	holdNode    map[types.UID]string
 	graded      map[types.UID]string
 	ended       map[types.UID]int
 	failures    int
@@ -185,7 +181,7 @@ func (st *taskCleanupState) init() {
 	if st.reserved == nil {
 		st.reserved, st.admittedAt = map[types.UID]time.Time{}, map[types.UID]time.Time{}
 		st.releaseWait, st.children = map[types.UID]time.Time{}, map[types.UID]time.Time{}
-		st.attempt, st.holdNode, st.graded = map[types.UID]time.Time{}, map[types.UID]string{}, map[types.UID]string{}
+		st.attempt, st.graded = map[types.UID]time.Time{}, map[types.UID]string{}
 		st.ended = map[types.UID]int{}
 	}
 }
@@ -287,29 +283,47 @@ func (r *Reconciler) expiryTrigger(s *v1alpha1.AgentSession, obs *observation, n
 // taskCleanupPurged: a reap is the cause, so there is no wait.
 func taskCleanupPurged(s *v1alpha1.AgentSession) bool { return !s.DeletionTimestamp.IsZero() }
 
-// taskCleanupDueAt is the effective due time of a task record: graceStart for a
-// purged Session, graceStart plus the grace for any other. The stored dueAt is
-// shown, not obeyed, so a reap during the wait makes it due at once.
+// taskCleanupDueAt obeys the stored deadline for a non-reaped task. A changed
+// grace applies only to new records; a reap still makes this one due at once.
 func (r *Reconciler) taskCleanupDueAt(s *v1alpha1.AgentSession) time.Time {
 	e := s.Status.PrivateHistory.Expiry
 	if taskCleanupPurged(s) {
 		return e.GraceStart.Time
 	}
-	return e.GraceStart.Add(r.taskCleanupGrace())
+	return e.DueAt.Time
 }
 
-// taskCleanupAllowed is --task-cleanup-sessions: names allowed to leave
-// Waiting, empty for all (a proof's allowlist).
+// taskCleanupAllowed is --task-cleanup-sessions: names allowed at every step,
+// including both deletes, empty for all.
 func (r *Reconciler) taskCleanupAllowed(name string) bool {
 	return len(r.TaskCleanupSessions) == 0 || slices.Contains(r.TaskCleanupSessions, name)
 }
 
-// taskRetryRefusal reports whether a record's refusal ended its attempt: one
-// at Rescuing. Its hold pod goes, and at its retry it comes back in through
-// the queue with a new hold intent. A refusal at Archived or Deleting has no
-// hold pod; it is re-checked in place, as DESIGN-025's are.
+// taskRetryRefusal reports whether an inactive record needs queue admission
+// before work resumes. Every refusal in an active phase frees its slot.
 func taskRetryRefusal(e *v1alpha1.PrivateHomeExpiryStatus) bool {
-	return e != nil && e.Phase == v1alpha1.HomeExpiryRescuing && e.Refusal != ""
+	if e == nil || e.Refusal == "" {
+		return false
+	}
+	switch e.Phase {
+	case v1alpha1.HomeExpiryRescuing, v1alpha1.HomeExpiryArchived, v1alpha1.HomeExpiryDeleting:
+		return true
+	}
+	return false
+}
+
+// taskCleanupParked checks the stop switch and allowlist at a step boundary.
+// Callers repeat it after slow verification and before either delete.
+func (r *Reconciler) taskCleanupParked(s *v1alpha1.AgentSession, obs *observation) bool {
+	if !r.taskCleanupOn() {
+		obs.homeExpiry = &homeExpiryNote{reason: taskReasonPaused, message: "the task clean-up is stopped (--enable-task-session-cleanup=false)"}
+		return true
+	}
+	if !r.taskCleanupAllowed(s.Name) {
+		obs.homeExpiry = &homeExpiryNote{reason: taskReasonPaused, message: "the task clean-up is parked: this session is not on --task-cleanup-sessions"}
+		return true
+	}
+	return false
 }
 
 // taskRefusalRetry is how long a recorded refusal waits for its re-check: a
@@ -328,7 +342,7 @@ func taskRefusalRetry(reason string) time.Duration {
 // attempt at Rescuing: one of the shelf or its bundle waits an hour too, so a
 // broken shared volume does not rerun every rescue every 15 minutes.
 func taskAttemptRefusalRetry(e *v1alpha1.PrivateHomeExpiryStatus) time.Duration {
-	if taskRetryRefusal(e) {
+	if taskRetryRefusal(e) && e.Phase == v1alpha1.HomeExpiryRescuing {
 		switch e.Refusal {
 		case expiryShelfUnavailable, expiryBundleMissing, expiryBundleMismatch:
 			return taskAttemptRetry
@@ -337,13 +351,9 @@ func taskAttemptRefusalRetry(e *v1alpha1.PrivateHomeExpiryStatus) time.Duration 
 	return taskRefusalRetry(e.Refusal)
 }
 
-// taskActive reports whether a task record holds one of the clean-up's slots:
-// at Rescuing, Archived or Deleting, not refused and not held by the owner. A
-// refused or held record keeps its HOME and waits for a person, so it does
-// not keep others from starting. One at Rescuing comes back in through the
-// queue; one at Archived or Deleting, which needs no hold pod, goes on from
-// its re-check, or once the hold is lifted, so the cap can then be passed by
-// that one for its last minutes.
+// taskActive reports whether a record holds a slot: Rescuing, Archived or
+// Deleting, not refused and not held by the owner. An inactive record must
+// pass through the queue again before resuming, in every active phase.
 func taskActive(s *v1alpha1.AgentSession) bool {
 	h := s.Status.PrivateHistory
 	if h == nil || h.Expiry == nil || h.Expiry.Refusal != "" || homeExpiryHeld(s) {
@@ -486,6 +496,9 @@ func taskPauseNote(reason string, minFree int64) *homeExpiryNote {
 // common re-check, then the phase's step. The task trigger ignores
 // operatingMode, so nothing but a new Pod cancels.
 func (r *Reconciler) stepTaskCleanup(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
+	if r.taskCleanupParked(v.s, obs) {
+		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
+	}
 	e := v.record()
 	if expiryPhaseAtLeast(e.Phase, v1alpha1.HomeExpiryDeleting) {
 		return r.stepExpiryDelete(ctx, v, obs)
@@ -500,14 +513,13 @@ func (r *Reconciler) stepTaskCleanup(ctx context.Context, v *expiryView, obs *ob
 		return r.cancelHomeExpiry(ctx, v, obs, "the Session has no terminal record and is not reaped", false)
 	}
 	if homeExpiryHeld(v.s) {
+		if e.Phase != v1alpha1.HomeExpiryWaiting && e.Refusal == "" {
+			// Persist inactivity before removing its hold, so lifting the
+			// owner's override cannot resume outside queue admission.
+			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryOwnerHold, "the owner holds the clean-up"))
+		}
 		if p := v.ownHold(); p != nil && p.DeletionTimestamp.IsZero() {
 			return r.removeExpiryHold(ctx, v, obs, p, holdReleaseOwnerHold)
-		}
-		if e.Phase == v1alpha1.HomeExpiryRescuing && e.Refusal == "" && v.pod == nil && len(v.mounts) == 0 {
-			// The hold ended this attempt: its slot frees, and once the hold
-			// is lifted it comes back in through the queue, so lifting holds
-			// never starts rescues past the cap.
-			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryOwnerHold, "the owner holds the clean-up"))
 		}
 		obs.homeExpiry = &homeExpiryNote{reason: taskReasonHeld, message: heldNote(v.s).message}
 		if homeExpiryOverride(v.s) == expiryOverrideInvalid {
@@ -559,7 +571,7 @@ func (r *Reconciler) stepTaskCleanup(ctx context.Context, v *expiryView, obs *ob
 }
 
 // taskCleanupWait is the Waiting step: on to Rescuing once the record is due
-// (purged: at once; otherwise the grace after graceStart; or the owner's
+// (purged: at once; otherwise its stored dueAt; or the owner's
 // release-now), allowed, its descendants stopped (finished only), nothing
 // pauses the clean-up and the queue admits it.
 func (r *Reconciler) taskCleanupWait(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
@@ -611,15 +623,17 @@ func (r *Reconciler) taskCleanupWait(ctx context.Context, v *expiryView, obs *ob
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
 }
 
-// taskCleanupRetry is the re-check of a refusal at Rescuing, once its time has
-// come and the common re-check passed: volume_not_released looks at the
+// taskCleanupRetry re-admits an inactive record in any active phase once
+// its refusal is due and the common re-check passed: volume_not_released looks at the
 // volume once more (no slot), then the record goes back into the queue, a
 // refused or stuck attempt last. The write that re-admits it clears the
-// refusal and makes a new hold intent, so the next hold pod's rescue is the
-// one judged.
+// refusal. Only Rescuing gets a new hold intent; later phases keep their
+// verified bundle and resume their next step after admission.
 func (r *Reconciler) taskCleanupRetry(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
 	e := v.record()
-	if v.pod != nil || len(v.mounts) > 0 {
+	endedExecutor := e.Phase == v1alpha1.HomeExpiryRescuing && v.pod != nil &&
+		string(v.pod.UID) == e.ExecutorUID && podPhaseTerminal(v.pod) && v.newPod() == nil
+	if (v.pod != nil || len(v.mounts) > 0) && !endedExecutor {
 		// A Pod still holds the name or the claim: the clean-up's own hold
 		// pod terminating is looked at again soon; one that stays (an ended
 		// executor its guard keeps, a hold pod its guard keeps) every 15
@@ -629,7 +643,7 @@ func (r *Reconciler) taskCleanupRetry(ctx context.Context, v *expiryView, obs *o
 		}
 		return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
 	}
-	if e.Refusal == expiryVolumeNotReleased {
+	if e.Phase == v1alpha1.HomeExpiryRescuing && e.Refusal == expiryVolumeNotReleased {
 		if why := r.taskVolumeReleased(ctx, v); why != "" {
 			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryVolumeNotReleased, "%s", why))
 		}
@@ -644,7 +658,9 @@ func (r *Reconciler) taskCleanupRetry(ctx context.Context, v *expiryView, obs *o
 	}
 	fresh := v.s.DeepCopy()
 	next := fresh.Status.PrivateHistory.Expiry
-	next.HoldPodUID, next.HoldIntent = "", string(uuid.NewUUID())
+	if e.Phase == v1alpha1.HomeExpiryRescuing {
+		next.HoldPodUID, next.HoldIntent = "", taskHoldIntent(v.now, "")
+	}
 	clearExpiryRefusal(next)
 	if err := r.writeExpiry(ctx, v, fresh); err != nil {
 		r.taskUnreserve(v.s.UID)
@@ -653,6 +669,24 @@ func (r *Reconciler) taskCleanupRetry(ctx context.Context, v *expiryView, obs *o
 	r.taskAdmitted(v.s.UID, v.now)
 	log.FromContext(ctx).Info("the task clean-up tries again after its refusal", "refusal", e.Refusal)
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
+}
+
+// taskHoldIntent keeps the attempt's start across replacement holds, with a
+// fresh unique suffix for each create/adopt intent. The 53-byte value fits the
+// existing opaque 64-byte field; retry admission passes an empty prior intent.
+const taskAttemptTimeFormat = "20060102T150405Z"
+
+func taskHoldIntent(now time.Time, prior string) string {
+	if start, ok := taskIntentStarted(prior); ok {
+		now = start
+	}
+	return now.UTC().Format(taskAttemptTimeFormat) + "/" + string(uuid.NewUUID())
+}
+
+func taskIntentStarted(intent string) (time.Time, bool) {
+	stamp, _, ok := strings.Cut(intent, "/")
+	at, err := time.Parse(taskAttemptTimeFormat, stamp)
+	return at, ok && err == nil
 }
 
 // taskCleanupRescue is the Rescuing step: the ended executor goes, the old
@@ -681,15 +715,15 @@ func (r *Reconciler) taskCleanupRescue(ctx context.Context, v *expiryView, obs *
 	case e.HoldPodUID != "" || e.HoldIntent == "":
 		fresh := v.s.DeepCopy()
 		next := fresh.Status.PrivateHistory.Expiry
-		next.HoldPodUID, next.HoldIntent = "", string(uuid.NewUUID())
+		next.HoldPodUID, next.HoldIntent = "", taskHoldIntent(v.now, e.HoldIntent)
 		clearStepRefusal(next)
 		if err := r.writeExpiry(ctx, v, fresh); err != nil {
 			return ctrl.Result{RequeueAfter: time.Second}, true, nil
 		}
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	default:
-		// DESIGN-061 1.1: nothing mounts the HOME until the old node is shown
-		// to have released its volume.
+		// DESIGN-061 1.1: nothing mounts HOME until every Node is shown
+		// live and no longer using its volume.
 		if why := r.taskVolumeReleased(ctx, v); why != "" {
 			first := r.taskReleaseWaitSince(v.s.UID, v.now)
 			if v.now.Sub(first) < taskReleaseWait {
@@ -701,28 +735,27 @@ func (r *Reconciler) taskCleanupRescue(ctx context.Context, v *expiryView, obs *
 			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryVolumeNotReleased, "%s for %s", why, taskReleaseWait))
 		}
 		r.taskForgetReleaseWait(v.s.UID)
+		if start, ok := taskIntentStarted(e.HoldIntent); ok && v.now.Sub(start) >= taskAttemptDeadline {
+			r.taskBreaker(true, v.now)
+			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryAttemptStuck, "the clean-up attempt reached %s before a replacement hold", taskAttemptDeadline))
+		}
 		return r.createExpiryHold(ctx, v, obs)
 	}
 
 	hold := pod
-	r.taskRememberHoldNode(v.s.UID, hold.Spec.NodeName)
-	if !hold.DeletionTimestamp.IsZero() {
-		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
-	}
 	if !expiryHoldAnnotated(hold, e) || !isHoldPod(hold) || !controlledBySession(hold, v.s) || !privateExecutorUsesHome(hold, v.s.Status.PrivateHistory.HomeClaim) {
 		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryIdentityChanged, "the hold pod %s is not bound to the HOME and the record", hold.Name))
 	}
-	rec := v.s.Status.Rescue
-	ours := rec != nil && rescueRanIn(v.s, hold) && r.taskGraded(hold.UID, rec.Stamp)
-	if since := r.taskAttemptSince(hold.UID, v.now); v.now.Sub(since) >= taskAttemptDeadline {
-		// This hold pod graded no rescue for half an hour, the last one
-		// included: it never ran, or its rescue could not be reached by
-		// exec, first or on a retry. The attempt ends, the HOME stays, and
-		// the breaker counts it.
+	if v.now.Sub(r.taskAttemptStarted(v, hold)) >= taskAttemptDeadline {
 		r.taskEndAttempt(v.s.UID, hold.UID)
 		r.taskBreaker(true, v.now)
-		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryAttemptStuck, "the hold pod %s graded no rescue for %s; it is %s", hold.Name, taskAttemptDeadline, hold.Status.Phase))
+		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryAttemptStuck, "the clean-up attempt reached %s; hold pod %s is %s", taskAttemptDeadline, hold.Name, hold.Status.Phase))
 	}
+	if !hold.DeletionTimestamp.IsZero() {
+		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
+	}
+	rec := v.s.Status.Rescue
+	ours := rec != nil && rescueRanIn(v.s, hold) && r.taskGraded(hold.UID, rec.Stamp)
 	if podEnded(hold) {
 		if r.taskHoldEnded(v.s.UID, hold.UID) >= taskHoldsEndedMax {
 			r.taskEndAttempt(v.s.UID, hold.UID)
@@ -762,8 +795,21 @@ func (r *Reconciler) taskCleanupRescue(ctx context.Context, v *expiryView, obs *
 	return r.saveTaskBundle(ctx, v, hold, obs)
 }
 
-// taskAttemptSince is since when the hold pod graded no rescue: when it was
-// first seen, or its last graded rescue (taskMarkGraded).
+// taskAttemptStarted reads the durable attempt clock. For older intents it
+// uses the hold's creation time, or its first observation as a last resort.
+func (r *Reconciler) taskAttemptStarted(v *expiryView, hold *corev1.Pod) time.Time {
+	since := r.taskAttemptSince(hold.UID, v.now)
+	if start, ok := taskIntentStarted(v.record().HoldIntent); ok {
+		return start
+	}
+	if !hold.CreationTimestamp.IsZero() && hold.CreationTimestamp.Time.Before(since) {
+		return hold.CreationTimestamp.Time
+	}
+	return since
+}
+
+// taskAttemptSince is the first observation of an older hold whose intent
+// has no durable timestamp. Failed reports never reset it.
 func (r *Reconciler) taskAttemptSince(hold types.UID, now time.Time) time.Time {
 	st := &r.taskCleanup
 	st.mu.Lock()
@@ -806,25 +852,6 @@ func (r *Reconciler) taskEndAttempt(uid, hold types.UID) {
 	}
 }
 
-func (r *Reconciler) taskRememberHoldNode(uid types.UID, node string) {
-	if node == "" {
-		return
-	}
-	st := &r.taskCleanup
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.init()
-	st.holdNode[uid] = node
-}
-
-func (r *Reconciler) taskHoldNode(uid types.UID) string {
-	st := &r.taskCleanup
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.init()
-	return st.holdNode[uid]
-}
-
 // taskGraded reports whether this operator ran the clean-up's rescue in the
 // hold pod and graded it, for that stamp.
 func (r *Reconciler) taskGraded(hold types.UID, stamp string) bool {
@@ -835,17 +862,14 @@ func (r *Reconciler) taskGraded(hold types.UID, stamp string) bool {
 	return stamp != "" && st.graded[hold] == stamp
 }
 
-// taskMarkGraded records a rescue this operator ran and graded in the hold
-// pod: the hold pod's clock starts again from now, and the attempt's count of
-// ended hold pods is cleared.
-func (r *Reconciler) taskMarkGraded(uid, hold types.UID, stamp string, now time.Time) {
+// taskMarkGraded remembers the strict grading, without restarting the attempt
+// clock or forgetting ended holds after a failed report.
+func (r *Reconciler) taskMarkGraded(hold types.UID, stamp string) {
 	st := &r.taskCleanup
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.init()
 	st.graded[hold] = stamp
-	st.attempt[hold] = now
-	delete(st.ended, uid)
 }
 
 // taskRescueRefusedIn reports whether the Session's newest rescue ran in the
@@ -950,7 +974,7 @@ func (r *Reconciler) taskRescue(ctx context.Context, v *expiryView, obs *observa
 	if !written {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
-	r.taskMarkGraded(v.s.UID, hold.UID, rec.Stamp, v.now)
+	r.taskMarkGraded(hold.UID, rec.Stamp)
 	switch {
 	case rec.Result != v1alpha1.RescueFailed:
 		r.taskBreaker(false, v.now)
@@ -1061,7 +1085,7 @@ func (r *Reconciler) saveTaskBundle(ctx context.Context, v *expiryView, hold *co
 	}
 	e, before := after.record(), v.record()
 	if e == nil || e.Phase != v1alpha1.HomeExpiryRescuing || e.HoldPodUID != before.HoldPodUID || after.ownHold() == nil || after.newPod() != nil ||
-		homeExpiryHeld(after.s) || !rescued(after.s) || !rescueRanIn(after.s, hold) || after.s.Status.Rescue.Stamp != rec.Stamp || expiryRecheck(after) != nil {
+		homeExpiryHeld(after.s) || r.taskCleanupParked(after.s, obs) || !rescued(after.s) || !rescueRanIn(after.s, hold) || after.s.Status.Rescue.Stamp != rec.Stamp || expiryRecheck(after) != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
 	fresh := after.s.DeepCopy()
@@ -1083,6 +1107,9 @@ func (r *Reconciler) saveTaskBundle(ctx context.Context, v *expiryView, hold *co
 // verifies the bundle again and records Deleting.
 func (r *Reconciler) taskCleanupArchived(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
 	if p := v.ownHold(); p != nil {
+		if v.now.Sub(r.taskAttemptStarted(v, p)) >= taskAttemptDeadline {
+			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryAttemptStuck, "the clean-up attempt reached %s while the saved hold pod %s remains", taskAttemptDeadline, p.Name))
+		}
 		if !p.DeletionTimestamp.IsZero() {
 			return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
 		}
@@ -1176,8 +1203,8 @@ func keptName(s *v1alpha1.AgentSession, e *v1alpha1.PrivateHomeExpiryStatus) str
 }
 
 // taskVolumeReleased is DESIGN-061 1.1 on uncached reads: the terminal
-// record's node (same name and UID) is Ready with a fresh lease and its
-// status.volumesInUse does not list the HOME's volume
+// record's node has the same name and UID; all Nodes are Ready with fresh
+// leases and none lists the HOME's volume in status.volumesInUse
 // (kubernetes.io/csi/<driver>^<volumeHandle> from the claim's
 // PersistentVolume). It returns why the release is not shown, or "". A node
 // that is gone or has a new UID never shows it. The caller's view shows no
@@ -1210,16 +1237,33 @@ func (r *Reconciler) taskVolumeReleased(ctx context.Context, v *expiryView) stri
 	if slices.Contains(node.Status.VolumesInUse, unique) {
 		return fmt.Sprintf("node %s still lists the HOME's volume %s as in use", t.NodeName, unique)
 	}
-	if hn := r.taskHoldNode(v.s.UID); hn != "" && hn != t.NodeName {
-		// The clean-up's last hold pod stood on another node: its teardown
-		// must be over too. Its node must be read, and must not list it.
-		var other corev1.Node
-		if err := r.APIReader.Get(ctx, client.ObjectKey{Name: hn}, &other); err != nil {
-			return fmt.Sprintf("node %s of the last hold pod cannot be read (%v)", hn, err)
+	// No remembered hold node: a new leader must also prove release on
+	// every possible previous mounting node after its Pod disappeared.
+	var nodes corev1.NodeList
+	if err := r.APIReader.List(ctx, &nodes); err != nil {
+		return fmt.Sprintf("all nodes cannot be read (%v)", err)
+	}
+	foundExecutor := false
+	for _, listed := range nodes.Items {
+		other, _, _, err := executorNodeLive(ctx, r.APIReader, listed.Name, r.clock)
+		if err != nil {
+			return fmt.Sprintf("node %s is not shown Ready with a fresh lease (%v)", listed.Name, err)
+		}
+		if other.UID != listed.UID {
+			return fmt.Sprintf("node %s changed UID during the release check", listed.Name)
+		}
+		if other.Name == t.NodeName {
+			foundExecutor = true
+			if string(other.UID) != t.NodeUID {
+				return fmt.Sprintf("executor node %s changed UID during the release check", t.NodeName)
+			}
 		}
 		if slices.Contains(other.Status.VolumesInUse, unique) {
-			return fmt.Sprintf("node %s of the last hold pod still lists the HOME's volume %s as in use", hn, unique)
+			return fmt.Sprintf("node %s still lists the HOME's volume %s as in use", other.Name, unique)
 		}
+	}
+	if !foundExecutor {
+		return "the executor node is missing from the node list"
 	}
 	if v.pod != nil || len(v.mounts) > 0 {
 		return "a Pod still mounts the HOME claim"
@@ -1269,6 +1313,9 @@ func deleteCleanedTaskSession(ctx context.Context, c client.Client, s *v1alpha1.
 // claim, and the guard allows it, it is deleted; the next reconcile releases
 // it like a reaped one (6.6).
 func (r *Reconciler) removeCleanedTaskSession(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
+	if r.taskCleanupParked(v.s, obs) {
+		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
+	}
 	if err := taskSessionRemovalAllowed(v.s); err != nil {
 		obs.homeExpiry = &homeExpiryNote{reason: taskReasonDeleted, message: "the session is not removed: " + err.Error()}
 		return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
@@ -1645,8 +1692,9 @@ func (r *Reconciler) taskCleanupAdmittable(ctx context.Context, s *v1alpha1.Agen
 	defer st.mu.Unlock()
 	st.init()
 	// An admission always reads the cache again: the snapshot serves only the
-	// judgement of the records that wait, so a second operator's or this
-	// one's last list never admits past the cap.
+	// judgement of the records that wait, so this leader does not reuse its own
+	// stale snapshot. Overlapping leaders with lagging caches can still
+	// exceed the cap (DESIGN-061 4); startup requires leader election.
 	if reserve || st.snap == nil || now.Sub(st.snap.at) >= taskQueueSnapshotTTL || now.Before(st.snap.at) {
 		snap, err := r.taskQueueFromCache(ctx, s.Namespace, now)
 		if err != nil {
