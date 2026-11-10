@@ -14,6 +14,50 @@ GO ?= go
 GO_PARALLELISM ?= 2
 NICE ?= nice -n 19
 
+# Per-package go test timeout (go's default is 10m). ci.yml caps the whole Test
+# job at 30 minutes, including checkout, setup and compile, and the whole make
+# test takes about 20 minutes there, so a package timeout of 30m could never fire
+# before the job is cancelled. 15m is above go's 10m default, leaves about four
+# times the 234s measured for internal/agentd (2026-11-10, session pod, 2 CPUs,
+# nice -n 19, scratch on /tmp), and lets a hung test end with go's own timeout
+# and stack dump while the job is still alive. When the guard below keeps the
+# HOME GOTMPDIR, internal/agentd still exceeds any reasonable timeout (over 45m
+# measured), which is why both guard notices say so.
+GO_TEST_TIMEOUT ?= 15m
+
+# Where go test puts its work directory and t.TempDir files. A session pod sets
+# GOTMPDIR under HOME, a network volume where fsync-heavy tests ran 70 to 100
+# times slower (TestHistoryArchiveVerifyDetectsTamper: 110s on HOME, 1.5s on
+# /tmp) and internal/agentd did not finish in 45 minutes. Test scratch goes to a
+# fresh directory under GO_TEST_TMP_ROOT, removed when the target exits. Set
+# GO_TEST_TMP_ROOT= (empty) to keep the caller's GOTMPDIR. TMPDIR is untouched.
+#
+# A pod's /tmp is an 8Gi emptyDir whose overflow evicts the pod, and Go enforces
+# no quota, so the redirect has a budget guard: if GO_TEST_TMP_ROOT already holds
+# more than GO_TEST_TMP_MAX_KB (default 4 GiB, half the cap, the rest is
+# reserve), or du cannot measure it, the caller's GOTMPDIR is kept and one line
+# says so. A du that exits non-zero is "cannot measure": its total leaves out what
+# it could not read, so it proves nothing. du runs at most twice (the second run
+# absorbs a file vanishing mid-walk); only an exit 0 with an all-digit total
+# counts. The guard is a check at start, not a quota.
+# Observed peaks: internal/agentd alone about 55 MB (OP690); one full make test
+# stayed under 300 MiB (one observation, PR 1054).
+GO_TEST_TMP_ROOT ?= /tmp
+GO_TEST_TMP_MAX_KB ?= 4194304
+GO_TEST_TMP_SETUP = tmp=; if [ -n '$(GO_TEST_TMP_ROOT)' ]; then \
+	out="$$(du -sxk '$(GO_TEST_TMP_ROOT)' 2>/dev/null)" || out="$$(du -sxk '$(GO_TEST_TMP_ROOT)' 2>/dev/null)" || out=; \
+	used="$$(printf %s "$$out" | cut -f1)"; \
+	case "$$used" in ""|*[!0-9]*) used=;; esac; \
+	if [ -z "$$used" ]; then \
+		echo "make: cannot measure $(GO_TEST_TMP_ROOT); keeping GOTMPDIR; internal/agentd may not finish under GO_TEST_TIMEOUT on a network volume" >&2; \
+	elif [ "$$used" -gt '$(GO_TEST_TMP_MAX_KB)' ]; then \
+		echo "make: $(GO_TEST_TMP_ROOT) holds $$used KiB, above GO_TEST_TMP_MAX_KB=$(GO_TEST_TMP_MAX_KB); keeping GOTMPDIR; internal/agentd may not finish under GO_TEST_TIMEOUT on a network volume" >&2; \
+	else \
+		tmp="$$(mktemp -d '$(GO_TEST_TMP_ROOT)/dev-env-go-test.XXXXXX')"; trap 'rm -rf "$$tmp"' EXIT; \
+	fi; \
+fi
+GO_TEST_ENV = $${tmp:+GOTMPDIR="$$tmp"}
+
 # Child processes inherit these too: `go list` under controller-gen and
 # golangci-lint, and the test binaries.
 export GOMAXPROCS := $(GO_PARALLELISM)
@@ -103,8 +147,8 @@ lint: $(GOLANGCI_LINT) ## Run golangci-lint.
 # how many packages, and so how many API servers, run at once.
 .PHONY: test
 test: $(SETUP_ENVTEST) ## Run the unit tests and the envtest suites, GO_PARALLELISM packages at a time.
-	assets="$$($(ENVTEST_USE))"; $(ENVTEST_WRITABLE); \
-		KUBEBUILDER_ASSETS="$$assets" $(NICE) $(GO) test -p $(GO_PARALLELISM) ./...
+	assets="$$($(ENVTEST_USE))"; $(ENVTEST_WRITABLE); $(GO_TEST_TMP_SETUP); \
+		env $(GO_TEST_ENV) KUBEBUILDER_ASSETS="$$assets" $(NICE) $(GO) test -p $(GO_PARALLELISM) -timeout $(GO_TEST_TIMEOUT) ./...
 	$(MAKE) --no-print-directory test-portal-localtest
 
 # The portal local test instance (DESIGN-055) compiles only with this tag, so
@@ -113,7 +157,7 @@ PORTAL_LOCALTEST_TAG := portallocaltest
 
 .PHONY: test-portal-localtest
 test-portal-localtest: ## Run the portal local test instance's tagged tests (DESIGN-055).
-	$(NICE) $(GO) test -p $(GO_PARALLELISM) -tags $(PORTAL_LOCALTEST_TAG) -run LocalTest ./web/portal/session/ ./web/portal/localtest/
+	$(GO_TEST_TMP_SETUP); env $(GO_TEST_ENV) $(NICE) $(GO) test -p $(GO_PARALLELISM) -timeout $(GO_TEST_TIMEOUT) -tags $(PORTAL_LOCALTEST_TAG) -run LocalTest ./web/portal/session/ ./web/portal/localtest/
 
 .PHONY: portal-localtest
 portal-localtest: ## Serve the portal on loopback with fixture data and a fixed test principal (DESIGN-055). LOCALTEST_ARGS="-listen 127.0.0.1:8099".
