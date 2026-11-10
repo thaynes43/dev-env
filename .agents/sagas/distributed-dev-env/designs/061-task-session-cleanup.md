@@ -106,7 +106,8 @@ drop the HOME's volume after the hold pod is removed, and only then records
 four of five deletes about one second after the hold pod was removed, while
 that pod's node still listed the volume. The wait is the leader's memory,
 separate from the rescue step's clock, so a restart starts a new 5 minutes,
-and the record keeps its slot while it waits. Polls while that wait is
+and the record keeps its slot while it waits. A recorded refusal drops that
+clock, so the next attempt waits again. Polls while that wait is
 already running and the volume is still listed do not re-hash the bundle.
 The verify and the other delete checks run on the first look, and again on
 the pass that deletes or refuses.

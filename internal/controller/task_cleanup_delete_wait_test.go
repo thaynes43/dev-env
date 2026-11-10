@@ -322,6 +322,48 @@ func TestTaskCleanupDeleteReleaseWait(t *testing.T) {
 			t.Fatalf("record %+v; want the fresh wait to refuse and keep the HOME", f.expiry(t))
 		}
 	})
+
+	t.Run("forgets after another refusal", func(t *testing.T) {
+		f, _ := taskDeletingVolume(t)
+		taskReconcile(t, f)
+		if _, ok := deleteReleaseRemembered(f); !ok {
+			t.Fatal("the wait did not start")
+		}
+		s := f.session(t)
+		if s.Annotations == nil {
+			s.Annotations = map[string]string{}
+		}
+		s.Annotations[v1alpha1.AnnotationHomeExpiry] = v1alpha1.HomeExpiryHold
+		if err := f.c.Update(context.Background(), s); err != nil {
+			t.Fatal(err)
+		}
+		taskReconcile(t, f)
+		e := f.expiry(t)
+		if e == nil || e.Phase != v1alpha1.HomeExpiryDeleting || e.Refusal != expiryOwnerHold || f.claim(t) == nil {
+			t.Fatalf("hold record %+v claim %v; want owner_hold at Deleting and the HOME kept", e, f.claim(t) != nil)
+		}
+		if _, ok := deleteReleaseRemembered(f); ok {
+			t.Fatal("the owner-hold refusal left the delete wait remembered")
+		}
+		s = f.session(t)
+		delete(s.Annotations, v1alpha1.AnnotationHomeExpiry)
+		if err := f.c.Update(context.Background(), s); err != nil {
+			t.Fatal(err)
+		}
+		taskAdvance(t, f, homeExpiryRefusalRetry+time.Second)
+		res := taskReconcile(t, f)
+		e = f.expiry(t)
+		if e == nil || e.Refusal != "" || e.Phase != v1alpha1.HomeExpiryDeleting || !taskActive(f.session(t)) || f.claim(t) == nil {
+			t.Fatalf("retry record %+v claim %v; want Deleting, admitted, HOME kept", e, f.claim(t) != nil)
+		}
+		if res.RequeueAfter != time.Second {
+			t.Fatalf("retry requeue %s; want 1s", res.RequeueAfter)
+		}
+		// The old start is already past 5 minutes. A clock left in place
+		// would refuse on this look.
+		res = taskReconcile(t, f)
+		assertDeleteWaiting(t, f, res)
+	})
 }
 
 func TestTaskCleanupHoldPodRemovedSaysTheRescueIsSaved(t *testing.T) {
