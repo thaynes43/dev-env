@@ -304,7 +304,8 @@ immutable `spec.limits.maxWorkers` caps its unfinished **direct workers across
 all agent kinds**, in addition to the unchanged per-agent child and depth
 rules. Workers remain ordinary session callers at depth 1, and their children
 at depth 2. Existing sessions without this field retain their existing rules.
-Only policy callers may set this new request field. Neither model nor effort
+Initially only policy callers may set this new request field; section 7.2 adds
+human and trusted client callers. Neither model nor effort
 defaults from a CLI or a template can substitute for the required model.
 
 Root concurrency counts all unfinished sessions with that account as parent,
@@ -349,6 +350,83 @@ Reap preserves the existing rescue finalizer
 and UID precondition. No log route (it execs), message, thread, resume, suspend,
 grant, keeper-login, fleet or other client route is exposed. OP527 must reuse
 these fences when adding its start/status/stop facade.
+
+### 7.2 Coordinator CLI contract (OP527, 2026-11-10)
+
+This refines sections 6 and 7 using the OP526 implementation. The seam is the
+existing `POST /v1/sessions`, not a new route. Neither the launcher nor the
+operator reads OpenProject or needs its credential. The caller supplies a
+positive item ID and a repository name or declared project. The embedded brief
+tells the coordinator to read `opwork show ID --history` and claim that item
+when it runs. The project catalog resolves the repository for `--project`;
+Codex still requires a declared project and the managed-task feature gate.
+
+```
+agent-run coordinator start --item ID (--repo R | --project P) --model FULL_ID --hours H --workers N [--run LABEL] [-o json]
+agent-run coordinator status NAME [-o json]
+agent-run coordinator status --item ID [--run LABEL] [-o json]
+agent-run coordinator stop NAME [-o json]
+agent-run coordinator brief [--item ID --hours H --workers N]
+```
+
+Start requires Tom's explicit full model ID: `claude-opus-5-5`,
+`claude-fable-5-2` or `gpt-6-astra`. There is no default or effort flag. Hours
+and workers are required whole numbers from 1 to 4. Validation happens before
+connecting. Start sends the chosen model, matching agent, `mode: task`,
+`profile: dev`, `size: M`, the brief, `limits.timeout: Hh`,
+`limits.maxWorkers: N` and the derived `idempotencyKey`. No `effort` key is
+sent. For a bounded human/client create with omitted effort, the API applies
+the same known model presets as a policy create; unrelated creates keep their
+existing defaults. The authenticated caller still supplies the parent.
+
+The key is `coordinator-ITEM`, or `coordinator-ITEM-LABEL` for an explicit
+`--run`. LABEL uses lowercase letters, digits and hyphens, starting and ending
+with a letter or digit; the complete key is at most 63 characters. Repeat the
+same label to retry that run. Choose a new label, for example `--run retry-2`,
+only to deliberately start another run of the same item. Keys are scoped to
+the authenticated caller, not global across identities.
+
+Start first reads `GET /v1/sessions?mine=true` for that exact key. If one
+retained session exists, it returns its detail without starting again, even
+after exit and even if start options changed. Multiple matches refuse with
+their names; inspect by name. Otherwise start posts the request. The existing
+API makes simultaneous identical creates idempotent while unfinished; a
+different request with the same active key conflicts. Its dedupe does not
+cover completed tasks. Therefore the read-before-create cannot guarantee
+exactly one run if another run starts and ends between the read and POST, or
+after its Session record is deleted. This preserves the existing API contract
+and avoids adding a lock or a schema field in this story. Retained outcomes
+remain available while the Session record exists, after pod reclaim.
+
+`status --item` uses the same caller-scoped exact key lookup, then the ordinary
+detail route. `status NAME` reads that name under the caller's existing ACL.
+Start and status print name, phase, item, task verdict when present, and the
+retained outcome's summary, PR URLs and head SHAs. Their JSON is one object:
+`{"item":527,"session":{...}}`, where `session` is the existing API Session
+document and `item` is omitted for a name without a coordinator key. Stop is
+the existing DELETE/reap of one name, with the same rescue, retention and
+authorization rules. It prints the existing reap message or one Session JSON
+document. These commands negotiate both `Dev-Env-Caller-Policy: limits-v1`
+and `X-Dev-Env-Task-Outcome: v1`.
+
+Policy callers, Tom's human caller and trusted client callers (including the
+workbench) may set `limits.maxWorkers`. For humans and clients its bound is
+1 to 4; a policy may tighten that. Ordinary session callers, including a
+session on the workbench profile, and restricted coordinator-host callers
+still cannot set it. A bounded create uses strict Kubernetes field validation
+for every admitted caller so an old CRD cannot silently remove the cap.
+Workers use the existing aggregate direct-worker count, depth checks and
+resume fences; no CallerPolicy schema or bounds change.
+
+The one-page plain-text brief is embedded in agent-run and available offline
+with `coordinator brief`; optional item and budget flags render a concrete
+copy. It specifies worker choices, tracker reporting, the retained outcome
+file and the section 8 refusal/budget behavior. Passing existing access to a
+worker means only an already authorized supported route, never sharing raw
+credentials or activating the held agent-decided grants feature. It never
+waits on Meatball or asks Meatball to unblock it. OP528 should reuse this
+request, key and brief contract plus the existing list/detail/reap routes;
+the front-door server needs no tracker credential to launch a coordinator.
 
 ## 8. One approval path
 
