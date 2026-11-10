@@ -355,6 +355,41 @@ func TestPortalConversationCtlCodexChannelPrivacy(t *testing.T) {
 	}
 }
 
+// ctl thread-status (DESIGN-057 section 11) answers every refusal with one
+// decodable thread-launch.v1 line and that outcome's exit code; only a usage
+// error prints nothing on stdout. It takes no handoff, model, name or wait.
+func TestCtlThreadStatus(t *testing.T) {
+	home := t.TempDir()
+	const thread = "0199a000-0000-7000-8000-000000000002"
+	claudeRemote := map[string]string{"HOME": home, "AGENTD_SESSION": `{"name":"r-1","repo":"r","agent":"claude","mode":"remote","model":"claude-haiku-4-5"}`}
+	codexHost := map[string]string{"HOME": home, "AGENTD_SESSION": `{"name":"r-1","repo":"r","agent":"codex","mode":"remote","model":"gpt-6-luna"}`}
+	for name, args := range map[string][]string{
+		"extra argument": {"ctl", "thread-status", "--thread", thread, "extra"},
+		"launch flag":    {"ctl", "thread-status", "--thread", thread, "--model", "gpt-6-luna"},
+		"handoff flag":   {"ctl", "thread-status", "--thread", thread, "--handoff", "x"},
+		"wait flag":      {"ctl", "thread-status", "--thread", thread, "--wait", "1m"},
+	} {
+		if code, out, errOut := runArgs(args, codexHost); code != exitUsage || out != "" || !strings.Contains(errOut, "usage: ctl thread-status") {
+			t.Errorf("%s: %d %q %q", name, code, out, errOut)
+		}
+	}
+	for name, tc := range map[string]struct {
+		env    map[string]string
+		thread string
+		code   string
+	}{
+		"claude host":   {claudeRemote, thread, "not_codex_host"},
+		"no thread":     {codexHost, "", "invalid_input"},
+		"bad thread id": {codexHost, "t-1", "invalid_input"},
+	} {
+		code, out, _ := runArgs([]string{"ctl", "thread-status", "--thread", tc.thread}, tc.env)
+		r, err := apiv1.DecodeThreadLaunch([]byte(out))
+		if err != nil || code != exitFailure || r.Outcome != apiv1.ThreadFailed || r.Error.Code != tc.code || r.ThreadID != "" {
+			t.Errorf("%s: %d %v %q", name, code, err, out)
+		}
+	}
+}
+
 // ctl thread-start (DESIGN-057) answers every refusal with one decodable
 // thread-launch.v1 line and that outcome's exit code; only a usage error
 // prints nothing on stdout.

@@ -14,7 +14,7 @@ Directories still to come: later controllers (ToolSession, LLMLease) beside
 .agents/HANDOFF.md       dated delivery log and ruling index; large, so search it rather than read it
 docs/repo-layout.md      this layout; make check-layout reads it
 docs/agent-rules-rationale.md  reasons and history cut from CLAUDE.md (OP499)
-docs/frontdoor.md        Meatball's front door: the ten MCP tools, the token files, and what the cluster must already have (DESIGN-060)
+docs/frontdoor.md        Meatball's front door: the eleven MCP tools, the token files, and what the cluster must already have (DESIGN-060)
 .agents/sagas/<saga>/    saga README (vision, decision log), KICKOFF, adrs/, designs/, backlog/, research/
 .agents/skills/          repo-native agent skills, one SKILL.md each: supervised-dispatch, worker-qa-loop, timer-checkin, tmux-cli-handoff
 .github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), publish.yml (operator image from main, signed), publish-agent.yml (agent image from a v2.x.y tag, signed), publish-git-wait.yml (the git-wait trial fixture's
@@ -79,8 +79,8 @@ internal/scheduledwork/pages/  DESIGN-054 S4a's page Reminders: Key (the determi
 internal/shelf/          the operator's side of the shelf pod (D-67): finds it, lists and prunes rescues there by exec; the pruner is
                          a leader-only runnable; ExecSlots, the per-replica limit on archive execs (DESIGN-024 5, DESIGN-025 6.4);
                          HistoryReader, the history archive's reads for the API (DESIGN-025 8)
-internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, login, fleet, rc start|status (DESIGN-038, client observations), thread start (DESIGN-057), maintenance check, pages list|show (offline, DESIGN-031), schedule create|list|show|edit|cancel|approve|retry (DESIGN-054); finds the API and a token in a session
-internal/frontdoor/      Meatball's MCP server (DESIGN-060): one bearer, ten tools, opwork as a fixed-argument subprocess, coordinator start/status/stop through agent-run's operator client
+internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, login, fleet, rc start|status (DESIGN-038, client observations), thread start|status (DESIGN-057), maintenance check, pages list|show (offline, DESIGN-031), schedule create|list|show|edit|cancel|approve|retry (DESIGN-054); finds the API and a token in a session
+internal/frontdoor/      Meatball's MCP server (DESIGN-060): one bearer, eleven tools, opwork as a fixed-argument subprocess, coordinator start/status/stop through agent-run's operator client
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol, and the standard-library helpers maintenancecontract, pages, version, and tokenfile (`make build` checks the binary does not link Kubernetes); tests run against an httptest TLS server
 internal/keeper/         the keeper (D-52), including the default-off Ask notifier (DESIGN-034): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes
@@ -109,7 +109,7 @@ internal/agentd/protocol/  what agentd and the operator exchange: the session do
                          archive's wire types and the canonical JSON both sides hash (canonical.go, DESIGN-025 5.4)
 internal/agentd/hostexecutor/  owns one foreground native computer for one immutable budget binding (no budget authority, no pairing)
 internal/codexrc/        pure pinned Codex project/host discovery and rc-launch error mapping; no I/O, launch or pairing authority
-internal/threadlaunch/   DESIGN-057's provider-neutral thread launch: registry (codex host, claude session, cursor/grok unqualified), Adapter interface, phase recorder and driver; pure, no I/O
+internal/threadlaunch/   DESIGN-057's provider-neutral thread launch: registry (codex host, claude session, cursor/grok unqualified), Adapter interface, phase recorder and driver, and the read-only Observer pass behind thread status; pure, no I/O
 internal/codexauth/      the access-only Codex document the keeper publishes and agentd reads; it cannot carry a refresh token
 internal/claudeauth/     the access-only Claude projection document (dev-env-claude-live) and the merge of its access fields into a pod's .credentials.json; it cannot carry a refresh token; pure, no I/O (Story110 T09 increment 1)
 internal/claudelogin/    the keeper-owned Claude login ceremony (Story110 T09 increment 5): the control socket's wire types and client, and the helper that runs the pinned `claude auth login` in a memory-backed staging HOME, prints only the sign-in link and reads the one-time code on stdin; reads no credential

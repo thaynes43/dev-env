@@ -52,6 +52,12 @@ var threadName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 // ValidThreadName is the rule for a thread's name on its host.
 func ValidThreadName(s string) bool { return threadName.MatchString(s) }
 
+var threadID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// ValidThreadID is the rule for a native Codex thread id, as a result's
+// threadId carries it and `agent-run thread status --thread` takes it.
+func ValidThreadID(s string) bool { return threadID.MatchString(s) }
+
 // ValidThreadHandoff is the one handoff rule: 1 to ThreadMaxHandoffBytes UTF-8
 // bytes, not blank, and no control character but newline and tab (C0, DEL and
 // C1 are refused, as a message's are, D-65).

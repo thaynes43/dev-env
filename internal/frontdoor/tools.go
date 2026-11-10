@@ -6,32 +6,49 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/thaynes43/dev-env/internal/agentrun"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
-// tool descriptions stay at or under 30 words. Their total stays under 300.
+// descriptionWordBound is the measured total of the tool descriptions.
+// Each description is at most 30 words.
+const descriptionWordBound = 142
+
+// noStandingAuthority is the whole success result when no authority file is installed.
+const noStandingAuthority = "No standing authority is installed for this caller. Ask the owner once, and record the answer on the work item."
+
+// authorityMaxBytes is the largest authority file standing_authority will return.
+const authorityMaxBytes = 4096
+
+// tool descriptions stay at or under 30 words. Their total is descriptionWordBound.
 var frontDoorTools = []map[string]any{
-	tool("backlog_find", "Find work items by text, status, or parent epic. Read only.", map[string]any{
+	// Read-only tracker search: a repeat writes nothing, deletes nothing, and does not leave the project.
+	tool("backlog_find", "Find work items by text, status, or parent epic. Read only.", hints(true, false, true, false), map[string]any{
 		"text":   map[string]any{"type": "string"},
 		"status": map[string]any{"type": "string"},
 		"epic":   map[string]any{"type": "integer", "minimum": 1},
 	}, nil),
-	tool("backlog_show", "Read one work item, including scope, acceptance, and constraints.", map[string]any{
+	// Read-only item read: a repeat writes nothing, deletes nothing, and does not leave the project.
+	tool("backlog_show", "Read one work item, including scope, acceptance, and constraints.", hints(true, false, true, false), map[string]any{
 		"id": map[string]any{"type": "integer", "minimum": 1},
 	}, []string{"id"}),
-	tool("backlog_create", "Create a story under an epic. Search first. The write is attributed to meatball, not Tom.", map[string]any{
+	// Creates a kept item. A repeat with the same epic and title reuses that source key and writes nothing when the text still matches.
+	tool("backlog_create", "Create a story under an epic. Search first. The write is attributed to meatball, not Tom.", hints(false, false, true, false), map[string]any{
 		"epic":       map[string]any{"type": "integer", "minimum": 1},
 		"title":      map[string]any{"type": "string"},
 		"scope":      map[string]any{"type": "string"},
 		"acceptance": map[string]any{"type": "string"},
 	}, []string{"epic", "title", "scope"}),
-	tool("backlog_groom", "Replace an item's scope, acceptance, or constraints, then read the item back.", map[string]any{
+	// Sets field text. opwork groom patches and adds a journal note on every call, so a repeat is not the same state. Nothing is deleted.
+	tool("backlog_groom", "Replace an item's scope, acceptance, or constraints, then read the item back.", hints(false, false, false, false), map[string]any{
 		"id": map[string]any{"type": "integer", "minimum": 1},
 		"fields": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
 			"description": map[string]any{"type": "string"},
@@ -39,15 +56,18 @@ var frontDoorTools = []map[string]any{
 			"constraints": map[string]any{"type": "string"},
 		}},
 	}, []string{"id", "fields"}),
-	tool("backlog_order", "Set an item's priority, which decides what goes next, then read it back.", map[string]any{
+	// Sets priority. opwork order writes nothing when that priority already matches. Nothing is deleted.
+	tool("backlog_order", "Set an item's priority, which decides what goes next, then read it back.", hints(false, false, true, false), map[string]any{
 		"id":       map[string]any{"type": "integer", "minimum": 1},
 		"priority": map[string]any{"type": "string"},
 	}, []string{"id", "priority"}),
-	tool("backlog_close", "Close an item with evidence. An explicit hold stays a hold.", map[string]any{
+	// Closes an item and keeps it. opwork complete posts another evidence comment when Accepted is not yet allowed, so a repeat is not the same state.
+	tool("backlog_close", "Close an item with evidence. An explicit hold stays a hold.", hints(false, false, false, false), map[string]any{
 		"id":       map[string]any{"type": "integer", "minimum": 1},
 		"evidence": map[string]any{"type": "string"},
 	}, []string{"id", "evidence"}),
-	tool("coordinator_start", "Start one coordinator for an item. Model is required and is the full id Tom named. No effort.", map[string]any{
+	// Starts an agent that can reach the web. A repeat returns the retained session for coordinator-<item> and does not post another create while that record exists.
+	tool("coordinator_start", "Start one coordinator for an item. Model is required and is the full id Tom named. No effort.", hints(false, false, true, true), map[string]any{
 		"item":    map[string]any{"type": "integer", "minimum": 1},
 		"repo":    map[string]any{"type": "string"},
 		"project": map[string]any{"type": "string"},
@@ -55,22 +75,39 @@ var frontDoorTools = []map[string]any{
 		"hours":   map[string]any{"type": "integer", "minimum": 1, "maximum": 4},
 		"workers": map[string]any{"type": "integer", "minimum": 1, "maximum": 4},
 	}, []string{"item", "model", "hours", "workers"}),
-	tool("session_status", "Read one session this caller started, by name or item, including any retained outcome.", map[string]any{
+	// Read-only session read: a repeat writes nothing, deletes nothing, and talks only to the operator.
+	tool("session_status", "Read one session this caller started, by name or item, including any retained outcome.", hints(true, false, true, false), map[string]any{
 		"name": map[string]any{"type": "string"},
 		"item": map[string]any{"type": "integer", "minimum": 1},
 	}, nil),
-	tool("session_stop", "Stop one session this caller started. A refusal from the operator is reported plainly.", map[string]any{
+	// Reaps a session. Clean-up then removes the task and keeps only rescued unpushed work. A second reap during that delete changes nothing.
+	tool("session_stop", "Stop one session this caller started. A refusal from the operator is reported plainly.", hints(false, true, true, false), map[string]any{
 		"name": map[string]any{"type": "string"},
 	}, []string{"name"}),
-	tool("waiting_on_tom", "List open Asks for this caller's sessions and items that need Tom's approval or answer.", map[string]any{}, nil),
+	// Read-only list of Asks and held items: a repeat writes nothing, deletes nothing, and does not leave those systems.
+	tool("waiting_on_tom", "List open Asks for this caller's sessions and items that need Tom's approval or answer.", hints(true, false, true, false), map[string]any{}, nil),
+	// Read-only read of the configured authority file: a repeat writes nothing, deletes nothing, and reads no other path.
+	tool("standing_authority", "Read the owner's standing instruction installed for this caller.", hints(true, false, true, false), map[string]any{}, nil),
 }
 
-func tool(name, description string, properties map[string]any, required []string) map[string]any {
+// hints fills Tool.annotations. The four fields are ToolAnnotations in the MCP
+// schema for protocol 2025-03-26 and for 2025-11-25. The names and the nesting
+// under annotations are the same in both, and this server follows that object.
+func hints(readOnly, destructive, idempotent, openWorld bool) map[string]any {
+	return map[string]any{
+		"readOnlyHint":    readOnly,
+		"destructiveHint": destructive,
+		"idempotentHint":  idempotent,
+		"openWorldHint":   openWorld,
+	}
+}
+
+func tool(name, description string, annotations, properties map[string]any, required []string) map[string]any {
 	schema := map[string]any{"type": "object", "additionalProperties": false, "properties": properties}
 	if required != nil {
 		schema["required"] = required
 	}
-	return map[string]any{"name": name, "description": description, "inputSchema": schema}
+	return map[string]any{"name": name, "description": description, "inputSchema": schema, "annotations": annotations}
 }
 
 func (h *handler) callTool(ctx context.Context, name string, raw json.RawMessage) (string, error) {
@@ -99,6 +136,8 @@ func (h *handler) callTool(ctx context.Context, name string, raw json.RawMessage
 		return h.sessionStop(ctx, args)
 	case "waiting_on_tom":
 		return h.waitingOnTom(ctx, args)
+	case "standing_authority":
+		return h.standingAuthority(args)
 	default:
 		return "", fmt.Errorf("unknown tool %s", name)
 	}
@@ -337,6 +376,55 @@ func (h *handler) sessionStop(ctx context.Context, args map[string]any) (string,
 		text += "reaping: true\n"
 	}
 	return text, nil
+}
+
+func (h *handler) standingAuthority(args map[string]any) (string, error) {
+	if err := only(args); err != nil {
+		return "", err
+	}
+	return readStandingAuthority(h.authorityFile)
+}
+
+// readStandingAuthority reads the file named by the process flag. The path is
+// never taken from the tool call. A larger file is refused whole, not truncated.
+func readStandingAuthority(path string) (string, error) {
+	if path == "" {
+		return noStandingAuthority, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return noStandingAuthority, nil
+		}
+		return "", errors.New("the standing authority file cannot be read")
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return "", errors.New("the standing authority file cannot be read")
+	}
+	if info.Size() > authorityMaxBytes {
+		return "", errors.New("the standing authority file is larger than 4096 bytes")
+	}
+	b, err := io.ReadAll(io.LimitReader(f, authorityMaxBytes+1))
+	if err != nil {
+		return "", errors.New("the standing authority file cannot be read")
+	}
+	if len(b) > authorityMaxBytes {
+		return "", errors.New("the standing authority file is larger than 4096 bytes")
+	}
+	if len(b) == 0 {
+		return noStandingAuthority, nil
+	}
+	if !utf8.Valid(b) {
+		return "", errors.New("the standing authority file is not UTF-8 text")
+	}
+	for _, r := range string(b) {
+		if r != '\n' && r != '\t' && unicode.IsControl(r) {
+			return "", errors.New("the standing authority file contains a control character")
+		}
+	}
+	return string(b), nil
 }
 
 func (h *handler) waitingOnTom(ctx context.Context, args map[string]any) (string, error) {

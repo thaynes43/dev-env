@@ -19,7 +19,9 @@ import (
 	"github.com/thaynes43/dev-env/internal/threadlaunch"
 )
 
-// The Codex adapter of `agent-run thread start` (DESIGN-057 section 5). It
+// The Codex adapter of `agent-run thread start` (DESIGN-057 section 5) and the
+// read-only pass of `agent-run thread status` (section 11), which shares its
+// host checks and first-response read and launches nothing. The adapter
 // runs in the host, reached by `agentd ctl thread-start` over the exec route
 // `agent-run pair` uses. It creates the thread only through the packaged
 // scripts/codex-clean-session.py (the native `codex --remote` TUI, the
@@ -141,6 +143,113 @@ func startCodexThread(ctx context.Context, s Settings, sess protocol.Session, re
 	return threadlaunch.Run(ctx, a, rec, threadlaunch.Options{Wait: wait, Poll: 2 * time.Second, Sleep: d.sleep})
 }
 
+// CodexThreadStatusRequest names one existing thread on this host. Repo is the
+// repository the thread was started in; empty is the host's own.
+type CodexThreadStatusRequest struct {
+	ThreadID, Repo string
+}
+
+// ObserveCodexThread is `agent-run thread status` on this host (DESIGN-057
+// section 11): one read-only pass over an existing thread, reported as a
+// thread-launch.v1 result. It never runs the wrapper, starts a client or sends
+// a thread input.
+func ObserveCodexThread(ctx context.Context, s Settings, sess protocol.Session, req CodexThreadStatusRequest) apiv1.ThreadLaunchResult {
+	return observeCodexThread(ctx, s, sess, req, codexThreadDepsFor())
+}
+
+// codexThreadStatusBound ends a status pass whose reads hang.
+const codexThreadStatusBound = time.Minute
+
+func observeCodexThread(ctx context.Context, s Settings, sess protocol.Session, req CodexThreadStatusRequest, d codexThreadDeps) apiv1.ThreadLaunchResult {
+	ctx, cancel := context.WithTimeout(ctx, codexThreadStatusBound)
+	defer cancel()
+	d = d.observeOnly()
+	rec := threadlaunch.NewStatusRecorder("codex", d.now)
+	a := &codexThreadAdapter{s: s, sess: sess, req: CodexThreadRequest{Repo: req.Repo}, d: d, thread: req.ThreadID, once: true}
+	return threadlaunch.Observe(ctx, codexThreadStatus{a}, rec)
+}
+
+// observeOnly drops the launch half, so a status pass holds no wrapper,
+// interpreter or poll clock: only the host reads and the read-only observers.
+// A later change that reached for one on this path would stop, not launch.
+func (d codexThreadDeps) observeOnly() codexThreadDeps {
+	d.launch, d.python, d.wrapper, d.sleep = nil, nil, nil, nil
+	return d
+}
+
+// codexThreadStatus is the adapter's read-only half: it exposes Locate, Visible
+// and FirstResponse, and neither Preflight nor Create.
+type codexThreadStatus struct{ a *codexThreadAdapter }
+
+// Visible finds the thread by id among the newest threads for its cwd. The
+// default list (the phone's) is read first: a thread there is created and
+// visible in one read, and sub-agent or exec threads cannot crowd it out of
+// the newest 20. Only when it is absent does the all-sources list tell a
+// hidden thread from an id that is not there.
+func (o codexThreadStatus) Visible(ctx context.Context, r *threadlaunch.Recorder) (bool, error) {
+	a := o.a
+	find := func(all bool) (codexThreadSummary, bool, error) {
+		list, err := a.d.list(ctx, a.s, a.pid, a.cwd, all)
+		if err != nil {
+			return codexThreadSummary{}, false, threadlaunch.Halt(apiv1.ThreadFailed, "observation_unavailable", apiv1.ThreadPhaseThreadCreated)
+		}
+		i := slices.IndexFunc(list, func(t codexThreadSummary) bool { return t.ID == a.thread && t.Cwd == a.cwd })
+		if i < 0 {
+			return codexThreadSummary{}, false, nil
+		}
+		return list[i], true, nil
+	}
+	t, ok, err := find(false)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		r.Result.ThreadID, r.Result.Source = a.thread, t.Source
+		r.Phase(apiv1.ThreadPhaseThreadCreated, "ok", "thread_list_default", "thread_listed_for_cwd")
+		r.Phase(apiv1.ThreadPhaseSourceVisible, "ok", "thread_list_default", t.Source)
+		return true, nil
+	}
+	if t, ok, err = find(true); err != nil {
+		return false, err
+	}
+	if !ok {
+		r.Phase(apiv1.ThreadPhaseThreadCreated, "error", "thread_list", "thread_not_listed")
+		return false, threadlaunch.Halt(apiv1.ThreadFailed, "thread_not_found", apiv1.ThreadPhaseThreadCreated)
+	}
+	r.Result.ThreadID, r.Result.Source = a.thread, t.Source
+	r.Phase(apiv1.ThreadPhaseThreadCreated, "ok", "thread_list", "thread_listed_for_cwd")
+	r.Phase(apiv1.ThreadPhaseSourceVisible, "error", "thread_list_default", "hidden_source")
+	return false, threadlaunch.Halt(apiv1.ThreadHidden, "hidden_source", apiv1.ThreadPhaseSourceVisible)
+}
+
+func (o codexThreadStatus) FirstResponse(ctx context.Context, r *threadlaunch.Recorder) (bool, error) {
+	return o.a.FirstResponse(ctx, r)
+}
+
+// Locate checks the host as a launch's preflight does and resolves the cwd the
+// thread lists are read for. The pairing marker is reported, never required:
+// the thread already exists.
+func (o codexThreadStatus) Locate(ctx context.Context, r *threadlaunch.Recorder) error {
+	a := o.a
+	r.Result.Host, r.Result.SessionName = a.sess.Name, a.sess.Name
+	if !codexRemoteSession(a.sess) {
+		r.Phase(apiv1.ThreadPhaseHostReady, "error", "host_session", "not_codex_host")
+		return threadlaunch.Halt(apiv1.ThreadFailed, "not_codex_host", apiv1.ThreadPhaseHostReady)
+	}
+	if !nativeThreadID.MatchString(a.thread) || (a.req.Repo != "" && !apiv1.ValidRepoName(a.req.Repo)) {
+		return threadlaunch.Halt(apiv1.ThreadFailed, "invalid_input", apiv1.ThreadPhaseHostReady)
+	}
+	if err := a.hostReady(ctx, r); err != nil {
+		return err
+	}
+	if a.d.paired(a.s) {
+		r.Phase(apiv1.ThreadPhasePaired, "unknown", "host_state", "pair_code_issued")
+	} else {
+		r.Phase(apiv1.ThreadPhasePaired, "required", "host_state", "no_pair_code_issued")
+	}
+	return a.resolveCwd(r)
+}
+
 type codexThreadAdapter struct {
 	s        Settings
 	sess     protocol.Session
@@ -152,6 +261,8 @@ type codexThreadAdapter struct {
 	launched time.Time
 	thread   string
 	failures int
+	// once marks a status pass: one observation, no launch and no poll.
+	once bool
 }
 
 func validCodexThreadRequest(req CodexThreadRequest) bool {
@@ -171,6 +282,33 @@ func (a *codexThreadAdapter) Preflight(ctx context.Context, r *threadlaunch.Reco
 		return threadlaunch.Halt(apiv1.ThreadFailed, "invalid_input", apiv1.ThreadPhaseHostReady)
 	}
 	r.Result.Name, r.Result.RequestedModel = a.req.Name, a.req.Model
+	if err := a.hostReady(ctx, r); err != nil {
+		return err
+	}
+	// Codex has no read for the phone's side of a pairing. A host that never
+	// issued a code cannot be paired; one that did may be.
+	if !a.d.paired(a.s) {
+		r.Phase(apiv1.ThreadPhasePaired, "required", "host_state", "no_pair_code_issued")
+		return threadlaunch.Halt(apiv1.ThreadActionRequired, "pairing_required", apiv1.ThreadPhasePaired)
+	}
+	r.Phase(apiv1.ThreadPhasePaired, "unknown", "host_state", "pair_code_issued")
+	if err := a.resolveCwd(r); err != nil {
+		return err
+	}
+	before, err := a.d.list(ctx, a.s, a.pid, a.cwd, true)
+	if err != nil {
+		return threadlaunch.Halt(apiv1.ThreadFailed, "observation_unavailable", apiv1.ThreadPhaseHostReady)
+	}
+	a.before = make(map[string]bool, len(before))
+	for _, t := range before {
+		a.before[t.ID] = true
+	}
+	return nil
+}
+
+// hostReady records host_ready: the keeper's access projection is current, the
+// daemon is live and its Remote Control is connected. It only reads.
+func (a *codexThreadAdapter) hostReady(ctx context.Context, r *threadlaunch.Recorder) error {
 	if a.d.access(a.s, a.d.now()) != nil {
 		r.Phase(apiv1.ThreadPhaseHostReady, "blocked", "host_access", "login_required")
 		return threadlaunch.Halt(apiv1.ThreadActionRequired, "login_required", apiv1.ThreadPhaseHostReady)
@@ -191,13 +329,12 @@ func (a *codexThreadAdapter) Preflight(ctx context.Context, r *threadlaunch.Reco
 		return threadlaunch.Halt(apiv1.ThreadFailed, "remote_disconnected", apiv1.ThreadPhaseHostReady)
 	}
 	r.Phase(apiv1.ThreadPhaseHostReady, "ok", "host_daemon", "remote_connected")
-	// Codex has no read for the phone's side of a pairing. A host that never
-	// issued a code cannot be paired; one that did may be.
-	if !a.d.paired(a.s) {
-		r.Phase(apiv1.ThreadPhasePaired, "required", "host_state", "no_pair_code_issued")
-		return threadlaunch.Halt(apiv1.ThreadActionRequired, "pairing_required", apiv1.ThreadPhasePaired)
-	}
-	r.Phase(apiv1.ThreadPhasePaired, "unknown", "host_state", "pair_code_issued")
+	return nil
+}
+
+// resolveCwd sets the thread's cwd, ~/repos/<repo> on the host: the request's
+// repo, else the host's own.
+func (a *codexThreadAdapter) resolveCwd(r *threadlaunch.Recorder) error {
 	repo := a.req.Repo
 	if repo == "" {
 		repo = a.sess.Repo
@@ -210,14 +347,6 @@ func (a *codexThreadAdapter) Preflight(ctx context.Context, r *threadlaunch.Reco
 		return threadlaunch.Halt(apiv1.ThreadFailed, "repo_unavailable", apiv1.ThreadPhaseHostReady)
 	}
 	r.Result.Cwd = a.cwd
-	before, err := a.d.list(ctx, a.s, a.pid, a.cwd, true)
-	if err != nil {
-		return threadlaunch.Halt(apiv1.ThreadFailed, "observation_unavailable", apiv1.ThreadPhaseHostReady)
-	}
-	a.before = make(map[string]bool, len(before))
-	for _, t := range before {
-		a.before[t.ID] = true
-	}
 	return nil
 }
 
@@ -270,13 +399,14 @@ func (a *codexThreadAdapter) Create(ctx context.Context, r *threadlaunch.Recorde
 }
 
 // observed counts a failed observation; only consecutive failures end the run.
+// A status pass (once) never polls, so its first failure ends it.
 func (a *codexThreadAdapter) observed(err error) error {
 	if err == nil {
 		a.failures = 0
 		return nil
 	}
 	a.failures++
-	if a.failures >= codexThreadObserveErrors {
+	if a.once || a.failures >= codexThreadObserveErrors {
 		return err
 	}
 	return errRetryObservation

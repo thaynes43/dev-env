@@ -216,25 +216,51 @@ func TestFrontDoorTools(t *testing.T) {
 		}
 		result := doc["result"].(map[string]any)
 		tools := result["tools"].([]any)
-		if len(tools) != 10 {
+		if len(tools) != 11 {
 			t.Fatalf("got %d tools", len(tools))
 		}
-		want := []string{"backlog_find", "backlog_show", "backlog_create", "backlog_groom", "backlog_order", "backlog_close", "coordinator_start", "session_status", "session_stop", "waiting_on_tom"}
+		want := []string{"backlog_find", "backlog_show", "backlog_create", "backlog_groom", "backlog_order", "backlog_close", "coordinator_start", "session_status", "session_stop", "waiting_on_tom", "standing_authority"}
+		// readOnlyHint, destructiveHint, idempotentHint, openWorldHint.
+		wantAnn := map[string][4]bool{
+			"backlog_find":       {true, false, true, false},
+			"backlog_show":       {true, false, true, false},
+			"backlog_create":     {false, false, true, false},
+			"backlog_groom":      {false, false, false, false},
+			"backlog_order":      {false, false, true, false},
+			"backlog_close":      {false, false, false, false},
+			"coordinator_start":  {false, false, true, true},
+			"session_status":     {true, false, true, false},
+			"session_stop":       {false, true, true, false},
+			"waiting_on_tom":     {true, false, true, false},
+			"standing_authority": {true, false, true, false},
+		}
+		keys := []string{"readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"}
 		total := 0
 		for i, raw := range tools {
 			tool := raw.(map[string]any)
-			if tool["name"] != want[i] {
+			name, _ := tool["name"].(string)
+			if name != want[i] {
 				t.Fatalf("tool %d is %v", i, tool["name"])
 			}
 			desc := tool["description"].(string)
 			n := len(strings.Fields(desc))
 			if n == 0 || n > 30 {
-				t.Fatalf("%s description has %d words", tool["name"], n)
+				t.Fatalf("%s description has %d words", name, n)
 			}
 			total += descriptionWords(tool)
+			ann, _ := tool["annotations"].(map[string]any)
+			if len(ann) != len(keys) {
+				t.Fatalf("%s annotations %#v", name, tool["annotations"])
+			}
+			for k, key := range keys {
+				got, ok := ann[key].(bool)
+				if !ok || got != wantAnn[name][k] {
+					t.Fatalf("%s %s = %#v, want %v", name, key, ann[key], wantAnn[name][k])
+				}
+			}
 		}
-		if total > 300 {
-			t.Fatalf("tools/list descriptions have %d words", total)
+		if total != descriptionWordBound || descriptionWordBound != 142 {
+			t.Fatalf("tools/list descriptions have %d words; bound %d; measured contract 142", total, descriptionWordBound)
 		}
 	})
 
@@ -248,8 +274,22 @@ func TestFrontDoorTools(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = res.Body.Close() }()
+		raw, _ := io.ReadAll(res.Body)
 		if res.StatusCode != http.StatusOK || len(res.Header.Get("Mcp-Session-Id")) < 8 {
 			t.Fatalf("status %d session %q", res.StatusCode, res.Header.Get("Mcp-Session-Id"))
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		result, _ := doc["result"].(map[string]any)
+		instr, _ := result["instructions"].(string)
+		if instr != serverInstructions {
+			t.Fatalf("instructions %q", instr)
+		}
+		n := len(strings.Fields(instr))
+		if n > 120 || n != 58 {
+			t.Fatalf("instructions have %d words", n)
 		}
 	})
 
@@ -560,19 +600,23 @@ func toolResult(t *testing.T, status int, raw []byte) (string, bool) {
 func TestMutatingCallWithoutTokenDoesNoWork(t *testing.T) {
 	dir := t.TempDir()
 	count := filepath.Join(dir, "opwork-invocations")
-	base, api, _, _ := startDoor(t, fmt.Sprintf("#!/bin/sh\nprintf 'x\\n' >> %q\n", count))
+	authPath := filepath.Join(dir, "authority")
+	writeFile(t, authPath, "authority-sentinel-value\n")
+	base, api, _, h := startDoor(t, fmt.Sprintf("#!/bin/sh\nprintf 'x\\n' >> %q\n", count))
+	h.(*handler).authorityFile = authPath
 	calls := []struct {
 		name string
 		args map[string]any
 	}{
 		{"coordinator_start", map[string]any{"item": 528, "repo": "dev-env", "model": "claude-opus-5-5", "hours": 2, "workers": 2}},
 		{"backlog_close", map[string]any{"id": 528, "evidence": "tests passed"}},
+		{"standing_authority", map[string]any{}},
 	}
 	for _, token := range []string{"", "wrong-token"} {
 		for _, call := range calls {
 			api.reset()
 			status, raw := postMCP(t, nil, base, token, "tools/call", map[string]any{"name": call.name, "arguments": call.args})
-			if status != http.StatusUnauthorized || len(raw) != 0 {
+			if status != http.StatusUnauthorized || len(raw) != 0 || strings.Contains(string(raw), "authority-sentinel-value") {
 				t.Fatalf("%s token rejected as status %d body %d", call.name, status, len(raw))
 			}
 			if len(api.requests()) != 0 {
@@ -601,6 +645,97 @@ func TestMutatingCallWithoutTokenDoesNoWork(t *testing.T) {
 	_, _ = toolResult(t, status, raw)
 	if len(api.requests()) == 0 {
 		t.Fatal("a valid coordinator start made no operator request")
+	}
+}
+
+func TestStandingAuthority(t *testing.T) {
+	base, api, _, h := startDoor(t, stubScript)
+	door := h.(*handler)
+	call := func(args map[string]any) (string, bool) {
+		t.Helper()
+		status, raw := postMCP(t, nil, base, testBearer, "tools/call", map[string]any{"name": "standing_authority", "arguments": args})
+		return toolResult(t, status, raw)
+	}
+	text, isError := call(map[string]any{})
+	if isError || text != noStandingAuthority {
+		t.Fatalf("no flag: error %v text %q", isError, text)
+	}
+	dir := t.TempDir()
+	door.authorityFile = filepath.Join(dir, "missing")
+	text, isError = call(map[string]any{})
+	if isError || text != noStandingAuthority {
+		t.Fatalf("missing: error %v text %q", isError, text)
+	}
+	empty := filepath.Join(dir, "empty")
+	writeFile(t, empty, "")
+	door.authorityFile = empty
+	text, isError = call(map[string]any{})
+	if isError || text != noStandingAuthority {
+		t.Fatalf("empty: error %v text %q", isError, text)
+	}
+	path := filepath.Join(dir, "authority")
+	writeFile(t, path, "first\n\tline")
+	door.authorityFile = path
+	text, isError = call(map[string]any{})
+	if isError || text != "first\n\tline" {
+		t.Fatalf("file: error %v text %q", isError, text)
+	}
+	writeFile(t, path, "second line\n")
+	text, isError = call(map[string]any{})
+	if isError || text != "second line\n" {
+		t.Fatalf("reread: error %v text %q", isError, text)
+	}
+	writeFile(t, path, "\n")
+	text, isError = call(map[string]any{})
+	if isError || text != "\n" {
+		t.Fatalf("newline: error %v text %q", isError, text)
+	}
+	exact := strings.Repeat("a", authorityMaxBytes)
+	writeFile(t, path, exact)
+	text, isError = call(map[string]any{})
+	if isError || text != exact {
+		t.Fatalf("cap: error %v len %d", isError, len(text))
+	}
+	writeFile(t, path, strings.Repeat("b", authorityMaxBytes+1))
+	text, isError = call(map[string]any{})
+	if !isError || text != "the standing authority file is larger than 4096 bytes" || strings.Contains(text, "bbb") {
+		t.Fatalf("oversize: error %v text %q", isError, text)
+	}
+	writeFile(t, path, "restored\n")
+	text, isError = call(map[string]any{})
+	if isError || text != "restored\n" {
+		t.Fatalf("reread after error: error %v text %q", isError, text)
+	}
+	writeFile(t, path, "bad\r\ntext")
+	text, isError = call(map[string]any{})
+	if !isError || text != "the standing authority file contains a control character" || strings.Contains(text, "bad") {
+		t.Fatalf("control: error %v text %q", isError, text)
+	}
+	if err := os.WriteFile(path, []byte{0xff, 0xfe}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	text, isError = call(map[string]any{})
+	if !isError || text != "the standing authority file is not UTF-8 text" {
+		t.Fatalf("utf8: error %v text %q", isError, text)
+	}
+	other := filepath.Join(dir, "other")
+	writeFile(t, other, "other-secret-marker")
+	text, isError = call(map[string]any{"path": other})
+	if !isError || strings.Contains(text, "other-secret-marker") || strings.Contains(text, other) {
+		t.Fatalf("caller path: error %v text %q", isError, text)
+	}
+	door.authorityFile = dir
+	text, isError = call(map[string]any{})
+	if !isError || text != "the standing authority file cannot be read" || strings.Contains(text, "other-secret-marker") {
+		t.Fatalf("directory: error %v text %q", isError, text)
+	}
+	door.authorityFile = ""
+	text, isError = call(map[string]any{})
+	if isError || text != noStandingAuthority {
+		t.Fatalf("cleared flag: error %v text %q", isError, text)
+	}
+	if len(api.requests()) != 0 {
+		t.Fatal("standing authority called the operator")
 	}
 }
 

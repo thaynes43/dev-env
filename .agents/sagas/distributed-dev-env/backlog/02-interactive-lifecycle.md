@@ -89,7 +89,8 @@ the cluster.
 - [x] 3. **The `RescueFailed` page** (D-10, D-57, #69; haynes-ops #3532). The
   operator serves `dev_env_session_rescue_failed`; haynes-ops scrapes it and pages
   Tom with `DevEnvRescueFailed`, and with `DevEnvOperatorMetricsAbsent` when the
-  series vanish.
+  series vanish. A task clean-up refusal is not in `dev_env_session_rescue_failed`
+  (DESIGN-061 6).
 - [x] 4. **Local sessions and resume on boot** (D-58, this PR). The API serves `mode: local` for
   Claude. agentd starts the TUI in tmux session `agent` with a new conversation id.
   On any later boot of a volume that has a launch record, task or local, it starts

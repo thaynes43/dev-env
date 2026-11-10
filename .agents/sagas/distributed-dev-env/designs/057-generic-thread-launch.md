@@ -3,12 +3,15 @@
 - **Status:** Proposed, 2026-11-09. Codex adapter in source; live acceptance pending.
   Section 10 (session-pod callers through the operator's API, OP495) in source,
   2026-11-09; live acceptance pending.
+  Section 11 (`thread status`, the observe-only recheck, OP492) in source,
+  2026-11-10; exec route only; live acceptance pending.
 - **Tracking:** [Story OP489](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/489),
   under [Epic #91](https://work.haynesnetwork.com/work_packages/91). It supersedes
   [OP272](https://work.haynesnetwork.com/work_packages/272)'s runtime activation
   (journal 5990) and meets [OP481](https://work.haynesnetwork.com/work_packages/481)
   acceptance item 2 for this route. [Story OP495](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/495)
-  adds section 10.
+  adds section 10. [Story OP492](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/492)
+  adds section 11.
 - **Origin:** Tom, 2026-11-09: "Yes build it but meatball has been starting these
   so check to see what's built already don't duplicate what they have but you need
   that ability too. You need to be able to start Grok too and other providers as we
@@ -233,7 +236,7 @@ No handoff, response, pairing code or native message text. At most 32 KiB.
 
 | Outcome | Exit | Meaning |
 | --- | --- | --- |
-| `responded` | 0 | All phases above `ok` (except `paired`). |
+| `responded` | 0 | All phases above `ok` (except `paired`). A `thread status` result also leaves `client_started` `unknown` (section 11). |
 | `visible` | 7 | Created and listed; the response is pending or not observable. Check later; never resend. |
 | `action_required` | 7 | Pairing or login needs Tom. Nothing was created. |
 | `timed_out` | 7 | The wait ended first; phases show where. Never resend. |
@@ -351,3 +354,104 @@ Tom and trusted clients on any profile), a real listener with short timeouts
 over HTTP/1.1 and HTTP/2, and agent-run against a fake API. Live proof waits for a paired host: from an ordinary session pod,
 `thread start --agent codex --host <host>` must print `responded` and Tom must
 see the thread on his phone.
+
+## 11. Observe-only recheck: `thread status` (2026-11-10, OP492)
+
+**The gap.** `thread start` ends `visible` (exit 7, `response_pending`) when
+the first response arrives after `--wait`. The result says "check again
+later", and nothing checked again: the only command that observed a thread
+also launched one.
+
+**Command.**
+
+```bash
+agent-run thread status --agent codex --host <codex-host> --thread <threadId> [--repo R]
+```
+
+`--thread` is a result's `threadId`. `--repo` is the repo the thread was
+started in (default: the host's repo), because the thread lists are read for
+one cwd. It takes no handoff, model, effort, name or wait: each is a usage
+error. It prints one `thread-launch.v1` line and exits with its outcome's code.
+
+**Observe-only, by construction.** Nothing on this path can launch or send:
+
+- agent-run execs `agentd ctl thread-status --thread ID [--repo R]`, never
+  `thread-start`, without `-i`: the exec has no stdin to carry an input.
+- `ctl thread-status` reads no stdin and has no launch flag.
+- `threadlaunch.Observe` drives an `Observer` (`Locate`, `Visible`,
+  `FirstResponse`). The interface has no `Create`, and the Codex status pass
+  drops the wrapper, its interpreter and the poll clock from its dependencies
+  before it runs.
+- The daemon sees only the handshake (`initialize` and its `initialized`
+  notification), `remoteControl/status/read` for `host_ready`, and the three
+  read calls of section 5 (`thread/list`, `thread/turns/list`,
+  `thread/items/list`).
+
+**One pass.** It does not poll, wait or retry.
+
+1. **Locate.** The session must be a Codex remote host and the id a native
+   thread id. `host_ready` is section 5's check, unchanged (access current,
+   daemon live, remote `connected`), with the same codes. `paired` is reported
+   from the host's marker (`unknown` or `required`) and never stops the pass:
+   the thread already exists. The cwd is `~/repos/<repo>`, as for a launch.
+2. **Visible.** The default `thread/list` for the cwd (newest 20, the phone's
+   list) is read first. The id there is `thread_created` and `source_visible`
+   `ok` from one read, and sub-agent or exec threads cannot crowd it out of
+   the 20. Only when it is absent is the all-sources list read: the id there
+   is `hidden` (`hidden_source`), and in neither list the pass ends `failed`
+   with `thread_not_found`. An older thread, another repo's thread and a wrong
+   id look the same.
+3. **First response.** Section 5 step 5, the same code: `responded` when an
+   agent message exists; `failed` (`turn_failed`) for a failed or interrupted
+   first turn; `visible` with `response_not_observable` for a completed turn
+   without an observed message; `visible` with `response_pending` when no turn
+   exists yet or it is in progress.
+
+**Result.** The same document, so a caller reads it as it reads a launch.
+What differs: `name`, `requestedModel` and `deadlineMs` are empty or zero;
+`client_started` stays `unknown` (`not_observed_by_status`: the pass does not
+look at the client process); `permission` repeats the launch contract with
+source `launch_contract`, because a status pass does not observe it; and
+`threadId` and `source` are set only once the thread is found. `unconfirmed`
+and `timed_out` never occur: nothing was launched and nothing waited. A failed
+read is `failed` with `observation_unavailable`. agent-run relays only an
+answer a status pass can give: a lost or invalid one, a launch's outcome
+(`unconfirmed`, `timed_out`, `blocked`), or a found thread that is not
+`--thread` is `failed` with `status_unavailable`. All are safe to repeat.
+`response_not_observable` is the one answer a recheck will not change.
+
+**Any listed thread.** The pass accepts any thread id listed for the cwd, not
+only one `thread start` returned. For a thread started another way (the phone,
+say) the turn states are still what was observed, but `permission` and the
+`handoff` phase describe a `thread start` launch and say nothing about that
+thread.
+
+**Route and authorization.** The exec route and checks of `thread start`
+(section 3): `sessionExecTarget`, then the host must be a Running Codex
+`remote` session. No grant, RBAC rule, API route or CRD is added. The
+operator's thread route (section 10) carries a launch only, so an ordinary
+session pod, which has no exec (D-19), gets `failed` with
+`status_route_unavailable` before any request, and never falls back to the
+launch route. A read route for session pods would be a new API contract with
+section 10's profile fence; it is not part of OP492 and needs its own story.
+A host whose agentd predates `thread-status` answers `status_unsupported`.
+
+**Other providers.** Claude is refused with
+`provider_observation_unavailable` (its first response is not observable;
+`rc status` reads its session). Cursor and Grok are `blocked`, as for a launch.
+
+**Tests.** Fakes only: the driver with a fake observer; the Codex status pass
+with a scripted host (completed, pending, failed and interrupted turns,
+hidden, not found, read failures, host refusals) whose launch fakes fail the
+test if reached; the same pass against the in-process app-server, asserting
+the methods sent are only the handshake and the three reads; `ctl
+thread-status` refusals; and agent-run with a fake API and a fake
+`kubectl exec`, asserting the exact argv, no `-i`, empty stdin and no POST.
+
+**Live acceptance and one open question.** Live acceptance is the
+coordinator's, on a host whose image ships this. It must also settle what no
+fake can: how Codex 0.160.1 answers `thread/turns/list` and
+`thread/items/list` for a thread whose client has exited or whose daemon
+restarted. A launch reads them within its wait; a status pass may run much
+later. If they fail there, status reports `observation_unavailable`; that is
+truthful but not useful, and it would need a design change, not a retry.
