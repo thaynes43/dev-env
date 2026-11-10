@@ -75,9 +75,13 @@ These large files are references. Search them for the item you need:
   `nice -n 19`. Keep `GO_PARALLELISM` at 2 in a shared pod.
 - `make test` gives each package `-timeout $(GO_TEST_TIMEOUT)` (30m, not go's 10m) and
   points `GOTMPDIR` at a fresh `/tmp` directory it removes on exit (`GO_TEST_TMP_ROOT`;
-  empty keeps your `GOTMPDIR`). Under the image's HOME `GOTMPDIR`, a network volume,
-  fsync-heavy tests run 70 times slower and `internal/agentd` does not finish in 45
-  minutes; on `/tmp` it takes about 4 (OP690).
+  empty keeps your `GOTMPDIR`; `TMPDIR` is untouched). Under the image's HOME
+  `GOTMPDIR`, a network volume, fsync-heavy tests run 70 times slower and
+  `internal/agentd` does not finish in 45 minutes; on `/tmp` it takes about 4 (OP690).
+  Observed `/tmp` peaks: `internal/agentd` alone about 55 MB, one full `make test`
+  under 300 MiB. A guard refuses the redirect (and keeps your `GOTMPDIR`, with one
+  line on stderr) when `/tmp` already holds more than `GO_TEST_TMP_MAX_KB`
+  (4 GiB, half the pod's 8Gi cap) or cannot be measured.
 - A new Go package under `api/`, `cmd/`, `internal/` or `scripts/` needs a line in
   [docs/repo-layout.md](docs/repo-layout.md); `make check-layout` fails without one.
 - Build images only in CI. The agent image is about 3.2 GB; `ci.yml` builds and

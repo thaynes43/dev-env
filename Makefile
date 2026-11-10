@@ -25,12 +25,27 @@ GO_TEST_TIMEOUT ?= 30m
 # GOTMPDIR under HOME, a network volume where fsync-heavy tests ran 70 to 100
 # times slower (TestHistoryArchiveVerifyDetectsTamper: 110s on HOME, 1.5s on
 # /tmp) and internal/agentd did not finish in 45 minutes. Test scratch goes to a
-# fresh directory under GO_TEST_TMP_ROOT, removed when the target exits; agentd
-# peaked near 55 MB there. Set GO_TEST_TMP_ROOT= (empty) to keep the caller's
-# GOTMPDIR.
+# fresh directory under GO_TEST_TMP_ROOT, removed when the target exits. Set
+# GO_TEST_TMP_ROOT= (empty) to keep the caller's GOTMPDIR. TMPDIR is untouched.
+#
+# A pod's /tmp is an 8Gi emptyDir whose overflow evicts the pod, and Go enforces
+# no quota, so the redirect has a budget guard: if GO_TEST_TMP_ROOT already holds
+# more than GO_TEST_TMP_MAX_KB (default 4 GiB, half the cap, the rest is
+# reserve), or du cannot measure it, the caller's GOTMPDIR is kept and one line
+# says so. Observed peaks: internal/agentd alone about 55 MB (OP690); one full
+# make test stayed under 300 MiB (one observation, PR 1054).
 GO_TEST_TMP_ROOT ?= /tmp
+GO_TEST_TMP_MAX_KB ?= 4194304
 GO_TEST_TMP_SETUP = tmp=; if [ -n '$(GO_TEST_TMP_ROOT)' ]; then \
-	tmp="$$(mktemp -d '$(GO_TEST_TMP_ROOT)/dev-env-go-test.XXXXXX')"; trap 'rm -rf "$$tmp"' EXIT; fi
+	used="$$(du -sxk '$(GO_TEST_TMP_ROOT)' 2>/dev/null | cut -f1)" || used=; \
+	if [ -z "$$used" ]; then \
+		echo "make: cannot measure $(GO_TEST_TMP_ROOT); keeping GOTMPDIR" >&2; \
+	elif [ "$$used" -gt '$(GO_TEST_TMP_MAX_KB)' ]; then \
+		echo "make: $(GO_TEST_TMP_ROOT) holds $$used KiB, above GO_TEST_TMP_MAX_KB=$(GO_TEST_TMP_MAX_KB); keeping GOTMPDIR" >&2; \
+	else \
+		tmp="$$(mktemp -d '$(GO_TEST_TMP_ROOT)/dev-env-go-test.XXXXXX')"; trap 'rm -rf "$$tmp"' EXIT; \
+	fi; \
+fi
 GO_TEST_ENV = $${tmp:+GOTMPDIR="$$tmp"}
 
 # Child processes inherit these too: `go list` under controller-gen and
