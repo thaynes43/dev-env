@@ -559,9 +559,10 @@ that is not a short name, `^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`, is the label
 
 Unknown is not zero. A Session with no Reported tokens or cost would add to
 the session and seconds counters only. Codex cost is Unknown today, and
-Cursor reports no tokens or cost. A Session already present when this ships
-would be counted once, the first time the leader sees it final. The USD
-figure is the observation's decimal string, added as a float.
+Cursor reports no tokens or cost. Once a stored mark exists (see Next
+step), a Session already present when this ships would be counted once, the
+first time the leader sees it final. The USD figure is the observation's
+decimal string, added as a float.
 
 Weekly cost, once those counters exist:
 
@@ -608,9 +609,11 @@ terminal record). Usage has no such mark.
 A follow-up chooses the store. The smallest is one annotation or condition
 the leader writes before it increments, so a restart skips a Session that
 already carries it, and a Session present at the upgrade does not, and is
-counted once. A crash between that write and the increment can drop one add
-when Prometheus has not scraped it. That is the same window as the terminal
-counter. A ConfigMap of totals, written with a resourceVersion check, is the
-other small store. Either one is a new story. This one changes no portal
-page and no haynes-ops manifest, and it does not change how usage is
-recorded on the Session.
+counted once. A crash after that write and before a scrape that has seen
+the increment drops that Session's add, because the restart sees the mark
+and does not add it. A scrape that happens before the increment does not
+save it. That is the same window as the terminal counter, which increments
+only after its status mark is stored. A ConfigMap of totals, written with a
+resourceVersion check, is the other small store. Either one is a new story.
+This one changes no portal page and no haynes-ops manifest, and it does not
+change how usage is recorded on the Session.
