@@ -22,7 +22,7 @@ NICE ?= nice -n 19
 # nice -n 19, scratch on /tmp), and lets a hung test end with go's own timeout
 # and stack dump while the job is still alive. When the guard below keeps the
 # HOME GOTMPDIR, internal/agentd still exceeds any reasonable timeout (over 45m
-# measured), which is why the guard prints a notice.
+# measured), which is why both guard notices say so.
 GO_TEST_TIMEOUT ?= 15m
 
 # Where go test puts its work directory and t.TempDir files. A session pod sets
@@ -36,19 +36,22 @@ GO_TEST_TIMEOUT ?= 15m
 # no quota, so the redirect has a budget guard: if GO_TEST_TMP_ROOT already holds
 # more than GO_TEST_TMP_MAX_KB (default 4 GiB, half the cap, the rest is
 # reserve), or du cannot measure it, the caller's GOTMPDIR is kept and one line
-# says so. du's total counts even if du exits non-zero (an unreadable or vanished
-# entry); only a missing or non-numeric total is "cannot measure".
+# says so. A du that exits non-zero is "cannot measure": its total leaves out what
+# it could not read, so it proves nothing. du runs at most twice (the second run
+# absorbs a file vanishing mid-walk); only an exit 0 with an all-digit total
+# counts. The guard is a check at start, not a quota.
 # Observed peaks: internal/agentd alone about 55 MB (OP690); one full make test
 # stayed under 300 MiB (one observation, PR 1054).
 GO_TEST_TMP_ROOT ?= /tmp
 GO_TEST_TMP_MAX_KB ?= 4194304
 GO_TEST_TMP_SETUP = tmp=; if [ -n '$(GO_TEST_TMP_ROOT)' ]; then \
-	used="$$({ du -sxk '$(GO_TEST_TMP_ROOT)' 2>/dev/null || true; } | tail -n 1 | cut -f1)"; \
+	out="$$(du -sxk '$(GO_TEST_TMP_ROOT)' 2>/dev/null)" || out="$$(du -sxk '$(GO_TEST_TMP_ROOT)' 2>/dev/null)" || out=; \
+	used="$$(printf %s "$$out" | cut -f1)"; \
 	case "$$used" in ""|*[!0-9]*) used=;; esac; \
 	if [ -z "$$used" ]; then \
-		echo "make: cannot measure $(GO_TEST_TMP_ROOT); keeping GOTMPDIR" >&2; \
+		echo "make: cannot measure $(GO_TEST_TMP_ROOT); keeping GOTMPDIR; internal/agentd may not finish under GO_TEST_TIMEOUT on a network volume" >&2; \
 	elif [ "$$used" -gt '$(GO_TEST_TMP_MAX_KB)' ]; then \
-		echo "make: $(GO_TEST_TMP_ROOT) holds $$used KiB, above GO_TEST_TMP_MAX_KB=$(GO_TEST_TMP_MAX_KB); keeping GOTMPDIR" >&2; \
+		echo "make: $(GO_TEST_TMP_ROOT) holds $$used KiB, above GO_TEST_TMP_MAX_KB=$(GO_TEST_TMP_MAX_KB); keeping GOTMPDIR; internal/agentd may not finish under GO_TEST_TIMEOUT on a network volume" >&2; \
 	else \
 		tmp="$$(mktemp -d '$(GO_TEST_TMP_ROOT)/dev-env-go-test.XXXXXX')"; trap 'rm -rf "$$tmp"' EXIT; \
 	fi; \

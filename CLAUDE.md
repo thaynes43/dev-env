@@ -81,8 +81,9 @@ These large files are references. Search them for the item you need:
   Observed `/tmp` peaks: `internal/agentd` alone about 55 MB, one full `make test`
   under 300 MiB. A guard refuses the redirect (and keeps your `GOTMPDIR`, with one
   line on stderr) when `/tmp` already holds more than `GO_TEST_TMP_MAX_KB`
-  (4 GiB, half the pod's 8Gi cap) or cannot be measured. With the HOME `GOTMPDIR`
-  kept, `internal/agentd` will exceed any reasonable timeout; the stderr line says so.
+  (4 GiB, half the pod's 8Gi cap) or cannot be measured (`du` must exit 0, tried twice; a start-time check, not a quota). With the HOME `GOTMPDIR`
+  kept, `internal/agentd` will exceed any reasonable timeout; both notices end with
+  "internal/agentd may not finish under GO_TEST_TIMEOUT on a network volume".
 - A new Go package under `api/`, `cmd/`, `internal/` or `scripts/` needs a line in
   [docs/repo-layout.md](docs/repo-layout.md); `make check-layout` fails without one.
 - Build images only in CI. The agent image is about 3.2 GB; `ci.yml` builds and
