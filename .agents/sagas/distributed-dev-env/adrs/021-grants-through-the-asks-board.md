@@ -76,9 +76,20 @@ The broker creates the Ask from `Broker.pending`, after no GrantPolicy has appro
 the grant and no delegate decision applies (`internal/broker/broker.go`
 lines 268-289), and only when the flag is on. The Ask's context names the
 requesting session. A label
-`coordination.dev-env.haynesops.com/ask-origin=broker` marks it. The
-broker decides an answer only on an Ask it marked. A hand-written Ask of
-this kind is not decided.
+`coordination.dev-env.haynesops.com/ask-origin=broker` marks it. The label
+is not proof by itself: any principal that can create an Ask could set it.
+The broker decides an answer only when all of these hold: the label is
+`broker`; `requestId` is `grant-` plus `grant.uid`; `context.sessionUID`
+equals the grant's requester session UID; and the live UID, digest, type,
+target and TTL match section 2. `POST /v1/asks` refuses `type=grant` and
+strips `ask-origin` from every session create, so a session cannot set the
+label. Sessions have no direct Ask CRD rights (DESIGN-034 section 4). The
+broker's ServiceAccount is the principal that creates an Ask with that
+label, by writing the object, not by calling `POST /v1/asks`. A cluster
+admin can still write one. That is the same trust as a cluster admin
+writing AccessGrant status, which the broker already has to live with. The
+request-id and session-UID checks stop a label copied onto some other
+session's Ask from deciding this grant.
 
 The scope is typed, on the Ask, not on the AccessGrant. AccessGrant spec
 is unchanged. The fields are:
@@ -188,16 +199,25 @@ answer, the Ask stays open, and the grant stays pending. If an answered
 grant Ask has no usable username, the broker denies the grant
 (`deniedBy` `broker`) and stops. It does not invent a name.
 
-**When `Decide` fails after the answer is stored.** The answer stays. The
-broker acts on the error:
+**When the answer is stored and the grant is not yet decided.** The answer
+stays. The broker acts on the pre-check and on `Decide`:
 
-| `Decide` result | What the broker does |
+| Result | What the broker does |
 |---|---|
 | Success | The grant leaves Pending. Stop. |
 | A conflict or a read error, and the grant is still Pending, UID and digest still match | Retry on the next reconcile. |
 | `ErrNotPending` | Stop. The grant has already ended, been released, or been deleted. Do not create a grant. |
-| `ErrRefused` because the live UID, digest, type, target or TTL does not match the Ask | Deny that live grant when the UID matches and the object is still Pending (`deniedBy` `broker`, message that the scope no longer matches). When the UID does not match, do not call `Decide` on the object that now has the name. Stop. Never open a replacement grant or a replacement Ask. |
+| Pre-check mismatch, before `Decide` | The broker compares UID, digest, type, target and TTL to the Ask and does not call `Decide` unless they match. If the live UID matches and the grant is still Pending but the digest, type, target or TTL does not, it denies that grant (`deniedBy` `broker`, message that the scope no longer matches) and stops. If the UID does not match, it does not call `Decide` on the object that now has the name, and it stops. It never opens a replacement grant or a replacement Ask. |
 | Any other `ErrRefused` | Deny the pending grant with the broker's reason and stop. A yes that the broker cannot apply does not sit pending forever, and it does not grant. |
+
+`Decide` re-checks the same binding. Behind the flag, `decisionAllowed`
+re-reads the Ask and returns `ErrRefused` when the label, request id,
+session UID, UID, digest, type, target or TTL no longer match. A
+`Decision` that carries only `By` does not pass that re-check. PR 5 of the
+build plan needs this for credential, maintenance and reserved grants,
+whose execution also re-reads the Ask. The pre-check and the re-check can
+both see a mismatch if the object changes between them. Either one ends
+the grant refused and does not create another.
 
 A changed UID or digest ends refused. It never becomes a new grant.
 
@@ -420,19 +440,30 @@ The PRs merge in this order. Each is releasable with the flag off.
 
 1. **Wire and CRD.** `api/coordination/v1alpha1/ask_types.go`,
    `internal/apiserver/apiv1/asks.go`, generated `config/crd/` and
-   `zz_generated.deepcopy.go`. Tests in `internal/apiserver/apiv1/asks_test.go`
-   and the coordination validation suite: a grant Ask with the typed scope
-   and no expiry is accepted; an approval Ask past 24 hours is still
-   refused; an info Ask with a `grant` object is refused; a grant Ask with
-   an expiry or an approval scope is refused; `ValidateForAt` accepts a
-   grant answer with no clock check and still expires an approval.
+   `zz_generated.deepcopy.go`. This PR adds `answer.answeredBy.username`
+   on the coordination Ask and on the wire actor, optional, pattern
+   `^[A-Za-z0-9][A-Za-z0-9._@+-]{0,62}$`, omitted from session responses.
+   A grant answer requires it; an info or approval answer omits it. Tests
+   in `internal/apiserver/apiv1/asks_test.go` and the coordination
+   validation suite: a grant Ask with the typed scope and no expiry is
+   accepted; an approval Ask past 24 hours is still refused; an info Ask
+   with a `grant` object is refused; a grant Ask with an expiry or an
+   approval scope is refused; `ValidateForAt` accepts a grant answer with
+   `approved` and a username that matches the pattern, and no clock check;
+   a grant answer with a slash in the username, or with no username, is
+   refused; an approval answer that carries `username` is refused; an
+   approval still expires. The coordinator copies this Ask CRD into
+   haynes-ops after this PR merges and before PR 4 or PR 6 is pinned.
+   Either of those images stores `username`. An API server whose CRD has
+   no such field drops it, and section 2 would then deny the grant.
 2. **Store, sweeper, session create.** `internal/asks/store.go`,
    `internal/asks/sweeper.go`, `internal/apiserver/asks.go`. Envtest in
    `internal/asks/envtest_test.go`: the fourth open grant Ask for one
    session is 429; the 49th in the namespace is 429; a grant Ask does not
    consume one of the 16 info slots; the sweeper does not expire a grant
    Ask and still expires an info Ask; `POST /v1/asks` with `type=grant`
-   is 400.
+   is 400; a session create that sends `ask-origin=broker` stores no such
+   label.
 3. **Broker opens the Ask and holds the 30-minute deny.**
    `internal/broker/broker.go`, `cmd/dev-env-operator/broker.go` for the
    flag only. A broker unit test with a fake clock: flag off, denied at
@@ -443,10 +474,12 @@ The PRs merge in this order. Each is releasable with the flag off.
    Ask. If it cannot, one envtest in this package, alone.
 4. **Broker applies the answer.** `internal/broker/seams.go` and a new
    `internal/broker/grant_ask.go`. Unit tests: one answer grants once and
-   the repeat is `ErrNotPending`; a digest change denies and does not
-   create a grant; a UID change does not call `Decide` on the replacement;
-   a conflict retries; a transport error retries; another `ErrRefused`
-   denies. `Decision.By` is `authentik/` plus the stored username.
+   the repeat is `ErrNotPending`; a digest, type, target or TTL mismatch
+   denies the pending grant and does not call `Decide`; a UID change does
+   not call `Decide` on the replacement; a conflict retries; a transport
+   error retries; another `ErrRefused` denies. `Decision.By` is
+   `authentik/` plus the stored username. The test shows the pre-check
+   outcome, not an `ErrRefused` the broker pretended `Decide` returned.
 5. **Credential, maintenance and reserved execution.**
    `internal/broker/seams.go`, `internal/broker/credentials.go`,
    `internal/broker/broker.go` lines 343-344. The existing
@@ -454,8 +487,10 @@ The PRs merge in this order. Each is releasable with the flag off.
    `TestNonPolicyCredentialApprovalIsRefusedAtExecutionToday` stay green
    with the flag off and with no Ask. New tests, flag on, with a matching
    Ask: a credential approval creates one job; the same `By` without the
-   Ask creates none; maintenance and reserved scope stay Active only while
-   the Ask binds, and fail closed when it does not.
+   Ask creates none; `decisionAllowed` re-reads the Ask and returns
+   `ErrRefused` when the binding does not match; maintenance and reserved
+   scope stay Active only while the Ask binds, and fail closed when it
+   does not.
 6. **Portal card, username, Dismiss.** `web/portal/session/authorization.go`,
    `web/portal/session/asks.go`, `web/portal/asks.go`,
    `internal/apiserver/portal_asks.go`. A portal test renders the four
