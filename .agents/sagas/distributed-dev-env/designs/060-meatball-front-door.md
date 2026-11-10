@@ -440,6 +440,87 @@ waits on Meatball or asks Meatball to unblock it. OP528 should reuse this
 request, key and brief contract plus the existing list/detail/reap routes;
 the front-door server needs no tracker credential to launch a coordinator.
 
+### 7.3 Annotations, instructions and the standing authority (OP546, 2026-11-10)
+
+Tom, 2026-11-10, typed in coordinator session dev-env-fable-coordinator-1109:
+"Meatball is asking me basic things like if it can connect to the MCP with the
+token. It should not be asking permission for basic things and this constant
+nagging makes it almost useless."
+
+Research the same day found three causes on our side. The tools carried no MCP
+annotations. In the schema for protocol 2025-11-25, and the same schema for
+2025-03-26, an omitted `readOnlyHint` means false, an omitted `destructiveHint`
+means true, and an omitted `openWorldHint` means true, so a client treats an
+unannotated tool as not read-only, destructive and open-world and confirms
+every call. The initialize result had no `instructions`. Meatball had nowhere
+to read a standing authority, so it asked when its authority was unclear.
+
+`tools/list` returns eleven tools. Each tool's `annotations` object has
+`readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`. Those
+are the fields of `ToolAnnotations`, nested on `Tool` as `annotations`, in both
+dated schemas. The names and the nesting are the same. This server follows that
+shared object and sets every field. The values come from what the code does:
+
+| Tool | read-only | destructive | idempotent | open-world |
+|---|---|---|---|---|
+| `backlog_find`, `backlog_show`, `session_status`, `waiting_on_tom`, `standing_authority` | true | false | true | false |
+| `backlog_create` | false | false | true | false |
+| `backlog_groom` | false | false | false | false |
+| `backlog_order` | false | false | true | false |
+| `backlog_close` | false | false | false | false |
+| `coordinator_start` | false | false | true | true |
+| `session_stop` | false | true | true | false |
+
+The reads only look. The tracker writes keep history and delete nothing, so
+they are not destructive. `backlog_create` derives a source key from the epic
+and the title, `meatball-<epic>-` plus the first eight bytes of SHA-256 of the
+epic, a newline and the title. `opwork create` finds that item and writes
+nothing when the subject and the supplied text still match, so a repeat leaves
+the same state. `opwork groom` patches and adds a journal note on every call,
+including a repeat of the same text, so it is not idempotent. `opwork order`
+writes nothing when the priority already matches. `opwork complete` writes
+nothing once the item is Accepted. When Accepted is not an allowed transition,
+each call posts another evidence comment and says not to re-run, so
+`backlog_close` is not idempotent. A client must not retry it on its own.
+
+`coordinator_start` calls `ExecuteCoordinatorStart`. That looks up the caller's
+retained session for `coordinator-<item>` and returns it without posting
+another create, so a repeat for the same item returns the same session while
+that record exists. This server does not pass a run label. After the record is
+deleted, a repeat starts a new session. Section 7.2's limit still holds: this
+is not a cross-replica lock. The started agent uses profile `dev`, which has
+web egress, so the tool is open-world. The call itself deletes nothing.
+
+`session_stop` reaps the session. Task clean-up then removes a stopped task
+and keeps only its rescued unpushed work, so the hint is destructive. A second
+delete while the session is already being reaped changes nothing, and a stop
+after the record is gone does not recreate it.
+
+`initialize` includes `instructions`, the `InitializeResult` field of both
+schemas, beside `protocolVersion`, `capabilities` and `serverInfo`. The text
+is 58 words, under the 120 word limit: "This server is Meatball's front door
+to the haynes-engineering tracker and to coordinator sessions. The server and
+the operator enforce the caller's limits, so call a tool and report the result
+rather than asking the owner first. A refusal is final. Record it and do not
+work around it. standing_authority returns the owner's standing instruction
+for this caller."
+
+`standing_authority` takes no arguments. Its description is at most 30 words,
+like the others. The eleven descriptions together are 142 words. The tool
+re-reads the file named by `--authority-file` (`Config.AuthorityFile`) on
+every call. The path comes only from that flag. The file must be a regular
+file of at most 4096 bytes and valid UTF-8. A larger file is a plain tool
+error and is never truncated. A control character other than newline and tab
+is a plain tool error. With no flag, or a missing or empty file, the tool
+returns exactly: "No standing authority is installed for this caller. Ask the
+owner once, and record the answer on the work item." It returns nothing else
+from the filesystem.
+
+The authority text is installed by haynes-ops as a ConfigMap and is Tom's
+text, changed only by a PR he approves. This change installs none. It grants
+no new access and does not change any existing tool's behaviour or limits.
+The behaviour page is [docs/frontdoor.md](../../../../docs/frontdoor.md).
+
 ## 8. One approval path
 
 ### The list (ruled by Tom, 2026-11-10)
@@ -596,7 +677,7 @@ door has no such action.
 | 2 | Grants that need Tom go through the board | First ADR-021 and the DESIGN-034 amendment (section 8, the adapter's contract). Then: the operator opens a `grant` Ask for a grant no policy decided; the portal answer calls `Decide`; no timeout while it waits on Tom; the "session has ended" card; `request_access` and `grant` help cut to 40 words | M | 1; ADR-021 and the DESIGN-034 amendment accepted |
 | 3 | Meatball's caller | `CallerPolicy` for one caller: CRD, API class, the ruled limits (a driver from `claude-opus-5-5`, `gpt-6-astra` or `claude-fable-5-2`, required and with no default; 4 hours, 4 workers, 2 at once; no effort setting), own-sessions-only reads and stops | M | none |
 | 4 | Coordinator start | One operator route that fills in a coordinator task from a tracker item; the standard brief; `agent-run coordinator start, status, stop`; worker-count cap | M | 3 |
-| 5 | Front-door MCP server | Deployment, ServiceAccount, internal ingress, token from 1Password; the ten tools; `opwork groom` and `order` | M | 3, 4 |
+| 5 | Front-door MCP server | Deployment, ServiceAccount, internal ingress, token from 1Password; the eleven tools; `opwork groom` and `order` | M | 3, 4 |
 | 6 | Acceptance run | Meatball (or a stand-in with the same token) starts a coordinator on one ready story; cheaper workers reach a merged PR; one risky request reaches Tom's phone and he decides | S | 1, 2, 5 |
 
 Not in the slice: agent-decided grants (#503 and a delegated policy), OP505's
