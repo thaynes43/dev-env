@@ -2,12 +2,11 @@
 
 - **Status:** Accepted for the first slice, 2026-11-09 (coordinator
   dev-env-fable-coordinator-1109). Option B is taken: it adds no provider
-  request, login or access, so it needs no owner approval. The questions in
-  section 10 are settled the same way: no timer reads, Cursor and Grok stay
-  "not connected". Each is the option that adds nothing, and Tom is told;
-  timer reads or a Cursor reader would be a new story with his ruling. Both
-  passive sources were checked with real data (section 11). Nothing is built
-  or deployed yet.
+  request, login or access, so it needs no owner approval and no owner
+  question is pending. Section 10 lists what Tom may still choose to add
+  (timer reads, a Cursor reader); none of it blocks the slice, and each would
+  be a new story with his ruling. Both passive sources were checked with real
+  data (section 11). Nothing is built or deployed yet.
 - **Tracking:** [Story OP509](https://work.haynesnetwork.com/work_packages/509),
   project haynes-engineering: "Usage reporting that keeps working: weekly
   usage and resets without approval windows or a host session that
@@ -94,14 +93,15 @@ Evidence, all offline, no provider contact:
   (`codex-rs/exec/src/exec_events.rs`) put token `usage` on `turn.completed`
   and have no rate-limit field. agentd's parser
   (`internal/agentd/codex_stream.go`) reads none either.
-- **No real sample.** The repo has no real rollout or exec stream. Its
-  rollout fixtures are synthetic and have no `rate_limits`
-  (`internal/agentd/conversation_usage.go:466`,
+- **No sample in the repo.** Its rollout fixtures are synthetic and have no
+  `rate_limits` (`internal/agentd/conversation_usage.go:466`,
   `testdata/conversation_usage/codex_*.jsonl`).
+- **One real sample, 2026-11-09** (section 11): a rollout written by one
+  `codex exec` in a session pod carries `rate_limits` on its `token_count`
+  record, with a 10080-minute `primary` window.
 
-So the pinned source shows that the field exists and is persisted. Whether
-it is filled in for this account at run time is not shown. The first
-installed reading shows it, and the slice has no value until it does.
+So the pinned source shows that the field exists and is persisted, and one
+real rollout shows it filled in for this account.
 
 The reading: agentd already finds each Codex thread's rollout
 (`findCodexRollout`) and reads it (`applyCodexRolloutModels`,
@@ -131,8 +131,10 @@ core, so they should write rollouts too; that is not checked.
 - **Interactive only.** The callback runs in the terminal UI: Claude remote
   and local sessions. A headless `claude -p` task is not assumed to run it
   (DESIGN-052).
-- **Never observed here.** OP191's one installed test (haynes-ops #4408,
-  restored by #4409) never returned a result. No sample from 2.1.321 exists.
+- **Observed once.** OP191's installed test (haynes-ops #4408, restored by
+  #4409) never returned a result. On 2026-11-09 the coordinator saw the
+  callback input in a v2 remote session on 2.1.321 (section 11): it carries
+  `rate_limits.seven_day`, and the image's helper accepts it.
 - **Install point.** agentd writes `~/.claude/settings.json` one key at a
   time with `assertSettingsKey` (`internal/agentd/claudestate.go:191`),
   called from `renderDefaultModel` and `renderBypassPrompt`
@@ -164,7 +166,7 @@ makes no request (DESIGN-052), so it cannot be the transport by itself.
 | Nothing running | the last reading ages, with its time shown | the same, and also while only headless Claude tasks run |
 | Use outside the cluster | shows at the next model call in the cluster | claude.ai use shows at the next interactive reply |
 | Reading time | the rollout record's time: when the client received the numbers | the callback time, advanced only when a value changed |
-| Stays Unknown | the provider's own measurement time; a window it does not report; whether the field is filled in until first seen | the same, plus periods with only headless tasks |
+| Stays Unknown | the provider's own measurement time; a window it does not report | the same, plus periods with only headless tasks |
 
 The Claude callback also runs on events that bring no new data (a
 permission-mode change, a timer). agentd therefore keeps the previous
@@ -211,9 +213,10 @@ expired and doing nothing.
 *Changes:* agentd, one heartbeat field, a small operator writer, the read
 route, one shared display rule, the portal pin. *Risks:* no new reading
 while nothing runs, or while only headless Claude tasks run; a worker can
-post a false reading, as bounded above; Codex's field is shown in source
-but not yet seen filled in. *Owner approves:* accepting the idle gap (Q-01).
-No provider request, window, version list or private config is added.
+post a false reading, as bounded above; a Codex remote host may write no
+rollout (not checked). *Owner approves:* nothing. The idle gap is a limit of
+the page, told to the owner, not an access he grants. No provider request,
+window, version list or private config is added.
 
 **C. Mix.** B for Claude and Codex, plus an active read for what B cannot
 see: Cursor, and Claude when only headless tasks run. This has B's parts plus
@@ -227,8 +230,8 @@ adds no provider request and no login, so it needs no window, no host, no
 version list and no encrypted file. The numbers are the client's own, about
 the one login, with their real receipt time. Its gap (idle periods, and
 Claude headless-only periods) is shown on the page, not hidden. If Tom
-wants timer-based reads for that gap (Q-01) or for Cursor (Q-02), add them
-later as a C-shaped second story. Nothing in B has to be undone for that.
+wants timer-based reads for that gap or a reader for Cursor (section 10), add
+them later as a C-shaped second story. Nothing in B has to be undone for that.
 
 ## 7. First slice
 
@@ -249,7 +252,10 @@ The slice delivers B for Claude and Codex.
    `statusLine` to `claude-statusline-usage --output
    $XDG_RUNTIME_DIR/dev-env-usage/claude-statusline.json` and makes that
    directory with mode 0700. If a different `statusLine` is already set, it
-   wraps that command with `--display` so the display is kept. Then agentd
+   wraps that command with `--display` so the display is kept. The step is
+   idempotent: agentd renders at every boot and resume, so it recognizes its
+   own command by the helper's exact path and leaves it as it is, never
+   wrapping it a second time; a test renders twice. Then agentd
    reads the file at each heartbeat (bounded, owner and mode checked) and
    keeps the reading time when no value changed. Medium: about 150 and 150.
 4. **Send rule** (`internal/agentd` heartbeat assembly): attach a reading
@@ -271,12 +277,17 @@ The slice delivers B for Claude and Codex.
    `GET /v1/provider-allowances` serves, per provider, the newer of the slot
    item and the session reading. The session reading goes out as a
    `passive_event` item, source version `session-v1`, with its source
-   status. Small to medium: about 100 and 120.
+   status. It is served whatever the slot's state: today `readStored`
+   returns early when the slot is suppressed, missing or unconfigured
+   (`provider_allowance_reports.go:193`), and its trust comes from the
+   private config; the session reading must not depend on either, or B would
+   still hang on the expired slot. Small to medium: about 100 and 120.
 7. **One display rule** (`internal/providerallowance`, used by
    `ProjectCachedRead`): `passive_event` items with source version
    `session-v1` are judged by one built-in rule. It checks shape, sets
-   binding Unknown and never marks a value current. Every other item keeps
-   the private trust contexts. Without this rule the portal rejects any item
+   binding Unknown and never marks a value current. The rule applies in the
+   operator's own `ProjectCachedRead` call as well as the portal's. Every
+   other item keeps the private trust contexts. Without this rule the portal rejects any item
    that matches no private context (`cachedMarkItem`), and so hides it. The
    portal then shows the reading as "Last reported", "Passive event",
    "Account not verified" (`web/portal/session/product_allowance.go`).
@@ -296,7 +307,7 @@ at any time.
 **Left as it is:** the active collector (expired, no IO), its flags, its
 private config and its version list. Nothing is deleted. A cleanup story can
 remove the collector flags, the handoff flag and the supplemental reader
-once Q-01 is answered.
+once a week of readings shows the passive route is enough.
 
 **Proof.** `kubectl -n dev-env-system get configmap
 dev-env-session-allowances -o yaml` shows, per provider, a reading at most
@@ -312,11 +323,11 @@ agentd side; the operator and portal side) and one release, plus three small
 haynes-ops PRs. One worker session for the source, or two stories split along
 that line.
 
-If Codex rollouts turn out never to carry `rate_limits`, the passive
-Codex route fails, and Codex needs the active path instead: the existing
-`account/rateLimits/read` in an ordinary Codex session pod (access-only
-login, non-forced, no model call), with a standing approval (Q-01). This
-design does not build that.
+A Codex task's rollout carries `rate_limits` (section 11). If Codex remote
+host sessions turn out to write none, hosts give no reading and tasks still
+do. An active path (the existing `account/rateLimits/read` in an ordinary
+Codex session pod: access-only login, non-forced, no model call) would need
+the owner's standing approval. This design does not build it.
 
 ## 8. Staleness on the page
 
@@ -349,10 +360,13 @@ only machine-readable route found (R-07 G2, the Grok Build CLI's
 own refresh token. Both conflict with OP509's rules. Grok stays "Not
 connected"; the portal already shows that row (#940).
 
-## 10. Questions for the owner
+## 10. Choices left to the owner
 
-Written for a phone. Each is asked alone, at the moment it is needed; the
-answer is folded back here as a dated ruling.
+None of these blocks the slice, and none is pending: option B is the answer
+that adds nothing, so the coordinator took it and told Tom in the session.
+They are written for a phone, for the day he wants more than B gives. A yes
+to any of them is a new story, and his answer is recorded there as a dated
+ruling.
 
 **Q-01. Read usage only from running sessions?** "Your weekly usage numbers
 would come from the AI sessions you already run, with no extra checks
@@ -416,6 +430,11 @@ values are on OP509, not here.
   `/usr/local/bin/claude-statusline-usage --output <file>` accepted that real
   input (exit 0) and wrote a `providerallowance.read.v1` document.
 - Both probes were removed afterwards and the settings file restored.
+- **The one model call.** Section 3 keeps the rule "no model call made only
+  to poll quota". That rule is about a collector that polls. This was one
+  qualification call, made once by the coordinator under OP509 to check the
+  design's largest unverified claim before about 1,650 lines were built on
+  it. It is not repeated, and nothing in the design makes such a call.
 
 Still not checked: that Codex remote host sessions write rollouts; the live
 portal page.
