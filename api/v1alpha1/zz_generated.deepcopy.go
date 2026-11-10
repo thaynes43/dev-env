@@ -144,6 +144,10 @@ func (in *AccessGrantStatus) DeepCopyInto(out *AccessGrantStatus) {
 		in, out := &in.NotifiedAt, &out.NotifiedAt
 		*out = (*in).DeepCopy()
 	}
+	if in.AskUnreadAt != nil {
+		in, out := &in.AskUnreadAt, &out.AskUnreadAt
+		*out = (*in).DeepCopy()
+	}
 	if in.AdminCredential != nil {
 		in, out := &in.AdminCredential, &out.AdminCredential
 		*out = new(AdminCredentialStatus)

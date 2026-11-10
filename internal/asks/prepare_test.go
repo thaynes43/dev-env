@@ -132,6 +132,37 @@ func TestPrepareGrantOmitsExpiryAndClientLabels(t *testing.T) {
 	}
 }
 
+func TestPrepareBrokerOriginIsSetOnCreateAndASessionCannot(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	in := grantCreate("grant-req-origin")
+	in.Labels = map[string]string{OriginLabel: BrokerOrigin}
+	session, err := prepare(testRequester(), in, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Labels[OriginLabel] != "" {
+		t.Fatalf("session caller stored origin %q", session.Labels[OriginLabel])
+	}
+	broker := testRequester()
+	broker.Origin = BrokerOrigin
+	got, err := prepare(broker, in, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Labels[OriginLabel] != BrokerOrigin {
+		t.Fatalf("broker create origin %q", got.Labels[OriginLabel])
+	}
+	other := testRequester()
+	other.Origin = "session"
+	refused, err := prepare(other, in, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refused.Labels[OriginLabel] != "" {
+		t.Fatalf("non-broker origin stored %q", refused.Labels[OriginLabel])
+	}
+}
+
 func TestPageNewestFirst(t *testing.T) {
 	base := time.Date(2026, 10, 29, 20, 0, 0, 0, time.UTC)
 	items := []apiv1.Ask{

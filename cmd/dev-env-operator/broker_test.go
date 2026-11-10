@@ -26,6 +26,12 @@ func TestParseBrokerFlags(t *testing.T) {
 			t.Errorf("delegate %q accepted", bad)
 		}
 	}
+	if o.enableGrantAsks {
+		t.Fatal("--enable-grant-asks defaults on")
+	}
+	if o, err := parseBrokerFlags([]string{"--enable-grant-asks"}); err != nil || !o.enableGrantAsks {
+		t.Fatalf("explicit grant asks enable: %+v %v", o.enableGrantAsks, err)
+	}
 	if o, err := parseBrokerFlags([]string{"--enable-proxmox-grants"}); err != nil || !o.enableProxmoxGrants {
 		t.Fatalf("explicit Proxmox enable: %+v %v", o, err)
 	}

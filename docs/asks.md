@@ -17,12 +17,90 @@ not expire. An info or approval ask cannot carry a grant object, and a grant
 ask cannot carry an approval scope or an expiry. Info and approval behaviour
 is otherwise unchanged.
 
-`POST /v1/asks` refuses `type=grant`. The session route also drops any labels
-on the body, including `coordination.dev-env.haynesops.com/ask-origin`, so a
-session create does not store that label. The store accepts a grant ask and
-applies the caps below. It records the requester, the open state and the ask
-type, and it does not record `ask-origin`. The broker path that opens a grant
-ask is not this route.
+`POST /v1/asks` refuses `type=grant`, and refuses a `requestId` that starts
+with `grant-`. That prefix is the broker's. The session route also drops any
+labels on the body, including `coordination.dev-env.haynesops.com/ask-origin`,
+so a session create does not store that label.
+
+Rollout precondition: no grant Ask from an earlier build exists.
+`--enable-grant-asks` has never been set in any cluster, so no flag-on grant
+Ask is stored. A stored grant Ask whose scope text is not the text this build
+renders is denied, and the request must be made again. The AccessGrant CRD
+that stores `status.ask` and `status.askUnreadAt` is installed before the
+flag is set. That CRD is not rolled back while a grant with a route exists:
+a rollback drops the route, and the broker then creates no Ask.
+
+The broker writes `status.ask` on the grant, the Ask's object name, before it
+creates that Ask ([ADR-022](../.agents/sagas/distributed-dev-env/adrs/022-grant-ask-route.md)).
+It sets the field once and does not clear it. A separate live read of a new
+object must show the route before the Ask is created. If that read does not
+show it, no Ask is created and the grant is denied in that reconcile, by the
+broker. The message is that the CRD does not store the Ask route. A Warning
+Event says the same. There is no wait. A storage failure on the Ask path is
+an immediate deny: a wait is a state, and a state needs its own fence. From
+a stored route on, that Ask is the only approval. If it is missing, not this
+grant's, or unreadable for two minutes, the grant is denied. The two minutes
+start at `status.askUnreadAt` and survive a restart. After that instant is
+written, a separate live read of a new object must show it. If it does not,
+the grant is denied at once, with its own message, that the CRD does not
+store the Ask unread time. A create the apiserver refused before commit is
+retried only until the grant's original 30-minute deadline. While that
+pre-create is outstanding, the broker checks the deadline with a fresh clock
+before it branches on the Ask read, and again at the create itself, including
+the first attempt. The store checks that same deadline once more, immediately
+before it sends the create, after its own count list. It never creates after
+the deadline. The outstanding marker is cleared only after that timeout
+denial is stored, or a fresh read shows the grant is no longer Pending. A
+failed denial leaves the marker, so a later read error does not open a new
+unread episode. A read error before the deadline does not open one either.
+A create that may have committed is not retried, and a missing Ask denies
+the grant. A grant with
+no route is still denied at 30 minutes. A grant an attested policy could
+match, from one live policy list in that reconcile, is not given a route or
+an Ask.
+
+When the broker denies a routed grant for a reason other than that Ask's own
+answer, it withdraws its own open Ask after the deny is stored. An empty
+stored route still withdraws: cleanup computes the Ask name the same way a
+decision does, and the identity and UID checks run before any write. A failed
+withdraw is retried later. The first wait is one second and each later
+failure doubles it, up to five minutes. A read that fails and is not NotFound
+keeps that backoff and leaves the Ask untouched on that pass. A Delete
+that conflicts leaves that wait in place, so a repeated conflict does not
+start again at one second. The wait is cleared when the Delete succeeds or
+returns NotFound. Retention deletes the grant at its time even when the
+card could not be read. Every attempt checks the expected Ask UID and the
+full grant identity, including the label write after the withdrawal is
+stored. That patch tests the Ask UID
+and resourceVersion. An answered Ask stays answered. A foreign Ask is left
+alone. The card for a session that has ended stays open for Dismiss, and an
+Ask event does not enqueue it. A create or update of an Ask that matches a
+terminal grant enqueues that grant for this cleanup. A failed lookup of the
+owning grant is retried only when that scheduled retry is due. An unrelated
+Ask event does not run it. One retry reads the grants once for every held
+Ask. At most 32 are held, oldest first. A newer Ask is not added when the
+set is full, and the next reconcile of its grant still finds it: that
+reconcile loads the Ask from the grant and does not use the held set. The
+grant is already terminal, so the enqueue cannot approve it. A pending grant
+the requester releases is stored Released first. The Ask is then withdrawn
+from that terminal path, with the same backoff as a deny. An answered Ask
+on a Pending grant can wait up to the controller's error backoff when its
+wake was dropped during an outage. A dropped wake for a terminal grant
+waits for that grant's next reconcile.
+
+The store accepts a grant ask and applies the caps below. It records the
+requester, the open state and the ask type. It records `ask-origin=broker`
+only when the broker caller sets that origin on the same create. A session
+caller cannot set it. `POST /v1/asks/{id}/withdraw` refuses `type=grant`.
+The broker withdraws a grant Ask when the session releases the grant.
+
+The broker puts the complete access the digest covers into the Ask detail,
+with explicit field names (`namespaces:[...]`, `allNamespaces:true`,
+`reserved:true`, and the secret, storage, destination and port fields). A
+namespace role includes every Secret name. Egress includes every destination
+with its ports, protocols and label selectors. When that text does not fit the
+detail bound, the broker opens no Ask. The grant keeps the 30-minute denial,
+and a Warning Event says the request is too large to show and should be split.
 
 A grant answer requires `approved` and a `username` matching
 `^[A-Za-z0-9][A-Za-z0-9._@+-]{0,62}$`. An info or approval answer omits
@@ -47,7 +125,7 @@ principal the portal authenticated.
 | POST | `/v1/asks` | session | 201 created, 200 identical `requestId` |
 | GET | `/v1/asks?mine=true` | session | 200, newest first |
 | GET | `/v1/asks/{id}` | owning session | 200 |
-| POST | `/v1/asks/{id}/withdraw` | owning session, while open | 200 |
+| POST | `/v1/asks/{id}/withdraw` | owning session, while open, not `type=grant` | 200 |
 | GET | `/v1/portal/asks?state=open` or `all` | portal reader | 200 |
 | GET | `/v1/portal/asks/{id}` | portal reader, any state | 200 |
 | POST | `/v1/portal/asks/{id}/answer` | portal reader, while open and unexpired | 200 |
@@ -198,8 +276,9 @@ This source default does not settle Tom's quiet-hours ruling or permit go-live.
 ## Status codes
 
 Validation failures, including a fractional `scope.expiresAt`, are 400.
-`POST /v1/asks` with `type=grant` is 400. A session cannot set labels;
-`ask-origin` is dropped and is not stored.
+`POST /v1/asks` with `type=grant` is 400. Withdraw of an Ask whose type is
+`grant` is 400. A session cannot set labels. On this route `ask-origin` is
+dropped and is not stored.
 The same `requestId` with a different body is 409. Withdraw of an ask that is
 not open is 409. An answer when the ask is answered or withdrawn is 409. The
 same issuer and subject repeating the identical answer is 200, including when
@@ -207,6 +286,24 @@ only the display name differs. A different subject is 409. An answer when the
 ask or its approval scope has expired is 410 (`expired`). A count bound is
 429 (`limit_exceeded`). An unconfirmed count is 503. Another session's ask is
 404.
+
+## Who can answer a grant Ask
+
+The broker trusts the stored answer. It cannot tell who wrote it. Whoever may update `asks/status` in `dev-agents` can store an answer the broker will apply. Whoever may create an Ask, patch its metadata, or delete an Ask can occupy the grant's Ask name, change the origin label, or remove the Ask the grant already named. By design the operator stores the portal's answer for a signed-in person, and the broker creates the grant Ask. The coordinator checks the live writers of create, metadata patch, delete, and `asks/status` before the flag is set.
+
+## Broker verbs on Asks and TaskClaims
+
+These are the Kubernetes verbs the broker's grant-Ask code uses. This repository does not grant them. ADR-021's build plan also lists `get` on TaskClaims, which this code does not use, and it does not list `patch` on Asks, which the state-label repair uses. Origin is set in the create, not by a patch.
+
+| Verb | Resource | Function |
+| --- | --- | --- |
+| get | asks | `loadGrantAsk` reads the grant's Ask. `KubeStore.load` reads it again from `KubeStore.Create` and `KubeStore.Withdraw`. |
+| list | asks | `KubeStore.countAtMost`, from `KubeStore.checkRoom` during `Create`. `KubeStore.recountMatching` lists when an open count is already at its bound. |
+| watch | asks | `Broker.SetupWithManager` watches Asks and wakes grants through `enqueueGrantAsk`. A pending grant is woken for its answer. A terminal grant is woken so its Ask can be withdrawn. A failed owner list is retried only when that retry is due, with one grant list for the held Asks. At most 32 are held, oldest first. A newer Ask is dropped and found again when its grant is next reconciled. A session that has ended is not woken. |
+| create | asks | `KubeStore.Create`, called from `ensureGrantAsk`. The origin label is on this create. |
+| update | asks/status | `KubeStore.ensureOpen`, from `Create`, and `KubeStore.Withdraw`, from `withdrawBrokerDenial` and `withdrawOpenGrantAsk`. |
+| patch | asks | `KubeStore.setStateLabel`, from `syncLabel`, which `Withdraw` and `recountMatching` call. This patches the state label only. A grant withdrawal checks the Ask UID and the full identity on each read, and the patch tests that UID and the resourceVersion. |
+| list | taskclaims | `grantAskWorkPackage` lists the session's TaskClaims for the story link. |
 
 ## Operator RBAC
 

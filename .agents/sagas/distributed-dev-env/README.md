@@ -5,9 +5,11 @@
 [DESIGN-060](designs/060-meatball-front-door.md) is the front door: Meatball
 manages the backlog and starts coordinator sessions, and Tom names the model.
 [ADR-021](adrs/021-grants-through-the-asks-board.md), accepted by the
-coordinator, sends a grant that needs Tom through the Asks board. The source
-is merged in part. The front door Deployment is live, and its tools still
-carry no message between a session and Meatball.
+coordinator, sends a grant that needs Tom through the Asks board.
+[ADR-022](adrs/022-grant-ask-route.md) is Proposed and amends that build plan
+with the grant's Ask route. The source is merged in part. The front door
+Deployment is live, and its tools still carry no message between a session
+and Meatball.
 
 **2026-11-10 reaching a parent, OP545:** [DESIGN-062](designs/062-reaching-a-parent.md)
 is accepted by the coordinator with four rulings (its section 12). One parent

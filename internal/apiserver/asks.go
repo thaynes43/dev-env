@@ -98,8 +98,12 @@ func (s *Server) createAsk(ctx context.Context, w http.ResponseWriter, r *http.R
 	}
 	// A session cannot create a grant ask, flag on or off.
 	// Client labels are dropped, so ask-origin never lands on a session create.
+	// The grant- prefix is the broker's request id. A session cannot occupy it.
 	if body.Type == apiv1.AskTypeGrant {
 		return 0, nil, badRequest("type: a session cannot create a grant ask")
+	}
+	if strings.HasPrefix(body.RequestID, apiv1.AskGrantRequestPrefix) {
+		return 0, nil, badRequest("requestId: the grant- prefix is reserved")
 	}
 	body.Labels = nil
 	now := s.askNow()
@@ -165,8 +169,17 @@ func (s *Server) withdrawAsk(ctx context.Context, _ http.ResponseWriter, r *http
 	if err != nil {
 		return 0, nil, err
 	}
+	// A session cannot withdraw a grant Ask. The broker withdraws one when
+	// the session releases the grant (ADR-021 section 5).
+	current, err := s.ownedAsk(ctx, r.PathValue("id"), reqr)
+	if err != nil {
+		return 0, nil, mapAskError(err)
+	}
+	if current.Type == apiv1.AskTypeGrant {
+		return 0, nil, badRequest("type: a session cannot withdraw a grant ask")
+	}
 	now := s.askNow()
-	ask, err := s.Asks.Withdraw(ctx, r.PathValue("id"), reqr, now)
+	ask, err := s.Asks.Withdraw(ctx, r.PathValue("id"), reqr, now, asks.WithdrawIdentity{})
 	if err != nil {
 		return 0, nil, mapAskError(err)
 	}

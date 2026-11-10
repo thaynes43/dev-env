@@ -5,9 +5,11 @@ package asks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -15,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
@@ -33,6 +36,10 @@ const (
 	TypeLabel = "coordination.dev-env.haynesops.com/ask-type"
 	// OriginLabel marks a broker-created grant ask. Session create drops it.
 	OriginLabel = "coordination.dev-env.haynesops.com/ask-origin"
+	// BrokerOrigin is the only value stored on OriginLabel. The store writes
+	// it only when Requester.Origin is exactly this, in the create call.
+	// A session caller leaves Requester.Origin empty, and body labels are ignored.
+	BrokerOrigin = "broker"
 
 	// DefaultOpenPerRequester is the cap on stored-open info and approval asks
 	// for one session. An open ask that has lapsed still counts until its
@@ -61,6 +68,14 @@ var (
 	ErrLimit = errors.New("ask limit reached")
 	// ErrUnavailable means the store could not confirm a read or a write.
 	ErrUnavailable = errors.New("asks are unavailable")
+	// ErrCreateUnconfirmed means the create request left the client and this
+	// call cannot prove the Ask was not stored. That includes a status
+	// initialisation or final read that failed after the object was created.
+	// The caller must not create again. A missing Ask denies the grant.
+	ErrCreateUnconfirmed = errors.New("ask create was not confirmed")
+	// ErrCreateNotAfter means CreateNotAfter was already reached. The create
+	// request was not sent and nothing was stored.
+	ErrCreateNotAfter = errors.New("ask create is past its deadline")
 )
 
 // LimitError is a refused create. Scope is LimitOpen, LimitOpenGrant,
@@ -110,6 +125,12 @@ type KubeStore struct {
 	Namespace string
 	Limits    Limits
 	Log       logr.Logger
+	// CreateNotAfter, with Now, is checked immediately before the create
+	// request is sent, after the store's own count list. Zero means the
+	// caller has no deadline. The session path leaves both unset.
+	CreateNotAfter time.Time
+	// Now is the caller's clock for CreateNotAfter. Nil skips that check.
+	Now func() time.Time
 }
 
 func (s KubeStore) ready() error {
@@ -169,6 +190,11 @@ func (s KubeStore) Create(ctx context.Context, req Requester, in apiv1.AskCreate
 	if err := s.checkRoom(ctx, req, now, in.Type); err != nil {
 		return apiv1.Ask{}, false, err
 	}
+	// The count list above can move the caller's clock. This is the last
+	// check before the request is sent. Nothing has been stored.
+	if s.Now != nil && !s.CreateNotAfter.IsZero() && !s.Now().Before(s.CreateNotAfter) {
+		return apiv1.Ask{}, false, ErrCreateNotAfter
+	}
 	obj := &coord.Ask{
 		TypeMeta:   metav1.TypeMeta{APIVersion: coord.GroupVersion.String(), Kind: "Ask"},
 		ObjectMeta: metav1.ObjectMeta{Name: made.Name, Namespace: s.Namespace, Labels: made.Labels},
@@ -178,25 +204,48 @@ func (s KubeStore) Create(ctx context.Context, req Requester, in apiv1.AskCreate
 		if apierrors.IsAlreadyExists(err) {
 			existing, rerr := s.load(ctx, made.Name)
 			if rerr != nil {
-				return apiv1.Ask{}, false, rerr
+				return apiv1.Ask{}, false, createUnconfirmed(rerr)
 			}
-			return s.finishExisting(ctx, existing, req, digest)
+			wire, _, ferr := s.finishExisting(ctx, existing, req, digest)
+			if ferr != nil && !errors.Is(ferr, ErrConflict) {
+				return apiv1.Ask{}, false, createUnconfirmed(ferr)
+			}
+			return wire, false, ferr
 		}
 		s.logWrite(err, made.Name)
-		return apiv1.Ask{}, false, fmt.Errorf("%w: ask was not stored", ErrUnavailable)
+		stored := fmt.Errorf("%w: ask was not stored", ErrUnavailable)
+		// A definitive apiserver refusal did not persist the object.
+		// Anything else left the client and may have committed.
+		if createRefusedBeforeCommit(err) {
+			return apiv1.Ask{}, false, stored
+		}
+		return apiv1.Ask{}, false, createUnconfirmed(stored)
 	}
 	if err := s.ensureOpen(ctx, obj); err != nil {
-		return apiv1.Ask{}, false, err
+		return apiv1.Ask{}, false, createUnconfirmed(err)
 	}
 	fresh, err := s.load(ctx, obj.Name)
 	if err != nil {
-		return apiv1.Ask{}, false, err
+		return apiv1.Ask{}, false, createUnconfirmed(err)
 	}
 	wire, err := toWire(fresh)
 	if err != nil {
-		return apiv1.Ask{}, false, err
+		// The object is already stored. A validation failure on the read-back
+		// is not proof the create was refused.
+		return apiv1.Ask{}, false, createUnconfirmed(err)
 	}
 	return wire, true, nil
+}
+
+// createRefusedBeforeCommit reports an apiserver rejection that does not
+// persist the object. The create request was sent, and the refusal is the
+// proof it did not commit.
+func createRefusedBeforeCommit(err error) bool {
+	return apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsMethodNotSupported(err) || apierrors.IsUnsupportedMediaType(err)
+}
+
+func createUnconfirmed(err error) error {
+	return fmt.Errorf("%w: %w", ErrCreateUnconfirmed, err)
 }
 
 func (s KubeStore) finishExisting(ctx context.Context, obj *coord.Ask, req Requester, digest string) (apiv1.Ask, bool, error) {
@@ -267,10 +316,24 @@ func (s KubeStore) ListNamespace(ctx context.Context) ([]apiv1.Ask, bool, error)
 	return s.list(ctx, nil)
 }
 
+// WithdrawIdentity is the Ask the caller already accepted. Withdraw checks
+// it against the object it has just read, on every attempt, including each
+// conflict retry. The zero value withdraws an ask that is not a grant ask.
+// A grant ask is withdrawn only when every field matches that object.
+type WithdrawIdentity struct {
+	AskUID      types.UID
+	Origin      string
+	RequestID   string
+	SessionName string
+	SessionUID  string
+	GrantUID    string
+}
+
 // Withdraw sets an open ask to withdrawn. The requester must own it. An ask
 // that is not effectively open, including one that has lapsed, is refused
-// with ErrAskNotOpen (409). now is truncated to whole seconds.
-func (s KubeStore) Withdraw(ctx context.Context, id string, req Requester, now time.Time) (apiv1.Ask, error) {
+// with ErrAskNotOpen (409). now is truncated to whole seconds. ident is
+// checked on every read before any write.
+func (s KubeStore) Withdraw(ctx context.Context, id string, req Requester, now time.Time, ident WithdrawIdentity) (apiv1.Ask, error) {
 	if err := s.ready(); err != nil {
 		return apiv1.Ask{}, err
 	}
@@ -285,6 +348,11 @@ func (s KubeStore) Withdraw(ctx context.Context, id string, req Requester, now t
 		}
 		if !owns(obj, req) {
 			return apiv1.Ask{}, ErrNotFound
+		}
+		if obj.Spec.Type == string(apiv1.AskTypeGrant) || ident.AskUID != "" {
+			if !withdrawIdentityOK(obj, ident) {
+				return apiv1.Ask{}, ErrNotFound
+			}
 		}
 		wire, err := toWire(obj)
 		if err != nil {
@@ -301,7 +369,7 @@ func (s KubeStore) Withdraw(ctx context.Context, id string, req Requester, now t
 			s.logWrite(err, id)
 			return apiv1.Ask{}, fmt.Errorf("%w: ask was not withdrawn", ErrUnavailable)
 		}
-		s.syncLabel(ctx, id, string(apiv1.AskStateWithdrawn))
+		s.syncLabel(ctx, id, string(apiv1.AskStateWithdrawn), &ident)
 		fresh, err := s.load(ctx, id)
 		if err != nil {
 			return apiv1.Ask{}, err
@@ -335,7 +403,7 @@ func (s KubeStore) Answer(ctx context.Context, id string, in apiv1.AskAnswerRequ
 		}
 		if err := in.ValidateForAt(wire, now); err != nil {
 			if errors.Is(err, apiv1.ErrAskNotOpen) && sameAnswer(obj, in) {
-				s.syncLabel(ctx, id, string(apiv1.AskStateAnswered))
+				s.syncLabel(ctx, id, string(apiv1.AskStateAnswered), nil)
 				return wire, nil
 			}
 			return apiv1.Ask{}, err
@@ -351,7 +419,7 @@ func (s KubeStore) Answer(ctx context.Context, id string, in apiv1.AskAnswerRequ
 			s.logWrite(err, id)
 			return apiv1.Ask{}, fmt.Errorf("%w: ask answer was not stored", ErrUnavailable)
 		}
-		s.syncLabel(ctx, id, string(apiv1.AskStateAnswered))
+		s.syncLabel(ctx, id, string(apiv1.AskStateAnswered), nil)
 		fresh, err := s.load(ctx, id)
 		if err != nil {
 			return apiv1.Ask{}, err
@@ -371,6 +439,25 @@ func applyAnswer(obj *coord.Ask, in apiv1.AskAnswerRequest, now time.Time) {
 		v := *in.Approved
 		obj.Status.Answer.Approved = &v
 	}
+}
+
+// withdrawIdentityOK reports whether this read is still the Ask the caller
+// named. The origin has to be the broker's, and the grant, the request id,
+// the session and the object UID all have to match.
+func withdrawIdentityOK(obj *coord.Ask, ident WithdrawIdentity) bool {
+	if obj == nil || ident.AskUID == "" || obj.UID != ident.AskUID {
+		return false
+	}
+	if ident.Origin != BrokerOrigin || obj.Labels[OriginLabel] != ident.Origin {
+		return false
+	}
+	if obj.Spec.Type != string(apiv1.AskTypeGrant) || obj.Spec.Grant == nil {
+		return false
+	}
+	if obj.Spec.RequestID != ident.RequestID || obj.Spec.Grant.UID != ident.GrantUID {
+		return false
+	}
+	return obj.Spec.Context.SessionName == ident.SessionName && obj.Spec.Context.SessionUID == ident.SessionUID
 }
 
 func owns(obj *coord.Ask, req Requester) bool {
@@ -417,37 +504,71 @@ func (s KubeStore) ensureOpen(ctx context.Context, obj *coord.Ask) error {
 	return nil
 }
 
-func (s KubeStore) syncLabel(ctx context.Context, name, state string) {
-	if err := s.setStateLabel(ctx, name, state); err != nil {
+func (s KubeStore) syncLabel(ctx context.Context, name, state string, ident *WithdrawIdentity) {
+	if err := s.setStateLabel(ctx, name, state, ident); err != nil {
 		s.log().Error(nil, "ask state label was not updated", "id", name, "state", state, "reason", string(apierrors.ReasonForError(err)))
 	}
 }
 
-func (s KubeStore) setStateLabel(ctx context.Context, name, state string) error {
+// setStateLabel writes the state label. ident, when it names an Ask, is
+// checked on every read, including each retry. The patch tests that Ask's
+// UID and resourceVersion, so a replacement between the read and the patch
+// is refused. A label-only patch leaves the immutable spec out of the write.
+func (s KubeStore) setStateLabel(ctx context.Context, name, state string, ident *WithdrawIdentity) error {
 	for attempt := 0; attempt < 4; attempt++ {
 		obj, err := s.load(ctx, name)
 		if err != nil {
 			return err
 		}
-		if obj.Labels == nil {
-			obj.Labels = map[string]string{}
+		if ident != nil && ident.AskUID != "" && !withdrawIdentityOK(obj, *ident) {
+			return ErrNotFound
 		}
-		if obj.Labels[StateLabel] == state {
+		if obj.Labels != nil && obj.Labels[StateLabel] == state {
 			return nil
 		}
-		base := obj.DeepCopy()
-		obj.Labels[StateLabel] = state
-		// A label-only merge leaves the immutable spec out of the write. A full
-		// update reserializes its times and the spec equality rule can refuse it.
-		if err := s.Client.Patch(ctx, obj, client.MergeFrom(base)); err != nil {
-			if apierrors.IsConflict(err) {
-				continue
-			}
+		if obj.GetUID() == "" || obj.GetResourceVersion() == "" {
+			return fmt.Errorf("%w: ask has no uid or resourceVersion", ErrUnavailable)
+		}
+		raw, err := stateLabelPatch(obj, state)
+		if err != nil {
 			return err
+		}
+		if err := s.Client.Patch(ctx, obj.DeepCopy(), client.RawPatch(types.JSONPatchType, raw)); err != nil {
+			if apierrors.IsNotFound(err) {
+				return err
+			}
+			continue
 		}
 		return nil
 	}
 	return ErrConflict
+}
+
+func stateLabelPatch(obj *coord.Ask, state string) ([]byte, error) {
+	ops := []any{
+		map[string]any{"op": "test", "path": "/metadata/uid", "value": string(obj.GetUID())},
+		map[string]any{"op": "test", "path": "/metadata/resourceVersion", "value": obj.GetResourceVersion()},
+	}
+	if len(obj.GetLabels()) == 0 {
+		ops = append(ops, map[string]any{
+			"op": "add", "path": "/metadata/labels",
+			"value": map[string]string{StateLabel: state},
+		})
+	} else {
+		op := "add"
+		if _, ok := obj.GetLabels()[StateLabel]; ok {
+			op = "replace"
+		}
+		ops = append(ops, map[string]any{
+			"op": op, "path": "/metadata/labels/" + jsonPointerToken(StateLabel), "value": state,
+		})
+	}
+	return json.Marshal(ops)
+}
+
+func jsonPointerToken(s string) string {
+	s = strings.ReplaceAll(s, "~", "~0")
+	return strings.ReplaceAll(s, "/", "~1")
 }
 
 func (s KubeStore) load(ctx context.Context, name string) (*coord.Ask, error) {
@@ -640,7 +761,7 @@ func (s KubeStore) recountMatching(ctx context.Context, sel client.ListOption, n
 				continue
 			}
 			if label, ok := desiredStateLabel(item, now); ok && label != "" && label != string(apiv1.AskStateOpen) {
-				s.syncLabel(ctx, item.Name, label)
+				s.syncLabel(ctx, item.Name, label, nil)
 			}
 		}
 		if list.Continue == "" {

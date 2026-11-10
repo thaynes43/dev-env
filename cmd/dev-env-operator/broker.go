@@ -28,6 +28,7 @@ type brokerOptions struct {
 	enableProxmoxGrants        bool
 	enableHWSSHGrants          bool
 	enableAttested             bool
+	enableGrantAsks            bool
 	enableMaintenance          bool
 	enableAttestedMaint        bool
 	maintenanceHuman           string
@@ -58,6 +59,7 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	fs.BoolVar(&o.enableProxmoxGrants, "enable-proxmox-grants", false, "enable keeper-backed Proxmox grants after node trust and acceptance are configured")
 	fs.BoolVar(&o.enableHWSSHGrants, "enable-hw-ssh-grants", false, "enable hw-ssh credential grants (D-89): the keeper leases the static shared hw-ssh key into the session pod. Removing the lease is not revocation: the key stays valid on every host")
 	fs.BoolVar(&o.enableAttested, "enable-attested-grants", false, "approve a request through a GrantPolicy with spec.attested when its requesting session recorded an agent attestation (a claim that the user or a coordinator approved; not verified human identity). Off, attested policies approve nothing")
+	fs.BoolVar(&o.enableGrantAsks, "enable-grant-asks", false, "open one grant Ask when no policy and no delegate decides a grant. That Ask alone decides it, and the 30-minute deny does not apply once the broker has opened it. A grant with no broker Ask is still denied at 30 minutes (ADR-021). Off, the broker logs and denies at 30 minutes")
 	fs.StringVar(&o.maintenanceHuman, "maintenance-human-service-account", "dev-env-system/dev-env-human", "must match operator --human-service-account for authenticated maintenance decisions")
 	fs.BoolVar(&o.enableMaintenance, "enable-maintenance-grants", false, "HELD: enable isolated bounded maintenance leases after policy review")
 	fs.BoolVar(&o.enableAttestedMaint, "enable-attested-maintenance", false, "HELD (ADR-013): also approve a maintenance grant through an attested GrantPolicy whose maintenance scope matches its envelope exactly, when its requesting session recorded an agent attestation (a claim, not verified human identity). Needs --enable-attested-grants and --enable-maintenance-grants; the human decision route is checked first and is unchanged. Off, maintenance is approved by the human route only, or by a listed --grant-delegates delegate through a GrantPolicy with spec.delegated")
@@ -149,6 +151,7 @@ func runBroker(args []string) error {
 		EnableProxmoxGrants:            o.enableProxmoxGrants,
 		EnableHWSSHGrants:              o.enableHWSSHGrants,
 		EnableAttestedGrants:           o.enableAttested,
+		EnableGrantAsks:                o.enableGrantAsks,
 		AttestedMaintenanceCreators:    o.attestedCreators,
 		EnableMaintenanceGrants:        o.enableMaintenance,
 		EnableAttestedMaintenance:      o.enableAttestedMaint,

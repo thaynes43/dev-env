@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -28,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	coordv1 "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
 
@@ -52,7 +54,10 @@ type Options struct {
 	EnableHWSSHGrants bool
 	// EnableAttestedGrants turns on approval through attested GrantPolicies
 	// (agent attestation, not verified human identity). Default off.
-	EnableAttestedGrants           bool
+	EnableAttestedGrants bool
+	// EnableGrantAsks opens a grant Ask for a grant no policy and no delegate
+	// takes, and does not deny it at 30 minutes (ADR-021). Default off.
+	EnableGrantAsks                bool
 	EnableMaintenanceGrants        bool
 	MaintenanceHumanServiceAccount string
 	// AttestedMaintenanceCreators lists the ServiceAccounts whose directly
@@ -121,7 +126,7 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		return nil, nil, errors.New("the session and policy namespaces must be set")
 	}
 	scheme := runtime.NewScheme()
-	if err := errors.Join(clientgoscheme.AddToScheme(scheme), v1alpha1.AddToScheme(scheme)); err != nil {
+	if err := errors.Join(clientgoscheme.AddToScheme(scheme), v1alpha1.AddToScheme(scheme), coordv1.AddToScheme(scheme)); err != nil {
 		return nil, nil, err
 	}
 	mo := ctrl.Options{
@@ -167,6 +172,7 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		EnableProxmoxGrants:            o.EnableProxmoxGrants,
 		EnableHWSSHGrants:              o.EnableHWSSHGrants,
 		EnableAttestedGrants:           o.EnableAttestedGrants,
+		EnableGrantAsks:                o.EnableGrantAsks,
 		AttestedMaintenanceCreators:    slices.Clone(o.AttestedMaintenanceCreators),
 		EnableMaintenanceGrants:        o.EnableMaintenanceGrants,
 		EnableAttestedMaintenance:      o.EnableAttestedMaintenance,
@@ -197,9 +203,30 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 // grants, and every GrantPolicy change, which enqueues every pending grant.
 // CredentialJob receipts enqueue their immutable grant reference too.
 func (b *Broker) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	bldr := ctrl.NewControllerManagedBy(mgr).
 		Named("accessgrant").
-		For(&v1alpha1.AccessGrant{}).
+		For(&v1alpha1.AccessGrant{})
+	if b.EnableGrantAsks {
+		// Flag off, the broker does not watch Asks, so it needs no Ask RBAC.
+		// A failed owner list is retried only when its scheduled retry is
+		// due. A later Ask event does not drain held lookups. A terminal
+		// grant is woken for cleanup; a pending grant is woken for its answer.
+		bldr = bldr.Watches(&coordv1.Ask{}, handler.Funcs{
+			CreateFunc: func(ctx context.Context, e event.CreateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.deliverGrantAsk(ctx, e.Object, q)
+			},
+			UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.deliverGrantAsk(ctx, e.ObjectNew, q)
+			},
+			DeleteFunc: func(ctx context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.deliverGrantAsk(ctx, e.Object, q)
+			},
+			GenericFunc: func(ctx context.Context, e event.GenericEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.deliverGrantAsk(ctx, e.Object, q)
+			},
+		})
+	}
+	return bldr.
 		Watches(&v1alpha1.AgentSession{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
 				return b.grantsOf(ctx, o.GetName(), false)

@@ -79,7 +79,7 @@ func TestEnvtestAskSweeper(t *testing.T) {
 		t.Fatal(err)
 	}
 	withdrawn := makeAsk("ask-0000000000000004")
-	if _, err := store.Withdraw(ctx, withdrawn.Name, req, now); err != nil {
+	if _, err := store.Withdraw(ctx, withdrawn.Name, req, now, WithdrawIdentity{}); err != nil {
 		t.Fatal(err)
 	}
 	// Terminal records are never repaired, even when their labels are stale.

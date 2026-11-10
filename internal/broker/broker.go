@@ -15,6 +15,13 @@
 //     decision); -> Denied when Tom or a delegate denies, when the broker's
 //     checks fail, when the session ended, or after 30 minutes unanswered
 //     (deniedBy timeout); -> Released when the session gives it back.
+//     With --enable-grant-asks, the broker writes status.ask and opens one
+//     grant Ask when no policy and no delegate takes the grant. From that
+//     write, that Ask alone decides it, and a missing or foreign Ask denies
+//     the grant (ADR-022). A grant with no route, including a credential
+//     grant, a maintenance grant, and one an attested policy would match, is
+//     still denied at 30 minutes. Flag off and no route, the pending path is
+//     unchanged.
 //   - Active -> Expired at expiresAt, Released on spec.release or when the
 //     session ends, Denied when a check fails, Failed when it cannot be made.
 //     Each of these revokes first.
@@ -29,7 +36,9 @@
 //
 // Approval and execution fences persist in AccessGrants. Credential execution
 // uses immutable CredentialJobs with keeper-owned receipts; a receipt never
-// approves a grant. A restart needs no in-memory grant state. The envtest suite in this
+// approves a grant. The route is status.ask. A create this process has not
+// seen succeed is remembered only until restart; after a restart a routed
+// grant whose Ask is missing is denied. The envtest suite in this
 // package runs the broker under exactly the RBAC and admission policy that
 // haynes-ops gives it.
 package broker
@@ -40,6 +49,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -70,6 +80,11 @@ const (
 	// Retention is how long an ended grant is kept as the audit record
 	// (DESIGN-001 6.12).
 	Retention = 90 * 24 * time.Hour
+	// grantAskCleanupBackoffStart is the first wait when a terminal grant's
+	// Ask could not be read. Each later failure doubles it, up to
+	// grantAskCleanupBackoffCap. The grant is still deleted at Retention.
+	grantAskCleanupBackoffStart = time.Second
+	grantAskCleanupBackoffCap   = 5 * time.Minute
 	// MinTokenSeconds is the shortest token TokenRequest issues.
 	MinTokenSeconds = 600
 
@@ -118,6 +133,10 @@ type Broker struct {
 	// that carries its session's agent attestation. Off, the broker skips every
 	// attested policy and so never approves through one.
 	EnableAttestedGrants bool
+	// EnableGrantAsks opens one grant Ask when no policy and no delegate takes
+	// a grant, and does not deny that grant at 30 minutes (ADR-021). Default
+	// off. Off, pending logs and denies at 30 minutes, and no Ask is opened.
+	EnableGrantAsks bool
 	// EnableMaintenanceGrants is held default off; cleanup remains enabled.
 	EnableMaintenanceGrants bool
 	// EnableAttestedMaintenance lets an attested policy with a maintenance
@@ -154,6 +173,40 @@ type Broker struct {
 	// Recorder emits Events on the grant; nil emits none.
 	Recorder events.EventRecorder
 
+	// grantAsks creates grant Asks. Nil uses asks.KubeStore on the broker's
+	// own client. Tests set it to return a store limit or an unconfirmed count.
+	grantAsks grantAskCreator
+	// decideFn records one grant decision. Nil calls Decide. A test sets it
+	// to prove a pre-check did not decide, or to count one real decision.
+	decideFn func(ctx context.Context, grantName string, d Decision) error
+
+	// grantAskMu guards the in-memory grant-Ask maps below. The route and
+	// the unread time are on the grant's status. None of these maps is stored.
+	grantAskMu sync.Mutex
+	// grantAskCreateWait is a create this process has not sent, or that the
+	// apiserver refused before commit. It is not a create that may have
+	// committed, and a restart does not keep it. It is cleared only after a
+	// terminal write is visible, or a fresh read shows the grant is no
+	// longer Pending.
+	grantAskCreateWait map[types.UID]struct{}
+	// grantAskCleanupWait is the next cleanup wait for one terminal grant.
+	// A missing entry starts at one second. A conflicting Delete leaves
+	// the wait in place, so the next conflict does not start again at one
+	// second. The wait is cleared when that Delete succeeds or returns
+	// NotFound, and when Ask cleanup succeeds before the grant is due
+	// for deletion.
+	grantAskCleanupWait map[types.UID]time.Duration
+	// grantAskOwnerHeld are Asks whose owning-grant list failed, oldest
+	// first, at most grantAskOwnerHeldMax. The scheduled retry tries them
+	// again with one grant list. A restart drops them. A newer Ask is not
+	// kept once the set is full. The grant's own reconcile still reads it.
+	grantAskOwnerHeld []heldGrantAsk
+	// grantAskOwnerBackoff is the next wait for that lookup. Zero starts
+	// at one second and the wait doubles up to five minutes.
+	grantAskOwnerBackoff time.Duration
+	// grantAskOwnerQueue receives a grant once a failed lookup succeeds.
+	grantAskOwnerQueue grantAskWorkQueue
+
 	// reconciled, when set, hears of every finished reconcile (tests).
 	reconciled func(types.NamespacedName)
 }
@@ -174,11 +227,21 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	if b.reconciled != nil {
 		defer b.reconciled(req.NamespacedName)
 	}
+	// Not a grant. A failed Ask-owner list is tried again through this key.
+	if req.Name == grantAskOwnerRetryName {
+		return b.reconcileGrantAskOwnerRetry(ctx)
+	}
 	var g v1alpha1.AccessGrant
 	if err := b.APIReader.Get(ctx, req.NamespacedName, &g); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !g.DeletionTimestamp.IsZero() {
+		// A retention Delete can commit and then lose its response. That
+		// error leaves the cleanup wait in place, and retain does not run
+		// again once this timestamp is set. Clear the wait before
+		// finalization. A conflicting Delete does not set the timestamp,
+		// so its wait stays.
+		b.clearGrantAskCleanupBackoff(g.UID)
 		return b.finalize(ctx, &g)
 	}
 	if !controllerutil.ContainsFinalizer(&g, Finalizer) {
@@ -236,12 +299,25 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 }
 
 // pending answers a grant that waits: released, timed out, approved by a
-// policy, or still waiting for Tom, who is told once.
+// policy, or still waiting for Tom, who is told once. A grant with status.ask
+// set is on the Ask path (ADR-022): that Ask alone decides it, flag on or
+// off. A grant with no route keeps the 30-minute deny, including while Ask
+// reads fail. Maintenance is not given an Ask. A grant an attested policy
+// would match is not given one either.
 func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) (ctrl.Result, error) {
 	if g.Spec.Release {
+		// Store Released first. The Ask is withdrawn from the terminal path,
+		// with the same retry as a deny. A failed withdraw cannot keep the
+		// grant Pending.
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released before an answer", now)
 	}
+	// The route is read first. A routed grant is never given another path.
+	if g.Status.Ask != "" {
+		return b.followGrantAskRoute(ctx, g, sess, now)
+	}
 	deadline := g.CreationTimestamp.Add(PendingTimeout)
+	// No route. The 30-minute deny is decided before any Ask read, so a
+	// failed read cannot postpone it.
 	if !now.Time.Before(deadline) {
 		return b.end(ctx, g, v1alpha1.GrantDenied, DeniedByTimeout, "no answer in 30 minutes", now)
 	}
@@ -265,29 +341,139 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 		}
 		return ctrl.Result{RequeueAfter: min(5*time.Second, deadline.Sub(now.Time))}, nil
 	}
-	var policies v1alpha1.GrantPolicyList
-	if err := b.Client.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
+	// One live list for this reconcile: the approval match and the decision
+	// to wait for an attestation both use it. A failed list opens no Ask.
+	policies, err := b.liveGrantPolicies(ctx)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("list the grant policies: %w", err)
 	}
-	if p, st := b.attestedApproval(ctx, g, sess, policies.Items, now.Time); p != nil {
-		approve(g, PolicyApprover+p.Name, g.Spec.TTL.Duration, now)
+	open := false
+	if b.EnableGrantAsks {
+		switch b.classifyUnroutedGrantAsk(ctx, g) {
+		case grantAskUnread:
+			res, err, waiting := b.pendingUnrouted(ctx, g, sess, now, deadline, false, policies)
+			if waiting {
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
+			return res, err
+		case grantAskBroker:
+			// An Ask this grant already owns is followed, including a
+			// credential grant. The exclusion below only stops a new Ask.
+			if err := b.claimGrantAskRoute(ctx, g); err != nil {
+				if errors.Is(err, errGrantAskRouteReread) {
+					return ctrl.Result{RequeueAfter: time.Second}, nil
+				}
+				if errors.Is(err, errGrantAskRouteNotStored) {
+					return b.denyPendingGrant(ctx, g, grantAskMsgRouteNotStored, now)
+				}
+				return ctrl.Result{}, err
+			}
+			return b.followGrantAskRoute(ctx, g, sess, now)
+		case grantAskForeign:
+			b.noteForeignGrantAsk(g)
+		case grantAskNone:
+			open = g.Spec.Type != v1alpha1.GrantCredential
+		}
+		if open && attestedPolicyCouldMatch(b.EnableAttestedGrants, policies, g) {
+			open = false
+		}
+	}
+	res, err, _ := b.pendingUnrouted(ctx, g, sess, now, deadline, open, policies)
+	return res, err
+}
+
+// liveGrantPolicies reads GrantPolicies from the API server, not the cache.
+func (b *Broker) liveGrantPolicies(ctx context.Context) ([]v1alpha1.GrantPolicy, error) {
+	if b.APIReader == nil {
+		return nil, errGrantAskLater
+	}
+	var list v1alpha1.GrantPolicyList
+	if err := b.APIReader.List(ctx, &list, client.InNamespace(b.PolicyNamespace)); err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
+
+// pendingUnrouted is the path for a grant with no route. open is true only
+// when this pass may create the one Ask. waiting is true when the grant is
+// still pending on Tom.
+func (b *Broker) pendingUnrouted(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time, deadline time.Time, open bool, policies []v1alpha1.GrantPolicy) (ctrl.Result, error, bool) {
+	if p, st := b.attestedApproval(ctx, g, sess, policies, now.Time); p != nil {
 		msg := "approved by a standing policy"
 		if st != nil {
 			msg = grantattest.Message(p.Name, *st)
 		}
-		written, err := b.writeStatus(ctx, g)
-		if written {
-			b.decided(ctx, g, msg)
-		}
-		return ctrl.Result{}, err
+		res, err := b.approveByPolicy(ctx, g, PolicyApprover+p.Name, g.Spec.TTL.Duration, now, msg)
+		return res, err, false
 	}
 	// No policy approves it at once: a recorded delegate decision, when
 	// delegates are configured (DESIGN-042 6.2), comes before Tom is told. One
 	// that cannot apply falls through, so Tom is still told once.
 	if res, handled, err := b.delegateDecision(ctx, g, sess, now); handled {
-		return res, err
+		return res, err, false
 	}
+	if open {
+		err := b.ensureGrantAsk(ctx, g, sess, now)
+		switch {
+		case err == nil && g.Status.Ask != "":
+			res, ferr := b.followGrantAskRoute(ctx, g, sess, now)
+			return res, ferr, false
+		case errors.Is(err, errGrantAskRouteReread):
+			return ctrl.Result{RequeueAfter: time.Second}, nil, false
+		case errors.Is(err, errGrantAskTooLarge):
+			b.event(g, corev1.EventTypeWarning, "GrantAsk", "AskTooLarge", "the request is too large to show and should be split")
+		case errors.Is(err, errGrantAskForeign):
+			return ctrl.Result{RequeueAfter: grantAskRecheck}, nil, false
+		case errors.Is(err, errGrantAskRouteForeign):
+			res, derr := b.followGrantAskRoute(ctx, g, sess, now)
+			return res, derr, false
+		case errors.Is(err, errGrantAskRouteNotStored):
+			// The route is not in the stored grant. No Ask is created. A
+			// wait would be a state other approvals could still use, so the
+			// grant is denied in this reconcile.
+			res, derr := b.denyPendingGrant(ctx, g, grantAskMsgRouteNotStored, now)
+			return res, derr, false
+		case errors.Is(err, errGrantAskDeadline):
+			res, derr := b.denyOutstandingCreate(ctx, g, b.now())
+			return res, derr, false
+		case err != nil:
+			res, herr := b.grantAskHoldError(ctx, g, err)
+			return res, herr, false
+		}
+	}
+	res, err := b.waitForTom(ctx, g, deadline, now)
+	return res, err, err == nil
+}
 
+// approveByPolicy writes a policy approval only when a live read still shows
+// no route. A route means the Ask decides, and this write does not.
+func (b *Broker) approveByPolicy(ctx context.Context, g *v1alpha1.AccessGrant, by string, ttl time.Duration, now metav1.Time, msg string) (ctrl.Result, error) {
+	fresh, err := b.readGrant(ctx, g.Name)
+	if apierrors.IsNotFound(err) {
+		return ctrl.Result{}, nil
+	}
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if fresh.UID != g.UID || (fresh.Status.Phase != "" && fresh.Status.Phase != v1alpha1.GrantPending) || !fresh.DeletionTimestamp.IsZero() || fresh.Spec.Release {
+		*g = *fresh
+		return ctrl.Result{}, nil
+	}
+	if fresh.Status.Ask != "" {
+		*g = *fresh
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	approve(fresh, by, ttl, now)
+	written, err := b.writeStatus(ctx, fresh)
+	if written {
+		b.decided(ctx, fresh, msg)
+	}
+	*g = *fresh
+	return ctrl.Result{}, err
+}
+
+// waitForTom tells Tom once and looks again at the 30-minute deadline.
+func (b *Broker) waitForTom(ctx context.Context, g *v1alpha1.AccessGrant, deadline time.Time, now metav1.Time) (ctrl.Result, error) {
 	wait := ctrl.Result{RequeueAfter: deadline.Sub(now.Time)}
 	if g.Status.NotifiedAt != nil || b.Notifier == nil {
 		return wait, nil
@@ -425,28 +611,89 @@ func (b *Broker) end(ctx context.Context, g *v1alpha1.AccessGrant, phase v1alpha
 	g.Status.Message = truncate(msg)
 	g.Status.EndedAt = &now
 	written, err := b.writeStatus(ctx, g)
-	if written {
-		b.decided(ctx, g, msg)
-		return ctrl.Result{RequeueAfter: Retention}, nil
+	if !written {
+		return ctrl.Result{}, err
 	}
-	return ctrl.Result{}, err
+	b.decided(ctx, g, msg)
+	// The terminal phase is already stored. A withdraw that fails backs off
+	// and is retried from retain. A release uses that same retry.
+	if werr := b.withdrawTerminalAsk(ctx, g); werr != nil {
+		return b.grantAskCleanupRetry(g, now), nil
+	}
+	b.clearGrantAskCleanupBackoff(g.UID)
+	return ctrl.Result{RequeueAfter: Retention}, nil
 }
 
-// retain deletes an ended grant once it has been kept 90 days.
+// retain deletes an ended grant once it has been kept 90 days. A card that
+// could not be read does not keep the grant past that time.
 func (b *Broker) retain(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (ctrl.Result, error) {
+	werr := b.withdrawTerminalAsk(ctx, g)
 	ended := g.CreationTimestamp
 	if g.Status.EndedAt != nil {
 		ended = *g.Status.EndedAt
 	}
 	deadline := ended.Add(Retention)
-	if now.Time.Before(deadline) {
-		return ctrl.Result{RequeueAfter: deadline.Sub(now.Time)}, nil
+	if !now.Time.Before(deadline) {
+		if err := b.Client.Delete(ctx, g, client.Preconditions{UID: &g.UID}); err != nil {
+			if apierrors.IsNotFound(err) {
+				b.clearGrantAskCleanupBackoff(g.UID)
+				return ctrl.Result{}, nil
+			}
+			if apierrors.IsConflict(err) {
+				return b.grantAskCleanupRetry(g, now), nil
+			}
+			return ctrl.Result{}, fmt.Errorf("delete the grant after its retention: %w", err)
+		}
+		b.clearGrantAskCleanupBackoff(g.UID)
+		log.FromContext(ctx).Info("deleted the grant after 90 days", grantFields(g)...)
+		return ctrl.Result{}, nil
 	}
-	if err := b.Client.Delete(ctx, g, client.Preconditions{UID: &g.UID}); err != nil {
-		return retryOn(err, "delete the grant after its retention")
+	if werr != nil {
+		return b.grantAskCleanupRetry(g, now), nil
 	}
-	log.FromContext(ctx).Info("deleted the grant after 90 days", grantFields(g)...)
-	return ctrl.Result{}, nil
+	b.clearGrantAskCleanupBackoff(g.UID)
+	return ctrl.Result{RequeueAfter: deadline.Sub(now.Time)}, nil
+}
+
+// grantAskCleanupRetry is the wait after a terminal grant's Ask cleanup
+// failed, or after Delete of the retained grant conflicted. The first
+// wait is one second. Each later failure doubles it, up to five minutes.
+// The wait never runs past Retention. A conflicting Delete does not clear
+// the wait first, so the next conflict does not start again at one second.
+func (b *Broker) grantAskCleanupRetry(g *v1alpha1.AccessGrant, now metav1.Time) ctrl.Result {
+	wait := b.nextGrantAskCleanupBackoff(g.UID)
+	ended := g.CreationTimestamp.Time
+	if g.Status.EndedAt != nil {
+		ended = g.Status.EndedAt.Time
+	}
+	if until := ended.Add(Retention).Sub(now.Time); until > 0 && wait > until {
+		wait = until
+	}
+	return ctrl.Result{RequeueAfter: wait}
+}
+
+func (b *Broker) nextGrantAskCleanupBackoff(uid types.UID) time.Duration {
+	b.grantAskMu.Lock()
+	defer b.grantAskMu.Unlock()
+	if b.grantAskCleanupWait == nil {
+		b.grantAskCleanupWait = map[types.UID]time.Duration{}
+	}
+	wait := b.grantAskCleanupWait[uid]
+	if wait <= 0 {
+		wait = grantAskCleanupBackoffStart
+	}
+	next := wait * 2
+	if next > grantAskCleanupBackoffCap {
+		next = grantAskCleanupBackoffCap
+	}
+	b.grantAskCleanupWait[uid] = next
+	return wait
+}
+
+func (b *Broker) clearGrantAskCleanupBackoff(uid types.UID) {
+	b.grantAskMu.Lock()
+	defer b.grantAskMu.Unlock()
+	delete(b.grantAskCleanupWait, uid)
 }
 
 // finalize revokes a deleted grant and lets it go.
@@ -466,6 +713,25 @@ func (b *Broker) finalize(ctx context.Context, g *v1alpha1.AccessGrant) (ctrl.Re
 		return retryOn(err, "lift the finalizer")
 	}
 	return ctrl.Result{}, nil
+}
+
+// withdrawTerminalAsk closes the broker's open Ask after a terminal write.
+// A deny withdraws when the broker denied a routed grant, including one whose
+// stored route is empty: cleanup then uses the computed Ask name. A pending
+// release withdraws after Released is stored. A read failure that is not
+// NotFound returns an error so the caller backs off, from one second up to
+// five minutes. The Ask is not modified on that pass.
+func (b *Broker) withdrawTerminalAsk(ctx context.Context, g *v1alpha1.AccessGrant) error {
+	if err := b.withdrawBrokerDenial(ctx, g); err != nil {
+		return err
+	}
+	if g == nil || g.Status.Phase != v1alpha1.GrantReleased || !g.Spec.Release || g.Status.Message != "released before an answer" {
+		return nil
+	}
+	if !b.EnableGrantAsks && g.Status.Ask == "" {
+		return nil
+	}
+	return b.withdrawOpenGrantAsk(ctx, g)
 }
 
 // writeStatus writes the grant's status with its resourceVersion. A conflict

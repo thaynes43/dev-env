@@ -70,11 +70,11 @@ func (b *Broker) attestedMaintenanceApproval(ctx context.Context, g *v1alpha1.Ac
 	if g.Spec.Maintenance.ExtensionOf != "" {
 		return wait("an extension needs the human route")
 	}
-	var policies v1alpha1.GrantPolicyList
-	if err := b.Client.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
+	policies, err := b.liveGrantPolicies(ctx)
+	if err != nil {
 		return false, fmt.Errorf("list the grant policies: %w", err)
 	}
-	p, st := b.attestedApproval(ctx, g, sess, policies.Items, now.Time)
+	p, st := b.attestedApproval(ctx, g, sess, policies, now.Time)
 	if p == nil || st == nil || p.Spec.Attested == nil {
 		return false, nil
 	}
@@ -92,12 +92,25 @@ func (b *Broker) attestedMaintenanceApproval(ctx context.Context, g *v1alpha1.Ac
 		}
 		return false, err
 	}
-	approve(g, PolicyApprover+p.Name, g.Spec.TTL.Duration, now)
-	written, err := b.writeStatus(ctx, g)
-	if written {
-		b.decided(ctx, g, grantattest.Message(p.Name, *st))
+	// The same live read the other approval writers use. A route means the
+	// Ask decides, and this write does not.
+	fresh, err := b.readGrant(ctx, g.Name)
+	if apierrors.IsNotFound(err) {
+		return false, nil
 	}
-	return true, err
+	if err != nil {
+		return false, err
+	}
+	if fresh.UID != g.UID || fresh.Status.Ask != "" || (fresh.Status.Phase != "" && fresh.Status.Phase != v1alpha1.GrantPending) || !fresh.DeletionTimestamp.IsZero() || fresh.Spec.Release {
+		return false, nil
+	}
+	approve(fresh, PolicyApprover+p.Name, g.Spec.TTL.Duration, now)
+	written, werr := b.writeStatus(ctx, fresh)
+	if written {
+		b.decided(ctx, fresh, grantattest.Message(p.Name, *st))
+	}
+	*g = *fresh
+	return true, werr
 }
 
 // topLevelSession reports whether s has no parent session. A session that a

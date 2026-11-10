@@ -15,10 +15,13 @@ import (
 )
 
 // Requester is the session that created an ask. The namespace is dev-agents.
+// Origin is set by the broker to BrokerOrigin. A session caller leaves it
+// empty. It is not taken from the request body.
 type Requester struct {
 	Namespace string
 	Name      string
 	UID       string
+	Origin    string
 }
 
 func whole(t time.Time) time.Time { return t.UTC().Truncate(time.Second) }
@@ -189,15 +192,17 @@ func prepare(req Requester, in apiv1.AskCreateRequest, now time.Time) (prepared,
 	if err := apiv1.ValidateAsk(wire); err != nil {
 		return prepared{}, fmt.Errorf("%w: prepared ask failed validation", ErrUnavailable)
 	}
-	return prepared{
-		Name: spec.ID, Spec: spec,
-		// Client labels are ignored. ask-origin is not stored here.
-		Labels: map[string]string{
-			RequesterLabel: requesterValue(req),
-			StateLabel:     string(apiv1.AskStateOpen),
-			TypeLabel:      string(in.Type),
-		},
-	}, nil
+	labels := map[string]string{
+		RequesterLabel: requesterValue(req),
+		StateLabel:     string(apiv1.AskStateOpen),
+		TypeLabel:      string(in.Type),
+	}
+	// Client labels on the body are ignored. The broker origin is written
+	// only when this caller is the broker, in the same create.
+	if req.Origin == BrokerOrigin {
+		labels[OriginLabel] = BrokerOrigin
+	}
+	return prepared{Name: spec.ID, Spec: spec, Labels: labels}, nil
 }
 
 func coordGrant(g *apiv1.AskGrant) *coord.AskGrant {
