@@ -227,8 +227,10 @@ the workbench profile. Tool descriptions stay under 30 words each.
   may be named, not a menu for Meatball. Tom, later the same day, typed in the
   coordinator's session: "I always will tell Meatball what model I want
   coordinating and we have preset effort levels". So Meatball never chooses
-  the model: a start without a model named by Tom is refused, and the brief
-  carries no advice on choosing one.
+  the model. The API can enforce only part of that: a start with no model is
+  refused, and so is a model outside the list. That the model is the one Tom
+  named is Meatball's rule, written in its tool description; the API cannot
+  check it. The brief carries no advice on choosing a model.
 - **Effort is preset, never a parameter** (the same ruling). A Claude session
   runs at `xhigh` when its model takes it, else the highest level below
   (`internal/agentrun/model.go`, `effortPreference`). Codex runs `gpt-6-astra`
@@ -396,7 +398,7 @@ door has no such action.
 |---|---|---|---|---|
 | 1 | Asks board on | Refresh #264's held haynes-ops draft: Ask CRD, RBAC, operator `--enable-asks`, keeper `--enable-ask-notifications` with the portal origin | M | none: quiet hours were ruled on 2026-11-10 (DESIGN-034 Q-255-02: pushes from 07:00 to midnight Eastern). The story is the existing item OP264 |
 | 2 | Grants that need Tom go through the board | First ADR-021 and the DESIGN-034 amendment (section 8, the adapter's contract). Then: the operator opens a `grant` Ask for a grant no policy decided; the portal answer calls `Decide`; no timeout while it waits on Tom; the "session has ended" card; `request_access` and `grant` help cut to 40 words | M | 1; ADR-021 and the DESIGN-034 amendment accepted |
-| 3 | Meatball's caller | `CallerPolicy` for one caller: CRD, API class, the ruled limits (a driver Tom named, from `claude-opus-5-5`, `gpt-6-astra` or `claude-fable-5-2`, required and with no default; 4 hours, 4 workers, 2 at once; no effort setting), own-sessions-only reads and stops | M | none |
+| 3 | Meatball's caller | `CallerPolicy` for one caller: CRD, API class, the ruled limits (a driver from `claude-opus-5-5`, `gpt-6-astra` or `claude-fable-5-2`, required and with no default; 4 hours, 4 workers, 2 at once; no effort setting), own-sessions-only reads and stops | M | none |
 | 4 | Coordinator start | One operator route that fills in a coordinator task from a tracker item; the standard brief; `agent-run coordinator start, status, stop`; worker-count cap | M | 3 |
 | 5 | Front-door MCP server | Deployment, ServiceAccount, internal ingress, token from 1Password; the ten tools; `opwork groom` and `order` | M | 3, 4 |
 | 6 | Acceptance run | Meatball (or a stand-in with the same token) starts a coordinator on one ready story; cheaper workers reach a merged PR; one risky request reaches Tom's phone and he decides | S | 1, 2, 5 |
