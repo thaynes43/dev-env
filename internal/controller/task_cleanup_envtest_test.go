@@ -11,8 +11,11 @@ package controller
 // pvc-protection from a claim no Pod uses.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +23,7 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -242,5 +246,107 @@ func TestTaskCleanupQueueCapWithTwoOperators(t *testing.T) {
 		if d := claimDeletes[HomeClaimName(name)]; len(d) != 1 || !d[0] {
 			t.Fatalf("the HOME of %s was deleted %v; want once, with UID and resourceVersion preconditions", name, d)
 		}
+	}
+}
+
+// TestTaskCleanupExpiredTamperedBundleKeepsSession is the kept-work check on
+// an Expired record where CEL runs. A tampered bundle must not be written
+// onto the record (the API server would reject it) and must not requeue in
+// one second.
+func TestTaskCleanupExpiredTamperedBundleKeepsSession(t *testing.T) {
+	ctx := context.Background()
+	const (
+		name  = "exp-bundle-tamper"
+		stamp = "20261110-0800"
+	)
+	digest := strings.Repeat("ab", 32)
+	at := metav1.NewTime(time.Date(2026, 11, 10, 8, 0, 0, 0, time.UTC))
+	manifest := "rescue/" + name + "/" + stamp + "/manifest.json"
+	s := taskSession()
+	s.Name, s.Namespace, s.UID, s.ResourceVersion = name, sessionNS, "", ""
+	s.Finalizers = []string{Finalizer}
+	s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+	if err := k8s.Create(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		purgeEnv(&v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS}})
+	})
+	s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{
+		Version: 1, SessionUID: string(s.UID), HomeClaim: HomeClaimName(name), HomeUID: "expired-home-uid",
+		BindingGeneration: s.Generation, Admission: sharedStarted, ExecutorAttempted: true, ExecutorIntent: "original-intent",
+		Provider: string(s.Spec.Agent), StopState: "Unknown",
+		LastExecutor: &v1alpha1.PrivateExecutorStatus{PodUID: "original-executor", PodName: name, NodeName: "worker-a", Revision: "original-template", Generation: s.Generation},
+		ExecutorTerminal: &v1alpha1.PrivateExecutorTerminalStatus{Version: 1, PodUID: "original-executor", Phase: "Succeeded", Reason: "Completed", PodResourceVersion: "42",
+			NodeName: "worker-a", NodeUID: "node-uid", LeaseRenewedAt: at, ObservedAt: at,
+			Containers: []v1alpha1.PrivateExecutorContainerTermination{{Name: ContainerName, ExitCode: 0, Reason: "Completed", FinishedAt: at}}},
+		Expiry: &v1alpha1.PrivateHomeExpiryStatus{Version: 1, ExecutorUID: "original-executor", HomeUID: "expired-home-uid", GraceStart: at, DueAt: at,
+			Phase: v1alpha1.HomeExpiryRescuing, HoldIntent: "intent-1", HoldPodUID: "hold-1"},
+	}
+	if err := k8s.Status().Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	step := func(edit func(*v1alpha1.PrivateHomeExpiryStatus)) {
+		t.Helper()
+		got := &v1alpha1.AgentSession{}
+		if err := k8s.Get(ctx, client.ObjectKey{Namespace: sessionNS, Name: name}, got); err != nil {
+			t.Fatal(err)
+		}
+		edit(got.Status.PrivateHistory.Expiry)
+		if err := k8s.Status().Update(ctx, got); err != nil {
+			t.Fatal(err)
+		}
+	}
+	step(func(e *v1alpha1.PrivateHomeExpiryStatus) {
+		e.Phase, e.RescueStamp = v1alpha1.HomeExpiryArchived, stamp
+		e.Bundle = &v1alpha1.PrivateHomeBundleStatus{Stamp: stamp, Result: bundleVerified, Manifest: manifest, ManifestSHA256: digest, Bundles: 1, Bytes: 2048, VerifiedAt: at}
+	})
+	step(func(e *v1alpha1.PrivateHomeExpiryStatus) {
+		e.Phase, e.DeletingAt = v1alpha1.HomeExpiryDeleting, &at
+	})
+	step(func(e *v1alpha1.PrivateHomeExpiryStatus) {
+		e.Phase, e.HomeDeletedAt = v1alpha1.HomeExpiryExpired, &at
+	})
+	stored := &v1alpha1.AgentSession{}
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: sessionNS, Name: name}, stored); err != nil {
+		t.Fatal(err)
+	}
+	before, err := json.Marshal(stored.Status.PrivateHistory.Expiry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := name + "/" + stamp
+	verifier := &fakeVerifier{free: 10 << 30, answers: map[string]protocol.RescueVerifyResult{}}
+	verifier.set(id, protocol.RescueVerifyResult{OK: true, Manifest: manifest, ManifestSHA256: strings.Repeat("e", 64), Bundles: 1, Bytes: 2048})
+	r := &Reconciler{Client: k8s, APIReader: k8s, Templates: templatesKey, PrivateTerminalRecord: true, PrivateExecutorStop: true,
+		TaskSessionCleanup: true, TaskCleanupMaxActive: DefaultTaskCleanupMaxActive, RescueVerifier: verifier,
+		TaskCleanupCounters: NewTaskCleanupCounters()}
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: sessionNS, Name: name}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RequeueAfter == time.Second {
+		t.Fatalf("requeue %s; an Expired refusal must not retry every second", res.RequeueAfter)
+	}
+	if res.RequeueAfter != homeExpiryRefusalRetry {
+		t.Fatalf("requeue %s; want %s", res.RequeueAfter, homeExpiryRefusalRetry)
+	}
+	got := &v1alpha1.AgentSession{}
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: sessionNS, Name: name}, got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.DeletionTimestamp.IsZero() {
+		t.Fatal("the Session is being deleted")
+	}
+	after, err := json.Marshal(got.Status.PrivateHistory.Expiry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("the Expired record changed\nbefore %s\nafter  %s", before, after)
+	}
+	c := meta.FindStatusCondition(got.Status.Conditions, ConditionHomeExpiry)
+	if c == nil || !strings.Contains(c.Message, "the session is not removed") || !strings.Contains(c.Message, "not the recorded") {
+		t.Fatalf("HomeExpiry %+v; want a note that the tampered bundle keeps the session", c)
 	}
 }

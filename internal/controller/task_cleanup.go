@@ -166,15 +166,18 @@ type taskCleanupState struct {
 	// hold pods ended with none graded; graded: the hold
 	// pods whose rescue this operator ran with --strict-home and graded, by
 	// stamp. A graded entry goes where that hold's attempt entry goes.
-	attempt     map[types.UID]time.Time
-	graded      map[types.UID]string
-	ended       map[types.UID]int
-	failures    int
-	lastFailure time.Time
-	freeAt      time.Time
-	free        protocol.RescueVerifyResult
-	freeErr     error
-	snap        *taskQueueSnapshot
+	attempt map[types.UID]time.Time
+	graded  map[types.UID]string
+	ended   map[types.UID]int
+	// removalNoted: by Session, the reason already said for an Expired record
+	// that cannot store a refusal. The warning is once per reason.
+	removalNoted map[types.UID]string
+	failures     int
+	lastFailure  time.Time
+	freeAt       time.Time
+	free         protocol.RescueVerifyResult
+	freeErr      error
+	snap         *taskQueueSnapshot
 }
 
 func (st *taskCleanupState) init() {
@@ -1190,43 +1193,56 @@ func (r *Reconciler) taskDropLog(ctx context.Context, v *expiryView, hold *corev
 // Verified bundle re-hashed on the shelf must answer the recorded manifest,
 // digest, bundles and bytes; CleanAndPushed needs status.rescue still naming
 // the hold pod and stamp of that verdict. ok only then; otherwise the step's
-// answer.
+// answer is recorded. An Expired record cannot store that answer:
+// removeCleanedTaskSession uses keptWorkRefusal and does not write.
 func (r *Reconciler) keptWorkVerified(ctx context.Context, v *expiryView, obs *observation) (ok bool, res ctrl.Result, stop bool, err error) {
+	if v.record().Bundle == nil && !r.taskPolicy(v.s) {
+		return r.historyArchiveVerified(ctx, v, obs)
+	}
+	ok, ref, unknown := r.keptWorkRefusal(ctx, v, obs)
+	switch {
+	case ok:
+		return true, ctrl.Result{}, false, nil
+	case unknown || ref == nil:
+		return false, ctrl.Result{RequeueAfter: homeExpiryUnknownRetry}, false, nil
+	}
+	res, stop, err = r.refuseHomeExpiry(ctx, v, obs, ref)
+	return false, res, stop, err
+}
+
+// keptWorkRefusal judges the record's kept work and writes nothing. ok only
+// when it verifies. unknown means the verify did not finish (no shelf slot):
+// obs.homeExpiry may already say so, and the caller retries after
+// homeExpiryUnknownRetry. Otherwise ref is the refusal keptWorkVerified
+// would record, including a shelf that could not be reached.
+func (r *Reconciler) keptWorkRefusal(ctx context.Context, v *expiryView, obs *observation) (ok bool, ref *expiryRefusal, unknown bool) {
 	e := v.record()
 	if e.Bundle == nil {
-		if r.taskPolicy(v.s) {
-			res, stop, err = r.refuseHomeExpiry(ctx, v, obs, refusal(expiryBundleMissing, "the clean-up record holds no bundle"))
-			return false, res, stop, err
-		}
-		return r.historyArchiveVerified(ctx, v, obs)
+		return false, refusal(expiryBundleMissing, "the clean-up record holds no bundle"), false
 	}
 	b := e.Bundle
 	if b.Result == bundleCleanAndPushed {
 		rec := v.s.Status.Rescue
 		if rec == nil || rec.Superseded || rec.Result != v1alpha1.RescueCleanAndPushed || rec.Stamp != b.Stamp || e.HoldPodUID == "" || rec.PodUID != e.HoldPodUID {
-			res, stop, err = r.refuseHomeExpiry(ctx, v, obs, refusal(expiryBundleMismatch, "status.rescue no longer names the clean and pushed rescue %s in the hold pod %s", b.Stamp, e.HoldPodUID))
-			return false, res, stop, err
+			return false, refusal(expiryBundleMismatch, "status.rescue no longer names the clean and pushed rescue %s in the hold pod %s", b.Stamp, e.HoldPodUID), false
 		}
-		return true, ctrl.Result{}, false, nil
+		return true, nil, false
 	}
 	id, idErr := taskRescueID(v.s, b.Manifest, b.Stamp)
 	if idErr != nil {
-		res, stop, err = r.refuseHomeExpiry(ctx, v, obs, refusal(expiryBundleMismatch, "%v", idErr))
-		return false, res, stop, err
+		return false, refusal(expiryBundleMismatch, "%v", idErr), false
 	}
-	got, ref, verified := r.verifyTaskBundle(ctx, v, obs, id, b.Manifest)
+	got, bundleRef, verified := r.verifyTaskBundle(ctx, v, obs, id, b.Manifest)
 	switch {
-	case ref != nil:
-		res, stop, err = r.refuseHomeExpiry(ctx, v, obs, ref)
-		return false, res, stop, err
+	case bundleRef != nil:
+		return false, bundleRef, false
 	case !verified:
-		return false, ctrl.Result{RequeueAfter: homeExpiryUnknownRetry}, false, nil
+		return false, nil, true
 	case got.ManifestSHA256 != b.ManifestSHA256 || int64(got.Bundles) != int64(b.Bundles) || got.Bytes != b.Bytes:
-		res, stop, err = r.refuseHomeExpiry(ctx, v, obs, refusal(expiryBundleMismatch, "rescue-verify %s found digest %s, %d bundles and %d bytes, not the recorded %s, %d and %d",
-			id, got.ManifestSHA256, got.Bundles, got.Bytes, b.ManifestSHA256, b.Bundles, b.Bytes))
-		return false, res, stop, err
+		return false, refusal(expiryBundleMismatch, "rescue-verify %s found digest %s, %d bundles and %d bytes, not the recorded %s, %d and %d",
+			id, got.ManifestSHA256, got.Bundles, got.Bytes, b.ManifestSHA256, b.Bundles, b.Bytes), false
 	}
-	return true, ctrl.Result{}, false, nil
+	return true, nil, false
 }
 
 // keptName names a record's kept work for texts and events: the archive entry,
@@ -1358,8 +1374,11 @@ func deleteCleanedTaskSession(ctx context.Context, c client.Client, s *v1alpha1.
 // removeCleanedTaskSession is the finished Session's end (DESIGN-061 2): once
 // its record is Expired, uncached reads find no Pod of its name and no HOME
 // claim, and the guard allows it, the kept work verifies again and then it
-// is deleted. A refusal is recorded the same way as before the HOME delete,
-// and the Session stays. The next reconcile releases it like a reaped one (6.6).
+// is deleted. The record is already Expired, so a failed verify is not
+// written (the schema forbids any change to it). The note, one warning per
+// reason and a 15-minute retry say why the Session stays. A shelf that
+// could not be reached retries after a minute and also writes nothing. The
+// next reconcile releases a deleted Session like a reaped one (6.6).
 func (r *Reconciler) removeCleanedTaskSession(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
 	if r.taskCleanupParked(v.s, obs) {
 		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
@@ -1373,8 +1392,16 @@ func (r *Reconciler) removeCleanedTaskSession(ctx context.Context, v *expiryView
 		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
 	}
 	// The claim is already gone, so there is no volume left to check.
-	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
-		return res, stop, err
+	// keptWorkVerified would write the refusal; an Expired record cannot change.
+	ok, ref, unknown := r.keptWorkRefusal(ctx, v, obs)
+	if !ok {
+		if unknown || ref == nil || ref.reason == expiryShelfUnavailable || ref.reason == expiryUnknown {
+			if ref != nil && obs.homeExpiry == nil {
+				obs.homeExpiry = &homeExpiryNote{reason: "Unknown", message: truncate(ref.Error()), unknown: true, pending: true}
+			}
+			return ctrl.Result{RequeueAfter: homeExpiryUnknownRetry}, false, nil
+		}
+		return r.keepExpiredTaskSession(v.s, obs, ref)
 	}
 	if err := deleteCleanedTaskSession(ctx, r.Client, v.s); err != nil {
 		switch {
@@ -1393,6 +1420,35 @@ func (r *Reconciler) removeCleanedTaskSession(ctx context.Context, v *expiryView
 	}
 	log.FromContext(ctx).Info("deleted a finished task Session after its HOME was cleaned up; it is released next", "kept", keptName(v.s, v.record()))
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
+}
+
+// keepExpiredTaskSession says why a finished Session stays. The Expired
+// record cannot change, so nothing is written: the note, one warning per
+// reason, and a 15-minute retry are what a person sees.
+func (r *Reconciler) keepExpiredTaskSession(s *v1alpha1.AgentSession, obs *observation, ref *expiryRefusal) (ctrl.Result, bool, error) {
+	note := "the session is not removed: " + ref.Error()
+	obs.homeExpiry = &homeExpiryNote{reason: taskReasonDeleted, message: truncate(note)}
+	if r.markExpiredRemoval(s.UID, ref.reason) {
+		r.countTaskRefused(ref.reason)
+		r.event(s, corev1.EventTypeWarning, "TaskCleanup", "TaskCleanupRefused", note)
+	}
+	return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
+}
+
+// markExpiredRemoval is true the first time this operator says this reason
+// for the Session. Later retries of the same reason stay quiet.
+func (r *Reconciler) markExpiredRemoval(uid types.UID, reason string) bool {
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.removalNoted == nil {
+		st.removalNoted = map[types.UID]string{}
+	}
+	if st.removalNoted[uid] == reason {
+		return false
+	}
+	st.removalNoted[uid] = reason
+	return true
 }
 
 // countTaskRefused counts a clean-up refusal in its own counter only.

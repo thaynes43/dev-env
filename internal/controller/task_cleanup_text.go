@@ -116,7 +116,7 @@ func taskCleanupStep(s *v1alpha1.AgentSession, obs observation) string {
 	case v1alpha1.HomeExpiryDeleting:
 		return fmt.Sprintf("the HOME %s is being deleted and the session can no longer be resumed; %s", h.HomeClaim, taskKeptShort(s, e))
 	case v1alpha1.HomeExpiryExpired:
-		return "the HOME is deleted; this session is removed next; " + bundleKeptText(s, e)
+		return with("the HOME is deleted; this session is removed next; " + bundleKeptText(s, e))
 	}
 	return "the task clean-up is at " + e.Phase
 }

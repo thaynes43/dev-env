@@ -273,6 +273,8 @@ func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *
 	if homeGone(v) {
 		// The claim is already gone, so there is no volume left to check.
 		// The kept work still has to verify before the record becomes Expired.
+		// The phase is still Deleting, so the schema allows the refusal write.
+		// removeCleanedTaskSession does not write one: its record is already Expired.
 		if r.taskPolicy(v.s) {
 			if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 				return res, stop, err
@@ -292,6 +294,7 @@ func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *
 		return res, stop, err
 	}
 	if homeGone(after) {
+		// Still Deleting, so the refusal write is allowed, as above.
 		if r.taskPolicy(after.s) {
 			if ok, res, stop, err := r.keptWorkVerified(ctx, after, obs); !ok {
 				return res, stop, err

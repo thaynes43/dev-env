@@ -2,7 +2,9 @@ package controller
 
 // Regressions for the coordinator's eight rulings on PR #1029 (OP520).
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -13,6 +15,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -665,13 +669,7 @@ func TestTaskCleanupKeptWorkVerifiedWhenTheClaimIsGone(t *testing.T) {
 			t.Fatal("the Session was already deleted at Expired")
 		}
 		f.verifier.set(id, protocol.RescueVerifyResult{OK: true, Manifest: manifest, ManifestSHA256: strings.Repeat("e", 64), Bundles: 1, Bytes: 2048})
-		f.run(t, 3)
-		if f.sessionGone(t) || !f.session(t).DeletionTimestamp.IsZero() {
-			t.Fatal("the Session was deleted after the bundle was tampered")
-		}
-		if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryExpired || e.Refusal != expiryBundleMismatch {
-			t.Fatalf("record %+v; want Expired and %s", e, expiryBundleMismatch)
-		}
+		taskAssertExpiredKept(t, f, "not the recorded")
 	})
 
 	t.Run("clean and pushed rescue no longer names the hold", func(t *testing.T) {
@@ -686,13 +684,7 @@ func TestTaskCleanupKeptWorkVerifiedWhenTheClaimIsGone(t *testing.T) {
 			t.Fatalf("record %+v; want a clean and pushed bundle", e)
 		}
 		f.updateStatus(t, func(st *v1alpha1.AgentSessionStatus) { st.Rescue.Superseded = true })
-		f.run(t, 3)
-		if f.sessionGone(t) || !f.session(t).DeletionTimestamp.IsZero() {
-			t.Fatal("the Session was deleted after status.rescue stopped naming the verdict")
-		}
-		if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryExpired || e.Refusal != expiryBundleMismatch {
-			t.Fatalf("record %+v; want Expired and %s", e, expiryBundleMismatch)
-		}
+		taskAssertExpiredKept(t, f, "status.rescue no longer names the clean and pushed rescue")
 	})
 
 	t.Run("happy path still removes the session", func(t *testing.T) {
@@ -760,6 +752,53 @@ func TestTaskCleanupEndedAttemptDropsGradedHold(t *testing.T) {
 	}
 	if !freshLeft {
 		t.Fatal("prune dropped a graded hold whose attempt is still kept")
+	}
+}
+
+// taskAssertExpiredKept checks a kept-work refusal on an Expired record: the
+// record is unchanged, the Session stays, the note says why, the retry is 15
+// minutes, and a second reconcile does not emit a second warning.
+func taskAssertExpiredKept(t *testing.T, f *taskFixture, why string) {
+	t.Helper()
+	before, err := json.Marshal(f.expiry(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := events.NewFakeRecorder(4)
+	f.r.Recorder = rec
+	res, err := f.r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.sessionGone(t) || !f.session(t).DeletionTimestamp.IsZero() {
+		t.Fatal("the Session was removed")
+	}
+	after, err := json.Marshal(f.expiry(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("the record changed\nbefore %s\nafter  %s", before, after)
+	}
+	c := f.condition(t, ConditionHomeExpiry)
+	if c == nil || !strings.Contains(c.Message, "the session is not removed") || !strings.Contains(c.Message, why) {
+		t.Fatalf("HomeExpiry %+v; want a note that the session is not removed: %s", c, why)
+	}
+	if res.RequeueAfter != homeExpiryRefusalRetry {
+		t.Fatalf("retry %s; want %s", res.RequeueAfter, homeExpiryRefusalRetry)
+	}
+	if got := eventReasons(rec); len(got) != 1 || got[0] != "TaskCleanupRefused" {
+		t.Fatalf("events %v; want one TaskCleanupRefused", got)
+	}
+	if _, err := f.r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := eventReasons(rec); len(got) != 0 {
+		t.Fatalf("the second reconcile emitted %v", got)
+	}
+	again, err := json.Marshal(f.expiry(t))
+	if err != nil || !bytes.Equal(before, again) {
+		t.Fatalf("the second reconcile changed the record: %s", again)
 	}
 }
 
