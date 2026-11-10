@@ -1,7 +1,13 @@
 # DESIGN-034: An Asks and approvals board for agents
 
 - **Status:** Proposed; documentation only, 2026-10-29.
+  Amended 2026-11-10 (ADR-021): a third kind, `grant`, is proposed in
+  [ADR-021](../adrs/021-grants-through-the-asks-board.md). That ADR is
+  Proposed for coordinator review. Until it is accepted, the v1 contract
+  below is unchanged and no grant Ask is built.
 - **Decision:** [ADR-010](../adrs/010-agent-asks-and-approvals-board.md).
+  Amended 2026-11-10 (ADR-021): ADR-021 amends ADR-010 for `grant` Asks
+  only. Info and approval stay on ADR-010.
 - **Tracking:** [Story #255](https://work.haynesnetwork.com/work_packages/255),
   [Epic #254](https://work.haynesnetwork.com/work_packages/254), Saga #85.
 - **Source:** PR #658 at `4de52a3427254cc66c33f0ed2139fb9811508c0b`,
@@ -37,6 +43,12 @@ It describes required behavior, not installed or accepted functionality.
 | Approve/Deny primary, secondary options cannot contradict decision | 2579 A15 | D; §8 |
 | Default-off flags; keeper pushes; operator expiry sweeper; lane custody and merge order | 2539; unchanged by 2579/2595 | All; §9/§12 |
 | T4 outside v1; profile allowlist, workbench opt-in, grant exclusions | 2579 A14; Q-255-03 remains pending | Follow-up; §10/§13 |
+
+Amended 2026-11-10 (ADR-021): the rows for `type`, `scope` / `expiresAt`,
+the 16/512/4096 limits, `POST /v1/asks`, withdraw, and the answer-time
+expiry check describe `info` and `approval` only. A `grant` Ask differs
+as the notes in §2, §3, §7, §8, §9 and §12 say. Those notes do not relax
+an approval Ask.
 
 ## 1. Result and existing parts
 
@@ -76,13 +88,13 @@ operator's first CAS status write, readers treat an absent
 | Field | v1 meaning and bound |
 |---|---|
 | `id`, `requestId` | Server-generated `ask-` plus 16 lowercase hex digits. Create `requestId` matches `^[A-Za-z0-9-]{8,64}$`, keyed per original requester. Identical retry returns the same record; changed body under that key conflicts. |
-| `type` | Exactly `info` or `approval`. |
+| `type` | Exactly `info` or `approval`. Amended 2026-11-10 (ADR-021): or `grant`, opened only by the broker, never by a session. |
 | `question` | UTF-8 plain text, 1–1000 runes, not blank. |
 | `options` | 0–6 choices; unique IDs matching `^[a-z0-9-]{1,24}$`, labels 1–80 runes, descriptions 0–300 runes. An info Ask needs at least one option or `allowFreeText: true`. An approval needs no options. |
 | `recommended`, `allowFreeText` | Recommendation is an option ID or empty. Free text controls info answers; it does not restrict approval notes. Never preselect approval. |
 | `context` | Server-filled `sessionName` (≤253 bytes) and `sessionUID` (≤128 bytes); optional positive OpenProject `workPackage` integer and 0–5 HTTPS links of 1–300 bytes each. No caller-supplied requester identity. |
-| `scope` | Required for approval, absent for info. `action` and `target` each 1–200 nonblank runes, plus RFC 3339 `expiresAt`. Describe one exact action and target with material limits. Approval scope expires 1m to 24h after creation in v1 (`AskScopeMaxTTL`). |
-| `createdAt`, `expiresAt` | Server creation time. Create uses `expiresIn`, a Go duration string in whole seconds, `1m` to `168h` (7 days), default `24h`. An approval Ask's `expiresAt` is ≤ `scope.expiresAt` (A8): when `expiresIn` is omitted, `expiresAt` is the earlier of `createdAt + 24h` and `scope.expiresAt`, so the default never fails; an explicit `expiresIn` that would outlive the scope is refused with `400` (lane 0 `ExpiresAtFrom`, `ValidateAt`). The 24h scope cap therefore also bounds the answer window. An answer never extends either expiry. Servers truncate the clock to whole seconds before `ExpiresAtFrom` and `ValidateAt`, and store that value in the spec as `createdAt` (`metav1.Time`), not `metadata.creationTimestamp` (2595 A16). |
+| `scope` | Required for approval, absent for info. `action` and `target` each 1–200 nonblank runes, plus RFC 3339 `expiresAt`. Describe one exact action and target with material limits. Approval scope expires 1m to 24h after creation in v1 (`AskScopeMaxTTL`). Amended 2026-11-10 (ADR-021): a `grant` Ask has no approval `scope`. It has a typed `grant` object instead: the AccessGrant UID, `grantattest.ScopeDigest`, the grant type, the target token, and the TTL asked. No `expiresAt` on that object. |
+| `createdAt`, `expiresAt` | Server creation time. Create uses `expiresIn`, a Go duration string in whole seconds, `1m` to `168h` (7 days), default `24h`. An approval Ask's `expiresAt` is ≤ `scope.expiresAt` (A8): when `expiresIn` is omitted, `expiresAt` is the earlier of `createdAt + 24h` and `scope.expiresAt`, so the default never fails; an explicit `expiresIn` that would outlive the scope is refused with `400` (lane 0 `ExpiresAtFrom`, `ValidateAt`). The 24h scope cap therefore also bounds the answer window. An answer never extends either expiry. Amended 2026-11-10 (ADR-021): that cap and `expiresIn` apply to approval Asks. A `grant` Ask omits `spec.expiresAt` and `scope.expiresAt`. Its access TTL is the grant's `spec.ttl`, enforced by the broker, not by the Ask. Servers truncate the clock to whole seconds before `ExpiresAtFrom` and `ValidateAt`, and store that value in the spec as `createdAt` (`metav1.Time`), not `metadata.creationTimestamp` (2595 A16). |
 | `state` | `open`, `answered`, `withdrawn` or `expired` only. |
 | `answer` | Set once: `optionId` (an existing choice or empty), `text` (0–2000 runes), `approved` (required `*bool` for approval, absent for info), `answeredBy` and server `answeredAt`. An explicit false means Deny; omission is not false. |
 | `answer.answeredBy` | Operator audit/portal: issuer ≤300 runes and subject ≤200 runes, each nonblank when present and both required on the portal answer request; displayName ≤120 runes, nonblank when present. The operator stores issuer and subject, plus displayName when known. A returned actor is valid with a nonblank displayName, or with both issuer and subject (2595 A2'). Session responses return only displayName, `Portal user` when none is known; issuer and subject are omitted, not empty-string placeholders. No access tokens or cookies. |
@@ -113,7 +125,12 @@ A selected option must exist; it cannot contradict Approve/Deny in the
 portal (§8). Text or an option label never implies approval.
 
 Admission limits are **16 open per requester, 512 total per requester and
-4096 per namespace**. Closed records still count toward totals. Count
+4096 per namespace**. Closed records still count toward totals. Amended
+2026-11-10 (ADR-021): those 16 are info and approval Asks. Open `grant`
+Asks are counted apart from the 16: 3 per session, because a session may
+have at most 3 grants waiting, and 48 in the namespace, 16 times 3. They
+still count toward the 512 and the 4096. The numbers and the full-board
+behaviour are ADR-021 section 4. Count
 open Asks from an uncached list of that requester's Asks (at most 512),
 using `EffectiveState`, or from a state label kept in step with status.
 [`taskclaim.CheckRoom`](../../../../internal/taskclaim/store.go) counts
@@ -141,7 +158,10 @@ principal labels.
 Only `open` can transition, to one of the other three states. Answer,
 withdraw and expiry race through CAS. At answer time the Ask must be open
 and `now < expiresAt`; for approval, also `now < scope.expiresAt`. Enforce
-these checks at the write even if the expiry sweeper has not run. Lane 0's
+these checks at the write even if the expiry sweeper has not run. Amended
+2026-11-10 (ADR-021): a `grant` Ask has no expiry. `ValidateForAt` accepts
+its answer while it is open, with no clock check. `expired` is not a state
+the sweeper writes for it. Lane 0's
 `ValidateForAt(ask, now)` helper expresses the answer-time checks; handlers
 map expired/conflicting outcomes to the codes in §3. Check for an identical
 retry by the same issuer and subject before calling `ValidateForAt`. That
@@ -160,8 +180,8 @@ Session/Pod checks. No operator bearer token reaches the browser.
 
 | Caller | v1 rights |
 |---|---|
-| Session | Create as itself; list/read only its own Asks; withdraw its open Ask. No answer route or supplied human principal. |
-| Portal reader (BFF) | List and read Asks, including detail in any state; answer after authenticating the current human and checking the portal group. No withdrawal, consumption or general inbox access. |
+| Session | Create as itself; list/read only its own Asks; withdraw its open Ask. No answer route or supplied human principal. Amended 2026-11-10 (ADR-021): a session cannot create or withdraw a `grant` Ask. It can read its own. |
+| Portal reader (BFF) | List and read Asks, including detail in any state; answer after authenticating the current human and checking the portal group. No withdrawal, consumption or general inbox access. Amended 2026-11-10 (ADR-021): it may Dismiss a `grant` Ask whose session has ended. Dismiss does not call `Decide`. |
 
 Add only the listed portal routes to the portal-reader allowlist. Its
 identity must remain unavailable to agent pods. The BFF derives the actor
@@ -176,19 +196,23 @@ fields for audit, and portal routes return them. Every session-facing
 response under `/v1/asks`, including create replay, lists and withdraw,
 omits issuer and subject and exposes only displayName. Clients must accept
 that projection without reconstructing or requiring the raw identity.
+Amended 2026-11-10 (ADR-021): a grant answer also carries `username`, the
+`preferred_username` from the UserInfo body this check already fetches.
+Session responses omit it too. `approvedBy` on the grant is
+`authentik/<username>`. The OIDC subject is not copied there.
 [ADR-010](../adrs/010-agent-asks-and-approvals-board.md) records the change
 from DESIGN-029's HMAC message actor boundary for approvals. Current
 message identity handling remains separate.
 
 | Route | Caller and behavior |
 |---|---|
-| `POST /v1/asks` | Session. `201` new; `200` identical retry; `409` same requester/requestId with changed body. Returns the Ask, with session identity redaction. |
+| `POST /v1/asks` | Session. `201` new; `200` identical retry; `409` same requester/requestId with changed body. Returns the Ask, with session identity redaction. Amended 2026-11-10 (ADR-021): `type=grant` is 400. The broker creates that kind. |
 | `GET /v1/asks?mine=true&limit=...&cursor=...` | Session, own records only, including stored answers. |
 | `GET /v1/asks/{id}` | Owner Session only; answer read has no ACK or consumption side effect. |
-| `POST /v1/asks/{id}/withdraw` | Owner Session, open only; `409` when not open. No portal withdraw route. |
+| `POST /v1/asks/{id}/withdraw` | Owner Session, open only; `409` when not open. No portal withdraw route. Amended 2026-11-10 (ADR-021): `type=grant` is refused here. The session releases the grant; the broker withdraws the Ask. A new portal route `POST /v1/portal/asks/{id}/dismiss` withdraws a grant Ask after the session has ended and does not call `Decide`. |
 | `GET /v1/portal/asks?state=open\|all&limit=...&cursor=...` | Portal reader, bounded list. |
 | `GET /v1/portal/asks/{id}` | Portal reader, any state; supports push links and `?ask=` selection. |
-| `POST /v1/portal/asks/{id}/answer` | Portal reader with BFF-derived actor, set-once CAS. Open/unexpired Ask; approval scope still future. `200` for a confirmed answer, also returning the stored Ask on an identical answer retry by the same issuer and subject; otherwise `409` for answered/withdrawn and `410` for expired. |
+| `POST /v1/portal/asks/{id}/answer` | Portal reader with BFF-derived actor, set-once CAS. Open/unexpired Ask; approval scope still future. `200` for a confirmed answer, also returning the stored Ask on an identical answer retry by the same issuer and subject; otherwise `409` for answered/withdrawn and `410` for expired. Amended 2026-11-10 (ADR-021): a grant Ask has no expiry, so it is not `410` for a clock. The portal does not call `Decide`. The broker does, once, as ADR-021 section 2. |
 
 Another Session's Ask returns `404`, the same as an unknown ID. A caller
 of the wrong class returns `403`. Withdraw returns `409` when
@@ -206,7 +230,10 @@ stable operation-ID field to answer/withdraw. Expiry checks, CAS and
 confirmed retry semantics must agree; a late expiry sweep cannot permit
 an overdue answer.
 
-Both lists order **newest first by `(createdAt desc, id)`**. The operator
+Both lists order **newest first by `(createdAt desc, id)`**. Amended
+2026-11-10 (ADR-021): on the open list, open `grant` Asks come first,
+oldest first, and the other open Asks stay newest first. The all-state
+list stays newest first. The operator
 selects the bounded set by labels, sorts it, and uses its own opaque
 cursor. Do not rely on Kubernetes list order or use its continuation token
 as the public Ask cursor. Page `limit` is at most 100. Invalid cursors
@@ -341,7 +368,7 @@ projected token; no provider API key or inference call is needed.
 
 | Tool | v1 contract |
 |---|---|
-| `ask` | Typed create intent and caller-stable `requestId`; returns the Ask JSON immediately. No revision. Include a portal link only when lane C has a configured portal origin; otherwise none. |
+| `ask` | Typed create intent and caller-stable `requestId`; returns the Ask JSON immediately. No revision. Include a portal link only when lane C has a configured portal origin; otherwise none. Amended 2026-11-10 (ADR-021): `type` stays `info` or `approval`. A session cannot create `grant`. |
 | `ask_status` | Read own Ask, including its stored answer. Immediate return, no ACK or consumption. Any approval validity shown is labelled computed, not a server field; use lane 0 `EffectiveState` and `ApprovalValid` rather than reimplementing them. |
 | `list_my_asks` | One page of own Asks, including answered records, with the operator cursor. No all-session scan or automatic continuation. |
 | `withdraw` | Withdraw own open Ask; cannot erase an answer or revoke approval. No revision/operation-ID extension is required in v1. |
@@ -387,6 +414,10 @@ a relay may link to the Ask but cannot synthesize the portal principal.
 At answer time the Ask must be open/unexpired and approval scope still in
 the future. **No revocation exists in v1**, so `scope.expiresAt` is capped
 at `createdAt + 24h` and Ask `expiresAt` cannot exceed scope expiry.
+Amended 2026-11-10 (ADR-021): this cap stays for approval Asks. A `grant`
+Ask has no scope expiry and no answer deadline. `ApprovalValid` stays false
+for it. The boolean is consumed by one `Decide`, which is the grant
+adapter in ADR-021, not a standing approval.
 Clients display validity as **computed** from
 `approved && now < scope.expiresAt` (lane 0 `ApprovalValid`); it is not a
 server field. Deny is an
@@ -395,7 +426,10 @@ though the historical answer remains visible.
 
 Logout or group removal blocks later portal operations on fresh checks;
 it does not rewrite a historical answer. The record supplies no credential
-or machine action permission. Under the Q-255-04 ruling (§13) an
+or machine action permission. Amended 2026-11-10 (ADR-021): a saved `grant`
+answer still grants nothing by itself. The broker calls `Decide`, and the
+grant's phase is the access. An approval Ask is not spent by this path.
+Under the Q-255-04 ruling (§13) an
 unexpired approval is a one-off for that exact action, once. Do not
 activate that use before installation and usable acceptance, and never
 spend an approval twice.
@@ -424,9 +458,18 @@ an all-state view. Use the portal resource route
 and same-origin `POST .../asks/{id}/answer` for the form. The BFF uses the
 portal detail API to read a selected Ask in any state, including push
 links to an already answered Ask. No portal withdrawal control or route.
+Amended 2026-11-10 (ADR-021): Dismiss is the one portal control that closes
+a `grant` Ask, and only after the asking session has ended. It is not a
+withdraw of a live question.
 
 A card shows question, requester, work item/links, recommendation, deadline
-and age. Render URLs under A7, including the plain host for untrusted link
+and age. Amended 2026-11-10 (ADR-021): a `grant` card shows what, why, how
+long, and the fixed sentence "If you say no, this grant is denied and
+nothing is installed." While the session exists the controls are Approve
+for the asked TTL and Decline. When the session has ended the card shows
+the request, "The session that asked has ended", the story link when
+`context.workPackage` is set, and Dismiss. It does not show Approve or
+Decline, and it starts no session. Render URLs under A7, including the plain host for untrusted link
 hosts. Selected detail shows full exact scope before the answer controls.
 Fetch compatible conversation on demand under the current separate
 history authority; missing history cannot prevent reading or denying an
@@ -506,6 +549,9 @@ configured recipient, and credential rotation does not reset the ledger.
 Cap timestamps round up the latest permitted dispatch time, including the
 five-second ConfigMap save budget. Refresh decisions after the live GET and
 refuse dispatch after that deadline, window close or selected Ask expiry.
+Amended 2026-11-10 (ADR-021): a `grant` Ask has no expiry, so this skip does
+not drop it. The same push title and the same quiet hours apply. The push
+still carries no request text.
 Cap intervals include this five-second budget and whole-second rounding.
 
 The GitOps-precreated keeper-owned ConfigMap is
@@ -556,7 +602,9 @@ pages of 500 Asks without a state-label selector, then rereads each mutation
 authoritatively. The list snapshot skips answered/withdrawn records and records
 whose effective state and label already match; only candidates for a status or
 label change require a GET. `EffectiveState` governs Ask/scope expiry; absent state is
-open. Status updates and label repairs use resourceVersion CAS, rereading on
+open. Amended 2026-11-10 (ADR-021): the sweeper does not expire a `grant`
+Ask. A missing `expiresAt` on that kind is not a lapsed clock. Info and
+approval Asks are unchanged. Status updates and label repairs use resourceVersion CAS, rereading on
 conflict. Answered/withdrawn Asks are untouched. A crash between expiry and
 label update is repaired on the next scan. Off means no runnable/Ask I/O.
 
@@ -659,6 +707,10 @@ Each grant, budget or native-decision consuming adapter needs a separate
 story and authorization after its prerequisites. Prove exact typed scope,
 one-use reservation, Unknown without replay, revocation races where
 supported and restore/epoch invalidation. No generic approve-and-run tool.
+Amended 2026-11-10 (ADR-021): the grant adapter is OpenProject #525 and
+ADR-021, not a lane of Epic #254. Its build plan is ADR-021, seven PRs
+behind broker `--enable-grant-asks`, default off. Budget and
+native-decision adapters remain their own stories. Q-255-04 is unchanged.
 
 ## 13. Questions for Tom
 

@@ -1,5 +1,10 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+**2026-11-10 proposed, OP525:** [ADR-021](adrs/021-grants-through-the-asks-board.md)
+proposes that a grant needing Tom travels through the Asks board. It is
+Proposed for coordinator review and is not a decision until the coordinator
+accepts it. No decision-log row is taken here.
+
 **2026-11-04 stalled-work rule, OP399:** [decision 94](#decision-log) and
 [ADR-019](adrs/019-stalled-work-steers-not-stops.md) record Tom's relayed words,
 which coordinator dev-env-1104-010332 applied to supersede the stop clause of
