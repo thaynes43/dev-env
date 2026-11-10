@@ -86,7 +86,18 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			return nil, err
 		}
 	} else if req.Limits != nil && req.Limits.MaxWorkers != nil {
-		return nil, forbidden("limits.maxWorkers is set only by a CallerPolicy caller")
+		if c.kind != kindHuman && c.kind != kindClient {
+			return nil, forbidden("limits.maxWorkers is set only by a CallerPolicy, human or trusted client caller")
+		}
+		if *req.Limits.MaxWorkers < 1 || *req.Limits.MaxWorkers > 4 {
+			return nil, invalid(fieldError("limits.maxWorkers", "the worker cap must be from 1 to 4"))
+		}
+		// The coordinator CLI sends no effort key. Apply the same known
+		// presets without changing trusted callers' explicit settings or
+		// any existing create that does not ask for a worker cap.
+		if agent, effort, ok := callerModelPreset(req.Model); ok && req.Agent == agent && req.Effort == "" {
+			req.Effort = effort
+		}
 	}
 	if req.CanaryID != "" {
 		return nil, invalid(fieldError("canaryID", "canaries use the fixed ID-only create route"))

@@ -35,6 +35,12 @@ type fleetResourcesHeader struct{}
 // sessionTaskClaimsHeader opts only explicit show reads into the claim join.
 type sessionTaskClaimsHeader struct{}
 
+type coordinatorLimitsHeader struct{}
+
+func withCoordinatorLimits(ctx context.Context) context.Context {
+	return context.WithValue(ctx, coordinatorLimitsHeader{}, true)
+}
+
 // grantTaskClaimsHeader is scoped to the explicit grant show request.
 type grantTaskClaimsHeader struct{}
 
@@ -217,6 +223,9 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 	// an older operator ignores the header.
 	req.Header.Set(apiv1.AttributionHeader, apiv1.AttributionProvider)
 	req.Header.Set(apiv1.TaskOutcomeHeader, apiv1.TaskOutcomeV1)
+	if ctx.Value(coordinatorLimitsHeader{}) != nil {
+		req.Header.Set(apiv1.CallerPolicyLimitsHeader, apiv1.CallerPolicyLimitsV1)
+	}
 	// This client decodes the task budget stall signal (decision 94); an
 	// older operator ignores the header and an older client never sends it.
 	req.Header.Set(apiv1.TaskBudgetStallHeader, apiv1.TaskBudgetStallV1)

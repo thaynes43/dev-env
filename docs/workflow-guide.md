@@ -450,6 +450,43 @@ removed the variable from a Codex session's environment. Exit 0 is fine, 1 is ex
 login's own roughly 30-day lifetime lives with the keeper and is not in the
 projection.
 
+### Start a bounded coordinator on a tracker item
+
+Source contract: [DESIGN-060 section 7.2](../.agents/sagas/distributed-dev-env/designs/060-meatball-front-door.md#72-coordinator-cli-contract-op527-2026-11-10).
+This requires an operator with the coordinator worker-cap admission change;
+source tests do not prove it is installed.
+
+```bash
+agent-run coordinator start --item 527 --project dev-env --model gpt-6-astra --hours 4 --workers 2
+agent-run coordinator status --item 527
+agent-run coordinator status SESSION -o json
+agent-run coordinator stop SESSION
+agent-run coordinator brief --item 527 --hours 4 --workers 2
+```
+
+Tom supplies the model every time: `claude-opus-5-5`, `claude-fable-5-2` or
+`gpt-6-astra`. There is no model default or effort flag. Hours and workers are
+whole numbers from 1 to 4. Claude also accepts `--repo NAME` instead of
+`--project`; Codex needs a declared project. The launcher needs no tracker
+credential: the coordinator reads and claims its item when it runs.
+
+Start looks up the caller's existing run for the same item, including retained
+results after exit. To deliberately run it again, add `--run retry-2` to start
+and to item-based status. Keep that label when retrying. Start sends one POST;
+exit 6 means its result is unconfirmed. Inspect status before repeating start.
+This lookup lasts while the Session record is retained. Cached lists and
+concurrent creates on different replicas have the race limits in section 7.2.
+Status prints the task verdict and retained summary, PR links and
+head SHAs when present. Start/status JSON is one object with `item` and
+`session`; stop uses the existing reap and returns one Session object.
+
+The caller must be the enrolled CallerPolicy identity, Tom's human caller or a
+trusted client such as the workbench. Ordinary session callers cannot set a
+coordinator's worker cap. The coordinator runs on `dev`, size M, as a task.
+Its brief directs worker selection, budget checkpoints, tracker reports and
+the outcome file. Routine work proceeds; risky access gets one ask to Tom;
+an API refusal is recorded and never routed around. It never waits on Meatball.
+
 ### Launch a project-bound child on another provider
 
 *OpenProject #402, 2026-11-04. Checked against source at `801de50d` and
