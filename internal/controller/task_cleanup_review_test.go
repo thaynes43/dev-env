@@ -69,6 +69,47 @@ func TestTaskCleanupDisabledAtRescuingKeepsHome(t *testing.T) {
 	f.kept(t)
 }
 
+func TestTaskCleanupUnobservedOwnerHoldDoesNotFreeSlot(t *testing.T) {
+	f := taskAtPhase(t, v1alpha1.HomeExpiryRescuing)
+	f.r.TaskCleanupMaxActive = 1
+	ctx := context.Background()
+	other := f.session(t).DeepCopy()
+	other.Name, other.UID, other.ResourceVersion = "queued-b", "queued-b-uid", ""
+	other.DeletionTimestamp = nil
+	other.Status.PrivateHistory.SessionUID = string(other.UID)
+	other.Status.PrivateHistory.Expiry.Phase = v1alpha1.HomeExpiryWaiting
+	other.Status.PrivateHistory.Expiry.DueAt = metav1.NewTime(f.clock.Add(-time.Hour))
+	status := other.Status.DeepCopy()
+	if err := f.c.Create(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	other.Status = *status
+	if err := f.c.Status().Update(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	// The queue observes A's owner hold before A can persist its refusal.
+	// If that freed A's slot, B could start and lifting A's hold before its
+	// reconcile would then let both run under max-active=1.
+	s := f.session(t)
+	s.Annotations = map[string]string{v1alpha1.AnnotationHomeExpiry: v1alpha1.HomeExpiryHold}
+	if err := f.c.Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	f.r = f.fresh()
+	f.r.TaskCleanupMaxActive = 1
+	if f.r.taskCleanupAdmittable(ctx, other, *f.clock, true) {
+		t.Fatal("an owner hold without a recorded refusal freed an active slot")
+	}
+	f.run(t, 1) // persist owner_hold, making inactivity durable
+	if f.expiry(t).Refusal != expiryOwnerHold {
+		t.Fatal("the hold did not persist its refusal")
+	}
+	if !f.r.taskCleanupAdmittable(ctx, other, *f.clock, true) {
+		t.Fatal("the recorded refusal did not free its slot")
+	}
+	f.kept(t)
+}
+
 func TestTaskCleanupEveryNodeMustProveRelease(t *testing.T) {
 	for _, phase := range []string{v1alpha1.HomeExpiryRescuing, v1alpha1.HomeExpiryDeleting} {
 		for _, problem := range []string{"mounted", "replaced", "not ready", "stale lease"} {
@@ -244,6 +285,75 @@ func TestTaskCleanupFailedReportsDoNotResetAttemptAge(t *testing.T) {
 			f.kept(t)
 		})
 	}
+}
+
+func TestTaskCleanupRetryWaitHonorsAttemptDeadline(t *testing.T) {
+	f := taskAtPhase(t, v1alpha1.HomeExpiryRescuing)
+	f.tick(t, f.clock.Add(taskAttemptDeadline-time.Minute))
+	f.report(func(p *corev1.Pod) (protocol.RescueReport, error) {
+		rep := cleanRescue(p.Name, "20261111-1200")
+		rep.CleanAndPushed, rep.StrictHome = false, &protocol.StrictHomeCheck{}
+		rep.Repos[0].Fetched, rep.Repos[0].FetchError = false, "fetch failed"
+		return rep, nil
+	})
+	f.run(t, 1)
+	v, err := f.r.readExpiryView(context.Background(), f.session(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, _, err := f.r.stepTaskCleanup(context.Background(), v, &observation{})
+	if err != nil || res.RequeueAfter <= 0 || res.RequeueAfter > time.Minute {
+		t.Fatalf("retry sleeps past the attempt deadline: %s, %v", res.RequeueAfter, err)
+	}
+	f.kept(t)
+}
+
+func TestTaskCleanupReleaseWaitCannotExtendAttempt(t *testing.T) {
+	f := taskAtPhase(t, v1alpha1.HomeExpiryRescuing)
+	if err := f.c.Delete(context.Background(), f.named(t)); err != nil {
+		t.Fatal(err)
+	}
+	f.tick(t, f.clock.Add(taskAttemptDeadline-time.Minute))
+	f.nodeInUse(t, homeVolumeUniqueName())
+	f.run(t, 2) // replacement intent, then wait for release
+	f.tick(t, f.clock.Add(time.Minute))
+	f.r = f.fresh()
+	f.run(t, 1)
+	if e := f.expiry(t); e.Refusal != expiryVolumeNotReleased || taskActive(f.session(t)) {
+		t.Fatalf("release wait extended the attempt across a restart: %+v", e)
+	}
+	f.kept(t)
+}
+
+type taskRescueFunc struct {
+	*expiryRescuer
+	run func(context.Context, *corev1.Pod) (protocol.RescueReport, error)
+}
+
+func (r taskRescueFunc) RescueStrictHome(ctx context.Context, p *corev1.Pod) (protocol.RescueReport, error) {
+	return r.run(ctx, p)
+}
+
+func TestTaskCleanupRescueCannotOverrunAttempt(t *testing.T) {
+	f := taskAtPhase(t, v1alpha1.HomeExpiryRescuing)
+	f.tick(t, f.clock.Add(taskAttemptDeadline-time.Minute))
+	called := false
+	f.r.Rescuer = taskRescueFunc{expiryRescuer: f.rescuer, run: func(ctx context.Context, p *corev1.Pod) (protocol.RescueReport, error) {
+		called = true
+		deadline, bounded := ctx.Deadline()
+		if !bounded || time.Until(deadline) > time.Minute {
+			t.Error("rescue context is not bounded by the remaining attempt")
+		}
+		f.tick(t, f.clock.Add(time.Minute))
+		rep := cleanRescue(p.Name, "20261111-1200")
+		rep.StrictHome = &protocol.StrictHomeCheck{}
+		return rep, nil
+	}}
+	f.run(t, 1)
+	if e := f.expiry(t); !called || e.Refusal != expiryAttemptStuck || taskActive(f.session(t)) || f.session(t).Status.Rescue != nil {
+		t.Fatalf("late rescue report counted after the attempt expired: %+v", e)
+	}
+	f.kept(t)
 }
 
 func TestTaskCleanupTerminatingHoldCannotEscapeAttemptDeadline(t *testing.T) {

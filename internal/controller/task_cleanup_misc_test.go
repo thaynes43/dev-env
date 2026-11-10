@@ -124,7 +124,8 @@ func TestTaskRecordsLeaveTheExpiryGaugesWhileTheCleanupIsOn(t *testing.T) {
 }
 
 // TestTaskCleanupSlots: a record holds a slot at Rescuing, Archived or Deleting
-// only while it is neither refused nor held; Waiting and Expired hold none.
+// until a refusal is recorded, including an owner hold's refusal; Waiting
+// and Expired hold none.
 func TestTaskCleanupSlots(t *testing.T) {
 	at := metav1.NewTime(time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC))
 	for _, tc := range []struct {
@@ -141,7 +142,8 @@ func TestTaskCleanupSlots(t *testing.T) {
 		{v1alpha1.HomeExpiryArchived, expiryBundleMissing, false, false},
 		{v1alpha1.HomeExpiryDeleting, expiryForbidden, false, false},
 		{v1alpha1.HomeExpiryDeleting, expiryClaimInUse, false, false},
-		{v1alpha1.HomeExpiryRescuing, "", true, false},
+		{v1alpha1.HomeExpiryRescuing, "", true, true},
+		{v1alpha1.HomeExpiryRescuing, expiryOwnerHold, true, false},
 	} {
 		tf := newTerminalFixture()
 		s := tf.s

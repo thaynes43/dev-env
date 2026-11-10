@@ -97,7 +97,8 @@ lazy; Pod disappearance and VolumeAttachment alone are not release proof.
 `resourceNames` restriction). This story changes no haynes-ops grant.
 
 When release is unproven, nothing mounts the HOME. The clean-up looks again
-every 30 seconds. After 30 minutes it records `volume_not_released`, frees
+every 30 seconds, bounded by the remaining attempt time. At the 30-minute
+attempt deadline it records `volume_not_released`, frees
 its slot and keeps the HOME, re-checking every 15 minutes. Before a delete,
 an unproven release also records a refusal and keeps the HOME.
 
@@ -387,8 +388,9 @@ is off, and nothing is installed. Details the sections above leave open:
 - **The terminal task reclaim** may still remove a finished task's ended
   executor while its record is at `Waiting`; from `Rescuing` on the clean-up's
   own step removes a Pod that still stands.
-- **1.1's wait** lives in the leader's memory: a new leader starts its 30
-  minutes again, so it waits longer, never shorter, and still mounts nothing.
+- **1.1's wait (review correction, 2026-11-10).** The release polling clock
+  lives in the leader's memory, but the durable attempt deadline caps it;
+  a new leader cannot extend the total attempt beyond 30 minutes.
   A volume that is not CSI, a PersistentVolume that is not bound to the claim,
   or a read that fails (the cluster-wide `get` on PersistentVolumes is H1's)
   never shows the release. Before every hold and before deleting the claim,
@@ -418,7 +420,9 @@ is off, and nothing is installed. Details the sections above leave open:
   runs twice.
 - **A stuck attempt ends (review correction, 2026-11-10).** The attempt's
   total age is capped at 30 minutes, including failed reports, replacements
-  and a terminating hold. The hold intent carries its start time plus a new
+  release waits and a terminating hold. Retry requeues and rescue/verify
+  execution use the remaining attempt time; a late report cannot save a
+  bundle after the deadline. The hold intent carries its start time plus a new
   unique suffix for each replacement, within the existing 64-character
   field. Restarting the operator cannot reset that time. Older intents use
   the hold's creation time, or the first observation if no time is available.
@@ -428,7 +432,9 @@ is off, and nothing is installed. Details the sections above leave open:
   replacement still requires section 1.1's release proof. Three ended holds
   with no graded rescue also end an attempt.
 - **The queue (review correction, 2026-11-10).** A record at `Rescuing`,
-  `Archived` or `Deleting` holds a slot unless refused or held by its owner.
+  `Archived` or `Deleting` holds a slot until a refusal is recorded. An owner
+  hold frees the slot only when its refusal is durable, so an unobserved
+  hold that is removed cannot let two records use the same slot.
   Every inactive record needs queue admission again before resuming,
   including after a refusal clears or an owner hold is lifted. Rescuing
   retries get a new hold intent; later phases keep their verified bundle.
@@ -496,10 +502,13 @@ can still admit different records above the cap. Election and re-admission
 reduce the ordinary exposure; this is not a distributed reservation or a
 strict cross-leader cap. No lock needs a person to clear it.
 
-Every refusal or owner hold frees its slot, and the record must be admitted
-again before resuming in any active phase. An attempt lasts at most 30
-minutes: failed fetch/bundle reports never renew it, and a terminating hold
-is included. At the bound it records a refusal, retains HOME, frees the slot,
+Every recorded refusal frees its slot, including an owner hold's refusal;
+an owner hold not yet recorded still counts against the cap. The record
+must be admitted again before resuming in any active phase. An attempt
+lasts at most 30 minutes: failed fetch/bundle reports never renew it, and
+release waits and a terminating hold are included. Retry requeues and
+rescue/verify execution are bounded by the remaining attempt time. At the
+bound it records a refusal, retains HOME, frees the slot,
 and cannot mount a replacement until all-node release is proven (1.1).
 The non-empty session allowlist parks excluded records in every phase and
 is checked immediately before claim and Session deletion. `max-active=0`

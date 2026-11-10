@@ -352,11 +352,12 @@ func taskAttemptRefusalRetry(e *v1alpha1.PrivateHomeExpiryStatus) time.Duration 
 }
 
 // taskActive reports whether a record holds a slot: Rescuing, Archived or
-// Deleting, not refused and not held by the owner. An inactive record must
-// pass through the queue again before resuming, in every active phase.
+// Deleting and not refused. An owner hold frees its slot only once the
+// refusal is durable; removing an unobserved hold cannot over-admit work.
+// An inactive record must pass through the queue again before resuming.
 func taskActive(s *v1alpha1.AgentSession) bool {
 	h := s.Status.PrivateHistory
-	if h == nil || h.Expiry == nil || h.Expiry.Refusal != "" || homeExpiryHeld(s) {
+	if h == nil || h.Expiry == nil || h.Expiry.Refusal != "" {
 		return false
 	}
 	switch h.Expiry.Phase {
@@ -695,9 +696,31 @@ func taskIntentStarted(intent string) (time.Time, bool) {
 // valid one is kept: a Verified bundle re-hashed on the shelf, or every clone
 // clean and pushed. A refused rescue removes the hold pod and records
 // rescue_refused; a transient failure keeps it and runs again after HoldRetry.
-func (r *Reconciler) taskCleanupRescue(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
+func (r *Reconciler) taskCleanupRescue(ctx context.Context, v *expiryView, obs *observation) (res ctrl.Result, stop bool, err error) {
 	e := v.record()
 	pod := v.pod
+	start, timed := taskIntentStarted(e.HoldIntent)
+	if hold := v.ownHold(); hold != nil {
+		start, timed = r.taskAttemptStarted(v, hold), true
+	}
+	if timed {
+		deadline := start.Add(taskAttemptDeadline)
+		if !v.now.Before(deadline) {
+			if pod == nil {
+				if why := r.taskVolumeReleased(ctx, v); why != "" {
+					return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryVolumeNotReleased, "%s at the attempt's %s bound", why, taskAttemptDeadline))
+				}
+			}
+			return r.taskRefuseStuckAttempt(ctx, v, obs)
+		}
+		// A failed report or an unreleased volume must not schedule the
+		// next check later than the durable attempt deadline.
+		defer func() {
+			if taskActive(v.s) && res.RequeueAfter > 0 {
+				res.RequeueAfter = min(res.RequeueAfter, max(time.Nanosecond, deadline.Sub(r.clock())))
+			}
+		}()
+	}
 	switch {
 	case pod != nil && string(pod.UID) == e.ExecutorUID:
 		if !pod.DeletionTimestamp.IsZero() {
@@ -735,21 +758,12 @@ func (r *Reconciler) taskCleanupRescue(ctx context.Context, v *expiryView, obs *
 			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryVolumeNotReleased, "%s for %s", why, taskReleaseWait))
 		}
 		r.taskForgetReleaseWait(v.s.UID)
-		if start, ok := taskIntentStarted(e.HoldIntent); ok && v.now.Sub(start) >= taskAttemptDeadline {
-			r.taskBreaker(true, v.now)
-			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryAttemptStuck, "the clean-up attempt reached %s before a replacement hold", taskAttemptDeadline))
-		}
 		return r.createExpiryHold(ctx, v, obs)
 	}
 
 	hold := pod
 	if !expiryHoldAnnotated(hold, e) || !isHoldPod(hold) || !controlledBySession(hold, v.s) || !privateExecutorUsesHome(hold, v.s.Status.PrivateHistory.HomeClaim) {
 		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryIdentityChanged, "the hold pod %s is not bound to the HOME and the record", hold.Name))
-	}
-	if v.now.Sub(r.taskAttemptStarted(v, hold)) >= taskAttemptDeadline {
-		r.taskEndAttempt(v.s.UID, hold.UID)
-		r.taskBreaker(true, v.now)
-		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryAttemptStuck, "the clean-up attempt reached %s; hold pod %s is %s", taskAttemptDeadline, hold.Name, hold.Status.Phase))
 	}
 	if !hold.DeletionTimestamp.IsZero() {
 		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
@@ -793,6 +807,13 @@ func (r *Reconciler) taskCleanupRescue(ctx context.Context, v *expiryView, obs *
 		return r.taskRescue(ctx, v, obs, hold)
 	}
 	return r.saveTaskBundle(ctx, v, hold, obs)
+}
+
+func (r *Reconciler) taskRefuseStuckAttempt(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
+	r.taskEndAttempt(v.s.UID, types.UID(v.record().HoldPodUID))
+	v.now = r.clock()
+	r.taskBreaker(true, v.now)
+	return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryAttemptStuck, "the clean-up attempt reached %s; the HOME stays", taskAttemptDeadline))
 }
 
 // taskAttemptStarted reads the durable attempt clock. For older intents it
@@ -940,7 +961,17 @@ func (r *Reconciler) taskRescue(ctx context.Context, v *expiryView, obs *observa
 		return r.expiryUnknown(ctx, v.s, obs, errors.New("this operator's rescuer cannot run the clean-up's rescue (--strict-home)"))
 	}
 	log.FromContext(ctx).Info("running the task clean-up's rescue", "pod", hold.Name, "uid", hold.UID)
-	rep, err := tr.RescueStrictHome(ctx, hold)
+	deadline := r.taskAttemptStarted(v, hold).Add(taskAttemptDeadline)
+	remaining := deadline.Sub(r.clock())
+	if remaining <= 0 {
+		return r.taskRefuseStuckAttempt(ctx, v, obs)
+	}
+	attemptCtx, cancel := context.WithTimeout(ctx, min(remaining, RescueTimeout))
+	defer cancel()
+	rep, err := tr.RescueStrictHome(attemptCtx, hold)
+	if !r.clock().Before(deadline) || remaining <= RescueTimeout && errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
+		return r.taskRefuseStuckAttempt(ctx, v, obs)
+	}
 	var exit utilexec.ExitError
 	unchecked := err != nil && errors.As(err, &exit) && exit.ExitStatus() == 2
 	if err != nil && !unchecked {
@@ -1064,13 +1095,19 @@ func (r *Reconciler) verifyTaskBundle(ctx context.Context, v *expiryView, obs *o
 // unheld, and nothing new holding the HOME.
 func (r *Reconciler) saveTaskBundle(ctx context.Context, v *expiryView, hold *corev1.Pod, obs *observation) (ctrl.Result, bool, error) {
 	rec := v.s.Status.Rescue
+	deadline := r.taskAttemptStarted(v, hold).Add(taskAttemptDeadline)
 	b := &v1alpha1.PrivateHomeBundleStatus{Stamp: rec.Stamp, Result: bundleCleanAndPushed}
 	if rec.Result == v1alpha1.RescueVerified {
 		id, err := taskRescueID(v.s, rec.LastBundle, rec.Stamp)
 		if err != nil {
 			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryBundleMismatch, "%v", err))
 		}
-		res, ref, ok := r.verifyTaskBundle(ctx, v, obs, id, rec.LastBundle)
+		verifyCtx, cancel := context.WithTimeout(ctx, max(time.Nanosecond, deadline.Sub(r.clock())))
+		defer cancel()
+		res, ref, ok := r.verifyTaskBundle(verifyCtx, v, obs, id, rec.LastBundle)
+		if !r.clock().Before(deadline) || errors.Is(verifyCtx.Err(), context.DeadlineExceeded) {
+			return r.taskRefuseStuckAttempt(ctx, v, obs)
+		}
 		if ref != nil {
 			return r.refuseHomeExpiry(ctx, v, obs, ref)
 		}
@@ -1087,6 +1124,9 @@ func (r *Reconciler) saveTaskBundle(ctx context.Context, v *expiryView, hold *co
 	if e == nil || e.Phase != v1alpha1.HomeExpiryRescuing || e.HoldPodUID != before.HoldPodUID || after.ownHold() == nil || after.newPod() != nil ||
 		homeExpiryHeld(after.s) || r.taskCleanupParked(after.s, obs) || !rescued(after.s) || !rescueRanIn(after.s, hold) || after.s.Status.Rescue.Stamp != rec.Stamp || expiryRecheck(after) != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
+	}
+	if !after.now.Before(deadline) {
+		return r.taskRefuseStuckAttempt(ctx, after, obs)
 	}
 	fresh := after.s.DeepCopy()
 	next := fresh.Status.PrivateHistory.Expiry
@@ -1107,11 +1147,12 @@ func (r *Reconciler) saveTaskBundle(ctx context.Context, v *expiryView, hold *co
 // verifies the bundle again and records Deleting.
 func (r *Reconciler) taskCleanupArchived(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
 	if p := v.ownHold(); p != nil {
-		if v.now.Sub(r.taskAttemptStarted(v, p)) >= taskAttemptDeadline {
-			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryAttemptStuck, "the clean-up attempt reached %s while the saved hold pod %s remains", taskAttemptDeadline, p.Name))
+		remaining := r.taskAttemptStarted(v, p).Add(taskAttemptDeadline).Sub(v.now)
+		if remaining <= 0 {
+			return r.taskRefuseStuckAttempt(ctx, v, obs)
 		}
 		if !p.DeletionTimestamp.IsZero() {
-			return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
+			return ctrl.Result{RequeueAfter: min(homeExpiryPodWait, remaining)}, false, nil
 		}
 		r.taskDropLog(ctx, v, p)
 		return r.removeExpiryHold(ctx, v, obs, p, holdReleaseArchived)

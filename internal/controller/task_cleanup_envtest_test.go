@@ -41,6 +41,17 @@ import (
 // UID and resourceVersion as preconditions, and every Session is gone.
 func TestTaskCleanupQueueCapWithTwoOperators(t *testing.T) {
 	ctx := context.Background()
+	// Other cases leave Nodes in this package's ephemeral API server.
+	// This case simulates its own kubelet; stale or NotReady fixture Nodes
+	// would correctly prevent the new all-Node release proof forever.
+	var previousNodes corev1.NodeList
+	if err := k8s.List(ctx, &previousNodes); err != nil {
+		t.Fatal(err)
+	}
+	for i := range previousNodes.Items {
+		n := &previousNodes.Items[i]
+		purgeEnv(&coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{Name: n.Name, Namespace: "kube-node-lease"}}, n)
+	}
 	if err := k8s.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-node-lease"}}); err != nil && !apierrors.IsAlreadyExists(err) {
 		t.Fatal(err)
 	}

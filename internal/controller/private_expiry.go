@@ -210,8 +210,8 @@ func recordedExecutorEnded(s *v1alpha1.AgentSession, obs observation) bool {
 }
 
 // expiryView is one reconcile's uncached reads for the HOME expiry: the
-// Session, the Pod of its name, its HOME claim and every Pod that mounts
-// that claim, including the named Pod when it mounts the claim.
+// Session, the Pod of its name, its HOME claim and every other Pod that
+// mounts that claim. Both pod and mounts incorporate the Pod LIST.
 type expiryView struct {
 	s      *v1alpha1.AgentSession
 	pod    *corev1.Pod
@@ -324,7 +324,11 @@ func (r *Reconciler) readExpiryView(ctx context.Context, s *v1alpha1.AgentSessio
 			}
 			// A Pod created after GET is still evidence, including a hold
 			// awaiting adoption. A Pod absent from LIST does not erase GET.
-			v.pod = p.DeepCopy()
+			// When both reads name the same version, retain the GET proof.
+			if v.pod == nil {
+				v.pod = p.DeepCopy()
+			}
+			continue // counted by pod; mounts contains only other names
 		}
 		if podMountsClaim(&p, fresh.Status.PrivateHistory.HomeClaim) {
 			v.mounts = append(v.mounts, p)
