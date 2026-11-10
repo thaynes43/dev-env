@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"context"
+	"errors"
 	"math"
 	"net/http"
 	"regexp"
@@ -136,6 +137,13 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	// usage never wait on it, and agentd offers the same snapshot next beat.
 	if err := s.recordTaskOutcome(ctx, &sess, c.pod, st); err != nil {
 		s.Log.Error(err, "record task outcome", "session", key.Name)
+	}
+	// A passive allowance reading is best-effort as well (DESIGN-059), and
+	// ignored unless the store is on. Only a fixed code is logged.
+	if s.SessionAllowances != nil && st.Allowance != nil {
+		if err := s.SessionAllowances.Record(ctx, &sess, c.pod, *st.Allowance, s.now()); err != nil && !errors.Is(err, errSessionAllowanceRate) && !errors.Is(err, errSessionAllowanceHeld) {
+			s.Log.V(1).Info("allowance reading not stored", "session", key.Name, "reason", err.Error())
+		}
 	}
 	return http.StatusNoContent, nil, nil
 }
