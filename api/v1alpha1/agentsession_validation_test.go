@@ -1832,9 +1832,15 @@ func TestPrivateHomeExpiryTaskBundle(t *testing.T) {
 				saved(e, verified(name))
 				e.RescueStamp, e.Bundle.Stamp = stamp, ""
 			}},
-			{"an unbounded stamp", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+			// The bundle's stamp equals rescueStamp, which has its own
+			// bound; a longer one fails either rule.
+			{"a stamp over 64 characters", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
 				saved(e, verified(name))
 				e.RescueStamp, e.Bundle.Stamp = strings.Repeat("1", 64), strings.Repeat("1", 65)
+			}},
+			{"a manifest of another rescue", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				saved(e, verified(name))
+				e.Bundle.Manifest = "rescue/" + name + "/20261110-1800/manifest.json"
 			}},
 			{"negative bytes", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
 				saved(e, verified(name))
@@ -1892,6 +1898,12 @@ func TestPrivateHomeExpiryTaskBundle(t *testing.T) {
 		next.Status.PrivateHistory.Expiry.Phase, next.Status.PrivateHistory.Expiry.RescueStamp = v1alpha1.HomeExpiryExporting, stamp
 		if err := k8s.Status().Update(ctx(t), next); err != nil {
 			t.Fatal("Exporting refused:", err)
+		}
+		// A record that exported history goes on to its archive only.
+		swapped := get(t, s)
+		saved(swapped.Status.PrivateHistory.Expiry, verified(s.Name))
+		if err := k8s.Status().Update(ctx(t), swapped); !apierrors.IsInvalid(err) {
+			t.Fatalf("Exporting to Archived with a bundle accepted: %v", err)
 		}
 		archived := get(t, s)
 		archived.Status.PrivateHistory.Expiry.Phase, archived.Status.PrivateHistory.Expiry.Archive = v1alpha1.HomeExpiryArchived, archive()

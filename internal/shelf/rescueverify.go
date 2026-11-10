@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	utilexec "k8s.io/client-go/util/exec"
 
@@ -19,7 +20,8 @@ var ErrSlotsBusy = errors.New("every shelf exec slot of this operator is taken")
 // RescueVerifier runs `agentd ctl rescue-verify` in the shelf for a task
 // Session's clean-up (DESIGN-061 section 3). Each call takes one of the
 // per-replica ExecSlots first, with TryTake, so the clean-up shares the
-// shelf's exec budget with the archive execs.
+// shelf's exec budget with the archive execs. The exec's deadline is
+// Shelf.Timeout, a minute by default; set it longer for large bundles.
 type RescueVerifier struct {
 	Shelf *Shelf
 	Slots *ExecSlots
@@ -53,14 +55,15 @@ func (v *RescueVerifier) Verify(ctx context.Context, id string) (protocol.Rescue
 	if err != nil {
 		return res, err
 	}
-	cmd := []string{"agentd", "ctl", "rescue-verify"}
-	if id != "" {
-		cmd = append(cmd, "--id", id)
-	}
 	timeout := s.Timeout
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
+	cmd := []string{"agentd", "ctl", "rescue-verify"}
+	if id != "" {
+		cmd = append(cmd, "--id", id)
+	}
+	cmd = append(cmd, "--timeout", agentdDeadline(timeout).String())
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	stdout, stderr := &capped{max: 64 << 10}, &capped{max: 4 << 10}
@@ -83,6 +86,14 @@ func (v *RescueVerifier) Verify(ctx context.Context, id string) (protocol.Rescue
 		return protocol.RescueVerifyResult{}, fmt.Errorf("rescue-verify in the shelf pod %s: %w", pod, err)
 	}
 	return res, nil
+}
+
+// agentdDeadline is the deadline rescue-verify gets in the shelf: shorter than
+// the exec's, so agentd stops hashing and lets go of the shelf lock before the
+// operator gives up on it. A minute's exec leaves agentd 50 seconds.
+func agentdDeadline(exec time.Duration) time.Duration {
+	d := exec - exec/6
+	return max(d.Truncate(time.Second), time.Second)
 }
 
 // checkVerifyResult refuses an answer that is not the one asked for, or that

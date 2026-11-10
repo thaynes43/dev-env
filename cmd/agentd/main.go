@@ -101,13 +101,14 @@ Commands:
                            or HOME and not hidden, holds .git and is neither a
                            ~/repos clone nor a worktree one lists: "stray
                            repository PATH" in the report's strictHome.
-  ctl rescue-verify [--id <session>/<stamp>]
+  ctl rescue-verify [--id <session>/<stamp>] [--timeout D]
                            In the shelf (DESIGN-061): print the shared volume's
                            free and total bytes as JSON; with --id, also
                            re-hash every bundle of that rescue against its
                            manifest and print the manifest's SHA-256. Exit 1
                            with a document is a refusal: bundle_missing or
-                           bundle_mismatch.
+                           bundle_mismatch. It ends by itself after D
+                           (default 50s, 1s to 30m).
   ctl drop-log             In a hold pod (DESIGN-061): remove this session's
                            own log copy, logs/<session>.log, from the shared
                            volume, and nothing else; print what it did as JSON.
@@ -484,19 +485,28 @@ func strictHomeFlags(args []string, stopAgent *bool) bool {
 	return strict
 }
 
-// rescueVerifyCtl is `ctl rescue-verify [--id <session>/<stamp>]` in the shelf
-// (DESIGN-061 section 3). It prints one JSON document. Exit 0: ok. Exit 1
-// with the document on stdout: a refusal (bundle_missing, bundle_mismatch).
-// Exit 1 with nothing on stdout: a failure, said on stderr. Exit 2: usage.
-func rescueVerifyCtl(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+// rescueVerifyTimeout is rescue-verify's own deadline without --timeout:
+// below the operator's one-minute shelf exec, so agentd ends first.
+const rescueVerifyTimeout = 50 * time.Second
+
+// maxRescueVerifyTimeout bounds --timeout.
+const maxRescueVerifyTimeout = 30 * time.Minute
+
+// rescueVerifyCtl is `ctl rescue-verify [--id <session>/<stamp>] [--timeout D]`
+// in the shelf (DESIGN-061 section 3). It prints one JSON document. Exit 0:
+// ok. Exit 1 with the document on stdout: a refusal (bundle_missing,
+// bundle_mismatch). Exit 1 with nothing on stdout: a failure, said on stderr,
+// such as the deadline (default 50s, 1s to 30m). Exit 2: usage.
+func rescueVerifyCtl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
 	fs := flag.NewFlagSet("ctl rescue-verify", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	id := fs.String("id", "", "")
+	timeout := fs.Duration("timeout", rescueVerifyTimeout, "")
 	err := fs.Parse(args)
 	idSet := false
 	fs.Visit(func(f *flag.Flag) { idSet = idSet || f.Name == "id" })
-	if err != nil || fs.NArg() != 0 || (idSet && *id == "") {
-		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl rescue-verify [--id <session>/<stamp>]\n", binaryName)
+	if err != nil || fs.NArg() != 0 || (idSet && *id == "") || *timeout < time.Second || *timeout > maxRescueVerifyTimeout {
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl rescue-verify [--id <session>/<stamp>] [--timeout D, 1s to 30m]\n", binaryName)
 		return exitUsage
 	}
 	if *id != "" {
@@ -510,7 +520,9 @@ func rescueVerifyCtl(args []string, stdout, stderr io.Writer, getenv func(string
 		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
 		return exitFailure
 	}
-	res, err := agentd.VerifyRescue(s, *id)
+	ctx, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+	res, err := agentd.VerifyRescue(ctx, s, *id)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "%s: rescue-verify: %v\n", binaryName, err)
 		return exitFailure
@@ -812,7 +824,7 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		case "rescues", "prune", "hold-rescue":
 			return shelfCtl(args, stdin, stdout, stderr, getenv)
 		case "rescue-verify":
-			return rescueVerifyCtl(args[1:], stdout, stderr, getenv)
+			return rescueVerifyCtl(ctx, args[1:], stdout, stderr, getenv)
 		case "drop-log":
 			return dropLogCtl(args[1:], stdout, stderr, getenv)
 		case "history-export", "history-archive":

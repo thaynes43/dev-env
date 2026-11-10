@@ -944,6 +944,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!(has(self.archive) && has(self.bundle))",message="a HOME expiry record holds an archive or a bundle, never both"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.bundle) || (has(self.bundle) && self.bundle == oldSelf.bundle)",message="a HOME expiry record's bundle never changes once set"
 // +kubebuilder:validation:XValidation:rule="!has(self.bundle) || self.phase in ['Archived', 'Deleting', 'Expired']",message="a HOME expiry record holds a bundle only from Archived on"
+// +kubebuilder:validation:XValidation:rule="!has(self.bundle) || oldSelf.phase != 'Exporting'",message="a HOME expiry record that exported history keeps to its archive, never a bundle"
 // +kubebuilder:validation:XValidation:rule="!has(self.bundle) || (has(self.rescueStamp) && self.bundle.stamp == self.rescueStamp)",message="a HOME expiry record's bundle is the rescue it names"
 // +kubebuilder:validation:XValidation:rule="!(self.phase in ['Deleting', 'Expired']) || has(self.deletingAt)",message="a Deleting HOME expiry record has deletingAt"
 // +kubebuilder:validation:XValidation:rule="self.phase != 'Expired' || has(self.homeDeletedAt)",message="an Expired HOME expiry record has homeDeletedAt"
@@ -1036,6 +1037,7 @@ type PrivateHomeArchiveStatus struct {
 // CleanAndPushed rescue found every clone clean and pushed and wrote nothing,
 // so it names no manifest, no digest and no bundle.
 // +kubebuilder:validation:XValidation:rule="self.result == 'Verified' ? (has(self.manifest) && has(self.manifestSHA256) && self.bundles > 0) : (!has(self.manifest) && !has(self.manifestSHA256) && self.bundles == 0 && self.bytes == 0)",message="a Verified bundle names its manifest, digest and bundles; a CleanAndPushed one names none"
+// +kubebuilder:validation:XValidation:rule="!has(self.manifest) || self.manifest.contains('/' + self.stamp)",message="a bundle's manifest lies in its rescue's directory"
 type PrivateHomeBundleStatus struct {
 	// Stamp is the rescue's stamp (status.rescue.stamp), equal to the
 	// record's rescueStamp.

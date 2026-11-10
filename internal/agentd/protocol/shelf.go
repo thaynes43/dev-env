@@ -213,6 +213,6 @@ type DropLogResult struct {
 	// Removed is set when the file was there and this call removed it; an
 	// absent copy is not an error.
 	Removed bool `json:"removed"`
-	// Bytes is the removed file's size.
-	Bytes int64 `json:"bytes,omitempty"`
+	// Bytes is the removed file's size; 0 when nothing was removed.
+	Bytes int64 `json:"bytes"`
 }

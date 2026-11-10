@@ -91,6 +91,10 @@ func TestCtlRescueVerify(t *testing.T) {
 		{"ctl", "rescue-verify", "--id", "../x/20261110-0213"},
 		{"ctl", "rescue-verify", "--id", "s-1"},
 		{"ctl", "rescue-verify", "--session", "s-1"},
+		{"ctl", "rescue-verify", "--timeout", "0s"},
+		{"ctl", "rescue-verify", "--timeout", "500ms"},
+		{"ctl", "rescue-verify", "--timeout", "31m"},
+		{"ctl", "rescue-verify", "--timeout", "soon"},
 	} {
 		if code, out, errOut := runArgs(args, map[string]string{"HOME": home}); code != exitUsage || out != "" || !strings.Contains(errOut, "rescue-verify") {
 			t.Errorf("%q: %d %q %q", args, code, out, errOut)
@@ -108,7 +112,7 @@ func TestCtlRescueVerify(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &res); err != nil || code != exitOK || !res.OK || res.Version != 1 || res.SharedTotalBytes <= 0 {
 		t.Fatalf("space only: %d %s %s %v", code, out, errOut, err)
 	}
-	code, out, errOut = runArgs([]string{"ctl", "rescue-verify", "--id", "s-1/20261110-0213"}, env)
+	code, out, errOut = runArgs([]string{"ctl", "rescue-verify", "--id", "s-1/20261110-0213", "--timeout", "5s"}, env)
 	res = protocol.RescueVerifyResult{}
 	if err := json.Unmarshal([]byte(out), &res); err != nil || code != exitFailure || res.OK || res.Refusal != protocol.RescueVerifyBundleMissing || res.ID != "s-1/20261110-0213" {
 		t.Fatalf("a missing rescue: %d %s %s %v", code, out, errOut, err)

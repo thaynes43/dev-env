@@ -205,14 +205,18 @@ with one more field, `strictHome`.
 |---|---|
 | HOME itself; every entry directly under `~/work`, hidden ones included; every entry directly under `~/repos` or HOME that is not hidden | hidden entries of HOME (`~/.claude`, `~/.cache`) and of `~/repos` (a clone in progress); the shared volume's mount; files; links to nothing; anything deeper; a `~/lost+found` this pod's user cannot search (mkfs makes it root's, so the agent, the same user, could not write into it) |
 
-An entry counts when it is a directory, or a link to one, holding `.git` as a
-directory, a file or a link. It passes when its path, links resolved, is a
-clone under `~/repos` (`clonesIn`: `.git` is a directory) or a worktree that
-`git worktree list --porcelain` of one lists (bare and prunable entries left
-out). The check runs after the agent stop and before any commit or bundle.
-Adding `~/repos` and HOME itself to the ruling's two places is this story's:
-a separate-git-dir clone in `~/repos` is no clone to the rescue, so it would
-go unseen too.
+An entry counts when it is a directory, or a link to one, that holds `.git`
+(a directory, a file or a link) or is a bare repository (`HEAD`, `objects/`
+and `refs/` at its top). It passes in two cases, comparing paths with links
+resolved. It may be a clone under `~/repos` (`clonesIn`: `.git` is a
+directory). Or it may be a worktree that `git worktree list --porcelain` of
+such a clone lists (bare and prunable entries left out) whose
+`git rev-parse --path-format=absolute --git-common-dir` is that clone's
+`.git`. A listing alone can be stale: a removed worktree whose path now holds
+another clone stays listed. The check runs after the agent stop and before any
+commit or bundle. This story adds `~/repos`, HOME itself and bare
+repositories to the ruling's two places. Each holds work the rescue would not
+see, a separate-git-dir clone in `~/repos` among them.
 
 | Outcome | Report | Exit |
 |---|---|---|
@@ -233,18 +237,27 @@ go unseen too.
 
 The causes are `cannot list the worktrees of CLONE: ...` (its worktrees then
 also show as stray) and `cannot inspect PATH: ...` (a permission or I/O error
-on the entry or its `.git`).
+on the entry or its `.git`, or `git rev-parse --git-common-dir` failing in a
+listed worktree).
 
-**`agentd ctl rescue-verify [--id <session>/<stamp>]`**, in the shelf. The id
-is the rescue's directory under `rescue/`, which can be `<stamp>-2`. Take it
-from the report's `bundle.dir` or `status.rescue.lastBundle`, not from the
-stamp. Exit 2 means extra arguments, `--id` without a value or with an empty
-one, or an id that `ParseRescueID` refuses. The operator calls it through
+Known limits: it looks one level deep (section 9). It skips a complete clone
+in a hidden `~/repos/.name`, which the rescue does not see either. It also
+skips repositories inside hidden tool state.
+
+**`agentd ctl rescue-verify [--id <session>/<stamp>] [--timeout D]`**, in the
+shelf. The id is the rescue's directory under `rescue/`, which can be
+`<stamp>-2`. Take it from the report's `bundle.dir` or
+`status.rescue.lastBundle`, not from the stamp. `--timeout` is agentd's own
+deadline, 50s by default, 1s to 30m. Past it, agentd stops waiting for the
+lock or hashing and fails. Exit 2 means extra arguments, `--id` without a
+value or with an empty one, an id that `ParseRescueID` refuses, or a
+`--timeout` out of range. The operator calls it through
 `shelf.RescueVerifier.Verify(ctx, id)`. That call takes one of the replica's
 `ExecSlots` with `TryTake`, and answers `ErrSlotsBusy` without an exec when
-none is free. It checks the document against the exit status and gives a
-refusal back as a result, not an error. The exec timeout is `Shelf.Timeout`,
-a minute by default.
+none is free. It passes `--timeout` as five sixths of the exec timeout
+(`Shelf.Timeout`, a minute by default, so 50s), so agentd ends first. It
+checks the document against the exit status and gives a refusal back as a
+result, not an error. Set `Shelf.Timeout` longer for a large bundle.
 
 ```json
 {
@@ -265,16 +278,20 @@ a minute by default.
 | without `--id` | `version`, `ok: true`, the two space figures (statfs: `Bavail` and `Blocks` times the fragment size, as df) | 0 |
 | every bundle matches | as above | 0 |
 | `bundle_missing` | `ok: false`, `refusal`, `detail`: `rescue/`, `rescue/<session>`, the rescue's directory, its manifest or a bundle it names is absent, or is not a directory or regular file as it should be (a link counts as neither) | 1 |
-| `bundle_mismatch` | the same: the manifest is over 4 MiB, not JSON, not version 1, names another session or directory, says `complete: false`, or lists a repo without a verified bundle, or a bundle outside its directory; or a bundle's size or SHA-256 differs from the manifest | 1 |
-| a failure: the shared volume not mounted, statfs failed or contradicts itself, an I/O error | nothing on stdout; stderr says why | 1 |
+| `bundle_mismatch` | the same: the manifest is over 4 MiB, not JSON, not version 1, names another session or directory, says `complete: false`, lists no bundle, lists a repo without a verified bundle, or a bundle outside its directory; or a bundle's size or SHA-256 differs from the manifest | 1 |
+| a failure: the shared volume not mounted, statfs failed or contradicts itself, an I/O error, the deadline | nothing on stdout; stderr says why | 1 |
 
 On a refusal, `manifestSHA256`, `bundles` and `bytes` are what was read before
-it. They are for a person and prove nothing. The command reads the manifest
-once, hashes those bytes and parses the same bytes. It opens every file
-without following a final link and checks the open file. It holds
-`.shelf.lock` shared, so a prune or a restore's hold waits and other verifies
-do not; without `--id` it takes no lock. It writes nothing and runs no git.
-Hashing time grows with bundle size.
+it. They are for a person and prove nothing. `detail` is at most 512 bytes,
+and values quoted from the manifest are cut first. An ok answer with `--id`
+always names at least one bundle, as a `Verified` record must. The command
+reads the manifest once, hashes those bytes and parses the same bytes. It
+opens every file without following a final link and checks the open file. It
+takes `.shelf.lock` shared and without blocking, retrying every 100 ms until
+its deadline. So a prune or a restore's hold waits for it, other verifies do
+not, and a verify the operator gave up on never holds the lock on. Without
+`--id` it takes no lock. It writes nothing but `.shelf.lock` when that is
+absent, and it runs no git.
 
 **`agentd ctl drop-log`**, in the hold pod, with no arguments; the session
 comes from `AGENTD_SESSION`. It removes `logs/<session>.log` from the shared
@@ -285,9 +302,13 @@ progress, not the HOME's `~/work/<session>.log`.
 { "session": "dev-env-1110-021204", "path": "logs/dev-env-1110-021204.log", "removed": true, "bytes": 2581 }
 ```
 
+It opens `logs/` without following a link and removes the copy relative to
+that directory, so a `logs/` swapped for a link cannot send the unlink
+elsewhere.
+
 | Outcome | Exit |
 |---|---|
-| removed (`removed: true`, `bytes`), or there was none (`removed: false`; also when `logs/` is absent) | 0 |
+| removed (`removed: true`, `bytes` its size), or there was none (`removed: false`, `bytes: 0`; also when `logs/` is absent) | 0 |
 | a failure, nothing removed, nothing on stdout: no session or a name that is not one; an agent this pod started is running (its pid file names a live process); the shared volume not mounted; `logs/` is not a real directory; the copy is not a regular file; an I/O error | 1 |
 
 **What part 2 (#520) relies on.**
@@ -304,6 +325,12 @@ progress, not the HOME's `~/work/<session>.log`.
   gate.
 - A `drop-log` failure does not keep the HOME. The 30-day prune is the
   fallback (section 9).
+- The schema (section 2 item 1) also refuses: a `bundle` before `Archived`, or
+  on a record that was `Exporting`; a `bundle.stamp` other than
+  `rescueStamp`; a manifest outside `rescue/<session>/<stamp>[-N]/`. It checks
+  that phases move forward and that each phase has its fields, not every step:
+  `Waiting` straight to `Deleting` with a bundle passes it, as with an
+  archive, so the controller keeps the order.
 
 ## 4. How many at once, and the backlog
 

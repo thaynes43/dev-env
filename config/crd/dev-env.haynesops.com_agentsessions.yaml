@@ -2354,6 +2354,9 @@ spec:
                             && has(self.manifestSHA256) && self.bundles > 0) : (!has(self.manifest)
                             && !has(self.manifestSHA256) && self.bundles == 0 && self.bytes
                             == 0)'
+                        - message: a bundle's manifest lies in its rescue's directory
+                          rule: '!has(self.manifest) || self.manifest.contains(''/''
+                            + self.stamp)'
                       deletingAt:
                         format: date-time
                         type: string
@@ -2473,6 +2476,9 @@ spec:
                         on
                       rule: '!has(self.bundle) || self.phase in [''Archived'', ''Deleting'',
                         ''Expired'']'
+                    - message: a HOME expiry record that exported history keeps to
+                        its archive, never a bundle
+                      rule: '!has(self.bundle) || oldSelf.phase != ''Exporting'''
                     - message: a HOME expiry record's bundle is the rescue it names
                       rule: '!has(self.bundle) || (has(self.rescueStamp) && self.bundle.stamp
                         == self.rescueStamp)'

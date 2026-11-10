@@ -33,7 +33,7 @@ func TestRescueVerifierRunsUnderASlot(t *testing.T) {
 	if err != nil || !res.OK || res.ManifestSHA256 != sum || res.Bundles != 2 || res.Bytes != 41984 || res.SharedFreeBytes != 19327352832 {
 		t.Fatalf("verify: %+v %v", res, err)
 	}
-	if e.cmds[0] != "agentd ctl rescue-verify --id "+verifyID || e.pods[0] != ns+"/shelf-1/"+Container {
+	if e.cmds[0] != "agentd ctl rescue-verify --id "+verifyID+" --timeout 50s" || e.pods[0] != ns+"/shelf-1/"+Container {
 		t.Errorf("ran %q in %q", e.cmds[0], e.pods[0])
 	}
 	if release, ok := slots.TryTake(); !ok {
@@ -43,8 +43,13 @@ func TestRescueVerifierRunsUnderASlot(t *testing.T) {
 	}
 
 	e = &fakeExec{out: `{"version":1,"ok":true,"bundles":0,"bytes":0,"sharedFreeBytes":1,"sharedTotalBytes":2}`}
-	if res, err := verifier(t, e, slots).Verify(ctx, ""); err != nil || !res.OK || e.cmds[0] != "agentd ctl rescue-verify" {
+	v := verifier(t, e, slots)
+	v.Shelf.Timeout = 2 * time.Minute
+	if res, err := v.Verify(ctx, ""); err != nil || !res.OK || e.cmds[0] != "agentd ctl rescue-verify --timeout 1m40s" {
 		t.Fatalf("space only: %+v %v, ran %q", res, err, e.cmds)
+	}
+	if got := agentdDeadline(time.Second); got != time.Second {
+		t.Errorf("a one-second exec gives agentd %s", got)
 	}
 
 	exit1 := utilexec.CodeExitError{Err: errors.New("command terminated"), Code: 1}

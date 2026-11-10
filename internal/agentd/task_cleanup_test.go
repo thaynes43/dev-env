@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
@@ -141,6 +142,23 @@ func TestStrictHomeRefusals(t *testing.T) {
 			}
 			return p
 		}, "stray repository "},
+		{"a clone where a worktree stood, its record not pruned", func(t *testing.T, rig rescueRig) string {
+			p := filepath.Join(rig.s.WorkDir(), "reused")
+			gitRun(t, rig.g.env, rig.s.ClonePath("demo"), "worktree", "add", "-q", "-b", "reused", p)
+			if err := os.RemoveAll(p); err != nil {
+				t.Fatal(err)
+			}
+			rig.gitInit(t, p)
+			if !strings.Contains(gitRun(t, rig.g.env, rig.s.ClonePath("demo"), "worktree", "list", "--porcelain"), "worktree "+p) {
+				t.Fatal("git no longer lists the old worktree; the case proves nothing")
+			}
+			return p
+		}, "stray repository "},
+		{"a bare repository under ~/work", func(t *testing.T, rig rescueRig) string {
+			p := filepath.Join(rig.s.WorkDir(), "mirror.git")
+			gitRun(t, rig.g.env, rig.s.WorkDir(), "init", "-q", "--bare", p)
+			return p
+		}, "stray repository "},
 		{"a directory it cannot inspect", func(t *testing.T, rig rescueRig) string {
 			if os.Geteuid() == 0 {
 				t.Skip("root reads every directory")
@@ -231,6 +249,28 @@ type worktreeListFails struct{ Runner }
 
 func (w worktreeListFails) Run(ctx context.Context, c Cmd) (Result, error) {
 	if strings.Contains(strings.Join(c.Args, " "), "worktree list") {
+		return Result{}, &CmdError{Name: "git", ExitCode: 128}
+	}
+	return w.Runner.Run(ctx, c)
+}
+
+// A listed worktree whose git common dir cannot be read refuses: nothing
+// shows it is the clone's.
+func TestStrictHomeRefusesAWorktreeItCannotTie(t *testing.T) {
+	rig := newRescueRig(t)
+	rep, err := Rescue(context.Background(), commonDirFails{Runner: rig.r}, rig.s, "demo-1006-170000", rescueNow, RescueOptions{StrictHome: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.OK || rep.StrictHome == nil || !strings.HasPrefix(rep.StrictHome.Refused, "cannot inspect "+rig.ws.Worktree+": git rev-parse --git-common-dir") {
+		t.Fatalf("not refused: %+v %+v", rep, rep.StrictHome)
+	}
+}
+
+type commonDirFails struct{ Runner }
+
+func (w commonDirFails) Run(ctx context.Context, c Cmd) (Result, error) {
+	if strings.Contains(strings.Join(c.Args, " "), "--git-common-dir") {
 		return Result{}, &CmdError{Name: "git", ExitCode: 128}
 	}
 	return w.Runner.Run(ctx, c)
@@ -329,7 +369,7 @@ func (v verifyRig) bundle(t *testing.T) string {
 
 func TestRescueVerifyReHashesEveryBundle(t *testing.T) {
 	v := newVerifyRig(t)
-	res, err := VerifyRescue(v.s, v.id)
+	res, err := VerifyRescue(context.Background(), v.s, v.id)
 	if err != nil || !res.OK || res.Refusal != "" {
 		t.Fatalf("verify: %+v %v", res, err)
 	}
@@ -343,13 +383,13 @@ func TestRescueVerifyReHashesEveryBundle(t *testing.T) {
 		t.Errorf("space: %d of %d", res.SharedFreeBytes, res.SharedTotalBytes)
 	}
 	// Without --id it reports the space only.
-	res, err = VerifyRescue(v.s, "")
+	res, err = VerifyRescue(context.Background(), v.s, "")
 	if err != nil || !res.OK || res.ID != "" || res.ManifestSHA256 != "" || res.SharedFreeBytes != 18<<30 {
 		t.Fatalf("space only: %+v %v", res, err)
 	}
 	// Any change to the manifest is another digest, even a valid one.
 	v.editManifest(t, func(m *protocol.RescueManifest) { m.CreatedAt = m.CreatedAt.Add(1) })
-	again, err := VerifyRescue(v.s, v.id)
+	again, err := VerifyRescue(context.Background(), v.s, v.id)
 	if err != nil || !again.OK || again.ManifestSHA256 == hex.EncodeToString(sum[:]) {
 		t.Fatalf("a changed manifest kept its digest: %+v %v", again, err)
 	}
@@ -428,39 +468,117 @@ func TestRescueVerifyRefusals(t *testing.T) {
 		{"a repo without a verified bundle", func(t *testing.T, v verifyRig) {
 			v.editManifest(t, func(m *protocol.RescueManifest) { m.Repos[0].Bundle.Verified = false })
 		}, protocol.RescueVerifyBundleMismatch},
+		{"no bundle at all", func(t *testing.T, v verifyRig) {
+			v.editManifest(t, func(m *protocol.RescueManifest) { m.Repos = nil })
+		}, protocol.RescueVerifyBundleMismatch},
+		{"the manifest for another directory", func(t *testing.T, v verifyRig) {
+			v.editManifest(t, func(m *protocol.RescueManifest) { m.Dir += "-2" })
+		}, protocol.RescueVerifyBundleMismatch},
+		{"the manifest over 4 MiB", func(t *testing.T, v verifyRig) {
+			writeFile(t, v.abs(v.manifest), strings.Repeat(" ", maxManifestBytes+1))
+		}, protocol.RescueVerifyBundleMismatch},
+		{"the manifest a link to a copy", func(t *testing.T, v verifyRig) {
+			copyTo := filepath.Join(v.s.SharedDir, "manifest-copy.json")
+			data, _ := os.ReadFile(v.abs(v.manifest))
+			writeFile(t, copyTo, string(data))
+			if err := os.Remove(v.abs(v.manifest)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(copyTo, v.abs(v.manifest)); err != nil {
+				t.Fatal(err)
+			}
+		}, protocol.RescueVerifyBundleMissing},
+		{"the rescue a link to a copy", func(t *testing.T, v verifyRig) {
+			moved := filepath.Join(v.s.SharedDir, "moved-rescue")
+			if err := os.Rename(v.abs(v.dir), moved); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(moved, v.abs(v.dir)); err != nil {
+				t.Fatal(err)
+			}
+		}, protocol.RescueVerifyBundleMissing},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := newVerifyRig(t)
 			tc.tamper(t, v)
-			res, err := VerifyRescue(v.s, v.id)
+			res, err := VerifyRescue(context.Background(), v.s, v.id)
 			if err != nil || res.OK || res.Refusal != tc.code || res.Detail == "" || res.SharedTotalBytes == 0 {
 				t.Fatalf("got %+v %v, want refusal %s", res, err, tc.code)
 			}
+			if len(res.Detail) > maxVerifyDetail {
+				t.Errorf("detail of %d bytes", len(res.Detail))
+			}
 		})
+	}
+}
+
+// A refusal's detail stays bounded whatever the manifest says.
+func TestRescueVerifyBoundsItsDetail(t *testing.T) {
+	v := newVerifyRig(t)
+	v.editManifest(t, func(m *protocol.RescueManifest) { m.Session = strings.Repeat("s", 1<<20) })
+	res, err := VerifyRescue(context.Background(), v.s, v.id)
+	if err != nil || res.Refusal != protocol.RescueVerifyBundleMismatch || len(res.Detail) > maxVerifyDetail {
+		t.Fatalf("%v %s, detail of %d bytes", err, res.Refusal, len(res.Detail))
+	}
+	if got := clip("ab\u00e9cd", 5); got != "ab..." || clip("abc", 5) != "abc" {
+		t.Errorf("clip: %q", got)
+	}
+}
+
+// A verify waits for a prune's exclusive lock only until its deadline, and
+// stops hashing once its context ends.
+func TestRescueVerifyEndsAtItsDeadline(t *testing.T) {
+	v := newVerifyRig(t)
+	old := shelfLockPoll
+	shelfLockPoll = time.Millisecond
+	t.Cleanup(func() { shelfLockPoll = old })
+	unlock, err := lockShelf(v.s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := VerifyRescue(ctx, v.s, v.id); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("under a prune's lock: %v", err)
+	}
+	unlock()
+	// Other verifies share the lock.
+	shared, err := lockShelfShared(context.Background(), v.s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := VerifyRescue(context.Background(), v.s, v.id); err != nil || !res.OK {
+		t.Errorf("beside another verify: %+v %v", res, err)
+	}
+	shared()
+	done, stop := context.WithCancel(context.Background())
+	stop()
+	if _, _, err := hashRegular(done, v.bundle(t)); !errors.Is(err, context.Canceled) {
+		t.Errorf("hashing after the context ended: %v", err)
 	}
 }
 
 // What proves nothing either way is an error, never a refusal or ok.
 func TestRescueVerifyFailures(t *testing.T) {
 	v := newVerifyRig(t)
-	if _, err := VerifyRescue(v.s, "../etc/20261006-1730"); err == nil {
+	if _, err := VerifyRescue(context.Background(), v.s, "../etc/20261006-1730"); err == nil {
 		t.Error("a bad id was read")
 	}
 	old := sharedIsMounted
 	sharedIsMounted = func(string, string) error { return errors.New("not mounted") }
-	if _, err := VerifyRescue(v.s, v.id); err == nil {
+	if _, err := VerifyRescue(context.Background(), v.s, v.id); err == nil {
 		t.Error("verified without the shared volume")
 	}
 	sharedIsMounted = old
 	sharedStatfs = func(string, *syscall.Statfs_t) error { return syscall.EIO }
-	if _, err := VerifyRescue(v.s, ""); err == nil {
+	if _, err := VerifyRescue(context.Background(), v.s, ""); err == nil {
 		t.Error("no statfs, still an answer")
 	}
 	sharedStatfs = func(_ string, st *syscall.Statfs_t) error {
 		*st = syscall.Statfs_t{Bsize: 4096, Blocks: 1, Bfree: 2}
 		return nil
 	}
-	if _, err := VerifyRescue(v.s, ""); err == nil {
+	if _, err := VerifyRescue(context.Background(), v.s, ""); err == nil {
 		t.Error("contradictory figures, still an answer")
 	}
 }
@@ -492,8 +610,14 @@ func TestDropLogRemovesOnlyTheSessionsLogCopy(t *testing.T) {
 		}
 	}
 	// Again: nothing to remove is no error.
-	if res, err := DropLog(rig.s, "demo-1006-170000"); err != nil || res.Removed {
+	if res, err := DropLog(rig.s, "demo-1006-170000"); err != nil || res.Removed || res.Bytes != 0 {
 		t.Fatalf("a second drop-log: %+v %v", res, err)
+	}
+	// An empty copy still reports its size, 0.
+	writeFile(t, own, "")
+	data, _ := json.Marshal(func() protocol.DropLogResult { r, _ := DropLog(rig.s, "demo-1006-170000"); return r }())
+	if !strings.Contains(string(data), `"removed":true,"bytes":0`) {
+		t.Errorf("an empty copy: %s", data)
 	}
 }
 
