@@ -4,13 +4,19 @@ package controller
 // at Waiting, and the clean-up's gauges.
 
 import (
+	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/shelf"
 )
 
 // TestTaskCleanupLeavesTheEndedComputeToTheReclaimAtWaiting: a task record at
@@ -114,5 +120,129 @@ func TestTaskRecordsLeaveTheExpiryGaugesWhileTheCleanupIsOn(t *testing.T) {
 	task := gaugeValues(t, &TaskCleanupCollector{Reader: f.c, Namespace: f.s.Namespace, Now: func() time.Time { return *f.clock }, Reconciler: f.r})
 	if task[MetricTaskCleanupSessions+"/"+taskStateRefused] != 1 || task[MetricTaskCleanupPaused+"/"+taskPauseMaxActiveZero] != 0 {
 		t.Fatalf("the clean-up's gauges: %v", task)
+	}
+}
+
+// TestTaskCleanupSlots: a record holds a slot at Rescuing, Archived or Deleting
+// only while it is neither refused nor held; Waiting and Expired hold none.
+func TestTaskCleanupSlots(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC))
+	for _, tc := range []struct {
+		phase, refusal string
+		held, want     bool
+	}{
+		{v1alpha1.HomeExpiryWaiting, "", false, false},
+		{v1alpha1.HomeExpiryRescuing, "", false, true},
+		{v1alpha1.HomeExpiryArchived, "", false, true},
+		{v1alpha1.HomeExpiryDeleting, "", false, true},
+		{v1alpha1.HomeExpiryExpired, "", false, false},
+		{v1alpha1.HomeExpiryRescuing, expiryVolumeNotReleased, false, false},
+		{v1alpha1.HomeExpiryRescuing, expiryBundleMismatch, false, false},
+		{v1alpha1.HomeExpiryArchived, expiryBundleMissing, false, false},
+		{v1alpha1.HomeExpiryDeleting, expiryForbidden, false, false},
+		{v1alpha1.HomeExpiryDeleting, expiryClaimInUse, false, false},
+		{v1alpha1.HomeExpiryRescuing, "", true, false},
+	} {
+		tf := newTerminalFixture()
+		s := tf.s
+		h := s.Status.PrivateHistory
+		h.Expiry = &v1alpha1.PrivateHomeExpiryStatus{Version: 1, Phase: tc.phase, Refusal: tc.refusal, GraceStart: at, DueAt: at}
+		if tc.held {
+			s.Annotations = map[string]string{v1alpha1.AnnotationHomeExpiry: v1alpha1.HomeExpiryHold}
+		}
+		if got := taskActive(s); got != tc.want {
+			t.Errorf("%s refused %q held %v: holds a slot %v, want %v", tc.phase, tc.refusal, tc.held, got, tc.want)
+		}
+	}
+}
+
+// TestTaskCleanupBusyShelfIsAskedOnceAMinute: a busy shelf is an answer kept
+// for the minute, like any other, so queued Sessions do not ask it, or make
+// the uncached reads, on every reconcile.
+func TestTaskCleanupBusyShelfIsAskedOnceAMinute(t *testing.T) {
+	f := newTaskFixture(t, nil)
+	f.verifier.err = shelf.ErrSlotsBusy
+	f.run(t, 6)
+	if n := len(f.verifier.calls); n != 1 {
+		t.Fatalf("the shelf was asked %d times in a minute; want once", n)
+	}
+	if !f.r.TaskCleanupPaused(*f.clock)[taskPauseShelfUnavailable] {
+		t.Fatal("a busy shelf does not pause new starts")
+	}
+	f.tick(t, f.clock.Add(taskFreeCacheTTL+time.Second))
+	f.run(t, 1)
+	if n := len(f.verifier.calls); n != 2 {
+		t.Fatalf("the shelf was asked %d times after the minute; want twice", n)
+	}
+	f.kept(t)
+}
+
+// TestTaskCleanupFourWorkersOnALaggingCacheStayUnderTheCap: one operator's
+// four reconcile workers admit four due Sessions at once on a cache that has
+// not seen any of their writes; the reservations keep it to the cap.
+func TestTaskCleanupFourWorkersOnALaggingCacheStayUnderTheCap(t *testing.T) {
+	f := newTaskFixture(t, nil)
+	ctx := context.Background()
+	var sessions []*v1alpha1.AgentSession
+	for i := range 4 {
+		s := f.session(t).DeepCopy()
+		s.ObjectMeta = metav1.ObjectMeta{Name: fmt.Sprintf("lag-%d", i), Namespace: s.Namespace, UID: k8stypes.UID(fmt.Sprintf("uid-lag-%d", i)), Finalizers: []string{Finalizer}}
+		at := metav1.NewTime(f.observed.Add(time.Duration(i) * time.Second))
+		h := s.Status.PrivateHistory
+		h.SessionUID = string(s.UID)
+		h.Expiry = &v1alpha1.PrivateHomeExpiryStatus{Version: 1, ExecutorUID: h.LastExecutor.PodUID, HomeUID: h.HomeUID, GraceStart: at, DueAt: at, Phase: v1alpha1.HomeExpiryWaiting}
+		st := s.Status
+		if err := f.c.Create(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.c.Get(ctx, client.ObjectKeyFromObject(s), s); err != nil {
+			t.Fatal(err)
+		}
+		s.Status = st
+		if err := f.c.Status().Update(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.c.Delete(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.c.Get(ctx, client.ObjectKeyFromObject(s), s); err != nil {
+			t.Fatal(err)
+		}
+		sessions = append(sessions, s)
+	}
+	// The cache: a list frozen before any admission.
+	var frozen v1alpha1.AgentSessionList
+	if err := f.c.List(ctx, &frozen, client.InNamespace(f.s.Namespace)); err != nil {
+		t.Fatal(err)
+	}
+	r := f.fresh()
+	r.Client = interceptor.NewClient(f.c, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+		if l, ok := list.(*v1alpha1.AgentSessionList); ok {
+			frozen.DeepCopyInto(l)
+			return nil
+		}
+		return c.List(ctx, list, opts...)
+	}})
+	var wg sync.WaitGroup
+	admitted := make([]bool, len(sessions))
+	for i, s := range sessions {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			admitted[i] = r.taskCleanupAdmittable(ctx, s, *f.clock, true)
+		}()
+	}
+	wg.Wait()
+	n := 0
+	for _, a := range admitted {
+		if a {
+			n++
+		}
+	}
+	if n != DefaultTaskCleanupMaxActive {
+		t.Fatalf("%d of four admitted at once on a lagging cache; want the cap, %d", n, DefaultTaskCleanupMaxActive)
+	}
+	if !admitted[0] || !admitted[1] {
+		t.Fatalf("admitted %v; want the two oldest", admitted)
 	}
 }

@@ -94,7 +94,7 @@ func TestTaskCleanupRescueRefusalsKeepTheHome(t *testing.T) {
 				t.Fatalf("the hold pod %s stays after the refusal", p.UID)
 			}
 			f.kept(t)
-			if taskActive(e) {
+			if taskActive(f.session(t)) {
 				t.Fatal("a refused record holds its slot")
 			}
 			if want := map[bool]int{false: 0, true: 1}[tc.breaker]; f.r.taskCleanup.failures != want {
@@ -279,13 +279,13 @@ func TestTaskCleanupReleaseCheck(t *testing.T) {
 		if p := f.named(t); p != nil {
 			t.Fatalf("a Pod %s mounts the HOME before its release was shown", p.Name)
 		}
-		if e := f.expiry(t); e.Refusal != "" || !taskActive(e) {
+		if e := f.expiry(t); e.Refusal != "" || !taskActive(f.session(t)) {
 			t.Fatalf("record %+v; want it waiting with its slot", e)
 		}
 		f.tick(t, f.clock.Add(taskReleaseWait+time.Minute))
 		f.run(t, 2)
 		e := f.expiry(t)
-		if e.Refusal != expiryVolumeNotReleased || taskActive(e) || f.named(t) != nil {
+		if e.Refusal != expiryVolumeNotReleased || taskActive(f.session(t)) || f.named(t) != nil {
 			t.Fatalf("record %+v, pod %v; want volume_not_released, the slot free, no hold pod", e, f.named(t))
 		}
 		if c := f.condition(t, ConditionPodReady); c == nil || !strings.Contains(c.Message, "did not show the HOME's volume released within 30m0s, so the stop is unproven") {
@@ -626,4 +626,105 @@ func TestTaskCleanupOldAgentImageIsRefusedAndPausesTheCleanup(t *testing.T) {
 		t.Fatalf("the breaker counted %d, want 1", f.r.taskCleanup.failures)
 	}
 	f.kept(t)
+}
+
+// TestTaskCleanupStuckAttemptFreesItsSlot: a hold pod that never runs gives up
+// after half an hour: attempt_stuck, the hold pod goes, the slot frees, the
+// breaker counts it, the HOME stays, and an hour later a new hold pod tries.
+func TestTaskCleanupStuckAttemptFreesItsSlot(t *testing.T) {
+	f := newTaskFixture(t, nil)
+	f.run(t, 8)
+	hold := f.named(t)
+	if hold == nil || !isHoldPod(hold) {
+		t.Fatalf("no hold pod: %+v", f.expiry(t))
+	}
+	f.run(t, 2)
+	if e := f.expiry(t); e.Refusal != "" || !taskActive(f.session(t)) {
+		t.Fatalf("refused before the deadline: %+v", e)
+	}
+	f.tick(t, f.clock.Add(taskAttemptDeadline+time.Minute))
+	f.run(t, 3)
+	e := f.expiry(t)
+	if e.Refusal != expiryAttemptStuck || taskActive(f.session(t)) || f.named(t) != nil {
+		t.Fatalf("record %+v, pod %v; want attempt_stuck, the slot free, the hold pod gone", e, f.named(t))
+	}
+	if f.r.taskCleanup.failures != 1 {
+		t.Fatalf("the breaker counted %d, want 1", f.r.taskCleanup.failures)
+	}
+	f.kept(t)
+	f.tick(t, f.clock.Add(taskAttemptRetry+time.Minute))
+	f.run(t, 4)
+	if next := f.named(t); next == nil || !isHoldPod(next) || next.UID == hold.UID || f.expiry(t).Refusal != "" {
+		t.Fatalf("no new hold pod an hour later: %+v, record %+v", next, f.expiry(t))
+	}
+}
+
+// TestTaskCleanupRescueOfAnotherOperatorRunsAgain: a rescue in the hold pod
+// that this operator did not run and grade with --strict-home (an earlier
+// operator, or DESIGN-025's) is never kept: the strict rescue runs first.
+func TestTaskCleanupRescueOfAnotherOperatorRunsAgain(t *testing.T) {
+	f := newTaskFixture(t, nil)
+	f.run(t, 2)
+	hold := f.toHold(t)
+	// A valid rescue in the hold pod, written by someone else.
+	f.updateStatus(t, func(st *v1alpha1.AgentSessionStatus) {
+		at := metav1.NewTime(*f.clock)
+		st.Rescue = &v1alpha1.RescueStatus{Stamp: "20261111-1100", At: &at, PodUID: string(hold.UID), Generation: f.s.Generation, Result: v1alpha1.RescueCleanAndPushed}
+	})
+	ran := len(f.rescuer.ranIn())
+	f.report(func(p *corev1.Pod) (protocol.RescueReport, error) {
+		rep := cleanRescue(p.Name, "20261111-1200")
+		rep.StrictHome = &protocol.StrictHomeCheck{}
+		return rep, nil
+	})
+	f.run(t, 2)
+	if n := len(f.rescuer.ranIn()); n != ran+1 {
+		t.Fatalf("the strict rescue did not run: %d then %d", ran, n)
+	}
+	if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryArchived || e.Bundle == nil || e.Bundle.Stamp != "20261111-1200" {
+		t.Fatalf("record %+v; want Archived on the strict rescue's stamp", e)
+	}
+}
+
+// TestTaskCleanupChecksTheLastHoldPodsNode: when the clean-up's last hold pod
+// stood on another node than the executor, the next hold pod waits until that
+// node no longer lists the HOME's volume either.
+func TestTaskCleanupChecksTheLastHoldPodsNode(t *testing.T) {
+	f := newTaskFixture(t, nil)
+	other := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-b", UID: "node-2"}}
+	if err := f.c.Create(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	f.run(t, 8)
+	hold := f.named(t)
+	if hold == nil || !isHoldPod(hold) {
+		t.Fatalf("no hold pod: %+v", f.expiry(t))
+	}
+	// The scheduler put it on worker-b, where it ended; worker-b still
+	// lists the volume while it tears the pod down.
+	hold.Spec.NodeName = "worker-b"
+	if err := f.c.Update(context.Background(), hold); err != nil {
+		t.Fatal(err)
+	}
+	hold = f.named(t)
+	hold.Status.Phase = corev1.PodFailed
+	if err := f.c.Status().Update(context.Background(), hold); err != nil {
+		t.Fatal(err)
+	}
+	other.Status.VolumesInUse = []corev1.UniqueVolumeName{homeVolumeUniqueName()}
+	if err := f.c.Status().Update(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	f.run(t, 5)
+	if p := f.named(t); p != nil {
+		t.Fatalf("a new hold pod %s while the last one's node lists the volume", p.UID)
+	}
+	other.Status.VolumesInUse = nil
+	if err := f.c.Status().Update(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	f.run(t, 2)
+	if p := f.named(t); p == nil || !isHoldPod(p) || p.UID == hold.UID {
+		t.Fatalf("no new hold pod once the node released the volume: %v", p)
+	}
 }

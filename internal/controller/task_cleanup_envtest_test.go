@@ -144,7 +144,7 @@ func TestTaskCleanupQueueCapWithTwoOperators(t *testing.T) {
 				}
 				t.Fatal(err)
 			}
-			if h := s.Status.PrivateHistory; h != nil && taskActive(h.Expiry) {
+			if taskActive(s) {
 				n++
 			}
 		}

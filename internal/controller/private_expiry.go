@@ -96,7 +96,7 @@ var homeExpiryReasons = []string{
 	protocol.HistoryErrCredentialInTree, protocol.HistoryErrTooLarge, protocol.HistoryErrChanged,
 	expiryShelfUnavailable, expiryArchiveConflict, expiryArchiveMissing, expiryArchiveMismatch, expiryExportInvalid,
 	expiryPlanTooLarge, expiryPreconditionFailed, expiryForbidden,
-	expiryVolumeNotReleased, expiryRescueRefused, expiryBundleMissing, expiryBundleMismatch,
+	expiryVolumeNotReleased, expiryRescueRefused, expiryAttemptStuck, expiryBundleMissing, expiryBundleMismatch,
 }
 
 // homeExpiryPhaseOrder is the only order an expiry record moves in.
@@ -1262,7 +1262,10 @@ func (r *Reconciler) refuseHomeExpiry(ctx context.Context, v *expiryView, obs *o
 	if ref.reason == expiryUnknown {
 		return r.expiryUnknown(ctx, v.s, obs, ref.err)
 	}
-	r.countExpiryRefused(ref.reason)
+	task := r.taskPolicy(v.s)
+	if !task {
+		r.countExpiryRefused(ref.reason)
+	}
 	log.FromContext(ctx).Info("the HOME expiry is refused; the HOME stays", "reason", ref.reason, "error", ref.err.Error())
 	obs.homeExpiry = &homeExpiryNote{reason: "Refused", message: truncate(ref.Error())}
 	fresh := v.s.DeepCopy()
@@ -1272,10 +1275,8 @@ func (r *Reconciler) refuseHomeExpiry(ctx context.Context, v *expiryView, obs *o
 	if err := r.writeExpiry(ctx, v, fresh); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
-	if r.taskPolicy(v.s) {
-		if r.TaskCleanupCounters != nil {
-			r.TaskCleanupCounters.Refused.WithLabelValues(ref.reason).Inc()
-		}
+	if task {
+		r.countTaskRefused(ref.reason)
 		r.event(v.s, corev1.EventTypeWarning, "TaskCleanup", "TaskCleanupRefused", "the task clean-up keeps the HOME: "+ref.Error())
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}

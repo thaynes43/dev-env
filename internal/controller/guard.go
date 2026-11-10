@@ -420,6 +420,7 @@ const (
 	// the hold pod refused, so the HOME is kept and the slot freed.
 	holdReleaseCleanupOff    expiryHoldRelease = "the task clean-up is turned off"
 	holdReleaseRescueRefused expiryHoldRelease = "the rescue in it refused, so the clean-up keeps the HOME"
+	holdReleaseRefused       expiryHoldRelease = "the clean-up's attempt is refused, so it keeps the HOME and frees its slot"
 )
 
 // expiryHoldEvidence is what the HOME expiry's hold pod guard judges a
@@ -488,6 +489,10 @@ func expiryHoldRemovalAllowed(pod *corev1.Pod, ev expiryHoldEvidence) error {
 		}
 	case holdReleaseCleanupOff:
 		if task && !ev.taskOn {
+			return nil
+		}
+	case holdReleaseRefused:
+		if task && taskRetryRefusal(h.Expiry) {
 			return nil
 		}
 	case holdReleaseRescueRefused:

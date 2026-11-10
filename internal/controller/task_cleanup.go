@@ -83,14 +83,26 @@ const (
 	// taskChildrenRetry: a finished parent whose descendants run is looked
 	// at again this soon.
 	taskChildrenRetry = 15 * time.Minute
+	// taskAttemptDeadline: a clean-up whose hold pods ran no rescue for this
+	// long (a hold pod that never runs, keeps ending, or cannot be reached by
+	// exec) is refused attempt_stuck: its hold pod goes, its slot frees, and
+	// it is tried again an hour later. A hold pod starts in minutes and a
+	// rescue takes at most RescueTimeout.
+	taskAttemptDeadline = 30 * time.Minute
+	taskAttemptRetry    = time.Hour
+	// taskMemoryKeep bounds how long the leader remembers a Session it no
+	// longer hears from.
+	taskMemoryKeep = 8 * 24 * time.Hour
 )
 
 // The task clean-up's own refusal reasons (DESIGN-061 sections 1.1 and 3).
-// volume_not_released and rescue_refused free the record's slot; the bundle
-// refusals keep the HOME at the verify that found them.
+// Every refusal keeps the HOME and frees the record's slot (taskActive); one
+// at Rescuing also ends the attempt, so its hold pod goes and it comes back
+// in through the queue.
 const (
 	expiryVolumeNotReleased = "volume_not_released"
 	expiryRescueRefused     = "rescue_refused"
+	expiryAttemptStuck      = "attempt_stuck"
 	expiryBundleMissing     = protocol.RescueVerifyBundleMissing
 	expiryBundleMismatch    = protocol.RescueVerifyBundleMismatch
 )
@@ -145,6 +157,13 @@ type taskCleanupState struct {
 	admittedAt  map[types.UID]time.Time
 	releaseWait map[types.UID]time.Time
 	children    map[types.UID]time.Time
+	// attempt: since when the clean-up's hold pods ran no rescue
+	// (taskAttemptDeadline); holdNode: the node each Session's last hold pod
+	// stood on, for the next release check; graded: the hold pods whose
+	// rescue this operator ran with --strict-home and graded, by stamp.
+	attempt     map[types.UID]time.Time
+	holdNode    map[types.UID]string
+	graded      map[types.UID]string
 	failures    int
 	lastFailure time.Time
 	freeAt      time.Time
@@ -157,6 +176,29 @@ func (st *taskCleanupState) init() {
 	if st.reserved == nil {
 		st.reserved, st.admittedAt = map[types.UID]time.Time{}, map[types.UID]time.Time{}
 		st.releaseWait, st.children = map[types.UID]time.Time{}, map[types.UID]time.Time{}
+		st.attempt, st.holdNode, st.graded = map[types.UID]time.Time{}, map[types.UID]string{}, map[types.UID]string{}
+	}
+}
+
+// prune forgets what the leader remembers of Sessions it has not heard from
+// for taskMemoryKeep. The caller holds the lock.
+func (st *taskCleanupState) prune(now time.Time) {
+	for uid, at := range st.admittedAt {
+		if now.Sub(at) > taskMemoryKeep {
+			delete(st.admittedAt, uid)
+		}
+	}
+	for _, m := range []map[types.UID]time.Time{st.releaseWait, st.attempt} {
+		for uid, at := range m {
+			if now.Sub(at) > taskMemoryKeep {
+				delete(m, uid)
+			}
+		}
+	}
+	for uid, until := range st.children {
+		if now.After(until) {
+			delete(st.children, uid)
+		}
 	}
 }
 
@@ -252,28 +294,39 @@ func (r *Reconciler) taskCleanupAllowed(name string) bool {
 	return len(r.TaskCleanupSessions) == 0 || slices.Contains(r.TaskCleanupSessions, name)
 }
 
-// slotFreeRefusal: a record refused for one of these holds no slot; it goes
-// back into the queue at its retry.
-func slotFreeRefusal(reason string) bool {
-	return reason == expiryVolumeNotReleased || reason == expiryRescueRefused
+// taskRetryRefusal reports whether a record's refusal ended its attempt: one
+// at Rescuing. Its hold pod goes, and at its retry it comes back in through
+// the queue with a new hold intent. A refusal at Archived or Deleting has no
+// hold pod; it is re-checked in place, as DESIGN-025's are.
+func taskRetryRefusal(e *v1alpha1.PrivateHomeExpiryStatus) bool {
+	return e != nil && e.Phase == v1alpha1.HomeExpiryRescuing && e.Refusal != ""
 }
 
 // taskRefusalRetry is how long a recorded refusal waits for its re-check: a
-// refused rescue a day, anything else 15 minutes.
+// refused rescue a day, a stuck attempt an hour, anything else 15 minutes.
 func taskRefusalRetry(reason string) time.Duration {
-	if reason == expiryRescueRefused {
+	switch reason {
+	case expiryRescueRefused:
 		return taskRescueRefusedRetry
+	case expiryAttemptStuck:
+		return taskAttemptRetry
 	}
 	return homeExpiryRefusalRetry
 }
 
 // taskActive reports whether a task record holds one of the clean-up's slots:
-// at Rescuing, Archived or Deleting, and not refused for a reason that frees it.
-func taskActive(e *v1alpha1.PrivateHomeExpiryStatus) bool {
-	if e == nil || slotFreeRefusal(e.Refusal) {
+// at Rescuing, Archived or Deleting, not refused and not held by the owner. A
+// refused or held record keeps its HOME and waits for a person, so it does
+// not keep others from starting. One at Rescuing comes back in through the
+// queue; one at Archived or Deleting, which needs no hold pod, goes on from
+// its re-check, or once the hold is lifted, so the cap can then be passed by
+// that one for its last minutes.
+func taskActive(s *v1alpha1.AgentSession) bool {
+	h := s.Status.PrivateHistory
+	if h == nil || h.Expiry == nil || h.Expiry.Refusal != "" || homeExpiryHeld(s) {
 		return false
 	}
-	switch e.Phase {
+	switch h.Expiry.Phase {
 	case v1alpha1.HomeExpiryRescuing, v1alpha1.HomeExpiryArchived, v1alpha1.HomeExpiryDeleting:
 		return true
 	}
@@ -433,13 +486,18 @@ func (r *Reconciler) stepTaskCleanup(ctx context.Context, v *expiryView, obs *ob
 		}
 		return ctrl.Result{}, false, nil
 	}
+	if p := v.ownHold(); taskRetryRefusal(e) && p != nil && p.DeletionTimestamp.IsZero() {
+		// The refusal ended the attempt: its hold pod goes, and the HOME
+		// stays.
+		return r.removeExpiryHold(ctx, v, obs, p, holdReleaseRefused)
+	}
 	if retry := taskRefusalRetry(e.Refusal); e.Refusal != "" && e.RefusalAt != nil && v.now.Before(e.RefusalAt.Add(retry)) && !v.now.Before(e.RefusalAt.Time) {
 		return ctrl.Result{RequeueAfter: min(e.RefusalAt.Add(retry).Sub(v.now)+time.Second, homeExpiryMaxWait)}, false, nil
 	}
 	if ref := expiryRecheck(v); ref != nil {
 		return r.refuseHomeExpiry(ctx, v, obs, ref)
 	}
-	if slotFreeRefusal(e.Refusal) {
+	if taskRetryRefusal(e) {
 		return r.taskCleanupRetry(ctx, v, obs)
 	}
 	var (
@@ -481,6 +539,12 @@ func (r *Reconciler) taskCleanupWait(ctx context.Context, v *expiryView, obs *ob
 	if !release && v.now.Before(due) {
 		return ctrl.Result{RequeueAfter: min(due.Sub(v.now)+time.Second, homeExpiryMaxWait)}, false, nil
 	}
+	// The allowlist, a pause and the queue first, from the cache and memory:
+	// the descendants' check below lists every Session uncached.
+	if note, wait, quiet := r.taskCleanupNotAdmitted(ctx, v.s, v.now, false); quiet {
+		obs.homeExpiry = note
+		return ctrl.Result{RequeueAfter: wait}, false, nil
+	}
 	if !taskCleanupPurged(v.s) {
 		// A finished task waits while its descendants run; a purged one does
 		// not (DESIGN-061 2).
@@ -491,10 +555,6 @@ func (r *Reconciler) taskCleanupWait(ctx context.Context, v *expiryView, obs *ob
 			return ctrl.Result{RequeueAfter: taskChildrenRetry}, false, nil
 		}
 		r.taskUnblockChildren(v.s.UID)
-	}
-	if note, wait, quiet := r.taskCleanupNotAdmitted(ctx, v.s, v.now, false); quiet {
-		obs.homeExpiry = note
-		return ctrl.Result{RequeueAfter: wait}, false, nil
 	}
 	if !r.taskCleanupAdmittable(ctx, v.s, v.now, true) {
 		obs.homeExpiry = taskQueuedNote(r.TaskCleanupMaxActive)
@@ -522,11 +582,12 @@ func (r *Reconciler) taskCleanupWait(ctx context.Context, v *expiryView, obs *ob
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
 }
 
-// taskCleanupRetry is the re-check of a refusal that freed the record's slot,
-// once its time has come: volume_not_released looks at the volume once more
-// (no slot), and either one goes back into the queue, a refused rescue last.
-// The write that re-admits it clears the refusal and makes a new hold intent,
-// so the next hold pod's rescue is the one judged.
+// taskCleanupRetry is the re-check of a refusal at Rescuing, once its time has
+// come and the common re-check passed: volume_not_released looks at the
+// volume once more (no slot), then the record goes back into the queue, a
+// refused or stuck attempt last. The write that re-admits it clears the
+// refusal and makes a new hold intent, so the next hold pod's rescue is the
+// one judged.
 func (r *Reconciler) taskCleanupRetry(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
 	e := v.record()
 	if v.pod != nil || len(v.mounts) > 0 {
@@ -609,11 +670,24 @@ func (r *Reconciler) taskCleanupRescue(ctx context.Context, v *expiryView, obs *
 	}
 
 	hold := pod
+	r.taskRememberHoldNode(v.s.UID, hold.Spec.NodeName)
 	if !hold.DeletionTimestamp.IsZero() {
 		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
 	}
 	if !expiryHoldAnnotated(hold, e) || !isHoldPod(hold) || !controlledBySession(hold, v.s) || !privateExecutorUsesHome(hold, v.s.Status.PrivateHistory.HomeClaim) {
 		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryIdentityChanged, "the hold pod %s is not bound to the HOME and the record", hold.Name))
+	}
+	rec := v.s.Status.Rescue
+	ours := rec != nil && rescueRanIn(v.s, hold) && r.taskGraded(hold.UID, rec.Stamp)
+	if ours {
+		r.taskForgetAttempt(v.s.UID)
+	} else if since := r.taskAttemptSince(v.s.UID, v.now); v.now.Sub(since) >= taskAttemptDeadline {
+		// No rescue in this clean-up's hold pods for half an hour: the pod
+		// never ran, kept ending, or could not be reached. The attempt ends,
+		// the HOME stays, and the breaker counts it.
+		r.taskForgetAttempt(v.s.UID)
+		r.taskBreaker(true, v.now)
+		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryAttemptStuck, "the clean-up's hold pods ran no rescue for %s; hold pod %s is %s", taskAttemptDeadline, hold.Name, hold.Status.Phase))
 	}
 	if podEnded(hold) {
 		return r.removeExpiryHold(ctx, v, obs, hold, holdReleaseEnded)
@@ -622,9 +696,14 @@ func (r *Reconciler) taskCleanupRescue(ctx context.Context, v *expiryView, obs *
 		obs.homeExpiry = &homeExpiryNote{reason: taskReasonSaving, message: "the hold pod " + hold.Name + " is starting"}
 		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
 	}
-	rec := v.s.Status.Rescue
-	if !rescued(v.s) || !rescueRanIn(v.s, hold) {
-		if rec != nil && rec.Result == v1alpha1.RescueFailed && rescueRanIn(v.s, hold) {
+	if !ours {
+		// No rescue in this hold pod yet, or one this operator did not run
+		// and grade with --strict-home (an earlier operator, or DESIGN-025):
+		// it runs, so only the strict rescue's verdict is ever kept.
+		return r.taskRescue(ctx, v, obs, hold)
+	}
+	if !rescued(v.s) {
+		if rec.Result == v1alpha1.RescueFailed {
 			if taskRescueRefusedIn(v.s, string(hold.UID)) {
 				// A refusal: the hold pod goes first, then the refusal is
 				// recorded, and the HOME stays (DESIGN-061 3).
@@ -642,6 +721,64 @@ func (r *Reconciler) taskCleanupRescue(ctx context.Context, v *expiryView, obs *
 		return r.taskRescue(ctx, v, obs, hold)
 	}
 	return r.saveTaskBundle(ctx, v, hold, obs)
+}
+
+func (r *Reconciler) taskAttemptSince(uid types.UID, now time.Time) time.Time {
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.init()
+	at, ok := st.attempt[uid]
+	if !ok || now.Before(at) {
+		st.attempt[uid] = now
+		return now
+	}
+	return at
+}
+
+func (r *Reconciler) taskForgetAttempt(uid types.UID) {
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.init()
+	delete(st.attempt, uid)
+}
+
+func (r *Reconciler) taskRememberHoldNode(uid types.UID, node string) {
+	if node == "" {
+		return
+	}
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.init()
+	st.holdNode[uid] = node
+}
+
+func (r *Reconciler) taskHoldNode(uid types.UID) string {
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.init()
+	return st.holdNode[uid]
+}
+
+// taskGraded reports whether this operator ran the clean-up's rescue in the
+// hold pod and graded it, for that stamp.
+func (r *Reconciler) taskGraded(hold types.UID, stamp string) bool {
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.init()
+	return stamp != "" && st.graded[hold] == stamp
+}
+
+func (r *Reconciler) taskMarkGraded(hold types.UID, stamp string) {
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.init()
+	st.graded[hold] = stamp
 }
 
 // taskRescueRefusedIn reports whether the Session's newest rescue ran in the
@@ -746,6 +883,7 @@ func (r *Reconciler) taskRescue(ctx context.Context, v *expiryView, obs *observa
 	if !written {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
+	r.taskMarkGraded(hold.UID, rec.Stamp)
 	switch {
 	case rec.Result != v1alpha1.RescueFailed:
 		r.taskBreaker(false, v.now)
@@ -1005,6 +1143,17 @@ func (r *Reconciler) taskVolumeReleased(ctx context.Context, v *expiryView) stri
 	if slices.Contains(node.Status.VolumesInUse, unique) {
 		return fmt.Sprintf("node %s still lists the HOME's volume %s as in use", t.NodeName, unique)
 	}
+	if hn := r.taskHoldNode(v.s.UID); hn != "" && hn != t.NodeName {
+		// The clean-up's last hold pod stood on another node: its teardown
+		// must be over too. Its node must be read, and must not list it.
+		var other corev1.Node
+		if err := r.APIReader.Get(ctx, client.ObjectKey{Name: hn}, &other); err != nil {
+			return fmt.Sprintf("node %s of the last hold pod cannot be read (%v)", hn, err)
+		}
+		if slices.Contains(other.Status.VolumesInUse, unique) {
+			return fmt.Sprintf("node %s of the last hold pod still lists the HOME's volume %s as in use", hn, unique)
+		}
+	}
 	if v.pod != nil || len(v.mounts) > 0 {
 		return "a Pod still mounts the HOME claim"
 	}
@@ -1023,6 +1172,8 @@ func taskSessionRemovalAllowed(s *v1alpha1.AgentSession) error {
 		return errors.New("only a task Session in the clean-up's scope is deleted by it (DESIGN-061 2)")
 	case !s.DeletionTimestamp.IsZero():
 		return errors.New("a reaped Session is released, not deleted again")
+	case homeExpiryHeld(s):
+		return errors.New("the owner holds the task clean-up")
 	case privateHistoryIdentity(s) != nil:
 		return privateHistoryIdentity(s)
 	case s.UID == "" || s.ResourceVersion == "":
@@ -1060,15 +1211,29 @@ func (r *Reconciler) removeCleanedTaskSession(ctx context.Context, v *expiryView
 		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
 	}
 	if err := deleteCleanedTaskSession(ctx, r.Client, v.s); err != nil {
-		if apierrors.IsConflict(err) || apierrors.IsInvalid(err) {
-			r.countExpiryRefused(expiryPreconditionFailed)
+		switch {
+		case apierrors.IsConflict(err), apierrors.IsInvalid(err):
+			r.countTaskRefused(expiryPreconditionFailed)
 			return ctrl.Result{RequeueAfter: time.Second}, true, nil
+		case apierrors.IsForbidden(err):
+			// A denial: an Expired record never changes, so it is said and
+			// looked at again in 15 minutes, not retried every minute.
+			r.countTaskRefused(expiryForbidden)
+			obs.homeExpiry = &homeExpiryNote{reason: taskReasonDeleted, message: "the session cannot be deleted: " + truncate(err.Error())}
+			r.event(v.s, corev1.EventTypeWarning, "TaskCleanup", "TaskCleanupRefused", "the task clean-up cannot delete the session: "+err.Error())
+			return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
 		}
 		return r.expiryUnknown(ctx, v.s, obs, fmt.Errorf("delete the cleaned task Session: %w", err))
 	}
-	r.taskSessionRemovedEvent(v.s, "finished")
-	log.FromContext(ctx).Info("deleted a finished task Session after its HOME was cleaned up", "kept", keptName(v.s, v.record()))
+	log.FromContext(ctx).Info("deleted a finished task Session after its HOME was cleaned up; it is released next", "kept", keptName(v.s, v.record()))
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
+}
+
+// countTaskRefused counts a clean-up refusal in its own counter only.
+func (r *Reconciler) countTaskRefused(reason string) {
+	if r.TaskCleanupCounters != nil {
+		r.TaskCleanupCounters.Refused.WithLabelValues(reason).Inc()
+	}
 }
 
 // taskSessionRemovedEvent is TaskCleanupSessionRemoved: the rescue and its
@@ -1151,11 +1316,10 @@ func (r *Reconciler) taskCleanupPause(ctx context.Context, now time.Time, cacheO
 		if r.RescueVerifier == nil {
 			free, freeErr = protocol.RescueVerifyResult{}, errors.New("this operator has no rescue verifier")
 		} else {
+			// A busy shelf is no answer either; it is kept for the minute too,
+			// so a busy shelf does not send every queued Session to the
+			// uncached reads.
 			free, freeErr = r.RescueVerifier.Verify(ctx, "")
-			if errors.Is(freeErr, shelf.ErrSlotsBusy) {
-				// A busy shelf is no answer: judge again in a minute.
-				return taskPauseShelfUnavailable, true
-			}
 		}
 		st.mu.Lock()
 		st.freeAt, st.free, st.freeErr = now, free, freeErr
@@ -1206,6 +1370,10 @@ func (r *Reconciler) taskBreaker(failed bool, now time.Time) {
 	if !failed {
 		st.failures = 0
 		return
+	}
+	if st.failures >= taskBreakerTrips && !now.Before(st.lastFailure.Add(taskBreakerPause)) {
+		// The pause is over: three more in a row pause it again.
+		st.failures = 0
 	}
 	st.failures++
 	st.lastFailure = now
@@ -1266,7 +1434,12 @@ func (r *Reconciler) taskAdmitted(uid types.UID, now time.Time) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.init()
-	st.admittedAt[uid] = now
+	st.prune(now)
+	if _, ok := st.admittedAt[uid]; !ok {
+		// The first start this leader saw: a retry does not restart the
+		// duration.
+		st.admittedAt[uid] = now
+	}
 	st.snap = nil
 }
 
@@ -1340,7 +1513,7 @@ func (r *Reconciler) taskQueueFromCache(ctx context.Context, ns string, now time
 			continue
 		}
 		e := s.Status.PrivateHistory.Expiry
-		if taskActive(e) {
+		if taskActive(s) {
 			snap.active[s.UID] = true
 			continue
 		}
@@ -1357,13 +1530,13 @@ func (r *Reconciler) taskQueueFromCache(ctx context.Context, ns string, now time
 			if now.Before(q.due) && !release || !taskCleanupPurged(s) && r.taskChildrenBlockedLocked(s.UID, now) {
 				continue
 			}
-		case e.Phase == v1alpha1.HomeExpiryRescuing && slotFreeRefusal(e.Refusal) && e.RefusalAt != nil:
+		case taskRetryRefusal(e) && e.RefusalAt != nil:
 			if now.Before(e.RefusalAt.Add(taskRefusalRetry(e.Refusal))) {
 				continue
 			}
-			q.retry, q.reaped, q.due = e.Refusal == expiryRescueRefused, time.Time{}, e.RefusalAt.Time
+			q.retry, q.reaped, q.due = e.Refusal == expiryRescueRefused || e.Refusal == expiryAttemptStuck, time.Time{}, e.RefusalAt.Time
 			if !q.retry {
-				// A volume that was not released goes back in its place.
+				// Any other refused attempt goes back in its place.
 				q.due = r.taskCleanupDueAt(s)
 				if taskCleanupPurged(s) {
 					q.reaped = s.DeletionTimestamp.Time

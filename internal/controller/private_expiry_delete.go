@@ -313,7 +313,9 @@ func (r *Reconciler) recordHomeExpired(ctx context.Context, v *expiryView, obs *
 	clearExpiryRefusal(next)
 	target := v.s.DeepCopy()
 	acknowledged, err := r.writePrivateHistoryAcknowledged(ctx, target, fresh)
-	if acknowledged && r.HomeExpiryCounters != nil {
+	if acknowledged && r.HomeExpiryCounters != nil && !r.taskPolicy(fresh) {
+		// A task Session's is counted by the clean-up's own counter, once
+		// the Session is released.
 		r.HomeExpiryCounters.Expired.Inc()
 	}
 	if err != nil {
@@ -353,11 +355,15 @@ func (r *Reconciler) releaseExpiredSession(ctx context.Context, v *expiryView, o
 		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
 	}
 	log.FromContext(ctx).Info("released a reaped private Session whose HOME expired")
-	if e := v.record(); r.taskPolicy(v.s) && e.DeletingAt != nil && !v.s.DeletionTimestamp.After(e.DeletingAt.Time) {
-		// A purged Session: reaped before its HOME's delete began. A finished
-		// one was deleted after its record was Expired, and
-		// removeCleanedTaskSession said so then.
-		r.taskSessionRemovedEvent(v.s, "purged")
+	if e := v.record(); r.taskPolicy(v.s) {
+		// Counted once, here: a purged Session was reaped before its HOME's
+		// delete began; any other ended on its own first, whoever deleted
+		// the Session after.
+		cause := "finished"
+		if e.DeletingAt != nil && !v.s.DeletionTimestamp.After(e.DeletingAt.Time) {
+			cause = "purged"
+		}
+		r.taskSessionRemovedEvent(v.s, cause)
 	}
 	return ctrl.Result{}, true, nil
 }
