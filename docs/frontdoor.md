@@ -97,10 +97,15 @@ the read failed. The retained groom record stores the field text, not the path
 of the temp file this server removes when the process exits. `flush` retries
 the attribution note with the original text.
 
-opwork rejects a tracker HTTP body larger than 4 MiB before it decodes JSON.
+opwork rejects a tracker HTTP body larger than 8 MiB before it decodes JSON.
 A scan, which `search` uses for a source key or an owner and which create uses
-to find a source key, stops at 25 pages, 2000 rows, or 8 MiB. Past a bound it
-refuses instead of returning a partial list.
+to find a source key and likely duplicates, reads 100 items to a page and keeps
+only the rows that match. Its memory is one page plus the matches, however
+large the project is. It stops at 500 pages (50,000 items read) or 2000
+matching rows, and past a bound it refuses instead of returning a partial
+list. These bounds are opwork's own, so they hold for every agent, not only for
+this server. On 2026-11-10 the project had 326 items and a 100-item page was
+about 1.2 MiB.
 
 ### Coordinator sessions
 

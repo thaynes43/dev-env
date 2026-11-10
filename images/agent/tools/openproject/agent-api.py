@@ -20,7 +20,7 @@ import urllib.request
 ORIGIN = "http://openproject-web.frontend.svc.cluster.local:8082"
 ALLOWED = ("/api/v3/projects", "/api/v3/work_packages", "/api/v3/types", "/api/v3/statuses", "/api/v3/users/me", "/api/v3/relations", "/api/v3/attachments", "/api/v3/queries")
 PRIORITIES = "/api/v3/priorities"  # the collection only; a priority item path is not this route
-MAX_RESPONSE_BYTES = 4 * 1024 * 1024  # one body, rejected before JSON decoding
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024  # one body, rejected before JSON decoding; a 100-item page is about 1.2 MiB (2026-11-10)
 
 GET_BUDGET = 120
 BACKOFF_CAP = 16
@@ -147,7 +147,6 @@ def request(method, path, payload=None):
                 if len(raw) > MAX_RESPONSE_BYTES:
                     # Not JSON-decoded, not retried, and the body is not part of the error.
                     raise ApiUnavailable("OpenProject response exceeds %d bytes" % MAX_RESPONSE_BYTES)
-                request.last_body_bytes = len(raw)  # opwork's scan adds these up
                 result = response.code, raw
         except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
             cause = error.reason if isinstance(error, urllib.error.URLError) else error

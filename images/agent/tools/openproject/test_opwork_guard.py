@@ -9,6 +9,7 @@ import json
 import os
 import tempfile
 import unittest
+import urllib.parse
 from unittest import mock
 
 from test_opwork_groom import load
@@ -58,7 +59,7 @@ class BodyAndPriorities(unittest.TestCase):
         self.assertNotIn("MARKER", str(caught.exception))
         self.assertEqual(len(seen), 1)
 
-    def test_small_body_is_decoded_and_its_size_is_kept(self):
+    def test_small_body_is_decoded(self):
         raw = b'{"id":1,"ok":true}'
         self.assertLess(len(raw), self.api.MAX_RESPONSE_BYTES)
 
@@ -70,7 +71,6 @@ class BodyAndPriorities(unittest.TestCase):
             code, data = self.api.request("GET", "/api/v3/work_packages/1")
         self.assertEqual(code, 200)
         self.assertEqual(data, {"id": 1, "ok": True})
-        self.assertEqual(self.api.request.last_body_bytes, len(raw))
 
     def test_priority_item_path_is_refused_before_http(self):
         def boom(*args, **kwargs):
@@ -156,24 +156,24 @@ def self_origin():
 
 class ScanBounds(unittest.TestCase):
     def setUp(self):
-        self.saved = (opwork.SCAN_MAX_PAGES, opwork.SCAN_MAX_ROWS, opwork.SCAN_MAX_BYTES)
+        self.saved = (opwork.SCAN_MAX_PAGES, opwork.SCAN_MAX_ROWS, opwork.SCAN_PAGE_SIZE)
         self.addCleanup(self.restore)
         self.pager = Pager()
         self.tracker = opwork.Tracker(self.pager.request, RuntimeError, "haynes-engineering")
 
     def restore(self):
-        opwork.SCAN_MAX_PAGES, opwork.SCAN_MAX_ROWS, opwork.SCAN_MAX_BYTES = self.saved
+        opwork.SCAN_MAX_PAGES, opwork.SCAN_MAX_ROWS, opwork.SCAN_PAGE_SIZE = self.saved
 
     def test_scan_returns_a_page_inside_the_bounds(self):
-        opwork.SCAN_MAX_PAGES, opwork.SCAN_MAX_ROWS, opwork.SCAN_MAX_BYTES = 2, 10, 1000
-        self.pager.elements, self.pager.total, self.pager.page_bytes = 1, 1, 20
+        opwork.SCAN_MAX_PAGES, opwork.SCAN_MAX_ROWS = 2, 10
+        self.pager.elements, self.pager.total = 1, 1
         rows = self.tracker.scan([{"status": {"operator": "*", "values": []}}])
         self.assertEqual([row["id"] for row in rows], [9])
         self.assertEqual(rows[0]["subject"], "SECRET-ROW")
 
-    def test_scan_refuses_past_pages_rows_and_bytes(self):
-        opwork.SCAN_MAX_PAGES, opwork.SCAN_MAX_ROWS, opwork.SCAN_MAX_BYTES = 1, 100, 100000
-        self.pager.elements, self.pager.total, self.pager.page_bytes = 1, 5, 20
+    def test_scan_refuses_past_pages_and_kept_rows(self):
+        opwork.SCAN_MAX_PAGES, opwork.SCAN_MAX_ROWS = 1, 100
+        self.pager.elements, self.pager.total = 1, 5
         with self.assertRaises(opwork.Fail) as caught:
             self.tracker.scan([])
         self.assertEqual(caught.exception.code, 3)
@@ -187,22 +187,44 @@ class ScanBounds(unittest.TestCase):
         with self.assertRaises(opwork.Fail) as caught:
             self.tracker.scan([])
         self.assertIn("scan stopped", str(caught.exception))
-        self.assertEqual(self.pager.listings, 1)
-
-        self.pager.listings = 0
-        # The page's JSON is under this cap. The recorded body size is over it,
-        # so the bound has to be the bytes the client kept, not a second encoding.
-        opwork.SCAN_MAX_ROWS, opwork.SCAN_MAX_BYTES = 100, 100000
-        self.pager.elements, self.pager.total, self.pager.page_bytes = 1, 1, 100001
-        with self.assertRaises(opwork.Fail) as caught:
-            self.tracker.scan([])
-        self.assertIn("scan stopped", str(caught.exception))
         self.assertNotIn("SECRET-ROW", str(caught.exception))
         self.assertEqual(self.pager.listings, 1)
 
+    def test_a_backlog_far_past_the_kept_row_bound_is_read_and_only_matches_are_kept(self):
+        """5,000 items, a kept-row bound of 3: the bound counts matches, so every agent's create
+        and source-key search keep working as the project grows."""
+        opwork.SCAN_MAX_ROWS = 3
+        self.pager.elements, self.pager.total = opwork.SCAN_PAGE_SIZE, 5000
+        self.pager.wanted = {37: "wanted:1"}
+        rows = self.tracker.by_source_key("wanted:1")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(text_key(rows[0]), "wanted:1")
+        self.assertEqual(self.pager.listings, 5000 // opwork.SCAN_PAGE_SIZE)
+        self.assertEqual(self.pager.sizes, {opwork.SCAN_PAGE_SIZE})
+
+        self.pager.listings = 0
+        self.assertEqual(self.tracker.by_source_key("absent:1"), [])
+        self.assertEqual(self.pager.listings, 5000 // opwork.SCAN_PAGE_SIZE)
+
+        # Without a keep function every row is kept, so the same backlog is past the bound.
+        self.pager.listings = 0
+        with self.assertRaises(opwork.Fail) as caught:
+            self.tracker.scan([])
+        self.assertIn("scan stopped", str(caught.exception))
+        self.assertEqual(self.pager.listings, 1)
+
+    def test_search_and_create_find_a_key_in_a_large_backlog(self):
+        self.pager.elements, self.pager.total = opwork.SCAN_PAGE_SIZE, 5000
+        self.pager.wanted = {41: "wanted:2"}
+        code, out, err = invoke(self.tracker, ["search", "--source-key", "wanted:2"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("#9041", out)
+        self.assertNotIn("SECRET-ROW", out + err)
+        self.assertEqual([c for c in self.pager.calls if c[0] == "POST"], [])
+
     def test_search_and_create_refuse_a_bounded_scan_without_a_write(self):
-        opwork.SCAN_MAX_PAGES, opwork.SCAN_MAX_ROWS, opwork.SCAN_MAX_BYTES = 1, 100, 100000
-        self.pager.elements, self.pager.total, self.pager.page_bytes = 1, 5, 20
+        opwork.SCAN_MAX_PAGES, opwork.SCAN_MAX_ROWS = 1, 100
+        self.pager.elements, self.pager.total = 1, 5
         code, out, err = invoke(self.tracker, ["search", "--source-key", "missing"])
         self.assertEqual(code, 3, err)
         self.assertIn("scan stopped", err)
@@ -217,19 +239,25 @@ class ScanBounds(unittest.TestCase):
         self.assertEqual([c for c in self.pager.calls if c[0] == "POST"], [])
 
 
+def text_key(row):
+    return opwork.text_of(row.get(opwork.SOURCE_KEY))
+
+
 class Pager:
+    """A project of `total` items served `elements` to a page. `wanted` maps a page number to
+    the source key of that page's first row, whose id is 9000 plus the page number."""
+
     def __init__(self):
         self.calls = []
         self.listings = 0
         self.elements = 1
         self.total = 1
-        self.page_bytes = 20
+        self.wanted = {}
+        self.sizes = set()
 
     def request(self, method, path, payload=None):
-        base = path.split("?", 1)[0]
+        base, _, query = path.partition("?")
         self.calls.append((method, base))
-        # Bound methods expose attributes of the function. scan reads this size.
-        Pager.request.last_body_bytes = self.page_bytes
         if base == "/api/v3/projects/haynes-engineering":
             return 200, {"id": 1, "identifier": "haynes-engineering"}
         if base == "/api/v3/work_packages/1":
@@ -239,9 +267,15 @@ class Pager:
                                     "status": {"title": "New", "href": "/api/v3/statuses/1"}}}
         if base.startswith("/api/v3/projects/") and base.endswith("/work_packages"):
             self.listings += 1
-            row = {"id": 9, "subject": "SECRET-ROW", "lockVersion": 1, "customField6": "other",
+            asked = urllib.parse.parse_qs(query)
+            page = int(asked.get("offset", ["1"])[0])
+            self.sizes.add(int(asked.get("pageSize", ["0"])[0]))
+            row = {"id": 9, "subject": "SECRET-ROW", "lockVersion": 1, opwork.SOURCE_KEY: "other",
                    "_links": {"type": {"title": "Story"}, "status": {"title": "New"}, "parent": {}}}
-            return 200, {"total": self.total, "_embedded": {"elements": [dict(row) for _ in range(self.elements)]}}
+            rows = [dict(row) for _ in range(self.elements)]
+            if page in self.wanted:
+                rows[0] = dict(row, id=9000 + page, subject="A wanted story", **{opwork.SOURCE_KEY: self.wanted[page]})
+            return 200, {"total": self.total, "_embedded": {"elements": rows}}
         return 404, {"message": "no route"}
 
 

@@ -105,11 +105,13 @@ PARENT_OF = {"Epic": "Saga", "Story": "Epic"}
 WRITE_CMDS = {"claim", "comment", "status", "complete", "relate", "create", "groom", "order", "checkpoint-update", "checkpoint", "flush"}
 ORIGIN_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}\Z")
 MAX_FIELD = 200000
-# A scan used by search (source key or owner) and by_source_key refuses past these.
-# A partial list would hide a source key and let create write a second item.
-SCAN_MAX_PAGES = 25
-SCAN_MAX_ROWS = 2000
-SCAN_MAX_BYTES = 8 * 1024 * 1024
+# A scan (search by source key or owner, create's source-key and duplicate checks) reads the
+# filtered set one page at a time and keeps only the rows its caller asks for. Memory is one page
+# plus the kept rows, however large the backlog is. Past a bound it refuses: a partial list would
+# hide a source key and let create write a second item.
+SCAN_PAGE_SIZE = 100
+SCAN_MAX_PAGES = 500  # 50,000 items read
+SCAN_MAX_ROWS = 2000  # rows kept, not rows read
 
 
 class Fail(Exception):
@@ -297,28 +299,29 @@ class Tracker:
         if isinstance(link, dict) and isinstance(link.get("href"), str):
             href = link["href"]
         if href not in self.project_hrefs():
-            raise Fail("REFUSED: #%s is not in project %s. Nothing was returned or written." % (wp_id, self.project), 3)
+            raise Fail("REFUSED: #%s is not in project %s. Nothing was returned or written. An item of another project needs --project." % (wp_id, self.project), 3)
         return item
 
     def listing(self, filters, page=1, size=20):
         query = urllib.parse.urlencode({"filters": json.dumps(filters), "pageSize": size, "offset": page, "sortBy": '[["id","asc"]]'})
         return self.get("/api/v3/projects/%s/work_packages?%s" % (self.project, query))
 
-    def scan(self, filters):  # every page, for client-side matching (source keys are not server filters)
-        """Every page, until the page, row or byte bound. Past a bound, refuse.
-        Returning a partial list would hide a source key."""
-        rows, page, nbytes = [], 1, 0
+    def scan(self, filters, keep=None):  # client-side matching: source keys are not server filters
+        """Every page of the filtered set; the rows `keep` accepts (every row without it).
+
+        Only kept rows are held, so a large backlog costs requests, not memory. Past the page
+        bound or the kept-row bound it refuses. Returning a partial list would hide a source key."""
+        rows, page, read = [], 1, 0
         while True:
             if page > SCAN_MAX_PAGES:
                 raise Fail(scan_limited(), 3)
-            data = self.listing(filters, page, 200)
+            data = self.listing(filters, page, SCAN_PAGE_SIZE)
             elements = data["_embedded"]["elements"]
-            page_bytes = scan_page_bytes(self.request, data)
-            if nbytes + page_bytes > SCAN_MAX_BYTES or len(rows) + len(elements) > SCAN_MAX_ROWS:
+            read += len(elements)
+            rows += [w for w in elements if keep is None or keep(w)]
+            if len(rows) > SCAN_MAX_ROWS:
                 raise Fail(scan_limited(), 3)
-            nbytes += page_bytes
-            rows += elements
-            if len(rows) >= data["total"] or not elements:
+            if read >= data["total"] or not elements:
                 return rows
             page += 1
 
@@ -338,7 +341,7 @@ class Tracker:
         return self.get("/api/v3/relations?" + query)["_embedded"]["elements"]
 
     def by_source_key(self, key):
-        return [w for w in self.scan([{"status": {"operator": "*", "values": []}}]) if text_of(w.get(SOURCE_KEY)) == key]
+        return self.scan([{"status": {"operator": "*", "values": []}}], lambda w: text_of(w.get(SOURCE_KEY)) == key)
 
     def patch(self, wp, fields=None, status=None, lock=None, assignee=None, allow_clear=(), priority=None):
         """PATCH only the supplied fields, with lockVersion, then read back. Conflict re-reads and
@@ -456,7 +459,7 @@ def cmd_search(t, a, session):
     if a.text:
         filters.append({"subjectOrId": {"operator": "**", "values": [a.text]}})
     if a.source_key or a.owner:  # not server filters: scan the filtered set and match here
-        rows = [w for w in t.scan(filters) if (not a.source_key or text_of(w.get(SOURCE_KEY)) == a.source_key) and (not a.owner or a.owner.lower() in text_of(w.get(OWNER)).lower())]
+        rows = t.scan(filters, lambda w: (not a.source_key or text_of(w.get(SOURCE_KEY)) == a.source_key) and (not a.owner or a.owner.lower() in text_of(w.get(OWNER)).lower()))
         total, rows = len(rows), rows[(a.page - 1) * a.limit:a.page * a.limit]
     else:
         data = t.listing(filters, a.page, a.limit)
@@ -591,19 +594,8 @@ def clip(text, limit, full):
 
 
 def scan_limited():
-    return "REFUSED: the scan stopped at its limit (%d pages, %d rows, %d bytes). Nothing more was read or written." % (
-        SCAN_MAX_PAGES, SCAN_MAX_ROWS, SCAN_MAX_BYTES)
-
-
-def scan_page_bytes(request, data):
-    """Bytes of the page just read. The real client records the raw body; a fake is measured as JSON."""
-    size = getattr(request, "last_body_bytes", None)
-    if type(size) is int and size >= 0:
-        return size
-    try:
-        return len(json.dumps(data, separators=(",", ":")).encode())
-    except (TypeError, ValueError):
-        return 0
+    return "REFUSED: the scan stopped at its limit (%d pages of %d items, or %d matching rows). Nothing more was read or written." % (
+        SCAN_MAX_PAGES, SCAN_PAGE_SIZE, SCAN_MAX_ROWS)
 
 
 def cmd_show(t, a, session):
@@ -860,7 +852,8 @@ def cmd_create(t, a, session):
     if epic["_links"]["type"]["title"] != PARENT_OF[kind]:
         raise Fail("Grammar: a %s goes under a %s, but #%d is a %s" % (kind, PARENT_OF[kind], a.epic, epic["_links"]["type"]["title"]))
     words = [x for x in a.subject.lower().split() if len(x) > 3]
-    similar = [w for w in t.scan([{"parent": {"operator": "=", "values": [str(a.epic)]}}, {"status": {"operator": "*", "values": []}}]) if words and sum(x in w["subject"].lower() for x in words) * 2 >= len(words)]
+    similar = t.scan([{"parent": {"operator": "=", "values": [str(a.epic)]}}, {"status": {"operator": "*", "values": []}}],
+                     lambda w: bool(words) and sum(x in w["subject"].lower() for x in words) * 2 >= len(words))
     if similar and not a.confirm_new:
         raise Fail("POSSIBLE DUPLICATE under #%d:\n  %s\nReuse one, or repeat with --confirm-new if this is genuinely separate work." % (a.epic, "\n  ".join(line(w) for w in similar)), 4)
     payload = {"subject": a.subject, "description": {"raw": a.description or ""}, SOURCE_KEY: a.source_key,
