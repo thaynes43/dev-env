@@ -262,6 +262,32 @@ func TestEnvtestAskRoutes(t *testing.T) {
 		t.Fatal("portal all failed closed or kept the unreadable ask")
 	}
 
+	grantBody := askInfo("request-grant1")
+	grantBody.Type = apiv1.AskTypeGrant
+	grantBody.ExpiresIn = ""
+	grantBody.Options = nil
+	grantBody.Recommended = ""
+	grantBody.AllowFreeText = false
+	grantBody.Question = "Access for this session?"
+	grantBody.Grant = &apiv1.AskGrant{
+		UID: "01234567-89ab-cdef-0123-456789abcdef", ScopeDigest: strings.Repeat("A", 43),
+		Type: "kube", Target: "dev-env-grant-workloads", TTL: "10m",
+	}
+	refused := wantError(t, api.do(http.MethodPost, apiv1.AsksPath, owner, grantBody), http.StatusBadRequest, apiv1.CodeBadRequest)
+	if !strings.Contains(refused.Message, "grant") {
+		t.Fatalf("grant refusal %q", refused.Message)
+	}
+	origin := askInfo("request-origin1")
+	origin.Labels = map[string]string{asks.OriginLabel: "broker"}
+	made := api.post(owner, origin, http.StatusCreated)
+	var storedOrigin coord.Ask
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: sessionNS, Name: made.ID}, &storedOrigin); err != nil {
+		t.Fatal(err)
+	}
+	if storedOrigin.Labels[asks.OriginLabel] != "" || storedOrigin.Labels[asks.TypeLabel] != string(apiv1.AskTypeInfo) {
+		t.Fatalf("stored labels %v", storedOrigin.Labels)
+	}
+
 	api.srv.Asks.Limits = asks.Limits{OpenPerRequester: 1, TotalPerRequester: 64, PerNamespace: 4096}
 	capTok := api.session("ask-lane-cap")
 	api.post(capTok, askInfo("request-cap1"), http.StatusCreated)

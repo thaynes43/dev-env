@@ -11,16 +11,18 @@ const MetricNearLimit = "dev_env_asks_near_limit_total"
 
 // Limit scopes reported by MetricNearLimit and LimitError.
 const (
-	LimitOpen      = "open"
-	LimitRequester = "requester"
-	LimitNamespace = "namespace"
+	LimitOpen               = "open"
+	LimitRequester          = "requester"
+	LimitNamespace          = "namespace"
+	LimitOpenGrant          = "open-grant"
+	LimitOpenGrantNamespace = "open-grant-namespace"
 )
 
 // NearLimit is the create-time observation. The operator registers it on its
 // metrics registry when --enable-asks is set.
 var NearLimit = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: MetricNearLimit,
-	Help: "Ask creates that observed a count at or above 80 percent of an ask bound. The scope label is open, requester, or namespace.",
+	Help: "Ask creates that observed a count at or above 80 percent of an ask bound. The scope label is open, requester, namespace, open-grant, or open-grant-namespace.",
 }, []string{"scope"})
 
 // RegisterMetrics registers NearLimit. A second registration is success.

@@ -10,6 +10,24 @@ and
 still needs the Ask CRD and RBAC in haynes-ops. An ask is not an approval until
 a portal reader answers it, and an expired approval is not an approval.
 
+A grant ask is a third kind ([ADR-021](../.agents/sagas/distributed-dev-env/adrs/021-grants-through-the-asks-board.md)).
+It carries a typed grant scope (`uid`, `scopeDigest`, `type`, `target`, `ttl`,
+and optional `detail`) and omits `expiresAt` and the approval scope. It does
+not expire. An info or approval ask cannot carry a grant object, and a grant
+ask cannot carry an approval scope or an expiry. Info and approval behaviour
+is otherwise unchanged.
+
+`POST /v1/asks` refuses `type=grant`. The session route also drops any labels
+on the body, including `coordination.dev-env.haynesops.com/ask-origin`, so a
+session create does not store that label. The store accepts a grant ask and
+applies the caps below. It records the requester, the open state and the ask
+type, and it does not record `ask-origin`. The broker path that opens a grant
+ask is not this route.
+
+A grant answer requires `approved` and a `username` matching
+`^[A-Za-z0-9][A-Za-z0-9._@+-]{0,62}$`. An info or approval answer omits
+`username`. Session responses omit `username` along with issuer and subject.
+
 Asks live in the `dev-agents` namespace as
 `asks.coordination.dev-env.haynesops.com`. The spec is immutable. The status
 answer is set once. v1 does not create an InboxMessage: `delivery` stays empty,
@@ -35,13 +53,16 @@ principal the portal authenticated.
 | POST | `/v1/portal/asks/{id}/answer` | portal reader, while open and unexpired | 200 |
 
 `state=open` is the effective state: an open ask whose `expiresAt` (or, for an
-approval, whose `scope.expiresAt`) has passed is not listed as open. Pages use
+approval, whose `scope.expiresAt`) has passed is not listed as open. A grant
+ask has no `expiresAt` and stays open. Pages use
 `limit` (default 20, maximum 100) and an opaque `cursor`. Order is `createdAt`
 descending, then `id` descending.
 
 Session responses include `answeredBy.displayName` only (empty becomes
-`Portal user`). That includes create, an identical create retry, list mine,
-get and withdraw. Portal responses include issuer, subject and display name.
+`Portal user`). They omit issuer, subject and `username`. That includes
+create, an identical create retry, list mine, get and withdraw. Portal
+responses include issuer, subject and display name, and `username` when the
+stored answer has one.
 Whether an approval is still in force (`approved` and now before
 `scope.expiresAt`) is computed by the client. It is not a stored field.
 
@@ -68,14 +89,19 @@ expires at `scope.expiresAt`.
 
 An identical `requestId` is resolved before validation and the room check, so
 a retry needs no slot and is not refused because the clock has moved. A new
-create counts, then creates. The bounds are 16 open asks per requester, 512
-asks per requester, and 4096 asks in the namespace. Open asks are counted from
-the state label. When that count is already at the open bound, the operator
-reads that requester's open-labelled asks (at most 512) and counts only those
-whose stored state is open or absent and whose effective state is still open.
-It repairs the other labels. An unconfirmed count is 503. At or above 80
-percent of a bound the operator logs and increments
-`dev_env_asks_near_limit_total`.
+create counts, then creates. The bounds are 16 open info and approval asks
+per requester, 512 asks per requester, and 4096 asks in the namespace. Grant
+asks are counted apart: 3 open grant asks per session and 48 open grant asks
+in the namespace. Those opens still sit inside the 512 and 4096 lifetime
+bounds, and a grant ask does not take one of the 16 info and approval slots.
+Open info and approval asks are counted from the state label, excluding the
+grant type; a missing type label still counts toward the 16. Open grant asks
+are counted from the state label and the grant type label. When an open count
+is already at its bound, the operator reads the matching open-labelled asks
+(at most 512) and counts only those whose stored state is open or absent and
+whose effective state is still open. It repairs the other labels. An
+unconfirmed count is 503. At or above 80 percent of a bound the operator logs
+and increments `dev_env_asks_near_limit_total`.
 
 ## Expiry sweeper
 
@@ -83,9 +109,11 @@ The operator reuses `--enable-asks` for a leader-only sweeper; enabling asks
 requires leader election. Every minute it scans at most nine pages of 500
 records, without trusting the state label. It applies `EffectiveState` to the
 Ask deadline and, for approval, the scope deadline. An absent state is open.
-The list snapshot selects only records needing a status or label change for
+A grant ask is left as it is: the sweeper does not expire it because a clock
+passed. Info and approval asks still expire. The list snapshot selects only
+records needing a status or label change for
 an authoritative GET; unchanged, answered and withdrawn records need no GET.
-An expired open Ask becomes `expired` through a status update carrying its
+An expired open info or approval Ask becomes `expired` through a status update carrying its
 resourceVersion. On conflict it rereads, so an answer that already committed
 wins. Answered and withdrawn Asks are untouched, even after approval expiry.
 
@@ -170,6 +198,8 @@ This source default does not settle Tom's quiet-hours ruling or permit go-live.
 ## Status codes
 
 Validation failures, including a fractional `scope.expiresAt`, are 400.
+`POST /v1/asks` with `type=grant` is 400. A session cannot set labels;
+`ask-origin` is dropped and is not stored.
 The same `requestId` with a different body is 409. Withdraw of an ask that is
 not open is 409. An answer when the ask is answered or withdrawn is 409. The
 same issuer and subject repeating the identical answer is 200, including when

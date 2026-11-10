@@ -381,6 +381,10 @@ type AskCreateRequest struct {
 	Scope         *AskScope         `json:"scope,omitempty"`
 	Grant         *AskGrant         `json:"grant,omitempty"`
 	ExpiresIn     string            `json:"expiresIn,omitempty"`
+	// Labels is not stored. The session route drops it, including
+	// coordination.dev-env.haynesops.com/ask-origin, so a session cannot set
+	// the broker origin.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // AskAnswerRequest is the body of POST PortalAskAnswerPath. Actor is set by
@@ -490,12 +494,6 @@ func (r AskCreateRequest) ValidateAt(now time.Time) error {
 		if exp.After(r.Scope.ExpiresAt) {
 			return askInvalid("expiresIn", "an approval ask may not outlive scope.expiresAt")
 		}
-	}
-	// The session route refuses type=grant. The store's create path lifts this
-	// once it counts grant asks on their own caps. A well-formed grant still
-	// fails here, so this package does not store one ahead of that count.
-	if r.Type == AskTypeGrant {
-		return askInvalid("type", "a session cannot create a grant ask")
 	}
 	return nil
 }
