@@ -96,6 +96,12 @@ func (s *Server) createAsk(ctx context.Context, w http.ResponseWriter, r *http.R
 	if err := decodeJSON(w, r, maxAskBody, &body, true); err != nil {
 		return 0, nil, err
 	}
+	// A session cannot create a grant ask, flag on or off.
+	// Client labels are dropped, so ask-origin never lands on a session create.
+	if body.Type == apiv1.AskTypeGrant {
+		return 0, nil, badRequest("type: a session cannot create a grant ask")
+	}
+	body.Labels = nil
 	now := s.askNow()
 	ask, created, err := s.Asks.Create(ctx, reqr, body, now)
 	if err != nil {

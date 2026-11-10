@@ -13,10 +13,11 @@ package apiv1
 // (question, option descriptions, answer text) through NormalizeAskText
 // before they validate it.
 //
-// Time: an ask and an approval scope expire. Answer handlers check an answer
-// with AskAnswerRequest.ValidateForAt at their own clock reading, and readers
-// use Ask.EffectiveState and Ask.ApprovalValid rather than the stored state
-// alone.
+// Time: an info ask and an approval scope expire. A grant ask does not: it
+// stays open until it is answered or withdrawn. Answer handlers check an
+// answer with AskAnswerRequest.ValidateForAt at their own clock reading, and
+// readers use Ask.EffectiveState and Ask.ApprovalValid rather than the stored
+// state alone. ValidateForAt does not apply a clock check to a grant ask.
 //
 // Whole seconds: an ask's times are whole seconds. A server truncates its
 // clock reading to whole seconds (now.Truncate(time.Second)) before it calls
@@ -118,6 +119,9 @@ const (
 	AskActorIssuerMaxRunes       = 300
 	AskActorSubjectMaxRunes      = 200
 	AskActorDisplayNameMaxRunes  = 120
+	AskActorUsernameMaxLen       = 63
+	AskGrantUIDMaxLen            = 64
+	AskGrantTTLMaxLen            = 16
 	AskSessionNameMaxLen         = 253
 	AskSessionUIDMaxLen          = 128
 	AskInboxMessageMaxLen        = 253
@@ -138,6 +142,7 @@ type AskType string
 const (
 	AskTypeInfo     AskType = "info"
 	AskTypeApproval AskType = "approval"
+	AskTypeGrant    AskType = "grant"
 )
 
 // AskState is the stored lifecycle of one ask. Only "open" can change. An
@@ -153,9 +158,13 @@ const (
 )
 
 var (
-	askIDPattern        = regexp.MustCompile(`^ask-[0-9a-f]{16}$`)
-	askRequestIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
-	askOptionIDPattern  = regexp.MustCompile(`^[a-z0-9-]{1,24}$`)
+	askIDPattern          = regexp.MustCompile(`^ask-[0-9a-f]{16}$`)
+	askRequestIDPattern   = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
+	askOptionIDPattern    = regexp.MustCompile(`^[a-z0-9-]{1,24}$`)
+	askGrantUIDPattern    = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._:-]*[A-Za-z0-9])?$`)
+	askGrantDigestPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	askGrantTTLPattern    = regexp.MustCompile(`^([0-9]+(h|m|s))+$`)
+	askUsernamePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@+-]{0,62}$`)
 )
 
 // Errors. Every validation failure wraps ErrAskInvalid, so a handler maps it
@@ -200,12 +209,24 @@ type AskOption struct {
 }
 
 // AskScope names the single action an approval authorises. It is required for
-// type approval and forbidden for type info. ExpiresAt is 1m to 24h after the
-// ask's creation in v1 (AskScopeMaxTTL), and the ask expires no later than it.
+// type approval and forbidden for type info and type grant. ExpiresAt is 1m to
+// 24h after the ask's creation in v1 (AskScopeMaxTTL), and the ask expires no
+// later than it.
 type AskScope struct {
 	Action    string    `json:"action"`
 	Target    string    `json:"target"`
 	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// AskGrant is the typed scope of a grant ask. It is required for type grant
+// and forbidden for info and approval. Detail is display only.
+type AskGrant struct {
+	UID         string `json:"uid"`
+	ScopeDigest string `json:"scopeDigest"`
+	Type        string `json:"type"`
+	Target      string `json:"target"`
+	TTL         string `json:"ttl"`
+	Detail      string `json:"detail,omitempty"`
 }
 
 // AskRequestContext is the part of the context the caller supplies. The
@@ -239,6 +260,9 @@ type AskActor struct {
 	Issuer      string `json:"issuer,omitempty"`
 	Subject     string `json:"subject,omitempty"`
 	DisplayName string `json:"displayName,omitempty"`
+	// Username is the portal preferred_username. A grant answer requires it
+	// on the way in. An info or approval answer omits it. SessionView omits it.
+	Username string `json:"username,omitempty"`
 }
 
 // AskActorFallbackDisplayName is the display name of a session view whose
@@ -246,9 +270,9 @@ type AskActor struct {
 const AskActorFallbackDisplayName = "Portal user"
 
 // SessionView returns the actor as a session-facing route shows it: the
-// display name only, with Issuer and Subject empty (and so omitted from JSON).
-// An empty display name becomes AskActorFallbackDisplayName, so the view is
-// never blank and passes ValidateAsk.
+// display name only, with Issuer, Subject and Username empty (and so omitted
+// from JSON). An empty display name becomes AskActorFallbackDisplayName, so
+// the view is never blank and passes ValidateAsk.
 func (a AskActor) SessionView() AskActor {
 	if a.DisplayName == "" {
 		return AskActor{DisplayName: AskActorFallbackDisplayName}
@@ -293,25 +317,28 @@ type AskDelivery struct {
 
 // Ask is one record as the server returns it.
 type Ask struct {
-	ID            string       `json:"id"`
-	Type          AskType      `json:"type"`
-	Question      string       `json:"question"`
-	Options       []AskOption  `json:"options,omitempty"`
-	Recommended   string       `json:"recommended"`
-	AllowFreeText bool         `json:"allowFreeText"`
-	Context       AskContext   `json:"context"`
-	Scope         *AskScope    `json:"scope,omitempty"`
-	CreatedAt     time.Time    `json:"createdAt"`
-	ExpiresAt     time.Time    `json:"expiresAt"`
-	State         AskState     `json:"state"`
-	Answer        *AskAnswer   `json:"answer,omitempty"`
-	Delivery      *AskDelivery `json:"delivery,omitempty"`
+	ID            string      `json:"id"`
+	Type          AskType     `json:"type"`
+	Question      string      `json:"question"`
+	Options       []AskOption `json:"options,omitempty"`
+	Recommended   string      `json:"recommended"`
+	AllowFreeText bool        `json:"allowFreeText"`
+	Context       AskContext  `json:"context"`
+	Scope         *AskScope   `json:"scope,omitempty"`
+	Grant         *AskGrant   `json:"grant,omitempty"`
+	CreatedAt     time.Time   `json:"createdAt"`
+	// omitzero, not omitempty: encoding/json does not treat a zero time.Time
+	// as empty, so omitempty would send 0001-01-01 for a grant ask.
+	ExpiresAt time.Time    `json:"expiresAt,omitzero"`
+	State     AskState     `json:"state"`
+	Answer    *AskAnswer   `json:"answer,omitempty"`
+	Delivery  *AskDelivery `json:"delivery,omitempty"`
 }
 
-// EffectiveState is the state as of now. An open ask whose expiresAt, or, for
-// an approval, whose scope.expiresAt is at or before now reads as expired,
-// whether or not the sweeper has stored that yet. Other states are returned
-// as stored.
+// EffectiveState is the state as of now. An open info ask whose expiresAt, or
+// an open approval whose scope.expiresAt, is at or before now reads as
+// expired, whether or not the sweeper has stored that yet. A grant ask does
+// not lapse because a clock passed. Other states are returned as stored.
 func (a Ask) EffectiveState(now time.Time) AskState {
 	if a.State == AskStateOpen && askLapsed(a, now) {
 		return AskStateExpired
@@ -331,6 +358,9 @@ func (a Ask) ApprovalValid(now time.Time) bool {
 }
 
 func askLapsed(a Ask, now time.Time) bool {
+	if a.Type == AskTypeGrant {
+		return false
+	}
 	if !now.Before(a.ExpiresAt) {
 		return true
 	}
@@ -351,7 +381,12 @@ type AskCreateRequest struct {
 	AllowFreeText bool              `json:"allowFreeText"`
 	Context       AskRequestContext `json:"context"`
 	Scope         *AskScope         `json:"scope,omitempty"`
+	Grant         *AskGrant         `json:"grant,omitempty"`
 	ExpiresIn     string            `json:"expiresIn,omitempty"`
+	// Labels is not stored. The session route drops it, including
+	// coordination.dev-env.haynesops.com/ask-origin, so a session cannot set
+	// the broker origin.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // AskAnswerRequest is the body of POST PortalAskAnswerPath. Actor is set by
@@ -413,9 +448,17 @@ func (r AskCreateRequest) TTL() (time.Duration, error) {
 // createdAt: createdAt plus TTL. An approval with no ExpiresIn ends at its
 // scope.expiresAt when that is sooner, because an approval ask may not
 // outlive its scope (contract v1.1 A8); an explicit ExpiresIn that does is
-// refused by ValidateAt. Call it after ValidateAt, with the same time. A
-// server truncates createdAt to whole seconds first (see the package note).
+// refused by ValidateAt. A grant ask has no expiry: an empty ExpiresIn
+// returns the zero time, and a set ExpiresIn is refused. Call it after
+// ValidateAt, with the same time. A server truncates createdAt to whole
+// seconds first (see the package note).
 func (r AskCreateRequest) ExpiresAtFrom(createdAt time.Time) (time.Time, error) {
+	if r.Type == AskTypeGrant {
+		if r.ExpiresIn != "" {
+			return time.Time{}, askInvalid("expiresIn", "a grant ask has no expiry")
+		}
+		return time.Time{}, nil
+	}
 	d, err := r.TTL()
 	if err != nil {
 		return time.Time{}, err
@@ -443,7 +486,7 @@ func (r AskCreateRequest) ValidateAt(now time.Time) error {
 		return err
 	}
 	if err := validateAskBody(r.Type, r.Question, r.Options, r.Recommended, r.AllowFreeText,
-		r.Context.WorkPackage, r.Context.Links, r.Scope); err != nil {
+		r.Context.WorkPackage, r.Context.Links, r.Scope, r.Grant); err != nil {
 		return err
 	}
 	if r.Scope != nil {
@@ -476,7 +519,8 @@ func (r AskAnswerRequest) ValidateFor(a Ask) error { return r.ValidateForAt(a, t
 // For type approval, approved is required and is the decision; an option is
 // advisory, and text is an optional note. For type info, approved must be
 // nil, and the answer needs an option or non-blank text, with text only when
-// the ask allows free text.
+// the ask allows free text. For type grant, approved and a username are
+// required, and the clock is not consulted: an open grant stays open.
 func (r AskAnswerRequest) ValidateForAt(a Ask, now time.Time) error {
 	if err := r.Validate(); err != nil {
 		return err
@@ -491,7 +535,10 @@ func (r AskAnswerRequest) ValidateForAt(a Ask, now time.Time) error {
 	default:
 		return ErrAskNotOpen
 	}
-	return validateAskAnswerAgainst(a, r.OptionID, r.Text, r.Approved)
+	if err := validateAskAnswerAgainst(a, r.OptionID, r.Text, r.Approved); err != nil {
+		return err
+	}
+	return validateAskUsername(a.Type, r.Actor.Username, true)
 }
 
 // ValidateAsk checks a record received from the server: every field rule of
@@ -502,7 +549,7 @@ func ValidateAsk(a Ask) error {
 		return askInvalid("id", "must match ^ask-[0-9a-f]{16}$")
 	}
 	if err := validateAskBody(a.Type, a.Question, a.Options, a.Recommended, a.AllowFreeText,
-		a.Context.WorkPackage, a.Context.Links, a.Scope); err != nil {
+		a.Context.WorkPackage, a.Context.Links, a.Scope, a.Grant); err != nil {
 		return err
 	}
 	if a.Context.SessionName == "" || len(a.Context.SessionName) > AskSessionNameMaxLen || !askPlain(a.Context.SessionName) {
@@ -514,7 +561,11 @@ func ValidateAsk(a Ask) error {
 	if a.CreatedAt.IsZero() {
 		return askInvalid("createdAt", "required")
 	}
-	if a.ExpiresAt.Before(a.CreatedAt.Add(AskMinTTL)) || a.ExpiresAt.After(a.CreatedAt.Add(AskMaxTTL)) {
+	if a.Type == AskTypeGrant {
+		if !a.ExpiresAt.IsZero() {
+			return askInvalid("expiresAt", "a grant ask has no expiry")
+		}
+	} else if a.ExpiresAt.Before(a.CreatedAt.Add(AskMinTTL)) || a.ExpiresAt.After(a.CreatedAt.Add(AskMaxTTL)) {
 		return askInvalid("expiresAt", "must be 1m to 7d after createdAt")
 	}
 	if a.Scope != nil {
@@ -540,11 +591,21 @@ func ValidateAsk(a Ask) error {
 		if err := validateAskAnswerAgainst(a, a.Answer.OptionID, a.Answer.Text, a.Answer.Approved); err != nil {
 			return err
 		}
+		// A stored grant answer may omit username: the session view does.
+		// The answer request and the CRD still require it on the way in.
+		if err := validateAskUsername(a.Type, a.Answer.AnsweredBy.Username, false); err != nil {
+			return err
+		}
 		if a.Answer.AnsweredAt.IsZero() {
 			return askInvalid("answer.answeredAt", "required")
 		}
-		// The answer route refuses an answer at or after expiresAt.
-		if a.Answer.AnsweredAt.Before(a.CreatedAt) || !a.Answer.AnsweredAt.Before(a.ExpiresAt) {
+		// The answer route refuses an answer at or after expiresAt. A grant
+		// ask has no expiresAt, so only the createdAt bound applies.
+		if a.Type == AskTypeGrant {
+			if a.Answer.AnsweredAt.Before(a.CreatedAt) {
+				return askInvalid("answer.answeredAt", "must be at or after createdAt")
+			}
+		} else if a.Answer.AnsweredAt.Before(a.CreatedAt) || !a.Answer.AnsweredAt.Before(a.ExpiresAt) {
 			return askInvalid("answer.answeredAt", "must be at or after createdAt and before expiresAt")
 		}
 	default:
@@ -575,15 +636,21 @@ func validateAskScopeWindow(from, scopeExpiresAt time.Time) error {
 
 // validateAskBody checks the fields a create request and a stored ask share.
 func validateAskBody(t AskType, question string, options []AskOption, recommended string,
-	allowFreeText bool, workPackage int, links []string, scope *AskScope) error {
+	allowFreeText bool, workPackage int, links []string, scope *AskScope, grant *AskGrant) error {
 	switch t {
 	case AskTypeInfo:
 		if scope != nil {
 			return askInvalid("scope", "forbidden for type info")
 		}
+		if grant != nil {
+			return askInvalid("grant", "forbidden for type info")
+		}
 	case AskTypeApproval:
 		if scope == nil {
 			return askInvalid("scope", "required for type approval")
+		}
+		if grant != nil {
+			return askInvalid("grant", "forbidden for type approval")
 		}
 		if err := askText("scope.action", scope.Action, 1, AskScopeFieldMaxRunes, false); err != nil {
 			return err
@@ -593,6 +660,13 @@ func validateAskBody(t AskType, question string, options []AskOption, recommende
 		}
 		if scope.ExpiresAt.IsZero() {
 			return askInvalid("scope.expiresAt", "required")
+		}
+	case AskTypeGrant:
+		if scope != nil {
+			return askInvalid("scope", "forbidden for type grant")
+		}
+		if err := validateAskGrant(grant); err != nil {
+			return err
 		}
 	default:
 		return askInvalid("type", "must be info or approval")
@@ -637,6 +711,56 @@ func validateAskBody(t AskType, question string, options []AskOption, recommende
 		if err := validateAskLink(l); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateAskGrant(g *AskGrant) error {
+	if g == nil {
+		return askInvalid("grant", "required for type grant")
+	}
+	if len(g.UID) < 1 || len(g.UID) > AskGrantUIDMaxLen || !askGrantUIDPattern.MatchString(g.UID) {
+		return askInvalid("grant.uid", "must match ^[A-Za-z0-9]([A-Za-z0-9._:-]*[A-Za-z0-9])?$, 1 to 64 characters")
+	}
+	if !askGrantDigestPattern.MatchString(g.ScopeDigest) {
+		return askInvalid("grant.scopeDigest", "must match ^[A-Za-z0-9_-]{43}$")
+	}
+	switch g.Type {
+	case "kube", "egress", "credential", "breakglass", "maintenance":
+	default:
+		return askInvalid("grant.type", "must be kube, egress, credential, breakglass or maintenance")
+	}
+	if err := askText("grant.target", g.Target, 1, AskScopeFieldMaxRunes, false); err != nil {
+		return err
+	}
+	if len(g.TTL) < 2 || len(g.TTL) > AskGrantTTLMaxLen || !askGrantTTLPattern.MatchString(g.TTL) {
+		return askInvalid("grant.ttl", "must be a duration string of 2 to 16 characters")
+	}
+	if g.Detail != "" {
+		if err := askText("grant.detail", g.Detail, 1, AskScopeFieldMaxRunes, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateAskUsername applies the username rule. required is true for an
+// answer request: a grant answer must carry a username that matches the
+// pattern. A stored record may omit it, because the session view does.
+// An info or approval answer never carries one. The pattern itself is
+// checked with the rest of the actor shape.
+func validateAskUsername(t AskType, username string, required bool) error {
+	switch t {
+	case AskTypeGrant:
+		if required && username == "" {
+			return askInvalid("actor.username", "required for type grant")
+		}
+	case AskTypeInfo, AskTypeApproval:
+		if username != "" {
+			return askInvalid("actor.username", "only a grant answer has a username")
+		}
+	default:
+		return askInvalid("type", "must be info or approval")
 	}
 	return nil
 }
@@ -689,6 +813,9 @@ func validateAskAnswerShape(optionID, text string, actor AskActor, recorded bool
 	if err := askText("actor.displayName", actor.DisplayName, minFor(false, actor.DisplayName), AskActorDisplayNameMaxRunes, false); err != nil {
 		return err
 	}
+	if actor.Username != "" && (len(actor.Username) > AskActorUsernameMaxLen || !askUsernamePattern.MatchString(actor.Username)) {
+		return askInvalid("actor.username", "must match ^[A-Za-z0-9][A-Za-z0-9._@+-]{0,62}$")
+	}
 	if recorded && actor.DisplayName == "" && (actor.Issuer == "" || actor.Subject == "") {
 		return askInvalid("actor", "needs a displayName, or an issuer and a subject")
 	}
@@ -713,6 +840,10 @@ func validateAskAnswerAgainst(a Ask, optionID, text string, approved *bool) erro
 		// Approve or deny is the answer; text is always allowed as a note.
 		if approved == nil {
 			return askInvalid("approved", "required for type approval")
+		}
+	case AskTypeGrant:
+		if approved == nil {
+			return askInvalid("approved", "required for type grant")
 		}
 	case AskTypeInfo:
 		if approved != nil {

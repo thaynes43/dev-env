@@ -1,8 +1,6 @@
 # ADR-021: Grants that need Tom travel through the Asks board
 
-- **Status:** Proposed for coordinator review. This ADR installs nothing,
-  changes no live policy and approves no action. It is not accepted until the
-  coordinator accepts it. No code merges before that.
+- **Status:** Accepted 2026-11-10 by the coordinator (OP525). Tom ruled the behaviour quoted below; this ADR installs nothing.
 - **Date:** 2026-11-10
 - **Decider:** Tom Haynes, for the rulings quoted below. The mechanism that
   carries those rulings is proposed here for the coordinator to accept or

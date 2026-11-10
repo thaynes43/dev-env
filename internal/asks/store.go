@@ -13,6 +13,8 @@ import (
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
@@ -26,11 +28,20 @@ const (
 	RequesterLabel = "coordination.dev-env.haynesops.com/ask-requester"
 	// StateLabel is the stored lifecycle, used to count open asks.
 	StateLabel = "coordination.dev-env.haynesops.com/ask-state"
+	// TypeLabel is the ask kind. Grant opens are counted with it, apart from
+	// the 16 info and approval slots.
+	TypeLabel = "coordination.dev-env.haynesops.com/ask-type"
+	// OriginLabel marks a broker-created grant ask. Session create drops it.
+	OriginLabel = "coordination.dev-env.haynesops.com/ask-origin"
 
-	// DefaultOpenPerRequester is the cap on stored-open asks for one session.
-	// An open ask that has lapsed still counts until its state label changes;
-	// the expiry sweeper is a later lane.
+	// DefaultOpenPerRequester is the cap on stored-open info and approval asks
+	// for one session. An open ask that has lapsed still counts until its
+	// state label changes. Grant asks do not use this cap.
 	DefaultOpenPerRequester int64 = 16
+	// DefaultOpenGrantsPerRequester is the cap on open grant asks for one session.
+	DefaultOpenGrantsPerRequester int64 = 3
+	// DefaultOpenGrantsPerNamespace is the cap on open grant asks in the namespace.
+	DefaultOpenGrantsPerNamespace int64 = 48
 	// DefaultTotalPerRequester is the lifetime cap for one session.
 	DefaultTotalPerRequester int64 = 512
 	// DefaultPerNamespace is the cap on asks in the namespace.
@@ -52,7 +63,8 @@ var (
 	ErrUnavailable = errors.New("asks are unavailable")
 )
 
-// LimitError is a refused create. Scope is LimitOpen, LimitRequester or LimitNamespace.
+// LimitError is a refused create. Scope is LimitOpen, LimitOpenGrant,
+// LimitOpenGrantNamespace, LimitRequester or LimitNamespace.
 type LimitError struct{ Scope string }
 
 func (e *LimitError) Error() string { return "ask limit reached: " + e.Scope }
@@ -60,14 +72,22 @@ func (e *LimitError) Unwrap() error { return ErrLimit }
 
 // Limits are the count bounds. A zero field takes the default.
 type Limits struct {
-	OpenPerRequester  int64
-	TotalPerRequester int64
-	PerNamespace      int64
+	OpenPerRequester       int64
+	OpenGrantsPerRequester int64
+	OpenGrantsPerNamespace int64
+	TotalPerRequester      int64
+	PerNamespace           int64
 }
 
 func (l Limits) effective() Limits {
 	if l.OpenPerRequester <= 0 {
 		l.OpenPerRequester = DefaultOpenPerRequester
+	}
+	if l.OpenGrantsPerRequester <= 0 {
+		l.OpenGrantsPerRequester = DefaultOpenGrantsPerRequester
+	}
+	if l.OpenGrantsPerNamespace <= 0 {
+		l.OpenGrantsPerNamespace = DefaultOpenGrantsPerNamespace
 	}
 	if l.TotalPerRequester <= 0 {
 		l.TotalPerRequester = DefaultTotalPerRequester
@@ -146,7 +166,7 @@ func (s KubeStore) Create(ctx context.Context, req Requester, in apiv1.AskCreate
 	if err != nil {
 		return apiv1.Ask{}, false, err
 	}
-	if err := s.checkRoom(ctx, req, now); err != nil {
+	if err := s.checkRoom(ctx, req, now, in.Type); err != nil {
 		return apiv1.Ask{}, false, err
 	}
 	obj := &coord.Ask{
@@ -345,7 +365,7 @@ func applyAnswer(obj *coord.Ask, in apiv1.AskAnswerRequest, now time.Time) {
 	obj.Status.State = string(apiv1.AskStateAnswered)
 	obj.Status.Answer = &coord.AskAnswer{
 		OptionID: in.OptionID, Text: in.Text, AnsweredAt: metav1.NewTime(now),
-		AnsweredBy: coord.AskActor{Issuer: in.Actor.Issuer, Subject: in.Actor.Subject, DisplayName: in.Actor.DisplayName},
+		AnsweredBy: coord.AskActor{Issuer: in.Actor.Issuer, Subject: in.Actor.Subject, DisplayName: in.Actor.DisplayName, Username: in.Actor.Username},
 	}
 	if in.Approved != nil {
 		v := *in.Approved
@@ -482,27 +502,71 @@ func (s KubeStore) list(ctx context.Context, sel client.ListOption) ([]apiv1.Ask
 	return nil, false, fmt.Errorf("%w: ask list did not finish", ErrUnavailable)
 }
 
-func (s KubeStore) checkRoom(ctx context.Context, req Requester, now time.Time) error {
+// nonGrantOpenSelector matches this requester's open asks that are not grants.
+// A missing type label still matches, so an ask stored before the type label
+// counts toward the 16 info and approval slots.
+func nonGrantOpenSelector(who string) (labels.Selector, error) {
+	sel := labels.SelectorFromSet(labels.Set{
+		RequesterLabel: who,
+		StateLabel:     string(apiv1.AskStateOpen),
+	})
+	req, err := labels.NewRequirement(TypeLabel, selection.NotEquals, []string{string(apiv1.AskTypeGrant)})
+	if err != nil {
+		return nil, err
+	}
+	return sel.Add(*req), nil
+}
+
+func (s KubeStore) checkRoom(ctx context.Context, req Requester, now time.Time, kind apiv1.AskType) error {
 	now = whole(now)
 	lim := s.Limits.effective()
 	who := requesterValue(req)
-	checks := []struct {
-		scope string
-		match map[string]string
-		max   int64
-	}{
-		{LimitOpen, map[string]string{RequesterLabel: who, StateLabel: string(apiv1.AskStateOpen)}, lim.OpenPerRequester},
-		{LimitRequester, map[string]string{RequesterLabel: who}, lim.TotalPerRequester},
-		{LimitNamespace, nil, lim.PerNamespace},
+	type roomCheck struct {
+		scope   string
+		sel     client.ListOption
+		max     int64
+		recount func() (int64, bool, error)
 	}
+	var checks []roomCheck
+	if kind == apiv1.AskTypeGrant {
+		session := client.MatchingLabels{
+			RequesterLabel: who,
+			StateLabel:     string(apiv1.AskStateOpen),
+			TypeLabel:      string(apiv1.AskTypeGrant),
+		}
+		namespace := client.MatchingLabels{
+			StateLabel: string(apiv1.AskStateOpen),
+			TypeLabel:  string(apiv1.AskTypeGrant),
+		}
+		checks = append(checks,
+			roomCheck{LimitOpenGrant, session, lim.OpenGrantsPerRequester, func() (int64, bool, error) {
+				return s.recountMatching(ctx, session, now)
+			}},
+			roomCheck{LimitOpenGrantNamespace, namespace, lim.OpenGrantsPerNamespace, func() (int64, bool, error) {
+				return s.recountMatching(ctx, namespace, now)
+			}},
+		)
+	} else {
+		sel, err := nonGrantOpenSelector(who)
+		if err != nil {
+			return fmt.Errorf("%w: ask count failed", ErrUnavailable)
+		}
+		checks = append(checks, roomCheck{LimitOpen, client.MatchingLabelsSelector{Selector: sel}, lim.OpenPerRequester, func() (int64, bool, error) {
+			return s.recountMatching(ctx, client.MatchingLabelsSelector{Selector: sel}, now)
+		}})
+	}
+	checks = append(checks,
+		roomCheck{LimitRequester, client.MatchingLabels{RequesterLabel: who}, lim.TotalPerRequester, nil},
+		roomCheck{LimitNamespace, nil, lim.PerNamespace, nil},
+	)
 	for _, check := range checks {
-		n, err := s.countAtMost(ctx, check.match, check.max)
+		n, err := s.countAtMost(ctx, check.sel, check.max)
 		if err != nil {
 			s.log().Error(nil, "ask count failed", "scope", check.scope, "reason", string(apierrors.ReasonForError(err)))
 			return fmt.Errorf("%w: ask count failed", ErrUnavailable)
 		}
-		if check.scope == LimitOpen && n >= check.max {
-			recounted, unconfirmed, rerr := s.recountOpen(ctx, req, now)
+		if check.recount != nil && n >= check.max {
+			recounted, unconfirmed, rerr := check.recount()
 			if rerr != nil {
 				s.log().Error(nil, "ask count failed", "scope", check.scope, "reason", string(apierrors.ReasonForError(rerr)))
 				return fmt.Errorf("%w: ask count failed", ErrUnavailable)
@@ -524,12 +588,14 @@ func (s KubeStore) checkRoom(ctx context.Context, req Requester, now time.Time) 
 	return nil
 }
 
-// recountOpen reads this requester's open-labelled asks, at most openRecountLimit,
-// and counts those whose stored state is open or absent and whose effective
-// state is still open. Any other label in that set is repaired. unconfirmed is
-// true when a record could not be read or the scan stopped early.
-func (s KubeStore) recountOpen(ctx context.Context, req Requester, now time.Time) (int64, bool, error) {
-	who := requesterValue(req)
+// recountMatching reads open-labelled asks selected by sel, at most
+// openRecountLimit, and counts those whose stored state is open or absent
+// and whose effective state is still open. Any other label in that set is
+// repaired. unconfirmed is true when a record could not be read or the scan
+// stopped early. Grant asks are selected with the type label; info and
+// approval asks are selected by excluding that type, so a missing type label
+// still counts toward the 16.
+func (s KubeStore) recountMatching(ctx context.Context, sel client.ListOption, now time.Time) (int64, bool, error) {
 	var n int64
 	seen := 0
 	cursor := ""
@@ -546,7 +612,7 @@ func (s KubeStore) recountOpen(ctx context.Context, req Requester, now time.Time
 		list := &coord.AskList{}
 		opts := []client.ListOption{
 			client.InNamespace(s.Namespace),
-			client.MatchingLabels{RequesterLabel: who, StateLabel: string(apiv1.AskStateOpen)},
+			sel,
 			client.Limit(limit),
 		}
 		if cursor != "" {
@@ -613,7 +679,8 @@ func desiredStateLabel(obj *coord.Ask, now time.Time) (string, bool) {
 
 // countAtMost is the CheckRoom read: uncached metadata, label selected, and it
 // stops once the bound is reached so a full namespace is not pulled past the cap.
-func (s KubeStore) countAtMost(ctx context.Context, match map[string]string, bound int64) (int64, error) {
+// A nil selector counts every ask in the namespace.
+func (s KubeStore) countAtMost(ctx context.Context, sel client.ListOption, bound int64) (int64, error) {
 	if s.Live == nil || bound < 1 {
 		return 0, ErrUnavailable
 	}
@@ -623,8 +690,8 @@ func (s KubeStore) countAtMost(ctx context.Context, match map[string]string, bou
 		page := &metav1.PartialObjectMetadataList{}
 		page.SetGroupVersionKind(coord.GroupVersion.WithKind("AskList"))
 		opts := []client.ListOption{client.InNamespace(s.Namespace), client.Limit(min(bound-n, 500)), client.Continue(cursor)}
-		if len(match) > 0 {
-			opts = append(opts, client.MatchingLabels(match))
+		if sel != nil {
+			opts = append(opts, sel)
 		}
 		if err := s.Live.List(ctx, page, opts...); err != nil {
 			return 0, err
@@ -653,6 +720,12 @@ func toWire(obj *coord.Ask) (apiv1.Ask, error) {
 		},
 		CreatedAt: spec.CreatedAt.UTC(), ExpiresAt: spec.ExpiresAt.UTC(), State: state,
 	}
+	if spec.Grant != nil {
+		out.Grant = &apiv1.AskGrant{
+			UID: spec.Grant.UID, ScopeDigest: spec.Grant.ScopeDigest, Type: spec.Grant.Type,
+			Target: spec.Grant.Target, TTL: spec.Grant.TTL, Detail: spec.Grant.Detail,
+		}
+	}
 	if len(spec.Options) > 0 {
 		out.Options = make([]apiv1.AskOption, len(spec.Options))
 		for i, opt := range spec.Options {
@@ -666,7 +739,10 @@ func toWire(obj *coord.Ask) (apiv1.Ask, error) {
 		src := obj.Status.Answer
 		ans := apiv1.AskAnswer{
 			OptionID: src.OptionID, Text: src.Text, AnsweredAt: src.AnsweredAt.UTC(),
-			AnsweredBy: apiv1.AskActor{Issuer: src.AnsweredBy.Issuer, Subject: src.AnsweredBy.Subject, DisplayName: src.AnsweredBy.DisplayName},
+			AnsweredBy: apiv1.AskActor{
+				Issuer: src.AnsweredBy.Issuer, Subject: src.AnsweredBy.Subject,
+				DisplayName: src.AnsweredBy.DisplayName, Username: src.AnsweredBy.Username,
+			},
 		}
 		if src.Approved != nil {
 			v := *src.Approved

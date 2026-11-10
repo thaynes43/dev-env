@@ -50,6 +50,14 @@ type digestBody struct {
 	ScopeTarget    string            `json:"scopeTarget"`
 	ScopeExpiresAt string            `json:"scopeExpiresAt"`
 	ExpiresIn      string            `json:"expiresIn"`
+	// Grant fields sit at the end and omit when empty, so an info or approval
+	// digest stays the same bytes it was before grant asks existed.
+	GrantUID         string `json:"grantUid,omitempty"`
+	GrantScopeDigest string `json:"grantScopeDigest,omitempty"`
+	GrantType        string `json:"grantType,omitempty"`
+	GrantTarget      string `json:"grantTarget,omitempty"`
+	GrantTTL         string `json:"grantTtl,omitempty"`
+	GrantDetail      string `json:"grantDetail,omitempty"`
 }
 
 func requestDigest(in apiv1.AskCreateRequest) (string, error) {
@@ -68,6 +76,14 @@ func requestDigest(in apiv1.AskCreateRequest) (string, error) {
 		body.ScopeAction = in.Scope.Action
 		body.ScopeTarget = in.Scope.Target
 		body.ScopeExpiresAt = in.Scope.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	if in.Grant != nil {
+		body.GrantUID = in.Grant.UID
+		body.GrantScopeDigest = in.Grant.ScopeDigest
+		body.GrantType = in.Grant.Type
+		body.GrantTarget = in.Grant.Target
+		body.GrantTTL = in.Grant.TTL
+		body.GrantDetail = in.Grant.Detail
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -124,13 +140,16 @@ func prepare(req Requester, in apiv1.AskCreateRequest, now time.Time) (prepared,
 	if err := in.ValidateAt(now); err != nil {
 		return prepared{}, err
 	}
-	exp, err := in.ExpiresAtFrom(now)
-	if err != nil {
-		return prepared{}, err
-	}
-	exp = exp.UTC()
-	if !wholeInstant(exp) {
-		return prepared{}, fmt.Errorf("%w: expiresAt: must be a whole number of seconds", apiv1.ErrAskInvalid)
+	var exp time.Time
+	if in.Type != apiv1.AskTypeGrant {
+		exp, err = in.ExpiresAtFrom(now)
+		if err != nil {
+			return prepared{}, err
+		}
+		exp = exp.UTC()
+		if !wholeInstant(exp) {
+			return prepared{}, fmt.Errorf("%w: expiresAt: must be a whole number of seconds", apiv1.ErrAskInvalid)
+		}
 	}
 	digest, err := requestDigest(in)
 	if err != nil {
@@ -143,8 +162,13 @@ func prepare(req Requester, in apiv1.AskCreateRequest, now time.Time) (prepared,
 			SessionName: req.Name, SessionUID: req.UID,
 			WorkPackage: in.Context.WorkPackage, Links: in.Context.Links,
 		},
-		CreatedAt: metav1.NewTime(now), ExpiresAt: metav1.NewTime(exp),
+		CreatedAt: metav1.NewTime(now),
 		RequestID: in.RequestID, RequestDigest: digest,
+	}
+	if in.Type == apiv1.AskTypeGrant {
+		spec.Grant = coordGrant(in.Grant)
+	} else {
+		spec.ExpiresAt = metav1.NewTime(exp)
 	}
 	if !apiv1.ValidAskID(spec.ID) {
 		return prepared{}, fmt.Errorf("%w: ask id", ErrUnavailable)
@@ -167,9 +191,21 @@ func prepare(req Requester, in apiv1.AskCreateRequest, now time.Time) (prepared,
 	}
 	return prepared{
 		Name: spec.ID, Spec: spec,
+		// Client labels are ignored. ask-origin is not stored here.
 		Labels: map[string]string{
 			RequesterLabel: requesterValue(req),
 			StateLabel:     string(apiv1.AskStateOpen),
+			TypeLabel:      string(in.Type),
 		},
 	}, nil
+}
+
+func coordGrant(g *apiv1.AskGrant) *coord.AskGrant {
+	if g == nil {
+		return nil
+	}
+	return &coord.AskGrant{
+		UID: g.UID, ScopeDigest: g.ScopeDigest, Type: g.Type,
+		Target: g.Target, TTL: g.TTL, Detail: g.Detail,
+	}
 }
