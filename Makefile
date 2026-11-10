@@ -14,6 +14,25 @@ GO ?= go
 GO_PARALLELISM ?= 2
 NICE ?= nice -n 19
 
+# Per-package go test timeout (go's default is 10m). Measured 2026-11-10 in a
+# session pod (2 CPUs, nice -n 19): internal/agentd, the slowest package, takes
+# about 4 minutes (234s, 884 tests) with GOTMPDIR on /tmp. 30m leaves 7x margin
+# and equals ci.yml's Test job timeout, so a hung test fails the package before
+# the job is cancelled.
+GO_TEST_TIMEOUT ?= 30m
+
+# Where go test puts its work directory and t.TempDir files. A session pod sets
+# GOTMPDIR under HOME, a network volume where fsync-heavy tests ran 70 to 100
+# times slower (TestHistoryArchiveVerifyDetectsTamper: 110s on HOME, 1.5s on
+# /tmp) and internal/agentd did not finish in 45 minutes. Test scratch goes to a
+# fresh directory under GO_TEST_TMP_ROOT, removed when the target exits; agentd
+# peaked near 55 MB there. Set GO_TEST_TMP_ROOT= (empty) to keep the caller's
+# GOTMPDIR.
+GO_TEST_TMP_ROOT ?= /tmp
+GO_TEST_TMP_SETUP = tmp=; if [ -n '$(GO_TEST_TMP_ROOT)' ]; then \
+	tmp="$$(mktemp -d '$(GO_TEST_TMP_ROOT)/dev-env-go-test.XXXXXX')"; trap 'rm -rf "$$tmp"' EXIT; fi
+GO_TEST_ENV = $${tmp:+GOTMPDIR="$$tmp"}
+
 # Child processes inherit these too: `go list` under controller-gen and
 # golangci-lint, and the test binaries.
 export GOMAXPROCS := $(GO_PARALLELISM)
@@ -103,8 +122,8 @@ lint: $(GOLANGCI_LINT) ## Run golangci-lint.
 # how many packages, and so how many API servers, run at once.
 .PHONY: test
 test: $(SETUP_ENVTEST) ## Run the unit tests and the envtest suites, GO_PARALLELISM packages at a time.
-	assets="$$($(ENVTEST_USE))"; $(ENVTEST_WRITABLE); \
-		KUBEBUILDER_ASSETS="$$assets" $(NICE) $(GO) test -p $(GO_PARALLELISM) ./...
+	assets="$$($(ENVTEST_USE))"; $(ENVTEST_WRITABLE); $(GO_TEST_TMP_SETUP); \
+		env $(GO_TEST_ENV) KUBEBUILDER_ASSETS="$$assets" $(NICE) $(GO) test -p $(GO_PARALLELISM) -timeout $(GO_TEST_TIMEOUT) ./...
 	$(MAKE) --no-print-directory test-portal-localtest
 
 # The portal local test instance (DESIGN-055) compiles only with this tag, so
@@ -113,7 +132,7 @@ PORTAL_LOCALTEST_TAG := portallocaltest
 
 .PHONY: test-portal-localtest
 test-portal-localtest: ## Run the portal local test instance's tagged tests (DESIGN-055).
-	$(NICE) $(GO) test -p $(GO_PARALLELISM) -tags $(PORTAL_LOCALTEST_TAG) -run LocalTest ./web/portal/session/ ./web/portal/localtest/
+	$(GO_TEST_TMP_SETUP); env $(GO_TEST_ENV) $(NICE) $(GO) test -p $(GO_PARALLELISM) -timeout $(GO_TEST_TIMEOUT) -tags $(PORTAL_LOCALTEST_TAG) -run LocalTest ./web/portal/session/ ./web/portal/localtest/
 
 .PHONY: portal-localtest
 portal-localtest: ## Serve the portal on loopback with fixture data and a fixed test principal (DESIGN-055). LOCALTEST_ARGS="-listen 127.0.0.1:8099".
