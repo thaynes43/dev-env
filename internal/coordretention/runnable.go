@@ -579,7 +579,7 @@ func (r *Runnable) forceReset(ctx context.Context, c candidate) error {
 }
 
 func (r *Runnable) markReleased(ctx context.Context, c candidate) stepStatus {
-	if needsCompanionAck(c.item.Result.Observations) && c.ack == nil {
+	if needsCompanionAck(c.item.Result.Observations) && c.ack == nil && !c.item.Result.ReplyAck {
 		return stepStatus{skipped: true}
 	}
 	rec, err := r.readRecord(ctx, c.item.Result.Summary)

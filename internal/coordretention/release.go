@@ -79,7 +79,8 @@ func (r *Runnable) releaseRechecked(ctx context.Context, s Summary) (liveRecord,
 		}
 		cfg.Archive = map[MessageRef]ArchiveEvidence{rec.summary.Message: evidence}
 	}
-	decision, _, observations := decide(ctx, cfg, rec.summary, map[string]memoSession{})
+	// nil replies: this recheck has one record, so decide reads a stored reply itself.
+	decision, _, observations, _ := decide(ctx, cfg, rec.summary, map[string]memoSession{}, nil)
 	rec.observations = observations
 	switch decision {
 	case Released:

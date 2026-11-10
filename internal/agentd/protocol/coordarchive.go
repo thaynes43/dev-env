@@ -266,10 +266,32 @@ func coordArchiveObjectMatches(m CoordArchiveManifest, object map[string]any) bo
 		return false
 	}
 	if m.Resource == "inboxmessages" || m.Resource == "inboxreadacks" {
-		recipient, ok := spec["recipient"].(map[string]any)
-		if !ok || recipient["uid"] != m.RecipientUID {
+		uid, ok := CoordArchiveRecipientUID(m.Resource, spec)
+		if !ok || uid != m.RecipientUID {
 			return false
 		}
 	}
 	return m.Resource != "inboxreadacks" || spec["messageUID"] == m.MessageUID
+}
+
+// CoordArchiveRecipientUID is the recipient form the archive manifest stores.
+// A session recipient contributes spec.recipient.uid. A caller recipient
+// contributes spec.callerRecipient.policyUID. An ack has only the session form.
+// Exactly one message form matches.
+func CoordArchiveRecipientUID(resource string, spec map[string]any) (string, bool) {
+	recipient, recipientOK := spec["recipient"].(map[string]any)
+	if resource == "inboxreadacks" {
+		uid, _ := recipient["uid"].(string)
+		return uid, recipientOK && uid != ""
+	}
+	caller, callerOK := spec["callerRecipient"].(map[string]any)
+	if recipientOK == callerOK {
+		return "", false
+	}
+	if recipientOK {
+		uid, _ := recipient["uid"].(string)
+		return uid, uid != ""
+	}
+	uid, _ := caller["policyUID"].(string)
+	return uid, uid != ""
 }

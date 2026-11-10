@@ -45,6 +45,17 @@ type Summary struct {
 	Owner, Source, Sender, Recipient                         SessionRef
 	Message                                                  MessageRef
 	Valid                                                    bool
+	// CallerSenderUID is the CallerPolicy UID when the sender is the
+	// Meatball account. Sender stays empty in that case.
+	CallerSenderUID string
+	// CallerRecipient is set when Recipient holds only the CallerPolicy UID.
+	CallerRecipient bool
+	// MessageKind is the inbox kind. Empty is a plain message.
+	MessageKind string
+	// ParentNote is the parent-route label.
+	ParentNote bool
+	// ReplyToName and ReplyToUID name the note a reply answers.
+	ReplyToName, ReplyToUID string
 }
 
 // ListConfig supplies the uncached API reader and the explicitly enabled kinds.
@@ -194,6 +205,16 @@ func summarize(r resource, namespace string, u *unstructured.Unstructured) Summa
 		if runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &v) == nil {
 			s.Project, s.Sender = v.Spec.Project, ref(v.Spec.Sender)
 			s.Recipient = recipientForm(v.Spec)
+			s.MessageKind = v.Spec.Kind
+			s.ParentNote = v.GetLabels()[inbox.ParentNoteLabel] == "true"
+			if v.Spec.CallerSender != nil && v.Spec.Sender == (coord.SessionIdentity{}) {
+				s.CallerSenderUID = v.Spec.CallerSender.PolicyUID
+				s.Sender = SessionRef{}
+			}
+			s.CallerRecipient = v.Spec.CallerRecipient != nil && v.Spec.Recipient == (coord.SessionIdentity{})
+			if v.Spec.InReplyTo != nil {
+				s.ReplyToName, s.ReplyToUID = v.Spec.InReplyTo.Name, v.Spec.InReplyTo.UID
+			}
 			s.Valid = validMeta(s, namespace) && inbox.ValidMessage(v.Spec) && u.GetName() == inbox.MessageNameFor(v.Spec)
 		}
 	case InboxReadAck:
