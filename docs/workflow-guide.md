@@ -983,22 +983,24 @@ the state and reply metadata. A waiting response contains no text. An already
 stored answer returns at once. Each held request uses one Kubernetes watch
 from the reply list's resource version, so an answer between the list and
 watch is not missed. The caller's live session and pod are checked again
-before returning the answer. More than eight held waits for a session return
-429. Cancellation releases the watch and its slot.
+before returning the answer. More than eight held waits for one session on
+one API replica return 429. Two replicas can hold sixteen. Cancellation
+releases the watch and its slot.
 
 The wait handler moves its request's read and write deadlines to the wait plus
 30 seconds. The CLI copies its HTTP client and uses the wait plus two minutes;
-the other parent commands keep the 30 second client. A broken watch returns
-an unconfirmed result. Neither side polls or retries automatically. Call
-`wait` again when more than 900 seconds are needed or a connection ends before
-the answer arrives.
+the other parent commands keep the 30 second client. A watch that is refused
+or cannot start answers 503 and holds nothing. Neither side polls or retries
+automatically. Call `wait` again when more than 900 seconds are needed or a
+connection ends before the answer arrives.
 
 The operator flag `--enable-parent-notes` defaults to false and requires
 `--enable-durable-inbox`. With it off these routes answer 503 and store
-nothing; an operator older than this feature answers 404. This source does not
-enable it in the cluster. The parent finds
-notes by listing them. Meatball callers and wake notices are later slices;
-no note text is pasted into a session.
+nothing; an operator older than this feature answers 404. The wait needs the
+verb watch on inboxmessages for the operator's Role, granted in haynes-ops
+before the flag is on. This source does not enable the flag in the cluster.
+The parent finds notes by listing them. Meatball callers and wake notices
+are later slices; no note text is pasted into a session.
 
 The record is an InboxMessage marked by the server-set label
 `coordination.dev-env.haynesops.com/parent-note=true`. The label distinguishes

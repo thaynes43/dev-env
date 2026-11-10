@@ -114,7 +114,9 @@ func TestParentWaitClientTimeoutAndOtherCommands(t *testing.T) {
 		return nil, nil
 	}
 	http.DefaultTransport = tr
-	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { http.Error(w, "refused", 503) }
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		http.Error(w, "refused", http.StatusServiceUnavailable)
+	}
 	note := parentTestMetadata().Name
 	for _, tc := range []struct {
 		args    []string

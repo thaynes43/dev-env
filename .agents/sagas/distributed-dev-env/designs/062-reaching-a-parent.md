@@ -465,10 +465,14 @@ parent has notes. Meatball does not learn about sessions it did not start.
 The wait uses a watch on the reply, one watch per held request, and returns
 when the reply is stored or the deadline passes. The handler does not spin.
 A second wait on the same note returns the stored reply at once. Over 8
-held waits for one session, the route returns 429.
+held waits for one session on one API replica, the route returns 429. Two
+API replicas can hold sixteen for one session. The wait needs the verb
+watch on inboxmessages for the operator's Role, granted in haynes-ops
+before the flag is on. A refused watch, or a watch that cannot start,
+answers 503 with a fixed sentence and holds nothing, and it does not poll.
 
 The API server's read timeout is 30 seconds and its write timeout is 60
-seconds (`internal/apiserver/server.go:595-596`). Before the wait handler
+seconds (`internal/apiserver/server.go:604-605`). Before the wait handler
 blocks, it calls `holdResponse` for N plus 30 seconds
 (`internal/apiserver/threads.go:169-181`). That helper moves this request's
 read deadline and write deadline, which is how a thread launch already
@@ -506,7 +510,8 @@ than 900 seconds, or when the connection closes before the handler answers.
 | Wait deadline with no reply | 200, state `waiting`, no text |
 | Wait when the reply is already stored | 200, the reply text |
 | Project or sender over the inbox limits | 429, nothing stored |
-| Too many held waits | 429 |
+| Too many held waits for one session on one API replica | 429. Two replicas can hold sixteen |
+| Watch refused or cannot start | 503, nothing held |
 | Schema not upgraded, so a new field would be dropped | 503, nothing stored |
 
 `agent-run msg` to a headless task stays 409. This design does not change
@@ -584,7 +589,7 @@ Meatball learns by calling `parent_waiting`, and by the count on
 Text, key, list page and the 512 / 4096 caps stay the inbox caps (section
 2.2). Questions, results, blockers, replies and parent-originated messages
 all count. One answer per note. The wait cap is 900 seconds and 8 held
-waits per session.
+waits per session on one API replica. Two replicas can hold sixteen.
 
 ADR-004 keeps an InboxMessage while the sender session object exists
 (`internal/coordretention/rules.go:155-162`). After that sender is gone, it
@@ -722,3 +727,9 @@ recorded on OP545 and Tom can change any of them.
    already an open question for Tom on OP501 and is not decided here.
 4. **Kinds.** Three: question, result and blocker. A list shows questions
    and blockers first. None grants access or approves anything.
+5. **Held waits are counted per API replica.** Ruled by the coordinator on
+   2026-11-10, answering the slice 3 question on OpenProject #686. Eight
+   held waits for one session protect one API process. The operator runs
+   two replicas and both serve the API, so one session can hold at most
+   sixteen across them. The counter stays on that process's Server. The
+   429 sentence stays "at most 8 parent waits may be held for one session".

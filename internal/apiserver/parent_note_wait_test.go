@@ -14,8 +14,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -396,8 +398,8 @@ func TestParentNoteWaitWatchClosesOrErrorsWithoutRetry(t *testing.T) {
 			stream.Error(&metav1.Status{Message: "PRIVATE_WATCH_ERROR"})
 		}
 		w := receiveParentWait(t, result)
-		wantError(t, w, 503, apiv1.CodeUnavailable)
-		if !stream.IsStopped() || p.watches.Load() != 1 || p.lists.Load() != 1 || strings.Contains(w.Body.String(), "PRIVATE_WATCH_ERROR") || len(f.srv.parentWaits.held) != 0 {
+		e := wantError(t, w, http.StatusServiceUnavailable, apiv1.CodeUnavailable)
+		if e.Message != parentWaitWatchRefused || !stream.IsStopped() || p.watches.Load() != 1 || p.lists.Load() != 1 || strings.Contains(w.Body.String(), "PRIVATE_WATCH_ERROR") || len(f.srv.parentWaits.held) != 0 {
 			t.Fatal("failed watch leaked, reconnected, polled or exposed its error")
 		}
 	}
@@ -502,6 +504,64 @@ func TestParentNoteAnswerLimitsAndSchema(t *testing.T) {
 			answerParentTest(t, f, parent, note.Name, "refused", "PRIVATE_ANSWER", status)
 			if countMessages(t, f) != before {
 				t.Fatal("refusal stored a reply")
+			}
+		})
+	}
+}
+
+func TestParentNoteWaitSlotsStayOnTheServer(t *testing.T) {
+	party := coord.SessionIdentity{Namespace: "dev-agents", Name: "child", UID: "child-uid"}
+	var first, second Server
+	for range parentHeldWaitLimit {
+		if !first.parentWaits.acquire(party) {
+			t.Fatal("server rejected a wait inside its own eight")
+		}
+	}
+	if first.parentWaits.acquire(party) {
+		t.Fatal("ninth wait was held on the same server")
+	}
+	if !second.parentWaits.acquire(party) {
+		t.Fatal("second server shared the first server's held waits")
+	}
+}
+
+func TestParentNoteWaitRefusedWatchHoldsNothing(t *testing.T) {
+	for _, refused := range []bool{true, false} {
+		t.Run(map[bool]string{true: "forbidden", false: "no watcher"}[refused], func(t *testing.T) {
+			f, _, child, _ := parentNoteFixture(t, false)
+			note := tellParentNote(t, f, child, apiv1.TellParentRequest{Key: "note", Kind: "question", Text: "PRIVATE_QUESTION"}, 201)
+			var lists, watches atomic.Int32
+			f.srv.Inbox.Live = interceptor.NewClient(f.c, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, obj client.ObjectList, opts ...client.ListOption) error {
+				err := c.List(ctx, obj, opts...)
+				if list, ok := obj.(*coord.InboxMessageList); ok {
+					lists.Add(1)
+					list.ResourceVersion = "42"
+				}
+				return err
+			}})
+			if refused {
+				f.srv.Inbox.Watcher = interceptor.NewClient(f.c, interceptor.Funcs{Watch: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) (watch.Interface, error) {
+					watches.Add(1)
+					return nil, apierrors.NewForbidden(schema.GroupResource{Resource: "inboxmessages"}, "", errors.New("PRIVATE_WATCH_DENIED"))
+				}})
+			}
+			start := time.Now()
+			w := f.do(http.MethodGet, apiv1.ParentNotesPath+"/"+note.Name+"/wait?seconds=900", child, nil)
+			e := wantError(t, w, http.StatusServiceUnavailable, apiv1.CodeUnavailable)
+			if e.Message != parentWaitWatchRefused || strings.Contains(w.Body.String(), "PRIVATE") || lists.Load() != 1 || len(f.srv.parentWaits.held) != 0 || time.Since(start) >= time.Second {
+				t.Fatalf("refused watch held, polled, or leaked text: lists=%d watches=%d held=%d body=%s", lists.Load(), watches.Load(), len(f.srv.parentWaits.held), w.Body.String())
+			}
+			if refused && watches.Load() != 1 {
+				t.Fatalf("forbidden watch was called %d times", watches.Load())
+			}
+			if !refused && watches.Load() != 0 {
+				t.Fatal("a missing watcher still opened a watch")
+			}
+			party := sessionIdentity(f.session("child"))
+			for range parentHeldWaitLimit {
+				if !f.srv.parentWaits.acquire(party) {
+					t.Fatal("refused watch left a held slot")
+				}
 			}
 		})
 	}

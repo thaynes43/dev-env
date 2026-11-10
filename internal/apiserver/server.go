@@ -118,6 +118,7 @@ type Server struct {
 	// ParentNotes enables the session-parent note routes. Default off: the
 	// routes answer 503 to an authenticated caller and store nothing.
 	ParentNotes bool
+	// parentWaits counts held waits on this Server. Each API replica has its own.
 	parentWaits parentWaitSlots
 	// Tests may expire the held wait without sleeping. Connection deadlines
 	// still use holdResponse's wall clock.

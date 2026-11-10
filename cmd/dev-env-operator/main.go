@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -820,6 +821,17 @@ func reconcilerForOptions(o options) *controller.Reconciler {
 	}
 }
 
+// parentNoteInbox is the inbox store the API uses. Parent-note waits watch
+// through a client built from the manager's config and scheme. The manager's
+// cached client does not watch, and a nil watcher is not filled in later.
+func parentNoteInbox(c client.Client, live client.Reader, cfg *rest.Config, scheme *runtime.Scheme, namespace string) (*inbox.KubeStore, error) {
+	watcher, err := client.NewWithWatch(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return nil, fmt.Errorf("parent-note watch client: %w", err)
+	}
+	return &inbox.KubeStore{Client: c, Live: live, Watcher: watcher, Namespace: namespace}, nil
+}
+
 func run(args []string) error {
 	o, err := parseFlags(args)
 	if err != nil {
@@ -1017,7 +1029,10 @@ func run(args []string) error {
 		}
 		var inboxStore *inbox.KubeStore
 		if o.inboxEnabled {
-			inboxStore = &inbox.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
+			inboxStore, err = parentNoteInbox(mgr.GetClient(), mgr.GetAPIReader(), mgr.GetConfig(), mgr.GetScheme(), o.templatesNamespace)
+			if err != nil {
+				return err
+			}
 		}
 		// Export live project record counts and lifetime source Session bounds.
 		// Enabled archive-backed retention can free project capacity after eligible

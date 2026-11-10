@@ -362,10 +362,12 @@ with the same key and text. A second different answer returns 409.
 Wait is one held read by the note's sender. --for defaults to 15m and accepts
 whole seconds from 1s to 15m. It prints the exact answer, or waiting with no
 note text at the deadline; -o json includes state and reply metadata. A stored
-answer returns at once. At most 8 waits per session may be held. Wait uses its
-own client timeout of --for plus 2 minutes; other commands keep 30 seconds.
-There is no polling or automatic retry. Call wait again for more time or after
-a connection closes before its answer.
+answer returns at once. At most 8 waits for one session may be held on one
+API replica. Two replicas can hold sixteen. Wait uses its own client timeout
+of --for plus 2 minutes; other commands keep 30 seconds. A watch that is
+refused or cannot start returns 503 and holds nothing. There is no polling
+or automatic retry. Call wait again for more time or after a connection
+closes before its answer.
 
 These commands require --enable-parent-notes on the operator, which defaults
 off and requires --enable-durable-inbox. Disabled routes return 503, which

@@ -16,7 +16,13 @@ import (
 	"github.com/thaynes43/dev-env/internal/inbox"
 )
 
+// parentHeldWaitLimit is how many waits one session may hold on this Server.
+// Each API replica has its own Server. Two replicas can hold sixteen.
 const parentHeldWaitLimit = 8
+
+// parentWaitWatchRefused is the only sentence a refused or unstarted watch
+// returns. It carries no note text, and the handler does not poll.
+const parentWaitWatchRefused = "the parent wait cannot watch for a reply"
 
 type parentWaitSlots struct {
 	mu   sync.Mutex
@@ -90,7 +96,10 @@ func (s *Server) waitParentNote(ctx context.Context, w http.ResponseWriter, r *h
 		defer cancel()
 		reply, err = s.awaitParentReply(waitCtx, note, version)
 		if err != nil {
-			return 0, nil, inboxUnknown()
+			// The slot is released by the defer above. A refused watch, a nil
+			// watcher, or a stream that dies is one attempt: no second watch
+			// and no list loop.
+			return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, parentWaitWatchRefused)
 		}
 	}
 	// A held token can outlive its pod. Re-prove the original identity before
