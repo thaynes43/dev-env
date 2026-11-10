@@ -253,10 +253,31 @@ func (h *AggregateAllowanceReports) readStored(ctx context.Context) (int, any, e
 		}
 		return 0, nil, allowanceUnavailable()
 	}
-	mergeSessionReadings(&doc, readings)
 	trust := h.Store.trust()
+	mergeSessionReadings(&doc, readings, rejectedSlotProviders(doc, readings, trust, h.now()))
 	providerallowance.ProjectCachedRead(&doc, trust.Contexts, trust.Registry, trust.MaxAge, true, h.now())
 	return allowanceDocument(doc)
+}
+
+// rejectedSlotProviders names the providers whose slot item the projection
+// rejects under trust: such an item is never shown, so it must not hide a
+// session reading by being newer. It projects a copy; doc is not changed.
+func rejectedSlotProviders(doc providerallowance.ReadResponse, readings map[string]StoredSessionReading, trust AggregateAllowanceTrust, now time.Time) map[string]bool {
+	if len(readings) == 0 {
+		return nil
+	}
+	projected, err := cloneAllowanceRead(doc)
+	if err != nil {
+		return nil
+	}
+	providerallowance.ProjectCachedRead(&projected, trust.Contexts, trust.Registry, trust.MaxAge, true, now)
+	out := map[string]bool{}
+	for _, item := range projected.Items {
+		if item.Validation.State == providerallowance.ValidationRejected || item.Binding.State == providerallowance.BindingMismatch {
+			out[item.Observation.Provider] = true
+		}
+	}
+	return out
 }
 
 // readSessionsOnly serves the session readings over the empty slot.
@@ -278,7 +299,7 @@ func (h *AggregateAllowanceReports) readSessionsOnly(ctx context.Context) (int, 
 // built-in session rule applies: no private context is used.
 func (h *AggregateAllowanceReports) serveSessionReadings(readings map[string]StoredSessionReading) (int, any, error) {
 	doc := UnconfiguredAggregateDocument()
-	mergeSessionReadings(&doc, readings)
+	mergeSessionReadings(&doc, readings, nil)
 	providerallowance.ProjectCachedRead(&doc, nil, nil, 0, false, h.now())
 	return allowanceDocument(doc)
 }
@@ -300,11 +321,11 @@ func (h *AggregateAllowanceReports) sessionReadings(ctx context.Context) map[str
 var sessionContractProviders = map[string]string{protocol.AgentClaude: "anthropic", protocol.AgentCodex: "openai"}
 
 // mergeSessionReadings puts each provider's session reading into doc when it
-// is newer than the provider's slot item, or the slot has none: the slot
-// item is removed and the provider's source status replaced by the
-// reading's. A slot item at least as new is kept. A provider with more than
-// one slot item is left as it is.
-func mergeSessionReadings(doc *providerallowance.ReadResponse, readings map[string]StoredSessionReading) {
+// is newer than the provider's slot item, the slot has none, or the slot item
+// is one the projection rejects: the slot item is removed and the provider's
+// source status replaced by the reading's. A kept slot item at least as new
+// stays. A provider with more than one slot item is left as it is.
+func mergeSessionReadings(doc *providerallowance.ReadResponse, readings map[string]StoredSessionReading, rejected map[string]bool) {
 	merged := ""
 	for _, agent := range sessionAllowanceProviders {
 		r, ok := readings[agent]
@@ -326,7 +347,7 @@ func mergeSessionReadings(doc *providerallowance.ReadResponse, readings map[stri
 				slot, count = i, count+1
 			}
 		}
-		if count > 1 || (slot >= 0 && !r.ReadAt.After(slotItemTime(doc.Items[slot]))) {
+		if count > 1 || (slot >= 0 && !rejected[provider] && !r.ReadAt.After(slotItemTime(doc.Items[slot]))) {
 			continue
 		}
 		if slot >= 0 {

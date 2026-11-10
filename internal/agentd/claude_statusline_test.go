@@ -26,6 +26,7 @@ func statuslineFixture(t *testing.T, mode string) (Settings, protocol.Session) {
 	if err := os.MkdirAll(s.RuntimeDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	s.ClaudeLiveFile = filepath.Join(s.Home, "live", "access.json")
 	writeFile(t, filepath.Join(s.SystemBin, claudeStatuslineHelper), "#!/bin/sh\n")
 	if err := os.Chmod(filepath.Join(s.SystemBin, claudeStatuslineHelper), 0o755); err != nil {
 		t.Fatal(err)
@@ -120,6 +121,25 @@ func TestRenderClaudeStatuslineLeavesWhatItCannotRead(t *testing.T) {
 			}
 		})
 	}
+	t.Run("settings holding null", func(t *testing.T) {
+		s, sess := statuslineFixture(t, protocol.ModeRemote)
+		writeFile(t, filepath.Join(s.ClaudeConfigDir, "settings.json"), "null")
+		if st := renderClaudeStatusline(s, sess); st.State != StepOK || statusLineOf(t, s)["type"] != "command" {
+			t.Fatalf("%+v", st)
+		}
+	})
+	t.Run("its own command without quotes", func(t *testing.T) {
+		s, sess := statuslineFixture(t, protocol.ModeRemote)
+		path := filepath.Join(s.ClaudeConfigDir, "settings.json")
+		writeJSON(t, path, map[string]any{keyStatusLine: map[string]any{"type": "command", "command": filepath.Join(s.SystemBin, claudeStatuslineHelper) + " --output " + claudeUsageFile(s)}})
+		before, _ := os.ReadFile(path)
+		if st := renderClaudeStatusline(s, sess); st.State != StepOK || !strings.Contains(strings.Join(st.Notes, " "), "already runs") {
+			t.Fatalf("%+v", st)
+		}
+		if after, _ := os.ReadFile(path); string(after) != string(before) {
+			t.Fatal("rewritten")
+		}
+	})
 	t.Run("settings that are not an object", func(t *testing.T) {
 		s, sess := statuslineFixture(t, protocol.ModeRemote)
 		path := filepath.Join(s.ClaudeConfigDir, "settings.json")
@@ -143,6 +163,13 @@ func TestRenderClaudeStatuslineSkips(t *testing.T) {
 		t.Errorf("codex: %+v", st)
 	}
 	sess.Agent = protocol.AgentClaude
+	// A pod that does not follow the keeper's Claude projection.
+	live := s.ClaudeLiveFile
+	s.ClaudeLiveFile = ""
+	if st := renderClaudeStatusline(s, sess); st.State != StepSkip || !strings.Contains(strings.Join(st.Notes, " "), "projection") {
+		t.Errorf("no projection: %+v", st)
+	}
+	s.ClaudeLiveFile = live
 	if err := os.Remove(filepath.Join(s.SystemBin, claudeStatuslineHelper)); err != nil {
 		t.Fatal(err)
 	}

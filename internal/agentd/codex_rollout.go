@@ -377,13 +377,23 @@ func parseCodexTokenCount(line []byte) (reading *protocol.AllowanceReading, reas
 		if err != nil || minutes <= 0 || minutes > protocol.MaxAllowanceWindowMinutes {
 			return nil, allowanceShapeUnrecognized, true
 		}
-		used, ok := protocol.CanonicalAllowancePercent(string(bytes.TrimSpace(w["used_percent"])))
+		usedText := string(bytes.TrimSpace(w["used_percent"]))
+		used, ok := protocol.CanonicalAllowancePercent(usedText)
 		if !ok {
+			if protocol.AllowanceNumber(usedText) {
+				return nil, allowanceOutOfBounds, true
+			}
 			return nil, allowanceShapeUnrecognized, true
 		}
 		reset, ok := protocol.AllowanceResetsAt(string(bytes.TrimSpace(w["resets_at"])))
 		if !ok {
 			return nil, allowanceShapeUnrecognized, true
+		}
+		// A window whose reset had passed when the record was written describes
+		// a window that is over: it is left out, as the Claude reader does, so
+		// the other window still gives a reading.
+		if !reset.After(r.ReadAt) {
+			continue
 		}
 		r.Windows = append(r.Windows, protocol.AllowanceWindow{Minutes: minutes, UsedPercent: used, ResetsAt: reset})
 	}

@@ -14,26 +14,29 @@ session or CLI version list is involved.
   percent and reset, and the record's time. The weekly window is the one of
   10080 minutes, wherever it appears. Plan type, credits and every other field
   are dropped.
-- **Claude.** For a remote or local Claude session (never a headless task),
-  agentd's render step `claude-statusline` sets `statusLine` in
-  `~/.claude/settings.json` to the image's
-  `/usr/local/bin/claude-statusline-usage --output
-  $XDG_RUNTIME_DIR/dev-env-usage/claude-statusline.json`. An existing display
-  command is kept: the helper runs it with `--display /bin/sh -c '<command>'`.
-  The CLI runs the helper at each reply; the helper writes only the five-hour
-  and seven-day windows. Each heartbeat, agentd reads that file after checking
-  its owner and mode. When no value changed since the last reading, the
-  earlier reading time is kept, so a reading can look older than it is, never
-  newer.
+- **Claude.** For a remote or local Claude session (never a headless task)
+  whose pod follows the keeper's Claude projection, agentd's render step
+  `claude-statusline` sets `statusLine` in `~/.claude/settings.json` to
+  `'/usr/local/bin/claude-statusline-usage' --output
+  '/dev/shm/run-1000/dev-env-usage/claude-statusline.json'` (the directory is
+  `$XDG_RUNTIME_DIR/dev-env-usage`, mode 0700). An existing display command is
+  kept: the helper runs it with `--display /bin/sh -c '<command>'`. The CLI
+  runs the helper at each reply; the helper writes only the five-hour and
+  seven-day windows. agentd reads that file every 5 seconds and at each
+  heartbeat, after checking its owner and mode. When no value changed since
+  the last reading, the earlier reading time is kept. A callback that brings no
+  new numbers can still make a reading look newer than it is, by at most those
+  5 seconds.
 
-agentd sends a reading only while the pod's credential for that provider is
-the keeper's current projection. A reading it found and did not send shows in
-the session's `status.agent.problems` as `allowance-reading: warn: reading not
-sent: <reason>`:
+A pod that does not follow the keeper's projection for its provider takes no
+reading at all, because none could be sent; for Claude the render step's skip
+note says so. Otherwise agentd sends a reading only while the pod's credential
+is the keeper's current projection. A reading it found and did not send shows
+in the session's `status.agent.problems` as `allowance-reading: warn: reading
+not sent: <reason>`:
 
 | Reason | Meaning |
 | --- | --- |
-| `credential_not_projection` | This pod does not follow the keeper's projection for the provider. |
 | `credential_not_current` | The pod's installed credential is not the projection's current generation, is near its expiry, or holds its own refresh token. |
 | `shape_unrecognized` | The record or file does not have the fields in the documented shape. |
 | `out_of_bounds` | A value breaks a bound below, such as a reset before the reading. |
@@ -52,18 +55,21 @@ On, for each heartbeat that carries a reading, the operator checks:
   within one window length (plus one hour, for a reset rounded up to the hour);
 - the reading time is not before the pod started, and not more than one minute
   ahead of the operator's clock (it is then stored at the operator's time);
-- at most one reading per session per minute is taken.
+- at most one reading per session per minute is taken, with five seconds of
+  slack for an early heartbeat. Each operator replica counts on its own.
 
 A valid reading goes into the ConfigMap
 `dev-env-system/dev-env-session-allowances`, one entry per provider
 (`claude.json`, `codex.json`) holding its last two readings, newest first, and
 the name of the session that reported each. The write is an Update with the
-read resourceVersion, at most once per provider per five minutes, sooner when a
-reset moved. An older reading never replaces a newer one. The operator does not
+read resourceVersion, at most once per provider per five minutes. A reset that
+moved by more than two minutes, or a window that came or went, allows a write
+after one minute. An older reading never replaces a newer one. The operator does not
 create the ConfigMap and never writes the active collector's slot
 `dev-env-provider-allowances`.
 
 The route then serves, per provider, the newer of the slot's item and the
+session reading. A slot item that the private trust rejects never hides a
 session reading. The session reading is served whatever the slot's state:
 suppressed, missing or unreadable. Without the private slot selection, the route
 is mounted GET-only for the portal reader and serves the readings alone. A

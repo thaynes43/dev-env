@@ -24,6 +24,15 @@ const (
 	SessionProducerRef = "dev-env-session-allowances"
 )
 
+// The operator's bounds on a session reading (internal/agentd/protocol), kept
+// here so the rule refuses what the operator would never store: a window of
+// at most 31 days, and a reset at most one window length (plus one hour for a
+// reset rounded up to the hour) after the reading.
+const (
+	sessionMaxWindowMinutes = 31 * 24 * 60
+	sessionResetSlack       = time.Hour
+)
+
 // sessionReason is the fixed freshness and current-measure reason.
 const sessionReason = "session reading: account not verified; provider freshness unknown"
 
@@ -150,11 +159,11 @@ func projectSessionItem(item *ReadItem, now time.Time) bool {
 		if m.Category != CategoryIncluded || m.Unit != UnitPercent || m.Direction != DirectionUsed || m.Currency != nil {
 			return false
 		}
-		if m.Window.DurationMinutes == nil || *m.Window.DurationMinutes <= 0 || m.Window.ResetPrecision != ResetInstant || m.Value.State != ValueKnown || m.Value.Decimal == nil || !sessionPercentFits(*m.Value.Decimal) {
+		if m.Window.DurationMinutes == nil || *m.Window.DurationMinutes <= 0 || *m.Window.DurationMinutes > sessionMaxWindowMinutes || m.Window.ResetPrecision != ResetInstant || m.Value.State != ValueKnown || m.Value.Decimal == nil || !sessionPercentFits(*m.Value.Decimal) {
 			return false
 		}
 		reset, ok := cachedTime(m.Window.ResetAt)
-		if !ok || !reset.After(captured) {
+		if !ok || !reset.After(captured) || reset.After(captured.Add(time.Duration(*m.Window.DurationMinutes)*time.Minute+sessionResetSlack)) {
 			return false
 		}
 		current := CurrentMeasure{MeasureID: m.ID, State: CurrentUnknown, Value: MeasureValue{State: ValueUnknown}, Reason: sessionReason}

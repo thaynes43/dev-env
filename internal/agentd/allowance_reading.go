@@ -279,12 +279,14 @@ func codexProjectionCurrent(s Settings, now time.Time) bool {
 func (d *Daemon) allowanceReading() (*protocol.AllowanceReading, *Step) {
 	var r *protocol.AllowanceReading
 	var reason string
+	// A pod that does not follow the keeper's projection for its provider
+	// takes no reading at all: none could ever be sent.
 	switch {
-	case d.Session.Agent == protocol.AgentCodex:
+	case d.Session.Agent == protocol.AgentCodex && d.S.CodexAccessFile != "":
 		if path := codexAllowanceRollout(d.S); path != "" {
 			r, reason = codexRolloutAllowance(path)
 		}
-	case d.Session.Agent == protocol.AgentClaude && (d.Session.Mode == protocol.ModeRemote || d.Session.Mode == protocol.ModeLocal):
+	case d.watchesStatusline():
 		r, reason = readClaudeStatuslineAllowance(d.S)
 		r = d.statusline.keep(r)
 	default:
@@ -300,4 +302,22 @@ func (d *Daemon) allowanceReading() (*protocol.AllowanceReading, *Step) {
 		return nil, allowanceRefused(reason)
 	}
 	return r, nil
+}
+
+// watchesStatusline: this session's Claude CLI runs the statusline helper.
+func (d *Daemon) watchesStatusline() bool {
+	return d.Session.Agent == protocol.AgentClaude && (d.Session.Mode == protocol.ModeRemote || d.Session.Mode == protocol.ModeLocal) && d.S.ClaudeLiveFile != ""
+}
+
+// observeStatusline reads the statusline file between heartbeats, at each
+// poll. The file keeps only the last callback, so a callback with no new
+// values that follows a reply would otherwise give the reply's numbers the
+// later time; read every poll, a reading can look newer than it is by at most
+// one poll interval (5 s), never by a whole heartbeat.
+func (d *Daemon) observeStatusline() {
+	if !d.watchesStatusline() {
+		return
+	}
+	r, _ := readClaudeStatuslineAllowance(d.S)
+	d.statusline.keep(r)
 }

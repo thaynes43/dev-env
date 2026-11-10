@@ -292,6 +292,12 @@ func renderClaudeStatusline(s Settings, sess protocol.Session) Step {
 	if sess.Agent != protocol.AgentClaude || (sess.Mode != protocol.ModeLocal && sess.Mode != protocol.ModeRemote) {
 		return skipStep(name, "only an interactive Claude session runs the statusline")
 	}
+	// A reading is only ever sent while the pod's credential is the keeper's
+	// projection, so a pod that does not follow it gains nothing from the
+	// callback.
+	if s.ClaudeLiveFile == "" {
+		return skipStep(name, "this pod does not follow the keeper's Claude projection; no allowance reading")
+	}
 	if s.RuntimeDir == "" || !filepath.IsAbs(s.RuntimeDir) {
 		return skipStep(name, "XDG_RUNTIME_DIR is not set; no allowance reading")
 	}

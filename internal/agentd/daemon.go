@@ -652,6 +652,7 @@ func (d *Daemon) supervise(ctx context.Context) error {
 				return err
 			}
 			d.expireCredentials()
+			d.observeStatusline()
 			if d.writerRefused {
 				// An observational daemon skips the login poll, but a first
 				// launch refused before boot still stops its login window.

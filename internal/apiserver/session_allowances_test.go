@@ -311,3 +311,23 @@ func TestSessionAllowanceEntryDecode(t *testing.T) {
 		}
 	}
 }
+
+// A malformed reading never fails the heartbeat or reaches the store.
+func TestSessionAllowancesMalformedKeepsTheHeartbeat(t *testing.T) {
+	f := newFixture(t, sessionAllowanceConfigMap())
+	tok := allowanceSession(t, f, sessionAllowanceTestName, v1alpha1.AgentCodex, v1alpha1.ModeTask)
+	enableSessionAllowances(f)
+	for _, malformed := range []string{`"text"`, `{"windows":"x"}`, `{"provider":"codex","source":"codex-rollout","readAt":"2026-10-06T17:30:00Z","windows":[{"minutes":"x"}]}`} {
+		f.now = f.now.Add(2 * time.Minute)
+		body := `{"session":"` + sessionAllowanceTestName + `","agent":{"state":"busy"},"allowance":` + malformed + `}`
+		if w := f.do(http.MethodPost, protocol.HeartbeatPath(sessionAllowanceTestName), tok, body); w.Code != http.StatusNoContent {
+			t.Fatalf("%s: %d %s", malformed, w.Code, w.Body.String())
+		}
+		if got := f.session(sessionAllowanceTestName).Status.Agent; got == nil || got.Status != protocol.AgentBusy {
+			t.Fatalf("%s: liveness %+v", malformed, got)
+		}
+	}
+	if _, ok := storedEntry(t, f, protocol.AgentCodex); ok {
+		t.Fatal("a malformed reading was stored")
+	}
+}

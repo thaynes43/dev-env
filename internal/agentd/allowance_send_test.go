@@ -183,6 +183,13 @@ func TestHeartbeatWithoutReading(t *testing.T) {
 			t.Errorf("%s/%s: %+v %q", session.Agent, session.Mode, st.Allowance, allowanceProblem(st))
 		}
 	}
+	// A Codex pod without the keeper's projection has a rollout and still
+	// sends nothing, and names no problem.
+	writeRollout(t, s.CodexHome, "19", rolloutThread, tokenCount(now.Add(-time.Minute), weekly("5"), "null"))
+	s.CodexAccessFile = ""
+	if st := beatOnce(t, &Daemon{S: s, Session: sess, Now: func() time.Time { return now }}); st.Allowance != nil || allowanceProblem(st) != "" {
+		t.Errorf("no projection: %+v %q", st.Allowance, allowanceProblem(st))
+	}
 }
 
 func TestHeartbeatCarriesClaudeReading(t *testing.T) {
@@ -203,9 +210,38 @@ func TestHeartbeatCarriesClaudeReading(t *testing.T) {
 	if st = beatOnce(t, d); st.Allowance == nil || !st.Allowance.ReadAt.Equal(at) {
 		t.Fatalf("same values moved the reading time: %+v", st.Allowance)
 	}
-	// No projection: refused, not sent.
-	d.S.ClaudeLiveFile = ""
-	if st = beatOnce(t, d); st.Allowance != nil || allowanceProblem(st) != "reading not sent: "+allowanceNotProjection {
+	// The keeper published a generation the pod has not applied: refused.
+	publish(t, d.S.ClaudeLiveFile, projAccess(2, time.Hour))
+	if st = beatOnce(t, d); st.Allowance != nil || allowanceProblem(st) != "reading not sent: "+allowanceNotCurrent {
 		t.Fatalf("allowance %+v, problem %q", st.Allowance, allowanceProblem(st))
+	}
+	// A pod that does not follow the projection takes no reading at all.
+	d.S.ClaudeLiveFile = ""
+	if st = beatOnce(t, d); st.Allowance != nil || allowanceProblem(st) != "" {
+		t.Fatalf("allowance %+v, problem %q", st.Allowance, allowanceProblem(st))
+	}
+}
+
+// A callback with no new values between two heartbeats does not move the
+// reading time, because the poll saw the reply's file first.
+func TestStatuslinePollKeepsTheReplyTime(t *testing.T) {
+	s, sess := claudeProjected(t)
+	if err := os.MkdirAll(s.RuntimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reply := loginNow.Add(-50 * time.Second)
+	seven := reply.Add(50 * time.Hour)
+	d := &Daemon{S: s, Session: sess, Now: func() time.Time { return loginNow }}
+	writeUsageFile(t, s, statuslineDoc(t, callbackInput("", "34", time.Time{}, seven), reply))
+	d.observeStatusline()
+	writeUsageFile(t, s, statuslineDoc(t, callbackInput("", "34", time.Time{}, seven), reply.Add(30*time.Second)))
+	if st := beatOnce(t, d); st.Allowance == nil || !st.Allowance.ReadAt.Equal(reply) {
+		t.Fatalf("%+v", st.Allowance)
+	}
+	// A Claude task never watches the file.
+	task := &Daemon{S: s, Session: protocol.Session{Name: "s", Agent: protocol.AgentClaude, Mode: protocol.ModeTask}}
+	task.observeStatusline()
+	if task.statusline.last != nil {
+		t.Fatal("a task read the statusline")
 	}
 }

@@ -149,3 +149,17 @@ func TestStatusAllowanceField(t *testing.T) {
 		}
 	}
 }
+
+// A malformed reading decodes to the zero reading, never an error, so it
+// cannot fail the heartbeat that carries it.
+func TestAllowanceReadingMalformedDecodesInvalid(t *testing.T) {
+	for _, raw := range []string{`"text"`, `[]`, `{"windows":"x"}`, `{"windows":[{"minutes":1.5}]}`, `{"readAt":"yesterday"}`, `{"provider":7}`} {
+		var st Status
+		if err := json.Unmarshal([]byte(`{"session":"s","agent":{"state":"busy"},"allowance":`+raw+`}`), &st); err != nil {
+			t.Fatalf("%s: the status failed: %v", raw, err)
+		}
+		if st.Session != "s" || st.Allowance == nil || st.Allowance.Valid() {
+			t.Fatalf("%s: %+v", raw, st.Allowance)
+		}
+	}
+}

@@ -200,6 +200,10 @@ func assertSettingsKey(settingsPath, key string, value any) (bool, error) {
 	default:
 		return false, err
 	}
+	if top == nil {
+		// A file holding the JSON null.
+		top = map[string]json.RawMessage{}
+	}
 	want, err := json.Marshal(value)
 	if err != nil {
 		return false, err
@@ -245,7 +249,12 @@ func assertStatusLine(settingsPath, helper, out string) (string, error) {
 	default:
 		return "", err
 	}
+	if top == nil {
+		top = map[string]json.RawMessage{}
+	}
 	base := shellQuote(helper) + " --output " + shellQuote(out)
+	// The same command written without quotes is also the helper's own.
+	bare := helper + " --output " + out
 	line := map[string]json.RawMessage{}
 	command := ""
 	if raw, ok := top[keyStatusLine]; ok && strings.TrimSpace(string(raw)) != "null" {
@@ -262,7 +271,7 @@ func assertStatusLine(settingsPath, helper, out string) (string, error) {
 	command = strings.TrimSpace(command)
 	note := "statusLine set to the usage helper"
 	switch {
-	case command == base || strings.HasPrefix(command, base+" --display "):
+	case command == base || strings.HasPrefix(command, base+" --display ") || command == bare || strings.HasPrefix(command, bare+" --display "):
 		return "statusLine already runs the usage helper", nil
 	case strings.HasPrefix(command, shellQuote(helper)+" ") || strings.HasPrefix(command, helper+" ") || command == helper || command == shellQuote(helper):
 		return "WARN statusLine runs the usage helper with another output; left as it is", nil

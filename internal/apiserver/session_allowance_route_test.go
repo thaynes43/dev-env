@@ -24,6 +24,8 @@ type slotDouble struct {
 	view  AggregateAllowanceView
 	err   error
 	reads int
+	// trusted is the store's trust; nil trusts nothing.
+	trusted *AggregateAllowanceTrust
 }
 
 func (s *slotDouble) Read(context.Context) (AggregateAllowanceView, error) {
@@ -33,6 +35,9 @@ func (s *slotDouble) Read(context.Context) (AggregateAllowanceView, error) {
 func (s *slotDouble) Put(context.Context, []byte, time.Time) error { return errors.New("no put") }
 func (s *slotDouble) configured() bool                             { return true }
 func (s *slotDouble) trust() AggregateAllowanceTrust {
+	if s.trusted != nil {
+		return *s.trusted
+	}
 	return AggregateAllowanceTrust{MaxAge: 30 * time.Minute}
 }
 
@@ -182,23 +187,37 @@ func TestSessionAllowanceRouteServesReadingWhateverTheSlot(t *testing.T) {
 }
 
 func TestSessionAllowanceRouteNewerWins(t *testing.T) {
-	// The slot's Claude item was measured 2026-10-28T10:00:00Z.
-	slotMeasured := time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC)
+	// A trusted Codex slot item, measured 2026-11-02T02:59:00Z, beside a
+	// Claude session reading: the trusted item stays trusted.
+	_, trustedDoc := assemblyCaptures(t)
+	raw, err := json.Marshal(trustedDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust := repairAllowanceStore(&slotMem{}).trust()
+	slotMeasured := time.Date(2026, 11, 2, 2, 59, 0, 0, time.UTC)
+	serving := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
 	for name, c := range map[string]struct {
 		readAt      time.Time
 		wantSession bool
 	}{
-		"newer reading replaces the slot item": {slotMeasured.Add(time.Hour), true},
+		"newer reading replaces the slot item": {slotMeasured.Add(time.Minute), true},
 		"older reading keeps the slot item":    {slotMeasured.Add(-time.Hour), false},
 		"same time keeps the slot item":        {slotMeasured, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			slot := slotStates(t)["found"]
-			status, doc, err := get(t, storedHandler(t, slot, sessionsDouble{readings: map[string]StoredSessionReading{protocol.AgentClaude: routeReading(protocol.AgentClaude, c.readAt, "34")}}))
+			slot := &slotDouble{view: AggregateAllowanceView{Found: true, Raw: raw}, trusted: &trust}
+			readings := map[string]StoredSessionReading{
+				protocol.AgentCodex:  routeReading(protocol.AgentCodex, c.readAt, "34"),
+				protocol.AgentClaude: routeReading(protocol.AgentClaude, serving.Add(-time.Minute), "12"),
+			}
+			h := storedHandler(t, slot, sessionsDouble{readings: readings})
+			h.Now = func() time.Time { return serving }
+			status, doc, err := get(t, h)
 			if err != nil || status != http.StatusOK {
 				t.Fatalf("%d %v", status, err)
 			}
-			items, statuses := itemOf(doc, "anthropic"), statusOf(doc, "anthropic")
+			items, statuses := itemOf(doc, "openai"), statusOf(doc, "openai")
 			if len(items) != 1 || len(statuses) != 1 {
 				t.Fatalf("items %d statuses %d", len(items), len(statuses))
 			}
@@ -206,11 +225,26 @@ func TestSessionAllowanceRouteNewerWins(t *testing.T) {
 			if isSession != c.wantSession || (statuses[0].ProducerRef == providerallowance.SessionProducerRef) != c.wantSession {
 				t.Fatalf("session item %v, status %s", isSession, statuses[0].ProducerRef)
 			}
-			if c.wantSession == (doc.SnapshotRevision == "snap-a") {
-				t.Fatalf("snapshot revision %q", doc.SnapshotRevision)
+			if !c.wantSession && (items[0].Validation.State != providerallowance.ValidationSourceFields || items[0].Binding.State != providerallowance.BindingVerified) {
+				t.Fatalf("the trusted slot item lost its trust beside a session reading: %+v %+v", items[0].Validation, items[0].Binding)
+			}
+			if claude := itemOf(doc, "anthropic"); len(claude) != 1 || !providerallowance.SessionReadingSource(claude[0].Observation.Source) {
+				t.Fatalf("anthropic %+v", claude)
 			}
 		})
 	}
+	// A slot item the projection rejects never hides a reading, even an older one.
+	t.Run("rejected slot item", func(t *testing.T) {
+		slot := slotStates(t)["found"]
+		slotTime := time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC)
+		_, doc, err := get(t, storedHandler(t, slot, sessionsDouble{readings: map[string]StoredSessionReading{protocol.AgentClaude: routeReading(protocol.AgentClaude, slotTime.Add(-time.Hour), "34")}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if items := itemOf(doc, "anthropic"); len(items) != 1 || !providerallowance.SessionReadingSource(items[0].Observation.Source) || doc.SnapshotRevision == "snap-a" {
+			t.Fatalf("anthropic %+v rev %q", items, doc.SnapshotRevision)
+		}
+	})
 }
 
 // Without a slot selection the route is GET-only for the portal reader and

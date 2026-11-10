@@ -131,7 +131,15 @@ func TestProjectCachedReadRefusesForgedSessionItems(t *testing.T) {
 			v := "2026-11-01T00:00:00Z"
 			d.Items[0].Observation.Measures[0].Window.ResetAt = &v
 		},
-		"an unconfigured provider": func(d *ReadResponse) { d.Items[0].Observation.Availability = AvailabilityConflict },
+		"a conflict availability": func(d *ReadResponse) { d.Items[0].Observation.Availability = AvailabilityConflict },
+		"a window over 31 days": func(d *ReadResponse) {
+			m := Count(32 * 24 * 60)
+			d.Items[0].Observation.Measures[0].Window.DurationMinutes = &m
+		},
+		"a reset past one window": func(d *ReadResponse) {
+			v := "2026-11-20T00:00:00Z"
+			d.Items[0].Observation.Measures[0].Window.ResetAt = &v
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			doc := sessionDoc(t, "anthropic")

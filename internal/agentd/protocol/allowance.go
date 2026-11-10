@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"math/big"
 	"regexp"
 	"strconv"
@@ -50,6 +51,20 @@ type AllowanceReading struct {
 	Windows []AllowanceWindow `json:"windows"`
 }
 
+// UnmarshalJSON keeps a malformed reading from rejecting the heartbeat that
+// carries it: a type error decodes to the zero reading, which is not Valid,
+// and the operator ignores it.
+func (a *AllowanceReading) UnmarshalJSON(raw []byte) error {
+	type plain AllowanceReading
+	var decoded plain
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		*a = AllowanceReading{}
+		return nil
+	}
+	*a = AllowanceReading(decoded)
+	return nil
+}
+
 // AllowanceWindow is one allowance window of a reading.
 type AllowanceWindow struct {
 	// Minutes is the window's length.
@@ -71,6 +86,10 @@ func ValidAllowancePercent(s string) bool { return allowancePercent.MatchString(
 // allowanceNumber is the JSON number grammar, with a short exponent so the
 // parse stays small.
 var allowanceNumber = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]{1,3})?$`)
+
+// AllowanceNumber reports whether text is a JSON number this package parses,
+// whatever its value.
+func AllowanceNumber(text string) bool { return len(text) <= 64 && allowanceNumber.MatchString(text) }
 
 // CanonicalAllowancePercent rewrites a JSON number's text as a canonical used
 // percent: rounded to six fraction digits, trailing zeros removed. It refuses

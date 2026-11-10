@@ -37,8 +37,16 @@ const (
 	// provider, unless a window's reset changed.
 	sessionAllowanceWriteEvery = 5 * time.Minute
 	// sessionAllowanceEvery is the least time between two readings taken from
-	// one session.
-	sessionAllowanceEvery = time.Minute
+	// one session: one a minute, less five seconds so that a 60-second
+	// heartbeat that arrives a little early is not refused.
+	sessionAllowanceEvery = time.Minute - 5*time.Second
+	// sessionAllowanceResetMoved is how far a reset must move to count as
+	// changed. A CLI that derives the reset from "seconds until reset" moves
+	// it by a second or two between records; that is not a new window.
+	sessionAllowanceResetMoved = 2 * time.Minute
+	// sessionAllowanceWriteFloor is the least time between two writes for one
+	// provider, even when a reset moved.
+	sessionAllowanceWriteFloor = time.Minute
 	// sessionAllowanceKeep is how many readings each provider keeps.
 	sessionAllowanceKeep = 2
 	// sessionAllowanceSkew is how far ahead of the operator's clock a reading
@@ -143,12 +151,13 @@ func (s *SessionAllowanceStore) take(session string, now time.Time) bool {
 	if s.seen == nil {
 		s.seen = map[string]time.Time{}
 	}
-	if last, ok := s.seen[session]; ok && now.Sub(last) < sessionAllowanceEvery && !now.Before(last) {
+	// A clock that went back counts like one that stood still.
+	if last, ok := s.seen[session]; ok && absDuration(now.Sub(last)) < sessionAllowanceEvery {
 		return false
 	}
 	if len(s.seen) >= maxSessionAllowanceSessions {
 		for name, at := range s.seen {
-			if now.Sub(at) >= sessionAllowanceEvery || now.Before(at) {
+			if absDuration(now.Sub(at)) >= sessionAllowanceEvery {
 				delete(s.seen, name)
 			}
 		}
@@ -206,10 +215,21 @@ func writeDue(last, next StoredSessionReading) bool {
 	if !next.ReadAt.After(last.ReadAt) {
 		return false
 	}
-	return next.ReportedAt.Sub(last.ReportedAt) >= sessionAllowanceWriteEvery || next.ReportedAt.Before(last.ReportedAt) || resetsChanged(last.Windows, next.Windows)
+	// A clock behind the last write (another replica's, or one that went back)
+	// waits rather than skipping the limit.
+	since := next.ReportedAt.Sub(last.ReportedAt)
+	return since >= sessionAllowanceWriteEvery || (since >= sessionAllowanceWriteFloor && resetsChanged(last.Windows, next.Windows))
 }
 
-// resetsChanged reports whether a window's reset moved, or a window came or went.
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}
+
+// resetsChanged reports whether a window's reset moved by more than
+// sessionAllowanceResetMoved, or a window came or went.
 func resetsChanged(a, b []protocol.AllowanceWindow) bool {
 	if len(a) != len(b) {
 		return true
@@ -217,7 +237,7 @@ func resetsChanged(a, b []protocol.AllowanceWindow) bool {
 	for _, w := range a {
 		found := false
 		for _, v := range b {
-			if v.Minutes == w.Minutes && v.ResetsAt.Equal(w.ResetsAt) {
+			if v.Minutes == w.Minutes && absDuration(v.ResetsAt.Sub(w.ResetsAt)) <= sessionAllowanceResetMoved {
 				found = true
 				break
 			}
