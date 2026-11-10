@@ -186,7 +186,7 @@ func (s *Server) policySession(ctx context.Context, key types.NamespacedName, c 
 }
 
 // callerWorkerCap is absent on existing sessions. It changes no legacy caller's
-// child or depth rule, and is an additional aggregate cap on new policy roots.
+// child or depth rule, and is an additional aggregate cap on bounded roots.
 func callerWorkerCap(c *caller) *int32 {
 	if c.kind == kindSession && c.session != nil && c.session.Spec.Limits != nil {
 		return c.session.Spec.Limits.MaxWorkers
@@ -254,7 +254,7 @@ func (s *Server) admitCallerCapacityExcept(ctx context.Context, c *caller, excep
 // must refuse it, never silently prune limits.maxWorkers and launch an
 // unbounded coordinator. A bounded parent's worker records the parent's UID.
 func (s *Server) createWithCallerCap(ctx context.Context, sess *v1alpha1.AgentSession, c *caller) error {
-	if c.kind != kindPolicy && callerWorkerCap(c) == nil {
+	if c.kind != kindPolicy && callerWorkerCap(c) == nil && (sess.Spec.Limits == nil || sess.Spec.Limits.MaxWorkers == nil) {
 		return s.Client.Create(ctx, sess)
 	}
 	if c.kind == kindSession {

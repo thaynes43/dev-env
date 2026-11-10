@@ -14,6 +14,7 @@ Usage:
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
   agent-run rc start|status|fresh -o json         launch or observe Remote Control
+  agent-run coordinator start|status|stop|brief   run bounded work on a tracker item
   agent-run thread start --agent <provider> ...   start a fresh phone-visible thread (Codex on a host, Claude as a session)
   agent-run inbox send|ask|reply|list|read|ack|ack-status
                                                   durable inbox
@@ -117,6 +118,35 @@ Exit codes:
 `
 
 var commandHelp = map[string]string{
+	"coordinator": `agent-run coordinator start|status|stop|brief
+
+Start a bounded task on an OpenProject item, read its state and retained outcome,
+or stop it. brief prints the embedded instructions offline. Use help coordinator
+start, help coordinator status, or help coordinator stop for flags.
+`,
+	"coordinator start": `agent-run coordinator start --item ID (--repo R | --project P) --model FULL_ID --hours H --workers N [--run LABEL] [-o json]
+
+Start a dev-profile task; no tracker credential needed. Model is required;
+effort is preset. Hours and workers: 1 to 4. Repeating an item returns its
+retained run. Use a new --run label for a deliberate second run.
+`,
+	"coordinator status": `agent-run coordinator status NAME [-o json]
+agent-run coordinator status --item ID [--run LABEL] [-o json]
+
+Read state, task verdict and retained outcome: summary, PR links and head SHAs.
+Item lookup finds the caller's run. JSON is one object with item and session.
+`,
+	"coordinator stop": `agent-run coordinator stop NAME [-o json]
+
+Reap one session through the existing API. The operator preserves work under
+the session's rescue and retention rules. This requests a stop; it does not
+wait for completion. JSON is one Session document.
+`,
+	"coordinator brief": `agent-run coordinator brief [--item ID --hours H --workers N]
+
+Print the embedded coordinator instructions without connecting. Supply all three
+flags to render a concrete item and budget; otherwise placeholders are shown.
+`,
 	"rc": `Usage: agent-run rc start --project P [--repo R] --agent claude --model <full id> [--effort e] --handoff FILE [--wait 5m] [--idempotency-key K] -o json
        agent-run rc status <session> -o json
        agent-run rc fresh --session NAME --request FILE -o json
