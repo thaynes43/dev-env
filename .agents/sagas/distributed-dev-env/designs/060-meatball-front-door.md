@@ -182,7 +182,11 @@ that.
 
 `coordinator_start` names four things: the tracker item (a story or an epic),
 the driving model (a full id from an allowed list), the hours, and the most
-workers at once. The platform fills in the rest: the repository from the item's
+workers at once. **The model is Tom's choice every time** (his ruling of
+2026-11-10, section 7): he tells Meatball which model coordinates and Meatball
+passes it through. So the model is required, it has no default, and nothing
+here helps Meatball pick one. **There is no effort parameter:** every model
+runs at its preset level (section 7). The platform fills in the rest: the repository from the item's
 `repos` field, profile, size, task mode, the wall-time limit, the parent
 (`meatball`), an idempotency key from the item id so a repeat returns the same
 session (D-36 V-03), a claim on the item, and the standard brief (section 7). It
@@ -219,9 +223,18 @@ the workbench profile. Tool descriptions stay under 30 words each.
 - **Drivers:** `claude-opus-5-5`, `gpt-6-astra` or `claude-fable-5-2`. Tom,
   2026-11-10, asked what Meatball may start without asking: "Also allow
   Fable", with the proposed limits: each coordinator up to 4 hours and 4
-  workers at a time, at most 2 running at once. Fable draws on the quota he
-  uses himself, so the brief tells Meatball to pick it only when the story
-  needs it.
+  workers at a time, at most 2 running at once. That list is the bound on what
+  may be named, not a menu for Meatball. Tom, later the same day, typed in the
+  coordinator's session: "I always will tell Meatball what model I want
+  coordinating and we have preset effort levels". So Meatball never chooses
+  the model: a start without a model named by Tom is refused, and the brief
+  carries no advice on choosing one.
+- **Effort is preset, never a parameter** (the same ruling). A Claude session
+  runs at `xhigh` when its model takes it, else the highest level below
+  (`internal/agentrun/model.go`, `effortPreference`). Codex runs `gpt-6-astra`
+  at `max` and its `gpt-6.1-sol` subagents at `xhigh` (the model policy in the
+  common rules). The front door, `agent-run coordinator start` and the brief
+  expose no effort setting.
 - **Workers:** `claude-sonnet-5-5` for routine work, `claude-opus-5-5` for hard
   or user-visible work, `gpt-6.1-sol` for Codex, and Cursor's Grok model
   (OP496 j6199 used `grok-4.7-high`).
@@ -383,7 +396,7 @@ door has no such action.
 |---|---|---|---|---|
 | 1 | Asks board on | Refresh #264's held haynes-ops draft: Ask CRD, RBAC, operator `--enable-asks`, keeper `--enable-ask-notifications` with the portal origin | M | none: quiet hours were ruled on 2026-11-10 (DESIGN-034 Q-255-02: pushes from 07:00 to midnight Eastern). The story is the existing item OP264 |
 | 2 | Grants that need Tom go through the board | First ADR-021 and the DESIGN-034 amendment (section 8, the adapter's contract). Then: the operator opens a `grant` Ask for a grant no policy decided; the portal answer calls `Decide`; no timeout while it waits on Tom; the "session has ended" card; `request_access` and `grant` help cut to 40 words | M | 1; ADR-021 and the DESIGN-034 amendment accepted |
-| 3 | Meatball's caller | `CallerPolicy` for one caller: CRD, API class, the ruled limits (drivers `claude-opus-5-5`, `gpt-6-astra` or `claude-fable-5-2`; 4 hours, 4 workers, 2 at once), own-sessions-only reads and stops | M | none |
+| 3 | Meatball's caller | `CallerPolicy` for one caller: CRD, API class, the ruled limits (a driver Tom named, from `claude-opus-5-5`, `gpt-6-astra` or `claude-fable-5-2`, required and with no default; 4 hours, 4 workers, 2 at once; no effort setting), own-sessions-only reads and stops | M | none |
 | 4 | Coordinator start | One operator route that fills in a coordinator task from a tracker item; the standard brief; `agent-run coordinator start, status, stop`; worker-count cap | M | 3 |
 | 5 | Front-door MCP server | Deployment, ServiceAccount, internal ingress, token from 1Password; the ten tools; `opwork groom` and `order` | M | 3, 4 |
 | 6 | Acceptance run | Meatball (or a stand-in with the same token) starts a coordinator on one ready story; cheaper workers reach a merged PR; one risky request reaches Tom's phone and he decides | S | 1, 2, 5 |
@@ -408,7 +421,10 @@ worker profile, named-ServiceAccount Jobs for runbooks (#494 row 5).
 
 *Ruled 2026-11-10, all three, by phone prompt in the coordinator's session:
 Q-060-01 "Yes, use this list (Recommended)"; Q-060-02 answered in his own
-words (section 8, "No answer is not a no"); Q-060-03 "Also allow Fable". The
+words (section 8, "No answer is not a no"); Q-060-03 "Also allow Fable". He
+added, unasked, at 2026-11-10T02:31:08Z by the coordinator's shell clock: "I always will
+tell Meatball what model I want coordinating and we have preset effort levels"
+(sections 6 and 7). The
 questions as drafted follow, for the record. The prompts he saw were put in
 plainer words; their text is in the OP517 comments of 2026-11-10.*
 
