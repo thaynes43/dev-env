@@ -6,6 +6,11 @@ portal reader. It does not acquire provider data or enable recurring ingestion.
 Source publication, installed configuration and real provider acceptance remain
 separate evidence.
 
+With `--enable-session-allowances` (DESIGN-059, default off), the GET also
+serves each provider's newer passive session reading, whatever the slot's
+state, and is mounted for the portal reader even without a selection. See
+[Session allowance readings](operator-session-allowances.md).
+
 ## Operator selection
 
 Both `--enable-aggregate-allowance-reports` and
