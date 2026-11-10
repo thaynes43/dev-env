@@ -579,6 +579,44 @@ func TestRCLoginRequiredStateReturnsAtOnce(t *testing.T) {
 	}
 }
 
+// A projection that lands between agentd's two login reads can publish state
+// login-required with a message that already says the login is in, rejected
+// or unverifiable. That one status is not an owner action: the next poll is.
+func TestRCLoginRequiredStateWithProjectionPrefixesKeepsWaiting(t *testing.T) {
+	for _, msg := range []string{
+		"logged in on the keeper's projection, access token lapses 2026-11-10T13:00:00Z",
+		"login-rejected: the provider rejected keeper generation 3 at 2026-10-06T20:59:00Z; a newer generation may or may not arrive; no login is run in this pod",
+		"login-unverified: this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider rejected the keeper's login; no login is run in this pod",
+	} {
+		t.Run(msg[:12], func(t *testing.T) {
+			h := newHarness(t)
+			rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
+				v := rcView(5)
+				if poll == 0 {
+					v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentLoginRequired, Message: msg}
+				}
+				return v
+			}, http.StatusAccepted)
+			h.mustRun(ExitOK, rcArgs(h)...)
+			r := rcResult(t, h)
+			if r.Outcome != "link_available" || r.Error != nil || r.Polls != 1 || r.TotalMs != 2000 || rcCountMessages(h) != 1 {
+				t.Fatal("a projection-mode status stopped the start", r)
+			}
+		})
+	}
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+		v := rcView(2)
+		v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentLoginRequired, Message: "login-rejected: the provider rejected keeper generation 3 at 2026-10-06T20:59:00Z; a newer generation may or may not arrive; no login is run in this pod"}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitPending, rcArgs(h, "--wait", "2m")...)
+	r := rcResult(t, h)
+	if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "launch_deadline" || r.Error.Phase != "agent_started" || r.TotalMs != 120000 || rcCountMessages(h) != 0 {
+		t.Fatal("a rejected projection became an owner action", r)
+	}
+}
+
 // Agent state failed means agentd could not start the agent. It is not a wait.
 func TestRCAgentFailedStateReturnsAtOnce(t *testing.T) {
 	const wait = 6 * time.Minute

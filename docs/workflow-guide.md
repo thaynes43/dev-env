@@ -873,9 +873,10 @@ Use this when Tom must see and drive the thread on his phone.
    ask it to make its own worktree. `--agent claude --project P` starts a new
    remote Claude session through `rc start`'s flow instead; `--agent cursor` or
    `grok` is refused as not yet qualified. If that session's agent state is
-   `login-required` and the status is not a pending keeper refresh or the
-   projection warning, the result is `action_required` with
-   `claude_login_required` at once. `agent-run help thread` has the
+   `login-required` and the status is not a pending keeper refresh, the
+   projection warning, or a logged-in, rejected or unverifiable projection
+   line, the result is `action_required` with `claude_login_required` at
+   once. `agent-run help thread` has the
    outcome table.
 
 ## 4. The everyday workflow

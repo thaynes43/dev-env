@@ -401,13 +401,18 @@ func rcSessionEnded(v apiv1.Session) bool {
 // agentd reports pending, busy, idle, waiting, exited, failed, interrupted
 // and login-required (protocol.Agent*). login-required means the pod has no
 // usable login, so the agent has not started and will not without a person
-// or a credential. Two messages that share that state stay on the paths that
+// or a credential. Messages that share that state stay on the paths that
 // already classify them: refreshing: (auth_refresh_pending; the keeper's next
-// generation can land with no person) and the projection warning
+// generation can land with no person), the projection warning
 // (auth_projection_unavailable after 30s, because that projection can still
-// land). failed means agentd could not start the agent. busy, idle and
-// waiting are a started agent. pending, exited and interrupted stay on the
-// wait. A login_conflict message is decided before this runs.
+// land), and a projection-mode line that says the login is already in
+// (logged in on the keeper's projection), rejected (login-rejected:) or
+// unverifiable (login-unverified:). Those last three can share the state for
+// one heartbeat when the projection lands between agentd's two login reads;
+// the next poll is the one that counts. failed means agentd could not start
+// the agent. busy, idle and waiting are a started agent. pending, exited and
+// interrupted stay on the wait. A login_conflict message is decided before
+// this runs.
 func rcAgentBlocked(a *apiv1.AgentStatus, authCode string) (outcome, code string, stop bool) {
 	if a == nil {
 		return "", "", false
@@ -418,6 +423,13 @@ func rcAgentBlocked(a *apiv1.AgentStatus, authCode string) (outcome, code string
 	case protocol.AgentLoginRequired:
 		switch authCode {
 		case "auth_refresh_pending", "auth_projection_unavailable":
+			return "", "", false
+		}
+		msg := strings.ToLower(strings.TrimSpace(a.Message))
+		switch {
+		case strings.HasPrefix(msg, "logged in on the keeper's projection"),
+			strings.HasPrefix(msg, "login-rejected:"),
+			strings.HasPrefix(msg, "login-unverified:"):
 			return "", "", false
 		}
 		return "action_required", "claude_login_required", true
