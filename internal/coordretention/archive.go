@@ -194,6 +194,8 @@ func manifestFor(rec liveRecord) (protocol.CoordArchiveManifest, error) {
 		ArchivedBy: archivedBy,
 	}
 	if s.Kind == InboxMessage || s.Kind == InboxReadAck {
+		// summarize stored the matching recipient form: the session UID, or
+		// the CallerPolicy UID when callerRecipient is set.
 		m.RecipientUID = s.Recipient.UID
 	}
 	if s.Kind == InboxReadAck {

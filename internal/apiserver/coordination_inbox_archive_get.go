@@ -49,7 +49,7 @@ func (s *Server) archivedInboxMessage(ctx context.Context, name string) (*coord.
 		return nil, time.Time{}, inboxArchiveUnavailable()
 	}
 	var message coord.InboxMessage
-	if json.Unmarshal(canonical, &message) != nil || message.APIVersion != manifest.APIVersion || message.Kind != manifest.Kind || message.Namespace != manifest.Namespace || message.Name != manifest.Name || string(message.UID) != manifest.UID || message.ResourceVersion != manifest.ResourceVersion || message.Spec.Project != manifest.Project || message.Spec.Recipient.UID != manifest.RecipientUID || message.Name != inbox.MessageName(message.Spec.Sender, message.Spec.Key) || !inbox.ValidMessage(message.Spec) || message.CreationTimestamp.IsZero() || !message.DeletionTimestamp.IsZero() {
+	if json.Unmarshal(canonical, &message) != nil || message.APIVersion != manifest.APIVersion || message.Kind != manifest.Kind || message.Namespace != manifest.Namespace || message.Name != manifest.Name || string(message.UID) != manifest.UID || message.ResourceVersion != manifest.ResourceVersion || message.Spec.Project != manifest.Project || inbox.RecipientFormUID(message.Spec) != manifest.RecipientUID || message.Name != inbox.MessageNameFor(message.Spec) || !inbox.ValidMessage(message.Spec) || message.CreationTimestamp.IsZero() || !message.DeletionTimestamp.IsZero() {
 		return nil, time.Time{}, inboxArchiveUnavailable()
 	}
 	if ctx.Err() != nil {

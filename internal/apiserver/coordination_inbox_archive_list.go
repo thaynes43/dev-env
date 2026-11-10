@@ -109,7 +109,7 @@ func (s *Server) archivedInboxMetadata(stored protocol.CoordArchiveStoredManifes
 		return nil, time.Time{}, errors.New("invalid coordination archive manifest")
 	}
 	var message coord.InboxMessage
-	if json.Unmarshal(object, &message) != nil || message.APIVersion != manifest.APIVersion || message.Kind != manifest.Kind || message.Namespace != manifest.Namespace || message.Name != manifest.Name || string(message.UID) != manifest.UID || message.ResourceVersion != manifest.ResourceVersion || message.Spec.Project != manifest.Project || message.Spec.Recipient.UID != manifest.RecipientUID || message.Name != inbox.MessageName(message.Spec.Sender, message.Spec.Key) || !inbox.ValidArchiveMetadata(message.Spec) || message.CreationTimestamp.IsZero() || !message.DeletionTimestamp.IsZero() {
+	if json.Unmarshal(object, &message) != nil || message.APIVersion != manifest.APIVersion || message.Kind != manifest.Kind || message.Namespace != manifest.Namespace || message.Name != manifest.Name || string(message.UID) != manifest.UID || message.ResourceVersion != manifest.ResourceVersion || message.Spec.Project != manifest.Project || inbox.RecipientFormUID(message.Spec) != manifest.RecipientUID || message.Name != inbox.MessageNameFor(message.Spec) || !inbox.ValidArchiveMetadata(message.Spec) || message.CreationTimestamp.IsZero() || !message.DeletionTimestamp.IsZero() {
 		return nil, time.Time{}, errors.New("invalid coordination archive inbox metadata")
 	}
 	return &message, stored.ArchivedAt, nil
