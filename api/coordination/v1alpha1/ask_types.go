@@ -58,7 +58,9 @@ type AskSpec struct {
 	// +kubebuilder:validation:MaxLength=20
 	// +kubebuilder:validation:Pattern=`^ask-[0-9a-f]{16}$`
 	ID string `json:"id"`
+	// Type is info, approval or grant.
 	// +kubebuilder:validation:Enum=info;approval;grant
+	// +kubebuilder:validation:MaxLength=8
 	Type string `json:"type"`
 	// Question is 1 to 1000 runes. The byte ceiling is four bytes per rune.
 	// +kubebuilder:validation:MinLength=1
@@ -158,6 +160,7 @@ type AskGrant struct {
 	ScopeDigest string `json:"scopeDigest"`
 	// Type is the grant's type.
 	// +kubebuilder:validation:Enum=kube;egress;credential;breakglass;maintenance
+	// +kubebuilder:validation:MaxLength=11
 	Type string `json:"type"`
 	// Target is one token, 1 to 200 runes. The byte ceiling is four bytes per rune.
 	// +kubebuilder:validation:MinLength=1
