@@ -170,17 +170,29 @@ func TestGrantAskStoreLimitOrUnavailableStaysPending(t *testing.T) {
 			f.until(func(g *v1alpha1.AccessGrant) bool {
 				return g.Status.Phase == v1alpha1.GrantPending && stub.calls >= 1
 			})
+			if f.grant().Status.Phase != v1alpha1.GrantPending || f.grant().Status.DeniedBy != "" {
+				t.Fatalf("store error denied the grant: %+v", f.grant().Status)
+			}
 			calls := stub.calls
+			if _, err := f.reconcile(); err != nil {
+				t.Fatal(err)
+			}
+			if stub.calls <= calls {
+				t.Fatalf("store calls = %d, want a retry after %d", stub.calls, calls)
+			}
+			if f.grant().Status.Phase != v1alpha1.GrantPending {
+				t.Fatalf("store error denied the grant inside the window: %+v", f.grant().Status)
+			}
+			if n := f.askCount(); n != 0 {
+				t.Fatalf("store error left %d asks", n)
+			}
 			f.clk.Step(PendingTimeout)
 			if _, err := f.reconcile(); err != nil {
 				t.Fatal(err)
 			}
 			g := f.grant()
-			if g.Status.Phase != v1alpha1.GrantPending || g.Status.DeniedBy != "" {
-				t.Fatalf("store error denied the grant: %+v", g.Status)
-			}
-			if stub.calls <= calls {
-				t.Fatalf("store calls = %d, want a retry after %d", stub.calls, calls)
+			if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByTimeout || g.Status.Message != "no answer in 30 minutes" {
+				t.Fatalf("no ask after 30 minutes: phase %s deniedBy %s message %q", g.Status.Phase, g.Status.DeniedBy, g.Status.Message)
 			}
 			if n := f.askCount(); n != 0 {
 				t.Fatalf("store error left %d asks", n)
@@ -212,13 +224,11 @@ func TestGrantAskUnfitUIDStaysPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantPending })
-	f.clk.Step(PendingTimeout)
 	if _, err := f.reconcile(); err != nil {
 		t.Fatal(err)
 	}
-	got := f.grant()
-	if got.Status.Phase != v1alpha1.GrantPending || got.Status.DeniedBy != "" {
-		t.Fatalf("unfit UID: %+v", got.Status)
+	if got := f.grant(); got.Status.Phase != v1alpha1.GrantPending || got.Status.DeniedBy != "" {
+		t.Fatalf("unfit UID inside the window: %+v", got.Status)
 	}
 	if n := f.askCount(); n != 0 {
 		t.Fatalf("unfit UID opened %d asks", n)
@@ -226,6 +236,17 @@ func TestGrantAskUnfitUIDStaysPending(t *testing.T) {
 	msgs := eventTexts(rec)
 	if len(msgs) == 0 || !strings.Contains(msgs[0], "AskNotOpened") || strings.Contains(strings.Join(msgs, "\n"), "AskBoardFull") {
 		t.Fatalf("events %q", msgs)
+	}
+	f.clk.Step(PendingTimeout)
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	got := f.grant()
+	if got.Status.Phase != v1alpha1.GrantDenied || got.Status.DeniedBy != DeniedByTimeout || got.Status.Message != "no answer in 30 minutes" {
+		t.Fatalf("unfit UID after 30 minutes: phase %s deniedBy %s message %q", got.Status.Phase, got.Status.DeniedBy, got.Status.Message)
+	}
+	if n := f.askCount(); n != 0 {
+		t.Fatalf("unfit UID opened %d asks", n)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,9 +28,9 @@ import (
 )
 
 const (
-	// grantAskOriginBroker is the ask-origin label value the broker sets.
-	// The store does not set it. A session create cannot set it either.
-	grantAskOriginBroker = "broker"
+	// grantAskOriginBroker is the ask-origin label value the broker sets
+	// on the create. A session create cannot set it.
+	grantAskOriginBroker = asks.BrokerOrigin
 	// grantAskRecheck is how often a grant selected for Tom is reconciled
 	// while its Ask is open. An answer is also enqueued from the Ask watch.
 	grantAskRecheck = 30 * time.Second
@@ -46,6 +47,12 @@ var (
 	errGrantAskLater = errors.New("grant ask will be retried")
 	// errGrantAskStop means this pass must not approve and must not deny.
 	errGrantAskStop = errors.New("grant ask stops without a decision")
+	// errGrantAskTooLarge means the complete scope does not fit an Ask.
+	// The broker opens nothing and the grant keeps the 30-minute deny.
+	errGrantAskTooLarge = errors.New("grant ask scope does not fit")
+	// errGrantAskForeign means an Ask already sits at the broker's name
+	// and the broker did not create it. It is not labelled and not read.
+	errGrantAskForeign = errors.New("grant ask was not opened by the broker")
 
 	grantAskDigestPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 	grantAskTTLPattern      = regexp.MustCompile(`^([0-9]+(h|m|s))+$`)
@@ -58,7 +65,15 @@ const (
 	grantAskDenyScope
 	grantAskDenyUsername
 	grantAskDenyUnusable
+	grantAskDenyWithdrawn
 	grantAskApply
+)
+
+const (
+	grantAskNone = iota
+	grantAskUnread
+	grantAskForeign
+	grantAskBroker
 )
 
 // grantAskCreator is the part of asks.KubeStore the broker calls. A nil
@@ -84,6 +99,9 @@ func (b *Broker) askStore() asks.KubeStore {
 // the grant. A mismatch denies or leaves the grant pending. It never approves.
 func (b *Broker) holdGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) (ctrlResult, error) {
 	if err := b.ensureGrantAsk(ctx, g, sess, now); err != nil {
+		if errors.Is(err, errGrantAskTooLarge) || errors.Is(err, errGrantAskForeign) {
+			return reconcile.Result{RequeueAfter: grantAskRecheck}, err
+		}
 		return b.grantAskHoldError(ctx, g, err)
 	}
 	if done, res, err := b.applyGrantAnswer(ctx, g, now); done {
@@ -117,6 +135,9 @@ func (b *Broker) applyGrantAnswer(ctx context.Context, g *v1alpha1.AccessGrant, 
 		return true, res, err
 	case grantAskDenyUnusable:
 		res, err := b.denyPendingGrant(ctx, g, "the answer could not be applied", now)
+		return true, res, err
+	case grantAskDenyWithdrawn:
+		res, err := b.denyPendingGrant(ctx, g, "the grant ask was withdrawn", now)
 		return true, res, err
 	case grantAskApply:
 		res, err := b.decideGrantAsk(ctx, g, ask, now)
@@ -257,6 +278,11 @@ func grantAskAction(g *v1alpha1.AccessGrant, ask *coord.Ask) int {
 	if !grantAskIdentityOK(g, ask) {
 		return grantAskStop
 	}
+	// A withdrawn broker Ask is a cancelled request. It is never left
+	// approvable, and it is not treated as still waiting.
+	if ask.Status.State == string(apiv1.AskStateWithdrawn) {
+		return grantAskDenyWithdrawn
+	}
 	if !grantAskScopeOK(g, ask) {
 		return grantAskDenyScope
 	}
@@ -366,11 +392,11 @@ func (b *Broker) ensureGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, se
 	if !ok {
 		return errGrantAskLater
 	}
-	// An Ask already stored for this grant is kept, including one whose
-	// answer the store's wire check would refuse. Create is only the first
-	// write. A second object is not opened.
-	if _, loadErr := b.loadGrantAsk(ctx, g); loadErr == nil {
-		return b.ensureGrantAskOrigin(ctx, g)
+	// An Ask already stored at this name is kept only when the broker
+	// created it. Create is only the first write. A second object is not
+	// opened, and a foreign Ask is not labelled.
+	if existing, loadErr := b.loadGrantAsk(ctx, g); loadErr == nil {
+		return b.keptGrantAsk(g, existing)
 	} else if !apierrors.IsNotFound(loadErr) {
 		return loadErr
 	}
@@ -378,18 +404,25 @@ func (b *Broker) ensureGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, se
 	if err != nil {
 		return err
 	}
-	req := asks.Requester{Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session, UID: string(g.Spec.Requester.SessionUID)}
+	req := asks.Requester{
+		Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session, UID: string(g.Spec.Requester.SessionUID),
+		Origin: grantAskOriginBroker,
+	}
 	wire, created, err := b.askCreator().Create(ctx, req, body, now.Time)
 	if errors.Is(err, asks.ErrConflict) {
-		// The request id is already stored. Keep that Ask. Do not write a
-		// second one and do not deny.
+		// The request id is already stored. Keep that Ask when it is the
+		// broker's. Do not write a second one and do not deny.
 		created = false
 		err = nil
 	}
 	if err != nil {
 		return err
 	}
-	if err := b.ensureGrantAskOrigin(ctx, g); err != nil {
+	stored, loadErr := b.loadGrantAsk(ctx, g)
+	if loadErr != nil {
+		return loadErr
+	}
+	if err := b.keptGrantAsk(g, stored); err != nil {
 		return err
 	}
 	if created {
@@ -398,32 +431,35 @@ func (b *Broker) ensureGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, se
 	return nil
 }
 
-func (b *Broker) ensureGrantAskOrigin(ctx context.Context, g *v1alpha1.AccessGrant) error {
-	obj, err := b.loadGrantAsk(ctx, g)
-	if err != nil {
-		return err
-	}
-	if obj.Spec.Type != string(apiv1.AskTypeGrant) || obj.Spec.Grant == nil || obj.Spec.Grant.UID != string(g.UID) {
-		return errGrantAskStop
-	}
-	if obj.Labels[asks.OriginLabel] == grantAskOriginBroker {
-		return nil
-	}
-	if obj.Labels[asks.OriginLabel] != "" {
-		return errGrantAskStop
-	}
-	base := obj.DeepCopy()
-	if obj.Labels == nil {
-		obj.Labels = map[string]string{}
-	}
-	obj.Labels[asks.OriginLabel] = grantAskOriginBroker
-	if err := b.Client.Patch(ctx, obj, client.MergeFrom(base)); err != nil {
-		if apierrors.IsConflict(err) {
-			return errGrantAskLater
-		}
-		return err
+// keptGrantAsk accepts an Ask the broker created and refuses any other
+// object at that name. It does not add the origin label.
+func (b *Broker) keptGrantAsk(g *v1alpha1.AccessGrant, obj *coord.Ask) error {
+	if obj == nil || obj.Labels[asks.OriginLabel] != grantAskOriginBroker {
+		b.noteForeignGrantAsk(g)
+		return errGrantAskForeign
 	}
 	return nil
+}
+
+// classifyGrantAsk reports whether a broker Ask, a foreign Ask, or no Ask
+// is stored at this grant's name. A read failure is unread: the caller
+// must not approve by another path.
+func (b *Broker) classifyGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant) int {
+	ask, err := b.loadGrantAsk(ctx, g)
+	if errors.Is(err, errGrantAskLater) || apierrors.IsNotFound(err) {
+		return grantAskNone
+	}
+	if err != nil {
+		return grantAskUnread
+	}
+	if ask.Labels[asks.OriginLabel] != grantAskOriginBroker {
+		return grantAskForeign
+	}
+	return grantAskBroker
+}
+
+func (b *Broker) noteForeignGrantAsk(g *v1alpha1.AccessGrant) {
+	b.event(g, corev1.EventTypeWarning, "GrantAsk", "AskNotBroker", "an ask at this grant's name was not opened by the broker")
 }
 
 // withdrawOpenGrantAsk withdraws the broker's open grant Ask when the session
@@ -502,20 +538,26 @@ func (b *Broker) grantAskBody(ctx context.Context, g *v1alpha1.AccessGrant, sess
 	if !grantAskDigestPattern.MatchString(digest) {
 		return apiv1.AskCreateRequest{}, errGrantAskLater
 	}
+	detail, fits := grantAskDetail(g)
+	if !fits {
+		return apiv1.AskCreateRequest{}, errGrantAskTooLarge
+	}
 	body := apiv1.AskCreateRequest{
 		RequestID: id,
 		Type:      apiv1.AskTypeGrant,
 		Grant: &apiv1.AskGrant{
 			UID: string(g.UID), ScopeDigest: digest, Type: string(g.Spec.Type),
-			Target: target, TTL: ttl, Detail: grantAskDetail(g),
+			Target: target, TTL: ttl, Detail: detail,
 		},
 		Context: apiv1.AskRequestContext{WorkPackage: b.grantAskWorkPackage(ctx, sess)},
 	}
 	body.Question = grantAskQuestion(g.Spec.Reason, body, now)
-	if body.Grant != nil && body.Grant.Detail != "" && body.ValidateAt(now) != nil {
-		body.Grant.Detail = ""
-	}
 	if err := body.ValidateAt(now); err != nil {
+		// The complete scope is kept. A detail that does not fit is not
+		// shortened or dropped, and no Ask is opened.
+		if detail != "" {
+			return apiv1.AskCreateRequest{}, errGrantAskTooLarge
+		}
 		return apiv1.AskCreateRequest{}, errGrantAskLater
 	}
 	return body, nil
@@ -575,36 +617,122 @@ func grantAskTTL(d time.Duration) (string, bool) {
 	return s, true
 }
 
-func grantAskDetail(g *v1alpha1.AccessGrant) string {
+// grantAskDetail is the complete access the scope digest covers, beyond the
+// type, target and TTL already on the Ask. fits is false when that text
+// does not fit the Ask detail bound. The text is never shortened.
+func grantAskDetail(g *v1alpha1.AccessGrant) (string, bool) {
+	var detail string
 	switch g.Spec.Type {
 	case v1alpha1.GrantKube, v1alpha1.GrantBreakglass:
-		if g.Spec.Kube == nil || len(g.Spec.Kube.Namespaces) == 0 {
-			return "cluster"
-		}
-		return strings.Join(g.Spec.Kube.Namespaces, ",")
+		detail = kubeAskDetail(g.Spec.Kube)
 	case v1alpha1.GrantEgress:
-		return egressAskDetail(g.Spec.Egress)
-	default:
+		detail = egressAskDetail(g.Spec.Egress)
+	}
+	if utf8.RuneCountInString(detail) > apiv1.AskScopeFieldMaxRunes {
+		return "", false
+	}
+	return detail, true
+}
+
+func kubeAskDetail(k *v1alpha1.KubeGrant) string {
+	if k == nil {
 		return ""
 	}
+	var parts []string
+	switch {
+	case k.AllNamespaces:
+		parts = append(parts, "all-namespaces")
+	case len(k.Namespaces) == 0:
+		parts = append(parts, "cluster")
+	default:
+		parts = append(parts, strings.Join(sortedCopy(k.Namespaces), ","))
+	}
+	if k.Reserved {
+		parts = append(parts, "reserved")
+	}
+	if len(k.Secrets) > 0 {
+		parts = append(parts, "secrets:"+strings.Join(sortedCopy(k.Secrets), ","))
+	}
+	if len(k.StorageTargets) > 0 {
+		items := make([]string, len(k.StorageTargets))
+		for i, target := range k.StorageTargets {
+			items[i] = target.Kind + "/" + target.Name + "/" + target.UID
+		}
+		slices.Sort(items)
+		parts = append(parts, "storage:"+strings.Join(items, ","))
+	}
+	return strings.Join(parts, " ")
 }
 
 func egressAskDetail(e *v1alpha1.EgressGrant) string {
 	if e == nil {
 		return ""
 	}
-	parts := make([]string, 0, len(e.FQDNs)+len(e.CIDRs)+len(e.Endpoints))
-	parts = append(parts, e.FQDNs...)
-	parts = append(parts, e.CIDRs...)
-	for _, ep := range e.Endpoints {
-		if ep.Namespace != "" {
-			parts = append(parts, ep.Namespace)
+	var parts []string
+	for _, name := range sortedCopy(e.FQDNs) {
+		parts = append(parts, "fqdn:"+name)
+	}
+	for _, cidr := range sortedCopy(e.CIDRs) {
+		parts = append(parts, "cidr:"+cidr)
+	}
+	type endpointText struct {
+		namespace string
+		labels    string
+	}
+	endpoints := make([]endpointText, 0, len(e.Endpoints))
+	for _, item := range e.Endpoints {
+		keys := make([]string, 0, len(item.MatchLabels))
+		for key, value := range item.MatchLabels {
+			keys = append(keys, key+"="+string(value))
 		}
+		slices.Sort(keys)
+		labels := ""
+		if len(keys) > 0 {
+			labels = "[" + strings.Join(keys, ",") + "]"
+		}
+		endpoints = append(endpoints, endpointText{namespace: item.Namespace, labels: labels})
 	}
-	if len(parts) == 0 {
-		return ""
+	slices.SortFunc(endpoints, func(a, b endpointText) int {
+		if a.namespace != b.namespace {
+			return strings.Compare(a.namespace, b.namespace)
+		}
+		return strings.Compare(a.labels, b.labels)
+	})
+	for _, item := range endpoints {
+		parts = append(parts, "endpoint:"+item.namespace+item.labels)
 	}
-	return strings.Join(parts, ",")
+	if len(e.Ports) > 0 {
+		type portText struct {
+			port     int32
+			protocol string
+		}
+		ports := make([]portText, len(e.Ports))
+		for i, port := range e.Ports {
+			protocol := string(port.Protocol)
+			if protocol == "" {
+				protocol = string(v1alpha1.ProtocolTCP)
+			}
+			ports[i] = portText{port: port.Port, protocol: protocol}
+		}
+		slices.SortFunc(ports, func(a, b portText) int {
+			if a.port != b.port {
+				return int(a.port - b.port)
+			}
+			return strings.Compare(a.protocol, b.protocol)
+		})
+		shown := make([]string, len(ports))
+		for i, port := range ports {
+			shown[i] = fmt.Sprintf("%d/%s", port.port, port.protocol)
+		}
+		parts = append(parts, "ports:"+strings.Join(shown, ","))
+	}
+	return strings.Join(parts, " ")
+}
+
+func sortedCopy(in []string) []string {
+	out := slices.Clone(in)
+	slices.Sort(out)
+	return out
 }
 
 // grantAskWorkPackage is the one OpenProject issue id on the session, or 0

@@ -33,6 +33,10 @@ const (
 	TypeLabel = "coordination.dev-env.haynesops.com/ask-type"
 	// OriginLabel marks a broker-created grant ask. Session create drops it.
 	OriginLabel = "coordination.dev-env.haynesops.com/ask-origin"
+	// BrokerOrigin is the only value stored on OriginLabel. The store writes
+	// it only when Requester.Origin is exactly this, in the create call.
+	// A session caller leaves Requester.Origin empty, and body labels are ignored.
+	BrokerOrigin = "broker"
 
 	// DefaultOpenPerRequester is the cap on stored-open info and approval asks
 	// for one session. An open ask that has lapsed still counts until its

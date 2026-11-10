@@ -21,8 +21,16 @@ is otherwise unchanged.
 on the body, including `coordination.dev-env.haynesops.com/ask-origin`, so a
 session create does not store that label. The store accepts a grant ask and
 applies the caps below. It records the requester, the open state and the ask
-type, and it does not record `ask-origin`. The broker path that opens a grant
-ask is not this route.
+type. It records `ask-origin=broker` only when the broker caller sets that
+origin on the same create. A session caller cannot set it. `POST
+/v1/asks/{id}/withdraw` refuses `type=grant`. The broker withdraws a grant
+Ask when the session releases the grant.
+
+The broker puts the complete access the digest covers into the Ask detail:
+for a namespace role, every Secret name; for egress, every destination with
+its ports, protocols and label selectors. When that text does not fit the
+detail bound, the broker opens no Ask. The grant keeps the 30-minute denial,
+and a Warning Event says the request is too large to show and should be split.
 
 A grant answer requires `approved` and a `username` matching
 `^[A-Za-z0-9][A-Za-z0-9._@+-]{0,62}$`. An info or approval answer omits
@@ -47,7 +55,7 @@ principal the portal authenticated.
 | POST | `/v1/asks` | session | 201 created, 200 identical `requestId` |
 | GET | `/v1/asks?mine=true` | session | 200, newest first |
 | GET | `/v1/asks/{id}` | owning session | 200 |
-| POST | `/v1/asks/{id}/withdraw` | owning session, while open | 200 |
+| POST | `/v1/asks/{id}/withdraw` | owning session, while open, not `type=grant` | 200 |
 | GET | `/v1/portal/asks?state=open` or `all` | portal reader | 200 |
 | GET | `/v1/portal/asks/{id}` | portal reader, any state | 200 |
 | POST | `/v1/portal/asks/{id}/answer` | portal reader, while open and unexpired | 200 |
@@ -198,8 +206,9 @@ This source default does not settle Tom's quiet-hours ruling or permit go-live.
 ## Status codes
 
 Validation failures, including a fractional `scope.expiresAt`, are 400.
-`POST /v1/asks` with `type=grant` is 400. A session cannot set labels;
-`ask-origin` is dropped and is not stored.
+`POST /v1/asks` with `type=grant` is 400. Withdraw of an Ask whose type is
+`grant` is 400. A session cannot set labels. On this route `ask-origin` is
+dropped and is not stored.
 The same `requestId` with a different body is 409. Withdraw of an ask that is
 not open is 409. An answer when the ask is answered or withdrawn is 409. The
 same issuer and subject repeating the identical answer is 200, including when
@@ -207,6 +216,24 @@ only the display name differs. A different subject is 409. An answer when the
 ask or its approval scope has expired is 410 (`expired`). A count bound is
 429 (`limit_exceeded`). An unconfirmed count is 503. Another session's ask is
 404.
+
+## Who can answer a grant Ask
+
+The broker trusts the stored answer. It cannot tell who wrote it. Whoever may update `asks/status` in `dev-agents` can approve a grant. By design that is the operator, which writes the portal's answer for a signed-in person, and the broker. The coordinator checks the live writers before the flag is set.
+
+## Broker verbs on Asks and TaskClaims
+
+These are the Kubernetes verbs the broker's grant-Ask code uses. This repository does not grant them. ADR-021's build plan also lists `get` on TaskClaims, which this code does not use, and it does not list `patch` on Asks, which the state-label repair uses. Origin is set in the create, not by a patch.
+
+| Verb | Resource | Function |
+| --- | --- | --- |
+| get | asks | `loadGrantAsk` reads the grant's Ask. `KubeStore.load` reads it again from `KubeStore.Create` and `KubeStore.Withdraw`. |
+| list | asks | `KubeStore.countAtMost`, from `KubeStore.checkRoom` during `Create`. `KubeStore.recountMatching` lists when an open count is already at its bound. |
+| watch | asks | `Broker.SetupWithManager` watches Asks and wakes grants through `enqueueGrantAsk`. |
+| create | asks | `KubeStore.Create`, called from `ensureGrantAsk`. The origin label is on this create. |
+| update | asks/status | `KubeStore.ensureOpen`, from `Create`, and `KubeStore.Withdraw`, from `withdrawOpenGrantAsk`. |
+| patch | asks | `KubeStore.setStateLabel`, from `syncLabel`, which `Withdraw` and `recountMatching` call. This patches the state label only. |
+| list | taskclaims | `grantAskWorkPackage` lists the session's TaskClaims for the story link. |
 
 ## Operator RBAC
 

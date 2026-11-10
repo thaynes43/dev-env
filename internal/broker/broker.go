@@ -15,9 +15,12 @@
 //     decision); -> Denied when Tom or a delegate denies, when the broker's
 //     checks fail, when the session ended, or after 30 minutes unanswered
 //     (deniedBy timeout); -> Released when the session gives it back.
-//     With --enable-grant-asks, a grant no policy and no delegate takes is not
-//     denied at 30 minutes: the broker opens one grant Ask and applies one
-//     answer through Decide (ADR-021). Flag off, that pending path is unchanged.
+//     With --enable-grant-asks, the broker opens one grant Ask when no policy
+//     and no delegate takes the grant, and that Ask alone decides it: the
+//     30-minute deny does not apply once the broker has opened the Ask
+//     (ADR-021). A grant with no broker Ask, including a credential grant and
+//     one still on the delegate path, is still denied at 30 minutes. Flag off,
+//     the pending path is unchanged.
 //   - Active -> Expired at expiresAt, Released on spec.release or when the
 //     session ends, Denied when a check fails, Failed when it cannot be made.
 //     Each of these revokes first.
@@ -251,8 +254,10 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 
 // pending answers a grant that waits: released, timed out, approved by a
 // policy, or still waiting for Tom, who is told once. With EnableGrantAsks,
-// a grant no policy and no delegate takes stays pending past 30 minutes and
-// the broker opens one grant Ask (ADR-021). Maintenance keeps its own wait.
+// an Ask the broker opened is read before any policy, attestation or
+// delegate path, and that Ask alone decides the grant. The 30-minute deny
+// still applies to a grant for which the broker has not opened an Ask.
+// Maintenance keeps its own wait and is not given an Ask.
 func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) (ctrl.Result, error) {
 	if g.Spec.Release {
 		if b.EnableGrantAsks {
@@ -263,17 +268,33 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released before an answer", now)
 	}
 	deadline := g.CreationTimestamp.Add(PendingTimeout)
-	// Flag off, this deny is exactly where it is today: before a policy match.
-	if !b.EnableGrantAsks && !now.Time.Before(deadline) {
+	// Credential grants open no Ask in this slice. Maintenance opens none
+	// either. Every other flag-on grant is gated on its Ask before a policy,
+	// an attestation or a delegate can approve it.
+	if b.EnableGrantAsks && g.Spec.Type != v1alpha1.GrantMaintenance && g.Spec.Type != v1alpha1.GrantCredential {
+		switch b.classifyGrantAsk(ctx, g) {
+		case grantAskUnread:
+			// The Ask could not be read. Do not approve by another path.
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		case grantAskForeign:
+			// An Ask at the broker's name without the broker origin is not
+			// adopted, and its answer is not read.
+			b.noteForeignGrantAsk(g)
+			if !now.Time.Before(deadline) {
+				return b.end(ctx, g, v1alpha1.GrantDenied, DeniedByTimeout, "no answer in 30 minutes", now)
+			}
+			return ctrl.Result{RequeueAfter: min(grantAskRecheck, deadline.Sub(now.Time))}, nil
+		case grantAskBroker:
+			return b.holdGrantAsk(ctx, g, sess, now)
+		}
+	}
+	// No broker Ask is open for this grant. Flag on or off, the 30-minute
+	// deny is the one it has today, before a policy or a delegate runs.
+	if !now.Time.Before(deadline) {
 		return b.end(ctx, g, v1alpha1.GrantDenied, DeniedByTimeout, "no answer in 30 minutes", now)
 	}
 
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
-		// A grant Ask is opened only after the policy and delegate steps below.
-		// Maintenance returns before those, so its 30-minute deny stays.
-		if b.EnableGrantAsks && !now.Time.Before(deadline) {
-			return b.end(ctx, g, v1alpha1.GrantDenied, DeniedByTimeout, "no answer in 30 minutes", now)
-		}
 		// A delegate decision (DESIGN-042 6.2) shares the set-once annotation
 		// with the human route; only a configured broker reads it as one, so
 		// without delegates this step does nothing.
@@ -314,11 +335,19 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 	if res, handled, err := b.delegateDecision(ctx, g, sess, now); handled {
 		return res, err
 	}
-	// Selected for Tom: no policy and no delegate took it. Flag on, the
-	// 30-minute deny does not apply, including while the Ask is still failing
-	// to open. Flag off, the notify-and-wait below is unchanged.
-	if b.EnableGrantAsks {
-		return b.holdGrantAsk(ctx, g, sess, now)
+	// Selected for Tom: no policy and no delegate took it. A credential grant
+	// keeps the flag-off wait. Any other flag-on grant opens one Ask, unless
+	// the complete scope does not fit the Ask: then it keeps this wait too.
+	if b.EnableGrantAsks && g.Spec.Type != v1alpha1.GrantCredential {
+		res, err := b.holdGrantAsk(ctx, g, sess, now)
+		switch {
+		case errors.Is(err, errGrantAskTooLarge):
+			b.event(g, corev1.EventTypeWarning, "GrantAsk", "AskTooLarge", "the request is too large to show and should be split")
+		case errors.Is(err, errGrantAskForeign):
+			return ctrl.Result{RequeueAfter: grantAskRecheck}, nil
+		default:
+			return res, err
+		}
 	}
 
 	wait := ctrl.Result{RequeueAfter: deadline.Sub(now.Time)}

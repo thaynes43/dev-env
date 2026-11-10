@@ -197,7 +197,7 @@ func TestGrantAskTransportErrorRetries(t *testing.T) {
 	}
 }
 
-func TestGrantAskOtherRefusalDenies(t *testing.T) {
+func TestGrantAskCredentialOpensNoAskAndDeniesAtThirtyMinutes(t *testing.T) {
 	f := newGrantAskFixture(t, true)
 	f.b.EnableProxmoxGrants = true
 	g := f.grant()
@@ -208,22 +208,30 @@ func TestGrantAskOtherRefusalDenies(t *testing.T) {
 	if err := f.base.Update(f.ctx, g); err != nil {
 		t.Fatal(err)
 	}
-	f.openAsk()
-	if got := f.onlyAsk().Spec.Grant.Target; got != string(v1alpha1.CredentialProxmox) {
-		t.Fatalf("target %s", got)
+	f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantPending })
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
 	}
-	f.answer(boolPtr(true), "tom", "")
-	spy := f.watchDecide(true)
-	f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantDenied })
+	if got := f.grant(); got.Status.Phase != v1alpha1.GrantPending || got.Status.ApprovedBy != "" || got.Status.DeniedBy != "" {
+		t.Fatalf("credential before 30 minutes: %+v", got.Status)
+	}
+	if n := f.askCount(); n != 0 {
+		t.Fatalf("credential grant opened %d asks", n)
+	}
+	f.clk.Step(PendingTimeout)
+	spy := f.watchDecide(false)
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
 	got := f.grant()
-	if got.Status.DeniedBy != DeniedByBroker || got.Status.Message != "the answer could not be applied" || got.Status.ApprovedBy != "" {
-		t.Fatalf("refusal: deniedBy %s message %q approvedBy %s", got.Status.DeniedBy, got.Status.Message, got.Status.ApprovedBy)
+	if got.Status.Phase != v1alpha1.GrantDenied || got.Status.DeniedBy != DeniedByTimeout || got.Status.Message != "no answer in 30 minutes" || got.Status.ApprovedBy != "" {
+		t.Fatalf("credential after 30 minutes: phase %s deniedBy %s message %q approvedBy %s", got.Status.Phase, got.Status.DeniedBy, got.Status.Message, got.Status.ApprovedBy)
 	}
-	if spy.calls != 1 || spy.last.By != "authentik/tom" || !spy.last.Approve {
-		t.Fatalf("Decide calls=%d by=%s approve=%v", spy.calls, spy.last.By, spy.last.Approve)
+	if spy.calls != 0 {
+		t.Fatalf("Decide calls = %d", spy.calls)
 	}
-	if !errors.Is(spy.err, ErrRefused) || !strings.Contains(spy.err.Error(), "credential approvals require a matching standing policy") {
-		t.Fatalf("stored refusal was not the credential rule: %v", spy.err)
+	if n := f.askCount(); n != 0 {
+		t.Fatalf("credential grant opened %d asks", n)
 	}
 }
 

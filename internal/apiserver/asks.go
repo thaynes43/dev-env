@@ -165,6 +165,15 @@ func (s *Server) withdrawAsk(ctx context.Context, _ http.ResponseWriter, r *http
 	if err != nil {
 		return 0, nil, err
 	}
+	// A session cannot withdraw a grant Ask. The broker withdraws one when
+	// the session releases the grant (ADR-021 section 5).
+	current, err := s.ownedAsk(ctx, r.PathValue("id"), reqr)
+	if err != nil {
+		return 0, nil, mapAskError(err)
+	}
+	if current.Type == apiv1.AskTypeGrant {
+		return 0, nil, badRequest("type: a session cannot withdraw a grant ask")
+	}
 	now := s.askNow()
 	ask, err := s.Asks.Withdraw(ctx, r.PathValue("id"), reqr, now)
 	if err != nil {
