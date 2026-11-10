@@ -118,7 +118,11 @@ type Status struct {
 	// holding $HOME: numbers and a closed state word, never a path. Absent means
 	// not measured. An operator that does not know the field ignores it.
 	HomeHeadroom *HomeHeadroom `json:"homeHeadroom,omitempty"`
-	ObservedAt   time.Time     `json:"observedAt"`
+	// Allowance is one passive allowance reading from this session's own CLI
+	// (DESIGN-059): absent when there is none, or when agentd refused to send
+	// it. An operator that does not know the field ignores it.
+	Allowance  *AllowanceReading `json:"allowance,omitempty"`
+	ObservedAt time.Time         `json:"observedAt"`
 }
 
 // Workspace is the session's clone and worktree (D-15).
