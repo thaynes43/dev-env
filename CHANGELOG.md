@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.98.0](https://github.com/thaynes43/dev-env/compare/v2.97.0...v2.98.0) (2026-11-10)
+
+
+### Features
+
+* **usage:** passive allowance readings from running sessions (DESIGN-059 slice 1) (OP509) ([#1018](https://github.com/thaynes43/dev-env/issues/1018)) ([25b7724](https://github.com/thaynes43/dev-env/commit/25b77247cdacb77a631d701b8bfab3364eea9355))
+
+
+### Bug Fixes
+
+* **operator:** take a kubelet-reported ContainerStatusUnknown as a stopped executor (OP515) ([#1019](https://github.com/thaynes43/dev-env/issues/1019)) ([b179e35](https://github.com/thaynes43/dev-env/commit/b179e354bcfa3ec688e30097fda18bc283d37c15))
+
 ## [2.97.0](https://github.com/thaynes43/dev-env/compare/v2.96.0...v2.97.0) (2026-11-09)
 
 
