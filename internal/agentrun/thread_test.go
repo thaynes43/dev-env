@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/threadlaunch"
 )
@@ -260,6 +261,41 @@ func TestThreadStartClaudeMapsRCStart(t *testing.T) {
 	if err != nil || r.Outcome != apiv1.ThreadTimedOut || r.Error.Code != "launch_deadline" || r.Phases[apiv1.ThreadPhaseSourceVisible].State == "ok" {
 		t.Fatalf("result %v %+v", err, r)
 	}
+}
+
+// A Claude agent that reports login-required needs an owner. The thread result
+// keeps that outcome and exit 7. Agent state failed is outcome failed, exit 1.
+func TestThreadStartClaudeLoginRequiredAndFailedAgent(t *testing.T) {
+	const wait = 6 * time.Minute
+	t.Run("login-required", func(t *testing.T) {
+		h := newHarness(t)
+		rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+			v := rcView(2)
+			v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentLoginRequired, Message: "no usable Claude login in this pod; run: agent-run login remote-268 url"}
+			return v
+		}, http.StatusAccepted)
+		h.mustRun(ExitPending, "thread", "start", "--agent", "claude", "--project", "sample", "--model", "claude-opus-5-5", "--handoff", h.write("handoff.txt", rcTestText), "--wait", wait.String())
+		r := threadResult(t, h)
+		if r.Outcome != apiv1.ThreadActionRequired || r.Error == nil || r.Error.Code != "claude_login_required" || r.Error.Phase != apiv1.ThreadPhaseClientStarted || r.Error.Message != rcErrorMessages["claude_login_required"] {
+			t.Fatalf("result %+v", r.Error)
+		}
+		if r.TotalMs != 0 || r.DeadlineMs != wait.Milliseconds() || rcCountMessages(h) != 0 || r.Phases[apiv1.ThreadPhaseClientStarted].State != "blocked" {
+			t.Fatalf("waited or sent a handoff: total %d messages %d", r.TotalMs, rcCountMessages(h))
+		}
+	})
+	t.Run("failed", func(t *testing.T) {
+		h := newHarness(t)
+		rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+			v := rcView(2)
+			v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentFailed, Message: "the agent failed to start"}
+			return v
+		}, http.StatusAccepted)
+		h.mustRun(ExitFailed, "thread", "start", "--agent", "claude", "--project", "sample", "--model", "claude-opus-5-5", "--handoff", h.write("handoff.txt", rcTestText), "--wait", wait.String())
+		r := threadResult(t, h)
+		if r.Outcome != apiv1.ThreadFailed || r.Error == nil || r.Error.Code != "session_ended" || r.Error.Phase != apiv1.ThreadPhaseClientStarted || r.TotalMs != 0 || rcCountMessages(h) != 0 {
+			t.Fatalf("result %+v messages %d", r.Error, rcCountMessages(h))
+		}
+	})
 }
 
 // threadAPIHarness is an ordinary session pod: its API answers the thread

@@ -735,6 +735,7 @@ Phases: host_ready, paired, client_started, thread_created, source_visible
   failed 1, blocked 1 refused; nothing created unless phases say otherwise
   (invalid input that agent-run itself refuses exits 2)
 Never resend a handoff after 6 or 7.
+A Claude session whose agent state is login-required, and whose status is not a pending keeper refresh, the projection warning, or a logged-in, rejected or unverifiable projection line, is action_required with claude_login_required at client_started (exit 7) as soon as that state is seen; the handoff is not sent.
 `,
 	"pair": `Usage: agent-run pair <name>
 
