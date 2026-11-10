@@ -317,12 +317,22 @@ held across the live count and create. This also fences concurrent API replicas.
 A crash or uncertain unlock leaves a closed gate, not a timed lease that could
 permit two writers. An operator must verify no admission is still in flight
 before removing such a stale lock. These locks grant no caller Kubernetes rights.
+Creates under this gate request strict Kubernetes field validation so an old
+AgentSession CRD refuses `maxWorkers` instead of pruning the worker cap.
+Installation needs both generated CRDs before the operator rollout, all serving
+API replicas on the new version, operator read access to the policy, and operator
+create/delete access to the lock ConfigMaps in the session namespace. Meatball
+gets no Kubernetes resource rights from this contract.
 
 Only `GET/POST /v1/sessions` and `GET/DELETE /v1/sessions/{name}` accept the new
 class. Lists always filter to its own direct sessions, regardless of query
 filters. Detail and reap use live parent checks; missing and foreign names get
 the same refusal. Detail returns the session and retained outcome, without
-descendant or project-wide reads. Reap preserves the existing rescue finalizer
+descendant or project-wide reads. Retained outcomes use the existing
+`X-Dev-Env-Task-Outcome: v1` negotiation. Policy callers receive
+`limits.maxWorkers`; existing callers receive it only with
+`Dev-Env-Caller-Policy: limits-v1`, preserving old strict response decoders.
+Reap preserves the existing rescue finalizer
 and UID precondition. No log route (it execs), message, thread, resume, suspend,
 grant, keeper-login, fleet or other client route is exposed. OP527 must reuse
 these fences when adding its start/status/stop facade.

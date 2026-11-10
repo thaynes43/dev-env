@@ -487,6 +487,13 @@ type LLMSpec struct {
 
 // SessionLimits caps a task session.
 type SessionLimits struct {
+	// MaxWorkers caps unfinished direct children across agent kinds for a
+	// CallerPolicy-created coordinator. Absence keeps the existing child rules.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=4
+	// +optional
+	MaxWorkers *int32 `json:"maxWorkers,omitempty"`
+
 	// Timeout is the wall-clock limit, for example 3h.
 	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="must be a positive Go duration such as 40m or 72h"
 	// +optional

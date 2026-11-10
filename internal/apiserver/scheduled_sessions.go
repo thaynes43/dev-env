@@ -102,6 +102,19 @@ func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSes
 	if s.callerHasTaskBudget(c) {
 		return "", "", false, &scheduledwork.RefusedError{Reason: fmt.Sprintf("%s is bound to a task budget; scheduled work is not dispatched outside its reservation", c)}
 	}
+	gate, err := s.lockCallerAdmission(ctx, c)
+	if err != nil {
+		return "", "", false, scheduledRefusal(err)
+	}
+	defer s.finishCallerAdmission(ctx, gate)
+	if gate != nil {
+		if existing, err := s.scheduledSession(ctx, name); err != nil || existing != nil {
+			if err != nil {
+				return "", "", false, err
+			}
+			return adoptScheduledSession(existing, d)
+		}
+	}
 	sess.Name = name
 	controllerutil.AddFinalizer(sess, v1alpha1.ScheduledWorkFinalizer)
 	sess.Labels[v1alpha1.LabelScheduledWork] = string(d.ItemUID)
@@ -124,7 +137,7 @@ func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSes
 	if s.now().After(d.StartDeadline) {
 		return "", "", false, scheduledwork.ErrPastStartDeadline
 	}
-	err = s.Client.Create(ctx, sess)
+	err = s.createWithCallerAdmission(ctx, sess, gate)
 	if apierrors.IsAlreadyExists(err) {
 		existing, err := s.scheduledSession(ctx, name)
 		switch {
