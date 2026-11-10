@@ -317,7 +317,9 @@ pair a phone with it once.
    workbench session can start one for you on the paired host with
    `agent-run thread start --agent codex --host <name> --model <id> --effort
    <e> --handoff <file>`; it reports `responded` once the thread has answered,
-   and the thread is in your phone's list ([workflow guide section
+   and the thread is in your phone's list. If the answer comes after its wait,
+   `agent-run thread status --agent codex --host <name> --thread <id>` checks
+   again without starting or sending anything ([workflow guide section
    3](workflow-guide.md#start-an-owner-interactive-codex-task-on-a-paired-v2-host)).
 
 - The pairing lives on the session's volume. Suspend and resume keep it;

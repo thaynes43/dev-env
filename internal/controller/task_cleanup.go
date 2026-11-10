@@ -486,8 +486,9 @@ func (r *Reconciler) taskCleanupQuiet(ctx context.Context, s *v1alpha1.AgentSess
 // taskCleanupNotAdmitted is what keeps a due record from starting, judged from
 // the cache and the leader's memory: the allowlist, a finished parent's
 // running descendants (as last found), a pause, or the queue. quiet is false
-// when nothing keeps it, or when cacheOnly and the shelf's free space must be
-// read again first.
+// when nothing keeps it. When cacheOnly and the shelf's free-space answer is
+// not cached, that is not a pause: a record that would not start says it is
+// queued, and one that might start is not quiet, so the shelf is asked.
 func (r *Reconciler) taskCleanupNotAdmitted(ctx context.Context, s *v1alpha1.AgentSession, now time.Time, cacheOnly bool) (note *homeExpiryNote, wait time.Duration, quiet bool) {
 	if !r.taskCleanupAllowed(s.Name) {
 		return &homeExpiryNote{reason: taskReasonWaiting, message: "the task clean-up is due but waits: this session is not on --task-cleanup-sessions"}, homeExpiryMaxWait, true
@@ -497,6 +498,14 @@ func (r *Reconciler) taskCleanupNotAdmitted(ctx context.Context, s *v1alpha1.Age
 	}
 	pause, known := r.taskCleanupPause(ctx, now, cacheOnly)
 	if !known {
+		// No cached free-space answer. Nothing is paused. A record that would
+		// not start says queued and stays on the cache, so a cold cache does
+		// not send the backlog to the shelf. One that might start falls
+		// through; only that call's failure, low space, the breaker or
+		// max-active 0 says paused.
+		if !r.taskCleanupAdmittable(ctx, s, now, false) {
+			return taskQueuedNote(r.TaskCleanupMaxActive), taskQueuePoll, true
+		}
 		return nil, 0, false
 	}
 	if pause != "" {
@@ -1586,7 +1595,8 @@ func formatBytes(n int64) string {
 // taskCleanupPause is the first of section 4's pause reasons that holds, or
 // "": the manual pause, the breaker, then the shelf's free space (checked
 // before each start, cached a minute). known is false only when cacheOnly and
-// the shelf must be asked again.
+// the free-space answer is not cached. That is not a pause: the caller says
+// the record is queued, or asks the shelf when the record might start.
 func (r *Reconciler) taskCleanupPause(ctx context.Context, now time.Time, cacheOnly bool) (reason string, known bool) {
 	if r.TaskCleanupMaxActive <= 0 {
 		return taskPauseMaxActiveZero, true

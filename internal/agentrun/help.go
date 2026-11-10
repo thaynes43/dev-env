@@ -16,6 +16,8 @@ Usage:
   agent-run rc start|status|fresh -o json         launch or observe Remote Control
   agent-run coordinator start|status|stop|brief   run bounded work on a tracker item
   agent-run thread start --agent <provider> ...   start a fresh phone-visible thread (Codex on a host, Claude as a session)
+  agent-run thread status --agent codex --host <h> --thread <id>
+                                                  recheck a started Codex thread's first response; observe-only
   agent-run inbox send|ask|reply|list|read|ack|ack-status
                                                   durable inbox
   agent-run instruction send|read|checkpoint|consume|address|attempt designated parent delivery and native consumption
@@ -689,6 +691,7 @@ it was. Renew well before the login lapses (status says when).
                          --handoff FILE [--repo R] [--name N] [--wait 5m] [-o json]
        agent-run thread start --agent claude --project P [--repo R] --model <full id> [--effort e]
                          --handoff FILE [--wait 5m] [--idempotency-key K] [-o json]
+       agent-run thread status --agent codex --host <codex-host> --thread <id> [--repo R] [-o json]
 
 Starts one fresh interactive thread that Tom can see in his provider's phone app
 (DESIGN-057) and prints one thread-launch.v1 JSON line. The handoff is the
@@ -736,6 +739,35 @@ Phases: host_ready, paired, client_started, thread_created, source_visible
   (invalid input that agent-run itself refuses exits 2)
 Never resend a handoff after 6 or 7.
 A Claude session whose agent state is login-required, and whose status is not a pending keeper refresh, the projection warning, or a logged-in, rejected or unverifiable projection line, is action_required with claude_login_required at client_started (exit 7) as soon as that state is seen; the handoff is not sent.
+
+thread status is the observe-only recheck of a Codex thread that thread start
+left visible (exit 7, response_pending). It never launches, runs the wrapper or
+sends the thread anything: it takes no handoff, model, effort, name or wait,
+and its exec has no stdin. --thread is the result's threadId and --repo the
+repo the thread was started in (default: the host's repo). It runs agentd ctl
+thread-status in the host over the same exec route and host checks as thread
+start, makes one read-only pass (host state, the thread lists for that repo,
+the first turn and its newest items) and prints one thread-launch.v1 line:
+  responded 0         the first response exists now
+  visible 7           response_pending: still pending, check again later.
+                      response_not_observable: the first turn completed with no
+                      agent message seen; rechecking will not change it, so look
+                      on the phone
+  action_required 7   the keeper's Codex access is not current on the host
+  hidden 1            the thread's source is one the phone hides
+  failed 1            the first turn failed (turn_failed), the id is not among the
+                      newest 20 threads for that repo (thread_not_found), or the
+                      host or the observation was unavailable
+A failed status launched nothing, so running it again is always safe. The
+result has no name, requestedModel or deadline; client_started stays unknown
+(status does not look at the client process) and paired is reported, never
+required. Its permission field and handoff phase repeat thread start's
+contract (permission source launch_contract): they mean something only for a
+threadId that thread start returned, not for a thread started another way.
+An ordinary session pod has no exec and no API route for status yet
+(status_route_unavailable): run it from a workbench session, the v1 pod or
+Tom's kubeconfig. --agent claude is refused (its first response is not
+observable; see agent-run rc status); cursor and grok are not qualified.
 `,
 	"pair": `Usage: agent-run pair <name>
 
