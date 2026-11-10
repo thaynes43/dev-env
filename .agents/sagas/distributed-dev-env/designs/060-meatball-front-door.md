@@ -310,10 +310,20 @@ defaults from a CLI or a template can substitute for the required model.
 Root concurrency counts all unfinished sessions with that account as parent,
 across models and repositories. It uses the existing unfinished-session rule:
 pending, running, idle and draining count; reaping, suspended, archived,
-failed or exited sessions do not. Idempotent repeats return their existing
+failed or exited sessions do not. A resume of a newly policy-bound root or
+direct worker must reacquire its parent's capacity. Its atomic resume patch
+reserves that slot until the session is reaped, including while status is stale
+or it later suspends or finishes. This conservative reservation avoids relying
+on an old task's terminal heartbeat as evidence that a resumed task finished;
+finish then reap a resumed session to release the slot. Ordinary unbounded
+sessions retain their existing lifecycle behavior. Worker records retain the
+bounded parent's UID so deletion or name reuse cannot remove their fence.
+Idempotent repeats return their existing
 session before checking capacity. Admission for this caller and each bounded
 parent takes an atomic Kubernetes ConfigMap lock in the session namespace,
-held across the live count and create. This also fences concurrent API replicas.
+held across the live count and create or bounded resume. This also fences
+concurrent API replicas. Scheduled dispatch retries lock contention during its
+existing start grace; a genuine capacity refusal remains a refusal.
 A crash or uncertain unlock leaves a closed gate, not a timed lease that could
 permit two writers. An operator must verify no admission is still in flight
 before removing such a stale lock. These locks grant no caller Kubernetes rights.

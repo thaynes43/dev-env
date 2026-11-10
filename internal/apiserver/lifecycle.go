@@ -6,7 +6,6 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -116,7 +115,7 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 			}
 			sess.Annotations[v1alpha1.AnnotationResumedAt] = s.now().UTC().Format(time.RFC3339)
 		}
-		err := s.Client.Patch(ctx, &sess, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
+		err := s.patchWithCallerAdmission(ctx, &sess, orig)
 		if identity {
 			s.createMu.Unlock()
 		}

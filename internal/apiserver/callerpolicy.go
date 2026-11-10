@@ -23,6 +23,8 @@ const (
 	meatballAccount       = "dev-env-system/dev-env-meatball"
 	callerPolicyNamespace = "dev-env-system"
 	callerPolicyName      = "meatball"
+	callerParentUID       = "dev-env.haynesops.com/caller-capacity-parent-uid"
+	callerResumeReserved  = "dev-env.haynesops.com/caller-resume-reserved"
 )
 
 // readCallerPolicy never consults the manager's cache: removal revokes the
@@ -198,6 +200,10 @@ func callerWorkerCap(c *caller) *int32 {
 // admitCallerCapacity runs under both createMu and the distributed admission
 // lock. Live reads count successful creates from other replicas immediately.
 func (s *Server) admitCallerCapacity(ctx context.Context, c *caller) error {
+	return s.admitCallerCapacityExcept(ctx, c, "")
+}
+
+func (s *Server) admitCallerCapacityExcept(ctx context.Context, c *caller, except types.UID) error {
 	var cap int32
 	switch {
 	case c.kind == kindPolicy:
@@ -229,15 +235,17 @@ func (s *Server) admitCallerCapacity(ctx context.Context, c *caller) error {
 	}
 	n := 0
 	for i := range list.Items {
-		if list.Items[i].Spec.Parent == c.parent && unfinished(&list.Items[i]) {
+		it := &list.Items[i]
+		reserved := it.Annotations[callerResumeReserved] == "true" && it.DeletionTimestamp.IsZero()
+		if it.Spec.Parent == c.parent && (except == "" || it.UID != except) && (unfinished(it) || reserved) {
 			n++
 		}
 	}
 	if n >= int(cap) {
 		if c.kind == kindPolicy {
-			return tooManyRequests("CallerPolicy permits at most %d unfinished sessions; one must finish first", cap)
+			return tooManyRequests("CallerPolicy permits at most %d unfinished sessions; one must finish first, or reap a resumed session to release its reservation", cap)
 		}
-		return tooManyRequests("the parent worker cap is %d unfinished direct workers across all agent kinds; one must finish first", cap)
+		return tooManyRequests("the parent worker cap is %d unfinished direct workers across all agent kinds; one must finish first, or reap a resumed worker to release its reservation", cap)
 	}
 	return nil
 }
@@ -246,8 +254,9 @@ func (s *Server) admitCallerCapacity(ctx context.Context, c *caller) error {
 // No lease expiry can permit a second writer while the first is still running.
 // A crash or uncertain create deliberately needs operator recovery (DESIGN-060).
 type callerAdmission struct {
-	lock corev1.ConfigMap
-	hold bool
+	lock      corev1.ConfigMap
+	hold      bool
+	parentUID types.UID
 }
 
 func (s *Server) lockCallerAdmission(ctx context.Context, c *caller) (*callerAdmission, error) {
@@ -259,6 +268,9 @@ func (s *Server) lockCallerAdmission(ctx context.Context, c *caller) (*callerAdm
 		ObjectMeta: metav1.ObjectMeta{Namespace: s.Policy.SessionNamespace, Name: fmt.Sprintf("caller-admission-%x", digest[:16])},
 		Data:       map[string]string{"parent": c.parent},
 	}}
+	if c.kind == kindSession {
+		gate.parentUID = c.session.UID
+	}
 	if err := s.Client.Create(ctx, &gate.lock); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return nil, newError(http.StatusConflict, apiv1.CodeConflict, "caller admission is in progress or needs operator recovery; no new session was created")
@@ -273,7 +285,7 @@ func (s *Server) finishCallerAdmission(ctx context.Context, gate *callerAdmissio
 		return
 	}
 	if gate.hold || gate.lock.UID == "" {
-		s.Log.Info("caller admission lock retained; verify the in-flight create before recovery", "lock", gate.lock.Name)
+		s.Log.Info("caller admission lock retained; verify the in-flight create or resume before recovery", "lock", gate.lock.Name)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -287,6 +299,12 @@ func (s *Server) createWithCallerAdmission(ctx context.Context, sess *v1alpha1.A
 	if gate == nil {
 		return s.Client.Create(ctx, sess)
 	}
+	if gate.parentUID != "" {
+		if sess.Annotations == nil {
+			sess.Annotations = map[string]string{}
+		}
+		sess.Annotations[callerParentUID] = string(gate.parentUID)
+	}
 	gate.hold = true
 	// An older installed CRD must refuse this create, never silently prune
 	// limits.maxWorkers and launch an unbounded coordinator.
@@ -294,6 +312,67 @@ func (s *Server) createWithCallerAdmission(ctx context.Context, sess *v1alpha1.A
 	// Only definite non-creates or a confirmed create release the lock. A lost
 	// response, cancellation or timeout may still commit after our call returns.
 	if err == nil || apierrors.IsAlreadyExists(err) || apierrors.IsInvalid(err) ||
+		apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsBadRequest(err) {
+		gate.hold = false
+	}
+	return err
+}
+
+// Only newly bounded targets enter this path, whoever requested their resume.
+// A worker's durable parent UID prevents orphaning or name reuse from turning
+// its next resume into an unbounded legacy operation.
+func (s *Server) callerForBoundedResume(ctx context.Context, sess *v1alpha1.AgentSession) (*caller, error) {
+	if sess.Spec.Parent == meatballAccount && sess.Spec.Limits != nil && sess.Spec.Limits.MaxWorkers != nil {
+		p, err := s.readCallerPolicy(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if p == nil {
+			return nil, forbidden("CallerPolicy is unavailable; cannot resume its bounded session")
+		}
+		return &caller{kind: kindPolicy, parent: meatballAccount, policy: p}, nil
+	}
+	uid := sess.Annotations[callerParentUID]
+	if uid == "" {
+		return nil, nil
+	}
+	var parent v1alpha1.AgentSession
+	if s.Live == nil || s.Live.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Spec.Parent}, &parent) != nil ||
+		string(parent.UID) != uid || parent.Spec.Limits == nil || parent.Spec.Limits.MaxWorkers == nil {
+		return nil, forbidden("the bounded worker parent cannot be verified for resume")
+	}
+	return &caller{kind: kindSession, parent: parent.Name, session: &parent}, nil
+}
+
+func (s *Server) patchWithCallerAdmission(ctx context.Context, sess, original *v1alpha1.AgentSession) error {
+	patch := client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})
+	if sess.Spec.OperatingMode != v1alpha1.OperatingModeRunning {
+		return s.Client.Patch(ctx, sess, patch)
+	}
+	c, err := s.callerForBoundedResume(ctx, sess)
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return s.Client.Patch(ctx, sess, patch)
+	}
+	gate, err := s.lockCallerAdmission(ctx, c)
+	if err != nil {
+		return err
+	}
+	defer s.finishCallerAdmission(ctx, gate)
+	if err := s.admitCallerCapacityExcept(ctx, c, sess.UID); err != nil {
+		return err
+	}
+	if sess.Annotations == nil {
+		sess.Annotations = map[string]string{}
+	}
+	// The CAS reserves capacity in the same write that requests the resume.
+	// It remains until reap: old terminal status cannot release a new run.
+	sess.Annotations[callerResumeReserved] = "true"
+	gate.hold = true
+	err = s.Client.Patch(ctx, sess, patch)
+	if err == nil || apierrors.IsConflict(err) || apierrors.IsNotFound(err) || apierrors.IsInvalid(err) ||
 		apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsBadRequest(err) {
 		gate.hold = false
 	}

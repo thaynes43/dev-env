@@ -104,7 +104,9 @@ func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSes
 	}
 	gate, err := s.lockCallerAdmission(ctx, c)
 	if err != nil {
-		return "", "", false, scheduledRefusal(err)
+		// Another replica can hold the lock with spare capacity. Retry within
+		// start grace instead of parking this occurrence as a definite refusal.
+		return "", "", false, err
 	}
 	defer s.finishCallerAdmission(ctx, gate)
 	if gate != nil {

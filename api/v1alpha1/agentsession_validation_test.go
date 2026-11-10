@@ -149,6 +149,13 @@ func TestCallerPolicyValidation(t *testing.T) {
 			wantInvalid(t, k8s.Create(ctx(t), &unstructured.Unstructured{Object: u}), field)
 		})
 	}
+	t.Run("required spec", func(t *testing.T) {
+		p := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": v1alpha1.GroupVersion.String(), "kind": "CallerPolicy",
+			"metadata": map[string]any{"name": name(), "namespace": ns},
+		}}
+		wantInvalid(t, k8s.Create(ctx(t), p), "spec")
+	})
 }
 
 func TestCallerPolicyWorkerLimitValidation(t *testing.T) {

@@ -184,9 +184,10 @@ func TestCallerPolicyUnknownAndRevoked(t *testing.T) {
 		t.Run(where, func(t *testing.T) {
 			f := meatballFixture(t)
 			p := meatballPolicy()
-			if where == "other-name" {
+			switch where {
+			case "other-name":
 				p.Name = "other"
-			} else if where == "other-namespace" {
+			case "other-namespace":
 				p.Namespace = "elsewhere"
 			}
 			if where != "absent" {
