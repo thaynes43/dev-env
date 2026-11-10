@@ -1,7 +1,9 @@
 # DESIGN-060: Meatball front door
 
-- **Status:** Proposed, 2026-11-10. Design only: nothing is built, switched on
-  or changed. Section 8's table waits for Tom's ruling (story acceptance item 4).
+- **Status:** Accepted for its first slice, 2026-11-10. Tom ruled on the three
+  questions the same day (section 11): the risky-access list, that a request
+  stays open until he answers, and what Meatball may start. Design only:
+  nothing is built, switched on or changed by this document.
 - **Tracking:** [Story OP517](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/517),
   under [Epic OP516](https://work.haynesnetwork.com/work_packages/516).
 - **Origin:** Tom, 2026-11-10, typed in coordinator session
@@ -197,8 +199,12 @@ the workbench profile. Tool descriptions stay under 30 words each.
   profile replaces it for workers when it lands.
 - **Mode:** a task: it runs once within its hours, and its outcome is kept after
   the pod is reclaimed.
-- **Drivers:** `claude-opus-5-5` or `gpt-6-astra`. `claude-fable-5-2` only on
-  Tom's word: its quota is shared with his own use.
+- **Drivers:** `claude-opus-5-5`, `gpt-6-astra` or `claude-fable-5-2`. Tom,
+  2026-11-10, asked what Meatball may start without asking: "Also allow
+  Fable", with the proposed limits: each coordinator up to 4 hours and 4
+  workers at a time, at most 2 running at once. Fable draws on the quota he
+  uses himself, so the brief tells Meatball to pick it only when the story
+  needs it.
 - **Workers:** `claude-sonnet-5-5` for routine work, `claude-opus-5-5` for hard
   or user-visible work, `gpt-6.1-sol` for Codex, and Cursor's Grok model
   (OP496 j6199 used `grok-4.7-high`).
@@ -218,13 +224,18 @@ the workbench profile. Tool descriptions stay under 30 words each.
 
 ## 8. One approval path
 
-### The list (Tom edits this)
+### The list (ruled by Tom, 2026-11-10)
+
+Tom approved this list by phone prompt in the coordinator's session on
+2026-11-10: "Yes, use this list (Recommended)". Before it was shown to him the
+coordinator moved the app-namespace workload role from the middle column to
+the right, because it can reach Secrets. He may change any line later.
 
 | Routine: needs nobody | Coordinator may approve for its own workers | Risky: Tom's phone |
 |---|---|---|
 | Start, read, message and stop its own workers within its budget | Pass a worker access the coordinator already holds, for no longer than the coordinator's remaining hours | The shared hardware SSH key, and SSH to any host |
-| Read the cluster, logs and metrics (never Secret values) | The workload role in one named app namespace outside the dev-env namespaces, up to 1 hour (it can reach that namespace's Secrets by changing an image: move it right if that is too much) | Proxmox: the write credential and the PVE API |
-| Branch, PR, review; merge when required checks pass; release PRs; haynes-ops pin PRs | Read-only egress to a named LAN metrics endpoint, up to 1 hour | Reading Secret values |
+| Read the cluster, logs and metrics (never Secret values) | Read-only egress to a named LAN metrics endpoint, up to 1 hour | Proxmox: the write credential and the PVE API |
+| Branch, PR, review; merge when required checks pass; release PRs; haynes-ops pin PRs | | Reading Secret values, and the workload role in an app namespace, which can reach that namespace's Secrets by changing an image |
 | `flux reconcile`, suspend, resume; `rollout restart`; CronJob suspend; ExternalSecret force-sync; outside the dev-env namespaces | | Break-glass |
 | Jobs that run as the namespace's `default` ServiceAccount | | Node role: cordon, drain, uncordon, taint |
 | Tracker writes on its own story and its follow-ups | | Maintenance grants (GPU caps, SYS_ADMIN) |
@@ -280,12 +291,18 @@ AccessGrant type already documents `authentik/<username>` for this).
 - **Waiting:** the session records "waiting on Tom: <Ask link>" on its item and
   carries on with other work. It checks the answer at its next step, not in a
   sleep loop.
-- **Timeout:** no answer means no. Today that is 30 minutes and lost 5 of 42
-  requests (OP494 comment 6046). This design proposes 8 hours, or until the
-  asking session ends, whichever is first (question 2). When the session ends,
-  its open Asks close as "no longer needed", so nothing stale waits on Tom.
-- **One place:** the portal's Asks page lists every open request, grants
-  included. `waiting_on_tom()` returns the same list to Meatball. A tracker item
+- **No answer is not a no (Tom, 2026-11-10).** Asked how long a request should
+  wait, he answered: "I should always respond if I didn't I missed it in a way
+  I cannot get back to it. The UI should be my failsafe at missed requests but
+  it's super rare I'd say no to be honest, this is a home lab". So a risky
+  request does not expire into a refusal. It stays open on the board until he
+  answers it. Today a grant times out at 30 minutes; that goes. The board's
+  24-hour ceiling on an Ask (DESIGN-034) has to be lifted or renewed for these.
+  If the asking session ends first, the request stays on the board marked
+  "the session that asked has ended", with what a yes would now do (start the
+  remaining step as a follow-up), so he can still get back to it.
+- **One place, and it is the failsafe:** the portal's Asks page lists every
+  open request, grants included, oldest first, including any he missed. `waiting_on_tom()` returns the same list to Meatball. A tracker item
   in Needs approval or Needs answer carries its Ask link, or the daily sweep
   (#498) clears it.
 
@@ -304,12 +321,12 @@ door has no such action.
 
 | # | Story | Changes | Size | Depends on |
 |---|---|---|---|---|
-| 1 | Asks board on | Refresh #264's held haynes-ops draft: Ask CRD, RBAC, operator `--enable-asks`, keeper `--enable-ask-notifications` with the portal origin | M | Tom's yes (question 2; quiet hours Q-255-02 is open) |
-| 2 | Grants that need Tom go through the board | Operator opens an approval Ask for a grant no policy decided; the portal answer calls `Decide`; pending window per question 2; `request_access` and `grant` help cut to 40 words | M | 1 |
-| 3 | Meatball's caller | `CallerPolicy` for one caller: CRD, API class, limits per question 3, own-sessions-only reads and stops | M | question 3 |
+| 1 | Asks board on | Refresh #264's held haynes-ops draft: Ask CRD, RBAC, operator `--enable-asks`, keeper `--enable-ask-notifications` with the portal origin | M | quiet hours Q-255-02 is open |
+| 2 | Grants that need Tom go through the board | Operator opens an approval Ask for a grant no policy decided; the portal answer calls `Decide`; a request stays open until Tom answers (section 8); `request_access` and `grant` help cut to 40 words | M | 1 |
+| 3 | Meatball's caller | `CallerPolicy` for one caller: CRD, API class, the ruled limits (Opus, Astra or Fable drivers; 4 hours, 4 workers, 2 at once), own-sessions-only reads and stops | M | none |
 | 4 | Coordinator start | One operator route that fills in a coordinator task from a tracker item; the standard brief; `agent-run coordinator start, status, stop`; worker-count cap | M | 3 |
 | 5 | Front-door MCP server | Deployment, ServiceAccount, internal ingress, token from 1Password; the ten tools; `opwork groom` and `order` | M | 3, 4 |
-| 6 | Acceptance run | Meatball (or a stand-in with the same token) starts a coordinator on one ready story; cheaper workers reach a merged PR; one risky request reaches Tom's phone and he decides | S | 1, 2, 5; Tom's ruling on section 8 |
+| 6 | Acceptance run | Meatball (or a stand-in with the same token) starts a coordinator on one ready story; cheaper workers reach a merged PR; one risky request reaches Tom's phone and he decides | S | 1, 2, 5 |
 
 Not in the slice: agent-decided grants (#503 and a delegated policy), OP505's
 worker profile, named-ServiceAccount Jobs for runbooks (#494 row 5).
@@ -328,6 +345,11 @@ worker profile, named-ServiceAccount Jobs for runbooks (#494 row 5).
   approved stops standing in for Tom.
 
 ## 11. Questions for Tom
+
+*Ruled 2026-11-10, all three, by phone prompt in the coordinator's session:
+Q-060-01 "Yes, use this list (Recommended)"; Q-060-02 answered in his own
+words (section 8, "No answer is not a no"); Q-060-03 "Also allow Fable". The
+questions as drafted follow, for the record.*
 
 **Q-060-01. The risky list.** Agents will ask you on your phone before they do
 anything in the right-hand column of section 8: the SSH key, Proxmox, Secrets,
