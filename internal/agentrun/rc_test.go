@@ -265,7 +265,7 @@ func TestRCPodReadyIsNotAgentStarted(t *testing.T) {
 	// agent; and "running", a word agentd never reports.
 	for _, agent := range []*apiv1.AgentStatus{nil, {State: protocol.AgentIdle}, {State: protocol.AgentBusy, ConversationID: "  "},
 		{State: protocol.AgentPending, ConversationID: "id"}, {State: protocol.AgentExited, ConversationID: "id"},
-		{State: protocol.AgentFailed, ConversationID: "id"}, {State: "running", ConversationID: "id"}} {
+		{State: "running", ConversationID: "id"}} {
 		h := newHarness(t)
 		rcServe(h, http.StatusCreated, func(int) apiv1.Session {
 			v := rcView(5)
@@ -438,6 +438,14 @@ func TestRCAuthOwnerAction(t *testing.T) {
 		rcServe(h, http.StatusCreated, func(int) apiv1.Session {
 			v := rcView(5)
 			v.AgentStatus = &apiv1.AgentStatus{Message: msg + " " + rcTestText}
+			// agentd sets the state with the message. A login conflict fails
+			// the start; the projection warning stays login-required.
+			switch code {
+			case "login_conflict":
+				v.AgentStatus.State = protocol.AgentFailed
+			case "auth_projection_unavailable":
+				v.AgentStatus.State = protocol.AgentLoginRequired
+			}
 			return v
 		}, http.StatusAccepted)
 		h.mustRun(ExitPending, rcArgs(h)...)
@@ -460,7 +468,7 @@ func TestRCAuthProjectionRecoversAfterOnePoll(t *testing.T) {
 	rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
 		v := rcView(5)
 		if poll == 0 {
-			v.AgentStatus = &apiv1.AgentStatus{Message: "login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
+			v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentLoginRequired, Message: "login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
 		}
 		return v
 	}, http.StatusAccepted)
@@ -479,7 +487,7 @@ func TestRCPendingKeeperRefreshIsNotAnOwnerActionAndRecovers(t *testing.T) {
 	rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
 		v := rcView(5)
 		if poll < 25 {
-			v.AgentStatus = &apiv1.AgentStatus{Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"}
+			v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentLoginRequired, Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"}
 		}
 		return v
 	}, http.StatusAccepted)
@@ -497,9 +505,9 @@ func TestRCPendingRefreshThenLapseStillEndsInOwnerAction(t *testing.T) {
 	rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
 		v := rcView(5)
 		if poll < 10 {
-			v.AgentStatus = &apiv1.AgentStatus{Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation"}
+			v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentLoginRequired, Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation"}
 		} else {
-			v.AgentStatus = &apiv1.AgentStatus{Message: "login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
+			v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentLoginRequired, Message: "login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
 		}
 		return v
 	}, http.StatusAccepted)
@@ -517,7 +525,7 @@ func TestRCPendingRefreshOutlastingTheWaitIsNotAnOwnerAction(t *testing.T) {
 	h := newHarness(t)
 	rcServe(h, http.StatusCreated, func(int) apiv1.Session {
 		v := rcView(5)
-		v.AgentStatus = &apiv1.AgentStatus{Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"}
+		v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentLoginRequired, Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"}
 		return v
 	}, http.StatusAccepted)
 	h.mustRun(ExitPending, rcArgs(h, "--wait", "2m")...)
@@ -533,12 +541,95 @@ func TestRCLoginRequiredStillEndsInOwnerActionNotTheRefreshReason(t *testing.T) 
 	h := newHarness(t)
 	rcServe(h, http.StatusCreated, func(int) apiv1.Session {
 		v := rcView(5)
-		v.AgentStatus = &apiv1.AgentStatus{Message: "login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
+		v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentLoginRequired, Message: "login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
 		return v
 	}, http.StatusAccepted)
 	h.mustRun(ExitPending, rcArgs(h)...)
 	if r := rcResult(t, h); r.Outcome != "action_required" || r.Error == nil || r.Error.Code != "auth_projection_unavailable" {
 		t.Fatal("login-required lost its owner action", r)
+	}
+}
+
+// A profile with no Claude login reports agent state login-required and a
+// message the projection rule does not match. On 2026-11-10 that waited out
+// --wait and returned timed_out. It is an owner action on the first observation.
+func TestRCLoginRequiredStateReturnsAtOnce(t *testing.T) {
+	const wait = 6 * time.Minute
+	for name, msg := range map[string]string{
+		"status text": "no usable Claude login in this pod; run: agent-run login remote-268 url",
+		"boot note":   "login-required: no usable Claude login in this pod; no login is started until agent-run login asks for it",
+		"state only":  "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+				v := rcView(2)
+				v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentLoginRequired, Message: msg}
+				return v
+			}, http.StatusAccepted)
+			h.mustRun(ExitPending, rcArgs(h, "--wait", wait.String())...)
+			r := rcResult(t, h)
+			if r.Outcome != "action_required" || r.Error == nil || r.Error.Code != "claude_login_required" || r.Error.Phase != "agent_started" || r.Error.Message != rcErrorMessages["claude_login_required"] || r.Phases["agent_started"].State != "blocked" {
+				t.Fatal("login-required state was not an owner action", r)
+			}
+			if r.TotalMs != 0 || r.DeadlineMs != wait.Milliseconds() || r.Polls != 0 || rcCountMessages(h) != 0 {
+				t.Fatal("login-required state waited or sent a handoff", r.TotalMs, r.Polls, rcCountMessages(h))
+			}
+		})
+	}
+}
+
+// A projection that lands between agentd's two login reads can publish state
+// login-required with a message that already says the login is in, rejected
+// or unverifiable. That one status is not an owner action: the next poll is.
+func TestRCLoginRequiredStateWithProjectionPrefixesKeepsWaiting(t *testing.T) {
+	for _, msg := range []string{
+		"logged in on the keeper's projection, access token lapses 2026-11-10T13:00:00Z",
+		"login-rejected: the provider rejected keeper generation 3 at 2026-10-06T20:59:00Z; a newer generation may or may not arrive; no login is run in this pod",
+		"login-unverified: this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider rejected the keeper's login; no login is run in this pod",
+	} {
+		t.Run(msg[:12], func(t *testing.T) {
+			h := newHarness(t)
+			rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
+				v := rcView(5)
+				if poll == 0 {
+					v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentLoginRequired, Message: msg}
+				}
+				return v
+			}, http.StatusAccepted)
+			h.mustRun(ExitOK, rcArgs(h)...)
+			r := rcResult(t, h)
+			if r.Outcome != "link_available" || r.Error != nil || r.Polls != 1 || r.TotalMs != 2000 || rcCountMessages(h) != 1 {
+				t.Fatal("a projection-mode status stopped the start", r)
+			}
+		})
+	}
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+		v := rcView(2)
+		v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentLoginRequired, Message: "login-rejected: the provider rejected keeper generation 3 at 2026-10-06T20:59:00Z; a newer generation may or may not arrive; no login is run in this pod"}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitPending, rcArgs(h, "--wait", "2m")...)
+	r := rcResult(t, h)
+	if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "launch_deadline" || r.Error.Phase != "agent_started" || r.TotalMs != 120000 || rcCountMessages(h) != 0 {
+		t.Fatal("a rejected projection became an owner action", r)
+	}
+}
+
+// Agent state failed means agentd could not start the agent. It is not a wait.
+func TestRCAgentFailedStateReturnsAtOnce(t *testing.T) {
+	const wait = 6 * time.Minute
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+		v := rcView(2)
+		v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentFailed, Message: "the agent failed to start"}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitFailed, rcArgs(h, "--wait", wait.String())...)
+	r := rcResult(t, h)
+	if r.Outcome != "failed" || r.Error == nil || r.Error.Code != "session_ended" || r.Error.Phase != "agent_started" || r.TotalMs != 0 || r.DeadlineMs != wait.Milliseconds() || r.Polls != 0 || rcCountMessages(h) != 0 {
+		t.Fatal("failed agent waited or was not a failure", r)
 	}
 }
 
