@@ -506,7 +506,8 @@ work around it. standing_authority returns the owner's standing instruction
 for this caller."
 
 `standing_authority` takes no arguments. Its description is at most 30 words,
-like the others. The eleven descriptions together are 142 words. The tool
+like the others. The eleven descriptions together were 142 words at OP546;
+the close rule in section 7.4 brings the total to 150. The tool
 re-reads the file named by `--authority-file` (`Config.AuthorityFile`) on
 every call. The path comes only from that flag. The file must be a regular
 file of at most 4096 bytes and valid UTF-8. A larger file is a plain tool

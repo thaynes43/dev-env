@@ -38,7 +38,7 @@ file stops it before it listens. A missing authority file does not.
 ## Tools
 
 `tools/list` returns these eleven tools. Each description is at most 30 words,
-and the descriptions together are 142 words.
+and the descriptions together are 150 words.
 
 | Tool | What it does |
 |---|---|
@@ -47,7 +47,7 @@ and the descriptions together are 142 words.
 | `backlog_create` | Create a story under an epic. Search first. The write is attributed to meatball, not Tom. |
 | `backlog_groom` | Replace an item's scope, acceptance, or constraints, then read the item back. |
 | `backlog_order` | Set an item's priority, which decides what goes next, then read it back. |
-| `backlog_close` | Close an item with evidence. An explicit hold stays a hold. |
+| `backlog_close` | Close with evidence; may take over from this caller's own finished coordinator for the item. Explicit holds stay held. |
 | `coordinator_start` | Start one coordinator for an item. Model is required and is the full id Tom named. No effort. |
 | `session_status` | Read one session this caller started, by name or item, including any retained outcome. |
 | `session_stop` | Stop one session this caller started. A refusal from the operator is reported plainly. |
@@ -68,9 +68,40 @@ carries a line `Origin: meatball`. opwork refuses a write whose session is Tom.
 `constraints`). At least one field. The text is written to a private temp file
 and passed as `--description`, `--acceptance` or `--constraints`.
 `backlog_order` takes `id` and `priority`. `backlog_close` takes `id` and
-`evidence` and runs `opwork complete` without `--force`. `backlog_create` takes
+`evidence` and first runs `opwork complete` without `--force`. `backlog_create` takes
 `epic`, `title` and `scope`, and optional `acceptance`, and sends a source key
 so a repeat finds the same item.
+
+Only `backlog_close` has a bounded ownership exception. If opwork's guard
+refuses because another session owns the item, the server checks the caller's
+coordinator for that exact item through the same operator lookup as
+`session_status(item)`. The owner must name that session in opwork's worktree
+and branch format. Its task must have exited with a Succeeded or Failed
+result. A starting or running task, missing or unknown result, TimedOut
+result, another caller's session, a different owner, ambiguous lookup or
+operator error writes nothing.
+
+The refusal carries an opt-in `complete --guard-json` signal. It contains
+the guard reason and the item snapshot, including the lock and opwork's hold
+decision. Exit 3 or words in an error message never authorize takeover.
+Needs answer, Needs approval and Paused are opwork's explicit hold statuses;
+In review itself is not a hold. Missing or malformed proof fails closed.
+Older opwork versions without that signal also fail closed.
+
+With every condition proven from this call's fresh reads, the server claims
+with `--force`, `--expect-lock` set to the refused item's lock, and a note
+naming the caller's own finished coordinator. It then completes with the
+original evidence, without force. Both writes are attributed to meatball.
+If the item changed, including into a hold, the claim conflicts and writes
+nothing. Failed proof or a refused claim returns the original refusal and
+exit diagnostic, with one added sentence explaining the unmet condition.
+
+A successful claim is kept even if completion fails. The tool then reports
+the completion result and a fresh read of the actual tracker state. A failed
+state read is reported as unconfirmed. An uncertain claim also stops and
+reads back; it does not complete or undo the claim. Do not retry mutations
+automatically. `backlog_groom` has no takeover exception; changing scope or
+acceptance is a separate work decision.
 
 The same two commands exist on opwork itself, for a person or a session:
 

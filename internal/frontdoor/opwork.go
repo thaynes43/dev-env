@@ -3,6 +3,7 @@ package frontdoor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -25,6 +26,26 @@ type opwork struct {
 	tokenFile string
 	project   string
 }
+
+// Only complete --guard-json emits this document, from opwork's guard itself.
+// Pointer fields distinguish missing proof from a false hold or lock zero.
+type guardRefusal struct {
+	Schema      string `json:"schema"`
+	Reason      string `json:"reason"`
+	Message     string `json:"message"`
+	ID          int64  `json:"id"`
+	LockVersion *int64 `json:"lockVersion"`
+	Owner       string `json:"owner"`
+	Status      string `json:"status"`
+	Hold        *bool  `json:"hold"`
+}
+
+type opworkFailure struct {
+	code  int
+	guard *guardRefusal
+}
+
+func (e *opworkFailure) Error() string { return fmt.Sprintf("opwork exited %d", e.code) }
 
 func (o opwork) call(ctx context.Context, args ...string) (string, error) {
 	if o.path == "" {
@@ -54,9 +75,30 @@ func (o opwork) call(ctx context.Context, args ...string) (string, error) {
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
-		return text, fmt.Errorf("opwork exited %d", exit.ExitCode())
+		failure := &opworkFailure{code: exit.ExitCode()}
+		if failure.code == 3 && hasGuardJSON(args) && stdout.n == 0 && !stderr.truncated {
+			var guard guardRefusal
+			if json.Unmarshal([]byte(stderr.String()), &guard) == nil && guard.Schema == "opwork.guard.v1" && guard.Message != "" &&
+				(guard.Reason == "ownership" || guard.Reason == "hold") {
+				failure.guard = &guard
+				text = scrub(guard.Message, "")
+			}
+		}
+		return text, failure
 	}
 	return text, errors.New("opwork could not be started")
+}
+
+func hasGuardJSON(args []string) bool {
+	if len(args) == 0 || args[0] != "complete" {
+		return false
+	}
+	for _, arg := range args[1:] {
+		if arg == "--guard-json" {
+			return true
+		}
+	}
+	return false
 }
 
 func childEnv(tokenFile, project string) []string {
