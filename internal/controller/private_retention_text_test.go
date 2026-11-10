@@ -64,10 +64,10 @@ func TestReapedPrivateSessionSaysWhatIsTrue(t *testing.T) {
 			"its private HOME is kept, and nothing is archived or deleted yet; " +
 			"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
 		reapStoppedUnknown = "reap accepted; the agent was stopped as the reap asked (its Pod ended at the operator's stop deadline; " +
-			"the kubelet reported its container agent gone, with no finish time), recorded 2026-10-12T12:00:00Z; " +
+			"the kubelet could not locate its container agent when the Pod ended, so it has no finish time), recorded 2026-10-12T12:00:00Z; " +
 			"its private HOME is kept, and nothing is archived or deleted yet; " +
 			"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
-		stoppedUnknown = "reap accepted; the agent stopped: its Pod ended Failed (DeadlineExceeded; the kubelet reported its container agent gone, with no finish time), " +
+		stoppedUnknown = "reap accepted; the agent stopped: its Pod ended Failed (DeadlineExceeded; the kubelet could not locate its container agent when the Pod ended, so it has no finish time), " +
 			"recorded 2026-10-12T12:00:00Z; " +
 			"its private HOME is kept, and nothing is archived or deleted yet; " +
 			"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"

@@ -210,8 +210,6 @@ func TestPrivateTerminalNeverFromAbsence(t *testing.T) {
 	}
 }
 
-// T15: no record while a check fails; the reconcile asks again in 30s. Each
-// failure leaves the HOME and the Pod alone.
 // kubeletLostContainer gives f's executor container the status a kubelet
 // writes when it cannot locate the container as the Pod ends (DESIGN-025
 // 25.6, the dev-env-1029-222313 case): terminated, ContainerStatusUnknown,
@@ -280,9 +278,11 @@ func TestPrivateTerminalTakesKubeletContainerStatusUnknown(t *testing.T) {
 }
 
 // DESIGN-025 25.6: only the private terminal record takes the kubelet's
-// ContainerStatusUnknown. The strict check, and every stop proof built on it
-// (the shared workspace stop, the maintenance executor, the terminal task
-// reclaim and the budget execution), still refuse it.
+// ContainerStatusUnknown. The strict check still refuses it, and so does the
+// maintenance executor's stop proof, which is built on it and otherwise
+// accepts the same Pod with an ordinary termination. The shared workspace
+// stop, the terminal task reclaim's Pod checks and the budget execution call
+// the same strict check.
 func TestOnlyTheTerminalRecordTakesContainerStatusUnknown(t *testing.T) {
 	f := newTerminalFixture()
 	kubeletLostContainer(&f)
@@ -300,8 +300,14 @@ func TestOnlyTheTerminalRecordTakesContainerStatusUnknown(t *testing.T) {
 	if allContainersTerminated(ordinary.pod) != nil || allContainersTerminatedOrUnknown(ordinary.pod) != nil {
 		t.Fatal("an ordinary termination is refused")
 	}
+	oc := ordinary.client()
+	if err := VerifyExecutorStopped(context.Background(), oc, ordinary.pod, string(ordinary.node.UID), func() time.Time { return ordinary.now }); err != nil {
+		t.Fatal("the maintenance executor's stop proof refused an ordinary termination, so its refusal above proves nothing:", err)
+	}
 }
 
+// T15: no record while a check fails; the reconcile asks again in 30s. Each
+// failure leaves the HOME and the Pod alone.
 func TestPrivateTerminalChecksBlockRecording(t *testing.T) {
 	// unknownAnd is the kubelet's ContainerStatusUnknown shape (25.6) and
 	// then one more defect.
@@ -329,7 +335,8 @@ func TestPrivateTerminalChecksBlockRecording(t *testing.T) {
 		name     string
 		edit     func(*terminalFixture)
 		reader   func(*terminalFixture) interceptor.Funcs
-		terminal bool // the Pod's phase is terminal, so refused is counted
+		terminal bool   // the Pod's phase is terminal, so refused is counted
+		refusal  string // when set, the check's error says this
 	}{
 		{name: "node not ready", terminal: true, edit: func(f *terminalFixture) { f.node.Status.Conditions[0].Status = corev1.ConditionFalse }},
 		{name: "node ready unknown", terminal: true, edit: func(f *terminalFixture) { f.node.Status.Conditions[0].Status = corev1.ConditionUnknown }},
@@ -358,39 +365,48 @@ func TestPrivateTerminalChecksBlockRecording(t *testing.T) {
 		{name: "unscheduled", terminal: true, edit: func(f *terminalFixture) { f.pod.Spec.NodeName = "" }},
 		// DESIGN-025 25.6: the kubelet's ContainerStatusUnknown counts only
 		// in its own shape, and only when every other check passes.
-		{name: "unknown container also running", terminal: true, edit: unknownAnd(func(f *terminalFixture) {
+		{name: "unknown container also running", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: unknownAnd(func(f *terminalFixture) {
 			f.pod.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
 		})},
-		{name: "unknown container also waiting", terminal: true, edit: unknownAnd(func(f *terminalFixture) {
+		{name: "unknown container also waiting", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: unknownAnd(func(f *terminalFixture) {
 			f.pod.Status.ContainerStatuses[0].State.Waiting = &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}
 		})},
-		{name: "unknown container status twice", terminal: true, edit: unknownAnd(func(f *terminalFixture) {
+		{name: "unknown container status twice", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: unknownAnd(func(f *terminalFixture) {
+			// Two admitted containers and two statuses, both of one name,
+			// so the count check passes and the duplicate check refuses.
+			f.pod.Spec.Containers = append(f.pod.Spec.Containers, corev1.Container{Name: "sidecar"})
 			f.pod.Status.ContainerStatuses = append(f.pod.Status.ContainerStatuses, f.pod.Status.ContainerStatuses[0])
 		})},
-		{name: "unknown container beside a missing status", terminal: true, edit: unknownAnd(func(f *terminalFixture) {
+		{name: "unknown container beside a missing status", terminal: true, refusal: "missing or extra admitted container status", edit: unknownAnd(func(f *terminalFixture) {
 			f.pod.Spec.Containers = append(f.pod.Spec.Containers, corev1.Container{Name: "sidecar"})
 		})},
-		{name: "no container status at all", terminal: true, edit: func(f *terminalFixture) { f.pod.Status.ContainerStatuses = nil }},
-		{name: "no finish time with another reason", terminal: true, edit: func(f *terminalFixture) {
+		{name: "no container status at all", terminal: true, refusal: "missing or extra admitted container status", edit: func(f *terminalFixture) { f.pod.Status.ContainerStatuses = nil }},
+		{name: "no finish time with another reason", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: func(f *terminalFixture) {
 			f.pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error"}}
 		}},
-		{name: "no finish time and no reason", terminal: true, edit: func(f *terminalFixture) {
+		{name: "no finish time and no reason", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: func(f *terminalFixture) {
 			f.pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137}}
 		}},
-		{name: "no finish time with the reason in another case", terminal: true, edit: func(f *terminalFixture) {
+		{name: "no finish time with the reason in another case", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: func(f *terminalFixture) {
 			f.pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "containerstatusunknown"}}
 		}},
-		{name: "unknown container, pod GC marked it failed", terminal: true, edit: unknownAnd(func(f *terminalFixture) {
+		{name: "unknown reason with another exit code", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: unknownAnd(func(f *terminalFixture) {
+			f.pod.Status.ContainerStatuses[0].State.Terminated.ExitCode = 0
+		})},
+		{name: "unknown reason with a start time", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: unknownAnd(func(f *terminalFixture) {
+			f.pod.Status.ContainerStatuses[0].State.Terminated.StartedAt = metav1.NewTime(f.now.Add(-time.Hour))
+		})},
+		{name: "unknown container, pod GC marked it failed", terminal: true, refusal: "Pod garbage collector", edit: unknownAnd(func(f *terminalFixture) {
 			f.pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.DisruptionTarget, Status: corev1.ConditionTrue, Reason: "DeletionByPodGC"}}
 		})},
-		{name: "unknown container, node not ready", terminal: true, edit: unknownAnd(func(f *terminalFixture) { f.node.Status.Conditions[0].Status = corev1.ConditionFalse })},
-		{name: "unknown container, lease stale", terminal: true, edit: unknownAnd(func(f *terminalFixture) { f.lease.Spec.RenewTime.Time = f.now.Add(-41 * time.Second) })},
-		{name: "unknown container, lease future", terminal: true, edit: unknownAnd(func(f *terminalFixture) { f.lease.Spec.RenewTime.Time = f.now.Add(2 * time.Second) })},
-		{name: "unknown container, lease held by another node", terminal: true, edit: unknownAnd(func(f *terminalFixture) { f.lease.Spec.HolderIdentity = ptr.To("worker-b") })},
-		{name: "unknown container, lease owned by another node UID", terminal: true, edit: unknownAnd(func(f *terminalFixture) { f.lease.OwnerReferences[0].UID = "node-2" })},
-		{name: "unknown container, unscheduled", terminal: true, edit: unknownAnd(func(f *terminalFixture) { f.pod.Spec.NodeName = "" })},
-		{name: "unknown container, lease read forbidden", terminal: true, edit: kubeletLostContainer, reader: forbidden("leases")},
-		{name: "unknown container but running phase", edit: unknownAnd(func(f *terminalFixture) { f.pod.Status.Phase, f.pod.Status.Reason = corev1.PodRunning, "" })},
+		{name: "unknown container, node not ready", terminal: true, refusal: "unready", edit: unknownAnd(func(f *terminalFixture) { f.node.Status.Conditions[0].Status = corev1.ConditionFalse })},
+		{name: "unknown container, lease stale", terminal: true, refusal: "stale, future or foreign", edit: unknownAnd(func(f *terminalFixture) { f.lease.Spec.RenewTime.Time = f.now.Add(-41 * time.Second) })},
+		{name: "unknown container, lease future", terminal: true, refusal: "stale, future or foreign", edit: unknownAnd(func(f *terminalFixture) { f.lease.Spec.RenewTime.Time = f.now.Add(2 * time.Second) })},
+		{name: "unknown container, lease held by another node", terminal: true, refusal: "stale, future or foreign", edit: unknownAnd(func(f *terminalFixture) { f.lease.Spec.HolderIdentity = ptr.To("worker-b") })},
+		{name: "unknown container, lease owned by another node UID", terminal: true, refusal: "different node UID", edit: unknownAnd(func(f *terminalFixture) { f.lease.OwnerReferences[0].UID = "node-2" })},
+		{name: "unknown container, unscheduled", terminal: true, refusal: "has no node", edit: unknownAnd(func(f *terminalFixture) { f.pod.Spec.NodeName = "" })},
+		{name: "unknown container, lease read forbidden", terminal: true, refusal: "executor node lease", edit: kubeletLostContainer, reader: forbidden("leases")},
+		{name: "unknown container but running phase", refusal: "phase is not terminal", edit: unknownAnd(func(f *terminalFixture) { f.pod.Status.Phase, f.pod.Status.Reason = corev1.PodRunning, "" })},
 		{name: "node read forbidden", terminal: true, reader: forbidden("nodes")},
 		{name: "lease read forbidden", terminal: true, reader: forbidden("leases")},
 		{name: "running", edit: func(f *terminalFixture) {
@@ -440,6 +456,12 @@ func TestPrivateTerminalChecksBlockRecording(t *testing.T) {
 			var pod corev1.Pod
 			if err := base.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &pod); err != nil || pod.UID != f.pod.UID {
 				t.Fatal("the executor Pod was touched", err)
+			}
+			if tc.refusal != "" {
+				// The case is refused by the check it names, not another.
+				if _, err := r.verifyExecutorTerminated(context.Background(), f.s, f.pod.UID); err == nil || !strings.Contains(err.Error(), tc.refusal) {
+					t.Fatalf("refused for another reason: %v; want %q", err, tc.refusal)
+				}
 			}
 		})
 	}

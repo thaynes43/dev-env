@@ -128,13 +128,21 @@ func allContainersTerminated(p *corev1.Pod) error {
 }
 
 // allContainersTerminatedOrUnknown is allContainersTerminated that also takes
-// one more shape: a status terminated with reason exactly
-// ContainerStatusUnknown and no running or waiting state, whatever its finish
-// time. Only the private terminal record (verifyExecutorTerminated) uses it,
-// beside its terminal-phase, Pod GC, node and lease checks (DESIGN-025 25.6);
-// every other stop proof keeps allContainersTerminated.
+// one more shape: a status with no running or waiting state, terminated
+// exactly as a kubelet writes a container it could not locate
+// (kubeletUnknownTermination). Only the private terminal record
+// (verifyExecutorTerminated) uses it, beside its terminal-phase, Pod GC, node
+// and lease checks (DESIGN-025 25.6); every other stop proof keeps
+// allContainersTerminated.
 func allContainersTerminatedOrUnknown(p *corev1.Pod) error {
 	return containersTerminated(p, true)
+}
+
+// kubeletUnknownTermination reports whether t is exactly the terminated state
+// a kubelet writes for a container it could not locate when the Pod ended:
+// reason ContainerStatusUnknown, exit code 137, no start or finish time.
+func kubeletUnknownTermination(t *corev1.ContainerStateTerminated) bool {
+	return t.Reason == containerStatusUnknown && t.ExitCode == 137 && t.StartedAt.IsZero() && t.FinishedAt.IsZero()
 }
 
 func containersTerminated(p *corev1.Pod, unknownEnds bool) error {
@@ -145,7 +153,7 @@ func containersTerminated(p *corev1.Pod, unknownEnds bool) error {
 		seen := map[string]bool{}
 		for _, status := range statuses {
 			t := status.State.Terminated
-			ended := t != nil && (!t.FinishedAt.IsZero() || (unknownEnds && t.Reason == containerStatusUnknown))
+			ended := t != nil && (!t.FinishedAt.IsZero() || (unknownEnds && kubeletUnknownTermination(t)))
 			if seen[status.Name] || !ended || status.State.Running != nil || status.State.Waiting != nil {
 				return errors.New("executor has a duplicate, uncertain or nonterminated current container")
 			}

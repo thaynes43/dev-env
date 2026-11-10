@@ -465,9 +465,9 @@ func privateRetentionNoted(s *v1alpha1.AgentSession, obs observation, note strin
 // ended at the deadline of the operator's own stop request did not fail: it
 // was stopped, as the reap asked (section 4) or, when the request came before
 // the reap, after its task ended (section 24). Any other ending shows its raw
-// phase and reason. A record whose containers the kubelet reported gone, with
-// no finish time, says so (DESIGN-025 25.6). Call it only with a terminal
-// record.
+// phase and reason. A record with containers the kubelet could not locate
+// when the Pod ended, which have no finish time, says so (DESIGN-025 25.6).
+// Call it only with a terminal record.
 func agentStoppedText(s *v1alpha1.AgentSession) string {
 	h := s.Status.PrivateHistory
 	t := h.ExecutorTerminal
@@ -498,9 +498,9 @@ func agentStoppedText(s *v1alpha1.AgentSession) string {
 }
 
 // unknownContainersText names the record's containers that the kubelet
-// reported terminated as ContainerStatusUnknown with no finish time: the
-// kubelet could not locate them when the Pod ended (DESIGN-025 25.6). It is
-// empty when there are none.
+// reported terminated as ContainerStatusUnknown with no finish time: it could
+// not locate them when the Pod ended (DESIGN-025 25.6). It is empty when there
+// are none.
 func unknownContainersText(t *v1alpha1.PrivateExecutorTerminalStatus) string {
 	var names []string
 	for _, c := range t.Containers {
@@ -512,9 +512,9 @@ func unknownContainersText(t *v1alpha1.PrivateExecutorTerminalStatus) string {
 	case 0:
 		return ""
 	case 1:
-		return "the kubelet reported its container " + names[0] + " gone, with no finish time"
+		return "the kubelet could not locate its container " + names[0] + " when the Pod ended, so it has no finish time"
 	}
-	return "the kubelet reported its containers " + strings.Join(names, ", ") + " gone, with no finish time"
+	return "the kubelet could not locate its containers " + strings.Join(names, ", ") + " when the Pod ended, so they have no finish time"
 }
 
 // stopNotProvenText says why no terminal record proves the agent's stop.
