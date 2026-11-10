@@ -76,6 +76,9 @@ func (s *Server) listArchivedInbox(ctx context.Context, c *caller, project strin
 		if verifyErr != nil || item.UID != string(message.UID) || message.Spec.Project != project || (recipient != nil && message.Spec.Recipient != *recipient) {
 			return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")
 		}
+		if inbox.IsParentNote(message) {
+			continue
+		}
 		view := inboxMetadata(message)
 		view.Archived, view.ArchivedAt = true, &archivedAt
 		items = append(items, view)

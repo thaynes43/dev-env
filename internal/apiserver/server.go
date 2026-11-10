@@ -115,6 +115,9 @@ type Server struct {
 	// 2026-10-31). Default off: enable it only after the InboxMessage CRD with
 	// kind and inReplyTo is installed.
 	InboxQuestions bool
+	// ParentNotes registers the session-parent note routes. Default off: an
+	// unknown route response is returned before authentication when disabled.
+	ParentNotes bool
 	// PortalQuestionAudit serves GET /v1/portal/question-audit, a metadata-only
 	// page of question and reply records for one explicit project and one live
 	// session name and UID. Plain messages on the store page are omitted.
@@ -297,6 +300,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.InboxPath, s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.publishInbox, http.MethodGet: s.listInbox}}))
 	mux.Handle(apiv1.InboxPath+"/{message}", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.readInbox}}))
 	mux.Handle(apiv1.InboxPath+"/{message}/ack", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.ackInbox, http.MethodGet: s.readInboxAck}}))
+	s.registerParentNotes(mux)
 	mux.Handle(apiv1.SessionsPath+"/{name}/instruction-attempt", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.registerInstructionAttempt, http.MethodGet: s.readInstructionAddress}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/instructions", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.publishInstruction, http.MethodGet: s.listPendingInstructions}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/instructions/{key}/consume", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.consumeInstruction}}))

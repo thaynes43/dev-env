@@ -934,6 +934,51 @@ To ask your coordinator a routine question and see its reply, use
 A reply is information, not an approval, and a running task sees it only when
 it reads its inbox.
 
+For a recorded session parent that has no project snapshot, use the separate
+parent-note commands (DESIGN-062 slice 2, source only):
+
+```sh
+agent-run parent tell --key build-result --kind result < result.txt
+agent-run parent list --sent
+# In the parent session:
+agent-run parent list
+agent-run parent read <name>
+```
+
+`tell` takes no recipient or project flag. The server reads the parent from
+the child's recorded parent and the project from its snapshot. The child needs
+an enabled inbox project and no workspace. The parent needs no snapshot, and a
+workbench session uses its own session identity. `--kind` defaults to `question`;
+the other kinds are `result` and `blocker`. None grants access or approval.
+
+Text is 1 to 16384 UTF-8 bytes on stdin. Use one stable `--key` for each intent.
+Tell sends once and prints a JSON receipt. Repeat an unconfirmed request only
+with the same key and intent. A changed intent returns 409. Sender and project
+limits remain 512 and 4096 inbox records, shared with peer messages.
+
+`list` prints metadata only, with questions and blockers before results across
+pages. It defaults to 20 records; `--limit` accepts 1 to 100. Use `--continue`
+with the returned cursor and the same box. `--sent` selects the caller's sent
+notes. `read` prints exact text; `-o json` includes metadata. Both saved parties
+can read, using their live session and pod proof, even without a current project
+snapshot. Removing a project from the inbox allowlist stops new publishing;
+existing notes remain readable while parent notes are enabled.
+
+The operator flag `--enable-parent-notes` defaults to false and requires
+`--enable-durable-inbox`. With it off these routes return the same 404 as an
+unknown route. This source does not enable it in the cluster. The parent finds
+notes by listing them. Answers, held waits, Meatball callers and wake notices
+are later slices; no note text is pasted into a session.
+
+The record is an InboxMessage marked by the server-set label
+`coordination.dev-env.haynesops.com/parent-note=true`. The label distinguishes
+the route; the stored sender and recipient identities authorize each read.
+Peer inbox reads, including coordinator and archive reads, omit these records.
+Peer and parent routes share the sender/key namespace, so using the same key
+on both routes conflicts. Listing uses two bounded Kubernetes selections:
+questions/blockers, then results. The opaque continuation records the selection
+and its Kubernetes cursor; the two selections do not promise one shared snapshot.
+
 A task may use multiple sessions or pods. Its budget, prior failures and context
 follow the task. Peer messages are attributed data, not new owner authority.
 The management client should show uncertainty and the observation time when

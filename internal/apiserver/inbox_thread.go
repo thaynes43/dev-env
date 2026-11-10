@@ -135,7 +135,7 @@ func (s *Server) inboxQuestionFor(ctx context.Context, req apiv1.PublishInboxReq
 	if err != nil {
 		return nil, inboxUnknown()
 	}
-	if q.Spec.Project != req.Project || q.Spec.Recipient != replier || (req.InReplyTo.UID != "" && req.InReplyTo.UID != string(q.UID)) {
+	if inbox.IsParentNote(q) || q.Spec.Project != req.Project || q.Spec.Recipient != replier || (req.InReplyTo.UID != "" && req.InReplyTo.UID != string(q.UID)) {
 		return nil, inboxHidden()
 	}
 	if q.Spec.Kind != inbox.KindQuestion {
