@@ -444,7 +444,8 @@ live child, that `spec.parent` is that caller. `spec.parent` is immutable
 ### 7.2 Routes
 
 All of these require a new flag `--enable-parent-notes`, default false,
-which requires `--enable-durable-inbox`. This PR adds no flag.
+which requires `--enable-durable-inbox`. The design's own pull request added
+no flag; build slice 2 adds it.
 
 | Method and path | Who | Effect |
 |---|---|---|

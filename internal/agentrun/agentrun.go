@@ -227,6 +227,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.list(ctx, rest)
 	case "inbox":
 		return a.inbox(ctx, rest)
+	case "parent":
+		return a.parent(ctx, rest)
 	case "instruction":
 		return a.instruction(ctx, rest)
 	case "directory":

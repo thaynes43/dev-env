@@ -108,6 +108,7 @@ type options struct {
 	contextReadProjects          []string
 	inboxEnabled                 bool
 	inboxQuestions               bool
+	parentNotes                  bool
 	inboxProjects                []string
 	inboxCoordinatorReadProjects []string
 	portalQuestionAudit          bool
@@ -331,6 +332,7 @@ func parseFlags(args []string) (options, error) {
 	inboxProjects := fs.String("inbox-projects", "", "explicit comma-separated projects enabled for durable Session inbox access")
 	inboxCoordinatorProjects := fs.String("inbox-coordinator-read-projects", "", "separate explicit projects granting configured coordinators inbox content read only")
 	fs.BoolVar(&o.inboxQuestions, "enable-inbox-questions", false, "accept inbox ask and reply publications and serve the thread view and sent box; requires enable-durable-inbox and the InboxMessage CRD with kind and inReplyTo")
+	fs.BoolVar(&o.parentNotes, "enable-parent-notes", false, "accept child notes to recorded session parents and serve their inbox and sent box; requires enable-durable-inbox")
 	fs.BoolVar(&o.portalQuestionAudit, "enable-portal-question-audit", false, "serve GET /v1/portal/question-audit, one page of question and reply metadata for an explicit project and live session; default off and requires the portal reader, durable inbox, inbox questions and an explicit project allowlist. Source wiring is not a deployed permission")
 	portalQuestionProjects := fs.String("portal-question-projects", "", "comma-separated projects whose question and reply metadata the portal reader may audit; empty leaves the route off")
 	fs.StringVar(&o.ownedRootPolicy, "owned-root-policy", "", "explicit operator-owned finite root policy ConfigMap in dev-env-system")
@@ -598,8 +600,8 @@ func parseFlags(args []string) (options, error) {
 				return o, errors.New("inbox coordinator content scope requires an enabled configured coordinator and enabled project")
 			}
 		}
-	} else if len(o.inboxProjects) != 0 || len(o.inboxCoordinatorReadProjects) != 0 || o.inboxQuestions {
-		return o, errors.New("inbox scopes and questions require explicit enable-durable-inbox")
+	} else if len(o.inboxProjects) != 0 || len(o.inboxCoordinatorReadProjects) != 0 || o.inboxQuestions || o.parentNotes {
+		return o, errors.New("inbox scopes, questions and parent notes require explicit enable-durable-inbox")
 	}
 	o.portalQuestionProjects, err = apiserver.ParseTaskClaimReadProjects(*portalQuestionProjects)
 	if err != nil {
@@ -1096,7 +1098,7 @@ func run(args []string) error {
 			PortalConversationTargets: o.portalConversationTargets,
 			SessionDirectory:          directories, SessionDirectoryProjects: o.directoryProjects, MetadataDiscoveryProjects: o.metadataDiscoveryProjects, DirectoryContexts: directoryContexts,
 			PublishedContexts: contexts, ContextReadProjects: o.contextReadProjects,
-			Inbox: inboxStore, InboxProjects: o.inboxProjects, InboxCoordinatorReadProjects: o.inboxCoordinatorReadProjects, InboxQuestions: o.inboxQuestions,
+			Inbox: inboxStore, InboxProjects: o.inboxProjects, InboxCoordinatorReadProjects: o.inboxCoordinatorReadProjects, InboxQuestions: o.inboxQuestions, ParentNotes: o.parentNotes,
 			PortalQuestionAudit: o.portalQuestionAudit, PortalQuestionProjects: o.portalQuestionProjects,
 			TaskClaims: claims, TaskClaimReadProjects: o.taskClaimReadProjects, PortalTaskClaims: o.portalTaskClaims,
 			Client:      mgr.GetClient(),

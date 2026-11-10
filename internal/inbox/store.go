@@ -297,6 +297,9 @@ func (s KubeStore) validMessage(m *coord.InboxMessage) bool {
 		return false
 	}
 	name := MessageNameFor(m.Spec)
+	if IsParentNote(m) {
+		return validParentNoteSpec(m.Spec) && s.validObject(m, name, parentNoteLabels(m.Spec))
+	}
 	if m.Spec.Kind != "" {
 		return s.validObject(m, name, messageLabels(m.Spec))
 	}
@@ -326,6 +329,10 @@ func ambiguous(err error) bool {
 	return !apierrors.IsInvalid(err) && !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) && !apierrors.IsBadRequest(err)
 }
 func (s KubeStore) Create(ctx context.Context, spec coord.InboxMessageSpec) (*coord.InboxMessage, bool, error) {
+	return s.create(ctx, spec, false)
+}
+
+func (s KubeStore) create(ctx context.Context, spec coord.InboxMessageSpec, parentNote bool) (*coord.InboxMessage, bool, error) {
 	if !s.ready() || !ValidMessage(spec) {
 		return nil, false, ErrUnavailable
 	}
@@ -345,7 +352,11 @@ func (s KubeStore) Create(ctx context.Context, spec coord.InboxMessageSpec) (*co
 	} else if err != nil {
 		return nil, false, ErrUnavailable
 	}
-	m := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: MessageNameFor(spec), Labels: messageLabels(spec)}, Spec: spec}
+	labels := messageLabels(spec)
+	if parentNote {
+		labels = parentNoteLabels(spec)
+	}
+	m := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: MessageNameFor(spec), Labels: labels}, Spec: spec}
 	createErr := s.Client.Create(ctx, m)
 	observed, err := s.Get(ctx, m.Name)
 	if err != nil || observed.Spec.Sender != spec.Sender || observed.Spec.Key != spec.Key {
@@ -441,8 +452,12 @@ func (s KubeStore) List(ctx context.Context, project string, recipient *coord.Se
 		}
 		labels[RecipientLabel] = recipientLabel(*recipient)
 	}
+	selector, err := peerMessageSelector(labels)
+	if err != nil {
+		return nil, "", ErrUnavailable
+	}
 	var list coord.InboxMessageList
-	if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels(labels), client.Limit(limit), client.Continue(cursor)) != nil || int64(len(list.Items)) > limit || len(list.Continue) > 4096 {
+	if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), selector, client.Limit(limit), client.Continue(cursor)) != nil || int64(len(list.Items)) > limit || len(list.Continue) > 4096 {
 		return nil, "", ErrUnavailable
 	}
 	for i := range list.Items {
@@ -461,8 +476,12 @@ func (s KubeStore) ListSent(ctx context.Context, project string, sender coord.Se
 		return nil, "", ErrUnavailable
 	}
 	labels := map[string]string{taskclaim.ProjectLabel: project, taskclaim.SourceLabel: taskclaim.SessionLabel(sender)}
+	selector, err := peerMessageSelector(labels)
+	if err != nil {
+		return nil, "", ErrUnavailable
+	}
 	var list coord.InboxMessageList
-	if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels(labels), client.Limit(limit), client.Continue(cursor)) != nil || int64(len(list.Items)) > limit || len(list.Continue) > 4096 {
+	if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), selector, client.Limit(limit), client.Continue(cursor)) != nil || int64(len(list.Items)) > limit || len(list.Continue) > 4096 {
 		return nil, "", ErrUnavailable
 	}
 	for i := range list.Items {

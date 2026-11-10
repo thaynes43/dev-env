@@ -20,6 +20,7 @@ Usage:
                                                   recheck a started Codex thread's first response; observe-only
   agent-run inbox send|ask|reply|list|read|ack|ack-status
                                                   durable inbox
+  agent-run parent tell|list|read                  notes to a session parent
   agent-run instruction send|read|checkpoint|consume|address|attempt designated parent delivery and native consumption
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
@@ -332,6 +333,30 @@ Registration runs only for a launch built with the instruction capability.
 A legacy or disabled native task does not call this route.
 
 Source tests do not prove an installed operator or a live native task.
+`,
+	"parent": `Usage: agent-run parent tell --key <key> [--kind question|result|blocker] < note.txt
+       agent-run parent list [--sent] [--limit N] [--continue <cursor>] [-o json]
+       agent-run parent read <name> [-o json]
+
+Tell leaves a note for this Session's recorded session parent. No recipient or
+project flag: the server derives both from the child. The child needs a project
+snapshot and no workspace; the parent needs no project snapshot. Kind defaults
+to question. Tell reads 1..16384 UTF-8 bytes from stdin and sends once, using a
+stable --key. If unconfirmed, explicitly retry only the identical intent and
+key. A changed intent conflicts; nothing is replaced.
+
+List prints JSON metadata for notes addressed to this Session, or with --sent
+the notes it sent. Questions and blockers come before results, across pages.
+The default limit is 20; 1..100 is allowed. Pass the returned continuation to
+--continue with the same box. Read prints the exact text without acknowledging
+it; -o json includes metadata. Only the saved sender and recipient can read a
+note. Tell prints a JSON receipt. A note grants no access or approval.
+
+These commands require --enable-parent-notes on the operator, which defaults
+off and requires --enable-durable-inbox. Disabled routes return 503, which
+tell reports as an unknown outcome because the same status can mean that. Only
+session parents are supported. The parent finds notes by listing them; nothing
+wakes it or pastes note text into its session.
 `,
 	"inbox": `Usage: agent-run inbox send --project <project> --recipient-namespace <namespace> --recipient-name <name> --recipient-uid <uid> --key <key> < message.txt
        agent-run inbox ask --project <project> [--to <session> [--to-uid <uid>]] --key <key> < question.txt

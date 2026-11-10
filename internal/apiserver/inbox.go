@@ -191,6 +191,9 @@ func (s *Server) publishInbox(ctx context.Context, _ http.ResponseWriter, r *htt
 	// An accepted retry must survive recipient deletion and catalog updates.
 	existing, err := s.Inbox.Get(ctx, inbox.MessageName(spec.Sender, spec.Key))
 	if err == nil {
+		if inbox.IsParentNote(existing) {
+			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "the key already identifies a parent note; nothing was replaced")
+		}
 		fresh, fenceErr := s.inboxSenderCaller(ctx, c)
 		if fenceErr != nil || !sameSessionBinding(fresh, sender) {
 			return 0, nil, inboxHidden()
@@ -246,6 +249,9 @@ func (s *Server) publishInbox(ctx context.Context, _ http.ResponseWriter, r *htt
 	if err != nil {
 		return 0, nil, inboxUnknown()
 	}
+	if inbox.IsParentNote(m) {
+		return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "the key already identifies a parent note; nothing was replaced")
+	}
 	return inboxPublishResult(m, created, spec)
 }
 
@@ -290,7 +296,7 @@ func (s *Server) authorizedInbox(ctx context.Context, r *http.Request, c *caller
 		if err != nil {
 			return nil, nil, err
 		}
-		if m.Spec.Project != project || (recipient != nil && m.Spec.Recipient != *recipient) {
+		if inbox.IsParentNote(m) || m.Spec.Project != project || (recipient != nil && m.Spec.Recipient != *recipient) {
 			return nil, nil, inboxHidden()
 		}
 		if err := s.inboxReadFence(ctx, c, project, recipient); err != nil {
@@ -301,7 +307,7 @@ func (s *Server) authorizedInbox(ctx context.Context, r *http.Request, c *caller
 	if err != nil {
 		return nil, nil, inboxUnknown()
 	}
-	if m.Spec.Project != project || (recipient != nil && m.Spec.Recipient != *recipient) {
+	if inbox.IsParentNote(m) || m.Spec.Project != project || (recipient != nil && m.Spec.Recipient != *recipient) {
 		return nil, nil, inboxHidden()
 	}
 	if err := s.inboxReadFence(ctx, c, project, recipient); err != nil {
