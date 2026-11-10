@@ -26,7 +26,9 @@ var rcStages = []struct {
 }{
 	{"pod_scheduled", "scheduling_timeout", 60 * time.Second},
 	{"pod_ready", "pod_ready_timeout", 120 * time.Second},
-	{"agent_started", "agent_start_timeout", 90 * time.Second},
+	// agent_started follows --wait. The zero is not a timeout; stageDeadline
+	// explains why a fixed budget cannot see a healthy start.
+	{"agent_started", "agent_start_timeout", 0},
 	{"rc_ready", "rc_registration_timeout", 90 * time.Second},
 	{"link_available", "link_unavailable", 10 * time.Second},
 }
@@ -420,7 +422,7 @@ func (r *rcRun) follow(ctx context.Context, c *conn, view apiv1.Session, handoff
 		} else {
 			projectionSince = nil
 		}
-		end := min(r.wait, stageStart+rcStages[stage].budget)
+		end := r.stageDeadline(stage, stageStart)
 		if r.elapsed() >= end {
 			return r.finish("timed_out", rcStageTimeoutCode(stage, authCode, end == r.wait), rcStages[stage].phase, ExitPending)
 		}
@@ -577,9 +579,28 @@ func (r *rcRun) status(ctx context.Context, args []string) error {
 	return r.finish("accepted", "", "", ExitPending)
 }
 
-// rcStageTimeoutCode names why a stage budget ended. The global wait always wins.
-// During agent start, a status that still said "refreshing:" (the keeper's next
-// login generation pending) is reported as such, not as a bare startup timeout.
+// stageDeadline is when follow stops waiting for this stage. agent_started
+// follows --wait. Its evidence is the session status agentd publishes on a
+// 60s heartbeat, so a process that is already up can stay invisible for
+// almost a minute. On 2026-11-10 the fixed 90s budget that used to start
+// when PodReady was observed expired at 120.6s: PodReady at 30.5s plus 90s.
+// The conversation existed at 82s, inside that window, but the next
+// heartbeat was the first status that could show it, and --wait was 6m.
+// The handoff was never sent. Both the fixed budget and the heartbeat lag
+// caused the miss. Other stages keep their budgets, still capped by --wait.
+// An unconfirmed handoff is still never resent.
+func (r *rcRun) stageDeadline(stage int, stageStart time.Duration) time.Duration {
+	if rcStages[stage].phase == "agent_started" {
+		return r.wait
+	}
+	return min(r.wait, stageStart+rcStages[stage].budget)
+}
+
+// rcStageTimeoutCode names why a stage budget ended. The global wait always wins,
+// including for agent_started, which has no shorter budget: that expiry is
+// launch_deadline with the phase named. During agent start, a status that still
+// said "refreshing:" (the keeper's next login generation pending) is reported as
+// such only when a shorter budget ends first, not as a bare startup timeout.
 func rcStageTimeoutCode(stage int, authCode string, atWait bool) string {
 	if atWait {
 		return "launch_deadline"
