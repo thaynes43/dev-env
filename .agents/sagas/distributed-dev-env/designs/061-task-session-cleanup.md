@@ -19,7 +19,8 @@
   (`agentsession_types.go:943`).
 - Two clean-ups at once, purged first. 346 of the 388 eligible Sessions are due
   at switch-on and drain in about half a day. 77 stay outside this path (53 with
-  no recorded stop, 1 for OP515, 20 pilots, 3 canaries). One question for Tom.
+  no recorded stop, 1 for OP515, 20 pilots, 3 canaries). Tom ruled on the one
+  question: the 53 are cleaned too, as a later source step (section 9, F6).
 
 ## 1. Triggers and clocks
 
@@ -235,7 +236,7 @@ hours**. If every rescue ran to its 10-minute limit, it would take under 2 days.
 | Interactive (`local`, `remote`) | 33 (13 suspended) | ruling point (4): they keep D-51 and D-62; `dev-env-1019-141220`, marked private before ADR-008, stays under DESIGN-025, which is off | nobody |
 | Running tasks | 2, plus 2 pending canaries | not ended | nobody |
 | `RetentionPending` (reaped, no terminal record) | 1, `dev-env-1029-222313` | the Pod ended, but one container status is unknown, so the stop is not proven | OP515 (PR #1019) |
-| `PreservationUnknown` (`executorMissed`) | 53, Suspended | the Pod was gone before its end was recorded (markers of 2026-10-27, Sessions created 10-19 to 10-26); ADR-005: "Absence alone never proves stop" | Q1 (section 9) |
+| `PreservationUnknown` (`executorMissed`) | 53, Suspended | the Pod was gone before its end was recorded (markers of 2026-10-27, Sessions created 10-19 to 10-26); ADR-005: "Absence alone never proves stop" | Tom, 2026-11-10: clean them too (section 9); built as F6 |
 | Volume not released (1.1) | none expected: all 7 HOMEs Prometheus shows mounted belong to interactive Sessions | the old node still lists the volume 30 minutes on, or the node is gone | Tom |
 | Canaries (`spec.projectCanary`) | 3 Failed, 2 Pending | the fixed result reader reads them live (DESIGN-022) | F5 |
 | Pilots (`projectcanary.IsPilot`) | 20 Failed | the sealed C7 pilot runs of 2026-10-16 (DESIGN-027) | F5 |
@@ -318,7 +319,7 @@ is a bounded story, started after this path is accepted.
 | F3 | PVC `dev-env-history-archive` (20Gi, `Retain`, mounted by no Pod): nothing | delete it; Tom removes the `Retain` PV by hand |
 | F4 | `internal/homeretention`, `cmd/home-retention-dry-run`: offline only | keep or delete |
 | F5 | canaries and pilots (section 5) | clean them under ADR-020 after retiring their live readers (DESIGN-022, DESIGN-027) |
-| F6 | the 53 `PreservationUnknown` Sessions | if Q1 says yes; needs one more CEL change: a task record may rest on `executorMissed` |
+| F6 | the 53 `PreservationUnknown` Sessions | ruled yes on 2026-11-10 (section 9): a source step after D2, with one more CEL change (a task record may rest on `executorMissed`) and the substitute proof of section 9 |
 | F7 | a task Session's usage and cost numbers, which live only in its status and go with it (ADR-020 C-54) | a small ledger that survives clean-up: counters of tokens and cost by agent, model and repository, added once per Session when its usage observation is accepted, so Prometheus keeps the totals; under the usage epic (OP509) |
 
 ## 8. Rollout
@@ -399,9 +400,22 @@ stop must be proven". For 53 of them the two conflict.
 > clean-up's pod could mount it' as the proof?"
 > Options: "Yes, clean them up (Recommended)" / "No, keep them for me to look at".
 
-The recommendation is yes. The proof would be: 7 days since
+**Ruled 2026-11-10.** Tom answered by phone prompt in the coordinator's
+session (recorded at 2026-11-10T01:44:55Z by its shell clock, on #518): "Yes, clean them
+too (Recommended)". The prompt he saw, in plainer words than the draft above:
+"53 old task sessions from mid to late October lost their pods before the
+system wrote down that the agent had stopped. Nothing runs on them and nothing
+has their disks mounted (checked just now). The new 7-day clean-up would skip
+them, because it cannot prove the stop the usual way. Should it clean them up
+too? Any work that never reached GitHub is still saved first." The option he
+chose read: "Take 'no pod and no mount for more than 7 days' as proof the agent
+stopped. Unpushed work is saved as a bundle, then the session and its disk are
+deleted." Just before asking, the coordinator read the cluster: no Pod of any
+of these names, and no Pod mounting any of their HOMEs.
+
+The proof is: 7 days since
 `executorMissed.observedAt`; an uncached read with no Pod of the name and none
 mounting the claim; 1.1 passing on `lastExecutor.nodeName`; and the hold pod
 attaching the ReadWriteOnce volume, which fails while another node holds it,
-followed by a full rescue. A yes becomes F6; until then the 53 stay, named by
+followed by a full rescue. It is built as F6; until then the 53 stay, named by
 the alert.

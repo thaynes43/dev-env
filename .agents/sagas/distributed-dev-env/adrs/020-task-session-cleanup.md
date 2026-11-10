@@ -98,6 +98,15 @@ sessions" are modes `local` and `remote`.
    cleaned as soon as this is live: oldest first, purged ones ahead of finished
    ones, a few at a time.
 
+8. **A task Session whose stop was never recorded is cleaned too** (Tom,
+   2026-11-10, by phone prompt: "Yes, clean them too (Recommended)"; the full
+   prompt is in DESIGN-061 section 9). For these, and only these, the stop
+   proof of point 3 is replaced by: at least 7 days since the operator recorded
+   the missed executor; no Pod of that name and none mounting the HOME; the
+   node it ran on no longer lists the volume as in use; and the clean-up's own
+   pod attaches the volume. The rescue of point 3 runs unchanged. It is a later
+   source step (DESIGN-061 F6), after the main path is proven.
+
 **Consequence for transcripts.** The conversation transcripts of a task
 Session (Claude `projects/`, Codex `sessions/` and the rest) and its
 `~/work/<session>.log` live only in its HOME. They are gone when the HOME is
@@ -124,6 +133,6 @@ read for task Sessions.
 | C-49 | Bad: transcripts of task Sessions are not kept. Anything an agent learned and did not write to Git or OpenProject is lost with the HOME. |
 | C-50 | Bad: the operator deletes HOMEs and Sessions unattended. A mistaken reap of a live task now stops it and deletes its HOME minutes later, keeping only unpushed Git work. An owner hold set before the reap still prevents both. |
 | C-51 | Bad: a rescue that refuses (a merge in progress, a nested repository, more than 50 MiB untracked, submodule work, or a repository outside `~/repos`) keeps that Session. A person must decide, so a few HOMEs can stand past 7 days. The alert names them. |
-| C-52 | Neutral: Sessions with no recorded stop (`PreservationUnknown`, `RetentionPending`), canaries and pilots stay outside this path. They need a person or their own follow-up story (DESIGN-061 section 5). |
+| C-52 | Neutral: Sessions with no recorded stop (`PreservationUnknown`, `RetentionPending`), canaries and pilots stay outside this path at first. They need a person or their own follow-up story (DESIGN-061 section 5). For the `PreservationUnknown` task Sessions Tom ruled the same day that they are cleaned too (point 8). |
 | C-53 | Neutral: the history archive, its reads and the H7 checks have no task-session use left. They stay off and are removed by later stories, not by this decision. |
 | C-54 | Bad: a finished task Session's own record goes with it: its retained outcome (PR links, summary), its usage and cost numbers and `agent-run show`. No other store holds them today (the portal database keeps logins only, and no metric carries usage or cost). What must outlive 7 days is written to the tracker item or Git first. Before the backlog drains, the coordinator saves a usage summary of the Sessions to be cleaned on OpenProject #518; a ledger of totals that survives clean-up is DESIGN-061's follow-up F7. |
