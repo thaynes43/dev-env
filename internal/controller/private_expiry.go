@@ -96,6 +96,7 @@ var homeExpiryReasons = []string{
 	protocol.HistoryErrCredentialInTree, protocol.HistoryErrTooLarge, protocol.HistoryErrChanged,
 	expiryShelfUnavailable, expiryArchiveConflict, expiryArchiveMissing, expiryArchiveMismatch, expiryExportInvalid,
 	expiryPlanTooLarge, expiryPreconditionFailed, expiryForbidden,
+	expiryVolumeNotReleased, expiryRescueRefused, expiryBundleMissing, expiryBundleMismatch,
 }
 
 // homeExpiryPhaseOrder is the only order an expiry record moves in.
@@ -365,7 +366,7 @@ func (r *Reconciler) expiryQuiet(s *v1alpha1.AgentSession, obs *observation, oth
 		return ctrl.Result{}, false
 	case override != "" && override != v1alpha1.HomeExpiryHold:
 		return ctrl.Result{}, false
-	case e.Phase == v1alpha1.HomeExpiryWaiting && override == "" && !now.Before(e.DueAt.Time):
+	case e.Phase == v1alpha1.HomeExpiryWaiting && override == "" && !now.Before(homeExpiryDueAt(e)):
 		return ctrl.Result{}, false
 	case obs.claim.missing || obs.claim.foreign != "" || homeClaimBound(s, obs.claim.obj) != nil:
 		return ctrl.Result{}, false
@@ -384,9 +385,22 @@ func (r *Reconciler) expiryQuiet(s *v1alpha1.AgentSession, obs *observation, oth
 		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, true
 	}
 	if e.Phase == v1alpha1.HomeExpiryWaiting {
-		return ctrl.Result{RequeueAfter: min(e.DueAt.Sub(now)+time.Second, homeExpiryMaxWait)}, true
+		return ctrl.Result{RequeueAfter: min(homeExpiryDueAt(e).Sub(now)+time.Second, homeExpiryMaxWait)}, true
 	}
 	return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, true
+}
+
+// homeExpiryDueAt is when a DESIGN-025 record's grace ends: its dueAt, and
+// never sooner than Q-31's 720 hours after graceStart. Every DESIGN-025
+// record's dueAt is at least that, so this changes none of them; a record the
+// task clean-up made (DESIGN-061: no wait, or 168 hours) that DESIGN-025
+// takes over after the clean-up's flag went off waits the full grace.
+func homeExpiryDueAt(e *v1alpha1.PrivateHomeExpiryStatus) time.Time {
+	floor := e.GraceStart.Add(DefaultHomeExpiryGrace)
+	if e.DueAt.Time.Before(floor) {
+		return floor
+	}
+	return e.DueAt.Time
 }
 
 // podMountsClaim reports whether any volume of p names the claim.
@@ -467,6 +481,10 @@ type homeExpiryNote struct {
 func (r *Reconciler) reconcileHomeExpiry(ctx context.Context, s *v1alpha1.AgentSession, obs *observation) (ctrl.Result, bool, error) {
 	if s.Spec.Workspace != nil || s.Status.PrivateHistory == nil {
 		return ctrl.Result{}, false, nil
+	}
+	if r.taskPolicy(s) {
+		// DESIGN-061: a task Session's clean-up, on this pipeline.
+		return r.reconcileTaskCleanup(ctx, s, obs)
 	}
 	if !r.homeExpiryOn() {
 		return r.homeExpiryOff(ctx, s, obs)
@@ -564,8 +582,19 @@ func (r *Reconciler) startHomeExpiry(ctx context.Context, v *expiryView, obs *ob
 		}
 	}
 	fresh := v.s.DeepCopy()
+	grace := r.homeExpiryGrace()
+	task := r.taskPolicy(v.s)
+	if task {
+		// DESIGN-061 1: none after a reap, the clean-up's grace after any
+		// other end. The stored dueAt is shown; the effective due time is
+		// derived from graceStart and the cause (taskCleanupDueAt).
+		grace = r.taskCleanupGrace()
+		if taskCleanupPurged(v.s) {
+			grace = 0
+		}
+	}
 	e := &v1alpha1.PrivateHomeExpiryStatus{Version: 1, ExecutorUID: h.LastExecutor.PodUID, HomeUID: h.HomeUID,
-		GraceStart: start, DueAt: metav1.NewTime(start.Add(r.homeExpiryGrace())), Phase: v1alpha1.HomeExpiryWaiting}
+		GraceStart: start, DueAt: metav1.NewTime(start.Add(grace)), Phase: v1alpha1.HomeExpiryWaiting}
 	if homeExpiryOverride(v.s) == v1alpha1.HomeExpiryReleaseNow {
 		at := recordTime(v.now)
 		e.ReleaseNowAt = &at
@@ -574,7 +603,12 @@ func (r *Reconciler) startHomeExpiry(ctx context.Context, v *expiryView, obs *ob
 	if err := r.writeExpiry(ctx, v, fresh); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
-	log.FromContext(ctx).Info("started the HOME expiry of a private Session", "executor", e.ExecutorUID, "dueAt", e.DueAt.UTC().Format(time.RFC3339))
+	log.FromContext(ctx).Info("started the HOME expiry of a private Session", "executor", e.ExecutorUID, "dueAt", e.DueAt.UTC().Format(time.RFC3339), "taskCleanup", task)
+	if task {
+		r.event(v.s, corev1.EventTypeNormal, "TaskCleanup", "TaskCleanupWaiting",
+			fmt.Sprintf("the task clean-up recorded the ended executor %s; it is due at %s (DESIGN-061)", e.ExecutorUID, e.DueAt.UTC().Format(time.RFC3339)))
+		return ctrl.Result{RequeueAfter: time.Second}, true, nil
+	}
 	r.event(v.s, corev1.EventTypeNormal, "HomeExpiry", "HomeExpiryStarted",
 		fmt.Sprintf("the HOME expiry started for the ended executor %s; its grace ends at %s (DESIGN-025 5.1)", e.ExecutorUID, e.DueAt.UTC().Format(time.RFC3339)))
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
@@ -680,8 +714,9 @@ func (r *Reconciler) runExpiryStep(ctx context.Context, v *expiryView, obs *obse
 func (r *Reconciler) expiryWait(ctx context.Context, v *expiryView) (ctrl.Result, bool, error) {
 	e := v.record()
 	release := homeExpiryOverride(v.s) == v1alpha1.HomeExpiryReleaseNow
-	if !release && v.now.Before(e.DueAt.Time) {
-		return ctrl.Result{RequeueAfter: min(e.DueAt.Sub(v.now)+time.Second, homeExpiryMaxWait)}, false, nil
+	due := homeExpiryDueAt(e)
+	if !release && v.now.Before(due) {
+		return ctrl.Result{RequeueAfter: min(due.Sub(v.now)+time.Second, homeExpiryMaxWait)}, false, nil
 	}
 	fresh := v.s.DeepCopy()
 	next := fresh.Status.PrivateHistory.Expiry
@@ -694,8 +729,8 @@ func (r *Reconciler) expiryWait(ctx context.Context, v *expiryView) (ctrl.Result
 	if err := r.writeExpiry(ctx, v, fresh); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
-	why := "its grace ended at " + e.DueAt.UTC().Format(time.RFC3339)
-	if release && v.now.Before(e.DueAt.Time) {
+	why := "its grace ended at " + due.UTC().Format(time.RFC3339)
+	if release && v.now.Before(due) {
 		why = "the owner asked for release-now"
 	}
 	r.event(v.s, corev1.EventTypeNormal, "HomeExpiry", "HomeExpiryRescuing", "the HOME expiry moves to its rescue: "+why)
@@ -1056,6 +1091,10 @@ func (r *Reconciler) createExpiryHold(ctx context.Context, v *expiryView, obs *o
 		return r.expiryUnknown(ctx, v.s, obs, fmt.Errorf("create the hold pod: %w", err))
 	}
 	log.FromContext(ctx).Info("created the HOME expiry's hold pod", "pod", pod.Name, "uid", pod.UID, "intent", v.record().HoldIntent)
+	if r.taskPolicy(v.s) {
+		r.event(v.s, corev1.EventTypeNormal, "TaskCleanup", "HoldPod", "created hold pod "+pod.Name+" bound to the HOME "+v.record().HomeUID+" for the clean-up's rescue (DESIGN-061)")
+		return ctrl.Result{RequeueAfter: time.Second}, true, nil
+	}
 	r.event(v.s, corev1.EventTypeNormal, "HomeExpiry", "HoldPod", "created hold pod "+pod.Name+" bound to the HOME "+v.record().HomeUID+" for the expiry's rescue and export (DESIGN-025 6.1)")
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
 }
@@ -1101,7 +1140,7 @@ func (r *Reconciler) removeExpiredExecutor(ctx context.Context, v *expiryView, o
 // It is the one caller of deleteExpiryHold. The guard judges the reason from
 // this reconcile's uncached reads, not from the caller's word.
 func (r *Reconciler) removeExpiryHold(ctx context.Context, v *expiryView, obs *observation, pod *corev1.Pod, why expiryHoldRelease) (ctrl.Result, bool, error) {
-	ev := expiryHoldEvidence{why: why, view: v, templates: obs.templates, archiveOn: r.homeExpiryOn()}
+	ev := expiryHoldEvidence{why: why, view: v, templates: obs.templates, archiveOn: r.homeExpiryOn(), task: r.taskPolicy(v.s), taskOn: r.taskCleanupOn()}
 	if err := expiryHoldRemovalAllowed(pod, ev); err != nil {
 		log.FromContext(ctx).Info("the HOME expiry keeps its hold pod", "pod", pod.Name, "reason", err.Error())
 		return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
@@ -1114,7 +1153,11 @@ func (r *Reconciler) removeExpiryHold(ctx context.Context, v *expiryView, obs *o
 		return ctrl.Result{RequeueAfter: time.Second}, true, err
 	}
 	log.FromContext(ctx).Info("deleted the HOME expiry's hold pod", "pod", pod.Name, "uid", pod.UID, "why", string(why))
-	r.event(v.s, corev1.EventTypeNormal, "HomeExpiry", "HoldPodRemoved", fmt.Sprintf("deleted the expiry's hold pod %s: %s (DESIGN-025 6.1)", pod.Name, why))
+	if ev.task {
+		r.event(v.s, corev1.EventTypeNormal, "TaskCleanup", "HoldPodRemoved", fmt.Sprintf("deleted the clean-up's hold pod %s: %s (DESIGN-061)", pod.Name, why))
+	} else {
+		r.event(v.s, corev1.EventTypeNormal, "HomeExpiry", "HoldPodRemoved", fmt.Sprintf("deleted the expiry's hold pod %s: %s (DESIGN-025 6.1)", pod.Name, why))
+	}
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
 }
 
@@ -1136,7 +1179,11 @@ func (r *Reconciler) homeExpiryOff(ctx context.Context, s *v1alpha1.AgentSession
 		return r.adoptExpiryHold(ctx, v)
 	}
 	if p := v.ownHold(); p != nil && p.DeletionTimestamp.IsZero() {
-		return r.removeExpiryHold(ctx, v, obs, p, holdReleaseArchiveOff)
+		why := holdReleaseArchiveOff
+		if r.taskPolicy(v.s) {
+			why = holdReleaseCleanupOff
+		}
+		return r.removeExpiryHold(ctx, v, obs, p, why)
 	}
 	return ctrl.Result{}, false, nil
 }
@@ -1217,12 +1264,19 @@ func (r *Reconciler) refuseHomeExpiry(ctx context.Context, v *expiryView, obs *o
 	}
 	r.countExpiryRefused(ref.reason)
 	log.FromContext(ctx).Info("the HOME expiry is refused; the HOME stays", "reason", ref.reason, "error", ref.err.Error())
-	obs.homeExpiry = &homeExpiryNote{reason: "Refused", message: ref.Error()}
+	obs.homeExpiry = &homeExpiryNote{reason: "Refused", message: truncate(ref.Error())}
 	fresh := v.s.DeepCopy()
 	at := recordTime(v.now)
 	next := fresh.Status.PrivateHistory.Expiry
 	next.Refusal, next.RefusalAt = ref.reason, &at
 	if err := r.writeExpiry(ctx, v, fresh); err != nil {
+		return ctrl.Result{RequeueAfter: time.Second}, true, nil
+	}
+	if r.taskPolicy(v.s) {
+		if r.TaskCleanupCounters != nil {
+			r.TaskCleanupCounters.Refused.WithLabelValues(ref.reason).Inc()
+		}
+		r.event(v.s, corev1.EventTypeWarning, "TaskCleanup", "TaskCleanupRefused", "the task clean-up keeps the HOME: "+ref.Error())
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
 	r.event(v.s, corev1.EventTypeWarning, "HomeExpiry", "HomeExpiryRefused", "the HOME expiry is refused and the HOME stays: "+ref.Error())
@@ -1252,13 +1306,20 @@ func setHomeExpiryCondition(s *v1alpha1.AgentSession, obs observation, st *v1alp
 		meta.RemoveStatusCondition(&st.Conditions, ConditionHomeExpiry)
 		return
 	}
+	if taskPolicyOf(s, obs.taskCleanupOn) {
+		setTaskCleanupCondition(s, obs, st)
+		return
+	}
 	c := metav1.Condition{Type: ConditionHomeExpiry, Status: metav1.ConditionTrue, ObservedGeneration: s.Generation}
 	where := ""
 	if e != nil {
 		c.Reason = e.Phase
 		where = fmt.Sprintf("the HOME expiry is at %s; its grace ends at %s", e.Phase, e.DueAt.UTC().Format(time.RFC3339))
-		if e.Archive != nil {
+		switch {
+		case e.Archive != nil:
 			where += fmt.Sprintf("; archived as %s (%s)", e.Archive.Entry, e.Archive.ContentSHA256)
+		case e.Bundle != nil:
+			where += "; keeps " + keptName(s, e)
 		}
 	}
 	switch {

@@ -586,3 +586,46 @@ func TestPortalQuestionAuditFlagsDefaultOff(t *testing.T) {
 		}
 	}
 }
+
+// TestTaskCleanupFlagsAreExplicitDefaultOffAndBounded (DESIGN-061 2, item 8):
+// the clean-up is off by default with its defaults; it needs the terminal
+// record and the executor stop; the grace is 1h to 168h, max-active 0 to 3,
+// the free floor a quantity, and the allowlist Session names.
+func TestTaskCleanupFlagsAreExplicitDefaultOffAndBounded(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.taskSessionCleanup || o.taskCleanupGrace != 168*time.Hour || o.taskCleanupMaxActive != 2 ||
+		o.taskCleanupMinSharedFree.Value() != 2<<30 || len(o.taskCleanupSessions) != 0 {
+		t.Fatalf("defaults: %v %v %v %v %v, err %v", o.taskSessionCleanup, o.taskCleanupGrace, o.taskCleanupMaxActive, o.taskCleanupMinSharedFree.String(), o.taskCleanupSessions, err)
+	}
+	if r := reconcilerForOptions(o); r.TaskSessionCleanup || r.TaskCleanupMaxActive != 2 || r.TaskCleanupMinSharedFree != 2<<30 {
+		t.Fatalf("the reconciler is not given the defaults: %+v", r)
+	}
+	on := []string{"--enable-task-session-cleanup", "--enable-private-terminal-record", "--enable-private-executor-stop"}
+	for _, args := range [][]string{
+		{"--enable-task-session-cleanup"},
+		{"--enable-task-session-cleanup", "--enable-private-terminal-record"},
+		{"--enable-task-session-cleanup", "--enable-private-executor-stop"},
+	} {
+		// The last is refused by the stop flag's own rule first.
+		if _, err := parseFlags(args); err == nil || !strings.Contains(err.Error(), "--enable-") {
+			t.Errorf("%v was accepted: %v", args, err)
+		}
+	}
+	for _, extra := range []string{"--task-cleanup-grace=59m", "--task-cleanup-grace=169h", "--task-cleanup-grace=0s",
+		"--task-cleanup-max-active=4", "--task-cleanup-max-active=-1", "--task-cleanup-min-shared-free=-1Gi",
+		"--task-cleanup-min-shared-free=lots", "--task-cleanup-sessions=Not_A_Name"} {
+		if _, err := parseFlags(append(slices.Clone(on), extra)); err == nil {
+			t.Errorf("%s was accepted", extra)
+		}
+	}
+	o, err = parseFlags(append(slices.Clone(on), "--task-cleanup-grace=1h", "--task-cleanup-max-active=0", "--task-cleanup-min-shared-free=512Mi",
+		"--task-cleanup-sessions=dev-env-1109-234800, haynes-studio-1110-000448"))
+	if err != nil || !o.taskSessionCleanup || o.taskCleanupGrace != time.Hour || o.taskCleanupMaxActive != 0 || o.taskCleanupMinSharedFree.Value() != 512<<20 ||
+		!slices.Equal(o.taskCleanupSessions, []string{"dev-env-1109-234800", "haynes-studio-1110-000448"}) {
+		t.Fatalf("explicit flags: %+v, err %v", o, err)
+	}
+	r := reconcilerForOptions(o)
+	if !r.TaskSessionCleanup || r.TaskCleanupGrace != time.Hour || r.TaskCleanupMaxActive != 0 || r.TaskCleanupMinSharedFree != 512<<20 || len(r.TaskCleanupSessions) != 2 {
+		t.Fatalf("the reconciler is not given the flags: %+v", r)
+	}
+}

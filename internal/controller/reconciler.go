@@ -171,6 +171,35 @@ type Reconciler struct {
 	HomeExpiryDelete bool
 	// HomeExpiryGrace is the grace; below DefaultHomeExpiryGrace counts as it.
 	HomeExpiryGrace time.Duration
+	// TaskSessionCleanup runs the task-session clean-up of ADR-020 and
+	// DESIGN-061 on the expiry pipeline, for spec.mode task only: a purged
+	// task's HOME is deleted once its agent's stop is proven, a finished one's
+	// TaskCleanupGrace later, after a strict Git rescue in a hold pod and only
+	// a bundle of unpushed work is kept; then the Session goes. It acts only
+	// while PrivateTerminalRecord and PrivateExecutorStop are on too. Default
+	// off: no record is made.
+	TaskSessionCleanup bool
+	// TaskCleanupGrace is the wait after a task's end that is not a reap
+	// (168h by default; 1h to 168h).
+	TaskCleanupGrace time.Duration
+	// TaskCleanupMaxActive is how many clean-ups run at once (at most 3); 0
+	// pauses the clean-up.
+	TaskCleanupMaxActive int
+	// TaskCleanupMinSharedFree pauses new clean-ups while the shared volume
+	// has less free, in bytes.
+	TaskCleanupMinSharedFree int64
+	// TaskCleanupSessions, when not empty, are the only Session names allowed
+	// to leave Waiting (a proof's allowlist).
+	TaskCleanupSessions []string
+	// RescueVerifier re-hashes a rescue's bundles in the shelf for the
+	// clean-up (shelf.RescueVerifier); nil verifies nothing, so no Verified
+	// bundle is kept and the clean-up pauses as shelf_unavailable.
+	RescueVerifier RescueVerifier
+	// TaskCleanupCounters count the clean-up's deletes and refusals; nil
+	// counts nothing.
+	TaskCleanupCounters *TaskCleanupCounters
+	// taskCleanup is the leader's memory of the clean-up (task_cleanup.go).
+	taskCleanup taskCleanupState
 	// HistoryRelay runs the export in the hold pod and the archive commands
 	// in the shelf; nil refuses the export with shelf_unavailable.
 	HistoryRelay HistoryRelay
@@ -463,7 +492,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	}
 
 	t, tErr := r.loadTemplates(ctx)
-	obs := observation{pod: pod, claim: claim, templates: t, templatesErr: tErr, now: time.Now(), homeExpiryOn: r.homeExpiryOn()}
+	obs := observation{pod: pod, claim: claim, templates: t, templatesErr: tErr, now: time.Now(), homeExpiryOn: r.homeExpiryOn(),
+		taskCleanupOn: r.taskCleanupOn(), taskCleanupGrace: r.taskCleanupGrace()}
 	if s.Spec.Workspace != nil {
 		result, err := r.reconcileSharedWorkspace(ctx, &s, &obs)
 		if err != nil {
@@ -552,6 +582,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 
 	var result ctrl.Result
 	switch {
+	case !wantsPodGone(&s) && !hold && r.taskCleanupOwns(&s):
+		// The task clean-up owns this Session's HOME (DESIGN-061): a private
+		// task never runs again (ADR-008), so nothing is started, and its
+		// rescue in the clean-up's hold pod is not superseded by a Failed
+		// task's operatingMode Running or a resume.
 	case !wantsPodGone(&s) && !hold && s.Status.ArchivedAt != nil:
 		// An archived session's volume is gone, so a new pod would start its
 		// task again on a new volume: it is never resumed (D-62). It stays
@@ -1522,6 +1557,10 @@ type observation struct {
 	// homeExpiryOn is whether this operator runs the HOME expiry's history
 	// archive (homeExpiryOn), for the conditions' next step.
 	homeExpiryOn bool
+	// taskCleanupOn and taskCleanupGrace are the task clean-up's flag and
+	// grace (DESIGN-061), for the conditions of the Sessions it owns.
+	taskCleanupOn    bool
+	taskCleanupGrace time.Duration
 	// privateExecutorEnded: the recorded executor is gone after its confirmed
 	// terminal record, so its absence is ExecutorEnded, not Unknown.
 	privateExecutorEnded bool
@@ -1713,12 +1752,30 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 			return v1alpha1.PhaseSuspended, notReady("PreservationUnknown", obs.privateHistoryUnknown.Error())
 		}
 		return v1alpha1.PhasePending, notReady("PreservationUnknown", obs.privateHistoryUnknown.Error())
+	case privateHistoryProtected(s) && obs.privateHistoryUnknown == nil && taskPolicyOf(s, obs.taskCleanupOn) && executorTerminalRecorded(s.Status.PrivateHistory):
+		// DESIGN-061 6: a task Session the clean-up owns says its step.
+		phase := v1alpha1.PhaseFailed
+		switch {
+		case !s.DeletionTimestamp.IsZero():
+			phase = v1alpha1.PhasePending
+		case s.Status.ArchivedAt != nil && homeExpiryRemovingHome(s):
+			phase = v1alpha1.PhaseArchived
+		case s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended:
+			phase = v1alpha1.PhaseSuspended
+		}
+		return phase, notReady(taskCleanupText(s, obs))
 	case privateHistoryProtected(s) && obs.pod.missing && obs.privateExecutorEnded && !wantsPodGone(s):
 		rec := s.Status.PrivateHistory.ExecutorTerminal
 		return v1alpha1.PhaseFailed, notReady("ExecutorEnded", fmt.Sprintf("the recorded private executor ended (%s %s) and its Pod is gone; its HOME is kept and no replacement starts", rec.Phase, rec.Reason))
 	case privateHistoryProtected(s) && obs.pod.missing && s.DeletionTimestamp.IsZero() && s.Status.ArchivedAt != nil && homeExpiryRemovingHome(s):
 		// DESIGN-025 6.5: a suspended private Session whose HOME expiry
 		// recorded Deleting is archived (D-62) until it is reaped.
+		if e := s.Status.PrivateHistory.Expiry; e.Archive == nil {
+			// A task Session's clean-up keeps a bundle, not an archive
+			// (DESIGN-061).
+			return v1alpha1.PhaseArchived, notReady("Archived", fmt.Sprintf("the task clean-up deletes the HOME %s and keeps %s; the session is not resumed (DESIGN-061)",
+				HomeClaimName(s.Name), keptName(s, e)))
+		}
 		return v1alpha1.PhaseArchived, notReady("Archived", fmt.Sprintf("the HOME expiry archived the history as %s and deletes the HOME %s; an archived session is not resumed: read its history with agent-run history (DESIGN-025)",
 			s.Status.PrivateHistory.Expiry.Archive.Entry, HomeClaimName(s.Name)))
 	case privateHistoryProtected(s) && obs.pod.missing && s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && s.DeletionTimestamp.IsZero() &&

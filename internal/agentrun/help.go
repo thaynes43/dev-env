@@ -510,7 +510,9 @@ only when nothing was sent (the API could not be reached at all).
        agent-run rescue restore <session>/<stamp> (--local | -p "<task>") [--repo <name>] [flags]
 
 A rescue is the bundle of a session's work, written to the shared volume when the
-session is suspended or reaped (D-10, D-48). The bundles never leave the cluster.
+session is suspended or reaped (D-10, D-48), or when the task clean-up deletes a
+task session's HOME (DESIGN-061: only commits, tracked edits and untracked files
+that never reached GitHub). The bundles never leave the cluster.
 
 rescue list shows them, newest first: id, when it was made (UTC), the repos it
 holds a bundle for, its size, its state, and how long it is kept. The state is
@@ -877,6 +879,19 @@ HOME. Its RemovalBlocked condition usually says ExecutorEnded once the agent's
 stop is recorded, and RetentionPending, with the reason, while it is not. The
 other reasons (TaskComputeReclaimed, PreservationUnknown, HomeDeleting,
 HomeExpired) say what they mean in their text.
+
+A private task session (mode task) is cleaned up instead while the operator's
+task clean-up is on (ADR-020, DESIGN-061); its conditions then name the "task
+clean-up (DESIGN-061)". The operator stops its agent, waits until the old node
+has released the HOME's volume, saves any work that never reached GitHub as a
+git bundle (agent-run rescue list --session <name>; kept 30 days), deletes its
+HOME and then the session, normally within minutes of the reap. A task that
+ended on its own goes the same way 7 days after its end. Gitignored files,
+files outside a repository and the conversation transcripts go with the HOME.
+A rescue that refuses (a merge in progress, a nested or stray repository,
+more than 50 MiB untracked) keeps the HOME for a person; an owner hold set
+before the reap keeps both. agent-run show <name> says "reaping: clean-up
+queued", "saving unpushed work" or "deleting the HOME".
 
 A reap returns at once; agent-run show <name> follows it until the session is gone.
 `,

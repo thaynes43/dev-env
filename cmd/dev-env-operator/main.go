@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -97,85 +98,92 @@ type options struct {
 	rescueIncidentOwners             *controller.RescueIncidentOwners
 	coordinatorInstructionAgentImage string
 
-	originalHome                  *homeguard.Binding
-	directoryEnabled              bool
-	directoryProjects             []string
-	metadataDiscoveryProjects     []string
-	retainedCommonRules           bool
-	contextsEnabled               bool
-	contextReadProjects           []string
-	inboxEnabled                  bool
-	inboxQuestions                bool
-	inboxProjects                 []string
-	inboxCoordinatorReadProjects  []string
-	portalQuestionAudit           bool
-	portalQuestionProjects        []string
-	taskClaimsEnabled             bool
-	taskClaimReadProjects         []string
-	portalTaskClaims              apiserver.PortalTaskClaimsConfig
-	ownedRootPolicy               string
-	nativeFixtureEnabled          bool
-	nativeFixtureImage            string
-	taskBudgetsEnabled            bool
-	remindersAPI                  bool
-	reminderCalendarRefs          []string
-	taskBudgetNamespace           string
-	taskBudgetWorkerImage         string
-	pilotAgent                    *controller.PilotAgent
-	taskPilotAgent                *controller.PilotAgent
-	remotePilotAgent              *controller.PilotAgent
-	codexRCAgent                  *controller.CodexRCAgent
-	assignedTaskBudgets           map[string]string
-	sessionNamespace              string
-	templatesNamespace            string
-	policyNamespace               string
-	templatesName                 string
-	leaderElect                   bool
-	metricsAddr                   string
-	probeAddr                     string
-	kubeAPIQPS                    float64
-	kubeAPIBurst                  int
-	apiURL                        string
-	apiAddr                       string
-	apiTLSDir                     string
-	humanSA                       string
-	clientSAs                     []string
-	grantApprovalURL              string
-	grantAttestation              bool
-	reservedDecisionClasses       []string
-	reservedExcludedNamespaces    []string
-	grantDelegates                []string
-	grantPolicyDelegates          []string
-	legacyGrantDelegates          []broker.LegacyDelegateBinding
-	maintenanceEnabled            bool
-	asksEnabled                   bool
-	coordinatorEnabled            bool
-	portalReaderEnabled           bool
-	portalConversationUsage       bool
-	portalMessageTargets          map[string]string
-	portalLaunchRepos             map[string]struct{}
-	portalLaunchProfile           string
-	portalLaunchMaxUnfinished     int
-	portalConversationTargets     map[string]string
-	privatePilot                  *projectcanary.PilotPolicy
-	privateProjectTasks           bool
-	managedCodexTasks             bool
-	codexRCEnabled                bool
-	codexRCTargetFile             string
-	codexRCTarget                 *apiv1.CodexRCTarget
-	privateHistoryRetention       bool
-	privateTerminalRecord         bool
-	terminalTaskPodReclaim        bool
-	legacyTerminalTaskReclaim     bool
-	terminalTaskReclaimGrace      time.Duration
-	privateExecutorStop           bool
-	homeHistoryArchive            bool
-	historyArchiveReads           bool
-	coordinationArchiveReads      bool
-	coordinationRetention         bool
-	coordinationRetentionGrace    time.Duration
-	homeExpiryDelete              bool
-	homeExpiryGrace               time.Duration
+	originalHome                 *homeguard.Binding
+	directoryEnabled             bool
+	directoryProjects            []string
+	metadataDiscoveryProjects    []string
+	retainedCommonRules          bool
+	contextsEnabled              bool
+	contextReadProjects          []string
+	inboxEnabled                 bool
+	inboxQuestions               bool
+	inboxProjects                []string
+	inboxCoordinatorReadProjects []string
+	portalQuestionAudit          bool
+	portalQuestionProjects       []string
+	taskClaimsEnabled            bool
+	taskClaimReadProjects        []string
+	portalTaskClaims             apiserver.PortalTaskClaimsConfig
+	ownedRootPolicy              string
+	nativeFixtureEnabled         bool
+	nativeFixtureImage           string
+	taskBudgetsEnabled           bool
+	remindersAPI                 bool
+	reminderCalendarRefs         []string
+	taskBudgetNamespace          string
+	taskBudgetWorkerImage        string
+	pilotAgent                   *controller.PilotAgent
+	taskPilotAgent               *controller.PilotAgent
+	remotePilotAgent             *controller.PilotAgent
+	codexRCAgent                 *controller.CodexRCAgent
+	assignedTaskBudgets          map[string]string
+	sessionNamespace             string
+	templatesNamespace           string
+	policyNamespace              string
+	templatesName                string
+	leaderElect                  bool
+	metricsAddr                  string
+	probeAddr                    string
+	kubeAPIQPS                   float64
+	kubeAPIBurst                 int
+	apiURL                       string
+	apiAddr                      string
+	apiTLSDir                    string
+	humanSA                      string
+	clientSAs                    []string
+	grantApprovalURL             string
+	grantAttestation             bool
+	reservedDecisionClasses      []string
+	reservedExcludedNamespaces   []string
+	grantDelegates               []string
+	grantPolicyDelegates         []string
+	legacyGrantDelegates         []broker.LegacyDelegateBinding
+	maintenanceEnabled           bool
+	asksEnabled                  bool
+	coordinatorEnabled           bool
+	portalReaderEnabled          bool
+	portalConversationUsage      bool
+	portalMessageTargets         map[string]string
+	portalLaunchRepos            map[string]struct{}
+	portalLaunchProfile          string
+	portalLaunchMaxUnfinished    int
+	portalConversationTargets    map[string]string
+	privatePilot                 *projectcanary.PilotPolicy
+	privateProjectTasks          bool
+	managedCodexTasks            bool
+	codexRCEnabled               bool
+	codexRCTargetFile            string
+	codexRCTarget                *apiv1.CodexRCTarget
+	privateHistoryRetention      bool
+	privateTerminalRecord        bool
+	terminalTaskPodReclaim       bool
+	legacyTerminalTaskReclaim    bool
+	terminalTaskReclaimGrace     time.Duration
+	privateExecutorStop          bool
+	homeHistoryArchive           bool
+	historyArchiveReads          bool
+	coordinationArchiveReads     bool
+	coordinationRetention        bool
+	coordinationRetentionGrace   time.Duration
+	homeExpiryDelete             bool
+	homeExpiryGrace              time.Duration
+	// The task-session clean-up (ADR-020, DESIGN-061 2 item 8), all off or
+	// at their defaults.
+	taskSessionCleanup            bool
+	taskCleanupGrace              time.Duration
+	taskCleanupMaxActive          int
+	taskCleanupMinSharedFree      resource.Quantity
+	taskCleanupSessions           []string
 	privateProjectCanariesEnabled bool
 	privateProjectCanaries        *projectcanary.Policy
 	managedChildDecisions         bool
@@ -277,6 +285,30 @@ func parseFlags(args []string) (options, error) {
 	fs.DurationVar(&o.coordinationRetentionGrace, "coordination-retention-grace", coordretention.DefaultGrace, "coordination retention grace after the latest absence; it may only lengthen 720h (DESIGN-024 5)")
 	fs.BoolVar(&o.homeExpiryDelete, "enable-home-expiry-delete", false, "let the HOME expiry go past Archived: verify the archive again, delete the private HOME with UID and resourceVersion preconditions and release a reaped Session (DESIGN-025 6.5, 6.6); needs --enable-home-history-archive and --enable-history-archive-reads, and stays off until the archived read is accepted on the installed system (#174)")
 	fs.DurationVar(&o.homeExpiryGrace, "home-expiry-grace", controller.DefaultHomeExpiryGrace, "the HOME expiry's grace after the recorded stop; it may only lengthen Q-31's 720h (DESIGN-025 13)")
+	fs.BoolVar(&o.taskSessionCleanup, "enable-task-session-cleanup", false, "clean up finished and purged task Sessions (ADR-020, DESIGN-061): after a strict Git rescue in a hold pod keep only a bundle of unpushed work, delete the HOME, then the Session; needs --enable-private-terminal-record and --enable-private-executor-stop")
+	fs.DurationVar(&o.taskCleanupGrace, "task-cleanup-grace", controller.DefaultTaskCleanupGrace, "how long after a task Session's recorded end that is not a reap the clean-up waits; 1h to 168h (DESIGN-061 1)")
+	fs.IntVar(&o.taskCleanupMaxActive, "task-cleanup-max-active", controller.DefaultTaskCleanupMaxActive, "task clean-ups at once, at most 3; 0 pauses the clean-up (DESIGN-061 4)")
+	o.taskCleanupMinSharedFree = *resource.NewQuantity(controller.DefaultTaskCleanupMinSharedFree, resource.BinarySI)
+	fs.Func("task-cleanup-min-shared-free", "pause new task clean-ups while the shared volume has less free than this, for example 2Gi (DESIGN-061 4)", func(v string) error {
+		q, err := resource.ParseQuantity(v)
+		if err != nil {
+			return err
+		}
+		o.taskCleanupMinSharedFree = q
+		return nil
+	})
+	fs.Func("task-cleanup-sessions", "comma-separated Session names allowed to leave Waiting, empty for all; for a proof (DESIGN-061 8)", func(v string) error {
+		o.taskCleanupSessions = nil
+		for _, name := range strings.Split(v, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				if errs := validation.IsDNS1123Subdomain(name); len(errs) != 0 {
+					return fmt.Errorf("%q is not a Session name: %s", name, strings.Join(errs, "; "))
+				}
+				o.taskCleanupSessions = append(o.taskCleanupSessions, name)
+			}
+		}
+		return nil
+	})
 	fs.BoolVar(&o.retainedCommonRules, "enable-retained-common-rules", false, "retain reviewed common instruction inputs for new fixed private managed canaries")
 	fs.BoolVar(&o.privateProjectCanariesEnabled, "enable-private-project-canaries", false, "enable only two explicitly configured private managed subscription rule canaries")
 	pilot := fs.String("private-project-pilot", "", "sealed absolute-window two-session dev-env Codex integration policy; global private admission remains off")
@@ -676,6 +708,9 @@ func parseFlags(args []string) (options, error) {
 	if o.homeExpiryGrace < controller.DefaultHomeExpiryGrace {
 		return o, fmt.Errorf("--home-expiry-grace %s is under %s: the grace may only be lengthened (DESIGN-025 13)", o.homeExpiryGrace, controller.DefaultHomeExpiryGrace)
 	}
+	if err := validateTaskCleanupOptions(o); err != nil {
+		return o, err
+	}
 	if o.coordinationRetention && !o.coordinationArchiveReads {
 		return o, errors.New("--enable-coordination-retention requires --enable-coordination-archive-reads: a deleted coordination record must stay readable (DESIGN-024 5)")
 	}
@@ -771,6 +806,11 @@ func reconcilerForOptions(o options) *controller.Reconciler {
 		HomeHistoryArchive:          o.homeHistoryArchive,
 		HomeExpiryGrace:             o.homeExpiryGrace,
 		HomeExpiryDelete:            o.homeExpiryDelete,
+		TaskSessionCleanup:          o.taskSessionCleanup,
+		TaskCleanupGrace:            o.taskCleanupGrace,
+		TaskCleanupMaxActive:        o.taskCleanupMaxActive,
+		TaskCleanupMinSharedFree:    o.taskCleanupMinSharedFree.Value(),
+		TaskCleanupSessions:         o.taskCleanupSessions,
 		PrivateProjectCanaries:      o.privateProjectCanaries,
 		PrivatePilot:                o.privatePilot,
 		PrivateProjectCloneOwner:    cloneOwner,
@@ -844,6 +884,8 @@ func run(args []string) error {
 	ctrlmetrics.Registry.MustRegister(stopCounter)
 	expiryCounters := controller.NewHomeExpiryCounters()
 	ctrlmetrics.Registry.MustRegister(expiryCounters.Collectors()...)
+	taskCleanupCounters := controller.NewTaskCleanupCounters()
+	ctrlmetrics.Registry.MustRegister(taskCleanupCounters.Collectors()...)
 	// The scheduled-work releaser has no flag (DESIGN-054 S3a), so its
 	// counter is always there.
 	releaseHolds := controller.NewScheduledWorkReleaseHoldsCounter()
@@ -888,6 +930,10 @@ func run(args []string) error {
 	r.SessionNamespace = o.sessionNamespace
 	r.ScheduledWorkNamespace = o.templatesNamespace
 	r.HistoryRelay = &controller.ExecHistoryRelay{Exec: podExec, Shelf: rescueShelf, Slots: shelfSlots}
+	// The task clean-up's bundle verify and free-space check take one of the
+	// same shelf exec slots (DESIGN-061 3.1).
+	r.RescueVerifier = &shelf.RescueVerifier{Shelf: rescueShelf, Slots: shelfSlots}
+	r.TaskCleanupCounters = taskCleanupCounters
 	r.APIReader = mgr.GetAPIReader()
 	r.Rescuer = rescuer
 	r.WorkspaceStopper = rescuer
@@ -908,7 +954,11 @@ func run(args []string) error {
 	ctrlmetrics.Registry.MustRegister(&controller.SessionCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, TerminalTaskReclaim: o.terminalTaskPodReclaim, RescueIncidentOwners: o.rescueIncidentOwners})
 	// The HOME expiry's gauges, read from the same cache at scrape time
 	// (DESIGN-025 10).
-	ctrlmetrics.Registry.MustRegister(&controller.HomeExpiryCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, DeleteOn: o.homeExpiryDelete})
+	ctrlmetrics.Registry.MustRegister(&controller.HomeExpiryCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, DeleteOn: o.homeExpiryDelete,
+		TaskCleanupOn: o.taskSessionCleanup && o.privateTerminalRecord && o.privateExecutorStop})
+	// The task clean-up's gauges (DESIGN-061 6): states from the same cache,
+	// pauses from the leader's memory.
+	ctrlmetrics.Registry.MustRegister(&controller.TaskCleanupCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, Reconciler: r})
 	// The scheduled sessions whose release is held, read from the same cache
 	// at scrape time: DESIGN-054's page source (S6).
 	ctrlmetrics.Registry.MustRegister(&controller.ScheduledWorkReleaseCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace})
@@ -1296,4 +1346,23 @@ func parseRemotePilotAgent(image, session string) (*controller.PilotAgent, error
 		return nil, errors.New("--remote-pilot-agent-session must be <parent>|<key>: parent is a DNS-1123 session name or namespace/serviceaccount, key is a non-empty label value, with exactly one '|'")
 	}
 	return &controller.PilotAgent{Image: image, Parent: parent, Key: key}, nil
+}
+
+// validateTaskCleanupOptions refuses the task clean-up's flags out of their
+// bounds (DESIGN-061 2, item 8): the clean-up needs the terminal record and the
+// executor stop; the grace is 1h to 168h; at most 3 run at once (one of the
+// four reconcile workers stays free), 0 pausing; the free-space floor is not
+// negative.
+func validateTaskCleanupOptions(o options) error {
+	switch {
+	case o.taskSessionCleanup && (!o.privateTerminalRecord || !o.privateExecutorStop):
+		return errors.New("--enable-task-session-cleanup requires --enable-private-terminal-record and --enable-private-executor-stop: the terminal record is the stop proof, and the stop gives a purged task its record (DESIGN-061)")
+	case o.taskCleanupGrace < controller.MinTaskCleanupGrace || o.taskCleanupGrace > controller.MaxTaskCleanupGrace:
+		return fmt.Errorf("--task-cleanup-grace %s is outside %s to %s (DESIGN-061 2)", o.taskCleanupGrace, controller.MinTaskCleanupGrace, controller.MaxTaskCleanupGrace)
+	case o.taskCleanupMaxActive < 0 || o.taskCleanupMaxActive > controller.MaxTaskCleanupMaxActive:
+		return fmt.Errorf("--task-cleanup-max-active %d is outside 0 to %d (DESIGN-061 4)", o.taskCleanupMaxActive, controller.MaxTaskCleanupMaxActive)
+	case o.taskCleanupMinSharedFree.Sign() < 0:
+		return errors.New("--task-cleanup-min-shared-free must not be negative")
+	}
+	return nil
 }

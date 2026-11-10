@@ -208,7 +208,10 @@ func (r *Reconciler) terminalTaskSessionAllowed(s *v1alpha1.AgentSession, now ti
 	if _, err := r.taskReclaimProof(s, now); err != nil {
 		return "ProofUnknown", err
 	}
-	if s.Status.PrivateHistory.Expiry != nil {
+	if e := s.Status.PrivateHistory.Expiry; e != nil && (e.Phase != v1alpha1.HomeExpiryWaiting || !r.taskPolicy(s)) {
+		// A task clean-up record at Waiting (DESIGN-061) leaves the ended
+		// executor's compute to this reclaim; its Rescuing step removes a
+		// Pod that still stands.
 		return "Protected", errors.New("separate HOME expiry is in progress")
 	}
 	return "", nil
