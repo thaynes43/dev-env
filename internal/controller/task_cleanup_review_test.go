@@ -802,6 +802,29 @@ func taskAssertExpiredKept(t *testing.T, f *taskFixture, why string) {
 	}
 }
 
+func TestTaskCleanupExpiredRemovalNoteDoesNotLinger(t *testing.T) {
+	f := newTaskFixture(t, nil)
+	if !f.r.markExpiredRemoval(f.s.UID, expiryBundleMismatch) {
+		t.Fatal("the first note was not said")
+	}
+	if f.r.markExpiredRemoval(f.s.UID, expiryBundleMismatch) {
+		t.Fatal("the same reason was said again")
+	}
+	f.r.forgetExpiredRemoval(f.s.UID)
+	if !f.r.markExpiredRemoval(f.s.UID, expiryBundleMismatch) {
+		t.Fatal("a deleted session's note was still remembered")
+	}
+	st := &f.r.taskCleanup
+	st.mu.Lock()
+	st.removalNoted[f.s.UID] = expiredRemovalNote{reason: expiryBundleMismatch, at: f.clock.Add(-taskMemoryKeep - time.Second)}
+	st.prune(*f.clock)
+	_, left := st.removalNoted[f.s.UID]
+	st.mu.Unlock()
+	if left {
+		t.Fatal("prune left an expired removal note")
+	}
+}
+
 func taskGradedHas(f *taskFixture, hold k8stypes.UID) bool {
 	st := &f.r.taskCleanup
 	st.mu.Lock()

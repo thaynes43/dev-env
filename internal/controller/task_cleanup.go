@@ -170,8 +170,9 @@ type taskCleanupState struct {
 	graded  map[types.UID]string
 	ended   map[types.UID]int
 	// removalNoted: by Session, the reason already said for an Expired record
-	// that cannot store a refusal. The warning is once per reason.
-	removalNoted map[types.UID]string
+	// that cannot store a refusal, and when. The warning is once per reason.
+	// A successful delete drops the entry; prune ages out the rest.
+	removalNoted map[types.UID]expiredRemovalNote
 	failures     int
 	lastFailure  time.Time
 	freeAt       time.Time
@@ -211,6 +212,11 @@ func (st *taskCleanupState) prune(now time.Time) {
 	for uid, until := range st.children {
 		if now.After(until) {
 			delete(st.children, uid)
+		}
+	}
+	for uid, note := range st.removalNoted {
+		if now.Sub(note.at) > taskMemoryKeep {
+			delete(st.removalNoted, uid)
 		}
 	}
 }
@@ -1419,6 +1425,7 @@ func (r *Reconciler) removeCleanedTaskSession(ctx context.Context, v *expiryView
 		return r.expiryUnknown(ctx, v.s, obs, fmt.Errorf("delete the cleaned task Session: %w", err))
 	}
 	log.FromContext(ctx).Info("deleted a finished task Session after its HOME was cleaned up; it is released next", "kept", keptName(v.s, v.record()))
+	r.forgetExpiredRemoval(v.s.UID)
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
 }
 
@@ -1435,20 +1442,38 @@ func (r *Reconciler) keepExpiredTaskSession(s *v1alpha1.AgentSession, obs *obser
 	return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
 }
 
+// expiredRemovalNote is one warning already given for an Expired record.
+type expiredRemovalNote struct {
+	reason string
+	at     time.Time
+}
+
 // markExpiredRemoval is true the first time this operator says this reason
-// for the Session. Later retries of the same reason stay quiet.
+// for the Session. Later retries of the same reason stay quiet and keep the
+// note fresh, so prune does not drop a Session that is still refused.
 func (r *Reconciler) markExpiredRemoval(uid types.UID, reason string) bool {
 	st := &r.taskCleanup
+	now := r.clock()
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.removalNoted == nil {
-		st.removalNoted = map[types.UID]string{}
+		st.removalNoted = map[types.UID]expiredRemovalNote{}
 	}
-	if st.removalNoted[uid] == reason {
+	if note, ok := st.removalNoted[uid]; ok && note.reason == reason {
+		note.at = now
+		st.removalNoted[uid] = note
 		return false
 	}
-	st.removalNoted[uid] = reason
+	st.removalNoted[uid] = expiredRemovalNote{reason: reason, at: now}
 	return true
+}
+
+// forgetExpiredRemoval drops the warning after the Session is deleted.
+func (r *Reconciler) forgetExpiredRemoval(uid types.UID) {
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	delete(st.removalNoted, uid)
 }
 
 // countTaskRefused counts a clean-up refusal in its own counter only.
