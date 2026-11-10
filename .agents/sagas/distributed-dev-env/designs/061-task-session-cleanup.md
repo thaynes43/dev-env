@@ -292,7 +292,7 @@ doubles (the live `dev_env_reaped_sessions_retained` sums to 66 for 33).
 **The alert** (haynes-ops `operator/app/prometheusrule.yaml`) fires when a
 finished or purged task Session is over 8 days past its clock and still has its
 HOME, owner holds, canaries and pilots left out. It fires on day one for the 54
-unproven Sessions until Q1 and OP515 settle them, as intended.
+unproven Sessions until F6 and OP515 clean them, as intended.
 
 ```yaml
 - alert: DevEnvTaskCleanupOverdue   # warning
@@ -380,7 +380,7 @@ write that Session's status (ADR-005 C-38, DESIGN-025 section 14).
 | `CleanAndPushed` rests on a fetch at rescue time (`rescue.go:186-200`), not DESIGN-044's authenticated receipt; a thin bundle needs origin's default branch to restore | D-51 and D-62 make the same test for every interactive archive |
 | `--strict-home` looks one level deep and misses `~/work/a/b` | a recorded limit |
 | the shelf jumps from 2.9.1 to the release | under `RollingUpdate` a bad pod stalls and the old one keeps serving |
-| removing a Session removes `taskOutcome`, usage observations and `agent-run show` | Tom's premise: the record is in Git and OpenProject; DESIGN-059's allowance reports do not read these |
+| removing a Session removes `taskOutcome`, usage observations and `agent-run show`, and no other store holds them (ADR-020 C-54) | before H5 the coordinator saves a usage summary of the Sessions to be cleaned on OpenProject #518 (section 8); follow-up F7 keeps totals that survive clean-up; what a story needs longer goes on its tracker item |
 | the task log copy is removed (`drop-log`), reading "nothing else is kept" (ADR-020 point 4) to include it | the 30-day prune is the fallback if the removal fails |
 | coordination records still follow ADR-004: 30 days after the Session is gone | not HOME data; a later story if Tom wants |
 
