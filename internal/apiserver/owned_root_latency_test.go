@@ -39,7 +39,8 @@ import (
 // then running the live probe can refuse while the proof context is still
 // open: the error is a probeRefusal, the category stays transport, and the
 // roundtrip never reaches a one-second floor. The success path checks that
-// the prober context is live and has a deadline, then returns the ready exit.
+// the prober context is live and that its deadline is the one-second budget,
+// then returns the ready exit.
 // Startup still uses the real probe, which waitReady retries. The deadline
 // case still waits until that same prober context ends.
 const latencyProofBudget = time.Second
@@ -81,8 +82,12 @@ func (e latencyOwnedExec) Run(ctx context.Context, ns, pod, container string, ar
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, ok := ctx.Deadline(); !ok {
-		return errors.New("proof context has no deadline")
+	// The prober's own timeout is one second. A missing deadline, a deadline
+	// already behind, or a longer caller deadline means this is not that budget.
+	dl, ok := ctx.Deadline()
+	remaining := time.Until(dl)
+	if !ok || remaining <= 0 || remaining > latencyProofBudget {
+		return errors.New("proof context deadline is not the one-second budget")
 	}
 	if e.deadlines != nil {
 		e.deadlines.Add(1)
