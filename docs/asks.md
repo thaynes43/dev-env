@@ -65,18 +65,25 @@ stored route still withdraws: cleanup computes the Ask name the same way a
 decision does, and the identity and UID checks run before any write. A failed
 withdraw is retried later. The first wait is one second and each later
 failure doubles it, up to five minutes. A read that fails and is not NotFound
-keeps that backoff and leaves the Ask untouched on that pass. Retention
-deletes the grant at its time even when the card could not be read. Every
-attempt checks the expected Ask UID and the full grant identity, including
-the label write after the withdrawal is stored. That patch tests the Ask UID
+keeps that backoff and leaves the Ask untouched on that pass. A Delete
+that conflicts leaves that wait in place, so a repeated conflict does not
+start again at one second. The wait is cleared when the Delete succeeds or
+returns NotFound. Retention deletes the grant at its time even when the
+card could not be read. Every attempt checks the expected Ask UID and the
+full grant identity, including the label write after the withdrawal is
+stored. That patch tests the Ask UID
 and resourceVersion. An answered Ask stays answered. A foreign Ask is left
 alone. The card for a session that has ended stays open for Dismiss, and an
 Ask event does not enqueue it. A create or update of an Ask that matches a
 terminal grant enqueues that grant for this cleanup. A failed lookup of the
-owning grant is retried. The grant is already terminal, so the enqueue
-cannot approve it. A pending grant the requester releases is stored
-Released first. The Ask is then withdrawn from that terminal path, with the
-same backoff as a deny.
+owning grant is retried only when that scheduled retry is due. An unrelated
+Ask event does not run it. One retry reads the grants once for every held
+Ask. At most 32 are held, oldest first. A newer Ask is not added when the
+set is full, and the next reconcile of its grant still finds it: that
+reconcile loads the Ask from the grant and does not use the held set. The
+grant is already terminal, so the enqueue cannot approve it. A pending grant
+the requester releases is stored Released first. The Ask is then withdrawn
+from that terminal path, with the same backoff as a deny.
 
 The store accepts a grant ask and applies the caps below. It records the
 requester, the open state and the ask type. It records `ask-origin=broker`
@@ -289,7 +296,7 @@ These are the Kubernetes verbs the broker's grant-Ask code uses. This repository
 | --- | --- | --- |
 | get | asks | `loadGrantAsk` reads the grant's Ask. `KubeStore.load` reads it again from `KubeStore.Create` and `KubeStore.Withdraw`. |
 | list | asks | `KubeStore.countAtMost`, from `KubeStore.checkRoom` during `Create`. `KubeStore.recountMatching` lists when an open count is already at its bound. |
-| watch | asks | `Broker.SetupWithManager` watches Asks and wakes grants through `enqueueGrantAsk`. A pending grant is woken for its answer. A terminal grant is woken so its Ask can be withdrawn. A failed owner list is retried. A session that has ended is not woken. |
+| watch | asks | `Broker.SetupWithManager` watches Asks and wakes grants through `enqueueGrantAsk`. A pending grant is woken for its answer. A terminal grant is woken so its Ask can be withdrawn. A failed owner list is retried only when that retry is due, with one grant list for the held Asks. At most 32 are held, oldest first. A newer Ask is dropped and found again when its grant is next reconciled. A session that has ended is not woken. |
 | create | asks | `KubeStore.Create`, called from `ensureGrantAsk`. The origin label is on this create. |
 | update | asks/status | `KubeStore.ensureOpen`, from `Create`, and `KubeStore.Withdraw`, from `withdrawBrokerDenial` and `withdrawOpenGrantAsk`. |
 | patch | asks | `KubeStore.setStateLabel`, from `syncLabel`, which `Withdraw` and `recountMatching` call. This patches the state label only. A grant withdrawal checks the Ask UID and the full identity on each read, and the patch tests that UID and the resourceVersion. |

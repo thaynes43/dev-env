@@ -190,11 +190,17 @@ type Broker struct {
 	// longer Pending.
 	grantAskCreateWait map[types.UID]struct{}
 	// grantAskCleanupWait is the next cleanup wait for one terminal grant.
-	// A missing entry starts at one second.
+	// A missing entry starts at one second. A conflicting Delete leaves
+	// the wait in place, so the next conflict does not start again at one
+	// second. The wait is cleared when that Delete succeeds or returns
+	// NotFound, and when Ask cleanup succeeds before the grant is due
+	// for deletion.
 	grantAskCleanupWait map[types.UID]time.Duration
-	// grantAskOwnerHeld are Asks whose owning-grant list failed. The next
-	// lookup tries them again. A restart drops them.
-	grantAskOwnerHeld map[string]client.Object
+	// grantAskOwnerHeld are Asks whose owning-grant list failed, oldest
+	// first, at most grantAskOwnerHeldMax. The scheduled retry tries them
+	// again with one grant list. A restart drops them. A newer Ask is not
+	// kept once the set is full. The grant's own reconcile still reads it.
+	grantAskOwnerHeld []heldGrantAsk
 	// grantAskOwnerBackoff is the next wait for that lookup. Zero starts
 	// at one second and the wait doubles up to five minutes.
 	grantAskOwnerBackoff time.Duration
@@ -622,9 +628,9 @@ func (b *Broker) retain(ctx context.Context, g *v1alpha1.AccessGrant, now metav1
 	}
 	deadline := ended.Add(Retention)
 	if !now.Time.Before(deadline) {
-		b.clearGrantAskCleanupBackoff(g.UID)
 		if err := b.Client.Delete(ctx, g, client.Preconditions{UID: &g.UID}); err != nil {
 			if apierrors.IsNotFound(err) {
+				b.clearGrantAskCleanupBackoff(g.UID)
 				return ctrl.Result{}, nil
 			}
 			if apierrors.IsConflict(err) {
@@ -632,6 +638,7 @@ func (b *Broker) retain(ctx context.Context, g *v1alpha1.AccessGrant, now metav1
 			}
 			return ctrl.Result{}, fmt.Errorf("delete the grant after its retention: %w", err)
 		}
+		b.clearGrantAskCleanupBackoff(g.UID)
 		log.FromContext(ctx).Info("deleted the grant after 90 days", grantFields(g)...)
 		return ctrl.Result{}, nil
 	}
@@ -643,8 +650,10 @@ func (b *Broker) retain(ctx context.Context, g *v1alpha1.AccessGrant, now metav1
 }
 
 // grantAskCleanupRetry is the wait after a terminal grant's Ask cleanup
-// failed. The first wait is one second. Each later failure doubles it, up
-// to five minutes. The wait never runs past Retention.
+// failed, or after Delete of the retained grant conflicted. The first
+// wait is one second. Each later failure doubles it, up to five minutes.
+// The wait never runs past Retention. A conflicting Delete does not clear
+// the wait first, so the next conflict does not start again at one second.
 func (b *Broker) grantAskCleanupRetry(g *v1alpha1.AccessGrant, now metav1.Time) ctrl.Result {
 	wait := b.nextGrantAskCleanupBackoff(g.UID)
 	ended := g.CreationTimestamp.Time

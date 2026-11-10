@@ -961,6 +961,124 @@ func (s *swapAskAfterDeny) Get(ctx context.Context, key client.ObjectKey, obj cl
 	return nil
 }
 
+func TestGrantAskInfoEventDoesNotDrainHeldOwners(t *testing.T) {
+	f := newGrantAskFixture(t, true)
+	reader := &countingGrantList{Client: f.meta, fail: true}
+	f.b.APIReader = reader
+	q := &captureQueue{}
+	const extra = 3
+	n := grantAskOwnerHeldMax + extra
+	for i := range n {
+		ask := &coord.Ask{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("ask-held-%02d", i),
+				Namespace: asks.Namespace,
+				Labels:    map[string]string{asks.OriginLabel: grantAskOriginBroker},
+			},
+			Spec: coord.AskSpec{Grant: &coord.AskGrant{UID: fmt.Sprintf("uid-%02d", i)}},
+		}
+		f.b.deliverGrantAsk(f.ctx, ask, q)
+	}
+	if got := len(f.b.grantAskOwnerHeld); got != grantAskOwnerHeldMax {
+		t.Fatalf("held %d, want %d", got, grantAskOwnerHeldMax)
+	}
+	oldest := asks.Namespace + "/ask-held-00"
+	if f.b.grantAskOwnerHeld[0].key != oldest {
+		t.Fatalf("oldest %s", f.b.grantAskOwnerHeld[0].key)
+	}
+	dropped := asks.Namespace + "/" + fmt.Sprintf("ask-held-%02d", n-1)
+	for _, h := range f.b.grantAskOwnerHeld {
+		if h.key == dropped {
+			t.Fatal("newest was held")
+		}
+	}
+	if reader.lists != n {
+		t.Fatalf("setup lists %d, want %d", reader.lists, n)
+	}
+	listed := reader.lists
+	added := len(q.added)
+	scheduled := len(q.after)
+	info := &coord.Ask{
+		ObjectMeta: metav1.ObjectMeta{Name: "ask-info", Namespace: asks.Namespace},
+		Spec:       coord.AskSpec{Type: string(apiv1.AskTypeInfo), Question: "status"},
+	}
+	f.b.deliverGrantAsk(f.ctx, info, q)
+	if reader.lists != listed || len(q.added) != added || len(q.after) != scheduled || len(f.b.grantAskOwnerHeld) != grantAskOwnerHeldMax {
+		t.Fatalf("info event before the retry: lists %d added %d scheduled %d held %d", reader.lists, len(q.added), len(q.after), len(f.b.grantAskOwnerHeld))
+	}
+	res, err := f.b.Reconcile(f.ctx, reconcile.Request{NamespacedName: types.NamespacedName{
+		Namespace: f.b.SessionNamespace, Name: grantAskOwnerRetryName,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reader.lists != listed+1 {
+		t.Fatalf("due retry listed %d times, want 1", reader.lists-listed)
+	}
+	if len(f.b.grantAskOwnerHeld) != grantAskOwnerHeldMax || f.b.grantAskOwnerHeld[0].key != oldest {
+		t.Fatalf("after the due retry held %d oldest %s", len(f.b.grantAskOwnerHeld), f.b.grantAskOwnerHeld[0].key)
+	}
+	for _, h := range f.b.grantAskOwnerHeld {
+		if h.key == dropped {
+			t.Fatal("newest was held after the due retry")
+		}
+	}
+	if res.RequeueAfter == 0 || len(q.added) != added {
+		t.Fatalf("due retry requeue %s added %d", res.RequeueAfter, len(q.added))
+	}
+}
+
+type countingGrantList struct {
+	client.Client
+	fail  bool
+	lists int
+}
+
+func (c *countingGrantList) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*v1alpha1.AccessGrantList); ok {
+		c.lists++
+		if c.fail {
+			return apierrors.NewServiceUnavailable("grants were not listed")
+		}
+	}
+	return c.Client.List(ctx, list, opts...)
+}
+
+func TestGrantAskDeleteConflictKeepsCleanupBackoff(t *testing.T) {
+	f := newGrantAskFixture(t, true)
+	f.openAsk()
+	g := f.grant()
+	ended := f.b.now()
+	g.Status.Phase = v1alpha1.GrantDenied
+	g.Status.DeniedBy = DeniedByBroker
+	g.Status.Message = "the scope no longer matches"
+	g.Status.EndedAt = &ended
+	if err := f.base.Status().Update(f.ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	f.clk.Step(Retention)
+	f.b.Client = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*v1alpha1.AccessGrant); ok {
+				return apierrors.NewConflict(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "accessgrants"}, obj.GetName(), errors.New("uid precondition"))
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	f.b.APIReader = f.meta
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+	for i, wait := range want {
+		res, err := f.reconcile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := f.grant()
+		if res.RequeueAfter != wait || !got.DeletionTimestamp.IsZero() || got.Status.Phase != v1alpha1.GrantDenied || got.Status.ApprovedBy != "" {
+			t.Fatalf("conflict %d requeue %s want %s deleted %v phase %s approvedBy %q", i, res.RequeueAfter, wait, !got.DeletionTimestamp.IsZero(), got.Status.Phase, got.Status.ApprovedBy)
+		}
+	}
+}
+
 func TestGrantAskCleanupBackoffDoesNotBlockRetention(t *testing.T) {
 	f := newGrantAskFixture(t, true)
 	f.openAsk()

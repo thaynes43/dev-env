@@ -1259,7 +1259,7 @@ type grantAskWorkQueue interface {
 // its answer can be applied. A terminal grant is woken so its Ask can be
 // withdrawn. The grant is already terminal, so that wake cannot approve it.
 // A session that has ended is left alone. A failed owner list is remembered
-// and retried; it does not enqueue a guess.
+// and retried when the scheduled retry is due; it does not enqueue a guess.
 func (b *Broker) enqueueGrantAsk(ctx context.Context, o client.Object) []reconcile.Request {
 	reqs, failed := b.grantAskRequests(ctx, o)
 	if failed {
@@ -1269,8 +1269,10 @@ func (b *Broker) enqueueGrantAsk(ctx context.Context, o client.Object) []reconci
 	return reqs
 }
 
-// deliverGrantAsk is the Ask watch. A failed owner list schedules one retry.
-// The retry backs off from one second to five minutes.
+// deliverGrantAsk is the Ask watch. A failed owner list remembers the Ask
+// and schedules one retry. Held Asks are retried only when that retry is
+// due, not from a later Ask event. The wait backs off from one second to
+// five minutes.
 func (b *Broker) deliverGrantAsk(ctx context.Context, obj client.Object, q grantAskWorkQueue) {
 	if obj == nil || q == nil {
 		return
@@ -1281,11 +1283,6 @@ func (b *Broker) deliverGrantAsk(ctx context.Context, obj client.Object, q grant
 		b.holdGrantAskOwner(obj)
 		q.AddAfter(b.grantAskOwnerRetryRequest(), b.nextGrantAskOwnerBackoff())
 		return
-	}
-	extra, err := b.retryGrantAskOwners(ctx)
-	reqs = append(reqs, extra...)
-	if err != nil {
-		q.AddAfter(b.grantAskOwnerRetryRequest(), b.nextGrantAskOwnerBackoff())
 	}
 	seen := map[types.NamespacedName]bool{}
 	for _, req := range reqs {
@@ -1314,6 +1311,16 @@ func (b *Broker) grantAskRequests(ctx context.Context, o client.Object) ([]recon
 		log.FromContext(ctx).Error(err, "grant ask owner was not listed", "ask", ask.Name)
 		return nil, true
 	}
+	return requestsForListedGrantAsk(ask, &list), false
+}
+
+// requestsForListedGrantAsk matches one Ask against a grant list that has
+// already been read. It does not list.
+func requestsForListedGrantAsk(obj client.Object, list *v1alpha1.AccessGrantList) []reconcile.Request {
+	ask, ok := obj.(*coord.Ask)
+	if !ok || ask.Spec.Grant == nil || ask.Labels[asks.OriginLabel] != grantAskOriginBroker || list == nil {
+		return nil
+	}
 	var out []reconcile.Request
 	for i := range list.Items {
 		g := &list.Items[i]
@@ -1330,7 +1337,26 @@ func (b *Broker) grantAskRequests(ctx context.Context, o client.Object) ([]recon
 		}
 		out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(g)})
 	}
-	return out, false
+	return out
+}
+
+// grantAskOwnerHeldMax is how many Asks a failed owner list may remember.
+// The oldest stay. Once the set is full, a newer Ask is not added.
+//
+// A dropped Ask is still found by the next reconcile of its grant. The
+// held entry is only a wake after a failed list. Reconcile does not read
+// this set. The AccessGrant watch and the grant's own requeue already run
+// that reconcile: an open Ask is loaded again on the recheck, and a
+// terminal grant is loaded again on the cleanup backoff or at retention.
+// That pass reads the Ask by the route stored on the grant, or by the name
+// computed from the grant, and applies the answer or withdraws the Ask.
+// Dropping the wake leaves the grant and the Ask in place.
+const grantAskOwnerHeldMax = 32
+
+// heldGrantAsk is one Ask waiting for a later owner list, in arrival order.
+type heldGrantAsk struct {
+	key string
+	obj client.Object
 }
 
 func (b *Broker) holdGrantAskOwner(obj client.Object) {
@@ -1338,15 +1364,24 @@ func (b *Broker) holdGrantAskOwner(obj client.Object) {
 	if !ok || ask.Name == "" {
 		return
 	}
+	key := ask.Namespace + "/" + ask.Name
+	saved := ask.DeepCopy()
 	b.grantAskMu.Lock()
 	defer b.grantAskMu.Unlock()
-	if b.grantAskOwnerHeld == nil {
-		b.grantAskOwnerHeld = map[string]client.Object{}
+	for i := range b.grantAskOwnerHeld {
+		if b.grantAskOwnerHeld[i].key == key {
+			b.grantAskOwnerHeld[i].obj = saved
+			return
+		}
 	}
-	b.grantAskOwnerHeld[ask.Namespace+"/"+ask.Name] = ask.DeepCopy()
+	if len(b.grantAskOwnerHeld) >= grantAskOwnerHeldMax {
+		return
+	}
+	b.grantAskOwnerHeld = append(b.grantAskOwnerHeld, heldGrantAsk{key: key, obj: saved})
 }
 
-// retryGrantAskOwners lists the owner of each Ask whose previous list failed.
+// retryGrantAskOwners reads the grants once and matches every Ask whose
+// previous list failed. It does not list once per Ask.
 func (b *Broker) retryGrantAskOwners(ctx context.Context) ([]reconcile.Request, error) {
 	b.grantAskMu.Lock()
 	held := b.grantAskOwnerHeld
@@ -1355,35 +1390,60 @@ func (b *Broker) retryGrantAskOwners(ctx context.Context) ([]reconcile.Request, 
 	if len(held) == 0 {
 		return nil, nil
 	}
+	if b.APIReader == nil {
+		log.FromContext(ctx).Error(errGrantAskOwnerLookup, "grant ask owners were not listed", "held", len(held))
+		b.restoreGrantAskOwners(held)
+		return nil, errGrantAskOwnerLookup
+	}
+	var list v1alpha1.AccessGrantList
+	if err := b.APIReader.List(ctx, &list, client.InNamespace(b.SessionNamespace)); err != nil {
+		log.FromContext(ctx).Error(err, "grant ask owners were not listed", "held", len(held))
+		b.restoreGrantAskOwners(held)
+		return nil, errGrantAskOwnerLookup
+	}
 	var out []reconcile.Request
-	failed := false
-	again := map[string]client.Object{}
-	for key, obj := range held {
-		reqs, listFailed := b.grantAskRequests(ctx, obj)
-		if listFailed {
-			failed = true
-			again[key] = obj
-			continue
-		}
-		out = append(out, reqs...)
-	}
-	if len(again) > 0 {
-		b.grantAskMu.Lock()
-		if b.grantAskOwnerHeld == nil {
-			b.grantAskOwnerHeld = again
-		} else {
-			for key, obj := range again {
-				if _, ok := b.grantAskOwnerHeld[key]; !ok {
-					b.grantAskOwnerHeld[key] = obj
-				}
-			}
-		}
-		b.grantAskMu.Unlock()
-	}
-	if failed {
-		return out, errGrantAskOwnerLookup
+	for _, h := range held {
+		out = append(out, requestsForListedGrantAsk(h.obj, &list)...)
 	}
 	return out, nil
+}
+
+// restoreGrantAskOwners puts a failed retry's Asks back. The snapshot is
+// older than anything held while the list ran, so it stays and a newer
+// Ask that does not fit is dropped. See grantAskOwnerHeldMax.
+func (b *Broker) restoreGrantAskOwners(older []heldGrantAsk) {
+	b.grantAskMu.Lock()
+	defer b.grantAskMu.Unlock()
+	arrived := b.grantAskOwnerHeld
+	merged := make([]heldGrantAsk, 0, grantAskOwnerHeldMax)
+	seen := map[string]struct{}{}
+	for _, h := range older {
+		if len(merged) >= grantAskOwnerHeldMax {
+			break
+		}
+		if obj, ok := heldGrantAskObject(arrived, h.key); ok {
+			h.obj = obj
+		}
+		seen[h.key] = struct{}{}
+		merged = append(merged, h)
+	}
+	for _, h := range arrived {
+		if _, ok := seen[h.key]; ok || len(merged) >= grantAskOwnerHeldMax {
+			continue
+		}
+		seen[h.key] = struct{}{}
+		merged = append(merged, h)
+	}
+	b.grantAskOwnerHeld = merged
+}
+
+func heldGrantAskObject(held []heldGrantAsk, key string) (client.Object, bool) {
+	for _, h := range held {
+		if h.key == key {
+			return h.obj, true
+		}
+	}
+	return nil, false
 }
 
 func (b *Broker) reconcileGrantAskOwnerRetry(ctx context.Context) (reconcile.Result, error) {

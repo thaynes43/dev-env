@@ -115,10 +115,13 @@ check. The deny is written first and stands whatever the withdraw does. A
 failed withdraw is retried on a later reconcile of the denied grant until
 the Ask is closed or gone. The first retry waits one second and each later
 failure doubles that wait, up to five minutes. It is not a fixed one-second
-loop. Retention deletes the grant when its time comes even if the card
-could not be read. A read failure that is not NotFound leaves the Ask
-untouched on that pass. The expected Ask UID and the full grant identity
-travel into the withdraw and are checked on every attempt, including each
+loop. A Delete that conflicts leaves that wait in place. The wait is
+cleared when the Delete succeeds or returns NotFound, so a repeated
+conflict does not start again at one second. Retention deletes the grant
+when its time comes even if the card could not be read. A read failure that
+is not NotFound leaves the Ask untouched on that pass. The expected Ask
+UID and the full grant identity travel into the withdraw and are checked
+on every attempt, including each
 conflict retry and the label write after the withdrawal is stored. That
 label patch tests the Ask UID and resourceVersion before it writes. A
 foreign Ask is left alone. An Ask that is not open is left as stored: the
@@ -126,14 +129,19 @@ Ask CRD does not let an answered Ask become withdrawn. When the stored
 route is empty, cleanup computes the Ask name the same way a decision
 does, and those identity and UID checks still run before any write. An Ask
 create or update whose Ask matches a terminal grant enqueues that grant for
-this cleanup. A failed lookup of the owning grant is retried. The grant is
-already terminal, so the enqueue cannot approve it. This amends ADR-021's
-sentence "The Ask stays open" for a broker denial of a routed grant whose
-session is still there. It does not amend section 5. When the session has
-ended, the card stays open for Dismiss and the Ask event does not enqueue
-it. A pending grant the requester releases is stored Released first. The
-Ask is then withdrawn from that terminal path, with the same backoff as a
-deny.
+this cleanup. A failed lookup of the owning grant is remembered and retried
+only when that scheduled retry is due. An unrelated Ask event does not run
+it. One retry reads the grants once for every Ask it still holds. The held
+set keeps at most 32 Asks, oldest first. A newer Ask is not added when the
+set is full. That Ask is still found when its grant is next reconciled: the
+grant reconcile loads the Ask from the grant and does not use the held set.
+The grant is already terminal, so the enqueue cannot approve it. This
+amends ADR-021's sentence "The Ask stays open" for a broker denial of a
+routed grant whose session is still there. It does not amend section 5.
+When the session has ended, the card stays open for Dismiss and the Ask
+event does not enqueue it. A pending grant the requester releases is stored
+Released first. The Ask is then withdrawn from that terminal path, with the
+same backoff as a deny.
 
 This amends ADR-021's build plan. `make generate` commits the deepcopy and
 the CRD. The flag has never been set; docs/asks.md states that no grant Ask
@@ -149,4 +157,4 @@ from an earlier build exists.
 | C-64 | Neutral: `status.askUnreadAt` is the start of the unread episode, set once per episode. A restart and a failed deny keep it. The two-minute limit stays one constant. A live read that does not show the instant denies the grant at once. |
 | C-65 | Neutral: one live GrantPolicy list serves the approval match and the decision that an attested policy could match. A failed list opens no Ask. |
 | C-66 | Bad: if a live read after the route write does not show the route, no Ask is created and the grant is denied at once by the broker. A storage failure on the Ask path is an immediate deny, because a wait is a state and a state needs its own fence. The AccessGrant CRD that stores `status.ask` and `status.askUnreadAt` is installed before the flag is set, and is not rolled back while a routed grant exists. |
-| C-67 | Neutral: a broker denial of a routed grant whose session is still there withdraws the broker's own open Ask after the deny is stored. An empty stored route uses the computed Ask name, with the same identity and UID checks before any write. A pending release is stored Released first and retries the withdraw the same way. A read failure that is not NotFound backs off from one second to five minutes and does not touch the Ask. Retention is not held up when the card cannot be read. A matching Ask create or update enqueues a terminal grant for that cleanup, and a failed owner lookup is retried. Every attempt checks the Ask UID and the full grant identity, including the label patch and its UID and resourceVersion preconditions. An answered Ask stays answered. The ended-session card stays open for Dismiss and is not enqueued. |
+| C-67 | Neutral: a broker denial of a routed grant whose session is still there withdraws the broker's own open Ask after the deny is stored. An empty stored route uses the computed Ask name, with the same identity and UID checks before any write. A pending release is stored Released first and retries the withdraw the same way. A read failure that is not NotFound backs off from one second to five minutes and does not touch the Ask. A conflicting Delete leaves that wait in place. The wait is cleared when the Delete succeeds or returns NotFound, so a repeated conflict does not start again at one second. Retention is not held up when the card cannot be read. A matching Ask create or update enqueues a terminal grant for that cleanup. A failed owner lookup is retried only when its scheduled retry is due, with one grant list for the held Asks. At most 32 are held, oldest first. A newer Ask is dropped and found again when its grant is next reconciled. Every attempt checks the Ask UID and the full grant identity, including the label patch and its UID and resourceVersion preconditions. An answered Ask stays answered. The ended-session card stays open for Dismiss and is not enqueued. |
