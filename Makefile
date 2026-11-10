@@ -14,12 +14,16 @@ GO ?= go
 GO_PARALLELISM ?= 2
 NICE ?= nice -n 19
 
-# Per-package go test timeout (go's default is 10m). Measured 2026-11-10 in a
-# session pod (2 CPUs, nice -n 19): internal/agentd, the slowest package, takes
-# about 4 minutes (234s, 884 tests) with GOTMPDIR on /tmp. 30m leaves 7x margin
-# and equals ci.yml's Test job timeout, so a hung test fails the package before
-# the job is cancelled.
-GO_TEST_TIMEOUT ?= 30m
+# Per-package go test timeout (go's default is 10m). ci.yml caps the whole Test
+# job at 30 minutes, including checkout, setup and compile, and the whole make
+# test takes about 20 minutes there, so a package timeout of 30m could never fire
+# before the job is cancelled. 15m is above go's 10m default, leaves about four
+# times the 234s measured for internal/agentd (2026-11-10, session pod, 2 CPUs,
+# nice -n 19, scratch on /tmp), and lets a hung test end with go's own timeout
+# and stack dump while the job is still alive. When the guard below keeps the
+# HOME GOTMPDIR, internal/agentd still exceeds any reasonable timeout (over 45m
+# measured), which is why the guard prints a notice.
+GO_TEST_TIMEOUT ?= 15m
 
 # Where go test puts its work directory and t.TempDir files. A session pod sets
 # GOTMPDIR under HOME, a network volume where fsync-heavy tests ran 70 to 100
@@ -32,12 +36,15 @@ GO_TEST_TIMEOUT ?= 30m
 # no quota, so the redirect has a budget guard: if GO_TEST_TMP_ROOT already holds
 # more than GO_TEST_TMP_MAX_KB (default 4 GiB, half the cap, the rest is
 # reserve), or du cannot measure it, the caller's GOTMPDIR is kept and one line
-# says so. Observed peaks: internal/agentd alone about 55 MB (OP690); one full
-# make test stayed under 300 MiB (one observation, PR 1054).
+# says so. du's total counts even if du exits non-zero (an unreadable or vanished
+# entry); only a missing or non-numeric total is "cannot measure".
+# Observed peaks: internal/agentd alone about 55 MB (OP690); one full make test
+# stayed under 300 MiB (one observation, PR 1054).
 GO_TEST_TMP_ROOT ?= /tmp
 GO_TEST_TMP_MAX_KB ?= 4194304
 GO_TEST_TMP_SETUP = tmp=; if [ -n '$(GO_TEST_TMP_ROOT)' ]; then \
-	used="$$(du -sxk '$(GO_TEST_TMP_ROOT)' 2>/dev/null | cut -f1)" || used=; \
+	used="$$({ du -sxk '$(GO_TEST_TMP_ROOT)' 2>/dev/null || true; } | tail -n 1 | cut -f1)"; \
+	case "$$used" in ""|*[!0-9]*) used=;; esac; \
 	if [ -z "$$used" ]; then \
 		echo "make: cannot measure $(GO_TEST_TMP_ROOT); keeping GOTMPDIR" >&2; \
 	elif [ "$$used" -gt '$(GO_TEST_TMP_MAX_KB)' ]; then \
