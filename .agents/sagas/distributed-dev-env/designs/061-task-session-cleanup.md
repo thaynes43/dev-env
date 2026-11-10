@@ -438,6 +438,8 @@ is off, and nothing is installed. Details the sections above leave open:
   Every inactive record needs queue admission again before resuming,
   including after a refusal clears or an owner hold is lifted. Rescuing
   retries get a new hold intent; later phases keep their verified bundle.
+  Adopting a late-created hold only records its UID and preserves a cleanup
+  refusal, including while cleanup is off; adoption cannot re-admit work.
   Refusals wait a day for `rescue_refused`, an hour for `attempt_stuck` or a
   shelf/bundle failure at Rescuing, and 15 minutes otherwise. The cache and
   per-leader reservations bound ordinary admission; section 4 states the

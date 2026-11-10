@@ -110,6 +110,40 @@ func TestTaskCleanupUnobservedOwnerHoldDoesNotFreeSlot(t *testing.T) {
 	f.kept(t)
 }
 
+func TestTaskCleanupLateHoldAdoptionCannotReadmitRefusal(t *testing.T) {
+	for _, state := range []string{"enabled", "disabled"} {
+		for _, reason := range []string{expiryOwnerHold, expiryAttemptStuck, expiryRescueRefused} {
+			t.Run(state+"/"+reason, func(t *testing.T) {
+				f := newTaskFixture(t, nil)
+				f.run(t, 5) // hold exists but its UID is not yet adopted
+				if f.named(t) == nil || f.expiry(t).HoldPodUID != "" {
+					t.Fatal("setup did not leave a hold awaiting adoption")
+				}
+				// An earlier Create may complete after an ambiguous response and
+				// a refusal write. Its intent still matches, but adoption is not
+				// permission to resume the inactive attempt.
+				f.updateStatus(t, func(st *v1alpha1.AgentSessionStatus) {
+					at := recordTime(*f.clock)
+					st.PrivateHistory.Expiry.Refusal, st.PrivateHistory.Expiry.RefusalAt = reason, &at
+				})
+				f.r = f.fresh()
+				f.r.TaskCleanupMaxActive = 0
+				f.r.TaskSessionCleanup = state == "enabled"
+				f.run(t, 1)
+				if e := f.expiry(t); e.Refusal != reason || e.HoldPodUID == "" || taskActive(f.session(t)) {
+					t.Fatalf("adoption bypassed readmission: %+v", e)
+				}
+				f.r.TaskSessionCleanup = true
+				f.run(t, 2)
+				if f.named(t) != nil || len(f.rescuer.ranIn()) != 0 {
+					t.Fatal("refused late hold was kept or rescued")
+				}
+				f.kept(t)
+			})
+		}
+	}
+}
+
 func TestTaskCleanupEveryNodeMustProveRelease(t *testing.T) {
 	for _, phase := range []string{v1alpha1.HomeExpiryRescuing, v1alpha1.HomeExpiryDeleting} {
 		for _, problem := range []string{"mounted", "replaced", "not ready", "stale lease"} {

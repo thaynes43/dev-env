@@ -1073,7 +1073,13 @@ func (r *Reconciler) adoptExpiryHold(ctx context.Context, v *expiryView) (ctrl.R
 	fresh := v.s.DeepCopy()
 	next := fresh.Status.PrivateHistory.Expiry
 	next.HoldPodUID = string(v.pod.UID)
-	clearStepRefusal(next)
+	// Adoption only identifies a late-created hold; it cannot re-admit a
+	// refused cleanup. The durable intent also identifies that case while
+	// cleanup is off, without changing which policy owns the record.
+	_, cleanupIntent := taskIntentStarted(next.HoldIntent)
+	if !r.taskPolicy(v.s) && !(cleanupIntent && taskCleanupScope(v.s)) {
+		clearStepRefusal(next)
+	}
 	if err := r.writeExpiry(ctx, v, fresh); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
