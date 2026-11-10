@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -81,6 +82,165 @@ func TestGrantAskUnconfirmedCreateIsNotRetried(t *testing.T) {
 	if stub.calls != 1 || f.askCount() != 0 || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Message != grantAskMsgGone || g.Status.ApprovedBy != "" {
 		t.Fatalf("after the stored no was deleted: calls=%d asks=%d phase=%s deniedBy=%s message=%q", stub.calls, f.askCount(), g.Status.Phase, g.Status.DeniedBy, g.Status.Message)
 	}
+	t.Run("commit after the denial is withdrawn", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		stub := &grantAskStub{err: &asks.LimitError{Scope: asks.LimitOpenGrant}}
+		f.b.grantAsks = stub
+		f.until(func(g *v1alpha1.AccessGrant) bool {
+			return g.Status.Phase == v1alpha1.GrantPending && g.Status.Ask != "" && stub.calls >= 1
+		})
+		// The metadata client gives the committed Ask a UID. Withdraw refuses an
+		// object with an empty UID, and the fake client does not assign one.
+		late := &lateCommitAsk{base: f.meta}
+		f.b.grantAsks = late
+		res, err := f.reconcile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := f.grant()
+		if late.calls != 1 || f.askCount() != 0 || res.RequeueAfter != Retention || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Message != grantAskMsgGone || g.Status.ApprovedBy != "" {
+			t.Fatalf("before the commit: calls=%d asks=%d requeue=%s %+v", late.calls, f.askCount(), res.RequeueAfter, g.Status)
+		}
+		if err := late.commit(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		ask := f.onlyAsk()
+		if ask.Name != g.Status.Ask || ask.UID == "" || ask.Status.State != string(apiv1.AskStateOpen) || ask.Labels[asks.StateLabel] != string(apiv1.AskStateOpen) {
+			t.Fatalf("committed ask %s uid %q state %s label %s route %s", ask.Name, ask.UID, ask.Status.State, ask.Labels[asks.StateLabel], g.Status.Ask)
+		}
+		reqs := f.b.enqueueGrantAsk(f.ctx, ask)
+		if len(reqs) != 1 || reqs[0].Name != g.Name || reqs[0].Namespace != sessionNS {
+			t.Fatalf("enqueue %+v", reqs)
+		}
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		got := f.onlyAsk()
+		g = f.grant()
+		if got.Status.State != string(apiv1.AskStateWithdrawn) || got.Labels[asks.StateLabel] != string(apiv1.AskStateWithdrawn) || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.ApprovedBy != "" || g.Status.Message != grantAskMsgGone {
+			t.Fatalf("after the event: grant %+v ask %s label %s", g.Status, got.Status.State, got.Labels[asks.StateLabel])
+		}
+	})
+	t.Run("owner lookup failure is retried", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		f.openAsk()
+		pending := f.b.enqueueGrantAsk(f.ctx, f.onlyAsk())
+		if len(pending) != 1 || pending[0].Name != f.g.Name {
+			t.Fatalf("pending enqueue %+v", pending)
+		}
+		g := f.grant()
+		ended := f.b.now()
+		g.Status.Phase = v1alpha1.GrantDenied
+		g.Status.DeniedBy = DeniedByBroker
+		g.Status.Message = "the scope no longer matches"
+		g.Status.EndedAt = &ended
+		if err := f.base.Status().Update(f.ctx, g); err != nil {
+			t.Fatal(err)
+		}
+		ask := f.onlyAsk()
+		f.b.APIReader = &failGrantList{Client: f.meta, fail: true}
+		if reqs := f.b.enqueueGrantAsk(f.ctx, ask); len(reqs) != 0 {
+			t.Fatalf("failed lookup enqueued %+v", reqs)
+		}
+		f.b.APIReader = f.meta
+		reqs, err := f.b.retryGrantAskOwners(f.ctx)
+		if err != nil || len(reqs) != 1 || reqs[0].Name != f.g.Name {
+			t.Fatalf("retry %+v %v", reqs, err)
+		}
+		q := &captureQueue{}
+		f.b.APIReader = &failGrantList{Client: f.meta, fail: true}
+		f.b.deliverGrantAsk(f.ctx, ask, q)
+		if len(q.after) != 1 || q.after[0].d != time.Second || q.after[0].req.Name != grantAskOwnerRetryName || len(q.added) != 0 {
+			t.Fatalf("schedule added %+v after %+v", q.added, q.after)
+		}
+		f.b.APIReader = f.meta
+		res, err := f.b.Reconcile(f.ctx, q.after[0].req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.RequeueAfter != 0 || len(q.added) != 1 || q.added[0].Name != f.g.Name {
+			t.Fatalf("sentinel added %+v requeue %s", q.added, res.RequeueAfter)
+		}
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		if f.grant().Status.Phase != v1alpha1.GrantDenied || f.grant().Status.ApprovedBy != "" || f.onlyAsk().Status.State != string(apiv1.AskStateWithdrawn) {
+			t.Fatalf("cleanup %+v ask %s", f.grant().Status, f.onlyAsk().Status.State)
+		}
+	})
+	t.Run("session ended is not enqueued", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		f.openAsk()
+		f.meta.sessionDeleting = true
+		f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantDenied })
+		if f.grant().Status.Message != "the session ended" || f.onlyAsk().Status.State != string(apiv1.AskStateOpen) {
+			t.Fatalf("setup %+v ask %s", f.grant().Status, f.onlyAsk().Status.State)
+		}
+		if reqs := f.b.enqueueGrantAsk(f.ctx, f.onlyAsk()); len(reqs) != 0 {
+			t.Fatalf("session ended enqueued %+v", reqs)
+		}
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		if f.grant().Status.Message != "the session ended" || f.onlyAsk().Status.State != string(apiv1.AskStateOpen) || f.grant().Status.ApprovedBy != "" {
+			t.Fatalf("after the event %+v ask %s", f.grant().Status, f.onlyAsk().Status.State)
+		}
+	})
+}
+
+// lateCommitAsk reports that the create was not confirmed and stores nothing
+// until commit. The broker must not create again; the later object is what
+// an Ask event has to withdraw.
+type lateCommitAsk struct {
+	base  client.Client
+	calls int
+	req   asks.Requester
+	body  apiv1.AskCreateRequest
+	now   time.Time
+	saved bool
+}
+
+func (s *lateCommitAsk) Create(_ context.Context, req asks.Requester, in apiv1.AskCreateRequest, now time.Time) (apiv1.Ask, bool, error) {
+	s.calls++
+	s.req, s.body, s.now, s.saved = req, in, now, true
+	return apiv1.Ask{}, false, fmt.Errorf("%w: the create left the client", asks.ErrCreateUnconfirmed)
+}
+
+func (s *lateCommitAsk) commit(ctx context.Context) error {
+	if !s.saved {
+		return errors.New("nothing to commit")
+	}
+	store := asks.KubeStore{Client: s.base, Live: s.base, Namespace: asks.Namespace}
+	_, _, err := store.Create(ctx, s.req, s.body, s.now)
+	return err
+}
+
+type failGrantList struct {
+	client.Client
+	fail bool
+}
+
+func (f *failGrantList) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*v1alpha1.AccessGrantList); ok && f.fail {
+		return apierrors.NewServiceUnavailable("grants were not listed")
+	}
+	return f.Client.List(ctx, list, opts...)
+}
+
+type queuedAfter struct {
+	req reconcile.Request
+	d   time.Duration
+}
+
+type captureQueue struct {
+	added []reconcile.Request
+	after []queuedAfter
+}
+
+func (q *captureQueue) Add(req reconcile.Request) { q.added = append(q.added, req) }
+
+func (q *captureQueue) AddAfter(req reconcile.Request, d time.Duration) {
+	q.after = append(q.after, queuedAfter{req: req, d: d})
 }
 
 func TestGrantAskUnreadTimeSurvivesAFreshBroker(t *testing.T) {
@@ -240,6 +400,45 @@ func TestGrantAskPrunedRouteCreatesNoAsk(t *testing.T) {
 		g = f.grant()
 		if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.ApprovedBy != "" || g.Status.Message != grantAskMsgRouteNotStored {
 			t.Fatalf("after policy and delegate: %+v", g.Status)
+		}
+	})
+	t.Run("pruned route withdraws the owned ask", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		f.openAsk()
+		before := f.onlyAsk().UID
+		g := f.grant()
+		g.Status.Ask = ""
+		if err := f.base.Status().Update(f.ctx, g); err != nil {
+			t.Fatal(err)
+		}
+		f.b.Client = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if g, ok := obj.(*v1alpha1.AccessGrant); ok && g.Status.Ask != "" && g.Status.Phase != v1alpha1.GrantDenied {
+					clone := g.DeepCopy()
+					clone.Status.Ask = ""
+					return c.SubResource(sub).Update(ctx, clone, opts...)
+				}
+				return c.SubResource(sub).Update(ctx, obj, opts...)
+			},
+		})
+		reader := &failAskGetOnceDenied{Client: f.meta, grant: client.ObjectKey{Namespace: sessionNS, Name: f.g.Name}}
+		f.b.APIReader = reader
+		res, err := f.reconcile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		g = f.grant()
+		ask := f.onlyAsk()
+		if !reader.failed || res.RequeueAfter != time.Second || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Message != grantAskMsgRouteNotStored || g.Status.Ask != "" || g.Status.ApprovedBy != "" || ask.UID != before || ask.Status.State != string(apiv1.AskStateOpen) {
+			t.Fatalf("read failure: requeue %s failed %v grant %+v ask %s", res.RequeueAfter, reader.failed, g.Status, ask.Status.State)
+		}
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		g = f.grant()
+		ask = f.onlyAsk()
+		if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Message != grantAskMsgRouteNotStored || g.Status.ApprovedBy != "" || g.Status.Ask != "" || ask.UID != before || ask.Status.State != string(apiv1.AskStateWithdrawn) || ask.Labels[asks.StateLabel] != string(apiv1.AskStateWithdrawn) {
+			t.Fatalf("recovered: %+v ask %s label %s uid %s", g.Status, ask.Status.State, ask.Labels[asks.StateLabel], ask.UID)
 		}
 	})
 	t.Run("pruned unread time", func(t *testing.T) {
@@ -584,6 +783,18 @@ func TestGrantAskBrokerDenyAskState(t *testing.T) {
 			t.Fatalf("attempts %d grant %+v ask %s origin %q", attempts, g.Status, after.Status.State, after.Labels[asks.OriginLabel])
 		}
 	})
+	t.Run("replacement after the status write", func(t *testing.T) {
+		assertLabelFence(t, "replace-after")
+	})
+	t.Run("replacement between the label read and the patch", func(t *testing.T) {
+		assertLabelFence(t, "replace-between")
+	})
+	t.Run("origin change after the status write", func(t *testing.T) {
+		assertLabelFence(t, "origin-after")
+	})
+	t.Run("origin change between the label read and the patch", func(t *testing.T) {
+		assertLabelFence(t, "origin-between")
+	})
 	t.Run("unreadable ask stays open", func(t *testing.T) {
 		f := newGrantAskFixture(t, true)
 		f.openAsk()
@@ -695,7 +906,7 @@ func TestGrantAskFailedWithdrawRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.RequeueAfter != time.Second || failed != 1 || f.grant().Status.Phase != v1alpha1.GrantDenied || f.onlyAsk().Status.State != string(apiv1.AskStateOpen) {
+	if res.RequeueAfter != 2*time.Second || failed != 1 || f.grant().Status.Phase != v1alpha1.GrantDenied || f.onlyAsk().Status.State != string(apiv1.AskStateOpen) {
 		t.Fatalf("read failure on the retry: requeue %s failed %d %+v ask %s", res.RequeueAfter, failed, f.grant().Status, f.onlyAsk().Status.State)
 	}
 	f.meta.failAskGet = nil
@@ -747,6 +958,193 @@ func (s *swapAskAfterDeny) Get(ctx context.Context, key client.ObjectKey, obj cl
 	}
 	s.newUID = replacement.UID
 	snapshot.DeepCopyInto(ask)
+	return nil
+}
+
+func TestGrantAskCleanupBackoffDoesNotBlockRetention(t *testing.T) {
+	f := newGrantAskFixture(t, true)
+	f.openAsk()
+	g := f.grant()
+	ended := f.b.now()
+	g.Status.Phase = v1alpha1.GrantDenied
+	g.Status.DeniedBy = DeniedByBroker
+	g.Status.Message = "the scope no longer matches"
+	g.Status.EndedAt = &ended
+	if err := f.base.Status().Update(f.ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	f.meta.failAskGet = apierrors.NewServiceUnavailable("ask was not read")
+	want := []time.Duration{
+		time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
+		16 * time.Second, 32 * time.Second, 64 * time.Second, 128 * time.Second,
+		256 * time.Second, 5 * time.Minute, 5 * time.Minute,
+	}
+	for i, wait := range want {
+		res, err := f.reconcile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := f.grant()
+		if res.RequeueAfter != wait || got.Status.Phase != v1alpha1.GrantDenied || !got.DeletionTimestamp.IsZero() || f.onlyAsk().Status.State != string(apiv1.AskStateOpen) {
+			t.Fatalf("step %d requeue %s want %s phase %s deleted %v ask %s", i, res.RequeueAfter, wait, got.Status.Phase, got.DeletionTimestamp, f.onlyAsk().Status.State)
+		}
+	}
+	f.clk.Step(Retention)
+	res, err := f.reconcile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fake client keeps an object that still has its revoke finalizer and
+	// records the delete as a deletion timestamp. That timestamp is the
+	// retention delete; the unreadable card is left open.
+	got := f.grant()
+	ask := f.onlyAsk()
+	if res.RequeueAfter != 0 || got.DeletionTimestamp.IsZero() || got.Status.Phase != v1alpha1.GrantDenied || got.Status.DeniedBy != DeniedByBroker || got.Status.ApprovedBy != "" || ask.Status.State != string(apiv1.AskStateOpen) || ask.Labels[asks.StateLabel] == string(apiv1.AskStateWithdrawn) {
+		t.Fatalf("retention requeue %s deleted %v grant %+v ask %s label %s", res.RequeueAfter, got.DeletionTimestamp, got.Status, ask.Status.State, ask.Labels[asks.StateLabel])
+	}
+}
+
+type failAskGetOnceDenied struct {
+	client.Client
+	grant  client.ObjectKey
+	failed bool
+}
+
+func (f *failAskGetOnceDenied) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*coord.Ask); ok && !f.failed {
+		var g v1alpha1.AccessGrant
+		if err := f.Client.Get(ctx, f.grant, &g); err == nil && g.Status.Phase == v1alpha1.GrantDenied {
+			f.failed = true
+			return apierrors.NewServiceUnavailable("ask was not read")
+		}
+	}
+	return f.Client.Get(ctx, key, obj, opts...)
+}
+
+func assertLabelFence(t *testing.T, mode string) {
+	t.Helper()
+	f := newGrantAskFixture(t, true)
+	f.openAsk()
+	ask := f.onlyAsk()
+	before := ask.UID
+	ask.Spec.Grant.TTL = "2h0m0s"
+	if err := f.base.Update(f.ctx, ask); err != nil {
+		t.Fatal(err)
+	}
+	gate := &labelFence{base: f.base, mode: mode}
+	wrapped := interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if err := c.Get(ctx, key, obj, opts...); err != nil {
+				return err
+			}
+			return gate.afterGet(ctx, obj)
+		},
+		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			if err := c.SubResource(sub).Update(ctx, obj, opts...); err != nil {
+				return err
+			}
+			return gate.afterStatus(ctx, obj)
+		},
+	})
+	f.b.Client = wrapped
+	f.b.APIReader = wrapped
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if !gate.moved {
+		t.Fatal("the label window was not reached")
+	}
+	got := f.onlyAsk()
+	g := f.grant()
+	if g.Status.Phase != v1alpha1.GrantDenied || g.Status.Message != "the scope no longer matches" || g.Status.ApprovedBy != "" {
+		t.Fatalf("grant %+v", g.Status)
+	}
+	if got.Labels[asks.StateLabel] == string(apiv1.AskStateWithdrawn) {
+		t.Fatalf("withdrew the label of %s: %v", mode, got.Labels)
+	}
+	switch mode {
+	case "replace-after", "replace-between":
+		if got.UID == before || got.UID != gate.newUID || got.Status.State != string(apiv1.AskStateOpen) {
+			t.Fatalf("%s uid %s -> %s planted %s state %s", mode, before, got.UID, gate.newUID, got.Status.State)
+		}
+	case "origin-after", "origin-between":
+		if got.UID != before || got.Labels[asks.OriginLabel] != "replaced" || got.Status.State != string(apiv1.AskStateWithdrawn) {
+			t.Fatalf("%s uid %s origin %q state %s", mode, got.UID, got.Labels[asks.OriginLabel], got.Status.State)
+		}
+	default:
+		t.Fatalf("unknown mode %s", mode)
+	}
+}
+
+// labelFence moves the Ask after its withdrawal status is stored, or between
+// the label read and the label patch. The patch must not mark the result withdrawn.
+type labelFence struct {
+	base   client.Client
+	mode   string
+	moved  bool
+	newUID types.UID
+}
+
+func (g *labelFence) afterStatus(ctx context.Context, obj client.Object) error {
+	ask, ok := obj.(*coord.Ask)
+	if !ok || ask.Status.State != string(apiv1.AskStateWithdrawn) || g.moved {
+		return nil
+	}
+	if g.mode != "replace-after" && g.mode != "origin-after" {
+		return nil
+	}
+	return g.move(ctx, ask)
+}
+
+func (g *labelFence) afterGet(ctx context.Context, obj client.Object) error {
+	ask, ok := obj.(*coord.Ask)
+	if !ok || ask.Status.State != string(apiv1.AskStateWithdrawn) || g.moved {
+		return nil
+	}
+	if g.mode != "replace-between" && g.mode != "origin-between" {
+		return nil
+	}
+	snapshot := ask.DeepCopy()
+	if err := g.move(ctx, snapshot); err != nil {
+		return err
+	}
+	snapshot.DeepCopyInto(ask)
+	return nil
+}
+
+func (g *labelFence) move(ctx context.Context, old *coord.Ask) error {
+	g.moved = true
+	if g.mode == "origin-after" || g.mode == "origin-between" {
+		var stored coord.Ask
+		if err := g.base.Get(ctx, client.ObjectKeyFromObject(old), &stored); err != nil {
+			return err
+		}
+		if stored.Labels == nil {
+			stored.Labels = map[string]string{}
+		}
+		stored.Labels[asks.OriginLabel] = "replaced"
+		return g.base.Update(ctx, &stored)
+	}
+	if err := g.base.Delete(ctx, old); err != nil {
+		return err
+	}
+	next := old.DeepCopy()
+	next.ResourceVersion = ""
+	next.UID = old.UID + "-replaced"
+	next.Status = coord.AskStatus{}
+	if next.Labels == nil {
+		next.Labels = map[string]string{}
+	}
+	next.Labels[asks.StateLabel] = string(apiv1.AskStateOpen)
+	next.Labels[asks.OriginLabel] = grantAskOriginBroker
+	if err := g.base.Create(ctx, next); err != nil {
+		return err
+	}
+	next.Status.State = string(apiv1.AskStateOpen)
+	if err := g.base.Status().Update(ctx, next); err != nil {
+		return err
+	}
+	g.newUID = next.UID
 	return nil
 }
 

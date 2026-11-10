@@ -541,8 +541,11 @@ func (b *Broker) createGrantedAsk(ctx context.Context, g *v1alpha1.AccessGrant, 
 	// including the first attempt. The store checks the same deadline again
 	// after its own count list, immediately before it sends the create.
 	deadline := g.CreationTimestamp.Add(PendingTimeout)
+	// Leave the outstanding marker set. The caller clears it only after the
+	// timeout denial is visible, or a fresh read shows the grant is no
+	// longer Pending. Clearing it before that write lets a later read error
+	// open a new unread episode.
 	if !b.now().Time.Before(deadline) {
-		b.clearGrantAskCreateOutstanding(g.UID)
 		return errGrantAskDeadline
 	}
 	req := asks.Requester{
@@ -555,7 +558,6 @@ func (b *Broker) createGrantedAsk(ctx context.Context, g *v1alpha1.AccessGrant, 
 		// The store's count list can cross the deadline after the check
 		// above. That refusal is before the request is sent.
 		if errors.Is(err, asks.ErrCreateNotAfter) {
-			b.clearGrantAskCreateOutstanding(g.UID)
 			return errGrantAskDeadline
 		}
 		// A refusal proved to precede commit may be retried until the grant's
@@ -598,8 +600,7 @@ func (b *Broker) followGrantAskRoute(ctx context.Context, g *v1alpha1.AccessGran
 	// deadline. A successful read means an Ask exists, and this deadline
 	// no longer applies.
 	if err != nil && b.grantAskCreateOutstanding(g.UID) && !b.now().Time.Before(g.CreationTimestamp.Add(PendingTimeout)) {
-		b.clearGrantAskCreateOutstanding(g.UID)
-		return b.denyStillPending(ctx, g, DeniedByTimeout, "no answer in 30 minutes", b.now())
+		return b.denyOutstandingCreate(ctx, g, b.now())
 	}
 	switch {
 	case apierrors.IsNotFound(err):
@@ -607,7 +608,7 @@ func (b *Broker) followGrantAskRoute(ctx context.Context, g *v1alpha1.AccessGran
 			cerr := b.createGrantedAsk(ctx, g, sess, now)
 			if cerr != nil && !errors.Is(cerr, errGrantAskUnconfirmed) {
 				if errors.Is(cerr, errGrantAskDeadline) {
-					return b.denyStillPending(ctx, g, DeniedByTimeout, "no answer in 30 minutes", b.now())
+					return b.denyOutstandingCreate(ctx, g, b.now())
 				}
 				if errors.Is(cerr, errGrantAskRouteForeign) {
 					b.noteForeignGrantAsk(g)
@@ -803,14 +804,48 @@ func (b *Broker) noteForeignGrantAsk(g *v1alpha1.AccessGrant) {
 	b.event(g, corev1.EventTypeWarning, "GrantAsk", "AskNotBroker", "an ask at this grant's name was not opened by the broker")
 }
 
+// denyOutstandingCreate stores the timeout denial for a pre-create that is
+// still outstanding. The marker stays until that denial is visible, or a
+// fresh read shows this grant is no longer Pending.
+func (b *Broker) denyOutstandingCreate(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (reconcile.Result, error) {
+	res, err := b.denyStillPending(ctx, g, DeniedByTimeout, "no answer in 30 minutes", now)
+	if err != nil {
+		return res, err
+	}
+	b.clearGrantAskCreateIfNotPending(ctx, g)
+	return res, nil
+}
+
+// clearGrantAskCreateIfNotPending drops the outstanding pre-create marker
+// once a fresh read shows the grant is no longer Pending. A read that fails
+// leaves the marker, so the next pass still knows the original deadline.
+func (b *Broker) clearGrantAskCreateIfNotPending(ctx context.Context, g *v1alpha1.AccessGrant) {
+	if g == nil || !b.grantAskCreateOutstanding(g.UID) {
+		return
+	}
+	fresh, err := b.readGrant(ctx, g.Name)
+	if apierrors.IsNotFound(err) {
+		b.clearGrantAskCreateOutstanding(g.UID)
+		return
+	}
+	if err != nil {
+		return
+	}
+	if fresh.UID != g.UID || !fresh.DeletionTimestamp.IsZero() || (fresh.Status.Phase != "" && fresh.Status.Phase != v1alpha1.GrantPending) {
+		b.clearGrantAskCreateOutstanding(g.UID)
+	}
+}
+
 // withdrawBrokerDenial withdraws the broker's own Ask after the broker has
 // denied a routed grant for a reason other than the Ask's own answer. The
-// deny is already written. A foreign Ask is left alone. A read failure that
-// is not NotFound is returned, and the Ask is not modified on that pass. An
-// Ask that is not open, including one the session ending left for Dismiss,
-// is left as it is. A failed withdraw is returned so a later reconcile retries.
+// deny is already written. An empty stored route still uses the computed Ask
+// name, and the identity and UID checks run before any write. A foreign Ask
+// is left alone. A read failure that is not NotFound is returned, and the
+// Ask is not modified on that pass. An Ask that is not open, including one
+// the session ending left for Dismiss, is left as it is. A failed withdraw
+// is returned so a later reconcile retries.
 func (b *Broker) withdrawBrokerDenial(ctx context.Context, g *v1alpha1.AccessGrant) error {
-	if g == nil || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Ask == "" {
+	if g == nil || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker {
 		return nil
 	}
 	if g.Status.Message == "the session ended" {
@@ -821,7 +856,7 @@ func (b *Broker) withdrawBrokerDenial(ctx context.Context, g *v1alpha1.AccessGra
 		return nil
 	}
 	// A read failure that is not NotFound leaves the Ask untouched and
-	// keeps the short retry. Converting it to success would drop that retry.
+	// keeps the cleanup retry. Converting it to success would drop that retry.
 	if err != nil {
 		return err
 	}
@@ -1206,22 +1241,78 @@ func truncateRunes(s string, n int) string {
 	return string([]rune(s)[:n])
 }
 
-// enqueueGrantAsk wakes the grant an answered Ask names. Flag off, the watch
-// is not registered. A grant that is already decided is left alone.
+// grantAskOwnerRetryName is the reconcile key for a failed Ask-owner list.
+// It is not a grant name: a grant's name matches ^grant-[a-z0-9]...
+const grantAskOwnerRetryName = ".grant-ask-owner-retry"
+
+// errGrantAskOwnerLookup means the owning grant could not be listed. The Ask
+// is kept and the lookup is tried again.
+var errGrantAskOwnerLookup = errors.New("grant ask owner was not listed")
+
+// grantAskWorkQueue is the part of the controller work queue the Ask watch uses.
+type grantAskWorkQueue interface {
+	Add(reconcile.Request)
+	AddAfter(reconcile.Request, time.Duration)
+}
+
+// enqueueGrantAsk wakes the grant an Ask names. A pending grant is woken so
+// its answer can be applied. A terminal grant is woken so its Ask can be
+// withdrawn. The grant is already terminal, so that wake cannot approve it.
+// A session that has ended is left alone. A failed owner list is remembered
+// and retried; it does not enqueue a guess.
 func (b *Broker) enqueueGrantAsk(ctx context.Context, o client.Object) []reconcile.Request {
-	if !b.EnableGrantAsks {
+	reqs, failed := b.grantAskRequests(ctx, o)
+	if failed {
+		b.holdGrantAskOwner(o)
 		return nil
+	}
+	return reqs
+}
+
+// deliverGrantAsk is the Ask watch. A failed owner list schedules one retry.
+// The retry backs off from one second to five minutes.
+func (b *Broker) deliverGrantAsk(ctx context.Context, obj client.Object, q grantAskWorkQueue) {
+	if obj == nil || q == nil {
+		return
+	}
+	b.setGrantAskWorkQueue(q)
+	reqs, failed := b.grantAskRequests(ctx, obj)
+	if failed {
+		b.holdGrantAskOwner(obj)
+		q.AddAfter(b.grantAskOwnerRetryRequest(), b.nextGrantAskOwnerBackoff())
+		return
+	}
+	extra, err := b.retryGrantAskOwners(ctx)
+	reqs = append(reqs, extra...)
+	if err != nil {
+		q.AddAfter(b.grantAskOwnerRetryRequest(), b.nextGrantAskOwnerBackoff())
+	}
+	seen := map[types.NamespacedName]bool{}
+	for _, req := range reqs {
+		if seen[req.NamespacedName] {
+			continue
+		}
+		seen[req.NamespacedName] = true
+		q.Add(req)
+	}
+}
+
+func (b *Broker) grantAskRequests(ctx context.Context, o client.Object) ([]reconcile.Request, bool) {
+	if !b.EnableGrantAsks {
+		return nil, false
 	}
 	ask, ok := o.(*coord.Ask)
 	if !ok || ask.Spec.Grant == nil || ask.Labels[asks.OriginLabel] != grantAskOriginBroker {
-		return nil
+		return nil, false
 	}
 	if b.APIReader == nil {
-		return nil
+		log.FromContext(ctx).Error(errGrantAskOwnerLookup, "grant ask owner was not listed", "ask", ask.Name)
+		return nil, true
 	}
 	var list v1alpha1.AccessGrantList
 	if err := b.APIReader.List(ctx, &list, client.InNamespace(b.SessionNamespace)); err != nil {
-		return nil
+		log.FromContext(ctx).Error(err, "grant ask owner was not listed", "ask", ask.Name)
+		return nil, true
 	}
 	var out []reconcile.Request
 	for i := range list.Items {
@@ -1229,10 +1320,126 @@ func (b *Broker) enqueueGrantAsk(ctx context.Context, o client.Object) []reconci
 		if string(g.UID) != ask.Spec.Grant.UID {
 			continue
 		}
-		if g.Status.Phase != "" && g.Status.Phase != v1alpha1.GrantPending {
+		// The ended-session card stays open for Dismiss. Cleanup must not
+		// withdraw it, and this event must not be what starts that cleanup.
+		if g.Status.Message == "the session ended" {
+			continue
+		}
+		if g.Status.Phase != "" && g.Status.Phase != v1alpha1.GrantPending && !g.Status.Phase.Ended() {
 			continue
 		}
 		out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(g)})
 	}
-	return out
+	return out, false
+}
+
+func (b *Broker) holdGrantAskOwner(obj client.Object) {
+	ask, ok := obj.(*coord.Ask)
+	if !ok || ask.Name == "" {
+		return
+	}
+	b.grantAskMu.Lock()
+	defer b.grantAskMu.Unlock()
+	if b.grantAskOwnerHeld == nil {
+		b.grantAskOwnerHeld = map[string]client.Object{}
+	}
+	b.grantAskOwnerHeld[ask.Namespace+"/"+ask.Name] = ask.DeepCopy()
+}
+
+// retryGrantAskOwners lists the owner of each Ask whose previous list failed.
+func (b *Broker) retryGrantAskOwners(ctx context.Context) ([]reconcile.Request, error) {
+	b.grantAskMu.Lock()
+	held := b.grantAskOwnerHeld
+	b.grantAskOwnerHeld = nil
+	b.grantAskMu.Unlock()
+	if len(held) == 0 {
+		return nil, nil
+	}
+	var out []reconcile.Request
+	failed := false
+	again := map[string]client.Object{}
+	for key, obj := range held {
+		reqs, listFailed := b.grantAskRequests(ctx, obj)
+		if listFailed {
+			failed = true
+			again[key] = obj
+			continue
+		}
+		out = append(out, reqs...)
+	}
+	if len(again) > 0 {
+		b.grantAskMu.Lock()
+		if b.grantAskOwnerHeld == nil {
+			b.grantAskOwnerHeld = again
+		} else {
+			for key, obj := range again {
+				if _, ok := b.grantAskOwnerHeld[key]; !ok {
+					b.grantAskOwnerHeld[key] = obj
+				}
+			}
+		}
+		b.grantAskMu.Unlock()
+	}
+	if failed {
+		return out, errGrantAskOwnerLookup
+	}
+	return out, nil
+}
+
+func (b *Broker) reconcileGrantAskOwnerRetry(ctx context.Context) (reconcile.Result, error) {
+	reqs, err := b.retryGrantAskOwners(ctx)
+	b.addGrantAskRequests(reqs)
+	if err != nil {
+		return reconcile.Result{RequeueAfter: b.nextGrantAskOwnerBackoff()}, nil
+	}
+	b.resetGrantAskOwnerBackoff()
+	return reconcile.Result{}, nil
+}
+
+func (b *Broker) grantAskOwnerRetryRequest() reconcile.Request {
+	return reconcile.Request{NamespacedName: types.NamespacedName{Namespace: b.SessionNamespace, Name: grantAskOwnerRetryName}}
+}
+
+func (b *Broker) setGrantAskWorkQueue(q grantAskWorkQueue) {
+	b.grantAskMu.Lock()
+	b.grantAskOwnerQueue = q
+	b.grantAskMu.Unlock()
+}
+
+func (b *Broker) addGrantAskRequests(reqs []reconcile.Request) {
+	b.grantAskMu.Lock()
+	q := b.grantAskOwnerQueue
+	b.grantAskMu.Unlock()
+	if q == nil {
+		return
+	}
+	seen := map[types.NamespacedName]bool{}
+	for _, req := range reqs {
+		if seen[req.NamespacedName] {
+			continue
+		}
+		seen[req.NamespacedName] = true
+		q.Add(req)
+	}
+}
+
+func (b *Broker) nextGrantAskOwnerBackoff() time.Duration {
+	b.grantAskMu.Lock()
+	defer b.grantAskMu.Unlock()
+	wait := b.grantAskOwnerBackoff
+	if wait <= 0 {
+		wait = grantAskCleanupBackoffStart
+	}
+	next := wait * 2
+	if next > grantAskCleanupBackoffCap {
+		next = grantAskCleanupBackoffCap
+	}
+	b.grantAskOwnerBackoff = next
+	return wait
+}
+
+func (b *Broker) resetGrantAskOwnerBackoff() {
+	b.grantAskMu.Lock()
+	b.grantAskOwnerBackoff = 0
+	b.grantAskMu.Unlock()
 }

@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -207,7 +208,22 @@ func (b *Broker) SetupWithManager(mgr ctrl.Manager) error {
 		For(&v1alpha1.AccessGrant{})
 	if b.EnableGrantAsks {
 		// Flag off, the broker does not watch Asks, so it needs no Ask RBAC.
-		bldr = bldr.Watches(&coordv1.Ask{}, handler.EnqueueRequestsFromMapFunc(b.enqueueGrantAsk))
+		// A failed owner list is retried from the handler. A terminal grant
+		// is woken for cleanup; a pending grant is woken for its answer.
+		bldr = bldr.Watches(&coordv1.Ask{}, handler.Funcs{
+			CreateFunc: func(ctx context.Context, e event.CreateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.deliverGrantAsk(ctx, e.Object, q)
+			},
+			UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.deliverGrantAsk(ctx, e.ObjectNew, q)
+			},
+			DeleteFunc: func(ctx context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.deliverGrantAsk(ctx, e.Object, q)
+			},
+			GenericFunc: func(ctx context.Context, e event.GenericEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.deliverGrantAsk(ctx, e.Object, q)
+			},
+		})
 	}
 	return bldr.
 		Watches(&v1alpha1.AgentSession{},

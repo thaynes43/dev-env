@@ -5,9 +5,11 @@ package asks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -367,7 +369,7 @@ func (s KubeStore) Withdraw(ctx context.Context, id string, req Requester, now t
 			s.logWrite(err, id)
 			return apiv1.Ask{}, fmt.Errorf("%w: ask was not withdrawn", ErrUnavailable)
 		}
-		s.syncLabel(ctx, id, string(apiv1.AskStateWithdrawn))
+		s.syncLabel(ctx, id, string(apiv1.AskStateWithdrawn), &ident)
 		fresh, err := s.load(ctx, id)
 		if err != nil {
 			return apiv1.Ask{}, err
@@ -401,7 +403,7 @@ func (s KubeStore) Answer(ctx context.Context, id string, in apiv1.AskAnswerRequ
 		}
 		if err := in.ValidateForAt(wire, now); err != nil {
 			if errors.Is(err, apiv1.ErrAskNotOpen) && sameAnswer(obj, in) {
-				s.syncLabel(ctx, id, string(apiv1.AskStateAnswered))
+				s.syncLabel(ctx, id, string(apiv1.AskStateAnswered), nil)
 				return wire, nil
 			}
 			return apiv1.Ask{}, err
@@ -417,7 +419,7 @@ func (s KubeStore) Answer(ctx context.Context, id string, in apiv1.AskAnswerRequ
 			s.logWrite(err, id)
 			return apiv1.Ask{}, fmt.Errorf("%w: ask answer was not stored", ErrUnavailable)
 		}
-		s.syncLabel(ctx, id, string(apiv1.AskStateAnswered))
+		s.syncLabel(ctx, id, string(apiv1.AskStateAnswered), nil)
 		fresh, err := s.load(ctx, id)
 		if err != nil {
 			return apiv1.Ask{}, err
@@ -502,37 +504,71 @@ func (s KubeStore) ensureOpen(ctx context.Context, obj *coord.Ask) error {
 	return nil
 }
 
-func (s KubeStore) syncLabel(ctx context.Context, name, state string) {
-	if err := s.setStateLabel(ctx, name, state); err != nil {
+func (s KubeStore) syncLabel(ctx context.Context, name, state string, ident *WithdrawIdentity) {
+	if err := s.setStateLabel(ctx, name, state, ident); err != nil {
 		s.log().Error(nil, "ask state label was not updated", "id", name, "state", state, "reason", string(apierrors.ReasonForError(err)))
 	}
 }
 
-func (s KubeStore) setStateLabel(ctx context.Context, name, state string) error {
+// setStateLabel writes the state label. ident, when it names an Ask, is
+// checked on every read, including each retry. The patch tests that Ask's
+// UID and resourceVersion, so a replacement between the read and the patch
+// is refused. A label-only patch leaves the immutable spec out of the write.
+func (s KubeStore) setStateLabel(ctx context.Context, name, state string, ident *WithdrawIdentity) error {
 	for attempt := 0; attempt < 4; attempt++ {
 		obj, err := s.load(ctx, name)
 		if err != nil {
 			return err
 		}
-		if obj.Labels == nil {
-			obj.Labels = map[string]string{}
+		if ident != nil && ident.AskUID != "" && !withdrawIdentityOK(obj, *ident) {
+			return ErrNotFound
 		}
-		if obj.Labels[StateLabel] == state {
+		if obj.Labels != nil && obj.Labels[StateLabel] == state {
 			return nil
 		}
-		base := obj.DeepCopy()
-		obj.Labels[StateLabel] = state
-		// A label-only merge leaves the immutable spec out of the write. A full
-		// update reserializes its times and the spec equality rule can refuse it.
-		if err := s.Client.Patch(ctx, obj, client.MergeFrom(base)); err != nil {
-			if apierrors.IsConflict(err) {
-				continue
-			}
+		if obj.GetUID() == "" || obj.GetResourceVersion() == "" {
+			return fmt.Errorf("%w: ask has no uid or resourceVersion", ErrUnavailable)
+		}
+		raw, err := stateLabelPatch(obj, state)
+		if err != nil {
 			return err
+		}
+		if err := s.Client.Patch(ctx, obj.DeepCopy(), client.RawPatch(types.JSONPatchType, raw)); err != nil {
+			if apierrors.IsNotFound(err) {
+				return err
+			}
+			continue
 		}
 		return nil
 	}
 	return ErrConflict
+}
+
+func stateLabelPatch(obj *coord.Ask, state string) ([]byte, error) {
+	ops := []any{
+		map[string]any{"op": "test", "path": "/metadata/uid", "value": string(obj.GetUID())},
+		map[string]any{"op": "test", "path": "/metadata/resourceVersion", "value": obj.GetResourceVersion()},
+	}
+	if len(obj.GetLabels()) == 0 {
+		ops = append(ops, map[string]any{
+			"op": "add", "path": "/metadata/labels",
+			"value": map[string]string{StateLabel: state},
+		})
+	} else {
+		op := "add"
+		if _, ok := obj.GetLabels()[StateLabel]; ok {
+			op = "replace"
+		}
+		ops = append(ops, map[string]any{
+			"op": op, "path": "/metadata/labels/" + jsonPointerToken(StateLabel), "value": state,
+		})
+	}
+	return json.Marshal(ops)
+}
+
+func jsonPointerToken(s string) string {
+	s = strings.ReplaceAll(s, "~", "~0")
+	return strings.ReplaceAll(s, "/", "~1")
 }
 
 func (s KubeStore) load(ctx context.Context, name string) (*coord.Ask, error) {
@@ -725,7 +761,7 @@ func (s KubeStore) recountMatching(ctx context.Context, sel client.ListOption, n
 				continue
 			}
 			if label, ok := desiredStateLabel(item, now); ok && label != "" && label != string(apiv1.AskStateOpen) {
-				s.syncLabel(ctx, item.Name, label)
+				s.syncLabel(ctx, item.Name, label, nil)
 			}
 		}
 		if list.Continue == "" {

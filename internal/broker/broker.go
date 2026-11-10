@@ -80,6 +80,11 @@ const (
 	// Retention is how long an ended grant is kept as the audit record
 	// (DESIGN-001 6.12).
 	Retention = 90 * 24 * time.Hour
+	// grantAskCleanupBackoffStart is the first wait when a terminal grant's
+	// Ask could not be read. Each later failure doubles it, up to
+	// grantAskCleanupBackoffCap. The grant is still deleted at Retention.
+	grantAskCleanupBackoffStart = time.Second
+	grantAskCleanupBackoffCap   = 5 * time.Minute
 	// MinTokenSeconds is the shortest token TokenRequest issues.
 	MinTokenSeconds = 600
 
@@ -175,13 +180,26 @@ type Broker struct {
 	// to prove a pre-check did not decide, or to count one real decision.
 	decideFn func(ctx context.Context, grantName string, d Decision) error
 
-	// grantAskMu guards grantAskCreateWait. The route and the unread time
-	// are on the grant's status.
+	// grantAskMu guards the in-memory grant-Ask maps below. The route and
+	// the unread time are on the grant's status. None of these maps is stored.
 	grantAskMu sync.Mutex
 	// grantAskCreateWait is a create this process has not sent, or that the
 	// apiserver refused before commit. It is not a create that may have
-	// committed, and a restart does not keep it.
+	// committed, and a restart does not keep it. It is cleared only after a
+	// terminal write is visible, or a fresh read shows the grant is no
+	// longer Pending.
 	grantAskCreateWait map[types.UID]struct{}
+	// grantAskCleanupWait is the next cleanup wait for one terminal grant.
+	// A missing entry starts at one second.
+	grantAskCleanupWait map[types.UID]time.Duration
+	// grantAskOwnerHeld are Asks whose owning-grant list failed. The next
+	// lookup tries them again. A restart drops them.
+	grantAskOwnerHeld map[string]client.Object
+	// grantAskOwnerBackoff is the next wait for that lookup. Zero starts
+	// at one second and the wait doubles up to five minutes.
+	grantAskOwnerBackoff time.Duration
+	// grantAskOwnerQueue receives a grant once a failed lookup succeeds.
+	grantAskOwnerQueue grantAskWorkQueue
 
 	// reconciled, when set, hears of every finished reconcile (tests).
 	reconciled func(types.NamespacedName)
@@ -202,6 +220,10 @@ func (b *Broker) now() metav1.Time {
 func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	if b.reconciled != nil {
 		defer b.reconciled(req.NamespacedName)
+	}
+	// Not a grant. A failed Ask-owner list is tried again through this key.
+	if req.Name == grantAskOwnerRetryName {
+		return b.reconcileGrantAskOwnerRetry(ctx)
 	}
 	var g v1alpha1.AccessGrant
 	if err := b.APIReader.Get(ctx, req.NamespacedName, &g); err != nil {
@@ -400,7 +422,7 @@ func (b *Broker) pendingUnrouted(ctx context.Context, g *v1alpha1.AccessGrant, s
 			res, derr := b.denyPendingGrant(ctx, g, grantAskMsgRouteNotStored, now)
 			return res, derr, false
 		case errors.Is(err, errGrantAskDeadline):
-			res, derr := b.denyStillPending(ctx, g, DeniedByTimeout, "no answer in 30 minutes", b.now())
+			res, derr := b.denyOutstandingCreate(ctx, g, b.now())
 			return res, derr, false
 		case err != nil:
 			res, herr := b.grantAskHoldError(ctx, g, err)
@@ -581,32 +603,82 @@ func (b *Broker) end(ctx context.Context, g *v1alpha1.AccessGrant, phase v1alpha
 		return ctrl.Result{}, err
 	}
 	b.decided(ctx, g, msg)
-	// The terminal phase is already stored. A withdraw that fails is retried
-	// from retain. A release uses that same retry.
+	// The terminal phase is already stored. A withdraw that fails backs off
+	// and is retried from retain. A release uses that same retry.
 	if werr := b.withdrawTerminalAsk(ctx, g); werr != nil {
-		return ctrl.Result{RequeueAfter: time.Second}, nil
+		return b.grantAskCleanupRetry(g, now), nil
 	}
+	b.clearGrantAskCleanupBackoff(g.UID)
 	return ctrl.Result{RequeueAfter: Retention}, nil
 }
 
-// retain deletes an ended grant once it has been kept 90 days.
+// retain deletes an ended grant once it has been kept 90 days. A card that
+// could not be read does not keep the grant past that time.
 func (b *Broker) retain(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (ctrl.Result, error) {
-	if werr := b.withdrawTerminalAsk(ctx, g); werr != nil {
-		return ctrl.Result{RequeueAfter: time.Second}, nil
-	}
+	werr := b.withdrawTerminalAsk(ctx, g)
 	ended := g.CreationTimestamp
 	if g.Status.EndedAt != nil {
 		ended = *g.Status.EndedAt
 	}
 	deadline := ended.Add(Retention)
-	if now.Time.Before(deadline) {
-		return ctrl.Result{RequeueAfter: deadline.Sub(now.Time)}, nil
+	if !now.Time.Before(deadline) {
+		b.clearGrantAskCleanupBackoff(g.UID)
+		if err := b.Client.Delete(ctx, g, client.Preconditions{UID: &g.UID}); err != nil {
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
+			if apierrors.IsConflict(err) {
+				return b.grantAskCleanupRetry(g, now), nil
+			}
+			return ctrl.Result{}, fmt.Errorf("delete the grant after its retention: %w", err)
+		}
+		log.FromContext(ctx).Info("deleted the grant after 90 days", grantFields(g)...)
+		return ctrl.Result{}, nil
 	}
-	if err := b.Client.Delete(ctx, g, client.Preconditions{UID: &g.UID}); err != nil {
-		return retryOn(err, "delete the grant after its retention")
+	if werr != nil {
+		return b.grantAskCleanupRetry(g, now), nil
 	}
-	log.FromContext(ctx).Info("deleted the grant after 90 days", grantFields(g)...)
-	return ctrl.Result{}, nil
+	b.clearGrantAskCleanupBackoff(g.UID)
+	return ctrl.Result{RequeueAfter: deadline.Sub(now.Time)}, nil
+}
+
+// grantAskCleanupRetry is the wait after a terminal grant's Ask cleanup
+// failed. The first wait is one second. Each later failure doubles it, up
+// to five minutes. The wait never runs past Retention.
+func (b *Broker) grantAskCleanupRetry(g *v1alpha1.AccessGrant, now metav1.Time) ctrl.Result {
+	wait := b.nextGrantAskCleanupBackoff(g.UID)
+	ended := g.CreationTimestamp.Time
+	if g.Status.EndedAt != nil {
+		ended = g.Status.EndedAt.Time
+	}
+	if until := ended.Add(Retention).Sub(now.Time); until > 0 && wait > until {
+		wait = until
+	}
+	return ctrl.Result{RequeueAfter: wait}
+}
+
+func (b *Broker) nextGrantAskCleanupBackoff(uid types.UID) time.Duration {
+	b.grantAskMu.Lock()
+	defer b.grantAskMu.Unlock()
+	if b.grantAskCleanupWait == nil {
+		b.grantAskCleanupWait = map[types.UID]time.Duration{}
+	}
+	wait := b.grantAskCleanupWait[uid]
+	if wait <= 0 {
+		wait = grantAskCleanupBackoffStart
+	}
+	next := wait * 2
+	if next > grantAskCleanupBackoffCap {
+		next = grantAskCleanupBackoffCap
+	}
+	b.grantAskCleanupWait[uid] = next
+	return wait
+}
+
+func (b *Broker) clearGrantAskCleanupBackoff(uid types.UID) {
+	b.grantAskMu.Lock()
+	defer b.grantAskMu.Unlock()
+	delete(b.grantAskCleanupWait, uid)
 }
 
 // finalize revokes a deleted grant and lets it go.
@@ -629,10 +701,11 @@ func (b *Broker) finalize(ctx context.Context, g *v1alpha1.AccessGrant) (ctrl.Re
 }
 
 // withdrawTerminalAsk closes the broker's open Ask after a terminal write.
-// A deny withdraws when the broker denied a routed grant. A pending release
-// withdraws after Released is stored. A read failure that is not NotFound
-// returns an error so the caller keeps the short retry. The Ask is not
-// modified on that pass.
+// A deny withdraws when the broker denied a routed grant, including one whose
+// stored route is empty: cleanup then uses the computed Ask name. A pending
+// release withdraws after Released is stored. A read failure that is not
+// NotFound returns an error so the caller backs off, from one second up to
+// five minutes. The Ask is not modified on that pass.
 func (b *Broker) withdrawTerminalAsk(ctx context.Context, g *v1alpha1.AccessGrant) error {
 	if err := b.withdrawBrokerDenial(ctx, g); err != nil {
 		return err

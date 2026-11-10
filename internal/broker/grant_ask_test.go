@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
@@ -18,6 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -262,6 +264,79 @@ func TestGrantAskStoreLimitOrUnavailableStaysPending(t *testing.T) {
 			t.Fatalf("read across the deadline: calls %d %+v", stub.calls, g.Status)
 		}
 	})
+	t.Run("ask read error across the deadline after a conflict", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		stub := &grantAskStub{err: &asks.LimitError{Scope: asks.LimitOpenGrant}}
+		f.b.grantAsks = stub
+		f.until(func(g *v1alpha1.AccessGrant) bool {
+			return g.Status.Phase == v1alpha1.GrantPending && g.Status.Ask != "" && stub.calls >= 1
+		})
+		calls := stub.calls
+		before := f.grant().ResourceVersion
+		conflicts := 0
+		f.b.Client = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				g, ok := obj.(*v1alpha1.AccessGrant)
+				if !ok || g.Status.Phase != v1alpha1.GrantDenied || conflicts > 0 {
+					return c.SubResource(sub).Update(ctx, obj, opts...)
+				}
+				conflicts++
+				var stored v1alpha1.AccessGrant
+				if err := f.base.Get(ctx, client.ObjectKeyFromObject(g), &stored); err != nil {
+					return err
+				}
+				orig := stored.DeepCopy()
+				if stored.Annotations == nil {
+					stored.Annotations = map[string]string{}
+				}
+				stored.Annotations[v1alpha1.LabelPrefix+"grant-ask-conflict"] = "1"
+				if err := f.base.Patch(ctx, &stored, client.MergeFrom(orig)); err != nil {
+					return err
+				}
+				return apierrors.NewConflict(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "accessgrants"}, g.Name, errors.New("version changed"))
+			},
+		})
+		f.b.APIReader = &askReadStepsClock{Client: f.meta, clk: f.clk}
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		g := f.grant()
+		if conflicts != 1 || g.ResourceVersion == before || g.Annotations[v1alpha1.LabelPrefix+"grant-ask-conflict"] != "1" || stub.calls != calls || g.Status.Phase != v1alpha1.GrantPending || g.Status.DeniedBy != "" || g.Status.AskUnreadAt != nil || g.Status.ApprovedBy != "" {
+			t.Fatalf("conflict left %+v calls %d conflicts %d rv %s -> %s", g.Status, stub.calls, conflicts, before, g.ResourceVersion)
+		}
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		g = f.grant()
+		if stub.calls != calls || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByTimeout || g.Status.Message != "no answer in 30 minutes" || g.Status.AskUnreadAt != nil || g.Status.ApprovedBy != "" {
+			t.Fatalf("after the conflict: calls %d %+v", stub.calls, g.Status)
+		}
+	})
+	t.Run("ask read error before the deadline", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		stub := &grantAskStub{err: &asks.LimitError{Scope: asks.LimitOpenGrant}}
+		f.b.grantAsks = stub
+		f.until(func(g *v1alpha1.AccessGrant) bool {
+			return g.Status.Phase == v1alpha1.GrantPending && g.Status.Ask != "" && stub.calls >= 1
+		})
+		calls := stub.calls
+		f.meta.failAskGet = apierrors.NewServiceUnavailable("ask was not read")
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		g := f.grant()
+		if stub.calls != calls || g.Status.Phase != v1alpha1.GrantPending || g.Status.DeniedBy != "" || g.Status.AskUnreadAt != nil || g.Status.ApprovedBy != "" || g.Status.Message == grantAskMsgUnread {
+			t.Fatalf("read before the deadline: calls %d %+v", stub.calls, g.Status)
+		}
+		f.clk.Step(grantAskUnreadLimit)
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		g = f.grant()
+		if stub.calls != calls || g.Status.Phase != v1alpha1.GrantPending || g.Status.DeniedBy != "" || g.Status.AskUnreadAt != nil || g.Status.ApprovedBy != "" || g.Status.Message == grantAskMsgUnread {
+			t.Fatalf("two minutes later: calls %d %+v", stub.calls, g.Status)
+		}
+	})
 	t.Run("preflight crosses the deadline", func(t *testing.T) {
 		f := newGrantAskFixture(t, true)
 		reader := &deadlineTaskList{Client: f.meta, clk: f.clk}
@@ -275,6 +350,23 @@ func TestGrantAskStoreLimitOrUnavailableStaysPending(t *testing.T) {
 		g := f.grant()
 		if reader.lists < 2 || f.askCount() != 0 || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByTimeout || g.Status.Message != "no answer in 30 minutes" || g.Status.ApprovedBy != "" {
 			t.Fatalf("preflight: lists %d asks %d %+v", reader.lists, f.askCount(), g.Status)
+		}
+	})
+	t.Run("preflight crosses the deadline before the creator", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		reader := &deadlineTaskList{Client: f.meta, clk: f.clk}
+		spy := &grantAskStub{err: errors.New("create must not be called")}
+		f.b.APIReader = reader
+		f.b.grantAsks = spy
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		g := f.grant()
+		if spy.calls != 0 || reader.lists < 2 || f.askCount() != 0 || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByTimeout || g.Status.Message != "no answer in 30 minutes" || g.Status.ApprovedBy != "" {
+			t.Fatalf("creator spy: calls %d lists %d asks %d %+v", spy.calls, reader.lists, f.askCount(), g.Status)
 		}
 	})
 	t.Run("store count crosses the deadline", func(t *testing.T) {

@@ -49,22 +49,34 @@ pre-create is outstanding, the broker checks the deadline with a fresh clock
 before it branches on the Ask read, and again at the create itself, including
 the first attempt. The store checks that same deadline once more, immediately
 before it sends the create, after its own count list. It never creates after
-the deadline. A read error does not
-open a new unread episode past that deadline. A create that may have
-committed is not retried, and a missing Ask denies the grant. A grant with
+the deadline. The outstanding marker is cleared only after that timeout
+denial is stored, or a fresh read shows the grant is no longer Pending. A
+failed denial leaves the marker, so a later read error does not open a new
+unread episode. A read error before the deadline does not open one either.
+A create that may have committed is not retried, and a missing Ask denies
+the grant. A grant with
 no route is still denied at 30 minutes. A grant an attested policy could
 match, from one live policy list in that reconcile, is not given a route or
 an Ask.
 
 When the broker denies a routed grant for a reason other than that Ask's own
-answer, it withdraws its own open Ask after the deny is stored. A failed
-withdraw is retried later. A read that fails and is not NotFound keeps that
-short retry and leaves the Ask untouched on that pass. Every attempt checks
-the expected Ask UID and the full grant identity. An answered Ask stays
-answered. A foreign Ask is left alone. The card for a session that has ended
-stays open for Dismiss. A pending grant the requester releases is stored
+answer, it withdraws its own open Ask after the deny is stored. An empty
+stored route still withdraws: cleanup computes the Ask name the same way a
+decision does, and the identity and UID checks run before any write. A failed
+withdraw is retried later. The first wait is one second and each later
+failure doubles it, up to five minutes. A read that fails and is not NotFound
+keeps that backoff and leaves the Ask untouched on that pass. Retention
+deletes the grant at its time even when the card could not be read. Every
+attempt checks the expected Ask UID and the full grant identity, including
+the label write after the withdrawal is stored. That patch tests the Ask UID
+and resourceVersion. An answered Ask stays answered. A foreign Ask is left
+alone. The card for a session that has ended stays open for Dismiss, and an
+Ask event does not enqueue it. A create or update of an Ask that matches a
+terminal grant enqueues that grant for this cleanup. A failed lookup of the
+owning grant is retried. The grant is already terminal, so the enqueue
+cannot approve it. A pending grant the requester releases is stored
 Released first. The Ask is then withdrawn from that terminal path, with the
-same retry as a deny.
+same backoff as a deny.
 
 The store accepts a grant ask and applies the caps below. It records the
 requester, the open state and the ask type. It records `ask-origin=broker`
@@ -277,10 +289,10 @@ These are the Kubernetes verbs the broker's grant-Ask code uses. This repository
 | --- | --- | --- |
 | get | asks | `loadGrantAsk` reads the grant's Ask. `KubeStore.load` reads it again from `KubeStore.Create` and `KubeStore.Withdraw`. |
 | list | asks | `KubeStore.countAtMost`, from `KubeStore.checkRoom` during `Create`. `KubeStore.recountMatching` lists when an open count is already at its bound. |
-| watch | asks | `Broker.SetupWithManager` watches Asks and wakes grants through `enqueueGrantAsk`. |
+| watch | asks | `Broker.SetupWithManager` watches Asks and wakes grants through `enqueueGrantAsk`. A pending grant is woken for its answer. A terminal grant is woken so its Ask can be withdrawn. A failed owner list is retried. A session that has ended is not woken. |
 | create | asks | `KubeStore.Create`, called from `ensureGrantAsk`. The origin label is on this create. |
-| update | asks/status | `KubeStore.ensureOpen`, from `Create`, and `KubeStore.Withdraw`, from `withdrawOpenGrantAsk`. |
-| patch | asks | `KubeStore.setStateLabel`, from `syncLabel`, which `Withdraw` and `recountMatching` call. This patches the state label only. |
+| update | asks/status | `KubeStore.ensureOpen`, from `Create`, and `KubeStore.Withdraw`, from `withdrawBrokerDenial` and `withdrawOpenGrantAsk`. |
+| patch | asks | `KubeStore.setStateLabel`, from `syncLabel`, which `Withdraw` and `recountMatching` call. This patches the state label only. A grant withdrawal checks the Ask UID and the full identity on each read, and the patch tests that UID and the resourceVersion. |
 | list | taskclaims | `grantAskWorkPackage` lists the session's TaskClaims for the story link. |
 
 ## Operator RBAC
