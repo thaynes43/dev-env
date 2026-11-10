@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -273,7 +274,7 @@ func TestSessionAllowancesTwoReplicas(t *testing.T) {
 	if err := a.Record(ctx, sess, &pod, *codexReading(f.now.Add(-time.Minute), "50", reset), f.now); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Record(ctx, sess, &pod, *codexReading(f.now.Add(-2*time.Minute), "40", reset), f.now); err != errSessionAllowanceHeld {
+	if err := b.Record(ctx, sess, &pod, *codexReading(f.now.Add(-2*time.Minute), "40", reset), f.now); !errors.Is(err, errSessionAllowanceHeld) {
 		t.Fatalf("replica b: %v", err)
 	}
 	newest, err := b.Newest(ctx)

@@ -296,7 +296,7 @@ func codexRolloutAllowance(path string) (*protocol.AllowanceReading, string) {
 	off := max(st.Size()-maxRolloutTail, 0)
 	buf := make([]byte, st.Size()-off)
 	n, err := f.ReadAt(buf, off)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, ""
 	}
 	buf = buf[:n]
