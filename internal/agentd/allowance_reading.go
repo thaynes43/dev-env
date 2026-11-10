@@ -1,6 +1,9 @@
 package agentd
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -8,6 +11,8 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/claudeauth"
+	"github.com/thaynes43/dev-env/internal/codexauth"
 	"github.com/thaynes43/dev-env/internal/providerallowance"
 )
 
@@ -168,4 +173,131 @@ func (k *statuslineReadings) keep(r *protocol.AllowanceReading) *protocol.Allowa
 	saved.Windows = append([]protocol.AllowanceWindow(nil), out.Windows...)
 	k.last = &saved
 	return &out
+}
+
+// The send rule's refusals (DESIGN-059 step 4). Every managed pod holds only
+// the keeper's projection of the one login per provider, so a reading is about
+// that login by construction, but only while the pod's credential is that
+// projection.
+const (
+	// allowanceNotProjection: this pod is not configured to follow the
+	// keeper's projection for the session's provider.
+	allowanceNotProjection = "credential_not_projection"
+	// allowanceNotCurrent: the projection is configured, and the pod's
+	// installed credential is not its current generation, or it is near its
+	// expiry or unreadable.
+	allowanceNotCurrent = "credential_not_current"
+)
+
+// allowanceStepName is the step a refusal is reported in.
+const allowanceStepName = "allowance-reading"
+
+func allowanceRefused(reason string) *Step {
+	return &Step{Name: allowanceStepName, State: StepWarn, Notes: []string{"reading not sent: " + reason}}
+}
+
+// allowanceCredentialRefusal is the send rule: empty while the pod's
+// credential for the session's provider is the keeper's current projection,
+// else the reason. It only reads; it never applies a projection.
+func allowanceCredentialRefusal(s Settings, sess protocol.Session, now time.Time) string {
+	switch sess.Agent {
+	case protocol.AgentClaude:
+		if s.ClaudeLiveFile == "" {
+			return allowanceNotProjection
+		}
+		if !claudeProjectionCurrent(s, now) {
+			return allowanceNotCurrent
+		}
+	case protocol.AgentCodex:
+		if s.CodexAccessFile == "" {
+			return allowanceNotProjection
+		}
+		if !codexProjectionCurrent(s, now) {
+			return allowanceNotCurrent
+		}
+	default:
+		return allowanceNotProjection
+	}
+	return ""
+}
+
+// claudeProjectionCurrent repeats SyncClaudeAccess's checks without writing:
+// the pod's credentials hold no refresh token, the projection is valid, its
+// generation is the one the pod recorded, and merging it would change
+// nothing, so the pod's access fields are the projection's.
+func claudeProjectionCurrent(s Settings, now time.Time) bool {
+	if !filepath.IsAbs(s.ClaudeLiveFile) || !filepath.IsAbs(s.ClaudeConfigDir) || !filepath.IsAbs(s.StateDir) {
+		return false
+	}
+	existing, err := readClaudeCredentials(s)
+	if err != nil || len(existing) == 0 || claudeauth.HoldsRefreshToken(existing) {
+		return false
+	}
+	raw, err := readBounded(s.ClaudeLiveFile, claudeauth.MaxBytes)
+	if err != nil {
+		return false
+	}
+	a, err := claudeauth.Decode(raw, now)
+	if err != nil {
+		return false
+	}
+	canonical, err := claudeauth.Encode(a, now)
+	if err != nil {
+		return false
+	}
+	sum := sha256.Sum256(canonical)
+	data, err := readBounded(s.statePath("claude-access-generation.json"), 4<<10)
+	var recorded claudeReceipt
+	if err != nil || codexauth.DecodeStrict(data, &recorded) != nil || recorded.Generation != a.Generation ||
+		subtle.ConstantTimeCompare([]byte(recorded.Fingerprint), []byte(hex.EncodeToString(sum[:]))) != 1 {
+		return false
+	}
+	_, changed, err := claudeauth.MergeCredentials(existing, a)
+	return err == nil && !changed
+}
+
+// codexProjectionCurrent is the owned-capture check
+// (ownedAllowanceProjection: a valid projection more than five minutes from
+// expiry whose generation the pod recorded) plus one more: the auth.json the
+// CLI reads is exactly that projection's native file.
+func codexProjectionCurrent(s Settings, now time.Time) bool {
+	if !filepath.IsAbs(s.CodexHome) {
+		return false
+	}
+	native, _, err := ownedAllowanceProjection(s, now)
+	if err != nil {
+		return false
+	}
+	installed, err := readCodexAccessFile(filepath.Join(s.CodexHome, "auth.json"))
+	return err == nil && subtle.ConstantTimeCompare(installed, native) == 1
+}
+
+// allowanceReading is this heartbeat's reading and, when one was found and
+// not sent, the step that says why. A Codex session reads its rollout; a
+// Claude remote or local session reads the statusline helper's file. Any
+// other session has none. No source, or a source with no reading, is neither.
+func (d *Daemon) allowanceReading() (*protocol.AllowanceReading, *Step) {
+	var r *protocol.AllowanceReading
+	var reason string
+	switch {
+	case d.Session.Agent == protocol.AgentCodex:
+		if path := codexAllowanceRollout(d.S); path != "" {
+			r, reason = codexRolloutAllowance(path)
+		}
+	case d.Session.Agent == protocol.AgentClaude && (d.Session.Mode == protocol.ModeRemote || d.Session.Mode == protocol.ModeLocal):
+		r, reason = readClaudeStatuslineAllowance(d.S)
+		r = d.statusline.keep(r)
+	default:
+		return nil, nil
+	}
+	if r == nil {
+		if reason == "" {
+			return nil, nil
+		}
+		return nil, allowanceRefused(reason)
+	}
+	if reason := allowanceCredentialRefusal(d.S, d.Session, d.now()); reason != "" {
+		return nil, allowanceRefused(reason)
+	}
+	return r, nil
 }

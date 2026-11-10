@@ -83,6 +83,9 @@ type Daemon struct {
 	tmpUsage tmpUsageMonitor
 	// homeHeadroom samples the HOME filesystem's bytes and inodes (home_headroom.go).
 	homeHeadroom homeHeadroomMonitor
+	// statusline keeps the last Claude allowance reading's time
+	// (allowance_reading.go).
+	statusline statuslineReadings
 }
 
 // conversationUsageEvery is how often an interactive session's conversation
@@ -794,6 +797,13 @@ func (d *Daemon) beat(ctx context.Context) {
 	st.ConversationUsage = d.conversationUsage()
 	d.overlayRejection(&st)
 	st.HomeHeadroom = d.homeHeadroom.Sample(d.S.Home, d.now(), d.Log)
+	// A passive allowance reading rides the heartbeat (DESIGN-059). A refused
+	// one is not sent, and its step names the reason.
+	var refused *Step
+	st.Allowance, refused = d.allowanceReading()
+	if refused != nil {
+		st.Problems = append(st.Problems, *refused)
+	}
 	d.sendHeartbeat(ctx, st)
 }
 
