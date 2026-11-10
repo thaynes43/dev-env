@@ -371,7 +371,10 @@ of the week used", then "resets <weekday> <day> <month> <time> UTC", then
 "reported <age> ago". One line says it was reported by a running session and
 not checked with the provider. The trust lines stay in the tile's details.
 The grey, past-reset and no-reading rules above are unchanged. A window other
-than 7 days is a smaller line in the same form.
+than 7 days is a smaller line in the same form. If that shorter window's
+reset has passed while the week is still current, the smaller line names the
+window before the past-reset sentence, and each detail line starts with its
+window name.
 
 ## 9. Cursor and Grok
 

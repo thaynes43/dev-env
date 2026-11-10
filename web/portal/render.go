@@ -1139,7 +1139,9 @@ type SessionLine struct {
 }
 
 // SessionDetail is one session window's trust lines, kept off the headline.
+// Window names the line when a tile has more than one.
 type SessionDetail struct {
+	Window                      string
 	Received, ReceivedExact     string
 	ProviderAt, ProviderAtExact string
 	Source, Account, Reset, Why string
@@ -1169,7 +1171,11 @@ func (a ProductAllowance) SessionTile() *SessionTileView {
 		More:    a.LastReportedMore,
 	}
 	if primary.WindowOver {
-		view.Lines = append(view.Lines, SessionLine{Kind: "over", Text: primary.Over})
+		text := primary.Over
+		if len(ordered) > 1 {
+			text = sessionNamedOver(primary)
+		}
+		view.Lines = append(view.Lines, SessionLine{Kind: "over", Text: text})
 		if primary.When != "" {
 			view.Lines = append(view.Lines, SessionLine{Kind: "when", Text: primary.When})
 		}
@@ -1188,10 +1194,7 @@ func (a ProductAllowance) SessionTile() *SessionTileView {
 	}
 	for _, extra := range ordered[1:] {
 		if extra.WindowOver {
-			if primary.WindowOver {
-				continue
-			}
-			view.Lines = append(view.Lines, SessionLine{Kind: "over", Text: extra.Over})
+			view.Lines = append(view.Lines, SessionLine{Kind: "over", Text: sessionNamedOver(extra)})
 			continue
 		}
 		view.Lines = append(view.Lines, SessionLine{Kind: "extra", Text: sessionPercentLine(extra.Percent, extra.Window), Stale: extra.Stale})
@@ -1248,10 +1251,20 @@ func sessionResetLine(l ProductAllowanceLastReported) string {
 	return "resets " + t.UTC().Format("Monday 2 Jan 15:04 UTC")
 }
 
+// sessionNamedOver keeps the passed-reset sentence and says which window,
+// so a shorter window that has reset does not read as the week.
+func sessionNamedOver(l ProductAllowanceLastReported) string {
+	if l.Window == "" || l.Window == "Unknown" {
+		return l.Over
+	}
+	return l.Window + ": " + l.Over
+}
+
 func sessionDetails(lines []ProductAllowanceLastReported) []SessionDetail {
 	out := make([]SessionDetail, 0, len(lines))
 	for _, l := range lines {
 		out = append(out, SessionDetail{
+			Window:   l.Window,
 			Received: l.ReadAt, ReceivedExact: l.ReadAtExact,
 			ProviderAt: l.ProviderAt, ProviderAtExact: l.ProviderAtExact,
 			Source: l.Source, Account: l.Account, Reset: l.Reset, Why: l.Why,

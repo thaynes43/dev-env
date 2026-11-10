@@ -140,7 +140,10 @@ under a minute). The percent is normal text. A reading of exactly 30 minutes
 stays plain. Older than 30 minutes, that percent is greyed and the age line
 says so, for example "reported 3 hours ago". One a few seconds older says
 "reported 31 minutes ago". A window other than 7 days is a smaller line in
-the same form, such as "12% of the 5 hours used". One line under the headline
+the same form, such as "12% of the 5 hours used". If that shorter window's
+reset has passed while the week is still current, the smaller line names it,
+for example "5 hours: This window is over: the reported reset has passed, so
+its percent is not shown." Details name each window. One line under the headline
 says "Reported by a running session; not checked with the provider." The
 trust lines stay in the tile's Details and in the account section: received
 time, "Passive event", "Account not verified", and the reported reset. The

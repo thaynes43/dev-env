@@ -48,7 +48,11 @@ A reading reported by a running session (source version `session-v1`) uses a
 different glance. The headline is the number: "34% of the week used", then
 "resets Thursday 12 Nov 12:00 UTC", then "reported 12 minutes ago" (or
 "reported just now" under a minute). A window other than 7 days is a smaller
-line in the same form, for example "12% of the 5 hours used". One line under
+line in the same form, for example "12% of the 5 hours used". If that
+shorter window's reset has passed while the week is still current, the
+smaller line names it: "5 hours: This window is over: the reported reset
+has passed, so its percent is not shown." Details name each window, "7 days"
+or "5 hours", at the start of the line. One line under
 that says "Reported by a running session; not checked with the provider."
 The trust lines (received time, passive event, account not verified, reported
 reset) stay in the tile's Details and in the account section. The words

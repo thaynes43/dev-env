@@ -356,6 +356,51 @@ func TestSessionTilePutsAShorterWindowUnderTheWeek(t *testing.T) {
 	if !strings.Contains(codex, "Reported reset: 10 Nov 15:00 UTC.") {
 		t.Fatal("the 5 hour reset left the details")
 	}
+	for _, want := range []string{"7 days · Received", "5 hours · Received", "7 days · Reported reset:", "5 hours · Reported reset:"} {
+		if !strings.Contains(codex, want) {
+			t.Errorf("details do not name the window %q:\n%s", want, codex)
+		}
+	}
+}
+
+func TestSessionTileNamesAShorterWindowThatHasReset(t *testing.T) {
+	asOf := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	line := func(percent, window string, reset time.Time) ProductAllowanceLastReported {
+		return ProductAllowanceLastReported{
+			Percent: percent, Window: window, Session: true,
+			Reset:        "Reported reset: " + reset.UTC().Format("2 Jan 15:04 UTC") + ".",
+			ReadAt:       asOf.Add(-3 * time.Hour).UTC().Format("2 Jan 15:04 UTC"),
+			ReadAtExact:  asOf.Add(-3 * time.Hour).UTC().Format(time.RFC3339),
+			ResetAtExact: reset.UTC().Format(time.RFC3339),
+			Source:       "Passive event", Account: "Account not verified",
+			Why: "Not current or trusted: this reading's account is not verified.",
+		}
+	}
+	body := allowanceRender(t, ProductPage{
+		Title: "Sessions", Connected: true, Complete: true, Filter: ProductFilter{View: "usage"}, AsOf: asOf,
+		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Codex", Value: AllowanceUnknown, Reason: "Allowance freshness unknown or expired",
+			LastReported: []ProductAllowanceLastReported{
+				line("12% used", "5 hours", asOf.Add(-time.Minute)),
+				line("34% used", "7 days", asOf.Add(48*time.Hour)),
+			}}}},
+	})
+	codex := glanceTile(t, glanceSection(t, body), "Codex")
+	named := "5 hours: " + allowanceWindowOver
+	weekAt := strings.Index(codex, "<strong>34% of the week used</strong>")
+	ageAt := strings.Index(codex, "reported 3 hours ago")
+	overAt := strings.Index(codex, named)
+	if weekAt < 0 || ageAt < weekAt || overAt < ageAt {
+		t.Fatalf("a passed shorter window is not named under the week:\n%s", codex)
+	}
+	if strings.Contains(codex, "12% of the 5 hours used") || strings.Contains(codex[weekAt:overAt], allowanceWindowOver) {
+		t.Fatalf("the passed shorter window reads as the week or still shows its percent:\n%s", codex)
+	}
+	if strings.Count(codex, allowanceWindowOver) != 1 || strings.Count(codex, sessionReadingCaveat) != 1 {
+		t.Fatalf("over or caveat repeated:\n%s", codex)
+	}
+	if !strings.Contains(codex, "7 days · Received") || !strings.Contains(codex, "5 hours · Received") {
+		t.Fatalf("details do not name both windows:\n%s", codex)
+	}
 }
 
 func TestReportedAgeWords(t *testing.T) {
