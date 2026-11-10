@@ -215,3 +215,114 @@ func schemaAnswer(ask *coord.Ask) *coord.AskAnswer {
 		AnsweredAt: metav1.NewTime(ask.Spec.CreatedAt.Add(time.Minute)),
 	}
 }
+
+func schemaGrant(name, requestID string) *coord.Ask {
+	created := time.Date(2026, 10, 29, 20, 0, 0, 0, time.UTC)
+	return &coord.Ask{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec: coord.AskSpec{
+			ID: name, Type: "grant", Question: "Access for this session?",
+			AllowFreeText: false,
+			Context:       coord.AskContext{SessionName: "sess", SessionUID: "uid-1"},
+			CreatedAt:     metav1.NewTime(created),
+			RequestID:     requestID,
+			RequestDigest: strings.Repeat("ab", 32),
+			Grant: &coord.AskGrant{
+				UID:         "01234567-89ab-cdef-0123-456789abcdef",
+				ScopeDigest: strings.Repeat("A", 43),
+				Type:        "kube",
+				Target:      "dev-env-grant-workloads",
+				TTL:         "10m",
+				Detail:      "dev",
+			},
+		},
+	}
+}
+
+func TestAskSchemaGrantAccepted(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ask := schemaGrant("ask-1111111111111111", "request-g1")
+	if err := kube.Create(ctx, ask); err != nil {
+		t.Fatal("grant with typed scope and no expiry", err)
+	}
+	yes := true
+	ask.Status.State = "answered"
+	ask.Status.Answer = &coord.AskAnswer{
+		Approved:   &yes,
+		AnsweredBy: coord.AskActor{Issuer: "https://issuer.example", Subject: "subject-1", DisplayName: "Board user", Username: "a+b@c"},
+		AnsweredAt: metav1.NewTime(ask.Spec.CreatedAt.Add(time.Minute)),
+	}
+	if err := kube.Status().Update(ctx, ask); err != nil {
+		t.Fatal("grant answer with username", err)
+	}
+}
+
+func TestAskSchemaRefusesGrantShape(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	info := schemaAsk("ask-2222222222222222", "")
+	info.Spec.RequestID = "request-g2"
+	info.Spec.Grant = schemaGrant("ask-2222222222222222", "request-g2").Spec.Grant
+	if err := kube.Create(ctx, info); !apierrors.IsInvalid(err) {
+		t.Fatal("info with a grant object", err)
+	}
+	withExpiry := schemaGrant("ask-3333333333333333", "request-g3")
+	withExpiry.Spec.ExpiresAt = metav1.NewTime(withExpiry.Spec.CreatedAt.Add(time.Hour))
+	if err := kube.Create(ctx, withExpiry); !apierrors.IsInvalid(err) {
+		t.Fatal("grant with an expiry", err)
+	}
+	withScope := schemaGrant("ask-4444444444444444", "request-g4")
+	withScope.Spec.Scope = &coord.AskScope{Action: "merge", Target: "repo", ExpiresAt: metav1.NewTime(withScope.Spec.CreatedAt.Add(time.Hour))}
+	if err := kube.Create(ctx, withScope); !apierrors.IsInvalid(err) {
+		t.Fatal("grant with an approval scope", err)
+	}
+	missing := schemaGrant("ask-5555555555555555", "request-g5")
+	missing.Spec.Grant = nil
+	if err := kube.Create(ctx, missing); !apierrors.IsInvalid(err) {
+		t.Fatal("grant without a typed scope", err)
+	}
+}
+
+func TestAskSchemaRefusesUsernameOnTheWrongKind(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	grant := schemaGrant("ask-6666666666666666", "request-g6")
+	if err := kube.Create(ctx, grant); err != nil {
+		t.Fatal(err)
+	}
+	yes := true
+	grant.Status.State = "answered"
+	grant.Status.Answer = &coord.AskAnswer{
+		Approved:   &yes,
+		AnsweredBy: coord.AskActor{Issuer: "https://issuer.example", Subject: "subject-1", DisplayName: "Board user"},
+		AnsweredAt: metav1.NewTime(grant.Spec.CreatedAt.Add(time.Minute)),
+	}
+	if err := kube.Status().Update(ctx, grant); !apierrors.IsInvalid(err) {
+		t.Fatal("grant answer with no username", err)
+	}
+	slashed := grant.DeepCopy()
+	slashed.Status.Answer.AnsweredBy.Username = "tom/x"
+	if err := kube.Status().Update(ctx, slashed); !apierrors.IsInvalid(err) {
+		t.Fatal("grant answer with a slash in the username", err)
+	}
+	approval := schemaAsk("ask-7777777777777777", "")
+	approval.Spec.RequestID = "request-g7"
+	approval.Spec.Type = "approval"
+	approval.Spec.Options = nil
+	approval.Spec.Recommended = ""
+	approval.Spec.AllowFreeText = false
+	approval.Spec.Scope = &coord.AskScope{Action: "merge", Target: "repo", ExpiresAt: metav1.NewTime(approval.Spec.CreatedAt.Add(time.Hour))}
+	if err := kube.Create(ctx, approval); err != nil {
+		t.Fatal(err)
+	}
+	approval.Status.State = "answered"
+	approval.Status.Answer = &coord.AskAnswer{
+		Approved:   &yes,
+		AnsweredBy: coord.AskActor{Issuer: "https://issuer.example", Subject: "subject-1", DisplayName: "Board user", Username: "tom"},
+		AnsweredAt: metav1.NewTime(approval.Spec.CreatedAt.Add(time.Minute)),
+	}
+	if err := kube.Status().Update(ctx, approval); !apierrors.IsInvalid(err) {
+		t.Fatal("approval answer with username", err)
+	}
+}

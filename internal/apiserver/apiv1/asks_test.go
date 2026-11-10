@@ -1221,3 +1221,119 @@ func TestAskBlankRequiredFields(t *testing.T) {
 		t.Errorf("answer text with visible character: want accepted, got %v", err)
 	}
 }
+
+func grantWire() *AskGrant {
+	return &AskGrant{
+		UID:         "01234567-89ab-cdef-0123-456789abcdef",
+		ScopeDigest: strings.Repeat("A", 43),
+		Type:        "kube",
+		Target:      "dev-env-grant-workloads",
+		TTL:         "10m",
+		Detail:      "dev",
+	}
+}
+
+func grantAskRecord() Ask {
+	a := askRecord()
+	a.Type = AskTypeGrant
+	a.Question = "Access for this session?"
+	a.Options = nil
+	a.Recommended = ""
+	a.AllowFreeText = false
+	a.Scope = nil
+	a.Grant = grantWire()
+	a.ExpiresAt = time.Time{}
+	return a
+}
+
+// TestGrantAskValidation covers the grant kind on the wire: a typed scope with
+// no expiry is accepted, an info ask cannot carry that object, a grant ask
+// cannot carry an expiry or an approval scope, and an approval past 24 hours
+// is still refused. Answer checks are in TestGrantAskAnswer.
+func TestGrantAskValidation(t *testing.T) {
+	if err := ValidateAsk(grantAskRecord()); err != nil {
+		t.Fatal("grant with typed scope and no expiry", err)
+	}
+	withGrant := askRecord()
+	withGrant.Grant = grantWire()
+	if err := ValidateAsk(withGrant); !errors.Is(err, ErrAskInvalid) {
+		t.Fatal("info with a grant object", err)
+	}
+	expired := grantAskRecord()
+	expired.ExpiresAt = expired.CreatedAt.Add(time.Hour)
+	if err := ValidateAsk(expired); !errors.Is(err, ErrAskInvalid) {
+		t.Fatal("grant with an expiry", err)
+	}
+	scoped := grantAskRecord()
+	scoped.Scope = &AskScope{Action: "merge", Target: "repo#1", ExpiresAt: askNow.Add(time.Hour)}
+	if err := ValidateAsk(scoped); !errors.Is(err, ErrAskInvalid) {
+		t.Fatal("grant with an approval scope", err)
+	}
+	over := askApprovalRequest()
+	over.Scope.ExpiresAt = askNow.Add(AskScopeMaxTTL + time.Second)
+	over.ExpiresIn = "1m"
+	if err := over.ValidateAt(askNow); !errors.Is(err, ErrAskInvalid) {
+		t.Fatal("approval past 24 hours", err)
+	}
+	if got := grantAskRecord().ApprovalValid(askNow.Add(time.Hour)); got {
+		t.Fatal("a grant ask was a standing approval")
+	}
+	view := AskActor{Issuer: "https://idp.example", Subject: "u-1", DisplayName: "Tom", Username: "tom"}
+	if got := view.SessionView(); got.Username != "" || got.Issuer != "" || got.Subject != "" || got.DisplayName != "Tom" {
+		t.Fatalf("session view %+v", got)
+	}
+	raw, err := json.Marshal(view.SessionView())
+	if err != nil || strings.Contains(string(raw), "username") || strings.Contains(string(raw), "tom") {
+		t.Fatal("session view json", string(raw), err)
+	}
+}
+
+// TestGrantAskAnswer checks ValidateForAt for a grant answer, and that an
+// approval still expires on the clock.
+func TestGrantAskAnswer(t *testing.T) {
+	grant := grantAskRecord()
+	yes := true
+	actor := askActor()
+	actor.Username = "tom"
+	later := askNow.Add(365 * 24 * time.Hour)
+	if err := (AskAnswerRequest{Approved: &yes, Actor: actor}).ValidateForAt(grant, later); err != nil {
+		t.Fatal("grant answer with username and no clock check", err)
+	}
+	actor.Username = "a+b@c"
+	if err := (AskAnswerRequest{Approved: &yes, Actor: actor}).ValidateForAt(grant, later); err != nil {
+		t.Fatal("username with @ and +", err)
+	}
+	actor.Username = "tom/x"
+	if err := (AskAnswerRequest{Approved: &yes, Actor: actor}).ValidateForAt(grant, later); !errors.Is(err, ErrAskInvalid) {
+		t.Fatal("slash in the username", err)
+	}
+	actor.Username = ""
+	if err := (AskAnswerRequest{Approved: &yes, Actor: actor}).ValidateForAt(grant, later); !errors.Is(err, ErrAskInvalid) {
+		t.Fatal("grant answer with no username", err)
+	}
+	approval := askRecord()
+	approval.Type = AskTypeApproval
+	approval.Scope = &AskScope{Action: "merge", Target: "repo#1", ExpiresAt: askNow.Add(time.Hour)}
+	approval.ExpiresAt = approval.Scope.ExpiresAt
+	named := askActor()
+	named.Username = "tom"
+	if err := (AskAnswerRequest{Approved: &yes, Actor: named}).ValidateForAt(approval, askNow.Add(time.Minute)); !errors.Is(err, ErrAskInvalid) {
+		t.Fatal("approval answer with username", err)
+	}
+	stored := askAnswered(approval)
+	stored.Answer.Approved = &yes
+	stored.Answer.AnsweredBy.Username = "tom"
+	if err := ValidateAsk(stored); !errors.Is(err, ErrAskInvalid) {
+		t.Fatal("stored approval answer with username", err)
+	}
+	if got := approval.EffectiveState(approval.Scope.ExpiresAt); got != AskStateExpired {
+		t.Fatalf("approval at scope expiry: %s", got)
+	}
+	if err := (AskAnswerRequest{Approved: &yes, Actor: askActor()}).ValidateForAt(approval, approval.Scope.ExpiresAt); !errors.Is(err, ErrAskExpired) {
+		t.Fatal("approval answer at scope expiry", err)
+	}
+	open := grantAskRecord()
+	if got := open.EffectiveState(later); got != AskStateOpen {
+		t.Fatalf("grant effective state %s", got)
+	}
+}

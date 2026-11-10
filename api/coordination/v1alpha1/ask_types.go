@@ -15,16 +15,19 @@ func init() {
 	})
 }
 
-// Ask is one agent question or approval request (OpenProject Epic #254). The
-// spec is immutable. The status carries the lifecycle, and its answer is set
-// once. v1 stores no inbox delivery: the requester reads the answer from the ask.
-// A root rule stops a status write from dropping a stored answer. The status
-// type's own rule does not run once status itself is gone.
+// Ask is one agent question, approval request, or grant that needs a person
+// (OpenProject Epic #254, ADR-021). The spec is immutable. The status carries
+// the lifecycle, and its answer is set once. v1 stores no inbox delivery: the
+// requester reads the answer from the ask. A root rule stops a status write
+// from dropping a stored answer. The status type's own rule does not run once
+// status itself is gone.
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:validation:XValidation:rule="self.metadata.name == self.spec.id",message="the ask's name is its id"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.answer) || (has(self.status) && has(self.status.answer))",message="an ask answer cannot be dropped with status"
+// +kubebuilder:validation:XValidation:rule="!has(self.status) || !has(self.status.answer) || self.spec.type != 'grant' || has(self.status.answer.answeredBy.username)",message="a grant answer has a username"
+// +kubebuilder:validation:XValidation:rule="!has(self.status) || !has(self.status.answer) || self.spec.type == 'grant' || !has(self.status.answer.answeredBy.username)",message="an info or approval answer has no username"
 type Ask struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -40,13 +43,22 @@ type AskList struct {
 }
 
 // AskSpec is the ask as it was created. Nothing in it changes.
+// A grant ask carries grant and omits expiresAt and the approval scope.
+// An info or approval ask omits grant and keeps expiresAt. Stored info and
+// approval asks already have expiresAt and no grant, so these rules do not
+// make them invalid.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ask spec is immutable"
+// +kubebuilder:validation:XValidation:rule="self.type == 'grant' || !has(self.grant)",message="an info or approval ask has no grant"
+// +kubebuilder:validation:XValidation:rule="self.type != 'grant' || has(self.grant)",message="a grant ask has a typed scope"
+// +kubebuilder:validation:XValidation:rule="self.type != 'grant' || !has(self.scope)",message="a grant ask has no approval scope"
+// +kubebuilder:validation:XValidation:rule="self.type != 'grant' || !has(self.expiresAt)",message="a grant ask has no expiry"
+// +kubebuilder:validation:XValidation:rule="self.type == 'grant' || has(self.expiresAt)",message="an info or approval ask has an expiry"
 type AskSpec struct {
 	// +kubebuilder:validation:MinLength=20
 	// +kubebuilder:validation:MaxLength=20
 	// +kubebuilder:validation:Pattern=`^ask-[0-9a-f]{16}$`
 	ID string `json:"id"`
-	// +kubebuilder:validation:Enum=info;approval
+	// +kubebuilder:validation:Enum=info;approval;grant
 	Type string `json:"type"`
 	// Question is 1 to 1000 runes. The byte ceiling is four bytes per rune.
 	// +kubebuilder:validation:MinLength=1
@@ -62,9 +74,16 @@ type AskSpec struct {
 	AllowFreeText bool       `json:"allowFreeText"`
 	Context       AskContext `json:"context"`
 	// +optional
-	Scope     *AskScope   `json:"scope,omitempty"`
+	Scope *AskScope `json:"scope,omitempty"`
+	// Grant is the typed scope of a grant ask. Info and approval asks omit it.
+	// +optional
+	Grant     *AskGrant   `json:"grant,omitempty"`
 	CreatedAt metav1.Time `json:"createdAt"`
-	ExpiresAt metav1.Time `json:"expiresAt"`
+	// ExpiresAt is the answer deadline of an info or approval ask. A grant ask
+	// omits it. The field stays optional so a grant can leave it unset; every
+	// stored info or approval ask already sets it.
+	// +optional
+	ExpiresAt metav1.Time `json:"expiresAt,omitempty"`
 	// +kubebuilder:validation:MinLength=8
 	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9-]{8,64}$`
@@ -112,6 +131,7 @@ type AskContext struct {
 }
 
 // AskScope is the single action an approval ask names. Info asks omit it.
+// A grant ask omits it too; the grant object is that ask's scope.
 type AskScope struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=800
@@ -120,6 +140,39 @@ type AskScope struct {
 	// +kubebuilder:validation:MaxLength=800
 	Target    string      `json:"target"`
 	ExpiresAt metav1.Time `json:"expiresAt"`
+}
+
+// AskGrant is the typed scope of a grant ask (ADR-021). It names the
+// AccessGrant the ask is about. It is not an approval scope, and it is not
+// part of the AccessGrant spec.
+type AskGrant struct {
+	// UID is the AccessGrant object's metadata.uid.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9]([A-Za-z0-9._:-]*[A-Za-z0-9])?$`
+	UID string `json:"uid"`
+	// ScopeDigest is grantattest.ScopeDigest of that object: 43 base64url characters.
+	// +kubebuilder:validation:MinLength=43
+	// +kubebuilder:validation:MaxLength=43
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]{43}$`
+	ScopeDigest string `json:"scopeDigest"`
+	// Type is the grant's type.
+	// +kubebuilder:validation:Enum=kube;egress;credential;breakglass;maintenance
+	Type string `json:"type"`
+	// Target is one token, 1 to 200 runes. The byte ceiling is four bytes per rune.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=800
+	Target string `json:"target"`
+	// TTL is the duration the grant asked, stored as a duration string of at
+	// most 16 characters. The broker checks the 10m to 8h bounds.
+	// +kubebuilder:validation:MinLength=2
+	// +kubebuilder:validation:MaxLength=16
+	// +kubebuilder:validation:Pattern=`^([0-9]+(h|m|s))+$`
+	TTL string `json:"ttl"`
+	// Detail is optional display, 0 to 200 runes. It is not part of the binding.
+	// +kubebuilder:validation:MaxLength=800
+	// +optional
+	Detail string `json:"detail,omitempty"`
 }
 
 // AskStatus is the lifecycle. An answer is written once and never replaced
@@ -166,4 +219,11 @@ type AskActor struct {
 	// +kubebuilder:validation:MaxLength=480
 	// +optional
 	DisplayName string `json:"displayName,omitempty"`
+	// Username is the portal preferred_username. A grant answer requires it.
+	// An info or approval answer omits it. Session responses omit it.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._@+-]{0,62}$`
+	// +optional
+	Username string `json:"username,omitempty"`
 }
