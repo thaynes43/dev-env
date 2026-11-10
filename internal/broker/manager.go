@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	coordv1 "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
 
@@ -52,7 +53,10 @@ type Options struct {
 	EnableHWSSHGrants bool
 	// EnableAttestedGrants turns on approval through attested GrantPolicies
 	// (agent attestation, not verified human identity). Default off.
-	EnableAttestedGrants           bool
+	EnableAttestedGrants bool
+	// EnableGrantAsks opens a grant Ask for a grant no policy and no delegate
+	// takes, and does not deny it at 30 minutes (ADR-021). Default off.
+	EnableGrantAsks                bool
 	EnableMaintenanceGrants        bool
 	MaintenanceHumanServiceAccount string
 	// AttestedMaintenanceCreators lists the ServiceAccounts whose directly
@@ -121,7 +125,7 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		return nil, nil, errors.New("the session and policy namespaces must be set")
 	}
 	scheme := runtime.NewScheme()
-	if err := errors.Join(clientgoscheme.AddToScheme(scheme), v1alpha1.AddToScheme(scheme)); err != nil {
+	if err := errors.Join(clientgoscheme.AddToScheme(scheme), v1alpha1.AddToScheme(scheme), coordv1.AddToScheme(scheme)); err != nil {
 		return nil, nil, err
 	}
 	mo := ctrl.Options{
@@ -167,6 +171,7 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		EnableProxmoxGrants:            o.EnableProxmoxGrants,
 		EnableHWSSHGrants:              o.EnableHWSSHGrants,
 		EnableAttestedGrants:           o.EnableAttestedGrants,
+		EnableGrantAsks:                o.EnableGrantAsks,
 		AttestedMaintenanceCreators:    slices.Clone(o.AttestedMaintenanceCreators),
 		EnableMaintenanceGrants:        o.EnableMaintenanceGrants,
 		EnableAttestedMaintenance:      o.EnableAttestedMaintenance,
@@ -197,9 +202,14 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 // grants, and every GrantPolicy change, which enqueues every pending grant.
 // CredentialJob receipts enqueue their immutable grant reference too.
 func (b *Broker) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	bldr := ctrl.NewControllerManagedBy(mgr).
 		Named("accessgrant").
-		For(&v1alpha1.AccessGrant{}).
+		For(&v1alpha1.AccessGrant{})
+	if b.EnableGrantAsks {
+		// Flag off, the broker does not watch Asks, so it needs no Ask RBAC.
+		bldr = bldr.Watches(&coordv1.Ask{}, handler.EnqueueRequestsFromMapFunc(b.enqueueGrantAsk))
+	}
+	return bldr.
 		Watches(&v1alpha1.AgentSession{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
 				return b.grantsOf(ctx, o.GetName(), false)

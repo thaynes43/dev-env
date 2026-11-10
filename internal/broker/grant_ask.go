@@ -1,0 +1,455 @@
+package broker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
+	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/asks"
+	"github.com/thaynes43/dev-env/internal/grantattest"
+	"github.com/thaynes43/dev-env/internal/taskclaim"
+)
+
+const (
+	// grantAskOriginBroker is the ask-origin label value the broker sets.
+	// The store does not set it. A session create cannot set it either.
+	grantAskOriginBroker = "broker"
+	// grantAskRecheck is how often a grant selected for Tom is reconciled
+	// while its Ask is open. An answer is also enqueued from the Ask watch.
+	grantAskRecheck = 30 * time.Second
+	// grantAskQuestionFallback is the question when spec.reason fails the
+	// Ask text rules. The grant is still opened.
+	grantAskQuestionFallback = "The session asked for access. The reason could not be shown on the board."
+	// grantAskWorkPackageMax is the Ask field's maximum OpenProject id.
+	grantAskWorkPackageMax = 2_000_000_000
+)
+
+var (
+	// errGrantAskLater means this pass opens nothing and does not deny.
+	// The next reconcile tries again.
+	errGrantAskLater = errors.New("grant ask will be retried")
+	// errGrantAskStop means this pass must not approve and must not deny.
+	errGrantAskStop = errors.New("grant ask stops without a decision")
+
+	grantAskDigestPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	grantAskTTLPattern    = regexp.MustCompile(`^([0-9]+(h|m|s))+$`)
+)
+
+// grantAskCreator is the part of asks.KubeStore the broker calls. A nil
+// grantAsks field uses the broker's own client.
+type grantAskCreator interface {
+	Create(ctx context.Context, req asks.Requester, in apiv1.AskCreateRequest, now time.Time) (apiv1.Ask, bool, error)
+}
+
+func (b *Broker) askCreator() grantAskCreator {
+	if b.grantAsks != nil {
+		return b.grantAsks
+	}
+	return b.askStore()
+}
+
+func (b *Broker) askStore() asks.KubeStore {
+	return asks.KubeStore{Client: b.Client, Live: b.APIReader, Namespace: asks.Namespace}
+}
+
+// holdGrantAsk opens one grant Ask for a grant no policy and no delegate
+// took, and leaves the grant pending. A failed open, a full board, an unfit
+// UID and an unconfirmed count all requeue. None of them denies the grant.
+func (b *Broker) holdGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) (ctrlResult, error) {
+	if err := b.ensureGrantAsk(ctx, g, sess, now); err != nil {
+		return b.grantAskHoldError(ctx, g, err)
+	}
+	return b.noteGrantAsk(ctx, g, now)
+}
+
+// ctrlResult is an alias so this file can name the result without importing
+// the controller package twice in signatures that already use reconcile.
+type ctrlResult = reconcile.Result
+
+func (b *Broker) grantAskHoldError(ctx context.Context, g *v1alpha1.AccessGrant, err error) (reconcile.Result, error) {
+	switch {
+	case errors.Is(err, asks.ErrLimit), errors.Is(err, asks.ErrUnavailable):
+		b.event(g, corev1.EventTypeWarning, "GrantAsk", "AskBoardFull", "the asks board is full; the grant stays pending")
+		log.FromContext(ctx).Error(err, "grant ask was not opened", "grant", g.Name)
+	case errors.Is(err, errGrantAskStop):
+		// Pending, and not approved. The next pass looks again. Nothing here
+		// waits on a person to clear a lock.
+		return reconcile.Result{RequeueAfter: grantAskRecheck}, nil
+	default:
+		log.FromContext(ctx).Error(err, "grant ask was not opened", "grant", g.Name)
+	}
+	return reconcile.Result{RequeueAfter: grantAskRecheck}, nil
+}
+
+func (b *Broker) noteGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (reconcile.Result, error) {
+	wait := reconcile.Result{RequeueAfter: grantAskRecheck}
+	if g.Status.NotifiedAt != nil || b.Notifier == nil {
+		return wait, nil
+	}
+	if err := b.Notifier.NotifyPending(ctx, g); err != nil {
+		b.event(g, corev1.EventTypeWarning, "Notify", "NotifyFailed", "could not tell Tom: "+err.Error())
+		return reconcile.Result{}, fmt.Errorf("notify: %w", err)
+	}
+	g.Status.NotifiedAt = &now
+	if written, err := b.writeStatus(ctx, g); !written || err != nil {
+		return reconcile.Result{}, err
+	}
+	log.FromContext(ctx).Info("grant waits for Tom", grantFields(g)...)
+	b.event(g, corev1.EventTypeNormal, "Notify", "WaitsForTom", "no standing policy matches; a grant ask was opened")
+	return wait, nil
+}
+
+func (b *Broker) ensureGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) error {
+	if b.SessionNamespace != asks.Namespace || sess == nil {
+		return errGrantAskLater
+	}
+	if g.Spec.Requester.SessionUID == "" || string(sess.UID) != string(g.Spec.Requester.SessionUID) || sess.Name != g.Spec.Requester.Session {
+		return errGrantAskLater
+	}
+	id, ok := grantAskRequestID(g.UID)
+	if !ok {
+		return errGrantAskLater
+	}
+	body, err := b.grantAskBody(ctx, g, sess, id, now.Time)
+	if err != nil {
+		return err
+	}
+	req := asks.Requester{Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session, UID: string(g.Spec.Requester.SessionUID)}
+	wire, created, err := b.askCreator().Create(ctx, req, body, now.Time)
+	if errors.Is(err, asks.ErrConflict) {
+		// The request id is already stored. Keep that Ask. Do not write a
+		// second one and do not deny.
+		created = false
+		err = nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := b.ensureGrantAskOrigin(ctx, g); err != nil {
+		return err
+	}
+	if created {
+		log.FromContext(ctx).Info("opened a grant ask", "grant", g.Name, "ask", wire.ID)
+	}
+	return nil
+}
+
+func (b *Broker) ensureGrantAskOrigin(ctx context.Context, g *v1alpha1.AccessGrant) error {
+	obj, err := b.loadGrantAsk(ctx, g)
+	if err != nil {
+		return err
+	}
+	if obj.Spec.Type != string(apiv1.AskTypeGrant) || obj.Spec.Grant == nil || obj.Spec.Grant.UID != string(g.UID) {
+		return errGrantAskStop
+	}
+	if obj.Labels[asks.OriginLabel] == grantAskOriginBroker {
+		return nil
+	}
+	if obj.Labels[asks.OriginLabel] != "" {
+		return errGrantAskStop
+	}
+	base := obj.DeepCopy()
+	if obj.Labels == nil {
+		obj.Labels = map[string]string{}
+	}
+	obj.Labels[asks.OriginLabel] = grantAskOriginBroker
+	if err := b.Client.Patch(ctx, obj, client.MergeFrom(base)); err != nil {
+		if apierrors.IsConflict(err) {
+			return errGrantAskLater
+		}
+		return err
+	}
+	return nil
+}
+
+// withdrawOpenGrantAsk withdraws the broker's open grant Ask when the session
+// releases the grant. A missing Ask is not an error. An Ask that is not this
+// grant's is left alone. The session-ended path does not call this: that card
+// stays open for Dismiss.
+func (b *Broker) withdrawOpenGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant) error {
+	obj, err := b.loadGrantAsk(ctx, g)
+	if apierrors.IsNotFound(err) || errors.Is(err, errGrantAskLater) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if obj.Labels[asks.OriginLabel] != grantAskOriginBroker || obj.Spec.Type != string(apiv1.AskTypeGrant) || obj.Spec.Grant == nil || obj.Spec.Grant.UID != string(g.UID) {
+		return nil
+	}
+	if obj.Status.State != "" && obj.Status.State != string(apiv1.AskStateOpen) {
+		return nil
+	}
+	req := asks.Requester{Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session, UID: string(g.Spec.Requester.SessionUID)}
+	if _, err := b.askStore().Withdraw(ctx, obj.Name, req, b.now().Time); err != nil {
+		if errors.Is(err, asks.ErrNotFound) || errors.Is(err, apiv1.ErrAskNotOpen) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (b *Broker) loadGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant) (*coord.Ask, error) {
+	name, ok := grantAskObjectName(b.SessionNamespace, g)
+	if !ok || b.APIReader == nil {
+		return nil, errGrantAskLater
+	}
+	var obj coord.Ask
+	if err := b.APIReader.Get(ctx, client.ObjectKey{Namespace: asks.Namespace, Name: name}, &obj); err != nil {
+		return nil, err
+	}
+	return &obj, nil
+}
+
+func grantAskObjectName(namespace string, g *v1alpha1.AccessGrant) (string, bool) {
+	if namespace != asks.Namespace || g.Spec.Requester.Session == "" || g.Spec.Requester.SessionUID == "" {
+		return "", false
+	}
+	id, ok := grantAskRequestID(g.UID)
+	if !ok {
+		return "", false
+	}
+	return asks.Name(asks.Requester{
+		Namespace: namespace,
+		Name:      g.Spec.Requester.Session,
+		UID:       string(g.Spec.Requester.SessionUID),
+	}, id), true
+}
+
+func grantAskRequestID(uid types.UID) (string, bool) {
+	id := "grant-" + string(uid)
+	if !apiv1.ValidAskRequestID(id) {
+		return "", false
+	}
+	return id, true
+}
+
+func (b *Broker) grantAskBody(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, id string, now time.Time) (apiv1.AskCreateRequest, error) {
+	target, ok := grantAskTarget(g)
+	if !ok {
+		return apiv1.AskCreateRequest{}, errGrantAskLater
+	}
+	ttl, ok := grantAskTTL(g.Spec.TTL.Duration)
+	if !ok {
+		return apiv1.AskCreateRequest{}, errGrantAskLater
+	}
+	digest := grantattest.ScopeDigest(g)
+	if !grantAskDigestPattern.MatchString(digest) {
+		return apiv1.AskCreateRequest{}, errGrantAskLater
+	}
+	body := apiv1.AskCreateRequest{
+		RequestID: id,
+		Type:      apiv1.AskTypeGrant,
+		Grant: &apiv1.AskGrant{
+			UID: string(g.UID), ScopeDigest: digest, Type: string(g.Spec.Type),
+			Target: target, TTL: ttl, Detail: grantAskDetail(g),
+		},
+		Context: apiv1.AskRequestContext{WorkPackage: b.grantAskWorkPackage(ctx, sess)},
+	}
+	body.Question = grantAskQuestion(g.Spec.Reason, body, now)
+	if body.Grant != nil && body.Grant.Detail != "" && body.ValidateAt(now) != nil {
+		body.Grant.Detail = ""
+	}
+	if err := body.ValidateAt(now); err != nil {
+		return apiv1.AskCreateRequest{}, errGrantAskLater
+	}
+	return body, nil
+}
+
+func grantAskQuestion(reason string, body apiv1.AskCreateRequest, now time.Time) string {
+	q := truncateRunes(apiv1.NormalizeAskText(reason), apiv1.AskQuestionMaxRunes)
+	trial := body
+	if trial.Grant != nil {
+		g := *trial.Grant
+		g.Detail = ""
+		trial.Grant = &g
+	}
+	trial.Question = q
+	if trial.ValidateAt(now) == nil {
+		return q
+	}
+	return grantAskQuestionFallback
+}
+
+func grantAskTarget(g *v1alpha1.AccessGrant) (string, bool) {
+	var target string
+	switch g.Spec.Type {
+	case v1alpha1.GrantKube, v1alpha1.GrantBreakglass:
+		if g.Spec.Kube == nil {
+			return "", false
+		}
+		target = g.Spec.Kube.Role
+	case v1alpha1.GrantCredential:
+		if g.Spec.Credential == nil {
+			return "", false
+		}
+		target = string(g.Spec.Credential.Name)
+	case v1alpha1.GrantEgress:
+		target = "egress"
+	case v1alpha1.GrantMaintenance:
+		target = "maintenance"
+	default:
+		return "", false
+	}
+	n := utf8.RuneCountInString(target)
+	if n < 1 || n > apiv1.AskScopeFieldMaxRunes {
+		return "", false
+	}
+	return target, true
+}
+
+func grantAskTTL(d time.Duration) (string, bool) {
+	s := d.String()
+	if len(s) < 2 || len(s) > apiv1.AskGrantTTLMaxLen || !grantAskTTLPattern.MatchString(s) {
+		return "", false
+	}
+	parsed, err := time.ParseDuration(s)
+	if err != nil || parsed != d {
+		return "", false
+	}
+	return s, true
+}
+
+func grantAskDetail(g *v1alpha1.AccessGrant) string {
+	switch g.Spec.Type {
+	case v1alpha1.GrantKube, v1alpha1.GrantBreakglass:
+		if g.Spec.Kube == nil || len(g.Spec.Kube.Namespaces) == 0 {
+			return "cluster"
+		}
+		return strings.Join(g.Spec.Kube.Namespaces, ",")
+	case v1alpha1.GrantEgress:
+		return egressAskDetail(g.Spec.Egress)
+	default:
+		return ""
+	}
+}
+
+func egressAskDetail(e *v1alpha1.EgressGrant) string {
+	if e == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(e.FQDNs)+len(e.CIDRs)+len(e.Endpoints))
+	parts = append(parts, e.FQDNs...)
+	parts = append(parts, e.CIDRs...)
+	for _, ep := range e.Endpoints {
+		if ep.Namespace != "" {
+			parts = append(parts, ep.Namespace)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, ",")
+}
+
+// grantAskWorkPackage is the one OpenProject issue id on the session, or 0
+// when there is not exactly one. A failed list omits the link and the Ask is
+// still created.
+func (b *Broker) grantAskWorkPackage(ctx context.Context, sess *v1alpha1.AgentSession) int {
+	if sess == nil || sess.UID == "" || b.APIReader == nil || b.SessionNamespace != asks.Namespace {
+		return 0
+	}
+	who := taskclaim.SessionLabel(coord.SessionIdentity{
+		Namespace: b.SessionNamespace, Name: sess.Name, UID: string(sess.UID),
+	})
+	var list coord.TaskClaimList
+	if err := b.APIReader.List(ctx, &list, client.InNamespace(b.SessionNamespace), client.MatchingLabels{taskclaim.SourceLabel: who}); err != nil {
+		log.FromContext(ctx).Error(err, "task claims were not read; the grant ask has no story link", "session", sess.Name)
+		return 0
+	}
+	if list.Continue != "" {
+		log.FromContext(ctx).Error(errors.New("task claim list did not finish"), "task claims were not read; the grant ask has no story link", "session", sess.Name)
+		return 0
+	}
+	ids := map[int]struct{}{}
+	for i := range list.Items {
+		item := &list.Items[i]
+		if !item.DeletionTimestamp.IsZero() {
+			continue
+		}
+		id, ok := openProjectIssue(item.Spec.Identity.TaskKey)
+		if !ok {
+			continue
+		}
+		ids[id] = struct{}{}
+	}
+	if len(ids) != 1 {
+		return 0
+	}
+	for id := range ids {
+		return id
+	}
+	return 0
+}
+
+func openProjectIssue(taskKey string) (int, bool) {
+	rest, ok := strings.CutPrefix(taskKey, "issue:")
+	if !ok || rest == "" || rest[0] < '1' || rest[0] > '9' {
+		return 0, false
+	}
+	for _, c := range rest[1:] {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil || n <= 0 || n > grantAskWorkPackageMax || strconv.Itoa(n) != rest {
+		return 0, false
+	}
+	return n, true
+}
+
+func truncateRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n])
+}
+
+// enqueueGrantAsk wakes the grant an answered Ask names. Flag off, the watch
+// is not registered. A grant that is already decided is left alone.
+func (b *Broker) enqueueGrantAsk(ctx context.Context, o client.Object) []reconcile.Request {
+	if !b.EnableGrantAsks {
+		return nil
+	}
+	ask, ok := o.(*coord.Ask)
+	if !ok || ask.Spec.Grant == nil || ask.Labels[asks.OriginLabel] != grantAskOriginBroker {
+		return nil
+	}
+	if b.APIReader == nil {
+		return nil
+	}
+	var list v1alpha1.AccessGrantList
+	if err := b.APIReader.List(ctx, &list, client.InNamespace(b.SessionNamespace)); err != nil {
+		return nil
+	}
+	var out []reconcile.Request
+	for i := range list.Items {
+		g := &list.Items[i]
+		if string(g.UID) != ask.Spec.Grant.UID {
+			continue
+		}
+		if g.Status.Phase != "" && g.Status.Phase != v1alpha1.GrantPending {
+			continue
+		}
+		out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(g)})
+	}
+	return out
+}
