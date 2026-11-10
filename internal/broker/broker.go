@@ -15,12 +15,13 @@
 //     decision); -> Denied when Tom or a delegate denies, when the broker's
 //     checks fail, when the session ended, or after 30 minutes unanswered
 //     (deniedBy timeout); -> Released when the session gives it back.
-//     With --enable-grant-asks, the broker opens one grant Ask when no policy
-//     and no delegate takes the grant, and that Ask alone decides it: the
-//     30-minute deny does not apply once the broker has opened the Ask
-//     (ADR-021). A grant with no broker Ask, including a credential grant and
-//     one still on the delegate path, is still denied at 30 minutes. Flag off,
-//     the pending path is unchanged.
+//     With --enable-grant-asks, the broker writes status.ask and opens one
+//     grant Ask when no policy and no delegate takes the grant. From that
+//     write, that Ask alone decides it, and a missing or foreign Ask denies
+//     the grant (ADR-022). A grant with no route, including a credential
+//     grant, a maintenance grant, and one an attested policy would match, is
+//     still denied at 30 minutes. Flag off and no route, the pending path is
+//     unchanged.
 //   - Active -> Expired at expiresAt, Released on spec.release or when the
 //     session ends, Denied when a check fails, Failed when it cannot be made.
 //     Each of these revokes first.
@@ -35,7 +36,9 @@
 //
 // Approval and execution fences persist in AccessGrants. Credential execution
 // uses immutable CredentialJobs with keeper-owned receipts; a receipt never
-// approves a grant. A restart needs no in-memory grant state. The envtest suite in this
+// approves a grant. The route is status.ask. A create this process has not
+// seen succeed is remembered only until restart; after a restart a routed
+// grant whose Ask is missing is denied. The envtest suite in this
 // package runs the broker under exactly the RBAC and admission policy that
 // haynes-ops gives it.
 package broker
@@ -46,6 +49,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -171,6 +175,13 @@ type Broker struct {
 	// to prove a pre-check did not decide, or to count one real decision.
 	decideFn func(ctx context.Context, grantName string, d Decision) error
 
+	// grantAskMu guards the in-memory route timers. The route itself is status.ask.
+	grantAskMu sync.Mutex
+	// grantAskUnreadAt is when a routed grant's Ask first could not be read.
+	grantAskUnreadAt map[types.UID]time.Time
+	// grantAskCreateWait is a create this process has not seen succeed.
+	grantAskCreateWait map[types.UID]struct{}
+
 	// reconciled, when set, hears of every finished reconcile (tests).
 	reconciled func(types.NamespacedName)
 }
@@ -253,43 +264,27 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 }
 
 // pending answers a grant that waits: released, timed out, approved by a
-// policy, or still waiting for Tom, who is told once. With EnableGrantAsks,
-// an Ask the broker opened is read before any policy, attestation or
-// delegate path, and that Ask alone decides the grant. The 30-minute deny
-// still applies to a grant for which the broker has not opened an Ask.
-// Maintenance keeps its own wait and is not given an Ask.
+// policy, or still waiting for Tom, who is told once. A grant with status.ask
+// set is on the Ask path (ADR-022): that Ask alone decides it, flag on or
+// off. A grant with no route keeps the 30-minute deny, including while Ask
+// reads fail. Maintenance is not given an Ask. A grant an attested policy
+// would match is not given one either.
 func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) (ctrl.Result, error) {
 	if g.Spec.Release {
-		if b.EnableGrantAsks {
+		if b.EnableGrantAsks || g.Status.Ask != "" {
 			if err := b.withdrawOpenGrantAsk(ctx, g); err != nil {
 				return ctrl.Result{RequeueAfter: time.Second}, nil
 			}
 		}
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released before an answer", now)
 	}
-	deadline := g.CreationTimestamp.Add(PendingTimeout)
-	// Credential grants open no Ask in this slice. Maintenance opens none
-	// either. Every other flag-on grant is gated on its Ask before a policy,
-	// an attestation or a delegate can approve it.
-	if b.EnableGrantAsks && g.Spec.Type != v1alpha1.GrantMaintenance && g.Spec.Type != v1alpha1.GrantCredential {
-		switch b.classifyGrantAsk(ctx, g) {
-		case grantAskUnread:
-			// The Ask could not be read. Do not approve by another path.
-			return ctrl.Result{RequeueAfter: time.Second}, nil
-		case grantAskForeign:
-			// An Ask at the broker's name without the broker origin is not
-			// adopted, and its answer is not read.
-			b.noteForeignGrantAsk(g)
-			if !now.Time.Before(deadline) {
-				return b.end(ctx, g, v1alpha1.GrantDenied, DeniedByTimeout, "no answer in 30 minutes", now)
-			}
-			return ctrl.Result{RequeueAfter: min(grantAskRecheck, deadline.Sub(now.Time))}, nil
-		case grantAskBroker:
-			return b.holdGrantAsk(ctx, g, sess, now)
-		}
+	// The route is read first. A routed grant is never given another path.
+	if g.Status.Ask != "" {
+		return b.followGrantAskRoute(ctx, g, sess, now)
 	}
-	// No broker Ask is open for this grant. Flag on or off, the 30-minute
-	// deny is the one it has today, before a policy or a delegate runs.
+	deadline := g.CreationTimestamp.Add(PendingTimeout)
+	// No route. The 30-minute deny is decided before any Ask read, so a
+	// failed read cannot postpone it.
 	if !now.Time.Before(deadline) {
 		return b.end(ctx, g, v1alpha1.GrantDenied, DeniedByTimeout, "no answer in 30 minutes", now)
 	}
@@ -313,43 +308,113 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 		}
 		return ctrl.Result{RequeueAfter: min(5*time.Second, deadline.Sub(now.Time))}, nil
 	}
+	open := false
+	if b.EnableGrantAsks {
+		switch b.classifyUnroutedGrantAsk(ctx, g) {
+		case grantAskUnread:
+			res, err, waiting := b.pendingUnrouted(ctx, g, sess, now, deadline, false)
+			if waiting {
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
+			return res, err
+		case grantAskBroker:
+			// An Ask this grant already owns is followed, including a
+			// credential grant. The exclusion below only stops a new Ask.
+			if err := b.claimGrantAskRoute(ctx, g); err != nil {
+				if errors.Is(err, errGrantAskRouteReread) {
+					return ctrl.Result{RequeueAfter: time.Second}, nil
+				}
+				return ctrl.Result{}, err
+			}
+			return b.followGrantAskRoute(ctx, g, sess, now)
+		case grantAskForeign:
+			b.noteForeignGrantAsk(g)
+		case grantAskNone:
+			open = g.Spec.Type != v1alpha1.GrantCredential
+		}
+		if open && b.attestedPolicyCouldMatch(ctx, g) {
+			open = false
+		}
+	}
+	res, err, _ := b.pendingUnrouted(ctx, g, sess, now, deadline, open)
+	return res, err
+}
+
+// pendingUnrouted is the path for a grant with no route. open is true only
+// when this pass may create the one Ask. waiting is true when the grant is
+// still pending on Tom.
+func (b *Broker) pendingUnrouted(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time, deadline time.Time, open bool) (ctrl.Result, error, bool) {
 	var policies v1alpha1.GrantPolicyList
 	if err := b.Client.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("list the grant policies: %w", err)
+		return ctrl.Result{}, fmt.Errorf("list the grant policies: %w", err), false
 	}
 	if p, st := b.attestedApproval(ctx, g, sess, policies.Items, now.Time); p != nil {
-		approve(g, PolicyApprover+p.Name, g.Spec.TTL.Duration, now)
 		msg := "approved by a standing policy"
 		if st != nil {
 			msg = grantattest.Message(p.Name, *st)
 		}
-		written, err := b.writeStatus(ctx, g)
-		if written {
-			b.decided(ctx, g, msg)
-		}
-		return ctrl.Result{}, err
+		res, err := b.approveByPolicy(ctx, g, PolicyApprover+p.Name, g.Spec.TTL.Duration, now, msg)
+		return res, err, false
 	}
 	// No policy approves it at once: a recorded delegate decision, when
 	// delegates are configured (DESIGN-042 6.2), comes before Tom is told. One
 	// that cannot apply falls through, so Tom is still told once.
 	if res, handled, err := b.delegateDecision(ctx, g, sess, now); handled {
-		return res, err
+		return res, err, false
 	}
-	// Selected for Tom: no policy and no delegate took it. A credential grant
-	// keeps the flag-off wait. Any other flag-on grant opens one Ask, unless
-	// the complete scope does not fit the Ask: then it keeps this wait too.
-	if b.EnableGrantAsks && g.Spec.Type != v1alpha1.GrantCredential {
-		res, err := b.holdGrantAsk(ctx, g, sess, now)
+	if open {
+		err := b.ensureGrantAsk(ctx, g, sess, now)
 		switch {
+		case err == nil && g.Status.Ask != "":
+			res, ferr := b.followGrantAskRoute(ctx, g, sess, now)
+			return res, ferr, false
+		case errors.Is(err, errGrantAskRouteReread):
+			return ctrl.Result{RequeueAfter: time.Second}, nil, false
 		case errors.Is(err, errGrantAskTooLarge):
 			b.event(g, corev1.EventTypeWarning, "GrantAsk", "AskTooLarge", "the request is too large to show and should be split")
 		case errors.Is(err, errGrantAskForeign):
-			return ctrl.Result{RequeueAfter: grantAskRecheck}, nil
-		default:
-			return res, err
+			return ctrl.Result{RequeueAfter: grantAskRecheck}, nil, false
+		case errors.Is(err, errGrantAskRouteForeign):
+			res, derr := b.followGrantAskRoute(ctx, g, sess, now)
+			return res, derr, false
+		case err != nil:
+			res, herr := b.grantAskHoldError(ctx, g, err)
+			return res, herr, false
 		}
 	}
+	res, err := b.waitForTom(ctx, g, deadline, now)
+	return res, err, err == nil
+}
 
+// approveByPolicy writes a policy approval only when a live read still shows
+// no route. A route means the Ask decides, and this write does not.
+func (b *Broker) approveByPolicy(ctx context.Context, g *v1alpha1.AccessGrant, by string, ttl time.Duration, now metav1.Time, msg string) (ctrl.Result, error) {
+	fresh, err := b.readGrant(ctx, g.Name)
+	if apierrors.IsNotFound(err) {
+		return ctrl.Result{}, nil
+	}
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if fresh.UID != g.UID || (fresh.Status.Phase != "" && fresh.Status.Phase != v1alpha1.GrantPending) || !fresh.DeletionTimestamp.IsZero() || fresh.Spec.Release {
+		*g = *fresh
+		return ctrl.Result{}, nil
+	}
+	if fresh.Status.Ask != "" {
+		*g = *fresh
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	approve(fresh, by, ttl, now)
+	written, err := b.writeStatus(ctx, fresh)
+	if written {
+		b.decided(ctx, fresh, msg)
+	}
+	*g = *fresh
+	return ctrl.Result{}, err
+}
+
+// waitForTom tells Tom once and looks again at the 30-minute deadline.
+func (b *Broker) waitForTom(ctx context.Context, g *v1alpha1.AccessGrant, deadline time.Time, now metav1.Time) (ctrl.Result, error) {
 	wait := ctrl.Result{RequeueAfter: deadline.Sub(now.Time)}
 	if g.Status.NotifiedAt != nil || b.Notifier == nil {
 		return wait, nil

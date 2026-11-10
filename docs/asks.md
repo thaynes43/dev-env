@@ -17,18 +17,34 @@ not expire. An info or approval ask cannot carry a grant object, and a grant
 ask cannot carry an approval scope or an expiry. Info and approval behaviour
 is otherwise unchanged.
 
-`POST /v1/asks` refuses `type=grant`. The session route also drops any labels
-on the body, including `coordination.dev-env.haynesops.com/ask-origin`, so a
-session create does not store that label. The store accepts a grant ask and
-applies the caps below. It records the requester, the open state and the ask
-type. It records `ask-origin=broker` only when the broker caller sets that
-origin on the same create. A session caller cannot set it. `POST
-/v1/asks/{id}/withdraw` refuses `type=grant`. The broker withdraws a grant
-Ask when the session releases the grant.
+`POST /v1/asks` refuses `type=grant`, and refuses a `requestId` that starts
+with `grant-`. That prefix is the broker's. The session route also drops any
+labels on the body, including `coordination.dev-env.haynesops.com/ask-origin`,
+so a session create does not store that label.
 
-The broker puts the complete access the digest covers into the Ask detail:
-for a namespace role, every Secret name; for egress, every destination with
-its ports, protocols and label selectors. When that text does not fit the
+Rollout precondition: no grant Ask from an earlier build exists.
+`--enable-grant-asks` has never been set in any cluster, so no flag-on grant
+Ask is stored. A stored grant Ask whose scope text is not the text this build
+renders is denied, and the request must be made again.
+
+The broker writes `status.ask` on the grant, the Ask's object name, before it
+creates that Ask ([ADR-022](../.agents/sagas/distributed-dev-env/adrs/022-grant-ask-route.md)).
+It sets the field once and does not clear it. From then on that Ask is the
+only approval. If it is missing, not this grant's, or unreadable, the grant
+is denied. A grant with no route is still denied at 30 minutes. A grant an
+attested policy would match is not given a route or an Ask.
+
+The store accepts a grant ask and applies the caps below. It records the
+requester, the open state and the ask type. It records `ask-origin=broker`
+only when the broker caller sets that origin on the same create. A session
+caller cannot set it. `POST /v1/asks/{id}/withdraw` refuses `type=grant`.
+The broker withdraws a grant Ask when the session releases the grant.
+
+The broker puts the complete access the digest covers into the Ask detail,
+with explicit field names (`namespaces:[...]`, `allNamespaces:true`,
+`reserved:true`, and the secret, storage, destination and port fields). A
+namespace role includes every Secret name. Egress includes every destination
+with its ports, protocols and label selectors. When that text does not fit the
 detail bound, the broker opens no Ask. The grant keeps the 30-minute denial,
 and a Warning Event says the request is too large to show and should be split.
 
@@ -219,7 +235,7 @@ ask or its approval scope has expired is 410 (`expired`). A count bound is
 
 ## Who can answer a grant Ask
 
-The broker trusts the stored answer. It cannot tell who wrote it. Whoever may update `asks/status` in `dev-agents` can approve a grant. By design that is the operator, which writes the portal's answer for a signed-in person, and the broker. The coordinator checks the live writers before the flag is set.
+The broker trusts the stored answer. It cannot tell who wrote it. Whoever may update `asks/status` in `dev-agents` can store an answer the broker will apply. Whoever may create an Ask, patch its metadata, or delete an Ask can occupy the grant's Ask name, change the origin label, or remove the Ask the grant already named. By design the operator stores the portal's answer for a signed-in person, and the broker creates the grant Ask. The coordinator checks the live writers of create, metadata patch, delete, and `asks/status` before the flag is set.
 
 ## Broker verbs on Asks and TaskClaims
 

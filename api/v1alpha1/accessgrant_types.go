@@ -466,6 +466,14 @@ type AccessGrantStatus struct {
 	// +optional
 	NotifiedAt *metav1.Time `json:"notifiedAt,omitempty"`
 
+	// Ask is the object name of the Ask the broker will open for this grant.
+	// The broker sets it once, with this grant's resourceVersion as the
+	// precondition, before it creates the Ask, and never clears it (ADR-022).
+	// +kubebuilder:validation:MaxLength=20
+	// +kubebuilder:validation:Pattern=`^ask-[0-9a-f]{16}$`
+	// +optional
+	Ask string `json:"ask,omitempty"`
+
 	// ServiceAccount is the kube/breakglass identity name. Reusable admin
 	// credentials retain their namespace in AdminCredential; other identities
 	// live in the session namespace.
@@ -527,6 +535,7 @@ type AdminCredentialStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="metadata.name must be at most 63 characters: it names the grant's ServiceAccount and bindings"
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^grant-[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="metadata.name is grant-<id>, a DNS label: it names the grant's ServiceAccount, and the audit log shows it"
+// +kubebuilder:validation:XValidation:rule="!has(self.status) || !has(oldSelf.status) || !has(oldSelf.status.ask) || (has(self.status.ask) && self.status.ask == oldSelf.status.ask)",message="the grant ask route is set once"
 type AccessGrant struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

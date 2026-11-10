@@ -34,6 +34,19 @@ const (
 	// grantAskRecheck is how often a grant selected for Tom is reconciled
 	// while its Ask is open. An answer is also enqueued from the Ask watch.
 	grantAskRecheck = 30 * time.Second
+	// grantAskUnreadLimit is how long a routed grant waits when its Ask
+	// cannot be read. Past that, the grant is denied. It is not given
+	// another path.
+	grantAskUnreadLimit = 2 * time.Minute
+	// grantAskMsgRemake is the denial when the stored scope text is not the
+	// text this build renders for the grant.
+	grantAskMsgRemake = "the request must be made again"
+	// grantAskMsgGone, grantAskMsgForeign and grantAskMsgUnread are the
+	// denials for a routed grant whose Ask is missing, not this grant's, or
+	// unreadable.
+	grantAskMsgGone    = "the grant ask is gone"
+	grantAskMsgForeign = "the grant ask is not this grant's"
+	grantAskMsgUnread  = "the grant ask could not be read"
 	// grantAskQuestionFallback is the question when spec.reason fails the
 	// Ask text rules. The grant is still opened.
 	grantAskQuestionFallback = "The session asked for access. The reason could not be shown on the board."
@@ -51,8 +64,15 @@ var (
 	// The broker opens nothing and the grant keeps the 30-minute deny.
 	errGrantAskTooLarge = errors.New("grant ask scope does not fit")
 	// errGrantAskForeign means an Ask already sits at the broker's name
-	// and the broker did not create it. It is not labelled and not read.
+	// and it is not this grant's. It is not labelled, not read, and the
+	// route is not set.
 	errGrantAskForeign = errors.New("grant ask was not opened by the broker")
+	// errGrantAskRouteReread means the route write conflicted or the grant
+	// changed. The caller reads the grant again and does not create an Ask.
+	errGrantAskRouteReread = errors.New("grant ask route must be read again")
+	// errGrantAskRouteForeign means the route is set and the object there
+	// is not this grant's Ask. The caller denies. It does not open another.
+	errGrantAskRouteForeign = errors.New("grant ask at the route is not this grant's")
 
 	grantAskDigestPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 	grantAskTTLPattern      = regexp.MustCompile(`^([0-9]+(h|m|s))+$`)
@@ -63,6 +83,7 @@ const (
 	grantAskWait = iota
 	grantAskStop
 	grantAskDenyScope
+	grantAskDenyDetail
 	grantAskDenyUsername
 	grantAskDenyUnusable
 	grantAskDenyWithdrawn
@@ -93,35 +114,10 @@ func (b *Broker) askStore() asks.KubeStore {
 	return asks.KubeStore{Client: b.Client, Live: b.APIReader, Namespace: asks.Namespace}
 }
 
-// holdGrantAsk opens one grant Ask for a grant no policy and no delegate
-// took. An answer that binds is applied once. A failed open, a full board,
-// an unfit UID and an unconfirmed count all requeue. None of them denies
-// the grant. A mismatch denies or leaves the grant pending. It never approves.
-func (b *Broker) holdGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) (ctrlResult, error) {
-	if err := b.ensureGrantAsk(ctx, g, sess, now); err != nil {
-		if errors.Is(err, errGrantAskTooLarge) || errors.Is(err, errGrantAskForeign) {
-			return reconcile.Result{RequeueAfter: grantAskRecheck}, err
-		}
-		return b.grantAskHoldError(ctx, g, err)
-	}
-	if done, res, err := b.applyGrantAnswer(ctx, g, now); done {
-		return res, err
-	}
-	return b.noteGrantAsk(ctx, g, now)
-}
-
-// applyGrantAnswer acts on a stored answer. done is false while the Ask is
-// still open, so the caller notifies Tom and waits. A pre-check failure does
-// not call Decide.
-func (b *Broker) applyGrantAnswer(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (bool, reconcile.Result, error) {
-	ask, err := b.loadGrantAsk(ctx, g)
-	if apierrors.IsNotFound(err) || errors.Is(err, errGrantAskLater) {
-		return true, reconcile.Result{RequeueAfter: grantAskRecheck}, nil
-	}
-	if err != nil {
-		log.FromContext(ctx).Error(err, "grant ask was not read", "grant", g.Name)
-		return true, reconcile.Result{RequeueAfter: time.Second}, nil
-	}
+// applyLoadedGrantAnswer acts on an Ask this pass already loaded. done is
+// false while the Ask is still open, so the caller notifies Tom and waits.
+// A pre-check failure does not call Decide.
+func (b *Broker) applyLoadedGrantAnswer(ctx context.Context, g *v1alpha1.AccessGrant, ask *coord.Ask, now metav1.Time) (bool, reconcile.Result, error) {
 	switch grantAskAction(g, ask) {
 	case grantAskWait:
 		return false, reconcile.Result{}, nil
@@ -129,6 +125,9 @@ func (b *Broker) applyGrantAnswer(ctx context.Context, g *v1alpha1.AccessGrant, 
 		return true, reconcile.Result{RequeueAfter: grantAskRecheck}, nil
 	case grantAskDenyScope:
 		res, err := b.denyScopeMismatch(ctx, g, now)
+		return true, res, err
+	case grantAskDenyDetail:
+		res, err := b.denyPendingGrant(ctx, g, grantAskMsgRemake, now)
 		return true, res, err
 	case grantAskDenyUsername:
 		res, err := b.denyPendingGrant(ctx, g, "the answer has no usable username", now)
@@ -164,7 +163,7 @@ func (b *Broker) recheckGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, d
 	if d.TTL != 0 {
 		return fmt.Errorf("%w: a grant ask approves for the ttl asked", ErrRefused)
 	}
-	ask, err := b.loadGrantAsk(ctx, g)
+	ask, err := b.loadDecisionAsk(ctx, g)
 	if errors.Is(err, errGrantAskLater) || apierrors.IsNotFound(err) {
 		return fmt.Errorf("%w: no matching grant ask", ErrRefused)
 	}
@@ -173,6 +172,9 @@ func (b *Broker) recheckGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, d
 	}
 	if !grantAskIdentityOK(g, ask) || !grantAskScopeOK(g, ask) {
 		return fmt.Errorf("%w: the grant ask does not bind this grant", ErrRefused)
+	}
+	if !grantAskDetailOK(g, ask) {
+		return fmt.Errorf("%w: %s", ErrRefused, grantAskMsgRemake)
 	}
 	if ask.Status.State != string(apiv1.AskStateAnswered) || ask.Status.Answer == nil || ask.Status.Answer.Approved == nil {
 		return fmt.Errorf("%w: the grant ask has no usable answer", ErrRefused)
@@ -224,7 +226,7 @@ func (b *Broker) denyScopeMismatch(ctx context.Context, g *v1alpha1.AccessGrant,
 	if !grantStillPending(g, fresh) {
 		return reconcile.Result{}, nil
 	}
-	ask, err := b.loadGrantAsk(ctx, fresh)
+	ask, err := b.loadDecisionAsk(ctx, fresh)
 	if apierrors.IsNotFound(err) || errors.Is(err, errGrantAskLater) {
 		return reconcile.Result{RequeueAfter: grantAskRecheck}, nil
 	}
@@ -286,6 +288,9 @@ func grantAskAction(g *v1alpha1.AccessGrant, ask *coord.Ask) int {
 	if !grantAskScopeOK(g, ask) {
 		return grantAskDenyScope
 	}
+	if !grantAskDetailOK(g, ask) {
+		return grantAskDenyDetail
+	}
 	if ask.Status.State != string(apiv1.AskStateAnswered) || ask.Status.Answer == nil {
 		return grantAskWait
 	}
@@ -331,13 +336,22 @@ func grantAskScopeOK(g *v1alpha1.AccessGrant, ask *coord.Ask) bool {
 	return err == nil && parsed == g.Spec.TTL.Duration
 }
 
+// grantAskDetailOK reports whether the stored scope text is the text this
+// build renders for the grant. A text that does not fit is not equal.
+func grantAskDetailOK(g *v1alpha1.AccessGrant, ask *coord.Ask) bool {
+	if ask == nil || ask.Spec.Grant == nil {
+		return false
+	}
+	detail, fits := grantAskDetail(g)
+	if !fits {
+		return false
+	}
+	return ask.Spec.Grant.Detail == detail
+}
+
 func grantAskUsernameOK(user string) bool {
 	return grantAskUsernamePattern.MatchString(user)
 }
-
-// ctrlResult is an alias so this file can name the result without importing
-// the controller package twice in signatures that already use reconcile.
-type ctrlResult = reconcile.Result
 
 func (b *Broker) grantAskHoldError(ctx context.Context, g *v1alpha1.AccessGrant, err error) (reconcile.Result, error) {
 	switch {
@@ -381,6 +395,10 @@ func (b *Broker) noteGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, now 
 	return wait, nil
 }
 
+// ensureGrantAsk claims the route and creates the one Ask. The scope text is
+// rendered first: a text that does not fit never takes a route. An Ask that
+// is already this grant's is claimed and not created again. Any other object
+// at the name is left alone and the route is not set.
 func (b *Broker) ensureGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) error {
 	if b.SessionNamespace != asks.Namespace || sess == nil {
 		return errGrantAskLater
@@ -392,13 +410,73 @@ func (b *Broker) ensureGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, se
 	if !ok {
 		return errGrantAskLater
 	}
-	// An Ask already stored at this name is kept only when the broker
-	// created it. Create is only the first write. A second object is not
-	// opened, and a foreign Ask is not labelled.
-	if existing, loadErr := b.loadGrantAsk(ctx, g); loadErr == nil {
-		return b.keptGrantAsk(g, existing)
-	} else if !apierrors.IsNotFound(loadErr) {
+	if _, err := b.grantAskBody(ctx, g, sess, id, now.Time); err != nil {
+		return err
+	}
+	existing, loadErr := b.loadGrantAsk(ctx, g)
+	switch {
+	case loadErr == nil && grantAskIdentityOK(g, existing):
+		return b.claimGrantAskRoute(ctx, g)
+	case loadErr == nil:
+		b.noteForeignGrantAsk(g)
+		return errGrantAskForeign
+	case !apierrors.IsNotFound(loadErr):
 		return loadErr
+	}
+	if err := b.claimGrantAskRoute(ctx, g); err != nil {
+		return err
+	}
+	b.noteGrantAskCreateOutstanding(g.UID)
+	return b.createGrantedAsk(ctx, g, sess, now)
+}
+
+// claimGrantAskRoute writes status.ask with the grant's resourceVersion
+// before the Ask exists. A conflict or a route that is already something
+// else returns errGrantAskRouteReread. The caller reads again and does not
+// create.
+func (b *Broker) claimGrantAskRoute(ctx context.Context, g *v1alpha1.AccessGrant) error {
+	name, ok := grantAskObjectName(b.SessionNamespace, g)
+	if !ok {
+		return errGrantAskLater
+	}
+	if g.Status.Ask == name {
+		return nil
+	}
+	if g.Status.Ask != "" {
+		return errGrantAskRouteReread
+	}
+	fresh, err := b.readGrant(ctx, g.Name)
+	if apierrors.IsNotFound(err) {
+		return errGrantAskRouteReread
+	}
+	if err != nil {
+		return err
+	}
+	if fresh.UID != g.UID || (fresh.Status.Phase != "" && fresh.Status.Phase != v1alpha1.GrantPending) || !fresh.DeletionTimestamp.IsZero() || fresh.Spec.Release || fresh.Status.Ask != "" {
+		*g = *fresh
+		return errGrantAskRouteReread
+	}
+	fresh.Status.Ask = name
+	if err := b.Client.Status().Update(ctx, fresh); err != nil {
+		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+			return errGrantAskRouteReread
+		}
+		return err
+	}
+	*g = *fresh
+	return nil
+}
+
+// createGrantedAsk stores the Ask named by the route. It does not choose a
+// second name. A create this process has not seen succeed stays outstanding.
+func (b *Broker) createGrantedAsk(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) error {
+	name, ok := grantAskObjectName(b.SessionNamespace, g)
+	if !ok || g.Status.Ask != name {
+		return errGrantAskRouteForeign
+	}
+	id, ok := grantAskRequestID(g.UID)
+	if !ok {
+		return errGrantAskLater
 	}
 	body, err := b.grantAskBody(ctx, g, sess, id, now.Time)
 	if err != nil {
@@ -410,20 +488,19 @@ func (b *Broker) ensureGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, se
 	}
 	wire, created, err := b.askCreator().Create(ctx, req, body, now.Time)
 	if errors.Is(err, asks.ErrConflict) {
-		// The request id is already stored. Keep that Ask when it is the
-		// broker's. Do not write a second one and do not deny.
-		created = false
-		err = nil
+		b.clearGrantAskCreateOutstanding(g.UID)
+		return errGrantAskRouteForeign
 	}
 	if err != nil {
 		return err
 	}
-	stored, loadErr := b.loadGrantAsk(ctx, g)
+	b.clearGrantAskCreateOutstanding(g.UID)
+	stored, loadErr := b.loadAskByName(ctx, g.Status.Ask)
 	if loadErr != nil {
 		return loadErr
 	}
-	if err := b.keptGrantAsk(g, stored); err != nil {
-		return err
+	if !grantAskIdentityOK(g, stored) {
+		return errGrantAskRouteForeign
 	}
 	if created {
 		log.FromContext(ctx).Info("opened a grant ask", "grant", g.Name, "ask", wire.ID)
@@ -431,31 +508,140 @@ func (b *Broker) ensureGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, se
 	return nil
 }
 
-// keptGrantAsk accepts an Ask the broker created and refuses any other
-// object at that name. It does not add the origin label.
-func (b *Broker) keptGrantAsk(g *v1alpha1.AccessGrant, obj *coord.Ask) error {
-	if obj == nil || obj.Labels[asks.OriginLabel] != grantAskOriginBroker {
-		b.noteForeignGrantAsk(g)
-		return errGrantAskForeign
+// followGrantAskRoute is the only path for a grant whose route is set.
+// The Ask is re-read here. Missing, not this grant's, or unreadable past
+// the short bound denies the grant. A create this process has not seen
+// succeed is retried at the same name.
+func (b *Broker) followGrantAskRoute(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) (reconcile.Result, error) {
+	if g.Status.Ask == "" {
+		return reconcile.Result{RequeueAfter: time.Second}, nil
 	}
-	return nil
+	ask, err := b.loadAskByName(ctx, g.Status.Ask)
+	switch {
+	case apierrors.IsNotFound(err):
+		if b.grantAskCreateOutstanding(g.UID) {
+			if cerr := b.createGrantedAsk(ctx, g, sess, now); cerr != nil {
+				if errors.Is(cerr, errGrantAskRouteForeign) {
+					b.noteForeignGrantAsk(g)
+					return b.denyRoutedGrant(ctx, g, grantAskMsgForeign, now)
+				}
+				return b.grantAskHoldError(ctx, g, cerr)
+			}
+			ask, err = b.loadAskByName(ctx, g.Status.Ask)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					return b.grantAskHoldError(ctx, g, errGrantAskLater)
+				}
+				return b.routedUnread(ctx, g, now)
+			}
+		} else {
+			return b.denyRoutedGrant(ctx, g, grantAskMsgGone, now)
+		}
+	case err != nil:
+		return b.routedUnread(ctx, g, now)
+	}
+	b.clearGrantAskUnread(g.UID)
+	b.clearGrantAskCreateOutstanding(g.UID)
+	if !grantAskIdentityOK(g, ask) {
+		b.noteForeignGrantAsk(g)
+		return b.denyRoutedGrant(ctx, g, grantAskMsgForeign, now)
+	}
+	if done, res, aerr := b.applyLoadedGrantAnswer(ctx, g, ask, now); done {
+		return res, aerr
+	}
+	return b.noteGrantAsk(ctx, g, now)
 }
 
-// classifyGrantAsk reports whether a broker Ask, a foreign Ask, or no Ask
-// is stored at this grant's name. A read failure is unread: the caller
-// must not approve by another path.
-func (b *Broker) classifyGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant) int {
+func (b *Broker) routedUnread(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (reconcile.Result, error) {
+	if b.grantAskUnreadTooLong(g.UID, now.Time) {
+		return b.denyRoutedGrant(ctx, g, grantAskMsgUnread, now)
+	}
+	return reconcile.Result{RequeueAfter: time.Second}, nil
+}
+
+func (b *Broker) denyRoutedGrant(ctx context.Context, g *v1alpha1.AccessGrant, msg string, now metav1.Time) (reconcile.Result, error) {
+	b.clearGrantAskUnread(g.UID)
+	b.clearGrantAskCreateOutstanding(g.UID)
+	return b.denyPendingGrant(ctx, g, msg, now)
+}
+
+// classifyUnroutedGrantAsk reports whether the Ask at this grant's computed
+// name is this grant's, something else, missing, or unreadable. The origin
+// label alone is not enough.
+func (b *Broker) classifyUnroutedGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant) int {
 	ask, err := b.loadGrantAsk(ctx, g)
-	if errors.Is(err, errGrantAskLater) || apierrors.IsNotFound(err) {
+	switch {
+	case errors.Is(err, errGrantAskLater), apierrors.IsNotFound(err):
 		return grantAskNone
-	}
-	if err != nil {
+	case err != nil:
 		return grantAskUnread
-	}
-	if ask.Labels[asks.OriginLabel] != grantAskOriginBroker {
+	case grantAskIdentityOK(g, ask):
+		return grantAskBroker
+	default:
 		return grantAskForeign
 	}
-	return grantAskBroker
+}
+
+// attestedPolicyCouldMatch reports whether a non-deleting policy with an
+// attestation requirement fits this grant. The statement need not be present
+// yet. A failed policy read reports a match, so this pass opens no Ask.
+func (b *Broker) attestedPolicyCouldMatch(ctx context.Context, g *v1alpha1.AccessGrant) bool {
+	if !b.EnableAttestedGrants {
+		return false
+	}
+	var policies v1alpha1.GrantPolicyList
+	if err := b.Client.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
+		return true
+	}
+	for i := range policies.Items {
+		p := &policies.Items[i]
+		if p.DeletionTimestamp.IsZero() && MatchesAttested(p, g) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Broker) noteGrantAskCreateOutstanding(uid types.UID) {
+	b.grantAskMu.Lock()
+	defer b.grantAskMu.Unlock()
+	if b.grantAskCreateWait == nil {
+		b.grantAskCreateWait = map[types.UID]struct{}{}
+	}
+	b.grantAskCreateWait[uid] = struct{}{}
+}
+
+func (b *Broker) clearGrantAskCreateOutstanding(uid types.UID) {
+	b.grantAskMu.Lock()
+	defer b.grantAskMu.Unlock()
+	delete(b.grantAskCreateWait, uid)
+}
+
+func (b *Broker) grantAskCreateOutstanding(uid types.UID) bool {
+	b.grantAskMu.Lock()
+	defer b.grantAskMu.Unlock()
+	_, ok := b.grantAskCreateWait[uid]
+	return ok
+}
+
+func (b *Broker) grantAskUnreadTooLong(uid types.UID, now time.Time) bool {
+	b.grantAskMu.Lock()
+	defer b.grantAskMu.Unlock()
+	if b.grantAskUnreadAt == nil {
+		b.grantAskUnreadAt = map[types.UID]time.Time{}
+	}
+	started, ok := b.grantAskUnreadAt[uid]
+	if !ok {
+		b.grantAskUnreadAt[uid] = now
+		return false
+	}
+	return !now.Before(started.Add(grantAskUnreadLimit))
+}
+
+func (b *Broker) clearGrantAskUnread(uid types.UID) {
+	b.grantAskMu.Lock()
+	defer b.grantAskMu.Unlock()
+	delete(b.grantAskUnreadAt, uid)
 }
 
 func (b *Broker) noteForeignGrantAsk(g *v1alpha1.AccessGrant) {
@@ -467,14 +653,14 @@ func (b *Broker) noteForeignGrantAsk(g *v1alpha1.AccessGrant) {
 // grant's is left alone. The session-ended path does not call this: that card
 // stays open for Dismiss.
 func (b *Broker) withdrawOpenGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant) error {
-	obj, err := b.loadGrantAsk(ctx, g)
+	obj, err := b.loadDecisionAsk(ctx, g)
 	if apierrors.IsNotFound(err) || errors.Is(err, errGrantAskLater) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if obj.Labels[asks.OriginLabel] != grantAskOriginBroker || obj.Spec.Type != string(apiv1.AskTypeGrant) || obj.Spec.Grant == nil || obj.Spec.Grant.UID != string(g.UID) {
+	if !grantAskIdentityOK(g, obj) {
 		return nil
 	}
 	if obj.Status.State != "" && obj.Status.State != string(apiv1.AskStateOpen) {
@@ -492,7 +678,21 @@ func (b *Broker) withdrawOpenGrantAsk(ctx context.Context, g *v1alpha1.AccessGra
 
 func (b *Broker) loadGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant) (*coord.Ask, error) {
 	name, ok := grantAskObjectName(b.SessionNamespace, g)
-	if !ok || b.APIReader == nil {
+	if !ok {
+		return nil, errGrantAskLater
+	}
+	return b.loadAskByName(ctx, name)
+}
+
+func (b *Broker) loadDecisionAsk(ctx context.Context, g *v1alpha1.AccessGrant) (*coord.Ask, error) {
+	if g.Status.Ask != "" {
+		return b.loadAskByName(ctx, g.Status.Ask)
+	}
+	return b.loadGrantAsk(ctx, g)
+}
+
+func (b *Broker) loadAskByName(ctx context.Context, name string) (*coord.Ask, error) {
+	if name == "" || b.APIReader == nil {
 		return nil, errGrantAskLater
 	}
 	var obj coord.Ask
@@ -518,7 +718,7 @@ func grantAskObjectName(namespace string, g *v1alpha1.AccessGrant) (string, bool
 }
 
 func grantAskRequestID(uid types.UID) (string, bool) {
-	id := "grant-" + string(uid)
+	id := apiv1.AskGrantRequestPrefix + string(uid)
 	if !apiv1.ValidAskRequestID(id) {
 		return "", false
 	}
@@ -639,19 +839,16 @@ func kubeAskDetail(k *v1alpha1.KubeGrant) string {
 		return ""
 	}
 	var parts []string
-	switch {
-	case k.AllNamespaces:
-		parts = append(parts, "all-namespaces")
-	case len(k.Namespaces) == 0:
-		parts = append(parts, "cluster")
-	default:
-		parts = append(parts, strings.Join(sortedCopy(k.Namespaces), ","))
+	if k.AllNamespaces {
+		parts = append(parts, "allNamespaces:true")
+	} else {
+		parts = append(parts, "namespaces:["+strings.Join(sortedCopy(k.Namespaces), ",")+"]")
 	}
 	if k.Reserved {
-		parts = append(parts, "reserved")
+		parts = append(parts, "reserved:true")
 	}
 	if len(k.Secrets) > 0 {
-		parts = append(parts, "secrets:"+strings.Join(sortedCopy(k.Secrets), ","))
+		parts = append(parts, "secrets:["+strings.Join(sortedCopy(k.Secrets), ",")+"]")
 	}
 	if len(k.StorageTargets) > 0 {
 		items := make([]string, len(k.StorageTargets))
@@ -659,7 +856,7 @@ func kubeAskDetail(k *v1alpha1.KubeGrant) string {
 			items[i] = target.Kind + "/" + target.Name + "/" + target.UID
 		}
 		slices.Sort(items)
-		parts = append(parts, "storage:"+strings.Join(items, ","))
+		parts = append(parts, "storage:["+strings.Join(items, ",")+"]")
 	}
 	return strings.Join(parts, " ")
 }

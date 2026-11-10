@@ -344,6 +344,43 @@ func TestAccessGrantStatusSubresource(t *testing.T) {
 	wantInvalid(t, k8s.Status().Update(ctx(t), got), "status.phase: Unsupported value")
 }
 
+func TestAccessGrantAskRoute(t *testing.T) {
+	g := kubeGrant()
+	if err := k8s.Create(ctx(t), g); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	g = getGrant(t, g)
+	g.Status.Phase = v1alpha1.GrantPending
+	g.Status.Ask = "ask-0123456789abcdef"
+	if err := k8s.Status().Update(ctx(t), g); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if got := getGrant(t, g).Status.Ask; got != "ask-0123456789abcdef" {
+		t.Fatalf("ask %q", got)
+	}
+
+	bad := getGrant(t, g)
+	bad.Status.Ask = "not-an-ask"
+	wantInvalid(t, k8s.Status().Update(ctx(t), bad), "status.ask")
+
+	changed := getGrant(t, g)
+	changed.Status.Ask = "ask-fedcba9876543210"
+	wantInvalid(t, k8s.Status().Update(ctx(t), changed), "the grant ask route is set once")
+
+	cleared := getGrant(t, g)
+	cleared.Status.Ask = ""
+	wantInvalid(t, k8s.Status().Update(ctx(t), cleared), "the grant ask route is set once")
+
+	rel := getGrant(t, g)
+	rel.Spec.Release = true
+	if err := k8s.Update(ctx(t), rel); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if got := getGrant(t, g).Status.Ask; got != "ask-0123456789abcdef" {
+		t.Fatalf("release cleared the route %q", got)
+	}
+}
+
 func getGrant(t *testing.T, g *v1alpha1.AccessGrant) *v1alpha1.AccessGrant {
 	t.Helper()
 	var out v1alpha1.AccessGrant

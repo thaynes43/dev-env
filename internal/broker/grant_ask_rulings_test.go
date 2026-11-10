@@ -51,7 +51,7 @@ func TestGrantAskStoredNoThenMatchingAttestationStaysDenied(t *testing.T) {
 		t.Fatal(err)
 	}
 	open.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantActive })
-	if open.grant().Status.ApprovedBy != "policy/frontend-attested" || open.askCount() != 0 {
+	if open.grant().Status.ApprovedBy != "policy/frontend-attested" || open.askCount() != 0 || open.grant().Status.Ask != "" {
 		t.Fatalf("attestation did not match: %+v asks=%d", open.grant().Status, open.askCount())
 	}
 
@@ -143,6 +143,123 @@ func TestGrantAskScopeTextStatesPortsSelectorsAndSecrets(t *testing.T) {
 	if secrets.grant().Status.Phase != v1alpha1.GrantPending || one.grant().Status.Phase != v1alpha1.GrantPending {
 		t.Fatalf("secret grants: %s %s", secrets.grant().Status.Phase, one.grant().Status.Phase)
 	}
+	if !strings.Contains(both, "namespaces:[downloads]") || !strings.Contains(both, "secrets:[") {
+		t.Fatalf("secret text has no field names: %q", both)
+	}
+	if a.onlyAsk().Spec.Grant.Type == secrets.onlyAsk().Spec.Grant.Type {
+		t.Fatal("type did not change the stored ask")
+	}
+	if a.onlyAsk().Spec.Context.SessionName != a.grant().Spec.Requester.Session || a.onlyAsk().Spec.Context.SessionUID != string(a.grant().Spec.Requester.SessionUID) {
+		t.Fatalf("session context %+v", a.onlyAsk().Spec.Context)
+	}
+	otherSession := a.grant().DeepCopy()
+	otherSession.Spec.Requester.SessionUID = "33333333-3333-4333-8333-333333333333"
+	if grantattest.ScopeDigest(a.grant()) == grantattest.ScopeDigest(otherSession) {
+		t.Fatal("session uid did not change the digest")
+	}
+	otherName := a.grant().DeepCopy()
+	otherName.Spec.Requester.Session = "s2"
+	if grantattest.ScopeDigest(a.grant()) == grantattest.ScopeDigest(otherName) {
+		t.Fatal("session name did not change the digest")
+	}
+
+	shortTTL := openKubeAsk(t, &v1alpha1.KubeGrant{Role: v1alpha1.RoleWorkloads, Namespaces: []string{"frontend"}})
+	longTTL := newGrantAskFixture(t, true)
+	longGrant := longTTL.grant()
+	longGrant.Spec.TTL.Duration = 2 * time.Hour
+	longGrant.Spec.Reason = "use the named secrets"
+	if err := longTTL.base.Update(longTTL.ctx, longGrant); err != nil {
+		t.Fatal(err)
+	}
+	longTTL.openAsk()
+	if shortTTL.onlyAsk().Spec.Grant.TTL == longTTL.onlyAsk().Spec.Grant.TTL || shortTTL.onlyAsk().Spec.Grant.Target == "" {
+		t.Fatalf("ttl %s %s", shortTTL.onlyAsk().Spec.Grant.TTL, longTTL.onlyAsk().Spec.Grant.TTL)
+	}
+	otherRole := openKubeAsk(t, &v1alpha1.KubeGrant{Role: v1alpha1.RoleSecretsRead, Namespaces: []string{"frontend"}})
+	if otherRole.onlyAsk().Spec.Grant.Target == shortTTL.onlyAsk().Spec.Grant.Target {
+		t.Fatal("role did not change the stored target")
+	}
+
+	udp := base
+	udp.Ports = []v1alpha1.GrantPort{{Port: 443, Protocol: v1alpha1.ProtocolUDP}}
+	udpText, udpOK := grantAskDetail(egressGrant(udp))
+	tcpText, tcpOK := grantAskDetail(egressGrant(base))
+	if !udpOK || !tcpOK || udpText == tcpText || !strings.Contains(udpText, "443/UDP") || !strings.Contains(tcpText, "443/TCP") {
+		t.Fatalf("protocol text %q %q", tcpText, udpText)
+	}
+	oneName := egressGrant(v1alpha1.EgressGrant{FQDNs: []string{"a.example"}, Ports: tcp(443)})
+	twoNames := egressGrant(v1alpha1.EgressGrant{FQDNs: []string{"a.example", "b.example"}, Ports: tcp(443)})
+	oneText, oneOK := grantAskDetail(oneName)
+	twoText, twoOK := grantAskDetail(twoNames)
+	if !oneOK || !twoOK || oneText == twoText || !strings.Contains(twoText, "fqdn:a.example") || !strings.Contains(twoText, "fqdn:b.example") {
+		t.Fatalf("fqdn text %q %q", oneText, twoText)
+	}
+	oneCIDR := egressGrant(v1alpha1.EgressGrant{CIDRs: []string{"10.0.0.0/24"}, Ports: tcp(443)})
+	twoCIDR := egressGrant(v1alpha1.EgressGrant{CIDRs: []string{"10.0.0.0/24", "10.1.0.0/24"}, Ports: tcp(443)})
+	cidrA, cidrAOK := grantAskDetail(oneCIDR)
+	cidrB, cidrBOK := grantAskDetail(twoCIDR)
+	if !cidrAOK || !cidrBOK || cidrA == cidrB || !strings.Contains(cidrB, "cidr:10.0.0.0/24") || !strings.Contains(cidrB, "cidr:10.1.0.0/24") {
+		t.Fatalf("cidr text %q %q", cidrA, cidrB)
+	}
+	otherNS := base
+	otherNS.Endpoints = []v1alpha1.EgressEndpoint{{Namespace: "downloads", MatchLabels: map[string]v1alpha1.LabelValue{"app": "web"}}}
+	nsText, nsOK := grantAskDetail(egressGrant(otherNS))
+	if !nsOK || nsText == da || !strings.Contains(nsText, "endpoint:downloads") {
+		t.Fatalf("endpoint namespace %q", nsText)
+	}
+
+	storage := func(kind, name, uid string) string {
+		g := kubeGrant(v1alpha1.RoleSecretsRead, "frontend")
+		g.Spec.Kube.StorageTargets = []v1alpha1.GrantStorageTarget{{Kind: kind, Name: name, UID: uid}}
+		got, ok := grantAskDetail(g)
+		if !ok {
+			t.Fatalf("storage text did not fit")
+		}
+		return got
+	}
+	baseStorage := storage("PersistentVolumeClaim", "data", "uid-1")
+	if baseStorage == storage("VolumeSnapshot", "data", "uid-1") || baseStorage == storage("PersistentVolumeClaim", "other", "uid-1") || baseStorage == storage("PersistentVolumeClaim", "data", "uid-2") {
+		t.Fatal("storage kind, name or uid did not change the text")
+	}
+	if !strings.Contains(baseStorage, "storage:[PersistentVolumeClaim/data/uid-1]") {
+		t.Fatalf("storage text %q", baseStorage)
+	}
+
+	left := kubeGrant(v1alpha1.RoleSecretsRead)
+	left.Spec.Kube.Namespaces = []string{"all-namespaces"}
+	left.Spec.Kube.Reserved = true
+	right := left.DeepCopy()
+	right.Spec.Kube.AllNamespaces = true
+	right.Spec.Kube.Namespaces = nil
+	leftText, leftOK := grantAskDetail(left)
+	rightText, rightOK := grantAskDetail(right)
+	if !leftOK || !rightOK || leftText != "namespaces:[all-namespaces] reserved:true" || rightText != "allNamespaces:true reserved:true" {
+		t.Fatalf("collision pair %q %q", leftText, rightText)
+	}
+	if grantattest.ScopeDigest(left) == grantattest.ScopeDigest(right) {
+		t.Fatal("collision pair digests are equal")
+	}
+
+	cred := kubeGrant(v1alpha1.RoleWorkloads, "frontend")
+	cred.Spec.Type = v1alpha1.GrantCredential
+	cred.Spec.Kube = nil
+	cred.Spec.Credential = &v1alpha1.CredentialGrant{Name: v1alpha1.CredentialProxmox}
+	credTarget, credOK := grantAskTarget(cred)
+	credDetail, credFits := grantAskDetail(cred)
+	if !credOK || !credFits || credTarget != string(v1alpha1.CredentialProxmox) || credDetail != "" {
+		t.Fatalf("credential target %q detail %q", credTarget, credDetail)
+	}
+	maint := kubeGrant(v1alpha1.RoleWorkloads, "frontend")
+	maint.Spec.Type = v1alpha1.GrantMaintenance
+	maint.Spec.Kube = nil
+	maint.Spec.Maintenance = &v1alpha1.MaintenanceTask{Operation: "inspect"}
+	maintTarget, maintOK := grantAskTarget(maint)
+	maintDetail, maintFits := grantAskDetail(maint)
+	changed := maint.DeepCopy()
+	changed.Spec.Maintenance.Operation = "repair"
+	if !maintOK || !maintFits || maintTarget != "maintenance" || maintDetail != "" || grantattest.ScopeDigest(maint) == grantattest.ScopeDigest(changed) {
+		t.Fatalf("maintenance target %q detail %q", maintTarget, maintDetail)
+	}
 }
 
 func TestGrantAskOverlongScopeOpensNoAskAndDeniesAtThirtyMinutes(t *testing.T) {
@@ -224,11 +341,17 @@ func TestGrantAskDelegatePastDeadlineDeniesOnReconcile(t *testing.T) {
 	}
 	early.clk.Step(29 * time.Minute)
 	early.armDelegate(early.b.now().Time)
+	earlyWrites := early.watchGrantStatus()
 	if _, err := early.reconcile(); err != nil {
 		t.Fatal(err)
 	}
 	if g := early.grant(); g.Status.Phase != v1alpha1.GrantActive || !strings.HasPrefix(g.Status.ApprovedBy, DelegateApprover) {
 		t.Fatalf("delegate inside the window: %+v", g.Status)
+	}
+	if !statusWrite(*earlyWrites, func(st v1alpha1.AccessGrantStatus) bool {
+		return st.Phase == v1alpha1.GrantActive && strings.HasPrefix(st.ApprovedBy, DelegateApprover)
+	}) {
+		t.Fatalf("delegate approval was not the status write: %+v", *earlyWrites)
 	}
 	if early.askCount() != 0 {
 		t.Fatal("delegate approval opened an ask")
@@ -241,7 +364,7 @@ func TestGrantAskDelegatePastDeadlineDeniesOnReconcile(t *testing.T) {
 	f.clk.Step(29 * time.Minute)
 	f.armDelegate(f.b.now().Time)
 	f.clk.Step(2 * time.Minute)
-	spy := f.watchDecide(false)
+	writes := f.watchGrantStatus()
 	if _, err := f.reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -249,17 +372,34 @@ func TestGrantAskDelegatePastDeadlineDeniesOnReconcile(t *testing.T) {
 	if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByTimeout || g.Status.Message != "no answer in 30 minutes" || g.Status.ApprovedBy != "" {
 		t.Fatalf("delegate across the deadline: phase %s deniedBy %s message %q approvedBy %s", g.Status.Phase, g.Status.DeniedBy, g.Status.Message, g.Status.ApprovedBy)
 	}
-	if spy.calls != 0 {
-		t.Fatal("Decide was called")
+	if !statusWrite(*writes, func(st v1alpha1.AccessGrantStatus) bool {
+		return st.Phase == v1alpha1.GrantDenied && st.DeniedBy == DeniedByTimeout && st.Message == "no answer in 30 minutes"
+	}) {
+		t.Fatalf("deadline was not the status write: %+v", *writes)
+	}
+	if statusWrite(*writes, func(st v1alpha1.AccessGrantStatus) bool {
+		return st.Phase == v1alpha1.GrantActive || strings.HasPrefix(st.ApprovedBy, DelegateApprover)
+	}) {
+		t.Fatalf("delegate wrote an approval: %+v", *writes)
 	}
 	if f.askCount() != 0 {
 		t.Fatal("delegate past the deadline opened an ask")
 	}
 }
 
+func statusWrite(writes []v1alpha1.AccessGrantStatus, pred func(v1alpha1.AccessGrantStatus) bool) bool {
+	for _, st := range writes {
+		if pred(st) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestGrantAskOriginIsSetOnCreateWithoutAPatch(t *testing.T) {
 	f := newGrantAskFixture(t, true)
 	patches := 0
+	sawCreate := false
 	f.b.Client = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
 		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 			if _, ok := obj.(*coord.Ask); ok {
@@ -268,13 +408,30 @@ func TestGrantAskOriginIsSetOnCreateWithoutAPatch(t *testing.T) {
 			}
 			return c.Patch(ctx, obj, patch, opts...)
 		},
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			ask, ok := obj.(*coord.Ask)
+			if ok {
+				if ask.Labels[asks.OriginLabel] != grantAskOriginBroker {
+					t.Fatalf("create origin %q", ask.Labels[asks.OriginLabel])
+				}
+				var stored v1alpha1.AccessGrant
+				if err := c.Get(ctx, client.ObjectKey{Namespace: sessionNS, Name: f.g.Name}, &stored); err != nil {
+					t.Fatal(err)
+				}
+				if stored.Status.Ask == "" || stored.Status.Ask != ask.Name {
+					t.Fatalf("route %q at create, ask %s", stored.Status.Ask, ask.Name)
+				}
+				sawCreate = true
+			}
+			return c.Create(ctx, obj, opts...)
+		},
 	})
 	f.openAsk()
 	ask := f.onlyAsk()
-	if patches != 0 || ask.Labels[asks.OriginLabel] != grantAskOriginBroker {
-		t.Fatalf("patches=%d origin=%q", patches, ask.Labels[asks.OriginLabel])
+	if !sawCreate || patches != 0 || ask.Labels[asks.OriginLabel] != grantAskOriginBroker {
+		t.Fatalf("sawCreate=%v patches=%d origin=%q", sawCreate, patches, ask.Labels[asks.OriginLabel])
 	}
-	if g := f.grant(); g.Status.Phase != v1alpha1.GrantPending || g.Status.ApprovedBy != "" {
+	if g := f.grant(); g.Status.Phase != v1alpha1.GrantPending || g.Status.ApprovedBy != "" || g.Status.Ask != ask.Name {
 		t.Fatalf("origin create: %+v", g.Status)
 	}
 }
@@ -283,40 +440,18 @@ func TestGrantAskForeignAskIsNotAdopted(t *testing.T) {
 	f := newGrantAskFixture(t, true)
 	rec := &events.FakeRecorder{Events: make(chan string, 8)}
 	f.b.Recorder = rec
-	f.openAsk()
-	src := f.onlyAsk()
-	foreign := src.DeepCopy()
-	if err := f.base.Delete(f.ctx, src); err != nil {
-		t.Fatal(err)
-	}
-	foreign.ResourceVersion = ""
-	foreign.UID = ""
-	delete(foreign.Labels, asks.OriginLabel)
-	yes := true
-	foreign.Status = coord.AskStatus{
-		State: string(apiv1.AskStateAnswered),
-		Answer: &coord.AskAnswer{
-			Approved: &yes, AnsweredAt: metav1.NewTime(f.clk.Now()),
-			AnsweredBy: coord.AskActor{Issuer: "https://issuer.example/grant-ask", Subject: "subject-1", Username: "tom"},
-		},
-	}
-	if err := f.base.Create(f.ctx, foreign); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.base.Status().Update(f.ctx, foreign); err != nil {
-		t.Fatal(err)
-	}
-	p := kubePolicy("frontend-workloads", []string{v1alpha1.RoleWorkloads}, "frontend")
-	if err := f.base.Create(f.ctx, &p); err != nil {
-		t.Fatal(err)
-	}
+	// Phase is set and pending() has not run. The next pass classifies, then
+	// creates. The foreign object appears between those two reads.
+	f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantPending })
+	f.meta.notFoundAsksLeft = 3
+	f.meta.plantForeignOnCreate = true
 	spy := f.watchDecide(false)
 	if _, err := f.reconcile(); err != nil {
 		t.Fatal(err)
 	}
 	g := f.grant()
-	if g.Status.Phase != v1alpha1.GrantPending || g.Status.ApprovedBy != "" || g.Status.DeniedBy != "" {
-		t.Fatalf("foreign ask: %+v", g.Status)
+	if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Message != grantAskMsgForeign || g.Status.ApprovedBy != "" || g.Status.Ask == "" {
+		t.Fatalf("foreign ask between the reads: %+v", g.Status)
 	}
 	if got := f.onlyAsk().Labels[asks.OriginLabel]; got != "" {
 		t.Fatalf("foreign ask was labelled %q", got)
@@ -328,17 +463,23 @@ func TestGrantAskForeignAskIsNotAdopted(t *testing.T) {
 	if len(msgs) == 0 || !strings.Contains(strings.Join(msgs, "\n"), "AskNotBroker") {
 		t.Fatalf("events %q", msgs)
 	}
-	f.clk.Step(PendingTimeout)
-	if _, err := f.reconcile(); err != nil {
-		t.Fatal(err)
+	if n := f.askCount(); n != 1 {
+		t.Fatalf("asks = %d", n)
 	}
-	got := f.grant()
-	if got.Status.Phase != v1alpha1.GrantDenied || got.Status.DeniedBy != DeniedByTimeout || got.Status.ApprovedBy != "" {
-		t.Fatalf("foreign ask after 30 minutes: %+v", got.Status)
-	}
-	if origin := f.onlyAsk().Labels[asks.OriginLabel]; origin != "" {
-		t.Fatalf("foreign ask was labelled %q", origin)
-	}
+}
+
+func (f *grantAskFixture) watchGrantStatus() *[]v1alpha1.AccessGrantStatus {
+	f.t.Helper()
+	writes := &[]v1alpha1.AccessGrantStatus{}
+	f.b.Client = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			if g, ok := obj.(*v1alpha1.AccessGrant); ok {
+				*writes = append(*writes, *g.Status.DeepCopy())
+			}
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	})
+	return writes
 }
 
 func (f *grantAskFixture) runningPod() *corev1.Pod {

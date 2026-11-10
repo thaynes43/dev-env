@@ -658,6 +658,14 @@ spec:
                   ApprovedTTL is the TTL it was approved for: spec.ttl, or less when Tom
                   chose "approve for less time".
                 type: string
+              ask:
+                description: |-
+                  Ask is the object name of the Ask the broker will open for this grant.
+                  The broker sets it once, with this grant's resourceVersion as the
+                  precondition, before it creates the Ask, and never clears it (ADR-022).
+                maxLength: 20
+                pattern: ^ask-[0-9a-f]{16}$
+                type: string
               delegateReach:
                 description: DelegateReach records the reviewed policy and identity
                   binding (DESIGN-042 6.6).
@@ -934,6 +942,9 @@ spec:
         - message: 'metadata.name is grant-<id>, a DNS label: it names the grant''s
             ServiceAccount, and the audit log shows it'
           rule: self.metadata.name.matches('^grant-[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+        - message: the grant ask route is set once
+          rule: '!has(self.status) || !has(oldSelf.status) || !has(oldSelf.status.ask)
+            || (has(self.status.ask) && self.status.ask == oldSelf.status.ask)'
     served: true
     storage: true
     subresources:

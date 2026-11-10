@@ -5,8 +5,10 @@
 [DESIGN-060](designs/060-meatball-front-door.md) is the front door: Meatball
 manages the backlog and starts coordinator sessions, and Tom names the model.
 [ADR-021](adrs/021-grants-through-the-asks-board.md), accepted by the
-coordinator, sends a grant that needs Tom through the Asks board. The source
-is merged in part and nothing of the front door is installed.
+coordinator, sends a grant that needs Tom through the Asks board.
+[ADR-022](adrs/022-grant-ask-route.md) is Proposed and amends that build plan
+with the grant's Ask route. The source is merged in part and nothing of the
+front door is installed.
 
 **2026-11-04 stalled-work rule, OP399:** [decision 94](#decision-log) and
 [ADR-019](adrs/019-stalled-work-steers-not-stops.md) record Tom's relayed words,

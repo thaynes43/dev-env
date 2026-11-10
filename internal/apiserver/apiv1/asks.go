@@ -157,6 +157,10 @@ const (
 	AskStateExpired   AskState = "expired"
 )
 
+// AskGrantRequestPrefix is the request id prefix the broker uses for the
+// Ask it opens for one AccessGrant. The session create route refuses it.
+const AskGrantRequestPrefix = "grant-"
+
 var (
 	askIDPattern          = regexp.MustCompile(`^ask-[0-9a-f]{16}$`)
 	askRequestIDPattern   = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)

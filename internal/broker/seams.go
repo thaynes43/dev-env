@@ -169,11 +169,23 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 }
 
 // decisionAllowed checks a decision against the grant and returns the TTL an
-// approval gives. With EnableGrantAsks, a By that is not a policy, a delegate
-// or the maintenance human skips the 30-minute age check and must match the
-// stored grant Ask. Those three decisions keep the checks below as they are.
-// A credential approval is still refused here until ADR-021 build item 5.
+// approval gives. It re-reads the grant first. A route, or a grant-Ask
+// answer, is approved only when that re-read's Ask is this decision. A
+// policy, a delegate and the maintenance human keep the 30-minute age check
+// when the grant has no route. A credential approval is still refused here
+// until ADR-021 build item 5.
 func (b *Broker) decisionAllowed(ctx context.Context, g *v1alpha1.AccessGrant, d Decision, now time.Time) (time.Duration, error) {
+	fresh, err := b.readGrant(ctx, g.Name)
+	if apierrors.IsNotFound(err) {
+		return 0, fmt.Errorf("%w: grant %s does not exist", ErrNotPending, g.Name)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if fresh.UID != g.UID {
+		return 0, fmt.Errorf("%w: grant %s does not exist", ErrNotPending, g.Name)
+	}
+	*g = *fresh
 	switch {
 	case !g.DeletionTimestamp.IsZero():
 		return 0, fmt.Errorf("%w: grant %s is being deleted", ErrNotPending, g.Name)
@@ -181,17 +193,25 @@ func (b *Broker) decisionAllowed(ctx context.Context, g *v1alpha1.AccessGrant, d
 		return 0, fmt.Errorf("%w: grant %s is %s", ErrNotPending, g.Name, g.Status.Phase)
 	case g.Spec.Release:
 		return 0, fmt.Errorf("%w: grant %s was released", ErrNotPending, g.Name)
-	case !b.grantAskDecides(d) && !now.Before(g.CreationTimestamp.Add(PendingTimeout)):
-		return 0, fmt.Errorf("%w: grant %s waited more than %s", ErrNotPending, g.Name, PendingTimeout)
 	case d.By == "":
 		return 0, fmt.Errorf("%w: no approver", ErrRefused)
-	case strings.HasPrefix(d.By, PolicyApprover):
-		return 0, fmt.Errorf("%w: %s is a policy; Tom decides on the page, and break-glass only ever by him (D-27)", ErrRefused, d.By)
 	}
-	if b.grantAskDecides(d) {
-		if err := b.recheckGrantAsk(ctx, g, d); err != nil {
+	// The route is on the object this attempt will write. A routed grant is
+	// approved only as the answer of that Ask. A read error is returned so
+	// the caller retries. It is not turned into the deadline.
+	if g.Status.Ask != "" || b.grantAskDecides(d) {
+		err := b.recheckGrantAsk(ctx, g, d)
+		if err != nil {
+			if errors.Is(err, ErrRefused) && !b.grantAskDecides(d) && !now.Before(g.CreationTimestamp.Add(PendingTimeout)) {
+				return 0, fmt.Errorf("%w: grant %s waited more than %s", ErrNotPending, g.Name, PendingTimeout)
+			}
 			return 0, err
 		}
+	} else if !now.Before(g.CreationTimestamp.Add(PendingTimeout)) {
+		return 0, fmt.Errorf("%w: grant %s waited more than %s", ErrNotPending, g.Name, PendingTimeout)
+	}
+	if strings.HasPrefix(d.By, PolicyApprover) {
+		return 0, fmt.Errorf("%w: %s is a policy; Tom decides on the page, and break-glass only ever by him (D-27)", ErrRefused, d.By)
 	}
 	delegate := strings.HasPrefix(d.By, DelegateApprover)
 	if d.Reserved != nil && !delegate {

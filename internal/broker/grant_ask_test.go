@@ -191,8 +191,9 @@ func TestGrantAskStoreLimitOrUnavailableStaysPending(t *testing.T) {
 				t.Fatal(err)
 			}
 			g := f.grant()
-			if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByTimeout || g.Status.Message != "no answer in 30 minutes" {
-				t.Fatalf("no ask after 30 minutes: phase %s deniedBy %s message %q", g.Status.Phase, g.Status.DeniedBy, g.Status.Message)
+			name, ok := grantAskObjectName(f.b.SessionNamespace, g)
+			if !ok || g.Status.Phase != v1alpha1.GrantPending || g.Status.Ask != name || g.Status.ApprovedBy != "" || g.Status.DeniedBy != "" {
+				t.Fatalf("routed grant after a failed create: phase %s ask %q approvedBy %s deniedBy %s", g.Status.Phase, g.Status.Ask, g.Status.ApprovedBy, g.Status.DeniedBy)
 			}
 			if n := f.askCount(); n != 0 {
 				t.Fatalf("store error left %d asks", n)
@@ -361,6 +362,13 @@ type askMetadataClient struct {
 	// failGrantGet, after grantGetsLeft successful grant reads, fails the next one.
 	failGrantGet  error
 	grantGetsLeft int
+	// failAskGet fails every Ask read.
+	failAskGet error
+	// notFoundAsksLeft returns NotFound for that many Ask reads, then the store.
+	notFoundAsksLeft int
+	// plantForeignOnCreate stores the Ask without the broker origin and
+	// reports that the name was already taken.
+	plantForeignOnCreate bool
 }
 
 func (m *askMetadataClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -369,6 +377,13 @@ func (m *askMetadataClient) Get(ctx context.Context, key client.ObjectKey, obj c
 			return m.failGrantGet
 		}
 		m.grantGetsLeft--
+	}
+	if _, ok := obj.(*coord.Ask); ok && m.failAskGet != nil {
+		return m.failAskGet
+	}
+	if _, ok := obj.(*coord.Ask); ok && m.notFoundAsksLeft > 0 {
+		m.notFoundAsksLeft--
+		return apierrors.NewNotFound(coord.GroupVersion.WithResource("asks").GroupResource(), key.Name)
 	}
 	if err := m.Client.Get(ctx, key, obj, opts...); err != nil {
 		return err
@@ -380,6 +395,20 @@ func (m *askMetadataClient) Get(ctx context.Context, key client.ObjectKey, obj c
 		}
 	}
 	return nil
+}
+
+func (m *askMetadataClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	ask, ok := obj.(*coord.Ask)
+	if !ok || !m.plantForeignOnCreate {
+		return m.Client.Create(ctx, obj, opts...)
+	}
+	planted := ask.DeepCopy()
+	planted.ResourceVersion = ""
+	delete(planted.Labels, asks.OriginLabel)
+	if err := m.Client.Create(ctx, planted, opts...); err != nil {
+		return err
+	}
+	return apierrors.NewAlreadyExists(coord.GroupVersion.WithResource("asks").GroupResource(), ask.Name)
 }
 
 func (m askMetadataClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
@@ -599,7 +628,7 @@ func (f *grantAskFixture) assertOneGrantAsk() {
 	if got, err := time.ParseDuration(ask.Spec.Grant.TTL); err != nil || got != g.Spec.TTL.Duration {
 		f.t.Fatalf("ttl %s: %v", ask.Spec.Grant.TTL, err)
 	}
-	if ask.Spec.Grant.Detail != "frontend" || ask.Spec.Question != g.Spec.Reason {
+	if ask.Spec.Grant.Detail != "namespaces:[frontend]" || ask.Spec.Question != g.Spec.Reason {
 		f.t.Fatalf("detail %q question %q", ask.Spec.Grant.Detail, ask.Spec.Question)
 	}
 	if ask.Spec.Context.WorkPackage != 0 {

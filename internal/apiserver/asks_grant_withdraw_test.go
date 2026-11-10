@@ -15,6 +15,25 @@ import (
 	"github.com/thaynes43/dev-env/internal/asks"
 )
 
+func TestSessionCreateRefusesGrantRequestID(t *testing.T) {
+	f := newFixture(t)
+	f.srv.Asks = &asks.KubeStore{Client: f.c, Live: f.c, Namespace: asks.Namespace, Log: logr.Discard()}
+	f.h = f.srv.Handler()
+	tok := f.sessionPod("grant-prefix", "full", 0)
+	body := askInfo("grant-0123456789abcdef")
+	refused := wantError(t, f.do(http.MethodPost, apiv1.AsksPath, tok, body), http.StatusBadRequest, apiv1.CodeBadRequest)
+	if !strings.Contains(refused.Message, "grant-") {
+		t.Fatalf("refusal %q", refused.Message)
+	}
+	var list coord.AskList
+	if err := f.c.List(context.Background(), &list, client.InNamespace(asks.Namespace)); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 0 {
+		t.Fatalf("the session route stored %d asks", len(list.Items))
+	}
+}
+
 func TestSessionWithdrawRefusesGrantAsk(t *testing.T) {
 	f := newFixture(t)
 	f.srv.Asks = &asks.KubeStore{Client: f.c, Live: f.c, Namespace: asks.Namespace, Log: logr.Discard()}

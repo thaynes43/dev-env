@@ -95,7 +95,7 @@ func TestGrantAskScopeMismatchDeniesWithoutDecide(t *testing.T) {
 	}
 }
 
-func TestGrantAskDetailMismatchStillGrants(t *testing.T) {
+func TestGrantAskDetailMismatchRefuses(t *testing.T) {
 	f := newGrantAskFixture(t, true)
 	f.openAsk()
 	f.answer(boolPtr(true), "tom", "")
@@ -104,10 +104,23 @@ func TestGrantAskDetailMismatchStillGrants(t *testing.T) {
 	if err := f.base.Update(f.ctx, ask); err != nil {
 		t.Fatal(err)
 	}
-	spy := f.watchDecide(true)
-	f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantActive })
-	if spy.calls != 1 || f.grant().Status.ApprovedBy != "authentik/tom" {
-		t.Fatalf("detail mismatch calls=%d approvedBy=%s", spy.calls, f.grant().Status.ApprovedBy)
+	err := f.b.Decide(f.ctx, f.g.Name, Decision{Approve: true, By: "authentik/tom"})
+	if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), grantAskMsgRemake) {
+		t.Fatalf("Decide: %v", err)
+	}
+	if got := f.grant(); got.Status.Phase != v1alpha1.GrantPending || got.Status.ApprovedBy != "" {
+		t.Fatalf("Decide wrote %+v", got.Status)
+	}
+	spy := f.watchDecide(false)
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	g := f.grant()
+	if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Message != grantAskMsgRemake || g.Status.ApprovedBy != "" || g.Status.Ask == "" {
+		t.Fatalf("detail mismatch: %+v", g.Status)
+	}
+	if spy.calls != 0 {
+		t.Fatal("reconcile called Decide")
 	}
 }
 
@@ -125,7 +138,7 @@ func TestGrantAskUIDChangeDoesNotDecideReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := f.grant()
-	if g.Status.Phase != v1alpha1.GrantPending || g.Status.DeniedBy != "" || g.Status.ApprovedBy != "" {
+	if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByBroker || g.Status.Message != grantAskMsgForeign || g.Status.ApprovedBy != "" || g.Status.Ask == "" {
 		t.Fatalf("uid change: %+v", g.Status)
 	}
 	if spy.calls != 0 {
