@@ -9,7 +9,9 @@
   data (section 11). Slice 1 (section 7, steps 1 to 8) is built in
   [PR #1018](https://github.com/thaynes43/dev-env/pull/1018); step 9
   (haynes-ops) is not done, so nothing is deployed. Section "Slice 1 as
-  built" states where the build differs (2026-11-10).
+  built" states where the build differs (2026-11-10). Section "Totals that
+  survive clean-up" is a stop for [OP524](https://work.haynesnetwork.com/work_packages/524)
+  (2026-11-10): the counters are not built.
 - **Tracking:** [Story OP509](https://work.haynesnetwork.com/work_packages/509),
   project haynes-engineering: "Usage reporting that keeps working: weekly
   usage and resets without approval windows or a host session that
@@ -522,3 +524,93 @@ Known limits:
 - **Section 8 is built (OP523).** A reading older than 30 minutes is greyed
   with its age in plain words. After the reported reset, the percent is not
   shown. With no reading, Claude and Codex say nothing has reported yet.
+
+## Totals that survive clean-up
+
+**Status:** stopped, 2026-11-10,
+[story OP524](https://work.haynesnetwork.com/work_packages/524). Nothing in
+this section is built. ADR-020 consequence C-54 and DESIGN-061 follow-up F7
+ask for tokens and cost that remain after a finished task Session is
+deleted. The portal database keeps logins only, and the operator's session
+metrics are gauges read from the Sessions that still exist
+(`internal/controller/metrics.go`, `SessionCollector`), so a deleted Session
+takes its series with it. This story stops because a counter cannot count
+each Session once across an operator restart without a new stored object.
+
+### Shape, not registered
+
+Written down so a follow-up does not invent a second shape. No metric below
+is registered, and no PromQL below returns data until one is.
+
+The leader adds. The other replica leaves the counters at 0, so a sum of the
+two replicas does not double. Tokens and cost use a served model when the
+final observation lists one, and the requested model otherwise. Cursor lists
+no served model (R-08), so it uses the requested model. A model or repository
+that is not a short name, `^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`, is the label
+`other`. Agent and cost kind are already closed sets (`claude`, `codex`,
+`cursor`; `ProviderCLIEquivalentEstimate`, `Unknown`).
+
+| Metric | Labels | Unit | When it would rise |
+| --- | --- | --- | --- |
+| `dev_env_task_usage_tokens_total` | `agent`, `model`, `repository`, `cost_kind`, `token` (`input`, `output`, `cache_read`, `cache_write`) | tokens | a Reported amount on a final usage observation |
+| `dev_env_task_usage_cost_usd_total` | `agent`, `model`, `repository`, `cost_kind` | USD | a Reported cost on that observation |
+| `dev_env_task_usage_sessions_total` | `agent`, `model` (the requested model) | sessions | one, when the observation is final, or for `cursor` when `status.taskResult` is recorded |
+| `dev_env_task_usage_seconds_total` | `agent`, `model` (the requested model) | seconds | whole seconds from `metadata.creationTimestamp` to `status.agent.task.finishedAt`, when that finish is present and not earlier |
+
+Unknown is not zero. A Session with no Reported tokens or cost would add to
+the session and seconds counters only. Codex cost is Unknown today, and
+Cursor reports no tokens or cost. A Session already present when this ships
+would be counted once, the first time the leader sees it final. The USD
+figure is the observation's decimal string, added as a float.
+
+Weekly cost, once those counters exist:
+
+```promql
+sum by (agent, model, repository) (increase(dev_env_task_usage_cost_usd_total[7d]))
+```
+
+`increase` adds across a process restart only when the new process does not
+add the same Session again. Prometheus then keeps the samples only for its
+own retention. Both limits are why the store question is the stop.
+
+### Why a restart cannot know
+
+The counters live in the leader's memory. A new process starts them at 0.
+Prometheus keeps the samples from the previous process, and `increase` adds
+that old value to whatever the new process adds. The total is exact only
+when the new process does not add a Session the old one already added.
+
+Those two Sessions look the same in the API. Both are a final usage
+observation, or a recorded Cursor task result, on a Session that is still
+there. The observation is immutable, and it was stored as the usage record,
+not as a mark that this ledger has added it. Nothing else on the Session
+says the add happened. A restart therefore cannot tell "already counted"
+from "already existed when this shipped, count it once on first sight".
+
+| Way | Result |
+| --- | --- |
+| Count every final Session this process sees, and remember its UID in memory | A restart forgets the UIDs and adds them again, so `increase` counts them twice. Two replicas stay exact only while the leader alone adds. |
+| Count only a Session that turns final after this process started | A restart does not add Sessions the previous process added. It also skips every Session that was already final at startup: the Sessions present when this ships, and any Session that turned final while the operator was down. |
+| Ask Prometheus whether the series exists, and skip Sessions that are already final when it does | Not a new object. A Session that turns final after the series exists and before the new process is up looks like one already added, so it is skipped forever. A failed query has no safe side: adding double-counts, and skipping misses the first sight. |
+| A gauge summed from the Sessions that still exist | Both replicas and a restart agree. A deleted Session leaves the gauge. That is the loss C-54 names. |
+| On deletion, move that Session's numbers into a counter | The process can die after the add and before the delete, and the restart adds again. It can die after the delete and before a scrape, and both the add and the Session are gone. |
+
+Keeping the set of added UIDs, or keeping the totals, is new stored state.
+A field on AgentSession is a new CRD field. A ConfigMap of the totals or the
+UIDs is a new stored object. An annotation is the same durable mark on the
+existing Session. This story stops rather than add any of them. The
+operator's other once-per-Session counters take their once from a status
+mark that was already stored for another reason (the private executor
+terminal record). Usage has no such mark.
+
+### Next step
+
+A follow-up chooses the store. The smallest is one annotation or condition
+the leader writes before it increments, so a restart skips a Session that
+already carries it, and a Session present at the upgrade does not, and is
+counted once. A crash between that write and the increment can drop one add
+when Prometheus has not scraped it. That is the same window as the terminal
+counter. A ConfigMap of totals, written with a resourceVersion check, is the
+other small store. Either one is a new story. This one changes no portal
+page and no haynes-ops manifest, and it does not change how usage is
+recorded on the Session.
