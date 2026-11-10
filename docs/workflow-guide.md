@@ -980,9 +980,10 @@ race past the check; reads choose the oldest stored reply.
 accepts whole seconds from `1s` to `15m` (900 seconds). It prints the exact
 answer, or `waiting` when the deadline passes with no reply. `-o json` includes
 the state and reply metadata. A waiting response contains no text. An already
-stored answer returns at once. Each held request uses one Kubernetes watch
-from the reply list's resource version, so an answer between the list and
-watch is not missed. The caller's live session and pod are checked again
+stored answer returns at once. A reply that arrives during the wait is
+read back once, and the command prints the oldest stored reply. Each held
+request uses one Kubernetes watch from the reply list's resource version,
+so an answer between the list and the watch is not missed. The caller's live session and pod are checked again
 before returning the answer. More than eight held waits for one session on
 one API replica return 429. Two replicas can hold sixteen. Cancellation
 releases the watch and its slot.

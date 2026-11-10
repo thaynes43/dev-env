@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -506,6 +507,66 @@ func TestParentNoteAnswerLimitsAndSchema(t *testing.T) {
 				t.Fatal("refusal stored a reply")
 			}
 		})
+	}
+}
+
+func TestParentNoteWaitReturnsOldestReplyNotWatchOrder(t *testing.T) {
+	f, parent, child, _ := parentNoteFixture(t, false)
+	note := tellParentNote(t, f, child, apiv1.TellParentRequest{Key: "note", Kind: "question", Text: "x"}, 201)
+	first := answerParentTest(t, f, parent, note.Name, "one", "text-one", 201)
+	stored, err := f.srv.Inbox.Get(context.Background(), first.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSpec := stored.Spec
+	secondSpec.Key, secondSpec.Text = "two", "text-two"
+	created, _, err := f.srv.Inbox.CreateParentNote(context.Background(), secondSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replies := []coord.InboxMessage{*stored, *created}
+	stamp := metav1.NewTime(time.Unix(1_700_000_000, 0).UTC())
+	for i := range replies {
+		replies[i].CreationTimestamp = stamp
+	}
+	slices.SortFunc(replies, func(a, b coord.InboxMessage) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	oldest, newer := replies[0], replies[1]
+	var lists, watches atomic.Int32
+	f.srv.Inbox.Live = interceptor.NewClient(f.c, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, obj client.ObjectList, opts ...client.ListOption) error {
+		list, ok := obj.(*coord.InboxMessageList)
+		if !ok {
+			return c.List(ctx, obj, opts...)
+		}
+		lists.Add(1)
+		list.ResourceVersion = "42"
+		if lists.Load() == 1 {
+			list.Items = nil
+			return nil
+		}
+		list.Items = []coord.InboxMessage{newer, oldest}
+		return nil
+	}})
+	started := make(chan *watch.RaceFreeFakeWatcher, 1)
+	f.srv.Inbox.Watcher = interceptor.NewClient(f.c, interceptor.Funcs{Watch: func(_ context.Context, _ client.WithWatch, obj client.ObjectList, opts ...client.ListOption) (watch.Interface, error) {
+		var o client.ListOptions
+		o.ApplyOptions(opts)
+		if _, ok := obj.(*coord.InboxMessageList); !ok || o.Raw == nil || o.Raw.ResourceVersion != "42" {
+			t.Error("watch did not start at the empty list version")
+		}
+		watches.Add(1)
+		stream := watch.NewRaceFreeFake()
+		started <- stream
+		return stream, nil
+	}})
+	result, cancel := startParentWait(f, child, note.Name)
+	defer cancel()
+	stream := receiveParentWait(t, started)
+	stream.Add(&newer)
+	w := receiveParentWait(t, result)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), oldest.Spec.Text) || strings.Contains(w.Body.String(), newer.Spec.Text) || watches.Load() != 1 || lists.Load() != 2 || !stream.IsStopped() {
+		t.Fatalf("held wait followed watch order or listed more than once: status %d lists=%d watches=%d body=%s", w.Code, lists.Load(), watches.Load(), w.Body.String())
 	}
 }
 

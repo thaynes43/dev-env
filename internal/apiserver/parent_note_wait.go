@@ -151,7 +151,17 @@ func (s *Server) awaitParentReply(ctx context.Context, note *coord.InboxMessage,
 			if (event.Type != watch.Added && event.Type != watch.Modified) || !ok || !s.Inbox.ValidParentReply(note, reply) {
 				return nil, inbox.ErrUnavailable
 			}
-			return reply, nil
+			// The event only wakes the wait. Watch order is resourceVersion.
+			// Reads choose the oldest stored reply: creation time, then name.
+			// One list here applies that order. It is not another watch.
+			replies, _, err := s.Inbox.ParentReplies(ctx, note)
+			if err != nil || len(replies) == 0 {
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					return nil, nil
+				}
+				return nil, inbox.ErrUnavailable
+			}
+			return &replies[0], nil
 		}
 	}
 }

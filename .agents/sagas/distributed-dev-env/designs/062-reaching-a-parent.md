@@ -464,6 +464,8 @@ parent has notes. Meatball does not learn about sessions it did not start.
 
 The wait uses a watch on the reply, one watch per held request, and returns
 when the reply is stored or the deadline passes. The handler does not spin.
+The watch only wakes the handler. The reply it returns is the oldest stored
+reply, from one list after the event, the same choice a later read makes.
 A second wait on the same note returns the stored reply at once. Over 8
 held waits for one session on one API replica, the route returns 429. Two
 API replicas can hold sixteen for one session. The wait needs the verb
