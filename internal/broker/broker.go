@@ -16,8 +16,8 @@
 //     checks fail, when the session ended, or after 30 minutes unanswered
 //     (deniedBy timeout); -> Released when the session gives it back.
 //     With --enable-grant-asks, a grant no policy and no delegate takes is not
-//     denied at 30 minutes: the broker opens one grant Ask and waits (ADR-021).
-//     Flag off, that pending path is unchanged.
+//     denied at 30 minutes: the broker opens one grant Ask and applies one
+//     answer through Decide (ADR-021). Flag off, that pending path is unchanged.
 //   - Active -> Expired at expiresAt, Released on spec.release or when the
 //     session ends, Denied when a check fails, Failed when it cannot be made.
 //     Each of these revokes first.
@@ -164,6 +164,9 @@ type Broker struct {
 	// grantAsks creates grant Asks. Nil uses asks.KubeStore on the broker's
 	// own client. Tests set it to return a store limit or an unconfirmed count.
 	grantAsks grantAskCreator
+	// decideFn records one grant decision. Nil calls Decide. A test sets it
+	// to prove a pre-check did not decide, or to count one real decision.
+	decideFn func(ctx context.Context, grantName string, d Decision) error
 
 	// reconciled, when set, hears of every finished reconcile (tests).
 	reconciled func(types.NamespacedName)

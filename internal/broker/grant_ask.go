@@ -47,8 +47,18 @@ var (
 	// errGrantAskStop means this pass must not approve and must not deny.
 	errGrantAskStop = errors.New("grant ask stops without a decision")
 
-	grantAskDigestPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
-	grantAskTTLPattern    = regexp.MustCompile(`^([0-9]+(h|m|s))+$`)
+	grantAskDigestPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	grantAskTTLPattern      = regexp.MustCompile(`^([0-9]+(h|m|s))+$`)
+	grantAskUsernamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@+-]{0,62}$`)
+)
+
+const (
+	grantAskWait = iota
+	grantAskStop
+	grantAskDenyScope
+	grantAskDenyUsername
+	grantAskDenyUnusable
+	grantAskApply
 )
 
 // grantAskCreator is the part of asks.KubeStore the broker calls. A nil
@@ -69,13 +79,234 @@ func (b *Broker) askStore() asks.KubeStore {
 }
 
 // holdGrantAsk opens one grant Ask for a grant no policy and no delegate
-// took, and leaves the grant pending. A failed open, a full board, an unfit
-// UID and an unconfirmed count all requeue. None of them denies the grant.
+// took. An answer that binds is applied once. A failed open, a full board,
+// an unfit UID and an unconfirmed count all requeue. None of them denies
+// the grant. A mismatch denies or leaves the grant pending. It never approves.
 func (b *Broker) holdGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) (ctrlResult, error) {
 	if err := b.ensureGrantAsk(ctx, g, sess, now); err != nil {
 		return b.grantAskHoldError(ctx, g, err)
 	}
+	if done, res, err := b.applyGrantAnswer(ctx, g, now); done {
+		return res, err
+	}
 	return b.noteGrantAsk(ctx, g, now)
+}
+
+// applyGrantAnswer acts on a stored answer. done is false while the Ask is
+// still open, so the caller notifies Tom and waits. A pre-check failure does
+// not call Decide.
+func (b *Broker) applyGrantAnswer(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (bool, reconcile.Result, error) {
+	ask, err := b.loadGrantAsk(ctx, g)
+	if apierrors.IsNotFound(err) || errors.Is(err, errGrantAskLater) {
+		return true, reconcile.Result{RequeueAfter: grantAskRecheck}, nil
+	}
+	if err != nil {
+		log.FromContext(ctx).Error(err, "grant ask was not read", "grant", g.Name)
+		return true, reconcile.Result{RequeueAfter: time.Second}, nil
+	}
+	switch grantAskAction(g, ask) {
+	case grantAskWait:
+		return false, reconcile.Result{}, nil
+	case grantAskStop:
+		return true, reconcile.Result{RequeueAfter: grantAskRecheck}, nil
+	case grantAskDenyScope:
+		res, err := b.denyScopeMismatch(ctx, g, now)
+		return true, res, err
+	case grantAskDenyUsername:
+		res, err := b.denyPendingGrant(ctx, g, "the answer has no usable username", now)
+		return true, res, err
+	case grantAskDenyUnusable:
+		res, err := b.denyPendingGrant(ctx, g, "the answer could not be applied", now)
+		return true, res, err
+	case grantAskApply:
+		res, err := b.decideGrantAsk(ctx, g, ask, now)
+		return true, res, err
+	default:
+		return true, reconcile.Result{RequeueAfter: grantAskRecheck}, nil
+	}
+}
+
+// grantAskDecides reports whether this decision is Tom's grant-Ask answer.
+// A policy, a delegate and the maintenance human keep the 30-minute age
+// check and do not take the Ask re-check.
+func (b *Broker) grantAskDecides(d Decision) bool {
+	if !b.EnableGrantAsks || d.By == "" || strings.HasPrefix(d.By, PolicyApprover) || strings.HasPrefix(d.By, DelegateApprover) {
+		return false
+	}
+	return d.By != b.maintenanceHumanApprover()
+}
+
+// recheckGrantAsk re-reads the Ask inside Decide. A read error is returned
+// as itself so the caller retries. Anything else that does not bind is a
+// refusal. A By with no matching answer does not pass.
+func (b *Broker) recheckGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, d Decision) error {
+	if d.TTL != 0 {
+		return fmt.Errorf("%w: a grant ask approves for the ttl asked", ErrRefused)
+	}
+	ask, err := b.loadGrantAsk(ctx, g)
+	if errors.Is(err, errGrantAskLater) || apierrors.IsNotFound(err) {
+		return fmt.Errorf("%w: no matching grant ask", ErrRefused)
+	}
+	if err != nil {
+		return err
+	}
+	if !grantAskIdentityOK(g, ask) || !grantAskScopeOK(g, ask) {
+		return fmt.Errorf("%w: the grant ask does not bind this grant", ErrRefused)
+	}
+	if ask.Status.State != string(apiv1.AskStateAnswered) || ask.Status.Answer == nil || ask.Status.Answer.Approved == nil {
+		return fmt.Errorf("%w: the grant ask has no usable answer", ErrRefused)
+	}
+	user := ask.Status.Answer.AnsweredBy.Username
+	if !grantAskUsernameOK(user) || d.By != "authentik/"+user || d.Approve != *ask.Status.Answer.Approved {
+		return fmt.Errorf("%w: the decision does not match the grant ask", ErrRefused)
+	}
+	return nil
+}
+
+func (b *Broker) decideGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, ask *coord.Ask, now metav1.Time) (reconcile.Result, error) {
+	if ask.Status.Answer == nil || ask.Status.Answer.Approved == nil || !grantAskUsernameOK(ask.Status.Answer.AnsweredBy.Username) {
+		return b.denyPendingGrant(ctx, g, "the answer could not be applied", now)
+	}
+	approved := *ask.Status.Answer.Approved
+	d := Decision{Approve: approved, By: "authentik/" + ask.Status.Answer.AnsweredBy.Username}
+	if !approved {
+		d.Reason = ask.Status.Answer.Text
+	}
+	err := b.decideGrant(ctx, g.Name, d)
+	switch {
+	case err == nil, errors.Is(err, ErrNotPending):
+		return reconcile.Result{}, nil
+	case errors.Is(err, ErrRefused):
+		return b.denyPendingGrant(ctx, g, "the answer could not be applied", now)
+	default:
+		log.FromContext(ctx).Error(err, "grant ask answer was not recorded", "grant", g.Name)
+		return reconcile.Result{RequeueAfter: time.Second}, nil
+	}
+}
+
+func (b *Broker) decideGrant(ctx context.Context, name string, d Decision) error {
+	if b.decideFn != nil {
+		return b.decideFn(ctx, name, d)
+	}
+	return b.Decide(ctx, name, d)
+}
+
+func (b *Broker) denyScopeMismatch(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (reconcile.Result, error) {
+	fresh, err := b.readGrant(ctx, g.Name)
+	if apierrors.IsNotFound(err) {
+		return reconcile.Result{}, nil
+	}
+	if err != nil {
+		log.FromContext(ctx).Error(err, "grant was not read before a deny", "grant", g.Name)
+		return reconcile.Result{RequeueAfter: time.Second}, nil
+	}
+	if !grantStillPending(g, fresh) {
+		return reconcile.Result{}, nil
+	}
+	ask, err := b.loadGrantAsk(ctx, fresh)
+	if apierrors.IsNotFound(err) || errors.Is(err, errGrantAskLater) {
+		return reconcile.Result{RequeueAfter: grantAskRecheck}, nil
+	}
+	if err != nil {
+		log.FromContext(ctx).Error(err, "grant ask was not read before a deny", "grant", g.Name)
+		return reconcile.Result{RequeueAfter: time.Second}, nil
+	}
+	if !grantAskIdentityOK(fresh, ask) {
+		return reconcile.Result{RequeueAfter: grantAskRecheck}, nil
+	}
+	if grantAskScopeOK(fresh, ask) {
+		return reconcile.Result{RequeueAfter: time.Second}, nil
+	}
+	return b.end(ctx, fresh, v1alpha1.GrantDenied, DeniedByBroker, "the scope no longer matches", now)
+}
+
+func (b *Broker) denyPendingGrant(ctx context.Context, g *v1alpha1.AccessGrant, msg string, now metav1.Time) (reconcile.Result, error) {
+	fresh, err := b.readGrant(ctx, g.Name)
+	if apierrors.IsNotFound(err) {
+		return reconcile.Result{}, nil
+	}
+	if err != nil {
+		log.FromContext(ctx).Error(err, "grant was not read before a deny", "grant", g.Name)
+		return reconcile.Result{RequeueAfter: time.Second}, nil
+	}
+	if !grantStillPending(g, fresh) {
+		return reconcile.Result{}, nil
+	}
+	return b.end(ctx, fresh, v1alpha1.GrantDenied, DeniedByBroker, msg, now)
+}
+
+func grantStillPending(seen, fresh *v1alpha1.AccessGrant) bool {
+	if fresh == nil || seen == nil || fresh.UID != seen.UID || !fresh.DeletionTimestamp.IsZero() || fresh.Spec.Release {
+		return false
+	}
+	return fresh.Status.Phase == "" || fresh.Status.Phase == v1alpha1.GrantPending
+}
+
+func (b *Broker) readGrant(ctx context.Context, name string) (*v1alpha1.AccessGrant, error) {
+	if b.APIReader == nil {
+		return nil, errGrantAskLater
+	}
+	var fresh v1alpha1.AccessGrant
+	if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: name}, &fresh); err != nil {
+		return nil, err
+	}
+	return &fresh, nil
+}
+
+func grantAskAction(g *v1alpha1.AccessGrant, ask *coord.Ask) int {
+	if !grantAskIdentityOK(g, ask) {
+		return grantAskStop
+	}
+	if !grantAskScopeOK(g, ask) {
+		return grantAskDenyScope
+	}
+	if ask.Status.State != string(apiv1.AskStateAnswered) || ask.Status.Answer == nil {
+		return grantAskWait
+	}
+	if !grantAskUsernameOK(ask.Status.Answer.AnsweredBy.Username) {
+		return grantAskDenyUsername
+	}
+	if ask.Status.Answer.Approved == nil {
+		return grantAskDenyUnusable
+	}
+	return grantAskApply
+}
+
+func grantAskIdentityOK(g *v1alpha1.AccessGrant, ask *coord.Ask) bool {
+	if ask == nil || ask.Labels[asks.OriginLabel] != grantAskOriginBroker {
+		return false
+	}
+	if ask.Spec.Type != string(apiv1.AskTypeGrant) || ask.Spec.Grant == nil {
+		return false
+	}
+	id, ok := grantAskRequestID(g.UID)
+	if !ok || ask.Spec.RequestID != id {
+		return false
+	}
+	if ask.Spec.Context.SessionUID != string(g.Spec.Requester.SessionUID) || ask.Spec.Context.SessionName != g.Spec.Requester.Session {
+		return false
+	}
+	return ask.Spec.Grant.UID == string(g.UID)
+}
+
+func grantAskScopeOK(g *v1alpha1.AccessGrant, ask *coord.Ask) bool {
+	if ask == nil || ask.Spec.Grant == nil {
+		return false
+	}
+	gr := ask.Spec.Grant
+	target, ok := grantAskTarget(g)
+	if !ok || gr.Target != target || gr.Type != string(g.Spec.Type) || gr.ScopeDigest != grantattest.ScopeDigest(g) {
+		return false
+	}
+	if len(gr.TTL) < 2 || len(gr.TTL) > apiv1.AskGrantTTLMaxLen || !grantAskTTLPattern.MatchString(gr.TTL) {
+		return false
+	}
+	parsed, err := time.ParseDuration(gr.TTL)
+	return err == nil && parsed == g.Spec.TTL.Duration
+}
+
+func grantAskUsernameOK(user string) bool {
+	return grantAskUsernamePattern.MatchString(user)
 }
 
 // ctrlResult is an alias so this file can name the result without importing
@@ -125,6 +356,14 @@ func (b *Broker) ensureGrantAsk(ctx context.Context, g *v1alpha1.AccessGrant, se
 	id, ok := grantAskRequestID(g.UID)
 	if !ok {
 		return errGrantAskLater
+	}
+	// An Ask already stored for this grant is kept, including one whose
+	// answer the store's wire check would refuse. Create is only the first
+	// write. A second object is not opened.
+	if _, loadErr := b.loadGrantAsk(ctx, g); loadErr == nil {
+		return b.ensureGrantAskOrigin(ctx, g)
+	} else if !apierrors.IsNotFound(loadErr) {
+		return loadErr
 	}
 	body, err := b.grantAskBody(ctx, g, sess, id, now.Time)
 	if err != nil {

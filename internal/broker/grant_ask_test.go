@@ -266,9 +266,18 @@ type askMetadataClient struct {
 	client.Client
 	failTaskClaims  bool
 	sessionDeleting bool
+	// failGrantGet, after grantGetsLeft successful grant reads, fails the next one.
+	failGrantGet  error
+	grantGetsLeft int
 }
 
-func (m askMetadataClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+func (m *askMetadataClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*v1alpha1.AccessGrant); ok && m.failGrantGet != nil {
+		if m.grantGetsLeft <= 0 {
+			return m.failGrantGet
+		}
+		m.grantGetsLeft--
+	}
 	if err := m.Client.Get(ctx, key, obj, opts...); err != nil {
 		return err
 	}
@@ -375,15 +384,6 @@ func (f *grantAskFixture) grant() *v1alpha1.AccessGrant {
 	return &g
 }
 
-func (f *grantAskFixture) sessionObject() *v1alpha1.AgentSession {
-	f.t.Helper()
-	var s v1alpha1.AgentSession
-	if err := f.base.Get(f.ctx, types.NamespacedName{Namespace: sessionNS, Name: f.session.Name}, &s); err != nil {
-		f.t.Fatal(err)
-	}
-	return &s
-}
-
 func (f *grantAskFixture) asks() []coord.Ask {
 	f.t.Helper()
 	var list coord.AskList
@@ -402,6 +402,83 @@ func (f *grantAskFixture) onlyAsk() *coord.Ask {
 		f.t.Fatalf("asks = %d", len(items))
 	}
 	return &items[0]
+}
+
+func (f *grantAskFixture) openAsk() {
+	f.t.Helper()
+	f.until(func(g *v1alpha1.AccessGrant) bool {
+		return g.Status.Phase == v1alpha1.GrantPending && f.askCount() == 1
+	})
+}
+
+func (f *grantAskFixture) answer(approved *bool, username, text string) {
+	f.t.Helper()
+	if !grantAskUsernameOK(username) {
+		f.plantAnswer(approved, username, text)
+		return
+	}
+	_, err := f.b.askStore().Answer(f.ctx, f.onlyAsk().Name, apiv1.AskAnswerRequest{
+		Text: text, Approved: approved,
+		Actor: apiv1.AskActor{
+			Issuer: "https://issuer.example/grant-ask", Subject: "subject-1", Username: username,
+		},
+	}, f.clk.Now())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// plantAnswer writes an answer the store would refuse. The broker still has
+// to see it and deny, rather than treat the wire error as a reason to wait.
+func (f *grantAskFixture) plantAnswer(approved *bool, username, text string) {
+	f.t.Helper()
+	ask := f.onlyAsk()
+	ask.Status.State = string(apiv1.AskStateAnswered)
+	ask.Status.Answer = &coord.AskAnswer{
+		Text: text, Approved: approved, AnsweredAt: metav1.NewTime(f.clk.Now()),
+		AnsweredBy: coord.AskActor{
+			Issuer: "https://issuer.example/grant-ask", Subject: "subject-1", Username: username,
+		},
+	}
+	if err := f.base.Status().Update(f.ctx, ask); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f *grantAskFixture) watchDecide(real bool) *decideSpy {
+	f.t.Helper()
+	s := &decideSpy{t: f.t, b: f.b, real: real}
+	f.b.decideFn = s.call
+	return s
+}
+
+func (f *grantAskFixture) grantCount() int {
+	f.t.Helper()
+	var list v1alpha1.AccessGrantList
+	if err := f.base.List(f.ctx, &list, client.InNamespace(sessionNS)); err != nil {
+		f.t.Fatal(err)
+	}
+	return len(list.Items)
+}
+
+type decideSpy struct {
+	t     *testing.T
+	b     *Broker
+	real  bool
+	calls int
+	last  Decision
+	err   error
+}
+
+func (s *decideSpy) call(ctx context.Context, name string, d Decision) error {
+	s.calls++
+	s.last = d
+	if !s.real {
+		s.err = errors.New("Decide was called")
+		return s.err
+	}
+	s.err = s.b.Decide(ctx, name, d)
+	return s.err
 }
 
 func (f *grantAskFixture) assertOneGrantAsk() {

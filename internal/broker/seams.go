@@ -98,7 +98,7 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 			return err
 		}
 		now := b.now()
-		ttl, err := b.decisionAllowed(&g, d, now.Time)
+		ttl, err := b.decisionAllowed(ctx, &g, d, now.Time)
 		if err != nil {
 			return err
 		}
@@ -169,8 +169,11 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 }
 
 // decisionAllowed checks a decision against the grant and returns the TTL an
-// approval gives.
-func (b *Broker) decisionAllowed(g *v1alpha1.AccessGrant, d Decision, now time.Time) (time.Duration, error) {
+// approval gives. With EnableGrantAsks, a By that is not a policy, a delegate
+// or the maintenance human skips the 30-minute age check and must match the
+// stored grant Ask. Those three decisions keep the checks below as they are.
+// A credential approval is still refused here until ADR-021 build item 5.
+func (b *Broker) decisionAllowed(ctx context.Context, g *v1alpha1.AccessGrant, d Decision, now time.Time) (time.Duration, error) {
 	switch {
 	case !g.DeletionTimestamp.IsZero():
 		return 0, fmt.Errorf("%w: grant %s is being deleted", ErrNotPending, g.Name)
@@ -178,12 +181,17 @@ func (b *Broker) decisionAllowed(g *v1alpha1.AccessGrant, d Decision, now time.T
 		return 0, fmt.Errorf("%w: grant %s is %s", ErrNotPending, g.Name, g.Status.Phase)
 	case g.Spec.Release:
 		return 0, fmt.Errorf("%w: grant %s was released", ErrNotPending, g.Name)
-	case !now.Before(g.CreationTimestamp.Add(PendingTimeout)):
+	case !b.grantAskDecides(d) && !now.Before(g.CreationTimestamp.Add(PendingTimeout)):
 		return 0, fmt.Errorf("%w: grant %s waited more than %s", ErrNotPending, g.Name, PendingTimeout)
 	case d.By == "":
 		return 0, fmt.Errorf("%w: no approver", ErrRefused)
 	case strings.HasPrefix(d.By, PolicyApprover):
 		return 0, fmt.Errorf("%w: %s is a policy; Tom decides on the page, and break-glass only ever by him (D-27)", ErrRefused, d.By)
+	}
+	if b.grantAskDecides(d) {
+		if err := b.recheckGrantAsk(ctx, g, d); err != nil {
+			return 0, err
+		}
 	}
 	delegate := strings.HasPrefix(d.By, DelegateApprover)
 	if d.Reserved != nil && !delegate {
