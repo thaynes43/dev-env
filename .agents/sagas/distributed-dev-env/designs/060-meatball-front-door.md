@@ -2,10 +2,11 @@
 
 - **Status:** Proposed, 2026-11-10, with Tom's three rulings of the same day
   recorded (section 11): the risky-access list, that a request stays open until
-  he answers, and what Meatball may start. Stories 1 and 3 to 6 can start from
-  it. Story 2 changes access and the Ask contract, so it starts with its own
-  ADR and an amendment to DESIGN-034 (section 8). Design only: nothing is
-  built, switched on or changed by this document.
+  he answers, and what Meatball may start. Stories 1, 3, 4 and 5 can start
+  from it. Story 2 changes access and the Ask contract, so it starts with its
+  own ADR and an amendment to DESIGN-034 (section 8), and story 6 waits on
+  story 2. Design only: nothing is built, switched on or changed by this
+  document.
 - **Tracking:** [Story OP517](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/517),
   under [Epic OP516](https://work.haynesnetwork.com/work_packages/516).
 - **Origin:** Tom, 2026-11-10, typed in coordinator session
@@ -380,7 +381,7 @@ door has no such action.
 
 | # | Story | Changes | Size | Depends on |
 |---|---|---|---|---|
-| 1 | Asks board on | Refresh #264's held haynes-ops draft: Ask CRD, RBAC, operator `--enable-asks`, keeper `--enable-ask-notifications` with the portal origin | M | quiet hours Q-255-02 is open |
+| 1 | Asks board on | Refresh #264's held haynes-ops draft: Ask CRD, RBAC, operator `--enable-asks`, keeper `--enable-ask-notifications` with the portal origin | M | none: quiet hours were ruled on 2026-11-10 (DESIGN-034 Q-255-02: pushes from 07:00 to midnight Eastern). The story is the existing item OP264 |
 | 2 | Grants that need Tom go through the board | First ADR-021 and the DESIGN-034 amendment (section 8, the adapter's contract). Then: the operator opens a `grant` Ask for a grant no policy decided; the portal answer calls `Decide`; no timeout while it waits on Tom; the "session has ended" card; `request_access` and `grant` help cut to 40 words | M | 1; ADR-021 and the DESIGN-034 amendment accepted |
 | 3 | Meatball's caller | `CallerPolicy` for one caller: CRD, API class, the ruled limits (drivers `claude-opus-5-5`, `gpt-6-astra` or `claude-fable-5-2`; 4 hours, 4 workers, 2 at once), own-sessions-only reads and stops | M | none |
 | 4 | Coordinator start | One operator route that fills in a coordinator task from a tracker item; the standard brief; `agent-run coordinator start, status, stop`; worker-count cap | M | 3 |

@@ -659,8 +659,8 @@ supported and restore/epoch invalidation. No generic approve-and-run tool.
 
 ## 13. Questions for Tom
 
-These IDs belong to #255. Q-255-04 has the dated ruling below; the other
-questions remain unresolved. The lead must deliver active questions one at
+These IDs belong to #255. Q-255-02 and Q-255-04 have the dated rulings below;
+the other questions remain unresolved. The lead must deliver active questions one at
 a time through its verified phone route and record actual answer/source/date
 here and in #255. Open questions do not block this docs PR; they hold only
 their dependent behavior. Do not send this table as one prompt or reopen a
@@ -669,7 +669,7 @@ deferred question early.
 | ID / status | Question and recommendation | Alternative / gate |
 |---|---|---|
 | Q-255-01 — **DEFERRED until F2** | May any current portal-group member revoke an unused approval given by another member? Recommend any admitted member, with revoker/time/reason retained. This is a proposal, not current authority. | Original approver only. Ask when F2 begins; no v1 revocation. |
-| Q-255-02 — pending | No live Ask quiet-hours policy is adopted. Source supports an optional empty-by-default window. Should new Ask pushes wait outside 09:00–21:00 America/New_York? Recommend daytime only, priority 0, DST-aware deferral and no agent bypass. | All hours within caps. Ask before lane B goes live; source/tests may proceed default off. Login notices unchanged. |
+| Q-255-02 — **RULING, 2026-11-10** | Tom, by phone prompt in coordinator session dev-env-fable-coordinator-1109 (recorded at 2026-11-10T02:10:33Z by its shell clock; OpenProject #264). Asked: "Next I switch on the board that sends agents' questions and risky-access requests to your phone: a push that opens a page where you answer. Should those pushes also come at night, or wait until morning? Either way the request stays on the board and the agent keeps working on other things." The options were "Daytime only, 9am-9pm (Recommended)" and "Any time". He answered in his own words: "7AM to midnight is fine". Coordinator's reading, not Tom's words: new Ask pushes are sent from 07:00 to midnight America/New_York; one that comes due outside that window waits and is sent at 07:00; no agent can bypass it; the Ask stays open on the board meanwhile. | The earlier recommendation was 09:00–21:00. `--ask-notify-window` takes the window and `--ask-notify-timezone` the zone (docs/asks.md); the activation sets them. Login notices unchanged. |
 | Q-255-03 — pending | May the portal expose transcripts for all compatible Sessions in the resource without per-UID entries, with an operator-owned full/dev profile allowlist, workbench opt-in and exclusion of credential/break-glass grant holders? Recommend that bounded eligibility. | Keep exact targets. Holds T4, which is not v1; Ask board/history links use current scope meanwhile. |
 | Q-255-04 — **RULING, 2026-10-29** | Tom, OpenProject #255 journal 2680: “It's situational, I may be asked to approve binding changes that are beyond one request.” Also: “I don't want to have to approve the same thing over and over we need a way to manage permissions and rules but also one off approvals will happen” and “here I do not want to approve agents to always send emails just that I approve the one that was drafted.” Lead reading (journal 2680), not Tom's words: a v1 portal Approve covers one exact action, target and content, once, within its expiry, and never becomes standing permission. | A standing rule is a separate approval kind: approve a scoped policy once, then list, manage and revoke it. See [DESIGN-036](036-standing-rules.md). Journal 2680 supersedes journal 2675, retracted in 2676. This records the distinction; it grants no credential, removes no other hold and creates no executor. |
 
