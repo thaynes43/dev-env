@@ -140,6 +140,15 @@ func Summaries(ctx context.Context, c ListConfig) ([]Summary, error) {
 }
 
 func ref(s coord.SessionIdentity) SessionRef { return SessionRef{s.Namespace, s.Name, s.UID} }
+
+// recipientForm keeps a session recipient as the session ref. A caller
+// recipient contributes its CallerPolicy UID and no session name.
+func recipientForm(spec coord.InboxMessageSpec) SessionRef {
+	if spec.CallerRecipient != nil && spec.Recipient == (coord.SessionIdentity{}) {
+		return SessionRef{UID: spec.CallerRecipient.PolicyUID}
+	}
+	return ref(spec.Recipient)
+}
 func objectSummary(r resource, ns string, u *unstructured.Unstructured) Summary {
 	return Summary{Kind: r.kind, Resource: r.name, Namespace: ns, Name: u.GetName(), UID: string(u.GetUID()), ResourceVersion: u.GetResourceVersion()}
 }
@@ -183,8 +192,9 @@ func summarize(r resource, namespace string, u *unstructured.Unstructured) Summa
 	case InboxMessage:
 		var v coord.InboxMessage
 		if runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &v) == nil {
-			s.Project, s.Sender, s.Recipient = v.Spec.Project, ref(v.Spec.Sender), ref(v.Spec.Recipient)
-			s.Valid = validMeta(s, namespace) && inbox.ValidMessage(v.Spec) && u.GetName() == inbox.MessageName(v.Spec.Sender, v.Spec.Key)
+			s.Project, s.Sender = v.Spec.Project, ref(v.Spec.Sender)
+			s.Recipient = recipientForm(v.Spec)
+			s.Valid = validMeta(s, namespace) && inbox.ValidMessage(v.Spec) && u.GetName() == inbox.MessageNameFor(v.Spec)
 		}
 	case InboxReadAck:
 		var v coord.InboxReadAck

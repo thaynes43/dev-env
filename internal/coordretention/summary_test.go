@@ -164,6 +164,57 @@ func TestSummariesRejectsMalformedScopeAndCancellation(t *testing.T) {
 	}
 }
 
+func TestSummariesParentSenderAndRecipientForms(t *testing.T) {
+	policyUID := "88888888-8888-4888-8888-888888888888"
+	caller := &coord.InboxCaller{ServiceAccount: coord.MeatballServiceAccount, PolicyUID: policyUID}
+	session := messageSpec()
+	toCaller := messageSpec()
+	toCaller.Key = "to-caller"
+	toCaller.Kind = inbox.KindBlocker
+	toCaller.Recipient = coord.SessionIdentity{}
+	toCaller.CallerRecipient = caller
+	fromCaller := messageSpec()
+	fromCaller.Key = "from-caller"
+	fromCaller.Sender = coord.SessionIdentity{}
+	fromCaller.CallerSender = &coord.InboxCaller{ServiceAccount: coord.MeatballServiceAccount, PolicyUID: policyUID}
+	fromCaller.Actor.Kind = "policy"
+	fromCaller.Actor.ServiceAccount = coord.MeatballServiceAccount
+	specs := []coord.InboxMessageSpec{session, toCaller, fromCaller}
+	uids := []types.UID{"44444444-4444-4444-8444-444444444441", "44444444-4444-4444-8444-444444444442", "44444444-4444-4444-8444-444444444443"}
+	var items []unstructured.Unstructured
+	for i, spec := range specs {
+		if !inbox.ValidMessage(spec) {
+			t.Fatalf("fixture %d refused", i)
+		}
+		obj := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: inbox.MessageNameFor(spec), UID: uids[i], ResourceVersion: "30"}, Spec: spec}
+		raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, unstructured.Unstructured{Object: raw})
+	}
+	out, err := Summaries(context.Background(), ListConfig{Reader: &fixtureReader{objects: map[string][]unstructured.Unstructured{"InboxMessageList": items}}, Namespace: retentionNS, Enabled: map[Kind]bool{InboxMessage: true}})
+	if err != nil || len(out) != 3 {
+		t.Fatalf("summaries: %#v %v", out, err)
+	}
+	byName := map[string]Summary{}
+	for _, s := range out {
+		byName[s.Name] = s
+	}
+	got := byName[inbox.MessageNameFor(session)]
+	if !got.Valid || got.Sender.UID != sender.UID || got.Recipient.UID != recipient.UID || got.Recipient.Name != recipient.Name {
+		t.Fatalf("session summary: %#v", got)
+	}
+	got = byName[inbox.MessageNameFor(toCaller)]
+	if !got.Valid || got.Sender.UID != sender.UID || got.Recipient != (SessionRef{UID: policyUID}) {
+		t.Fatalf("caller recipient summary: %#v", got)
+	}
+	got = byName[inbox.MessageNameFor(fromCaller)]
+	if !got.Valid || got.Sender != (SessionRef{}) || got.Recipient.UID != recipient.UID {
+		t.Fatalf("caller sender summary: %#v", got)
+	}
+}
+
 func TestSummariesStableProjectNameUIDOrder(t *testing.T) {
 	spec := claimSpec()
 	var items []unstructured.Unstructured

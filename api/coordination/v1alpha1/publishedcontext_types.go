@@ -53,6 +53,7 @@ type ContextAttribution struct {
 
 // The API and store enforce UTF-8 byte bounds too: CRD MaxLength counts characters.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="published context and original provenance are immutable"
+// +kubebuilder:validation:XValidation:rule="self.actor.kind != 'policy'",message="a published context actor is not a caller policy"
 // +kubebuilder:validation:XValidation:rule="self.identity.sessionUID == self.source.uid",message="source UID must equal original publication identity"
 // +kubebuilder:validation:XValidation:rule="self.origin == 'ExplicitPublished' ? (self.completeness == 'ExplicitExcerpt' && !has(self.managedOutput)) : (has(self.managedOutput) && self.completeness in ['PartialManagedOutput', 'Unknown'] && self.attribution.provider in ['claude', 'codex'] && self.identity.kind == 'transcript-excerpt' && self.identity.key == 'capture-' + self.managedOutput.invocation + '-' + (self.managedOutput.ordinal == 0 ? '0' : self.managedOutput.ordinal == 1 ? '1' : self.managedOutput.ordinal == 2 ? '2' : '3'))",message="managed assertions require their bounded fixed identity and truthful partial state"
 type PublishedContextSpec struct {

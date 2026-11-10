@@ -21,6 +21,7 @@ type TaskClaimList struct {
 
 // TaskClaimSpec contains only bounded attribution, never prompt or rules text.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="task ownership and provenance are immutable"
+// +kubebuilder:validation:XValidation:rule="self.actor.kind != 'policy'",message="a task claim actor is not a caller policy"
 type TaskClaimSpec struct {
 	Identity   TaskIdentity    `json:"identity"`
 	Owner      SessionIdentity `json:"owner"`
@@ -59,7 +60,10 @@ type SessionIdentity struct {
 }
 
 type ClaimActor struct {
-	// +kubebuilder:validation:Enum=session;coordinator
+	// policy is the Meatball caller on an InboxMessage. TaskClaim and
+	// PublishedContext refuse it. MaxLength bounds the string a rule reads.
+	// +kubebuilder:validation:Enum=session;coordinator;policy
+	// +kubebuilder:validation:MaxLength=11
 	Kind string `json:"kind"`
 	// +kubebuilder:validation:MinLength=3
 	// +kubebuilder:validation:MaxLength=317

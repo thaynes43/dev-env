@@ -39,6 +39,8 @@ const (
 	InReplyToLabel = "coordination.dev-env.haynesops.com/in-reply-to"
 
 	KindQuestion = "question"
+	KindResult   = "result"
+	KindBlocker  = "blocker"
 	KindReply    = "reply"
 	// StaleAfter is the fixed age past which an unanswered question reads
 	// Stale. It is a display bound, not an expiry: nothing is deleted or resent.
@@ -59,9 +61,9 @@ var DefaultLimits = taskclaim.Limits{PerSession: 512, PerProject: 4096}
 
 var (
 	ErrUnavailable = errors.New("inbox observation is unconfirmed")
-	// ErrSchemaNotUpgraded means the cluster's InboxMessage schema prunes the
-	// kind or inReplyTo of a question or reply, so storing it would leave a
-	// record that stays invalid. Nothing was written.
+	// ErrSchemaNotUpgraded means the cluster's InboxMessage schema prunes a
+	// field the record needs, so storing it would leave a record that stays
+	// invalid. Nothing was written.
 	ErrSchemaNotUpgraded = errors.New("inbox schema not upgraded")
 	ErrNotFound          = errors.New("inbox record not found")
 	keyPattern           = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$`)
@@ -83,6 +85,34 @@ func MessageName(sender coord.SessionIdentity, key string) string {
 		Sender coord.SessionIdentity
 		Key    string
 	}{sender, key})
+}
+
+// PolicyMessageName names a message whose sender is the Meatball account.
+// The shape differs from MessageName, so the same key yields a different name.
+func PolicyMessageName(serviceAccount, policyUID, key string) string {
+	return fullName("message", struct {
+		ServiceAccount string
+		PolicyUID      string
+		Key            string
+	}{serviceAccount, policyUID, key})
+}
+
+// MessageNameFor returns the name of the sender form that is set.
+// A session sender keeps MessageName. A caller sender uses PolicyMessageName.
+func MessageNameFor(spec coord.InboxMessageSpec) string {
+	if spec.CallerSender != nil && spec.Sender == (coord.SessionIdentity{}) {
+		return PolicyMessageName(spec.CallerSender.ServiceAccount, spec.CallerSender.PolicyUID, spec.Key)
+	}
+	return MessageName(spec.Sender, spec.Key)
+}
+
+// RecipientFormUID returns the session UID when recipient is set, and the
+// CallerPolicy UID when callerRecipient is set.
+func RecipientFormUID(spec coord.InboxMessageSpec) string {
+	if spec.CallerRecipient != nil && spec.Recipient == (coord.SessionIdentity{}) {
+		return spec.CallerRecipient.PolicyUID
+	}
+	return spec.Recipient.UID
 }
 func AckName(messageUID, recipientUID string) string {
 	return fullName("read-ack", []string{messageUID, recipientUID})
@@ -114,21 +144,82 @@ func ValidArchiveMetadata(s coord.InboxMessageSpec) bool {
 }
 
 func validMessageSpec(s coord.InboxMessageSpec, archived bool) bool {
-	// Reuse bounded attribution/provenance validation without sharing claim ACLs.
-	claim := coord.TaskClaimSpec{Identity: coord.TaskIdentity{Project: s.Project, Repository: s.Repository, TaskKey: "task:inbox"}, Owner: s.Sender, Actor: s.Actor, Provenance: s.Provenance}
 	textOK := ValidText(s.Text)
 	if archived {
 		textOK = s.Text == ""
 	}
-	return taskclaim.ValidSpec(claim) && s.Actor.Kind == "session" && ValidSession(s.Recipient) && ValidKey(s.Key) && textOK &&
-		(s.Provider == "claude" || s.Provider == "codex" || s.Provider == "cursor" || s.Provider == "opencode") && modelPattern.MatchString(s.RequestedModel) && validCorrelation(s)
+	if !textOK || !ValidKey(s.Key) || !validEnds(s) || !validCorrelation(s) || !validProvider(s) {
+		return false
+	}
+	// Reuse bounded attribution and provenance validation without sharing claim
+	// ACLs. TaskClaim refuses a policy actor, so a caller sender is checked
+	// here and the provenance reuse sees a session actor.
+	owner, actor := s.Sender, s.Actor
+	if s.CallerSender != nil {
+		actor.Kind = "session"
+		if owner == (coord.SessionIdentity{}) {
+			owner = coord.SessionIdentity{Namespace: "dev-agents", Name: "provenance", UID: "provenance"}
+		}
+	}
+	claim := coord.TaskClaimSpec{Identity: coord.TaskIdentity{Project: s.Project, Repository: s.Repository, TaskKey: "task:inbox"}, Owner: owner, Actor: actor, Provenance: s.Provenance}
+	return taskclaim.ValidSpec(claim)
+}
+
+func validProvider(s coord.InboxMessageSpec) bool {
+	return (s.Provider == "claude" || s.Provider == "codex" || s.Provider == "cursor" || s.Provider == "opencode") && modelPattern.MatchString(s.RequestedModel)
+}
+
+func validEnds(s coord.InboxMessageSpec) bool {
+	sender, callerSender := s.Sender != (coord.SessionIdentity{}), s.CallerSender != nil
+	recipient, callerRecipient := s.Recipient != (coord.SessionIdentity{}), s.CallerRecipient != nil
+	if sender == callerSender || recipient == callerRecipient {
+		return false
+	}
+	if !validInboxActor(s) {
+		return false
+	}
+	if s.Kind == "" && callerSender && !recipient {
+		return false
+	}
+	if sender && !ValidSession(s.Sender) {
+		return false
+	}
+	if recipient && !ValidSession(s.Recipient) {
+		return false
+	}
+	if callerSender && !validCaller(s.CallerSender) {
+		return false
+	}
+	if callerRecipient && !validCaller(s.CallerRecipient) {
+		return false
+	}
+	return true
+}
+
+func validCaller(c *coord.InboxCaller) bool {
+	return c != nil && c.ServiceAccount == coord.MeatballServiceAccount && uidPattern.MatchString(c.PolicyUID)
+}
+
+func validInboxActor(s coord.InboxMessageSpec) bool {
+	if !validActor(s.Actor) {
+		return false
+	}
+	switch s.Actor.Kind {
+	case "session":
+		return s.Sender != (coord.SessionIdentity{})
+	case "policy":
+		return s.CallerSender != nil && s.Actor.ServiceAccount == coord.MeatballServiceAccount && s.CallerSender.ServiceAccount == coord.MeatballServiceAccount
+	default:
+		return false
+	}
 }
 
 // validCorrelation mirrors the schema: every reply, and only a reply, names one
-// exact question. Which question a reply may name is the API's check.
+// exact message. A question, result or blocker names none. Which message a
+// reply may name is the API's check.
 func validCorrelation(s coord.InboxMessageSpec) bool {
 	switch s.Kind {
-	case "", KindQuestion:
+	case "", KindQuestion, KindResult, KindBlocker:
 		return s.InReplyTo == nil
 	case KindReply:
 		return s.InReplyTo != nil && ValidRef(*s.InReplyTo)
@@ -160,10 +251,11 @@ func SameIntent(a, b coord.InboxMessageSpec) bool {
 
 func validActor(a coord.ClaimActor) bool {
 	ns, sa, ok := strings.Cut(a.ServiceAccount, "/")
-	return a.Kind == "session" && ok && len(validation.IsDNS1123Label(ns)) == 0 && len(validation.IsDNS1123Subdomain(sa)) == 0 && len(validation.IsDNS1123Subdomain(a.PodName)) == 0 && uidPattern.MatchString(a.PodUID)
+	kindOK := a.Kind == "session" || a.Kind == "policy"
+	return kindOK && ok && len(validation.IsDNS1123Label(ns)) == 0 && len(validation.IsDNS1123Subdomain(sa)) == 0 && len(validation.IsDNS1123Subdomain(a.PodName)) == 0 && uidPattern.MatchString(a.PodUID)
 }
 func ValidAck(s coord.InboxReadAckSpec) bool {
-	return projectcatalog.ValidName(s.Project) && ValidMessageName(s.MessageName) && uidPattern.MatchString(s.MessageUID) && ValidSession(s.Recipient) && validActor(s.Actor)
+	return projectcatalog.ValidName(s.Project) && ValidMessageName(s.MessageName) && uidPattern.MatchString(s.MessageUID) && ValidSession(s.Recipient) && s.Actor.Kind == "session" && validActor(s.Actor)
 }
 
 type KubeStore struct {
@@ -204,7 +296,7 @@ func (s KubeStore) validMessage(m *coord.InboxMessage) bool {
 	if m == nil || !ValidMessage(m.Spec) {
 		return false
 	}
-	name := MessageName(m.Spec.Sender, m.Spec.Key)
+	name := MessageNameFor(m.Spec)
 	if m.Spec.Kind != "" {
 		return s.validObject(m, name, messageLabels(m.Spec))
 	}
@@ -238,7 +330,7 @@ func (s KubeStore) Create(ctx context.Context, spec coord.InboxMessageSpec) (*co
 		return nil, false, ErrUnavailable
 	}
 	// Only a new message counts against the bounds; a retry still confirms.
-	if _, err := s.Get(ctx, MessageName(spec.Sender, spec.Key)); errors.Is(err, ErrNotFound) {
+	if _, err := s.Get(ctx, MessageNameFor(spec)); errors.Is(err, ErrNotFound) {
 		if err := taskclaim.CheckRoom(ctx, s.Live, "InboxMessageList", s.Namespace, spec.Project, spec.Sender, s.Limits.Effective(DefaultLimits)); err != nil {
 			if errors.Is(err, ErrLimit) {
 				return nil, false, ErrLimit
@@ -253,7 +345,7 @@ func (s KubeStore) Create(ctx context.Context, spec coord.InboxMessageSpec) (*co
 	} else if err != nil {
 		return nil, false, ErrUnavailable
 	}
-	m := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: MessageName(spec.Sender, spec.Key), Labels: messageLabels(spec)}, Spec: spec}
+	m := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: MessageNameFor(spec), Labels: messageLabels(spec)}, Spec: spec}
 	createErr := s.Client.Create(ctx, m)
 	observed, err := s.Get(ctx, m.Name)
 	if err != nil || observed.Spec.Sender != spec.Sender || observed.Spec.Key != spec.Key {
@@ -278,7 +370,7 @@ func (s KubeStore) Create(ctx context.Context, spec coord.InboxMessageSpec) (*co
 // is read into an unstructured object, which a response replaces whole, so a
 // pruned field cannot survive from the request.
 func (s KubeStore) checkSchema(ctx context.Context, spec coord.InboxMessageSpec) error {
-	probe := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: MessageName(spec.Sender, spec.Key), Labels: messageLabels(spec)}, Spec: spec}
+	probe := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: MessageNameFor(spec), Labels: messageLabels(spec)}, Spec: spec}
 	fields, err := runtime.DefaultUnstructuredConverter.ToUnstructured(probe)
 	if err != nil {
 		return ErrUnavailable
@@ -294,7 +386,9 @@ func (s KubeStore) checkSchema(ctx context.Context, spec coord.InboxMessageSpec)
 	}
 	kind, _, _ := unstructured.NestedString(u.Object, "spec", "kind")
 	_, hasReplyTo, _ := unstructured.NestedMap(u.Object, "spec", "inReplyTo")
-	if kind != spec.Kind || hasReplyTo != (spec.InReplyTo != nil) {
+	_, hasCallerSender, _ := unstructured.NestedMap(u.Object, "spec", "callerSender")
+	_, hasCallerRecipient, _ := unstructured.NestedMap(u.Object, "spec", "callerRecipient")
+	if kind != spec.Kind || hasReplyTo != (spec.InReplyTo != nil) || hasCallerSender != (spec.CallerSender != nil) || hasCallerRecipient != (spec.CallerRecipient != nil) {
 		return ErrSchemaNotUpgraded
 	}
 	return nil
