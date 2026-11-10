@@ -156,6 +156,25 @@ func TestTaskCleanupRescueLeavesTheRescueFailedGauge(t *testing.T) {
 		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-before",
 		DueAt: metav1.NewTime(at.Add(time.Hour)), HoldIntent: "20261111T120000Z/first-intent",
 	}
+	// A reaped task is due at grace start, not the stored dueAt. The clean-up's
+	// rescue is before that stored dueAt and still belongs to the clean-up.
+	reapedAt := metav1.NewTime(at.Time)
+	reaped := rescue("reaped", v1alpha1.ModeTask, "", "old-hold-reaped", "")
+	reaped.Finalizers = []string{Finalizer}
+	reaped.DeletionTimestamp = &reapedAt
+	reaped.Status.PrivateHistory.Expiry = &v1alpha1.PrivateHomeExpiryStatus{
+		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-reaped",
+		GraceStart: metav1.NewTime(at.Add(-time.Hour)), DueAt: metav1.NewTime(at.Add(7 * 24 * time.Hour)),
+		HoldIntent: "20261111T120000Z/reaped-intent",
+	}
+	// Release-now starts before the stored due time. The rescue is the clean-up's.
+	released := rescue("released", v1alpha1.ModeTask, "", "old-hold-released", "")
+	releaseAt := metav1.NewTime(at.Add(-time.Minute))
+	released.Status.PrivateHistory.Expiry = &v1alpha1.PrivateHomeExpiryStatus{
+		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-released",
+		DueAt: metav1.NewTime(at.Add(7 * 24 * time.Hour)), ReleaseNowAt: &releaseAt,
+		HoldIntent: "20261111T120000Z/released-intent",
+	}
 	// The same gap, but the failed rescue ran in the recorded executor.
 	executor := rescue("executor", v1alpha1.ModeTask, "", "exec-executor", "")
 	executor.Status.PrivateHistory.Expiry = &v1alpha1.PrivateHomeExpiryStatus{
@@ -166,10 +185,10 @@ func TestTaskCleanupRescueLeavesTheRescueFailedGauge(t *testing.T) {
 		return "dev_env_session_rescue_failed{reason=WorktreeRefused,session=" + name + "} 1"
 	}
 	got := strings.Join(gather(t, &SessionCollector{
-		Reader:    fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(cleanup, held, earlier, plain, retry, before, executor).Build(),
+		Reader:    fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(cleanup, held, earlier, plain, retry, before, reaped, released, executor).Build(),
 		Namespace: "dev-agents", TaskCleanupOn: true,
 	}), "\n")
-	for _, name := range []string{"cleanup", "held", "retry"} {
+	for _, name := range []string{"cleanup", "held", "retry", "reaped", "released"} {
 		if strings.Contains(got, series(name)) {
 			t.Fatalf("the clean-up's rescue %s is in the gauge:\n%s", name, got)
 		}

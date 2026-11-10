@@ -642,7 +642,7 @@ unproven Sessions until F6 and OP515 clean them, as intended.
   for: 1h
 ```
 
-A rescue the task clean-up ran in its own hold pod is not in `dev_env_session_rescue_failed`, so `DevEnvRescueFailed` does not page for it. The test is the clean-up's own: `status.rescue.podUID` equals the record's `holdPodUID` while the task policy owns the Session, and the same rescue stays out after the daily retry clears that UID and writes a new hold intent, until the next rescue replaces it, when that rescue is at or after the record's due time and did not run in the recorded executor; `RescueFailed` stays True, and once the record says `rescue_refused` the Session is `dev_env_task_cleanup_sessions{state="refused"}`, so the critical alert does not count it twice.
+A rescue the task clean-up ran in its own hold pod is not in `dev_env_session_rescue_failed`, so `DevEnvRescueFailed` does not page for it. The test is the clean-up's own: `status.rescue.podUID` equals the record's `holdPodUID` while the task policy owns the Session, and the same rescue stays out after the daily retry clears that UID and writes a new hold intent, until the next rescue replaces it, when that rescue is at or after the clock the clean-up uses (the stored due time, grace start when the Session is reaped, or release-now when that is earlier) and did not run in the recorded executor; `RescueFailed` stays True, and once the record says `rescue_refused` the Session is `dev_env_task_cleanup_sessions{state="refused"}`, so the critical alert does not count it twice.
 
 **Events:** `TaskCleanupStarted` (the due time); `ExecutorRemoved`, `HoldPod`
 and `Rescue` as today; `TaskCleanupSaved` (the rescue's name, refs and bytes,

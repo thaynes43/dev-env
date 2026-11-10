@@ -193,8 +193,8 @@ func (c *SessionCollector) Collect(ch chan<- prometheus.Metric) {
 // one, including before the refusal is stored and including a transient
 // failure in the same pod. The daily retry clears the hold pod UID before
 // the next rescue is stored; that gap stays out when the failed rescue is
-// at or after the record's due time and did not run in the recorded
-// executor. An earlier rescue keeps its own pod UID and still counts.
+// at or after the clock taskCleanupDueAt uses and did not run in the
+// recorded executor. An earlier rescue keeps its own pod UID and still counts.
 // DESIGN-025's hold pod is outside the task policy, so its failure still
 // counts.
 func taskCleanupRescueExcluded(s *v1alpha1.AgentSession, cleanupOn bool) bool {
@@ -214,8 +214,26 @@ func taskCleanupRescueExcluded(s *v1alpha1.AgentSession, cleanupOn bool) bool {
 	// wait in that gap is 30 minutes, longer than DevEnvRescueFailed's 20
 	// minutes. The first attempt reaches the same status shape, so the gap
 	// is left out only when this failed rescue is one the clean-up wrote:
-	// at or after the record's due time, and not in the recorded executor.
-	// An earlier failure, including a D-55 hold pod, still counts.
+	// at or after the clock taskCleanupDueAt uses, and not in the recorded
+	// executor. An earlier failure, including a D-55 hold pod, still counts.
 	return e.Phase == v1alpha1.HomeExpiryRescuing && e.HoldIntent != "" && e.HoldPodUID == "" &&
-		rec.PodUID != e.ExecutorUID && rec.At != nil && !e.DueAt.IsZero() && !rec.At.Time.Before(e.DueAt.Time)
+		rec.PodUID != e.ExecutorUID && taskCleanupRescueAfterDue(s, e, rec)
+}
+
+// taskCleanupRescueAfterDue reports whether the rescue is at or after the
+// time the clean-up was allowed to run it. A reaped Session is due at grace
+// start, not the stored dueAt (taskCleanupDueAt). Release-now can be earlier
+// than both.
+func taskCleanupRescueAfterDue(s *v1alpha1.AgentSession, e *v1alpha1.PrivateHomeExpiryStatus, rec *v1alpha1.RescueStatus) bool {
+	if rec.At == nil {
+		return false
+	}
+	due := e.DueAt.Time
+	if !s.DeletionTimestamp.IsZero() {
+		due = e.GraceStart.Time
+	}
+	if e.ReleaseNowAt != nil && !e.ReleaseNowAt.IsZero() && (due.IsZero() || e.ReleaseNowAt.Time.Before(due)) {
+		due = e.ReleaseNowAt.Time
+	}
+	return !due.IsZero() && !rec.At.Time.Before(due)
 }
