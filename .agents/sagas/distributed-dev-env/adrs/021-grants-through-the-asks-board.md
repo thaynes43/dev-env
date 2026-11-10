@@ -85,7 +85,7 @@ target and TTL match section 2. `POST /v1/asks` refuses `type=grant` and
 strips `ask-origin` from every session create, so a session cannot set the
 label. Sessions have no direct Ask CRD rights (DESIGN-034 section 4). The
 broker's ServiceAccount is the principal that creates an Ask with that
-label, by writing the object, not by calling `POST /v1/asks`. A cluster
+label, through `asks.KubeStore` as section 4 says, not by calling `POST /v1/asks` and not by a raw object write. A cluster
 admin can still write one. That is the same trust as a cluster admin
 writing AccessGrant status, which the broker already has to live with. The
 request-id and session-UID checks stop a label copied onto some other
@@ -330,12 +330,22 @@ those two, as DESIGN-034 section 2 says.
 | Total per requester, and per namespace | 512 and 4096, unchanged | A grant Ask is still an Ask. The lifetime caps stay the backstop. |
 
 The count is an uncached list, the same pattern as the existing open
-count, using the type label and the state label. An identical retry needs
-no new slot. At the cap, create returns the existing `429 limit_exceeded`.
-An unconfirmed count returns `503`. The broker then does not deny the
-grant. It requeues and emits an event that the board is full. Ended-session
-cards stay open until Tom dismisses them, and they count toward both caps.
-That is what the caps are for.
+count in `checkRoom` (`internal/asks/store.go` lines 485-512), using the
+type label and the state label. An identical retry needs no new slot. The
+broker creates the grant Ask by calling that store. Today's `Create` takes
+`apiv1.AskCreateRequest` (line 116), which has no `grant` fields, so the
+build extends `Create` to accept a grant Ask and to apply the 3 and 48
+caps inside it. At the cap the store returns `asks.ErrLimit` (lines 48-59).
+An unconfirmed count returns `asks.ErrUnavailable` (lines 510-512). The
+broker does not deny the grant on either error. It requeues and emits an
+event that the board is full. It does not see HTTP. `POST /v1/asks` still
+maps those two errors to `429 limit_exceeded` and `503` for info and
+approval (`internal/apiserver/asks.go` lines 237-242;
+`internal/apiserver/apiv1/types.go` line 780). A grant Ask is not created
+on that route. A raw create of the Ask object, outside the store, would
+skip both caps, and this design does not do that. Ended-session cards stay
+open until Tom dismisses them, and they count toward both caps. That is
+what the caps are for.
 
 ### 5. When the asking session has ended
 
@@ -459,19 +469,23 @@ The PRs merge in this order. Each is releasable with the flag off.
 2. **Store, sweeper, session create.** `internal/asks/store.go`,
    `internal/asks/sweeper.go`, `internal/apiserver/asks.go`. Envtest in
    `internal/asks/envtest_test.go`: the fourth open grant Ask for one
-   session is 429; the 49th in the namespace is 429; a grant Ask does not
-   consume one of the 16 info slots; the sweeper does not expire a grant
-   Ask and still expires an info Ask; `POST /v1/asks` with `type=grant`
+   session returns `asks.ErrLimit`; the 49th in the namespace returns
+   `asks.ErrLimit`; an unconfirmed open count returns
+   `asks.ErrUnavailable`; a grant Ask does not consume one of the 16 info
+   slots; the sweeper does not expire a grant Ask and still expires an
+   info Ask. The session handler test: `POST /v1/asks` with `type=grant`
    is 400; a session create that sends `ask-origin=broker` stores no such
-   label.
+   label. Those store tests assert the store errors, not HTTP status.
 3. **Broker opens the Ask and holds the 30-minute deny.**
    `internal/broker/broker.go`, `cmd/dev-env-operator/broker.go` for the
    flag only. A broker unit test with a fake clock: flag off, denied at
    30 minutes and no Ask; flag on, still pending after 30 minutes with one
    Ask, and a second reconcile does not open a second Ask; a matching
    policy approves and opens no Ask; `spec.release` releases; a missing
-   session denies. No envtest in this PR if the unit client can hold the
-   Ask. If it cannot, one envtest in this package, alone.
+   session denies; `asks.ErrLimit` or `asks.ErrUnavailable` from the store
+   leaves the grant pending and does not deny it. No envtest in this PR if
+   the unit client can hold the Ask. If it cannot, one envtest in this
+   package, alone.
 4. **Broker applies the answer.** `internal/broker/seams.go` and a new
    `internal/broker/grant_ask.go`. Unit tests: one answer grants once and
    the repeat is `ErrNotPending`; a digest, type, target or TTL mismatch

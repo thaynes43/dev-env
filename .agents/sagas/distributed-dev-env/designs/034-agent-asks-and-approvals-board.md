@@ -130,7 +130,9 @@ Admission limits are **16 open per requester, 512 total per requester and
 Asks are counted apart from the 16: 3 per session, because a session may
 have at most 3 grants waiting, and 48 in the namespace, 16 times 3. They
 still count toward the 512 and the 4096. The numbers and the full-board
-behaviour are ADR-021 section 4. Count
+behaviour are ADR-021 section 4. The broker learns a full board as
+`asks.ErrLimit` or `asks.ErrUnavailable` from the store. The `429` and
+`503` below stay the session route's mapping for info and approval. Count
 open Asks from an uncached list of that requester's Asks (at most 512),
 using `EffectiveState`, or from a state label kept in step with status.
 [`taskclaim.CheckRoom`](../../../../internal/taskclaim/store.go) counts
@@ -206,7 +208,7 @@ message identity handling remains separate.
 
 | Route | Caller and behavior |
 |---|---|
-| `POST /v1/asks` | Session. `201` new; `200` identical retry; `409` same requester/requestId with changed body. Returns the Ask, with session identity redaction. Amended 2026-11-10 (ADR-021): `type=grant` is 400. The broker creates that kind. |
+| `POST /v1/asks` | Session. `201` new; `200` identical retry; `409` same requester/requestId with changed body. Returns the Ask, with session identity redaction. Amended 2026-11-10 (ADR-021): `type=grant` is 400. The broker creates that kind through `asks.KubeStore`, not through this route. |
 | `GET /v1/asks?mine=true&limit=...&cursor=...` | Session, own records only, including stored answers. |
 | `GET /v1/asks/{id}` | Owner Session only; answer read has no ACK or consumption side effect. |
 | `POST /v1/asks/{id}/withdraw` | Owner Session, open only; `409` when not open. No portal withdraw route. Amended 2026-11-10 (ADR-021): `type=grant` is refused here. The session releases the grant; the broker withdraws the Ask. A new portal route `POST /v1/portal/asks/{id}/dismiss` withdraws a grant Ask after the session has ended and does not call `Decide`. |
