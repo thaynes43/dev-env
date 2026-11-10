@@ -949,7 +949,8 @@ func run(args []string) error {
 	}
 	// The sessions' metrics, read from the cache at scrape time on every
 	// replica: the RescueFailed page's source (D-57).
-	ctrlmetrics.Registry.MustRegister(&controller.SessionCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, TerminalTaskReclaim: o.terminalTaskPodReclaim, RescueIncidentOwners: o.rescueIncidentOwners})
+	ctrlmetrics.Registry.MustRegister(&controller.SessionCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, TerminalTaskReclaim: o.terminalTaskPodReclaim, RescueIncidentOwners: o.rescueIncidentOwners,
+		TaskCleanupOn: o.taskSessionCleanup && o.privateTerminalRecord && o.privateExecutorStop})
 	// The HOME expiry's gauges, read from the same cache at scrape time
 	// (DESIGN-025 10).
 	ctrlmetrics.Registry.MustRegister(&controller.HomeExpiryCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, DeleteOn: o.homeExpiryDelete,

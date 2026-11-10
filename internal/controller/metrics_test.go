@@ -99,6 +99,120 @@ func TestSessionCollector(t *testing.T) {
 	}
 }
 
+// TestTaskCleanupRescueLeavesTheRescueFailedGauge: a failed rescue the task
+// clean-up ran in its own hold pod is absent from dev_env_session_rescue_failed.
+// The same failure with no clean-up record, and an earlier rescue the clean-up
+// has not replaced, still report 1. The refusal is counted by
+// dev_env_task_cleanup_sessions{state="refused"} (task_cleanup_metrics.go, the
+// case e.Refusal != "").
+func TestTaskCleanupRescueLeavesTheRescueFailedGauge(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	at := metav1.NewTime(time.Date(2026, 11, 10, 13, 31, 0, 0, time.UTC))
+	failed := metav1.Condition{Type: ConditionRescueFailed, Status: metav1.ConditionTrue, Reason: "WorktreeRefused", LastTransitionTime: at}
+	rescue := func(name string, mode v1alpha1.SessionMode, holdUID, rescueUID, refusal string) *v1alpha1.AgentSession {
+		s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "dev-agents"}}
+		s.Spec.Mode = mode
+		s.Status.Phase = v1alpha1.PhaseSuspended
+		s.Status.Conditions = []metav1.Condition{failed}
+		s.Status.Rescue = &v1alpha1.RescueStatus{Result: v1alpha1.RescueFailed, PodUID: rescueUID, At: &at}
+		if mode != v1alpha1.ModeTask {
+			return s
+		}
+		s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{
+			Version:          1,
+			LastExecutor:     &v1alpha1.PrivateExecutorStatus{PodUID: "exec-" + name},
+			ExecutorTerminal: &v1alpha1.PrivateExecutorTerminalStatus{Version: 1, PodUID: "exec-" + name, ObservedAt: at},
+		}
+		if holdUID != "" || refusal != "" {
+			s.Status.PrivateHistory.Expiry = &v1alpha1.PrivateHomeExpiryStatus{
+				Version: 1, Phase: v1alpha1.HomeExpiryRescuing, HoldPodUID: holdUID, Refusal: refusal,
+			}
+		}
+		return s
+	}
+	// The live case: the refusal and the hold pod are the same rescue.
+	cleanup := rescue("cleanup", v1alpha1.ModeTask, "hold-cleanup", "hold-cleanup", expiryRescueRefused)
+	// The clean-up's rescue is stored, and rescue_refused is not, yet.
+	held := rescue("held", v1alpha1.ModeTask, "hold-held", "hold-held", "")
+	// An earlier rescue failed. The clean-up has a record and has not rescued.
+	earlier := rescue("earlier", v1alpha1.ModeTask, "hold-next", "old-executor", "")
+	// The same failed rescue, with no clean-up record.
+	plain := rescue("plain", v1alpha1.ModeRemote, "", "hold-cleanup", "")
+	// The daily retry cleared the hold pod UID and wrote a new intent. The
+	// failed rescue is the clean-up's: after the record's due time, and not
+	// the executor's pod.
+	retry := rescue("retry", v1alpha1.ModeTask, "", "old-hold", "")
+	retry.Status.PrivateHistory.Expiry = &v1alpha1.PrivateHomeExpiryStatus{
+		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-retry",
+		DueAt: metav1.NewTime(at.Add(-time.Hour)), HoldIntent: "20261111T120000Z/retry-intent",
+	}
+	// The first attempt has the same shape, but the failed rescue is earlier
+	// than the record's due time (a D-55 hold pod, not the clean-up's).
+	before := rescue("before", v1alpha1.ModeTask, "", "d55-hold", "")
+	before.Status.PrivateHistory.Expiry = &v1alpha1.PrivateHomeExpiryStatus{
+		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-before",
+		DueAt: metav1.NewTime(at.Add(time.Hour)), HoldIntent: "20261111T120000Z/first-intent",
+	}
+	// A reaped task is due at grace start, not the stored dueAt. The clean-up's
+	// rescue is before that stored dueAt and still belongs to the clean-up.
+	reapedAt := metav1.NewTime(at.Time)
+	reaped := rescue("reaped", v1alpha1.ModeTask, "", "old-hold-reaped", "")
+	reaped.Finalizers = []string{Finalizer}
+	reaped.DeletionTimestamp = &reapedAt
+	reaped.Status.PrivateHistory.Expiry = &v1alpha1.PrivateHomeExpiryStatus{
+		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-reaped",
+		GraceStart: metav1.NewTime(at.Add(-time.Hour)), DueAt: metav1.NewTime(at.Add(7 * 24 * time.Hour)),
+		HoldIntent: "20261111T120000Z/reaped-intent",
+	}
+	// Release-now starts before the stored due time. The rescue is the clean-up's.
+	released := rescue("released", v1alpha1.ModeTask, "", "old-hold-released", "")
+	releaseAt := metav1.NewTime(at.Add(-time.Minute))
+	released.Status.PrivateHistory.Expiry = &v1alpha1.PrivateHomeExpiryStatus{
+		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-released",
+		DueAt: metav1.NewTime(at.Add(7 * 24 * time.Hour)), ReleaseNowAt: &releaseAt,
+		HoldIntent: "20261111T120000Z/released-intent",
+	}
+	// The same gap, but the failed rescue ran in the recorded executor.
+	executor := rescue("executor", v1alpha1.ModeTask, "", "exec-executor", "")
+	executor.Status.PrivateHistory.Expiry = &v1alpha1.PrivateHomeExpiryStatus{
+		Version: 1, Phase: v1alpha1.HomeExpiryRescuing, ExecutorUID: "exec-executor",
+		DueAt: metav1.NewTime(at.Add(-time.Hour)), HoldIntent: "20261111T120000Z/executor-intent",
+	}
+	series := func(name string) string {
+		return "dev_env_session_rescue_failed{reason=WorktreeRefused,session=" + name + "} 1"
+	}
+	got := strings.Join(gather(t, &SessionCollector{
+		Reader:    fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(cleanup, held, earlier, plain, retry, before, reaped, released, executor).Build(),
+		Namespace: "dev-agents", TaskCleanupOn: true,
+	}), "\n")
+	for _, name := range []string{"cleanup", "held", "retry", "reaped", "released"} {
+		if strings.Contains(got, series(name)) {
+			t.Fatalf("the clean-up's rescue %s is in the gauge:\n%s", name, got)
+		}
+	}
+	for _, name := range []string{"earlier", "plain", "executor", "before"} {
+		if !strings.Contains(got, series(name)) {
+			t.Fatalf("missing %s in\n%s", series(name), got)
+		}
+	}
+	off := strings.Join(gather(t, &SessionCollector{
+		Reader: fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(cleanup).Build(), Namespace: "dev-agents",
+	}), "\n")
+	if !strings.Contains(off, series("cleanup")) {
+		t.Fatalf("with the clean-up off the refusal is not counted:\n%s", off)
+	}
+	task := strings.Join(gather(t, &TaskCleanupCollector{
+		Reader: fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(cleanup).Build(), Namespace: "dev-agents",
+		Reconciler: &Reconciler{TaskSessionCleanup: true, PrivateTerminalRecord: true, PrivateExecutorStop: true},
+	}), "\n")
+	if !strings.Contains(task, "dev_env_task_cleanup_sessions{state=refused} 1") {
+		t.Fatalf("rescue_refused is not state refused:\n%s", task)
+	}
+}
+
 func TestTerminalTaskReclaimCollectorRetainedCountAndAge(t *testing.T) {
 	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	s := sessionWith("held-task", v1alpha1.PhaseSuspended, metav1.Condition{Type: ConditionTerminalTaskReclaim, Status: metav1.ConditionTrue, Reason: "Held"})

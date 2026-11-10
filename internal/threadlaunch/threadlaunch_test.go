@@ -134,6 +134,71 @@ func TestRunOutcomes(t *testing.T) {
 	}
 }
 
+// fakeObserver is fakeAdapter's read-only half. It has no Create to call.
+type fakeObserver struct {
+	*fakeAdapter
+	located int
+}
+
+func (f *fakeObserver) Locate(_ context.Context, r *Recorder) error {
+	f.located++
+	if f.preflight == nil {
+		r.Phase(apiv1.ThreadPhaseHostReady, "ok", "fake", "ready")
+	}
+	return f.preflight
+}
+
+// Observe is one pass: each step runs at most once, nothing is created, no
+// poll clock exists, and a failed observation is a plain failure, never an
+// unconfirmed launch.
+func TestObserveOutcomes(t *testing.T) {
+	cases := []struct {
+		name               string
+		f                  *fakeAdapter
+		outcome, code, phs string
+		visible, resp      int
+	}{
+		{"completed", &fakeAdapter{}, apiv1.ThreadResponded, "", "", 1, 1},
+		{"response pending", &fakeAdapter{respondAfter: 1}, apiv1.ThreadVisible, "response_pending", apiv1.ThreadPhaseFirstResponse, 1, 1},
+		{"turn failed", &fakeAdapter{respondErr: Halt(apiv1.ThreadFailed, "turn_failed", apiv1.ThreadPhaseFirstResponse)}, apiv1.ThreadFailed, "turn_failed", apiv1.ThreadPhaseFirstResponse, 1, 1},
+		{"not observable", &fakeAdapter{respondErr: ErrNotObservable}, apiv1.ThreadVisible, "response_not_observable", apiv1.ThreadPhaseFirstResponse, 1, 1},
+		{"response read failed", &fakeAdapter{respondErr: errors.New("rpc")}, apiv1.ThreadFailed, "observation_unavailable", apiv1.ThreadPhaseFirstResponse, 1, 1},
+		{"hidden", &fakeAdapter{visibleErr: Halt(apiv1.ThreadHidden, "hidden_source", apiv1.ThreadPhaseSourceVisible)}, apiv1.ThreadHidden, "hidden_source", apiv1.ThreadPhaseSourceVisible, 1, 0},
+		{"list read failed", &fakeAdapter{visibleErr: errors.New("rpc")}, apiv1.ThreadFailed, "observation_unavailable", apiv1.ThreadPhaseSourceVisible, 1, 0},
+		{"not visible without a reason", &fakeAdapter{visibleAfter: 1}, apiv1.ThreadFailed, "observation_unavailable", apiv1.ThreadPhaseSourceVisible, 1, 0},
+		{"thread not found", &fakeAdapter{preflight: Halt(apiv1.ThreadFailed, "thread_not_found", apiv1.ThreadPhaseThreadCreated)}, apiv1.ThreadFailed, "thread_not_found", apiv1.ThreadPhaseThreadCreated, 0, 0},
+		{"host refused", &fakeAdapter{preflight: Halt(apiv1.ThreadActionRequired, "login_required", "")}, apiv1.ThreadActionRequired, "login_required", apiv1.ThreadPhaseHostReady, 0, 0},
+		{"locate unexpected", &fakeAdapter{preflight: errors.New("boom")}, apiv1.ThreadFailed, "observation_unavailable", apiv1.ThreadPhaseHostReady, 0, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &clock{now: time.Date(2026, 11, 10, 16, 0, 0, 0, time.UTC)}
+			o := &fakeObserver{fakeAdapter: tc.f}
+			res := Observe(context.Background(), o, NewRecorder("codex", c.Now))
+			b, err := Encode(res)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := apiv1.DecodeThreadLaunch(b[:len(b)-1])
+			if err != nil {
+				t.Fatalf("result does not decode: %v\n%s", err, b)
+			}
+			if got.Outcome != tc.outcome || code(got) != tc.code || (got.Error != nil && got.Error.Phase != tc.phs) {
+				t.Fatalf("got %s/%s at %+v", got.Outcome, code(got), got.Error)
+			}
+			if got.Error != nil && got.Error.Message == "" {
+				t.Fatalf("code %s has no fixed message", got.Error.Code)
+			}
+			if got.Outcome == apiv1.ThreadUnconfirmed || got.Outcome == apiv1.ThreadTimedOut || got.DeadlineMs != 0 {
+				t.Fatalf("a status pass reported a launch outcome or a wait: %s %d", got.Outcome, got.DeadlineMs)
+			}
+			if tc.f.creates != 0 || o.located != 1 || tc.f.visible != tc.visible || tc.f.resp != tc.resp {
+				t.Fatalf("creates %d locates %d visible %d resp %d", tc.f.creates, o.located, tc.f.visible, tc.f.resp)
+			}
+		})
+	}
+}
+
 // A deadline is a pending result, never a retry: polls stop and Create is not
 // repeated.
 func TestRunDeadlineStopsPolling(t *testing.T) {

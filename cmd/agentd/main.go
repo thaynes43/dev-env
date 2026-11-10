@@ -814,6 +814,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return codexPairCtl(ctx, args[1:], stdout, stderr, getenv)
 		case "thread-start":
 			return threadStartCtl(ctx, args[1:], stdin, stdout, stderr, getenv)
+		case "thread-status":
+			return threadStatusCtl(ctx, args[1:], stdout, stderr, getenv)
 		case "deliver", "log":
 			return ctlMessageOrLog(ctx, args, stdin, stdout, stderr, getenv, r)
 		case "portal-conversation":
