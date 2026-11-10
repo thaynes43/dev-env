@@ -233,6 +233,29 @@ func (l *live) want(method, path, token string, body any, status int) []byte {
 	return b
 }
 
+// waitSession reads the session through the API until ok accepts it, for up to
+// cacheLagBound. The API answers a session GET from the manager's informer cache,
+// so a read right after a write may return the previous version until the watch
+// event arrives. The failure prints the last view seen.
+func (l *live) waitSession(t *testing.T, name, token, what string, ok func(apiv1.Session) bool) apiv1.Session {
+	t.Helper()
+	deadline := time.Now().Add(cacheLagBound)
+	for {
+		view := unmarshal[apiv1.Session](t, l.want(http.MethodGet, apiv1.SessionPath(name), token, nil, http.StatusOK))
+		if ok(view) {
+			return view
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the API view of %s never showed %s within %s; last agentStatus %+v", name, what, cacheLagBound, view.AgentStatus)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// cacheLagBound is how long a read served from the informer cache may trail a
+// write that the suite has already confirmed against the API server.
+const cacheLagBound = 5 * time.Second
+
 func unmarshal[T any](t *testing.T, b []byte) T {
 	t.Helper()
 	var v T
@@ -344,10 +367,14 @@ func TestEnvtestAPI(t *testing.T) {
 		if len(s.Status.Agent.Problems) != 1 || !strings.HasPrefix(s.Status.Agent.Problems[0], "project-bootstrap: fail: catalog bootstrap outcome Partial: extra=UnsupportedTrackedEntry") {
 			t.Fatalf("problems %q", s.Status.Agent.Problems)
 		}
-		view := unmarshal[apiv1.Session](t, l.want(http.MethodGet, apiv1.SessionPath(sess.Name), human, nil, http.StatusOK))
-		if v := view.AgentStatus; v == nil || v.ProjectBootstrap == nil || v.ProjectBootstrap.Projects[0].Cause != "UnsupportedTrackedEntry" || len(v.ProjectBootstrap.Repositories) != 3 {
-			t.Fatalf("API view %+v", view.AgentStatus)
-		}
+		// The API serves this read from the manager's informer cache, which can
+		// still hold the previous heartbeat's status: wait for the cache to catch up
+		// with the write confirmed above.
+		l.waitSession(t, sess.Name, human, "the bootstrap heartbeat", func(view apiv1.Session) bool {
+			v := view.AgentStatus
+			return v != nil && v.ProjectBootstrap != nil && len(v.ProjectBootstrap.Projects) == 1 &&
+				v.ProjectBootstrap.Projects[0].Cause == "UnsupportedTrackedEntry" && len(v.ProjectBootstrap.Repositories) == 3
+		})
 		// A heartbeat without a bootstrap clears it.
 		l.want(http.MethodPost, protocol.HeartbeatPath(sess.Name), agent, status(sess.Name), http.StatusNoContent)
 		if err := l.k8s.Get(ctx, client.ObjectKeyFromObject(&sess), &s); err != nil {
