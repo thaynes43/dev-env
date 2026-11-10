@@ -435,7 +435,7 @@ which requires `--enable-durable-inbox`. This PR adds no flag.
 | `GET /v1/parent-notes?box=inbox\|sent` | a session, or the Meatball caller | inbox: notes addressed to this caller. sent: notes this caller wrote. `limit` 1 to 100 |
 | `GET /v1/parent-notes/{name}` | the sender or the recipient | one note, including text |
 | `POST /v1/parent-notes/{name}/answer` | the recipient of that note | one reply |
-| `GET /v1/parent-notes/{name}/wait?seconds=N` | the note's sender | holds until the reply exists, or until N seconds. N is 1 to 900. The handler sets its own write deadline to that wait before it blocks |
+| `GET /v1/parent-notes/{name}/wait?seconds=N` | the note's sender | holds until the reply exists, or until N seconds. N is 1 to 900. The handler calls `holdResponse` for N plus 30 seconds before it blocks |
 
 A hidden note is 404, the same shape as today's inbox hide
 (`internal/apiserver/inbox.go:28`). A session does not learn that some other
@@ -448,14 +448,24 @@ when the reply is stored or the deadline passes. The handler does not spin.
 A second wait on the same note returns the stored reply at once. Over 8
 held waits for one session, the route returns 429.
 
-The API server's `WriteTimeout` is 60 seconds
-(`internal/apiserver/server.go:596`). The connection closes when the
-response is still unwritten at that limit. Before the wait handler blocks,
-it calls `http.ResponseController.SetWriteDeadline` for the end of the
-requested N seconds. A wait of 61 to 900 seconds can then finish with 200.
-Every other route keeps the 60 second server timeout. The client calls wait
-again only when it wants longer than 900 seconds, or when the connection
-closes before the handler answers.
+The API server's read timeout is 30 seconds and its write timeout is 60
+seconds (`internal/apiserver/server.go:595-596`). Before the wait handler
+blocks, it calls `holdResponse` for N plus 30 seconds
+(`internal/apiserver/threads.go:169-181`). That helper moves this request's
+read deadline and write deadline, which is how a thread launch already
+outlives those two limits (`internal/apiserver/threads.go:103`). Every
+other route keeps the server limits. A wait of 61 to 900 seconds can then
+finish with 200.
+
+`agent-run`'s shared API client gives up after 30 seconds
+(`internal/agentrun/creds.go:64`, `internal/agentrun/creds.go:182`).
+`parent wait` copies that client and sets its timeout to N plus 2 minutes,
+the same shape thread uses for one long request
+(`internal/agentrun/thread.go:30-33`, `internal/agentrun/thread.go:234-238`).
+The 2 minutes sit past the server's extra 30 seconds, so the response can
+be written before the client gives up. The other parent commands keep the
+30 second client. The client calls wait again only when it wants longer
+than 900 seconds, or when the connection closes before the handler answers.
 
 ### 7.3 Failure cases
 
@@ -537,9 +547,10 @@ list and read, because those are API reads. It still cannot take `msg`.
 
 The child learns the answer by `agent-run parent wait` or `parent read`.
 Wait holds on the watch until the reply is stored or the deadline passes.
-The route extends its own write deadline, so one call can last the full 900
-seconds inside the server's 60 second write timeout (section 7.2). The
-client sleeps nothing and polls nothing during that call. A headless task
+The route moves its own deadlines, and `parent wait` uses a client whose
+timeout is that wait plus 2 minutes, so one call can last the full 900
+seconds (section 7.2). The client sleeps nothing and polls nothing during
+that call. A headless task
 runs the same command. If the work order's wait is longer than 900 seconds,
 the task runs wait again when it is ready to block again. A repeat returns
 at once when the answer is already there. The answer stays in the record.
@@ -619,9 +630,11 @@ fields.
    `internal/apiserver/parent_note_wait_test.go` (reply already stored
    returns at once; deadline already passed returns `waiting` without
    blocking; a second distinct answer is 409; a server whose write timeout
-   is 200ms still returns 200 when the reply arrives after that timeout,
-   because the handler extended its own deadline). Also
-   `internal/agentrun/parent_wait_test.go`.
+   is 200ms, and whose read timeout is 200ms, still returns 200 when the
+   reply arrives after those timeouts, because the handler called
+   `holdResponse`). `internal/agentrun/parent_wait_test.go` asserts the wait
+   request uses a client whose timeout is N plus 2 minutes, and that the
+   other parent commands keep the 30 second client.
 4. **Meatball.** The policy allow list, ownership, and the four front-door
    tools plus the count on `session_status`. Tests:
    `internal/apiserver/parent_note_policy_test.go` (own session allowed,
