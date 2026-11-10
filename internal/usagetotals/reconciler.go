@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -33,8 +32,7 @@ type Reconciler struct {
 }
 
 type remembered struct {
-	mark      string
-	visibleAt time.Time
+	mark string
 }
 
 // NeedLeaderElection makes the controller run in the leader only.
@@ -55,11 +53,12 @@ func (r *Reconciler) elected() bool {
 	return r != nil && r.Elected != nil && r.Elected()
 }
 
-// Reconcile adds a ready Session, then writes AnnotationCounted once that add
-// has been visible long enough for the operator scrape. The add happens
-// before the mark. A failed mark write is remembered in this process, so the
-// next reconcile writes the mark again and does not add again. A restart
-// without the mark adds the Session again, which is the accepted crash window.
+// Reconcile creates the series a ready Session needs at 0. When every one of
+// those series has existed for settleFor, it adds the Session and then writes
+// AnnotationCounted, in that order, in the same reconcile. A failed mark write
+// is remembered in this process, so the next reconcile writes the mark again
+// and does not add again. A restart without the mark adds the Session again,
+// which is the accepted crash window.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	if !r.elected() {
 		return ctrl.Result{}, nil
@@ -88,15 +87,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 	if mem, ok := r.added[session.UID]; ok {
-		ready := r.Counters != nil && r.Counters.ready(mem.visibleAt)
-		wait := time.Duration(0)
-		if !ready && r.Counters != nil {
-			wait = r.Counters.untilReady(mem.visibleAt)
-		}
 		r.mu.Unlock()
-		if !ready {
-			return ctrl.Result{RequeueAfter: wait}, nil
-		}
 		if err := r.writeMark(ctx, &session, mem.mark); err != nil {
 			return ctrl.Result{}, fmt.Errorf("task usage mark: %w", err)
 		}
@@ -111,11 +102,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		r.mu.Unlock()
 		return ctrl.Result{}, errors.New("task usage counters are not configured")
 	}
-	visibleAt := r.Counters.apply(con)
-	r.added[session.UID] = remembered{mark: con.mark, visibleAt: visibleAt}
+	added, wait := r.Counters.addIfSettled(con)
+	if !added {
+		r.mu.Unlock()
+		return ctrl.Result{RequeueAfter: wait}, nil
+	}
+	r.added[session.UID] = remembered{mark: con.mark}
 	r.names[req.NamespacedName] = session.UID
 	r.mu.Unlock()
-	return ctrl.Result{RequeueAfter: r.Counters.untilReady(visibleAt)}, nil
+	if err := r.writeMark(ctx, &session, con.mark); err != nil {
+		return ctrl.Result{}, fmt.Errorf("task usage mark: %w", err)
+	}
+	return ctrl.Result{}, nil
 }
 
 func (r *Reconciler) forget(name types.NamespacedName) {

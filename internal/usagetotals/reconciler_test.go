@@ -95,12 +95,12 @@ func TestChangedObservationNotCountedTwice(t *testing.T) {
 
 func TestAddPrecedesMark(t *testing.T) {
 	session := finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5")
-	r := &Reconciler{Counters: withClock(NewCounters()), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
+	r := &Reconciler{Counters: withClock(t, NewCounters()), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
 	var atPatch float64
 	var patched bool
 	r.Client = fakeClientIntercept(t, session, interceptor.Funcs{
 		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			atPatch = r.Counters.actual(MetricSessions, "claude", "claude-opus-5-5")
+			atPatch = metricValue(t, r.Counters.Sessions.WithLabelValues("claude", "claude-opus-5-5"))
 			patched = true
 			return cl.Patch(ctx, obj, patch, opts...)
 		},
@@ -109,27 +109,10 @@ func TestAddPrecedesMark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if patched || res.RequeueAfter <= 0 || annotation(t, r.Client, "s") != "" {
-		t.Fatalf("mark written before a scrape: patched %v after %s annotation %q", patched, res.RequeueAfter, annotation(t, r.Client, "s"))
+	if patched || res.RequeueAfter != settleFor || annotation(t, r.Client, "s") != "" {
+		t.Fatalf("mark during settle: patched %v after %s annotation %q", patched, res.RequeueAfter, annotation(t, r.Client, "s"))
 	}
-	got := scrapes(t, r.Counters, 2)
-	key := series(MetricSessions, "agent", "claude", "model", "claude-opus-5-5")
-	if got[0][key] != 0 || got[1][key] != 0 {
-		t.Fatalf("zero window scrapes = %v then %v", got[0], got[1])
-	}
-	advance(r.Counters, r.Counters.zeroFor)
-	shown := scrapes(t, r.Counters, 1)
-	if shown[0][key] != 1 {
-		t.Fatalf("visible scrape = %v", shown[0])
-	}
-	res, err = reconcileResult(r, "s")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if patched || res.RequeueAfter <= 0 {
-		t.Fatalf("mark written before the visible window: patched %v after %s", patched, res.RequeueAfter)
-	}
-	advance(r.Counters, r.Counters.markAfter)
+	advance(r.Counters, settleFor)
 	if err := reconcile(r, "s"); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +162,10 @@ func TestNoUsageCountsSessionsAndSecondsOnly(t *testing.T) {
 	if err := reconcile(r, "s"); err != nil {
 		t.Fatal(err)
 	}
-	advance(r.Counters, r.Counters.zeroFor)
+	advance(r.Counters, settleFor)
+	if err := reconcile(r, "s"); err != nil {
+		t.Fatal(err)
+	}
 	got := gatherCounters(t, r.Counters)
 	if got[series(MetricSessions, "agent", "claude", "model", "claude-opus-5-5")] != 1 {
 		t.Fatalf("sessions = %v", got)
@@ -287,7 +273,13 @@ func TestLabelValuesAreBounded(t *testing.T) {
 	if err := reconcile(r, "plain"); err != nil {
 		t.Fatal(err)
 	}
-	advance(r.Counters, r.Counters.zeroFor)
+	advance(r.Counters, settleFor)
+	if err := reconcile(r, "served"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcile(r, "plain"); err != nil {
+		t.Fatal(err)
+	}
 	got := gatherCounters(t, r.Counters)
 	want := map[string]float64{
 		series(MetricTokens, "agent", "claude", "cost_kind", kindEstimate, "model", labelOther, "repository", labelOther, "token", tokenInput):     10,
@@ -312,10 +304,10 @@ func TestLabelValuesAreBounded(t *testing.T) {
 func TestRefusedMarkDoesNotAddAgain(t *testing.T) {
 	session := finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5")
 	var seen []float64
-	r := &Reconciler{Counters: withClock(NewCounters()), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
+	r := &Reconciler{Counters: withClock(t, NewCounters()), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
 	c := fakeClientIntercept(t, session, interceptor.Funcs{
 		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			seen = append(seen, r.Counters.actual(MetricSessions, "claude", "claude-opus-5-5"))
+			seen = append(seen, metricValue(t, r.Counters.Sessions.WithLabelValues("claude", "claude-opus-5-5")))
 			return errors.New("annotation refused")
 		},
 	})
@@ -323,7 +315,7 @@ func TestRefusedMarkDoesNotAddAgain(t *testing.T) {
 	if _, err := reconcileResult(r, "s"); err != nil {
 		t.Fatal(err)
 	}
-	advance(r.Counters, r.Counters.zeroFor+r.Counters.markAfter)
+	advance(r.Counters, settleFor)
 	if err := reconcile(r, "s"); err == nil {
 		t.Fatal("expected the mark write to fail")
 	}
@@ -353,6 +345,14 @@ func TestPartialObservationWaitsForFinal(t *testing.T) {
 		t.Fatalf("partial sessions = %v", got)
 	}
 	setResultState(t, c, "s", stateFinal)
+	res, err := reconcileResult(r, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RequeueAfter != settleFor || sessionValue(t, r.Counters, "claude", "claude-opus-5-5") != 0 {
+		t.Fatalf("final during settle: after %s sessions %v", res.RequeueAfter, sessionValue(t, r.Counters, "claude", "claude-opus-5-5"))
+	}
+	advance(r.Counters, settleFor)
 	if err := reconcile(r, "s"); err != nil {
 		t.Fatal(err)
 	}
@@ -361,30 +361,67 @@ func TestPartialObservationWaitsForFinal(t *testing.T) {
 	}
 }
 
-func TestFirstScrapeIsZero(t *testing.T) {
+func TestSeriesStaysZeroUntilSettle(t *testing.T) {
 	c := fakeClient(t, finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5"))
 	r := newReconciler(t, c)
-	if err := reconcile(r, "s"); err != nil {
+	res, err := reconcileResult(r, "s")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if res.RequeueAfter != settleFor {
+		t.Fatalf("requeue = %s", res.RequeueAfter)
 	}
 	key := series(MetricSessions, "agent", "claude", "model", "claude-opus-5-5")
 	held := scrapes(t, r.Counters, 2)
 	if held[0][key] != 0 || held[1][key] != 0 {
-		t.Fatalf("zero window = %v then %v", held[0], held[1])
+		t.Fatalf("reads during settle = %v then %v", held[0], held[1])
 	}
-	advance(r.Counters, r.Counters.zeroFor)
-	shown := scrapes(t, r.Counters, 2)
-	if shown[0][key] != 1 || shown[1][key] != 1 {
-		t.Fatalf("visible = %v then %v", shown[0], shown[1])
+	advance(r.Counters, settleFor/2)
+	res, err = reconcileResult(r, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RequeueAfter != settleFor/2 || sessionValue(t, r.Counters, "claude", "claude-opus-5-5") != 0 {
+		t.Fatalf("halfway: after %s sessions %v", res.RequeueAfter, sessionValue(t, r.Counters, "claude", "claude-opus-5-5"))
+	}
+	advance(r.Counters, settleFor/2)
+	if err := reconcile(r, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if sessionValue(t, r.Counters, "claude", "claude-opus-5-5") != 1 || annotation(t, c, "s") != "observation/"+idA {
+		t.Fatalf("after settle sessions %v mark %q", sessionValue(t, r.Counters, "claude", "claude-opus-5-5"), annotation(t, c, "s"))
+	}
+}
+
+func TestUnmarkedSessionCountsAgainAfterRestart(t *testing.T) {
+	session := finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5")
+	first := &Reconciler{Counters: withClock(t, NewCounters()), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
+	first.Client = fakeClientIntercept(t, session, interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			return errors.New("annotation refused")
+		},
+	})
+	if _, err := reconcileResult(first, "s"); err != nil {
+		t.Fatal(err)
+	}
+	advance(first.Counters, settleFor)
+	if err := reconcile(first, "s"); err == nil {
+		t.Fatal("expected the mark write to fail")
+	}
+	if sessionValue(t, first.Counters, "claude", "claude-opus-5-5") != 1 || annotation(t, first.Client, "s") != "" {
+		t.Fatal("the first process should have added once and left no mark")
+	}
+	restarted := newReconciler(t, fakeClient(t, finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5")))
+	settle(t, restarted, "s")
+	if sessionValue(t, restarted.Counters, "claude", "claude-opus-5-5") != 1 {
+		t.Fatalf("restarted sessions = %v", sessionValue(t, restarted.Counters, "claude", "claude-opus-5-5"))
 	}
 }
 
 func TestForgetAddedSessionOnNotFound(t *testing.T) {
 	c := fakeClient(t, finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5"))
 	r := newReconciler(t, c)
-	if err := reconcile(r, "s"); err != nil {
-		t.Fatal(err)
-	}
+	settle(t, r, "s")
 	if len(r.added) != 1 {
 		t.Fatalf("remembered %d", len(r.added))
 	}
@@ -414,7 +451,7 @@ func TestOtherNamespaceDoesNotCount(t *testing.T) {
 
 func newReconciler(t *testing.T, c client.Client) *Reconciler {
 	t.Helper()
-	return &Reconciler{Client: c, Counters: withClock(NewCounters()), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
+	return &Reconciler{Client: c, Counters: withClock(t, NewCounters()), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
 }
 
 type frozenClock struct {
@@ -436,7 +473,11 @@ func (f *frozenClock) advance(d time.Duration) {
 
 var testClocks sync.Map
 
-func withClock(c *Counters) *Counters {
+func withClock(t *testing.T, c *Counters) *Counters {
+	t.Helper()
+	prev := settleFor
+	settleFor = 5 * time.Second
+	t.Cleanup(func() { settleFor = prev })
 	clk := &frozenClock{at: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)}
 	c.now = clk.now
 	testClocks.Store(c, clk)
@@ -465,7 +506,7 @@ func settle(t *testing.T, r *Reconciler, name string) {
 	if _, err := reconcileResult(r, name); err != nil {
 		t.Fatal(err)
 	}
-	advance(r.Counters, r.Counters.zeroFor+r.Counters.markAfter)
+	advance(r.Counters, settleFor)
 	if _, err := reconcileResult(r, name); err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +604,16 @@ func setResultState(t *testing.T, c client.Client, name, state string) {
 
 func sessionValue(t *testing.T, c *Counters, agent, model string) float64 {
 	t.Helper()
-	return c.actual(MetricSessions, agent, model)
+	return metricValue(t, c.Sessions.WithLabelValues(agent, model))
+}
+
+func metricValue(t *testing.T, metric prometheus.Metric) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := metric.Write(&m); err != nil {
+		t.Fatal(err)
+	}
+	return m.GetCounter().GetValue()
 }
 
 func series(name string, kv ...string) string {

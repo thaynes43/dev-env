@@ -194,9 +194,9 @@ Cost for one week:
 sum by (agent, model, repository) (increase(dev_env_task_usage_cost_usd_total[7d]))
 ```
 
-`increase` keeps the week across an operator restart. A new series reports
-0 for two minutes, then the total, including when the process has already
-added Sessions. Reading the metrics endpoint does not change that.
-`increase` counts the step from 0. A Session that already has the
-annotation is not added again. The operator ServiceMonitor already scrapes
-this endpoint every minute.
+`increase` keeps the week across an operator restart. A new series stays
+at 0 for five minutes, then takes its first add. A Session that already
+has the annotation is not added again. If no scrape lands during the five
+minutes after a series is created in a process, `increase` does not see
+that series' first add; the raw counter still holds it. Totals appear up
+to five minutes after a restart, or after a new label is first used.

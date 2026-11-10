@@ -560,9 +560,8 @@ not rewrite a mark that is already there.
 The same process also remembers each Session it has added, until that
 Session is deleted. If the annotation write fails, or the cache has not yet
 shown the annotation, a later reconcile writes that same value again and
-does not add again. The write waits until the add has been visible for two
-minutes. The memory lasts only for the process. After a restart the
-annotation is the only mark.
+does not add again. The memory lasts only for the process. After a restart
+the annotation is the only mark.
 
 ### Who adds, and in what order
 
@@ -574,27 +573,26 @@ there is no leader to trust, and nothing is added.
 
 For a Session that is ready and has no mark:
 
-1. Add it to the in-memory counters. A series that did not exist yet
-   reports 0 for two minutes, then the total. Reading `/metrics` does not
-   change that, so a curl, a scrape that times out, or a second Prometheus
-   during those two minutes still reads 0.
-2. Wait two minutes after the total is visible, then write the annotation.
+1. Make sure every series this Session will add to exists in this process,
+   created at 0, and remember when each was created. Reading the metrics
+   endpoint does not change a series.
+2. If any of those series is younger than five minutes, add nothing and
+   look again after the remainder. The five minutes is a settle time in
+   the operator. It does not depend on the scrape interval.
+3. When every series has existed for five minutes, add every amount for
+   this Session, then write the annotation, in that order, in the same
+   reconcile.
 
-The operator is already scraped every minute. The ServiceMonitor is
-`serviceMonitor.app` on Service `dev-env-operator` in `dev-env-system`,
-port `metrics` (8080), path `/metrics`, interval 1m
-(haynes-ops `kubernetes/main/apps/dev-env-system/operator/app/helmrelease.yaml`).
-This design does not change that scrape. Two minutes is longer than one
-scrape, so a scrape in the zero window and a scrape after the total is
-visible both fit before the annotation. That covers a new label, the first
-sight of Sessions that already exist, and the first add after a restart.
-An existing series includes the add on the next scrape; the same two
-minutes pass before the annotation.
+A series that already settled in this process does not wait again. A
+Session whose series are not all settled waits for the youngest. That
+covers a new label, the first sight of Sessions that already exist, and
+the first add after a restart.
 
-If the process dies before the annotation, the restart does not see a
-mark, so that one Session is counted again. That double count is accepted.
-The annotation stays after the add, and it is written only after the total
-has been visible for two minutes.
+If the process dies after the add and before the annotation, the restart
+does not see a mark, so that one Session is counted again. That double
+count is accepted. A silent loss, where the add is dropped and the restart
+then skips the Session, is not: the annotation is written only after the
+add.
 
 ### What is counted
 
@@ -633,21 +631,22 @@ missing finish, or a finish that is not after creation, adds no seconds.
 ### Sessions already present
 
 A Session that exists when this ships has no annotation. The leader's
-controller lists every Session when it starts, and that first sight is the
-count: a final observation, or a recorded Cursor task result, is added
-once. A Session that becomes final later is added when the leader next
-reconciles it. A Session that already carries the annotation is skipped,
-including after a restart.
+controller lists every Session when it starts. That first sight creates
+the series at 0, and the add happens once those series have existed for
+five minutes. A Session that becomes final later is handled the same way
+on the next reconcile. A Session that already carries the annotation is
+skipped, including after a restart. Totals appear up to five minutes after
+a restart, or after a new label is first used.
 
 ### Restart and Prometheus
 
 The counters live in the leader's process and start at zero when that
-process starts. A new series reports 0 for two minutes, then the total, so
-`increase` counts the step from 0, including Sessions added before the
-first scrape. A Session the previous process already marked is not added,
-so the new total is only the Sessions that still have no mark. The old
-leader's series stay where they were. Sum the replicas. The non-leader
-replica adds nothing, so its series stay absent.
+process starts. A new series is exported at 0 for five minutes, then the
+first add lands, so `increase` counts the step from 0 when a scrape saw
+the series during those five minutes. A Session the previous process
+already marked is not added. The old leader's series stay where they were.
+Sum the replicas. The non-leader replica adds nothing, so its series stay
+absent.
 
 Weekly cost:
 
@@ -658,13 +657,13 @@ sum by (agent, model, repository) (increase(dev_env_task_usage_cost_usd_total[7d
 ### Known limits
 
 - The totals last as long as Prometheus keeps the series.
-- One Session can be counted twice when the process dies after a scrape has
-  seen the add and before the annotation. That window is accepted.
-- A scrape gap that covers the whole two minutes a new series reports 0
-  can make `increase` drop that step. The annotation is still written
-  after the total has been visible for two minutes. The operator metrics
-  are already scraped, and `DevEnvOperatorMetricsAbsent` fires when they
-  are absent (DESIGN-001 D-57).
+- One Session can be counted twice when the process dies after the add and
+  before the annotation. That window is accepted.
+- If no scrape lands during the five minutes after a series is created in
+  a process, `increase` does not see that series' first add. The raw
+  counter still holds it.
+- Totals appear up to five minutes after a restart, or after a new label
+  is first used.
 - The same crash before any scrape, while the Session still exists, is
   recovered by the restart's add. The same crash after the Session has
   already been deleted leaves that add out, because the Session is no

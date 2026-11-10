@@ -16,165 +16,147 @@ const (
 	MetricSeconds  = "dev_env_task_usage_seconds_total"
 )
 
-const scrapeNote = " A new series reports 0 for its first two minutes, then the total, so increase() counts that step. Reading the endpoint does not change the value."
+const helpSettle = " A new series in a process stays at 0 for five minutes before its first add."
 
-// The operator ServiceMonitor scrapes every minute (haynes-ops
-// kubernetes/main/apps/dev-env-system/operator/app/helmrelease.yaml,
-// serviceMonitor.app). Two minutes covers one scrape of the zero and, after
-// the total is visible, one scrape of the total.
-const (
-	zeroFor   = 2 * time.Minute
-	markAfter = 2 * time.Minute
-)
+// settleFor is how long a series exists at 0 in this process before its
+// first add. Tests shorten it. There is no flag.
+var settleFor = 5 * time.Minute
 
 // Counters are the task-usage totals. Each replica registers them. Only the
 // leader adds. A new process starts them at zero.
 //
-// Prometheus increase() ignores the gap before a series' first sample. A new
-// series therefore reports 0 until it is zeroFor old, then the total. Collect
-// does not change that: a curl, a timed-out scrape, or a second Prometheus
-// during the two minutes still reads 0.
+// A series is created at 0 and receives no add until it has existed here for
+// settleFor. Collect does not change a series.
 type Counters struct {
-	mu        sync.Mutex
-	series    map[seriesID]seriesState
-	desc      map[string]*prometheus.Desc
-	zeroFor   time.Duration
-	markAfter time.Duration
-	now       func() time.Time
+	Tokens   *prometheus.CounterVec
+	CostUSD  *prometheus.CounterVec
+	Sessions *prometheus.CounterVec
+	Seconds  *prometheus.CounterVec
+
+	mu   sync.Mutex
+	born map[seriesKey]time.Time
+	now  func() time.Time
 }
 
-type seriesID struct {
+type seriesKey struct {
 	metric, agent, model, repository, kind, token string
 }
 
-type seriesState struct {
-	actual float64
-	showAt time.Time
-}
-
-// NewCounters returns counters with no series yet. A series appears when a
-// Session is added.
+// NewCounters returns counters with no series yet. A series appears at 0
+// when a Session is prepared, and receives its add only after settleFor.
 func NewCounters() *Counters {
 	return &Counters{
-		series:    map[seriesID]seriesState{},
-		zeroFor:   zeroFor,
-		markAfter: markAfter,
-		desc: map[string]*prometheus.Desc{
-			MetricTokens: prometheus.NewDesc(MetricTokens,
-				"Tokens from a final task usage observation, added once per Session. Unknown is omitted. Cursor is omitted. The token label is input, output, cache_read, or cache_write."+scrapeNote,
-				[]string{"agent", "model", "repository", "cost_kind", "token"}, nil),
-			MetricCostUSD: prometheus.NewDesc(MetricCostUSD,
-				"CLI-equivalent cost in USD from a final task usage observation, added once per Session. Unknown is omitted. Cursor is omitted. This is not a billed charge."+scrapeNote,
-				[]string{"agent", "model", "repository", "cost_kind"}, nil),
-			MetricSessions: prometheus.NewDesc(MetricSessions,
-				"Task Sessions added to the usage totals, one per Session. Cursor is added when its task result is recorded. Other agents are added when the usage observation is final."+scrapeNote,
-				[]string{"agent", "model"}, nil),
-			MetricSeconds: prometheus.NewDesc(MetricSeconds,
-				"Whole wall-clock seconds from Session creation to status.agent.task.finishedAt, for each Session added to the usage totals. A missing or earlier finish adds nothing."+scrapeNote,
-				[]string{"agent", "model"}, nil),
-		},
+		Tokens: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: MetricTokens,
+			Help: "Tokens from a final task usage observation, added once per Session. Unknown is omitted. Cursor is omitted. The token label is input, output, cache_read, or cache_write." + helpSettle,
+		}, []string{"agent", "model", "repository", "cost_kind", "token"}),
+		CostUSD: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: MetricCostUSD,
+			Help: "CLI-equivalent cost in USD from a final task usage observation, added once per Session. Unknown is omitted. Cursor is omitted. This is not a billed charge." + helpSettle,
+		}, []string{"agent", "model", "repository", "cost_kind"}),
+		Sessions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: MetricSessions,
+			Help: "Task Sessions added to the usage totals, one per Session. Cursor is added when its task result is recorded. Other agents are added when the usage observation is final." + helpSettle,
+		}, []string{"agent", "model"}),
+		Seconds: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: MetricSeconds,
+			Help: "Whole wall-clock seconds from Session creation to status.agent.task.finishedAt, for each Session added to the usage totals. A missing or earlier finish adds nothing." + helpSettle,
+		}, []string{"agent", "model"}),
+		born: map[seriesKey]time.Time{},
 	}
 }
 
-// Register registers the counters. Registering the same collector again is success.
+// Register registers the counters. Registering the same collectors again is success.
 func (c *Counters) Register(r prometheus.Registerer) error {
 	if c == nil || r == nil {
 		return errors.New("task usage counters are not configured")
 	}
-	if err := r.Register(c); err != nil {
-		var already prometheus.AlreadyRegisteredError
-		if errors.As(err, &already) && already.ExistingCollector == c {
-			return nil
+	for _, col := range []prometheus.Collector{c.Tokens, c.CostUSD, c.Sessions, c.Seconds} {
+		if err := r.Register(col); err != nil {
+			var already prometheus.AlreadyRegisteredError
+			if errors.As(err, &already) && already.ExistingCollector == col {
+				continue
+			}
+			return err
 		}
-		return err
 	}
 	return nil
 }
 
-// Describe implements prometheus.Collector.
-func (c *Counters) Describe(ch chan<- *prometheus.Desc) {
-	for _, name := range []string{MetricTokens, MetricCostUSD, MetricSessions, MetricSeconds} {
-		ch <- c.desc[name]
+// addIfSettled creates every series this contribution will add to, at 0.
+// It adds the contribution only when each of those series has existed for
+// settleFor. Otherwise it adds nothing and returns the longest remainder.
+func (c *Counters) addIfSettled(con contribution) (bool, time.Duration) {
+	if c == nil {
+		return false, settleFor
 	}
-}
-
-// Collect implements prometheus.Collector. It does not change the counters.
-// A series created less than zeroFor ago is reported as 0.
-func (c *Counters) Collect(ch chan<- prometheus.Metric) {
 	now := c.clock()
-	c.mu.Lock()
-	type sample struct {
-		id    seriesID
-		value float64
-	}
-	snap := make([]sample, 0, len(c.series))
-	for id, st := range c.series {
-		value := st.actual
-		if now.Before(st.showAt) {
-			value = 0
-		}
-		snap = append(snap, sample{id: id, value: value})
-	}
-	c.mu.Unlock()
-	for _, s := range snap {
-		ch <- prometheus.MustNewConstMetric(c.desc[s.id.metric], prometheus.CounterValue, s.value, s.id.labelValues()...)
-	}
-}
-
-// apply adds one Session's contribution. The returned time is when that add
-// is visible. A series still inside its first two minutes keeps the add
-// hidden until that series' show time. A series that is already showing its
-// total includes the add immediately. The annotation waits markAfter after
-// the returned time.
-func (c *Counters) apply(con contribution) time.Time {
-	now := c.clock()
-	visibleAt := now
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	bump := func(id seriesID, amount float64) {
-		if amount <= 0 {
-			return
-		}
-		st, ok := c.series[id]
-		if !ok {
-			st.showAt = now.Add(c.zeroFor)
-		}
-		st.actual += amount
-		c.series[id] = st
-		if st.showAt.After(visibleAt) {
-			visibleAt = st.showAt
+	var wait time.Duration
+	for _, id := range seriesOf(con) {
+		c.touch(id, now)
+		remain := settleFor - now.Sub(c.born[id])
+		if remain > wait {
+			wait = remain
 		}
 	}
-	bump(seriesID{metric: MetricSessions, agent: con.agent, model: con.model}, 1)
-	bump(seriesID{metric: MetricSeconds, agent: con.agent, model: con.model}, con.seconds)
+	if wait > 0 {
+		return false, wait
+	}
+	c.Sessions.WithLabelValues(con.agent, con.model).Add(1)
+	if con.seconds > 0 {
+		c.Seconds.WithLabelValues(con.agent, con.model).Add(con.seconds)
+	}
 	for _, sample := range con.tokens {
-		bump(seriesID{metric: MetricTokens, agent: con.agent, model: sample.model, repository: sample.repository, kind: sample.kind, token: sample.token}, sample.amount)
+		if sample.amount <= 0 {
+			continue
+		}
+		c.Tokens.WithLabelValues(con.agent, sample.model, sample.repository, sample.kind, sample.token).Add(sample.amount)
 	}
 	for _, sample := range con.costs {
-		bump(seriesID{metric: MetricCostUSD, agent: con.agent, model: sample.model, repository: sample.repository, kind: sample.kind}, sample.usd)
+		if sample.usd <= 0 {
+			continue
+		}
+		c.CostUSD.WithLabelValues(con.agent, sample.model, sample.repository, sample.kind).Add(sample.usd)
 	}
-	return visibleAt
+	return true, 0
 }
 
-// ready reports whether the add has been visible for markAfter.
-func (c *Counters) ready(visibleAt time.Time) bool {
-	if c == nil || visibleAt.IsZero() {
-		return false
+func (c *Counters) touch(id seriesKey, now time.Time) {
+	switch id.metric {
+	case MetricTokens:
+		c.Tokens.WithLabelValues(id.agent, id.model, id.repository, id.kind, id.token)
+	case MetricCostUSD:
+		c.CostUSD.WithLabelValues(id.agent, id.model, id.repository, id.kind)
+	case MetricSeconds:
+		c.Seconds.WithLabelValues(id.agent, id.model)
+	default:
+		c.Sessions.WithLabelValues(id.agent, id.model)
 	}
-	return !c.clock().Before(visibleAt.Add(c.markAfter))
+	if _, ok := c.born[id]; !ok {
+		c.born[id] = now
+	}
 }
 
-// untilReady is the wait until ready. A short positive wait avoids a tight
-// requeue when the clock is within a second of the deadline.
-func (c *Counters) untilReady(visibleAt time.Time) time.Duration {
-	if c == nil || visibleAt.IsZero() {
-		return markAfter
+func seriesOf(con contribution) []seriesKey {
+	out := []seriesKey{{metric: MetricSessions, agent: con.agent, model: con.model}}
+	if con.seconds > 0 {
+		out = append(out, seriesKey{metric: MetricSeconds, agent: con.agent, model: con.model})
 	}
-	wait := visibleAt.Add(c.markAfter).Sub(c.clock())
-	if wait < time.Second {
-		return time.Second
+	for _, sample := range con.tokens {
+		if sample.amount <= 0 {
+			continue
+		}
+		out = append(out, seriesKey{metric: MetricTokens, agent: con.agent, model: sample.model, repository: sample.repository, kind: sample.kind, token: sample.token})
 	}
-	return wait
+	for _, sample := range con.costs {
+		if sample.usd <= 0 {
+			continue
+		}
+		out = append(out, seriesKey{metric: MetricCostUSD, agent: con.agent, model: sample.model, repository: sample.repository, kind: sample.kind})
+	}
+	return out
 }
 
 func (c *Counters) clock() time.Time {
@@ -182,21 +164,4 @@ func (c *Counters) clock() time.Time {
 		return c.now()
 	}
 	return time.Now()
-}
-
-func (c *Counters) actual(metric, agent, model string) float64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.series[seriesID{metric: metric, agent: agent, model: model}].actual
-}
-
-func (id seriesID) labelValues() []string {
-	switch id.metric {
-	case MetricTokens:
-		return []string{id.agent, id.model, id.repository, id.kind, id.token}
-	case MetricCostUSD:
-		return []string{id.agent, id.model, id.repository, id.kind}
-	default:
-		return []string{id.agent, id.model}
-	}
 }
