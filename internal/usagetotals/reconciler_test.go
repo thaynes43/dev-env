@@ -24,8 +24,10 @@ import (
 
 var (
 	usageStart = time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
-	idA        = strings.Repeat("a", 64)
-	idB        = strings.Repeat("b", 64)
+	// usageSeen is the frozen clock withClock installs. Age checks read it.
+	usageSeen = time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	idA       = strings.Repeat("a", 64)
+	idB       = strings.Repeat("b", 64)
 )
 
 func TestBoundLabel(t *testing.T) {
@@ -66,6 +68,185 @@ func TestMarkHonouredAcrossRestart(t *testing.T) {
 	}
 	if got := sessionValue(t, first.Counters, "claude", "claude-opus-5-5"); got != 1 {
 		t.Fatalf("first process changed to %v", got)
+	}
+}
+
+func TestOldSessionIsSkippedAndNotAdded(t *testing.T) {
+	if countWindow != 168*time.Hour || markSkippedOld != "skipped/older-than-168h" {
+		t.Fatalf("window %s mark %q", countWindow, markSkippedOld)
+	}
+	s := finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5")
+	s.Status.Agent.Task.FinishedAt = metav1.NewTime(usageSeen.Add(-countWindow - time.Hour))
+	c := fakeClient(t, s)
+	r := newReconciler(t, c)
+	if err := reconcile(r, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if got := annotation(t, c, "s"); got != "skipped/older-than-168h" {
+		t.Fatalf("mark = %q", got)
+	}
+	assertNoSeries(t, r.Counters)
+	if err := reconcile(r, "s"); err != nil {
+		t.Fatal(err)
+	}
+	assertNoSeries(t, r.Counters)
+	if got := annotation(t, c, "s"); got != "skipped/older-than-168h" {
+		t.Fatalf("mark after second reconcile = %q", got)
+	}
+
+	restarted := newReconciler(t, c)
+	if err := reconcile(restarted, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcile(restarted, "s"); err != nil {
+		t.Fatal(err)
+	}
+	assertNoSeries(t, restarted.Counters)
+	assertNoSeries(t, r.Counters)
+	if got := annotation(t, c, "s"); got != "skipped/older-than-168h" {
+		t.Fatalf("mark after restart = %q", got)
+	}
+}
+
+func TestSkipMarkLeftAloneAcrossRestart(t *testing.T) {
+	s := finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5")
+	s.Status.Agent.Task.FinishedAt = metav1.NewTime(usageSeen.Add(-time.Hour))
+	s.Annotations = map[string]string{AnnotationCounted: "skipped/older-than-168h"}
+	c := fakeClient(t, s)
+	r := newReconciler(t, c)
+	settle(t, r, "s")
+	assertNoSeries(t, r.Counters)
+	if got := annotation(t, c, "s"); got != "skipped/older-than-168h" {
+		t.Fatalf("mark = %q", got)
+	}
+
+	restarted := newReconciler(t, c)
+	settle(t, restarted, "s")
+	assertNoSeries(t, restarted.Counters)
+	if got := annotation(t, c, "s"); got != "skipped/older-than-168h" {
+		t.Fatalf("mark after restart = %q", got)
+	}
+}
+
+func TestSessionFinished167HoursAgoIsAdded(t *testing.T) {
+	fin := usageSeen.Add(-167 * time.Hour)
+	s := finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5")
+	s.CreationTimestamp = metav1.NewTime(fin.Add(-125 * time.Second))
+	s.Status.Agent.Task.FinishedAt = metav1.NewTime(fin)
+	c := fakeClient(t, s)
+	r := newReconciler(t, c)
+	res, err := reconcileResult(r, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RequeueAfter != settleFor || annotation(t, c, "s") != "" {
+		t.Fatalf("during settle: after %s mark %q", res.RequeueAfter, annotation(t, c, "s"))
+	}
+	advance(r.Counters, settleFor)
+	if err := reconcile(r, "s"); err != nil {
+		t.Fatal(err)
+	}
+	got := gatherCounters(t, r.Counters)
+	if got[series(MetricSessions, "agent", "claude", "model", "claude-opus-5-5")] != 1 {
+		t.Fatalf("sessions = %v", got)
+	}
+	if got[series(MetricSeconds, "agent", "claude", "model", "claude-opus-5-5")] != 125 {
+		t.Fatalf("seconds = %v", got)
+	}
+	if gotMark := annotation(t, c, "s"); gotMark != "observation/"+idA {
+		t.Fatalf("mark = %q", gotMark)
+	}
+}
+
+func TestCursorWithoutFinishedAtUsesCreationTime(t *testing.T) {
+	t.Run("older than 168h", func(t *testing.T) {
+		s := baseSession("old", "uid-1", "cursor", "dev-env", "grok-4.7")
+		s.Generation = 4
+		s.Status.Agent = nil
+		s.CreationTimestamp = metav1.NewTime(usageSeen.Add(-countWindow - time.Hour))
+		s.Status.TaskResult = &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultSucceeded}
+		c := fakeClient(t, s)
+		r := newReconciler(t, c)
+		if err := reconcile(r, "old"); err != nil {
+			t.Fatal(err)
+		}
+		if got := annotation(t, c, "old"); got != "skipped/older-than-168h" {
+			t.Fatalf("mark = %q", got)
+		}
+		assertNoSeries(t, r.Counters)
+	})
+
+	t.Run("finishedAt zero", func(t *testing.T) {
+		s := baseSession("zero", "uid-2", "cursor", "dev-env", "grok-4.7")
+		s.Generation = 6
+		s.Status.Agent.Task.FinishedAt = metav1.Time{}
+		s.CreationTimestamp = metav1.NewTime(usageSeen.Add(-countWindow - time.Hour))
+		s.Status.TaskResult = &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultSucceeded}
+		c := fakeClient(t, s)
+		r := newReconciler(t, c)
+		if err := reconcile(r, "zero"); err != nil {
+			t.Fatal(err)
+		}
+		if got := annotation(t, c, "zero"); got != "skipped/older-than-168h" {
+			t.Fatalf("mark = %q", got)
+		}
+		assertNoSeries(t, r.Counters)
+	})
+
+	t.Run("167h", func(t *testing.T) {
+		s := baseSession("recent", "uid-3", "cursor", "dev-env", "grok-4.7")
+		s.Generation = 8
+		s.Status.Agent = nil
+		s.CreationTimestamp = metav1.NewTime(usageSeen.Add(-167 * time.Hour))
+		s.Status.TaskResult = &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultSucceeded}
+		c := fakeClient(t, s)
+		r := newReconciler(t, c)
+		settle(t, r, "recent")
+		got := gatherCounters(t, r.Counters)
+		if got[series(MetricSessions, "agent", "cursor", "model", "grok-4.7")] != 1 {
+			t.Fatalf("sessions = %v", got)
+		}
+		for name := range got {
+			if strings.HasPrefix(name, MetricTokens) || strings.HasPrefix(name, MetricCostUSD) || strings.HasPrefix(name, MetricSeconds) {
+				t.Fatalf("unexpected series %s in %v", name, got)
+			}
+		}
+		if gotMark := annotation(t, c, "recent"); gotMark != "generation/8" {
+			t.Fatalf("mark = %q", gotMark)
+		}
+	})
+}
+
+func TestSkipMarkWriteIsRetriedWithoutAdding(t *testing.T) {
+	s := finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5")
+	s.Status.Agent.Task.FinishedAt = metav1.NewTime(usageSeen.Add(-countWindow - time.Hour))
+	var patches int
+	r := &Reconciler{Counters: withClock(t, NewCounters()), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
+	r.Client = fakeClientIntercept(t, s, interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			patches++
+			if patches == 1 {
+				return errors.New("annotation refused")
+			}
+			return cl.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	if err := reconcile(r, "s"); err == nil {
+		t.Fatal("expected the skip mark write to fail")
+	}
+	assertNoSeries(t, r.Counters)
+	if got := annotation(t, r.Client, "s"); got != "" {
+		t.Fatalf("mark after refused write = %q", got)
+	}
+	if err := reconcile(r, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if got := annotation(t, r.Client, "s"); got != "skipped/older-than-168h" {
+		t.Fatalf("mark = %q", got)
+	}
+	assertNoSeries(t, r.Counters)
+	if patches != 2 {
+		t.Fatalf("patches = %d", patches)
 	}
 }
 
@@ -478,7 +659,7 @@ func withClock(t *testing.T, c *Counters) *Counters {
 	prev := settleFor
 	settleFor = 5 * time.Second
 	t.Cleanup(func() { settleFor = prev })
-	clk := &frozenClock{at: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)}
+	clk := &frozenClock{at: usageSeen}
 	c.now = clk.now
 	testClocks.Store(c, clk)
 	return c
@@ -599,6 +780,14 @@ func setResultState(t *testing.T, c client.Client, name, state string) {
 	got.Status.UsageObservation.ResultState = state
 	if err := c.Status().Update(context.Background(), &got); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertNoSeries(t *testing.T, c *Counters) {
+	t.Helper()
+	got := gatherCounters(t, c)
+	if len(got) != 0 {
+		t.Fatalf("series = %v, want none", got)
 	}
 }
 

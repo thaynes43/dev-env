@@ -159,6 +159,9 @@ func seriesOf(con contribution) []seriesKey {
 	return out
 }
 
+// clock is the time the settle and the count window both use. Tests set now.
+// A nil receiver or an unset now uses time.Now, and nowhere else decides
+// the time.
 func (c *Counters) clock() time.Time {
 	if c != nil && c.now != nil {
 		return c.now()

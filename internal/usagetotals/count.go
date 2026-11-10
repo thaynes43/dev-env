@@ -10,16 +10,29 @@ import (
 )
 
 const (
-	// AnnotationCounted is the leader's mark that this Session was added.
-	// A non-empty value means the Session is already counted. The value records
-	// the observation that was added, so a later observation is not added again.
+	// AnnotationCounted is the leader's mark that this Session was decided.
+	// A non-empty value means the Session is left alone. The value records
+	// the observation that was added, the generation when there was no
+	// observation id, or the skip below when the task finished too long
+	// before the leader saw it, so a later observation is not added.
 	//
 	//	observation/<64-hex usage observation id>
 	//	generation/<metadata.generation>
+	//	skipped/older-than-168h
 	//
 	// generation is used when the Session has no 64-hex observation id, which
 	// is a Cursor task result with no usage observation.
 	AnnotationCounted = "dev-env.haynesops.com/task-usage-counted"
+
+	// countWindow is the oldest finish the leader still adds. A ready Session
+	// with no mark that finished more than this long before the reconcile is
+	// marked and not added. 168 hours is the task clean-up grace, so in
+	// normal running only a backlog is older.
+	countWindow = 168 * time.Hour
+
+	// markSkippedOld is the annotation value for that skip. It creates no
+	// series and adds nothing.
+	markSkippedOld = "skipped/older-than-168h"
 
 	labelOther      = "other"
 	stateReported   = "Reported"
@@ -119,6 +132,23 @@ func markFor(s *v1alpha1.AgentSession) string {
 		return "observation/" + obs.ID
 	}
 	return "generation/" + strconv.FormatInt(s.Generation, 10)
+}
+
+// taskFinished is status.agent.task.finishedAt. When that is absent or
+// zero, it is metadata.creationTimestamp.
+func taskFinished(s *v1alpha1.AgentSession) time.Time {
+	if s.Status.Agent != nil && s.Status.Agent.Task != nil {
+		if fin := s.Status.Agent.Task.FinishedAt.Time; !fin.IsZero() {
+			return fin
+		}
+	}
+	return s.CreationTimestamp.Time
+}
+
+// olderThanCountWindow reports whether the task finished more than
+// countWindow before now. now is the counters' clock.
+func olderThanCountWindow(s *v1alpha1.AgentSession, now time.Time) bool {
+	return now.Sub(taskFinished(s)) > countWindow
 }
 
 func wallSeconds(s *v1alpha1.AgentSession) float64 {

@@ -201,3 +201,13 @@ minutes after a series is created in a process, `increase` does not see
 that series' first add; the raw counter still holds it. Totals appear up
 to five minutes after a restart, or after a new label is first used. A
 Session deleted before its series have settled is not counted.
+
+A ready Session with no mark whose task finished more than 168 hours
+before the leader's reconcile sees it is marked `skipped/older-than-168h`
+and not added; a Session inside those 168 hours is added after the settle,
+and any mark already present, including that skip, is left alone. Finished
+is `status.agent.task.finishedAt`, or `metadata.creationTimestamp` when
+that is absent or zero. The documented weekly query would otherwise report
+the whole history as this week's cost; the older history is the
+coordinator's per-Session export attached to OpenProject #518 before the
+backlog is cleaned.

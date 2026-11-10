@@ -55,10 +55,15 @@ func (r *Reconciler) elected() bool {
 
 // Reconcile creates the series a ready Session needs at 0. When every one of
 // those series has existed for settleFor, it adds the Session and then writes
-// AnnotationCounted, in that order, in the same reconcile. A failed mark write
-// is remembered in this process, so the next reconcile writes the mark again
-// and does not add again. A restart without the mark adds the Session again,
-// which is the accepted crash window.
+// AnnotationCounted, in that order, in the same reconcile. A ready Session
+// with no mark whose task finished more than countWindow before this
+// reconcile is marked skipped and not added: writeMark does that write, no
+// series is created, and a failed write is retried on the next reconcile
+// without adding. A failed mark write after an add is remembered in this
+// process, so the next reconcile writes the mark again and does not add
+// again. A restart without the mark adds a Session that is still inside the
+// window, which is the accepted crash window. Any mark already stored,
+// including the skip, is left alone.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	if !r.elected() {
 		return ctrl.Result{}, nil
@@ -96,6 +101,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	con, ok := contributionOf(&session)
 	if !ok {
 		r.mu.Unlock()
+		return ctrl.Result{}, nil
+	}
+	// The counters' clock is the one the settle uses. A nil Counters still
+	// has that clock, so a skip does not need the collectors to be configured.
+	if olderThanCountWindow(&session, r.Counters.clock()) {
+		r.mu.Unlock()
+		if err := r.writeMark(ctx, &session, markSkippedOld); err != nil {
+			return ctrl.Result{}, fmt.Errorf("task usage mark: %w", err)
+		}
 		return ctrl.Result{}, nil
 	}
 	if r.Counters == nil {

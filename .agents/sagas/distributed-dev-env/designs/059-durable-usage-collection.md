@@ -543,17 +543,19 @@ remains. No CRD field and no new object.
 ### The mark
 
 The mark is an annotation on the AgentSession. The leader reads it before
-adding and writes it after adding.
+adding and writes it after adding, or writes the skip below without adding.
 
 | Field | Value |
 | --- | --- |
 | Key | `dev-env.haynesops.com/task-usage-counted` |
 | Value, when the Session has a 64-hex usage observation id | `observation/<id>` |
+| Value, when a ready Session with no mark finished more than 168 hours before this reconcile | `skipped/older-than-168h` |
 | Value otherwise | `generation/<metadata.generation>` |
 
 A Cursor task result with no usage observation uses the generation form.
-Any non-empty value means this Session was already added. The value names
-the observation id that was counted, or the generation when there was no
+Any non-empty value means the leader has already decided this Session, so
+it is left alone. A skip added nothing. The other values name the
+observation id that was counted, or the generation when there was no
 observation id, so a later observation is not added again. The leader does
 not rewrite a mark that is already there.
 
@@ -571,7 +573,10 @@ leaves the counters at zero, so a sum of the two replicas does not double.
 The operator's default is leader election on. With leader election off
 there is no leader to trust, and nothing is added.
 
-For a Session that is ready and has no mark:
+A ready Session that finished more than 168 hours before this reconcile is
+marked skipped and not added, as "Sessions already present" describes, and
+the following steps do not run. For every other Session that is ready and
+has no mark:
 
 1. Make sure every series this Session will add to exists in this process,
    created at 0, and remember when each was created. Reading the metrics
@@ -630,13 +635,15 @@ missing finish, or a finish that is not after creation, adds no seconds.
 
 ### Sessions already present
 
-A Session that exists when this ships has no annotation. The leader's
-controller lists every Session when it starts. That first sight creates
-the series at 0, and the add happens once those series have existed for
-five minutes. A Session that becomes final later is handled the same way
-on the next reconcile. A Session that already carries the annotation is
-skipped, including after a restart. Totals appear up to five minutes after
-a restart, or after a new label is first used.
+A ready Session with no mark whose task finished more than 168 hours
+before the leader's reconcile sees it is marked `skipped/older-than-168h`
+and not added; a Session inside those 168 hours is added after the settle,
+and any mark already present, including that skip, is left alone. Finished
+is `status.agent.task.finishedAt`, or `metadata.creationTimestamp` when
+that is absent or zero. The documented weekly query would otherwise report
+the whole history as this week's cost; the older history is the
+coordinator's per-Session export attached to OpenProject #518 before the
+backlog is cleaned.
 
 ### Restart and Prometheus
 
