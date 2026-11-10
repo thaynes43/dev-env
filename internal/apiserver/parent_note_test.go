@@ -255,13 +255,31 @@ func TestParentNotesDefaultOffAndIndependentQuestionFlag(t *testing.T) {
 	f, parent, child, _ := parentNoteFixture(t, false)
 	f.srv.ParentNotes = false
 	f.h = f.srv.Handler()
-	for _, path := range []string{apiv1.ParentNotesPath, apiv1.ParentNotesPath + "/name", apiv1.ParentNotesPath + "/name/answer", apiv1.ParentNotesPath + "/name/wait"} {
+	// Flag off (DESIGN-062 section 7.3): each route this slice serves answers
+	// 503 to an authenticated caller, as the durable inbox does when it is off.
+	for _, rt := range []struct{ method, path string }{
+		{http.MethodPost, apiv1.ParentNotesPath}, {http.MethodGet, apiv1.ParentNotesPath}, {http.MethodGet, apiv1.ParentNotesPath + "/name"},
+	} {
+		for _, token := range []string{child, parent} {
+			w := f.do(rt.method, rt.path, token, struct{}{})
+			wantError(t, w, http.StatusServiceUnavailable, apiv1.CodeUnavailable)
+			if !strings.Contains(w.Body.String(), "parent notes are not enabled") {
+				t.Fatalf("%s %s: the refusal does not say parent notes are off: %s", rt.method, rt.path, w.Body.String())
+			}
+		}
+		// A caller with no token is refused before the flag is read.
+		if w := f.do(rt.method, rt.path, "", struct{}{}); w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s with no token: status %d, want 401", rt.method, rt.path, w.Code)
+		}
+	}
+	// The answer and wait routes belong to a later slice and do not exist.
+	for _, path := range []string{apiv1.ParentNotesPath + "/name/answer", apiv1.ParentNotesPath + "/name/wait"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			for _, token := range []string{"", child, parent} {
 				w := f.do(method, path, token, struct{}{})
 				wantError(t, w, 404, apiv1.CodeNotFound)
 				if !strings.Contains(w.Body.String(), "no route "+method+" "+path) {
-					t.Fatal("disabled route was registered")
+					t.Fatal("a later slice's route was registered")
 				}
 			}
 		}

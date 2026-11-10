@@ -17,10 +17,10 @@ import (
 	"github.com/thaynes43/dev-env/internal/inbox"
 )
 
+// The routes are always registered. With the flag off an authenticated caller
+// gets 503 and nothing is stored (DESIGN-062 section 7.3), as the durable
+// inbox answers when it is off; an older operator answers 404.
 func (s *Server) registerParentNotes(mux *http.ServeMux) {
-	if !s.ParentNotes {
-		return
-	}
 	mux.Handle(apiv1.ParentNotesPath, s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{
 		http.MethodPost: s.tellParent, http.MethodGet: s.listParentNotes,
 	}}))
@@ -30,6 +30,9 @@ func (s *Server) registerParentNotes(mux *http.ServeMux) {
 }
 
 func (s *Server) parentNotesAvailable() error {
+	if !s.ParentNotes {
+		return newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "parent notes are not enabled")
+	}
 	if s.Inbox == nil || s.Live == nil {
 		return newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "durable inbox is not enabled")
 	}

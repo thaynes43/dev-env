@@ -115,8 +115,8 @@ type Server struct {
 	// 2026-10-31). Default off: enable it only after the InboxMessage CRD with
 	// kind and inReplyTo is installed.
 	InboxQuestions bool
-	// ParentNotes registers the session-parent note routes. Default off: an
-	// unknown route response is returned before authentication when disabled.
+	// ParentNotes enables the session-parent note routes. Default off: the
+	// routes answer 503 to an authenticated caller and store nothing.
 	ParentNotes bool
 	// PortalQuestionAudit serves GET /v1/portal/question-audit, a metadata-only
 	// page of question and reply records for one explicit project and one live

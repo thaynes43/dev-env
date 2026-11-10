@@ -187,6 +187,9 @@ func TestParentCommandsRefusalsAndRedirectsStayPrivate(t *testing.T) {
 		{400, ExitFailed, "key, kind, text"}, {404, ExitNotFound, "not found"},
 		{422, ExitFailed, "snapshot"}, {429, ExitFailed, "limits"},
 		{403, ExitAuth, "403"}, {307, ExitFailed, "307"},
+		// A 503 on the one write is unconfirmed, as for the inbox: the same
+		// status also means the store's outcome is unknown.
+		{503, ExitUnconfirmed, "outcome Unknown"},
 	} {
 		h := newHarness(t)
 		h.env.Stdin = strings.NewReader("x")
@@ -201,5 +204,16 @@ func TestParentCommandsRefusalsAndRedirectsStayPrivate(t *testing.T) {
 		if len(h.api.requests()) != 1 || len(h.sleeps) != 0 {
 			t.Fatal("refusal or redirect repeated request")
 		}
+	}
+	// A read that meets 503 says the feature may be off (DESIGN-062 7.3).
+	h := newHarness(t)
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		http.Error(w, "PRIVATE_NOTE_TEXT "+testToken, http.StatusServiceUnavailable)
+	}
+	if code := h.run("parent", "list"); code == ExitOK {
+		t.Fatal("parent list accepted a 503")
+	}
+	if !strings.Contains(h.stderr.String(), "not enabled") || strings.Contains(h.stderr.String(), "PRIVATE_NOTE_TEXT") || strings.Contains(h.stderr.String(), testToken) {
+		t.Fatal("a 503 read lost its reason or exposed the API body: " + h.stderr.String())
 	}
 }

@@ -965,8 +965,9 @@ snapshot. Removing a project from the inbox allowlist stops new publishing;
 existing notes remain readable while parent notes are enabled.
 
 The operator flag `--enable-parent-notes` defaults to false and requires
-`--enable-durable-inbox`. With it off these routes return the same 404 as an
-unknown route. This source does not enable it in the cluster. The parent finds
+`--enable-durable-inbox`. With it off these routes answer 503 and store
+nothing; an operator older than this feature answers 404. This source does not
+enable it in the cluster. The parent finds
 notes by listing them. Answers, held waits, Meatball callers and wake notices
 are later slices; no note text is pasted into a session.
 

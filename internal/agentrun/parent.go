@@ -141,6 +141,9 @@ func parentNoteError(status int, err error, mutation bool) error {
 		code = ee.code
 	}
 	if mutation && code == ExitUnconfirmed {
+		if status == http.StatusServiceUnavailable {
+			return fail(code, "parent tell outcome Unknown (503): parent notes or the durable inbox may not be enabled on this operator. No request was repeated. Retry only the identical intent with the same key")
+		}
 		return fail(code, "parent tell outcome Unknown; no request was repeated. Retry only the identical intent with the same key")
 	}
 	switch status {
@@ -149,7 +152,9 @@ func parentNoteError(status int, err error, mutation bool) error {
 	case http.StatusUnprocessableEntity:
 		return fail(code, "parent tell was refused (422); a child needs a project snapshot, no workspace, and a recorded session parent")
 	case http.StatusNotFound:
-		return fail(code, "parent note, recorded parent or authorized scope was not found (404); the routes may be disabled")
+		return fail(code, "parent note, recorded parent or authorized scope was not found (404); an operator older than parent notes also answers 404")
+	case http.StatusServiceUnavailable:
+		return fail(code, "parent request was refused (503); parent notes or the durable inbox are not enabled on this operator, or the inbox is unavailable")
 	case http.StatusConflict:
 		return fail(code, "parent tell conflicts with the existing key (409); nothing was replaced and no new key was generated")
 	case http.StatusTooManyRequests:

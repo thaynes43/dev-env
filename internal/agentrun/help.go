@@ -353,7 +353,8 @@ it; -o json includes metadata. Only the saved sender and recipient can read a
 note. Tell prints a JSON receipt. A note grants no access or approval.
 
 These commands require --enable-parent-notes on the operator, which defaults
-off and requires --enable-durable-inbox. Disabled routes return 404. Only
+off and requires --enable-durable-inbox. Disabled routes return 503, which
+tell reports as an unknown outcome because the same status can mean that. Only
 session parents are supported. The parent finds notes by listing them; nothing
 wakes it or pastes note text into its session.
 `,
