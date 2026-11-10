@@ -44,12 +44,8 @@ func TestBoundLabel(t *testing.T) {
 func TestMarkHonouredAcrossRestart(t *testing.T) {
 	c := fakeClient(t, finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5"))
 	first := newReconciler(t, c)
-	if err := reconcile(first, "s"); err != nil {
-		t.Fatal(err)
-	}
-	if err := reconcile(first, "s"); err != nil {
-		t.Fatal(err)
-	}
+	settle(t, first, "s")
+	settle(t, first, "s")
 	if got := sessionValue(t, first.Counters, "claude", "claude-opus-5-5"); got != 1 {
 		t.Fatalf("first process sessions = %v", got)
 	}
@@ -75,9 +71,7 @@ func TestMarkHonouredAcrossRestart(t *testing.T) {
 func TestChangedObservationNotCountedTwice(t *testing.T) {
 	c := fakeClient(t, finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5"))
 	r := newReconciler(t, c)
-	if err := reconcile(r, "s"); err != nil {
-		t.Fatal(err)
-	}
+	settle(t, r, "s")
 	setObservationID(t, c, "s", idB)
 	if err := reconcile(r, "s"); err != nil {
 		t.Fatal(err)
@@ -105,19 +99,33 @@ func TestAddPrecedesMark(t *testing.T) {
 	var patched bool
 	r.Client = fakeClientIntercept(t, session, interceptor.Funcs{
 		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			atPatch = counterValue(t, r.Counters.Sessions.WithLabelValues("claude", "claude-opus-5-5"))
+			atPatch = r.Counters.actual(MetricSessions, "claude", "claude-opus-5-5")
 			patched = true
 			return cl.Patch(ctx, obj, patch, opts...)
 		},
 	})
+	res, err := reconcileResult(r, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patched || res.RequeueAfter <= 0 || annotation(t, r.Client, "s") != "" {
+		t.Fatalf("mark written before a scrape: patched %v after %s annotation %q", patched, res.RequeueAfter, annotation(t, r.Client, "s"))
+	}
+	got := scrapes(t, r.Counters, 2)
+	if got[0][series(MetricSessions, "agent", "claude", "model", "claude-opus-5-5")] != 0 {
+		t.Fatalf("first scrape = %v", got[0])
+	}
+	if got[1][series(MetricSessions, "agent", "claude", "model", "claude-opus-5-5")] != 1 {
+		t.Fatalf("second scrape = %v", got[1])
+	}
 	if err := reconcile(r, "s"); err != nil {
 		t.Fatal(err)
 	}
 	if !patched || atPatch != 1 {
 		t.Fatalf("patch saw sessions %v, patched %v", atPatch, patched)
 	}
-	if got := annotation(t, r.Client, "s"); got != "observation/"+idA {
-		t.Fatalf("mark = %q", got)
+	if gotMark := annotation(t, r.Client, "s"); gotMark != "observation/"+idA {
+		t.Fatalf("mark = %q", gotMark)
 	}
 }
 
@@ -179,9 +187,7 @@ func TestCursorCountsSessionsAndSecondsOnly(t *testing.T) {
 	s.Status.TaskResult = &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultSucceeded, Reason: "TaskSucceeded"}
 	c := fakeClient(t, s)
 	r := newReconciler(t, c)
-	if err := reconcile(r, "s"); err != nil {
-		t.Fatal(err)
-	}
+	settle(t, r, "s")
 	got := gatherCounters(t, r.Counters)
 	if got[series(MetricSessions, "agent", "cursor", "model", "grok-4.7")] != 1 {
 		t.Fatalf("sessions = %v", got)
@@ -206,9 +212,7 @@ func TestCursorCountsSessionsAndSecondsOnly(t *testing.T) {
 		withObs.Status.UsageObservation.InputTokens = v1alpha1.TokenObservationStatus{State: stateReported, Amount: &n}
 		c := fakeClient(t, withObs)
 		r := newReconciler(t, c)
-		if err := reconcile(r, "with-obs"); err != nil {
-			t.Fatal(err)
-		}
+		settle(t, r, "with-obs")
 		got := gatherCounters(t, r.Counters)
 		if got[series(MetricSessions, "agent", "cursor", "model", "grok-4.7")] != 1 {
 			t.Fatalf("sessions = %v", got)
@@ -297,11 +301,15 @@ func TestRefusedMarkDoesNotAddAgain(t *testing.T) {
 	r := &Reconciler{Counters: NewCounters(), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
 	c := fakeClientIntercept(t, session, interceptor.Funcs{
 		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			seen = append(seen, counterValue(t, r.Counters.Sessions.WithLabelValues("claude", "claude-opus-5-5")))
+			seen = append(seen, r.Counters.actual(MetricSessions, "claude", "claude-opus-5-5"))
 			return errors.New("annotation refused")
 		},
 	})
 	r.Client = c
+	if _, err := reconcileResult(r, "s"); err != nil {
+		t.Fatal(err)
+	}
+	scrapes(t, r.Counters, 2)
 	if err := reconcile(r, "s"); err == nil {
 		t.Fatal("expected the mark write to fail")
 	}
@@ -339,6 +347,39 @@ func TestPartialObservationWaitsForFinal(t *testing.T) {
 	}
 }
 
+func TestFirstScrapeIsZero(t *testing.T) {
+	c := fakeClient(t, finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5"))
+	r := newReconciler(t, c)
+	if err := reconcile(r, "s"); err != nil {
+		t.Fatal(err)
+	}
+	got := scrapes(t, r.Counters, 2)
+	key := series(MetricSessions, "agent", "claude", "model", "claude-opus-5-5")
+	if got[0][key] != 0 || got[1][key] != 1 {
+		t.Fatalf("scrapes = %v then %v", got[0], got[1])
+	}
+}
+
+func TestForgetAddedSessionOnNotFound(t *testing.T) {
+	c := fakeClient(t, finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5"))
+	r := newReconciler(t, c)
+	if err := reconcile(r, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.added) != 1 {
+		t.Fatalf("remembered %d", len(r.added))
+	}
+	if err := c.Delete(context.Background(), &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "dev-agents"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcile(r, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.added) != 0 || len(r.names) != 0 {
+		t.Fatalf("remembered %d names %d", len(r.added), len(r.names))
+	}
+}
+
 func TestOtherNamespaceDoesNotCount(t *testing.T) {
 	s := finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5")
 	s.Namespace = "elsewhere"
@@ -358,8 +399,23 @@ func newReconciler(t *testing.T, c client.Client) *Reconciler {
 }
 
 func reconcile(r *Reconciler, name string) error {
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "dev-agents", Name: name}})
+	_, err := reconcileResult(r, name)
 	return err
+}
+
+func reconcileResult(r *Reconciler, name string) (ctrl.Result, error) {
+	return r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "dev-agents", Name: name}})
+}
+
+func settle(t *testing.T, r *Reconciler, name string) {
+	t.Helper()
+	if _, err := reconcileResult(r, name); err != nil {
+		t.Fatal(err)
+	}
+	scrapes(t, r.Counters, 2)
+	if _, err := reconcileResult(r, name); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func fakeClient(t *testing.T, sessions ...*v1alpha1.AgentSession) client.Client {
@@ -454,16 +510,7 @@ func setResultState(t *testing.T, c client.Client, name, state string) {
 
 func sessionValue(t *testing.T, c *Counters, agent, model string) float64 {
 	t.Helper()
-	return counterValue(t, c.Sessions.WithLabelValues(agent, model))
-}
-
-func counterValue(t *testing.T, metric prometheus.Metric) float64 {
-	t.Helper()
-	var m dto.Metric
-	if err := metric.Write(&m); err != nil {
-		t.Fatal(err)
-	}
-	return m.GetCounter().GetValue()
+	return c.actual(MetricSessions, agent, model)
 }
 
 func series(name string, kv ...string) string {
@@ -480,19 +527,29 @@ func series(name string, kv ...string) string {
 
 func gatherCounters(t *testing.T, c *Counters) map[string]float64 {
 	t.Helper()
+	got := scrapes(t, c, 2)
+	return got[len(got)-1]
+}
+
+func scrapes(t *testing.T, c *Counters, n int) []map[string]float64 {
+	t.Helper()
 	reg := prometheus.NewPedanticRegistry()
 	if err := c.Register(reg); err != nil {
 		t.Fatal(err)
 	}
-	mfs, err := reg.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := map[string]float64{}
-	for _, mf := range mfs {
-		for _, m := range mf.GetMetric() {
-			out[metricKey(mf.GetName(), m)] = m.GetCounter().GetValue()
+	var out []map[string]float64
+	for i := 0; i < n; i++ {
+		mfs, err := reg.Gather()
+		if err != nil {
+			t.Fatal(err)
 		}
+		one := map[string]float64{}
+		for _, mf := range mfs {
+			for _, m := range mf.GetMetric() {
+				one[metricKey(mf.GetName(), m)] = m.GetCounter().GetValue()
+			}
+		}
+		out = append(out, one)
 	}
 	return out
 }

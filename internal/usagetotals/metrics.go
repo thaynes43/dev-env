@@ -2,6 +2,7 @@ package usagetotals
 
 import (
 	"errors"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -14,64 +15,151 @@ const (
 	MetricSeconds  = "dev_env_task_usage_seconds_total"
 )
 
+const scrapeNote = " The first scrape of a series in a process is 0, and the next scrape reports the total, so increase() counts that step."
+
 // Counters are the task-usage totals. Each replica registers them. Only the
 // leader adds. A new process starts them at zero.
+//
+// Prometheus increase() ignores the gap before a series' first sample. The
+// first Collect of a series therefore reports 0, even when Sessions were
+// already added, and later Collects report the total.
 type Counters struct {
-	Tokens   *prometheus.CounterVec
-	CostUSD  *prometheus.CounterVec
-	Sessions *prometheus.CounterVec
-	Seconds  *prometheus.CounterVec
+	mu     sync.Mutex
+	epoch  uint64
+	series map[seriesID]seriesState
+	desc   map[string]*prometheus.Desc
+}
+
+type seriesID struct {
+	metric, agent, model, repository, kind, token string
+}
+
+type seriesState struct {
+	actual    float64
+	epoch     uint64
+	primed    bool
+	published uint64
 }
 
 // NewCounters returns counters with no series yet. A series appears when a
 // Session is added.
 func NewCounters() *Counters {
 	return &Counters{
-		Tokens: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: MetricTokens,
-			Help: "Tokens from a final task usage observation, added once per Session. Unknown is omitted. Cursor is omitted. The token label is input, output, cache_read, or cache_write.",
-		}, []string{"agent", "model", "repository", "cost_kind", "token"}),
-		CostUSD: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: MetricCostUSD,
-			Help: "CLI-equivalent cost in USD from a final task usage observation, added once per Session. Unknown is omitted. Cursor is omitted. This is not a billed charge.",
-		}, []string{"agent", "model", "repository", "cost_kind"}),
-		Sessions: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: MetricSessions,
-			Help: "Task Sessions added to the usage totals, one per Session. Cursor is added when its task result is recorded. Other agents are added when the usage observation is final.",
-		}, []string{"agent", "model"}),
-		Seconds: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: MetricSeconds,
-			Help: "Whole wall-clock seconds from Session creation to status.agent.task.finishedAt, for each Session added to the usage totals. A missing or earlier finish adds nothing.",
-		}, []string{"agent", "model"}),
+		series: map[seriesID]seriesState{},
+		desc: map[string]*prometheus.Desc{
+			MetricTokens: prometheus.NewDesc(MetricTokens,
+				"Tokens from a final task usage observation, added once per Session. Unknown is omitted. Cursor is omitted. The token label is input, output, cache_read, or cache_write."+scrapeNote,
+				[]string{"agent", "model", "repository", "cost_kind", "token"}, nil),
+			MetricCostUSD: prometheus.NewDesc(MetricCostUSD,
+				"CLI-equivalent cost in USD from a final task usage observation, added once per Session. Unknown is omitted. Cursor is omitted. This is not a billed charge."+scrapeNote,
+				[]string{"agent", "model", "repository", "cost_kind"}, nil),
+			MetricSessions: prometheus.NewDesc(MetricSessions,
+				"Task Sessions added to the usage totals, one per Session. Cursor is added when its task result is recorded. Other agents are added when the usage observation is final."+scrapeNote,
+				[]string{"agent", "model"}, nil),
+			MetricSeconds: prometheus.NewDesc(MetricSeconds,
+				"Whole wall-clock seconds from Session creation to status.agent.task.finishedAt, for each Session added to the usage totals. A missing or earlier finish adds nothing."+scrapeNote,
+				[]string{"agent", "model"}, nil),
+		},
 	}
 }
 
-// Register registers the counters. Registering the same collectors again is success.
+// Register registers the counters. Registering the same collector again is success.
 func (c *Counters) Register(r prometheus.Registerer) error {
 	if c == nil || r == nil {
 		return errors.New("task usage counters are not configured")
 	}
-	for _, col := range []prometheus.Collector{c.Tokens, c.CostUSD, c.Sessions, c.Seconds} {
-		if err := r.Register(col); err != nil {
-			var already prometheus.AlreadyRegisteredError
-			if errors.As(err, &already) && already.ExistingCollector == col {
-				continue
-			}
-			return err
+	if err := r.Register(c); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if errors.As(err, &already) && already.ExistingCollector == c {
+			return nil
 		}
+		return err
 	}
 	return nil
 }
 
-func (c *Counters) apply(con contribution) {
-	c.Sessions.WithLabelValues(con.agent, con.model).Add(1)
-	if con.seconds > 0 {
-		c.Seconds.WithLabelValues(con.agent, con.model).Add(con.seconds)
+// Describe implements prometheus.Collector.
+func (c *Counters) Describe(ch chan<- *prometheus.Desc) {
+	for _, name := range []string{MetricTokens, MetricCostUSD, MetricSessions, MetricSeconds} {
+		ch <- c.desc[name]
 	}
+}
+
+// Collect implements prometheus.Collector. The first observation of a series
+// is 0. Later observations are the total added so far.
+func (c *Counters) Collect(ch chan<- prometheus.Metric) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, st := range c.series {
+		value := st.actual
+		if !st.primed {
+			value = 0
+			st.primed = true
+		} else {
+			st.published = st.epoch
+		}
+		c.series[id] = st
+		ch <- prometheus.MustNewConstMetric(c.desc[id.metric], prometheus.CounterValue, value, id.labelValues()...)
+	}
+}
+
+// apply adds one Session's contribution. The returned epoch and series are
+// ready once a later Collect has reported those series at this total.
+func (c *Counters) apply(con contribution) (uint64, []seriesID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.epoch++
+	epoch := c.epoch
+	var touched []seriesID
+	bump := func(id seriesID, amount float64) {
+		if amount <= 0 {
+			return
+		}
+		st := c.series[id]
+		st.actual += amount
+		st.epoch = epoch
+		c.series[id] = st
+		touched = append(touched, id)
+	}
+	bump(seriesID{metric: MetricSessions, agent: con.agent, model: con.model}, 1)
+	bump(seriesID{metric: MetricSeconds, agent: con.agent, model: con.model}, con.seconds)
 	for _, sample := range con.tokens {
-		c.Tokens.WithLabelValues(con.agent, sample.model, sample.repository, sample.kind, sample.token).Add(sample.amount)
+		bump(seriesID{metric: MetricTokens, agent: con.agent, model: sample.model, repository: sample.repository, kind: sample.kind, token: sample.token}, sample.amount)
 	}
 	for _, sample := range con.costs {
-		c.CostUSD.WithLabelValues(con.agent, sample.model, sample.repository, sample.kind).Add(sample.usd)
+		bump(seriesID{metric: MetricCostUSD, agent: con.agent, model: sample.model, repository: sample.repository, kind: sample.kind}, sample.usd)
+	}
+	return epoch, touched
+}
+
+// ready reports whether a Collect has reported every series at or after epoch.
+func (c *Counters) ready(epoch uint64, touched []seriesID) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(touched) == 0 {
+		return false
+	}
+	for _, id := range touched {
+		if c.series[id].published < epoch {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Counters) actual(metric, agent, model string) float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.series[seriesID{metric: metric, agent: agent, model: model}].actual
+}
+
+func (id seriesID) labelValues() []string {
+	switch id.metric {
+	case MetricTokens:
+		return []string{id.agent, id.model, id.repository, id.kind, id.token}
+	case MetricCostUSD:
+		return []string{id.agent, id.model, id.repository, id.kind}
+	default:
+		return []string{id.agent, id.model}
 	}
 }

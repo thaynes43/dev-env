@@ -557,11 +557,12 @@ the observation id that was counted, or the generation when there was no
 observation id, so a later observation is not added again. The leader does
 not rewrite a mark that is already there.
 
-The same process also remembers each Session it has added. If the
-annotation write fails, or the cache has not yet shown the annotation, the
-next reconcile writes that same value again and does not add again. The
-memory lasts only for the process. After a restart the annotation is the
-only mark.
+The same process also remembers each Session it has added, until that
+Session is deleted. If the annotation write fails, or the cache has not yet
+shown the annotation, a later reconcile writes that same value again and
+does not add again. The write waits until a scrape has reported the total.
+The memory lasts only for the process. After a restart the annotation is
+the only mark.
 
 ### Who adds, and in what order
 
@@ -573,12 +574,19 @@ there is no leader to trust, and nothing is added.
 
 For a Session that is ready and has no mark:
 
-1. Add it to the counters.
-2. Write the annotation.
+1. Add it to the in-memory counters.
+2. Wait until a scrape has reported that total. The first scrape of a
+   series in this process reports 0, even when the add has already
+   happened. The next scrape reports the total, so `increase` counts the
+   step up from 0. That covers a new label, the first sight of Sessions
+   that already exist, and the first add after a restart.
+3. Write the annotation.
 
-If the process dies between the two, the restart does not see a mark, so
-that one Session is counted again. That double count is accepted. Writing
-the mark second keeps a Session that still exists in the next count.
+If the process dies before the annotation, the restart does not see a
+mark, so that one Session is counted again. That double count is accepted.
+The mark stays after the add, and it is written only once the total has
+been reported, so a scrape cannot miss the first sample of a series and
+then skip the Session because of the mark.
 
 ### What is counted
 
@@ -626,11 +634,12 @@ including after a restart.
 ### Restart and Prometheus
 
 The counters live in the leader's process and start at zero when that
-process starts. Prometheus `increase` keeps a week across that reset
-because the new process does not add a Session the old one already marked.
-The old leader's series stay where they were; the new leader's series
-start at zero and grow only with Sessions that have no mark. Sum the
-replicas.
+process starts. The first scrape of each series in that process is 0. The
+next scrape reports the total, so `increase` counts the step from 0,
+including Sessions added before the first scrape. A Session the previous
+process already marked is not added, so the new total is only the Sessions
+that still have no mark. The old leader's series stay where they were. Sum
+the replicas.
 
 Weekly cost:
 
