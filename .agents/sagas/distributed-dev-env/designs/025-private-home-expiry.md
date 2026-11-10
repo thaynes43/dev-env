@@ -146,7 +146,7 @@ A new optional field beside the existing executor record,
 | `nodeName`, `nodeUID` | 253, 128 | the node that reported it |
 | `leaseRenewedAt` | time | the node lease's renew time at the observation |
 | `observedAt` | time | the operator's clock at the observation |
-| `containers` | at most 16 items | `name` (63), `exitCode`, `reason` (128), `finishedAt`, for regular, init and ephemeral containers |
+| `containers` | at most 16 items | `name` (63), `exitCode`, `reason` (128), `finishedAt`, for regular, init and ephemeral containers. *Amended 2026-11-10 (25.6):* `finishedAt` may be absent only when `reason` is `ContainerStatusUnknown` |
 | `claudeConfigDir`, `codexHome` | 256 each | the executor's provider directories, relative to HOME, when its agent container sets each literally; empty otherwise (section 6.3) |
 
 **Why beside `lastExecutor`, not inside it.** `observePrivateHistory` rebuilds
@@ -179,7 +179,10 @@ is absent, the operator runs `verifyExecutorTerminated`. It reads uncached:
    `allContainersTerminated` (today's helper in `workspace_stop.go`): every
    regular, init and ephemeral container has a `terminated` state with a
    `finishedAt`, and none is running or waiting. The Pod has no `DisruptionTarget`
-   condition with reason `DeletionByPodGC`.
+   condition with reason `DeletionByPodGC`. *Amended 2026-11-10 (section
+   25.6):* this record alone also takes a container the kubelet reports
+   `terminated` with reason `ContainerStatusUnknown` and no finish time
+   (`allContainersTerminatedOrUnknown`), with every other check here.
 2. **The node:** `spec.nodeName` is set; the Node exists, is not deleting, and
    has exactly one `Ready` condition, which is `True`.
 3. **The node lease** in `kube-node-lease`: held by that node, owned by that
@@ -2770,3 +2773,150 @@ operator judged it, and `show` and `list`).
 Deploy needs an operator pin (conditions, backoff, gauges) and an agent image
 for `agent-run`. No CRD changed, so no CRD copy goes to haynes-ops first. The
 alert is a separate haynes-ops PR.
+
+### 25.6 A container the kubelet reports as ContainerStatusUnknown — 2026-11-10 (OP515)
+
+**The case.** `dev-env-1029-222313` was reaped at 2026-10-29T22:29:11Z. The
+operator's stop request followed a second later (section 4), and the Pod ended
+at that deadline: phase `Failed`, reason `DeadlineExceeded`, controlled by the
+Session, no deletion timestamp, no `DisruptionTarget` condition, on a node that
+is Ready today. Its one container, `agent` (`RestartPolicy: Always`), had
+restarted 6 times. Its last run exited 1 at 22:28:43Z, a minute before the
+deadline. Its current state is `terminated` with exit code 137, reason
+`ContainerStatusUnknown`, message "The container could not be located when the
+pod was terminated", and no `startedAt` or `finishedAt`. Point 1 of 3.2 refused
+it for the missing `finishedAt`, every 30 minutes since 25.3. So the Session
+said `RetentionPending` for 11 days. It was the one reaped Session with no
+terminal record. The alert of 25.4 would fire on it and never clear, and the
+HOME expiry could never start for it.
+
+**What the kubelet means.** These citations are to kubernetes/kubernetes at
+tag `v1.35.5`, the kubelet on every node today.
+
+- The reason is the kubelet's constant `ContainerReasonStatusUnknown`
+  (`pkg/kubelet/container/runtime.go` L295-296).
+- The kubelet writes exactly this current state (that reason, that message, exit
+  code 137, no start or finish time) in two places:
+  1. `TerminatePod` (`pkg/kubelet/status/status_manager.go` L564-637). Its
+     comment says the kubelet may be unable to retrieve a container's status
+     "due to garbage collection, admin action, or loss of temporary data on a
+     restart", and that it "ensures that any absent container status is treated
+     as a failure". Once the Pod has initialized, it gives this state to every
+     regular container whose status is not terminated yet, whether running or
+     waiting in its last report, and to the init containers that started. `SyncTerminatedPod` calls it as its
+     last step (`pkg/kubelet/kubelet.go` L2407). Before that, the pod's
+     volumes are unmounted (L2364), its volume directories are gone (L2370-2380)
+     and its cgroup is destroyed (L2398). Destroying the cgroup first kills every
+     process left in it (`tryKillingCgroupProcesses`,
+     `pkg/kubelet/cm/pod_container_manager_linux.go` L168-210).
+  2. `convertToAPIContainerStatuses` (`pkg/kubelet/kubelet_pods.go`
+     L2302-2324), when the container runtime reports the container in state
+     `UNKNOWN` and the last status was running. Its comment: "we know that this
+     container was previously running and isn't anymore (assuming the CRI isn't
+     failing to return running containers)".
+
+  A third message, "...when the pod was deleted. The container used to be
+  Running" (L2556-2560), goes into `lastState`, never into the current state.
+- **The terminal phase carries the proof**, as 3.2 already says for a private
+  executor. The status manager never writes a terminal phase while the pod
+  worker says the Pod could have running containers (`mergePodStatus`,
+  `status_manager.go` L1281-1295: "The Kubelet should never transition a pod to
+  terminal status that could have running containers"). The pod worker says so
+  until `SyncTerminatingPod` has returned without error (`pod_workers.go`
+  L652-660 and L1334-1346). It returns without error only after `KillPod` and a
+  fresh runtime read that finds no running container (`kubelet.go` L2240-2273:
+  "detected running containers after a successful KillPod, CRI violation").
+- **In this case** the container was waiting out its restart back-off when the
+  deadline ended the Pod, so the kubelet had nothing running to kill.
+  `PodReadyToStartContainers` turned False at 22:29:43Z, as the sandbox went.
+  This fits the first path: `TerminatePod` turned the waiting status into this
+  one. The status alone cannot prove which path wrote it.
+
+**Worst case.** In the second path the runtime reported the container
+`UNKNOWN`: it lost track of it. A process that the runtime can no longer see
+could then still exist. The kubelet does not count an `UNKNOWN` container as
+running, so the phase can still turn terminal. Such a process stays in the Pod's
+cgroup until `SyncTerminatedPod` kills what is left there, after the volumes are
+unmounted. It is the runtime's failure, not the kubelet's, and the ordinary
+proof depends on that same runtime read: a container's finish time and the
+"no running container" check both come from it.
+
+**Why it is still safe for the HOME.** The terminal record is the only thing
+this rule writes, and the HOME expiry is the only step that later touches the
+HOME on it. That step never reads the HOME through the ended Pod. It first
+deletes the ended executor Pod, gracefully, and waits until the object is gone.
+Only then can a hold pod take its name and mount the HOME (5.2,
+`expiryRescueAndExport`). A live kubelet lets a terminal Pod's object go only
+after `TerminatePod`'s update, which ends `SyncTerminatedPod` (`canBeDeleted`,
+`status_manager.go` L1122-1139). That is after the unmount and after the cgroup
+kill. So the archive copy and any later delete start only after the kubelet has
+unmounted the HOME from that Pod and killed what was left in its cgroup,
+whichever path wrote the status. A force deletion, or the Pod garbage collector
+deleting the Pod of a deleted node, skips the kubelet. That is true for every
+terminal record already, and this rule does not widen it.
+
+**The rule.** `verifyExecutorTerminated` alone calls
+`allContainersTerminatedOrUnknown` (`internal/controller/workspace_stop.go`).
+That check is `allContainersTerminated` plus one shape: a status that is
+`terminated` with reason exactly `ContainerStatusUnknown` and no `running` or
+`waiting` state, with or without a finish time. Everything else in 3.2 still
+holds: the Pod is the recorded executor and the Session controls it, its phase
+is terminal, no Pod garbage collector `DisruptionTarget`, a node name, a Ready
+node and a fresh lease of that node.
+
+**What stays refused.** A container that is running or waiting, alone or beside
+a terminated state. A duplicate or missing status, or none at all. A terminated
+container with no finish time and any other reason, or no reason, or the reason
+spelled in another case. And, with the kubelet's shape too: a non-terminal phase,
+a Pod the Pod garbage collector marked, no node, a node that is not Ready, a
+stale, future or foreign lease, a forbidden read, and a replaced, foreign or
+hold Pod. Every other stop proof keeps `allContainersTerminated` and still
+refuses this shape: the shared workspace stop, the maintenance executor
+(`VerifyExecutorStopped`), the terminal task reclaim (section 24: its proof,
+its Pod removal and its check of children) and the budget execution.
+
+**The record tells the two proofs apart.** Each container's `reason` is
+recorded, and a `ContainerStatusUnknown` container with no finish time has no
+`finishedAt`: the operator never invents one. That needs one API change, made in
+its own commit. `containers[].finishedAt` is optional now, as it is in core's
+`ContainerStateTerminated`. A new CEL rule allows a missing `finishedAt` only
+when `reason` is exactly `ContainerStatusUnknown`. Before it, a real API server
+refused such a record (`finishedAt: Required value`). Every stored record has a
+`finishedAt`, so each one still validates.
+
+**What the owner reads** (`agentStoppedText`). The stop text names those
+containers: "the agent was stopped as the reap asked (its Pod ended at the
+operator's stop deadline; the kubelet reported its container agent gone, with
+no finish time), recorded ...". With no stop request of the operator's it reads
+"its Pod ended Failed (DeadlineExceeded; the kubelet reported its container
+agent gone, with no finish time)".
+
+**What it changes, and what it does not.** This rule archives, deletes,
+releases, rescues and stops nothing. It writes the terminal record that every
+other reaped Session already has. The Session's reason moves from
+`RetentionPending` to `ExecutorEnded`, so the 25.4 gauge counts it there and the
+alert does not fire on it. The record makes the Session eligible for the HOME
+expiry, which is off today (`--enable-home-history-archive`). When that is on,
+the expiry runs its existing steps with every gate of section 5 and 6, and the
+HOME delete stays behind its own flag. No finalizer, guard, flag or RBAC
+changes. `stopState` keeps its single value.
+
+**An operator who doubts a record of this shape** can hold the HOME expiry for
+that Session with the owner hold of section 9 before turning the archive on.
+
+**Tests.** `TestPrivateHistoryExecutorTerminalRecordIsImmutableAndBound` in
+`api/v1alpha1` (such a record is accepted and kept unchanged; no finish time
+with another reason, no reason or the reason in another case is refused).
+`TestPrivateTerminalTakesKubeletContainerStatusUnknown`,
+`TestOnlyTheTerminalRecordTakesContainerStatusUnknown`, the new cases of
+`TestPrivateTerminalChecksBlockRecording` and
+`TestPrivateTerminalRefusesStaleOrForgedPod`, the envtest case of
+`TestPrivateTerminalRecordOnTheAPIServer`, and two cases of
+`TestReapedPrivateSessionSaysWhatIsTrue`, all in `internal/controller`.
+
+**Deploy.** The CRD changed: haynes-ops gets this `config/crd/` copy before
+the operator pin that writes such a record. With an older CRD the write is
+refused, as above, and the Session stays `RetentionPending`. Nothing is lost,
+since a refused write changes nothing. Then the operator pin. At its next check
+the operator writes the record for `dev-env-1029-222313`, and the Session says
+`ExecutorEnded`.

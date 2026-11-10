@@ -465,23 +465,56 @@ func privateRetentionNoted(s *v1alpha1.AgentSession, obs observation, note strin
 // ended at the deadline of the operator's own stop request did not fail: it
 // was stopped, as the reap asked (section 4) or, when the request came before
 // the reap, after its task ended (section 24). Any other ending shows its raw
-// phase and reason. Call it only with a terminal record.
+// phase and reason. A record whose containers the kubelet reported gone, with
+// no finish time, says so (DESIGN-025 25.6). Call it only with a terminal
+// record.
 func agentStoppedText(s *v1alpha1.AgentSession) string {
 	h := s.Status.PrivateHistory
 	t := h.ExecutorTerminal
 	at := t.ObservedAt.UTC().Format(time.RFC3339)
+	gone := unknownContainersText(t)
 	if r := h.StopRequest; r != nil && r.PodUID == t.PodUID && t.Phase == string(corev1.PodFailed) && t.Reason == "DeadlineExceeded" {
 		why := "after its task ended"
 		if !s.DeletionTimestamp.IsZero() && !r.RequestedAt.Time.Before(s.DeletionTimestamp.Truncate(time.Second)) {
 			why = "as the reap asked"
 		}
-		return fmt.Sprintf("the agent was stopped %s (its Pod ended at the operator's stop deadline), recorded %s", why, at)
+		if gone != "" {
+			gone = "; " + gone
+		}
+		return fmt.Sprintf("the agent was stopped %s (its Pod ended at the operator's stop deadline%s), recorded %s", why, gone, at)
 	}
 	how := t.Phase
+	var detail []string
 	if t.Reason != "" {
-		how += " (" + t.Reason + ")"
+		detail = append(detail, t.Reason)
+	}
+	if gone != "" {
+		detail = append(detail, gone)
+	}
+	if len(detail) > 0 {
+		how += " (" + strings.Join(detail, "; ") + ")"
 	}
 	return fmt.Sprintf("the agent stopped: its Pod ended %s, recorded %s", how, at)
+}
+
+// unknownContainersText names the record's containers that the kubelet
+// reported terminated as ContainerStatusUnknown with no finish time: the
+// kubelet could not locate them when the Pod ended (DESIGN-025 25.6). It is
+// empty when there are none.
+func unknownContainersText(t *v1alpha1.PrivateExecutorTerminalStatus) string {
+	var names []string
+	for _, c := range t.Containers {
+		if c.FinishedAt.IsZero() && c.Reason == containerStatusUnknown {
+			names = append(names, c.Name)
+		}
+	}
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return "the kubelet reported its container " + names[0] + " gone, with no finish time"
+	}
+	return "the kubelet reported its containers " + strings.Join(names, ", ") + " gone, with no finish time"
 }
 
 // stopNotProvenText says why no terminal record proves the agent's stop.

@@ -145,7 +145,9 @@ func (r *Reconciler) verifyExecutorTerminated(ctx context.Context, s *v1alpha1.A
 	if !podPhaseTerminal(&pod) {
 		return nil, errors.New("the recorded executor's phase is not terminal")
 	}
-	if err := allContainersTerminated(&pod); err != nil {
+	// A container the kubelet reports as ContainerStatusUnknown counts here,
+	// and only here, together with the checks below (DESIGN-025 25.6).
+	if err := allContainersTerminatedOrUnknown(&pod); err != nil {
 		return nil, err
 	}
 	for _, c := range pod.Status.Conditions {
@@ -195,8 +197,10 @@ func boundText(s string, n int) string {
 }
 
 // executorContainerTerminations lists every regular, init and ephemeral
-// container's termination. allContainersTerminated has already checked that
-// each one is terminated and that the lists match the spec.
+// container's termination. allContainersTerminatedOrUnknown has already
+// checked that each one is terminated and that the lists match the spec. A
+// ContainerStatusUnknown termination without a finish time is recorded
+// without one (DESIGN-025 25.6): the record never invents a time.
 func executorContainerTerminations(p *corev1.Pod) ([]v1alpha1.PrivateExecutorContainerTermination, error) {
 	var out []v1alpha1.PrivateExecutorContainerTermination
 	for _, statuses := range [][]corev1.ContainerStatus{p.Status.ContainerStatuses, p.Status.InitContainerStatuses, p.Status.EphemeralContainerStatuses} {
@@ -205,7 +209,11 @@ func executorContainerTerminations(p *corev1.Pod) ([]v1alpha1.PrivateExecutorCon
 			if t == nil || st.Name == "" || len(st.Name) > 63 {
 				return nil, errors.New("a container of the recorded executor has no recordable termination")
 			}
-			out = append(out, v1alpha1.PrivateExecutorContainerTermination{Name: st.Name, ExitCode: t.ExitCode, Reason: boundText(t.Reason, 128), FinishedAt: recordTime(t.FinishedAt.Time)})
+			c := v1alpha1.PrivateExecutorContainerTermination{Name: st.Name, ExitCode: t.ExitCode, Reason: boundText(t.Reason, 128)}
+			if !t.FinishedAt.IsZero() {
+				c.FinishedAt = recordTime(t.FinishedAt.Time)
+			}
+			out = append(out, c)
 		}
 	}
 	if len(out) == 0 || len(out) > maxTerminalContainers {

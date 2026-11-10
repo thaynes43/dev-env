@@ -115,14 +115,38 @@ func controlledBySession(p *corev1.Pod, s *v1alpha1.AgentSession) bool {
 	return owner != nil && owner.APIVersion == v1alpha1.GroupVersion.String() && owner.Kind == "AgentSession" && owner.Name == s.Name && owner.UID == s.UID
 }
 
+// containerStatusUnknown is the reason a kubelet gives a container that it
+// reports terminated without having seen it end: exit code 137, no start or
+// finish time (DESIGN-025 25.6).
+const containerStatusUnknown = "ContainerStatusUnknown"
+
+// allContainersTerminated reports whether every admitted regular, init and
+// ephemeral container has exactly one status, terminated with a finish time,
+// and none may restart on its own.
 func allContainersTerminated(p *corev1.Pod) error {
+	return containersTerminated(p, false)
+}
+
+// allContainersTerminatedOrUnknown is allContainersTerminated that also takes
+// one more shape: a status terminated with reason exactly
+// ContainerStatusUnknown and no running or waiting state, whatever its finish
+// time. Only the private terminal record (verifyExecutorTerminated) uses it,
+// beside its terminal-phase, Pod GC, node and lease checks (DESIGN-025 25.6);
+// every other stop proof keeps allContainersTerminated.
+func allContainersTerminatedOrUnknown(p *corev1.Pod) error {
+	return containersTerminated(p, true)
+}
+
+func containersTerminated(p *corev1.Pod, unknownEnds bool) error {
 	check := func(names []string, statuses []corev1.ContainerStatus) error {
 		if len(names) != len(statuses) {
 			return errors.New("executor has missing or extra admitted container status")
 		}
 		seen := map[string]bool{}
 		for _, status := range statuses {
-			if seen[status.Name] || status.State.Terminated == nil || status.State.Terminated.FinishedAt.IsZero() || status.State.Running != nil || status.State.Waiting != nil {
+			t := status.State.Terminated
+			ended := t != nil && (!t.FinishedAt.IsZero() || (unknownEnds && t.Reason == containerStatusUnknown))
+			if seen[status.Name] || !ended || status.State.Running != nil || status.State.Waiting != nil {
 				return errors.New("executor has a duplicate, uncertain or nonterminated current container")
 			}
 			seen[status.Name] = true
