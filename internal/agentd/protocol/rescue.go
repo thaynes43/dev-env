@@ -46,11 +46,11 @@ type RescueReport struct {
 	StrictHome *StrictHomeCheck `json:"strictHome,omitempty"`
 }
 
-// StrictHomeCheck is `agentd ctl rescue --strict-home`'s look outside
-// ~/repos (DESIGN-061 section 3): HOME itself, every directory directly
-// under ~/work, and every directory directly under HOME that is not hidden,
-// that holds .git, must be a clone under ~/repos or a worktree one of them
-// lists. When it is not, the rescue refuses before it commits or bundles
+// StrictHomeCheck is `agentd ctl rescue --strict-home`'s look for
+// repositories the rescue would not see (DESIGN-061 section 3): HOME itself,
+// every directory directly under ~/work, and every directory directly under
+// ~/repos or HOME that is not hidden, that holds .git, must be a clone under
+// ~/repos or a worktree one of them lists. When it is not, the rescue refuses before it commits or bundles
 // anything: the report is not OK, not CleanAndPushed and lists no repos.
 type StrictHomeCheck struct {
 	// Stray are the directories holding .git that are neither, sorted; at

@@ -32,11 +32,12 @@ const strictHomeShown = 4
 // finds clones only under ~/repos and their worktrees wherever they are, so a
 // clone anywhere else would be deleted unseen with the HOME. It looks one
 // level deep: HOME itself, every entry directly under ~/work, hidden ones
-// included, and every entry directly under HOME that is not hidden (tool
-// state such as ~/.claude and the shared volume's mount are skipped). An entry
-// counts when it is a directory, or a link to one, holding .git in any form.
-// It must then be a clone under ~/repos or a worktree one of them lists,
-// compared after links are resolved. It never descends and changes nothing.
+// included, and every entry directly under ~/repos or HOME that is not hidden
+// (tool state such as ~/.claude, a clone in progress in ~/repos and the shared
+// volume's mount are skipped). An entry counts when it is a directory, or a
+// link to one, holding .git in any form. It must then be a clone under ~/repos
+// (clonesIn: its .git a directory) or a worktree one of them lists, compared
+// after links are resolved. It never descends and changes nothing.
 func strictHome(ctx context.Context, r Runner, s Settings, clones []string) *protocol.StrictHomeCheck {
 	check := &protocol.StrictHomeCheck{}
 	var problems []string
@@ -67,7 +68,7 @@ func strictHome(ctx context.Context, r Runner, s Settings, clones []string) *pro
 	for _, dir := range []struct {
 		path   string
 		hidden bool
-	}{{s.WorkDir(), true}, {s.Home, false}} {
+	}{{s.WorkDir(), true}, {s.ReposDir(), false}, {s.Home, false}} {
 		entries, err := os.ReadDir(dir.path)
 		if isNotExist(err) {
 			continue

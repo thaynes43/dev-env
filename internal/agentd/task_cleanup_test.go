@@ -58,6 +58,10 @@ func TestStrictHomePassesAnOrdinaryHome(t *testing.T) {
 	}
 	rig.gitInit(t, filepath.Join(home, ".cache", "tool"))
 	rig.gitInit(t, filepath.Join(home, ".tool-state"))
+	// A clone in progress in ~/repos lives in a hidden directory, and a
+	// worktree in ~/repos is listed by its clone.
+	rig.gitInit(t, filepath.Join(rig.s.ReposDir(), ".demo-clone-tmp"))
+	gitRun(t, rig.g.env, clone, "worktree", "add", "-q", "-b", "third", filepath.Join(rig.s.ReposDir(), "demo-third"))
 	// A repository two levels down is a recorded limit (DESIGN-061 section 9).
 	rig.gitInit(t, filepath.Join(work, "scratch", "deep"))
 	writeFile(t, filepath.Join(rig.ws.Worktree, "edit.txt"), "dirty\n")
@@ -111,6 +115,14 @@ func TestStrictHomeRefusals(t *testing.T) {
 				t.Fatal(err)
 			}
 			gitRun(t, rig.g.env, rig.s.WorkDir(), "init", "-q", "--separate-git-dir", filepath.Join(rig.s.Home, ".gitdirs", "separate"), p)
+			return p
+		}, "stray repository "},
+		{"a separate-git-dir clone in ~/repos", func(t *testing.T, rig rescueRig) string {
+			p := filepath.Join(rig.s.ReposDir(), "detached-gitdir")
+			if err := os.MkdirAll(filepath.Join(rig.s.Home, ".gitdirs"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			gitRun(t, rig.g.env, rig.s.ReposDir(), "init", "-q", "--separate-git-dir", filepath.Join(rig.s.Home, ".gitdirs", "detached"), p)
 			return p
 		}, "stray repository "},
 		{"a worktree of a clone outside ~/repos", func(t *testing.T, rig rescueRig) string {
@@ -268,7 +280,9 @@ func newVerifyRig(t *testing.T) verifyRig {
 	return verifyRig{rescueRig: rig, id: strings.TrimPrefix(rep.Bundle.Dir, protocol.RescueRoot+"/"), dir: rep.Bundle.Dir, manifest: rep.Bundle.Manifest}
 }
 
-func (v verifyRig) abs(rel string) string { return filepath.Join(v.s.SharedDir, filepath.FromSlash(rel)) }
+func (v verifyRig) abs(rel string) string {
+	return filepath.Join(v.s.SharedDir, filepath.FromSlash(rel))
+}
 
 func (v verifyRig) editManifest(t *testing.T, edit func(*protocol.RescueManifest)) {
 	t.Helper()
@@ -412,7 +426,10 @@ func TestRescueVerifyFailures(t *testing.T) {
 	if _, err := VerifyRescue(v.s, ""); err == nil {
 		t.Error("no statfs, still an answer")
 	}
-	sharedStatfs = func(_ string, st *syscall.Statfs_t) error { *st = syscall.Statfs_t{Bsize: 4096, Blocks: 1, Bfree: 2}; return nil }
+	sharedStatfs = func(_ string, st *syscall.Statfs_t) error {
+		*st = syscall.Statfs_t{Bsize: 4096, Blocks: 1, Bfree: 2}
+		return nil
+	}
 	if _, err := VerifyRescue(v.s, ""); err == nil {
 		t.Error("contradictory figures, still an answer")
 	}

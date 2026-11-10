@@ -1730,7 +1730,9 @@ func TestPrivateHomeExpiryTaskBundle(t *testing.T) {
 			func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Refusal, e.RefusalAt = "bundle_missing", &later },
 			func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Refusal, e.RefusalAt = "", nil },
 			func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Phase, e.DeletingAt = v1alpha1.HomeExpiryDeleting, &later },
-			func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Phase, e.HomeDeletedAt = v1alpha1.HomeExpiryExpired, &later },
+			func(e *v1alpha1.PrivateHomeExpiryStatus) {
+				e.Phase, e.HomeDeletedAt = v1alpha1.HomeExpiryExpired, &later
+			},
 		}
 		for i, step := range steps {
 			next := get(t, s)
@@ -1771,7 +1773,9 @@ func TestPrivateHomeExpiryTaskBundle(t *testing.T) {
 				saved(e, verified(name))
 				e.Archive = archive()
 			}},
-			{"a bundle at Rescuing", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) { e.RescueStamp, e.Bundle = stamp, verified(name) }},
+			{"a bundle at Rescuing", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
+				e.RescueStamp, e.Bundle = stamp, verified(name)
+			}},
 			{"a bundle at Exporting", func(e *v1alpha1.PrivateHomeExpiryStatus, name string) {
 				saved(e, verified(name))
 				e.Phase = v1alpha1.HomeExpiryExporting
@@ -1862,7 +1866,9 @@ func TestPrivateHomeExpiryTaskBundle(t *testing.T) {
 			{"another digest", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Bundle.ManifestSHA256 = strings.Repeat("cd", 32) }},
 			{"another count", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Bundle.Bundles = 3 }},
 			{"other bytes", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Bundle.Bytes++ }},
-			{"verified again", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Bundle.VerifiedAt = metav1.NewTime(later.Add(time.Minute)) }},
+			{"verified again", func(e *v1alpha1.PrivateHomeExpiryStatus) {
+				e.Bundle.VerifiedAt = metav1.NewTime(later.Add(time.Minute))
+			}},
 			{"another manifest", func(e *v1alpha1.PrivateHomeExpiryStatus) {
 				e.Bundle.Manifest = "rescue/" + s.Name + "/" + stamp + "-2/manifest.json"
 			}},

@@ -1,7 +1,9 @@
 # DESIGN-061: Task-session clean-up within 7 days
 
 - **Status:** Proposed 2026-11-10 for coordinator review. Nothing is built,
-  switched on or deleted by this document.
+  switched on or deleted by this document. Source of section 2 items 1 and 7
+  (the `bundle` field and the three agentd commands, 3.1): OpenProject #519,
+  not installed.
 - **Decision:** [ADR-020](../adrs/020-task-session-cleanup.md) (Tom, 2026-11-10).
 - **Changes, for task Sessions only:** [DESIGN-025](025-private-home-expiry.md),
   [DESIGN-044](044-two-tier-home-retention.md), DESIGN-001 D-45 (dated notes
@@ -156,7 +158,7 @@ Session. A task record already holding `archive` keeps DESIGN-025's delete.
 | every worktree of each clone, wherever it lives, so `~/work` is covered | `listWorktrees` `:217-239` |
 | tracked edits and non-ignored untracked files, committed through a temporary index to `rescue/<worktree>-<stamp>`; the worktree, index and branch stay as they were; a detached HEAD on no ref is anchored the same way | `:30-40` |
 | every branch, tag and stash entry whose commit origin lacks | `unpushedRefs` `:483-516` |
-| **new, clean-up only (`--strict-home`):** every directory directly under `~/work`, or directly under HOME and not hidden, that holds `.git` must be a `~/repos` clone or a worktree one lists; otherwise "stray repository PATH". Without this, a clone outside `~/repos` would be deleted unseen. Hidden tool state (`~/.claude`, `~/.cache`) is not scanned | new |
+| **new, clean-up only (`--strict-home`):** every directory directly under `~/work`, or directly under HOME and not hidden, that holds `.git` must be a `~/repos` clone or a worktree one lists; otherwise "stray repository PATH". Without this, a clone outside `~/repos` would be deleted unseen. Hidden tool state (`~/.claude`, `~/.cache`) is not scanned. As built (3.1), HOME itself and the entries of `~/repos` are checked too | `task_cleanup.go` |
 
 **What is saved.** One thin bundle per clone with unpushed refs, against
 origin's default branch. agentd checks each with `git bundle verify`, copies it
@@ -185,6 +187,123 @@ templates): 30 days from the bundle, written minutes before the release.
 |---|---|
 | a merge, rebase, cherry-pick or revert in progress (`rescue.go:257-261`); an untracked nested repository (`:374-378`); over 50 MiB untracked (`:383-385`); a submodule off its commit, dirty, stashed or unpushed (`:319-360`); a stray repository | refused `rescue_refused`; the hold pod is removed, the slot freed and the HOME kept; listed (section 6) and tried once a day, last in the queue, in case a newer agent image handles it |
 | a fetch or a bundle write failed (transient) | the hold pod is kept and retried every 15 minutes (`HoldRetry`); `DevEnvRescueFailed` after 20 minutes; the breaker counts it |
+
+### 3.1 Command contract
+
+Built in OpenProject #519 (section 2, items 1 and 7). No controller calls
+these yet; without them every rescue, shelf and session behaves as before.
+Each command prints one JSON document on stdout, indented, and its errors on
+stderr. Exit 2 is always a usage error, with nothing on stdout.
+
+**`agentd ctl rescue --stop-agent --strict-home`**, in the hold pod. The
+flags may come in either order; `--strict-home` alone also works. It is
+refused (exit 2) twice over, with `--workspace-stop-proof-stdin`, or with any
+other argument. It prints `ctl rescue`'s report (`protocol.RescueReport`)
+with one more field, `strictHome`.
+
+| It looks at | It skips |
+|---|---|
+| HOME itself; every entry directly under `~/work`, hidden ones included; every entry directly under `~/repos` or HOME that is not hidden | hidden entries of HOME (`~/.claude`, `~/.cache`) and of `~/repos` (a clone in progress); the shared volume's mount; files; links to nothing; anything deeper |
+
+An entry counts when it is a directory, or a link to one, holding `.git` as a
+directory, a file or a link. It passes when its path, links resolved, is a
+clone under `~/repos` (`clonesIn`: `.git` is a directory) or a worktree that
+`git worktree list --porcelain` of one lists (bare and prunable entries left
+out). The check runs after the agent stop and before any commit or bundle.
+Adding `~/repos` and HOME itself to the ruling's two places is this story's:
+a separate-git-dir clone in `~/repos` is no clone to the rescue, so it would
+go unseen too.
+
+| Outcome | Report | Exit |
+|---|---|---|
+| passed | `"strictHome": {}`, then the rescue exactly as without the flag | 0, or 1 when that rescue is not OK |
+| refused | `ok: false`, `cleanAndPushed: false`, `repos: []`, no `bundle`; nothing committed, nothing written to the shared volume; `strictHome.stray` (sorted, at most 32) and `strictHome.refused` | 1 |
+| empty volume (D-55) | the usual empty report with `"strictHome": {}` | 0 |
+| a shared-workspace session | nothing on stdout; stderr: `--strict-home checks a private HOME` | 1 |
+
+`strictHome.refused` is one line. Causes come first, then each stray, joined by
+`"; "`, and after four items `and N more`:
+
+```json
+"strictHome": {
+  "stray": ["/home/dev/work/side-project"],
+  "refused": "stray repository /home/dev/work/side-project"
+}
+```
+
+The causes are `cannot list the worktrees of CLONE: ...` (its worktrees then
+also show as stray) and `cannot inspect PATH: ...` (a permission or I/O error
+on the entry or its `.git`).
+
+**`agentd ctl rescue-verify [--id <session>/<stamp>]`**, in the shelf. The id
+is the rescue's directory under `rescue/`, which can be `<stamp>-2`. Take it
+from the report's `bundle.dir` or `status.rescue.lastBundle`, not from the
+stamp. Exit 2 means extra arguments, `--id` without a value or with an empty
+one, or an id that `ParseRescueID` refuses. The operator calls it through
+`shelf.RescueVerifier.Verify(ctx, id)`. That call takes one of the replica's
+`ExecSlots` with `TryTake`, and answers `ErrSlotsBusy` without an exec when
+none is free. It checks the document against the exit status and gives a
+refusal back as a result, not an error. The exec timeout is `Shelf.Timeout`,
+a minute by default.
+
+```json
+{
+  "version": 1,
+  "id": "dev-env-1110-021204/20261110-0213",
+  "manifest": "rescue/dev-env-1110-021204/20261110-0213/manifest.json",
+  "manifestSHA256": "<64 hex>",
+  "bundles": 2,
+  "bytes": 41984,
+  "ok": true,
+  "sharedFreeBytes": 19327352832,
+  "sharedTotalBytes": 21474836480
+}
+```
+
+| Outcome | Document | Exit |
+|---|---|---|
+| without `--id` | `version`, `ok: true`, the two space figures (statfs: `Bavail` and `Blocks` times the fragment size, as df) | 0 |
+| every bundle matches | as above | 0 |
+| `bundle_missing` | `ok: false`, `refusal`, `detail`: the rescue's directory (or `rescue/<session>`), its manifest or a bundle it names is absent, or is not a regular file (a link counts as not) | 1 |
+| `bundle_mismatch` | the same: the manifest is over 4 MiB, not JSON, not version 1, names another session or directory, says `complete: false`, or lists a repo without a verified bundle, or a bundle outside its directory; or a bundle's size or SHA-256 differs from the manifest | 1 |
+| a failure: the shared volume not mounted, statfs failed or contradicts itself, an I/O error | nothing on stdout; stderr says why | 1 |
+
+On a refusal, `manifestSHA256`, `bundles` and `bytes` are what was read before
+it. They are for a person and prove nothing. The command reads the manifest
+once, hashes those bytes and parses the same bytes. It opens every file
+without following a final link and checks the open file. It holds
+`.shelf.lock` shared, so a prune or a restore's hold waits and other verifies
+do not; without `--id` it takes no lock. It writes nothing and runs no git.
+Hashing time grows with bundle size.
+
+**`agentd ctl drop-log`**, in the hold pod, with no arguments; the session
+comes from `AGENTD_SESSION`. It removes `logs/<session>.log` from the shared
+volume and nothing else: not another session's log, not a `.tmp-*` copy in
+progress, not the HOME's `~/work/<session>.log`.
+
+```json
+{ "session": "dev-env-1110-021204", "path": "logs/dev-env-1110-021204.log", "removed": true, "bytes": 2581 }
+```
+
+| Outcome | Exit |
+|---|---|
+| removed (`removed: true`, `bytes`), or there was none (`removed: false`; also when `logs/` is absent) | 0 |
+| a failure, nothing removed, nothing on stdout: no session or a name that is not one; an agent this pod started is running (its pid file names a live process); the shared volume not mounted; `logs/` is not a real directory; the copy is not a regular file; an I/O error | 1 |
+
+**What part 2 (#520) relies on.**
+
+- `strictHome` is absent from a report made without the flag. A clean-up
+  rescue whose report lacks it ran on an agentd without the check and is a
+  failure.
+- A non-empty `strictHome.refused` is a permanent refusal (`rescue_refused`).
+  It is never transient, so the breaker never counts it. Grade it before the
+  existing rules, which also flag such a report for its empty `repos`.
+- For `Verified`, the `Archived` write takes `manifestSHA256`, `bundles` and
+  `bytes` from an ok `rescue-verify` into `bundle`. Every later verify must be
+  ok with the same three, or the HOME is kept. `sharedFreeBytes` feeds the 2Gi
+  gate.
+- A `drop-log` failure does not keep the HOME. The 30-day prune is the
+  fallback (section 9).
 
 ## 4. How many at once, and the backlog
 
