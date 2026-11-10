@@ -118,8 +118,10 @@ These large files are references. Search them for the item you need:
   one line, none above U+FFFF; in Python, `json.dumps(..., ensure_ascii=False)`). The
   whole file is at most 2048 bytes. Write a temporary file in the same directory and
   rename it into place; a missing or invalid file publishes nothing. The first
-  snapshot at task exit is kept immutably and shown by `agent-run show`. Keep
-  secrets, prompts and transcripts out. See
+  snapshot at task exit is kept immutably and shown by `agent-run show` until the
+  Session is cleaned up: with the task clean-up on (ADR-020), 7 days after a task
+  ends, or minutes after a reap. Put what must outlive that on the tracker item
+  or in Git. Keep secrets, prompts and transcripts out. See
   [the format](docs/workflow-guide.md#retain-a-tasks-pr-and-handoff-after-pod-reclaim).
 - **Routine coordination goes to the parent or coordinator through `agent-run`**
   (Tom, 2026-10-30). Use `agent-run msg <session> -` with the text on stdin when TUI

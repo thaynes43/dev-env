@@ -1223,6 +1223,13 @@ succeeded. Read the task result, not those counts, for the outcome. See [the tas
 On images with task outcome retention (#320), a headless task can leave a small
 result that `agent-run show NAME` reads from Session status after its pod has
 been reclaimed or suspended. It requires no running pod or HOME access.
+
+**It lasts only as long as the Session.** With the operator's task clean-up on
+(ADR-020, DESIGN-061), a task Session is deleted, with its HOME, 7 days after
+its task ended, and minutes after a reap. Its `status.taskOutcome`, usage
+numbers and `agent-run show` go with it; only a git bundle of work that never
+reached GitHub stays, 30 days (`agent-run rescue list --session NAME`). Write
+what must outlive that to the tracker item or to Git before the task returns.
 Before returning, atomically write `~/work/<session>.outcome.json`:
 
 ```sh
@@ -1262,7 +1269,8 @@ The original pod sends the snapshot through the authenticated heartbeat. The
 operator validates it again and stores the first record immutably at
 `status.taskOutcome`. Repeated heartbeats, later edits and other pods cannot
 replace it. `agent-run show` prints its summary, PR URLs and heads in every
-phase; JSON output includes `taskOutcome`. No file means no outcome row.
+phase until the Session is cleaned up; JSON output includes `taskOutcome`. No
+file means no outcome row.
 The portal's Sessions detail shows the same record in a **Task outcome** panel
 in every phase, including after the pod is reclaimed, with its pull requests as
 links and Process exit kept as a separate row. It asks for the field with

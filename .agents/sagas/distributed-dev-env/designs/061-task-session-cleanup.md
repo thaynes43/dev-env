@@ -3,7 +3,8 @@
 - **Status:** Proposed 2026-11-10 for coordinator review. Nothing is built,
   switched on or deleted by this document. Source of section 2 items 1 and 7
   (the `bundle` field and the three agentd commands, 3.1): OpenProject #519,
-  not installed.
+  not installed. Source of items 2 to 6 and 8 to 12 (the operator's path,
+  default off): OpenProject #520, section 3.2, not installed.
 - **Decision:** [ADR-020](../adrs/020-task-session-cleanup.md) (Tom, 2026-11-10).
 - **Changes, for task Sessions only:** [DESIGN-025](025-private-home-expiry.md),
   [DESIGN-044](044-two-tier-home-retention.md), DESIGN-001 D-45 (dated notes
@@ -331,6 +332,114 @@ elsewhere.
   that phases move forward and that each phase has its fields, not every step:
   `Waiting` straight to `Deleting` with a bundle passes it, as with an
   archive, so the controller keeps the order.
+
+### 3.2 In source (part 2, OP520)
+
+Built on part 1 (#519) in `internal/controller`: `task_cleanup.go` (the
+policy, the queue, 1.1, the grading, the bundle verify, the finished
+Session's delete), `task_cleanup_text.go` (section 6's texts),
+`task_cleanup_metrics.go` (section 6's metrics), with the policy's branches in
+`private_expiry.go`, `private_expiry_delete.go`, `guard.go`,
+`private_history.go`, `reconciler.go` and `terminal_task_reclaim.go`; the five
+flags in `cmd/dev-env-operator`; `agent-run reap`, `show` and `help reap|rescue`
+in `internal/agentrun`. Nothing calls it while `--enable-task-session-cleanup`
+is off, and nothing is installed. Details the sections above leave open:
+
+- **Which policy owns a record** (`taskPolicy`). A record holding a `bundle` is
+  always the clean-up's, whatever the flag: with the flag off its hold pod
+  goes and the record stays where it is (section 8's stop). A record holding
+  an `archive`, or at `Exporting`, keeps DESIGN-025. Any other Session in the
+  scope of section 2 is the clean-up's while the flag is on. With the flag off
+  a record the clean-up made without a bundle falls back to DESIGN-025, whose
+  wait is now never shorter than 720 hours after `graceStart`
+  (`homeExpiryDueAt`), so a task record's short `dueAt` can never hurry
+  DESIGN-025. Every DESIGN-025 record already has a `dueAt` at least that far.
+- **Due time.** The record's `dueAt` is written as `graceStart` for a purged
+  Session and `graceStart` plus the grace for any other; the effective due time
+  is derived again on every judgement (`taskCleanupDueAt`), so a reap during
+  the wait makes it due at once and nothing else moves it. The owner's
+  release-now still skips the wait; a hold still stops every step.
+- **A Session the clean-up owns is never given a Pod again**, and its rescue is
+  never marked superseded, whatever `operatingMode` says: a Failed task's
+  `operatingMode` is Running, and a resume patches it, but a private task never
+  runs again (ADR-008). Without this, the rescue the clean-up relies on would
+  be superseded the moment its hold pod went. The rescue record is written
+  while the expiry record still names the hold pod it ran in
+  (`recordTaskRescue`), not while the Session wants its Pod gone, which a
+  Failed task does not.
+- **The terminal task reclaim** may still remove a finished task's ended
+  executor while its record is at `Waiting`; from `Rescuing` on the clean-up's
+  own step removes a Pod that still stands.
+- **1.1's wait** lives in the leader's memory: a new leader starts its 30
+  minutes again, so it waits longer, never shorter, and still mounts nothing.
+  A volume that is not CSI, a PersistentVolume that is not bound to the claim,
+  or a read that fails (the cluster-wide `get` on PersistentVolumes is H1's)
+  never shows the release.
+- **Grading** (`gradeTaskRescue`). A non-empty `strictHome.refused` is
+  `StrictHomeRefused`, graded first. A report without `strictHome`, or agentd
+  refusing `--strict-home` as a usage error (exit 2, an agent image from before
+  #519), is `StrictHomeUnchecked`, a failure. Section 3's transient row is
+  `FetchFailed` and `BundleFailed`: they keep the hold pod, run again after
+  HoldRetry and count in the breaker. Every other failure (`StrictHomeRefused`,
+  `StrictHomeUnchecked`, `WorktreeRefused`, `NotProven`,
+  `BootstrapInterrupted`, `RepoError`, `ReportMismatch`, `AgentNotStopped`,
+  `AgentStillRunning`) is `rescue_refused`: the hold pod goes first, then the
+  refusal is written and the slot frees. The breaker counts only
+  `StrictHomeUnchecked` of these, since a stale image fails every clean-up
+  alike. A day later the record goes back into the queue, last, with a new
+  hold intent, so a new hold pod, of the templates' image then, is the one
+  judged. A rescue that could not run at all (no exec) is Unknown, as in
+  DESIGN-025: nothing is recorded, and it is asked again in a minute.
+- **The queue.** Judged from the cache, without copying it, in one list that
+  serves every reconcile for 10 seconds; an admission always lists again and
+  then holds an in-memory reservation until the cache shows its record active
+  (at most 2 minutes). So the four workers never overshoot, and a second
+  operator, which ranks the same queue from its own cache, admits the same
+  head and no other. Records refused `volume_not_released` or `rescue_refused`
+  hold no slot and come back in through the queue at their retry. A finished
+  parent whose descendants run is remembered for 15 minutes, so it does not
+  block the queue behind it.
+- **Texts name no queue position.** Section 6's example ("2 run now ... 5 are
+  ahead of it") would rewrite the status of every queued Session each time
+  the queue moved. The text says "the clean-up is queued: at most 2 run at
+  once, purged sessions first, then the oldest", and a pause names its reason
+  and the floor, not the free bytes. The HomeExpiry condition starts with
+  "task clean-up (DESIGN-061)", which `agent-run` reads: the API has no field
+  that says the clean-up applies, so `agent-run reap` prints the task text only
+  when a condition names it, and keeps the private text otherwise.
+- **The finished Session's delete** is `deleteCleanedTaskSession`, after
+  `taskSessionRemovalAllowed` (in scope, not Reaping, its identity intact, the
+  record `Expired` for the bound HOME with a bundle), with UID and
+  resourceVersion preconditions and background propagation, from
+  `removeCleanedTaskSession` once uncached reads find no Pod and no claim. It
+  is one more row of `TestOnlyTheGuardDeletes`. The release is then
+  `releaseExpiredSession`'s, unchanged. `expiryVolumeRemovalAllowed` accepts a
+  kept `bundle` in place of an archive on a task Session's record only
+  (`keptBundle`); the verify the delete path runs first is now
+  `keptWorkVerified`, which `TestExpiryDeleteNeedsVerify` pins in the same
+  place `historyArchiveVerified` was.
+- **Metrics.** `dev_env_task_cleanup_sessions{state}` and
+  `..._oldest_seconds{state}` read 0 everywhere while the clean-up is off.
+  While it is on, DESIGN-025's three gauges leave out the Sessions the
+  clean-up owns, so no alert counts one twice. `..._duration_seconds` counts
+  from the start this leader saw to the Session's removal; after a leader
+  change that clean-up is not observed. `..._paused{reason}` reads the
+  leader's memory; another replica reports only `max_active_zero`.
+- **Rollout needs, in order (#521):** the CRD copy of part 1 (H1, before any
+  pin); the operator's cluster-wide `get` on `persistentvolumes` (H1); the
+  templates' agent image and the shelf at a release with `--strict-home`,
+  `drop-log` and `rescue-verify` (H2): with an older agent image every rescue
+  is refused as `StrictHomeUnchecked`, three of them pause the clean-up for an
+  hour, and every HOME stays; with an older shelf every Verified bundle's
+  verify fails (`shelf_unavailable`, HOME kept); then the pin (H3); then the
+  flags (H4, H5). The operator already
+  may delete Sessions, Pods and claims and patch claims in `dev-agents`.
+
+Tests: `internal/controller/task_cleanup_test.go`,
+`task_cleanup_refusal_test.go`, `task_cleanup_misc_test.go` and the envtest
+`task_cleanup_envtest_test.go`; `TestTaskCleanupFlagsAreExplicitDefaultOffAndBounded`
+in `cmd/dev-env-operator`; `TestReapTaskSessionUnderTheCleanupSaysWhatIsTrue`
+in `internal/agentrun`. The PR lists each against #520's acceptance.
 
 ## 4. How many at once, and the backlog
 

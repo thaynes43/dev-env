@@ -33,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	utilexec "k8s.io/client-go/util/exec"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -652,15 +653,17 @@ func taskRescueRefusedIn(s *v1alpha1.AgentSession, holdUID string) bool {
 }
 
 // transientTaskRescueReason: the clean-up's rescue failures that keep the hold
-// pod and run again (a fetch or a bundle write, section 3), and a report made
-// without the strict check (an agent image without it); the breaker counts
-// them. Every other failure is a refusal a person decides.
+// pod and run again (a fetch or a bundle write, section 3); the breaker counts
+// them. Every other failure is a refusal: the hold pod goes, the HOME stays,
+// and a new hold pod tries again in a day.
 func transientTaskRescueReason(reason string) bool {
-	switch reason {
-	case "FetchFailed", "BundleFailed", taskRescueUnchecked:
-		return true
-	}
-	return false
+	return reason == "FetchFailed" || reason == "BundleFailed"
+}
+
+// taskBreakerReason: the failures the breaker counts, the transient ones and
+// an agent image without the strict check, which fails every clean-up alike.
+func taskBreakerReason(reason string) bool {
+	return transientTaskRescueReason(reason) || reason == taskRescueUnchecked
 }
 
 // A bundle's result, as the record's string field holds it.
@@ -710,7 +713,9 @@ func (r *Reconciler) taskRescue(ctx context.Context, v *expiryView, obs *observa
 	}
 	log.FromContext(ctx).Info("running the task clean-up's rescue", "pod", hold.Name, "uid", hold.UID)
 	rep, err := tr.RescueStrictHome(ctx, hold)
-	if err != nil {
+	var exit utilexec.ExitError
+	unchecked := err != nil && errors.As(err, &exit) && exit.ExitStatus() == 2
+	if err != nil && !unchecked {
 		return r.expiryUnknown(ctx, v.s, obs, fmt.Errorf("the rescue could not run in the hold pod %s: %w", hold.Name, err))
 	}
 	// exec reaches a pod by name: the report counts only from this one.
@@ -721,6 +726,19 @@ func (r *Reconciler) taskRescue(ctx context.Context, v *expiryView, obs *observa
 		return r.expiryUnknown(ctx, v.s, obs, fmt.Errorf("the hold pod %s was replaced during the rescue (uid %s, now %s)", hold.Name, hold.UID, cur.UID))
 	}
 	rec, reason := gradeTaskRescue(v.s, hold, rep, recordTime(r.clock()))
+	if unchecked {
+		// agentd refused --strict-home as a usage error: an agent image from
+		// before it (DESIGN-061 3.1). A refusal, so the hold pod of that image
+		// goes, and one the breaker counts, so a stale image pauses the
+		// clean-up.
+		at := recordTime(r.clock())
+		rec = &v1alpha1.RescueStatus{Stamp: at.UTC().Format("20060102-1504"), At: &at, PodUID: string(hold.UID), Generation: v.s.Generation, Result: v1alpha1.RescueFailed,
+			Message: truncate("the hold pod's agent image does not know --strict-home, so no clean-up rescue ran: " + err.Error())}
+		if v.s.Status.Rescue != nil {
+			rec.LastBundle = v.s.Status.Rescue.LastBundle
+		}
+		reason = taskRescueUnchecked
+	}
 	written, err := r.recordTaskRescue(ctx, v, rec, reason)
 	if err != nil {
 		return r.expiryUnknown(ctx, v.s, obs, fmt.Errorf("record the rescue in the hold pod %s: %w", hold.Name, err))
@@ -731,7 +749,7 @@ func (r *Reconciler) taskRescue(ctx context.Context, v *expiryView, obs *observa
 	switch {
 	case rec.Result != v1alpha1.RescueFailed:
 		r.taskBreaker(false, v.now)
-	case transientTaskRescueReason(reason):
+	case taskBreakerReason(reason):
 		r.taskBreaker(true, v.now)
 	}
 	r.event(v.s, eventType(rec), "Rescue", reason, rec.Message)

@@ -9,6 +9,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -38,12 +40,14 @@ func refusedWorktree(session, why string) protocol.RescueReport {
 // nested repository; over 50 MiB untracked; a submodule off its commit; a stray
 // repository (--strict-home); and a clone missing from the report. Each is
 // rescue_refused: the hold pod goes, the slot frees, the HOME and the Session
-// stay, nothing reaches Archived, and the breaker counts none of them. A day
+// stay, nothing reaches Archived, and the breaker counts none of them but a
+// report without the strict check (an agent image from before it). A day
 // later the record goes back into the queue, last, and a new hold pod
 // rescues again.
 func TestTaskCleanupRescueRefusalsKeepTheHome(t *testing.T) {
 	for _, tc := range []struct {
 		name, says string
+		breaker    bool
 		report     func(session string) protocol.RescueReport
 	}{
 		{name: "merge in progress", says: "a merge is in progress (MERGE_HEAD)", report: func(s string) protocol.RescueReport {
@@ -69,6 +73,9 @@ func TestTaskCleanupRescueRefusalsKeepTheHome(t *testing.T) {
 			return protocol.RescueReport{Session: s, Stamp: "20261111-1200", OK: true, CleanAndPushed: true, Agent: &protocol.AgentStop{}, StrictHome: &protocol.StrictHomeCheck{},
 				Repos: []protocol.RepoRescue{{Path: "/home/dev/repos/other", Fetched: true}}}
 		}},
+		{name: "no strict check in the report", says: "ran without the strict HOME check", breaker: true, report: func(s string) protocol.RescueReport {
+			return cleanRescue(s, "20261111-1200")
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newTaskFixture(t, nil)
@@ -90,8 +97,8 @@ func TestTaskCleanupRescueRefusalsKeepTheHome(t *testing.T) {
 			if taskActive(e) {
 				t.Fatal("a refused record holds its slot")
 			}
-			if f.r.TaskCleanupPaused(*f.clock)[taskPauseRescueFailures] || f.r.taskCleanup.failures != 0 {
-				t.Fatal("the breaker counted a refusal")
+			if want := map[bool]int{false: 0, true: 1}[tc.breaker]; f.r.taskCleanup.failures != want {
+				t.Fatalf("the breaker counted %d, want %d", f.r.taskCleanup.failures, want)
 			}
 			if v := terminalCount(f.taskCounters.Refused, expiryRescueRefused); v != 1 {
 				t.Fatalf("rescue_refused counted %v, want 1", v)
@@ -125,10 +132,10 @@ func TestTaskCleanupRescueRefusalsKeepTheHome(t *testing.T) {
 	}
 }
 
-// TestTaskCleanupTransientRescueFailuresKeepTheHoldPod: a failed fetch, a
-// failed bundle write and a report without the strict check keep the hold pod
-// and the HOME, run again after HoldRetry, and count in the breaker, which
-// pauses new starts after three in a row.
+// TestTaskCleanupTransientRescueFailuresKeepTheHoldPod: a failed fetch and a
+// failed bundle write keep the hold pod and the HOME, run again after
+// HoldRetry, and count in the breaker, which pauses new starts after three in
+// a row.
 func TestTaskCleanupTransientRescueFailuresKeepTheHoldPod(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -146,7 +153,6 @@ func TestTaskCleanupTransientRescueFailuresKeepTheHoldPod(t *testing.T) {
 			rep.Repos[0].Bundle.Verified, rep.Repos[0].Bundle.Error = false, "write rescue/x: no space left on device"
 			return rep
 		}},
-		{name: "no strict check", report: func(s string) protocol.RescueReport { return cleanRescue(s, "20261111-1200") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newTaskFixture(t, nil)
@@ -595,4 +601,29 @@ func TestTaskCleanupVolumeGuardTakesOnlyATaskBundle(t *testing.T) {
 
 func errConflictForTest(obj client.Object) error {
 	return apierrors.NewConflict(corev1.Resource("persistentvolumeclaims"), obj.GetName(), errors.New("held by the test"))
+}
+
+// TestTaskCleanupOldAgentImageIsRefusedAndPausesTheCleanup: an agent image
+// from before --strict-home answers it with a usage error (exit 2). That is
+// recorded as a failed rescue, the hold pod goes so a later one can run a
+// newer image, the HOME stays, and the breaker counts it.
+func TestTaskCleanupOldAgentImageIsRefusedAndPausesTheCleanup(t *testing.T) {
+	f := newTaskFixture(t, nil)
+	f.run(t, 2)
+	f.toHold(t)
+	f.report(func(*corev1.Pod) (protocol.RescueReport, error) {
+		return protocol.RescueReport{}, fmt.Errorf("%w: agentd: usage: ctl status | rescue [--stop-agent]", utilexec.CodeExitError{Err: errors.New("command terminated with exit code 2"), Code: 2})
+	})
+	f.run(t, 6)
+	e := f.expiry(t)
+	if e.Refusal != expiryRescueRefused || f.named(t) != nil {
+		t.Fatalf("record %+v, pod %v; want rescue_refused and the hold pod gone", e, f.named(t))
+	}
+	if r := f.session(t).Status.Rescue; r == nil || r.Result != v1alpha1.RescueFailed || !strings.Contains(r.Message, "does not know --strict-home") {
+		t.Fatalf("status.rescue %+v", r)
+	}
+	if f.r.taskCleanup.failures != 1 {
+		t.Fatalf("the breaker counted %d, want 1", f.r.taskCleanup.failures)
+	}
+	f.kept(t)
 }
