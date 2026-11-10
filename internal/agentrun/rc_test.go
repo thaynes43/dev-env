@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -26,7 +27,8 @@ func rcView(level int) apiv1.Session {
 		v = runningOn(v, "synthetic-node")
 	}
 	if level >= 3 {
-		v.AgentStatus = &apiv1.AgentStatus{State: "running", ConversationID: "synthetic-conversation"}
+		// A remote Claude session that has come up waits for its first prompt: idle.
+		v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentIdle, ConversationID: "synthetic-conversation"}
 	}
 	if level >= 4 {
 		v.RemoteControl = &apiv1.RemoteControl{State: "registered"}
@@ -237,8 +239,33 @@ func TestRCBadOrAbsentLink(t *testing.T) {
 	}
 }
 
+// agentd reports a started agent as busy, idle or waiting, never as "running"
+// (OP531). Each of the three, with a conversation, is a started agent.
+func TestRCAgentStartedUsesAgentdStates(t *testing.T) {
+	for _, state := range []string{protocol.AgentBusy, protocol.AgentIdle, protocol.AgentWaiting} {
+		if !rcAgentStarted(&apiv1.AgentStatus{State: state, ConversationID: "c1"}) {
+			t.Fatalf("state %q with a conversation is not a started agent", state)
+		}
+		if rcAgentStarted(&apiv1.AgentStatus{State: state}) {
+			t.Fatalf("state %q without a conversation is a started agent", state)
+		}
+	}
+	for _, state := range []string{"", "running", "starting", protocol.AgentPending, protocol.AgentExited, protocol.AgentFailed, protocol.AgentInterrupted} {
+		if rcAgentStarted(&apiv1.AgentStatus{State: state, ConversationID: "c1"}) {
+			t.Fatalf("state %q is a started agent", state)
+		}
+	}
+	if rcAgentStarted(nil) {
+		t.Fatal("no status is a started agent")
+	}
+}
+
 func TestRCPodReadyIsNotAgentStarted(t *testing.T) {
-	for _, agent := range []*apiv1.AgentStatus{nil, {State: "running"}, {State: "starting", ConversationID: "id"}} {
+	// No status; a started state with no conversation; states that are not a started
+	// agent; and "running", a word agentd never reports.
+	for _, agent := range []*apiv1.AgentStatus{nil, {State: protocol.AgentIdle}, {State: protocol.AgentBusy, ConversationID: "  "},
+		{State: protocol.AgentPending, ConversationID: "id"}, {State: protocol.AgentExited, ConversationID: "id"},
+		{State: protocol.AgentFailed, ConversationID: "id"}, {State: "running", ConversationID: "id"}} {
 		h := newHarness(t)
 		rcServe(h, http.StatusCreated, func(int) apiv1.Session {
 			v := rcView(5)
@@ -866,7 +893,7 @@ func TestRCRejectedLoginIsAPhaseReasonOnly(t *testing.T) {
 			h := newHarness(t)
 			rcServe(h, http.StatusCreated, func(int) apiv1.Session {
 				v := rcView(5)
-				v.AgentStatus = &apiv1.AgentStatus{State: "running", ConversationID: "c1", Message: msg}
+				v.AgentStatus = &apiv1.AgentStatus{State: protocol.AgentBusy, ConversationID: "c1", Message: msg}
 				return v
 			}, http.StatusAccepted)
 			h.mustRun(ExitOK, rcArgs(h)...)
