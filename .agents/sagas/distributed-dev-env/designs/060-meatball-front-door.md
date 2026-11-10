@@ -1,9 +1,11 @@
 # DESIGN-060: Meatball front door
 
-- **Status:** Accepted for its first slice, 2026-11-10. Tom ruled on the three
-  questions the same day (section 11): the risky-access list, that a request
-  stays open until he answers, and what Meatball may start. Design only:
-  nothing is built, switched on or changed by this document.
+- **Status:** Proposed, 2026-11-10, with Tom's three rulings of the same day
+  recorded (section 11): the risky-access list, that a request stays open until
+  he answers, and what Meatball may start. Stories 1 and 3 to 6 can start from
+  it. Story 2 changes access and the Ask contract, so it starts with its own
+  ADR and an amendment to DESIGN-034 (section 8). Design only: nothing is
+  built, switched on or changed by this document.
 - **Tracking:** [Story OP517](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/517),
   under [Epic OP516](https://work.haynesnetwork.com/work_packages/516).
 - **Origin:** Tom, 2026-11-10, typed in coordinator session
@@ -129,6 +131,20 @@ A third class exists, the restricted "coordinator host" (`caller.go:147-153`,
 bound to one pod and a host annotation (`coordinator.go:68-79`) and is live only
 for a fixture (`--coordinator-hosts` names `dev-env-owned-native-fixture`).
 Meatball is not a pod, so it cannot use it.
+
+A fourth exists in code only, the named coordinator identity (DESIGN-042 6.4;
+`caller.go:70-76` and `:141-145`; `internal/templates/templates.go:120-137`). A
+profile may name the ServiceAccount `dev-env-coordinator-<name>`, and the API
+then takes that pod's token as a session caller. The operator has it on
+(`cmd/dev-env-operator/main.go:391`), but nothing uses it: no such account
+exists in dev-agents (live read: 0), no profile names one, and it has no role
+binding. `dev-env-agent-guard` matches `dev-env-agent` by username only, so such
+an account is under `dev-env-identity-guard` alone. The coordinators Meatball
+starts do not use it in the first slice: they run as `dev-env-agent` on `dev`,
+under both guards, with the rights section 7 lists. Its use comes with the
+middle column of section 8, when a coordinator has to hold a right its workers
+do not: workers inherit the parent's profile, so that also needs OP505's worker
+profile first.
 
 ## 5. The three approval mechanisms as they are
 
@@ -282,9 +298,43 @@ log-only notifier); the board is built and tested, with Pushover, the portal,
 Authentik sign-in and expiry; and it also covers approvals that are not grants
 (a destructive runbook step, spending). DESIGN-034 7 already expects one typed
 adapter per machine action, "grant UID/role/TTL" among them. The merge: when no
-policy decides a grant, the operator opens an approval Ask for it; Tom's answer
-on the portal calls the broker's existing `Decide` with his portal identity (the
+policy decides a grant, the operator opens an Ask for it; Tom's answer on the
+portal calls the broker's existing `Decide` with his portal identity (the
 AccessGrant type already documents `authentik/<username>` for this).
+
+**The adapter's contract (story 2 writes it down before any code).**
+DESIGN-034 7 says an approved Ask is a record and carries no machine
+permission, and that each adapter that consumes one needs its own typed
+validator, a one-use reservation and its own story. ADR-010 is still Proposed.
+This is a change to access and to the Ask contract, so story 2 opens with a new
+ADR (ADR-021, since DESIGN-061 takes ADR-020) and an amendment to DESIGN-034,
+and merges no code before both are accepted. This design's choice, for that
+ADR to record or overturn:
+
+- **A third Ask kind, `grant`,** opened only by the operator, never by a
+  session. Its scope is typed, not free text: the AccessGrant's UID, its scope
+  digest (`grantattest.ScopeDigest`, as a delegate decision binds), the grant's
+  type and target, and the TTL asked. The card's what and how-long come from
+  these fields.
+- **One use.** The answer is the Ask's existing set-once write. The adapter then
+  calls `Decide` for that grant UID and digest as `authentik/<username>`, with a
+  TTL no longer than the grant asked. `Decide` refuses a grant that is no longer
+  pending (`ErrNotPending`, `internal/broker/seams.go:90`), so a repeat cannot
+  grant twice. If `Decide` fails after the answer is stored, the operator
+  retries it for that Ask until the grant leaves Pending. A grant whose UID or
+  digest no longer matches ends refused, never as a new grant.
+- **Two clocks, kept apart.** How long the question stays open: until Tom
+  answers (his ruling, below). How long the access lasts: the grant's own TTL,
+  which the broker enforces and ends. The 24-hour cap (`AskScopeMaxTTL`) guards
+  a standing approval that nothing can revoke. A `grant` Ask leaves no standing
+  approval, because the answer is spent at once. So the cap and the answer
+  rules stay as they are for `approval` Asks, and a `grant` Ask has no
+  `scope.expiresAt` and no `expiresAt`.
+- **The grant's own timer.** A grant that waits on Tom is no longer denied at
+  30 minutes (`PendingTimeout`, `internal/broker/broker.go:69`). It ends when he
+  answers, when the asking session withdraws it, or when that session ends.
+- **A bound.** Nothing expires these by itself, so the ADR sets how many may be
+  open for one session and in all.
 
 ### While it waits, on timeout, and in one place
 
@@ -296,11 +346,17 @@ AccessGrant type already documents `authentik/<username>` for this).
   I cannot get back to it. The UI should be my failsafe at missed requests but
   it's super rare I'd say no to be honest, this is a home lab". So a risky
   request does not expire into a refusal. It stays open on the board until he
-  answers it. Today a grant times out at 30 minutes; that goes. The board's
-  24-hour ceiling on an Ask (DESIGN-034) has to be lifted or renewed for these.
-  If the asking session ends first, the request stays on the board marked
-  "the session that asked has ended", with what a yes would now do (start the
-  remaining step as a follow-up), so he can still get back to it.
+  answers it. Today a grant times out at 30 minutes; that goes for a grant
+  that waits on him. The board's 24-hour ceiling stays for approval Asks and
+  does not apply to these (the adapter's contract, above).
+- **If the asking session ends first,** its grant ends with it: an AccessGrant
+  is bound to the session that asked, so there is nothing left to grant to and
+  `Decide` cannot run. The request stays on the board, marked "the session that
+  asked has ended", with what was asked, by which session and for which story,
+  so he can still get back to it. In the first slice that card has a link to
+  the story and a Dismiss button, and no Approve button: a late yes would
+  grant nothing, and no component starts work from it. Starting the step again
+  is an ordinary coordinator start, by Meatball or Tom, on that story.
 - **One place, and it is the failsafe:** the portal's Asks page lists every
   open request, grants included, oldest first, including any he missed. `waiting_on_tom()` returns the same list to Meatball. A tracker item
   in Needs approval or Needs answer carries its Ask link, or the daily sweep
@@ -322,8 +378,8 @@ door has no such action.
 | # | Story | Changes | Size | Depends on |
 |---|---|---|---|---|
 | 1 | Asks board on | Refresh #264's held haynes-ops draft: Ask CRD, RBAC, operator `--enable-asks`, keeper `--enable-ask-notifications` with the portal origin | M | quiet hours Q-255-02 is open |
-| 2 | Grants that need Tom go through the board | Operator opens an approval Ask for a grant no policy decided; the portal answer calls `Decide`; a request stays open until Tom answers (section 8); `request_access` and `grant` help cut to 40 words | M | 1 |
-| 3 | Meatball's caller | `CallerPolicy` for one caller: CRD, API class, the ruled limits (Opus, Astra or Fable drivers; 4 hours, 4 workers, 2 at once), own-sessions-only reads and stops | M | none |
+| 2 | Grants that need Tom go through the board | First ADR-021 and the DESIGN-034 amendment (section 8, the adapter's contract). Then: the operator opens a `grant` Ask for a grant no policy decided; the portal answer calls `Decide`; no timeout while it waits on Tom; the "session has ended" card; `request_access` and `grant` help cut to 40 words | M | 1; ADR-021 and the DESIGN-034 amendment accepted |
+| 3 | Meatball's caller | `CallerPolicy` for one caller: CRD, API class, the ruled limits (drivers `claude-opus-5-5`, `gpt-6-astra` or `claude-fable-5-2`; 4 hours, 4 workers, 2 at once), own-sessions-only reads and stops | M | none |
 | 4 | Coordinator start | One operator route that fills in a coordinator task from a tracker item; the standard brief; `agent-run coordinator start, status, stop`; worker-count cap | M | 3 |
 | 5 | Front-door MCP server | Deployment, ServiceAccount, internal ingress, token from 1Password; the ten tools; `opwork groom` and `order` | M | 3, 4 |
 | 6 | Acceptance run | Meatball (or a stand-in with the same token) starts a coordinator on one ready story; cheaper workers reach a merged PR; one risky request reaches Tom's phone and he decides | S | 1, 2, 5 |
@@ -349,7 +405,8 @@ worker profile, named-ServiceAccount Jobs for runbooks (#494 row 5).
 *Ruled 2026-11-10, all three, by phone prompt in the coordinator's session:
 Q-060-01 "Yes, use this list (Recommended)"; Q-060-02 answered in his own
 words (section 8, "No answer is not a no"); Q-060-03 "Also allow Fable". The
-questions as drafted follow, for the record.*
+questions as drafted follow, for the record. The prompts he saw were put in
+plainer words; their text is in the OP517 comments of 2026-11-10.*
 
 **Q-060-01. The risky list.** Agents will ask you on your phone before they do
 anything in the right-hand column of section 8: the SSH key, Proxmox, Secrets,
@@ -362,9 +419,9 @@ phone.
 
 **Q-060-02. How long a risky request waits.** When an agent asks you for risky
 access and you do not answer, how long should it wait before taking it as no? It
-keeps working on other things meanwhile. Today it is 30 minutes, and 5 of 42
-requests were lost that way. Options: 30 minutes; 8 hours; 24 hours (the most
-the board allows). *Recommended:* 8 hours.
+keeps working on other things meanwhile. Today it is 30 minutes, and 6 of the
+66 grant records ended that way (section 5). Options: 30 minutes; 8 hours; 24
+hours (the most the board allows). *Recommended:* 8 hours.
 
 **Q-060-03. What Meatball may start without asking.** Proposed: coordinators on
 Opus 5.5 or GPT-6 Astra, not Fable; each up to 4 hours and 4 workers at a time;
@@ -378,7 +435,9 @@ a time, 2 hours). *Recommended:* as proposed.
 - How `approvedBy: chat/Tom` was written. The journals say a local agent on the
   Mac did it; no dev-env code writes that value.
 - The OP494 audit counts 6 owner approvals; the live records show 5 (4
-  `chat/Tom`, 1 by Tom's ServiceAccount).
+  `chat/Tom`, 1 by Tom's ServiceAccount). OP494 comment 6046 counts 5 timeouts
+  in 42 requests; the live records show 6 in 66. This design uses the live
+  read.
 - Whether Meatball can reach the internal ingress from where it runs.
 - Whether the bot token may start `publish-agent.yml` by hand, the fallback a
   release can need.
