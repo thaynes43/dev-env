@@ -9,7 +9,11 @@
   data (section 11). Slice 1 (section 7, steps 1 to 8) is built in
   [PR #1018](https://github.com/thaynes43/dev-env/pull/1018); step 9
   (haynes-ops) is not done, so nothing is deployed. Section "Slice 1 as
-  built" states where the build differs (2026-11-10).
+  built" states where the build differs (2026-11-10). Section "Totals that
+  survive clean-up" is the design for
+  [OP524](https://work.haynesnetwork.com/work_packages/524), ruled 2026-11-10
+  by dev-env-fable-coordinator-1109: one annotation on the Session, counters
+  in the operator, no CRD change.
 - **Tracking:** [Story OP509](https://work.haynesnetwork.com/work_packages/509),
   project haynes-engineering: "Usage reporting that keeps working: weekly
   usage and resets without approval windows or a host session that
@@ -522,3 +526,159 @@ Known limits:
 - **Section 8 is built (OP523).** A reading older than 30 minutes is greyed
   with its age in plain words. After the reported reset, the percent is not
   shown. With no reading, Claude and Codex say nothing has reported yet.
+
+## Totals that survive clean-up
+
+**Status:** design, ruled 2026-11-10 by coordinator
+dev-env-fable-coordinator-1109 for
+[story OP524](https://work.haynesnetwork.com/work_packages/524). The counters
+are built in `internal/usagetotals`. ADR-020 consequence C-54 and DESIGN-061
+follow-up F7 ask for tokens and cost that remain after a finished task
+Session is deleted. The portal database keeps logins only, and the
+operator's session metrics are gauges read from the Sessions that still
+exist (`internal/controller/metrics.go`, `SessionCollector`), so a deleted
+Session takes those series with it. These counters are the store that
+remains. No CRD field and no new object.
+
+### The mark
+
+The mark is an annotation on the AgentSession. The leader reads it before
+adding and writes it after adding, or writes the skip below without adding.
+
+| Field | Value |
+| --- | --- |
+| Key | `dev-env.haynesops.com/task-usage-counted` |
+| Value, when the Session has a 64-hex usage observation id | `observation/<id>` |
+| Value, when a ready Session with no mark finished more than 168 hours before this reconcile | `skipped/older-than-168h` |
+| Value otherwise | `generation/<metadata.generation>` |
+
+A Cursor task result with no usage observation uses the generation form.
+Any non-empty value means the leader has already decided this Session, so
+it is left alone. A skip added nothing. The other values name the
+observation id that was counted, or the generation when there was no
+observation id, so a later observation is not added again. The leader does
+not rewrite a mark that is already there.
+
+The same process also remembers each Session it has added, until that
+Session is deleted. If the annotation write fails, or the cache has not yet
+shown the annotation, a later reconcile writes that same value again and
+does not add again. The memory lasts only for the process. After a restart
+the annotation is the only mark.
+
+### Who adds, and in what order
+
+Only the leader adds. The controller runs on the leader only, and the
+reconcile checks the election again. A replica that is not the leader
+leaves the counters at zero, so a sum of the two replicas does not double.
+The operator's default is leader election on. With leader election off
+there is no leader to trust, and nothing is added.
+
+A ready Session that finished more than 168 hours before this reconcile is
+marked skipped and not added, as "Sessions already present" describes, and
+the following steps do not run. For every other Session that is ready and
+has no mark:
+
+1. Make sure every series this Session will add to exists in this process,
+   created at 0, and remember when each was created. Reading the metrics
+   endpoint does not change a series.
+2. If any of those series is younger than five minutes, add nothing and
+   look again after the remainder. The five minutes is a settle time in
+   the operator. It does not depend on the scrape interval.
+3. When every series has existed for five minutes, add every amount for
+   this Session, then write the annotation, in that order, in the same
+   reconcile.
+
+A series that already settled in this process does not wait again. A
+Session whose series are not all settled waits for the youngest. That
+covers a new label, the first sight of Sessions that already exist, and
+the first add after a restart.
+
+If the process dies after the add and before the annotation, the restart
+does not see a mark, so that one Session is counted again. That double
+count is accepted. A silent loss, where the add is dropped and the restart
+then skips the Session, is not: the annotation is written only after the
+add.
+
+### What is counted
+
+Claude and Codex are counted when `status.usageObservation.resultState` is
+`Final`. Cursor is counted when `status.taskResult` is recorded, and then
+only as sessions and wall-clock seconds. Cursor reports no tokens or cost
+(R-08), so those series are not used for it. A partial observation is left
+until it is final. Conversation usage and captured child usage are not
+these counters.
+
+Tokens and cost use a served model when the final observation lists one,
+and the requested model otherwise. The session and seconds series use the
+requested model (`status.usageObservation.source.requestedModel`, or
+`spec.model` when the observation has none). The repository is `spec.repo`.
+A model or repository that is not a short name,
+`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`, is the label `other`. Agent and cost
+kind are the closed sets `claude`, `codex`, `cursor` and
+`ProviderCLIEquivalentEstimate`, `Unknown`; anything else is `other`. The
+token label is `input`, `output`, `cache_read` (cache read) or
+`cache_write` (cache creation). Unknown is not zero: a Reported amount is
+added, and an Unknown amount is omitted. A Reported zero does not open a
+series. The USD figure is the observation's decimal string, added as a
+float.
+
+| Metric | Labels | Unit | When it rises |
+| --- | --- | --- | --- |
+| `dev_env_task_usage_tokens_total` | `agent`, `model`, `repository`, `cost_kind`, `token` | tokens | a Reported amount on a final usage observation |
+| `dev_env_task_usage_cost_usd_total` | `agent`, `model`, `repository`, `cost_kind` | USD | a Reported cost on that observation |
+| `dev_env_task_usage_sessions_total` | `agent`, `model` (the requested model) | sessions | one, when the observation is final, or for `cursor` when `status.taskResult` is recorded |
+| `dev_env_task_usage_seconds_total` | `agent`, `model` (the requested model) | seconds | whole seconds from `metadata.creationTimestamp` to `status.agent.task.finishedAt`, when that finish is present and not earlier |
+
+A Session with no Reported tokens or cost adds to the session and seconds
+counters only. Codex cost is Unknown today. Seconds are truncated. A
+missing finish, or a finish that is not after creation, adds no seconds.
+
+### Sessions already present
+
+A ready Session with no mark whose task finished more than 168 hours
+before the leader's reconcile sees it is marked `skipped/older-than-168h`
+and not added; a Session inside those 168 hours is added after the settle,
+and any mark already present, including that skip, is left alone. Finished
+is `status.agent.task.finishedAt`, or `metadata.creationTimestamp` when
+that is absent or zero. The documented weekly query would otherwise report
+the whole history as this week's cost; the older history is the
+coordinator's per-Session export attached to OpenProject #518 before the
+backlog is cleaned.
+
+### Restart and Prometheus
+
+The counters live in the leader's process and start at zero when that
+process starts. A new series is exported at 0 for five minutes, then the
+first add lands, so `increase` counts the step from 0 when a scrape saw
+the series during those five minutes. A Session the previous process
+already marked is not added. The old leader's series stay where they were.
+Sum the replicas. The non-leader replica adds nothing, so its series stay
+absent.
+
+Weekly cost:
+
+```promql
+sum by (agent, model, repository) (increase(dev_env_task_usage_cost_usd_total[7d]))
+```
+
+### Known limits
+
+- The totals last as long as Prometheus keeps the series.
+- One Session can be counted twice when the process dies after the add and
+  before the annotation. That window is accepted.
+- If no scrape lands during the five minutes after a series is created in
+  a process, `increase` does not see that series' first add. The raw
+  counter still holds it.
+- Totals appear up to five minutes after a restart, or after a new label
+  is first used.
+- A Session deleted before its series have settled is not counted.
+- The same crash before any scrape, while the Session still exists, is
+  recovered by the restart's add. The same crash after the Session has
+  already been deleted leaves that add out, because the Session is no
+  longer there to count.
+- A float cannot hold every USD decimal. The amount is the observation's
+  decimal, added as a float.
+- Two model names that fail the short-name rule share the label `other`,
+  and so do two such repositories.
+- An annotation written by hand with any non-empty value is a mark. It is
+  not added, and it is not rewritten.

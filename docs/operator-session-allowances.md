@@ -167,3 +167,47 @@ so agent images can roll at any time.
 
 To turn it off, remove the flag. The ConfigMap keeps its last readings and is
 no longer read or written.
+
+## Task usage totals
+
+These counters are separate from the allowance readings above. A finished
+task Session is deleted after clean-up, and the tokens and cost in its
+status go with it (ADR-020 C-54). The operator's leader adds that Session
+to the counters below once, then writes the annotation
+`dev-env.haynesops.com/task-usage-counted`. Prometheus keeps the totals
+after the Session is gone. The design, including the annotation value and
+the known limits, is DESIGN-059's section "Totals that survive clean-up".
+
+| Metric | Labels | Unit |
+| --- | --- | --- |
+| `dev_env_task_usage_tokens_total` | `agent`, `model`, `repository`, `cost_kind`, `token` (`input`, `output`, `cache_read`, `cache_write`) | tokens |
+| `dev_env_task_usage_cost_usd_total` | `agent`, `model`, `repository`, `cost_kind` | USD |
+| `dev_env_task_usage_sessions_total` | `agent`, `model` (the requested model) | sessions |
+| `dev_env_task_usage_seconds_total` | `agent`, `model` (the requested model) | seconds |
+
+Cursor adds sessions and seconds only. The series are on the operator's
+existing metrics endpoint. A replica that is not the leader stays at zero.
+
+Cost for one week:
+
+```promql
+sum by (agent, model, repository) (increase(dev_env_task_usage_cost_usd_total[7d]))
+```
+
+`increase` keeps the week across an operator restart. A new series stays
+at 0 for five minutes, then takes its first add. A Session that already
+has the annotation is not added again. If no scrape lands during the five
+minutes after a series is created in a process, `increase` does not see
+that series' first add; the raw counter still holds it. Totals appear up
+to five minutes after a restart, or after a new label is first used. A
+Session deleted before its series have settled is not counted.
+
+A ready Session with no mark whose task finished more than 168 hours
+before the leader's reconcile sees it is marked `skipped/older-than-168h`
+and not added; a Session inside those 168 hours is added after the settle,
+and any mark already present, including that skip, is left alone. Finished
+is `status.agent.task.finishedAt`, or `metadata.creationTimestamp` when
+that is absent or zero. The documented weekly query would otherwise report
+the whole history as this week's cost; the older history is the
+coordinator's per-Session export attached to OpenProject #518 before the
+backlog is cleaned.
