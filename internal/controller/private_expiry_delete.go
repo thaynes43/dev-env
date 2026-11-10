@@ -262,14 +262,22 @@ func (r *Reconciler) recheckArchivedRefusal(ctx context.Context, v *expiryView, 
 // removeExpiredHome is Deleting's step, on every attempt (6.5 points 1, 2, 4
 // and 5): the verify, the re-check and the Pod check, in this call path, then
 // the claim's delete with its UID and resourceVersion and the finalizer's lift
-// (deleteExpiryHome). A claim that is gone makes the record Expired. A claim
-// whose delete has started and whose finalizer is already lifted waits for
-// Kubernetes, with nothing left for the operator to remove.
+// (deleteExpiryHome). A claim that is gone makes the record Expired once a
+// task record's kept work verifies again; a refusal leaves the record and the
+// Session. A claim whose delete has started and whose finalizer is already
+// lifted waits for Kubernetes, with nothing left for the operator to remove.
 func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
 	if r.taskPolicy(v.s) && r.taskCleanupParked(v.s, obs) {
 		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
 	}
 	if homeGone(v) {
+		// The claim is already gone, so there is no volume left to check.
+		// The kept work still has to verify before the record becomes Expired.
+		if r.taskPolicy(v.s) {
+			if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
+				return res, stop, err
+			}
+		}
 		return r.recordHomeExpired(ctx, v, obs)
 	}
 	if c := v.claim; !c.DeletionTimestamp.IsZero() && !controllerutil.ContainsFinalizer(c, Finalizer) {
@@ -284,6 +292,11 @@ func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *
 		return res, stop, err
 	}
 	if homeGone(after) {
+		if r.taskPolicy(after.s) {
+			if ok, res, stop, err := r.keptWorkVerified(ctx, after, obs); !ok {
+				return res, stop, err
+			}
+		}
 		return r.recordHomeExpired(ctx, after, obs)
 	}
 	if ref := noPodUsesHome(after); ref != nil {

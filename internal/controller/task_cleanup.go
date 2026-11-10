@@ -165,7 +165,7 @@ type taskCleanupState struct {
 	// (taskAttemptDeadline); ended: by Session, how many of this attempt's
 	// hold pods ended with none graded; graded: the hold
 	// pods whose rescue this operator ran with --strict-home and graded, by
-	// stamp.
+	// stamp. A graded entry goes where that hold's attempt entry goes.
 	attempt     map[types.UID]time.Time
 	graded      map[types.UID]string
 	ended       map[types.UID]int
@@ -194,11 +194,15 @@ func (st *taskCleanupState) prune(now time.Time) {
 			delete(st.admittedAt, uid)
 		}
 	}
-	for _, m := range []map[types.UID]time.Time{st.releaseWait, st.attempt} {
-		for uid, at := range m {
-			if now.Sub(at) > taskMemoryKeep {
-				delete(m, uid)
-			}
+	for uid, at := range st.releaseWait {
+		if now.Sub(at) > taskMemoryKeep {
+			delete(st.releaseWait, uid)
+		}
+	}
+	for uid, at := range st.attempt {
+		if now.Sub(at) > taskMemoryKeep {
+			delete(st.attempt, uid)
+			delete(st.graded, uid)
 		}
 	}
 	for uid, until := range st.children {
@@ -856,6 +860,7 @@ func (r *Reconciler) taskHoldEnded(uid, hold types.UID) int {
 		if _, graded := st.graded[hold]; !graded {
 			st.ended[uid]++
 		}
+		delete(st.graded, hold)
 	}
 	return st.ended[uid]
 }
@@ -870,6 +875,7 @@ func (r *Reconciler) taskEndAttempt(uid, hold types.UID) {
 	delete(st.ended, uid)
 	if hold != "" {
 		delete(st.attempt, hold)
+		delete(st.graded, hold)
 	}
 }
 
@@ -1351,8 +1357,9 @@ func deleteCleanedTaskSession(ctx context.Context, c client.Client, s *v1alpha1.
 
 // removeCleanedTaskSession is the finished Session's end (DESIGN-061 2): once
 // its record is Expired, uncached reads find no Pod of its name and no HOME
-// claim, and the guard allows it, it is deleted; the next reconcile releases
-// it like a reaped one (6.6).
+// claim, and the guard allows it, the kept work verifies again and then it
+// is deleted. A refusal is recorded the same way as before the HOME delete,
+// and the Session stays. The next reconcile releases it like a reaped one (6.6).
 func (r *Reconciler) removeCleanedTaskSession(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
 	if r.taskCleanupParked(v.s, obs) {
 		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, false, nil
@@ -1364,6 +1371,10 @@ func (r *Reconciler) removeCleanedTaskSession(ctx context.Context, v *expiryView
 	if v.pod != nil || len(v.mounts) > 0 || !homeGone(v) {
 		obs.homeExpiry = &homeExpiryNote{reason: taskReasonDeleted, message: "a Pod or the HOME claim of the session is still there; the session is removed once none is"}
 		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
+	}
+	// The claim is already gone, so there is no volume left to check.
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
+		return res, stop, err
 	}
 	if err := deleteCleanedTaskSession(ctx, r.Client, v.s); err != nil {
 		switch {

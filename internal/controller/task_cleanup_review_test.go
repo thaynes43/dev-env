@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -572,4 +574,199 @@ func TestTaskCleanupAllowlistRecheckedAfterLastVerify(t *testing.T) {
 	})
 	f.run(t, 1)
 	f.kept(t)
+}
+
+// taskFinishedFixture is a finished task past its grace, before a hold pod.
+func taskFinishedFixture(t *testing.T) *taskFixture {
+	t.Helper()
+	f := newTaskFixture(t, func(tf *terminalFixture) {
+		tf.s.DeletionTimestamp = nil
+		tf.s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+		tf.pod = nil
+	})
+	f.tick(t, f.observed.Add(DefaultTaskCleanupGrace+time.Minute))
+	return f
+}
+
+// taskRunUntil reconciles until done, and fails if that does not happen.
+func taskRunUntil(t *testing.T, f *taskFixture, done func() bool) {
+	t.Helper()
+	for range 24 {
+		if done() {
+			return
+		}
+		f.run(t, 1)
+	}
+	t.Fatalf("not reached: record %+v sessionGone=%v claimGone=%v", f.expiry(t), f.sessionGone(t), f.claimGone(t))
+}
+
+func taskSetVerified(f *taskFixture) (id, manifest string) {
+	id = f.s.Name + "/20261111-1200"
+	manifest = "rescue/" + id + "/manifest.json"
+	f.verifier.set(id, protocol.RescueVerifyResult{OK: true, Manifest: manifest, ManifestSHA256: testDigest, Bundles: 1, Bytes: 2048})
+	return id, manifest
+}
+
+// TestTaskCleanupKeptWorkVerifiedWhenTheClaimIsGone is the coordinator's
+// follow-up on PR #1036: a task record whose HOME claim is already gone
+// verifies its kept work before Expired, and again before the Session is
+// deleted. A refusal leaves the Session. A clean and pushed record uses the
+// check keptWorkVerified already makes.
+func TestTaskCleanupKeptWorkVerifiedWhenTheClaimIsGone(t *testing.T) {
+	t.Run("claim already gone and the bundle missing", func(t *testing.T) {
+		f := newTaskFixture(t, nil)
+		id, _ := taskSetVerified(f)
+		f.toHold(t)
+		f.report(func(p *corev1.Pod) (protocol.RescueReport, error) {
+			return verifiedRescue(p.Name, "20261111-1200", "20261111-1200"), nil
+		})
+		taskRunUntil(t, f, func() bool {
+			e := f.expiry(t)
+			return e != nil && e.Phase == v1alpha1.HomeExpiryDeleting
+		})
+		if f.claimGone(t) {
+			t.Fatal("the claim was already gone at Deleting")
+		}
+		// The delete lands, and the shelf copy is gone before the next
+		// reconcile records Expired.
+		f.deleteErr = func(obj client.Object) error {
+			if _, ok := obj.(*corev1.PersistentVolumeClaim); ok {
+				f.verifier.mu.Lock()
+				delete(f.verifier.answers, id)
+				f.verifier.mu.Unlock()
+			}
+			return nil
+		}
+		f.run(t, 4)
+		e := f.expiry(t)
+		if e.Phase == v1alpha1.HomeExpiryExpired || e.HomeDeletedAt != nil || e.Refusal != expiryBundleMissing {
+			t.Fatalf("record %+v; want Deleting, %s, and not Expired", e, expiryBundleMissing)
+		}
+		if !f.claimGone(t) {
+			t.Fatal("the claim is not gone; this did not exercise the already-gone path")
+		}
+		if f.sessionGone(t) {
+			t.Fatal("the Session is gone")
+		}
+	})
+
+	t.Run("expired bundle tampered before the session delete", func(t *testing.T) {
+		f := taskFinishedFixture(t)
+		id, manifest := taskSetVerified(f)
+		f.toHold(t)
+		f.report(func(p *corev1.Pod) (protocol.RescueReport, error) {
+			return verifiedRescue(p.Name, "20261111-1200", "20261111-1200"), nil
+		})
+		taskRunUntil(t, f, func() bool {
+			e := f.expiry(t)
+			return e != nil && e.Phase == v1alpha1.HomeExpiryExpired
+		})
+		if f.sessionGone(t) || !f.session(t).DeletionTimestamp.IsZero() {
+			t.Fatal("the Session was already deleted at Expired")
+		}
+		f.verifier.set(id, protocol.RescueVerifyResult{OK: true, Manifest: manifest, ManifestSHA256: strings.Repeat("e", 64), Bundles: 1, Bytes: 2048})
+		f.run(t, 3)
+		if f.sessionGone(t) || !f.session(t).DeletionTimestamp.IsZero() {
+			t.Fatal("the Session was deleted after the bundle was tampered")
+		}
+		if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryExpired || e.Refusal != expiryBundleMismatch {
+			t.Fatalf("record %+v; want Expired and %s", e, expiryBundleMismatch)
+		}
+	})
+
+	t.Run("clean and pushed rescue no longer names the hold", func(t *testing.T) {
+		f := taskFinishedFixture(t)
+		f.toHold(t)
+		f.passRescue()
+		taskRunUntil(t, f, func() bool {
+			e := f.expiry(t)
+			return e != nil && e.Phase == v1alpha1.HomeExpiryExpired
+		})
+		if e := f.expiry(t); e.Bundle == nil || e.Bundle.Result != bundleCleanAndPushed {
+			t.Fatalf("record %+v; want a clean and pushed bundle", e)
+		}
+		f.updateStatus(t, func(st *v1alpha1.AgentSessionStatus) { st.Rescue.Superseded = true })
+		f.run(t, 3)
+		if f.sessionGone(t) || !f.session(t).DeletionTimestamp.IsZero() {
+			t.Fatal("the Session was deleted after status.rescue stopped naming the verdict")
+		}
+		if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryExpired || e.Refusal != expiryBundleMismatch {
+			t.Fatalf("record %+v; want Expired and %s", e, expiryBundleMismatch)
+		}
+	})
+
+	t.Run("happy path still removes the session", func(t *testing.T) {
+		f := taskFinishedFixture(t)
+		taskSetVerified(f)
+		f.toHold(t)
+		f.report(func(p *corev1.Pod) (protocol.RescueReport, error) {
+			return verifiedRescue(p.Name, "20261111-1200", "20261111-1200"), nil
+		})
+		taskRunUntil(t, f, func() bool { return f.sessionGone(t) })
+		if !f.claimGone(t) {
+			t.Fatal("the HOME claim stays")
+		}
+	})
+
+	t.Run("clean and pushed still removes the session", func(t *testing.T) {
+		f := taskFinishedFixture(t)
+		f.toHold(t)
+		f.passRescue()
+		taskRunUntil(t, f, func() bool { return f.sessionGone(t) })
+		if calls := f.verifier.idCalls(); len(calls) != 0 {
+			t.Fatalf("a clean and pushed rescue was verified on the shelf: %v", calls)
+		}
+		if !f.claimGone(t) {
+			t.Fatal("the HOME claim stays")
+		}
+	})
+}
+
+// TestTaskCleanupEndedAttemptDropsGradedHold: graded keeps one entry per hold
+// pod, and that entry goes where the attempt entry goes.
+func TestTaskCleanupEndedAttemptDropsGradedHold(t *testing.T) {
+	f := newTaskFixture(t, nil)
+	hold := k8stypes.UID("hold-graded")
+	f.r.taskAttemptSince(hold, *f.clock)
+	f.r.taskMarkGraded(hold, "20261111-1200")
+	f.r.taskEndAttempt(f.s.UID, hold)
+	if taskGradedHas(f, hold) {
+		t.Fatal("graded still has the hold after the attempt ended")
+	}
+
+	ended := k8stypes.UID("hold-ended")
+	f.r.taskAttemptSince(ended, *f.clock)
+	f.r.taskMarkGraded(ended, "20261111-1201")
+	if n := f.r.taskHoldEnded(f.s.UID, ended); n != 0 {
+		t.Fatalf("a graded hold counted as ungraded: %d", n)
+	}
+	if taskGradedHas(f, ended) {
+		t.Fatal("graded still has a hold whose attempt entry was removed")
+	}
+
+	old, fresh := k8stypes.UID("hold-old"), k8stypes.UID("hold-fresh")
+	st := &f.r.taskCleanup
+	st.mu.Lock()
+	st.attempt[old] = f.clock.Add(-taskMemoryKeep - time.Second)
+	st.graded[old] = "20261111-1202"
+	st.attempt[fresh] = *f.clock
+	st.graded[fresh] = "20261111-1203"
+	st.prune(*f.clock)
+	_, oldLeft := st.graded[old]
+	_, freshLeft := st.graded[fresh]
+	st.mu.Unlock()
+	if oldLeft {
+		t.Fatal("prune left a graded hold whose attempt entry aged out")
+	}
+	if !freshLeft {
+		t.Fatal("prune dropped a graded hold whose attempt is still kept")
+	}
+}
+
+func taskGradedHas(f *taskFixture, hold k8stypes.UID) bool {
+	st := &f.r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	_, ok := st.graded[hold]
+	return ok
 }
