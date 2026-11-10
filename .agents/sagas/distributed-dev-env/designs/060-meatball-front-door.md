@@ -502,17 +502,27 @@ adapter per machine action, "grant UID/role/TTL" among them. The merge: when no
 policy decides a grant, the operator opens an Ask for it; Tom's answer on the
 portal calls the broker's existing `Decide` with his portal identity (the
 AccessGrant type already documents `authentik/<username>` for this).
+Amended 2026-11-10 (ADR-021): the portal stores the answer on the existing
+answer route and gains no credential. The broker, in process, calls
+`Decide`. `<username>` is `preferred_username` from the UserInfo body the
+portal already fetches, not the OIDC subject.
 
 **The adapter's contract (story 2 writes it down before any code).**
 DESIGN-034 7 says an approved Ask is a record and carries no machine
 permission, and that each adapter that consumes one needs its own typed
 validator, a one-use reservation and its own story. ADR-010 is still Proposed.
 This is a change to access and to the Ask contract, so story 2 opens with a new
-ADR (ADR-021: ADR-020 and DESIGN-061 are the task-session clean-up, in work
-under [OP518](https://work.haynesnetwork.com/work_packages/518) and not on main
-yet; if they land later, this takes the next free number) and an amendment to
+ADR (ADR-021; ADR-020 and DESIGN-061 part 1 have since merged, #1021 and
+#1022) and an amendment to
 DESIGN-034,
-and merges no code before both are accepted. This design's choice, for that
+and merges no code before both are accepted. Amended 2026-11-10
+(ADR-021): [ADR-021](../adrs/021-grants-through-the-asks-board.md) records
+this contract and is Proposed for coordinator review. The build plan, by
+file and test, is in that ADR. No code merges before the coordinator
+accepts it. Where the ADR is more specific than the bullets below, the
+ADR stands: a changed UID or digest is a pre-check, refuses the grant, and
+does not call `Decide`; any other `ErrRefused` also ends it refused; only
+a conflict or a read error retries. This design's choice, for that
 ADR to record or overturn:
 
 - **A third Ask kind, `grant`,** opened only by the operator, never by a
