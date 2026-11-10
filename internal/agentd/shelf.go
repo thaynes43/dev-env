@@ -237,12 +237,17 @@ func Prune(s Settings, req protocol.PruneRequest, now time.Time) (protocol.Prune
 // lockShelf takes an exclusive lock on the shared volume's ShelfLockFile.
 // CephFS keeps flock across clients, so it holds across a rollout's two shelf
 // pods too.
-func lockShelf(s Settings) (func(), error) {
+func lockShelf(s Settings) (func(), error) { return lockShelfHow(s, syscall.LOCK_EX) }
+
+// lockShelfHow takes the ShelfLockFile lock how says: syscall.LOCK_EX, or
+// LOCK_SH for a reader such as rescue-verify, which only a prune or a hold
+// waits for.
+func lockShelfHow(s Settings, how int) (func(), error) {
 	f, err := os.OpenFile(filepath.Join(s.SharedDir, protocol.ShelfLockFile), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("the shelf lock: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := syscall.Flock(int(f.Fd()), how); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("the shelf lock: %w", err)
 	}

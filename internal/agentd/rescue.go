@@ -48,6 +48,9 @@ const rescueLockFile = "rescue.lock"
 // next look (D-55).
 func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.Time, opt RescueOptions) (protocol.RescueReport, error) {
 	if s.WorkspaceID != "" {
+		if opt.StrictHome {
+			return protocol.RescueReport{}, errors.New("--strict-home checks a private HOME; this session works in a shared workspace")
+		}
 		return rescueSharedTask(ctx, r, s, session, now, opt)
 	}
 	if opt.WorkspaceStopProof != nil {
@@ -69,6 +72,10 @@ func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.
 			// Only reads agentd's pid file, which an empty volume lacks.
 			rep.Agent = stopAgent(s, opt.StopGrace)
 		}
+		if opt.StrictHome {
+			// Nothing on the volume holds .git, so the check passes.
+			rep.StrictHome = &protocol.StrictHomeCheck{}
+		}
 		rep.FinishedAt = time.Now().UTC()
 		return rep, nil
 	}
@@ -88,6 +95,16 @@ func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.
 	repos, err := clonesIn(s.ReposDir())
 	if err != nil {
 		return protocol.RescueReport{}, err
+	}
+	if opt.StrictHome {
+		// Before anything is committed or bundled: a refusal leaves the
+		// volume and the shared volume as they were.
+		rep.StrictHome = strictHome(ctx, r, s, repos)
+		if rep.StrictHome.Refused != "" {
+			rep.OK, rep.CleanAndPushed = false, false
+			rep.FinishedAt = time.Now().UTC()
+			return rep, nil
+		}
 	}
 	for _, repo := range repos {
 		rr := rescueRepo(ctx, r, s, repo, rep.Stamp)
@@ -158,6 +175,11 @@ type RescueOptions struct {
 	StopAgent bool
 	// StopGrace is how long the stop waits after SIGTERM before SIGKILL.
 	StopGrace time.Duration
+	// StrictHome refuses the rescue when a repository lies outside ~/repos
+	// and its worktrees (--strict-home, DESIGN-061 section 3; strictHome).
+	// A task Session's clean-up sets it, because only the bundle outlives
+	// the HOME. Without it the rescue is as it always was.
+	StrictHome bool
 }
 
 // clonesIn lists the git clones directly under dir, skipping hidden entries

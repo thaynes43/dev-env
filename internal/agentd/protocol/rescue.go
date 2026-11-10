@@ -40,7 +40,31 @@ type RescueReport struct {
 	// Bundle is D-10 step 2: where this rescue's bundles and manifest are on
 	// the shared volume. It is nil when no repo had a ref to bundle.
 	Bundle *BundleReport `json:"bundle,omitempty"`
+	// StrictHome is what `--strict-home` found (DESIGN-061 section 3). It is
+	// nil without the flag, and set, empty when it passed, on every report
+	// the flag made, so a reader can tell the check ran.
+	StrictHome *StrictHomeCheck `json:"strictHome,omitempty"`
 }
+
+// StrictHomeCheck is `agentd ctl rescue --strict-home`'s look outside
+// ~/repos (DESIGN-061 section 3): HOME itself, every directory directly
+// under ~/work, and every directory directly under HOME that is not hidden,
+// that holds .git, must be a clone under ~/repos or a worktree one of them
+// lists. When it is not, the rescue refuses before it commits or bundles
+// anything: the report is not OK, not CleanAndPushed and lists no repos.
+type StrictHomeCheck struct {
+	// Stray are the directories holding .git that are neither, sorted; at
+	// most MaxStrictHomeStray are listed.
+	Stray []string `json:"stray,omitempty"`
+	// Refused is empty when the check passed. Otherwise it is one line, for
+	// example "stray repository /home/dev/work/scratch", and also names any
+	// directory that could not be inspected ("cannot inspect PATH: ...") or
+	// a clone whose worktrees could not be listed.
+	Refused string `json:"refused,omitempty"`
+}
+
+// MaxStrictHomeStray caps StrictHomeCheck.Stray; Refused counts the rest.
+const MaxStrictHomeStray = 32
 
 // WorkspacePreservation binds shared task preservation to an admitted writer,
 // or to explicit verified no-owner admission. It never proves an empty home.

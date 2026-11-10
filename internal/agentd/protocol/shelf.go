@@ -153,3 +153,66 @@ func RescueDirOf(id string) (string, error) {
 	}
 	return path.Join(RescueRoot, session, name), nil
 }
+
+// RescueVerifyVersion is the version of the document `agentd ctl
+// rescue-verify` prints (DESIGN-061 section 3).
+const RescueVerifyVersion = 1
+
+// The refusals of `agentd ctl rescue-verify` (DESIGN-061 section 3). Each one
+// means the rescue cannot stand for the work it saved, so a clean-up keeps
+// the HOME.
+const (
+	// RescueVerifyBundleMissing: the rescue's directory, its manifest or a
+	// bundle the manifest names is not on the shared volume, or is not a
+	// regular file.
+	RescueVerifyBundleMissing = "bundle_missing"
+	// RescueVerifyBundleMismatch: the manifest cannot be trusted (unreadable,
+	// not JSON, another version, incomplete, naming another session or
+	// directory, or a bundle outside its directory), or a bundle's size or
+	// SHA-256 differs from what the manifest says.
+	RescueVerifyBundleMismatch = "bundle_mismatch"
+)
+
+// RescueVerifyResult is what `agentd ctl rescue-verify [--id
+// <session>/<stamp>]` prints in the shelf: the shared volume's free and total
+// bytes, and with --id the rescue's manifest digest and its bundles,
+// re-hashed. OK is false only on a refusal, which then names one of the
+// RescueVerify codes. On a refusal, manifestSHA256, bundles and bytes are
+// what was read before it, for a person; they prove nothing.
+type RescueVerifyResult struct {
+	Version int `json:"version"`
+	// ID is the rescue checked, <session>/<stamp>; empty without --id.
+	ID string `json:"id,omitempty"`
+	// Manifest is rescue/<session>/<stamp>/manifest.json.
+	Manifest string `json:"manifest,omitempty"`
+	// ManifestSHA256 is the SHA-256 of the manifest's bytes as read once:
+	// the same bytes were parsed and their bundles re-hashed.
+	ManifestSHA256 string `json:"manifestSHA256,omitempty"`
+	// Bundles counts the bundle files the manifest names; Bytes is their
+	// total size.
+	Bundles int   `json:"bundles"`
+	Bytes   int64 `json:"bytes"`
+	OK      bool  `json:"ok"`
+	// Refusal is RescueVerifyBundleMissing or RescueVerifyBundleMismatch.
+	Refusal string `json:"refusal,omitempty"`
+	// Detail says which file and why, for a person.
+	Detail string `json:"detail,omitempty"`
+	// SharedFreeBytes is what an unprivileged writer may still use on the
+	// shared volume (statfs Bavail), and SharedTotalBytes its size.
+	SharedFreeBytes  int64 `json:"sharedFreeBytes"`
+	SharedTotalBytes int64 `json:"sharedTotalBytes"`
+}
+
+// DropLogResult is what `agentd ctl drop-log` prints in a hold pod
+// (DESIGN-061 section 3): the session's own log copy on the shared volume,
+// logs/<session>.log, and whether this call removed it.
+type DropLogResult struct {
+	Session string `json:"session"`
+	// Path is logs/<session>.log, relative to the shared volume's root.
+	Path string `json:"path"`
+	// Removed is set when the file was there and this call removed it; an
+	// absent copy is not an error.
+	Removed bool `json:"removed"`
+	// Bytes is the removed file's size.
+	Bytes int64 `json:"bytes,omitempty"`
+}
