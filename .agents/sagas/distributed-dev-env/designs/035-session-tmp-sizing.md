@@ -104,3 +104,23 @@ an EmptyDir sizeLimit alone reserves no node disk.
   intended; run `make check-generated` if that changes. CI builds/smokes the image.
 
 The PR and #251 handoff record actual checks and independent native review.
+
+## Note 2026-11-10: `make test` scratch on `/tmp` (OP690)
+
+Decided by the coordinator session, not by Tom. Item 2 above (GOTMPDIR under
+HOME) stays the image default and is unchanged, as is TMPDIR. One exception: the
+Makefile's `test` and `test-portal-localtest` targets point GOTMPDIR (and so
+`t.TempDir()`) at a fresh directory under `/tmp`, removed when the target exits.
+
+Why: on the HOME network volume, fsync-heavy `internal/agentd` tests ran about
+12 times slower (2695 s against 232 s over 859 tests) and the package did not
+finish in 45 minutes; on `/tmp` it passes in about 234 s.
+
+Bound: `GO_TEST_TMP_MAX_KB` (default 4194304, 4 GiB, half the pod's 8Gi cap, the
+rest is reserve). If `/tmp` already holds more, or `du` cannot measure it (a
+non-zero exit counts as failure whatever it printed; `du` runs at most twice), the
+target keeps the caller's GOTMPDIR, the image's HOME directory, and prints one
+line to stderr. Observed
+peaks: `internal/agentd` alone about 55 MB; one full `make test` under 300 MiB
+(one observation, PR 1054). Go enforces no quota: the guard is a start-time check, not
+a quota. `GO_TEST_TMP_ROOT=` (empty) turns the redirect off.
