@@ -2,14 +2,11 @@ package apiserver
 
 import (
 	"context"
-	"crypto/sha256"
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,7 +22,6 @@ const (
 	callerPolicyNamespace = "dev-env-system"
 	callerPolicyName      = "meatball"
 	callerParentUID       = "dev-env.haynesops.com/caller-capacity-parent-uid"
-	callerResumeReserved  = "dev-env.haynesops.com/caller-resume-reserved"
 )
 
 // readCallerPolicy never consults the manager's cache: removal revokes the
@@ -198,8 +194,11 @@ func callerWorkerCap(c *caller) *int32 {
 	return nil
 }
 
-// admitCallerCapacity runs under both createMu and the distributed admission
-// lock. Live reads count successful creates from other replicas immediately.
+// admitCallerCapacity runs under createMu, just before the create; a bounded
+// resume runs admitCallerCapacityExcept there too, excluding the session
+// itself, before its patch. Live reads count other replicas' writes once they
+// commit. Two replicas admitting in the same instant can exceed a cap by one;
+// DESIGN-060 7.1 accepts that, as the per-agent child rule already does.
 func (s *Server) admitCallerCapacity(ctx context.Context, c *caller) error {
 	return s.admitCallerCapacityExcept(ctx, c, "")
 }
@@ -237,110 +236,34 @@ func (s *Server) admitCallerCapacityExcept(ctx context.Context, c *caller, excep
 	n := 0
 	for i := range list.Items {
 		it := &list.Items[i]
-		reserved := it.Annotations[callerResumeReserved] == "true" && it.DeletionTimestamp.IsZero()
-		if it.Spec.Parent == c.parent && (except == "" || it.UID != except) && (unfinished(it) || reserved) {
+		if it.Spec.Parent == c.parent && (except == "" || it.UID != except) && unfinished(it) {
 			n++
 		}
 	}
 	if n >= int(cap) {
 		if c.kind == kindPolicy {
-			return tooManyRequests("CallerPolicy permits at most %d unfinished sessions; one must finish first, or reap a resumed session to release its reservation", cap)
+			return tooManyRequests("CallerPolicy permits at most %d unfinished sessions; one must finish first", cap)
 		}
-		return tooManyRequests("the parent worker cap is %d unfinished direct workers across all agent kinds; one must finish first, or reap a resumed worker to release its reservation", cap)
+		return tooManyRequests("the parent worker cap is %d unfinished direct workers across all agent kinds; one must finish first", cap)
 	}
 	return nil
 }
 
-// A nonexpiring atomic lock fences the live count plus create across replicas.
-// No lease expiry can permit a second writer while the first is still running.
-// A crash or uncertain create deliberately needs operator recovery (DESIGN-060).
-type callerAdmission struct {
-	lock      corev1.ConfigMap
-	hold      bool
-	parentUID types.UID
-}
-
-func (s *Server) lockCallerAdmission(ctx context.Context, c *caller) (*callerAdmission, error) {
+// createWithCallerCap writes a session admitted by admitCallerCapacity. A
+// bounded create asks for strict field validation: an older installed CRD
+// must refuse it, never silently prune limits.maxWorkers and launch an
+// unbounded coordinator. A bounded parent's worker records the parent's UID.
+func (s *Server) createWithCallerCap(ctx context.Context, sess *v1alpha1.AgentSession, c *caller) error {
 	if c.kind != kindPolicy && callerWorkerCap(c) == nil {
-		return nil, nil
-	}
-	digest := sha256.Sum256([]byte(c.parent))
-	gate := &callerAdmission{lock: corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Namespace: s.Policy.SessionNamespace, Name: fmt.Sprintf("caller-admission-%x", digest[:16])},
-		Data:       map[string]string{"parent": c.parent},
-	}}
-	if c.kind == kindSession {
-		gate.parentUID = c.session.UID
-	}
-	if err := s.Client.Create(ctx, &gate.lock); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return nil, newError(http.StatusConflict, apiv1.CodeConflict, "caller admission is in progress or needs operator recovery; no new session was created")
-		}
-		return nil, fromKubeError(err, "lock caller admission")
-	}
-	return gate, nil
-}
-
-func (s *Server) finishCallerAdmission(ctx context.Context, gate *callerAdmission) {
-	if gate == nil {
-		return
-	}
-	if gate.hold || gate.lock.UID == "" {
-		s.Log.Info("caller admission lock retained; verify the in-flight create or resume before recovery", "lock", gate.lock.Name)
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	var err error
-	for attempt := range 3 {
-		if attempt > 0 {
-			timer := time.NewTimer(time.Duration(attempt) * 100 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-			case <-timer.C:
-			}
-			timer.Stop()
-			if ctx.Err() != nil {
-				break
-			}
-		}
-		err = s.Client.Delete(ctx, &gate.lock, client.Preconditions{UID: &gate.lock.UID, ResourceVersion: &gate.lock.ResourceVersion})
-		if err == nil || apierrors.IsNotFound(err) {
-			return
-		}
-		// Lost transport replies are safe to retry with the same preconditions.
-		// An explicit denial, identity conflict or other permanent API error is
-		// a stop, never a reason to delete a changed lock or try another route.
-		var status apierrors.APIStatus
-		if errors.As(err, &status) && !apierrors.IsTimeout(err) && !apierrors.IsServerTimeout(err) &&
-			!apierrors.IsTooManyRequests(err) && !apierrors.IsServiceUnavailable(err) && !apierrors.IsInternalError(err) {
-			break
-		}
-	}
-	s.Log.Error(err, "caller admission unlock failed; verify before recovery", "lock", gate.lock.Name)
-}
-
-func (s *Server) createWithCallerAdmission(ctx context.Context, sess *v1alpha1.AgentSession, gate *callerAdmission) error {
-	if gate == nil {
 		return s.Client.Create(ctx, sess)
 	}
-	if gate.parentUID != "" {
+	if c.kind == kindSession {
 		if sess.Annotations == nil {
 			sess.Annotations = map[string]string{}
 		}
-		sess.Annotations[callerParentUID] = string(gate.parentUID)
+		sess.Annotations[callerParentUID] = string(c.session.UID)
 	}
-	gate.hold = true
-	// An older installed CRD must refuse this create, never silently prune
-	// limits.maxWorkers and launch an unbounded coordinator.
-	err := s.Client.Create(ctx, sess, client.FieldValidation(metav1.FieldValidationStrict))
-	// Only definite non-creates or a confirmed create release the lock. A lost
-	// response, cancellation or timeout may still commit after our call returns.
-	if err == nil || apierrors.IsAlreadyExists(err) || apierrors.IsInvalid(err) ||
-		apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsBadRequest(err) {
-		gate.hold = false
-	}
-	return err
+	return s.Client.Create(ctx, sess, client.FieldValidation(metav1.FieldValidationStrict))
 }
 
 // Only newly bounded targets enter this path, whoever requested their resume.
@@ -367,39 +290,4 @@ func (s *Server) callerForBoundedResume(ctx context.Context, sess *v1alpha1.Agen
 		return nil, forbidden("the bounded worker parent cannot be verified for resume")
 	}
 	return &caller{kind: kindSession, parent: parent.Name, session: &parent}, nil
-}
-
-func (s *Server) patchWithCallerAdmission(ctx context.Context, sess, original *v1alpha1.AgentSession) error {
-	patch := client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})
-	if sess.Spec.OperatingMode != v1alpha1.OperatingModeRunning {
-		return s.Client.Patch(ctx, sess, patch)
-	}
-	c, err := s.callerForBoundedResume(ctx, sess)
-	if err != nil {
-		return err
-	}
-	if c == nil {
-		return s.Client.Patch(ctx, sess, patch)
-	}
-	gate, err := s.lockCallerAdmission(ctx, c)
-	if err != nil {
-		return err
-	}
-	defer s.finishCallerAdmission(ctx, gate)
-	if err := s.admitCallerCapacityExcept(ctx, c, sess.UID); err != nil {
-		return err
-	}
-	if sess.Annotations == nil {
-		sess.Annotations = map[string]string{}
-	}
-	// The CAS reserves capacity in the same write that requests the resume.
-	// It remains until reap: old terminal status cannot release a new run.
-	sess.Annotations[callerResumeReserved] = "true"
-	gate.hold = true
-	err = s.Client.Patch(ctx, sess, patch)
-	if err == nil || apierrors.IsConflict(err) || apierrors.IsNotFound(err) || apierrors.IsInvalid(err) ||
-		apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsBadRequest(err) {
-		gate.hold = false
-	}
-	return err
 }

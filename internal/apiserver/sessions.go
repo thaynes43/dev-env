@@ -111,23 +111,16 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 
 	// A repeat of a key comes first: a retry of a create that succeeded must get
 	// its session back, even when that session is the one that reached a limit.
-	if existing, err := s.repeatSession(ctx, req, c, sess); err != nil {
-		return 0, nil, err
-	} else if existing != nil {
-		w.Header().Set("Location", apiv1.SessionPath(existing.Name))
-		return http.StatusOK, view(existing, false), nil
-	}
-	gate, err := s.lockCallerAdmission(ctx, c)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer s.finishCallerAdmission(ctx, gate)
-	if gate != nil {
-		// A different replica may have created this key after our first read
-		// and released its lock before we acquired it. Recheck under the lock.
-		if existing, err := s.repeatSession(ctx, req, c, sess); err != nil {
+	if req.IdempotencyKey != "" {
+		existing, err := s.byIdempotencyKey(ctx, c.parent, req.IdempotencyKey)
+		if err != nil {
 			return 0, nil, err
-		} else if existing != nil {
+		}
+		if existing != nil {
+			if existing.Annotations[v1alpha1.AnnotationRequestHash] != sess.Annotations[v1alpha1.AnnotationRequestHash] {
+				return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
+					"idempotency key %q already created session %s with a different request", req.IdempotencyKey, existing.Name)
+			}
 			w.Header().Set("Location", apiv1.SessionPath(existing.Name))
 			return http.StatusOK, view(existing, false), nil
 		}
@@ -236,7 +229,7 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 				return 0, nil, invalid(fieldError("project", "private budget common inputs changed before dispatch; reservation retained"))
 			}
 		}
-		err := s.createWithCallerAdmission(ctx, sess, gate)
+		err := s.createWithCallerCap(ctx, sess, c)
 		if apierrors.IsAlreadyExists(err) {
 			sess.ResourceVersion = ""
 			continue
@@ -250,21 +243,6 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 		return http.StatusCreated, view(sess, false), nil
 	}
 	return 0, nil, internal("no free session name after %s-%d", base, nameAttempts)
-}
-
-func (s *Server) repeatSession(ctx context.Context, req apiv1.CreateSessionRequest, c *caller, sess *v1alpha1.AgentSession) (*v1alpha1.AgentSession, error) {
-	if req.IdempotencyKey == "" {
-		return nil, nil
-	}
-	existing, err := s.byIdempotencyKey(ctx, c.parent, req.IdempotencyKey)
-	if err != nil {
-		return nil, err
-	}
-	if existing != nil && existing.Annotations[v1alpha1.AnnotationRequestHash] != sess.Annotations[v1alpha1.AnnotationRequestHash] {
-		return nil, newError(http.StatusConflict, apiv1.CodeConflict,
-			"idempotency key %q already created session %s with a different request", req.IdempotencyKey, existing.Name)
-	}
-	return existing, nil
 }
 
 // runningChildren counts a session's unfinished children, read from the API

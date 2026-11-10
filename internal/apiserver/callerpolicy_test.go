@@ -413,9 +413,10 @@ func TestCallerPolicyRefusesUnverifiedPolicyAndProfile(t *testing.T) {
 	}
 }
 
-// Two replicas have different create mutexes but share Kubernetes. Pause one
-// before its write, then attempt another: the second cannot pass a stale count.
-func TestCallerPolicyAdmissionAcrossReplicas(t *testing.T) {
+// One replica's create lock covers the live count and the create. Pause the
+// first create inside its write: a second create on the same replica waits,
+// then counts the committed first and is refused instead of passing a stale count.
+func TestCallerPolicyAdmissionSerialisedWithinReplica(t *testing.T) {
 	for _, boundedParent := range []bool{false, true} {
 		t.Run(fmt.Sprint("workers=", boundedParent), func(t *testing.T) {
 			f := meatballFixture(t, meatballPolicy())
@@ -436,12 +437,12 @@ func TestCallerPolicyAdmissionAcrossReplicas(t *testing.T) {
 				t.Fatal(err)
 			}
 			entered, release := make(chan struct{}), make(chan struct{})
-			var once sync.Once
+			var enter, once sync.Once
 			unblock := func() { once.Do(func() { close(release) }) }
 			t.Cleanup(unblock)
-			blocked := interceptor.NewClient(f.c, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 				if _, ok := obj.(*v1alpha1.AgentSession); ok {
-					close(entered)
+					enter.Do(func() { close(entered) })
 					select {
 					case <-release:
 					case <-time.After(10 * time.Second):
@@ -450,132 +451,178 @@ func TestCallerPolicyAdmissionAcrossReplicas(t *testing.T) {
 				}
 				return c.Create(ctx, obj, opts...)
 			}})
-			f.srv.Client = blocked
-			other := meatballFixture(t)
-			other.srv.Client, other.srv.Live, other.srv.Auth = f.c, f.c, f.auth
-			other.srv.Now = f.srv.Now
-			result := make(chan int, 1)
-			go func() { result <- f.do(http.MethodPost, apiv1.SessionsPath, token, r).Code }()
+			first, second := make(chan int, 1), make(chan int, 1)
+			go func() { first <- f.do(http.MethodPost, apiv1.SessionsPath, token, r).Code }()
 			select {
 			case <-entered:
 			case <-time.After(10 * time.Second):
 				t.Fatal("first admission did not reach its create")
 			}
-			wantError(t, other.do(http.MethodPost, apiv1.SessionsPath, token, r), 409, apiv1.CodeConflict)
+			go func() { second <- f.do(http.MethodPost, apiv1.SessionsPath, token, r).Code }()
+			select {
+			case code := <-second:
+				t.Fatalf("second create did not wait for the first: %d", code)
+			case <-time.After(200 * time.Millisecond):
+			}
 			unblock()
-			if code := <-result; code != 201 {
+			if code := <-first; code != http.StatusCreated {
 				t.Fatalf("first create: %d", code)
 			}
-			wantError(t, other.do(http.MethodPost, apiv1.SessionsPath, token, r), 429, apiv1.CodeLimitExceeded)
+			if code := <-second; code != http.StatusTooManyRequests {
+				t.Fatalf("second create passed a stale count: %d", code)
+			}
+			want := 2 // the seed and the first create
+			if boundedParent {
+				want++ // and the parent
+			}
+			if got := f.sessionCount(); got != want {
+				t.Fatalf("sessions: %d, want %d", got, want)
+			}
 		})
 	}
 }
 
-func TestCallerPolicyUnknownCreateRetainsAdmissionLock(t *testing.T) {
+// A lost create response needs no recovery: nothing is held, the live count
+// includes the session if it committed, and an idempotent retry finds it.
+func TestCallerPolicyUnknownCreateNeedsNoRecovery(t *testing.T) {
 	for _, committed := range []bool{false, true} {
-		f := meatballFixture(t, meatballPolicy())
-		r := meatballRequest()
-		r.IdempotencyKey = "lost-response"
-		f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-			if _, ok := obj.(*v1alpha1.AgentSession); ok {
-				if committed {
-					if err := c.Create(ctx, obj, opts...); err != nil {
-						return err
+		t.Run(fmt.Sprint("committed=", committed), func(t *testing.T) {
+			p := meatballPolicy()
+			p.Spec.MaxConcurrent = 1
+			f := meatballFixture(t, p)
+			r := meatballRequest()
+			r.IdempotencyKey = "lost-response"
+			f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*v1alpha1.AgentSession); ok {
+					if committed {
+						if err := c.Create(ctx, obj, opts...); err != nil {
+							return err
+						}
 					}
+					return context.DeadlineExceeded
 				}
-				return context.DeadlineExceeded
-			}
-			return c.Create(ctx, obj, opts...)
-		}})
-		wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokMeatball, r), 503, apiv1.CodeUnavailable)
-		f.srv.Client = f.c
-		var locks corev1.ConfigMapList
-		if err := f.c.List(context.Background(), &locks, client.InNamespace(sessionNS)); err != nil || len(locks.Items) != 1 {
-			t.Fatal("unknown create lost its admission lock", err, len(locks.Items))
-		}
-		r2 := meatballRequest()
-		wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokMeatball, r2), 409, apiv1.CodeConflict)
-		w := f.do(http.MethodPost, apiv1.SessionsPath, tokMeatball, r)
-		want := 409
-		if committed {
-			want = 200 // a found exact idempotent create remains recoverable.
-		}
-		if w.Code != want {
-			t.Fatal("unknown create retry", w.Code, w.Body.String())
-		}
-	}
-}
-
-func TestCallerPolicyAdmissionUnlockRetry(t *testing.T) {
-	for _, tc := range []struct {
-		name                    string
-		failures, wantCalls     int
-		lostResponse, permanent bool
-		wantHeld                bool
-	}{
-		{name: "transient", failures: 2, wantCalls: 3},
-		{name: "lost delete response", lostResponse: true, wantCalls: 2},
-		{name: "bounded exhaustion", failures: 99, wantCalls: 3, wantHeld: true},
-		{name: "permanent denial", permanent: true, wantCalls: 1, wantHeld: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := meatballFixture(t, meatballPolicy())
-			calls := 0
-			f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
-				if _, ok := obj.(*corev1.ConfigMap); !ok {
-					return c.Delete(ctx, obj, opts...)
-				}
-				options := (&client.DeleteOptions{}).ApplyOptions(opts)
-				if options.Preconditions == nil || options.Preconditions.UID == nil || options.Preconditions.ResourceVersion == nil ||
-					*options.Preconditions.UID != obj.GetUID() || *options.Preconditions.ResourceVersion != obj.GetResourceVersion() {
-					t.Fatal("an unlock attempt lost its exact lock preconditions")
-				}
-				calls++
-				if tc.permanent {
-					return apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, obj.GetName(), fmt.Errorf("test denial"))
-				}
-				if tc.lostResponse && calls == 1 {
-					if err := c.Delete(ctx, obj, opts...); err != nil {
-						return err
-					}
-					return apierrors.NewServiceUnavailable("test lost acknowledgement")
-				}
-				if calls <= tc.failures {
-					return apierrors.NewServiceUnavailable("test transient failure")
-				}
-				return c.Delete(ctx, obj, opts...)
+				return c.Create(ctx, obj, opts...)
 			}})
-			policyCreated(t, f, tokMeatball, meatballRequest())
-			var locks corev1.ConfigMapList
-			if err := f.c.List(context.Background(), &locks, client.InNamespace(sessionNS)); err != nil {
-				t.Fatal(err)
+			wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokMeatball, r), 503, apiv1.CodeUnavailable)
+			f.srv.Client = f.c
+			wantNoConfigMaps(t, f)
+			w := f.do(http.MethodPost, apiv1.SessionsPath, tokMeatball, r)
+			want := http.StatusCreated
+			if committed {
+				want = http.StatusOK // the committed create is found by its key.
 			}
-			if calls != tc.wantCalls || (len(locks.Items) == 1) != tc.wantHeld {
-				t.Fatalf("unlock calls=%d held=%d; want calls=%d held=%t", calls, len(locks.Items), tc.wantCalls, tc.wantHeld)
+			if w.Code != want {
+				t.Fatal("unknown create retry", w.Code, w.Body.String())
 			}
+			wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokMeatball, meatballRequest()), 429, apiv1.CodeLimitExceeded)
 		})
 	}
 }
 
 func TestCallerPolicyPolicyChangesDuringAdmission(t *testing.T) {
 	f := meatballFixture(t, meatballPolicy())
-	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-		if _, ok := obj.(*corev1.ConfigMap); ok {
-			p := meatballPolicy()
-			if err := c.Get(ctx, client.ObjectKeyFromObject(p), p); err != nil {
-				return err
-			}
-			p.Spec.MaxWorkers = 1
-			if err := c.Update(ctx, p); err != nil {
-				return err
+	reads := 0
+	// The first policy read resolves the caller. Tighten the policy right
+	// after it, so the re-read under the create lock sees another version.
+	f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if err := c.Get(ctx, key, obj, opts...); err != nil {
+			return err
+		}
+		if p, ok := obj.(*v1alpha1.CallerPolicy); ok {
+			if reads++; reads == 1 {
+				changed := p.DeepCopy()
+				changed.Spec.MaxWorkers = 1
+				return c.Update(ctx, changed)
 			}
 		}
-		return c.Create(ctx, obj, opts...)
+		return nil
 	}})
 	e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokMeatball, meatballRequest()), 403, apiv1.CodeForbidden)
 	if !strings.Contains(e.Message, "changed during admission") || f.sessionCount() != 0 {
 		t.Fatal("policy change was not fenced", e.Message)
 	}
+}
+
+// configMapWrites records every ConfigMap write through the server's clients.
+type configMapWrites struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (w *configMapWrites) record(verb string, obj client.Object) {
+	if _, ok := obj.(*corev1.ConfigMap); ok {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		w.calls = append(w.calls, verb+" "+obj.GetName())
+	}
+}
+
+func (w *configMapWrites) wrap(c client.WithWatch) client.WithWatch {
+	return interceptor.NewClient(c, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			w.record("create", obj)
+			return c.Create(ctx, obj, opts...)
+		},
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			w.record("update", obj)
+			return c.Update(ctx, obj, opts...)
+		},
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			w.record("patch", obj)
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			w.record("delete", obj)
+			return c.Delete(ctx, obj, opts...)
+		},
+		DeleteAllOf: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteAllOfOption) error {
+			w.record("deleteAllOf", obj)
+			return c.DeleteAllOf(ctx, obj, opts...)
+		},
+	})
+}
+
+func wantNoConfigMaps(t *testing.T, f *fixture) {
+	t.Helper()
+	var list corev1.ConfigMapList
+	if err := f.c.List(context.Background(), &list, client.InNamespace(sessionNS)); err != nil || len(list.Items) != 0 {
+		t.Fatal("admission left a ConfigMap in the session namespace", err, len(list.Items))
+	}
+}
+
+// Capacity is a live count under the create lock; admission writes no lock
+// object. Creates, a scheduled worker, and bounded suspends and resumes write
+// no ConfigMap through either client.
+func TestCallerPolicyAdmissionWritesNoConfigMap(t *testing.T) {
+	f := meatballFixture(t, meatballPolicy())
+	bindCatalogFixture(t, f)
+	writes := &configMapWrites{}
+	f.srv.Client, f.srv.Live = writes.wrap(f.c), writes.wrap(f.c)
+	root := policyCreated(t, f, tokMeatball, meatballRequest())
+	token := f.sessionPod("coordinator", "dev", 0)
+	parent := f.session("coordinator")
+	cap := int32(2)
+	parent.Spec.Parent, parent.Spec.Limits = meatballAccount, &v1alpha1.SessionLimits{MaxWorkers: &cap}
+	if err := f.c.Update(context.Background(), parent); err != nil {
+		t.Fatal(err)
+	}
+	worker := policyCreated(t, f, token, coordinatorTask())
+	d := swDispatch()
+	d.Owner = &scheduledwork.SessionRef{Name: parent.Name, UID: parent.UID}
+	if _, _, _, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), d); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{root, worker} {
+		for _, path := range []string{apiv1.SessionSuspendPath(name), apiv1.SessionResumePath(name)} {
+			if w := f.do(http.MethodPost, path, tokHuman, nil); w.Code != http.StatusAccepted {
+				t.Fatal(path, w.Code, w.Body.String())
+			}
+		}
+	}
+	if len(writes.calls) != 0 {
+		t.Fatal("admission wrote ConfigMaps", writes.calls)
+	}
+	wantNoConfigMaps(t, f)
 }
 
 func TestCallerPolicyReapUIDPrecondition(t *testing.T) {

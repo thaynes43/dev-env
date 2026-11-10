@@ -2,9 +2,9 @@ package apiserver
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -45,141 +45,117 @@ func policyCreated(t *testing.T, f *fixture, token string, req apiv1.CreateSessi
 	return decode[apiv1.Session](t, w).Name
 }
 
+// The annotation an earlier draft used to hold a resumed session's slot until
+// reap. A resume must not write it: a resumed session counts by the ordinary
+// unfinished rule.
+const retiredResumeReservation = "dev-env.haynesops.com/caller-resume-reserved"
+
 func TestCallerPolicyResumeCapacity(t *testing.T) {
 	for _, workers := range []bool{false, true} {
-		for _, terminal := range []bool{false, true} {
-			t.Run(fmt.Sprintf("workers=%t/terminal=%t", workers, terminal), func(t *testing.T) {
-				f, token, req := boundedLifecycleFixture(t, workers)
-				a := policyCreated(t, f, token, req)
-				if terminal {
-					sess := f.session(a)
-					sess.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentExited}
-					if err := f.c.Status().Update(context.Background(), sess); err != nil {
-						t.Fatal(err)
-					}
-				}
-				if w := f.do(http.MethodPost, apiv1.SessionSuspendPath(a), tokHuman, nil); w.Code != 202 {
-					t.Fatal(w.Code, w.Body.String())
-				}
-				b := policyCreated(t, f, token, req)
-				wantError(t, f.do(http.MethodPost, apiv1.SessionResumePath(a), tokHuman, nil), 429, apiv1.CodeLimitExceeded)
-				if err := f.c.Delete(context.Background(), f.session(b)); err != nil {
-					t.Fatal(err)
-				}
-				if w := f.do(http.MethodPost, apiv1.SessionResumePath(a), tokHuman, nil); w.Code != 202 {
-					t.Fatal("available capacity did not permit resume", w.Code, w.Body.String())
-				}
-				wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, token, req), 429, apiv1.CodeLimitExceeded)
-				// A reservation survives stale status, later suspension and another
-				// resume; the target's own reservation must not double-count it.
-				if w := f.do(http.MethodPost, apiv1.SessionSuspendPath(a), tokHuman, nil); w.Code != 202 {
-					t.Fatal(w.Code, w.Body.String())
-				}
-				wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, token, req), 429, apiv1.CodeLimitExceeded)
-				if w := f.do(http.MethodPost, apiv1.SessionResumePath(a), tokHuman, nil); w.Code != 202 {
-					t.Fatal("repeat resume counted its own reservation", w.Code, w.Body.String())
-				}
-				if err := f.c.Delete(context.Background(), f.session(a)); err != nil {
-					t.Fatal(err)
-				}
-				policyCreated(t, f, token, req)
-			})
-		}
+		t.Run(fmt.Sprintf("workers=%t", workers), func(t *testing.T) {
+			f, token, req := boundedLifecycleFixture(t, workers)
+			a := policyCreated(t, f, token, req)
+			if w := f.do(http.MethodPost, apiv1.SessionSuspendPath(a), tokHuman, nil); w.Code != 202 {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			b := policyCreated(t, f, token, req)
+			e := wantError(t, f.do(http.MethodPost, apiv1.SessionResumePath(a), tokHuman, nil), 429, apiv1.CodeLimitExceeded)
+			if !strings.Contains(e.Message, "one must finish first") || strings.Contains(e.Message, "reservation") {
+				t.Fatal(e.Message)
+			}
+			if f.session(a).Spec.OperatingMode != v1alpha1.OperatingModeSuspended {
+				t.Fatal("a refused resume changed the session")
+			}
+			if err := f.c.Delete(context.Background(), f.session(b)); err != nil {
+				t.Fatal(err)
+			}
+			if w := f.do(http.MethodPost, apiv1.SessionResumePath(a), tokHuman, nil); w.Code != 202 {
+				t.Fatal("available capacity did not permit resume", w.Code, w.Body.String())
+			}
+			if _, ok := f.session(a).Annotations[retiredResumeReservation]; ok {
+				t.Fatal("resume wrote a capacity reservation")
+			}
+			wantNoConfigMaps(t, f)
+			// The resumed session is unfinished, so it holds the only slot.
+			wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, token, req), 429, apiv1.CodeLimitExceeded)
+			// Finishing releases it with no reap.
+			sess := f.session(a)
+			sess.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentExited}
+			if err := f.c.Status().Update(context.Background(), sess); err != nil {
+				t.Fatal(err)
+			}
+			policyCreated(t, f, token, req)
+		})
 	}
 }
 
-func TestCallerPolicyResumeFencesOtherReplicas(t *testing.T) {
+// A bounded resume's live count and patch run under the same create lock as
+// a create. Pause the resume inside its patch: a create on the same replica
+// waits, then counts the resumed session and is refused.
+func TestCallerPolicyResumeSerialisedWithCreate(t *testing.T) {
 	for _, workers := range []bool{false, true} {
-		t.Run(fmt.Sprint(workers), func(t *testing.T) {
+		t.Run(fmt.Sprintf("workers=%t", workers), func(t *testing.T) {
 			f, token, req := boundedLifecycleFixture(t, workers)
 			a := policyCreated(t, f, token, req)
-			f.do(http.MethodPost, apiv1.SessionSuspendPath(a), tokHuman, nil)
+			if w := f.do(http.MethodPost, apiv1.SessionSuspendPath(a), tokHuman, nil); w.Code != 202 {
+				t.Fatal(w.Code, w.Body.String())
+			}
 			entered, release := make(chan struct{}), make(chan struct{})
-			var once sync.Once
+			var enter, once sync.Once
 			unblock := func() { once.Do(func() { close(release) }) }
 			t.Cleanup(unblock)
 			f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-				close(entered)
-				select {
-				case <-release:
-				case <-time.After(10 * time.Second):
-					return context.DeadlineExceeded
+				if _, ok := obj.(*v1alpha1.AgentSession); ok {
+					enter.Do(func() { close(entered) })
+					select {
+					case <-release:
+					case <-time.After(10 * time.Second):
+						return context.DeadlineExceeded
+					}
 				}
 				return c.Patch(ctx, obj, patch, opts...)
 			}})
-			other := meatballFixture(t)
-			other.srv.Client, other.srv.Live, other.srv.Auth = f.c, f.c, f.auth
-			result := make(chan int, 1)
-			go func() { result <- f.do(http.MethodPost, apiv1.SessionResumePath(a), tokHuman, nil).Code }()
+			resumed, created := make(chan int, 1), make(chan int, 1)
+			go func() { resumed <- f.do(http.MethodPost, apiv1.SessionResumePath(a), tokHuman, nil).Code }()
 			select {
 			case <-entered:
 			case <-time.After(10 * time.Second):
 				t.Fatal("resume did not reach its patch")
 			}
-			wantError(t, other.do(http.MethodPost, apiv1.SessionsPath, token, req), 409, apiv1.CodeConflict)
+			go func() { created <- f.do(http.MethodPost, apiv1.SessionsPath, token, req).Code }()
+			select {
+			case code := <-created:
+				t.Fatalf("create did not wait for the bounded resume: %d", code)
+			case <-time.After(200 * time.Millisecond):
+			}
 			unblock()
-			if code := <-result; code != 202 {
+			if code := <-resumed; code != http.StatusAccepted {
 				t.Fatal("resume", code)
 			}
-			wantError(t, other.do(http.MethodPost, apiv1.SessionsPath, token, req), 429, apiv1.CodeLimitExceeded)
+			if code := <-created; code != http.StatusTooManyRequests {
+				t.Fatal("create passed a stale count", code)
+			}
 		})
 	}
 }
 
-func TestCallerPolicyScheduledContentionRetries(t *testing.T) {
-	f, token, req := boundedLifecycleFixture(t, true)
+func TestCallerPolicyScheduledWorkerRecordsParent(t *testing.T) {
+	f, _, _ := boundedLifecycleFixture(t, true)
 	parent := f.session("bounded-parent")
-	*parent.Spec.Limits.MaxWorkers = 2
-	if err := f.c.Update(context.Background(), parent); err != nil {
-		t.Fatal(err)
-	}
-	entered, release := make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	unblock := func() { once.Do(func() { close(release) }) }
-	t.Cleanup(unblock)
-	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-		if _, ok := obj.(*v1alpha1.AgentSession); ok {
-			close(entered)
-			select {
-			case <-release:
-			case <-time.After(10 * time.Second):
-				return context.DeadlineExceeded
-			}
-		}
-		return c.Create(ctx, obj, opts...)
-	}})
-	other := meatballFixture(t)
-	other.srv.Client, other.srv.Live, other.srv.Auth = f.c, f.c, f.auth
-	other.srv.Now = f.srv.Now
-	result := make(chan int, 1)
-	go func() { result <- f.do(http.MethodPost, apiv1.SessionsPath, token, req).Code }()
-	select {
-	case <-entered:
-	case <-time.After(10 * time.Second):
-		t.Fatal("ordinary create did not acquire admission")
-	}
 	d := swDispatch()
 	d.Owner = &scheduledwork.SessionRef{Name: parent.Name, UID: parent.UID}
-	_, _, _, err := other.srv.CreateScheduledSession(context.Background(), swRequest(), d)
-	var refused *scheduledwork.RefusedError
-	if err == nil || errors.As(err, &refused) {
-		t.Fatalf("contention must be retryable, got %v", err)
-	}
-	unblock()
-	if code := <-result; code != 201 {
-		t.Fatal("ordinary create", code)
-	}
-	name, uid, adopted, err := other.srv.CreateScheduledSession(context.Background(), swRequest(), d)
+	name, uid, adopted, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), d)
 	if err != nil || name == "" || uid == "" || adopted {
-		t.Fatal("retry did not create", name, uid, adopted, err)
+		t.Fatal("scheduled worker was not created", name, uid, adopted, err)
 	}
 	if f.session(name).Annotations[callerParentUID] != string(parent.UID) {
 		t.Fatal("scheduled child did not retain its bounded parent identity")
 	}
-	_, _, adopted, err = other.srv.CreateScheduledSession(context.Background(), swRequest(), d)
+	_, _, adopted, err = f.srv.CreateScheduledSession(context.Background(), swRequest(), d)
 	if err != nil || !adopted {
 		t.Fatal("retry did not adopt", adopted, err)
 	}
+	wantNoConfigMaps(t, f)
 }
 
 func TestCallerPolicyResumeRefusesMissingOrReplacedAuthority(t *testing.T) {
@@ -215,21 +191,30 @@ func TestCallerPolicyResumeRefusesMissingOrReplacedAuthority(t *testing.T) {
 	}
 }
 
-func TestCallerPolicyUnknownResumeRetainsLock(t *testing.T) {
+// A lost resume response needs no recovery: nothing is held, and the next
+// create is admitted or refused by the live count alone.
+func TestCallerPolicyUnknownResumeNeedsNoRecovery(t *testing.T) {
 	for _, committed := range []bool{false, true} {
-		f, token, req := boundedLifecycleFixture(t, false)
-		a := policyCreated(t, f, token, req)
-		f.do(http.MethodPost, apiv1.SessionSuspendPath(a), tokHuman, nil)
-		f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			if committed {
-				if err := c.Patch(ctx, obj, patch, opts...); err != nil {
-					return err
+		t.Run(fmt.Sprintf("committed=%t", committed), func(t *testing.T) {
+			f, token, req := boundedLifecycleFixture(t, false)
+			a := policyCreated(t, f, token, req)
+			f.do(http.MethodPost, apiv1.SessionSuspendPath(a), tokHuman, nil)
+			f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if committed {
+					if err := c.Patch(ctx, obj, patch, opts...); err != nil {
+						return err
+					}
 				}
+				return context.DeadlineExceeded
+			}})
+			wantError(t, f.do(http.MethodPost, apiv1.SessionResumePath(a), tokHuman, nil), 503, apiv1.CodeUnavailable)
+			f.srv.Client = f.c
+			wantNoConfigMaps(t, f)
+			if committed {
+				wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, token, req), 429, apiv1.CodeLimitExceeded)
+				return
 			}
-			return context.DeadlineExceeded
-		}})
-		wantError(t, f.do(http.MethodPost, apiv1.SessionResumePath(a), tokHuman, nil), 503, apiv1.CodeUnavailable)
-		f.srv.Client = f.c
-		wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, token, req), 409, apiv1.CodeConflict)
+			policyCreated(t, f, token, req)
+		})
 	}
 }

@@ -311,47 +311,31 @@ Root concurrency counts all unfinished sessions with that account as parent,
 across models and repositories. It uses the existing unfinished-session rule:
 pending, running, idle and draining count; reaping, suspended, archived,
 failed or exited sessions do not. A resume of a newly policy-bound root or
-direct worker must reacquire its parent's capacity. Its atomic resume patch
-reserves that slot until the session is reaped, including while status is stale
-or it later suspends or finishes. This conservative reservation avoids relying
-on an old task's terminal heartbeat as evidence that a resumed task finished;
-finish then reap a resumed session to release the slot. Ordinary unbounded
-sessions retain their existing lifecycle behavior. Worker records retain the
-bounded parent's UID so deletion or name reuse cannot remove their fence.
-Idempotent repeats return their existing
-session before checking capacity. Admission for this caller and each bounded
-parent takes an atomic Kubernetes ConfigMap lock in the session namespace,
-held across the live count and create or bounded resume. This also fences
-concurrent API replicas. Scheduled dispatch retries lock contention during its
-existing start grace; a genuine capacity refusal remains a refusal.
-A crash or uncertain unlock leaves a closed gate, not a timed lease that could
-permit two writers. An operator must verify no admission is still in flight
-before removing such a stale lock. These locks grant no caller Kubernetes rights.
-Unlock retries transient errors at most three times within five seconds, with
-the same UID and resourceVersion preconditions; NotFound means released.
-Permanent errors stop retries. Manual recovery requires operator authority:
+direct worker must find a free slot again: its live count excludes the session
+itself. A resumed session then counts by the same ordinary unfinished rule; no
+reservation outlives it. Ordinary unbounded sessions retain their existing
+lifecycle behavior. Worker records retain the bounded parent's UID so deletion
+or name reuse cannot remove their fence. Idempotent repeats return their
+existing session before checking capacity. If the policy changed since the
+caller was resolved, admission refuses and the caller retries with the new
+bounds.
 
-1. Locate the ConfigMap named in the API log. Its name is
-   `caller-admission-` plus the first 16 bytes of SHA-256 of the exact parent
-   string, encoded as 32 lowercase hex characters, in the session namespace.
-   Read its `data.parent`, UID and resourceVersion from Kubernetes.
-2. Quiesce admission on **all** serving API replicas and confirm their old
-   create/resume handlers have ended. Read AgentSessions live in that namespace,
-   filter by `spec.parent == data.parent`, and reconcile the uncertain request
-   by its idempotency key or exact session UID, including a resume reservation.
-   Age or an apparently absent session is not proof that a write cannot still
-   commit. If that proof is unavailable, keep the lock and the admission closed.
-3. Re-read the lock and delete only with that exact UID and resourceVersion as
-   Kubernetes DeleteOptions preconditions. NotFound is complete; a changed
-   identity/version stops recovery. Restore admission only after this check;
-   its live count will include every confirmed create and resume reservation.
+Capacity is a live count, read from the API server under the replica's own
+create lock just before the create or the resume patch. Two operator replicas
+that admit in the same instant can exceed a cap by one. That is accepted, as it
+already is for the existing child rule (`maxRunningChildrenPerAgent`), because
+a lock that needs a person to clear it after a crash would stop Meatball and its
+coordinators, which this epic exists to prevent (coordinator's review ruling,
+2026-11-10). Admission writes no lock object, so a crash or a lost response
+leaves nothing to recover. For scheduled dispatch a capacity refusal remains a
+refusal.
 
-Creates under this gate request strict Kubernetes field validation so an old
+Bounded creates request strict Kubernetes field validation so an old
 AgentSession CRD refuses `maxWorkers` instead of pruning the worker cap.
 Installation needs both generated CRDs before the operator rollout, all serving
-API replicas on the new version, operator read access to the policy, and operator
-create/delete access to the lock ConfigMaps in the session namespace. Meatball
-gets no Kubernetes resource rights from this contract.
+API replicas on the new version, and operator read access to the policy. It
+needs no new operator rights in the session namespace. Meatball gets no
+Kubernetes resource rights from this contract.
 
 Only `GET/POST /v1/sessions` and `GET/DELETE /v1/sessions/{name}` accept the new
 class. Lists always filter to its own direct sessions, regardless of query
