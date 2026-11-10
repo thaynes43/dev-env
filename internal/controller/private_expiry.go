@@ -1077,7 +1077,7 @@ func (r *Reconciler) adoptExpiryHold(ctx context.Context, v *expiryView) (ctrl.R
 	// refused cleanup. The durable intent also identifies that case while
 	// cleanup is off, without changing which policy owns the record.
 	_, cleanupIntent := taskIntentStarted(next.HoldIntent)
-	if !r.taskPolicy(v.s) && !(cleanupIntent && taskCleanupScope(v.s)) {
+	if !r.taskPolicy(v.s) && (!cleanupIntent || !taskCleanupScope(v.s)) {
 		clearStepRefusal(next)
 	}
 	if err := r.writeExpiry(ctx, v, fresh); err != nil {
