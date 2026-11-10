@@ -908,9 +908,9 @@ type PrivateHistoryStatus struct {
 	// Expiry is the HOME expiry record (DESIGN-025 5.1). It exists only while
 	// the Session is eligible and triggered: Reaping, or Suspended past its
 	// archive deadline, with a terminal record. It rests on executorTerminal
-	// and names the bound HOME. Its phase moves only forward, its archive
-	// never changes once set, and it can be removed (a cancel) only before
-	// Deleting.
+	// and names the bound HOME. Its phase moves only forward, its archive or
+	// a task Session's bundle (DESIGN-061) never changes once set, and it can
+	// be removed (a cancel) only before Deleting.
 	// +optional
 	Expiry *PrivateHomeExpiryStatus `json:"expiry,omitempty"`
 	// ExpiryClearedAt is when the last expiry record was cancelled (DESIGN-025
@@ -940,7 +940,11 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.archive) || (has(self.archive) && self.archive == oldSelf.archive)",message="a HOME expiry record's archive never changes once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.releaseNowAt) || (has(self.releaseNowAt) && self.releaseNowAt == oldSelf.releaseNowAt)",message="a HOME expiry record's releaseNowAt never changes once set"
 // +kubebuilder:validation:XValidation:rule="!(self.phase in ['Exporting', 'Archived', 'Deleting', 'Expired']) || size(self.rescueStamp) > 0",message="a HOME expiry record past Rescuing names its rescue"
-// +kubebuilder:validation:XValidation:rule="!(self.phase in ['Archived', 'Deleting', 'Expired']) || has(self.archive)",message="an Archived HOME expiry record holds its archive"
+// +kubebuilder:validation:XValidation:rule="!(self.phase in ['Archived', 'Deleting', 'Expired']) || has(self.archive) || has(self.bundle)",message="an Archived HOME expiry record holds its archive or its bundle"
+// +kubebuilder:validation:XValidation:rule="!(has(self.archive) && has(self.bundle))",message="a HOME expiry record holds an archive or a bundle, never both"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.bundle) || (has(self.bundle) && self.bundle == oldSelf.bundle)",message="a HOME expiry record's bundle never changes once set"
+// +kubebuilder:validation:XValidation:rule="!has(self.bundle) || self.phase in ['Archived', 'Deleting', 'Expired']",message="a HOME expiry record holds a bundle only from Archived on"
+// +kubebuilder:validation:XValidation:rule="!has(self.bundle) || (has(self.rescueStamp) && self.bundle.stamp == self.rescueStamp)",message="a HOME expiry record's bundle is the rescue it names"
 // +kubebuilder:validation:XValidation:rule="!(self.phase in ['Deleting', 'Expired']) || has(self.deletingAt)",message="a Deleting HOME expiry record has deletingAt"
 // +kubebuilder:validation:XValidation:rule="self.phase != 'Expired' || has(self.homeDeletedAt)",message="an Expired HOME expiry record has homeDeletedAt"
 // +kubebuilder:validation:XValidation:rule="has(self.refusal) == has(self.refusalAt)",message="a HOME expiry record's refusal and refusalAt go together"
@@ -984,6 +988,13 @@ type PrivateHomeExpiryStatus struct {
 	// Archive is the verified history archive entry.
 	// +optional
 	Archive *PrivateHomeArchiveStatus `json:"archive,omitempty"`
+	// Bundle is what a task Session's clean-up keeps in place of an archive
+	// (ADR-020, DESIGN-061 section 3): the rescue's verdict and, for a
+	// Verified one, its manifest as the shelf re-hashed it. It is set once,
+	// at Archived, and never changes. A record holds an archive or a bundle,
+	// never both.
+	// +optional
+	Bundle *PrivateHomeBundleStatus `json:"bundle,omitempty"`
 	// +optional
 	DeletingAt *metav1.Time `json:"deletingAt,omitempty"`
 	// +optional
@@ -1016,6 +1027,47 @@ type PrivateHomeArchiveStatus struct {
 	// +kubebuilder:validation:Minimum=0
 	GitFiles   int32       `json:"gitFiles"`
 	ArchivedAt metav1.Time `json:"archivedAt"`
+}
+
+// PrivateHomeBundleStatus is the unpushed-work rescue a task Session's
+// clean-up relies on (DESIGN-061 section 3). A Verified rescue names its
+// manifest on the shared volume and the manifest's SHA-256 as `agentd ctl
+// rescue-verify` read it in the shelf, with every bundle re-hashed. A
+// CleanAndPushed rescue found every clone clean and pushed and wrote nothing,
+// so it names no manifest, no digest and no bundle.
+// +kubebuilder:validation:XValidation:rule="self.result == 'Verified' ? (has(self.manifest) && has(self.manifestSHA256) && self.bundles > 0) : (!has(self.manifest) && !has(self.manifestSHA256) && self.bundles == 0 && self.bytes == 0)",message="a Verified bundle names its manifest, digest and bundles; a CleanAndPushed one names none"
+type PrivateHomeBundleStatus struct {
+	// Stamp is the rescue's stamp (status.rescue.stamp), equal to the
+	// record's rescueStamp.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	Stamp string `json:"stamp"`
+	// Result is the rescue's verdict.
+	// +kubebuilder:validation:Enum=Verified;CleanAndPushed
+	// +kubebuilder:validation:MaxLength=16
+	Result string `json:"result"`
+	// Manifest is the rescue's manifest on the shared volume, for example
+	// rescue/dev-env-1110-021204/20261110-0213/manifest.json. Only a
+	// Verified bundle has one.
+	// +kubebuilder:validation:MaxLength=160
+	// +kubebuilder:validation:Pattern=`^rescue/[a-z0-9]([-a-z0-9]*[a-z0-9])?/[0-9]{8}-[0-9]{4}(-[0-9]+)?/manifest\.json$`
+	// +optional
+	Manifest string `json:"manifest,omitempty"`
+	// ManifestSHA256 is the SHA-256 of the manifest's bytes, as the shelf
+	// read them when it re-hashed every bundle the manifest names.
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
+	// +optional
+	ManifestSHA256 string `json:"manifestSHA256,omitempty"`
+	// Bundles is how many bundle files the manifest names.
+	// +kubebuilder:validation:Minimum=0
+	Bundles int32 `json:"bundles"`
+	// Bytes is the bundles' total size.
+	// +kubebuilder:validation:Minimum=0
+	Bytes int64 `json:"bytes"`
+	// VerifiedAt is when the operator accepted the verdict: for Verified,
+	// the shelf's re-hash.
+	VerifiedAt metav1.Time `json:"verifiedAt"`
 }
 
 // PrivateExecutorStopRequestStatus records the stop intent for the recorded
