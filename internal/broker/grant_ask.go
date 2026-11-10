@@ -132,6 +132,19 @@ func (b *Broker) askCreator() grantAskCreator {
 	return b.askStore()
 }
 
+// grantAskCreator is askCreator with the grant's original deadline. The real
+// store checks it immediately before the create request. A stub is unchanged.
+func (b *Broker) grantAskCreator(deadline time.Time) grantAskCreator {
+	creator := b.askCreator()
+	store, ok := creator.(asks.KubeStore)
+	if !ok {
+		return creator
+	}
+	store.CreateNotAfter = deadline
+	store.Now = func() time.Time { return b.now().Time }
+	return store
+}
+
 func (b *Broker) askStore() asks.KubeStore {
 	return asks.KubeStore{Client: b.Client, Live: b.APIReader, Namespace: asks.Namespace}
 }
@@ -525,8 +538,10 @@ func (b *Broker) createGrantedAsk(ctx context.Context, g *v1alpha1.AccessGrant, 
 		return err
 	}
 	// The preflight above can move the clock. This is the create boundary,
-	// including the first attempt. Never send the create after the deadline.
-	if !b.now().Time.Before(g.CreationTimestamp.Add(PendingTimeout)) {
+	// including the first attempt. The store checks the same deadline again
+	// after its own count list, immediately before it sends the create.
+	deadline := g.CreationTimestamp.Add(PendingTimeout)
+	if !b.now().Time.Before(deadline) {
 		b.clearGrantAskCreateOutstanding(g.UID)
 		return errGrantAskDeadline
 	}
@@ -534,8 +549,15 @@ func (b *Broker) createGrantedAsk(ctx context.Context, g *v1alpha1.AccessGrant, 
 		Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session, UID: string(g.Spec.Requester.SessionUID),
 		Origin: grantAskOriginBroker,
 	}
-	wire, created, err := b.askCreator().Create(ctx, req, body, now.Time)
+	creator := b.grantAskCreator(deadline)
+	wire, created, err := creator.Create(ctx, req, body, now.Time)
 	if err != nil {
+		// The store's count list can cross the deadline after the check
+		// above. That refusal is before the request is sent.
+		if errors.Is(err, asks.ErrCreateNotAfter) {
+			b.clearGrantAskCreateOutstanding(g.UID)
+			return errGrantAskDeadline
+		}
 		// A refusal proved to precede commit may be retried until the grant's
 		// original deadline. Anything else may have committed: do not create again.
 		if createRefusedBeforeCommit(err) {

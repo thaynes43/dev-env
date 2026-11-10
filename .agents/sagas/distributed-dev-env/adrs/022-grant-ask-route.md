@@ -71,8 +71,9 @@ is no durable marker for it. While a pre-create attempt is outstanding, the
 broker checks that deadline with a fresh clock before it branches on the Ask
 read, so a read error cannot open a new unread episode past the deadline.
 It checks the clock again at the create boundary, after the preflight and
-before the create is sent, including the first attempt. It never creates
-after the deadline. Any error after the create request left the client,
+before the create is sent, including the first attempt. The store checks
+that same deadline once more, immediately before it sends the create, after
+its own count list. It never creates after the deadline. Any error after the create request left the client,
 including a failure of the store's status initialisation or its final read,
 may have committed. The broker does not create again. A missing Ask then
 denies the grant. A restart has no memory of an unsent create, and a routed
@@ -129,7 +130,7 @@ from an earlier build exists.
 | Id | Consequence |
 |---|---|
 | C-61 | Good: losing sight of the Ask cannot reopen a policy, an attestation, or a delegate or reserved decision. |
-| C-62 | Bad: a routed grant whose Ask is deleted is denied. The session asks again. A create refused before commit is retried only until the original 30-minute deadline, and only in the process that has not sent it. That deadline is a fresh clock reading before the Ask-read branch and again at the create boundary. A create that may have committed is not retried. |
+| C-62 | Bad: a routed grant whose Ask is deleted is denied. The session asks again. A create refused before commit is retried only until the original 30-minute deadline, and only in the process that has not sent it. That deadline is a fresh clock reading before the Ask-read branch, again at the create boundary, and again inside the store immediately before the request is sent. A create that may have committed is not retried. |
 | C-63 | Neutral: a grant with no route, including flag off, is unchanged. An attested policy still decides the grant without an Ask. |
 | C-64 | Neutral: `status.askUnreadAt` is the start of the unread episode, set once per episode. A restart and a failed deny keep it. The two-minute limit stays one constant. A live read that does not show the instant denies the grant at once. |
 | C-65 | Neutral: one live GrantPolicy list serves the approval match and the decision that an attested policy could match. A failed list opens no Ask. |

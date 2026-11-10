@@ -277,6 +277,21 @@ func TestGrantAskStoreLimitOrUnavailableStaysPending(t *testing.T) {
 			t.Fatalf("preflight: lists %d asks %d %+v", reader.lists, f.askCount(), g.Status)
 		}
 	})
+	t.Run("store count crosses the deadline", func(t *testing.T) {
+		f := newGrantAskFixture(t, true)
+		reader := &askCountStepsClock{Client: f.meta, clk: f.clk}
+		f.b.APIReader = reader
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		g := f.grant()
+		if reader.lists < 1 || f.askCount() != 0 || g.Status.Phase != v1alpha1.GrantDenied || g.Status.DeniedBy != DeniedByTimeout || g.Status.Message != "no answer in 30 minutes" || g.Status.ApprovedBy != "" {
+			t.Fatalf("store count: lists %d asks %d %+v", reader.lists, f.askCount(), g.Status)
+		}
+	})
 }
 
 // askReadStepsClock moves the clock past the original deadline inside an Ask
@@ -310,6 +325,24 @@ func (d *deadlineTaskList) List(ctx context.Context, list client.ObjectList, opt
 		}
 	}
 	return d.Client.List(ctx, list, opts...)
+}
+
+// askCountStepsClock moves the clock past the original deadline inside the
+// store's Ask count list, which runs after the broker's own preflight.
+type askCountStepsClock struct {
+	client.Client
+	clk   *clocktesting.FakeClock
+	lists int
+}
+
+func (a *askCountStepsClock) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if page, ok := list.(*metav1.PartialObjectMetadataList); ok && page.GroupVersionKind().Kind == "AskList" {
+		a.lists++
+		if a.lists == 1 {
+			a.clk.Step(PendingTimeout)
+		}
+	}
+	return a.Client.List(ctx, list, opts...)
 }
 
 func TestGrantAskUnfitUIDStaysPending(t *testing.T) {

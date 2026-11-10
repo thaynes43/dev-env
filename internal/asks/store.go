@@ -71,6 +71,9 @@ var (
 	// initialisation or final read that failed after the object was created.
 	// The caller must not create again. A missing Ask denies the grant.
 	ErrCreateUnconfirmed = errors.New("ask create was not confirmed")
+	// ErrCreateNotAfter means CreateNotAfter was already reached. The create
+	// request was not sent and nothing was stored.
+	ErrCreateNotAfter = errors.New("ask create is past its deadline")
 )
 
 // LimitError is a refused create. Scope is LimitOpen, LimitOpenGrant,
@@ -120,6 +123,12 @@ type KubeStore struct {
 	Namespace string
 	Limits    Limits
 	Log       logr.Logger
+	// CreateNotAfter, with Now, is checked immediately before the create
+	// request is sent, after the store's own count list. Zero means the
+	// caller has no deadline. The session path leaves both unset.
+	CreateNotAfter time.Time
+	// Now is the caller's clock for CreateNotAfter. Nil skips that check.
+	Now func() time.Time
 }
 
 func (s KubeStore) ready() error {
@@ -178,6 +187,11 @@ func (s KubeStore) Create(ctx context.Context, req Requester, in apiv1.AskCreate
 	}
 	if err := s.checkRoom(ctx, req, now, in.Type); err != nil {
 		return apiv1.Ask{}, false, err
+	}
+	// The count list above can move the caller's clock. This is the last
+	// check before the request is sent. Nothing has been stored.
+	if s.Now != nil && !s.CreateNotAfter.IsZero() && !s.Now().Before(s.CreateNotAfter) {
+		return apiv1.Ask{}, false, ErrCreateNotAfter
 	}
 	obj := &coord.Ask{
 		TypeMeta:   metav1.TypeMeta{APIVersion: coord.GroupVersion.String(), Kind: "Ask"},

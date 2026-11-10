@@ -47,7 +47,9 @@ store the Ask unread time. A create the apiserver refused before commit is
 retried only until the grant's original 30-minute deadline. While that
 pre-create is outstanding, the broker checks the deadline with a fresh clock
 before it branches on the Ask read, and again at the create itself, including
-the first attempt. It never creates after the deadline. A read error does not
+the first attempt. The store checks that same deadline once more, immediately
+before it sends the create, after its own count list. It never creates after
+the deadline. A read error does not
 open a new unread episode past that deadline. A create that may have
 committed is not retried, and a missing Ask denies the grant. A grant with
 no route is still denied at 30 minutes. A grant an attested policy could
