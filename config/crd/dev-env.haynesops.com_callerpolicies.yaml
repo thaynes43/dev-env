@@ -1,0 +1,104 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: callerpolicies.dev-env.haynesops.com
+spec:
+  group: dev-env.haynesops.com
+  names:
+    kind: CallerPolicy
+    listKind: CallerPolicyList
+    plural: callerpolicies
+    singular: callerpolicy
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          CallerPolicy is the first D-36 caller contract (DESIGN-060 7.1). Only the
+          dev-env-system/meatball object is read. It admits no other caller or rights.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              CallerPolicySpec may tighten the first caller's bounds, never widen them.
+              Effort and route rights are fixed by the API, not configurable policy fields.
+            properties:
+              maxConcurrent:
+                format: int32
+                maximum: 2
+                minimum: 1
+                type: integer
+              maxTimeout:
+                maxLength: 32
+                type: string
+                x-kubernetes-validations:
+                - message: maxTimeout must be a positive Go duration at most 4h
+                  rule: duration(self) > duration('0s') && duration(self) <= duration('4h')
+              maxWorkers:
+                format: int32
+                maximum: 4
+                minimum: 1
+                type: integer
+              mode:
+                enum:
+                - task
+                maxLength: 4
+                type: string
+              models:
+                description: Models has no default. The request must name one of these
+                  full IDs.
+                items:
+                  enum:
+                  - claude-opus-5-5
+                  - gpt-6-astra
+                  - claude-fable-5-2
+                  maxLength: 64
+                  type: string
+                maxItems: 3
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: set
+              profile:
+                enum:
+                - dev
+                maxLength: 3
+                type: string
+              serviceAccount:
+                enum:
+                - dev-env-system/dev-env-meatball
+                maxLength: 128
+                type: string
+            required:
+            - maxConcurrent
+            - maxTimeout
+            - maxWorkers
+            - mode
+            - models
+            - profile
+            - serviceAccount
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true

@@ -46,7 +46,7 @@ recover a previous invocation's timing or handoff receipt.
 | `project_inventory_ok` | Create echoed the accepted repository and base; status alone cannot recover this create evidence |
 | `pod_scheduled` | Session conditions: PodScheduled true, PodReady true, or a node-bound PodReady false condition reporting Starting/container startup; 60s |
 | `pod_ready` | PodReady condition true; 120s after `api_accepted`, including scheduling time |
-| `agent_started` | Agent running with nonempty conversation ID; 90s |
+| `agent_started` | Agent running with nonempty conversation ID. Follows `--wait`, not a fixed 90s. The status is agentd's 60s heartbeat, so a start can stay invisible for almost a minute after the process is up |
 | `provider_auth_ok` | Always unknown. Reason `provider_readiness_unavailable`, or, while the session's agent message starts with `login-rejected:` or `login-unverified:` (agentd saw the provider refuse the applied keeper generation, or cannot tell), `login_rejected_pending` or `login_rejection_unverifiable`. Information only: no gate, no new outcome, exit code or error code; the one handoff attempt is unchanged |
 | `rc_ready` | Always unknown: `provider_readiness_unavailable`; `rcRegistered` separately records registration; 90s |
 | `link_available` | URL matches the existing portal Remote Control URL pattern; 10s after registration |
@@ -57,8 +57,15 @@ recover a previous invocation's timing or handoff receipt.
 Each phase carries state (`ok`, `error`, `blocked`, `unknown` or
 `not_applicable`), first observation time, milliseconds since request,
 null source time, evidence source and reason. Scheduling and PodReady budgets
-both start at acceptance; later stage budgets run serially. All are capped by
-`--wait` (default 5m, maximum 10m), including network requests. `--wait 0`
+both start at acceptance. Registration and the link then run serially from
+the previous observation. `agent_started` does not: it runs until `--wait`.
+On 2026-11-10 a fixed 90s from PodReady expired at 120.6s (PodReady at 30.5s)
+while the conversation had existed since 82s and `--wait` was 6m. The status
+that would have shown it arrives on the next heartbeat, up to a minute later,
+so the handoff was never sent. The other budgets stay, and every stage is
+still capped by `--wait` (default 5m, maximum 10m), including network
+requests. A start that never appears times out at `--wait` with the phase
+named (`launch_deadline`, phase `agent_started`). `--wait 0`
 submits the create and prints its handle without polling or sending a handoff.
 A zero-wait start and a status read of an active session without a link
 return `accepted` (exit 7); an expired positive wait returns `timed_out` with
@@ -85,11 +92,12 @@ including a rejected or unconfirmed handoff.
 | `launch_forbidden` | HTTP 403, including the coordinator refusal |
 | `project_unavailable` | HTTP 422 identifying project admission; phase `project_inventory_ok` |
 | `request_conflict` | HTTP 409 on create, such as a changed request under a reused key |
-| `scheduling_timeout`, `pod_ready_timeout`, `agent_start_timeout` | Corresponding stage budget expired |
+| `scheduling_timeout`, `pod_ready_timeout` | Corresponding stage budget expired |
+| `agent_start_timeout` | Retained for a stage budget that ends before `--wait`. Agent start follows `--wait`, so a start that never appears is `launch_deadline` with phase `agent_started` |
 | `login_conflict` | Recognized agent conflict requires immediate owner action; no login is attempted |
 | `auth_projection_unavailable` | Keeper projection warning persisted for 30s within agent startup; a transient warning can clear; one status read cannot establish persistence |
-| `auth_refresh_pending` | The pod reported `refreshing:` (the access token expired under 3 minutes ago and the keeper's next generation is pending) when the 90s agent-start budget ended; outcome `timed_out`, exit pending, session handle retained. While the status is `refreshing:` the 30s owner-action rule does not run, and no sign-in is requested; if the status returns to the login-required text, that rule runs from that moment, and only within the remaining agent-start budget |
-| `login_rejected_pending` | Not an error code: the `provider_auth_ok` phase reason while the agent message starts with `login-rejected:` (agentd saw the provider reject the applied keeper token while it was unexpired). The phase stays `unknown`; no outcome, exit code, error code or owner action changes, and the one handoff attempt is unchanged. A newer generation may or may not arrive; if the wait outlasts agent start, the ordinary `agent_start_timeout` applies |
+| `auth_refresh_pending` | The pod reported `refreshing:` (the access token expired under 3 minutes ago and the keeper's next generation is pending) when the wait for agent start ended, including when that wait is `--wait`. Outcome `timed_out`, phase `agent_started`, exit pending, session handle retained. While the status is `refreshing:` the 30s owner-action rule does not run, and no sign-in is requested; if the status returns to the login-required text, that rule runs from that moment, for the rest of `--wait` |
+| `login_rejected_pending` | Not an error code: the `provider_auth_ok` phase reason while the agent message starts with `login-rejected:` (agentd saw the provider reject the applied keeper token while it was unexpired). The phase stays `unknown`; no outcome, exit code, error code or owner action changes, and the one handoff attempt is unchanged. A newer generation may or may not arrive; if `--wait` ends first, the result is `launch_deadline` with phase `agent_started` |
 | `login_rejection_unverifiable` | Not an error code: the `provider_auth_ok` phase reason while the agent message starts with `login-unverified:` (the pod's rejection record is unreadable or inconsistent, so agentd cannot tell). Same effect as above: reason text only |
 | `rc_registration_timeout`, `link_unavailable` | Registration or validated link did not appear in its budget |
 | `session_ended` | Session is Failed, Suspended, Archived or being reaped; start/status return `failed`, exit 1, even with a retained link |

@@ -193,6 +193,9 @@ type CreateSessionRequest struct {
 
 // Limits caps a task session.
 type Limits struct {
+	// MaxWorkers caps unfinished direct workers across agent kinds. Only a
+	// CallerPolicy caller may supply it; the first policy requires 1 through 4.
+	MaxWorkers *int32 `json:"maxWorkers,omitempty"`
 	// Timeout is a positive Go duration, for example 40m.
 	Timeout string `json:"timeout,omitempty"`
 	// MaxTurns caps the agent's turns; 0 means no cap.

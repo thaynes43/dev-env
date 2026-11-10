@@ -80,6 +80,106 @@ func name() string {
 	return fmt.Sprintf("s-%d", seq.Add(1))
 }
 
+func validCallerPolicy() *v1alpha1.CallerPolicy {
+	return &v1alpha1.CallerPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: name(), Namespace: ns},
+		Spec: v1alpha1.CallerPolicySpec{
+			ServiceAccount: "dev-env-system/dev-env-meatball", Mode: "task", Profile: "dev",
+			Models:        []string{"claude-opus-5-5", "gpt-6-astra", "claude-fable-5-2"},
+			MaxConcurrent: 2, MaxTimeout: "4h", MaxWorkers: 4,
+		},
+	}
+}
+
+func TestCallerPolicyValidation(t *testing.T) {
+	for _, model := range []string{"claude-opus-5-5", "gpt-6-astra", "claude-fable-5-2"} {
+		t.Run("accept "+model, func(t *testing.T) {
+			p := validCallerPolicy()
+			p.Spec.Models = []string{model}
+			p.Spec.MaxWorkers, p.Spec.MaxConcurrent = 1, 1
+			p.Spec.MaxTimeout = strings.Repeat("0", 30) + "1s" // 32-character bound, positive.
+			if err := k8s.Create(ctx(t), p); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if err := k8s.Create(ctx(t), validCallerPolicy()); err != nil {
+		t.Fatalf("accept all models and upper bounds: %v", err)
+	}
+	cases := []struct {
+		name, field string
+		mutate      func(*v1alpha1.CallerPolicySpec)
+	}{
+		{"other account", "serviceAccount", func(s *v1alpha1.CallerPolicySpec) { s.ServiceAccount = "dev-env-system/other" }},
+		{"long account", "serviceAccount", func(s *v1alpha1.CallerPolicySpec) { s.ServiceAccount = strings.Repeat("a", 129) }},
+		{"non-task", "mode", func(s *v1alpha1.CallerPolicySpec) { s.Mode = "local" }},
+		{"wrong profile", "profile", func(s *v1alpha1.CallerPolicySpec) { s.Profile = "ops" }},
+		{"long profile", "profile", func(s *v1alpha1.CallerPolicySpec) { s.Profile = "workbench" }},
+		{"no models", "models", func(s *v1alpha1.CallerPolicySpec) { s.Models = []string{} }},
+		{"wrong model", "models", func(s *v1alpha1.CallerPolicySpec) { s.Models = []string{"claude-sonnet-5-5"} }},
+		{"long model", "models", func(s *v1alpha1.CallerPolicySpec) { s.Models = []string{strings.Repeat("a", 65)} }},
+		{"too many models", "models", func(s *v1alpha1.CallerPolicySpec) { s.Models = append(s.Models, "claude-sonnet-5-5") }},
+		{"duplicate models", "models", func(s *v1alpha1.CallerPolicySpec) { s.Models = []string{"gpt-6-astra", "gpt-6-astra"} }},
+		{"zero concurrent", "maxConcurrent", func(s *v1alpha1.CallerPolicySpec) { s.MaxConcurrent = 0 }},
+		{"three concurrent", "maxConcurrent", func(s *v1alpha1.CallerPolicySpec) { s.MaxConcurrent = 3 }},
+		{"zero workers", "maxWorkers", func(s *v1alpha1.CallerPolicySpec) { s.MaxWorkers = 0 }},
+		{"five workers", "maxWorkers", func(s *v1alpha1.CallerPolicySpec) { s.MaxWorkers = 5 }},
+		{"too long timeout", "maxTimeout", func(s *v1alpha1.CallerPolicySpec) { s.MaxTimeout = "4h1ns" }},
+		{"zero timeout", "maxTimeout", func(s *v1alpha1.CallerPolicySpec) { s.MaxTimeout = "0s" }},
+		{"negative timeout", "maxTimeout", func(s *v1alpha1.CallerPolicySpec) { s.MaxTimeout = "-1s" }},
+		{"invalid timeout", "maxTimeout", func(s *v1alpha1.CallerPolicySpec) { s.MaxTimeout = "four hours" }},
+		{"long timeout string", "maxTimeout", func(s *v1alpha1.CallerPolicySpec) { s.MaxTimeout = strings.Repeat("0", 31) + "1s" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := validCallerPolicy()
+			tc.mutate(&p.Spec)
+			wantInvalid(t, k8s.Create(ctx(t), p), tc.field)
+		})
+	}
+	for _, field := range []string{"serviceAccount", "mode", "profile", "models", "maxConcurrent", "maxTimeout", "maxWorkers"} {
+		t.Run("required "+field, func(t *testing.T) {
+			p := validCallerPolicy()
+			p.APIVersion, p.Kind = v1alpha1.GroupVersion.String(), "CallerPolicy"
+			u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			unstructured.RemoveNestedField(u, "spec", field)
+			wantInvalid(t, k8s.Create(ctx(t), &unstructured.Unstructured{Object: u}), field)
+		})
+	}
+	t.Run("required spec", func(t *testing.T) {
+		p := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": v1alpha1.GroupVersion.String(), "kind": "CallerPolicy",
+			"metadata": map[string]any{"name": name(), "namespace": ns},
+		}}
+		wantInvalid(t, k8s.Create(ctx(t), p), "spec")
+	})
+}
+
+func TestCallerPolicyWorkerLimitValidation(t *testing.T) {
+	for _, workers := range []int32{1, 4, 0, 5} {
+		s := taskSession()
+		s.Spec.Limits = &v1alpha1.SessionLimits{MaxWorkers: &workers}
+		err := k8s.Create(ctx(t), s)
+		if workers == 0 || workers == 5 {
+			wantInvalid(t, err, "maxWorkers")
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		original := s.DeepCopy()
+		if err := k8s.Update(ctx(t), s); err != nil {
+			t.Fatalf("unchanged cap: %v", err)
+		}
+		*original.Spec.Limits.MaxWorkers = 2
+		original.ResourceVersion = s.ResourceVersion
+		wantInvalid(t, k8s.Update(ctx(t), original), "immutable after create")
+	}
+}
+
 func dur(d time.Duration) *metav1.Duration { return &metav1.Duration{Duration: d} }
 
 // taskSession is the smallest valid session: Tom's own task, on Claude.

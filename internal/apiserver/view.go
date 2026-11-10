@@ -61,7 +61,7 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 		v.ArchivedAt = &at
 	}
 	if l := s.Spec.Limits; l != nil {
-		v.Limits = &apiv1.Limits{MaxTurns: l.MaxTurns}
+		v.Limits = &apiv1.Limits{MaxTurns: l.MaxTurns, MaxWorkers: l.MaxWorkers}
 		if l.Timeout != nil {
 			v.Limits.Timeout = l.Timeout.Duration.String()
 		}
