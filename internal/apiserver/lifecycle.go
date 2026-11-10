@@ -89,9 +89,28 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 		// run under the create lock, as a create's check and Create do, so a
 		// resume and a create on this replica cannot both pass.
 		identity := mode == v1alpha1.OperatingModeRunning && sess.Labels[templates.CoordinatorIdentityLabel] != ""
-		if identity {
+		// A resume of a CallerPolicy root or a bounded parent's worker takes a
+		// slot again: its live count, excluding itself, and its patch also run
+		// under the create lock (DESIGN-060 7.1). Other resumes are unchanged.
+		var bounded *caller
+		if mode == v1alpha1.OperatingModeRunning {
+			var err error
+			if bounded, err = s.callerForBoundedResume(ctx, &sess); err != nil {
+				return 0, nil, err
+			}
+		}
+		locked := identity || bounded != nil
+		if locked {
 			s.createMu.Lock()
+		}
+		if identity {
 			if err := s.admitNamedCoordinator(ctx, &sess); err != nil {
+				s.createMu.Unlock()
+				return 0, nil, err
+			}
+		}
+		if bounded != nil {
+			if err := s.admitCallerCapacityExcept(ctx, bounded, sess.UID); err != nil {
 				s.createMu.Unlock()
 				return 0, nil, err
 			}
@@ -117,7 +136,7 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 			sess.Annotations[v1alpha1.AnnotationResumedAt] = s.now().UTC().Format(time.RFC3339)
 		}
 		err := s.Client.Patch(ctx, &sess, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
-		if identity {
+		if locked {
 			s.createMu.Unlock()
 		}
 		if apierrors.IsConflict(err) {

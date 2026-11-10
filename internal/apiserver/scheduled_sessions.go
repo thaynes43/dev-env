@@ -124,7 +124,7 @@ func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSes
 	if s.now().After(d.StartDeadline) {
 		return "", "", false, scheduledwork.ErrPastStartDeadline
 	}
-	err = s.Client.Create(ctx, sess)
+	err = s.createWithCallerCap(ctx, sess, c)
 	if apierrors.IsAlreadyExists(err) {
 		existing, err := s.scheduledSession(ctx, name)
 		switch {

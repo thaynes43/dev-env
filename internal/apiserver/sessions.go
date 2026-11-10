@@ -59,6 +59,18 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 	}
 	var keys map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &keys)
+	if c.kind == kindPolicy {
+		// Presence matters: an explicit empty/null effort is still a caller
+		// setting. Match encoding/json's case-insensitive field handling too.
+		for key := range keys {
+			if strings.EqualFold(key, "effort") {
+				return 0, nil, invalid(fieldError("effort", "CallerPolicy accepts no effort setting; omit the key"))
+			}
+		}
+		if req.CanaryID != "" || dryRun {
+			return 0, nil, policyCallerDenied()
+		}
+	}
 	canaryRequest := req.CanaryID != ""
 	for key := range keys {
 		canaryRequest = canaryRequest || strings.EqualFold(key, "canaryID")
@@ -74,6 +86,9 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 		return s.createProjectCanary(ctx, w, c, req.CanaryID)
 	}
 	if req.Project != "" && s.PrivatePilot != nil {
+		if c.kind == kindPolicy {
+			return 0, nil, forbidden("CallerPolicy does not admit private pilot sessions")
+		}
 		strict, err := kjson.UnmarshalStrict(raw, &req)
 		if err != nil || len(strict) != 0 {
 			return 0, nil, badRequest("expected one exact sealed pilot request")
@@ -214,7 +229,7 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 				return 0, nil, invalid(fieldError("project", "private budget common inputs changed before dispatch; reservation retained"))
 			}
 		}
-		err := s.Client.Create(ctx, sess)
+		err := s.createWithCallerCap(ctx, sess, c)
 		if apierrors.IsAlreadyExists(err) {
 			sess.ResourceVersion = ""
 			continue
@@ -321,7 +336,7 @@ func (s *Server) listSessions(ctx context.Context, _ http.ResponseWriter, r *htt
 	}
 	var list v1alpha1.AgentSessionList
 	reader := client.Reader(s.Client)
-	if c.kind == kindCoordinator {
+	if c.kind == kindCoordinator || c.kind == kindPolicy {
 		reader = s.Live
 	}
 	if err := reader.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
@@ -336,6 +351,9 @@ func (s *Server) listSessions(ctx context.Context, _ http.ResponseWriter, r *htt
 	})
 	out := apiv1.SessionList{Sessions: []apiv1.Session{}}
 	for i := range items {
+		if c.kind == kindPolicy && !policyOwns(c, &items[i]) {
+			continue
+		}
 		if (c.kind != kindCoordinator || items[i].Spec.Parent == c.parent) && f.match(&items[i], c) {
 			out.Sessions = append(out.Sessions, view(&items[i], false))
 		}
@@ -422,6 +440,13 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 	if err != nil {
 		return 0, nil, err
 	}
+	if c.kind == kindPolicy {
+		sess, err := s.policySession(ctx, key, c)
+		if err != nil {
+			return 0, nil, err
+		}
+		return http.StatusOK, view(sess, true), nil
+	}
 	opted := r.Header.Get(apiv1.UsageCaptureHeader) == apiv1.UsageCaptureDirectV1
 	if c.kind == kindCoordinator {
 		sess, err := s.childForCoordinator(ctx, key, c, "")
@@ -471,6 +496,9 @@ func (s *Server) reapSession(ctx context.Context, _ http.ResponseWriter, r *http
 	// cache that lags.
 	var sess v1alpha1.AgentSession
 	if err := s.Live.Get(ctx, key, &sess); err != nil {
+		if c.kind == kindPolicy {
+			return 0, nil, policyCallerDenied()
+		}
 		if c.kind == kindCoordinator {
 			return 0, nil, coordinatorDenied()
 		}
@@ -478,6 +506,9 @@ func (s *Server) reapSession(ctx context.Context, _ http.ResponseWriter, r *http
 	}
 	if c.kind == kindCoordinator && (sess.Spec.Parent != c.parent || sess.UID == "") {
 		return 0, nil, coordinatorDenied()
+	}
+	if c.kind == kindPolicy && !policyOwns(c, &sess) {
+		return 0, nil, policyCallerDenied()
 	}
 	if err := s.authorizeChildMutation(ctx, &sess, c); err != nil {
 		return 0, nil, err
@@ -502,7 +533,9 @@ func (s *Server) reapSession(ctx context.Context, _ http.ResponseWriter, r *http
 	}
 	s.Log.Info("session reap requested", "session", sess.Name, "caller", c.String())
 	var after v1alpha1.AgentSession
-	if err := s.Live.Get(ctx, key, &after); err == nil && (c.kind != kindCoordinator || (after.UID == sess.UID && after.Spec.Parent == c.parent)) {
+	if err := s.Live.Get(ctx, key, &after); err == nil &&
+		(c.kind != kindCoordinator || (after.UID == sess.UID && after.Spec.Parent == c.parent)) &&
+		(c.kind != kindPolicy || (after.UID == sess.UID && policyOwns(c, &after))) {
 		return http.StatusAccepted, view(&after, false), nil
 	}
 	v := view(&sess, false)
@@ -530,6 +563,9 @@ func refuseRetainedExecutor(c *caller) error {
 // ordinary session runs it under the create lock, after a repeat of the same
 // create has had its answer (createSessionMode, CreateScheduledSession).
 func (s *Server) admitCreate(ctx context.Context, c *caller, sess *v1alpha1.AgentSession) error {
+	if err := s.admitCallerCapacity(ctx, c); err != nil {
+		return err
+	}
 	// Image rollback blocks only new enrollment. An accepted create whose
 	// response was lost must still be recoverable through its same stable key.
 	// Authentication, project and parent binding were checked by newSession.
