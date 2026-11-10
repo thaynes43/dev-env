@@ -89,7 +89,8 @@ every worker it started has stopped. Before then, `backlog_close` returns
 the original refusal and one sentence naming what was not proven; the
 caller tries again later. `Grace`, `ChildrenActive`, any other reason or
 phase, and missing or duplicate conditions all refuse takeover. A resume
-resets reclaim to `Grace`. If terminal task reclaim is disabled, the
+before reclaim settles can restart `Grace`; a settled `Reclaimed` condition
+is not reset by resume. If terminal task reclaim is disabled, the
 condition never appears and takeover never happens.
 
 Accepted residual: the condition records the moment of reclaim. If someone

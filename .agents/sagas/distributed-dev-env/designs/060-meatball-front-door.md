@@ -561,7 +561,8 @@ all of the following are proven from reads made during this call:
    proves neither that its pod is gone nor that its workers stopped. Any
    other phase or reason, a missing condition or duplicate conditions
    refuses takeover. In particular, `Grace` and `ChildrenActive` do not
-   qualify; an explicit resume resets reclaim to `Grace`.
+   qualify. Before reclaim settles, an explicit resume can restart `Grace`;
+   a settled `Reclaimed` condition is not reset by resume.
 6. The refused item's snapshot has a known status and explicitly says it is
    not a hold. Review work held in Needs answer, Needs approval or Paused
    stays held. In review itself is not an explicit hold in opwork.
