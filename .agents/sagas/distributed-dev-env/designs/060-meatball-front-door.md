@@ -521,6 +521,82 @@ text, changed only by a PR he approves. This change installs none. It grants
 no new access and does not change any existing tool's behaviour or limits.
 The behaviour page is [docs/frontdoor.md](../../../../docs/frontdoor.md).
 
+### 7.4 Close an item left by the caller's finished coordinator (OP632, 2026-11-10)
+
+Process decision by coordinator `dev-env-fable-coordinator-1109`, recorded in
+the OP632 work order. This is not a ruling by Tom. In OP529's acceptance run,
+the coordinator started through Meatball's front door left its item In review
+and exited. `backlog_close` then met opwork's ownership guard. That guard is
+correct for unrelated or live owners. This exception covers only the caller's
+own finished coordinator for the exact item.
+
+`backlog_close` first runs the existing `opwork complete` without force. A
+successful call returns normally. A refusal can lead to takeover only when
+all of the following are proven from reads made during this call:
+
+1. The refusal is specifically opwork's ownership guard, before any write.
+   Exit 3 alone cannot prove it: holds, conflicts and other refusals share
+   that code. Add `complete --guard-json`, an opt-in representation of the
+   existing guard failure. Its versioned JSON object carries the exact
+   original message, reason (`ownership` or `hold`), item id, lockVersion,
+   execution owner, status and `hold` boolean. The boolean uses opwork's
+   existing `HOLDS`: Needs answer, Needs approval and Paused. The hold guard
+   still runs first. Ordinary CLI output, exit codes and session guards do
+   not change. No text matching grants a takeover.
+2. The owner has opwork's exact session form:
+   `<agent> | worktree <session> | branch agent/<session>`. Both session
+   names must agree and be valid session names. A bare caller name, a path,
+   an absent field or an unrecognized representation does not qualify.
+3. `agentrun.ExecuteCoordinatorStatus` with `Item` finds exactly one retained
+   `coordinator-<item>` under this caller. Its fresh GET must still carry that
+   key and its name must exactly equal the owner's session. The operator's
+   caller-scoped list and GET enforce provenance. No lookup by owner name,
+   history search, alternate identity or cached result is a substitute.
+4. The session is in task mode and has a finished task result whose verdict
+   is Succeeded or Failed. Starting, running, missing, Unknown and TimedOut
+   do not qualify. A failed pod phase alone proves nothing about its task.
+5. The refused item's snapshot has a known status and explicitly says it is
+   not a hold. Review work held in Needs answer, Needs approval or Paused
+   stays held. In review itself is not an explicit hold in opwork.
+
+After these checks, run `claim --force --expect-lock=<refused lock>` with a
+note naming the caller's own finished coordinator and why it is taking over.
+The tracker atomically rejects any changed item, including a new hold, with
+the existing lockVersion check. No retry adopts a newer lock. The claim's
+note follows its successful PATCH, so a conflict writes no note. Then run
+`complete` with the caller's original evidence and without force. Both
+commands use the existing `meatball` execution identity and origin.
+
+The original refusal message and exit diagnostic are retained, followed by
+one sentence naming the missing condition, when proof fails or the takeover
+conflicts. These paths make no tracker mutation. Missing, malformed,
+truncated or unsupported guard data fails closed. An older opwork that does
+not support the option also fails closed; there is no fallback to parsing
+text. Operator errors or missing/ambiguous sessions write nothing.
+
+After a successful or possibly applied claim, do not undo it. If completion
+does not reach Accepted, return its result and a fresh `show` of the item's
+actual state. If that read fails, say the current state is unconfirmed and
+return the read error; never claim acceptance or retry the mutation. A
+failed or uncertain claim also gets a read back and stops without complete.
+Claim and complete are two tracker operations, not one transaction.
+
+`backlog_groom` gets no such exception. Editing scope or acceptance is a new
+work decision, not closing the caller's completed coordinator work. It keeps
+its current opwork behavior. No other tool receives force, and no general
+takeover tool is added. The tool annotations remain unchanged: close writes
+kept tracker data, and a repeated completion can add evidence.
+
+Source evidence is one PR containing this design, decision row, implementation
+and docs. Offline fakes must show caller-attributed claim then complete for
+Succeeded and Failed, and no mutation for running/starting/unknown tasks,
+another caller's owner, a mismatched owner, no retained session, operator
+failure, malformed owner, every canonical hold, a stale lock and every other
+opwork refusal. Additional tests cover malformed signals and failure after
+takeover. The coordinator owns the second-family review, merge, image pin,
+installation and live acceptance. Item 492 is untouched by this story's
+worker and remains the coordinator's live test.
+
 ## 8. One approval path
 
 ### The list (ruled by Tom, 2026-11-10)
