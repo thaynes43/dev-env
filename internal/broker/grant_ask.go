@@ -315,8 +315,17 @@ type ctrlResult = reconcile.Result
 
 func (b *Broker) grantAskHoldError(ctx context.Context, g *v1alpha1.AccessGrant, err error) (reconcile.Result, error) {
 	switch {
-	case errors.Is(err, asks.ErrLimit), errors.Is(err, asks.ErrUnavailable):
+	case errors.Is(err, asks.ErrLimit):
 		b.event(g, corev1.EventTypeWarning, "GrantAsk", "AskBoardFull", "the asks board is full; the grant stays pending")
+		log.FromContext(ctx).Error(err, "grant ask was not opened", "grant", g.Name)
+	case errors.Is(err, asks.ErrUnavailable):
+		// The count was not confirmed. That is not the cap.
+		b.event(g, corev1.EventTypeWarning, "GrantAsk", "AskCountUnavailable", "the ask count could not be confirmed; the grant stays pending")
+		log.FromContext(ctx).Error(err, "grant ask was not opened", "grant", g.Name)
+	case errors.Is(err, errGrantAskLater):
+		// A UID, target or body that cannot be stored. Retry, and say so on
+		// the grant. Do not deny.
+		b.event(g, corev1.EventTypeWarning, "GrantAsk", "AskNotOpened", "the grant ask could not be opened; the grant stays pending")
 		log.FromContext(ctx).Error(err, "grant ask was not opened", "grant", g.Name)
 	case errors.Is(err, errGrantAskStop):
 		// Pending, and not approved. The next pass looks again. Nothing here

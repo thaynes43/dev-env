@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	clocktesting "k8s.io/utils/clock/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -151,14 +153,18 @@ func TestGrantAskEndedSessionLeavesTheAskOpen(t *testing.T) {
 
 func TestGrantAskStoreLimitOrUnavailableStaysPending(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		err  error
+		name   string
+		err    error
+		reason string
+		note   string
 	}{
-		{"limit", &asks.LimitError{Scope: asks.LimitOpenGrant}},
-		{"unavailable", fmt.Errorf("%w: ask count unconfirmed", asks.ErrUnavailable)},
+		{"limit", &asks.LimitError{Scope: asks.LimitOpenGrant}, "AskBoardFull", "the asks board is full"},
+		{"unavailable", fmt.Errorf("%w: ask count unconfirmed", asks.ErrUnavailable), "AskCountUnavailable", "the ask count could not be confirmed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newGrantAskFixture(t, true)
+			rec := &events.FakeRecorder{Events: make(chan string, 16)}
+			f.b.Recorder = rec
 			stub := &grantAskStub{err: tc.err}
 			f.b.grantAsks = stub
 			f.until(func(g *v1alpha1.AccessGrant) bool {
@@ -179,12 +185,27 @@ func TestGrantAskStoreLimitOrUnavailableStaysPending(t *testing.T) {
 			if n := f.askCount(); n != 0 {
 				t.Fatalf("store error left %d asks", n)
 			}
+			got := eventTexts(rec)
+			if len(got) == 0 || !strings.Contains(got[0], tc.reason) || !strings.Contains(got[0], tc.note) {
+				t.Fatalf("events %q, want %s", got, tc.reason)
+			}
+			other := "AskBoardFull"
+			if tc.reason == other {
+				other = "AskCountUnavailable"
+			}
+			for _, msg := range got {
+				if strings.Contains(msg, other) {
+					t.Fatalf("event %q used %s", msg, other)
+				}
+			}
 		})
 	}
 }
 
 func TestGrantAskUnfitUIDStaysPending(t *testing.T) {
 	f := newGrantAskFixture(t, true)
+	rec := &events.FakeRecorder{Events: make(chan string, 16)}
+	f.b.Recorder = rec
 	g := f.grant()
 	g.UID = "bad.uid"
 	if err := f.base.Update(f.ctx, g); err != nil {
@@ -201,6 +222,56 @@ func TestGrantAskUnfitUIDStaysPending(t *testing.T) {
 	}
 	if n := f.askCount(); n != 0 {
 		t.Fatalf("unfit UID opened %d asks", n)
+	}
+	msgs := eventTexts(rec)
+	if len(msgs) == 0 || !strings.Contains(msgs[0], "AskNotOpened") || strings.Contains(strings.Join(msgs, "\n"), "AskBoardFull") {
+		t.Fatalf("events %q", msgs)
+	}
+}
+
+func TestGrantAskMaintenanceStillDeniesAtThirtyMinutes(t *testing.T) {
+	f := newGrantAskFixture(t, true)
+	f.b.EnableMaintenanceGrants = true
+	g := f.grant()
+	g.Spec.Type = v1alpha1.GrantMaintenance
+	g.Spec.Kube = nil
+	g.Spec.TTL.Duration = 30 * time.Minute
+	g.Spec.Maintenance = &v1alpha1.MaintenanceTask{
+		Coordinator: v1alpha1.MaintenanceIdentity{
+			Name: g.Spec.Requester.Session, UID: string(g.Spec.Requester.SessionUID), PodUID: "pod-1",
+		},
+		Node: "worker-node", NodeUID: "node-uid", Resource: "device-identity", Operation: "inspect",
+		Image: "registry.example/tool@sha256:" + strings.Repeat("b", 64), CPUMillis: 100, MemoryMiB: 128,
+	}
+	if err := f.base.Update(f.ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	f.until(func(g *v1alpha1.AccessGrant) bool { return g.Status.Phase == v1alpha1.GrantPending })
+	if n := f.askCount(); n != 0 {
+		t.Fatalf("maintenance opened %d asks before the wait", n)
+	}
+	f.clk.Step(PendingTimeout)
+	if _, err := f.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	got := f.grant()
+	if got.Status.Phase != v1alpha1.GrantDenied || got.Status.DeniedBy != DeniedByTimeout || got.Status.Message != "no answer in 30 minutes" {
+		t.Fatalf("maintenance after 30 minutes: phase %s deniedBy %s message %q", got.Status.Phase, got.Status.DeniedBy, got.Status.Message)
+	}
+	if n := f.askCount(); n != 0 {
+		t.Fatalf("maintenance opened %d asks", n)
+	}
+}
+
+func eventTexts(rec *events.FakeRecorder) []string {
+	var out []string
+	for {
+		select {
+		case msg := <-rec.Events:
+			out = append(out, msg)
+		default:
+			return out
+		}
 	}
 }
 
