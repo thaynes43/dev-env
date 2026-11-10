@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,7 +95,7 @@ func TestChangedObservationNotCountedTwice(t *testing.T) {
 
 func TestAddPrecedesMark(t *testing.T) {
 	session := finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5")
-	r := &Reconciler{Counters: NewCounters(), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
+	r := &Reconciler{Counters: withClock(NewCounters()), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
 	var atPatch float64
 	var patched bool
 	r.Client = fakeClientIntercept(t, session, interceptor.Funcs{
@@ -112,12 +113,23 @@ func TestAddPrecedesMark(t *testing.T) {
 		t.Fatalf("mark written before a scrape: patched %v after %s annotation %q", patched, res.RequeueAfter, annotation(t, r.Client, "s"))
 	}
 	got := scrapes(t, r.Counters, 2)
-	if got[0][series(MetricSessions, "agent", "claude", "model", "claude-opus-5-5")] != 0 {
-		t.Fatalf("first scrape = %v", got[0])
+	key := series(MetricSessions, "agent", "claude", "model", "claude-opus-5-5")
+	if got[0][key] != 0 || got[1][key] != 0 {
+		t.Fatalf("zero window scrapes = %v then %v", got[0], got[1])
 	}
-	if got[1][series(MetricSessions, "agent", "claude", "model", "claude-opus-5-5")] != 1 {
-		t.Fatalf("second scrape = %v", got[1])
+	advance(r.Counters, r.Counters.zeroFor)
+	shown := scrapes(t, r.Counters, 1)
+	if shown[0][key] != 1 {
+		t.Fatalf("visible scrape = %v", shown[0])
 	}
+	res, err = reconcileResult(r, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patched || res.RequeueAfter <= 0 {
+		t.Fatalf("mark written before the visible window: patched %v after %s", patched, res.RequeueAfter)
+	}
+	advance(r.Counters, r.Counters.markAfter)
 	if err := reconcile(r, "s"); err != nil {
 		t.Fatal(err)
 	}
@@ -167,6 +179,7 @@ func TestNoUsageCountsSessionsAndSecondsOnly(t *testing.T) {
 	if err := reconcile(r, "s"); err != nil {
 		t.Fatal(err)
 	}
+	advance(r.Counters, r.Counters.zeroFor)
 	got := gatherCounters(t, r.Counters)
 	if got[series(MetricSessions, "agent", "claude", "model", "claude-opus-5-5")] != 1 {
 		t.Fatalf("sessions = %v", got)
@@ -274,6 +287,7 @@ func TestLabelValuesAreBounded(t *testing.T) {
 	if err := reconcile(r, "plain"); err != nil {
 		t.Fatal(err)
 	}
+	advance(r.Counters, r.Counters.zeroFor)
 	got := gatherCounters(t, r.Counters)
 	want := map[string]float64{
 		series(MetricTokens, "agent", "claude", "cost_kind", kindEstimate, "model", labelOther, "repository", labelOther, "token", tokenInput):     10,
@@ -298,7 +312,7 @@ func TestLabelValuesAreBounded(t *testing.T) {
 func TestRefusedMarkDoesNotAddAgain(t *testing.T) {
 	session := finalSession("s", "uid-1", idA, "dev-env", "claude-opus-5-5")
 	var seen []float64
-	r := &Reconciler{Counters: NewCounters(), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
+	r := &Reconciler{Counters: withClock(NewCounters()), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
 	c := fakeClientIntercept(t, session, interceptor.Funcs{
 		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 			seen = append(seen, r.Counters.actual(MetricSessions, "claude", "claude-opus-5-5"))
@@ -309,7 +323,7 @@ func TestRefusedMarkDoesNotAddAgain(t *testing.T) {
 	if _, err := reconcileResult(r, "s"); err != nil {
 		t.Fatal(err)
 	}
-	scrapes(t, r.Counters, 2)
+	advance(r.Counters, r.Counters.zeroFor+r.Counters.markAfter)
 	if err := reconcile(r, "s"); err == nil {
 		t.Fatal("expected the mark write to fail")
 	}
@@ -353,10 +367,15 @@ func TestFirstScrapeIsZero(t *testing.T) {
 	if err := reconcile(r, "s"); err != nil {
 		t.Fatal(err)
 	}
-	got := scrapes(t, r.Counters, 2)
 	key := series(MetricSessions, "agent", "claude", "model", "claude-opus-5-5")
-	if got[0][key] != 0 || got[1][key] != 1 {
-		t.Fatalf("scrapes = %v then %v", got[0], got[1])
+	held := scrapes(t, r.Counters, 2)
+	if held[0][key] != 0 || held[1][key] != 0 {
+		t.Fatalf("zero window = %v then %v", held[0], held[1])
+	}
+	advance(r.Counters, r.Counters.zeroFor)
+	shown := scrapes(t, r.Counters, 2)
+	if shown[0][key] != 1 || shown[1][key] != 1 {
+		t.Fatalf("visible = %v then %v", shown[0], shown[1])
 	}
 }
 
@@ -395,7 +414,41 @@ func TestOtherNamespaceDoesNotCount(t *testing.T) {
 
 func newReconciler(t *testing.T, c client.Client) *Reconciler {
 	t.Helper()
-	return &Reconciler{Client: c, Counters: NewCounters(), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
+	return &Reconciler{Client: c, Counters: withClock(NewCounters()), SessionNamespace: "dev-agents", Elected: func() bool { return true }}
+}
+
+type frozenClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (f *frozenClock) now() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.at
+}
+
+func (f *frozenClock) advance(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.at = f.at.Add(d)
+}
+
+var testClocks sync.Map
+
+func withClock(c *Counters) *Counters {
+	clk := &frozenClock{at: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)}
+	c.now = clk.now
+	testClocks.Store(c, clk)
+	return c
+}
+
+func advance(c *Counters, d time.Duration) {
+	v, ok := testClocks.Load(c)
+	if !ok {
+		panic("usage totals test clock is missing")
+	}
+	v.(*frozenClock).advance(d)
 }
 
 func reconcile(r *Reconciler, name string) error {
@@ -412,7 +465,7 @@ func settle(t *testing.T, r *Reconciler, name string) {
 	if _, err := reconcileResult(r, name); err != nil {
 		t.Fatal(err)
 	}
-	scrapes(t, r.Counters, 2)
+	advance(r.Counters, r.Counters.zeroFor+r.Counters.markAfter)
 	if _, err := reconcileResult(r, name); err != nil {
 		t.Fatal(err)
 	}

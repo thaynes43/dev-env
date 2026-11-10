@@ -3,6 +3,7 @@ package usagetotals
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -15,19 +16,31 @@ const (
 	MetricSeconds  = "dev_env_task_usage_seconds_total"
 )
 
-const scrapeNote = " The first scrape of a series in a process is 0, and the next scrape reports the total, so increase() counts that step."
+const scrapeNote = " A new series reports 0 for its first two minutes, then the total, so increase() counts that step. Reading the endpoint does not change the value."
+
+// The operator ServiceMonitor scrapes every minute (haynes-ops
+// kubernetes/main/apps/dev-env-system/operator/app/helmrelease.yaml,
+// serviceMonitor.app). Two minutes covers one scrape of the zero and, after
+// the total is visible, one scrape of the total.
+const (
+	zeroFor   = 2 * time.Minute
+	markAfter = 2 * time.Minute
+)
 
 // Counters are the task-usage totals. Each replica registers them. Only the
 // leader adds. A new process starts them at zero.
 //
-// Prometheus increase() ignores the gap before a series' first sample. The
-// first Collect of a series therefore reports 0, even when Sessions were
-// already added, and later Collects report the total.
+// Prometheus increase() ignores the gap before a series' first sample. A new
+// series therefore reports 0 until it is zeroFor old, then the total. Collect
+// does not change that: a curl, a timed-out scrape, or a second Prometheus
+// during the two minutes still reads 0.
 type Counters struct {
-	mu     sync.Mutex
-	epoch  uint64
-	series map[seriesID]seriesState
-	desc   map[string]*prometheus.Desc
+	mu        sync.Mutex
+	series    map[seriesID]seriesState
+	desc      map[string]*prometheus.Desc
+	zeroFor   time.Duration
+	markAfter time.Duration
+	now       func() time.Time
 }
 
 type seriesID struct {
@@ -35,17 +48,17 @@ type seriesID struct {
 }
 
 type seriesState struct {
-	actual    float64
-	epoch     uint64
-	primed    bool
-	published uint64
+	actual float64
+	showAt time.Time
 }
 
 // NewCounters returns counters with no series yet. A series appears when a
 // Session is added.
 func NewCounters() *Counters {
 	return &Counters{
-		series: map[seriesID]seriesState{},
+		series:    map[seriesID]seriesState{},
+		zeroFor:   zeroFor,
+		markAfter: markAfter,
 		desc: map[string]*prometheus.Desc{
 			MetricTokens: prometheus.NewDesc(MetricTokens,
 				"Tokens from a final task usage observation, added once per Session. Unknown is omitted. Cursor is omitted. The token label is input, output, cache_read, or cache_write."+scrapeNote,
@@ -85,41 +98,52 @@ func (c *Counters) Describe(ch chan<- *prometheus.Desc) {
 	}
 }
 
-// Collect implements prometheus.Collector. The first observation of a series
-// is 0. Later observations are the total added so far.
+// Collect implements prometheus.Collector. It does not change the counters.
+// A series created less than zeroFor ago is reported as 0.
 func (c *Counters) Collect(ch chan<- prometheus.Metric) {
+	now := c.clock()
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	type sample struct {
+		id    seriesID
+		value float64
+	}
+	snap := make([]sample, 0, len(c.series))
 	for id, st := range c.series {
 		value := st.actual
-		if !st.primed {
+		if now.Before(st.showAt) {
 			value = 0
-			st.primed = true
-		} else {
-			st.published = st.epoch
 		}
-		c.series[id] = st
-		ch <- prometheus.MustNewConstMetric(c.desc[id.metric], prometheus.CounterValue, value, id.labelValues()...)
+		snap = append(snap, sample{id: id, value: value})
+	}
+	c.mu.Unlock()
+	for _, s := range snap {
+		ch <- prometheus.MustNewConstMetric(c.desc[s.id.metric], prometheus.CounterValue, s.value, s.id.labelValues()...)
 	}
 }
 
-// apply adds one Session's contribution. The returned epoch and series are
-// ready once a later Collect has reported those series at this total.
-func (c *Counters) apply(con contribution) (uint64, []seriesID) {
+// apply adds one Session's contribution. The returned time is when that add
+// is visible. A series still inside its first two minutes keeps the add
+// hidden until that series' show time. A series that is already showing its
+// total includes the add immediately. The annotation waits markAfter after
+// the returned time.
+func (c *Counters) apply(con contribution) time.Time {
+	now := c.clock()
+	visibleAt := now
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.epoch++
-	epoch := c.epoch
-	var touched []seriesID
 	bump := func(id seriesID, amount float64) {
 		if amount <= 0 {
 			return
 		}
-		st := c.series[id]
+		st, ok := c.series[id]
+		if !ok {
+			st.showAt = now.Add(c.zeroFor)
+		}
 		st.actual += amount
-		st.epoch = epoch
 		c.series[id] = st
-		touched = append(touched, id)
+		if st.showAt.After(visibleAt) {
+			visibleAt = st.showAt
+		}
 	}
 	bump(seriesID{metric: MetricSessions, agent: con.agent, model: con.model}, 1)
 	bump(seriesID{metric: MetricSeconds, agent: con.agent, model: con.model}, con.seconds)
@@ -129,22 +153,35 @@ func (c *Counters) apply(con contribution) (uint64, []seriesID) {
 	for _, sample := range con.costs {
 		bump(seriesID{metric: MetricCostUSD, agent: con.agent, model: sample.model, repository: sample.repository, kind: sample.kind}, sample.usd)
 	}
-	return epoch, touched
+	return visibleAt
 }
 
-// ready reports whether a Collect has reported every series at or after epoch.
-func (c *Counters) ready(epoch uint64, touched []seriesID) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(touched) == 0 {
+// ready reports whether the add has been visible for markAfter.
+func (c *Counters) ready(visibleAt time.Time) bool {
+	if c == nil || visibleAt.IsZero() {
 		return false
 	}
-	for _, id := range touched {
-		if c.series[id].published < epoch {
-			return false
-		}
+	return !c.clock().Before(visibleAt.Add(c.markAfter))
+}
+
+// untilReady is the wait until ready. A short positive wait avoids a tight
+// requeue when the clock is within a second of the deadline.
+func (c *Counters) untilReady(visibleAt time.Time) time.Duration {
+	if c == nil || visibleAt.IsZero() {
+		return markAfter
 	}
-	return true
+	wait := visibleAt.Add(c.markAfter).Sub(c.clock())
+	if wait < time.Second {
+		return time.Second
+	}
+	return wait
+}
+
+func (c *Counters) clock() time.Time {
+	if c != nil && c.now != nil {
+		return c.now()
+	}
+	return time.Now()
 }
 
 func (c *Counters) actual(metric, agent, model string) float64 {

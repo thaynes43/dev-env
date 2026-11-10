@@ -560,9 +560,9 @@ not rewrite a mark that is already there.
 The same process also remembers each Session it has added, until that
 Session is deleted. If the annotation write fails, or the cache has not yet
 shown the annotation, a later reconcile writes that same value again and
-does not add again. The write waits until a scrape has reported the total.
-The memory lasts only for the process. After a restart the annotation is
-the only mark.
+does not add again. The write waits until the add has been visible for two
+minutes. The memory lasts only for the process. After a restart the
+annotation is the only mark.
 
 ### Who adds, and in what order
 
@@ -574,19 +574,27 @@ there is no leader to trust, and nothing is added.
 
 For a Session that is ready and has no mark:
 
-1. Add it to the in-memory counters.
-2. Wait until a scrape has reported that total. The first scrape of a
-   series in this process reports 0, even when the add has already
-   happened. The next scrape reports the total, so `increase` counts the
-   step up from 0. That covers a new label, the first sight of Sessions
-   that already exist, and the first add after a restart.
-3. Write the annotation.
+1. Add it to the in-memory counters. A series that did not exist yet
+   reports 0 for two minutes, then the total. Reading `/metrics` does not
+   change that, so a curl, a scrape that times out, or a second Prometheus
+   during those two minutes still reads 0.
+2. Wait two minutes after the total is visible, then write the annotation.
+
+The operator is already scraped every minute. The ServiceMonitor is
+`serviceMonitor.app` on Service `dev-env-operator` in `dev-env-system`,
+port `metrics` (8080), path `/metrics`, interval 1m
+(haynes-ops `kubernetes/main/apps/dev-env-system/operator/app/helmrelease.yaml`).
+This design does not change that scrape. Two minutes is longer than one
+scrape, so a scrape in the zero window and a scrape after the total is
+visible both fit before the annotation. That covers a new label, the first
+sight of Sessions that already exist, and the first add after a restart.
+An existing series includes the add on the next scrape; the same two
+minutes pass before the annotation.
 
 If the process dies before the annotation, the restart does not see a
 mark, so that one Session is counted again. That double count is accepted.
-The mark stays after the add, and it is written only once the total has
-been reported, so a scrape cannot miss the first sample of a series and
-then skip the Session because of the mark.
+The annotation stays after the add, and it is written only after the total
+has been visible for two minutes.
 
 ### What is counted
 
@@ -634,12 +642,12 @@ including after a restart.
 ### Restart and Prometheus
 
 The counters live in the leader's process and start at zero when that
-process starts. The first scrape of each series in that process is 0. The
-next scrape reports the total, so `increase` counts the step from 0,
-including Sessions added before the first scrape. A Session the previous
-process already marked is not added, so the new total is only the Sessions
-that still have no mark. The old leader's series stay where they were. Sum
-the replicas.
+process starts. A new series reports 0 for two minutes, then the total, so
+`increase` counts the step from 0, including Sessions added before the
+first scrape. A Session the previous process already marked is not added,
+so the new total is only the Sessions that still have no mark. The old
+leader's series stay where they were. Sum the replicas. The non-leader
+replica adds nothing, so its series stay absent.
 
 Weekly cost:
 
@@ -650,9 +658,13 @@ sum by (agent, model, repository) (increase(dev_env_task_usage_cost_usd_total[7d
 ### Known limits
 
 - The totals last as long as Prometheus keeps the series.
-- One Session can be counted twice when the process dies after the add and
-  before the annotation, and a scrape has already seen the first add. That
-  window is accepted.
+- One Session can be counted twice when the process dies after a scrape has
+  seen the add and before the annotation. That window is accepted.
+- A scrape gap that covers the whole two minutes a new series reports 0
+  can make `increase` drop that step. The annotation is still written
+  after the total has been visible for two minutes. The operator metrics
+  are already scraped, and `DevEnvOperatorMetricsAbsent` fires when they
+  are absent (DESIGN-001 D-57).
 - The same crash before any scrape, while the Session still exists, is
   recovered by the restart's add. The same crash after the Session has
   already been deleted leaves that add out, because the Session is no
