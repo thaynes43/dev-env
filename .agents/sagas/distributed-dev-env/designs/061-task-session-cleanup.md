@@ -117,7 +117,7 @@ one does not. Every other Session keeps DESIGN-025, which stays off.
 | # | Where | Change | Lines |
 |---|---|---|---|
 | 1 | `api/v1alpha1` | `PrivateHomeExpiryStatus.Bundle`: `stamp`, `result` (`Verified` or `CleanAndPushed`), `manifest`, `manifestSHA256`, `bundles`, `bytes`, `verifiedAt`. CEL `:943` becomes `has(self.archive) \|\| has(self.bundle)`; `bundle` never changes once set; never both. The only CRD change, and unavoidable: `:943` refuses the phases the delete and release need | 50 |
-| 2 | new `controller/task_cleanup.go` | scope; trigger (Reaping, or the terminal record exists, in any mode); effective due (`graceStart` if Reaping, else plus `--task-cleanup-grace`; the stored `dueAt` is shown, not obeyed); 1.1's release check; queue, slots, breaker, free-space gate (section 4); removal of a finished Session once `Expired` | 380 |
+| 2 | new `controller/task_cleanup.go` | scope; trigger (Reaping, or the terminal record exists, whatever `operatingMode` says; `spec.mode` is always `task`); effective due (`graceStart` if Reaping, else plus `--task-cleanup-grace`; the stored `dueAt` is shown, not obeyed); 1.1's release check; queue, slots, breaker, free-space gate (section 4); removal of a finished Session once `Expired` | 380 |
 | 3 | `private_expiry.go` | `reconcileHomeExpiry` (`:467-533`) picks the policy before `homeExpiryOn()` (`:144`); `startHomeExpiry` (`:538-581`) sets `dueAt` by cause; `expiryWait` (`:680-703`) takes the effective due and the queue; `expiryRescueAndExport` (`:710-794`) checks 1.1 before `createExpiryHold` (`:1041`), goes from a valid rescue to `Archived` with `bundle`, runs `drop-log` before the hold pod goes, never calls the relay; `expiryQuiet` (`:354-390`) and `homeExpiryTriggered` (`:181-199`) follow the policy | 120 |
 | 4 | `private_expiry_delete.go` | `homeExpiryDeleteOn` (`:35`) true for the policy; `historyArchiveVerified` (`:80-103`) becomes `keptWorkVerified`: a shelf re-hash for `Verified`, and for `CleanAndPushed` a check that `status.rescue` still names the hold pod and stamp; `expiryRechecked` (`:122`) compares `bundle` | 80 |
 | 5 | `guard.go` | `expiryVolumeRemovalAllowed` (`:529`) accepts a verified `bundle` on a task record; `expiryHoldRemovalAllowed` (`:449-494`) learns the policy's off state and trigger; new `taskSessionRemovalAllowed` and `deleteCleanedTaskSession` delete an `Expired` finished Session with UID and resourceVersion preconditions and background propagation, like the API's reap (`apiserver/sessions.go:496-498`); two rows in `guardedCalls` (`guard_test.go:253-293`); RBAC already allows it (haynes-ops `rbac/app/operator.yaml:58-60`) | 90 |
@@ -127,7 +127,7 @@ one does not. Every other Session keeps DESIGN-025, which stays off.
 | 9 | texts | `privateRetention` (`private_history.go:402-470`), `setHomeExpiryCondition` (`private_expiry.go:1245`), `agent-run reap` (`agentrun/sessions.go:515`), `show`, `list` (section 6) | 120 |
 | 10 | metrics | section 6 | 100 |
 | 11 | tests | unit (fake client, in-process exec); envtest for CEL and two operators; a case per refusal (section 3) and group (section 5) | 900 |
-| 12 | docs, same PR | DESIGN-025 section 26; DESIGN-044; DESIGN-001 D-45, D-55, D-62 notes; workflow guide; `agent-run help reap\|rescue`; handoff | - |
+| 12 | docs, same PR | DESIGN-025 section 26; DESIGN-044; DESIGN-001 D-45, D-55, D-62 notes; `agent-run help reap\|rescue`; handoff. Also the two places that promise the retained outcome, which now lasts until the Session is cleaned up, 7 days after a finished task ends (ADR-020 C-54): CLAUDE.md "Headless task outcome" and the workflow guide's "Retain a task's PR and handoff after pod reclaim" | - |
 
 | Flag | Change | Code default | Live after rollout |
 |---|---|---|---|
@@ -319,6 +319,7 @@ is a bounded story, started after this path is accepted.
 | F4 | `internal/homeretention`, `cmd/home-retention-dry-run`: offline only | keep or delete |
 | F5 | canaries and pilots (section 5) | clean them under ADR-020 after retiring their live readers (DESIGN-022, DESIGN-027) |
 | F6 | the 53 `PreservationUnknown` Sessions | if Q1 says yes; needs one more CEL change: a task record may rest on `executorMissed` |
+| F7 | a task Session's usage and cost numbers, which live only in its status and go with it (ADR-020 C-54) | a small ledger that survives clean-up: counters of tokens and cost by agent, model and repository, added once per Session when its usage observation is accepted, so Prometheus keeps the totals; under the usage epic (OP509) |
 
 ## 8. Rollout
 
@@ -327,7 +328,7 @@ One PR per step, squash-merged after `CI - Success`; each waits for the last.
 | # | Repo | Change | Verify | Roll back |
 |---|---|---|---|---|
 | D1 | dev-env | this ADR and design | review | - |
-| D2 | dev-env | section 2, items 1 to 12, default off; then a release | `make test` (unit and envtest), CI, native review | revert |
+| D2 | dev-env | section 2, items 1 to 12, default off; then a release. It may land as two PRs, each one worker session: first items 1 and 7 (the record's `bundle` field and the three agentd commands, which change nothing until called), then the rest | `make test` (unit and envtest), CI, native review | revert |
 | H1 | haynes-ops | CRD copy of the release (`crds/app/agentsessions.yaml`), before any pin (haynes-ops #3502); the operator's cluster-wide `get` on `persistentvolumes` (1.1) | the CRD has `bundle`; no status changes; `kubectl auth can-i` shows the new `get` for the operator | revert |
 | H2 | haynes-ops | templates image to the release (hold pods need `--strict-home`, `drop-log`); shelf image from 2.9.1 to the release, no archive mount | the new shelf pod is Ready; `agent-run rescue list` answers; idle Sessions drain as on any template bump | revert |
 | H3 | haynes-ops | operator pin, flags unchanged | 2/2 Ready; session pod UIDs and restarts unchanged; no `expiry` written | previous pin |
@@ -352,6 +353,12 @@ For the extra probe, `agent-run rescue restore NAME/STAMP -p "show the rescued
 branch and the untracked file"` must show both (acceptance 3 of #518).
 Throughout, the interactive count stays at 33 (13 suspended), and about 388
 records stand `waiting` or `queued` while the allowlist holds.
+
+**Before the backlog (H5), save what goes with the Sessions.** The coordinator
+exports one line per Session to be cleaned (name, repository, agent, model,
+created and ended times, tokens and cost as its status reports them, PR links
+from the retained outcome) and attaches the file to OpenProject #518. It holds
+no secret and no transcript. ADR-020 C-54 says why.
 
 **The backlog (H5).** Watch
 `sum by (state) (max without (pod, instance) (dev_env_task_cleanup_sessions))`,

@@ -11,8 +11,7 @@
   recorded both on OpenProject #490, comments 6210 and 6211. The author of this
   ADR, a native subagent of that coordinator, did not see either at its source;
   the work order's quotes and the two tracker comments match word for word.
-  Saga decision log: row 96, which the coordinator enters; this change adds only
-  this ADR and its design.
+  Saga decision log: row 96, entered by the coordinator in the same change.
 - **Supersedes, for task Sessions only** (`spec.mode: task`): the statements of
   [ADR-005](005-private-home-expiry.md), [ADR-006](006-private-home-expiry-corrections.md),
   [ADR-007](007-preserve-v1-archive-trust-boundary.md) and
@@ -127,3 +126,4 @@ read for task Sessions.
 | C-51 | Bad: a rescue that refuses (a merge in progress, a nested repository, more than 50 MiB untracked, submodule work, or a repository outside `~/repos`) keeps that Session. A person must decide, so a few HOMEs can stand past 7 days. The alert names them. |
 | C-52 | Neutral: Sessions with no recorded stop (`PreservationUnknown`, `RetentionPending`), canaries and pilots stay outside this path. They need a person or their own follow-up story (DESIGN-061 section 5). |
 | C-53 | Neutral: the history archive, its reads and the H7 checks have no task-session use left. They stay off and are removed by later stories, not by this decision. |
+| C-54 | Bad: a finished task Session's own record goes with it: its retained outcome (PR links, summary), its usage and cost numbers and `agent-run show`. No other store holds them today (the portal database keeps logins only, and no metric carries usage or cost). What must outlive 7 days is written to the tracker item or Git first. Before the backlog drains, the coordinator saves a usage summary of the Sessions to be cleaned on OpenProject #518; a ledger of totals that survives clean-up is DESIGN-061's follow-up F7. |
