@@ -8,7 +8,11 @@ import (
 // ProjectCachedRead degrades one cached read for a serving clock.
 // A passive_event item of source version session-v1 (DESIGN-059), and its
 // SessionProducerRef status, are judged by one built-in rule instead of the
-// caller's contexts: shape checked, binding Unknown, never current.
+// caller's contexts: shape checked, binding Unknown, never current. The rule
+// cannot tell who built an item: the operator labels rejected each session-v1
+// item it did not merge itself (RejectSessionReadings) before it serves a
+// document, and an item labelled rejected stays rejected here, so a reader
+// of the operator's bytes keeps that rejection.
 // It changes freshness, current-measure state, and derived status binding.
 // Observation timestamps, receipts, provider observed times, and raw
 // observation decimals stay as stored. A receipt ahead of the serving clock

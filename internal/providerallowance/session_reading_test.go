@@ -183,3 +183,28 @@ func TestProjectCachedReadSessionRuleLeavesOthers(t *testing.T) {
 		t.Fatal("an untrusted ordinary item was not rejected as before")
 	}
 }
+
+// RejectSessionReadings labels only session-v1 items rejected, without
+// writing the caller's backing array; the built-in rule then keeps the item
+// and its status rejected, and a second projection does not lift it.
+func TestRejectSessionReadings(t *testing.T) {
+	doc := sessionDoc(t, "anthropic")
+	other := sessionDoc(t, "openai").Items[0]
+	other.Observation.Source = Source{Kind: SourceNativeRPC, Version: CodexRPCSourceVersion, CapabilityRef: CodexRPCCapability}
+	doc.Items = append(doc.Items, other)
+	original := doc.Items
+	RejectSessionReadings(&doc)
+	if original[0].Validation.State != ValidationDisplayOnly {
+		t.Fatal("the caller's items were written")
+	}
+	if doc.Items[0].Validation.State != ValidationRejected || doc.Items[1].Validation.State != other.Validation.State {
+		t.Fatalf("labels %v %v", doc.Items[0].Validation.State, doc.Items[1].Validation.State)
+	}
+	for i := 0; i < 2; i++ {
+		ProjectCachedRead(&doc, nil, nil, 0, false, sessionAt.Add(time.Minute))
+		if doc.Items[0].Validation.State != ValidationRejected || doc.Items[0].Binding.State != BindingMismatch || doc.SourceStatuses[0].Validation.State != ValidationRejected {
+			t.Fatalf("projection %d: item %+v status %+v", i, doc.Items[0].Validation, doc.SourceStatuses[0].Validation)
+		}
+	}
+	RejectSessionReadings(nil)
+}

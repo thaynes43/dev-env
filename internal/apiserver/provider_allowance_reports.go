@@ -213,6 +213,9 @@ func (h *AggregateAllowanceReports) readSource(ctx context.Context) (int, any, e
 	if err != nil || ctx.Err() != nil {
 		return 0, nil, allowanceUnavailable()
 	}
+	// The operator built no session-v1 item here: any is rejected, and the
+	// portal's projection of these bytes keeps it rejected.
+	providerallowance.RejectSessionReadings(&doc)
 	return allowanceDocument(doc)
 }
 
@@ -253,6 +256,11 @@ func (h *AggregateAllowanceReports) readStored(ctx context.Context) (int, any, e
 		}
 		return 0, nil, allowanceUnavailable()
 	}
+	// A session-v1 item in the slot is not the operator's: the slot's
+	// publisher, or anyone who writes the ConfigMap, can shape one. It is
+	// rejected before the merge, as it was before session readings existed,
+	// so it is never shown display-only, and a real reading replaces it.
+	providerallowance.RejectSessionReadings(&doc)
 	trust := h.Store.trust()
 	mergeSessionReadings(&doc, readings, rejectedSlotProviders(doc, readings, trust, h.now()))
 	providerallowance.ProjectCachedRead(&doc, trust.Contexts, trust.Registry, trust.MaxAge, true, h.now())
@@ -261,7 +269,10 @@ func (h *AggregateAllowanceReports) readStored(ctx context.Context) (int, any, e
 
 // rejectedSlotProviders names the providers whose slot item the projection
 // rejects under trust: such an item is never shown, so it must not hide a
-// session reading by being newer. It projects a copy; doc is not changed.
+// session reading by being newer. A session-v1 item is not counted: in a
+// slot it is always a rejected forgery, which the merge drops, and it must
+// not let an older reading replace a trusted slot item. It projects a copy;
+// doc is not changed.
 func rejectedSlotProviders(doc providerallowance.ReadResponse, readings map[string]StoredSessionReading, trust AggregateAllowanceTrust, now time.Time) map[string]bool {
 	if len(readings) == 0 {
 		return nil
@@ -273,6 +284,9 @@ func rejectedSlotProviders(doc providerallowance.ReadResponse, readings map[stri
 	providerallowance.ProjectCachedRead(&projected, trust.Contexts, trust.Registry, trust.MaxAge, true, now)
 	out := map[string]bool{}
 	for _, item := range projected.Items {
+		if providerallowance.SessionReadingSource(item.Observation.Source) {
+			continue
+		}
 		if item.Validation.State == providerallowance.ValidationRejected || item.Binding.State == providerallowance.BindingMismatch {
 			out[item.Observation.Provider] = true
 		}
@@ -322,9 +336,10 @@ var sessionContractProviders = map[string]string{protocol.AgentClaude: "anthropi
 
 // mergeSessionReadings puts each provider's session reading into doc when it
 // is newer than the provider's slot item, the slot has none, or the slot item
-// is one the projection rejects: the slot item is removed and the provider's
-// source status replaced by the reading's. A kept slot item at least as new
-// stays. A provider with more than one slot item is left as it is.
+// is one the projection rejects: the provider's slot items are removed and
+// its source status replaced by the reading's. A kept slot item at least as
+// new stays. A provider with more than one slot item that is not session-v1
+// is left as it is; PUT refuses such a slot.
 func mergeSessionReadings(doc *providerallowance.ReadResponse, readings map[string]StoredSessionReading, rejected map[string]bool) {
 	merged := ""
 	for _, agent := range sessionAllowanceProviders {
@@ -341,19 +356,25 @@ func mergeSessionReadings(doc *providerallowance.ReadResponse, readings map[stri
 		if err != nil {
 			continue
 		}
+		// A session-v1 item already in doc is a rejected forgery
+		// (RejectSessionReadings): it is not counted and never keeps the
+		// reading out, and it goes with the slot item when the reading merges.
 		slot, count := -1, 0
 		for i := range doc.Items {
-			if doc.Items[i].Observation.Provider == provider {
+			if doc.Items[i].Observation.Provider == provider && !providerallowance.SessionReadingSource(doc.Items[i].Observation.Source) {
 				slot, count = i, count+1
 			}
 		}
 		if count > 1 || (slot >= 0 && !rejected[provider] && !r.ReadAt.After(slotItemTime(doc.Items[slot]))) {
 			continue
 		}
-		if slot >= 0 {
-			doc.Items = append(doc.Items[:slot:slot], doc.Items[slot+1:]...)
+		kept := doc.Items[:0:0]
+		for _, it := range doc.Items {
+			if it.Observation.Provider != provider {
+				kept = append(kept, it)
+			}
 		}
-		doc.Items = append(doc.Items, item)
+		doc.Items = append(kept, item)
 		statuses := doc.SourceStatuses[:0:0]
 		replaced := false
 		for _, s := range doc.SourceStatuses {

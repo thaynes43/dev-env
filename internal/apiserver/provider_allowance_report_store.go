@@ -197,6 +197,9 @@ func (s *AggregateAllowanceReportStore) accept(doc providerallowance.ReadRespons
 	if _, err := time.Parse(time.RFC3339Nano, doc.ServedAt); err != nil {
 		return ErrAggregateRejected
 	}
+	if claimsSessionReading(doc) {
+		return ErrAggregateRejected
+	}
 	items, err := indexAllowanceItems(doc)
 	if err != nil {
 		return err
@@ -487,6 +490,24 @@ var aggregateProviders = []string{"cursor", "anthropic", "openai"}
 // before any producer emits it, and accepting a three-row document after a
 // four-row one, keeps the release order and its rollback safe.
 var optionalAggregateProviders = []string{"grok"}
+
+// claimsSessionReading reports a row only the operator may serve: a
+// session-v1 item, or an item or source status of the session readings'
+// producer (DESIGN-059). The operator merges session readings at read time;
+// no publisher puts one in the slot.
+func claimsSessionReading(doc providerallowance.ReadResponse) bool {
+	for _, item := range doc.Items {
+		if providerallowance.SessionReadingSource(item.Observation.Source) || item.Observation.ProducerRef == providerallowance.SessionProducerRef {
+			return true
+		}
+	}
+	for _, status := range doc.SourceStatuses {
+		if status.ProducerRef == providerallowance.SessionProducerRef {
+			return true
+		}
+	}
+	return false
+}
 
 func indexAllowanceItems(doc providerallowance.ReadResponse) (map[string]providerallowance.ReadItem, error) {
 	out := map[string]providerallowance.ReadItem{}

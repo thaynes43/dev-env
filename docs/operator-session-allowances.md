@@ -77,6 +77,16 @@ session reading is a `passive_event` item with source version `session-v1`,
 judged by one built-in rule: its account is never verified and no value is ever
 current.
 
+Only the operator's own readings get that rule. Anyone who can write the slot
+or a Source document can also write a well-shaped `session-v1` item, and its
+content cannot show who built it. So the operator labels every `session-v1`
+item it did not merge itself rejected before the merge. It is shown like any
+untrusted item, exactly as before session readings existed, and a real reading
+for that provider replaces it whatever its time. The built-in rule never lifts
+a rejected label, so the portal, which projects the operator's bytes again,
+keeps it rejected. A PUT to the slot that carries a `session-v1` item, or an
+item or source status with producer `dev-env-session-allowances`, is refused.
+
 The flag needs the API (`--api-bind-address`), the ConfigMap precreated with
 metadata only, and `get` and `update` on that one name in the operator's Role.
 

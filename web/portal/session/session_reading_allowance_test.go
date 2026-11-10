@@ -65,3 +65,37 @@ func TestSessionReadingShownAsLastReported(t *testing.T) {
 		}
 	}
 }
+
+// A session-v1 item the operator did not merge is served labelled rejected
+// (providerallowance.RejectSessionReadings). The portal cannot tell it from a
+// merged one by its content, so its own projection must keep that label: the
+// tile shows no value and no last-reported line. The values are synthetic.
+func TestSessionReadingRejectedByTheOperatorStaysHidden(t *testing.T) {
+	at := time.Date(2026, 11, 9, 23, 42, 10, 0, time.UTC)
+	item, status, err := providerallowance.SessionReadingItem("anthropic", at, []providerallowance.SessionWindow{
+		{Minutes: 10080, UsedPercent: "99", ResetAt: at.Add(60 * time.Hour)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := providerallowance.ReadResponse{Schema: providerallowance.SchemaRead, SnapshotRevision: "r", ServedAt: at.Format(time.RFC3339Nano),
+		Items: []providerallowance.ReadItem{item}, SourceStatuses: []providerallowance.SourceStatus{status}}
+	// The operator's serving steps for a document it did not build.
+	providerallowance.RejectSessionReadings(&doc)
+	providerallowance.ProjectCachedRead(&doc, nil, nil, 30*time.Minute, true, at.Add(time.Minute))
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := NewCachedAllowanceReader(raw, providerallowance.FixtureParseLimits, nil, nil, AllowanceReadPolicy{MaxAge: 30 * time.Minute, Set: true})
+	for _, row := range reader.Allowances(at.Add(5 * time.Minute)) {
+		if row.Provider != "Claude" {
+			continue
+		}
+		if row.Value != portal.AllowanceUnknown || len(row.Windows) != 0 || len(row.LastReported) != 0 {
+			t.Fatalf("a rejected session item was shown: %+v", row)
+		}
+		return
+	}
+	t.Fatal("no Claude row")
+}

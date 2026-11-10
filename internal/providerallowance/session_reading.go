@@ -128,11 +128,42 @@ func SessionReadingSource(src Source) bool {
 	return src.Kind == SourcePassive && src.Version == SessionSourceVersion
 }
 
+// RejectSessionReadings labels every session-v1 item in doc rejected. The
+// operator calls it on each document it did not build (the stored slot, a
+// Source) before it merges its own session readings: anyone who can write
+// that document can also write a well-shaped session-v1 item, so such an
+// item is shown rejected, as it was before session readings existed, and
+// ProjectCachedRead then treats it like any untrusted item. The built-in rule
+// never lifts a rejected label, so a reader that projects the served bytes
+// again (the portal) keeps it rejected. The Items slice is copied before the
+// first change; the caller's backing array is not written.
+func RejectSessionReadings(doc *ReadResponse) {
+	if doc == nil {
+		return
+	}
+	copied := false
+	for i := range doc.Items {
+		if !SessionReadingSource(doc.Items[i].Observation.Source) {
+			continue
+		}
+		if !copied {
+			doc.Items, copied = append([]ReadItem(nil), doc.Items...), true
+		}
+		doc.Items[i].Validation.State = ValidationRejected
+	}
+}
+
 // projectSessionItem is the built-in display rule for one session-v1 item.
 // It checks the item's shape, sets its binding Unknown, never marks a value
 // current, and marks a measure expired once its reset has passed at now. It
 // reports false for an item it does not accept, which the caller rejects.
+// An item that arrives labelled rejected is not accepted: a label never
+// grants trust, but a rejection by the operator (RejectSessionReadings) or by
+// an earlier projection is kept.
 func projectSessionItem(item *ReadItem, now time.Time) bool {
+	if item.Validation.State == ValidationRejected {
+		return false
+	}
 	obs := &item.Observation
 	spec, ok := sessionReadingProviders[obs.Provider]
 	if !ok || !SessionReadingSource(obs.Source) || obs.Source.CapabilityRef != spec.capability || obs.ProducerRef != SessionProducerRef {

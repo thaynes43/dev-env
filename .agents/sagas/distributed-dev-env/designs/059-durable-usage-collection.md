@@ -6,7 +6,10 @@
   question is pending. Section 10 lists what Tom may still choose to add
   (timer reads, a Cursor reader); none of it blocks the slice, and each would
   be a new story with his ruling. Both passive sources were checked with real
-  data (section 11). Nothing is built or deployed yet.
+  data (section 11). Slice 1 (section 7, steps 1 to 8) is built in
+  [PR #1018](https://github.com/thaynes43/dev-env/pull/1018); step 9
+  (haynes-ops) is not done, so nothing is deployed. Section "Slice 1 as
+  built" states where the build differs (2026-11-10).
 - **Tracking:** [Story OP509](https://work.haynesnetwork.com/work_packages/509),
   project haynes-engineering: "Usage reporting that keeps working: weekly
   usage and resets without approval windows or a host session that
@@ -163,7 +166,7 @@ makes no request (DESIGN-052), so it cannot be the transport by itself.
 | --- | --- | --- |
 | Updates when | any Codex task or host session makes a model call | an interactive Claude session gets a reply |
 | Delay | one heartbeat plus at most one store write per provider per 5 min: about 6 min | the same |
-| Nothing running | the last reading ages, with its time shown | the same, and also while only headless Claude tasks run |
+| Nothing running | the last reading ages, with its time shown | the same, and also while only headless Claude tasks run (*Amended 2026-11-10:* or only sessions that do not follow the keeper's projection) |
 | Use outside the cluster | shows at the next model call in the cluster | claude.ai use shows at the next interactive reply |
 | Reading time | the rollout record's time: when the client received the numbers | the callback time, advanced only when a value changed |
 | Stays Unknown | the provider's own measurement time; a window it does not report | the same, plus periods with only headless tasks |
@@ -171,7 +174,9 @@ makes no request (DESIGN-052), so it cannot be the transport by itself.
 The Claude callback also runs on events that bring no new data (a
 permission-mode change, a timer). agentd therefore keeps the previous
 reading time when no value changed. That can make a reading look older
-than it is, never newer. If that misses the 30-minute promise in practice,
+than it is. (*Amended 2026-11-10:* it can also look newer, by at most 5
+seconds: the helper's file holds only the last callback, and agentd reads
+it every 5 seconds.) If that misses the 30-minute promise in practice,
 forward the documented `cost.total_api_duration_ms` counter as the signal of
 a new reply.
 
@@ -181,9 +186,10 @@ token, so it could post a false reading for its own session. That matters
 little: the number is shown, not acted on. (DESIGN-001 7.3's quota priority
 would act on it. It is not built, and it would need another check.) Bounds:
 the provider must equal the session's agent; percent 0 to 100; reset after
-the reading time and within one window length; reading time not in the
-future and not before the pod started; at most one reading per session per
-minute; the store keeps the reporting session's name; the next honest
+the reading time and within one window length (*Amended 2026-11-10:* plus
+one hour); reading time not in the future and not before the pod started; at
+most one reading per session per minute (*Amended 2026-11-10:* per 55
+seconds); the store keeps the reporting session's name; the next honest
 reading replaces a false one. Binding: every managed pod holds only the
 keeper's projection of the one login per provider, so a reading is about
 that login by construction. agentd sends a reading only while the pod's
@@ -245,8 +251,9 @@ The slice delivers B for Claude and Codex.
 2. **Codex reader** (`internal/agentd/codex_rollout.go`): read the newest
    `token_count` with `rate_limits` from a bounded tail of the thread's
    rollout at each heartbeat. Check the shape, not the CLI version. Use
-   synthetic fixtures built from the pinned source's field names. Medium:
-   about 120 and 150.
+   synthetic fixtures built from the pinned source's field names.
+   *Amended 2026-11-10:* every window in the record is sent, each labelled
+   by its length. Medium: about 120 and 150.
 3. **Claude statusline** (`internal/agentd/render.go`, `claudestate.go`): a
    render step for Claude remote and local sessions only. It sets
    `statusLine` to `claude-statusline-usage --output
@@ -257,11 +264,14 @@ The slice delivers B for Claude and Codex.
    own command by the helper's exact path and leaves it as it is, never
    wrapping it a second time; a test renders twice. Then agentd
    reads the file at each heartbeat (bounded, owner and mode checked) and
-   keeps the reading time when no value changed. Medium: about 150 and 150.
+   keeps the reading time when no value changed. *Amended 2026-11-10:* only
+   in pods that follow the keeper's Claude projection, and agentd also reads
+   the file every 5 seconds. Medium: about 150 and 150.
 4. **Send rule** (`internal/agentd` heartbeat assembly): attach a reading
    only while the pod's credential is the keeper's current projection; after
    a refusal, a note in the boot steps names the reason, such as
-   `shape_unrecognized`. Small: about 50 and 60.
+   `shape_unrecognized`. *Amended 2026-11-10:* a pod that does not follow
+   the projection takes no reading and gets no note. Small: about 50 and 60.
 5. **Operator writer** (`internal/apiserver/heartbeat.go`, new
    `session_allowances.go`): validate the reading (provider equals the
    session's agent, the bounds in 4.4). Write it into a new ConfigMap
@@ -281,7 +291,9 @@ The slice delivers B for Claude and Codex.
    returns early when the slot is suppressed, missing or unconfigured
    (`provider_allowance_reports.go:193`), and its trust comes from the
    private config; the session reading must not depend on either, or B would
-   still hang on the expired slot. Small to medium: about 100 and 120.
+   still hang on the expired slot. *Amended 2026-11-10:* with no private
+   slot selection at all, the route is mounted GET-only for the portal
+   reader and serves the readings alone. Small to medium: about 100 and 120.
 7. **One display rule** (`internal/providerallowance`, used by
    `ProjectCachedRead`): `passive_event` items with source version
    `session-v1` are judged by one built-in rule. It checks shape, sets
@@ -291,7 +303,11 @@ The slice delivers B for Claude and Codex.
    that matches no private context (`cachedMarkItem`), and so hides it. The
    portal then shows the reading as "Last reported", "Passive event",
    "Account not verified" (`web/portal/session/product_allowance.go`).
-   Small: about 60 and 100.
+   *Amended 2026-11-10:* the rule shows only the `session-v1` items the
+   operator merges itself. The operator labels any other one, in the slot or
+   a Source, rejected before the merge, and the rule never lifts a rejected
+   label, so the portal keeps it rejected. A PUT to the slot that carries a
+   session reading's item or status is refused. Small: about 60 and 100.
 8. **Docs:** this design's status, a short operator page, the Layout block
    if a package is added. Small.
 9. **haynes-ops**, all public, no sops edit: precreate the new ConfigMap
@@ -335,7 +351,9 @@ A tile shows a plain percent only while its reading is under 30 minutes old
 and its reset time is still ahead. Past 30 minutes it shows the percent
 greyed with "as of <time>". Once the reset time has passed, it shows no
 percent, only "Reset <time>; no reading since", because the new week's use
-is unknown, not zero. The portal change is a later story.
+is unknown, not zero. The portal change is a later story. *Amended
+2026-11-10:* not built in slice 1. Until that story, a last-reported line
+keeps the percent and says the reported reset time has passed.
 
 ## 9. Cursor and Grok
 
@@ -438,3 +456,41 @@ values are on OP509, not here.
 
 Still not checked: that Codex remote host sessions write rollouts; the live
 portal page.
+
+## Slice 1 as built, 2026-11-10 (PR #1018)
+
+The coordinator accepted seven differences from sections 4.4, 7 and 8 on
+2026-11-10. Each is the rule now in force.
+
+1. **Reset bound.** A reset lies after the reading time and within one
+   window length plus one hour. A provider may round a reset up to the hour.
+2. **Reading time.** agentd keeps the earlier reading time when no value
+   changed. It reads the helper's file every 5 seconds and at each
+   heartbeat. A callback with no new numbers can still make a reading look
+   newer, by at most those 5 seconds. A full fix is a later story.
+3. **Per-session limit.** The operator takes at most one reading per
+   session per 55 seconds, so heartbeat jitter drops no honest reading.
+   Each operator replica counts on its own.
+4. **No projection, no reading.** A pod that does not follow the keeper's
+   projection for its provider takes no reading and gets no refusal note.
+   For Claude, the render step's skip note says why. A reading found and not
+   sent shows in `status.agent.problems` as `allowance-reading: warn:
+   reading not sent: <reason>`.
+5. **No private selection.** "Unconfigured" includes an operator with no
+   private slot selection at all. The route is then mounted GET-only for the
+   portal reader and serves the session readings alone, with no private
+   context.
+6. **Both Codex windows.** Every Codex window in the record is sent, each
+   labelled by its length. The weekly window is the one of 10080 minutes.
+7. **Staleness.** Section 8 is not built. The built-in rule marks a measure
+   expired once its reset passes, as data only. The portal keeps the percent
+   on a last-reported line and says the reported reset time has passed.
+
+Known limits:
+
+- **Claude needs a running session.** Claude readings come only from remote
+  or local Claude sessions whose pod follows the keeper's projection. With
+  no such session running, the Claude numbers age. They are shown as last
+  reported, never as current.
+- **Section 8 is a later portal story.** The 30-minute grey and the
+  no-percent-after-reset state are not built.
