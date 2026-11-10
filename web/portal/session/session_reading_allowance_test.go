@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,8 +57,30 @@ func TestSessionReadingShownAsLastReported(t *testing.T) {
 		t.Fatalf("last reported %+v (reason %q)", claude.LastReported, claude.Reason)
 	}
 	line := claude.LastReported[0]
-	if line.Percent != "34% used" || line.Window != "7 days" || line.Source != "Passive event" || line.Account != "Account not verified" || line.ReadAtExact != "2026-11-09T23:42:10Z" || line.ProviderAt != "" {
+	if line.Percent != "34% used" || line.Window != "7 days" || line.Source != "Passive event" || line.Account != "Account not verified" || line.ReadAtExact != "2026-11-09T23:42:10Z" || line.ProviderAt != "" || !line.Session {
 		t.Fatalf("line %+v", line)
+	}
+	body, err := portal.RenderProduct(portal.ProductPage{
+		Title: "Sessions", Connected: true, Complete: true, Filter: portal.ProductFilter{View: "usage"},
+		AsOf: at.Add(5 * time.Minute), Usage: &portal.ProductUsage{Allowance: rows},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(body)
+	start := strings.Index(page, `<h3 class="glance-name">Claude</h3>`)
+	end := strings.Index(page, `<h3 class="glance-name">Codex</h3>`)
+	if start < 0 || end < start {
+		t.Fatal("Claude tile was not rendered")
+	}
+	tile := page[start:end]
+	for _, want := range []string{"34% of the week used", "resets Thursday 12 Nov 11:42 UTC", "reported 5 minutes ago", "Reported by a running session; not checked with the provider."} {
+		if !strings.Contains(tile, want) {
+			t.Errorf("mapped session tile lacks %q:\n%s", want, tile)
+		}
+	}
+	if strings.Contains(tile, ">Unknown<") || strings.Contains(tile, "No current percent") {
+		t.Errorf("mapped session tile kept the old words:\n%s", tile)
 	}
 	for _, row := range rows {
 		if row.Provider == "Codex" && row.Value != portal.AllowanceNotConnected {

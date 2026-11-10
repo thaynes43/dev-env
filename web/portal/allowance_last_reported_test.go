@@ -188,7 +188,19 @@ func TestAllowanceReadingAgeFourStates(t *testing.T) {
 			ReadAtExact:  read.UTC().Format(time.RFC3339Nano),
 			ResetAtExact: reset.UTC().Format(time.RFC3339Nano),
 			Source:       "Passive event", Account: "Account not verified",
-			Why: "Not current or trusted: this reading's account is not verified.",
+			Why:     "Not current or trusted: this reading's account is not verified.",
+			Session: true,
+		}
+	}
+	order := func(tile string, parts ...string) {
+		t.Helper()
+		at := -1
+		for _, part := range parts {
+			i := strings.Index(tile, part)
+			if i < 0 || i <= at {
+				t.Errorf("headline order broke at %q:\n%s", part, tile)
+			}
+			at = i
 		}
 	}
 	page := func(rows []ProductAllowance) string {
@@ -204,24 +216,34 @@ func TestAllowanceReadingAgeFourStates(t *testing.T) {
 	}
 
 	freshRead := asOf.Add(-12 * time.Minute)
+	freshReset := asOf.Add(48 * time.Hour)
 	fresh := page([]ProductAllowance{{Provider: "Claude", Value: AllowanceUnknown, Reason: "Allowance freshness unknown or expired",
-		LastReported: []ProductAllowanceLastReported{line("34% used", freshRead, asOf.Add(48*time.Hour))}}})
+		LastReported: []ProductAllowanceLastReported{line("34% used", freshRead, freshReset)}}})
 	claude := tile(fresh, "Claude")
-	for _, want := range []string{`class="allowance-last-fresh"`, "<strong>34% used</strong>", "Last reported, not current"} {
+	order(claude,
+		"<strong>34% of the week used</strong>",
+		"resets "+freshReset.UTC().Format("Monday 2 Jan 15:04 UTC"),
+		"reported 12 minutes ago",
+		sessionReadingCaveat,
+	)
+	for _, want := range []string{
+		"Passive event", "Account not verified",
+		`Received <time datetime="2026-11-10T11:48:00Z">10 Nov 11:48 UTC</time>`,
+		"Reported reset: 12 Nov 12:00 UTC.",
+		"Not current or trusted: this reading&#39;s account is not verified.",
+		`<details class="session-detail">`,
+	} {
 		if !strings.Contains(claude, want) {
 			t.Errorf("fresh tile lacks %q:\n%s", want, claude)
 		}
 	}
-	for _, want := range []string{
-		"Received <time datetime=\"2026-11-10T11:48:00Z\">10 Nov 11:48 UTC</time>",
-		"Reported reset: 12 Nov 12:00 UTC.",
-	} {
-		if !strings.Contains(fresh, want) {
-			t.Errorf("fresh account section lacks %q", want)
+	for _, banned := range []string{">Unknown<", "No current percent", "Last reported, not current", "session-stale", allowanceWindowOver} {
+		if strings.Contains(claude, banned) {
+			t.Errorf("fresh tile shows %q:\n%s", banned, claude)
 		}
 	}
-	if strings.Contains(claude, "allowance-last-stale") || strings.Contains(claude, "allowance-last-age") || strings.Contains(claude, allowanceWindowOver) {
-		t.Errorf("fresh tile is greyed or past its reset:\n%s", claude)
+	if !strings.Contains(fresh, "Last reported, not current") || !strings.Contains(fresh, "Passive event") {
+		t.Error("account section dropped the trust lines")
 	}
 
 	// Exactly 30 minutes is still a plain percent. Older than that is greyed.
@@ -231,38 +253,34 @@ func TestAllowanceReadingAgeFourStates(t *testing.T) {
 			line("11% used", asOf.Add(-allowanceReportedStaleAfter-time.Second), asOf.Add(24*time.Hour)),
 		}}})
 	codex := tile(boundary, "Codex")
-	if !strings.Contains(codex, `class="allowance-last-fresh"`) || !strings.Contains(codex, "<strong>10% used</strong>") {
-		t.Errorf("a 30 minute reading was greyed:\n%s", codex)
+	if !strings.Contains(codex, `<p class="session-headline"><strong>10% of the week used</strong>`) || !strings.Contains(codex, "reported 30 minutes ago") {
+		t.Errorf("a 30 minute reading was greyed or lost its age:\n%s", codex)
 	}
-	if !strings.Contains(codex, `class="allowance-last-stale"`) || !strings.Contains(codex, "<strong>11% used</strong>") || !strings.Contains(codex, "reported 31 minutes ago") {
-		t.Errorf("a reading older than 30 minutes lacks its age:\n%s", codex)
+	if strings.Contains(codex, `class="session-headline session-stale"`) {
+		t.Error("a 30 minute reading was greyed")
 	}
-	if strings.Contains(codex, "reported 30 minutes ago") {
-		t.Error("a greyed reading says the same age as a plain 30 minute reading")
+	if !strings.Contains(codex, `class="session-secondary session-stale">11% of the week used`) || !strings.Contains(codex, `class="session-age session-stale">reported 31 minutes ago`) {
+		t.Errorf("a reading older than 30 minutes lacks its grey age:\n%s", codex)
 	}
 
 	old := page([]ProductAllowance{{Provider: "Claude", Value: AllowanceUnknown, Reason: "Allowance freshness unknown or expired",
 		LastReported: []ProductAllowanceLastReported{line("65% used", asOf.Add(-3*time.Hour), asOf.Add(36*time.Hour))}}})
 	claude = tile(old, "Claude")
-	for _, want := range []string{`class="allowance-last-stale"`, "<strong>65% used</strong>", "reported 3 hours ago"} {
+	for _, want := range []string{`class="session-headline session-stale"><strong>65% of the week used</strong>`, "reported 3 hours ago", sessionReadingCaveat} {
 		if !strings.Contains(claude, want) {
 			t.Errorf("stale tile lacks %q:\n%s", want, claude)
 		}
 	}
-	if strings.Contains(claude, allowanceWindowOver) || strings.Contains(claude, "allowance-last-fresh") {
-		t.Errorf("stale tile dropped its percent:\n%s", claude)
+	if strings.Contains(claude, allowanceWindowOver) || strings.Contains(claude, ">Unknown<") || strings.Contains(claude, "No current percent") {
+		t.Errorf("stale tile dropped its percent or restored the old words:\n%s", claude)
 	}
 
 	past := page([]ProductAllowance{{Provider: "Codex", Value: AllowanceUnknown, Reason: "No percent allowance reported",
 		LastReported: []ProductAllowanceLastReported{line("95% used", asOf.Add(-2*time.Hour), asOf.Add(-time.Minute))}}})
 	codex = tile(past, "Codex")
-	for _, want := range []string{`class="allowance-last-over"`, allowanceWindowOver, "Last reading was 10 Nov 10:00 UTC."} {
-		if !strings.Contains(codex, want) {
-			t.Errorf("past reset tile lacks %q:\n%s", want, codex)
-		}
-	}
-	if strings.Contains(past, "95% used") || strings.Contains(past, "<strong>") {
-		t.Error("past reset still shows a percent")
+	order(codex, allowanceWindowOver, "Last reading was 10 Nov 10:00 UTC.", sessionReadingCaveat)
+	if strings.Contains(past, "95% used") || strings.Contains(past, "<strong>") || strings.Contains(codex, ">Unknown<") || strings.Contains(codex, "No current percent") {
+		t.Errorf("past reset still shows a percent or the old words:\n%s", codex)
 	}
 
 	none := page(nil)
@@ -275,11 +293,113 @@ func TestAllowanceReadingAgeFourStates(t *testing.T) {
 			t.Errorf("%s tile still says Unknown or shows a percent:\n%s", provider, got)
 		}
 	}
-	for _, provider := range []string{"Cursor", "Grok"} {
-		got := tile(none, provider)
-		if !strings.Contains(got, `tone-muted">Not connected<`) || strings.Contains(got, allowanceNoReading) {
-			t.Errorf("%s should stay not connected:\n%s", provider, got)
+	cursor := tile(none, "Cursor")
+	for _, want := range []string{
+		cursorPlanSentence,
+		`href="` + cursorPlanURL + `"`,
+		`target="_blank"`,
+		`rel="noopener noreferrer"`,
+		"cursor.com/dashboard",
+		"opens in a new tab",
+	} {
+		if !strings.Contains(cursor, want) && !strings.Contains(cursor, strings.ReplaceAll(want, "'", "&#39;")) {
+			t.Errorf("Cursor tile lacks %q:\n%s", want, cursor)
 		}
+	}
+	if strings.Contains(cursor, "Not connected") || strings.Contains(cursor, "No percent reported") || strings.Contains(cursor, allowanceNoReading) {
+		t.Errorf("Cursor tile kept the old gap:\n%s", cursor)
+	}
+	grok := tile(none, "Grok")
+	if !strings.Contains(grok, `tone-muted">Not connected<`) || strings.Contains(grok, allowanceNoReading) || strings.Contains(grok, cursorPlanSentence) {
+		t.Errorf("Grok should stay not connected:\n%s", grok)
+	}
+}
+
+func TestSessionTilePutsAShorterWindowUnderTheWeek(t *testing.T) {
+	asOf := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	weekReset := asOf.Add(48 * time.Hour)
+	hourReset := asOf.Add(3 * time.Hour)
+	line := func(percent, window string, reset time.Time) ProductAllowanceLastReported {
+		return ProductAllowanceLastReported{
+			Percent: percent, Window: window, Session: true,
+			Reset:        "Reported reset: " + reset.UTC().Format("2 Jan 15:04 UTC") + ".",
+			ReadAt:       asOf.Add(-2 * time.Minute).UTC().Format("2 Jan 15:04 UTC"),
+			ReadAtExact:  asOf.Add(-2 * time.Minute).UTC().Format(time.RFC3339),
+			ResetAtExact: reset.UTC().Format(time.RFC3339),
+			Source:       "Passive event", Account: "Account not verified",
+			Why: "Not current or trusted: this reading's account is not verified.",
+		}
+	}
+	body := allowanceRender(t, ProductPage{
+		Title: "Sessions", Connected: true, Complete: true, Filter: ProductFilter{View: "usage"}, AsOf: asOf,
+		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Codex", Value: AllowanceUnknown, Reason: "Allowance freshness unknown or expired",
+			LastReported: []ProductAllowanceLastReported{
+				line("12% used", "5 hours", hourReset),
+				line("34% used", "7 days", weekReset),
+			}}}},
+	})
+	codex := glanceTile(t, glanceSection(t, body), "Codex")
+	weekAt := strings.Index(codex, "<strong>34% of the week used</strong>")
+	resetAt := strings.Index(codex, "resets Thursday 12 Nov 12:00 UTC")
+	ageAt := strings.Index(codex, "reported 2 minutes ago")
+	hourAt := strings.Index(codex, `class="session-secondary">12% of the 5 hours used`)
+	caveatAt := strings.Index(codex, sessionReadingCaveat)
+	if weekAt < 0 || resetAt < weekAt || ageAt < resetAt || hourAt < ageAt || caveatAt < hourAt {
+		t.Fatalf("shorter window is not a smaller line under the week:\n%s", codex)
+	}
+	if strings.Count(codex, sessionReadingCaveat) != 1 {
+		t.Fatalf("caveat count %d:\n%s", strings.Count(codex, sessionReadingCaveat), codex)
+	}
+	if strings.Contains(codex, ">Unknown<") || strings.Contains(codex, "No current percent") {
+		t.Fatalf("shorter window restored the old words:\n%s", codex)
+	}
+	if !strings.Contains(codex, "Reported reset: 10 Nov 15:00 UTC.") {
+		t.Fatal("the 5 hour reset left the details")
+	}
+	for _, want := range []string{"7 days · Received", "5 hours · Received", "7 days · Reported reset:", "5 hours · Reported reset:"} {
+		if !strings.Contains(codex, want) {
+			t.Errorf("details do not name the window %q:\n%s", want, codex)
+		}
+	}
+}
+
+func TestSessionTileNamesAShorterWindowThatHasReset(t *testing.T) {
+	asOf := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	line := func(percent, window string, reset time.Time) ProductAllowanceLastReported {
+		return ProductAllowanceLastReported{
+			Percent: percent, Window: window, Session: true,
+			Reset:        "Reported reset: " + reset.UTC().Format("2 Jan 15:04 UTC") + ".",
+			ReadAt:       asOf.Add(-3 * time.Hour).UTC().Format("2 Jan 15:04 UTC"),
+			ReadAtExact:  asOf.Add(-3 * time.Hour).UTC().Format(time.RFC3339),
+			ResetAtExact: reset.UTC().Format(time.RFC3339),
+			Source:       "Passive event", Account: "Account not verified",
+			Why: "Not current or trusted: this reading's account is not verified.",
+		}
+	}
+	body := allowanceRender(t, ProductPage{
+		Title: "Sessions", Connected: true, Complete: true, Filter: ProductFilter{View: "usage"}, AsOf: asOf,
+		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Codex", Value: AllowanceUnknown, Reason: "Allowance freshness unknown or expired",
+			LastReported: []ProductAllowanceLastReported{
+				line("12% used", "5 hours", asOf.Add(-time.Minute)),
+				line("34% used", "7 days", asOf.Add(48*time.Hour)),
+			}}}},
+	})
+	codex := glanceTile(t, glanceSection(t, body), "Codex")
+	named := "5 hours: " + allowanceWindowOver
+	weekAt := strings.Index(codex, "<strong>34% of the week used</strong>")
+	ageAt := strings.Index(codex, "reported 3 hours ago")
+	overAt := strings.Index(codex, named)
+	if weekAt < 0 || ageAt < weekAt || overAt < ageAt {
+		t.Fatalf("a passed shorter window is not named under the week:\n%s", codex)
+	}
+	if strings.Contains(codex, "12% of the 5 hours used") || strings.Contains(codex[weekAt:overAt], allowanceWindowOver) {
+		t.Fatalf("the passed shorter window reads as the week or still shows its percent:\n%s", codex)
+	}
+	if strings.Count(codex, allowanceWindowOver) != 1 || strings.Count(codex, sessionReadingCaveat) != 1 {
+		t.Fatalf("over or caveat repeated:\n%s", codex)
+	}
+	if !strings.Contains(codex, "7 days · Received") || !strings.Contains(codex, "5 hours · Received") {
+		t.Fatalf("details do not name both windows:\n%s", codex)
 	}
 }
 
@@ -320,6 +440,9 @@ func TestAllowanceReadingColorsExistInBothThemes(t *testing.T) {
 		".allowance-last-fresh .allowance-last-value strong { color: var(--ink);",
 		".allowance-last-stale .allowance-last-value, .allowance-last-stale .allowance-last-value strong, .allowance-last-stale .allowance-last-age { color: var(--muted); }",
 		".allowance-last-over-line, .glance-gap { color: var(--ink); }",
+		".session-headline { margin: 0; color: var(--ink);",
+		".session-headline.session-stale, .session-headline.session-stale strong, .session-secondary.session-stale, .session-age.session-stale { color: var(--muted); }",
+		".cursor-plan { margin: 0; color: var(--ink);",
 	} {
 		if !strings.Contains(viewsStyle, rule) {
 			t.Errorf("stylesheet lacks %q", rule)
@@ -332,6 +455,10 @@ func TestAllowanceReadingCopyWrapsOnAPhone(t *testing.T) {
 		".allowance-last-age, .allowance-last-over-line, .glance-gap { margin: 2px 0 0; max-width: 100%; font-size: 13px; font-weight: 400; letter-spacing: 0; line-height: 1.45; overflow-wrap: anywhere; }",
 		".glance-gap { margin: 0; }",
 		".glance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));",
+		".session-headline { margin: 0; color: var(--ink); font-size: 20px; font-weight: 650; letter-spacing: -.4px; line-height: 1.25; overflow-wrap: anywhere; }",
+		".session-reset, .session-age, .session-when, .session-caveat, .session-secondary { margin: 2px 0 0; max-width: 100%; letter-spacing: 0; line-height: 1.45; overflow-wrap: anywhere; }",
+		".cursor-plan { margin: 0; color: var(--ink); font-size: 13px; font-weight: 400; letter-spacing: 0; line-height: 1.45; overflow-wrap: anywhere; }",
+		".cursor-plan-link a { overflow-wrap: anywhere; }",
 	} {
 		if !strings.Contains(viewsStyle, rule) {
 			t.Errorf("phone layout lacks %q", rule)
@@ -341,7 +468,7 @@ func TestAllowanceReadingCopyWrapsOnAPhone(t *testing.T) {
 	if phone == "" || !strings.Contains(phone, "overflow: visible") {
 		t.Fatal("phone layout is missing or clips the page")
 	}
-	for _, sel := range []string{".glance-gap", ".allowance-last-age", ".allowance-last-over-line"} {
+	for _, sel := range []string{".glance-gap", ".allowance-last-age", ".allowance-last-over-line", ".session-headline", ".session-secondary", ".cursor-plan"} {
 		if strings.Contains(viewsStyle, sel+" {") && strings.Contains(viewsStyle, sel+" { white-space: nowrap") {
 			t.Errorf("%s does not wrap", sel)
 		}

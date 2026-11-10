@@ -366,6 +366,15 @@ appears when a new Codex task, or a remote Claude session, runs on a current
 image and the operator is collecting those readings." The operator serves
 that empty tile and an unconfigured source as the same value, so the sentence
 includes the collecting condition. Cursor and Grok stay not connected.
+*Amended 2026-11-10, OP534:* a session-v1 reading's glance leads with "<N>%
+of the week used", then "resets <weekday> <day> <month> <time> UTC", then
+"reported <age> ago". One line says it was reported by a running session and
+not checked with the provider. The trust lines stay in the tile's details.
+The grey, past-reset and no-reading rules above are unchanged. A window other
+than 7 days is a smaller line in the same form. If that shorter window's
+reset has passed while the week is still current, the smaller line names the
+window before the past-reset sentence, and each detail line starts with its
+window name.
 
 ## 9. Cursor and Grok
 
@@ -379,7 +388,12 @@ needs a team key, and dashboard calls are private (OP193, gated). No passive
 source is known. If Tom wants it (Q-02), run that reader inside a running
 Cursor task pod at most every 30 minutes, after the glyph is qualified, under
 a standing approval. Otherwise the tile says "Not connected: Cursor offers no
-supported way for a program to read it."
+supported way for a program to read it." *Amended 2026-11-10, OP532 portal:*
+the Usage tile says "Cursor's plan allowance can only be seen on Cursor's own
+page." and links to https://cursor.com/dashboard. It does not count tasks or
+minutes. The portal's session list has the agent, the mode and the requested
+model, and no wall-clock duration, so a weekly total would need a new field
+on the session the portal already reads. Grok stays not connected.
 
 **Grok.** No documented programmatic source exists
 ([R-07](../research/R-07-op192-grok-usage-source-plan.md)). Cursor's help

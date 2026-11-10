@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"html"
 	"regexp"
 	"strings"
 	"testing"
@@ -248,7 +249,8 @@ func TestClaimsPolicyNavigationAndStyle(t *testing.T) {
 		t.Fatal("a CSS comment breaks the CSP hash")
 	}
 	body := renderClaimsBody(t, ClaimsPage{State: ClaimsRefused})
-	if !strings.Contains(body, `content="`+strings.ReplaceAll(strings.TrimSuffix(ClaimsPolicy, "; frame-ancestors 'none'"), "'", "&#39;")+`"`) {
+	meta := strings.Split(strings.Split(body, `http-equiv="Content-Security-Policy" content="`)[1], `"`)[0]
+	if html.UnescapeString(meta) != strings.TrimSuffix(ClaimsPolicy, "; frame-ancestors 'none'") || strings.Contains(meta, "frame-ancestors") {
 		t.Fatal("meta policy differs from the header")
 	}
 	if strings.Count(body, `href="/portal/projects/dev-env/environments/internal/claims" aria-current="page"`) != 2 {

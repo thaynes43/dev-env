@@ -18,7 +18,7 @@ const (
 // op192Section returns one provider's account section on the Usage page.
 func op192Section(t *testing.T, section, provider string) string {
 	t.Helper()
-	m := regexp.MustCompile(`(?s)<section class="allowance-account"><h3>` + provider + ` .*?</section>`).FindString(section)
+	m := regexp.MustCompile(`(?s)<section class="allowance-account"><h3>` + provider + `(?: |</h3>).*?</section>`).FindString(section)
 	if m == "" {
 		t.Fatalf("no %s account section in %s", provider, section)
 	}

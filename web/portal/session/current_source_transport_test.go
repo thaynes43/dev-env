@@ -44,7 +44,8 @@ func TestCurrentSourceTransportProjectsUsageAndDetail(t *testing.T) {
 		`Resets at <time datetime="2026-01-22T12:00:00Z">22 Jan 2026, 12:00:00</time> (UTC). Resets in 6 days 23 hours 50 minutes, as of 15 Jan 2026, 12:10:00 UTC.`,
 		`width="40"`,
 		"Not connected",
-		"No Cursor account view is connected.",
+		"Cursor&#39;s plan allowance can only be seen on Cursor&#39;s own page.",
+		`href="https://cursor.com/dashboard"`,
 		`data-label="Input" class="unknown">Unknown`,
 		"worker",
 	} {

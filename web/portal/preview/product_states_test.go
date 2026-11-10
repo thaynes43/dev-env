@@ -241,10 +241,10 @@ func TestReadingAgePreviewsSayTheFourStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	checks := map[string][]string{
-		"usage-reading-fresh.html": {"allowance-last-fresh", "<strong>34% used</strong>", "Reported reset:"},
-		"usage-reading-stale.html": {"allowance-last-stale", "<strong>34% used</strong>", "reported 3 hours ago"},
-		"usage-reading-reset.html": {"allowance-last-over", "This window is over: the reported reset has passed, so its percent is not shown.", "Last reading was 10 Nov 10:00 UTC."},
-		"usage-reading-none.html":  {"Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image and the operator is collecting those readings.", ">No reading<"},
+		"usage-reading-fresh.html": {"34% of the week used", "resets Thursday 12 Nov 12:00 UTC", "reported 12 minutes ago", "Reported by a running session; not checked with the provider.", "allowance-last-fresh", "<strong>34% used</strong>", "Reported reset:"},
+		"usage-reading-stale.html": {"34% of the week used", "session-stale", "reported 3 hours ago", "Reported by a running session; not checked with the provider."},
+		"usage-reading-reset.html": {"allowance-last-over", "This window is over: the reported reset has passed, so its percent is not shown.", "Last reading was 10 Nov 10:00 UTC.", "Reported by a running session; not checked with the provider."},
+		"usage-reading-none.html":  {"Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image and the operator is collecting those readings.", ">No reading<", "Cursor&#39;s plan allowance can only be seen on Cursor&#39;s own page.", `href="https://cursor.com/dashboard"`, `target="_blank"`},
 	}
 	for name, wants := range checks {
 		body, err := os.ReadFile(filepath.Join(dir, name))

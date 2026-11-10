@@ -307,6 +307,7 @@ func lastReportedAllowance(doc providerallowance.ReadResponse, provider string) 
 				Percent: *m.Value.Decimal + suffix, Window: allowanceWindow(m.Window), Reset: reset,
 				ReadAt: allowanceTime(&item.ReceivedAt), ReadAtExact: read,
 				Source: source, Account: account, Why: why,
+				Session: providerallowance.SessionReadingSource(o.Source),
 			}
 			if projected.ResetPrecision == "instant" {
 				line.ResetAtExact = projected.ResetAt

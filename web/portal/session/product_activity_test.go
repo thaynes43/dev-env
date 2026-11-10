@@ -864,7 +864,7 @@ func TestAccountAllowanceNeverComesFromSessionTokensOrCost(t *testing.T) {
 		}
 		wantConnected := 4
 		if view == "usage" {
-			wantConnected = 2
+			wantConnected = 1
 			if strings.Count(block, ">No reading<") != 2 || !strings.Contains(block, "Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image and the operator is collecting those readings.") {
 				t.Fatalf("usage empty tiles: %s", block)
 			}
