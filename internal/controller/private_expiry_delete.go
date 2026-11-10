@@ -294,6 +294,25 @@ func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *
 		obs.homeExpiry = &homeExpiryNote{reason: "HomeDeleting", message: "the HOME claim " + c.Name + " is being deleted and the operator's finalizer is lifted; waiting for it to go"}
 		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
 	}
+	// A wait already remembered, whose volume is still listed and whose time
+	// has not run out, comes back after the poll and does not re-hash the
+	// bundle. The first look has no memory, so it runs the sequence below
+	// and starts the wait. A released volume, or a wait that has run out,
+	// falls through, so the verify, the re-check, the Pod check, the
+	// identity, the release check and the parked check still run in that
+	// call before any delete or refusal.
+	if r.taskPolicy(v.s) {
+		if _, remembered := r.taskDeleteReleaseRemembered(v.s.UID); remembered {
+			if why := r.taskVolumeReleased(ctx, v); why != "" {
+				first := r.taskDeleteReleaseWaitSince(v.s.UID, v.now)
+				if v.now.Sub(first) < taskDeleteReleaseWait {
+					obs.homeExpiry = &homeExpiryNote{reason: taskReasonDeleting, message: taskDeleteReleaseWaiting}
+					log.FromContext(ctx).Info("the task clean-up waits for the HOME's volume to be released after its hold pod was removed", "reason", why)
+					return ctrl.Result{RequeueAfter: taskDeleteReleasePoll}, false, nil
+				}
+			}
+		}
+	}
 	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 		return res, stop, err
 	}

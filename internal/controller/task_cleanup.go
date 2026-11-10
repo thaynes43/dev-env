@@ -1671,6 +1671,17 @@ func (r *Reconciler) taskBreaker(failed bool, now time.Time) {
 	st.lastFailure = now
 }
 
+// taskDeleteReleaseRemembered is the delete step's start, if this leader
+// has one. A restart has none.
+func (r *Reconciler) taskDeleteReleaseRemembered(uid types.UID) (time.Time, bool) {
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.init()
+	at, ok := st.deleteReleaseWait[uid]
+	return at, ok
+}
+
 // taskDeleteReleaseWaitSince is the delete step's first look at a volume
 // that is still listed, remembered for this leader only. A restart returns
 // a new start, so the wait runs for taskDeleteReleaseWait again.

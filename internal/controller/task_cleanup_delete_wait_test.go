@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 // taskDrainEvents reads the events a fake recorder has queued.
@@ -343,4 +344,100 @@ func TestTaskCleanupHoldPodRemovedSaysTheRescueIsSaved(t *testing.T) {
 	if f.named(t) != nil {
 		t.Fatal("the hold pod stayed")
 	}
+}
+
+// taskDeletingVerified is a Deleting record whose kept work is a Verified
+// bundle, so each delete attempt re-hashes it on the shelf. The HOME claim
+// is still there: the delete itself has not run.
+func taskDeletingVerified(t *testing.T) *taskFixture {
+	t.Helper()
+	f := newTaskFixture(t, nil)
+	id := f.s.Name + "/20261111-1200-2"
+	f.verifier.set(id, protocol.RescueVerifyResult{OK: true, Manifest: "rescue/" + id + "/manifest.json", ManifestSHA256: testDigest, Bundles: 1, Bytes: 41984})
+	f.report(func(p *corev1.Pod) (protocol.RescueReport, error) {
+		return verifiedRescue(p.Name, "20261111-1200", "20261111-1200-2"), nil
+	})
+	f.toHold(t)
+	for range 8 {
+		f.run(t, 1)
+		e := f.expiry(t)
+		if e != nil && e.Phase == v1alpha1.HomeExpiryDeleting {
+			if e.Bundle == nil || e.Bundle.Result != bundleVerified || f.claim(t) == nil {
+				t.Fatalf("Deleting setup %+v claim %v", e, f.claim(t) != nil)
+			}
+			return f
+		}
+	}
+	t.Fatalf("setup reached %+v", f.expiry(t))
+	return nil
+}
+
+func taskListHomeVolume(t *testing.T, f *taskFixture) *corev1.Node {
+	t.Helper()
+	n := taskReadyOtherNode(t, f)
+	n.Status.VolumesInUse = []corev1.UniqueVolumeName{homeVolumeUniqueName()}
+	if err := f.c.Status().Update(context.Background(), n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// TestTaskCleanupDeleteReleaseWaitVerifiesOnce is the review's load finding:
+// polls while a remembered wait still sees the volume listed do not re-hash
+// the bundle. The first look does, and so does the pass that deletes or refuses.
+func TestTaskCleanupDeleteReleaseWaitVerifiesOnce(t *testing.T) {
+	t.Run("polls", func(t *testing.T) {
+		f := taskDeletingVerified(t)
+		taskListHomeVolume(t, f)
+		before := len(f.verifier.idCalls())
+		taskReconcile(t, f)
+		for range 4 {
+			taskReconcile(t, f)
+		}
+		if got := len(f.verifier.idCalls()) - before; got != 1 {
+			t.Fatalf("rescue verifies during the wait %d; want 1, the first look; calls %v", got, f.verifier.idCalls())
+		}
+		c := f.claim(t)
+		e := f.expiry(t)
+		if c == nil || !c.DeletionTimestamp.IsZero() || e == nil || e.Phase != v1alpha1.HomeExpiryDeleting || e.Refusal != "" {
+			t.Fatalf("record %+v claim %v; want Deleting, no refusal, HOME kept", e, c != nil)
+		}
+	})
+
+	t.Run("released", func(t *testing.T) {
+		f := taskDeletingVerified(t)
+		n := taskListHomeVolume(t, f)
+		taskReconcile(t, f)
+		for range 3 {
+			taskReconcile(t, f)
+		}
+		before := len(f.verifier.idCalls())
+		setNodeVolumes(t, f, n.Name)
+		taskReconcile(t, f)
+		if got := len(f.verifier.idCalls()) - before; got != 1 {
+			t.Fatalf("rescue verifies on the releasing pass %d; want 1; calls %v", got, f.verifier.idCalls())
+		}
+		if f.claim(t) != nil || f.expiry(t) == nil || f.expiry(t).Refusal != "" {
+			t.Fatalf("record %+v claim %v; want the HOME deleted and no refusal", f.expiry(t), f.claim(t) != nil)
+		}
+	})
+
+	t.Run("refuses", func(t *testing.T) {
+		f := taskDeletingVerified(t)
+		taskListHomeVolume(t, f)
+		taskReconcile(t, f)
+		for range 3 {
+			taskReconcile(t, f)
+		}
+		before := len(f.verifier.idCalls())
+		taskAdvance(t, f, taskDeleteReleaseWait)
+		taskReconcile(t, f)
+		if got := len(f.verifier.idCalls()) - before; got != 1 {
+			t.Fatalf("rescue verifies on the refusing pass %d; want 1; calls %v", got, f.verifier.idCalls())
+		}
+		e := f.expiry(t)
+		if e == nil || e.Refusal != expiryVolumeNotReleased || e.Phase != v1alpha1.HomeExpiryDeleting || f.claim(t) == nil {
+			t.Fatalf("record %+v claim %v; want volume_not_released and the HOME kept", e, f.claim(t) != nil)
+		}
+	})
 }
