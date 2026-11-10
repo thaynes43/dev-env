@@ -2,6 +2,8 @@ package apiserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/providerallowance"
 )
@@ -54,7 +57,19 @@ type AggregateAllowanceReports struct {
 	// Supplemental is the separate public cached-GET binding. It is not added
 	// to SessionUIDs and it cannot publish.
 	Supplemental *SupplementalAllowanceReader
-	Now          func() time.Time
+	// Sessions is the passive session readings' store (DESIGN-059). Set, a
+	// GET serves each provider's newer of the slot item and the session
+	// reading, whatever the slot's state. Set without a slot or a Source, the
+	// route is GET-only for the portal reader and serves the readings alone.
+	// Nil leaves every read as it was.
+	Sessions sessionAllowanceReader
+	Now      func() time.Time
+}
+
+// sessionAllowanceReader returns each provider's newest session reading.
+// SessionAllowanceStore is the Kubernetes reader; tests substitute a double.
+type sessionAllowanceReader interface {
+	Newest(ctx context.Context) (map[string]StoredSessionReading, error)
 }
 
 // SupplementalAllowanceReader is one public kindSession cached aggregate GET.
@@ -81,9 +96,16 @@ func (h *AggregateAllowanceReports) RouteEnabled() bool {
 		return h.storeMode()
 	}
 	if h.Source == nil {
-		return false
+		return h.sessionsOnly()
 	}
 	return h.sessionBinding() || h.portalBinding()
+}
+
+// sessionsOnly is the GET-only route over session readings alone: no slot,
+// no Source, and only the existing portal reader identity. It takes no
+// trust from the private configuration, because it has none.
+func (h *AggregateAllowanceReports) sessionsOnly() bool {
+	return h != nil && h.Enabled && h.Sessions != nil && h.Source == nil && !h.usesStore() && h.portalBinding()
 }
 
 // PublishEnabled reports whether PUT may be mounted. GET-only source mode is false.
@@ -154,6 +176,9 @@ func (h *AggregateAllowanceReports) Handle(ctx context.Context, w http.ResponseW
 	if err := h.allow(ctx, c); err != nil {
 		return 0, nil, err
 	}
+	if h.Source == nil {
+		return h.readSessionsOnly(ctx)
+	}
 	return h.readSource(ctx)
 }
 
@@ -195,23 +220,153 @@ func (h *AggregateAllowanceReports) readStored(ctx context.Context) (int, any, e
 	if ctx.Err() != nil {
 		return 0, nil, allowanceUnavailable()
 	}
+	// Session readings are served whatever the slot's state: an expired,
+	// suppressed, missing or unreadable slot must not hide them. With none,
+	// every answer below is the one served before.
+	readings := h.sessionReadings(ctx)
 	view, err := h.Store.Read(ctx)
-	if err != nil || ctx.Err() != nil {
+	if ctx.Err() != nil {
+		return 0, nil, allowanceUnavailable()
+	}
+	if err != nil {
+		if len(readings) > 0 {
+			return h.serveSessionReadings(readings)
+		}
 		return 0, nil, aggregateAllowanceError(err)
 	}
 	if view.Suppressed {
+		if len(readings) > 0 {
+			return h.serveSessionReadings(readings)
+		}
 		return 0, nil, allowanceUnavailable()
 	}
 	if !view.Found || len(view.Raw) == 0 {
+		if len(readings) > 0 {
+			return h.serveSessionReadings(readings)
+		}
 		return allowanceDocument(UnconfiguredAggregateDocument())
 	}
 	doc, err := providerallowance.DecodeReadResponse(view.Raw, providerallowance.FixtureParseLimits)
 	if err != nil {
+		if len(readings) > 0 {
+			return h.serveSessionReadings(readings)
+		}
 		return 0, nil, allowanceUnavailable()
 	}
+	mergeSessionReadings(&doc, readings)
 	trust := h.Store.trust()
 	providerallowance.ProjectCachedRead(&doc, trust.Contexts, trust.Registry, trust.MaxAge, true, h.now())
 	return allowanceDocument(doc)
+}
+
+// readSessionsOnly serves the session readings over the empty slot.
+func (h *AggregateAllowanceReports) readSessionsOnly(ctx context.Context) (int, any, error) {
+	if ctx.Err() != nil {
+		return 0, nil, allowanceUnavailable()
+	}
+	readings := h.sessionReadings(ctx)
+	if ctx.Err() != nil {
+		return 0, nil, allowanceUnavailable()
+	}
+	if len(readings) == 0 {
+		return allowanceDocument(UnconfiguredAggregateDocument())
+	}
+	return h.serveSessionReadings(readings)
+}
+
+// serveSessionReadings serves session readings over the empty slot. Only the
+// built-in session rule applies: no private context is used.
+func (h *AggregateAllowanceReports) serveSessionReadings(readings map[string]StoredSessionReading) (int, any, error) {
+	doc := UnconfiguredAggregateDocument()
+	mergeSessionReadings(&doc, readings)
+	providerallowance.ProjectCachedRead(&doc, nil, nil, 0, false, h.now())
+	return allowanceDocument(doc)
+}
+
+// sessionReadings is each provider's newest session reading, or none when
+// the store is off or cannot be read: a failed read never hides the slot.
+func (h *AggregateAllowanceReports) sessionReadings(ctx context.Context) map[string]StoredSessionReading {
+	if h == nil || h.Sessions == nil {
+		return nil
+	}
+	readings, err := h.Sessions.Newest(ctx)
+	if err != nil {
+		return nil
+	}
+	return readings
+}
+
+// sessionContractProviders maps a session's agent to the contract provider.
+var sessionContractProviders = map[string]string{protocol.AgentClaude: "anthropic", protocol.AgentCodex: "openai"}
+
+// mergeSessionReadings puts each provider's session reading into doc when it
+// is newer than the provider's slot item, or the slot has none: the slot
+// item is removed and the provider's source status replaced by the
+// reading's. A slot item at least as new is kept. A provider with more than
+// one slot item is left as it is.
+func mergeSessionReadings(doc *providerallowance.ReadResponse, readings map[string]StoredSessionReading) {
+	merged := ""
+	for _, agent := range sessionAllowanceProviders {
+		r, ok := readings[agent]
+		if !ok {
+			continue
+		}
+		provider := sessionContractProviders[agent]
+		windows := make([]providerallowance.SessionWindow, 0, len(r.Windows))
+		for _, w := range r.Windows {
+			windows = append(windows, providerallowance.SessionWindow{Minutes: w.Minutes, UsedPercent: w.UsedPercent, ResetAt: w.ResetsAt})
+		}
+		item, status, err := providerallowance.SessionReadingItem(provider, r.ReadAt, windows)
+		if err != nil {
+			continue
+		}
+		slot, count := -1, 0
+		for i := range doc.Items {
+			if doc.Items[i].Observation.Provider == provider {
+				slot, count = i, count+1
+			}
+		}
+		if count > 1 || (slot >= 0 && !r.ReadAt.After(slotItemTime(doc.Items[slot]))) {
+			continue
+		}
+		if slot >= 0 {
+			doc.Items = append(doc.Items[:slot:slot], doc.Items[slot+1:]...)
+		}
+		doc.Items = append(doc.Items, item)
+		statuses := doc.SourceStatuses[:0:0]
+		replaced := false
+		for _, s := range doc.SourceStatuses {
+			if s.Provider != provider {
+				statuses = append(statuses, s)
+			} else if !replaced {
+				statuses, replaced = append(statuses, status), true
+			}
+		}
+		if !replaced {
+			statuses = append(statuses, status)
+		}
+		doc.SourceStatuses = statuses
+		merged += "|" + item.Observation.ObservationID
+	}
+	if merged != "" {
+		sum := sha256.Sum256([]byte(doc.SnapshotRevision + merged))
+		doc.SnapshotRevision = "session-merge-" + hex.EncodeToString(sum[:12])
+	}
+}
+
+// slotItemTime is when a slot item's numbers were measured: the provider's
+// time when it reported one, else the capture time. Unreadable is the zero
+// time, so any session reading is newer.
+func slotItemTime(item providerallowance.ReadItem) time.Time {
+	for _, raw := range []*string{item.Observation.ProviderObservedAt, &item.Observation.CapturedAt} {
+		if raw == nil {
+			continue
+		}
+		if at, err := time.Parse(time.RFC3339Nano, *raw); err == nil {
+			return at
+		}
+	}
+	return time.Time{}
 }
 
 func (h *AggregateAllowanceReports) putStored(ctx context.Context, w http.ResponseWriter, r *http.Request) (int, any, error) {

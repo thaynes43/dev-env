@@ -1089,7 +1089,19 @@ func run(args []string) error {
 		// Passive allowance readings (DESIGN-059): default off. Reads are
 		// uncached; the one write is an Update with the read resourceVersion.
 		if o.sessionAllowances {
-			api.SessionAllowances = &apiserver.SessionAllowanceStore{Writer: mgr.GetClient(), Live: mgr.GetAPIReader()}
+			sessions := &apiserver.SessionAllowanceStore{Writer: mgr.GetClient(), Live: mgr.GetAPIReader()}
+			api.SessionAllowances = sessions
+			// GET /v1/provider-allowances serves the readings whatever the
+			// slot's state. Without a slot selection the route is GET-only for
+			// the portal reader and takes no trust from any private config.
+			if aggregateReports != nil {
+				aggregateReports.Sessions = sessions
+			} else {
+				api.AggregateAllowanceReports = &apiserver.AggregateAllowanceReports{
+					Enabled: true, Sessions: sessions,
+					PortalNamespace: aggregatePortalNamespace, PortalServiceAccount: aggregatePortalAccount,
+				}
+			}
 		}
 		// The standby session is default off. It is made through the API's own
 		// creation path and found again by its label (Story110 T25, plan 03).
