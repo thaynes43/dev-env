@@ -210,9 +210,110 @@ func TestPrivateTerminalNeverFromAbsence(t *testing.T) {
 	}
 }
 
+// kubeletLostContainer gives f's executor container the status a kubelet
+// writes when it cannot locate the container as the Pod ends (DESIGN-025
+// 25.6, the dev-env-1029-222313 case): terminated, ContainerStatusUnknown,
+// exit 137, no start or finish time, and the last run's own termination in
+// lastState.
+func kubeletLostContainer(f *terminalFixture) {
+	st := &f.pod.Status.ContainerStatuses[0]
+	st.RestartCount = 6
+	st.LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error",
+		StartedAt: metav1.NewTime(f.now.Add(-time.Minute)), FinishedAt: metav1.NewTime(f.now.Add(-time.Minute))}}
+	st.State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "ContainerStatusUnknown",
+		Message: "The container could not be located when the pod was terminated"}}
+}
+
+// DESIGN-025 25.6: a terminal Pod whose container the kubelet reported as
+// ContainerStatusUnknown, with every other check passing, gets its terminal
+// record. The record keeps the reason and has no finish time; the Pod is not
+// touched.
+func TestPrivateTerminalTakesKubeletContainerStatusUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*terminalFixture)
+		want []v1alpha1.PrivateExecutorContainerTermination
+	}{
+		{name: "the agent container", edit: kubeletLostContainer,
+			want: []v1alpha1.PrivateExecutorContainerTermination{{Name: ContainerName, ExitCode: 137, Reason: "ContainerStatusUnknown"}}},
+		{name: "an init container too", edit: func(f *terminalFixture) {
+			kubeletLostContainer(f)
+			f.pod.Spec.InitContainers = []corev1.Container{{Name: "k8tz"}}
+			f.pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "k8tz", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+				ExitCode: 137, Reason: "ContainerStatusUnknown", Message: "The container could not be located when the pod was terminated"}}}}
+		}, want: []v1alpha1.PrivateExecutorContainerTermination{{Name: ContainerName, ExitCode: 137, Reason: "ContainerStatusUnknown"},
+			{Name: "k8tz", ExitCode: 137, Reason: "ContainerStatusUnknown"}}},
+		{name: "beside an ordinary termination", edit: func(f *terminalFixture) {
+			kubeletLostContainer(f)
+			f.pod.Spec.Containers = append(f.pod.Spec.Containers, corev1.Container{Name: "sidecar"})
+			f.pod.Status.ContainerStatuses = append(f.pod.Status.ContainerStatuses, corev1.ContainerStatus{Name: "sidecar", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+				ExitCode: 0, Reason: "Completed", FinishedAt: metav1.NewTime(f.now.Add(-3 * time.Second))}}})
+		}, want: []v1alpha1.PrivateExecutorContainerTermination{{Name: ContainerName, ExitCode: 137, Reason: "ContainerStatusUnknown"},
+			{Name: "sidecar", ExitCode: 0, Reason: "Completed", FinishedAt: metav1.NewTime(time.Date(2026, 10, 12, 11, 59, 57, 0, time.UTC))}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newTerminalFixture()
+			tc.edit(&f)
+			c := f.client()
+			counter := NewPrivateExecutorTerminalCounter()
+			reconcileSession(t, f.reconciler(c, c, counter), f.s, 3)
+			got := storedHistory(t, c, f.s)
+			rec := got.Status.PrivateHistory.ExecutorTerminal
+			if rec == nil || rec.PodUID != "original-executor" || rec.Phase != "Failed" || rec.Reason != "DeadlineExceeded" || rec.NodeUID != "node-1" ||
+				!rec.ObservedAt.Equal(&metav1.Time{Time: f.now}) || !apiequality.Semantic.DeepEqual(rec.Containers, tc.want) || !rec.Containers[0].FinishedAt.IsZero() {
+				t.Fatalf("terminal record\n got %+v\nwant containers %+v", rec, tc.want)
+			}
+			if got.Status.PrivateHistory.ExecutorMissed != nil || got.Status.PrivateHistory.StopState != "Unknown" {
+				t.Fatal("the record came with a missed marker or a stop claim")
+			}
+			if terminalCount(counter, terminalRecorded) != 1 || terminalCount(counter, terminalRefused) != 0 {
+				t.Fatalf("recorded %v, refused %v", terminalCount(counter, terminalRecorded), terminalCount(counter, terminalRefused))
+			}
+			var pod corev1.Pod
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &pod); err != nil || pod.UID != f.pod.UID || !pod.DeletionTimestamp.IsZero() {
+				t.Fatal("the executor Pod was touched", err)
+			}
+		})
+	}
+}
+
+// DESIGN-025 25.6: only the private terminal record takes the kubelet's
+// ContainerStatusUnknown. The strict check still refuses it, and so does the
+// maintenance executor's stop proof, which is built on it and otherwise
+// accepts the same Pod with an ordinary termination. The shared workspace
+// stop, the terminal task reclaim's Pod checks and the budget execution call
+// the same strict check.
+func TestOnlyTheTerminalRecordTakesContainerStatusUnknown(t *testing.T) {
+	f := newTerminalFixture()
+	kubeletLostContainer(&f)
+	if err := allContainersTerminatedOrUnknown(f.pod); err != nil {
+		t.Fatal("the terminal record's check refused the kubelet's shape:", err)
+	}
+	if allContainersTerminated(f.pod) == nil {
+		t.Fatal("the strict check took a container with no finish time")
+	}
+	c := f.client()
+	if VerifyExecutorStopped(context.Background(), c, f.pod, string(f.node.UID), func() time.Time { return f.now }) == nil {
+		t.Fatal("the maintenance executor's stop proof took a container with no finish time")
+	}
+	ordinary := newTerminalFixture()
+	if allContainersTerminated(ordinary.pod) != nil || allContainersTerminatedOrUnknown(ordinary.pod) != nil {
+		t.Fatal("an ordinary termination is refused")
+	}
+	oc := ordinary.client()
+	if err := VerifyExecutorStopped(context.Background(), oc, ordinary.pod, string(ordinary.node.UID), func() time.Time { return ordinary.now }); err != nil {
+		t.Fatal("the maintenance executor's stop proof refused an ordinary termination, so its refusal above proves nothing:", err)
+	}
+}
+
 // T15: no record while a check fails; the reconcile asks again in 30s. Each
 // failure leaves the HOME and the Pod alone.
 func TestPrivateTerminalChecksBlockRecording(t *testing.T) {
+	// unknownAnd is the kubelet's ContainerStatusUnknown shape (25.6) and
+	// then one more defect.
+	unknownAnd := func(more func(*terminalFixture)) func(*terminalFixture) {
+		return func(f *terminalFixture) { kubeletLostContainer(f); more(f) }
+	}
 	forbidden := func(kind string) func(*terminalFixture) interceptor.Funcs {
 		return func(*terminalFixture) interceptor.Funcs {
 			return interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
@@ -234,7 +335,8 @@ func TestPrivateTerminalChecksBlockRecording(t *testing.T) {
 		name     string
 		edit     func(*terminalFixture)
 		reader   func(*terminalFixture) interceptor.Funcs
-		terminal bool // the Pod's phase is terminal, so refused is counted
+		terminal bool   // the Pod's phase is terminal, so refused is counted
+		refusal  string // when set, the check's error says this
 	}{
 		{name: "node not ready", terminal: true, edit: func(f *terminalFixture) { f.node.Status.Conditions[0].Status = corev1.ConditionFalse }},
 		{name: "node ready unknown", terminal: true, edit: func(f *terminalFixture) { f.node.Status.Conditions[0].Status = corev1.ConditionUnknown }},
@@ -261,6 +363,50 @@ func TestPrivateTerminalChecksBlockRecording(t *testing.T) {
 			f.pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.DisruptionTarget, Status: corev1.ConditionTrue, Reason: "DeletionByPodGC"}}
 		}},
 		{name: "unscheduled", terminal: true, edit: func(f *terminalFixture) { f.pod.Spec.NodeName = "" }},
+		// DESIGN-025 25.6: the kubelet's ContainerStatusUnknown counts only
+		// in its own shape, and only when every other check passes.
+		{name: "unknown container also running", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: unknownAnd(func(f *terminalFixture) {
+			f.pod.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
+		})},
+		{name: "unknown container also waiting", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: unknownAnd(func(f *terminalFixture) {
+			f.pod.Status.ContainerStatuses[0].State.Waiting = &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}
+		})},
+		{name: "unknown container status twice", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: unknownAnd(func(f *terminalFixture) {
+			// Two admitted containers and two statuses, both of one name,
+			// so the count check passes and the duplicate check refuses.
+			f.pod.Spec.Containers = append(f.pod.Spec.Containers, corev1.Container{Name: "sidecar"})
+			f.pod.Status.ContainerStatuses = append(f.pod.Status.ContainerStatuses, f.pod.Status.ContainerStatuses[0])
+		})},
+		{name: "unknown container beside a missing status", terminal: true, refusal: "missing or extra admitted container status", edit: unknownAnd(func(f *terminalFixture) {
+			f.pod.Spec.Containers = append(f.pod.Spec.Containers, corev1.Container{Name: "sidecar"})
+		})},
+		{name: "no container status at all", terminal: true, refusal: "missing or extra admitted container status", edit: func(f *terminalFixture) { f.pod.Status.ContainerStatuses = nil }},
+		{name: "no finish time with another reason", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: func(f *terminalFixture) {
+			f.pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error"}}
+		}},
+		{name: "no finish time and no reason", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: func(f *terminalFixture) {
+			f.pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137}}
+		}},
+		{name: "no finish time with the reason in another case", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: func(f *terminalFixture) {
+			f.pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "containerstatusunknown"}}
+		}},
+		{name: "unknown reason with another exit code", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: unknownAnd(func(f *terminalFixture) {
+			f.pod.Status.ContainerStatuses[0].State.Terminated.ExitCode = 0
+		})},
+		{name: "unknown reason with a start time", terminal: true, refusal: "duplicate, uncertain or nonterminated", edit: unknownAnd(func(f *terminalFixture) {
+			f.pod.Status.ContainerStatuses[0].State.Terminated.StartedAt = metav1.NewTime(f.now.Add(-time.Hour))
+		})},
+		{name: "unknown container, pod GC marked it failed", terminal: true, refusal: "Pod garbage collector", edit: unknownAnd(func(f *terminalFixture) {
+			f.pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.DisruptionTarget, Status: corev1.ConditionTrue, Reason: "DeletionByPodGC"}}
+		})},
+		{name: "unknown container, node not ready", terminal: true, refusal: "unready", edit: unknownAnd(func(f *terminalFixture) { f.node.Status.Conditions[0].Status = corev1.ConditionFalse })},
+		{name: "unknown container, lease stale", terminal: true, refusal: "stale, future or foreign", edit: unknownAnd(func(f *terminalFixture) { f.lease.Spec.RenewTime.Time = f.now.Add(-41 * time.Second) })},
+		{name: "unknown container, lease future", terminal: true, refusal: "stale, future or foreign", edit: unknownAnd(func(f *terminalFixture) { f.lease.Spec.RenewTime.Time = f.now.Add(2 * time.Second) })},
+		{name: "unknown container, lease held by another node", terminal: true, refusal: "stale, future or foreign", edit: unknownAnd(func(f *terminalFixture) { f.lease.Spec.HolderIdentity = ptr.To("worker-b") })},
+		{name: "unknown container, lease owned by another node UID", terminal: true, refusal: "different node UID", edit: unknownAnd(func(f *terminalFixture) { f.lease.OwnerReferences[0].UID = "node-2" })},
+		{name: "unknown container, unscheduled", terminal: true, refusal: "has no node", edit: unknownAnd(func(f *terminalFixture) { f.pod.Spec.NodeName = "" })},
+		{name: "unknown container, lease read forbidden", terminal: true, refusal: "executor node lease", edit: kubeletLostContainer, reader: forbidden("leases")},
+		{name: "unknown container but running phase", refusal: "phase is not terminal", edit: unknownAnd(func(f *terminalFixture) { f.pod.Status.Phase, f.pod.Status.Reason = corev1.PodRunning, "" })},
 		{name: "node read forbidden", terminal: true, reader: forbidden("nodes")},
 		{name: "lease read forbidden", terminal: true, reader: forbidden("leases")},
 		{name: "running", edit: func(f *terminalFixture) {
@@ -311,6 +457,12 @@ func TestPrivateTerminalChecksBlockRecording(t *testing.T) {
 			if err := base.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &pod); err != nil || pod.UID != f.pod.UID {
 				t.Fatal("the executor Pod was touched", err)
 			}
+			if tc.refusal != "" {
+				// The case is refused by the check it names, not another.
+				if _, err := r.verifyExecutorTerminated(context.Background(), f.s, f.pod.UID); err == nil || !strings.Contains(err.Error(), tc.refusal) {
+					t.Fatalf("refused for another reason: %v; want %q", err, tc.refusal)
+				}
+			}
 		})
 	}
 }
@@ -329,17 +481,23 @@ func TestPrivateTerminalRefusesStaleOrForgedPod(t *testing.T) {
 		{"other HOME", func(f *terminalFixture) { f.pod.Annotations[privateHistoryHomeAnnotation] = "forged-home" }},
 		{"hold pod", func(f *terminalFixture) { f.pod.Labels[v1alpha1.LabelHold] = "true" }},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newTerminalFixture()
-			tc.edit(&f)
-			c := f.client()
-			counter := NewPrivateExecutorTerminalCounter()
-			reconcileSession(t, f.reconciler(c, c, counter), f.s, 3)
-			got := storedHistory(t, c, f.s)
-			if got.Status.PrivateHistory.ExecutorTerminal != nil || got.Status.PrivateHistory.ExecutorMissed != nil || terminalCount(counter, terminalRecorded) != 0 {
-				t.Fatalf("recorded a stale or forged Pod: %+v", got.Status.PrivateHistory)
-			}
-		})
+		for _, shape := range []struct {
+			name string
+			edit func(*terminalFixture)
+		}{{"ordinary", func(*terminalFixture) {}}, {"kubelet-lost container", kubeletLostContainer}} {
+			t.Run(tc.name+", "+shape.name, func(t *testing.T) {
+				f := newTerminalFixture()
+				shape.edit(&f)
+				tc.edit(&f)
+				c := f.client()
+				counter := NewPrivateExecutorTerminalCounter()
+				reconcileSession(t, f.reconciler(c, c, counter), f.s, 3)
+				got := storedHistory(t, c, f.s)
+				if got.Status.PrivateHistory.ExecutorTerminal != nil || got.Status.PrivateHistory.ExecutorMissed != nil || terminalCount(counter, terminalRecorded) != 0 {
+					t.Fatalf("recorded a stale or forged Pod: %+v", got.Status.PrivateHistory)
+				}
+			})
+		}
 	}
 	t.Run("UID changed after the observation", func(t *testing.T) {
 		f := newTerminalFixture()
@@ -857,6 +1015,25 @@ func TestPrivateTerminalRecordOnTheAPIServer(t *testing.T) {
 		if !apiequality.Semantic.DeepEqual(got.Status.PrivateHistory.ExecutorTerminal, rec) || got.Status.PrivateHistory.ExecutorMissed != nil ||
 			meta.FindStatusCondition(got.Status.Conditions, ConditionPrivateHistory).Reason != "ExecutorEnded" || terminalCount(counter, terminalRecorded) != 1 {
 			t.Fatalf("pod loss after the record lost it or counted again: %+v", got.Status.PrivateHistory)
+		}
+	})
+
+	// DESIGN-025 25.6 on a real API server: the CRD takes the record with
+	// no finish time, and the confirmed write's re-read matches it.
+	t.Run("a kubelet-lost container is recorded with no finish time", func(t *testing.T) {
+		s, pod, node, _ := envFixture(t, "op515-terminal-unknown")
+		pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "ContainerStatusUnknown",
+			Message: "The container could not be located when the pod was terminated"}}
+		setNodeReady(t, node, corev1.ConditionTrue)
+		endPod(t, pod)
+		counter := NewPrivateExecutorTerminalCounter()
+		reconcileSession(t, operatorAt(counter), s, 2)
+		rec := history(t, s).Status.PrivateHistory.ExecutorTerminal
+		want := []v1alpha1.PrivateExecutorContainerTermination{{Name: ContainerName, ExitCode: 137, Reason: "ContainerStatusUnknown"}}
+		if rec == nil || rec.PodUID != string(pod.UID) || rec.NodeUID != string(node.UID) || !apiequality.Semantic.DeepEqual(rec.Containers, want) || !rec.Containers[0].FinishedAt.IsZero() ||
+			terminalCount(counter, terminalRecorded) != 1 || terminalCount(counter, terminalRefused) != 0 {
+			t.Fatalf("no confirmed record without a finish time on the API server: %+v (recorded %v, refused %v)", rec,
+				terminalCount(counter, terminalRecorded), terminalCount(counter, terminalRefused))
 		}
 	})
 

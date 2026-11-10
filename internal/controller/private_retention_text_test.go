@@ -63,6 +63,14 @@ func TestReapedPrivateSessionSaysWhatIsTrue(t *testing.T) {
 		reapStopped = "reap accepted; the agent was stopped as the reap asked (its Pod ended at the operator's stop deadline), recorded 2026-10-12T12:00:00Z; " +
 			"its private HOME is kept, and nothing is archived or deleted yet; " +
 			"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
+		reapStoppedUnknown = "reap accepted; the agent was stopped as the reap asked (its Pod ended at the operator's stop deadline; " +
+			"the kubelet could not locate its container agent when the Pod ended, so it has no finish time), recorded 2026-10-12T12:00:00Z; " +
+			"its private HOME is kept, and nothing is archived or deleted yet; " +
+			"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
+		stoppedUnknown = "reap accepted; the agent stopped: its Pod ended Failed (DeadlineExceeded; the kubelet could not locate its container agent when the Pod ended, so it has no finish time), " +
+			"recorded 2026-10-12T12:00:00Z; " +
+			"its private HOME is kept, and nothing is archived or deleted yet; " +
+			"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
 		evicted = "reap accepted; the agent stopped: its Pod ended Failed (Evicted), recorded 2026-10-12T12:00:00Z; " +
 			"its private HOME is kept, and nothing is archived or deleted yet; " +
 			"the session is released only after the HOME expiry (DESIGN-025) archives its history and deletes the HOME, and the history archive is not switched on yet"
@@ -99,6 +107,14 @@ func TestReapedPrivateSessionSaysWhatIsTrue(t *testing.T) {
 			reason: "ExecutorEnded", message: reapStopped, history: "ExecutorEnded"},
 		{name: "stopped by the reap, Pod gone", edit: func(f *terminalFixture) { stopRequested(f, 30*time.Second); recordTerminal(*f) }, podGone: true,
 			reason: "ExecutorEnded", message: reapStopped, history: "ExecutorEnded"},
+		// DESIGN-025 25.6, the dev-env-1029-222313 case: the reap's stop
+		// ended the Pod while its container waited to restart, and the
+		// kubelet reported that container ContainerStatusUnknown. The
+		// operator records it from the Pod, and the text says so.
+		{name: "stopped by the reap, kubelet lost the container", edit: func(f *terminalFixture) { stopRequested(f, 30*time.Second); kubeletLostContainer(f) },
+			reason: "ExecutorEnded", message: reapStoppedUnknown, history: "ExecutorEnded"},
+		{name: "deadline without a stop request, kubelet lost the container", edit: kubeletLostContainer,
+			reason: "ExecutorEnded", message: stoppedUnknown, history: "ExecutorEnded"},
 		// Any other ending keeps its raw phase and reason: a deadline with no
 		// stop request of the operator's, and a stop request overtaken by an
 		// eviction.

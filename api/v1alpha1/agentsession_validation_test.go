@@ -1148,6 +1148,20 @@ func TestPrivateHistoryExecutorTerminalRecordIsImmutableAndBound(t *testing.T) {
 				h.ExecutorTerminal = terminal()
 				h.ExecutorTerminal.CodexHome = strings.Repeat("d", 257)
 			}},
+			// DESIGN-025 25.6: only the kubelet's ContainerStatusUnknown
+			// may go without a finish time.
+			{"no finish time with another reason", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorTerminal = terminal()
+				h.ExecutorTerminal.Containers[0] = v1alpha1.PrivateExecutorContainerTermination{Name: "agent", ExitCode: 137, Reason: "Error"}
+			}},
+			{"no finish time and no reason", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorTerminal = terminal()
+				h.ExecutorTerminal.Containers[0] = v1alpha1.PrivateExecutorContainerTermination{Name: "agent", ExitCode: 137}
+			}},
+			{"no finish time with the reason in another case", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorTerminal = terminal()
+				h.ExecutorTerminal.Containers[0] = v1alpha1.PrivateExecutorContainerTermination{Name: "agent", ExitCode: 137, Reason: "containerstatusunknown"}
+			}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				s := taskSession()
@@ -1200,6 +1214,45 @@ func TestPrivateHistoryExecutorTerminalRecordIsImmutableAndBound(t *testing.T) {
 			{"change the UID", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorTerminal.PodUID = "replacement" }},
 			{"add missed", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorMissed = missed() }},
 			{"drop with status", func(h *v1alpha1.PrivateHistoryStatus) { *h = *retained(s) }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bad := get(t, s)
+				tc.edit(bad.Status.PrivateHistory)
+				if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+					t.Fatalf("terminal record change accepted: %v", err)
+				}
+			})
+		}
+	})
+
+	// DESIGN-025 25.6: a container the kubelet reported terminated as
+	// ContainerStatusUnknown has no finish time, and the record keeps none.
+	t.Run("container status unknown without a finish time", func(t *testing.T) {
+		unknown := func() *v1alpha1.PrivateExecutorTerminalStatus {
+			rec := terminal()
+			rec.Containers = []v1alpha1.PrivateExecutorContainerTermination{{Name: "agent", ExitCode: 137, Reason: "ContainerStatusUnknown"},
+				{Name: "sidecar", ExitCode: 0, Reason: "ContainerStatusUnknown", FinishedAt: at}}
+			return rec
+		}
+		s := taskSession()
+		if err := k8s.Create(ctx(t), s); err != nil {
+			t.Fatal(err)
+		}
+		s.Status.PrivateHistory = retained(s)
+		s.Status.PrivateHistory.ExecutorTerminal = unknown()
+		if err := k8s.Status().Update(ctx(t), s); err != nil {
+			t.Fatal("a ContainerStatusUnknown record without a finish time refused:", err)
+		}
+		got := get(t, s)
+		if !apiequality.Semantic.DeepEqual(got.Status.PrivateHistory.ExecutorTerminal, unknown()) || !got.Status.PrivateHistory.ExecutorTerminal.Containers[0].FinishedAt.IsZero() {
+			t.Fatalf("record pruned, changed or given a finish time: %+v", got.Status.PrivateHistory.ExecutorTerminal)
+		}
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHistoryStatus)
+		}{
+			{"add a finish time", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorTerminal.Containers[0].FinishedAt = at }},
+			{"change the reason", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorTerminal.Containers[0].Reason = "Error" }},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				bad := get(t, s)
