@@ -45,6 +45,7 @@ type threadFake struct {
 	all, shown []codexThreadSummary
 	turns      []codexTurnObservation // one per poll; the last repeats
 	listErrs   int
+	allListErr bool // status only: the all-sources read fails
 	state      string
 	launches   []codexWrapperCall
 	polls      int
@@ -463,12 +464,13 @@ func threadRPCFixture(t *testing.T, answer func(method string, params map[string
 			if conn.ReadJSON(&request) != nil {
 				return
 			}
-			if request.ID == nil {
-				continue
-			}
+			// Notifications are recorded too, so a write sent as one is seen.
 			mu.Lock()
 			seen = append(seen, map[string]any{"method": request.Method, "params": request.Params})
 			mu.Unlock()
+			if request.ID == nil {
+				continue
+			}
 			result := answer(request.Method, request.Params)
 			if request.Method == "initialize" {
 				result = map[string]any{"userAgent": "codex/0.160.1 fixture"}

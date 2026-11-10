@@ -1,6 +1,7 @@
 // Package threadlaunch is the provider-neutral core of `agent-run thread
-// start` (DESIGN-057): the provider registry, the Adapter interface, a phase
-// recorder and the one driver every adapter runs under. It is pure (standard
+// start` and `thread status` (DESIGN-057): the provider registry, the Adapter
+// interface, a phase recorder, the one driver every adapter runs under and the
+// read-only Observe pass over an existing thread. It is pure (standard
 // library and apiv1 only), so agent-run stays free of Kubernetes, and it
 // performs no I/O of its own: adapters do, behind their own fakes.
 package threadlaunch
@@ -111,7 +112,7 @@ var messages = map[string]string{
 	"thread_ambiguous":                 "More than one new thread matches this launch; inspect the host before any retry",
 	"hidden_source":                    "The thread was created with a source the phone's default list hides",
 	"turn_failed":                      "The thread's first turn failed or was interrupted",
-	"response_pending":                 "The thread is visible; its first response was not observed before the wait ended. Check again later and never resend",
+	"response_pending":                 "The thread is visible; its first response has not been observed yet. Check again later and never resend. agent-run thread status rechecks it from the v1 pod, a workbench session or a laptop",
 	"response_not_observable":          "The conversation is visible; this provider's first response is not observable by this command",
 	"observation_unavailable":          "The host's thread observation failed",
 	"launch_deadline":                  "The launch wait ended; phases show how far it got. Never resend",
@@ -127,6 +128,10 @@ var messages = map[string]string{
 	"provider_readiness_unavailable":   "Provider readiness is unavailable",
 	"session_launch_failed":            "The session launch did not reach a registered link",
 	"provider_observation_unavailable": "This provider's first response is not observable by this command",
+	"thread_not_found":                 "No thread with this id is among the newest threads for that repository on the host; check --thread and --repo. Nothing was launched or sent",
+	"status_unsupported":               "The host's agentd has no thread-status; move the host to an image that ships it. Nothing was launched or sent",
+	"status_route_unavailable":         "thread status reaches the host by exec only, and an ordinary session pod has none (D-19); run it from a workbench session, the v1 pod or Tom's kubeconfig. Nothing was launched or sent",
+	"status_unavailable":               "The host returned no valid status result; nothing was launched or sent, so checking again is safe",
 }
 
 // Message is the fixed diagnostic for a code; an unknown code has none.
@@ -184,6 +189,22 @@ func NewRecorder(provider string, now func() time.Time) *Recorder {
 	for _, p := range apiv1.ThreadLaunchPhases {
 		r.Result.Phases[p] = apiv1.RCLaunchPhase{State: "unknown", EvidenceSource: "client", Reason: "not_observed"}
 	}
+	return r
+}
+
+// StatusPermissionSource marks a status result's permission as the launch
+// contract repeated, not something the status pass observed.
+const StatusPermissionSource = "launch_contract"
+
+// NewStatusRecorder starts a `thread status` result (DESIGN-057 section 11):
+// a launch result whose permission is the contract, not an observation, and
+// whose client_started says a status pass never looks at the client process.
+func NewStatusRecorder(provider string, now func() time.Time) *Recorder {
+	r := NewRecorder(provider, now)
+	if r.Result.Permission.Mode == apiv1.ThreadPermissionAlwaysAllow {
+		r.Result.Permission.Source = StatusPermissionSource
+	}
+	r.Unknown(apiv1.ThreadPhaseClientStarted, "status", "not_observed_by_status")
 	return r
 }
 
@@ -300,6 +321,49 @@ func Run(ctx context.Context, a Adapter, rec *Recorder, o Options) apiv1.ThreadL
 		return end(apiv1.ThreadPhaseFirstResponse, err, apiv1.ThreadUnconfirmed)
 	}
 	return rec.Finish(apiv1.ThreadResponded, "", "", o.Wait)
+}
+
+// Observer is the read-only half of an adapter, for `agent-run thread status`
+// (DESIGN-057 section 11). It has no Create: nothing on this path can launch a
+// client, run a wrapper or send a thread input.
+type Observer interface {
+	// Locate checks the host and where the thread lives. It creates nothing.
+	Locate(context.Context, *Recorder) error
+	// Visible finds the named thread: thread_created and source_visible.
+	Visible(context.Context, *Recorder) (bool, error)
+	// FirstResponse observes handoff and first_response.
+	FirstResponse(context.Context, *Recorder) (bool, error)
+}
+
+// Observe makes one read-only pass over an existing thread and reports it in
+// the launch's own terms: responded once the first response exists, visible
+// while it is pending or not observable, the Observer's *Stop otherwise. It
+// never polls, waits or retries, and nothing it reports is a launch: any
+// failed observation is a plain failure, so checking again is always safe.
+func Observe(ctx context.Context, o Observer, rec *Recorder) apiv1.ThreadLaunchResult {
+	end := func(phase string, err error) apiv1.ThreadLaunchResult {
+		var stop *Stop
+		if errors.As(err, &stop) {
+			return rec.Finish(stop.Outcome, stop.Code, firstNonEmpty(stop.Phase, phase), 0)
+		}
+		return rec.Finish(apiv1.ThreadFailed, "observation_unavailable", phase, 0)
+	}
+	if err := o.Locate(ctx, rec); err != nil {
+		return end(apiv1.ThreadPhaseHostReady, err)
+	}
+	if done, err := o.Visible(ctx, rec); err != nil || !done {
+		return end(apiv1.ThreadPhaseSourceVisible, err)
+	}
+	done, err := o.FirstResponse(ctx, rec)
+	switch {
+	case errors.Is(err, ErrNotObservable):
+		return rec.Finish(apiv1.ThreadVisible, "response_not_observable", apiv1.ThreadPhaseFirstResponse, 0)
+	case err != nil:
+		return end(apiv1.ThreadPhaseFirstResponse, err)
+	case !done:
+		return rec.Finish(apiv1.ThreadVisible, "response_pending", apiv1.ThreadPhaseFirstResponse, 0)
+	}
+	return rec.Finish(apiv1.ThreadResponded, "", "", 0)
 }
 
 func firstNonEmpty(a, b string) string {
