@@ -356,13 +356,16 @@ is unknown, not zero. The portal change is a later story. *Amended
 keeps the percent and says the reported reset time has passed. *Amended
 2026-11-10, OP523:* the portal rule is built. A reading older than 30
 minutes is greyed and says its age in plain words, for example "reported 3
-hours ago". A reading of exactly 30 minutes still shows a plain percent.
-Once the reported reset has passed, the percent is not shown. The line says
-"This window is over: the reported reset has passed, so its percent is not
-shown." and "Last reading was <time>." With no reading, Claude and Codex say
-"Nothing has reported yet. A reading appears when a new Codex task, or a
-remote Claude session, runs on a current image." Cursor and Grok stay not
-connected.
+hours ago". A reading of exactly 30 minutes still shows a plain percent. A
+reading a few seconds past that says "reported 31 minutes ago", so the grey
+line does not use the same words. Once the reported reset has passed, the
+percent is not shown. The line says "This window is over: the reported reset
+has passed, so its percent is not shown." and "Last reading was <time>."
+With no reading, Claude and Codex say "Nothing has reported yet. A reading
+appears when a new Codex task, or a remote Claude session, runs on a current
+image and the operator is collecting those readings." The operator serves
+that empty tile and an unconfigured source as the same value, so the sentence
+includes the collecting condition. Cursor and Grok stay not connected.
 
 ## 9. Cursor and Grok
 

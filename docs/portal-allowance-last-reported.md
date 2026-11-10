@@ -15,9 +15,11 @@ Each line in the account section shows:
 
 - the percent and its direction, exactly as the provider reported it, while
   the reading is 30 minutes old or newer and its reset is still ahead. The
-  percent is then normal text, not grey. Older than 30 minutes, the same
-  percent is greyed and the line says its age in plain words, for example
-  "reported 3 hours ago". Once the reported reset time is at or before the
+  percent is then normal text, not grey. A reading of exactly 30 minutes
+  stays that way. Older than 30 minutes, the same percent is greyed and the
+  line says its age in plain words, for example "reported 3 hours ago". A
+  reading a few seconds past 30 minutes says "reported 31 minutes ago".
+  Once the reported reset time is at or before the
   page clock, the percent is not shown. The line says "This window is over:
   the reported reset has passed, so its percent is not shown." and "Last
   reading was <time>." The new window's use is unknown, not zero;
@@ -46,8 +48,10 @@ The account badge stays Unknown while a reading is shown. If its reason would
 read "No percent allowance reported" above a shown value, it reads "No current
 percent allowance" instead. With no reading at all, a Claude or Codex tile
 does not say Unknown. It says "Nothing has reported yet. A reading appears
-when a new Codex task, or a remote Claude session, runs on a current image."
-Cursor and Grok stay Not connected. A last-reported line draws no meter and
+when a new Codex task, or a remote Claude session, runs on a current image
+and the operator is collecting those readings." The operator serves that
+empty tile and an unconfigured source as the same value. Cursor and Grok
+stay Not connected. A last-reported line draws no meter and
 no countdown, and it never moves the page's "as of" time. The compact
 Sessions strip shows only the state.
 

@@ -244,7 +244,7 @@ func TestReadingAgePreviewsSayTheFourStates(t *testing.T) {
 		"usage-reading-fresh.html": {"allowance-last-fresh", "<strong>34% used</strong>", "Reported reset:"},
 		"usage-reading-stale.html": {"allowance-last-stale", "<strong>34% used</strong>", "reported 3 hours ago"},
 		"usage-reading-reset.html": {"allowance-last-over", "This window is over: the reported reset has passed, so its percent is not shown.", "Last reading was 10 Nov 10:00 UTC."},
-		"usage-reading-none.html":  {"Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image.", ">No reading<"},
+		"usage-reading-none.html":  {"Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image and the operator is collecting those readings.", ">No reading<"},
 	}
 	for name, wants := range checks {
 		body, err := os.ReadFile(filepath.Join(dir, name))
@@ -348,7 +348,7 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 			wantNotConnected = 3
 		}
 		if tc.disconnected && strings.HasPrefix(tc.name, "usage") {
-			if !strings.Contains(block, "Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image.") || strings.Count(block, ">No reading<") != 2 {
+			if !strings.Contains(block, "Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image and the operator is collecting those readings.") || strings.Count(block, ">No reading<") != 2 {
 				t.Errorf("%s: Claude and Codex should say nothing has reported yet", tc.name)
 			}
 		}

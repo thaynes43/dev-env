@@ -120,9 +120,10 @@ No entry, or an old one, means one of these:
   a reading.
 - Nothing has run since the last reading. It ages, with its time shown. Older
   than 30 minutes, the portal greys the percent and says how long ago it was
-  reported, in plain words (for example "reported 3 hours ago"). After its
-  reset passes, the percent is not shown: that window is over, and the page
-  says when the last reading was.
+  reported, in plain words (for example "reported 3 hours ago"). A reading of
+  exactly 30 minutes stays plain. One a few seconds older says "reported 31
+  minutes ago". After its reset passes, the percent is not shown: that window
+  is over, and the page says when the last reading was.
 - A Codex remote host session wrote no rollout. That is not verified yet;
   Codex tasks do write one.
 - agentd refused it: see `status.agent.problems` above.
@@ -135,13 +136,16 @@ A portal with the built-in rule shows the reading in **Last reported, not
 current**. While the reading is 30 minutes old or newer and its reset is still
 ahead, the percent is shown in normal text, with the window, the reported
 reset, "Received" and the reading time, "Passive event" and "Account not
-verified". Older than 30 minutes, that percent is greyed and the line says
-its age in plain words, for example "reported 3 hours ago". Once the reported
+verified". A reading of exactly 30 minutes stays plain. Older than 30
+minutes, that percent is greyed and the line says its age in plain words, for
+example "reported 3 hours ago". One a few seconds older says "reported 31
+minutes ago". Once the reported
 reset has passed, the percent is not shown. The line says "This window is
 over: the reported reset has passed, so its percent is not shown." and "Last
 reading was <time>." With no reading, Claude and Codex say "Nothing has
 reported yet. A reading appears when a new Codex task, or a remote Claude
-session, runs on a current image." Cursor and Grok stay not connected.
+session, runs on a current image and the operator is collecting those
+readings." Cursor and Grok stay not connected.
 
 An older portal, which lacks the rule, treats the `session-v1` item like any
 item no private context trusts: the provider's tile shows Unknown with no

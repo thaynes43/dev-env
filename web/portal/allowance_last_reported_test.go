@@ -234,8 +234,11 @@ func TestAllowanceReadingAgeFourStates(t *testing.T) {
 	if !strings.Contains(codex, `class="allowance-last-fresh"`) || !strings.Contains(codex, "<strong>10% used</strong>") {
 		t.Errorf("a 30 minute reading was greyed:\n%s", codex)
 	}
-	if !strings.Contains(codex, `class="allowance-last-stale"`) || !strings.Contains(codex, "<strong>11% used</strong>") || !strings.Contains(codex, "reported 30 minutes ago") {
+	if !strings.Contains(codex, `class="allowance-last-stale"`) || !strings.Contains(codex, "<strong>11% used</strong>") || !strings.Contains(codex, "reported 31 minutes ago") {
 		t.Errorf("a reading older than 30 minutes lacks its age:\n%s", codex)
+	}
+	if strings.Contains(codex, "reported 30 minutes ago") {
+		t.Error("a greyed reading says the same age as a plain 30 minute reading")
 	}
 
 	old := page([]ProductAllowance{{Provider: "Claude", Value: AllowanceUnknown, Reason: "Allowance freshness unknown or expired",
@@ -287,6 +290,7 @@ func TestReportedAgeWords(t *testing.T) {
 	}{
 		{30 * time.Second, "reported just now"},
 		{time.Minute, "reported 1 minute ago"},
+		{30*time.Minute + time.Second, "reported 31 minutes ago"},
 		{31 * time.Minute, "reported 31 minutes ago"},
 		{time.Hour, "reported 1 hour ago"},
 		{3 * time.Hour, "reported 3 hours ago"},

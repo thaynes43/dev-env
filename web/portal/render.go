@@ -635,8 +635,10 @@ const allowanceReportedStaleAfter = 30 * time.Minute
 const allowanceWindowOver = "This window is over: the reported reset has passed, so its percent is not shown."
 
 // allowanceNoReading is the Claude and Codex tile when nothing has reported.
-// Cursor and Grok stay Not connected; they have no session reading.
-const allowanceNoReading = "Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image."
+// The operator serves that empty tile and an unconfigured source as the same
+// value, so the sentence includes the collecting condition. Cursor and Grok
+// stay Not connected; they have no session reading.
+const allowanceNoReading = "Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image and the operator is collecting those readings."
 
 // ProductAllowanceLastReported is one percent window as a provider last
 // reported it. ReadAt is when the collector received the reading, not a
@@ -1251,18 +1253,24 @@ func lastReadingWhen(readAt string, parsed time.Time, ok bool) string {
 	return "Last reading was " + when + "."
 }
 
-// reportedAgo is a reading's age in one unit, rounded down, so the words
-// never claim the reading is newer than it is.
+// reportedAgo is a reading's age in one unit. A partial minute rounds up, so
+// a greyed reading just past 30 minutes says 31 minutes and does not share
+// the words of a 30-minute reading that is still shown plain.
 func reportedAgo(d time.Duration) string {
-	switch {
-	case d < time.Minute:
+	if d < time.Minute {
 		return "reported just now"
-	case d < time.Hour:
-		return "reported " + allowancePlural(int(d/time.Minute), "minute") + " ago"
-	case d < 24*time.Hour:
-		return "reported " + allowancePlural(int(d/time.Hour), "hour") + " ago"
+	}
+	shown := d.Truncate(time.Minute)
+	if shown < d {
+		shown += time.Minute
+	}
+	switch {
+	case shown < time.Hour:
+		return "reported " + allowancePlural(int(shown/time.Minute), "minute") + " ago"
+	case shown < 24*time.Hour:
+		return "reported " + allowancePlural(int(shown/time.Hour), "hour") + " ago"
 	default:
-		return "reported " + allowancePlural(int(d/(24*time.Hour)), "day") + " ago"
+		return "reported " + allowancePlural(int(shown/(24*time.Hour)), "day") + " ago"
 	}
 }
 
