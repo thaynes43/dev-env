@@ -8,12 +8,15 @@ import (
 	"testing"
 	"time"
 
+	"fmt"
+
 	"github.com/go-logr/logr"
 	dto "github.com/prometheus/client_model/go"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
@@ -435,6 +438,162 @@ func TestEnvtestAskStore(t *testing.T) {
 	allListed, allIncomplete, err := store.ListNamespace(ctx)
 	if err != nil || !allIncomplete || !hasAsk(allListed, bare.Name) || hasAsk(allListed, bad.Name) {
 		t.Fatal("namespace list", err, allIncomplete)
+	}
+}
+
+func TestEnvtestGrantAsks(t *testing.T) {
+	env, err := testenv.Start()
+	if err != nil {
+		t.Fatalf("envtest: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := env.Stop(); err != nil {
+			t.Log("envtest stop:", err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	scheme := runtime.NewScheme()
+	if err := coord.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.New(env.Config, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: Namespace}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	store := KubeStore{Client: c, Live: c, Namespace: Namespace, Log: logr.Discard()}
+	sweepReq := Requester{Namespace: Namespace, Name: "grant-sweep", UID: "uid-grant-sweep"}
+	info := infoCreate("sweep-info1")
+	info.ExpiresIn = "1m"
+	infoAsk, _, err := store.Create(ctx, sweepReq, info, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantAsk, _, err := store.Create(ctx, sweepReq, grantCreate("sweep-grant1"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk := clocktesting.NewFakeClock(now)
+	sweeper := Sweeper{Enabled: true, Store: store, Clock: clk}
+	sweeper.Sweep(ctx)
+	clk.Step(time.Minute)
+	sweeper.Sweep(ctx)
+	var sweptInfo, sweptGrant coord.Ask
+	if err := c.Get(ctx, client.ObjectKey{Namespace: Namespace, Name: infoAsk.ID}, &sweptInfo); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: Namespace, Name: grantAsk.ID}, &sweptGrant); err != nil {
+		t.Fatal(err)
+	}
+	if sweptInfo.Status.State != string(apiv1.AskStateExpired) || sweptInfo.Labels[StateLabel] != string(apiv1.AskStateExpired) {
+		t.Fatalf("info sweeper state %q label %q", sweptInfo.Status.State, sweptInfo.Labels[StateLabel])
+	}
+	if sweptGrant.Status.State != string(apiv1.AskStateOpen) || sweptGrant.Labels[StateLabel] != string(apiv1.AskStateOpen) || !sweptGrant.Spec.ExpiresAt.IsZero() {
+		t.Fatalf("grant sweeper state %q label %q expires %v", sweptGrant.Status.State, sweptGrant.Labels[StateLabel], sweptGrant.Spec.ExpiresAt.Time)
+	}
+	if err := c.Delete(ctx, &sweptInfo); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, &sweptGrant); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("unconfirmed open grant recount", func(t *testing.T) {
+		who := Requester{Namespace: Namespace, Name: "grant-unconfirmed", UID: "uid-grant-unconfirmed"}
+		limited := store
+		limited.Limits = Limits{OpenGrantsPerRequester: 1}
+		bad := grantRecord(who, "ask-bbbbbbbbbbbbbbbb", "request-u1", now)
+		bad.Spec.Grant.Target = "dev-env\ngrant"
+		if err := c.Create(ctx, bad); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_ = c.Delete(context.Background(), bad)
+		})
+		if _, _, err := limited.Create(ctx, who, grantCreate("request-u2"), now); !errors.Is(err, ErrUnavailable) {
+			t.Fatal("unconfirmed open grant count did not refuse the create", err)
+		}
+		if err := c.Delete(ctx, bad); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	session := func(n int) Requester {
+		return Requester{Namespace: Namespace, Name: fmt.Sprintf("g-%02d", n), UID: fmt.Sprintf("uid-g-%02d", n)}
+	}
+	first := session(0)
+	var firstID string
+	var firstBody apiv1.AskCreateRequest
+	for i := 0; i < 3; i++ {
+		body := grantCreate(fmt.Sprintf("grant-00-%d", i))
+		made, created, err := store.Create(ctx, first, body, now)
+		if err != nil || !created || made.Type != apiv1.AskTypeGrant || !made.ExpiresAt.IsZero() {
+			t.Fatalf("grant %d %+v created %v err %v", i, made, created, err)
+		}
+		if i == 0 {
+			firstID, firstBody = made.ID, body
+		}
+	}
+	again, created, err := store.Create(ctx, first, firstBody, now.Add(time.Minute))
+	if err != nil || created || again.ID != firstID {
+		t.Fatalf("grant retry %+v created %v err %v", again, created, err)
+	}
+	_, _, err = store.Create(ctx, first, grantCreate("grant-00-3"), now)
+	var fourth *LimitError
+	if !errors.Is(err, ErrLimit) || !errors.As(err, &fourth) || fourth.Scope != LimitOpenGrant {
+		t.Fatal("fourth open grant", err)
+	}
+	for i := 0; i < 16; i++ {
+		if _, _, err := store.Create(ctx, first, infoCreate(fmt.Sprintf("info-00-%02d", i)), now); err != nil {
+			t.Fatalf("info %d: %v", i, err)
+		}
+	}
+	var infoFull *LimitError
+	if _, _, err := store.Create(ctx, first, infoCreate("info-00-16"), now); !errors.As(err, &infoFull) || infoFull.Scope != LimitOpen {
+		t.Fatal("seventeenth info", err)
+	}
+	for s := 1; s < 16; s++ {
+		who := session(s)
+		for i := 0; i < 3; i++ {
+			if _, _, err := store.Create(ctx, who, grantCreate(fmt.Sprintf("grant-%02d-%d", s, i)), now); err != nil {
+				t.Fatalf("session %d grant %d: %v", s, i, err)
+			}
+		}
+	}
+	var namespaceFull *LimitError
+	if _, _, err := store.Create(ctx, session(16), grantCreate("grant-16-0"), now); !errors.As(err, &namespaceFull) || namespaceFull.Scope != LimitOpenGrantNamespace {
+		t.Fatal("49th open grant", err)
+	}
+}
+
+func grantRecord(req Requester, name, requestID string, created time.Time) *coord.Ask {
+	return &coord.Ask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: Namespace,
+			Labels: map[string]string{
+				RequesterLabel: requesterValue(req),
+				StateLabel:     string(apiv1.AskStateOpen),
+				TypeLabel:      string(apiv1.AskTypeGrant),
+			},
+		},
+		Spec: coord.AskSpec{
+			ID: name, Type: string(apiv1.AskTypeGrant), Question: "Access for this session?",
+			Context:       coord.AskContext{SessionName: req.Name, SessionUID: req.UID},
+			CreatedAt:     metav1.NewTime(created),
+			RequestID:     requestID,
+			RequestDigest: strings.Repeat("ab", 32),
+			Grant: &coord.AskGrant{
+				UID: "01234567-89ab-cdef-0123-456789abcdef", ScopeDigest: strings.Repeat("A", 43),
+				Type: "kube", Target: "dev-env-grant-workloads", TTL: "10m",
+			},
+		},
 	}
 }
 

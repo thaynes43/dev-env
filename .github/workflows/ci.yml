@@ -130,7 +130,7 @@ jobs:
           DEV_ENV_SHARED_GUARD_CHECKOUT: ${{ github.workspace }}/_shared-guard-pinned
         run: nice -n 19 python3 -O -B -m unittest discover -s scripts/delivery -p 'test_*.py' -v
       - name: OpenProject MCP server tests
-        run: nice -n 19 python3 -I -B -m unittest discover -s images/agent/tools/openproject -p 'test_opwork_mcp.py' -v
+        run: nice -n 19 python3 -I -B -m unittest discover -s images/agent/tools/openproject -p 'test_opwork*.py' -v
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -196,6 +196,8 @@ jobs:
         run: make build
       - name: Build the portal binary
         run: make build-portal
+      - name: Build the front-door binary
+        run: make build-frontdoor
       - name: Build agent-run for darwin/arm64
         run: make build-agent-run-darwin
       - name: Build source-bound portal-localtest harness
@@ -345,6 +347,58 @@ jobs:
           done
           grep -q '^usr/share/licenses/dev-env/go-modules/.*LICEN[CS]E' "${RUNNER_TEMP}/portal-files" \
             || { echo "no Go module license texts in the portal image" >&2; exit 1; }
+
+  # Front door: build only, never push. Python is in the image so opwork can run.
+  # A missing token file exits before listen and prints no credential.
+  image-frontdoor:
+    name: Image (front door)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      - name: Build the front-door image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./images/frontdoor/Dockerfile
+          push: false
+          load: true
+          tags: dev-env-frontdoor:ci
+          build-args: |
+            COMMIT=${{ github.event.pull_request.head.sha }}
+          cache-from: type=gha,scope=dev-env-frontdoor
+          cache-to: type=gha,mode=max,scope=dev-env-frontdoor
+      - name: Check the front door, opwork and the license files
+        run: |
+          test "$(docker run --rm --entrypoint /usr/local/bin/dev-env-frontdoor dev-env-frontdoor:ci version | awk '{print $1}')" = dev-env-frontdoor
+          docker run --rm --entrypoint opwork dev-env-frontdoor:ci --help >/dev/null
+          set +e
+          docker run --rm dev-env-frontdoor:ci > "${RUNNER_TEMP}/frontdoor-out" 2> "${RUNNER_TEMP}/frontdoor-err"
+          code=$?
+          set -e
+          test "${code}" -eq 1
+          grep -q "bearer token file" "${RUNNER_TEMP}/frontdoor-err"
+          id="$(docker create dev-env-frontdoor:ci)"
+          docker export "${id}" | tar -t > "${RUNNER_TEMP}/frontdoor-files"
+          docker rm "${id}" > /dev/null
+          for f in usr/local/bin/dev-env-frontdoor usr/local/bin/opwork \
+                   usr/local/lib/opwork/opwork.py usr/local/lib/opwork/agent-api.py \
+                   usr/share/doc/dev-env/LICENSE usr/share/doc/dev-env/THIRD_PARTY.md \
+                   usr/share/licenses/dev-env/go-stdlib/LICENSE; do
+            grep -qx "${f}" "${RUNNER_TEMP}/frontdoor-files" || { echo "missing from the image: ${f}" >&2; exit 1; }
+          done
+          grep -q '^usr/share/licenses/dev-env/go-modules/.*LICEN[CS]E' "${RUNNER_TEMP}/frontdoor-files" \
+            || { echo "no Go module license texts in the front-door image" >&2; exit 1; }
 
   # Login-only helper: native CLI version checks never start an auth ceremony.
   image-codex-login:
@@ -509,6 +563,7 @@ jobs:
       - image-operator
       - image-codex-login
       - image-portal
+      - image-frontdoor
       - image-agent
       - image-git-wait
     runs-on: ubuntu-latest

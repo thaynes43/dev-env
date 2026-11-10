@@ -97,10 +97,15 @@ func expiryErrorReason(err error) string {
 }
 
 // expiryStates reads only lifecycle fields, without validating Ask prose.
+// A grant ask has no deadline. The sweeper does not move it to expired
+// because a clock passed; an empty state still reads as open.
 func expiryStates(obj *coord.Ask, now time.Time) (apiv1.AskState, apiv1.AskState) {
 	state := apiv1.AskState(obj.Status.State)
 	if state == "" {
 		state = apiv1.AskStateOpen
+	}
+	if obj.Spec.Type == string(apiv1.AskTypeGrant) {
+		return state, state
 	}
 	wire := apiv1.Ask{State: state, Type: apiv1.AskType(obj.Spec.Type), ExpiresAt: obj.Spec.ExpiresAt.Time}
 	if obj.Spec.Scope != nil {

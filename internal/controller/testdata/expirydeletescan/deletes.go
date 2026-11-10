@@ -24,7 +24,7 @@ func verifyAfterDelete(ctx context.Context, v *expiryView) {
 		return
 	}
 	deleteExpiryHome(ctx, r.Client, r.APIReader, after.s, after.claim)
-	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 		return res, stop, err
 	}
 }
@@ -34,7 +34,7 @@ func recheckBeforeVerify(ctx context.Context, v *expiryView) {
 	if after == nil {
 		return res, stop, err
 	}
-	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 		return res, stop, err
 	}
 	if ref := noPodUsesHome(after); ref != nil {
@@ -44,7 +44,7 @@ func recheckBeforeVerify(ctx context.Context, v *expiryView) {
 }
 
 func podCheckOnStaleView(ctx context.Context, v *expiryView) {
-	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 		return res, stop, err
 	}
 	after, res, stop, err := r.expiryRechecked(ctx, v, obs)
@@ -58,7 +58,7 @@ func podCheckOnStaleView(ctx context.Context, v *expiryView) {
 }
 
 func deleteOnStaleView(ctx context.Context, v *expiryView) {
-	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 		return res, stop, err
 	}
 	after, res, stop, err := r.expiryRechecked(ctx, v, obs)
@@ -72,7 +72,7 @@ func deleteOnStaleView(ctx context.Context, v *expiryView) {
 }
 
 func verifyIgnored(ctx context.Context, v *expiryView) {
-	r.historyArchiveVerified(ctx, v, obs)
+	r.keptWorkVerified(ctx, v, obs)
 	after, res, stop, err := r.expiryRechecked(ctx, v, obs)
 	if after == nil {
 		return res, stop, err
@@ -84,7 +84,7 @@ func verifyIgnored(ctx context.Context, v *expiryView) {
 }
 
 func noNilCheck(ctx context.Context, v *expiryView) {
-	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 		return res, stop, err
 	}
 	after, _, _, _ := r.expiryRechecked(ctx, v, obs)
@@ -100,7 +100,7 @@ func deletingWithoutChecks(ctx context.Context, v *expiryView) {
 }
 
 func deletingBeforePodCheck(ctx context.Context, v *expiryView) {
-	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 		return res, stop, err
 	}
 	after, res, stop, err := r.expiryRechecked(ctx, v, obs)
@@ -115,7 +115,7 @@ func deletingBeforePodCheck(ctx context.Context, v *expiryView) {
 }
 
 func verifyReturnsOnSuccess(ctx context.Context, v *expiryView) {
-	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); ok {
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); ok {
 		return res, stop, err
 	}
 	after, res, stop, err := r.expiryRechecked(ctx, v, obs)
@@ -129,7 +129,7 @@ func verifyReturnsOnSuccess(ctx context.Context, v *expiryView) {
 }
 
 func podCheckNeverRefuses(ctx context.Context, v *expiryView) {
-	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 		return res, stop, err
 	}
 	after, res, stop, err := r.expiryRechecked(ctx, v, obs)
@@ -143,7 +143,7 @@ func podCheckNeverRefuses(ctx context.Context, v *expiryView) {
 }
 
 func goodDelete(ctx context.Context, v *expiryView) {
-	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 		return res, stop, err
 	}
 	after, res, stop, err := r.expiryRechecked(ctx, v, obs)
@@ -157,7 +157,7 @@ func goodDelete(ctx context.Context, v *expiryView) {
 }
 
 func goodDeleting(ctx context.Context, v *expiryView) {
-	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
+	if ok, res, stop, err := r.keptWorkVerified(ctx, v, obs); !ok {
 		return res, stop, err
 	}
 	after, res, stop, err := r.expiryRechecked(ctx, v, obs)

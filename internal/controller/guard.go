@@ -28,8 +28,10 @@ import (
 // anything, besides the HOME expiry's three exceptions (DESIGN-025 5.2, 6.1,
 // 6.5): deleteExpiryExecutor, the ended executor of a private Session in
 // Rescuing, deleteExpiryHold, the expiry's own hold pod, and deleteExpiryHome,
-// a private HOME in Deleting after its archive verified again. Each deletes by
-// UID; releaseSession, releaseVolume, releaseExpiryHome,
+// a private HOME in Deleting after its archive, or a task Session's bundle,
+// verified again; and the task clean-up's one more (DESIGN-061 2, item 5):
+// deleteCleanedTaskSession, a finished task Session whose record is Expired.
+// Each deletes by UID; releaseSession, releaseVolume, releaseExpiryHome,
 // releaseScheduledWorkFinalizer (DESIGN-054's releaser, which lifts only the
 // scheduled-work finalizer) and a few named release helpers are the only ones
 // that lift a finalizer or rewrite owner references, and releaseSession lifts
@@ -414,6 +416,11 @@ const (
 	// change clears, and the templates name another agent image than the hold
 	// pod runs; a hold pod of the new image re-checks it.
 	holdReleaseStaleImage expiryHoldRelease = "the export needs a source change and the hold pod runs an agent image the templates no longer name"
+	// The task clean-up's (DESIGN-061): its flag is off, or the rescue in
+	// the hold pod refused, so the HOME is kept and the slot freed.
+	holdReleaseCleanupOff    expiryHoldRelease = "the task clean-up is turned off"
+	holdReleaseRescueRefused expiryHoldRelease = "the rescue in it refused, so the clean-up keeps the HOME"
+	holdReleaseRefused       expiryHoldRelease = "the clean-up's attempt is refused, so it keeps the HOME and frees its slot"
 )
 
 // expiryHoldEvidence is what the HOME expiry's hold pod guard judges a
@@ -430,6 +437,10 @@ type expiryHoldEvidence struct {
 	// archiveOn is the operator's --enable-home-history-archive (with the
 	// terminal record), for archive off.
 	archiveOn bool
+	// task: the task clean-up owns the record (DESIGN-061), so its trigger
+	// ignores operatingMode; the guard also checks the Session's scope.
+	// taskOn is --enable-task-session-cleanup (with the flags it needs).
+	task, taskOn bool
 }
 
 // expiryHoldRemovalAllowed is nil only when the HOME expiry may delete its own
@@ -462,14 +473,30 @@ func expiryHoldRemovalAllowed(pod *corev1.Pod, ev expiryHoldEvidence) error {
 	case h.Expiry.HoldPodUID == "" || string(pod.UID) != h.Expiry.HoldPodUID || !expiryHoldAnnotated(pod, h.Expiry):
 		return errors.New("the hold pod is not the one the expiry record names")
 	}
+	task := ev.task && taskCleanupScope(s)
 	switch ev.why {
 	case holdReleaseCancel:
 		trig, _ := homeExpiryTriggered(s, ev.templates, ev.view.now)
+		if task {
+			trig = taskCleanupTriggered(s)
+		}
 		if !expiryPhaseAtLeast(h.Expiry.Phase, v1alpha1.HomeExpiryDeleting) && (trig == expiryNotTriggered || ev.view.newPod() != nil) {
 			return nil
 		}
 	case holdReleaseArchiveOff:
-		if !ev.archiveOn {
+		if !task && !ev.archiveOn {
+			return nil
+		}
+	case holdReleaseCleanupOff:
+		if task && !ev.taskOn {
+			return nil
+		}
+	case holdReleaseRefused:
+		if task && taskRetryRefusal(h.Expiry) {
+			return nil
+		}
+	case holdReleaseRescueRefused:
+		if task && h.Expiry.Phase == v1alpha1.HomeExpiryRescuing && rescueRanIn(s, pod) && taskRescueRefusedIn(s, string(pod.UID)) {
 			return nil
 		}
 	case holdReleaseOwnerHold:
@@ -526,8 +553,14 @@ func expiryVolumeRemovalAllowed(s *v1alpha1.AgentSession, claim *corev1.Persiste
 		return errors.New("the private HOME was never bound")
 	case h.Expiry == nil || h.Expiry.Phase != v1alpha1.HomeExpiryDeleting || h.Expiry.DeletingAt == nil:
 		return errors.New("the HOME expiry deletes a HOME only once Deleting is recorded (DESIGN-025 6.5)")
-	case h.Expiry.Archive == nil || !protocol.ValidSHA256(h.Expiry.Archive.ContentSHA256) || h.Expiry.Archive.Entry == "":
+	case h.Expiry.Archive == nil && h.Expiry.Bundle == nil:
+		return errors.New("the expiry record holds no archive of the history and no bundle of the unpushed work")
+	case h.Expiry.Archive != nil && (!protocol.ValidSHA256(h.Expiry.Archive.ContentSHA256) || h.Expiry.Archive.Entry == ""):
 		return errors.New("the expiry record holds no archive of the history")
+	case h.Expiry.Bundle != nil && (h.Expiry.Archive != nil || !taskCleanupScope(s) || !keptBundle(h.Expiry)):
+		// DESIGN-061 2, item 5: a task Session's verified bundle stands in for
+		// the archive, and only a task Session's.
+		return errors.New("the expiry record's bundle is not a task Session's verified rescue")
 	case !executorTerminalRecorded(h) || h.Expiry.ExecutorUID != h.ExecutorTerminal.PodUID || h.Expiry.HomeUID != h.HomeUID:
 		return errors.New("the expiry record rests on no confirmed terminal record of the recorded executor, or names another HOME")
 	case claim == nil || claim.UID == "" || string(claim.UID) != h.HomeUID || claim.Name != h.HomeClaim || claim.ResourceVersion == "":
@@ -579,6 +612,23 @@ func releaseExpiryHome(ctx context.Context, c client.Client, s *v1alpha1.AgentSe
 	orig := claim.DeepCopy()
 	controllerutil.RemoveFinalizer(claim, Finalizer)
 	return client.IgnoreNotFound(c.Patch(ctx, claim, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})))
+}
+
+// keptBundle reports whether a record's bundle is one the clean-up kept
+// (DESIGN-061 3): a Verified rescue naming its manifest, the manifest's digest
+// and at least one bundle, or CleanAndPushed naming none, of the record's
+// rescue.
+func keptBundle(e *v1alpha1.PrivateHomeExpiryStatus) bool {
+	b := e.Bundle
+	switch {
+	case b == nil || b.Stamp == "" || b.Stamp != e.RescueStamp || b.VerifiedAt.IsZero():
+		return false
+	case b.Result == bundleVerified:
+		return b.Manifest != "" && protocol.ValidSHA256(b.ManifestSHA256) && b.Bundles > 0
+	case b.Result == bundleCleanAndPushed:
+		return b.Manifest == "" && b.ManifestSHA256 == "" && b.Bundles == 0 && b.Bytes == 0
+	}
+	return false
 }
 
 // expiryReleaseAllowed is nil only for the one protected Session that

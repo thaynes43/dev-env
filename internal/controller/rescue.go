@@ -31,6 +31,18 @@ import (
 // the agent first, so the rescue is the worktree's last state (D-48).
 var RescueCommand = []string{"agentd", "ctl", "rescue", "--stop-agent"}
 
+// StrictRescueCommand is the task clean-up's rescue in its hold pod
+// (DESIGN-061 3.1): RescueCommand with --strict-home, which refuses a HOME
+// holding a repository the rescue would not see.
+var StrictRescueCommand = []string{"agentd", "ctl", "rescue", "--stop-agent", "--strict-home"}
+
+// DropLogCommand removes the Session's own log copy from the shared volume,
+// in the clean-up's hold pod, before it goes (DESIGN-061 3.1).
+var DropLogCommand = []string{"agentd", "ctl", "drop-log"}
+
+// dropLogTimeout bounds drop-log: one unlink on the shared volume.
+const dropLogTimeout = time.Minute
+
 // ReadRestartCommand is `agentd ctl prepare-restart --dry-run` (DESIGN-001 5.2).
 // It prints the launch record and the live attach count. It does not stop the agent.
 var ReadRestartCommand = []string{"agentd", "ctl", "prepare-restart", "--dry-run"}
@@ -94,6 +106,35 @@ func (e *ExecRescuer) Rescue(ctx context.Context, pod *corev1.Pod) (protocol.Res
 	stdout, stderr := &cappedBuffer{max: maxReport}, &cappedBuffer{max: 64 << 10}
 	err := e.exec.Run(ctx, pod.Namespace, pod.Name, ContainerName, RescueCommand, nil, stdout, stderr)
 	return parseRescueOutput(stdout, stderr.String(), err)
+}
+
+// RescueStrictHome implements TaskCleanupRescuer: the rescue with
+// --strict-home, read as Rescue's report is.
+func (e *ExecRescuer) RescueStrictHome(ctx context.Context, pod *corev1.Pod) (protocol.RescueReport, error) {
+	ctx, cancel := context.WithTimeout(ctx, e.timeout)
+	defer cancel()
+	stdout, stderr := &cappedBuffer{max: maxReport}, &cappedBuffer{max: 64 << 10}
+	err := e.exec.Run(ctx, pod.Namespace, pod.Name, ContainerName, StrictRescueCommand, nil, stdout, stderr)
+	return parseRescueOutput(stdout, stderr.String(), err)
+}
+
+// DropLog implements TaskCleanupRescuer: exit 0 with its document, or an
+// error; nothing was removed on an error.
+func (e *ExecRescuer) DropLog(ctx context.Context, pod *corev1.Pod) (protocol.DropLogResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, dropLogTimeout)
+	defer cancel()
+	stdout, stderr := &cappedBuffer{max: 64 << 10}, &cappedBuffer{max: 4 << 10}
+	var res protocol.DropLogResult
+	if err := e.exec.Run(ctx, pod.Namespace, pod.Name, ContainerName, DropLogCommand, nil, stdout, stderr); err != nil {
+		return res, fmt.Errorf("drop-log in %s: %w: %s", pod.Name, err, strings.TrimSpace(stderr.String()))
+	}
+	if stdout.err != nil {
+		return res, stdout.err
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &res); err != nil {
+		return res, fmt.Errorf("drop-log in %s: the answer is not JSON: %w", pod.Name, err)
+	}
+	return res, nil
 }
 
 // ReadRestart implements Restarter. It execs the dry-run. A non-zero exit or

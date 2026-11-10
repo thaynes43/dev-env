@@ -179,7 +179,9 @@ func (a *app) printSession(s apiv1.Session) {
 	if s.Node != "" {
 		phase += " on " + s.Node
 	}
-	if s.Reaping && s.PrivateHistory != nil {
+	if step, ok := taskCleanupStep(s); s.Reaping && ok {
+		phase += ", reaping: " + step
+	} else if s.Reaping && s.PrivateHistory != nil {
 		phase += ", reaping: stop the agent, keep its private HOME"
 	} else if s.Reaping {
 		phase += ", reaping: rescue, then suspend and archive"
@@ -512,8 +514,57 @@ func reapText(s apiv1.Session) string {
 			return "reap accepted; it is a private session: " + c.Message
 		}
 	}
+	if taskCleanupApplies(s) {
+		return "reap accepted; it is a task session, so the operator stops its agent, saves any work that never reached GitHub as a git bundle (kept 30 days), " +
+			"then deletes its HOME and the session, normally within minutes; agent-run show " + s.Name + " follows it"
+	}
 	return "reap accepted; it is a private session, so the operator asks its agent to stop and keeps its private HOME; " +
 		"no rescue bundle is made, and nothing is archived or deleted now; agent-run show " + s.Name + " says when the stop is proven"
+}
+
+// taskCleanupMarker is how the operator's conditions name the task clean-up
+// (DESIGN-061): a task Session in its scope says it while the clean-up is on,
+// and its HomeExpiry condition starts with it.
+const taskCleanupMarker = "task clean-up (DESIGN-061)"
+
+// taskCleanupApplies reports whether the operator says the task clean-up owns
+// the private task Session: the API has no field for it, so the conditions
+// tell (DESIGN-061 6).
+func taskCleanupApplies(s apiv1.Session) bool {
+	if s.PrivateHistory == nil || s.Mode != "task" {
+		return false
+	}
+	for _, c := range s.Conditions {
+		if strings.Contains(c.Message, taskCleanupMarker) {
+			return true
+		}
+	}
+	return false
+}
+
+// taskCleanupStep is show's phase note for a reaped task Session under the
+// clean-up, from its HomeExpiry condition's reason.
+func taskCleanupStep(s apiv1.Session) (string, bool) {
+	if !taskCleanupApplies(s) {
+		return "", false
+	}
+	for _, c := range s.Conditions {
+		if c.Type != "HomeExpiry" || !strings.HasPrefix(c.Message, taskCleanupMarker) {
+			continue
+		}
+		switch c.Reason {
+		case "Saving":
+			return "saving unpushed work", true
+		case "Saved", "Deleting", "Deleted":
+			return "deleting the HOME", true
+		case "Refused":
+			return "clean-up refused, its HOME is kept", true
+		case "Held":
+			return "clean-up held by the owner", true
+		}
+		return "clean-up queued", true
+	}
+	return "stop the agent, then clean up", true
 }
 
 func (a *app) fleet(ctx context.Context, args []string) error {

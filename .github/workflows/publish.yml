@@ -1,7 +1,8 @@
 name: Publish
 
-# Publishes and signs ghcr.io/thaynes43/dev-env-operator and
-# ghcr.io/thaynes43/dev-env-codex-login from main. The agent image has its own
+# Publishes and signs ghcr.io/thaynes43/dev-env-operator,
+# ghcr.io/thaynes43/dev-env-codex-login, ghcr.io/thaynes43/dev-env-portal and
+# ghcr.io/thaynes43/dev-env-frontdoor from main. The agent image has its own
 # workflow, publish-agent.yml, which runs from a release tag (B5, D-53).
 #
 # Tags: only sha-<short>. Never `latest`, and an existing tag is never pushed again.
@@ -47,6 +48,9 @@ on:
       - 'images/operator/**'
       - 'images/codex-login/**'
       - 'images/portal/**'
+      - 'images/frontdoor/**'
+      - 'images/agent/tools/openproject/**'
+      - 'images/agent/tools/opwork.sh'
       - 'web/portal/**'
       - 'images/THIRD_PARTY.md'
       - 'LICENSE'
@@ -88,6 +92,9 @@ jobs:
           - name: portal
             image: dev-env-portal
             dockerfile: images/portal/Dockerfile
+          - name: frontdoor
+            image: dev-env-frontdoor
+            dockerfile: images/frontdoor/Dockerfile
     # workflow_dispatch can be started on any branch; only main publishes.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest

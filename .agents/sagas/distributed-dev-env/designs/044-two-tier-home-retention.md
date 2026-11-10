@@ -1,6 +1,13 @@
 # DESIGN-044: HOME preservation verifier and read-only retention classification
 
 Source-only slice OP350, under Epic 99, linked to OP102 and issue174/H7-H10.
+
+*Note 2026-11-10 (ADR-020, DESIGN-061, OP520):* for task Sessions this
+classifier's owner decision batch and its `finishedAt` clock are superseded.
+The operator's task clean-up deletes a finished task Session's HOME 168 hours
+after `executorTerminal.observedAt`, and a purged one's at once, after its own
+rescue and bundle verify. The package stays as it is, offline only (DESIGN-061
+F4).
 [ADR-018](../adrs/018-two-tier-home-retention.md) records the newer owner policy.
 Older archive delivery gates remain historical and do not add owner intent to
 this slice. Source, tests, merge, installed state and usable acceptance must be

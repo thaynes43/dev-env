@@ -1,7 +1,8 @@
 # DESIGN-060: Meatball front door
 
-- **Status:** Proposed, 2026-11-10, with Tom's three rulings of the same day
-  recorded (section 11): the risky-access list, that a request stays open until
+- **Status:** Accepted 2026-11-10 by the coordinator (story OP517), with Tom's
+  rulings of the same day recorded (section 11, and decisions 97 and 98 in the
+  saga's decision log): the risky-access list, that a request stays open until
   he answers, and what Meatball may start. Stories 1, 3, 4 and 5 can start
   from it. Story 2 changes access and the Ask contract, so it starts with its
   own ADR and an amendment to DESIGN-034 (section 8), and story 6 waits on

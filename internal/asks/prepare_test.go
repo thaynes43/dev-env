@@ -23,6 +23,20 @@ func infoCreate(id string) apiv1.AskCreateRequest {
 	}
 }
 
+func grantCreate(id string) apiv1.AskCreateRequest {
+	return apiv1.AskCreateRequest{
+		RequestID: id, Type: apiv1.AskTypeGrant, Question: "Access for this session?",
+		Grant: &apiv1.AskGrant{
+			UID:         "01234567-89ab-cdef-0123-456789abcdef",
+			ScopeDigest: strings.Repeat("A", 43),
+			Type:        "kube",
+			Target:      "dev-env-grant-workloads",
+			TTL:         "10m",
+			Detail:      "dev",
+		},
+	}
+}
+
 func TestPrepareNormalizesAndRefusesFractionalScope(t *testing.T) {
 	now := time.Date(2026, 10, 29, 20, 0, 0, 0, time.UTC)
 	req := testRequester()
@@ -83,6 +97,38 @@ func TestPrepareNormalizesAndRefusesFractionalScope(t *testing.T) {
 	over.ExpiresIn = "3h"
 	if _, err := prepare(req, over, now); !errors.Is(err, apiv1.ErrAskInvalid) {
 		t.Fatal("approval ask outliving its scope was accepted", err)
+	}
+}
+
+func TestInfoRequestDigestUnchanged(t *testing.T) {
+	got, err := requestDigest(infoCreate("request-01"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "a4024816ac2045581021f2e6fcc5a9af0ab24bcf3fb418d23a218f3e8d66ee87"
+	if got != want {
+		t.Fatalf("info digest %s", got)
+	}
+}
+
+func TestPrepareGrantOmitsExpiryAndClientLabels(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	in := grantCreate("grant-req1")
+	in.Labels = map[string]string{OriginLabel: "broker", "extra": "no"}
+	got, err := prepare(testRequester(), in, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Spec.ExpiresAt.IsZero() || got.Spec.Grant == nil || got.Spec.Grant.UID != in.Grant.UID || got.Spec.Grant.TTL != "10m" {
+		t.Fatalf("spec expires %v grant %+v", got.Spec.ExpiresAt.Time, got.Spec.Grant)
+	}
+	if got.Labels[TypeLabel] != string(apiv1.AskTypeGrant) || got.Labels[OriginLabel] != "" || got.Labels["extra"] != "" || len(got.Labels) != 3 {
+		t.Fatalf("labels %v", got.Labels)
+	}
+	withExpiry := grantCreate("grant-req2")
+	withExpiry.ExpiresIn = "1h"
+	if _, err := prepare(testRequester(), withExpiry, now); !errors.Is(err, apiv1.ErrAskInvalid) {
+		t.Fatal("grant with expiresIn was accepted", err)
 	}
 }
 
