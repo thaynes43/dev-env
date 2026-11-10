@@ -27,6 +27,12 @@ func (s *Server) registerParentNotes(mux *http.ServeMux) {
 	mux.Handle(apiv1.ParentNotesPath+"/{message}", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{
 		http.MethodGet: s.readParentNote,
 	}}))
+	mux.Handle(apiv1.ParentNotesPath+"/{message}/answer", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{
+		http.MethodPost: s.answerParentNote,
+	}}))
+	mux.Handle(apiv1.ParentNotesPath+"/{message}/wait", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{
+		http.MethodGet: s.waitParentNote,
+	}}))
 }
 
 func (s *Server) parentNotesAvailable() error {

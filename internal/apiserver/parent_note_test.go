@@ -154,6 +154,10 @@ func TestParentNotesLiveShapes(t *testing.T) {
 			}
 			w := f.do(http.MethodGet, apiv1.ParentNotesPath+"/"+m.Name, stranger, nil)
 			wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
+			missing := f.do(http.MethodGet, apiv1.ParentNotesPath+"/"+missingParentNoteName, stranger, nil)
+			if w.Body.String() != missing.Body.String() {
+				t.Fatal("hidden note body differs from a missing name")
+			}
 			if strings.Contains(w.Body.String(), m.Name) || strings.Contains(w.Body.String(), "PRIVATE_PARENT_NOTE") {
 				t.Fatal("hidden read disclosed a note")
 			}
@@ -259,6 +263,7 @@ func TestParentNotesDefaultOffAndIndependentQuestionFlag(t *testing.T) {
 	// 503 to an authenticated caller, as the durable inbox does when it is off.
 	for _, rt := range []struct{ method, path string }{
 		{http.MethodPost, apiv1.ParentNotesPath}, {http.MethodGet, apiv1.ParentNotesPath}, {http.MethodGet, apiv1.ParentNotesPath + "/name"},
+		{http.MethodPost, apiv1.ParentNotesPath + "/name/answer"}, {http.MethodGet, apiv1.ParentNotesPath + "/name/wait?seconds=1"},
 	} {
 		for _, token := range []string{child, parent} {
 			w := f.do(rt.method, rt.path, token, struct{}{})
@@ -272,18 +277,6 @@ func TestParentNotesDefaultOffAndIndependentQuestionFlag(t *testing.T) {
 			t.Fatalf("%s %s with no token: status %d, want 401", rt.method, rt.path, w.Code)
 		}
 	}
-	// The answer and wait routes belong to a later slice and do not exist.
-	for _, path := range []string{apiv1.ParentNotesPath + "/name/answer", apiv1.ParentNotesPath + "/name/wait"} {
-		for _, method := range []string{http.MethodGet, http.MethodPost} {
-			for _, token := range []string{"", child, parent} {
-				w := f.do(method, path, token, struct{}{})
-				wantError(t, w, 404, apiv1.CodeNotFound)
-				if !strings.Contains(w.Body.String(), "no route "+method+" "+path) {
-					t.Fatal("a later slice's route was registered")
-				}
-			}
-		}
-	}
 	if countMessages(t, f) != 0 {
 		t.Fatal("disabled route wrote a note")
 	}
@@ -293,8 +286,13 @@ func TestParentNotesDefaultOffAndIndependentQuestionFlag(t *testing.T) {
 	if got := parentNoteList(t, f, parent, ""); len(got.Items) != 1 {
 		t.Fatal("questions flag gated parent list")
 	}
-	for _, path := range []string{apiv1.ParentNotesPath + "/" + m.Name + "/answer", apiv1.ParentNotesPath + "/" + m.Name + "/wait"} {
-		wantError(t, f.do(http.MethodPost, path, parent, struct{}{}), 404, apiv1.CodeNotFound)
+	answer := f.do(http.MethodPost, apiv1.ParentNotesPath+"/"+m.Name+"/answer", parent, apiv1.AnswerParentRequest{Key: "answer", Text: "x"})
+	if answer.Code != 201 {
+		t.Fatal("questions flag gated parent answer", answer.Code)
+	}
+	wait := f.do(http.MethodGet, apiv1.ParentNotesPath+"/"+m.Name+"/wait?seconds=1", child, nil)
+	if wait.Code != 200 {
+		t.Fatal("questions flag gated parent wait", wait.Code)
 	}
 }
 
@@ -312,6 +310,10 @@ func TestParentNotesRetryAndDurableParties(t *testing.T) {
 	changed = req
 	changed.Kind = "blocker"
 	tellParentNote(t, f, child, changed, 409)
+	stored, err := f.srv.Inbox.Get(context.Background(), m.Name)
+	if err != nil || stored.Spec.Text != req.Text || stored.Spec.Kind != req.Kind {
+		t.Fatal("different intent changed the stored note")
+	}
 	removeInboxSession(t, f, "parent")
 	var cm corev1.ConfigMap
 	if err := f.c.Get(context.Background(), f.srv.Projects.Key, &cm); err != nil {
@@ -354,21 +356,30 @@ func TestParentNotesPrivacyAcrossPeerRoutes(t *testing.T) {
 	f.h = f.srv.Handler()
 	req := apiv1.TellParentRequest{Key: "parent-key", Kind: "question", Text: "PRIVATE_PARENT_NOTE"}
 	m := tellParentNote(t, f, child, req, 201)
-	for _, token := range []string{parent, child, tokCoordinator, tokHuman, tokClient} {
-		wantError(t, f.do(http.MethodGet, inboxPath(m), token, nil), 404, apiv1.CodeNotFound)
-		wantError(t, f.do(http.MethodGet, ackPath(m), token, nil), 404, apiv1.CodeNotFound)
-	}
-	for _, token := range []string{parent, tokCoordinator} {
-		w := f.do(http.MethodGet, apiv1.InboxPath+"?project=sample&view=thread", token, nil)
-		if w.Code != 200 || len(decode[apiv1.InboxList](t, w).Items) != 0 {
-			t.Fatal("peer list exposed parent note", w.Code)
+	for _, enabled := range []bool{true, false} {
+		f.srv.ParentNotes = enabled
+		f.h = f.srv.Handler()
+		for _, token := range []string{parent, child, tokCoordinator, tokHuman, tokClient} {
+			wantError(t, f.do(http.MethodGet, inboxPath(m), token, nil), 404, apiv1.CodeNotFound)
+			wantError(t, f.do(http.MethodGet, inboxPath(m)+"&view=thread", token, nil), 404, apiv1.CodeNotFound)
+			wantError(t, f.do(http.MethodGet, ackPath(m), token, nil), 404, apiv1.CodeNotFound)
 		}
+		for _, token := range []string{parent, tokCoordinator} {
+			for _, view := range []string{"", "&view=thread"} {
+				w := f.do(http.MethodGet, apiv1.InboxPath+"?project=sample"+view, token, nil)
+				if w.Code != 200 || len(decode[apiv1.InboxList](t, w).Items) != 0 {
+					t.Fatal("peer list exposed parent note", w.Code)
+				}
+			}
+		}
+		if w := f.do(http.MethodGet, apiv1.InboxPath+"?project=sample&box=sent", child, nil); w.Code != 200 || len(decode[apiv1.InboxList](t, w).Items) != 0 {
+			t.Fatal("peer sent list exposed parent note")
+		}
+		wantError(t, f.do(http.MethodPost, ackPath(m), parent, struct{}{}), 404, apiv1.CodeNotFound)
+		wantError(t, f.do(http.MethodPost, apiv1.InboxPath, parent, replyTo(m, "answer", "x")), 404, apiv1.CodeNotFound)
 	}
-	if w := f.do(http.MethodGet, apiv1.InboxPath+"?project=sample&box=sent", child, nil); w.Code != 200 || len(decode[apiv1.InboxList](t, w).Items) != 0 {
-		t.Fatal("peer sent list exposed parent note")
-	}
-	wantError(t, f.do(http.MethodPost, ackPath(m), parent, struct{}{}), 404, apiv1.CodeNotFound)
-	wantError(t, f.do(http.MethodPost, apiv1.InboxPath, parent, replyTo(m, "answer", "x")), 404, apiv1.CodeNotFound)
+	f.srv.ParentNotes = true
+	f.h = f.srv.Handler()
 	for _, token := range []string{tokCoordinator, tokHuman, tokClient} {
 		wantError(t, f.do(http.MethodGet, apiv1.ParentNotesPath+"/"+m.Name, token, nil), 404, apiv1.CodeNotFound)
 		wantError(t, f.do(http.MethodGet, apiv1.ParentNotesPath, token, nil), 404, apiv1.CodeNotFound)
@@ -402,23 +413,27 @@ func TestParentNotesPeerArchivePrivacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.srv.CoordinationArchiveReads, f.srv.ShelfSlots = true, shelf.NewExecSlots(2)
-	f.srv.CoordinationArchive = &inboxArchiveGetFake{result: archived}
-	wantError(t, f.do(http.MethodGet, inboxPath(m), tokCoordinator, nil), 404, apiv1.CodeNotFound)
-	wantError(t, f.do(http.MethodGet, ackPath(m), tokCoordinator, nil), 404, apiv1.CodeNotFound)
-	query := protocol.CoordArchiveListQuery{Resource: "inboxmessages", Project: "sample", Limit: 100}
-	next, err := query.Cursor("20261015T180000.000000000Z-" + string(stored.UID) + ".json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.srv.CoordinationArchive = &inboxArchiveListFake{list: protocol.CoordArchiveListResult{Items: []protocol.CoordArchiveListItem{item}, Next: next}}
-	w := f.do(http.MethodGet, apiv1.InboxPath+"?project=sample&archived=only", tokCoordinator, nil)
-	page := decode[apiv1.InboxList](t, w)
-	if w.Code != 200 || len(page.Items) != 0 || page.Continue == "" {
-		t.Fatal("archive list exposed parent note", w.Code)
-	}
-	inner, err := decodeContextArchiveListCursor(page.Continue, contextArchiveListCursor{Route: apiv1.InboxPath, Project: "sample", Limit: 100})
-	if err != nil || inner != next {
-		t.Fatal("filtered archive page lost its continuation", err)
+	for _, enabled := range []bool{true, false} {
+		f.srv.ParentNotes = enabled
+		f.h = f.srv.Handler()
+		f.srv.CoordinationArchive = &inboxArchiveGetFake{result: archived}
+		wantError(t, f.do(http.MethodGet, inboxPath(m), tokCoordinator, nil), 404, apiv1.CodeNotFound)
+		wantError(t, f.do(http.MethodGet, ackPath(m), tokCoordinator, nil), 404, apiv1.CodeNotFound)
+		query := protocol.CoordArchiveListQuery{Resource: "inboxmessages", Project: "sample", Limit: 100}
+		next, err := query.Cursor("20261015T180000.000000000Z-" + string(stored.UID) + ".json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.srv.CoordinationArchive = &inboxArchiveListFake{list: protocol.CoordArchiveListResult{Items: []protocol.CoordArchiveListItem{item}, Next: next}}
+		w := f.do(http.MethodGet, apiv1.InboxPath+"?project=sample&archived=only", tokCoordinator, nil)
+		page := decode[apiv1.InboxList](t, w)
+		if w.Code != 200 || len(page.Items) != 0 || page.Continue == "" {
+			t.Fatal("archive list exposed parent note", w.Code)
+		}
+		inner, err := decodeContextArchiveListCursor(page.Continue, contextArchiveListCursor{Route: apiv1.InboxPath, Project: "sample", Limit: 100})
+		if err != nil || inner != next {
+			t.Fatal("filtered archive page lost its continuation", err)
+		}
 	}
 }
 

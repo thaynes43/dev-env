@@ -20,7 +20,7 @@ Usage:
                                                   recheck a started Codex thread's first response; observe-only
   agent-run inbox send|ask|reply|list|read|ack|ack-status
                                                   durable inbox
-  agent-run parent tell|list|read                  notes to a session parent
+  agent-run parent tell|list|read|answer|wait      notes to a session parent
   agent-run instruction send|read|checkpoint|consume|address|attempt designated parent delivery and native consumption
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
@@ -337,6 +337,8 @@ Source tests do not prove an installed operator or a live native task.
 	"parent": `Usage: agent-run parent tell --key <key> [--kind question|result|blocker] < note.txt
        agent-run parent list [--sent] [--limit N] [--continue <cursor>] [-o json]
        agent-run parent read <name> [-o json]
+       agent-run parent answer <name> --key <key> < answer.txt
+       agent-run parent wait <name> [--for 15m] [-o json]
 
 Tell leaves a note for this Session's recorded session parent. No recipient or
 project flag: the server derives both from the child. The child needs a project
@@ -351,6 +353,21 @@ The default limit is 20; 1..100 is allowed. Pass the returned continuation to
 --continue with the same box. Read prints the exact text without acknowledging
 it; -o json includes metadata. Only the saved sender and recipient can read a
 note. Tell prints a JSON receipt. A note grants no access or approval.
+
+Answer reads 1..16384 UTF-8 bytes on stdin and prints a JSON receipt. Only the
+note's saved recipient can answer a question, result or blocker. The server
+binds the reply to that note and its sender. Repeat an unconfirmed answer only
+with the same key and text. A second different answer returns 409.
+
+Wait is one held read by the note's sender. --for defaults to 15m and accepts
+whole seconds from 1s to 15m. It prints the exact answer, or waiting with no
+note text at the deadline; -o json includes state and reply metadata. A stored
+answer returns at once. At most 8 waits for one session may be held on one
+API replica. Two replicas can hold sixteen. Wait uses its own client timeout
+of --for plus 2 minutes; other commands keep 30 seconds. A watch that is
+refused or cannot start returns 503 and holds nothing. There is no polling
+or automatic retry. Call wait again for more time or after a connection
+closes before its answer.
 
 These commands require --enable-parent-notes on the operator, which defaults
 off and requires --enable-durable-inbox. Disabled routes return 503, which

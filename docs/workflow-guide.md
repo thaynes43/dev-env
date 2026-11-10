@@ -935,7 +935,7 @@ A reply is information, not an approval, and a running task sees it only when
 it reads its inbox.
 
 For a recorded session parent that has no project snapshot, use the separate
-parent-note commands (DESIGN-062 slice 2, source only):
+parent-note commands (DESIGN-062 slices 2 and 3, source only):
 
 ```sh
 agent-run parent tell --key build-result --kind result < result.txt
@@ -943,6 +943,9 @@ agent-run parent list --sent
 # In the parent session:
 agent-run parent list
 agent-run parent read <name>
+agent-run parent answer <name> --key build-answer < answer.txt
+# Back in the child session:
+agent-run parent wait <name> --for 15m
 ```
 
 `tell` takes no recipient or project flag. The server reads the parent from
@@ -964,11 +967,40 @@ can read, using their live session and pod proof, even without a current project
 snapshot. Removing a project from the inbox allowlist stops new publishing;
 existing notes remain readable while parent notes are enabled.
 
+`answer` accepts the same text and key bounds as `tell`. The note's recipient
+may answer a question, result or blocker. The server binds the reply to the
+live note and sends it to that note's saved sender. The parent needs no project
+snapshot. The reply keeps the child's saved project provenance and the parent's
+writer attribution. Answer sends once and prints a JSON receipt. The same key
+and intent return the stored receipt; a second different answer is 409 and
+replaces nothing. As with peer inbox replies, concurrent distinct answers can
+race past the check; reads choose the oldest stored reply.
+
+`wait` is one held read by the note's sender. `--for` defaults to `15m` and
+accepts whole seconds from `1s` to `15m` (900 seconds). It prints the exact
+answer, or `waiting` when the deadline passes with no reply. `-o json` includes
+the state and reply metadata. A waiting response contains no text. An already
+stored answer returns at once. A reply that arrives during the wait is
+read back once, and the command prints the oldest stored reply. Each held
+request uses one Kubernetes watch from the reply list's resource version,
+so an answer between the list and the watch is not missed. The caller's live session and pod are checked again
+before returning the answer. More than eight held waits for one session on
+one API replica return 429. Two replicas can hold sixteen. Cancellation
+releases the watch and its slot.
+
+The wait handler moves its request's read and write deadlines to the wait plus
+30 seconds. The CLI copies its HTTP client and uses the wait plus two minutes;
+the other parent commands keep the 30 second client. A watch that is refused
+or cannot start answers 503 and holds nothing. Neither side polls or retries
+automatically. Call `wait` again when more than 900 seconds are needed or a
+connection ends before the answer arrives.
+
 The operator flag `--enable-parent-notes` defaults to false and requires
 `--enable-durable-inbox`. With it off these routes answer 503 and store
-nothing; an operator older than this feature answers 404. This source does not
-enable it in the cluster. The parent finds
-notes by listing them. Answers, held waits, Meatball callers and wake notices
+nothing; an operator older than this feature answers 404. The wait needs the
+verb watch on inboxmessages for the operator's Role, granted in haynes-ops
+before the flag is on. This source does not enable the flag in the cluster.
+The parent finds notes by listing them. Meatball callers and wake notices
 are later slices; no note text is pasted into a session.
 
 The record is an InboxMessage marked by the server-set label
