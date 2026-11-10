@@ -625,12 +625,28 @@ func (a ProductAllowance) GlanceLastMore() int {
 	return len(a.LastReported) - len(a.GlanceLastReported()) + a.LastReportedMore
 }
 
+// allowanceReportedStaleAfter is how old a last-reported percent may be
+// before the Usage page greys it (DESIGN-059 section 8). A reading older
+// than this, whose reset is still ahead, keeps its percent and says its age.
+const allowanceReportedStaleAfter = 30 * time.Minute
+
+// allowanceWindowOver is the one sentence once a reported reset has passed.
+// The percent it described is not shown: the new window's use is unknown.
+const allowanceWindowOver = "This window is over: the reported reset has passed, so its percent is not shown."
+
+// allowanceNoReading is the Claude and Codex tile when nothing has reported.
+// Cursor and Grok stay Not connected; they have no session reading.
+const allowanceNoReading = "Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image."
+
 // ProductAllowanceLastReported is one percent window as a provider last
 // reported it. ReadAt is when the collector received the reading, not a
 // provider time; ProviderAt is the provider's own measurement time, only when
 // the provider reported one. ResetAtExact is set only for an exact reset
 // instant. Account says whether that reading's account was verified. Why is
 // fixed copy naming the reason it is not current. AsOf is the render clock.
+//
+// Stale, Age, WindowOver, Over and When are filled at render from ReadAtExact,
+// ResetAtExact and AsOf. They are not operator fields.
 type ProductAllowanceLastReported struct {
 	Percent, Window, Reset      string
 	ReadAt, ReadAtExact         string
@@ -638,6 +654,14 @@ type ProductAllowanceLastReported struct {
 	ResetAtExact                string
 	Source, Account, Why        string
 	AsOf                        time.Time
+	// Stale is a reading older than 30 minutes whose reset is still ahead.
+	// Age is plain words, such as "reported 3 hours ago".
+	Stale bool
+	Age   string
+	// WindowOver drops the percent. Over is the one sentence. When names
+	// the last reading.
+	WindowOver bool
+	Over, When string
 }
 
 // ProductAllowanceWindow holds provider-reported display text and optional
@@ -917,6 +941,41 @@ func (a ProductAllowance) Confidence() string {
 	}
 }
 
+// NoReading is the Usage sentence for a Claude or Codex tile that has no
+// reading. A real failure reason stays Unknown. Cursor and Grok are empty.
+func (a ProductAllowance) NoReading() string {
+	if a.Provider != "Claude" && a.Provider != "Codex" {
+		return ""
+	}
+	if len(a.Windows) > 0 || len(a.LastReported) > 0 {
+		return ""
+	}
+	switch a.Value {
+	case AllowanceNotConnected:
+		return allowanceNoReading
+	case AllowanceUnknown:
+		switch a.Reason {
+		case "", "Unknown", "No trusted allowance reported":
+			return allowanceNoReading
+		}
+	}
+	return ""
+}
+
+// ReadingOver reports that every last-reported line is past its reset, so
+// the glance does not also show a large "No current percent" placeholder.
+func (a ProductAllowance) ReadingOver() bool {
+	if len(a.LastReported) == 0 {
+		return false
+	}
+	for _, line := range a.LastReported {
+		if !line.WindowOver {
+			return false
+		}
+	}
+	return true
+}
+
 // MissingNote explains Cursor or Grok when no account view is connected.
 func (a ProductAllowance) MissingNote() string {
 	if (a.Provider == "Cursor" || a.Provider == "Grok") && a.Value == AllowanceNotConnected {
@@ -1127,8 +1186,8 @@ const (
 
 // lastReportedViews fills absent text, keeps at most four windows and counts
 // the rest. A line without a percent or a receipt time is dropped rather than
-// shown as a gap. A reported reset instant at or before the render clock
-// replaces the reset and reason text: the value predates that reset.
+// shown as a gap. Age and a passed reset are decided here from the receipt
+// time, the reset instant and the render clock. No new operator field is read.
 func lastReportedViews(in []ProductAllowanceLastReported) ([]ProductAllowanceLastReported, int) {
 	var out []ProductAllowanceLastReported
 	more := 0
@@ -1148,20 +1207,63 @@ func lastReportedViews(in []ProductAllowanceLastReported) ([]ProductAllowanceLas
 		} else {
 			l.ProviderAt = display(l.ProviderAt)
 		}
-		// A passed reset time does not establish replenishment (DESIGN-030).
-		if reset, err := time.Parse(time.RFC3339, l.ResetAtExact); err == nil && !l.AsOf.IsZero() && !reset.After(l.AsOf) {
-			l.Reset = "The reported reset time has passed; this value is from before it."
-			l.Why = "Not current: the reported reset time has passed."
-			if l.Account != "Account verified" {
-				l.Why = "Not current or trusted: the reported reset time has passed and this reading's account is not verified."
-			}
-		}
-		if at, err := time.Parse(time.RFC3339, l.ProviderAtExact); err == nil && !l.AsOf.IsZero() && at.After(l.AsOf) {
-			l.Why += " That observation time is in the future."
-		}
-		out = append(out, l)
+		line := l
+		applyReportedReading(&line)
+		out = append(out, line)
 	}
 	return out, more
+}
+
+// applyReportedReading greys a reading older than 30 minutes and drops the
+// percent once its reported reset is at or before the page clock. A passed
+// reset does not mean the allowance was replenished (DESIGN-030).
+func applyReportedReading(l *ProductAllowanceLastReported) {
+	readAt, readOK := parseAllowanceInstantOK(l.ReadAtExact)
+	if reset, ok := parseAllowanceInstantOK(l.ResetAtExact); ok && !l.AsOf.IsZero() && !reset.After(l.AsOf) {
+		l.WindowOver = true
+		l.Over = allowanceWindowOver
+		l.When = lastReadingWhen(l.ReadAt, readAt, readOK)
+		l.Reset, l.Why = "", ""
+		return
+	}
+	if readOK && !l.AsOf.IsZero() && l.AsOf.Sub(readAt) > allowanceReportedStaleAfter {
+		l.Stale = true
+		l.Age = reportedAgo(l.AsOf.Sub(readAt))
+	}
+	if at, ok := parseAllowanceInstantOK(l.ProviderAtExact); ok && !l.AsOf.IsZero() && at.After(l.AsOf) {
+		l.Why += " That observation time is in the future."
+	}
+}
+
+func parseAllowanceInstantOK(raw string) (time.Time, bool) {
+	t, state := parseAllowanceInstant(raw)
+	return t, state == "exact"
+}
+
+func lastReadingWhen(readAt string, parsed time.Time, ok bool) string {
+	when := readAt
+	if when == "" || when == "Unknown" {
+		if !ok {
+			return "Last reading time was not reported."
+		}
+		when = parsed.UTC().Format("2 Jan 15:04 UTC")
+	}
+	return "Last reading was " + when + "."
+}
+
+// reportedAgo is a reading's age in one unit, rounded down, so the words
+// never claim the reading is newer than it is.
+func reportedAgo(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "reported just now"
+	case d < time.Hour:
+		return "reported " + allowancePlural(int(d/time.Minute), "minute") + " ago"
+	case d < 24*time.Hour:
+		return "reported " + allowancePlural(int(d/time.Hour), "hour") + " ago"
+	default:
+		return "reported " + allowancePlural(int(d/(24*time.Hour)), "day") + " ago"
+	}
 }
 
 // ProductUsage is the Sessions page's Usage view: headline counts, account

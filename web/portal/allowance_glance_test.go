@@ -109,8 +109,9 @@ func TestAllowanceGlanceUnknownReasonAndPastReset(t *testing.T) {
 	if !strings.Contains(k, `tone-muted">Unknown<`) || !strings.Contains(k, "No quota counters in the CLI. Nothing is estimated.") {
 		t.Errorf("Unknown Cursor lost its reason: %s", k)
 	}
-	if !strings.Contains(glanceTile(t, section, "Codex"), "Not connected") {
-		t.Error("absent Codex is not Not connected")
+	codex := glanceTile(t, section, "Codex")
+	if !strings.Contains(codex, allowanceNoReading) || !strings.Contains(codex, ">No reading<") || strings.Contains(codex, ">Unknown<") {
+		t.Errorf("absent Codex does not say nothing has reported yet:\n%s", codex)
 	}
 }
 

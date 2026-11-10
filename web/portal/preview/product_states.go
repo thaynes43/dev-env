@@ -203,6 +203,47 @@ func writeProductStates(dir string) error {
 			return err
 		}
 	}
+	return writeReadingAgePages(dir)
+}
+
+// writeReadingAgePages renders the four Usage staleness states with synthetic
+// percents so a local preview can be opened. It does not contact a provider.
+func writeReadingAgePages(dir string) error {
+	asOf := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	line := func(read, reset time.Time) portal.ProductAllowanceLastReported {
+		return portal.ProductAllowanceLastReported{
+			Percent: "34% used", Window: "7 days",
+			Reset:        "Reported reset: " + reset.UTC().Format("2 Jan 15:04 UTC") + ".",
+			ReadAt:       read.UTC().Format("2 Jan 15:04 UTC"),
+			ReadAtExact:  read.UTC().Format(time.RFC3339),
+			ResetAtExact: reset.UTC().Format(time.RFC3339),
+			Source:       "Passive event", Account: "Account not verified",
+			Why: "Not current or trusted: this reading's account is not verified.",
+		}
+	}
+	pages := []struct {
+		name string
+		rows []portal.ProductAllowance
+	}{
+		{"usage-reading-fresh", []portal.ProductAllowance{{Provider: "Claude", Value: portal.AllowanceUnknown, Reason: "Allowance freshness unknown or expired", LastReported: []portal.ProductAllowanceLastReported{line(asOf.Add(-12*time.Minute), asOf.Add(48*time.Hour))}}}},
+		{"usage-reading-stale", []portal.ProductAllowance{{Provider: "Codex", Value: portal.AllowanceUnknown, Reason: "Allowance freshness unknown or expired", LastReported: []portal.ProductAllowanceLastReported{line(asOf.Add(-3*time.Hour), asOf.Add(36*time.Hour))}}}},
+		{"usage-reading-reset", []portal.ProductAllowance{{Provider: "Claude", Value: portal.AllowanceUnknown, Reason: "No percent allowance reported", LastReported: []portal.ProductAllowanceLastReported{line(asOf.Add(-2*time.Hour), asOf.Add(-time.Minute))}}}},
+		{"usage-reading-none", nil},
+	}
+	for _, p := range pages {
+		body, err := portal.RenderProduct(portal.ProductPage{
+			Title: "Sessions", Connected: true, Complete: true, Preview: true, AsOf: asOf,
+			ObservedAt: "2026-11-10T12:00:00Z", ReadCompletedAt: "2026-11-10T11:59:00Z",
+			Filter: portal.ProductFilter{View: "usage"},
+			Usage:  &portal.ProductUsage{Allowance: p.rows},
+		})
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, p.name+".html"), body, 0o600); err != nil {
+			return err
+		}
+	}
 	return writeAttentionStates(dir)
 }
 

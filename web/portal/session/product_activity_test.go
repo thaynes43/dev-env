@@ -862,7 +862,14 @@ func TestAccountAllowanceNeverComesFromSessionTokensOrCost(t *testing.T) {
 				t.Fatalf("allowance missing %s: %s", name, block)
 			}
 		}
-		if block == "" || strings.Count(block, "Not connected") != 4 || strings.Contains(block, "%") || strings.Contains(block, "38.00") || strings.Contains(block, "62,000") || strings.Contains(block, "62000") {
+		wantConnected := 4
+		if view == "usage" {
+			wantConnected = 2
+			if strings.Count(block, ">No reading<") != 2 || !strings.Contains(block, "Nothing has reported yet. A reading appears when a new Codex task, or a remote Claude session, runs on a current image.") {
+				t.Fatalf("usage empty tiles: %s", block)
+			}
+		}
+		if block == "" || strings.Count(block, "Not connected") != wantConnected || strings.Contains(block, "%") || strings.Contains(block, "38.00") || strings.Contains(block, "62,000") || strings.Contains(block, "62000") {
 			t.Fatalf("usage leaked into allowance: %s", block)
 		}
 		if view == "usage" {
