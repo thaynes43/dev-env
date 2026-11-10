@@ -131,6 +131,7 @@ var rcErrorMessages = map[string]string{
 	"login_conflict":                "A login conflict requires owner action",
 	"auth_projection_unavailable":   "The keeper authentication projection remained unavailable for 30 seconds during agent startup",
 	"auth_refresh_pending":          "The keeper's next login generation was still pending when the wait for agent start ended; no sign-in was requested",
+	"claude_login_required":         "The session's profile has no usable Claude login, so the agent will not start until a person sets one up",
 	"rc_registration_timeout":       "Remote Control registration exceeded its budget",
 	"link_unavailable":              "A valid Remote Control link was not observed within its budget",
 	"session_ended":                 "The session has ended or is being reaped",
@@ -396,6 +397,35 @@ func rcSessionEnded(v apiv1.Session) bool {
 	return v.Reaping || v.Phase == "Failed" || v.Phase == "Suspended" || v.Phase == "Archived"
 }
 
+// rcAgentBlocked reports an agent state that ends the follow at once.
+// agentd reports pending, busy, idle, waiting, exited, failed, interrupted
+// and login-required (protocol.Agent*). login-required means the pod has no
+// usable login, so the agent has not started and will not without a person
+// or a credential. Two messages that share that state stay on the paths that
+// already classify them: refreshing: (auth_refresh_pending; the keeper's next
+// generation can land with no person) and the projection warning
+// (auth_projection_unavailable after 30s, because that projection can still
+// land). failed means agentd could not start the agent. busy, idle and
+// waiting are a started agent. pending, exited and interrupted stay on the
+// wait. A login_conflict message is decided before this runs.
+func rcAgentBlocked(a *apiv1.AgentStatus, authCode string) (outcome, code string, stop bool) {
+	if a == nil {
+		return "", "", false
+	}
+	switch a.State {
+	case protocol.AgentFailed:
+		return "failed", "session_ended", true
+	case protocol.AgentLoginRequired:
+		switch authCode {
+		case "auth_refresh_pending", "auth_projection_unavailable":
+			return "", "", false
+		}
+		return "action_required", "claude_login_required", true
+	default:
+		return "", "", false
+	}
+}
+
 func (r *rcRun) follow(ctx context.Context, c *conn, view apiv1.Session, handoff string) error {
 	stage := 0
 	stageStart := r.accepted
@@ -408,6 +438,13 @@ func (r *rcRun) follow(ctx context.Context, c *conn, view apiv1.Session, handoff
 		if authCode == "login_conflict" {
 			r.phase("agent_started", "blocked", "session_agent_status", authCode)
 			return r.finish("action_required", authCode, "agent_started", ExitPending)
+		}
+		if outcome, code, stop := rcAgentBlocked(view.AgentStatus, authCode); stop {
+			if outcome == "action_required" {
+				r.phase("agent_started", "blocked", "session_agent_status", code)
+				return r.finish(outcome, code, "agent_started", ExitPending)
+			}
+			return r.finish(outcome, code, "agent_started", ExitFailed)
 		}
 		if r.wait == 0 {
 			return r.finish("accepted", "launch_deadline", rcStages[stage].phase, ExitPending)
