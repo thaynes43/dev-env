@@ -1,6 +1,7 @@
 package agentrun
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -182,6 +183,11 @@ func TestRCPhaseTimeoutsAndGlobalDeadline(t *testing.T) {
 			wait := "10m"
 			wantMs := stage.budget.Milliseconds()
 			wantCode := stage.timeout
+			if stage.phase == "agent_started" {
+				// Agent start follows --wait. 2m is past the old 90s budget,
+				// so a miss would still report agent_start_timeout at 90s.
+				wait, wantMs, wantCode = "2m", 120000, "launch_deadline"
+			}
 			if deadline {
 				name, wait, wantMs, wantCode = stage.phase+"/global", "3s", 3000, "launch_deadline"
 			}
@@ -239,12 +245,96 @@ func TestRCPodReadyIsNotAgentStarted(t *testing.T) {
 			v.AgentStatus = agent
 			return v
 		}, http.StatusAccepted)
-		h.mustRun(ExitPending, rcArgs(h)...)
+		h.mustRun(ExitPending, rcArgs(h, "--wait", "2m")...)
 		r := rcResult(t, h)
-		if r.Error.Code != "agent_start_timeout" || r.Phases["agent_started"].State != "unknown" || rcCountMessages(h) != 0 {
-			t.Fatal("PodReady or RC registration was treated as a running agent")
+		if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "launch_deadline" || r.Error.Phase != "agent_started" || r.TotalMs != 120000 || r.Phases["agent_started"].State != "unknown" || rcCountMessages(h) != 0 {
+			t.Fatal("PodReady or RC registration was treated as a running agent", r)
 		}
 	}
+}
+
+// The session status is agentd's heartbeat, 60s apart. A process that is up
+// at 80s is first visible on the heartbeat at 120s (the one at 60s is too
+// early). That is still inside --wait, so the launch reports started and
+// sends the handoff once. One that never appears times out at --wait with
+// the phase named and sends nothing. The clock is the harness fake.
+func TestRCAgentStartObservedOnHeartbeatWithinWait(t *testing.T) {
+	const heartbeat = 60 * time.Second
+	const agentUp = 80 * time.Second
+	serve := func(h *harness, up bool) {
+		rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+			elapsed := h.now.Sub(testNow)
+			published := elapsed - elapsed%heartbeat
+			v := rcView(2) // PodReady, no conversation yet
+			if up && published >= agentUp {
+				v = rcView(5)
+			}
+			return v
+		}, http.StatusAccepted)
+	}
+	assertNoLongSleep := func(h *harness) {
+		t.Helper()
+		for _, d := range h.sleeps {
+			if d > pollInterval {
+				t.Fatal("poll exceeds 2s")
+			}
+		}
+	}
+	t.Run("rc", func(t *testing.T) {
+		h := newHarness(t)
+		serve(h, true)
+		h.mustRun(ExitOK, rcArgs(h, "--wait", "6m")...)
+		r := rcResult(t, h)
+		if r.Outcome != "link_available" || r.Error != nil || rcCountMessages(h) != 1 || r.Phases["handoff"].State != "ok" {
+			t.Fatalf("handoff not delivered: %+v messages %d", r, rcCountMessages(h))
+		}
+		if sinceMs(r.Phases["agent_started"]) != 120000 || r.Phases["agent_started"].State != "ok" || r.TotalMs != 120000 || r.DeadlineMs != 360000 {
+			t.Fatalf("start was not the 120s heartbeat: agent %d total %d", sinceMs(r.Phases["agent_started"]), r.TotalMs)
+		}
+		assertNoLongSleep(h)
+	})
+	t.Run("thread", func(t *testing.T) {
+		h := newHarness(t)
+		serve(h, true)
+		h.mustRun(ExitPending, "thread", "start", "--agent", "claude", "--project", "sample", "--model", "claude-opus-5-5", "--handoff", h.write("handoff.txt", rcTestText), "--wait", "6m")
+		raw := h.stdout.Bytes()
+		got, err := apiv1.DecodeThreadLaunch(bytes.TrimSuffix(raw, []byte("\n")))
+		if err != nil || strings.Contains(string(raw), rcTestText) {
+			t.Fatalf("result %v %q", err, raw)
+		}
+		if got.Outcome != apiv1.ThreadVisible || rcCountMessages(h) != 1 || got.Phases[apiv1.ThreadPhaseHandoff].State != "ok" {
+			t.Fatalf("handoff not delivered: %+v messages %d", got, rcCountMessages(h))
+		}
+		started := got.Phases[apiv1.ThreadPhaseClientStarted]
+		created := got.Phases[apiv1.ThreadPhaseThreadCreated]
+		if started.State != "ok" || created.State != "ok" || sinceMs(started) != 120000 || sinceMs(created) != 120000 || got.TotalMs != 120000 || got.DeadlineMs != 360000 {
+			t.Fatalf("start was not the 120s heartbeat: %+v", got)
+		}
+		assertNoLongSleep(h)
+	})
+	t.Run("never", func(t *testing.T) {
+		h := newHarness(t)
+		serve(h, false)
+		h.mustRun(ExitPending, rcArgs(h, "--wait", "3m")...)
+		r := rcResult(t, h)
+		if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "launch_deadline" || r.Error.Phase != "agent_started" || r.TotalMs != 180000 || r.DeadlineMs != 180000 || rcCountMessages(h) != 0 {
+			t.Fatalf("never-up did not time out at --wait: %+v messages %d", r, rcCountMessages(h))
+		}
+		assertNoLongSleep(h)
+	})
+	t.Run("thread never", func(t *testing.T) {
+		h := newHarness(t)
+		serve(h, false)
+		h.mustRun(ExitPending, "thread", "start", "--agent", "claude", "--project", "sample", "--model", "claude-opus-5-5", "--handoff", h.write("handoff.txt", rcTestText), "--wait", "3m")
+		got, err := apiv1.DecodeThreadLaunch(bytes.TrimSuffix(h.stdout.Bytes(), []byte("\n")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Outcome != apiv1.ThreadTimedOut || got.Error == nil || got.Error.Code != "launch_deadline" || got.Error.Phase != apiv1.ThreadPhaseClientStarted || got.TotalMs != 180000 || got.DeadlineMs != 180000 || rcCountMessages(h) != 0 {
+			t.Fatalf("thread never-up did not name the phase at --wait: %+v messages %d", got, rcCountMessages(h))
+		}
+		assertNoLongSleep(h)
+	})
 }
 
 func TestRCRefusalsAndRedaction(t *testing.T) {
@@ -393,20 +483,20 @@ func TestRCPendingRefreshThenLapseStillEndsInOwnerAction(t *testing.T) {
 	}
 }
 
-// A refresh that never lands is not an owner action either: the 90 second
-// agent-start budget ends first (the pending window is longer), so the launch is
-// reported as timed out for that specific reason, with the handle retained.
-func TestRCPendingRefreshOutlastingTheAgentStartBudgetTimesOutWithItsOwnReason(t *testing.T) {
+// A refresh that never lands is not an owner action. Agent start follows
+// --wait, and a status that still says refreshing: keeps auth_refresh_pending
+// when that wait ends. The phase is named and the handoff is not sent.
+func TestRCPendingRefreshOutlastingTheWaitIsNotAnOwnerAction(t *testing.T) {
 	h := newHarness(t)
 	rcServe(h, http.StatusCreated, func(int) apiv1.Session {
 		v := rcView(5)
 		v.AgentStatus = &apiv1.AgentStatus{Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"}
 		return v
 	}, http.StatusAccepted)
-	h.mustRun(ExitPending, rcArgs(h)...)
+	h.mustRun(ExitPending, rcArgs(h, "--wait", "2m")...)
 	r := rcResult(t, h)
-	if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "auth_refresh_pending" || r.Link == nil || rcCountMessages(h) != 0 {
-		t.Fatal("a pending refresh outlasting the budget was not reported with its own reason", r)
+	if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "auth_refresh_pending" || r.Error.Phase != "agent_started" || r.TotalMs != 120000 || r.Link == nil || rcCountMessages(h) != 0 {
+		t.Fatal("a pending refresh was an owner action, a bare deadline, or ended before --wait", r)
 	}
 }
 
@@ -749,12 +839,12 @@ func TestRCStageTimeoutCodeUsesTheLastObservedRefreshStatus(t *testing.T) {
 		atWait   bool
 		want     string
 	}{
-		"refresh pending at agent start":       {agent, "auth_refresh_pending", false, "auth_refresh_pending"},
-		"global wait wins over the reason":     {agent, "auth_refresh_pending", true, "launch_deadline"},
-		"no auth status keeps the stage code":  {agent, "", false, "agent_start_timeout"},
-		"projection wait keeps the stage code": {agent, "auth_projection_unavailable", false, "agent_start_timeout"},
-		"other stages never take the reason":   {podReady, "auth_refresh_pending", false, "pod_ready_timeout"},
-		"global wait in any stage":             {podReady, "", true, "launch_deadline"},
+		"refresh pending at agent start":               {agent, "auth_refresh_pending", false, "auth_refresh_pending"},
+		"refresh pending keeps its reason at the wait": {agent, "auth_refresh_pending", true, "auth_refresh_pending"},
+		"no auth status keeps the stage code":          {agent, "", false, "agent_start_timeout"},
+		"projection wait keeps the stage code":         {agent, "auth_projection_unavailable", false, "agent_start_timeout"},
+		"other stages never take the reason":           {podReady, "auth_refresh_pending", false, "pod_ready_timeout"},
+		"global wait in any stage":                     {podReady, "", true, "launch_deadline"},
 	} {
 		if got := rcStageTimeoutCode(tc.stage, tc.authCode, tc.atWait); got != tc.want {
 			t.Errorf("%s: got %q want %q", name, got, tc.want)
@@ -795,7 +885,7 @@ func TestRCRejectedLoginIsAPhaseReasonOnly(t *testing.T) {
 // `login-rejected:` is information, not an owner action. While agent start waits,
 // rc start does not ask for action after 30 seconds (unlike a persistent
 // projection outage), recovers when the status clears, and if it never clears
-// ends with the ordinary agent-start timeout, not an auth code.
+// ends at --wait as launch_deadline with the phase named, not an auth code.
 func TestRCRejectedLoginDuringAgentStartIsNotAnOwnerAction(t *testing.T) {
 	const msg = "login-rejected: the provider rejected keeper generation 3 at 2026-10-06T20:59:00Z; a newer generation may or may not arrive; no login is run in this pod"
 	t.Run("recovers", func(t *testing.T) {
@@ -824,9 +914,9 @@ func TestRCRejectedLoginDuringAgentStartIsNotAnOwnerAction(t *testing.T) {
 			v.AgentStatus = &apiv1.AgentStatus{Message: msg}
 			return v
 		}, http.StatusAccepted)
-		h.mustRun(ExitPending, rcArgs(h)...)
+		h.mustRun(ExitPending, rcArgs(h, "--wait", "2m")...)
 		r := rcResult(t, h)
-		if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "agent_start_timeout" || rcCountMessages(h) != 0 {
+		if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "launch_deadline" || r.Error.Phase != "agent_started" || r.TotalMs != 120000 || rcCountMessages(h) != 0 {
 			t.Fatal("a refused login produced an auth outcome", r)
 		}
 	})

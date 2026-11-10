@@ -136,7 +136,11 @@ its bounded startup phases. The project catalog chooses the repository/base.
 The idempotency key is always sent and printed; retain it and the session handle.
 --wait 0 creates only, returning exit 7 without polling or sending the handoff.
 --wait defaults to 5m and cannot exceed 10m. A positive wait that expires reports
-timed_out with the session handle. Status makes one read and never submits a handoff.
+timed_out with the session handle. Agent start follows that wait, not a fixed
+90s budget: the session status is agentd's heartbeat and can lag the process by
+up to a minute. A start that never appears times out at --wait with the phase
+named. Scheduling, PodReady, registration and the link keep their own budgets,
+each still capped by --wait. Status makes one read and never submits a handoff.
 Codex is blocked locally with codex_adapter_not_implemented:
 Codex remote launch is not implemented in 2a; no inventory was probed
 For a fresh Codex thread on a paired v2 host, use agent-run thread start.
@@ -675,7 +679,11 @@ worktree, as on the phone. --wait (at most 10m) bounds the whole launch.
                   session named --name (default thread-<UTC mmdd-HHMMSS>) in
                   ~/repos/<repo> on the host (default: the host's repo). Never codex exec
                   or queue, and no sandbox or approval flag.
---agent claude    a new remote session, through rc start's flow (about two minutes).
+--agent claude    a new remote session, through rc start. It follows --wait (default
+                  5m, at most 10m). Agent start is read from the session status,
+                  which agentd publishes on its heartbeat, so it can show up to
+                  a minute after the process is up. A start that never shows
+                  times out at --wait with that phase named.
 --agent cursor|grok
                   refused: not yet qualified.
 
