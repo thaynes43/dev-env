@@ -132,7 +132,7 @@ func taskKeptShort(s *v1alpha1.AgentSession, e *v1alpha1.PrivateHomeExpiryStatus
 func taskRefusalText(s *v1alpha1.AgentSession, e *v1alpha1.PrivateHomeExpiryStatus) string {
 	at := "now"
 	if e.RefusalAt != nil {
-		at = e.RefusalAt.Add(taskRefusalRetry(e.Refusal)).UTC().Format(time.RFC3339)
+		at = e.RefusalAt.Add(taskAttemptRefusalRetry(e)).UTC().Format(time.RFC3339)
 	}
 	switch e.Refusal {
 	case expiryRescueRefused:
@@ -145,6 +145,8 @@ func taskRefusalText(s *v1alpha1.AgentSession, e *v1alpha1.PrivateHomeExpiryStat
 		node := s.Status.PrivateHistory.ExecutorTerminal.NodeName
 		return fmt.Sprintf("the clean-up keeps the HOME: node %s did not show the HOME's volume released within %s, so the stop is unproven; a person decides; it looks again at %s",
 			node, graceWords(taskReleaseWait), at)
+	case expiryOwnerHold:
+		return "the owner's hold on the clean-up is lifted; it goes back into the queue at " + at
 	case expiryBundleMissing, expiryBundleMismatch:
 		return "the clean-up keeps the HOME: the saved bundle no longer verifies on the shelf (" + e.Refusal + "); a person decides; it checks again at " + at
 	}

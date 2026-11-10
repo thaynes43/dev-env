@@ -282,7 +282,7 @@ func (r *Reconciler) removeExpiredHome(ctx context.Context, v *expiryView, obs *
 		case apierrors.IsConflict(err), apierrors.IsInvalid(err):
 			// The claim changed since the read (the delete itself does
 			// that): the next reconcile starts again from the verify.
-			r.countExpiryRefused(expiryPreconditionFailed)
+			r.countRefusedFor(after.s, expiryPreconditionFailed)
 			return ctrl.Result{RequeueAfter: time.Second}, true, nil
 		case apierrors.IsForbidden(err):
 			return r.refuseHomeExpiry(ctx, after, obs, refusal(expiryForbidden, "delete the HOME claim: %v", err))

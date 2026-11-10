@@ -96,7 +96,7 @@ var homeExpiryReasons = []string{
 	protocol.HistoryErrCredentialInTree, protocol.HistoryErrTooLarge, protocol.HistoryErrChanged,
 	expiryShelfUnavailable, expiryArchiveConflict, expiryArchiveMissing, expiryArchiveMismatch, expiryExportInvalid,
 	expiryPlanTooLarge, expiryPreconditionFailed, expiryForbidden,
-	expiryVolumeNotReleased, expiryRescueRefused, expiryAttemptStuck, expiryBundleMissing, expiryBundleMismatch,
+	expiryVolumeNotReleased, expiryRescueRefused, expiryAttemptStuck, expiryOwnerHold, expiryBundleMissing, expiryBundleMismatch,
 }
 
 // homeExpiryPhaseOrder is the only order an expiry record moves in.
@@ -1125,7 +1125,7 @@ func (r *Reconciler) removeExpiredExecutor(ctx context.Context, v *expiryView, o
 	}
 	if err := deleteExpiryExecutor(ctx, r.Client, v.s, pod); err != nil {
 		if apierrors.IsConflict(err) || apierrors.IsInvalid(err) {
-			r.countExpiryRefused(expiryPreconditionFailed)
+			r.countRefusedFor(v.s, expiryPreconditionFailed)
 			return ctrl.Result{RequeueAfter: time.Second}, true, nil
 		}
 		return ctrl.Result{RequeueAfter: time.Second}, true, err
@@ -1147,7 +1147,7 @@ func (r *Reconciler) removeExpiryHold(ctx context.Context, v *expiryView, obs *o
 	}
 	if err := deleteExpiryHold(ctx, r.Client, pod, ev); err != nil {
 		if apierrors.IsConflict(err) || apierrors.IsInvalid(err) {
-			r.countExpiryRefused(expiryPreconditionFailed)
+			r.countRefusedFor(v.s, expiryPreconditionFailed)
 			return ctrl.Result{RequeueAfter: time.Second}, true, nil
 		}
 		return ctrl.Result{RequeueAfter: time.Second}, true, err
@@ -1375,5 +1375,15 @@ func (r *Reconciler) countExpiryOnce(s *v1alpha1.AgentSession, reason string, wi
 	}
 	r.expiryCounted[key] = now
 	r.expiryMu.Unlock()
+	r.countRefusedFor(s, reason)
+}
+
+// countRefusedFor counts a refusal in the counter of the Session's policy:
+// the clean-up's for a task Session it owns, else DESIGN-025's.
+func (r *Reconciler) countRefusedFor(s *v1alpha1.AgentSession, reason string) {
+	if r.taskPolicy(s) {
+		r.countTaskRefused(reason)
+		return
+	}
 	r.countExpiryRefused(reason)
 }

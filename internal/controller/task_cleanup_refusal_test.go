@@ -728,3 +728,94 @@ func TestTaskCleanupChecksTheLastHoldPodsNode(t *testing.T) {
 		t.Fatalf("no new hold pod once the node released the volume: %v", p)
 	}
 }
+
+// TestTaskCleanupRetryThatNeverRunsIsStuck: after a graded transient failure,
+// a retry whose exec never reaches the hold pod ends the attempt 30 minutes
+// after the last graded rescue, and frees the slot.
+func TestTaskCleanupRetryThatNeverRunsIsStuck(t *testing.T) {
+	f := newTaskFixture(t, nil)
+	f.run(t, 2)
+	f.toHold(t)
+	f.report(func(p *corev1.Pod) (protocol.RescueReport, error) {
+		rep := cleanRescue(p.Name, "20261111-1200")
+		rep.CleanAndPushed, rep.StrictHome = false, &protocol.StrictHomeCheck{}
+		rep.Repos[0].Fetched, rep.Repos[0].FetchError = false, "could not resolve host: github.com"
+		return rep, nil
+	})
+	f.run(t, 2)
+	if r := f.session(t).Status.Rescue; r == nil || r.Result != v1alpha1.RescueFailed {
+		t.Fatalf("no graded transient failure: %+v", r)
+	}
+	f.failRescue()
+	f.tick(t, f.clock.Add(HoldRescueRetry+time.Minute))
+	f.run(t, 3)
+	if e := f.expiry(t); e.Refusal != "" {
+		t.Fatalf("refused before the deadline: %+v", e)
+	}
+	f.tick(t, f.clock.Add(taskAttemptDeadline))
+	f.run(t, 3)
+	if e := f.expiry(t); e.Refusal != expiryAttemptStuck || taskActive(f.session(t)) || f.named(t) != nil {
+		t.Fatalf("record %+v, pod %v; want attempt_stuck and the hold pod gone", e, f.named(t))
+	}
+	f.kept(t)
+}
+
+// TestTaskCleanupHoldPodsThatKeepEndingAreStuck: three hold pods that end
+// with no rescue graded end the attempt.
+func TestTaskCleanupHoldPodsThatKeepEndingAreStuck(t *testing.T) {
+	f := newTaskFixture(t, nil)
+	f.run(t, 2)
+	var uids []string
+	for range 3 {
+		f.run(t, 6)
+		p := f.named(t)
+		if p == nil || !isHoldPod(p) {
+			t.Fatalf("no hold pod after %d: %+v", len(uids), f.expiry(t))
+		}
+		uids = append(uids, string(p.UID))
+		p.Status.Phase = corev1.PodFailed
+		if err := f.c.Status().Update(context.Background(), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.run(t, 3)
+	e := f.expiry(t)
+	if e.Refusal != expiryAttemptStuck || f.named(t) != nil {
+		t.Fatalf("record %+v, pod %v after hold pods %v ended; want attempt_stuck", e, f.named(t), uids)
+	}
+	if len(f.rescuer.ranIn()) != 0 {
+		t.Fatal("a rescue ran in a hold pod that never ran")
+	}
+	f.kept(t)
+}
+
+// TestTaskCleanupLiftedHoldGoesBackThroughTheQueue: the owner holding a
+// clean-up at Rescuing removes its hold pod and frees its slot (owner_hold);
+// once the hold is lifted it starts again only when the queue admits it.
+func TestTaskCleanupLiftedHoldGoesBackThroughTheQueue(t *testing.T) {
+	f := newTaskFixture(t, nil)
+	f.run(t, 2)
+	hold := f.toHold(t)
+	f.update(t, func(s *v1alpha1.AgentSession) {
+		s.Annotations = map[string]string{v1alpha1.AnnotationHomeExpiry: v1alpha1.HomeExpiryHold}
+	})
+	f.run(t, 4)
+	e := f.expiry(t)
+	if f.named(t) != nil || e.Refusal != expiryOwnerHold || taskActive(f.session(t)) {
+		t.Fatalf("held at Rescuing: pod %v, record %+v; want the hold pod gone and owner_hold", f.named(t), e)
+	}
+	// Lifted while the clean-up is paused: nothing starts.
+	f.update(t, func(s *v1alpha1.AgentSession) { delete(s.Annotations, v1alpha1.AnnotationHomeExpiry) })
+	f.r.TaskCleanupMaxActive = 0
+	f.tick(t, f.clock.Add(homeExpiryRefusalRetry+time.Minute))
+	f.run(t, 4)
+	if p := f.named(t); p != nil || f.expiry(t).Refusal != expiryOwnerHold {
+		t.Fatalf("a lifted hold started outside the queue: pod %v, record %+v", p, f.expiry(t))
+	}
+	f.r.TaskCleanupMaxActive = 2
+	f.run(t, 4)
+	if p := f.named(t); p == nil || !isHoldPod(p) || p.UID == hold.UID || f.expiry(t).Refusal != "" {
+		t.Fatalf("admitted after the lift: pod %v, record %+v; want a new hold pod", p, f.expiry(t))
+	}
+	f.claimIntact(t)
+}

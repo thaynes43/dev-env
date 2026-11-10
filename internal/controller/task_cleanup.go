@@ -90,6 +90,9 @@ const (
 	// rescue takes at most RescueTimeout.
 	taskAttemptDeadline = 30 * time.Minute
 	taskAttemptRetry    = time.Hour
+	// taskHoldsEndedMax: an attempt whose hold pods ended this many times
+	// without a rescue graded is stuck too.
+	taskHoldsEndedMax = 3
 	// taskMemoryKeep bounds how long the leader remembers a Session it no
 	// longer hears from.
 	taskMemoryKeep = 8 * 24 * time.Hour
@@ -103,8 +106,11 @@ const (
 	expiryVolumeNotReleased = "volume_not_released"
 	expiryRescueRefused     = "rescue_refused"
 	expiryAttemptStuck      = "attempt_stuck"
-	expiryBundleMissing     = protocol.RescueVerifyBundleMissing
-	expiryBundleMismatch    = protocol.RescueVerifyBundleMismatch
+	// expiryOwnerHold: the owner held a clean-up at Rescuing; its hold pod
+	// went, and once the hold is lifted it comes back in through the queue.
+	expiryOwnerHold      = "owner_hold"
+	expiryBundleMissing  = protocol.RescueVerifyBundleMissing
+	expiryBundleMismatch = protocol.RescueVerifyBundleMismatch
 )
 
 // The pause reasons of DESIGN-061 section 4.
@@ -157,13 +163,16 @@ type taskCleanupState struct {
 	admittedAt  map[types.UID]time.Time
 	releaseWait map[types.UID]time.Time
 	children    map[types.UID]time.Time
-	// attempt: since when the clean-up's hold pods ran no rescue
-	// (taskAttemptDeadline); holdNode: the node each Session's last hold pod
-	// stood on, for the next release check; graded: the hold pods whose
-	// rescue this operator ran with --strict-home and graded, by stamp.
+	// attempt: by hold pod, since when it graded no new rescue
+	// (taskAttemptDeadline); ended: by Session, how many of this attempt's
+	// hold pods ended with none graded; holdNode: the node each Session's
+	// last hold pod stood on, for the next release check; graded: the hold
+	// pods whose rescue this operator ran with --strict-home and graded, by
+	// stamp.
 	attempt     map[types.UID]time.Time
 	holdNode    map[types.UID]string
 	graded      map[types.UID]string
+	ended       map[types.UID]int
 	failures    int
 	lastFailure time.Time
 	freeAt      time.Time
@@ -177,6 +186,7 @@ func (st *taskCleanupState) init() {
 		st.reserved, st.admittedAt = map[types.UID]time.Time{}, map[types.UID]time.Time{}
 		st.releaseWait, st.children = map[types.UID]time.Time{}, map[types.UID]time.Time{}
 		st.attempt, st.holdNode, st.graded = map[types.UID]time.Time{}, map[types.UID]string{}, map[types.UID]string{}
+		st.ended = map[types.UID]int{}
 	}
 }
 
@@ -312,6 +322,19 @@ func taskRefusalRetry(reason string) time.Duration {
 		return taskAttemptRetry
 	}
 	return homeExpiryRefusalRetry
+}
+
+// taskAttemptRefusalRetry is taskRefusalRetry for a refusal that ended an
+// attempt at Rescuing: one of the shelf or its bundle waits an hour too, so a
+// broken shared volume does not rerun every rescue every 15 minutes.
+func taskAttemptRefusalRetry(e *v1alpha1.PrivateHomeExpiryStatus) time.Duration {
+	if taskRetryRefusal(e) {
+		switch e.Refusal {
+		case expiryShelfUnavailable, expiryBundleMissing, expiryBundleMismatch:
+			return taskAttemptRetry
+		}
+	}
+	return taskRefusalRetry(e.Refusal)
 }
 
 // taskActive reports whether a task record holds one of the clean-up's slots:
@@ -480,6 +503,12 @@ func (r *Reconciler) stepTaskCleanup(ctx context.Context, v *expiryView, obs *ob
 		if p := v.ownHold(); p != nil && p.DeletionTimestamp.IsZero() {
 			return r.removeExpiryHold(ctx, v, obs, p, holdReleaseOwnerHold)
 		}
+		if e.Phase == v1alpha1.HomeExpiryRescuing && e.Refusal == "" && v.pod == nil && len(v.mounts) == 0 {
+			// The hold ended this attempt: its slot frees, and once the hold
+			// is lifted it comes back in through the queue, so lifting holds
+			// never starts rescues past the cap.
+			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryOwnerHold, "the owner holds the clean-up"))
+		}
 		obs.homeExpiry = &homeExpiryNote{reason: taskReasonHeld, message: heldNote(v.s).message}
 		if homeExpiryOverride(v.s) == expiryOverrideInvalid {
 			return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
@@ -491,7 +520,7 @@ func (r *Reconciler) stepTaskCleanup(ctx context.Context, v *expiryView, obs *ob
 		// stays.
 		return r.removeExpiryHold(ctx, v, obs, p, holdReleaseRefused)
 	}
-	if retry := taskRefusalRetry(e.Refusal); e.Refusal != "" && e.RefusalAt != nil && v.now.Before(e.RefusalAt.Add(retry)) && !v.now.Before(e.RefusalAt.Time) {
+	if retry := taskAttemptRefusalRetry(e); e.Refusal != "" && e.RefusalAt != nil && v.now.Before(e.RefusalAt.Add(retry)) && !v.now.Before(e.RefusalAt.Time) {
 		return ctrl.Result{RequeueAfter: min(e.RefusalAt.Add(retry).Sub(v.now)+time.Second, homeExpiryMaxWait)}, false, nil
 	}
 	if ref := expiryRecheck(v); ref != nil {
@@ -591,8 +620,14 @@ func (r *Reconciler) taskCleanupWait(ctx context.Context, v *expiryView, obs *ob
 func (r *Reconciler) taskCleanupRetry(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
 	e := v.record()
 	if v.pod != nil || len(v.mounts) > 0 {
-		// The clean-up's own hold pod still terminates; it mounts the claim.
-		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
+		// A Pod still holds the name or the claim: the clean-up's own hold
+		// pod terminating is looked at again soon; one that stays (an ended
+		// executor its guard keeps, a hold pod its guard keeps) every 15
+		// minutes.
+		if v.pod != nil && !v.pod.DeletionTimestamp.IsZero() {
+			return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
+		}
+		return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
 	}
 	if e.Refusal == expiryVolumeNotReleased {
 		if why := r.taskVolumeReleased(ctx, v); why != "" {
@@ -679,17 +714,21 @@ func (r *Reconciler) taskCleanupRescue(ctx context.Context, v *expiryView, obs *
 	}
 	rec := v.s.Status.Rescue
 	ours := rec != nil && rescueRanIn(v.s, hold) && r.taskGraded(hold.UID, rec.Stamp)
-	if ours {
-		r.taskForgetAttempt(v.s.UID)
-	} else if since := r.taskAttemptSince(v.s.UID, v.now); v.now.Sub(since) >= taskAttemptDeadline {
-		// No rescue in this clean-up's hold pods for half an hour: the pod
-		// never ran, kept ending, or could not be reached. The attempt ends,
-		// the HOME stays, and the breaker counts it.
-		r.taskForgetAttempt(v.s.UID)
+	if since := r.taskAttemptSince(hold.UID, v.now); v.now.Sub(since) >= taskAttemptDeadline {
+		// This hold pod graded no rescue for half an hour, the last one
+		// included: it never ran, or its rescue could not be reached by
+		// exec, first or on a retry. The attempt ends, the HOME stays, and
+		// the breaker counts it.
+		r.taskEndAttempt(v.s.UID, hold.UID)
 		r.taskBreaker(true, v.now)
-		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryAttemptStuck, "the clean-up's hold pods ran no rescue for %s; hold pod %s is %s", taskAttemptDeadline, hold.Name, hold.Status.Phase))
+		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryAttemptStuck, "the hold pod %s graded no rescue for %s; it is %s", hold.Name, taskAttemptDeadline, hold.Status.Phase))
 	}
 	if podEnded(hold) {
+		if r.taskHoldEnded(v.s.UID, hold.UID) >= taskHoldsEndedMax {
+			r.taskEndAttempt(v.s.UID, hold.UID)
+			r.taskBreaker(true, v.now)
+			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryAttemptStuck, "%d hold pods ended without a rescue; the last is %s", taskHoldsEndedMax, hold.Name))
+		}
 		return r.removeExpiryHold(ctx, v, obs, hold, holdReleaseEnded)
 	}
 	if hold.Status.Phase != corev1.PodRunning {
@@ -723,25 +762,48 @@ func (r *Reconciler) taskCleanupRescue(ctx context.Context, v *expiryView, obs *
 	return r.saveTaskBundle(ctx, v, hold, obs)
 }
 
-func (r *Reconciler) taskAttemptSince(uid types.UID, now time.Time) time.Time {
+// taskAttemptSince is since when the hold pod graded no rescue: when it was
+// first seen, or its last graded rescue (taskMarkGraded).
+func (r *Reconciler) taskAttemptSince(hold types.UID, now time.Time) time.Time {
 	st := &r.taskCleanup
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.init()
-	at, ok := st.attempt[uid]
+	at, ok := st.attempt[hold]
 	if !ok || now.Before(at) {
-		st.attempt[uid] = now
+		st.attempt[hold] = now
 		return now
 	}
 	return at
 }
 
-func (r *Reconciler) taskForgetAttempt(uid types.UID) {
+// taskHoldEnded counts one more of the attempt's hold pods ended with no
+// rescue graded in it, once per hold pod, and returns the count.
+func (r *Reconciler) taskHoldEnded(uid, hold types.UID) int {
 	st := &r.taskCleanup
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.init()
-	delete(st.attempt, uid)
+	if _, counted := st.attempt[hold]; counted {
+		delete(st.attempt, hold)
+		if _, graded := st.graded[hold]; !graded {
+			st.ended[uid]++
+		}
+	}
+	return st.ended[uid]
+}
+
+// taskEndAttempt forgets an attempt's clocks: at its end, or when a new
+// admission starts the next.
+func (r *Reconciler) taskEndAttempt(uid, hold types.UID) {
+	st := &r.taskCleanup
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.init()
+	delete(st.ended, uid)
+	if hold != "" {
+		delete(st.attempt, hold)
+	}
 }
 
 func (r *Reconciler) taskRememberHoldNode(uid types.UID, node string) {
@@ -773,12 +835,17 @@ func (r *Reconciler) taskGraded(hold types.UID, stamp string) bool {
 	return stamp != "" && st.graded[hold] == stamp
 }
 
-func (r *Reconciler) taskMarkGraded(hold types.UID, stamp string) {
+// taskMarkGraded records a rescue this operator ran and graded in the hold
+// pod: the hold pod's clock starts again from now, and the attempt's count of
+// ended hold pods is cleared.
+func (r *Reconciler) taskMarkGraded(uid, hold types.UID, stamp string, now time.Time) {
 	st := &r.taskCleanup
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.init()
 	st.graded[hold] = stamp
+	st.attempt[hold] = now
+	delete(st.ended, uid)
 }
 
 // taskRescueRefusedIn reports whether the Session's newest rescue ran in the
@@ -883,7 +950,7 @@ func (r *Reconciler) taskRescue(ctx context.Context, v *expiryView, obs *observa
 	if !written {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
-	r.taskMarkGraded(hold.UID, rec.Stamp)
+	r.taskMarkGraded(v.s.UID, hold.UID, rec.Stamp, v.now)
 	switch {
 	case rec.Result != v1alpha1.RescueFailed:
 		r.taskBreaker(false, v.now)
@@ -1435,6 +1502,7 @@ func (r *Reconciler) taskAdmitted(uid types.UID, now time.Time) {
 	defer st.mu.Unlock()
 	st.init()
 	st.prune(now)
+	delete(st.ended, uid)
 	if _, ok := st.admittedAt[uid]; !ok {
 		// The first start this leader saw: a retry does not restart the
 		// duration.
@@ -1531,7 +1599,7 @@ func (r *Reconciler) taskQueueFromCache(ctx context.Context, ns string, now time
 				continue
 			}
 		case taskRetryRefusal(e) && e.RefusalAt != nil:
-			if now.Before(e.RefusalAt.Add(taskRefusalRetry(e.Refusal))) {
+			if now.Before(e.RefusalAt.Add(taskAttemptRefusalRetry(e))) {
 				continue
 			}
 			q.retry, q.reaped, q.due = e.Refusal == expiryRescueRefused || e.Refusal == expiryAttemptStuck, time.Time{}, e.RefusalAt.Time

@@ -376,7 +376,13 @@ is off, and nothing is installed. Details the sections above leave open:
   or a read that fails (the cluster-wide `get` on PersistentVolumes is H1's)
   never shows the release. Before a second hold pod, the node the last one
   stood on, when the leader saw it and it is another node, must not list the
-  volume either (review of #520).
+  volume either (review of #520). That node lives in the leader's memory
+  only: after a leader change the next hold pod is checked against the
+  executor's node alone, as the section asks; recording it would need a CRD
+  field. Known limit, as for DESIGN-025's intents: two operators overlapping
+  at a leader change can leave a hold pod made for an older intent, which
+  then cancels the record as a new Pod (PreservationUnknown, HOME kept) and
+  needs a person.
 - **Grading** (`gradeTaskRescue`). A non-empty `strictHome.refused` is
   `StrictHomeRefused`, graded first. A report without `strictHome`, or agentd
   refusing `--strict-home` as a usage error (exit 2, an agent image from before
@@ -397,12 +403,14 @@ is off, and nothing is installed. Details the sections above leave open:
   that it did not (an earlier leader's, or DESIGN-025's) runs again before
   anything is kept, so after a leader change one rescue per active clean-up
   runs twice.
-- **A stuck attempt ends** (`attempt_stuck`, review of #520). When the
-  clean-up's hold pods run no rescue for 30 minutes (a pod that never runs,
-  keeps ending, or cannot be reached by exec), the attempt is refused, its
-  hold pod goes, the breaker counts it, and it is tried again an hour later,
-  last in the queue. A rescue that failed for a transient reason keeps its
-  hold pod and retries, as section 3 says, however long that takes.
+- **A stuck attempt ends** (`attempt_stuck`, review of #520). A hold pod
+  that grades no rescue for 30 minutes after it was first seen, or after its
+  last graded rescue (so a retry whose exec never runs counts too), and an
+  attempt whose hold pods ended three times with none graded, are refused:
+  the hold pod goes, the breaker counts it, and it is tried again an hour
+  later, last in the queue. A rescue that keeps failing for a transient
+  reason, graded each time, keeps its hold pod and retries, as section 3
+  says, however long that takes.
 - **The queue.** Judged from the cache, without copying it, in one list that
   serves every reconcile for 10 seconds; an admission always lists again and
   then holds an in-memory reservation until the cache shows its record active
@@ -417,7 +425,12 @@ is off, and nothing is installed. Details the sections above leave open:
   at `Archived` or `Deleting`, where no hold pod stands, is re-checked in
   place every 15 minutes, as DESIGN-025's are; when its cause is fixed, or an
   owner hold is lifted, it goes on without waiting in the queue, so the cap
-  can be passed by one for its last minutes. A finished parent whose
+  can be passed by one for its last minutes. An owner hold at `Rescuing`
+  removes the hold pod and records `owner_hold`, so once the hold is lifted
+  the record comes back in through the queue and lifting holds never starts
+  rescues past the cap. A refusal of the shelf or the bundle at `Rescuing`
+  waits an hour before its retry, so a broken shared volume does not rerun
+  every rescue every 15 minutes. A finished parent whose
   descendants run is remembered for 15 minutes, so it does not block the
   queue behind it; the descendants' uncached check runs only once the queue
   would admit it, and a busy shelf is an answer kept for the minute like any
