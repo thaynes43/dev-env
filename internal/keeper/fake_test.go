@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -97,17 +98,22 @@ type fakeGitHub struct {
 	srv *httptest.Server
 	now func() time.Time
 
-	mu       sync.Mutex
-	pub      *rsa.PublicKey
-	issuer   any // what the JWT's iss must be
-	life     time.Duration
-	failures []failure
-	mints    int
-	requests int
-	lastBody map[string]map[string]string
-	lastJWT  string
-	tokens   []string
-	errs     []string
+	mu               sync.Mutex
+	pub              *rsa.PublicKey
+	issuer           any // what the JWT's iss must be
+	life             time.Duration
+	failures         []failure
+	mints            int
+	requests         int
+	lastBody         map[string]map[string]string
+	lastRepositories []string
+	lastRaw          []byte
+	lastJWT          string
+	tokens           []string
+	errs             []string
+	// repoEcho, when set, is placed in a successful response's repositories
+	// list so a test can prove the keeper does not log those names.
+	repoEcho string
 }
 
 func newFakeGitHub(t *testing.T, pub *rsa.PublicKey, now func() time.Time) *fakeGitHub {
@@ -155,12 +161,22 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.lastJWT = jwt
-	var body map[string]map[string]string
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20+1))
+	if err != nil || len(raw) > 1<<20 {
+		fail(http.StatusBadRequest, "body")
+		return
+	}
+	var body struct {
+		Permissions  map[string]string `json:"permissions"`
+		Repositories []string          `json:"repositories"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
 		fail(http.StatusBadRequest, "body: "+err.Error())
 		return
 	}
-	f.lastBody = body
+	f.lastRaw = append([]byte(nil), raw...)
+	f.lastBody = map[string]map[string]string{"permissions": body.Permissions}
+	f.lastRepositories = append([]string(nil), body.Repositories...)
 	if len(f.failures) > 0 {
 		next := f.failures[0]
 		f.failures = f.failures[1:]
@@ -172,16 +188,27 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	tok := fmt.Sprintf("ghs_test_%d_%s", f.mints, strings.Repeat("x", 20))
 	f.tokens = append(f.tokens, tok)
 	perms := map[string]string{"metadata": "read"}
-	for k, v := range body["permissions"] {
+	for k, v := range body.Permissions {
 		perms[k] = v
 	}
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	selection := "all"
+	if len(body.Repositories) > 0 {
+		selection = "selected"
+	}
+	resp := map[string]any{
 		"token":                tok,
 		"expires_at":           f.now().Add(f.life).UTC().Format(time.RFC3339),
 		"permissions":          perms,
-		"repository_selection": "all",
-	})
+		"repository_selection": selection,
+	}
+	if f.repoEcho != "" && selection == "selected" {
+		resp["repositories"] = []map[string]string{{
+			"name":      body.Repositories[0],
+			"full_name": f.repoEcho + "/" + body.Repositories[0],
+		}}
+	}
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // checkJWT verifies the App JWT as GitHub would; "" means it passes.

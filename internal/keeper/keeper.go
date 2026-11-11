@@ -9,11 +9,13 @@
 // re-reading the Lease right before the call (D-52).
 //
 // Plan 01 builds the first credential, the haynes-dev-bot installation token,
-// minted every 40 minutes into dev-agents/dev-env-gh-token (D-52). A Job here
+// minted every 40 minutes into dev-agents/dev-env-gh-token (D-52). The
+// haynes-ops-bot installation token is the same kind of Job, and only when
+// --enable-ops-gh-token is set (DESIGN-064 6.2, default off). A Job here
 // is for a credential that is safe to mint again: Keeper.attempt retries a
 // failed refresh with backoff, and it keeps no durable intent and checks no
-// fence before the call. Only non-rotating credentials (today, the gh
-// installation token) may be Jobs. A rotating login must never be one:
+// fence before the call. Only non-rotating credentials (today, the GitHub App
+// installation tokens) may be Jobs. A rotating login must never be one:
 // replaying a refresh token whose rotation response was lost revokes the whole
 // token family (CLAUDE.md, hard rules). Rotating logins run as their own
 // serialized leader runnable with a durable intent journal and a Lease budget

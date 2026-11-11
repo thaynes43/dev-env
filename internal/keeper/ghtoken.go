@@ -12,13 +12,20 @@ import (
 // directory at /creds, so the token is /creds/gh_token, which agentd's gh wrapper
 // and git's credential helper read at every call (D-40, D-42).
 const (
-	DefaultGHTokenSecret = "dev-env-gh-token"
-	GHTokenKey           = "gh_token"
+	DefaultGHTokenSecret    = "dev-env-gh-token"
+	DefaultOpsGHTokenSecret = "dev-env-ops-gh-token"
+	// DefaultOpsGitHubAppDir is the mount of the haynes-ops-bot App's files.
+	// The keeper reads it only when --enable-ops-gh-token is set.
+	DefaultOpsGitHubAppDir = "/etc/dev-env-keeper/github-ops-bot"
+	GHTokenKey             = "gh_token"
 )
 
 // GitHubTokenJob mints an installation token of app into secret's gh_token. The
 // file ends in a newline, as v1's /creds/gh_token did; every reader takes it
-// through `$(cat ...)`, which drops it.
+// through `$(cat ...)`, which drops it. Both App loops use this Job. A full
+// grant logs the permissions and repository selection GitHub returned. A short
+// grant also logs permissionsNotGranted. The token, the key and the request
+// headers are not fields.
 func GitHubTokenJob(name string, app *GitHubApp, secret types.NamespacedName) Job {
 	return Job{
 		Name:   name,

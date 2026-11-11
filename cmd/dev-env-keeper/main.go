@@ -9,7 +9,10 @@
 //
 // Built so far (plan 01 step 6, D-52): the haynes-dev-bot installation token,
 // minted every 40 minutes into dev-agents/dev-env-gh-token, with /healthz and
-// /readyz. internal/keeper holds the work; this file reads the flags.
+// /readyz. With --enable-ops-gh-token (default off, DESIGN-064 6.2) it also
+// mints the haynes-ops-bot token into dev-agents/dev-env-ops-gh-token on the
+// same schedule. Off, the mints are the dev bot's alone. internal/keeper holds
+// the work; this file reads the flags.
 package main
 
 import (
@@ -116,6 +119,11 @@ type options struct {
 	githubAppDir     string
 	githubAPIURL     string
 	permissions      map[string]string
+	opsGHToken       bool
+	opsGHTokenSecret string
+	opsGitHubAppDir  string
+	opsPermissions   map[string]string
+	opsRepositories  []string
 	interval         time.Duration
 	leaderElect      bool
 	metricsAddr      string
@@ -130,7 +138,15 @@ type options struct {
 }
 
 func defaultPermissions() string {
-	b, err := json.Marshal(keeper.DefaultDevBotPermissions)
+	return mustPermissions(keeper.DefaultDevBotPermissions)
+}
+
+func defaultOpsPermissions() string {
+	return mustPermissions(keeper.DefaultOpsBotPermissions)
+}
+
+func mustPermissions(p map[string]string) string {
+	b, err := json.Marshal(p)
 	if err != nil {
 		panic(err)
 	}
@@ -153,6 +169,12 @@ func parseFlags(args []string) (options, error) {
 		strings.Join([]string{keeper.AppFileClientID + " or " + keeper.AppFileAppID, keeper.AppFileInstallationID, keeper.AppFilePrivateKey}, ", ")+"; read at every mint")
 	fs.StringVar(&o.githubAPIURL, "github-api-url", keeper.DefaultGitHubAPIURL, "GitHub's REST API")
 	perms := fs.String("gh-token-permissions", defaultPermissions(), "JSON permission set that down-scopes the token; only permissions the App holds, or GitHub refuses the mint")
+	fs.BoolVar(&o.opsGHToken, "enable-ops-gh-token", false, "mint the haynes-ops-bot installation token into the ops Secret (DESIGN-064 6.2); default off, and off leaves the keeper's mints unchanged")
+	fs.StringVar(&o.opsGHTokenSecret, "ops-gh-token-secret", keeper.DefaultOpsGHTokenSecret, "Secret the ops token goes into, key "+keeper.GHTokenKey+"; GitOps creates it empty; used only with --enable-ops-gh-token")
+	fs.StringVar(&o.opsGitHubAppDir, "ops-github-app-dir", keeper.DefaultOpsGitHubAppDir, "directory of the haynes-ops-bot App's files, read at every mint: "+
+		strings.Join([]string{keeper.AppFileClientID + " or " + keeper.AppFileAppID, keeper.AppFileInstallationID, keeper.AppFilePrivateKey}, ", "))
+	opsPerms := fs.String("ops-gh-token-permissions", defaultOpsPermissions(), "JSON permission set that down-scopes the ops token; default is v1's haynes-ops-bot set")
+	opsRepos := fs.String("ops-gh-token-repositories", "", "comma-separated repository names (not owner/name) the ops token may access; required with --enable-ops-gh-token")
 	fs.DurationVar(&o.interval, "refresh-interval", keeper.DefaultInterval, "longest wait between two mints; a token is also refreshed after two thirds of its life")
 	fs.BoolVar(&o.leaderElect, "leader-elect", true, "hold the keeper's Lease before refreshing anything (one owner per credential)")
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
@@ -229,33 +251,44 @@ func parseFlags(args []string) (options, error) {
 		return o, fmt.Errorf("--gh-token-permissions: %w", err)
 	}
 	o.permissions = p
+	op, err := keeper.ParsePermissions(*opsPerms)
+	if err != nil {
+		return o, fmt.Errorf("--ops-gh-token-permissions: %w", err)
+	}
+	o.opsPermissions = op
+	repos, err := keeper.ParseRepositories(*opsRepos)
+	if err != nil {
+		return o, fmt.Errorf("--ops-gh-token-repositories: %w", err)
+	}
+	o.opsRepositories = repos
+	if o.opsGHToken {
+		if o.opsGHTokenSecret == "" || o.opsGitHubAppDir == "" {
+			return o, errors.New("--ops-gh-token-secret and --ops-github-app-dir must not be empty when --enable-ops-gh-token is set")
+		}
+		if o.opsGHTokenSecret == o.ghTokenSecret {
+			return o, errors.New("--ops-gh-token-secret must not be the dev bot's Secret")
+		}
+		if o.opsGitHubAppDir == o.githubAppDir {
+			return o, errors.New("--ops-github-app-dir must not be the dev bot's App directory")
+		}
+		if len(repos) == 0 {
+			return o, errors.New("--ops-gh-token-repositories is required with --enable-ops-gh-token, so the token is limited to that list")
+		}
+	}
 	return o, nil
 }
 
-func run(args []string) error {
-	o, err := parseFlags(args)
-	if err != nil {
-		return err
-	}
-	log := logr.FromSlogHandler(slog.NewJSONHandler(os.Stderr, nil))
-	ctrl.SetLogger(log)
-	log = log.WithName(binaryName)
-	info := version.Get()
-	log.Info("starting", "version", info.String(binaryName), "namespace", o.namespace,
-		"ghTokenSecret", o.secretNamespace+"/"+o.ghTokenSecret, "githubAppDir", o.githubAppDir)
-
-	cfg, err := ctrl.GetConfig()
-	if err != nil {
-		return err
-	}
-	return keeper.Run(ctrl.SetupSignalHandler(), cfg, keeper.Options{
+// keeperOptions is the keeper configuration the flags select. With the ops
+// flag off, OpsGitHubApp is nil and the dev App's repository list is empty.
+func (o options) keeperOptions(userAgent string) keeper.Options {
+	k := keeper.Options{
 		Namespace:     o.namespace,
 		GHTokenSecret: types.NamespacedName{Namespace: o.secretNamespace, Name: o.ghTokenSecret},
 		GitHubApp: &keeper.GitHubApp{
 			Dir:         o.githubAppDir,
 			APIURL:      o.githubAPIURL,
 			Permissions: o.permissions,
-			UserAgent:   binaryName + "/" + info.Version,
+			UserAgent:   userAgent,
 		},
 		ProxmoxGrants:    o.proxmoxGrants,
 		HWSSHGrants:      o.hwsshGrants,
@@ -268,6 +301,42 @@ func run(args []string) error {
 		LeaderElect:      o.leaderElect,
 		MetricsAddr:      o.metricsAddr,
 		ProbeAddr:        o.probeAddr,
-		Log:              log,
-	})
+	}
+	if !o.opsGHToken {
+		return k
+	}
+	k.OpsGHTokenSecret = types.NamespacedName{Namespace: o.secretNamespace, Name: o.opsGHTokenSecret}
+	k.OpsGitHubApp = &keeper.GitHubApp{
+		Dir:          o.opsGitHubAppDir,
+		APIURL:       o.githubAPIURL,
+		Permissions:  o.opsPermissions,
+		Repositories: o.opsRepositories,
+		UserAgent:    userAgent,
+	}
+	return k
+}
+
+func run(args []string) error {
+	o, err := parseFlags(args)
+	if err != nil {
+		return err
+	}
+	log := logr.FromSlogHandler(slog.NewJSONHandler(os.Stderr, nil))
+	ctrl.SetLogger(log)
+	log = log.WithName(binaryName)
+	info := version.Get()
+	started := []any{"version", info.String(binaryName), "namespace", o.namespace,
+		"ghTokenSecret", o.secretNamespace + "/" + o.ghTokenSecret, "githubAppDir", o.githubAppDir}
+	if o.opsGHToken {
+		started = append(started, "opsGHTokenSecret", o.secretNamespace+"/"+o.opsGHTokenSecret, "opsGitHubAppDir", o.opsGitHubAppDir)
+	}
+	log.Info("starting", started...)
+
+	cfg, err := ctrl.GetConfig()
+	if err != nil {
+		return err
+	}
+	kopts := o.keeperOptions(binaryName + "/" + info.Version)
+	kopts.Log = log
+	return keeper.Run(ctrl.SetupSignalHandler(), cfg, kopts)
 }

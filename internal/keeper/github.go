@@ -56,6 +56,17 @@ var DefaultDevBotPermissions = map[string]string{
 	"actions":       "read",
 }
 
+// DefaultOpsBotPermissions is v1's haynes-ops-bot set, the string
+// {"contents":"write","pull_requests":"write","checks":"read","issues":"write"}
+// from GITHUB_BOT_TOKEN_PERMISSIONS in dev-env-ops's HelmRelease (DESIGN-064
+// 6.2). It has no workflows and no actions.
+var DefaultOpsBotPermissions = map[string]string{
+	"contents":      "write",
+	"pull_requests": "write",
+	"checks":        "read",
+	"issues":        "write",
+}
+
 const (
 	// jwtBackdate and jwtLifetime follow GitHub's rules for an App JWT: issued
 	// in the past to allow for clock drift, and expiring at most 10 minutes
@@ -82,6 +93,12 @@ type GitHubApp struct {
 	APIURL string
 	// Permissions down-scope the token. They must be a subset of the App's own.
 	Permissions map[string]string
+	// Repositories limits the token to these repository names (the name, not
+	// owner/name). Empty omits the field. The haynes-dev-bot mint leaves it
+	// empty, so GitHub scopes that token to every repository the installation
+	// can access, which is the request it sends today. The ops bot sets it
+	// (DESIGN-064 6.2). An empty ops list is refused before the loop starts.
+	Repositories []string
 	// HTTP sends the request; a client with a 30 s timeout when nil.
 	HTTP *http.Client
 	// Clock dates the JWT; the real clock when nil.
@@ -130,7 +147,13 @@ func (a *GitHubApp) Mint(ctx context.Context) (InstallationToken, error) {
 	if err != nil {
 		return InstallationToken{}, err
 	}
-	body, err := json.Marshal(map[string]any{"permissions": a.Permissions})
+	// One field when Repositories is empty, so the dev bot's body stays the
+	// permissions object alone.
+	payload := map[string]any{"permissions": a.Permissions}
+	if len(a.Repositories) > 0 {
+		payload["repositories"] = a.Repositories
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return InstallationToken{}, err
 	}
@@ -164,6 +187,9 @@ func (a *GitHubApp) Mint(ctx context.Context) (InstallationToken, error) {
 	if resp.StatusCode != http.StatusCreated {
 		return InstallationToken{}, githubError(resp.StatusCode, raw)
 	}
+	// repositories, the selected-repo objects, is left out of this struct on
+	// purpose. The success log records repository_selection, not those names,
+	// and a value that is never stored cannot reach a log line.
 	var out struct {
 		Token               string            `json:"token"`
 		ExpiresAt           string            `json:"expires_at"`
@@ -350,6 +376,9 @@ func githubError(status int, raw []byte) error {
 var (
 	permissionName  = regexp.MustCompile(`^[a-z][a-z_]*$`)
 	permissionLevel = map[string]bool{"read": true, "write": true, "admin": true}
+	// repositoryName is GitHub's repository name, not owner/name. 100 characters
+	// is GitHub's limit.
+	repositoryName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
 )
 
 // ParsePermissions reads a permission set as JSON, the form v1's
@@ -371,4 +400,36 @@ func ParsePermissions(s string) (map[string]string, error) {
 		}
 	}
 	return p, nil
+}
+
+// ParseRepositories reads a comma-separated list of repository names. An empty
+// string is an empty list, which the ops loop refuses when it is enabled: an
+// omitted repositories field would mint a token for every repository the
+// installation can access. Names are the repository name, not owner/name.
+func ParseRepositories(s string) ([]string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	if len(s) > 64<<10 {
+		return nil, errors.New("repository list is too long")
+	}
+	parts := strings.Split(s, ",")
+	if len(parts) > 500 {
+		return nil, errors.New("more than 500 repositories; GitHub refuses a longer list")
+	}
+	seen := make(map[string]struct{}, len(parts))
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if !repositoryName.MatchString(name) {
+			return nil, fmt.Errorf("%q is not a repository name (the name, not owner/name)", name)
+		}
+		if _, ok := seen[name]; ok {
+			return nil, fmt.Errorf("duplicate repository %q", name)
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out, nil
 }

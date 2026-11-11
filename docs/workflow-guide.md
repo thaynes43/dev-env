@@ -1209,6 +1209,47 @@ The keeper owns rotating login refresh; session pods receive access-only
 projections. Account login is different from computer pairing. Fresh v2 login
 must not create a second refresher for v1’s credential.
 
+### Tokens the keeper mints
+
+The keeper writes each GitHub installation token it is configured to mint
+with one merge patch, and it does not create, list or read the Secret.
+GitOps creates the Secret empty. A session mounts it as a directory; the
+token file is `gh_token`.
+
+| Token | Secret in `dev-agents` | Who mounts it | When the keeper mints it |
+|---|---|---|---|
+| haynes-dev-bot | `dev-env-gh-token` | ordinary session profiles, at `/creds/gh_token` | every keeper process |
+| haynes-ops-bot | `dev-env-ops-gh-token` | the ops profile, at `/creds/gh_token` | `--enable-ops-gh-token`, which defaults off |
+
+Both tokens use one schedule and the keeper's one Lease. A mint runs on
+becoming leader, then every 40 minutes or after two thirds of the token's
+life, whichever is sooner. A failed mint waits 10 seconds and doubles that
+wait up to 5 minutes. Readiness is the tokens this process has written that
+have not expired. With the ops flag off, that is the dev bot token. With the
+flag on, it is both tokens.
+
+The ops loop reads its App from `--ops-github-app-dir` (default
+`/etc/dev-env-keeper/github-ops-bot`) at every mint. That directory holds
+`client-id` or `app-id`, `installation-id` and `private-key`.
+`--ops-gh-token-secret` (default `dev-env-ops-gh-token`) is the Secret. The
+patch sets key `gh_token` and the annotations
+`dev-env.haynesops.com/expires-at` and `dev-env.haynesops.com/written-at`.
+`--ops-gh-token-permissions` defaults to v1's haynes-ops-bot set: contents,
+pull requests and issues write, and checks read.
+`--ops-gh-token-repositories` is a comma-separated list of repository names,
+and the enable flag requires it, so the token is limited to that list.
+
+A successful mint logs the permissions and the repository selection GitHub
+granted. The log leaves out the token, the App key and the request headers.
+A mint GitHub refuses, including a permission the App lacks, is logged with
+GitHub's message and then waits on the backoff above. An installation token
+has no refresh token, so the keeper and another minter of the same App do
+not revoke each other.
+
+This repository leaves the ops flag off. Turning it on is a haynes-ops
+change, after a mint log has recorded the permissions and repository
+selection the installation granted.
+
 ### Proxmox activation checkpoint
 
 Q-19's CA storage step is complete by owner confirmation in existing

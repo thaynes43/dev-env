@@ -42,6 +42,11 @@ type Options struct {
 	GHTokenSecret types.NamespacedName
 	// GitHubApp mints the gh token.
 	GitHubApp *GitHubApp
+	// OpsGHTokenSecret and OpsGitHubApp mint the haynes-ops-bot token
+	// (DESIGN-064 6.2). A nil OpsGitHubApp leaves the Jobs as the dev bot
+	// token alone, which is the command's default.
+	OpsGHTokenSecret types.NamespacedName
+	OpsGitHubApp     *GitHubApp
 	// ProxmoxGrants is disabled by default; it does not enable the hw-ssh lease.
 	ProxmoxGrants ProxmoxGrantOptions
 	// HWSSHGrants leases the static hw-ssh key into a session pod (D-89); off by
@@ -78,11 +83,35 @@ type Options struct {
 }
 
 // keeperJobs are the Keeper's Jobs: only credentials that are safe to mint
-// again, which today is the gh installation token alone. A rotating login is
-// never a Job, whatever o enables; Run adds it as its own journaled, fenced
+// again. The haynes-dev-bot installation token always is one. The haynes-ops-bot
+// installation token is one only when OpsGitHubApp is set, which the command
+// does for --enable-ops-gh-token (default off). A rotating login is never a
+// Job, whatever else o enables; Run adds it as its own journaled, fenced
 // runnable (codexWorker), as the package doc says.
 func keeperJobs(o Options) []Job {
-	return []Job{GitHubTokenJob("gh-token", o.GitHubApp, o.GHTokenSecret)}
+	jobs := []Job{GitHubTokenJob("gh-token", o.GitHubApp, o.GHTokenSecret)}
+	if o.OpsGitHubApp == nil {
+		return jobs
+	}
+	return append(jobs, GitHubTokenJob("ops-gh-token", o.OpsGitHubApp, o.OpsGHTokenSecret))
+}
+
+// validateOps refuses an ops App that would mint a token for every repository
+// the installation can access, or write it over the dev bot's Secret.
+func validateOps(o Options) error {
+	if o.OpsGitHubApp == nil {
+		return nil
+	}
+	if o.OpsGHTokenSecret.Namespace == "" || o.OpsGHTokenSecret.Name == "" || o.OpsGHTokenSecret == o.GHTokenSecret {
+		return errors.New("keeper: the ops token Secret must be set and must not be the dev bot's Secret")
+	}
+	if o.OpsGitHubApp.Dir == "" || o.OpsGitHubApp.Dir == o.GitHubApp.Dir {
+		return errors.New("keeper: the ops App directory must be set and must not be the dev bot's directory")
+	}
+	if len(o.OpsGitHubApp.Permissions) == 0 || len(o.OpsGitHubApp.Repositories) == 0 {
+		return errors.New("keeper: the ops App needs a permission set and a repository list")
+	}
+	return nil
 }
 
 // noticesStart reports whether Run adds the notifier. Disabled notice flags
@@ -104,6 +133,9 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 	}
 	if o.Namespace == "" || o.GHTokenSecret.Namespace == "" || o.GHTokenSecret.Name == "" || o.GitHubApp == nil {
 		return errors.New("keeper: the namespace, the gh token Secret and the GitHub App are required")
+	}
+	if err := validateOps(o); err != nil {
+		return err
 	}
 	if o.ClaudeAuth.Enabled && (o.Namespace == o.GHTokenSecret.Namespace || (o.ClaudeAuth.LoginDir != "" && !filepath.IsAbs(o.ClaudeAuth.LoginDir))) {
 		return errors.New("claude auth requires separate private/public namespaces and an absolute login directory")
@@ -173,6 +205,9 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 	}
 	if o.GitHubApp.Clock == nil && o.Clock != nil {
 		o.GitHubApp.Clock = o.Clock
+	}
+	if o.OpsGitHubApp != nil && o.OpsGitHubApp.Clock == nil && o.Clock != nil {
+		o.OpsGitHubApp.Clock = o.Clock
 	}
 	k := &Keeper{
 		Jobs:     keeperJobs(o),

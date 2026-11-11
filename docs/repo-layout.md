@@ -83,8 +83,10 @@ internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-6
 internal/frontdoor/      Meatball's MCP server (DESIGN-060): one bearer, fifteen tools, opwork as a fixed-argument subprocess, coordinator start/status/stop and parent notes through agent-run's operator client
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol, and the standard-library helpers maintenancecontract, pages, version, and tokenfile (`make build` checks the binary does not link Kubernetes); tests run against an httptest TLS server
-internal/keeper/         the keeper (D-52), including the default-off Ask notifier (DESIGN-034): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes
-                         behind a Lease. Only that non-rotating token is a Keeper Job; the rotating Codex login and the
+internal/keeper/         the keeper (D-52), including the default-off Ask notifier (DESIGN-034): mints the haynes-dev-bot token
+                         into dev-agents/dev-env-gh-token every 40 minutes, and with --enable-ops-gh-token (default off,
+                         DESIGN-064 6.2) the haynes-ops-bot token into dev-env-ops-gh-token. Both sit behind one Lease.
+                         Only those non-rotating installation tokens are Keeper Jobs; the rotating Codex login and the
                          Proxmox credential grants are separate journaled, Lease-fenced leader runnables. Unit tests use a fake
                          GitHub (httptest) and a fake clock; its envtest suite runs it as its ServiceAccount with exactly
                          the Roles haynes-ops gives it

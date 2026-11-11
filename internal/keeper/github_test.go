@@ -42,8 +42,66 @@ func TestMintSignsAJWTAndDownScopes(t *testing.T) {
 	if !reflect.DeepEqual(gh.lastBody["permissions"], DefaultDevBotPermissions) {
 		t.Errorf("asked for %v, want v1's set %v", gh.lastBody["permissions"], DefaultDevBotPermissions)
 	}
+	wantBody, err := json.Marshal(map[string]any{"permissions": DefaultDevBotPermissions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gh.lastRaw) != string(wantBody) || len(gh.lastRepositories) != 0 {
+		t.Errorf("dev mint body %s, want %s", gh.lastRaw, wantBody)
+	}
 	if missing := app.MissingPermissions(tok.Permissions); len(missing) != 0 {
 		t.Errorf("missing %v from a full grant", missing)
+	}
+}
+
+func TestMintRequestsTheOpsRepositories(t *testing.T) {
+	k := keys(t)
+	gh := newFakeGitHub(t, &k[0].PublicKey, time.Now)
+	gh.repoEcho = "not-for-logs"
+	app := gh.app(writeAppDir(t, k[0]))
+	app.Permissions = DefaultOpsBotPermissions
+	app.Repositories = []string{"haynes-ops", "cigar-journal"}
+
+	tok, err := app.Mint(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.RepositorySelection != "selected" {
+		t.Errorf("repository selection %q", tok.RepositorySelection)
+	}
+	if !reflect.DeepEqual(gh.lastRepositories, app.Repositories) {
+		t.Errorf("repositories %v", gh.lastRepositories)
+	}
+	if !reflect.DeepEqual(gh.lastBody["permissions"], DefaultOpsBotPermissions) {
+		t.Errorf("permissions %v", gh.lastBody["permissions"])
+	}
+	wantBody, err := json.Marshal(map[string]any{
+		"permissions":  DefaultOpsBotPermissions,
+		"repositories": app.Repositories,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gh.lastRaw) != string(wantBody) {
+		t.Errorf("ops mint body %s, want %s", gh.lastRaw, wantBody)
+	}
+	if strings.Contains(fmt.Sprint(tok), "not-for-logs") || strings.Contains(fmt.Sprintf("%+v", tok), "not-for-logs") {
+		t.Errorf("the token value carries repository names: %+v", tok)
+	}
+}
+
+func TestParseRepositories(t *testing.T) {
+	got, err := ParseRepositories(" haynes-ops, cigar-journal ")
+	if err != nil || !reflect.DeepEqual(got, []string{"haynes-ops", "cigar-journal"}) {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	if got, err := ParseRepositories(""); err != nil || got != nil {
+		t.Fatalf("empty: %v %v", got, err)
+	}
+	for _, bad := range []string{"thaynes43/haynes-ops", "haynes-ops,haynes-ops", "haynes-ops,", "*", ".github"} {
+		if _, err := ParseRepositories(bad); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
 	}
 }
 
