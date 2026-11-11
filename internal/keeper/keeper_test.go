@@ -49,6 +49,7 @@ type harness struct {
 	k      *Keeper
 	logs   *logBuffer
 	keyPEM []byte
+	app    *GitHubApp
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -69,6 +70,7 @@ func newHarness(t *testing.T, objs []client.Object, funcs *interceptor.Funcs) *h
 	h.c = b.Build()
 	app := h.gh.app(writeAppDir(t, k[0]))
 	app.Clock = h.clock
+	h.app = app
 	h.k = &Keeper{
 		Jobs:   []Job{GitHubTokenJob("gh-token", app, ghSecret)},
 		Writer: &SecretWriter{Client: h.c},
