@@ -520,6 +520,18 @@ func TestSummonIdempotencyIsStoredNotReplayed(t *testing.T) {
 	wantError(t, again, http.StatusConflict, apiv1.CodeConflict)
 }
 
+func TestSummonCreateRefusesCaseDuplicateKeys(t *testing.T) {
+	f := summonFixture(t)
+	body := `{"name":"rem-responder-1","mode":"task","lane":"remediation","data":{"alert":"one"},"Data":{"alert":"two"}}`
+	e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokStranger, body), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantField(t, e, "data")
+	wantField(t, e, "Data")
+	named := `{"name":"rem-responder-1","Name":"rem-responder-2","mode":"task","lane":"remediation"}`
+	e = wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokStranger, named), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantField(t, e, "name")
+	wantField(t, e, "Name")
+}
+
 func TestSummonCreateRefusesNonStringData(t *testing.T) {
 	f := summonFixture(t)
 	body := `{"name":"rem-responder-1","mode":"task","lane":"remediation","data":{"alert":1}}`

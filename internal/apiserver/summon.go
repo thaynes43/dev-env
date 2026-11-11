@@ -206,21 +206,39 @@ func dataRaw(keys map[string]json.RawMessage) json.RawMessage {
 }
 
 func summonKeysAllowed(keys map[string]json.RawMessage) error {
-	var bad []string
+	// JSON object keys are case-sensitive, and encoding/json matches a struct
+	// field case-insensitively without refusing a second spelling. Two keys
+	// that differ only in case would make the stored data depend on map
+	// iteration. Refuse both spellings.
+	folded := make(map[string][]string, len(keys))
 	for k := range keys {
+		fold := strings.ToLower(k)
+		folded[fold] = append(folded[fold], k)
+	}
+	folds := make([]string, 0, len(folded))
+	for fold := range folded {
+		folds = append(folds, fold)
+	}
+	slices.Sort(folds)
+	var fields []apiv1.FieldError
+	for _, fold := range folds {
+		spellings := folded[fold]
+		slices.Sort(spellings)
+		if len(spellings) > 1 {
+			for _, k := range spellings {
+				fields = append(fields, fieldError(k, "a summoning create names this field more than once, differing only in case"))
+			}
+			continue
+		}
+		k := spellings[0]
 		if !slices.ContainsFunc(summonCreateKeys, func(allow string) bool {
 			return strings.EqualFold(k, allow)
 		}) {
-			bad = append(bad, k)
+			fields = append(fields, fieldError(k, "a summoning create cannot set %s", k))
 		}
 	}
-	if len(bad) == 0 {
+	if len(fields) == 0 {
 		return nil
-	}
-	slices.Sort(bad)
-	fields := make([]apiv1.FieldError, len(bad))
-	for i, k := range bad {
-		fields[i] = fieldError(k, "a summoning create cannot set %s", k)
 	}
 	return invalid(fields...)
 }
