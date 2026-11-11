@@ -563,7 +563,6 @@ func TestCodexThreadObserverRPC(t *testing.T) {
 // them under item, so that decoder reports no agent message. A copy of those
 // fields on the entry itself must not count: only item is the ThreadItem.
 func TestCodexFirstTurnReadsNestedThreadItem(t *testing.T) {
-	const cwd = "/home/dev/repos/dev-env"
 	s, _ := threadRPCFixture(t, func(method string, _ map[string]any) any {
 		switch method {
 		case "thread/turns/list":
