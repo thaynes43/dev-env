@@ -41,7 +41,7 @@ host only when no safe host can be used, and it says why. Agents provision
 hosts. Tom only pairs.
 
 A headless Codex task stays its own session. It does not take a paired host.
-Section 6 says which commands change.
+Section 7 says which commands change.
 
 Tom's words, and only these:
 
@@ -357,7 +357,23 @@ created. Renewing the keeper stays the existing workbench path.
    still fails this, because its last state is `login-required`.
 6. The shared-login check passed. The frozen `login-required` does not fail
    it.
-7. Resuming it would stay inside the pool caps in section 5.
+7. Resuming it would stay inside the pool caps in section 6.
+8. This caller is one today's resume route would accept for that host. A
+   caller of kind `coordinator` is accepted only for its own child
+   (`internal/apiserver/lifecycle.go:51-56`,
+   `internal/apiserver/coordinator.go:99-106`). A pooled host is not that
+   child. Select does not return `resume` to that caller, and it does not
+   widen the route. A session, human or workbench caller still may resume,
+   which is the reach that route already has: `authorizeChildMutation`
+   returns before the child check when the kind is not `coordinator`
+   (`internal/apiserver/coordinator.go:100-102`).
+
+A host whose last state is `pair-code-issued` had a live daemon. A live
+daemon is `busy`, so the idle timer does not suspend it (section 2). The
+only way that host is `Suspended` is a named suspend. The resume branch is
+for that case. It does not take the three hosts the idle timer suspended on
+2026-11-07. Their last state is `login-required`, so rule 5 already excludes
+them.
 
 No suspended host in section 3 is eligible. That is a result of the rules,
 not a gap in the read.
@@ -385,11 +401,14 @@ flowchart TD
   login{Keeper projection current?}
   stopLogin[login_required. No resume and no create]
   running[A running suitable host]
-  suspended[A suspended eligible host under the cap]
-  createOk{Caller may already create a host, and the cap allows one?}
+  suspended[A suspended eligible host this caller may resume]
+  cell{A running unprotected host already fills the cell?}
+  report[report that host. No launch and no create]
+  createOk{Caller may already create a host, and the fleet cap allows one?}
   created[Create one host and print why]
   none[no_suitable_host, with each skip reason]
   won{Lease compare-and-swap wins?}
+  held{Another caller holds a live lease?}
   use[Use that running host]
   resume[Resume that suspended host onto the current image]
   again[Read the list again]
@@ -401,13 +420,17 @@ flowchart TD
   running -->|one is free| won
   running -->|all leased| busy[host_busy. No create]
   running -->|none| suspended
-  suspended -->|one| won
-  suspended -->|none| createOk
+  suspended -->|one this caller may resume| won
+  suspended -->|none| cell
+  cell -->|yes| report
+  cell -->|no| createOk
   createOk -->|yes| created
   createOk -->|no| none
-  won -->|yes, running| use
-  won -->|yes, suspended| resume
-  won -->|lost| again
+  won -->|wins, running| use
+  won -->|wins, suspended| resume
+  won -->|conflict| held
+  held -->|no| won
+  held -->|yes| again
   again --> running
 ```
 
@@ -415,17 +438,24 @@ Order:
 
 1. A running suitable host. If several fit, prefer one that already carries
    the pool label, then the one with the newest `lastActivity`.
-2. A suspended eligible host, resumed onto the current image. Resume is the
+2. A suspended eligible host, resumed onto the current image, and only when
+   rule 8 in section 4 says this caller may resume it. Resume is the
    existing operating-mode change. The new pod is the current templates, on
    the same volume. If several fit, resume the one suspended longest ago,
-   and only one.
+   and only one. A caller of kind `coordinator` does not take this branch
+   for a pooled host.
 3. A new host, only as the fallback in section 6, with the reason printed.
-   The reason names the skip result for every existing host.
+   Before that create, every running unprotected Codex remote host in the
+   cell already counts, suitable or not. If one is there, the result names
+   it with action `report` and does not create a second host. The reason
+   names the skip result for every existing host.
 
 The result is one JSON object the caller prints: `host`, `action`
-(`use`, `resume` or `create`), `ready` (true or false), `reason`, and
-`skipped` as a list of `{name, reason}`. Reasons are the fixed codes in
-section 6. No pairing code, no prompt text, no transcript.
+(`use`, `resume`, `create` or `report`), `ready` (true or false), `reason`,
+and `skipped` as a list of `{name, reason}`. `report` names the running host
+that already fills the cell. The selector does not launch on it and does
+not create another. Reasons are the fixed codes in section 7. No pairing
+code, no prompt text, no transcript.
 
 **A caller that names a host gets that host.** `--host` does not enter this
 order. Today's thread start runs, including `host_not_running`,
@@ -437,16 +467,22 @@ automatic path. This feature itself never names a protected host.
 **Race.** Before `use` or `resume`, the selector writes one annotation,
 `dev-env.haynesops.com/codex-host-lease`, with the caller's identity, an
 expiry and a purpose word. The write is a compare-and-swap on the session's
-`resourceVersion`. The winner proceeds. A conflict means someone else wrote
-the session: the selector reads again and chooses the next host. It does not
-start a thread on a host whose lease it lost. The lease lasts at most 15
-minutes, which covers a resume and a thread start wait of 10 minutes. The
-caller clears it when the launch result is known. A dead caller leaves it
-until expiry. The lease serializes this tooling's own launches. It does not
-mean the phone is idle. The platform cannot see an in-progress phone turn
-without exec, and this design does not exec to decide. Two launches over
-time on one host are the reuse we want. Two launches at the same moment are
-the race the lease stops.
+`resourceVersion`. A status write bumps that version too, and a running
+host's heartbeat does it often. The operating-mode route already retries
+that kind of conflict (`internal/apiserver/lifecycle.go:34-38`,
+`internal/apiserver/lifecycle.go:142-143`). The lease does the same for one
+host. On a conflict the selector reads that same host again. It retries the
+lease while the annotation is absent, expired, or already this caller's. It
+moves to the next host only when another caller holds a lease that has not
+expired. A heartbeat is not that. It does not start a thread on a host
+whose lease another caller holds. The lease lasts at most 15 minutes, which
+covers a resume and a thread start wait of 10 minutes. The caller clears it
+when the launch result is known. A dead caller leaves it until expiry. The
+lease serializes this tooling's own launches. It does not mean the phone is
+idle. The platform cannot see an in-progress phone turn without exec, and
+this design does not exec to decide. Two launches over time on one host are
+the reuse we want. Two launches at the same moment are the race the lease
+stops.
 
 The selector does not write the lease on a protected host, a rescue-failed
 host, or a host it is not going to use. A read-only check writes nothing.
@@ -456,8 +492,16 @@ host, or a host it is not going to use. A read-only check writes nothing.
 string still create two hosts. The fallback takes one operator-owned
 ConfigMap, `dev-env-codex-host-pool` in `dev-env-system`, with one key per
 profile and repo. The compare-and-swap of that key holds the session name
-being created. The loser waits for that session and uses it. The ConfigMap
-holds names, not codes or prompts.
+being created and an expiry of at most 15 minutes, the same bound as the
+lease. The loser reads the named session. If that session exists and fits,
+the loser uses it and does not create another. If the name is absent and
+the claim has not expired, the loser waits and reads again, and it still
+does not create. If the claim has expired, or the named session exists and
+does not fit (it is Failed, it is being deleted, or its profile or repo is
+wrong), the loser clears that claim with its own compare-and-swap and runs
+selection again. A creator that dies, or whose create is refused, blocks
+that cell only until the expiry. The ConfigMap holds names and an expiry,
+not codes or prompts.
 
 ## 6. The pool
 
@@ -488,20 +532,28 @@ does not add.
   `spec.repo`. One running host in the cell is enough for the reuse that was
   missing on story 571. The historical pair of `dev-env` hosts is not
   evidence of two simultaneous suitable threads.
-- `maxRunning` defaults to 2 for the whole fleet of pooled hosts. Tonight's
-  two running hosts are two cells, and one of them is protected rather than
-  pooled. A fleet cap of 2 lets one more cell have a host later without a
-  host per repository. Seven catalog projects times a running host would be
-  a host per repo, which the thread evidence does not support.
+- `maxRunning` defaults to 2 for the whole fleet. It counts the same running
+  unprotected Codex remote hosts as the cell cap. Tonight one host counts:
+  `dev-env-1110-230548`. `haynes-ops-1109-115326` is protected, so it stays
+  outside the cap. A fleet cap of 2 leaves room for one more cell later
+  without a host per repository. Seven catalog projects times a running
+  host would be a host per repo, which the thread evidence does not support.
 - Both values are operator flags. Code does not bury a second copy. A change
   to either flag is a reviewed template or operator change, with the use
   from `agent-run fleet` at that time. This design does not ask Tom for a
   number.
 
-**What counts toward the cap.** A Running host that is suitable, or that
-carries the pool label `dev-env.haynesops.com/codex-host-pool` equal to its
-`profile/repo`. A protected host does not count. A leased host counts, so a
-second caller waits or gets `host_busy` instead of a new host.
+**What counts toward the cap.** Every Running Codex remote host in the cell
+that is not protected. Suitable or not, pool label or not. That includes
+`unpaired`, `login-required`, `offline`, `starting`, `errored` and outdated.
+A new host beside an unpaired one would ask Tom to pair again. The cell cap
+stops that. A protected host does not count. A leased host counts, so a
+second caller waits or gets `host_busy` instead of a new host. When the
+one host that fills the cell is not suitable, the result is action
+`report` with that host and its reason (`unpaired`, `image_outdated` or
+`remote_unavailable`). The selector does not launch on it. `at_capacity`
+is a resume or a create that would exceed `maxRunning`. A cell that
+already has its running host returns `use`, `host_busy` or `report`.
 
 **What retires a pooled host.** When a create or a resume would exceed a
 cap, it does not happen. The tooling does not suspend a running host to get
@@ -544,15 +596,18 @@ host, and a fallback it is allowed to create is a `full` host.
 | `agent-run --agent codex --interactive` | Calls select before create. A suitable or eligible host is printed and no host is created. Create remains the fallback |
 | `agent-run thread status` | None. Still the named host, exec route only |
 | `agent-run pair` | None. Still a person's command. The selector never runs it |
-| `agent-run suspend`, `resume`, `reap` of a named session | None. A person or a caller who names a session keeps today's reach. The new resume is only the select route's `resume` action, and only for an eligible host |
+| `agent-run suspend`, `resume`, `reap` of a named session | None. A person or a caller who names a session keeps today's reach. The select route returns `resume` only for an eligible host and only to a caller today's resume route would accept. Caller kind `coordinator` does not get `resume` for a pooled host it did not start |
 | `agent-run coordinator start` and front door `coordinator_start` | None. A coordinator is a task session on profile `dev`. It does not need a paired host. A thread it starts later uses `thread start`, and then this selector |
 | Headless `agent-run --project ... -p` for Codex | None. Not a host |
 | Front door tools | No new tool. The front door's allow list stays |
 
 A session that may not create a host still may not. Select's `create`
 action checks the same rule as create does today
-(`internal/apiserver/validate.go:156-163`). A `dev` session, which is what
-a coordinator is, can use or resume a fitting host and cannot create one.
+(`internal/apiserver/validate.go:156-163`). A session on profile `dev` can
+use a fitting running host, and it can resume a fitting suspended host,
+because that caller is not kind `coordinator`. It cannot create one. The
+API's coordinator identity is the other caller: it can use a fitting
+running host, and it cannot resume a pooled host and cannot create one.
 A workbench fallback host still cannot name a profile, so it is `full`. It
 does not become a stand-in for the `dev` host.
 
@@ -569,8 +624,10 @@ filled where a host was considered:
 | `login_required` | The keeper projection is not current now | No resume, no create |
 | `no_suitable_host` | Nothing suitable or eligible, and this caller may not create | No create |
 | `caller_cannot_create` | A create would have been the fallback, and this caller may not create a Codex host | No create |
-| `at_capacity` | A create or a resume would exceed `maxRunningPerCell` or `maxRunning` | No create, no resume |
+| `at_capacity` | A create or a resume would exceed `maxRunning` | No create, no resume |
 | `host_busy` | Every suitable running host holds a live lease | No create |
+| `caller_cannot_resume` | Caller kind is `coordinator` and the host is not its child | Not resumed. The resume route is not called |
+| `remote_unavailable` | Running, and the remote state is `login-required`, `offline`, `starting` or `errored` | Not restarted. It still counts toward the cell cap, and the result may `report` it |
 | `protected` | Recorded on a skipped host | That host is not leased, resumed or launched |
 | `rescue_blocked` | Rescue `Failed`, or removal blocked | Not resumed |
 | `pairing_unknown` | Suspended, and the last state is not `pair-code-issued` | Not resumed |
@@ -581,8 +638,9 @@ filled where a host was considered:
 | `folder_trust_pending` | Selected, and story 695 has not recorded trust for the repo | Still selected. Not a reason to create |
 | `resume_unconfirmed` | The resume was accepted and the host was not Running before the wait | No second resume and no create |
 
-A lost lease is not an error by itself. The selector tries the next host.
-`host_busy` is the result when none is left.
+A conflict with no live foreign lease is not an error. The selector retries
+that same host. A lease another caller still holds moves selection to the
+next host. `host_busy` is the result when no suitable running host is left.
 
 ## 8. Safety
 
@@ -590,8 +648,9 @@ This feature never resumes, restarts, re-images or types into a protected
 host, or into a running host it did not select. It never deletes a volume.
 It adds no credential, grant, profile, network or exposure. It does not
 pair, and a pairing code never goes through a transcript, a file, a log
-line, a result JSON or the tracker. The lease and the pool ConfigMap store
-a session name, a caller identity, an expiry and a purpose word.
+line, a result JSON or the tracker. The lease stores a caller identity, an
+expiry and a purpose word. The pool ConfigMap stores a session name and an
+expiry.
 
 The read-only check writes nothing. The live check in section 9, slice 3,
 is that form, against `dev-env-1110-230548`, and it starts no thread.
@@ -615,7 +674,8 @@ facts and a projection fact and returns the section 5 object. Named tests:
 `TestPairingUnknownIsNotResumed`, `TestUnpushedWorkIsNotResumed`,
 `TestOutdatedRunningIsNotUsed`, `TestAtCapacityDoesNotCreate`,
 `TestNamedHostIsNotReplaced`, `TestFolderTrustPendingStillSelects`,
-`TestLostLeaseReselects`.
+`TestLostLeaseReselects`, `TestHeartbeatConflictRetriesSameHost`,
+`TestCoordinatorKindDoesNotResume`, `TestUnsuitableRunningHostBlocksCreate`.
 
 **Slice 2. The route and the two commands.** `POST /v1/codex-hosts/select`
 and `?check=true`. `thread start` without `--host`, and
@@ -624,8 +684,11 @@ a workbench create that omits profile, and a named `--host` that never calls
 select. `TestCheckWritesNothing` asserts no patch client is called.
 
 **Slice 3. Resume.** The route's `resume` action uses the existing resume
-route, then waits. Fakes: a suspended eligible host is resumed once; a
-protected host is not; a second caller that loses the lease does not resume.
+route, then waits. It never calls that route for caller kind `coordinator`
+on a host that is not its child. Fakes: a suspended eligible host is
+resumed once for a session caller; a protected host is not; a second caller
+that loses the lease does not resume; a coordinator-kind caller gets no
+resume patch.
 Live validation, and the only one: from a workbench session,
 `agent-run codex-host select --profile dev --repo dev-env --check` prints
 `dev-env-1110-230548`, action `use`, ready false, reason
@@ -634,10 +697,12 @@ matching section 3. Before and after, `kubectl get agentsession
 dev-env-1110-230548 -o jsonpath='{.metadata.resourceVersion}'` is unchanged.
 No new host. No thread start. No resume.
 
-**Slice 4. Fallback create.** The ConfigMap claim, the caps, and
+**Slice 4. Fallback create.** The ConfigMap claim, its expiry, the caps, and
 `at_capacity`. Fakes only. No live create. The test
 `TestTwoCallersCreateOneHost` loses the second create and returns the first
-name.
+name. `TestExpiredCreateClaimIsRetried` clears a claim past its expiry when
+the named session never appears, then runs selection again, and it does not
+create while the claim is still inside its expiry.
 
 **Slice 5. Ready.** When story 695 records trust for `~/repos/<repo>`, the
 result's `ready` becomes true for that repo. Until that record exists, the
@@ -661,9 +726,10 @@ trust write of its own.
 
 3. **Should an ordinary session become able to create a Codex host, so a
    `dev` coordinator can do the fallback itself?** Recommendation: no. That
-   widens who may start a daemon on the shared login. A `dev` caller reuses
-   or resumes a fitting host and otherwise gets `caller_cannot_create`.
-   The workbench and Tom's caller keep the create right they have.
+   widens who may start a daemon on the shared login. A session on profile
+   `dev` uses or resumes a fitting host and otherwise gets
+   `caller_cannot_create`. The API coordinator identity uses a running host
+   only. The workbench and Tom's caller keep the create right they have.
 
 4. **Should the selector exec a read-only thread list to see a phone turn in
    progress?** Recommendation: no. Busy is the lease. An exec into a live
