@@ -33,6 +33,10 @@ func (s *Server) registerParentNotes(mux *http.ServeMux) {
 	mux.Handle(apiv1.ParentNotesPath+"/{message}/wait", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{
 		http.MethodGet: s.waitParentNote,
 	}}))
+	// Literal path, so /wait is not read as a note named wait.
+	mux.Handle(apiv1.ParentNotesWaitAnyPath, s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{
+		http.MethodGet: s.waitAnyParentNote,
+	}}))
 }
 
 func (s *Server) parentNotesAvailable() error {
@@ -188,9 +192,23 @@ func (s *Server) parentNoteSenderFence(ctx context.Context, c *caller, original 
 	return nil
 }
 
+// parentNoteReadFence re-proves the caller before a private answer. It refuses
+// when the live pod and session no longer match, when a named coordinator's
+// admission label fails namedCoordinatorAdmitted on the session just read
+// live, or when resolveCaller would refuse. resolveCaller and the identity
+// comparisons stay. The bearer is not authenticated again.
 func (s *Server) parentNoteReadFence(ctx context.Context, c *caller, original coord.SessionIdentity) error {
 	fresh, err := s.inboxRecipientCaller(ctx, c)
 	if err != nil || sessionIdentity(fresh) != original {
+		return inboxHidden()
+	}
+	// fresh is the session inboxRecipientCaller just read through the live
+	// reader. The cache resolveCaller uses below can still show the old label.
+	if s.namedCoordinatorIdentity(c.identity) && !namedCoordinatorAdmitted(fresh, c.identity.ServiceAccount) {
+		return inboxHidden()
+	}
+	again, err := s.resolveCaller(ctx, c.identity)
+	if err != nil || again == nil || again.kind != kindSession || again.session == nil || sessionIdentity(again.session) != original {
 		return inboxHidden()
 	}
 	return nil

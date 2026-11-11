@@ -264,6 +264,7 @@ func TestParentNotesDefaultOffAndIndependentQuestionFlag(t *testing.T) {
 	for _, rt := range []struct{ method, path string }{
 		{http.MethodPost, apiv1.ParentNotesPath}, {http.MethodGet, apiv1.ParentNotesPath}, {http.MethodGet, apiv1.ParentNotesPath + "/name"},
 		{http.MethodPost, apiv1.ParentNotesPath + "/name/answer"}, {http.MethodGet, apiv1.ParentNotesPath + "/name/wait?seconds=1"},
+		{http.MethodGet, apiv1.ParentNotesWaitAnyPath + "?seconds=1"},
 	} {
 		for _, token := range []string{child, parent} {
 			w := f.do(rt.method, rt.path, token, struct{}{})

@@ -125,6 +125,10 @@ type Server struct {
 	// Tests may expire the held wait without sleeping. Connection deadlines
 	// still use holdResponse's wall clock.
 	parentWaitTimeout func(context.Context, time.Duration) (context.Context, context.CancelFunc)
+	// parentRefusalWait blocks until the fixed refusal time. Nil uses the wall
+	// clock. Tests release it without sleeping; the time is still the one the
+	// handler chose when the wait started.
+	parentRefusalWait func(ctx context.Context, at time.Time)
 	// PortalQuestionAudit serves GET /v1/portal/question-audit, a metadata-only
 	// page of question and reply records for one explicit project and one live
 	// session name and UID. Plain messages on the store page are omitted.
