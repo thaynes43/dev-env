@@ -2131,7 +2131,7 @@ session `dev-env-1111-170449`.
 |---|---|---|
 | N1, HIGH: the charge has no order with create and admission | "the charge comes first": a dispatch id before anything is created, the charge committed, then the Session carrying the id; "a repeated key maps to the same id"; "a charge with no Session is a spent slot, never a free session"; "the leader admits only a Session whose id is committed"; the last slot decided by the ledger's write, "the loser gets 429"; proofs in #738 and #740. Q-21: the id hashes the caller, the key and the key's newest earlier Session's UID; on AlreadyExists "the same id as its own (200) and any other id as a name clash (next suffix)". The ageing rule, as corrected in the Q-21 answer: "no Session is admitted without a committed charge for its id"; a filing's entry stays until `chargedAt` or Abandoned; a caller-create entry with no Session is dropped at an hour old; "A double charge across two hours is acceptable; an uncharged admitted Session is not". The answer to `op734-fix2-q-5`: a filing's entry "follows the same rule as a caller's: it leaves once it is an hour old and its child exists and is admitted or closed, or once the filing is Abandoned. Admission reads one place, the ledger", replacing "until its remediation records the charge"; and "an entry counts toward createsPerHour only during its own hour", after which an unsettled one stays only as the record admission reads | 5.9 (the ledger, admission, the charge-order proof); 6.4 (`dispatchID`, the order of checks); 6.6 (the filing's steps 2 and 3) |
 | N2, MEDIUM: the deadline does not fence the spawn | "add the fence, do not claim it": run-agent checks the start deadline again immediately before it spawns the provider, new code in #741; until then an operator-declared close with a first launch possibly in flight releases "only when the recorded pod is confirmed gone"; the paused-launch proof | 5.9 (the latch, the release rule, the proof); 6.7 (the latch) |
-| N3, MEDIUM: the resume exception | "removed. ... Resuming a summoned session is refused, by anyone"; record it as not built: "a replacement-pod continuation of a closed actuator needs its own design". Q-22, with the answer to note `op734-fix2-q-4`: "Write it as the code is": no summoned session's conversation is read once it stops; for tasks that is ADR-020's rule, for remote sessions today's lifecycle; the retained-data difference goes in V-15 and under T-2; two follow-ups named, not designed. The ruling's sentence that a remote session's history "is read with `agent-run history`" was wrong, and this worker's premise that tasks are archived was wrong too (11) | 5.9 (no resume; what Tom keeps); 6.7; 7.1 V-15; 8.1 T-2; 9.1 |
+| N3, MEDIUM: the resume exception | "removed. ... Resuming a summoned session is refused, by anyone"; record it as not built: "a replacement-pod continuation of a closed actuator needs its own design". Q-22, with the answer to note `op734-fix2-q-4`: "Write it as the code is": no summoned session's conversation is read once it stops; the answer then added "for tasks that is ADR-020's rule, for remote sessions today's lifecycle", an attribution 10.4's R2 corrects (ADR-020 rules the deletion and the absence of an archive after it; the missing reader before that is a product limitation); the retained-data difference goes in V-15 and under T-2; two follow-ups named, not designed. The ruling's sentence that a remote session's history "is read with `agent-run history`" was wrong, and this worker's premise that tasks are archived was wrong too (11) | 5.9 (no resume; what Tom keeps); 6.7; 7.1 V-15; 8.1 T-2; 9.1 |
 | N4, MEDIUM: clean-up can erase a pending filing | ADR-020's retention unchanged, no hand-off store; a filing still Pending 24 hours after its remediation closed "is closed as `Abandoned`, with a second page"; "never dropped in silence" | 6.6 (Abandoned, the proof); 6.8 (`escalation-abandoned`) |
 | N5, MEDIUM: the DNS list cannot resolve the operator | v1's names minus Pushover "plus the exact operator service name"; #735 proves it resolves and an authenticated call works | 6.1 |
 | N6, MEDIUM: no bound for urgent sessions | a per-caller bound on Queued urgent sessions, field and number named; past it 429, "recorded in the ledger with a count, and one `overflow` page per caller per hour"; the callers' contracts. Q-23 corrects the ruling's wording: "the caller-side page path exists for remediation only"; #748 states `escalate.sh`'s premise and builds nothing in the callers | 5.9 (`queuedUrgent`, default 4, range 1 to 16); 6.4; 6.6 (Blocked); 6.7; 6.8 (`overflow`); 6.12; 6.13 |
@@ -2161,6 +2161,15 @@ separate change.
 | R1, MEDIUM: an urgent create refused by the hourly limit was only logged | accepted: it is counted in the ledger and paged as `overflow`, like one refused past `queuedUrgent`; no charge and no Session for the refusal; every refusal is counted once, whichever limit is checked first | 5.9 (the queues, the ledger, the proof); 6.4; 6.7 (proof); 6.8 (the event and the overflow paragraph); 6.12; 6.13; 11 item 7; ADR-025 decision 9 |
 | R2, LOW: "no reader once a task stops" was attributed to Tom too broadly | accepted: ADR-020 records the 7-day deletion and no conversation archive after it; that no supported reader exists before then is a limitation of the product today, not a ruling of his | 5.9; 7.1 (V-15); 8.1 (T-2); ADR-025 decision 7 |
 | R3, LOW: ADR-025 decision 11 still gave the DNS list without the operator's name | accepted: the ADR names `dev-env-operator.dev-env-system.svc.cluster.local`, as 6.1 does | ADR-025 decision 11 |
+
+The independent check of those edits (PR comment 6803756636, on `8376fdbe`)
+found R1's contract and R3 met and no HIGH or MEDIUM, and two LOW leftovers in
+unchanged text: the summary in section 11 that left `queuedUrgent` out of the
+refusals, and two sentences (10.3's N3 row and section 11) that still tied
+"nothing reads a stopped task's conversation" to ADR-020. The coordinator
+applied the wording the check prescribed, in the commit after `8376fdbe`. That
+last commit had no further second-family review; it changes those three
+passages and this paragraph only.
 
 ## 11. What changes in DESIGN-001, and what was found wrong
 
@@ -2216,8 +2225,10 @@ Found wrong or stale while reading (for the coordinator):
 - **Item 738's Tested line** refuses "a create past concurrent". DESIGN-001
   3.7 queues an escalation and pages after 15 minutes, and item 741 says a
   create is "never refused only because the lane is busy". This design
-  queues past a pool once #741 is on and refuses only past `createsPerHour`,
-  or past the queue bound for an upgrade or curation create (5.9, 6.4,
+  queues past a pool once #741 is on and refuses only past `createsPerHour`
+  or past a queue bound: `queued` for an upgrade or curation create,
+  `queuedUrgent` for a remediation or an escalation, whose refusal is
+  counted and paged as `overflow` with no charge and no Session (5.9, 6.4,
   6.7).
 - **Item 734's reuse list** says only the decision path writes
   `status.outcome`. True, and that path runs only for Codex tasks with a
@@ -2336,5 +2347,7 @@ advisory review:
   with `agent-run history`"; that archive holds private Sessions only, and
   remote sessions are never marked (Q-22). **This worker's question** behind
   Q-22 said summoned tasks are archived before their HOME is deleted; under
-  ADR-020 they keep only a bundle, so nothing reads a task's conversation
-  either. Both are corrected in 5.9.
+  ADR-020 a task's transcripts stay in its HOME until the HOME is deleted,
+  7 days after it ends, and no archive is kept after that. That no supported
+  reader exists before the deletion is today's product limitation, not
+  something ADR-020 rules (10.4, R2). Both are corrected in 5.9.
