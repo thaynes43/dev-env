@@ -12,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/shelf"
 )
@@ -20,7 +19,7 @@ import (
 // release is the only caller of deleteRecord. TestOnlyRetentionDeletesCoordinationRecords
 // reads this function: releaseRechecked and archiveVerified run before deleteRecord.
 func (r *Runnable) release(ctx context.Context, c candidate) stepStatus {
-	rec, st := r.releaseRechecked(ctx, c.item.Result.Summary, c.item.Result.Reply)
+	rec, st := r.releaseRechecked(ctx, c.item.Result.Summary)
 	if st.done || st.refused || st.stop != "" {
 		return st
 	}
@@ -29,23 +28,6 @@ func (r *Runnable) release(ctx context.Context, c candidate) stepStatus {
 	}
 	if err := r.archiveVerified(ctx, rec); err != nil {
 		return r.refuseArchive(rec.summary.Kind, err)
-	}
-	// A note released on its reply is archived with that reply. Both are
-	// verified before either delete. A failure of either leaves both live.
-	var replyRec *liveRecord
-	if c.item.Result.Reply != nil {
-		prepared, replyStatus := r.prepareBoundReply(ctx, rec, *c.item.Result.Reply)
-		if replyStatus.stop != "" || replyStatus.refused {
-			return replyStatus
-		}
-		if prepared == nil {
-			r.countRefused(rec.summary.Kind, reasonUnknown)
-			return stepStatus{refused: true}
-		}
-		if err := r.archiveVerified(ctx, *prepared); err != nil {
-			return r.refuseArchive(prepared.summary.Kind, err)
-		}
-		replyRec = prepared
 	}
 	var ackRec *liveRecord
 	if c.ack != nil {
@@ -64,15 +46,6 @@ func (r *Runnable) release(ctx context.Context, c candidate) stepStatus {
 	if !messageDelete.deleted {
 		return messageDelete
 	}
-	if replyRec != nil {
-		replyDelete := r.finishDelete(ctx, replyRec.summary, r.deleteRecord(ctx, replyRec.summary))
-		if !replyDelete.deleted {
-			return replyDelete
-		}
-		if ackRec == nil {
-			return replyDelete
-		}
-	}
 	if ackRec == nil {
 		return messageDelete
 	}
@@ -83,7 +56,7 @@ func (r *Runnable) release(ctx context.Context, c candidate) stepStatus {
 	return stepStatus{deleted: true}
 }
 
-func (r *Runnable) releaseRechecked(ctx context.Context, s Summary, reply *Summary) (liveRecord, stepStatus) {
+func (r *Runnable) releaseRechecked(ctx context.Context, s Summary) (liveRecord, stepStatus) {
 	rec, err := r.readRecord(ctx, s)
 	if apierrors.IsNotFound(err) {
 		return liveRecord{}, stepStatus{done: true}
@@ -106,21 +79,7 @@ func (r *Runnable) releaseRechecked(ctx context.Context, s Summary, reply *Summa
 		}
 		cfg.Archive = map[MessageRef]ArchiveEvidence{rec.summary.Message: evidence}
 	}
-	// nil replies: this recheck has one record, so decide reads a stored reply itself.
-	decision, _, observations, replyAck, proven := decide(ctx, cfg, rec.summary, map[string]memoSession{}, nil)
-	if reply != nil {
-		// The pass released this note on one reply. A malformed, replaced or
-		// removed reply does not fall through to another release reason.
-		if decision != Released || !replyAck || proven == nil || proven.UID != reply.UID || proven.Name != reply.Name {
-			r.countRefused(s.Kind, reasonUnknown)
-			return liveRecord{}, stepStatus{refused: true}
-		}
-	} else if replyAck {
-		// A reply arrived after the pass. Keep the note until a pass carries
-		// that reply, so the note is not deleted without archiving it.
-		r.countRefused(s.Kind, reasonUnknown)
-		return liveRecord{}, stepStatus{refused: true}
-	}
+	decision, _, observations := decide(ctx, cfg, rec.summary, map[string]memoSession{})
 	rec.observations = observations
 	switch decision {
 	case Released:
@@ -146,46 +105,6 @@ func (r *Runnable) releaseRechecked(ctx context.Context, s Summary, reply *Summa
 		r.countRefused(rec.summary.Kind, reasonUnknown)
 		return liveRecord{}, stepStatus{refused: true}
 	}
-}
-
-// prepareBoundReply archives the exact reply the pass named. It does not delete.
-// The caller verifies the bytes and deletes only after that succeeds.
-func (r *Runnable) prepareBoundReply(ctx context.Context, note liveRecord, want Summary) (*liveRecord, stepStatus) {
-	rec, err := r.readRecord(ctx, want)
-	if apierrors.IsNotFound(err) || (err == nil && (rec.summary.UID != want.UID || rec.summary.Name != want.Name)) {
-		r.countRefused(note.summary.Kind, reasonUnknown)
-		return nil, stepStatus{refused: true}
-	}
-	if err != nil {
-		return nil, r.refuseArchive(want.Kind, err)
-	}
-	var msg coord.InboxMessage
-	if err := r.Reader.Get(ctx, client.ObjectKey{Namespace: want.Namespace, Name: want.Name}, &msg); err != nil {
-		if apierrors.IsNotFound(err) {
-			r.countRefused(note.summary.Kind, reasonUnknown)
-			return nil, stepStatus{refused: true}
-		}
-		return nil, r.refuseArchive(want.Kind, err)
-	}
-	if !validReply(note.summary, &msg, r.Namespace) || string(msg.UID) != want.UID {
-		r.countRefused(note.summary.Kind, reasonUnknown)
-		return nil, stepStatus{refused: true}
-	}
-	cfg := EvalConfig{Reader: r.Reader, OperatorNamespace: r.Namespace, ReconciledNamespaces: r.Reconciled}
-	decision, _, observations, _, _ := decide(ctx, cfg, rec.summary, map[string]memoSession{}, &replyIndex{byNote: map[noteKey][]Summary{}})
-	if decision != Released {
-		r.countRefused(note.summary.Kind, reasonUnknown)
-		return nil, stepStatus{refused: true}
-	}
-	ev, err := absentEvent(rec.summary.Resource, r.now(), observations)
-	if err != nil {
-		r.countRefused(rec.summary.Kind, reasonUnknown)
-		return nil, stepStatus{refused: true}
-	}
-	if err := r.putArchive(ctx, rec, &ev); err != nil {
-		return nil, r.refuseArchive(rec.summary.Kind, err)
-	}
-	return &rec, stepStatus{}
 }
 
 func (r *Runnable) messageEvidence(ctx context.Context, m MessageRef) (ArchiveEvidence, error) {

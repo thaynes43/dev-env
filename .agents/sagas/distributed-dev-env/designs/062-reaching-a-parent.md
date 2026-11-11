@@ -609,7 +609,7 @@ For these notes, ADR-023 adds two release facts and leaves the 30 days:
   forever on a session object that will never exist.
 - A stored reply counts as the ack of the note. The note follows the
   existing grace once the child session is gone. The 2026-11-11 note below
-  narrows that sentence: while a session parent exists the note is kept.
+  records that this fact is not implemented in this slice.
   The reply is an InboxMessage under the same rule.
   A caller sender counts as absent, so a Meatball reply follows that grace
   once the child is gone. A session sender keeps the reply while that parent
@@ -617,18 +617,18 @@ For these notes, ADR-023 adds two release facts and leaves the 30 days:
   ADR-004 still keeps a message while its sender session exists.
 
 Noted 2026-11-11, coordinator session dev-env-fable-coordinator-1109, on the
-independent review of the retention slice. The reply-as-ack sentence above is
-narrower than it reads. A note to a session parent is kept while that parent
-session exists, answered or not, the same as any inbox message whose recipient
-session exists. A stored reply counts as the ack only when the recipient is
-the caller account, or the parent session is itself gone. The parent read and
-list routes cannot yet read a released note back from the archive, so
-releasing one while the parent session exists would hide it.
+independent reviews of the retention slice. The reply-as-ack fact above is
+not implemented in this slice. It moves to story 697 with the archive read
+fallback. The parent read and list routes cannot yet read a released note
+back from the archive, so this slice does not release a note on the strength
+of its reply.
 [OpenProject #697](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/697),
 "Reaching a parent: read a released note from its archive, then release
-answered notes to a live parent", adds that read. This narrowing can be lifted
-after that story. ADR-023 is unchanged: keeping a record longer than its
-release fact allows is not a contradiction of it.
+answered notes to a live parent", adds that read. This slice implements only
+the first fact: a caller endpoint counts as absent. A labelled note to a
+session parent is also kept while that parent session exists, including when
+a read ack is already stored. ADR-023 is unchanged: keeping a record longer
+than its release fact allows is not a contradiction of it.
 
 A note to a session parent who never answers, while that parent session
 still exists, stays, as any unacked inbox message to a live recipient stays.

@@ -54,8 +54,6 @@ type Summary struct {
 	MessageKind string
 	// ParentNote is the parent-route label.
 	ParentNote bool
-	// ReplyToName and ReplyToUID name the note a reply answers.
-	ReplyToName, ReplyToUID string
 }
 
 // ListConfig supplies the uncached API reader and the explicitly enabled kinds.
@@ -212,9 +210,6 @@ func summarize(r resource, namespace string, u *unstructured.Unstructured) Summa
 				s.Sender = SessionRef{}
 			}
 			s.CallerRecipient = v.Spec.CallerRecipient != nil && v.Spec.Recipient == (coord.SessionIdentity{})
-			if v.Spec.InReplyTo != nil {
-				s.ReplyToName, s.ReplyToUID = v.Spec.InReplyTo.Name, v.Spec.InReplyTo.UID
-			}
 			s.Valid = validMeta(s, namespace) && inbox.ValidMessage(v.Spec) && u.GetName() == inbox.MessageNameFor(v.Spec)
 		}
 	case InboxReadAck:
