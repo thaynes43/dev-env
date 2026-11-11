@@ -123,9 +123,21 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	}
 	patch := client.MergeFrom(base)
 	// An outcome acquired by another writer after this read must not be replaced
-	// or cleared by a stale decision heartbeat. Ordinary heartbeat fields keep
-	// their existing merge behavior when no decision outcome is being changed.
-	if !apiequality.Semantic.DeepEqual(base.Status.Outcome, sess.Status.Outcome) {
+	// or cleared by a stale decision heartbeat. A stored pod UID that is not
+	// this caller's is the same kind of stale read: the merge patch would
+	// leave the other pod's later fields in place and stamp this caller's UID
+	// on them. An empty stored UID takes no lock. Until the CRD has the field
+	// it reads back empty, and locking then would conflict every heartbeat
+	// with the controller. Ordinary fields keep their merge behavior otherwise.
+	callerPod := ""
+	if c.pod != nil {
+		callerPod = string(c.pod.UID)
+	}
+	storedPod := ""
+	if base.Status.Agent != nil {
+		storedPod = base.Status.Agent.PodUID
+	}
+	if !apiequality.Semantic.DeepEqual(base.Status.Outcome, sess.Status.Outcome) || (storedPod != "" && storedPod != callerPod) {
 		patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
 	}
 	if err := s.Client.Status().Patch(ctx, &sess, patch); err != nil {

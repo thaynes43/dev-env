@@ -1510,6 +1510,62 @@ func (f *fixture) callHeartbeat(name string, pod *corev1.Pod, body string) {
 	}
 }
 
+// A heartbeat from the present pod must not stamp its UID onto fields the
+// previous pod wrote after this read. The status patch conflicts, and the
+// stored report stays the previous pod's.
+func TestPresentPodHeartbeatConflictsWithThePreviousPodsLaterWrite(t *testing.T) {
+	f := newCodexFixture(t)
+	f.addCodexHost("paired", codexHostOpt{agentd: codexAgentdLine("2.102.0")})
+	var previous corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &previous); err != nil {
+		t.Fatal(err)
+	}
+	f.replaceCodexPod("paired", f.now)
+	var present corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &present); err != nil {
+		t.Fatal(err)
+	}
+	if present.UID == previous.UID {
+		t.Fatal("the replacement kept the previous uid")
+	}
+	const lateState = "late-from-previous"
+	conflicted := false
+	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			fresh := f.session("paired")
+			fresh.Status.Agent.Agentd = codexAgentdLine("2.103.0")
+			fresh.Status.Agent.PodUID = string(previous.UID)
+			fresh.Status.RemoteControl.State = lateState
+			if err := f.c.Status().Update(ctx, fresh); err != nil {
+				return err
+			}
+			err := c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			conflicted = apierrors.IsConflict(err)
+			return err
+		},
+	})
+	raw, err := json.Marshal(codexReportStatus("paired"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, protocol.HeartbeatPath("paired"), strings.NewReader(string(raw)))
+	req.SetPathValue("name", "paired")
+	req.Header.Set("Content-Type", "application/json")
+	code, _, herr := f.srv.heartbeat(context.Background(), httptest.NewRecorder(), req, &caller{
+		kind: kindSession, session: f.session("paired"), pod: &present,
+	})
+	stored := f.session("paired")
+	agent := stored.Status.Agent
+	if !conflicted || herr == nil || code == http.StatusNoContent {
+		t.Fatalf("present heartbeat applied over the previous pod's later write: conflicted %v code %d err %v agent %+v remote %+v",
+			conflicted, code, herr, agent, stored.Status.RemoteControl)
+	}
+	if agent == nil || agent.PodUID != string(previous.UID) || agent.Agentd != codexAgentdLine("2.103.0") ||
+		stored.Status.RemoteControl == nil || stored.Status.RemoteControl.State != lateState {
+		t.Fatalf("stored report is not the previous pod's later write: agent %+v remote %+v", agent, stored.Status.RemoteControl)
+	}
+}
+
 // A heartbeat authenticated as the previous pod can be stored after the
 // replacement exists. It carries that pod's UID, so selection does not use
 // the host, and it writes no lease. A heartbeat from the present pod does.

@@ -397,10 +397,15 @@ authenticated caller, never from the request body, and it stamps
 `lastHeartbeat` with the operator's clock (`agentStatus` takes `s.now()`).
 A caller with no pod leaves `podUID` empty. A heartbeat from the previous
 pod that is stored late carries the previous pod's UID and so does not
-count. Until the cluster's CRD has the field the API server drops it and
-no running host counts as reported. A container restart inside the same
-pod keeps the pod UID, so the previous container's report counts for at
-most the staleness bound. The image is the same, so the version is right,
+count. When a UID is already stored and it is not this caller's, the
+status patch carries the resource version of that read. A status write
+that landed after the read is refused, so the other pod's later fields
+are not left under this caller's UID. An empty stored UID takes no such
+lock: it does not bind a report, and until the CRD has the field the UID
+reads back empty on every heartbeat. Until the cluster's CRD has the field
+the API server drops it and no running host counts as reported. A
+container restart inside the same pod keeps the pod UID, so the previous
+container's report counts for at most the staleness bound. The image is the same, so the version is right,
 and the remote state can be that old. The route still accepts a heartbeat
 from the session's own pod, including one that is deleting, and it does
 not change who may post one. Still not defended: a process inside the host
