@@ -26,7 +26,10 @@ import (
 // `agent-run pair` uses. It creates the thread only through the packaged
 // scripts/codex-clean-session.py (the native `codex --remote` TUI, the
 // phone-visible `vscode` source), never `codex exec`, `codex queue` or
-// `thread/start`, and passes no sandbox or approval flag. Everything else is
+// `thread/start`, and passes no sandbox or approval flag. Before that client
+// starts, thread start writes folder trust for the one platform repository
+// through the host daemon's config/value/write (DESIGN-057 section 12).
+// thread status does not. Everything else is
 // read-only observation over the peer-verified control socket. It never pairs,
 // logs in, resumes, forks or retries a launch.
 
@@ -83,6 +86,7 @@ type codexThreadDeps struct {
 	list    func(ctx context.Context, s Settings, pid int, cwd string, all bool) ([]codexThreadSummary, error)
 	turn    func(ctx context.Context, s Settings, pid int, threadID string) (codexTurnObservation, error)
 	launch  func(context.Context, codexWrapperCall) ([]byte, error)
+	trust   func(context.Context, Settings, int, string) error
 	python  func() (string, error)
 	wrapper func() (string, error)
 	now     func() time.Time
@@ -103,6 +107,7 @@ func realCodexThreadDeps() codexThreadDeps {
 		list:   listCodexThreads,
 		turn:   readCodexFirstTurn,
 		launch: runCodexThreadWrapper,
+		trust:  writeCodexProjectTrust,
 		python: func() (string, error) { return exec.LookPath("python3") },
 		wrapper: func() (string, error) {
 			info, err := os.Stat(CodexThreadWrapper)
@@ -173,7 +178,7 @@ func observeCodexThread(ctx context.Context, s Settings, sess protocol.Session, 
 // interpreter or poll clock: only the host reads and the read-only observers.
 // A later change that reached for one on this path would stop, not launch.
 func (d codexThreadDeps) observeOnly() codexThreadDeps {
-	d.launch, d.python, d.wrapper, d.sleep = nil, nil, nil, nil
+	d.launch, d.python, d.wrapper, d.sleep, d.trust = nil, nil, nil, nil, nil
 	return d
 }
 
@@ -295,6 +300,18 @@ func (a *codexThreadAdapter) Preflight(ctx context.Context, r *threadlaunch.Reco
 	if err := a.resolveCwd(r); err != nil {
 		return err
 	}
+	// Trust the platform clone before the client starts, so Codex does not
+	// stop on its folder prompt. A status pass does not call Preflight.
+	if err := ensureCodexRepoTrust(ctx, a.s, a.pid, a.cwd, a.d.trust); err != nil {
+		code := "codex_config_invalid"
+		switch {
+		case errors.Is(err, errFolderNotQualified):
+			code = "folder_not_qualified"
+		case errors.Is(err, errCodexTrustUnconfirmed):
+			code = "codex_trust_unconfirmed"
+		}
+		return threadlaunch.Halt(apiv1.ThreadFailed, code, apiv1.ThreadPhaseHostReady)
+	}
 	before, err := a.d.list(ctx, a.s, a.pid, a.cwd, true)
 	if err != nil {
 		return threadlaunch.Halt(apiv1.ThreadFailed, "observation_unavailable", apiv1.ThreadPhaseHostReady)
@@ -343,8 +360,14 @@ func (a *codexThreadAdapter) resolveCwd(r *threadlaunch.Recorder) error {
 		return threadlaunch.Halt(apiv1.ThreadFailed, "repo_unavailable", apiv1.ThreadPhaseHostReady)
 	}
 	a.cwd = a.s.ClonePath(repo)
-	if info, err := os.Stat(a.cwd); err != nil || !info.IsDir() || noSymlinkComponents(a.cwd) != nil {
+	info, err := os.Stat(a.cwd)
+	if err != nil || !info.IsDir() {
 		return threadlaunch.Halt(apiv1.ThreadFailed, "repo_unavailable", apiv1.ThreadPhaseHostReady)
+	}
+	// A symlink, including one that leaves ~/repos, is not a folder this launch
+	// may trust. A missing directory stays repo_unavailable.
+	if noSymlinkComponents(a.cwd) != nil {
+		return threadlaunch.Halt(apiv1.ThreadFailed, "folder_not_qualified", apiv1.ThreadPhaseHostReady)
 	}
 	r.Result.Cwd = a.cwd
 	return nil

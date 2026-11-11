@@ -5,13 +5,16 @@
   2026-11-09; live acceptance pending.
   Section 11 (`thread status`, the observe-only recheck, OP492) in source,
   2026-11-10; exec route only; live acceptance pending.
+  Section 12 (folder trust for a platform repository, OP695) in source,
+  2026-11-10; live acceptance pending.
 - **Tracking:** [Story OP489](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/489),
   under [Epic #91](https://work.haynesnetwork.com/work_packages/91). It supersedes
   [OP272](https://work.haynesnetwork.com/work_packages/272)'s runtime activation
   (journal 5990) and meets [OP481](https://work.haynesnetwork.com/work_packages/481)
   acceptance item 2 for this route. [Story OP495](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/495)
   adds section 10. [Story OP492](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/492)
-  adds section 11.
+  adds section 11. [Story OP695](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/695)
+  adds section 12.
 - **Origin:** Tom, 2026-11-09: "Yes build it but meatball has been starting these
   so check to see what's built already don't duplicate what they have but you need
   that ability too. You need to be able to start Grok too and other providers as we
@@ -154,8 +157,9 @@ one adapter and one registry row.
 
 The observer uses a fresh connection per poll, makes only read calls, and allows
 1 MiB frames. If no thread appears, the message says the client may be waiting
-at a folder-trust or other prompt in the named tmux session: an authorized
-person decides, and nobody sends keys while a native question is pending.
+at a prompt in the named tmux session. A repository the platform bootstrapped
+under `~/repos` is trusted before launch (section 12). Any other prompt is left
+for an authorized person, and nobody sends keys while a native question is pending.
 
 ## 6. Claude and Cursor/Grok adapters
 
@@ -455,3 +459,114 @@ fake can: how Codex 0.160.1 answers `thread/turns/list` and
 restarted. A launch reads them within its wait; a status pass may run much
 later. If they fail there, status reports `observation_unavailable`; that is
 truthful but not useful, and it would need a design change, not a retry.
+
+## 12. Folder trust for a platform repository (2026-11-10, OP695)
+
+**Ruling.** Tom, 2026-11-10, by phone prompt in coordinator session
+dev-env-fable-coordinator-1109: "You cannot be asking this it needs to happen
+automatically. It's going to happen every time make it part of our tooling to
+accept and trust".
+
+For a folder the platform itself bootstrapped, that replaces "an authorized
+person decides folder trust". The tooling accepts the folder before the client
+starts. Any other prompt (authentication, a later question) is unchanged:
+nobody sends keys, and an authorized person still decides those.
+
+**Where Codex 0.160.1 stores it.** `codex --help` says configuration is
+`$CODEX_HOME/config.toml` (the help text names `~/.codex/config.toml`; on a
+host that directory is `Settings.CodexHome`). There is no `codex trust`
+subcommand, and `--dangerously-bypass-hook-trust` is hook trust, not this
+prompt. The 0.160.1 binary's onboarding writer persists
+`projects."<absolute path>".trust_level`. `ProjectConfig` has that one field,
+and `TrustLevel` is `trusted` or `untrusted`. The entry Codex itself writes is:
+
+```toml
+[projects."/home/dev/repos/<repo>"]
+trust_level = "trusted"
+```
+
+**How it is written.** Not by editing the file. A second writer on
+`config.toml`, and a hand-written TOML scan, can drop a concurrent save or
+another folder's entry. agentd calls the host daemon's own writer,
+`config/value/write`, on the peer-checked control socket, the same way it
+reads threads. `codex app-server generate-json-schema` for codex-cli 0.160.1
+(no `--experimental`, and no client, daemon or model) includes that method.
+`ConfigValueWriteParams` requires `keyPath` (string), `value` (any JSON) and
+`mergeStrategy` (`replace` or `upsert`). `expectedVersion` is an optional
+string or null, with no description in the schema. `filePath` is optional and
+defaults to the user's `config.toml` when omitted. agentd omits it, so the
+write uses that file. `Config` still has `additionalProperties: true` and
+does not name `projects`. `keyPath` is not limited to the named fields. The same version's key-path
+parser keeps a double-quoted segment whole, so
+`projects."<absolute path>".trust_level` is one path key, and the value
+`"trusted"` is a valid JSON string.
+
+The schema does not describe `expectedVersion`. Codex 0.160.1's config writer
+does: when the field is set, it is compared to the active user layer's version.
+That version is `sha256:` and 64 lowercase hex digits, the hash of the layer,
+and `config/read` with `includeLayers` true returns it on the layer whose
+`name.type` is `user`. A mismatch is refused before the edit is applied:
+JSON-RPC code -32600, message `Configuration was modified since last read.
+Fetch latest version and retry.`, and `data.config_write_error_code`
+`configVersionConflict`. Null or omitted skips the check, so agentd always
+sends the version it just read when a user layer exists. The response is
+`ConfigWriteResponse`: `filePath`, `status` (`ok` or `okOverridden`) and
+`version`. `ok` is the write we asked for. `okOverridden` means a higher layer
+replaced the effective value.
+
+**Who writes it.** agentd, inside `thread start`'s preflight, after the same
+host, pairing and cwd checks the launch already makes, and before the wrapper
+runs. It reads the user-layer version, then writes with `mergeStrategy`
+`replace` and that `expectedVersion`. A version conflict is read again and
+retried at most three times, then refused. A folder that is already
+`trusted` is left untouched. The wrapper does not write trust: it cannot see
+which folders the platform bootstrapped, its contract is to start one client
+and never approve a folder, and a status pass must not run it. The write is
+one configuration call, never keystrokes into a client and never a lock file
+beside `config.toml`. `thread status` does not write trust.
+
+**What a trusted folder enables.** The repository's own `.codex/config.toml`,
+rules and project MCP servers load without a question. That is the decision
+Tom ruled on. It does not add a host right the thread did not already have,
+and it is not blanket approval of project hooks.
+
+**What qualifies.** The repository's name is in this session's own project
+bootstrap record on the host: `~/.agentd/boot.json` field `projectBootstrap`,
+the value `CollectStatus` copies into the status it reports. The repository
+entry's state is `Ready`, which means the platform cloned it and the refresh
+left it usable. The boot-record check answers whether this platform's
+bootstrap reported the repository Ready; it is not proof against a thread
+running as the host's own user, which can write Codex trust itself.
+`Preserved` is not that state, and neither is a name the
+record does not list. The catalog's own state is not the test: a `Partial`
+catalog can still hold a `Ready` repository. The path checks stay. The path
+is the launch's repository (`--repo`, otherwise the host's), absolute and
+clean, exactly `~/repos/<repo>`, no component is a symlink, `EvalSymlinks`
+returns that same path, and the directory is a Git repository whose toplevel
+is that path. Its `.git` is a real directory there, not a file and not a
+symlink. Nothing a handoff names. Nothing outside `~/repos`. Nothing above
+that repository root, and not a subdirectory of it.
+
+**When it does not.** A `--repo` that is not in that record as `Ready`, or a
+record that cannot be read, stops the launch at once with
+`folder_not_qualified` (outcome `failed`, exit 1), before any config is read,
+before the wrapper and before the wait. Two codes cover the write, and each
+message is true. `codex_config_invalid` means nothing changed: the private
+host refused before any call, the daemon's read failed, or the write was
+rejected, including a version conflict after three retries. The message
+starts `Nothing changed:`. `codex_trust_unconfirmed` means trust may have been
+written: the write was sent and the answer was not a rejection (the connection
+died after the request, the result was not `ok`). The message starts
+`Trust may have been written:`. Neither code starts a client.
+
+**Out of this section.** Claude's and Cursor's prompts. Pairing. Any other
+Codex setting. A haynes-ops change. Turning a flag on.
+
+The host config composer (`codexHostConfig`) already keeps a trusted project it
+did not itself add, on a public host. A private Codex host
+(`AGENTD_ENABLE_PRIVATE_CODEX_HOST`) refuses a trusted root outside the catalog
+project roots it owns (`~/codex/<project>`). That check runs on a host status
+read, not only when the config is rewritten. This launch therefore does not
+write on a private host: it stops with `codex_config_invalid` before any
+config call, and nothing changed. The private composer is not changed.
+
