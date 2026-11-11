@@ -33,10 +33,42 @@ func peerMessageSelector(match map[string]string) (client.MatchingLabelsSelector
 }
 
 func validParentNoteSpec(spec coord.InboxMessageSpec) bool {
-	return ValidSession(spec.Sender) && ValidSession(spec.Recipient) &&
-		spec.CallerSender == nil && spec.CallerRecipient == nil &&
-		((spec.InReplyTo == nil && (spec.Kind == KindQuestion || spec.Kind == KindResult || spec.Kind == KindBlocker)) ||
-			(spec.Kind == KindReply && spec.InReplyTo != nil && ValidRef(*spec.InReplyTo)))
+	sessionPair := ValidSession(spec.Sender) && ValidSession(spec.Recipient) && spec.CallerSender == nil && spec.CallerRecipient == nil
+	sessionNote := sessionPair && spec.InReplyTo == nil && (spec.Kind == KindQuestion || spec.Kind == KindResult || spec.Kind == KindBlocker)
+	sessionReply := sessionPair && spec.Kind == KindReply && spec.InReplyTo != nil && ValidRef(*spec.InReplyTo)
+	childToCaller := ValidSession(spec.Sender) && spec.Recipient == (coord.SessionIdentity{}) && spec.CallerSender == nil && validCaller(spec.CallerRecipient) &&
+		spec.InReplyTo == nil && (spec.Kind == KindQuestion || spec.Kind == KindResult || spec.Kind == KindBlocker)
+	callerWrite := spec.Sender == (coord.SessionIdentity{}) && ValidSession(spec.Recipient) && validCaller(spec.CallerSender) && spec.CallerRecipient == nil
+	callerReply := callerWrite && spec.Kind == KindReply && spec.InReplyTo != nil && ValidRef(*spec.InReplyTo)
+	callerPlain := callerWrite && spec.Kind == "" && spec.InReplyTo == nil
+	return sessionNote || sessionReply || childToCaller || callerReply || callerPlain
+}
+
+func callerEqual(a, b *coord.InboxCaller) bool {
+	return a != nil && b != nil && a.ServiceAccount == b.ServiceAccount && a.PolicyUID == b.PolicyUID
+}
+
+// noteParty is exactly one end of a parent note: a session, or the policy caller.
+type noteParty struct {
+	session coord.SessionIdentity
+	caller  *coord.InboxCaller
+}
+
+func (p noteParty) ready() bool {
+	if p.caller != nil {
+		return validCaller(p.caller) && p.session == (coord.SessionIdentity{})
+	}
+	return ValidSession(p.session)
+}
+
+func (p noteParty) sees(m *coord.InboxMessage) bool {
+	if m == nil {
+		return false
+	}
+	if p.caller != nil {
+		return callerEqual(m.Spec.CallerSender, p.caller) || callerEqual(m.Spec.CallerRecipient, p.caller)
+	}
+	return m.Spec.Sender == p.session || m.Spec.Recipient == p.session
 }
 
 func parentNoteLabels(spec coord.InboxMessageSpec) map[string]string {
@@ -58,7 +90,15 @@ func (s KubeStore) CreateParentNote(ctx context.Context, spec coord.InboxMessage
 // GetParentNote checks the stored parties before validating the record, so
 // an unrelated caller cannot distinguish an invalid hidden note from absence.
 func (s KubeStore) GetParentNote(ctx context.Context, name string, party coord.SessionIdentity) (*coord.InboxMessage, error) {
-	if !s.ready() || !ValidSession(party) {
+	return s.getParentNote(ctx, name, noteParty{session: party})
+}
+
+func (s KubeStore) GetCallerParentNote(ctx context.Context, name string, caller *coord.InboxCaller) (*coord.InboxMessage, error) {
+	return s.getParentNote(ctx, name, noteParty{caller: caller})
+}
+
+func (s KubeStore) getParentNote(ctx context.Context, name string, party noteParty) (*coord.InboxMessage, error) {
+	if !s.ready() || !party.ready() {
 		return nil, ErrUnavailable
 	}
 	if !ValidMessageName(name) {
@@ -71,7 +111,7 @@ func (s KubeStore) GetParentNote(ctx context.Context, name string, party coord.S
 		}
 		return nil, ErrUnavailable
 	}
-	if !IsParentNote(&m) || (m.Spec.Sender != party && m.Spec.Recipient != party) {
+	if !IsParentNote(&m) || !party.sees(&m) {
 		return nil, ErrNotFound
 	}
 	if !s.validMessage(&m) {
@@ -89,9 +129,14 @@ func parentReplyLabels(q *coord.InboxMessage) map[string]string {
 
 // ValidParentReply checks the full stored binding, not just the watch labels.
 func (s KubeStore) ValidParentReply(q, reply *coord.InboxMessage) bool {
-	return IsParentNote(reply) && s.validMessage(reply) && reply.Spec.Kind == KindReply &&
-		reply.Spec.Project == q.Spec.Project && reply.Spec.InReplyTo != nil && *reply.Spec.InReplyTo == Ref(q) &&
-		reply.Spec.Sender == q.Spec.Recipient && reply.Spec.Recipient == q.Spec.Sender
+	if q == nil || !IsParentNote(reply) || !s.validMessage(reply) || reply.Spec.Kind != KindReply ||
+		reply.Spec.Project != q.Spec.Project || reply.Spec.InReplyTo == nil || *reply.Spec.InReplyTo != Ref(q) {
+		return false
+	}
+	if q.Spec.CallerRecipient != nil && q.Spec.Recipient == (coord.SessionIdentity{}) {
+		return reply.Spec.Sender == (coord.SessionIdentity{}) && reply.Spec.Recipient == q.Spec.Sender && callerEqual(reply.Spec.CallerSender, q.Spec.CallerRecipient)
+	}
+	return reply.Spec.CallerSender == nil && reply.Spec.Sender == q.Spec.Recipient && reply.Spec.Recipient == q.Spec.Sender
 }
 
 // ParentReplies returns a bounded snapshot and its resourceVersion. Starting
@@ -137,26 +182,37 @@ func ValidParentNoteCursor(cursor string) bool {
 }
 
 func (s KubeStore) ListParentNotes(ctx context.Context, party coord.SessionIdentity, sent bool, limit int64, cursor string) ([]coord.InboxMessage, string, error) {
-	if !s.ready() || !ValidSession(party) || limit < 1 || limit > 100 || !ValidParentNoteCursor(cursor) {
+	return s.listParentNotes(ctx, noteParty{session: party}, sent, limit, cursor)
+}
+
+func (s KubeStore) ListCallerParentNotes(ctx context.Context, caller *coord.InboxCaller, sent bool, limit int64, cursor string) ([]coord.InboxMessage, string, error) {
+	return s.listParentNotes(ctx, noteParty{caller: caller}, sent, limit, cursor)
+}
+
+func (s KubeStore) listParentNotes(ctx context.Context, party noteParty, sent bool, limit int64, cursor string) ([]coord.InboxMessage, string, error) {
+	if !s.ready() || !party.ready() || limit < 1 || limit > 100 || !ValidParentNoteCursor(cursor) {
 		return nil, "", ErrUnavailable
 	}
 	phase, continuation := 0, ""
 	if cursor != "" {
 		phase, continuation = int(cursor[0]-'0'), cursor[2:]
 	}
-	partyKey, partyValue := RecipientLabel, recipientLabel(party)
-	if sent {
-		partyKey, partyValue = taskclaim.SourceLabel, taskclaim.SessionLabel(party)
+	partyKey, partyValue := RecipientLabel, recipientLabel(party.session)
+	if party.caller != nil {
+		partyValue = callerLabel(party.caller)
 	}
+	if sent {
+		partyKey = taskclaim.SourceLabel
+		if party.caller == nil {
+			partyValue = taskclaim.SessionLabel(party.session)
+		}
+	}
+	callerSent := party.caller != nil && sent
 	out := make([]coord.InboxMessage, 0, limit)
 	// At most two list calls, each bounded by the remaining page size. There
 	// is no cross-project scan and no read of another party's notes.
 	for ; phase < 2; phase++ {
-		kinds := []string{KindQuestion, KindBlocker}
-		if phase == 1 {
-			kinds = []string{KindResult}
-		}
-		kindRequirement, err := labels.NewRequirement(KindLabel, selection.In, kinds)
+		kindRequirement, err := parentNotePhaseRequirement(phase, callerSent)
 		if err != nil {
 			return nil, "", ErrUnavailable
 		}
@@ -169,15 +225,17 @@ func (s KubeStore) ListParentNotes(ctx context.Context, party coord.SessionIdent
 		}
 		for i := range page.Items {
 			m := &page.Items[i]
-			matchesParty := m.Spec.Recipient == party
+			matchesParty := m.Spec.Recipient == party.session
+			if party.caller != nil {
+				matchesParty = callerEqual(m.Spec.CallerRecipient, party.caller)
+			}
 			if sent {
-				matchesParty = m.Spec.Sender == party
+				matchesParty = m.Spec.Sender == party.session
+				if party.caller != nil {
+					matchesParty = callerEqual(m.Spec.CallerSender, party.caller)
+				}
 			}
-			matchesPhase := m.Spec.Kind == KindQuestion || m.Spec.Kind == KindBlocker
-			if phase == 1 {
-				matchesPhase = m.Spec.Kind == KindResult
-			}
-			if !IsParentNote(m) || !s.validMessage(m) || !matchesParty || !matchesPhase {
+			if !IsParentNote(m) || !s.validMessage(m) || !matchesParty || !parentNotePhaseMatches(m.Spec, phase, callerSent) {
 				return nil, "", ErrUnavailable
 			}
 			out = append(out, *m)
@@ -195,4 +253,30 @@ func (s KubeStore) ListParentNotes(ctx context.Context, party coord.SessionIdent
 		continuation = ""
 	}
 	return out, "", nil
+}
+
+func parentNotePhaseRequirement(phase int, callerSent bool) (*labels.Requirement, error) {
+	if callerSent && phase == 1 {
+		return labels.NewRequirement(KindLabel, selection.DoesNotExist, nil)
+	}
+	kinds := []string{KindQuestion, KindBlocker}
+	if callerSent && phase == 0 {
+		kinds = []string{KindReply}
+	} else if phase == 1 {
+		kinds = []string{KindResult}
+	}
+	return labels.NewRequirement(KindLabel, selection.In, kinds)
+}
+
+func parentNotePhaseMatches(spec coord.InboxMessageSpec, phase int, callerSent bool) bool {
+	if callerSent {
+		if phase == 0 {
+			return spec.Kind == KindReply
+		}
+		return spec.Kind == ""
+	}
+	if phase == 0 {
+		return spec.Kind == KindQuestion || spec.Kind == KindBlocker
+	}
+	return spec.Kind == KindResult
 }

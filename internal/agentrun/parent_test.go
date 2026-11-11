@@ -19,6 +19,42 @@ func parentTestMetadata() apiv1.InboxMetadata {
 	}
 }
 
+func TestParentMetadataAcceptsOnePartyForm(t *testing.T) {
+	session := parentTestMetadata()
+	if !validParentNoteMetadata(session) {
+		t.Fatal("session parties refused")
+	}
+	toCaller := session
+	toCaller.Recipient = apiv1.TaskClaimOwner{}
+	toCaller.CallerRecipient = &apiv1.InboxCaller{ServiceAccount: parentCallerAccount, PolicyUID: "policy-uid"}
+	if !validParentNoteMetadata(toCaller) {
+		t.Fatal("a note to the Meatball account was refused")
+	}
+	fromCaller := session
+	fromCaller.Kind = ""
+	fromCaller.Sender = apiv1.TaskClaimOwner{}
+	fromCaller.CallerSender = &apiv1.InboxCaller{ServiceAccount: parentCallerAccount, PolicyUID: "policy-uid"}
+	if !validParentPlainMetadata(fromCaller) {
+		t.Fatal("a plain message from the Meatball account was refused")
+	}
+	reply := fromCaller
+	reply.Kind = apiv1.InboxKindReply
+	reply.InReplyTo = &apiv1.InboxMessageRef{Name: session.Name, UID: session.UID}
+	if !validParentReplyMetadata(reply, session.Name) {
+		t.Fatal("a reply from the Meatball account was refused")
+	}
+	both := session
+	both.CallerSender = &apiv1.InboxCaller{ServiceAccount: parentCallerAccount, PolicyUID: "policy-uid"}
+	if validParentMetadata(both) {
+		t.Fatal("both sender forms accepted")
+	}
+	wrong := toCaller
+	wrong.CallerRecipient = &apiv1.InboxCaller{ServiceAccount: "other/account", PolicyUID: "policy-uid"}
+	if validParentMetadata(wrong) {
+		t.Fatal("another ServiceAccount accepted")
+	}
+}
+
 func TestParentTellIntentAndUncertainty(t *testing.T) {
 	h := newHarness(t)
 	var intents []apiv1.TellParentRequest

@@ -63,21 +63,30 @@ type InboxThread struct {
 	ObservedAt        time.Time        `json:"observedAt"`
 }
 
+// InboxCaller is the Meatball account when it is a parent-note party.
+// A session party leaves the matching pointer empty.
+type InboxCaller struct {
+	ServiceAccount string `json:"serviceAccount"`
+	PolicyUID      string `json:"policyUID"`
+}
+
 type InboxMetadata struct {
-	Name           string              `json:"name"`
-	UID            string              `json:"uid"`
-	Project        string              `json:"project"`
-	Key            string              `json:"key"`
-	Sender         TaskClaimOwner      `json:"sender"`
-	Recipient      TaskClaimOwner      `json:"recipient"`
-	Actor          TaskClaimActor      `json:"actor"`
-	Provenance     TaskClaimProvenance `json:"provenance"`
-	Repository     string              `json:"repository"`
-	Provider       string              `json:"provider"`
-	RequestedModel string              `json:"requestedModel"`
-	CreatedAt      time.Time           `json:"createdAt"`
-	Archived       bool                `json:"archived,omitempty"`
-	ArchivedAt     *time.Time          `json:"archivedAt,omitempty"`
+	Name            string              `json:"name"`
+	UID             string              `json:"uid"`
+	Project         string              `json:"project"`
+	Key             string              `json:"key"`
+	Sender          TaskClaimOwner      `json:"sender"`
+	Recipient       TaskClaimOwner      `json:"recipient"`
+	CallerSender    *InboxCaller        `json:"callerSender,omitempty"`
+	CallerRecipient *InboxCaller        `json:"callerRecipient,omitempty"`
+	Actor           TaskClaimActor      `json:"actor"`
+	Provenance      TaskClaimProvenance `json:"provenance"`
+	Repository      string              `json:"repository"`
+	Provider        string              `json:"provider"`
+	RequestedModel  string              `json:"requestedModel"`
+	CreatedAt       time.Time           `json:"createdAt"`
+	Archived        bool                `json:"archived,omitempty"`
+	ArchivedAt      *time.Time          `json:"archivedAt,omitempty"`
 	// Set only in the thread view and on ask/reply receipts.
 	Kind      string           `json:"kind,omitempty"`
 	InReplyTo *InboxMessageRef `json:"inReplyTo,omitempty"`

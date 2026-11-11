@@ -14,6 +14,9 @@ func (s *Server) answerParentNote(ctx context.Context, _ http.ResponseWriter, r 
 	if err := s.parentNotesAvailable(); err != nil {
 		return 0, nil, err
 	}
+	if c.kind == kindPolicy {
+		return s.answerPolicyParentNote(ctx, r, c)
+	}
 	sender, err := s.inboxSenderCaller(ctx, c)
 	if err != nil {
 		return 0, nil, err
@@ -50,7 +53,7 @@ func (s *Server) answerParentNote(ctx context.Context, _ http.ResponseWriter, r 
 		if err := s.parentNoteSenderFence(ctx, c, sender); err != nil {
 			return 0, nil, err
 		}
-		return inboxPublishResult(existing, false, spec)
+		return s.finishParentNote(existing, false, spec)
 	}
 	if !errors.Is(err, inbox.ErrNotFound) {
 		return 0, nil, inboxUnknown()
@@ -87,7 +90,7 @@ func (s *Server) answerParentNote(ctx context.Context, _ http.ResponseWriter, r 
 	if !inbox.IsParentNote(m) {
 		return 0, nil, parentNoteKeyConflict()
 	}
-	return inboxPublishResult(m, created, spec)
+	return s.finishParentNote(m, created, spec)
 }
 
 // Direction and kind are checked before a reply is read or created. Replies,

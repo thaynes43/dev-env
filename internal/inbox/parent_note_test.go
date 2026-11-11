@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/taskclaim"
 )
 
 func TestParentNotesPriorityAcrossPagesAndProjects(t *testing.T) {
@@ -187,5 +188,148 @@ func TestParentNotesBoundedQueries(t *testing.T) {
 		if _, _, err := s.ListParentNotes(context.Background(), bad, false, 1, ""); !errors.Is(err, ErrUnavailable) {
 			t.Fatal("invalid party accepted")
 		}
+	}
+}
+
+func TestCreateCountsAndConfirmsBothSenderForms(t *testing.T) {
+	session := validMessage()
+	if !sameSenderForm(session, session) {
+		t.Fatal("a session sender did not confirm by its session identity")
+	}
+	otherSession := session
+	otherSession.Sender.UID = "other-uid"
+	if sameSenderForm(otherSession, session) {
+		t.Fatal("a session sender confirmed a different session")
+	}
+	caller := session
+	caller.Sender = coord.SessionIdentity{}
+	caller.CallerSender = meatballCaller()
+	caller.Actor = policyActor(session.Actor)
+	if !sameSenderForm(caller, caller) {
+		t.Fatal("a caller sender did not confirm by message name")
+	}
+	dropped := caller
+	dropped.CallerSender = nil
+	if sameSenderForm(dropped, caller) || MessageNameFor(dropped) == MessageNameFor(caller) {
+		t.Fatal("a caller sender confirmed an empty session sender")
+	}
+	otherCaller := *meatballCaller()
+	otherCaller.PolicyUID = "other-policy-uid"
+	otherPolicy := caller
+	otherPolicy.CallerSender = &otherCaller
+	if sameSenderForm(otherPolicy, caller) {
+		t.Fatal("a caller sender confirmed a different policy")
+	}
+
+	ctx := context.Background()
+	s := storeFixture(t)
+	s.Limits.PerSession = 1
+	if _, created, err := s.Create(ctx, session); err != nil || !created {
+		t.Fatal("session create", err)
+	}
+	if _, created, err := s.Create(ctx, session); err != nil || created {
+		t.Fatal("session retry charged another room or failed", created, err)
+	}
+	second := session
+	second.Key = "session-2"
+	if _, _, err := s.Create(ctx, second); !errors.Is(err, ErrLimit) {
+		t.Fatal("session room did not stay on the session sender", err)
+	}
+	first := caller
+	first.Key = "caller-1"
+	stored, created, err := s.Create(ctx, first)
+	if err != nil || !created {
+		t.Fatal("caller create", err)
+	}
+	if stored.Labels[taskclaim.SourceLabel] != callerLabel(first.CallerSender) || stored.Labels[taskclaim.SourceLabel] == taskclaim.SessionLabel(coord.SessionIdentity{}) {
+		t.Fatal("caller sender used an empty session room", stored.Labels[taskclaim.SourceLabel])
+	}
+	if _, created, err := s.Create(ctx, first); err != nil || created {
+		t.Fatal("caller retry charged another room or failed", created, err)
+	}
+	again := first
+	again.Key = "caller-2"
+	if _, _, err := s.Create(ctx, again); !errors.Is(err, ErrLimit) {
+		t.Fatal("caller room did not use the caller's own key", err)
+	}
+	foreign := first
+	foreign.Key = "caller-other"
+	foreign.CallerSender = &otherCaller
+	foreign.Actor.ServiceAccount = coord.MeatballServiceAccount
+	if _, created, err := s.Create(ctx, foreign); err != nil || !created {
+		t.Fatal("a different policy shared the first caller's room", err)
+	}
+
+	capped := storeFixture(t)
+	capped.Limits.PerProject = 1
+	if _, _, err := capped.Create(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := capped.Create(ctx, first); !errors.Is(err, ErrLimit) {
+		t.Fatal("project room stopped counting a caller sender", err)
+	}
+}
+
+func TestCallerParentNotesListReplyAndParties(t *testing.T) {
+	ctx := context.Background()
+	s := storeFixture(t)
+	noteSpec := validMessage()
+	noteSpec.Kind = KindQuestion
+	noteSpec.Recipient = coord.SessionIdentity{}
+	noteSpec.CallerRecipient = meatballCaller()
+	note, created, err := s.CreateParentNote(ctx, noteSpec)
+	if err != nil || !created || !IsParentNote(note) {
+		t.Fatal("child note to the caller", err)
+	}
+	plain := validMessage()
+	plain.Key = "plain-1"
+	plain.Kind = ""
+	plain.Sender = coord.SessionIdentity{}
+	plain.CallerSender = meatballCaller()
+	plain.Actor = policyActor(plain.Actor)
+	plainMessage, _, err := s.CreateParentNote(ctx, plain)
+	if err != nil {
+		t.Fatal("plain message", err)
+	}
+	ref := Ref(note)
+	replySpec := plain
+	replySpec.Key = "reply-1"
+	replySpec.Kind = KindReply
+	replySpec.Recipient = noteSpec.Sender
+	replySpec.InReplyTo = &ref
+	reply, _, err := s.CreateParentNote(ctx, replySpec)
+	if err != nil || !s.ValidParentReply(note, reply) {
+		t.Fatal("caller reply", err)
+	}
+	replies, _, err := s.ParentReplies(ctx, note)
+	if err != nil || len(replies) != 1 || replies[0].Name != reply.Name {
+		t.Fatal("stored caller reply was not the note's answer", err)
+	}
+	inboxItems, _, err := s.ListCallerParentNotes(ctx, meatballCaller(), false, 100, "")
+	if err != nil || len(inboxItems) != 1 || inboxItems[0].Name != note.Name {
+		t.Fatal("caller inbox", err, len(inboxItems))
+	}
+	sent, _, err := s.ListCallerParentNotes(ctx, meatballCaller(), true, 100, "")
+	if err != nil || len(sent) != 2 || sent[0].Spec.Kind != KindReply || sent[1].Spec.Kind != "" {
+		t.Fatal("caller sent box", err)
+	}
+	if _, err := s.GetCallerParentNote(ctx, note.Name, meatballCaller()); err != nil {
+		t.Fatal("caller read", err)
+	}
+	other := meatballCaller()
+	other.PolicyUID = "other-policy-uid"
+	if _, err := s.GetCallerParentNote(ctx, note.Name, other); !errors.Is(err, ErrNotFound) {
+		t.Fatal("another policy saw the note", err)
+	}
+	if _, err := s.GetParentNote(ctx, note.Name, noteSpec.Sender); err != nil {
+		t.Fatal("child read", err)
+	}
+	if _, err := s.GetParentNote(ctx, plainMessage.Name, plain.Recipient); err != nil {
+		t.Fatal("child read of a plain message", err)
+	}
+	stranger := noteSpec.Sender
+	stranger.UID = "stranger-uid"
+	if _, err := s.GetParentNote(ctx, note.Name, stranger); !errors.Is(err, ErrNotFound) {
+		t.Fatal("a session matched an empty recipient", err)
 	}
 }

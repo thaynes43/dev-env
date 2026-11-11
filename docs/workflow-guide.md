@@ -1000,8 +1000,24 @@ The operator flag `--enable-parent-notes` defaults to false and requires
 nothing; an operator older than this feature answers 404. The wait needs the
 verb watch on inboxmessages for the operator's Role, granted in haynes-ops
 before the flag is on. This source does not enable the flag in the cluster.
-The parent finds notes by listing them. Meatball callers and wake notices
-are later slices; no note text is pasted into a session.
+The parent finds notes by listing them. A child whose recorded parent is the
+Meatball account `dev-env-system/dev-env-meatball` uses the same `parent tell`.
+The server stores `callerRecipient` from the live CallerPolicy. Any other
+ServiceAccount parent is refused with 422. The child reads an answer with
+`parent read` or `parent wait`. `parent wait` stays the note's sender. The
+Meatball account does not wait.
+
+Meatball reads and answers through the front door, and only for sessions it
+started. The tools are `parent_waiting`, `parent_read`, `parent_answer` and
+`parent_send`. `session_status` adds `parent notes waiting: N` for that
+session. The count and the waiting list have no note text. A session Meatball
+did not start is hidden. A plain message from Meatball is read by name with
+`parent read`. The child's list stays questions and blockers, then results, so
+that plain message is not in the list. The caller's sent list is replies, then
+plain messages. A session that names a child on tell is refused with 400 and
+stores nothing. A session parent sending to its own child is not this slice.
+The wake notice for a session parent is a later slice. No note
+text is pasted into a session.
 
 The record is an InboxMessage marked by the server-set label
 `coordination.dev-env.haynesops.com/parent-note=true`. The label distinguishes

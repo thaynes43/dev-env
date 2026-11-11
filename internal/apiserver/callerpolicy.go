@@ -126,11 +126,12 @@ func (s *Server) preparePolicySession(ctx context.Context, req apiv1.CreateSessi
 }
 
 func policyCallerDenied() error {
-	return forbidden("CallerPolicy permits creating tasks and reading or reaping only sessions this caller started")
+	return forbidden("CallerPolicy permits creating tasks, reading or reaping only sessions this caller started, and parent notes for those sessions")
 }
 
 // policyCallerAllowed is a positive route and method list. New routes grant
 // nothing implicitly. In particular the log route execs and is not a read here.
+// Parent-note wait stays off this list: only the note's sender session waits.
 func policyCallerAllowed(c *caller, r *http.Request) error {
 	if c.kind != kindPolicy {
 		return nil
@@ -141,7 +142,29 @@ func policyCallerAllowed(c *caller, r *http.Request) error {
 	if name := r.PathValue("name"); name != "" && r.URL.Path == apiv1.SessionPath(name) && (r.Method == http.MethodGet || r.Method == http.MethodDelete) {
 		return nil
 	}
+	if policyParentNoteRoute(r) {
+		return nil
+	}
 	return policyCallerDenied()
+}
+
+func policyParentNoteRoute(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodPost:
+	default:
+		return false
+	}
+	message := r.PathValue("message")
+	switch r.URL.Path {
+	case apiv1.ParentNotesPath:
+		return true
+	case apiv1.ParentNotesPath + "/" + message:
+		return message != "" && r.Method == http.MethodGet
+	case apiv1.ParentNotesPath + "/" + message + "/answer":
+		return message != "" && r.Method == http.MethodPost
+	default:
+		return false
+	}
 }
 
 func policyOwns(c *caller, sess *v1alpha1.AgentSession) bool {

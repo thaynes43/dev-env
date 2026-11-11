@@ -216,10 +216,10 @@ func TestFrontDoorTools(t *testing.T) {
 		}
 		result := doc["result"].(map[string]any)
 		tools := result["tools"].([]any)
-		if len(tools) != 11 {
+		if len(tools) != 15 {
 			t.Fatalf("got %d tools", len(tools))
 		}
-		want := []string{"backlog_find", "backlog_show", "backlog_create", "backlog_groom", "backlog_order", "backlog_close", "coordinator_start", "session_status", "session_stop", "waiting_on_tom", "standing_authority"}
+		want := []string{"backlog_find", "backlog_show", "backlog_create", "backlog_groom", "backlog_order", "backlog_close", "coordinator_start", "session_status", "session_stop", "waiting_on_tom", "standing_authority", "parent_waiting", "parent_read", "parent_answer", "parent_send"}
 		// readOnlyHint, destructiveHint, idempotentHint, openWorldHint.
 		wantAnn := map[string][4]bool{
 			"backlog_find":       {true, false, true, false},
@@ -233,6 +233,10 @@ func TestFrontDoorTools(t *testing.T) {
 			"session_stop":       {false, true, true, false},
 			"waiting_on_tom":     {true, false, true, false},
 			"standing_authority": {true, false, true, false},
+			"parent_waiting":     {true, false, true, false},
+			"parent_read":        {true, false, true, false},
+			"parent_answer":      {false, false, true, false},
+			"parent_send":        {false, false, true, false},
 		}
 		keys := []string{"readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"}
 		total := 0
@@ -259,8 +263,8 @@ func TestFrontDoorTools(t *testing.T) {
 				}
 			}
 		}
-		if total != descriptionWordBound || descriptionWordBound != 150 {
-			t.Fatalf("tools/list descriptions have %d words; bound %d; measured contract 150", total, descriptionWordBound)
+		if total != descriptionWordBound || descriptionWordBound != 214 {
+			t.Fatalf("tools/list descriptions have %d words; bound %d; measured contract 214", total, descriptionWordBound)
 		}
 	})
 

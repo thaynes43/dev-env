@@ -37,8 +37,8 @@ file stops it before it listens. A missing authority file does not.
 
 ## Tools
 
-`tools/list` returns these eleven tools. Each description is at most 30 words,
-and the descriptions together are 150 words.
+`tools/list` returns these fifteen tools. Each description is at most 30 words,
+and the descriptions together are 214 words.
 
 | Tool | What it does |
 |---|---|
@@ -53,6 +53,10 @@ and the descriptions together are 150 words.
 | `session_stop` | Stop one session this caller started. A refusal from the operator is reported plainly. |
 | `waiting_on_tom` | List open Asks for this caller's sessions and items that need Tom's approval or answer. |
 | `standing_authority` | Read the owner's standing instruction installed for this caller. |
+| `parent_waiting` | List notes waiting from sessions this caller started. Names, kinds and ages only. |
+| `parent_read` | Read one note to this caller, including its text, from a session this caller started. |
+| `parent_answer` | Store one answer to a note from a session this caller started. A second different answer is refused. |
+| `parent_send` | Send one message to a session this caller started. The session reads it with its next parent read. |
 
 A tool failure is a result with `isError` true and a plain-text message. An
 unknown tool name is a JSON-RPC error.
@@ -178,6 +182,24 @@ takes a session `name`. The operator allows either only for a session this
 caller started. A 401, 403 or 404 comes back as `refused:` and the operator's
 message. The text includes the session name, state, the OpenProject item link
 when the item is known, and a retained outcome when the session has one.
+After a successful read it adds one line, `parent notes waiting: N`, counting
+notes from that session that are waiting for this caller. The line is a count.
+If that list cannot be read, the line is `parent notes waiting: unavailable`
+and the session read still returns. Neither line carries note text.
+
+### Parent notes
+
+`parent_waiting`, `parent_read`, `parent_answer` and `parent_send` are the
+only parent-note tools. They call the operator as this process's ServiceAccount.
+A session this caller did not start is hidden: the tool returns the operator's
+status and does not return the note text, the key or the kind on a refusal.
+`parent_waiting` lists names, kinds and ages. It has no text and no key.
+`parent_read` returns the stored text unchanged. `parent_answer` stores one
+reply. The same key and text confirm the stored answer; a different second
+answer is refused. `parent_send` stores one plain message for a session this
+caller started. The text is the text that was stored. These tools do not wait.
+The operator routes stay off until `--enable-parent-notes` is set, and this
+repository does not set it.
 
 ### Waiting on Tom
 
@@ -215,6 +237,10 @@ open-world.
 | `session_stop` | false | true | true | false | It reaps the session. Clean-up then removes the task and keeps only rescued unpushed work. A second reap during that delete changes nothing. |
 | `waiting_on_tom` | true | false | true | false | It only lists Asks and held items. A repeat writes nothing and deletes nothing. |
 | `standing_authority` | true | false | true | false | It only reads the configured authority file. A repeat writes nothing and reads no other path. |
+| `parent_waiting` | true | false | true | false | It only lists notes waiting for this caller. A repeat writes nothing. Names, kinds and ages only. |
+| `parent_read` | true | false | true | false | It only reads one note, including its stored text. A repeat writes nothing. |
+| `parent_answer` | false | false | true | false | It stores one answer. The same key and text confirm the stored answer. A different answer is refused. Nothing is deleted. |
+| `parent_send` | false | false | true | false | It stores one message to a session this caller started. The same key and text confirm it. Nothing is deleted. |
 
 `backlog_create` builds the source key `meatball-<epic>-` plus the first eight
 bytes of SHA-256 of the epic, a newline and the title. `opwork create` searches
@@ -275,9 +301,14 @@ haynes-ops installs these. This repository does not.
 - **CallerPolicy** `dev-env-system/meatball`, admitting that account. The
   contract is DESIGN-060 section 7.1: mode `task`, profile `dev`, the three
   full model ids, at most 4 hours, at most 4 workers, at most 2 at once. The
-  account may `POST` and `GET /v1/sessions` and `GET` and `DELETE` one session
-  it started. It gets no exec, no grants, no workbench profile, and no other
-  caller's sessions. This server does not change that policy.
+  account may `POST` and `GET /v1/sessions`, `GET` and `DELETE` one session
+  it started, and `POST` and `GET` parent notes for those sessions. It gets no
+  exec, no grants, no workbench profile, no wait on a parent note, and no
+  other caller's sessions. The parent-note routes are in the operator and stay
+  off until `--enable-parent-notes` is set. This repository does not set that
+  flag and does not change the CallerPolicy object: the route list is the
+  operator's code. The account needs no new Kubernetes verb. The operator's
+  existing inboxmessage get, list and create cover these records.
 - **Internal ingress** to the Deployment, path `/mcp`.
 - **One Secret** for the MCP bearer, mounted as a file and passed as
   `--token-file`.

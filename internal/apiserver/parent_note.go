@@ -53,12 +53,18 @@ func (s *Server) tellParent(ctx context.Context, _ http.ResponseWriter, r *http.
 	if err := s.parentNotesAvailable(); err != nil {
 		return 0, nil, err
 	}
-	sender, err := s.inboxSenderCaller(ctx, c)
-	if err != nil {
-		return 0, nil, err
-	}
 	var req apiv1.TellParentRequest
 	if err := boundedInboxJSON(r, inbox.MaxRequestBytes, &req); err != nil {
+		return 0, nil, err
+	}
+	if c.kind == kindPolicy {
+		return s.sendPolicyParentNote(ctx, c, req)
+	}
+	if req.Session != "" {
+		return 0, nil, badRequest("a session tells its recorded parent and names no child")
+	}
+	sender, err := s.inboxSenderCaller(ctx, c)
+	if err != nil {
 		return 0, nil, err
 	}
 	if !inbox.ValidKey(req.Key) || !inbox.ValidText(req.Text) || !validParentNoteKind(req.Kind) {
@@ -67,6 +73,9 @@ func (s *Server) tellParent(ctx context.Context, _ http.ResponseWriter, r *http.
 	snapshot, err := claimSnapshot(sender)
 	if err != nil {
 		return 0, nil, newError(http.StatusUnprocessableEntity, apiv1.CodeInvalid, "a child needs a project snapshot and no workspace to tell its parent")
+	}
+	if sender.Spec.Parent == meatballAccount {
+		return s.tellMeatballParent(ctx, c, sender, snapshot, req)
 	}
 	if sender.Spec.Parent == "" || strings.Contains(sender.Spec.Parent, "/") || len(validation.IsDNS1123Subdomain(sender.Spec.Parent)) != 0 {
 		return 0, nil, newError(http.StatusUnprocessableEntity, apiv1.CodeInvalid, "this Session has no recorded session parent")
@@ -92,7 +101,7 @@ func (s *Server) tellParent(ctx context.Context, _ http.ResponseWriter, r *http.
 		if err := s.parentNoteSenderFence(ctx, c, sender); err != nil {
 			return 0, nil, err
 		}
-		return inboxPublishResult(existing, false, spec)
+		return s.finishParentNote(existing, false, spec)
 	}
 	if !errors.Is(err, inbox.ErrNotFound) {
 		return 0, nil, inboxUnknown()
@@ -133,7 +142,38 @@ func (s *Server) tellParent(ctx context.Context, _ http.ResponseWriter, r *http.
 	if !inbox.IsParentNote(m) {
 		return 0, nil, parentNoteKeyConflict()
 	}
-	return inboxPublishResult(m, created, spec)
+	return s.finishParentNote(m, created, spec)
+}
+
+func (s *Server) finishParentNote(m *coord.InboxMessage, created bool, spec coord.InboxMessageSpec) (int, any, error) {
+	status, body, err := inboxPublishResult(m, created, spec)
+	if status == http.StatusOK || status == http.StatusCreated {
+		s.logParentNote("write", m)
+	}
+	return status, body, err
+}
+
+func (s *Server) logParentNote(verb string, m *coord.InboxMessage) {
+	if m == nil {
+		return
+	}
+	kind := m.Spec.Kind
+	if kind == "" {
+		kind = "plain"
+	}
+	side := "session"
+	if m.Spec.CallerSender != nil || m.Spec.CallerRecipient != nil {
+		side = "caller"
+	}
+	s.Log.Info("parent note", "verb", verb, "name", m.Name, "kind", kind, "bytes", len(m.Spec.Text), "parent", side)
+}
+
+func (s *Server) logParentNoteList(box string, n int, caller bool) {
+	side := "session"
+	if caller {
+		side = "caller"
+	}
+	s.Log.Info("parent note", "verb", "list", "box", box, "count", n, "parent", side)
 }
 
 func parentNoteKeyConflict() error {
@@ -160,6 +200,9 @@ func (s *Server) readParentNote(ctx context.Context, _ http.ResponseWriter, r *h
 	if err := s.parentNotesAvailable(); err != nil {
 		return 0, nil, err
 	}
+	if c.kind == kindPolicy {
+		return s.readPolicyParentNote(ctx, r, c)
+	}
 	sess, err := s.inboxRecipientCaller(ctx, c)
 	if err != nil {
 		return 0, nil, err
@@ -175,24 +218,25 @@ func (s *Server) readParentNote(ctx context.Context, _ http.ResponseWriter, r *h
 	if err := s.parentNoteReadFence(ctx, c, party); err != nil {
 		return 0, nil, err
 	}
+	s.logParentNote("read", m)
 	return http.StatusOK, apiv1.InboxMessage{InboxMetadata: withInboxCorrelation(inboxMetadata(m), m), Text: m.Spec.Text}, nil
 }
 
-func (s *Server) listParentNotes(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
-	if err := s.parentNotesAvailable(); err != nil {
-		return 0, nil, err
-	}
-	sess, err := s.inboxRecipientCaller(ctx, c)
-	if err != nil {
-		return 0, nil, err
-	}
+type parentNoteQuery struct {
+	box    string
+	limit  int64
+	cursor string
+	sent   bool
+}
+
+func parseParentNoteQuery(r *http.Request) (parentNoteQuery, error) {
 	q, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		return 0, nil, badRequest("invalid parent note query")
+		return parentNoteQuery{}, badRequest("invalid parent note query")
 	}
 	for key, values := range q {
 		if len(values) != 1 || (key != "box" && key != "limit" && key != "continue") {
-			return 0, nil, badRequest("invalid parent note query")
+			return parentNoteQuery{}, badRequest("invalid parent note query")
 		}
 	}
 	box := q.Get("box")
@@ -200,29 +244,52 @@ func (s *Server) listParentNotes(ctx context.Context, _ http.ResponseWriter, r *
 		box = apiv1.ParentNotesInbox
 	}
 	if box != apiv1.ParentNotesInbox && box != apiv1.ParentNotesSent {
-		return 0, nil, badRequest("box must be inbox or sent")
+		return parentNoteQuery{}, badRequest("box must be inbox or sent")
 	}
 	limit := int64(100)
 	if raw := q.Get("limit"); raw != "" {
 		limit, err = strconv.ParseInt(raw, 10, 64)
 		if err != nil || limit < 1 || limit > 100 {
-			return 0, nil, badRequest("limit must be between 1 and 100")
+			return parentNoteQuery{}, badRequest("limit must be between 1 and 100")
 		}
 	}
 	if !inbox.ValidParentNoteCursor(q.Get("continue")) {
-		return 0, nil, badRequest("invalid parent note continuation")
+		return parentNoteQuery{}, badRequest("invalid parent note continuation")
 	}
-	party := sessionIdentity(sess)
-	items, next, err := s.Inbox.ListParentNotes(ctx, party, box == apiv1.ParentNotesSent, limit, q.Get("continue"))
-	if err != nil {
-		return 0, nil, inboxUnknown()
-	}
+	return parentNoteQuery{box: box, limit: limit, cursor: q.Get("continue"), sent: box == apiv1.ParentNotesSent}, nil
+}
+
+func parentNoteViews(items []coord.InboxMessage) []apiv1.InboxMetadata {
 	views := make([]apiv1.InboxMetadata, 0, len(items))
 	for i := range items {
 		views = append(views, withInboxCorrelation(inboxMetadata(&items[i]), &items[i]))
 	}
+	return views
+}
+
+func (s *Server) listParentNotes(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	if err := s.parentNotesAvailable(); err != nil {
+		return 0, nil, err
+	}
+	if c.kind == kindPolicy {
+		return s.listPolicyParentNotes(ctx, r, c)
+	}
+	sess, err := s.inboxRecipientCaller(ctx, c)
+	if err != nil {
+		return 0, nil, err
+	}
+	q, err := parseParentNoteQuery(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	party := sessionIdentity(sess)
+	items, next, err := s.Inbox.ListParentNotes(ctx, party, q.sent, q.limit, q.cursor)
+	if err != nil {
+		return 0, nil, inboxUnknown()
+	}
 	if err := s.parentNoteReadFence(ctx, c, party); err != nil {
 		return 0, nil, err
 	}
-	return http.StatusOK, apiv1.InboxList{Items: views, Continue: next, Box: box}, nil
+	s.logParentNoteList(q.box, len(items), false)
+	return http.StatusOK, apiv1.InboxList{Items: parentNoteViews(items), Continue: next, Box: q.box}, nil
 }

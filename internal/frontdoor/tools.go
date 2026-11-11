@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -20,7 +21,7 @@ import (
 
 // descriptionWordBound is the measured total of the tool descriptions.
 // Each description is at most 30 words.
-const descriptionWordBound = 150
+const descriptionWordBound = 214
 
 // noStandingAuthority is the whole success result when no authority file is installed.
 const noStandingAuthority = "No standing authority is installed for this caller. Ask the owner once, and record the answer on the work item."
@@ -88,6 +89,26 @@ var frontDoorTools = []map[string]any{
 	tool("waiting_on_tom", "List open Asks for this caller's sessions and items that need Tom's approval or answer.", hints(true, false, true, false), map[string]any{}, nil),
 	// Read-only read of the configured authority file: a repeat writes nothing, deletes nothing, and reads no other path.
 	tool("standing_authority", "Read the owner's standing instruction installed for this caller.", hints(true, false, true, false), map[string]any{}, nil),
+	// Read-only list of notes addressed to this caller. Names, kinds and ages only: a repeat writes nothing and returns no text.
+	tool("parent_waiting", "List notes waiting from sessions this caller started. Names, kinds and ages only.", hints(true, false, true, false), map[string]any{
+		"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+	}, nil),
+	// Read-only read of one note, including its stored text. A repeat writes nothing.
+	tool("parent_read", "Read one note to this caller, including its text, from a session this caller started.", hints(true, false, true, false), map[string]any{
+		"name": map[string]any{"type": "string"},
+	}, []string{"name"}),
+	// Stores one answer. The same key and text confirm the stored answer. A different answer is refused. Nothing is deleted.
+	tool("parent_answer", "Store one answer to a note from a session this caller started. A second different answer is refused.", hints(false, false, true, false), map[string]any{
+		"name": map[string]any{"type": "string"},
+		"key":  map[string]any{"type": "string"},
+		"text": map[string]any{"type": "string"},
+	}, []string{"name", "key", "text"}),
+	// Stores one plain message. The same key and text confirm it. Nothing is deleted.
+	tool("parent_send", "Send one message to a session this caller started. The session reads it with its next parent read.", hints(false, false, true, false), map[string]any{
+		"session": map[string]any{"type": "string"},
+		"key":     map[string]any{"type": "string"},
+		"text":    map[string]any{"type": "string"},
+	}, []string{"session", "key", "text"}),
 }
 
 // hints fills Tool.annotations. The four fields are ToolAnnotations in the MCP
@@ -138,6 +159,14 @@ func (h *handler) callTool(ctx context.Context, name string, raw json.RawMessage
 		return h.waitingOnTom(ctx, args)
 	case "standing_authority":
 		return h.standingAuthority(args)
+	case "parent_waiting":
+		return h.parentWaiting(ctx, args)
+	case "parent_read":
+		return h.parentRead(ctx, args)
+	case "parent_answer":
+		return h.parentAnswer(ctx, args)
+	case "parent_send":
+		return h.parentSend(ctx, args)
 	default:
 		return "", fmt.Errorf("unknown tool %s", name)
 	}
@@ -356,7 +385,32 @@ func (h *handler) sessionStatus(ctx context.Context, args map[string]any) (strin
 	if err != nil {
 		return "", plainRefusal(err)
 	}
-	return formatSession(out), nil
+	line := "parent notes waiting: unavailable\n"
+	if n, err := h.countWaiting(ctx, out.Session.Name); err == nil {
+		line = fmt.Sprintf("parent notes waiting: %d\n", n)
+	}
+	return formatSession(out) + line, nil
+}
+
+func (h *handler) countWaiting(ctx context.Context, session string) (int, error) {
+	n := 0
+	cursor := ""
+	for page := 0; page < 42; page++ {
+		list, err := h.op.ListParentNotes(ctx, apiv1.ParentNotesInbox, 100, cursor)
+		if err != nil {
+			return 0, err
+		}
+		for _, item := range list.Items {
+			if item.Sender.Name == session {
+				n++
+			}
+		}
+		if list.Continue == "" {
+			return n, nil
+		}
+		cursor = list.Continue
+	}
+	return n, nil
 }
 
 func (h *handler) sessionStop(ctx context.Context, args map[string]any) (string, error) {
@@ -598,4 +652,166 @@ func writeField(dir, name, text string) (string, error) {
 		return "", err
 	}
 	return path, closeErr
+}
+
+func (h *handler) parentWaiting(ctx context.Context, args map[string]any) (string, error) {
+	if err := only(args, "limit"); err != nil {
+		return "", err
+	}
+	limit, has, err := intArg(args, "limit")
+	if err != nil {
+		return "", err
+	}
+	if !has {
+		limit = 100
+	}
+	if limit < 1 || limit > 100 {
+		return "", errors.New("limit must be between 1 and 100")
+	}
+	list, err := h.op.ListParentNotes(ctx, apiv1.ParentNotesInbox, limit, "")
+	if err != nil {
+		return "", plainRefusal(err)
+	}
+	return formatParentWaiting(list), nil
+}
+
+func (h *handler) parentRead(ctx context.Context, args map[string]any) (string, error) {
+	if err := only(args, "name"); err != nil {
+		return "", err
+	}
+	name, ok, err := strArg(args, "name")
+	if err != nil || !ok || !parentNoteNameOK(name) {
+		return "", errors.New("parent_read requires a note name")
+	}
+	msg, err := h.op.ReadParentNote(ctx, name)
+	if err != nil {
+		return "", plainRefusal(err)
+	}
+	return formatParentRecord(msg.InboxMetadata, msg.Text), nil
+}
+
+func (h *handler) parentAnswer(ctx context.Context, args map[string]any) (string, error) {
+	if err := only(args, "name", "key", "text"); err != nil {
+		return "", err
+	}
+	name, ok, err := strArg(args, "name")
+	if err != nil || !ok || !parentNoteNameOK(name) {
+		return "", errors.New("parent_answer requires a note name")
+	}
+	key, keyOK, err := strArg(args, "key")
+	if err != nil || !keyOK || !parentKeyOK(key) {
+		return "", errors.New("parent_answer requires a key")
+	}
+	text, textOK, err := strArg(args, "text")
+	if err != nil || !textOK || !parentTextOK(text) {
+		return "", errors.New("parent_answer requires 1 to 16384 UTF-8 bytes")
+	}
+	result, err := h.op.AnswerParentNote(ctx, name, apiv1.AnswerParentRequest{Key: key, Text: text})
+	if err != nil {
+		return "", plainRefusal(err)
+	}
+	return formatParentRecord(result.Message, text), nil
+}
+
+func (h *handler) parentSend(ctx context.Context, args map[string]any) (string, error) {
+	if err := only(args, "session", "key", "text"); err != nil {
+		return "", err
+	}
+	session, ok, err := strArg(args, "session")
+	if err != nil || !ok || !parentSessionOK(session) {
+		return "", errors.New("parent_send requires a session name")
+	}
+	key, keyOK, err := strArg(args, "key")
+	if err != nil || !keyOK || !parentKeyOK(key) {
+		return "", errors.New("parent_send requires a key")
+	}
+	text, textOK, err := strArg(args, "text")
+	if err != nil || !textOK || !parentTextOK(text) {
+		return "", errors.New("parent_send requires 1 to 16384 UTF-8 bytes")
+	}
+	result, err := h.op.SendParentNote(ctx, apiv1.TellParentRequest{Session: session, Key: key, Text: text})
+	if err != nil {
+		return "", plainRefusal(err)
+	}
+	return formatParentRecord(result.Message, text), nil
+}
+
+func formatParentWaiting(list apiv1.InboxList) string {
+	var b strings.Builder
+	if len(list.Items) == 0 {
+		b.WriteString("notes: none\n")
+	}
+	for i, item := range list.Items {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "name: %s\nkind: %s\nage: %s\n", item.Name, parentKindLabel(item.Kind), item.CreatedAt.UTC().Format(time.RFC3339))
+	}
+	if list.Continue != "" {
+		b.WriteString("more notes may be waiting\n")
+	}
+	return b.String()
+}
+
+func formatParentRecord(m apiv1.InboxMetadata, text string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "name: %s\nkind: %s\n", m.Name, parentKindLabel(m.Kind))
+	writeParentParty(&b, "sender", m.Sender, m.CallerSender)
+	writeParentParty(&b, "recipient", m.Recipient, m.CallerRecipient)
+	if m.InReplyTo != nil && m.InReplyTo.Name != "" {
+		fmt.Fprintf(&b, "inReplyTo: %s\n", m.InReplyTo.Name)
+	}
+	b.WriteByte('\n')
+	b.WriteString(text)
+	return b.String()
+}
+
+func writeParentParty(b *strings.Builder, label string, session apiv1.TaskClaimOwner, caller *apiv1.InboxCaller) {
+	if caller != nil {
+		fmt.Fprintf(b, "%s: %s\n", label, caller.ServiceAccount)
+		return
+	}
+	if session.Name != "" {
+		fmt.Fprintf(b, "%s: %s/%s\n", label, session.Namespace, session.Name)
+	}
+}
+
+func parentKindLabel(kind string) string {
+	if kind == "" {
+		return "plain"
+	}
+	return kind
+}
+
+func parentNoteNameOK(name string) bool {
+	rest, ok := strings.CutPrefix(name, "message.")
+	if !ok {
+		return false
+	}
+	left, right, ok := strings.Cut(rest, ".")
+	if !ok || len(left) != 32 || len(right) != 32 {
+		return false
+	}
+	return parentHex(left) && parentHex(right)
+}
+
+func parentHex(s string) bool {
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func parentSessionOK(name string) bool {
+	return name != "" && len(name) <= 253 && utf8.ValidString(name) && !strings.ContainsAny(name, "/ \t\r\n\x00")
+}
+
+func parentKeyOK(key string) bool {
+	return key != "" && len(key) <= 128 && utf8.ValidString(key) && !strings.ContainsAny(key, "\x00\r\n")
+}
+
+func parentTextOK(text string) bool {
+	return text != "" && len(text) <= 16<<10 && utf8.ValidString(text)
 }
