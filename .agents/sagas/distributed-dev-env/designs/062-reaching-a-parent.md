@@ -793,7 +793,7 @@ with the keystroke. The bad path answers a person's open question (section
 **Ruling 6.** Nothing is typed into a parent's terminal to wake it. A parent
 is woken by a command it runs itself.
 
-**Slice 6b. The held wait for new notes** (OpenProject #688)**.**
+**Slice 6b. The held wait for new notes** (OpenProject #708)**.**
 
 | Method and path | Who | Effect |
 |---|---|---|

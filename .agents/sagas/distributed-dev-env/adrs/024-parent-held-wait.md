@@ -13,7 +13,7 @@
   note's text is never typed into a parent's screen.
 - **Design:** [DESIGN-062](../designs/062-reaching-a-parent.md) section 13.
 - **Tracking:** OpenProject [#689](https://work.haynesnetwork.com/work_packages/689)
-  (the withdrawn slice) and [#688](https://work.haynesnetwork.com/work_packages/688)
+  (the withdrawn slice) and [#708](https://work.haynesnetwork.com/work_packages/708)
   (the held wait). Parent epic #516.
 
 ## Context
