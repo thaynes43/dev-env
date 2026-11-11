@@ -4,8 +4,10 @@
   (`dev-env-1111-143337`) sets Accepted when it rules on the reviewed PR.
 - **Date:** 2026-11-11
 - **Decider:** to be the coordinator of OP751. Written by worker session
-  `dev-env-1111-144138` for story OP734. This ADR records no decision by Tom.
-  Where a decision rests on an earlier ruling of his, it names the record.
+  `dev-env-1111-144138` for story OP734. The coordinator ruled the fifteen
+  questions behind it on 2026-11-11 (DESIGN-064 section 10); those are not
+  rulings by Tom. This ADR records no decision by Tom. Where a decision rests
+  on an earlier ruling of his, it names the record.
 - **Supersedes:** these parts of [DESIGN-001](../designs/001-dev-env-v2.md),
   which was accepted with [ADR-001](001-distributed-dev-env.md). Everything
   else in DESIGN-001 3.7 (D-36), 6.10 and 7.3 stands.
@@ -17,8 +19,9 @@
      `503 plan credential unavailable`.
   5. 3.7, "Watchdogs": the words "and resumed from its volume where it can
      be".
-  6. 3.7, "Pages, from the operator on Pushover", and 6.10's operator bullet
-     "`api.pushover.net` (summoned-session pages and the digest)".
+  6. 3.7, "Pages, from the operator on Pushover: ... an upgrade or
+     escalation `failed` ...", and 6.10's operator bullet "`api.pushover.net`
+     (summoned-session pages and the digest)".
   7. 3.7, "Storm limits" and "Escalations are not single-flight", where they
      imply a create past `concurrent` is refused.
   8. 3.7, "Retention": "a `done` session stays joinable for 1 day, a
@@ -76,16 +79,19 @@ that change DESIGN-001.
 8. **The keeper sends summoned-session pages and the digest** (DESIGN-064
    Q-16, option A). The operator records page events on the session's status;
    the keeper, which already holds the Pushover token and pushes Ask
-   notifications, sends each one once. The operator holds no Pushover token.
-   A `failed` outcome pages in every lane, as v1 does.
+   notifications, sends each one once. The operator holds no Pushover token,
+   and its egress to `api.pushover.net` is removed. Failures page as v1's do,
+   in every lane: every `failed` outcome except a quiet unreported exit
+   (DESIGN-064 6.8). The keeper also pages when the static token is rejected,
+   because stopping dev-env-ops ends v1's only alarm for it (Q-18).
 9. **Past `concurrent` a create is held; past `createsPerHour` it is
    refused.** A held session exists with no pod and a condition that says
    why. An escalation held over 15 minutes pages.
-10. **Retention.** Task sessions follow ADR-020 (Tom, 2026-11-10: every
-    finished task is deleted 7 days after it ends). Remote summoned sessions
-    follow v2's timers once their outcome is terminal (DESIGN-064 Q-12).
-    Before that, neither is drained nor idle-suspended; the watchdog governs
-    them.
+10. **Retention and timers.** Task sessions follow ADR-020 (Tom, 2026-11-10:
+    every finished task is deleted 7 days after it ends). Remote summoned
+    sessions follow today's timers, unchanged (DESIGN-064 Q-12). A summoned
+    session is never drained for a new revision, and one suspended before its
+    outcome is terminal is closed as `onUnreported`.
 11. **The ops tier has no Pushover, and the platform tier does not select ops
     pods** (DESIGN-064 Q-01, Q-02). The ops policy carries its own DNS, API
     server and operator API rules.
@@ -111,7 +117,11 @@ that change DESIGN-001.
 - The curation move (#746) needs no Remote Control and no keeper login.
 - The keeper gains read access to AgentSessions in `dev-agents` and one more
   ledger ConfigMap. It gains no write on sessions.
-- V-12 (the static token's mint date and pages) is not built by any story
-  here; DESIGN-064 Q-18 defers it.
+- #749 depends on #742's rejected-token page. The rest of V-12 (the static
+  token's mint date and the pages at 30 and 7 days) is deferred to a story the
+  coordinator files, due before about 2027-06.
+- The callers' own `claude -p` runs and their metered fallback stay outside
+  this work; their spend ConfigMaps are read and reported at acceptance
+  (DESIGN-064 5.4).
 - Nothing here changes Meatball's front door, Tom's own sessions, the task
   clean-up or any running session.
