@@ -548,15 +548,21 @@ time of the last one. The charge always comes first:
    leader, competing for it are decided by the ledger's write: one
    optimistic-lock update wins, and the loser re-reads, finds the hour full
    and gets 429 (a filing stays Pending, 6.6).
-4. **Ageing out.** A charge counts toward the hour of its time. The
-   invariant: no Session is admitted without a committed charge for its id.
-   A caller-create charge leaves the ledger once it is an hour old and its
-   Session exists and is admitted or closed; or once it is an hour old and
-   an uncached read by its id finds no Session. A later retry then maps to
-   the same id and is charged again: a double charge across two hours is
-   acceptable, an uncharged admitted Session is not. A filing's charge stays
-   until its remediation records `chargedAt` or the filing is `Abandoned`
-   (6.6).
+4. **Ageing out.** An entry has two uses, kept apart. It counts toward
+   `createsPerHour` only during its own hour. After that it stays, while it
+   is unsettled, only as the record admission reads, and no longer counts
+   toward the rate. That holds for both kinds of entry. The invariant: no
+   Session is admitted without a committed charge for its id.
+   - A caller-create entry leaves the ledger once it is an hour old and its
+     Session exists and is admitted or closed; or once it is an hour old and
+     an uncached read by its id finds no Session. A later retry then maps to
+     the same id and is charged again: a double charge across two hours is
+     acceptable, an uncharged admitted Session is not.
+   - A filing's entry follows the same rule (Q-21, the answer to note
+     `op734-fix2-q-5`, 10.3): it leaves
+     once it is an hour old and its child exists and is admitted or closed,
+     or once the filing is `Abandoned` (6.6). Admission reads one place, the
+     ledger.
 
 **Admission.** Only the leader admits, so two admissions cannot race across
 API replicas (R6's race is the API's). In each pass it takes Queued sessions
@@ -1176,9 +1182,11 @@ another escalation.
      Pending, name}` on the remediation, in the same write as the outcome.
   2. The charge: ledger id `filing:<remediation UID>`, then
      `status.summon.escalation.chargedAt`. An id already in the ledger, or a
-     `chargedAt` already set, is never charged again. The charge stays in
-     the ledger until `chargedAt` is recorded or the filing is `Abandoned`
-     (5.9), so a crash between the two never charges it twice.
+     `chargedAt` already set, is never charged again. The entry stays in
+     the ledger until it is an hour old and the child is admitted or closed,
+     or the filing is `Abandoned` (5.9), so a crash between the two never
+     charges it twice and a child that waits Queued for its pool can still
+     be admitted.
   3. Before any create, an uncached list by the `filed-for-uid` label. A
      child that exists is recorded. Otherwise the create, the child carrying
      the id `filing:<remediation UID>` as its `spec.summon.dispatchID`; on AlreadyExists the
@@ -1917,7 +1925,7 @@ narrowed Q-17.
 | Q-18 | V-12 | no story covers it; v1's only alarm is the executor's probe (F-07) | A defer to a new story; B fold into #742 | A | **Ruled, not as recommended**, coordinator, 2026-11-11: a rejected-token page is a v1 function to keep; it goes in #742 before #749; the rest of V-12 is deferred (6.8) | #742, #749 |
 | Q-19 | containment | `policyCallerAllowed` includes DELETE; ADR-020 deletes purged tasks at once | A summoning callers create and read only; summoned sessions create no sessions; B Meatball's list | A | **Ruled A**, coordinator, 2026-11-11, with conditions (6.4) | #738 |
 | Q-20 | how a remediation on v2 sees what v1 sessions declared | the exec guard denies exec into a pod that runs as `dev/dev-env`, so v1's reader cannot run from an ops session (6.12, N11) | open | none recorded | **Pending coordinator** (ruling on N11, 2026-11-11). Authorizes no exception to the guard | #747's acceptance |
-| Q-21 | the dispatch id of a caller's create | a summoned key is reused after its session ends (6.4's suffix rule); a hash of the caller and the key alone would let a re-fire find its id charged (5.9, N1) | A hash of caller, key and the key's newest earlier Session's UID; B a ledger entry reused per key; C a hash with the name | A | **Ruled A**, coordinator, 2026-11-11, with a correction to the ageing rule (5.9, 10.3) | #738 |
+| Q-21 | the dispatch id of a caller's create | a summoned key is reused after its session ends (6.4's suffix rule); a hash of the caller and the key alone would let a re-fire find its id charged (5.9, N1) | A hash of caller, key and the key's newest earlier Session's UID; B a ledger entry reused per key; C a hash with the name | A | **Ruled A**, coordinator, 2026-11-11, with a correction to the ageing rule and, by note `op734-fix2-q-5`, the filing's entry (5.9, 10.3) | #738, #740 |
 | Q-22 | what Tom keeps of a terminal summoned session | `agent-run history` reads private Sessions only; remote sessions are never marked; ADR-020 keeps no conversation archive for tasks (5.9, N3) | A write it as the code is; B mark summoned remote sessions private | A | **Ruled A**, coordinator, 2026-11-11, with a precision on ADR-020 (5.9, 8.1, 10.3) | nothing |
 | Q-23 | an escalation caller's fallback when its create is refused | `escalate.sh` lines 44–47: call sites do not gate on its exit code; `remediate.sh` lines 43–47 fail open (6.12, 6.13, N6) | A state the premise, build nothing in the callers; B a caller-side page | A | **Ruled A**, coordinator, 2026-11-11 (6.12, 6.13, 10.3) | #748's acceptance wording |
 
@@ -1925,8 +1933,8 @@ Q-10 (#747), Q-11 (#749) and Q-14 (#736) belong to those items. Q-04's and
 Q-16's options B are on Tom's list; neither was chosen. Q-20 is the
 coordinator's, recorded by its ruling on N11, and is pending. Q-21 to Q-23
 were asked in fix round 2 as notes `op734-fix2-q-1` to `op734-fix2-q-3`, with
-`op734-fix2-q-4` correcting the premise of q-2, and were ruled the same day
-(10.3). Three gates are Tom's and are Pending (8.1).
+`op734-fix2-q-4` correcting the premise of q-2 and `op734-fix2-q-5` settling
+the filing's ledger entry under Q-21, and were ruled the same day (10.3). Three gates are Tom's and are Pending (8.1).
 
 ### 8.1 Tom's gates (F8)
 
@@ -2064,15 +2072,15 @@ design follows. Quotes are the coordinator's. Fix round 1 by worker session
 From the same coordinator session, on PR 1075 at head `e329ce56`: comment
 6802125957, its rulings on the independent re-review (comment 6802046490,
 findings N1 to N11) and on fix round 1's own choices; then its answers to
-fix round 2's question notes `op734-fix2-q-1` to `op734-fix2-q-4`, read by
-`agent-run parent wait` at 2026-11-11T17:14Z and 17:16Z. Each says it is not
+fix round 2's question notes `op734-fix2-q-1` to `op734-fix2-q-5`, read by
+`agent-run parent wait` at 2026-11-11T17:14Z, 17:16Z and 17:27Z. Each says it is not
 a ruling by Tom. Every finding was accepted; where a ruling makes a choice,
 this design follows it. Quotes are the coordinator's. Fix round 2 by worker
 session `dev-env-1111-170449`.
 
 | Finding | Ruling | Where this design meets it |
 |---|---|---|
-| N1, HIGH: the charge has no order with create and admission | "the charge comes first": a dispatch id before anything is created, the charge committed, then the Session carrying the id; "a repeated key maps to the same id"; "a charge with no Session is a spent slot, never a free session"; "the leader admits only a Session whose id is committed"; the last slot decided by the ledger's write, "the loser gets 429"; proofs in #738 and #740. Q-21: the id hashes the caller, the key and the key's newest earlier Session's UID; on AlreadyExists "the same id as its own (200) and any other id as a name clash (next suffix)". The ageing rule, as corrected in the Q-21 answer: "no Session is admitted without a committed charge for its id"; a filing's entry stays until `chargedAt` or Abandoned; a caller-create entry with no Session is dropped at an hour old; "A double charge across two hours is acceptable; an uncharged admitted Session is not" | 5.9 (the ledger, admission, the charge-order proof); 6.4 (`dispatchID`, the order of checks); 6.6 (the filing's steps 2 and 3) |
+| N1, HIGH: the charge has no order with create and admission | "the charge comes first": a dispatch id before anything is created, the charge committed, then the Session carrying the id; "a repeated key maps to the same id"; "a charge with no Session is a spent slot, never a free session"; "the leader admits only a Session whose id is committed"; the last slot decided by the ledger's write, "the loser gets 429"; proofs in #738 and #740. Q-21: the id hashes the caller, the key and the key's newest earlier Session's UID; on AlreadyExists "the same id as its own (200) and any other id as a name clash (next suffix)". The ageing rule, as corrected in the Q-21 answer: "no Session is admitted without a committed charge for its id"; a filing's entry stays until `chargedAt` or Abandoned; a caller-create entry with no Session is dropped at an hour old; "A double charge across two hours is acceptable; an uncharged admitted Session is not". The answer to `op734-fix2-q-5`: a filing's entry "follows the same rule as a caller's: it leaves once it is an hour old and its child exists and is admitted or closed, or once the filing is Abandoned. Admission reads one place, the ledger", replacing "until its remediation records the charge"; and "an entry counts toward createsPerHour only during its own hour", after which an unsettled one stays only as the record admission reads | 5.9 (the ledger, admission, the charge-order proof); 6.4 (`dispatchID`, the order of checks); 6.6 (the filing's steps 2 and 3) |
 | N2, MEDIUM: the deadline does not fence the spawn | "add the fence, do not claim it": run-agent checks the start deadline again immediately before it spawns the provider, new code in #741; until then an operator-declared close with a first launch possibly in flight releases "only when the recorded pod is confirmed gone"; the paused-launch proof | 5.9 (the latch, the release rule, the proof); 6.7 (the latch) |
 | N3, MEDIUM: the resume exception | "removed. ... Resuming a summoned session is refused, by anyone"; record it as not built: "a replacement-pod continuation of a closed actuator needs its own design". Q-22, with the answer to note `op734-fix2-q-4`: "Write it as the code is": no summoned session's conversation is read once it stops; for tasks that is ADR-020's rule, for remote sessions today's lifecycle; the retained-data difference goes in V-15 and under T-2; two follow-ups named, not designed. The ruling's sentence that a remote session's history "is read with `agent-run history`" was wrong, and this worker's premise that tasks are archived was wrong too (11) | 5.9 (no resume; what Tom keeps); 6.7; 7.1 V-15; 8.1 T-2; 9.1 |
 | N4, MEDIUM: clean-up can erase a pending filing | ADR-020's retention unchanged, no hand-off store; a filing still Pending 24 hours after its remediation closed "is closed as `Abandoned`, with a second page"; "never dropped in silence" | 6.6 (Abandoned, the proof); 6.8 (`escalation-abandoned`) |
