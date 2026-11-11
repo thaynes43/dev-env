@@ -343,10 +343,10 @@ func judge(h Host, c Caller, requested, repo string, now time.Time) (reason stri
 		if h.OperatingMode != ModeRunning || !h.PodReady || h.HoldPod {
 			return ReasonNotRunning, false, false
 		}
-		// Ruling O. The remote state, the version and the lease are
-		// status from the last accepted heartbeat. They count only when
-		// the present pod reported them. A suspended host does not reach
-		// this line. The host still fills the cell.
+		// Ruling O, kept by ruling Q. The remote state, the version and
+		// the lease are status from the last accepted heartbeat. They
+		// count only when the present pod reported them. A suspended host
+		// does not reach this line. The host still fills the cell.
 		if !h.Reported {
 			return ReasonRemoteUnavailable, false, false
 		}

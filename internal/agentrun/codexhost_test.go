@@ -191,6 +191,79 @@ func TestThreadStartWithoutHost(t *testing.T) {
 	}
 }
 
+// streamOrder records the order of writes across stdout and stderr.
+type streamOrder struct {
+	mu    sync.Mutex
+	order []string
+	out   bytes.Buffer
+	err   bytes.Buffer
+}
+
+func (s *streamOrder) stdout() io.Writer { return &streamTap{order: s, name: "stdout", buf: &s.out} }
+func (s *streamOrder) stderr() io.Writer { return &streamTap{order: s, name: "stderr", buf: &s.err} }
+
+type streamTap struct {
+	order *streamOrder
+	name  string
+	buf   *bytes.Buffer
+}
+
+func (t *streamTap) Write(p []byte) (int, error) {
+	t.order.mu.Lock()
+	defer t.order.mu.Unlock()
+	t.order.order = append(t.order.order, t.name)
+	return t.buf.Write(p)
+}
+
+// Ruling R. For report, resume, create, one refusal and an unknown action,
+// the first write is the stdout thread-launch.v1 line.
+func TestThreadStartWritesTheResultBeforeStderr(t *testing.T) {
+	args := func(h *harness) []string {
+		return []string{"thread", "start", "--agent", "codex", "--model", "gpt-6-astra", "--effort", "high", "--handoff", h.write("handoff.txt", threadHandoff), "--repo", "dev-env"}
+	}
+	cases := []struct {
+		name   string
+		choice apiv1.CodexHostChoice
+	}{
+		{"report", codexChoice("report", "paired", "remote_unavailable")},
+		{"resume", codexChoice("resume", "paired", "")},
+		{"create", codexChoice("create", "paired", "")},
+		{"refusal", codexChoice("", "", "login_required")},
+		{"unknown action", apiv1.CodexHostChoice{Action: "reimage", Host: "paired"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			rec := &streamOrder{}
+			h.env.Stdout = rec.stdout()
+			h.env.Stderr = rec.stderr()
+			h.api.handle = serveCodexChoice(tc.choice)
+			if code := h.run(args(h)...); code != apiv1.ThreadLaunchExit(apiv1.ThreadBlocked) {
+				t.Fatalf("exit %d order %v stdout %s stderr %s", code, rec.order, rec.out.String(), rec.err.String())
+			}
+			if len(rec.order) == 0 || rec.order[0] != "stdout" {
+				t.Fatalf("first write %v, want stdout", rec.order)
+			}
+			sawErr := false
+			for _, stream := range rec.order[1:] {
+				if stream == "stderr" {
+					sawErr = true
+				}
+				if stream == "stdout" {
+					t.Fatalf("stdout was written again after stderr began: %v", rec.order)
+				}
+			}
+			if !sawErr {
+				t.Fatalf("stderr was not written: %v", rec.order)
+			}
+			r, err := apiv1.DecodeThreadLaunch(bytes.TrimSuffix(rec.out.Bytes(), []byte("\n")))
+			if err != nil || bytes.Count(rec.out.Bytes(), []byte("\n")) != 1 || r.Outcome != apiv1.ThreadBlocked || r.Error == nil || r.Error.Code != "no_host_selected" {
+				t.Fatalf("stdout %q err %v", rec.out.String(), err)
+			}
+		})
+	}
+}
+
 func TestThreadStartSelectorRefusalPrintsTheBlockedLine(t *testing.T) {
 	args := func(h *harness) []string {
 		return []string{"thread", "start", "--agent", "codex", "--model", "gpt-6-astra", "--effort", "high", "--handoff", h.write("handoff.txt", threadHandoff), "--repo", "dev-env"}

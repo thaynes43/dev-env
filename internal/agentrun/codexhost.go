@@ -240,21 +240,23 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 	case "create":
 		return a.threadNoHostSelected(choice, commandCreatesNoHost)
 	default:
-		// Ruling P. A selector refusal and an action this client does not
-		// know still print the one blocked line. codex-host select and the
-		// interactive create keep codexHostRefused.
+		// Ruling R. threadRefuse prints the blocked line and returns the
+		// exit. The refusal text is written after that. codex-host select
+		// and the interactive create keep codexHostRefused.
+		err := a.threadRefuse("codex", apiv1.ThreadBlocked, "no_host_selected", apiv1.ThreadLaunchExit(apiv1.ThreadBlocked))
 		a.errf("%s", codexHostRefusalLine(choice))
-		return a.threadRefuse("codex", apiv1.ThreadBlocked, "no_host_selected", apiv1.ThreadLaunchExit(apiv1.ThreadBlocked))
+		return err
 	}
 }
 
 // threadNoHostSelected is a select answer that did not start a thread
-// (ruling N, widened by ruling P). Stdout is one thread-launch.v1 result,
-// outcome blocked, code no_host_selected. Stderr is the action's fixed
-// sentence, when it has one, and then the select object. A failed stderr
-// write is ignored: the stdout line is still printed. The exit is the
-// blocked outcome's code.
+// (ruling N, widened by ruling R). threadRefuse prints the thread-launch.v1
+// line and returns the exit error. Stderr, the action's fixed sentence when
+// it has one and then the select object, is written after that. A stderr
+// error is ignored. With stderr closed the process may end on SIGPIPE after
+// the line is out. The returned error is the one threadRefuse held.
 func (a *app) threadNoHostSelected(choice apiv1.CodexHostChoice, sentence string) error {
+	err := a.threadRefuse("codex", apiv1.ThreadBlocked, "no_host_selected", apiv1.ThreadLaunchExit(apiv1.ThreadBlocked))
 	if sentence != "" {
 		a.errf("%s", sentence)
 	}
@@ -262,7 +264,7 @@ func (a *app) threadNoHostSelected(choice apiv1.CodexHostChoice, sentence string
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(choice)
-	return a.threadRefuse("codex", apiv1.ThreadBlocked, "no_host_selected", apiv1.ThreadLaunchExit(apiv1.ThreadBlocked))
+	return err
 }
 
 // Stages of a select attempt that ended before any HTTP response.

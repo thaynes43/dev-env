@@ -812,22 +812,23 @@ worktree, as on the phone. --wait (at most 10m) bounds the whole launch.
                   or on an older operator, thread start behaves as it does today and
                   prints one line that host selection is off. With it on, use starts the
                   thread on the chosen host and releases the lease when the launch result
-                  is known. The command exits 0 only when a thread was started. report,
-                  resume and create print one thread-launch.v1 result on stdout with
-                  outcome blocked and code no_host_selected, print the choice on stderr
-                  after that action's sentence, and exit 1. A failed write to stderr
-                  does not drop that stdout line. report has no sentence.
-                  resume says resume is not built yet. create says this command does
-                  not create a host. A selector refusal (login_required,
-                  caller_cannot_create, at_capacity, host_busy) and an action this
-                  client does not know print the same blocked line, after the
-                  refusal's code and fixed sentence on stderr, and exit 1.
+                  is known. The command exits 0 only when a thread was started. On
+                  report, resume, create, a selector refusal and an unknown action, the
+                  thread-launch.v1 line is written to stdout before anything is written
+                  to stderr. The line has outcome blocked and code no_host_selected,
+                  and the exit is 1. report, resume and create then write that action's
+                  sentence, when it has one, and the choice. A refusal and an unknown
+                  action then write the refusal's code and fixed sentence. report has
+                  no sentence. resume says resume is not built yet. create says this
+                  command does not create a host. With stderr closed the process may
+                  end on SIGPIPE after the line is out.
                   A select call the API refuses (401, 403, 409, 422, 429, or
                   another non-200 that is not 404 or 5xx) or a 200 that cannot
                   be decoded prints no result line and keeps that call's
-                  non-zero exit. A running host is chosen when its present pod
-                  reported the status and its reported agentd is at least
-                  2.102.0, including when its pod revision is not current.
+                  non-zero exit. A running host is chosen when status.agent.podUID
+                  is that host's present pod and the heartbeat is fresh, and its
+                  reported agentd is at least 2.102.0, including when its pod revision
+                  is not current.
                   The choice's outdated field says that, and when a lease is
                   written it is taken from that lease's read. --host never asks.
 --agent claude    a new remote session, through rc start. It follows --wait (default

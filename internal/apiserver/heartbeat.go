@@ -97,6 +97,11 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 
 	}
 	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
+	// The reporting pod is the caller resolveSession authenticated, never a
+	// field of the body. A caller with no pod leaves it empty.
+	if c.pod != nil {
+		sess.Status.Agent.PodUID = string(c.pod.UID)
+	}
 	if task := sess.Status.Agent.Task; task != nil && st.Agent.Task.ExitSource != nil {
 		source := st.Agent.Task.ExitSource
 		if source.Valid() && c.pod != nil && source.SessionUID == string(sess.UID) && source.PodUID == string(c.pod.UID) &&

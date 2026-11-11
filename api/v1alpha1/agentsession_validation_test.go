@@ -648,6 +648,26 @@ func TestSpecImmutableExceptOperatingModeAndLifecycle(t *testing.T) {
 	})
 }
 
+// TestAgentPodUIDLength is the schema rule for status.agent.podUID: 64
+// characters are accepted and 65 are refused.
+func TestAgentPodUIDLength(t *testing.T) {
+	s := remoteSession()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Status.Phase = v1alpha1.PhaseRunning
+	s.Status.Agent = &v1alpha1.AgentStatus{PodUID: strings.Repeat("a", 64)}
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatalf("64 characters: %v", err)
+	}
+	if got := get(t, s).Status.Agent; got == nil || got.PodUID != strings.Repeat("a", 64) {
+		t.Fatalf("podUID %+v", got)
+	}
+	got := get(t, s)
+	got.Status.Agent.PodUID = strings.Repeat("b", 65)
+	wantInvalid(t, k8s.Status().Update(ctx(t), got), "status.agent.podUID")
+}
+
 // TestStatusSubresource: status is written only through /status, spec only
 // through the object, and the status schema holds too.
 func TestStatusSubresource(t *testing.T) {

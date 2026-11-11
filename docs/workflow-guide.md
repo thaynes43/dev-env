@@ -866,23 +866,24 @@ Use this when Tom must see and drive the thread on his phone.
    behaves as it does today and prints one line that host selection is off.
    With the flag on, `use` starts the thread on the chosen host and releases
    the lease when the launch result is known. The command exits 0 only when
-   a thread was started. `report`, `resume` and `create` print one
-   `thread-launch.v1` line on stdout with outcome `blocked` and code
-   `no_host_selected`, print the choice on stderr after that action's
-   sentence, and exit 1. A failed write to stderr does not drop that line.
+   a thread was started. On `report`, `resume`, `create`, a selector refusal
+   and an unknown action, the `thread-launch.v1` line is written to stdout
+   before anything is written to stderr. The line has outcome `blocked` and
+   code `no_host_selected`, and the exit is 1. `report`, `resume` and
+   `create` then write that action's sentence, when it has one, and the
+   choice. A refusal and an unknown action then write the code and sentence.
    `report` has no sentence. `resume` says resume is not built yet.
-   `create` says this command does not create a host. A selector refusal
-   (`login_required`, `caller_cannot_create`, `at_capacity`, `host_busy`)
-   and an action this client does not know print the same blocked line,
-   after the code and sentence on stderr, and exit 1. A select call the
+   `create` says this command does not create a host. With stderr closed the
+   process may end on SIGPIPE after the line is out. A select call the
    API refuses (401, 403, 409, 422, 429, or another non-200 that is not
    404 or 5xx) or a 200 that cannot be decoded prints no result line and
    keeps that call's exit. Neither resumes nor creates. A running host is
-   chosen when its present pod reported the status and its reported agentd
-   is at least 2.102.0, even when its pod revision is not the current
-   template revision. The choice's `outdated` field says that. When a
-   lease was written, it is taken from that lease's read, and it does not
-   change `ready`. `--host` never calls select.
+   chosen when `status.agent.podUID` is that host's present pod and the
+   heartbeat is fresh, and its reported agentd is at least 2.102.0, even
+   when its pod revision is not the current template revision. The choice's
+   `outdated` field says that. When a lease was written, it is taken from
+   that lease's read, and it does not change `ready`. `--host` never calls
+   select.
    `agent-run codex-host select --repo <name> [--profile <name>] [--check]`
    prints the same choice, including `outdated`. It prints `use`, `resume`,
    `create` and `report`; it does not carry resume or create out, and it

@@ -705,6 +705,12 @@ spec:
                     description: Message is why agentd could not start the agent,
                       when it could not.
                     type: string
+                  podUID:
+                    description: |-
+                      PodUID is the UID of the pod whose heartbeat this status came from, set
+                      by the operator from the authenticated caller, never from the request body.
+                    maxLength: 64
+                    type: string
                   problems:
                     description: |-
                       Problems are the boot steps that warned or failed, each as

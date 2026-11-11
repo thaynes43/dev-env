@@ -978,6 +978,7 @@ func TestParseReportedAgentd(t *testing.T) {
 		"agentd v2.102.0 (commit ab(c, go1.27.3, linux/amd64)",
 		"agentd v2.102.0 (commit ab)c, go1.27.3, linux/amd64)",
 		"agentd v2.102.0 (commit , go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit abc,def, go1.27.3, linux/amd64)",
 	} {
 		if _, _, _, ok := parseReportedAgentd(line); ok {
 			t.Errorf("accepted %q", line)

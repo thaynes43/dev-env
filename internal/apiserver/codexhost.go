@@ -358,20 +358,19 @@ func codexHeartbeatFresh(at *metav1.Time, now time.Time) bool {
 	return now.Sub(at.Time) <= authority.DefaultHeartbeatStaleAfter
 }
 
-// codexPodReported is ruling O. The session status keeps the previous pod's
-// agentd line, remote state and repository report until this pod's heartbeat
-// is accepted. Those facts count only when lastHeartbeat was accepted for the
-// pod that is present: it is set, not after now, inside the staleness bound
-// codexHeartbeatFresh already uses, and not earlier than pod.status.startTime.
-// A pod with no start time has not reported.
+// codexPodReported is ruling Q. The session status keeps the previous pod's
+// agentd line, remote state and repository report until a heartbeat from the
+// pod that is present is stored. Those facts count only when status.agent.podUID
+// is that pod's UID and lastHeartbeat is fresh on the operator's clock.
+// There is no comparison with pod.status.startTime.
 func codexPodReported(sess *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) bool {
-	if pod == nil || pod.Status.StartTime == nil || sess == nil || sess.Status.Agent == nil {
+	if pod == nil || sess == nil || sess.Status.Agent == nil {
 		return false
 	}
-	if !codexHeartbeatFresh(sess.Status.Agent.LastHeartbeat, now) {
+	if sess.Status.Agent.PodUID == "" || sess.Status.Agent.PodUID != string(pod.UID) {
 		return false
 	}
-	return !sess.Status.Agent.LastHeartbeat.Time.Before(pod.Status.StartTime.Time)
+	return codexHeartbeatFresh(sess.Status.Agent.LastHeartbeat, now)
 }
 
 func (s *Server) codexHostPod(ctx context.Context, sess *v1alpha1.AgentSession) (*corev1.Pod, error) {
