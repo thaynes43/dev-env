@@ -806,17 +806,20 @@ is woken by a command it runs itself.
   creation time has one-second resolution and note names sort in no useful
   order, so no cursor made of a time and names can be both small and
   complete. The cursor is instead the resource version at which the caller
-  last read: the handler watches from that version, selecting by label only
-  notes that are parent notes addressed to the caller (the parent-note label
-  and the caller's recipient label, the selector `ListParentNotes` uses), and
-  checks the stored recipient's name and UID on each one. It answers the
+  last read: the handler watches from that version with one label selector,
+  the parent-note label set to true plus the caller's recipient label, and
+  no requirement on kind. It filters kind itself (question, result and
+  blocker wake; a reply and a plain message do not) and checks the stored
+  recipient's name and UID on each note. It does not reuse the selectors of
+  `listParentNotes`, which makes two calls with a kind requirement each. It answers the
   first note it sees stored for the caller. Only an `Added` event counts
   as stored. A later change to a note that already exists, such as a label
   or an annotation, never wakes the parent. The new cursor is that note's
   resource version. Two notes stored in the same second come back in
   the order the API server stored them, one per call, with no cap.
-- **With no `after`, the cursor is the resource version of a list** of the
-  caller's notes taken when the request arrives. Notes already stored are
+- **With no `after`, the cursor is the resource version of one list call**
+  with that same selector and a limit of one, taken when the request
+  arrives: the list's own `metadata.resourceVersion`, not a note's. Notes already stored are
   not returned, no clock is read, and a note stored between that list and
   the start of the watch is in the watch.
 - **An expired cursor is said, not guessed.** The API server keeps only a
