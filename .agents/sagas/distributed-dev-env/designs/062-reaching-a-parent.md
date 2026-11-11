@@ -782,8 +782,8 @@ recorded on OP545 and Tom can change any of them.
 
 Ruled by the coordinator `dev-env-fable-coordinator-1109` on 2026-11-11,
 reversing its own ruling 1. Not a ruling by Tom. Recorded as
-[ADR-024](../adrs/024-parent-held-wait.md), which supersedes the two
-sentences of ADR-023 about the wake notice and its sent mark.
+[ADR-024](../adrs/024-parent-held-wait.md), which supersedes the parts of
+ADR-023 about the wake line and its sent mark.
 
 **Why.** Slice 6 was built (dev-env PR 1072) and reviewed twice by another
 model family. Both reviews found HIGH faults in the typing itself, the second
@@ -800,26 +800,29 @@ is woken by a command it runs itself.
 
 | Method and path | Who | Effect |
 |---|---|---|
-| `GET /v1/parent-notes/wait?seconds=N&after=CURSOR` | a session, for notes addressed to itself | holds until a note of kind question, result or blocker addressed to the caller exists that is newer than CURSOR, or until N seconds. N is 1 to 900. Answers the oldest such note's name, child, kind and creation time, and a cursor. No note text |
+| `GET /v1/parent-notes/wait?seconds=N&after=CURSOR` | a session, for notes addressed to itself | holds until a note of kind question, result or blocker addressed to the caller is stored after CURSOR, or until N seconds. N is 1 to 900. Answers that note's name, child, kind and creation time, and a cursor; or `waiting`; or `resync` when the cursor is too old. No note text |
 
-- **The cursor never skips a note.** A note's creation time has one-second
-  resolution and note names sort in no useful order, so "newer than a time
-  and a name" would lose a note stored later in the same second. The cursor
-  therefore holds a creation second and the names already given to the
-  caller for that second, at most 32 of them. A note is new when its
-  creation second is later than the cursor's, or equal with a name the
-  cursor does not hold. The answer is the oldest new note, by second and
-  then by name. If more than 32 notes to one parent share a second, a later
-  call may name one of them again. A repeat is harmless; a miss is not
-  possible. The cursor is opaque to the caller, at most 4096 bytes, and
-  carries no note text.
-- **With no `after`, the cursor is built from what is stored**, not from a
-  clock: the newest note already addressed to the caller, and the names at
-  its second. So a first call returns only notes stored after it began, and
-  the operator's clock is never compared with the API server's. The handler
-  lists and then watches from that list's resource version, so a note
-  stored between the two is not lost. A caller that wants the backlog reads
-  `agent-run parent list` first.
+- **The cursor is the API server's own position, not a time.** A note's
+  creation time has one-second resolution and note names sort in no useful
+  order, so no cursor made of a time and names can be both small and
+  complete. The cursor is instead the resource version at which the caller
+  last read: the handler watches parent notes from that version and answers
+  the first note it sees stored for the caller. The new cursor is that
+  note's resource version. Two notes stored in the same second come back in
+  the order the API server stored them, one per call, with no cap.
+- **With no `after`, the cursor is the resource version of a list** of the
+  caller's notes taken when the request arrives. Notes already stored are
+  not returned, no clock is read, and a note stored between that list and
+  the start of the watch is in the watch.
+- **An expired cursor is said, not guessed.** The API server keeps only a
+  window of history. When it refuses the cursor's version as too old, the
+  answer is `resync` with a fresh cursor from a new list, and the caller
+  runs `agent-run parent list` to see what it may have missed. The handler
+  never falls back to comparing times.
+- At the deadline the answer is `waiting`, with the newest version the watch
+  reached, or the cursor it was given when the watch reached none. The
+  cursor is opaque to the caller, at most 256 bytes, and carries no note
+  text. A cursor that is not a resource version is refused with 422.
 - Authorisation is the inbox list's: a session sees only notes addressed to
   it, by name and UID. A CallerPolicy caller has no wait, as before
   (section 7.2).
@@ -832,7 +835,7 @@ is woken by a command it runs itself.
 
 | Command | What it does |
 |---|---|
-| `agent-run parent wait-any [--after CURSOR] [--for 15m] [-o json]` | one held read. Prints the note's name, child and kind and the next cursor, or `waiting`. Exit 0 for both |
+| `agent-run parent wait-any [--after CURSOR] [--for 15m] [-o json]` | one held read. Prints the note's name, child and kind and the next cursor; or `waiting` and the cursor; or `resync` and a fresh cursor, which means: read `agent-run parent list`. Exit 0 for all three |
 
 **How a coordinator uses it.** After it dispatches a worker, it starts
 `agent-run parent wait-any` as a background command. Its harness wakes it
@@ -843,10 +846,13 @@ headless parent can run the same command in the foreground between steps.
 
 **Tests.** `internal/apiserver/parent_note_wait_any_test.go`: returns at once
 when a newer note exists; holds and returns when one is stored; `waiting` at
-the deadline; two notes stored in one second are both returned, in either
-name order, and neither twice within the 32-name bound; a note stored
-between the list and the watch is returned; with no `after`, notes that
-already exist are not returned and no clock is read; another session's notes never wake the caller; a reply and a
+the deadline; two notes stored in one second are returned one per call, in
+the order they were stored, whatever their names; forty notes in one second
+are all returned, none twice and none skipped; a note stored between the
+list and the watch is returned; with no `after`, notes that already exist
+are not returned and no clock is read; an expired cursor answers `resync`
+with a fresh cursor and returns no note; a cursor that is not a resource
+version is 422; another session's notes never wake the caller; a reply and a
 plain message never wake it; the ninth held read is 429; a refused watch is
 503; the route is absent with the flag off; a CallerPolicy caller is
 refused. `internal/agentrun`: the command prints no note text, passes the

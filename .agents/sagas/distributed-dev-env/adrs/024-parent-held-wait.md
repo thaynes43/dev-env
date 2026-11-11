@@ -49,8 +49,9 @@ section 5).
    held read on the operator. It returns when a note addressed to the caller
    exists that the caller's cursor does not cover, or when its time is up. It
    prints the note's name, its child and its kind, and a cursor. It prints no
-   note text. The cursor never loses a note: a note may be named twice,
-   never skipped (DESIGN-062 section 13).
+   note text. The cursor is the API server's own position in its stream of
+   changes, so no note is skipped; when that position is too old, the answer
+   says so and the caller reads its list (DESIGN-062 section 13).
 3. **The parent's own harness does the waking.** A coordinator starts the
    command in the background. When the command exits, the harness tells the
    session, the way it does for any background command. No other process
