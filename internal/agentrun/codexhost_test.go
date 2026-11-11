@@ -142,25 +142,38 @@ func TestThreadStartWithoutHost(t *testing.T) {
 	})
 	for _, tc := range []struct {
 		action, sentence string
-		exit             int
 	}{
-		{"report", "", ExitOK},
-		{"resume", resumeNotBuilt, ExitFailed},
-		{"create", commandCreatesNoHost, ExitFailed},
+		{"report", ""},
+		{"resume", resumeNotBuilt},
+		{"create", commandCreatesNoHost},
 	} {
 		t.Run(tc.action, func(t *testing.T) {
 			h := newHarness(t)
 			h.api.handle = serveCodexChoice(codexChoice(tc.action, "paired", "remote_unavailable"))
-			h.mustRun(tc.exit, args(h)...)
-			var got apiv1.CodexHostChoice
-			if json.Unmarshal(h.stdout.Bytes(), &got) != nil || got.Action != tc.action {
-				t.Fatalf("stdout %s", h.stdout.String())
+			h.mustRun(apiv1.ThreadLaunchExit(apiv1.ThreadBlocked), args(h)...)
+			r := threadResult(t, h)
+			if r.Outcome != apiv1.ThreadBlocked || r.Error == nil || r.Error.Code != "no_host_selected" || r.Error.Message != threadlaunch.Message("no_host_selected") {
+				t.Fatalf("result %+v", r.Error)
 			}
+			rest := h.stderr.String()
 			if tc.sentence != "" {
-				contains(t, "stderr", h.stderr.String(), tc.sentence)
+				prefix := "agent-run: " + tc.sentence + "\n"
+				if !strings.HasPrefix(rest, prefix) {
+					t.Fatalf("stderr %q", rest)
+				}
+				rest = strings.TrimPrefix(rest, prefix)
 			}
-			if len(h.api.requests()) != 1 {
-				t.Fatalf("started something: %d requests", len(h.api.requests()))
+			var got apiv1.CodexHostChoice
+			if json.Unmarshal([]byte(rest), &got) != nil || got.Action != tc.action || got.Host != "paired" {
+				t.Fatalf("stderr choice %q", rest)
+			}
+			if strings.Contains(h.stdout.String(), `"action"`) {
+				t.Fatal("stdout carried the select object")
+			}
+			for _, req := range h.api.requests() {
+				if strings.Contains(req.path, "/threads") {
+					t.Fatalf("started a thread: %+v", h.api.requests())
+				}
 			}
 		})
 	}

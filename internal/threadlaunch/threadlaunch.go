@@ -95,6 +95,7 @@ func Names() []string {
 // Fixed diagnostics. Messages are client text, never reflected native output.
 var messages = map[string]string{
 	"invalid_input":                    "Invalid launch input",
+	"no_host_selected":                 "Host selection did not choose a host to use, so no thread was started",
 	"provider_not_qualified":           cursorUnqualified,
 	"not_codex_host":                   "The host is not a Codex --interactive session",
 	"host_not_running":                 "The host session is not Running",

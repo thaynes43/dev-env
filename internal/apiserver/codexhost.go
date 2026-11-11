@@ -391,8 +391,12 @@ func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates
 	if pod != nil {
 		h.PodReady = codexHostPodReady(sess, pod)
 		h.HoldPod = pod.Labels[v1alpha1.LabelHold] == "true"
-		h.ImageCurrent = pod.Labels[v1alpha1.LabelRevision] == tmpl.Revision() && tmpl.Revision() != "" &&
-			!conditionIsTrue(sess.Status.Conditions, controller.ConditionOutdated)
+		// The pod revision against the template revision. The Outdated
+		// condition is not this fact: a host one release behind stays
+		// usable when its agentd is new enough (ruling M).
+		if rev := pod.Labels[v1alpha1.LabelRevision]; tmpl != nil && tmpl.Revision() != "" && rev == tmpl.Revision() {
+			h.RevisionCurrent = true
+		}
 		if pod.Labels[codexHostPoolLabel] == "true" {
 			h.Pool = true
 		}
@@ -407,8 +411,11 @@ func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates
 	if sess.Status.RemoteControl != nil {
 		h.RemoteState = sess.Status.RemoteControl.State
 	}
-	if sess.Status.Agent != nil && sess.Status.Agent.LastActivity != nil {
-		h.LastActivity = sess.Status.Agent.LastActivity.Time
+	if sess.Status.Agent != nil {
+		h.Agentd = sess.Status.Agent.Agentd
+		if sess.Status.Agent.LastActivity != nil {
+			h.LastActivity = sess.Status.Agent.LastActivity.Time
+		}
 	}
 	if sess.Status.SuspendedAt != nil {
 		h.SuspendedAt = sess.Status.SuspendedAt.Time

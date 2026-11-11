@@ -763,11 +763,13 @@ it was. Renew well before the login lapses (status says when).
 
 Prints the Codex host selection as JSON and exits 0 for any action (use,
 resume, create or report). A refusal prints the fixed code and sentence and
-exits non-zero. --check asks the operator to choose and write nothing.
-Without --check, a use writes a lease for at most 15 minutes; this command
-does not release it. The route is off unless the operator was started with
---enable-codex-host-select. When it is off, or the operator is older, the
-command reports route_unsupported.
+exits non-zero. The object includes outdated, true when the chosen host is
+running and its pod revision is not the current template revision. It does
+not change ready, which is true exactly for use. --check asks the operator
+to choose and write nothing. Without --check, a use writes a lease for at
+most 15 minutes; this command does not release it. The route is off unless
+the operator was started with --enable-codex-host-select. When it is off,
+or the operator is older, the command reports route_unsupported.
 `,
 	"thread": `Usage: agent-run thread start --agent codex --host <codex-host> --model <full id> --effort <e>
                          --handoff FILE [--repo R] [--name N] [--wait 5m] [-o json]
@@ -810,9 +812,14 @@ worktree, as on the phone. --wait (at most 10m) bounds the whole launch.
                   or on an older operator, thread start behaves as it does today and
                   prints one line that host selection is off. With it on, use starts the
                   thread on the chosen host and releases the lease when the launch result
-                  is known. report prints the choice and starts nothing. resume prints the
-                  choice and says resume is not built yet. create prints the choice and
-                  says this command does not create a host. --host never asks.
+                  is known. The command exits 0 only when a thread was started. report,
+                  resume and create print one thread-launch.v1 result on stdout with
+                  outcome blocked and code no_host_selected, print the choice on stderr
+                  after that action's sentence, and exit 1. report has no sentence.
+                  resume says resume is not built yet. create says this command does
+                  not create a host. A running host is chosen when its reported agentd
+                  is at least 2.102.0, including when its pod revision is not current.
+                  The choice's outdated field says that. --host never asks.
 --agent claude    a new remote session, through rc start. It follows --wait (default
                   5m, at most 10m). Agent start is read from the session status,
                   which agentd publishes on its heartbeat, so it can show up to

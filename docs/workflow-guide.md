@@ -865,11 +865,19 @@ Use this when Tom must see and drive the thread on his phone.
    still needs `--host`. If it tries selection while the route is absent it
    behaves as it does today and prints one line that host selection is off.
    With the flag on, `use` starts the thread on the chosen host and releases
-   the lease when the launch result is known. `report` prints the choice and
-   starts nothing. `resume` and `create` are later slices: the command prints
-   the choice and does not resume or create. `--host` never calls select.
+   the lease when the launch result is known. The command exits 0 only when
+   a thread was started. `report`, `resume` and `create` print one
+   `thread-launch.v1` line on stdout with outcome `blocked` and code
+   `no_host_selected`, print the choice on stderr after that action's
+   sentence, and exit 1. `report` has no sentence. `resume` says resume is
+   not built yet. `create` says this command does not create a host. Neither
+   resumes nor creates. A running host is chosen when its reported agentd is
+   at least 2.102.0, even when its pod revision is not the current template
+   revision. The choice's `outdated` field says that, and it does not change
+   `ready`. `--host` never calls select.
    `agent-run codex-host select --repo <name> [--profile <name>] [--check]`
-   prints the same choice. `--check` writes nothing.
+   prints the same choice, including `outdated`, and exits 0 for any action.
+   `--check` writes nothing.
    `agent-run --agent codex --interactive` calls select before create, and
    creates a host only when the choice is `create`.
 

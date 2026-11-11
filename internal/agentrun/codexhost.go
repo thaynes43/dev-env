@@ -230,20 +230,31 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 		}
 		return a.threadOnHost(ctx, cmd, t)
 	case "report":
-		return a.printJSON(choice)
+		return a.threadNoHostSelected(choice, "")
 	case "resume":
-		if err := a.printJSON(choice); err != nil {
-			return err
-		}
-		return fail(ExitFailed, "%s", resumeNotBuilt)
+		return a.threadNoHostSelected(choice, resumeNotBuilt)
 	case "create":
-		if err := a.printJSON(choice); err != nil {
-			return err
-		}
-		return fail(ExitFailed, "%s", commandCreatesNoHost)
+		return a.threadNoHostSelected(choice, commandCreatesNoHost)
 	default:
 		return codexHostRefused(choice)
 	}
+}
+
+// threadNoHostSelected is a select answer that did not start a thread
+// (ruling N). Stdout is one thread-launch.v1 result, outcome blocked, code
+// no_host_selected. Stderr is the action's fixed sentence, when it has one,
+// and then the select object. The exit is the blocked outcome's code.
+func (a *app) threadNoHostSelected(choice apiv1.CodexHostChoice, sentence string) error {
+	if sentence != "" {
+		a.errf("%s", sentence)
+	}
+	enc := json.NewEncoder(a.env.Stderr)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(choice); err != nil {
+		return fail(ExitFailed, "could not print the host choice")
+	}
+	return a.threadRefuse("codex", apiv1.ThreadBlocked, "no_host_selected", apiv1.ThreadLaunchExit(apiv1.ThreadBlocked))
 }
 
 // Stages of a select attempt that ended before any HTTP response.

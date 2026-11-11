@@ -83,6 +83,8 @@ type codexHostOpt struct {
 	repos                          []string
 	skipPod, notReady              bool
 	protected, pool, outdated      bool
+	omitAgentd                     bool
+	agentd                         string
 	rescueFailed, removalBlocked   bool
 	superseded                     bool
 	rescue                         v1alpha1.RescueResult
@@ -146,9 +148,12 @@ func (f *fixture) addCodexHost(name string, o codexHostOpt) {
 	saved.Status = v1alpha1.AgentSessionStatus{
 		Phase:         o.phase,
 		RemoteControl: &v1alpha1.RemoteControlStatus{Name: name, State: o.remote},
-		Agent: &v1alpha1.AgentStatus{ProjectBootstrap: &v1alpha1.ProjectBootstrapStatus{
-			State: codexHostBootstrapReady, Repositories: repos,
-		}},
+		Agent: &v1alpha1.AgentStatus{
+			Agentd: codexHostAgentd(o),
+			ProjectBootstrap: &v1alpha1.ProjectBootstrapStatus{
+				State: codexHostBootstrapReady, Repositories: repos,
+			},
+		},
 	}
 	if o.phase == v1alpha1.PhaseRunning && !o.skipPod {
 		saved.Status.PodName = name
@@ -265,6 +270,20 @@ func (f *fixture) coordinatorCaller() string {
 }
 
 func clientHolder() string { return "client/" + clientSA }
+
+// codexHostAgentd is the reported status.agent.agentd line. The form is
+// version.Info.String("agentd"). An empty option is the minimum version
+// automatic selection accepts. omitAgentd leaves the line missing.
+func codexHostAgentd(o codexHostOpt) string {
+	switch {
+	case o.omitAgentd:
+		return ""
+	case o.agentd != "":
+		return o.agentd
+	default:
+		return "agentd v" + codexhostpool.MinAgentdVersion + " (commit abcdef012345, go1.27.1, linux/amd64)"
+	}
+}
 
 func (f *fixture) wantChoice(w *httptest.ResponseRecorder, action, host, reason string) apiv1.CodexHostChoice {
 	f.t.Helper()
@@ -703,6 +722,55 @@ func TestCodexHostLoginFact(t *testing.T) {
 	})
 }
 
+func TestCodexHostAgentdVersionAndRevision(t *testing.T) {
+	line := func(v string) string {
+		return "agentd v" + v + " (commit abcdef012345, go1.27.1, linux/amd64)"
+	}
+	t.Run("exactly the minimum", func(t *testing.T) {
+		f := newCodexFixture(t)
+		f.addCodexHost("paired", codexHostOpt{})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", true), "use", "paired", "")
+		if got.Outdated || !got.Ready {
+			t.Fatalf("%+v", got)
+		}
+	})
+	t.Run("above the minimum and not current", func(t *testing.T) {
+		f := newCodexFixture(t)
+		f.addCodexHost("behind", codexHostOpt{agentd: line("2.104.0"), outdated: true})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "behind", "")
+		if !got.Outdated || !got.Ready {
+			t.Fatalf("%+v", got)
+		}
+		if _, id, _, ok := parseCodexHostLease(f.session("behind").Annotations[codexHostLeaseAnnotation]); !ok || id != codexTestLaunch {
+			t.Fatal("a host one revision behind was not leased")
+		}
+	})
+	t.Run("one patch below fills the cell", func(t *testing.T) {
+		f := newCodexFixture(t)
+		f.addCodexHost("old", codexHostOpt{agentd: line("2.101.1")})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "old", codexhostpool.ReasonImageOutdated)
+		if got.Ready || got.Action == "create" || f.session("old").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatalf("used or leased %+v", got)
+		}
+	})
+	t.Run("missing", func(t *testing.T) {
+		f := newCodexFixture(t)
+		f.addCodexHost("none", codexHostOpt{omitAgentd: true})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", true), "report", "none", codexhostpool.ReasonImageOutdated)
+		if got.Action == "create" {
+			t.Fatal("a missing version did not fill the cell")
+		}
+	})
+	t.Run("unparsable", func(t *testing.T) {
+		f := newCodexFixture(t)
+		f.addCodexHost("bad", codexHostOpt{agentd: "agentd v2.102.0"})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", true), "report", "bad", codexhostpool.ReasonImageOutdated)
+		if got.Action == "create" {
+			t.Fatal("an unparsable version did not fill the cell")
+		}
+	})
+}
+
 // The lease step re-reads the chosen session and its pod and runs the same
 // suitability test. A host that no longer qualifies is not leased.
 func TestCodexHostLeaseRechecksSuitability(t *testing.T) {
@@ -780,6 +848,22 @@ func TestCodexHostLeaseRechecksSuitability(t *testing.T) {
 		f.wantChoice(f.selectCodex(tokClient, "dev", false), "", "", codexhostpool.ReasonLoginRequired)
 		if f.session("only").Annotations[codexHostLeaseAnnotation] != "" {
 			t.Fatal("leased a host whose login had lapsed")
+		}
+	})
+	t.Run("agentd below the minimum", func(t *testing.T) {
+		f := newCodexFixture(t, mutate("only", func(ctx context.Context, c client.WithWatch, sess *v1alpha1.AgentSession) {
+			if sess.Status.Agent == nil {
+				t.Fatal("no agent status")
+			}
+			sess.Status.Agent.Agentd = "agentd v2.101.1 (commit abcdef012345, go1.27.1, linux/amd64)"
+			if err := c.Status().Update(ctx, sess); err != nil {
+				t.Fatal(err)
+			}
+		}))
+		f.addCodexHost("only", codexHostOpt{})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "only", codexhostpool.ReasonImageOutdated)
+		if got.Ready || f.session("only").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatal("leased a host whose agentd dropped below the minimum")
 		}
 	})
 	t.Run("replaced", func(t *testing.T) {

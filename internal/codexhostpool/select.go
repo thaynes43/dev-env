@@ -1,6 +1,10 @@
 package codexhostpool
 
-import "time"
+import (
+	"strconv"
+	"strings"
+	"time"
+)
 
 // Actions are the section 5 result. A named host is returned as use: today's
 // thread start runs on that host, and selection does not resume or create.
@@ -72,6 +76,15 @@ const (
 	// defaults. A non-positive cap on Input selects them.
 	DefaultMaxRunningPerCell = 1
 	DefaultMaxRunning        = 2
+
+	// MinAgentdVersion is the oldest agentd automatic selection accepts,
+	// major.minor.patch with no leading zero. 2.102.0 is the release in
+	// which agentd trusts a bootstrapped folder itself. 2.101.1 carried
+	// the reply reading and is not enough. Raise this, in a reviewed
+	// change, when a release changes what a thread launch needs from
+	// agentd. A running host below it, or whose reported line is missing
+	// or unparsable, is image_outdated and still counts toward the cell.
+	MinAgentdVersion = "2.102.0"
 )
 
 // Login is the one shared Codex login fact for this selection (ruling J).
@@ -119,13 +132,20 @@ type Host struct {
 	LeaseHolder         string
 	LeaseLaunchID       string
 	LeaseExpiry         time.Time
-	ImageCurrent        bool
-	SuspendedBy         string
-	SuspendedAt         time.Time
-	LastActivity        time.Time
-	Pool                bool
-	Archived            bool
-	Parent              string
+	// Agentd is status.agent.agentd, the line agentd reports. Empty when
+	// the session has not reported one.
+	Agentd string
+	// RevisionCurrent is true when the pod's revision label equals the
+	// current template revision and that revision is not empty. It does
+	// not decide suitability. The answer's outdated is its negation for
+	// a chosen running host.
+	RevisionCurrent bool
+	SuspendedBy     string
+	SuspendedAt     time.Time
+	LastActivity    time.Time
+	Pool            bool
+	Archived        bool
+	Parent          string
 }
 
 // Caller is who is asking. ParentRef is the identity stored on a child's
@@ -172,12 +192,17 @@ type Skip struct {
 }
 
 // Result is the section 5 object. Ready is true exactly when Action is use.
+// Outdated is true when the chosen host is running and its pod revision is
+// not the current template revision. It does not change Ready. A resume
+// leaves it false: that host is suspended, and a resume puts it on the
+// current image.
 type Result struct {
-	Host    string `json:"host,omitempty"`
-	Action  string `json:"action,omitempty"`
-	Ready   bool   `json:"ready"`
-	Reason  string `json:"reason,omitempty"`
-	Skipped []Skip `json:"skipped,omitempty"`
+	Host     string `json:"host,omitempty"`
+	Action   string `json:"action,omitempty"`
+	Ready    bool   `json:"ready"`
+	Outdated bool   `json:"outdated"`
+	Reason   string `json:"reason,omitempty"`
+	Skipped  []Skip `json:"skipped,omitempty"`
 }
 
 type judged struct {
@@ -265,7 +290,11 @@ func Suitable(h Host, c Caller, profile, repository string, now time.Time) bool 
 func finish(rows []judged, chosen int, action string, ready bool, reason string) Result {
 	res := Result{Action: action, Ready: ready, Reason: reason}
 	if chosen >= 0 {
-		res.Host = rows[chosen].host.Name
+		h := rows[chosen].host
+		res.Host = h.Name
+		if h.Phase == PhaseRunning {
+			res.Outdated = !h.RevisionCurrent
+		}
 	}
 	for _, row := range rows {
 		if row.index == chosen {
@@ -310,7 +339,12 @@ func judge(h Host, c Caller, requested, repo string, now time.Time) (reason stri
 		if why := runningRemoteReason(h.RemoteState); why != "" {
 			return why, false, false
 		}
-		if !h.ImageCurrent {
+		// Ruling M. The old test was "the pod revision is the current
+		// template revision". The launch needs an agentd that is new
+		// enough, which is a version, not a claim to be the newest image.
+		// A suspended host does not reach this line: a resume puts it on
+		// the current image.
+		if !agentdNewEnough(h.Agentd) {
 			return ReasonImageOutdated, false, false
 		}
 		if leaseHeldByOther(h, c, now) {
@@ -410,6 +444,88 @@ func runningRemoteReason(state string) string {
 	default:
 		return ReasonRemoteUnavailable
 	}
+}
+
+// agentdNewEnough reports whether line is the reported agentd form and
+// the version is at or above MinAgentdVersion. Anything else is not.
+func agentdNewEnough(line string) bool {
+	maj, min, pat, ok := parseReportedAgentd(line)
+	if !ok {
+		return false
+	}
+	wantMaj, wantMin, wantPat, ok := parseStrictTriple(MinAgentdVersion)
+	if !ok {
+		return false
+	}
+	if maj != wantMaj {
+		return maj > wantMaj
+	}
+	if min != wantMin {
+		return min > wantMin
+	}
+	return pat >= wantPat
+}
+
+// parseReportedAgentd accepts only the line version.Info.String("agentd")
+// writes: "agentd v<major>.<minor>.<patch> (commit <commit>, <go>, <platform>)".
+// Each component is a decimal integer with no leading zero. The commit, the
+// Go version and the platform are non-empty and contain no space. A prefix,
+// a suffix, a leading zero or a space anywhere in those tokens is rejected.
+func parseReportedAgentd(line string) (major, minor, patch int, ok bool) {
+	const head = "agentd v"
+	rest, found := strings.CutPrefix(line, head)
+	if !found {
+		return 0, 0, 0, false
+	}
+	ver, tail, found := strings.Cut(rest, " (commit ")
+	if !found || ver == "" || strings.ContainsAny(ver, " \t") {
+		return 0, 0, 0, false
+	}
+	if !strings.HasSuffix(tail, ")") || strings.Contains(tail[:len(tail)-1], ")") {
+		return 0, 0, 0, false
+	}
+	parts := strings.Split(strings.TrimSuffix(tail, ")"), ", ")
+	if len(parts) != 3 {
+		return 0, 0, 0, false
+	}
+	for _, p := range parts {
+		if p == "" || strings.ContainsAny(p, " \t,") {
+			return 0, 0, 0, false
+		}
+	}
+	return parseStrictTriple(ver)
+}
+
+func parseStrictTriple(s string) (major, minor, patch int, ok bool) {
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return 0, 0, 0, false
+	}
+	nums := [3]int{}
+	for i, p := range parts {
+		n, good := parseDecimal(p)
+		if !good {
+			return 0, 0, 0, false
+		}
+		nums[i] = n
+	}
+	return nums[0], nums[1], nums[2], true
+}
+
+func parseDecimal(s string) (int, bool) {
+	if s == "" || (len(s) > 1 && s[0] == '0') {
+		return 0, false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 func leaseHeldByOther(h Host, c Caller, now time.Time) bool {

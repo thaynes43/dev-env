@@ -353,11 +353,27 @@ and is not built.
    asking Tom for a code. `login-required`, `offline`, `starting` and
    `errored` are not suitable. A running host in those states is left
    alone. This feature does not restart it.
-8. The pod revision equals the current template revision (`Outdated` false).
-   An outdated running host is not suitable, and it is not suspended to
-   move it. `haynes-ops-1109-115326` fails this as well as the protected
-   rule. Its image `2.89.0` is from before thread start, so a launch there
-   would be `host_unsupported` even if it were not protected.
+8. The host's reported agentd is at least `2.102.0`. The route reads
+   `status.agent.agentd` and the pool parses that line strictly. The
+   reported form is what `version.Info.String("agentd")` writes:
+   `agentd v<major>.<minor>.<patch> (commit <commit>, <go>, <platform>)`,
+   with no leading zero in a component. A version below the minimum, or a
+   missing or unparsable line, is `image_outdated`. The host is not used
+   and it is not suspended. It still counts toward the cell.
+   `internal/codexhostpool` keeps one constant for that minimum,
+   `MinAgentdVersion`. Raise it, in a reviewed change, when a release
+   changes what a thread launch needs from agentd. `2.102.0` is the
+   release in which agentd trusts a bootstrapped folder itself. `2.101.1`
+   carried the reply reading and is below the minimum. The pod revision
+   is not this rule. The answer's `outdated` is true when the chosen host
+   is running and its pod revision label is not the current template
+   revision. It is information only. Ready stays true exactly when the
+   action is `use`. A suspended eligible host does not take this test: a
+   resume puts it on the current image, and a resume answer leaves
+   `outdated` false. Nothing here suspends, resumes or restarts a host.
+   `haynes-ops-1109-115326` fails the protected rule before this one. Its
+   image `2.89.0` is also below the minimum, so a launch there would be
+   `host_unsupported` even if it were not protected.
 9. The login fact is not lapsed. Unknown does not block.
 
 **A suspended host is eligible to resume** when all of these hold:
@@ -439,11 +455,15 @@ input. Story 695 writes trust at each thread start, and that trust does not
 survive a boot, so selection does not read it. Missing trust is not a
 reason to create another host.
 
-On this evening, for a caller whose profile fits `dev`, the only suitable
-host is `dev-env-1110-230548`. Its project bootstrap is Ready, 9 of 9
-repositories, so a request for any repository in that report fits.
-`spec.repo` `dev-env` is only the default. The action is `use`, so the
-result is ready. For a profile that does not fit `dev`, no host is
+On this evening, for a caller whose profile fits `dev`,
+`dev-env-1110-230548` is the only running paired host that fits the
+profile. Its project bootstrap is Ready, 9 of 9 repositories, so a
+request for any repository in that report fits. `spec.repo` `dev-env` is
+only the default. Its image was `2.101.0`, which rule 8 now treats as
+below the agentd minimum, so the action is `report` with reason
+`image_outdated`. The host fills the cell, and nothing is created. Its
+pod revision was the current template revision, so `outdated` is false.
+Ready is false. For a profile that does not fit `dev`, no host is
 suitable.
 
 ## 5. Selection
@@ -512,8 +532,12 @@ Order:
    names the skip result for every existing host.
 
 The result is one JSON object the caller prints: `host`, `action`
-(`use`, `resume`, `create` or `report`), `ready` (true or false), `reason`,
-and `skipped` as a list of `{name, reason}`. `report` names the running host
+(`use`, `resume`, `create` or `report`), `ready` (true or false),
+`outdated` (true or false), `reason`, and `skipped` as a list of
+`{name, reason}`. `outdated` is true when the chosen host is running and
+its pod revision label is not the current template revision. It does not
+change `ready`, which stays true exactly when the action is `use`. A
+resume answer leaves `outdated` false. `report` names the running host
 that already fills the cell, and the cell is the resolved profile. The
 selector does not launch on it and does not create another. Reasons are the
 fixed codes in section 7. No pairing code, no prompt text, no transcript.
@@ -614,7 +638,10 @@ does not add.
 
 **What counts toward the cap.** Every Running Codex remote host in the cell
 that is not protected. Suitable or not, pool label or not. That includes
-`unpaired`, `login-required`, `offline`, `starting`, `errored` and outdated.
+`unpaired`, `login-required`, `offline`, `starting`, `errored`, and a
+running host whose reported agentd is below the minimum, missing or
+unparsable (`image_outdated`). A pod revision that is not current does
+not by itself keep a host out of the cap or out of use.
 A new host beside an unpaired one would ask Tom to pair again. The cell cap
 stops that. A protected host does not count. A leased host counts, so a
 second caller waits or gets `host_busy` instead of a new host. When the
@@ -657,9 +684,10 @@ together with a current keeper login (ruling E). Suitable can be short of
 ready. The result says which.
 
 No host in section 3 is adopted by this design. Question 1 is answered no
-(section 11). The only host the selector can use tonight that passes
-section 4 on its own is `dev-env-1110-230548`, for profile `dev`, for a
-requested repository its bootstrap reports Ready.
+(section 11). `dev-env-1110-230548` is the only running host that fits
+profile `dev` and reports the requested repository Ready. Its image that
+evening was `2.101.0`, below the agentd minimum in section 4 rule 8, so
+the selector reports it and does not use it.
 
 ## 7. The contract
 
@@ -681,7 +709,7 @@ finding no host is `caller_cannot_create`.
 | --- | --- |
 | `agent-run thread start --agent codex` with `--host` | None. The named host, today's errors |
 | `agent-run codex-host select --repo <name> [--profile <name>] [--check]` | New. Prints the section 5 object. `--check` is `?check=true` and writes nothing. Without `--check`, the command carries out `use`, `resume`, `create` or `report`. The live check in section 9 is this command with `--check` |
-| `agent-run thread start --agent codex` without `--host` | Calls select, then today's thread start on the chosen host. A `resume` action resumes first and waits until the host is Running or the wait ends. A `create` action creates only when section 6 allows it, then the caller still has to pair before a thread will pass `paired`. A `report` action prints the object and does not start a thread |
+| `agent-run thread start --agent codex` without `--host` | Calls select. `use` runs today's thread start on the chosen host and is the only answer that can exit 0. `report`, `resume` and `create` start nothing: stdout is one `thread-launch.v1` result with outcome `blocked` and code `no_host_selected`, stderr is that action's fixed sentence and then the select object, and the exit is the blocked code. `report` has no sentence. `resume` says resume is not built yet. `create` says this command does not create a host. Carrying out resume and create is later slices |
 | `agent-run --agent codex --interactive` | Calls select with `?check=true` before create, so the call holds no lease. A suitable or eligible host is printed and no host is created. Create remains the fallback. A `report` action prints the object and does not create |
 | `agent-run thread status` | None. Still the named host, exec route only |
 | `agent-run pair` | None. Still a person's command. The selector never runs it |
@@ -724,7 +752,7 @@ filled where a host was considered:
 | `rescue_blocked` | Rescue `Failed`, or removal blocked | Not resumed |
 | `pairing_unknown` | Suspended, and pairing is not shown. Until slice 6, the last state is not `pair-code-issued`. After slice 6, the session has no durable record that a pairing code was issued | Not resumed |
 | `unpaired` | Running and `unpaired` | Not used, and not sent to `pair` |
-| `image_outdated` | Running, revision not current | Not suspended and not used |
+| `image_outdated` | Running, and the reported agentd is below the minimum, missing or unparsable | Not suspended and not used. It still counts toward the cell |
 | `profile_mismatch` | Resolved profile does not fit | Not used |
 | `repo_not_ready` | The requested repository is not Ready in the host's reported project bootstrap | Not used |
 | `unpushed_work` | Suspended rescue has unpushed refs, or the rescue is missing | Not resumed |
@@ -1012,3 +1040,41 @@ is the coordinator's ruling, not Tom's. No session names in code.
 `--codex-host-hands-off` has no default. The operator refuses to start with
 `--enable-codex-host-select` unless `--codex-host-hands-off` is given. An
 explicit empty value is allowed and is a stated choice.
+
+**Ruling M** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+is the coordinator's ruling, not Tom's. A running host is suitable when
+its agentd is new enough, not when its image is the newest. The old rule
+existed because a thread started through an older agentd lacks fixes the
+launch depends on. That is a statement about a version, not about being
+the newest. `internal/codexhostpool` has one constant, the minimum agentd
+version automatic selection accepts, set to `2.102.0` (the release in
+which agentd trusts a bootstrapped folder itself; `2.101.1` carried the
+reply reading). The route reads the host's reported agentd version from
+`status.agent.agentd` and parses that line strictly. A running host whose
+version parses and is at or above the minimum is suitable as far as this
+rule goes. A host whose version is below the minimum, missing or
+unparsable is skipped with the existing reason `image_outdated` and still
+counts toward the cell. The answer gains one boolean, `outdated`, true
+when the chosen running host's pod revision is not the current template
+revision. It is information only and does not change `ready`, which stays
+true exactly for `use`. A suspended eligible host is unaffected: a resume
+puts it on the current image, and a resume answer leaves `outdated`
+false. Nothing in this ruling suspends, resumes or restarts a host. The
+constant is raised, in a reviewed change, whenever a release changes what
+a thread launch needs from agentd.
+
+**Ruling N** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+is the coordinator's ruling, not Tom's. `agent-run thread start` without
+`--host` never exits 0 unless a thread was started. For any answer that
+is not `use` (`report`, `resume`, `create`), the command prints one
+`thread-launch.v1` result on stdout with outcome `blocked` and the fixed
+blocker code `no_host_selected`, prints the select object on stderr after
+the existing fixed sentence for that action, and exits with the exit code
+`blocked` already has. `report` has no sentence. `resume`'s sentence is
+that resume is not built yet. `create`'s sentence is that this command
+does not create a host. `no_host_selected` and its one sentence live in
+`internal/threadlaunch`. The interactive create and `agent-run codex-host
+select` are unchanged. `--host` does not call select. When the route is
+absent, thread start behaves as it does today. This replaces the
+print-and-exit sentences of ruling H for `thread start` without `--host`.
+Ruling H's other points stand.
