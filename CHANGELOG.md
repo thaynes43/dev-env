@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.104.0](https://github.com/thaynes43/dev-env/compare/v2.103.0...v2.104.0) (2026-11-11)
+
+
+### Features
+
+* **parent:** a parent's own held wait for new notes, agent-run parent wait-any (DESIGN-062 slice 6b, OP708) ([#1074](https://github.com/thaynes43/dev-env/issues/1074)) ([b65a41c](https://github.com/thaynes43/dev-env/commit/b65a41c98281c15f9cefd5db285482a6128c777a))
+
 ## [2.103.0](https://github.com/thaynes43/dev-env/compare/v2.102.0...v2.103.0) (2026-11-11)
 
 
