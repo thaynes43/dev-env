@@ -265,12 +265,15 @@ func decideInbox(ctx context.Context, c EvalConfig, s Summary, memo map[string]m
 		return Released, nil, []protocol.CoordArchiveObservation{senderObs, obs}
 	}
 	// A labelled note to a session parent is kept while that parent exists.
-	// The read ack is not consulted first. A failed or absent parent read
-	// continues with the ordinary ack and recipient rule.
+	// Absence continues with the ordinary ack and recipient rule. Any other
+	// parent read is Unknown, before a read ack is consulted.
 	if sessionParentNote(s) {
 		recipientAnswer, recipientObs, recipientOK := inboxRecipient(ctx, c, s, memo)
 		if recipientOK && recipientAnswer == sessionPresent {
 			return Kept, nil, []protocol.CoordArchiveObservation{senderObs, recipientObs}
+		}
+		if recipientAnswer != sessionAbsent {
+			return Unknown, nil, nil
 		}
 	}
 	decision, observations, done := inboxAck(ctx, c, s, senderObs)

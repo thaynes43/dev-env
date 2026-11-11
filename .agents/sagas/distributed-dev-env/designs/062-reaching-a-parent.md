@@ -625,10 +625,25 @@ of its reply.
 [OpenProject #697](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/697),
 "Reaching a parent: read a released note from its archive, then release
 answered notes to a live parent", adds that read. This slice implements only
-the first fact: a caller endpoint counts as absent. A labelled note to a
-session parent is also kept while that parent session exists, including when
-a read ack is already stored. ADR-023 is unchanged: keeping a record longer
-than its release fact allows is not a contradiction of it.
+the first fact: a caller endpoint counts as absent. ADR-023 is unchanged:
+keeping a record longer than its release fact allows is not a contradiction
+of it.
+
+The rows that differ from main are these. A labelled note whose child session
+is gone and whose parent session is present is kept. That includes a valid
+read ack, and a read ack whose read fails or which is malformed or unbound.
+Main releases the valid-ack case and leaves the bad-ack case Unknown. A
+labelled note whose child session is gone, and whose parent read is anything
+other than present or absent, is Unknown, including when a valid read ack is
+stored. Main releases that case. A note to the caller account, a caller
+reply, and a caller plain message are kept while the child session exists
+and become release-eligible once that child is gone. Main leaves every
+caller shape Unknown.
+
+Retention is off by default, and haynes-ops does not set
+`--enable-coordination-retention`. A shelf older than this change refuses to
+archive a caller-recipient note, which stops before any delete. During a
+mixed rollout an old leader still applies main's rules.
 
 A note to a session parent who never answers, while that parent session
 still exists, stays, as any unacked inbox message to a live recipient stays.

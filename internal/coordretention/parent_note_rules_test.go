@@ -367,6 +367,55 @@ func decideChildReadFails(t *testing.T, message *coord.InboxMessage, childName s
 	return Evaluate(context.Background(), config(reader), summaries)[0]
 }
 
+// A valid read ack is present and the child read fails. Both stay Unknown.
+// Removing the caller-sender branch lets the ack release them.
+func TestCallerSenderReadAckDoesNotShortcutAFailedChildRead(t *testing.T) {
+	replyNote := noteMessage(t, toCaller("sender-ack-reply-note", inbox.KindQuestion), idUID(500), false)
+	cases := []struct {
+		name    string
+		message *coord.InboxMessage
+		child   string
+	}{
+		{name: "caller reply", message: answerTo(t, replyNote, "sender-ack-reply", idUID(501), true), child: sender.Name},
+		{name: "caller plain message", message: noteMessage(t, fromCaller("sender-ack-plain", ""), idUID(502), false), child: recipient.Name},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ack := callerReadAck(t, tc.message, idUID(503)).(*coord.InboxReadAck)
+			if !inbox.ValidAck(ack.Spec) || ack.Spec.MessageUID != string(tc.message.UID) || ack.Name != inbox.AckName(string(tc.message.UID), tc.message.Spec.Recipient.UID) {
+				t.Fatalf("ack fixture %#v", ack)
+			}
+			got := decideChildReadFailsWithAck(t, tc.message, tc.child, ack)
+			requireDecision(t, got, Unknown)
+			if got.Observations != nil {
+				t.Fatalf("failed child read recorded observations: %#v", got.Observations)
+			}
+		})
+	}
+}
+
+func decideChildReadFailsWithAck(t *testing.T, message *coord.InboxMessage, childName string, ack *coord.InboxReadAck) Result {
+	t.Helper()
+	summaries, err := Summaries(context.Background(), ListConfig{
+		Reader:    &fixtureReader{objects: map[string][]unstructured.Unstructured{"InboxMessageList": {toUnstructured(t, message)}}},
+		Namespace: retentionNS, Enabled: map[Kind]bool{InboxMessage: true},
+	})
+	if err != nil || len(summaries) != 1 {
+		t.Fatalf("summary %#v %v", summaries, err)
+	}
+	reader := &hookReader{get: func(_ context.Context, key client.ObjectKey, obj client.Object) error {
+		if _, ok := obj.(*devv1.AgentSession); ok && key.Name == childName {
+			return apierrors.NewServiceUnavailable("child read failed")
+		}
+		if got, ok := obj.(*coord.InboxReadAck); ok && key.Name == ack.Name {
+			*got = *ack.DeepCopy()
+			return nil
+		}
+		return apierrors.NewNotFound(schema.GroupResource{Resource: "synthetic"}, key.Name)
+	}}
+	return Evaluate(context.Background(), config(reader), summaries)[0]
+}
+
 func TestParentNoteReadAckKeepsALiveParent(t *testing.T) {
 	note := noteMessage(t, childNote("ack-live-parent", inbox.KindQuestion), idUID(200), true)
 	ack := sessionAck(t, note, idUID(201))
@@ -416,6 +465,125 @@ func TestParentNoteReadAckKeepsALiveParent(t *testing.T) {
 			t.Fatalf("recheck %#v uid %s", st, rec.summary.UID)
 		}
 	})
+}
+
+// A live parent keeps the note before the ack is read. On main each of these
+// acks is Unknown. Removing the parent-present return makes these Unknown too.
+func TestParentNoteLiveParentKeepsABadReadAck(t *testing.T) {
+	for i, tc := range []struct {
+		name string
+		fail bool
+		bad  func(t *testing.T, note *coord.InboxMessage) *coord.InboxReadAck
+	}{
+		{name: "ack-read-failed", fail: true},
+		{name: "ack-malformed", bad: func(t *testing.T, note *coord.InboxMessage) *coord.InboxReadAck {
+			t.Helper()
+			ack := sessionAck(t, note, idUID(410))
+			ack.Spec.Actor.Kind = "policy"
+			if inbox.ValidAck(ack.Spec) {
+				t.Fatal("malformed ack fixture")
+			}
+			return ack
+		}},
+		{name: "ack-unbound", bad: func(t *testing.T, note *coord.InboxMessage) *coord.InboxReadAck {
+			t.Helper()
+			ack := sessionAck(t, note, idUID(411))
+			ack.Spec.MessageUID = "99999999-9999-4999-8999-999999999991"
+			if ack.Spec.MessageUID == string(note.UID) || !inbox.ValidAck(ack.Spec) || ack.Name != inbox.AckName(string(note.UID), note.Spec.Recipient.UID) {
+				t.Fatal("unbound ack fixture")
+			}
+			return ack
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			note := noteMessage(t, childNote("bad-ack-"+tc.name, inbox.KindQuestion), idUID(400+i), true)
+			parent := liveSession(recipient)
+			var ack *coord.InboxReadAck
+			if tc.bad != nil {
+				ack = tc.bad(t, note)
+			}
+			absent := noteReader(t, note, ack, tc.fail, nil)
+			if got := evaluateStored(t, absent, note)[note.Name]; got.Decision != Unknown {
+				t.Fatalf("bad ack without the parent = %s", got.Decision)
+			}
+			live := noteReader(t, note, ack, tc.fail, parent)
+			got := evaluateStored(t, live, note)[note.Name]
+			requireDecision(t, got, Kept)
+			if len(got.Observations) != 2 || got.Observations[1].Observed != "present" || got.Observations[1].UID != recipient.UID {
+				t.Fatalf("live parent with a bad ack: %#v", got)
+			}
+			recheckRefusesDelete(t, live, note, got.Summary)
+		})
+	}
+}
+
+// A parent read that is not present or absent stays Unknown before the ack.
+// On main the valid ack below is release-eligible. Removing the Unknown return
+// makes this Released, and the recheck can delete it.
+func TestParentNoteUnknownParentWithAValidAckIsUnknown(t *testing.T) {
+	note := noteMessage(t, childNote("unknown-parent-ack", inbox.KindBlocker), idUID(420), true)
+	ack := sessionAck(t, note, idUID(421))
+	base := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(note.DeepCopy(), ack.DeepCopy()).Build()
+	if got := evaluateStored(t, base, note)[note.Name]; got.Decision != Released || len(got.Observations) < 2 || got.Observations[1].Observed != "acknowledged" {
+		t.Fatalf("valid ack with the parent gone: %#v", got)
+	}
+	reader := &hookReader{Reader: base, get: func(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+		if _, ok := obj.(*devv1.AgentSession); ok && key.Name == recipient.Name {
+			return apierrors.NewServiceUnavailable("parent read failed")
+		}
+		return base.Get(ctx, key, obj)
+	}}
+	got := evaluateStored(t, reader, note)[note.Name]
+	requireDecision(t, got, Unknown)
+	if got.Observations != nil {
+		t.Fatalf("unknown parent recorded observations: %#v", got.Observations)
+	}
+	recheckRefusesDelete(t, reader, note, got.Summary)
+}
+
+func noteReader(t *testing.T, note *coord.InboxMessage, ack *coord.InboxReadAck, failAck bool, parent *devv1.AgentSession) client.Reader {
+	t.Helper()
+	objects := []client.Object{note.DeepCopy()}
+	if ack != nil {
+		objects = append(objects, ack.DeepCopy())
+	}
+	if parent != nil {
+		objects = append(objects, parent.DeepCopy())
+	}
+	base := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(objects...).Build()
+	if !failAck {
+		return base
+	}
+	return &hookReader{Reader: base, get: func(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+		if _, ok := obj.(*coord.InboxReadAck); ok {
+			return apierrors.NewServiceUnavailable("ack read failed")
+		}
+		return base.Get(ctx, key, obj)
+	}}
+}
+
+func recheckRefusesDelete(t *testing.T, reader client.Reader, note *coord.InboxMessage, summary Summary) {
+	t.Helper()
+	store, ok := reader.(client.Client)
+	if !ok {
+		store = reader.(*hookReader).Reader.(client.Client)
+	}
+	archive := newMemArchive()
+	runnable := &Runnable{
+		Reader: reader, Client: store, Namespace: retentionNS, Reconciled: map[string]bool{"dev-agents": true},
+		metrics: newRetentionMetrics(), Archive: archive, Slots: shelf.NewExecSlots(1),
+		Now: func() time.Time { return time.Date(2026, 11, 11, 5, 0, 0, 0, time.UTC) },
+	}
+	if _, st := runnable.releaseRechecked(context.Background(), summary); !st.refused || st.stop != "" || st.done {
+		t.Fatalf("recheck %#v", st)
+	}
+	status := runnable.release(context.Background(), candidate{item: LookupResult{Result: Result{Summary: summary}}})
+	if status.deleted || !status.refused {
+		t.Fatalf("release %#v", status)
+	}
+	if err := store.Get(context.Background(), client.ObjectKey{Namespace: note.Namespace, Name: note.Name}, &coord.InboxMessage{}); err != nil {
+		t.Fatalf("note after recheck: %v", err)
+	}
 }
 
 func TestParentNoteManifestRecipientUID(t *testing.T) {
@@ -732,6 +900,101 @@ func exercisePerRecordPath(t *testing.T, name string, build func(*testing.T, int
 			t.Fatalf("%s missing while held: %v", name, err)
 		}
 	})
+}
+
+// The pass marks the record while the child is gone. At the recheck the
+// original UID is present again, or the child read fails. Neither deletes.
+// The present recheck resets the mark. Removing that recheck would delete both.
+func TestCallerRecheckKeepsAReturnedOrUnreadableChild(t *testing.T) {
+	shapes := []struct {
+		name  string
+		build func(t *testing.T, n int) *coord.InboxMessage
+		child coord.SessionIdentity
+	}{
+		{name: "caller-recipient note", child: sender, build: func(t *testing.T, n int) *coord.InboxMessage {
+			t.Helper()
+			return noteMessage(t, toCaller(fmt.Sprintf("recheck-note-%d", n), inbox.KindResult), idUID(n), false)
+		}},
+		{name: "caller reply", child: sender, build: func(t *testing.T, n int) *coord.InboxMessage {
+			t.Helper()
+			note := noteMessage(t, toCaller(fmt.Sprintf("recheck-reply-note-%d", n), inbox.KindQuestion), idUID(n), false)
+			return answerTo(t, note, fmt.Sprintf("recheck-reply-%d", n), idUID(n+1), true)
+		}},
+	}
+	for i, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Run("original uid present at the recheck", func(t *testing.T) {
+				message := shape.build(t, 600+i*10)
+				rig, sessionGets := rigUntilRecheck(t, message, shape.child, false)
+				if got := rig.pass(); got != resultComplete || len(rig.archive.puts) != 1 || rig.archive.puts[0].Event == nil || rig.archive.puts[0].Event.State != "absent" || len(rig.deletes.names) != 0 || *sessionGets != 1 {
+					t.Fatalf("mark %s puts %d deletes %v session reads %d", got, len(rig.archive.puts), rig.deletes.names, *sessionGets)
+				}
+				key := lookupKey(identityOf(rig.summary(t)))
+				if rig.archive.grace[key] == nil || rig.archive.latest[key].State != "absent" {
+					t.Fatalf("grace %#v latest %#v", rig.archive.grace[key], rig.archive.latest[key])
+				}
+				rig.now = rig.archive.grace[key].Add(DefaultGrace)
+				if got := rig.pass(); got != resultComplete || len(rig.deletes.names) != 0 || *sessionGets != 3 {
+					t.Fatalf("present recheck %s deletes %v session reads %d", got, rig.deletes.names, *sessionGets)
+				}
+				if rig.archive.grace[key] != nil || rig.archive.latest[key].State != "present" || len(rig.archive.marks) != 2 || rig.archive.marks[0].Event.State != "hold" || rig.archive.marks[1].Event.State != "present" {
+					t.Fatalf("mark was not reset: grace %v latest %#v marks %#v", rig.archive.grace[key], rig.archive.latest[key], rig.archive.marks)
+				}
+				if err := rig.store.Get(context.Background(), client.ObjectKey{Namespace: message.Namespace, Name: message.Name}, &coord.InboxMessage{}); err != nil {
+					t.Fatalf("record after the present recheck: %v", err)
+				}
+			})
+			t.Run("child read fails at the recheck", func(t *testing.T) {
+				message := shape.build(t, 700+i*10)
+				rig, sessionGets := rigUntilRecheck(t, message, shape.child, true)
+				if got := rig.pass(); got != resultComplete || len(rig.deletes.names) != 0 || len(rig.archive.puts) != 1 || *sessionGets != 1 {
+					t.Fatalf("mark %s deletes %v session reads %d", got, rig.deletes.names, *sessionGets)
+				}
+				key := lookupKey(identityOf(rig.summary(t)))
+				opened := *rig.archive.grace[key]
+				rig.now = opened.Add(DefaultGrace)
+				if got := rig.pass(); got != resultComplete || len(rig.deletes.names) != 0 || *sessionGets != 3 {
+					t.Fatalf("failed recheck %s deletes %v session reads %d", got, rig.deletes.names, *sessionGets)
+				}
+				if rig.archive.grace[key] == nil || !rig.archive.grace[key].Equal(opened) || rig.archive.latest[key].State != "absent" || len(rig.archive.marks) != 0 {
+					t.Fatalf("failed recheck changed the mark: grace %v latest %#v marks %d", rig.archive.grace[key], rig.archive.latest[key], len(rig.archive.marks))
+				}
+				if err := rig.store.Get(context.Background(), client.ObjectKey{Namespace: message.Namespace, Name: message.Name}, &coord.InboxMessage{}); err != nil {
+					t.Fatalf("record after the failed recheck: %v", err)
+				}
+			})
+		})
+	}
+}
+
+// rigUntilRecheck marks from a child that is gone. The third session read is
+// the recheck: the original UID, or a failed read.
+func rigUntilRecheck(t *testing.T, message *coord.InboxMessage, child coord.SessionIdentity, fail bool) (*callerRig, *int) {
+	t.Helper()
+	rig := newCallerRig(t, message)
+	sessionGets := 0
+	live := liveSession(child)
+	split := &splitReader{Client: rig.store, lists: &fixtureReader{objects: map[string][]unstructured.Unstructured{
+		"InboxMessageList": {toUnstructured(t, rig.message)},
+	}}}
+	rig.run.Reader = &hookReader{
+		list: split.List,
+		get: func(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+			if _, ok := obj.(*devv1.AgentSession); ok && key.Namespace == child.Namespace && key.Name == child.Name {
+				sessionGets++
+				if sessionGets < 3 {
+					return apierrors.NewNotFound(schema.GroupResource{Resource: "agentsessions"}, key.Name)
+				}
+				if fail {
+					return apierrors.NewServiceUnavailable("child read failed")
+				}
+				*obj.(*devv1.AgentSession) = *live
+				return nil
+			}
+			return rig.store.Get(ctx, key, obj)
+		},
+	}
+	return rig, &sessionGets
 }
 
 func verifiedBeforeDelete(steps []string) bool {
