@@ -651,17 +651,22 @@ func readCodexFirstTurn(ctx context.Context, s Settings, pid int, threadID strin
 		return codexTurnObservation{}, errCodexHostUnknown
 	}
 	obs := codexTurnObservation{TurnID: turn.ID, Status: turn.Status}
+	// Codex 0.160.1 returns ThreadItemEntry objects: {item, turnId, startedAtMs,
+	// completedAtMs}. The ThreadItem (type, text) is under item. Reading type
+	// and text on the entry itself never sees an agent message (OP694).
 	var items struct {
 		Data *[]struct {
-			Type string  `json:"type"`
-			Text *string `json:"text"`
+			Item struct {
+				Type string  `json:"type"`
+				Text *string `json:"text"`
+			} `json:"item"`
 		} `json:"data"`
 	}
 	if r.call("thread/items/list", map[string]any{"threadId": threadID, "turnId": turn.ID, "limit": 8, "sortDirection": "desc"}, &items) != nil || items.Data == nil || len(*items.Data) > 8 {
 		return codexTurnObservation{}, errCodexHostUnknown
 	}
-	for _, item := range *items.Data {
-		if item.Type == "agentMessage" && item.Text != nil && strings.TrimSpace(*item.Text) != "" {
+	for _, entry := range *items.Data {
+		if entry.Item.Type == "agentMessage" && entry.Item.Text != nil && strings.TrimSpace(*entry.Item.Text) != "" {
 			obs.AgentMessage = true
 		}
 	}

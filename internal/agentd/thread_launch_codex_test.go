@@ -430,6 +430,21 @@ func TestCodexThreadObservationEnds(t *testing.T) {
 	})
 }
 
+// codexThreadFixture is one Thread as thread/list returns it (0.160.1): the
+// fields this adapter reads, plus the others the schema requires.
+func codexThreadFixture(id, cwd, preview string, created int64, source any) map[string]any {
+	return map[string]any{
+		"id": id, "cwd": cwd, "source": source, "preview": preview, "createdAt": created,
+		"cliVersion": "0.160.1", "ephemeral": false, "modelProvider": "openai", "projectId": nil,
+		"sessionId": id, "status": map[string]any{"type": "idle"}, "turns": []any{}, "updatedAt": created,
+	}
+}
+
+// codexThreadItemEntry is one ThreadItemEntry: the ThreadItem sits under item.
+func codexThreadItemEntry(turnID string, item map[string]any) map[string]any {
+	return map[string]any{"item": item, "turnId": turnID, "startedAtMs": 1762711200000, "completedAtMs": 1762711201000}
+}
+
 // threadRPCFixture is an inert in-process app-server on a Unix socket. It
 // records each request's params; answer gives the result.
 func threadRPCFixture(t *testing.T, answer func(method string, params map[string]any) any) (Settings, *[]map[string]any) {
@@ -473,7 +488,11 @@ func threadRPCFixture(t *testing.T, answer func(method string, params map[string
 			}
 			result := answer(request.Method, request.Params)
 			if request.Method == "initialize" {
-				result = map[string]any{"userAgent": "codex/0.160.1 fixture"}
+				// InitializeResponse requires these four fields (0.160.1).
+				result = map[string]any{
+					"userAgent": "codex/0.160.1 fixture", "codexHome": home,
+					"platformFamily": "unix", "platformOs": "linux",
+				}
 			}
 			if conn.WriteJSON(map[string]any{"id": *request.ID, "result": result}) != nil {
 				return
@@ -492,16 +511,16 @@ func TestCodexThreadObserverRPC(t *testing.T) {
 		switch method {
 		case "thread/list":
 			return map[string]any{"data": []any{
-				map[string]any{"id": newThread, "cwd": cwd, "source": "vscode", "preview": big, "createdAt": 1762711200},
-				map[string]any{"id": twoThread, "cwd": cwd, "source": map[string]any{"custom": "x"}, "preview": "", "createdAt": 1762711100},
-				map[string]any{"id": oldThread, "cwd": cwd, "source": "weird value!", "preview": "", "createdAt": 1762711000},
+				codexThreadFixture(newThread, cwd, big, 1762711200, "vscode"),
+				codexThreadFixture(twoThread, cwd, "", 1762711100, map[string]any{"custom": "x"}),
+				codexThreadFixture(oldThread, cwd, "", 1762711000, "weird value!"),
 			}, "nextCursor": nil}
 		case "thread/turns/list":
 			return map[string]any{"data": []any{map[string]any{"id": turnID, "status": "completed", "items": []any{}}}}
 		case "thread/items/list":
 			return map[string]any{"data": []any{
-				map[string]any{"type": "commandExecution", "id": "i2"},
-				map[string]any{"type": "agentMessage", "id": "i1", "text": "Done."},
+				codexThreadItemEntry(turnID, map[string]any{"id": "i2", "type": "contextCompaction"}),
+				codexThreadItemEntry(turnID, map[string]any{"id": "i1", "type": "agentMessage", "text": "Done."}),
 			}}
 		}
 		return nil
@@ -537,6 +556,46 @@ func TestCodexThreadObserverRPC(t *testing.T) {
 	}
 	if _, err := readCodexFirstTurn(context.Background(), s, os.Getpid(), "not-a-thread"); err == nil {
 		t.Fatal("a malformed thread id was sent")
+	}
+}
+
+// The old decoder read type and text on the entry. A ThreadItemEntry keeps
+// them under item, so that decoder reports no agent message. A copy of those
+// fields on the entry itself must not count: only item is the ThreadItem.
+func TestCodexFirstTurnReadsNestedThreadItem(t *testing.T) {
+	s, _ := threadRPCFixture(t, func(method string, _ map[string]any) any {
+		switch method {
+		case "thread/turns/list":
+			return map[string]any{"data": []any{map[string]any{"id": turnID, "status": "completed", "items": []any{}}}}
+		case "thread/items/list":
+			return map[string]any{"data": []any{
+				map[string]any{
+					"type": "agentMessage", "text": "This is the entry, not the item.",
+					"turnId": turnID,
+					"item":   map[string]any{"id": "i2", "type": "contextCompaction"},
+				},
+				codexThreadItemEntry(turnID, map[string]any{"id": "i1", "type": "agentMessage", "text": "Done."}),
+			}}
+		}
+		return nil
+	})
+	obs, err := readCodexFirstTurn(context.Background(), s, os.Getpid(), newThread)
+	if err != nil || !obs.AgentMessage {
+		t.Fatalf("nested agentMessage was not observed: %v %+v", err, obs)
+	}
+	s, _ = threadRPCFixture(t, func(method string, _ map[string]any) any {
+		switch method {
+		case "thread/turns/list":
+			return map[string]any{"data": []any{map[string]any{"id": turnID, "status": "completed", "items": []any{}}}}
+		case "thread/items/list":
+			// The shape the old decoder accepted, which 0.160.1 does not return.
+			return map[string]any{"data": []any{map[string]any{"type": "agentMessage", "id": "i1", "text": "Done."}}}
+		}
+		return nil
+	})
+	obs, err = readCodexFirstTurn(context.Background(), s, os.Getpid(), newThread)
+	if err != nil || obs.AgentMessage {
+		t.Fatalf("a top-level type and text must not count as an agent message: %v %+v", err, obs)
 	}
 }
 
@@ -633,8 +692,19 @@ func TestCodexThreadPinnedSchema(t *testing.T) {
 			t.Fatal("thread/items/list lacks", f)
 		}
 	}
+	itemsResponse := read("ThreadItemsListResponse", "bc8a8dcb9a48d9ca38b0a5faa89b80ec2fd57398cd3a8dcc15097776153f6c74")
+	entry := defs(itemsResponse)["ThreadItemEntry"].(map[string]any)
+	for _, f := range []string{"item", "turnId"} {
+		if !slices.Contains(entry["required"].([]any), any(f)) {
+			t.Fatal("ThreadItemEntry no longer requires", f)
+		}
+	}
+	dataItems := props(itemsResponse)["data"].(map[string]any)["items"].(map[string]any)
+	if dataItems["$ref"] != "#/definitions/ThreadItemEntry" {
+		t.Fatal("thread/items/list data is not a list of ThreadItemEntry")
+	}
 	found := false
-	for _, v := range defs(read("ThreadItemsListResponse", "bc8a8dcb9a48d9ca38b0a5faa89b80ec2fd57398cd3a8dcc15097776153f6c74"))["ThreadItem"].(map[string]any)["oneOf"].([]any) {
+	for _, v := range defs(itemsResponse)["ThreadItem"].(map[string]any)["oneOf"].([]any) {
 		item := v.(map[string]any)
 		typ := item["properties"].(map[string]any)["type"].(map[string]any)["enum"].([]any)
 		if len(typ) == 1 && typ[0] == "agentMessage" && slices.Contains(item["required"].([]any), any("text")) {
