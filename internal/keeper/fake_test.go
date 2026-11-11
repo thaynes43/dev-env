@@ -98,9 +98,12 @@ type fakeGitHub struct {
 	srv *httptest.Server
 	now func() time.Time
 
-	mu               sync.Mutex
-	pub              *rsa.PublicKey
-	issuer           any // what the JWT's iss must be
+	mu     sync.Mutex
+	pub    *rsa.PublicKey
+	issuer any // what the JWT's iss must be
+	// installationID is the installation the access_tokens path must name.
+	// Empty means testInstallationID.
+	installationID   string
 	life             time.Duration
 	failures         []failure
 	mints            int
@@ -134,7 +137,11 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(map[string]string{"message": msg})
 	}
-	if r.Method != http.MethodPost || r.URL.Path != "/app/installations/"+testInstallationID+"/access_tokens" {
+	inst := f.installationID
+	if inst == "" {
+		inst = testInstallationID
+	}
+	if r.Method != http.MethodPost || r.URL.Path != "/app/installations/"+inst+"/access_tokens" {
 		fail(http.StatusNotFound, "unexpected "+r.Method+" "+r.URL.Path)
 		return
 	}

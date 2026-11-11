@@ -107,8 +107,10 @@ type GitHubApp struct {
 	UserAgent string
 	// DistinctFrom, when set, is an App this mint must not be. The ops loop
 	// sets it to the dev bot's App. Mint loads both directories and refuses
-	// when they have the same issuer: the client id, or the app id when there
-	// is no client id. Path cleaning cannot see a symlink; this check can.
+	// when they have the same issuer (the client id, or the app id when there
+	// is no client id) or the same installation id. A client id and an app id
+	// do not compare as one issuer; the installation id does not depend on
+	// which of those files is present. Path cleaning cannot see a symlink.
 	DistinctFrom *GitHubApp
 }
 
@@ -306,7 +308,19 @@ func (a *GitHubApp) refuseSharedIssuer(creds appCreds) error {
 	if creds.issuer == other.issuer {
 		return errors.New("refusing to mint: this App has the same issuer as the dev bot's App")
 	}
+	// A client id and an app id for one App do not compare equal: one is a
+	// string and the other is a number. The installation id is one number
+	// either way, and GitHub's are unique, so it catches that pair.
+	if samePositiveID(creds.installationID, other.installationID) {
+		return errors.New("refusing to mint: this App has the same installation id as the dev bot's App")
+	}
 	return nil
+}
+
+func samePositiveID(a, b string) bool {
+	ai, err1 := strconv.ParseInt(a, 10, 64)
+	bi, err2 := strconv.ParseInt(b, 10, 64)
+	return err1 == nil && err2 == nil && ai > 0 && ai == bi
 }
 
 // readOptional reads a small file and trims it; a missing file is "".

@@ -116,10 +116,13 @@ func TestDistinctAppsMintAndASharedIssuerDoesNot(t *testing.T) {
 	devGH := newFakeGitHub(t, &pair[0].PublicKey, time.Now)
 	opsGH := newFakeGitHub(t, &pair[1].PublicKey, time.Now)
 	const opsClient = "Iv23opsclientid"
+	const opsInstallation = "4343"
 	opsGH.issuer = opsClient
+	opsGH.installationID = opsInstallation
 	devDir := writeAppDir(t, pair[0])
 	opsDir := writeAppDir(t, pair[1])
 	writeFile(t, filepath.Join(opsDir, AppFileClientID), opsClient+"\n")
+	writeFile(t, filepath.Join(opsDir, AppFileInstallationID), opsInstallation+"\n")
 	devApp := devGH.app(devDir)
 	opsApp := opsGH.app(opsDir)
 	opsApp.Permissions = DefaultOpsBotPermissions
@@ -154,6 +157,35 @@ func TestDistinctAppsMintAndASharedIssuerDoesNot(t *testing.T) {
 	}
 	if _, reqs, _, _, _ := opsGH.snapshot(); reqs != before {
 		t.Fatalf("same issuer sent a mint: requests %d, before %d", reqs, before)
+	}
+}
+
+func TestOpsMintRefusesTheSameInstallationEvenWhenIssuerFilesDiffer(t *testing.T) {
+	pair := keys(t)
+	devGH := newFakeGitHub(t, &pair[0].PublicKey, time.Now)
+	opsGH := newFakeGitHub(t, &pair[1].PublicKey, time.Now)
+	opsGH.issuer = int64(4291021)
+	devDir := writeAppDir(t, pair[0])
+	opsDir := writeAppDir(t, pair[1])
+	if err := os.Remove(filepath.Join(opsDir, AppFileClientID)); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(opsDir, AppFileAppID), "4291021\n")
+	devApp := devGH.app(devDir)
+	opsApp := opsGH.app(opsDir)
+	opsApp.Permissions = DefaultOpsBotPermissions
+	opsApp.Repositories = []string{"haynes-ops"}
+	opsApp.DistinctFrom = devApp
+
+	_, err := opsApp.Mint(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "installation") {
+		t.Fatalf("client-id against app-id, same installation: %v", err)
+	}
+	if strings.Contains(err.Error(), testInstallationID) || strings.Contains(err.Error(), "4291021") {
+		t.Fatalf("the refusal quotes an id: %v", err)
+	}
+	if _, reqs, _, _, _ := opsGH.snapshot(); reqs != 0 {
+		t.Fatalf("same installation sent a mint: %d requests", reqs)
 	}
 }
 
