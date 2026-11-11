@@ -342,6 +342,11 @@ type Profile struct {
 	// ReservedEnv or forbiddenEnv names (D-44).
 	EnvFrom []corev1.EnvFromSource `json:"envFrom,omitempty"`
 	Mounts  []Mount                `json:"mounts,omitempty"`
+	// Remote is env and mounts for a remote session's agent pod only
+	// (DESIGN-064 6.3). Task pods, local pods, hold pods, rescue pods,
+	// project canaries and pilot executors do not receive it. It has no
+	// envFrom, labels or service account.
+	Remote *ProfileRemote `json:"remote,omitempty"`
 	// Labels go on the pod, for the egress tiers and the broker's standing
 	// policies to select on.
 	Labels map[string]string `json:"labels,omitempty"`
@@ -352,6 +357,13 @@ type Profile struct {
 	// The rescue and hold pods never use it. A session runs as a coordinator
 	// identity only with the API's CoordinatorIdentityLabel (controller.buildPod).
 	ServiceAccount string `json:"serviceAccount,omitempty"`
+}
+
+// ProfileRemote is the optional remote block on a profile: env and mounts
+// the operator adds only to a remote session's agent pod (DESIGN-064 6.3).
+type ProfileRemote struct {
+	Env    []corev1.EnvVar `json:"env,omitempty"`
+	Mounts []Mount         `json:"mounts,omitempty"`
 }
 
 // Mount is a ConfigMap or a Secret mounted read-only as a directory.
@@ -616,6 +628,29 @@ func (t *Templates) Validate() error {
 		if msgs := validateGlobalMountPaths(t.Mounts, p.Mounts); len(msgs) > 0 {
 			for _, m := range msgs {
 				add("%s.mounts: %s", where, m)
+			}
+		}
+		if p.Remote != nil {
+			remoteWhere := where + ".remote"
+			if len(p.Remote.Env) == 0 && len(p.Remote.Mounts) == 0 {
+				add("%s needs env or mounts", remoteWhere)
+			}
+			// pEnv and pNames already hold the document's and this profile's
+			// names, so a remote name or path that repeats either is refused
+			// by the same rules as the profile's own env and mounts.
+			errs = append(errs, validateEnv(remoteWhere+".env", p.Remote.Env, pEnv)...)
+			errs = append(errs, validateMounts(remoteWhere+".mounts", p.Remote.Mounts, pNames)...)
+			if msgs := validateGlobalMountPaths(t.Mounts, p.Remote.Mounts); len(msgs) > 0 {
+				for _, m := range msgs {
+					add("%s.mounts: %s", remoteWhere, m)
+				}
+			}
+			for _, m := range p.Remote.Mounts {
+				for _, existing := range p.Mounts {
+					if m.Path == existing.Path {
+						add("%s.mounts: path %s is already mounted by this profile", remoteWhere, m.Path)
+					}
+				}
 			}
 		}
 		for k, v := range p.Labels {

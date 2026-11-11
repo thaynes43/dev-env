@@ -291,11 +291,11 @@ func applyCoordinatorInstructionEnv(env []corev1.EnvVar, enable bool) []corev1.E
 
 // buildHoldPod returns the session's rescue pod (D-55): the session's pod with
 // `agentd hold` in place of `agentd run`, the S class's requests and limits,
-// and no agent credentials: no static token, and no profile env or envFrom. It
-// keeps the volumes a rescue needs: the session volume, the shared volume,
-// the templates' mounts, and the profile mount at /creds for GitHub fetch.
-// Other profile mounts are only for agents. Heartbeats are off, because no
-// agent runs in it.
+// and no agent credentials: no static token, no profile env or envFrom, and
+// no profile remote block. It keeps the volumes a rescue needs: the session
+// volume, the shared volume, the templates' mounts, and the profile mount at
+// /creds for GitHub fetch. Other profile mounts are only for agents.
+// Heartbeats are off, because no agent runs in it.
 func buildHoldPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
 	return buildSessionPod(s, t, "", true, false, false, false)
 }
@@ -432,6 +432,10 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	if !hold {
 		env = append(env, profile.Env...)
 		envFrom = append(envFrom, profile.EnvFrom...)
+		// The remote block is a remote agent pod's alone (DESIGN-064 6.3).
+		if remoteProfileContent(s, hold) && profile.Remote != nil {
+			env = append(env, profile.Remote.Env...)
+		}
 	}
 	// Only the accepted common route receives a fixed file transport.
 	if s.Spec.CommonRules != nil {
@@ -504,6 +508,9 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		if !hold || m.Path == rescueGitHubMountPath {
 			templateMounts = append(templateMounts, m)
 		}
+	}
+	if remoteProfileContent(s, hold) && profile.Remote != nil {
+		templateMounts = append(templateMounts, profile.Remote.Mounts...)
 	}
 	for _, m := range templateMounts {
 		volumes = append(volumes, templateVolume(m))
@@ -628,6 +635,14 @@ func startDeadlineEnv(s *v1alpha1.AgentSession, hold bool) (string, error) {
 		return "", sessionInvalidError{errors.New("a scheduled-work start deadline needs a first launch record, which a Codex remote session does not keep")}
 	}
 	return raw, nil
+}
+
+// remoteProfileContent reports whether this pod receives the profile's remote
+// block: a remote session's agent pod only. A hold pod is the rescue pod.
+// A canary or pilot executor is built here too and does not receive it,
+// whatever its mode. Task and local pods do not receive it.
+func remoteProfileContent(s *v1alpha1.AgentSession, hold bool) bool {
+	return s != nil && !hold && s.Spec.Mode == v1alpha1.ModeRemote && s.Spec.ProjectCanary == nil && !projectcanary.IsPilot(s)
 }
 
 // staticTokenFor reports whether the pod gets the static Claude token: Claude in

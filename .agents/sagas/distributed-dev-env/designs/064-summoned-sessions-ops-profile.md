@@ -275,7 +275,7 @@ flowchart LR
 | Kind | Claude credential | Supported today | Refresher |
 |---|---|---|---|
 | `task` (remediation, curation) | the static token `CLAUDE_CODE_OAUTH_TOKEN` from `dev-env-claude-secret`, which the operator sets for Claude task and local sessions on every profile (R21) | yes, for profile `ops` too | none: it is a setup token with no refresh token (DESIGN-001 6.1) |
-| `remote` (escalation, upgrade) | the keeper's access-only projection: `AGENTD_CLAUDE_LIVE_FILE` and the `dev-env-claude-live` mount (R22) | only on `full` and `workbench`; 6.3 adds it to `ops` | the keeper alone. agentd never refreshes, and refuses to start an agent when the pod's credentials hold a refresh token of their own (`ErrClaudeLoginConflict`) |
+| `remote` (escalation, upgrade) | the keeper's access-only projection: `AGENTD_CLAUDE_LIVE_FILE` and the `dev-env-claude-live` mount (R22) | the projection is delivered in the profile's `remote` block | the keeper alone. agentd never refreshes, and refuses to start an agent when the pod's credentials hold a refresh token of their own (`ErrClaudeLoginConflict`) |
 
 So "the ops profile follows the keeper's Claude login" (story 737's title)
 applies to remote sessions. A task keeps the static token. Profile `full`
@@ -845,13 +845,28 @@ In haynes-ops `templates.yaml`, profile `ops`:
 
 | Item | Before | After |
 |---|---|---|
-| `AGENTD_CLAUDE_LIVE_FILE=/opt/dev-env/claude-access/access.json` | absent | present, as `full` |
-| mount `claude-access` from `dev-env-claude-live`, mode 0440 | absent | present, as `full` |
+| `AGENTD_CLAUDE_LIVE_FILE=/opt/dev-env/claude-access/access.json` | absent | the profile's `remote` block |
+| mount `claude-access` from `dev-env-claude-live`, mode 0440 | absent | the profile's `remote` block |
 | `CIGAR_JOURNAL_TOKEN` | present | kept (curation) |
 | `UNIFI_MCP_AUTH_TOKEN` (optional) | present | removed: with Q-01 an ops pod cannot reach mcp-unifi, and mcp-unifi can write to the network |
 | `dev-env-proxmox-secret` (optional, read token) | present | kept, as D-18 lists it. It is unusable without a LAN grant, and the broker sends every ops grant to Tom (R26) |
 | `/creds` from `dev-env-ops-gh-token` | present | kept (6.2 fills it) |
 | Codex projection | absent | absent: summoned sessions run Claude only (6.4) |
+
+A profile's env and mounts are added to every agent pod of that profile, so the projection on `ops` itself would put the keeper's access token on task and local pods (haynes-ops PR 4832, review comment 6809168189). Those two rows are the profile's `remote` block, which the operator adds only to a remote session's agent pod. A task or local pod on `ops` holds the static token only.
+
+#### Known limit (coordinator ruling, 2026-11-11)
+
+> A remote session on `ops` is joinable from the owner's phone, so it runs
+> on the owner's account and holds that account's access token. A steered
+> session could use the token against the account or leak it through a
+> channel the ops tier allows, such as GitHub. Bounds: remote sessions only
+> (the escalation and upgrade lanes); at most the number the caller policy
+> allows at once; an access token of about eight hours, with no refresh
+> token; a name-list network. The pod this replaces, `dev-env-ops`, holds a
+> full login with its refresh token, reads the same text and has a wider
+> network. A narrower credential for these sessions is follow-up story 759.
+> This limit is shown to the owner before the retirement gate (T-2).
 
 - Follow the rollout rule at the top of `templates.yaml`
   (`rollout.newSessionsOnlyImage`), so the profile change drains no running
