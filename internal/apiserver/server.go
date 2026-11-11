@@ -418,7 +418,7 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle(ProviderAllowanceReportsPath, s.serve(route{methods: methods}))
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, notFound("no route %s %s", r.Method, r.URL.Path))
+		writeError(w, notFound("no route %s %s", r.Method, publicRequestPath(r.URL.Path)))
 	})
 	return mux
 }
@@ -439,7 +439,7 @@ func (s *Server) serve(rt route) http.Handler {
 			h, ok := rt.methods[r.Method]
 			if !ok {
 				w.Header().Set("Allow", allow)
-				return http.StatusMethodNotAllowed, newError(http.StatusMethodNotAllowed, apiv1.CodeMethodNotAllowed, "%s takes %s", r.URL.Path, allow)
+				return http.StatusMethodNotAllowed, newError(http.StatusMethodNotAllowed, apiv1.CodeMethodNotAllowed, "%s takes %s", publicRequestPath(r.URL.Path), allow)
 			}
 			tok, err := bearerToken(r)
 			if err != nil {

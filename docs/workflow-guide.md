@@ -1000,8 +1000,29 @@ The operator flag `--enable-parent-notes` defaults to false and requires
 nothing; an operator older than this feature answers 404. The wait needs the
 verb watch on inboxmessages for the operator's Role, granted in haynes-ops
 before the flag is on. This source does not enable the flag in the cluster.
-The parent finds notes by listing them. Meatball callers and wake notices
-are later slices; no note text is pasted into a session.
+The parent finds notes by listing them. A child whose recorded parent is the
+Meatball account `dev-env-system/dev-env-meatball` uses the same `parent tell`.
+The server stores `callerRecipient` from the live CallerPolicy. Any other
+ServiceAccount parent is refused with 422. The child reads an answer with
+`parent read` or `parent wait`. `parent wait` stays the note's sender. The
+Meatball account does not wait.
+
+Meatball reads and answers through the front door, and only for sessions it
+started. The tools are `parent_waiting`, `parent_read`, `parent_answer` and
+`parent_send`. `session_status` adds `parent notes waiting: N` for that
+session. The count and the waiting list are notes with no reply, and they have
+no note text. The waiting list takes a continuation and returns one when
+another page remains. An empty page says none on this page and still returns
+the continuation. `parent list` still returns the historical record,
+including a note that already has an answer. A session Meatball
+did not start is hidden. A plain message from Meatball is in the child's
+inbox list, with replies and results, after questions and blockers. The child
+reads it with `parent read`. The caller's sent list is replies, then plain
+messages. The caller's sender cap counts across projects. The project cap stays
+per project. A session that names a child on tell is refused with 400 and stores
+nothing. A session parent sending to its own child is not this slice.
+The wake notice for a session parent is a later slice. No note
+text is pasted into a session.
 
 The record is an InboxMessage marked by the server-set label
 `coordination.dev-env.haynesops.com/parent-note=true`. The label distinguishes
@@ -1009,8 +1030,10 @@ the route; the stored sender and recipient identities authorize each read.
 Peer inbox reads, including coordinator and archive reads, omit these records.
 Peer and parent routes share the sender/key namespace, so using the same key
 on both routes conflicts. Listing uses two bounded Kubernetes selections:
-questions/blockers, then results. The opaque continuation records the selection
-and its Kubernetes cursor; the two selections do not promise one shared snapshot.
+questions and blockers, then results, replies and plain messages. The caller's
+sent list is replies, then plain messages. The opaque continuation records the
+selection and its Kubernetes cursor; the two selections do not promise one
+shared snapshot.
 
 A task may use multiple sessions or pods. Its budget, prior failures and context
 follow the task. Peer messages are attributed data, not new owner authority.

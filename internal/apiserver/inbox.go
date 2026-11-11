@@ -498,6 +498,13 @@ func inboxOwner(s coord.SessionIdentity) apiv1.TaskClaimOwner {
 func inboxActorView(a coord.ClaimActor) apiv1.TaskClaimActor {
 	return apiv1.TaskClaimActor{Kind: a.Kind, ServiceAccount: a.ServiceAccount, PodName: a.PodName, PodUID: a.PodUID}
 }
+func inboxCallerView(c *coord.InboxCaller) *apiv1.InboxCaller {
+	if c == nil {
+		return nil
+	}
+	return &apiv1.InboxCaller{ServiceAccount: c.ServiceAccount, PolicyUID: c.PolicyUID}
+}
+
 func inboxMetadata(m *coord.InboxMessage) apiv1.InboxMetadata {
 	p := m.Spec.Provenance
 	provenance := apiv1.TaskClaimProvenance{CatalogRevision: p.CatalogRevision, RulesRevision: p.RulesRevision, GitHub: p.GitHub, DefaultBranch: p.DefaultBranch, InitialPinState: p.InitialPinState, ReportedHead: p.ReportedHead}
@@ -505,7 +512,7 @@ func inboxMetadata(m *coord.InboxMessage) apiv1.InboxMetadata {
 		at := p.ReportedAt.Time
 		provenance.ReportedAt = &at
 	}
-	return apiv1.InboxMetadata{Name: m.Name, UID: string(m.UID), Project: m.Spec.Project, Key: m.Spec.Key, Sender: inboxOwner(m.Spec.Sender), Recipient: inboxOwner(m.Spec.Recipient), Actor: inboxActorView(m.Spec.Actor), Provenance: provenance, Repository: m.Spec.Repository, Provider: m.Spec.Provider, RequestedModel: m.Spec.RequestedModel, CreatedAt: m.CreationTimestamp.Time}
+	return apiv1.InboxMetadata{Name: m.Name, UID: string(m.UID), Project: m.Spec.Project, Key: m.Spec.Key, Sender: inboxOwner(m.Spec.Sender), Recipient: inboxOwner(m.Spec.Recipient), CallerSender: inboxCallerView(m.Spec.CallerSender), CallerRecipient: inboxCallerView(m.Spec.CallerRecipient), Actor: inboxActorView(m.Spec.Actor), Provenance: provenance, Repository: m.Spec.Repository, Provider: m.Spec.Provider, RequestedModel: m.Spec.RequestedModel, CreatedAt: m.CreationTimestamp.Time}
 }
 func inboxAckView(a *coord.InboxReadAck) apiv1.InboxReadAck {
 	return apiv1.InboxReadAck{Name: a.Name, UID: string(a.UID), Project: a.Spec.Project, MessageName: a.Spec.MessageName, MessageUID: a.Spec.MessageUID, Recipient: inboxOwner(a.Spec.Recipient), Actor: inboxActorView(a.Spec.Actor), CreatedAt: a.CreationTimestamp.Time}

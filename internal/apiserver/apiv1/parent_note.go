@@ -13,14 +13,16 @@ const (
 	ParentNoteMaxWaitSeconds = 900
 )
 
-// TellParentRequest contains intent only. The server derives the project and
-// recipient from the authenticated child session, never from the request.
-// Receipts, lists and reads use the existing InboxResult, InboxList and
-// InboxMessage shapes, including kind, without the peer inbox thread view.
+// TellParentRequest contains intent only. A child omits Session: the server
+// derives the project and the parent from that session. A policy caller sets
+// Session to the child it started and omits Kind: that stores one plain
+// message. Receipts, lists and reads use the existing InboxResult, InboxList
+// and InboxMessage shapes, including kind, without the peer inbox thread view.
 type TellParentRequest struct {
-	Key  string `json:"key"`
-	Kind string `json:"kind"`
-	Text string `json:"text"`
+	Key     string `json:"key"`
+	Kind    string `json:"kind"`
+	Text    string `json:"text"`
+	Session string `json:"session,omitempty"`
 }
 
 // AnswerParentRequest has no correlation or recipient fields. The server

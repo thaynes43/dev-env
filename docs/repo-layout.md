@@ -14,7 +14,7 @@ Directories still to come: later controllers (ToolSession, LLMLease) beside
 .agents/HANDOFF.md       dated delivery log and ruling index; large, so search it rather than read it
 docs/repo-layout.md      this layout; make check-layout reads it
 docs/agent-rules-rationale.md  reasons and history cut from CLAUDE.md (OP499)
-docs/frontdoor.md        Meatball's front door: the eleven MCP tools, the token files, and what the cluster must already have (DESIGN-060)
+docs/frontdoor.md        Meatball's front door: the fifteen MCP tools, the token files, and what the cluster must already have (DESIGN-060)
 .agents/sagas/<saga>/    saga README (vision, decision log), KICKOFF, adrs/, designs/, backlog/, research/
 .agents/skills/          repo-native agent skills, one SKILL.md each: supervised-dispatch, worker-qa-loop, timer-checkin, tmux-cli-handoff
 .github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), publish.yml (operator image from main, signed), publish-agent.yml (agent image from a v2.x.y tag, signed), publish-git-wait.yml (the git-wait trial fixture's
@@ -80,7 +80,7 @@ internal/shelf/          the operator's side of the shelf pod (D-67): finds it, 
                          a leader-only runnable; ExecSlots, the per-replica limit on archive execs (DESIGN-024 5, DESIGN-025 6.4);
                          HistoryReader, the history archive's reads for the API (DESIGN-025 8)
 internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, login, fleet, rc start|status (DESIGN-038, client observations), thread start|status (DESIGN-057), maintenance check, pages list|show (offline, DESIGN-031), schedule create|list|show|edit|cancel|approve|retry (DESIGN-054); finds the API and a token in a session
-internal/frontdoor/      Meatball's MCP server (DESIGN-060): one bearer, eleven tools, opwork as a fixed-argument subprocess, coordinator start/status/stop through agent-run's operator client
+internal/frontdoor/      Meatball's MCP server (DESIGN-060): one bearer, fifteen tools, opwork as a fixed-argument subprocess, coordinator start/status/stop and parent notes through agent-run's operator client
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol, and the standard-library helpers maintenancecontract, pages, version, and tokenfile (`make build` checks the binary does not link Kubernetes); tests run against an httptest TLS server
 internal/keeper/         the keeper (D-52), including the default-off Ask notifier (DESIGN-034): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes

@@ -455,7 +455,7 @@ unannotated tool as not read-only, destructive and open-world and confirms
 every call. The initialize result had no `instructions`. Meatball had nowhere
 to read a standing authority, so it asked when its authority was unclear.
 
-`tools/list` returns eleven tools. Each tool's `annotations` object has
+`tools/list` returns fifteen tools. Each tool's `annotations` object has
 `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`. Those
 are the fields of `ToolAnnotations`, nested on `Tool` as `annotations`, in both
 dated schemas. The names and the nesting are the same. This server follows that
@@ -469,6 +469,8 @@ shared object and sets every field. The values come from what the code does:
 | `backlog_order` | false | false | true | false |
 | `backlog_close` | false | false | false | false |
 | `coordinator_start` | false | false | true | true |
+| `parent_waiting`, `parent_read` | true | false | true | false |
+| `parent_answer`, `parent_send` | false | false | true | false |
 | `session_stop` | false | true | true | false |
 
 The reads only look. The tracker writes keep history and delete nothing, so
@@ -507,7 +509,14 @@ for this caller."
 
 `standing_authority` takes no arguments. Its description is at most 30 words,
 like the others. The eleven descriptions together were 142 words at OP546;
-the close rule in section 7.4 brings the total to 150. The tool
+the close rule in section 7.4 brings the total to 150. DESIGN-062 slice 4
+adds `parent_waiting`, `parent_read`, `parent_answer` and `parent_send`.
+Each description is at most 30 words, and the measured total is 214.
+`session_status` also appends `parent notes waiting: N`, a count of notes
+with no reply. The count matches the session name and UID. A scan that still
+has a continuation says `incomplete`. `parent_waiting` pages with an opaque
+continuation. An empty page says `notes: none on this page` and still returns
+the continuation. `standing_authority`
 re-reads the file named by `--authority-file` (`Config.AuthorityFile`) on
 every call. The path comes only from that flag. The file must be a regular
 file of at most 4096 bytes and valid UTF-8. A larger file is a plain tool

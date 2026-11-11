@@ -101,7 +101,7 @@ func (a *app) parent(ctx context.Context, args []string) error {
 			return fail(ExitFailed, "parent list returned an unconfirmed box or page")
 		}
 		for _, item := range result.Items {
-			if !validParentNoteMetadata(item) {
+			if !validParentNoteMetadata(item) && !validParentReplyMetadata(item, "") && !validParentPlainMetadata(item) {
 				return fail(ExitFailed, "parent list returned an unconfirmed note")
 			}
 		}
@@ -112,7 +112,7 @@ func (a *app) parent(ctx context.Context, args []string) error {
 		if err != nil {
 			return parentNoteError(status, err, verb)
 		}
-		if status != http.StatusOK || (!validParentNoteMetadata(result.InboxMetadata) && !validParentReplyMetadata(result.InboxMetadata, "")) || result.Name != pos[0] || len(result.Text) == 0 || len(result.Text) > 16<<10 || !utf8.ValidString(result.Text) {
+		if status != http.StatusOK || (!validParentNoteMetadata(result.InboxMetadata) && !validParentReplyMetadata(result.InboxMetadata, "") && !validParentPlainMetadata(result.InboxMetadata)) || result.Name != pos[0] || len(result.Text) == 0 || len(result.Text) > 16<<10 || !utf8.ValidString(result.Text) {
 			return fail(ExitFailed, "parent read returned an unconfirmed note")
 		}
 		if cmd.c.output == outputJSON {
@@ -133,13 +133,37 @@ func validParentReplyMetadata(m apiv1.InboxMetadata, note string) bool {
 		(note == "" || m.InReplyTo.Name == note)
 }
 
-func validParentMetadata(m apiv1.InboxMetadata) bool {
-	validParty := func(p apiv1.TaskClaimOwner) bool {
-		return len(p.Namespace) <= 63 && directoryProjectName.MatchString(p.Namespace) && inboxDNSName(p.Name) && inboxUIDPattern.MatchString(p.UID)
+const parentCallerAccount = "dev-env-system/dev-env-meatball"
+
+func validParentParty(p apiv1.TaskClaimOwner) bool {
+	return len(p.Namespace) <= 63 && directoryProjectName.MatchString(p.Namespace) && inboxDNSName(p.Name) && inboxUIDPattern.MatchString(p.UID)
+}
+
+func validParentCaller(c *apiv1.InboxCaller) bool {
+	return c != nil && c.ServiceAccount == parentCallerAccount && inboxUIDPattern.MatchString(c.PolicyUID)
+}
+
+// validParentEnd accepts exactly one party form. A session parent keeps two
+// session identities. The Meatball account uses the caller form on its side.
+func validParentEnd(session apiv1.TaskClaimOwner, caller *apiv1.InboxCaller) bool {
+	sessionSet := session.Namespace != "" || session.Name != "" || session.UID != ""
+	if sessionSet == (caller != nil) {
+		return false
 	}
+	if caller != nil {
+		return validParentCaller(caller)
+	}
+	return validParentParty(session)
+}
+
+func validParentMetadata(m apiv1.InboxMetadata) bool {
 	return inboxMessagePattern.MatchString(m.Name) && inboxUIDPattern.MatchString(m.UID) &&
 		len(m.Project) <= 63 && directoryProjectName.MatchString(m.Project) && inboxKeyPattern.MatchString(m.Key) &&
-		validParty(m.Sender) && validParty(m.Recipient)
+		validParentEnd(m.Sender, m.CallerSender) && validParentEnd(m.Recipient, m.CallerRecipient)
+}
+
+func validParentPlainMetadata(m apiv1.InboxMetadata) bool {
+	return validParentMetadata(m) && (m.Kind == "" || m.Kind == apiv1.InboxKindPlain) && m.InReplyTo == nil && m.CallerSender != nil
 }
 
 // Copy both layers: the long wait changes only this request's timeout. All
