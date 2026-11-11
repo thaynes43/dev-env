@@ -498,17 +498,6 @@ func redactGitHubText(s string) string {
 	return s
 }
 
-func redactGitHubList(in []string) []string {
-	if in == nil {
-		return nil
-	}
-	out := make([]string, len(in))
-	for i, s := range in {
-		out[i] = redactGitHubText(s)
-	}
-	return out
-}
-
 // permissionName and permissionLevel bound what ParsePermissions accepts.
 var (
 	permissionName  = regexp.MustCompile(`^[a-z][a-z_]*$`)

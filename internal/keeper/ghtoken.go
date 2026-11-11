@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -24,7 +25,10 @@ const (
 // file ends in a newline, as v1's /creds/gh_token did; every reader takes it
 // through `$(cat ...)`, which drops it. Both App loops use this Job. A full
 // grant logs the permissions and repository selection GitHub returned. A short
-// grant also logs permissionsNotGranted. The token, the key and the request
+// grant also logs permissionsNotGranted. A permission entry is logged only
+// when its name and level are a permission name and read, write or admin;
+// anything else is dropped, not scrubbed, so a long permission name is not
+// replaced by the credential scrubber. The token, the key and the request
 // headers are not fields.
 func GitHubTokenJob(name string, app *GitHubApp, secret types.NamespacedName) Job {
 	return Job{
@@ -38,10 +42,10 @@ func GitHubTokenJob(name string, app *GitHubApp, secret types.NamespacedName) Jo
 			}
 			fields := []any{
 				"repositorySelection", redactGitHubText(tok.RepositorySelection),
-				"permissions", redactGitHubList(permissionList(tok.Permissions)),
+				"permissions", acceptedPermissions(permissionList(tok.Permissions)),
 			}
-			if missing := app.MissingPermissions(tok.Permissions); len(missing) > 0 {
-				fields = append(fields, "permissionsNotGranted", redactGitHubList(missing))
+			if missing := acceptedPermissions(app.MissingPermissions(tok.Permissions)); len(missing) > 0 {
+				fields = append(fields, "permissionsNotGranted", missing)
 			}
 			return Refreshed{
 				Value:     newSecretValue(tok.Token.Reveal() + "\n"),
@@ -50,6 +54,25 @@ func GitHubTokenJob(name string, app *GitHubApp, secret types.NamespacedName) Jo
 			}, nil
 		},
 	}
+}
+
+// acceptedPermissions keeps name:level entries whose name and level are ones
+// ParsePermissions would accept. Other entries are dropped. Both App loops
+// log through this, instead of the credential scrubber, so a permission name
+// of 20 or more characters stays visible.
+func acceptedPermissions(entries []string) []string {
+	if len(entries) == 0 {
+		return entries
+	}
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name, level, ok := strings.Cut(entry, ":")
+		if !ok || !permissionName.MatchString(name) || !permissionLevel[level] {
+			continue
+		}
+		out = append(out, name+":"+level)
+	}
+	return out
 }
 
 // permissionList renders a permission set as sorted "name:level" strings.

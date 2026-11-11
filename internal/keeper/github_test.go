@@ -789,6 +789,44 @@ func TestRedactRemovesAWrappedRequestJWT(t *testing.T) {
 	})
 }
 
+func TestLongPermissionNamesStayInTheGrantLog(t *testing.T) {
+	const name = "vulnerability_alerts"
+	if len(name) < 20 {
+		t.Fatalf("%s is %d characters", name, len(name))
+	}
+	h := newHarness(t, []client.Object{emptySecret()}, nil)
+	h.app.Permissions = map[string]string{
+		"contents":             "write",
+		"vulnerability_alerts": "write",
+	}
+	h.gh.respond = func(w http.ResponseWriter, _ *http.Request, _ string) {
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"token":      "ghs_test_perm_xxxxxxxxxxxxxxxxxxxx",
+			"expires_at": h.clock.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"permissions": map[string]string{
+				"contents":                      "read",
+				"vulnerability_alerts":          "not-a-level",
+				"ghs_SYNTHETICMARKER0123456789": "write",
+			},
+			"repository_selection": "all",
+		})
+	}
+	h.start()
+	if w := h.nextWait(); w != 40*time.Minute {
+		t.Fatalf("wait %s, want a successful mint", w)
+	}
+	logs := h.logs.String()
+	for _, want := range []string{"vulnerability_alerts:write", "contents:read", "contents:write"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("logs lack %q:\n%s", want, logs)
+		}
+	}
+	if strings.Contains(logs, "[redacted]:write") || strings.Contains(logs, "not-a-level") || strings.Contains(logs, "ghs_SYNTHETICMARKER0123456789") || strings.Contains(logs, "ghs_test_perm_") {
+		t.Errorf("the log hides the permission name or keeps a rejected entry:\n%s", logs)
+	}
+}
+
 func TestRedactRemovesBase64URLRunsBeforeTheLengthCut(t *testing.T) {
 	run := strings.Repeat("A", 40)
 	got := redactGitHubText(strings.Repeat("ab ", 93) + run)
