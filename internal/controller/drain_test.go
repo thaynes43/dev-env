@@ -266,6 +266,7 @@ func TestDrainLeavesASummonedSession(t *testing.T) {
 	startOperator(t, func(r *Reconciler) { r.Restarter = rt })
 	live := newSession(t, func(s *v1alpha1.AgentSession) {
 		s.Spec.Caller, s.Spec.Lane, s.Spec.Profile = "alert-responder", v1alpha1.LaneRemediation, "ops"
+		s.Spec.Summon = remediationSummon()
 	})
 	leaveBusy(t, live.Name)
 	markRunning(t, waitPod(t, live.Name), "talosw02")

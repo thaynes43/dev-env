@@ -14,13 +14,17 @@ import (
 //
 //   - metadata.name is a DNS label of at most 63 characters (it is the pod's
 //     hostname and the Remote Control name);
-//   - prompt is set in task mode and only there; limits are task mode only;
+//   - prompt is required in task mode, refused in local mode, and allowed in
+//     remote mode only for a summoned session (DESIGN-064 5.6); limits are
+//     task mode only;
 //   - llm is set for opencode and only there;
 //   - a Claude model is a full id (claude-...), never an alias;
 //   - a cursor session runs in task mode and names no effort (DESIGN-058);
 //   - caller and lane go together and mark a summoned session; idempotencyKey
-//     needs them; a summoned session runs in task or remote mode and names a
-//     profile other than full (3.7, D-36);
+//     needs them; a summoned session runs in task or remote mode, names a
+//     profile other than full or workbench, and runs agent claude only
+//     (3.7, D-36, DESIGN-064 6.4);
+//   - spec.summon is present exactly when caller is, and it is immutable;
 //   - spec is immutable after create except operatingMode and lifecycle.
 //
 // Rules about a caller rather than a session (urgent priority for the
@@ -30,6 +34,7 @@ import (
 
 // AgentKind is the agent CLI a session runs.
 // +kubebuilder:validation:Enum=claude;codex;cursor;opencode
+// +kubebuilder:validation:MaxLength=8
 type AgentKind string
 
 const (
@@ -45,6 +50,7 @@ const (
 // SessionMode is how the agent runs: v1's task, local and both become task,
 // local and remote. Summoned sessions use task or remote (DESIGN-001 3.7).
 // +kubebuilder:validation:Enum=task;local;remote
+// +kubebuilder:validation:MaxLength=6
 type SessionMode string
 
 const (
@@ -81,6 +87,7 @@ const (
 // Lane groups summoned sessions (DESIGN-001 3.7). remediation, upgrade and
 // curation are single-flight; escalation is a label only.
 // +kubebuilder:validation:Enum=remediation;upgrade;curation;escalation
+// +kubebuilder:validation:MaxLength=11
 type Lane string
 
 const (
@@ -136,7 +143,7 @@ const (
 // operator never writes spec either: what it resolves (the default profile and
 // tools, the timers per mode) it reads from the templates or records in status.
 //
-// +kubebuilder:validation:XValidation:rule="self.mode == 'task' ? has(self.prompt) : !has(self.prompt)",message="prompt is required in task mode and not allowed in local or remote mode"
+// +kubebuilder:validation:XValidation:rule="(self.mode == 'task' && has(self.prompt)) || (self.mode == 'local' && !has(self.prompt)) || (self.mode == 'remote' && (has(self.caller) || !has(self.prompt)))",message="prompt is required in task mode, not allowed in local mode, and allowed in remote mode only for a summoned session"
 // +kubebuilder:validation:XValidation:rule="!has(self.limits) || self.mode == 'task'",message="limits apply to task mode only"
 // +kubebuilder:validation:XValidation:rule="self.agent == 'opencode' ? has(self.llm) : !has(self.llm)",message="llm is required for agent opencode and not allowed for claude or codex"
 // +kubebuilder:validation:XValidation:rule="self.agent != 'claude' || self.model.startsWith('claude-')",message="a Claude model is a full id such as claude-opus-5-5, never an alias"
@@ -145,7 +152,21 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.idempotencyKey) || has(self.caller)",message="idempotencyKey is for summoned sessions only: set caller and lane"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.mode != 'local'",message="a summoned session runs in task or remote mode, never local"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || (has(self.profile) && self.profile != 'full')",message="a summoned session names its profile, and it is never full (D-36)"
-// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot) && has(self.usageCaptureParentUID) == has(oldSelf.usageCaptureParentUID) && has(self.coordinatorInstructionParentUID) == has(oldSelf.coordinatorInstructionParentUID)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
+// Install this CRD only while no AgentSession carries spec.caller. The
+// coordinator's read at 2026-11-11T20:35Z found none of 255, and none had
+// spec.lane. The API on main refuses name and lane from every caller, so
+// none can appear before the admission slice, and the install step re-checks
+// the count. There is no migration. No old-schema regression test: a session
+// with spec.caller cannot exist yet.
+// +kubebuilder:validation:XValidation:rule="has(self.summon) == has(self.caller)",message="summon is present exactly when caller is"
+// +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.profile != 'workbench'",message="a summoned session is never workbench"
+// +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.agent == 'claude'",message="a summoned session runs agent claude only"
+// +kubebuilder:validation:XValidation:rule="!has(self.summon) || !has(self.summon.staleAfter) || (self.mode == 'remote' && self.lane == 'upgrade')",message="summon.staleAfter is for a remote upgrade session only"
+// +kubebuilder:validation:XValidation:rule="!has(self.summon) || ((self.lane == 'remediation' || self.lane == 'curation') == has(self.summon.maxHold))",message="summon.maxHold is required for remediation and curation and not allowed for upgrade or escalation"
+// +kubebuilder:validation:XValidation:rule="!has(self.summon) || ((self.lane == 'remediation') == has(self.summon.escalation))",message="summon.escalation is present exactly for a remediation"
+// +kubebuilder:validation:XValidation:rule="!has(self.summon) || (self.lane == 'remediation' ? self.summon.onUnreported == 'escalated' : self.summon.onUnreported == 'failed')",message="summon.onUnreported is escalated for remediation and failed for every other lane"
+// +kubebuilder:validation:XValidation:rule="!has(self.summon) || !(self.lane == 'remediation' || self.lane == 'escalation') || self.summon.priority == 'urgent'",message="summon.priority is urgent for lanes remediation and escalation"
+// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot) && has(self.usageCaptureParentUID) == has(oldSelf.usageCaptureParentUID) && has(self.coordinatorInstructionParentUID) == has(oldSelf.coordinatorInstructionParentUID) && has(self.summon) == has(oldSelf.summon)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
 // +kubebuilder:validation:XValidation:rule="!has(self.projectCanary) || (self.mode == 'task' && self.agent in ['claude', 'codex'] && self.size == 'S' && has(self.parent) && self.parent == self.projectCanary.client && !has(self.workspace) && !has(self.restore) && !has(self.tools) && !has(self.llm) && !has(self.caller) && !has(self.lane) && !has(self.lifecycle) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) <= duration('180s') && (self.agent == 'codex' ? (!has(self.limits.maxTurns) || self.limits.maxTurns == 0) : (has(self.limits.maxTurns) && self.limits.maxTurns > 0 && self.limits.maxTurns <= 3)))",message="project canaries require their fixed private bounded subscription task contract"
 // +kubebuilder:validation:XValidation:rule="!has(self.commonRules) || (has(self.projectCanary) && has(self.projectCanary.commonRevision) && self.projectCanary.commonRevision == self.commonRules.commonRevision) || (has(self.privatePilot) && self.privatePilot.commonRevision == self.commonRules.commonRevision) || (!has(self.projectCanary) && !has(self.privatePilot) && !has(self.workspace) && self.mode == 'task' && self.agent in ['claude', 'codex'] && has(self.profile) && self.profile == 'dev' && has(self.parent) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) > duration('0s') && duration(self.limits.timeout) <= duration('45m'))",message="common rules require a matching managed canary or finite private task binding"
 // +kubebuilder:validation:XValidation:rule="!has(self.sessionDirectory) || has(self.projectCanary) || has(self.privatePilot)",message="directory enrollment requires a managed canary"
@@ -226,7 +247,8 @@ type AgentSessionSpec struct {
 	// +optional
 	Effort string `json:"effort,omitempty"`
 
-	// Prompt is the task. Task mode only, and required there.
+	// Prompt is the task text. Required in task mode, refused in local mode,
+	// and allowed in remote mode only for a summoned session (DESIGN-064 5.6).
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=262144
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
@@ -333,6 +355,12 @@ type AgentSessionSpec struct {
 	// +optional
 	IdempotencyKey string `json:"idempotencyKey,omitempty"`
 
+	// Summon is the immutable snapshot copied from the CallerPolicy entry at
+	// create (DESIGN-064 6.4). It is present exactly when caller is.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
+	// +optional
+	Summon *SessionSummon `json:"summon,omitempty"`
+
 	// Limits caps a task session; task mode only. Summoned callers get them from
 	// their policy.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
@@ -356,6 +384,90 @@ type AgentSessionSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Restore string `json:"restore,omitempty"`
+}
+
+// SessionSummon is the immutable create-time snapshot of a summoned session
+// (DESIGN-064 6.4): the dispatch id, priority, fallback model, onUnreported,
+// and, when the entry has them, staleAfter, maxHold and the escalation entry.
+type SessionSummon struct {
+	// DispatchID is the id the create ledger charged before this session was
+	// created (DESIGN-064 5.9). A caller create is a hash or a random id; a
+	// platform filing is filing:<remediation UID>.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9.:_-]{0,127}$`
+	// +required
+	DispatchID string `json:"dispatchID"`
+
+	// +required
+	Priority SummonPriority `json:"priority"`
+
+	// FallbackModel is the entry's fallback, a full Claude id.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^claude-[a-z]+(-[0-9]+)+$`
+	// +required
+	FallbackModel string `json:"fallbackModel"`
+
+	// +required
+	OnUnreported SummonOnUnreported `json:"onUnreported"`
+
+	// StaleAfter is set for a remote upgrade session only, at most 24h.
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s') && duration(self) <= duration('24h')",message="staleAfter must be a positive Go duration at most 24h"
+	// +optional
+	StaleAfter string `json:"staleAfter,omitempty"`
+
+	// MaxHold is set for remediation and curation only, at most 24h.
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s') && duration(self) <= duration('24h')",message="maxHold must be a positive Go duration at most 24h"
+	// +optional
+	MaxHold string `json:"maxHold,omitempty"`
+
+	// Escalation is the policy's escalation entry, copied for a remediation
+	// so a later policy change cannot widen or remove the filing's settings.
+	// +optional
+	Escalation *SessionSummonEscalation `json:"escalation,omitempty"`
+}
+
+// SessionSummonEscalation is that copied escalation entry (DESIGN-064 6.4):
+// kind remote, lane escalation, repo, profile, model, fallback, effort and
+// onUnreported failed.
+//
+// +kubebuilder:validation:XValidation:rule="self.kind == 'remote' && self.lane == 'escalation' && self.profile == 'ops' && self.onUnreported == 'failed' && self.model != self.fallback",message="escalation is a copy of an escalation entry: kind remote, lane escalation, profile ops, onUnreported failed, and a fallback that differs"
+type SessionSummonEscalation struct {
+	// +required
+	Kind SummonKind `json:"kind"`
+	// +required
+	Lane Lane `json:"lane"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=100
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_.-]+$`
+	// +kubebuilder:validation:XValidation:rule="self != '.' && self != '..'",message="repo is a repository name, not a path"
+	// +required
+	Repo string `json:"repo"`
+	// +kubebuilder:validation:Enum=ops
+	// +kubebuilder:validation:MaxLength=32
+	// +required
+	Profile string `json:"profile"`
+	// Model is the escalation entry's default model.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^claude-[a-z]+(-[0-9]+)+$`
+	// +required
+	Model string `json:"model"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^claude-[a-z]+(-[0-9]+)+$`
+	// +required
+	Fallback string `json:"fallback"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:Pattern=`^[a-z]+$`
+	// +required
+	Effort string `json:"effort"`
+	// +required
+	OnUnreported SummonOnUnreported `json:"onUnreported"`
 }
 
 // PrivatePilotBinding binds the immutable two-slot policy to retained inputs.

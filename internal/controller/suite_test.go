@@ -436,6 +436,28 @@ func newSession(t *testing.T, edit func(*v1alpha1.AgentSession)) *v1alpha1.Agent
 	return s
 }
 
+// remediationSummon is the snapshot a remediation must carry once spec.summon
+// is present exactly when spec.caller is (DESIGN-064 6.4).
+func remediationSummon() *v1alpha1.SessionSummon {
+	return &v1alpha1.SessionSummon{
+		DispatchID:    "dispatch-rem",
+		Priority:      v1alpha1.SummonPriorityUrgent,
+		FallbackModel: "claude-opus-5",
+		OnUnreported:  v1alpha1.SummonOnUnreportedEscalated,
+		MaxHold:       "20m",
+		Escalation: &v1alpha1.SessionSummonEscalation{
+			Kind:         v1alpha1.SummonKindRemote,
+			Lane:         v1alpha1.LaneEscalation,
+			Repo:         "haynes-ops",
+			Profile:      "ops",
+			Model:        "claude-sonnet-5-5",
+			Fallback:     "claude-opus-5",
+			Effort:       "xhigh",
+			OnUnreported: v1alpha1.SummonOnUnreportedFailed,
+		},
+	}
+}
+
 // sanitize keeps a test name's letters and digits, at most 30 of them, so the
 // session name stays a DNS label.
 func sanitize(name string) string {

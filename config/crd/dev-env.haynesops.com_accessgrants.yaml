@@ -509,6 +509,7 @@ spec:
                     - codex
                     - cursor
                     - opencode
+                    maxLength: 8
                     type: string
                   parent:
                     description: |-

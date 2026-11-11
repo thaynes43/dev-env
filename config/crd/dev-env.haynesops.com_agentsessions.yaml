@@ -80,6 +80,12 @@ spec:
               operator never writes spec either: what it resolves (the default profile and
               tools, the timers per mode) it reads from the templates or records in status.
 
+              Install this CRD only while no AgentSession carries spec.caller. The
+              coordinator's read at 2026-11-11T20:35Z found none of 255, and none had
+              spec.lane. The API on main refuses name and lane from every caller, so
+              none can appear before the admission slice, and the install step re-checks
+              the count. There is no migration. No old-schema regression test: a session
+              with spec.caller cannot exist yet.
               coordinatorInstructions is default false. An existing object may gain that
               default once. Any other add, remove, or value change is refused.
             properties:
@@ -90,6 +96,7 @@ spec:
                 - codex
                 - cursor
                 - opencode
+                maxLength: 8
                 type: string
                 x-kubernetes-validations:
                 - message: immutable after create; only operatingMode and lifecycle
@@ -216,6 +223,7 @@ spec:
                 - upgrade
                 - curation
                 - escalation
+                maxLength: 11
                 type: string
                 x-kubernetes-validations:
                 - message: immutable after create; only operatingMode and lifecycle
@@ -293,6 +301,7 @@ spec:
                 - task
                 - local
                 - remote
+                maxLength: 6
                 type: string
                 x-kubernetes-validations:
                 - message: immutable after create; only operatingMode and lifecycle
@@ -450,7 +459,9 @@ spec:
                 - message: project canary binding is immutable
                   rule: self == oldSelf
               prompt:
-                description: Prompt is the task. Task mode only, and required there.
+                description: |-
+                  Prompt is the task text. Required in task mode, refused in local mode,
+                  and allowed in remote mode only for a summoned session (DESIGN-064 5.6).
                 maxLength: 262144
                 minLength: 1
                 type: string
@@ -516,6 +527,150 @@ spec:
                 - message: immutable after create; only operatingMode and lifecycle
                     may change
                   rule: self == oldSelf
+              summon:
+                description: |-
+                  Summon is the immutable snapshot copied from the CallerPolicy entry at
+                  create (DESIGN-064 6.4). It is present exactly when caller is.
+                properties:
+                  dispatchID:
+                    description: |-
+                      DispatchID is the id the create ledger charged before this session was
+                      created (DESIGN-064 5.9). A caller create is a hash or a random id; a
+                      platform filing is filing:<remediation UID>.
+                    maxLength: 128
+                    minLength: 1
+                    pattern: ^[A-Za-z0-9][A-Za-z0-9.:_-]{0,127}$
+                    type: string
+                  escalation:
+                    description: |-
+                      Escalation is the policy's escalation entry, copied for a remediation
+                      so a later policy change cannot widen or remove the filing's settings.
+                    properties:
+                      effort:
+                        maxLength: 32
+                        minLength: 1
+                        pattern: ^[a-z]+$
+                        type: string
+                      fallback:
+                        maxLength: 64
+                        minLength: 1
+                        pattern: ^claude-[a-z]+(-[0-9]+)+$
+                        type: string
+                      kind:
+                        description: 'SummonKind is the mode a summon entry starts:
+                          task or remote.'
+                        enum:
+                        - task
+                        - remote
+                        maxLength: 6
+                        type: string
+                      lane:
+                        description: |-
+                          Lane groups summoned sessions (DESIGN-001 3.7). remediation, upgrade and
+                          curation are single-flight; escalation is a label only.
+                        enum:
+                        - remediation
+                        - upgrade
+                        - curation
+                        - escalation
+                        maxLength: 11
+                        type: string
+                      model:
+                        description: Model is the escalation entry's default model.
+                        maxLength: 64
+                        minLength: 1
+                        pattern: ^claude-[a-z]+(-[0-9]+)+$
+                        type: string
+                      onUnreported:
+                        description: |-
+                          SummonOnUnreported is the outcome written when a summoned session does not
+                          report (DESIGN-064 6.4).
+                        enum:
+                        - escalated
+                        - failed
+                        maxLength: 9
+                        type: string
+                      profile:
+                        enum:
+                        - ops
+                        maxLength: 32
+                        type: string
+                      repo:
+                        maxLength: 100
+                        minLength: 1
+                        pattern: ^[A-Za-z0-9_.-]+$
+                        type: string
+                        x-kubernetes-validations:
+                        - message: repo is a repository name, not a path
+                          rule: self != '.' && self != '..'
+                    required:
+                    - effort
+                    - fallback
+                    - kind
+                    - lane
+                    - model
+                    - onUnreported
+                    - profile
+                    - repo
+                    type: object
+                    x-kubernetes-validations:
+                    - message: 'escalation is a copy of an escalation entry: kind
+                        remote, lane escalation, profile ops, onUnreported failed,
+                        and a fallback that differs'
+                      rule: self.kind == 'remote' && self.lane == 'escalation' &&
+                        self.profile == 'ops' && self.onUnreported == 'failed' &&
+                        self.model != self.fallback
+                  fallbackModel:
+                    description: FallbackModel is the entry's fallback, a full Claude
+                      id.
+                    maxLength: 64
+                    minLength: 1
+                    pattern: ^claude-[a-z]+(-[0-9]+)+$
+                    type: string
+                  maxHold:
+                    description: MaxHold is set for remediation and curation only,
+                      at most 24h.
+                    maxLength: 32
+                    type: string
+                    x-kubernetes-validations:
+                    - message: maxHold must be a positive Go duration at most 24h
+                      rule: duration(self) > duration('0s') && duration(self) <= duration('24h')
+                  onUnreported:
+                    description: |-
+                      SummonOnUnreported is the outcome written when a summoned session does not
+                      report (DESIGN-064 6.4).
+                    enum:
+                    - escalated
+                    - failed
+                    maxLength: 9
+                    type: string
+                  priority:
+                    description: SummonPriority is the admission priority of a summon
+                      entry (DESIGN-064 5.9).
+                    enum:
+                    - urgent
+                    - normal
+                    - bulk
+                    maxLength: 6
+                    type: string
+                  staleAfter:
+                    description: StaleAfter is set for a remote upgrade session only,
+                      at most 24h.
+                    maxLength: 32
+                    type: string
+                    x-kubernetes-validations:
+                    - message: staleAfter must be a positive Go duration at most 24h
+                      rule: duration(self) > duration('0s') && duration(self) <= duration('24h')
+                required:
+                - dispatchID
+                - fallbackModel
+                - onUnreported
+                - priority
+                type: object
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               tools:
                 description: |-
                   Tools are the tool pools registered at boot (DESIGN-001 8.1), by ToolPool
@@ -567,9 +722,11 @@ spec:
             - repo
             type: object
             x-kubernetes-validations:
-            - message: prompt is required in task mode and not allowed in local or
-                remote mode
-              rule: 'self.mode == ''task'' ? has(self.prompt) : !has(self.prompt)'
+            - message: prompt is required in task mode, not allowed in local mode,
+                and allowed in remote mode only for a summoned session
+              rule: (self.mode == 'task' && has(self.prompt)) || (self.mode == 'local'
+                && !has(self.prompt)) || (self.mode == 'remote' && (has(self.caller)
+                || !has(self.prompt)))
             - message: limits apply to task mode only
               rule: '!has(self.limits) || self.mode == ''task'''
             - message: llm is required for agent opencode and not allowed for claude
@@ -592,6 +749,28 @@ spec:
             - message: a summoned session names its profile, and it is never full
                 (D-36)
               rule: '!has(self.caller) || (has(self.profile) && self.profile != ''full'')'
+            - message: summon is present exactly when caller is
+              rule: has(self.summon) == has(self.caller)
+            - message: a summoned session is never workbench
+              rule: '!has(self.caller) || self.profile != ''workbench'''
+            - message: a summoned session runs agent claude only
+              rule: '!has(self.caller) || self.agent == ''claude'''
+            - message: summon.staleAfter is for a remote upgrade session only
+              rule: '!has(self.summon) || !has(self.summon.staleAfter) || (self.mode
+                == ''remote'' && self.lane == ''upgrade'')'
+            - message: summon.maxHold is required for remediation and curation and
+                not allowed for upgrade or escalation
+              rule: '!has(self.summon) || ((self.lane == ''remediation'' || self.lane
+                == ''curation'') == has(self.summon.maxHold))'
+            - message: summon.escalation is present exactly for a remediation
+              rule: '!has(self.summon) || ((self.lane == ''remediation'') == has(self.summon.escalation))'
+            - message: summon.onUnreported is escalated for remediation and failed
+                for every other lane
+              rule: '!has(self.summon) || (self.lane == ''remediation'' ? self.summon.onUnreported
+                == ''escalated'' : self.summon.onUnreported == ''failed'')'
+            - message: summon.priority is urgent for lanes remediation and escalation
+              rule: '!has(self.summon) || !(self.lane == ''remediation'' || self.lane
+                == ''escalation'') || self.summon.priority == ''urgent'''
             - message: 'immutable after create: no spec field may be added or removed,
                 except operatingMode and lifecycle'
               rule: has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort)
@@ -607,6 +786,7 @@ spec:
                 == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot)
                 && has(self.usageCaptureParentUID) == has(oldSelf.usageCaptureParentUID)
                 && has(self.coordinatorInstructionParentUID) == has(oldSelf.coordinatorInstructionParentUID)
+                && has(self.summon) == has(oldSelf.summon)
             - message: project canaries require their fixed private bounded subscription
                 task contract
               rule: '!has(self.projectCanary) || (self.mode == ''task'' && self.agent
