@@ -1310,9 +1310,11 @@ func TestCodexHostPresentPodMustHaveReported(t *testing.T) {
 	})
 	t.Run("safety reasons come first", func(t *testing.T) {
 		f := newCodexFixture(t)
-		f.addCodexHost(codexHandsOffName, codexHostOpt{noPodStart: true})
-		f.addCodexHost("protected-host", codexHostOpt{protected: true, noPodStart: true})
-		f.addCodexHost("rescue-host", codexHostOpt{rescueFailed: true, noPodStart: true})
+		// Each of these has not reported (no stored pod UID). The safety
+		// reason is still the one recorded, not remote_unavailable.
+		f.addCodexHost(codexHandsOffName, codexHostOpt{omitPodUID: true})
+		f.addCodexHost("protected-host", codexHostOpt{protected: true, omitPodUID: true})
+		f.addCodexHost("rescue-host", codexHostOpt{rescueFailed: true, omitPodUID: true})
 		f.addCodexHost("open", codexHostOpt{})
 		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "open", "")
 		gotReason := map[string]string{}
@@ -1330,6 +1332,24 @@ func TestCodexHostPresentPodMustHaveReported(t *testing.T) {
 			}
 		}
 	})
+}
+
+// An empty stored UID never counts, including against a pod whose UID is
+// empty: equality alone would accept that pair.
+func TestCodexPodReportedNeedsAStoredUID(t *testing.T) {
+	now := time.Now()
+	hb := metav1.NewTime(now)
+	sess := &v1alpha1.AgentSession{}
+	sess.Status.Agent = &v1alpha1.AgentStatus{LastHeartbeat: &hb}
+	if codexPodReported(sess, &corev1.Pod{}, now) {
+		t.Fatal("an empty stored UID counted as the pod's report")
+	}
+	sess.Status.Agent.PodUID = "uid-1"
+	pod := &corev1.Pod{}
+	pod.UID = "uid-1"
+	if !codexPodReported(sess, pod, now) {
+		t.Fatal("a matching stored UID with a fresh heartbeat did not count")
+	}
 }
 
 // The lease read applies the same report check. A heartbeat that goes stale,

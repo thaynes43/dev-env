@@ -126,8 +126,10 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	// this caller's is the same kind of stale read: the merge patch would
 	// leave the other pod's later fields in place and stamp this caller's UID
 	// on them. An empty stored UID takes no lock. Until the CRD has the field
-	// it reads back empty, and locking then would conflict every heartbeat
-	// with the controller. Ordinary fields keep their merge behavior otherwise.
+	// it reads back empty on every heartbeat, and a lock on an empty UID would
+	// then put every heartbeat under the resource version: any other write
+	// between the read and the patch would refuse it. Ordinary fields keep
+	// their merge behavior otherwise.
 	callerPod := ""
 	if c.pod != nil {
 		callerPod = string(c.pod.UID)

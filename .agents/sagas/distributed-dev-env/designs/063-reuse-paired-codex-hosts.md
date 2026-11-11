@@ -415,8 +415,8 @@ the field the UID reads back empty on every heartbeat. Until the cluster's
 CRD has the field the API server drops it and no running host counts as
 reported.
 
-A limit stays. A heartbeat from the present pod whose read already held
-its own UID takes no lock. If a write from the previous pod lands between
+A limit stays. A heartbeat from the present pod whose read held its own
+UID, or no UID, takes no lock. If a write from the previous pod lands between
 that read and its patch, the fields the present pod did not change keep
 the previous pod's values under the present pod's UID until the present
 pod's next heartbeat. This needs a request from the previous pod to stay
@@ -1217,7 +1217,10 @@ text, ignores a stderr error, and returns the held error. No signal
 handling is added. With stderr closed the process may end on SIGPIPE
 after the line is out. `agent-run help thread` and section 7 say the line
 comes first. `agent-run codex-host select` and the interactive create are
-unchanged.
+unchanged. Not covered: a `use` answer whose launch then fails. That is
+the thread start path that `--host` also takes, and it still writes its
+diagnostics before its result. The third independent review found it;
+it is OpenProject item 764.
 
 **Ruling S** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
 is the coordinator's ruling, not Tom's. A status patch from a heartbeat
@@ -1230,7 +1233,7 @@ stored with no other write between its read and its patch leaves
 `status.agent` and `status.remoteControl` wholly that caller's. The lock
 of dcfb7207 stays: a stored UID that is not empty and is not the caller's
 still carries the resource version of that read. A heartbeat from the
-present pod whose read already held its own UID takes no lock. If a write
+present pod whose read held its own UID, or no UID, takes no lock. If a write
 from the previous pod lands between that read and its patch, the fields
 the present pod did not change keep the previous pod's values under the
 present pod's UID until the present pod's next heartbeat. That needs a
