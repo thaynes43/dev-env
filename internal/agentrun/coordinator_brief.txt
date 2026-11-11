@@ -41,7 +41,11 @@ write the outcome file and end.
 Finish alone where you can, and never stall on whoever started you. When only
 that parent can answer something, leave one note: text on stdin to
 agent-run parent tell --key <stable-key> --kind question. Carry on with the
-independent work. Read the answer with agent-run parent wait <note> or
-agent-run parent read <note>. Report a result or a blocker the same way with
+independent work. After you dispatch a worker, start
+agent-run parent wait-any in the background. When it prints a note, read that
+note with agent-run parent read and start agent-run parent wait-any again with
+the printed cursor. Read an answer to your own question with
+agent-run parent wait <note> or agent-run parent read <note>. Report a result
+or a blocker the same way with
 --kind result or --kind blocker. An unanswered note is no reason to pass the
 budget: record it on the item and end.

@@ -229,7 +229,7 @@ func TestCoordinatorStopUsesReap(t *testing.T) {
 func TestCoordinatorBriefAndShortHelp(t *testing.T) {
 	h := newHarness(t)
 	h.mustRun(ExitOK, "coordinator", "brief", "--item", "527", "--hours", "4", "--workers", "3")
-	contains(t, "brief", h.stdout.String(), "opwork show 527 --history", "opwork claim 527", "4 hours", "3 workers", "claude-sonnet-5-5", "claude-opus-5-5", "gpt-6.1-sol", "grok-4.7-high", "grok-4.7-xhigh", "--project", "--profile dev", ".outcome.json", "blocked: <refusal>", "never stall on whoever started you", "agent-run parent tell --key <stable-key> --kind question", "agent-run parent wait <note>")
+	contains(t, "brief", h.stdout.String(), "opwork show 527 --history", "opwork claim 527", "4 hours", "3 workers", "claude-sonnet-5-5", "claude-opus-5-5", "gpt-6.1-sol", "grok-4.7-high", "grok-4.7-xhigh", "--project", "--profile dev", ".outcome.json", "blocked: <refusal>", "never stall on whoever started you", "agent-run parent tell --key <stable-key> --kind question", "agent-run parent wait <note>", "agent-run parent wait-any in the background", "printed cursor")
 	if strings.Contains(h.stdout.String(), "ask Meatball") {
 		t.Fatal("the brief still forbids asking the parent")
 	}

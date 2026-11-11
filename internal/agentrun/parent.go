@@ -23,11 +23,14 @@ func (a *app) parent(ctx context.Context, args []string) error {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		return a.help([]string{"parent"})
 	}
+	if len(args) > 0 && args[0] == "wait-any" {
+		return a.parentWaitAny(ctx, args[1:])
+	}
 	if len(args) > 0 && (args[0] == "answer" || args[0] == "wait") {
 		return a.parentAnswerWait(ctx, args[0], args[1:])
 	}
 	if len(args) == 0 || (args[0] != "tell" && args[0] != "list" && args[0] != "read") {
-		return usageError("parent requires tell, list, read, answer or wait; see agent-run help parent")
+		return usageError("parent requires tell, list, read, answer, wait or wait-any; see agent-run help parent")
 	}
 	verb := args[0]
 	cmd := newCommand("parent", outputJSON)
@@ -196,6 +199,9 @@ func parentNoteError(status int, err error, verb string) error {
 	case http.StatusBadRequest:
 		return fail(code, "parent request was refused (400); check key, kind, text and command arguments")
 	case http.StatusUnprocessableEntity:
+		if verb == "wait-any" {
+			return fail(code, "parent wait-any was refused (422); --after must be a resource version cursor")
+		}
 		return fail(code, "parent tell was refused (422); a child needs a project snapshot, no workspace, and a recorded session parent")
 	case http.StatusNotFound:
 		return fail(code, "parent note, recorded parent or authorized scope was not found (404); an operator older than parent notes also answers 404")

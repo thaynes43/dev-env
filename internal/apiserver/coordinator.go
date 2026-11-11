@@ -164,7 +164,7 @@ func publicRequestPath(path string) string {
 // unknown subpath, never keeps the raw remainder.
 func parentNotePublicPath(path string) (string, bool) {
 	const root = "/v1/parent-notes"
-	if path == root {
+	if path == root || path == root+"/wait" {
 		return path, true
 	}
 	if _, ok := strings.CutPrefix(path, root+"/"); !ok {

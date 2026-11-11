@@ -1,0 +1,775 @@
+package apiserver
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/go-logr/logr"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/watch"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/inbox"
+)
+
+// waitAnyStamp is one second shared by notes whose order must come from
+// storage, not from the clock or from their names.
+var waitAnyStamp = time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+
+func waitAnyName(i int) string {
+	return fmt.Sprintf("message.%032x.%032x", i, 0)
+}
+
+func waitAnyParty(t *testing.T, f *fixture, name string) coord.SessionIdentity {
+	t.Helper()
+	return sessionIdentity(f.session(name))
+}
+
+func waitAnyRecipient(party coord.SessionIdentity) string {
+	data, err := json.Marshal(party)
+	if err != nil {
+		panic(err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])[:63]
+}
+
+func waitAnyNote(to coord.SessionIdentity, name, kind, rv, text string, created time.Time) *coord.InboxMessage {
+	return &coord.InboxMessage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "dev-env-system", ResourceVersion: rv,
+			CreationTimestamp: metav1.NewTime(created),
+			Labels:            map[string]string{inbox.ParentNoteLabel: "true"},
+		},
+		Spec: coord.InboxMessageSpec{
+			Sender:    coord.SessionIdentity{Namespace: "dev-agents", Name: "child", UID: "child-uid"},
+			Recipient: to,
+			Kind:      kind, Key: "PRIVATE_KEY", Text: text, Project: "dev-env",
+		},
+	}
+}
+
+func rvAfter(have, from string) bool {
+	got, err1 := strconv.ParseUint(have, 10, 64)
+	start, err2 := strconv.ParseUint(from, 10, 64)
+	return err1 == nil && err2 == nil && got > start
+}
+
+// gateWatch delivers one event only when the handler is receiving it.
+type gateWatch struct {
+	ch      chan watch.Event
+	stop    chan struct{}
+	once    sync.Once
+	stopped atomic.Bool
+}
+
+func newGateWatch() *gateWatch {
+	return &gateWatch{ch: make(chan watch.Event), stop: make(chan struct{})}
+}
+
+func (g *gateWatch) Stop() {
+	g.once.Do(func() {
+		g.stopped.Store(true)
+		close(g.stop)
+	})
+}
+
+func (g *gateWatch) IsStopped() bool { return g.stopped.Load() }
+
+func (g *gateWatch) ResultChan() <-chan watch.Event { return g.ch }
+
+func (g *gateWatch) send(t *testing.T, ev watch.Event) {
+	t.Helper()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case g.ch <- ev:
+	case <-g.stop:
+		t.Fatal("watch stopped before the event")
+	case <-timer.C:
+		t.Fatal("handler did not receive the watch event")
+	}
+}
+
+type waitAnyProbe struct {
+	notes    []*coord.InboxMessage
+	gate     bool
+	started  chan watch.Interface
+	watchErr error
+	listRV   string
+	inject   *coord.InboxMessage
+	onList   func()
+
+	lists, watches atomic.Int32
+	mu             sync.Mutex
+	listSels       []string
+	listLimits     []int64
+	watchSels      []string
+	watchRVs       []string
+	bookmarks      []bool
+	watchLimits    []int64
+	namespaces     []string
+	sawInject      bool
+}
+
+func (p *waitAnyProbe) install(f *fixture) {
+	f.srv.Inbox.Live = interceptor.NewClient(f.c, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, obj client.ObjectList, opts ...client.ListOption) error {
+		var o client.ListOptions
+		o.ApplyOptions(opts)
+		err := c.List(ctx, obj, opts...)
+		list, ok := obj.(*coord.InboxMessageList)
+		if !ok {
+			return err
+		}
+		p.lists.Add(1)
+		sel := ""
+		if o.LabelSelector != nil {
+			sel = o.LabelSelector.String()
+		}
+		p.mu.Lock()
+		p.listSels = append(p.listSels, sel)
+		p.listLimits = append(p.listLimits, o.Limit)
+		p.mu.Unlock()
+		list.Continue = ""
+		if p.listRV != "" {
+			list.ResourceVersion = p.listRV
+		}
+		if p.inject != nil {
+			list.Items = append(list.Items, *p.inject)
+			p.sawInject = true
+		}
+		if p.onList != nil {
+			p.onList()
+		}
+		return err
+	}})
+	f.srv.Inbox.Watcher = interceptor.NewClient(f.c, interceptor.Funcs{Watch: func(_ context.Context, _ client.WithWatch, obj client.ObjectList, opts ...client.ListOption) (watch.Interface, error) {
+		if _, ok := obj.(*coord.InboxMessageList); !ok {
+			return nil, errors.New("unexpected watch type")
+		}
+		var o client.ListOptions
+		o.ApplyOptions(opts)
+		p.watches.Add(1)
+		p.recordWatch(o)
+		if p.watchErr != nil {
+			return nil, p.watchErr
+		}
+		if p.gate {
+			g := newGateWatch()
+			p.started <- g
+			return g, nil
+		}
+		stream := watch.NewRaceFreeFake()
+		p.mu.Lock()
+		notes := append([]*coord.InboxMessage(nil), p.notes...)
+		p.mu.Unlock()
+		from := ""
+		if o.Raw != nil {
+			from = o.Raw.ResourceVersion
+		}
+		for _, note := range notes {
+			if rvAfter(note.ResourceVersion, from) {
+				stream.Add(note)
+			}
+		}
+		return stream, nil
+	}})
+}
+
+func (p *waitAnyProbe) recordWatch(o client.ListOptions) {
+	sel := ""
+	if o.LabelSelector != nil {
+		sel = o.LabelSelector.String()
+	}
+	rv := ""
+	mark := false
+	if o.Raw != nil {
+		rv = o.Raw.ResourceVersion
+		mark = o.Raw.AllowWatchBookmarks
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.watchSels = append(p.watchSels, sel)
+	p.watchRVs = append(p.watchRVs, rv)
+	p.bookmarks = append(p.bookmarks, mark)
+	p.watchLimits = append(p.watchLimits, o.Limit)
+	p.namespaces = append(p.namespaces, o.Namespace)
+}
+
+func (p *waitAnyProbe) requireWatch(t *testing.T, i int, party coord.SessionIdentity, rv string) {
+	t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if i < 0 || i >= len(p.watchSels) {
+		t.Fatalf("watch %d missing (%d)", i, len(p.watchSels))
+	}
+	requireWaitAnySelector(t, p.watchSels[i], party)
+	if p.namespaces[i] != "dev-env-system" || p.watchLimits[i] != 0 || !p.bookmarks[i] || p.watchRVs[i] != rv {
+		t.Fatalf("watch %d ns %q limit %d bookmark %v rv %q, want %q", i, p.namespaces[i], p.watchLimits[i], p.bookmarks[i], p.watchRVs[i], rv)
+	}
+}
+
+func (p *waitAnyProbe) requireList(t *testing.T, i int, party coord.SessionIdentity) {
+	t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if i < 0 || i >= len(p.listSels) {
+		t.Fatalf("list %d missing (%d)", i, len(p.listSels))
+	}
+	requireWaitAnySelector(t, p.listSels[i], party)
+	if p.listLimits[i] != 1 {
+		t.Fatalf("list limit %d, want 1", p.listLimits[i])
+	}
+}
+
+func requireWaitAnySelector(t *testing.T, sel string, party coord.SessionIdentity) {
+	t.Helper()
+	if !strings.Contains(sel, inbox.ParentNoteLabel+"=true") || !strings.Contains(sel, inbox.RecipientLabel+"="+waitAnyRecipient(party)) || strings.Contains(sel, inbox.KindLabel) {
+		t.Fatalf("selector %q", sel)
+	}
+}
+
+func armWaitAnyDeadline(f *fixture) *context.CancelFunc {
+	var expire context.CancelFunc
+	f.srv.parentWaitTimeout = func(ctx context.Context, _ time.Duration) (context.Context, context.CancelFunc) {
+		child, cancel := context.WithCancel(ctx)
+		expire = cancel
+		return parentDeadlineContext{child}, cancel
+	}
+	return &expire
+}
+
+func startWaitAny(f *fixture, token, query string) (<-chan *httptest.ResponseRecorder, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan *httptest.ResponseRecorder, 1)
+	r := httptest.NewRequest(http.MethodGet, apiv1.ParentNotesWaitAnyPath+"?"+query, nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer "+token)
+	go func() {
+		w := httptest.NewRecorder()
+		f.h.ServeHTTP(w, r)
+		result <- w
+	}()
+	return result, cancel
+}
+
+func doWaitAny(t *testing.T, f *fixture, token, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	r := httptest.NewRequest(http.MethodGet, apiv1.ParentNotesWaitAnyPath+"?"+query, nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	f.h.ServeHTTP(w, r)
+	return w
+}
+
+func decodeWaitAny(t *testing.T, w *httptest.ResponseRecorder) (apiv1.ParentNoteWaitAnyResult, map[string]json.RawMessage) {
+	t.Helper()
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	got := decode[apiv1.ParentNoteWaitAnyResult](t, w)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["text"]; ok {
+		t.Fatal("response included text")
+	}
+	if _, ok := raw["key"]; ok {
+		t.Fatal("response included key")
+	}
+	return got, raw
+}
+
+func assertNoPrivate(t *testing.T, body string) {
+	t.Helper()
+	for _, secret := range []string{"PRIVATE_NOTE_TEXT", "PRIVATE_KEY", "PRIVATE_EXPIRED", "PRIVATE_WATCH_ERROR", "PRIVATE_FOREIGN", "PRIVATE_REPLY", "PRIVATE_PLAIN", "PRIVATE_FUTURE"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("response leaked %s: %s", secret, body)
+		}
+	}
+}
+
+func TestParentNoteWaitAnyReturnsStoredNote(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	party := waitAnyParty(t, f, "parent")
+	note := waitAnyNote(party, waitAnyName(4), inbox.KindQuestion, "5", "PRIVATE_NOTE_TEXT", waitAnyStamp)
+	var logs strings.Builder
+	f.srv.Log = logr.FromSlogHandler(slog.NewJSONHandler(&logs, nil))
+	p := &waitAnyProbe{notes: []*coord.InboxMessage{note}, listRV: "1"}
+	p.install(f)
+	start := time.Now()
+	w := doWaitAny(t, f, parent, "seconds=30&after=4")
+	if time.Since(start) > time.Second {
+		t.Fatal("a stored note did not return at once")
+	}
+	got, _ := decodeWaitAny(t, w)
+	assertNoPrivate(t, w.Body.String())
+	if strings.Contains(logs.String(), "PRIVATE_NOTE_TEXT") || strings.Contains(logs.String(), "PRIVATE_KEY") {
+		t.Fatal("log included note text or key")
+	}
+	if got.State != apiv1.ParentNoteArrived || got.Name != note.Name || got.Child != "child" || got.Kind != inbox.KindQuestion || !got.CreatedAt.Equal(waitAnyStamp) || got.Cursor != "5" {
+		t.Fatalf("note %+v", got)
+	}
+	if len(f.srv.parentWaits.held) != 0 || p.lists.Load() != 0 || p.watches.Load() != 1 {
+		t.Fatalf("lists %d watches %d held %d", p.lists.Load(), p.watches.Load(), len(f.srv.parentWaits.held))
+	}
+	p.requireWatch(t, 0, party, "4")
+}
+
+func TestParentNoteWaitAnyHoldsUntilStored(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	party := waitAnyParty(t, f, "parent")
+	note := waitAnyNote(party, waitAnyName(7), inbox.KindResult, "8", "PRIVATE_NOTE_TEXT", waitAnyStamp)
+	p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1)}
+	p.install(f)
+	result, cancel := startWaitAny(f, parent, "seconds=30&after=7")
+	defer cancel()
+	g := receiveParentWait(t, p.started).(*gateWatch)
+	select {
+	case early := <-result:
+		t.Fatalf("returned before the note was stored: %s", early.Body.String())
+	case <-time.After(200 * time.Millisecond):
+	}
+	g.send(t, watch.Event{Type: watch.Added, Object: note})
+	w := receiveParentWait(t, result)
+	got, _ := decodeWaitAny(t, w)
+	assertNoPrivate(t, w.Body.String())
+	if got.State != apiv1.ParentNoteArrived || got.Name != note.Name || got.Child != "child" || got.Kind != inbox.KindResult || got.Cursor != "8" || !g.IsStopped() || len(f.srv.parentWaits.held) != 0 {
+		t.Fatalf("held wait %+v stopped %v", got, g.IsStopped())
+	}
+	p.requireWatch(t, 0, party, "7")
+}
+
+func TestParentNoteWaitAnyWaitingAtDeadline(t *testing.T) {
+	for _, withAfter := range []bool{true, false} {
+		t.Run(fmt.Sprintf("after=%v", withAfter), func(t *testing.T) {
+			f, parent, _, _ := parentNoteFixture(t, false)
+			party := waitAnyParty(t, f, "parent")
+			p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1), listRV: "5"}
+			p.install(f)
+			expire := armWaitAnyDeadline(f)
+			query := "seconds=30"
+			if withAfter {
+				query += "&after=5"
+			}
+			result, cancel := startWaitAny(f, parent, query)
+			defer cancel()
+			g := receiveParentWait(t, p.started).(*gateWatch)
+			(*expire)()
+			w := receiveParentWait(t, result)
+			got, _ := decodeWaitAny(t, w)
+			if got.State != apiv1.ParentNoteWaiting || got.Cursor != "5" || got.Name != "" || strings.Contains(w.Body.String(), "createdAt") || !g.IsStopped() || len(f.srv.parentWaits.held) != 0 {
+				t.Fatalf("deadline %+v %s", got, w.Body.String())
+			}
+			wantLists := int32(1)
+			if withAfter {
+				wantLists = 0
+			}
+			if p.lists.Load() != wantLists || p.watches.Load() != 1 {
+				t.Fatalf("lists %d watches %d", p.lists.Load(), p.watches.Load())
+			}
+			p.requireWatch(t, 0, party, "5")
+			if !withAfter {
+				p.requireList(t, 0, party)
+			}
+		})
+	}
+}
+
+func TestParentNoteWaitAnySameSecondOrder(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	party := waitAnyParty(t, f, "parent")
+	// The first stored name sorts after the second. Storage order is the answer.
+	first := waitAnyNote(party, waitAnyName(90), inbox.KindQuestion, "2", "PRIVATE_NOTE_TEXT", waitAnyStamp)
+	second := waitAnyNote(party, waitAnyName(1), inbox.KindBlocker, "3", "PRIVATE_NOTE_TEXT", waitAnyStamp)
+	if first.Name < second.Name || !first.CreationTimestamp.Equal(&second.CreationTimestamp) {
+		t.Fatal("fixture does not reverse names inside one second")
+	}
+	p := &waitAnyProbe{notes: []*coord.InboxMessage{first, second}}
+	p.install(f)
+	w1 := doWaitAny(t, f, parent, "seconds=30&after=1")
+	got1, _ := decodeWaitAny(t, w1)
+	w2 := doWaitAny(t, f, parent, "seconds=30&after="+got1.Cursor)
+	got2, _ := decodeWaitAny(t, w2)
+	assertNoPrivate(t, w1.Body.String()+w2.Body.String())
+	if got1.Name != first.Name || got1.Kind != inbox.KindQuestion || got1.Cursor != "2" || got2.Name != second.Name || got2.Kind != inbox.KindBlocker || got2.Cursor != "3" || !got1.CreatedAt.Equal(got2.CreatedAt) {
+		t.Fatalf("order %s then %s", got1.Name, got2.Name)
+	}
+}
+
+func TestParentNoteWaitAnyFortyNotes(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	party := waitAnyParty(t, f, "parent")
+	kinds := []string{inbox.KindQuestion, inbox.KindResult, inbox.KindBlocker}
+	notes := make([]*coord.InboxMessage, 40)
+	for i := range notes {
+		notes[i] = waitAnyNote(party, waitAnyName(i^1), kinds[i%3], strconv.Itoa(i+2), "PRIVATE_NOTE_TEXT", waitAnyStamp)
+	}
+	if notes[0].Name < notes[1].Name || notes[1].Name > notes[2].Name {
+		t.Fatal("fixture names are monotonic")
+	}
+	p := &waitAnyProbe{notes: notes}
+	p.install(f)
+	seen := map[string]bool{}
+	cursor := "1"
+	for i, note := range notes {
+		w := doWaitAny(t, f, parent, "seconds=30&after="+cursor)
+		got, _ := decodeWaitAny(t, w)
+		assertNoPrivate(t, w.Body.String())
+		if got.State != apiv1.ParentNoteArrived || got.Name != note.Name || got.Kind != note.Spec.Kind || got.Child != "child" || got.Cursor != note.ResourceVersion || seen[got.Name] || !got.CreatedAt.Equal(waitAnyStamp) {
+			t.Fatalf("note %d: %+v", i, got)
+		}
+		seen[got.Name] = true
+		cursor = got.Cursor
+		p.requireWatch(t, i, party, cursorBefore(note.ResourceVersion))
+	}
+	if len(seen) != 40 || cursor != "41" {
+		t.Fatalf("saw %d cursor %s", len(seen), cursor)
+	}
+	f.srv.parentWaitTimeout = expiredParentWait
+	w := doWaitAny(t, f, parent, "seconds=30&after="+cursor)
+	got, _ := decodeWaitAny(t, w)
+	if got.State != apiv1.ParentNoteWaiting || got.Cursor != "41" || got.Name != "" || p.watches.Load() != 40 || p.lists.Load() != 0 {
+		t.Fatalf("after forty %+v watches %d", got, p.watches.Load())
+	}
+}
+
+func cursorBefore(rv string) string {
+	n, err := strconv.ParseUint(rv, 10, 64)
+	if err != nil || n == 0 {
+		return ""
+	}
+	return strconv.FormatUint(n-1, 10)
+}
+
+func TestParentNoteWaitAnyBetweenListAndWatch(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	party := waitAnyParty(t, f, "parent")
+	note := waitAnyNote(party, waitAnyName(3), inbox.KindBlocker, "11", "PRIVATE_NOTE_TEXT", waitAnyStamp)
+	listed := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	p := &waitAnyProbe{listRV: "10", onList: func() {
+		once.Do(func() { close(listed) })
+		<-release
+	}}
+	p.install(f)
+	result, cancel := startWaitAny(f, parent, "seconds=30")
+	defer cancel()
+	receiveParentWait(t, listed)
+	p.mu.Lock()
+	p.notes = []*coord.InboxMessage{note}
+	p.mu.Unlock()
+	close(release)
+	w := receiveParentWait(t, result)
+	got, _ := decodeWaitAny(t, w)
+	assertNoPrivate(t, w.Body.String())
+	if got.State != apiv1.ParentNoteArrived || got.Name != note.Name || got.Cursor != "11" || p.lists.Load() != 1 || p.watches.Load() != 1 {
+		t.Fatalf("between %+v lists %d watches %d", got, p.lists.Load(), p.watches.Load())
+	}
+	p.requireList(t, 0, party)
+	p.requireWatch(t, 0, party, "10")
+}
+
+func TestParentNoteWaitAnyNoAfterSkipsExisting(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	party := waitAnyParty(t, f, "parent")
+	existing := waitAnyNote(party, waitAnyName(9), inbox.KindQuestion, "1", "PRIVATE_FUTURE", time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC))
+	p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1), listRV: "50", inject: existing}
+	p.install(f)
+	clocks := 0
+	f.srv.Now = func() time.Time {
+		clocks++
+		return f.now
+	}
+	expire := armWaitAnyDeadline(f)
+	result, cancel := startWaitAny(f, parent, "seconds=30")
+	defer cancel()
+	g := receiveParentWait(t, p.started).(*gateWatch)
+	(*expire)()
+	w := receiveParentWait(t, result)
+	got, _ := decodeWaitAny(t, w)
+	assertNoPrivate(t, w.Body.String())
+	if !p.sawInject || got.State != apiv1.ParentNoteWaiting || got.Cursor != "50" || strings.Contains(w.Body.String(), existing.Name) || clocks != 2 || !g.IsStopped() {
+		t.Fatalf("existing %+v clocks %d body %s", got, clocks, w.Body.String())
+	}
+	if p.lists.Load() != 1 || p.watches.Load() != 1 {
+		t.Fatalf("lists %d watches %d", p.lists.Load(), p.watches.Load())
+	}
+	p.requireList(t, 0, party)
+	p.requireWatch(t, 0, party, "50")
+}
+
+func TestParentNoteWaitAnyExpiredCursorResync(t *testing.T) {
+	t.Run("watch call", func(t *testing.T) {
+		f, parent, _, _ := parentNoteFixture(t, false)
+		party := waitAnyParty(t, f, "parent")
+		p := &waitAnyProbe{watchErr: apierrors.NewResourceExpired("PRIVATE_EXPIRED"), listRV: "900"}
+		p.install(f)
+		w := doWaitAny(t, f, parent, "seconds=5&after=3")
+		got, _ := decodeWaitAny(t, w)
+		assertNoPrivate(t, w.Body.String())
+		if got.State != apiv1.ParentNoteResync || got.Cursor != "900" || got.Name != "" || w.Code != http.StatusOK || p.lists.Load() != 1 || p.watches.Load() != 1 || len(f.srv.parentWaits.held) != 0 {
+			t.Fatalf("resync %+v %s lists %d", got, w.Body.String(), p.lists.Load())
+		}
+		p.requireList(t, 0, party)
+	})
+	t.Run("error event", func(t *testing.T) {
+		f, parent, _, _ := parentNoteFixture(t, false)
+		party := waitAnyParty(t, f, "parent")
+		p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1), listRV: "900"}
+		p.install(f)
+		result, cancel := startWaitAny(f, parent, "seconds=30&after=3")
+		defer cancel()
+		g := receiveParentWait(t, p.started).(*gateWatch)
+		g.send(t, watch.Event{Type: watch.Error, Object: &metav1.Status{Status: metav1.StatusFailure, Code: http.StatusGone, Reason: metav1.StatusReasonExpired, Message: "PRIVATE_EXPIRED"}})
+		w := receiveParentWait(t, result)
+		got, _ := decodeWaitAny(t, w)
+		assertNoPrivate(t, w.Body.String())
+		if got.State != apiv1.ParentNoteResync || got.Cursor != "900" || got.Name != "" || p.lists.Load() != 1 || p.watches.Load() != 1 || !g.IsStopped() {
+			t.Fatalf("error event %+v lists %d watches %d", got, p.lists.Load(), p.watches.Load())
+		}
+		p.requireWatch(t, 0, party, "3")
+		p.requireList(t, 0, party)
+	})
+}
+
+func TestParentNoteWaitAnyModifiedDoesNotWake(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	party := waitAnyParty(t, f, "parent")
+	note := waitAnyNote(party, waitAnyName(6), inbox.KindQuestion, "11", "PRIVATE_NOTE_TEXT", waitAnyStamp)
+	p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1)}
+	p.install(f)
+	expire := armWaitAnyDeadline(f)
+	result, cancel := startWaitAny(f, parent, "seconds=30&after=10")
+	defer cancel()
+	g := receiveParentWait(t, p.started).(*gateWatch)
+	g.send(t, watch.Event{Type: watch.Modified, Object: note})
+	(*expire)()
+	w := receiveParentWait(t, result)
+	got, _ := decodeWaitAny(t, w)
+	assertNoPrivate(t, w.Body.String())
+	if got.State != apiv1.ParentNoteWaiting || got.Name != "" || got.Cursor != "11" || strings.Contains(w.Body.String(), note.Name) {
+		t.Fatalf("modified %+v %s", got, w.Body.String())
+	}
+}
+
+func TestParentNoteWaitAnyBookmarkCursor(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	party := waitAnyParty(t, f, "parent")
+	p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 2)}
+	p.install(f)
+	expire := armWaitAnyDeadline(f)
+	result, cancel := startWaitAny(f, parent, "seconds=30&after=10")
+	defer cancel()
+	g := receiveParentWait(t, p.started).(*gateWatch)
+	g.send(t, watch.Event{Type: watch.Bookmark, Object: &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{ResourceVersion: "80"}}})
+	(*expire)()
+	w := receiveParentWait(t, result)
+	got, _ := decodeWaitAny(t, w)
+	if got.State != apiv1.ParentNoteWaiting || got.Cursor != "80" || got.Name != "" {
+		t.Fatalf("bookmark %+v", got)
+	}
+	result2, cancel2 := startWaitAny(f, parent, "seconds=30&after=80")
+	defer cancel2()
+	receiveParentWait(t, p.started)
+	(*expire)()
+	w2 := receiveParentWait(t, result2)
+	got2, _ := decodeWaitAny(t, w2)
+	if w2.Code != http.StatusOK || got2.State != apiv1.ParentNoteWaiting || got2.Cursor != "80" || p.watches.Load() != 2 || p.lists.Load() != 0 {
+		t.Fatalf("next %+v watches %d", got2, p.watches.Load())
+	}
+	p.requireWatch(t, 1, party, "80")
+}
+
+func TestParentNoteWaitAnyOtherSession(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	party := waitAnyParty(t, f, "parent")
+	stranger := waitAnyParty(t, f, "stranger")
+	if stranger.Namespace != party.Namespace || stranger.Name == party.Name || stranger.UID == party.UID {
+		t.Fatal("stranger is not another session in the same namespace")
+	}
+	foreign := waitAnyNote(stranger, waitAnyName(8), inbox.KindQuestion, "12", "PRIVATE_FOREIGN", waitAnyStamp)
+	p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1)}
+	p.install(f)
+	expire := armWaitAnyDeadline(f)
+	result, cancel := startWaitAny(f, parent, "seconds=30&after=10")
+	defer cancel()
+	g := receiveParentWait(t, p.started).(*gateWatch)
+	g.send(t, watch.Event{Type: watch.Added, Object: foreign})
+	(*expire)()
+	w := receiveParentWait(t, result)
+	got, _ := decodeWaitAny(t, w)
+	assertNoPrivate(t, w.Body.String())
+	if got.State != apiv1.ParentNoteWaiting || got.Cursor != "10" || got.Name != "" || strings.Contains(w.Body.String(), foreign.Name) {
+		t.Fatalf("foreign %+v %s", got, w.Body.String())
+	}
+	p.requireWatch(t, 0, party, "10")
+}
+
+func TestParentNoteWaitAnyReplyAndPlain(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	party := waitAnyParty(t, f, "parent")
+	reply := waitAnyNote(party, waitAnyName(2), inbox.KindReply, "11", "PRIVATE_REPLY", waitAnyStamp)
+	plain := waitAnyNote(party, waitAnyName(3), "", "12", "PRIVATE_PLAIN", waitAnyStamp)
+	p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1)}
+	p.install(f)
+	expire := armWaitAnyDeadline(f)
+	result, cancel := startWaitAny(f, parent, "seconds=30&after=10")
+	defer cancel()
+	g := receiveParentWait(t, p.started).(*gateWatch)
+	g.send(t, watch.Event{Type: watch.Added, Object: reply})
+	g.send(t, watch.Event{Type: watch.Added, Object: plain})
+	(*expire)()
+	w := receiveParentWait(t, result)
+	got, _ := decodeWaitAny(t, w)
+	assertNoPrivate(t, w.Body.String())
+	if got.State != apiv1.ParentNoteWaiting || got.Name != "" || got.Cursor != "12" || strings.Contains(w.Body.String(), reply.Name) || strings.Contains(w.Body.String(), plain.Name) {
+		t.Fatalf("reply or plain woke %+v %s", got, w.Body.String())
+	}
+}
+
+func TestParentNoteWaitAnyNinthHeldWithParentWait(t *testing.T) {
+	f, parent, child, _ := parentNoteFixture(t, false)
+	note := tellParentNote(t, f, child, apiv1.TellParentRequest{Key: "note", Kind: "question", Text: "x"}, 201)
+	p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 16), listRV: "42"}
+	p.install(f)
+	var results []<-chan *httptest.ResponseRecorder
+	var cancels []context.CancelFunc
+	var streams []*gateWatch
+	hold := func(result <-chan *httptest.ResponseRecorder, cancel context.CancelFunc) {
+		t.Helper()
+		t.Cleanup(cancel)
+		results = append(results, result)
+		cancels = append(cancels, cancel)
+		streams = append(streams, receiveParentWait(t, p.started).(*gateWatch))
+	}
+	for range 4 {
+		hold(startParentWait(f, child, note.Name))
+	}
+	for range 4 {
+		hold(startWaitAny(f, child, "seconds=30&after=42"))
+	}
+	// Another session does not share the child's eight.
+	parentResult, parentCancel := startWaitAny(f, parent, "seconds=30&after=42")
+	t.Cleanup(parentCancel)
+	receiveParentWait(t, p.started)
+	ninth := f.do(http.MethodGet, apiv1.ParentNotesWaitAnyPath+"?seconds=1&after=42", child, nil)
+	e := wantError(t, ninth, http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
+	parentNinth := f.do(http.MethodGet, apiv1.ParentNotesPath+"/"+note.Name+"/wait?seconds=1", child, nil)
+	pe := wantError(t, parentNinth, http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
+	if e.Message != parentHeldWaitLimitMessage || pe.Message != parentHeldWaitLimitMessage || p.watches.Load() != 9 {
+		t.Fatalf("ninth %q parent %q watches %d", e.Message, pe.Message, p.watches.Load())
+	}
+	parentCancel()
+	receiveParentWait(t, parentResult)
+	for i, cancel := range cancels {
+		cancel()
+		receiveParentWait(t, results[i])
+		if !streams[i].IsStopped() {
+			t.Fatal("canceled request leaked its watch")
+		}
+	}
+	if len(f.srv.parentWaits.held) != 0 {
+		t.Fatal("canceled requests leaked slots")
+	}
+}
+
+func TestParentNoteWaitAnyRefusedWatch(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	p := &waitAnyProbe{watchErr: errors.New("PRIVATE_WATCH_ERROR"), listRV: "5"}
+	p.install(f)
+	w := doWaitAny(t, f, parent, "seconds=5&after=3")
+	e := wantError(t, w, http.StatusServiceUnavailable, apiv1.CodeUnavailable)
+	assertNoPrivate(t, w.Body.String())
+	if e.Message != parentWaitAnyWatchRefused || p.watches.Load() != 1 || p.lists.Load() != 0 || len(f.srv.parentWaits.held) != 0 {
+		t.Fatalf("refused %q watches %d lists %d held %d", e.Message, p.watches.Load(), p.lists.Load(), len(f.srv.parentWaits.held))
+	}
+}
+
+func TestParentNoteWaitAnyFlagOff(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1), listRV: "5"}
+	p.install(f)
+	f.srv.ParentNotes = false
+	f.h = f.srv.Handler()
+	w := f.do(http.MethodGet, apiv1.ParentNotesWaitAnyPath+"?seconds=1", parent, nil)
+	e := wantError(t, w, http.StatusServiceUnavailable, apiv1.CodeUnavailable)
+	if e.Message != "parent notes are not enabled" || p.watches.Load() != 0 || p.lists.Load() != 0 || len(f.srv.parentWaits.held) != 0 {
+		t.Fatalf("flag off %q watches %d lists %d", e.Message, p.watches.Load(), p.lists.Load())
+	}
+	post := f.do(http.MethodPost, apiv1.ParentNotesWaitAnyPath, parent, nil)
+	if post.Code != http.StatusMethodNotAllowed || !strings.Contains(post.Body.String(), "/v1/parent-notes/wait takes ") {
+		t.Fatalf("method %d %s", post.Code, post.Body.String())
+	}
+}
+
+func TestParentNoteWaitAnyCallerPolicyRefused(t *testing.T) {
+	f, _, _, _ := parentNoteFixture(t, false)
+	if err := f.c.Create(context.Background(), meatballPolicy()); err != nil {
+		t.Fatal(err)
+	}
+	id := saIdentity(meatballAccount)
+	id.PodName, id.PodUID = "front-door", "front-door-pod"
+	f.auth[tokMeatball] = id
+	p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1), listRV: "5"}
+	p.install(f)
+	w := f.do(http.MethodGet, apiv1.ParentNotesWaitAnyPath+"?seconds=1", tokMeatball, nil)
+	wantError(t, w, http.StatusForbidden, apiv1.CodeForbidden)
+	if p.watches.Load() != 0 || p.lists.Load() != 0 || len(f.srv.parentWaits.held) != 0 {
+		t.Fatalf("policy caller watches %d lists %d", p.watches.Load(), p.lists.Load())
+	}
+}
+
+func TestParentNoteWaitAnyBadCursor(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1), listRV: "5"}
+	p.install(f)
+	bad := []string{"nope", "01", "-1", "1.2", strings.Repeat("9", 256), strings.Repeat("9", 257)}
+	for _, after := range bad {
+		w := f.do(http.MethodGet, apiv1.ParentNotesWaitAnyPath+"?seconds=1&after="+after, parent, nil)
+		e := wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+		if e.Message != "after must be a resource version" || strings.Contains(w.Body.String(), after) {
+			t.Fatalf("cursor %q echoed or changed the sentence: %s", after, w.Body.String())
+		}
+	}
+	empty := f.do(http.MethodGet, apiv1.ParentNotesWaitAnyPath+"?seconds=1&after=", parent, nil)
+	wantError(t, empty, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	for _, query := range []string{"", "?seconds=0", "?seconds=901", "?seconds=1&seconds=2", "?seconds=1&after=1&after=2"} {
+		wantError(t, f.do(http.MethodGet, apiv1.ParentNotesWaitAnyPath+query, parent, nil), http.StatusBadRequest, apiv1.CodeBadRequest)
+	}
+	if p.watches.Load() != 0 || p.lists.Load() != 0 || len(f.srv.parentWaits.held) != 0 {
+		t.Fatalf("bad cursor watched lists %d watches %d", p.lists.Load(), p.watches.Load())
+	}
+	// A canonical version is not a 422. Zero is a resource version.
+	p.gate = true
+	expire := armWaitAnyDeadline(f)
+	result, cancel := startWaitAny(f, parent, "seconds=30&after=0")
+	defer cancel()
+	receiveParentWait(t, p.started)
+	(*expire)()
+	w := receiveParentWait(t, result)
+	got, _ := decodeWaitAny(t, w)
+	if got.State != apiv1.ParentNoteWaiting || got.Cursor != "0" {
+		t.Fatalf("zero cursor %+v %s", got, w.Body.String())
+	}
+}

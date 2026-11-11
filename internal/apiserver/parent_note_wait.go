@@ -18,7 +18,10 @@ import (
 
 // parentHeldWaitLimit is how many waits one session may hold on this Server.
 // Each API replica has its own Server. Two replicas can hold sixteen.
+// parent wait and parent wait-any share this counter.
 const parentHeldWaitLimit = 8
+
+const parentHeldWaitLimitMessage = "at most 8 parent waits may be held for one session"
 
 // parentWaitWatchRefused is the only sentence a refused or unstarted watch
 // returns. It carries no note text, and the handler does not poll.
@@ -81,7 +84,7 @@ func (s *Server) waitParentNote(ctx context.Context, w http.ResponseWriter, r *h
 		reply = &replies[0]
 	} else {
 		if !s.parentWaits.acquire(party) {
-			return 0, nil, newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded, "at most 8 parent waits may be held for one session")
+			return 0, nil, newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded, parentHeldWaitLimitMessage)
 		}
 		defer s.parentWaits.release(party)
 		duration := time.Duration(seconds) * time.Second

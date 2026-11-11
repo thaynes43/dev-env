@@ -159,6 +159,57 @@ func (s KubeStore) ParentReplies(ctx context.Context, q *coord.InboxMessage) ([]
 	return replies, list.ResourceVersion, err
 }
 
+// parentNoteWatchSelector is one selection: the parent-note label and the
+// caller's recipient label. It does not constrain kind. Callers filter kind
+// on each event. It is not the two kind-scoped calls listParentNotes makes.
+func parentNoteWatchSelector(party coord.SessionIdentity) (labels.Selector, error) {
+	if !ValidSession(party) {
+		return nil, ErrUnavailable
+	}
+	return labels.SelectorFromSet(map[string]string{
+		ParentNoteLabel: "true",
+		RecipientLabel:  recipientLabel(party),
+	}), nil
+}
+
+// ParentNoteWatchCursor is the resource version of one list of notes addressed
+// to party, limited to one object. The list's own metadata.resourceVersion is
+// the cursor. Items are not interpreted, and no clock is read.
+func (s KubeStore) ParentNoteWatchCursor(ctx context.Context, party coord.SessionIdentity) (string, error) {
+	if !s.ready() || !ValidSession(party) {
+		return "", ErrUnavailable
+	}
+	sel, err := parentNoteWatchSelector(party)
+	if err != nil {
+		return "", ErrUnavailable
+	}
+	var list coord.InboxMessageList
+	if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabelsSelector{Selector: sel}, client.Limit(1)) != nil {
+		return "", ErrUnavailable
+	}
+	if list.ResourceVersion == "" {
+		return "", ErrUnavailable
+	}
+	return list.ResourceVersion, nil
+}
+
+// WatchParentNotes opens one watch of notes addressed to party, from version,
+// and asks for bookmarks. A 410 from the API server is returned as-is so the
+// caller can resync; other failures are also returned as-is. Callers do not
+// reconnect or poll.
+func (s KubeStore) WatchParentNotes(ctx context.Context, party coord.SessionIdentity, version string) (watch.Interface, error) {
+	if s.Watcher == nil || version == "" || !s.ready() || !ValidSession(party) {
+		return nil, ErrUnavailable
+	}
+	sel, err := parentNoteWatchSelector(party)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	return s.Watcher.Watch(ctx, &coord.InboxMessageList{}, client.InNamespace(s.Namespace),
+		client.MatchingLabelsSelector{Selector: sel},
+		&client.ListOptions{Raw: &metav1.ListOptions{ResourceVersion: version, AllowWatchBookmarks: true}})
+}
+
 // WatchParentReplies opens exactly one stream. A closed or expired stream is
 // unconfirmed; callers do not silently reconnect or poll.
 func (s KubeStore) WatchParentReplies(ctx context.Context, q *coord.InboxMessage, version string) (watch.Interface, error) {

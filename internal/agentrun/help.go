@@ -22,7 +22,8 @@ Usage:
                                                   print which paired Codex host would be reused
   agent-run inbox send|ask|reply|list|read|ack|ack-status
                                                   durable inbox
-  agent-run parent tell|list|read|answer|wait      notes to a session parent
+  agent-run parent tell|list|read|answer|wait|wait-any
+                                                  notes to a session parent
   agent-run instruction send|read|checkpoint|consume|address|attempt designated parent delivery and native consumption
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
@@ -341,6 +342,7 @@ Source tests do not prove an installed operator or a live native task.
        agent-run parent read <name> [-o json]
        agent-run parent answer <name> --key <key> < answer.txt
        agent-run parent wait <name> [--for 15m] [-o json]
+       agent-run parent wait-any [--after <cursor>] [--for 15m] [-o json]
 
 Tell leaves a note for this Session's recorded session parent. No recipient or
 project flag: the server derives both from the child. The child needs a project
@@ -371,11 +373,24 @@ refused or cannot start returns 503 and holds nothing. There is no polling
 or automatic retry. Call wait again for more time or after a connection
 closes before its answer.
 
+Wait-any is one held read for a new note addressed to this session. It prints
+the note's name, child and kind, then the next cursor; or waiting and the
+cursor; or resync, a fresh cursor, and a line to run agent-run parent list.
+It prints no note text. Exit is 0 for all three. --after is the cursor the
+previous call printed. With no --after, notes already stored are left for
+parent list. --for defaults to 15m. A longer whole-second wait calls again
+with the cursor it was given, at most 900 seconds at a time. The client
+timeout is that chunk plus 2 minutes, the same as parent wait. At most 8
+held reads for one session on one API replica are shared with parent wait.
+A refused watch returns 503 and holds nothing. There is no polling. A
+CallerPolicy caller has no wait.
+
 These commands require --enable-parent-notes on the operator, which defaults
 off and requires --enable-durable-inbox. Disabled routes return 503, which
 tell reports as an unknown outcome because the same status can mean that. Only
-session parents are supported. The parent finds notes by listing them; nothing
-wakes it or pastes note text into its session.
+session parents are supported. A parent finds new notes with parent wait-any,
+or by listing them. Nothing is typed into its terminal, and no note text is
+pasted into its session.
 `,
 	"inbox": `Usage: agent-run inbox send --project <project> --recipient-namespace <namespace> --recipient-name <name> --recipient-uid <uid> --key <key> < message.txt
        agent-run inbox ask --project <project> [--to <session> [--to-uid <uid>]] --key <key> < question.txt

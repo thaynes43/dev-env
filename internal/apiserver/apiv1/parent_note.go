@@ -1,6 +1,15 @@
 package apiv1
 
+import (
+	"strconv"
+	"time"
+)
+
 const ParentNotesPath = "/v1/parent-notes"
+
+// ParentNotesWaitAnyPath is the session's own held read for new notes.
+// It is not the per-note wait at /v1/parent-notes/{message}/wait.
+const ParentNotesWaitAnyPath = ParentNotesPath + "/wait"
 
 const (
 	ParentNoteQuestion       = "question"
@@ -10,8 +19,27 @@ const (
 	ParentNotesSent          = "sent"
 	ParentNoteWaiting        = "waiting"
 	ParentNoteAnswered       = "answered"
+	ParentNoteArrived        = "note"
+	ParentNoteResync         = "resync"
 	ParentNoteMaxWaitSeconds = 900
+	// ParentNoteMaxCursorBytes is the opaque cursor limit. A longer value is
+	// refused; it is never treated as a resource version.
+	ParentNoteMaxCursorBytes = 256
 )
+
+// ValidResourceVersion reports whether v is one Kubernetes resource version:
+// a canonical decimal integer, at most ParentNoteMaxCursorBytes long. Empty
+// is not a version. The caller does not guess a nearby value.
+func ValidResourceVersion(v string) bool {
+	if v == "" || len(v) > ParentNoteMaxCursorBytes {
+		return false
+	}
+	n, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		return false
+	}
+	return strconv.FormatUint(n, 10) == v
+}
 
 // TellParentRequest contains intent only. A child omits Session: the server
 // derives the project and the parent from that session. A policy caller sets
@@ -37,4 +65,16 @@ type AnswerParentRequest struct {
 type ParentNoteWaitResult struct {
 	State string        `json:"state"`
 	Reply *InboxMessage `json:"reply,omitempty"`
+}
+
+// ParentNoteWaitAnyResult is one held read for a new note addressed to the
+// caller. It carries the note's name, child, kind and creation time, or
+// waiting, or resync. It never carries the note's text or key.
+type ParentNoteWaitAnyResult struct {
+	State     string    `json:"state"`
+	Name      string    `json:"name,omitempty"`
+	Child     string    `json:"child,omitempty"`
+	Kind      string    `json:"kind,omitempty"`
+	CreatedAt time.Time `json:"createdAt,omitzero"`
+	Cursor    string    `json:"cursor,omitempty"`
 }

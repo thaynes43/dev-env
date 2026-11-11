@@ -33,6 +33,10 @@ func (s *Server) registerParentNotes(mux *http.ServeMux) {
 	mux.Handle(apiv1.ParentNotesPath+"/{message}/wait", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{
 		http.MethodGet: s.waitParentNote,
 	}}))
+	// Literal path, so /wait is not read as a note named wait.
+	mux.Handle(apiv1.ParentNotesWaitAnyPath, s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{
+		http.MethodGet: s.waitAnyParentNote,
+	}}))
 }
 
 func (s *Server) parentNotesAvailable() error {

@@ -970,6 +970,8 @@ agent-run parent list --sent
 agent-run parent list
 agent-run parent read <name>
 agent-run parent answer <name> --key build-answer < answer.txt
+# After dispatching a worker, in the background:
+agent-run parent wait-any --for 15m
 # Back in the child session:
 agent-run parent wait <name> --for 15m
 ```
@@ -1026,7 +1028,7 @@ The operator flag `--enable-parent-notes` defaults to false and requires
 nothing; an operator older than this feature answers 404. The wait needs the
 verb watch on inboxmessages for the operator's Role, granted in haynes-ops
 before the flag is on. This source does not enable the flag in the cluster.
-The parent finds notes by listing them. A child whose recorded parent is the
+The parent finds notes by listing them or with `parent wait-any`. A child whose recorded parent is the
 Meatball account `dev-env-system/dev-env-meatball` uses the same `parent tell`.
 The server stores `callerRecipient` from the live CallerPolicy. Any other
 ServiceAccount parent is refused with 422. The child reads an answer with
@@ -1047,8 +1049,23 @@ reads it with `parent read`. The caller's sent list is replies, then plain
 messages. The caller's sender cap counts across projects. The project cap stays
 per project. A session that names a child on tell is refused with 400 and stores
 nothing. A session parent sending to its own child is not this slice.
-The wake notice for a session parent is a later slice. No note
-text is pasted into a session.
+A parent that wants to be woken runs `agent-run parent wait-any` itself.
+Nothing is typed into its terminal, and no note text is pasted into its
+session. The command is one held read on `GET /v1/parent-notes/wait`,
+counted together with `parent wait`: at most eight for one session on one
+API replica. It returns when a question, result or blocker addressed to the
+caller is stored after the cursor, or when its time is up. It prints the
+note's name, child and kind, then the next cursor; or `waiting` and the
+cursor; or `resync` and a fresh cursor, which means run
+`agent-run parent list`. It never prints the note's text or key. The cursor
+is the API server's resource version. With no `--after`, notes already
+stored are not returned. `--for` defaults to `15m`. A longer wait calls
+again with the cursor the previous call returned, in chunks of at most 900
+seconds. The client timeout is that chunk plus two minutes, the same as
+`parent wait`. A refused watch answers 503 and holds nothing. Neither side
+polls. A CallerPolicy caller has no wait. After dispatching a worker, a
+coordinator starts the command in the background, reads the named note, and
+starts the command again with the printed cursor.
 
 The record is an InboxMessage marked by the server-set label
 `coordination.dev-env.haynesops.com/parent-note=true`. The label distinguishes
