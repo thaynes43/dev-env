@@ -99,7 +99,7 @@ that change DESIGN-001.
 | A new CRD kind for summoning callers | Item 738 and D-36 name CallerPolicy; one kind keeps one read path and one RBAC rule. |
 | Finding a caller's policy by listing all policies | Two policies could name one account. A derived name makes one per account by construction, with an uncached Get. |
 | The caller waiting for the link and paging | The operator files remediation escalations itself, so there is no caller process to wait. Callers' pages would also need the token in `upgrade-agent`. |
-| The operator holding a Pushover token | A new holder of a credential, on Tom's list. The keeper already holds it and already pushes from watched objects. |
+| The operator holding a Pushover token | A new holder of a credential, on Tom's list. The keeper already holds it and already pushes for the Asks it reads, with a ledger. |
 | Switching models when a run hits the quota wall | A restart can repeat an actuator's actions. One plan pool serves every model, so a switch rarely helps at the plan's wall. |
 | Resuming a lost summoned session | The same double-action risk. A person or the caller decides. |
 | Refusing a create past `concurrent` | An escalation must never be silent (R-01 F-04). A refusal leaves the caller to page; a hold pages from one place. |

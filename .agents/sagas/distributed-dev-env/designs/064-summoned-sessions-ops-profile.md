@@ -118,7 +118,7 @@ under `kubernetes/main/apps/` unless they start with `.agents/`.
 | R3 | Any other ServiceAccount gets 403 "... summoning callers (CallerPolicy) arrive in plan 10". | dev-env: `internal/apiserver/caller.go`, `resolveCaller` (line 168) | reused with a change (6.4) |
 | R4 | A policy caller may create, read and delete its own sessions and use parent notes, nothing else. | dev-env: `callerpolicy.go`, `policyCallerAllowed`, `policyParentNoteRoute` | reused with a change (6.4, Q-19): summoning callers get create and own reads only |
 | R5 | `preparePolicySession` checks mode, profile, model, agent, effort, timeout and worker cap before the ordinary create path. | dev-env: `callerpolicy.go`, `preparePolicySession` | reused as the pattern; the summoning check is built new beside it (6.4) |
-| R6 | A policy caller's unfinished sessions are counted by `spec.parent` under the create lock. | dev-env: `callerpolicy.go`, `admitCallerCapacityExcept`, `createWithCallerCap` | reused with a change (6.4, 6.7): `concurrent` from the policy; past it the create is held |
+| R6 | A policy caller's unfinished sessions are counted by `spec.parent` with the ordinary unfinished rule; past the cap the create gets 429. | dev-env: `callerpolicy.go`, `admitCallerCapacityExcept` (`tooManyRequests`) | reused with a change (6.4, 6.7): `concurrent` from the policy; past it the create is held |
 | R7 | AgentSession has `spec.caller`, `spec.lane` (enum remediation, upgrade, curation, escalation) and `spec.idempotencyKey`, all immutable. | dev-env: `api/v1alpha1/agentsession_types.go`, `AgentSessionSpec.Caller`, `.Lane`, `.IdempotencyKey`, type `Lane` | reused as is |
 | R8 | CEL: caller and lane go together; idempotencyKey needs caller; a summoned session is never `local` and never profile `full`. | dev-env: `agentsession_types.go` lines 144–147 | reused with a change (6.4): also never `workbench`, agent `claude` only |
 | R9 | The API refuses `name` and `lane` from every caller. | dev-env: `internal/apiserver/validate.go` lines 105–106 | reused with a change (6.4) |
@@ -143,7 +143,7 @@ under `kubernetes/main/apps/` unless they start with `.agents/`.
 | R28 | The operator admits 8443 from `dev-agents`, `dev/dev-env` and `dev-env-system`, not `upgrade-agent`, and has egress to `api.pushover.net`. | haynes-ops: `dev-env-system/network/app/operator.yaml` | reused with a change (6.5) |
 | R29 | The API takes tokens for audience `dev-env-operator`. The front door shows the client pattern: a projected token and the `dev-env-api-ca` copy pki publishes. | dev-env: `apiv1/types.go`, `TokenAudience`; haynes-ops: `dev-env-system/frontdoor/app/deployment.yaml`, volumes `operator-token`, `operator-ca` | reused as the pattern (6.5) |
 | R30 | The keeper mints one App (haynes-dev-bot) into one Secret. `dev-env-ops-gh-token` exists empty and the keeper's Role names it. | dev-env: `cmd/dev-env-keeper/main.go`, flags `gh-token-secret`, `github-app-dir`; haynes-ops: `dev-env-system/rbac/app/keeper.yaml` line 24; `dev-env-system/secrets/app/keeper-secrets.yaml` | built new (6.2) |
-| R31 | The keeper holds the Pushover token and sends pushes for objects it watches, with a dedupe ledger ConfigMap. | dev-env: `cmd/dev-env-keeper/main.go`, `pushover-token-file`; `internal/keeper/ask_notifications.go`, `notifier.go`; haynes-ops: `dev-env-system/keeper/app/externalsecret-pushover.yaml`, `dev-env-system/rbac/app/keeper-ask-notifications.yaml` | reused with a change (6.8, Q-16) |
+| R31 | The keeper holds the Pushover token. Its Ask notifier is a leader-only runnable that lists Asks each tick and writes its dedupe, rate and page record before any send, into a ledger ConfigMap. | dev-env: `cmd/dev-env-keeper/main.go`, `pushover-token-file`; `internal/keeper/ask_notifications.go`, `askNotificationReader` and the `askNotifier` comment (lines 144–153), `notifier.go`; haynes-ops: `dev-env-system/keeper/app/externalsecret-pushover.yaml`, `dev-env-system/rbac/app/keeper-ask-notifications.yaml` | reused with a change (6.8, Q-16) |
 | R32 | The operator has no Pushover sender; its one mention is a placeholder. | dev-env: `cmd/dev-env-operator/broker.go` line 167 | nothing to reuse |
 | R33 | Plan usage is read for the 5-hour and weekly windows. How fresh the reading is was not verified. | dev-env: `internal/providerallowance/claude_statusline.go` (`five_hour`, `seven_day`); haynes-ops: operator flag `--enable-session-allowances` | reused with a change (6.9) |
 | R34 | ScheduledWork has two switches, both off live, recommended to stay off. | dev-env: `docs/switches-2026-11-10.md`, rows `--enable-scheduled-work`, `--enable-scheduled-work-api` | not used (Q-04) |
@@ -162,7 +162,7 @@ The v1 pieces each story replaces, all under haynes-ops
 |---|---|---|
 | `dev-env-ops/app/resources/work-order-watch.sh` | polls the ConfigMap every 60 s, one active session per lane (`for lane in esc wo rem`), orphan sweep, `wo_watchdog` (180 min), retention, daily login check | 6.7 (lanes, watchdog), 6.16 |
 | `dev-env-ops/app/resources/session-launch.sh` | model probe and fallback, Remote Control choice (`want_rc=0` for curation and rem), headless rem with 40 min and 120 turns, close an unreported order | 6.6, 6.9, 6.10 |
-| `dev-env-ops/app/resources/order-status.sh` | `working`, `done`, `failed`, `escalate`; pages on wo and esc `failed`; rem promotion to `esc-rem-` | 6.6, 6.8 |
+| `dev-env-ops/app/resources/order-status.sh` | `working`, `done`, `failed`, `escalate`; pages on every `failed`; rem promotion to `esc-rem-` | 6.6, 6.8 |
 | `dev-env-ops/app/resources/rc-state.sh` | waits up to 120 s for a `bridgeSessionId` before a page carries a link | 6.10 |
 | `dev-env-ops/app/resources/ops-digest.sh` | quiet digest at Pushover priority -1 | 6.8 |
 | `dev-env-ops/app/resources/login-check.sh` | days left on dev-env-ops's own Max login; pages at 7 days | nothing; it ends with the pod (6.15) |
@@ -282,8 +282,9 @@ Q-11 on #749 covers one more renewal.
 
 ### 5.4 Outside this work: the callers' own LLM runs (work order 7e)
 
-R-01's Option A is live: `respond.sh` and `run-shepherd.sh` (and `triage.sh`
-through it) run `claude -p` in their own CronJob pods, plan token first, with a
+R-01's Option A is live: `respond.sh` and `run-shepherd.sh` run `claude -p` in
+their own CronJob pods (R-01 shows triage running the shepherd with
+`MODE=remediate`), plan token first, with a
 metered fallback key from `upgrade-shepherd-llm-secret`, and record spend in
 their own ConfigMaps. Those runs are diagnosis inside the caller, not sessions
 v2 runs, and no story here moves them. So they stay outside this work.
@@ -359,9 +360,10 @@ Egress, and nothing else:
 - Q-09: the playbook (`cigar-curation.md`, "Today the fallback is what
   actually fires") says the installation covers cigar-journal but grants no
   `issues`; the HelmRelease asks for `issues: write`; DESIGN-001 6.4 says
-  GitHub refuses a mint that asks for a permission the App lacks. One of these
-  texts is stale. The builder reads the installation's permissions and
-  repositories from GitHub and records them before the flag goes on.
+  GitHub refuses a mint that asks for a permission the App lacks. These do not
+  agree as written; either one is stale or the grant differs by repository.
+  The builder reads the installation's permissions and repositories from
+  GitHub and records them before the flag goes on.
 - An installation token has no refresh token. The keeper and the
   `gh-refresher` sidecar minting the same App during the overlap do not
   revoke each other.
@@ -478,8 +480,8 @@ spec:
 - **Idempotency (V-03).** Per caller. A key whose session is unfinished
   **and** has no terminal outcome returns that session with 200. If the
   earlier one is finished or has a terminal outcome, the new session takes
-  the requested name with the first free suffix `-2` to `-99`; the earlier
-  record is kept (finished tasks stay 7 days, R17). A name held by an
+  the requested name if it is free, else the first free suffix `-2` to `-99`;
+  the earlier record is kept (finished tasks stay 7 days, R17). A name held by an
   unfinished session with a different key is 409.
 - **Limits.** `createsPerHour` counts the caller's sessions created in the
   last hour; past it, 429 with the reason. The count holds because a
@@ -503,8 +505,9 @@ spec:
 - **Token:** a projected ServiceAccount token, audience `dev-env-operator`,
   `expirationSeconds: 3600`, at `/var/run/secrets/dev-env/token`, as the front
   door does (R29).
-- **CA:** pki publishes `dev-env-api-ca` into `upgrade-agent` from the same
-  pinned file, mounted at `/etc/dev-env/ca.crt`.
+- **CA:** pki also publishes `dev-env-api-ca` into `upgrade-agent` (new; it
+  publishes the same pinned file into `dev-agents` and `dev-env-system`
+  today), mounted at `/etc/dev-env/ca.crt`.
 - **Network:** `operator.yaml` admits 8443 from `upgrade-agent` pods with
   exactly those app labels; each caller's CNP adds egress to
   `dev-env-system`/`dev-env-operator` 8443. The API URL is the one the front
@@ -517,7 +520,8 @@ spec:
   API's message printed); 3 unconfirmed (5xx, timeout): the caller retries
   with the same key, which is safe because the create is idempotent. It
   never prints the token. The selftest runs in CI against a fake server, in
-  the style of `scripts/upgrade-agent/*selftest*`.
+  the style of haynes-ops `scripts/upgrade-agent/*-selftest.sh` (for example
+  `coordination-sig-selftest.sh`).
 - The scripts in `upgrade-shepherd:0.1.0`, `upgrade-agent:0.1.0` and
   `dev-env:0.6.8` already call curl and jq (`respond.sh`, `gate.sh`,
   `triage.sh`, the curation-order args). That is evidence, not a run; the
@@ -568,7 +572,7 @@ sessions whose outcome is not terminal. When one of these happens, it writes
 
 | Event | Reason |
 |---|---|
-| a task's agent exits: `status.taskResult` is set (Succeeded, Failed, TimedOut, Unknown) | `agent-exited`, `timed-out`, `turn-cap` or `exit-unknown` |
+| a task's agent exits: `status.taskResult` is set (Succeeded, Failed, TimedOut, Unknown) | `timed-out` for TimedOut, `exit-unknown` for Unknown, else `agent-exited`; `turn-cap` only if the result's reason names the turn cap (not verified that it does) |
 | a remote session's agent exits | `agent-exited` |
 | the pod is gone and the session was not reaped or suspended | `session-lost` |
 | the watchdog trips (6.7) | `stale` or `escalation-bound` |
@@ -659,15 +663,17 @@ fields that exist (`status.outcome`, the hold condition, `status.agent`). If
 ### 6.8 OP742: pages and the daily digest
 
 **Who sends (Q-16, recommended A).** The keeper, which already holds the
-Pushover token and sends Ask pushes from objects it watches (R31). The
+Pushover token and sends Ask pushes from the Asks it reads (R31). The
 operator holds no Pushover token.
 
 - The operator records each page event on the summoned session's status: a
   bounded list `status.summon.pages[]` of `{event, at}` (MaxItems 8).
-- The keeper watches AgentSessions in `dev-agents` with `spec.caller` set
-  (new read-only RBAC: get, list, watch on agentsessions), sends each event
-  once, and records it in its own ledger ConfigMap (for example
-  `dev-env-keeper-summon-pages`, precreated by GitOps like the Ask ledger).
+- The keeper, leader only, lists AgentSessions in `dev-agents` with
+  `spec.caller` set each tick, as its Ask notifier lists Asks (new read-only
+  RBAC: get and list on agentsessions). It writes its dedupe, rate and page
+  record before each send, as the Ask notifier does, in its own ledger
+  ConfigMap (for example `dev-env-keeper-summon-pages`, precreated by GitOps
+  like the Ask ledger).
   The send result Pushover returns goes in the keeper's page record
   (`internal/pages`).
 
@@ -689,7 +695,8 @@ pages only upgrade and escalation failures. This design keeps v1's behaviour:
 `failed` pages in every lane. A remediation that ends `escalated` does not
 page itself; its escalation does.
 
-Ruling 99 (Ask pushes only between 07:00 and midnight) is about Ask pushes.
+Decision-log row 99 (Ask pushes only between 07:00 and midnight, Tom's
+phone answer "7AM to midnight is fine") is about Ask pushes.
 Summoned pages are not Asks, so they keep v1's any-hour behaviour. The
 coordinator may rule otherwise.
 
@@ -1003,7 +1010,7 @@ before it opened.
 | Q-12 | retention | ADR-020; templates `lifecycle` | tasks: ADR-020; remote: A v2 timers, B per-outcome timers | A | Tasks: **Ruled** 2026-11-10 by Tom, ADR-020 decision 2 (quoted in ADR-020). Remote: Pending coordinator | #745 |
 | Q-13 | escalations in parallel | DESIGN-001 3.7: "Escalations are not single-flight" | keep DESIGN-001's rule | keep | **Ruled** 2026-10-06: D-36 in DESIGN-001 3.7, accepted with ADR-001. The saga decision log, row 3, records D-01 to D-37 as decided that day with ADR-001; it does not quote Tom on this rule. No new question | — |
 | Q-15 | an upgrade order waiting for Tom or a time | #603's states; #601's approval of record is a GitHub review | A two sessions, the ask ends `done`; B a `waiting` state | A | Pending coordinator | #610 (#741 under B) |
-| Q-16 | who sends pages and the digest | operator has egress, no sender (R32); keeper holds the token and pushes from watched objects (R31) | A keeper, from events on status; B operator gets a token (Tom's list) | A | Pending coordinator | #742, #745 |
+| Q-16 | who sends pages and the digest | operator has egress, no sender (R32); keeper holds the token and pushes for the Asks it reads (R31) | A keeper, from events on status; B operator gets a token (Tom's list) | A | Pending coordinator | #742, #745 |
 | Q-17 | Option A and "no metered spend" | 5.4 | A outside, observed and reported; B in scope | A | Pending coordinator | #751's Accepted wording |
 | Q-18 | V-12 | no story covers it; v1 has no such alarm (F-07); token ends about 2027-07 | A defer to a new story; B fold into #742 | A | Pending coordinator | nothing in #751; must land before about 2027-06 |
 | Q-19 | containment | `policyCallerAllowed` includes DELETE; ADR-020 deletes purged tasks at once | A summoning callers create and read only; summoned sessions create no children; B Meatball's list | A | Pending coordinator | #738 |
