@@ -698,8 +698,12 @@ Live validation, and the only one: from a workbench session,
 `dev-env-1110-230548`, action `use`, ready false, reason
 `folder_trust_pending`, and a skip reason for each of the other five hosts
 matching section 3. Before and after, `kubectl get agentsession
-dev-env-1110-230548 -o jsonpath='{.metadata.resourceVersion}'` is unchanged.
-No new host. No thread start. No resume.
+dev-env-1110-230548` shows no annotation
+`dev-env.haynesops.com/codex-host-lease`, and `spec.operatingMode` is still
+`Running`. `kubectl -n dev-env-system get cm dev-env-codex-host-pool` is
+absent, or it has no key for profile `dev` and repo `dev-env`. A heartbeat
+bumps `resourceVersion` on its own, so that field is not the proof. No new
+host. No thread start. No resume.
 
 **Slice 4. Fallback create.** The ConfigMap claim, its expiry, the caps, and
 `at_capacity`. Fakes only. No live create. The test
