@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -19,7 +20,25 @@ func TestParentNotesFlagDefaultOffAndRequiresDurableInbox(t *testing.T) {
 		t.Fatal("durable inbox enabled parent notes", err)
 	}
 	o, err = parseFlags(append(slices.Clone(bound), "--enable-parent-notes"))
-	if err != nil || !o.parentNotes || !o.inboxEnabled || o.inboxQuestions || o.coordinatorEnabled || len(o.inboxCoordinatorReadProjects) != 0 {
+	if err != nil || !o.parentNotes || !o.inboxEnabled || o.inboxQuestions || o.coordinatorEnabled || len(o.inboxCoordinatorReadProjects) != 0 || o.parentNotice {
 		t.Fatal("parent notes refused or widened another gate", err)
+	}
+}
+
+func TestParentNoticeFlagDefaultOffAndRequiresParentNotes(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.parentNotice {
+		t.Fatal("parent notice enabled by default", err)
+	}
+	if _, err := parseFlags([]string{"--enable-parent-notice"}); err == nil || !strings.Contains(err.Error(), "--enable-parent-notes") {
+		t.Fatal("parent notice accepted without parent notes", err)
+	}
+	bound := []string{"--enable-durable-inbox", "--inbox-projects=sample", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43"}
+	if _, err := parseFlags(append(slices.Clone(bound), "--enable-parent-notice")); err == nil || !strings.Contains(err.Error(), "--enable-parent-notes") {
+		t.Fatal("parent notice accepted without parent notes", err)
+	}
+	o, err = parseFlags(append(slices.Clone(bound), "--enable-parent-notes", "--enable-parent-notice"))
+	if err != nil || !o.parentNotice || !o.parentNotes || !o.inboxEnabled {
+		t.Fatal("parent notice refused when parent notes are on", err)
 	}
 }

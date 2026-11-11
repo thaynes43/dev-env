@@ -110,6 +110,7 @@ type options struct {
 	inboxEnabled                 bool
 	inboxQuestions               bool
 	parentNotes                  bool
+	parentNotice                 bool
 	inboxProjects                []string
 	inboxCoordinatorReadProjects []string
 	portalQuestionAudit          bool
@@ -334,6 +335,7 @@ func parseFlags(args []string) (options, error) {
 	inboxCoordinatorProjects := fs.String("inbox-coordinator-read-projects", "", "separate explicit projects granting configured coordinators inbox content read only")
 	fs.BoolVar(&o.inboxQuestions, "enable-inbox-questions", false, "accept inbox ask and reply publications and serve the thread view and sent box; requires enable-durable-inbox and the InboxMessage CRD with kind and inReplyTo")
 	fs.BoolVar(&o.parentNotes, "enable-parent-notes", false, "accept child notes to recorded session parents and serve their inbox and sent box; requires enable-durable-inbox")
+	fs.BoolVar(&o.parentNotice, "enable-parent-notice", false, "deliver one fixed wake line to a Claude TUI session parent; default off; requires enable-parent-notes and the verb patch on inboxmessages")
 	fs.BoolVar(&o.portalQuestionAudit, "enable-portal-question-audit", false, "serve GET /v1/portal/question-audit, one page of question and reply metadata for an explicit project and live session; default off and requires the portal reader, durable inbox, inbox questions and an explicit project allowlist. Source wiring is not a deployed permission")
 	portalQuestionProjects := fs.String("portal-question-projects", "", "comma-separated projects whose question and reply metadata the portal reader may audit; empty leaves the route off")
 	fs.StringVar(&o.ownedRootPolicy, "owned-root-policy", "", "explicit operator-owned finite root policy ConfigMap in dev-env-system")
@@ -591,6 +593,9 @@ func parseFlags(args []string) (options, error) {
 	o.inboxCoordinatorReadProjects, err = apiserver.ParseTaskClaimReadProjects(*inboxCoordinatorProjects)
 	if err != nil {
 		return o, err
+	}
+	if o.parentNotice && !o.parentNotes {
+		return o, errors.New("--enable-parent-notice requires --enable-parent-notes")
 	}
 	if o.inboxEnabled {
 		if o.apiAddr == "0" || o.catalogBinding == nil || len(o.inboxProjects) == 0 || len(validation.IsDNS1123Label(o.templatesNamespace)) != 0 {
@@ -1031,6 +1036,25 @@ func run(args []string) error {
 		if o.inboxEnabled {
 			inboxStore, err = parentNoteInbox(mgr.GetClient(), mgr.GetAPIReader(), mgr.GetConfig(), mgr.GetScheme(), o.templatesNamespace)
 			if err != nil {
+				return err
+			}
+		}
+		if o.parentNotice {
+			if inboxStore == nil || inboxStore.Watcher == nil {
+				return errors.New("--enable-parent-notice requires --enable-parent-notes")
+			}
+			refused := apiserver.NewParentNoticePatchRefused()
+			ctrlmetrics.Registry.MustRegister(refused)
+			if err := mgr.Add(&apiserver.ParentNoticeRunner{
+				Enabled:          true,
+				SessionNamespace: o.sessionNamespace,
+				Notes:            inboxStore,
+				Live:             mgr.GetAPIReader(),
+				Watcher:          inboxStore.Watcher,
+				Exec:             podExec,
+				Log:              ctrl.Log.WithName("parent-notice"),
+				Refused:          refused,
+			}); err != nil {
 				return err
 			}
 		}

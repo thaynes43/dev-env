@@ -1,5 +1,6 @@
 // Package inbox retains immutable API messages and explicit read acknowledgements.
-// Only Create mutates storage; all observations use the uncached reader.
+// Create stores a message. The parent-notice mark is a metadata annotation
+// patch; the spec stays immutable. Observations use the uncached reader.
 package inbox
 
 import (
@@ -288,7 +289,7 @@ func (s KubeStore) ready() bool {
 func (s KubeStore) validObject(o client.Object, name string, labels ...map[string]string) bool {
 	created := o.GetCreationTimestamp()
 	return o.GetNamespace() == s.Namespace && o.GetName() == name && o.GetUID() != "" && o.GetResourceVersion() != "" && !created.IsZero() && o.GetDeletionTimestamp().IsZero() &&
-		len(o.GetOwnerReferences()) == 0 && len(o.GetFinalizers()) == 0 && len(o.GetAnnotations()) == 0 &&
+		len(o.GetOwnerReferences()) == 0 && len(o.GetFinalizers()) == 0 && annotationsOK(o) &&
 		slices.ContainsFunc(labels, func(want map[string]string) bool { return maps.Equal(o.GetLabels(), want) })
 }
 func recipientLabels(project string, recipient coord.SessionIdentity) map[string]string {

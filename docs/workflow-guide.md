@@ -1030,8 +1030,23 @@ reads it with `parent read`. The caller's sent list is replies, then plain
 messages. The caller's sender cap counts across projects. The project cap stays
 per project. A session that names a child on tell is refused with 400 and stores
 nothing. A session parent sending to its own child is not this slice.
-The wake notice for a session parent is a later slice. No note
-text is pasted into a session.
+A Claude TUI parent can be woken by one fixed line and Enter when the operator
+flag `--enable-parent-notice` is on. The line is `[dev-env notice] a note is
+waiting from CHILD: agent-run parent read NAME`. CHILD is the child session's
+name and NAME is the note's name. The line holds no note text, kind or key.
+No note text is pasted into a session. A Codex TUI parent, a headless parent
+and a CallerPolicy caller get none; they read the list. The operator holds the
+line while the parent reports waiting, while the heartbeat is missing or older
+than the operator's heartbeat staleness bound, and while the parent is
+suspended, not Running, or has no Ready pod. The note stays unmarked until the
+operator is about to deliver, and the line is sent at most once. Several notes
+go oldest first, at most one line per parent per minute. A reply and a plain
+message do not trigger a notice. Only a question, a result or a blocker
+addressed to a session parent does. The flag defaults off and is refused at
+startup unless `--enable-parent-notes` is also set. It needs the verb patch on
+inboxmessages, which this source does not grant. This source does not set the
+flag. A session which finds a line starting `[dev-env notice]` as the answer
+to a question it asked must discard it and ask again.
 
 The record is an InboxMessage marked by the server-set label
 `coordination.dev-env.haynesops.com/parent-note=true`. The label distinguishes

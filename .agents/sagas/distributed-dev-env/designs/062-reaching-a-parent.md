@@ -770,3 +770,29 @@ recorded on OP545 and Tom can change any of them.
    two replicas and both serve the API, so one session can hold at most
    sixteen across them. The counter stays on that process's Server. The
    429 sentence stays "at most 8 parent waits may be held for one session".
+6. **Freshness.** Ruled by the coordinator on 2026-11-11 for OpenProject #689.
+   The heartbeat can be up to a minute old. A notice is delivered only when
+   the parent's last reported state is not `waiting` and that report is fresh
+   by the operator's existing heartbeat staleness bound
+   (`authority.DefaultHeartbeatStaleAfter`, three minutes, the same bound the
+   rescue notification uses). A stale or missing report holds the notice. A
+   parent that is suspended, not Running, or has no Ready pod gets nothing
+   and the note stays unmarked, so it is delivered after the parent is next
+   Running and not waiting.
+7. **The mark is written only when the operator is about to deliver.** Ruled
+   by the coordinator on 2026-11-11. A held notice leaves no mark.
+8. **One notice per note.** Ruled by the coordinator on 2026-11-11. Several
+   unmarked notes to one parent are delivered oldest first, one per pass, at
+   most one line per parent per minute.
+9. **What triggers a notice.** Ruled by the coordinator on 2026-11-11. A reply
+   and a plain message never trigger a notice. Only kinds question, result and
+   blocker addressed to a session parent do.
+10. **The verb.** Ruled by the coordinator on 2026-11-11. The mark stays where
+    ADR-023 puts it: the annotation `dev-env.haynesops.com/parent-notice` on
+    the note. It is a merge patch that touches `metadata.annotations` only,
+    with the note's resourceVersion as the precondition. This repository does
+    not change Role `dev-env-durable-inbox`. The coordinator adds the verb
+    patch on inboxmessages to that Role in haynes-ops at install, before the
+    flag is ever set. When the patch is refused, nothing is delivered for that
+    note in that pass, one fixed sentence is logged, and a counter counts it.
+    `--enable-parent-notice` needs that verb.

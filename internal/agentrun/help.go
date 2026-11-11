@@ -372,8 +372,19 @@ closes before its answer.
 These commands require --enable-parent-notes on the operator, which defaults
 off and requires --enable-durable-inbox. Disabled routes return 503, which
 tell reports as an unknown outcome because the same status can mean that. Only
-session parents are supported. The parent finds notes by listing them; nothing
-wakes it or pastes note text into its session.
+session parents are supported.
+
+A Claude TUI parent can be woken by one fixed line and Enter when the operator
+flag --enable-parent-notice is on: "[dev-env notice] a note is waiting from
+CHILD: agent-run parent read NAME". The line holds no note text, kind or key.
+No note text is pasted into a session. A Codex TUI parent, a headless parent
+and a CallerPolicy caller get none and read the list. The line is held while
+the parent reports waiting, while its heartbeat is stale or missing, and while
+it is suspended, not Running, or has no Ready pod. It is sent at most once.
+The flag defaults off, requires --enable-parent-notes, and needs the verb
+patch on inboxmessages. This source does not set the flag. A session which
+finds a line starting "[dev-env notice]" as the answer to a question it asked
+must discard it and ask again.
 `,
 	"inbox": `Usage: agent-run inbox send --project <project> --recipient-namespace <namespace> --recipient-name <name> --recipient-uid <uid> --key <key> < message.txt
        agent-run inbox ask --project <project> [--to <session> [--to-uid <uid>]] --key <key> < question.txt

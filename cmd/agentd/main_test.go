@@ -119,6 +119,9 @@ func TestCtl(t *testing.T) {
 	if code, _, errOut := runArgs([]string{"ctl", "deliver"}, env); code != exitUsage || !strings.Contains(errOut, "--from") {
 		t.Errorf("ctl deliver without --from: %d %q", code, errOut)
 	}
+	if code, _, errOut := runArgs([]string{"ctl", "notice"}, env); code != exitUsage || !strings.Contains(errOut, "ctl notice") {
+		t.Errorf("ctl notice: %d %q", code, errOut)
+	}
 	if code, _, errOut := runArgs([]string{"ctl", "log", "--tail", "0"}, env); code != exitUsage {
 		t.Errorf("ctl log --tail 0: %d %q", code, errOut)
 	}

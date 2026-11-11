@@ -117,6 +117,10 @@ Commands:
                            bracketed paste into the Claude TUI, or codex queue.
                            Exit 3 when the agent takes no message (a headless
                            task, or no agent running).
+  ctl notice --expected-pod-uid UID --expected-session-uid UID
+                           Type one parent-notice line from stdin, then Enter,
+                           into a Claude TUI. Exit 3 for Codex, a headless
+                           task, or an agent that is not running.
   ctl login url|code|status
                            A remote session's pod-owned Claude login: url starts
                            the sign-in and prints its link (refused while the
@@ -579,6 +583,46 @@ const exitNotAddressable = 3
 // answers it with a 404.
 const exitNoLog = 4
 
+// ctlNotice is `ctl notice`: one fixed wake line on stdin, then Enter, for a
+// Claude TUI only. It does not wrap the line as an agent-run msg.
+func ctlNotice(ctx context.Context, args []string, stdin io.Reader, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
+	fs := flag.NewFlagSet("ctl notice", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	expectedPod := fs.String("expected-pod-uid", "", "")
+	expectedSession := fs.String("expected-session-uid", "", "")
+	if err := fs.Parse(args); err != nil || fs.NArg() > 0 || *expectedPod == "" || *expectedSession == "" {
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl notice --expected-pod-uid <uid> --expected-session-uid <uid> (the line on stdin)\n", binaryName)
+		return exitUsage
+	}
+	s, err := agentd.LoadSettings(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+		return exitFailure
+	}
+	sess, err := agentd.LoadSession(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+		return exitFailure
+	}
+	if s.PodUID != *expectedPod || sess.SessionUID != *expectedSession {
+		_, _ = fmt.Fprintln(stderr, "agentd: target identity does not match")
+		return exitFailure
+	}
+	buf, err := io.ReadAll(io.LimitReader(stdin, 512))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: read the notice: %v\n", binaryName, err)
+		return exitFailure
+	}
+	if err := agentd.DeliverNotice(ctx, r, s, sess, string(buf)); err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: notice: %v\n", binaryName, err)
+		if errors.Is(err, agentd.ErrNotAddressable) {
+			return exitNotAddressable
+		}
+		return exitFailure
+	}
+	return exitOK
+}
+
 // ctlMessageOrLog is `ctl deliver --from <caller>` (the message on stdin) and
 // `ctl log [--tail N]` (D-65).
 func ctlMessageOrLog(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
@@ -816,6 +860,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return threadStartCtl(ctx, args[1:], stdin, stdout, stderr, getenv)
 		case "thread-status":
 			return threadStatusCtl(ctx, args[1:], stdout, stderr, getenv)
+		case "notice":
+			return ctlNotice(ctx, args[1:], stdin, stderr, getenv, r)
 		case "deliver", "log":
 			return ctlMessageOrLog(ctx, args, stdin, stdout, stderr, getenv, r)
 		case "portal-conversation":
