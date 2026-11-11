@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
@@ -36,6 +37,20 @@ func ensureCodexRepoTrust(ctx context.Context, s Settings, cwd string) error {
 	if err := qualifyCodexRepo(ctx, s, cwd); err != nil {
 		return err
 	}
+	// A private host's composer rejects a trusted root outside ~/codex/<project>,
+	// and that check runs on every status read. Writing ~/repos/<repo> would
+	// make the host unreadable. Stop before opening the file.
+	if s.PrivateCodexHost {
+		return errCodexConfigInvalid
+	}
+	if err := prepareCodexHome(s); err != nil {
+		return err
+	}
+	unlock, err := lockCodexConfig(s)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	path := filepath.Join(s.CodexHome, "config.toml")
 	src, mode, err := readCodexConfig(s, path)
 	if err != nil {
@@ -45,7 +60,7 @@ func ensureCodexRepoTrust(ctx context.Context, s Settings, cwd string) error {
 	if err != nil || !changed {
 		return err
 	}
-	return writeCodexConfigAtomic(path, next, mode)
+	return writeCodexConfigIfUnchanged(path, src, next, mode)
 }
 
 // qualifyCodexRepo accepts only the resolved path of one repository the
@@ -108,23 +123,30 @@ func proveCodexRepoRoot(ctx context.Context, cwd string) error {
 	return nil
 }
 
-func readCodexConfig(s Settings, path string) ([]byte, fs.FileMode, error) {
+func prepareCodexHome(s Settings) error {
 	home := s.CodexHome
 	if !filepath.IsAbs(home) || filepath.Clean(home) != home || noSymlinkComponents(filepath.Dir(home)) != nil {
-		return nil, 0, errCodexConfigInvalid
+		return errCodexConfigInvalid
 	}
 	parent, err := os.Lstat(filepath.Dir(home))
 	if err != nil || !parent.IsDir() {
-		return nil, 0, errCodexConfigInvalid
+		return errCodexConfigInvalid
 	}
 	if info, err := os.Lstat(home); err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return nil, 0, errCodexConfigInvalid
+			return errCodexConfigInvalid
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, 0, errCodexConfigInvalid
+		return errCodexConfigInvalid
 	} else if err := os.Mkdir(home, 0o700); err != nil {
-		return nil, 0, errCodexConfigInvalid
+		return errCodexConfigInvalid
+	}
+	return nil
+}
+
+func readCodexConfig(s Settings, path string) ([]byte, fs.FileMode, error) {
+	if err := prepareCodexHome(s); err != nil {
+		return nil, 0, err
 	}
 	mode := fs.FileMode(0o600)
 	if info, err := os.Lstat(path); err == nil {
@@ -466,6 +488,40 @@ func joinLines(lines []string) []byte {
 		b.WriteString(line)
 	}
 	return b.Bytes()
+}
+
+// lockCodexConfig is an exclusive flock on config.toml.lock. A busy lock
+// stops the launch. The caller leaves the file unchanged.
+func lockCodexConfig(s Settings) (func(), error) {
+	path := filepath.Join(s.CodexHome, "config.toml.lock")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
+	if err != nil {
+		return nil, errCodexConfigInvalid
+	}
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, errCodexConfigInvalid
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		return nil, errCodexConfigInvalid
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
+}
+
+// writeCodexConfigIfUnchanged writes next only when the file is still src.
+// A concurrent Codex save or another launch is left as it was.
+func writeCodexConfigIfUnchanged(path string, src, next []byte, mode fs.FileMode) error {
+	current, err := boundedHostFile(path, codexConfigMax, false)
+	if errors.Is(err, os.ErrNotExist) {
+		if len(src) != 0 {
+			return errCodexConfigInvalid
+		}
+	} else if err != nil || !bytes.Equal(current, src) {
+		return errCodexConfigInvalid
+	}
+	return writeCodexConfigAtomic(path, next, mode)
 }
 
 func writeCodexConfigAtomic(path string, data []byte, mode fs.FileMode) error {

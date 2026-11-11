@@ -524,8 +524,14 @@ Codex setting. A haynes-ops change. Turning a flag on.
 The host config composer (`codexHostConfig`) already keeps a trusted project it
 did not itself add, on a public host. A private Codex host
 (`AGENTD_ENABLE_PRIVATE_CODEX_HOST`) refuses a trusted root outside the catalog
-project roots it owns. This launch writes the repository path on the host that
-serves `thread start`. That private compose is a separate path and is not
-changed here; a private host's next compose fails closed if it sees this extra
-trusted root.
+project roots it owns (`~/codex/<project>`). That check runs on a host status
+read, not only when the config is rewritten. This launch therefore does not
+write on a private host: it stops with `codex_config_invalid` and leaves
+`config.toml` unchanged. The private composer is not changed.
+
+The read and the write hold an exclusive flock on `config.toml.lock` in the
+Codex home. If that lock is busy, or the file changed after it was read, the
+launch stops with `codex_config_invalid` and the file is left as it was. Two
+launches cannot drop each other's folder entry, and a Codex rewrite during the
+edit is not overwritten.
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
@@ -260,5 +261,78 @@ func TestCodexRepoTrustLeavesTrustedEntry(t *testing.T) {
 	}
 	if got := configBytes(t, s); !bytes.Equal(got, original) {
 		t.Fatalf("rewrote a trusted entry\n%s", got)
+	}
+}
+
+// A private host rejects a trusted root outside ~/codex/<project> on every
+// status read. The launch stops before writing, so that read keeps working.
+func TestCodexRepoTrustPrivateHostDoesNotWrite(t *testing.T) {
+	s, sess, cwd := threadHost(t)
+	s.PrivateCodexHost = true
+	if err := os.MkdirAll(s.CodexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("model = \"gpt-6-astra\"\n")
+	path := filepath.Join(s.CodexHome, "config.toml")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := newThreadFake(cwd)
+	got := launchThread(t, f, s, sess, goodThreadRequest())
+	if got.Outcome != apiv1.ThreadFailed || got.Error == nil || got.Error.Code != "codex_config_invalid" || got.TotalMs != 0 || len(f.launches) != 0 {
+		t.Fatalf("got %s/%+v total %d launches %d", got.Outcome, got.Error, got.TotalMs, len(f.launches))
+	}
+	if file, err := os.ReadFile(path); err != nil || !bytes.Equal(file, original) {
+		t.Fatalf("private host config changed: %v %q", err, file)
+	}
+}
+
+// A busy lock, or a file that changed after it was read, leaves the config
+// byte for byte and does not install the new bytes.
+func TestCodexRepoTrustBusyLockAndStaleWrite(t *testing.T) {
+	s, _, cwd := threadHost(t)
+	if err := os.MkdirAll(s.CodexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("model = \"keep\"\n")
+	path := filepath.Join(s.CodexHome, "config.toml")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(filepath.Join(s.CodexHome, "config.toml.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureCodexRepoTrust(context.Background(), s, cwd); err == nil {
+		t.Fatal("a busy lock was accepted")
+	}
+	if file, err := os.ReadFile(path); err != nil || !bytes.Equal(file, original) {
+		t.Fatalf("busy lock wrote config: %v %q", err, file)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	_ = lock.Close()
+
+	if err := writeCodexConfigIfUnchanged(path, []byte("stale"), []byte("model = \"changed\"\n"), 0o600); err == nil {
+		t.Fatal("a stale snapshot was written")
+	}
+	if file, err := os.ReadFile(path); err != nil || !bytes.Equal(file, original) {
+		t.Fatalf("stale write changed config: %v %q", err, file)
+	}
+	if err := ensureCodexRepoTrust(context.Background(), s, cwd); err != nil {
+		t.Fatal(err)
+	}
+	doc := map[string]any{}
+	if err := toml.Unmarshal(configBytes(t, s), &doc); err != nil {
+		t.Fatal(err)
+	}
+	projects, _ := doc["projects"].(map[string]any)
+	table, _ := projects[cwd].(map[string]any)
+	if table["trust_level"] != "trusted" || doc["model"] != "keep" {
+		t.Fatalf("after the lock: %+v", doc)
 	}
 }
