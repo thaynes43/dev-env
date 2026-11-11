@@ -63,6 +63,7 @@ func TestInvariantNoOwnerReferenceToTheOperator(t *testing.T) {
 		newSession(t, func(s *v1alpha1.AgentSession) { s.Spec.Mode, s.Spec.Prompt = v1alpha1.ModeRemote, "" }),
 		newSession(t, func(s *v1alpha1.AgentSession) {
 			s.Spec.Caller, s.Spec.Lane, s.Spec.Profile = "alert-responder", v1alpha1.LaneRemediation, "ops"
+			s.Spec.Summon = remediationSummon()
 		}),
 	}
 	for _, s := range sessions {

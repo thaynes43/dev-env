@@ -215,6 +215,7 @@ func summonedTask() *v1alpha1.AgentSession {
 	s.Spec.Parent = "upgrade-agent/alert-responder"
 	s.Spec.Effort = "xhigh"
 	s.Spec.Limits = &v1alpha1.SessionLimits{Timeout: dur(40 * time.Minute), MaxTurns: 120}
+	s.Spec.Summon = remediationSummon()
 	return s
 }
 
@@ -227,7 +228,40 @@ func summonedRemote() *v1alpha1.AgentSession {
 	s.Spec.Prompt = ""
 	s.Spec.Limits = nil
 	s.Spec.Model = "claude-fable-5-1"
+	s.Spec.Summon = escalationSummon()
 	return s
+}
+
+// remediationSummon is the snapshot a remediation carries (DESIGN-064 6.4).
+func remediationSummon() *v1alpha1.SessionSummon {
+	return &v1alpha1.SessionSummon{
+		DispatchID:    "dispatch-rem",
+		Priority:      v1alpha1.SummonPriorityUrgent,
+		FallbackModel: "claude-opus-5",
+		OnUnreported:  v1alpha1.SummonOnUnreportedEscalated,
+		MaxHold:       "20m",
+		Escalation: &v1alpha1.SessionSummonEscalation{
+			Kind:         v1alpha1.SummonKindRemote,
+			Lane:         v1alpha1.LaneEscalation,
+			Repo:         "haynes-ops",
+			Profile:      "ops",
+			Model:        "claude-sonnet-5-5",
+			Fallback:     "claude-opus-5",
+			Effort:       "xhigh",
+			OnUnreported: v1alpha1.SummonOnUnreportedFailed,
+		},
+	}
+}
+
+// escalationSummon is the snapshot an escalation carries. It has no maxHold
+// and no nested escalation entry.
+func escalationSummon() *v1alpha1.SessionSummon {
+	return &v1alpha1.SessionSummon{
+		DispatchID:    "dispatch-esc",
+		Priority:      v1alpha1.SummonPriorityUrgent,
+		FallbackModel: "claude-opus-5",
+		OnUnreported:  v1alpha1.SummonOnUnreportedFailed,
+	}
 }
 
 // cursorSession is a cursor task (DESIGN-058): a Cursor model id, no effort.
@@ -322,6 +356,11 @@ func TestCreateAccepts(t *testing.T) {
 		"a cursor task":                   cursorSession(),
 		"a summoned remediation task":     summonedTask(),
 		"a summoned escalation":           summonedRemote(),
+		"a summoned remote session with a prompt": func() *v1alpha1.AgentSession {
+			s := summonedRemote()
+			s.Spec.Prompt = "Escalation: Tom will join this session."
+			return s
+		}(),
 		"a summoned upgrade without an idempotency key": func() *v1alpha1.AgentSession {
 			s := summonedRemote()
 			s.Name = "wo-" + name()
@@ -398,8 +437,9 @@ func TestCreateRejects(t *testing.T) {
 
 		// Mode-bound fields.
 		{"a task without a prompt", func(s *v1alpha1.AgentSession) { s.Spec.Prompt = "" }, "prompt is required in task mode"},
-		{"a prompt in remote mode", func(s *v1alpha1.AgentSession) { s.Spec.Mode = v1alpha1.ModeRemote }, "not allowed in local or remote mode"},
-		{"a prompt in local mode", func(s *v1alpha1.AgentSession) { s.Spec.Mode = v1alpha1.ModeLocal }, "not allowed in local or remote mode"},
+		{"a prompt in remote mode", func(s *v1alpha1.AgentSession) { s.Spec.Mode = v1alpha1.ModeRemote }, "only for a summoned session"},
+		{"a prompt in local mode", func(s *v1alpha1.AgentSession) { s.Spec.Mode = v1alpha1.ModeLocal }, "not allowed in local mode"},
+		{"summon without a caller", func(s *v1alpha1.AgentSession) { s.Spec.Summon = escalationSummon() }, "exactly when caller is"},
 		{"limits on a remote session", func(s *v1alpha1.AgentSession) {
 			s.Spec.Mode, s.Spec.Prompt = v1alpha1.ModeRemote, ""
 			s.Spec.Limits = &v1alpha1.SessionLimits{MaxTurns: 10}
@@ -469,6 +509,9 @@ func TestCreateRejectsSummoned(t *testing.T) {
 			s.Spec.Mode, s.Spec.Prompt, s.Spec.Limits = v1alpha1.ModeLocal, "", nil
 		}, "never local"},
 		{"a summoned session on profile full", func(s *v1alpha1.AgentSession) { s.Spec.Profile = "full" }, "never full"},
+		{"a summoned session on profile workbench", func(s *v1alpha1.AgentSession) { s.Spec.Profile = "workbench" }, "never workbench"},
+		{"a summoned session on codex", func(s *v1alpha1.AgentSession) { s.Spec.Agent = v1alpha1.AgentCodex }, "agent claude only"},
+		{"a caller without summon", func(s *v1alpha1.AgentSession) { s.Spec.Summon = nil }, "exactly when caller is"},
 		{"a summoned session with no profile", func(s *v1alpha1.AgentSession) { s.Spec.Profile = "" }, "names its profile"},
 		{"an idempotency key with a slash", func(s *v1alpha1.AgentSession) { s.Spec.IdempotencyKey = "alert/b7baaf6c" }, "spec.idempotencyKey"},
 		{"an idempotency key longer than a label value", func(s *v1alpha1.AgentSession) {
@@ -481,6 +524,197 @@ func TestCreateRejectsSummoned(t *testing.T) {
 			s := summonedTask()
 			c.mutate(s)
 			wantInvalid(t, k8s.Create(ctx(t), s), c.want)
+		})
+	}
+}
+
+// TestSummonSnapshotRules proves the spec.summon field rules from DESIGN-064 6.4.
+func TestSummonSnapshotRules(t *testing.T) {
+	upgrade := func() *v1alpha1.AgentSession {
+		s := summonedRemote()
+		s.Name = "wo-" + name()
+		s.Spec.Caller = "upgrade-shepherd"
+		s.Spec.Lane = v1alpha1.LaneUpgrade
+		s.Spec.IdempotencyKey = ""
+		s.Spec.Summon = &v1alpha1.SessionSummon{
+			DispatchID:    "dispatch-upgrade",
+			Priority:      v1alpha1.SummonPriorityNormal,
+			FallbackModel: "claude-opus-5",
+			OnUnreported:  v1alpha1.SummonOnUnreportedFailed,
+			StaleAfter:    "180m",
+		}
+		return s
+	}
+	curation := func() *v1alpha1.AgentSession {
+		s := summonedTask()
+		s.Name = "wo-cigar-curate-" + name()
+		s.Spec.Lane = v1alpha1.LaneCuration
+		s.Spec.Summon = &v1alpha1.SessionSummon{
+			DispatchID:    "dispatch-curation",
+			Priority:      v1alpha1.SummonPriorityBulk,
+			FallbackModel: "claude-opus-5",
+			OnUnreported:  v1alpha1.SummonOnUnreportedFailed,
+			MaxHold:       "12h",
+		}
+		return s
+	}
+
+	accepts := []struct {
+		title string
+		build func() *v1alpha1.AgentSession
+	}{
+		{"upgrade with staleAfter", upgrade},
+		{"upgrade without staleAfter", func() *v1alpha1.AgentSession {
+			s := upgrade()
+			s.Spec.Summon.StaleAfter = ""
+			return s
+		}},
+		{"upgrade staleAfter at 24h", func() *v1alpha1.AgentSession {
+			s := upgrade()
+			s.Spec.Summon.StaleAfter = "24h"
+			return s
+		}},
+		{"curation with maxHold", curation},
+		{"remediation maxHold at 24h", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.MaxHold = "24h"
+			return s
+		}},
+		{"filing dispatch id", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.DispatchID = "filing:01234567-89ab-cdef-0123-456789abcdef"
+			return s
+		}},
+		{"hex dispatch id", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.DispatchID = strings.Repeat("ab", 32)
+			return s
+		}},
+	}
+	for _, c := range accepts {
+		t.Run("accept "+c.title, func(t *testing.T) {
+			if err := k8s.Create(ctx(t), c.build()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	refuses := []struct {
+		title string
+		build func() *v1alpha1.AgentSession
+		want  string
+	}{
+		{"staleAfter on a remediation", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.StaleAfter = "180m"
+			return s
+		}, "remote upgrade session only"},
+		{"staleAfter on an escalation", func() *v1alpha1.AgentSession {
+			s := summonedRemote()
+			s.Spec.Summon.StaleAfter = "180m"
+			return s
+		}, "remote upgrade session only"},
+		{"staleAfter on a task upgrade", func() *v1alpha1.AgentSession {
+			s := upgrade()
+			s.Spec.Mode = v1alpha1.ModeTask
+			s.Spec.Prompt = "bump the chart"
+			s.Spec.Limits = &v1alpha1.SessionLimits{Timeout: dur(time.Hour)}
+			return s
+		}, "remote upgrade session only"},
+		{"staleAfter of zero", func() *v1alpha1.AgentSession {
+			s := upgrade()
+			s.Spec.Summon.StaleAfter = "0s"
+			return s
+		}, "positive Go duration"},
+		{"staleAfter over 24h", func() *v1alpha1.AgentSession {
+			s := upgrade()
+			s.Spec.Summon.StaleAfter = "24h1s"
+			return s
+		}, "at most 24h"},
+		{"maxHold on an upgrade", func() *v1alpha1.AgentSession {
+			s := upgrade()
+			s.Spec.Summon.MaxHold = "20m"
+			return s
+		}, "not allowed for upgrade or escalation"},
+		{"remediation without maxHold", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.MaxHold = ""
+			return s
+		}, "required for remediation and curation"},
+		{"curation without maxHold", func() *v1alpha1.AgentSession {
+			s := curation()
+			s.Spec.Summon.MaxHold = ""
+			return s
+		}, "required for remediation and curation"},
+		{"maxHold over 24h", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.MaxHold = "24h1s"
+			return s
+		}, "at most 24h"},
+		{"escalation copy on an escalation", func() *v1alpha1.AgentSession {
+			s := summonedRemote()
+			s.Spec.Summon.Escalation = remediationSummon().Escalation
+			return s
+		}, "present exactly for a remediation"},
+		{"remediation without an escalation copy", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.Escalation = nil
+			return s
+		}, "present exactly for a remediation"},
+		{"onUnreported failed on a remediation", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.OnUnreported = v1alpha1.SummonOnUnreportedFailed
+			return s
+		}, "escalated for remediation"},
+		{"onUnreported escalated on an upgrade", func() *v1alpha1.AgentSession {
+			s := upgrade()
+			s.Spec.Summon.OnUnreported = v1alpha1.SummonOnUnreportedEscalated
+			return s
+		}, "failed for every other lane"},
+		{"priority normal on a remediation", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.Priority = v1alpha1.SummonPriorityNormal
+			return s
+		}, "urgent for lanes remediation and escalation"},
+		{"escalation fallback equal to the model", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.Escalation.Fallback = s.Spec.Summon.Escalation.Model
+			return s
+		}, "fallback that differs"},
+		{"escalation profile dev", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.Escalation.Profile = "dev"
+			return s
+		}, "profile"},
+		{"escalation onUnreported escalated", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.Escalation.OnUnreported = v1alpha1.SummonOnUnreportedEscalated
+			return s
+		}, "onUnreported failed"},
+		{"fallback model alias", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.FallbackModel = "opus"
+			return s
+		}, "fallbackModel"},
+		{"empty dispatch id", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.DispatchID = ""
+			return s
+		}, "dispatchID"},
+		{"dispatch id with a slash", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.DispatchID = "abc/def"
+			return s
+		}, "dispatchID"},
+		{"dispatch id over 128 characters", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.DispatchID = strings.Repeat("a", 129)
+			return s
+		}, "dispatchID"},
+	}
+	for _, c := range refuses {
+		t.Run("refuse "+c.title, func(t *testing.T) {
+			wantInvalid(t, k8s.Create(ctx(t), c.build()), c.want)
 		})
 	}
 }
@@ -544,6 +778,10 @@ func TestSpecImmutableExceptOperatingModeAndLifecycle(t *testing.T) {
 		want   string // empty: the update is accepted
 	}{
 		{"suspend", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.OperatingMode = v1alpha1.OperatingModeSuspended }, ""},
+		{"suspend a summoned session", summonedTask, func(s *v1alpha1.AgentSessionSpec) { s.OperatingMode = v1alpha1.OperatingModeSuspended }, ""},
+		{"change the summon dispatch id", summonedTask, func(s *v1alpha1.AgentSessionSpec) { s.Summon.DispatchID = "other-id" }, "spec.summon"},
+		{"remove summon", summonedTask, func(s *v1alpha1.AgentSessionSpec) { s.Summon = nil }, presence},
+		{"add summon", taskSession, func(s *v1alpha1.AgentSessionSpec) { s.Summon = escalationSummon() }, presence},
 		{"set the timers", remoteSession, func(s *v1alpha1.AgentSessionSpec) {
 			s.Lifecycle = &v1alpha1.Lifecycle{IdleSuspendAfter: dur(24 * time.Hour)}
 		}, ""},
