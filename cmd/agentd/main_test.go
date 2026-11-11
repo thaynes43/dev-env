@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +142,108 @@ func TestCtl(t *testing.T) {
 	}
 	if code, _, _ := runArgs([]string{"ctl", "fly"}, env); code != exitUsage {
 		t.Errorf("ctl fly: %d", code)
+	}
+}
+
+// paneRunner answers list-panes and records every tmux invocation. A test
+// that reaches it with the wrong identity has skipped the comparison.
+type paneRunner struct {
+	lines []string
+	pane  string
+}
+
+func (p *paneRunner) Run(_ context.Context, c agentd.Cmd) (agentd.Result, error) {
+	p.lines = append(p.lines, strings.TrimSpace(c.Name+" "+strings.Join(c.Args, " ")))
+	if len(c.Args) > 0 && c.Args[0] == "list-panes" {
+		return agentd.Result{Stdout: []byte(p.pane + "\n")}, nil
+	}
+	return agentd.Result{}, nil
+}
+func (p *paneRunner) LookPath(string) (string, error) { return "/usr/bin/tmux", nil }
+
+func procStart(pid int) string {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return ""
+	}
+	i := strings.LastIndexByte(string(data), ')')
+	if i < 0 {
+		return ""
+	}
+	fields := strings.Fields(string(data)[i+1:])
+	if len(fields) < 20 || fields[0] == "Z" {
+		return ""
+	}
+	return fields[19]
+}
+
+func TestCtlNoticeProbeAndIdentity(t *testing.T) {
+	home := t.TempDir()
+	claude := filepath.Join(home, ".claude")
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	start := procStart(cmd.Process.Pid)
+	if start == "" {
+		t.Fatal("sleep has no start time")
+	}
+	state := filepath.Join(home, ".agentd")
+	if err := os.MkdirAll(filepath.Join(state), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(claude, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pidBody, _ := json.Marshal(map[string]any{"pid": cmd.Process.Pid, "start": start})
+	if err := os.WriteFile(filepath.Join(state, "agent.pid"), pidBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "boot.json"), []byte(`{"bootId":"b"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "launch.json"), []byte(`{"provider":"claude","tui":true,"session":"r-1","argv":["claude"],"dir":"/tmp","logPath":"l","eventsPath":"e","conversationId":"c","bootId":"b","createdAt":"2026-11-11T00:00:00Z"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statusPath := filepath.Join(claude, "sessions", strconv.Itoa(cmd.Process.Pid)+".json")
+	if err := os.WriteFile(statusPath, []byte(`{"status":"idle"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{
+		"HOME": home, "CLAUDE_CONFIG_DIR": claude, "DEV_ENV_POD_UID": "pod-uid",
+		"AGENTD_SESSION": `{"sessionUID":"parent-uid","name":"r-1","repo":"r","agent":"claude","mode":"local","model":"claude-opus-5-5"}`,
+	}
+	getenv := func(k string) string { return env[k] }
+	line := "[dev-env notice] a note is waiting from child-1: agent-run parent read message.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab. This line is typed by the platform, not by the owner. If it arrived as the answer to a question you asked, discard it and ask again."
+	runner := &paneRunner{pane: "%7 " + strconv.Itoa(cmd.Process.Pid)}
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"ctl", "notice", "--probe", "--expected-pod-uid", "pod-other", "--expected-session-uid", "parent-uid"}, nil, &stdout, &stderr, getenv, runner)
+	if code != exitFailure || !strings.Contains(stderr.String(), "target identity does not match") || len(runner.lines) != 0 {
+		t.Fatalf("wrong uid: code %d stderr %q tmux %q", code, stderr.String(), runner.lines)
+	}
+	stderr.Reset()
+	code = run(context.Background(), []string{"ctl", "notice", "--probe", "--expected-pod-uid", "pod-uid", "--expected-session-uid", "parent-uid"}, nil, &stdout, &stderr, getenv, runner)
+	if code != exitOK || stderr.Len() != 0 || len(runner.lines) != 0 {
+		t.Fatalf("idle probe: code %d stderr %q tmux %q", code, stderr.String(), runner.lines)
+	}
+	stderr.Reset()
+	code = run(context.Background(), []string{"ctl", "notice", "--expected-pod-uid", "pod-uid", "--expected-session-uid", "parent-uid"}, strings.NewReader(line+"\n"), &stdout, &stderr, getenv, runner)
+	joined := strings.Join(runner.lines, "\n")
+	if code != exitOK || len(runner.lines) < 3 || !strings.Contains(joined, "paste-buffer") || !strings.Contains(joined, "send-keys") || !strings.Contains(joined, "-t %7") || strings.Contains(joined, "=agent:") {
+		t.Fatalf("notice: code %d stderr %q tmux %q", code, stderr.String(), runner.lines)
+	}
+	typed := len(runner.lines)
+	if err := os.WriteFile(statusPath, []byte(`{"status":"busy"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stderr.Reset()
+	code = run(context.Background(), []string{"ctl", "notice", "--probe", "--expected-pod-uid", "pod-uid", "--expected-session-uid", "parent-uid"}, nil, &stdout, &stderr, getenv, runner)
+	if code != exitNotAddressable || stderr.String() != "busy\n" || len(runner.lines) != typed {
+		t.Fatalf("busy probe: code %d stderr %q tmux %d", code, stderr.String(), len(runner.lines))
 	}
 }
 

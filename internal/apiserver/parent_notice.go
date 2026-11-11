@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,16 +31,28 @@ import (
 // annotation on the note. Nothing about a notice is kept only in memory.
 
 const (
-	parentNoticeGap = time.Minute
+	// parentNoticeGap is the least time between two marks for one parent,
+	// measured from the newest mark (ruling R7).
+	parentNoticeGap = 90 * time.Second
+	// parentNoticeAttempt bounds the probe, the marks and the delivery.
+	parentNoticeAttempt = 30 * time.Second
+	parentNoticeMaxN    = 9999
 
-	noticePatchRefused    = "parent notice patch refused"
-	noticeDeliveryFailed  = "parent notice delivery failed"
-	noticeListRefused     = "parent notice list refused"
-	noticeScanRefused     = "parent notice scan refused"
-	noticeWatchRefused    = "parent notice watch refused"
-	parentNoticeMetric    = "dev_env_parent_notice_patch_refused_total"
-	parentNoticeLineLimit = 400
+	noticePatchRefused     = "parent notice patch refused"
+	noticeDeliveryFailed   = "parent notice delivery failed"
+	noticeListRefused      = "parent notice list refused"
+	noticeScanRefused      = "parent notice scan refused"
+	noticeWatchRefused     = "parent notice watch refused"
+	noticePageBudgetHit    = "parent notice page budget reached"
+	parentNoticeMetric     = "dev_env_parent_notice_patch_refused_total"
+	parentNoticePageMetric = "dev_env_parent_notice_page_budget_total"
+	// parentNoticeLineLimit is the longer of the two fixed lines: a 253-byte
+	// session name, one note name, and the shared sentences.
+	parentNoticeLineLimit = 524
 )
+
+// parentNoticeSentences are the two sentences both line forms end with.
+const parentNoticeSentences = " This line is typed by the platform, not by the owner. If it arrived as the answer to a question you asked, discard it and ask again."
 
 // NoticeRefusedCounter counts a patch that was not followed by a delivery.
 type NoticeRefusedCounter interface {
@@ -53,14 +67,31 @@ func NewParentNoticePatchRefused() prometheus.Counter {
 	})
 }
 
-// ParentNoticeLine is the only line a wake notice types. child is the child
-// session's name and name is the note's name. The line holds neither the
-// note text, nor its kind, nor its key.
-func ParentNoticeLine(child, name string) (string, bool) {
-	if len(validation.IsDNS1123Subdomain(child)) != 0 || !inbox.ValidMessageName(name) {
+// NewParentNoticePageBudget is the operator's counter for a recipient list
+// that stopped at the page budget and still served the notes already read.
+func NewParentNoticePageBudget() prometheus.Counter {
+	return prometheus.NewCounter(prometheus.CounterOpts{
+		Name: parentNoticePageMetric,
+		Help: "Parent-notice recipient lists that stopped at the page budget and still served the notes already read.",
+	})
+}
+
+// ParentNoticeLine builds the only two lines a wake notice types. n is 1 for
+// the singular form, whose name is the note, and 2 to 9999 for the plural
+// form. The line holds neither the note text, nor its kind, nor its key.
+func ParentNoticeLine(child, name string, n int) (string, bool) {
+	if n < 1 || n > parentNoticeMaxN || len(validation.IsDNS1123Subdomain(child)) != 0 {
 		return "", false
 	}
-	line := "[dev-env notice] a note is waiting from " + child + ": agent-run parent read " + name
+	var line string
+	if n == 1 {
+		if !inbox.ValidMessageName(name) {
+			return "", false
+		}
+		line = "[dev-env notice] a note is waiting from " + child + ": agent-run parent read " + name + "." + parentNoticeSentences
+	} else {
+		line = "[dev-env notice] " + strconv.Itoa(n) + " notes are waiting, the oldest from " + child + ": agent-run parent list." + parentNoticeSentences
+	}
 	if len(line) > parentNoticeLineLimit || strings.ContainsAny(line, "\r\n") {
 		return "", false
 	}
@@ -77,55 +108,84 @@ type ParentNotices struct {
 	GetPod     func(context.Context, *v1alpha1.AgentSession) (*corev1.Pod, error)
 	List       func(context.Context, coord.SessionIdentity) ([]coord.InboxMessage, error)
 	Patch      func(context.Context, *coord.InboxMessage, time.Time) error
+	Probe      func(context.Context, *v1alpha1.AgentSession, *corev1.Pod) error
 	Deliver    func(context.Context, *v1alpha1.AgentSession, *corev1.Pod, string) error
 }
 
-// Pass delivers at most one unmarked note to parentName, or nothing.
-func (p *ParentNotices) Pass(ctx context.Context, parentName string) {
+// Pass marks every unmarked note to parentName, oldest first, and types one
+// line. It returns true when the list showed no unmarked note left, so a
+// heartbeat hint may drop that parent. A hold returns false and leaves the
+// notes unmarked.
+func (p *ParentNotices) Pass(ctx context.Context, parentName string) bool {
 	if p == nil || !p.Enabled || parentName == "" || p.GetSession == nil {
-		return
+		return false
 	}
 	sess, err := p.GetSession(ctx, parentName)
 	if err != nil || !claudeTUI(sess) {
-		return
+		return false
 	}
 	if p.GetPod == nil {
-		return
+		return false
 	}
 	pod, err := p.GetPod(ctx, sess)
 	if err != nil || pod == nil || !parentReady(sess, pod, p.now()) {
-		return
+		return false
 	}
 	id := coord.SessionIdentity{Namespace: sess.Namespace, Name: sess.Name, UID: string(sess.UID)}
 	if p.List == nil {
-		return
+		return false
 	}
 	notes, err := p.List(ctx, id)
 	if err != nil {
 		p.Log.Info(noticeListRefused, "parent", parentName)
-		return
+		return false
 	}
-	now := p.now()
-	if noticeTooSoon(notes, now) {
-		return
+	pending := unmarkedNotices(notes, id)
+	if len(pending) == 0 {
+		return true
 	}
-	note, line, ok := oldestNotice(notes, id)
-	if !ok {
-		return
+	if noticeTooSoon(notes, p.now()) {
+		return false
+	}
+	attempt, cancel := context.WithTimeout(ctx, parentNoticeAttempt)
+	defer cancel()
+	if p.Probe == nil {
+		return false
+	}
+	if err := p.Probe(attempt, sess, pod); err != nil {
+		return false
 	}
 	if p.Patch == nil || p.Deliver == nil {
-		return
+		return false
 	}
-	if err := p.Patch(ctx, note.DeepCopy(), now); err != nil {
-		p.Log.Info(noticePatchRefused, "note", note.Name)
-		if p.Refused != nil {
-			p.Refused.Inc()
+	limit := len(pending)
+	if limit > parentNoticeMaxN {
+		limit = parentNoticeMaxN
+	}
+	now := p.now()
+	marked := make([]*coord.InboxMessage, 0, limit)
+	for _, n := range pending[:limit] {
+		if err := p.Patch(attempt, n.DeepCopy(), now); err != nil {
+			p.Log.Info(noticePatchRefused, "note", n.Name)
+			if p.Refused != nil {
+				p.Refused.Inc()
+			}
+			if len(marked) == 0 {
+				return false
+			}
+			break
 		}
-		return
+		marked = append(marked, n)
 	}
-	if err := p.Deliver(ctx, sess, pod, line); err != nil {
-		p.Log.Info(noticeDeliveryFailed, "note", note.Name)
+	line, ok := ParentNoticeLine(marked[0].Spec.Sender.Name, marked[0].Name, len(marked))
+	if !ok {
+		p.Log.Info(noticeDeliveryFailed, "note", marked[0].Name)
+		return false
 	}
+	if err := p.Deliver(attempt, sess, pod, line); err != nil {
+		p.Log.Info(noticeDeliveryFailed, "note", marked[0].Name)
+	}
+	return len(marked) == len(pending)
 }
 
 func (p *ParentNotices) now() time.Time {
@@ -140,8 +200,10 @@ func claudeTUI(sess *v1alpha1.AgentSession) bool {
 		(sess.Spec.Mode == v1alpha1.ModeLocal || sess.Spec.Mode == v1alpha1.ModeRemote)
 }
 
-// parentReady is the gate in rulings 6 and the Claude-TUI rule. A hold leaves
-// the note unmarked. The heartbeat bound is the operator's existing one.
+// parentReady is the operator's first filter. The line is typed only when the
+// last report says idle and the heartbeat is fresh by the existing bound. A
+// hold leaves the note unmarked. agentd reads Claude's own status again at
+// the keyboard.
 func parentReady(sess *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) bool {
 	if sess.Spec.OperatingMode != v1alpha1.OperatingModeRunning || sess.Status.Phase != v1alpha1.PhaseRunning {
 		return false
@@ -152,7 +214,7 @@ func parentReady(sess *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) bo
 		return false
 	}
 	a := sess.Status.Agent
-	if a == nil || a.LastHeartbeat == nil || a.Status == "" || a.Status == protocol.AgentWaiting {
+	if a == nil || a.LastHeartbeat == nil || a.Status != protocol.AgentIdle {
 		return false
 	}
 	hb := a.LastHeartbeat.Time
@@ -181,28 +243,26 @@ func noticeTooSoon(notes []coord.InboxMessage, now time.Time) bool {
 	return found && now.Sub(latest) < parentNoticeGap
 }
 
-func oldestNotice(notes []coord.InboxMessage, parent coord.SessionIdentity) (*coord.InboxMessage, string, bool) {
-	var best *coord.InboxMessage
-	var line string
+func unmarkedNotices(notes []coord.InboxMessage, parent coord.SessionIdentity) []*coord.InboxMessage {
+	var out []*coord.InboxMessage
 	for i := range notes {
 		n := &notes[i]
 		if !unmarkedNotice(n, parent) {
 			continue
 		}
-		candidate, ok := ParentNoticeLine(n.Spec.Sender.Name, n.Name)
-		if !ok {
+		if _, ok := ParentNoticeLine(n.Spec.Sender.Name, n.Name, 1); !ok {
 			continue
 		}
-		if best == nil || n.CreationTimestamp.Time.Before(best.CreationTimestamp.Time) ||
-			(n.CreationTimestamp.Time.Equal(best.CreationTimestamp.Time) && n.Name < best.Name) {
-			best = n
-			line = candidate
+		out = append(out, n)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		ti, tj := out[i].CreationTimestamp.Time, out[j].CreationTimestamp.Time
+		if ti.Equal(tj) {
+			return out[i].Name < out[j].Name
 		}
-	}
-	if best == nil {
-		return nil, "", false
-	}
-	return best, line, true
+		return ti.Before(tj)
+	})
+	return out
 }
 
 func unmarkedNotice(m *coord.InboxMessage, parent coord.SessionIdentity) bool {
@@ -217,8 +277,11 @@ func unmarkedNotice(m *coord.InboxMessage, parent coord.SessionIdentity) bool {
 }
 
 // ParentNoticeRunner delivers wake lines in the leader only. It scans stored
-// notes on start and again after a watch gap, and it looks on each session
-// status change and each new note. The flag off means it is not added.
+// notes on start and again after a watch gap. A pass runs for a parent only
+// after that scan, or a note watch, has seen an unmarked note for it. The set
+// is a hint: the annotation is still what decides that a note was sent once.
+// A heartbeat for a parent with nothing pending does not list. The flag off
+// means the runner is not added.
 type ParentNoticeRunner struct {
 	Enabled          bool
 	SessionNamespace string
@@ -228,18 +291,21 @@ type ParentNoticeRunner struct {
 	Exec             PodExecutor
 	Log              logr.Logger
 	Refused          NoticeRefusedCounter
+	Pages            NoticeRefusedCounter
 	Now              func() time.Time
 
 	GetSession    func(context.Context, string) (*v1alpha1.AgentSession, error)
 	GetPod        func(context.Context, *v1alpha1.AgentSession) (*corev1.Pod, error)
 	List          func(context.Context, coord.SessionIdentity) ([]coord.InboxMessage, error)
 	Patch         func(context.Context, *coord.InboxMessage, time.Time) error
+	Probe         func(context.Context, *v1alpha1.AgentSession, *corev1.Pod) error
 	Deliver       func(context.Context, *v1alpha1.AgentSession, *corev1.Pod, string) error
 	ScanParents   func(context.Context) ([]string, error)
 	WatchSessions func(context.Context) (watch.Interface, error)
 	WatchNotes    func(context.Context) (watch.Interface, error)
 
-	mu sync.Mutex
+	mu      sync.Mutex
+	pending map[string]struct{}
 }
 
 // NeedLeaderElection keeps delivery on the leader. A second leader that
@@ -270,7 +336,7 @@ func (r *ParentNoticeRunner) Start(ctx context.Context) error {
 func (r *ParentNoticeRunner) notices() *ParentNotices {
 	return &ParentNotices{
 		Enabled: r.Enabled, Now: r.Now, Log: r.Log, Refused: r.Refused,
-		GetSession: r.getSession, GetPod: r.getPod, List: r.list, Patch: r.patch, Deliver: r.deliver,
+		GetSession: r.getSession, GetPod: r.getPod, List: r.list, Patch: r.patch, Probe: r.probe, Deliver: r.deliver,
 	}
 }
 
@@ -280,7 +346,22 @@ func (r *ParentNoticeRunner) passName(ctx context.Context, name string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.notices().Pass(ctx, name)
+	if r.notices().Pass(ctx, name) {
+		delete(r.pending, name)
+	}
+}
+
+func (r *ParentNoticeRunner) remember(names ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pending == nil {
+		r.pending = map[string]struct{}{}
+	}
+	for _, name := range names {
+		if name != "" {
+			r.pending[name] = struct{}{}
+		}
+	}
 }
 
 func (r *ParentNoticeRunner) scan(ctx context.Context) {
@@ -289,6 +370,7 @@ func (r *ParentNoticeRunner) scan(ctx context.Context) {
 		r.Log.Info(noticeScanRefused)
 		return
 	}
+	r.remember(names...)
 	for _, name := range names {
 		if ctx.Err() != nil {
 			return
@@ -341,7 +423,17 @@ func (r *ParentNoticeRunner) list(ctx context.Context, party coord.SessionIdenti
 	if r.List != nil {
 		return r.List(ctx, party)
 	}
-	return r.Notes.NoticeNotes(ctx, party)
+	notes, hit, err := r.Notes.NoticeNotes(ctx, party)
+	if err != nil {
+		return nil, err
+	}
+	if hit {
+		r.Log.Info(noticePageBudgetHit, "parent", party.Name)
+		if r.Pages != nil {
+			r.Pages.Inc()
+		}
+	}
+	return notes, nil
 }
 
 func (r *ParentNoticeRunner) patch(ctx context.Context, note *coord.InboxMessage, at time.Time) error {
@@ -351,18 +443,34 @@ func (r *ParentNoticeRunner) patch(ctx context.Context, note *coord.InboxMessage
 	return r.Notes.MarkParentNotice(ctx, note, at)
 }
 
+func (r *ParentNoticeRunner) probe(ctx context.Context, sess *v1alpha1.AgentSession, pod *corev1.Pod) error {
+	if r.Probe != nil {
+		return r.Probe(ctx, sess, pod)
+	}
+	return r.execNotice(ctx, sess, pod, true, "")
+}
+
 func (r *ParentNoticeRunner) deliver(ctx context.Context, sess *v1alpha1.AgentSession, pod *corev1.Pod, line string) error {
 	if r.Deliver != nil {
 		return r.Deliver(ctx, sess, pod, line)
 	}
-	if r.Exec == nil || pod == nil || line == "" {
+	return r.execNotice(ctx, sess, pod, false, line)
+}
+
+func (r *ParentNoticeRunner) execNotice(ctx context.Context, sess *v1alpha1.AgentSession, pod *corev1.Pod, probe bool, line string) error {
+	if r.Exec == nil || pod == nil || sess == nil || (!probe && line == "") {
 		return errors.New("parent notice has no exec")
 	}
-	ctx, cancel := context.WithTimeout(ctx, podCmdTimeout)
-	defer cancel()
 	stderr := &limitedBuffer{max: 4 << 10}
-	args := []string{"agentd", "ctl", "notice", "--expected-pod-uid", string(pod.UID), "--expected-session-uid", string(sess.UID)}
-	return r.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, args, strings.NewReader(line+"\n"), io.Discard, stderr)
+	args := []string{"agentd", "ctl", "notice"}
+	stdin := strings.NewReader("")
+	if probe {
+		args = append(args, "--probe")
+	} else {
+		stdin = strings.NewReader(line + "\n")
+	}
+	args = append(args, "--expected-pod-uid", string(pod.UID), "--expected-session-uid", string(sess.UID))
+	return r.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, args, stdin, io.Discard, stderr)
 }
 
 type noticeOpen func(context.Context) (watch.Interface, error)
@@ -424,6 +532,12 @@ func (r *ParentNoticeRunner) onSession(ctx context.Context, e watch.Event) {
 	if !ok || !claudeTUI(sess) {
 		return
 	}
+	r.mu.Lock()
+	_, want := r.pending[sess.Name]
+	r.mu.Unlock()
+	if !want {
+		return
+	}
 	r.passName(ctx, sess.Name)
 }
 
@@ -438,6 +552,7 @@ func (r *ParentNoticeRunner) onNote(ctx context.Context, e watch.Event) {
 	if _, marked := m.Annotations[inbox.ParentNoticeAnnotation]; marked {
 		return
 	}
+	r.remember(m.Spec.Recipient.Name)
 	r.passName(ctx, m.Spec.Recipient.Name)
 }
 

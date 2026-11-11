@@ -191,6 +191,48 @@ func lockFileWait(path string, wait time.Duration) (func(), error) {
 	}
 }
 
+// lockFileWaitContext is lockFileWait for a parent notice. The wait and its
+// pause both end when ctx does, so the operator's attempt deadline is the
+// last moment a notice can still be waiting to type.
+func lockFileWaitContext(ctx context.Context, path string, wait time.Duration) (func(), error) {
+	deadline := time.Now().Add(wait)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() {
+				_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+				_ = f.Close()
+			}, nil
+		}
+		_ = f.Close()
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, err
+		}
+		remain := time.Until(deadline)
+		if remain <= 0 {
+			return nil, fmt.Errorf("another message was still being delivered after %s", wait)
+		}
+		pause := 50 * time.Millisecond
+		if remain < pause {
+			pause = remain
+		}
+		timer := time.NewTimer(pause)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 // deliverSettle is how long Deliver waits between the paste and Enter.
 var deliverSettle = 500 * time.Millisecond
 

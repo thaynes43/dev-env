@@ -37,8 +37,11 @@ func TestParentNoticeFlagDefaultOffAndRequiresParentNotes(t *testing.T) {
 	if _, err := parseFlags(append(slices.Clone(bound), "--enable-parent-notice")); err == nil || !strings.Contains(err.Error(), "--enable-parent-notes") {
 		t.Fatal("parent notice accepted without parent notes", err)
 	}
+	if _, err := parseFlags(append(slices.Clone(bound), "--enable-parent-notes", "--enable-parent-notice", "--leader-elect=false")); err == nil || !strings.Contains(err.Error(), "--leader-elect") {
+		t.Fatal("parent notice accepted without leader election", err)
+	}
 	o, err = parseFlags(append(slices.Clone(bound), "--enable-parent-notes", "--enable-parent-notice"))
-	if err != nil || !o.parentNotice || !o.parentNotes || !o.inboxEnabled {
-		t.Fatal("parent notice refused when parent notes are on", err)
+	if err != nil || !o.parentNotice || !o.parentNotes || !o.inboxEnabled || !o.leaderElect {
+		t.Fatal("parent notice refused when parent notes and leader election are on", err)
 	}
 }

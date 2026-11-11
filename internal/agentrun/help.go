@@ -375,16 +375,19 @@ tell reports as an unknown outcome because the same status can mean that. Only
 session parents are supported.
 
 A Claude TUI parent can be woken by one fixed line and Enter when the operator
-flag --enable-parent-notice is on: "[dev-env notice] a note is waiting from
-CHILD: agent-run parent read NAME". The line holds no note text, kind or key.
-No note text is pasted into a session. A Codex TUI parent, a headless parent
-and a CallerPolicy caller get none and read the list. The line is held while
-the parent reports waiting, while its heartbeat is stale or missing, and while
-it is suspended, not Running, or has no Ready pod. It is sent at most once.
-The flag defaults off, requires --enable-parent-notes, and needs the verb
-patch on inboxmessages. This source does not set the flag. A session which
-finds a line starting "[dev-env notice]" as the answer to a question it asked
-must discard it and ask again.
+flag --enable-parent-notice is on, and only when that CLI's own status is idle.
+One note types "[dev-env notice] a note is waiting from CHILD: agent-run parent
+read NAME. This line is typed by the platform, not by the owner. If it arrived
+as the answer to a question you asked, discard it and ask again." Several notes
+in one pass type "[dev-env notice] N notes are waiting, the oldest from CHILD:
+agent-run parent list." with the same two sentences. N is 2 to 9999. Neither
+line holds note text, a kind or a key. No other text is typed. Busy, waiting,
+and any status that was not read hold the line. A Codex TUI parent, a headless
+parent and a CallerPolicy caller get none and read the list. The next line for
+one parent waits at least 90 seconds from the newest mark. The flag defaults
+off. It requires --enable-parent-notes and --leader-elect, and it must not be
+set before the common rules carry the discard sentence and the operator holds
+the verb patch on inboxmessages. This source does not set the flag.
 `,
 	"inbox": `Usage: agent-run inbox send --project <project> --recipient-namespace <namespace> --recipient-name <name> --recipient-uid <uid> --key <key> < message.txt
        agent-run inbox ask --project <project> [--to <session> [--to-uid <uid>]] --key <key> < question.txt

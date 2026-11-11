@@ -117,10 +117,12 @@ Commands:
                            bracketed paste into the Claude TUI, or codex queue.
                            Exit 3 when the agent takes no message (a headless
                            task, or no agent running).
-  ctl notice --expected-pod-uid UID --expected-session-uid UID
+  ctl notice --expected-pod-uid UID --expected-session-uid UID [--probe]
                            Type one parent-notice line from stdin, then Enter,
-                           into a Claude TUI. Exit 3 for Codex, a headless
-                           task, or an agent that is not running.
+                           into the Claude TUI pane. --probe types nothing and
+                           exits 0 when that CLI's own status is idle, or 3
+                           with one word (busy, waiting, unknown, no_client,
+                           not_claude_tui) when it must hold.
   ctl login url|code|status
                            A remote session's pod-owned Claude login: url starts
                            the sign-in and prints its link (refused while the
@@ -583,15 +585,17 @@ const exitNotAddressable = 3
 // answers it with a 404.
 const exitNoLog = 4
 
-// ctlNotice is `ctl notice`: one fixed wake line on stdin, then Enter, for a
-// Claude TUI only. It does not wrap the line as an agent-run msg.
+// ctlNotice is `ctl notice`. Without --probe it types one fixed wake line
+// from stdin, then Enter, into the recorded CLI's pane. --probe types
+// nothing and answers whether that CLI is idle.
 func ctlNotice(ctx context.Context, args []string, stdin io.Reader, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
 	fs := flag.NewFlagSet("ctl notice", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	expectedPod := fs.String("expected-pod-uid", "", "")
 	expectedSession := fs.String("expected-session-uid", "", "")
+	probe := fs.Bool("probe", false, "")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 || *expectedPod == "" || *expectedSession == "" {
-		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl notice --expected-pod-uid <uid> --expected-session-uid <uid> (the line on stdin)\n", binaryName)
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl notice --expected-pod-uid <uid> --expected-session-uid <uid> [--probe]\n", binaryName)
 		return exitUsage
 	}
 	s, err := agentd.LoadSettings(getenv)
@@ -608,7 +612,18 @@ func ctlNotice(ctx context.Context, args []string, stdin io.Reader, stderr io.Wr
 		_, _ = fmt.Fprintln(stderr, "agentd: target identity does not match")
 		return exitFailure
 	}
-	buf, err := io.ReadAll(io.LimitReader(stdin, 512))
+	if *probe {
+		if err := agentd.NoticeProbe(s, sess); err != nil {
+			if errors.Is(err, agentd.ErrNotAddressable) {
+				_, _ = fmt.Fprintln(stderr, err.Error())
+				return exitNotAddressable
+			}
+			_, _ = fmt.Fprintf(stderr, "%s: notice: %v\n", binaryName, err)
+			return exitFailure
+		}
+		return exitOK
+	}
+	buf, err := io.ReadAll(io.LimitReader(stdin, 525))
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "%s: read the notice: %v\n", binaryName, err)
 		return exitFailure

@@ -18,9 +18,12 @@ import (
 const ParentNoticeAnnotation = "dev-env.haynesops.com/parent-notice"
 
 const (
-	noticePage    = 100
-	noticeMax     = 512
-	noticeScanMax = 4096
+	noticePage = 100
+	// NoticePageBudget is how many pages one pass reads for one parent, at
+	// noticePage. 41 pages cover one project's 4096 records. A further page
+	// is not read: the caller logs, counts, and serves the notes already read.
+	NoticePageBudget = (4096 + noticePage - 1) / noticePage
+	noticeScanMax    = 4096
 )
 
 // NoticeKind is a child note that can wake a session parent: question, result
@@ -82,12 +85,13 @@ type parentNoticePatchMeta struct {
 	ResourceVersion string            `json:"resourceVersion"`
 }
 
-// NoticeNotes lists parent notes addressed to one session, newest page after
-// page, including marked notes. An incomplete or mismatched page is refused
-// so a pass does not deliver from a partial read.
-func (s KubeStore) NoticeNotes(ctx context.Context, party coord.SessionIdentity) ([]coord.InboxMessage, error) {
+// NoticeNotes lists parent notes addressed to one session, page after page,
+// including marked notes. hit is true when the page budget stopped the read;
+// the notes already read are still returned. An incomplete or mismatched
+// page is refused so a pass does not deliver from a broken read.
+func (s KubeStore) NoticeNotes(ctx context.Context, party coord.SessionIdentity) ([]coord.InboxMessage, bool, error) {
 	if !s.ready() || !ValidSession(party) {
-		return nil, ErrUnavailable
+		return nil, false, ErrUnavailable
 	}
 	sel := labels.SelectorFromSet(map[string]string{
 		ParentNoteLabel: "true",
@@ -95,29 +99,29 @@ func (s KubeStore) NoticeNotes(ctx context.Context, party coord.SessionIdentity)
 	})
 	var out []coord.InboxMessage
 	var cont string
-	for {
+	for pages := 0; ; pages++ {
+		if pages >= NoticePageBudget {
+			return out, true, nil
+		}
 		var page coord.InboxMessageList
 		if s.Live.List(ctx, &page, client.InNamespace(s.Namespace), client.MatchingLabelsSelector{Selector: sel}, client.Limit(noticePage), client.Continue(cont)) != nil {
-			return nil, ErrUnavailable
+			return nil, false, ErrUnavailable
 		}
 		if int64(len(page.Items)) > noticePage {
-			return nil, ErrUnavailable
+			return nil, false, ErrUnavailable
 		}
 		for i := range page.Items {
 			m := &page.Items[i]
 			if !IsParentNote(m) || m.Spec.Recipient != party || !m.GetDeletionTimestamp().IsZero() || !s.validMessage(m) {
-				return nil, ErrUnavailable
+				return nil, false, ErrUnavailable
 			}
 			out = append(out, *m)
 		}
-		if len(out) > noticeMax {
-			return nil, ErrUnavailable
-		}
 		if page.Continue == "" {
-			return out, nil
+			return out, false, nil
 		}
 		if len(page.Continue) > 4096 {
-			return nil, ErrUnavailable
+			return nil, false, ErrUnavailable
 		}
 		cont = page.Continue
 	}

@@ -2,7 +2,9 @@ package apiserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -14,9 +16,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -72,8 +78,12 @@ type noticeFix struct {
 	pod        *corev1.Pod
 	notes      []coord.InboxMessage
 	lines      []string
+	patched    []string
 	patches    int
 	patchErr   error
+	failPatch  string
+	probeErr   error
+	probes     int
 	deliverErr error
 	refused    noticeCount
 	log        noticeLog
@@ -146,6 +156,7 @@ func (f *noticeFix) notices() ParentNotices {
 		},
 		List:    f.list,
 		Patch:   f.patch,
+		Probe:   f.probe,
 		Deliver: f.deliver,
 	}
 }
@@ -163,12 +174,26 @@ func (f *noticeFix) list(_ context.Context, id coord.SessionIdentity) ([]coord.I
 	return out, nil
 }
 
+func (f *noticeFix) probe(ctx context.Context, _ *v1alpha1.AgentSession, _ *corev1.Pod) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.probes++
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("probe has no deadline")
+	}
+	return f.probeErr
+}
+
 func (f *noticeFix) patch(_ context.Context, note *coord.InboxMessage, at time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.patches++
+	f.patched = append(f.patched, note.Name)
 	if f.patchErr != nil {
 		return f.patchErr
+	}
+	if f.failPatch != "" && f.failPatch == note.Name {
+		return errors.New("refused")
 	}
 	for i := range f.notes {
 		if f.notes[i].Name != note.Name {
@@ -220,11 +245,11 @@ func TestParentNoticeHeldWhileWaitingThenSentOnce(t *testing.T) {
 	}
 	f.sess.Status.Agent.Status = protocol.AgentIdle
 	f.pass()
-	want, ok := ParentNoticeLine("child-1", f.notes[0].Name)
+	want, ok := ParentNoticeLine("child-1", f.notes[0].Name, 1)
 	if !ok || len(f.lines) != 1 || f.lines[0] != want || !f.marked(f.notes[0].Name) {
 		t.Fatalf("idle: lines %q marked %v want %q", f.lines, f.marked(f.notes[0].Name), want)
 	}
-	if strings.Contains(f.lines[0], noticeText) || strings.Contains(f.lines[0], noticeKey) || strings.Contains(f.lines[0], "question") || strings.Contains(f.lines[0], "[Message from") {
+	if strings.Contains(f.lines[0], noticeText) || strings.Contains(f.lines[0], noticeKey) || strings.Contains(f.lines[0], "[Message from") {
 		t.Fatalf("line holds more than the notice: %q", f.lines[0])
 	}
 	f.pass()
@@ -320,12 +345,18 @@ func TestParentNoticeStaleHeartbeatHolds(t *testing.T) {
 func TestParentNoticeSuspendedHoldsUntilRunning(t *testing.T) {
 	f := newNoticeFix()
 	f.sess.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+	f.sess.Status.Phase = v1alpha1.PhaseRunning
+	f.pass()
+	if len(f.lines) != 0 || f.patches != 0 || f.marked(f.notes[0].Name) {
+		t.Fatal("a suspended operating mode with a running phase got a notice")
+	}
+	f = newNoticeFix()
+	f.sess.Spec.OperatingMode = v1alpha1.OperatingModeRunning
 	f.sess.Status.Phase = v1alpha1.PhaseSuspended
 	f.pass()
 	if len(f.lines) != 0 || f.patches != 0 || f.marked(f.notes[0].Name) {
-		t.Fatal("suspended parent got a notice")
+		t.Fatal("a suspended phase with a running operating mode got a notice")
 	}
-	f.sess.Spec.OperatingMode = v1alpha1.OperatingModeRunning
 	f.sess.Status.Phase = v1alpha1.PhaseRunning
 	f.pass()
 	if len(f.lines) != 1 || !f.marked(f.notes[0].Name) {
@@ -345,33 +376,90 @@ func TestParentNoticeSuspendedHoldsUntilRunning(t *testing.T) {
 	}
 }
 
-func TestParentNoticeOnePerMinuteOldestFirst(t *testing.T) {
+func TestParentNoticeOneLineForTheBacklog(t *testing.T) {
 	f := newNoticeFix()
 	older := f.note(inbox.KindBlocker, "old-key", "old text", f.now.Add(-2*time.Hour), "1", noticeName("e"))
 	newer := f.note(inbox.KindResult, "new-key", "new text", f.now.Add(-time.Hour), "1", noticeName("f"))
 	f.notes = []coord.InboxMessage{newer, older}
 	f.pass()
-	if len(f.lines) != 1 || !strings.Contains(f.lines[0], noticeName("e")) || strings.Contains(f.lines[0], "old text") || strings.Contains(f.lines[0], "new text") {
-		t.Fatalf("first pass: %q", f.lines)
+	want, ok := ParentNoticeLine("child-1", older.Name, 2)
+	if !ok || len(f.lines) != 1 || f.lines[0] != want || !f.marked(noticeName("e")) || !f.marked(noticeName("f")) {
+		t.Fatalf("one line: %q marked older %v newer %v", f.lines, f.marked(noticeName("e")), f.marked(noticeName("f")))
+	}
+	if strings.Contains(f.lines[0], "old text") || strings.Contains(f.lines[0], "new text") || strings.Contains(f.lines[0], noticeName("e")) {
+		t.Fatalf("plural line names a note or its text: %q", f.lines[0])
+	}
+	if len(f.patched) != 2 || f.patched[0] != noticeName("e") || f.patched[1] != noticeName("f") {
+		t.Fatalf("mark order %v", f.patched)
 	}
 	f.pass()
-	if len(f.lines) != 1 || f.marked(noticeName("f")) {
-		t.Fatalf("burst: %q marked newer %v", f.lines, f.marked(noticeName("f")))
+	if len(f.lines) != 1 || f.patches != 2 {
+		t.Fatalf("sent again: lines %q patches %d", f.lines, f.patches)
 	}
-	f.mu.Lock()
-	f.now = f.now.Add(parentNoticeGap)
-	f.mu.Unlock()
+
+	f = newNoticeFix()
+	older = f.note(inbox.KindBlocker, "old-key", "old text", f.now.Add(-2*time.Hour), "1", noticeName("e"))
+	newer = f.note(inbox.KindResult, "new-key", "new text", f.now.Add(-time.Hour), "1", noticeName("f"))
+	f.notes = []coord.InboxMessage{newer, older}
+	f.failPatch = noticeName("e")
 	f.pass()
-	if len(f.lines) != 2 || !strings.Contains(f.lines[1], noticeName("f")) {
-		t.Fatalf("after a minute: %q", f.lines)
+	if len(f.lines) != 0 || f.marked(noticeName("e")) || f.marked(noticeName("f")) || f.refused.n.Load() != 1 {
+		t.Fatalf("first refusal typed or marked: lines %q refused %d", f.lines, f.refused.n.Load())
+	}
+
+	f = newNoticeFix()
+	older = f.note(inbox.KindBlocker, "old-key", "old text", f.now.Add(-2*time.Hour), "1", noticeName("e"))
+	newer = f.note(inbox.KindResult, "new-key", "new text", f.now.Add(-time.Hour), "1", noticeName("f"))
+	f.notes = []coord.InboxMessage{newer, older}
+	f.failPatch = noticeName("f")
+	f.pass()
+	one, ok := ParentNoticeLine("child-1", noticeName("e"), 1)
+	if !ok || len(f.lines) != 1 || f.lines[0] != one || !f.marked(noticeName("e")) || f.marked(noticeName("f")) {
+		t.Fatalf("later refusal: lines %q older %v newer %v", f.lines, f.marked(noticeName("e")), f.marked(noticeName("f")))
 	}
 }
 
 func TestParentNoticeRaceDeliversOnce(t *testing.T) {
 	f := newNoticeFix()
+	f.notes[0].ResourceVersion = "1"
+	store := noticeStore(t)
 	var mu sync.Mutex
 	rv := "1"
-	f.notes[0].ResourceVersion = "1"
+	var sawResourceVersion bool
+	store.Client = interceptor.NewClient(store.Client.(client.WithWatch), interceptor.Funcs{
+		Patch: func(_ context.Context, _ client.WithWatch, obj client.Object, patch client.Patch, _ ...client.PatchOption) error {
+			data, err := patch.Data(obj)
+			if err != nil {
+				return err
+			}
+			if strings.Contains(string(data), `"spec"`) || strings.Contains(string(data), noticeText) {
+				return errors.New("patch carried more than the mark")
+			}
+			var body struct {
+				Metadata struct {
+					ResourceVersion string            `json:"resourceVersion"`
+					Annotations     map[string]string `json:"annotations"`
+				} `json:"metadata"`
+			}
+			if json.Unmarshal(data, &body) != nil {
+				return errors.New("patch body")
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if body.Metadata.ResourceVersion == "" {
+				// A patch with no precondition is applied. The test then sees
+				// two deliveries, which is the failure this case exists to catch.
+				rv = rv + "x"
+				return nil
+			}
+			sawResourceVersion = true
+			if body.Metadata.ResourceVersion != rv || body.Metadata.Annotations[inbox.ParentNoticeAnnotation] == "" {
+				return apierrors.NewConflict(schema.GroupResource{Resource: "inboxmessages"}, obj.GetName(), errors.New("resourceVersion"))
+			}
+			rv = rv + "b"
+			return nil
+		},
+	})
 	var deliveries atomic.Int32
 	p := f.notices()
 	p.List = func(context.Context, coord.SessionIdentity) ([]coord.InboxMessage, error) {
@@ -380,14 +468,8 @@ func TestParentNoticeRaceDeliversOnce(t *testing.T) {
 		n.Annotations = nil
 		return []coord.InboxMessage{n}, nil
 	}
-	p.Patch = func(_ context.Context, note *coord.InboxMessage, _ time.Time) error {
-		mu.Lock()
-		defer mu.Unlock()
-		if note.ResourceVersion != rv {
-			return apierrors.NewConflict(schema.GroupResource{Resource: "inboxmessages"}, note.Name, errors.New("resourceVersion"))
-		}
-		rv = "2"
-		return nil
+	p.Patch = func(ctx context.Context, note *coord.InboxMessage, at time.Time) error {
+		return store.MarkParentNotice(ctx, note, at)
 	}
 	p.Deliver = func(context.Context, *v1alpha1.AgentSession, *corev1.Pod, string) error {
 		deliveries.Add(1)
@@ -398,8 +480,8 @@ func TestParentNoticeRaceDeliversOnce(t *testing.T) {
 	go func() { defer wg.Done(); p.Pass(context.Background(), f.sess.Name) }()
 	go func() { defer wg.Done(); p.Pass(context.Background(), f.sess.Name) }()
 	wg.Wait()
-	if deliveries.Load() != 1 || f.refused.n.Load() != 1 {
-		t.Fatalf("deliveries %d refused %d", deliveries.Load(), f.refused.n.Load())
+	if !sawResourceVersion || deliveries.Load() != 1 || f.refused.n.Load() != 1 {
+		t.Fatalf("rv %v deliveries %d refused %d", sawResourceVersion, deliveries.Load(), f.refused.n.Load())
 	}
 }
 
@@ -448,6 +530,22 @@ func TestParentNoticeFlagOffDoesNothing(t *testing.T) {
 	}
 }
 
+func noticeStore(t *testing.T) inbox.KubeStore {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := coord.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			obj.SetUID(types.UID("note-uid"))
+			obj.SetCreationTimestamp(metav1.Now())
+			return c.Create(ctx, obj, opts...)
+		},
+	}).Build()
+	return inbox.KubeStore{Client: c, Live: c, Namespace: "private-coordination"}
+}
+
 func TestParentNoticeRunnerStatusChangeAndStoredNote(t *testing.T) {
 	f := newNoticeFix()
 	delivered := make(chan string, 2)
@@ -459,14 +557,19 @@ func TestParentNoticeRunnerStatusChangeAndStoredNote(t *testing.T) {
 		delivered <- line
 		return nil
 	}
-	sessions := make(chan watch.Event, 1)
-	notes := make(chan watch.Event, 1)
+	sessions := make(chan watch.Event)
+	notes := make(chan watch.Event)
 	opened := make(chan struct{})
 	var once sync.Once
+	var lists atomic.Int32
 	r := &ParentNoticeRunner{
 		Enabled: true, Now: p.Now, Log: p.Log, Refused: p.Refused,
-		GetSession: p.GetSession, GetPod: p.GetPod, List: p.List, Patch: p.Patch, Deliver: p.Deliver,
-		ScanParents: func(context.Context) ([]string, error) { return nil, nil },
+		GetSession: p.GetSession, GetPod: p.GetPod, Patch: p.Patch, Probe: p.Probe, Deliver: p.Deliver,
+		List: func(ctx context.Context, id coord.SessionIdentity) ([]coord.InboxMessage, error) {
+			lists.Add(1)
+			return p.List(ctx, id)
+		},
+		ScanParents: func(context.Context) ([]string, error) { return []string{f.sess.Name}, nil },
 		WatchSessions: func(context.Context) (watch.Interface, error) {
 			once.Do(func() { close(opened) })
 			return &chanWatch{ch: sessions}, nil
@@ -484,14 +587,18 @@ func TestParentNoticeRunnerStatusChangeAndStoredNote(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("session watch did not open")
 	}
-	sessions <- watch.Event{Type: watch.Modified, Object: f.sess.DeepCopy()}
 	select {
 	case line := <-delivered:
 		if strings.Contains(line, noticeText) || !strings.Contains(line, "child-1") {
-			t.Fatalf("status change typed %q", line)
+			t.Fatalf("start scan typed %q", line)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("status change did not deliver")
+		t.Fatal("start scan did not deliver")
+	}
+	afterScan := lists.Load()
+	sessions <- watch.Event{Type: watch.Modified, Object: f.sess.DeepCopy()}
+	if lists.Load() != afterScan {
+		t.Fatal("a heartbeat with nothing pending listed notes")
 	}
 	second := f.note(inbox.KindResult, "second-key", "second text", f.now.Add(-time.Minute), "1", noticeName("d"))
 	second.Labels = map[string]string{inbox.ParentNoteLabel: "true"}
@@ -529,39 +636,191 @@ func TestParentNoticeRunnerFlagOffDoesNotScan(t *testing.T) {
 	}
 }
 
-type noticeExec struct {
+type noticeCall struct {
 	cmd                []string
 	stdin              string
 	ns, pod, container string
+	deadline           time.Time
+	hasDeadline        bool
 }
 
-func (e *noticeExec) Run(_ context.Context, ns, pod, container string, cmd []string, stdin io.Reader, _, _ io.Writer) error {
-	e.ns, e.pod, e.container = ns, pod, container
-	e.cmd = append([]string(nil), cmd...)
-	b, err := io.ReadAll(stdin)
-	e.stdin = string(b)
+type noticeExec struct {
+	mu    sync.Mutex
+	calls []noticeCall
+	err   error
+}
+
+func (e *noticeExec) Run(ctx context.Context, ns, pod, container string, cmd []string, stdin io.Reader, _, _ io.Writer) error {
+	call := noticeCall{cmd: append([]string(nil), cmd...), ns: ns, pod: pod, container: container}
+	if stdin != nil {
+		b, err := io.ReadAll(stdin)
+		if err != nil {
+			return err
+		}
+		call.stdin = string(b)
+	}
+	if d, ok := ctx.Deadline(); ok {
+		call.deadline, call.hasDeadline = d, true
+	}
+	e.mu.Lock()
+	e.calls = append(e.calls, call)
+	err := e.err
+	e.mu.Unlock()
 	return err
 }
 
 func TestParentNoticeExecTypesOnlyTheFixedLine(t *testing.T) {
 	f := newNoticeFix()
-	line, ok := ParentNoticeLine("child-1", f.notes[0].Name)
+	line, ok := ParentNoticeLine("child-1", f.notes[0].Name, 1)
 	if !ok {
 		t.Fatal("line")
 	}
 	ex := &noticeExec{}
-	r := &ParentNoticeRunner{Exec: ex}
-	if err := r.deliver(context.Background(), f.sess, f.pod, line); err != nil {
-		t.Fatal(err)
+	p := f.notices()
+	r := &ParentNoticeRunner{
+		Enabled: true, Exec: ex, Now: p.Now, Log: p.Log, Refused: p.Refused,
+		GetSession: p.GetSession, GetPod: p.GetPod, List: p.List, Patch: p.Patch,
 	}
-	if ex.ns != f.pod.Namespace || ex.pod != f.pod.Name || ex.container != controller.ContainerName {
-		t.Fatalf("exec target %s/%s %s", ex.ns, ex.pod, ex.container)
+	if !r.notices().Pass(context.Background(), f.sess.Name) {
+		t.Fatal("pass did not clear")
 	}
-	if strings.Join(ex.cmd, " ") != "agentd ctl notice --expected-pod-uid pod-uid --expected-session-uid parent-uid" {
-		t.Fatalf("cmd %q", ex.cmd)
+	if len(ex.calls) != 2 {
+		t.Fatalf("execs %d", len(ex.calls))
 	}
-	if ex.stdin != line+"\n" || strings.Contains(ex.stdin, noticeText) || strings.Contains(ex.stdin, noticeKey) || strings.Contains(ex.stdin, "[Message from") {
-		t.Fatalf("stdin %q", ex.stdin)
+	probe, typed := ex.calls[0], ex.calls[1]
+	if probe.ns != f.pod.Namespace || probe.pod != f.pod.Name || probe.container != controller.ContainerName || typed.container != controller.ContainerName {
+		t.Fatalf("exec target %+v %+v", probe, typed)
+	}
+	if strings.Join(probe.cmd, " ") != "agentd ctl notice --probe --expected-pod-uid pod-uid --expected-session-uid parent-uid" || probe.stdin != "" {
+		t.Fatalf("probe %q stdin %q", probe.cmd, probe.stdin)
+	}
+	if strings.Join(typed.cmd, " ") != "agentd ctl notice --expected-pod-uid pod-uid --expected-session-uid parent-uid" {
+		t.Fatalf("cmd %q", typed.cmd)
+	}
+	if typed.stdin != line+"\n" || strings.Contains(typed.stdin, noticeText) || strings.Contains(typed.stdin, noticeKey) || strings.Contains(typed.stdin, "[Message from") {
+		t.Fatalf("stdin %q", typed.stdin)
+	}
+	if !probe.hasDeadline || !typed.hasDeadline || typed.deadline.Sub(probe.deadline) > time.Second {
+		t.Fatal("probe and delivery do not share one deadline", probe.deadline, typed.deadline)
+	}
+}
+
+func TestParentNoticeBusyHolds(t *testing.T) {
+	for _, status := range []string{protocol.AgentBusy, protocol.AgentWaiting, protocol.AgentPending, "pondering"} {
+		f := newNoticeFix()
+		f.sess.Status.Agent.Status = status
+		f.pass()
+		if len(f.lines) != 0 || f.patches != 0 || f.probes != 0 || f.marked(f.notes[0].Name) {
+			t.Fatalf("%s delivered probes %d lines %q", status, f.probes, f.lines)
+		}
+	}
+}
+
+func TestParentNoticeProbeHoldWritesNoMark(t *testing.T) {
+	f := newNoticeFix()
+	f.probeErr = errors.New("busy")
+	f.pass()
+	if f.probes != 1 || f.patches != 0 || len(f.lines) != 0 || f.marked(f.notes[0].Name) {
+		t.Fatalf("probes %d patches %d lines %q", f.probes, f.patches, f.lines)
+	}
+}
+
+func TestParentNoticeSlowExecThenNewNote(t *testing.T) {
+	f := newNoticeFix()
+	started := time.Now()
+	p := f.notices()
+	p.Deliver = func(ctx context.Context, sess *v1alpha1.AgentSession, pod *corev1.Pod, line string) error {
+		deadline, ok := ctx.Deadline()
+		if !ok || deadline.Sub(started) > 31*time.Second || deadline.Sub(started) < 29*time.Second {
+			t.Errorf("attempt deadline %s", deadline.Sub(started))
+		}
+		f.mu.Lock()
+		f.now = f.now.Add(20 * time.Second)
+		f.mu.Unlock()
+		return f.deliver(ctx, sess, pod, line)
+	}
+	if !p.Pass(context.Background(), f.sess.Name) || len(f.lines) != 1 {
+		t.Fatal(f.lines)
+	}
+	markedAt := f.now.Add(-20 * time.Second)
+	next := f.note(inbox.KindResult, "later-key", "later text", f.now, "2", noticeName("d"))
+	f.mu.Lock()
+	f.notes = append(f.notes, next)
+	f.mu.Unlock()
+	p.Pass(context.Background(), f.sess.Name)
+	if len(f.lines) != 1 || f.marked(noticeName("d")) {
+		t.Fatalf("a note during the gap was typed: %q", f.lines)
+	}
+	f.mu.Lock()
+	f.now = markedAt.Add(parentNoticeGap - time.Second)
+	f.mu.Unlock()
+	p.Pass(context.Background(), f.sess.Name)
+	if len(f.lines) != 1 || f.marked(noticeName("d")) {
+		t.Fatal("89s was enough", f.lines)
+	}
+	f.mu.Lock()
+	f.now = markedAt.Add(parentNoticeGap)
+	f.mu.Unlock()
+	if !p.Pass(context.Background(), f.sess.Name) || len(f.lines) != 2 || !f.marked(noticeName("d")) || !strings.Contains(f.lines[1], noticeName("d")) || strings.Contains(f.lines[1], "later text") {
+		t.Fatalf("after 90s: %q marked %v", f.lines, f.marked(noticeName("d")))
+	}
+}
+
+func TestParentNoticeServesALongRecipientList(t *testing.T) {
+	f := newNoticeFix()
+	notes := make([]coord.InboxMessage, 513)
+	old := f.now.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	for i := 0; i < 512; i++ {
+		notes[i] = f.note(inbox.KindQuestion, fmt.Sprintf("k-%d", i), "text", f.now.Add(-time.Duration(i+2)*time.Hour), "1", fmt.Sprintf("message.%032x.%032x", i+1, i+1))
+		notes[i].Annotations = map[string]string{inbox.ParentNoticeAnnotation: old}
+	}
+	notes[512] = f.note(inbox.KindResult, "open-key", noticeText, f.now.Add(-time.Hour), "1", noticeName("a"))
+	f.notes = notes
+	f.pass()
+	want, ok := ParentNoticeLine("child-1", noticeName("a"), 1)
+	if !ok || len(f.lines) != 1 || f.lines[0] != want || !f.marked(noticeName("a")) || f.patches != 1 {
+		t.Fatalf("lines %q patches %d", f.lines, f.patches)
+	}
+}
+
+func TestParentNoticePageBudgetIsLoggedAndServed(t *testing.T) {
+	ctx := context.Background()
+	s := noticeStore(t)
+	spec := coord.InboxMessageSpec{
+		Project: "sample", Key: "budget-note", Text: "  exact UTF-8 text\n",
+		Sender:    coord.SessionIdentity{Namespace: "dev-agents", Name: "sender", UID: "sender-uid"},
+		Recipient: coord.SessionIdentity{Namespace: "dev-agents", Name: "recipient", UID: "recipient-uid"},
+		Actor:     coord.ClaimActor{Kind: "session", ServiceAccount: "dev-agents/dev-env-agent", PodName: "sender", PodUID: "sender-pod-uid"},
+		Provenance: coord.ClaimProvenance{
+			CatalogRevision: strings.Repeat("a", 64), RulesRevision: strings.Repeat("b", 64),
+			GitHub: "thaynes43/dev-env", DefaultBranch: "main", InitialPinState: "Unknown",
+		},
+		Repository: "repo", Provider: "claude", RequestedModel: "claude-opus-5-5", Kind: inbox.KindQuestion,
+	}
+	m, created, err := s.CreateParentNote(ctx, spec)
+	if err != nil || !created {
+		t.Fatal(err, created)
+	}
+	calls := 0
+	s.Live = interceptor.NewClient(s.Live.(client.WithWatch), interceptor.Funcs{List: func(_ context.Context, _ client.WithWatch, list client.ObjectList, _ ...client.ListOption) error {
+		calls++
+		if calls > inbox.NoticePageBudget+1 {
+			t.Fatal("read past the page budget")
+		}
+		page := list.(*coord.InboxMessageList)
+		page.Items = []coord.InboxMessage{*m.DeepCopy()}
+		page.Continue = "more"
+		return nil
+	}})
+	var log noticeLog
+	var pages noticeCount
+	r := &ParentNoticeRunner{Notes: &s, Log: logr.New(&log), Pages: &pages}
+	notes, err := r.list(ctx, spec.Recipient)
+	if err != nil || len(notes) != inbox.NoticePageBudget || calls != inbox.NoticePageBudget || pages.n.Load() != 1 {
+		t.Fatalf("notes %d calls %d counted %d err %v", len(notes), calls, pages.n.Load(), err)
+	}
+	if !strings.Contains(log.joined(), noticePageBudgetHit) || strings.Contains(log.joined(), spec.Text) || strings.Contains(log.joined(), spec.Key) {
+		t.Fatalf("log %q", log.joined())
 	}
 }
 

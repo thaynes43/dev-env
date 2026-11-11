@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -126,8 +127,87 @@ func TestNoticeParentsSkipsMarkedCallerAndPlain(t *testing.T) {
 	if err != nil || len(parents) != 1 || parents[0] != spec.Recipient {
 		t.Fatalf("parents %+v %v", parents, err)
 	}
-	notes, err := s.NoticeNotes(ctx, spec.Recipient)
-	if err != nil || len(notes) != 2 {
-		t.Fatalf("notes %d %v", len(notes), err)
+	notes, hit, err := s.NoticeNotes(ctx, spec.Recipient)
+	if err != nil || hit || len(notes) != 2 {
+		t.Fatalf("notes %d hit %v %v", len(notes), hit, err)
+	}
+}
+
+// More than 512 notes to one parent, most already marked, are still listed.
+// The old refusal counted marked notes and dropped every later pass.
+func TestNoticeNotesServesMoreThan512(t *testing.T) {
+	ctx := context.Background()
+	s := pagedFake(storeFixture(t))
+	spec := validMessage()
+	spec.Kind = KindQuestion
+	const total = 513
+	var unmarked string
+	for i := 0; i < total; i++ {
+		note := spec
+		note.Key = fmt.Sprintf("fan-%d", i)
+		if i >= 256 {
+			note.Sender.Name = "sender-b"
+			note.Sender.UID = "sender-b-uid"
+		}
+		m, created, err := s.CreateParentNote(ctx, note)
+		if err != nil || !created {
+			t.Fatal(i, err, created)
+		}
+		if i == total-1 {
+			unmarked = m.Name
+			continue
+		}
+		m.Annotations = map[string]string{ParentNoticeAnnotation: time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)}
+		if err := s.Client.Update(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	notes, hit, err := s.NoticeNotes(ctx, spec.Recipient)
+	if err != nil || hit || len(notes) != total {
+		t.Fatalf("notes %d hit %v %v", len(notes), hit, err)
+	}
+	found := false
+	marked := 0
+	for i := range notes {
+		if _, ok := notes[i].Annotations[ParentNoticeAnnotation]; ok {
+			marked++
+		}
+		if notes[i].Name == unmarked {
+			found = true
+		}
+	}
+	if !found || marked != total-1 {
+		t.Fatalf("unmarked found %v marked %d", found, marked)
+	}
+}
+
+func TestNoticeNotesStopsAtThePageBudgetAndServesWhatItRead(t *testing.T) {
+	ctx := context.Background()
+	s := storeFixture(t)
+	spec := validMessage()
+	spec.Kind = KindQuestion
+	spec.Key = "budget-note"
+	m, _, err := s.CreateParentNote(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	base := s.Live.(client.WithWatch)
+	s.Live = interceptor.NewClient(base, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+		calls++
+		if calls > NoticePageBudget+1 {
+			t.Fatal("read past the page budget")
+		}
+		page, ok := list.(*coord.InboxMessageList)
+		if !ok {
+			t.Fatalf("%T", list)
+		}
+		page.Items = []coord.InboxMessage{*m}
+		page.Continue = "more"
+		return nil
+	}})
+	notes, hit, err := s.NoticeNotes(ctx, spec.Recipient)
+	if err != nil || !hit || len(notes) != NoticePageBudget || calls != NoticePageBudget {
+		t.Fatalf("notes %d hit %v calls %d err %v", len(notes), hit, calls, err)
 	}
 }

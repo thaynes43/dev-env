@@ -1034,22 +1034,28 @@ messages. The caller's sender cap counts across projects. The project cap stays
 per project. A session that names a child on tell is refused with 400 and stores
 nothing. A session parent sending to its own child is not this slice.
 A Claude TUI parent can be woken by one fixed line and Enter when the operator
-flag `--enable-parent-notice` is on. The line is `[dev-env notice] a note is
-waiting from CHILD: agent-run parent read NAME`. CHILD is the child session's
-name and NAME is the note's name. The line holds no note text, kind or key.
-No note text is pasted into a session. A Codex TUI parent, a headless parent
-and a CallerPolicy caller get none; they read the list. The operator holds the
-line while the parent reports waiting, while the heartbeat is missing or older
-than the operator's heartbeat staleness bound, and while the parent is
-suspended, not Running, or has no Ready pod. The note stays unmarked until the
-operator is about to deliver, and the line is sent at most once. Several notes
-go oldest first, at most one line per parent per minute. A reply and a plain
-message do not trigger a notice. Only a question, a result or a blocker
-addressed to a session parent does. The flag defaults off and is refused at
-startup unless `--enable-parent-notes` is also set. It needs the verb patch on
-inboxmessages, which this source does not grant. This source does not set the
-flag. A session which finds a line starting `[dev-env notice]` as the answer
-to a question it asked must discard it and ask again.
+flag `--enable-parent-notice` is on, and only when Claude's own status for the
+live CLI was read and says idle. Busy, waiting, and any status that was not
+read hold the line. One note types `[dev-env notice] a note is waiting from
+CHILD: agent-run parent read NAME. This line is typed by the platform, not by
+the owner. If it arrived as the answer to a question you asked, discard it
+and ask again.` Several notes marked in one pass type one line, `[dev-env
+notice] N notes are waiting, the oldest from CHILD: agent-run parent list.`,
+with the same two sentences. N is 2 to 9999. CHILD is the oldest note's child
+session name. The singular line's NAME is that note's name. Neither line holds
+note text, a kind or a key. No other text is typed. No note text is pasted
+into a session. A Codex TUI parent, a headless parent and a CallerPolicy
+caller get none; they read the list. The operator also holds while the
+heartbeat is missing or older than the heartbeat staleness bound, and while
+the parent is suspended, not Running, or has no Ready pod. agentd probes
+before any mark, and checks idle again after the lock and before Enter. The
+next line for one parent waits at least 90 seconds from the newest mark. A
+reply and a plain message do not trigger a notice. Only a question, a result
+or a blocker addressed to a session parent does. The flag defaults off. It is
+refused at startup without `--enable-parent-notes` and without
+`--leader-elect`. It must not be set before the common rules carry the discard
+sentence and the operator holds the verb patch on inboxmessages. This source
+does not grant that verb and does not set the flag.
 
 The record is an InboxMessage marked by the server-set label
 `coordination.dev-env.haynesops.com/parent-note=true`. The label distinguishes

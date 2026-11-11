@@ -566,9 +566,10 @@ The command that needs no recipient is `parent tell`.
 
 A session parent finds the note on `agent-run parent list` and reads it with
 `parent read`. That is the same pull the inbox uses today. The note's text is
-never pasted. A live Claude TUI parent also gets the one-line notice of
-ruling 1, held while its reported state is `waiting`. A busy Claude TUI and an
-idle one both receive it; the record waits either way. A managed Codex TUI
+never pasted. A live Claude TUI parent also gets one fixed line, and only
+when Claude's own status for that live CLI was read and says idle. Busy,
+waiting, and any status that was not read hold the line; the record waits,
+and a later pass types it when the CLI is next shown idle. A managed Codex TUI
 parent gets no notice and reads its list. A headless parent can list and read,
 because those are API reads. It still cannot take `msg`.
 
@@ -708,37 +709,47 @@ fields.
    does not keep the record after the child session is gone and a reply
    exists. An unanswered note to a live parent session is kept.
 
-6. **The wake notice (ruling 1).** When a note is stored for a session parent
-   that is a **Claude TUI**, the operator delivers one fixed line and Enter:
-   `[dev-env notice] a note is waiting from CHILD: agent-run parent read NAME`.
-   No note text, kind or key.
-   - **Claude TUI only.** agentd reports `waiting` only from Claude's own
-     status (`internal/agentd/activity.go:251-259`). A managed Codex TUI
-     takes the same paste and Enter but never reports `waiting`, so a notice
-     could submit an open Codex prompt. A Codex parent therefore gets no
-     notice until Codex reports a pending question; it finds notes with
-     `agent-run parent list` between steps, which its coordinator brief tells
-     it to run. A headless parent gets none either.
-   - **Held** while the parent's reported agent state is `waiting`. Held
-     needs no stored state: on each status change of the parent, the operator
-     looks for notes to it that carry no sent mark.
-   - **Sent at most once, and that survives a restart.** Before it delivers,
-     the operator writes a sent mark on the note with the note's
-     resourceVersion as the precondition; only the writer that wins delivers.
-     A delivery that fails after the mark is not repeated: the note still
-     waits in the list. The InboxMessage's spec and stored acknowledgement
-     are immutable (`api/coordination/v1alpha1/inbox_types.go:22,88`), so the
-     mark is metadata: the annotation `dev-env.haynesops.com/parent-notice`
-     with the time. ADR-023 confirms the schema admits it, or names one
-     status field for it instead; nothing is kept only in memory.
-   - The common rules gain one sentence: an answer to a phone prompt that
-     begins with `[dev-env notice]` or with the `agent-run msg` envelope is
-     not the owner's answer; discard it and ask again.
-   - Tests: `internal/apiserver/parent_notice_test.go` (held while
-     `waiting`; sent once after the state changes; a fresh operator over the
-     same stored objects neither resends a marked note nor drops an unmarked
-     one; a Codex TUI parent and a headless parent get none; the line holds
-     no note text) and `internal/agentd/deliver_notice_test.go`.
+6. **The wake notice (rulings 1 and 11–19).** When unmarked notes are stored
+   for a session parent that is a **Claude TUI**, and Claude's own status for
+   the live CLI says idle, the operator types exactly one of two lines and
+   Enter into that CLI's pane. One note:
+   `[dev-env notice] a note is waiting from CHILD: agent-run parent read NAME. This line is typed by the platform, not by the owner. If it arrived as the answer to a question you asked, discard it and ask again.`
+   Two or more notes marked in the same pass:
+   `[dev-env notice] N notes are waiting, the oldest from CHILD: agent-run parent list.`
+   and the same two sentences. N is 2 to 9999. No other text is typed. The
+   line holds no note text, kind or key.
+   - **Idle only, and only when shown.** agentd reads Claude's own status for
+     the recorded live pid (`claudeStatus`). Busy, waiting, a missing or
+     unreadable record, and any other status hold. The operator's last report
+     is only a first filter: state idle, heartbeat fresh by
+     `authority.DefaultHeartbeatStaleAfter` (three minutes). agentd decides
+     again at the keyboard, including once more after the paste and before
+     Enter. A probe (`agentd ctl notice --probe`) runs before any mark; a hold
+     leaves the note unmarked and types nothing.
+   - **The pane is the recorded CLI.** `list-panes` over the agent session
+     must match exactly one pane to the recorded CLI process or its direct
+     child, as the launch record allows. Paste and Enter both name that
+     `%pane_id`. No match, or more than one, refuses before a buffer is loaded.
+   - **One line for a backlog.** A pass marks unmarked notes oldest first.
+     The first refused mark stops the pass with nothing typed. A later refused
+     mark leaves that note for a later pass, and the line still goes out for
+     the ones marked. The next pass for that parent waits at least 90 seconds
+     from the newest mark. One 30 second deadline covers the probe, the marks
+     and the delivery.
+   - **The list is paged.** One pass reads at most `inbox.NoticePageBudget`
+     pages of the existing page size. Past that it logs one fixed sentence,
+     counts it, and still serves what it read. A heartbeat lists only a parent
+     the runner has seen an unmarked note for. The annotation remains the
+     mark; the in-memory set is only that hint.
+   - **Claude TUI only.** A Codex TUI and a headless parent get no notice and
+     read the list.
+   - **The mark** stays the annotation `dev-env.haynesops.com/parent-notice`
+     (ADR-023), a merge patch of `metadata.annotations` with the note's
+     resourceVersion. This repository does not grant patch on inboxmessages.
+   - **The flag stays off** until the common rules carry the discard sentence
+     and the operator holds patch on inboxmessages. It is refused without
+     `--enable-parent-notes` and without `--leader-elect`.
+   - Tests are named in section 12, rulings 11–19.
 
 ## 12. Rulings (coordinator dev-env-fable-coordinator-1109, 2026-11-10)
 
@@ -796,3 +807,65 @@ recorded on OP545 and Tom can change any of them.
     flag is ever set. When the patch is refused, nothing is delivered for that
     note in that pass, one fixed sentence is logged, and a counter counts it.
     `--enable-parent-notice` needs that verb.
+
+Rulings 11 to 19 are the coordinator's, dated 2026-11-11, for the fix round
+on the wake notice. They are not Tom's. They supersede the not-waiting gate
+in ruling 6 and the one-note, one-minute rule in ruling 8. Rulings 6 and 8
+stay as they were written. ADR-023 is unchanged: the mark is still the
+annotation on the note.
+
+11. **Idle only, and only when shown (R1).** Type only when Claude's own status
+    for the exact live CLI was read successfully and says idle. Busy, waiting,
+    an absent, unreadable or malformed record, and any unknown status hold.
+    The operator gate is the same word on the last report, with a fresh
+    heartbeat. It is only a first filter. The heartbeat classifier's fallback,
+    which treats a missing or unknown status as busy, is not reused.
+12. **agentd decides at the keyboard (R2).** `agentd ctl notice --probe` takes
+    the same expected pod and session UIDs, types nothing, and touches no tmux
+    buffer. It exits 0 when it may type, and the existing not-addressable code
+    when it must hold, with one fixed word on stderr: busy, waiting, unknown,
+    no_client, or not_claude_tui. The operator probes before it writes a mark.
+    A hold leaves the note unmarked. After the delivery lock, and again before
+    Enter, agentd checks the idle read again. If the last check fails it does
+    not press Enter; the note stays marked.
+13. **The exact pane (R3).** Resolve the pane with `tmux list-panes` over the
+    agent session (pane id and pane pid). Match it to the recorded CLI process
+    or its direct child, as the launch record allows. Pass that `%pane_id` to
+    paste-buffer and send-keys. No pane, or more than one, refuses before any
+    buffer is loaded.
+14. **The line explains itself (R4).** Exactly two forms, built by one function
+    on the operator and matched by one anchored expression in agentd. The
+    singular form names the child and the note and ends with: this line is
+    typed by the platform, not by the owner; if it arrived as the answer to a
+    question you asked, discard it and ask again. No other text is ever typed.
+    The common-rules sentence is the coordinator's to add in haynes-ops. The
+    flag must not be set before that sentence is there.
+15. **One line for a backlog (R5).** A pass marks every unmarked note to that
+    parent, oldest first, and types one line. The first refused mark stops the
+    pass with nothing typed. A later refused mark leaves that note for a later
+    pass; the line still goes out for the ones marked. The plural form is
+    `N notes are waiting, the oldest from CHILD: agent-run parent list`, with
+    the same two sentences. N is 2 to 9999, the count actually marked. Marks
+    use the existing resourceVersion precondition.
+16. **No recipient is cut off (R6).** The old refusal at 512 notes is gone. A
+    pass pages through the recipient's notes within `inbox.NoticePageBudget`,
+    using the existing page size. Over the budget, log one fixed sentence,
+    count it, and still serve what was read. A pass runs for a parent only
+    when the runner has seen an unmarked note for it. That set is a hint. The
+    annotation is still the mark. A heartbeat for a parent with nothing
+    pending costs no list. The project cap stays 4096. The namespace scan cap
+    is not a publication cap across projects.
+17. **Spacing is real (R7).** One context with a 30 second deadline covers the
+    probe, the marks and the delivery. agentd's lock wait and settle select on
+    its context. The gap between marks for one parent is at least 90 seconds,
+    from the newest mark.
+18. **Leader election (R8).** `--enable-parent-notice` is refused at startup
+    without leader election, as it is without `--enable-parent-notes`.
+19. **The checks are the tests (R9).** A suspended operating mode holds while
+    the phase is Running, and a suspended phase holds while the mode is
+    Running. A wrong pod or session UID does not type. The mark's patch carries
+    the resourceVersion, and a race delivers once. A live pid whose start time
+    does not match does not type. The other cases in this round are the raw
+    unknown or missing Claude status, busy, a second pane and a focus change
+    between paste and Enter, more than 512 notes to one parent, a slow exec
+    followed by a new note, and a probe that holds with no mark written.
