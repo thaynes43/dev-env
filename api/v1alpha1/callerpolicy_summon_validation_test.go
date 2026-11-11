@@ -108,17 +108,6 @@ func pairPolicy() *v1alpha1.CallerPolicy {
 	)
 }
 
-func sixEntries() []v1alpha1.CallerPolicySummonSession {
-	return []v1alpha1.CallerPolicySummonSession{
-		summonEntry(v1alpha1.SummonKindTask, v1alpha1.LaneRemediation),
-		summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneEscalation),
-		summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneUpgrade),
-		summonEntry(v1alpha1.SummonKindTask, v1alpha1.LaneCuration),
-		summonEntry(v1alpha1.SummonKindTask, v1alpha1.LaneUpgrade),
-		summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneRemediation),
-	}
-}
-
 func asUnstructured(t *testing.T, p *v1alpha1.CallerPolicy) *unstructured.Unstructured {
 	t.Helper()
 	p.APIVersion, p.Kind = v1alpha1.GroupVersion.String(), "CallerPolicy"
@@ -172,18 +161,14 @@ func TestCallerPolicySummonValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("accept same lane with different kinds", func(t *testing.T) {
+	t.Run("accept the four valid pairs", func(t *testing.T) {
 		p := summonPolicy(
-			summonEntry(v1alpha1.SummonKindTask, v1alpha1.LaneUpgrade),
+			summonEntry(v1alpha1.SummonKindTask, v1alpha1.LaneRemediation),
+			summonEntry(v1alpha1.SummonKindTask, v1alpha1.LaneCuration),
+			summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneEscalation),
 			summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneUpgrade),
 		)
 		if err := k8s.Create(ctx(t), p); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	t.Run("accept six entries", func(t *testing.T) {
-		if err := k8s.Create(ctx(t), summonPolicy(sixEntries()...)); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -325,9 +310,14 @@ func TestCallerPolicySummonValidation(t *testing.T) {
 		{"account with a trailing hyphen", func(p *v1alpha1.CallerPolicy) { setAccount(p, "upgrade-agent-/worker") }, "serviceAccount"},
 		{"64-character namespace", func(p *v1alpha1.CallerPolicy) { setAccount(p, strings.Repeat("a", 64)+"/worker") }, "serviceAccount"},
 		{"account over 128 characters", func(p *v1alpha1.CallerPolicy) {
-			p.Spec.Summon.ServiceAccount = strings.Repeat("a", 129)
+			// 64 + "/" + 64 = 129, with a slash, so a missing slash is not
+			// the failure. A pattern-valid account is at most 127 characters
+			// (63 + "/" + 63), so this label pair still fails the pattern.
+			// The assertion is the max-length phrase, which that pattern
+			// error does not contain. The object name stays short.
+			p.Spec.Summon.ServiceAccount = strings.Repeat("a", 64) + "/" + strings.Repeat("b", 64)
 			p.Name = "short-name"
-		}, "serviceAccount"},
+		}, "128"},
 		{"concurrent 0", func(p *v1alpha1.CallerPolicy) { p.Spec.Summon.Limits.Concurrent = 0 }, "concurrent"},
 		{"concurrent 5", func(p *v1alpha1.CallerPolicy) { p.Spec.Summon.Limits.Concurrent = 5 }, "concurrent"},
 		{"escalations 0", func(p *v1alpha1.CallerPolicy) { p.Spec.Summon.Limits.Escalations = i32(0) }, "escalations"},
@@ -340,12 +330,37 @@ func TestCallerPolicySummonValidation(t *testing.T) {
 		{"createsPerHour 0", func(p *v1alpha1.CallerPolicy) { p.Spec.Summon.Limits.CreatesPerHour = 0 }, "createsPerHour"},
 		{"createsPerHour 31", func(p *v1alpha1.CallerPolicy) { p.Spec.Summon.Limits.CreatesPerHour = 31 }, "createsPerHour"},
 		{"no sessions", func(p *v1alpha1.CallerPolicy) {
-			p.Spec.Summon.Sessions = nil
+			p.Spec.Summon.Sessions = []v1alpha1.CallerPolicySummonSession{}
 			p.Spec.Summon.Limits.Escalations = nil
 		}, "sessions"},
 		{"seven sessions", func(p *v1alpha1.CallerPolicy) {
-			p.Spec.Summon.Sessions = append(sixEntries(), summonEntry(v1alpha1.SummonKindTask, v1alpha1.LaneRemediation))
+			e := summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneUpgrade)
+			p.Spec.Summon.Sessions = []v1alpha1.CallerPolicySummonSession{e, e, e, e, e, e, e}
+			p.Spec.Summon.Limits.Escalations = nil
 		}, "at most 6"},
+		{"task escalation", func(p *v1alpha1.CallerPolicy) {
+			p.Spec.Summon.Sessions = []v1alpha1.CallerPolicySummonSession{
+				summonEntry(v1alpha1.SummonKindTask, v1alpha1.LaneEscalation),
+			}
+		}, "escalation and upgrade are remote"},
+		{"task upgrade", func(p *v1alpha1.CallerPolicy) {
+			p.Spec.Summon.Sessions = []v1alpha1.CallerPolicySummonSession{
+				summonEntry(v1alpha1.SummonKindTask, v1alpha1.LaneUpgrade),
+			}
+			p.Spec.Summon.Limits.Escalations = nil
+		}, "escalation and upgrade are remote"},
+		{"remote remediation", func(p *v1alpha1.CallerPolicy) {
+			p.Spec.Summon.Sessions = []v1alpha1.CallerPolicySummonSession{
+				summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneRemediation),
+				summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneEscalation),
+			}
+		}, "remediation and curation are task"},
+		{"remote curation", func(p *v1alpha1.CallerPolicy) {
+			p.Spec.Summon.Sessions = []v1alpha1.CallerPolicySummonSession{
+				summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneCuration),
+			}
+			p.Spec.Summon.Limits.Escalations = nil
+		}, "remediation and curation are task"},
 		{"duplicate kind and lane", func(p *v1alpha1.CallerPolicy) {
 			a := summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneUpgrade)
 			b := summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneUpgrade)
@@ -365,7 +380,9 @@ func TestCallerPolicySummonValidation(t *testing.T) {
 		{"five prefixes", func(p *v1alpha1.CallerPolicy) {
 			p.Spec.Summon.Sessions[0].NamePrefixes = []string{"rem-a-", "rem-b-", "rem-c-", "rem-d-", "rem-e-"}
 		}, "at most 4"},
-		{"no prefixes", func(p *v1alpha1.CallerPolicy) { p.Spec.Summon.Sessions[0].NamePrefixes = nil }, "namePrefixes"},
+		{"no prefixes", func(p *v1alpha1.CallerPolicy) {
+			p.Spec.Summon.Sessions[0].NamePrefixes = []string{}
+		}, "namePrefixes"},
 		{"prefix does not end in a dash", func(p *v1alpha1.CallerPolicy) {
 			p.Spec.Summon.Sessions[0].NamePrefixes = []string{"rem-responder"}
 		}, "namePrefixes"},
@@ -384,6 +401,18 @@ func TestCallerPolicySummonValidation(t *testing.T) {
 		{"prefix esc-rem-", func(p *v1alpha1.CallerPolicy) {
 			p.Spec.Summon.Sessions[1].NamePrefixes = []string{"esc-rem-"}
 		}, "esc-rem-"},
+		{"upgrade prefix wo-cigar-curate-", func(p *v1alpha1.CallerPolicy) {
+			e := summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneUpgrade)
+			e.NamePrefixes = []string{"wo-cigar-curate-"}
+			p.Spec.Summon.Sessions = []v1alpha1.CallerPolicySummonSession{e}
+			p.Spec.Summon.Limits.Escalations = nil
+		}, "does not start with wo-cigar-curate-"},
+		{"upgrade prefix extending wo-cigar-curate-", func(p *v1alpha1.CallerPolicy) {
+			e := summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneUpgrade)
+			e.NamePrefixes = []string{"wo-cigar-curate-extra-"}
+			p.Spec.Summon.Sessions = []v1alpha1.CallerPolicySummonSession{e}
+			p.Spec.Summon.Limits.Escalations = nil
+		}, "does not start with wo-cigar-curate-"},
 		{"duplicate prefixes", func(p *v1alpha1.CallerPolicy) {
 			p.Spec.Summon.Sessions[0].NamePrefixes = []string{"rem-a-", "rem-a-"}
 		}, "Duplicate value"},
@@ -409,6 +438,9 @@ func TestCallerPolicySummonValidation(t *testing.T) {
 		{"fallback equal to the default", func(p *v1alpha1.CallerPolicy) {
 			p.Spec.Summon.Sessions[0].Model.Fallback = p.Spec.Summon.Sessions[0].Model.Default
 		}, "must differ"},
+		{"fallback alias", func(p *v1alpha1.CallerPolicy) {
+			p.Spec.Summon.Sessions[0].Model.Fallback = "opus"
+		}, "model.fallback"},
 		{"effort in capitals", func(p *v1alpha1.CallerPolicy) { p.Spec.Summon.Sessions[0].Effort = "XHigh" }, "effort"},
 		{"effort with a hyphen", func(p *v1alpha1.CallerPolicy) { p.Spec.Summon.Sessions[0].Effort = "x-high" }, "effort"},
 		{"effort of 33 characters", func(p *v1alpha1.CallerPolicy) {

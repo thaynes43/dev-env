@@ -163,14 +163,16 @@ type CallerPolicySummonLimits struct {
 
 // CallerPolicySummonSession is one lane a caller may start. The brief template
 // is fixed text; the API renders it and does not substitute into it (5.6).
+// Remediation and curation are task; escalation and upgrade are remote.
 // Effort uses the AgentSession effort pattern, ^[a-z]+$, not a closed enum.
 // Omitted staleAfter on a remote upgrade entry means the design default of
 // 180m; a structural default would land on every entry. maxHold's design
 // defaults are 20m for remediation and 12h for curation; the schema requires
 // the field there and bounds the duration.
 //
+// +kubebuilder:validation:XValidation:rule="(self.lane == 'remediation' && self.kind == 'task') || (self.lane == 'curation' && self.kind == 'task') || (self.lane == 'escalation' && self.kind == 'remote') || (self.lane == 'upgrade' && self.kind == 'remote')",message="remediation and curation are task; escalation and upgrade are remote"
 // +kubebuilder:validation:XValidation:rule="!(self.lane == 'remediation' || self.lane == 'escalation') || self.priority == 'urgent'",message="priority urgent is required for lanes remediation and escalation"
-// +kubebuilder:validation:XValidation:rule="self.namePrefixes.all(p, !p.startsWith('esc-rem-')) && ((self.lane == 'remediation' && self.namePrefixes.all(p, p.startsWith('rem-'))) || (self.lane == 'escalation' && self.namePrefixes.all(p, p.startsWith('esc-'))) || (self.lane == 'upgrade' && self.namePrefixes.all(p, p.startsWith('wo-'))) || (self.lane == 'curation' && self.namePrefixes.all(p, p.startsWith('wo-cigar-curate-'))))",message="namePrefixes are DNS prefixes for the lane (rem-, esc-, wo-, wo-cigar-curate-) and none start with esc-rem-"
+// +kubebuilder:validation:XValidation:rule="self.namePrefixes.all(p, !p.startsWith('esc-rem-')) && ((self.lane == 'remediation' && self.namePrefixes.all(p, p.startsWith('rem-'))) || (self.lane == 'escalation' && self.namePrefixes.all(p, p.startsWith('esc-'))) || (self.lane == 'upgrade' && self.namePrefixes.all(p, p.startsWith('wo-') && !p.startsWith('wo-cigar-curate-'))) || (self.lane == 'curation' && self.namePrefixes.all(p, p.startsWith('wo-cigar-curate-'))))",message="namePrefixes are DNS prefixes for the lane (rem-, esc-, wo-, wo-cigar-curate-), an upgrade prefix does not start with wo-cigar-curate-, and none start with esc-rem-"
 // +kubebuilder:validation:XValidation:rule="(self.kind == 'task') == has(self.timeout)",message="timeout is required for a task entry and not allowed for a remote entry"
 // +kubebuilder:validation:XValidation:rule="self.kind == 'task' || !has(self.maxTurns)",message="maxTurns is for a task entry only"
 // +kubebuilder:validation:XValidation:rule="!has(self.staleAfter) || (self.kind == 'remote' && self.lane == 'upgrade')",message="staleAfter is for a remote upgrade entry only"
@@ -185,7 +187,8 @@ type CallerPolicySummonSession struct {
 	Priority SummonPriority `json:"priority"`
 
 	// NamePrefixes are DNS label prefixes ending in '-'. One to four, each at
-	// most 32 characters. None may start with esc-rem-.
+	// most 32 characters. None may start with esc-rem-. An upgrade prefix
+	// starts with wo- and does not start with wo-cigar-curate-.
 	// +listType=set
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=4

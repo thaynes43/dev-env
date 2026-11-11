@@ -681,6 +681,16 @@ func TestSummonSnapshotRules(t *testing.T) {
 			s.Spec.Summon.Escalation.Fallback = s.Spec.Summon.Escalation.Model
 			return s
 		}, "fallback that differs"},
+		{"escalation copy with kind task", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.Escalation.Kind = v1alpha1.SummonKindTask
+			return s
+		}, "kind remote"},
+		{"escalation copy with lane upgrade", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.Summon.Escalation.Lane = v1alpha1.LaneUpgrade
+			return s
+		}, "lane escalation"},
 		{"escalation profile dev", func() *v1alpha1.AgentSession {
 			s := summonedTask()
 			s.Spec.Summon.Escalation.Profile = "dev"

@@ -34,6 +34,7 @@ import (
 
 // AgentKind is the agent CLI a session runs.
 // +kubebuilder:validation:Enum=claude;codex;cursor;opencode
+// +kubebuilder:validation:MaxLength=8
 type AgentKind string
 
 const (
@@ -49,6 +50,7 @@ const (
 // SessionMode is how the agent runs: v1's task, local and both become task,
 // local and remote. Summoned sessions use task or remote (DESIGN-001 3.7).
 // +kubebuilder:validation:Enum=task;local;remote
+// +kubebuilder:validation:MaxLength=6
 type SessionMode string
 
 const (
@@ -85,6 +87,7 @@ const (
 // Lane groups summoned sessions (DESIGN-001 3.7). remediation, upgrade and
 // curation are single-flight; escalation is a label only.
 // +kubebuilder:validation:Enum=remediation;upgrade;curation;escalation
+// +kubebuilder:validation:MaxLength=11
 type Lane string
 
 const (
@@ -149,6 +152,12 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.idempotencyKey) || has(self.caller)",message="idempotencyKey is for summoned sessions only: set caller and lane"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.mode != 'local'",message="a summoned session runs in task or remote mode, never local"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || (has(self.profile) && self.profile != 'full')",message="a summoned session names its profile, and it is never full (D-36)"
+// Install this CRD only while no AgentSession carries spec.caller. The
+// coordinator's read at 2026-11-11T20:35Z found none of 255, and none had
+// spec.lane. The API on main refuses name and lane from every caller, so
+// none can appear before the admission slice, and the install step re-checks
+// the count. There is no migration. No old-schema regression test: a session
+// with spec.caller cannot exist yet.
 // +kubebuilder:validation:XValidation:rule="has(self.summon) == has(self.caller)",message="summon is present exactly when caller is"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.profile != 'workbench'",message="a summoned session is never workbench"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.agent == 'claude'",message="a summoned session runs agent claude only"
@@ -422,9 +431,10 @@ type SessionSummon struct {
 }
 
 // SessionSummonEscalation is that copied escalation entry (DESIGN-064 6.4):
-// kind, lane, repo, profile, model, fallback, effort and onUnreported.
+// kind remote, lane escalation, repo, profile, model, fallback, effort and
+// onUnreported failed.
 //
-// +kubebuilder:validation:XValidation:rule="self.lane == 'escalation' && self.profile == 'ops' && self.onUnreported == 'failed' && self.model != self.fallback",message="escalation is a copy of an escalation entry: lane escalation, profile ops, onUnreported failed, and a fallback that differs"
+// +kubebuilder:validation:XValidation:rule="self.kind == 'remote' && self.lane == 'escalation' && self.profile == 'ops' && self.onUnreported == 'failed' && self.model != self.fallback",message="escalation is a copy of an escalation entry: kind remote, lane escalation, profile ops, onUnreported failed, and a fallback that differs"
 type SessionSummonEscalation struct {
 	// +required
 	Kind SummonKind `json:"kind"`

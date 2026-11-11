@@ -65,6 +65,7 @@ spec:
                   - codex
                   - cursor
                   - opencode
+                  maxLength: 8
                   type: string
                 maxItems: 3
                 type: array
@@ -90,6 +91,7 @@ spec:
                       - codex
                       - cursor
                       - opencode
+                      maxLength: 8
                       type: string
                     maxItems: 3
                     type: array
@@ -168,6 +170,7 @@ spec:
                       - codex
                       - cursor
                       - opencode
+                      maxLength: 8
                       type: string
                     maxItems: 3
                     type: array

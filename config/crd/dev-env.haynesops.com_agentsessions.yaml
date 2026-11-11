@@ -80,6 +80,12 @@ spec:
               operator never writes spec either: what it resolves (the default profile and
               tools, the timers per mode) it reads from the templates or records in status.
 
+              Install this CRD only while no AgentSession carries spec.caller. The
+              coordinator's read at 2026-11-11T20:35Z found none of 255, and none had
+              spec.lane. The API on main refuses name and lane from every caller, so
+              none can appear before the admission slice, and the install step re-checks
+              the count. There is no migration. No old-schema regression test: a session
+              with spec.caller cannot exist yet.
               coordinatorInstructions is default false. An existing object may gain that
               default once. Any other add, remove, or value change is refused.
             properties:
@@ -90,6 +96,7 @@ spec:
                 - codex
                 - cursor
                 - opencode
+                maxLength: 8
                 type: string
                 x-kubernetes-validations:
                 - message: immutable after create; only operatingMode and lifecycle
@@ -216,6 +223,7 @@ spec:
                 - upgrade
                 - curation
                 - escalation
+                maxLength: 11
                 type: string
                 x-kubernetes-validations:
                 - message: immutable after create; only operatingMode and lifecycle
@@ -293,6 +301,7 @@ spec:
                 - task
                 - local
                 - remote
+                maxLength: 6
                 type: string
                 x-kubernetes-validations:
                 - message: immutable after create; only operatingMode and lifecycle
@@ -564,6 +573,7 @@ spec:
                         - upgrade
                         - curation
                         - escalation
+                        maxLength: 11
                         type: string
                       model:
                         description: Model is the escalation entry's default model.
@@ -604,11 +614,12 @@ spec:
                     - repo
                     type: object
                     x-kubernetes-validations:
-                    - message: 'escalation is a copy of an escalation entry: lane
-                        escalation, profile ops, onUnreported failed, and a fallback
-                        that differs'
-                      rule: self.lane == 'escalation' && self.profile == 'ops' &&
-                        self.onUnreported == 'failed' && self.model != self.fallback
+                    - message: 'escalation is a copy of an escalation entry: kind
+                        remote, lane escalation, profile ops, onUnreported failed,
+                        and a fallback that differs'
+                      rule: self.kind == 'remote' && self.lane == 'escalation' &&
+                        self.profile == 'ops' && self.onUnreported == 'failed' &&
+                        self.model != self.fallback
                   fallbackModel:
                     description: FallbackModel is the entry's fallback, a full Claude
                       id.
