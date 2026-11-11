@@ -859,6 +859,20 @@ Use this when Tom must see and drive the thread on his phone.
      --model gpt-6-astra --effort xhigh --handoff task.md [--repo dev-env]
    ```
 
+   Without `--host`, and only when the operator was started with
+   `--enable-codex-host-select`, `thread start --agent codex` first calls
+   `POST /v1/codex-hosts/select`. The flag is off by default, so the command
+   still needs `--host`. If it tries selection while the route is absent it
+   behaves as it does today and prints one line that host selection is off.
+   With the flag on, `use` starts the thread on the chosen host and releases
+   the lease when the launch result is known. `report` prints the choice and
+   starts nothing. `resume` and `create` are later slices: the command prints
+   the choice and does not resume or create. `--host` never calls select.
+   `agent-run codex-host select --repo <name> [--profile <name>] [--check]`
+   prints the same choice. `--check` writes nothing.
+   `agent-run --agent codex --interactive` calls select before create, and
+   creates a host only when the choice is `create`.
+
    Either way `agentd ctl thread-start` runs in the host, which checks the daemon is
    connected and the host was paired, runs the clean-session wrapper once (the
    handoff on stdin), and watches the daemon's thread list. It prints one

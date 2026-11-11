@@ -184,7 +184,6 @@ func TestThreadStartInvalidInput(t *testing.T) {
 		"no verb":        {"thread"},
 		"other verb":     {"thread", "stop"},
 		"unknown agent":  {"thread", "start", "--agent", "gemini", "--handoff", good},
-		"no host":        {"thread", "start", "--agent", "codex", "--model", "gpt-6-astra", "--effort", "high", "--handoff", good},
 		"alias model":    {"thread", "start", "--agent", "codex", "--host", "h-1", "--model", "gpt", "--effort", "high", "--handoff", good},
 		"no effort":      {"thread", "start", "--agent", "codex", "--host", "h-1", "--model", "gpt-6-astra", "--handoff", good},
 		"long handoff":   {"thread", "start", "--agent", "codex", "--host", "h-1", "--model", "gpt-6-astra", "--effort", "high", "--handoff", long},
@@ -336,6 +335,11 @@ func TestThreadStartCodexViaAPIInSessionPod(t *testing.T) {
 	reqs := h.api.requests()
 	if len(reqs) != 1 || reqs[0].method != http.MethodPost || reqs[0].path != apiv1.SessionThreadsPath(threadHostName) || reqs[0].auth != "Bearer "+testToken || c.calls != 0 {
 		t.Fatalf("requests %+v, execs %d", reqs, c.calls)
+	}
+	for _, req := range reqs {
+		if strings.Contains(req.path, "codex-hosts") {
+			t.Fatal("a named host called select")
+		}
 	}
 	dec := json.NewDecoder(bytes.NewReader(reqs[0].body))
 	dec.DisallowUnknownFields()

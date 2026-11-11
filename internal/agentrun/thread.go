@@ -134,7 +134,13 @@ func threadReadHandoff(path string) ([]byte, bool) {
 // is added on either path.
 func (a *app) threadOnHost(ctx context.Context, cmd *command, t threadArgs) error {
 	invalid := func() error { return a.threadRefuse("codex", apiv1.ThreadFailed, "invalid_input", ExitUsage) }
-	if !projectName.MatchString(t.host) || t.project != "" || t.key != "" || (t.repo != "" && !apiv1.ValidRepoName(t.repo)) || protocol.ValidateCodexEffort(t.model, t.effort) != nil || t.effort == "" {
+	if t.project != "" || t.key != "" || (t.repo != "" && !apiv1.ValidRepoName(t.repo)) || protocol.ValidateCodexEffort(t.model, t.effort) != nil || t.effort == "" {
+		return invalid()
+	}
+	if t.host == "" {
+		return a.threadChooseHost(ctx, cmd, t)
+	}
+	if !projectName.MatchString(t.host) {
 		return invalid()
 	}
 	if t.name == "" {

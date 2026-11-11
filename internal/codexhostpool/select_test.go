@@ -21,9 +21,11 @@ func devSession() Caller {
 func baseInput(c Caller, hosts []Host) Input {
 	return Input{
 		Hosts:             hosts,
-		Projection:        Projection{Decodes: true, ExpiresAt: evening.Add(24 * time.Hour)},
+		Login:             LoginCurrent,
 		Caller:            c,
-		Request:           Request{Profile: "dev", Repository: "dev-env"},
+		Request:           Request{Repository: "dev-env"},
+		ResolvedProfile:   "dev",
+		DefaultProfile:    "full",
 		Now:               evening,
 		MaxRunningPerCell: 1,
 		MaxRunning:        2,
@@ -90,7 +92,7 @@ func checkSkipped(t *testing.T, res Result, want map[string]string) {
 func TestSelectsRunningPairedHost(t *testing.T) {
 	host := runningPaired("paired")
 	res := Select(baseInput(clientCaller(), []Host{host}))
-	checkResult(t, res, ActionUse, "paired", ReasonFolderTrustPending, false)
+	checkResult(t, res, ActionUse, "paired", "", true)
 	checkSkipped(t, res, nil)
 
 	body, err := json.Marshal(res)
@@ -101,7 +103,7 @@ func TestSelectsRunningPairedHost(t *testing.T) {
 	if err := json.Unmarshal(body, &wire); err != nil {
 		t.Fatal(err)
 	}
-	if wire["host"] != "paired" || wire["action"] != ActionUse || wire["ready"] != false || wire["reason"] != ReasonFolderTrustPending {
+	if wire["host"] != "paired" || wire["action"] != ActionUse || wire["ready"] != true || wire["reason"] != nil {
 		t.Fatalf("wire %#v", wire)
 	}
 
@@ -112,7 +114,7 @@ func TestSelectsRunningPairedHost(t *testing.T) {
 		newer := runningPaired("newer")
 		newer.LastActivity = evening
 		res := Select(baseInput(clientCaller(), []Host{newer, older}))
-		checkResult(t, res, ActionUse, "older", ReasonFolderTrustPending, false)
+		checkResult(t, res, ActionUse, "older", "", true)
 		checkSkipped(t, res, map[string]string{"newer": ReasonNotChosen})
 	})
 
@@ -121,7 +123,7 @@ func TestSelectsRunningPairedHost(t *testing.T) {
 		older.LastActivity = evening.Add(-time.Hour)
 		newer := runningPaired("newer")
 		res := Select(baseInput(clientCaller(), []Host{older, newer}))
-		checkResult(t, res, ActionUse, "newer", ReasonFolderTrustPending, false)
+		checkResult(t, res, ActionUse, "newer", "", true)
 		checkSkipped(t, res, map[string]string{"older": ReasonNotChosen})
 	})
 
@@ -129,18 +131,20 @@ func TestSelectsRunningPairedHost(t *testing.T) {
 		a := runningPaired("b-host")
 		b := runningPaired("a-host")
 		res := Select(baseInput(clientCaller(), []Host{a, b}))
-		checkResult(t, res, ActionUse, "a-host", ReasonFolderTrustPending, false)
+		checkResult(t, res, ActionUse, "a-host", "", true)
 	})
 
 	t.Run("dev session uses a dev host", func(t *testing.T) {
 		res := Select(baseInput(devSession(), []Host{runningPaired("paired")}))
-		checkResult(t, res, ActionUse, "paired", ReasonFolderTrustPending, false)
+		checkResult(t, res, ActionUse, "paired", "", true)
 	})
 
 	t.Run("full session does not fit the dev host", func(t *testing.T) {
 		c := devSession()
 		c.Profile = "full"
-		res := Select(baseInput(c, []Host{runningPaired("paired")}))
+		in := baseInput(c, []Host{runningPaired("paired")})
+		in.ResolvedProfile = "full"
+		res := Select(in)
 		checkResult(t, res, "", "", ReasonCallerCannotCreate, false)
 		checkSkipped(t, res, map[string]string{"paired": ReasonProfileMismatch})
 	})
@@ -153,31 +157,39 @@ func TestSelectsRunningPairedHost(t *testing.T) {
 		checkSkipped(t, res, map[string]string{"wide": ReasonProfileMismatch})
 	})
 
-	t.Run("client omitting profile does not reuse dev", func(t *testing.T) {
+	t.Run("resolved default profile does not reuse dev", func(t *testing.T) {
 		in := baseInput(clientCaller(), []Host{runningPaired("paired")})
-		in.Request.Profile = ""
+		in.ResolvedProfile = in.DefaultProfile
 		res := Select(in)
 		checkResult(t, res, ActionCreate, "", "", false)
 		checkSkipped(t, res, map[string]string{"paired": ReasonProfileMismatch})
 	})
 
-	t.Run("workbench session selects the default profile", func(t *testing.T) {
+	t.Run("workbench session selects the named profile", func(t *testing.T) {
 		full := runningPaired("full-host")
 		full.ResolvedProfile = "full"
 		dev := runningPaired("dev-host")
 		c := Caller{Kind: KindSession, Name: "wb", Profile: "workbench", Workbench: true}
 		in := baseInput(c, []Host{dev, full})
-		in.Request.Profile = "dev"
+		in.ResolvedProfile = "dev"
 		res := Select(in)
-		checkResult(t, res, ActionUse, "full-host", ReasonFolderTrustPending, false)
-		checkSkipped(t, res, map[string]string{"dev-host": ReasonProfileMismatch})
+		checkResult(t, res, ActionUse, "dev-host", "", true)
+		checkSkipped(t, res, map[string]string{"full-host": ReasonProfileMismatch})
+	})
+
+	t.Run("workbench session cannot create off the default profile", func(t *testing.T) {
+		c := Caller{Kind: KindSession, Name: "wb", Profile: "workbench", Workbench: true}
+		in := baseInput(c, nil)
+		in.ResolvedProfile = "dev"
+		res := Select(in)
+		checkResult(t, res, "", "", ReasonCallerCannotCreate, false)
 	})
 
 	t.Run("non-codex host is not a host", func(t *testing.T) {
 		other := runningPaired("claude")
 		other.Agent = "claude"
 		res := Select(baseInput(clientCaller(), []Host{other, runningPaired("paired")}))
-		checkResult(t, res, ActionUse, "paired", ReasonFolderTrustPending, false)
+		checkResult(t, res, ActionUse, "paired", "", true)
 		checkSkipped(t, res, map[string]string{"claude": ReasonNotCodexHost})
 	})
 
@@ -209,7 +221,7 @@ func TestSkipsBusyLease(t *testing.T) {
 		free := runningPaired("free")
 		free.LastActivity = evening.Add(-time.Hour)
 		res := Select(baseInput(clientCaller(), []Host{leased, free}))
-		checkResult(t, res, ActionUse, "free", ReasonFolderTrustPending, false)
+		checkResult(t, res, ActionUse, "free", "", true)
 		checkSkipped(t, res, map[string]string{"leased": ReasonHostBusy})
 	})
 
@@ -227,15 +239,30 @@ func TestSkipsBusyLease(t *testing.T) {
 		h.LeaseHolder = "someone-else"
 		h.LeaseExpiry = evening.Add(-time.Second)
 		res := Select(baseInput(clientCaller(), []Host{h}))
-		checkResult(t, res, ActionUse, "expired", ReasonFolderTrustPending, false)
+		checkResult(t, res, ActionUse, "expired", "", true)
 	})
 
 	t.Run("this caller's lease does not block", func(t *testing.T) {
 		h := runningPaired("ours")
 		h.LeaseHolder = "workbench"
+		h.LeaseLaunchID = "aaaaaaaaaaaaaaaa"
 		h.LeaseExpiry = evening.Add(time.Hour)
-		res := Select(baseInput(clientCaller(), []Host{h}))
-		checkResult(t, res, ActionUse, "ours", ReasonFolderTrustPending, false)
+		in := baseInput(clientCaller(), []Host{h})
+		in.Caller.LaunchID = "aaaaaaaaaaaaaaaa"
+		res := Select(in)
+		checkResult(t, res, ActionUse, "ours", "", true)
+	})
+
+	t.Run("this caller's other launch is busy", func(t *testing.T) {
+		h := runningPaired("ours")
+		h.LeaseHolder = "workbench"
+		h.LeaseLaunchID = "aaaaaaaaaaaaaaaa"
+		h.LeaseExpiry = evening.Add(time.Hour)
+		in := baseInput(clientCaller(), []Host{h})
+		in.Caller.LaunchID = "bbbbbbbbbbbbbbbb"
+		res := Select(in)
+		checkResult(t, res, "", "", ReasonHostBusy, false)
+		checkSkipped(t, res, map[string]string{"ours": ReasonHostBusy})
 	})
 }
 
@@ -252,7 +279,7 @@ func TestSkipsProtected(t *testing.T) {
 			tc.mark(&bad)
 			good := runningPaired("open")
 			res := Select(baseInput(clientCaller(), []Host{bad, good}))
-			checkResult(t, res, ActionUse, "open", ReasonFolderTrustPending, false)
+			checkResult(t, res, ActionUse, "open", "", true)
 			checkSkipped(t, res, map[string]string{"hands-off": ReasonProtected})
 		})
 	}
@@ -286,7 +313,7 @@ func TestSkipsRescueBlocked(t *testing.T) {
 			tc.mark(&bad)
 			good := runningPaired("open")
 			res := Select(baseInput(clientCaller(), []Host{bad, good}))
-			checkResult(t, res, ActionUse, "open", ReasonFolderTrustPending, false)
+			checkResult(t, res, ActionUse, "open", "", true)
 			checkSkipped(t, res, map[string]string{"blocked": ReasonRescueBlocked})
 		})
 	}
@@ -296,7 +323,9 @@ func TestStaleLoginSnapshotDoesNotBlock(t *testing.T) {
 	stale := suspendedPaired("stale", evening.Add(-48*time.Hour))
 	stale.RemoteState = StateLoginRequired
 	in := baseInput(clientCaller(), []Host{stale})
-	in.Projection.ExpiresAt = evening.Add(5*time.Minute + time.Second)
+	// A suspended host's frozen login-required is not a reading. Unknown
+	// does not block, and the host is still not eligible to resume.
+	in.Login = LoginUnknown
 	res := Select(in)
 	if res.Reason == ReasonLoginRequired {
 		t.Fatal("a frozen login-required snapshot blocked selection")
@@ -317,7 +346,6 @@ func TestStaleLoginSnapshotDoesNotBlock(t *testing.T) {
 	t.Run("human may create", func(t *testing.T) {
 		c := Caller{Kind: KindHuman, Name: "tom", Profile: "full"}
 		in := baseInput(c, []Host{stale})
-		in.Request.Profile = "dev"
 		res := Select(in)
 		checkResult(t, res, ActionCreate, "", "", false)
 	})
@@ -329,35 +357,32 @@ func TestStaleLoginSnapshotDoesNotBlock(t *testing.T) {
 		h := stale
 		h.ResolvedProfile = "full"
 		in := baseInput(c, []Host{h})
+		in.ResolvedProfile = in.DefaultProfile
 		res := Select(in)
 		checkResult(t, res, ActionCreate, "", "", false)
 		checkSkipped(t, res, map[string]string{"stale": ReasonPairingUnknown})
+	})
+
+	t.Run("unset login does not block", func(t *testing.T) {
+		in := baseInput(clientCaller(), []Host{stale})
+		in.Login = ""
+		res := Select(in)
+		if res.Reason == ReasonLoginRequired {
+			t.Fatal("an unset login blocked selection")
+		}
+		checkResult(t, res, ActionCreate, "", "", false)
 	})
 }
 
 func TestCurrentLoginFailureBlocksResumeAndCreate(t *testing.T) {
 	running := runningPaired("live")
 	suspended := suspendedPaired("asleep", evening.Add(-2*time.Hour))
-	hosts := []Host{running, suspended}
-	cases := []struct {
-		name      string
-		decodes   bool
-		expiresIn time.Duration
-	}{
-		{"does not decode", false, 24 * time.Hour},
-		{"expires inside five minutes", true, 4 * time.Minute},
-		{"expires exactly five minutes ahead", true, 5 * time.Minute},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			in := baseInput(clientCaller(), hosts)
-			in.Projection = Projection{Decodes: tc.decodes, ExpiresAt: evening.Add(tc.expiresIn)}
-			res := Select(in)
-			checkResult(t, res, "", "", ReasonLoginRequired, false)
-			if len(res.Skipped) != 0 {
-				t.Fatalf("login failure considered hosts: %#v", res.Skipped)
-			}
-		})
+	in := baseInput(clientCaller(), []Host{running, suspended})
+	in.Login = LoginLapsed
+	res := Select(in)
+	checkResult(t, res, "", "", ReasonLoginRequired, false)
+	if len(res.Skipped) != 0 {
+		t.Fatalf("a lapsed login considered hosts: %#v", res.Skipped)
 	}
 }
 
@@ -365,7 +390,7 @@ func TestSuspendedEligibleComesAfterRunning(t *testing.T) {
 	running := runningPaired("live")
 	asleep := suspendedPaired("asleep", evening.Add(-3*time.Hour))
 	res := Select(baseInput(devSession(), []Host{asleep, running}))
-	checkResult(t, res, ActionUse, "live", ReasonFolderTrustPending, false)
+	checkResult(t, res, ActionUse, "live", "", true)
 	checkSkipped(t, res, map[string]string{"asleep": ReasonNotChosen})
 
 	t.Run("resume the one suspended longest ago", func(t *testing.T) {
@@ -373,7 +398,7 @@ func TestSuspendedEligibleComesAfterRunning(t *testing.T) {
 		old := suspendedPaired("old", evening.Add(-48*time.Hour))
 		old.RescueState = RescueVerified
 		res := Select(baseInput(devSession(), []Host{recent, old}))
-		checkResult(t, res, ActionResume, "old", ReasonFolderTrustPending, false)
+		checkResult(t, res, ActionResume, "old", "", false)
 		checkSkipped(t, res, map[string]string{"recent": ReasonNotChosen})
 	})
 }
@@ -400,7 +425,7 @@ func TestIdleSuspendedPoolHostIsResumed(t *testing.T) {
 		t.Fatal("fixture lost who suspended the host")
 	}
 	res := Select(baseInput(devSession(), []Host{h}))
-	checkResult(t, res, ActionResume, "idle", ReasonFolderTrustPending, false)
+	checkResult(t, res, ActionResume, "idle", "", false)
 	checkSkipped(t, res, nil)
 }
 
@@ -412,7 +437,7 @@ func TestSelectsHostWhoseRepoDiffersWhenRequestedRepoReady(t *testing.T) {
 	if h.SpecRepo == "dev-env" {
 		t.Fatal("fixture no longer differs")
 	}
-	checkResult(t, res, ActionUse, "other-default", ReasonFolderTrustPending, false)
+	checkResult(t, res, ActionUse, "other-default", "", true)
 
 	t.Run("empty request uses spec.repo when it is Ready", func(t *testing.T) {
 		asleep := suspendedPaired("asleep", evening.Add(-time.Hour))
@@ -422,16 +447,7 @@ func TestSelectsHostWhoseRepoDiffersWhenRequestedRepoReady(t *testing.T) {
 		if res.Action == ActionCreate {
 			t.Fatal("empty repository created a host instead of reusing one")
 		}
-		checkResult(t, res, ActionResume, "asleep", ReasonFolderTrustPending, false)
-	})
-
-	t.Run("empty request trusts spec.repo", func(t *testing.T) {
-		h := runningPaired("live")
-		h.TrustedRepos = []string{"dev-env"}
-		in := baseInput(clientCaller(), []Host{h})
-		in.Request.Repository = ""
-		res := Select(in)
-		checkResult(t, res, ActionUse, "live", "", true)
+		checkResult(t, res, ActionResume, "asleep", "", false)
 	})
 }
 
@@ -445,7 +461,7 @@ func TestSkipsHostWhenRequestedRepoNotReady(t *testing.T) {
 	ready.SpecRepo = "haynes-ops"
 	ready.ReadyRepos = []string{"dev-env"}
 	res := Select(baseInput(clientCaller(), []Host{match, ready}))
-	checkResult(t, res, ActionUse, "bootstrap-ready", ReasonFolderTrustPending, false)
+	checkResult(t, res, ActionUse, "bootstrap-ready", "", true)
 	checkSkipped(t, res, map[string]string{"spec-matches": ReasonRepoNotReady})
 
 	t.Run("empty request skips a host whose spec.repo is not Ready", func(t *testing.T) {
@@ -544,33 +560,22 @@ func TestNamedHostIsNotReplaced(t *testing.T) {
 	better := runningPaired("better")
 	in := baseInput(clientCaller(), []Host{named, better})
 	in.Request.NamedHost = "named"
-	in.Projection.Decodes = false
+	in.Login = LoginLapsed
 	res := Select(in)
-	checkResult(t, res, ActionUse, "named", "", false)
+	checkResult(t, res, ActionUse, "named", "", true)
 	checkSkipped(t, res, nil)
 	if res.Host == "better" {
 		t.Fatal("replaced the named host")
 	}
 }
 
-func TestFolderTrustPendingStillSelects(t *testing.T) {
-	h := runningPaired("paired")
-	res := Select(baseInput(clientCaller(), []Host{h}))
-	checkResult(t, res, ActionUse, "paired", ReasonFolderTrustPending, false)
+func TestUseIsReady(t *testing.T) {
+	res := Select(baseInput(clientCaller(), []Host{runningPaired("paired")}))
+	checkResult(t, res, ActionUse, "paired", "", true)
 
-	t.Run("recorded trust makes the host ready", func(t *testing.T) {
-		h := runningPaired("paired")
-		h.TrustedRepos = []string{"dev-env"}
-		res := Select(baseInput(clientCaller(), []Host{h}))
-		checkResult(t, res, ActionUse, "paired", "", true)
-	})
-
-	t.Run("trust for another repo does not count", func(t *testing.T) {
-		h := runningPaired("paired")
-		h.TrustedRepos = []string{"haynes-ops"}
-		res := Select(baseInput(clientCaller(), []Host{h}))
-		checkResult(t, res, ActionUse, "paired", ReasonFolderTrustPending, false)
-	})
+	asleep := suspendedPaired("asleep", evening.Add(-time.Hour))
+	res = Select(baseInput(clientCaller(), []Host{asleep}))
+	checkResult(t, res, ActionResume, "asleep", "", false)
 }
 
 func TestLostLeaseReselects(t *testing.T) {
@@ -584,7 +589,7 @@ func TestLostLeaseReselects(t *testing.T) {
 	next := runningPaired("next")
 	next.LastActivity = evening.Add(-time.Hour)
 	res := Select(baseInput(clientCaller(), []Host{lost, next}))
-	checkResult(t, res, ActionUse, "next", ReasonFolderTrustPending, false)
+	checkResult(t, res, ActionUse, "next", "", true)
 	checkSkipped(t, res, map[string]string{"lost": ReasonHostBusy})
 }
 
@@ -598,7 +603,7 @@ func TestHeartbeatConflictRetriesSameHost(t *testing.T) {
 	other.LastActivity = evening
 	same.LastActivity = evening.Add(-time.Hour)
 	res := Select(baseInput(clientCaller(), []Host{other, same}))
-	checkResult(t, res, ActionUse, "same", ReasonFolderTrustPending, false)
+	checkResult(t, res, ActionUse, "same", "", true)
 	checkSkipped(t, res, map[string]string{"other": ReasonNotChosen})
 }
 
@@ -617,14 +622,14 @@ func TestCoordinatorKindDoesNotResume(t *testing.T) {
 		child := h
 		child.Parent = c.ParentRef
 		res := Select(baseInput(c, []Host{child}))
-		checkResult(t, res, ActionResume, "pool", ReasonFolderTrustPending, false)
+		checkResult(t, res, ActionResume, "pool", "", false)
 	})
 
 	t.Run("running host is used", func(t *testing.T) {
 		live := runningPaired("live")
 		live.Parent = "dev-agents/someone-else"
 		res := Select(baseInput(c, []Host{live}))
-		checkResult(t, res, ActionUse, "live", ReasonFolderTrustPending, false)
+		checkResult(t, res, ActionUse, "live", "", true)
 	})
 }
 
@@ -693,8 +698,8 @@ func TestSection3InventoryLiveCheck(t *testing.T) {
 			repo:    "dev-env",
 			action:  ActionUse,
 			host:    "dev-env-1110-230548",
-			reason:  ReasonFolderTrustPending,
-			ready:   false,
+			reason:  "",
+			ready:   true,
 			skipped: map[string]string{
 				"haynes-ops-1109-115326": ReasonProtected,
 				"dev-env-1027-010042":    ReasonProfileMismatch,
@@ -708,15 +713,25 @@ func TestSection3InventoryLiveCheck(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := baseInput(clientCaller(), hosts)
-			in.Request.Profile = tt.profile
+			in.ResolvedProfile = tt.profile
 			in.Request.Repository = tt.repo
-			in.Projection.ExpiresAt = time.Date(2026, 11, 18, 2, 26, 21, 0, time.UTC)
 			in.MaxRunningPerCell = 1
 			in.MaxRunning = 2
 			res := Select(in)
 			checkResult(t, res, tt.action, tt.host, tt.reason, tt.ready)
 			checkSkipped(t, res, tt.skipped)
 		})
+	}
+}
+
+func TestSuitableIsTheUseRule(t *testing.T) {
+	h := runningPaired("paired")
+	if !Suitable(h, clientCaller(), "dev", "dev-env", evening) {
+		t.Fatal("a paired host was not suitable")
+	}
+	h.OperatingMode = ModeSuspended
+	if Suitable(h, clientCaller(), "dev", "dev-env", evening) {
+		t.Fatal("a suspended host was suitable")
 	}
 }
 

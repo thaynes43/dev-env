@@ -286,6 +286,42 @@ func TestStandbyFlag(t *testing.T) {
 	}
 }
 
+func TestCodexHostSelectFlag(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.codexHostSelect {
+		t.Fatalf("--enable-codex-host-select must be off by default: %v %v", o.codexHostSelect, err)
+	}
+	if o.codexHostMaxPerCell != 1 || o.codexHostMaxRunning != 2 {
+		t.Fatalf("caps %d %d", o.codexHostMaxPerCell, o.codexHostMaxRunning)
+	}
+	if o.codexHostHandsOff != "" {
+		t.Fatalf("hands-off default %q", o.codexHostHandsOff)
+	}
+	if _, err = parseFlags([]string{"--enable-codex-host-select"}); err == nil {
+		t.Fatal("--enable-codex-host-select without --codex-host-hands-off was accepted")
+	}
+	o, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-hands-off="})
+	if err != nil || !o.codexHostSelect || o.codexHostHandsOff != "" {
+		t.Fatalf("explicit empty hands-off: %v %q %v", o.codexHostSelect, o.codexHostHandsOff, err)
+	}
+	o, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-hands-off=kept-off"})
+	if err != nil || !o.codexHostSelect || o.codexHostHandsOff != "kept-off" {
+		t.Fatalf("named hands-off: %v %q %v", o.codexHostSelect, o.codexHostHandsOff, err)
+	}
+	if _, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-hands-off=kept-off", "--api-bind-address=0"}); err == nil {
+		t.Fatal("--enable-codex-host-select without the API was accepted")
+	}
+	if _, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-hands-off=kept-off", "--codex-host-max-running=0"}); err == nil {
+		t.Fatal("a zero cap was accepted")
+	}
+	if _, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-hands-off=kept-off", "--codex-host-max-running-per-cell=0"}); err == nil {
+		t.Fatal("a zero cell cap was accepted")
+	}
+	if _, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-hands-off=Not_A_Name"}); err == nil {
+		t.Fatal("a hands-off name that is not a session name was accepted")
+	}
+}
+
 func TestAsksFlagDefaultOff(t *testing.T) {
 	o, err := parseFlags(nil)
 	if err != nil || o.asksEnabled {

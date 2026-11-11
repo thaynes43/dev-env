@@ -149,7 +149,7 @@ func (a *app) connect(ctx context.Context, o connOpts) (*conn, error) {
 	if caFile != "" {
 		pool, err := certPool(caFile)
 		if err != nil {
-			return nil, fail(ExitAuth, "%v", err)
+			return nil, noSelectResponse(stageCA, fail(ExitAuth, "%v", err))
 		}
 		tlsConf.RootCAs = pool
 	}
@@ -226,15 +226,21 @@ func (f *fileToken) Token(context.Context) (string, error) {
 	b, err := tokenfile.Read(f.path, tokenfile.MaxBytes)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", fail(ExitAuth, "no token at %s (%s)", f.path, f.from)
+			return "", localCredential("no token at %s (%s)", f.path, f.from)
 		}
-		return "", fail(ExitAuth, "the token at %s (%s): %v", f.path, f.from, err)
+		return "", localCredential("the token at %s (%s): %v", f.path, f.from, err)
 	}
 	tok := strings.TrimSpace(string(b))
 	if tok == "" {
-		return "", fail(ExitAuth, "the token file %s (%s) is empty", f.path, f.from)
+		return "", localCredential("the token file %s (%s) is empty", f.path, f.from)
 	}
 	return tok, nil
+}
+
+// localCredential is a token-file failure before any request. The message and
+// exit code are the ones other commands already print.
+func localCredential(format string, args ...any) error {
+	return noSelectResponse(stageCredentials, &exitError{code: ExitAuth, msg: fmt.Sprintf(format, args...)})
 }
 
 func (f *fileToken) Describe() string {
@@ -261,15 +267,15 @@ func newMinter(env Env) (*minter, error) {
 	dir := env.ServiceAccountDir
 	own, err := tokenfile.Read(filepath.Join(dir, "token"), tokenfile.MaxBytes)
 	if err != nil {
-		return nil, fail(ExitAuth, "the pod's ServiceAccount token: %v", err)
+		return nil, noSelectResponse(stageCredentials, fail(ExitAuth, "the pod's ServiceAccount token: %v", err))
 	}
 	ns, name, err := serviceAccountOf(strings.TrimSpace(string(own)))
 	if err != nil {
-		return nil, fail(ExitAuth, "the pod's ServiceAccount token at %s: %v", filepath.Join(dir, "token"), err)
+		return nil, noSelectResponse(stageCredentials, fail(ExitAuth, "the pod's ServiceAccount token at %s: %v", filepath.Join(dir, "token"), err))
 	}
 	pool, err := certPool(filepath.Join(dir, "ca.crt"))
 	if err != nil {
-		return nil, fail(ExitAuth, "the cluster's CA: %v", err)
+		return nil, noSelectResponse(stageCA, fail(ExitAuth, "the cluster's CA: %v", err))
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = nil
@@ -296,7 +302,7 @@ func (m *minter) Token(ctx context.Context) (string, error) {
 	}
 	own, err := tokenfile.Read(filepath.Join(m.env.ServiceAccountDir, "token"), tokenfile.MaxBytes)
 	if err != nil {
-		return "", fail(ExitAuth, "the pod's ServiceAccount token: %v", err)
+		return "", noSelectResponse(stageCredentials, fail(ExitAuth, "the pod's ServiceAccount token: %v", err))
 	}
 	body, _ := json.Marshal(map[string]any{
 		"apiVersion": "authentication.k8s.io/v1",
@@ -306,14 +312,14 @@ func (m *minter) Token(ctx context.Context) (string, error) {
 	u := fmt.Sprintf("%s/api/v1/namespaces/%s/serviceaccounts/%s/token", m.server, url.PathEscape(m.namespace), url.PathEscape(m.name))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", noSelectResponse(stageMinting, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(own)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	resp, err := m.http.Do(req)
 	if err != nil {
-		return "", fail(ExitRetry, "could not reach the Kubernetes API at %s to mint a token: %v", m.server, err)
+		return "", noSelectResponse(stageMinting, fail(ExitRetry, "could not reach the Kubernetes API at %s to mint a token: %v", m.server, err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -331,7 +337,7 @@ func (m *minter) Token(ctx context.Context) (string, error) {
 		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 			code = ExitRetry
 		}
-		return "", fail(code, "the Kubernetes API refused to mint a token for %s/%s (%d): %s", m.namespace, m.name, resp.StatusCode, msg)
+		return "", noSelectResponse(stageMinting, fail(code, "the Kubernetes API refused to mint a token for %s/%s (%d): %s", m.namespace, m.name, resp.StatusCode, msg))
 	}
 	var tr struct {
 		Status struct {
@@ -339,7 +345,7 @@ func (m *minter) Token(ctx context.Context) (string, error) {
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(raw, &tr); err != nil || tr.Status.Token == "" {
-		return "", fail(ExitFailed, "the Kubernetes API answered a TokenRequest for %s/%s with no token", m.namespace, m.name)
+		return "", noSelectResponse(stageMinting, fail(ExitFailed, "the Kubernetes API answered a TokenRequest for %s/%s with no token", m.namespace, m.name))
 	}
 	m.tok, m.at = tr.Status.Token, m.env.Now()
 	return m.tok, nil

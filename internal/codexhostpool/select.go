@@ -31,7 +31,6 @@ const (
 	ReasonProfileMismatch    = "profile_mismatch"
 	ReasonRepoNotReady       = "repo_not_ready"
 	ReasonUnpushedWork       = "unpushed_work"
-	ReasonFolderTrustPending = "folder_trust_pending"
 	ReasonNotCodexHost       = "not_codex_host"
 	ReasonNotRunning         = "not_running"
 	ReasonNotResumable       = "not_resumable"
@@ -69,24 +68,28 @@ const (
 	RescueVerified       = "Verified"
 	RescueFailed         = "Failed"
 
-	// DefaultProfile is the templates' default, used when a human or trusted
-	// client omits the profile, and for a workbench session, which may not
-	// name one.
-	DefaultProfile = "full"
 	// DefaultMaxRunningPerCell and DefaultMaxRunning are the section 6 flag
 	// defaults. A non-positive cap on Input selects them.
 	DefaultMaxRunningPerCell = 1
 	DefaultMaxRunning        = 2
+)
 
-	// projectionLead is the SyncCodexAccess test: the access expiry is more
-	// than five minutes ahead.
-	projectionLead = 5 * time.Minute
+// Login is the one shared Codex login fact for this selection (ruling J).
+// current and unknown do not block. lapsed stops every path with
+// login_required. A suspended host's frozen login-required is not a reading,
+// and a fact published by the keeper is not an input.
+type Login string
+
+const (
+	LoginCurrent Login = "current"
+	LoginLapsed  Login = "lapsed"
+	LoginUnknown Login = "unknown"
 )
 
 // Host is one Codex host as facts. Select does not read the cluster.
 //
-// UID is the session UID. This slice does not write a lease, so the choice
-// does not read it. SpecRepo is the host's default repository: the fit test
+// UID is the session UID. The route carries it into the lease step. SpecRepo
+// is the host's default repository: the fit test
 // only when the request names none. SuspendedBy is who suspended the host;
 // eligibility does not depend on it.
 type Host struct {
@@ -114,6 +117,7 @@ type Host struct {
 	OmittedRefs         int
 	RemoteState         string
 	LeaseHolder         string
+	LeaseLaunchID       string
 	LeaseExpiry         time.Time
 	ImageCurrent        bool
 	SuspendedBy         string
@@ -122,40 +126,40 @@ type Host struct {
 	Pool                bool
 	Archived            bool
 	Parent              string
-	TrustedRepos        []string
-}
-
-// Projection is the one current keeper Codex login fact.
-type Projection struct {
-	Decodes   bool
-	ExpiresAt time.Time
 }
 
 // Caller is who is asking. ParentRef is the identity stored on a child's
 // spec.parent. A coordinator may resume only a host whose parent equals it.
-// Workbench is the session-pod workbench (isWorkbenchSession).
+// Workbench is the session-pod workbench (isWorkbenchSession). LaunchID
+// distinguishes one launch from another that shares this caller's identity.
 type Caller struct {
 	Kind      string
 	Name      string
 	Profile   string
 	ParentRef string
 	Workbench bool
+	LaunchID  string
 }
 
-// Request is the profile and repository to fit, and an optional named host.
-// A named host does not enter selection.
+// Request is the repository to fit, and an optional named host. A named host
+// does not enter selection. The profile is Input.ResolvedProfile.
 type Request struct {
-	Profile    string
 	Repository string
 	NamedHost  string
 }
 
-// Input is everything Select may see. Now is the clock.
+// Input is everything Select may see. Now is the clock. Login is the one
+// shared fact: only LoginLapsed stops selection. Current, unknown and the
+// zero value do not. ResolvedProfile is the profile the caller already
+// resolved. DefaultProfile is the templates' default. Select has no default
+// of its own. A workbench session may create only when the two are equal.
 type Input struct {
 	Hosts             []Host
-	Projection        Projection
+	Login             Login
 	Caller            Caller
 	Request           Request
+	ResolvedProfile   string
+	DefaultProfile    string
 	Now               time.Time
 	MaxRunningPerCell int
 	MaxRunning        int
@@ -167,9 +171,7 @@ type Skip struct {
 	Reason string `json:"reason"`
 }
 
-// Result is the section 5 object. Ready is false, and Reason is
-// folder_trust_pending, when a chosen host is suitable or eligible and story
-// 695 has not recorded trust for the repository.
+// Result is the section 5 object. Ready is true exactly when Action is use.
 type Result struct {
 	Host    string `json:"host,omitempty"`
 	Action  string `json:"action,omitempty"`
@@ -190,13 +192,16 @@ type judged struct {
 // ruling E is not an input yet.
 func Select(in Input) Result {
 	if in.Request.NamedHost != "" {
-		return Result{Host: in.Request.NamedHost, Action: ActionUse}
+		return Result{Host: in.Request.NamedHost, Action: ActionUse, Ready: true}
 	}
-	if !projectionCurrent(in.Projection, in.Now) {
+	// A lapsed login stops every path before any host is considered. Unknown
+	// does not: a suspended host's frozen login-required is not a reading,
+	// and a create with an unknown login is what create does today.
+	if in.Login == LoginLapsed {
 		return Result{Reason: ReasonLoginRequired}
 	}
 
-	requested := requestedProfile(in.Caller, in.Request)
+	requested := in.ResolvedProfile
 	repo := in.Request.Repository
 	perCell, fleetCap := caps(in)
 	rows := make([]judged, 0, len(in.Hosts))
@@ -227,16 +232,14 @@ func Select(in Input) Result {
 
 	if len(suitable) > 0 {
 		best := pickRunning(suitable)
-		ready, why := readiness(best.host, repo)
-		return finish(rows, best.index, ActionUse, ready, why)
+		return finish(rows, best.index, ActionUse, true, "")
 	}
 	if len(busy) > 0 {
 		return finish(rows, -1, "", false, ReasonHostBusy)
 	}
 	if len(eligible) > 0 && room {
 		best := pickSuspended(eligible)
-		ready, why := readiness(best.host, repo)
-		return finish(rows, best.index, ActionResume, ready, why)
+		return finish(rows, best.index, ActionResume, false, "")
 	}
 	if len(fillers) > 0 && cellN >= perCell {
 		best := pickRunning(fillers)
@@ -245,10 +248,18 @@ func Select(in Input) Result {
 	if (len(eligible) > 0 && !room) || cellN >= perCell || fleetN >= fleetCap {
 		return finish(rows, -1, "", false, ReasonAtCapacity)
 	}
-	if !mayCreate(in.Caller) {
+	if !mayCreate(in.Caller, requested, in.DefaultProfile) {
 		return finish(rows, -1, "", false, ReasonCallerCannotCreate)
 	}
 	return finish(rows, -1, ActionCreate, false, "")
+}
+
+// Suitable is the single-host test Select uses for a running host that can
+// be used. profile is the resolved profile. repository is the request's
+// repository, empty when the request names none.
+func Suitable(h Host, c Caller, profile, repository string, now time.Time) bool {
+	_, ok, _ := judge(h, c, profile, repository, now)
+	return ok
 }
 
 func finish(rows []judged, chosen int, action string, ready bool, reason string) Result {
@@ -302,7 +313,7 @@ func judge(h Host, c Caller, requested, repo string, now time.Time) (reason stri
 		if !h.ImageCurrent {
 			return ReasonImageOutdated, false, false
 		}
-		if leaseHeldByOther(h, c.Name, now) {
+		if leaseHeldByOther(h, c, now) {
 			return ReasonHostBusy, false, false
 		}
 		return "", true, false
@@ -324,33 +335,14 @@ func judge(h Host, c Caller, requested, repo string, now time.Time) (reason stri
 	return "", false, true
 }
 
-func projectionCurrent(p Projection, now time.Time) bool {
-	return p.Decodes && !p.ExpiresAt.IsZero() && p.ExpiresAt.After(now.Add(projectionLead))
-}
-
-func requestedProfile(c Caller, r Request) string {
-	// A workbench session may not name a profile. The host it starts is the
-	// default profile, so that is the cell it fits.
-	if c.Kind == KindSession && c.Workbench {
-		return DefaultProfile
-	}
-	if c.Kind == KindSession || c.Kind == KindCoordinator {
-		return c.Profile
-	}
-	if r.Profile != "" {
-		return r.Profile
-	}
-	return DefaultProfile
-}
-
 func profileFits(c Caller, h Host, requested string) bool {
 	if !profileMatches(h.ResolvedProfile, requested) {
 		return false
 	}
 	// An ordinary session fits a host of its own profile. Ancestry does not
 	// pull a host out of another profile: a dev caller does not fit a full
-	// host, and a full caller does not fit the dev host. A workbench session
-	// is aimed at the default profile above, not at its own profile label.
+	// host, and a full caller does not fit a dev host. A workbench session
+	// fits the resolved profile it was given.
 	if c.Kind == KindSession && !c.Workbench {
 		return c.Profile != "" && c.Profile == h.ResolvedProfile
 	}
@@ -380,12 +372,12 @@ func repoReady(h Host, requested string) bool {
 	return contains(h.ReadyRepos, repo)
 }
 
-func mayCreate(c Caller) bool {
+func mayCreate(c Caller, resolved, def string) bool {
 	switch c.Kind {
 	case KindHuman, KindClient:
 		return true
 	case KindSession:
-		return c.Workbench
+		return c.Workbench && resolved != "" && resolved == def
 	default:
 		return false
 	}
@@ -420,20 +412,15 @@ func runningRemoteReason(state string) string {
 	}
 }
 
-func leaseHeldByOther(h Host, caller string, now time.Time) bool {
-	// Absent, expired, or already this caller's: not busy. A heartbeat bumps
-	// the session version and leaves the lease like that, so the choice stays
-	// on this host. Another caller's unexpired lease is the only reason to
-	// move on. The compare-and-swap retry is the later slice that writes the
-	// lease; this function only reads the lease it was given.
-	return h.LeaseHolder != "" && h.LeaseHolder != caller && h.LeaseExpiry.After(now)
-}
-
-func readiness(h Host, requested string) (bool, string) {
-	if contains(h.TrustedRepos, fitRepo(h, requested)) {
-		return true, ""
+func leaseHeldByOther(h Host, c Caller, now time.Time) bool {
+	// Absent or expired: not busy. Already this caller's for this launch id
+	// is not busy: a heartbeat bumps the session version and leaves the
+	// lease, so the same launch stays on this host. The same holder with
+	// another launch id is busy, as is another holder's unexpired lease.
+	if h.LeaseHolder == "" || !h.LeaseExpiry.After(now) {
+		return false
 	}
-	return false, ReasonFolderTrustPending
+	return h.LeaseHolder != c.Name || h.LeaseLaunchID != c.LaunchID
 }
 
 func caps(in Input) (perCell, fleet int) {
