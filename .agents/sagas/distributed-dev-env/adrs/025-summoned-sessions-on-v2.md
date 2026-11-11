@@ -128,9 +128,11 @@ DESIGN-001 left open.
    timeout, a remote session until its pod ends. v1 has the same gap: its
    watchdog frees the lane and leaves a hung window running. Nobody resumes
    a summoned session, a person included: the resume route refuses it. Once
-   a summoned session stops running, nothing reads its conversation (for
-   tasks that is ADR-020's rule; for remote sessions today's lifecycle),
-   where v1 keeps every transcript; Tom accepts that difference under
+   a summoned session stops running, nothing reads its conversation: no
+   supported reader exists, which is a limitation of the product today.
+   ADR-020 separately deletes a finished task 7 days after it ends and keeps
+   no conversation archive after that; it does not rule on reading one
+   before. v1 keeps every transcript; Tom accepts that difference under
    decision 15's second gate.
 8. **The keeper sends summoned-session pages and the digest** (DESIGN-064
    Q-16, option A). The operator records page events on the session's status;
@@ -156,7 +158,8 @@ DESIGN-001 left open.
    platform's filings among the latter, each toward `queuedUrgent`, counted
    per pool, so a queued escalation never refuses a remediation, nor the
    reverse. Past a bound a create is refused with 429. A Queued session has
-   no pod and no volume. An urgent refusal is never silent: it is counted in the
+   no pod and no volume. An urgent refusal is never silent, whether the queue bound or the hourly
+   limit made it: it is counted in the
    operator's create ledger, the keeper pages `overflow` once per caller per
    hour with the count, the responder fails open and pages as it does
    today, and an escalation caller logs it as it does today. The charge
@@ -173,7 +176,8 @@ DESIGN-001 left open.
 11. **The ops tier has no Pushover, and the platform tier does not select ops
     pods** (DESIGN-064 Q-01, Q-02). The ops policy carries its own DNS, API
     server and operator API rules. Its DNS rule lists v1's names minus
-    Pushover, never any name, and it keeps the ingress deny the platform tier
+    Pushover, plus the operator's own service name
+    `dev-env-operator.dev-env-system.svc.cluster.local`, never any name, and it keeps the ingress deny the platform tier
     gives today, with the same exclusions.
 12. **Summoning callers create and read their own sessions only,** and a
     summoned session creates no child sessions (DESIGN-064 Q-19).

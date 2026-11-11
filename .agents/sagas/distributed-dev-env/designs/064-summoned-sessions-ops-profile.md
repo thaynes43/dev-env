@@ -511,7 +511,12 @@ this design's own defaults, not from v1 or a record:
   never silent (R-01 F-04): the API adds the refusal to the caller's count of
   urgent refusals in the create ledger (below), in the same write that
   refuses it; the keeper sends one `overflow` page per caller per hour, with
-  the caller and the refusals not yet paged (6.8). The caller-side page path
+  the caller and the refusals not yet paged (6.8). An urgent create refused
+  because the hour's `createsPerHour` is spent is counted the same way (R1):
+  no charge, no Session, and one more urgent refusal in the ledger, written
+  by the refusal itself, whichever of the two limits the API checks first.
+  So every refused remediation or escalation is in an `overflow` page,
+  whatever refused it. The caller-side page path
   exists for remediation only: the responder fails open and pages, as it
   does today when a hand-off fails (6.12); an escalation caller logs the
   refusal, as today (6.13, Q-23). A platform
@@ -558,7 +563,9 @@ time of the last one. The charge always comes first:
 3. **The hour's last slot.** Two API replicas, or an API replica and the
    leader, competing for it are decided by the ledger's write: one
    optimistic-lock update wins, and the loser re-reads, finds the hour full
-   and gets 429 (a filing stays Pending, 6.6).
+   and gets 429 (a filing stays Pending, 6.6). If the refused create is
+   urgent, the refusal adds it to the caller's count of urgent refusals,
+   as above (R1).
 4. **Ageing out.** An entry has two uses, kept apart. It counts toward
    `createsPerHour` only during its own hour. After that it stays, while it
    is unsettled, only as the record admission reads, and no longer counts
@@ -651,17 +658,21 @@ reversed:
     sessions are never marked").
   - A task (a remediation or a curation run) keeps its Session, outcome and
     note for 7 days after it ends (R17), and a bundle of its unpushed work for
-    30 days. That is already Tom's rule, not new here: ADR-020 (2026-11-10;
-    he chose "Build exactly that" for a proposal that said "nothing else is
-    kept, no conversation archive"), decision 4, and C-53 (the history
-    archive has "no task-session use left"). Once the task has stopped,
-    nothing reads its conversation. For remote sessions the rule above is
-    today's lifecycle.
+    30 days. That retention is Tom's recorded decision, not new here:
+    ADR-020 (2026-11-10; he chose "Build exactly that" for a proposal that
+    said "nothing else is kept, no conversation archive"), decision 4, and
+    C-53 (the history archive has "no task-session use left"). ADR-020 rules
+    the deletion and the absence of an archive after it. It does not rule on
+    reading a transcript in the 7 days before. That nothing reads a stopped
+    task's conversation in that time is a limitation of the product today:
+    no supported reader exists (9.1) (R2). For remote sessions the rule above
+    is today's lifecycle.
   - So v2 keeps no summoned session's conversation readable once it stops
     running, where v1 keeps every transcript on its volume, and R-01's audit
     was made from those transcripts. That is a difference in retained data,
-    recorded under gate T-2 (8.1) and in V-15 (7.1), with the ADR-020 part
-    marked as already ruled.
+    recorded under gate T-2 (8.1) and in V-15 (7.1), with the two parts kept
+    apart: what ADR-020 already ruled (deletion after 7 days, no archive
+    after it) and what is a product limitation (no reader before that).
 
 **Which story lands what.** The create ledger, the dispatch id and the
 charge before create land in #738. The remote latch, the start deadline,
@@ -715,7 +726,11 @@ and run-agent refuses and no provider starts; a resume of a summoned session
 by a person, a session and a caller is refused (N3); N6's proof: distinct
 urgent keys over several hours with the escalation pool full give at most
 `queuedUrgent` Queued escalations, and every refusal appears in an
-`overflow` page; with the escalations' queue full, a new remediation is still
+`overflow` page; R1's proof: with `createsPerHour: 1`, `queuedUrgent: 4` and
+the escalation pool full, a second distinct urgent key in one hour is
+refused, charges nothing, creates no Session and is counted in the next
+`overflow` page, and with both limits full every refusal is counted once,
+whichever limit is checked first; with the escalations' queue full, a new remediation is still
 Queued, and with the remediations' queue full, a filing is still created
 (the advisory finding on `8bcdfc3d`); and a Queued session has no pod and no
 volume until it is admitted.
@@ -994,7 +1009,9 @@ not use the escalation entry's prefix: it is named under `esc-rem-` (6.6).
 - **Limits, from records a caller cannot remove (Q-19), by 5.9's model.** A
   summoning caller has no DELETE route and no RBAC in `dev-agents` or
   `dev-env-system`, so it can remove neither its sessions nor the ledger. Past
-  `createsPerHour` the create gets 429; past `queued`, an upgrade or curation
+  `createsPerHour` the create gets 429, and a remediation or an escalation
+  refused that way is counted in the ledger and paged as `overflow`, like one
+  refused past `queuedUrgent` (5.9, 6.8, R1); past `queued`, an upgrade or curation
   create gets 429; past `queuedUrgent` for its pool, a remediation or an
   escalation create gets 429, counted in the ledger and paged as `overflow`
   (5.9, 6.8); past a
@@ -1358,7 +1375,8 @@ restart between the two; two API creates at once. Also: a remediation or an
 escalation created while the queue already holds `queued` upgrades or
 curation runs is Queued, not refused, because the two bounds are apart (the
 advisory review's finding on `5d92c67a`); past `queuedUrgent` for its pool it
-is refused with an `overflow` page, never in silence (N6); a full escalations'
+is refused with an `overflow` page, never in silence (N6), and so is one
+refused past `createsPerHour` (R1); a full escalations'
 queue never refuses a remediation (the advisory finding on `8bcdfc3d`); a remediation Queued past `maxHold` files its escalation; two open escalations never hold a
 remediation; a held escalation pages at 15 minutes; a continuously
 heartbeating agentd reporting `interrupted` or `failed` with no task result
@@ -1401,7 +1419,7 @@ lifecycle events, which never stand in for a terminal event.
 | `escalation-reminder` | an escalation idle 24 hours |
 | `escalation-pending` | a remediation's escalation could not be filed (6.6) |
 | `escalation-abandoned` | a remediation's escalation was still Pending 24 hours after the remediation closed, and is given up: says it was never filed and why (6.6, N4) |
-| `overflow` | a caller's urgent creates were refused past `queuedUrgent` (5.9, N6): at most one per caller per hour, carrying the caller and the number of refusals not yet in an `overflow` page |
+| `overflow` | a caller's urgent creates were refused, past `queuedUrgent` or past `createsPerHour` (5.9, N6, R1): at most one per caller per hour, carrying the caller and the number of refusals not yet in an `overflow` page |
 | `static-token-rejected` | a summoned task's agent ended with a rejected login on the static token (below); at most once a day; a credential alarm beside the session's terminal event, never instead of it |
 
 **The terminal table (N8).** Every closed summoned session matches exactly
@@ -1446,7 +1464,8 @@ curation, which go to the digest (C8: the plan being busy is not a fault).
 DESIGN-001 3.7 paged only upgrade and escalation failures; ADR-025 replaces
 that with the terminal table.
 
-**Overflow (N6).** A refused urgent create has no session to carry a page
+**Overflow (N6, R1).** A refused urgent create, whichever limit refused it
+(`queuedUrgent` or `createsPerHour`), has no session to carry a page
 event, so the keeper reads the create ledger's refusal counts (5.9): new
 read-only RBAC, get on that one ConfigMap by name in `dev-env-system`. Its own
 ledger records, per caller, the refusal count it last paged and when. At most
@@ -1698,7 +1717,7 @@ remediation, whose escalation pages. v1 paged this case only after its
   A 429 from the client (exit 2), `summon urgent queue full` or
   `createsPerHour` included, is such a non-zero return, so the responder
   pages as it would have. The operator's `overflow` page (6.8) also counts
-  a `queuedUrgent` refusal.
+  the refusal, whichever limit made it (R1).
 - `rem_watchdog` in `respond.sh` is removed: the remediation's `maxHold`
   (20 minutes, its pending deadline), the task deadline (its running bound)
   and the guaranteed outcome cover it (6.6, 6.7). Every reader of `rem-*`
@@ -1747,10 +1766,9 @@ remediation, whose escalation pages. v1 paged this case only after its
   (lines 44–47: "an escalation write failure must NEVER break the primary
   run. This script traps its own errors, logs them, and exits 0/1/2 without
   side effects; call sites do not gate on the rc"). So a refused escalation
-  create is logged by the caller as today. Past `queuedUrgent`, the
-  platform's `overflow` page (6.8) is what tells Tom; past `createsPerHour`,
-  the storm limit, the API logs the refusal (6.4). Nothing new is built
-  in the callers.
+  create is logged by the caller as today. Whichever limit refused it,
+  `queuedUrgent` or `createsPerHour`, the platform's `overflow` page (6.8) is
+  what tells Tom (R1). Nothing new is built in the callers.
 - The reason and run reference go as `data` fields; the platform renders the
   brief (5.6).
 - The escalation contract moves per Q-08. The page link is 6.10's.
@@ -1848,7 +1866,7 @@ deferral.
 | V-12 static token mint date, pages at 30 and 7 days | a page when the static token is rejected: #742, before #749 (Q-18). The mint date and the pages at 30 and 7 days: **deferred** to a story the coordinator files; due before about 2027-06 | 6.8, 6.15 |
 | V-13 never ended by a change | already built (R39: summoned sessions never drain); #741 keeps it | 6.7 |
 | V-14 priority, fallback on quota | #743 | 6.9 |
-| V-15 retention | tasks: ADR-020 (live, R17): kept 7 days after they end, whatever the outcome, not 1 day after `done`. Remote: today's timers (Q-12): a finished escalation stays on Tom's phone list until its idle suspend (72 hours idle with no client), when the CLI archives its entry; its volume is kept until it is archived 168 hours later. No summoned session can be resumed, by anyone (5.9, N3). **Retained data differs from v1** (Q-22): v1 keeps every transcript on its volume, and R-01's audit was made from them; v2 keeps no summoned session's conversation readable once it stops running. For tasks that is already Tom's rule (ADR-020, "no conversation archive"); for remote sessions it is today's lifecycle. Recorded under gate T-2 (8.1); the reader and a bounded resume are not built (9.1). R-01 asked for 1 day after `done` and 7 days after `failed` | 5.9, 6.7, 6.10, 8.1, 9.1 |
+| V-15 retention | tasks: ADR-020 (live, R17): kept 7 days after they end, whatever the outcome, not 1 day after `done`. Remote: today's timers (Q-12): a finished escalation stays on Tom's phone list until its idle suspend (72 hours idle with no client), when the CLI archives its entry; its volume is kept until it is archived 168 hours later. No summoned session can be resumed, by anyone (5.9, N3). **Retained data differs from v1** (Q-22): v1 keeps every transcript on its volume, and R-01's audit was made from them; v2 keeps no summoned session's conversation readable once it stops running. Two parts, kept apart (R2): Tom's recorded decision (ADR-020) deletes a finished task 7 days after it ends and keeps no conversation archive once its HOME is deleted; that no supported reader exists for a stopped session's conversation before then, task or remote, is a limitation of the product today, not a ruling of his. Recorded under gate T-2 (8.1); the reader and a bounded resume are not built (9.1). R-01 asked for 1 day after `done` and 7 days after `failed` | 5.9, 6.7, 6.10, 8.1, 9.1 |
 | V-16 cost record | reused: `status.usage` and `status.conversationUsage` (R35). **Deferred:** the metrics export, to a story the coordinator files if it wants one. It blocks no story here and no plan 10 acceptance line (none names metrics) (C9) | 4 |
 | V-17 read Activity | #747 | 6.12 |
 
@@ -1967,7 +1985,7 @@ plain words, on Tom's phone; the answer comes back here as a dated ruling.
 | Gate | What Tom decides | Source | State | Blocks |
 |---|---|---|---|---|
 | T-1 | his ruling on this design as an access change | item 609: "A short design and Tom's ruling first, since it is an access change." The coordinator's rulings (10.1 to 10.3) do not stand in for it. Q-14 (moving the ops bot's App key into the keeper; DESIGN-001 6.4 already places it there) is part of this question | **Pending Tom.** The coordinator asks once the re-review of this round is clean | every build story that changes access: #735 to #745 |
-| T-2 | his yes before #749 stops dev-env-ops | epic #116's acceptance ("Tom explicitly accepts everyday workflows, retained data and operational ownership before v1/dev-env-ops/Headlamp retirement"); item 610, Out: "Retiring dev-env-ops itself without Tom's yes" | **Pending Tom.** The coordinator asks once, with the evidence that every caller has run on v2, and with the one difference in retained data he accepts with it: v1 keeps every transcript on its volume, and R-01's audit was made from them; v2 keeps no summoned session's conversation readable once it stops running (5.9). For tasks that is already Tom's rule (ADR-020, 2026-11-10, "no conversation archive"); for remote sessions it is today's lifecycle | #749, and so #750 |
+| T-2 | his yes before #749 stops dev-env-ops | epic #116's acceptance ("Tom explicitly accepts everyday workflows, retained data and operational ownership before v1/dev-env-ops/Headlamp retirement"); item 610, Out: "Retiring dev-env-ops itself without Tom's yes" | **Pending Tom.** The coordinator asks once, with the evidence that every caller has run on v2, and with the one difference in retained data he accepts with it: v1 keeps every transcript on its volume, and R-01's audit was made from them; v2 keeps no summoned session's conversation readable once it stops running (5.9). Two parts, kept apart (R2): his recorded decision (ADR-020, 2026-11-10) deletes a finished task 7 days after it ends and keeps no conversation archive once its HOME is deleted; that no supported reader exists for a stopped session's conversation before then, task or remote, is a limitation of the product today, not a ruling of his | #749, and so #750 |
 | T-3 | his yes to deleting the stored records #750 removes, asked once with the list: PVC `dev-env-ops-home` and ConfigMap `upgrade-work-orders` with its order history (6.16) | item 734's constraints (deleting volumes or data needs Tom); 6.16 | **Pending Tom**, a separate yes from T-2. Stopping the service (T-2) is not a yes to deleting data | #750's deletion of those records only |
 
 ## 9. Not verified
@@ -2129,6 +2147,21 @@ session `dev-env-1111-170449`.
 | Advisory finding on `8bcdfc3d` (PR review comment 4541144057): one `queuedUrgent` for both pools breaks C2 | the answer to `op734-fix2-q-6`: "One field, counted per pool: at most queuedUrgent Queued remediations and, separately, at most queuedUrgent Queued escalations, the platform's filings among them. A queued escalation never refuses a remediation, nor the reverse. The finding is right: my N6 wording put both under one bound and broke C2" | 5.9 (the queues, the proof); 6.4 (schema, limits); 6.6 (admission, Blocked); 6.7 (holds, the proof); ADR-025 decision 9 |
 | Advisory finding on `8bcdfc3d` (PR review comment 4541144847): N4's timing assumes the clean-up deletes every summoned task | the answer to `op734-fix2-q-7`: "Correct the sentence, and record under 'not built' that a summoned session closed before it launched is kept until reaped, with no clean-up trigger and no idle timer; a follow-up story ... decides its retention. B and C change data lifecycle and do not belong in a fix round"; and "say in 5.9 that nothing is created for a Queued session before admission, no pod and no volume, and put that in #741's proof" | 5.9 (nothing is created for a Queued session; the proof); 6.6 (Abandoned); 9.1 |
 
+### 10.4 On the third review
+
+The third independent review (PR comment 6803538012, on `b6b70422`) found no
+HIGH, one MEDIUM and two LOW. The coordinator, session `dev-env-1111-143337`
+(item 751), accepted all three on 2026-11-11 and made these edits itself,
+because both fix workers' tasks had ended and each change is a few lines.
+They are not rulings by Tom, and they were sent for an independent check as a
+separate change.
+
+| Finding | Ruling | Where this design carries it out |
+|---|---|---|
+| R1, MEDIUM: an urgent create refused by the hourly limit was only logged | accepted: it is counted in the ledger and paged as `overflow`, like one refused past `queuedUrgent`; no charge and no Session for the refusal; every refusal is counted once, whichever limit is checked first | 5.9 (the queues, the ledger, the proof); 6.4; 6.7 (proof); 6.8 (the event and the overflow paragraph); 6.12; 6.13; 11 item 7; ADR-025 decision 9 |
+| R2, LOW: "no reader once a task stops" was attributed to Tom too broadly | accepted: ADR-020 records the 7-day deletion and no conversation archive after it; that no supported reader exists before then is a limitation of the product today, not a ruling of his | 5.9; 7.1 (V-15); 8.1 (T-2); ADR-025 decision 7 |
+| R3, LOW: ADR-025 decision 11 still gave the DNS list without the operator's name | accepted: the ADR names `dev-env-operator.dev-env-system.svc.cluster.local`, as 6.1 does | ADR-025 decision 11 |
+
 ## 11. What changes in DESIGN-001, and what was found wrong
 
 ADR-025 supersedes these parts of DESIGN-001 (Accepted with ADR-001):
@@ -2155,8 +2188,8 @@ ADR-025 supersedes these parts of DESIGN-001 (Accepted with ADR-001):
 7. 3.7 "Storm limits" and "Escalations are not single-flight": past a pool
    a create is queued, not refused; past `createsPerHour` it is refused;
    past its queue bound a create is refused (`queued` for upgrades and
-   curation, `queuedUrgent` for remediations and escalations, which pages
-   `overflow`); and an escalation starts within its caller's `escalations`
+   curation, `queuedUrgent` for remediations and escalations); a refused
+   remediation or escalation pages `overflow`, whichever limit refused it; and an escalation starts within its caller's `escalations`
    pool and `createsPerHour`, not its `concurrent` limit (5.9, 6.4, 6.7).
 8. 3.7 "Retention": tasks follow ADR-020; remote sessions follow v2's timers
    (Q-12).
