@@ -592,8 +592,9 @@ host, and a fallback it is allowed to create is a `full` host.
 | Command or route | Change |
 | --- | --- |
 | `agent-run thread start --agent codex` with `--host` | None. The named host, today's errors |
-| `agent-run thread start --agent codex` without `--host` | Calls select, then today's thread start on the chosen host. A `resume` action resumes first and waits until the host is Running or the wait ends. A `create` action creates only when section 6 allows it, then the caller still has to pair before a thread will pass `paired` |
-| `agent-run --agent codex --interactive` | Calls select before create. A suitable or eligible host is printed and no host is created. Create remains the fallback |
+| `agent-run codex-host select --repo <name> [--profile <name>] [--check]` | New. Prints the section 5 object. `--check` is `?check=true` and writes nothing. Without `--check`, the command carries out `use`, `resume`, `create` or `report`. The live check in section 9 is this command with `--check` |
+| `agent-run thread start --agent codex` without `--host` | Calls select, then today's thread start on the chosen host. A `resume` action resumes first and waits until the host is Running or the wait ends. A `create` action creates only when section 6 allows it, then the caller still has to pair before a thread will pass `paired`. A `report` action prints the object and does not start a thread |
+| `agent-run --agent codex --interactive` | Calls select before create. A suitable or eligible host is printed and no host is created. Create remains the fallback. A `report` action prints the object and does not create |
 | `agent-run thread status` | None. Still the named host, exec route only |
 | `agent-run pair` | None. Still a person's command. The selector never runs it |
 | `agent-run suspend`, `resume`, `reap` of a named session | None. A person or a caller who names a session keeps today's reach. The select route returns `resume` only for an eligible host and only to a caller today's resume route would accept. Caller kind `coordinator` does not get `resume` for a pooled host it did not start |
@@ -677,11 +678,14 @@ facts and a projection fact and returns the section 5 object. Named tests:
 `TestLostLeaseReselects`, `TestHeartbeatConflictRetriesSameHost`,
 `TestCoordinatorKindDoesNotResume`, `TestUnsuitableRunningHostBlocksCreate`.
 
-**Slice 2. The route and the two commands.** `POST /v1/codex-hosts/select`
-and `?check=true`. `thread start` without `--host`, and
-`--agent codex --interactive`, call it. Fakes cover `caller_cannot_create`,
-a workbench create that omits profile, and a named `--host` that never calls
-select. `TestCheckWritesNothing` asserts no patch client is called.
+**Slice 2. The route and the commands that call it.** `POST
+/v1/codex-hosts/select` and `?check=true`. The new command is
+`agent-run codex-host select --repo <name> [--profile <name>] [--check]`.
+`thread start` without `--host`, and `--agent codex --interactive`, call
+the same route. Fakes cover `caller_cannot_create`, a workbench create that
+omits profile, a named `--host` that never calls select, and `--check`
+printing the object. `TestCheckWritesNothing` asserts no patch client is
+called.
 
 **Slice 3. Resume.** The route's `resume` action uses the existing resume
 route, then waits. It never calls that route for caller kind `coordinator`
