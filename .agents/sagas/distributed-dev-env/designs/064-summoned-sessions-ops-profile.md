@@ -1,12 +1,12 @@
 # DESIGN-064: Summoned sessions and the ops profile against today's code
 
-- **Status:** Proposed 2026-11-11 for coordinator review (story OP734). The
-  coordinator ruled on all fifteen questions on 2026-11-11 (section 10.1),
-  then on every finding of two reviews of the first draft (section 10.2) and
-  of the re-review of fix round 1 (section 10.3), and sets Accepted when it
-  rules on the re-reviewed PR. Three gates are Tom's and Pending (section
-  8.1): no build story that changes access starts before his ruling on this
-  design. This document builds, deploys and switches nothing.
+- **Status:** Accepted 2026-11-11 by the coordinator of story OP751 (session
+  `dev-env-1111-143337`), on dev-env PR 1075, after four independent reviews
+  and with the rulings in section 10 (10.5 has the acceptance). Those rulings
+  are the coordinator's, not Tom's. Gate T-1 is ruled: Tom answered "Yes,
+  build it (Recommended)" on the coordinator's phone prompt on 2026-11-11
+  (section 8.1 quotes the prompt in full). Gates T-2 and T-3 are Tom's and
+  Pending. This document builds, deploys and switches nothing.
 - **Tracking:** [Story OP734](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/734),
   under [Epic #112](https://work.haynesnetwork.com/work_packages/112). The
   coordinator's story is [OP751](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/751),
@@ -818,9 +818,11 @@ ingress rule carries the same exclusions as the egress rules.
   or reads it. Readiness covers both tokens once the flag is on.
 - haynes-ops: an ExternalSecret for the App's files from the 1Password item
   that feeds `upgrade-shepherd-bot-secret` today (item name not verified),
-  mounted only in the keeper. Q-14 (on #736) asks Tom before that
-  ExternalSecret PR merges. It blocks that PR only, not #736's source work in
-  dev-env, which moves no key (C9).
+  mounted only in the keeper. Q-14 (on #736) is ruled inside gate T-1 (8.1):
+  Tom's yes of 2026-11-11 covers the keeper holding this key, for the same
+  bot with the same rights. #736 still reads the installation's permissions
+  and repositories from the App before that ExternalSecret PR merges; if they
+  are wider than this design describes, the coordinator asks Tom again.
 - Q-09: the playbook (`cigar-curation.md`, "Today the fallback is what
   actually fires") says the installation covers cigar-journal but grants no
   `issues`; the HelmRelease asks for `issues: write`; DESIGN-001 6.4 says
@@ -831,9 +833,8 @@ ingress rule carries the same exclusions as the egress rules.
 - **Q-09 as ruled:** exactly v1's permission set and the installation's
   current repository list, nothing added. The stale text (the playbook or
   DESIGN-001 6.4) is corrected in the story that touches it. Any widening is a
-  question for Tom. Q-14 (moving the App key to the keeper) is Pending Tom,
-  is asked as part of gate T-1 (8.1), and blocks only #736's ExternalSecret
-  PR.
+  question for Tom. Q-14 (moving the App key to the keeper) is ruled yes by
+  Tom inside gate T-1 (8.1), for the same bot with the same rights.
 - An installation token has no refresh token. The keeper and the
   `gh-refresher` sidecar minting the same App during the overlap do not
   revoke each other.
@@ -1932,7 +1933,7 @@ line, and #751's acceptance should list them.
 | an idle-suspend exemption during a rollout | not needed: the watchdog trips before today's idle timers, a busy agent is not idle, and a session suspended before its outcome is closed as `onUnreported` | 6.7 |
 | start at a time | out of scope (item 734); the caller starts the session at its own time | 6.14 |
 | status written back to `upgrade-work-orders` | no: the readers move to the API (Q-07); each reader and its story are in 5.7 | 5.7 |
-| "A short design and Tom's ruling first, since it is an access change" | **Pending Tom**: gate T-1. The coordinator's rulings do not stand in for it. No build story that changes access (#735 to #745) starts before Tom rules on this design (F8) | 8.1 |
+| "A short design and Tom's ruling first, since it is an access change" | **Ruled yes by Tom, 2026-11-11**: gate T-1, on the coordinator's phone prompt (8.1). The coordinator's rulings did not stand in for it (F8) | 8.1 |
 
 ## 8. Questions
 
@@ -1955,7 +1956,7 @@ narrowed Q-17.
 | Q-06 | caller client | caller images run curl and jq today; no v2 `agent-run` | A wrapper in a new ConfigMap; B in `upgrade-coordination-lib`; C `agent-run` in images | A | **Ruled A**, coordinator, 2026-11-11, with a condition (6.5) | #739 |
 | Q-07 | status write-back | `run-night.mjs` line 216 and `respond.sh` line 264 read the ConfigMap | A readers use the API; B the operator writes into `upgrade-agent` | A | **Ruled A**, coordinator, 2026-11-11, with conditions (5.7) | #739, #747, #748, #610 |
 | Q-08 | where contracts live | playbooks in `dev-env-ops-scripts`; common rules assume a tracker and phone | A haynes-ops `.agents/runbooks/ops/`, prompt names the file, one ops paragraph; B a ConfigMap mount | A | **Ruled A**, coordinator, 2026-11-11, with conditions (5.6) | #746–#748 |
-| Q-09 | ops bot permissions and repositories | the HelmRelease asks `issues: write`; the playbook says the App has none | A v1's permissions, repositories read from the App; B haynes-ops only | A | **Ruled A narrowly**, coordinator, 2026-11-11 (6.2). Q-14 on #736 stays Pending Tom, is asked within gate T-1 (8.1), and blocks only #736's ExternalSecret PR (C9) | #736 |
+| Q-09 | ops bot permissions and repositories | the HelmRelease asks `issues: write`; the playbook says the App has none | A v1's permissions, repositories read from the App; B haynes-ops only | A | **Ruled A narrowly**, coordinator, 2026-11-11 (6.2). Q-14 on #736 was asked within gate T-1 and is ruled yes by Tom, 2026-11-11, for the same bot with the same rights (8.1) | #736 |
 | Q-12 | retention | ADR-020; templates `lifecycle` | tasks: ADR-020; remote: A today's timers, B per-outcome timers | A | Tasks: **Ruled** 2026-11-10 by Tom, ADR-020 decision 2 (quoted in ADR-020). Remote: **Ruled A**, coordinator, 2026-11-11, with a condition (7.1, V-15) | #745 |
 | Q-13 | escalations in parallel | DESIGN-001 3.7: "Escalations are not single-flight" | keep DESIGN-001's rule | keep | **Ruled** 2026-10-06: D-36 in DESIGN-001 3.7, accepted with ADR-001. The saga decision log, row 3, records D-01 to D-37 as decided that day with ADR-001; it does not quote Tom on this rule. No new question | — |
 | Q-15 | an upgrade order waiting for Tom or a time | #603's states; #601's approval of record is a GitHub review | A no new state: the ask ends `done`; B a `waiting` state | A | **Ruled A for v2**, coordinator, 2026-11-11; the shepherd's use is settled on item 610 (6.14) | #610 |
@@ -1968,14 +1969,16 @@ narrowed Q-17.
 | Q-22 | what Tom keeps of a terminal summoned session | `agent-run history` reads private Sessions only; remote sessions are never marked; ADR-020 keeps no conversation archive for tasks (5.9, N3) | A write it as the code is; B mark summoned remote sessions private | A | **Ruled A**, coordinator, 2026-11-11, with a precision on ADR-020 (5.9, 8.1, 10.3) | nothing |
 | Q-23 | an escalation caller's fallback when its create is refused | `escalate.sh` lines 44–47: call sites do not gate on its exit code; `remediate.sh` lines 43–47 fail open (6.12, 6.13, N6) | A state the premise, build nothing in the callers; B a caller-side page | A | **Ruled A**, coordinator, 2026-11-11 (6.12, 6.13, 10.3) | #748's acceptance wording |
 
-Q-10 (#747), Q-11 (#749) and Q-14 (#736) belong to those items. Q-04's and
+Q-10 (#747) and Q-11 (#749) belong to those items; Q-14 (#736) is ruled
+inside gate T-1 (8.1). Q-04's and
 Q-16's options B are on Tom's list; neither was chosen. Q-20 is the
 coordinator's, recorded by its ruling on N11, and is pending. Q-21 to Q-23
 were asked in fix round 2 as notes `op734-fix2-q-1` to `op734-fix2-q-3`, with
 `op734-fix2-q-4` correcting the premise of q-2 and `op734-fix2-q-5` settling
 the filing's ledger entry under Q-21, and were ruled the same day (10.3).
 Notes `op734-fix2-q-6` and `op734-fix2-q-7` answered the advisory review's two
-findings on `8bcdfc3d` (10.3). Three gates are Tom's and are Pending (8.1).
+findings on `8bcdfc3d` (10.3). Three gates are Tom's (8.1): T-1 is ruled,
+T-2 and T-3 are Pending.
 
 ### 8.1 Tom's gates (F8)
 
@@ -1984,9 +1987,25 @@ plain words, on Tom's phone; the answer comes back here as a dated ruling.
 
 | Gate | What Tom decides | Source | State | Blocks |
 |---|---|---|---|---|
-| T-1 | his ruling on this design as an access change | item 609: "A short design and Tom's ruling first, since it is an access change." The coordinator's rulings (10.1 to 10.3) do not stand in for it. Q-14 (moving the ops bot's App key into the keeper; DESIGN-001 6.4 already places it there) is part of this question | **Pending Tom.** The coordinator asks once the re-review of this round is clean | every build story that changes access: #735 to #745 |
+| T-1 | his ruling on this design as an access change | item 609: "A short design and Tom's ruling first, since it is an access change." The coordinator's rulings (10.1 to 10.3) do not stand in for it. Q-14 (moving the ops bot's App key into the keeper; DESIGN-001 6.4 already places it there) is part of this question | **Ruled yes by Tom, 2026-11-11**, on the coordinator's phone prompt, quoted below the table. It includes Q-14 for the same bot with the same rights; a wider repository list or wider permissions than today's is not covered and is asked again | nothing now: #735 to #745 may start, each under its own story and its own review |
 | T-2 | his yes before #749 stops dev-env-ops | epic #116's acceptance ("Tom explicitly accepts everyday workflows, retained data and operational ownership before v1/dev-env-ops/Headlamp retirement"); item 610, Out: "Retiring dev-env-ops itself without Tom's yes" | **Pending Tom.** The coordinator asks once, with the evidence that every caller has run on v2, and with the one difference in retained data he accepts with it: v1 keeps every transcript on its volume, and R-01's audit was made from them; v2 keeps no summoned session's conversation readable once it stops running (5.9). Two parts, kept apart (R2): his recorded decision (ADR-020, 2026-11-10) deletes a finished task 7 days after it ends and keeps no conversation archive once its HOME is deleted; that no supported reader exists for a stopped session's conversation before then, task or remote, is a limitation of the product today, not a ruling of his | #749, and so #750 |
 | T-3 | his yes to deleting the stored records #750 removes, asked once with the list: PVC `dev-env-ops-home` and ConfigMap `upgrade-work-orders` with its order history (6.16) | item 734's constraints (deleting volumes or data needs Tom); 6.16 | **Pending Tom**, a separate yes from T-2. Stopping the service (T-2) is not a yes to deleting data | #750's deletion of those records only |
+
+**T-1, as asked and answered.** The coordinator asked on Tom's phone, with a
+native prompt in session `dev-env-1111-143337`:
+
+> The design for moving dev-env-ops's work onto v2 is written and has had four independent reviews (dev-env PR 1075). It changes who can start privileged sessions, and the tracker says that needs your ruling before anything is built. Should I go ahead and build it?
+
+Tom chose **"Yes, build it (Recommended)"**. That option read:
+
+> You get: the five automations that use dev-env-ops today (alert responder, upgrade shepherd and its triage, health gate, cigar curation) start their Claude sessions through v2, so dev-env-ops and its monthly sign-in can be retired later. That retirement is a separate yes. What changes: each automation gets a rule in git that fixes what it may start, and v2 writes what the session is told. Those sessions keep the cluster rights dev-env-ops has now, with a tighter network. v2's keeper also holds the upgrade bot's GitHub key (same bot, same rights). Known loss, decided with the retirement: v2 keeps no readable transcript of a finished session; v1 keeps them all.
+
+The two options he did not choose were "Yes, but not the bot key yet" and
+"Not yet, I want to read it". The answer was read in that session at
+2026-11-11T18:42Z by the shell clock. It is a selection on a phone prompt,
+not typed words. The coordinator recorded it on OpenProject item 751
+(comment 7112) and item 734 (comment 7113) and told Tom in its session what
+it had recorded. It is not a yes to T-2 or T-3.
 
 ## 9. Not verified
 
@@ -2065,7 +2084,7 @@ ruling by Tom; record it so." Quotes are the coordinator's.
 | Q-06 | A | "name every object a caller pod newly mounts or reaches" (6.5); the network part is in 5.5. |
 | Q-07 | A | Record that this answers item 609's write-back ask with "the readers move to the API", and name each reader with its story (5.7, 7.5). The coordinator tells the upgrade saga's owner on item 609 when the design merges. |
 | Q-08 | A | "say who builds the prompt and where its fixed template lives; caller-supplied text stays fenced as data, never instructions; the contract is read from the worktree at the commit the session cloned; the common-rules paragraph is a haynes-ops PR in the first story that needs it (#746)" (5.6, 6.11). C1 (10.2) decides who builds it: the platform. |
-| Q-09 | A, narrowly | "exactly v1's permission set and the installation's current repository list, nothing added"; the stale text is corrected in the story that touches it; "Any widening is a question for Tom." Q-14 stays Pending Tom (6.2); C9 (10.2) narrows what it blocks to #736's ExternalSecret PR, and F8 puts it inside gate T-1 (8.1). |
+| Q-09 | A, narrowly | "exactly v1's permission set and the installation's current repository list, nothing added"; the stale text is corrected in the story that touches it; "Any widening is a question for Tom." Q-14 stayed Pending Tom at that ruling (6.2); C9 (10.2) narrowed what it blocked to #736's ExternalSecret PR, F8 put it inside gate T-1, and Tom ruled it yes there on 2026-11-11 (8.1). |
 | Q-12 | tasks: ADR-020; remote: A | "today's timers apply unchanged". Record the difference from plan 10 and V-15, "including what Tom sees: a finished escalation stays on his phone list until idle-suspend" (6.7, 7.1). |
 | Q-15 | A for v2 | No new outcome state. The shepherd's flow is "settled on item 610 with the upgrade saga's owner", not decided here (6.7, 6.14). |
 | Q-16 | A | "the page text is a fixed template; a session's note is truncated and marked as session text; the only link a page carries is the verified status.remoteControl URL or the console page, never a URL taken from a note; the dedupe survives a keeper restart"; say what happens to the operator's egress to `api.pushover.net` (6.8, 5.5: removed in #742). |
@@ -2170,6 +2189,31 @@ refusals, and two sentences (10.3's N3 row and section 11) that still tied
 applied the wording the check prescribed, in the commit after `8376fdbe`. That
 last commit had no further second-family review; it changes those three
 passages and this paragraph only.
+
+### 10.5 Acceptance
+
+Accepted by the coordinator, session `dev-env-1111-143337` (item 751), on
+2026-11-11, on dev-env PR 1075. The acceptance is the coordinator's. The one
+ruling of Tom's is gate T-1 (8.1).
+
+- **Four independent reviews by a second model family** (the provider
+  reported `gpt-6-astra` for each), one PR comment each: 6800332382 on
+  `3d117f67` (every reuse row opened; F1 to F9), 6802046490 on `e329ce56`
+  (N1 to N11), 6803538012 on `b6b70422` (R1 to R3) and 6803756636 on
+  `8376fdbe` (two wording leftovers). The coordinator's rulings on them: PR
+  comments 6800448147, 6802125957 with 6802364475, 6803625729 and 6803795961.
+- **The automatic advisory review** made four findings across the rounds;
+  each is answered on the PR. The last, on ADR-025 decision 10 (a summoned
+  task closed before it launched is not deleted after 7 days), is fixed in
+  the commit that sets Accepted.
+- **What no second-family review covered:** the wording commit `ce898c41` and
+  the commit that sets Accepted. They change status lines, the record of
+  T-1, one clause of ADR-025 decision 10 and the three passages 10.4 names.
+- **Left to the build stories as required proofs,** by the third review:
+  serializing the dispatch id, the name and the queue accounting across API
+  replicas; orphan-charge clean-up against a late retry; recovering an
+  uncertain child before a filing is abandoned; and the spawn check against
+  the real image. Each goes into its story's work order.
 
 ## 11. What changes in DESIGN-001, and what was found wrong
 

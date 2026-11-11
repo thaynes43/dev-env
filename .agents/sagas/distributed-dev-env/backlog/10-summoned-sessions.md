@@ -1,12 +1,12 @@
 # 10: summoned sessions (dev-env-ops into v2)
 
-**Status:** backlog. Design delta proposed 2026-11-11 in
+**Status:** backlog. Design delta accepted 2026-11-11 in
 [DESIGN-064](../designs/064-summoned-sessions-ops-profile.md) and
-[ADR-025](../adrs/025-summoned-sessions-on-v2.md) (OP734), revised the same day
-after two reviews and a re-review; build stories #735 to #750 and #610 under
-OP751. The access stories (#735 to #745) wait for Tom's ruling on the design,
-#749 for his yes, and #750's deletion of stored records for a separate yes
-(DESIGN-064 8.1). Nothing built.
+[ADR-025](../adrs/025-summoned-sessions-on-v2.md) (OP734), after four
+independent reviews; build stories #735 to #750 and #610 under OP751. Tom
+ruled yes on the design as an access change on 2026-11-11 (DESIGN-064 8.1),
+so the access stories (#735 to #745) may start. #749 waits for his yes, and
+#750's deletion of stored records for a separate yes. Nothing built.
 **Depends on:** 02 (lifecycle), 03 (Remote Control, so `remote` summoned sessions
 register), 07 (the broker; `ops` sessions' grants go to Tom); spike S-16 (plan usage)
 **Parallel with:** 04, 08

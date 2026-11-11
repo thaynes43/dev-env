@@ -1,17 +1,19 @@
 # ADR-025: Summoned sessions run on v2 under one policy per caller, report their own outcome, and page through the keeper
 
-- **Status:** Proposed 2026-11-11. The coordinator of story OP751
-  (`dev-env-1111-143337`) sets Accepted when it rules on the re-reviewed PR.
-  Three gates are Tom's and Pending (decision 15).
+- **Status:** Accepted 2026-11-11 by the coordinator of story OP751
+  (`dev-env-1111-143337`), on dev-env PR 1075, after four independent
+  reviews (DESIGN-064 10.5). Gate T-1 (decision 15) is ruled yes by Tom,
+  2026-11-11, on the coordinator's phone prompt; gates T-2 and T-3 are his
+  and Pending.
 - **Date:** 2026-11-11
-- **Decider:** to be the coordinator of OP751. Written by worker session
+- **Decider:** the coordinator of OP751. Written by worker session
   `dev-env-1111-144138` for story OP734; fix round 1 by worker session
   `dev-env-1111-155209`; fix round 2 by worker session
   `dev-env-1111-170449`. The coordinator ruled the fifteen questions behind
   it, every finding of two reviews of the first draft, and every finding of
   the re-review of fix round 1 with fix round 2's questions, on 2026-11-11
-  (DESIGN-064 sections 10.1 to 10.3); those are not rulings by Tom. This ADR
-  records no decision by Tom. Where a decision rests on an earlier ruling of
+  (DESIGN-064 sections 10.1 to 10.3); those are not rulings by Tom. The one
+  decision of Tom's this ADR records is gate T-1 (decision 15). Where a decision rests on an earlier ruling of
   his, it names the record.
 - **Supersedes:** these parts of [DESIGN-001](../designs/001-dev-env-v2.md),
   which was accepted with [ADR-001](001-distributed-dev-env.md). Everything
@@ -169,7 +171,9 @@ DESIGN-001 left open.
    escalation queued over 15 minutes pages; a remediation queued past its
    `maxHold` closes as `escalated` and files its escalation.
 10. **Retention and timers.** Task sessions follow ADR-020 (Tom, 2026-11-10:
-    every finished task is deleted 7 days after it ends). Remote summoned
+    every finished task is deleted 7 days after it ends), except a summoned
+    task closed before it launched, which is kept until reaped (decision 14,
+    DESIGN-064 9.1). Remote summoned
     sessions follow today's timers, unchanged (DESIGN-064 Q-12). A summoned
     session is never drained for a new revision (already built), and one
     suspended before its outcome is terminal is closed as `onUnreported`.
@@ -209,13 +213,16 @@ DESIGN-001 left open.
 15. **Three gates are Tom's.** No build story that changes access (#735 to
     #745) starts before Tom rules on DESIGN-064 as an access change, as item
     609 requires; the coordinator's rulings do not stand in for that, and
-    Q-14 is part of that question. #749 does not stop dev-env-ops before Tom's
+    Q-14 is part of that question. Tom ruled yes on 2026-11-11, on the
+    coordinator's phone prompt, which DESIGN-064 8.1 quotes in full; it
+    covers the keeper holding the ops bot's key for the same bot with the
+    same rights. #749 does not stop dev-env-ops before Tom's
     recorded yes, as epic #116 and item 610 require; scaling down being
     reversible does not replace it, and he is shown the difference in
     retained data with it. #750 deletes no stored record before a separate
     yes, asked once with the list: the volume `dev-env-ops-home` and the
-    ConfigMap `upgrade-work-orders` with its order history. All three are
-    Pending (DESIGN-064 8.1).
+    ConfigMap `upgrade-work-orders` with its order history. The first is
+    ruled; the other two are Pending (DESIGN-064 8.1).
 
 ## What this rejects
 
