@@ -185,7 +185,7 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 		ref = c.parent
 	}
 	if c == nil || c.policy == nil || c.policy.Spec.Summon == nil {
-		return 0, nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy)", ref)
+		return 0, nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, nor a summoning caller with a CallerPolicy", ref)
 	}
 	var raw json.RawMessage
 	if err := decodeJSON(w, r, maxCreateBody, &raw, true); err != nil {

@@ -120,7 +120,7 @@ func remediationBody(name string, data map[string]string) map[string]any {
 func wantPlan10Denied(t *testing.T, w *httptest.ResponseRecorder) {
 	t.Helper()
 	e := wantError(t, w, http.StatusForbidden, apiv1.CodeForbidden)
-	const want = "upgrade-agent/alert-responder may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy)"
+	const want = "upgrade-agent/alert-responder may not call this API: it is not Tom's, a client's or a session's ServiceAccount, nor a summoning caller with a CallerPolicy"
 	if e.Message != want {
 		t.Fatalf("message %q", e.Message)
 	}
