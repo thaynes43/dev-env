@@ -413,6 +413,26 @@ func TestSelectsHostWhoseRepoDiffersWhenRequestedRepoReady(t *testing.T) {
 		t.Fatal("fixture no longer differs")
 	}
 	checkResult(t, res, ActionUse, "other-default", ReasonFolderTrustPending, false)
+
+	t.Run("empty request uses spec.repo when it is Ready", func(t *testing.T) {
+		asleep := suspendedPaired("asleep", evening.Add(-time.Hour))
+		in := baseInput(clientCaller(), []Host{asleep})
+		in.Request.Repository = ""
+		res := Select(in)
+		if res.Action == ActionCreate {
+			t.Fatal("empty repository created a host instead of reusing one")
+		}
+		checkResult(t, res, ActionResume, "asleep", ReasonFolderTrustPending, false)
+	})
+
+	t.Run("empty request trusts spec.repo", func(t *testing.T) {
+		h := runningPaired("live")
+		h.TrustedRepos = []string{"dev-env"}
+		in := baseInput(clientCaller(), []Host{h})
+		in.Request.Repository = ""
+		res := Select(in)
+		checkResult(t, res, ActionUse, "live", "", true)
+	})
 }
 
 func TestSkipsHostWhenRequestedRepoNotReady(t *testing.T) {
@@ -427,6 +447,19 @@ func TestSkipsHostWhenRequestedRepoNotReady(t *testing.T) {
 	res := Select(baseInput(clientCaller(), []Host{match, ready}))
 	checkResult(t, res, ActionUse, "bootstrap-ready", ReasonFolderTrustPending, false)
 	checkSkipped(t, res, map[string]string{"spec-matches": ReasonRepoNotReady})
+
+	t.Run("empty request skips a host whose spec.repo is not Ready", func(t *testing.T) {
+		h := runningPaired("missing")
+		h.SpecRepo = "haynes-ops"
+		h.ReadyRepos = []string{"dev-env"}
+		in := baseInput(clientCaller(), []Host{h})
+		in.Request.Repository = ""
+		res := Select(in)
+		if res.Action == ActionCreate || res.Action == ActionUse {
+			t.Fatalf("got %+v", res)
+		}
+		checkResult(t, res, ActionReport, "missing", ReasonRepoNotReady, false)
+	})
 }
 
 func TestUnpushedWorkIsNotResumed(t *testing.T) {
@@ -541,9 +574,11 @@ func TestFolderTrustPendingStillSelects(t *testing.T) {
 }
 
 func TestLostLeaseReselects(t *testing.T) {
+	// The re-read shows another caller holding an unexpired lease. That is
+	// the only fact that moves selection on. The compare-and-swap retry
+	// itself is the later slice that writes the lease.
 	lost := runningPaired("lost")
 	lost.Pool = true
-	lost.LeaseConflict = true
 	lost.LeaseHolder = "other-caller"
 	lost.LeaseExpiry = evening.Add(10 * time.Minute)
 	next := runningPaired("next")
@@ -554,9 +589,11 @@ func TestLostLeaseReselects(t *testing.T) {
 }
 
 func TestHeartbeatConflictRetriesSameHost(t *testing.T) {
+	// A heartbeat bumps the session version and leaves the lease absent, so
+	// the preferred host stays chosen. An absent lease is not a reason to
+	// move on. The compare-and-swap retry is the later slice that writes.
 	same := runningPaired("same")
 	same.Pool = true
-	same.LeaseConflict = true
 	other := runningPaired("other")
 	other.LastActivity = evening
 	same.LastActivity = evening.Add(-time.Hour)

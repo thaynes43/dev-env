@@ -115,17 +115,14 @@ type Host struct {
 	RemoteState         string
 	LeaseHolder         string
 	LeaseExpiry         time.Time
-	// LeaseConflict is a compare-and-swap conflict observed on this host, such
-	// as a heartbeat bumping resourceVersion. It is not itself a foreign lease.
-	LeaseConflict bool
-	ImageCurrent  bool
-	SuspendedBy   string
-	SuspendedAt   time.Time
-	LastActivity  time.Time
-	Pool          bool
-	Archived      bool
-	Parent        string
-	TrustedRepos  []string
+	ImageCurrent        bool
+	SuspendedBy         string
+	SuspendedAt         time.Time
+	LastActivity        time.Time
+	Pool                bool
+	Archived            bool
+	Parent              string
+	TrustedRepos        []string
 }
 
 // Projection is the one current keeper Codex login fact.
@@ -364,7 +361,19 @@ func profileMatches(hostProfile, requested string) bool {
 	return hostProfile != "" && hostProfile == requested
 }
 
-func repoReady(h Host, repo string) bool {
+// fitRepo is the repository the host must have Ready. The request's
+// repository wins. When the request names none, the host's spec.repo is the
+// default, which is what resolveCwd launches. spec.repo is not a fit test
+// when the request names a repository.
+func fitRepo(h Host, requested string) string {
+	if requested != "" {
+		return requested
+	}
+	return h.SpecRepo
+}
+
+func repoReady(h Host, requested string) bool {
+	repo := fitRepo(h, requested)
 	if repo == "" {
 		return false
 	}
@@ -412,19 +421,16 @@ func runningRemoteReason(state string) string {
 }
 
 func leaseHeldByOther(h Host, caller string, now time.Time) bool {
-	// A conflict retries this host while the lease is absent, expired, or
-	// already this caller's. Another caller's unexpired lease is the only
-	// reason to move on. A heartbeat leaves the lease untouched, so a
-	// conflict with no foreign lease does not move selection on.
-	foreign := h.LeaseHolder != "" && h.LeaseHolder != caller && h.LeaseExpiry.After(now)
-	if h.LeaseConflict && !foreign {
-		return false
-	}
-	return foreign
+	// Absent, expired, or already this caller's: not busy. A heartbeat bumps
+	// the session version and leaves the lease like that, so the choice stays
+	// on this host. Another caller's unexpired lease is the only reason to
+	// move on. The compare-and-swap retry is the later slice that writes the
+	// lease; this function only reads the lease it was given.
+	return h.LeaseHolder != "" && h.LeaseHolder != caller && h.LeaseExpiry.After(now)
 }
 
-func readiness(h Host, repo string) (bool, string) {
-	if contains(h.TrustedRepos, repo) {
+func readiness(h Host, requested string) (bool, string) {
+	if contains(h.TrustedRepos, fitRepo(h, requested)) {
 		return true, ""
 	}
 	return false, ReasonFolderTrustPending
