@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -100,7 +101,12 @@ func answerTo(t *testing.T, note *coord.InboxMessage, key string, uid types.UID,
 
 func decideNotes(t *testing.T, messages []*coord.InboxMessage, sessions ...*devv1.AgentSession) map[string]Result {
 	t.Helper()
-	objects := make([]client.Object, 0, len(messages)+len(sessions))
+	return decideLoaded(t, messages, nil, sessions)
+}
+
+func decideLoaded(t *testing.T, messages []*coord.InboxMessage, extras []client.Object, sessions []*devv1.AgentSession) map[string]Result {
+	t.Helper()
+	objects := make([]client.Object, 0, len(messages)+len(sessions)+len(extras))
 	items := make([]unstructured.Unstructured, 0, len(messages))
 	for _, message := range messages {
 		objects = append(objects, message.DeepCopy())
@@ -109,6 +115,9 @@ func decideNotes(t *testing.T, messages []*coord.InboxMessage, sessions ...*devv
 			t.Fatal(err)
 		}
 		items = append(items, unstructured.Unstructured{Object: raw})
+	}
+	for _, extra := range extras {
+		objects = append(objects, extra.DeepCopyObject().(client.Object))
 	}
 	for _, session := range sessions {
 		objects = append(objects, session.DeepCopy())
@@ -144,7 +153,7 @@ func TestParentNoteReleaseFacts(t *testing.T) {
 		reply := answerTo(t, note, "caller-answer", "44444444-4444-4444-8444-444444444452", true)
 		got := decideNotes(t, []*coord.InboxMessage{note, reply}, parent)[note.Name]
 		requireDecision(t, got, Released)
-		if !got.ReplyAck || len(got.Observations) != 2 || got.Observations[1].Observed != "acknowledged" || got.Observations[1].AckUID != string(reply.UID) || got.Observations[1].UID != parentPolicyUID {
+		if !got.ReplyAck || got.Reply == nil || got.Reply.UID != string(reply.UID) || len(got.Observations) != 2 || got.Observations[1].Observed != "acknowledged" || got.Observations[1].AckUID != string(reply.UID) || got.Observations[1].UID != parentPolicyUID {
 			t.Fatalf("reply ack observation: %#v", got)
 		}
 		validateEvent(t, "inboxmessages", "absent", got.Observations)
@@ -179,17 +188,27 @@ func TestParentNoteReleaseFacts(t *testing.T) {
 		validateEvent(t, "inboxmessages", "absent", got.Observations)
 	})
 
-	t.Run("answered note to a live parent session is released", func(t *testing.T) {
+	t.Run("answered note to a live parent session is kept", func(t *testing.T) {
 		note := noteMessage(t, childNote("session-answered", inbox.KindQuestion), "44444444-4444-4444-8444-444444444456", true)
 		reply := answerTo(t, note, "session-answer", "44444444-4444-4444-8444-444444444457", false)
 		got := decideNotes(t, []*coord.InboxMessage{note, reply}, parent)[note.Name]
-		requireDecision(t, got, Released)
-		if !got.ReplyAck || got.Observations[1].Observed != "acknowledged" || got.Observations[1].AckUID != string(reply.UID) || got.Observations[1].UID != recipient.UID {
-			t.Fatalf("session reply ack: %#v", got)
+		requireDecision(t, got, Kept)
+		if got.ReplyAck || got.Reply != nil || len(got.Observations) != 2 || got.Observations[1].Observed != "present" || got.Observations[1].UID != recipient.UID {
+			t.Fatalf("live parent kept an answered note: %#v", got)
 		}
-		validateEvent(t, "inboxmessages", "absent", got.Observations)
+		validateEvent(t, "inboxmessages", "present", got.Observations)
 		replyResult := decideNotes(t, []*coord.InboxMessage{note, reply}, parent)[reply.Name]
 		requireDecision(t, replyResult, Kept)
+	})
+	t.Run("answered note is released once the parent session is gone", func(t *testing.T) {
+		note := noteMessage(t, childNote("session-parent-gone", inbox.KindQuestion), "44444444-4444-4444-8444-444444444458", true)
+		reply := answerTo(t, note, "session-parent-gone-answer", "44444444-4444-4444-8444-444444444459", false)
+		got := decideNotes(t, []*coord.InboxMessage{note, reply})[note.Name]
+		requireDecision(t, got, Released)
+		if !got.ReplyAck || got.Reply == nil || got.Reply.UID != string(reply.UID) || got.Observations[1].Observed != "acknowledged" || got.Observations[1].AckUID != string(reply.UID) {
+			t.Fatalf("gone parent reply ack: %#v", got)
+		}
+		validateEvent(t, "inboxmessages", "absent", got.Observations)
 	})
 }
 
@@ -303,7 +322,8 @@ func TestCallerSenderFollowsSection10(t *testing.T) {
 func TestRecheckReadsTheStoredReply(t *testing.T) {
 	note := noteMessage(t, childNote("recheck-answered", inbox.KindQuestion), "44444444-4444-4444-8444-4444444444a1", true)
 	reply := answerTo(t, note, "recheck-answer", "44444444-4444-4444-8444-4444444444a2", false)
-	parent := liveSession(recipient)
+	// The parent session is gone, so the stored reply is the ack. A live parent
+	// keeps the note and does not need the reply.
 	summaries, err := Summaries(context.Background(), ListConfig{
 		Reader:    &fixtureReader{objects: map[string][]unstructured.Unstructured{"InboxMessageList": {toUnstructured(t, note)}}},
 		Namespace: retentionNS, Enabled: map[Kind]bool{InboxMessage: true},
@@ -311,10 +331,10 @@ func TestRecheckReadsTheStoredReply(t *testing.T) {
 	if err != nil || len(summaries) != 1 {
 		t.Fatalf("summary %#v %v", summaries, err)
 	}
-	reader := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(note.DeepCopy(), reply.DeepCopy(), parent).Build()
-	decision, _, observations, replyAck := decide(context.Background(), config(reader), summaries[0], map[string]memoSession{}, nil)
-	if decision != Released || !replyAck || observations[1].AckUID != string(reply.UID) {
-		t.Fatalf("recheck decision %s ack %v %#v", decision, replyAck, observations)
+	reader := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(note.DeepCopy(), reply.DeepCopy()).Build()
+	decision, _, observations, replyAck, proven := decide(context.Background(), config(reader), summaries[0], map[string]memoSession{}, nil)
+	if decision != Released || !replyAck || proven == nil || proven.UID != string(reply.UID) || observations[1].AckUID != string(reply.UID) {
+		t.Fatalf("recheck decision %s ack %v reply %v %#v", decision, replyAck, proven, observations)
 	}
 
 	unanswered := noteMessage(t, childNote("recheck-open", inbox.KindBlocker), "44444444-4444-4444-8444-4444444444a3", true)
@@ -325,8 +345,9 @@ func TestRecheckReadsTheStoredReply(t *testing.T) {
 	if err != nil || len(openSummary) != 1 {
 		t.Fatal(err)
 	}
+	parent := liveSession(recipient)
 	openReader := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(unanswered.DeepCopy(), parent).Build()
-	decision, _, _, replyAck = decide(context.Background(), config(openReader), openSummary[0], map[string]memoSession{}, nil)
+	decision, _, _, replyAck, _ = decide(context.Background(), config(openReader), openSummary[0], map[string]memoSession{}, nil)
 	if decision != Kept || replyAck {
 		t.Fatalf("unanswered recheck %s ack %v", decision, replyAck)
 	}
@@ -374,8 +395,8 @@ func recheckOnly(t *testing.T, note *coord.InboxMessage, objects ...client.Objec
 	}
 	stored := append([]client.Object{note.DeepCopy()}, objects...)
 	reader := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(stored...).Build()
-	decision, _, observations, replyAck := decide(context.Background(), config(reader), summaries[0], map[string]memoSession{}, nil)
-	return Result{Summary: summaries[0], Decision: decision, Observations: observations, ReplyAck: replyAck}
+	decision, _, observations, replyAck, reply := decide(context.Background(), config(reader), summaries[0], map[string]memoSession{}, nil)
+	return Result{Summary: summaries[0], Decision: decision, Observations: observations, ReplyAck: replyAck, Reply: reply}
 }
 
 func toUnstructured(t *testing.T, message *coord.InboxMessage) unstructured.Unstructured {
@@ -421,27 +442,474 @@ func TestParentNoteManifestRecipientUID(t *testing.T) {
 }
 
 func TestReplyAckIsMarkedWithoutInboxReadAck(t *testing.T) {
-	note := noteMessage(t, childNote("mark-answered", inbox.KindQuestion), "44444444-4444-4444-8444-444444444491", true)
-	reply := answerTo(t, note, "mark-answer", "44444444-4444-4444-8444-444444444492", false)
-	parent := liveSession(recipient)
-	got := decideNotes(t, []*coord.InboxMessage{note, reply}, parent)[note.Name]
+	note := noteMessage(t, toCaller("mark-answered", inbox.KindQuestion), "44444444-4444-4444-8444-444444444491", false)
+	reply := answerTo(t, note, "mark-answer", "44444444-4444-4444-8444-444444444492", true)
+	got := decideNotes(t, []*coord.InboxMessage{note, reply})[note.Name]
 	requireDecision(t, got, Released)
-	if !got.ReplyAck {
+	if !got.ReplyAck || got.Reply == nil || got.Reply.UID != string(reply.UID) {
 		t.Fatal("reply was not the ack")
 	}
-	reader := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(note.DeepCopy(), reply.DeepCopy(), parent).Build()
+	reader := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(note.DeepCopy(), reply.DeepCopy()).Build()
 	archive := newMemArchive()
 	runnable := &Runnable{
 		Reader: reader, Archive: archive, Slots: shelf.NewExecSlots(1), Namespace: retentionNS,
-		Now: func() time.Time { return time.Date(2026, 11, 10, 23, 0, 0, 0, time.UTC) },
+		metrics: newRetentionMetrics(),
+		Now:     func() time.Time { return time.Date(2026, 11, 10, 23, 0, 0, 0, time.UTC) },
 	}
 	status := runnable.markReleased(context.Background(), candidate{item: lookupItem(got)})
 	if status.skipped || status.refused || !status.marked || len(archive.puts) != 1 || archive.puts[0].Event == nil || archive.puts[0].Event.State != "absent" {
 		t.Fatalf("mark status %#v puts %d", status, len(archive.puts))
 	}
-	if archive.puts[0].Manifest.RecipientUID != recipient.UID {
+	if archive.puts[0].Manifest.RecipientUID != parentPolicyUID {
 		t.Fatalf("marked recipient UID %s", archive.puts[0].Manifest.RecipientUID)
 	}
 }
 
 func lookupItem(result Result) LookupResult { return LookupResult{Result: result} }
+
+func sessionAck(t *testing.T, message *coord.InboxMessage) *coord.InboxReadAck {
+	t.Helper()
+	spec := coord.InboxReadAckSpec{
+		Project: message.Spec.Project, MessageName: message.Name, MessageUID: string(message.UID),
+		Recipient: message.Spec.Recipient, Actor: actor(),
+	}
+	if !inbox.ValidAck(spec) {
+		t.Fatalf("ack fixture %#v", spec)
+	}
+	return &coord.InboxReadAck{
+		TypeMeta: metav1.TypeMeta{APIVersion: protocol.CoordArchiveAPIVersion, Kind: "InboxReadAck"},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: retentionNS, Name: inbox.AckName(spec.MessageUID, spec.Recipient.UID),
+			UID: types.UID("77777777-7777-4777-8777-777777777777"), ResourceVersion: "40",
+		},
+		Spec: spec,
+	}
+}
+
+func TestCallerShapesThatAreNotNamedStayKeptOrUnknown(t *testing.T) {
+	t.Run("caller reply with a live child and a read ack is kept", func(t *testing.T) {
+		note := noteMessage(t, toCaller("ack-live-note", inbox.KindQuestion), "44444444-4444-4444-8444-444444444481", false)
+		reply := answerTo(t, note, "ack-live-reply", "44444444-4444-4444-8444-444444444482", true)
+		got := decideLoaded(t, []*coord.InboxMessage{reply}, []client.Object{sessionAck(t, reply)}, []*devv1.AgentSession{liveSession(sender)})[reply.Name]
+		requireDecision(t, got, Kept)
+		if got.ReplyAck {
+			t.Fatal("read ack released a caller reply")
+		}
+	})
+	t.Run("caller plain message with a live recipient and a read ack is kept", func(t *testing.T) {
+		message := noteMessage(t, fromCaller("ack-live-plain", ""), "44444444-4444-4444-8444-444444444483", false)
+		got := decideLoaded(t, []*coord.InboxMessage{message}, []client.Object{sessionAck(t, message)}, []*devv1.AgentSession{liveSession(recipient)})[message.Name]
+		requireDecision(t, got, Kept)
+	})
+	t.Run("non-plain caller-to-caller record is unknown", func(t *testing.T) {
+		spec := fromCaller("caller-to-caller", inbox.KindQuestion)
+		spec.Recipient = coord.SessionIdentity{}
+		spec.CallerRecipient = parentCaller()
+		message := noteMessage(t, spec, "44444444-4444-4444-8444-444444444484", false)
+		got := decideNotes(t, []*coord.InboxMessage{message})[message.Name]
+		requireDecision(t, got, Unknown)
+		if got.Observations != nil || got.ReplyAck || got.Reply != nil {
+			t.Fatalf("caller-to-caller %#v", got)
+		}
+	})
+}
+
+func TestReplyBindsRejectsEachField(t *testing.T) {
+	sessionNote := noteMessage(t, childNote("bind-session", inbox.KindQuestion), "44444444-4444-4444-8444-4444444444e1", true)
+	sessionReply := answerTo(t, sessionNote, "bind-session-answer", "44444444-4444-4444-8444-4444444444e2", false)
+	callerNote := noteMessage(t, toCaller("bind-caller", inbox.KindBlocker), "44444444-4444-4444-8444-4444444444e3", false)
+	callerReply := answerTo(t, callerNote, "bind-caller-answer", "44444444-4444-4444-8444-4444444444e4", true)
+	fromSpec := fromCaller("bind-from-caller", inbox.KindResult)
+	fromNote := noteMessage(t, fromSpec, "44444444-4444-4444-8444-4444444444e5", false)
+	back := messageSpec()
+	back.Key, back.Kind = "bind-back", inbox.KindReply
+	back.InReplyTo = &coord.InboxMessageRef{Name: fromNote.Name, UID: string(fromNote.UID)}
+	back.Sender = fromNote.Spec.Recipient
+	back.Recipient = coord.SessionIdentity{}
+	back.CallerRecipient = parentCaller()
+	backReply := noteMessage(t, back, "44444444-4444-4444-8444-4444444444e6", true)
+
+	pairs := []struct {
+		name  string
+		note  *coord.InboxMessage
+		reply *coord.InboxMessage
+	}{
+		{"session", sessionNote, sessionReply},
+		{"caller recipient", callerNote, callerReply},
+		{"caller sender", fromNote, backReply},
+	}
+	for _, pair := range pairs {
+		note := mustSummary(t, pair.note)
+		if !replyBinds(note, *pair.reply) {
+			t.Fatalf("%s reply does not bind", pair.name)
+		}
+	}
+	otherUID := "99999999-9999-4999-8999-999999999999"
+	otherName := inbox.MessageName(sender, "some-other-note")
+	mutate := func(reply *coord.InboxMessage, apply func(*coord.InboxMessage)) *coord.InboxMessage {
+		next := reply.DeepCopy()
+		apply(next)
+		return next
+	}
+	cases := []struct {
+		name  string
+		note  *coord.InboxMessage
+		reply *coord.InboxMessage
+		apply func(*coord.InboxMessage)
+	}{
+		{"project", sessionNote, sessionReply, func(m *coord.InboxMessage) { m.Spec.Project = "foreign" }},
+		{"note name", sessionNote, sessionReply, func(m *coord.InboxMessage) { m.Spec.InReplyTo.Name = otherName }},
+		{"note UID", sessionNote, sessionReply, func(m *coord.InboxMessage) { m.Spec.InReplyTo.UID = otherUID }},
+		{"sender party", sessionNote, sessionReply, func(m *coord.InboxMessage) { m.Spec.Sender.UID = otherUID }},
+		{"recipient party", sessionNote, sessionReply, func(m *coord.InboxMessage) { m.Spec.Recipient.UID = otherUID }},
+		{"caller recipient child party", callerNote, callerReply, func(m *coord.InboxMessage) { m.Spec.Recipient.UID = otherUID }},
+		{"caller recipient policy UID", callerNote, callerReply, func(m *coord.InboxMessage) {
+			m.Spec.CallerSender.PolicyUID = otherUID
+		}},
+		{"caller sender party", fromNote, backReply, func(m *coord.InboxMessage) { m.Spec.Sender.UID = otherUID }},
+		{"caller sender policy UID", fromNote, backReply, func(m *coord.InboxMessage) {
+			m.Spec.CallerRecipient.PolicyUID = otherUID
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			note := mustSummary(t, tc.note)
+			if replyBinds(note, *mutate(tc.reply, tc.apply)) {
+				t.Fatal("mutated reply still binds")
+			}
+		})
+	}
+}
+
+func mustSummary(t *testing.T, message *coord.InboxMessage) Summary {
+	t.Helper()
+	item := toUnstructured(t, message)
+	s := summarize(kindResource(InboxMessage), retentionNS, &item)
+	if !s.Valid {
+		t.Fatalf("summary %#v", s)
+	}
+	return s
+}
+
+func TestRetentionDecisionsMatchMain(t *testing.T) {
+	peer := summaryOf(t, InboxMessage)
+	child := &devv1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: peer.Sender.Namespace, Name: peer.Sender.Name, UID: types.UID(peer.Sender.UID)}}
+	parent := &devv1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: peer.Recipient.Namespace, Name: peer.Recipient.Name, UID: types.UID(peer.Recipient.UID)}}
+	decideSummary := func(t *testing.T, s Summary, archive map[MessageRef]ArchiveEvidence, objects ...client.Object) Decision {
+		t.Helper()
+		c := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(objects...).Build()
+		got := Evaluate(context.Background(), EvalConfig{Reader: c, OperatorNamespace: retentionNS, ReconciledNamespaces: map[string]bool{"dev-agents": true}, Archive: archive}, []Summary{s})[0]
+		if got.RequiredMessage != nil && got.Decision != Unknown {
+			t.Fatalf("pending with decision %s", got.Decision)
+		}
+		return got.Decision
+	}
+	ack := &coord.InboxReadAck{ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: inbox.AckName(peer.UID, peer.Recipient.UID), UID: "99999999-9999-4999-8999-999999999999", ResourceVersion: "1"}, Spec: coord.InboxReadAckSpec{Project: peer.Project, MessageName: peer.Name, MessageUID: peer.UID, Recipient: coord.SessionIdentity{Namespace: peer.Recipient.Namespace, Name: peer.Recipient.Name, UID: peer.Recipient.UID}, Actor: actor()}}
+	if !inbox.ValidAck(ack.Spec) {
+		t.Fatal("peer ack")
+	}
+	if decideSummary(t, peer, nil, child) != Kept {
+		t.Fatal("peer sender present")
+	}
+	if decideSummary(t, peer, nil, parent) != Kept {
+		t.Fatal("peer recipient present")
+	}
+	if decideSummary(t, peer, nil) != Released {
+		t.Fatal("peer both absent")
+	}
+	if decideSummary(t, peer, nil, ack, parent) != Released {
+		t.Fatal("peer sender gone with ack")
+	}
+
+	question := noteMessage(t, childNote("main-question", inbox.KindQuestion), "44444444-4444-4444-8444-4444444444f1", false)
+	if decideNotes(t, []*coord.InboxMessage{question}, child)[question.Name].Decision != Kept {
+		t.Fatal("old question sender present")
+	}
+	if decideNotes(t, []*coord.InboxMessage{question}, parent)[question.Name].Decision != Kept {
+		t.Fatal("old question recipient present")
+	}
+	if decideNotes(t, []*coord.InboxMessage{question})[question.Name].Decision != Released {
+		t.Fatal("old question both absent")
+	}
+	oldReply := answerTo(t, question, "main-old-reply", "44444444-4444-4444-8444-4444444444f2", false)
+	oldReply.Labels = nil
+	if decideNotes(t, []*coord.InboxMessage{oldReply}, parent)[oldReply.Name].Decision != Kept {
+		t.Fatal("old reply sender present")
+	}
+	if decideNotes(t, []*coord.InboxMessage{oldReply}, child)[oldReply.Name].Decision != Kept {
+		t.Fatal("old reply recipient present")
+	}
+	if decideNotes(t, []*coord.InboxMessage{oldReply})[oldReply.Name].Decision != Released {
+		t.Fatal("old reply both absent")
+	}
+	stored := answerTo(t, question, "main-stored-reply", "44444444-4444-4444-8444-4444444444f3", false)
+	stored.Labels = nil
+	if got := decideNotes(t, []*coord.InboxMessage{question, stored}, parent)[question.Name]; got.Decision != Kept || got.ReplyAck {
+		t.Fatalf("old question with a stored reply: %#v", got)
+	}
+
+	readAck := summaryOf(t, InboxReadAck)
+	liveMessage := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: readAck.Message.Namespace, Name: readAck.Message.Name, UID: types.UID(readAck.Message.UID), ResourceVersion: "30"}}
+	if decideSummary(t, readAck, map[MessageRef]ArchiveEvidence{readAck.Message: {Known: true, Holds: true}}, liveMessage) != Kept {
+		t.Fatal("read ack message live")
+	}
+	if decideSummary(t, readAck, map[MessageRef]ArchiveEvidence{readAck.Message: {Known: true, Holds: true}}) != Released {
+		t.Fatal("read ack archive holds")
+	}
+	if decideSummary(t, readAck, map[MessageRef]ArchiveEvidence{readAck.Message: {Known: true, Holds: false}}) != Kept {
+		t.Fatal("read ack archive misses")
+	}
+	if decideSummary(t, readAck, nil) != Unknown {
+		t.Fatal("read ack evidence unknown")
+	}
+
+	claim := summaryOf(t, TaskClaim)
+	owner := &devv1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: claim.Owner.Namespace, Name: claim.Owner.Name, UID: types.UID(claim.Owner.UID)}}
+	if decideSummary(t, claim, nil, owner) != Kept || decideSummary(t, claim, nil) != Released {
+		t.Fatal("task claim")
+	}
+	published := summaryOf(t, PublishedContext)
+	source := &devv1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: published.Source.Namespace, Name: published.Source.Name, UID: types.UID(published.Source.UID)}}
+	if decideSummary(t, published, nil, source) != Kept || decideSummary(t, published, nil) != Released {
+		t.Fatal("published context")
+	}
+	unknown := &hookReader{get: func(context.Context, client.ObjectKey, client.Object) error {
+		return apierrors.NewServiceUnavailable("unavailable")
+	}}
+	if got := Evaluate(context.Background(), config(unknown), []Summary{claim, published}); got[0].Decision != Unknown || got[1].Decision != Unknown {
+		t.Fatalf("unknown session reads %#v %#v", got[0].Decision, got[1].Decision)
+	}
+}
+
+func TestReleaseRecheckedStopsWhenTheReplyChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(t *testing.T, c client.Client, note, reply *coord.InboxMessage)
+	}{
+		{name: "malformed reply", change: func(t *testing.T, c client.Client, _, reply *coord.InboxMessage) {
+			t.Helper()
+			if err := c.Delete(context.Background(), reply); err != nil {
+				t.Fatal(err)
+			}
+			bad := reply.DeepCopy()
+			bad.Name = "not-the-derived-name"
+			bad.ResourceVersion = ""
+			if err := c.Create(context.Background(), bad); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "replaced reply", change: func(t *testing.T, c client.Client, note, reply *coord.InboxMessage) {
+			t.Helper()
+			if err := c.Delete(context.Background(), reply); err != nil {
+				t.Fatal(err)
+			}
+			next := answerTo(t, note, "replaced-reply", "44444444-4444-4444-8444-4444444444d1", true)
+			next.ResourceVersion = ""
+			if err := c.Create(context.Background(), next); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "reply removed", change: func(t *testing.T, c client.Client, _, reply *coord.InboxMessage) {
+			t.Helper()
+			if err := c.Delete(context.Background(), reply); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			note := noteMessage(t, toCaller("recheck-stop", inbox.KindQuestion), "44444444-4444-4444-8444-4444444444d2", false)
+			reply := answerTo(t, note, "recheck-stop-answer", "44444444-4444-4444-8444-4444444444d3", true)
+			store := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(note.DeepCopy(), reply.DeepCopy()).Build()
+			got := evaluateStored(t, store, note, reply)[note.Name]
+			requireDecision(t, got, Released)
+			if got.Reply == nil || got.Reply.UID != string(reply.UID) || got.Reply.Name != reply.Name {
+				t.Fatalf("pass reply %#v", got.Reply)
+			}
+			runnable := &Runnable{
+				Reader: store, Client: store, Namespace: retentionNS, Reconciled: map[string]bool{"dev-agents": true},
+				metrics: newRetentionMetrics(), Archive: newMemArchive(), Slots: shelf.NewExecSlots(1),
+				Now: func() time.Time { return time.Date(2026, 11, 11, 1, 0, 0, 0, time.UTC) },
+			}
+			if _, st := runnable.releaseRechecked(context.Background(), got.Summary, got.Reply); st.refused || st.stop != "" || st.done {
+				t.Fatalf("unchanged recheck %#v", st)
+			}
+			tc.change(t, store, note, reply)
+			if _, st := runnable.releaseRechecked(context.Background(), got.Summary, got.Reply); !st.refused || st.stop != "" {
+				t.Fatalf("changed recheck %#v", st)
+			}
+			status := runnable.release(context.Background(), candidate{item: lookupItem(got)})
+			if status.deleted || !status.refused {
+				t.Fatalf("release %#v", status)
+			}
+			if err := store.Get(context.Background(), client.ObjectKey{Namespace: note.Namespace, Name: note.Name}, &coord.InboxMessage{}); err != nil {
+				t.Fatalf("note after refused release: %v", err)
+			}
+		})
+	}
+}
+
+func evaluateStored(t *testing.T, reader client.Reader, messages ...*coord.InboxMessage) map[string]Result {
+	t.Helper()
+	items := make([]unstructured.Unstructured, 0, len(messages))
+	for _, message := range messages {
+		items = append(items, toUnstructured(t, message))
+	}
+	summaries, err := Summaries(context.Background(), ListConfig{
+		Reader:    &fixtureReader{objects: map[string][]unstructured.Unstructured{"InboxMessageList": items}},
+		Namespace: retentionNS, Enabled: map[Kind]bool{InboxMessage: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]Result{}
+	for _, result := range Evaluate(context.Background(), config(reader), summaries) {
+		out[result.Summary.Name] = result
+	}
+	return out
+}
+
+func TestCallerRecipientPairGoesThroughGraceArchiveAndDelete(t *testing.T) {
+	note := noteMessage(t, toCaller("grace-note", inbox.KindResult), "44444444-4444-4444-8444-4444444444c1", false)
+	reply := answerTo(t, note, "grace-reply", "44444444-4444-4444-8444-4444444444c2", true)
+	store := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(note.DeepCopy(), reply.DeepCopy()).Build()
+	arch := newMemArchive()
+	now := time.Date(2026, 11, 11, 2, 0, 0, 0, time.UTC)
+	past := now.Add(-DefaultGrace - time.Minute).UTC()
+	key := lookupKey(protocol.CoordArchiveIdentity{Resource: "inboxmessages", Project: note.Spec.Project, Name: note.Name, UID: string(note.UID)})
+	arch.grace[key] = timePtr(past)
+	arch.latest[key] = protocol.CoordArchiveEvent{State: "absent", At: past}
+	arch.revisions[key] = []protocol.CoordArchiveRevision{{ResourceVersion: "seed", SHA256: "abababababababababababababababababababababababababababababababab"}}
+	var steps []string
+	arch.note = func(step string) { steps = append(steps, step) }
+	deletes := &deleteNames{Client: store, steps: &steps}
+	reader := &splitReader{Client: store, lists: &fixtureReader{objects: map[string][]unstructured.Unstructured{
+		"InboxMessageList": {toUnstructured(t, note), toUnstructured(t, reply)},
+	}}}
+	runnable := &Runnable{
+		Enabled: true, Grace: DefaultGrace, Client: deletes, Reader: reader,
+		Namespace: retentionNS, Reconciled: map[string]bool{"dev-agents": true},
+		Kinds: map[Kind]bool{InboxMessage: true},
+		Pods:  &staticPods{name: "dev-env-shelf"}, Archive: arch, Slots: shelf.NewExecSlots(2),
+		metrics: newRetentionMetrics(), Now: func() time.Time { return now },
+	}
+	if got := runnable.Pass(context.Background()); got != resultComplete || len(deletes.names) != 2 {
+		t.Fatalf("pass %s deletes %v steps %v puts %d", got, deletes.names, steps, len(arch.puts))
+	}
+	if deletes.names[0] != note.Name || deletes.names[1] != reply.Name {
+		t.Fatalf("delete order %v", deletes.names)
+	}
+	gets := 0
+	for _, step := range steps {
+		if len(step) >= 7 && step[:7] == "delete:" {
+			if gets < 2 {
+				t.Fatalf("delete before both archives were verified: %v", steps)
+			}
+			continue
+		}
+		if step == "get" {
+			gets++
+		}
+	}
+	if len(arch.puts) < 2 || arch.puts[0].Manifest.UID != string(note.UID) || arch.puts[1].Manifest.UID != string(reply.UID) {
+		t.Fatalf("archive puts %#v", putUIDs(arch.puts))
+	}
+	for _, message := range []*coord.InboxMessage{note, reply} {
+		err := store.Get(context.Background(), client.ObjectKey{Namespace: message.Namespace, Name: message.Name}, &coord.InboxMessage{})
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("%s after delete: %v", message.Name, err)
+		}
+	}
+
+	t.Run("note archive write fails", func(t *testing.T) {
+		assertPairStays(t, "note-put", func(arch *memArchive, note, _ *coord.InboxMessage) { arch.failPutUID = string(note.UID) })
+	})
+	t.Run("reply archive write fails", func(t *testing.T) {
+		assertPairStays(t, "reply-put", func(arch *memArchive, _, reply *coord.InboxMessage) { arch.failPutUID = string(reply.UID) })
+	})
+	t.Run("note archive verify fails", func(t *testing.T) {
+		assertPairStays(t, "note-verify", func(arch *memArchive, _, _ *coord.InboxMessage) { arch.hideGet = true })
+	})
+	t.Run("reply archive verify fails", func(t *testing.T) {
+		assertPairStays(t, "reply-verify", func(arch *memArchive, _, _ *coord.InboxMessage) {
+			gets := 0
+			arch.onGet = func() {
+				gets++
+				if gets >= 2 {
+					arch.hideGet = true
+				}
+			}
+		})
+	})
+}
+
+func assertPairStays(t *testing.T, name string, prepare func(*memArchive, *coord.InboxMessage, *coord.InboxMessage)) {
+	t.Helper()
+	note := noteMessage(t, toCaller("stay-note-"+name, inbox.KindQuestion), "44444444-4444-4444-8444-4444444444c3", false)
+	reply := answerTo(t, note, "stay-reply-"+name, "44444444-4444-4444-8444-4444444444c4", true)
+	store := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(note.DeepCopy(), reply.DeepCopy()).Build()
+	arch := newMemArchive()
+	prepare(arch, note, reply)
+	now := time.Date(2026, 11, 11, 3, 0, 0, 0, time.UTC)
+	past := now.Add(-DefaultGrace - time.Minute).UTC()
+	key := lookupKey(protocol.CoordArchiveIdentity{Resource: "inboxmessages", Project: note.Spec.Project, Name: note.Name, UID: string(note.UID)})
+	arch.grace[key] = timePtr(past)
+	arch.latest[key] = protocol.CoordArchiveEvent{State: "absent", At: past}
+	arch.revisions[key] = []protocol.CoordArchiveRevision{{ResourceVersion: "seed", SHA256: "abababababababababababababababababababababababababababababababab"}}
+	deletes := &deleteNames{Client: store}
+	reader := &splitReader{Client: store, lists: &fixtureReader{objects: map[string][]unstructured.Unstructured{
+		"InboxMessageList": {toUnstructured(t, note), toUnstructured(t, reply)},
+	}}}
+	runnable := &Runnable{
+		Enabled: true, Grace: DefaultGrace, Client: deletes, Reader: reader,
+		Namespace: retentionNS, Reconciled: map[string]bool{"dev-agents": true},
+		Kinds: map[Kind]bool{InboxMessage: true},
+		Pods:  &staticPods{name: "dev-env-shelf"}, Archive: arch, Slots: shelf.NewExecSlots(2),
+		metrics: newRetentionMetrics(), Now: func() time.Time { return now },
+	}
+	got := runnable.Pass(context.Background())
+	if got == resultComplete && len(deletes.names) > 0 {
+		t.Fatalf("pass %s deleted %v", got, deletes.names)
+	}
+	if len(deletes.names) != 0 {
+		t.Fatalf("deleted %v on %s", deletes.names, got)
+	}
+	for _, message := range []*coord.InboxMessage{note, reply} {
+		if err := store.Get(context.Background(), client.ObjectKey{Namespace: message.Namespace, Name: message.Name}, &coord.InboxMessage{}); err != nil {
+			t.Fatalf("%s missing after refused archive: %v", message.Name, err)
+		}
+	}
+}
+
+func putUIDs(puts []protocol.CoordArchivePutRequest) []string {
+	out := make([]string, len(puts))
+	for i := range puts {
+		out[i] = puts[i].Manifest.UID
+	}
+	return out
+}
+
+type deleteNames struct {
+	client.Client
+	names []string
+	steps *[]string
+}
+
+func (d *deleteNames) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	d.names = append(d.names, obj.GetName())
+	if d.steps != nil {
+		*d.steps = append(*d.steps, "delete:"+obj.GetName())
+	}
+	return d.Client.Delete(ctx, obj, opts...)
+}
+
+type splitReader struct {
+	client.Client
+	lists *fixtureReader
+}
+
+func (s *splitReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*unstructured.UnstructuredList); ok {
+		return s.lists.List(ctx, list, opts...)
+	}
+	return s.Client.List(ctx, list, opts...)
+}

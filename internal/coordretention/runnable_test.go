@@ -759,6 +759,7 @@ type memArchive struct {
 	note         func(string)
 	alterGet     bool
 	hideGet      bool
+	failPutUID   string
 }
 
 func newMemArchive() *memArchive {
@@ -799,6 +800,9 @@ func (m *memArchive) Lookup(_ context.Context, ids []protocol.CoordArchiveIdenti
 func (m *memArchive) Put(_ context.Context, req protocol.CoordArchivePutRequest, mark bool) (protocol.CoordArchivePutResult, error) {
 	if m.onCall != nil {
 		m.onCall()
+	}
+	if m.failPutUID != "" && req.Manifest.UID == m.failPutUID {
+		return protocol.CoordArchivePutResult{}, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "put refused")
 	}
 	if m.err != nil {
 		return protocol.CoordArchivePutResult{}, m.err

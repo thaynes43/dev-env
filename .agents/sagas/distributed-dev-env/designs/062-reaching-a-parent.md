@@ -615,6 +615,20 @@ For these notes, ADR-023 adds two release facts and leaves the 30 days:
   session exists: the archive event can record the sender only as absent, and
   ADR-004 still keeps a message while its sender session exists.
 
+Noted 2026-11-11, coordinator session dev-env-fable-coordinator-1109, on the
+independent review of the retention slice. The reply-as-ack sentence above is
+narrower than it reads. A note to a session parent is kept while that parent
+session exists, answered or not, the same as any inbox message whose recipient
+session exists. A stored reply counts as the ack only when the recipient is
+the caller account, or the parent session is itself gone. The parent read and
+list routes cannot yet read a released note back from the archive, so
+releasing one while the parent session exists would hide it.
+[OpenProject #697](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/697),
+"Reaching a parent: read a released note from its archive, then release
+answered notes to a live parent", adds that read. This narrowing can be lifted
+after that story. ADR-023 is unchanged: keeping a record longer than its
+release fact allows is not a contradiction of it.
+
 A note to a session parent who never answers, while that parent session
 still exists, stays, as any unacked inbox message to a live recipient stays.
 After that parent session is gone, and the child session is gone, the 30

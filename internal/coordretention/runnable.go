@@ -432,10 +432,27 @@ func acksByMessage(items []LookupResult) map[string]LookupResult {
 func (r *Runnable) candidates(items []LookupResult) []candidate {
 	live := liveMessages(items)
 	acks := acksByMessage(items)
+	// A reply that releases its note travels with that note. It is not deleted
+	// on its own, including while the note is still inside grace.
+	carried := map[string]LookupResult{}
+	for _, item := range items {
+		if item.Result.Reply == nil {
+			continue
+		}
+		for _, other := range items {
+			if other.Result.Summary.Kind == InboxMessage && other.Result.Summary.UID == item.Result.Reply.UID && other.Result.Summary.Name == item.Result.Reply.Name {
+				carried[item.Result.Reply.UID] = other
+				break
+			}
+		}
+	}
 	var out []candidate
 	for _, item := range items {
 		action := classify(item, r.now(), r.Grace)
 		if item.Result.Summary.Kind == InboxReadAck && live[item.Result.Summary.Message.UID] {
+			continue
+		}
+		if _, ok := carried[item.Result.Summary.UID]; ok && item.Result.Summary.Kind == InboxMessage {
 			continue
 		}
 		if action != "mark" && action != "release" {

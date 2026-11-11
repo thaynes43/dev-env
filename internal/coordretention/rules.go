@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
@@ -39,9 +41,11 @@ type Result struct {
 	RequiredMessage *MessageRef // non-nil only after scoped live UID absence
 	// Observations are the reads this pass already performed. They confer no mark or delete authority.
 	Observations []protocol.CoordArchiveObservation
-	// ReplyAck reports that a stored parent-note reply is the ack. The note is
-	// marked without an InboxReadAck. Meatball writes no ack object.
+	// ReplyAck reports that a stored reply is the ack. Reply is that exact
+	// message. A note released this way is not deleted unless Reply is archived
+	// and verified first. Meatball writes no InboxReadAck.
 	ReplyAck bool
+	Reply    *Summary
 }
 type sessionAnswer uint8
 
@@ -60,14 +64,14 @@ type memoSession struct {
 // perform fresh uncached reads, never reuse these eligibility observations.
 func Evaluate(ctx context.Context, c EvalConfig, summaries []Summary) []Result {
 	memo := map[string]memoSession{}
-	replies := indexParentReplies(summaries, c.OperatorNamespace)
+	replies := indexParentReplies(ctx, c, summaries)
 	out := make([]Result, 0, len(summaries))
 	for _, s := range summaries {
-		d, pending, observations, replyAck := decide(ctx, c, s, memo, replies)
+		d, pending, observations, replyAck, reply := decide(ctx, c, s, memo, replies)
 		if ctx.Err() != nil {
-			d, pending, observations, replyAck = Unknown, nil, nil, false
+			d, pending, observations, replyAck, reply = Unknown, nil, nil, false, nil
 		}
-		out = append(out, Result{Summary: s, Decision: d, RequiredMessage: pending, Observations: observations, ReplyAck: replyAck})
+		out = append(out, Result{Summary: s, Decision: d, RequiredMessage: pending, Observations: observations, ReplyAck: replyAck, Reply: reply})
 	}
 	return out
 }
@@ -149,12 +153,12 @@ func sessionObservation(role string, ref SessionRef, memo map[string]memoSession
 	}
 	return obs, true
 }
-func decide(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession, replies map[noteKey][]Summary) (Decision, *MessageRef, []protocol.CoordArchiveObservation, bool) {
+func decide(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession, replies *replyIndex) (Decision, *MessageRef, []protocol.CoordArchiveObservation, bool, *Summary) {
 	if s.Kind == InboxMessage && ctx.Err() == nil && c.Reader != nil && validSummary(s, c.OperatorNamespace) {
 		return decideInbox(ctx, c, s, memo, replies)
 	}
 	d, pending, observations := decideRecord(ctx, c, s, memo)
-	return d, pending, observations, false
+	return d, pending, observations, false, nil
 }
 
 func decideRecord(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession) (Decision, *MessageRef, []protocol.CoordArchiveObservation) {
@@ -212,22 +216,62 @@ func validInboxRecipient(s Summary) bool {
 
 type noteKey struct{ project, name, uid string }
 
-func indexParentReplies(summaries []Summary, namespace string) map[noteKey][]Summary {
-	out := map[noteKey][]Summary{}
+// replyIndex is the pass's reply list. A nil index means the delete recheck
+// lists replies itself. err records a read that failed for one note; that note
+// stays Unknown rather than releasing without its reply.
+type replyIndex struct {
+	byNote map[noteKey][]Summary
+	err    map[noteKey]error
+}
+
+func indexParentReplies(ctx context.Context, c EvalConfig, summaries []Summary) *replyIndex {
+	idx := &replyIndex{byNote: map[noteKey][]Summary{}, err: map[noteKey]error{}}
+	if c.Reader == nil {
+		return idx
+	}
+	notes := map[noteKey]Summary{}
+	var replies []Summary
 	for _, s := range summaries {
-		if s.Kind != InboxMessage || s.MessageKind != inbox.KindReply || s.ReplyToName == "" || s.ReplyToUID == "" {
+		if s.Kind != InboxMessage {
 			continue
 		}
-		if !s.ParentNote && s.CallerSenderUID == "" {
-			continue
+		notes[noteKey{s.Project, s.Name, s.UID}] = s
+		if s.MessageKind == inbox.KindReply && s.ReplyToName != "" && s.ReplyToUID != "" {
+			replies = append(replies, s)
 		}
-		if !validSummary(s, namespace) {
-			continue
+	}
+	for _, s := range replies {
+		if err := ctx.Err(); err != nil {
+			return idx
 		}
 		key := noteKey{s.Project, s.ReplyToName, s.ReplyToUID}
-		out[key] = append(out[key], s)
+		note, ok := notes[key]
+		if !ok {
+			continue
+		}
+		var msg coord.InboxMessage
+		objectKey := client.ObjectKey{Namespace: s.Namespace, Name: s.Name}
+		err := c.Reader.Get(ctx, objectKey, &msg)
+		if ctx.Err() != nil {
+			return idx
+		}
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			idx.err[key] = err
+			continue
+		}
+		if !matchesObject(&msg, objectKey) || string(msg.UID) != s.UID || !validReply(note, &msg, c.OperatorNamespace) {
+			continue
+		}
+		fresh, ok := summarizeInbox(&msg, c.OperatorNamespace)
+		if !ok {
+			continue
+		}
+		idx.byNote[key] = append(idx.byNote[key], fresh)
 	}
-	return out
+	return idx
 }
 
 func noteUsesReplyAck(s Summary) bool {
@@ -237,12 +281,36 @@ func noteUsesReplyAck(s Summary) bool {
 		return false
 	}
 	// A caller sender's child is the recipient. That session keeps the record
-	// until it is gone. Reply-as-ack is for a child-authored note whose parent
-	// is still live, and for a caller recipient once the child sender is gone.
+	// until it is gone. A reply counts as the ack for a caller recipient, and
+	// for a session parent only once that parent session is gone.
 	if s.CallerSenderUID != "" {
 		return false
 	}
 	return s.ParentNote || s.CallerRecipient
+}
+
+// inboxShapeDecided reports the endpoint pairs retention may release or keep.
+// Every other pair, including caller to caller, is Unknown.
+func inboxShapeDecided(s Summary) bool {
+	sessionSender := s.CallerSenderUID == "" && s.Sender != (SessionRef{})
+	sessionRecipient := !s.CallerRecipient && s.Recipient != (SessionRef{})
+	callerSender := s.CallerSenderUID != "" && s.Sender == (SessionRef{})
+	callerRecipient := s.CallerRecipient && s.Recipient.Namespace == "" && s.Recipient.Name == "" && s.Recipient.UID != ""
+	switch {
+	case sessionSender && sessionRecipient && !callerSender && !callerRecipient:
+		return true
+	case sessionSender && callerRecipient && !callerSender:
+		switch s.MessageKind {
+		case inbox.KindQuestion, inbox.KindResult, inbox.KindBlocker:
+			return true
+		default:
+			return false
+		}
+	case callerSender && sessionRecipient && !callerRecipient:
+		return s.MessageKind == inbox.KindReply || s.MessageKind == ""
+	default:
+		return false
+	}
 }
 
 // callerPartyObservation records a Meatball party in the only shape the
@@ -256,57 +324,86 @@ func callerPartyObservation(role, policyUID, observed, ackUID string) (protocol.
 	return protocol.CoordArchiveObservation{Role: role, Namespace: namespace, Name: name, UID: policyUID, Observed: observed, AckUID: ackUID}, true
 }
 
-func decideInbox(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession, replies map[noteKey][]Summary) (Decision, *MessageRef, []protocol.CoordArchiveObservation, bool) {
+func decideInbox(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession, replies *replyIndex) (Decision, *MessageRef, []protocol.CoordArchiveObservation, bool, *Summary) {
+	if !inboxShapeDecided(s) {
+		return Unknown, nil, nil, false, nil
+	}
 	senderAnswer, senderObs, ok := inboxSender(ctx, c, s, memo)
 	if !ok {
-		return Unknown, nil, nil, false
+		return Unknown, nil, nil, false, nil
 	}
 	if senderAnswer == sessionPresent {
-		return Kept, nil, []protocol.CoordArchiveObservation{senderObs}, false
+		return Kept, nil, []protocol.CoordArchiveObservation{senderObs}, false, nil
+	}
+	// A caller-authored record is released only when its child session is gone.
+	// A read ack does not shortcut that.
+	if s.CallerSenderUID != "" {
+		recipientAnswer, recipientObs, ok := inboxRecipient(ctx, c, s, memo)
+		if !ok {
+			return Unknown, nil, nil, false, nil
+		}
+		decision := Released
+		if recipientAnswer == sessionPresent {
+			decision = Kept
+		}
+		return decision, nil, []protocol.CoordArchiveObservation{senderObs, recipientObs}, false, nil
 	}
 	if !s.CallerRecipient {
 		decision, observations, done := inboxAck(ctx, c, s, senderObs)
 		if done {
-			return decision, nil, observations, false
+			return decision, nil, observations, false, nil
 		}
 	}
-	if noteUsesReplyAck(s) {
-		replyUID, replyErr := provenReply(ctx, c, s, replies)
-		if replyUID != "" {
-			obs, ok := replyAckObservation(s, replyUID)
-			if !ok {
-				return Unknown, nil, nil, false
-			}
-			return Released, nil, []protocol.CoordArchiveObservation{senderObs, obs}, true
+	if noteUsesReplyAck(s) && !s.CallerRecipient {
+		// The reply counts as the ack only once the parent session is gone.
+		// While that session exists the note is kept, answered or not.
+		recipientAnswer, recipientObs, ok := inboxRecipient(ctx, c, s, memo)
+		if !ok {
+			return Unknown, nil, nil, false, nil
 		}
-		if replyErr != nil && !s.CallerRecipient {
-			recipientAnswer, _, recipientOK := inboxRecipient(ctx, c, s, memo)
-			if recipientOK && recipientAnswer == sessionAbsent {
-				obs, obsOK := sessionObservation("recipient", s.Recipient, memo)
-				if !obsOK {
-					return Unknown, nil, nil, false
-				}
-				return Released, nil, []protocol.CoordArchiveObservation{senderObs, obs}, false
-			}
-			return Unknown, nil, nil, false
+		if recipientAnswer == sessionPresent {
+			return Kept, nil, []protocol.CoordArchiveObservation{senderObs, recipientObs}, false, nil
 		}
+		reply, err := provenReply(ctx, c, s, replies)
+		if reply != nil {
+			obs, obsOK := replyAckObservation(s, reply.UID)
+			if !obsOK {
+				return Unknown, nil, nil, false, nil
+			}
+			return Released, nil, []protocol.CoordArchiveObservation{senderObs, obs}, true, reply
+		}
+		if err != nil {
+			return Unknown, nil, nil, false, nil
+		}
+		return Released, nil, []protocol.CoordArchiveObservation{senderObs, recipientObs}, false, nil
 	}
 	if s.CallerRecipient {
-		obs, ok := callerPartyObservation("recipient", s.Recipient.UID, "not-found", "")
-		if !ok {
-			return Unknown, nil, nil, false
+		reply, err := provenReply(ctx, c, s, replies)
+		if reply != nil {
+			obs, obsOK := replyAckObservation(s, reply.UID)
+			if !obsOK {
+				return Unknown, nil, nil, false, nil
+			}
+			return Released, nil, []protocol.CoordArchiveObservation{senderObs, obs}, true, reply
 		}
-		return Released, nil, []protocol.CoordArchiveObservation{senderObs, obs}, false
+		if err != nil {
+			return Unknown, nil, nil, false, nil
+		}
+		obs, obsOK := callerPartyObservation("recipient", s.Recipient.UID, "not-found", "")
+		if !obsOK {
+			return Unknown, nil, nil, false, nil
+		}
+		return Released, nil, []protocol.CoordArchiveObservation{senderObs, obs}, false, nil
 	}
 	recipientAnswer, recipientObs, ok := inboxRecipient(ctx, c, s, memo)
 	if !ok {
-		return Unknown, nil, nil, false
+		return Unknown, nil, nil, false, nil
 	}
 	decision := Released
 	if recipientAnswer == sessionPresent {
 		decision = Kept
 	}
-	return decision, nil, []protocol.CoordArchiveObservation{senderObs, recipientObs}, false
+	return decision, nil, []protocol.CoordArchiveObservation{senderObs, recipientObs}, false, nil
 }
 
 func inboxSender(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession) (sessionAnswer, protocol.CoordArchiveObservation, bool) {
@@ -356,22 +453,26 @@ func replyAckObservation(s Summary, replyUID string) (protocol.CoordArchiveObser
 	return protocol.CoordArchiveObservation{Role: "recipient", Namespace: s.Recipient.Namespace, Name: s.Recipient.Name, UID: s.Recipient.UID, Observed: "acknowledged", AckUID: replyUID}, true
 }
 
-func provenReply(ctx context.Context, c EvalConfig, note Summary, replies map[noteKey][]Summary) (string, error) {
+func provenReply(ctx context.Context, c EvalConfig, note Summary, replies *replyIndex) (*Summary, error) {
 	// A nil index has not seen the pass's list. The delete recheck has one
 	// record, so it reads replies itself. An empty index already did.
 	if replies == nil {
 		return listedReply(ctx, c, note)
 	}
+	key := noteKey{note.Project, note.Name, note.UID}
+	if err := replies.err[key]; err != nil && len(replies.byNote[key]) == 0 {
+		return nil, err
+	}
 	var lastErr error
-	for _, candidate := range replies[noteKey{note.Project, note.Name, note.UID}] {
+	for _, candidate := range replies.byNote[key] {
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		}
 		var msg coord.InboxMessage
-		key := client.ObjectKey{Namespace: candidate.Namespace, Name: candidate.Name}
-		err := c.Reader.Get(ctx, key, &msg)
+		objectKey := client.ObjectKey{Namespace: candidate.Namespace, Name: candidate.Name}
+		err := c.Reader.Get(ctx, objectKey, &msg)
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		}
 		if apierrors.IsNotFound(err) {
 			continue
@@ -380,59 +481,109 @@ func provenReply(ctx context.Context, c EvalConfig, note Summary, replies map[no
 			lastErr = err
 			continue
 		}
-		if !matchesObject(&msg, key) || string(msg.UID) != candidate.UID || !replyBinds(note, msg) {
+		// The fresh read uses the same function as the pass index and the recheck list.
+		if !matchesObject(&msg, objectKey) || string(msg.UID) != candidate.UID || !validReply(note, &msg, c.OperatorNamespace) {
 			continue
 		}
-		return string(msg.UID), nil
+		fresh, ok := summarizeInbox(&msg, c.OperatorNamespace)
+		if !ok {
+			continue
+		}
+		return &fresh, nil
 	}
-	return "", lastErr
+	return nil, lastErr
 }
 
-func listedReply(ctx context.Context, c EvalConfig, note Summary) (string, error) {
-	// Kind and project only. replyBinds then keeps a labelled parent reply or
-	// a caller-sender reply, which is the same set the pass index keeps. A
-	// parent-note label on this list would miss a caller reply the pass had
-	// already counted as the ack.
+func listedReply(ctx context.Context, c EvalConfig, note Summary) (*Summary, error) {
+	// Kind and project select the page. validReply then applies the same
+	// label, message, name and resourceVersion rules as the pass index.
+	// A parent-note label on this list would miss a caller reply.
 	selector := client.MatchingLabels{
 		inbox.KindLabel:        inbox.KindReply,
 		taskclaim.ProjectLabel: note.Project,
 	}
 	cursor, seen := "", map[string]struct{}{}
-	found := ""
+	var found *Summary
 	for page := 0; page < 128; page++ {
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return nil, err
 		}
 		var list coord.InboxMessageList
 		err := c.Reader.List(ctx, &list, client.InNamespace(c.OperatorNamespace), selector, client.Limit(50), client.Continue(cursor))
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		}
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if len(list.Items) > 50 {
-			return "", fmt.Errorf("parent reply list page exceeds its bound")
+			return nil, fmt.Errorf("parent reply list page exceeds its bound")
 		}
 		for i := range list.Items {
 			msg := &list.Items[i]
-			if msg.Namespace != c.OperatorNamespace || !protocol.ValidKubeUID(string(msg.UID)) || !replyBinds(note, *msg) {
+			if !validReply(note, msg, c.OperatorNamespace) {
 				continue
 			}
-			if found == "" {
-				found = string(msg.UID)
+			if found == nil {
+				fresh, ok := summarizeInbox(msg, c.OperatorNamespace)
+				if !ok {
+					continue
+				}
+				found = &fresh
 			}
 		}
 		if list.Continue == "" {
 			return found, nil
 		}
 		if _, ok := seen[list.Continue]; ok || list.Continue == cursor {
-			return "", fmt.Errorf("parent reply list repeated its cursor")
+			return nil, fmt.Errorf("parent reply list repeated its cursor")
 		}
 		seen[list.Continue] = struct{}{}
 		cursor = list.Continue
 	}
-	return "", fmt.Errorf("parent reply list did not end")
+	return nil, fmt.Errorf("parent reply list did not end")
+}
+
+// validReply is the only acceptance check for a stored reply. The pass index,
+// the fresh read of an indexed candidate, and the recheck list all call it:
+// the same labels, inbox.ValidMessage, the name derived from the sender and
+// the key, and the resourceVersion check inside validSummary.
+func validReply(note Summary, msg *coord.InboxMessage, namespace string) bool {
+	if msg == nil || msg.Namespace != namespace {
+		return false
+	}
+	labels := msg.GetLabels()
+	callerSender := msg.Spec.CallerSender != nil && msg.Spec.Sender == (coord.SessionIdentity{})
+	if labels[inbox.KindLabel] != inbox.KindReply || labels[taskclaim.ProjectLabel] != msg.Spec.Project {
+		return false
+	}
+	if labels[inbox.ParentNoteLabel] != "true" && !callerSender {
+		return false
+	}
+	if !inbox.ValidMessage(msg.Spec) || msg.GetName() != inbox.MessageNameFor(msg.Spec) {
+		return false
+	}
+	fresh, ok := summarizeInbox(msg, namespace)
+	if !ok || !validSummary(fresh, namespace) {
+		return false
+	}
+	if fresh.MessageKind != inbox.KindReply || fresh.ReplyToName == "" || fresh.ReplyToUID == "" {
+		return false
+	}
+	if !fresh.ParentNote && fresh.CallerSenderUID == "" {
+		return false
+	}
+	return replyBinds(note, *msg)
+}
+
+func summarizeInbox(msg *coord.InboxMessage, namespace string) (Summary, bool) {
+	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(msg)
+	if err != nil {
+		return Summary{}, false
+	}
+	u := &unstructured.Unstructured{Object: raw}
+	u.SetGroupVersionKind(kindResource(InboxMessage).gvk)
+	return summarize(kindResource(InboxMessage), namespace, u), true
 }
 
 func replyBinds(note Summary, reply coord.InboxMessage) bool {
