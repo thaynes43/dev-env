@@ -27,11 +27,13 @@ const (
 	ParentNoteMaxCursorBytes = 256
 )
 
-// ValidResourceVersion reports whether v is one Kubernetes resource version:
-// a canonical decimal integer, at most ParentNoteMaxCursorBytes long. Empty
-// is not a version. The caller does not guess a nearby value.
+// ValidResourceVersion reports whether v is one Kubernetes resource version a
+// parent wait can start from: a canonical decimal integer, at most
+// ParentNoteMaxCursorBytes long. Empty is not a version. Zero is not one
+// either: a watch from resourceVersion 0 replays objects that already exist.
+// The caller does not guess a nearby value.
 func ValidResourceVersion(v string) bool {
-	if v == "" || len(v) > ParentNoteMaxCursorBytes {
+	if v == "" || v == "0" || len(v) > ParentNoteMaxCursorBytes {
 		return false
 	}
 	n, err := strconv.ParseUint(v, 10, 64)

@@ -151,7 +151,7 @@ func TestParentWaitAnyInvalidArguments(t *testing.T) {
 	for _, args := range [][]string{
 		{"wait-any", "message." + strings.Repeat("a", 32) + "." + strings.Repeat("b", 32)},
 		{"wait-any", "--for", "0s"}, {"wait-any", "--for", "1500ms"}, {"wait-any", "--for", "-1s"},
-		{"wait-any", "--after", "nope"}, {"wait-any", "--after", "01"}, {"wait-any", "--after", long},
+		{"wait-any", "--after", "0"}, {"wait-any", "--after", "nope"}, {"wait-any", "--after", "01"}, {"wait-any", "--after", long},
 		{"wait-any", "--project", "dev-env"},
 	} {
 		h := newHarness(t)

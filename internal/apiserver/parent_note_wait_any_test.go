@@ -744,7 +744,9 @@ func TestParentNoteWaitAnyBadCursor(t *testing.T) {
 	f, parent, _, _ := parentNoteFixture(t, false)
 	p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1), listRV: "5"}
 	p.install(f)
-	bad := []string{"nope", "01", "-1", "1.2", strings.Repeat("9", 256), strings.Repeat("9", 257)}
+	// Zero is a canonical integer, and a watch from resourceVersion 0 replays
+	// notes that already exist, so it is not a cursor.
+	bad := []string{"0", "nope", "01", "-1", "1.2", strings.Repeat("9", 256), strings.Repeat("9", 257)}
 	for _, after := range bad {
 		w := f.do(http.MethodGet, apiv1.ParentNotesWaitAnyPath+"?seconds=1&after="+after, parent, nil)
 		e := wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
@@ -759,17 +761,5 @@ func TestParentNoteWaitAnyBadCursor(t *testing.T) {
 	}
 	if p.watches.Load() != 0 || p.lists.Load() != 0 || len(f.srv.parentWaits.held) != 0 {
 		t.Fatalf("bad cursor watched lists %d watches %d", p.lists.Load(), p.watches.Load())
-	}
-	// A canonical version is not a 422. Zero is a resource version.
-	p.gate = true
-	expire := armWaitAnyDeadline(f)
-	result, cancel := startWaitAny(f, parent, "seconds=30&after=0")
-	defer cancel()
-	receiveParentWait(t, p.started)
-	(*expire)()
-	w := receiveParentWait(t, result)
-	got, _ := decodeWaitAny(t, w)
-	if got.State != apiv1.ParentNoteWaiting || got.Cursor != "0" {
-		t.Fatalf("zero cursor %+v %s", got, w.Body.String())
 	}
 }
