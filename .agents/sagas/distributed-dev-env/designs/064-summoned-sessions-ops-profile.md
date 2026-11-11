@@ -2,16 +2,18 @@
 
 - **Status:** Proposed 2026-11-11 for coordinator review (story OP734). The
   coordinator ruled on all fifteen questions on 2026-11-11 (section 10.1),
-  then on every finding of two reviews of the first draft (section 10.2), and
-  sets Accepted when it rules on the re-reviewed PR. Two gates are Tom's and
-  Pending (section 8.1): no build story that changes access starts before his
-  ruling on this design. This document builds, deploys and switches nothing.
+  then on every finding of two reviews of the first draft (section 10.2) and
+  of the re-review of fix round 1 (section 10.3), and sets Accepted when it
+  rules on the re-reviewed PR. Three gates are Tom's and Pending (section
+  8.1): no build story that changes access starts before his ruling on this
+  design. This document builds, deploys and switches nothing.
 - **Tracking:** [Story OP734](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/734),
   under [Epic #112](https://work.haynesnetwork.com/work_packages/112). The
   coordinator's story is [OP751](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/751),
   owned by session `dev-env-1111-143337`. Author: worker session
   `dev-env-1111-144138`; fix round 1 (section 10.2): worker session
-  `dev-env-1111-155209`.
+  `dev-env-1111-155209`; fix round 2 (section 10.3): worker session
+  `dev-env-1111-170449`.
 - **Origin:** two sentences of Tom's, as item 734 quotes them. 2026-11-11, typed
   in coordinator session `dev-env-fable-coordinator-1109`: "Let's get another
   superuser fable 5.2 remote control session going with the work handed off to
@@ -456,7 +458,7 @@ nothing (ruling on F1, 2026-11-11).
 | What it can reach | How | v1's executor today |
 |---|---|---|
 | GitHub writes with the ops bot token: contents, pull requests and issues on the repositories the App's installation covers (6.2, Q-09). Pushing to a repository is also a way to move data out, whatever the DNS rule says | `/creds/gh_token` from `dev-env-ops-gh-token` (R24) | the same App's token, from the `gh-refresher` sidecar |
-| exec into any unprivileged pod outside the protected namespaces, the callers' pods in `upgrade-agent` included. Those pods hold the plan token, the metered fallback key (the alert-responder's `alert-responder-secret` carries `ANTHROPIC_API_KEY`: `alert-responder/app/externalsecret.yaml` line 18, mounted by `envFrom` in its `helmrelease.yaml` lines 94–96), and after #739 a projected token for the operator API, with which the session could create sessions under that caller's policy. 6.4's "a summoned session cannot create a session" holds for the session's own token, not for one it takes this way | the agent role's `pods/exec` create (`dev-env-system/rbac/app/agent.yaml` lines 81–85), refused only in the dev-env and controller namespaces (`identity-guard.yaml` rule 1) and into a privileged pod (`kyverno/policies/app/dev-env-exec-guard.yaml`); API-server proxy the same way (`agent.yaml` lines 86–90) | the same exec and proxy rights (`dev/dev-env/app/rbac.yaml` lines 84–86, ClusterRole `dev-env-operator`), bound with no guard (`upgrade-agent/dev-env-ops/app/rbac.yaml` lines 10–22). Its own pod holds the metered key (`dev-env-ops/app/helmrelease.yaml` lines 114–120, `upgrade-shepherd-llm-secret`) |
+| exec into any unprivileged pod outside the protected namespaces, the callers' pods in `upgrade-agent` included. Those pods hold the plan token, the metered fallback key (the alert-responder's `alert-responder-secret` carries `ANTHROPIC_API_KEY`: `alert-responder/app/externalsecret.yaml` line 18, mounted by `envFrom` in its `helmrelease.yaml` lines 94–96), and after #739 a projected token for the operator API, with which the session could create sessions under that caller's policy. 6.4's "a summoned session cannot create a session" holds for the session's own token, not for one it takes this way | the agent role's `pods/exec` create (`dev-env-system/rbac/app/agent.yaml` lines 81–85), refused only in the dev-env and controller namespaces (`identity-guard.yaml` rule 1), and into a privileged or host-PID pod or one that runs as a listed powerful ServiceAccount, `dev/dev-env` among them (`kyverno/policies/app/dev-env-exec-guard.yaml` lines 61–90; 6.12); API-server proxy the same way (`agent.yaml` lines 86–90) | the same exec and proxy rights (`dev/dev-env/app/rbac.yaml` lines 84–86, ClusterRole `dev-env-operator`), bound with no guard (`upgrade-agent/dev-env-ops/app/rbac.yaml` lines 10–22). Its own pod holds the metered key (`dev-env-ops/app/helmrelease.yaml` lines 114–120, `upgrade-shepherd-llm-secret`) |
 | the cigar-journal token | `CIGAR_JOURNAL_TOKEN` (R24) | the same token, for curation |
 | the Proxmox read token, which needs a LAN grant to be used; the broker approves no ops grant on its own (R26) | `dev-env-proxmox-secret`, optional (R24, 6.3) | not checked |
 
@@ -476,7 +478,7 @@ written by the operator leader unless a row says otherwise.
 
 | State | Record | Holds | Counted in |
 |---|---|---|---|
-| Queued | created; condition `SummonAdmitted=False` with its reason; `status.summon.admittedAt` absent | nothing: no pod, no latch | its caller's `queued`, unless it is urgent (a remediation or an escalation) |
+| Queued | created; condition `SummonAdmitted=False` with its reason; `status.summon.admittedAt` absent | nothing: no pod, no latch | its caller's `queued` if it is `normal` or `bulk`; its caller's `queuedUrgent` if it is `urgent` (a remediation or an escalation, the platform's filings included) |
 | Admitted | `status.summon.admittedAt`, set once | one reservation: its lane, if single-flight, and one slot in its pool | its pool and its lane |
 | Launched | the executor latch: an attempted pod is recorded before the create | the same reservation | the same |
 | Terminal | `status.outcome` terminal and `status.summon.closed` (`at`, `source` report or unreported, `reason`), written in one status write | the reservation until `closed.released` is true | nothing once released |
@@ -489,38 +491,83 @@ nothing else counts toward `escalations`. So an escalation waiting for Tom,
 for up to 72 hours, never holds back a remediation (C2), and a busy
 remediation never holds back an escalation.
 
-**The queue.** `limits.queued` counts the caller's Queued sessions of
-priority `normal` and `bulk` (upgrades and curation), apart from the pools
-(F5). A create of that priority past it gets 429 `summon queue full`, logged
-as an `ops-event` line, and the client exits 2 (refused). Default 4, range 0
-to 16: this design's own number, not from v1 or a record. An `urgent`
-session, a remediation or an escalation, is never refused for the queue. A
-refused urgent create would be silent: no session, no escalation and no page
-for its alert (R-01 F-04), where v1 queues every order. `createsPerHour`
-bounds how many urgent creates arrive; a Queued escalation pages after 15
-minutes (6.8), and a Queued remediation closes at its `maxHold` and files its
-own escalation (6.7). The one refusal left for an urgent create is
-`createsPerHour`, the storm limit DESIGN-001 3.7 decided; the responder keeps
-its own collapse, cooldown and page cap as the second layer, and the operator
-logs the refusal. A refused upgrade or curation run pages in neither v1 nor
-v2 while it waits; its caller sees exit 2.
+**The queues.** Two bounds per caller, apart from the pools (F5, N6), both
+this design's own defaults, not from v1 or a record:
 
-**The create ledger** (`createsPerHour`). One operator-owned ConfigMap in
-`dev-env-system` (for example `dev-env-summon-creates`), one key per caller
-holding that hour's charges, each with an id and a time, updated with an
-optimistic lock. The id is the new session's UID for a caller's create, and
-`filing:<remediation UID>` for the platform's filing. An id already in the
-ledger is never charged again. A repeated key that returns the existing
-session creates nothing and charges nothing (C9).
+- `limits.queued` counts the caller's Queued sessions of priority `normal`
+  and `bulk` (upgrades and curation). Default 4, range 0 to 16. A create of
+  that priority past it gets 429 `summon queue full`, logged as an
+  `ops-event` line, and the client exits 2 (refused). A refused upgrade or
+  curation run pages in neither v1 nor v2 while it waits; its caller sees
+  exit 2.
+- `limits.queuedUrgent` counts the caller's Queued sessions of priority
+  `urgent`: its remediations and escalations, the platform's filings for its
+  remediations included. Default 4, range 1 to 16; it is never 0, because 0
+  would refuse every urgent create that meets a busy pool, which ADR-025
+  rejects. A caller create past it gets 429 `summon urgent queue full`. It is
+  never silent (R-01 F-04): the API adds the refusal to the caller's count of
+  urgent refusals in the create ledger (below), in the same write that
+  refuses it; the keeper sends one `overflow` page per caller per hour, with
+  the caller and the refusals not yet paged (6.8). The caller-side page path
+  exists for remediation only: the responder fails open and pages, as it
+  does today when a hand-off fails (6.12); an escalation caller logs the
+  refusal, as today (6.13, Q-23). A platform
+  filing past it is not created: the remediation keeps its pending filing
+  (6.6, Blocked).
+
+So a caller's retained backlog is at most `queued` plus `queuedUrgent`
+Queued records, whatever arrives. `createsPerHour` bounds how many creates
+arrive, the storm limit DESIGN-001 3.7 decided; the responder keeps its own
+collapse, cooldown and page cap as the second layer. A Queued escalation
+pages after 15 minutes (6.8), and a Queued remediation closes at its
+`maxHold` and files its own escalation (6.7).
+
+**The create ledger** (`createsPerHour`, N1). One operator-owned ConfigMap in
+`dev-env-system` (for example `dev-env-summon-creates`), one key per caller,
+updated with an optimistic lock. Each key holds the caller's charges, each
+with a dispatch id and a time, and its count of urgent refusals with the
+time of the last one. The charge always comes first:
+
+1. **A caller's create.** The API chooses a dispatch id before it creates
+   anything (Q-21): a hash of the caller, the key and the UID of the key's
+   newest earlier Session (or none). A retry of one create sees the same
+   newest earlier Session, so it maps to the same id and charges nothing
+   twice; a re-fire after that Session ended gets a new id and a new charge.
+   A keyless create gets a fresh random id. The API commits the charge for
+   that id in the ledger, then creates the Session carrying the id as an
+   immutable field, `spec.summon.dispatchID`. An id already in the ledger is
+   not charged again. A charge with no Session is a spent slot of its hour,
+   never a free session. On AlreadyExists for a name the API reads that
+   Session: the same id is this request's Session (200); any other id is a
+   name clash and takes the next suffix (6.4). So one id never names two
+   Sessions. A repeated key whose session is returned creates nothing and
+   charges nothing (C9).
+2. **The platform's filing.** The id is `filing:<remediation UID>`; 6.6's
+   steps commit it before the child is created, and the child carries it.
+3. **The hour's last slot.** Two API replicas, or an API replica and the
+   leader, competing for it are decided by the ledger's write: one
+   optimistic-lock update wins, and the loser re-reads, finds the hour full
+   and gets 429 (a filing stays Pending, 6.6).
+4. **Ageing out.** A charge counts toward the hour of its time. The
+   invariant: no Session is admitted without a committed charge for its id.
+   A caller-create charge leaves the ledger once it is an hour old and its
+   Session exists and is admitted or closed; or once it is an hour old and
+   an uncached read by its id finds no Session. A later retry then maps to
+   the same id and is charged again: a double charge across two hours is
+   acceptable, an uncharged admitted Session is not. A filing's charge stays
+   until its remediation records `chargedAt` or the filing is `Abandoned`
+   (6.6).
 
 **Admission.** Only the leader admits, so two admissions cannot race across
 API replicas (R6's race is the API's). In each pass it takes Queued sessions
-oldest first and admits each whose single-flight lane is free, whose pool has
-a slot, whose quota gate passes (6.9) and whose policy still exists and names
-its ServiceAccount. After a release, the oldest eligible session gets the slot
-and the next stays Queued (F5). Admission writes `admittedAt` with the
-optimistic lock, after an uncached count of the pool's admitted, unreleased
-records. A leader that restarts recomputes everything from these records.
+oldest first and admits each whose dispatch id is committed in the ledger (an
+uncached read), whose single-flight lane is free, whose pool has a slot,
+whose quota gate passes (6.9) and whose policy still exists and names its
+ServiceAccount. A Session whose id the ledger does not hold is never
+admitted. After a release, the oldest eligible session gets the slot and the
+next stays Queued (F5). Admission writes `admittedAt` with the optimistic
+lock, after an uncached count of the pool's admitted, unreleased records. A
+leader that restarts recomputes everything from these records.
 
 **The executor latch (F3).** Written before the first pod create, never
 reversed:
@@ -550,11 +597,21 @@ reversed:
   session it does what it does for a retained private task
   (`daemon.go` lines 324–332): it starts nothing, and its status shows how
   the first run ended (`exited`, or `interrupted` when the process is gone
-  without a result, `internal/agentd/status.go` lines 164–170). A
-  late first launch is fenced by the start deadline: the controller sets
-  `AGENTD_START_DEADLINE` on a summoned session's pod (`pod.go` line 452, used
-  today for scheduled work), and agentd refuses a first launch past it
-  (`daemon.go` lines 404 and 426).
+  without a result, `internal/agentd/status.go` lines 164–170).
+- **The start deadline fences the provider's spawn, by new code (N2).** The
+  controller sets `AGENTD_START_DEADLINE` on a summoned session's pod
+  (`pod.go` line 452, used today for scheduled work). Today agentd checks it
+  only before it writes `launch.json` (`daemon.go` lines 404 and 426), and
+  says itself that "run-agent does not check the deadline again"
+  (lines 422–425). `StartAgent` writes the record and then asks tmux to start
+  run-agent (`launch.go` lines 422 and 430–433), and run-agent spawns the
+  provider later (`runagent.go` line 166 for a task, line 447 for a TUI). So
+  today's deadline does not fence the spawn. #741 adds the fence: for a
+  summoned session, run-agent checks the start deadline again immediately
+  before it spawns the provider, beside its existing pre-spawn check
+  (`runagent.go` lines 160 and 442), and past it refuses and starts no
+  provider. How run-agent learns the deadline is #741's to build; its test
+  proves it.
 - **Held and lost are told apart by the latch, not by `status.podName`**,
   which `observe` clears whenever the pod is absent (`reconciler.go`
   line 1586). Queued or admitted with no attempt: held. An attempt with an
@@ -562,17 +619,38 @@ reversed:
   is recorded; if none appears by the start deadline, the session closes
   `never-started`. An attempt with a recorded pod that an uncached read shows
   gone: lost.
-- **One explicit exception:** a person's `agent-run resume` (no summoning
-  caller can call it) of a summoned remote session whose outcome is terminal
-  and whose recorded pod is confirmed gone. It resumes the conversation with
-  `--resume`, never sends the brief again, reserves nothing and leaves the
-  outcome as it is. #741 builds it as a separate continuation record, as
-  DESIGN-025's explicit Claude continuation is; until it does, resuming a
-  summoned session is refused.
+- **No resume, by anyone (N3).** Resuming a summoned session is refused,
+  whoever asks. Today any caller may resume any session
+  (`internal/apiserver/lifecycle.go` lines 18–24 and 30–31), so #741 adds the
+  refusal to the resume route for a session with `spec.caller` set, beside
+  the controller's latch check above. Fix round 1 had added an exception for
+  a person's resume of a terminal remote session; no ruling asked for it, and
+  it is removed (9.1, not built). What Tom keeps, as the code is (Q-22):
+  - A terminal remote session (an escalation or an upgrade) whose pod still
+    runs stays joinable until its idle suspend. Its volume is kept until it
+    is archived; after the suspend nothing reads its conversation. Remote
+    sessions are never in the history archive `agent-run history` reads
+    (`internal/controller/private_history.go` lines 42–46: "Remote and local
+    sessions are never marked").
+  - A task (a remediation or a curation run) keeps its Session, outcome and
+    note for 7 days after it ends (R17), and a bundle of its unpushed work for
+    30 days. That is already Tom's rule, not new here: ADR-020 (2026-11-10;
+    he chose "Build exactly that" for a proposal that said "nothing else is
+    kept, no conversation archive"), decision 4, and C-53 (the history
+    archive has "no task-session use left"). Once the task has stopped,
+    nothing reads its conversation. For remote sessions the rule above is
+    today's lifecycle.
+  - So v2 keeps no summoned session's conversation readable once it stops
+    running, where v1 keeps every transcript on its volume, and R-01's audit
+    was made from those transcripts. That is a difference in retained data,
+    recorded under gate T-2 (8.1) and in V-15 (7.1), with the ADR-020 part
+    marked as already ruled.
 
-**Which story lands what.** The remote latch, the start deadline, the queue
-and the pools land in #741. No remote summoned session runs before #741 is
-installed, so #745 depends on it. Until then a summoned task (the curation
+**Which story lands what.** The create ledger, the dispatch id and the
+charge before create land in #738. The remote latch, the start deadline,
+run-agent's pre-spawn check, the resume refusal, the queues and the pools
+land in #741. No remote summoned session runs before #741 is installed, so
+#745 depends on it. Until then a summoned task (the curation
 move, #746) already has the private-task latch, and #738 refuses a create past
 its pool (6.4).
 
@@ -593,8 +671,11 @@ page or digest and the platform's filing all key on that one record.
 - A terminal outcome the operator declared releases once the latch guarantees
   no further launch: at once when there was no attempt, when the recorded pod
   is confirmed gone, or when the agent had started (the latch then refuses a
-  second pod and agentd refuses a continuation); otherwise at the start
-  deadline, after which agentd refuses a first launch.
+  second pod and agentd refuses a continuation); otherwise, with a first
+  launch possibly in flight, at the start deadline, after which run-agent's
+  new pre-spawn check (above) refuses to spawn the provider. Until that check
+  is in the build, such a close releases its reservation only when the
+  recorded pod is confirmed gone (N2).
 - **What still runs.** If the old process cannot be confirmed stopped (a
   partitioned node, a hung agentd whose pod still runs), it can keep acting
   after its reservation is released, beside the next session in its lane. A
@@ -610,7 +691,22 @@ Queued records with caller caps of one and two; leader restart; simultaneous
 API creates; cold create, held admission, a cached absence, a real pod loss, a
 same-pod agentd restart, an operator restart, and a late heartbeat or report.
 For each: no second provider launch for one session, no double count, no
-double page, no second filing.
+double page, no second filing. Added in fix round 2: the paused launch (N2):
+pause between the launch record and the provider spawn, advance past the
+start deadline, close and release on the operator, resume the paused path,
+and run-agent refuses and no provider starts; a resume of a summoned session
+by a person, a session and a caller is refused (N3); and N6's proof: distinct
+urgent keys over several hours with the escalation pool full give at most
+`queuedUrgent` Queued urgent records, and every refusal appears in an
+`overflow` page.
+
+**Proof of the charge order (N1), in #738's contract for a caller's create
+and #740's for a filing:** a crash after the Session is created; a crash
+after the charge and before the acknowledgement, retried across the hour's
+rollover; recovery by a repeated key; two replicas competing for the hour's
+last charge; an hour-old charge with no Session dropped and its retry charged
+again. Each shows one charge per dispatch id within an hour and at most one
+admitted Session per id, not merely a successful ConfigMap update.
 
 ## 6. Contracts per build story
 
@@ -632,7 +728,7 @@ ingress rule carries the same exclusions as the egress rules.
 
 | Destination | Port | v1 source (`upgrade-agent/dev-env-ops/app/networkpolicy.yaml`) |
 |---|---|---|
-| kube-dns, with a DNS rule that lists v1's names minus `api.pushover.net`: `*.cluster.local`, `*.svc`, the Alertmanager, Prometheus and Loki service names, `github.com`, `*.github.com`, `*.githubusercontent.com`, `ghcr.io`, `anthropic.com`, `*.anthropic.com`, `claude.ai`, `*.claude.ai`, `claude.com`, `*.claude.com`, `bridge.claudeusercontent.com`, `cigars.haynesnetwork.com` | 53 | rule 1, lines 31–52, minus Pushover (C4). An any-name rule (`matchPattern: "*"`, as the platform tier has) would be a way out of a pod with no open web, so the ops tier does not use it |
+| kube-dns, with a DNS rule that lists v1's names minus `api.pushover.net`: `*.cluster.local`, `*.svc`, the Alertmanager, Prometheus and Loki service names, `github.com`, `*.github.com`, `*.githubusercontent.com`, `ghcr.io`, `anthropic.com`, `*.anthropic.com`, `claude.ai`, `*.claude.ai`, `claude.com`, `*.claude.com`, `bridge.claudeusercontent.com`, `cigars.haynesnetwork.com`; plus one v2 name, the exact operator service name `dev-env-operator.dev-env-system.svc.cluster.local` (N5) | 53 | rule 1, lines 31–52, minus Pushover (C4). An any-name rule (`matchPattern: "*"`, as the platform tier has) would be a way out of a pod with no open web, so the ops tier does not use it. The added name is the session API URL the operator gives sessions (haynes-ops `dev-env-system/operator/app/helmrelease.yaml` lines 364–366, `--api-url=https://dev-env-operator.dev-env-system.svc.cluster.local:8443`, whose comment says the DNS allowlist refuses search-expanded names). v1's patterns do not match it: its comment says "Cilium `*` does NOT cross label boundaries — multi-label service FQDNs need exact matchNames" (lines 19–20), and v1 had no v2 API to reach |
 | `kube-apiserver` entity | 443, 6443 | rule 2 |
 | `dev-env-system` pods `app.kubernetes.io/name: dev-env-operator` | 8443 | none (v1 had no v2 API) |
 | `github.com`, `*.github.com`, `*.githubusercontent.com`, `ghcr.io` | 443 | rule 4 |
@@ -649,7 +745,8 @@ ingress rule carries the same exclusions as the egress rules.
   (`192.168.0.0/16`), and every in-cluster service not listed.
 - **Platform tier (Q-01).** `session-platform.yaml`'s `endpointSelector` gets
   `dev-env.haynesops.com/egress NotIn [ops]`. The ops policy carries its own
-  DNS, API server and operator rules (the first three rows), so an ops pod
+  DNS (with the operator's name), API server and operator rules (the first
+  three rows), so an ops pod
   reaches no shared MCP service, OpenProject or authoring pod.
 - Every pod still renders `mcp.json`. In an ops pod those servers fail to
   connect, except cigar-journal. Not verified: that Claude Code starts without
@@ -662,7 +759,11 @@ ingress rule carries the same exclusions as the egress rules.
   and is refused for `https://example.com`, which Hubble shows. Added (F7): a
   TCP connect from another `dev-agents` pod to the probe pod is dropped, which
   Hubble shows; and (C4) a lookup of a name outside the list is refused by the
-  DNS proxy.
+  DNS proxy. Added (N5): from the probe pod, the operator's service name
+  resolves, and an authenticated call to the operator API with the session's
+  own token works (its agentd heartbeat, which exists today; the report route
+  comes later, in #740). An allowed TCP destination alone does not prove that
+  path.
 
 ### 6.2 OP736: the keeper mints the ops bot token
 
@@ -742,7 +843,7 @@ metadata:
 spec:
   summon:
     serviceAccount: upgrade-agent/alert-responder
-    limits: { concurrent: 1, escalations: 2, queued: 4, createsPerHour: 6 }
+    limits: { concurrent: 1, escalations: 2, queued: 4, queuedUrgent: 4, createsPerHour: 6 }
     sessions:
       - kind: task
         lane: remediation
@@ -792,7 +893,8 @@ not use the escalation entry's prefix: it is named under `esc-rem-` (6.6).
 | `summon.serviceAccount` | `<namespace>/<name>`, MaxLength 128; namespace not `dev-agents`, `dev-env-system` or `dev-tools`; `metadata.name` equals it with `/` replaced by `.` |
 | `summon.limits.concurrent` | 1 to 4. Counts admitted, unreleased sessions of every entry except the escalation entry (5.9) |
 | `summon.limits.escalations` | 1 to 4, required when the policy has an escalation entry, absent otherwise. Counts admitted, unreleased escalations, the platform's filings included (5.9) |
-| `summon.limits.queued` | 0 to 16, default 4: this design's default. Counts Queued sessions of priority `normal` and `bulk`; an `urgent` session (remediation or escalation) is never refused for it (5.9) |
+| `summon.limits.queued` | 0 to 16, default 4: this design's default. Counts Queued sessions of priority `normal` and `bulk` (5.9) |
+| `summon.limits.queuedUrgent` | 1 to 16, default 4: this design's default (N6). Counts Queued sessions of priority `urgent`, the platform's filings for the caller's remediations included; never 0 (5.9) |
 | `summon.limits.createsPerHour` | 1 to 30 |
 | `summon.sessions` | 1 to 6 entries; `(kind, lane)` unique |
 | `kind` | `task` or `remote` |
@@ -841,8 +943,9 @@ not use the escalation entry's prefix: it is named under `esc-rem-` (6.6).
   `api/v1alpha1/agentsession_types.go` line 193, which is haynes-ops's default
   branch), `spec.profile`, `spec.model` = default, `spec.effort`,
   `spec.limits` from the entry, `spec.prompt` = the rendered brief (5.6), and
-  a new immutable `spec.summon` snapshot: `{priority, fallbackModel,
-  onUnreported, staleAfter, maxHold, escalation}`. For a remediation,
+  a new immutable `spec.summon` snapshot: `{dispatchID, priority,
+  fallbackModel, onUnreported, staleAfter, maxHold, escalation}`, where
+  `dispatchID` is the id the ledger charged before the create (5.9, N1). For a remediation,
   `escalation` is a copy of the policy's escalation entry at this create
   (kind, lane, repo, profile, model, fallback, effort, onUnreported), so a
   later policy change can neither widen nor remove the filing's settings
@@ -854,19 +957,27 @@ not use the escalation entry's prefix: it is named under `esc-rem-` (6.6).
   terminal outcome returns that session with 200 and charges nothing. The
   request hash for a summoned session covers `mode`, `lane` and `name`, not
   `data`, so a re-fire with fresher alert text returns the running session
-  and does not change its brief; a different `mode`, `lane` or `name` under
+  and does not change its brief. A 200 on a repeated key does not mean the
+  new data was taken: a caller must not read it as delivery of an update,
+  nor reuse a key for unrelated work. A different `mode`, `lane` or `name` under
   the same key is 409, as today (`sessions.go` lines 114–125). If the newest
   session is finished or has a terminal outcome, the new session takes the
   requested name if it is free, else the first free suffix `-2` to `-99`; the
   earlier record is kept (finished tasks stay 7 days, R17). A name held by a
-  session with a different key is 409. Ordinary and budget-bound replay rules
-  do not change.
+  session with a different key is 409. These checks, and every 422 and 403
+  above, come before the charge, so a refused request spends no slot. Then
+  5.9's order: the dispatch id (Q-21), the charge, the create carrying the
+  id. If the create meets AlreadyExists (another request took the name since
+  the check), the API reads that Session: the same id is this request's
+  Session (200); any other id is a name clash and takes the next suffix.
+  Ordinary and budget-bound replay rules do not change.
 - **Limits, from records a caller cannot remove (Q-19), by 5.9's model.** A
   summoning caller has no DELETE route and no RBAC in `dev-agents` or
   `dev-env-system`, so it can remove neither its sessions nor the ledger. Past
   `createsPerHour` the create gets 429; past `queued`, an upgrade or curation
-  create gets 429 (an urgent one never does); past a pool, the create is
-  Queued (6.7). Until #741 is on there is no queue: #738 alone
+  create gets 429; past `queuedUrgent`, a remediation or escalation create
+  gets 429, counted in the ledger and paged as `overflow` (5.9, 6.8); past a
+  pool, the create is Queued (6.7). Until #741 is on there is no queue: #738 alone
   refuses with 429 a create that would exceed its pool, counting the caller's
   unfinished summoned sessions per pool. Every refusal is logged.
 - **A summoned session cannot create a session (Q-19).** On `POST
@@ -882,7 +993,8 @@ not use the escalation entry's prefix: it is named under `esc-rem-` (6.6).
   `prompt` gets 422 (5.6); `esc-rem-` gets 403; a policy naming profile `dev`
   or a prefix `esc-rem-` is refused by the CRD; a re-fire with different
   `data` returns the same session with 200 and no ledger charge; the
-  suffix rule; the Meatball tests pass unchanged; an account with no policy
+  suffix rule; 5.9's charge-order proof (N1); a refused request leaves no
+  charge; the Meatball tests pass unchanged; an account with no policy
   still gets 403.
 
 ### 6.5 OP739: the caller transport
@@ -988,12 +1100,15 @@ wins (5.9).
 **The guaranteed outcome (V-08, F4).** The operator leader watches summoned
 sessions whose outcome is not terminal. On the first of these inputs it writes
 `spec.summon.onUnreported`, in 5.9's one terminal transition, with the note
-`unreported: <reason>`. It never writes or invents a `status.taskResult`.
+`unreported: <reason>`. When one pass sees more than one input, the earliest
+row of this table wins, so one close has exactly one reason, and 6.8's table
+maps that reason to exactly one terminal event (N8). It never writes or invents a `status.taskResult`.
 
 | Input (durable evidence) | Sessions | Reason |
 |---|---|---|
 | `status.taskResult` is set | task | `timed-out` for TimedOut, `exit-unknown` for Unknown, else `agent-exited`; `turn-cap` only if the result's reason names the turn cap (not verified that it does) |
 | `status.agent.status` is `exited` with no task result | both | `agent-exited` |
+| no usable model at start (6.9); listed before `agent-failed` because it is the more specific cause of a start that failed | both | `no-usable-model` |
 | `status.agent.status` is `failed`: agentd could not start the agent | both | `agent-failed` |
 | `status.agent.status` is `interrupted`: the process is gone without a result, a same-pod agentd restart included (the latch keeps it from resuming, 5.9) | both | `agent-interrupted` |
 | the pod is terminal (phase Succeeded or Failed, or every container terminated) with no task result | both | `pod-terminated` |
@@ -1002,7 +1117,6 @@ sessions whose outcome is not terminal. On the first of these inputs it writes
 | the task deadline (below) | task | `deadline` |
 | no heartbeat for 10 minutes while its pod exists (this design's default) | remote | `heartbeat-lost` |
 | the watchdog trips (6.7) | remote | `stale` or `escalation-bound` |
-| no usable model at start (6.9) | both | `no-usable-model` |
 | Queued past `maxHold` (6.7) | Queued | `hold-expired`, or `quota-hold-expired` when the hold was `QuotaHold` |
 | suspended before a terminal outcome (6.7) | both | `suspended-unreported` |
 
@@ -1012,8 +1126,12 @@ lines 133–170), and attaches a task result only when a result file exists
 (line 187), so the close keys on the agent and pod states, not on a lost
 heartbeat (F4).
 
-- **The task deadline** is the operator's own: the latch's attempt time plus
-  `limits.timeout` plus 10 minutes, by the operator's clock. It trips whatever
+- **The task deadline** is the operator's own (N7): `admittedAt` plus the
+  start allowance (15 minutes, the start deadline's) plus `limits.timeout`
+  plus 10 minutes, by the operator's clock. `admittedAt` is written once, at
+  admission, and is durable, so a restarted leader recomputes the same
+  deadline; no new timestamp is recorded. A re-arm after a known non-attempt
+  (5.9) does not move it, and neither does an unknown pod-create response. It trips whatever
   agentd reports, so it bounds a run-agent that vanished with its own timer
   (`internal/agentd/runagent.go` line 261). The 1-hour task idle suspend is
   not this bound: it does nothing to a pod that is not running and ready
@@ -1058,28 +1176,46 @@ another escalation.
      Pending, name}` on the remediation, in the same write as the outcome.
   2. The charge: ledger id `filing:<remediation UID>`, then
      `status.summon.escalation.chargedAt`. An id already in the ledger, or a
-     `chargedAt` already set, is never charged again.
+     `chargedAt` already set, is never charged again. The charge stays in
+     the ledger until `chargedAt` is recorded or the filing is `Abandoned`
+     (5.9), so a crash between the two never charges it twice.
   3. Before any create, an uncached list by the `filed-for-uid` label. A
-     child that exists is recorded. Otherwise the create; on AlreadyExists the
+     child that exists is recorded. Otherwise the create, the child carrying
+     the id `filing:<remediation UID>` as its `spec.summon.dispatchID`; on AlreadyExists the
      operator reads the session, records it if its `filedFor.uid` is the
      remediation's, and otherwise takes the next suffix.
   4. `status.summon.escalation = {state: Filed, name, uid}`. A Filed record
      never files again, even after its child has finished.
 - **Admission:** the child is Queued and admitted like any escalation, in the
-  `escalations` pool (5.9), never in `concurrent`.
+  `escalations` pool (5.9), never in `concurrent`. While Queued it counts
+  toward its caller's `queuedUrgent`.
 - **Blocked:** when the policy is gone or no longer names the account, the
-  hour's `createsPerHour` is spent, or remote summoned sessions are not
-  available yet (6.10 not installed, or the profile cannot
-  register), the remediation keeps `{state: Pending}` with the condition
-  `EscalationPending` and its reason, the `escalation-pending` page goes out
-  once (6.8), and the leader retries each pass. Nothing bypasses a limit, and
-  the filing is never dropped.
+  hour's `createsPerHour` is spent, the caller's `queuedUrgent` is full
+  (5.9), or remote summoned sessions are not available yet (6.10 not
+  installed, or the profile cannot register), the remediation keeps
+  `{state: Pending}` with the condition `EscalationPending` and its reason,
+  the `escalation-pending` page goes out once (6.8), and the leader retries
+  each pass. Nothing bypasses a limit.
+- **Abandoned, never in silence (N4).** A filing still Pending 24 hours after
+  its remediation closed (this design's default) is closed as `{state:
+  Abandoned, reason}`, in one status write, and a second page,
+  `escalation-abandoned`, says the escalation was never filed and why (6.8).
+  An Abandoned filing never files and is never retried. So Tom is paged when
+  the filing is first blocked and again when it is given up, both well inside
+  the 7 days before the task clean-up deletes the remediation (R17;
+  `internal/controller/task_cleanup.go` lines 299–311 trigger on the
+  executor's terminal record, and lines 1397–1431 delete the Session). This
+  design does not change ADR-020's retention and adds no hand-off store.
 - **Proof, in #740's contract:** a crash before and after the create; a lost
   create response; a child that has finished; a re-fire of the remediation's
   key while its escalation is open; an occupied name; a revoked policy; a
-  spent hourly limit; an escalation's own `escalate` (a page,
+  spent hourly limit; a full `queuedUrgent`; an escalation's own `escalate` (a page,
   no filing); a report racing the guaranteed close (one terminal write, one
-  page, one filing); a `working` after a terminal outcome (409, no change).
+  page, one filing); a `working` after a terminal outcome (409, no change);
+  5.9's charge-order proof for the filing (N1); and N4's: a filing blocked
+  across the 24-hour bound, with the policy restored before the bound (one
+  filing, its original UID binding and charge) and after it (`Abandoned`, no
+  filing, the second page).
 
 **Log line.** One line per outcome decision on the operator's stdout, so it
 reaches Loki:
@@ -1103,7 +1239,7 @@ Queued; the controller builds no pod until it is admitted. The condition
 `concurrent` or `escalations`, is full) or `QuotaHold` (6.9). `agent-run show`
 and the portal show the reason. A Queued session holds nothing; a Queued
 upgrade or curation session counts toward `queued`, and a Queued remediation
-or escalation counts toward nothing but `createsPerHour` (5.9).
+or escalation toward `queuedUrgent` (5.9).
 
 **Hold bounds (C2).** A Queued session past its entry's `maxHold` closes by
 `onUnreported` with reason `hold-expired` (`quota-hold-expired` if the hold
@@ -1127,22 +1263,26 @@ first. `escalation` is never held for its lane, and never for `QuotaHold`
 
 **The latch (F3).** #741 builds 5.9's executor latch: the remote latch, the
 controller's check before a pod create, agentd's refusal to continue a saved
-launch, and the start deadline. It shows how the controller is kept from
+launch, the start deadline, run-agent's new check of that deadline
+immediately before it spawns the provider (N2), and the resume route's
+refusal for every summoned session (N3). It shows how the controller is kept from
 starting a new pod for a session closed as lost (the coordinator's builder
 note on C1 to C9).
 
 **Watchdog (V-11).** Every 60 seconds, with a clock the tests can fake. Its
-trips are guaranteed-close inputs (6.6):
+trips are guaranteed-close inputs (6.6). Each close's terminal page or digest
+entry is chosen by 6.8's one table, not here (N8); the reminder is a separate
+event:
 
 | Session | Trips when | Then |
 |---|---|---|
 | task | the task deadline (6.6), whatever agentd reports | `onUnreported`, reason `deadline` |
 | any admitted | the start deadline plus one minute with no agent start | `onUnreported`, reason `never-started` |
-| remote | no heartbeat for 10 minutes while its pod exists | `onUnreported`, reason `heartbeat-lost`, page event `lost` |
-| remote, lane upgrade | no agent activity and no `working` report for `staleAfter` (180m) | `onUnreported`, reason `stale`, page event |
+| remote | no heartbeat for 10 minutes while its pod exists | `onUnreported`, reason `heartbeat-lost` |
+| remote, lane upgrade | no agent activity and no `working` report for `staleAfter` (180m) | `onUnreported`, reason `stale` |
 | remote, lane escalation | idle 24 hours after its last activity | one reminder page event |
 | remote, lane escalation | idle 72 hours | `failed`, reason `escalation-bound`, note says so |
-| any launched, recorded pod gone by an uncached read, without a reap or suspend | at once | `onUnreported`, reason `session-lost`, page event |
+| any launched, recorded pod gone by an uncached read, without a reap or suspend | at once | `onUnreported`, reason `session-lost` |
 
 "Agent activity" is `status.agent.lastActivity`, "the last time agentd saw
 the agent or its worktree change" (`api/v1alpha1/agentsession_types.go`
@@ -1152,8 +1292,9 @@ line 1218), which the idle timer already reads (`reconciler.go` line 829).
 resumed by the operator, and the latch keeps the controller and agentd from
 starting it again (5.9). An actuator that resumes on its own could act twice.
 This replaces DESIGN-001 3.7's "resumed from its volume where it can be"
-(ADR-025). A person's explicit resume of a terminal remote session is 5.9's
-one exception.
+(ADR-025). Nobody resumes a summoned session, a person included: the resume
+route refuses it (5.9, N3), and the bounded resume of a terminal escalation
+is not built (9.1).
 
 **No drain (V-13), already built (R39).** A session with `spec.caller` or
 `spec.lane` set is never drained for a templates revision; it runs to its
@@ -1187,8 +1328,9 @@ one running and two Queued, the running one ends and the oldest Queued is
 admitted while the next stays Queued; the same with a cap of two; a leader
 restart between the two; two API creates at once. Also: a remediation or an
 escalation created while the queue already holds `queued` upgrades or
-curation runs is Queued, never refused (the advisory review's finding on
-`5d92c67a`); a remediation Queued past `maxHold` files its escalation; two open escalations never hold a
+curation runs is Queued, not refused, because the two bounds are apart (the
+advisory review's finding on `5d92c67a`); past `queuedUrgent` it is refused
+with an `overflow` page, never in silence (N6); a remediation Queued past `maxHold` files its escalation; two open escalations never hold a
 remediation; a held escalation pages at 15 minutes; a continuously
 heartbeating agentd reporting `interrupted` or `failed` with no task result
 closes once (F4); a pod that fails before an agent starts closes
@@ -1213,19 +1355,47 @@ operator holds no Pushover token.
   ambiguous send; it does not prove delivery (`internal/keeper/ask_notifications.go`
   lines 149, 278 and 313).
 
-**Events, all at priority 0, at any hour:**
+**Events, all at priority 0, at any hour.** Two kinds, kept apart (N8):
+one terminal event per closed session, chosen by the table below, and
+lifecycle events, which never stand in for a terminal event.
 
-| Event | When |
+| Terminal event | When |
+|---|---|
+| `escalated` | an upgrade, curation or escalation session ended `escalated` by its own report (C3); carries the session's verified link, or the console page when it has none. It files no session (6.6) |
+| `failed` | the table below selects it |
+| `lost` | the table below selects it |
+
+| Lifecycle event | When |
 |---|---|
 | `escalation-started` | a remote escalation's registration settled (6.10); carries the verified link or says why there is none, and says apart whether its brief was launched (6.10) |
-| `escalated` | an upgrade, curation or escalation session ended `escalated` by its own report (C3); carries the session's verified link, or the console page when it has none. It files no session (6.6) |
-| `failed` | a `failed` outcome, except a quiet unreported exit and an expired curation hold (table below) |
-| `lost` | `session-lost`, `heartbeat-lost`, `agent-interrupted` or `pod-terminated` (6.6) |
-| `stale` | an upgrade session closed by the watchdog |
 | `escalation-held` | an escalation held over 15 minutes |
 | `escalation-reminder` | an escalation idle 24 hours |
 | `escalation-pending` | a remediation's escalation could not be filed (6.6) |
-| `static-token-rejected` | a summoned task's agent ended with a rejected login on the static token (below); at most once a day |
+| `escalation-abandoned` | a remediation's escalation was still Pending 24 hours after the remediation closed, and is given up: says it was never filed and why (6.6, N4) |
+| `overflow` | a caller's urgent creates were refused past `queuedUrgent` (5.9, N6): at most one per caller per hour, carrying the caller and the number of refusals not yet in an `overflow` page |
+| `static-token-rejected` | a summoned task's agent ended with a rejected login on the static token (below); at most once a day; a credential alarm beside the session's terminal event, never instead of it |
+
+**The terminal table (N8).** Every closed summoned session matches exactly
+one row, by lane, outcome, source and reason, and gets exactly what that row
+says: one terminal event or the digest. The reason is the one 6.6's close
+recorded (one per close). Rows are exclusive, so the keeper's dedupe key
+(session UID and event) can never see two terminal events for one session.
+
+| Lane | Outcome | Source | Reason | Terminal page or digest |
+|---|---|---|---|---|
+| remediation | `done` | report | — | digest |
+| remediation | `escalated` | report (a promoted `failed` included) or unreported | any | digest. It does not page itself; the platform's filing pages for it (`escalation-started`, or `escalation-pending` and `escalation-abandoned` if blocked) |
+| curation, upgrade, escalation | `done` | report | — | digest |
+| curation, upgrade, escalation | `failed` | report | — | `failed` |
+| curation, upgrade, escalation | `escalated` | report | — | `escalated` |
+| curation, upgrade, escalation | `failed` | unreported | `agent-exited`, `exit-unknown`, `turn-cap` (a quiet exit) | digest |
+| curation | `failed` | unreported | `hold-expired`, `quota-hold-expired` | digest |
+| curation, upgrade, escalation | `failed` | unreported | `session-lost`, `heartbeat-lost`, `agent-interrupted`, `pod-terminated` | `lost` |
+| curation, upgrade, escalation | `failed` | unreported | every other reason: `timed-out`, `deadline`, `stale`, `escalation-bound`, `agent-failed`, `never-started`, `no-usable-model`, `suspended-unreported` | `failed` |
+
+A lost or stale remediation is in the second row: it does not page itself,
+and its filing does. The `stale` event is removed (9.1): an
+upgrade closed by the watchdog pages `failed`, as v1's `wo_watchdog` does.
 
 **What v1 does with a failure today, kept exactly (Q-03 condition).** It is
 the same in every lane, curation included:
@@ -1240,16 +1410,20 @@ the same in every lane, curation included:
 | a `wo-*` or `esc-*` session reports `escalate` (`order-status.sh` lines 78–92) | an `esc-rem-` order is filed, whose session pages | `agent-run report escalate` in an upgrade, curation or escalation session | page `escalated`, with that session's link; no new session (C3) |
 | a `rem-*` order pending 20 min or claimed 120 min (`rem_watchdog`) | `failed`, then an escalation, which pages | a remediation past `maxHold` (`hold-expired`) or its task deadline (`deadline`) | `escalated`; its escalation pages |
 
-So the `failed` event fires for every `failed` outcome except a quiet
-unreported exit (`agent-exited`, `exit-unknown`, `turn-cap`) and an expired
-curation hold. v2 adds reasons v1 has no path for: `no-usable-model` (v1
-launched anyway and then hung, which paged), `agent-failed`, `never-started`
-and `deadline`, which page `failed`; and `hold-expired` and
-`quota-hold-expired` for curation, which go to the digest (C8: the plan being
-busy is not a fault). DESIGN-001 3.7 paged only upgrade and escalation
-failures; ADR-025 replaces that with this table. A remediation always ends
-`done` or `escalated`; one that ends `escalated` does not page itself, its
-escalation does.
+v2 adds reasons v1 has no path for: `no-usable-model` (v1 launched anyway
+and then hung, which paged), `agent-failed`, `never-started` and `deadline`,
+which page `failed`; and `hold-expired` and `quota-hold-expired` for
+curation, which go to the digest (C8: the plan being busy is not a fault).
+DESIGN-001 3.7 paged only upgrade and escalation failures; ADR-025 replaces
+that with the terminal table.
+
+**Overflow (N6).** A refused urgent create has no session to carry a page
+event, so the keeper reads the create ledger's refusal counts (5.9): new
+read-only RBAC, get on that one ConfigMap by name in `dev-env-system`. Its own
+ledger records, per caller, the refusal count it last paged and when. At most
+one `overflow` page per caller per hour, carrying the caller and the
+refusals since its last `overflow` page, so every refusal is in exactly one
+page attempt.
 
 **The static token (Q-18).** v1's only alarm for a dead setup token is the
 executor's daily probe, whose page reads "[dev-env-ops] claude SETUP TOKEN
@@ -1284,8 +1458,8 @@ the label `session note:`, with anything that looks like a URL replaced by
 session's page in the console, never a URL taken from a note or from caller
 data.
 
-**The digest.** Every terminal outcome that did not page (every `done`,
-including remediation `done`) goes into one quiet message at priority -1. It
+**The digest.** Every close whose row in the terminal table says digest
+goes into one quiet message at priority -1. It
 is sent every 24 hours, or early once 8 are pending (v1's
 `OPS_DIGEST_INTERVAL_H` and `OPS_DIGEST_MAX_PENDING`). The ledger keeps each
 outcome to one digest attempt across keeper restarts; a send whose result is
@@ -1293,7 +1467,7 @@ unknown is recorded as such and is not retried, so an outcome can be missing
 from the digests Tom receives, but it is never sent twice by design.
 
 **Limits.** One page attempt per event per session (the ledger key is
-session UID and event). The keeper writes the ledger entry before it sends, as
+session UID and event; for `overflow`, caller and hour). The keeper writes the ledger entry before it sends, as
 its Ask notifier does, so the dedupe survives a keeper restart. That gives
 deduplicated attempts, not proof of delivery. At most 6 pages an hour; past
 that, one "N more events" page. No email path exists (R-01: SMTP in an
@@ -1488,6 +1662,14 @@ remediation, whose escalation pages. v1 paged this case only after its
   (5.6). The policy is 6.4's example.
 - A remediation that escalates gets a v2 remote session (6.6), not a
   ConfigMap order.
+- **A refused create fails open (N6, Q-23).** `remediate.sh` keeps its rule
+  (lines 43–47): "the CALLER MUST FAIL OPEN. If this script returns non-zero
+  the caller has NOT handed the problem to anyone: it must fall back to
+  whatever it would have done before (for the responder, that means page)".
+  A 429 from the client (exit 2), `summon urgent queue full` or
+  `createsPerHour` included, is such a non-zero return, so the responder
+  pages as it would have. The operator's `overflow` page (6.8) also counts
+  a `queuedUrgent` refusal.
 - `rem_watchdog` in `respond.sh` is removed: the remediation's `maxHold`
   (20 minutes, its pending deadline), the task deadline (its running bound)
   and the guaranteed outcome cover it (6.6, 6.7). Every reader of `rem-*`
@@ -1500,12 +1682,17 @@ remediation, whose escalation pages. v1 paged this case only after its
   header lines 2–8). The contract that moves per Q-08 keeps that check,
   both halves, beside the v2 read (`kubectl get
   activities.dev-env.haynesops.com -n dev-env-system`, which the agent role
-  may read, R36). The builder verifies that the guards let an ops session
-  make that exec: `dev` is not among the identity guard's protected
-  namespaces (`identity-guard.yaml` rule 1), and the Kyverno exec guard
-  refuses only a privileged pod; whether the v1 pod is one was not checked
-  here. If either refuses, the gap stays open: #747 records it and is not
-  Accepted with it open.
+  may read, R36). **The v1 half is refused as written (N11).** `dev` is not
+  among the identity guard's protected namespaces (`identity-guard.yaml`
+  rule 1), but the Kyverno exec guard denies exec into any pod that runs as a
+  listed ServiceAccount, whatever its privilege, and the list names
+  `dev/dev-env` (haynes-ops `kyverno/policies/app/dev-env-exec-guard.yaml`
+  lines 61–64, the check at line 80). The v1 pod runs as that account
+  (`dev/dev-env/app/helmrelease.yaml` lines 329–330), and the reader execs
+  into it (`dev-activity-check.sh` lines 58–66). So an ops session cannot run
+  the v1 reader. How a remediation on v2 sees what v1 sessions declared is
+  open: Q-20 (8), Pending coordinator, blocking #747's acceptance. #747 is
+  not Accepted with it open. This authorizes no exception to the guard.
 - **RBAC check.** An ops session runs as `dev-env-agent`: v1's operator verbs,
   but guarded (R25). R-01 records three real fixes: a multus config on
   `talosw01`, a Ceph crash archived, and dev-env PVC space freed twice. The
@@ -1526,6 +1713,15 @@ remediation, whose escalation pages. v1 paged this case only after its
   `escalations` pool; one held over 15 minutes pages (6.8). An open
   escalation never holds a remediation, because the two count in different
   pools (5.9).
+- **A refused create (N6, Q-23).** The caller-side page path exists for
+  remediation only. `escalate.sh`'s call sites do not gate on its exit code
+  (lines 44–47: "an escalation write failure must NEVER break the primary
+  run. This script traps its own errors, logs them, and exits 0/1/2 without
+  side effects; call sites do not gate on the rc"). So a refused escalation
+  create is logged by the caller as today. Past `queuedUrgent`, the
+  platform's `overflow` page (6.8) is what tells Tom; past `createsPerHour`,
+  the storm limit, the API logs the refusal (6.4). Nothing new is built
+  in the callers.
 - The reason and run reference go as `data` fields; the platform renders the
   brief (5.6).
 - The escalation contract moves per Q-08. The page link is 6.10's.
@@ -1574,10 +1770,29 @@ remediation, whose escalation pages. v1 paged this case only after its
 
 ### 6.16 OP750: remove dev-env-ops
 
-- As item 750 says, after 30 days at zero and with #116's acceptance. The PVC
-  `dev-env-ops-home` holds the old sign-in, transcripts and worktrees; it is
-  deleted only on Tom's recorded yes, a separate yes from gate T-2's (8.1,
-  T-3).
+- As item 750 says, after 30 days at zero and with #116's acceptance.
+- **The stored records #750 removes (N9).** Gate T-3 (8.1) is Tom's yes to
+  deleting this list, asked once with the list; nothing on it is deleted
+  before that yes, and on a no the record is kept and the keep decision
+  recorded:
+  1. PVC `dev-env-ops-home`: the old sign-in, session transcripts and
+     worktrees (item 750's words), and curation reports under
+     `~/.local/state/cigar-curation/reports/` (6.11). v1 has no rescue
+     bundle.
+  2. ConfigMap `upgrade-work-orders`: every order entry the watcher's
+     retention still keeps, with its status, notes and times (item 750 scope
+     item 3). It is the only runtime-data ConfigMap the dev-env-ops scripts
+     read or write: each names it as `WORK_ORDER_CM` (haynes-ops
+     `upgrade-agent/dev-env-ops/app/helmrelease.yaml` line 57; the scripts'
+     default, for example `work-order-watch.sh` line 71).
+- The other objects #750 deletes hold no data that is not kept elsewhere:
+  the HelmRelease, the scripts ConfigMap `dev-env-ops-scripts`, the
+  CiliumNetworkPolicy and the RBAC are rendered from haynes-ops git, and the
+  Secret `dev-env-ops-secret` is rendered by its ExternalSecret from
+  1Password. Stopping the service is gate T-2, apart from T-3.
+- Item 750's constraint "Deleting the PVC needs Tom; nothing else in this
+  story deletes data" is wrong: scope item 3 deletes `upgrade-work-orders`.
+  Section 11 lists it.
 - If the playbooks still live in `dev-env-ops-scripts`, Q-08 was not carried
   out; they move first.
 
@@ -1599,12 +1814,12 @@ deferral.
 | V-07 ops profile | #735, #736, #737 | 6.1, 6.2, 6.3 |
 | V-08 outcome, guaranteed close, digest | #740, #742 | 5.9, 6.6, 6.8 |
 | V-09 lanes, escalation page at 15 min | #741, #742 | 5.9, 6.7, 6.8 |
-| V-10 storm limits | #738 (ledger, refusals), #741 (pools and queue) | 5.9, 6.4 |
+| V-10 storm limits | #738 (ledger, charge before create, refusals), #741 (pools and the two queue bounds), #742 (the `overflow` page) | 5.9, 6.4, 6.8 |
 | V-11 watchdogs, session lost, escalation bound | #741 (watchdog, latch), #740 (guaranteed-close inputs) | 5.9, 6.6, 6.7 |
 | V-12 static token mint date, pages at 30 and 7 days | a page when the static token is rejected: #742, before #749 (Q-18). The mint date and the pages at 30 and 7 days: **deferred** to a story the coordinator files; due before about 2027-06 | 6.8, 6.15 |
 | V-13 never ended by a change | already built (R39: summoned sessions never drain); #741 keeps it | 6.7 |
 | V-14 priority, fallback on quota | #743 | 6.9 |
-| V-15 retention | tasks: ADR-020 (live, R17): kept 7 days after they end, whatever the outcome, not 1 day after `done`. Remote: today's timers (Q-12): a finished escalation stays on Tom's phone list until its idle suspend (72 hours idle with no client), when the CLI archives its entry. Until its volume is archived 168 hours later, a person can resume it through 5.9's one exception, once #741 builds it; until then a summoned session cannot be resumed. R-01 asked for 1 day after `done` and 7 days after `failed` | 5.9, 6.7, 6.10 |
+| V-15 retention | tasks: ADR-020 (live, R17): kept 7 days after they end, whatever the outcome, not 1 day after `done`. Remote: today's timers (Q-12): a finished escalation stays on Tom's phone list until its idle suspend (72 hours idle with no client), when the CLI archives its entry; its volume is kept until it is archived 168 hours later. No summoned session can be resumed, by anyone (5.9, N3). **Retained data differs from v1** (Q-22): v1 keeps every transcript on its volume, and R-01's audit was made from them; v2 keeps no summoned session's conversation readable once it stops running. For tasks that is already Tom's rule (ADR-020, "no conversation archive"); for remote sessions it is today's lifecycle. Recorded under gate T-2 (8.1); the reader and a bounded resume are not built (9.1). R-01 asked for 1 day after `done` and 7 days after `failed` | 5.9, 6.7, 6.10, 8.1, 9.1 |
 | V-16 cost record | reused: `status.usage` and `status.conversationUsage` (R35). **Deferred:** the metrics export, to a story the coordinator files if it wants one. It blocks no story here and no plan 10 acceptance line (none names metrics) (C9) | 4 |
 | V-17 read Activity | #747 | 6.12 |
 
@@ -1701,10 +1916,17 @@ narrowed Q-17.
 | Q-17 | Option A and "no metered spend" | 5.4 | A outside, observed and reported; B in scope | A | **Ruled A**, coordinator, 2026-11-11, with the acceptance kept observable (5.4) | #751's Accepted wording |
 | Q-18 | V-12 | no story covers it; v1's only alarm is the executor's probe (F-07) | A defer to a new story; B fold into #742 | A | **Ruled, not as recommended**, coordinator, 2026-11-11: a rejected-token page is a v1 function to keep; it goes in #742 before #749; the rest of V-12 is deferred (6.8) | #742, #749 |
 | Q-19 | containment | `policyCallerAllowed` includes DELETE; ADR-020 deletes purged tasks at once | A summoning callers create and read only; summoned sessions create no sessions; B Meatball's list | A | **Ruled A**, coordinator, 2026-11-11, with conditions (6.4) | #738 |
+| Q-20 | how a remediation on v2 sees what v1 sessions declared | the exec guard denies exec into a pod that runs as `dev/dev-env`, so v1's reader cannot run from an ops session (6.12, N11) | open | none recorded | **Pending coordinator** (ruling on N11, 2026-11-11). Authorizes no exception to the guard | #747's acceptance |
+| Q-21 | the dispatch id of a caller's create | a summoned key is reused after its session ends (6.4's suffix rule); a hash of the caller and the key alone would let a re-fire find its id charged (5.9, N1) | A hash of caller, key and the key's newest earlier Session's UID; B a ledger entry reused per key; C a hash with the name | A | **Ruled A**, coordinator, 2026-11-11, with a correction to the ageing rule (5.9, 10.3) | #738 |
+| Q-22 | what Tom keeps of a terminal summoned session | `agent-run history` reads private Sessions only; remote sessions are never marked; ADR-020 keeps no conversation archive for tasks (5.9, N3) | A write it as the code is; B mark summoned remote sessions private | A | **Ruled A**, coordinator, 2026-11-11, with a precision on ADR-020 (5.9, 8.1, 10.3) | nothing |
+| Q-23 | an escalation caller's fallback when its create is refused | `escalate.sh` lines 44–47: call sites do not gate on its exit code; `remediate.sh` lines 43–47 fail open (6.12, 6.13, N6) | A state the premise, build nothing in the callers; B a caller-side page | A | **Ruled A**, coordinator, 2026-11-11 (6.12, 6.13, 10.3) | #748's acceptance wording |
 
 Q-10 (#747), Q-11 (#749) and Q-14 (#736) belong to those items. Q-04's and
-Q-16's options B are on Tom's list; neither was chosen. No question to the
-coordinator is pending. Two gates are Tom's and are Pending (8.1).
+Q-16's options B are on Tom's list; neither was chosen. Q-20 is the
+coordinator's, recorded by its ruling on N11, and is pending. Q-21 to Q-23
+were asked in fix round 2 as notes `op734-fix2-q-1` to `op734-fix2-q-3`, with
+`op734-fix2-q-4` correcting the premise of q-2, and were ruled the same day
+(10.3). Three gates are Tom's and are Pending (8.1).
 
 ### 8.1 Tom's gates (F8)
 
@@ -1713,9 +1935,9 @@ plain words, on Tom's phone; the answer comes back here as a dated ruling.
 
 | Gate | What Tom decides | Source | State | Blocks |
 |---|---|---|---|---|
-| T-1 | his ruling on this design as an access change | item 609: "A short design and Tom's ruling first, since it is an access change." The coordinator's rulings (10.1, 10.2) do not stand in for it. Q-14 (moving the ops bot's App key into the keeper; DESIGN-001 6.4 already places it there) is part of this question | **Pending Tom.** The coordinator asks once the re-review of this round is clean | every build story that changes access: #735 to #745 |
-| T-2 | his yes before #749 stops dev-env-ops | epic #116's acceptance ("Tom explicitly accepts everyday workflows, retained data and operational ownership before v1/dev-env-ops/Headlamp retirement"); item 610, Out: "Retiring dev-env-ops itself without Tom's yes" | **Pending Tom.** The coordinator asks once, with the evidence that every caller has run on v2 | #749, and so #750 |
-| T-3 | his yes before #750 deletes the volume `dev-env-ops-home` | item 734's constraints (deleting volumes or data needs Tom); 6.16 | **Pending Tom**, a separate yes from T-2 | #750's deletion only |
+| T-1 | his ruling on this design as an access change | item 609: "A short design and Tom's ruling first, since it is an access change." The coordinator's rulings (10.1 to 10.3) do not stand in for it. Q-14 (moving the ops bot's App key into the keeper; DESIGN-001 6.4 already places it there) is part of this question | **Pending Tom.** The coordinator asks once the re-review of this round is clean | every build story that changes access: #735 to #745 |
+| T-2 | his yes before #749 stops dev-env-ops | epic #116's acceptance ("Tom explicitly accepts everyday workflows, retained data and operational ownership before v1/dev-env-ops/Headlamp retirement"); item 610, Out: "Retiring dev-env-ops itself without Tom's yes" | **Pending Tom.** The coordinator asks once, with the evidence that every caller has run on v2, and with the one difference in retained data he accepts with it: v1 keeps every transcript on its volume, and R-01's audit was made from them; v2 keeps no summoned session's conversation readable once it stops running (5.9). For tasks that is already Tom's rule (ADR-020, 2026-11-10, "no conversation archive"); for remote sessions it is today's lifecycle | #749, and so #750 |
+| T-3 | his yes to deleting the stored records #750 removes, asked once with the list: PVC `dev-env-ops-home` and ConfigMap `upgrade-work-orders` with its order history (6.16) | item 734's constraints (deleting volumes or data needs Tom); 6.16 | **Pending Tom**, a separate yes from T-2. Stopping the service (T-2) is not a yes to deleting data | #750's deletion of those records only |
 
 ## 9. Not verified
 
@@ -1737,9 +1959,34 @@ plain words, on Tom's phone; the answer comes back here as a dated ruling.
 - Whether the curation playbook keeps state between runs (6.11).
 - The live ConfigMap contents, the dev-env-ops login's current expiry and the
   pod's state: no live read was made (5.3).
-- Whether the Kyverno exec guard lets an ops session exec into the v1 pod
-  for the activity check (6.12, C7).
 - Whether v1's executor holds the Proxmox read token (5.8).
+- That no caller create reaches the API server more than an hour after its
+  charge. The request's own deadline should bound it; it was not read. A
+  Session whose dispatch id the ledger no longer holds is never admitted
+  (5.9).
+
+The exec guard's effect on the v1 activity check is no longer unverified: the
+pinned policy refuses it (6.12, N11), and Q-20 holds the open question.
+
+### 9.1 Not built
+
+Mechanisms removed instead of specified, each with its reason:
+
+- **A resume of a terminal summoned session**, which fix round 1 had added as
+  one exception for a person's resume of a terminal remote session. No
+  ruling asked for it, and a replacement-pod continuation of a closed
+  actuator needs its own design (N3). Resuming a summoned session is refused,
+  by anyone (5.9). Follow-up: a bounded resume of a terminal escalation.
+- **A reader for a summoned session's conversation after it stops**, task or
+  remote (Q-22). Today nothing reads it once the session stops running
+  (5.9). Follow-up: one such reader.
+- **The `stale` page event.** An upgrade closed by the watchdog pages
+  `failed`, as v1's `wo_watchdog` does, so the terminal table (6.8) needs no
+  event of its own for it (N8).
+
+The coordinator files the two follow-up stories after this design merges;
+they are not designed here and block no build story. Deferrals recorded
+elsewhere: the rest of V-12 and V-16's metrics export (7.1).
 
 ## 10. Coordinator rulings (2026-11-11)
 
@@ -1812,6 +2059,35 @@ design follows. Quotes are the coordinator's. Fix round 1 by worker session
 | Added: the keeper's ledger | "deduplicated attempts, not proof of delivery. Word 6.8 that way" | 6.8 |
 | The pin | PR 1074 changed `internal/apiserver/caller.go`: re-open every row that cites it and move the dev-env pin | header; 4 (R3, R36) |
 
+### 10.3 On the re-review of fix round 1
+
+From the same coordinator session, on PR 1075 at head `e329ce56`: comment
+6802125957, its rulings on the independent re-review (comment 6802046490,
+findings N1 to N11) and on fix round 1's own choices; then its answers to
+fix round 2's question notes `op734-fix2-q-1` to `op734-fix2-q-4`, read by
+`agent-run parent wait` at 2026-11-11T17:14Z and 17:16Z. Each says it is not
+a ruling by Tom. Every finding was accepted; where a ruling makes a choice,
+this design follows it. Quotes are the coordinator's. Fix round 2 by worker
+session `dev-env-1111-170449`.
+
+| Finding | Ruling | Where this design meets it |
+|---|---|---|
+| N1, HIGH: the charge has no order with create and admission | "the charge comes first": a dispatch id before anything is created, the charge committed, then the Session carrying the id; "a repeated key maps to the same id"; "a charge with no Session is a spent slot, never a free session"; "the leader admits only a Session whose id is committed"; the last slot decided by the ledger's write, "the loser gets 429"; proofs in #738 and #740. Q-21: the id hashes the caller, the key and the key's newest earlier Session's UID; on AlreadyExists "the same id as its own (200) and any other id as a name clash (next suffix)". The ageing rule, as corrected in the Q-21 answer: "no Session is admitted without a committed charge for its id"; a filing's entry stays until `chargedAt` or Abandoned; a caller-create entry with no Session is dropped at an hour old; "A double charge across two hours is acceptable; an uncharged admitted Session is not" | 5.9 (the ledger, admission, the charge-order proof); 6.4 (`dispatchID`, the order of checks); 6.6 (the filing's steps 2 and 3) |
+| N2, MEDIUM: the deadline does not fence the spawn | "add the fence, do not claim it": run-agent checks the start deadline again immediately before it spawns the provider, new code in #741; until then an operator-declared close with a first launch possibly in flight releases "only when the recorded pod is confirmed gone"; the paused-launch proof | 5.9 (the latch, the release rule, the proof); 6.7 (the latch) |
+| N3, MEDIUM: the resume exception | "removed. ... Resuming a summoned session is refused, by anyone"; record it as not built: "a replacement-pod continuation of a closed actuator needs its own design". Q-22, with the answer to note `op734-fix2-q-4`: "Write it as the code is": no summoned session's conversation is read once it stops; for tasks that is ADR-020's rule, for remote sessions today's lifecycle; the retained-data difference goes in V-15 and under T-2; two follow-ups named, not designed. The ruling's sentence that a remote session's history "is read with `agent-run history`" was wrong, and this worker's premise that tasks are archived was wrong too (11) | 5.9 (no resume; what Tom keeps); 6.7; 7.1 V-15; 8.1 T-2; 9.1 |
+| N4, MEDIUM: clean-up can erase a pending filing | ADR-020's retention unchanged, no hand-off store; a filing still Pending 24 hours after its remediation closed "is closed as `Abandoned`, with a second page"; "never dropped in silence" | 6.6 (Abandoned, the proof); 6.8 (`escalation-abandoned`) |
+| N5, MEDIUM: the DNS list cannot resolve the operator | v1's names minus Pushover "plus the exact operator service name"; #735 proves it resolves and an authenticated call works | 6.1 |
+| N6, MEDIUM: no bound for urgent sessions | a per-caller bound on Queued urgent sessions, field and number named; past it 429, "recorded in the ledger with a count, and one `overflow` page per caller per hour"; the callers' contracts. Q-23 corrects the ruling's wording: "the caller-side page path exists for remediation only"; #748 states `escalate.sh`'s premise and builds nothing in the callers | 5.9 (`queuedUrgent`, default 4, range 1 to 16); 6.4; 6.6 (Blocked); 6.7; 6.8 (`overflow`); 6.12; 6.13 |
+| N7, MEDIUM: the task deadline's anchor | "`admittedAt` plus the start allowance plus `limits.timeout` plus 10 minutes. No new timestamp. A re-arm after a known non-attempt does not move it" | 6.6 |
+| N8, MEDIUM: two terminal events for one close | "One exclusive table from (lane, state, source, reason) to exactly one terminal event or the digest", a lost or stale remediation included; registration, held and reminder events apart | 6.6 (one reason per close); 6.7 (the watchdog defers to 6.8); 6.8 (the terminal table; the `stale` event removed, 9.1) |
+| N9, MEDIUM: T-3 covers data | "List every stored record #750 removes"; T-3 is Tom's yes to deleting that list, asked once with it; T-2 stays separate | 6.16; 8.1 |
+| N10, LOW: the ADR's Supersedes list and wording | the two lists match item by item; qualify DESIGN-001 3.7's "No v2 pod holds a metered API key" and its one-actuator promise without editing accepted history; "Tom's recorded rule" becomes second-hand unless a record quotes him; "Two gates" becomes three | 11; ADR-025 (Supersedes, decision 2, decision 15); the header |
+| N11, LOW: the exec guard refusal is known | record that the guard denies exec into a pod that runs as `dev/dev-env`; Q-20, Pending coordinator, blocks #747's acceptance; no exception to the guard | 5.8; 6.12; 8 (Q-20); 9 |
+| Fix round 1's choice: the hash leaves out `data` | accepted; "a 200 on a repeated key does not mean the new data was taken" | 6.4 |
+| Fix round 1's choice: curation's `escalate` | accepted: it pages with the console link and files nothing; the page offers a way into the same session, not a new session | 5.1 (difference 4); 6.8 (the terminal table) |
+| Fix round 1's choice: the defaults | accepted as this design's own: `queued` 4, start deadline 15 minutes, `heartbeat-lost` 10 minutes | 5.9; 6.4; 6.6 |
+| Fix round 1's choice: the resume exception | removed (N3) | 5.9; 9.1 |
+
 ## 11. What changes in DESIGN-001, and what was found wrong
 
 ADR-025 supersedes these parts of DESIGN-001 (Accepted with ADR-001):
@@ -1824,16 +2100,22 @@ ADR-025 supersedes these parts of DESIGN-001 (Accepted with ADR-001):
    caller; there is no `agent-run wait` verb (6.10).
 4. 3.7 "Plan credentials only": no `503 plan credential unavailable` on
    create; a session with no usable model closes as `onUnreported` (6.9).
+   Its sentence "No v2 pod holds a metered API key, so no session can fall
+   back to metered" is qualified, not edited: the launch has no automatic
+   metered fallback (R23), but the operator sets the Cursor key on cursor
+   task pods, and an ops session's exec right reaches caller pods that hold
+   metered keys (5.8).
 5. 3.7 "Watchdogs": the words "and resumed from its volume where it can
-   be": no automatic resume of a lost session, and the executor latch keeps
-   one from starting again (5.9, 6.7).
+   be": no summoned session is resumed, automatically or by anyone, and the
+   executor latch keeps one from starting again (5.9, 6.7).
 6. 3.7 "Pages" and 6.10's operator bullet: the keeper sends, not the operator
-   (Q-16); failures page as v1's do, in every lane (6.8); the operator's
-   Pushover egress goes (5.5).
+   (Q-16); failures page as v1's do, in every lane, by one terminal table
+   (6.8); the operator's Pushover egress goes (5.5).
 7. 3.7 "Storm limits" and "Escalations are not single-flight": past a pool
-   a create is queued, not refused; past `createsPerHour` it is refused, and
-   past the queue bound an upgrade or curation create is refused (never a
-   remediation or an escalation); and an escalation starts within its caller's `escalations`
+   a create is queued, not refused; past `createsPerHour` it is refused;
+   past its queue bound a create is refused (`queued` for upgrades and
+   curation, `queuedUrgent` for remediations and escalations, which pages
+   `overflow`); and an escalation starts within its caller's `escalations`
    pool and `createsPerHour`, not its `concurrent` limit (5.9, 6.4, 6.7).
 8. 3.7 "Retention": tasks follow ADR-020; remote sessions follow v2's timers
    (Q-12).
@@ -1846,6 +2128,14 @@ ADR-025 supersedes these parts of DESIGN-001 (Accepted with ADR-001):
     field ... reaches the session as data in a fenced block, never as
     instructions, as today" is kept, not superseded: the platform's render
     (5.6) is how it is met.
+12. 3.7 "Lanes": the sentence "One remediation actuator touches the cluster
+    at a time" is qualified, not edited: at most one admitted session holds
+    each single-flight lane, but an old process that cannot be confirmed
+    stopped can still act after its lane is released, as v1's hung window
+    can (5.9, "What still runs").
+
+ADR-025's Supersedes list carries the same twelve items, in the same order
+(N10).
 
 Found wrong or stale while reading (for the coordinator):
 
@@ -1883,6 +2173,12 @@ Found wrong or stale while reading (for the coordinator):
   rejected-token page must be installed before dev-env-ops stops).
 - **v1's lanes** put curation behind upgrades in one `wo` lane; v2 gives each
   its own (5.1). A difference, recorded so nobody reads it as a regression.
+- **Item 750's constraints** say "Deleting the PVC needs Tom; nothing else in
+  this story deletes data", while its scope item 3 deletes ConfigMap
+  `upgrade-work-orders` and its order history. T-3 covers both (6.16, N9).
+- **DESIGN-001 6.7** says "Tom's rule stands (2026-08-23): only sessions that
+  want Tom appear in his session list". It is a dated attribution and does
+  not quote him; ADR-025 decision 2 now says so (N10).
 
 Corrected in this design's own first draft (head `3d117f67`), by fix round 1
 (10.2). Each was a claim or a rule the reviews showed wrong:
@@ -1927,3 +2223,34 @@ Corrected in this design's own first draft (head `3d117f67`), by fix round 1
 - **6.15** let #749 come before Tom's yes because scaling down is reversible
   (F8).
 - **7.1 V-16** said "no story" without a deferral (C9).
+
+Corrected in fix round 1's text (head `e329ce56`), by fix round 2 (10.3):
+
+- **5.9's ledger** keyed a caller's charge on the new Session's UID, so the
+  Session existed before its charge, and let unsettled charges expire with
+  their hour (N1).
+- **5.9 and ADR-025 decision 7** said agentd's start deadline fences a late
+  first launch; it fences only the launch record, and the spawn needs a new
+  check in run-agent (N2).
+- **5.9, 6.7 and V-15** added a person's resume of a terminal remote session
+  that no ruling asked for (N3).
+- **6.6** promised a pending filing is "never dropped" while the task clean-up
+  can delete its remediation; it is now given up at 24 hours with a page
+  (N4).
+- **6.1's DNS list** could not resolve the operator's service name (N5).
+- **5.9 and 6.4** left urgent Queued sessions without a bound (N6).
+- **6.6's task deadline** used an attempt time no record holds (N7).
+- **6.8** let one close match two terminal events (N8).
+- **6.16 and 8.1** gated only the volume's deletion, not the order history
+  (N9).
+- **ADR-025** had ten supersessions to the design's eleven, left two
+  DESIGN-001 sentences unqualified, called a second-hand rule "Tom's recorded
+  rule" and said "two gates" for three (N10).
+- **6.12** left the exec guard's refusal of the v1 reader unverified; the
+  pinned policy refuses it (N11).
+- **The coordinator's N3 ruling** said a remote session's history "is read
+  with `agent-run history`"; that archive holds private Sessions only, and
+  remote sessions are never marked (Q-22). **This worker's question** behind
+  Q-22 said summoned tasks are archived before their HOME is deleted; under
+  ADR-020 they keep only a bundle, so nothing reads a task's conversation
+  either. Both are corrected in 5.9.
