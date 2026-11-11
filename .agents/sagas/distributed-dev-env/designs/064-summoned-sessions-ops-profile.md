@@ -478,7 +478,7 @@ written by the operator leader unless a row says otherwise.
 
 | State | Record | Holds | Counted in |
 |---|---|---|---|
-| Queued | created; condition `SummonAdmitted=False` with its reason; `status.summon.admittedAt` absent | nothing: no pod, no latch | its caller's `queued` if it is `normal` or `bulk`; its caller's `queuedUrgent` if it is `urgent` (a remediation or an escalation, the platform's filings included) |
+| Queued | created; condition `SummonAdmitted=False` with its reason; `status.summon.admittedAt` absent | nothing: no pod, no volume, no latch | its caller's `queued` if it is `normal` or `bulk`; if it is `urgent`, its caller's `queuedUrgent`, counted per pool: Queued remediations apart from Queued escalations (the platform's filings among them) |
 | Admitted | `status.summon.admittedAt`, set once | one reservation: its lane, if single-flight, and one slot in its pool | its pool and its lane |
 | Launched | the executor latch: an attempted pod is recorded before the create | the same reservation | the same |
 | Terminal | `status.outcome` terminal and `status.summon.closed` (`at`, `source` report or unreported, `reason`), written in one status write | the reservation until `closed.released` is true | nothing once released |
@@ -500,11 +500,14 @@ this design's own defaults, not from v1 or a record:
   `ops-event` line, and the client exits 2 (refused). A refused upgrade or
   curation run pages in neither v1 nor v2 while it waits; its caller sees
   exit 2.
-- `limits.queuedUrgent` counts the caller's Queued sessions of priority
-  `urgent`: its remediations and escalations, the platform's filings for its
-  remediations included. Default 4, range 1 to 16; it is never 0, because 0
-  would refuse every urgent create that meets a busy pool, which ADR-025
-  rejects. A caller create past it gets 429 `summon urgent queue full`. It is
+- `limits.queuedUrgent` bounds the caller's Queued sessions of priority
+  `urgent`, counted per pool: at most `queuedUrgent` Queued remediations,
+  and separately at most `queuedUrgent` Queued escalations, the platform's
+  filings for its remediations among them. So a queued escalation never
+  refuses a remediation, nor the reverse (C2; the advisory review's finding
+  on `8bcdfc3d`). Default 4, range 1 to 16; it is never 0, because 0 would
+  refuse every urgent create that meets a busy pool, which ADR-025 rejects.
+  A caller create past its pool's count gets 429 `summon urgent queue full`. It is
   never silent (R-01 F-04): the API adds the refusal to the caller's count of
   urgent refusals in the create ledger (below), in the same write that
   refuses it; the keeper sends one `overflow` page per caller per hour, with
@@ -512,11 +515,19 @@ this design's own defaults, not from v1 or a record:
   exists for remediation only: the responder fails open and pages, as it
   does today when a hand-off fails (6.12); an escalation caller logs the
   refusal, as today (6.13, Q-23). A platform
-  filing past it is not created: the remediation keeps its pending filing
-  (6.6, Blocked).
+  filing past the escalations' count is not created: the remediation keeps
+  its pending filing (6.6, Blocked).
 
-So a caller's retained backlog is at most `queued` plus `queuedUrgent`
-Queued records, whatever arrives. `createsPerHour` bounds how many creates
+So a caller's retained backlog is at most `queued` plus twice
+`queuedUrgent` Queued records, whatever arrives.
+
+**Nothing is created for a Queued session.** Before admission a summoned
+session has no pod and no volume. At the pinned commit the controller
+creates the volume in `ensure`, just before the pod (`reconciler.go`
+lines 1333–1361; the pod at line 1467), and `ensure` has one call
+(line 608). So #741's gate goes before that call, not between the volume and
+the pod: a Queued session gets neither. That is #741's work, and its proof
+shows it (below). `createsPerHour` bounds how many creates
 arrive, the storm limit DESIGN-001 3.7 decided; the responder keeps its own
 collapse, cooldown and page cap as the second layer. A Queued escalation
 pages after 15 minutes (6.8), and a Queued remediation closes at its
@@ -701,10 +712,13 @@ double page, no second filing. Added in fix round 2: the paused launch (N2):
 pause between the launch record and the provider spawn, advance past the
 start deadline, close and release on the operator, resume the paused path,
 and run-agent refuses and no provider starts; a resume of a summoned session
-by a person, a session and a caller is refused (N3); and N6's proof: distinct
+by a person, a session and a caller is refused (N3); N6's proof: distinct
 urgent keys over several hours with the escalation pool full give at most
-`queuedUrgent` Queued urgent records, and every refusal appears in an
-`overflow` page.
+`queuedUrgent` Queued escalations, and every refusal appears in an
+`overflow` page; with the escalations' queue full, a new remediation is still
+Queued, and with the remediations' queue full, a filing is still created
+(the advisory finding on `8bcdfc3d`); and a Queued session has no pod and no
+volume until it is admitted.
 
 **Proof of the charge order (N1), in #738's contract for a caller's create
 and #740's for a filing:** a crash after the Session is created; a crash
@@ -900,7 +914,7 @@ not use the escalation entry's prefix: it is named under `esc-rem-` (6.6).
 | `summon.limits.concurrent` | 1 to 4. Counts admitted, unreleased sessions of every entry except the escalation entry (5.9) |
 | `summon.limits.escalations` | 1 to 4, required when the policy has an escalation entry, absent otherwise. Counts admitted, unreleased escalations, the platform's filings included (5.9) |
 | `summon.limits.queued` | 0 to 16, default 4: this design's default. Counts Queued sessions of priority `normal` and `bulk` (5.9) |
-| `summon.limits.queuedUrgent` | 1 to 16, default 4: this design's default (N6). Counts Queued sessions of priority `urgent`, the platform's filings for the caller's remediations included; never 0 (5.9) |
+| `summon.limits.queuedUrgent` | 1 to 16, default 4: this design's default (N6). Bounds Queued sessions of priority `urgent` per pool: Queued remediations, and apart from them Queued escalations, the platform's filings for the caller's remediations among them; never 0 (5.9) |
 | `summon.limits.createsPerHour` | 1 to 30 |
 | `summon.sessions` | 1 to 6 entries; `(kind, lane)` unique |
 | `kind` | `task` or `remote` |
@@ -981,8 +995,9 @@ not use the escalation entry's prefix: it is named under `esc-rem-` (6.6).
   summoning caller has no DELETE route and no RBAC in `dev-agents` or
   `dev-env-system`, so it can remove neither its sessions nor the ledger. Past
   `createsPerHour` the create gets 429; past `queued`, an upgrade or curation
-  create gets 429; past `queuedUrgent`, a remediation or escalation create
-  gets 429, counted in the ledger and paged as `overflow` (5.9, 6.8); past a
+  create gets 429; past `queuedUrgent` for its pool, a remediation or an
+  escalation create gets 429, counted in the ledger and paged as `overflow`
+  (5.9, 6.8); past a
   pool, the create is Queued (6.7). Until #741 is on there is no queue: #738 alone
   refuses with 429 a create that would exceed its pool, counting the caller's
   unfinished summoned sessions per pool. Every refusal is logged.
@@ -1196,10 +1211,10 @@ another escalation.
      never files again, even after its child has finished.
 - **Admission:** the child is Queued and admitted like any escalation, in the
   `escalations` pool (5.9), never in `concurrent`. While Queued it counts
-  toward its caller's `queuedUrgent`.
+  among its caller's Queued escalations, bounded by `queuedUrgent`.
 - **Blocked:** when the policy is gone or no longer names the account, the
-  hour's `createsPerHour` is spent, the caller's `queuedUrgent` is full
-  (5.9), or remote summoned sessions are not available yet (6.10 not
+  hour's `createsPerHour` is spent, the caller's Queued escalations are at
+  `queuedUrgent` (5.9), or remote summoned sessions are not available yet (6.10 not
   installed, or the profile cannot register), the remediation keeps
   `{state: Pending}` with the condition `EscalationPending` and its reason,
   the `escalation-pending` page goes out once (6.8), and the leader retries
@@ -1209,15 +1224,20 @@ another escalation.
   Abandoned, reason}`, in one status write, and a second page,
   `escalation-abandoned`, says the escalation was never filed and why (6.8).
   An Abandoned filing never files and is never retried. So Tom is paged when
-  the filing is first blocked and again when it is given up, both well inside
-  the 7 days before the task clean-up deletes the remediation (R17;
-  `internal/controller/task_cleanup.go` lines 299–311 trigger on the
-  executor's terminal record, and lines 1397–1431 delete the Session). This
-  design does not change ADR-020's retention and adds no hand-off store.
+  the filing is first blocked and again when it is given up. For a
+  remediation that launched, both happen well inside the 7 days before the
+  task clean-up deletes it (R17; `internal/controller/task_cleanup.go`
+  lines 299–311 trigger on the executor's terminal record, and lines
+  1397–1431 delete the Session). A remediation closed before it launched
+  (`hold-expired` while Queued) has no executor record
+  (`executorTerminalRecorded`, `private_terminal.go` lines 120–121), so the
+  clean-up never deletes it: it is kept, with its filing record, until it is
+  reaped (9.1). This design does not change ADR-020's retention and adds no
+  hand-off store.
 - **Proof, in #740's contract:** a crash before and after the create; a lost
   create response; a child that has finished; a re-fire of the remediation's
   key while its escalation is open; an occupied name; a revoked policy; a
-  spent hourly limit; a full `queuedUrgent`; an escalation's own `escalate` (a page,
+  spent hourly limit; the Queued escalations at `queuedUrgent`; an escalation's own `escalate` (a page,
   no filing); a report racing the guaranteed close (one terminal write, one
   page, one filing); a `working` after a terminal outcome (409, no change);
   5.9's charge-order proof for the filing (N1); and N4's: a filing blocked
@@ -1247,7 +1267,7 @@ Queued; the controller builds no pod until it is admitted. The condition
 `concurrent` or `escalations`, is full) or `QuotaHold` (6.9). `agent-run show`
 and the portal show the reason. A Queued session holds nothing; a Queued
 upgrade or curation session counts toward `queued`, and a Queued remediation
-or escalation toward `queuedUrgent` (5.9).
+or escalation toward `queuedUrgent`, counted per pool (5.9).
 
 **Hold bounds (C2).** A Queued session past its entry's `maxHold` closes by
 `onUnreported` with reason `hold-expired` (`quota-hold-expired` if the hold
@@ -1337,8 +1357,9 @@ admitted while the next stays Queued; the same with a cap of two; a leader
 restart between the two; two API creates at once. Also: a remediation or an
 escalation created while the queue already holds `queued` upgrades or
 curation runs is Queued, not refused, because the two bounds are apart (the
-advisory review's finding on `5d92c67a`); past `queuedUrgent` it is refused
-with an `overflow` page, never in silence (N6); a remediation Queued past `maxHold` files its escalation; two open escalations never hold a
+advisory review's finding on `5d92c67a`); past `queuedUrgent` for its pool it
+is refused with an `overflow` page, never in silence (N6); a full escalations'
+queue never refuses a remediation (the advisory finding on `8bcdfc3d`); a remediation Queued past `maxHold` files its escalation; two open escalations never hold a
 remediation; a held escalation pages at 15 minutes; a continuously
 heartbeating agentd reporting `interrupted` or `failed` with no task result
 closes once (F4); a pod that fails before an agent starts closes
@@ -1934,7 +1955,9 @@ Q-16's options B are on Tom's list; neither was chosen. Q-20 is the
 coordinator's, recorded by its ruling on N11, and is pending. Q-21 to Q-23
 were asked in fix round 2 as notes `op734-fix2-q-1` to `op734-fix2-q-3`, with
 `op734-fix2-q-4` correcting the premise of q-2 and `op734-fix2-q-5` settling
-the filing's ledger entry under Q-21, and were ruled the same day (10.3). Three gates are Tom's and are Pending (8.1).
+the filing's ledger entry under Q-21, and were ruled the same day (10.3).
+Notes `op734-fix2-q-6` and `op734-fix2-q-7` answered the advisory review's two
+findings on `8bcdfc3d` (10.3). Three gates are Tom's and are Pending (8.1).
 
 ### 8.1 Tom's gates (F8)
 
@@ -1991,8 +2014,15 @@ Mechanisms removed instead of specified, each with its reason:
 - **The `stale` page event.** An upgrade closed by the watchdog pages
   `failed`, as v1's `wo_watchdog` does, so the terminal table (6.8) needs no
   event of its own for it (N8).
+- **Retention of a summoned session closed before it launched** (a session
+  closed while Queued, such as a remediation past `maxHold`). It is kept
+  until it is reaped: ADR-020's clean-up has no trigger for it (no executor
+  terminal record, 6.6) and the idle timer none (no pod, `reconciler.go`
+  line 812). Nothing else is left behind, because a Queued session has no
+  pod and no volume (5.9). Follow-up: a story that decides its retention
+  (the advisory finding on `8bcdfc3d`).
 
-The coordinator files the two follow-up stories after this design merges;
+The coordinator files the three follow-up stories after this design merges;
 they are not designed here and block no build story. Deferrals recorded
 elsewhere: the rest of V-12 and V-16's metrics export (7.1).
 
@@ -2072,8 +2102,9 @@ design follows. Quotes are the coordinator's. Fix round 1 by worker session
 From the same coordinator session, on PR 1075 at head `e329ce56`: comment
 6802125957, its rulings on the independent re-review (comment 6802046490,
 findings N1 to N11) and on fix round 1's own choices; then its answers to
-fix round 2's question notes `op734-fix2-q-1` to `op734-fix2-q-5`, read by
-`agent-run parent wait` at 2026-11-11T17:14Z, 17:16Z and 17:27Z. Each says it is not
+fix round 2's question notes `op734-fix2-q-1` to `op734-fix2-q-7`, read by
+`agent-run parent wait` at 2026-11-11T17:14Z, 17:16Z, 17:27Z and 17:33Z
+(q-6 and q-7 on the two advisory findings on `8bcdfc3d`). Each says it is not
 a ruling by Tom. Every finding was accepted; where a ruling makes a choice,
 this design follows it. Quotes are the coordinator's. Fix round 2 by worker
 session `dev-env-1111-170449`.
@@ -2095,6 +2126,8 @@ session `dev-env-1111-170449`.
 | Fix round 1's choice: curation's `escalate` | accepted: it pages with the console link and files nothing; the page offers a way into the same session, not a new session | 5.1 (difference 4); 6.8 (the terminal table) |
 | Fix round 1's choice: the defaults | accepted as this design's own: `queued` 4, start deadline 15 minutes, `heartbeat-lost` 10 minutes | 5.9; 6.4; 6.6 |
 | Fix round 1's choice: the resume exception | removed (N3) | 5.9; 9.1 |
+| Advisory finding on `8bcdfc3d` (PR review comment 4541144057): one `queuedUrgent` for both pools breaks C2 | the answer to `op734-fix2-q-6`: "One field, counted per pool: at most queuedUrgent Queued remediations and, separately, at most queuedUrgent Queued escalations, the platform's filings among them. A queued escalation never refuses a remediation, nor the reverse. The finding is right: my N6 wording put both under one bound and broke C2" | 5.9 (the queues, the proof); 6.4 (schema, limits); 6.6 (admission, Blocked); 6.7 (holds, the proof); ADR-025 decision 9 |
+| Advisory finding on `8bcdfc3d` (PR review comment 4541144847): N4's timing assumes the clean-up deletes every summoned task | the answer to `op734-fix2-q-7`: "Correct the sentence, and record under 'not built' that a summoned session closed before it launched is kept until reaped, with no clean-up trigger and no idle timer; a follow-up story ... decides its retention. B and C change data lifecycle and do not belong in a fix round"; and "say in 5.9 that nothing is created for a Queued session before admission, no pod and no volume, and put that in #741's proof" | 5.9 (nothing is created for a Queued session; the proof); 6.6 (Abandoned); 9.1 |
 
 ## 11. What changes in DESIGN-001, and what was found wrong
 
@@ -2256,6 +2289,16 @@ Corrected in fix round 1's text (head `e329ce56`), by fix round 2 (10.3):
   rule" and said "two gates" for three (N10).
 - **6.12** left the exec guard's refusal of the v1 reader unverified; the
   pinned policy refuses it (N11).
+
+Corrected in this round's own first push (head `8bcdfc3d`), after the
+advisory review:
+
+- **5.9** put Queued remediations and escalations under one `queuedUrgent`,
+  so queued escalations could refuse remediations, against C2; it is now
+  counted per pool.
+- **6.6** said the task clean-up deletes every remediation within 7 days; one
+  closed before it launched has no clean-up trigger and is kept until reaped
+  (9.1).
 - **The coordinator's N3 ruling** said a remote session's history "is read
   with `agent-run history`"; that archive holds private Sessions only, and
   remote sessions are never marked (Q-22). **This worker's question** behind

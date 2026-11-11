@@ -152,9 +152,11 @@ DESIGN-001 left open.
    one of two pools: `concurrent` for every entry but the escalation entry,
    `escalations` for escalations, so an open escalation never holds a
    remediation. Queued upgrades and curation runs count toward their own
-   bound, `queued`; Queued remediations and escalations, the platform's
-   filings included, toward `queuedUrgent`. Past either a create is refused
-   with 429. An urgent refusal is never silent: it is counted in the
+   bound, `queued`; Queued remediations and Queued escalations, the
+   platform's filings among the latter, each toward `queuedUrgent`, counted
+   per pool, so a queued escalation never refuses a remediation, nor the
+   reverse. Past a bound a create is refused with 429. A Queued session has
+   no pod and no volume. An urgent refusal is never silent: it is counted in the
    operator's create ledger, the keeper pages `overflow` once per caller per
    hour with the count, the responder fails open and pages as it does
    today, and an escalation caller logs it as it does today. The charge
@@ -196,7 +198,9 @@ DESIGN-001 left open.
     filing keeps the remediation pending and pages; nothing bypasses a limit.
     A filing still pending 24 hours after its remediation closed is given up
     as `Abandoned`, with a second page, well before the task clean-up deletes
-    the remediation; task retention does not change. Only remediations are
+    a remediation that launched; one closed before it launched is not deleted
+    by the clean-up at all and is kept until reaped, a retention a follow-up
+    story decides. Task retention does not change. Only remediations are
     filed for: an escalation's own `escalate` pages and files nothing.
 15. **Three gates are Tom's.** No build story that changes access (#735 to
     #745) starts before Tom rules on DESIGN-064 as an access change, as item
@@ -222,6 +226,7 @@ DESIGN-001 left open.
 | Switching models when a run hits the quota wall | A restart can repeat an actuator's actions. One plan pool serves every model, so a switch rarely helps at the plan's wall. |
 | Resuming a summoned session, automatically or by a person | The same double-action risk. A replacement-pod continuation of a closed actuator needs its own design; a bounded resume of a terminal escalation is a follow-up, not built (DESIGN-064 9.1). A person or the caller starts new work instead. |
 | No bound on queued urgent sessions | Open escalations could pile up queued sessions over hours. A bound with a counted refusal and an `overflow` page keeps every refusal visible. |
+| One queue bound shared by remediations and escalations | Escalations waiting days for their pool would fill it and refuse remediations, which breaks decision 9's rule that an open escalation never holds a remediation. |
 | Refusing a create past `concurrent` | An escalation must never be silent (R-01 F-04). A refusal leaves the caller to page; a queue pages from one place. |
 | Counting queued sessions and open escalations toward `concurrent` | Queued sessions would hold each other back with nothing running, and an escalation waiting days for Tom would hold back the next remediation. |
 | Filing the remediation's escalation under the caller's idempotency key | A re-fired remediation key would find the escalation, a caller could occupy its name, and a finished child would free the key for a second filing. |
