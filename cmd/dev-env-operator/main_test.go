@@ -294,23 +294,31 @@ func TestCodexHostSelectFlag(t *testing.T) {
 	if o.codexHostMaxPerCell != 1 || o.codexHostMaxRunning != 2 {
 		t.Fatalf("caps %d %d", o.codexHostMaxPerCell, o.codexHostMaxRunning)
 	}
-	for _, name := range []string{"haynes-ops-1109-115326", "dev-env-1027-111645", "dev-env-1104-010332", "dev-env-1027-010058"} {
-		if !strings.Contains(o.codexHostHandsOff, name) {
-			t.Fatalf("hands-off default %q lacks %s", o.codexHostHandsOff, name)
-		}
+	if o.codexHostHandsOff != "" {
+		t.Fatalf("hands-off default %q", o.codexHostHandsOff)
 	}
-	o, err = parseFlags([]string{"--enable-codex-host-select"})
-	if err != nil || !o.codexHostSelect {
-		t.Fatalf("--enable-codex-host-select: %v %v", o.codexHostSelect, err)
+	if _, err = parseFlags([]string{"--enable-codex-host-select"}); err == nil {
+		t.Fatal("--enable-codex-host-select without --codex-host-hands-off was accepted")
 	}
-	if _, err = parseFlags([]string{"--enable-codex-host-select", "--api-bind-address=0"}); err == nil {
+	o, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-hands-off="})
+	if err != nil || !o.codexHostSelect || o.codexHostHandsOff != "" {
+		t.Fatalf("explicit empty hands-off: %v %q %v", o.codexHostSelect, o.codexHostHandsOff, err)
+	}
+	o, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-hands-off=kept-off"})
+	if err != nil || !o.codexHostSelect || o.codexHostHandsOff != "kept-off" {
+		t.Fatalf("named hands-off: %v %q %v", o.codexHostSelect, o.codexHostHandsOff, err)
+	}
+	if _, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-hands-off=kept-off", "--api-bind-address=0"}); err == nil {
 		t.Fatal("--enable-codex-host-select without the API was accepted")
 	}
-	if _, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-max-running=0"}); err == nil {
+	if _, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-hands-off=kept-off", "--codex-host-max-running=0"}); err == nil {
 		t.Fatal("a zero cap was accepted")
 	}
-	if _, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-max-running-per-cell=0"}); err == nil {
+	if _, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-hands-off=kept-off", "--codex-host-max-running-per-cell=0"}); err == nil {
 		t.Fatal("a zero cell cap was accepted")
+	}
+	if _, err = parseFlags([]string{"--enable-codex-host-select", "--codex-host-hands-off=Not_A_Name"}); err == nil {
+		t.Fatal("a hands-off name that is not a session name was accepted")
 	}
 }
 

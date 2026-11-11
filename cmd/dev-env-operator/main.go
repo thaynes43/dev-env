@@ -255,7 +255,12 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.codexHostSelect, "enable-codex-host-select", false, "serve POST /v1/codex-hosts/select and /release (DESIGN-063); default off, and with it off the routes are not registered; needs the API")
 	fs.IntVar(&o.codexHostMaxPerCell, "codex-host-max-running-per-cell", codexhostpool.DefaultMaxRunningPerCell, "most running Codex hosts in one profile cell when host selection is on")
 	fs.IntVar(&o.codexHostMaxRunning, "codex-host-max-running", codexhostpool.DefaultMaxRunning, "most running Codex hosts when host selection is on")
-	fs.StringVar(&o.codexHostHandsOff, "codex-host-hands-off", strings.Join(apiserver.DefaultCodexHostHandsOff(), ","), "comma-separated Codex host names selection treats as protected")
+	var codexHostHandsOffSet bool
+	fs.Func("codex-host-hands-off", "comma-separated Codex host names selection treats as protected; required with --enable-codex-host-select, and an empty value is a stated choice", func(v string) error {
+		codexHostHandsOffSet = true
+		o.codexHostHandsOff = v
+		return nil
+	})
 	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
 	fs.BoolVar(&o.scheduledWork.enabled, "enable-scheduled-work", false, "run the leader-only scheduled-work executor (DESIGN-054 S3b): it claims each due ScheduledWork occurrence with a compare-and-set and creates its session through the API's creation path under a derived name; default off; needs the API and leader election. Each occurrence dispatches only on a basis checked at its due time (a human owner, a live session owner or a human approval) that its dispatch template admits; the templates are the ConfigMap dev-env-scheduled-work in the operator's namespace, and without it, or without such a basis, the occurrence parks and nothing dispatches")
 	fs.BoolVar(&o.scheduledWork.apiEnabled, "enable-scheduled-work-api", false, "serve /v1/scheduled-work (DESIGN-054 S5b): create, list, show, edit, cancel, approve and retry scheduled agent work, for agent-run schedule; default off, and every route answers 404 while off; needs the API (--api-bind-address), the ScheduledWork CRD installed and a reviewed Role on it, and get on the CRD and on the ConfigMap dev-env-scheduled-work for approve. It only records and decides items: nothing dispatches unless --enable-scheduled-work is also on")
@@ -741,6 +746,9 @@ func parseFlags(args []string) (options, error) {
 	}
 	if o.asksEnabled && !o.leaderElect {
 		return o, errors.New("--enable-asks requires leader election for the expiry sweeper")
+	}
+	if o.codexHostSelect && !codexHostHandsOffSet {
+		return o, errors.New("--enable-codex-host-select requires --codex-host-hands-off; an empty value is allowed")
 	}
 	if o.codexHostSelect && o.apiAddr == "0" {
 		return o, errors.New("--enable-codex-host-select requires the API (--api-bind-address)")

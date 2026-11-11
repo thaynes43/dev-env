@@ -2,16 +2,24 @@ package agentrun
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
 const (
-	hostSelectionOff     = "Host selection is off."
-	resumeNotBuilt       = "Resume is not built yet."
-	commandCreatesNoHost = "This command does not create a host."
+	hostSelectionOff          = "Host selection is off."
+	resumeNotBuilt            = "Resume is not built yet."
+	commandCreatesNoHost      = "This command does not create a host."
+	codexHostReleaseTimeout   = 10 * time.Second
+	selectionNotUsedUnreached = "Host selection was not used: the operator could not be reached."
+	selectionNotUsedNoCreds   = "Host selection was not used: no credentials."
+	selectionNotUsedNoAnswer  = "Host selection was not used: the operator did not answer."
 )
 
 func (a *app) codexHost(ctx context.Context, args []string) error {
@@ -42,7 +50,7 @@ func (a *app) codexHostSelect(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	choice, off, err := a.chooseCodexHost(ctx, c, repo, profile, check)
+	choice, off, _, err := a.chooseCodexHost(ctx, c, repo, profile, check)
 	if err != nil {
 		return err
 	}
@@ -57,11 +65,16 @@ func (a *app) codexHostSelect(ctx context.Context, args []string) error {
 
 // chooseCodexHost posts one select. The bool is true when the route is absent
 // (any 404): the flag is off, or the operator is older. A refusal is a choice
-// with an empty action, not an error.
-func (a *app) chooseCodexHost(ctx context.Context, c *conn, repo, profile string, check bool) (apiv1.CodexHostChoice, bool, error) {
-	payload, err := json.Marshal(apiv1.CodexHostSelectRequest{Repo: repo, Profile: profile})
+// with an empty action, not an error. The launch id is not a secret and is
+// not logged.
+func (a *app) chooseCodexHost(ctx context.Context, c *conn, repo, profile string, check bool) (apiv1.CodexHostChoice, bool, string, error) {
+	id, err := newCodexLaunchID()
 	if err != nil {
-		return apiv1.CodexHostChoice{}, false, fail(ExitFailed, "could not build the selection request")
+		return apiv1.CodexHostChoice{}, false, "", err
+	}
+	payload, err := json.Marshal(apiv1.CodexHostSelectRequest{Repo: repo, Profile: profile, LaunchID: id})
+	if err != nil {
+		return apiv1.CodexHostChoice{}, false, "", fail(ExitFailed, "could not build the selection request")
 	}
 	target := c.url + apiv1.CodexHostsSelectPath
 	if check {
@@ -69,23 +82,31 @@ func (a *app) chooseCodexHost(ctx context.Context, c *conn, repo, profile string
 	}
 	status, raw, err := a.send(ctx, c, http.MethodPost, target, payload)
 	if err != nil {
-		return apiv1.CodexHostChoice{}, false, err
+		return apiv1.CodexHostChoice{}, false, "", err
 	}
 	if status == http.StatusNotFound {
-		return apiv1.CodexHostChoice{}, true, nil
+		return apiv1.CodexHostChoice{}, true, "", nil
 	}
 	if status != http.StatusOK {
-		return apiv1.CodexHostChoice{}, false, refusal(c, status, raw)
+		return apiv1.CodexHostChoice{}, false, "", refusal(c, status, raw)
 	}
 	var choice apiv1.CodexHostChoice
 	if json.Unmarshal(raw, &choice) != nil {
-		return apiv1.CodexHostChoice{}, false, fail(ExitFailed, "the selection answer is not the host choice")
+		return apiv1.CodexHostChoice{}, false, "", fail(ExitFailed, "the selection answer is not the host choice")
 	}
-	return choice, false, nil
+	return choice, false, id, nil
 }
 
-func (a *app) releaseCodexHost(ctx context.Context, c *conn, host string) error {
-	payload, err := json.Marshal(apiv1.CodexHostReleaseRequest{Host: host})
+func newCodexLaunchID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fail(ExitFailed, "could not make a launch id")
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+func (a *app) releaseCodexHost(ctx context.Context, c *conn, host, launchID string) error {
+	payload, err := json.Marshal(apiv1.CodexHostReleaseRequest{Host: host, LaunchID: launchID})
 	if err != nil {
 		return fail(ExitFailed, "could not build the release request")
 	}
@@ -114,7 +135,7 @@ func codexHostRefused(choice apiv1.CodexHostChoice) error {
 // codexBeforeCreate asks select before an interactive Codex create. False
 // means the create does not continue: the choice was printed, or it was refused.
 func (a *app) codexBeforeCreate(ctx context.Context, c *conn, repo, profile string) (bool, error) {
-	choice, off, err := a.chooseCodexHost(ctx, c, repo, profile, false)
+	choice, off, _, err := a.chooseCodexHost(ctx, c, repo, profile, true)
 	if err != nil {
 		return false, err
 	}
@@ -142,11 +163,13 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 	}
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
-		return err
+		a.errf("%s", selectionNotUsedLine(err))
+		return invalid()
 	}
-	choice, off, err := a.chooseCodexHost(ctx, c, t.repo, "", false)
+	choice, off, launchID, err := a.chooseCodexHost(ctx, c, t.repo, "", false)
 	if err != nil {
-		return err
+		a.errf("%s", selectionNotUsedLine(err))
+		return invalid()
 	}
 	if off {
 		a.errf("%s", hostSelectionOff)
@@ -155,17 +178,17 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 	switch choice.Action {
 	case "use":
 		t.host = choice.Host
-		if !projectName.MatchString(t.host) {
-			if rel := a.releaseCodexHost(ctx, c, choice.Host); rel != nil {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codexHostReleaseTimeout)
+		defer cancel()
+		defer func() {
+			if rel := a.releaseCodexHost(releaseCtx, c, t.host, launchID); rel != nil {
 				a.errf("%s", rel.Error())
 			}
+		}()
+		if !projectName.MatchString(t.host) {
 			return invalid()
 		}
-		err = a.threadOnHost(ctx, cmd, t)
-		if rel := a.releaseCodexHost(ctx, c, t.host); rel != nil {
-			a.errf("%s", rel.Error())
-		}
-		return err
+		return a.threadOnHost(ctx, cmd, t)
 	case "report":
 		return a.printJSON(choice)
 	case "resume":
@@ -181,4 +204,15 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 	default:
 		return codexHostRefused(choice)
 	}
+}
+
+func selectionNotUsedLine(err error) string {
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		return selectionNotUsedUnreached
+	}
+	if ee.code == ExitAuth {
+		return selectionNotUsedNoCreds
+	}
+	return selectionNotUsedNoAnswer
 }

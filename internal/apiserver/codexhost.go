@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -30,6 +31,10 @@ const (
 	codexHostSelectPasses  = 8
 	codexHostLeaseTries    = 5
 	codexHostProfileDenied = "A session asks only for its own profile."
+	// codexHostCoordinatorCheckOnly refuses a coordinator a lease. The thread
+	// route does not accept that kind, so a lease would be useless to it.
+	codexHostCoordinatorCheckOnly = "A coordinator may only check host selection."
+	codexHostLaunchIDInvalid      = "launchId is 16 to 64 characters of a-z and 0-9"
 )
 
 const (
@@ -39,17 +44,6 @@ const (
 	codexHostProtectedAnnotation = v1alpha1.LabelPrefix + "protected"
 	codexHostBootstrapReady      = "Ready"
 )
-
-// DefaultCodexHostHandsOff is section 3's four names. --codex-host-hands-off
-// is seeded with them.
-func DefaultCodexHostHandsOff() []string {
-	return []string{
-		"haynes-ops-1109-115326",
-		"dev-env-1027-111645",
-		"dev-env-1104-010332",
-		"dev-env-1027-010058",
-	}
-}
 
 // CodexHostConfig turns on POST /v1/codex-hosts/select and /release.
 // Nil leaves both unregistered.
@@ -94,17 +88,27 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 	if req.Profile != "" && len(validation.IsDNS1123Label(req.Profile)) > 0 {
 		return 0, nil, invalid(fieldError("profile", "profile is a DNS label"))
 	}
-	asked, err := s.codexHostAskedProfile(c, req.Profile)
-	if err != nil {
-		return 0, nil, err
+	if !apiv1.ValidCodexLaunchID(req.LaunchID) {
+		return 0, nil, invalid(fieldError("launchId", codexHostLaunchIDInvalid))
+	}
+	if c.kind == kindCoordinator && !check {
+		return 0, nil, forbidden("%s", codexHostCoordinatorCheckOnly)
 	}
 	tmpl, err := s.codexHostTemplates(ctx)
 	if err != nil {
 		return 0, nil, err
 	}
+	asked, err := s.codexHostAskedProfile(c, req.Profile, tmpl.DefaultProfile)
+	if err != nil {
+		return 0, nil, err
+	}
+	who := s.codexHostCaller(c)
+	who.LaunchID = req.LaunchID
 	in := codexhostpool.Input{
-		Caller:            s.codexHostCaller(c),
-		Request:           codexhostpool.Request{Repository: req.Repo, Profile: asked},
+		Caller:            who,
+		Request:           codexhostpool.Request{Repository: req.Repo},
+		ResolvedProfile:   asked,
+		DefaultProfile:    tmpl.DefaultProfile,
 		MaxRunningPerCell: s.CodexHosts.MaxRunningPerCell,
 		MaxRunning:        s.CodexHosts.MaxRunning,
 	}
@@ -121,7 +125,16 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 			s.logCodexHostSelect(c, res, check)
 			return http.StatusOK, res, nil
 		}
-		wrote, err := s.leaseCodexHost(ctx, res.Host, in.Caller.Name)
+		uid := ""
+		for _, h := range hosts {
+			if h.Name == res.Host {
+				uid = h.UID
+				break
+			}
+		}
+		wrote, err := s.leaseCodexHost(ctx, codexLeaseTarget{
+			name: res.Host, uid: uid, caller: who, profile: asked, repo: req.Repo, tmpl: tmpl,
+		})
 		if err != nil {
 			return 0, nil, fromKubeError(err, "session "+res.Host)
 		}
@@ -149,6 +162,9 @@ func (s *Server) releaseCodexHost(ctx context.Context, w http.ResponseWriter, r 
 	if len(validation.IsDNS1123Label(req.Host)) > 0 {
 		return 0, nil, invalid(fieldError("host", "host is a session name"))
 	}
+	if !apiv1.ValidCodexLaunchID(req.LaunchID) {
+		return 0, nil, invalid(fieldError("launchId", codexHostLaunchIDInvalid))
+	}
 	key := types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: req.Host}
 	done := apiv1.CodexHostReleaseResponse{Host: req.Host, Released: true}
 	for range codexHostLeaseTries {
@@ -163,8 +179,8 @@ func (s *Server) releaseCodexHost(ctx context.Context, w http.ResponseWriter, r 
 		if raw == "" {
 			return http.StatusOK, done, nil
 		}
-		holder, _, ok := parseCodexHostLease(raw)
-		if !ok || holder != c.String() {
+		holder, launchID, _, ok := parseCodexHostLease(raw)
+		if !ok || holder != c.String() || launchID != req.LaunchID {
 			return 0, nil, newError(http.StatusConflict, apiv1.CodexHostLeaseHeld, "%s", apiv1.CodexHostLeaseHeldSentence)
 		}
 		orig := sess.DeepCopy()
@@ -182,14 +198,18 @@ func (s *Server) releaseCodexHost(ctx context.Context, w http.ResponseWriter, r 
 }
 
 func codexHostCheck(r *http.Request) (bool, error) {
-	v, ok := r.URL.Query()["check"]
-	if !ok {
+	if r.URL.RawQuery == "" {
 		return false, nil
 	}
-	if len(v) == 1 && v[0] == "true" {
-		return true, nil
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return false, invalid(fieldError("check", "check is true or omitted"))
 	}
-	return false, invalid(fieldError("check", "check is true or omitted"))
+	v, ok := q["check"]
+	if !ok || len(q) != 1 || len(v) != 1 || v[0] != "true" {
+		return false, invalid(fieldError("check", "check is true or omitted"))
+	}
+	return true, nil
 }
 
 func (s *Server) codexHostTemplates(ctx context.Context) (*templates.Templates, error) {
@@ -203,7 +223,7 @@ func (s *Server) codexHostTemplates(ctx context.Context) (*templates.Templates, 
 	return tmpl, nil
 }
 
-func (s *Server) codexHostAskedProfile(c *caller, named string) (string, error) {
+func (s *Server) codexHostAskedProfile(c *caller, named, def string) (string, error) {
 	own := c.profile
 	if own == "" && c.pod != nil {
 		own = c.pod.Labels[v1alpha1.LabelProfile]
@@ -211,7 +231,10 @@ func (s *Server) codexHostAskedProfile(c *caller, named string) (string, error) 
 	switch c.kind {
 	case kindSession:
 		if s.isWorkbenchSession(c) {
-			return named, nil
+			if named != "" {
+				return named, nil
+			}
+			return def, nil
 		}
 		if named != "" && named != own {
 			return "", forbidden("%s", codexHostProfileDenied)
@@ -223,7 +246,10 @@ func (s *Server) codexHostAskedProfile(c *caller, named string) (string, error) 
 		}
 		return own, nil
 	default:
-		return named, nil
+		if named != "" {
+			return named, nil
+		}
+		return def, nil
 	}
 }
 
@@ -242,6 +268,7 @@ func (s *Server) codexHostCaller(c *caller) codexhostpool.Caller {
 }
 
 func (s *Server) logCodexHostSelect(c *caller, res codexhostpool.Result, check bool) {
+	// The launch id is not logged. Presence is the request having been accepted.
 	s.Log.Info("codex host select", "caller", c.String(), "host", res.Host, "action", res.Action, "reason", res.Reason, "check", check)
 }
 
@@ -295,16 +322,28 @@ func codexRemoteSession(sess *v1alpha1.AgentSession) bool {
 }
 
 func codexLoginReading(sess *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) bool {
-	if !codexRemoteSession(sess) || sess.Status.Phase != v1alpha1.PhaseRunning || pod == nil {
-		return false
-	}
-	if !conditionIsTrue(sess.Status.Conditions, controller.ConditionPodReady) {
+	if !codexRemoteSession(sess) || sess.Status.Phase != v1alpha1.PhaseRunning || !codexHostPodReady(sess, pod) {
 		return false
 	}
 	if sess.Status.Agent == nil {
 		return false
 	}
 	return codexHeartbeatFresh(sess.Status.Agent.LastHeartbeat, now)
+}
+
+// codexHostPodReady is the one Ready test for a host and for a login reading:
+// the pod is this session's, Running and Ready, not deleting, and not a hold pod.
+func codexHostPodReady(sess *v1alpha1.AgentSession, pod *corev1.Pod) bool {
+	if sess == nil || pod == nil {
+		return false
+	}
+	if !metav1.IsControlledBy(pod, sess) || !pod.DeletionTimestamp.IsZero() {
+		return false
+	}
+	if pod.Labels[v1alpha1.LabelHold] == "true" {
+		return false
+	}
+	return pod.Status.Phase == corev1.PodRunning && podIsReady(pod)
 }
 
 func codexHeartbeatFresh(at *metav1.Time, now time.Time) bool {
@@ -350,7 +389,7 @@ func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates
 		Archived:        sess.Status.ArchivedAt != nil,
 	}
 	if pod != nil {
-		h.PodReady = conditionIsTrue(sess.Status.Conditions, controller.ConditionPodReady)
+		h.PodReady = codexHostPodReady(sess, pod)
 		h.HoldPod = pod.Labels[v1alpha1.LabelHold] == "true"
 		h.ImageCurrent = pod.Labels[v1alpha1.LabelRevision] == tmpl.Revision() && tmpl.Revision() != "" &&
 			!conditionIsTrue(sess.Status.Conditions, controller.ConditionOutdated)
@@ -364,8 +403,8 @@ func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates
 	if sess.Annotations[codexHostProtectedAnnotation] == "true" {
 		h.ProtectedAnnotation = true
 	}
-	if holder, exp, ok := parseCodexHostLease(sess.Annotations[codexHostLeaseAnnotation]); ok {
-		h.LeaseHolder, h.LeaseExpiry = holder, exp
+	if holder, launchID, exp, ok := parseCodexHostLease(sess.Annotations[codexHostLeaseAnnotation]); ok {
+		h.LeaseHolder, h.LeaseLaunchID, h.LeaseExpiry = holder, launchID, exp
 	}
 	if sess.Status.RemoteControl != nil {
 		h.RemoteState = sess.Status.RemoteControl.State
@@ -432,9 +471,14 @@ func (s *Server) codexHostBlocked(sess *v1alpha1.AgentSession) bool {
 	return sess.Status.Rescue != nil && sess.Status.Rescue.Result == v1alpha1.RescueFailed
 }
 
-func (s *Server) leaseCodexHost(ctx context.Context, name, holder string) (codexLeaseResult, error) {
-	key := types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: name}
-	now := s.now()
+type codexLeaseTarget struct {
+	name, uid, profile, repo string
+	caller                   codexhostpool.Caller
+	tmpl                     *templates.Templates
+}
+
+func (s *Server) leaseCodexHost(ctx context.Context, want codexLeaseTarget) (codexLeaseResult, error) {
+	key := types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: want.name}
 	for range codexHostLeaseTries {
 		var sess v1alpha1.AgentSession
 		if err := s.Live.Get(ctx, key, &sess); err != nil {
@@ -443,18 +487,30 @@ func (s *Server) leaseCodexHost(ctx context.Context, name, holder string) (codex
 			}
 			return 0, err
 		}
+		if string(sess.UID) != want.uid {
+			return codexLeaseBusy, nil
+		}
 		if !sess.DeletionTimestamp.IsZero() || s.codexHostBlocked(&sess) {
 			return codexLeaseBusy, nil
 		}
-		if codexLeaseHeldByOther(sess.Annotations[codexHostLeaseAnnotation], holder, now) {
+		pod, err := s.codexHostPod(ctx, &sess)
+		if err != nil {
+			return 0, err
+		}
+		now := s.now()
+		host := codexHostFrom(&sess, pod, want.tmpl, s.codexHostHandsOff(sess.Name))
+		if !codexhostpool.Suitable(host, want.caller, want.profile, want.repo, now) {
+			return codexLeaseBusy, nil
+		}
+		if codexLeaseHeldByOther(sess.Annotations[codexHostLeaseAnnotation], want.caller.Name, want.caller.LaunchID, now) {
 			return codexLeaseBusy, nil
 		}
 		orig := sess.DeepCopy()
 		if sess.Annotations == nil {
 			sess.Annotations = map[string]string{}
 		}
-		sess.Annotations[codexHostLeaseAnnotation] = formatCodexHostLease(codexHostLeasePurpose, now.Add(codexHostLeaseTTL), holder)
-		err := s.Client.Patch(ctx, &sess, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
+		sess.Annotations[codexHostLeaseAnnotation] = formatCodexHostLease(codexHostLeasePurpose, now.Add(codexHostLeaseTTL), want.caller.Name, want.caller.LaunchID)
+		err = s.Client.Patch(ctx, &sess, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
 		if apierrors.IsConflict(err) {
 			continue
 		}
@@ -466,26 +522,28 @@ func (s *Server) leaseCodexHost(ctx context.Context, name, holder string) (codex
 	return codexLeaseConflict, nil
 }
 
-func codexLeaseHeldByOther(raw, caller string, now time.Time) bool {
-	holder, exp, ok := parseCodexHostLease(raw)
-	return ok && holder != caller && exp.After(now)
-}
-
-func formatCodexHostLease(purpose string, expiry time.Time, holder string) string {
-	return purpose + " " + expiry.UTC().Format(time.RFC3339) + " " + holder
-}
-
-func parseCodexHostLease(raw string) (holder string, expiry time.Time, ok bool) {
-	purpose, rest, found := strings.Cut(raw, " ")
-	stamp, holder, found2 := strings.Cut(rest, " ")
-	if !found || !found2 || purpose == "" || holder == "" || strings.Contains(holder, " ") {
-		return "", time.Time{}, false
+func codexLeaseHeldByOther(raw, caller, launchID string, now time.Time) bool {
+	holder, id, exp, ok := parseCodexHostLease(raw)
+	if !ok || !exp.After(now) {
+		return false
 	}
-	exp, err := time.Parse(time.RFC3339, stamp)
+	return holder != caller || id != launchID
+}
+
+func formatCodexHostLease(purpose string, expiry time.Time, holder, launchID string) string {
+	return purpose + " " + expiry.UTC().Format(time.RFC3339) + " " + holder + " " + launchID
+}
+
+func parseCodexHostLease(raw string) (holder, launchID string, expiry time.Time, ok bool) {
+	parts := strings.Split(raw, " ")
+	if len(parts) != 4 || parts[0] == "" || parts[2] == "" || !apiv1.ValidCodexLaunchID(parts[3]) {
+		return "", "", time.Time{}, false
+	}
+	exp, err := time.Parse(time.RFC3339, parts[1])
 	if err != nil {
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
 	}
-	return holder, exp, true
+	return parts[2], parts[3], exp, true
 }
 
 func conditionIsTrue(conds []metav1.Condition, typ string) bool {

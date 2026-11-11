@@ -340,7 +340,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		}
 		return a.printJSON(raw)
 	}
-	if interactive && agent == protocol.AgentCodex {
+	if interactive && agent == protocol.AgentCodex && !restoring {
 		cont, err := a.codexBeforeCreate(ctx, c, repo, profile)
 		if err != nil {
 			return err

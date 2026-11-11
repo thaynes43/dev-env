@@ -14,7 +14,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -70,7 +69,7 @@ func (f *fixture) enableCodexHosts() {
 	f.srv.CodexHosts = &CodexHostConfig{
 		MaxRunningPerCell: codexhostpool.DefaultMaxRunningPerCell,
 		MaxRunning:        codexhostpool.DefaultMaxRunning,
-		HandsOff:          DefaultCodexHostHandsOff(),
+		HandsOff:          []string{codexHandsOffName},
 	}
 	f.h = f.srv.Handler()
 }
@@ -208,7 +207,21 @@ func (f *fixture) addCodexHost(name string, o codexHostOpt) {
 	if err := f.c.Create(ctx, pod); err != nil {
 		f.t.Fatal(err)
 	}
+	if o.notReady {
+		return
+	}
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	if err := f.c.Status().Update(ctx, pod); err != nil {
+		f.t.Fatal(err)
+	}
 }
+
+const (
+	codexTestLaunch   = "abc123def456ghi7"
+	codexOtherLaunch  = "0123456789abcdef"
+	codexHandsOffName = "kept-off"
+)
 
 func (f *fixture) selectCodex(token, profile string, check bool) *httptest.ResponseRecorder {
 	f.t.Helper()
@@ -216,7 +229,7 @@ func (f *fixture) selectCodex(token, profile string, check bool) *httptest.Respo
 	if check {
 		path += "?check=true"
 	}
-	return f.do(http.MethodPost, path, token, apiv1.CodexHostSelectRequest{Repo: "dev-env", Profile: profile})
+	return f.do(http.MethodPost, path, token, apiv1.CodexHostSelectRequest{Repo: "dev-env", Profile: profile, LaunchID: codexTestLaunch})
 }
 
 func (f *fixture) workbenchCaller(name, profile string) string {
@@ -259,8 +272,8 @@ func (f *fixture) wantChoice(w *httptest.ResponseRecorder, action, host, reason 
 		f.t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
 	got := decode[apiv1.CodexHostChoice](f.t, w)
-	if got.Action != action || got.Host != host || got.Reason != reason {
-		f.t.Fatalf("choice %+v, want action %q host %q reason %q", got, action, host, reason)
+	if got.Action != action || got.Host != host || got.Reason != reason || got.Ready != (action == "use") {
+		f.t.Fatalf("choice %+v, want action %q host %q reason %q ready %v", got, action, host, reason, action == "use")
 	}
 	return got
 }
@@ -298,7 +311,7 @@ func TestCodexHostSelectCheckWritesNothing(t *testing.T) {
 	})
 	f.addCodexHost("paired", codexHostOpt{})
 	reject.Store(true)
-	f.wantChoice(f.selectCodex(tokClient, "dev", true), "use", "paired", codexhostpool.ReasonFolderTrustPending)
+	f.wantChoice(f.selectCodex(tokClient, "dev", true), "use", "paired", "")
 	if got := f.session("paired").Annotations[codexHostLeaseAnnotation]; got != "" {
 		t.Fatalf("check wrote %q", got)
 	}
@@ -314,16 +327,16 @@ func TestCodexHostSelectUseLeasesAndRelease(t *testing.T) {
 		},
 	})
 	f.addCodexHost("paired", codexHostOpt{})
-	f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "paired", codexhostpool.ReasonFolderTrustPending)
+	f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "paired", "")
 	raw := f.session("paired").Annotations[codexHostLeaseAnnotation]
-	holder, exp, ok := parseCodexHostLease(raw)
-	if !ok || holder != clientHolder() || !exp.Equal(f.now.Add(codexHostLeaseTTL)) || strings.Count(raw, " ") != 2 {
-		t.Fatalf("lease %q holder %q exp %s", raw, holder, exp)
+	holder, launchID, exp, ok := parseCodexHostLease(raw)
+	if !ok || holder != clientHolder() || launchID != codexTestLaunch || !exp.Equal(f.now.Add(codexHostLeaseTTL)) || strings.Count(raw, " ") != 3 {
+		t.Fatalf("lease %q holder %q launch %q exp %s", raw, holder, launchID, exp)
 	}
 	if len(patches) != 1 || patches[0] != "paired" {
 		t.Fatalf("patches %v", patches)
 	}
-	w := f.do(http.MethodPost, apiv1.CodexHostsReleasePath, tokClient, apiv1.CodexHostReleaseRequest{Host: "paired"})
+	w := f.do(http.MethodPost, apiv1.CodexHostsReleasePath, tokClient, apiv1.CodexHostReleaseRequest{Host: "paired", LaunchID: codexTestLaunch})
 	got := decode[apiv1.CodexHostReleaseResponse](t, w)
 	if w.Code != http.StatusOK || !got.Released || got.Host != "paired" {
 		t.Fatalf("release %d %+v", w.Code, got)
@@ -334,12 +347,12 @@ func TestCodexHostSelectUseLeasesAndRelease(t *testing.T) {
 	if len(patches) != 2 {
 		t.Fatalf("patches after release %v", patches)
 	}
-	w = f.do(http.MethodPost, apiv1.CodexHostsReleasePath, tokClient, apiv1.CodexHostReleaseRequest{Host: "paired"})
+	w = f.do(http.MethodPost, apiv1.CodexHostsReleasePath, tokClient, apiv1.CodexHostReleaseRequest{Host: "paired", LaunchID: codexTestLaunch})
 	if w.Code != http.StatusOK || len(patches) != 2 {
 		t.Fatalf("absent lease: %d patches %v", w.Code, patches)
 	}
 
-	foreign := formatCodexHostLease(codexHostLeasePurpose, f.now.Add(time.Hour), "client/other")
+	foreign := formatCodexHostLease(codexHostLeasePurpose, f.now.Add(time.Hour), "client/other", codexOtherLaunch)
 	sess := f.session("paired")
 	orig := sess.DeepCopy()
 	if sess.Annotations == nil {
@@ -350,38 +363,57 @@ func TestCodexHostSelectUseLeasesAndRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := len(patches)
-	w = f.do(http.MethodPost, apiv1.CodexHostsReleasePath, tokClient, apiv1.CodexHostReleaseRequest{Host: "paired"})
+	w = f.do(http.MethodPost, apiv1.CodexHostsReleasePath, tokClient, apiv1.CodexHostReleaseRequest{Host: "paired", LaunchID: codexTestLaunch})
 	e := wantError(t, w, http.StatusConflict, apiv1.CodexHostLeaseHeld)
 	if e.Message != apiv1.CodexHostLeaseHeldSentence || f.session("paired").Annotations[codexHostLeaseAnnotation] != foreign || len(patches) != before {
 		t.Fatalf("foreign lease: %s patches %d", e.Message, len(patches))
 	}
 }
 
-// A heartbeat conflict is retried on the same host.
+// A real intervening write conflicts, and the optimistic lock is what makes it
+// conflict. The same host is leased on the retry.
 func TestCodexHostSelectHeartbeatConflictRetriesSameHost(t *testing.T) {
 	var n atomic.Int32
-	var mu sync.Mutex
-	var names []string
+	var conflicted atomic.Bool
 	f := newCodexFixture(t, interceptor.Funcs{
 		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			mu.Lock()
-			names = append(names, obj.GetName())
-			mu.Unlock()
-			if obj.GetName() == "paired" && n.Add(1) == 1 {
-				return apierrors.NewConflict(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "agentsessions"}, "paired", errors.New("heartbeat"))
+			if obj.GetName() != "paired" || n.Add(1) != 1 {
+				return c.Patch(ctx, obj, patch, opts...)
 			}
-			return c.Patch(ctx, obj, patch, opts...)
+			var live v1alpha1.AgentSession
+			if err := c.Get(ctx, types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &live); err != nil {
+				t.Fatal(err)
+			}
+			before := live.ResourceVersion
+			if live.Annotations == nil {
+				live.Annotations = map[string]string{}
+			}
+			live.Annotations[v1alpha1.LabelPrefix+"side-write"] = "1"
+			if err := c.Update(ctx, &live); err != nil {
+				t.Fatal(err)
+			}
+			if live.ResourceVersion == before {
+				t.Fatal("the intervening write did not change resourceVersion")
+			}
+			err := c.Patch(ctx, obj, patch, opts...)
+			if !apierrors.IsConflict(err) {
+				t.Errorf("a stale lease patch did not conflict: %v", err)
+			} else {
+				conflicted.Store(true)
+			}
+			return err
 		},
 	})
 	f.addCodexHost("paired", codexHostOpt{})
-	f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "paired", codexhostpool.ReasonFolderTrustPending)
-	mu.Lock()
-	defer mu.Unlock()
-	if len(names) != 2 || names[0] != "paired" || names[1] != "paired" {
-		t.Fatalf("patches %v", names)
+	f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "paired", "")
+	if !conflicted.Load() {
+		t.Fatal("the optimistic lock was not required")
 	}
-	if f.session("paired").Annotations[codexHostLeaseAnnotation] == "" {
+	if _, _, _, ok := parseCodexHostLease(f.session("paired").Annotations[codexHostLeaseAnnotation]); !ok {
 		t.Fatal("the retried lease was not written")
+	}
+	if f.session("paired").Annotations[v1alpha1.LabelPrefix+"side-write"] != "1" {
+		t.Fatal("the intervening write was lost")
 	}
 }
 
@@ -405,7 +437,7 @@ func TestCodexHostSelectForeignLeaseMovesOrBusy(t *testing.T) {
 				if sess.Annotations == nil {
 					sess.Annotations = map[string]string{}
 				}
-				sess.Annotations[codexHostLeaseAnnotation] = formatCodexHostLease(codexHostLeasePurpose, f.now.Add(time.Hour), "client/other")
+				sess.Annotations[codexHostLeaseAnnotation] = formatCodexHostLease(codexHostLeasePurpose, f.now.Add(time.Hour), "client/other", codexOtherLaunch)
 				return c.Update(ctx, sess.DeepCopy())
 			},
 			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
@@ -420,7 +452,7 @@ func TestCodexHostSelectForeignLeaseMovesOrBusy(t *testing.T) {
 		f.addCodexHost("preferred", codexHostOpt{pool: true, activity: &newer})
 		f.addCodexHost("second", codexHostOpt{activity: &older})
 		arm.Store(true)
-		f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "second", codexhostpool.ReasonFolderTrustPending)
+		f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "second", "")
 		mu.Lock()
 		defer mu.Unlock()
 		if len(names) != 1 || names[0] != "second" {
@@ -439,7 +471,7 @@ func TestCodexHostSelectForeignLeaseMovesOrBusy(t *testing.T) {
 				return errors.New("patch")
 			},
 		})
-		f.addCodexHost("only", codexHostOpt{lease: formatCodexHostLease(codexHostLeasePurpose, f.now.Add(time.Hour), "client/other")})
+		f.addCodexHost("only", codexHostOpt{lease: formatCodexHostLease(codexHostLeasePurpose, f.now.Add(time.Hour), "client/other", codexOtherLaunch)})
 		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "", "", codexhostpool.ReasonHostBusy)
 		if len(got.Skipped) != 1 || got.Skipped[0].Reason != codexhostpool.ReasonHostBusy || patched.Load() {
 			t.Fatalf("choice %+v patched %v", got, patched.Load())
@@ -456,7 +488,7 @@ func TestCodexHostSessionProfileFence(t *testing.T) {
 	if e.Message != codexHostProfileDenied {
 		t.Fatalf("message %q", e.Message)
 	}
-	f.wantChoice(f.selectCodex(tok, "", true), "use", "paired", codexhostpool.ReasonFolderTrustPending)
+	f.wantChoice(f.selectCodex(tok, "", true), "use", "paired", "")
 
 	w = f.selectCodex(tokClient, "", false)
 	if w.Code != http.StatusOK {
@@ -466,7 +498,7 @@ func TestCodexHostSessionProfileFence(t *testing.T) {
 	if got.Action == "use" && got.Host == "paired" {
 		t.Fatal("a client that omits the profile reused the dev host")
 	}
-	f.wantChoice(f.selectCodex(tokClient, "dev", true), "use", "paired", codexhostpool.ReasonFolderTrustPending)
+	f.wantChoice(f.selectCodex(tokClient, "dev", true), "use", "paired", "")
 }
 
 func TestCodexHostWorkbenchOmitsProfile(t *testing.T) {
@@ -516,7 +548,7 @@ func TestCodexHostCoordinatorResumeWritesNothing(t *testing.T) {
 		phase: v1alpha1.PhaseSuspended, mode: v1alpha1.OperatingModeSuspended,
 		rescue: v1alpha1.RescueCleanAndPushed, parent: coordinatorSA,
 	})
-	f.wantChoice(f.selectCodex(tok, "", true), "resume", "mine", codexhostpool.ReasonFolderTrustPending)
+	f.wantChoice(f.selectCodex(tok, "", true), "resume", "mine", "")
 	if patched.Load() {
 		t.Fatal("resume wrote a lease")
 	}
@@ -543,7 +575,7 @@ func TestCodexHostProtectedAndRescueAreNotLeased(t *testing.T) {
 			})
 			name := "kept"
 			if tc.name == "hands-off" {
-				name = DefaultCodexHostHandsOff()[0]
+				name = codexHandsOffName
 			}
 			f.addCodexHost(name, tc.opt)
 			got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "create", "", "")
@@ -587,7 +619,7 @@ func TestCodexHostLoginFact(t *testing.T) {
 	t.Run("fresh pair-code-issued is current", func(t *testing.T) {
 		f := newCodexFixture(t)
 		f.addCodexHost("live", codexHostOpt{remote: "pair-code-issued"})
-		f.wantChoice(f.selectCodex(tokClient, "dev", true), "use", "live", codexhostpool.ReasonFolderTrustPending)
+		f.wantChoice(f.selectCodex(tokClient, "dev", true), "use", "live", "")
 	})
 	for _, state := range []string{"offline", "starting", "errored", "unpaired", ""} {
 		t.Run("fresh "+state+" is current", func(t *testing.T) {
@@ -649,6 +681,246 @@ func TestCodexHostLoginFact(t *testing.T) {
 		older := f.now.Add(-time.Minute)
 		f.addCodexHost("older", codexHostOpt{remote: "login-required", heartbeat: &older})
 		f.addCodexHost("newer", codexHostOpt{})
-		f.wantChoice(f.selectCodex(tokClient, "dev", true), "use", "newer", codexhostpool.ReasonFolderTrustPending)
+		f.wantChoice(f.selectCodex(tokClient, "dev", true), "use", "newer", "")
 	})
+}
+
+// The lease step re-reads the chosen session and its pod and runs the same
+// suitability test. A host that no longer qualifies is not leased.
+func TestCodexHostLeaseRechecksSuitability(t *testing.T) {
+	mutate := func(name string, change func(context.Context, client.WithWatch, *v1alpha1.AgentSession)) interceptor.Funcs {
+		var once atomic.Bool
+		return interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if err := c.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				sess, ok := obj.(*v1alpha1.AgentSession)
+				// addCodexHost reads the session once before it writes status.
+				// The lease read is the first one that already has a phase.
+				if !ok || sess.Name != name || sess.Status.Phase == "" || !once.CompareAndSwap(false, true) {
+					return nil
+				}
+				change(ctx, c, sess)
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}
+	}
+	two := func(t *testing.T, change func(context.Context, client.WithWatch, *v1alpha1.AgentSession)) {
+		t.Helper()
+		f := newCodexFixture(t, mutate("preferred", change))
+		newer := f.now
+		older := f.now.Add(-time.Hour)
+		f.addCodexHost("preferred", codexHostOpt{pool: true, activity: &newer})
+		f.addCodexHost("second", codexHostOpt{activity: &older})
+		f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "second", "")
+		if f.session("preferred").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatal("leased the host that stopped qualifying")
+		}
+		if _, id, _, ok := parseCodexHostLease(f.session("second").Annotations[codexHostLeaseAnnotation]); !ok || id != codexTestLaunch {
+			t.Fatal("the next host was not leased")
+		}
+	}
+	t.Run("protected", func(t *testing.T) {
+		two(t, func(ctx context.Context, c client.WithWatch, sess *v1alpha1.AgentSession) {
+			if sess.Annotations == nil {
+				sess.Annotations = map[string]string{}
+			}
+			sess.Annotations[codexHostProtectedAnnotation] = "true"
+			if err := c.Update(ctx, sess); err != nil {
+				t.Fatal(err)
+			}
+		})
+	})
+	t.Run("suspended", func(t *testing.T) {
+		two(t, func(ctx context.Context, c client.WithWatch, sess *v1alpha1.AgentSession) {
+			sess.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+			if err := c.Update(ctx, sess); err != nil {
+				t.Fatal(err)
+			}
+			var fresh v1alpha1.AgentSession
+			if err := c.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, &fresh); err != nil {
+				t.Fatal(err)
+			}
+			fresh.Status.Phase = v1alpha1.PhaseSuspended
+			if err := c.Status().Update(ctx, &fresh); err != nil {
+				t.Fatal(err)
+			}
+		})
+	})
+	t.Run("login-required", func(t *testing.T) {
+		f := newCodexFixture(t, mutate("only", func(ctx context.Context, c client.WithWatch, sess *v1alpha1.AgentSession) {
+			if sess.Status.RemoteControl == nil {
+				sess.Status.RemoteControl = &v1alpha1.RemoteControlStatus{}
+			}
+			sess.Status.RemoteControl.State = "login-required"
+			if err := c.Status().Update(ctx, sess); err != nil {
+				t.Fatal(err)
+			}
+		}))
+		f.addCodexHost("only", codexHostOpt{})
+		f.wantChoice(f.selectCodex(tokClient, "dev", false), "", "", codexhostpool.ReasonLoginRequired)
+		if f.session("only").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatal("leased a host whose login had lapsed")
+		}
+	})
+	t.Run("replaced", func(t *testing.T) {
+		var old string
+		f := newCodexFixture(t, mutate("preferred", func(ctx context.Context, c client.WithWatch, sess *v1alpha1.AgentSession) {
+			old = string(sess.UID)
+			if err := c.Delete(ctx, sess); err != nil {
+				t.Fatal(err)
+			}
+			repl := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: sess.Name, Namespace: sess.Namespace, UID: uuid.NewUUID()}, Spec: v1alpha1.AgentSessionSpec{
+				Repo: "dev-env", Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Profile: "dev",
+			}}
+			if err := c.Create(ctx, repl); err != nil {
+				t.Fatal(err)
+			}
+			if string(repl.UID) == old || old == "" {
+				t.Fatalf("replacement uid %s old %s", repl.UID, old)
+			}
+		}))
+		newer := f.now
+		older := f.now.Add(-time.Hour)
+		f.addCodexHost("preferred", codexHostOpt{pool: true, activity: &newer})
+		f.addCodexHost("second", codexHostOpt{activity: &older})
+		f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "second", "")
+		if got := string(f.session("preferred").UID); got == old || f.session("preferred").Spec.Agent != "claude" {
+			t.Fatalf("replacement uid %s agent %s", got, f.session("preferred").Spec.Agent)
+		}
+		if f.session("preferred").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatal("leased the replacement")
+		}
+	})
+}
+
+func TestCodexHostPodReadyNotSessionCondition(t *testing.T) {
+	f := newCodexFixture(t)
+	f.addCodexHost("live", codexHostOpt{remote: "login-required"})
+	var pod corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "live"}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Status.Phase = corev1.PodPending
+	pod.Status.Conditions = nil
+	if err := f.c.Status().Update(context.Background(), &pod); err != nil {
+		t.Fatal(err)
+	}
+	got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "live", codexhostpool.ReasonNotRunning)
+	if got.Reason == codexhostpool.ReasonLoginRequired {
+		t.Fatal("a pod that is not Ready supplied the login fact")
+	}
+	if f.session("live").Annotations[codexHostLeaseAnnotation] != "" {
+		t.Fatal("leased a pod that is not Ready")
+	}
+
+	held := newCodexFixture(t)
+	held.addCodexHost("held", codexHostOpt{})
+	if err := held.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "held"}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	pod.Labels[v1alpha1.LabelHold] = "true"
+	if err := held.c.Update(context.Background(), &pod); err != nil {
+		t.Fatal(err)
+	}
+	held.wantChoice(held.selectCodex(tokClient, "dev", true), "report", "held", codexhostpool.ReasonNotRunning)
+}
+
+func TestCodexHostMalformedCheckWritesNothing(t *testing.T) {
+	var patched atomic.Bool
+	f := newCodexFixture(t, interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			patched.Store(true)
+			return errors.New("patch")
+		},
+	})
+	f.addCodexHost("paired", codexHostOpt{})
+	body := apiv1.CodexHostSelectRequest{Repo: "dev-env", Profile: "dev", LaunchID: codexTestLaunch}
+	for _, q := range []string{"?check=true;", "?check=true&other=1", "?other=1", "?check=false"} {
+		w := f.do(http.MethodPost, apiv1.CodexHostsSelectPath+q, tokClient, body)
+		if w.Code == http.StatusOK || patched.Load() {
+			t.Fatalf("%s status %d patched %v body %s", q, w.Code, patched.Load(), w.Body.String())
+		}
+		wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	}
+	w := f.do(http.MethodPost, apiv1.CodexHostsSelectPath, tokClient, apiv1.CodexHostSelectRequest{Repo: "dev-env", Profile: "dev"})
+	wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	if patched.Load() {
+		t.Fatal("a missing launch id wrote")
+	}
+}
+
+func TestCodexHostLeaseCarriesLaunchID(t *testing.T) {
+	f := newCodexFixture(t)
+	f.addCodexHost("paired", codexHostOpt{lease: formatCodexHostLease(codexHostLeasePurpose, f.now.Add(time.Hour), clientHolder(), codexTestLaunch)})
+	f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "paired", "")
+	if _, id, _, ok := parseCodexHostLease(f.session("paired").Annotations[codexHostLeaseAnnotation]); !ok || id != codexTestLaunch {
+		t.Fatal("the same launch id was not renewed")
+	}
+
+	busy := newCodexFixture(t)
+	busy.addCodexHost("busy", codexHostOpt{lease: formatCodexHostLease(codexHostLeasePurpose, busy.now.Add(time.Hour), clientHolder(), codexOtherLaunch)})
+	busy.wantChoice(busy.selectCodex(tokClient, "dev", false), "", "", codexhostpool.ReasonHostBusy)
+	if _, id, _, ok := parseCodexHostLease(busy.session("busy").Annotations[codexHostLeaseAnnotation]); !ok || id != codexOtherLaunch {
+		t.Fatal("a different launch id was overwritten")
+	}
+
+	oldF := newCodexFixture(t)
+	old := "use " + oldF.now.Add(time.Hour).UTC().Format(time.RFC3339) + " client/other"
+	oldF.addCodexHost("old", codexHostOpt{lease: old})
+	oldF.wantChoice(oldF.selectCodex(tokClient, "dev", false), "use", "old", "")
+	if _, id, _, ok := parseCodexHostLease(oldF.session("old").Annotations[codexHostLeaseAnnotation]); !ok || id != codexTestLaunch {
+		t.Fatal("a three-field lease was not vacant")
+	}
+	sess := oldF.session("old")
+	orig := sess.DeepCopy()
+	sess.Annotations[codexHostLeaseAnnotation] = old
+	if err := oldF.c.Patch(context.Background(), sess, client.MergeFrom(orig)); err != nil {
+		t.Fatal(err)
+	}
+	w := oldF.do(http.MethodPost, apiv1.CodexHostsReleasePath, tokClient, apiv1.CodexHostReleaseRequest{Host: "old", LaunchID: codexTestLaunch})
+	wantError(t, w, http.StatusConflict, apiv1.CodexHostLeaseHeld)
+	if oldF.session("old").Annotations[codexHostLeaseAnnotation] != old {
+		t.Fatal("release cleared a malformed lease")
+	}
+}
+
+func TestCodexHostWorkbenchNamesProfile(t *testing.T) {
+	f := newCodexFixture(t)
+	tok := f.workbenchCaller("wb", "workbench")
+	f.addCodexHost("dev-host", codexHostOpt{profile: "dev"})
+	f.addCodexHost("full-host", codexHostOpt{profile: "full"})
+	f.wantChoice(f.selectCodex(tok, "dev", true), "use", "dev-host", "")
+	f.wantChoice(f.selectCodex(tok, "", true), "use", "full-host", "")
+
+	bare := newCodexFixture(t)
+	tok = bare.workbenchCaller("wb", "workbench")
+	got := bare.wantChoice(bare.selectCodex(tok, "dev", false), "", "", codexhostpool.ReasonCallerCannotCreate)
+	if got.Action == "create" {
+		t.Fatal("a workbench created off the default profile")
+	}
+}
+
+func TestCodexHostCoordinatorNonCheckWritesNothing(t *testing.T) {
+	var patched atomic.Bool
+	f := newCodexFixture(t, interceptor.Funcs{
+		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+			patched.Store(true)
+			return errors.New("patch")
+		},
+	})
+	tok := f.coordinatorCaller()
+	f.addCodexHost("mine", codexHostOpt{
+		phase: v1alpha1.PhaseSuspended, mode: v1alpha1.OperatingModeSuspended,
+		rescue: v1alpha1.RescueCleanAndPushed, parent: coordinatorSA,
+	})
+	w := f.selectCodex(tok, "", false)
+	e := wantError(t, w, http.StatusForbidden, apiv1.CodeForbidden)
+	if e.Message != codexHostCoordinatorCheckOnly || patched.Load() {
+		t.Fatalf("message %q patched %v", e.Message, patched.Load())
+	}
 }

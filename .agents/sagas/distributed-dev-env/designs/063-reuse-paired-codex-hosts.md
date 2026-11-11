@@ -340,8 +340,10 @@ and is not built.
    list, or the annotation `dev-env.haynesops.com/protected` is `true`, or
    a rescue result is `Failed`, or `RescueFailed` is True, or
    `RemovalBlocked` is True. The annotation is not on any host today. The
-   list is the operator flag `--codex-host-hands-off`, seeded with the four
-   names in section 3. The failed-rescue rule catches
+   list is the operator flag `--codex-host-hands-off`. The flag has no
+   default. The operator refuses to start with `--enable-codex-host-select`
+   unless `--codex-host-hands-off` is given; an explicit empty value is a
+   stated choice. The failed-rescue rule catches
    `dev-env-1020-002245` even if the list is empty.
 6. Not busy. Busy means an unexpired lease annotation held by another
    caller, as section 5 defines it. Agent state `busy` on a live daemon is
@@ -432,19 +434,16 @@ two that have unpushed refs.
 No suspended host in section 3 is eligible. That is a result of the rules,
 not a gap in the read.
 
-**Ready** is stricter than suitable. A pooled host is ready when it is
-suitable, its revision is the current image, and story 695 has recorded the
-requested repository's folder `~/repos/<repo>` as trusted. 695 is in
-progress and not installed. Until it is, `ready` is false and the reason
-includes `folder_trust_pending`. The host can still be selected. Missing
-trust is not a reason to create another host. Creating one would ask Tom to
-pair again for a prompt the existing host can already hit.
+**Ready** is true exactly when the action is `use`. Folder trust is not an
+input. Story 695 writes trust at each thread start, and that trust does not
+survive a boot, so selection does not read it. Missing trust is not a
+reason to create another host.
 
 On this evening, for a caller whose profile fits `dev`, the only suitable
 host is `dev-env-1110-230548`. Its project bootstrap is Ready, 9 of 9
 repositories, so a request for any repository in that report fits.
-`spec.repo` `dev-env` is only the default. It is not ready, because folder
-trust is not recorded. For a profile that does not fit `dev`, no host is
+`spec.repo` `dev-env` is only the default. The action is `use`, so the
+result is ready. For a profile that does not fit `dev`, no host is
 suitable.
 
 ## 5. Selection
@@ -527,16 +526,18 @@ that the caller named. The refusal of protected hosts is only for the
 automatic path. This feature itself never names a protected host.
 
 **Race.** Before `use` or `resume`, the selector writes one annotation,
-`dev-env.haynesops.com/codex-host-lease`, with the caller's identity, an
-expiry and a purpose word. The write is a compare-and-swap on the session's
+`dev-env.haynesops.com/codex-host-lease`, with a purpose word, an expiry,
+the caller's identity and a launch id, space-separated. A value in the old
+three-field form is malformed. The write is a compare-and-swap on the session's
 `resourceVersion`. A status write bumps that version too, and a running
 host's heartbeat does it often. The operating-mode route already retries
 that kind of conflict (`internal/apiserver/lifecycle.go:34-38`,
 `internal/apiserver/lifecycle.go:142-143`). The lease does the same for one
 host. On a conflict the selector reads that same host again. It retries the
-lease while the annotation is absent, expired, or already this caller's. It
-moves to the next host only when another caller holds a lease that has not
-expired. A heartbeat is not that. It does not start a thread on a host
+lease while the annotation is absent, expired, malformed, or already this
+caller's for the same launch id. The same caller with another launch id is
+busy. It moves to the next host when the lease is busy. A heartbeat is not
+that. It does not start a thread on a host
 whose lease another caller holds. The lease lasts at most 15 minutes, which
 covers a resume and a thread start wait of 10 minutes. The caller clears it
 when the launch result is known. A dead caller leaves it until expiry. The
@@ -646,11 +647,12 @@ record. Holding archive for a pool host is not built here
 `dev-env-1110-230548` is the pool's host for profile `dev`. No tooling in
 this design suspends it.
 
-**Ready**, repeated so the pool has one sentence: paired, on the current
-image, and the requested folder trusted by story 695. Until slice 6, paired
-is `pair-code-issued`. After slice 6, paired is the durable record that a
-pairing code was issued, together with a current keeper login (ruling E).
-Suitable can be short of ready. The result says which.
+**Ready**, repeated so the pool has one sentence: ready is true exactly
+when the action is `use`. Folder trust is not an input. Until slice 6, a
+host that can be used is one whose remote state is `pair-code-issued`.
+After slice 6, paired is the durable record that a pairing code was issued,
+together with a current keeper login (ruling E). Suitable can be short of
+ready. The result says which.
 
 No host in section 3 is adopted by this design. Question 1 is answered no
 (section 11). The only host the selector can use tonight that passes
@@ -664,20 +666,21 @@ One new operator route, `POST /v1/codex-hosts/select`, beside the existing
 name a profile. The answer is the JSON object in section 5. `?check=true`
 is the read-only form: it chooses and writes nothing.
 
-The profile the host must fit is an input, not a silent default of `full`.
-A session caller may only ask for its own profile; omitting it means that
-profile. A workbench or human caller may name the profile, which is the
-only way the live check selects `dev-env-1110-230548`. If that caller omits
-the profile, select uses `full`, because a workbench create that omits the
-profile is forced onto the default profile. It then does not reuse the `dev`
-host, and a fallback it is allowed to create is a `full` host.
+The profile the host must fit is resolved once and passed in. Select has
+no default of its own. An ordinary session gets its own profile; naming
+another is refused, and omitting it means its own. A workbench session, a
+human and a trusted client get the profile they name, or the templates'
+default profile when they name none. Naming `dev` is how the live check
+selects `dev-env-1110-230548`. A workbench may create a host only when the
+resolved profile equals the templates' default. Naming another profile and
+finding no host is `caller_cannot_create`.
 
 | Command or route | Change |
 | --- | --- |
 | `agent-run thread start --agent codex` with `--host` | None. The named host, today's errors |
 | `agent-run codex-host select --repo <name> [--profile <name>] [--check]` | New. Prints the section 5 object. `--check` is `?check=true` and writes nothing. Without `--check`, the command carries out `use`, `resume`, `create` or `report`. The live check in section 9 is this command with `--check` |
 | `agent-run thread start --agent codex` without `--host` | Calls select, then today's thread start on the chosen host. A `resume` action resumes first and waits until the host is Running or the wait ends. A `create` action creates only when section 6 allows it, then the caller still has to pair before a thread will pass `paired`. A `report` action prints the object and does not start a thread |
-| `agent-run --agent codex --interactive` | Calls select before create. A suitable or eligible host is printed and no host is created. Create remains the fallback. A `report` action prints the object and does not create |
+| `agent-run --agent codex --interactive` | Calls select with `?check=true` before create, so the call holds no lease. A suitable or eligible host is printed and no host is created. Create remains the fallback. A `report` action prints the object and does not create |
 | `agent-run thread status` | None. Still the named host, exec route only |
 | `agent-run pair` | None. Still a person's command. The selector never runs it |
 | `agent-run suspend`, `resume`, `reap` of a named session | None. A person or a caller who names a session keeps today's reach. The select route returns `resume` only for an eligible host and only to a caller today's resume route would accept. Caller kind `coordinator` does not get `resume` for a pooled host it did not start |
@@ -692,8 +695,9 @@ use a fitting running host, and it can resume a fitting suspended host,
 because that caller is not kind `coordinator`. It cannot create one. The
 API's coordinator identity is the other caller: it can use a fitting
 running host, and it cannot resume a pooled host and cannot create one.
-A workbench fallback host still cannot name a profile, so it is `full`. It
-does not become a stand-in for the `dev` host.
+A workbench may name a profile for selection. It may create a host only
+when the resolved profile equals the templates' default profile. It does
+not become a stand-in for the `dev` host by omitting the name.
 
 Existing limits stay: depth at most 2, at most 4 unfinished children per
 agent kind (`internal/apiserver/caller.go:46-53`). A created fallback host
@@ -720,7 +724,6 @@ filled where a host was considered:
 | `profile_mismatch` | Resolved profile does not fit | Not used |
 | `repo_not_ready` | The requested repository is not Ready in the host's reported project bootstrap | Not used |
 | `unpushed_work` | Suspended rescue has unpushed refs, or the rescue is missing | Not resumed |
-| `folder_trust_pending` | Selected, and story 695 has not recorded trust for the repo | Still selected. Not a reason to create |
 | `resume_unconfirmed` | The resume was accepted and the host was not Running before the wait | No second resume and no create |
 
 A conflict with no live foreign lease is not an error. The selector retries
@@ -733,9 +736,10 @@ This feature never resumes, restarts, re-images or types into a protected
 host, or into a running host it did not select. It never deletes a volume.
 It adds no credential, grant, profile, network or exposure. It does not
 pair, and a pairing code never goes through a transcript, a file, a log
-line, a result JSON or the tracker. The lease stores a caller identity, an
-expiry and a purpose word. The pool ConfigMap stores a session name and an
-expiry.
+line, a result JSON or the tracker. The lease stores a purpose word, an
+expiry, a caller identity and a launch id, space-separated. A value in the
+old three-field form is malformed. The pool ConfigMap stores a session name
+and an expiry.
 
 The read-only check writes nothing. The live check in section 9, slice 3,
 is that form, against `dev-env-1110-230548`, and it starts no thread.
@@ -761,7 +765,7 @@ the section 5 object. Named tests:
 `TestSelectsHostWhoseRepoDiffersWhenRequestedRepoReady`,
 `TestSkipsHostWhenRequestedRepoNotReady`, `TestUnpushedWorkIsNotResumed`,
 `TestOutdatedRunningIsNotUsed`, `TestAtCapacityDoesNotCreate`,
-`TestNamedHostIsNotReplaced`, `TestFolderTrustPendingStillSelects`,
+`TestNamedHostIsNotReplaced`, `TestUseIsReady`,
 `TestLostLeaseReselects`, `TestHeartbeatConflictRetriesSameHost`,
 `TestCoordinatorKindDoesNotResume`, `TestUnsuitableRunningHostBlocksCreate`.
 
@@ -782,11 +786,8 @@ that loses the lease does not resume; a coordinator-kind caller gets no
 resume patch.
 Live validation, and the only one: from a workbench session,
 `agent-run codex-host select --profile dev --repo dev-env --check` prints
-`dev-env-1110-230548`, action `use`, ready false, reason
-`folder_trust_pending`, and a skip reason for each of the other five hosts
-matching section 3. Once story 695 has shipped and recorded trust for
-`~/repos/dev-env`, the same check expects ready true and does not expect
-`folder_trust_pending`. Before and after, `kubectl get agentsession
+`dev-env-1110-230548`, action `use`, ready true, and a skip reason for
+each of the other five hosts matching section 3. `kubectl get agentsession
 dev-env-1110-230548` shows no annotation
 `dev-env.haynesops.com/codex-host-lease`, and `spec.operatingMode` is still
 `Running`. `kubectl -n dev-env-system get cm dev-env-codex-host-pool` is
@@ -801,10 +802,10 @@ name. `TestExpiredCreateClaimIsRetried` clears a claim past its expiry when
 the named session never appears, then runs selection again, and it does not
 create while the claim is still inside its expiry.
 
-**Slice 5. Ready.** When story 695 records trust for `~/repos/<repo>`, the
-result's `ready` becomes true for that repo. Until that record exists, the
-slice's test expects `folder_trust_pending`. This slice does not invent a
-trust write of its own.
+**Slice 5. Ready.** Ready is true exactly when the action is `use`.
+Selection does not read folder trust: story 695 writes it at each thread
+start, and it does not survive a boot (ruling K). This slice does not
+invent a trust write of its own.
 
 **Slice 6. The durable pairing record (story 703).** A status field on the
 session records that a pairing code was issued. Resume eligibility uses that
@@ -850,8 +851,8 @@ Nothing below asks Tom.
    check must not use one.
 
 5. **Story 695 is still open. Does selection wait for it?** **Answered:
-   no.** Recommendation: no. Select the suitable host and report
-   `folder_trust_pending`. Do not create a host because trust is missing.
+   no.** Recommendation: no. Select the suitable host. Ready is true exactly
+   when the action is `use`. Do not create a host because trust is missing.
 
 **Later decision, not one of the five.** Hold archive for a pool host.
 A suspended host is archived 168 hours after its suspend, and the pairing
@@ -877,8 +878,8 @@ in section 1.
 3. **An ordinary session creating a Codex host: no.** `caller_cannot_create`
    stands.
 4. **An exec to see a phone turn in progress: no.** Busy is the lease.
-5. **Waiting for story 695: no.** Select the host and report
-   `folder_trust_pending`.
+5. **Waiting for story 695: no.** Select the host. Ready is true exactly
+   when the action is `use`.
 
 **Ruling A.** A cell is the resolved profile. `resolveCwd` launches in the
 requested repository (`internal/agentd/thread_launch_codex.go:335-340`), the
@@ -961,8 +962,9 @@ Release. `POST /v1/codex-hosts/release` with a body naming the host removes
 the lease only when its holder is this caller, by compare-and-swap. An
 absent lease is success. Another caller's lease is a fixed refusal and is
 left alone. A lease lasts at most 15 minutes and a dead caller's lease ends
-at its expiry. The lease value holds the caller's identity, an expiry and a
-purpose word, nothing else.
+at its expiry. The lease value holds a purpose word, an expiry, the
+caller's identity and a launch id (ruling 5). A value in the old
+three-field form is malformed.
 
 **Ruling J** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). The
 login fact, with no new access. The operator never reads the Secret
@@ -983,3 +985,26 @@ replaced by a three-valued `Input.Login` (current, lapsed, unknown).
 `TestStaleLoginSnapshotDoesNotBlock` and
 `TestCurrentLoginFailureBlocksResumeAndCreate` stay, restated on those
 values. A fact published by the keeper is a later option and is not built.
+
+**Ruling 5** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+is the coordinator's ruling, not Tom's. A select request carries a launch
+id the client makes with `crypto/rand`: 16 to 64 characters of `[a-z0-9]`.
+The lease value is a purpose word, an expiry, the caller identity and that
+launch id, space-separated. "Already this caller's" means the same holder
+and the same launch id. The same holder with another launch id is busy.
+Release needs both the holder and the launch id. A value in the old
+three-field form is malformed: vacant for acquisition, refused for release,
+which is what happens to any malformed value. The id is not a secret.
+Neither side logs it beyond its presence.
+
+**Ruling K** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+is the coordinator's ruling, not Tom's. `folder_trust_pending` and
+`TrustedRepos` are removed. Folder trust is written at each thread start
+since dev-env#1062 and does not survive a boot, so selection does not read
+it. Ready is true exactly when the action is `use`.
+
+**Ruling L** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+is the coordinator's ruling, not Tom's. No session names in code.
+`--codex-host-hands-off` has no default. The operator refuses to start with
+`--enable-codex-host-select` unless `--codex-host-hands-off` is given. An
+explicit empty value is allowed and is a stated choice.
