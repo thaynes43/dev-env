@@ -61,7 +61,7 @@ func TestParentWaitAnyWaitingResyncAndDefault(t *testing.T) {
 	}
 	mode = "resync"
 	h.mustRun(ExitOK, "parent", "wait-any", "--for", "15m")
-	if h.stdout.String() != "resync\n900\nrun agent-run parent list\n" || h.stderr.Len() != 0 || len(h.api.requests()) != 2 || len(h.sleeps) != 0 {
+	if h.stdout.String() != "resync\n900\n"+parentWaitAnyResyncLine+"\n" || h.stderr.Len() != 0 || len(h.api.requests()) != 2 || len(h.sleeps) != 0 {
 		t.Fatalf("resync %q requests %d", h.stdout.String(), len(h.api.requests()))
 	}
 }
@@ -150,7 +150,7 @@ func TestParentWaitAnyStopsOnResync(t *testing.T) {
 		writeTestJSON(w, http.StatusOK, apiv1.ParentNoteWaitAnyResult{State: apiv1.ParentNoteResync, Cursor: "900"})
 	}
 	h.mustRun(ExitOK, "parent", "wait-any", "--for", "901s")
-	if len(calls) != 1 || calls[0] != "900|" || h.stdout.String() != "resync\n900\nrun agent-run parent list\n" || h.stderr.Len() != 0 {
+	if len(calls) != 1 || calls[0] != "900|" || h.stdout.String() != "resync\n900\n"+parentWaitAnyResyncLine+"\n" || h.stderr.Len() != 0 {
 		t.Fatalf("resync did not stop the repeat: %v %q stderr %q", calls, h.stdout.String(), h.stderr.String())
 	}
 }

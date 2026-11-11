@@ -375,7 +375,8 @@ closes before its answer.
 
 Wait-any is one held read for a new note addressed to this session. It prints
 the note's name, child and kind, then the next cursor; or waiting and the
-cursor; or resync, a fresh cursor, and a line to run agent-run parent list.
+cursor; or resync, a fresh cursor, and a line that says to read every page
+of agent-run parent list and then continue from that cursor.
 It prints no note text. Exit is 0 for all three. --after is the cursor the
 previous call printed. With no --after, notes already stored are left for
 parent list. --for defaults to 15m and accepts whole seconds from 0. --for 0

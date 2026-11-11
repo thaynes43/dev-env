@@ -185,13 +185,18 @@ func (a *app) parentWaitAnyFailed(output, confirmed string, err error) error {
 	return err
 }
 
+// parentWaitAnyResyncLine is what a parent reads at the moment it must
+// reconcile. It names every page of the list, because parent list returns one
+// page at a time, and it names the cursor to continue from.
+const parentWaitAnyResyncLine = "read every page of agent-run parent list (pass --continue until none is returned), then run agent-run parent wait-any --after with this cursor"
+
 func (a *app) printParentWaitAny(result apiv1.ParentNoteWaitAnyResult) error {
 	switch result.State {
 	case apiv1.ParentNoteArrived:
 		_, err := fmt.Fprintf(a.env.Stdout, "%s %s %s\n%s\n", result.Name, result.Child, result.Kind, result.Cursor)
 		return err
 	case apiv1.ParentNoteResync:
-		_, err := fmt.Fprintf(a.env.Stdout, "%s\n%s\nrun agent-run parent list\n", apiv1.ParentNoteResync, result.Cursor)
+		_, err := fmt.Fprintf(a.env.Stdout, "%s\n%s\n%s\n", apiv1.ParentNoteResync, result.Cursor, parentWaitAnyResyncLine)
 		return err
 	default:
 		_, err := fmt.Fprintf(a.env.Stdout, "%s\n%s\n", apiv1.ParentNoteWaiting, result.Cursor)
