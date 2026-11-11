@@ -86,9 +86,9 @@ const (
 // Host is one Codex host as facts. Select does not read the cluster.
 //
 // UID is the session UID. This slice does not write a lease, so the choice
-// does not read it. SpecRepo is the host's default repository and is not a
-// fit test. SuspendedBy is who suspended the host; eligibility does not
-// depend on it.
+// does not read it. SpecRepo is the host's default repository: the fit test
+// only when the request names none. SuspendedBy is who suspended the host;
+// eligibility does not depend on it.
 type Host struct {
 	Name            string
 	UID             string
