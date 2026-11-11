@@ -226,15 +226,27 @@ func (f *fileToken) Token(context.Context) (string, error) {
 	b, err := tokenfile.Read(f.path, tokenfile.MaxBytes)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", fail(ExitAuth, "no token at %s (%s)", f.path, f.from)
+			return "", localCredential("no token at %s (%s)", f.path, f.from)
 		}
-		return "", fail(ExitAuth, "the token at %s (%s): %v", f.path, f.from, err)
+		return "", localCredential("the token at %s (%s): %v", f.path, f.from, err)
 	}
 	tok := strings.TrimSpace(string(b))
 	if tok == "" {
-		return "", fail(ExitAuth, "the token file %s (%s) is empty", f.path, f.from)
+		return "", localCredential("the token file %s (%s) is empty", f.path, f.from)
 	}
 	return tok, nil
+}
+
+// localCredentialError is a token-file failure before any request. An
+// operator 401 is an *exitError, not this type, even when its text names
+// the token file.
+type localCredentialError struct{ err *exitError }
+
+func (e *localCredentialError) Error() string { return e.err.Error() }
+func (e *localCredentialError) Unwrap() error { return e.err }
+
+func localCredential(format string, args ...any) error {
+	return &localCredentialError{err: &exitError{code: ExitAuth, msg: fmt.Sprintf(format, args...)}}
 }
 
 func (f *fileToken) Describe() string {

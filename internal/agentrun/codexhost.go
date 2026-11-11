@@ -221,21 +221,18 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 // not reached, or answered 5xx. A real refusal (a profile fence, a
 // coordinator check, an invalid body, a conflict) is returned unchanged.
 func threadSelectionFallback(err error) (string, bool) {
+	var local *localCredentialError
+	if errors.As(err, &local) {
+		return selectionNotUsedNoCreds, true
+	}
 	var ee *exitError
 	if !errors.As(err, &ee) {
 		return selectionNotUsedUnreached, true
-	}
-	if ee.code == ExitAuth && localTokenFailure(ee.msg) {
-		return selectionNotUsedNoCreds, true
 	}
 	if selectUnanswered(ee.msg) {
 		return selectionNotUsedNoAnswer, true
 	}
 	return "", false
-}
-
-func localTokenFailure(msg string) bool {
-	return strings.Contains(msg, "no token") || strings.Contains(msg, "token file") || strings.Contains(msg, "the token at")
 }
 
 func selectUnanswered(msg string) bool {

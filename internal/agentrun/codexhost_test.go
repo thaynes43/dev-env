@@ -461,6 +461,7 @@ func TestThreadStartSelectionRefusalIsReturned(t *testing.T) {
 		name, code, msg, want string
 		status, exit          int
 	}{
+		{"unauthenticated", apiv1.CodeUnauthenticated, "no", "the API did not accept", http.StatusUnauthorized, ExitAuth},
 		{"forbidden", apiv1.CodeForbidden, "A coordinator may only check host selection.", "not allowed", http.StatusForbidden, ExitAuth},
 		{"invalid", apiv1.CodeInvalid, "launchId is 16 to 64 characters of a-z and 0-9", "the API refused", http.StatusUnprocessableEntity, ExitFailed},
 		{"conflict", apiv1.CodeConflict, "session paired kept changing; try again", "the API refused", http.StatusConflict, ExitFailed},
