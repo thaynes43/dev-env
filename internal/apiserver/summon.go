@@ -106,6 +106,43 @@ func (s *Server) refuseSummonedChild(ctx context.Context, c *caller) error {
 	return nil
 }
 
+// refuseSummonedParent refuses a create whose parent is a session with
+// spec.caller set (DESIGN-064 6.4). The parent is read from the API server,
+// not from the cache resolveCaller used. A parent string that is not a session
+// name, or that names no session, is not this rule. Any other failed live read
+// refuses the create. createSessionMode also calls refuseSummonedChild first,
+// so a direct create, a canary and a private pilot still hear it before those
+// branches. admitCreate is the step every ordinary create shares, including a
+// scheduled dispatch of a record that already exists.
+func (s *Server) refuseSummonedParent(ctx context.Context, sess *v1alpha1.AgentSession) error {
+	if s == nil || sess == nil || s.Live == nil {
+		return nil
+	}
+	name := sess.Spec.Parent
+	if name == "" || strings.Contains(name, "/") || len(validation.IsDNS1123Label(name)) > 0 {
+		return nil
+	}
+	var parent v1alpha1.AgentSession
+	err := s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: name}, &parent)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fromKubeError(err, "the parent session")
+	}
+	if parent.Spec.Caller != "" {
+		return forbidden("a summoned session may not create sessions (DESIGN-064 6.4)")
+	}
+	return nil
+}
+
+// summonOwns is a summoning caller's session: spec.caller is its policy's
+// name and spec.parent is its account. Meatball keeps policyOwns.
+func summonOwns(c *caller, sess *v1alpha1.AgentSession) bool {
+	return c != nil && c.policy != nil && sess != nil && sess.UID != "" &&
+		sess.Spec.Caller == c.policy.Name && sess.Spec.Parent == c.parent
+}
+
 // summonBoundary draws the fence token: 16 hex characters, or the test hook.
 func (s *Server) summonBoundary() (string, error) {
 	if s != nil && s.SummonBoundary != nil {
@@ -148,11 +185,21 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 		ref = c.parent
 	}
 	if c == nil || c.policy == nil || c.policy.Spec.Summon == nil {
-		return 0, nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy) arrive in plan 10", ref)
+		return 0, nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy)", ref)
 	}
 	var raw json.RawMessage
 	if err := decodeJSON(w, r, maxCreateBody, &raw, true); err != nil {
 		return 0, nil, err
+	}
+	// Duplicate members are refused before any object map is built. encoding/json
+	// keeps one value and drops the other, including a key that differs only by
+	// an escape or by case.
+	dups, err := summonDuplicateFields(raw)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(dups) > 0 {
+		return 0, nil, invalid(dups...)
 	}
 	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &keys); err != nil || keys == nil {
@@ -194,6 +241,90 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 		"agent", sess.Spec.Agent, "mode", sess.Spec.Mode, "model", sess.Spec.Model, "lane", sess.Spec.Lane)
 	w.Header().Set("Location", apiv1.SessionPath(sess.Name))
 	return http.StatusCreated, view(sess, false), nil
+}
+
+// summonDuplicateFields reports members that name one field twice, at the
+// body and inside data. Names are compared after JSON unescaping and without
+// regard to case. The scan decodes values as raw JSON, so it does not build
+// an object map that would keep one of the two.
+func summonDuplicateFields(raw []byte) ([]apiv1.FieldError, error) {
+	return duplicateMemberFields(raw, "")
+}
+
+func duplicateMemberFields(raw []byte, prefix string) ([]apiv1.FieldError, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		if prefix != "" {
+			return nil, nil
+		}
+		return nil, badRequest("the body must be a JSON object")
+	}
+	type spellings struct{ names []string }
+	seen := map[string]*spellings{}
+	var dataRaw json.RawMessage
+	dataCount := 0
+	for dec.More() {
+		tok, err = dec.Token()
+		if err != nil {
+			return nil, badRequest("the body must be a JSON object")
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return nil, badRequest("the body must be a JSON object")
+		}
+		var val json.RawMessage
+		if err = dec.Decode(&val); err != nil {
+			return nil, badRequest("the body must be a JSON object")
+		}
+		fold := strings.ToLower(key)
+		sk := seen[fold]
+		if sk == nil {
+			sk = &spellings{}
+			seen[fold] = sk
+		}
+		sk.names = append(sk.names, key)
+		if prefix == "" && fold == "data" {
+			dataCount++
+			if dataCount == 1 {
+				dataRaw = append(json.RawMessage(nil), val...)
+			}
+		}
+	}
+	tok, err = dec.Token()
+	if err != nil || tok != json.Delim('}') || dec.More() {
+		return nil, badRequest("the body must be a JSON object")
+	}
+	folds := make([]string, 0, len(seen))
+	for fold := range seen {
+		folds = append(folds, fold)
+	}
+	slices.Sort(folds)
+	var fields []apiv1.FieldError
+	for _, fold := range folds {
+		if len(seen[fold].names) < 2 {
+			continue
+		}
+		names := slices.Clone(seen[fold].names)
+		slices.Sort(names)
+		names = slices.Compact(names)
+		for _, name := range names {
+			field := name
+			if prefix != "" {
+				field = prefix + name
+			}
+			fields = append(fields, fieldError(field, "a summoning create names this field more than once"))
+		}
+	}
+	if prefix == "" && dataCount == 1 && len(bytes.TrimSpace(dataRaw)) > 0 && bytes.TrimSpace(dataRaw)[0] == '{' {
+		inner, err := duplicateMemberFields(dataRaw, "data.")
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, inner...)
+	}
+	slices.SortFunc(fields, func(a, b apiv1.FieldError) int { return strings.Compare(a.Field, b.Field) })
+	return fields, nil
 }
 
 func dataRaw(keys map[string]json.RawMessage) json.RawMessage {
@@ -279,8 +410,8 @@ func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWi
 	if req.Name == "" || len(req.Name) > summonNameMaxLen || len(validation.IsDNS1123Label(req.Name)) > 0 {
 		return nil, invalid(fieldError("name", "a summoning session name is a DNS label of at most %d characters", summonNameMaxLen))
 	}
-	if strings.HasPrefix(req.Name, summonReservedPrefix) {
-		return nil, forbidden("esc-rem- is reserved for the platform's filing (DESIGN-064 6.4)")
+	if err := refuseReservedSessionName(req.Name); err != nil {
+		return nil, err
 	}
 	entry := summonEntry(c.policy.Spec.Summon.Sessions, req.Mode, req.Lane)
 	if entry == nil {

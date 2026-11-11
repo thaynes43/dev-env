@@ -1626,21 +1626,29 @@ A summoning caller is a ServiceAccount with one CallerPolicy in
 `dev-env-system`, named `<namespace>.<name>` (DESIGN-064 6.4 and 5.6, ADR-025
 decisions 1, 12 and 13). The API reads that object uncached. It admits the
 caller only when `spec.summon.serviceAccount` is that account and the object
-is not being deleted. Any other account still receives the existing 403.
+is not being deleted. Any other account still receives 403. That refusal
+does not say that summoning callers arrive in plan 10.
+
 Meatball's policy, routes and tests are unchanged. Nothing in this section
 installs a caller's policy.
 
-The caller may create a session and list or get the sessions it created. It
-may not delete a session, read a log, or write a parent note. A session it
-created cannot create a session.
+The caller may create a session, and may list or get a session only when
+`spec.caller` is its policy's name and `spec.parent` is its account. It may
+not delete a session, read a log, or write a parent note. A summoned session
+cannot create a session, including by submitting scheduled work. No create is
+admitted whose parent is a session with `spec.caller` set; that parent is read
+live.
 
 A create may carry `name`, `mode`, `lane`, `idempotencyKey` and `data`. It
 may also repeat `agent` as `claude`, `model` as the entry's default, and
 `profile` as the entry's profile, or leave those three empty. Any other
-field is refused with 422, named. `mode` and `lane` select the policy entry,
+field is refused with 422, named. Two members of the same name, compared after
+JSON unescaping and without regard to case, in the body or in `data`, are
+refused before a value is kept. `mode` and `lane` select the policy entry,
 or the create is refused. `name` is required: a DNS label of at most 60
-characters, starting with one of that entry's prefixes. A name starting with
-`esc-rem-` is refused for every caller. A create in lane upgrade whose name
+characters, starting with one of that entry's prefixes. A final name starting
+with `esc-rem-` is refused for every caller-driven create, including a name
+generated from the repository. A create in lane upgrade whose name
 starts with `wo-cigar-curate-` is refused.
 
 The API writes the parent (the account), the caller (the policy name), the
@@ -1656,8 +1664,10 @@ The API renders the brief into `spec.prompt`. The entry's template is copied
 verbatim, then one line naming the session, its policy and its lane, then one
 fenced block of the data fields in the order `brief.fields` lists them. The
 fence boundary is 16 random hex characters. Before rendering, each value loses
-every control character except newline and tab, then every `BEGIN DATA` and
-`END DATA` in any case, repeatedly, so a value cannot close the block. A
+every control character except newline and tab, and every Unicode format
+character (category Cf). Then every `BEGIN DATA` and `END DATA` in any case,
+repeatedly, so a marker joined by a removed format character is stripped too
+and a value cannot close the block. A
 `prompt` on the create is refused. A data key the entry does not name is
 refused. Each value is at most 4096 bytes and the values together at most
 16384. An ordinary remote session still cannot carry a prompt. A summoned

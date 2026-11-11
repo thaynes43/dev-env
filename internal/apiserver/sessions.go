@@ -154,6 +154,9 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 		if i > 1 {
 			sess.Name = fmt.Sprintf("%s-%d", base, i)
 		}
+		if err := refuseReservedSessionName(sess.Name); err != nil {
+			return 0, nil, err
+		}
 		if err := checkAgentd(sess); err != nil {
 			return 0, nil, err
 		}
@@ -360,7 +363,10 @@ func (s *Server) listSessions(ctx context.Context, _ http.ResponseWriter, r *htt
 	})
 	out := apiv1.SessionList{Sessions: []apiv1.Session{}}
 	for i := range items {
-		if (c.kind == kindPolicy || c.kind == kindSummon) && !policyOwns(c, &items[i]) {
+		if c.kind == kindPolicy && !policyOwns(c, &items[i]) {
+			continue
+		}
+		if c.kind == kindSummon && !summonOwns(c, &items[i]) {
 			continue
 		}
 		if (c.kind != kindCoordinator || items[i].Spec.Parent == c.parent) && f.match(&items[i], c) {
@@ -461,7 +467,7 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 			return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "sessions cannot be read")
 		}
 		var own v1alpha1.AgentSession
-		if s.Live.Get(ctx, key, &own) != nil || !policyOwns(c, &own) {
+		if s.Live.Get(ctx, key, &own) != nil || !summonOwns(c, &own) {
 			return 0, nil, summonReadDenied()
 		}
 		return http.StatusOK, view(&own, true), nil
@@ -576,12 +582,16 @@ func refuseRetainedExecutor(c *caller) error {
 }
 
 // admitCreate is the part of a create's admission that reads the session it
-// would make and the sessions already there: the instruction image, the
-// private project gate, the portal launch cap, the named coordinator rule and
-// a session caller's depth and child cap. Every create path that makes an
-// ordinary session runs it under the create lock, after a repeat of the same
-// create has had its answer (createSessionMode, CreateScheduledSession).
+// would make and the sessions already there: a parent that is itself a
+// summoned session, the instruction image, the private project gate, the
+// portal launch cap, the named coordinator rule and a session caller's depth
+// and child cap. Every create path that makes an ordinary session runs it
+// under the create lock, after a repeat of the same create has had its answer
+// (createSessionMode, CreateScheduledSession).
 func (s *Server) admitCreate(ctx context.Context, c *caller, sess *v1alpha1.AgentSession) error {
+	if err := s.refuseSummonedParent(ctx, sess); err != nil {
+		return err
+	}
 	if err := s.admitCallerCapacity(ctx, c); err != nil {
 		return err
 	}

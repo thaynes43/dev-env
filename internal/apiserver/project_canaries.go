@@ -57,6 +57,9 @@ func (s *Server) createProjectCanary(ctx context.Context, w http.ResponseWriter,
 		return 0, nil, invalid(fieldError("canaryID", "accepted source changed before canary create"))
 	}
 	sess.Name = key.Name
+	if err := refuseReservedSessionName(sess.Name); err != nil {
+		return 0, nil, err
+	}
 	sess.Spec.ProjectCanary = record.Binding(evidence, s.Projects.CloneOwner)
 	if s.SessionDirectory != nil && slices.Contains(s.SessionDirectoryProjects, record.Project) {
 		sess.Spec.SessionDirectory = &v1alpha1.SessionDirectoryEnrollment{Version: 1, Project: record.Project}

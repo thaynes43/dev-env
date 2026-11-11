@@ -66,6 +66,9 @@ func (s *Server) createPrivatePilot(ctx context.Context, w http.ResponseWriter, 
 		return 0, nil, forbidden("pilot catalog changed before create")
 	}
 	sess.Name = p.SessionName(slot)
+	if err := refuseReservedSessionName(sess.Name); err != nil {
+		return 0, nil, err
+	}
 	sess.Finalizers = append(sess.Finalizers, projectcanary.PilotFinalizer)
 	sess.Annotations[projectcanary.PilotAnnotation] = p.Binding(slot)
 	sess.Annotations[projectcanary.PilotPolicyAnnotation] = p.Record(evidence)

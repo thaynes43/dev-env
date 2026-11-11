@@ -197,7 +197,7 @@ func TestCallerPolicyUnknownAndRevoked(t *testing.T) {
 			}
 			for _, token := range []string{tokMeatball, tokStranger} {
 				e := wantError(t, f.do(http.MethodGet, apiv1.SessionsPath, token, nil), 403, apiv1.CodeForbidden)
-				want := fmt.Sprintf("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy) arrive in plan 10", f.auth[token].serviceAccountRef())
+				want := fmt.Sprintf("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy)", f.auth[token].serviceAccountRef())
 				if e.Message != want {
 					t.Fatalf("unknown caller response changed: %s", e.Message)
 				}

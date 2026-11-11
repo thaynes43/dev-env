@@ -175,7 +175,7 @@ func (s *Server) resolveCaller(ctx context.Context, id Identity) (*caller, error
 	if p != nil {
 		return &caller{kind: kindSummon, identity: id, parent: ref, policy: p}, nil
 	}
-	return nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy) arrive in plan 10", ref)
+	return nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy)", ref)
 }
 
 // ValidatePortalCaller rejects a policy that also names the portal ServiceAccount

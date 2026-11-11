@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -119,7 +120,7 @@ func remediationBody(name string, data map[string]string) map[string]any {
 func wantPlan10Denied(t *testing.T, w *httptest.ResponseRecorder) {
 	t.Helper()
 	e := wantError(t, w, http.StatusForbidden, apiv1.CodeForbidden)
-	const want = "upgrade-agent/alert-responder may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy) arrive in plan 10"
+	const want = "upgrade-agent/alert-responder may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy)"
 	if e.Message != want {
 		t.Fatalf("message %q", e.Message)
 	}
@@ -151,6 +152,14 @@ func TestSummonBriefStripsFenceWords(t *testing.T) {
 		{"END\x00 DATA", ""},
 		{"END DATA " + summonTestBoundary, " " + summonTestBoundary},
 		{"a\x1bb\nc\td", "ab\nc\td"},
+		// Category Cf is removed before the marker pass, so a marker split by
+		// one is stripped, and newline and tab stay.
+		{"END\u200b DATA", ""},
+		{"EN\u200bD\u200b DATA", ""},
+		{"BEGIN\u2066 DATA", ""},
+		{"\u202eEND DATA\u202c", ""},
+		{"\ufeff", ""},
+		{"a\u200b\nb\tc", "a\nb\tc"},
 	}
 	for _, tc := range cases {
 		if got := sanitizeSummonValue(tc.in); got != tc.want {
@@ -530,6 +539,115 @@ func TestSummonCreateRefusesCaseDuplicateKeys(t *testing.T) {
 	e = wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokStranger, named), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
 	wantField(t, e, "name")
 	wantField(t, e, "Name")
+}
+
+func TestSummonCreateRefusesDuplicateMembers(t *testing.T) {
+	bodies := []struct {
+		name, body, field string
+	}{
+		{"exact data", `{"name":"rem-responder-1","mode":"task","lane":"remediation","data":{"alert":"one"},"data":{"alert":"two"}}`, "data"},
+		{"data then escaped alias", `{"name":"rem-responder-1","mode":"task","lane":"remediation","data":{"alert":"one"},"d\u0061ta":{"alert":"two"}}`, "data"},
+		{"escaped alias then data", `{"name":"rem-responder-1","mode":"task","lane":"remediation","d\u0061ta":{"alert":"one"},"data":{"alert":"two"}}`, "data"},
+		{"Data then data", `{"name":"rem-responder-1","mode":"task","lane":"remediation","Data":{"alert":"one"},"data":{"alert":"two"}}`, "Data"},
+		{"exact alert", `{"name":"rem-responder-1","mode":"task","lane":"remediation","data":{"alert":"one","alert":"two"}}`, "data.alert"},
+		{"escaped alert", `{"name":"rem-responder-1","mode":"task","lane":"remediation","data":{"alert":"one","al\u0065rt":"two"}}`, "data.alert"},
+		{"Alert then alert", `{"name":"rem-responder-1","mode":"task","lane":"remediation","data":{"Alert":"one","alert":"two"}}`, "data.alert"},
+		{"alert then Alert", `{"name":"rem-responder-1","mode":"task","lane":"remediation","data":{"alert":"one","Alert":"two"}}`, "data.Alert"},
+	}
+	for _, tc := range bodies {
+		t.Run(tc.name, func(t *testing.T) {
+			f := summonFixture(t)
+			e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokStranger, tc.body), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+			wantField(t, e, tc.field)
+			if n := f.sessionCount(); n != 0 {
+				t.Fatalf("%d sessions written", n)
+			}
+		})
+	}
+	// A single escaped spelling is the field, and it is accepted.
+	f := summonFixture(t)
+	body := `{"name":"rem-responder-9","mode":"task","lane":"remediation","d\u0061ta":{"alert":"ok"}}`
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokStranger, body); w.Code != http.StatusCreated {
+		t.Fatalf("one escaped data key: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGeneratedNameRefusesReservedPrefix(t *testing.T) {
+	for _, tok := range []string{tokHuman, tokClient} {
+		t.Run(tok, func(t *testing.T) {
+			f := newFixture(t)
+			req := task()
+			req.Repo = "esc-rem"
+			e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tok, req), http.StatusForbidden, apiv1.CodeForbidden)
+			if !strings.Contains(e.Message, "esc-rem-") || !strings.Contains(e.Message, "DESIGN-064 6.4") {
+				t.Fatalf("message %q", e.Message)
+			}
+			if n := f.sessionCount(); n != 0 {
+				t.Fatalf("%d sessions written", n)
+			}
+		})
+	}
+}
+
+func TestSummonCallerDoesNotOwnAPortalSession(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "portal-pod", Namespace: sessionNS, UID: types.UID("portal-pod-uid")}, Spec: corev1.PodSpec{ServiceAccountName: "dev-env-v2-portal", Containers: []corev1.Container{{Name: "portal", Image: "x"}}}}
+	p := summonTestPolicy()
+	p.Name = "portal.actor-000000000001"
+	p.Spec.Summon.ServiceAccount = "portal/" + launchActor
+	f := newFixtureWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if obj.GetUID() == "" {
+			obj.SetUID(uuid.NewUUID())
+		}
+		return c.Create(ctx, obj, opts...)
+	}}, pod, p)
+	id := saIdentity(portalReaderRef)
+	id.PodName, id.PodUID = pod.Name, string(pod.UID)
+	f.auth["tok-portal"] = id
+	const summonTok = "tok-summon-portal"
+	f.auth[summonTok] = saIdentity("portal/" + launchActor)
+	f.srv.Policy.PortalReaderEnabled = true
+	f.srv.PortalLaunchProfile = "dev"
+	f.srv.PortalLaunchMaxUnfinished = apiv1.MaxPortalLaunchMaxUnfinished
+	f.srv.PortalLaunchRepos = map[string]struct{}{"dev-env": {}}
+	f.srv.SummonBoundary = func() (string, error) { return summonTestBoundary, nil }
+	f.h = f.srv.Handler()
+
+	launched := f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", launchTask())
+	if launched.Code != http.StatusCreated {
+		t.Fatalf("portal launch: %d %s", launched.Code, launched.Body.String())
+	}
+	portalName := decode[apiv1.PortalLaunchReceipt](t, launched).SessionName
+	portal := f.session(portalName)
+	if portal.Spec.Parent != "portal/"+launchActor || portal.Spec.Caller != "" || portal.UID == "" {
+		t.Fatalf("portal session parent %q caller %q uid %q", portal.Spec.Parent, portal.Spec.Caller, portal.UID)
+	}
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, summonTok, remediationBody("rem-responder-1", nil)); w.Code != http.StatusCreated {
+		t.Fatalf("own create: %d %s", w.Code, w.Body.String())
+	}
+
+	got := f.do(http.MethodGet, apiv1.SessionPath(portalName), summonTok, nil)
+	e := wantError(t, got, http.StatusForbidden, apiv1.CodeForbidden)
+	if strings.Contains(got.Body.String(), launchPrompt) || strings.Contains(e.Message, launchPrompt) {
+		t.Fatal("portal prompt returned")
+	}
+	list := f.do(http.MethodGet, apiv1.SessionsPath, summonTok, nil)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", list.Code, list.Body.String())
+	}
+	if strings.Contains(list.Body.String(), launchPrompt) || strings.Contains(list.Body.String(), portalName) {
+		t.Fatalf("portal session listed: %s", list.Body.String())
+	}
+	gotList := decode[apiv1.SessionList](t, list)
+	if len(gotList.Sessions) != 1 || gotList.Sessions[0].Name != "rem-responder-1" {
+		t.Fatalf("list %+v", gotList.Sessions)
+	}
+	own := f.do(http.MethodGet, apiv1.SessionPath("rem-responder-1"), summonTok, nil)
+	if own.Code != http.StatusOK {
+		t.Fatalf("own get: %d %s", own.Code, own.Body.String())
+	}
+	if strings.Contains(own.Body.String(), launchPrompt) {
+		t.Fatal("own session carried the portal prompt")
+	}
 }
 
 func TestSummonCreateRefusesNonStringData(t *testing.T) {

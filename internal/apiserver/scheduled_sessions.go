@@ -103,6 +103,9 @@ func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSes
 		return "", "", false, &scheduledwork.RefusedError{Reason: fmt.Sprintf("%s is bound to a task budget; scheduled work is not dispatched outside its reservation", c)}
 	}
 	sess.Name = name
+	if err := refuseReservedSessionName(sess.Name); err != nil {
+		return "", "", false, scheduledRefusal(err)
+	}
 	controllerutil.AddFinalizer(sess, v1alpha1.ScheduledWorkFinalizer)
 	sess.Labels[v1alpha1.LabelScheduledWork] = string(d.ItemUID)
 	if sess.Annotations == nil {

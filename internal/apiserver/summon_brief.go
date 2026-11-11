@@ -11,7 +11,9 @@ const (
 	summonValueMaxBytes = 4096
 	summonDataMaxBytes  = 16384
 	summonNameMaxLen    = 60
-	// summonReservedPrefix is the platform's filing prefix. No caller may use it.
+	// summonReservedPrefix is the platform's filing prefix. No caller-driven
+	// create may use it, including a name generated from the repository. The
+	// platform's own filing path is a later story and is not this check.
 	summonReservedPrefix = "esc-rem-"
 	// summonCurationPrefix is curation's prefix. An upgrade entry cannot declare
 	// it, and a requested upgrade name must not use it either (OP757).
@@ -61,8 +63,10 @@ func renderSummonBrief(name, policy, lane, template string, fields []string, dat
 }
 
 // sanitizeSummonValue drops every control character except newline and tab,
-// then removes BEGIN DATA and END DATA in any case until neither remains.
-// One removal can rebuild the phrase, so the removal repeats.
+// and every Unicode format character (category Cf), then removes BEGIN DATA
+// and END DATA in any case until neither remains. Format characters go first
+// so a marker they were splitting is removed too. One removal can rebuild
+// the phrase, so the removal repeats.
 func sanitizeSummonValue(s string) string {
 	s = stripSummonControls(s)
 	for {
@@ -75,11 +79,25 @@ func sanitizeSummonValue(s string) string {
 	}
 }
 
+// refuseReservedSessionName refuses a final session name in the platform's
+// filing prefix. Caller-driven creates call it after the name is chosen and
+// before the write. The platform's own filing path is not built here.
+func refuseReservedSessionName(name string) error {
+	if strings.HasPrefix(name, summonReservedPrefix) {
+		return forbidden("esc-rem- is reserved for the platform's filing (DESIGN-064 6.4)")
+	}
+	return nil
+}
+
 func stripSummonControls(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		if r == '\n' || r == '\t' || !unicode.IsControl(r) {
+		switch {
+		case r == '\n' || r == '\t':
+			b.WriteRune(r)
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+		default:
 			b.WriteRune(r)
 		}
 	}

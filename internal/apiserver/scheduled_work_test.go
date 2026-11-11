@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/scheduledwork/authority"
 	"github.com/thaynes43/dev-env/internal/scheduledwork/executor"
@@ -1195,5 +1196,135 @@ func TestScheduledWorkApprovePinsTheTemplateDigest(t *testing.T) {
 	decode[apiv1.ScheduledWork](t, f.do(http.MethodPost, path, tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: item.SpecHash}))
 	if got := f.stored(item.Name).Status.Approval.TemplateDigest; got != f.templateDigest("ops-audit") || got == digest {
 		t.Fatalf("an unpinned approval recorded %s", got)
+	}
+}
+
+// TestSummonedSessionScheduledWorkWritesNoChild is the scheduled-work half of
+// DESIGN-064 6.4: a summoned session's submit is refused at the route, and a
+// dispatch of a record that already exists writes no child, including when
+// the cached parent omits spec.caller. The production authorizer still grants
+// the session basis; the creator refuses.
+func TestSummonedSessionScheduledWorkWritesNoChild(t *testing.T) {
+	const summonedMsg = "a summoned session may not create sessions (DESIGN-064 6.4)"
+	t.Run("submit", func(t *testing.T) {
+		f := scheduledWorkFixture(t)
+		tok := f.sessionPod("summoned-one", "dev", 0)
+		f.editSession("summoned-one", func(s *v1alpha1.AgentSession) {
+			s.Spec.Caller = "upgrade-agent.alert-responder"
+		})
+		before := f.sessionCount()
+		e := wantError(t, f.do(http.MethodPost, apiv1.ScheduledWorkPath, tok, newWork()), http.StatusForbidden, apiv1.CodeForbidden)
+		if e.Message != summonedMsg {
+			t.Fatalf("message %q", e.Message)
+		}
+		var works v1alpha1.ScheduledWorkList
+		if err := f.c.List(context.Background(), &works); err != nil || len(works.Items) != 0 || f.sessionCount() != before {
+			t.Fatalf("works %d sessions %d err %v", len(works.Items), f.sessionCount(), err)
+		}
+	})
+	t.Run("existing record", func(t *testing.T) {
+		f := scheduledWorkFixture(t)
+		f.sessionPod("owner", "dev", 0)
+		proveLiveSummonedOwner(t, f, "owner", true)
+		dispatchSummonedRecord(t, f, f.c)
+	})
+	t.Run("stale cached parent", func(t *testing.T) {
+		f := scheduledWorkFixture(t)
+		f.sessionPod("owner", "dev", 0)
+		liveOwner := f.session("owner").DeepCopy()
+		liveOwner.Spec.Caller = "upgrade-agent.alert-responder"
+		liveOwner.Spec.Lane = v1alpha1.LaneRemediation
+		liveOwner.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+		liveOwner.Status.Phase = v1alpha1.PhaseRunning
+		liveOwner.Status.Agent = &v1alpha1.AgentStatus{
+			Status: protocol.AgentBusy, Boot: protocol.BootReady,
+			LastHeartbeat: &metav1.Time{Time: f.now},
+		}
+		f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				sess, ok := obj.(*v1alpha1.AgentSession)
+				if ok && key.Name == liveOwner.Name && key.Namespace == liveOwner.Namespace {
+					liveOwner.DeepCopyInto(sess)
+					return nil
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+		cached := f.session("owner")
+		if cached.Spec.Caller != "" {
+			t.Fatal("cache already has caller")
+		}
+		dispatchSummonedRecord(t, f, f.srv.Live)
+	})
+}
+
+func proveLiveSummonedOwner(t *testing.T, f *swFixture, name string, summoned bool) {
+	t.Helper()
+	f.editSession(name, func(s *v1alpha1.AgentSession) {
+		s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+		if summoned {
+			s.Spec.Caller = "upgrade-agent.alert-responder"
+			s.Spec.Lane = v1alpha1.LaneRemediation
+		}
+	})
+	s := f.session(name)
+	s.Status.Phase = v1alpha1.PhaseRunning
+	s.Status.Agent = &v1alpha1.AgentStatus{
+		Status: protocol.AgentBusy, Boot: protocol.BootReady,
+		LastHeartbeat: &metav1.Time{Time: f.now},
+	}
+	if err := f.c.Status().Update(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// dispatchSummonedRecord runs the production authorizer and creator for an
+// existing scheduled-work record owned by the live session "owner". reader is
+// what the authorizer reads. No child is written.
+func dispatchSummonedRecord(t *testing.T, f *swFixture, reader client.Reader) {
+	t.Helper()
+	ctx := context.Background()
+	owner := f.session("owner")
+	principal := "session/owner/" + string(owner.UID)
+	work := &v1alpha1.ScheduledWork{
+		ObjectMeta: metav1.ObjectMeta{Namespace: swNS, Name: "audit", UID: swUID},
+		Spec: v1alpha1.ScheduledWorkSpec{
+			Title: "audit", Owner: principal, Editor: principal,
+			Mode: v1alpha1.ScheduledWorkHeadless,
+			Work: v1alpha1.ScheduledWorkOrder{Template: "ops-audit", Repo: "haynes-ops", Prompt: "caller-selected instructions"},
+		},
+	}
+	if err := f.c.Create(ctx, work); err != nil {
+		t.Fatal(err)
+	}
+	sources := &executor.Sources{Reader: reader, SessionNamespace: sessionNS}
+	auth, err := sources.Authorize(ctx, work, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth.Basis != executor.BasisSession || auth.Owner == nil || auth.Owner.Name != "owner" || auth.Owner.UID != owner.UID {
+		t.Fatalf("authorizer %+v", auth)
+	}
+	before := f.sessionCount()
+	req := swRequest()
+	req.Prompt = "caller-selected instructions"
+	d := swDispatch()
+	d.Owner = auth.Owner
+	_, _, _, err = f.srv.CreateScheduledSession(ctx, req, d)
+	wantRefused(t, err, "DESIGN-064 6.4")
+	if f.sessionCount() != before {
+		t.Fatalf("sessions %d, want %d", f.sessionCount(), before)
+	}
+	if err := f.c.Get(ctx, client.ObjectKey{Namespace: sessionNS, Name: swName}, &v1alpha1.AgentSession{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("child read: %v", err)
+	}
+	var list v1alpha1.AgentSessionList
+	if err := f.c.List(ctx, &list, client.InNamespace(sessionNS)); err != nil {
+		t.Fatal(err)
+	}
+	for i := range list.Items {
+		if strings.Contains(list.Items[i].Spec.Prompt, "caller-selected instructions") {
+			t.Fatalf("prompt stored on %s", list.Items[i].Name)
+		}
 	}
 }

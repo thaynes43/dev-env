@@ -352,6 +352,11 @@ func sameScheduledWork(a, b v1alpha1.ScheduledWorkSpec) bool {
 
 // createScheduledWork serves POST /v1/scheduled-work.
 func (s *Server) createScheduledWork(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	// A summoned session hears the refusal here. A record that already exists
+	// is still refused at admitCreate, which reads the parent live.
+	if err := s.refuseSummonedChild(ctx, c); err != nil {
+		return 0, nil, err
+	}
 	me, err := scheduledWorkPrincipal(c)
 	if err != nil {
 		return 0, nil, err
