@@ -806,8 +806,11 @@ is woken by a command it runs itself.
   creation time has one-second resolution and note names sort in no useful
   order, so no cursor made of a time and names can be both small and
   complete. The cursor is instead the resource version at which the caller
-  last read: the handler watches parent notes from that version and answers
-  the first note it sees stored for the caller. Only an `Added` event counts
+  last read: the handler watches from that version, selecting by label only
+  notes that are parent notes addressed to the caller (the parent-note label
+  and the caller's recipient label, the selector `ListParentNotes` uses), and
+  checks the stored recipient's name and UID on each one. It answers the
+  first note it sees stored for the caller. Only an `Added` event counts
   as stored. A later change to a note that already exists, such as a label
   or an annotation, never wakes the parent. The new cursor is that note's
   resource version. Two notes stored in the same second come back in
@@ -827,7 +830,8 @@ is woken by a command it runs itself.
   cursor may fix; a 410 never is.
 - **An idle parent keeps a usable cursor.** The watch asks the API server
   for bookmarks. At the deadline the answer is `waiting`, with the newest
-  version the watch reported: a bookmark, or an event for any parent's note.
+  version the watch reported: a bookmark, or an event for one of the
+  caller's own notes. Another parent's notes never reach the handler.
   When the watch reported none, the answer returns the cursor it was given.
   So a parent with no new notes for hours is not sent to `resync` on every
   call. The handler does not take a fresh list at the deadline: a note
