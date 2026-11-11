@@ -395,21 +395,45 @@ The pod UID binds those facts to the pod.
 `POST /v1/sessions/{name}/heartbeat` records `status.agent.podUID` from the
 authenticated caller, never from the request body, and it stamps
 `lastHeartbeat` with the operator's clock (`agentStatus` takes `s.now()`).
-A caller with no pod leaves `podUID` empty. A heartbeat from the previous
-pod that is stored late carries the previous pod's UID and so does not
-count. When a UID is already stored and it is not this caller's, the
-status patch carries the resource version of that read. A status write
-that landed after the read is refused, so the other pod's later fields
-are not left under this caller's UID. An empty stored UID takes no such
-lock: it does not bind a report, and until the CRD has the field the UID
-reads back empty on every heartbeat. Until the cluster's CRD has the field
-the API server drops it and no running host counts as reported. A
-container restart inside the same pod keeps the pod UID, so the previous
-container's report counts for at most the staleness bound. The image is the same, so the version is right,
-and the remote state can be that old. The route still accepts a heartbeat
-from the session's own pod, including one that is deleting, and it does
-not change who may post one. Still not defended: a process inside the host
-that sends a false heartbeat. The version string is only length-clipped.
+Every status patch from a caller with a pod carries that caller's UID,
+whatever the handler's read held, so a patch computed from an earlier read
+stamps the caller's own UID. The write is a merge patch against that read,
+and a field equal to the read is left out. A heartbeat stored with no
+other write between its read and its patch leaves `status.agent` and
+`status.remoteControl` wholly that caller's. A caller with no pod leaves
+`podUID` empty and forces nothing into the patch. The merge patch then
+sends null for a key the read had and the new object lacks, so a stored
+UID is removed.
+
+A heartbeat from the previous pod that is stored late carries the previous
+pod's UID and so does not count. When a UID is already stored and it is
+not this caller's, the status patch carries the resource version of that
+read. A status write that landed after the read is refused, so the other
+pod's later fields are not left under this caller's UID. An empty stored
+UID takes no such lock: it does not bind a report, and until the CRD has
+the field the UID reads back empty on every heartbeat. Until the cluster's
+CRD has the field the API server drops it and no running host counts as
+reported.
+
+A limit stays. A heartbeat from the present pod whose read already held
+its own UID takes no lock. If a write from the previous pod lands between
+that read and its patch, the fields the present pod did not change keep
+the previous pod's values under the present pod's UID until the present
+pod's next heartbeat. This needs a request from the previous pod to stay
+in flight inside the operator across the whole replacement and to land
+inside one run of the handler. Every heartbeat is not locked, because that
+would refuse a heartbeat whenever any other writer changes the session
+between the read and the patch, and this route carries every session's
+liveness, usage and task result. Ruling S says the same in short, and the
+lock of dcfb7207 stays.
+
+A container restart inside the same pod keeps the pod UID, so the previous
+container's report counts for at most the staleness bound. The image is
+the same, so the version is right, and the remote state can be that old.
+The route still accepts a heartbeat from the session's own pod, including
+one that is deleting, and it does not change who may post one. Still not
+defended: a process inside the host that sends a false heartbeat. The
+version string is only length-clipped.
 
 **A suspended host is eligible to resume** when all of these hold:
 
@@ -1194,3 +1218,25 @@ handling is added. With stderr closed the process may end on SIGPIPE
 after the line is out. `agent-run help thread` and section 7 say the line
 comes first. `agent-run codex-host select` and the interactive create are
 unchanged.
+
+**Ruling S** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+is the coordinator's ruling, not Tom's. A status patch from a heartbeat
+whose caller has a pod always carries `status.agent.podUID`, whatever the
+handler's read held. The write is a merge patch against that read, and a
+field equal to the read is left out, so without this a late patch from the
+previous pod could leave the present pod's UID over the previous pod's
+changed fields. The patch now stamps the caller's own UID. A heartbeat
+stored with no other write between its read and its patch leaves
+`status.agent` and `status.remoteControl` wholly that caller's. The lock
+of dcfb7207 stays: a stored UID that is not empty and is not the caller's
+still carries the resource version of that read. A heartbeat from the
+present pod whose read already held its own UID takes no lock. If a write
+from the previous pod lands between that read and its patch, the fields
+the present pod did not change keep the previous pod's values under the
+present pod's UID until the present pod's next heartbeat. That needs a
+request from the previous pod to stay in flight inside the operator across
+the whole replacement and to land inside one run of the handler. Every
+heartbeat is not locked, because that would refuse a heartbeat whenever
+any other writer changes the session between the read and the patch, and
+this route carries every session's liveness, usage and task result. A
+caller with no pod forces nothing into its patch.

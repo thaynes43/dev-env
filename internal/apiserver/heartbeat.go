@@ -121,7 +121,6 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	if st.Usage != nil && st.UsageObservation == nil && sess.Status.UsageObservation == nil {
 		sess.Status.Usage = usageStatus(*st.Usage)
 	}
-	patch := client.MergeFrom(base)
 	// An outcome acquired by another writer after this read must not be replaced
 	// or cleared by a stale decision heartbeat. A stored pod UID that is not
 	// this caller's is the same kind of stale read: the merge patch would
@@ -137,6 +136,14 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	if base.Status.Agent != nil {
 		storedPod = base.Status.Agent.PodUID
 	}
+	// Ruling S. A merge patch omits a field equal to this read. Clear the UID
+	// on the base copy after the lock has read the stored value, so a caller
+	// with a pod sends status.agent.podUID on every heartbeat. A caller with
+	// no pod is unchanged: nothing is forced into its patch.
+	if c.pod != nil && base.Status.Agent != nil {
+		base.Status.Agent.PodUID = ""
+	}
+	patch := client.MergeFrom(base)
 	if !apiequality.Semantic.DeepEqual(base.Status.Outcome, sess.Status.Outcome) || (storedPod != "" && storedPod != callerPod) {
 		patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
 	}
