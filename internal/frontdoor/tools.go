@@ -23,6 +23,9 @@ import (
 // Each description is at most 30 words.
 const descriptionWordBound = 214
 
+// parentContinuationMax is the longest continuation parentCursorOK accepts.
+const parentContinuationMax = 4096
+
 // noStandingAuthority is the whole success result when no authority file is installed.
 const noStandingAuthority = "No standing authority is installed for this caller. Ask the owner once, and record the answer on the work item."
 
@@ -91,7 +94,8 @@ var frontDoorTools = []map[string]any{
 	tool("standing_authority", "Read the owner's standing instruction installed for this caller.", hints(true, false, true, false), map[string]any{}, nil),
 	// Read-only list of notes addressed to this caller. Names, kinds and ages only: a repeat writes nothing and returns no text.
 	tool("parent_waiting", "List notes waiting from sessions this caller started. Names, kinds and ages only.", hints(true, false, true, false), map[string]any{
-		"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+		"limit":    map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+		"continue": map[string]any{"type": "string", "maxLength": parentContinuationMax},
 	}, nil),
 	// Read-only read of one note, including its stored text. A repeat writes nothing.
 	tool("parent_read", "Read one note to this caller, including its text, from a session this caller started.", hints(true, false, true, false), map[string]any{
@@ -850,7 +854,7 @@ func parentAge(created time.Time) string {
 }
 
 func parentCursorOK(cursor string) bool {
-	if len(cursor) < 2 || len(cursor) > 4096 || (cursor[:2] != "0:" && cursor[:2] != "1:") {
+	if len(cursor) < 2 || len(cursor) > parentContinuationMax || (cursor[:2] != "0:" && cursor[:2] != "1:") {
 		return false
 	}
 	return utf8.ValidString(cursor) && !strings.ContainsAny(cursor, "\x00\r\n")

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -466,5 +467,55 @@ func TestUnansweredCallerNotesOneReplyList(t *testing.T) {
 	s.Limits.PerSession = 1
 	if _, _, err := s.ListUnansweredCallerNotes(ctx, meatballCaller(), 100, ""); !errors.Is(err, ErrUnavailable) {
 		t.Fatal("a reply scan past the sender cap was treated as complete", err)
+	}
+}
+
+func TestUnansweredCallerReplyLookupBound(t *testing.T) {
+	ctx := context.Background()
+	s := storeFixture(t)
+	spec := validMessage()
+	spec.Key = "waiting-reply-bound"
+	spec.Kind = KindQuestion
+	spec.Recipient = coord.SessionIdentity{}
+	spec.CallerRecipient = meatballCaller()
+	if _, _, err := s.CreateParentNote(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	caller := meatballCaller()
+	limit := s.Limits.Effective(DefaultLimits).PerSession + 1
+	want := labels.SelectorFromSet(map[string]string{
+		ParentNoteLabel:       "true",
+		taskclaim.SourceLabel: callerLabel(caller),
+		KindLabel:             KindReply,
+	}).String()
+	saw := false
+	watched, ok := s.Client.(client.WithWatch)
+	if !ok {
+		t.Fatal("store client cannot be wrapped")
+	}
+	s.Live = interceptor.NewClient(watched, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+		var o client.ListOptions
+		o.ApplyOptions(opts)
+		sel := ""
+		if o.LabelSelector != nil {
+			sel = o.LabelSelector.String()
+		}
+		if sel != want {
+			return c.List(ctx, list, opts...)
+		}
+		saw = true
+		if o.Limit != limit {
+			t.Errorf("reply limit %d, want %d", o.Limit, limit)
+		}
+		page, ok := list.(*coord.InboxMessageList)
+		if !ok {
+			t.Fatal("reply list type")
+		}
+		page.Items = nil
+		page.Continue = "more"
+		return nil
+	}})
+	if _, _, err := s.ListUnansweredCallerNotes(ctx, caller, 100, ""); !errors.Is(err, ErrUnavailable) || !saw {
+		t.Fatal("a continued reply page was treated as a complete scan", err, saw)
 	}
 }

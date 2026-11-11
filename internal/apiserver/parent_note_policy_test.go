@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -225,6 +226,74 @@ func TestParentNotePolicyCaller(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "/v1/parent-notes/{message}") {
 		t.Fatal("parent note log used the raw path")
+	}
+}
+
+func TestParentNoteMethodErrorsHideThePath(t *testing.T) {
+	f, _ := meatballChildFixture(t)
+	var logs bytes.Buffer
+	f.srv.Log = logr.FromSlogHandler(slog.NewJSONHandler(&logs, nil))
+	private := "PRIVATE_PATH_TEXT"
+	post := f.do(http.MethodPost, apiv1.ParentNotesPath+"/"+private, tokMeatball, nil)
+	if post.Code != http.StatusMethodNotAllowed || strings.Contains(post.Body.String(), private) || !strings.Contains(post.Body.String(), "/v1/parent-notes/{message} takes ") {
+		t.Fatal("post method error echoed the path", post.Code, post.Body.String())
+	}
+	get := f.do(http.MethodGet, apiv1.ParentNotesPath+"/"+private+"/answer", tokMeatball, nil)
+	if get.Code != http.StatusMethodNotAllowed || strings.Contains(get.Body.String(), private) || !strings.Contains(get.Body.String(), "/v1/parent-notes/{message}/answer") {
+		t.Fatal("answer method error echoed the path", get.Code, get.Body.String())
+	}
+	unknown := f.do(http.MethodGet, apiv1.ParentNotesPath+"/"+private+"/not-a-route", tokMeatball, nil)
+	if unknown.Code != http.StatusNotFound || strings.Contains(unknown.Body.String(), private) || !strings.Contains(unknown.Body.String(), "/v1/parent-notes/{message}") {
+		t.Fatal("unknown subpath echoed the path", unknown.Code, unknown.Body.String())
+	}
+	if strings.Contains(logs.String(), private) || !strings.Contains(logs.String(), "/v1/parent-notes/{message}") || !strings.Contains(logs.String(), "/v1/parent-notes/{message}/answer") {
+		t.Fatal("request log echoed the path or skipped the route template")
+	}
+}
+
+func TestParentNoteFinalFencesRefuseReplacement(t *testing.T) {
+	// resolveCaller, the opening policyNoteFence, then the final fence.
+	const finalPolicyRead = 3
+	text := "FENCE_NOTE_TEXT"
+	cases := []struct {
+		name string
+		do   func(f *fixture, name string) *httptest.ResponseRecorder
+	}{
+		{"list", func(f *fixture, _ string) *httptest.ResponseRecorder {
+			return f.do(http.MethodGet, apiv1.ParentNotesPath, tokMeatball, nil)
+		}},
+		{"read", func(f *fixture, name string) *httptest.ResponseRecorder {
+			return f.do(http.MethodGet, apiv1.ParentNotesPath+"/"+name, tokMeatball, nil)
+		}},
+		{"answer", func(f *fixture, name string) *httptest.ResponseRecorder {
+			return f.do(http.MethodPost, apiv1.ParentNotesPath+"/"+name+"/answer", tokMeatball, apiv1.AnswerParentRequest{Key: "fence-answer", Text: "fence answer"})
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, child := meatballChildFixture(t)
+			note := tellParentNote(t, f, child, apiv1.TellParentRequest{Key: "fence-" + tc.name, Kind: inbox.KindQuestion, Text: text}, http.StatusCreated)
+			reads := 0
+			f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				err := c.Get(ctx, key, obj, opts...)
+				if err != nil || key.Name != callerPolicyName || key.Namespace != callerPolicyNamespace {
+					return err
+				}
+				reads++
+				if reads != finalPolicyRead {
+					return nil
+				}
+				if err := recreateObject(c, obj, "policy-uid-final"); err != nil {
+					return err
+				}
+				return c.Get(ctx, key, obj, opts...)
+			}})
+			before := countMessages(t, f)
+			w := tc.do(f, note.Name)
+			if w.Code != http.StatusNotFound || countMessages(t, f) != before || strings.Contains(w.Body.String(), text) || strings.Contains(w.Body.String(), "fence answer") || reads != finalPolicyRead {
+				t.Fatalf("%s status %d reads %d stored %d: %s", tc.name, w.Code, reads, countMessages(t, f)-before, w.Body.String())
+			}
+		})
 	}
 }
 

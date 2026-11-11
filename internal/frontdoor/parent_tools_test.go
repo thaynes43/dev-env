@@ -2,6 +2,8 @@ package frontdoor
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -151,6 +153,7 @@ func TestParentTools(t *testing.T) {
 
 func TestParentWaitingPages(t *testing.T) {
 	base, api, _, _ := startDoor(t, "#!/bin/sh\nexit 0\n")
+	schema := parentWaitingSchema(t, base)
 	question := "message." + strings.Repeat("a", 32) + "." + strings.Repeat("b", 32)
 	result := "message." + strings.Repeat("c", 32) + "." + strings.Repeat("d", 32)
 	item := func(name, kind string) apiv1.InboxMetadata {
@@ -181,7 +184,11 @@ func TestParentWaitingPages(t *testing.T) {
 	if isError || !strings.Contains(first, question) || !strings.Contains(first, "continue: 1:\n") || strings.Contains(first, result) {
 		t.Fatalf("first page %q error %v", first, isError)
 	}
-	second, isError := call(map[string]any{"limit": 1, "continue": "1:"})
+	secondArgs := map[string]any{"limit": 1, "continue": "1:"}
+	if err := argsConform(schema, secondArgs); err != nil {
+		t.Fatal(err)
+	}
+	second, isError := call(secondArgs)
 	if isError || !strings.Contains(second, result) || strings.Contains(second, "continue:") {
 		t.Fatalf("results page %q error %v", second, isError)
 	}
@@ -270,6 +277,7 @@ func TestParentToolBounds(t *testing.T) {
 	}{
 		{"parent_waiting", map[string]any{"limit": 0}},
 		{"parent_waiting", map[string]any{"limit": 101}},
+		{"parent_waiting", map[string]any{secret: "x"}},
 		{"parent_read", map[string]any{"name": note, secret: "x"}},
 		{"parent_answer", map[string]any{"name": note, "key": "k", "text": "x", secret: "x"}},
 		{"parent_send", map[string]any{"session": "coord-1", "key": "k", "text": "x", secret: "x"}},
@@ -282,7 +290,89 @@ func TestParentToolBounds(t *testing.T) {
 		if !isError || strings.Contains(text, secret) || len(api.requests()) != 0 {
 			t.Fatalf("%s %q error %v requests %d", tc.name, text, isError, len(api.requests()))
 		}
+		if _, unknown := tc.args[secret]; unknown && tc.name == "parent_waiting" && text != "unknown argument" {
+			t.Fatalf("parent_waiting unknown property %q", text)
+		}
 	}
+}
+
+func parentWaitingSchema(t *testing.T, base string) map[string]any {
+	t.Helper()
+	status, raw := postMCP(t, http.DefaultClient, base, testBearer, "tools/list", map[string]any{})
+	var listed struct {
+		Result struct {
+			Tools []map[string]any `json:"tools"`
+		} `json:"result"`
+	}
+	if status != http.StatusOK || json.Unmarshal(raw, &listed) != nil {
+		t.Fatalf("tools/list status %d", status)
+	}
+	var tool map[string]any
+	for _, item := range listed.Result.Tools {
+		if item["name"] == "parent_waiting" {
+			tool = item
+		}
+	}
+	if tool == nil {
+		t.Fatal("tools/list omitted parent_waiting")
+	}
+	desc, _ := tool["description"].(string)
+	schema, _ := tool["inputSchema"].(map[string]any)
+	props, _ := schema["properties"].(map[string]any)
+	cont, _ := props["continue"].(map[string]any)
+	maxLen, ok := cont["maxLength"].(float64)
+	if len(strings.Fields(desc)) == 0 || len(strings.Fields(desc)) > 30 || schema["additionalProperties"] != false || cont["type"] != "string" || !ok || int(maxLen) != parentContinuationMax {
+		t.Fatalf("parent_waiting schema %#v", schema)
+	}
+	if required, ok := schema["required"].([]any); ok {
+		for _, item := range required {
+			if item == "continue" {
+				t.Fatal("continue is required")
+			}
+		}
+	}
+	fits := "1:" + strings.Repeat("a", parentContinuationMax-2)
+	if len(fits) != parentContinuationMax || !parentCursorOK(fits) || parentCursorOK(fits+"a") {
+		t.Fatal("advertised maxLength does not match the validator")
+	}
+	return schema
+}
+
+func argsConform(schema, args map[string]any) error {
+	props, _ := schema["properties"].(map[string]any)
+	if schema["additionalProperties"] != false {
+		return errors.New("schema accepts unknown properties")
+	}
+	for key, value := range args {
+		prop, ok := props[key].(map[string]any)
+		if !ok {
+			return fmt.Errorf("argument %s is not in the advertised schema", key)
+		}
+		switch prop["type"] {
+		case "string":
+			text, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("%s is not a string", key)
+			}
+			if maxLen, ok := prop["maxLength"].(float64); ok && len(text) > int(maxLen) {
+				return fmt.Errorf("%s is longer than the advertised maximum", key)
+			}
+		case "integer":
+			number, ok := value.(int)
+			if !ok {
+				return fmt.Errorf("%s is not an integer", key)
+			}
+			if min, ok := prop["minimum"].(float64); ok && float64(number) < min {
+				return fmt.Errorf("%s is below the advertised minimum", key)
+			}
+			if max, ok := prop["maximum"].(float64); ok && float64(number) > max {
+				return fmt.Errorf("%s is above the advertised maximum", key)
+			}
+		default:
+			return fmt.Errorf("%s has type %v", key, prop["type"])
+		}
+	}
+	return nil
 }
 
 func parentAgeShown(text string) bool {
