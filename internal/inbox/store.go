@@ -34,7 +34,9 @@ const (
 	MaxRequestBytes = 6*MaxTextBytes + 4096
 	RecipientLabel  = "coordination.dev-env.haynesops.com/recipient"
 	// KindLabel and InReplyToLabel mark questions and replies (DESIGN-014,
-	// 2026-10-31); plain messages carry neither.
+	// 2026-10-31). A peer plain message carries neither. A parent plain
+	// message from the caller carries KindPlain so the child's inbox can
+	// select it; the stored kind stays empty.
 	KindLabel      = "coordination.dev-env.haynesops.com/kind"
 	InReplyToLabel = "coordination.dev-env.haynesops.com/in-reply-to"
 
@@ -42,6 +44,7 @@ const (
 	KindResult   = "result"
 	KindBlocker  = "blocker"
 	KindReply    = "reply"
+	KindPlain    = "plain"
 	// StaleAfter is the fixed age past which an unanswered question reads
 	// Stale. It is a display bound, not an expiry: nothing is deleted or resent.
 	StaleAfter = 30 * time.Minute
@@ -130,6 +133,17 @@ func ValidText(text string) bool {
 	return len(text) > 0 && len(text) <= MaxTextBytes && utf8.ValidString(text)
 }
 func recipientLabel(s coord.SessionIdentity) string { return digest(s)[:63] }
+
+// callerLabel is the room and list key for one CallerPolicy identity.
+// It is not a Session identity, so a caller sender does not share an empty
+// session's room.
+func callerLabel(c *coord.InboxCaller) string {
+	return digest(struct {
+		Caller         string
+		ServiceAccount string
+		PolicyUID      string
+	}{"caller", c.ServiceAccount, c.PolicyUID})[:63]
+}
 func inReplyToLabel(r coord.InboxMessageRef) string { return digest(r)[:63] }
 
 func ValidMessage(s coord.InboxMessageSpec) bool {
@@ -281,10 +295,19 @@ func recipientLabels(project string, recipient coord.SessionIdentity) map[string
 	return map[string]string{taskclaim.ProjectLabel: project, RecipientLabel: recipientLabel(recipient)}
 }
 func messageLabels(spec coord.InboxMessageSpec) map[string]string {
-	l := recipientLabels(spec.Project, spec.Recipient)
+	recipientValue := recipientLabel(spec.Recipient)
+	if spec.CallerRecipient != nil && spec.Recipient == (coord.SessionIdentity{}) {
+		recipientValue = callerLabel(spec.CallerRecipient)
+	}
+	l := map[string]string{taskclaim.ProjectLabel: spec.Project, RecipientLabel: recipientValue}
 	l[taskclaim.SourceLabel] = taskclaim.SessionLabel(spec.Sender)
+	if spec.CallerSender != nil && spec.Sender == (coord.SessionIdentity{}) {
+		l[taskclaim.SourceLabel] = callerLabel(spec.CallerSender)
+	}
 	if spec.Kind != "" {
 		l[KindLabel] = spec.Kind
+	} else if spec.CallerSender != nil && spec.Sender == (coord.SessionIdentity{}) && spec.InReplyTo == nil {
+		l[KindLabel] = KindPlain
 	}
 	if spec.InReplyTo != nil {
 		l[InReplyToLabel] = inReplyToLabel(*spec.InReplyTo)
@@ -335,19 +358,82 @@ func (s KubeStore) Create(ctx context.Context, spec coord.InboxMessageSpec) (*co
 	return s.create(ctx, spec, false)
 }
 
+// checkMessageRoom counts a session sender with CheckRoom. A caller sender
+// has an empty session identity, so its room is its own caller key.
+func (s KubeStore) checkMessageRoom(ctx context.Context, spec coord.InboxMessageSpec) error {
+	limits := s.Limits.Effective(DefaultLimits)
+	if spec.CallerSender != nil && spec.Sender == (coord.SessionIdentity{}) {
+		return checkLabeledRoom(ctx, s.Live, s.Namespace, spec.Project, callerLabel(spec.CallerSender), limits)
+	}
+	return taskclaim.CheckRoom(ctx, s.Live, "InboxMessageList", s.Namespace, spec.Project, spec.Sender, limits)
+}
+
+func checkLabeledRoom(ctx context.Context, r client.Reader, namespace, project, source string, limits taskclaim.Limits) error {
+	for _, bound := range []struct {
+		match map[string]string
+		max   int64
+	}{
+		// The caller is not bound to one project. The sender cap is the source alone.
+		{map[string]string{taskclaim.SourceLabel: source}, limits.PerSession},
+		{map[string]string{taskclaim.ProjectLabel: project}, limits.PerProject},
+	} {
+		n, err := countLabeled(ctx, r, namespace, bound.match, bound.max)
+		if err != nil {
+			return err
+		}
+		if n >= bound.max {
+			return ErrLimit
+		}
+	}
+	return nil
+}
+
+func countLabeled(ctx context.Context, r client.Reader, namespace string, match map[string]string, bound int64) (int64, error) {
+	if r == nil || bound < 1 {
+		return 0, ErrUnavailable
+	}
+	var n int64
+	cursor := ""
+	for n < bound {
+		page := &metav1.PartialObjectMetadataList{}
+		page.SetGroupVersionKind(coord.GroupVersion.WithKind("InboxMessageList"))
+		if err := r.List(ctx, page, client.InNamespace(namespace), client.MatchingLabels(match), client.Limit(min(bound-n, 500)), client.Continue(cursor)); err != nil {
+			return 0, err
+		}
+		n += int64(len(page.Items))
+		if page.Continue == "" {
+			break
+		}
+		cursor = page.Continue
+	}
+	return n, nil
+}
+
+// sameSenderForm confirms the sender the create asked for. A session sender
+// is the stored session identity. A caller sender has an empty session, so
+// the stored name is the confirmation.
+func sameSenderForm(observed, spec coord.InboxMessageSpec) bool {
+	if spec.CallerSender != nil && spec.Sender == (coord.SessionIdentity{}) {
+		return MessageNameFor(observed) == MessageNameFor(spec)
+	}
+	return observed.Sender == spec.Sender
+}
+
 func (s KubeStore) create(ctx context.Context, spec coord.InboxMessageSpec, parentNote bool) (*coord.InboxMessage, bool, error) {
 	if !s.ready() || !ValidMessage(spec) {
 		return nil, false, ErrUnavailable
 	}
 	// Only a new message counts against the bounds; a retry still confirms.
 	if _, err := s.Get(ctx, MessageNameFor(spec)); errors.Is(err, ErrNotFound) {
-		if err := taskclaim.CheckRoom(ctx, s.Live, "InboxMessageList", s.Namespace, spec.Project, spec.Sender, s.Limits.Effective(DefaultLimits)); err != nil {
+		if err := s.checkMessageRoom(ctx, spec); err != nil {
 			if errors.Is(err, ErrLimit) {
 				return nil, false, ErrLimit
 			}
 			return nil, false, ErrUnavailable
 		}
-		if spec.Kind != "" {
+		// A plain peer message has no new field to prune. A caller sender or
+		// recipient does, even when kind is absent.
+		if spec.Kind != "" || spec.CallerSender != nil || spec.CallerRecipient != nil {
 			if err := s.checkSchema(ctx, spec); err != nil {
 				return nil, false, err
 			}
@@ -362,7 +448,7 @@ func (s KubeStore) create(ctx context.Context, spec coord.InboxMessageSpec, pare
 	m := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: MessageNameFor(spec), Labels: labels}, Spec: spec}
 	createErr := s.Client.Create(ctx, m)
 	observed, err := s.Get(ctx, m.Name)
-	if err != nil || observed.Spec.Sender != spec.Sender || observed.Spec.Key != spec.Key {
+	if err != nil || observed.Spec.Key != spec.Key || !sameSenderForm(observed.Spec, spec) {
 		return nil, false, ErrUnavailable
 	}
 	if createErr == nil {

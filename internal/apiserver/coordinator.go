@@ -144,5 +144,38 @@ func coordinatorLogPath(r *http.Request, c *caller) string {
 	if c != nil && c.kind == kindCoordinator && r.PathValue("name") != "" {
 		return "/v1/sessions/{child}"
 	}
+	if path, ok := parentNotePublicPath(r.URL.Path); ok {
+		return path
+	}
 	return r.URL.Path
+}
+
+// publicRequestPath is the path safe to put in an error. Parent-note routes
+// use the route template; every other path stays as requested.
+func publicRequestPath(path string) string {
+	if templated, ok := parentNotePublicPath(path); ok {
+		return templated
+	}
+	return path
+}
+
+// parentNotePublicPath is the route template for a parent-note URL. The
+// collection path is unchanged. A message path, including a wrong method or an
+// unknown subpath, never keeps the raw remainder.
+func parentNotePublicPath(path string) (string, bool) {
+	const root = "/v1/parent-notes"
+	if path == root {
+		return path, true
+	}
+	if _, ok := strings.CutPrefix(path, root+"/"); !ok {
+		return "", false
+	}
+	switch {
+	case strings.HasSuffix(path, "/answer"):
+		return root + "/{message}/answer", true
+	case strings.HasSuffix(path, "/wait"):
+		return root + "/{message}/wait", true
+	default:
+		return root + "/{message}", true
+	}
 }

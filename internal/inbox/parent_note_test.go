@@ -7,10 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/taskclaim"
 )
 
 func TestParentNotesPriorityAcrossPagesAndProjects(t *testing.T) {
@@ -187,5 +189,333 @@ func TestParentNotesBoundedQueries(t *testing.T) {
 		if _, _, err := s.ListParentNotes(context.Background(), bad, false, 1, ""); !errors.Is(err, ErrUnavailable) {
 			t.Fatal("invalid party accepted")
 		}
+	}
+}
+
+func TestCreateCountsAndConfirmsBothSenderForms(t *testing.T) {
+	session := validMessage()
+	if !sameSenderForm(session, session) {
+		t.Fatal("a session sender did not confirm by its session identity")
+	}
+	otherSession := session
+	otherSession.Sender.UID = "other-uid"
+	if sameSenderForm(otherSession, session) {
+		t.Fatal("a session sender confirmed a different session")
+	}
+	caller := session
+	caller.Sender = coord.SessionIdentity{}
+	caller.CallerSender = meatballCaller()
+	caller.Actor = policyActor(session.Actor)
+	if !sameSenderForm(caller, caller) {
+		t.Fatal("a caller sender did not confirm by message name")
+	}
+	dropped := caller
+	dropped.CallerSender = nil
+	if sameSenderForm(dropped, caller) || MessageNameFor(dropped) == MessageNameFor(caller) {
+		t.Fatal("a caller sender confirmed an empty session sender")
+	}
+	otherCaller := *meatballCaller()
+	otherCaller.PolicyUID = "other-policy-uid"
+	otherPolicy := caller
+	otherPolicy.CallerSender = &otherCaller
+	if sameSenderForm(otherPolicy, caller) {
+		t.Fatal("a caller sender confirmed a different policy")
+	}
+
+	ctx := context.Background()
+	s := storeFixture(t)
+	s.Limits.PerSession = 1
+	if _, created, err := s.Create(ctx, session); err != nil || !created {
+		t.Fatal("session create", err)
+	}
+	if _, created, err := s.Create(ctx, session); err != nil || created {
+		t.Fatal("session retry charged another room or failed", created, err)
+	}
+	second := session
+	second.Key = "session-2"
+	if _, _, err := s.Create(ctx, second); !errors.Is(err, ErrLimit) {
+		t.Fatal("session room did not stay on the session sender", err)
+	}
+	first := caller
+	first.Key = "caller-1"
+	stored, created, err := s.Create(ctx, first)
+	if err != nil || !created {
+		t.Fatal("caller create", err)
+	}
+	if stored.Labels[taskclaim.SourceLabel] != callerLabel(first.CallerSender) || stored.Labels[taskclaim.SourceLabel] == taskclaim.SessionLabel(coord.SessionIdentity{}) {
+		t.Fatal("caller sender used an empty session room", stored.Labels[taskclaim.SourceLabel])
+	}
+	if _, created, err := s.Create(ctx, first); err != nil || created {
+		t.Fatal("caller retry charged another room or failed", created, err)
+	}
+	again := first
+	again.Key = "caller-2"
+	if _, _, err := s.Create(ctx, again); !errors.Is(err, ErrLimit) {
+		t.Fatal("caller room did not use the caller's own key", err)
+	}
+	foreign := first
+	foreign.Key = "caller-other"
+	foreign.CallerSender = &otherCaller
+	foreign.Actor.ServiceAccount = coord.MeatballServiceAccount
+	if _, created, err := s.Create(ctx, foreign); err != nil || !created {
+		t.Fatal("a different policy shared the first caller's room", err)
+	}
+
+	capped := storeFixture(t)
+	capped.Limits.PerProject = 1
+	if _, _, err := capped.Create(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := capped.Create(ctx, first); !errors.Is(err, ErrLimit) {
+		t.Fatal("project room stopped counting a caller sender", err)
+	}
+}
+
+func TestCallerSenderLimitSpansProjects(t *testing.T) {
+	ctx := context.Background()
+	s := storeFixture(t)
+	s.Limits.PerSession = 1
+	first := validMessage()
+	first.Sender = coord.SessionIdentity{}
+	first.CallerSender = meatballCaller()
+	first.Actor = policyActor(first.Actor)
+	first.Kind = ""
+	if _, created, err := s.Create(ctx, first); err != nil || !created {
+		t.Fatal("caller create", err)
+	}
+	second := first
+	second.Key = "other-project"
+	second.Project = "other"
+	if _, _, err := s.Create(ctx, second); !errors.Is(err, ErrLimit) {
+		t.Fatal("caller room reset for each project", err)
+	}
+	other := *meatballCaller()
+	other.PolicyUID = "other-policy-uid"
+	second.CallerSender = &other
+	if _, created, err := s.Create(ctx, second); err != nil || !created {
+		t.Fatal("a different policy shared the room", err, created)
+	}
+
+	capped := storeFixture(t)
+	capped.Limits.PerProject = 1
+	if _, _, err := capped.Create(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	sameProject := first
+	sameProject.Key = "same-project"
+	sameProject.CallerSender = &other
+	if _, _, err := capped.Create(ctx, sameProject); !errors.Is(err, ErrLimit) {
+		t.Fatal("project cap stopped counting a caller sender", err)
+	}
+}
+
+func TestCallerParentNotesListReplyAndParties(t *testing.T) {
+	ctx := context.Background()
+	s := storeFixture(t)
+	noteSpec := validMessage()
+	noteSpec.Kind = KindQuestion
+	noteSpec.Recipient = coord.SessionIdentity{}
+	noteSpec.CallerRecipient = meatballCaller()
+	note, created, err := s.CreateParentNote(ctx, noteSpec)
+	if err != nil || !created || !IsParentNote(note) {
+		t.Fatal("child note to the caller", err)
+	}
+	plain := validMessage()
+	plain.Key = "plain-1"
+	plain.Kind = ""
+	plain.Sender = coord.SessionIdentity{}
+	plain.CallerSender = meatballCaller()
+	plain.Actor = policyActor(plain.Actor)
+	plainMessage, _, err := s.CreateParentNote(ctx, plain)
+	if err != nil {
+		t.Fatal("plain message", err)
+	}
+	before, _, err := s.ListUnansweredCallerNotes(ctx, meatballCaller(), 100, "")
+	if err != nil || len(before) != 1 || before[0].Name != note.Name {
+		t.Fatal("the note is not waiting before its answer", err, len(before))
+	}
+	ref := Ref(note)
+	replySpec := plain
+	replySpec.Key = "reply-1"
+	replySpec.Kind = KindReply
+	replySpec.Recipient = noteSpec.Sender
+	replySpec.InReplyTo = &ref
+	reply, _, err := s.CreateParentNote(ctx, replySpec)
+	if err != nil || !s.ValidParentReply(note, reply) {
+		t.Fatal("caller reply", err)
+	}
+	replies, _, err := s.ParentReplies(ctx, note)
+	if err != nil || len(replies) != 1 || replies[0].Name != reply.Name {
+		t.Fatal("stored caller reply was not the note's answer", err)
+	}
+	otherNoteSpec := noteSpec
+	otherNoteSpec.Key = "other-q"
+	otherNote, _, err := s.CreateParentNote(ctx, otherNoteSpec)
+	if err != nil {
+		t.Fatal("second note", err)
+	}
+	inboxItems, _, err := s.ListCallerParentNotes(ctx, meatballCaller(), false, 100, "")
+	if err != nil || len(inboxItems) != 2 {
+		t.Fatal("caller inbox", err, len(inboxItems))
+	}
+	sent, _, err := s.ListCallerParentNotes(ctx, meatballCaller(), true, 100, "")
+	if err != nil || len(sent) != 2 || sent[0].Spec.Kind != KindReply || sent[1].Spec.Kind != "" {
+		t.Fatal("caller sent box", err)
+	}
+	waiting, _, err := s.ListUnansweredCallerNotes(ctx, meatballCaller(), 100, "")
+	if err != nil || len(waiting) != 1 || waiting[0].Name != otherNote.Name {
+		t.Fatal("a reply cleared the wrong note", err, len(waiting))
+	}
+	kept, _, err := s.ListCallerParentNotes(ctx, meatballCaller(), false, 100, "")
+	if err != nil || len(kept) != 2 {
+		t.Fatal("the historical list dropped an answered note", err, len(kept))
+	}
+	if _, err := s.GetCallerParentNote(ctx, note.Name, meatballCaller()); err != nil {
+		t.Fatal("caller read", err)
+	}
+	other := meatballCaller()
+	other.PolicyUID = "other-policy-uid"
+	if _, err := s.GetCallerParentNote(ctx, note.Name, other); !errors.Is(err, ErrNotFound) {
+		t.Fatal("another policy saw the note", err)
+	}
+	if _, err := s.GetParentNote(ctx, note.Name, noteSpec.Sender); err != nil {
+		t.Fatal("child read", err)
+	}
+	if _, err := s.GetParentNote(ctx, plainMessage.Name, plain.Recipient); err != nil {
+		t.Fatal("child read of a plain message", err)
+	}
+	childInbox, _, err := s.ListParentNotes(ctx, plain.Recipient, false, 100, "")
+	if err != nil || len(childInbox) != 1 || childInbox[0].Name != plainMessage.Name {
+		t.Fatal("child inbox hid the plain message", err, len(childInbox))
+	}
+	childReplies, _, err := s.ListParentNotes(ctx, noteSpec.Sender, false, 100, "")
+	if err != nil || len(childReplies) != 1 || childReplies[0].Name != reply.Name {
+		t.Fatal("child inbox hid the reply", err, len(childReplies))
+	}
+	stranger := noteSpec.Sender
+	stranger.UID = "stranger-uid"
+	if _, err := s.GetParentNote(ctx, note.Name, stranger); !errors.Is(err, ErrNotFound) {
+		t.Fatal("a session matched an empty recipient", err)
+	}
+}
+
+func TestUnansweredCallerNotesOneReplyList(t *testing.T) {
+	ctx := context.Background()
+	s := storeFixture(t)
+	note := func(key string) *coord.InboxMessage {
+		t.Helper()
+		spec := validMessage()
+		spec.Key = key
+		spec.Kind = KindQuestion
+		spec.Recipient = coord.SessionIdentity{}
+		spec.CallerRecipient = meatballCaller()
+		got, _, err := s.CreateParentNote(ctx, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	replyTo := func(q *coord.InboxMessage, key string) *coord.InboxMessage {
+		t.Helper()
+		ref := Ref(q)
+		spec := validMessage()
+		spec.Key = key
+		spec.Kind = KindReply
+		spec.Sender = coord.SessionIdentity{}
+		spec.CallerSender = meatballCaller()
+		spec.Actor = policyActor(spec.Actor)
+		spec.Recipient = q.Spec.Sender
+		spec.InReplyTo = &ref
+		got, _, err := s.CreateParentNote(ctx, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first, second := note("q-1"), note("q-2")
+	for i := 0; i <= MaxReplies; i++ {
+		replyTo(first, fmt.Sprintf("reply-%d", i))
+	}
+	if _, _, err := s.ParentReplies(ctx, first); err == nil {
+		t.Fatal("many replies were a confirmed per-note lookup")
+	}
+	lists := 0
+	watched, ok := s.Client.(client.WithWatch)
+	if !ok {
+		t.Fatal("store client cannot be wrapped")
+	}
+	s.Live = interceptor.NewClient(watched, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+		lists++
+		return c.List(ctx, list, opts...)
+	}})
+	waiting, _, err := s.ListUnansweredCallerNotes(ctx, meatballCaller(), 100, "")
+	if err != nil || len(waiting) != 1 || waiting[0].Name != second.Name || lists != 3 {
+		t.Fatalf("many replies failed the page or cost a list per note: %v waiting %d lists %d", err, len(waiting), lists)
+	}
+
+	junkNote := note("q-3")
+	junk := replyTo(junkNote, "junk-reply")
+	junk.Spec.Recipient.Name = "someone-else"
+	if err := s.Client.Update(ctx, junk); err != nil {
+		t.Fatal(err)
+	}
+	waiting, _, err = s.ListUnansweredCallerNotes(ctx, meatballCaller(), 100, "")
+	if err != nil || len(waiting) != 2 || waiting[0].Name != second.Name || waiting[1].Name != junkNote.Name {
+		t.Fatal("a reply that does not validate failed the page or answered the note", err, len(waiting))
+	}
+
+	s.Limits.PerSession = 1
+	if _, _, err := s.ListUnansweredCallerNotes(ctx, meatballCaller(), 100, ""); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("a reply scan past the sender cap was treated as complete", err)
+	}
+}
+
+func TestUnansweredCallerReplyLookupBound(t *testing.T) {
+	ctx := context.Background()
+	s := storeFixture(t)
+	spec := validMessage()
+	spec.Key = "waiting-reply-bound"
+	spec.Kind = KindQuestion
+	spec.Recipient = coord.SessionIdentity{}
+	spec.CallerRecipient = meatballCaller()
+	if _, _, err := s.CreateParentNote(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	caller := meatballCaller()
+	limit := s.Limits.Effective(DefaultLimits).PerSession + 1
+	want := labels.SelectorFromSet(map[string]string{
+		ParentNoteLabel:       "true",
+		taskclaim.SourceLabel: callerLabel(caller),
+		KindLabel:             KindReply,
+	}).String()
+	saw := false
+	watched, ok := s.Client.(client.WithWatch)
+	if !ok {
+		t.Fatal("store client cannot be wrapped")
+	}
+	s.Live = interceptor.NewClient(watched, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+		var o client.ListOptions
+		o.ApplyOptions(opts)
+		sel := ""
+		if o.LabelSelector != nil {
+			sel = o.LabelSelector.String()
+		}
+		if sel != want {
+			return c.List(ctx, list, opts...)
+		}
+		saw = true
+		if o.Limit != limit {
+			t.Errorf("reply limit %d, want %d", o.Limit, limit)
+		}
+		page, ok := list.(*coord.InboxMessageList)
+		if !ok {
+			t.Fatal("reply list type")
+		}
+		page.Items = nil
+		page.Continue = "more"
+		return nil
+	}})
+	if _, _, err := s.ListUnansweredCallerNotes(ctx, caller, 100, ""); !errors.Is(err, ErrUnavailable) || !saw {
+		t.Fatal("a continued reply page was treated as a complete scan", err, saw)
 	}
 }

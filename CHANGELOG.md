@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.101.1](https://github.com/thaynes43/dev-env/compare/v2.101.0...v2.101.1) (2026-11-11)
+
+
+### Bug Fixes
+
+* **thread:** read Codex agent messages under ThreadItemEntry (OP694) ([#1063](https://github.com/thaynes43/dev-env/issues/1063)) ([1f2ea7b](https://github.com/thaynes43/dev-env/commit/1f2ea7b1c4f44f2e156753aa9a742c5ce3f4971c))
+
 ## [2.101.0](https://github.com/thaynes43/dev-env/compare/v2.100.0...v2.101.0) (2026-11-10)
 
 

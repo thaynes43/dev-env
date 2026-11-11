@@ -2,8 +2,9 @@
 
 - **Status:** Accepted 2026-11-11 by the coordinator
   (dev-env-fable-coordinator-1109, story OP696), with the rulings in
-  section 11. Design only. Nothing is built, switched on,
-  resumed, restarted or changed in the cluster by this document.
+  section 11. Slice 1 (story 698) is the pure choice. This document
+  switches nothing on, and it does not resume, restart or change the
+  cluster.
 - **Tracking:** [Story OP696](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/696),
   under [Epic #91](https://work.haynesnetwork.com/work_packages/91).
 - **Origin:** Tom, 2026-11-10, to Meatball. The sentence in
@@ -312,11 +313,13 @@ created. Renewing the keeper stays the existing workbench path.
 2. Phase `Running`, `spec.operatingMode` `Running`, no deletion timestamp,
    pod Ready, and the pod is not a hold pod.
 3. Resolved profile fits the caller. The resolved profile is the pod label,
-   else `spec.profile`, else the templates' `defaultProfile`. Fit uses the
-   thread profile fence already in `threadProfileFence`: the caller's
-   profile equals the host's, or the caller is an ancestor of the host.
-   A `dev` caller does not fit a `full` host. A `full` caller does not fit
-   the `dev` host `dev-env-1110-230548`.
+   else `spec.profile`, else the templates' `defaultProfile`. The choice
+   fits on profile alone: the host's resolved profile equals the profile
+   the request resolves to, which for a session is its own. A `dev` caller
+   does not fit a `full` host. A `full` caller does not fit the `dev` host
+   `dev-env-1110-230548`. Ancestry is not a fit: `threadProfileFence` still
+   lets a session start a thread on a host it or its children started when
+   it names that host, and a named host does not enter the choice.
 4. The requested repository is Ready in the host's reported project
    bootstrap. That report is `status.agent.projectBootstrap.repositories`:
    one entry per repository, state `Ready` or `Preserved`
@@ -363,11 +366,27 @@ created. Renewing the keeper stays the existing workbench path.
    `unpushedRefs` empty and `omittedRefs` empty. Someone else's unpushed
    branches stay on that volume. `dev-env-1019-205125` (67) and
    `haynes-ops-1023-041051` (42) fail this.
-5. The last `remoteControl.state` is `pair-code-issued`. A frozen
+5. Pairing evidence. The test until slice 6 and the test after it are
+   different.
+
+   Until slice 6 (story 703) the status field does not exist. The last
+   `remoteControl.state` must be `pair-code-issued`. A frozen
    `login-required` or `offline` means the marker was not read. The host is
    not eligible. Resuming it to go and look would wake a volume this feature
-   cannot show was paired. `dev-env-1027-010042` is clean and pushed, and it
-   still fails this, because its last state is `login-required`.
+   cannot show was paired. This test cannot tell "never paired" from
+   "paired, then the login lapsed". `dev-env-1027-010042` is clean and
+   pushed, and it still fails this, because its last state is
+   `login-required`. Slice 1's choice uses this test.
+
+   After slice 6 the session carries a durable record that a pairing code
+   was issued. Eligibility for resume uses that record together with a
+   current keeper login, not the last transient remote-control state. A
+   host the idle timer suspended after the keeper login lapsed is eligible
+   when that record is set and the keeper login is current, and the other
+   rules of this list still hold. A host with no record that a pairing code
+   was issued is not eligible. The field, and the CRD copy that lands in
+   haynes-ops before the operator writes it, are slice 6. Slice 1 does not
+   add the field.
 6. The shared-login check passed. The frozen `login-required` does not fail
    it.
 7. Resuming it would stay inside the pool caps in section 6.
@@ -381,24 +400,29 @@ created. Renewing the keeper stays the existing workbench path.
    returns before the child check when the kind is not `coordinator`
    (`internal/apiserver/coordinator.go:100-102`).
 
-Who suspended the host does not matter. A suspended host is eligible for
-resume when its last recorded remote-control state before the suspend was
-`pair-code-issued`, its rescue is clean with nothing unpushed, it is not
-protected, and it fits the profile, including a requested repository the
-reported bootstrap lists as Ready. A named suspend can leave that state.
-The idle timer cannot. `pair-code-issued` is reported only on the live
-daemon path, which sets the agent busy, and a busy agent is not suspended
-(`internal/agentd/codex_remote.go:393-404`,
+Who suspended the host does not matter. Until slice 6, a suspended host is
+eligible for resume when its last recorded remote-control state before the
+suspend was `pair-code-issued`, its rescue is clean with nothing unpushed,
+it is not protected, and it fits the profile, including a requested
+repository the reported bootstrap lists as Ready. A named suspend can leave
+that state. The idle timer cannot. `pair-code-issued` is reported only on
+the live daemon path, which sets the agent busy, and a busy agent is not
+suspended (`internal/agentd/codex_remote.go:393-404`,
 `internal/controller/reconciler.go:812-814`). When the keeper projection
 lapses, the state becomes `login-required` and the idle timer can suspend
-after 72 hours. Rule 5 then excludes that host.
+after 72 hours. Until slice 6, rule 5 then excludes that host. After slice
+6, rule 5 is the durable record together with a current keeper login, so
+that lapse does not by itself exclude a host the record shows was paired.
 
 The three hosts the idle timer suspended on 2026-11-07 stay out under the
-rules that remain. `dev-env-1027-010042` fails rule 5: its last state is
-`login-required`, not `pair-code-issued`. `dev-env-1019-205125` fails rule 4
-(67 unpushed refs) and rule 5 (last state `login-required`).
-`haynes-ops-1023-041051` fails rule 4 (42 unpushed refs) and rule 5 (last
-state `login-required`).
+rule that applies until slice 6. `dev-env-1027-010042` fails rule 5: its
+last state is `login-required`, not `pair-code-issued`.
+`dev-env-1019-205125` fails rule 4 (67 unpushed refs) and rule 5 (last state
+`login-required`). `haynes-ops-1023-041051` fails rule 4 (42 unpushed refs)
+and rule 5 (last state `login-required`). Section 3 has no durable record
+that a pairing code was issued for any of them. After slice 6 they stay out
+until such a record exists, and the unpushed-work rule still excludes the
+two that have unpushed refs.
 
 No suspended host in section 3 is eligible. That is a result of the rules,
 not a gap in the read.
@@ -603,16 +627,21 @@ sets the agent busy (`internal/agentd/codex_remote.go:393-404`), so
 (`internal/controller/reconciler.go:812-814`). The idle timer can suspend
 the host after the keeper projection lapses: the state becomes
 `login-required`, which is not busy, and the window for a remote session is
-72 hours. Rule 5 then excludes that host, and the next request creates a
-host Tom has to pair. Holding archive for a pool host is not built here
+72 hours. Until slice 6, rule 5 then excludes that host, and the next
+request creates a host Tom has to pair. After slice 6, rule 5 is the
+durable record that a pairing code was issued, used with a current keeper
+login (ruling E), and this lapse does not exclude a host that has the
+record. Holding archive for a pool host is not built here
 (section 10).
 
 `dev-env-1110-230548` is the pool's host for profile `dev`. No tooling in
 this design suspends it.
 
-**Ready**, repeated so the pool has one sentence: paired
-(`pair-code-issued`), on the current image, and the requested folder trusted
-by story 695. Suitable can be short of ready. The result says which.
+**Ready**, repeated so the pool has one sentence: paired, on the current
+image, and the requested folder trusted by story 695. Until slice 6, paired
+is `pair-code-issued`. After slice 6, paired is the durable record that a
+pairing code was issued, together with a current keeper login (ruling E).
+Suitable can be short of ready. The result says which.
 
 No host in section 3 is adopted by this design. Question 1 is answered no
 (section 11). The only host the selector can use tonight that passes
@@ -676,7 +705,7 @@ filled where a host was considered:
 | `remote_unavailable` | Running, and the remote state is `login-required`, `offline`, `starting` or `errored` | Not restarted. It still counts toward the cell cap, and the result may `report` it |
 | `protected` | Recorded on a skipped host | That host is not leased, resumed or launched |
 | `rescue_blocked` | Rescue `Failed`, or removal blocked | Not resumed |
-| `pairing_unknown` | Suspended, and the last state is not `pair-code-issued` | Not resumed |
+| `pairing_unknown` | Suspended, and pairing is not shown. Until slice 6, the last state is not `pair-code-issued`. After slice 6, the session has no durable record that a pairing code was issued | Not resumed |
 | `unpaired` | Running and `unpaired` | Not used, and not sent to `pair` |
 | `image_outdated` | Running, revision not current | Not suspended and not used |
 | `profile_mismatch` | Resolved profile does not fit | Not used |
@@ -767,6 +796,15 @@ result's `ready` becomes true for that repo. Until that record exists, the
 slice's test expects `folder_trust_pending`. This slice does not invent a
 trust write of its own.
 
+**Slice 6. The durable pairing record (story 703).** A status field on the
+session records that a pairing code was issued. Resume eligibility uses that
+record together with a current keeper login, not the last transient
+remote-control state (ruling E). The slice copies the CRD to haynes-ops
+before any operator that writes the field. Tests: a host that was paired,
+then read `login-required` and was suspended, is eligible once the keeper
+login is current; a host that never had a code issued is not. Slice 1 does
+not add the field.
+
 ## 10. Open questions
 
 Answered 2026-11-11 by the coordinator. Section 11 records each answer.
@@ -777,7 +815,8 @@ Nothing below asks Tom.
    them hold unpushed branches. `dev-env-1019-205125` is also the parent of
    a protected running session. Recommendation: do not adopt any of them.
    None is eligible under section 4 anyway, because none has a last state of
-   `pair-code-issued`.
+   `pair-code-issued`. Until slice 6 that last state is the test. After it,
+   the test is the durable record, and section 3 does not contain one.
    Leave them on the existing archive clock. Do not ask Tom unless a later
    story names one host and asks to resume it. This design's live check does
    not.
@@ -816,7 +855,7 @@ is not built here, and this design does not write that ADR.
 ## 11. Rulings (coordinator dev-env-fable-coordinator-1109, 2026-11-11)
 
 The coordinator accepted this design and ruled the five questions and the
-four points below. None of this is Tom's. His words are the three sentences
+points below. None of this is Tom's. His words are the three sentences
 in section 1.
 
 1. **Adopting the older suspended hosts: no.** Their pairing state is
@@ -859,3 +898,15 @@ host is a later ADR, recommended in section 10, and is not built here.
 **Ruling D.** `dev-env-1110-230548` is the pool's host for profile `dev`.
 No tooling in this design suspends it. Slice 3's live check stays on that
 host, and its expected reason updates once story 695 has shipped.
+
+**Ruling E** (coordinator dev-env-fable-coordinator-1109, merge comment on
+dev-env PR 1059, 2026-11-11). The pool loses a host when the keeper's Codex
+login lapses for more than 72 hours: the host reads `login-required`, the
+idle timer suspends it, and rule 5 excludes it because its last state is
+not `pair-code-issued`, although its pairing on the volume is intact. Rule
+5 cannot tell "never paired" from "paired, then the login lapsed". So the
+platform records, durably on the session, that a pairing code was issued,
+and eligibility for resume uses that record together with a current keeper
+login, not the last transient state. That is a status field, so the slice
+that adds it copies the CRD to haynes-ops first. The status field is slice
+6, story 703.
