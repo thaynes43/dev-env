@@ -68,7 +68,10 @@ JSON states and exits:
 Every tool call has a five-second timeout; observation waits one second by
 default (`--observe-seconds 0..5`). A living pane may be blocked on a real provider
 folder-trust prompt, authentication, connection or another error. The wrapper
-cannot establish any of those from process status. Disclose genuine trust prompts
+cannot establish any of those from process status. `thread start`'s agentd
+writes trust for a platform clone under `~/repos` before it runs this wrapper
+(DESIGN-057 section 12). The wrapper still does not write trust and does not
+send keys. Disclose genuine trust prompts
 to the authorized person; never silently approve an unknown folder. Never paste
 TUI input while a native question modal is pending. Subprocess output and pane
 content are not captured into the JSON receipt; no other conversation is read.

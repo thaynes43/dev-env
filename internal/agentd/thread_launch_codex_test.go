@@ -134,6 +134,7 @@ func threadHost(t *testing.T) (Settings, protocol.Session, string) {
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	gitInitRepo(t, cwd)
 	sess := protocol.Session{Name: "codex-host-1", Repo: "dev-env", Agent: protocol.AgentCodex, Mode: protocol.ModeRemote, Model: "gpt-6-astra"}
 	return s, sess, cwd
 }
@@ -256,7 +257,7 @@ func TestCodexThreadPreflightRefusals(t *testing.T) {
 		{"symlinked repo", func(_ *threadFake, _ *protocol.Session, r *CodexThreadRequest, s Settings) {
 			_ = os.Symlink(s.ClonePath("dev-env"), s.ClonePath("linked"))
 			r.Repo = "linked"
-		}, apiv1.ThreadFailed, "repo_unavailable"},
+		}, apiv1.ThreadFailed, "folder_not_qualified"},
 		{"bad name", func(_ *threadFake, _ *protocol.Session, r *CodexThreadRequest, _ Settings) { r.Name = "-x" }, apiv1.ThreadFailed, "invalid_input"},
 		{"alias model", func(_ *threadFake, _ *protocol.Session, r *CodexThreadRequest, _ Settings) { r.Model = "gpt" }, apiv1.ThreadFailed, "invalid_input"},
 		{"wrapper effort", func(_ *threadFake, _ *protocol.Session, r *CodexThreadRequest, _ Settings) { r.Effort = "ultra" }, apiv1.ThreadFailed, "invalid_input"},
@@ -563,7 +564,6 @@ func TestCodexThreadObserverRPC(t *testing.T) {
 // them under item, so that decoder reports no agent message. A copy of those
 // fields on the entry itself must not count: only item is the ThreadItem.
 func TestCodexFirstTurnReadsNestedThreadItem(t *testing.T) {
-	const cwd = "/home/dev/repos/dev-env"
 	s, _ := threadRPCFixture(t, func(method string, _ map[string]any) any {
 		switch method {
 		case "thread/turns/list":

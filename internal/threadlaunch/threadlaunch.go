@@ -104,11 +104,13 @@ var messages = map[string]string{
 	"remote_disconnected":              "The host's Codex daemon is not connected to Remote Control",
 	"pairing_required":                 "This host never issued a pairing code, so no phone is paired: run agent-run pair <host> and have Tom type the code",
 	"repo_unavailable":                 "The repository is not a directory on the host",
+	"folder_not_qualified":             "The folder is not the resolved path of a repository the platform bootstrapped for this session under ~/repos. The launch stopped before starting a client",
+	"codex_config_invalid":             "Codex config.toml could not be parsed or updated safely, so it was left unchanged and the launch stopped",
 	"name_consumed":                    "This thread name was already used on the host; choose another name",
 	"client_unavailable":               "The Codex client, tmux or the packaged wrapper is unavailable on the host; nothing was launched",
 	"launch_unconfirmed":               "The client launch outcome is unknown; inspect the named tmux session on the host and never retry automatically",
 	"client_not_running":               "The client did not survive its first observation; inspect the named tmux session on the host and never retry automatically",
-	"thread_not_observed":              "The client runs but no thread appeared; it may be waiting at a folder-trust or other prompt in the named tmux session. An authorized person decides; never send keys while a native question is pending",
+	"thread_not_observed":              "The client runs but no thread appeared; it may be waiting at a prompt in the named tmux session. A repository the platform bootstrapped under ~/repos is trusted in Codex's config before launch. Never send keys while a native question is pending",
 	"thread_ambiguous":                 "More than one new thread matches this launch; inspect the host before any retry",
 	"hidden_source":                    "The thread was created with a source the phone's default list hides",
 	"turn_failed":                      "The thread's first turn failed or was interrupted",
@@ -157,7 +159,8 @@ var ErrNotObservable = errors.New("first response not observable")
 // Recorder and returns a *Stop to end the run. Any other error ends it as
 // unconfirmed at the current phase: nothing is ever retried after Create.
 type Adapter interface {
-	// Preflight checks the host and pairing. It creates nothing.
+	// Preflight checks the host and pairing. It creates no thread. A Codex
+	// launch also records folder trust for its platform repository.
 	Preflight(context.Context, *Recorder) error
 	// Create starts the provider client at most once.
 	Create(context.Context, *Recorder) error

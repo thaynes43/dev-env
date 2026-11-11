@@ -754,7 +754,12 @@ worktree, as on the phone. --wait (at most 10m) bounds the whole launch.
                   is caller_not_allowed. The thread is the
                   native codex --remote TUI (scripts/codex-clean-session.py) in a tmux
                   session named --name (default thread-<UTC mmdd-HHMMSS>) in
-                  ~/repos/<repo> on the host (default: the host's repo). Never codex exec
+                  ~/repos/<repo> on the host (default: the host's repo). Before the client
+                  starts, agentd marks that resolved path trusted in Codex's config.toml
+                  (projects."<path>".trust_level). A folder that is not that repository
+                  stops at once with folder_not_qualified. A config.toml that cannot be
+                  updated safely stops with codex_config_invalid and is left unchanged.
+                  thread status does not write trust. Never codex exec
                   or queue, and no sandbox or approval flag.
 --agent claude    a new remote session, through rc start. It follows --wait (default
                   5m, at most 10m). Agent start is read from the session status,

@@ -5,13 +5,16 @@
   2026-11-09; live acceptance pending.
   Section 11 (`thread status`, the observe-only recheck, OP492) in source,
   2026-11-10; exec route only; live acceptance pending.
+  Section 12 (folder trust for a platform repository, OP695) in source,
+  2026-11-10; live acceptance pending.
 - **Tracking:** [Story OP489](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/489),
   under [Epic #91](https://work.haynesnetwork.com/work_packages/91). It supersedes
   [OP272](https://work.haynesnetwork.com/work_packages/272)'s runtime activation
   (journal 5990) and meets [OP481](https://work.haynesnetwork.com/work_packages/481)
   acceptance item 2 for this route. [Story OP495](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/495)
   adds section 10. [Story OP492](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/492)
-  adds section 11.
+  adds section 11. [Story OP695](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/695)
+  adds section 12.
 - **Origin:** Tom, 2026-11-09: "Yes build it but meatball has been starting these
   so check to see what's built already don't duplicate what they have but you need
   that ability too. You need to be able to start Grok too and other providers as we
@@ -154,8 +157,9 @@ one adapter and one registry row.
 
 The observer uses a fresh connection per poll, makes only read calls, and allows
 1 MiB frames. If no thread appears, the message says the client may be waiting
-at a folder-trust or other prompt in the named tmux session: an authorized
-person decides, and nobody sends keys while a native question is pending.
+at a prompt in the named tmux session. A repository the platform bootstrapped
+under `~/repos` is trusted before launch (section 12). Any other prompt is left
+for an authorized person, and nobody sends keys while a native question is pending.
 
 ## 6. Claude and Cursor/Grok adapters
 
@@ -455,3 +459,73 @@ fake can: how Codex 0.160.1 answers `thread/turns/list` and
 restarted. A launch reads them within its wait; a status pass may run much
 later. If they fail there, status reports `observation_unavailable`; that is
 truthful but not useful, and it would need a design change, not a retry.
+
+## 12. Folder trust for a platform repository (2026-11-10, OP695)
+
+**Ruling.** Tom, 2026-11-10, by phone prompt in coordinator session
+dev-env-fable-coordinator-1109: "You cannot be asking this it needs to happen
+automatically. It's going to happen every time make it part of our tooling to
+accept and trust".
+
+For a folder the platform itself bootstrapped, that replaces "an authorized
+person decides folder trust". The tooling accepts the folder before the client
+starts. Any other prompt (authentication, a later question) is unchanged:
+nobody sends keys, and an authorized person still decides those.
+
+**Where Codex 0.160.1 stores it.** `codex --help` says configuration is
+`$CODEX_HOME/config.toml` (the help text names `~/.codex/config.toml`; on a
+host that directory is `Settings.CodexHome`). There is no `codex trust`
+subcommand, and `--dangerously-bypass-hook-trust` is hook trust, not this
+prompt. `codex app-server generate-json-schema --experimental` does not name
+the key: its `Config` object sets `additionalProperties: true` and has no
+`projects` field. The 0.160.1 binary does. Its onboarding writer
+(`tui/src/onboarding/onboarding_screen.rs`, the trace `tui-project-trust-write`)
+persists `projects."<absolute path>".trust_level`. `ProjectConfig` has that one
+field, and `TrustLevel` is `trusted` or `untrusted`. The same binary's folder
+prompt says the decision is saved. The entry Codex itself writes is:
+
+```toml
+[projects."/home/dev/repos/<repo>"]
+trust_level = "trusted"
+```
+
+A later rewrite of `config.toml` by Codex keeps a key it owns. A sidecar file
+would not.
+
+**Who writes it.** agentd, inside `thread start`'s preflight, after the same
+host, pairing and cwd checks the launch already makes, and before the wrapper
+runs. The wrapper does not: it cannot see which folders the platform
+bootstrapped, its contract is to start one client and never approve a folder,
+and a status pass must not run it. The write is configuration, never keystrokes
+into a client. `thread status` does not write trust.
+
+**What qualifies.** Only the resolved path of one repository the platform
+bootstrapped for that session: `~/repos/<repo>`, where `<repo>` is the launch's
+repository name (the request's, otherwise the host's). The path is absolute and
+clean, no component is a symlink, `EvalSymlinks` returns that same path, and
+the directory is a Git repository whose toplevel is that path. Its `.git` is a
+real directory there, not a file and not a symlink. Nothing a handoff names.
+Nothing outside `~/repos`. Nothing above that repository root, and not a
+subdirectory of it.
+
+**When it does not.** A folder that does not qualify stops the launch at once
+with `folder_not_qualified` (outcome `failed`, exit 1), before the wrapper and
+before the wait. A `config.toml` that cannot be parsed, is not a regular file,
+or holds `projects` in a shape that cannot be updated without rewriting other
+keys, stops the launch with `codex_config_invalid` and the file is left byte
+for byte as it was. A config that already trusts the folder is left untouched.
+An update changes only that one entry: a missing folder is appended as its own
+table, and an existing table keeps every other line. Other keys and other
+folders stay byte for byte.
+
+**Out of this section.** Claude's and Cursor's prompts. Pairing. Any other
+Codex setting. A haynes-ops change. Turning a flag on.
+
+The host config composer (`codexHostConfig`) already keeps a trusted project it
+did not itself add, on a public host. A private Codex host
+(`AGENTD_ENABLE_PRIVATE_CODEX_HOST`) refuses a trusted root outside the catalog
+project roots it owns. This launch writes the repository path on the host that
+serves `thread start`. That private compose is a separate path and is not
+changed here; a private host's next compose fails closed if it sees this extra
+trusted root.
+

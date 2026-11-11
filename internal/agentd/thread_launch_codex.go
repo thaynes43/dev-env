@@ -26,7 +26,9 @@ import (
 // `agent-run pair` uses. It creates the thread only through the packaged
 // scripts/codex-clean-session.py (the native `codex --remote` TUI, the
 // phone-visible `vscode` source), never `codex exec`, `codex queue` or
-// `thread/start`, and passes no sandbox or approval flag. Everything else is
+// `thread/start`, and passes no sandbox or approval flag. Before that client
+// starts, thread start writes folder trust for the one platform repository
+// (DESIGN-057 section 12). thread status does not. Everything else is
 // read-only observation over the peer-verified control socket. It never pairs,
 // logs in, resumes, forks or retries a launch.
 
@@ -295,6 +297,15 @@ func (a *codexThreadAdapter) Preflight(ctx context.Context, r *threadlaunch.Reco
 	if err := a.resolveCwd(r); err != nil {
 		return err
 	}
+	// Trust the platform clone before the client starts, so Codex does not
+	// stop on its folder prompt. A status pass does not call Preflight.
+	if err := ensureCodexRepoTrust(ctx, a.s, a.cwd); err != nil {
+		code := "codex_config_invalid"
+		if errors.Is(err, errFolderNotQualified) {
+			code = "folder_not_qualified"
+		}
+		return threadlaunch.Halt(apiv1.ThreadFailed, code, apiv1.ThreadPhaseHostReady)
+	}
 	before, err := a.d.list(ctx, a.s, a.pid, a.cwd, true)
 	if err != nil {
 		return threadlaunch.Halt(apiv1.ThreadFailed, "observation_unavailable", apiv1.ThreadPhaseHostReady)
@@ -343,8 +354,14 @@ func (a *codexThreadAdapter) resolveCwd(r *threadlaunch.Recorder) error {
 		return threadlaunch.Halt(apiv1.ThreadFailed, "repo_unavailable", apiv1.ThreadPhaseHostReady)
 	}
 	a.cwd = a.s.ClonePath(repo)
-	if info, err := os.Stat(a.cwd); err != nil || !info.IsDir() || noSymlinkComponents(a.cwd) != nil {
+	info, err := os.Stat(a.cwd)
+	if err != nil || !info.IsDir() {
 		return threadlaunch.Halt(apiv1.ThreadFailed, "repo_unavailable", apiv1.ThreadPhaseHostReady)
+	}
+	// A symlink, including one that leaves ~/repos, is not a folder this launch
+	// may trust. A missing directory stays repo_unavailable.
+	if noSymlinkComponents(a.cwd) != nil {
+		return threadlaunch.Halt(apiv1.ThreadFailed, "folder_not_qualified", apiv1.ThreadPhaseHostReady)
 	}
 	r.Result.Cwd = a.cwd
 	return nil
