@@ -817,10 +817,14 @@ is woken by a command it runs itself.
   not returned, no clock is read, and a note stored between that list and
   the start of the watch is in the watch.
 - **An expired cursor is said, not guessed.** The API server keeps only a
-  window of history. When it refuses the cursor's version as too old, the
+  window of history. It reports a version that is too old in one of two
+  ways: the watch call fails with 410, or the watch opens and its first
+  event is an `Error` carrying status 410. Both mean the same here. The
   answer is `resync` with a fresh cursor from a new list, and the caller
   runs `agent-run parent list` to see what it may have missed. The handler
-  never falls back to comparing times.
+  never falls back to comparing times, and it does not answer 503 for a 410:
+  503 is for a watch that cannot be had at all, which a retry with the same
+  cursor may fix; a 410 never is.
 - **An idle parent keeps a usable cursor.** The watch asks the API server
   for bookmarks. At the deadline the answer is `waiting`, with the newest
   version the watch reported: a bookmark, or an event for any parent's note.
@@ -858,7 +862,8 @@ the order they were stored, whatever their names; forty notes in one second
 are all returned, none twice and none skipped; a note stored between the
 list and the watch is returned; with no `after`, notes that already exist
 are not returned and no clock is read; an expired cursor answers `resync`
-with a fresh cursor and returns no note; a `Modified` event for an old note
+with a fresh cursor and returns no note, both when the watch call fails with
+410 and when the stream sends an `Error` event with status 410; a `Modified` event for an old note
 wakes nobody; after a wait that saw only a bookmark, the returned cursor is
 the bookmark's version and the next call accepts it; a cursor that is not a resource
 version is 422; another session's notes never wake the caller; a reply and a
