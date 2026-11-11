@@ -146,8 +146,9 @@ func codexBootstrapReady(s Settings, repo string) error {
 
 // writeCodexProjectTrust asks the host daemon to set
 // projects."<folder>".trust_level to trusted. It reads the user-layer version
-// first and sends it as expectedVersion. A version conflict is retried at
-// most codexTrustVersionRetries times.
+// first and sends it as expectedVersion on every write. A read with no user
+// layer, or an empty version, refuses: this writer does not create the entry.
+// A version conflict is retried at most codexTrustVersionRetries times.
 func writeCodexProjectTrust(ctx context.Context, s Settings, pid int, folder string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -163,18 +164,16 @@ func writeCodexProjectTrust(ctx context.Context, s Settings, pid int, folder str
 	if state.trusted {
 		return nil
 	}
-	if state.hasUser && state.version == "" {
+	if !state.hasUser || state.version == "" {
 		return errCodexConfigInvalid
 	}
 	version := state.version
 	for attempt := 0; attempt <= codexTrustVersionRetries; attempt++ {
 		params := map[string]any{
-			"keyPath":       codexTrustKeyPath(folder),
-			"value":         "trusted",
-			"mergeStrategy": "replace",
-		}
-		if version != "" {
-			params["expectedVersion"] = version
+			"keyPath":         codexTrustKeyPath(folder),
+			"value":           "trusted",
+			"mergeStrategy":   "replace",
+			"expectedVersion": version,
 		}
 		raw, fault, sent, callErr := conn.callOutcome("config/value/write", params)
 		if callErr != nil || !sent {
@@ -227,8 +226,8 @@ type codexUserTrust struct {
 // readCodexUserTrust reads config/read with layers. The user layer's version
 // is what expectedVersion must match. A missing layers list, a version that
 // is not the 0.160.1 sha256 form, or more than one user layer refuses before
-// a write. No user layer is a first write: version stays empty and the call
-// omits expectedVersion, because there is no version to send.
+// a write. No user layer leaves hasUser false and version empty. That is not
+// a first write: the caller refuses it and does not create the entry.
 func readCodexUserTrust(r *codexHostRPC, folder string) (codexUserTrust, error) {
 	raw, fault, sent, err := r.callOutcome("config/read", map[string]any{"includeLayers": true})
 	if err != nil || fault != nil || !sent {

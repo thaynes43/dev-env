@@ -25,6 +25,10 @@ import (
 
 const trustLayerVersion = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
+// trustRetryVersion is a second user-layer version, distinct from the one
+// the first read returns, so a conflict retry can be checked on the request.
+const trustRetryVersion = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
 func gitInitRepo(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -176,6 +180,50 @@ func countMethod(seen []map[string]any, method string) int {
 		}
 	}
 	return n
+}
+
+func writeExpectedVersions(seen []map[string]any) []any {
+	var out []any
+	for _, r := range seen {
+		if r["method"] != "config/value/write" {
+			continue
+		}
+		params, _ := r["params"].(map[string]any)
+		out = append(out, params["expectedVersion"])
+	}
+	return out
+}
+
+// launchTrust runs one thread start against the fake daemon. prepare may
+// change the boot record after threadHost writes it and before the launch.
+func launchTrust(t *testing.T, prepare func(*testing.T, Settings), reply func(cwd, method string) trustReply) (apiv1.ThreadLaunchResult, []map[string]any) {
+	t.Helper()
+	s, sess, cwd := threadHost(t)
+	if prepare != nil {
+		prepare(t, s)
+	}
+	home, seen := trustDaemon(t, func(method string, _ map[string]any) trustReply {
+		return reply(cwd, method)
+	})
+	s.CodexHome = home
+	f := newThreadFake(cwd)
+	got := startCodexThread(context.Background(), s, sess, goodThreadRequest(), trustDeps(f))
+	if got.Outcome == apiv1.ThreadResponded {
+		if len(f.launches) != 1 {
+			t.Fatalf("responded with %d launches", len(f.launches))
+		}
+	} else if len(f.launches) != 0 {
+		t.Fatalf("%s started %d launches", got.Outcome, len(f.launches))
+	}
+	return got, seen()
+}
+
+func trustVersionConflict() map[string]any {
+	return map[string]any{
+		"code":    -32600,
+		"message": "Configuration was modified since last read. Fetch latest version and retry.",
+		"data":    map[string]any{"config_write_error_code": "configVersionConflict"},
+	}
 }
 
 func pinnedSchema(t *testing.T, name, digest string) map[string]any {
@@ -538,4 +586,201 @@ func TestCodexRepoTrustPrivateHostDoesNotWrite(t *testing.T) {
 	if file, err := os.ReadFile(path); err != nil || string(file) != string(original) {
 		t.Fatalf("private host config changed: %v %q", err, file)
 	}
+}
+
+func refuseTrust(t *testing.T, got apiv1.ThreadLaunchResult, seen []map[string]any, code string, writes int) {
+	t.Helper()
+	if got.Outcome != apiv1.ThreadFailed || got.Error == nil || got.Error.Code != code || got.Error.Message != threadlaunch.Message(code) || countMethod(seen, "config/value/write") != writes {
+		t.Fatalf("got %s/%+v writes %d", got.Outcome, got.Error, countMethod(seen, "config/value/write"))
+	}
+}
+
+// (a) No user layer is refused, and no config/value/write is sent.
+func TestCodexRepoTrustNoUserLayer(t *testing.T) {
+	got, seen := launchTrust(t, nil, func(cwd, method string) trustReply {
+		switch method {
+		case "config/read":
+			result := trustReadResult(cwd, false)
+			result["layers"] = []any{}
+			return trustReply{result: result}
+		case "config/value/write":
+			return trustReply{result: trustWriteResult()}
+		}
+		return trustReply{}
+	})
+	refuseTrust(t, got, seen, "codex_config_invalid", 0)
+}
+
+// (b) Two user layers are refused, and no config/value/write is sent.
+func TestCodexRepoTrustTwoUserLayers(t *testing.T) {
+	got, seen := launchTrust(t, nil, func(cwd, method string) trustReply {
+		switch method {
+		case "config/read":
+			one := trustReadResult(cwd, false)
+			two := trustReadResult(cwd, false)
+			one["layers"] = []any{one["layers"].([]any)[0], two["layers"].([]any)[0]}
+			return trustReply{result: one}
+		case "config/value/write":
+			return trustReply{result: trustWriteResult()}
+		}
+		return trustReply{}
+	})
+	refuseTrust(t, got, seen, "codex_config_invalid", 0)
+}
+
+// (c) A user-layer version that is not the sha256 form is refused, and no
+// config/value/write is sent.
+func TestCodexRepoTrustVersionFormRefused(t *testing.T) {
+	got, seen := launchTrust(t, nil, func(cwd, method string) trustReply {
+		switch method {
+		case "config/read":
+			result := trustReadResult(cwd, false)
+			result["layers"].([]any)[0].(map[string]any)["version"] = "not-a-version"
+			return trustReply{result: result}
+		case "config/value/write":
+			return trustReply{result: trustWriteResult()}
+		}
+		return trustReply{}
+	})
+	refuseTrust(t, got, seen, "codex_config_invalid", 0)
+}
+
+// (d) A version conflict is retried. The reread returns a new version, and
+// the retry's config/value/write carries that version as expectedVersion.
+func TestCodexRepoTrustConflictRetryUsesNewVersion(t *testing.T) {
+	reads, writes := 0, 0
+	got, seen := launchTrust(t, nil, func(cwd, method string) trustReply {
+		switch method {
+		case "config/read":
+			reads++
+			version := trustLayerVersion
+			if reads > 1 {
+				version = trustRetryVersion
+			}
+			result := trustReadResult(cwd, false)
+			result["layers"].([]any)[0].(map[string]any)["version"] = version
+			return trustReply{result: result}
+		case "config/value/write":
+			writes++
+			if writes == 1 {
+				return trustReply{fault: trustVersionConflict()}
+			}
+			ok := trustWriteResult()
+			ok["version"] = trustRetryVersion
+			return trustReply{result: ok}
+		}
+		return trustReply{}
+	})
+	versions := writeExpectedVersions(seen)
+	if got.Outcome != apiv1.ThreadResponded || got.Error != nil || len(versions) != 2 || versions[0] != trustLayerVersion || versions[1] != trustRetryVersion {
+		t.Fatalf("got %s/%+v versions %v", got.Outcome, got.Error, versions)
+	}
+}
+
+// (e) A write result that is not a confirmed ok is codex_trust_unconfirmed.
+// Each case sent one config/value/write.
+func TestCodexRepoTrustUnconfirmedWriteResults(t *testing.T) {
+	cases := []struct {
+		name   string
+		result any
+	}{
+		{name: "okOverridden", result: map[string]any{"filePath": "/home/dev/.codex/config.toml", "status": "okOverridden", "version": trustLayerVersion}},
+		{name: "malformed", result: []any{}},
+		{name: "relativeFilePath", result: map[string]any{"filePath": "config.toml", "status": "ok", "version": trustLayerVersion}},
+		{name: "badVersion", result: map[string]any{"filePath": "/home/dev/.codex/config.toml", "status": "ok", "version": "not-a-version"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, seen := launchTrust(t, nil, func(cwd, method string) trustReply {
+				switch method {
+				case "config/read":
+					return trustReply{result: trustReadResult(cwd, false)}
+				case "config/value/write":
+					return trustReply{result: tc.result}
+				}
+				return trustReply{}
+			})
+			refuseTrust(t, got, seen, "codex_trust_unconfirmed", 1)
+		})
+	}
+}
+
+// (f) A regular boot record reached through a symlinked ancestor is refused
+// before any config/value/write. The final file is not a symlink, so the
+// refusal is the ancestor check.
+func TestCodexRepoTrustBootRecordAncestorSymlink(t *testing.T) {
+	got, seen := launchTrust(t, func(t *testing.T, s Settings) {
+		t.Helper()
+		held := s.StateDir + "-real"
+		if err := os.Rename(s.StateDir, held); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(held, s.StateDir); err != nil {
+			t.Fatal(err)
+		}
+		parent, err := os.Lstat(s.StateDir)
+		if err != nil || parent.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("state dir %v %v", parent, err)
+		}
+		final, err := os.Lstat(filepath.Join(s.StateDir, bootFile))
+		if err != nil || !final.Mode().IsRegular() || final.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("boot record %v %v", final, err)
+		}
+	}, func(cwd, method string) trustReply {
+		switch method {
+		case "config/read":
+			return trustReply{result: trustReadResult(cwd, false)}
+		case "config/value/write":
+			return trustReply{result: trustWriteResult()}
+		}
+		return trustReply{}
+	})
+	refuseTrust(t, got, seen, "folder_not_qualified", 0)
+}
+
+// (g) A boot record over the size limit is refused before any
+// config/value/write. The bytes are still a Ready record, so the refusal is
+// the limit.
+func TestCodexRepoTrustBootRecordOverLimit(t *testing.T) {
+	got, seen := launchTrust(t, func(t *testing.T, s Settings) {
+		t.Helper()
+		path := s.statePath(bootFile)
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := strings.TrimRight(string(body), "\n")
+		if text == "" || text[len(text)-1] != '}' {
+			t.Fatalf("boot record does not end as one object")
+		}
+		padded := text[:len(text)-1] + `,"pad":"` + strings.Repeat("a", codexBootstrapBound) + `"}`
+		if len(padded) <= codexBootstrapBound {
+			t.Fatalf("padded record is %d bytes", len(padded))
+		}
+		var boot bootRecord
+		if json.Unmarshal([]byte(padded), &boot) != nil || boot.ProjectBootstrap == nil {
+			t.Fatal("padded record is not a readable bootstrap")
+		}
+		ready := false
+		for _, item := range boot.ProjectBootstrap.Repositories {
+			if item.Name == "dev-env" && item.State == protocol.BootstrapReady {
+				ready = true
+			}
+		}
+		if !ready {
+			t.Fatal("padded record does not name the repository Ready")
+		}
+		if err := os.WriteFile(path, []byte(padded), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}, func(cwd, method string) trustReply {
+		switch method {
+		case "config/read":
+			return trustReply{result: trustReadResult(cwd, false)}
+		case "config/value/write":
+			return trustReply{result: trustWriteResult()}
+		}
+		return trustReply{}
+	})
+	refuseTrust(t, got, seen, "folder_not_qualified", 0)
 }

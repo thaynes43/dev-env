@@ -534,7 +534,10 @@ and it is not blanket approval of project hooks.
 bootstrap record on the host: `~/.agentd/boot.json` field `projectBootstrap`,
 the value `CollectStatus` copies into the status it reports. The repository
 entry's state is `Ready`, which means the platform cloned it and the refresh
-left it usable. `Preserved` is not that state, and neither is a name the
+left it usable. The boot-record check answers whether this platform's
+bootstrap reported the repository Ready; it is not proof against a thread
+running as the host's own user, which can write Codex trust itself.
+`Preserved` is not that state, and neither is a name the
 record does not list. The catalog's own state is not the test: a `Partial`
 catalog can still hold a `Ready` repository. The path checks stay. The path
 is the launch's repository (`--repo`, otherwise the host's), absolute and
