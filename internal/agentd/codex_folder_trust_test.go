@@ -47,11 +47,6 @@ func gitInitRepo(t *testing.T, dir string) {
 	}
 }
 
-func mustStat(path string) error {
-	_, err := os.Stat(path)
-	return err
-}
-
 // trustWriteResult is a ConfigWriteResponse: the fields the 0.160.1 schema requires.
 func trustWriteResult() map[string]any {
 	return map[string]any{
@@ -428,7 +423,7 @@ func TestCodexRepoTrustWriteErrors(t *testing.T) {
 }
 
 // A path outside the rule stops at once, before the wrapper and before any
-// wait, and writes no config.
+// wait, with folder_not_qualified.
 func TestCodexRepoTrustRefusesUnqualified(t *testing.T) {
 	t.Run("not a repository", func(t *testing.T) {
 		s, sess, cwd := threadHost(t)
@@ -440,8 +435,20 @@ func TestCodexRepoTrustRefusesUnqualified(t *testing.T) {
 		if got.Outcome != apiv1.ThreadFailed || got.Error == nil || got.Error.Code != "folder_not_qualified" || got.TotalMs != 0 || len(f.launches) != 0 {
 			t.Fatalf("got %s/%+v total %d launches %d", got.Outcome, got.Error, got.TotalMs, len(f.launches))
 		}
-		if _, err := os.Stat(filepath.Join(s.CodexHome, "config.toml")); !os.IsNotExist(err) {
-			t.Fatalf("config.toml err %v", err)
+	})
+	t.Run("invalid git dir", func(t *testing.T) {
+		s, sess, cwd := threadHost(t)
+		gitDir := filepath.Join(cwd, ".git")
+		if err := os.RemoveAll(gitDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(gitDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		f := newThreadFake(cwd)
+		got := launchThread(t, f, s, sess, goodThreadRequest())
+		if got.Outcome != apiv1.ThreadFailed || got.Error == nil || got.Error.Code != "folder_not_qualified" || got.TotalMs != 0 || len(f.launches) != 0 {
+			t.Fatalf("got %s/%+v total %d launches %d", got.Outcome, got.Error, got.TotalMs, len(f.launches))
 		}
 	})
 	s, _, cwd := threadHost(t)
@@ -462,9 +469,7 @@ func TestCodexRepoTrustRefusesUnqualified(t *testing.T) {
 	outside = append(outside, other, link)
 	for _, path := range outside {
 		t.Run(path, func(t *testing.T) {
-			home := t.TempDir()
-			s.CodexHome = filepath.Join(home, ".codex")
-			if err := ensureCodexRepoTrust(context.Background(), s, 0, path, nil); err == nil || !os.IsNotExist(mustStat(filepath.Join(s.CodexHome, "config.toml"))) {
+			if err := ensureCodexRepoTrust(context.Background(), s, 0, path, nil); !errors.Is(err, errFolderNotQualified) {
 				t.Fatalf("path %s err %v", path, err)
 			}
 		})
@@ -489,13 +494,20 @@ func TestCodexRepoTrustIgnoresHandoffPath(t *testing.T) {
 	}
 }
 
-// thread status resolves the folder and writes nothing.
+// thread status resolves the folder and does not call the trust writer.
 func TestCodexThreadStatusDoesNotWriteTrust(t *testing.T) {
 	s, sess, cwd := threadHost(t)
 	f := newThreadFake(cwd)
-	_, _ = observeThread(t, f, s, sess, CodexThreadStatusRequest{ThreadID: newThread})
-	if _, err := os.Stat(filepath.Join(s.CodexHome, "config.toml")); !os.IsNotExist(err) {
-		t.Fatalf("status wrote config: %v", err)
+	var calls []string
+	d := statusDeps(t, f, &calls)
+	called := false
+	d.trust = func(context.Context, Settings, int, string) error {
+		called = true
+		return errors.New("status must not write trust")
+	}
+	got := observeCodexThread(context.Background(), s, sess, CodexThreadStatusRequest{ThreadID: newThread}, d)
+	if called || (got.Error != nil && (got.Error.Code == "codex_config_invalid" || got.Error.Code == "codex_trust_unconfirmed")) {
+		t.Fatalf("status %s/%+v called %v", got.Outcome, got.Error, called)
 	}
 }
 
