@@ -229,7 +229,23 @@ func TestCoordinatorStopUsesReap(t *testing.T) {
 func TestCoordinatorBriefAndShortHelp(t *testing.T) {
 	h := newHarness(t)
 	h.mustRun(ExitOK, "coordinator", "brief", "--item", "527", "--hours", "4", "--workers", "3")
-	contains(t, "brief", h.stdout.String(), "opwork show 527 --history", "opwork claim 527", "4 hours", "3 workers", "claude-sonnet-5-5", "claude-opus-5-5", "gpt-6.1-sol", "grok-4.7-high", "grok-4.7-xhigh", "--project", "--profile dev", ".outcome.json", "blocked: <refusal>", "never stall on whoever started you", "agent-run parent tell --key <stable-key> --kind question", "agent-run parent wait <note>", "agent-run parent wait-any in the background", "printed cursor")
+	contains(t, "brief", h.stdout.String(), "opwork show 527 --history", "opwork claim 527", "4 hours", "3 workers", "claude-sonnet-5-5", "claude-opus-5-5", "gpt-6.1-sol", "grok-4.7-high", "grok-4.7-xhigh", "--project", "--profile dev", ".outcome.json", "blocked: <refusal>", "never stall on whoever started you", "agent-run parent tell --key <stable-key> --kind question", "agent-run parent wait <note>", "printed cursor")
+	steps := []string{
+		"agent-run parent wait-any --for 0",
+		"agent-run parent wait-any --after <cursor> in the background",
+		"prints a note, read that note with agent-run parent read and start again",
+		"prints waiting, start again with that",
+		"prints resync, read agent-run parent list and then start",
+	}
+	brief := h.stdout.String()
+	at := 0
+	for _, step := range steps {
+		next := strings.Index(brief[at:], step)
+		if next < 0 {
+			t.Fatalf("brief omits step %q\n%s", step, brief)
+		}
+		at += next + len(step)
+	}
 	if strings.Contains(h.stdout.String(), "ask Meatball") {
 		t.Fatal("the brief still forbids asking the parent")
 	}

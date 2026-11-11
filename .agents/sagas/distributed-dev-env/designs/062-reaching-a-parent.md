@@ -800,7 +800,7 @@ is woken by a command it runs itself.
 
 | Method and path | Who | Effect |
 |---|---|---|
-| `GET /v1/parent-notes/wait?seconds=N&after=CURSOR` | a session, for notes addressed to itself | holds until a note of kind question, result or blocker addressed to the caller is stored after CURSOR, or until N seconds. N is 1 to 900. Answers that note's name, child, kind and creation time, and a cursor; or `waiting`; or `resync` when the cursor is too old. No note text |
+| `GET /v1/parent-notes/wait?seconds=N&after=CURSOR` | a session, for notes addressed to itself | holds until a note of kind question, result or blocker addressed to the caller is stored after CURSOR, or until N seconds. N is 0 to 900. N of 0 returns `waiting` and the cursor at once, holds nothing and opens no watch. Otherwise it answers that note's name, child, kind and creation time, and a cursor; or `waiting`; or `resync` when the cursor is too old. No note text |
 
 - **The cursor is the API server's own position, not a time.** A note's
   creation time has one-second resolution and note names sort in no useful
@@ -813,8 +813,10 @@ is woken by a command it runs itself.
   recipient's name and UID on each note. It does not reuse the selectors of
   `listParentNotes`, which makes two calls with a kind requirement each. It answers the
   first note it sees stored for the caller. Only an `Added` event counts
-  as stored. A later change to a note that already exists, such as a label
-  or an annotation, never wakes the parent. The new cursor is that note's
+  as stored. A note's labels are written once, by the operator, which holds
+  no write verb on inbox records. If an administrator removes and restores a
+  note's labels by hand, the wait may name that note again. Granting the
+  operator a write verb on inbox records later reopens this. The new cursor is that note's
   resource version. Two notes stored in the same second come back in
   the order the API server stored them, one per call, with no cap.
 - **With no `after`, the cursor is the resource version of one list call**
@@ -841,26 +843,39 @@ is woken by a command it runs itself.
   stored between the last event read and that list would be skipped.
 - The cursor is opaque to the caller, at most 256 bytes, and carries no note
   text. A cursor that is not a resource version is refused with 422.
+
+**What the cursor is and is not.** The cursor is the API server's resource
+version, a cluster-wide counter of writes. It names no party, no note and no
+namespace. A session learns from it only that the cluster wrote something. It
+is not a secret and it is not bound to a recipient. The notes a call returns
+are decided by who the caller is, never by the cursor, so another session's
+cursor shows that session only its own notes. Encrypting it would need a key
+shared by both API replicas, a new credential for no gain in safety.
+
 - Authorisation is the inbox list's: a session sees only notes addressed to
   it, by name and UID. A CallerPolicy caller has no wait, as before
   (section 7.2).
 - It is one held read on the watch the operator already has, with
   `holdResponse` as in section 7.2. It counts against the same limit as
   `parent wait`: eight held reads for one session on one API replica
-  (ruling 5). A refused watch answers 503 and holds nothing.
+  (ruling 5). `seconds=0` is not one of those reads. A refused watch answers 503 and holds nothing.
 - It is behind `--enable-parent-notes`. No new flag, verb, annotation or
   stored state. The operator writes nothing.
 
 | Command | What it does |
 |---|---|
-| `agent-run parent wait-any [--after CURSOR] [--for 15m] [-o json]` | one held read. Prints the note's name, child and kind and the next cursor; or `waiting` and the cursor; or `resync` and a fresh cursor, which means: read `agent-run parent list`. Exit 0 for all three |
+| `agent-run parent wait-any [--after CURSOR] [--for 15m] [-o json]` | one held read, or `--for 0` which returns `waiting` and the cursor at once. Prints the note's name, child and kind and the next cursor; or `waiting` and the cursor; or `resync` and a fresh cursor, which means: read `agent-run parent list`. Exit 0 for all three. A failed later call prints the last confirmed cursor and exits with that failure's own code |
 
-**How a coordinator uses it.** After it dispatches a worker, it starts
-`agent-run parent wait-any` as a background command. Its harness wakes it
-when the command exits. It reads the note with `agent-run parent read NAME`
-and starts the command again with the printed cursor. The coordinator brief
-(`internal/agentrun/coordinator_brief.txt`) says so in the same change. A
-headless parent can run the same command in the foreground between steps.
+**How a coordinator uses it.** In this order. Take a cursor with
+`agent-run parent wait-any --for 0` before dispatching a worker. After
+dispatching, run `agent-run parent wait-any --after <cursor>` in the
+background. Its harness wakes it when the command exits. On a note, read it
+with `agent-run parent read NAME` and start again with the printed cursor.
+On `waiting`, start again with that cursor. On `resync`, read
+`agent-run parent list` and then start again with the printed cursor. The
+coordinator brief (`internal/agentrun/coordinator_brief.txt`) says the same
+five steps. A headless parent can run the same command in the foreground
+between steps.
 
 **Tests.** `internal/apiserver/parent_note_wait_any_test.go`: returns at once
 when a newer note exists; holds and returns when one is stored; `waiting` at

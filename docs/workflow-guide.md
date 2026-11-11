@@ -970,8 +970,10 @@ agent-run parent list --sent
 agent-run parent list
 agent-run parent read <name>
 agent-run parent answer <name> --key build-answer < answer.txt
-# After dispatching a worker, in the background:
-agent-run parent wait-any --for 15m
+# Before dispatching a worker, take a cursor:
+agent-run parent wait-any --for 0
+# After dispatching, in the background, and again after a note, waiting or resync:
+agent-run parent wait-any --after <cursor>
 # Back in the child session:
 agent-run parent wait <name> --for 15m
 ```
@@ -1059,13 +1061,22 @@ note's name, child and kind, then the next cursor; or `waiting` and the
 cursor; or `resync` and a fresh cursor, which means run
 `agent-run parent list`. It never prints the note's text or key. The cursor
 is the API server's resource version. With no `--after`, notes already
-stored are not returned. `--for` defaults to `15m`. A longer wait calls
+stored are not returned. `--for` defaults to `15m`. `--for 0` returns
+`waiting` and the cursor at once: the given `--after`, or the list's version
+when none is given. It takes no slot and opens no watch. A longer wait calls
 again with the cursor the previous call returned, in chunks of at most 900
 seconds. The client timeout is that chunk plus two minutes, the same as
 `parent wait`. A refused watch answers 503 and holds nothing. Neither side
-polls. A CallerPolicy caller has no wait. After dispatching a worker, a
-coordinator starts the command in the background, reads the named note, and
-starts the command again with the printed cursor.
+polls. A CallerPolicy caller has no wait. If a call after the first fails,
+text and JSON both print the last cursor the server confirmed and
+`agent-run parent wait-any --after` that cursor, and the exit code is that
+failure's own. If no cursor was confirmed, the command says to read
+`agent-run parent list` before starting again. Before dispatching a worker,
+take a cursor with `agent-run parent wait-any --for 0`. After dispatching,
+run `agent-run parent wait-any --after <cursor>` in the background. On a
+note, read it and start again with the printed cursor. On `waiting`, start
+again with that cursor. On `resync`, read `agent-run parent list` and then
+start again with the printed cursor.
 
 The record is an InboxMessage marked by the server-set label
 `coordination.dev-env.haynesops.com/parent-note=true`. The label distinguishes

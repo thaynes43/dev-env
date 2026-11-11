@@ -378,12 +378,18 @@ the note's name, child and kind, then the next cursor; or waiting and the
 cursor; or resync, a fresh cursor, and a line to run agent-run parent list.
 It prints no note text. Exit is 0 for all three. --after is the cursor the
 previous call printed. With no --after, notes already stored are left for
-parent list. --for defaults to 15m. A longer whole-second wait calls again
-with the cursor it was given, at most 900 seconds at a time. The client
-timeout is that chunk plus 2 minutes, the same as parent wait. At most 8
-held reads for one session on one API replica are shared with parent wait.
-A refused watch returns 503 and holds nothing. There is no polling. A
-CallerPolicy caller has no wait.
+parent list. --for defaults to 15m and accepts whole seconds from 0. --for 0
+returns waiting and the cursor at once: the given --after, or the list's
+version when none is given. It takes no slot and opens no watch. A longer
+whole-second wait calls again with the cursor it was given, at most 900
+seconds at a time. The client timeout is that chunk plus 2 minutes, the same
+as parent wait. At most 8 held reads for one session on one API replica are
+shared with parent wait. A refused watch returns 503 and holds nothing.
+There is no polling. A CallerPolicy caller has no wait. If a call after the
+first fails, text and JSON both print the last cursor the server confirmed
+and the command agent-run parent wait-any --after that cursor, and the exit
+code is that failure's own. If no cursor was confirmed, it says to
+read agent-run parent list before starting again.
 
 These commands require --enable-parent-notes on the operator, which defaults
 off and requires --enable-durable-inbox. Disabled routes return 503, which

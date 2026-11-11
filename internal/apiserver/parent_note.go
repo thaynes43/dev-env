@@ -192,9 +192,17 @@ func (s *Server) parentNoteSenderFence(ctx context.Context, c *caller, original 
 	return nil
 }
 
+// parentNoteReadFence re-proves the caller before a private answer. It refuses
+// when the live pod and session no longer match, and when a new request by the
+// same caller would be refused. resolveCaller is that admission, including a
+// named coordinator's label, so the fence does not keep a second copy of it.
 func (s *Server) parentNoteReadFence(ctx context.Context, c *caller, original coord.SessionIdentity) error {
 	fresh, err := s.inboxRecipientCaller(ctx, c)
 	if err != nil || sessionIdentity(fresh) != original {
+		return inboxHidden()
+	}
+	again, err := s.resolveCaller(ctx, c.identity)
+	if err != nil || again == nil || again.kind != kindSession || again.session == nil || sessionIdentity(again.session) != original {
 		return inboxHidden()
 	}
 	return nil

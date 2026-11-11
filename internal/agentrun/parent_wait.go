@@ -2,6 +2,7 @@ package agentrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -92,25 +93,21 @@ func (a *app) parentWaitAny(ctx context.Context, args []string) error {
 	if len(pos) != 0 {
 		return usageError("parent wait-any takes no note name; see agent-run help parent")
 	}
-	if duration < time.Second || duration%time.Second != 0 {
-		return usageError("parent wait-any requires --for in whole seconds from 1s")
+	if duration < 0 || duration%time.Second != 0 {
+		return usageError("parent wait-any requires --for in whole seconds from 0")
 	}
 	if after != "" && !apiv1.ValidResourceVersion(after) {
 		return usageError("parent wait-any --after must be a resource version cursor")
 	}
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
-		return parentNoteError(0, err, "wait-any")
+		return a.parentWaitAnyFailed(cmd.c.output, "", parentNoteError(0, err, "wait-any"))
 	}
-	cursor := after
+	// confirmed is a cursor a successful call in this command returned.
+	// The caller's own --after is not one until a call confirms it.
+	confirmed := ""
 	var result apiv1.ParentNoteWaitAnyResult
-	for remaining := duration; remaining > 0; {
-		chunk := remaining
-		maxChunk := time.Duration(apiv1.ParentNoteMaxWaitSeconds) * time.Second
-		if chunk > maxChunk {
-			chunk = maxChunk
-		}
-		remaining -= chunk
+	call := func(chunk time.Duration, cursor string) error {
 		one := parentNoteClient(c, chunk)
 		query := url.Values{"seconds": {strconv.FormatInt(int64(chunk/time.Second), 10)}}
 		if cursor != "" {
@@ -119,23 +116,71 @@ func (a *app) parentWaitAny(ctx context.Context, args []string) error {
 		var got apiv1.ParentNoteWaitAnyResult
 		status, err := a.callWith(ctx, one, http.MethodGet, apiv1.ParentNotesWaitAnyPath, query, nil, &got, false)
 		if err != nil {
-			return parentNoteError(status, err, "wait-any")
+			return a.parentWaitAnyFailed(cmd.c.output, confirmed, parentNoteError(status, err, "wait-any"))
 		}
 		if status != http.StatusOK || !validParentWaitAny(got) {
-			return fail(ExitFailed, "parent wait-any returned an unconfirmed answer")
+			return a.parentWaitAnyFailed(cmd.c.output, confirmed, fail(ExitFailed, "parent wait-any returned an unconfirmed answer"))
 		}
 		result = got
-		cursor = got.Cursor
-		// A note or a resync ends the command. A longer wait calls again only
-		// while the answer is still waiting, using the cursor it was given.
-		if result.State != apiv1.ParentNoteWaiting {
-			break
+		confirmed = got.Cursor
+		return nil
+	}
+	if duration == 0 {
+		// One call, no chunk and no watch on the server. seconds=0.
+		if err := call(0, after); err != nil {
+			return err
+		}
+	} else {
+		cursor := after
+		for remaining := duration; remaining > 0; {
+			chunk := remaining
+			maxChunk := time.Duration(apiv1.ParentNoteMaxWaitSeconds) * time.Second
+			if chunk > maxChunk {
+				chunk = maxChunk
+			}
+			remaining -= chunk
+			if err := call(chunk, cursor); err != nil {
+				return err
+			}
+			cursor = result.Cursor
+			// A note or a resync ends the command. A longer wait calls again only
+			// while the answer is still waiting, using the cursor it was given.
+			if result.State != apiv1.ParentNoteWaiting {
+				break
+			}
 		}
 	}
 	if cmd.c.output == outputJSON {
 		return a.printJSON(result)
 	}
 	return a.printParentWaitAny(result)
+}
+
+// parentWaitAnyFailed keeps a cursor the server already confirmed when a later
+// call fails. Text and JSON both carry that cursor and the command that
+// continues from it. The exit code is the failure's own. When no call in this
+// command confirmed a cursor, the message says to read the list first.
+func (a *app) parentWaitAnyFailed(output, confirmed string, err error) error {
+	if confirmed != "" {
+		command := "agent-run parent wait-any --after " + confirmed
+		if output == outputJSON {
+			printed := struct {
+				Cursor  string `json:"cursor"`
+				Command string `json:"command"`
+			}{Cursor: confirmed, Command: command}
+			if perr := a.printJSON(printed); perr != nil {
+				return err
+			}
+		} else if _, perr := fmt.Fprintf(a.env.Stdout, "%s\n%s\n", confirmed, command); perr != nil {
+			return err
+		}
+		return err
+	}
+	var ee *exitError
+	if errors.As(err, &ee) {
+		return fail(ee.code, "%s; read agent-run parent list before starting again", ee.msg)
+	}
+	return err
 }
 
 func (a *app) printParentWaitAny(result apiv1.ParentNoteWaitAnyResult) error {

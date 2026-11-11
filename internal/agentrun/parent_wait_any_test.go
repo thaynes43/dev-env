@@ -97,6 +97,49 @@ func TestParentWaitAnyRepeatsPast900(t *testing.T) {
 	if len(calls) != 1 || calls[0] != "900" || h.stdout.String() != name+" child question\n43\n" {
 		t.Fatalf("a note did not stop the repeat: %v %q", calls, h.stdout.String())
 	}
+
+	// A later call fails. The last cursor the server confirmed is printed, and
+	// the exit code is the failure's own. Text and JSON both carry it.
+	h = newHarness(t)
+	n := 0
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		n++
+		if n == 1 {
+			writeTestJSON(w, http.StatusOK, apiv1.ParentNoteWaitAnyResult{State: apiv1.ParentNoteWaiting, Cursor: "77"})
+			return
+		}
+		apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "inbox record not found")
+	}
+	h.mustRun(ExitNotFound, "parent", "wait-any", "--for", "901s")
+	if h.stdout.String() != "77\nagent-run parent wait-any --after 77\n" || !strings.Contains(h.stderr.String(), "404") || strings.Contains(h.stdout.String(), "waiting") {
+		t.Fatalf("later failure text %q stderr %q", h.stdout.String(), h.stderr.String())
+	}
+	n = 0
+	h.mustRun(ExitNotFound, "parent", "wait-any", "--for", "901s", "-o", "json")
+	var raw map[string]any
+	if json.Unmarshal(h.stdout.Bytes(), &raw) != nil || raw["cursor"] != "77" || raw["command"] != "agent-run parent wait-any --after 77" || raw["state"] != nil {
+		t.Fatalf("later failure JSON %s", h.stdout.String())
+	}
+	if !strings.Contains(h.stderr.String(), "404") {
+		t.Fatalf("later failure JSON stderr %q", h.stderr.String())
+	}
+
+	// No call confirmed a cursor, including a call that was given --after.
+	// The command says to read the list and does not print that cursor.
+	for _, args := range [][]string{
+		{"parent", "wait-any", "--for", "30s"},
+		{"parent", "wait-any", "--after", "42", "--for", "1s"},
+		{"parent", "wait-any", "--for", "30s", "-o", "json"},
+	} {
+		h = newHarness(t)
+		h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+			apiError(w, http.StatusServiceUnavailable, apiv1.CodeUnavailable, "PRIVATE_LOST")
+		}
+		h.mustRun(ExitUnconfirmed, args...)
+		if h.stdout.Len() != 0 || strings.Contains(h.stdout.String(), "42") || strings.Contains(h.stderr.String(), "42") || strings.Contains(h.stderr.String(), "PRIVATE_LOST") || !strings.Contains(h.stderr.String(), "read agent-run parent list before starting again") {
+			t.Fatalf("%v stdout %q stderr %q", args, h.stdout.String(), h.stderr.String())
+		}
+	}
 }
 
 func TestParentWaitAnyClientTimeout(t *testing.T) {
@@ -150,7 +193,7 @@ func TestParentWaitAnyInvalidArguments(t *testing.T) {
 	long := strings.Repeat("9", 257)
 	for _, args := range [][]string{
 		{"wait-any", "message." + strings.Repeat("a", 32) + "." + strings.Repeat("b", 32)},
-		{"wait-any", "--for", "0s"}, {"wait-any", "--for", "1500ms"}, {"wait-any", "--for", "-1s"},
+		{"wait-any", "--for", "1500ms"}, {"wait-any", "--for", "-1s"},
 		{"wait-any", "--after", "0"}, {"wait-any", "--after", "nope"}, {"wait-any", "--after", "01"}, {"wait-any", "--after", long},
 		{"wait-any", "--project", "dev-env"},
 	} {
@@ -162,6 +205,34 @@ func TestParentWaitAnyInvalidArguments(t *testing.T) {
 	}
 }
 
+func TestParentWaitAnyForZero(t *testing.T) {
+	for _, flag := range []string{"0", "0s"} {
+		h := newHarness(t)
+		h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+			if r.Method != http.MethodGet || r.URL.Path != apiv1.ParentNotesWaitAnyPath || len(body) != 0 || r.URL.Query().Get("seconds") != "0" || r.URL.Query().Get("after") != "" {
+				t.Errorf("zero wait %s %s", r.Method, r.URL.RequestURI())
+			}
+			writeTestJSON(w, http.StatusOK, apiv1.ParentNoteWaitAnyResult{State: apiv1.ParentNoteWaiting, Cursor: "15"})
+		}
+		h.mustRun(ExitOK, "parent", "wait-any", "--for", flag)
+		if h.stdout.String() != "waiting\n15\n" || h.stderr.Len() != 0 || len(h.api.requests()) != 1 {
+			t.Fatalf("--for %s %q requests %d", flag, h.stdout.String(), len(h.api.requests()))
+		}
+	}
+	h := newHarness(t)
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if r.URL.Query().Get("seconds") != "0" || r.URL.Query().Get("after") != "42" {
+			t.Errorf("zero after %s", r.URL.RequestURI())
+		}
+		writeTestJSON(w, http.StatusOK, apiv1.ParentNoteWaitAnyResult{State: apiv1.ParentNoteWaiting, Cursor: "42"})
+	}
+	h.mustRun(ExitOK, "parent", "wait-any", "--for", "0", "--after", "42", "-o", "json")
+	var raw map[string]any
+	if json.Unmarshal(h.stdout.Bytes(), &raw) != nil || raw["state"] != "waiting" || raw["cursor"] != "42" || len(h.api.requests()) != 1 {
+		t.Fatalf("--for 0 JSON %s", h.stdout.String())
+	}
+}
+
 func TestParentHelpMentionsWaitAny(t *testing.T) {
 	help := commandHelp["parent"]
 	if !strings.Contains(help, "agent-run parent wait-any [--after <cursor>] [--for 15m] [-o json]") || !strings.Contains(usageText, "parent tell|list|read|answer|wait|wait-any") {
@@ -169,7 +240,7 @@ func TestParentHelpMentionsWaitAny(t *testing.T) {
 	}
 	h := newHarness(t)
 	h.mustRun(ExitOK, "help", "parent")
-	if !strings.Contains(h.stdout.String(), "agent-run parent wait-any") || strings.Contains(h.stdout.String(), "PRIVATE") {
+	if !strings.Contains(h.stdout.String(), "agent-run parent wait-any") || !strings.Contains(h.stdout.String(), "--for 0") || !strings.Contains(h.stdout.String(), "read agent-run parent list before starting again") || strings.Contains(h.stdout.String(), "PRIVATE") {
 		t.Fatal("agent-run help parent omits wait-any")
 	}
 }

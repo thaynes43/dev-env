@@ -24,9 +24,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/inbox"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 // waitAnyStamp is one second shared by notes whose order must come from
@@ -127,6 +132,8 @@ type waitAnyProbe struct {
 	watchLimits    []int64
 	namespaces     []string
 	sawInject      bool
+	listCheck      func(context.Context)
+	watchCheck     func(context.Context)
 }
 
 func (p *waitAnyProbe) install(f *fixture) {
@@ -158,9 +165,15 @@ func (p *waitAnyProbe) install(f *fixture) {
 		if p.onList != nil {
 			p.onList()
 		}
+		if p.listCheck != nil {
+			p.listCheck(ctx)
+		}
 		return err
 	}})
-	f.srv.Inbox.Watcher = interceptor.NewClient(f.c, interceptor.Funcs{Watch: func(_ context.Context, _ client.WithWatch, obj client.ObjectList, opts ...client.ListOption) (watch.Interface, error) {
+	f.srv.Inbox.Watcher = interceptor.NewClient(f.c, interceptor.Funcs{Watch: func(ctx context.Context, _ client.WithWatch, obj client.ObjectList, opts ...client.ListOption) (watch.Interface, error) {
+		if p.watchCheck != nil {
+			p.watchCheck(ctx)
+		}
 		if _, ok := obj.(*coord.InboxMessageList); !ok {
 			return nil, errors.New("unexpected watch type")
 		}
@@ -756,10 +769,282 @@ func TestParentNoteWaitAnyBadCursor(t *testing.T) {
 	}
 	empty := f.do(http.MethodGet, apiv1.ParentNotesWaitAnyPath+"?seconds=1&after=", parent, nil)
 	wantError(t, empty, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-	for _, query := range []string{"", "?seconds=0", "?seconds=901", "?seconds=1&seconds=2", "?seconds=1&after=1&after=2"} {
+	for _, query := range []string{"", "?seconds=901", "?seconds=1&seconds=2", "?seconds=1&after=1&after=2"} {
 		wantError(t, f.do(http.MethodGet, apiv1.ParentNotesWaitAnyPath+query, parent, nil), http.StatusBadRequest, apiv1.CodeBadRequest)
 	}
 	if p.watches.Load() != 0 || p.lists.Load() != 0 || len(f.srv.parentWaits.held) != 0 {
 		t.Fatalf("bad cursor watched lists %d watches %d", p.lists.Load(), p.watches.Load())
 	}
+}
+
+func TestParentNoteWaitAnySecondsZero(t *testing.T) {
+	t.Run("list", func(t *testing.T) {
+		f, parent, _, _ := parentNoteFixture(t, false)
+		party := waitAnyParty(t, f, "parent")
+		p := &waitAnyProbe{listRV: "15"}
+		heldDuring := -1
+		p.listCheck = func(context.Context) { heldDuring = len(f.srv.parentWaits.held) }
+		p.install(f)
+		f.srv.parentWaitTimeout = func(context.Context, time.Duration) (context.Context, context.CancelFunc) {
+			t.Fatal("seconds=0 opened a wait")
+			return context.Background(), func() {}
+		}
+		w := doWaitAny(t, f, parent, "seconds=0")
+		got, _ := decodeWaitAny(t, w)
+		if got.State != apiv1.ParentNoteWaiting || got.Cursor != "15" || got.Name != "" || p.lists.Load() != 1 || p.watches.Load() != 0 || heldDuring != 0 || len(f.srv.parentWaits.held) != 0 {
+			t.Fatalf("zero %+v lists %d watches %d held during %d", got, p.lists.Load(), p.watches.Load(), heldDuring)
+		}
+		p.requireList(t, 0, party)
+	})
+	t.Run("given cursor", func(t *testing.T) {
+		f, parent, _, _ := parentNoteFixture(t, false)
+		p := &waitAnyProbe{listRV: "15", gate: true, started: make(chan watch.Interface, 1)}
+		p.install(f)
+		w := doWaitAny(t, f, parent, "seconds=0&after=42")
+		got, _ := decodeWaitAny(t, w)
+		if got.State != apiv1.ParentNoteWaiting || got.Cursor != "42" || p.lists.Load() != 0 || p.watches.Load() != 0 || len(f.srv.parentWaits.held) != 0 {
+			t.Fatalf("given %+v lists %d watches %d", got, p.lists.Load(), p.watches.Load())
+		}
+	})
+	t.Run("bad cursor", func(t *testing.T) {
+		f, parent, _, _ := parentNoteFixture(t, false)
+		p := &waitAnyProbe{listRV: "15"}
+		p.install(f)
+		wantError(t, f.do(http.MethodGet, apiv1.ParentNotesWaitAnyPath+"?seconds=0&after=0", parent, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+		if p.lists.Load() != 0 || p.watches.Load() != 0 || len(f.srv.parentWaits.held) != 0 {
+			t.Fatal("bad zero cursor listed or watched")
+		}
+	})
+}
+
+// waitBudgetKey marks the context the wait's deadline owns.
+type waitBudgetKey struct{}
+
+func TestParentNoteWaitAnyReadBudget(t *testing.T) {
+	t.Run("list and watch", func(t *testing.T) {
+		f, parent, _, _ := parentNoteFixture(t, false)
+		p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1), listRV: "5"}
+		var listKey, watchKey any
+		var listHeld, watchHeld int
+		p.listCheck = func(ctx context.Context) {
+			listKey = ctx.Value(waitBudgetKey{})
+			listHeld = len(f.srv.parentWaits.held)
+		}
+		p.watchCheck = func(ctx context.Context) {
+			watchKey = ctx.Value(waitBudgetKey{})
+			watchHeld = len(f.srv.parentWaits.held)
+		}
+		p.install(f)
+		var expire context.CancelFunc
+		f.srv.parentWaitTimeout = func(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+			child, cancel := context.WithCancel(context.WithValue(ctx, waitBudgetKey{}, d))
+			expire = cancel
+			return parentDeadlineContext{child}, cancel
+		}
+		result, cancel := startWaitAny(f, parent, "seconds=30")
+		defer cancel()
+		receiveParentWait(t, p.started)
+		if listKey != 30*time.Second || watchKey != 30*time.Second || listHeld != 1 || watchHeld != 1 {
+			t.Fatalf("list key %v held %d; watch key %v held %d", listKey, listHeld, watchKey, watchHeld)
+		}
+		expire()
+		w := receiveParentWait(t, result)
+		got, _ := decodeWaitAny(t, w)
+		if got.State != apiv1.ParentNoteWaiting || got.Cursor != "5" {
+			t.Fatalf("budget %+v", got)
+		}
+	})
+	t.Run("resync", func(t *testing.T) {
+		f, parent, _, _ := parentNoteFixture(t, false)
+		p := &waitAnyProbe{watchErr: apierrors.NewResourceExpired("PRIVATE_EXPIRED"), listRV: "900"}
+		var listKey any
+		var listHeld int
+		p.listCheck = func(ctx context.Context) {
+			listKey = ctx.Value(waitBudgetKey{})
+			listHeld = len(f.srv.parentWaits.held)
+		}
+		p.watchCheck = func(ctx context.Context) {
+			if ctx.Value(waitBudgetKey{}) != 5*time.Second {
+				t.Errorf("watch outside the wait")
+			}
+		}
+		p.install(f)
+		f.srv.parentWaitTimeout = func(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+			return parentDeadlineContext{context.WithValue(ctx, waitBudgetKey{}, d)}, func() {}
+		}
+		w := doWaitAny(t, f, parent, "seconds=5&after=3")
+		got, _ := decodeWaitAny(t, w)
+		assertNoPrivate(t, w.Body.String())
+		if listKey != 5*time.Second || listHeld != 1 || got.State != apiv1.ParentNoteResync || got.Cursor != "900" {
+			t.Fatalf("resync %+v key %v held %d", got, listKey, listHeld)
+		}
+	})
+	t.Run("fence", func(t *testing.T) {
+		f, parent, _, _ := parentNoteFixture(t, false)
+		p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1)}
+		p.install(f)
+		var expire context.CancelFunc
+		f.srv.parentWaitTimeout = func(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+			child, cancel := context.WithCancel(context.WithValue(ctx, waitBudgetKey{}, d))
+			expire = cancel
+			return parentDeadlineContext{child}, cancel
+		}
+		var armed atomic.Bool
+		var fenceErr error
+		var fenceLeft time.Duration
+		var fenceWait, saw bool
+		f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			err := c.Get(ctx, key, obj, opts...)
+			if armed.Load() {
+				if _, ok := obj.(*v1alpha1.AgentSession); ok {
+					saw = true
+					fenceErr = ctx.Err()
+					fenceWait = ctx.Value(waitBudgetKey{}) != nil
+					if dl, ok := ctx.Deadline(); ok {
+						fenceLeft = time.Until(dl)
+					}
+				}
+			}
+			return err
+		}})
+		result, cancel := startWaitAny(f, parent, "seconds=30&after=10")
+		defer cancel()
+		receiveParentWait(t, p.started)
+		armed.Store(true)
+		expire()
+		w := receiveParentWait(t, result)
+		got, _ := decodeWaitAny(t, w)
+		if got.State != apiv1.ParentNoteWaiting || got.Cursor != "10" || !saw || fenceErr != nil || fenceWait || fenceLeft < 8*time.Second || fenceLeft > parentNoteFenceAllowance {
+			t.Fatalf("fence %+v err %v waitKey %v left %s saw %v", got, fenceErr, fenceWait, fenceLeft, saw)
+		}
+	})
+}
+
+func TestParentNoteWaitAnyRecipientNameAndUID(t *testing.T) {
+	f, parent, _, _ := parentNoteFixture(t, false)
+	party := waitAnyParty(t, f, "parent")
+	sameName := party
+	sameName.UID = party.UID + "-other"
+	sameUID := party
+	sameUID.Name = "other-name"
+	for _, tc := range []struct {
+		name string
+		to   coord.SessionIdentity
+	}{
+		{"same name other uid", sameName},
+		{"same uid other name", sameUID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			note := waitAnyNote(tc.to, waitAnyName(8), inbox.KindQuestion, "12", "PRIVATE_FOREIGN", waitAnyStamp)
+			p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1)}
+			p.install(f)
+			expire := armWaitAnyDeadline(f)
+			result, cancel := startWaitAny(f, parent, "seconds=30&after=10")
+			defer cancel()
+			g := receiveParentWait(t, p.started).(*gateWatch)
+			g.send(t, watch.Event{Type: watch.Added, Object: note})
+			(*expire)()
+			w := receiveParentWait(t, result)
+			got, _ := decodeWaitAny(t, w)
+			assertNoPrivate(t, w.Body.String())
+			if got.State != apiv1.ParentNoteWaiting || got.Cursor != "10" || got.Name != "" || strings.Contains(w.Body.String(), note.Name) {
+				t.Fatalf("%s woke %+v %s", tc.name, got, w.Body.String())
+			}
+		})
+	}
+}
+
+// waitAnyNamedParent admits the parent fixture's session as a named coordinator
+// and returns a token for that pod.
+func waitAnyNamedParent(t *testing.T, f *fixture) string {
+	t.Helper()
+	const account = "dev-env-coordinator-lead"
+	f.srv.Policy.NamedCoordinatorIdentities = true
+	sess := f.session("parent")
+	sess.Labels[templates.CoordinatorIdentityLabel] = account
+	if err := f.c.Update(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	var pod corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "parent"}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Spec.ServiceAccountName = account
+	if err := f.c.Update(context.Background(), &pod); err != nil {
+		t.Fatal(err)
+	}
+	tok := "tok-named-parent"
+	id := saIdentity(sessionNS + "/" + account)
+	id.PodName, id.PodUID = "parent", string(pod.UID)
+	f.auth[tok] = id
+	return tok
+}
+
+func revokeNamedAdmission(t *testing.T, f *fixture) {
+	t.Helper()
+	sess := f.session("parent")
+	sess.Labels[templates.CoordinatorIdentityLabel] = "dev-env-coordinator-other"
+	if err := f.c.Update(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParentNoteWaitAnyRevokedAdmission(t *testing.T) {
+	t.Run("before the wait", func(t *testing.T) {
+		f, _, _, _ := parentNoteFixture(t, false)
+		tok := waitAnyNamedParent(t, f)
+		revokeNamedAdmission(t, f)
+		p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1), listRV: "5"}
+		p.install(f)
+		result, cancel := startWaitAny(f, tok, "seconds=30&after=10")
+		defer cancel()
+		w := receiveParentWait(t, result)
+		wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
+		if p.watches.Load() != 0 || p.lists.Load() != 0 || len(f.srv.parentWaits.held) != 0 {
+			t.Fatalf("early refusal watched %d listed %d held %d", p.watches.Load(), p.lists.Load(), len(f.srv.parentWaits.held))
+		}
+	})
+	t.Run("note after the watch", func(t *testing.T) {
+		f, _, _, _ := parentNoteFixture(t, false)
+		tok := waitAnyNamedParent(t, f)
+		party := waitAnyParty(t, f, "parent")
+		note := waitAnyNote(party, waitAnyName(4), inbox.KindQuestion, "12", "PRIVATE_NOTE_TEXT", waitAnyStamp)
+		p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1)}
+		p.install(f)
+		expire := armWaitAnyDeadline(f)
+		result, cancel := startWaitAny(f, tok, "seconds=30&after=10")
+		defer cancel()
+		g := receiveParentWait(t, p.started).(*gateWatch)
+		revokeNamedAdmission(t, f)
+		g.send(t, watch.Event{Type: watch.Added, Object: note})
+		select {
+		case early := <-result:
+			t.Fatalf("revoked fence answered before the deadline: %s", early.Body.String())
+		case <-time.After(200 * time.Millisecond):
+		}
+		(*expire)()
+		w := receiveParentWait(t, result)
+		wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
+		assertNoPrivate(t, w.Body.String())
+		if strings.Contains(w.Body.String(), note.Name) || len(f.srv.parentWaits.held) != 0 || p.watches.Load() != 1 {
+			t.Fatalf("revoked body %s watches %d", w.Body.String(), p.watches.Load())
+		}
+	})
+	t.Run("deadline after the watch", func(t *testing.T) {
+		f, _, _, _ := parentNoteFixture(t, false)
+		tok := waitAnyNamedParent(t, f)
+		p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1)}
+		p.install(f)
+		expire := armWaitAnyDeadline(f)
+		result, cancel := startWaitAny(f, tok, "seconds=30&after=10")
+		defer cancel()
+		receiveParentWait(t, p.started)
+		revokeNamedAdmission(t, f)
+		(*expire)()
+		w := receiveParentWait(t, result)
+		wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
+		if strings.Contains(w.Body.String(), "waiting") || len(f.srv.parentWaits.held) != 0 {
+			t.Fatalf("deadline refusal %s", w.Body.String())
+		}
+	})
 }
