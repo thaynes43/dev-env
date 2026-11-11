@@ -51,6 +51,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/asks"
 	"github.com/thaynes43/dev-env/internal/broker"
+	"github.com/thaynes43/dev-env/internal/codexhostpool"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/coordretention"
@@ -153,6 +154,10 @@ type options struct {
 	legacyGrantDelegates         []broker.LegacyDelegateBinding
 	maintenanceEnabled           bool
 	asksEnabled                  bool
+	codexHostSelect              bool
+	codexHostMaxPerCell          int
+	codexHostMaxRunning          int
+	codexHostHandsOff            string
 	coordinatorEnabled           bool
 	portalReaderEnabled          bool
 	portalConversationUsage      bool
@@ -247,6 +252,10 @@ func parseFlags(args []string) (options, error) {
 	policyDelegates := fs.String("grant-policy-delegates", "", "HELD (DESIGN-042 6.6): default-empty subset of --grant-delegates allowed exact live delegated-policy reach outside their tree. Must match both services")
 	legacyDelegates := fs.String("grant-legacy-delegates", "", "HELD: exact existing baseline Claude actors ns/sa:saUID:session:sessionUID:pod:podUID, at most four; requires both delegate lists. Default empty")
 	fs.BoolVar(&o.asksEnabled, "enable-asks", false, "serve /v1/asks and /v1/portal/asks and run the leader-only expiry sweeper (OpenProject Epic #254); default off, asks live in dev-agents, and v1 does not deliver answers through the inbox")
+	fs.BoolVar(&o.codexHostSelect, "enable-codex-host-select", false, "serve POST /v1/codex-hosts/select and /release (DESIGN-063); default off, and with it off the routes are not registered; needs the API")
+	fs.IntVar(&o.codexHostMaxPerCell, "codex-host-max-running-per-cell", codexhostpool.DefaultMaxRunningPerCell, "most running Codex hosts in one profile cell when host selection is on")
+	fs.IntVar(&o.codexHostMaxRunning, "codex-host-max-running", codexhostpool.DefaultMaxRunning, "most running Codex hosts when host selection is on")
+	fs.StringVar(&o.codexHostHandsOff, "codex-host-hands-off", strings.Join(apiserver.DefaultCodexHostHandsOff(), ","), "comma-separated Codex host names selection treats as protected")
 	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
 	fs.BoolVar(&o.scheduledWork.enabled, "enable-scheduled-work", false, "run the leader-only scheduled-work executor (DESIGN-054 S3b): it claims each due ScheduledWork occurrence with a compare-and-set and creates its session through the API's creation path under a derived name; default off; needs the API and leader election. Each occurrence dispatches only on a basis checked at its due time (a human owner, a live session owner or a human approval) that its dispatch template admits; the templates are the ConfigMap dev-env-scheduled-work in the operator's namespace, and without it, or without such a basis, the occurrence parks and nothing dispatches")
 	fs.BoolVar(&o.scheduledWork.apiEnabled, "enable-scheduled-work-api", false, "serve /v1/scheduled-work (DESIGN-054 S5b): create, list, show, edit, cancel, approve and retry scheduled agent work, for agent-run schedule; default off, and every route answers 404 while off; needs the API (--api-bind-address), the ScheduledWork CRD installed and a reviewed Role on it, and get on the CRD and on the ConfigMap dev-env-scheduled-work for approve. It only records and decides items: nothing dispatches unless --enable-scheduled-work is also on")
@@ -733,6 +742,19 @@ func parseFlags(args []string) (options, error) {
 	if o.asksEnabled && !o.leaderElect {
 		return o, errors.New("--enable-asks requires leader election for the expiry sweeper")
 	}
+	if o.codexHostSelect && o.apiAddr == "0" {
+		return o, errors.New("--enable-codex-host-select requires the API (--api-bind-address)")
+	}
+	if o.codexHostSelect && (o.codexHostMaxPerCell < 1 || o.codexHostMaxRunning < 1) {
+		return o, errors.New("--codex-host-max-running-per-cell and --codex-host-max-running must be at least 1")
+	}
+	if o.codexHostSelect {
+		for _, name := range splitComma(o.codexHostHandsOff) {
+			if len(validation.IsDNS1123Label(name)) > 0 {
+				return o, fmt.Errorf("--codex-host-hands-off: %q is not a session name", name)
+			}
+		}
+	}
 	if o.privatePilot != nil && (!o.directoryEnabled || !slices.Contains(o.directoryProjects, projectcanary.PilotProject)) {
 		return o, errors.New("sealed pilot requires the dev-env session directory")
 	}
@@ -1167,6 +1189,13 @@ func run(args []string) error {
 			ProviderSourceReports:      sourceReports,
 			AggregateAllowanceReports:  aggregateReports,
 		}
+		if o.codexHostSelect {
+			api.CodexHosts = &apiserver.CodexHostConfig{
+				MaxRunningPerCell: o.codexHostMaxPerCell,
+				MaxRunning:        o.codexHostMaxRunning,
+				HandsOff:          splitComma(o.codexHostHandsOff),
+			}
+		}
 		// Passive allowance readings (DESIGN-059): default off. Reads are
 		// uncached; the one write is an Update with the read resourceVersion.
 		if o.sessionAllowances {
@@ -1398,4 +1427,18 @@ func validateTaskCleanupOptions(o options) error {
 		return errors.New("--task-cleanup-min-shared-free must not be negative")
 	}
 	return nil
+}
+
+func splitComma(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

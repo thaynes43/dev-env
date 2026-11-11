@@ -18,6 +18,8 @@ Usage:
   agent-run thread start --agent <provider> ...   start a fresh phone-visible thread (Codex on a host, Claude as a session)
   agent-run thread status --agent codex --host <h> --thread <id>
                                                   recheck a started Codex thread's first response; observe-only
+  agent-run codex-host select --repo <name> [--profile <name>] [--check]
+                                                  print which paired Codex host would be reused
   agent-run inbox send|ask|reply|list|read|ack|ack-status
                                                   durable inbox
   agent-run parent tell|list|read|answer|wait      notes to a session parent
@@ -729,6 +731,16 @@ follower answers; if the operator restarts mid-ceremony, run url again. Adoption
 needs a valid code and the same account: a wrong code leaves the current login as
 it was. Renew well before the login lapses (status says when).
 `,
+	"codex-host": `Usage: agent-run codex-host select --repo <name> [--profile <name>] [--check]
+
+Prints the Codex host selection as JSON and exits 0 for any action (use,
+resume, create or report). A refusal prints the fixed code and sentence and
+exits non-zero. --check asks the operator to choose and write nothing.
+Without --check, a use writes a lease for at most 15 minutes; this command
+does not release it. The route is off unless the operator was started with
+--enable-codex-host-select. When it is off, or the operator is older, the
+command reports route_unsupported.
+`,
 	"thread": `Usage: agent-run thread start --agent codex --host <codex-host> --model <full id> --effort <e>
                          --handoff FILE [--repo R] [--name N] [--wait 5m] [-o json]
        agent-run thread start --agent claude --project P [--repo R] --model <full id> [--effort e]
@@ -755,7 +767,15 @@ worktree, as on the phone. --wait (at most 10m) bounds the whole launch.
                   native codex --remote TUI (scripts/codex-clean-session.py) in a tmux
                   session named --name (default thread-<UTC mmdd-HHMMSS>) in
                   ~/repos/<repo> on the host (default: the host's repo). Never codex exec
-                  or queue, and no sandbox or approval flag.
+                  or queue, and no sandbox or approval flag. Omitting --host asks the
+                  operator to choose a host when it was started with
+                  --enable-codex-host-select. That flag is off by default. With it off,
+                  or on an older operator, thread start behaves as it does today and
+                  prints one line that host selection is off. With it on, use starts the
+                  thread on the chosen host and releases the lease when the launch result
+                  is known. report prints the choice and starts nothing. resume prints the
+                  choice and says resume is not built yet. create prints the choice and
+                  says this command does not create a host. --host never asks.
 --agent claude    a new remote session, through rc start. It follows --wait (default
                   5m, at most 10m). Agent start is read from the session status,
                   which agentd publishes on its heartbeat, so it can show up to

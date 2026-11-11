@@ -21,7 +21,7 @@ func devSession() Caller {
 func baseInput(c Caller, hosts []Host) Input {
 	return Input{
 		Hosts:             hosts,
-		Projection:        Projection{Decodes: true, ExpiresAt: evening.Add(24 * time.Hour)},
+		Login:             LoginCurrent,
 		Caller:            c,
 		Request:           Request{Profile: "dev", Repository: "dev-env"},
 		Now:               evening,
@@ -296,7 +296,9 @@ func TestStaleLoginSnapshotDoesNotBlock(t *testing.T) {
 	stale := suspendedPaired("stale", evening.Add(-48*time.Hour))
 	stale.RemoteState = StateLoginRequired
 	in := baseInput(clientCaller(), []Host{stale})
-	in.Projection.ExpiresAt = evening.Add(5*time.Minute + time.Second)
+	// A suspended host's frozen login-required is not a reading. Unknown
+	// does not block, and the host is still not eligible to resume.
+	in.Login = LoginUnknown
 	res := Select(in)
 	if res.Reason == ReasonLoginRequired {
 		t.Fatal("a frozen login-required snapshot blocked selection")
@@ -333,31 +335,27 @@ func TestStaleLoginSnapshotDoesNotBlock(t *testing.T) {
 		checkResult(t, res, ActionCreate, "", "", false)
 		checkSkipped(t, res, map[string]string{"stale": ReasonPairingUnknown})
 	})
+
+	t.Run("unset login does not block", func(t *testing.T) {
+		in := baseInput(clientCaller(), []Host{stale})
+		in.Login = ""
+		res := Select(in)
+		if res.Reason == ReasonLoginRequired {
+			t.Fatal("an unset login blocked selection")
+		}
+		checkResult(t, res, ActionCreate, "", "", false)
+	})
 }
 
 func TestCurrentLoginFailureBlocksResumeAndCreate(t *testing.T) {
 	running := runningPaired("live")
 	suspended := suspendedPaired("asleep", evening.Add(-2*time.Hour))
-	hosts := []Host{running, suspended}
-	cases := []struct {
-		name      string
-		decodes   bool
-		expiresIn time.Duration
-	}{
-		{"does not decode", false, 24 * time.Hour},
-		{"expires inside five minutes", true, 4 * time.Minute},
-		{"expires exactly five minutes ahead", true, 5 * time.Minute},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			in := baseInput(clientCaller(), hosts)
-			in.Projection = Projection{Decodes: tc.decodes, ExpiresAt: evening.Add(tc.expiresIn)}
-			res := Select(in)
-			checkResult(t, res, "", "", ReasonLoginRequired, false)
-			if len(res.Skipped) != 0 {
-				t.Fatalf("login failure considered hosts: %#v", res.Skipped)
-			}
-		})
+	in := baseInput(clientCaller(), []Host{running, suspended})
+	in.Login = LoginLapsed
+	res := Select(in)
+	checkResult(t, res, "", "", ReasonLoginRequired, false)
+	if len(res.Skipped) != 0 {
+		t.Fatalf("a lapsed login considered hosts: %#v", res.Skipped)
 	}
 }
 
@@ -544,7 +542,7 @@ func TestNamedHostIsNotReplaced(t *testing.T) {
 	better := runningPaired("better")
 	in := baseInput(clientCaller(), []Host{named, better})
 	in.Request.NamedHost = "named"
-	in.Projection.Decodes = false
+	in.Login = LoginLapsed
 	res := Select(in)
 	checkResult(t, res, ActionUse, "named", "", false)
 	checkSkipped(t, res, nil)
@@ -710,7 +708,6 @@ func TestSection3InventoryLiveCheck(t *testing.T) {
 			in := baseInput(clientCaller(), hosts)
 			in.Request.Profile = tt.profile
 			in.Request.Repository = tt.repo
-			in.Projection.ExpiresAt = time.Date(2026, 11, 18, 2, 26, 21, 0, time.UTC)
 			in.MaxRunningPerCell = 1
 			in.MaxRunning = 2
 			res := Select(in)

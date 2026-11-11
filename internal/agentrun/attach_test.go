@@ -49,7 +49,17 @@ func TestCreateInteractiveCodex(t *testing.T) {
 	h := newHarness(t)
 	serveCreate(h, runningOn(testSession(name, ""), "talosw02"))
 	h.mustRun(ExitOK, "haynes-ops", "--interactive", "--agent", "codex", "--model", "gpt-6-luna")
-	got := decodeCreate(t, h.api.requests()[0].body)
+	contains(t, "stderr", h.stderr.String(), "Host selection is off.")
+	var createBody []byte
+	for _, req := range h.api.requests() {
+		if req.method == http.MethodPost && req.path == apiv1.SessionsPath {
+			createBody = req.body
+		}
+	}
+	if createBody == nil {
+		t.Fatal("the create did not run")
+	}
+	got := decodeCreate(t, createBody)
 	if got.Mode != "remote" || got.Prompt != "" || got.Limits != nil || got.Agent != "codex" || got.Model != "gpt-6-luna" {
 		t.Errorf("create %+v", got)
 	}

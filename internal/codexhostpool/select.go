@@ -77,10 +77,18 @@ const (
 	// defaults. A non-positive cap on Input selects them.
 	DefaultMaxRunningPerCell = 1
 	DefaultMaxRunning        = 2
+)
 
-	// projectionLead is the SyncCodexAccess test: the access expiry is more
-	// than five minutes ahead.
-	projectionLead = 5 * time.Minute
+// Login is the one shared Codex login fact for this selection (ruling J).
+// current and unknown do not block. lapsed stops every path with
+// login_required. A suspended host's frozen login-required is not a reading,
+// and a fact published by the keeper is not an input.
+type Login string
+
+const (
+	LoginCurrent Login = "current"
+	LoginLapsed  Login = "lapsed"
+	LoginUnknown Login = "unknown"
 )
 
 // Host is one Codex host as facts. Select does not read the cluster.
@@ -125,12 +133,6 @@ type Host struct {
 	TrustedRepos        []string
 }
 
-// Projection is the one current keeper Codex login fact.
-type Projection struct {
-	Decodes   bool
-	ExpiresAt time.Time
-}
-
 // Caller is who is asking. ParentRef is the identity stored on a child's
 // spec.parent. A coordinator may resume only a host whose parent equals it.
 // Workbench is the session-pod workbench (isWorkbenchSession).
@@ -150,10 +152,12 @@ type Request struct {
 	NamedHost  string
 }
 
-// Input is everything Select may see. Now is the clock.
+// Input is everything Select may see. Now is the clock. Login is the one
+// shared fact: only LoginLapsed stops selection. Current, unknown and the
+// zero value do not.
 type Input struct {
 	Hosts             []Host
-	Projection        Projection
+	Login             Login
 	Caller            Caller
 	Request           Request
 	Now               time.Time
@@ -192,7 +196,10 @@ func Select(in Input) Result {
 	if in.Request.NamedHost != "" {
 		return Result{Host: in.Request.NamedHost, Action: ActionUse}
 	}
-	if !projectionCurrent(in.Projection, in.Now) {
+	// A lapsed login stops every path before any host is considered. Unknown
+	// does not: a suspended host's frozen login-required is not a reading,
+	// and a create with an unknown login is what create does today.
+	if in.Login == LoginLapsed {
 		return Result{Reason: ReasonLoginRequired}
 	}
 
@@ -322,10 +329,6 @@ func judge(h Host, c Caller, requested, repo string, now time.Time) (reason stri
 		return ReasonCallerCannotResume, false, false
 	}
 	return "", false, true
-}
-
-func projectionCurrent(p Projection, now time.Time) bool {
-	return p.Decodes && !p.ExpiresAt.IsZero() && p.ExpiresAt.After(now.Add(projectionLead))
 }
 
 func requestedProfile(c Caller, r Request) string {

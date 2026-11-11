@@ -340,6 +340,15 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		}
 		return a.printJSON(raw)
 	}
+	if interactive && agent == protocol.AgentCodex {
+		cont, err := a.codexBeforeCreate(ctx, c, repo, profile)
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
 	var sess apiv1.Session
 	status, err := a.call(ctx, c, http.MethodPost, apiv1.SessionsPath, nil, req, &sess)
 	if err != nil {

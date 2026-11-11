@@ -294,18 +294,23 @@ Codex hosts above. No running Codex task.
 ## 4. What suitable means
 
 A program can decide from the AgentSession object, the pod label when a pod
-exists, the templates' `defaultProfile`, the protected list, and one current
-read of the keeper Codex projection. It does not exec into the host.
+exists, the templates' `defaultProfile`, the protected list, and the login
+fact taken from session status. It does not exec into the host, and it does
+not read the Secret `dev-env-codex-live`.
 
-**Shared login, checked once per selection.** The projection decodes and
-expires more than five minutes ahead, the same test as `SyncCodexAccess`.
-`agent-run auth status` printing Codex `Ready`, with expiry outside the
-warning window, is that test as a person runs it. This evening it passed.
-A suspended host's `login-required` snapshot is not this test. It does not
-fail the check, and it does not prove the host needs a pairing. The proof
-that a login is needed is a current projection that fails this test. Then
-every path stops with `login_required`. Nothing is resumed and nothing is
-created. Renewing the keeper stays the existing workbench path.
+**Shared login, checked once per selection.** The operator never reads the
+Secret `dev-env-codex-live`, and this slice changes no Role. The login fact
+comes from session status. Every AgentSession with `spec.agent` `codex` and
+`spec.mode` `remote` that is Running, with a pod Ready and a heartbeat
+inside the operator's existing staleness bound
+(`authority.DefaultHeartbeatStaleAfter`), is a reading. Protected and
+hands-off hosts are included, because this only reads their status. The one
+with the newest heartbeat decides: remote state `login-required` is lapsed;
+any other state is current. No such host is unknown. Only lapsed returns
+`login_required`. Unknown does not block. A suspended host's frozen
+`login-required` is not a reading, and a create with an unknown login is
+what create does today. A fact published by the keeper is a later option
+and is not built.
 
 **A running host is suitable** when all of these hold:
 
@@ -335,9 +340,9 @@ created. Renewing the keeper stays the existing workbench path.
    list, or the annotation `dev-env.haynesops.com/protected` is `true`, or
    a rescue result is `Failed`, or `RescueFailed` is True, or
    `RemovalBlocked` is True. The annotation is not on any host today. The
-   list is configuration, seeded with the four names in section 3. The
-   failed-rescue rule catches `dev-env-1020-002245` even if the list is
-   empty.
+   list is the operator flag `--codex-host-hands-off`, seeded with the four
+   names in section 3. The failed-rescue rule catches
+   `dev-env-1020-002245` even if the list is empty.
 6. Not busy. Busy means an unexpired lease annotation held by another
    caller, as section 5 defines it. Agent state `busy` on a live daemon is
    the normal state. It is not busy for this rule.
@@ -351,7 +356,7 @@ created. Renewing the keeper stays the existing workbench path.
    move it. `haynes-ops-1109-115326` fails this as well as the protected
    rule. Its image `2.89.0` is from before thread start, so a launch there
    would be `host_unsupported` even if it were not protected.
-9. The shared-login check passed.
+9. The login fact is not lapsed. Unknown does not block.
 
 **A suspended host is eligible to resume** when all of these hold:
 
@@ -387,8 +392,8 @@ created. Renewing the keeper stays the existing workbench path.
    was issued is not eligible. The field, and the CRD copy that lands in
    haynes-ops before the operator writes it, are slice 6. Slice 1 does not
    add the field.
-6. The shared-login check passed. The frozen `login-required` does not fail
-   it.
+6. The login fact is not lapsed. A frozen `login-required` is not a reading
+   and does not fail this check. Unknown does not block.
 7. Resuming it would stay inside the pool caps in section 6.
 8. This caller is one today's resume route would accept for that host. A
    caller of kind `coordinator` is accepted only for its own child
@@ -449,7 +454,7 @@ flowchart TD
   need[Caller needs a Codex host]
   named{Caller named a host?}
   asIs[Today's thread start on that host]
-  login{Keeper projection current?}
+  login{Login lapsed?}
   stopLogin[login_required. No resume and no create]
   running[A running suitable host]
   suspended[A suspended eligible host this caller may resume]
@@ -466,8 +471,8 @@ flowchart TD
   need --> named
   named -->|yes| asIs
   named -->|no| login
-  login -->|no| stopLogin
-  login -->|yes| running
+  login -->|yes| stopLogin
+  login -->|no| running
   running -->|one is free| won
   running -->|all leased| busy[host_busy. No create]
   running -->|none| suspended
@@ -485,12 +490,16 @@ flowchart TD
   again --> running
 ```
 
-A cell is the resolved profile (section 4, rule 4).
+A cell is the resolved profile (section 4, rule 4). Login lapsed is the
+session-status fact in section 4. Unknown does not take the stop.
 
 Order:
 
 1. A running suitable host. If several fit, prefer one that already carries
-   the pool label, then the one with the newest `lastActivity`.
+   the pool label, then the one with the newest `lastActivity`. Slice 2
+   reads that label as `dev-env.haynesops.com/codex-host-pool=true` on the
+   session, and on the pod when the session has none. This slice does not
+   write it.
 2. A suspended eligible host, resumed onto the current image, and only when
    rule 8 in section 4 says this caller may resume it. Resume is the
    existing operating-mode change. The new pod is the current templates, on
@@ -696,7 +705,7 @@ filled where a host was considered:
 
 | Code | When | What does not happen |
 | --- | --- | --- |
-| `login_required` | The keeper projection is not current now | No resume, no create |
+| `login_required` | The login fact from session status is lapsed | No resume, no create |
 | `no_suitable_host` | Nothing suitable or eligible, and this caller may not create | No create |
 | `caller_cannot_create` | A create would have been the fallback, and this caller may not create a Codex host | No create |
 | `at_capacity` | A create or a resume would exceed `maxRunning` | No create, no resume |
@@ -743,7 +752,8 @@ live host, and none creates a host in the cluster. A new package
 that adds it. `make test` stays at two Go packages and two CPUs.
 
 **Slice 1. The choice, pure.** `internal/codexhostpool` takes a list of host
-facts and a projection fact and returns the section 5 object. Named tests:
+facts and a three-valued login fact (current, lapsed, unknown) and returns
+the section 5 object. Named tests:
 `TestSelectsRunningPairedHost`, `TestSkipsBusyLease`, `TestSkipsProtected`,
 `TestSkipsRescueBlocked`, `TestStaleLoginSnapshotDoesNotBlock`,
 `TestCurrentLoginFailureBlocksResumeAndCreate`, `TestSuspendedEligibleComesAfterRunning`,
@@ -910,3 +920,66 @@ and eligibility for resume uses that record together with a current keeper
 login, not the last transient state. That is a status field, so the slice
 that adds it copies the CRD to haynes-ops first. The status field is slice
 6, story 703.
+
+**Ruling F** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). Off
+by default. The operator flag `--enable-codex-host-select` (default false)
+registers the routes. With it off they are not registered, as the other
+gated routes are not. The caps are two operator flags with the design's
+defaults: `--codex-host-max-running-per-cell` (1) and
+`--codex-host-max-running` (2).
+
+**Ruling G** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+slice carries out use and report only. `POST /v1/codex-hosts/select` gathers
+the host facts from the AgentSession objects and the login fact (ruling J),
+calls `codexhostpool.Select`, and returns its object. With `?check=true` it
+writes nothing. Without check it writes the lease of section 5 only when
+the action is use: a compare-and-swap on `resourceVersion`, retried on the
+same host while the lease is absent, expired or already this caller's, and
+moved to the next host only when another caller holds an unexpired lease.
+For resume and create the route returns the object and writes nothing;
+slices 3 and 4 build those.
+
+**Ruling H** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). The
+commands. `agent-run codex-host select --repo <name> [--profile <name>]
+[--check]` prints the object as JSON and exits 0 for any action; a refusal
+prints the fixed code and sentence and exits non-zero. `agent-run thread
+start --agent codex` without `--host` calls select: on use it runs today's
+thread start on that host and releases the lease when the launch result is
+known, on every path; on report it prints the object and starts nothing; on
+resume it prints the object and one fixed sentence that resume is not built
+yet, and starts nothing; on create it prints the object and one fixed
+sentence that this command does not create a host. `agent-run --agent codex
+--interactive` calls select before create: on use, resume or report it
+prints the object and creates nothing; on create it continues with today's
+create unchanged. With `--host`, neither command calls select. When the
+route is absent (flag off, or an older operator), `codex-host select`
+reports `route_unsupported`, and the other two commands behave exactly as
+they do today and print one line that host selection is off.
+
+**Ruling I** (coordinator dev-env-fable-coordinator-1109, 2026-11-11).
+Release. `POST /v1/codex-hosts/release` with a body naming the host removes
+the lease only when its holder is this caller, by compare-and-swap. An
+absent lease is success. Another caller's lease is a fixed refusal and is
+left alone. A lease lasts at most 15 minutes and a dead caller's lease ends
+at its expiry. The lease value holds the caller's identity, an expiry and a
+purpose word, nothing else.
+
+**Ruling J** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). The
+login fact, with no new access. The operator never reads the Secret
+`dev-env-codex-live`, and this slice changes no Role. agentd already reports
+the reading: `collectCodexRemote` returns `login-required` whenever its
+check of the keeper projection fails, before anything else. So the route
+takes the login fact from session status. Consider every AgentSession with
+`spec.agent` `codex` and `spec.mode` `remote` that is Running with a pod
+Ready and a heartbeat inside the operator's existing staleness bound for a
+heartbeat (the constant the operator already has; add no new number),
+protected and hands-off hosts included, since this only reads their status.
+The one with the newest heartbeat decides: remote state `login-required` is
+lapsed; any other state is current. No such host is unknown. Only lapsed
+returns `login_required`. Unknown does not block: a suspended host's frozen
+`login-required` is not a reading, and a create with an unknown login is
+what create does today. In `internal/codexhostpool`, `Input.Projection` is
+replaced by a three-valued `Input.Login` (current, lapsed, unknown).
+`TestStaleLoginSnapshotDoesNotBlock` and
+`TestCurrentLoginFailureBlocksResumeAndCreate` stay, restated on those
+values. A fact published by the keeper is a later option and is not built.

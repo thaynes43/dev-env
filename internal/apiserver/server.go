@@ -10,6 +10,8 @@
 //	POST   /v1/sessions/{name}/heartbeat   agentd's status (D-41), the session's own pod only
 //	POST   /v1/sessions/{name}/threads     start one Codex thread on that host (DESIGN-057 10), by exec;
 //	                                       a session only on a host of its own profile or below it
+//	POST   /v1/codex-hosts/select          choose a paired Codex host (DESIGN-063); off unless CodexHosts is set
+//	POST   /v1/codex-hosts/release         clear this caller's lease on that host; off with select
 //	GET    /v1/fleet                       what runs and waits, and on which revision
 //	/v1/scheduled-work[/{name}[/cancel|/approve|/retry]]  scheduled agent work (DESIGN-054); off unless ScheduledWork is set
 //	POST   /v1/asks                        create an ask (session); off unless Asks is set
@@ -145,11 +147,14 @@ type Server struct {
 	Projects *CatalogBinding
 	// PrivateProjectTasks admits new catalog tasks into private repositories.
 	// It is independent of the provider and shared-workspace feature gates.
-	PrivatePilot          *projectcanary.PilotPolicy
-	PrivateProjectTasks   bool
-	ManagedCodexTasks     bool
-	CodexRCEnabled        bool
-	CodexRCTarget         *apiv1.CodexRCTarget
+	PrivatePilot        *projectcanary.PilotPolicy
+	PrivateProjectTasks bool
+	ManagedCodexTasks   bool
+	CodexRCEnabled      bool
+	CodexRCTarget       *apiv1.CodexRCTarget
+	// CodexHosts serves POST /v1/codex-hosts/select and /release (DESIGN-063
+	// slice 2). Nil leaves both unregistered.
+	CodexHosts            *CodexHostConfig
 	ManagedChildDecisions bool
 	// Empty keeps new ordinary coordinator-instruction receiver admission off.
 	CoordinatorInstructionAgentImage string
@@ -296,6 +301,7 @@ func (s *Server) Handler() http.Handler {
 	s.registerReminders(mux)
 	s.registerScheduledWork(mux)
 	s.registerAsks(mux)
+	s.registerCodexHosts(mux)
 	mux.Handle(apiv1.CanariesPath+"/{id}/result", s.canaryResultRoute())
 	mux.Handle(apiv1.SessionDirectoryPath, s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.listDirectory}}))
 	mux.Handle(apiv1.SessionDirectoryPath+"/{directory}", s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.getDirectory}}))
