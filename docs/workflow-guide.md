@@ -1011,11 +1011,11 @@ Meatball reads and answers through the front door, and only for sessions it
 started. The tools are `parent_waiting`, `parent_read`, `parent_answer` and
 `parent_send`. `session_status` adds `parent notes waiting: N` for that
 session. The count and the waiting list have no note text. A session Meatball
-did not start is hidden. A plain message from Meatball is read by name with
-`parent read`. The child's list stays questions and blockers, then results, so
-that plain message is not in the list. The caller's sent list is replies, then
-plain messages. A session that names a child on tell is refused with 400 and
-stores nothing. A session parent sending to its own child is not this slice.
+did not start is hidden. A plain message from Meatball is in the child's
+inbox list, with replies and results, after questions and blockers. The child
+reads it with `parent read`. The caller's sent list is replies, then plain
+messages. A session that names a child on tell is refused with 400 and stores
+nothing. A session parent sending to its own child is not this slice.
 The wake notice for a session parent is a later slice. No note
 text is pasted into a session.
 
@@ -1025,8 +1025,10 @@ the route; the stored sender and recipient identities authorize each read.
 Peer inbox reads, including coordinator and archive reads, omit these records.
 Peer and parent routes share the sender/key namespace, so using the same key
 on both routes conflicts. Listing uses two bounded Kubernetes selections:
-questions/blockers, then results. The opaque continuation records the selection
-and its Kubernetes cursor; the two selections do not promise one shared snapshot.
+questions and blockers, then results, replies and plain messages. The caller's
+sent list is replies, then plain messages. The opaque continuation records the
+selection and its Kubernetes cursor; the two selections do not promise one
+shared snapshot.
 
 A task may use multiple sessions or pods. Its budget, prior failures and context
 follow the task. Peer messages are attributed data, not new owner authority.

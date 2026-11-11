@@ -327,6 +327,14 @@ func TestCallerParentNotesListReplyAndParties(t *testing.T) {
 	if _, err := s.GetParentNote(ctx, plainMessage.Name, plain.Recipient); err != nil {
 		t.Fatal("child read of a plain message", err)
 	}
+	childInbox, _, err := s.ListParentNotes(ctx, plain.Recipient, false, 100, "")
+	if err != nil || len(childInbox) != 1 || childInbox[0].Name != plainMessage.Name {
+		t.Fatal("child inbox hid the plain message", err, len(childInbox))
+	}
+	childReplies, _, err := s.ListParentNotes(ctx, noteSpec.Sender, false, 100, "")
+	if err != nil || len(childReplies) != 1 || childReplies[0].Name != reply.Name {
+		t.Fatal("child inbox hid the reply", err, len(childReplies))
+	}
 	stranger := noteSpec.Sender
 	stranger.UID = "stranger-uid"
 	if _, err := s.GetParentNote(ctx, note.Name, stranger); !errors.Is(err, ErrNotFound) {

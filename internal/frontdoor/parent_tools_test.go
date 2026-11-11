@@ -108,7 +108,7 @@ func TestParentTools(t *testing.T) {
 		return toolResult(t, status, raw)
 	}
 	waiting, isError := call("parent_waiting", map[string]any{"limit": 20})
-	if isError || !strings.Contains(waiting, note) || !strings.Contains(waiting, "kind: blocker") || !strings.Contains(waiting, "age: 2026-11-10T22:00:00Z") || strings.Contains(waiting, key) || strings.Contains(waiting, secret) {
+	if isError || !strings.Contains(waiting, note) || !strings.Contains(waiting, "kind: blocker") || !parentAgeShown(waiting) || strings.Contains(waiting, "2026-11-10") || strings.Contains(waiting, key) || strings.Contains(waiting, secret) {
 		t.Fatalf("waiting %q error %v", waiting, isError)
 	}
 	read, isError := call("parent_read", map[string]any{"name": note})
@@ -147,4 +147,24 @@ func TestParentTools(t *testing.T) {
 	if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), key) || strings.Contains(logs.String(), "blocker") {
 		t.Fatal("front door logged note text, key or kind")
 	}
+}
+
+func parentAgeShown(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		rest, ok := strings.CutPrefix(line, "age: ")
+		if !ok || len(rest) < 2 {
+			continue
+		}
+		unit := rest[len(rest)-1]
+		if unit != 's' && unit != 'm' && unit != 'h' && unit != 'd' {
+			return false
+		}
+		for _, r := range rest[:len(rest)-1] {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }

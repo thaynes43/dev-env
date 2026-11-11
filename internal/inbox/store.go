@@ -34,7 +34,9 @@ const (
 	MaxRequestBytes = 6*MaxTextBytes + 4096
 	RecipientLabel  = "coordination.dev-env.haynesops.com/recipient"
 	// KindLabel and InReplyToLabel mark questions and replies (DESIGN-014,
-	// 2026-10-31); plain messages carry neither.
+	// 2026-10-31). A peer plain message carries neither. A parent plain
+	// message from the caller carries KindPlain so the child's inbox can
+	// select it; the stored kind stays empty.
 	KindLabel      = "coordination.dev-env.haynesops.com/kind"
 	InReplyToLabel = "coordination.dev-env.haynesops.com/in-reply-to"
 
@@ -42,6 +44,7 @@ const (
 	KindResult   = "result"
 	KindBlocker  = "blocker"
 	KindReply    = "reply"
+	KindPlain    = "plain"
 	// StaleAfter is the fixed age past which an unanswered question reads
 	// Stale. It is a display bound, not an expiry: nothing is deleted or resent.
 	StaleAfter = 30 * time.Minute
@@ -303,6 +306,8 @@ func messageLabels(spec coord.InboxMessageSpec) map[string]string {
 	}
 	if spec.Kind != "" {
 		l[KindLabel] = spec.Kind
+	} else if spec.CallerSender != nil && spec.Sender == (coord.SessionIdentity{}) && spec.InReplyTo == nil {
+		l[KindLabel] = KindPlain
 	}
 	if spec.InReplyTo != nil {
 		l[InReplyToLabel] = inReplyToLabel(*spec.InReplyTo)

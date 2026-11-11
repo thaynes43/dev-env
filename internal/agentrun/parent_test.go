@@ -53,6 +53,22 @@ func TestParentMetadataAcceptsOnePartyForm(t *testing.T) {
 	if validParentMetadata(wrong) {
 		t.Fatal("another ServiceAccount accepted")
 	}
+	h := newHarness(t)
+	plain := fromCaller
+	plain.Kind = apiv1.InboxKindPlain
+	listedReply := reply
+	listedReply.Name = "message." + strings.Repeat("c", 32) + "." + strings.Repeat("d", 32)
+	listedReply.UID = "reply-uid"
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		if r.Method != http.MethodGet || r.URL.Path != apiv1.ParentNotesPath || len(body) != 0 {
+			t.Error("parent list sent extra intent")
+		}
+		writeTestJSON(w, 200, apiv1.InboxList{Items: []apiv1.InboxMetadata{plain, listedReply}, Box: "inbox"})
+	}
+	h.mustRun(ExitOK, "parent", "list")
+	if !strings.Contains(h.stdout.String(), plain.Name) || !strings.Contains(h.stdout.String(), listedReply.Name) {
+		t.Fatal("list hid a caller message")
+	}
 }
 
 func TestParentTellIntentAndUncertainty(t *testing.T) {

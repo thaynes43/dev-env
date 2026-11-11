@@ -193,7 +193,8 @@ and the session read still returns. Neither line carries note text.
 only parent-note tools. They call the operator as this process's ServiceAccount.
 A session this caller did not start is hidden: the tool returns the operator's
 status and does not return the note text, the key or the kind on a refusal.
-`parent_waiting` lists names, kinds and ages. It has no text and no key.
+`parent_waiting` lists names, kinds and ages. An age is the whole seconds,
+minutes, hours or days since the note was stored. It has no text and no key.
 `parent_read` returns the stored text unchanged. `parent_answer` stores one
 reply. The same key and text confirm the stored answer; a different second
 answer is refused. `parent_send` stores one plain message for a session this

@@ -181,6 +181,10 @@ func TestParentNotePolicyCaller(t *testing.T) {
 	if len(sentList.Items) != 2 || sentList.Items[0].Kind != inbox.KindReply || sentList.Items[1].Kind != apiv1.InboxKindPlain {
 		t.Fatal("caller sent box", sentList.Items)
 	}
+	childInbox := parentNoteList(t, f, child, "")
+	if len(childInbox.Items) != 2 || childInbox.Items[0].Name != answer.Name || childInbox.Items[1].Name != sent.Name || childInbox.Items[1].Kind != apiv1.InboxKindPlain {
+		t.Fatal("child inbox hid the answer or the plain message", childInbox.Items)
+	}
 
 	for _, route := range []struct{ method, path string }{
 		{http.MethodGet, apiv1.ParentNotesPath + "/" + note.Name + "/wait?seconds=1"},

@@ -745,7 +745,7 @@ func formatParentWaiting(list apiv1.InboxList) string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "name: %s\nkind: %s\nage: %s\n", item.Name, parentKindLabel(item.Kind), item.CreatedAt.UTC().Format(time.RFC3339))
+		fmt.Fprintf(&b, "name: %s\nkind: %s\nage: %s\n", item.Name, parentKindLabel(item.Kind), parentAge(item.CreatedAt))
 	}
 	if list.Continue != "" {
 		b.WriteString("more notes may be waiting\n")
@@ -781,6 +781,27 @@ func parentKindLabel(kind string) string {
 		return "plain"
 	}
 	return kind
+}
+
+// parentAge is the whole seconds, minutes, hours or days since the note was stored.
+func parentAge(created time.Time) string {
+	if created.IsZero() {
+		return "0s"
+	}
+	d := time.Since(created)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }
 
 func parentNoteNameOK(name string) bool {

@@ -257,13 +257,15 @@ func (s KubeStore) listParentNotes(ctx context.Context, party noteParty, sent bo
 
 func parentNotePhaseRequirement(phase int, callerSent bool) (*labels.Requirement, error) {
 	if callerSent && phase == 1 {
-		return labels.NewRequirement(KindLabel, selection.DoesNotExist, nil)
+		return labels.NewRequirement(KindLabel, selection.In, []string{KindPlain})
 	}
 	kinds := []string{KindQuestion, KindBlocker}
 	if callerSent && phase == 0 {
 		kinds = []string{KindReply}
 	} else if phase == 1 {
-		kinds = []string{KindResult}
+		// Questions and blockers stay first. Results, replies and plain
+		// messages share the second selection, so one page stays two calls.
+		kinds = []string{KindResult, KindReply, KindPlain}
 	}
 	return labels.NewRequirement(KindLabel, selection.In, kinds)
 }
@@ -273,10 +275,10 @@ func parentNotePhaseMatches(spec coord.InboxMessageSpec, phase int, callerSent b
 		if phase == 0 {
 			return spec.Kind == KindReply
 		}
-		return spec.Kind == ""
+		return spec.Kind == "" && spec.CallerSender != nil && spec.InReplyTo == nil
 	}
 	if phase == 0 {
 		return spec.Kind == KindQuestion || spec.Kind == KindBlocker
 	}
-	return spec.Kind == KindResult
+	return spec.Kind == KindResult || spec.Kind == KindReply || (spec.Kind == "" && spec.CallerSender != nil && spec.InReplyTo == nil)
 }

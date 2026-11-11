@@ -101,7 +101,7 @@ func (a *app) parent(ctx context.Context, args []string) error {
 			return fail(ExitFailed, "parent list returned an unconfirmed box or page")
 		}
 		for _, item := range result.Items {
-			if !validParentNoteMetadata(item) {
+			if !validParentNoteMetadata(item) && !validParentReplyMetadata(item, "") && !validParentPlainMetadata(item) {
 				return fail(ExitFailed, "parent list returned an unconfirmed note")
 			}
 		}
