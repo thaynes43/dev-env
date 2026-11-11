@@ -854,7 +854,13 @@ shared by both API replicas, a new credential for no gain in safety.
 
 - Authorisation is the inbox list's: a session sees only notes addressed to
   it, by name and UID. A CallerPolicy caller has no wait, as before
-  (section 7.2).
+  (section 7.2). The final fence re-runs the admission a new request runs,
+  including a named coordinator's admission label. That fence is shared, so
+  parent wait, parent read and parent list recheck it too. On this route the
+  fence read has its own allowance of 10 seconds, taken from the request and
+  not from the wait. When the fence fails after a wait that is holding, the
+  handler keeps the slot until the wait's own deadline and then returns the
+  refusal. `seconds=0` holds nothing, so a failed fence there is immediate.
 - It is one held read on the watch the operator already has, with
   `holdResponse` as in section 7.2. It counts against the same limit as
   `parent wait`: eight held reads for one session on one API replica
