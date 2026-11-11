@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.102.0](https://github.com/thaynes43/dev-env/compare/v2.101.1...v2.102.0) (2026-11-11)
+
+
+### Features
+
+* **parent:** let a Meatball caller read and answer its sessions (OP687) ([#1061](https://github.com/thaynes43/dev-env/issues/1061)) ([7cc86a8](https://github.com/thaynes43/dev-env/commit/7cc86a80fbc6e9c500b9657c4c6d62e49770947d))
+
 ## [2.101.1](https://github.com/thaynes43/dev-env/compare/v2.101.0...v2.101.1) (2026-11-11)
 
 

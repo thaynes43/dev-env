@@ -607,8 +607,43 @@ For these notes, ADR-023 adds two release facts and leaves the 30 days:
 - A `callerRecipient` or `callerSender` is not a session. It counts as
   absent for the recipient or sender test, so a Meatball note does not wait
   forever on a session object that will never exist.
-- A stored reply counts as the ack. The note and the reply then follow the
-  existing grace once the child session is gone.
+- A stored reply counts as the ack of the note. The note follows the
+  existing grace once the child session is gone. The 2026-11-11 note below
+  records that this fact is not implemented in this slice.
+  The reply is an InboxMessage under the same rule.
+  A caller sender counts as absent, so a Meatball reply follows that grace
+  once the child is gone. A session sender keeps the reply while that parent
+  session exists: the archive event can record the sender only as absent, and
+  ADR-004 still keeps a message while its sender session exists.
+
+Noted 2026-11-11, coordinator session dev-env-fable-coordinator-1109, on the
+independent reviews of the retention slice. The reply-as-ack fact above is
+not implemented in this slice. It moves to story 697 with the archive read
+fallback. The parent read and list routes cannot yet read a released note
+back from the archive, so this slice does not release a note on the strength
+of its reply.
+[OpenProject #697](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/697),
+"Reaching a parent: read a released note from its archive, then release
+answered notes to a live parent", adds that read. This slice implements only
+the first fact: a caller endpoint counts as absent. ADR-023 is unchanged:
+keeping a record longer than its release fact allows is not a contradiction
+of it.
+
+The rows that differ from main are these. A labelled note whose child session
+is gone and whose parent session is present is kept. That includes a valid
+read ack, and a read ack whose read fails or which is malformed or unbound.
+Main releases the valid-ack case and leaves the bad-ack case Unknown. A
+labelled note whose child session is gone, and whose parent read is anything
+other than present or absent, is Unknown, including when a valid read ack is
+stored. Main releases that case. A note to the caller account, a caller
+reply, and a caller plain message are kept while the child session exists
+and become release-eligible once that child is gone. Main leaves every
+caller shape Unknown.
+
+Retention is off by default, and haynes-ops does not set
+`--enable-coordination-retention`. A shelf older than this change refuses to
+archive a caller-recipient note, which stops before any delete. During a
+mixed rollout an old leader still applies main's rules.
 
 A note to a session parent who never answers, while that parent session
 still exists, stays, as any unacked inbox message to a live recipient stays.

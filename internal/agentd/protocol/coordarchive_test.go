@@ -180,6 +180,47 @@ func TestCoordArchiveLimitsReaderBeforeDecoding(t *testing.T) {
 	}
 }
 
+func TestCoordArchiveCallerRecipientMatchesAndBothFormsDoNot(t *testing.T) {
+	m, raw := coordArchiveFixture(t, "inboxmessages")
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		t.Fatal(err)
+	}
+	spec := object["spec"].(map[string]any)
+	delete(spec, "recipient")
+	spec["callerRecipient"] = map[string]any{"serviceAccount": "dev-env-system/dev-env-meatball", "policyUID": m.RecipientUID}
+	callerRaw, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindCoordArchiveFixture(t, &m, callerRaw)
+	if _, err := VerifyCoordArchiveObject(m, bytes.NewReader(callerRaw)); err != nil {
+		t.Fatal(err)
+	}
+	spec["recipient"] = map[string]any{"uid": m.RecipientUID}
+	both, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindCoordArchiveFixture(t, &m, both)
+	requireCoordArchiveInvalid(t, m, bytes.NewReader(both))
+
+	ack, ackRaw := coordArchiveFixture(t, "inboxreadacks")
+	var ackObject map[string]any
+	if err := json.Unmarshal(ackRaw, &ackObject); err != nil {
+		t.Fatal(err)
+	}
+	ackSpec := ackObject["spec"].(map[string]any)
+	delete(ackSpec, "recipient")
+	ackSpec["callerRecipient"] = map[string]any{"policyUID": ack.RecipientUID}
+	ackRaw, err = json.Marshal(ackObject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindCoordArchiveFixture(t, &ack, ackRaw)
+	requireCoordArchiveInvalid(t, ack, bytes.NewReader(ackRaw))
+}
+
 func TestCoordArchiveCanonicalSizeBoundary(t *testing.T) {
 	m, raw := coordArchiveFixture(t, "publishedcontexts")
 	var object map[string]json.RawMessage

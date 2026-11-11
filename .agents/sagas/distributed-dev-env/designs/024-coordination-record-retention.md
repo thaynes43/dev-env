@@ -181,6 +181,14 @@ live in the session namespaces the operator reconciles (`dev-agents`).
 | InboxMessage | `sender-absent-recipient-done` | `spec.sender` UID is absent, and an InboxReadAck exists for this message UID and `spec.recipient` UID, or the recipient UID is absent | its ack, if any |
 | InboxReadAck | `message-released` | its message was released: the message UID is absent from the live store **and** the archive holds that message UID | its message |
 
+Parent notes stay InboxMessage records. [DESIGN-062](062-reaching-a-parent.md)
+section 10 adds two facts and no new kind or grace: a caller party counts as
+absent, and a stored reply counts as the note's ack. The 2026-11-11 note in
+that section records that this slice implements only the first fact. The
+reply-as-ack fact is not implemented here; it moves to story 697 with the
+archive read fallback. A labelled note to a session parent is kept while that
+parent session exists, including when a read ack is stored.
+
 The ack rule needs both halves. A message that left the live store some other
 way, for example by Tom's manual recovery (DESIGN-010), has no archive entry, so
 its ack stays. That manual path deletes a message's ack with it anyway.

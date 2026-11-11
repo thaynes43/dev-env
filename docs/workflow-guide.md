@@ -877,7 +877,16 @@ Use this when Tom must see and drive the thread on his phone.
    `client_started`, `thread_created`, `source_visible` (in the phone's default
    list), `handoff` and `first_response`, and the effective `permission` mode:
    always-allow (`--dangerously-bypass-approvals-and-sandbox`, which the wrapper
-   always passes; nobody picks a flag by hand). Only `responded` exits 0. `visible`
+   always passes; nobody picks a flag by hand). Before the wrapper runs, agentd
+   asks the host daemon's `config/value/write` to record folder trust for that
+   one repository (`projects."<resolved ~/repos/<repo>>".trust_level`), so the
+   client does not stop on its folder prompt. The repository qualifies only
+   when this session's bootstrap record names it `Ready`. Anything else stops
+   at once with `folder_not_qualified`, before config is read. A failure before
+   the write, including a private Codex host, stops with `codex_config_invalid`:
+   nothing changed. A failure after the write was sent stops with
+   `codex_trust_unconfirmed`: trust may have been written. `thread status` does not write
+   trust. Only `responded` exits 0. `visible`
    (exit 7) means the thread is listed and its answer was not seen before
    `--wait`; never resend. `hidden` means the thread got a source the phone
    hides. `action_required` with `pairing_required` means run `agent-run pair`

@@ -406,8 +406,8 @@ func validateListItem(item protocol.CoordArchiveListItem, q protocol.CoordArchiv
 		return errors.New("projection project differs")
 	}
 	if q.Resource == "inboxmessages" || q.Resource == "inboxreadacks" {
-		recipient, ok := spec["recipient"].(map[string]any)
-		if !ok || recipient["uid"] != item.Manifest.RecipientUID {
+		uid, ok := protocol.CoordArchiveRecipientUID(q.Resource, spec)
+		if !ok || uid != item.Manifest.RecipientUID {
 			return errors.New("projection recipient differs")
 		}
 	}

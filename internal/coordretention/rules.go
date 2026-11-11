@@ -3,6 +3,7 @@ package coordretention
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -79,7 +80,7 @@ func validSummary(s Summary, namespace string) bool {
 	case PublishedContext:
 		return validRef(s.Source)
 	case InboxMessage:
-		return validRef(s.Sender) && validRef(s.Recipient)
+		return validInboxSender(s) && validInboxRecipient(s)
 	case InboxReadAck:
 		if !validRef(s.Recipient) || s.Message.Namespace != s.Namespace || s.Message.Project != s.Project || s.Name != inbox.AckName(s.Message.UID, s.Recipient.UID) {
 			return false
@@ -144,6 +145,13 @@ func sessionObservation(role string, ref SessionRef, memo map[string]memoSession
 	return obs, true
 }
 func decide(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession) (Decision, *MessageRef, []protocol.CoordArchiveObservation) {
+	if s.Kind == InboxMessage && ctx.Err() == nil && c.Reader != nil && validSummary(s, c.OperatorNamespace) {
+		return decideInbox(ctx, c, s, memo)
+	}
+	return decideRecord(ctx, c, s, memo)
+}
+
+func decideRecord(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession) (Decision, *MessageRef, []protocol.CoordArchiveObservation) {
 	if ctx.Err() != nil || c.Reader == nil || !validSummary(s, c.OperatorNamespace) {
 		return Unknown, nil, nil
 	}
@@ -152,40 +160,6 @@ func decide(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSe
 		return sessionDecision(ctx, c, "owner", s.Owner, memo)
 	case PublishedContext:
 		return sessionDecision(ctx, c, "source", s.Source, memo)
-	case InboxMessage:
-		answer := session(ctx, c, s.Sender, memo)
-		senderObs, ok := sessionObservation("sender", s.Sender, memo)
-		if !ok {
-			return Unknown, nil, nil
-		}
-		if answer == sessionPresent {
-			return Kept, nil, []protocol.CoordArchiveObservation{senderObs}
-		}
-		var a coord.InboxReadAck
-		key := client.ObjectKey{Namespace: s.Namespace, Name: inbox.AckName(s.UID, s.Recipient.UID)}
-		err := c.Reader.Get(ctx, key, &a)
-		if ctx.Err() != nil {
-			return Unknown, nil, nil
-		}
-		if err == nil {
-			if !matchesObject(&a, key) || a.ResourceVersion == "" || !inbox.ValidAck(a.Spec) || a.Spec.Project != s.Project || a.Spec.MessageName != s.Name || a.Spec.MessageUID != s.UID || a.Spec.Recipient != (coord.SessionIdentity{Namespace: s.Recipient.Namespace, Name: s.Recipient.Name, UID: s.Recipient.UID}) {
-				return Unknown, nil, nil
-			}
-			return Released, nil, []protocol.CoordArchiveObservation{senderObs, {Role: "recipient", Namespace: s.Recipient.Namespace, Name: s.Recipient.Name, UID: s.Recipient.UID, Observed: "acknowledged", AckUID: string(a.UID)}}
-		}
-		if !apierrors.IsNotFound(err) {
-			return Unknown, nil, nil
-		}
-		recipientAnswer := session(ctx, c, s.Recipient, memo)
-		recipientObs, ok := sessionObservation("recipient", s.Recipient, memo)
-		if !ok {
-			return Unknown, nil, nil
-		}
-		decision := Released
-		if recipientAnswer == sessionPresent {
-			decision = Kept
-		}
-		return decision, nil, []protocol.CoordArchiveObservation{senderObs, recipientObs}
 	case InboxReadAck:
 		var m coord.InboxMessage
 		key := client.ObjectKey{Namespace: s.Message.Namespace, Name: s.Message.Name}
@@ -216,6 +190,170 @@ func decide(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSe
 	}
 	return Unknown, nil, nil
 }
+func validInboxSender(s Summary) bool {
+	if s.CallerSenderUID != "" {
+		return s.Sender == (SessionRef{}) && protocol.ValidKubeUID(s.CallerSenderUID)
+	}
+	return validRef(s.Sender)
+}
+
+func validInboxRecipient(s Summary) bool {
+	if s.CallerRecipient {
+		return s.Recipient.Namespace == "" && s.Recipient.Name == "" && protocol.ValidKubeUID(s.Recipient.UID)
+	}
+	return validRef(s.Recipient)
+}
+
+// inboxShapeDecided reports the endpoint pairs retention may release or keep.
+// Every other pair, including caller to caller, is Unknown.
+func inboxShapeDecided(s Summary) bool {
+	sessionSender := s.CallerSenderUID == "" && s.Sender != (SessionRef{})
+	sessionRecipient := !s.CallerRecipient && s.Recipient != (SessionRef{})
+	callerSender := s.CallerSenderUID != "" && s.Sender == (SessionRef{})
+	callerRecipient := s.CallerRecipient && s.Recipient.Namespace == "" && s.Recipient.Name == "" && s.Recipient.UID != ""
+	switch {
+	case sessionSender && sessionRecipient && !callerSender && !callerRecipient:
+		return true
+	case sessionSender && callerRecipient && !callerSender:
+		switch s.MessageKind {
+		case inbox.KindQuestion, inbox.KindResult, inbox.KindBlocker:
+			return true
+		default:
+			return false
+		}
+	case callerSender && sessionRecipient && !callerRecipient:
+		return s.MessageKind == inbox.KindReply || s.MessageKind == ""
+	default:
+		return false
+	}
+}
+
+// callerPartyObservation records a Meatball party in the only shape the
+// archive event accepts. The account is not a session. The namespace and
+// name are the service account; the UID is the CallerPolicy UID.
+func callerPartyObservation(role, policyUID, observed, ackUID string) (protocol.CoordArchiveObservation, bool) {
+	namespace, name, ok := strings.Cut(coord.MeatballServiceAccount, "/")
+	if !ok || !protocol.ValidKubeUID(policyUID) {
+		return protocol.CoordArchiveObservation{}, false
+	}
+	return protocol.CoordArchiveObservation{Role: role, Namespace: namespace, Name: name, UID: policyUID, Observed: observed, AckUID: ackUID}, true
+}
+
+func decideInbox(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession) (Decision, *MessageRef, []protocol.CoordArchiveObservation) {
+	if !inboxShapeDecided(s) {
+		return Unknown, nil, nil
+	}
+	senderAnswer, senderObs, ok := inboxSender(ctx, c, s, memo)
+	if !ok {
+		return Unknown, nil, nil
+	}
+	if senderAnswer == sessionPresent {
+		return Kept, nil, []protocol.CoordArchiveObservation{senderObs}
+	}
+	// A caller-authored record is released only when its child session is gone.
+	// A read ack does not shortcut that child read.
+	if s.CallerSenderUID != "" {
+		return callerChildDecision(ctx, c, s, memo, senderObs)
+	}
+	// The caller account is not a session. Once the child sender is gone, both
+	// endpoints of a note to that account are absent.
+	if s.CallerRecipient {
+		obs, obsOK := callerPartyObservation("recipient", s.Recipient.UID, "not-found", "")
+		if !obsOK {
+			return Unknown, nil, nil
+		}
+		return Released, nil, []protocol.CoordArchiveObservation{senderObs, obs}
+	}
+	// A labelled note to a session parent is kept while that parent exists.
+	// Absence continues with the ordinary ack and recipient rule. Any other
+	// parent read is Unknown, before a read ack is consulted.
+	if sessionParentNote(s) {
+		recipientAnswer, recipientObs, recipientOK := inboxRecipient(ctx, c, s, memo)
+		if recipientOK && recipientAnswer == sessionPresent {
+			return Kept, nil, []protocol.CoordArchiveObservation{senderObs, recipientObs}
+		}
+		if recipientAnswer != sessionAbsent {
+			return Unknown, nil, nil
+		}
+	}
+	decision, observations, done := inboxAck(ctx, c, s, senderObs)
+	if done {
+		return decision, nil, observations
+	}
+	recipientAnswer, recipientObs, ok := inboxRecipient(ctx, c, s, memo)
+	if !ok {
+		return Unknown, nil, nil
+	}
+	decision = Released
+	if recipientAnswer == sessionPresent {
+		decision = Kept
+	}
+	return decision, nil, []protocol.CoordArchiveObservation{senderObs, recipientObs}
+}
+
+func callerChildDecision(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession, senderObs protocol.CoordArchiveObservation) (Decision, *MessageRef, []protocol.CoordArchiveObservation) {
+	recipientAnswer, recipientObs, ok := inboxRecipient(ctx, c, s, memo)
+	if !ok {
+		return Unknown, nil, nil
+	}
+	decision := Released
+	if recipientAnswer == sessionPresent {
+		decision = Kept
+	}
+	return decision, nil, []protocol.CoordArchiveObservation{senderObs, recipientObs}
+}
+
+// sessionParentNote is a parent-route note whose recipient is a session.
+// A reply's parent is its sender, which is already read before any ack.
+func sessionParentNote(s Summary) bool {
+	if !s.ParentNote || s.CallerRecipient || s.CallerSenderUID != "" {
+		return false
+	}
+	switch s.MessageKind {
+	case inbox.KindQuestion, inbox.KindResult, inbox.KindBlocker:
+		return true
+	default:
+		return false
+	}
+}
+
+func inboxSender(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession) (sessionAnswer, protocol.CoordArchiveObservation, bool) {
+	if s.CallerSenderUID != "" {
+		obs, ok := callerPartyObservation("sender", s.CallerSenderUID, "not-found", "")
+		return sessionAbsent, obs, ok
+	}
+	answer := session(ctx, c, s.Sender, memo)
+	obs, ok := sessionObservation("sender", s.Sender, memo)
+	return answer, obs, ok
+}
+
+func inboxRecipient(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession) (sessionAnswer, protocol.CoordArchiveObservation, bool) {
+	answer := session(ctx, c, s.Recipient, memo)
+	obs, ok := sessionObservation("recipient", s.Recipient, memo)
+	return answer, obs, ok
+}
+
+// inboxAck is the InboxReadAck lookup. done is false only when the ack is
+// absent, so the caller can apply the recipient test. Every other result is final.
+func inboxAck(ctx context.Context, c EvalConfig, s Summary, senderObs protocol.CoordArchiveObservation) (Decision, []protocol.CoordArchiveObservation, bool) {
+	var a coord.InboxReadAck
+	key := client.ObjectKey{Namespace: s.Namespace, Name: inbox.AckName(s.UID, s.Recipient.UID)}
+	err := c.Reader.Get(ctx, key, &a)
+	if ctx.Err() != nil {
+		return Unknown, nil, true
+	}
+	if err == nil {
+		if !matchesObject(&a, key) || a.ResourceVersion == "" || !inbox.ValidAck(a.Spec) || a.Spec.Project != s.Project || a.Spec.MessageName != s.Name || a.Spec.MessageUID != s.UID || a.Spec.Recipient != (coord.SessionIdentity{Namespace: s.Recipient.Namespace, Name: s.Recipient.Name, UID: s.Recipient.UID}) {
+			return Unknown, nil, true
+		}
+		return Released, []protocol.CoordArchiveObservation{senderObs, {Role: "recipient", Namespace: s.Recipient.Namespace, Name: s.Recipient.Name, UID: s.Recipient.UID, Observed: "acknowledged", AckUID: string(a.UID)}}, true
+	}
+	if !apierrors.IsNotFound(err) {
+		return Unknown, nil, true
+	}
+	return "", nil, false
+}
+
 func sessionDecision(ctx context.Context, c EvalConfig, role string, ref SessionRef, memo map[string]memoSession) (Decision, *MessageRef, []protocol.CoordArchiveObservation) {
 	answer := session(ctx, c, ref, memo)
 	obs, ok := sessionObservation(role, ref, memo)
