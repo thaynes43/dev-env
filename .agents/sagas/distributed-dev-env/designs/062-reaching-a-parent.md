@@ -807,8 +807,10 @@ is woken by a command it runs itself.
   order, so no cursor made of a time and names can be both small and
   complete. The cursor is instead the resource version at which the caller
   last read: the handler watches parent notes from that version and answers
-  the first note it sees stored for the caller. The new cursor is that
-  note's resource version. Two notes stored in the same second come back in
+  the first note it sees stored for the caller. Only an `Added` event counts
+  as stored. A later change to a note that already exists, such as a label
+  or an annotation, never wakes the parent. The new cursor is that note's
+  resource version. Two notes stored in the same second come back in
   the order the API server stored them, one per call, with no cap.
 - **With no `after`, the cursor is the resource version of a list** of the
   caller's notes taken when the request arrives. Notes already stored are
@@ -819,9 +821,14 @@ is woken by a command it runs itself.
   answer is `resync` with a fresh cursor from a new list, and the caller
   runs `agent-run parent list` to see what it may have missed. The handler
   never falls back to comparing times.
-- At the deadline the answer is `waiting`, with the newest version the watch
-  reached, or the cursor it was given when the watch reached none. The
-  cursor is opaque to the caller, at most 256 bytes, and carries no note
+- **An idle parent keeps a usable cursor.** The watch asks the API server
+  for bookmarks. At the deadline the answer is `waiting`, with the newest
+  version the watch reported: a bookmark, or an event for any parent's note.
+  When the watch reported none, the answer returns the cursor it was given.
+  So a parent with no new notes for hours is not sent to `resync` on every
+  call. The handler does not take a fresh list at the deadline: a note
+  stored between the last event read and that list would be skipped.
+- The cursor is opaque to the caller, at most 256 bytes, and carries no note
   text. A cursor that is not a resource version is refused with 422.
 - Authorisation is the inbox list's: a session sees only notes addressed to
   it, by name and UID. A CallerPolicy caller has no wait, as before
@@ -851,7 +858,9 @@ the order they were stored, whatever their names; forty notes in one second
 are all returned, none twice and none skipped; a note stored between the
 list and the watch is returned; with no `after`, notes that already exist
 are not returned and no clock is read; an expired cursor answers `resync`
-with a fresh cursor and returns no note; a cursor that is not a resource
+with a fresh cursor and returns no note; a `Modified` event for an old note
+wakes nobody; after a wait that saw only a bookmark, the returned cursor is
+the bookmark's version and the next call accepts it; a cursor that is not a resource
 version is 422; another session's notes never wake the caller; a reply and a
 plain message never wake it; the ninth held read is 429; a refused watch is
 503; the route is absent with the flag off; a CallerPolicy caller is
