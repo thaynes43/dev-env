@@ -209,11 +209,20 @@ func (s *Server) namedCoordinatorIdentity(id Identity) bool {
 		id.Namespace == s.Policy.SessionNamespace && templates.IsCoordinatorServiceAccount(id.ServiceAccount)
 }
 
+// namedCoordinatorAdmitted is the admission-label test a named coordinator's
+// session must pass: CoordinatorIdentityLabel equals the token's own
+// ServiceAccount. resolveNamedCoordinatorSession uses it on the session it
+// resolved. The parent-note fence uses it on the session it just read
+// through the live reader.
+func namedCoordinatorAdmitted(sess *v1alpha1.AgentSession, account string) bool {
+	return sess.Labels[templates.CoordinatorIdentityLabel] == account
+}
+
 // resolveNamedCoordinatorSession finds the session a named coordinator
 // identity's token speaks for. It is resolveSession, the rule a workbench
 // session's pod meets, plus two checks: the live Pod runs as the token's own
 // account, and the session carries the API's admission record for that account
-// (templates.CoordinatorIdentityLabel). So the token speaks only for a session
+// (namedCoordinatorAdmitted). So the token speaks only for a session
 // the API admitted and whose pod the operator built as that account
 // (controller.buildPod), never for an ordinary session's pod. There is no client
 // fallback: a token bound to no pod, or to a pod no session controls, is refused.
@@ -227,7 +236,7 @@ func (s *Server) resolveNamedCoordinatorSession(ctx context.Context, id Identity
 	if c.pod.Spec.ServiceAccountName != id.ServiceAccount {
 		return nil, forbidden("pod %s does not run as %s", c.pod.Name, id.serviceAccountRef())
 	}
-	if c.session.Labels[templates.CoordinatorIdentityLabel] != id.ServiceAccount {
+	if !namedCoordinatorAdmitted(c.session, id.ServiceAccount) {
 		return nil, forbidden("session %s was not admitted to run as %s", c.session.Name, id.serviceAccountRef())
 	}
 	return c, nil

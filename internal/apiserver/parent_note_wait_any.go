@@ -89,6 +89,20 @@ func (s *Server) waitAnyParentNote(ctx context.Context, w http.ResponseWriter, r
 	}
 	waitCtx, cancel := timeout(ctx, duration)
 	defer cancel()
+	// refusalAt is fixed once, here: the wait's deadline plus the fence
+	// allowance. A note that fails the fence and an idle wait that fails it
+	// both answer at this time, so the fence's own latency cannot separate
+	// them. Request cancellation still ends the wait.
+	// holdResponse above already covers N plus 30 seconds. The allowance is
+	// 10 seconds, so this time fits in that hold: the other 20 seconds are
+	// the margin those connection deadlines already keep, and a fence that
+	// uses its whole allowance still ends before the connection closes.
+	var refusalAt time.Time
+	if dl, ok := waitCtx.Deadline(); ok {
+		refusalAt = dl.Add(parentNoteFenceAllowance)
+	} else {
+		refusalAt = time.Now().Add(duration + parentNoteFenceAllowance)
+	}
 	cursor := after
 	if after == "" {
 		// One list, inside the wait. Existing notes stay out of the answer.
@@ -113,9 +127,9 @@ func (s *Server) waitAnyParentNote(ctx context.Context, w http.ResponseWriter, r
 		note = nil
 	}
 	if err := s.finishParentWaitAny(ctx, c, party); err != nil {
-		// A failed fence does not answer early. The slot stays held until
-		// the wait's own deadline, then the refusal is the fence's own.
-		<-waitCtx.Done()
+		// A failed fence answers at refusalAt, not when its own read finishes
+		// and not when the wait context ends. The slot stays held until then.
+		s.holdParentNoteRefusal(ctx, refusalAt)
 		return 0, nil, err
 	}
 	if note != nil {
@@ -144,6 +158,22 @@ func (s *Server) answerParentWaitAnyNow(ctx context.Context, c *caller, party co
 		return 0, nil, err
 	}
 	return http.StatusOK, apiv1.ParentNoteWaitAnyResult{State: apiv1.ParentNoteWaiting, Cursor: cursor}, nil
+}
+
+// holdParentNoteRefusal blocks until at, or until ctx is done. Nil
+// parentRefusalWait uses the wall clock. ctx is the request, so cancelling
+// the request ends the block and an expired wait does not.
+func (s *Server) holdParentNoteRefusal(ctx context.Context, at time.Time) {
+	if s.parentRefusalWait != nil {
+		s.parentRefusalWait(ctx, at)
+		return
+	}
+	timer := time.NewTimer(time.Until(at))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 }
 
 // finishParentWaitAny reads the final fence on a context derived from the

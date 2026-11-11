@@ -111,13 +111,13 @@ func TestParentWaitAnyRepeatsPast900(t *testing.T) {
 		apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "inbox record not found")
 	}
 	h.mustRun(ExitNotFound, "parent", "wait-any", "--for", "901s")
-	if h.stdout.String() != "77\nagent-run parent wait-any --after 77\n" || !strings.Contains(h.stderr.String(), "404") || strings.Contains(h.stdout.String(), "waiting") {
+	if h.stdout.String() != "77\nrun the same command again with --after and that cursor\n" || strings.Contains(h.stdout.String(), "agent-run") || !strings.Contains(h.stderr.String(), "404") || strings.Contains(h.stdout.String(), "waiting") {
 		t.Fatalf("later failure text %q stderr %q", h.stdout.String(), h.stderr.String())
 	}
 	n = 0
 	h.mustRun(ExitNotFound, "parent", "wait-any", "--for", "901s", "-o", "json")
 	var raw map[string]any
-	if json.Unmarshal(h.stdout.Bytes(), &raw) != nil || raw["cursor"] != "77" || raw["command"] != "agent-run parent wait-any --after 77" || raw["state"] != nil {
+	if json.Unmarshal(h.stdout.Bytes(), &raw) != nil || len(raw) != 1 || raw["cursor"] != "77" || raw["command"] != nil || raw["state"] != nil {
 		t.Fatalf("later failure JSON %s", h.stdout.String())
 	}
 	if !strings.Contains(h.stderr.String(), "404") {
@@ -139,6 +139,19 @@ func TestParentWaitAnyRepeatsPast900(t *testing.T) {
 		if h.stdout.Len() != 0 || strings.Contains(h.stdout.String(), "42") || strings.Contains(h.stderr.String(), "42") || strings.Contains(h.stderr.String(), "PRIVATE_LOST") || !strings.Contains(h.stderr.String(), "read agent-run parent list before starting again") {
 			t.Fatalf("%v stdout %q stderr %q", args, h.stdout.String(), h.stderr.String())
 		}
+	}
+}
+
+func TestParentWaitAnyStopsOnResync(t *testing.T) {
+	h := newHarness(t)
+	var calls []string
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		calls = append(calls, r.URL.Query().Get("seconds")+"|"+r.URL.Query().Get("after"))
+		writeTestJSON(w, http.StatusOK, apiv1.ParentNoteWaitAnyResult{State: apiv1.ParentNoteResync, Cursor: "900"})
+	}
+	h.mustRun(ExitOK, "parent", "wait-any", "--for", "901s")
+	if len(calls) != 1 || calls[0] != "900|" || h.stdout.String() != "resync\n900\nrun agent-run parent list\n" || h.stderr.Len() != 0 {
+		t.Fatalf("resync did not stop the repeat: %v %q stderr %q", calls, h.stdout.String(), h.stderr.String())
 	}
 }
 
@@ -240,7 +253,14 @@ func TestParentHelpMentionsWaitAny(t *testing.T) {
 	}
 	h := newHarness(t)
 	h.mustRun(ExitOK, "help", "parent")
-	if !strings.Contains(h.stdout.String(), "agent-run parent wait-any") || !strings.Contains(h.stdout.String(), "--for 0") || !strings.Contains(h.stdout.String(), "read agent-run parent list before starting again") || strings.Contains(h.stdout.String(), "PRIVATE") {
+	out := h.stdout.String()
+	if !strings.Contains(out, "agent-run parent wait-any") || !strings.Contains(out, "--for 0") || !strings.Contains(out, "read agent-run parent list before starting again") || strings.Contains(out, "PRIVATE") {
 		t.Fatal("agent-run help parent omits wait-any")
+	}
+	if !strings.Contains(out, "run the same command again with --after and that cursor") || !strings.Contains(out, "JSON carries the cursor only") || strings.Contains(out, "agent-run parent wait-any --after that cursor") {
+		t.Fatal("help still describes a recovery command line")
+	}
+	if !strings.Contains(out, "passing --continue until none is returned") || !strings.Contains(out, "The wait cursor and the list continuation are different things.") {
+		t.Fatal("help omits the resync pages")
 	}
 }

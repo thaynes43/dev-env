@@ -385,10 +385,16 @@ whole-second wait calls again with the cursor it was given, at most 900
 seconds at a time. The client timeout is that chunk plus 2 minutes, the same
 as parent wait. At most 8 held reads for one session on one API replica are
 shared with parent wait. A refused watch returns 503 and holds nothing.
-There is no polling. A CallerPolicy caller has no wait. If a call after the
-first fails, text and JSON both print the last cursor the server confirmed
-and the command agent-run parent wait-any --after that cursor, and the exit
-code is that failure's own. If no cursor was confirmed, it says to
+There is no polling. A CallerPolicy caller has no wait. On resync, keep
+the cursor it printed. Read every page of agent-run parent list,
+passing --continue until none is returned. Then start
+agent-run parent wait-any --after with the kept cursor.
+The wait cursor and the list continuation are different things.
+If a call after the first fails, text prints the last cursor the server
+confirmed and one sentence:
+run the same command again with --after and that cursor.
+JSON carries the cursor only. The exit code is that failure's own. If no
+cursor was confirmed, it says to
 read agent-run parent list before starting again.
 
 These commands require --enable-parent-notes on the operator, which defaults

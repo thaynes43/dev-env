@@ -229,13 +229,16 @@ func TestCoordinatorStopUsesReap(t *testing.T) {
 func TestCoordinatorBriefAndShortHelp(t *testing.T) {
 	h := newHarness(t)
 	h.mustRun(ExitOK, "coordinator", "brief", "--item", "527", "--hours", "4", "--workers", "3")
-	contains(t, "brief", h.stdout.String(), "opwork show 527 --history", "opwork claim 527", "4 hours", "3 workers", "claude-sonnet-5-5", "claude-opus-5-5", "gpt-6.1-sol", "grok-4.7-high", "grok-4.7-xhigh", "--project", "--profile dev", ".outcome.json", "blocked: <refusal>", "never stall on whoever started you", "agent-run parent tell --key <stable-key> --kind question", "agent-run parent wait <note>", "printed cursor")
+	contains(t, "brief", h.stdout.String(), "opwork show 527 --history", "opwork claim 527", "4 hours", "3 workers", "claude-sonnet-5-5", "claude-opus-5-5", "gpt-6.1-sol", "grok-4.7-high", "grok-4.7-xhigh", "--project", "--profile dev", ".outcome.json", "blocked: <refusal>", "never stall on whoever started you", "agent-run parent tell --key <stable-key> --kind question", "agent-run parent wait <note>")
 	steps := []string{
-		"agent-run parent wait-any --for 0",
-		"agent-run parent wait-any --after <cursor> in the background",
-		"prints a note, read that note with agent-run parent read and start again",
-		"prints waiting, start again with that",
-		"prints resync, read agent-run parent list and then start",
+		"Before you dispatch a worker, take a cursor with\nagent-run parent wait-any --for 0",
+		"After you dispatch, run\nagent-run parent wait-any --after <cursor> in the background",
+		"prints a note, read that note with agent-run parent read and start again\nwith the printed cursor",
+		"prints waiting, start again with that\ncursor",
+		"prints resync, keep the cursor it printed",
+		"Read every page\nof agent-run parent list, passing --continue until none is returned",
+		"start agent-run parent wait-any --after with the kept cursor",
+		"The wait\ncursor and the list continuation are different things",
 	}
 	brief := h.stdout.String()
 	at := 0

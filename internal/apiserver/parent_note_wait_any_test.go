@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	corev1 "k8s.io/api/core/v1"
@@ -815,6 +816,26 @@ func TestParentNoteWaitAnySecondsZero(t *testing.T) {
 			t.Fatal("bad zero cursor listed or watched")
 		}
 	})
+	t.Run("revoked during the baseline read", func(t *testing.T) {
+		f, _, _, _ := parentNoteFixture(t, false)
+		tok := waitAnyNamedParent(t, f)
+		p := &waitAnyProbe{listRV: "15"}
+		p.listCheck = func(context.Context) { revokeNamedAdmission(t, f) }
+		p.install(f)
+		f.srv.parentWaitTimeout = func(context.Context, time.Duration) (context.Context, context.CancelFunc) {
+			t.Error("seconds=0 opened a wait")
+			return context.Background(), func() {}
+		}
+		start := time.Now()
+		w := doWaitAny(t, f, tok, "seconds=0")
+		if time.Since(start) > time.Second {
+			t.Fatal("seconds=0 refusal was not immediate")
+		}
+		wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
+		if p.lists.Load() != 1 || p.watches.Load() != 0 || len(f.srv.parentWaits.held) != 0 {
+			t.Fatalf("zero revoked lists %d watches %d held %d", p.lists.Load(), p.watches.Load(), len(f.srv.parentWaits.held))
+		}
+	})
 }
 
 // waitBudgetKey marks the context the wait's deadline owns.
@@ -1011,7 +1032,6 @@ func TestParentNoteWaitAnyRevokedAdmission(t *testing.T) {
 		note := waitAnyNote(party, waitAnyName(4), inbox.KindQuestion, "12", "PRIVATE_NOTE_TEXT", waitAnyStamp)
 		p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1)}
 		p.install(f)
-		expire := armWaitAnyDeadline(f)
 		result, cancel := startWaitAny(f, tok, "seconds=30&after=10")
 		defer cancel()
 		g := receiveParentWait(t, p.started).(*gateWatch)
@@ -1019,10 +1039,10 @@ func TestParentNoteWaitAnyRevokedAdmission(t *testing.T) {
 		g.send(t, watch.Event{Type: watch.Added, Object: note})
 		select {
 		case early := <-result:
-			t.Fatalf("revoked fence answered before the deadline: %s", early.Body.String())
+			t.Fatalf("revoked fence answered before the refusal time: %s", early.Body.String())
 		case <-time.After(200 * time.Millisecond):
 		}
-		(*expire)()
+		cancel()
 		w := receiveParentWait(t, result)
 		wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
 		assertNoPrivate(t, w.Body.String())
@@ -1041,10 +1061,185 @@ func TestParentNoteWaitAnyRevokedAdmission(t *testing.T) {
 		receiveParentWait(t, p.started)
 		revokeNamedAdmission(t, f)
 		(*expire)()
+		select {
+		case early := <-result:
+			t.Fatalf("answered when the wait ended, before the refusal time: %s", early.Body.String())
+		case <-time.After(200 * time.Millisecond):
+		}
+		cancel()
 		w := receiveParentWait(t, result)
 		wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
 		if strings.Contains(w.Body.String(), "waiting") || len(f.srv.parentWaits.held) != 0 {
 			t.Fatalf("deadline refusal %s", w.Body.String())
+		}
+	})
+}
+
+// TestParentNoteWaitAnyLiveAdmissionLabel gives the cache and the live reader
+// different admission labels. The cache still admits the named coordinator.
+// The live session does not. The fence must refuse. Removing the live label
+// check lets resolveCaller pass on the cache and return the note.
+func TestParentNoteWaitAnyLiveAdmissionLabel(t *testing.T) {
+	f, _, _, _ := parentNoteFixture(t, false)
+	tok := waitAnyNamedParent(t, f)
+	party := waitAnyParty(t, f, "parent")
+	note := waitAnyNote(party, waitAnyName(4), inbox.KindQuestion, "12", "PRIVATE_NOTE_TEXT", waitAnyStamp)
+	cached := f.session("parent")
+	if cached.Labels[templates.CoordinatorIdentityLabel] != "dev-env-coordinator-lead" {
+		t.Fatalf("cache label %q", cached.Labels[templates.CoordinatorIdentityLabel])
+	}
+	liveSess := cached.DeepCopy()
+	liveSess.Labels[templates.CoordinatorIdentityLabel] = "dev-env-coordinator-other"
+	var pod corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "parent"}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	live := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(liveSess, pod.DeepCopy()).Build()
+	var gotLive v1alpha1.AgentSession
+	if err := live.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "parent"}, &gotLive); err != nil {
+		t.Fatal(err)
+	}
+	if gotLive.UID != cached.UID || gotLive.Labels[templates.CoordinatorIdentityLabel] == cached.Labels[templates.CoordinatorIdentityLabel] {
+		t.Fatalf("live view uid %s label %q", gotLive.UID, gotLive.Labels[templates.CoordinatorIdentityLabel])
+	}
+	f.srv.Live = live
+	f.srv.parentRefusalWait = func(context.Context, time.Time) {}
+	p := &waitAnyProbe{notes: []*coord.InboxMessage{note}}
+	p.install(f)
+	w := doWaitAny(t, f, tok, "seconds=30&after=10")
+	wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
+	assertNoPrivate(t, w.Body.String())
+	if strings.Contains(w.Body.String(), note.Name) || p.watches.Load() != 1 || len(f.srv.parentWaits.held) != 0 {
+		t.Fatalf("live refusal body %s watches %d", w.Body.String(), p.watches.Load())
+	}
+	if again := f.session("parent"); again.Labels[templates.CoordinatorIdentityLabel] != "dev-env-coordinator-lead" {
+		t.Fatalf("cache label changed to %q", again.Labels[templates.CoordinatorIdentityLabel])
+	}
+}
+
+// TestParentNoteWaitAnyRefusalTime runs the note path and the idle path with
+// a fence read that blocks until the test releases it. Both must name the
+// refusal time fixed when the wait started: that wait's deadline plus the
+// fence allowance. Neither answers before that hold ends. Cancelling the
+// request ends it without waiting out the timer.
+func TestParentNoteWaitAnyRefusalTime(t *testing.T) {
+	for _, notePath := range []bool{true, false} {
+		name := "idle"
+		if notePath {
+			name = "note"
+		}
+		t.Run(name, func(t *testing.T) {
+			f, _, _, _ := parentNoteFixture(t, false)
+			tok := waitAnyNamedParent(t, f)
+			party := waitAnyParty(t, f, "parent")
+			stored := waitAnyNote(party, waitAnyName(4), inbox.KindQuestion, "12", "PRIVATE_NOTE_TEXT", waitAnyStamp)
+			p := &waitAnyProbe{}
+			if notePath {
+				p.notes = []*coord.InboxMessage{stored}
+			} else {
+				p.gate = true
+				p.started = make(chan watch.Interface, 1)
+			}
+			p.install(f)
+			var deadline time.Time
+			var expire context.CancelFunc
+			f.srv.parentWaitTimeout = func(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+				deadline = time.Now().Add(d)
+				inner, cancel := context.WithDeadline(ctx, deadline)
+				expire = cancel
+				return parentDeadlineContext{inner}, cancel
+			}
+			fenceStarted := make(chan struct{})
+			releaseFence := make(chan struct{})
+			var sessionGets atomic.Int32
+			var fenceOnce sync.Once
+			f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				err := c.Get(ctx, key, obj, opts...)
+				sess, ok := obj.(*v1alpha1.AgentSession)
+				if err != nil || !ok || sess.Name != "parent" || sessionGets.Add(1) < 2 {
+					return err
+				}
+				fenceOnce.Do(func() { close(fenceStarted) })
+				select {
+				case <-releaseFence:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				sess.Labels[templates.CoordinatorIdentityLabel] = "dev-env-coordinator-other"
+				return nil
+			}})
+			entered := make(chan struct{})
+			releaseRefusal := make(chan struct{})
+			var gotAt time.Time
+			f.srv.parentRefusalWait = func(ctx context.Context, at time.Time) {
+				gotAt = at
+				close(entered)
+				select {
+				case <-ctx.Done():
+				case <-releaseRefusal:
+				}
+			}
+			result, cancel := startWaitAny(f, tok, "seconds=30&after=10")
+			defer cancel()
+			if !notePath {
+				receiveParentWait(t, p.started)
+				expire()
+			}
+			select {
+			case <-fenceStarted:
+			case <-time.After(2 * time.Second):
+				t.Fatal("fence read did not start")
+			}
+			close(releaseFence)
+			select {
+			case <-entered:
+			case early := <-result:
+				t.Fatalf("answered before the refusal time: %s", early.Body.String())
+			case <-time.After(2 * time.Second):
+				t.Fatal("refusal was not held")
+			}
+			want := deadline.Add(parentNoteFenceAllowance)
+			if !gotAt.Equal(want) {
+				t.Fatalf("refusal %s, want deadline plus allowance %s", gotAt, want)
+			}
+			select {
+			case early := <-result:
+				t.Fatalf("answered before the hold ended: %s", early.Body.String())
+			default:
+			}
+			close(releaseRefusal)
+			w := receiveParentWait(t, result)
+			wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
+			assertNoPrivate(t, w.Body.String())
+			if len(f.srv.parentWaits.held) != 0 {
+				t.Fatal("refusal leaked its slot")
+			}
+		})
+	}
+	t.Run("cancelled", func(t *testing.T) {
+		f, _, _, _ := parentNoteFixture(t, false)
+		tok := waitAnyNamedParent(t, f)
+		party := waitAnyParty(t, f, "parent")
+		note := waitAnyNote(party, waitAnyName(4), inbox.KindQuestion, "12", "PRIVATE_NOTE_TEXT", waitAnyStamp)
+		p := &waitAnyProbe{gate: true, started: make(chan watch.Interface, 1)}
+		p.install(f)
+		result, cancel := startWaitAny(f, tok, "seconds=30&after=10")
+		defer cancel()
+		g := receiveParentWait(t, p.started).(*gateWatch)
+		revokeNamedAdmission(t, f)
+		g.send(t, watch.Event{Type: watch.Added, Object: note})
+		select {
+		case early := <-result:
+			t.Fatalf("answered before cancellation: %s", early.Body.String())
+		case <-time.After(200 * time.Millisecond):
+		}
+		cancel()
+		select {
+		case w := <-result:
+			wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
+			assertNoPrivate(t, w.Body.String())
+		case <-time.After(2 * time.Second):
+			t.Fatal("request cancellation did not end the refusal")
 		}
 	})
 }

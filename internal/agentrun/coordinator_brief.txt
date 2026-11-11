@@ -46,8 +46,11 @@ agent-run parent wait-any --for 0. After you dispatch, run
 agent-run parent wait-any --after <cursor> in the background. When it
 prints a note, read that note with agent-run parent read and start again
 with the printed cursor. When it prints waiting, start again with that
-cursor. When it prints resync, read agent-run parent list and then start
-again with the printed cursor. Read an answer to your own question with
+cursor. When it prints resync, keep the cursor it printed. Read every page
+of agent-run parent list, passing --continue until none is returned. Then
+start agent-run parent wait-any --after with the kept cursor. The wait
+cursor and the list continuation are different things. Read an answer to
+your own question with
 agent-run parent wait <note> or agent-run parent read <note>. Report a result
 or a blocker the same way with
 --kind result or --kind blocker. An unanswered note is no reason to pass the

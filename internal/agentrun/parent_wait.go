@@ -156,22 +156,24 @@ func (a *app) parentWaitAny(ctx context.Context, args []string) error {
 	return a.printParentWaitAny(result)
 }
 
+// parentWaitAnyAgain is the one sentence printed after a confirmed cursor when
+// a later call fails. It names no endpoint, token or command line.
+const parentWaitAnyAgain = "run the same command again with --after and that cursor"
+
 // parentWaitAnyFailed keeps a cursor the server already confirmed when a later
-// call fails. Text and JSON both carry that cursor and the command that
-// continues from it. The exit code is the failure's own. When no call in this
+// call fails. Text prints that cursor and parentWaitAnyAgain. JSON carries the
+// cursor only. The exit code is the failure's own. When no call in this
 // command confirmed a cursor, the message says to read the list first.
 func (a *app) parentWaitAnyFailed(output, confirmed string, err error) error {
 	if confirmed != "" {
-		command := "agent-run parent wait-any --after " + confirmed
 		if output == outputJSON {
 			printed := struct {
-				Cursor  string `json:"cursor"`
-				Command string `json:"command"`
-			}{Cursor: confirmed, Command: command}
+				Cursor string `json:"cursor"`
+			}{Cursor: confirmed}
 			if perr := a.printJSON(printed); perr != nil {
 				return err
 			}
-		} else if _, perr := fmt.Fprintf(a.env.Stdout, "%s\n%s\n", confirmed, command); perr != nil {
+		} else if _, perr := fmt.Fprintf(a.env.Stdout, "%s\n%s\n", confirmed, parentWaitAnyAgain); perr != nil {
 			return err
 		}
 		return err

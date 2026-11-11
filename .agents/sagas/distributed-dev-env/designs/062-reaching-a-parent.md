@@ -828,11 +828,14 @@ is woken by a command it runs itself.
   window of history. It reports a version that is too old in one of two
   ways: the watch call fails with 410, or the watch opens and its first
   event is an `Error` carrying status 410. Both mean the same here. The
-  answer is `resync` with a fresh cursor from a new list, and the caller
-  runs `agent-run parent list` to see what it may have missed. The handler
+  answer is `resync` with a fresh cursor from a new list. The caller keeps
+  that cursor, reads every page of `agent-run parent list`, passing
+  `--continue` until none is returned, then starts
+  `agent-run parent wait-any --after` with the kept cursor. The wait cursor
+  and the list continuation are different things. The handler
   never falls back to comparing times, and it does not answer 503 for a 410:
   503 is for a watch that cannot be had at all, which a retry with the same
-  cursor may fix; a 410 never is.
+  cursor may fix; a 410 never is. A resync whose fresh list fails answers 503.
 - **An idle parent keeps a usable cursor.** The watch asks the API server
   for bookmarks. At the deadline the answer is `waiting`, with the newest
   version the watch reported: a bookmark, or an event for one of the
@@ -854,13 +857,22 @@ shared by both API replicas, a new credential for no gain in safety.
 
 - Authorisation is the inbox list's: a session sees only notes addressed to
   it, by name and UID. A CallerPolicy caller has no wait, as before
-  (section 7.2). The final fence re-runs the admission a new request runs,
-  including a named coordinator's admission label. That fence is shared, so
-  parent wait, parent read and parent list recheck it too. On this route the
-  fence read has its own allowance of 10 seconds, taken from the request and
-  not from the wait. When the fence fails after a wait that is holding, the
-  handler keeps the slot until the wait's own deadline and then returns the
-  refusal. `seconds=0` holds nothing, so a failed fence there is immediate.
+  (section 7.2). The bearer is authenticated when the request arrives. At
+  the end the fence proves again, from live reads, that the same pod still
+  runs the same session and that a named coordinator is still admitted. A
+  bearer that expires or is revoked while the request is held, for at most
+  900 seconds plus the fence allowance, is not checked again. A token bound
+  to a pod dies with the pod, and a replaced pod fails the fence, so what is
+  left is an administrator deleting a ServiceAccount under a running pod.
+  Authenticating twice on a path every parent command shares is not worth
+  that case. That fence is shared, so parent wait, parent read and parent
+  list recheck it too. On this route the fence read has its own allowance of
+  10 seconds, taken from the request and not from the wait. When the fence
+  fails after a wait that is holding, the handler returns the refusal at one
+  time, fixed when the wait starts: the wait's deadline plus that allowance.
+  Request cancellation ends the wait sooner. The slot stays held until the
+  refusal is returned. `seconds=0` holds nothing, so a failed fence there is
+  immediate.
 - It is one held read on the watch the operator already has, with
   `holdResponse` as in section 7.2. It counts against the same limit as
   `parent wait`: eight held reads for one session on one API replica
@@ -870,17 +882,19 @@ shared by both API replicas, a new credential for no gain in safety.
 
 | Command | What it does |
 |---|---|
-| `agent-run parent wait-any [--after CURSOR] [--for 15m] [-o json]` | one held read, or `--for 0` which returns `waiting` and the cursor at once. Prints the note's name, child and kind and the next cursor; or `waiting` and the cursor; or `resync` and a fresh cursor, which means: read `agent-run parent list`. Exit 0 for all three. A failed later call prints the last confirmed cursor and exits with that failure's own code |
+| `agent-run parent wait-any [--after CURSOR] [--for 15m] [-o json]` | one held read, or `--for 0` which returns `waiting` and the cursor at once. Prints the note's name, child and kind and the next cursor; or `waiting` and the cursor; or `resync` and a fresh cursor. On `resync`, keep that cursor, read every page of `agent-run parent list`, passing `--continue` until none is returned, then start `agent-run parent wait-any --after` with the kept cursor. The wait cursor and the list continuation are different things. Exit 0 for all three. A failed later call prints the last confirmed cursor and one sentence, and exits with that failure's own code. JSON carries the cursor only |
 
 **How a coordinator uses it.** In this order. Take a cursor with
 `agent-run parent wait-any --for 0` before dispatching a worker. After
 dispatching, run `agent-run parent wait-any --after <cursor>` in the
 background. Its harness wakes it when the command exits. On a note, read it
 with `agent-run parent read NAME` and start again with the printed cursor.
-On `waiting`, start again with that cursor. On `resync`, read
-`agent-run parent list` and then start again with the printed cursor. The
-coordinator brief (`internal/agentrun/coordinator_brief.txt`) says the same
-five steps. A headless parent can run the same command in the foreground
+On `waiting`, start again with that cursor. On `resync`, keep the cursor it
+printed. Read every page of `agent-run parent list`, passing `--continue`
+until none is returned. Then start `agent-run parent wait-any --after` with
+the kept cursor. The wait cursor and the list continuation are different
+things. The coordinator brief (`internal/agentrun/coordinator_brief.txt`) says the same
+steps. A headless parent can run the same command in the foreground
 between steps.
 
 **Tests.** `internal/apiserver/parent_note_wait_any_test.go`: returns at once
@@ -896,7 +910,8 @@ wakes nobody; after a wait that saw only a bookmark, the returned cursor is
 the bookmark's version and the next call accepts it; a cursor that is not a resource
 version is 422; another session's notes never wake the caller; a reply and a
 plain message never wake it; the ninth held read is 429; a refused watch is
-503; the route is absent with the flag off; a CallerPolicy caller is
+503; with the flag off the route is registered and answers the same
+refusal as the other parent-note routes; a CallerPolicy caller is
 refused. `internal/agentrun`: the command prints no note text, passes the
 cursor back, and uses the long client timeout.
 

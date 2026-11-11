@@ -972,7 +972,12 @@ agent-run parent read <name>
 agent-run parent answer <name> --key build-answer < answer.txt
 # Before dispatching a worker, take a cursor:
 agent-run parent wait-any --for 0
-# After dispatching, in the background, and again after a note, waiting or resync:
+# After dispatching, in the background, and again after a note or waiting:
+agent-run parent wait-any --after <cursor>
+# On resync, keep that wait cursor. Read every page, then start again.
+# The list continuation is not the wait cursor.
+agent-run parent list
+agent-run parent list --continue <continuation>
 agent-run parent wait-any --after <cursor>
 # Back in the child session:
 agent-run parent wait <name> --for 15m
@@ -1058,8 +1063,11 @@ counted together with `parent wait`: at most eight for one session on one
 API replica. It returns when a question, result or blocker addressed to the
 caller is stored after the cursor, or when its time is up. It prints the
 note's name, child and kind, then the next cursor; or `waiting` and the
-cursor; or `resync` and a fresh cursor, which means run
-`agent-run parent list`. It never prints the note's text or key. The cursor
+cursor; or `resync` and a fresh cursor. On `resync`, keep that cursor.
+Read every page of `agent-run parent list`, passing `--continue` until
+none is returned, then start `agent-run parent wait-any --after` with the
+kept cursor. The wait cursor and the list continuation are different
+things. It never prints the note's text or key. The cursor
 is the API server's resource version. With no `--after`, notes already
 stored are not returned. `--for` defaults to `15m`. `--for 0` returns
 `waiting` and the cursor at once: the given `--after`, or the list's version
@@ -1068,15 +1076,18 @@ again with the cursor the previous call returned, in chunks of at most 900
 seconds. The client timeout is that chunk plus two minutes, the same as
 `parent wait`. A refused watch answers 503 and holds nothing. Neither side
 polls. A CallerPolicy caller has no wait. If a call after the first fails,
-text and JSON both print the last cursor the server confirmed and
-`agent-run parent wait-any --after` that cursor, and the exit code is that
-failure's own. If no cursor was confirmed, the command says to read
-`agent-run parent list` before starting again. Before dispatching a worker,
-take a cursor with `agent-run parent wait-any --for 0`. After dispatching,
-run `agent-run parent wait-any --after <cursor>` in the background. On a
-note, read it and start again with the printed cursor. On `waiting`, start
-again with that cursor. On `resync`, read `agent-run parent list` and then
-start again with the printed cursor.
+text prints the last cursor the server confirmed and one sentence: run the
+same command again with `--after` and that cursor. JSON carries the cursor
+only. The exit code is that failure's own. If no cursor was confirmed, the
+command says to read `agent-run parent list` before starting again. Before
+dispatching a worker, take a cursor with `agent-run parent wait-any --for 0`.
+After dispatching, run `agent-run parent wait-any --after <cursor>` in the
+background. On a note, read it and start again with the printed cursor. On
+`waiting`, start again with that cursor. On `resync`, keep the cursor it
+printed. Read every page of `agent-run parent list`, passing `--continue`
+until none is returned. Then start `agent-run parent wait-any --after` with
+the kept cursor. The wait cursor and the list continuation are different
+things.
 
 The record is an InboxMessage marked by the server-set label
 `coordination.dev-env.haynesops.com/parent-note=true`. The label distinguishes
