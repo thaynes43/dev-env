@@ -137,8 +137,15 @@ func noticeIdlePID(s Settings, p agentPid) error {
 	if !pidAlive(p) {
 		return noticeHold(NoticeNoClient)
 	}
-	status, _, ok := claudeStatus(s, p.Pid)
+	status, at, ok := claudeStatus(s, p.Pid)
 	if !ok {
+		return noticeHold(NoticeUnknown)
+	}
+	// A status file is named by pid. A record written before this process
+	// started belongs to a pid that has since been reused, so it is not this
+	// CLI. Missing updatedAt is the same: the read does not show this process.
+	start, fresh := procStartUnixMilli(p.Pid)
+	if !fresh || at.IsZero() || at.UnixMilli() < start {
 		return noticeHold(NoticeUnknown)
 	}
 	switch status {
@@ -162,7 +169,7 @@ func noticePane(ctx context.Context, r Runner, s Settings, cli agentPid) (string
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	res, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"list-panes", "-t", "=" + TmuxSession, "-F", "#{pane_id} #{pane_pid}"}})
+	res, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"list-panes", "-s", "-t", "=" + TmuxSession, "-F", "#{pane_id} #{pane_pid}"}})
 	if err != nil {
 		return "", errors.New("parent notice pane list failed")
 	}
@@ -206,6 +213,33 @@ func paneMatchesCLI(panePid int, cli agentPid) bool {
 		return true
 	}
 	return false
+}
+
+// procStartUnixMilli is the process start as Unix milliseconds. Linux
+// reports that start as ticks since boot, and USER_HZ is 100.
+func procStartUnixMilli(pid int) (int64, bool) {
+	ticks, err := strconv.ParseInt(procStartTime(pid), 10, 64)
+	if err != nil || ticks < 0 {
+		return 0, false
+	}
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0, false
+	}
+	var btime int64
+	found := false
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "btime ") {
+			continue
+		}
+		btime, err = strconv.ParseInt(strings.TrimPrefix(line, "btime "), 10, 64)
+		found = err == nil && btime > 0
+		break
+	}
+	if !found {
+		return 0, false
+	}
+	return btime*1000 + ticks*10, true
 }
 
 func procParent(pid int) (int, bool) {

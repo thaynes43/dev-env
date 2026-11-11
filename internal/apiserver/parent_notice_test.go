@@ -766,6 +766,27 @@ func TestParentNoticeSlowExecThenNewNote(t *testing.T) {
 	}
 }
 
+func TestParentNoticeStopsMarkingToLeaveTimeToDeliver(t *testing.T) {
+	f := newNoticeFix()
+	older := f.note(inbox.KindBlocker, "old-key", "old text", f.now.Add(-2*time.Hour), "1", noticeName("e"))
+	newer := f.note(inbox.KindResult, "new-key", "new text", f.now.Add(-time.Hour), "1", noticeName("f"))
+	f.notes = []coord.InboxMessage{newer, older}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	p := f.notices()
+	p.Patch = func(ctx context.Context, note *coord.InboxMessage, at time.Time) error {
+		if note.Name == older.Name {
+			time.Sleep(2 * time.Second)
+		}
+		return f.patch(ctx, note, at)
+	}
+	p.Pass(ctx, f.sess.Name)
+	one, ok := ParentNoticeLine("child-1", older.Name, 1)
+	if !ok || len(f.lines) != 1 || f.lines[0] != one || !f.marked(older.Name) || f.marked(newer.Name) {
+		t.Fatalf("lines %q older %v newer %v", f.lines, f.marked(older.Name), f.marked(newer.Name))
+	}
+}
+
 func TestParentNoticeServesALongRecipientList(t *testing.T) {
 	f := newNoticeFix()
 	notes := make([]coord.InboxMessage, 513)

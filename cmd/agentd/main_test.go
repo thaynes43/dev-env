@@ -210,7 +210,7 @@ func TestCtlNoticeProbeAndIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	statusPath := filepath.Join(claude, "sessions", strconv.Itoa(cmd.Process.Pid)+".json")
-	if err := os.WriteFile(statusPath, []byte(`{"status":"idle"}`), 0o600); err != nil {
+	if err := os.WriteFile(statusPath, []byte(`{"status":"idle","updatedAt":4102444800000}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := map[string]string{
@@ -237,7 +237,7 @@ func TestCtlNoticeProbeAndIdentity(t *testing.T) {
 		t.Fatalf("notice: code %d stderr %q tmux %q", code, stderr.String(), runner.lines)
 	}
 	typed := len(runner.lines)
-	if err := os.WriteFile(statusPath, []byte(`{"status":"busy"}`), 0o600); err != nil {
+	if err := os.WriteFile(statusPath, []byte(`{"status":"busy","updatedAt":4102444800000}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stderr.Reset()

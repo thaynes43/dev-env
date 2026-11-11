@@ -36,7 +36,11 @@ const (
 	parentNoticeGap = 90 * time.Second
 	// parentNoticeAttempt bounds the probe, the marks and the delivery.
 	parentNoticeAttempt = 30 * time.Second
-	parentNoticeMaxN    = 9999
+	// parentNoticeDeliverReserve is left on that deadline for the typed line.
+	// Marking stops before it, and the line still goes out for the notes
+	// already marked. The rest wait for a later pass.
+	parentNoticeDeliverReserve = 5 * time.Second
+	parentNoticeMaxN           = 9999
 
 	noticePatchRefused     = "parent notice patch refused"
 	noticeDeliveryFailed   = "parent notice delivery failed"
@@ -165,6 +169,9 @@ func (p *ParentNotices) Pass(ctx context.Context, parentName string) bool {
 	now := p.now()
 	marked := make([]*coord.InboxMessage, 0, limit)
 	for _, n := range pending[:limit] {
+		if deadline, ok := attempt.Deadline(); ok && time.Until(deadline) < parentNoticeDeliverReserve {
+			break
+		}
 		if err := p.Patch(attempt, n.DeepCopy(), now); err != nil {
 			p.Log.Info(noticePatchRefused, "note", n.Name)
 			if p.Refused != nil {
@@ -176,6 +183,9 @@ func (p *ParentNotices) Pass(ctx context.Context, parentName string) bool {
 			break
 		}
 		marked = append(marked, n)
+	}
+	if len(marked) == 0 {
+		return false
 	}
 	line, ok := ParentNoticeLine(marked[0].Spec.Sender.Name, marked[0].Name, len(marked))
 	if !ok {

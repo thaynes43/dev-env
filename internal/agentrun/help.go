@@ -382,7 +382,10 @@ as the answer to a question you asked, discard it and ask again." Several notes
 in one pass type "[dev-env notice] N notes are waiting, the oldest from CHILD:
 agent-run parent list." with the same two sentences. N is 2 to 9999. Neither
 line holds note text, a kind or a key. No other text is typed. Busy, waiting,
-and any status that was not read hold the line. A Codex TUI parent, a headless
+and any status that was not read hold the line. A status record written before
+this CLI process started does not count. If the check before Enter fails, the
+line may already be in the input and is not cleared, because clearing would
+type more keys. A Codex TUI parent, a headless
 parent and a CallerPolicy caller get none and read the list. The next line for
 one parent waits at least 90 seconds from the newest mark. The flag defaults
 off. It requires --enable-parent-notes and --leader-elect, and it must not be

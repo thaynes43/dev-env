@@ -726,16 +726,18 @@ fields.
      again at the keyboard, including once more after the paste and before
      Enter. A probe (`agentd ctl notice --probe`) runs before any mark; a hold
      leaves the note unmarked and types nothing.
-   - **The pane is the recorded CLI.** `list-panes` over the agent session
-     must match exactly one pane to the recorded CLI process or its direct
-     child, as the launch record allows. Paste and Enter both name that
-     `%pane_id`. No match, or more than one, refuses before a buffer is loaded.
+   - **The pane is the recorded CLI.** `list-panes -s` over the agent session
+     lists every window. Exactly one pane must match the recorded CLI process
+     or its direct child, as the launch record allows. Paste and Enter both
+     name that `%pane_id`. No match, or more than one, refuses before a buffer
+     is loaded.
    - **One line for a backlog.** A pass marks unmarked notes oldest first.
      The first refused mark stops the pass with nothing typed. A later refused
      mark leaves that note for a later pass, and the line still goes out for
-     the ones marked. The next pass for that parent waits at least 90 seconds
+     the ones marked.      The next pass for that parent waits at least 90 seconds
      from the newest mark. One 30 second deadline covers the probe, the marks
-     and the delivery.
+     and the delivery. Marking stops when less than 5 seconds remain, so the
+     line can still be typed for the notes already marked.
    - **The list is paged.** One pass reads at most `inbox.NoticePageBudget`
      pages of the existing page size. Past that it logs one fixed sentence,
      counts it, and still serves what it read. A heartbeat lists only a parent
@@ -815,8 +817,10 @@ stay as they were written. ADR-023 is unchanged: the mark is still the
 annotation on the note.
 
 11. **Idle only, and only when shown (R1).** Type only when Claude's own status
-    for the exact live CLI was read successfully and says idle. Busy, waiting,
-    an absent, unreadable or malformed record, and any unknown status hold.
+    for the exact live CLI was read successfully and says idle. The record's
+    updatedAt must be no earlier than that process's start, so a file left by
+    a reused pid does not count. Busy, waiting, an absent, unreadable or
+    malformed record, and any unknown status hold.
     The operator gate is the same word on the last report, with a fresh
     heartbeat. It is only a first filter. The heartbeat classifier's fallback,
     which treats a missing or unknown status as busy, is not reused.
@@ -827,7 +831,8 @@ annotation on the note.
     no_client, or not_claude_tui. The operator probes before it writes a mark.
     A hold leaves the note unmarked. After the delivery lock, and again before
     Enter, agentd checks the idle read again. If the last check fails it does
-    not press Enter; the note stays marked.
+    not press Enter; the note stays marked. The pasted line is left in the
+    input. Clearing it would type more keys.
 13. **The exact pane (R3).** Resolve the pane with `tmux list-panes` over the
     agent session (pane id and pane pid). Match it to the recorded CLI process
     or its direct child, as the launch record allows. Pass that `%pane_id` to
@@ -858,7 +863,8 @@ annotation on the note.
 17. **Spacing is real (R7).** One context with a 30 second deadline covers the
     probe, the marks and the delivery. agentd's lock wait and settle select on
     its context. The gap between marks for one parent is at least 90 seconds,
-    from the newest mark.
+    from the newest mark. Marking stops when less than 5 seconds remain on
+    the deadline, and the line is still typed for the notes already marked.
 18. **Leader election (R8).** `--enable-parent-notice` is refused at startup
     without leader election, as it is without `--enable-parent-notes`.
 19. **The checks are the tests (R9).** A suspended operating mode holds while

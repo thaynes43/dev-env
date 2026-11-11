@@ -49,7 +49,7 @@ func filepathJoinSessions(s Settings) string {
 	return s.ClaudeConfigDir + "/sessions"
 }
 
-func idleBody() string { return `{"status":"idle","updatedAt":1}` }
+func idleBody() string { return `{"status":"idle","updatedAt":4102444800000}` }
 
 // panesFor answers list-panes and records every other tmux invocation.
 func panesFor(t *testing.T, stdin map[string]string, stdout string) func(Cmd) (Result, error) {
@@ -88,7 +88,7 @@ func TestDeliverNoticeTypesOnlyTheFixedLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := f.lines()
-	if len(got) != 4 || !strings.Contains(got[0], "list-panes") || !strings.Contains(got[0], "#{pane_id} #{pane_pid}") ||
+	if len(got) != 4 || !strings.Contains(got[0], "list-panes") || !strings.Contains(got[0], " -s ") || !strings.Contains(got[0], "#{pane_id} #{pane_pid}") ||
 		!strings.HasPrefix(got[1], "tmux load-buffer -b agentd-notice-") || !strings.HasSuffix(got[1], " -") ||
 		got[2] != "tmux paste-buffer -b "+strings.Fields(got[1])[3]+" -d -p -t %12" ||
 		got[3] != "tmux send-keys -t %12 Enter" {
@@ -189,9 +189,10 @@ func TestDeliverNoticeTypesOnlyWhenClaudeStatusIsIdle(t *testing.T) {
 		{name: "missing", word: NoticeUnknown},
 		{name: "malformed", body: "{", word: NoticeUnknown},
 		{name: "empty", body: `{}`, word: NoticeUnknown},
-		{name: "unknown", body: `{"status":"pondering","updatedAt":1}`, word: NoticeUnknown},
-		{name: "busy", body: `{"status":"busy","updatedAt":1}`, word: NoticeBusy},
-		{name: "waiting", body: `{"status":"waiting","updatedAt":1}`, word: NoticeWaiting},
+		{name: "unknown", body: `{"status":"pondering","updatedAt":4102444800000}`, word: NoticeUnknown},
+		{name: "stale", body: `{"status":"idle","updatedAt":1}`, word: NoticeUnknown},
+		{name: "busy", body: `{"status":"busy","updatedAt":4102444800000}`, word: NoticeBusy},
+		{name: "waiting", body: `{"status":"waiting","updatedAt":4102444800000}`, word: NoticeWaiting},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -201,7 +202,11 @@ func TestDeliverNoticeTypesOnlyWhenClaudeStatusIsIdle(t *testing.T) {
 				writeClaudeStatus(t, s, cli.Pid, tc.body)
 			}
 			status, _, readOK := claudeStatus(s, cli.Pid)
-			if readOK && status == claudeIdle {
+			if tc.name == "stale" {
+				if !readOK || status != claudeIdle {
+					t.Fatal("stale fixture was not a readable idle record")
+				}
+			} else if readOK && status == claudeIdle {
 				t.Fatal("claudeStatus reported idle")
 			}
 			f.handle = panesFor(t, stdin, fmt.Sprintf("%%12 %d\n", cli.Pid))
@@ -313,7 +318,7 @@ func TestDeliverNoticeRechecksIdleBeforeEnter(t *testing.T) {
 			return Result{Stdout: []byte(fmt.Sprintf("%%12 %d\n", cli.Pid))}, nil
 		}
 		if len(c.Args) > 0 && c.Args[0] == "paste-buffer" {
-			writeClaudeStatus(t, s, cli.Pid, `{"status":"waiting","updatedAt":1}`)
+			writeClaudeStatus(t, s, cli.Pid, `{"status":"waiting","updatedAt":4102444800000}`)
 		}
 		return Result{}, nil
 	}
@@ -384,7 +389,7 @@ func TestNoticeProbeReadsClaudeStatusOnly(t *testing.T) {
 	if err := NoticeProbe(s, sess); err != nil {
 		t.Fatal(err)
 	}
-	writeClaudeStatus(t, s, cli.Pid, `{"status":"busy","updatedAt":1}`)
+	writeClaudeStatus(t, s, cli.Pid, `{"status":"busy","updatedAt":4102444800000}`)
 	if err := NoticeProbe(s, sess); !errors.Is(err, noticeHold(NoticeBusy)) {
 		t.Fatal(err)
 	}

@@ -1048,8 +1048,13 @@ into a session. A Codex TUI parent, a headless parent and a CallerPolicy
 caller get none; they read the list. The operator also holds while the
 heartbeat is missing or older than the heartbeat staleness bound, and while
 the parent is suspended, not Running, or has no Ready pod. agentd probes
-before any mark, and checks idle again after the lock and before Enter. The
-next line for one parent waits at least 90 seconds from the newest mark. A
+before any mark, and checks idle again after the lock and before Enter. A
+status record written before this CLI process started does not count. If the
+check before Enter fails, the line may already be sitting in the input and is
+not cleared, because clearing would type more keys; Enter is not pressed.
+The next line for one parent waits at least 90 seconds from the newest mark.
+Marking stops when less than 5 seconds remain of the 30 second attempt, and
+the line is still typed for the notes already marked. A
 reply and a plain message do not trigger a notice. Only a question, a result
 or a blocker addressed to a session parent does. The flag defaults off. It is
 refused at startup without `--enable-parent-notes` and without
