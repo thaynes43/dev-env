@@ -2,7 +2,9 @@
 
 - **Status:** Accepted 2026-11-10 by the coordinator (story OP545), with the
   rulings in section 12. Nothing is built, switched on or changed by this
-  document.
+  document. **Amended 2026-11-11:** the wake notice (slice 6, ruling 1) is
+  withdrawn and replaced by a held wait the parent runs itself; see section 13
+  and [ADR-024](../adrs/024-parent-held-wait.md).
 - **Tracking:** [Story OP545](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/545),
   under [Epic OP516](https://work.haynesnetwork.com/work_packages/516).
 - **Origin:** Tom, 2026-11-10, typed in coordinator session
@@ -566,9 +568,9 @@ The command that needs no recipient is `parent tell`.
 
 A session parent finds the note on `agent-run parent list` and reads it with
 `parent read`. That is the same pull the inbox uses today. The note's text is
-never pasted. A live Claude TUI parent also gets the one-line notice of
-ruling 1, held while its reported state is `waiting`. A busy Claude TUI and an
-idle one both receive it; the record waits either way. A managed Codex TUI
+never pasted. A parent that wants to be woken runs `agent-run parent
+wait-any` in the background (section 13); nothing is typed into its terminal.
+The one-line notice this paragraph first described is withdrawn. A managed Codex TUI
 parent gets no notice and reads its list. A headless parent can list and read,
 because those are API reads. It still cannot take `msg`.
 
@@ -708,7 +710,9 @@ fields.
    does not keep the record after the child session is gone and a reply
    exists. An unanswered note to a live parent session is kept.
 
-6. **The wake notice (ruling 1).** When a note is stored for a session parent
+6. **The wake notice (ruling 1). Withdrawn 2026-11-11; not built. Section 13
+   and ADR-024 replace it with slice 6b. The text below is kept as history.**
+   When a note is stored for a session parent
    that is a **Claude TUI**, the operator delivers one fixed line and Enter:
    `[dev-env notice] a note is waiting from CHILD: agent-run parent read NAME`.
    No note text, kind or key.
@@ -770,3 +774,67 @@ recorded on OP545 and Tom can change any of them.
    two replicas and both serve the API, so one session can hold at most
    sixteen across them. The counter stays on that process's Server. The
    429 sentence stays "at most 8 parent waits may be held for one session".
+
+## 13. Amendment, 2026-11-11: the parent holds its own wait
+
+Ruled by the coordinator `dev-env-fable-coordinator-1109` on 2026-11-11,
+reversing its own ruling 1. Not a ruling by Tom. Recorded as
+[ADR-024](../adrs/024-parent-held-wait.md), which supersedes the two
+sentences of ADR-023 about the wake notice and its sent mark.
+
+**Why.** Slice 6 was built (dev-env PR 1072) and reviewed twice by another
+model family. Both reviews found HIGH faults in the typing itself, the second
+on a head that had fixed the first: a second pane receives Enter when tmux
+pane synchronisation is on, a stale status record under a reused pid passes
+after a clock step, and the read of the client's state cannot be made atomic
+with the keystroke. The bad path answers a person's open question (section
+5). PR 1072 is closed unmerged; its branch is kept.
+
+**Ruling 6.** Nothing is typed into a parent's terminal to wake it. A parent
+is woken by a command it runs itself.
+
+**Slice 6b. The held wait for new notes** (OpenProject #688)**.**
+
+| Method and path | Who | Effect |
+|---|---|---|
+| `GET /v1/parent-notes/wait?seconds=N&after=CURSOR` | a session, for notes addressed to itself | holds until a note of kind question, result or blocker addressed to the caller exists that is newer than CURSOR, or until N seconds. N is 1 to 900. Answers the oldest such note's name, child, kind and creation time, and a cursor. No note text |
+
+- The cursor is opaque to the caller: the note's creation time and name.
+  With no `after`, the server uses the time the request arrived, so a first
+  call waits only for notes stored from then on. A caller that wants the
+  backlog reads `agent-run parent list` first.
+- Authorisation is the inbox list's: a session sees only notes addressed to
+  it, by name and UID. A CallerPolicy caller has no wait, as before
+  (section 7.2).
+- It is one held read on the watch the operator already has, with
+  `holdResponse` as in section 7.2. It counts against the same limit as
+  `parent wait`: eight held reads for one session on one API replica
+  (ruling 5). A refused watch answers 503 and holds nothing.
+- It is behind `--enable-parent-notes`. No new flag, verb, annotation or
+  stored state. The operator writes nothing.
+
+| Command | What it does |
+|---|---|
+| `agent-run parent wait-any [--after CURSOR] [--for 15m] [-o json]` | one held read. Prints the note's name, child and kind and the next cursor, or `waiting`. Exit 0 for both |
+
+**How a coordinator uses it.** After it dispatches a worker, it starts
+`agent-run parent wait-any` as a background command. Its harness wakes it
+when the command exits. It reads the note with `agent-run parent read NAME`
+and starts the command again with the printed cursor. The coordinator brief
+(`internal/agentrun/coordinator_brief.txt`) says so in the same change. A
+headless parent can run the same command in the foreground between steps.
+
+**Tests.** `internal/apiserver/parent_note_wait_any_test.go`: returns at once
+when a newer note exists; holds and returns when one is stored; `waiting` at
+the deadline; another session's notes never wake the caller; a reply and a
+plain message never wake it; the ninth held read is 429; a refused watch is
+503; the route is absent with the flag off; a CallerPolicy caller is
+refused. `internal/agentrun`: the command prints no note text, passes the
+cursor back, and uses the long client timeout.
+
+**What is no longer needed.** The annotation
+`dev-env.haynesops.com/parent-notice`, the verb `patch` on inboxmessages,
+`agentd ctl notice`, the sentence in the common rules about discarding a
+notice line, and the flag `--enable-parent-notice`. None was merged or
+installed.
+
