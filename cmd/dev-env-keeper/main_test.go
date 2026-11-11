@@ -22,7 +22,7 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if !maps.Equal(o.permissions, keeper.DefaultDevBotPermissions) {
 		t.Errorf("default permissions %v, want v1's %v", o.permissions, keeper.DefaultDevBotPermissions)
 	}
-	if o.opsGHToken || o.opsGHTokenSecret != keeper.DefaultOpsGHTokenSecret || o.opsGitHubAppDir != keeper.DefaultOpsGitHubAppDir || len(o.opsRepositories) != 0 || !maps.Equal(o.opsPermissions, keeper.DefaultOpsBotPermissions) {
+	if o.opsGHToken || o.opsGHTokenSecret != keeper.DefaultOpsGHTokenSecret || o.opsGitHubAppDir != keeper.DefaultOpsGitHubAppDir || len(o.opsRepositories) != 0 || o.opsPermissions != nil {
 		t.Errorf("ops defaults: enabled %v secret %q dir %q repos %v perms %v", o.opsGHToken, o.opsGHTokenSecret, o.opsGitHubAppDir, o.opsRepositories, o.opsPermissions)
 	}
 	k := o.keeperOptions("dev-env-keeper/test")
@@ -49,7 +49,6 @@ func TestParseFlagsRefuses(t *testing.T) {
 		{"--enable-ops-gh-token", "--ops-gh-token-repositories=haynes-ops,haynes-ops"},
 		{"--enable-ops-gh-token", "--ops-gh-token-repositories=haynes-ops", "--ops-gh-token-secret=dev-env-gh-token"},
 		{"--enable-ops-gh-token", "--ops-gh-token-repositories=haynes-ops", "--ops-github-app-dir=/etc/dev-env-keeper/github-dev-bot"},
-		{"--ops-gh-token-permissions={}"},
 	} {
 		if _, err := parseFlags(bad); err == nil {
 			t.Errorf("%v accepted", bad)
@@ -58,6 +57,46 @@ func TestParseFlagsRefuses(t *testing.T) {
 	o, err := parseFlags([]string{`--gh-token-permissions={"contents":"read"}`, "--refresh-interval=30m"})
 	if err != nil || o.permissions["contents"] != "read" || len(o.permissions) != 1 || o.interval != 30*time.Minute {
 		t.Errorf("overrides: %+v %v", o, err)
+	}
+}
+
+func TestOpsAppDirAliasesAreRefused(t *testing.T) {
+	dev := "/etc/dev-env-keeper/github-dev-bot"
+	for _, dir := range []string{
+		dev + "/",
+		"/etc/dev-env-keeper/./github-dev-bot",
+	} {
+		if _, err := parseFlags([]string{
+			"--enable-ops-gh-token",
+			"--ops-gh-token-repositories=haynes-ops",
+			"--ops-github-app-dir=" + dir,
+		}); err == nil {
+			t.Errorf("accepted ops App dir %q", dir)
+		}
+	}
+}
+
+func TestOpsSettingsAreValidatedOnlyWhenTheFlagIsOn(t *testing.T) {
+	off := []string{"--ops-gh-token-permissions={}", "--ops-gh-token-repositories=*,thaynes43/haynes-ops"}
+	o, err := parseFlags(off)
+	if err != nil {
+		t.Fatalf("flag off refused invalid ops settings: %v", err)
+	}
+	if o.opsGHToken || !maps.Equal(o.permissions, keeper.DefaultDevBotPermissions) {
+		t.Fatalf("flag off changed the dev loop: enabled %v perms %v", o.opsGHToken, o.permissions)
+	}
+	k := o.keeperOptions("dev-env-keeper/test")
+	if k.OpsGitHubApp != nil || len(k.GitHubApp.Repositories) != 0 || !maps.Equal(k.GitHubApp.Permissions, keeper.DefaultDevBotPermissions) {
+		t.Fatal("flag off did not leave the dev bot's loop alone")
+	}
+	for _, args := range [][]string{
+		{"--enable-ops-gh-token", "--ops-gh-token-repositories=haynes-ops", "--ops-gh-token-permissions={}"},
+		{"--enable-ops-gh-token", "--ops-gh-token-repositories=*"},
+		{"--enable-ops-gh-token", "--ops-gh-token-repositories=thaynes43/haynes-ops"},
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Errorf("flag on accepted %v", args)
+		}
 	}
 }
 

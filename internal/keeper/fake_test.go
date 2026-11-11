@@ -109,6 +109,7 @@ type fakeGitHub struct {
 	lastRepositories []string
 	lastRaw          []byte
 	lastJWT          string
+	jwts             []string
 	tokens           []string
 	errs             []string
 	// repoEcho, when set, is placed in a successful response's repositories
@@ -161,6 +162,7 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.lastJWT = jwt
+	f.jwts = append(f.jwts, jwt)
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20+1))
 	if err != nil || len(raw) > 1<<20 {
 		fail(http.StatusBadRequest, "body")
@@ -180,8 +182,11 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	if len(f.failures) > 0 {
 		next := f.failures[0]
 		f.failures = f.failures[1:]
+		// ECHO_JWT is a test stand-in for the request JWT, which is not known
+		// when the canned body is written.
+		body := strings.ReplaceAll(next.body, "ECHO_JWT", jwt)
 		w.WriteHeader(next.status)
-		_, _ = w.Write([]byte(next.body))
+		_, _ = w.Write([]byte(body))
 		return
 	}
 	f.mints++
@@ -278,6 +283,12 @@ func (f *fakeGitHub) snapshot() (mints, requests int, tokens, errs []string, jwt
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.mints, f.requests, append([]string(nil), f.tokens...), append([]string(nil), f.errs...), f.lastJWT
+}
+
+func (f *fakeGitHub) requestJWTs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.jwts...)
 }
 
 // app is a GitHubApp against f.

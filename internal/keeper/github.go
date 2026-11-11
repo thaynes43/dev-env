@@ -77,7 +77,7 @@ const (
 	maxKeyFile = 64 << 10
 	// maxResponse bounds what is read from GitHub's answer.
 	maxResponse = 1 << 20
-	// maxMessage bounds how much of GitHub's error message reaches a log line.
+	// maxMessage bounds how much of GitHub's text reaches an error or a log line.
 	maxMessage = 300
 )
 
@@ -105,6 +105,11 @@ type GitHubApp struct {
 	Clock clock.PassiveClock
 	// UserAgent names the keeper to GitHub, which requires one.
 	UserAgent string
+	// DistinctFrom, when set, is an App this mint must not be. The ops loop
+	// sets it to the dev bot's App. Mint loads both directories and refuses
+	// when they have the same issuer: the client id, or the app id when there
+	// is no client id. Path cleaning cannot see a symlink; this check can.
+	DistinctFrom *GitHubApp
 }
 
 // InstallationToken is what a mint returns.
@@ -140,6 +145,9 @@ func (a *GitHubApp) Mint(ctx context.Context) (InstallationToken, error) {
 	}
 	creds, err := a.load()
 	if err != nil {
+		return InstallationToken{}, err
+	}
+	if err := a.refuseSharedIssuer(creds); err != nil {
 		return InstallationToken{}, err
 	}
 	now := a.now()
@@ -209,7 +217,7 @@ func (a *GitHubApp) Mint(ctx context.Context) (InstallationToken, error) {
 	}
 	tok.ExpiresAt, err = time.Parse(time.RFC3339, out.ExpiresAt)
 	if err != nil {
-		return InstallationToken{}, fmt.Errorf("the mint response's expires_at %q is not RFC 3339", out.ExpiresAt)
+		return InstallationToken{}, fmt.Errorf("the mint response's expires_at %q is not RFC 3339", redactGitHubText(out.ExpiresAt))
 	}
 	if !tok.ExpiresAt.After(now) {
 		return InstallationToken{}, fmt.Errorf("the minted token expires at %s, which is not in the future", tok.ExpiresAt.UTC().Format(time.RFC3339))
@@ -281,6 +289,24 @@ func (a *GitHubApp) load() (appCreds, error) {
 	}
 	c.key, err = readPrivateKey(filepath.Join(a.Dir, AppFilePrivateKey))
 	return c, err
+}
+
+// refuseSharedIssuer reports when DistinctFrom loads the same issuer as creds.
+// The issuer is the client id, or the app id when the directory has no client
+// id. A failure to read the other App is itself a refusal: the mint does not
+// run when the comparison cannot be made.
+func (a *GitHubApp) refuseSharedIssuer(creds appCreds) error {
+	if a.DistinctFrom == nil {
+		return nil
+	}
+	other, err := a.DistinctFrom.load()
+	if err != nil {
+		return fmt.Errorf("refusing to mint: the dev bot's App could not be read: %w", err)
+	}
+	if creds.issuer == other.issuer {
+		return errors.New("refusing to mint: this App has the same issuer as the dev bot's App")
+	}
+	return nil
 }
 
 // readOptional reads a small file and trims it; a missing file is "".
@@ -365,11 +391,38 @@ func githubError(status int, raw []byte) error {
 		Message string `json:"message"`
 	}
 	_ = json.Unmarshal(raw, &body)
-	msg := strings.Join(strings.Fields(body.Message), " ")
-	if len(msg) > maxMessage {
-		msg = msg[:maxMessage] + "..."
+	return &GitHubError{Status: status, Message: redactGitHubText(body.Message)}
+}
+
+// A JWT is three base64url parts. A GitHub token starts with one of these
+// prefixes. Both are removed before the length cut, so truncation cannot leave
+// a prefix of either in an error or a log line.
+var (
+	jwtInGitHubText   = regexp.MustCompile(`[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`)
+	gitHubTokenInText = regexp.MustCompile(`github_pat_[A-Za-z0-9_]{8,}|gh[pousr]_[A-Za-z0-9]{8,}`)
+)
+
+// redactGitHubText is applied to text GitHub sent before that text reaches an
+// error or a log line. Both App loops use it.
+func redactGitHubText(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	s = jwtInGitHubText.ReplaceAllString(s, redacted)
+	s = gitHubTokenInText.ReplaceAllString(s, redacted)
+	if len(s) > maxMessage {
+		s = s[:maxMessage] + "..."
 	}
-	return &GitHubError{Status: status, Message: msg}
+	return s
+}
+
+func redactGitHubList(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, len(in))
+	for i, s := range in {
+		out[i] = redactGitHubText(s)
+	}
+	return out
 }
 
 // permissionName and permissionLevel bound what ParsePermissions accepts.
@@ -377,8 +430,9 @@ var (
 	permissionName  = regexp.MustCompile(`^[a-z][a-z_]*$`)
 	permissionLevel = map[string]bool{"read": true, "write": true, "admin": true}
 	// repositoryName is GitHub's repository name, not owner/name. 100 characters
-	// is GitHub's limit.
-	repositoryName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+	// is GitHub's limit. A leading dot is allowed (.github). "." and ".." are
+	// refused separately.
+	repositoryName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
 )
 
 // ParsePermissions reads a permission set as JSON, the form v1's
@@ -422,7 +476,7 @@ func ParseRepositories(s string) ([]string, error) {
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		name := strings.TrimSpace(part)
-		if !repositoryName.MatchString(name) {
+		if name == "." || name == ".." || !repositoryName.MatchString(name) {
 			return nil, fmt.Errorf("%q is not a repository name (the name, not owner/name)", name)
 		}
 		if _, ok := seen[name]; ok {

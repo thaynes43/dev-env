@@ -93,6 +93,9 @@ func keeperJobs(o Options) []Job {
 	if o.OpsGitHubApp == nil {
 		return jobs
 	}
+	// Every ops mint compares issuers with the dev bot's App. A symlink of the
+	// dev directory has a different path, so validateOps cannot see it.
+	o.OpsGitHubApp.DistinctFrom = o.GitHubApp
 	return append(jobs, GitHubTokenJob("ops-gh-token", o.OpsGitHubApp, o.OpsGHTokenSecret))
 }
 
@@ -105,7 +108,9 @@ func validateOps(o Options) error {
 	if o.OpsGHTokenSecret.Namespace == "" || o.OpsGHTokenSecret.Name == "" || o.OpsGHTokenSecret == o.GHTokenSecret {
 		return errors.New("keeper: the ops token Secret must be set and must not be the dev bot's Secret")
 	}
-	if o.OpsGitHubApp.Dir == "" || o.OpsGitHubApp.Dir == o.GitHubApp.Dir {
+	// Clean drops a trailing slash and dot segments. It does not resolve a
+	// symlink; Mint compares issuers for that.
+	if o.OpsGitHubApp.Dir == "" || o.GitHubApp == nil || filepath.Clean(o.OpsGitHubApp.Dir) == filepath.Clean(o.GitHubApp.Dir) {
 		return errors.New("keeper: the ops App directory must be set and must not be the dev bot's directory")
 	}
 	if len(o.OpsGitHubApp.Permissions) == 0 || len(o.OpsGitHubApp.Repositories) == 0 {

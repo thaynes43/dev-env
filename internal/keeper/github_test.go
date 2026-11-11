@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func TestMintSignsAJWTAndDownScopes(t *testing.T) {
@@ -98,10 +100,60 @@ func TestParseRepositories(t *testing.T) {
 	if got, err := ParseRepositories(""); err != nil || got != nil {
 		t.Fatalf("empty: %v %v", got, err)
 	}
-	for _, bad := range []string{"thaynes43/haynes-ops", "haynes-ops,haynes-ops", "haynes-ops,", "*", ".github"} {
+	got, err = ParseRepositories(".github")
+	if err != nil || !reflect.DeepEqual(got, []string{".github"}) {
+		t.Fatalf(".github: %v %v", got, err)
+	}
+	for _, bad := range []string{"thaynes43/haynes-ops", "haynes-ops,haynes-ops", "haynes-ops,", "*", ".", ".."} {
 		if _, err := ParseRepositories(bad); err == nil {
-			t.Errorf("accepted %s", bad)
+			t.Errorf("accepted %q", bad)
 		}
+	}
+}
+
+func TestDistinctAppsMintAndASharedIssuerDoesNot(t *testing.T) {
+	pair := keys(t)
+	devGH := newFakeGitHub(t, &pair[0].PublicKey, time.Now)
+	opsGH := newFakeGitHub(t, &pair[1].PublicKey, time.Now)
+	const opsClient = "Iv23opsclientid"
+	opsGH.issuer = opsClient
+	devDir := writeAppDir(t, pair[0])
+	opsDir := writeAppDir(t, pair[1])
+	writeFile(t, filepath.Join(opsDir, AppFileClientID), opsClient+"\n")
+	devApp := devGH.app(devDir)
+	opsApp := opsGH.app(opsDir)
+	opsApp.Permissions = DefaultOpsBotPermissions
+	opsApp.Repositories = []string{"haynes-ops"}
+	opsApp.DistinctFrom = devApp
+
+	if _, err := opsApp.Mint(context.Background()); err != nil {
+		t.Fatalf("two Apps, different issuers and keys: %v", err)
+	}
+	if _, reqs, _, _, _ := opsGH.snapshot(); reqs != 1 {
+		t.Fatalf("distinct ops mint made %d requests, want 1", reqs)
+	}
+	if _, reqs, _, _, _ := devGH.snapshot(); reqs != 0 {
+		t.Fatalf("the dev bot's GitHub was called: %d", reqs)
+	}
+
+	for _, dir := range []string{devDir, opsDir} {
+		if err := os.Remove(filepath.Join(dir, AppFileClientID)); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(dir, AppFileAppID), "4291021\n")
+	}
+	devGH.issuer = int64(4291021)
+	opsGH.issuer = int64(4291021)
+	_, before, _, _, _ := opsGH.snapshot()
+	_, err := opsApp.Mint(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "issuer") {
+		t.Fatalf("same app id, no client id: %v", err)
+	}
+	if strings.Contains(err.Error(), "4291021") || strings.Contains(err.Error(), opsClient) {
+		t.Fatalf("the refusal quotes an issuer: %v", err)
+	}
+	if _, reqs, _, _, _ := opsGH.snapshot(); reqs != before {
+		t.Fatalf("same issuer sent a mint: requests %d, before %d", reqs, before)
 	}
 }
 
@@ -270,6 +322,98 @@ func TestParsePermissions(t *testing.T) {
 		if _, err := ParsePermissions(bad); err == nil {
 			t.Errorf("accepted %s", bad)
 		}
+	}
+}
+
+// gitHubJWTMarker is three base64url parts, the shape of a JWT, and not a real one.
+const gitHubJWTMarker = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJzeW50aGV0aWMifQ.c2lnbmF0dXJlMTIzNDU2"
+
+func gitHubTokenMarkers() []string {
+	return []string{
+		"ghs_SYNTHETICMARKER0123456789",
+		"ghp_SYNTHETICMARKER0123456789",
+		"gho_SYNTHETICMARKER0123456789",
+		"ghu_SYNTHETICMARKER0123456789",
+		"ghr_SYNTHETICMARKER0123456789",
+		"github_pat_SYNTHETICMARKER0123456789",
+	}
+}
+
+func gitHubMarkerBlob() string {
+	return strings.Join(append(gitHubTokenMarkers(), gitHubJWTMarker, "ECHO_JWT"), " ") + " " + strings.Repeat("b", 800)
+}
+
+func assertNoGitHubSecrets(t *testing.T, what, text string, jwts, markers []string) {
+	t.Helper()
+	for _, jwt := range jwts {
+		if len(jwt) >= 24 && strings.Contains(text, jwt[:24]) {
+			t.Errorf("%s contains a request JWT", what)
+		}
+	}
+	for _, m := range markers {
+		if strings.Contains(text, m) {
+			t.Errorf("%s contains synthetic marker %.12s", what, m)
+		}
+	}
+}
+
+// Both App loops mint through Mint and GitHubTokenJob, so redacting here covers both.
+func TestMintRedactsGitHubTextInTheError(t *testing.T) {
+	k := keys(t)
+	gh := newFakeGitHub(t, &k[0].PublicKey, time.Now)
+	blob := gitHubMarkerBlob()
+	gh.failNext(
+		failure{http.StatusUnprocessableEntity, `{"message":"` + blob + `"}`},
+		failure{http.StatusCreated, `{"token":"ghs_test_expiry_xxxxxxxxxxxxxxxxxxxx","expires_at":"` + blob + `"}`},
+	)
+	app := gh.app(writeAppDir(t, k[0]))
+	markers := append(gitHubTokenMarkers(), gitHubJWTMarker)
+	_, err := app.Mint(context.Background())
+	if err == nil {
+		t.Fatal("accepted a refusal")
+	}
+	if len(err.Error()) > maxMessage+80 {
+		t.Errorf("message error length %d", len(err.Error()))
+	}
+	assertNoGitHubSecrets(t, "message error", err.Error(), gh.requestJWTs(), markers)
+
+	_, err = app.Mint(context.Background())
+	if err == nil {
+		t.Fatal("accepted a bad expiry")
+	}
+	if len(err.Error()) > maxMessage+80 {
+		t.Errorf("expiry error length %d", len(err.Error()))
+	}
+	assertNoGitHubSecrets(t, "expiry error", err.Error(), gh.requestJWTs(), markers)
+}
+
+func TestKeeperLogRedactsGitHubText(t *testing.T) {
+	h := newHarness(t, []client.Object{emptySecret()}, nil)
+	blob := gitHubMarkerBlob()
+	h.gh.failNext(
+		failure{http.StatusUnprocessableEntity, `{"message":"` + blob + `"}`},
+		failure{http.StatusCreated, `{"token":"ghs_test_expiry_xxxxxxxxxxxxxxxxxxxx","expires_at":"` + blob + `"}`},
+		failure{http.StatusCreated, `{"token":"ghs_test_metadata_xxxxxxxxxxxxxxxxxxxx","expires_at":"2099-01-01T00:00:00Z","permissions":{"contents":"ghs_SYNTHETICMARKER0123456789"},"repository_selection":"` + blob + `"}`},
+	)
+	h.start()
+	if w := h.nextWait(); w != 10*time.Second {
+		t.Fatalf("wait after the message %s, want 10s", w)
+	}
+	h.step(10 * time.Second)
+	if w := h.nextWait(); w != 20*time.Second {
+		t.Fatalf("wait after the expiry %s, want 20s", w)
+	}
+	h.step(20 * time.Second)
+	if w := h.nextWait(); w != 40*time.Minute {
+		t.Fatalf("wait after the metadata mint %s, want 40m", w)
+	}
+	logs := h.logs.String()
+	if logs == "" {
+		t.Fatal("no logs captured")
+	}
+	assertNoGitHubSecrets(t, "log", logs, h.gh.requestJWTs(), append(gitHubTokenMarkers(), gitHubJWTMarker))
+	if strings.Contains(logs, "ghs_test_") {
+		t.Error("the log holds a minted token")
 	}
 }
 

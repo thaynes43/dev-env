@@ -37,11 +37,11 @@ func GitHubTokenJob(name string, app *GitHubApp, secret types.NamespacedName) Jo
 				return Refreshed{}, err
 			}
 			fields := []any{
-				"repositorySelection", tok.RepositorySelection,
-				"permissions", permissionList(tok.Permissions),
+				"repositorySelection", redactGitHubText(tok.RepositorySelection),
+				"permissions", redactGitHubList(permissionList(tok.Permissions)),
 			}
 			if missing := app.MissingPermissions(tok.Permissions); len(missing) > 0 {
-				fields = append(fields, "permissionsNotGranted", missing)
+				fields = append(fields, "permissionsNotGranted", redactGitHubList(missing))
 			}
 			return Refreshed{
 				Value:     newSecretValue(tok.Token.Reveal() + "\n"),

@@ -251,16 +251,8 @@ func parseFlags(args []string) (options, error) {
 		return o, fmt.Errorf("--gh-token-permissions: %w", err)
 	}
 	o.permissions = p
-	op, err := keeper.ParsePermissions(*opsPerms)
-	if err != nil {
-		return o, fmt.Errorf("--ops-gh-token-permissions: %w", err)
-	}
-	o.opsPermissions = op
-	repos, err := keeper.ParseRepositories(*opsRepos)
-	if err != nil {
-		return o, fmt.Errorf("--ops-gh-token-repositories: %w", err)
-	}
-	o.opsRepositories = repos
+	// Ops permissions and repositories are validated only when the loop is on.
+	// A bad ops setting must not stop the dev bot's mint.
 	if o.opsGHToken {
 		if o.opsGHTokenSecret == "" || o.opsGitHubAppDir == "" {
 			return o, errors.New("--ops-gh-token-secret and --ops-github-app-dir must not be empty when --enable-ops-gh-token is set")
@@ -268,9 +260,21 @@ func parseFlags(args []string) (options, error) {
 		if o.opsGHTokenSecret == o.ghTokenSecret {
 			return o, errors.New("--ops-gh-token-secret must not be the dev bot's Secret")
 		}
-		if o.opsGitHubAppDir == o.githubAppDir {
+		// Clean drops a trailing slash and dot segments. It does not resolve a
+		// symlink; the mint compares issuers for that.
+		if filepath.Clean(o.opsGitHubAppDir) == filepath.Clean(o.githubAppDir) {
 			return o, errors.New("--ops-github-app-dir must not be the dev bot's App directory")
 		}
+		op, err := keeper.ParsePermissions(*opsPerms)
+		if err != nil {
+			return o, fmt.Errorf("--ops-gh-token-permissions: %w", err)
+		}
+		o.opsPermissions = op
+		repos, err := keeper.ParseRepositories(*opsRepos)
+		if err != nil {
+			return o, fmt.Errorf("--ops-gh-token-repositories: %w", err)
+		}
+		o.opsRepositories = repos
 		if len(repos) == 0 {
 			return o, errors.New("--ops-gh-token-repositories is required with --enable-ops-gh-token, so the token is limited to that list")
 		}

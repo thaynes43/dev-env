@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -241,6 +243,100 @@ func TestOpsTokenMintsBesideTheDevTokenAndARefusalBacksOff(t *testing.T) {
 	_, _, devTokens, _, devJWT := o.dev.snapshot()
 	_, _, opsTokens, _, opsJWT := o.ops.snapshot()
 	assertNoMaterial(t, logs, o.key, append(append(devTokens, opsTokens...), devJWT, opsJWT)...)
+}
+
+func TestOpsSymlinkToTheDevAppBacksOffWithoutMinting(t *testing.T) {
+	pair := keys(t)
+	clk := &armClock{FakeClock: fakeclock.NewFakeClock(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC))}
+	devGH := newFakeGitHub(t, &pair[0].PublicKey, clk.Now)
+	opsGH := newFakeGitHub(t, &pair[1].PublicKey, clk.Now)
+	opsGH.issuer = "Iv23opsclientid"
+	devDir := writeAppDir(t, pair[0])
+	link := filepath.Join(t.TempDir(), "ops-app")
+	if err := os.Symlink(devDir, link); err != nil {
+		t.Fatal(err)
+	}
+	devApp := devGH.app(devDir)
+	devApp.Clock = clk
+	opsApp := opsGH.app(link)
+	opsApp.Clock = clk
+	opsApp.Permissions = DefaultOpsBotPermissions
+	opsApp.Repositories = []string{"haynes-ops"}
+	opsApp.DistinctFrom = devApp
+	opsSecret := types.NamespacedName{Namespace: ghSecret.Namespace, Name: DefaultOpsGHTokenSecret}
+	if err := validateOps(Options{
+		GitHubApp:        devApp,
+		GHTokenSecret:    ghSecret,
+		OpsGitHubApp:     opsApp,
+		OpsGHTokenSecret: opsSecret,
+	}); err != nil {
+		t.Fatalf("a symlink is a different path; validateOps refused it before the mint: %v", err)
+	}
+
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(emptySecret(), secretNamed(DefaultOpsGHTokenSecret)).Build()
+	logs := &logBuffer{}
+	k := &Keeper{
+		Jobs: []Job{
+			GitHubTokenJob("gh-token", devApp, ghSecret),
+			GitHubTokenJob("ops-gh-token", opsApp, opsSecret),
+		},
+		Writer: &SecretWriter{Client: c},
+		Log:    logs.logger(),
+		Clock:  clk,
+		Rand:   func() float64 { return 0.5 },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := k.Start(ctx); err != nil {
+			t.Errorf("Start: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	eventually(t, "both token loops to sleep", func() bool {
+		if clk.arms() < 2 {
+			return false
+		}
+		k.mu.Lock()
+		defer k.mu.Unlock()
+		for _, name := range []string{"gh-token", "ops-gh-token"} {
+			st := k.state[name]
+			if st == nil || st.attempts < 1 || st.next.IsZero() {
+				return false
+			}
+		}
+		return true
+	})
+	k.mu.Lock()
+	opsWait := k.state["ops-gh-token"].next.Sub(clk.Now())
+	devWait := k.state["gh-token"].next.Sub(clk.Now())
+	k.mu.Unlock()
+	if opsWait != 10*time.Second {
+		t.Errorf("ops wait %s, want the first backoff", opsWait)
+	}
+	if devWait != 40*time.Minute {
+		t.Errorf("dev wait %s, want a successful mint", devWait)
+	}
+	if _, reqs, _, _, _ := opsGH.snapshot(); reqs != 0 {
+		t.Fatalf("the symlink reached GitHub: %d requests", reqs)
+	}
+	if _, reqs, _, _, _ := devGH.snapshot(); reqs != 1 {
+		t.Fatalf("dev requests %d, want 1", reqs)
+	}
+	if err := k.ReadyCheck(nil); err == nil || !strings.Contains(err.Error(), "ops-gh-token") {
+		t.Fatalf("readiness with a refused ops mint: %v", err)
+	}
+	if strings.Contains(logs.String(), testClientID) {
+		t.Errorf("the log quotes the dev bot's client id:\n%s", logs.String())
+	}
 }
 
 func TestOpsTokenIsNotCreatedWhenTheSecretIsMissing(t *testing.T) {

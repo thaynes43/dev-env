@@ -42,12 +42,45 @@ func TestRunMakesOnlyTheGHTokenAJob(t *testing.T) {
 	if len(jobs) != 2 || jobs[0].Name != "gh-token" || jobs[1].Name != "ops-gh-token" || jobs[1].Secret != o.OpsGHTokenSecret || jobs[1].Key != GHTokenKey || jobs[1].Refresh == nil {
 		t.Fatalf("ops App Jobs: %+v", jobs)
 	}
+	if o.OpsGitHubApp.DistinctFrom != o.GitHubApp {
+		t.Fatal("the ops mint is not compared with the dev bot's App")
+	}
 	if err := validateOps(o); err != nil {
 		t.Fatal(err)
 	}
 	o.OpsGitHubApp.Repositories = nil
 	if err := validateOps(o); err == nil {
 		t.Fatal("an ops App with no repository list was accepted")
+	}
+
+	devSecret := types.NamespacedName{Namespace: "dev-agents", Name: "dev-env-gh-token"}
+	if err := validateOps(Options{
+		GHTokenSecret:    devSecret,
+		GitHubApp:        &GitHubApp{Dir: "/etc/dev-env-keeper/github-dev-bot"},
+		OpsGHTokenSecret: devSecret,
+		OpsGitHubApp: &GitHubApp{
+			Dir:          DefaultOpsGitHubAppDir,
+			Permissions:  DefaultOpsBotPermissions,
+			Repositories: []string{"haynes-ops"},
+		},
+	}); err == nil {
+		t.Fatal("validateOps accepted the dev bot's Secret as the ops target")
+	}
+	devDir := "/etc/dev-env-keeper/github-dev-bot"
+	for _, dir := range []string{devDir + "/", "/etc/dev-env-keeper/./github-dev-bot"} {
+		alias := Options{
+			GHTokenSecret:    devSecret,
+			GitHubApp:        &GitHubApp{Dir: devDir},
+			OpsGHTokenSecret: types.NamespacedName{Namespace: "dev-agents", Name: DefaultOpsGHTokenSecret},
+			OpsGitHubApp: &GitHubApp{
+				Dir:          dir,
+				Permissions:  DefaultOpsBotPermissions,
+				Repositories: []string{"haynes-ops"},
+			},
+		}
+		if err := validateOps(alias); err == nil {
+			t.Errorf("validateOps accepted ops App dir %q", dir)
+		}
 	}
 
 	file, err := parser.ParseFile(token.NewFileSet(), "keeper.go", nil, parser.ParseComments|parser.PackageClauseOnly)
