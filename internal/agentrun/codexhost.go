@@ -20,6 +20,7 @@ const (
 	selectionNotUsedUnreached = "Host selection was not used: the operator could not be reached."
 	selectionNotUsedNoCreds   = "Host selection was not used: no credentials."
 	selectionNotUsedNoAnswer  = "Host selection was not used: the operator did not answer."
+	selectionNotUsedSettings  = "Host selection was not used: the connection settings were refused."
 )
 
 // codexHostReleaseTimeout bounds the release call itself. It starts when the
@@ -192,11 +193,15 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 	defer stopConn()
 	c, err := a.connect(connCtx, cmd.c.conn)
 	if err != nil {
-		if line, ok := threadSelectionFallback(err); ok {
-			a.errf("%s", line)
-			return invalid()
+		// Nothing has been sent to select yet, so every failure here is
+		// "no response" and main's result stands. A failure with no stage is
+		// a refused connection setting: say so, and keep its own sentence.
+		line, ok := threadSelectionFallback(err)
+		if !ok {
+			line = selectionNotUsedSettings + " " + err.Error()
 		}
-		return err
+		a.errf("%s", line)
+		return invalid()
 	}
 	choice, off, launchID, err := a.chooseCodexHost(ctx, c, t.repo, "", false, false)
 	if err != nil {

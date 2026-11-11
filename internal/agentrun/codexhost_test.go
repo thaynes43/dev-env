@@ -335,6 +335,15 @@ func TestThreadStartSelectionUnreachable(t *testing.T) {
 		h.mustRun(ExitUsage, args(h)...)
 		exact(t, h, selectionNotUsedUnreached)
 	})
+	t.Run("refused connection setting", func(t *testing.T) {
+		h := newHarness(t)
+		h.vars[envAPIURL] = "http://api.example"
+		h.mustRun(ExitUsage, args(h)...)
+		exact(t, h, selectionNotUsedSettings+` the API address "http://api.example" is not an https:// URL with a host (the API serves HTTPS only)`)
+		if len(h.api.requests()) != 0 {
+			t.Fatalf("requests %+v", h.api.requests())
+		}
+	})
 	t.Run("404", func(t *testing.T) {
 		h := newHarness(t)
 		h.mustRun(ExitUsage, args(h)...)
