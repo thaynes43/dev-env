@@ -191,25 +191,64 @@ func (s KubeStore) ListCallerParentNotes(ctx context.Context, caller *coord.Inbo
 
 // ListUnansweredCallerNotes is the waiting view. A note is waiting when no
 // valid reply to that exact note exists. The historical list is unchanged.
+// Replies are one bounded list for the caller, not one list per note. A reply
+// that does not validate does not answer the note and does not fail the page.
 func (s KubeStore) ListUnansweredCallerNotes(ctx context.Context, caller *coord.InboxCaller, limit int64, cursor string) ([]coord.InboxMessage, string, error) {
 	items, next, err := s.ListCallerParentNotes(ctx, caller, false, limit, cursor)
 	if err != nil {
 		return nil, "", err
 	}
-	out := make([]coord.InboxMessage, 0, len(items))
+	candidates := make([]*coord.InboxMessage, 0, len(items))
 	for i := range items {
 		if items[i].Spec.Kind == KindReply || items[i].Spec.Kind == "" {
 			continue
 		}
-		replies, _, err := s.ParentReplies(ctx, &items[i])
-		if err != nil {
-			return nil, "", err
-		}
-		if len(replies) == 0 {
-			out = append(out, items[i])
+		candidates = append(candidates, &items[i])
+	}
+	answered, err := s.callerNotesWithValidReply(ctx, caller, candidates)
+	if err != nil {
+		return nil, "", err
+	}
+	out := make([]coord.InboxMessage, 0, len(candidates))
+	for _, note := range candidates {
+		if !answered[inReplyToLabel(Ref(note))] {
+			out = append(out, *note)
 		}
 	}
 	return out, next, nil
+}
+
+// callerNotesWithValidReply reads the caller's replies once. The bound is the
+// sender cap: a continuation means the scan is incomplete, so the page is
+// unconfirmed rather than a guess.
+func (s KubeStore) callerNotesWithValidReply(ctx context.Context, caller *coord.InboxCaller, notes []*coord.InboxMessage) (map[string]bool, error) {
+	answered := map[string]bool{}
+	if len(notes) == 0 {
+		return answered, nil
+	}
+	byRef := make(map[string]*coord.InboxMessage, len(notes))
+	for _, note := range notes {
+		byRef[inReplyToLabel(Ref(note))] = note
+	}
+	limit := s.Limits.Effective(DefaultLimits).PerSession
+	selector := labels.SelectorFromSet(map[string]string{
+		ParentNoteLabel:       "true",
+		taskclaim.SourceLabel: callerLabel(caller),
+		KindLabel:             KindReply,
+	})
+	var page coord.InboxMessageList
+	if s.Live.List(ctx, &page, client.InNamespace(s.Namespace), client.MatchingLabelsSelector{Selector: selector}, client.Limit(limit+1)) != nil || page.Continue != "" || int64(len(page.Items)) > limit+1 {
+		return nil, ErrUnavailable
+	}
+	for i := range page.Items {
+		reply := &page.Items[i]
+		note := byRef[reply.Labels[InReplyToLabel]]
+		if note == nil || !s.ValidParentReply(note, reply) {
+			continue
+		}
+		answered[reply.Labels[InReplyToLabel]] = true
+	}
+	return answered, nil
 }
 
 func (s KubeStore) listParentNotes(ctx context.Context, party noteParty, sent bool, limit int64, cursor string) ([]coord.InboxMessage, string, error) {

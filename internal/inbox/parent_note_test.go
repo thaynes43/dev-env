@@ -397,3 +397,74 @@ func TestCallerParentNotesListReplyAndParties(t *testing.T) {
 		t.Fatal("a session matched an empty recipient", err)
 	}
 }
+
+func TestUnansweredCallerNotesOneReplyList(t *testing.T) {
+	ctx := context.Background()
+	s := storeFixture(t)
+	note := func(key string) *coord.InboxMessage {
+		t.Helper()
+		spec := validMessage()
+		spec.Key = key
+		spec.Kind = KindQuestion
+		spec.Recipient = coord.SessionIdentity{}
+		spec.CallerRecipient = meatballCaller()
+		got, _, err := s.CreateParentNote(ctx, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	replyTo := func(q *coord.InboxMessage, key string) *coord.InboxMessage {
+		t.Helper()
+		ref := Ref(q)
+		spec := validMessage()
+		spec.Key = key
+		spec.Kind = KindReply
+		spec.Sender = coord.SessionIdentity{}
+		spec.CallerSender = meatballCaller()
+		spec.Actor = policyActor(spec.Actor)
+		spec.Recipient = q.Spec.Sender
+		spec.InReplyTo = &ref
+		got, _, err := s.CreateParentNote(ctx, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first, second := note("q-1"), note("q-2")
+	for i := 0; i <= MaxReplies; i++ {
+		replyTo(first, fmt.Sprintf("reply-%d", i))
+	}
+	if _, _, err := s.ParentReplies(ctx, first); err == nil {
+		t.Fatal("many replies were a confirmed per-note lookup")
+	}
+	lists := 0
+	watched, ok := s.Client.(client.WithWatch)
+	if !ok {
+		t.Fatal("store client cannot be wrapped")
+	}
+	s.Live = interceptor.NewClient(watched, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+		lists++
+		return c.List(ctx, list, opts...)
+	}})
+	waiting, _, err := s.ListUnansweredCallerNotes(ctx, meatballCaller(), 100, "")
+	if err != nil || len(waiting) != 1 || waiting[0].Name != second.Name || lists != 3 {
+		t.Fatalf("many replies failed the page or cost a list per note: %v waiting %d lists %d", err, len(waiting), lists)
+	}
+
+	junkNote := note("q-3")
+	junk := replyTo(junkNote, "junk-reply")
+	junk.Spec.Recipient.Name = "someone-else"
+	if err := s.Client.Update(ctx, junk); err != nil {
+		t.Fatal(err)
+	}
+	waiting, _, err = s.ListUnansweredCallerNotes(ctx, meatballCaller(), 100, "")
+	if err != nil || len(waiting) != 2 || waiting[0].Name != second.Name || waiting[1].Name != junkNote.Name {
+		t.Fatal("a reply that does not validate failed the page or answered the note", err, len(waiting))
+	}
+
+	s.Limits.PerSession = 1
+	if _, _, err := s.ListUnansweredCallerNotes(ctx, meatballCaller(), 100, ""); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("a reply scan past the sender cap was treated as complete", err)
+	}
+}

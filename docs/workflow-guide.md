@@ -1012,7 +1012,8 @@ started. The tools are `parent_waiting`, `parent_read`, `parent_answer` and
 `parent_send`. `session_status` adds `parent notes waiting: N` for that
 session. The count and the waiting list are notes with no reply, and they have
 no note text. The waiting list takes a continuation and returns one when
-another page remains. `parent list` still returns the historical record,
+another page remains. An empty page says none on this page and still returns
+the continuation. `parent list` still returns the historical record,
 including a note that already has an answer. A session Meatball
 did not start is hidden. A plain message from Meatball is in the child's
 inbox list, with replies and results, after questions and blockers. The child

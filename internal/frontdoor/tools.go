@@ -780,7 +780,11 @@ func (h *handler) parentSend(ctx context.Context, args map[string]any) (string, 
 func formatParentWaiting(list apiv1.InboxList) string {
 	var b strings.Builder
 	if len(list.Items) == 0 {
-		b.WriteString("notes: none\n")
+		if list.Continue != "" {
+			b.WriteString("notes: none on this page\n")
+		} else {
+			b.WriteString("notes: none\n")
+		}
 	}
 	for i, item := range list.Items {
 		if i > 0 {

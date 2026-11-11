@@ -190,6 +190,21 @@ func TestParentWaitingPages(t *testing.T) {
 	if !isError || strings.Contains(bad, "PRIVATE_CURSOR") || len(api.requests()) != before {
 		t.Fatalf("bad continuation %q error %v requests %d", bad, isError, len(api.requests()))
 	}
+	api.set(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if r.URL.Query().Get("continue") == "" {
+			writeJSON(w, http.StatusOK, apiv1.InboxList{Box: apiv1.ParentNotesInbox, Continue: "0:more"})
+			return
+		}
+		writeJSON(w, http.StatusOK, apiv1.InboxList{Box: apiv1.ParentNotesInbox})
+	})
+	empty, isError := call(map[string]any{"limit": 1})
+	if isError || !strings.Contains(empty, "notes: none on this page\n") || !strings.Contains(empty, "continue: 0:more\n") || strings.Contains(empty, "notes: none\n") {
+		t.Fatalf("empty page %q error %v", empty, isError)
+	}
+	done, isError := call(map[string]any{"limit": 1, "continue": "0:more"})
+	if isError || !strings.Contains(done, "notes: none\n") || strings.Contains(done, "continue:") {
+		t.Fatalf("finished list %q error %v", done, isError)
+	}
 }
 
 func TestParentStatusCount(t *testing.T) {

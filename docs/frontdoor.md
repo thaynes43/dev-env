@@ -197,7 +197,9 @@ A session this caller did not start is hidden: the tool returns the operator's
 status and does not return the note text, the key or the kind on a refusal.
 `parent_waiting` lists notes that have no reply. It takes an optional `limit`
 and an optional `continue`, and it returns `continue:` when another page
-remains. Names, kinds and ages only. An age is the whole seconds, minutes,
+remains. An empty page that still has a continuation says `notes: none on this
+page` and still returns `continue:`. `notes: none` means the list is finished.
+Names, kinds and ages only. An age is the whole seconds, minutes,
 hours or days since the note was stored. It has no text and no key. An unknown
 argument on these four tools is a fixed sentence that does not repeat the
 argument name.
