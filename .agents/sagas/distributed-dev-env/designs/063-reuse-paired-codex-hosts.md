@@ -385,8 +385,13 @@ Who suspended the host does not matter. A suspended host is eligible for
 resume when its last recorded remote-control state before the suspend was
 `pair-code-issued`, its rescue is clean with nothing unpushed, it is not
 protected, and it fits the profile, including a requested repository the
-reported bootstrap lists as Ready. That includes a host the idle timer
-suspended.
+reported bootstrap lists as Ready. A named suspend can leave that state.
+The idle timer cannot. `pair-code-issued` is reported only on the live
+daemon path, which sets the agent busy, and a busy agent is not suspended
+(`internal/agentd/codex_remote.go:393-404`,
+`internal/controller/reconciler.go:812-814`). When the keeper projection
+lapses, the state becomes `login-required` and the idle timer can suspend
+after 72 hours. Rule 5 then excludes that host.
 
 The three hosts the idle timer suspended on 2026-11-07 stay out under the
 rules that remain. `dev-env-1027-010042` fails rule 5: its last state is
@@ -591,12 +596,19 @@ fails, its deletion timestamp is set, or archive has removed the volume.
 The existing 168h archive still applies after a normal suspend. This design
 does not lengthen archive, and it does not delete a volume. A suspended
 host is archived 168 hours after its suspend and its pairing goes with the
-volume, so a pool host has to be used about once in ten days (72 hours
-idle, then 168 hours suspended) or Tom pairs once more. Holding archive for
-a pool host is not built here (section 10).
+volume. The idle timer does not suspend a host whose agent is busy.
+`pair-code-issued` is reported only while the daemon is live, and that path
+sets the agent busy (`internal/agentd/codex_remote.go:393-404`), so
+`idleDeadline` does not suspend it
+(`internal/controller/reconciler.go:812-814`). The idle timer can suspend
+the host after the keeper projection lapses: the state becomes
+`login-required`, which is not busy, and the window for a remote session is
+72 hours. Rule 5 then excludes that host, and the next request creates a
+host Tom has to pair. Holding archive for a pool host is not built here
+(section 10).
 
-`dev-env-1110-230548` is the pool's host for profile `dev`. No tooling
-suspends it.
+`dev-env-1110-230548` is the pool's host for profile `dev`. No tooling in
+this design suspends it.
 
 **Ready**, repeated so the pool has one sentence: paired
 (`pair-code-issued`), on the current image, and the requested folder trusted
@@ -794,11 +806,12 @@ Nothing below asks Tom.
 
 **Later decision, not one of the five.** Hold archive for a pool host.
 A suspended host is archived 168 hours after its suspend, and the pairing
-goes with the volume (section 6). Recommendation: a later ADR should hold
-archive for the host that is a profile's paired pool host, and only that
-host, so a quiet stretch past about ten days does not delete the pairing.
-That is a retention change. It needs its own ADR. It is not built here, and
-this design does not write that ADR.
+goes with the volume (section 6). Holding that archive would keep the
+volume. It would not make a host eligible whose last state is
+`login-required`: rule 5 still excludes it. Recommendation: leave archive
+as it is until a later ADR, and do not treat an archive hold as the fix for
+a lapsed projection. That is a retention change. It needs its own ADR. It
+is not built here, and this design does not write that ADR.
 
 ## 11. Rulings (coordinator dev-env-fable-coordinator-1109, 2026-11-11)
 
@@ -829,15 +842,20 @@ default.
 **Ruling B.** A suspended host is eligible for resume when its last recorded
 remote-control state before the suspend was `pair-code-issued`, its rescue
 is clean with nothing unpushed, it is not protected, and it fits the
-profile, whoever suspended it. The three older hosts stay out: rule 5
-excludes `dev-env-1027-010042`, and rules 4 and 5 exclude
+profile, whoever suspended it. The idle timer does not produce that state
+today (section 4), so the reachable case is a named suspend.
+`TestIdleSuspendedPoolHostIsResumed` states the rule. The three older hosts
+stay out: rule 5 excludes `dev-env-1027-010042`, and rules 4 and 5 exclude
 `dev-env-1019-205125` and `haynes-ops-1023-041051`.
 
 **Ruling C.** A suspended host is archived 168 hours after its suspend and
-its pairing goes with the volume, so a pool host has to be used about once
-in ten days or Tom pairs once more. Holding archive for a pool host is a
-later ADR, recommended in section 10, and is not built here.
+its pairing goes with the volume. The review of this fold-in corrected the
+ten-day wording: the idle timer does not suspend a `pair-code-issued` host,
+because that state is reported only while the agent is busy. The host the
+idle timer can suspend is one whose keeper projection has lapsed
+(`login-required`), and rule 5 then excludes it. Holding archive for a pool
+host is a later ADR, recommended in section 10, and is not built here.
 
 **Ruling D.** `dev-env-1110-230548` is the pool's host for profile `dev`.
-No tooling suspends it. Slice 3's live check stays on that host, and its
-expected reason updates once story 695 has shipped.
+No tooling in this design suspends it. Slice 3's live check stays on that
+host, and its expected reason updates once story 695 has shipped.
