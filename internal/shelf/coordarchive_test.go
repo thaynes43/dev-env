@@ -492,6 +492,34 @@ func TestCoordinationArchiveListScopesAndProjection(t *testing.T) {
 	}
 }
 
+func TestListProjectionAcceptsCallerRecipient(t *testing.T) {
+	uid := "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f"
+	policy := "22222222-2222-4222-8222-222222222222"
+	name := "message." + strings.Repeat("ab", 16) + "." + strings.Repeat("cd", 16)
+	object := []byte(`{"apiVersion":"coordination.dev-env.haynesops.com/v1alpha1","kind":"InboxMessage","metadata":{"namespace":"dev-env-system","name":"` + name + `","uid":"` + uid + `","resourceVersion":"42"},"spec":{"project":"demo","callerRecipient":{"serviceAccount":"dev-env-system/dev-env-meatball","policyUID":"` + policy + `"}}}`)
+	item := protocol.CoordArchiveListItem{
+		UID: uid,
+		Manifest: &protocol.CoordArchiveStoredManifest{
+			CoordArchiveManifest: protocol.CoordArchiveManifest{
+				Format: protocol.CoordArchiveFormat, APIVersion: protocol.CoordArchiveAPIVersion,
+				Kind: "InboxMessage", Resource: "inboxmessages", Namespace: "dev-env-system", Name: name,
+				UID: uid, ResourceVersion: "42", Project: "demo", RecipientUID: policy, ArchivedBy: "test",
+				Object: protocol.CoordArchiveObjectDigest{SHA256: strings.Repeat("ab", 32), Bytes: int64(len(object))},
+			},
+			ArchivedAt: time.Unix(1, 0).UTC(),
+		},
+		Object: object,
+	}
+	q := protocol.CoordArchiveListQuery{Resource: "inboxmessages", Project: "demo", RecipientUID: policy}
+	if err := validateListItem(item, q); err != nil {
+		t.Fatal(err)
+	}
+	item.Object = []byte(`{"apiVersion":"coordination.dev-env.haynesops.com/v1alpha1","kind":"InboxMessage","metadata":{"namespace":"dev-env-system","name":"` + name + `","uid":"` + uid + `","resourceVersion":"42"},"spec":{"project":"demo","recipient":{"uid":"` + policy + `"},"callerRecipient":{"policyUID":"` + policy + `"}}}`)
+	if err := validateListItem(item, q); err == nil {
+		t.Fatal("both recipient forms accepted")
+	}
+}
+
 func coordExit(code int) error {
 	return utilexec.CodeExitError{Err: errors.New("command terminated"), Code: code}
 }

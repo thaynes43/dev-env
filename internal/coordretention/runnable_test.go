@@ -803,8 +803,13 @@ func (m *memArchive) Put(_ context.Context, req protocol.CoordArchivePutRequest,
 	if m.err != nil {
 		return protocol.CoordArchivePutResult{}, m.err
 	}
-	if req.Event != nil {
-		if err := m.refuseBackward(lookupKey(protocol.CoordArchiveIdentity{Resource: req.Manifest.Resource, Project: req.Manifest.Project, Name: req.Manifest.Name, UID: req.Manifest.UID}), req.Event.At); err != nil {
+	key := lookupKey(protocol.CoordArchiveIdentity{Resource: req.Manifest.Resource, Project: req.Manifest.Project, Name: req.Manifest.Name, UID: req.Manifest.UID})
+	// The journal treats an absent put while grace is open as a no-op. The
+	// hold and the grace start stay, including when the new event is older
+	// than the tail. The revision is still stored.
+	graceOpen := req.Event != nil && req.Event.State == "absent" && m.grace[key] != nil
+	if req.Event != nil && !graceOpen {
+		if err := m.refuseBackward(key, req.Event.At); err != nil {
 			return protocol.CoordArchivePutResult{}, err
 		}
 	}
@@ -812,11 +817,12 @@ func (m *memArchive) Put(_ context.Context, req protocol.CoordArchivePutRequest,
 		return protocol.CoordArchivePutResult{}, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "mark flag")
 	}
 	m.puts = append(m.puts, req)
-	key := lookupKey(protocol.CoordArchiveIdentity{Resource: req.Manifest.Resource, Project: req.Manifest.Project, Name: req.Manifest.Name, UID: req.Manifest.UID})
 	m.objects[req.Manifest.UID+"/"+req.Manifest.ResourceVersion+"/"+req.Manifest.Object.SHA256] = append([]byte(nil), req.Object...)
 	m.revisions[key] = append(m.revisions[key], protocol.CoordArchiveRevision{ResourceVersion: req.Manifest.ResourceVersion, SHA256: req.Manifest.Object.SHA256})
 	var grace *time.Time
-	if req.Event != nil && !m.freezeGrace {
+	if graceOpen {
+		grace = m.grace[key]
+	} else if req.Event != nil && !m.freezeGrace {
 		at := req.Event.At.UTC()
 		grace = &at
 		m.grace[key] = grace
