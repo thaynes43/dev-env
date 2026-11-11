@@ -115,6 +115,11 @@ func (r *Runnable) releaseRechecked(ctx context.Context, s Summary, reply *Summa
 			r.countRefused(s.Kind, reasonUnknown)
 			return liveRecord{}, stepStatus{refused: true}
 		}
+	} else if replyAck {
+		// A reply arrived after the pass. Keep the note until a pass carries
+		// that reply, so the note is not deleted without archiving it.
+		r.countRefused(s.Kind, reasonUnknown)
+		return liveRecord{}, stepStatus{refused: true}
 	}
 	rec.observations = observations
 	switch decision {

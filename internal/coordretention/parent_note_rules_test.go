@@ -748,6 +748,39 @@ func TestReleaseRecheckedStopsWhenTheReplyChanges(t *testing.T) {
 	}
 }
 
+func TestReleaseRecheckedStopsWhenAReplyArrivesAfterThePass(t *testing.T) {
+	note := noteMessage(t, toCaller("recheck-late", inbox.KindQuestion), "44444444-4444-4444-8444-4444444444d4", false)
+	store := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(note.DeepCopy()).Build()
+	got := evaluateStored(t, store, note)[note.Name]
+	requireDecision(t, got, Released)
+	if got.Reply != nil || got.ReplyAck {
+		t.Fatalf("unanswered pass %#v", got.Reply)
+	}
+	runnable := &Runnable{
+		Reader: store, Client: store, Namespace: retentionNS, Reconciled: map[string]bool{"dev-agents": true},
+		metrics: newRetentionMetrics(), Archive: newMemArchive(), Slots: shelf.NewExecSlots(1),
+		Now: func() time.Time { return time.Date(2026, 11, 11, 4, 0, 0, 0, time.UTC) },
+	}
+	if _, st := runnable.releaseRechecked(context.Background(), got.Summary, got.Reply); st.refused || st.stop != "" || st.done {
+		t.Fatalf("unanswered recheck %#v", st)
+	}
+	reply := answerTo(t, note, "recheck-late-answer", "44444444-4444-4444-8444-4444444444d5", true)
+	reply.ResourceVersion = ""
+	if err := store.Create(context.Background(), reply); err != nil {
+		t.Fatal(err)
+	}
+	if _, st := runnable.releaseRechecked(context.Background(), got.Summary, nil); !st.refused || st.stop != "" {
+		t.Fatalf("late reply recheck %#v", st)
+	}
+	status := runnable.release(context.Background(), candidate{item: lookupItem(got)})
+	if status.deleted || !status.refused {
+		t.Fatalf("release %#v", status)
+	}
+	if err := store.Get(context.Background(), client.ObjectKey{Namespace: note.Namespace, Name: note.Name}, &coord.InboxMessage{}); err != nil {
+		t.Fatalf("note after refused release: %v", err)
+	}
+}
+
 func evaluateStored(t *testing.T, reader client.Reader, messages ...*coord.InboxMessage) map[string]Result {
 	t.Helper()
 	items := make([]unstructured.Unstructured, 0, len(messages))
