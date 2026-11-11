@@ -1,6 +1,9 @@
 # 10: summoned sessions (dev-env-ops into v2)
 
-**Status:** backlog
+**Status:** backlog. Design delta proposed 2026-11-11 in
+[DESIGN-064](../designs/064-summoned-sessions-ops-profile.md) and
+[ADR-025](../adrs/025-summoned-sessions-on-v2.md) (OP734); build stories #735 to
+#750 and #610 under OP751. Nothing built.
 **Depends on:** 02 (lifecycle), 03 (Remote Control, so `remote` summoned sessions
 register), 07 (the broker; `ops` sessions' grants go to Tom); spike S-16 (plan usage)
 **Parallel with:** 04, 08
