@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.105.0](https://github.com/thaynes43/dev-env/compare/v2.104.0...v2.105.0) (2026-11-11)
+
+
+### Features
+
+* **api:** CallerPolicy summon schema and the AgentSession summon fields (DESIGN-064 6.4, OP756) ([#1079](https://github.com/thaynes43/dev-env/issues/1079)) ([6620120](https://github.com/thaynes43/dev-env/commit/66201204c557bb6cb6f399a43bf9c20e305b3ab3))
+
+
+### Bug Fixes
+
+* **codexhost:** a host one release behind stays usable; a thread start that starts nothing says so (OP709) ([#1077](https://github.com/thaynes43/dev-env/issues/1077)) ([83a125e](https://github.com/thaynes43/dev-env/commit/83a125e6eb1129181048d79ed11e371c9c98f8cc))
+
 ## [2.104.0](https://github.com/thaynes43/dev-env/compare/v2.103.0...v2.104.0) (2026-11-11)
 
 
