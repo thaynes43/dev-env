@@ -527,8 +527,10 @@ automatic path. This feature itself never names a protected host.
 
 **Race.** Before `use` or `resume`, the selector writes one annotation,
 `dev-env.haynesops.com/codex-host-lease`, with a purpose word, an expiry,
-the caller's identity and a launch id, space-separated. A value in the old
-three-field form is malformed. The write is a compare-and-swap on the session's
+the caller's identity and a launch id, space-separated. A value whose second
+field parses as a time in the future is busy for acquisition and for
+suitability, whatever its other fields are; a fully parsed four-field value
+still lets the same holder and launch id renew and release. The write is a compare-and-swap on the session's
 `resourceVersion`. A status write bumps that version too, and a running
 host's heartbeat does it often. The operating-mode route already retries
 that kind of conflict (`internal/apiserver/lifecycle.go:34-38`,
@@ -687,6 +689,8 @@ finding no host is `caller_cannot_create`.
 | `agent-run coordinator start` and front door `coordinator_start` | None. A coordinator is a task session on profile `dev`. It does not need a paired host. A thread it starts later uses `thread start`, and then this selector |
 | Headless `agent-run --project ... -p` for Codex | None. Not a host |
 | Front door tools | No new tool. The front door's allow list stays |
+
+When `thread start` without `--host` gets no response from select, a 404, or any 5xx, it keeps today's `invalid_input` result and exit 2 and adds one line; a received 401, 403, 409 or 422 is returned as the operator sent it.
 
 A session that may not create a host still may not. Select's `create`
 action checks the same rule as create does today

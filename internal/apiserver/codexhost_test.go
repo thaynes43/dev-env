@@ -535,6 +535,24 @@ func TestCodexHostCoordinatorDoesNotResumeForeignHost(t *testing.T) {
 	}
 }
 
+func TestCodexHostAdmittedResumeWritesNothing(t *testing.T) {
+	var patched atomic.Bool
+	f := newCodexFixture(t, interceptor.Funcs{
+		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+			patched.Store(true)
+			return errors.New("patch")
+		},
+	})
+	f.addCodexHost("asleep", codexHostOpt{
+		phase: v1alpha1.PhaseSuspended, mode: v1alpha1.OperatingModeSuspended,
+		rescue: v1alpha1.RescueCleanAndPushed,
+	})
+	got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "resume", "asleep", "")
+	if patched.Load() || got.Ready {
+		t.Fatalf("resume wrote %v choice %+v", patched.Load(), got)
+	}
+}
+
 func TestCodexHostCoordinatorResumeWritesNothing(t *testing.T) {
 	var patched atomic.Bool
 	f := newCodexFixture(t, interceptor.Funcs{
@@ -793,6 +811,74 @@ func TestCodexHostLeaseRechecksSuitability(t *testing.T) {
 			t.Fatal("leased the replacement")
 		}
 	})
+	t.Run("suitable replacement", func(t *testing.T) {
+		var old string
+		var replaced, patchedBeforeRelist atomic.Bool
+		var listsAfter atomic.Int32
+		f := newCodexFixture(t, interceptor.Funcs{
+			Get: mutate("preferred", func(ctx context.Context, c client.WithWatch, sess *v1alpha1.AgentSession) {
+				old = string(sess.UID)
+				replaced.Store(true)
+				repl := sess.DeepCopy()
+				repl.ResourceVersion = ""
+				repl.UID = uuid.NewUUID()
+				status := repl.Status
+				if err := c.Delete(ctx, sess); err != nil {
+					t.Fatal(err)
+				}
+				repl.Status = v1alpha1.AgentSessionStatus{}
+				if err := c.Create(ctx, repl); err != nil {
+					t.Fatal(err)
+				}
+				var saved v1alpha1.AgentSession
+				if err := c.Get(ctx, types.NamespacedName{Namespace: repl.Namespace, Name: repl.Name}, &saved); err != nil {
+					t.Fatal(err)
+				}
+				saved.Status = status
+				if err := c.Status().Update(ctx, &saved); err != nil {
+					t.Fatal(err)
+				}
+				var pod corev1.Pod
+				if err := c.Get(ctx, types.NamespacedName{Namespace: saved.Namespace, Name: saved.Name}, &pod); err != nil {
+					t.Fatal(err)
+				}
+				ref := metav1.NewControllerRef(&saved, v1alpha1.GroupVersion.WithKind("AgentSession"))
+				pod.OwnerReferences = []metav1.OwnerReference{*ref}
+				if err := c.Update(ctx, &pod); err != nil {
+					t.Fatal(err)
+				}
+				if string(saved.UID) == old || old == "" || saved.Spec.Agent != v1alpha1.AgentCodex {
+					t.Fatalf("replacement uid %s old %s agent %s", saved.UID, old, saved.Spec.Agent)
+				}
+			}).Get,
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if replaced.Load() {
+					listsAfter.Add(1)
+				}
+				return c.List(ctx, list, opts...)
+			},
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if sess, ok := obj.(*v1alpha1.AgentSession); ok && sess.Annotations[codexHostLeaseAnnotation] != "" && listsAfter.Load() == 0 {
+					patchedBeforeRelist.Store(true)
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		})
+		newer := f.now
+		older := f.now.Add(-time.Hour)
+		f.addCodexHost("preferred", codexHostOpt{pool: true, activity: &newer})
+		f.addCodexHost("second", codexHostOpt{activity: &older})
+		f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "preferred", "")
+		if string(f.session("preferred").UID) == old || old == "" {
+			t.Fatal("the host was not replaced")
+		}
+		if _, id, _, ok := parseCodexHostLease(f.session("preferred").Annotations[codexHostLeaseAnnotation]); !ok || id != codexTestLaunch {
+			t.Fatal("the suitable replacement was not leased after reselection")
+		}
+		if patchedBeforeRelist.Load() {
+			t.Fatal("leased the replacement before the UID check caused a reselection")
+		}
+	})
 }
 
 func TestCodexHostPodReadyNotSessionCondition(t *testing.T) {
@@ -802,8 +888,8 @@ func TestCodexHostPodReadyNotSessionCondition(t *testing.T) {
 	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "live"}, &pod); err != nil {
 		t.Fatal(err)
 	}
-	pod.Status.Phase = corev1.PodPending
-	pod.Status.Conditions = nil
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}
 	if err := f.c.Status().Update(context.Background(), &pod); err != nil {
 		t.Fatal(err)
 	}
@@ -840,7 +926,7 @@ func TestCodexHostMalformedCheckWritesNothing(t *testing.T) {
 	})
 	f.addCodexHost("paired", codexHostOpt{})
 	body := apiv1.CodexHostSelectRequest{Repo: "dev-env", Profile: "dev", LaunchID: codexTestLaunch}
-	for _, q := range []string{"?check=true;", "?check=true&other=1", "?other=1", "?check=false"} {
+	for _, q := range []string{"?check=true;", "?check=true&other=1", "?other=1", "?check=false", "?check=true&check=true"} {
 		w := f.do(http.MethodPost, apiv1.CodexHostsSelectPath+q, tokClient, body)
 		if w.Code == http.StatusOK || patched.Load() {
 			t.Fatalf("%s status %d patched %v body %s", q, w.Code, patched.Load(), w.Body.String())
@@ -872,20 +958,61 @@ func TestCodexHostLeaseCarriesLaunchID(t *testing.T) {
 	oldF := newCodexFixture(t)
 	old := "use " + oldF.now.Add(time.Hour).UTC().Format(time.RFC3339) + " client/other"
 	oldF.addCodexHost("old", codexHostOpt{lease: old})
-	oldF.wantChoice(oldF.selectCodex(tokClient, "dev", false), "use", "old", "")
-	if _, id, _, ok := parseCodexHostLease(oldF.session("old").Annotations[codexHostLeaseAnnotation]); !ok || id != codexTestLaunch {
-		t.Fatal("a three-field lease was not vacant")
+	oldF.wantChoice(oldF.selectCodex(tokClient, "dev", false), "", "", codexhostpool.ReasonHostBusy)
+	if got := oldF.session("old").Annotations[codexHostLeaseAnnotation]; got != old {
+		t.Fatalf("an unexpired three-field lease was overwritten: %q", got)
 	}
-	sess := oldF.session("old")
-	orig := sess.DeepCopy()
-	sess.Annotations[codexHostLeaseAnnotation] = old
-	if err := oldF.c.Patch(context.Background(), sess, client.MergeFrom(orig)); err != nil {
-		t.Fatal(err)
+	if !codexLeaseHeldByOther(old, clientHolder(), codexTestLaunch, oldF.now) {
+		t.Fatal("an unexpired three-field lease was not busy")
 	}
 	w := oldF.do(http.MethodPost, apiv1.CodexHostsReleasePath, tokClient, apiv1.CodexHostReleaseRequest{Host: "old", LaunchID: codexTestLaunch})
 	wantError(t, w, http.StatusConflict, apiv1.CodexHostLeaseHeld)
 	if oldF.session("old").Annotations[codexHostLeaseAnnotation] != old {
 		t.Fatal("release cleared a malformed lease")
+	}
+
+	same := newCodexFixture(t)
+	sameLease := "use " + same.now.Add(time.Hour).UTC().Format(time.RFC3339) + " " + clientHolder()
+	same.addCodexHost("same", codexHostOpt{lease: sameLease})
+	same.wantChoice(same.selectCodex(tokClient, "dev", false), "", "", codexhostpool.ReasonHostBusy)
+	if same.session("same").Annotations[codexHostLeaseAnnotation] != sameLease {
+		t.Fatal("an unexpired lease with this holder and no launch id was renewed")
+	}
+
+	junkF := newCodexFixture(t)
+	junk := "nope " + junkF.now.Add(time.Hour).UTC().Format(time.RFC3339) + " extra fields here"
+	junkF.addCodexHost("junk", codexHostOpt{lease: junk})
+	junkF.wantChoice(junkF.selectCodex(tokClient, "dev", true), "", "", codexhostpool.ReasonHostBusy)
+	if !codexLeaseHeldByOther(junk, clientHolder(), codexTestLaunch, junkF.now) || junkF.session("junk").Annotations[codexHostLeaseAnnotation] != junk {
+		t.Fatal("a future second field was not busy")
+	}
+
+	pastF := newCodexFixture(t)
+	past := "use " + pastF.now.Add(-time.Hour).UTC().Format(time.RFC3339) + " client/other"
+	pastF.addCodexHost("past", codexHostOpt{lease: past})
+	pastF.wantChoice(pastF.selectCodex(tokClient, "dev", false), "use", "past", "")
+	if _, id, _, ok := parseCodexHostLease(pastF.session("past").Annotations[codexHostLeaseAnnotation]); !ok || id != codexTestLaunch {
+		t.Fatal("an expired three-field lease was not vacant")
+	}
+	if codexLeaseHeldByOther(past, clientHolder(), codexTestLaunch, pastF.now) {
+		t.Fatal("an expired second field was busy")
+	}
+
+	unread := newCodexFixture(t)
+	bad := "use not-a-time " + clientHolder() + " " + codexTestLaunch
+	unread.addCodexHost("bad", codexHostOpt{lease: bad})
+	unread.wantChoice(unread.selectCodex(tokClient, "dev", false), "use", "bad", "")
+	if _, id, _, ok := parseCodexHostLease(unread.session("bad").Annotations[codexHostLeaseAnnotation]); !ok || id != codexTestLaunch {
+		t.Fatal("a lease with no readable expiry was not vacant")
+	}
+
+	rel := newCodexFixture(t)
+	kept := formatCodexHostLease(codexHostLeasePurpose, rel.now.Add(time.Hour), clientHolder(), codexTestLaunch)
+	rel.addCodexHost("paired", codexHostOpt{lease: kept})
+	w = rel.do(http.MethodPost, apiv1.CodexHostsReleasePath, tokClient, apiv1.CodexHostReleaseRequest{Host: "paired", LaunchID: codexOtherLaunch})
+	wantError(t, w, http.StatusConflict, apiv1.CodexHostLeaseHeld)
+	if rel.session("paired").Annotations[codexHostLeaseAnnotation] != kept {
+		t.Fatal("release cleared another launch id")
 	}
 }
 

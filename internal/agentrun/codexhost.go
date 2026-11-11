@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
+	"net/url"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -55,7 +55,7 @@ func (a *app) codexHostSelect(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	choice, off, _, err := a.chooseCodexHost(ctx, c, repo, profile, check)
+	choice, off, _, err := a.chooseCodexHost(ctx, c, repo, profile, check, false)
 	if err != nil {
 		return err
 	}
@@ -68,16 +68,20 @@ func (a *app) codexHostSelect(ctx context.Context, args []string) error {
 	return a.printJSON(choice)
 }
 
-// chooseCodexHost posts one select. The bool is true when the route is absent
-// (any 404): the flag is off, or the operator is older. A refusal is a choice
-// with an empty action, not an error. The launch id is not a secret and is
-// not logged.
-func (a *app) chooseCodexHost(ctx context.Context, c *conn, repo, profile string, check bool) (apiv1.CodexHostChoice, bool, string, error) {
+// chooseCodexHost posts one select. retry uses the client's standard call, the
+// same retries create uses. The bool is true when the route is absent (any
+// 404): the flag is off, or the operator is older. A refusal is a choice with
+// an empty action, not an error. The launch id is not a secret and is not logged.
+func (a *app) chooseCodexHost(ctx context.Context, c *conn, repo, profile string, check, retry bool) (apiv1.CodexHostChoice, bool, string, error) {
 	id, err := newCodexLaunchID()
 	if err != nil {
 		return apiv1.CodexHostChoice{}, false, "", err
 	}
-	payload, err := json.Marshal(apiv1.CodexHostSelectRequest{Repo: repo, Profile: profile, LaunchID: id})
+	req := apiv1.CodexHostSelectRequest{Repo: repo, Profile: profile, LaunchID: id}
+	if retry {
+		return a.chooseCodexHostRetry(ctx, c, req, id, check)
+	}
+	payload, err := json.Marshal(req)
 	if err != nil {
 		return apiv1.CodexHostChoice{}, false, "", fail(ExitFailed, "could not build the selection request")
 	}
@@ -87,17 +91,33 @@ func (a *app) chooseCodexHost(ctx context.Context, c *conn, repo, profile string
 	}
 	status, raw, err := a.send(ctx, c, http.MethodPost, target, payload)
 	if err != nil {
-		return apiv1.CodexHostChoice{}, false, "", err
+		return apiv1.CodexHostChoice{}, false, "", selectTransport(err)
 	}
 	if status == http.StatusNotFound {
 		return apiv1.CodexHostChoice{}, true, "", nil
 	}
 	if status != http.StatusOK {
-		return apiv1.CodexHostChoice{}, false, "", refusal(c, status, raw)
+		return apiv1.CodexHostChoice{}, false, "", &selectResponse{status: status, err: refusal(c, status, raw)}
 	}
 	var choice apiv1.CodexHostChoice
 	if json.Unmarshal(raw, &choice) != nil {
 		return apiv1.CodexHostChoice{}, false, "", fail(ExitFailed, "the selection answer is not the host choice")
+	}
+	return choice, false, id, nil
+}
+
+func (a *app) chooseCodexHostRetry(ctx context.Context, c *conn, req apiv1.CodexHostSelectRequest, id string, check bool) (apiv1.CodexHostChoice, bool, string, error) {
+	q := url.Values{}
+	if check {
+		q.Set("check", "true")
+	}
+	var choice apiv1.CodexHostChoice
+	status, err := a.callWith(ctx, c, http.MethodPost, apiv1.CodexHostsSelectPath, q, req, &choice, true)
+	if status == http.StatusNotFound {
+		return apiv1.CodexHostChoice{}, true, "", nil
+	}
+	if err != nil {
+		return apiv1.CodexHostChoice{}, false, "", err
 	}
 	return choice, false, id, nil
 }
@@ -140,7 +160,7 @@ func codexHostRefused(choice apiv1.CodexHostChoice) error {
 // codexBeforeCreate asks select before an interactive Codex create. False
 // means the create does not continue: the choice was printed, or it was refused.
 func (a *app) codexBeforeCreate(ctx context.Context, c *conn, repo, profile string) (bool, error) {
-	choice, off, _, err := a.chooseCodexHost(ctx, c, repo, profile, true)
+	choice, off, _, err := a.chooseCodexHost(ctx, c, repo, profile, true, true)
 	if err != nil {
 		return false, err
 	}
@@ -166,7 +186,11 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 	if _, ok := threadReadHandoff(t.handoff); !ok {
 		return invalid()
 	}
-	c, err := a.connect(ctx, cmd.c.conn)
+	// The port-forward belongs to connCtx, not to the command context, so a
+	// cancelled launch can still release. This command closes it afterwards.
+	connCtx, stopConn := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopConn()
+	c, err := a.connect(connCtx, cmd.c.conn)
 	if err != nil {
 		if line, ok := threadSelectionFallback(err); ok {
 			a.errf("%s", line)
@@ -174,7 +198,7 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 		}
 		return err
 	}
-	choice, off, launchID, err := a.chooseCodexHost(ctx, c, t.repo, "", false)
+	choice, off, launchID, err := a.chooseCodexHost(ctx, c, t.repo, "", false, false)
 	if err != nil {
 		if line, ok := threadSelectionFallback(err); ok {
 			a.errf("%s", line)
@@ -217,24 +241,77 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 	}
 }
 
-// threadSelectionFallback is the one line thread start adds when select was
-// not reached, or answered 5xx. A real refusal (a profile fence, a
-// coordinator check, an invalid body, a conflict) is returned unchanged.
-func threadSelectionFallback(err error) (string, bool) {
-	var local *localCredentialError
-	if errors.As(err, &local) {
-		return selectionNotUsedNoCreds, true
-	}
-	var ee *exitError
-	if !errors.As(err, &ee) {
-		return selectionNotUsedUnreached, true
-	}
-	if selectUnanswered(ee.msg) {
-		return selectionNotUsedNoAnswer, true
-	}
-	return "", false
+// Stages of a select attempt that ended before any HTTP response.
+const (
+	stageCredentials = "credentials"
+	stageMinting     = "minting"
+	stageCA          = "ca"
+	stageKubectl     = "kubectl"
+	stagePortForward = "port-forward"
+	stageTransport   = "transport"
+)
+
+// selectNoResponse is a failure before select answered. stage is where it
+// happened. Error and the exit code are the underlying error's, so other
+// commands are unchanged.
+type selectNoResponse struct {
+	stage string
+	err   error
 }
 
-func selectUnanswered(msg string) bool {
-	return strings.HasPrefix(msg, "the operator failed") || strings.HasPrefix(msg, "the operator is unavailable") || strings.Contains(msg, "the API answered 5")
+func (e *selectNoResponse) Error() string { return e.err.Error() }
+func (e *selectNoResponse) Unwrap() error { return e.err }
+
+func noSelectResponse(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var already *selectNoResponse
+	if errors.As(err, &already) {
+		return err
+	}
+	return &selectNoResponse{stage: stage, err: err}
+}
+
+// selectResponse is an HTTP response from select. status is the code the
+// operator sent. Error and the exit code are the refusal's.
+type selectResponse struct {
+	status int
+	err    error
+}
+
+func (e *selectResponse) Error() string { return e.err.Error() }
+func (e *selectResponse) Unwrap() error { return e.err }
+
+func selectTransport(err error) error {
+	var none *selectNoResponse
+	if errors.As(err, &none) {
+		return err
+	}
+	return noSelectResponse(stageTransport, err)
+}
+
+// threadSelectionFallback is the one line thread start adds when select was
+// not reached, answered 404, or answered 5xx. A received 401, 403, 409 or 422
+// is returned unchanged. The decision reads the error's type, not its text.
+func threadSelectionFallback(err error) (string, bool) {
+	var resp *selectResponse
+	if errors.As(err, &resp) {
+		switch {
+		case resp.status == http.StatusNotFound:
+			return hostSelectionOff, true
+		case resp.status >= 500:
+			return selectionNotUsedNoAnswer, true
+		default:
+			return "", false
+		}
+	}
+	var none *selectNoResponse
+	if errors.As(err, &none) {
+		if none.stage == stageCredentials {
+			return selectionNotUsedNoCreds, true
+		}
+		return selectionNotUsedUnreached, true
+	}
+	return "", false
 }

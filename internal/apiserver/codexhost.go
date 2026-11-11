@@ -403,9 +403,7 @@ func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates
 	if sess.Annotations[codexHostProtectedAnnotation] == "true" {
 		h.ProtectedAnnotation = true
 	}
-	if holder, launchID, exp, ok := parseCodexHostLease(sess.Annotations[codexHostLeaseAnnotation]); ok {
-		h.LeaseHolder, h.LeaseLaunchID, h.LeaseExpiry = holder, launchID, exp
-	}
+	applyCodexHostLease(&h, sess.Annotations[codexHostLeaseAnnotation])
 	if sess.Status.RemoteControl != nil {
 		h.RemoteState = sess.Status.RemoteControl.State
 	}
@@ -524,10 +522,45 @@ func (s *Server) leaseCodexHost(ctx context.Context, want codexLeaseTarget) (cod
 
 func codexLeaseHeldByOther(raw, caller, launchID string, now time.Time) bool {
 	holder, id, exp, ok := parseCodexHostLease(raw)
-	if !ok || !exp.After(now) {
-		return false
+	if ok {
+		if !exp.After(now) {
+			return false
+		}
+		return holder != caller || id != launchID
 	}
-	return holder != caller || id != launchID
+	// Not a four-field lease. A future second field is busy for every caller.
+	exp, ok = codexLeaseSecondExpiry(raw)
+	return ok && exp.After(now)
+}
+
+// applyCodexHostLease fills the fields Suitable already reads. A four-field
+// value keeps its holder and launch id, so the same caller can renew. Any
+// other value whose second field is a time is stored under a holder that is
+// not a caller identity: the raw value contains a space. Suitable then treats
+// a future expiry as busy and a past one as vacant.
+func applyCodexHostLease(h *codexhostpool.Host, raw string) {
+	if holder, launchID, exp, ok := parseCodexHostLease(raw); ok {
+		h.LeaseHolder, h.LeaseLaunchID, h.LeaseExpiry = holder, launchID, exp
+		return
+	}
+	exp, ok := codexLeaseSecondExpiry(raw)
+	if !ok {
+		return
+	}
+	h.LeaseHolder = raw
+	h.LeaseExpiry = exp
+}
+
+func codexLeaseSecondExpiry(raw string) (time.Time, bool) {
+	parts := strings.Split(raw, " ")
+	if len(parts) < 2 {
+		return time.Time{}, false
+	}
+	exp, err := time.Parse(time.RFC3339, parts[1])
+	if err != nil {
+		return time.Time{}, false
+	}
+	return exp, true
 }
 
 func formatCodexHostLease(purpose string, expiry time.Time, holder, launchID string) string {

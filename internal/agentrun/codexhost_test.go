@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -341,19 +344,39 @@ func TestThreadStartSelectionUnreachable(t *testing.T) {
 			t.Fatalf("requests %+v", reqs)
 		}
 	})
-	t.Run("5xx", func(t *testing.T) {
-		h := newHarness(t)
-		h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
-			if r.URL.Path != apiv1.CodexHostsSelectPath {
-				t.Errorf("unexpected %s", r.URL.Path)
+	for _, status := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			h := newHarness(t)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if r.URL.Path != apiv1.CodexHostsSelectPath {
+					t.Errorf("unexpected %s", r.URL.Path)
+				}
+				apiError(w, status, apiv1.CodeInternal, "the operator failed this request")
 			}
-			apiError(w, http.StatusInternalServerError, apiv1.CodeInternal, "the operator failed this request")
-		}
+			h.mustRun(ExitUsage, args(h)...)
+			exact(t, h, selectionNotUsedNoAnswer)
+			if len(h.api.requests()) != 1 {
+				t.Fatalf("requests %+v", h.api.requests())
+			}
+		})
+	}
+	t.Run("mint refused", func(t *testing.T) {
+		h := newHarness(t)
+		inPod(h, http.StatusForbidden)
 		h.mustRun(ExitUsage, args(h)...)
-		exact(t, h, selectionNotUsedNoAnswer)
-		if len(h.api.requests()) != 1 {
-			t.Fatalf("requests %+v", h.api.requests())
-		}
+		exact(t, h, selectionNotUsedUnreached)
+	})
+	t.Run("no kubectl", func(t *testing.T) {
+		h := newHarness(t)
+		h.vars = map[string]string{}
+		h.mustRun(ExitUsage, args(h)...)
+		exact(t, h, selectionNotUsedUnreached)
+	})
+	t.Run("port-forward", func(t *testing.T) {
+		h, l := laptopHarness(t, operatorDNS)
+		l.fail = "port-forward"
+		h.mustRun(ExitUsage, args(h)...)
+		exact(t, h, selectionNotUsedUnreached)
 	})
 }
 
@@ -380,10 +403,56 @@ func TestInteractiveSelectionFailures(t *testing.T) {
 	t.Run("transport error", func(t *testing.T) {
 		h := newHarness(t)
 		h.api.srv.Close()
-		if code := h.run(args...); code == ExitOK {
-			t.Fatalf("exit %d", code)
+		h.mustRun(ExitRetry, args...)
+		contains(t, "stderr", h.stderr.String(), "could not reach the API at "+h.api.srv.URL)
+		if len(h.sleeps) != 2 {
+			t.Fatalf("slept %d times, want the two retries create uses", len(h.sleeps))
 		}
 		noCreate(t, h)
+	})
+	t.Run("certificate", func(t *testing.T) {
+		h := newHarness(t)
+		delete(h.vars, envCAFile)
+		h.mustRun(ExitAuth, args...)
+		contains(t, "stderr", h.stderr.String(), "has a certificate agent-run does not trust")
+		if len(h.sleeps) != 0 {
+			t.Fatalf("a certificate failure was retried %d times", len(h.sleeps))
+		}
+		noCreate(t, h)
+	})
+	t.Run("503 is retried", func(t *testing.T) {
+		h := newHarness(t)
+		var selects int
+		h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+			switch {
+			case r.URL.Path == apiv1.CodexHostsSelectPath:
+				selects++
+				if selects == 1 {
+					apiError(w, http.StatusServiceUnavailable, apiv1.CodeUnavailable, "busy")
+					return
+				}
+				writeTestJSON(w, http.StatusOK, codexChoice("create", "", ""))
+			case r.Method == http.MethodPost && r.URL.Path == apiv1.SessionsPath:
+				writeTestJSON(w, http.StatusCreated, runningOn(testSession(name, ""), "talosw02"))
+			case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath(name):
+				writeTestJSON(w, http.StatusOK, runningOn(testSession(name, ""), "talosw02"))
+			default:
+				apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "no route")
+			}
+		}
+		h.mustRun(ExitOK, args...)
+		if selects < 2 {
+			t.Fatalf("select attempts %d, want a retry of 503", selects)
+		}
+		var created bool
+		for _, req := range h.api.requests() {
+			if req.method == http.MethodPost && req.path == apiv1.SessionsPath {
+				created = true
+			}
+		}
+		if !created {
+			t.Fatal("a retried select did not continue into create")
+		}
 	})
 	t.Run("404", func(t *testing.T) {
 		h := newHarness(t)
@@ -421,6 +490,41 @@ func TestInteractiveSelectionFailures(t *testing.T) {
 }
 
 func TestThreadStartReleaseTimeoutStartsAtRelease(t *testing.T) {
+	t.Run("launch longer than the deadline still releases", func(t *testing.T) {
+		releaseTimeoutStartsAtRelease(t)
+	})
+	t.Run("stuck release ends at the deadline", func(t *testing.T) {
+		prev := codexHostReleaseTimeout
+		codexHostReleaseTimeout = 200 * time.Millisecond
+		t.Cleanup(func() { codexHostReleaseTimeout = prev })
+		h, c := threadAPIHarness(t, nil)
+		var release int
+		h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+			switch r.URL.Path {
+			case apiv1.CodexHostsSelectPath:
+				writeTestJSON(w, http.StatusOK, codexChoice("use", threadHostName, ""))
+			case apiv1.SessionThreadsPath(threadHostName):
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(hostResult(t, apiv1.ThreadResponded, ""))
+			case apiv1.CodexHostsReleasePath:
+				release++
+				<-r.Context().Done()
+			default:
+				apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "no route")
+			}
+		}
+		args := []string{"thread", "start", "--agent", "codex", "--model", "gpt-6-astra", "--effort", "high", "--handoff", h.write("handoff.txt", threadHandoff), "--repo", "dev-env"}
+		started := time.Now()
+		h.mustRun(ExitOK, args...)
+		if time.Since(started) > 5*time.Second || release != 1 || c.calls != 0 {
+			t.Fatalf("elapsed %s release %d execs %d", time.Since(started), release, c.calls)
+		}
+	})
+}
+
+func releaseTimeoutStartsAtRelease(t *testing.T) {
+	t.Helper()
 	prev := codexHostReleaseTimeout
 	codexHostReleaseTimeout = 2 * time.Second
 	t.Cleanup(func() { codexHostReleaseTimeout = prev })
@@ -453,6 +557,50 @@ func TestThreadStartReleaseTimeoutStartsAtRelease(t *testing.T) {
 	}
 }
 
+func TestThreadStartReleaseKeepsPortForward(t *testing.T) {
+	h, _ := laptopHarness(t, operatorDNS)
+	ctx, cancel := context.WithCancel(context.Background())
+	var forwardCtx context.Context
+	var once sync.Once
+	address := h.api.srv.URL
+	h.env.PortForward = func(fwdCtx context.Context, _ []string) (string, func(), error) {
+		once.Do(func() { forwardCtx = fwdCtx })
+		return address, func() {}, nil
+	}
+	h.env.RunCapture = func(context.Context, []string, io.Reader, io.Writer) (int, []byte, error) {
+		return 1, nil, errors.New("exec stopped")
+	}
+	var release int
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		switch r.URL.Path {
+		case apiv1.CodexHostsSelectPath:
+			writeTestJSON(w, http.StatusOK, codexChoice("use", threadHostName, ""))
+		case apiv1.SessionPath(threadHostName):
+			cancel()
+			sess := testSession(threadHostName, "Running")
+			sess.Agent, sess.Mode = "codex", "remote"
+			writeTestJSON(w, http.StatusOK, sess)
+		case apiv1.CodexHostsReleasePath:
+			if forwardCtx == nil || forwardCtx.Err() != nil {
+				t.Errorf("the select connection was already closed")
+				http.Error(w, "closed", http.StatusBadGateway)
+				return
+			}
+			release++
+			writeTestJSON(w, http.StatusOK, apiv1.CodexHostReleaseResponse{Host: threadHostName, Released: true})
+		default:
+			apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "no route "+r.URL.Path)
+		}
+	}
+	args := []string{"thread", "start", "--agent", "codex", "--model", "gpt-6-astra", "--effort", "high", "--handoff", h.write("handoff.txt", threadHandoff), "--repo", "dev-env"}
+	if code := Run(ctx, args, h.env); release != 1 {
+		t.Fatalf("exit %d release %d\nstderr: %s", code, release, h.stderr.String())
+	}
+	if forwardCtx == nil || forwardCtx.Err() == nil {
+		t.Fatal("the command left the select connection open")
+	}
+}
+
 func TestThreadStartSelectionRefusalIsReturned(t *testing.T) {
 	args := func(h *harness) []string {
 		return []string{"thread", "start", "--agent", "codex", "--model", "gpt-6-astra", "--effort", "high", "--handoff", h.write("handoff.txt", threadHandoff), "--repo", "dev-env"}
@@ -465,9 +613,13 @@ func TestThreadStartSelectionRefusalIsReturned(t *testing.T) {
 		{"forbidden", apiv1.CodeForbidden, "A coordinator may only check host selection.", "not allowed", http.StatusForbidden, ExitAuth},
 		{"invalid", apiv1.CodeInvalid, "launchId is 16 to 64 characters of a-z and 0-9", "the API refused", http.StatusUnprocessableEntity, ExitFailed},
 		{"conflict", apiv1.CodeConflict, "session paired kept changing; try again", "the API refused", http.StatusConflict, ExitFailed},
+		{"token path looks like a 5xx", apiv1.CodeUnauthenticated, "no", "the API did not accept", http.StatusUnauthorized, ExitAuth},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
+			if tc.name == "token path looks like a 5xx" {
+				h.vars[envTokenFile] = h.write("the API answered 5/token", testToken+"\n")
+			}
 			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 				if r.URL.Path != apiv1.CodexHostsSelectPath {
 					t.Errorf("unexpected %s", r.URL.Path)
