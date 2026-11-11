@@ -771,12 +771,12 @@ func TestParentNoticeStopsMarkingToLeaveTimeToDeliver(t *testing.T) {
 	older := f.note(inbox.KindBlocker, "old-key", "old text", f.now.Add(-2*time.Hour), "1", noticeName("e"))
 	newer := f.note(inbox.KindResult, "new-key", "new text", f.now.Add(-time.Hour), "1", noticeName("f"))
 	f.notes = []coord.InboxMessage{newer, older}
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 28*time.Second)
 	defer cancel()
 	p := f.notices()
 	p.Patch = func(ctx context.Context, note *coord.InboxMessage, at time.Time) error {
 		if note.Name == older.Name {
-			time.Sleep(2 * time.Second)
+			time.Sleep(4 * time.Second)
 		}
 		return f.patch(ctx, note, at)
 	}

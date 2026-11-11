@@ -736,8 +736,9 @@ fields.
      mark leaves that note for a later pass, and the line still goes out for
      the ones marked.      The next pass for that parent waits at least 90 seconds
      from the newest mark. One 30 second deadline covers the probe, the marks
-     and the delivery. Marking stops when less than 5 seconds remain, so the
-     line can still be typed for the notes already marked.
+     and the delivery. Marking stops when less than 25 seconds remain, which
+     covers the delivery lock wait, so the line can still be typed for the
+     notes already marked.
    - **The list is paged.** One pass reads at most `inbox.NoticePageBudget`
      pages of the existing page size. Past that it logs one fixed sentence,
      counts it, and still serves what it read. A heartbeat lists only a parent
@@ -863,8 +864,9 @@ annotation on the note.
 17. **Spacing is real (R7).** One context with a 30 second deadline covers the
     probe, the marks and the delivery. agentd's lock wait and settle select on
     its context. The gap between marks for one parent is at least 90 seconds,
-    from the newest mark. Marking stops when less than 5 seconds remain on
-    the deadline, and the line is still typed for the notes already marked.
+    from the newest mark. Marking stops when less than 25 seconds remain on
+    the deadline, enough for the delivery lock wait, and the line is still
+    typed for the notes already marked.
 18. **Leader election (R8).** `--enable-parent-notice` is refused at startup
     without leader election, as it is without `--enable-parent-notes`.
 19. **The checks are the tests (R9).** A suspended operating mode holds while

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -60,6 +61,9 @@ func panesFor(t *testing.T, stdin map[string]string, stdout string) func(Cmd) (R
 			stdin[c.Name+" "+c.Args[0]] = string(b)
 		}
 		if len(c.Args) > 0 && c.Args[0] == "list-panes" {
+			if !slices.Contains(c.Args, "-s") {
+				return Result{Stdout: []byte("%1 1\n")}, nil
+			}
 			return Result{Stdout: []byte(stdout)}, nil
 		}
 		return Result{}, nil
@@ -237,6 +241,9 @@ func TestDeliverNoticePinsTheCLIPane(t *testing.T) {
 		if len(c.Args) == 0 || c.Args[0] != "list-panes" {
 			return Result{}, nil
 		}
+		if !slices.Contains(c.Args, "-s") {
+			return Result{Stdout: []byte(fmt.Sprintf("%%8 %d\n", other))}, nil
+		}
 		listed++
 		if listed == 1 {
 			return Result{Stdout: []byte(fmt.Sprintf("%%8 %d\n%%7 %d\n", other, cli.Pid))}, nil
@@ -315,6 +322,9 @@ func TestDeliverNoticeRechecksIdleBeforeEnter(t *testing.T) {
 			stdin[c.Name+" "+c.Args[0]] = string(b)
 		}
 		if len(c.Args) > 0 && c.Args[0] == "list-panes" {
+			if !slices.Contains(c.Args, "-s") {
+				return Result{Stdout: []byte("%1 1\n")}, nil
+			}
 			return Result{Stdout: []byte(fmt.Sprintf("%%12 %d\n", cli.Pid))}, nil
 		}
 		if len(c.Args) > 0 && c.Args[0] == "paste-buffer" {
@@ -364,6 +374,9 @@ func TestDeliverNoticeLockAndSettleObserveContext(t *testing.T) {
 			stdin[c.Name+" "+c.Args[0]] = string(b)
 		}
 		if len(c.Args) > 0 && c.Args[0] == "list-panes" {
+			if !slices.Contains(c.Args, "-s") {
+				return Result{Stdout: []byte("%1 1\n")}, nil
+			}
 			return Result{Stdout: []byte(fmt.Sprintf("%%12 %d\n", cli.Pid))}, nil
 		}
 		if len(c.Args) > 0 && c.Args[0] == "paste-buffer" {

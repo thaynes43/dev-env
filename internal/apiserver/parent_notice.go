@@ -37,9 +37,10 @@ const (
 	// parentNoticeAttempt bounds the probe, the marks and the delivery.
 	parentNoticeAttempt = 30 * time.Second
 	// parentNoticeDeliverReserve is left on that deadline for the typed line.
+	// It covers agentd's 20s delivery-lock wait, the settle, and the exec.
 	// Marking stops before it, and the line still goes out for the notes
 	// already marked. The rest wait for a later pass.
-	parentNoticeDeliverReserve = 5 * time.Second
+	parentNoticeDeliverReserve = 25 * time.Second
 	parentNoticeMaxN           = 9999
 
 	noticePatchRefused     = "parent notice patch refused"
