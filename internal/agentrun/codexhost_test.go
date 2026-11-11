@@ -142,28 +142,175 @@ func TestThreadStartWithoutHost(t *testing.T) {
 	})
 	for _, tc := range []struct {
 		action, sentence string
-		exit             int
 	}{
-		{"report", "", ExitOK},
-		{"resume", resumeNotBuilt, ExitFailed},
-		{"create", commandCreatesNoHost, ExitFailed},
+		{"report", ""},
+		{"resume", resumeNotBuilt},
+		{"create", commandCreatesNoHost},
 	} {
 		t.Run(tc.action, func(t *testing.T) {
 			h := newHarness(t)
 			h.api.handle = serveCodexChoice(codexChoice(tc.action, "paired", "remote_unavailable"))
-			h.mustRun(tc.exit, args(h)...)
-			var got apiv1.CodexHostChoice
-			if json.Unmarshal(h.stdout.Bytes(), &got) != nil || got.Action != tc.action {
-				t.Fatalf("stdout %s", h.stdout.String())
+			h.mustRun(apiv1.ThreadLaunchExit(apiv1.ThreadBlocked), args(h)...)
+			r := threadResult(t, h)
+			if r.Outcome != apiv1.ThreadBlocked || r.Error == nil || r.Error.Code != "no_host_selected" || r.Error.Message != threadlaunch.Message("no_host_selected") {
+				t.Fatalf("result %+v", r.Error)
 			}
+			rest := h.stderr.String()
 			if tc.sentence != "" {
-				contains(t, "stderr", h.stderr.String(), tc.sentence)
+				prefix := "agent-run: " + tc.sentence + "\n"
+				if !strings.HasPrefix(rest, prefix) {
+					t.Fatalf("stderr %q", rest)
+				}
+				rest = strings.TrimPrefix(rest, prefix)
 			}
-			if len(h.api.requests()) != 1 {
-				t.Fatalf("started something: %d requests", len(h.api.requests()))
+			var got apiv1.CodexHostChoice
+			if json.Unmarshal([]byte(rest), &got) != nil || got.Action != tc.action || got.Host != "paired" {
+				t.Fatalf("stderr choice %q", rest)
+			}
+			if strings.Contains(h.stdout.String(), `"action"`) {
+				t.Fatal("stdout carried the select object")
+			}
+			for _, req := range h.api.requests() {
+				if strings.Contains(req.path, "/threads") {
+					t.Fatalf("started a thread: %+v", h.api.requests())
+				}
 			}
 		})
 	}
+	for _, action := range []string{"report", "resume", "create"} {
+		t.Run(action+" stderr fails", func(t *testing.T) {
+			h := newHarness(t)
+			h.env.Stderr = failWriter{}
+			h.api.handle = serveCodexChoice(codexChoice(action, "paired", "remote_unavailable"))
+			h.mustRun(apiv1.ThreadLaunchExit(apiv1.ThreadBlocked), args(h)...)
+			r := threadResult(t, h)
+			if r.Outcome != apiv1.ThreadBlocked || r.Error == nil || r.Error.Code != "no_host_selected" {
+				t.Fatalf("result %+v", r.Error)
+			}
+		})
+	}
+}
+
+// streamOrder records the order of writes across stdout and stderr.
+type streamOrder struct {
+	mu    sync.Mutex
+	order []string
+	out   bytes.Buffer
+	err   bytes.Buffer
+}
+
+func (s *streamOrder) stdout() io.Writer { return &streamTap{order: s, name: "stdout", buf: &s.out} }
+func (s *streamOrder) stderr() io.Writer { return &streamTap{order: s, name: "stderr", buf: &s.err} }
+
+type streamTap struct {
+	order *streamOrder
+	name  string
+	buf   *bytes.Buffer
+}
+
+func (t *streamTap) Write(p []byte) (int, error) {
+	t.order.mu.Lock()
+	defer t.order.mu.Unlock()
+	t.order.order = append(t.order.order, t.name)
+	return t.buf.Write(p)
+}
+
+// Ruling R. For report, resume, create, one refusal and an unknown action,
+// the first write is the stdout thread-launch.v1 line.
+func TestThreadStartWritesTheResultBeforeStderr(t *testing.T) {
+	args := func(h *harness) []string {
+		return []string{"thread", "start", "--agent", "codex", "--model", "gpt-6-astra", "--effort", "high", "--handoff", h.write("handoff.txt", threadHandoff), "--repo", "dev-env"}
+	}
+	cases := []struct {
+		name   string
+		choice apiv1.CodexHostChoice
+	}{
+		{"report", codexChoice("report", "paired", "remote_unavailable")},
+		{"resume", codexChoice("resume", "paired", "")},
+		{"create", codexChoice("create", "paired", "")},
+		{"refusal", codexChoice("", "", "login_required")},
+		{"unknown action", apiv1.CodexHostChoice{Action: "reimage", Host: "paired"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			rec := &streamOrder{}
+			h.env.Stdout = rec.stdout()
+			h.env.Stderr = rec.stderr()
+			h.api.handle = serveCodexChoice(tc.choice)
+			if code := h.run(args(h)...); code != apiv1.ThreadLaunchExit(apiv1.ThreadBlocked) {
+				t.Fatalf("exit %d order %v stdout %s stderr %s", code, rec.order, rec.out.String(), rec.err.String())
+			}
+			if len(rec.order) == 0 || rec.order[0] != "stdout" {
+				t.Fatalf("first write %v, want stdout", rec.order)
+			}
+			sawErr := false
+			for _, stream := range rec.order[1:] {
+				if stream == "stderr" {
+					sawErr = true
+				}
+				if stream == "stdout" {
+					t.Fatalf("stdout was written again after stderr began: %v", rec.order)
+				}
+			}
+			if !sawErr {
+				t.Fatalf("stderr was not written: %v", rec.order)
+			}
+			r, err := apiv1.DecodeThreadLaunch(bytes.TrimSuffix(rec.out.Bytes(), []byte("\n")))
+			if err != nil || bytes.Count(rec.out.Bytes(), []byte("\n")) != 1 || r.Outcome != apiv1.ThreadBlocked || r.Error == nil || r.Error.Code != "no_host_selected" {
+				t.Fatalf("stdout %q err %v", rec.out.String(), err)
+			}
+		})
+	}
+}
+
+func TestThreadStartSelectorRefusalPrintsTheBlockedLine(t *testing.T) {
+	args := func(h *harness) []string {
+		return []string{"thread", "start", "--agent", "codex", "--model", "gpt-6-astra", "--effort", "high", "--handoff", h.write("handoff.txt", threadHandoff), "--repo", "dev-env"}
+	}
+	for _, reason := range []string{"login_required", "caller_cannot_create", "at_capacity", "host_busy", ""} {
+		name := reason
+		if name == "" {
+			name = "unknown action"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			choice := codexChoice("", "", reason)
+			if reason == "" {
+				choice.Action = "reimage"
+				choice.Host = "paired"
+			}
+			h.api.handle = serveCodexChoice(choice)
+			h.mustRun(apiv1.ThreadLaunchExit(apiv1.ThreadBlocked), args(h)...)
+			r := threadResult(t, h)
+			if r.Outcome != apiv1.ThreadBlocked || r.Error == nil || r.Error.Code != "no_host_selected" {
+				t.Fatalf("result %+v", r.Error)
+			}
+			line := "agent-run: " + codexHostRefusalLine(choice)
+			contains(t, "stderr", h.stderr.String(), line)
+			if strings.Contains(h.stdout.String(), `"action"`) {
+				t.Fatal("stdout carried the select object")
+			}
+		})
+	}
+
+	t.Run("codex-host select prints no result line", func(t *testing.T) {
+		for _, reason := range []string{"login_required", "caller_cannot_create", "at_capacity", "host_busy"} {
+			h := newHarness(t)
+			h.api.handle = serveCodexChoice(codexChoice("", "", reason))
+			h.mustRun(ExitFailed, "codex-host", "select", "--repo", "dev-env")
+			if h.stdout.Len() != 0 || strings.Contains(h.stdout.String(), "thread-launch") {
+				t.Fatalf("%s wrote %s", reason, h.stdout.String())
+			}
+			contains(t, "stderr", h.stderr.String(), "agent-run: "+codexHostRefusalLine(codexChoice("", "", reason)))
+		}
+		h := newHarness(t)
+		h.api.handle = serveCodexChoice(apiv1.CodexHostChoice{Action: "reimage", Host: "paired"})
+		h.mustRun(ExitOK, "codex-host", "select", "--repo", "dev-env")
+		if strings.Contains(h.stdout.String(), "thread-launch") || !strings.Contains(h.stdout.String(), `"action": "reimage"`) {
+			t.Fatalf("stdout %s", h.stdout.String())
+		}
+	})
 }
 
 func TestInteractiveCodexSelect(t *testing.T) {
@@ -622,6 +769,8 @@ func TestThreadStartSelectionRefusalIsReturned(t *testing.T) {
 		{"forbidden", apiv1.CodeForbidden, "A coordinator may only check host selection.", "not allowed", http.StatusForbidden, ExitAuth},
 		{"invalid", apiv1.CodeInvalid, "launchId is 16 to 64 characters of a-z and 0-9", "the API refused", http.StatusUnprocessableEntity, ExitFailed},
 		{"conflict", apiv1.CodeConflict, "session paired kept changing; try again", "the API refused", http.StatusConflict, ExitFailed},
+		{"limited", apiv1.CodeLimitExceeded, "slow down", "slow down", http.StatusTooManyRequests, ExitRetry},
+		{"other refusal", apiv1.CodeInvalid, "no", "the API refused", http.StatusBadRequest, ExitFailed},
 		{"token path looks like a 5xx", apiv1.CodeUnauthenticated, "no", "the API did not accept", http.StatusUnauthorized, ExitAuth},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -636,10 +785,22 @@ func TestThreadStartSelectionRefusalIsReturned(t *testing.T) {
 				apiError(w, tc.status, tc.code, tc.msg)
 			}
 			h.mustRun(tc.exit, args(h)...)
-			if strings.Contains(h.stderr.String(), "Host selection was not used") || strings.Contains(h.stdout.String(), `"version"`) {
+			if h.stdout.Len() != 0 || strings.Contains(h.stderr.String(), "Host selection was not used") {
 				t.Fatalf("a real refusal was hidden\nstdout %s\nstderr %s", h.stdout.String(), h.stderr.String())
 			}
 			contains(t, "stderr", h.stderr.String(), tc.want)
 		})
 	}
+	t.Run("unreadable 200", func(t *testing.T) {
+		h := newHarness(t)
+		h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("not-json"))
+		}
+		h.mustRun(ExitFailed, args(h)...)
+		if h.stdout.Len() != 0 {
+			t.Fatalf("stdout %s", h.stdout.String())
+		}
+		contains(t, "stderr", h.stderr.String(), "the selection answer is not the host choice")
+	})
 }

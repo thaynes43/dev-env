@@ -45,7 +45,9 @@ func runningPaired(name string) Host {
 		ReadyRepos:      []string{"dev-env"},
 		SpecRepo:        "dev-env",
 		RemoteState:     StatePairCodeIssued,
-		ImageCurrent:    true,
+		Agentd:          reportedAgentd(MinAgentdVersion),
+		Reported:        true,
+		RevisionCurrent: true,
 		LastActivity:    evening,
 	}
 }
@@ -55,11 +57,18 @@ func suspendedPaired(name string, at time.Time) Host {
 	h.Phase = PhaseSuspended
 	h.OperatingMode = ModeSuspended
 	h.PodReady = false
-	h.ImageCurrent = false
+	h.Agentd = ""
+	h.RevisionCurrent = false
 	h.RescueState = RescueCleanAndPushed
 	h.SuspendedAt = at
 	h.SuspendedBy = "named"
 	return h
+}
+
+// reportedAgentd is the status.agent.agentd line for a release version.
+// version.Info.String("agentd") writes that line.
+func reportedAgentd(version string) string {
+	return "agentd v" + version + " (commit abcdef012345, go1.27.1, linux/amd64)"
 }
 
 func checkResult(t *testing.T, res Result, action, host, reason string, ready bool) {
@@ -103,7 +112,7 @@ func TestSelectsRunningPairedHost(t *testing.T) {
 	if err := json.Unmarshal(body, &wire); err != nil {
 		t.Fatal(err)
 	}
-	if wire["host"] != "paired" || wire["action"] != ActionUse || wire["ready"] != true || wire["reason"] != nil {
+	if wire["host"] != "paired" || wire["action"] != ActionUse || wire["ready"] != true || wire["outdated"] != false || wire["reason"] != nil {
 		t.Fatalf("wire %#v", wire)
 	}
 
@@ -503,16 +512,22 @@ func TestUnpushedWorkIsNotResumed(t *testing.T) {
 }
 
 func TestOutdatedRunningIsNotUsed(t *testing.T) {
-	h := runningPaired("old-image")
-	h.ImageCurrent = false
+	// Ruling M. One patch below the minimum is 2.101.1, the release the
+	// ruling names as not enough. The host still fills the cell, so the
+	// answer is report and not create.
+	h := runningPaired("old-agentd")
+	h.Agentd = reportedAgentd("2.101.1")
 	in := baseInput(clientCaller(), []Host{h})
-	in.MaxRunningPerCell = 0
-	in.MaxRunning = 0
+	in.MaxRunningPerCell = 1
+	in.MaxRunning = 2
 	res := Select(in)
 	if res.Action == ActionUse || res.Action == ActionCreate || res.Action == ActionResume {
 		t.Fatalf("got %+v", res)
 	}
-	checkResult(t, res, ActionReport, "old-image", ReasonImageOutdated, false)
+	checkResult(t, res, ActionReport, "old-agentd", ReasonImageOutdated, false)
+	if res.Outdated {
+		t.Fatal("a current pod revision is not outdated")
+	}
 }
 
 func TestAtCapacityDoesNotCreate(t *testing.T) {
@@ -675,12 +690,14 @@ func TestUnsuitableRunningHostBlocksCreate(t *testing.T) {
 	})
 }
 
-// TestSection3InventoryLiveCheck is the section 9 live check, fed the six
-// section 3 hosts as facts. The caller is the trusted workbench client
-// (kind client), which may name profile dev. Skip precedence records rescue
-// failure, then the hands-off list, before profile: a protected host is not
-// described as only the wrong profile. Hosts whose resolved profile is not
-// dev then fail profile fit. dev-env-1110-230548 is the one that fits.
+// TestSection3InventoryLiveCheck feeds the six section 3 hosts as facts.
+// The caller is the trusted workbench client (kind client), which may name
+// profile dev. Skip precedence records rescue failure, then the hands-off
+// list, before profile: a protected host is not described as only the wrong
+// profile. Hosts whose resolved profile is not dev then fail profile fit.
+// dev-env-1110-230548 was on image 2.101.0, below MinAgentdVersion, so it
+// fills the cell and the answer is report (ruling M). Its pod revision was
+// the current template revision that evening, so outdated is false.
 func TestSection3InventoryLiveCheck(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -696,10 +713,10 @@ func TestSection3InventoryLiveCheck(t *testing.T) {
 			name:    "profile dev repo dev-env",
 			profile: "dev",
 			repo:    "dev-env",
-			action:  ActionUse,
+			action:  ActionReport,
 			host:    "dev-env-1110-230548",
-			reason:  "",
-			ready:   true,
+			reason:  ReasonImageOutdated,
+			ready:   false,
 			skipped: map[string]string{
 				"haynes-ops-1109-115326": ReasonProtected,
 				"dev-env-1027-010042":    ReasonProfileMismatch,
@@ -720,6 +737,9 @@ func TestSection3InventoryLiveCheck(t *testing.T) {
 			res := Select(in)
 			checkResult(t, res, tt.action, tt.host, tt.reason, tt.ready)
 			checkSkipped(t, res, tt.skipped)
+			if res.Outdated {
+				t.Fatal("the evening's pod revision was current")
+			}
 		})
 	}
 }
@@ -749,7 +769,7 @@ func section3Hosts() []Host {
 			Agent: AgentCodex, Mode: ModeRemote,
 			Phase: PhaseRunning, OperatingMode: ModeRunning, PodReady: true,
 			ResolvedProfile: "dev", ReadyRepos: []string{"dev-env"}, SpecRepo: "dev-env",
-			RemoteState: StatePairCodeIssued, ImageCurrent: true,
+			RemoteState: StatePairCodeIssued, Agentd: reportedAgentd("2.101.0"), Reported: true, RevisionCurrent: true,
 			LastActivity: act("2026-11-10T23:36:41Z"),
 			Parent:       "dev-env-system/dev-env-human",
 		},
@@ -758,7 +778,7 @@ func section3Hosts() []Host {
 			Agent: AgentCodex, Mode: ModeRemote,
 			Phase: PhaseRunning, OperatingMode: ModeRunning, PodReady: true,
 			ResolvedProfile: "full", SpecRepo: "haynes-ops",
-			HandsOff: true, RemoteState: StatePairCodeIssued, ImageCurrent: false,
+			HandsOff: true, RemoteState: StatePairCodeIssued, Agentd: reportedAgentd("2.89.0"), Reported: true, RevisionCurrent: false,
 			LastActivity: act("2026-11-10T23:37:17Z"),
 			Parent:       "dev/dev-env",
 		},
@@ -799,8 +819,209 @@ func section3Hosts() []Host {
 			Deletion: true, HoldPod: true,
 			ResolvedProfile: "full", SpecRepo: "dev-env",
 			RescueState: RescueFailed, RemovalBlocked: true, RemoteState: StateOffline,
-			ImageCurrent: false,
-			Parent:       "haynes-ops-1019-233310",
+			Parent: "haynes-ops-1019-233310",
 		},
+	}
+}
+
+// TestAgentdMinimum is ruling M. Exactly 2.102.0 and anything above it are
+// suitable. 2.101.1 is one release below that minimum: the release the ruling
+// names, and the patch line under 2.102.0. The minimum's own patch is 0, so
+// the previous release is 2.101.1 rather than a 2.102 patch.
+func TestAgentdMinimum(t *testing.T) {
+	cases := []struct {
+		name, version, action string
+		ready                 bool
+	}{
+		{"exactly the minimum", MinAgentdVersion, ActionUse, true},
+		{"above the minimum", "2.104.0", ActionUse, true},
+		{"one patch above", "2.102.1", ActionUse, true},
+		{"major above the minimum", "3.0.0", ActionUse, true},
+		{"one patch below", "2.101.1", ActionReport, false},
+		{"major below the minimum", "1.999.999", ActionReport, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := runningPaired("paired")
+			h.Agentd = reportedAgentd(tc.version)
+			in := baseInput(clientCaller(), []Host{h})
+			in.MaxRunningPerCell = 1
+			res := Select(in)
+			reason := ""
+			if tc.action == ActionReport {
+				reason = ReasonImageOutdated
+			}
+			if res.Action == ActionCreate || res.Action == ActionResume {
+				t.Fatalf("got %+v", res)
+			}
+			checkResult(t, res, tc.action, "paired", reason, tc.ready)
+			if res.Outdated {
+				t.Fatal("the pod revision is current")
+			}
+			if tc.action == ActionUse && !Suitable(h, clientCaller(), "dev", "dev-env", evening) {
+				t.Fatal("Select and Suitable disagree")
+			}
+			if tc.action != ActionUse && Suitable(h, clientCaller(), "dev", "dev-env", evening) {
+				t.Fatal("a host below the minimum was suitable")
+			}
+		})
+	}
+}
+
+func TestMissingAndUnparsableAgentdFillTheCell(t *testing.T) {
+	for _, tc := range []struct {
+		name, line string
+	}{
+		{"missing", ""},
+		{"unparsable", "agentd dev (commit unknown, go1.27.1, linux/amd64)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := runningPaired("paired")
+			h.Agentd = tc.line
+			in := baseInput(clientCaller(), []Host{h})
+			in.MaxRunningPerCell = 1
+			res := Select(in)
+			if res.Action == ActionCreate || res.Action == ActionUse || res.Action == ActionResume {
+				t.Fatalf("got %+v", res)
+			}
+			checkResult(t, res, ActionReport, "paired", ReasonImageOutdated, false)
+		})
+	}
+}
+
+func TestRevisionDoesNotDecideSuitability(t *testing.T) {
+	t.Run("not current", func(t *testing.T) {
+		h := runningPaired("behind")
+		h.Agentd = reportedAgentd("2.104.0")
+		h.RevisionCurrent = false
+		res := Select(baseInput(clientCaller(), []Host{h}))
+		checkResult(t, res, ActionUse, "behind", "", true)
+		if !res.Outdated {
+			t.Fatal("outdated was false")
+		}
+	})
+	t.Run("current", func(t *testing.T) {
+		h := runningPaired("current")
+		res := Select(baseInput(clientCaller(), []Host{h}))
+		checkResult(t, res, ActionUse, "current", "", true)
+		if res.Outdated {
+			t.Fatal("outdated was true")
+		}
+	})
+}
+
+func TestSuspendedEligibleIgnoresAgentdVersion(t *testing.T) {
+	h := suspendedPaired("asleep", evening.Add(-time.Hour))
+	h.Agentd = reportedAgentd("2.89.0")
+	res := Select(baseInput(clientCaller(), []Host{h}))
+	checkResult(t, res, ActionResume, "asleep", "", false)
+	if res.Outdated {
+		t.Fatal("a resume was marked outdated")
+	}
+}
+
+// TestParseReportedAgentd accepts only the line agentd reports.
+// The form, from version.Info.String("agentd"), is exactly:
+//
+//	agentd v<major>.<minor>.<patch> (commit <commit>, <goVersion>, <platform>)
+//
+// <major>, <minor> and <patch> are decimal integers with no leading zero.
+// A zero component is "0". <commit>, <goVersion> and <platform> are
+// non-empty printable ASCII (0x21 to 0x7E) with no comma and no parenthesis.
+// A prefix, a suffix or a leading zero is rejected.
+func TestParseReportedAgentd(t *testing.T) {
+	const good = "agentd v2.102.0 (commit abcdef012345, go1.27.1, linux/amd64)"
+	maj, min, pat, ok := parseReportedAgentd(good)
+	if !ok || maj != 2 || min != 102 || pat != 0 {
+		t.Fatalf("parse %q -> %d.%d.%d ok=%v", good, maj, min, pat, ok)
+	}
+	if MinAgentdVersion != "2.102.0" {
+		t.Fatalf("minimum %s", MinAgentdVersion)
+	}
+	for _, line := range []string{
+		good,
+		"agentd v2.102.1 (commit abcdef012345, go1.27.1, linux/amd64)",
+		"agentd v2.104.0 (commit abcdef012345-dirty, go1.27.1, linux/amd64)",
+		"agentd v0.1.0 (commit unknown, go1.27.1, linux/amd64)",
+	} {
+		if _, _, _, ok := parseReportedAgentd(line); !ok {
+			t.Errorf("rejected %q", line)
+		}
+	}
+	for _, line := range []string{
+		"",
+		"dev",
+		"v2.102.0",
+		"2.102.0",
+		" agentd v2.102.0 (commit abcdef012345, go1.27.1, linux/amd64)",
+		"xagentd v2.102.0 (commit abcdef012345, go1.27.1, linux/amd64)",
+		"agentd v2.102.0 (commit abcdef012345, go1.27.1, linux/amd64) extra",
+		"agentd v2.102.0-1-gabcdef (commit abcdef012345, go1.27.1, linux/amd64)",
+		"agentd v2.102.0-dirty (commit abcdef012345, go1.27.1, linux/amd64)",
+		"agentd 2.102.0 (commit abcdef012345, go1.27.1, linux/amd64)",
+		"agentd v02.102.0 (commit abcdef012345, go1.27.1, linux/amd64)",
+		"agentd v2.0102.0 (commit abcdef012345, go1.27.1, linux/amd64)",
+		"agentd v2.102.00 (commit abcdef012345, go1.27.1, linux/amd64)",
+		"agentd v2.102 (commit abcdef012345, go1.27.1, linux/amd64)",
+		"agentd v2.102.0.1 (commit abcdef012345, go1.27.1, linux/amd64)",
+		"agentd v2.102.0 (commit abc def, go1.27.1, linux/amd64)",
+		"agentd v2.102.0 (commit abcdef012345, go 1.27.1, linux/amd64)",
+		"agentd  v2.102.0 (commit abcdef012345, go1.27.1, linux/amd64)",
+		"agentd v2.102.0(commit abcdef012345, go1.27.1, linux/amd64)",
+		"agentd dev (commit unknown, go1.27.1, linux/amd64)",
+		"agentd v2.102.0 (commit abc\ndef, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit abc\rdef, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit abc\x00def, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit abc\tdef, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit abc\x7fdef, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit abc\u00a0def, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit ab(c, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit ab)c, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit , go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit abc,def, go1.27.3, linux/amd64)",
+	} {
+		if _, _, _, ok := parseReportedAgentd(line); ok {
+			t.Errorf("accepted %q", line)
+		}
+	}
+}
+
+// A running host whose present pod has not reported still fills the cell.
+// A suspended host is not held to that fact. Safety reasons are recorded
+// before it.
+func TestUnreportedRunningHost(t *testing.T) {
+	h := runningPaired("stale")
+	h.Reported = false
+	h.Agentd = reportedAgentd("2.104.0")
+	in := baseInput(clientCaller(), []Host{h})
+	res := Select(in)
+	checkResult(t, res, ActionReport, "stale", ReasonRemoteUnavailable, false)
+	if Suitable(h, clientCaller(), "dev", "dev-env", evening) {
+		t.Fatal("an unreported running host was suitable")
+	}
+
+	asleep := suspendedPaired("asleep", evening.Add(-time.Hour))
+	asleep.Reported = false
+	res = Select(baseInput(clientCaller(), []Host{asleep}))
+	checkResult(t, res, ActionResume, "asleep", "", false)
+
+	for _, tc := range []struct {
+		name   string
+		mark   func(*Host)
+		reason string
+	}{
+		{"hands-off", func(h *Host) { h.HandsOff = true }, ReasonProtected},
+		{"protected", func(h *Host) { h.ProtectedAnnotation = true }, ReasonProtected},
+		{"rescue", func(h *Host) { h.RescueFailed = true }, ReasonRescueBlocked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kept := runningPaired("kept")
+			kept.Reported = false
+			tc.mark(&kept)
+			open := runningPaired("open")
+			res := Select(baseInput(clientCaller(), []Host{kept, open}))
+			checkResult(t, res, ActionUse, "open", "", true)
+			checkSkipped(t, res, map[string]string{"kept": tc.reason})
+		})
 	}
 }

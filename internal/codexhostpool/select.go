@@ -1,6 +1,10 @@
 package codexhostpool
 
-import "time"
+import (
+	"strconv"
+	"strings"
+	"time"
+)
 
 // Actions are the section 5 result. A named host is returned as use: today's
 // thread start runs on that host, and selection does not resume or create.
@@ -72,6 +76,15 @@ const (
 	// defaults. A non-positive cap on Input selects them.
 	DefaultMaxRunningPerCell = 1
 	DefaultMaxRunning        = 2
+
+	// MinAgentdVersion is the oldest agentd automatic selection accepts,
+	// major.minor.patch with no leading zero. 2.102.0 is the release in
+	// which agentd trusts a bootstrapped folder itself. 2.101.1 carried
+	// the reply reading and is not enough. Raise this, in a reviewed
+	// change, when a release changes what a thread launch needs from
+	// agentd. A running host below it, or whose reported line is missing
+	// or unparsable, is image_outdated and still counts toward the cell.
+	MinAgentdVersion = "2.102.0"
 )
 
 // Login is the one shared Codex login fact for this selection (ruling J).
@@ -119,13 +132,27 @@ type Host struct {
 	LeaseHolder         string
 	LeaseLaunchID       string
 	LeaseExpiry         time.Time
-	ImageCurrent        bool
-	SuspendedBy         string
-	SuspendedAt         time.Time
-	LastActivity        time.Time
-	Pool                bool
-	Archived            bool
-	Parent              string
+	// Agentd is status.agent.agentd, the line agentd reports. Empty when
+	// the session has not reported one.
+	Agentd string
+	// Reported is true when the present pod reported this status. The
+	// agentd line, the remote state and the repository readiness are
+	// status fields, and they keep the previous pod's values until this
+	// pod's heartbeat is accepted. A running host without it is not
+	// suitable. A suspended host is not held to it.
+	Reported bool
+	// RevisionCurrent is true when the pod's revision label equals the
+	// current template revision and that revision is not empty. It does
+	// not decide suitability. The answer's outdated is its negation for
+	// a chosen running host. When a lease is written, that bit is taken
+	// from the read that validated the lease.
+	RevisionCurrent bool
+	SuspendedBy     string
+	SuspendedAt     time.Time
+	LastActivity    time.Time
+	Pool            bool
+	Archived        bool
+	Parent          string
 }
 
 // Caller is who is asking. ParentRef is the identity stored on a child's
@@ -172,12 +199,17 @@ type Skip struct {
 }
 
 // Result is the section 5 object. Ready is true exactly when Action is use.
+// Outdated is true when the chosen host is running and its pod revision is
+// not the current template revision. It does not change Ready. A resume
+// leaves it false: that host is suspended, and a resume puts it on the
+// current image.
 type Result struct {
-	Host    string `json:"host,omitempty"`
-	Action  string `json:"action,omitempty"`
-	Ready   bool   `json:"ready"`
-	Reason  string `json:"reason,omitempty"`
-	Skipped []Skip `json:"skipped,omitempty"`
+	Host     string `json:"host,omitempty"`
+	Action   string `json:"action,omitempty"`
+	Ready    bool   `json:"ready"`
+	Outdated bool   `json:"outdated"`
+	Reason   string `json:"reason,omitempty"`
+	Skipped  []Skip `json:"skipped,omitempty"`
 }
 
 type judged struct {
@@ -265,7 +297,11 @@ func Suitable(h Host, c Caller, profile, repository string, now time.Time) bool 
 func finish(rows []judged, chosen int, action string, ready bool, reason string) Result {
 	res := Result{Action: action, Ready: ready, Reason: reason}
 	if chosen >= 0 {
-		res.Host = rows[chosen].host.Name
+		h := rows[chosen].host
+		res.Host = h.Name
+		if h.Phase == PhaseRunning {
+			res.Outdated = !h.RevisionCurrent
+		}
 	}
 	for _, row := range rows {
 		if row.index == chosen {
@@ -307,10 +343,22 @@ func judge(h Host, c Caller, requested, repo string, now time.Time) (reason stri
 		if h.OperatingMode != ModeRunning || !h.PodReady || h.HoldPod {
 			return ReasonNotRunning, false, false
 		}
+		// Ruling O, kept by ruling Q. The remote state, the version and
+		// the lease are status from the last accepted heartbeat. They
+		// count only when the present pod reported them. A suspended host
+		// does not reach this line. The host still fills the cell.
+		if !h.Reported {
+			return ReasonRemoteUnavailable, false, false
+		}
 		if why := runningRemoteReason(h.RemoteState); why != "" {
 			return why, false, false
 		}
-		if !h.ImageCurrent {
+		// Ruling M. The old test was "the pod revision is the current
+		// template revision". The launch needs an agentd that is new
+		// enough, which is a version, not a claim to be the newest image.
+		// A suspended host does not reach this line: a resume puts it on
+		// the current image.
+		if !agentdNewEnough(h.Agentd) {
 			return ReasonImageOutdated, false, false
 		}
 		if leaseHeldByOther(h, c, now) {
@@ -410,6 +458,109 @@ func runningRemoteReason(state string) string {
 	default:
 		return ReasonRemoteUnavailable
 	}
+}
+
+// agentdNewEnough reports whether line is the reported agentd form and
+// the version is at or above MinAgentdVersion. Anything else is not.
+func agentdNewEnough(line string) bool {
+	maj, min, pat, ok := parseReportedAgentd(line)
+	if !ok {
+		return false
+	}
+	wantMaj, wantMin, wantPat, ok := parseStrictTriple(MinAgentdVersion)
+	if !ok {
+		return false
+	}
+	if maj != wantMaj {
+		return maj > wantMaj
+	}
+	if min != wantMin {
+		return min > wantMin
+	}
+	return pat >= wantPat
+}
+
+// parseReportedAgentd accepts only the line version.Info.String("agentd")
+// writes: "agentd v<major>.<minor>.<patch> (commit <commit>, <go>, <platform>)".
+// Each component is a decimal integer with no leading zero. The commit, the
+// Go version and the platform are non-empty printable ASCII (0x21 to 0x7E)
+// with no comma and no parenthesis. A closing parenthesis anywhere before
+// the final one is rejected with the line's shape, so a token cannot hold
+// one. A prefix, a suffix or a leading zero is rejected.
+func parseReportedAgentd(line string) (major, minor, patch int, ok bool) {
+	const head = "agentd v"
+	rest, found := strings.CutPrefix(line, head)
+	if !found {
+		return 0, 0, 0, false
+	}
+	ver, tail, found := strings.Cut(rest, " (commit ")
+	if !found || ver == "" || strings.ContainsAny(ver, " \t") {
+		return 0, 0, 0, false
+	}
+	if !strings.HasSuffix(tail, ")") || strings.Contains(tail[:len(tail)-1], ")") {
+		return 0, 0, 0, false
+	}
+	parts := strings.Split(strings.TrimSuffix(tail, ")"), ", ")
+	if len(parts) != 3 {
+		return 0, 0, 0, false
+	}
+	for _, p := range parts {
+		if !metadataToken(p) {
+			return 0, 0, 0, false
+		}
+	}
+	return parseStrictTriple(ver)
+}
+
+// metadataToken is one parenthetical token: non-empty, and every byte is
+// printable ASCII from 0x21 to 0x7E, with no comma and no opening
+// parenthesis. A closing parenthesis is rejected by the shape check above.
+func metadataToken(p string) bool {
+	if p == "" {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c < 0x21 || c > 0x7E {
+			return false
+		}
+		if c == ',' || c == '(' {
+			return false
+		}
+	}
+	return true
+}
+
+func parseStrictTriple(s string) (major, minor, patch int, ok bool) {
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return 0, 0, 0, false
+	}
+	nums := [3]int{}
+	for i, p := range parts {
+		n, good := parseDecimal(p)
+		if !good {
+			return 0, 0, 0, false
+		}
+		nums[i] = n
+	}
+	return nums[0], nums[1], nums[2], true
+}
+
+func parseDecimal(s string) (int, bool) {
+	if s == "" || (len(s) > 1 && s[0] == '0') {
+		return 0, false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 func leaseHeldByOther(h Host, c Caller, now time.Time) bool {

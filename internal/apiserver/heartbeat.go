@@ -97,6 +97,11 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 
 	}
 	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
+	// The reporting pod is the caller resolveSession authenticated, never a
+	// field of the body. A caller with no pod leaves it empty.
+	if c.pod != nil {
+		sess.Status.Agent.PodUID = string(c.pod.UID)
+	}
 	if task := sess.Status.Agent.Task; task != nil && st.Agent.Task.ExitSource != nil {
 		source := st.Agent.Task.ExitSource
 		if source.Valid() && c.pod != nil && source.SessionUID == string(sess.UID) && source.PodUID == string(c.pod.UID) &&
@@ -116,11 +121,32 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	if st.Usage != nil && st.UsageObservation == nil && sess.Status.UsageObservation == nil {
 		sess.Status.Usage = usageStatus(*st.Usage)
 	}
-	patch := client.MergeFrom(base)
 	// An outcome acquired by another writer after this read must not be replaced
-	// or cleared by a stale decision heartbeat. Ordinary heartbeat fields keep
-	// their existing merge behavior when no decision outcome is being changed.
-	if !apiequality.Semantic.DeepEqual(base.Status.Outcome, sess.Status.Outcome) {
+	// or cleared by a stale decision heartbeat. A stored pod UID that is not
+	// this caller's is the same kind of stale read: the merge patch would
+	// leave the other pod's later fields in place and stamp this caller's UID
+	// on them. An empty stored UID takes no lock. Until the CRD has the field
+	// it reads back empty on every heartbeat, and a lock on an empty UID would
+	// then put every heartbeat under the resource version: any other write
+	// between the read and the patch would refuse it. Ordinary fields keep
+	// their merge behavior otherwise.
+	callerPod := ""
+	if c.pod != nil {
+		callerPod = string(c.pod.UID)
+	}
+	storedPod := ""
+	if base.Status.Agent != nil {
+		storedPod = base.Status.Agent.PodUID
+	}
+	// Ruling S. A merge patch omits a field equal to this read. Clear the UID
+	// on the base copy after the lock has read the stored value, so a caller
+	// with a pod sends status.agent.podUID on every heartbeat. A caller with
+	// no pod is unchanged: nothing is forced into its patch.
+	if c.pod != nil && base.Status.Agent != nil {
+		base.Status.Agent.PodUID = ""
+	}
+	patch := client.MergeFrom(base)
+	if !apiequality.Semantic.DeepEqual(base.Status.Outcome, sess.Status.Outcome) || (storedPod != "" && storedPod != callerPod) {
 		patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
 	}
 	if err := s.Client.Status().Patch(ctx, &sess, patch); err != nil {

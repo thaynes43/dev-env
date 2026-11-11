@@ -47,13 +47,17 @@ type CodexHostSkip struct {
 	Reason string `json:"reason"`
 }
 
-// CodexHostChoice is the section 5 object.
+// CodexHostChoice is the section 5 object. Outdated is true when the chosen
+// host is running and its pod revision is not the current template revision.
+// When a lease was written, that revision is the one read with the lease.
+// It does not change Ready, which is true exactly when Action is use.
 type CodexHostChoice struct {
-	Host    string          `json:"host,omitempty"`
-	Action  string          `json:"action,omitempty"`
-	Ready   bool            `json:"ready"`
-	Reason  string          `json:"reason,omitempty"`
-	Skipped []CodexHostSkip `json:"skipped,omitempty"`
+	Host     string          `json:"host,omitempty"`
+	Action   string          `json:"action,omitempty"`
+	Ready    bool            `json:"ready"`
+	Outdated bool            `json:"outdated"`
+	Reason   string          `json:"reason,omitempty"`
+	Skipped  []CodexHostSkip `json:"skipped,omitempty"`
 }
 
 // CodexHostReleaseRequest names the host whose lease to clear, and the

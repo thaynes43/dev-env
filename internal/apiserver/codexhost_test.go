@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/codexhostpool"
 	"github.com/thaynes43/dev-env/internal/controller"
@@ -83,10 +85,18 @@ type codexHostOpt struct {
 	repos                          []string
 	skipPod, notReady              bool
 	protected, pool, outdated      bool
-	rescueFailed, removalBlocked   bool
-	superseded                     bool
-	rescue                         v1alpha1.RescueResult
-	unpushed                       int
+	omitAgentd                     bool
+	agentd                         string
+	// podStart overrides the pod's start time. noPodStart leaves it unset.
+	// A heartbeat counts as this pod's report when status.agent.podUID is
+	// this pod's UID (ruling Q). omitPodUID leaves that field empty.
+	podStart                     *time.Time
+	noPodStart                   bool
+	omitPodUID                   bool
+	rescueFailed, removalBlocked bool
+	superseded                   bool
+	rescue                       v1alpha1.RescueResult
+	unpushed                     int
 }
 
 func (f *fixture) addCodexHost(name string, o codexHostOpt) {
@@ -146,9 +156,12 @@ func (f *fixture) addCodexHost(name string, o codexHostOpt) {
 	saved.Status = v1alpha1.AgentSessionStatus{
 		Phase:         o.phase,
 		RemoteControl: &v1alpha1.RemoteControlStatus{Name: name, State: o.remote},
-		Agent: &v1alpha1.AgentStatus{ProjectBootstrap: &v1alpha1.ProjectBootstrapStatus{
-			State: codexHostBootstrapReady, Repositories: repos,
-		}},
+		Agent: &v1alpha1.AgentStatus{
+			Agentd: codexHostAgentd(o),
+			ProjectBootstrap: &v1alpha1.ProjectBootstrapStatus{
+				State: codexHostBootstrapReady, Repositories: repos,
+			},
+		},
 	}
 	if o.phase == v1alpha1.PhaseRunning && !o.skipPod {
 		saved.Status.PodName = name
@@ -161,6 +174,11 @@ func (f *fixture) addCodexHost(name string, o codexHostOpt) {
 	if o.activity != nil {
 		at := metav1.NewTime(*o.activity)
 		saved.Status.Agent.LastActivity = &at
+	}
+	var reportUID types.UID
+	if o.phase == v1alpha1.PhaseRunning && !o.skipPod && o.heartbeat != nil && !o.omitPodUID {
+		reportUID = uuid.NewUUID()
+		saved.Status.Agent.PodUID = string(reportUID)
 	}
 	podReady := o.phase == v1alpha1.PhaseRunning && !o.skipPod && !o.notReady
 	if podReady {
@@ -196,9 +214,13 @@ func (f *fixture) addCodexHost(name string, o codexHostOpt) {
 	if o.outdated {
 		rev = "old"
 	}
+	podUID := reportUID
+	if podUID == "" {
+		podUID = uuid.NewUUID()
+	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name, Namespace: sessionNS, UID: uuid.NewUUID(),
+			Name: name, Namespace: sessionNS, UID: podUID,
 			Labels:          map[string]string{v1alpha1.LabelProfile: o.profile, v1alpha1.LabelRevision: rev},
 			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(&saved, v1alpha1.GroupVersion.WithKind("AgentSession"))},
 		},
@@ -212,6 +234,17 @@ func (f *fixture) addCodexHost(name string, o codexHostOpt) {
 	}
 	pod.Status.Phase = corev1.PodRunning
 	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	if !o.noPodStart {
+		start := f.now
+		if o.heartbeat != nil {
+			start = *o.heartbeat
+		}
+		if o.podStart != nil {
+			start = *o.podStart
+		}
+		at := metav1.NewTime(start)
+		pod.Status.StartTime = &at
+	}
 	if err := f.c.Status().Update(ctx, pod); err != nil {
 		f.t.Fatal(err)
 	}
@@ -265,6 +298,20 @@ func (f *fixture) coordinatorCaller() string {
 }
 
 func clientHolder() string { return "client/" + clientSA }
+
+// codexHostAgentd is the reported status.agent.agentd line. The form is
+// version.Info.String("agentd"). An empty option is the minimum version
+// automatic selection accepts. omitAgentd leaves the line missing.
+func codexHostAgentd(o codexHostOpt) string {
+	switch {
+	case o.omitAgentd:
+		return ""
+	case o.agentd != "":
+		return o.agentd
+	default:
+		return "agentd v" + codexhostpool.MinAgentdVersion + " (commit abcdef012345, go1.27.1, linux/amd64)"
+	}
+}
 
 func (f *fixture) wantChoice(w *httptest.ResponseRecorder, action, host, reason string) apiv1.CodexHostChoice {
 	f.t.Helper()
@@ -703,6 +750,55 @@ func TestCodexHostLoginFact(t *testing.T) {
 	})
 }
 
+func TestCodexHostAgentdVersionAndRevision(t *testing.T) {
+	line := func(v string) string {
+		return "agentd v" + v + " (commit abcdef012345, go1.27.1, linux/amd64)"
+	}
+	t.Run("exactly the minimum", func(t *testing.T) {
+		f := newCodexFixture(t)
+		f.addCodexHost("paired", codexHostOpt{})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", true), "use", "paired", "")
+		if got.Outdated || !got.Ready {
+			t.Fatalf("%+v", got)
+		}
+	})
+	t.Run("above the minimum and not current", func(t *testing.T) {
+		f := newCodexFixture(t)
+		f.addCodexHost("behind", codexHostOpt{agentd: line("2.104.0"), outdated: true})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "behind", "")
+		if !got.Outdated || !got.Ready {
+			t.Fatalf("%+v", got)
+		}
+		if _, id, _, ok := parseCodexHostLease(f.session("behind").Annotations[codexHostLeaseAnnotation]); !ok || id != codexTestLaunch {
+			t.Fatal("a host one revision behind was not leased")
+		}
+	})
+	t.Run("one patch below fills the cell", func(t *testing.T) {
+		f := newCodexFixture(t)
+		f.addCodexHost("old", codexHostOpt{agentd: line("2.101.1")})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "old", codexhostpool.ReasonImageOutdated)
+		if got.Ready || got.Action == "create" || f.session("old").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatalf("used or leased %+v", got)
+		}
+	})
+	t.Run("missing", func(t *testing.T) {
+		f := newCodexFixture(t)
+		f.addCodexHost("none", codexHostOpt{omitAgentd: true})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", true), "report", "none", codexhostpool.ReasonImageOutdated)
+		if got.Action == "create" {
+			t.Fatal("a missing version did not fill the cell")
+		}
+	})
+	t.Run("unparsable", func(t *testing.T) {
+		f := newCodexFixture(t)
+		f.addCodexHost("bad", codexHostOpt{agentd: "agentd v2.102.0"})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", true), "report", "bad", codexhostpool.ReasonImageOutdated)
+		if got.Action == "create" {
+			t.Fatal("an unparsable version did not fill the cell")
+		}
+	})
+}
+
 // The lease step re-reads the chosen session and its pod and runs the same
 // suitability test. A host that no longer qualifies is not leased.
 func TestCodexHostLeaseRechecksSuitability(t *testing.T) {
@@ -780,6 +876,22 @@ func TestCodexHostLeaseRechecksSuitability(t *testing.T) {
 		f.wantChoice(f.selectCodex(tokClient, "dev", false), "", "", codexhostpool.ReasonLoginRequired)
 		if f.session("only").Annotations[codexHostLeaseAnnotation] != "" {
 			t.Fatal("leased a host whose login had lapsed")
+		}
+	})
+	t.Run("agentd below the minimum", func(t *testing.T) {
+		f := newCodexFixture(t, mutate("only", func(ctx context.Context, c client.WithWatch, sess *v1alpha1.AgentSession) {
+			if sess.Status.Agent == nil {
+				t.Fatal("no agent status")
+			}
+			sess.Status.Agent.Agentd = "agentd v2.101.1 (commit abcdef012345, go1.27.1, linux/amd64)"
+			if err := c.Status().Update(ctx, sess); err != nil {
+				t.Fatal(err)
+			}
+		}))
+		f.addCodexHost("only", codexHostOpt{})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "only", codexhostpool.ReasonImageOutdated)
+		if got.Ready || f.session("only").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatal("leased a host whose agentd dropped below the minimum")
 		}
 	})
 	t.Run("replaced", func(t *testing.T) {
@@ -1049,5 +1161,730 @@ func TestCodexHostCoordinatorNonCheckWritesNothing(t *testing.T) {
 	e := wantError(t, w, http.StatusForbidden, apiv1.CodeForbidden)
 	if e.Message != codexHostCoordinatorCheckOnly || patched.Load() {
 		t.Fatalf("message %q patched %v", e.Message, patched.Load())
+	}
+}
+
+func codexAgentdLine(v string) string {
+	return "agentd v" + v + " (commit abcdef012345, go1.27.1, linux/amd64)"
+}
+
+// replaceCodexPod swaps the host's pod for a new UID whose start time is start.
+// The session status is left as it was.
+func (f *fixture) replaceCodexPod(name string, start time.Time) types.UID {
+	f.t.Helper()
+	ctx := context.Background()
+	var pod corev1.Pod
+	key := types.NamespacedName{Namespace: sessionNS, Name: name}
+	if err := f.c.Get(ctx, key, &pod); err != nil {
+		f.t.Fatal(err)
+	}
+	old := pod.UID
+	if err := f.c.Delete(ctx, &pod); err != nil {
+		f.t.Fatal(err)
+	}
+	sess := f.session(name)
+	neu := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: sessionNS, UID: uuid.NewUUID(),
+			Labels:          pod.Labels,
+			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(sess, v1alpha1.GroupVersion.WithKind("AgentSession"))},
+		},
+		Spec: pod.Spec,
+	}
+	if neu.UID == "" || neu.UID == old {
+		f.t.Fatalf("replacement uid %s old %s", neu.UID, old)
+	}
+	if err := f.c.Create(ctx, neu); err != nil {
+		f.t.Fatal(err)
+	}
+	neu.Status.Phase = corev1.PodRunning
+	neu.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	at := metav1.NewTime(start)
+	neu.Status.StartTime = &at
+	if err := f.c.Status().Update(ctx, neu); err != nil {
+		f.t.Fatal(err)
+	}
+	return neu.UID
+}
+
+func (f *fixture) setHeartbeat(name string, at time.Time) {
+	f.t.Helper()
+	sess := f.session(name)
+	hb := metav1.NewTime(at)
+	sess.Status.Agent.LastHeartbeat = &hb
+	if err := f.c.Status().Update(context.Background(), sess); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f *fixture) setReportedPod(name string, uid types.UID) {
+	f.t.Helper()
+	sess := f.session(name)
+	sess.Status.Agent.PodUID = string(uid)
+	if err := f.c.Status().Update(context.Background(), sess); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// Ruling O. Status keeps the previous pod's version, remote state and
+// repository report. Those facts count only for the pod that is present.
+func TestCodexHostPresentPodMustHaveReported(t *testing.T) {
+	t.Run("replaced pod", func(t *testing.T) {
+		f := newCodexFixture(t)
+		earlier := f.now.Add(-time.Minute)
+		f.addCodexHost("paired", codexHostOpt{agentd: codexAgentdLine("2.104.0"), heartbeat: &earlier})
+		start := f.now.Add(-30 * time.Second)
+		neu := f.replaceCodexPod("paired", start)
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "paired", codexhostpool.ReasonRemoteUnavailable)
+		if got.Ready || f.session("paired").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatalf("used or leased a host the present pod has not reported: %+v", got)
+		}
+		f.setHeartbeat("paired", start)
+		got = f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "paired", codexhostpool.ReasonRemoteUnavailable)
+		if got.Ready || f.session("paired").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatalf("a heartbeat at the new pod's start, still carrying the previous pod UID, was used: %+v", got)
+		}
+		f.setReportedPod("paired", neu)
+		got = f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "paired", "")
+		if !got.Ready || f.session("paired").Annotations[codexHostLeaseAnnotation] == "" {
+			t.Fatalf("the present pod's UID was not used: %+v", got)
+		}
+	})
+	t.Run("replaced pod on check", func(t *testing.T) {
+		f := newCodexFixture(t)
+		earlier := f.now.Add(-time.Minute)
+		f.addCodexHost("paired", codexHostOpt{agentd: codexAgentdLine("2.104.0"), heartbeat: &earlier})
+		f.replaceCodexPod("paired", f.now.Add(-30*time.Second))
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", true), "report", "paired", codexhostpool.ReasonRemoteUnavailable)
+		if got.Ready || got.Host != "paired" || f.session("paired").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatalf("check leased or used a replaced pod: %+v", got)
+		}
+	})
+	t.Run("later heartbeat without the new uid", func(t *testing.T) {
+		f := newCodexFixture(t)
+		earlier := f.now.Add(-time.Minute)
+		f.addCodexHost("paired", codexHostOpt{agentd: codexAgentdLine("2.104.0"), heartbeat: &earlier})
+		neu := f.replaceCodexPod("paired", f.now.Add(-30*time.Second))
+		f.setHeartbeat("paired", f.now)
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "paired", codexhostpool.ReasonRemoteUnavailable)
+		if got.Ready || f.session("paired").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatalf("a later heartbeat from the previous pod was used: %+v", got)
+		}
+		f.setReportedPod("paired", neu)
+		got = f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "paired", "")
+		if !got.Ready {
+			t.Fatalf("%+v", got)
+		}
+	})
+	t.Run("older than the staleness bound", func(t *testing.T) {
+		f := newCodexFixture(t)
+		at := f.now.Add(-authority.DefaultHeartbeatStaleAfter - time.Second)
+		f.addCodexHost("paired", codexHostOpt{agentd: codexAgentdLine("2.104.0"), heartbeat: &at})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "paired", codexhostpool.ReasonRemoteUnavailable)
+		if f.session("paired").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatalf("leased %+v", got)
+		}
+	})
+	t.Run("at the staleness bound", func(t *testing.T) {
+		f := newCodexFixture(t)
+		at := f.now.Add(-authority.DefaultHeartbeatStaleAfter)
+		f.addCodexHost("paired", codexHostOpt{heartbeat: &at})
+		f.wantChoice(f.selectCodex(tokClient, "dev", true), "use", "paired", "")
+	})
+	t.Run("heartbeat in the future", func(t *testing.T) {
+		f := newCodexFixture(t)
+		at := f.now.Add(time.Second)
+		f.addCodexHost("paired", codexHostOpt{agentd: codexAgentdLine("2.104.0"), heartbeat: &at})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "paired", codexhostpool.ReasonRemoteUnavailable)
+		if f.session("paired").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatalf("leased %+v", got)
+		}
+	})
+	t.Run("missing start time still counts", func(t *testing.T) {
+		f := newCodexFixture(t)
+		f.addCodexHost("paired", codexHostOpt{agentd: codexAgentdLine("2.104.0"), noPodStart: true})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "paired", "")
+		if !got.Ready || f.session("paired").Annotations[codexHostLeaseAnnotation] == "" {
+			t.Fatalf("a matching pod UID was not used when start time was absent: %+v", got)
+		}
+	})
+	t.Run("safety reasons come first", func(t *testing.T) {
+		f := newCodexFixture(t)
+		// Each of these has not reported (no stored pod UID). The safety
+		// reason is still the one recorded, not remote_unavailable.
+		f.addCodexHost(codexHandsOffName, codexHostOpt{omitPodUID: true})
+		f.addCodexHost("protected-host", codexHostOpt{protected: true, omitPodUID: true})
+		f.addCodexHost("rescue-host", codexHostOpt{rescueFailed: true, omitPodUID: true})
+		f.addCodexHost("open", codexHostOpt{})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "open", "")
+		gotReason := map[string]string{}
+		for _, s := range got.Skipped {
+			gotReason[s.Name] = s.Reason
+		}
+		want := map[string]string{
+			codexHandsOffName: codexhostpool.ReasonProtected,
+			"protected-host":  codexhostpool.ReasonProtected,
+			"rescue-host":     codexhostpool.ReasonRescueBlocked,
+		}
+		for name, reason := range want {
+			if gotReason[name] != reason {
+				t.Fatalf("skip %s=%q, want %q (all %#v)", name, gotReason[name], reason, gotReason)
+			}
+		}
+	})
+}
+
+// An empty stored UID never counts, including against a pod whose UID is
+// empty: equality alone would accept that pair.
+func TestCodexPodReportedNeedsAStoredUID(t *testing.T) {
+	now := time.Now()
+	hb := metav1.NewTime(now)
+	sess := &v1alpha1.AgentSession{}
+	sess.Status.Agent = &v1alpha1.AgentStatus{LastHeartbeat: &hb}
+	if codexPodReported(sess, &corev1.Pod{}, now) {
+		t.Fatal("an empty stored UID counted as the pod's report")
+	}
+	sess.Status.Agent.PodUID = "uid-1"
+	pod := &corev1.Pod{}
+	pod.UID = "uid-1"
+	if !codexPodReported(sess, pod, now) {
+		t.Fatal("a matching stored UID with a fresh heartbeat did not count")
+	}
+}
+
+// The lease read applies the same report check. A heartbeat that goes stale,
+// or a pod replaced with one that has not reported, is not leased.
+func TestCodexHostLeaseRequiresThePresentPodsReport(t *testing.T) {
+	once := func(name string, change func(context.Context, client.WithWatch, *v1alpha1.AgentSession)) interceptor.Funcs {
+		var done atomic.Bool
+		return interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if err := c.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				sess, ok := obj.(*v1alpha1.AgentSession)
+				if !ok || sess.Name != name || sess.Status.Phase == "" || !done.CompareAndSwap(false, true) {
+					return nil
+				}
+				change(ctx, c, sess)
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}
+	}
+	t.Run("heartbeat goes stale", func(t *testing.T) {
+		var f *fixture
+		f = newCodexFixture(t, once("only", func(ctx context.Context, c client.WithWatch, sess *v1alpha1.AgentSession) {
+			stale := f.now.Add(-authority.DefaultHeartbeatStaleAfter - time.Second)
+			sess.Status.Agent.LastHeartbeat = &metav1.Time{Time: stale}
+			if err := c.Status().Update(ctx, sess); err != nil {
+				t.Fatal(err)
+			}
+			var pod corev1.Pod
+			if err := c.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, &pod); err != nil {
+				t.Fatal(err)
+			}
+			at := metav1.NewTime(stale)
+			pod.Status.StartTime = &at
+			if err := c.Status().Update(ctx, &pod); err != nil {
+				t.Fatal(err)
+			}
+		}))
+		f.addCodexHost("only", codexHostOpt{agentd: codexAgentdLine("2.104.0")})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "only", codexhostpool.ReasonRemoteUnavailable)
+		if f.session("only").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatalf("leased a host whose heartbeat went stale: %+v", got)
+		}
+	})
+	t.Run("pod is replaced", func(t *testing.T) {
+		var old types.UID
+		var f *fixture
+		f = newCodexFixture(t, once("only", func(ctx context.Context, c client.WithWatch, sess *v1alpha1.AgentSession) {
+			var pod corev1.Pod
+			key := types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}
+			if err := c.Get(ctx, key, &pod); err != nil {
+				t.Fatal(err)
+			}
+			old = pod.UID
+			if err := c.Delete(ctx, &pod); err != nil {
+				t.Fatal(err)
+			}
+			neu := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: sess.Name, Namespace: sess.Namespace, UID: uuid.NewUUID(),
+					Labels:          pod.Labels,
+					OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(sess, v1alpha1.GroupVersion.WithKind("AgentSession"))},
+				},
+				Spec: pod.Spec,
+			}
+			if neu.UID == old || old == "" {
+				t.Fatalf("replacement uid %s old %s", neu.UID, old)
+			}
+			if err := c.Create(ctx, neu); err != nil {
+				t.Fatal(err)
+			}
+			neu.Status.Phase = corev1.PodRunning
+			neu.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+			at := metav1.NewTime(f.now.Add(time.Second))
+			neu.Status.StartTime = &at
+			if err := c.Status().Update(ctx, neu); err != nil {
+				t.Fatal(err)
+			}
+		}))
+		f.addCodexHost("only", codexHostOpt{agentd: codexAgentdLine("2.104.0")})
+		got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "only", codexhostpool.ReasonRemoteUnavailable)
+		if string(f.session("only").UID) == "" || f.session("only").Annotations[codexHostLeaseAnnotation] != "" {
+			t.Fatalf("leased the replacement: %+v", got)
+		}
+	})
+}
+
+// The answer's outdated is the revision read with the lease, not the list.
+func TestCodexHostOutdatedFollowsLeasedPod(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		startOld  bool
+		leasedOld bool
+		wantOld   bool
+	}{
+		{"list current, lease behind", false, true, true},
+		{"list behind, lease current", true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var next string
+			var once atomic.Bool
+			f := newCodexFixture(t, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if err := c.Get(ctx, key, obj, opts...); err != nil {
+						return err
+					}
+					sess, ok := obj.(*v1alpha1.AgentSession)
+					if !ok || sess.Name != "paired" || sess.Status.Phase == "" || !once.CompareAndSwap(false, true) {
+						return nil
+					}
+					var pod corev1.Pod
+					if err := c.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, &pod); err != nil {
+						t.Fatal(err)
+					}
+					pod.Labels[v1alpha1.LabelRevision] = next
+					if err := c.Update(ctx, &pod); err != nil {
+						t.Fatal(err)
+					}
+					return nil
+				},
+			})
+			if tc.leasedOld {
+				next = "old"
+			} else {
+				next = f.tmpl.Revision()
+			}
+			f.addCodexHost("paired", codexHostOpt{agentd: codexAgentdLine("2.104.0"), outdated: tc.startOld})
+			got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "paired", "")
+			if got.Outdated != tc.wantOld {
+				t.Fatalf("outdated %v, want %v", got.Outdated, tc.wantOld)
+			}
+			var pod corev1.Pod
+			if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &pod); err != nil {
+				t.Fatal(err)
+			}
+			current := pod.Labels[v1alpha1.LabelRevision] == f.tmpl.Revision()
+			if got.Outdated == current || f.session("paired").Annotations[codexHostLeaseAnnotation] == "" {
+				t.Fatalf("outdated %v revision %q template %q", got.Outdated, pod.Labels[v1alpha1.LabelRevision], f.tmpl.Revision())
+			}
+		})
+	}
+}
+
+// codexReportStatus is a heartbeat that reports agentd 2.104.0, remote state
+// pair-code-issued and repository dev-env Ready.
+func codexReportStatus(name string) protocol.Status {
+	at := time.Date(2026, 11, 11, 18, 0, 0, 0, time.UTC)
+	return protocol.Status{
+		Session:  name,
+		Agentd:   codexAgentdLine("2.104.0"),
+		BootID:   "b1",
+		BootedAt: at,
+		Boot:     protocol.BootReady,
+		Agent:    protocol.AgentState{State: "idle"},
+		RemoteControl: &protocol.RemoteControl{
+			Name: name, State: codexhostpool.StatePairCodeIssued,
+		},
+		ProjectBootstrap: &protocol.ProjectBootstrap{
+			State:        protocol.BootstrapReady,
+			Repositories: []protocol.ProjectBootstrapRepository{{Name: "dev-env", State: protocol.BootstrapReady}},
+		},
+		ObservedAt: at,
+	}
+}
+
+func (f *fixture) callHeartbeat(name string, pod *corev1.Pod, body string) {
+	f.t.Helper()
+	sess := f.session(name)
+	c := &caller{kind: kindSession, session: sess, pod: pod}
+	req := httptest.NewRequest(http.MethodPost, protocol.HeartbeatPath(name), strings.NewReader(body))
+	req.SetPathValue("name", name)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	code, _, err := f.srv.heartbeat(context.Background(), w, req, c)
+	if err != nil || code != http.StatusNoContent {
+		f.t.Fatalf("heartbeat: code %d err %v body %s", code, err, w.Body.String())
+	}
+}
+
+// A heartbeat from the present pod must not stamp its UID onto fields the
+// previous pod wrote after this read. The status patch conflicts, and the
+// stored report stays the previous pod's.
+func TestPresentPodHeartbeatConflictsWithThePreviousPodsLaterWrite(t *testing.T) {
+	f := newCodexFixture(t)
+	f.addCodexHost("paired", codexHostOpt{agentd: codexAgentdLine("2.102.0")})
+	var previous corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &previous); err != nil {
+		t.Fatal(err)
+	}
+	f.replaceCodexPod("paired", f.now)
+	var present corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &present); err != nil {
+		t.Fatal(err)
+	}
+	if present.UID == previous.UID {
+		t.Fatal("the replacement kept the previous uid")
+	}
+	const lateState = "late-from-previous"
+	conflicted := false
+	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			fresh := f.session("paired")
+			fresh.Status.Agent.Agentd = codexAgentdLine("2.103.0")
+			fresh.Status.Agent.PodUID = string(previous.UID)
+			fresh.Status.RemoteControl.State = lateState
+			if err := f.c.Status().Update(ctx, fresh); err != nil {
+				return err
+			}
+			err := c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			conflicted = apierrors.IsConflict(err)
+			return err
+		},
+	})
+	raw, err := json.Marshal(codexReportStatus("paired"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, protocol.HeartbeatPath("paired"), strings.NewReader(string(raw)))
+	req.SetPathValue("name", "paired")
+	req.Header.Set("Content-Type", "application/json")
+	code, _, herr := f.srv.heartbeat(context.Background(), httptest.NewRecorder(), req, &caller{
+		kind: kindSession, session: f.session("paired"), pod: &present,
+	})
+	stored := f.session("paired")
+	agent := stored.Status.Agent
+	if !conflicted || herr == nil || code == http.StatusNoContent {
+		t.Fatalf("present heartbeat applied over the previous pod's later write: conflicted %v code %d err %v agent %+v remote %+v",
+			conflicted, code, herr, agent, stored.Status.RemoteControl)
+	}
+	if agent == nil || agent.PodUID != string(previous.UID) || agent.Agentd != codexAgentdLine("2.103.0") ||
+		stored.Status.RemoteControl == nil || stored.Status.RemoteControl.State != lateState {
+		t.Fatalf("stored report is not the previous pod's later write: agent %+v remote %+v", agent, stored.Status.RemoteControl)
+	}
+}
+
+// A heartbeat authenticated as the previous pod can be stored after the
+// replacement exists. It carries that pod's UID, so selection does not use
+// the host, and it writes no lease. A heartbeat from the present pod does.
+func TestDelayedPreviousPodHeartbeatStaysUnreported(t *testing.T) {
+	f := newCodexFixture(t)
+	f.addCodexHost("paired", codexHostOpt{agentd: codexAgentdLine("2.104.0")})
+	var p1 corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &p1); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(codexReportStatus("paired"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	f.callHeartbeat("paired", &p1, body)
+	if got := f.session("paired").Status.Agent; got == nil || got.PodUID != string(p1.UID) || got.Agentd != codexAgentdLine("2.104.0") {
+		t.Fatalf("first heartbeat %+v", got)
+	}
+
+	// The new pod's start equals the operator clock, so a comparison with
+	// start time would accept the late heartbeat. The UID does not.
+	p2 := f.replaceCodexPod("paired", f.now)
+	f.callHeartbeat("paired", &p1, body)
+	stored := f.session("paired").Status.Agent
+	if stored == nil || stored.PodUID != string(p1.UID) || stored.PodUID == string(p2) {
+		t.Fatalf("late heartbeat stored pod %q, previous %s present %s", stored.PodUID, p1.UID, p2)
+	}
+	if stored.Agentd != codexAgentdLine("2.104.0") || f.session("paired").Status.RemoteControl == nil ||
+		f.session("paired").Status.RemoteControl.State != codexhostpool.StatePairCodeIssued {
+		t.Fatalf("late heartbeat dropped the report: %+v remote %+v", stored, f.session("paired").Status.RemoteControl)
+	}
+	got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "paired", codexhostpool.ReasonRemoteUnavailable)
+	if got.Ready || got.Host != "paired" || f.session("paired").Annotations[codexHostLeaseAnnotation] != "" {
+		t.Fatalf("leased a host on the previous pod's late heartbeat: %+v", got)
+	}
+
+	var present corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &present); err != nil {
+		t.Fatal(err)
+	}
+	if present.UID != p2 {
+		t.Fatalf("present pod %s, want %s", present.UID, p2)
+	}
+	f.callHeartbeat("paired", &present, body)
+	if got := f.session("paired").Status.Agent; got == nil || got.PodUID != string(present.UID) {
+		t.Fatalf("present heartbeat %+v", got)
+	}
+	got = f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "paired", "")
+	if !got.Ready || f.session("paired").Annotations[codexHostLeaseAnnotation] == "" {
+		t.Fatalf("the present pod's heartbeat was not used: %+v", got)
+	}
+}
+
+// Ruling S. P1's report is stored with a remote state selection does not use.
+// The pod is replaced by P2. P1's heartbeat, whose body is pair-code-issued,
+// is in the handler when P2's heartbeat is stored. P1's patch then lands.
+// It carries P1's UID, so selection skips the host and writes no lease. P2's
+// next heartbeat, with a usable report, makes selection use the host.
+func TestLatePreviousPodHeartbeatStampsItsOwnUID(t *testing.T) {
+	f := newCodexFixture(t)
+	f.addCodexHost("paired", codexHostOpt{
+		remote: codexhostpool.StateOffline,
+		agentd: codexAgentdLine("2.104.0"),
+	})
+	var p1 corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &p1); err != nil {
+		t.Fatal(err)
+	}
+	initial := f.session("paired")
+	if initial.Status.Agent == nil || initial.Status.Agent.PodUID != string(p1.UID) ||
+		initial.Status.RemoteControl == nil || initial.Status.RemoteControl.State != codexhostpool.StateOffline {
+		t.Fatalf("P1 report agent %+v remote %+v", initial.Status.Agent, initial.Status.RemoteControl)
+	}
+	p2UID := f.replaceCodexPod("paired", f.now)
+	var p2 corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &p2); err != nil {
+		t.Fatal(err)
+	}
+	if p2.UID != p2UID || p2.UID == p1.UID {
+		t.Fatalf("replacement %s previous %s", p2.UID, p1.UID)
+	}
+
+	p1Status := codexReportStatus("paired")
+	p2Status := codexReportStatus("paired")
+	p2Status.RemoteControl.State = codexhostpool.StateStarting
+	p1Raw, err := json.Marshal(p1Status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2Raw, err := json.Marshal(p2Status)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			// P2's heartbeat uses the plain client, so it is stored before
+			// P1's patch is forwarded and does not re-enter this interceptor.
+			saved := f.srv.Client
+			f.srv.Client = f.c
+			f.callHeartbeat("paired", &p2, string(p2Raw))
+			f.srv.Client = saved
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	})
+	f.callHeartbeat("paired", &p1, string(p1Raw))
+	f.srv.Client = f.c
+
+	stored := f.session("paired")
+	agent := stored.Status.Agent
+	remote := ""
+	if stored.Status.RemoteControl != nil {
+		remote = stored.Status.RemoteControl.State
+	}
+	uid := ""
+	if agent != nil {
+		uid = agent.PodUID
+	}
+	w := f.selectCodex(tokClient, "dev", false)
+	choice := decode[apiv1.CodexHostChoice](t, w)
+	lease := f.session("paired").Annotations[codexHostLeaseAnnotation]
+	if uid != string(p1.UID) || remote != codexhostpool.StatePairCodeIssued ||
+		choice.Action != "report" || choice.Host != "paired" || choice.Reason != codexhostpool.ReasonRemoteUnavailable ||
+		choice.Ready || lease != "" {
+		t.Fatalf("after P1's patch: podUID %q remote %q choice %+v lease %q, want P1 %s, %s, report remote_unavailable, no lease (P2 is %s)",
+			uid, remote, choice, lease, p1.UID, codexhostpool.StatePairCodeIssued, p2.UID)
+	}
+
+	f.callHeartbeat("paired", &p2, string(p1Raw))
+	if got := f.session("paired").Status.Agent; got == nil || got.PodUID != string(p2.UID) ||
+		f.session("paired").Status.RemoteControl == nil ||
+		f.session("paired").Status.RemoteControl.State != codexhostpool.StatePairCodeIssued {
+		t.Fatalf("P2 heartbeat %+v remote %+v", f.session("paired").Status.Agent, f.session("paired").Status.RemoteControl)
+	}
+	got := f.wantChoice(f.selectCodex(tokClient, "dev", false), "use", "paired", "")
+	if !got.Ready || f.session("paired").Annotations[codexHostLeaseAnnotation] == "" {
+		t.Fatalf("P2's usable report was not used: %+v", got)
+	}
+}
+
+// A podUID field in the request body does not set status.agent.podUID.
+// The route sets it from the pod resolveSession authenticated.
+func TestHeartbeatBodyPodUIDDoesNotSetStatus(t *testing.T) {
+	f := newCodexFixture(t)
+	f.addCodexHost("paired", codexHostOpt{omitPodUID: true})
+	var pod corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	id := saIdentity(sessionNS + "/" + controller.ServiceAccountName)
+	id.PodName, id.PodUID = pod.Name, string(pod.UID)
+	const tok = "tok-paired-body"
+	f.auth[tok] = id
+
+	raw, err := json.Marshal(codexReportStatus("paired"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	const fromBody = "from-the-body"
+	fields["podUID"] = fromBody
+	if agent, ok := fields["agent"].(map[string]any); ok {
+		agent["podUID"] = fromBody
+	}
+	w := f.do(http.MethodPost, protocol.HeartbeatPath("paired"), tok, fields)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
+	}
+	got := f.session("paired").Status.Agent
+	if got == nil || got.PodUID != string(pod.UID) || got.PodUID == fromBody || got.Agentd != codexAgentdLine("2.104.0") {
+		t.Fatalf("status.agent.podUID %+v, want the caller pod %s", got, pod.UID)
+	}
+}
+
+// A heartbeat whose caller has no pod leaves status.agent.podUID empty, and
+// selection does not treat the host as reported.
+func TestHeartbeatWithoutPodLeavesHostUnreported(t *testing.T) {
+	f := newCodexFixture(t)
+	f.addCodexHost("paired", codexHostOpt{omitPodUID: true, agentd: "agentd v2.89.0 (commit abcdef012345, go1.27.1, linux/amd64)"})
+	raw, err := json.Marshal(codexReportStatus("paired"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.callHeartbeat("paired", nil, string(raw))
+	sess := f.session("paired")
+	got := sess.Status.Agent
+	if got == nil || got.PodUID != "" || got.Agentd != codexAgentdLine("2.104.0") {
+		t.Fatalf("status.agent %+v", got)
+	}
+	if sess.Status.RemoteControl == nil || sess.Status.RemoteControl.State != codexhostpool.StatePairCodeIssued {
+		t.Fatalf("remote %+v", sess.Status.RemoteControl)
+	}
+	ready := false
+	if got.ProjectBootstrap != nil {
+		for _, repo := range got.ProjectBootstrap.Repositories {
+			if repo.Name == "dev-env" && repo.State == protocol.BootstrapReady {
+				ready = true
+			}
+		}
+	}
+	if !ready {
+		t.Fatalf("repository report %+v", got.ProjectBootstrap)
+	}
+	choice := f.wantChoice(f.selectCodex(tokClient, "dev", false), "report", "paired", codexhostpool.ReasonRemoteUnavailable)
+	if choice.Ready || choice.Host != "paired" || f.session("paired").Annotations[codexHostLeaseAnnotation] != "" {
+		t.Fatalf("unreported host was used: %+v lease %q", choice, f.session("paired").Annotations[codexHostLeaseAnnotation])
+	}
+}
+
+// The caller's pod UID equals the stored UID. The patch bytes still carry
+// status.agent.podUID. A merge patch would otherwise leave the field out.
+func TestHeartbeatPatchCarriesPodUIDWhenItEqualsTheStoredUID(t *testing.T) {
+	f := newCodexFixture(t)
+	f.addCodexHost("paired", codexHostOpt{agentd: codexAgentdLine("2.104.0")})
+	var pod corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.session("paired").Status.Agent; got == nil || got.PodUID != string(pod.UID) {
+		t.Fatalf("stored %+v, want %s", got, pod.UID)
+	}
+	var patchData []byte
+	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			data, err := patch.Data(obj)
+			if err != nil {
+				return err
+			}
+			patchData = append([]byte(nil), data...)
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	})
+	raw, err := json.Marshal(codexReportStatus("paired"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.callHeartbeat("paired", &pod, string(raw))
+	var body map[string]any
+	if err := json.Unmarshal(patchData, &body); err != nil {
+		t.Fatalf("patch %s: %v", patchData, err)
+	}
+	status, _ := body["status"].(map[string]any)
+	agent, _ := status["agent"].(map[string]any)
+	if agent["podUID"] != string(pod.UID) {
+		t.Fatalf("patch %s", patchData)
+	}
+	if got := f.session("paired").Status.Agent; got == nil || got.PodUID != string(pod.UID) {
+		t.Fatalf("stored after heartbeat %+v", got)
+	}
+}
+
+// A caller with no pod, and a UID already stored. The merge patch sends null
+// for podUID, because the read had the key and the new object omits it, so
+// the stored UID is removed.
+func TestHeartbeatWithoutPodClearsAStoredUID(t *testing.T) {
+	f := newCodexFixture(t)
+	f.addCodexHost("paired", codexHostOpt{agentd: codexAgentdLine("2.104.0")})
+	var pod corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "paired"}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	before := ""
+	if agent := f.session("paired").Status.Agent; agent != nil {
+		before = agent.PodUID
+	}
+	if before == "" || before != string(pod.UID) {
+		t.Fatalf("stored UID %q, want %s", before, pod.UID)
+	}
+	var patchData []byte
+	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			data, err := patch.Data(obj)
+			if err != nil {
+				return err
+			}
+			patchData = append([]byte(nil), data...)
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	})
+	raw, err := json.Marshal(codexReportStatus("paired"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.callHeartbeat("paired", nil, string(raw))
+	var body map[string]any
+	if err := json.Unmarshal(patchData, &body); err != nil {
+		t.Fatalf("patch %s: %v", patchData, err)
+	}
+	status, _ := body["status"].(map[string]any)
+	agent, _ := status["agent"].(map[string]any)
+	if _, ok := agent["podUID"]; !ok || agent["podUID"] != nil {
+		t.Fatalf("patch %s", patchData)
+	}
+	got := f.session("paired").Status.Agent
+	if got == nil || got.PodUID != "" {
+		t.Fatalf("stored UID after a caller with no pod: %q, was %q", got.PodUID, before)
 	}
 }

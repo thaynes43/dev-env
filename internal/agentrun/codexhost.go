@@ -146,7 +146,7 @@ func (a *app) releaseCodexHost(ctx context.Context, c *conn, host, launchID stri
 	return nil
 }
 
-func codexHostRefused(choice apiv1.CodexHostChoice) error {
+func codexHostRefusalLine(choice apiv1.CodexHostChoice) string {
 	sentence, ok := apiv1.CodexHostSentence(choice.Reason)
 	if !ok {
 		sentence = "The selection was refused."
@@ -155,7 +155,11 @@ func codexHostRefused(choice apiv1.CodexHostChoice) error {
 	if code == "" {
 		code = "refused"
 	}
-	return fail(ExitFailed, "%s: %s", code, sentence)
+	return code + ": " + sentence
+}
+
+func codexHostRefused(choice apiv1.CodexHostChoice) error {
+	return fail(ExitFailed, "%s", codexHostRefusalLine(choice))
 }
 
 // codexBeforeCreate asks select before an interactive Codex create. False
@@ -230,20 +234,37 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 		}
 		return a.threadOnHost(ctx, cmd, t)
 	case "report":
-		return a.printJSON(choice)
+		return a.threadNoHostSelected(choice, "")
 	case "resume":
-		if err := a.printJSON(choice); err != nil {
-			return err
-		}
-		return fail(ExitFailed, "%s", resumeNotBuilt)
+		return a.threadNoHostSelected(choice, resumeNotBuilt)
 	case "create":
-		if err := a.printJSON(choice); err != nil {
-			return err
-		}
-		return fail(ExitFailed, "%s", commandCreatesNoHost)
+		return a.threadNoHostSelected(choice, commandCreatesNoHost)
 	default:
-		return codexHostRefused(choice)
+		// Ruling R. threadRefuse prints the blocked line and returns the
+		// exit. The refusal text is written after that. codex-host select
+		// and the interactive create keep codexHostRefused.
+		err := a.threadRefuse("codex", apiv1.ThreadBlocked, "no_host_selected", apiv1.ThreadLaunchExit(apiv1.ThreadBlocked))
+		a.errf("%s", codexHostRefusalLine(choice))
+		return err
 	}
+}
+
+// threadNoHostSelected is a select answer that did not start a thread
+// (ruling N, widened by ruling R). threadRefuse prints the thread-launch.v1
+// line and returns the exit error. Stderr, the action's fixed sentence when
+// it has one and then the select object, is written after that. A stderr
+// error is ignored. With stderr closed the process may end on SIGPIPE after
+// the line is out. The returned error is the one threadRefuse held.
+func (a *app) threadNoHostSelected(choice apiv1.CodexHostChoice, sentence string) error {
+	err := a.threadRefuse("codex", apiv1.ThreadBlocked, "no_host_selected", apiv1.ThreadLaunchExit(apiv1.ThreadBlocked))
+	if sentence != "" {
+		a.errf("%s", sentence)
+	}
+	enc := json.NewEncoder(a.env.Stderr)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(choice)
+	return err
 }
 
 // Stages of a select attempt that ended before any HTTP response.
@@ -297,8 +318,10 @@ func selectTransport(err error) error {
 }
 
 // threadSelectionFallback is the one line thread start adds when select was
-// not reached, answered 404, or answered 5xx. A received 401, 403, 409 or 422
-// is returned unchanged. The decision reads the error's type, not its text.
+// not reached, answered 404, or answered 5xx. A received 401, 403, 409, 422,
+// 429, or another non-200 that is not 404 or 5xx, and a 200 that cannot be
+// decoded, are returned unchanged: no result line, that call's own exit.
+// The decision reads the error's type, not its text.
 func threadSelectionFallback(err error) (string, bool) {
 	var resp *selectResponse
 	if errors.As(err, &resp) {

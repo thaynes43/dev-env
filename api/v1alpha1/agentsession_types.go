@@ -1342,6 +1342,12 @@ type AgentStatus struct {
 	// +optional
 	LastHeartbeat *metav1.Time `json:"lastHeartbeat,omitempty"`
 
+	// PodUID is the UID of the pod whose heartbeat this status came from, set
+	// by the operator from the authenticated caller, never from the request body.
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	PodUID string `json:"podUID,omitempty"`
+
 	// Agentd is agentd's version line.
 	// +optional
 	Agentd string `json:"agentd,omitempty"`

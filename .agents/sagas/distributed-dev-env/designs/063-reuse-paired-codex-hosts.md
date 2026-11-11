@@ -353,12 +353,87 @@ and is not built.
    asking Tom for a code. `login-required`, `offline`, `starting` and
    `errored` are not suitable. A running host in those states is left
    alone. This feature does not restart it.
-8. The pod revision equals the current template revision (`Outdated` false).
-   An outdated running host is not suitable, and it is not suspended to
-   move it. `haynes-ops-1109-115326` fails this as well as the protected
-   rule. Its image `2.89.0` is from before thread start, so a launch there
-   would be `host_unsupported` even if it were not protected.
+8. The host's reported agentd is at least `2.102.0`. The route reads
+   `status.agent.agentd` and the pool parses that line strictly. The
+   reported form is what `version.Info.String("agentd")` writes:
+   `agentd v<major>.<minor>.<patch> (commit <commit>, <go>, <platform>)`,
+   with no leading zero in a component. A version below the minimum, or a
+   missing or unparsable line, is `image_outdated`. The host is not used
+   and it is not suspended. It still counts toward the cell.
+   `internal/codexhostpool` keeps one constant for that minimum,
+   `MinAgentdVersion`. Raise it, in a reviewed change, when a release
+   changes what a thread launch needs from agentd. `2.102.0` is the
+   release in which agentd trusts a bootstrapped folder itself. `2.101.1`
+   carried the reply reading and is below the minimum. The pod revision
+   is not this rule. The answer's `outdated` is true when the chosen host
+   is running and its pod revision label is not the current template
+   revision. It is information only. Ready stays true exactly when the
+   action is `use`. A suspended eligible host does not take this test: a
+   resume puts it on the current image, and a resume answer leaves
+   `outdated` false. Nothing here suspends, resumes or restarts a host.
+   `haynes-ops-1109-115326` fails the protected rule before this one. Its
+   image `2.89.0` is also below the minimum, so a launch there would be
+   `host_unsupported` even if it were not protected.
 9. The login fact is not lapsed. Unknown does not block.
+
+**The present pod has reported.** The agentd line, the remote state and the
+repository readiness are status fields. They keep the previous pod's values
+until a heartbeat from the present pod is stored. A running host's reported
+facts count only when its present pod reported them. The route sets one
+boolean on the host fact, true only when the pod is present,
+`status.agent.podUID` is not empty and equals that pod's UID, and
+`status.agent.lastHeartbeat` is set, is not after now, and is inside the
+staleness bound `codexHeartbeatFresh` already uses (no new number). In the
+judge, a running host without that fact is skipped with
+`remote_unavailable`, in the same place as the pod Ready test, before the
+remote state, the version and the lease are read. It still counts toward
+the cell. Suitable and the lease step use the judge, so the lease's fresh
+read applies it. A suspended host is not held to it. The login fact is
+read as before.
+
+The pod UID binds those facts to the pod.
+`POST /v1/sessions/{name}/heartbeat` records `status.agent.podUID` from the
+authenticated caller, never from the request body, and it stamps
+`lastHeartbeat` with the operator's clock (`agentStatus` takes `s.now()`).
+Every status patch from a caller with a pod carries that caller's UID,
+whatever the handler's read held, so a patch computed from an earlier read
+stamps the caller's own UID. The write is a merge patch against that read,
+and a field equal to the read is left out. A heartbeat stored with no
+other write between its read and its patch leaves `status.agent` and
+`status.remoteControl` wholly that caller's. A caller with no pod leaves
+`podUID` empty and forces nothing into the patch. The merge patch then
+sends null for a key the read had and the new object lacks, so a stored
+UID is removed.
+
+A heartbeat from the previous pod that is stored late carries the previous
+pod's UID and so does not count. When a UID is already stored and it is
+not this caller's, the status patch carries the resource version of that
+read. A status write that landed after the read is refused, so the other
+pod's later fields are not left under this caller's UID. An empty stored
+UID takes no such lock: it does not bind a report, and until the CRD has
+the field the UID reads back empty on every heartbeat. Until the cluster's
+CRD has the field the API server drops it and no running host counts as
+reported.
+
+A limit stays. A heartbeat from the present pod whose read held its own
+UID, or no UID, takes no lock. If a write from the previous pod lands between
+that read and its patch, the fields the present pod did not change keep
+the previous pod's values under the present pod's UID until the present
+pod's next heartbeat. This needs a request from the previous pod to stay
+in flight inside the operator across the whole replacement and to land
+inside one run of the handler. Every heartbeat is not locked, because that
+would refuse a heartbeat whenever any other writer changes the session
+between the read and the patch, and this route carries every session's
+liveness, usage and task result. Ruling S says the same in short, and the
+lock of dcfb7207 stays.
+
+A container restart inside the same pod keeps the pod UID, so the previous
+container's report counts for at most the staleness bound. The image is
+the same, so the version is right, and the remote state can be that old.
+The route still accepts a heartbeat from the session's own pod, including
+one that is deleting, and it does not change who may post one. Still not
+defended: a process inside the host that sends a false heartbeat. The
+version string is only length-clipped.
 
 **A suspended host is eligible to resume** when all of these hold:
 
@@ -439,11 +514,15 @@ input. Story 695 writes trust at each thread start, and that trust does not
 survive a boot, so selection does not read it. Missing trust is not a
 reason to create another host.
 
-On this evening, for a caller whose profile fits `dev`, the only suitable
-host is `dev-env-1110-230548`. Its project bootstrap is Ready, 9 of 9
-repositories, so a request for any repository in that report fits.
-`spec.repo` `dev-env` is only the default. The action is `use`, so the
-result is ready. For a profile that does not fit `dev`, no host is
+On this evening, for a caller whose profile fits `dev`,
+`dev-env-1110-230548` is the only running paired host that fits the
+profile. Its project bootstrap is Ready, 9 of 9 repositories, so a
+request for any repository in that report fits. `spec.repo` `dev-env` is
+only the default. Its image was `2.101.0`, which rule 8 now treats as
+below the agentd minimum, so the action is `report` with reason
+`image_outdated`. The host fills the cell, and nothing is created. Its
+pod revision was the current template revision, so `outdated` is false.
+Ready is false. For a profile that does not fit `dev`, no host is
 suitable.
 
 ## 5. Selection
@@ -512,8 +591,13 @@ Order:
    names the skip result for every existing host.
 
 The result is one JSON object the caller prints: `host`, `action`
-(`use`, `resume`, `create` or `report`), `ready` (true or false), `reason`,
-and `skipped` as a list of `{name, reason}`. `report` names the running host
+(`use`, `resume`, `create` or `report`), `ready` (true or false),
+`outdated` (true or false), `reason`, and `skipped` as a list of
+`{name, reason}`. `outdated` is true when the chosen host is running and
+its pod revision label is not the current template revision. When a lease
+was written, that revision is the one read with the lease, not the list.
+It does not change `ready`, which stays true exactly when the action is
+`use`. A resume answer leaves `outdated` false. `report` names the running host
 that already fills the cell, and the cell is the resolved profile. The
 selector does not launch on it and does not create another. Reasons are the
 fixed codes in section 7. No pairing code, no prompt text, no transcript.
@@ -542,8 +626,9 @@ busy. It moves to the next host when the lease is busy. A heartbeat is not
 that. It does not start a thread on a host
 whose lease another caller holds. The lease lasts at most 15 minutes, which
 covers a resume and a thread start wait of 10 minutes. The caller clears it
-when the launch result is known. A dead caller leaves it until expiry. The
-lease serializes this tooling's own launches. It does not mean the phone is
+when the launch result is known. A dead caller leaves it until expiry. A
+select answer lost in transit leaves the lease until its expiry, at most
+15 minutes (ruling I). The lease serializes this tooling's own launches. It does not mean the phone is
 idle. The platform cannot see an in-progress phone turn without exec, and
 this design does not exec to decide. Two launches over time on one host are
 the reuse we want. Two launches at the same moment are the race the lease
@@ -578,7 +663,8 @@ or prompts.
 task. Tasks peaked at 17 unsuspended records and do not use a host. Hosts
 peaked at three unsuspended at once, then the idle timer suspended all three
 while their login snapshots were stale. Tonight two hosts are Running, and
-only one is suitable. Per profile, that overlap was two hosts with empty
+none is suitable: the one that fits profile `dev` is below the agentd
+minimum, and the other is protected. Per profile, that overlap was two hosts with empty
 `spec.profile` (the next pod would be `full`) and one host on profile
 `workbench`. No profile has two suitable hosts tonight. Threads per host
 are Unknown.
@@ -614,7 +700,11 @@ does not add.
 
 **What counts toward the cap.** Every Running Codex remote host in the cell
 that is not protected. Suitable or not, pool label or not. That includes
-`unpaired`, `login-required`, `offline`, `starting`, `errored` and outdated.
+`unpaired`, `login-required`, `offline`, `starting`, `errored`, a running
+host the present pod has not reported (`remote_unavailable`), and a
+running host whose reported agentd is below the minimum, missing or
+unparsable (`image_outdated`). A pod revision that is not current does
+not by itself keep a host out of the cap or out of use.
 A new host beside an unpaired one would ask Tom to pair again. The cell cap
 stops that. A protected host does not count. A leased host counts, so a
 second caller waits or gets `host_busy` instead of a new host. When the
@@ -657,9 +747,10 @@ together with a current keeper login (ruling E). Suitable can be short of
 ready. The result says which.
 
 No host in section 3 is adopted by this design. Question 1 is answered no
-(section 11). The only host the selector can use tonight that passes
-section 4 on its own is `dev-env-1110-230548`, for profile `dev`, for a
-requested repository its bootstrap reports Ready.
+(section 11). `dev-env-1110-230548` is the only running host that fits
+profile `dev` and reports the requested repository Ready. Its image that
+evening was `2.101.0`, below the agentd minimum in section 4 rule 8, so
+the selector reports it and does not use it.
 
 ## 7. The contract
 
@@ -680,8 +771,8 @@ finding no host is `caller_cannot_create`.
 | Command or route | Change |
 | --- | --- |
 | `agent-run thread start --agent codex` with `--host` | None. The named host, today's errors |
-| `agent-run codex-host select --repo <name> [--profile <name>] [--check]` | New. Prints the section 5 object. `--check` is `?check=true` and writes nothing. Without `--check`, the command carries out `use`, `resume`, `create` or `report`. The live check in section 9 is this command with `--check` |
-| `agent-run thread start --agent codex` without `--host` | Calls select, then today's thread start on the chosen host. A `resume` action resumes first and waits until the host is Running or the wait ends. A `create` action creates only when section 6 allows it, then the caller still has to pair before a thread will pass `paired`. A `report` action prints the object and does not start a thread |
+| `agent-run codex-host select --repo <name> [--profile <name>] [--check]` | New. Prints the section 5 object. `--check` is `?check=true` and writes nothing. Without `--check`, the command prints `use`, `resume`, `create` or `report`. A `use` still writes the lease (ruling G). Slices 3 and 4 carry resume and create out. The live check in section 9 is this command with `--check` |
+| `agent-run thread start --agent codex` without `--host` | Calls select. `use` runs today's thread start on the chosen host and is the only answer that can exit 0. `report`, `resume` and `create` start nothing. The `thread-launch.v1` line is written to stdout before anything is written to stderr: outcome `blocked`, code `no_host_selected`, then that action's fixed sentence and the select object on stderr, and the exit is the blocked code. `report` has no sentence. `resume` says resume is not built yet. `create` says this command does not create a host. A selector refusal (`login_required`, `caller_cannot_create`, `at_capacity`, `host_busy`) and an action this client does not know write the same blocked line first, then the refusal's code and fixed sentence on stderr, and exit with the blocked code. With stderr closed the process may end on SIGPIPE after the line is out. Carrying out resume and create is later slices |
 | `agent-run --agent codex --interactive` | Calls select with `?check=true` before create, so the call holds no lease. A suitable or eligible host is printed and no host is created. Create remains the fallback. A `report` action prints the object and does not create |
 | `agent-run thread status` | None. Still the named host, exec route only |
 | `agent-run pair` | None. Still a person's command. The selector never runs it |
@@ -690,7 +781,7 @@ finding no host is `caller_cannot_create`.
 | Headless `agent-run --project ... -p` for Codex | None. Not a host |
 | Front door tools | No new tool. The front door's allow list stays |
 
-When `thread start` without `--host` gets no response from select, a 404, or any 5xx, it keeps today's `invalid_input` result and exit 2 and adds one line; a received 401, 403, 409 or 422 is returned as the operator sent it.
+When `thread start` without `--host` gets no response from select, a 404, or any 5xx, it keeps today's `invalid_input` result and exit 2 and adds one line. A select call the API itself refuses, or that cannot be decoded, prints no result line and keeps that call's non-zero exit: HTTP 401, 403, 409, 422, 429, another non-200 that is not 404 or 5xx, and a 200 that cannot be decoded.
 
 A session that may not create a host still may not. Select's `create`
 action checks the same rule as create does today
@@ -719,12 +810,12 @@ filled where a host was considered:
 | `at_capacity` | A create or a resume would exceed `maxRunning` | No create, no resume |
 | `host_busy` | Every suitable running host holds a live lease | No create |
 | `caller_cannot_resume` | Caller kind is `coordinator` and the host is not its child | Not resumed. The resume route is not called |
-| `remote_unavailable` | Running, and the remote state is `login-required`, `offline`, `starting` or `errored` | Not restarted. It still counts toward the cell cap, and the result may `report` it |
+| `remote_unavailable` | Running, and the present pod has not reported, or the remote state is `login-required`, `offline`, `starting` or `errored` | Not restarted. It still counts toward the cell cap, and the result may `report` it |
 | `protected` | Recorded on a skipped host | That host is not leased, resumed or launched |
 | `rescue_blocked` | Rescue `Failed`, or removal blocked | Not resumed |
 | `pairing_unknown` | Suspended, and pairing is not shown. Until slice 6, the last state is not `pair-code-issued`. After slice 6, the session has no durable record that a pairing code was issued | Not resumed |
 | `unpaired` | Running and `unpaired` | Not used, and not sent to `pair` |
-| `image_outdated` | Running, revision not current | Not suspended and not used |
+| `image_outdated` | Running, and the reported agentd is below the minimum, missing or unparsable | Not suspended and not used. It still counts toward the cell |
 | `profile_mismatch` | Resolved profile does not fit | Not used |
 | `repo_not_ready` | The requested repository is not Ready in the host's reported project bootstrap | Not used |
 | `unpushed_work` | Suspended rescue has unpushed refs, or the rescue is missing | Not resumed |
@@ -748,9 +839,12 @@ and an expiry.
 The read-only check writes nothing. The live check in section 9, slice 3,
 is that form, against `dev-env-1110-230548`, and it starts no thread.
 
-An outdated or protected running host stays as it is, including
-`haynes-ops-1109-115326` and the three other hands-off sessions. A
-rescue-failed host stays excluded, including `dev-env-1020-002245`.
+An agentd below the minimum is not used and is not suspended. A pod
+revision that is not current is information only: the host can still be
+used, and the answer's `outdated` says so. A protected running host stays
+as it is, including `haynes-ops-1109-115326` and the three other hands-off
+sessions. A rescue-failed host stays excluded, including
+`dev-env-1020-002245`.
 
 ## 9. Build slices
 
@@ -1012,3 +1106,140 @@ is the coordinator's ruling, not Tom's. No session names in code.
 `--codex-host-hands-off` has no default. The operator refuses to start with
 `--enable-codex-host-select` unless `--codex-host-hands-off` is given. An
 explicit empty value is allowed and is a stated choice.
+
+**Ruling M** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+is the coordinator's ruling, not Tom's. A running host is suitable when
+its agentd is new enough, not when its image is the newest. The old rule
+existed because a thread started through an older agentd lacks fixes the
+launch depends on. That is a statement about a version, not about being
+the newest. `internal/codexhostpool` has one constant, the minimum agentd
+version automatic selection accepts, set to `2.102.0` (the release in
+which agentd trusts a bootstrapped folder itself; `2.101.1` carried the
+reply reading). The route reads the host's reported agentd version from
+`status.agent.agentd` and parses that line strictly. A running host whose
+version parses and is at or above the minimum is suitable as far as this
+rule goes. A host whose version is below the minimum, missing or
+unparsable is skipped with the existing reason `image_outdated` and still
+counts toward the cell. The answer gains one boolean, `outdated`, true
+when the chosen running host's pod revision is not the current template
+revision. It is information only and does not change `ready`, which stays
+true exactly for `use`. A suspended eligible host is unaffected: a resume
+puts it on the current image, and a resume answer leaves `outdated`
+false. Nothing in this ruling suspends, resumes or restarts a host. The
+constant is raised, in a reviewed change, whenever a release changes what
+a thread launch needs from agentd.
+
+**Ruling N** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+is the coordinator's ruling, not Tom's. `agent-run thread start` without
+`--host` never exits 0 unless a thread was started. For any answer that
+is not `use` (`report`, `resume`, `create`), the command prints one
+`thread-launch.v1` result on stdout with outcome `blocked` and the fixed
+blocker code `no_host_selected`, prints the select object on stderr after
+the existing fixed sentence for that action, and exits with the exit code
+`blocked` already has. `report` has no sentence. `resume`'s sentence is
+that resume is not built yet. `create`'s sentence is that this command
+does not create a host. `no_host_selected` and its one sentence live in
+`internal/threadlaunch`. The interactive create and `agent-run codex-host
+select` are unchanged. `--host` does not call select. When the route is
+absent, thread start behaves as it does today. This replaces the
+print-and-exit sentences of ruling H for `thread start` without `--host`.
+Ruling H's other points stand.
+
+**Ruling O** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+is the coordinator's ruling, not Tom's. A running host's reported facts
+count only when its present pod reported them. The agentd version, the
+remote state and the repository readiness are all read from the session's
+status, which keeps the previous pod's values until the new pod's first
+heartbeat is accepted. The host fact gains one boolean, set true only when
+the pod is present, `status.agent.lastHeartbeat` is set, is not after now,
+is inside the staleness bound the login reading already uses, and is not
+earlier than the present pod's start time. A pod without a start time has
+not reported. In the judge, a running host without the fact is skipped
+with the existing reason `remote_unavailable`, after the pod Ready test
+and before the remote state, the version and the lease are read. It still
+counts toward the cell. Suitable and the lease step use the judge, so the
+lease's fresh read applies it. A suspended host is unaffected. No CRD
+change, no new reason code, and no change to how the login fact is read.
+`lastHeartbeat` is stamped with the operator's clock when a heartbeat from
+the session's own pod is accepted. The route checks that the token is a
+projected ServiceAccount token bound to a pod that exists, that the pod
+UID matches, that the pod's controller is an AgentSession of the same API
+version, and that the session UID matches. It does not check deletion, so
+a deleting pod's heartbeat is accepted while the pod still exists and the
+token still matches. A process inside the host that sends a false
+heartbeat is not defended.
+
+**Ruling P** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+is the coordinator's ruling, not Tom's. `agent-run thread start` without
+`--host` prints exactly one `thread-launch.v1` line on stdout for every
+selection answer that did not start a thread, whatever happens to stderr.
+A failed write to stderr does not return before that line. The selector's
+refusals (`login_required`, `caller_cannot_create`, `at_capacity`,
+`host_busy`) and an action this client does not know also print the
+blocked / `no_host_selected` line on stdout, after the refusal's code and
+fixed sentence on stderr, and exit with the blocked exit code. Only
+`thread start` changes: `agent-run codex-host select` and the interactive
+create keep their refusal as it is. A select call the API itself refuses
+or that cannot be decoded (HTTP 401, 403, 409, 422, 429, another non-200
+that is not 404 or 5xx, an unreadable 200) stays as it is: no result
+line, the same non-zero exit.
+
+**Ruling Q** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+replaces the pod start comparison of ruling O, because comparing
+`lastHeartbeat` with `pod.status.startTime` does not say which pod
+reported: a heartbeat from the previous pod can be stored after the new
+pod starts, and a node clock can sit behind the operator's. The operator
+records the UID of the pod a heartbeat came from in `status.agent.podUID`,
+taken from the authenticated caller, never from the request body. A
+running host has reported when that UID is not empty and equals the
+present pod's UID and `lastHeartbeat` is not in the future and is inside
+the existing staleness bound, both on the operator's clock. There is no
+comparison with `pod.status.startTime`. A late heartbeat from the previous
+pod carries the previous pod's UID, and the host stays
+`remote_unavailable` until the present pod reports. The judge, Suitable,
+the lease step and the reason `remote_unavailable` stay as ruling O placed
+them. This is one additive status field. Until the cluster's CRD has the
+field the API server drops it and no running host counts as reported. A
+container restart inside the same pod keeps the pod UID, so the previous
+container's report counts for at most the staleness bound. The image is
+the same, so the version is right, and the remote state can be that old.
+A process inside the host that sends a false heartbeat is not defended.
+This is the coordinator's ruling, not Tom's.
+
+**Ruling R** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+is the coordinator's ruling, not Tom's. On every path of `agent-run thread
+start` without `--host` where a decoded selection answer starts no thread
+(`report`, `resume`, `create`, the four selector refusals, and an unknown
+action), the `thread-launch.v1` line is written to stdout before anything
+is written to stderr. `threadRefuse` prints that line and returns the exit
+error. The command calls it first, holds the error, writes the stderr
+text, ignores a stderr error, and returns the held error. No signal
+handling is added. With stderr closed the process may end on SIGPIPE
+after the line is out. `agent-run help thread` and section 7 say the line
+comes first. `agent-run codex-host select` and the interactive create are
+unchanged. Not covered: a `use` answer whose launch then fails. That is
+the thread start path that `--host` also takes, and it still writes its
+diagnostics before its result. The third independent review found it;
+it is OpenProject item 764.
+
+**Ruling S** (coordinator dev-env-fable-coordinator-1109, 2026-11-11). This
+is the coordinator's ruling, not Tom's. A status patch from a heartbeat
+whose caller has a pod always carries `status.agent.podUID`, whatever the
+handler's read held. The write is a merge patch against that read, and a
+field equal to the read is left out, so without this a late patch from the
+previous pod could leave the present pod's UID over the previous pod's
+changed fields. The patch now stamps the caller's own UID. A heartbeat
+stored with no other write between its read and its patch leaves
+`status.agent` and `status.remoteControl` wholly that caller's. The lock
+of dcfb7207 stays: a stored UID that is not empty and is not the caller's
+still carries the resource version of that read. A heartbeat from the
+present pod whose read held its own UID, or no UID, takes no lock. If a write
+from the previous pod lands between that read and its patch, the fields
+the present pod did not change keep the previous pod's values under the
+present pod's UID until the present pod's next heartbeat. That needs a
+request from the previous pod to stay in flight inside the operator across
+the whole replacement and to land inside one run of the handler. Every
+heartbeat is not locked, because that would refuse a heartbeat whenever
+any other writer changes the session between the read and the patch, and
+this route carries every session's liveness, usage and task result. A
+caller with no pod forces nothing into its patch.

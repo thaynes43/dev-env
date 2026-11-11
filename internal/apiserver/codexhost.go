@@ -132,7 +132,7 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 				break
 			}
 		}
-		wrote, err := s.leaseCodexHost(ctx, codexLeaseTarget{
+		wrote, leased, err := s.leaseCodexHost(ctx, codexLeaseTarget{
 			name: res.Host, uid: uid, caller: who, profile: asked, repo: req.Repo, tmpl: tmpl,
 		})
 		if err != nil {
@@ -140,6 +140,11 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 		}
 		switch wrote {
 		case codexLeaseWritten:
+			// The lease read is a later snapshot than the list. outdated
+			// follows the pod that was leased (finding 4).
+			if leased.Phase == codexhostpool.PhaseRunning {
+				res.Outdated = !leased.RevisionCurrent
+			}
 			s.logCodexHostSelect(c, res, check)
 			return http.StatusOK, res, nil
 		case codexLeaseBusy:
@@ -295,7 +300,7 @@ func (s *Server) codexHostFacts(ctx context.Context, tmpl *templates.Templates) 
 		if err != nil {
 			return nil, "", err
 		}
-		hosts = append(hosts, codexHostFrom(sess, pod, tmpl, off))
+		hosts = append(hosts, codexHostFrom(sess, pod, tmpl, off, now))
 		if !codexLoginReading(sess, pod, now) {
 			continue
 		}
@@ -353,6 +358,21 @@ func codexHeartbeatFresh(at *metav1.Time, now time.Time) bool {
 	return now.Sub(at.Time) <= authority.DefaultHeartbeatStaleAfter
 }
 
+// codexPodReported is ruling Q. The session status keeps the previous pod's
+// agentd line, remote state and repository report until a heartbeat from the
+// pod that is present is stored. Those facts count only when status.agent.podUID
+// is that pod's UID and lastHeartbeat is fresh on the operator's clock.
+// There is no comparison with pod.status.startTime.
+func codexPodReported(sess *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) bool {
+	if pod == nil || sess == nil || sess.Status.Agent == nil {
+		return false
+	}
+	if sess.Status.Agent.PodUID == "" || sess.Status.Agent.PodUID != string(pod.UID) {
+		return false
+	}
+	return codexHeartbeatFresh(sess.Status.Agent.LastHeartbeat, now)
+}
+
 func (s *Server) codexHostPod(ctx context.Context, sess *v1alpha1.AgentSession) (*corev1.Pod, error) {
 	name := sess.Status.PodName
 	if name == "" {
@@ -372,7 +392,7 @@ func (s *Server) codexHostPod(ctx context.Context, sess *v1alpha1.AgentSession) 
 	return &pod, nil
 }
 
-func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates.Templates, handsOff bool) codexhostpool.Host {
+func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates.Templates, handsOff bool, now time.Time) codexhostpool.Host {
 	h := codexhostpool.Host{
 		Name:            sess.Name,
 		UID:             string(sess.UID),
@@ -391,8 +411,12 @@ func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates
 	if pod != nil {
 		h.PodReady = codexHostPodReady(sess, pod)
 		h.HoldPod = pod.Labels[v1alpha1.LabelHold] == "true"
-		h.ImageCurrent = pod.Labels[v1alpha1.LabelRevision] == tmpl.Revision() && tmpl.Revision() != "" &&
-			!conditionIsTrue(sess.Status.Conditions, controller.ConditionOutdated)
+		// The pod revision against the template revision. The Outdated
+		// condition is not this fact: a host one release behind stays
+		// usable when its agentd is new enough (ruling M).
+		if rev := pod.Labels[v1alpha1.LabelRevision]; tmpl != nil && tmpl.Revision() != "" && rev == tmpl.Revision() {
+			h.RevisionCurrent = true
+		}
 		if pod.Labels[codexHostPoolLabel] == "true" {
 			h.Pool = true
 		}
@@ -407,9 +431,13 @@ func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates
 	if sess.Status.RemoteControl != nil {
 		h.RemoteState = sess.Status.RemoteControl.State
 	}
-	if sess.Status.Agent != nil && sess.Status.Agent.LastActivity != nil {
-		h.LastActivity = sess.Status.Agent.LastActivity.Time
+	if sess.Status.Agent != nil {
+		h.Agentd = sess.Status.Agent.Agentd
+		if sess.Status.Agent.LastActivity != nil {
+			h.LastActivity = sess.Status.Agent.LastActivity.Time
+		}
 	}
+	h.Reported = codexPodReported(sess, pod, now)
 	if sess.Status.SuspendedAt != nil {
 		h.SuspendedAt = sess.Status.SuspendedAt.Time
 	}
@@ -475,33 +503,33 @@ type codexLeaseTarget struct {
 	tmpl                     *templates.Templates
 }
 
-func (s *Server) leaseCodexHost(ctx context.Context, want codexLeaseTarget) (codexLeaseResult, error) {
+func (s *Server) leaseCodexHost(ctx context.Context, want codexLeaseTarget) (codexLeaseResult, codexhostpool.Host, error) {
 	key := types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: want.name}
 	for range codexHostLeaseTries {
 		var sess v1alpha1.AgentSession
 		if err := s.Live.Get(ctx, key, &sess); err != nil {
 			if apierrors.IsNotFound(err) {
-				return codexLeaseBusy, nil
+				return codexLeaseBusy, codexhostpool.Host{}, nil
 			}
-			return 0, err
+			return 0, codexhostpool.Host{}, err
 		}
 		if string(sess.UID) != want.uid {
-			return codexLeaseBusy, nil
+			return codexLeaseBusy, codexhostpool.Host{}, nil
 		}
 		if !sess.DeletionTimestamp.IsZero() || s.codexHostBlocked(&sess) {
-			return codexLeaseBusy, nil
+			return codexLeaseBusy, codexhostpool.Host{}, nil
 		}
 		pod, err := s.codexHostPod(ctx, &sess)
 		if err != nil {
-			return 0, err
+			return 0, codexhostpool.Host{}, err
 		}
 		now := s.now()
-		host := codexHostFrom(&sess, pod, want.tmpl, s.codexHostHandsOff(sess.Name))
+		host := codexHostFrom(&sess, pod, want.tmpl, s.codexHostHandsOff(sess.Name), now)
 		if !codexhostpool.Suitable(host, want.caller, want.profile, want.repo, now) {
-			return codexLeaseBusy, nil
+			return codexLeaseBusy, host, nil
 		}
 		if codexLeaseHeldByOther(sess.Annotations[codexHostLeaseAnnotation], want.caller.Name, want.caller.LaunchID, now) {
-			return codexLeaseBusy, nil
+			return codexLeaseBusy, host, nil
 		}
 		orig := sess.DeepCopy()
 		if sess.Annotations == nil {
@@ -513,11 +541,11 @@ func (s *Server) leaseCodexHost(ctx context.Context, want codexLeaseTarget) (cod
 			continue
 		}
 		if err != nil {
-			return 0, err
+			return 0, codexhostpool.Host{}, err
 		}
-		return codexLeaseWritten, nil
+		return codexLeaseWritten, host, nil
 	}
-	return codexLeaseConflict, nil
+	return codexLeaseConflict, codexhostpool.Host{}, nil
 }
 
 func codexLeaseHeldByOther(raw, caller, launchID string, now time.Time) bool {
