@@ -869,15 +869,25 @@ Use this when Tom must see and drive the thread on his phone.
    a thread was started. `report`, `resume` and `create` print one
    `thread-launch.v1` line on stdout with outcome `blocked` and code
    `no_host_selected`, print the choice on stderr after that action's
-   sentence, and exit 1. `report` has no sentence. `resume` says resume is
-   not built yet. `create` says this command does not create a host. Neither
-   resumes nor creates. A running host is chosen when its reported agentd is
-   at least 2.102.0, even when its pod revision is not the current template
-   revision. The choice's `outdated` field says that, and it does not change
-   `ready`. `--host` never calls select.
+   sentence, and exit 1. A failed write to stderr does not drop that line.
+   `report` has no sentence. `resume` says resume is not built yet.
+   `create` says this command does not create a host. A selector refusal
+   (`login_required`, `caller_cannot_create`, `at_capacity`, `host_busy`)
+   and an action this client does not know print the same blocked line,
+   after the code and sentence on stderr, and exit 1. A select call the
+   API refuses (401, 403, 409, 422, 429, or another non-200 that is not
+   404 or 5xx) or a 200 that cannot be decoded prints no result line and
+   keeps that call's exit. Neither resumes nor creates. A running host is
+   chosen when its present pod reported the status and its reported agentd
+   is at least 2.102.0, even when its pod revision is not the current
+   template revision. The choice's `outdated` field says that. When a
+   lease was written, it is taken from that lease's read, and it does not
+   change `ready`. `--host` never calls select.
    `agent-run codex-host select --repo <name> [--profile <name>] [--check]`
-   prints the same choice, including `outdated`, and exits 0 for any action.
-   `--check` writes nothing.
+   prints the same choice, including `outdated`. It prints `use`, `resume`,
+   `create` and `report`; it does not carry resume or create out, and it
+   prints no `thread-launch.v1` line. It exits 0 for any action.
+   `--check` writes nothing. A `use` without `--check` still writes the lease.
    `agent-run --agent codex --interactive` calls select before create, and
    creates a host only when the choice is `create`.
 

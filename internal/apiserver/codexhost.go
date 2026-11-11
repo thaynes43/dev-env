@@ -132,7 +132,7 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 				break
 			}
 		}
-		wrote, err := s.leaseCodexHost(ctx, codexLeaseTarget{
+		wrote, leased, err := s.leaseCodexHost(ctx, codexLeaseTarget{
 			name: res.Host, uid: uid, caller: who, profile: asked, repo: req.Repo, tmpl: tmpl,
 		})
 		if err != nil {
@@ -140,6 +140,11 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 		}
 		switch wrote {
 		case codexLeaseWritten:
+			// The lease read is a later snapshot than the list. outdated
+			// follows the pod that was leased (finding 4).
+			if leased.Phase == codexhostpool.PhaseRunning {
+				res.Outdated = !leased.RevisionCurrent
+			}
 			s.logCodexHostSelect(c, res, check)
 			return http.StatusOK, res, nil
 		case codexLeaseBusy:
@@ -295,7 +300,7 @@ func (s *Server) codexHostFacts(ctx context.Context, tmpl *templates.Templates) 
 		if err != nil {
 			return nil, "", err
 		}
-		hosts = append(hosts, codexHostFrom(sess, pod, tmpl, off))
+		hosts = append(hosts, codexHostFrom(sess, pod, tmpl, off, now))
 		if !codexLoginReading(sess, pod, now) {
 			continue
 		}
@@ -353,6 +358,22 @@ func codexHeartbeatFresh(at *metav1.Time, now time.Time) bool {
 	return now.Sub(at.Time) <= authority.DefaultHeartbeatStaleAfter
 }
 
+// codexPodReported is ruling O. The session status keeps the previous pod's
+// agentd line, remote state and repository report until this pod's heartbeat
+// is accepted. Those facts count only when lastHeartbeat was accepted for the
+// pod that is present: it is set, not after now, inside the staleness bound
+// codexHeartbeatFresh already uses, and not earlier than pod.status.startTime.
+// A pod with no start time has not reported.
+func codexPodReported(sess *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) bool {
+	if pod == nil || pod.Status.StartTime == nil || sess == nil || sess.Status.Agent == nil {
+		return false
+	}
+	if !codexHeartbeatFresh(sess.Status.Agent.LastHeartbeat, now) {
+		return false
+	}
+	return !sess.Status.Agent.LastHeartbeat.Time.Before(pod.Status.StartTime.Time)
+}
+
 func (s *Server) codexHostPod(ctx context.Context, sess *v1alpha1.AgentSession) (*corev1.Pod, error) {
 	name := sess.Status.PodName
 	if name == "" {
@@ -372,7 +393,7 @@ func (s *Server) codexHostPod(ctx context.Context, sess *v1alpha1.AgentSession) 
 	return &pod, nil
 }
 
-func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates.Templates, handsOff bool) codexhostpool.Host {
+func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates.Templates, handsOff bool, now time.Time) codexhostpool.Host {
 	h := codexhostpool.Host{
 		Name:            sess.Name,
 		UID:             string(sess.UID),
@@ -417,6 +438,7 @@ func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates
 			h.LastActivity = sess.Status.Agent.LastActivity.Time
 		}
 	}
+	h.Reported = codexPodReported(sess, pod, now)
 	if sess.Status.SuspendedAt != nil {
 		h.SuspendedAt = sess.Status.SuspendedAt.Time
 	}
@@ -482,33 +504,33 @@ type codexLeaseTarget struct {
 	tmpl                     *templates.Templates
 }
 
-func (s *Server) leaseCodexHost(ctx context.Context, want codexLeaseTarget) (codexLeaseResult, error) {
+func (s *Server) leaseCodexHost(ctx context.Context, want codexLeaseTarget) (codexLeaseResult, codexhostpool.Host, error) {
 	key := types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: want.name}
 	for range codexHostLeaseTries {
 		var sess v1alpha1.AgentSession
 		if err := s.Live.Get(ctx, key, &sess); err != nil {
 			if apierrors.IsNotFound(err) {
-				return codexLeaseBusy, nil
+				return codexLeaseBusy, codexhostpool.Host{}, nil
 			}
-			return 0, err
+			return 0, codexhostpool.Host{}, err
 		}
 		if string(sess.UID) != want.uid {
-			return codexLeaseBusy, nil
+			return codexLeaseBusy, codexhostpool.Host{}, nil
 		}
 		if !sess.DeletionTimestamp.IsZero() || s.codexHostBlocked(&sess) {
-			return codexLeaseBusy, nil
+			return codexLeaseBusy, codexhostpool.Host{}, nil
 		}
 		pod, err := s.codexHostPod(ctx, &sess)
 		if err != nil {
-			return 0, err
+			return 0, codexhostpool.Host{}, err
 		}
 		now := s.now()
-		host := codexHostFrom(&sess, pod, want.tmpl, s.codexHostHandsOff(sess.Name))
+		host := codexHostFrom(&sess, pod, want.tmpl, s.codexHostHandsOff(sess.Name), now)
 		if !codexhostpool.Suitable(host, want.caller, want.profile, want.repo, now) {
-			return codexLeaseBusy, nil
+			return codexLeaseBusy, host, nil
 		}
 		if codexLeaseHeldByOther(sess.Annotations[codexHostLeaseAnnotation], want.caller.Name, want.caller.LaunchID, now) {
-			return codexLeaseBusy, nil
+			return codexLeaseBusy, host, nil
 		}
 		orig := sess.DeepCopy()
 		if sess.Annotations == nil {
@@ -520,11 +542,11 @@ func (s *Server) leaseCodexHost(ctx context.Context, want codexLeaseTarget) (cod
 			continue
 		}
 		if err != nil {
-			return 0, err
+			return 0, codexhostpool.Host{}, err
 		}
-		return codexLeaseWritten, nil
+		return codexLeaseWritten, host, nil
 	}
-	return codexLeaseConflict, nil
+	return codexLeaseConflict, codexhostpool.Host{}, nil
 }
 
 func codexLeaseHeldByOther(raw, caller, launchID string, now time.Time) bool {

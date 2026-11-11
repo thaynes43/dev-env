@@ -49,6 +49,7 @@ type CodexHostSkip struct {
 
 // CodexHostChoice is the section 5 object. Outdated is true when the chosen
 // host is running and its pod revision is not the current template revision.
+// When a lease was written, that revision is the one read with the lease.
 // It does not change Ready, which is true exactly when Action is use.
 type CodexHostChoice struct {
 	Host     string          `json:"host,omitempty"`

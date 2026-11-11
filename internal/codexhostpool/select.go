@@ -135,10 +135,17 @@ type Host struct {
 	// Agentd is status.agent.agentd, the line agentd reports. Empty when
 	// the session has not reported one.
 	Agentd string
+	// Reported is true when the present pod reported this status. The
+	// agentd line, the remote state and the repository readiness are
+	// status fields, and they keep the previous pod's values until this
+	// pod's heartbeat is accepted. A running host without it is not
+	// suitable. A suspended host is not held to it.
+	Reported bool
 	// RevisionCurrent is true when the pod's revision label equals the
 	// current template revision and that revision is not empty. It does
 	// not decide suitability. The answer's outdated is its negation for
-	// a chosen running host.
+	// a chosen running host. When a lease is written, that bit is taken
+	// from the read that validated the lease.
 	RevisionCurrent bool
 	SuspendedBy     string
 	SuspendedAt     time.Time
@@ -336,6 +343,13 @@ func judge(h Host, c Caller, requested, repo string, now time.Time) (reason stri
 		if h.OperatingMode != ModeRunning || !h.PodReady || h.HoldPod {
 			return ReasonNotRunning, false, false
 		}
+		// Ruling O. The remote state, the version and the lease are
+		// status from the last accepted heartbeat. They count only when
+		// the present pod reported them. A suspended host does not reach
+		// this line. The host still fills the cell.
+		if !h.Reported {
+			return ReasonRemoteUnavailable, false, false
+		}
 		if why := runningRemoteReason(h.RemoteState); why != "" {
 			return why, false, false
 		}
@@ -469,8 +483,10 @@ func agentdNewEnough(line string) bool {
 // parseReportedAgentd accepts only the line version.Info.String("agentd")
 // writes: "agentd v<major>.<minor>.<patch> (commit <commit>, <go>, <platform>)".
 // Each component is a decimal integer with no leading zero. The commit, the
-// Go version and the platform are non-empty and contain no space. A prefix,
-// a suffix, a leading zero or a space anywhere in those tokens is rejected.
+// Go version and the platform are non-empty printable ASCII (0x21 to 0x7E)
+// with no comma and no parenthesis. A closing parenthesis anywhere before
+// the final one is rejected with the line's shape, so a token cannot hold
+// one. A prefix, a suffix or a leading zero is rejected.
 func parseReportedAgentd(line string) (major, minor, patch int, ok bool) {
 	const head = "agentd v"
 	rest, found := strings.CutPrefix(line, head)
@@ -489,11 +505,30 @@ func parseReportedAgentd(line string) (major, minor, patch int, ok bool) {
 		return 0, 0, 0, false
 	}
 	for _, p := range parts {
-		if p == "" || strings.ContainsAny(p, " \t,") {
+		if !metadataToken(p) {
 			return 0, 0, 0, false
 		}
 	}
 	return parseStrictTriple(ver)
+}
+
+// metadataToken is one parenthetical token: non-empty, and every byte is
+// printable ASCII from 0x21 to 0x7E, with no comma and no opening
+// parenthesis. A closing parenthesis is rejected by the shape check above.
+func metadataToken(p string) bool {
+	if p == "" {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c < 0x21 || c > 0x7E {
+			return false
+		}
+		if c == ',' || c == '(' {
+			return false
+		}
+	}
+	return true
 }
 
 func parseStrictTriple(s string) (major, minor, patch int, ok bool) {

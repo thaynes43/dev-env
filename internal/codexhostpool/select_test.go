@@ -46,6 +46,7 @@ func runningPaired(name string) Host {
 		SpecRepo:        "dev-env",
 		RemoteState:     StatePairCodeIssued,
 		Agentd:          reportedAgentd(MinAgentdVersion),
+		Reported:        true,
 		RevisionCurrent: true,
 		LastActivity:    evening,
 	}
@@ -768,7 +769,7 @@ func section3Hosts() []Host {
 			Agent: AgentCodex, Mode: ModeRemote,
 			Phase: PhaseRunning, OperatingMode: ModeRunning, PodReady: true,
 			ResolvedProfile: "dev", ReadyRepos: []string{"dev-env"}, SpecRepo: "dev-env",
-			RemoteState: StatePairCodeIssued, Agentd: reportedAgentd("2.101.0"), RevisionCurrent: true,
+			RemoteState: StatePairCodeIssued, Agentd: reportedAgentd("2.101.0"), Reported: true, RevisionCurrent: true,
 			LastActivity: act("2026-11-10T23:36:41Z"),
 			Parent:       "dev-env-system/dev-env-human",
 		},
@@ -777,7 +778,7 @@ func section3Hosts() []Host {
 			Agent: AgentCodex, Mode: ModeRemote,
 			Phase: PhaseRunning, OperatingMode: ModeRunning, PodReady: true,
 			ResolvedProfile: "full", SpecRepo: "haynes-ops",
-			HandsOff: true, RemoteState: StatePairCodeIssued, Agentd: reportedAgentd("2.89.0"), RevisionCurrent: false,
+			HandsOff: true, RemoteState: StatePairCodeIssued, Agentd: reportedAgentd("2.89.0"), Reported: true, RevisionCurrent: false,
 			LastActivity: act("2026-11-10T23:37:17Z"),
 			Parent:       "dev/dev-env",
 		},
@@ -835,7 +836,9 @@ func TestAgentdMinimum(t *testing.T) {
 		{"exactly the minimum", MinAgentdVersion, ActionUse, true},
 		{"above the minimum", "2.104.0", ActionUse, true},
 		{"one patch above", "2.102.1", ActionUse, true},
+		{"major above the minimum", "3.0.0", ActionUse, true},
 		{"one patch below", "2.101.1", ActionReport, false},
+		{"major below the minimum", "1.999.999", ActionReport, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -924,8 +927,8 @@ func TestSuspendedEligibleIgnoresAgentdVersion(t *testing.T) {
 //
 // <major>, <minor> and <patch> are decimal integers with no leading zero.
 // A zero component is "0". <commit>, <goVersion> and <platform> are
-// non-empty and contain no space. A prefix, a suffix, a leading zero or a
-// space in any of those tokens is rejected.
+// non-empty printable ASCII (0x21 to 0x7E) with no comma and no parenthesis.
+// A prefix, a suffix or a leading zero is rejected.
 func TestParseReportedAgentd(t *testing.T) {
 	const good = "agentd v2.102.0 (commit abcdef012345, go1.27.1, linux/amd64)"
 	maj, min, pat, ok := parseReportedAgentd(good)
@@ -966,9 +969,58 @@ func TestParseReportedAgentd(t *testing.T) {
 		"agentd  v2.102.0 (commit abcdef012345, go1.27.1, linux/amd64)",
 		"agentd v2.102.0(commit abcdef012345, go1.27.1, linux/amd64)",
 		"agentd dev (commit unknown, go1.27.1, linux/amd64)",
+		"agentd v2.102.0 (commit abc\ndef, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit abc\rdef, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit abc\x00def, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit abc\tdef, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit abc\x7fdef, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit abc\u00a0def, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit ab(c, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit ab)c, go1.27.3, linux/amd64)",
+		"agentd v2.102.0 (commit , go1.27.3, linux/amd64)",
 	} {
 		if _, _, _, ok := parseReportedAgentd(line); ok {
 			t.Errorf("accepted %q", line)
 		}
+	}
+}
+
+// A running host whose present pod has not reported still fills the cell.
+// A suspended host is not held to that fact. Safety reasons are recorded
+// before it.
+func TestUnreportedRunningHost(t *testing.T) {
+	h := runningPaired("stale")
+	h.Reported = false
+	h.Agentd = reportedAgentd("2.104.0")
+	in := baseInput(clientCaller(), []Host{h})
+	res := Select(in)
+	checkResult(t, res, ActionReport, "stale", ReasonRemoteUnavailable, false)
+	if Suitable(h, clientCaller(), "dev", "dev-env", evening) {
+		t.Fatal("an unreported running host was suitable")
+	}
+
+	asleep := suspendedPaired("asleep", evening.Add(-time.Hour))
+	asleep.Reported = false
+	res = Select(baseInput(clientCaller(), []Host{asleep}))
+	checkResult(t, res, ActionResume, "asleep", "", false)
+
+	for _, tc := range []struct {
+		name   string
+		mark   func(*Host)
+		reason string
+	}{
+		{"hands-off", func(h *Host) { h.HandsOff = true }, ReasonProtected},
+		{"protected", func(h *Host) { h.ProtectedAnnotation = true }, ReasonProtected},
+		{"rescue", func(h *Host) { h.RescueFailed = true }, ReasonRescueBlocked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kept := runningPaired("kept")
+			kept.Reported = false
+			tc.mark(&kept)
+			open := runningPaired("open")
+			res := Select(baseInput(clientCaller(), []Host{kept, open}))
+			checkResult(t, res, ActionUse, "open", "", true)
+			checkSkipped(t, res, map[string]string{"kept": tc.reason})
+		})
 	}
 }
