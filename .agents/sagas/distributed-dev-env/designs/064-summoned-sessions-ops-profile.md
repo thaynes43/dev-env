@@ -476,7 +476,7 @@ written by the operator leader unless a row says otherwise.
 
 | State | Record | Holds | Counted in |
 |---|---|---|---|
-| Queued | created; condition `SummonAdmitted=False` with its reason; `status.summon.admittedAt` absent | nothing: no pod, no latch | its caller's `queued`, unless it is an escalation |
+| Queued | created; condition `SummonAdmitted=False` with its reason; `status.summon.admittedAt` absent | nothing: no pod, no latch | its caller's `queued`, unless it is urgent (a remediation or an escalation) |
 | Admitted | `status.summon.admittedAt`, set once | one reservation: its lane, if single-flight, and one slot in its pool | its pool and its lane |
 | Launched | the executor latch: an attempted pod is recorded before the create | the same reservation | the same |
 | Terminal | `status.outcome` terminal and `status.summon.closed` (`at`, `source` report or unreported, `reason`), written in one status write | the reservation until `closed.released` is true | nothing once released |
@@ -489,16 +489,21 @@ nothing else counts toward `escalations`. So an escalation waiting for Tom,
 for up to 72 hours, never holds back a remediation (C2), and a busy
 remediation never holds back an escalation.
 
-**The queue.** `limits.queued` counts the caller's Queued sessions of every
-entry except its escalation entry, apart from the pools (F5). A create past it
-gets 429 `summon queue full`, logged as an `ops-event` line, and the client
-exits 2 (refused). Default 4, range 0 to 16: this design's own number, not
-from v1 or a record. An escalation is never refused for the queue, because a
-refused escalation would be silent (R-01 F-04): it is queued only behind its
-pool, `createsPerHour` alone bounds how many arrive, and each one queued over
-15 minutes pages (6.8). A refused remediation is not silent either: the
-remediations queued ahead of it close at their `maxHold` and file
-escalations (6.7).
+**The queue.** `limits.queued` counts the caller's Queued sessions of
+priority `normal` and `bulk` (upgrades and curation), apart from the pools
+(F5). A create of that priority past it gets 429 `summon queue full`, logged
+as an `ops-event` line, and the client exits 2 (refused). Default 4, range 0
+to 16: this design's own number, not from v1 or a record. An `urgent`
+session, a remediation or an escalation, is never refused for the queue. A
+refused urgent create would be silent: no session, no escalation and no page
+for its alert (R-01 F-04), where v1 queues every order. `createsPerHour`
+bounds how many urgent creates arrive; a Queued escalation pages after 15
+minutes (6.8), and a Queued remediation closes at its `maxHold` and files its
+own escalation (6.7). The one refusal left for an urgent create is
+`createsPerHour`, the storm limit DESIGN-001 3.7 decided; the responder keeps
+its own collapse, cooldown and page cap as the second layer, and the operator
+logs the refusal. A refused upgrade or curation run pages in neither v1 nor
+v2 while it waits; its caller sees exit 2.
 
 **The create ledger** (`createsPerHour`). One operator-owned ConfigMap in
 `dev-env-system` (for example `dev-env-summon-creates`), one key per caller
@@ -787,7 +792,7 @@ not use the escalation entry's prefix: it is named under `esc-rem-` (6.6).
 | `summon.serviceAccount` | `<namespace>/<name>`, MaxLength 128; namespace not `dev-agents`, `dev-env-system` or `dev-tools`; `metadata.name` equals it with `/` replaced by `.` |
 | `summon.limits.concurrent` | 1 to 4. Counts admitted, unreleased sessions of every entry except the escalation entry (5.9) |
 | `summon.limits.escalations` | 1 to 4, required when the policy has an escalation entry, absent otherwise. Counts admitted, unreleased escalations, the platform's filings included (5.9) |
-| `summon.limits.queued` | 0 to 16, default 4: this design's default. Counts Queued sessions of every entry except the escalation entry; an escalation is never refused for it (5.9) |
+| `summon.limits.queued` | 0 to 16, default 4: this design's default. Counts Queued sessions of priority `normal` and `bulk`; an `urgent` session (remediation or escalation) is never refused for it (5.9) |
 | `summon.limits.createsPerHour` | 1 to 30 |
 | `summon.sessions` | 1 to 6 entries; `(kind, lane)` unique |
 | `kind` | `task` or `remote` |
@@ -859,8 +864,9 @@ not use the escalation entry's prefix: it is named under `esc-rem-` (6.6).
 - **Limits, from records a caller cannot remove (Q-19), by 5.9's model.** A
   summoning caller has no DELETE route and no RBAC in `dev-agents` or
   `dev-env-system`, so it can remove neither its sessions nor the ledger. Past
-  `createsPerHour` the create gets 429; past `queued`, 429; past a pool, the
-  create is Queued (6.7). Until #741 is on there is no queue: #738 alone
+  `createsPerHour` the create gets 429; past `queued`, an upgrade or curation
+  create gets 429 (an urgent one never does); past a pool, the create is
+  Queued (6.7). Until #741 is on there is no queue: #738 alone
   refuses with 429 a create that would exceed its pool, counting the caller's
   unfinished summoned sessions per pool. Every refusal is logged.
 - **A summoned session cannot create a session (Q-19).** On `POST
@@ -1096,7 +1102,8 @@ Queued; the controller builds no pod until it is admitted. The condition
 `SummonAdmitted=False` names the reason: `LaneBusy`, `PoolBusy` (its pool,
 `concurrent` or `escalations`, is full) or `QuotaHold` (6.9). `agent-run show`
 and the portal show the reason. A Queued session holds nothing; a Queued
-session other than an escalation counts toward `queued` (5.9).
+upgrade or curation session counts toward `queued`, and a Queued remediation
+or escalation counts toward nothing but `createsPerHour` (5.9).
 
 **Hold bounds (C2).** A Queued session past its entry's `maxHold` closes by
 `onUnreported` with reason `hold-expired` (`quota-hold-expired` if the hold
@@ -1178,8 +1185,10 @@ it reads these fields; it does not re-implement them.
 **Proof, in #741's contract:** 5.9's list, and F5's: with `concurrent: 1`,
 one running and two Queued, the running one ends and the oldest Queued is
 admitted while the next stays Queued; the same with a cap of two; a leader
-restart between the two; two API creates at once. Also: a remediation Queued
-past `maxHold` files its escalation; two open escalations never hold a
+restart between the two; two API creates at once. Also: a remediation or an
+escalation created while the queue already holds `queued` upgrades or
+curation runs is Queued, never refused (the advisory review's finding on
+`5d92c67a`); a remediation Queued past `maxHold` files its escalation; two open escalations never hold a
 remediation; a held escalation pages at 15 minutes; a continuously
 heartbeating agentd reporting `interrupted` or `failed` with no task result
 closes once (F4); a pod that fails before an agent starts closes
@@ -1822,8 +1831,9 @@ ADR-025 supersedes these parts of DESIGN-001 (Accepted with ADR-001):
    (Q-16); failures page as v1's do, in every lane (6.8); the operator's
    Pushover egress goes (5.5).
 7. 3.7 "Storm limits" and "Escalations are not single-flight": past a pool
-   a create is queued, not refused; past `createsPerHour` or the queue bound
-   it is refused; and an escalation starts within its caller's `escalations`
+   a create is queued, not refused; past `createsPerHour` it is refused, and
+   past the queue bound an upgrade or curation create is refused (never a
+   remediation or an escalation); and an escalation starts within its caller's `escalations`
    pool and `createsPerHour`, not its `concurrent` limit (5.9, 6.4, 6.7).
 8. 3.7 "Retention": tasks follow ADR-020; remote sessions follow v2's timers
    (Q-12).
@@ -1842,8 +1852,9 @@ Found wrong or stale while reading (for the coordinator):
 - **Item 738's Tested line** refuses "a create past concurrent". DESIGN-001
   3.7 queues an escalation and pages after 15 minutes, and item 741 says a
   create is "never refused only because the lane is busy". This design
-  queues past a pool once #741 is on and refuses only past `createsPerHour`
-  or the queue bound (5.9, 6.4, 6.7).
+  queues past a pool once #741 is on and refuses only past `createsPerHour`,
+  or past the queue bound for an upgrade or curation create (5.9, 6.4,
+  6.7).
 - **Item 734's reuse list** says only the decision path writes
   `status.outcome`. True, and that path runs only for Codex tasks with a
   workspace behind a switch that is off live, so nothing writes it live today

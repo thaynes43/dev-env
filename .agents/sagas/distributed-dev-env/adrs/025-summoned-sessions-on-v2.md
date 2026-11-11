@@ -123,10 +123,11 @@ DESIGN-001 left open.
    nothing until the operator leader admits it. Admitted sessions count in
    one of two pools: `concurrent` for every entry but the escalation entry,
    `escalations` for escalations, so an open escalation never holds a
-   remediation. Queued sessions other than escalations count toward their
-   own bound, `queued`; past it, or past `createsPerHour`, a create is refused
-   with 429. An escalation is never refused for the queue, because a refused
-   escalation would be silent; it pages once it has waited 15 minutes. A
+   remediation. Queued upgrades and curation runs count toward their own
+   bound, `queued`; past it a create of theirs is refused with 429. A
+   remediation or an escalation is never refused for the queue, because a
+   refused urgent create would be silent; only `createsPerHour`, DESIGN-001's
+   storm limit, refuses one. An escalation queued over 15 minutes pages; a
    remediation queued past its `maxHold` closes as `escalated` and files its
    escalation.
 10. **Retention and timers.** Task sessions follow ADR-020 (Tom, 2026-11-10:
