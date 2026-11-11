@@ -183,7 +183,10 @@ live in the session namespaces the operator reconciles (`dev-agents`).
 
 Parent notes stay InboxMessage records. [DESIGN-062](062-reaching-a-parent.md)
 section 10 adds two facts and no new kind or grace: a caller party counts as
-absent, and a stored reply counts as the note's ack.
+absent, and a stored reply counts as the note's ack. The 2026-11-11 note in
+that section narrows the second fact: the reply counts as the ack only when
+the recipient is the caller account, or the parent session is gone. A note to
+a session parent is kept while that parent session exists.
 
 The ack rule needs both halves. A message that left the live store some other
 way, for example by Tom's manual recovery (DESIGN-010), has no archive entry, so

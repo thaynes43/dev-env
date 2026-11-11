@@ -608,8 +608,9 @@ For these notes, ADR-023 adds two release facts and leaves the 30 days:
   absent for the recipient or sender test, so a Meatball note does not wait
   forever on a session object that will never exist.
 - A stored reply counts as the ack of the note. The note follows the
-  existing grace once the child session is gone, including when the parent
-  session is still live. The reply is an InboxMessage under the same rule.
+  existing grace once the child session is gone. The 2026-11-11 note below
+  narrows that sentence: while a session parent exists the note is kept.
+  The reply is an InboxMessage under the same rule.
   A caller sender counts as absent, so a Meatball reply follows that grace
   once the child is gone. A session sender keeps the reply while that parent
   session exists: the archive event can record the sender only as absent, and
