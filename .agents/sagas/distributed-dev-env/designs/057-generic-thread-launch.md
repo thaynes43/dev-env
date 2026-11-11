@@ -476,47 +476,85 @@ nobody sends keys, and an authorized person still decides those.
 `$CODEX_HOME/config.toml` (the help text names `~/.codex/config.toml`; on a
 host that directory is `Settings.CodexHome`). There is no `codex trust`
 subcommand, and `--dangerously-bypass-hook-trust` is hook trust, not this
-prompt. `codex app-server generate-json-schema --experimental` does not name
-the key: its `Config` object sets `additionalProperties: true` and has no
-`projects` field. The 0.160.1 binary does. Its onboarding writer
-(`tui/src/onboarding/onboarding_screen.rs`, the trace `tui-project-trust-write`)
-persists `projects."<absolute path>".trust_level`. `ProjectConfig` has that one
-field, and `TrustLevel` is `trusted` or `untrusted`. The same binary's folder
-prompt says the decision is saved. The entry Codex itself writes is:
+prompt. The 0.160.1 binary's onboarding writer persists
+`projects."<absolute path>".trust_level`. `ProjectConfig` has that one field,
+and `TrustLevel` is `trusted` or `untrusted`. The entry Codex itself writes is:
 
 ```toml
 [projects."/home/dev/repos/<repo>"]
 trust_level = "trusted"
 ```
 
-A later rewrite of `config.toml` by Codex keeps a key it owns. A sidecar file
-would not.
+**How it is written.** Not by editing the file. A second writer on
+`config.toml`, and a hand-written TOML scan, can drop a concurrent save or
+another folder's entry. agentd calls the host daemon's own writer,
+`config/value/write`, on the peer-checked control socket, the same way it
+reads threads. `codex app-server generate-json-schema` for codex-cli 0.160.1
+(no `--experimental`, and no client, daemon or model) includes that method.
+`ConfigValueWriteParams` requires `keyPath` (string), `value` (any JSON) and
+`mergeStrategy` (`replace` or `upsert`). `expectedVersion` is an optional
+string or null, with no description in the schema. `filePath` is optional and
+defaults to the user's `config.toml` when omitted. agentd omits it, so the
+write uses that file. `Config` still has `additionalProperties: true` and
+does not name `projects`. `keyPath` is not limited to the named fields. The same version's key-path
+parser keeps a double-quoted segment whole, so
+`projects."<absolute path>".trust_level` is one path key, and the value
+`"trusted"` is a valid JSON string.
+
+The schema does not describe `expectedVersion`. Codex 0.160.1's config writer
+does: when the field is set, it is compared to the active user layer's version.
+That version is `sha256:` and 64 lowercase hex digits, the hash of the layer,
+and `config/read` with `includeLayers` true returns it on the layer whose
+`name.type` is `user`. A mismatch is refused before the edit is applied:
+JSON-RPC code -32600, message `Configuration was modified since last read.
+Fetch latest version and retry.`, and `data.config_write_error_code`
+`configVersionConflict`. Null or omitted skips the check, so agentd always
+sends the version it just read when a user layer exists. The response is
+`ConfigWriteResponse`: `filePath`, `status` (`ok` or `okOverridden`) and
+`version`. `ok` is the write we asked for. `okOverridden` means a higher layer
+replaced the effective value.
 
 **Who writes it.** agentd, inside `thread start`'s preflight, after the same
 host, pairing and cwd checks the launch already makes, and before the wrapper
-runs. The wrapper does not: it cannot see which folders the platform
-bootstrapped, its contract is to start one client and never approve a folder,
-and a status pass must not run it. The write is configuration, never keystrokes
-into a client. `thread status` does not write trust.
+runs. It reads the user-layer version, then writes with `mergeStrategy`
+`replace` and that `expectedVersion`. A version conflict is read again and
+retried at most three times, then refused. A folder that is already
+`trusted` is left untouched. The wrapper does not write trust: it cannot see
+which folders the platform bootstrapped, its contract is to start one client
+and never approve a folder, and a status pass must not run it. The write is
+one configuration call, never keystrokes into a client and never a lock file
+beside `config.toml`. `thread status` does not write trust.
 
-**What qualifies.** Only the resolved path of one repository the platform
-bootstrapped for that session: `~/repos/<repo>`, where `<repo>` is the launch's
-repository name (the request's, otherwise the host's). The path is absolute and
-clean, no component is a symlink, `EvalSymlinks` returns that same path, and
-the directory is a Git repository whose toplevel is that path. Its `.git` is a
-real directory there, not a file and not a symlink. Nothing a handoff names.
-Nothing outside `~/repos`. Nothing above that repository root, and not a
-subdirectory of it.
+**What a trusted folder enables.** The repository's own `.codex/config.toml`,
+rules and project MCP servers load without a question. That is the decision
+Tom ruled on. It does not add a host right the thread did not already have,
+and it is not blanket approval of project hooks.
 
-**When it does not.** A folder that does not qualify stops the launch at once
-with `folder_not_qualified` (outcome `failed`, exit 1), before the wrapper and
-before the wait. A `config.toml` that cannot be parsed, is not a regular file,
-or holds `projects` in a shape that cannot be updated without rewriting other
-keys, stops the launch with `codex_config_invalid` and the file is left byte
-for byte as it was. A config that already trusts the folder is left untouched.
-An update changes only that one entry: a missing folder is appended as its own
-table, and an existing table keeps every other line. Other keys and other
-folders stay byte for byte.
+**What qualifies.** The repository's name is in this session's own project
+bootstrap record on the host: `~/.agentd/boot.json` field `projectBootstrap`,
+the value `CollectStatus` copies into the status it reports. The repository
+entry's state is `Ready`, which means the platform cloned it and the refresh
+left it usable. `Preserved` is not that state, and neither is a name the
+record does not list. The catalog's own state is not the test: a `Partial`
+catalog can still hold a `Ready` repository. The path checks stay. The path
+is the launch's repository (`--repo`, otherwise the host's), absolute and
+clean, exactly `~/repos/<repo>`, no component is a symlink, `EvalSymlinks`
+returns that same path, and the directory is a Git repository whose toplevel
+is that path. Its `.git` is a real directory there, not a file and not a
+symlink. Nothing a handoff names. Nothing outside `~/repos`. Nothing above
+that repository root, and not a subdirectory of it.
+
+**When it does not.** A `--repo` that is not in that record as `Ready`, or a
+record that cannot be read, stops the launch at once with
+`folder_not_qualified` (outcome `failed`, exit 1), before any config is read,
+before the wrapper and before the wait. Two codes cover the write, and each
+message is true. `codex_config_invalid` means nothing changed: the private
+host refused before any call, the daemon's read failed, or the write was
+rejected, including a version conflict after three retries. The message
+starts `Nothing changed:`. `codex_trust_unconfirmed` means trust may have been
+written: the write was sent and the answer was not a rejection (the connection
+died after the request, the result was not `ok`). The message starts
+`Trust may have been written:`. Neither code starts a client.
 
 **Out of this section.** Claude's and Cursor's prompts. Pairing. Any other
 Codex setting. A haynes-ops change. Turning a flag on.
@@ -526,12 +564,6 @@ did not itself add, on a public host. A private Codex host
 (`AGENTD_ENABLE_PRIVATE_CODEX_HOST`) refuses a trusted root outside the catalog
 project roots it owns (`~/codex/<project>`). That check runs on a host status
 read, not only when the config is rewritten. This launch therefore does not
-write on a private host: it stops with `codex_config_invalid` and leaves
-`config.toml` unchanged. The private composer is not changed.
-
-The read and the write hold an exclusive flock on `config.toml.lock` in the
-Codex home. If that lock is busy, or the file changed after it was read, the
-launch stops with `codex_config_invalid` and the file is left as it was. Two
-launches cannot drop each other's folder entry, and a Codex rewrite during the
-edit is not overwritten.
+write on a private host: it stops with `codex_config_invalid` before any
+config call, and nothing changed. The private composer is not changed.
 

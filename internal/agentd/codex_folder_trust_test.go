@@ -1,18 +1,29 @@
 package agentd
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
-	"github.com/pelletier/go-toml/v2"
+	"github.com/gorilla/websocket"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/threadlaunch"
 )
+
+const trustLayerVersion = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func gitInitRepo(t *testing.T, dir string) {
 	t.Helper()
@@ -36,37 +47,384 @@ func gitInitRepo(t *testing.T, dir string) {
 	}
 }
 
-func configBytes(t *testing.T, s Settings) []byte {
+func mustStat(path string) error {
+	_, err := os.Stat(path)
+	return err
+}
+
+// trustWriteResult is a ConfigWriteResponse: the fields the 0.160.1 schema requires.
+func trustWriteResult() map[string]any {
+	return map[string]any{
+		"filePath": "/home/dev/.codex/config.toml",
+		"status":   "ok",
+		"version":  trustLayerVersion,
+	}
+}
+
+func trustReadResult(folder string, trusted bool) map[string]any {
+	config := map[string]any{}
+	if trusted {
+		config["projects"] = map[string]any{folder: map[string]any{"trust_level": "trusted"}}
+	}
+	return map[string]any{
+		"config":  config,
+		"origins": map[string]any{},
+		"layers": []any{map[string]any{
+			"name":    map[string]any{"type": "user", "file": "/home/dev/.codex/config.toml", "profile": nil},
+			"version": trustLayerVersion,
+			"config":  map[string]any{},
+		}},
+	}
+}
+
+type trustReply struct {
+	result any
+	fault  map[string]any
+	drop   bool
+}
+
+// trustDaemon is an in-process app-server. It answers initialize itself and
+// asks reply for every other request. No client, account or model is started.
+func trustDaemon(t *testing.T, reply func(method string, params map[string]any) trustReply) (string, func() []map[string]any) {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(s.CodexHome, "config.toml"))
+	home, err := os.MkdirTemp("/tmp", "trust-rpc-")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return b
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	dir := filepath.Join(home, "app-server-control")
+	if os.Mkdir(dir, 0o700) != nil {
+		t.Fatal("rpc directory")
+	}
+	listener, err := net.Listen("unix", filepath.Join(dir, "app-server-control.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	seen := []map[string]any{}
+	server := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		for {
+			var request struct {
+				ID     *int           `json:"id"`
+				Method string         `json:"method"`
+				Params map[string]any `json:"params"`
+			}
+			if conn.ReadJSON(&request) != nil {
+				return
+			}
+			mu.Lock()
+			seen = append(seen, map[string]any{"method": request.Method, "params": request.Params})
+			mu.Unlock()
+			if request.ID == nil {
+				continue
+			}
+			if request.Method == "initialize" {
+				if conn.WriteJSON(map[string]any{"id": *request.ID, "result": map[string]any{
+					"userAgent": "codex/0.160.1 fixture", "codexHome": home,
+					"platformFamily": "unix", "platformOs": "linux",
+				}}) != nil {
+					return
+				}
+				continue
+			}
+			answer := reply(request.Method, request.Params)
+			if answer.drop {
+				return
+			}
+			body := map[string]any{"id": *request.ID}
+			if answer.fault != nil {
+				body["error"] = answer.fault
+			} else {
+				body["result"] = answer.result
+			}
+			if conn.WriteJSON(body) != nil {
+				return
+			}
+		}
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+	return home, func() []map[string]any {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]map[string]any, len(seen))
+		copy(out, seen)
+		return out
+	}
 }
 
-// A fresh platform repository is trusted, and the launch then proceeds.
+func trustDeps(f *threadFake) codexThreadDeps {
+	d := f.deps()
+	d.daemon = func(Settings) (codexHostProcess, error) {
+		return codexHostProcess{State: "Live", PID: os.Getpid()}, nil
+	}
+	d.remote = func(_ context.Context, _ Settings, pid int) (string, error) {
+		if pid != os.Getpid() {
+			return "", os.ErrInvalid
+		}
+		return "connected", nil
+	}
+	d.trust = writeCodexProjectTrust
+	return d
+}
+
+func countMethod(seen []map[string]any, method string) int {
+	n := 0
+	for _, r := range seen {
+		if r["method"] == method {
+			n++
+		}
+	}
+	return n
+}
+
+func pinnedSchema(t *testing.T, name, digest string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "codex_thread_launch", name+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	if hex.EncodeToString(sum[:]) != digest {
+		t.Fatal("pinned schema changed", name)
+	}
+	var schema map[string]any
+	if json.Unmarshal(raw, &schema) != nil {
+		t.Fatal("schema JSON", name)
+	}
+	return schema
+}
+
+// A repository the bootstrap record names as Ready is trusted through
+// config/value/write, and the launch then proceeds. A second launch sees the
+// folder already trusted and does not write again.
 func TestCodexRepoTrustLaunchProceeds(t *testing.T) {
 	s, sess, cwd := threadHost(t)
+	var trustMu sync.Mutex
+	trusted := false
+	home, seen := trustDaemon(t, func(method string, _ map[string]any) trustReply {
+		switch method {
+		case "config/read":
+			trustMu.Lock()
+			on := trusted
+			trustMu.Unlock()
+			return trustReply{result: trustReadResult(cwd, on)}
+		case "config/value/write":
+			trustMu.Lock()
+			trusted = true
+			trustMu.Unlock()
+			return trustReply{result: trustWriteResult()}
+		}
+		return trustReply{}
+	})
+	s.CodexHome = home
 	f := newThreadFake(cwd)
-	got := launchThread(t, f, s, sess, goodThreadRequest())
+	got := startCodexThread(context.Background(), s, sess, goodThreadRequest(), trustDeps(f))
 	if got.Outcome != apiv1.ThreadResponded || len(f.launches) != 1 {
 		t.Fatalf("got %s/%+v launches %d", got.Outcome, got.Error, len(f.launches))
 	}
-	doc := map[string]any{}
-	if err := toml.Unmarshal(configBytes(t, s), &doc); err != nil {
-		t.Fatal(err)
+	paramsSchema := pinnedSchema(t, "ConfigValueWriteParams", "b9032e35bf64d4628bfc72e22b58b71bbcf754aeb720a86eacb091e0137547c9")
+	responseSchema := pinnedSchema(t, "ConfigWriteResponse", "1d690287d9e8a0c552f664038d3810dfc3903ec8042eb2c0f772856414f59954")
+	var writeParams, readParams map[string]any
+	for _, r := range seen() {
+		switch r["method"] {
+		case "config/value/write":
+			writeParams, _ = r["params"].(map[string]any)
+		case "config/read":
+			if readParams == nil {
+				readParams, _ = r["params"].(map[string]any)
+			}
+		}
 	}
-	projects, _ := doc["projects"].(map[string]any)
-	table, _ := projects[cwd].(map[string]any)
-	if table["trust_level"] != "trusted" || len(projects) != 1 {
-		t.Fatalf("projects %+v", projects)
+	if readParams["includeLayers"] != true || readParams["cwd"] != nil {
+		t.Fatalf("config/read params %v", readParams)
 	}
-	before := configBytes(t, s)
-	again := launchThread(t, newThreadFake(cwd), s, sess, goodThreadRequest())
-	if again.Outcome != apiv1.ThreadResponded || !bytes.Equal(before, configBytes(t, s)) {
-		t.Fatalf("second launch %s changed the trusted config", again.Outcome)
+	for _, key := range paramsSchema["required"].([]any) {
+		if _, ok := writeParams[key.(string)]; !ok {
+			t.Fatalf("write params %v lack required %v", writeParams, key)
+		}
 	}
+	if writeParams["keyPath"] != "projects."+strconvQuote(cwd)+".trust_level" || writeParams["mergeStrategy"] != "replace" || writeParams["value"] != "trusted" || writeParams["expectedVersion"] != trustLayerVersion || writeParams["filePath"] != nil {
+		t.Fatalf("write params %v", writeParams)
+	}
+	strategies := paramsSchema["definitions"].(map[string]any)["MergeStrategy"].(map[string]any)["enum"].([]any)
+	if !containsAny(strategies, writeParams["mergeStrategy"]) {
+		t.Fatalf("mergeStrategy %v not in %v", writeParams["mergeStrategy"], strategies)
+	}
+	wrote := trustWriteResult()
+	for _, key := range responseSchema["required"].([]any) {
+		if _, ok := wrote[key.(string)]; !ok {
+			t.Fatalf("write result %v lacks required %v", wrote, key)
+		}
+	}
+	if wrote["status"] != "ok" {
+		t.Fatalf("status %v", wrote["status"])
+	}
+	againFake := newThreadFake(cwd)
+	again := startCodexThread(context.Background(), s, sess, goodThreadRequest(), trustDeps(againFake))
+	if again.Outcome != apiv1.ThreadResponded || countMethod(seen(), "config/value/write") != 1 {
+		t.Fatalf("second launch %s writes %d", again.Outcome, countMethod(seen(), "config/value/write"))
+	}
+}
+
+func strconvQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func containsAny(list []any, v any) bool {
+	for _, item := range list {
+		if item == v {
+			return true
+		}
+	}
+	return false
+}
+
+// Provenance is the session's boot record, not a Git directory. A repository
+// the record does not name is refused, one it names as Ready is accepted
+// above, and a record that cannot be read is refused. Preserved is not Ready.
+func TestCodexRepoTrustProvenance(t *testing.T) {
+	t.Run("not named", func(t *testing.T) {
+		s, _, _ := threadHost(t)
+		extra := s.ClonePath("extra")
+		gitInitRepo(t, extra)
+		err := ensureCodexRepoTrust(context.Background(), s, os.Getpid(), extra, func(context.Context, Settings, int, string) error {
+			t.Fatal("a repository the record does not name read config")
+			return nil
+		})
+		if !errors.Is(err, errFolderNotQualified) {
+			t.Fatalf("err %v", err)
+		}
+		if _, statErr := os.Stat(filepath.Join(s.CodexHome, "config.toml")); !os.IsNotExist(statErr) {
+			t.Fatalf("config.toml err %v", statErr)
+		}
+	})
+	t.Run("preserved", func(t *testing.T) {
+		s, _, cwd := threadHost(t)
+		rec := bootRecord{BootID: "b1", Boot: protocol.BootReady, ProjectBootstrap: &protocol.ProjectBootstrap{
+			State:        protocol.BootstrapPartial,
+			Repositories: []protocol.ProjectBootstrapRepository{{Name: "dev-env", State: protocol.BootstrapPreserved, Reason: protocol.ReasonWorkingTreeDiffers}},
+		}}
+		if err := writeJSONFile(s.statePath(bootFile), rec); err != nil {
+			t.Fatal(err)
+		}
+		err := ensureCodexRepoTrust(context.Background(), s, os.Getpid(), cwd, func(context.Context, Settings, int, string) error {
+			t.Fatal("a preserved repository read config")
+			return nil
+		})
+		if !errors.Is(err, errFolderNotQualified) {
+			t.Fatalf("err %v", err)
+		}
+	})
+	t.Run("unreadable", func(t *testing.T) {
+		s, _, cwd := threadHost(t)
+		path := s.statePath(bootFile)
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(t.TempDir(), "other.json"), path); err != nil {
+			t.Fatal(err)
+		}
+		err := ensureCodexRepoTrust(context.Background(), s, os.Getpid(), cwd, func(context.Context, Settings, int, string) error {
+			t.Fatal("an unreadable record read config")
+			return nil
+		})
+		if !errors.Is(err, errFolderNotQualified) {
+			t.Fatalf("err %v", err)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		err = ensureCodexRepoTrust(context.Background(), s, os.Getpid(), cwd, func(context.Context, Settings, int, string) error {
+			t.Fatal("invalid JSON read config")
+			return nil
+		})
+		if !errors.Is(err, errFolderNotQualified) {
+			t.Fatalf("invalid JSON err %v", err)
+		}
+	})
+}
+
+// A version conflict is retried and then refused. The rejected writes do not
+// count as a change.
+func TestCodexRepoTrustVersionConflictRefused(t *testing.T) {
+	s, sess, cwd := threadHost(t)
+	home, seen := trustDaemon(t, func(method string, _ map[string]any) trustReply {
+		switch method {
+		case "config/read":
+			return trustReply{result: trustReadResult(cwd, false)}
+		case "config/value/write":
+			return trustReply{fault: map[string]any{
+				"code":    -32600,
+				"message": "Configuration was modified since last read. Fetch latest version and retry.",
+				"data":    map[string]any{"config_write_error_code": "configVersionConflict"},
+			}}
+		}
+		return trustReply{}
+	})
+	s.CodexHome = home
+	f := newThreadFake(cwd)
+	got := startCodexThread(context.Background(), s, sess, goodThreadRequest(), trustDeps(f))
+	if got.Outcome != apiv1.ThreadFailed || got.Error == nil || got.Error.Code != "codex_config_invalid" || got.Error.Message != threadlaunch.Message("codex_config_invalid") || got.TotalMs != 0 || len(f.launches) != 0 {
+		t.Fatalf("got %s/%+v total %d launches %d", got.Outcome, got.Error, got.TotalMs, len(f.launches))
+	}
+	if !strings.HasPrefix(got.Error.Message, "Nothing changed:") {
+		t.Fatalf("message %q", got.Error.Message)
+	}
+	// One attempt plus three retries, each rejected before the edit is applied.
+	if countMethod(seen(), "config/value/write") != codexTrustVersionRetries+1 || countMethod(seen(), "config/read") != codexTrustVersionRetries+1 {
+		t.Fatalf("reads %d writes %d", countMethod(seen(), "config/read"), countMethod(seen(), "config/value/write"))
+	}
+}
+
+// A failure before the write says nothing changed. A failure after the write
+// was sent says trust may have been written.
+func TestCodexRepoTrustWriteErrors(t *testing.T) {
+	t.Run("nothing changed", func(t *testing.T) {
+		s, sess, cwd := threadHost(t)
+		home, seen := trustDaemon(t, func(method string, _ map[string]any) trustReply {
+			if method == "config/read" {
+				return trustReply{fault: map[string]any{"code": -32603, "message": "failed to read configuration layers: fixture"}}
+			}
+			return trustReply{}
+		})
+		s.CodexHome = home
+		f := newThreadFake(cwd)
+		got := startCodexThread(context.Background(), s, sess, goodThreadRequest(), trustDeps(f))
+		if got.Outcome != apiv1.ThreadFailed || got.Error == nil || got.Error.Code != "codex_config_invalid" || got.Error.Message != threadlaunch.Message("codex_config_invalid") || len(f.launches) != 0 || countMethod(seen(), "config/value/write") != 0 {
+			t.Fatalf("got %s/%+v writes %d", got.Outcome, got.Error, countMethod(seen(), "config/value/write"))
+		}
+	})
+	t.Run("trust may have been written", func(t *testing.T) {
+		s, sess, cwd := threadHost(t)
+		home, seen := trustDaemon(t, func(method string, _ map[string]any) trustReply {
+			switch method {
+			case "config/read":
+				return trustReply{result: trustReadResult(cwd, false)}
+			case "config/value/write":
+				return trustReply{drop: true}
+			}
+			return trustReply{}
+		})
+		s.CodexHome = home
+		f := newThreadFake(cwd)
+		got := startCodexThread(context.Background(), s, sess, goodThreadRequest(), trustDeps(f))
+		if got.Outcome != apiv1.ThreadFailed || got.Error == nil || got.Error.Code != "codex_trust_unconfirmed" || got.Error.Message != threadlaunch.Message("codex_trust_unconfirmed") || len(f.launches) != 0 || countMethod(seen(), "config/value/write") != 1 {
+			t.Fatalf("got %s/%+v writes %d", got.Outcome, got.Error, countMethod(seen(), "config/value/write"))
+		}
+		if !strings.HasPrefix(got.Error.Message, "Trust may have been written:") {
+			t.Fatalf("message %q", got.Error.Message)
+		}
+	})
 }
 
 // A path outside the rule stops at once, before the wrapper and before any
@@ -106,109 +464,10 @@ func TestCodexRepoTrustRefusesUnqualified(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			home := t.TempDir()
 			s.CodexHome = filepath.Join(home, ".codex")
-			if err := ensureCodexRepoTrust(context.Background(), s, path); err == nil || !os.IsNotExist(mustStat(filepath.Join(s.CodexHome, "config.toml"))) {
+			if err := ensureCodexRepoTrust(context.Background(), s, 0, path, nil); err == nil || !os.IsNotExist(mustStat(filepath.Join(s.CodexHome, "config.toml"))) {
 				t.Fatalf("path %s err %v", path, err)
 			}
 		})
-	}
-}
-
-func mustStat(path string) error {
-	_, err := os.Stat(path)
-	return err
-}
-
-// An existing config keeps every byte outside the one trust entry.
-func TestCodexRepoTrustPreservesOtherKeys(t *testing.T) {
-	s, _, cwd := threadHost(t)
-	if err := os.MkdirAll(s.CodexHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	other := filepath.Join(s.ReposDir(), "other")
-	original := []byte("# kept\nmodel = \"gpt-6-astra\"\n\n[mcp_servers.fixture]\ncommand = \"keep\"\n\n[projects.\"" + other + "\"]\ntrust_level = \"trusted\"\nextra = \"stay\"\n\n[projects.\"" + cwd + "\"]\ntrust_level = \"untrusted\"\nnote = \"same\"\n")
-	path := filepath.Join(s.CodexHome, "config.toml")
-	if err := os.WriteFile(path, original, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureCodexRepoTrust(context.Background(), s, cwd); err != nil {
-		t.Fatal(err)
-	}
-	want := bytes.Replace(original, []byte("trust_level = \"untrusted\""), []byte("trust_level = \"trusted\""), 1)
-	if got := configBytes(t, s); !bytes.Equal(got, want) {
-		t.Fatalf("got\n%s\nwant\n%s", got, want)
-	}
-
-	fresh := Settings{Home: s.Home, CodexHome: filepath.Join(t.TempDir(), ".codex")}
-	if err := os.MkdirAll(fresh.CodexHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	prefix := []byte("# kept\nmodel = \"gpt-6-astra\"\n\n[projects.\"" + other + "\"]\ntrust_level = \"trusted\"\n")
-	dest := filepath.Join(fresh.CodexHome, "config.toml")
-	if err := os.WriteFile(dest, prefix, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureCodexRepoTrust(context.Background(), fresh, cwd); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(dest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.HasPrefix(got, prefix) {
-		t.Fatalf("append rewrote the prefix\n%s", got)
-	}
-	rest := got[len(prefix):]
-	wantRest := []byte("\n[projects.\"" + cwd + "\"]\ntrust_level = \"trusted\"\n")
-	if !bytes.Equal(rest, wantRest) {
-		t.Fatalf("appended %q", rest)
-	}
-}
-
-// A config that cannot be parsed stops the launch and is left byte for byte.
-func TestCodexRepoTrustInvalidConfigUnchanged(t *testing.T) {
-	s, sess, cwd := threadHost(t)
-	if err := os.MkdirAll(s.CodexHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	original := []byte("model = [\n")
-	path := filepath.Join(s.CodexHome, "config.toml")
-	if err := os.WriteFile(path, original, 0o640); err != nil {
-		t.Fatal(err)
-	}
-	f := newThreadFake(cwd)
-	got := launchThread(t, f, s, sess, goodThreadRequest())
-	if got.Outcome != apiv1.ThreadFailed || got.Error == nil || got.Error.Code != "codex_config_invalid" || got.TotalMs != 0 || len(f.launches) != 0 {
-		t.Fatalf("got %s/%+v total %d launches %d", got.Outcome, got.Error, got.TotalMs, len(f.launches))
-	}
-	if file, err := os.ReadFile(path); err != nil || !bytes.Equal(file, original) {
-		t.Fatalf("config changed: %v %q", err, file)
-	}
-	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o640 {
-		t.Fatalf("mode %+v %v", info, err)
-	}
-
-	shapes := [][]byte{
-		[]byte("projects = \"nope\"\n"),
-		[]byte("[projects]\n\"" + cwd + "\" = \"nope\"\n"),
-		[]byte("model = \"keep\"\nprojects = { \"" + cwd + "\" = { trust_level = \"untrusted\" } }\n"),
-	}
-	for _, shape := range shapes {
-		home := filepath.Join(t.TempDir(), ".codex")
-		if err := os.MkdirAll(home, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		s.CodexHome = home
-		file := filepath.Join(home, "config.toml")
-		if err := os.WriteFile(file, shape, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := ensureCodexRepoTrust(context.Background(), s, cwd); err == nil {
-			t.Fatalf("accepted %q", shape)
-		}
-		if got, err := os.ReadFile(file); err != nil || !bytes.Equal(got, shape) {
-			t.Fatalf("changed %q -> %q (%v)", shape, got, err)
-		}
 	}
 }
 
@@ -216,22 +475,17 @@ func TestCodexRepoTrustInvalidConfigUnchanged(t *testing.T) {
 func TestCodexRepoTrustIgnoresHandoffPath(t *testing.T) {
 	s, sess, cwd := threadHost(t)
 	f := newThreadFake(cwd)
+	d := f.deps()
+	var trusted []string
+	d.trust = func(_ context.Context, _ Settings, _ int, folder string) error {
+		trusted = append(trusted, folder)
+		return nil
+	}
 	req := goodThreadRequest()
 	req.Handoff = "Make a worktree, then summarize the open PRs.\nNotes live in /tmp/not-a-repo."
-	got := launchThread(t, f, s, sess, req)
-	if got.Outcome != apiv1.ThreadResponded {
-		t.Fatalf("got %s/%+v", got.Outcome, got.Error)
-	}
-	doc := map[string]any{}
-	if err := toml.Unmarshal(configBytes(t, s), &doc); err != nil {
-		t.Fatal(err)
-	}
-	projects, _ := doc["projects"].(map[string]any)
-	if _, ok := projects[cwd]; !ok || len(projects) != 1 {
-		t.Fatalf("projects %+v", projects)
-	}
-	if _, ok := projects["/tmp/not-a-repo"]; ok {
-		t.Fatal("the handoff path was trusted")
+	got := startCodexThread(context.Background(), s, sess, req, d)
+	if got.Outcome != apiv1.ThreadResponded || len(trusted) != 1 || trusted[0] != cwd {
+		t.Fatalf("got %s/%+v trusted %v", got.Outcome, got.Error, trusted)
 	}
 }
 
@@ -242,25 +496,6 @@ func TestCodexThreadStatusDoesNotWriteTrust(t *testing.T) {
 	_, _ = observeThread(t, f, s, sess, CodexThreadStatusRequest{ThreadID: newThread})
 	if _, err := os.Stat(filepath.Join(s.CodexHome, "config.toml")); !os.IsNotExist(err) {
 		t.Fatalf("status wrote config: %v", err)
-	}
-}
-
-// An entry that is already trusted, however it is quoted, is left untouched.
-func TestCodexRepoTrustLeavesTrustedEntry(t *testing.T) {
-	s, _, cwd := threadHost(t)
-	if err := os.MkdirAll(s.CodexHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	original := []byte("model = \"gpt-6-astra\"\n[projects.'" + cwd + "']\ntrust_level = 'trusted'\n")
-	path := filepath.Join(s.CodexHome, "config.toml")
-	if err := os.WriteFile(path, original, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureCodexRepoTrust(context.Background(), s, cwd); err != nil {
-		t.Fatal(err)
-	}
-	if got := configBytes(t, s); !bytes.Equal(got, original) {
-		t.Fatalf("rewrote a trusted entry\n%s", got)
 	}
 }
 
@@ -278,61 +513,17 @@ func TestCodexRepoTrustPrivateHostDoesNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := newThreadFake(cwd)
-	got := launchThread(t, f, s, sess, goodThreadRequest())
-	if got.Outcome != apiv1.ThreadFailed || got.Error == nil || got.Error.Code != "codex_config_invalid" || got.TotalMs != 0 || len(f.launches) != 0 {
-		t.Fatalf("got %s/%+v total %d launches %d", got.Outcome, got.Error, got.TotalMs, len(f.launches))
+	called := false
+	d := f.deps()
+	d.trust = func(context.Context, Settings, int, string) error {
+		called = true
+		return nil
 	}
-	if file, err := os.ReadFile(path); err != nil || !bytes.Equal(file, original) {
+	got := startCodexThread(context.Background(), s, sess, goodThreadRequest(), d)
+	if got.Outcome != apiv1.ThreadFailed || got.Error == nil || got.Error.Code != "codex_config_invalid" || got.Error.Message != threadlaunch.Message("codex_config_invalid") || got.TotalMs != 0 || len(f.launches) != 0 || called {
+		t.Fatalf("got %s/%+v total %d launches %d called %v", got.Outcome, got.Error, got.TotalMs, len(f.launches), called)
+	}
+	if file, err := os.ReadFile(path); err != nil || string(file) != string(original) {
 		t.Fatalf("private host config changed: %v %q", err, file)
-	}
-}
-
-// A busy lock, or a file that changed after it was read, leaves the config
-// byte for byte and does not install the new bytes.
-func TestCodexRepoTrustBusyLockAndStaleWrite(t *testing.T) {
-	s, _, cwd := threadHost(t)
-	if err := os.MkdirAll(s.CodexHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	original := []byte("model = \"keep\"\n")
-	path := filepath.Join(s.CodexHome, "config.toml")
-	if err := os.WriteFile(path, original, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	lock, err := os.OpenFile(filepath.Join(s.CodexHome, "config.toml.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureCodexRepoTrust(context.Background(), s, cwd); err == nil {
-		t.Fatal("a busy lock was accepted")
-	}
-	if file, err := os.ReadFile(path); err != nil || !bytes.Equal(file, original) {
-		t.Fatalf("busy lock wrote config: %v %q", err, file)
-	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
-		t.Fatal(err)
-	}
-	_ = lock.Close()
-
-	if err := writeCodexConfigIfUnchanged(path, []byte("stale"), []byte("model = \"changed\"\n"), 0o600); err == nil {
-		t.Fatal("a stale snapshot was written")
-	}
-	if file, err := os.ReadFile(path); err != nil || !bytes.Equal(file, original) {
-		t.Fatalf("stale write changed config: %v %q", err, file)
-	}
-	if err := ensureCodexRepoTrust(context.Background(), s, cwd); err != nil {
-		t.Fatal(err)
-	}
-	doc := map[string]any{}
-	if err := toml.Unmarshal(configBytes(t, s), &doc); err != nil {
-		t.Fatal(err)
-	}
-	projects, _ := doc["projects"].(map[string]any)
-	table, _ := projects[cwd].(map[string]any)
-	if table["trust_level"] != "trusted" || doc["model"] != "keep" {
-		t.Fatalf("after the lock: %+v", doc)
 	}
 }

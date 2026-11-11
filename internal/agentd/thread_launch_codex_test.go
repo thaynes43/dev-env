@@ -100,6 +100,7 @@ func (f *threadFake) deps() codexThreadDeps {
 			f.polls++
 			return f.turns[i], nil
 		},
+		trust: func(context.Context, Settings, int, string) error { return nil },
 		launch: func(_ context.Context, c codexWrapperCall) ([]byte, error) {
 			f.launches = append(f.launches, c)
 			state := f.state
@@ -135,6 +136,18 @@ func threadHost(t *testing.T) (Settings, protocol.Session, string) {
 		t.Fatal(err)
 	}
 	gitInitRepo(t, cwd)
+	// A Partial catalog can still name one repository Ready. That is the
+	// state that qualifies the folder; the catalog state is not.
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rec := bootRecord{BootID: "b1", Boot: protocol.BootReady, ProjectBootstrap: &protocol.ProjectBootstrap{
+		State:        protocol.BootstrapPartial,
+		Repositories: []protocol.ProjectBootstrapRepository{{Name: "dev-env", State: protocol.BootstrapReady}},
+	}}
+	if err := writeJSONFile(s.statePath(bootFile), rec); err != nil {
+		t.Fatal(err)
+	}
 	sess := protocol.Session{Name: "codex-host-1", Repo: "dev-env", Agent: protocol.AgentCodex, Mode: protocol.ModeRemote, Model: "gpt-6-astra"}
 	return s, sess, cwd
 }
@@ -536,6 +549,17 @@ func TestCodexThreadObserverRPC(t *testing.T) {
 	obs, err := readCodexFirstTurn(context.Background(), s, os.Getpid(), newThread)
 	if err != nil || obs.TurnID != turnID || obs.Status != "completed" || !obs.AgentMessage {
 		t.Fatalf("turn %v %+v", err, obs)
+	}
+	var itemParams map[string]any
+	for _, r := range *seen {
+		if r["method"] == "thread/items/list" {
+			itemParams, _ = r["params"].(map[string]any)
+		}
+	}
+	// The items read is for the turn just listed. Without turnId the daemon
+	// returns items from every turn of the thread.
+	if itemParams["turnId"] != turnID || itemParams["threadId"] != newThread {
+		t.Fatalf("items request %v", itemParams)
 	}
 	var lists []map[string]any
 	for _, r := range *seen {

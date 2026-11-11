@@ -28,7 +28,8 @@ import (
 // phone-visible `vscode` source), never `codex exec`, `codex queue` or
 // `thread/start`, and passes no sandbox or approval flag. Before that client
 // starts, thread start writes folder trust for the one platform repository
-// (DESIGN-057 section 12). thread status does not. Everything else is
+// through the host daemon's config/value/write (DESIGN-057 section 12).
+// thread status does not. Everything else is
 // read-only observation over the peer-verified control socket. It never pairs,
 // logs in, resumes, forks or retries a launch.
 
@@ -85,6 +86,7 @@ type codexThreadDeps struct {
 	list    func(ctx context.Context, s Settings, pid int, cwd string, all bool) ([]codexThreadSummary, error)
 	turn    func(ctx context.Context, s Settings, pid int, threadID string) (codexTurnObservation, error)
 	launch  func(context.Context, codexWrapperCall) ([]byte, error)
+	trust   func(context.Context, Settings, int, string) error
 	python  func() (string, error)
 	wrapper func() (string, error)
 	now     func() time.Time
@@ -105,6 +107,7 @@ func realCodexThreadDeps() codexThreadDeps {
 		list:   listCodexThreads,
 		turn:   readCodexFirstTurn,
 		launch: runCodexThreadWrapper,
+		trust:  writeCodexProjectTrust,
 		python: func() (string, error) { return exec.LookPath("python3") },
 		wrapper: func() (string, error) {
 			info, err := os.Stat(CodexThreadWrapper)
@@ -175,7 +178,7 @@ func observeCodexThread(ctx context.Context, s Settings, sess protocol.Session, 
 // interpreter or poll clock: only the host reads and the read-only observers.
 // A later change that reached for one on this path would stop, not launch.
 func (d codexThreadDeps) observeOnly() codexThreadDeps {
-	d.launch, d.python, d.wrapper, d.sleep = nil, nil, nil, nil
+	d.launch, d.python, d.wrapper, d.sleep, d.trust = nil, nil, nil, nil, nil
 	return d
 }
 
@@ -299,10 +302,13 @@ func (a *codexThreadAdapter) Preflight(ctx context.Context, r *threadlaunch.Reco
 	}
 	// Trust the platform clone before the client starts, so Codex does not
 	// stop on its folder prompt. A status pass does not call Preflight.
-	if err := ensureCodexRepoTrust(ctx, a.s, a.cwd); err != nil {
+	if err := ensureCodexRepoTrust(ctx, a.s, a.pid, a.cwd, a.d.trust); err != nil {
 		code := "codex_config_invalid"
-		if errors.Is(err, errFolderNotQualified) {
+		switch {
+		case errors.Is(err, errFolderNotQualified):
 			code = "folder_not_qualified"
+		case errors.Is(err, errCodexTrustUnconfirmed):
+			code = "codex_trust_unconfirmed"
 		}
 		return threadlaunch.Halt(apiv1.ThreadFailed, code, apiv1.ThreadPhaseHostReady)
 	}

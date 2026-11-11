@@ -98,15 +98,50 @@ func openCodexHostRPC(ctx context.Context, s Settings, expectedPID int) (*codexH
 	}()
 	return rpc, nil
 }
+
+// codexRPCFault is one JSON-RPC error object from the host daemon.
+type codexRPCFault struct {
+	Code    int64           `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
+}
+
+// configWriteCode is data.config_write_error_code, or "" when the fault is
+// not a config write rejection.
+func (f *codexRPCFault) configWriteCode() string {
+	if f == nil || len(f.Data) == 0 {
+		return ""
+	}
+	var body struct {
+		Code string `json:"config_write_error_code"`
+	}
+	if json.Unmarshal(f.Data, &body) != nil {
+		return ""
+	}
+	return body.Code
+}
+
 func (r *codexHostRPC) call(method string, params any, result any) error {
+	raw, fault, _, err := r.callOutcome(method, params)
+	if err != nil || fault != nil || len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, result) != nil {
+		return errCodexHostUnknown
+	}
+	return nil
+}
+
+// callOutcome writes one request and returns its result, or the server's
+// error object. sent is true once the request frame was written. err is a
+// transport or protocol failure, including a failure while reading the answer
+// after a successful write.
+func (r *codexHostRPC) callOutcome(method string, params any) (json.RawMessage, *codexRPCFault, bool, error) {
 	r.next++
 	if r.conn.WriteJSON(map[string]any{"id": r.next, "method": method, "params": params}) != nil {
-		return errCodexHostUnknown
+		return nil, nil, false, errCodexHostUnknown
 	}
 	for message := 0; message < 32; message++ {
 		kind, data, err := r.conn.ReadMessage()
 		if err != nil || kind != websocket.TextMessage || len(data) > r.frameBound() {
-			return errCodexHostUnknown
+			return nil, nil, true, errCodexHostUnknown
 		}
 		var envelope struct {
 			ID     *int            `json:"id"`
@@ -115,28 +150,35 @@ func (r *codexHostRPC) call(method string, params any, result any) error {
 			Error  json.RawMessage `json:"error"`
 		}
 		if json.Unmarshal(data, &envelope) != nil {
-			return errCodexHostUnknown
+			return nil, nil, true, errCodexHostUnknown
 		}
 		if envelope.Method != "" {
 			// A server request needs an interactive owner. Never discard it as
 			// though it were a notification while waiting for a mutation ACK.
 			if envelope.ID != nil {
-				return errCodexHostUnknown
+				return nil, nil, true, errCodexHostUnknown
 			}
 			if strings.HasPrefix(envelope.Method, "thread/") || strings.HasPrefix(envelope.Method, "turn/") {
 				r.churn = true
 			}
 			continue
 		}
-		if envelope.ID == nil || *envelope.ID != r.next || len(envelope.Error) > 0 && string(envelope.Error) != "null" || len(envelope.Result) == 0 || string(envelope.Result) == "null" {
-			return errCodexHostUnknown
+		if envelope.ID == nil || *envelope.ID != r.next {
+			return nil, nil, true, errCodexHostUnknown
 		}
-		if json.Unmarshal(envelope.Result, result) != nil {
-			return errCodexHostUnknown
+		if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
+			var fault codexRPCFault
+			if json.Unmarshal(envelope.Error, &fault) != nil || fault.Message == "" {
+				return nil, nil, true, errCodexHostUnknown
+			}
+			return nil, &fault, true, nil
 		}
-		return nil
+		if len(envelope.Result) == 0 || string(envelope.Result) == "null" {
+			return nil, nil, true, errCodexHostUnknown
+		}
+		return envelope.Result, nil, true, nil
 	}
-	return errCodexHostUnknown
+	return nil, nil, true, errCodexHostUnknown
 }
 func (r *codexHostRPC) loaded() ([]string, error) {
 	cursor := ""

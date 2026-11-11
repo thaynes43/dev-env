@@ -755,11 +755,14 @@ worktree, as on the phone. --wait (at most 10m) bounds the whole launch.
                   native codex --remote TUI (scripts/codex-clean-session.py) in a tmux
                   session named --name (default thread-<UTC mmdd-HHMMSS>) in
                   ~/repos/<repo> on the host (default: the host's repo). Before the client
-                  starts, agentd marks that resolved path trusted in Codex's config.toml
-                  (projects."<path>".trust_level). A folder that is not that repository
-                  stops at once with folder_not_qualified. A config.toml that cannot be
-                  updated safely, including on a private Codex host, stops with
-                  codex_config_invalid and is left unchanged.
+                  starts, agentd asks the host daemon's config/value/write to mark that
+                  resolved path trusted (projects."<path>".trust_level). The folder
+                  qualifies only when this session's bootstrap record names it Ready.
+                  Anything else stops at once with folder_not_qualified, before config
+                  is read. A failure before the write, including a private Codex host,
+                  stops with codex_config_invalid: nothing changed. A failure after the
+                  write was sent stops with codex_trust_unconfirmed: trust may have
+                  been written.
                   thread status does not write trust. Never codex exec
                   or queue, and no sandbox or approval flag.
 --agent claude    a new remote session, through rc start. It follows --wait (default

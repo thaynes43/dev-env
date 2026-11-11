@@ -1,72 +1,64 @@
 package agentd
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/pelletier/go-toml/v2"
-
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
-// errFolderNotQualified means the path is not the resolved repository the
-// platform bootstrapped for this session. errCodexConfigInvalid means
-// config.toml was left unchanged.
+// errFolderNotQualified means the path is not a repository this session's
+// bootstrap record names as Ready. errCodexConfigInvalid means the trust
+// write did not happen. errCodexTrustUnconfirmed means a write was sent and
+// not rejected, so trust may now be recorded.
 var (
-	errFolderNotQualified = errors.New("folder not qualified")
-	errCodexConfigInvalid = errors.New("codex config invalid")
+	errFolderNotQualified    = errors.New("folder not qualified")
+	errCodexConfigInvalid    = errors.New("codex config invalid")
+	errCodexTrustUnconfirmed = errors.New("codex trust unconfirmed")
 )
 
-const codexConfigMax = 256 << 10
+// codexTrustVersionRetries is how many times a configVersionConflict is tried
+// again. The attempt that still conflicts after that refuses.
+const codexTrustVersionRetries = 3
 
-// ensureCodexRepoTrust records the platform clone as trusted in Codex's own
-// config.toml, under projects."<path>".trust_level, before a client starts.
-// A folder that does not qualify, or a config that cannot be updated without
-// touching other keys, returns before any write.
-func ensureCodexRepoTrust(ctx context.Context, s Settings, cwd string) error {
+// codexBootstrapBound is the largest boot record this check will read. A
+// larger file is unreadable, and an unreadable record does not qualify.
+const codexBootstrapBound = 1 << 20
+
+// ensureCodexRepoTrust records the platform clone as trusted through the host
+// daemon's config/value/write, before a client starts. write is that call;
+// nil does not dial. A folder that does not qualify returns before write runs.
+func ensureCodexRepoTrust(ctx context.Context, s Settings, pid int, cwd string, write func(context.Context, Settings, int, string) error) error {
 	if err := qualifyCodexRepo(ctx, s, cwd); err != nil {
 		return err
 	}
 	// A private host's composer rejects a trusted root outside ~/codex/<project>,
 	// and that check runs on every status read. Writing ~/repos/<repo> would
-	// make the host unreadable. Stop before opening the file.
+	// make the host unreadable. Stop before any config call.
 	if s.PrivateCodexHost {
 		return errCodexConfigInvalid
 	}
-	if err := prepareCodexHome(s); err != nil {
-		return err
+	if write == nil {
+		return errCodexConfigInvalid
 	}
-	unlock, err := lockCodexConfig(s)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	path := filepath.Join(s.CodexHome, "config.toml")
-	src, mode, err := readCodexConfig(s, path)
-	if err != nil {
-		return err
-	}
-	next, changed, err := setProjectTrust(src, cwd)
-	if err != nil || !changed {
-		return err
-	}
-	return writeCodexConfigIfUnchanged(path, src, next, mode)
+	return write(ctx, s, pid, cwd)
 }
 
-// qualifyCodexRepo accepts only the resolved path of one repository the
-// platform bootstrapped: ~/repos/<repo>, with no symlink and with that
-// directory as the Git toplevel. A handoff path, a parent, a subdirectory
-// and a symlink out of ~/repos all fail here, before config.toml is opened.
+// qualifyCodexRepo accepts only the resolved path of one repository this
+// session's own bootstrap record names as Ready: ~/repos/<repo>, with no
+// symlink and with that directory as the Git toplevel. The record is
+// ~/.agentd/boot.json projectBootstrap, the value CollectStatus reports.
+// A handoff path, a parent, a subdirectory, a symlink, a name the record
+// does not list as Ready, and a record that cannot be read all fail here,
+// before config is read.
 func qualifyCodexRepo(ctx context.Context, s Settings, cwd string) error {
 	if !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cwd {
 		return errFolderNotQualified
@@ -79,8 +71,8 @@ func qualifyCodexRepo(ctx context.Context, s Settings, cwd string) error {
 	if err != nil || rel != name {
 		return errFolderNotQualified
 	}
-	// The written key is the path in double quotes. A character Go would
-	// escape is not a path this writer can record without changing the key.
+	// The key path quotes this directory. A character Go would escape is not
+	// a path this writer can record as that directory.
 	if strconv.Quote(cwd) != `"`+cwd+`"` {
 		return errFolderNotQualified
 	}
@@ -92,7 +84,10 @@ func qualifyCodexRepo(ctx context.Context, s Settings, cwd string) error {
 	if err != nil || filepath.Clean(resolved) != cwd {
 		return errFolderNotQualified
 	}
-	return proveCodexRepoRoot(ctx, cwd)
+	if err := proveCodexRepoRoot(ctx, cwd); err != nil {
+		return err
+	}
+	return codexBootstrapReady(s, name)
 }
 
 // proveCodexRepoRoot asks Git, with this directory's own .git and no parent
@@ -123,446 +118,200 @@ func proveCodexRepoRoot(ctx context.Context, cwd string) error {
 	return nil
 }
 
-func prepareCodexHome(s Settings) error {
-	home := s.CodexHome
-	if !filepath.IsAbs(home) || filepath.Clean(home) != home || noSymlinkComponents(filepath.Dir(home)) != nil {
-		return errCodexConfigInvalid
+// codexBootstrapReady reports whether repo is Ready in the boot record.
+// Ready is the repository state that means the platform cloned it and the
+// refresh left it usable. Preserved, any other state, a missing entry, and
+// an unreadable record do not qualify. The catalog's own state is not the
+// test: a Partial catalog can still hold a Ready repository.
+func codexBootstrapReady(s Settings, repo string) error {
+	path := s.statePath(bootFile)
+	if noSymlinkComponents(filepath.Dir(path)) != nil {
+		return errFolderNotQualified
 	}
-	parent, err := os.Lstat(filepath.Dir(home))
-	if err != nil || !parent.IsDir() {
-		return errCodexConfigInvalid
-	}
-	if info, err := os.Lstat(home); err == nil {
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return errCodexConfigInvalid
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return errCodexConfigInvalid
-	} else if err := os.Mkdir(home, 0o700); err != nil {
-		return errCodexConfigInvalid
-	}
-	return nil
-}
-
-func readCodexConfig(s Settings, path string) ([]byte, fs.FileMode, error) {
-	if err := prepareCodexHome(s); err != nil {
-		return nil, 0, err
-	}
-	mode := fs.FileMode(0o600)
-	if info, err := os.Lstat(path); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return nil, 0, errCodexConfigInvalid
-		}
-		mode = info.Mode().Perm()
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, 0, errCodexConfigInvalid
-	}
-	data, err := boundedHostFile(path, codexConfigMax, false)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, mode, nil
-	}
+	data, err := boundedHostFile(path, codexBootstrapBound, false)
 	if err != nil {
-		return nil, 0, errCodexConfigInvalid
+		return errFolderNotQualified
 	}
-	return data, mode, nil
+	var boot bootRecord
+	if json.Unmarshal(data, &boot) != nil || boot.ProjectBootstrap == nil {
+		return errFolderNotQualified
+	}
+	for _, item := range boot.ProjectBootstrap.Repositories {
+		if item.Name == repo && item.State == protocol.BootstrapReady {
+			return nil
+		}
+	}
+	return errFolderNotQualified
 }
 
-// setProjectTrust returns the config with projects."<folder>".trust_level set
-// to "trusted". changed is false when that entry was already trusted. Any
-// shape that would require rewriting other keys returns errCodexConfigInvalid
-// and the caller keeps the original bytes.
-func setProjectTrust(src []byte, folder string) ([]byte, bool, error) {
-	doc := map[string]any{}
-	if len(bytes.TrimSpace(src)) > 0 {
-		if err := toml.Unmarshal(src, &doc); err != nil {
-			return nil, false, errCodexConfigInvalid
-		}
-	}
-	var projects map[string]any
-	if raw, ok := doc["projects"]; ok {
-		table, ok := raw.(map[string]any)
-		if !ok {
-			return nil, false, errCodexConfigInvalid
-		}
-		projects = table
-	}
-	if projects != nil {
-		if raw, ok := projects[folder]; ok {
-			table, ok := raw.(map[string]any)
-			if !ok {
-				return nil, false, errCodexConfigInvalid
-			}
-			if table["trust_level"] == "trusted" {
-				return src, false, nil
-			}
-		}
-	}
-	next, err := editProjectTrust(src, folder)
+// writeCodexProjectTrust asks the host daemon to set
+// projects."<folder>".trust_level to trusted. It reads the user-layer version
+// first and sends it as expectedVersion. A version conflict is retried at
+// most codexTrustVersionRetries times.
+func writeCodexProjectTrust(ctx context.Context, s Settings, pid int, folder string) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	conn, err := openCodexThreadObserver(ctx, s, pid)
 	if err != nil {
-		return nil, false, err
+		return errCodexConfigInvalid
 	}
-	if len(next) > codexConfigMax || !bytes.Equal(projectTrustLevel(next, folder), []byte("trusted")) {
-		return nil, false, errCodexConfigInvalid
+	defer func() { _ = conn.conn.Close() }()
+	state, err := readCodexUserTrust(conn, folder)
+	if err != nil {
+		return err
 	}
-	return next, true, nil
-}
-
-func projectTrustLevel(src []byte, folder string) []byte {
-	doc := map[string]any{}
-	if toml.Unmarshal(src, &doc) != nil {
+	if state.trusted {
 		return nil
 	}
-	projects, _ := doc["projects"].(map[string]any)
-	table, _ := projects[folder].(map[string]any)
-	value, _ := table["trust_level"].(string)
-	return []byte(value)
-}
-
-func editProjectTrust(src []byte, folder string) ([]byte, error) {
-	if len(src) == 0 {
-		return appendProjectTrust(nil, folder), nil
+	if state.hasUser && state.version == "" {
+		return errCodexConfigInvalid
 	}
-	// A multiline string can hide a header or swallow an appended table.
-	// Leave the file alone rather than rewrite it.
-	if bytes.Contains(src, []byte(`"""`)) || bytes.Contains(src, []byte(`'''`)) {
-		return nil, errCodexConfigInvalid
-	}
-	header, dotted, err := findProjectTrust(src, folder)
-	if err != nil {
-		return nil, err
-	}
-	if header < 0 && dotted < 0 {
-		// The parser saw this folder but the line scan did not. Appending a
-		// second table would leave two entries. Stop instead.
-		if projectHasFolder(src, folder) {
-			return nil, errCodexConfigInvalid
+	version := state.version
+	for attempt := 0; attempt <= codexTrustVersionRetries; attempt++ {
+		params := map[string]any{
+			"keyPath":       codexTrustKeyPath(folder),
+			"value":         "trusted",
+			"mergeStrategy": "replace",
 		}
-		return appendProjectTrust(src, folder), nil
-	}
-	if header >= 0 && dotted >= 0 {
-		return nil, errCodexConfigInvalid
-	}
-	lines := splitKeep(src)
-	if dotted >= 0 {
-		lines[dotted] = replaceTrustAssignment(lines[dotted], `projects.`+strconv.Quote(folder)+`.trust_level`)
-		return joinLines(lines), nil
-	}
-	return editTrustTable(lines, header)
-}
-
-func projectHasFolder(src []byte, folder string) bool {
-	doc := map[string]any{}
-	if toml.Unmarshal(src, &doc) != nil {
-		return true
-	}
-	projects, _ := doc["projects"].(map[string]any)
-	_, ok := projects[folder]
-	return ok
-}
-
-func appendProjectTrust(src []byte, folder string) []byte {
-	var b bytes.Buffer
-	b.Write(src)
-	if len(src) > 0 && src[len(src)-1] != '\n' {
-		b.WriteByte('\n')
-	}
-	if len(src) > 0 {
-		b.WriteByte('\n')
-	}
-	fmt.Fprintf(&b, "[projects.%s]\ntrust_level = %q\n", strconv.Quote(folder), "trusted")
-	return b.Bytes()
-}
-
-func findProjectTrust(src []byte, folder string) (header, dotted int, err error) {
-	header, dotted = -1, -1
-	lines := splitKeep(src)
-	for i, line := range lines {
-		body := strings.TrimRight(line, "\r\n")
-		if d, ok := dottedTrustFolder(body); ok {
-			if d == folder {
-				if dotted >= 0 {
-					return -1, -1, errCodexConfigInvalid
+		if version != "" {
+			params["expectedVersion"] = version
+		}
+		raw, fault, sent, callErr := conn.callOutcome("config/value/write", params)
+		if callErr != nil || !sent {
+			if sent {
+				return errCodexTrustUnconfirmed
+			}
+			return errCodexConfigInvalid
+		}
+		if fault != nil {
+			code := fault.configWriteCode()
+			if code == "configVersionConflict" && attempt < codexTrustVersionRetries {
+				state, err = readCodexUserTrust(conn, folder)
+				if err != nil {
+					return errCodexConfigInvalid
 				}
-				dotted = i
+				if state.trusted {
+					return nil
+				}
+				if !state.hasUser || state.version == "" {
+					return errCodexConfigInvalid
+				}
+				version = state.version
+				continue
 			}
+			if codexTrustWriteRejected(code) {
+				return errCodexConfigInvalid
+			}
+			return errCodexTrustUnconfirmed
+		}
+		if codexTrustWriteOK(raw) {
+			return nil
+		}
+		return errCodexTrustUnconfirmed
+	}
+	return errCodexConfigInvalid
+}
+
+// codexTrustKeyPath is the config/value/write key for one absolute folder.
+// A quoted segment is one path key, so the directory is not split on dots.
+func codexTrustKeyPath(folder string) string {
+	return "projects." + strconv.Quote(folder) + ".trust_level"
+}
+
+type codexUserTrust struct {
+	trusted bool
+	hasUser bool
+	version string
+}
+
+// readCodexUserTrust reads config/read with layers. The user layer's version
+// is what expectedVersion must match. A missing layers list, a version that
+// is not the 0.160.1 sha256 form, or more than one user layer refuses before
+// a write. No user layer is a first write: version stays empty and the call
+// omits expectedVersion, because there is no version to send.
+func readCodexUserTrust(r *codexHostRPC, folder string) (codexUserTrust, error) {
+	raw, fault, sent, err := r.callOutcome("config/read", map[string]any{"includeLayers": true})
+	if err != nil || fault != nil || !sent {
+		return codexUserTrust{}, errCodexConfigInvalid
+	}
+	var response struct {
+		Config  json.RawMessage `json:"config"`
+		Origins json.RawMessage `json:"origins"`
+		Layers  *[]struct {
+			Name struct {
+				Type string `json:"type"`
+			} `json:"name"`
+			Version string `json:"version"`
+		} `json:"layers"`
+	}
+	if json.Unmarshal(raw, &response) != nil || len(response.Config) == 0 || response.Config[0] != '{' || len(response.Origins) == 0 || response.Origins[0] != '{' || response.Layers == nil {
+		return codexUserTrust{}, errCodexConfigInvalid
+	}
+	var config struct {
+		Projects map[string]struct {
+			TrustLevel string `json:"trust_level"`
+		} `json:"projects"`
+	}
+	if json.Unmarshal(response.Config, &config) != nil {
+		return codexUserTrust{}, errCodexConfigInvalid
+	}
+	out := codexUserTrust{}
+	if project, ok := config.Projects[folder]; ok && project.TrustLevel == "trusted" {
+		out.trusted = true
+	}
+	for _, layer := range *response.Layers {
+		if layer.Name.Type != "user" {
 			continue
 		}
-		name, ok := projectsHeader(body)
-		if !ok {
-			continue
+		if out.hasUser {
+			return codexUserTrust{}, errCodexConfigInvalid
 		}
-		if name == folder {
-			if header >= 0 {
-				return -1, -1, errCodexConfigInvalid
-			}
-			header = i
-		}
+		out.hasUser = true
+		out.version = layer.Version
 	}
-	return header, dotted, nil
+	if out.hasUser && !codexConfigVersion(out.version) {
+		return codexUserTrust{}, errCodexConfigInvalid
+	}
+	return out, nil
 }
 
-func editTrustTable(lines []string, header int) ([]byte, error) {
-	end := len(lines)
-	for i := header + 1; i < len(lines); i++ {
-		body := strings.TrimRight(lines[i], "\r\n")
-		if _, ok := anyHeader(body); ok {
-			end = i
-			break
-		}
-	}
-	at := -1
-	for i := header + 1; i < end; i++ {
-		if isTrustLevelAssignment(strings.TrimRight(lines[i], "\r\n")) {
-			if at >= 0 {
-				return nil, errCodexConfigInvalid
-			}
-			at = i
-		}
-	}
-	if at < 0 {
-		nl := "\n"
-		if strings.HasSuffix(lines[header], "\r\n") {
-			nl = "\r\n"
-		}
-		insert := "trust_level = \"trusted\"" + nl
-		out := append([]string{}, lines[:header+1]...)
-		out = append(out, insert)
-		out = append(out, lines[header+1:]...)
-		return joinLines(out), nil
-	}
-	lines[at] = replaceTrustAssignment(lines[at], "trust_level")
-	return joinLines(lines), nil
-}
-
-func replaceTrustAssignment(line, key string) string {
-	nl := ""
-	body := line
-	switch {
-	case strings.HasSuffix(line, "\r\n"):
-		nl = "\r\n"
-		body = strings.TrimSuffix(line, "\r\n")
-	case strings.HasSuffix(line, "\n"):
-		nl = "\n"
-		body = strings.TrimSuffix(line, "\n")
-	}
-	indent := body[:len(body)-len(strings.TrimLeft(body, " \t"))]
-	return indent + key + " = \"trusted\"" + nl
-}
-
-func isTrustLevelAssignment(body string) bool {
-	s := strings.TrimSpace(stripTOMLComment(body))
-	eq := strings.IndexByte(s, '=')
-	if eq < 0 {
+// codexConfigVersion is the user-layer version 0.160.1 puts on a config
+// layer: sha256: and 64 lowercase hex digits.
+func codexConfigVersion(v string) bool {
+	rest, ok := strings.CutPrefix(v, "sha256:")
+	if !ok || len(rest) != 64 {
 		return false
 	}
-	return strings.TrimSpace(s[:eq]) == "trust_level"
-}
-
-func projectsHeader(body string) (string, bool) {
-	name, ok := anyHeader(body)
-	if !ok || !strings.HasPrefix(name, "projects.") {
-		return "", false
-	}
-	parts := splitTOMLKey(name)
-	if len(parts) != 2 || parts[0] != "projects" || parts[1] == "" {
-		return "", false
-	}
-	return parts[1], true
-}
-
-func anyHeader(body string) (string, bool) {
-	s := strings.TrimSpace(stripTOMLComment(body))
-	if len(s) < 2 || s[0] != '[' || s[len(s)-1] != ']' || strings.HasPrefix(s, "[[") {
-		return "", false
-	}
-	return strings.TrimSpace(s[1 : len(s)-1]), true
-}
-
-func dottedTrustFolder(body string) (string, bool) {
-	s := strings.TrimSpace(stripTOMLComment(body))
-	eq := strings.IndexByte(s, '=')
-	if eq < 0 {
-		return "", false
-	}
-	parts := splitTOMLKey(strings.TrimSpace(s[:eq]))
-	if len(parts) != 3 || parts[0] != "projects" || parts[2] != "trust_level" {
-		return "", false
-	}
-	return parts[1], true
-}
-
-// splitTOMLKey splits a dotted key, keeping quoted segments whole and
-// dropping spaces that sit outside quotes.
-func splitTOMLKey(s string) []string {
-	var parts []string
-	var cur strings.Builder
-	inSingle, inDouble := false, false
-	flush := func() {
-		parts = append(parts, cur.String())
-		cur.Reset()
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case inSingle:
-			if c == '\'' {
-				inSingle = false
-				continue
-			}
-			cur.WriteByte(c)
-		case inDouble:
-			if c == '\\' && i+1 < len(s) {
-				i++
-				cur.WriteByte(s[i])
-				continue
-			}
-			if c == '"' {
-				inDouble = false
-				continue
-			}
-			cur.WriteByte(c)
-		case c == '\'':
-			inSingle = true
-		case c == '"':
-			inDouble = true
-		case c == '.':
-			flush()
-		case c == ' ' || c == '\t':
-		default:
-			cur.WriteByte(c)
+	for _, c := range rest {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
 		}
 	}
-	flush()
-	return parts
+	return true
 }
 
-func stripTOMLComment(s string) string {
-	inSingle, inDouble := false, false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case inSingle:
-			if c == '\'' {
-				inSingle = false
-			}
-		case inDouble:
-			if c == '\\' && i+1 < len(s) {
-				i++
-				continue
-			}
-			if c == '"' {
-				inDouble = false
-			}
-		case c == '\'':
-			inSingle = true
-		case c == '"':
-			inDouble = true
-		case c == '#':
-			return s[:i]
-		}
+// codexTrustWriteRejected is a config/value/write error the 0.160.1 daemon
+// returns before it applies the edit. configVersionConflict is one of them.
+func codexTrustWriteRejected(code string) bool {
+	switch code {
+	case "configVersionConflict", "configLayerReadonly", "configRequirementReadonly", "configValidationError", "configPathNotFound", "configSchemaUnknownKey":
+		return true
+	default:
+		return false
 	}
-	return s
 }
 
-func splitKeep(src []byte) []string {
-	text := string(src)
-	if text == "" {
-		return nil
+// codexTrustWriteOK is a ConfigWriteResponse whose status is ok. Any other
+// result, including okOverridden, is not confirmation that this folder is
+// trusted at the value we wrote.
+func codexTrustWriteOK(raw json.RawMessage) bool {
+	var response struct {
+		FilePath string `json:"filePath"`
+		Status   string `json:"status"`
+		Version  string `json:"version"`
 	}
-	var lines []string
-	for text != "" {
-		n := strings.IndexByte(text, '\n')
-		if n < 0 {
-			lines = append(lines, text)
-			break
-		}
-		lines = append(lines, text[:n+1])
-		text = text[n+1:]
+	if json.Unmarshal(raw, &response) != nil {
+		return false
 	}
-	return lines
-}
-
-func joinLines(lines []string) []byte {
-	var b bytes.Buffer
-	for _, line := range lines {
-		b.WriteString(line)
-	}
-	return b.Bytes()
-}
-
-// lockCodexConfig is an exclusive flock on config.toml.lock. A busy lock
-// stops the launch. The caller leaves the file unchanged.
-func lockCodexConfig(s Settings) (func(), error) {
-	path := filepath.Join(s.CodexHome, "config.toml.lock")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
-	if err != nil {
-		return nil, errCodexConfigInvalid
-	}
-	fi, err := f.Stat()
-	if err != nil || !fi.Mode().IsRegular() {
-		_ = f.Close()
-		return nil, errCodexConfigInvalid
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		_ = f.Close()
-		return nil, errCodexConfigInvalid
-	}
-	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
-}
-
-// writeCodexConfigIfUnchanged writes next only when the file is still src.
-// A concurrent Codex save or another launch is left as it was.
-func writeCodexConfigIfUnchanged(path string, src, next []byte, mode fs.FileMode) error {
-	current, err := boundedHostFile(path, codexConfigMax, false)
-	if errors.Is(err, os.ErrNotExist) {
-		if len(src) != 0 {
-			return errCodexConfigInvalid
-		}
-	} else if err != nil || !bytes.Equal(current, src) {
-		return errCodexConfigInvalid
-	}
-	return writeCodexConfigAtomic(path, next, mode)
-}
-
-func writeCodexConfigAtomic(path string, data []byte, mode fs.FileMode) error {
-	dir := filepath.Dir(path)
-	if st, err := os.Lstat(dir); err != nil || !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
-		return errCodexConfigInvalid
-	}
-	f, err := os.CreateTemp(dir, ".config.toml.agentd-*")
-	if err != nil {
-		return errCodexConfigInvalid
-	}
-	tmp := f.Name()
-	defer func() { _ = os.Remove(tmp) }()
-	if err := f.Chmod(mode); err != nil {
-		_ = f.Close()
-		return errCodexConfigInvalid
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return errCodexConfigInvalid
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return errCodexConfigInvalid
-	}
-	if err := f.Close(); err != nil {
-		return errCodexConfigInvalid
-	}
-	if st, err := os.Lstat(path); err == nil && (st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular()) {
-		return errCodexConfigInvalid
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return errCodexConfigInvalid
-	}
-	d, err := os.Open(dir)
-	if err != nil {
-		return errCodexConfigInvalid
-	}
-	defer func() { _ = d.Close() }()
-	if err := d.Sync(); err != nil {
-		return errCodexConfigInvalid
-	}
-	return nil
+	return response.Status == "ok" && codexConfigVersion(response.Version) && filepath.IsAbs(response.FilePath)
 }
