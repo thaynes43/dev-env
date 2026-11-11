@@ -118,6 +118,10 @@ type fakeGitHub struct {
 	// repoEcho, when set, is placed in a successful response's repositories
 	// list so a test can prove the keeper does not log those names.
 	repoEcho string
+	// respond, when set, writes the HTTP response after the JWT is accepted
+	// and replaces the failure queue and the mint. It runs while fakeGitHub
+	// holds its lock, so it must not call back into the fake.
+	respond func(w http.ResponseWriter, r *http.Request, jwt string)
 }
 
 func newFakeGitHub(t *testing.T, pub *rsa.PublicKey, now func() time.Time) *fakeGitHub {
@@ -170,6 +174,10 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	f.lastJWT = jwt
 	f.jwts = append(f.jwts, jwt)
+	if f.respond != nil {
+		f.respond(w, r, jwt)
+		return
+	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20+1))
 	if err != nil || len(raw) > 1<<20 {
 		fail(http.StatusBadRequest, "body")

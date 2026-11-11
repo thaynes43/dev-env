@@ -53,22 +53,29 @@ func secretNamed(name string) *corev1.Secret {
 }
 
 type opsLoop struct {
-	t     *testing.T
-	clock *armClock
-	dev   *fakeGitHub
-	ops   *fakeGitHub
-	c     client.Client
-	k     *Keeper
-	logs  *logBuffer
-	key   []byte
+	t      *testing.T
+	clock  *armClock
+	dev    *fakeGitHub
+	ops    *fakeGitHub
+	c      client.Client
+	k      *Keeper
+	logs   *logBuffer
+	key    []byte
+	devDir string
+	devApp *GitHubApp
+	opsApp *GitHubApp
 }
 
 func newOpsLoop(t *testing.T, opsSecret bool, opsFail ...failure) *opsLoop {
 	t.Helper()
 	pair := keys(t)
 	clk := &armClock{FakeClock: fakeclock.NewFakeClock(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC))}
+	const opsClient = "Iv23opsclientid"
+	const opsInstallation = "4343"
 	devGH := newFakeGitHub(t, &pair[0].PublicKey, clk.Now)
-	opsGH := newFakeGitHub(t, &pair[0].PublicKey, clk.Now)
+	opsGH := newFakeGitHub(t, &pair[1].PublicKey, clk.Now)
+	opsGH.issuer = opsClient
+	opsGH.installationID = opsInstallation
 	opsGH.repoEcho = "not-for-logs"
 	if len(opsFail) > 0 {
 		opsGH.failNext(opsFail...)
@@ -81,21 +88,29 @@ func newOpsLoop(t *testing.T, opsSecret bool, opsFail ...failure) *opsLoop {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	devApp := devGH.app(writeAppDir(t, pair[0]))
+	devDir := writeAppDir(t, pair[0])
+	opsDir := writeAppDir(t, pair[1])
+	writeFile(t, filepath.Join(opsDir, AppFileClientID), opsClient+"\n")
+	writeFile(t, filepath.Join(opsDir, AppFileInstallationID), opsInstallation+"\n")
+	devApp := devGH.app(devDir)
 	devApp.Clock = clk
-	opsApp := opsGH.app(writeAppDir(t, pair[0]))
+	opsApp := opsGH.app(opsDir)
 	opsApp.Clock = clk
 	opsApp.Permissions = DefaultOpsBotPermissions
 	opsApp.Repositories = []string{"haynes-ops", "cigar-journal"}
 	logs := &logBuffer{}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 	return &opsLoop{
-		t: t, clock: clk, dev: devGH, ops: opsGH, logs: logs, key: pkcs1PEM(pair[0]), c: c,
+		t: t, clock: clk, dev: devGH, ops: opsGH, logs: logs,
+		key: append(pkcs1PEM(pair[0]), pkcs1PEM(pair[1])...), c: c,
+		devDir: devDir, devApp: devApp, opsApp: opsApp,
 		k: &Keeper{
-			Jobs: []Job{
-				GitHubTokenJob("gh-token", devApp, ghSecret),
-				GitHubTokenJob("ops-gh-token", opsApp, types.NamespacedName{Namespace: ghSecret.Namespace, Name: DefaultOpsGHTokenSecret}),
-			},
+			Jobs: keeperJobs(Options{
+				GitHubApp:        devApp,
+				GHTokenSecret:    ghSecret,
+				OpsGitHubApp:     opsApp,
+				OpsGHTokenSecret: types.NamespacedName{Namespace: ghSecret.Namespace, Name: DefaultOpsGHTokenSecret},
+			}),
 			Writer: &SecretWriter{Client: c},
 			Log:    logs.logger(),
 			Clock:  clk,
@@ -367,6 +382,69 @@ func TestOpsTokenIsNotCreatedWhenTheSecretIsMissing(t *testing.T) {
 	_, _, opsTokens, _, opsJWT := o.ops.snapshot()
 	_, _, devTokens, _, devJWT := o.dev.snapshot()
 	assertNoMaterial(t, o.logs.String(), o.key, append(append(devTokens, opsTokens...), devJWT, opsJWT)...)
+}
+
+func TestNewOpsLoopUsesDistinctAppsAndKeeperJobs(t *testing.T) {
+	o := newOpsLoop(t, true)
+	if o.opsApp == nil || o.devApp == nil || o.opsApp.DistinctFrom != o.devApp {
+		t.Fatal("keeperJobs did not compare the ops App with the dev bot's App")
+	}
+	dev, err := o.devApp.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops, err := o.opsApp.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dev.issuer == ops.issuer {
+		t.Fatal("the two Apps share an issuer")
+	}
+	if dev.installationID == ops.installationID {
+		t.Fatal("the two Apps share an installation")
+	}
+	if dev.key.N.Cmp(ops.key.N) == 0 {
+		t.Fatal("the two Apps share a signing key")
+	}
+}
+
+func TestOpsMintBacksOffWhenTheDevDirectoryBecomesUnreadable(t *testing.T) {
+	o := newOpsLoop(t, true)
+	// A 3-minute ops token is due again in 2 minutes. The dev token stays on
+	// its 40-minute success wait, so this step wakes only the ops loop.
+	o.ops.life = 3 * time.Minute
+	o.start()
+	o.settled(map[string]int{"gh-token": 1, "ops-gh-token": 1}, 2)
+	if _, devReqs, _, _, _ := o.dev.snapshot(); devReqs != 1 {
+		t.Fatalf("dev requests before the directory change: %d", devReqs)
+	}
+	if _, opsReqs, _, _, _ := o.ops.snapshot(); opsReqs != 1 {
+		t.Fatalf("ops requests before the directory change: %d", opsReqs)
+	}
+	devSecret := o.secret(ghSecret.Name)
+	if err := os.Chmod(o.devDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(o.devDir, 0o700) })
+	beforeArms := o.clock.arms()
+	o.clock.Step(2 * time.Minute)
+	o.settled(map[string]int{"ops-gh-token": 2, "gh-token": 1}, beforeArms+1)
+	if _, opsReqs, _, _, _ := o.ops.snapshot(); opsReqs != 1 {
+		t.Fatalf("the ops mint contacted GitHub after the dev directory became unreadable: %d requests", opsReqs)
+	}
+	if w := o.waitOf("ops-gh-token"); w != 10*time.Second {
+		t.Errorf("ops wait %s, want the first backoff", w)
+	}
+	if _, devReqs, _, _, _ := o.dev.snapshot(); devReqs != 1 {
+		t.Fatalf("dev requests %d, want the first mint only", devReqs)
+	}
+	if w := o.waitOf("gh-token"); w != 38*time.Minute {
+		t.Errorf("dev wait %s, want 38m still on the successful mint", w)
+	}
+	devAfter := o.secret(ghSecret.Name)
+	if string(devAfter.Data[GHTokenKey]) != string(devSecret.Data[GHTokenKey]) || devAfter.Annotations[AnnotationExpiresAt] != devSecret.Annotations[AnnotationExpiresAt] {
+		t.Error("the dev token changed while its directory was unreadable")
+	}
 }
 
 func (o *opsLoop) secret(name string) *corev1.Secret {

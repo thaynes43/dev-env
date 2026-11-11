@@ -93,8 +93,10 @@ func keeperJobs(o Options) []Job {
 	if o.OpsGitHubApp == nil {
 		return jobs
 	}
-	// Every ops mint compares issuers with the dev bot's App. A symlink of the
-	// dev directory has a different path, so validateOps cannot see it.
+	// Every ops mint refuses the dev bot's issuer, an issuer pair of different
+	// forms, the dev bot's signing key, and the dev bot's installation. A
+	// symlink of the dev directory has a different path, so validateOps
+	// cannot see it.
 	o.OpsGitHubApp.DistinctFrom = o.GitHubApp
 	return append(jobs, GitHubTokenJob("ops-gh-token", o.OpsGitHubApp, o.OpsGHTokenSecret))
 }

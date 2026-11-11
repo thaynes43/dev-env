@@ -106,11 +106,11 @@ type GitHubApp struct {
 	// UserAgent names the keeper to GitHub, which requires one.
 	UserAgent string
 	// DistinctFrom, when set, is an App this mint must not be. The ops loop
-	// sets it to the dev bot's App. Mint loads both directories and refuses
-	// when they have the same issuer (the client id, or the app id when there
-	// is no client id) or the same installation id. A client id and an app id
-	// do not compare as one issuer; the installation id does not depend on
-	// which of those files is present. Path cleaning cannot see a symlink.
+	// sets it to the dev bot's App. Mint loads both directories and refuses,
+	// before any request, when the issuers are the same, when one issuer is a
+	// client id and the other is an app id (those two forms cannot be
+	// compared), when the directories hold the same signing key, or when the
+	// installation ids are the same. Path cleaning cannot see a symlink.
 	DistinctFrom *GitHubApp
 }
 
@@ -186,13 +186,21 @@ func (a *GitHubApp) Mint(ctx context.Context) (InstallationToken, error) {
 
 	resp, err := a.httpClient().Do(req)
 	if err != nil {
-		// A *url.Error names the method and the URL, which hold nothing secret.
-		return InstallationToken{}, fmt.Errorf("mint request: %w", err)
+		// The URL we requested holds nothing secret. A transport error can
+		// quote a response header, so it takes the same scrubber and bound
+		// as GitHub's message. Both App loops mint through here.
+		return InstallationToken{}, fmt.Errorf("mint request: %s", redactGitHubText(err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// A redirect is an error that names the status and nothing from the
+		// response. noRedirectTransport already does this; this is the same
+		// rule if a response arrives anyway.
+		return InstallationToken{}, fmt.Errorf("mint request redirected: HTTP %d", resp.StatusCode)
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
 	if err != nil {
-		return InstallationToken{}, fmt.Errorf("read the mint response: %w", err)
+		return InstallationToken{}, fmt.Errorf("read the mint response: %s", redactGitHubText(err.Error()))
 	}
 	if resp.StatusCode != http.StatusCreated {
 		return InstallationToken{}, githubError(resp.StatusCode, raw)
@@ -247,10 +255,44 @@ func (a *GitHubApp) now() time.Time {
 }
 
 func (a *GitHubApp) httpClient() *http.Client {
-	if a.HTTP == nil {
-		return &http.Client{Timeout: 30 * time.Second}
+	c := &http.Client{Timeout: 30 * time.Second}
+	if a.HTTP != nil {
+		copied := *a.HTTP
+		c = &copied
 	}
-	return a.HTTP
+	// Client.Do parses a Location header before CheckRedirect, and quotes a
+	// bad one. The transport turns a redirect into a status-only error first,
+	// so the mint follows no redirect. CheckRedirect is the same rule if a
+	// redirect is ever returned as a response.
+	c.Transport = noRedirectTransport{base: c.Transport}
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return c
+}
+
+// noRedirectTransport refuses a redirect. The error names the status and
+// nothing from the response: no Location, no body, no reason phrase. Both
+// App loops use it, because both mint through GitHubApp.Mint.
+type noRedirectTransport struct {
+	base http.RoundTripper
+}
+
+func (t noRedirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	resp, err := base.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	if resp.StatusCode < 300 || resp.StatusCode >= 400 {
+		return resp, nil
+	}
+	if resp.Body != nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponse))
+		_ = resp.Body.Close()
+	}
+	return nil, fmt.Errorf("mint request redirected: HTTP %d", resp.StatusCode)
 }
 
 // appCreds is what one mint reads from Dir.
@@ -293,10 +335,12 @@ func (a *GitHubApp) load() (appCreds, error) {
 	return c, err
 }
 
-// refuseSharedIssuer reports when DistinctFrom loads the same issuer as creds.
-// The issuer is the client id, or the app id when the directory has no client
-// id. A failure to read the other App is itself a refusal: the mint does not
-// run when the comparison cannot be made.
+// refuseSharedIssuer reports when DistinctFrom is not a different App. Each
+// check is a refusal before any request. A failure to read the other App is
+// itself a refusal: the mint does not run when the comparison cannot be made.
+// When more than one check matches, the error is the first of: the same
+// issuer, issuers of different forms, the same signing key, the same
+// installation.
 func (a *GitHubApp) refuseSharedIssuer(creds appCreds) error {
 	if a.DistinctFrom == nil {
 		return nil
@@ -308,13 +352,33 @@ func (a *GitHubApp) refuseSharedIssuer(creds appCreds) error {
 	if creds.issuer == other.issuer {
 		return errors.New("refusing to mint: this App has the same issuer as the dev bot's App")
 	}
-	// A client id and an app id for one App do not compare equal: one is a
-	// string and the other is a number. The installation id is one number
-	// either way, and GitHub's are unique, so it catches that pair.
+	if issuerFormsDiffer(creds.issuer, other.issuer) {
+		return errors.New("refusing to mint: the issuers are of different forms, one a client id and the other an app id, so they cannot be compared")
+	}
+	if sameSigningKey(creds.key, other.key) {
+		return errors.New("refusing to mint: this App has the same signing key as the dev bot's App")
+	}
 	if samePositiveID(creds.installationID, other.installationID) {
 		return errors.New("refusing to mint: this App has the same installation id as the dev bot's App")
 	}
 	return nil
+}
+
+// issuerFormsDiffer reports a client id (a string) paired with an app id (a
+// number). Those two cannot be compared, so the mint is refused.
+func issuerFormsDiffer(a, b any) bool {
+	_, aClient := a.(string)
+	_, bClient := b.(string)
+	_, aApp := a.(int64)
+	_, bApp := b.(int64)
+	return (aClient && bApp) || (aApp && bClient)
+}
+
+func sameSigningKey(a, b *rsa.PrivateKey) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.PublicKey.Equal(&b.PublicKey)
 }
 
 func samePositiveID(a, b string) bool {
@@ -409,19 +473,25 @@ func githubError(status int, raw []byte) error {
 }
 
 // A JWT is three base64url parts. A GitHub token starts with one of these
-// prefixes. Both are removed before the length cut, so truncation cannot leave
-// a prefix of either in an error or a log line.
+// prefixes. base64URLRun is 20 or more base64url characters: a JWT part left
+// when a dot is followed by a space or a line break, or a signature broken
+// across lines. A fragment shorter than 20 characters can remain. All of
+// these are removed before the length cut, so truncation cannot leave a
+// prefix of a credential in an error or a log line.
 var (
 	jwtInGitHubText   = regexp.MustCompile(`[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`)
 	gitHubTokenInText = regexp.MustCompile(`github_pat_[A-Za-z0-9_]{8,}|gh[pousr]_[A-Za-z0-9]{8,}`)
+	base64URLRun      = regexp.MustCompile(`[A-Za-z0-9_-]{20,}`)
 )
 
-// redactGitHubText is applied to text GitHub sent before that text reaches an
-// error or a log line. Both App loops use it.
+// redactGitHubText is applied to text GitHub sent, and to transport and
+// body-read errors, before that text reaches an error or a log line. Both
+// App loops use it.
 func redactGitHubText(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	s = jwtInGitHubText.ReplaceAllString(s, redacted)
 	s = gitHubTokenInText.ReplaceAllString(s, redacted)
+	s = base64URLRun.ReplaceAllString(s, redacted)
 	if len(s) > maxMessage {
 		s = s[:maxMessage] + "..."
 	}
