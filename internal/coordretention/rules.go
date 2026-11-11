@@ -389,8 +389,11 @@ func provenReply(ctx context.Context, c EvalConfig, note Summary, replies map[no
 }
 
 func listedReply(ctx context.Context, c EvalConfig, note Summary) (string, error) {
+	// Kind and project only. replyBinds then keeps a labelled parent reply or
+	// a caller-sender reply, which is the same set the pass index keeps. A
+	// parent-note label on this list would miss a caller reply the pass had
+	// already counted as the ack.
 	selector := client.MatchingLabels{
-		inbox.ParentNoteLabel:  "true",
 		inbox.KindLabel:        inbox.KindReply,
 		taskclaim.ProjectLabel: note.Project,
 	}

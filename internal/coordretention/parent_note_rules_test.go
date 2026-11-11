@@ -332,6 +332,52 @@ func TestRecheckReadsTheStoredReply(t *testing.T) {
 	}
 }
 
+func TestRecheckUsesTheSameReplyRuleAsThePass(t *testing.T) {
+	callerNote := noteMessage(t, toCaller("recheck-caller", inbox.KindQuestion), "44444444-4444-4444-8444-4444444444a4", true)
+	callerReply := answerTo(t, callerNote, "recheck-caller-answer", "44444444-4444-4444-8444-4444444444a5", true)
+	delete(callerReply.Labels, inbox.ParentNoteLabel)
+	got := decideNotes(t, []*coord.InboxMessage{callerNote, callerReply})[callerNote.Name]
+	requireDecision(t, got, Released)
+	if !got.ReplyAck || got.Observations[1].Observed != "acknowledged" || got.Observations[1].AckUID != string(callerReply.UID) {
+		t.Fatalf("pass %#v", got)
+	}
+	rechecked := recheckOnly(t, callerNote, callerReply)
+	requireDecision(t, rechecked, Released)
+	if !rechecked.ReplyAck || rechecked.Observations[1].Observed != "acknowledged" || rechecked.Observations[1].AckUID != string(callerReply.UID) {
+		t.Fatalf("recheck %#v", rechecked)
+	}
+
+	sessionNote := noteMessage(t, childNote("recheck-old", inbox.KindQuestion), "44444444-4444-4444-8444-4444444444a6", true)
+	sessionReply := answerTo(t, sessionNote, "recheck-old-answer", "44444444-4444-4444-8444-4444444444a7", false)
+	delete(sessionReply.Labels, inbox.ParentNoteLabel)
+	parent := liveSession(recipient)
+	got = decideNotes(t, []*coord.InboxMessage{sessionNote, sessionReply}, parent)[sessionNote.Name]
+	requireDecision(t, got, Kept)
+	if got.ReplyAck {
+		t.Fatal("an unlabelled session reply acked the pass")
+	}
+	rechecked = recheckOnly(t, sessionNote, sessionReply, parent)
+	requireDecision(t, rechecked, Kept)
+	if rechecked.ReplyAck {
+		t.Fatal("an unlabelled session reply acked the recheck")
+	}
+}
+
+func recheckOnly(t *testing.T, note *coord.InboxMessage, objects ...client.Object) Result {
+	t.Helper()
+	summaries, err := Summaries(context.Background(), ListConfig{
+		Reader:    &fixtureReader{objects: map[string][]unstructured.Unstructured{"InboxMessageList": {toUnstructured(t, note)}}},
+		Namespace: retentionNS, Enabled: map[Kind]bool{InboxMessage: true},
+	})
+	if err != nil || len(summaries) != 1 {
+		t.Fatalf("summary %#v %v", summaries, err)
+	}
+	stored := append([]client.Object{note.DeepCopy()}, objects...)
+	reader := fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(stored...).Build()
+	decision, _, observations, replyAck := decide(context.Background(), config(reader), summaries[0], map[string]memoSession{}, nil)
+	return Result{Summary: summaries[0], Decision: decision, Observations: observations, ReplyAck: replyAck}
+}
+
 func toUnstructured(t *testing.T, message *coord.InboxMessage) unstructured.Unstructured {
 	t.Helper()
 	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(message)
