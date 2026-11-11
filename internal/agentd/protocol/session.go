@@ -73,8 +73,13 @@ type Session struct {
 	Mode   string `json:"mode"`
 	Model  string `json:"model"`
 	Effort string `json:"effort,omitempty"`
-	// Prompt is the task. Task mode only.
-	Prompt string  `json:"prompt,omitempty"`
+	// Prompt is the task. Required in task mode. A remote session may carry
+	// one only when Caller is set, which is a summoned session (DESIGN-064
+	// 5.6). Local mode refuses it.
+	Prompt string `json:"prompt,omitempty"`
+	// Caller is the CallerPolicy of a summoned session, copied from
+	// spec.caller. Empty for an ordinary session.
+	Caller string  `json:"caller,omitempty"`
 	Limits *Limits `json:"limits,omitempty"`
 	// Restore names a rescue on the shared volume, <session>/<name> (D-67).
 	// On the first boot, after the clone, agentd fetches that rescue's bundle
@@ -300,8 +305,14 @@ func (s Session) Validate() error {
 		if strings.TrimSpace(s.Prompt) == "" {
 			errs = append(errs, errors.New("task mode needs a prompt"))
 		}
-	case ModeLocal, ModeRemote:
+	case ModeLocal:
 		if s.Prompt != "" {
+			errs = append(errs, fmt.Errorf("a prompt is for task mode only, not %s", s.Mode))
+		}
+	case ModeRemote:
+		// An ordinary remote session has no prompt. A summoned one carries
+		// the platform-rendered brief (DESIGN-064 5.6).
+		if s.Prompt != "" && s.Caller == "" {
 			errs = append(errs, fmt.Errorf("a prompt is for task mode only, not %s", s.Mode))
 		}
 	default:

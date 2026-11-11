@@ -1619,3 +1619,47 @@ The model-free TLS regressions cover these boundaries. Actual endpoint timing
 and survival of an active native process still require rollout evidence.
 
 For CLI version and model admission changes, see the [CLI and model upgrade checklist](cli-model-upgrades.md).
+
+## Summoning callers
+
+A summoning caller is a ServiceAccount with one CallerPolicy in
+`dev-env-system`, named `<namespace>.<name>` (DESIGN-064 6.4 and 5.6, ADR-025
+decisions 1, 12 and 13). The API reads that object uncached. It admits the
+caller only when `spec.summon.serviceAccount` is that account and the object
+is not being deleted. Any other account still receives the existing 403.
+Meatball's policy, routes and tests are unchanged. Nothing in this section
+installs a caller's policy.
+
+The caller may create a session and list or get the sessions it created. It
+may not delete a session, read a log, or write a parent note. A session it
+created cannot create a session.
+
+A create may carry `name`, `mode`, `lane`, `idempotencyKey` and `data`. It
+may also repeat `agent` as `claude`, `model` as the entry's default, and
+`profile` as the entry's profile, or leave those three empty. Any other
+field is refused with 422, named. `mode` and `lane` select the policy entry,
+or the create is refused. `name` is required: a DNS label of at most 60
+characters, starting with one of that entry's prefixes. A name starting with
+`esc-rem-` is refused for every caller. A create in lane upgrade whose name
+starts with `wo-cigar-curate-` is refused.
+
+The API writes the parent (the account), the caller (the policy name), the
+lane, the profile, the model, the effort, the limits and the immutable
+`spec.summon` snapshot from the entry, including the escalation entry copied
+for a remediation. It does not write `spec.base`; the default `origin/main`
+applies. `spec.summon.dispatchID` is a schema-valid random id. The ledger
+that charges an id before the create, the replay of `idempotencyKey`, the
+name suffix and the pool limits are a later slice. A key sent now is stored
+and is not replayed.
+
+The API renders the brief into `spec.prompt`. The entry's template is copied
+verbatim, then one line naming the session, its policy and its lane, then one
+fenced block of the data fields in the order `brief.fields` lists them. The
+fence boundary is 16 random hex characters. Before rendering, each value loses
+every control character except newline and tab, then every `BEGIN DATA` and
+`END DATA` in any case, repeatedly, so a value cannot close the block. A
+`prompt` on the create is refused. A data key the entry does not name is
+refused. Each value is at most 4096 bytes and the values together at most
+16384. An ordinary remote session still cannot carry a prompt. A summoned
+remote session can, because the brief is that prompt. Handing the brief to
+the CLI at first launch is a later story.
