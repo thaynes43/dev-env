@@ -485,7 +485,10 @@ trusted client such as the workbench. Ordinary session callers cannot set a
 coordinator's worker cap. The coordinator runs on `dev`, size M, as a task.
 Its brief directs worker selection, budget checkpoints, tracker reports and
 the outcome file. Routine work proceeds; risky access gets one ask to Tom;
-an API refusal is recorded and never routed around. It never waits on Meatball.
+an API refusal is recorded and never routed around. It finishes alone where it
+can and never stalls on whoever started it; when only that parent can answer,
+it leaves one note with `agent-run parent tell`, carries on, and reads the
+answer with `agent-run parent wait` or `parent read`.
 
 ### Launch a project-bound child on another provider
 

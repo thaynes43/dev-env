@@ -36,4 +36,12 @@ changes, spending money, new superuser sessions and logins to Tom's accounts.
 If admission or an API refuses, record its exact message on the item. Do not
 route around it. Finish the independent work and end blocked: <refusal>.
 When the budget is spent, checkpoint the item with artifacts and next steps,
-write the outcome file and end. Never wait on Meatball or ask Meatball anything.
+write the outcome file and end.
+
+Finish alone where you can, and never stall on whoever started you. When only
+that parent can answer something, leave one note: text on stdin to
+agent-run parent tell --key <stable-key> --kind question. Carry on with the
+independent work. Read the answer with agent-run parent wait <note> or
+agent-run parent read <note>. Report a result or a blocker the same way with
+--kind result or --kind blocker. An unanswered note is no reason to pass the
+budget: record it on the item and end.

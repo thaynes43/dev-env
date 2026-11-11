@@ -254,6 +254,19 @@ the workbench profile. Tool descriptions stay under 30 words each.
   records the exact message on the item, does not route around it, finishes the
   rest and ends "blocked: <refusal>". Budget spent: it records where it stopped
   and ends.
+- **Amended 2026-11-11 (OP706; coordinator dev-env-fable-coordinator-1109, not
+  a ruling by Tom).** The bullet above was written when a coordinator had no
+  way to ask the caller that started it, and the brief said "Never wait on
+  Meatball or ask Meatball anything". On 2026-11-10 Tom said "agents must be
+  able to reach Meatball and other parent coordinators via dev-env
+  capabilities so we need to sort that out", and DESIGN-062 built that: a
+  session leaves its parent a note, and Meatball reads and answers it through
+  the front door (OP687). The rule is now: a coordinator finishes alone where
+  it can and never stalls on its parent. When only the parent can answer, it
+  leaves one note with `agent-run parent tell`, carries on with independent
+  work, and reads the answer with `parent wait` or `parent read`. An
+  unanswered note is no reason to pass the budget. Nothing else in this
+  section changes: no caller authority, limit, grant or route.
 
 ### 7.1 First CallerPolicy contract (OP526, 2026-11-10)
 
