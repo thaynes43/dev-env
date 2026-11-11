@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -16,11 +17,15 @@ const (
 	hostSelectionOff          = "Host selection is off."
 	resumeNotBuilt            = "Resume is not built yet."
 	commandCreatesNoHost      = "This command does not create a host."
-	codexHostReleaseTimeout   = 10 * time.Second
 	selectionNotUsedUnreached = "Host selection was not used: the operator could not be reached."
 	selectionNotUsedNoCreds   = "Host selection was not used: no credentials."
 	selectionNotUsedNoAnswer  = "Host selection was not used: the operator did not answer."
 )
+
+// codexHostReleaseTimeout bounds the release call itself. It starts when the
+// release runs, not when the lease is acquired, so a long thread start does
+// not expire it.
+var codexHostReleaseTimeout = 10 * time.Second
 
 func (a *app) codexHost(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
@@ -163,13 +168,19 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 	}
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
-		a.errf("%s", selectionNotUsedLine(err))
-		return invalid()
+		if line, ok := threadSelectionFallback(err); ok {
+			a.errf("%s", line)
+			return invalid()
+		}
+		return err
 	}
 	choice, off, launchID, err := a.chooseCodexHost(ctx, c, t.repo, "", false)
 	if err != nil {
-		a.errf("%s", selectionNotUsedLine(err))
-		return invalid()
+		if line, ok := threadSelectionFallback(err); ok {
+			a.errf("%s", line)
+			return invalid()
+		}
+		return err
 	}
 	if off {
 		a.errf("%s", hostSelectionOff)
@@ -178,9 +189,9 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 	switch choice.Action {
 	case "use":
 		t.host = choice.Host
-		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codexHostReleaseTimeout)
-		defer cancel()
 		defer func() {
+			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codexHostReleaseTimeout)
+			defer cancel()
 			if rel := a.releaseCodexHost(releaseCtx, c, t.host, launchID); rel != nil {
 				a.errf("%s", rel.Error())
 			}
@@ -206,13 +217,27 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 	}
 }
 
-func selectionNotUsedLine(err error) string {
+// threadSelectionFallback is the one line thread start adds when select was
+// not reached, or answered 5xx. A real refusal (a profile fence, a
+// coordinator check, an invalid body, a conflict) is returned unchanged.
+func threadSelectionFallback(err error) (string, bool) {
 	var ee *exitError
 	if !errors.As(err, &ee) {
-		return selectionNotUsedUnreached
+		return selectionNotUsedUnreached, true
 	}
-	if ee.code == ExitAuth {
-		return selectionNotUsedNoCreds
+	if ee.code == ExitAuth && localTokenFailure(ee.msg) {
+		return selectionNotUsedNoCreds, true
 	}
-	return selectionNotUsedNoAnswer
+	if selectUnanswered(ee.msg) {
+		return selectionNotUsedNoAnswer, true
+	}
+	return "", false
+}
+
+func localTokenFailure(msg string) bool {
+	return strings.Contains(msg, "no token") || strings.Contains(msg, "token file") || strings.Contains(msg, "the token at")
+}
+
+func selectUnanswered(msg string) bool {
+	return strings.HasPrefix(msg, "the operator failed") || strings.HasPrefix(msg, "the operator is unavailable") || strings.Contains(msg, "the API answered 5")
 }

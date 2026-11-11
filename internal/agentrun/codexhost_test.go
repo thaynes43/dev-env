@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/threadlaunch"
@@ -417,4 +418,66 @@ func TestInteractiveSelectionFailures(t *testing.T) {
 		contains(t, "stderr", h.stderr.String(), "the operator failed")
 		noCreate(t, h)
 	})
+}
+
+func TestThreadStartReleaseTimeoutStartsAtRelease(t *testing.T) {
+	prev := codexHostReleaseTimeout
+	codexHostReleaseTimeout = 2 * time.Second
+	t.Cleanup(func() { codexHostReleaseTimeout = prev })
+	h, c := threadAPIHarness(t, nil)
+	var release int
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		switch r.URL.Path {
+		case apiv1.CodexHostsSelectPath:
+			var req apiv1.CodexHostSelectRequest
+			if json.Unmarshal(body, &req) != nil || !apiv1.ValidCodexLaunchID(req.LaunchID) {
+				t.Errorf("select rejected")
+			}
+			writeTestJSON(w, http.StatusOK, codexChoice("use", threadHostName, ""))
+		case apiv1.SessionThreadsPath(threadHostName):
+			time.Sleep(3 * time.Second)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(hostResult(t, apiv1.ThreadResponded, ""))
+		case apiv1.CodexHostsReleasePath:
+			release++
+			writeTestJSON(w, http.StatusOK, apiv1.CodexHostReleaseResponse{Host: threadHostName, Released: true})
+		default:
+			apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "no route")
+		}
+	}
+	args := []string{"thread", "start", "--agent", "codex", "--model", "gpt-6-astra", "--effort", "high", "--handoff", h.write("handoff.txt", threadHandoff), "--repo", "dev-env"}
+	h.mustRun(ExitOK, args...)
+	if release != 1 || c.calls != 0 {
+		t.Fatalf("release %d execs %d", release, c.calls)
+	}
+}
+
+func TestThreadStartSelectionRefusalIsReturned(t *testing.T) {
+	args := func(h *harness) []string {
+		return []string{"thread", "start", "--agent", "codex", "--model", "gpt-6-astra", "--effort", "high", "--handoff", h.write("handoff.txt", threadHandoff), "--repo", "dev-env"}
+	}
+	for _, tc := range []struct {
+		name, code, msg, want string
+		status, exit          int
+	}{
+		{"forbidden", apiv1.CodeForbidden, "A coordinator may only check host selection.", "not allowed", http.StatusForbidden, ExitAuth},
+		{"invalid", apiv1.CodeInvalid, "launchId is 16 to 64 characters of a-z and 0-9", "the API refused", http.StatusUnprocessableEntity, ExitFailed},
+		{"conflict", apiv1.CodeConflict, "session paired kept changing; try again", "the API refused", http.StatusConflict, ExitFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if r.URL.Path != apiv1.CodexHostsSelectPath {
+					t.Errorf("unexpected %s", r.URL.Path)
+				}
+				apiError(w, tc.status, tc.code, tc.msg)
+			}
+			h.mustRun(tc.exit, args(h)...)
+			if strings.Contains(h.stderr.String(), "Host selection was not used") || strings.Contains(h.stdout.String(), `"version"`) {
+				t.Fatalf("a real refusal was hidden\nstdout %s\nstderr %s", h.stdout.String(), h.stderr.String())
+			}
+			contains(t, "stderr", h.stderr.String(), tc.want)
+		})
+	}
 }
