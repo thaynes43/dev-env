@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.103.0](https://github.com/thaynes43/dev-env/compare/v2.102.0...v2.103.0) (2026-11-11)
+
+
+### Features
+
+* **codexhost:** choose and lease a paired Codex host, routes off by default (DESIGN-063 slice 2, OP699) ([#1070](https://github.com/thaynes43/dev-env/issues/1070)) ([5ffdada](https://github.com/thaynes43/dev-env/commit/5ffdada50d346e9fc4e55388d692708b3e3e7ef8))
+* **retention:** release parent notes once their child session is gone (DESIGN-062 slice 5, OP688) ([#1060](https://github.com/thaynes43/dev-env/issues/1060)) ([a5e8032](https://github.com/thaynes43/dev-env/commit/a5e803280c9bf3581689f7f0eb648974c709ea33))
+
+
+### Bug Fixes
+
+* **coordinator:** the brief lets a coordinator ask its parent through parent notes (OP706) ([#1071](https://github.com/thaynes43/dev-env/issues/1071)) ([6bc602c](https://github.com/thaynes43/dev-env/commit/6bc602c55b01de247958dfebb9ab8876aa0125f7))
+
 ## [2.102.0](https://github.com/thaynes43/dev-env/compare/v2.101.1...v2.102.0) (2026-11-11)
 
 
