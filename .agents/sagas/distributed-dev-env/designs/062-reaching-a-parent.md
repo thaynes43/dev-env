@@ -40,10 +40,11 @@
 - The child learns the answer from one held read, not from a sleep loop. A
   headless task can run that read. `agent-run msg` stays unable to deliver
   into a headless task.
-- A note's text is never typed into a parent's screen. A live Claude TUI
-  parent is woken by one fixed line with no note text, and only while it is
-  not waiting on a person (section 5 and ruling 1). Meatball polls. Nothing new pushes
-  into its chat.
+- A note's text is never typed into a parent's screen, and since 2026-11-11
+  nothing else is either: a parent that wants to be woken runs
+  `agent-run parent wait-any` itself (section 13, ADR-024). The one fixed
+  line this bullet first described is withdrawn. Meatball polls. Nothing new
+  pushes into its chat.
 
 ## 1. Outcome
 
@@ -750,7 +751,9 @@ The worker put four questions for Tom here. Tom said the same day that he
 should not be asked basic things, so the coordinator rules them. Each is
 recorded on OP545 and Tom can change any of them.
 
-1. **How a session parent learns of a note.** The note's text always stays
+1. **How a session parent learns of a note. Superseded in part on 2026-11-11
+   by ruling 6 (section 13) and ADR-024: no line is typed; the parent runs
+   its own held wait. The original text is kept as history.** The note's text always stays
    in the record and is never typed into the parent's screen. A live Claude
    TUI parent is woken by one fixed line that carries no note text (slice 6);
    a Codex or headless parent is not typed into and reads its list. The line
@@ -799,10 +802,24 @@ is woken by a command it runs itself.
 |---|---|---|
 | `GET /v1/parent-notes/wait?seconds=N&after=CURSOR` | a session, for notes addressed to itself | holds until a note of kind question, result or blocker addressed to the caller exists that is newer than CURSOR, or until N seconds. N is 1 to 900. Answers the oldest such note's name, child, kind and creation time, and a cursor. No note text |
 
-- The cursor is opaque to the caller: the note's creation time and name.
-  With no `after`, the server uses the time the request arrived, so a first
-  call waits only for notes stored from then on. A caller that wants the
-  backlog reads `agent-run parent list` first.
+- **The cursor never skips a note.** A note's creation time has one-second
+  resolution and note names sort in no useful order, so "newer than a time
+  and a name" would lose a note stored later in the same second. The cursor
+  therefore holds a creation second and the names already given to the
+  caller for that second, at most 32 of them. A note is new when its
+  creation second is later than the cursor's, or equal with a name the
+  cursor does not hold. The answer is the oldest new note, by second and
+  then by name. If more than 32 notes to one parent share a second, a later
+  call may name one of them again. A repeat is harmless; a miss is not
+  possible. The cursor is opaque to the caller, at most 4096 bytes, and
+  carries no note text.
+- **With no `after`, the cursor is built from what is stored**, not from a
+  clock: the newest note already addressed to the caller, and the names at
+  its second. So a first call returns only notes stored after it began, and
+  the operator's clock is never compared with the API server's. The handler
+  lists and then watches from that list's resource version, so a note
+  stored between the two is not lost. A caller that wants the backlog reads
+  `agent-run parent list` first.
 - Authorisation is the inbox list's: a session sees only notes addressed to
   it, by name and UID. A CallerPolicy caller has no wait, as before
   (section 7.2).
@@ -826,7 +843,10 @@ headless parent can run the same command in the foreground between steps.
 
 **Tests.** `internal/apiserver/parent_note_wait_any_test.go`: returns at once
 when a newer note exists; holds and returns when one is stored; `waiting` at
-the deadline; another session's notes never wake the caller; a reply and a
+the deadline; two notes stored in one second are both returned, in either
+name order, and neither twice within the 32-name bound; a note stored
+between the list and the watch is returned; with no `after`, notes that
+already exist are not returned and no clock is read; another session's notes never wake the caller; a reply and a
 plain message never wake it; the ninth held read is 429; a refused watch is
 503; the route is absent with the flag off; a CallerPolicy caller is
 refused. `internal/agentrun`: the command prints no note text, passes the

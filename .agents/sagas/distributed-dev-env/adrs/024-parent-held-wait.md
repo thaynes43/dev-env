@@ -6,11 +6,14 @@
 - **Decider:** that coordinator, reversing its own ruling 1 of
   [DESIGN-062](../designs/062-reaching-a-parent.md) section 12. This ADR does
   not record a decision by Tom.
-- **Supersedes:** in [ADR-023](023-reaching-a-parent.md), decision 1's
-  sentence that a live Claude TUI parent is woken by one fixed line, and the
-  paragraph that names the annotation `dev-env.haynesops.com/parent-notice`
-  as the sent mark. Everything else in ADR-023 stands, including that a
-  note's text is never typed into a parent's screen.
+- **Supersedes:** four parts of [ADR-023](023-reaching-a-parent.md), all
+  about the wake line: in decision 1, the sentence that a live Claude TUI
+  parent is woken by one fixed line, and the last sentence, that the line's
+  fixed first words let a session discard it; the paragraph that names the
+  annotation `dev-env.haynesops.com/parent-notice` as the sent mark; and the
+  second sentence of consequence C-63. Everything else in ADR-023 stands,
+  including that a note's text is never typed into a parent's screen and
+  that a Codex or headless parent reads its list.
 - **Design:** [DESIGN-062](../designs/062-reaching-a-parent.md) section 13.
 - **Tracking:** OpenProject [#689](https://work.haynesnetwork.com/work_packages/689)
   (the withdrawn slice) and [#708](https://work.haynesnetwork.com/work_packages/708)
@@ -44,9 +47,10 @@ section 5).
    withdrawn. dev-env PR 1072 is closed unmerged and its branch is kept.
 2. **A parent holds its own wait.** `agent-run parent wait-any` makes one
    held read on the operator. It returns when a note addressed to the caller
-   exists that is newer than the caller's cursor, or when its time is up. It
+   exists that the caller's cursor does not cover, or when its time is up. It
    prints the note's name, its child and its kind, and a cursor. It prints no
-   note text.
+   note text. The cursor never loses a note: a note may be named twice,
+   never skipped (DESIGN-062 section 13).
 3. **The parent's own harness does the waking.** A coordinator starts the
    command in the background. When the command exits, the harness tells the
    session, the way it does for any background command. No other process
