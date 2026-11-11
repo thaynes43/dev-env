@@ -25,11 +25,11 @@ const (
 // file ends in a newline, as v1's /creds/gh_token did; every reader takes it
 // through `$(cat ...)`, which drops it. Both App loops use this Job. A full
 // grant logs the permissions and repository selection GitHub returned. A short
-// grant also logs permissionsNotGranted. A permission entry is logged only
-// when its name and level are a permission name and read, write or admin;
-// anything else is dropped, not scrubbed, so a long permission name is not
-// replaced by the credential scrubber. The token, the key and the request
-// headers are not fields.
+// grant also logs permissionsNotGranted, which is built from the configured
+// set. A granted permission is logged only when its name is in that set and
+// its level is read, write or admin. A response entry whose name is outside
+// the set is dropped, and the line carries permissionsDropped when that count
+// is not zero. The token, the key and the request headers are not fields.
 func GitHubTokenJob(name string, app *GitHubApp, secret types.NamespacedName) Job {
 	return Job{
 		Name:   name,
@@ -40,9 +40,13 @@ func GitHubTokenJob(name string, app *GitHubApp, secret types.NamespacedName) Jo
 			if err != nil {
 				return Refreshed{}, err
 			}
+			granted, dropped := grantedPermissions(app.Permissions, tok.Permissions)
 			fields := []any{
 				"repositorySelection", redactGitHubText(tok.RepositorySelection),
-				"permissions", acceptedPermissions(permissionList(tok.Permissions)),
+				"permissions", granted,
+			}
+			if dropped != 0 {
+				fields = append(fields, "permissionsDropped", dropped)
 			}
 			if missing := acceptedPermissions(app.MissingPermissions(tok.Permissions)); len(missing) > 0 {
 				fields = append(fields, "permissionsNotGranted", missing)
@@ -56,10 +60,32 @@ func GitHubTokenJob(name string, app *GitHubApp, secret types.NamespacedName) Jo
 	}
 }
 
+// grantedPermissions returns the response entries that may be logged, and how
+// many response names were outside configured. A logged entry's name is one
+// the keeper asked for, and its level is read, write or admin. A configured
+// name with another level is left out of the log and out of the count. Names
+// are not passed through the credential scrubber, so a long configured
+// permission stays visible.
+func grantedPermissions(configured, granted map[string]string) ([]string, int) {
+	logged := make([]string, 0, len(granted))
+	dropped := 0
+	for _, name := range slices.Sorted(maps.Keys(granted)) {
+		level := granted[name]
+		if _, ok := configured[name]; !ok {
+			dropped++
+			continue
+		}
+		if !permissionLevel[level] {
+			continue
+		}
+		logged = append(logged, name+":"+level)
+	}
+	return logged, dropped
+}
+
 // acceptedPermissions keeps name:level entries whose name and level are ones
-// ParsePermissions would accept. Other entries are dropped. Both App loops
-// log through this, instead of the credential scrubber, so a permission name
-// of 20 or more characters stays visible.
+// ParsePermissions would accept. permissionsNotGranted is built from the
+// configured set and passes through here. Response permissions do not.
 func acceptedPermissions(entries []string) []string {
 	if len(entries) == 0 {
 		return entries
@@ -71,15 +97,6 @@ func acceptedPermissions(entries []string) []string {
 			continue
 		}
 		out = append(out, name+":"+level)
-	}
-	return out
-}
-
-// permissionList renders a permission set as sorted "name:level" strings.
-func permissionList(p map[string]string) []string {
-	out := make([]string, 0, len(p))
-	for _, name := range slices.Sorted(maps.Keys(p)) {
-		out = append(out, name+":"+p[name])
 	}
 	return out
 }

@@ -447,6 +447,124 @@ func TestOpsMintBacksOffWhenTheDevDirectoryBecomesUnreadable(t *testing.T) {
 	}
 }
 
+// TestOpsMintRefusesNumericAppIDInClientIDFile is the mislabeled-file case:
+// one App's client id in the dev directory's client-id, and that App's numeric
+// id in the ops directory's client-id, with two keys and two installations.
+// The value is an app id wherever the file sits, so the two forms cannot be
+// compared. The ops mint is refused before any request and backs off; the dev
+// bot's mint still succeeds.
+func TestOpsMintRefusesNumericAppIDInClientIDFile(t *testing.T) {
+	pair := keys(t)
+	clk := &armClock{FakeClock: fakeclock.NewFakeClock(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC))}
+	devGH := newFakeGitHub(t, &pair[0].PublicKey, clk.Now)
+	opsGH := newFakeGitHub(t, &pair[1].PublicKey, clk.Now)
+	const numericAppID = "4291021"
+	const opsInstallation = "4343"
+	// A mint that treated the ops client-id file as a client id would send
+	// this string. The fake accepts it, so the test fails when the mint runs.
+	opsGH.issuer = numericAppID
+	opsGH.installationID = opsInstallation
+	devDir := writeAppDir(t, pair[0])
+	opsDir := writeAppDir(t, pair[1])
+	writeFile(t, filepath.Join(opsDir, AppFileClientID), numericAppID+"\n")
+	writeFile(t, filepath.Join(opsDir, AppFileInstallationID), opsInstallation+"\n")
+	devApp := devGH.app(devDir)
+	devApp.Clock = clk
+	opsApp := opsGH.app(opsDir)
+	opsApp.Clock = clk
+	opsApp.Permissions = DefaultOpsBotPermissions
+	opsApp.Repositories = []string{"haynes-ops"}
+	opsSecret := types.NamespacedName{Namespace: ghSecret.Namespace, Name: DefaultOpsGHTokenSecret}
+
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(emptySecret(), secretNamed(DefaultOpsGHTokenSecret)).Build()
+	logs := &logBuffer{}
+	k := &Keeper{
+		Jobs: keeperJobs(Options{
+			GitHubApp:        devApp,
+			GHTokenSecret:    ghSecret,
+			OpsGitHubApp:     opsApp,
+			OpsGHTokenSecret: opsSecret,
+		}),
+		Writer: &SecretWriter{Client: c},
+		Log:    logs.logger(),
+		Clock:  clk,
+		Rand:   func() float64 { return 0.5 },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := k.Start(ctx); err != nil {
+			t.Errorf("Start: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	eventually(t, "both token loops to sleep", func() bool {
+		if clk.arms() < 2 {
+			return false
+		}
+		k.mu.Lock()
+		defer k.mu.Unlock()
+		for _, name := range []string{"gh-token", "ops-gh-token"} {
+			st := k.state[name]
+			if st == nil || st.attempts < 1 || st.next.IsZero() {
+				return false
+			}
+		}
+		return true
+	})
+	k.mu.Lock()
+	opsWait := k.state["ops-gh-token"].next.Sub(clk.Now())
+	devWait := k.state["gh-token"].next.Sub(clk.Now())
+	k.mu.Unlock()
+	if opsWait != 10*time.Second {
+		t.Errorf("ops wait %s, want the first backoff", opsWait)
+	}
+	if devWait != 40*time.Minute {
+		t.Errorf("dev wait %s, want a successful mint", devWait)
+	}
+	if _, reqs, _, _, _ := opsGH.snapshot(); reqs != 0 {
+		t.Fatalf("a numeric app id in client-id reached GitHub: %d requests", reqs)
+	}
+	if _, reqs, _, _, _ := devGH.snapshot(); reqs != 1 {
+		t.Fatalf("dev requests %d, want 1", reqs)
+	}
+	if err := k.ReadyCheck(nil); err == nil || !strings.Contains(err.Error(), "ops-gh-token") {
+		t.Fatalf("readiness with a refused ops mint: %v", err)
+	}
+	text := logs.String()
+	if !strings.Contains(text, "cannot be compared") {
+		t.Fatalf("the refusal is not the different-forms check:\n%s", text)
+	}
+	for _, id := range []string{numericAppID, testClientID, testInstallationID, opsInstallation} {
+		if strings.Contains(text, id) {
+			t.Errorf("the log quotes an id %q", id)
+		}
+	}
+	dev := &corev1.Secret{}
+	if err := c.Get(context.Background(), ghSecret, dev); err != nil {
+		t.Fatal(err)
+	}
+	_, _, devTokens, _, _ := devGH.snapshot()
+	if len(devTokens) != 1 || string(dev.Data[GHTokenKey]) != devTokens[0]+"\n" {
+		t.Error("the dev bot's mint did not succeed")
+	}
+	opsWritten := &corev1.Secret{}
+	if err := c.Get(context.Background(), opsSecret, opsWritten); err != nil {
+		t.Fatal(err)
+	}
+	if len(opsWritten.Data[GHTokenKey]) != 0 {
+		t.Error("the refused ops mint wrote a token")
+	}
+}
+
 func (o *opsLoop) secret(name string) *corev1.Secret {
 	o.t.Helper()
 	s := &corev1.Secret{}

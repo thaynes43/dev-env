@@ -30,7 +30,8 @@ import (
 // The files of a GitHub App's directory: the keys of the Secret that the
 // keeper's ExternalSecret writes from 1Password (haynes-ops, KICKOFF 8.8), mounted
 // as a directory. The JWT's issuer is client-id when that file exists, else
-// app-id; GitHub recommends the client ID.
+// app-id; GitHub recommends the client ID. A value that is all digits is an
+// app id, whichever of those files holds it.
 const (
 	AppFileClientID       = "client-id"
 	AppFileAppID          = "app-id"
@@ -110,7 +111,9 @@ type GitHubApp struct {
 	// before any request, when the issuers are the same, when one issuer is a
 	// client id and the other is an app id (those two forms cannot be
 	// compared), when the directories hold the same signing key, or when the
-	// installation ids are the same. Path cleaning cannot see a symlink.
+	// installation ids are the same. Equality and the different-forms check
+	// use the classified value: all digits is an app id, whichever file holds
+	// it. Path cleaning cannot see a symlink.
 	DistinctFrom *GitHubApp
 }
 
@@ -314,11 +317,14 @@ func (a *GitHubApp) load() (appCreds, error) {
 	}
 	switch {
 	case clientID != "":
-		c.issuer = clientID
+		c.issuer, err = classifyIssuer(filepath.Join(a.Dir, AppFileClientID), clientID)
+		if err != nil {
+			return c, err
+		}
 	case appID != "":
-		n, err := strconv.ParseInt(appID, 10, 64)
-		if err != nil || n <= 0 {
-			return c, fmt.Errorf("%s: not a positive number", filepath.Join(a.Dir, AppFileAppID))
+		n, err := parseAppID(filepath.Join(a.Dir, AppFileAppID), appID)
+		if err != nil {
+			return c, err
 		}
 		c.issuer = n
 	default:
@@ -364,14 +370,50 @@ func (a *GitHubApp) refuseSharedIssuer(creds appCreds) error {
 	return nil
 }
 
-// issuerFormsDiffer reports a client id (a string) paired with an app id (a
-// number). Those two cannot be compared, so the mint is refused.
+// issuerFormsDiffer reports a client id (a string) paired with an app id (an
+// int64). Those two cannot be compared, so the mint is refused. load
+// classifies each issuer first: all digits is an app id.
 func issuerFormsDiffer(a, b any) bool {
 	_, aClient := a.(string)
 	_, bClient := b.(string)
 	_, aApp := a.(int64)
 	_, bApp := b.(int64)
 	return (aClient && bApp) || (aApp && bClient)
+}
+
+// classifyIssuer classifies an issuer by its value. All digits is an app id.
+// Any other value is a client id. The file name does not decide the form.
+func classifyIssuer(file, raw string) (any, error) {
+	if !allDigits(raw) {
+		return raw, nil
+	}
+	n, err := parseAppID(file, raw)
+	if err != nil {
+		return nil, err
+	}
+	return n, nil
+}
+
+// parseAppID parses a positive App id. The error names the file.
+func parseAppID(file, raw string) (int64, error) {
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s: not a positive number", file)
+	}
+	return n, nil
+}
+
+// allDigits reports whether s is one or more ASCII digits.
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func sameSigningKey(a, b *rsa.PrivateKey) bool {

@@ -827,6 +827,53 @@ func TestLongPermissionNamesStayInTheGrantLog(t *testing.T) {
 	}
 }
 
+// TestGrantLogDropsPermissionsOutsideTheConfiguredSet is the hostile response
+// the syntax check would keep: a wholly lowercase token-prefixed name and a
+// long lowercase fragment, each with a valid level. Neither is in the
+// configured set, so neither is logged, and the line counts them. A requested
+// vulnerability_alerts:write stays.
+func TestGrantLogDropsPermissionsOutsideTheConfiguredSet(t *testing.T) {
+	const (
+		tokenPrefixed = "ghp_lowercasesyntheticmarker"
+		longFragment  = "abcdefghijklmnopqrstuvwxyz"
+	)
+	if len(longFragment) < 20 {
+		t.Fatalf("long fragment is %d characters", len(longFragment))
+	}
+	if !permissionName.MatchString(tokenPrefixed) || !permissionName.MatchString(longFragment) || !permissionLevel["write"] {
+		t.Fatal("the hostile keys must be ones the syntax check accepts")
+	}
+	h := newHarness(t, []client.Object{emptySecret()}, nil)
+	h.app.Permissions = map[string]string{"vulnerability_alerts": "write"}
+	h.gh.respond = func(w http.ResponseWriter, _ *http.Request, _ string) {
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"token":      "ghs_test_perm_xxxxxxxxxxxxxxxxxxxx",
+			"expires_at": h.clock.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"permissions": map[string]string{
+				"vulnerability_alerts": "write",
+				tokenPrefixed:          "write",
+				longFragment:           "write",
+			},
+			"repository_selection": "all",
+		})
+	}
+	h.start()
+	if w := h.nextWait(); w != 40*time.Minute {
+		t.Fatalf("wait %s, want a successful mint", w)
+	}
+	logs := h.logs.String()
+	if !strings.Contains(logs, "vulnerability_alerts:write") {
+		t.Errorf("logs lack the requested permission:\n%s", logs)
+	}
+	if strings.Contains(logs, tokenPrefixed) || strings.Contains(logs, longFragment) {
+		t.Errorf("the log kept a response permission outside the configured set:\n%s", logs)
+	}
+	if !strings.Contains(logs, `"permissionsDropped":2`) {
+		t.Errorf("the log does not carry the dropped count:\n%s", logs)
+	}
+}
+
 func TestRedactRemovesBase64URLRunsBeforeTheLengthCut(t *testing.T) {
 	run := strings.Repeat("A", 40)
 	got := redactGitHubText(strings.Repeat("ab ", 93) + run)
