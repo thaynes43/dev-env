@@ -222,7 +222,13 @@ func (s *Server) listPolicyParentNotes(ctx context.Context, r *http.Request, c *
 	if err != nil {
 		return 0, nil, err
 	}
-	items, next, err := s.Inbox.ListCallerParentNotes(ctx, policyInboxCaller(c), q.sent, q.limit, q.cursor)
+	var items []coord.InboxMessage
+	var next string
+	if q.waiting {
+		items, next, err = s.Inbox.ListUnansweredCallerNotes(ctx, policyInboxCaller(c), q.limit, q.cursor)
+	} else {
+		items, next, err = s.Inbox.ListCallerParentNotes(ctx, policyInboxCaller(c), q.sent, q.limit, q.cursor)
+	}
 	if err != nil {
 		return 0, nil, inboxUnknown()
 	}

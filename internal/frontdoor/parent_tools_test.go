@@ -69,7 +69,7 @@ func TestParentTools(t *testing.T) {
 	}
 	api.set(func(w http.ResponseWriter, r *http.Request, body []byte) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == apiv1.ParentNotesPath && r.URL.Query().Get("box") == apiv1.ParentNotesInbox:
+		case r.Method == http.MethodGet && r.URL.Path == apiv1.ParentNotesPath && r.URL.Query().Get("box") == apiv1.ParentNotesInbox && r.URL.Query().Get("waiting") == "true":
 			writeJSON(w, http.StatusOK, apiv1.InboxList{Box: apiv1.ParentNotesInbox, Items: []apiv1.InboxMetadata{
 				meta(note, "question", "coord-1", key),
 				meta(other, "blocker", "coord-1", key+"-2"),
@@ -96,7 +96,7 @@ func TestParentTools(t *testing.T) {
 			view.CallerSender = &apiv1.InboxCaller{ServiceAccount: "dev-env-system/dev-env-meatball", PolicyUID: "policy-uid"}
 			writeJSON(w, http.StatusCreated, apiv1.InboxResult{Outcome: "Created", Message: view})
 		case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath("coord-1"):
-			writeJSON(w, http.StatusOK, apiv1.Session{Name: "coord-1", Phase: "Running"})
+			writeJSON(w, http.StatusOK, apiv1.Session{Name: "coord-1", Phase: "Running", UID: "uid-1"})
 		default:
 			writeJSON(w, http.StatusNotFound, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeNotFound, Message: secret + " foreign-session"}})
 		}
@@ -146,6 +146,127 @@ func TestParentTools(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), key) || strings.Contains(logs.String(), "blocker") {
 		t.Fatal("front door logged note text, key or kind")
+	}
+}
+
+func TestParentWaitingPages(t *testing.T) {
+	base, api, _, _ := startDoor(t, "#!/bin/sh\nexit 0\n")
+	question := "message." + strings.Repeat("a", 32) + "." + strings.Repeat("b", 32)
+	result := "message." + strings.Repeat("c", 32) + "." + strings.Repeat("d", 32)
+	item := func(name, kind string) apiv1.InboxMetadata {
+		return apiv1.InboxMetadata{Name: name, UID: "note-uid", Project: "dev-env", Key: "k", Kind: kind, CreatedAt: time.Date(2026, 11, 10, 22, 0, 0, 0, time.UTC)}
+	}
+	api.set(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if r.URL.Path != apiv1.ParentNotesPath || r.URL.Query().Get("waiting") != "true" {
+			t.Errorf("waiting page used %s %s", r.Method, r.URL.RequestURI())
+			writeJSON(w, http.StatusNotFound, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeNotFound, Message: "missing"}})
+			return
+		}
+		switch r.URL.Query().Get("continue") {
+		case "":
+			writeJSON(w, http.StatusOK, apiv1.InboxList{Box: apiv1.ParentNotesInbox, Items: []apiv1.InboxMetadata{item(question, "question")}, Continue: "1:"})
+		case "1:":
+			writeJSON(w, http.StatusOK, apiv1.InboxList{Box: apiv1.ParentNotesInbox, Items: []apiv1.InboxMetadata{item(result, "result")}})
+		default:
+			t.Errorf("unexpected continuation")
+			writeJSON(w, http.StatusBadRequest, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeBadRequest, Message: "bad"}})
+		}
+	})
+	call := func(args map[string]any) (string, bool) {
+		t.Helper()
+		status, raw := postMCP(t, http.DefaultClient, base, testBearer, "tools/call", map[string]any{"name": "parent_waiting", "arguments": args})
+		return toolResult(t, status, raw)
+	}
+	first, isError := call(map[string]any{"limit": 1})
+	if isError || !strings.Contains(first, question) || !strings.Contains(first, "continue: 1:\n") || strings.Contains(first, result) {
+		t.Fatalf("first page %q error %v", first, isError)
+	}
+	second, isError := call(map[string]any{"limit": 1, "continue": "1:"})
+	if isError || !strings.Contains(second, result) || strings.Contains(second, "continue:") {
+		t.Fatalf("results page %q error %v", second, isError)
+	}
+	before := len(api.requests())
+	bad, isError := call(map[string]any{"continue": "PRIVATE_CURSOR"})
+	if !isError || strings.Contains(bad, "PRIVATE_CURSOR") || len(api.requests()) != before {
+		t.Fatalf("bad continuation %q error %v requests %d", bad, isError, len(api.requests()))
+	}
+}
+
+func TestParentStatusCount(t *testing.T) {
+	base, api, _, _ := startDoor(t, "#!/bin/sh\nexit 0\n")
+	note := func(name, uid string) apiv1.InboxMetadata {
+		return apiv1.InboxMetadata{Name: name, UID: "note-uid", Project: "dev-env", Key: "k", Kind: "question", Sender: apiv1.TaskClaimOwner{Namespace: "dev-agents", Name: "coord-1", UID: uid}, CreatedAt: time.Date(2026, 11, 10, 22, 0, 0, 0, time.UTC)}
+	}
+	api.set(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath("coord-1"):
+			writeJSON(w, http.StatusOK, apiv1.Session{Name: "coord-1", Phase: "Running", UID: "uid-new"})
+		case r.URL.Path == apiv1.ParentNotesPath && r.URL.Query().Get("waiting") == "true":
+			writeJSON(w, http.StatusOK, apiv1.InboxList{Box: apiv1.ParentNotesInbox, Items: []apiv1.InboxMetadata{
+				note("message."+strings.Repeat("a", 32)+"."+strings.Repeat("b", 32), "uid-old"),
+				note("message."+strings.Repeat("c", 32)+"."+strings.Repeat("d", 32), "uid-new"),
+			}})
+		default:
+			writeJSON(w, http.StatusNotFound, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeNotFound, Message: "missing"}})
+		}
+	})
+	status, raw := postMCP(t, http.DefaultClient, base, testBearer, "tools/call", map[string]any{"name": "session_status", "arguments": map[string]any{"name": "coord-1"}})
+	text, isError := toolResult(t, status, raw)
+	if isError || !strings.Contains(text, "parent notes waiting: 1\n") {
+		t.Fatalf("replaced session %q error %v", text, isError)
+	}
+
+	api.reset()
+	pages := 0
+	api.set(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath("coord-1"):
+			writeJSON(w, http.StatusOK, apiv1.Session{Name: "coord-1", Phase: "Running", UID: "uid-1"})
+		case r.URL.Path == apiv1.ParentNotesPath:
+			pages++
+			writeJSON(w, http.StatusOK, apiv1.InboxList{Box: apiv1.ParentNotesInbox, Continue: "0:more", Items: []apiv1.InboxMetadata{note("message."+strings.Repeat("e", 32)+"."+strings.Repeat("f", 32), "uid-1")}})
+		default:
+			writeJSON(w, http.StatusNotFound, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeNotFound, Message: "missing"}})
+		}
+	})
+	status, raw = postMCP(t, http.DefaultClient, base, testBearer, "tools/call", map[string]any{"name": "session_status", "arguments": map[string]any{"name": "coord-1"}})
+	text, isError = toolResult(t, status, raw)
+	if isError || !strings.Contains(text, "parent notes waiting: incomplete\n") || strings.Contains(text, "parent notes waiting: 42") || pages != 42 {
+		t.Fatalf("exhausted scan %q error %v pages %d", text, isError, pages)
+	}
+}
+
+func TestParentToolBounds(t *testing.T) {
+	base, api, _, _ := startDoor(t, "#!/bin/sh\nexit 0\n")
+	api.set(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		t.Errorf("boundary input reached the operator: %s %s", r.Method, r.URL.Path)
+		writeJSON(w, http.StatusInternalServerError, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeUnavailable, Message: "no"}})
+	})
+	secret := "PRIVATE_BOUNDARY_TEXT"
+	note := "message." + strings.Repeat("a", 32) + "." + strings.Repeat("b", 32)
+	call := func(name string, args map[string]any) (string, bool) {
+		t.Helper()
+		status, raw := postMCP(t, http.DefaultClient, base, testBearer, "tools/call", map[string]any{"name": name, "arguments": args})
+		return toolResult(t, status, raw)
+	}
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"parent_waiting", map[string]any{"limit": 0}},
+		{"parent_waiting", map[string]any{"limit": 101}},
+		{"parent_read", map[string]any{"name": note, secret: "x"}},
+		{"parent_answer", map[string]any{"name": note, "key": "k", "text": "x", secret: "x"}},
+		{"parent_send", map[string]any{"session": "coord-1", "key": "k", "text": "x", secret: "x"}},
+		{"parent_answer", map[string]any{"name": note, "key": "", "text": "x"}},
+		{"parent_answer", map[string]any{"name": note, "key": strings.Repeat("k", 129), "text": "x"}},
+		{"parent_send", map[string]any{"session": "coord-1", "key": "k", "text": ""}},
+		{"parent_send", map[string]any{"session": "coord-1", "key": "k", "text": strings.Repeat(secret, 2000)}},
+	} {
+		text, isError := call(tc.name, tc.args)
+		if !isError || strings.Contains(text, secret) || len(api.requests()) != 0 {
+			t.Fatalf("%s %q error %v requests %d", tc.name, text, isError, len(api.requests()))
+		}
 	}
 }
 

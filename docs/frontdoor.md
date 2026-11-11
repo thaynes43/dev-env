@@ -183,9 +183,11 @@ caller started. A 401, 403 or 404 comes back as `refused:` and the operator's
 message. The text includes the session name, state, the OpenProject item link
 when the item is known, and a retained outcome when the session has one.
 After a successful read it adds one line, `parent notes waiting: N`, counting
-notes from that session that are waiting for this caller. The line is a count.
-If that list cannot be read, the line is `parent notes waiting: unavailable`
-and the session read still returns. Neither line carries note text.
+notes from that session that have no reply. The sender name and the sender UID
+both have to match the session. If that list cannot be read, the line is
+`parent notes waiting: unavailable`. If the bounded scan still has a
+continuation, the line is `parent notes waiting: incomplete`. The session read
+still returns. None of these lines carries note text.
 
 ### Parent notes
 
@@ -193,8 +195,12 @@ and the session read still returns. Neither line carries note text.
 only parent-note tools. They call the operator as this process's ServiceAccount.
 A session this caller did not start is hidden: the tool returns the operator's
 status and does not return the note text, the key or the kind on a refusal.
-`parent_waiting` lists names, kinds and ages. An age is the whole seconds,
-minutes, hours or days since the note was stored. It has no text and no key.
+`parent_waiting` lists notes that have no reply. It takes an optional `limit`
+and an optional `continue`, and it returns `continue:` when another page
+remains. Names, kinds and ages only. An age is the whole seconds, minutes,
+hours or days since the note was stored. It has no text and no key. An unknown
+argument on these four tools is a fixed sentence that does not repeat the
+argument name.
 `parent_read` returns the stored text unchanged. `parent_answer` stores one
 reply. The same key and text confirm the stored answer; a different second
 answer is refused. `parent_send` stores one plain message for a session this

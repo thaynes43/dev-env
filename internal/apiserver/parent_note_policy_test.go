@@ -9,6 +9,9 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -111,6 +114,10 @@ func TestParentNotePolicyCaller(t *testing.T) {
 	if len(inboxList.Items) != 1 || inboxList.Items[0].Name != note.Name {
 		t.Fatal("caller inbox did not list only its own note", inboxList.Items)
 	}
+	waitingBefore := parentNoteList(t, f, tokMeatball, "?waiting=true")
+	if len(waitingBefore.Items) != 1 || waitingBefore.Items[0].Name != note.Name {
+		t.Fatal("the note was not waiting before its answer", waitingBefore.Items)
+	}
 	read := f.do(http.MethodGet, apiv1.ParentNotesPath+"/"+note.Name, tokMeatball, nil)
 	if read.Code != http.StatusOK || decode[apiv1.InboxMessage](t, read).Text != text {
 		t.Fatal("caller read did not return the stored text", read.Code, read.Body.String())
@@ -142,6 +149,14 @@ func TestParentNotePolicyCaller(t *testing.T) {
 	if strings.Contains(second.Body.String(), answerText) || strings.Contains(second.Body.String(), "other") {
 		t.Fatal("second answer disclosed text")
 	}
+	waitingAfter := parentNoteList(t, f, tokMeatball, "?waiting=true")
+	if len(waitingAfter.Items) != 0 {
+		t.Fatal("an answered note stayed in the waiting list", waitingAfter.Items)
+	}
+	if kept := parentNoteList(t, f, tokMeatball, "?box=inbox"); len(kept.Items) != 1 || kept.Items[0].Name != note.Name {
+		t.Fatal("the historical list dropped the answered note", kept.Items)
+	}
+	wantError(t, f.do(http.MethodGet, apiv1.ParentNotesPath+"?waiting=true", child, nil), http.StatusBadRequest, apiv1.CodeBadRequest)
 	childRead := f.do(http.MethodGet, apiv1.ParentNotesPath+"/"+answer.Name, child, nil)
 	if childRead.Code != http.StatusOK || decode[apiv1.InboxMessage](t, childRead).Text != answerText {
 		t.Fatal("child could not read the stored answer", childRead.Code, childRead.Body.String())
@@ -200,7 +215,91 @@ func TestParentNotePolicyCaller(t *testing.T) {
 			t.Fatal("a refused route carried a note", route.method, route.path)
 		}
 	}
-	if strings.Contains(logs.String(), text) || strings.Contains(logs.String(), answerText) || strings.Contains(logs.String(), sentText) || strings.Contains(logs.String(), key) || strings.Contains(logs.String(), "PRIVATE_FOREIGN_NOTE") || strings.Contains(logs.String(), "policy-answer") {
+	privatePath := "PRIVATE_PATH_TEXT"
+	pathRead := f.do(http.MethodGet, apiv1.ParentNotesPath+"/"+privatePath, tokMeatball, nil)
+	if pathRead.Code != http.StatusNotFound || strings.Contains(pathRead.Body.String(), privatePath) {
+		t.Fatal("a private path was echoed", pathRead.Code, pathRead.Body.String())
+	}
+	if strings.Contains(logs.String(), text) || strings.Contains(logs.String(), answerText) || strings.Contains(logs.String(), sentText) || strings.Contains(logs.String(), key) || strings.Contains(logs.String(), "PRIVATE_FOREIGN_NOTE") || strings.Contains(logs.String(), "policy-answer") || strings.Contains(logs.String(), privatePath) {
 		t.Fatal("parent note text or key was logged")
 	}
+	if !strings.Contains(logs.String(), "/v1/parent-notes/{message}") {
+		t.Fatal("parent note log used the raw path")
+	}
+}
+
+func TestParentNoteFencesRefuseReplacement(t *testing.T) {
+	t.Run("policy", func(t *testing.T) {
+		f, child := meatballChildFixture(t)
+		reads := 0
+		f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			err := c.Get(ctx, key, obj, opts...)
+			if err == nil && key.Name == callerPolicyName && key.Namespace == callerPolicyNamespace {
+				reads++
+				if reads == 1 {
+					if err := recreateObject(c, obj, "policy-uid-2"); err != nil {
+						return err
+					}
+				}
+			}
+			return err
+		}})
+		before := countMessages(t, f)
+		w := f.do(http.MethodPost, apiv1.ParentNotesPath, child, apiv1.TellParentRequest{Key: "replaced-policy", Kind: inbox.KindQuestion, Text: "note text"})
+		wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
+		if countMessages(t, f) != before || strings.Contains(w.Body.String(), "note text") {
+			t.Fatal("a replaced policy stored a note", w.Code, w.Body.String())
+		}
+	})
+	t.Run("child", func(t *testing.T) {
+		f, _ := meatballChildFixture(t)
+		reads := 0
+		f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			err := c.Get(ctx, key, obj, opts...)
+			if err == nil && key.Name == "child" && key.Namespace == sessionNS {
+				reads++
+				if reads == 1 {
+					if err := recreateObject(c, obj, "child-uid-2"); err != nil {
+						return err
+					}
+				}
+			}
+			return err
+		}})
+		before := countMessages(t, f)
+		w := f.do(http.MethodPost, apiv1.ParentNotesPath, tokMeatball, apiv1.TellParentRequest{Session: "child", Key: "replaced-child", Text: "note text"})
+		wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
+		if countMessages(t, f) != before || strings.Contains(w.Body.String(), "note text") {
+			t.Fatal("a replaced child stored a message", w.Code, w.Body.String())
+		}
+	})
+}
+
+func meatballChildFixture(t *testing.T) (*fixture, string) {
+	t.Helper()
+	f, _, child, _ := parentNoteFixture(t, false)
+	if err := f.c.Create(context.Background(), meatballPolicy()); err != nil {
+		t.Fatal(err)
+	}
+	id := saIdentity(meatballAccount)
+	id.PodName, id.PodUID = "front-door", "front-door-pod"
+	f.auth[tokMeatball] = id
+	owned := f.session("child")
+	owned.Spec.Parent = meatballAccount
+	if err := f.c.Update(context.Background(), owned); err != nil {
+		t.Fatal(err)
+	}
+	f.h = f.srv.Handler()
+	return f, child
+}
+
+func recreateObject(c client.WithWatch, obj client.Object, uid types.UID) error {
+	ctx := context.Background()
+	fresh := obj.DeepCopyObject().(client.Object)
+	if err := c.Delete(ctx, fresh); err != nil {
+		return err
+	}
+	fresh.SetResourceVersion("")
+	fresh.SetUID(uid)
+	return c.Create(ctx, fresh)
 }

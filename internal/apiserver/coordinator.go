@@ -144,5 +144,15 @@ func coordinatorLogPath(r *http.Request, c *caller) string {
 	if c != nil && c.kind == kindCoordinator && r.PathValue("name") != "" {
 		return "/v1/sessions/{child}"
 	}
+	if r.PathValue("message") != "" && strings.HasPrefix(r.URL.Path, "/v1/parent-notes/") {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/answer"):
+			return "/v1/parent-notes/{message}/answer"
+		case strings.HasSuffix(r.URL.Path, "/wait"):
+			return "/v1/parent-notes/{message}/wait"
+		default:
+			return "/v1/parent-notes/{message}"
+		}
+	}
 	return r.URL.Path
 }

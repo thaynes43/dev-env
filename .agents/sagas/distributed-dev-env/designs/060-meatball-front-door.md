@@ -512,8 +512,10 @@ like the others. The eleven descriptions together were 142 words at OP546;
 the close rule in section 7.4 brings the total to 150. DESIGN-062 slice 4
 adds `parent_waiting`, `parent_read`, `parent_answer` and `parent_send`.
 Each description is at most 30 words, and the measured total is 214.
-`session_status` also appends `parent notes waiting: N`, a count with no
-note text. `standing_authority`
+`session_status` also appends `parent notes waiting: N`, a count of notes
+with no reply. The count matches the session name and UID. A scan that still
+has a continuation says `incomplete`. `parent_waiting` pages with an opaque
+continuation. `standing_authority`
 re-reads the file named by `--authority-file` (`Config.AuthorityFile`) on
 every call. The path comes only from that flag. The file must be a regular
 file of at most 4096 bytes and valid UTF-8. A larger file is a plain tool

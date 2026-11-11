@@ -223,10 +223,11 @@ func (s *Server) readParentNote(ctx context.Context, _ http.ResponseWriter, r *h
 }
 
 type parentNoteQuery struct {
-	box    string
-	limit  int64
-	cursor string
-	sent   bool
+	box     string
+	limit   int64
+	cursor  string
+	sent    bool
+	waiting bool
 }
 
 func parseParentNoteQuery(r *http.Request) (parentNoteQuery, error) {
@@ -235,7 +236,7 @@ func parseParentNoteQuery(r *http.Request) (parentNoteQuery, error) {
 		return parentNoteQuery{}, badRequest("invalid parent note query")
 	}
 	for key, values := range q {
-		if len(values) != 1 || (key != "box" && key != "limit" && key != "continue") {
+		if len(values) != 1 || (key != "box" && key != "limit" && key != "continue" && key != "waiting") {
 			return parentNoteQuery{}, badRequest("invalid parent note query")
 		}
 	}
@@ -245,6 +246,10 @@ func parseParentNoteQuery(r *http.Request) (parentNoteQuery, error) {
 	}
 	if box != apiv1.ParentNotesInbox && box != apiv1.ParentNotesSent {
 		return parentNoteQuery{}, badRequest("box must be inbox or sent")
+	}
+	waiting := q.Get("waiting")
+	if (waiting != "" && waiting != "true") || (waiting == "true" && box != apiv1.ParentNotesInbox) {
+		return parentNoteQuery{}, badRequest("invalid parent note query")
 	}
 	limit := int64(100)
 	if raw := q.Get("limit"); raw != "" {
@@ -256,7 +261,7 @@ func parseParentNoteQuery(r *http.Request) (parentNoteQuery, error) {
 	if !inbox.ValidParentNoteCursor(q.Get("continue")) {
 		return parentNoteQuery{}, badRequest("invalid parent note continuation")
 	}
-	return parentNoteQuery{box: box, limit: limit, cursor: q.Get("continue"), sent: box == apiv1.ParentNotesSent}, nil
+	return parentNoteQuery{box: box, limit: limit, cursor: q.Get("continue"), sent: box == apiv1.ParentNotesSent, waiting: waiting == "true"}, nil
 }
 
 func parentNoteViews(items []coord.InboxMessage) []apiv1.InboxMetadata {
@@ -281,6 +286,9 @@ func (s *Server) listParentNotes(ctx context.Context, _ http.ResponseWriter, r *
 	q, err := parseParentNoteQuery(r)
 	if err != nil {
 		return 0, nil, err
+	}
+	if q.waiting {
+		return 0, nil, badRequest("invalid parent note query")
 	}
 	party := sessionIdentity(sess)
 	items, next, err := s.Inbox.ListParentNotes(ctx, party, q.sent, q.limit, q.cursor)

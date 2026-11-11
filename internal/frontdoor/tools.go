@@ -385,32 +385,42 @@ func (h *handler) sessionStatus(ctx context.Context, args map[string]any) (strin
 	if err != nil {
 		return "", plainRefusal(err)
 	}
-	line := "parent notes waiting: unavailable\n"
-	if n, err := h.countWaiting(ctx, out.Session.Name); err == nil {
+	var line string
+	if n, complete, err := h.countWaiting(ctx, out.Session.Name, out.Session.UID); err != nil {
+		line = "parent notes waiting: unavailable\n"
+	} else if !complete {
+		line = "parent notes waiting: incomplete\n"
+	} else {
 		line = fmt.Sprintf("parent notes waiting: %d\n", n)
 	}
 	return formatSession(out) + line, nil
 }
 
-func (h *handler) countWaiting(ctx context.Context, session string) (int, error) {
+func (h *handler) countWaiting(ctx context.Context, session, uid string) (int, bool, error) {
+	if session == "" || uid == "" {
+		return 0, false, nil
+	}
 	n := 0
 	cursor := ""
 	for page := 0; page < 42; page++ {
-		list, err := h.op.ListParentNotes(ctx, apiv1.ParentNotesInbox, 100, cursor)
+		list, err := h.op.ListParentNotes(ctx, apiv1.ParentNotesInbox, 100, cursor, true)
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		for _, item := range list.Items {
-			if item.Sender.Name == session {
+			if item.Sender.Name == session && item.Sender.UID == uid {
 				n++
 			}
 		}
 		if list.Continue == "" {
-			return n, nil
+			return n, true, nil
+		}
+		if !parentCursorOK(list.Continue) {
+			return 0, false, nil
 		}
 		cursor = list.Continue
 	}
-	return n, nil
+	return 0, false, nil
 }
 
 func (h *handler) sessionStop(ctx context.Context, args map[string]any) (string, error) {
@@ -588,16 +598,43 @@ func decodeArgs(raw json.RawMessage) (map[string]any, error) {
 }
 
 func only(args map[string]any, keys ...string) error {
+	if unknownArgument(args, keys...) {
+		return fmt.Errorf("unknown argument %s", unknownArgumentName(args, keys...))
+	}
+	return nil
+}
+
+func onlyFixed(args map[string]any, keys ...string) error {
+	if unknownArgument(args, keys...) {
+		return errors.New("unknown argument")
+	}
+	return nil
+}
+
+func unknownArgument(args map[string]any, keys ...string) bool {
 	allow := make(map[string]bool, len(keys))
 	for _, key := range keys {
 		allow[key] = true
 	}
 	for key := range args {
 		if !allow[key] {
-			return fmt.Errorf("unknown argument %s", key)
+			return true
 		}
 	}
-	return nil
+	return false
+}
+
+func unknownArgumentName(args map[string]any, keys ...string) string {
+	allow := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		allow[key] = true
+	}
+	for key := range args {
+		if !allow[key] {
+			return key
+		}
+	}
+	return ""
 }
 
 func strArg(args map[string]any, key string) (string, bool, error) {
@@ -655,7 +692,7 @@ func writeField(dir, name, text string) (string, error) {
 }
 
 func (h *handler) parentWaiting(ctx context.Context, args map[string]any) (string, error) {
-	if err := only(args, "limit"); err != nil {
+	if err := onlyFixed(args, "limit", "continue"); err != nil {
 		return "", err
 	}
 	limit, has, err := intArg(args, "limit")
@@ -668,7 +705,11 @@ func (h *handler) parentWaiting(ctx context.Context, args map[string]any) (strin
 	if limit < 1 || limit > 100 {
 		return "", errors.New("limit must be between 1 and 100")
 	}
-	list, err := h.op.ListParentNotes(ctx, apiv1.ParentNotesInbox, limit, "")
+	cursor, cursorSet, err := strArg(args, "continue")
+	if err != nil || cursorSet && !parentCursorOK(cursor) {
+		return "", errors.New("the continuation is not valid")
+	}
+	list, err := h.op.ListParentNotes(ctx, apiv1.ParentNotesInbox, limit, cursor, true)
 	if err != nil {
 		return "", plainRefusal(err)
 	}
@@ -676,7 +717,7 @@ func (h *handler) parentWaiting(ctx context.Context, args map[string]any) (strin
 }
 
 func (h *handler) parentRead(ctx context.Context, args map[string]any) (string, error) {
-	if err := only(args, "name"); err != nil {
+	if err := onlyFixed(args, "name"); err != nil {
 		return "", err
 	}
 	name, ok, err := strArg(args, "name")
@@ -691,7 +732,7 @@ func (h *handler) parentRead(ctx context.Context, args map[string]any) (string, 
 }
 
 func (h *handler) parentAnswer(ctx context.Context, args map[string]any) (string, error) {
-	if err := only(args, "name", "key", "text"); err != nil {
+	if err := onlyFixed(args, "name", "key", "text"); err != nil {
 		return "", err
 	}
 	name, ok, err := strArg(args, "name")
@@ -714,7 +755,7 @@ func (h *handler) parentAnswer(ctx context.Context, args map[string]any) (string
 }
 
 func (h *handler) parentSend(ctx context.Context, args map[string]any) (string, error) {
-	if err := only(args, "session", "key", "text"); err != nil {
+	if err := onlyFixed(args, "session", "key", "text"); err != nil {
 		return "", err
 	}
 	session, ok, err := strArg(args, "session")
@@ -747,8 +788,8 @@ func formatParentWaiting(list apiv1.InboxList) string {
 		}
 		fmt.Fprintf(&b, "name: %s\nkind: %s\nage: %s\n", item.Name, parentKindLabel(item.Kind), parentAge(item.CreatedAt))
 	}
-	if list.Continue != "" {
-		b.WriteString("more notes may be waiting\n")
+	if list.Continue != "" && parentCursorOK(list.Continue) {
+		fmt.Fprintf(&b, "continue: %s\n", list.Continue)
 	}
 	return b.String()
 }
@@ -802,6 +843,13 @@ func parentAge(created time.Time) string {
 	default:
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
+}
+
+func parentCursorOK(cursor string) bool {
+	if len(cursor) < 2 || len(cursor) > 4096 || (cursor[:2] != "0:" && cursor[:2] != "1:") {
+		return false
+	}
+	return utf8.ValidString(cursor) && !strings.ContainsAny(cursor, "\x00\r\n")
 }
 
 func parentNoteNameOK(name string) bool {

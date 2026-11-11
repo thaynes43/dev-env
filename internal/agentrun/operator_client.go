@@ -82,10 +82,13 @@ func (o *Operator) ListAsks(ctx context.Context) (apiv1.AskList, error) {
 
 // ListParentNotes reads one page of parent notes for this caller. The box is
 // inbox or sent. A refusal drops the operator body: it can carry note text.
-func (o *Operator) ListParentNotes(ctx context.Context, box string, limit int64, cursor string) (apiv1.InboxList, error) {
+func (o *Operator) ListParentNotes(ctx context.Context, box string, limit int64, cursor string, waiting bool) (apiv1.InboxList, error) {
 	q := url.Values{"box": {box}, "limit": {strconv.FormatInt(limit, 10)}}
 	if cursor != "" {
 		q.Set("continue", cursor)
+	}
+	if waiting {
+		q.Set("waiting", "true")
 	}
 	var list apiv1.InboxList
 	status, err := o.app.call(ctx, o.conn, http.MethodGet, apiv1.ParentNotesPath, q, nil, &list)

@@ -1010,11 +1010,15 @@ Meatball account does not wait.
 Meatball reads and answers through the front door, and only for sessions it
 started. The tools are `parent_waiting`, `parent_read`, `parent_answer` and
 `parent_send`. `session_status` adds `parent notes waiting: N` for that
-session. The count and the waiting list have no note text. A session Meatball
+session. The count and the waiting list are notes with no reply, and they have
+no note text. The waiting list takes a continuation and returns one when
+another page remains. `parent list` still returns the historical record,
+including a note that already has an answer. A session Meatball
 did not start is hidden. A plain message from Meatball is in the child's
 inbox list, with replies and results, after questions and blockers. The child
 reads it with `parent read`. The caller's sent list is replies, then plain
-messages. A session that names a child on tell is refused with 400 and stores
+messages. The caller's sender cap counts across projects. The project cap stays
+per project. A session that names a child on tell is refused with 400 and stores
 nothing. A session parent sending to its own child is not this slice.
 The wake notice for a session parent is a later slice. No note
 text is pasted into a session.

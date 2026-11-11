@@ -373,7 +373,8 @@ func checkLabeledRoom(ctx context.Context, r client.Reader, namespace, project, 
 		match map[string]string
 		max   int64
 	}{
-		{map[string]string{taskclaim.ProjectLabel: project, taskclaim.SourceLabel: source}, limits.PerSession},
+		// The caller is not bound to one project. The sender cap is the source alone.
+		{map[string]string{taskclaim.SourceLabel: source}, limits.PerSession},
 		{map[string]string{taskclaim.ProjectLabel: project}, limits.PerProject},
 	} {
 		n, err := countLabeled(ctx, r, namespace, bound.match, bound.max)

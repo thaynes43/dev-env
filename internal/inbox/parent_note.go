@@ -189,6 +189,29 @@ func (s KubeStore) ListCallerParentNotes(ctx context.Context, caller *coord.Inbo
 	return s.listParentNotes(ctx, noteParty{caller: caller}, sent, limit, cursor)
 }
 
+// ListUnansweredCallerNotes is the waiting view. A note is waiting when no
+// valid reply to that exact note exists. The historical list is unchanged.
+func (s KubeStore) ListUnansweredCallerNotes(ctx context.Context, caller *coord.InboxCaller, limit int64, cursor string) ([]coord.InboxMessage, string, error) {
+	items, next, err := s.ListCallerParentNotes(ctx, caller, false, limit, cursor)
+	if err != nil {
+		return nil, "", err
+	}
+	out := make([]coord.InboxMessage, 0, len(items))
+	for i := range items {
+		if items[i].Spec.Kind == KindReply || items[i].Spec.Kind == "" {
+			continue
+		}
+		replies, _, err := s.ParentReplies(ctx, &items[i])
+		if err != nil {
+			return nil, "", err
+		}
+		if len(replies) == 0 {
+			out = append(out, items[i])
+		}
+	}
+	return out, next, nil
+}
+
 func (s KubeStore) listParentNotes(ctx context.Context, party noteParty, sent bool, limit int64, cursor string) ([]coord.InboxMessage, string, error) {
 	if !s.ready() || !party.ready() || limit < 1 || limit > 100 || !ValidParentNoteCursor(cursor) {
 		return nil, "", ErrUnavailable
