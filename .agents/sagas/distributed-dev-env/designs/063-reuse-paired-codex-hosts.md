@@ -313,11 +313,13 @@ created. Renewing the keeper stays the existing workbench path.
 2. Phase `Running`, `spec.operatingMode` `Running`, no deletion timestamp,
    pod Ready, and the pod is not a hold pod.
 3. Resolved profile fits the caller. The resolved profile is the pod label,
-   else `spec.profile`, else the templates' `defaultProfile`. Fit uses the
-   thread profile fence already in `threadProfileFence`: the caller's
-   profile equals the host's, or the caller is an ancestor of the host.
-   A `dev` caller does not fit a `full` host. A `full` caller does not fit
-   the `dev` host `dev-env-1110-230548`.
+   else `spec.profile`, else the templates' `defaultProfile`. The choice
+   fits on profile alone: the host's resolved profile equals the profile
+   the request resolves to, which for a session is its own. A `dev` caller
+   does not fit a `full` host. A `full` caller does not fit the `dev` host
+   `dev-env-1110-230548`. Ancestry is not a fit: `threadProfileFence` still
+   lets a session start a thread on a host it or its children started when
+   it names that host, and a named host does not enter the choice.
 4. The requested repository is Ready in the host's reported project
    bootstrap. That report is `status.agent.projectBootstrap.repositories`:
    one entry per repository, state `Ready` or `Preserved`
