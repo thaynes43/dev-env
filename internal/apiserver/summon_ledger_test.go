@@ -352,6 +352,8 @@ func replica(f *fixture, c client.Client) *Server {
 		Log:            logr.Discard(),
 		Now:            f.srv.Now,
 		SummonBoundary: f.srv.SummonBoundary,
+		// The fixture's switch: every replica runs one operator's flags.
+		SummonCreateKinds: f.srv.SummonCreateKinds,
 		// SummonClock is left nil: each replica has its own clock.
 	}
 }

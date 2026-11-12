@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/projectcanary/testutil"
@@ -683,5 +684,44 @@ func TestRetiredArchiveFlagsRefuseStartup(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Proof 8 of story 770: --summon-create-kinds is empty by default, takes task
+// and remote once each, and refuses to start on anything else (DESIGN-064
+// 5.9, the correction of 2026-11-12).
+func TestSummonCreateKindsFlag(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || len(o.summonCreateKinds) != 0 {
+		t.Fatalf("--summon-create-kinds must be empty by default: %v %v", o.summonCreateKinds, err)
+	}
+	for _, tc := range []struct {
+		arg  string
+		want []v1alpha1.SummonKind
+	}{
+		{"--summon-create-kinds=", nil},
+		{"--summon-create-kinds=task", []v1alpha1.SummonKind{v1alpha1.SummonKindTask}},
+		{"--summon-create-kinds=remote", []v1alpha1.SummonKind{v1alpha1.SummonKindRemote}},
+		{"--summon-create-kinds=task,remote", []v1alpha1.SummonKind{v1alpha1.SummonKindTask, v1alpha1.SummonKindRemote}},
+		{"--summon-create-kinds=remote,task", []v1alpha1.SummonKind{v1alpha1.SummonKindRemote, v1alpha1.SummonKindTask}},
+	} {
+		o, err := parseFlags([]string{tc.arg})
+		if err != nil || !slices.Equal(o.summonCreateKinds, tc.want) {
+			t.Errorf("%s: %v %v, want %v", tc.arg, o.summonCreateKinds, err, tc.want)
+		}
+		// The start line carries the value as the flag names it.
+		if got := summonCreateKindsValue(o.summonCreateKinds); got != strings.TrimPrefix(tc.arg, "--summon-create-kinds=") {
+			t.Errorf("%s: start line value %q", tc.arg, got)
+		}
+	}
+	for _, v := range []string{"Task", "task,task", "task,", ",task", ",", "local", "task, remote", " task", "task,remote,task"} {
+		_, err := parseFlags([]string{"--summon-create-kinds=" + v})
+		if err == nil {
+			t.Errorf("--summon-create-kinds=%q was accepted", v)
+			continue
+		}
+		if !strings.Contains(err.Error(), "--summon-create-kinds") {
+			t.Errorf("--summon-create-kinds=%q: the error does not name the flag: %v", v, err)
+		}
 	}
 }

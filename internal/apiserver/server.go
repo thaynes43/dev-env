@@ -63,6 +63,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/asks"
 	"github.com/thaynes43/dev-env/internal/broker"
@@ -220,6 +221,15 @@ type Server struct {
 	// SummonBoundary draws the 16 hex characters that fence a summon brief.
 	// Nil draws them from crypto/rand. Tests set it so a render is fixed.
 	SummonBoundary func() (string, error)
+	// SummonCreateKinds are the session kinds a summoning caller may create,
+	// from --summon-create-kinds (DESIGN-064 5.9, the correction of
+	// 2026-11-12). A summoning create of any other kind is refused with 403
+	// after the request's own checks and before anything is read back,
+	// charged or created; the agentd transport bound is checked later, in
+	// dispatchSummon, so only for a kind that is switched on. Empty, the
+	// default, refuses every summoning create;
+	// the front door's and every other caller's creates are not affected.
+	SummonCreateKinds []v1alpha1.SummonKind
 	// ChildUsageCapture records accepted direct-child usage on the parent.
 	// Default off: no parent read or write and no receipt view.
 	ChildUsageCapture bool

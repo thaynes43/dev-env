@@ -288,6 +288,15 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 		return 0, nil, err
 	}
 	lane = string(entry.Lane)
+	// The switch: after the request's own checks above, before the replay of a
+	// key, any ledger write, any Session and any urgent-refusal count. The
+	// agentd transport bound stays in dispatchSummon, after this switch, so
+	// while a kind is off a request that would fail only that bound gets the
+	// 403. It could run here on the longest name and a placeholder dispatch
+	// id; story 741 may move it.
+	if err := s.summonKindSwitchedOn(entry.Kind); err != nil {
+		return 0, nil, err
+	}
 
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
@@ -295,6 +304,17 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 		return 0, nil, err
 	}
 	return s.dispatchSummon(ctx, w, c, req, entry, sess, brief)
+}
+
+// summonKindSwitchedOn refuses a summoning create whose entry's kind
+// --summon-create-kinds does not name (Server.SummonCreateKinds; DESIGN-064
+// 5.9, the correction of 2026-11-12). The refusal reads nothing: it names the
+// flag and the kind only.
+func (s *Server) summonKindSwitchedOn(kind v1alpha1.SummonKind) error {
+	if slices.Contains(s.SummonCreateKinds, kind) {
+		return nil
+	}
+	return forbidden("summoning creates of kind %s are not switched on: the operator's --summon-create-kinds does not name %s (DESIGN-064 5.9)", kind, kind)
 }
 
 // summonMemberASCII is the refusal for a member name that is not printable

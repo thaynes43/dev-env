@@ -810,6 +810,34 @@ land in #741. No remote summoned session runs before #741 is installed, so
 move, #746) already has the private-task latch, and #738 refuses a create past
 its pool (6.4).
 
+**Correction, coordinator, 2026-11-12 (review of haynes-ops PR 4850, #770).**
+The paragraph above says no remote summoned session runs before #741 is
+installed, and nothing enforced that: a CallerPolicy with `summon` was a
+create grant the moment it was applied, and the operator at `ac1bbb58`
+started a session for any of its entries. The text above stays; where it
+differs, this governs. Summoning creates are off until the operator's
+`--summon-create-kinds` names their kind: `task`, `remote` or both, and empty
+by default. A create whose entry's kind the flag does not name is refused
+with 403, and the message names the flag and the kind. The refusal comes
+after the request's own checks (keys, name prefix, lane, kind, model, data
+and the size of the rendered brief), so a request that fails one of them
+still gets its own 4xx. The bound on the session document sent to agentd is
+not among them: it is checked in the dispatch step, after the switch, and
+#770 did not move it, so a request that would fail only that bound gets the
+403 while its kind is off. Neither refusal reads back, charges or creates
+anything. The check could run before the switch, on the longest name the
+create may take and a placeholder as long as a dispatch id; #741, which
+reworks this path, may move it (the reviews of PR 1090, comment 6817599604
+and the advisory review at `eb9afbda`). It comes before the repeat of a key is answered, before any ledger
+write, before any Session and before any count of a refused urgent create,
+so with the flag empty a summoning caller can change nothing. Its list and
+get are unchanged, and so are the front door's and every other caller's
+creates. `task` is not named before #741 is installed. `remote` is not named
+before #741 and #745 are installed and the pinned agent image accepts a
+summoned remote session. A kind is switched on only by a later haynes-ops PR
+under #741 or #745. This is a coordinator ruling of 2026-11-12, after the
+review of haynes-ops PR 4850, not a ruling by Tom.
+
 **One terminal transition.** The first terminal write wins, under the
 optimistic lock, and every later observation reads it: a report, a loss, a
 watchdog trip or a late heartbeat can never consume a reservation, count a

@@ -1813,6 +1813,29 @@ The caller may create a session, and may list or get a session only when
 not delete a session, read a log, or write a parent note. A summoned session
 cannot submit scheduled work.
 
+**Summoning creates are off until their kind is switched on** (DESIGN-064
+5.9, its correction of 2026-11-12, story 770). The operator's
+`--summon-create-kinds` names the session kinds a summoning caller may
+create: `task`, `remote` or both. It is empty by default, and empty refuses
+every summoning create. A create whose entry's kind the flag does not name
+is refused with 403; the message names the flag and the kind. The request's
+own checks come first (its keys, name prefix, lane, kind, model, data and the
+size of the rendered brief), so a request that fails one of them still gets
+its own refusal, such as 400 or 422. One check is not among them: the bound on
+the session document sent to agentd is made in the dispatch step, after the
+switch, and story 770 did not move it. So while a kind is off, a request that
+would fail only that bound gets the 403 instead of its 422. Neither refusal
+reads back, charges or creates anything. Then the switch's 403
+comes before anything else: a repeat of a key gets the 403 and nothing
+of its session, nothing is charged in the create ledger, no Session is
+written and a refused urgent create is not counted. List and get answer as
+before, and Meatball's creates and every other caller's are unchanged.
+`task` is not named before story 741 is installed, and `remote` not before
+stories 741 and 745 are installed and the pinned agent image accepts a
+summoned remote session. A value other than `task` or `remote`, a value
+named twice or an empty element stops the operator at start, and its start
+line logs the value. The rules below apply once a kind is on.
+
 A create whose parent is a session — the session's own request, or a
 scheduled dispatch on the session basis — is refused when the session already
 in hand has `spec.caller` set. The API then reads that session live and
