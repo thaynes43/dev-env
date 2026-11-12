@@ -860,8 +860,13 @@ ingress rule carries the same exclusions as the egress rules.
   - At the first mint, before any session uses the token: GitHub issues a
     token limited to those two repositories with the four permissions, and
     the keeper logs no `permissionsNotGranted`. A repository that has left
-    the installation, or a permission the installation has not accepted,
-    fails the mint, and the keeper is then not ready.
+    the installation makes GitHub refuse the mint, and the keeper is then not
+    ready. A permission the installation has not accepted either makes GitHub
+    refuse the mint, or comes back as a short grant. The keeper treats a short
+    grant as a success: it writes the token, is ready, and logs
+    `permissionsNotGranted`. So readiness alone does not settle the
+    permissions: the coordinator reads that log line before any session uses
+    the token, and turns the flag off again if it shows a shortfall.
   - Not checked, and said so wherever the install is described: whether the
     installation covers further repositories. The token cannot reach them:
     the list is in git and adding a name is a question for Tom. The key
