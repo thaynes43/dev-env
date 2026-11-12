@@ -2213,8 +2213,14 @@ spec:
                     format: date-time
                     type: string
                   note:
-                    description: Note is the session's one-line note with its report.
+                    description: |-
+                      Note is the session's one-line note with its report.
+                      MaxLength bounds code points; the CEL rule also bounds UTF-8 bytes.
+                    maxLength: 1024
                     type: string
+                    x-kubernetes-validations:
+                    - message: outcome note must be at most 1024 bytes
+                      rule: size(bytes(self)) <= 1024
                   state:
                     description: State is the reported outcome.
                     enum:
@@ -3276,6 +3282,54 @@ spec:
                   is admitted. A replacement claim is never adopted into this lifecycle.
                 maxLength: 128
                 type: string
+              summon:
+                description: Summon records the summoned session's terminal transition
+                  (DESIGN-064 5.9).
+                properties:
+                  closed:
+                    description: Closed is written atomically with the first terminal
+                      outcome.
+                    properties:
+                      at:
+                        format: date-time
+                        type: string
+                      reason:
+                        description: Reason is the report verb or the guaranteed-close
+                          reason from section 6.6.
+                        maxLength: 32
+                        minLength: 1
+                        type: string
+                      source:
+                        enum:
+                        - report
+                        - unreported
+                        maxLength: 10
+                        type: string
+                    required:
+                    - at
+                    - reason
+                    - source
+                    type: object
+                  escalation:
+                    description: |-
+                      Escalation is the pending filing for a remediation ending escalated.
+                      OP768 adds filing, blocked and abandoned transitions; this slice files nothing.
+                    properties:
+                      name:
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                      state:
+                        enum:
+                        - Pending
+                        maxLength: 16
+                        type: string
+                    required:
+                    - name
+                    - state
+                    type: object
+                type: object
               suspendedAt:
                 description: |-
                   SuspendedAt is when the operator first saw the session suspended with

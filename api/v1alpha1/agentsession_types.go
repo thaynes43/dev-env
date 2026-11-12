@@ -832,6 +832,10 @@ type AgentSessionStatus struct {
 	// +optional
 	Outcome *OutcomeStatus `json:"outcome,omitempty"`
 
+	// Summon records the summoned session's terminal transition (DESIGN-064 5.9).
+	// +optional
+	Summon *SummonStatus `json:"summon,omitempty"`
+
 	// DecisionAnswer is written only by the authenticated direct-parent API route.
 	// Heartbeat reports cannot create or modify it. No private text is stored.
 	// +optional
@@ -1568,6 +1572,9 @@ type OutcomeStatus struct {
 	State OutcomeState `json:"state,omitempty"`
 
 	// Note is the session's one-line note with its report.
+	// MaxLength bounds code points; the CEL rule also bounds UTF-8 bytes.
+	// +kubebuilder:validation:MaxLength=1024
+	// +kubebuilder:validation:XValidation:rule="size(bytes(self)) <= 1024",message="outcome note must be at most 1024 bytes"
 	// +optional
 	Note string `json:"note,omitempty"`
 

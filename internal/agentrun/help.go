@@ -31,6 +31,8 @@ Usage:
                                                   create or report a trusted fixed original
   agent-run canary result --id <id> --session-uid <uid> --context <name> --json --once
                                                   read one retained fixed publication
+  agent-run report working|done|failed|escalate [--note "..."]
+                                                  report this summoned session's outcome
   agent-run show <name> [--captured-usage -o json]
                                               show one session; --captured-usage adds direct-child receipts
   agent-run usage -o json [--from-file FILE|-]  offline allowance read
@@ -916,12 +918,40 @@ Flags:
   --mine            only the sessions this caller started
   -o name|json      print only the names, or the API's list as JSON
 `,
+	"report": `Usage: agent-run report working|done|failed|escalate [--note "..."] [-o json]
+
+Only a session summoned under a CallerPolicy may report, from its own pod with
+its projected token. Its caller, another session and a person cannot report for
+it. The pod's HOSTNAME selects the session; the API verifies the live pod and
+Session UID.
+
+working sets running and moves the progress time. done ends the work as done.
+failed ends it as failed; in lane remediation it becomes escalated and the note
+is prefixed with "reported failed: ". escalate ends it as escalated. A remediation
+ending escalated records a pending filing; this release does not file the child.
+
+--note is stored without truncation. The stored limit is 1024 UTF-8 bytes,
+including the 17-byte remediation failed prefix: that verb accepts 1007 bytes
+of your note. A larger stored note is refused with 422. Before checking length,
+the route refuses any C0 or C1 control character (including newline and tab),
+DEL, or Unicode format character (category Cf), also with 422.
+
+Terminal outcomes are final. An identical state and note returns 200 without a
+write only when closed.source is report. A report equal to a guaranteed close,
+a different terminal report, or working after a terminal outcome returns 409:
+report prints "outcome is final:" with the stored state and note and exits 1.
+A 409 error envelope instead prints
+"outcome write kept conflicting; read the session before retrying", also exit 1.
+This command sends once; after an unconfirmed response, read agent-run show
+before retrying.
+`,
 	"show": `Usage: agent-run show <name> [-o json]
        agent-run show <name> --json --once
 
 Shows one session: phase and node, the scheduler's reason while Pending, repo,
 agent, model and effort, size, the agent's state, branch and head from its last
-heartbeat, how the task ended, usage, conditions and the task itself.
+heartbeat, how the task ended, its reported outcome and note, usage, conditions
+and the task itself.
 
 With explicit --json --once, reads one named Session without retry or redirect
 and prints its validated raw JSON. Missing retained provenance remains Unknown;
