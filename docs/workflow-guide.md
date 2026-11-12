@@ -1656,10 +1656,11 @@ A create may carry `name`, `mode`, `lane`, `idempotencyKey` and `data`. It
 may also repeat `agent` as `claude`, `model` as the entry's default, and
 `profile` as the entry's profile, or leave those three empty. Any other
 field is refused with 422, named. A member name in the body or inside `data`
-that contains any byte outside printable ASCII is refused before any map is
-built. Two printable-ASCII members of the same name, compared after JSON
+that contains any byte outside printable ASCII is refused before a value map
+is decoded. Two printable-ASCII members of the same name, compared after JSON
 unescaping and without regard to case, are refused the same way, before a
-value is kept. `mode` and `lane` select the policy entry,
+value is kept; a body with two `data` members is refused for that, without a
+look inside either. `mode` and `lane` select the policy entry,
 or the create is refused. `name` is required: a DNS label of at most 60
 characters, starting with one of that entry's prefixes. A final name starting
 with `esc-rem-` is refused for every caller-driven create, including a name

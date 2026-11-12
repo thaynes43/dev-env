@@ -86,9 +86,11 @@ func summonCallerAllowed(c *caller, r *http.Request) error {
 const summonedChildRefusal = "a summoned session may not create sessions (DESIGN-064 6.4)"
 
 // refuseSummonedChild refuses a create from a session principal that is
-// summoned, or that cannot be confirmed as the same session (DESIGN-064 6.4).
-// The authenticated snapshot is not replaced by whatever object now has its
-// name. createSessionMode calls this before the canary and pilot branches.
+// summoned, or whose session cannot be read (DESIGN-064 6.4). The
+// authenticated snapshot is not replaced by whatever object now has its
+// name. One case still creates: an ordinary snapshot whose live object has
+// another UID and no spec.caller (confirmSessionCaller says why).
+// createSessionMode calls this before the canary and pilot branches.
 // admitCreate calls refuseSummonedParent under the create lock, which is the
 // same check for a scheduled dispatch.
 func (s *Server) refuseSummonedChild(ctx context.Context, c *caller) error {
@@ -124,11 +126,16 @@ func (s *Server) refuseSummonedParent(ctx context.Context, c *caller, sess *v1al
 // confirmSessionCaller applies the session-principal rule to snapshot, the
 // authenticated or cached session. A spec.caller already set is refused
 // before the live read: that field is immutable, so a later disappearance or
-// a different object of the same name does not erase it. The live object
-// must be this UID. A missing object, a failed read, or another UID refuses.
-// A live spec.caller refuses too, which is the stale cache that omitted it.
-// Live nil does not invent an object; with no caller on the snapshot there
-// is nothing further to refuse. The snapshot is not modified.
+// a different object of the same name does not erase it. A missing live
+// object or a failed read refuses. A live spec.caller refuses, whichever UID
+// the live object has; with the same UID that is the stale cache that
+// omitted it. A live object with another UID and no spec.caller does not
+// refuse: an ordinary session replaced by another ordinary session still
+// creates, which the usage-capture binding relies on. This rule trusts the
+// pod's controller reference as resolveSession does; it is no defence against
+// a writer that can rewrite that reference. Live nil does not invent an
+// object; with no caller on the snapshot there is nothing further to refuse.
+// The snapshot is not modified.
 func (s *Server) confirmSessionCaller(ctx context.Context, snapshot *v1alpha1.AgentSession) error {
 	if snapshot == nil {
 		return nil
@@ -242,7 +249,7 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 		return 0, nil, err
 	}
 	// A member name outside printable ASCII, and two members of one field, are
-	// refused before any object map is built. encoding/json keeps one value
+	// refused before a value map is decoded. encoding/json keeps one value
 	// and drops the other, including a key that differs only by an escape or
 	// by case.
 	dups, err := summonDuplicateFields(raw)
@@ -301,7 +308,9 @@ const summonMemberASCII = "a summoning create's member names are printable ASCII
 
 // summonDuplicateFields reports a member name that is not printable ASCII,
 // and members that name one field twice, at the body and inside data. A
-// non-ASCII name is refused before any map is built. Duplicate names are
+// non-ASCII name is refused before a value map is decoded. Two `data`
+// members are refused as duplicates first, without scanning inside either.
+// Duplicate names are
 // compared after JSON unescaping and without regard to case. The scan
 // decodes values as raw JSON, so it does not build an object map that would
 // keep one of the two.
