@@ -53,6 +53,11 @@ type Gate struct {
 // Admits reports whether the quota lets s start now. A session without
 // spec.caller, an urgent session and a priority with no line set read
 // nothing; every decision on a normal or bulk session logs one line.
+//
+// The decision's clock is read after the reading returns, past the read and
+// any wait for the lock, so staleness and a window's reset are judged at the
+// time the session would start (ruling R2 on PR 1101). The 30-second reuse
+// keeps the time taken before the read.
 func (g *Gate) Admits(s *v1alpha1.AgentSession) bool {
 	if s == nil || s.Spec.Caller == "" {
 		return true
@@ -65,6 +70,7 @@ func (g *Gate) Admits(s *v1alpha1.AgentSession) bool {
 	r := Reading{Missing: WhyNoReading}
 	if g.Lines.For(p) {
 		r = g.reading(string(s.Spec.Agent), now)
+		now = g.now()
 	}
 	d := Decide(p, r, g.Lines, now)
 	if p != v1alpha1.SummonPriorityUrgent {
@@ -128,14 +134,19 @@ func (g *Gate) readOnce() (map[string]Reading, Why) {
 
 // log writes the decision's one line. Every value is the operator's own or a
 // checked reading's number: the session's name and lane, its priority, the
-// fixed reason, each window's canonical percent and line, and the age.
+// fixed reason, each window's canonical percent and line, and the age. A
+// negative age (a reading from the future) is written exactly, so it never
+// reads as zero.
 func (g *Gate) log(s *v1alpha1.AgentSession, d Decision) {
 	msg := "quota gate admitted a summoned session"
 	if !d.Admit {
 		msg = "quota gate held a summoned session"
 	}
 	age := "none"
-	if d.HaveReading {
+	switch {
+	case d.HaveReading && d.Age < 0:
+		age = d.Age.String()
+	case d.HaveReading:
 		age = d.Age.Truncate(time.Second).String()
 	}
 	g.Log.Info(msg, "session", s.Name, "lane", string(s.Spec.Lane), "priority", string(d.Priority), "reason", string(d.Reason),

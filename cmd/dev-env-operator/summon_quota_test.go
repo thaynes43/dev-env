@@ -147,7 +147,13 @@ func (c *countingReader) Get(ctx context.Context, key client.ObjectKey, obj clie
 // two minutes before quotaT0.
 func allowanceConfigMap(t *testing.T, fiveHour, sevenDay string) *corev1.ConfigMap {
 	t.Helper()
-	readAt := quotaT0.Add(-2 * time.Minute)
+	return allowanceConfigMapAt(t, quotaT0.Add(-2*time.Minute), fiveHour, sevenDay)
+}
+
+// allowanceConfigMapAt is the store's ConfigMap with one Claude reading taken
+// at readAt.
+func allowanceConfigMapAt(t *testing.T, readAt time.Time, fiveHour, sevenDay string) *corev1.ConfigMap {
+	t.Helper()
 	var windows []protocol.AllowanceWindow
 	if fiveHour != "" {
 		windows = append(windows, protocol.AllowanceWindow{Minutes: summonquota.FiveHourMinutes, UsedPercent: fiveHour, ResetsAt: readAt.Add(3 * time.Hour)})
@@ -252,75 +258,102 @@ func TestSummonQuotaStoreIsReadOnly(t *testing.T) {
 	}
 }
 
-// Proofs 6 and 8 in a real admission pass (internal/controller's
+// quotaPass is a real admission pass (internal/controller's
 // SummonAdmissionPass, unchanged) on a fake API server, with the hook main.go
-// builds: three Queued curation sessions of one caller and one ordinary
-// session. At 81 % the three wait QuotaHold on one store read, and the
-// ordinary session never reaches the gate; at 80 % the oldest is admitted.
+// builds: three Queued curation sessions of one caller, a create ledger that
+// binds them, one ordinary session, and a reading of the 5-hour window at
+// used percent. Its clock is now, for the reconciler and the gate alike;
+// seen is every session the gate was asked about.
+type quotaPass struct {
+	c        client.Client
+	spy      *countingReader
+	r        *controller.Reconciler
+	now      time.Time
+	seen     []string
+	names    []string
+	ordinary string
+}
+
+func newQuotaPass(t *testing.T, used string) *quotaPass {
+	t.Helper()
+	scheme := quotaScheme(t)
+	caller := "cigar-ns.cigar-curator"
+	policy := &v1alpha1.CallerPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: "dev-env-system", Name: caller, UID: "policy-uid"},
+		Spec: v1alpha1.CallerPolicySpec{Summon: &v1alpha1.CallerPolicySummon{ServiceAccount: "cigar-ns/cigar-curator",
+			Limits: v1alpha1.CallerPolicySummonLimits{Concurrent: 3, CreatesPerHour: 10}}}}
+	entry := summonledger.Entry{Clock: quotaT0}
+	objs := []client.Object{policy, allowanceConfigMap(t, used, "")}
+	w := &quotaPass{now: quotaT0}
+	for i := 1; i <= 3; i++ {
+		s := quotaSession("curate-"+string(rune('0'+i)), v1alpha1.SummonPriorityBulk)
+		s.UID = types.UID("uid-" + s.Name)
+		s.CreationTimestamp = metav1.NewTime(quotaT0.Add(-time.Duration(10-i) * time.Minute))
+		s.Spec.Mode, s.Spec.Parent, s.Spec.Profile, s.Spec.Repo = v1alpha1.ModeTask, "cigar-ns/cigar-curator", "ops", "dev-env"
+		s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+		s.Spec.Summon.MaxHold = "12h"
+		s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{Admission: "NeverStarted"}
+		entry.Charges = append(entry.Charges, summonledger.Charge{ID: s.Spec.Summon.DispatchID, At: quotaT0, Attempt: quotaT0, Hash: strings.Repeat("0", 64), Name: s.Name})
+		objs = append(objs, s)
+		w.names = append(w.names, s.Name)
+	}
+	ordinary := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: "dev-agents", Name: "dev-env-1112-000001", UID: "uid-ordinary"},
+		Spec: v1alpha1.AgentSessionSpec{Repo: "dev-env", Agent: v1alpha1.AgentClaude, Mode: v1alpha1.ModeTask, OperatingMode: v1alpha1.OperatingModeRunning}}
+	objs = append(objs, ordinary)
+	w.ordinary = ordinary.Name
+	raw, err := summonledger.Encode(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objs = append(objs, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: summonledger.Namespace, Name: summonledger.Name}, Data: map[string]string{caller: raw}})
+	w.c = fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.AgentSession{}).WithObjects(objs...).Build()
+
+	w.spy = &countingReader{Reader: w.c}
+	clock := func() time.Time { return w.now }
+	hook := summonQuotaHook(summonquota.Lines{NormalFiveHour: 95, BulkFiveHour: 80, MaxAge: 15 * time.Minute}, w.spy, logr.Discard(), clock)
+	w.r = &controller.Reconciler{Client: w.c, APIReader: w.c, SessionNamespace: "dev-agents", SummonedLanes: true,
+		PrivateHistoryRetention: true, PrivateTerminalRecord: true, PrivateExecutorStop: true, TerminalTaskPodReclaim: true,
+		Now: clock,
+		SummonQuota: func(s *v1alpha1.AgentSession) bool {
+			w.seen = append(w.seen, s.Name)
+			return hook(s)
+		}}
+	return w
+}
+
+// session reads back one session: whether it was admitted, and its
+// SummonAdmitted condition.
+func (w *quotaPass) session(t *testing.T, name string) (bool, *metav1.Condition) {
+	t.Helper()
+	var s v1alpha1.AgentSession
+	if err := w.c.Get(context.Background(), types.NamespacedName{Namespace: "dev-agents", Name: name}, &s); err != nil {
+		t.Fatal(err)
+	}
+	return s.Status.Summon != nil && s.Status.Summon.AdmittedAt != nil, meta.FindStatusCondition(s.Status.Conditions, controller.ConditionSummonAdmitted)
+}
+
+// Proofs 6 and 8 in a real admission pass: at 81 % the three curation
+// sessions wait QuotaHold on one store read, and the ordinary session never
+// reaches the gate; at 80 % the oldest is admitted.
 func TestSummonQuotaInTheAdmissionPass(t *testing.T) {
 	for _, tc := range []struct {
 		used     string
 		admitted string
 	}{{"81", ""}, {"80", "curate-1"}} {
 		t.Run(tc.used, func(t *testing.T) {
-			scheme := quotaScheme(t)
-			caller := "cigar-ns.cigar-curator"
-			policy := &v1alpha1.CallerPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: "dev-env-system", Name: caller, UID: "policy-uid"},
-				Spec: v1alpha1.CallerPolicySpec{Summon: &v1alpha1.CallerPolicySummon{ServiceAccount: "cigar-ns/cigar-curator",
-					Limits: v1alpha1.CallerPolicySummonLimits{Concurrent: 3, CreatesPerHour: 10}}}}
-			entry := summonledger.Entry{Clock: quotaT0}
-			objs := []client.Object{policy, allowanceConfigMap(t, tc.used, "")}
-			var names []string
-			for i := 1; i <= 3; i++ {
-				s := quotaSession("curate-"+string(rune('0'+i)), v1alpha1.SummonPriorityBulk)
-				s.UID = types.UID("uid-" + s.Name)
-				s.CreationTimestamp = metav1.NewTime(quotaT0.Add(-time.Duration(10-i) * time.Minute))
-				s.Spec.Mode, s.Spec.Parent, s.Spec.Profile, s.Spec.Repo = v1alpha1.ModeTask, "cigar-ns/cigar-curator", "ops", "dev-env"
-				s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
-				s.Spec.Summon.MaxHold = "12h"
-				s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{Admission: "NeverStarted"}
-				entry.Charges = append(entry.Charges, summonledger.Charge{ID: s.Spec.Summon.DispatchID, At: quotaT0, Attempt: quotaT0, Hash: strings.Repeat("0", 64), Name: s.Name})
-				objs = append(objs, s)
-				names = append(names, s.Name)
-			}
-			ordinary := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: "dev-agents", Name: "dev-env-1112-000001", UID: "uid-ordinary"},
-				Spec: v1alpha1.AgentSessionSpec{Repo: "dev-env", Agent: v1alpha1.AgentClaude, Mode: v1alpha1.ModeTask, OperatingMode: v1alpha1.OperatingModeRunning}}
-			objs = append(objs, ordinary)
-			raw, err := summonledger.Encode(entry)
-			if err != nil {
+			w := newQuotaPass(t, tc.used)
+			if err := w.r.SummonAdmissionPass(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			objs = append(objs, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: summonledger.Namespace, Name: summonledger.Name}, Data: map[string]string{caller: raw}})
-			c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.AgentSession{}).WithObjects(objs...).Build()
-
-			spy := &countingReader{Reader: c}
-			hook := summonQuotaHook(summonquota.Lines{NormalFiveHour: 95, BulkFiveHour: 80, MaxAge: 15 * time.Minute}, spy, logr.Discard(), func() time.Time { return quotaT0 })
-			var seen []string
-			r := &controller.Reconciler{Client: c, APIReader: c, SessionNamespace: "dev-agents", SummonedLanes: true,
-				PrivateHistoryRetention: true, PrivateTerminalRecord: true, PrivateExecutorStop: true, TerminalTaskPodReclaim: true,
-				Now: func() time.Time { return quotaT0 },
-				SummonQuota: func(s *v1alpha1.AgentSession) bool {
-					seen = append(seen, s.Name)
-					return hook(s)
-				}}
-			if err := r.SummonAdmissionPass(context.Background()); err != nil {
-				t.Fatal(err)
+			if w.spy.gets != 1 {
+				t.Errorf("%d store reads in one pass, want 1", w.spy.gets)
 			}
-			if spy.gets != 1 {
-				t.Errorf("%d store reads in one pass, want 1", spy.gets)
-			}
-			for _, name := range seen {
-				if name == ordinary.Name {
+			for _, name := range w.seen {
+				if name == w.ordinary {
 					t.Error("a session without spec.caller reached the quota gate")
 				}
 			}
-			for _, name := range names {
-				var s v1alpha1.AgentSession
-				if err := c.Get(context.Background(), types.NamespacedName{Namespace: "dev-agents", Name: name}, &s); err != nil {
-					t.Fatal(err)
-				}
-				admitted := s.Status.Summon != nil && s.Status.Summon.AdmittedAt != nil
-				cond := meta.FindStatusCondition(s.Status.Conditions, controller.ConditionSummonAdmitted)
+			for _, name := range w.names {
+				admitted, cond := w.session(t, name)
 				switch {
 				case name == tc.admitted && !admitted:
 					t.Errorf("%s not admitted at %s %%: %+v", name, tc.used, cond)
@@ -333,13 +366,80 @@ func TestSummonQuotaInTheAdmissionPass(t *testing.T) {
 			// At 81 % every curation session reached the gate; at 80 % the
 			// first was admitted and holds the single-flight lane, so the
 			// others wait LaneBusy without asking it.
-			want := names
+			want := w.names
 			if tc.admitted != "" {
-				want = names[:1]
+				want = w.names[:1]
 			}
-			if strings.Join(seen, ",") != strings.Join(want, ",") {
-				t.Errorf("the gate saw %v, want %v", seen, want)
+			if strings.Join(w.seen, ",") != strings.Join(want, ",") {
+				t.Errorf("the gate saw %v, want %v", w.seen, want)
 			}
 		})
+	}
+}
+
+// The review's gap: a session held on a high reading is admitted on a later
+// pass once a lower reading is read. The first pass holds all three at 81 %;
+// a new reading at 80 % lands; 30 seconds later the next pass reads it and
+// admits the oldest.
+func TestSummonQuotaHeldSessionAdmittedOnALaterPass(t *testing.T) {
+	w := newQuotaPass(t, "81")
+	if err := w.r.SummonAdmissionPass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range w.names {
+		if admitted, cond := w.session(t, name); admitted || cond == nil || cond.Reason != controller.SummonReasonQuotaHold {
+			t.Fatalf("%s after the first pass at 81 %%: admitted %v, condition %+v", name, admitted, cond)
+		}
+	}
+	var cm corev1.ConfigMap
+	if err := w.c.Get(context.Background(), types.NamespacedName{Namespace: apiserver.SessionAllowanceNamespace, Name: apiserver.SessionAllowanceName}, &cm); err != nil {
+		t.Fatal(err)
+	}
+	cm.Data = allowanceConfigMapAt(t, quotaT0.Add(10*time.Second), "80", "").Data
+	if err := w.c.Update(context.Background(), &cm); err != nil {
+		t.Fatal(err)
+	}
+	w.now = quotaT0.Add(summonquota.DefaultReuse)
+	w.seen = nil
+	if err := w.r.SummonAdmissionPass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w.spy.gets != 2 {
+		t.Errorf("%d store reads in two passes 30 s apart, want 2", w.spy.gets)
+	}
+	admitted, cond := w.session(t, "curate-1")
+	if !admitted || cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("curate-1 on the later pass at 80 %%: admitted %v, condition %+v", admitted, cond)
+	}
+	for _, name := range w.names[1:] {
+		if admitted, _ := w.session(t, name); admitted {
+			t.Errorf("%s admitted on the later pass; the lane is single-flight", name)
+		}
+	}
+}
+
+// Ruling R1 through the real store: the operator's clock goes back an hour
+// behind a stored 99 % reading. The gate reads the ConfigMap again, gets the
+// same reading, now an hour in the future, and admits, logged as
+// reading-from-future.
+func TestSummonQuotaClockRolledBackBehindAStoredReadingAdmits(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(quotaScheme(t)).WithObjects(allowanceConfigMap(t, "99", "")).Build()
+	spy := &countingReader{Reader: c}
+	now := quotaT0
+	logs := &quotaLogs{}
+	hook := summonQuotaHook(summonquota.Lines{BulkFiveHour: 80, MaxAge: 15 * time.Minute}, spy, logs.logger(), func() time.Time { return now })
+	if hook(quotaSession("bulk-a", v1alpha1.SummonPriorityBulk)) {
+		t.Fatal("bulk at 99 %, line 80, admitted before the clock went back")
+	}
+	now = quotaT0.Add(-time.Hour)
+	if !hook(quotaSession("bulk-b", v1alpha1.SummonPriorityBulk)) {
+		t.Fatal("the clock went back an hour behind a 99 % reading and the session was held")
+	}
+	if spy.gets != 2 {
+		t.Fatalf("%d store reads, want a new read after the clock went back (2)", spy.gets)
+	}
+	if len(logs.lines) != 2 || !strings.Contains(logs.lines[1], `"reason"="reading-from-future"`) || !strings.Contains(logs.lines[1], `"fiveHourUsed"="99"`) ||
+		!strings.Contains(logs.lines[1], `"readingAge"="-58m0s"`) {
+		t.Fatalf("logs %q", logs.lines)
 	}
 }
