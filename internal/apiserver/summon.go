@@ -290,8 +290,10 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 	lane = string(entry.Lane)
 	// The switch: after the request's own checks above, before the replay of a
 	// key, any ledger write, any Session and any urgent-refusal count. The
-	// agentd transport bound in dispatchSummon needs the final name and the
-	// dispatch id, so it is checked only for a kind that is switched on.
+	// agentd transport bound stays in dispatchSummon, after this switch, so
+	// while a kind is off a request that would fail only that bound gets the
+	// 403. It could run here on the longest name and a placeholder dispatch
+	// id; story 741 may move it.
 	if err := s.summonKindSwitchedOn(entry.Kind); err != nil {
 		return 0, nil, err
 	}

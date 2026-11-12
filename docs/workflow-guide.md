@@ -1822,9 +1822,10 @@ is refused with 403; the message names the flag and the kind. The request's
 own checks come first (its keys, name prefix, lane, kind, model, data and the
 size of the rendered brief), so a request that fails one of them still gets
 its own refusal, such as 400 or 422. One check is not among them: the bound on
-the session document sent to agentd depends on the final name and the dispatch
-id, so it is made only for a kind that is switched on; while the kind is off,
-a request that would fail only that bound gets the 403. Then the switch's 403
+the session document sent to agentd is made in the dispatch step, after the
+switch, and story 770 did not move it. So while a kind is off, a request that
+would fail only that bound gets the 403 instead of its 422. Neither refusal
+reads back, charges or creates anything. Then the switch's 403
 comes before anything else: a repeat of a key gets the 403 and nothing
 of its session, nothing is charged in the create ledger, no Session is
 written and a refused urgent create is not counted. List and get answer as
