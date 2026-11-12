@@ -89,6 +89,12 @@ const (
 	// AnnotationRequestHash is the SHA-256 of the create request that carried the
 	// idempotency key. A repeat of the key with a different request is refused.
 	AnnotationRequestHash = LabelPrefix + "request-hash"
+	// AnnotationSummonGeneration is a summoned session's generation, a decimal
+	// integer the API writes in the create (DESIGN-064 5.9): 1 for a key's first
+	// session, else the newest earlier session's generation plus one. The newest
+	// session of a key is the one with the highest; a session without it counts
+	// as 0.
+	AnnotationSummonGeneration = LabelPrefix + "summon-generation"
 	// LabelDepth is how many sessions stand between this one and the human or
 	// client that started the chain: 0 for a session Tom or a client created, 1
 	// for its child, 2 for a grandchild. A session at depth 2 creates no children

@@ -582,6 +582,134 @@ time of the last one. The charge always comes first:
      or once the filing is `Abandoned` (6.6). Admission reads one place, the
      ledger.
 
+**Correction, coordinator, 2026-11-12 (review of PR 1085).** The review of
+#738's ledger reproduced a session created after its charge was pruned, one
+charge funding two sessions, and a newest session chosen wrongly. The text
+above stays; where it differs, this governs.
+
+*Amended, coordinator, 2026-11-12 (second review of PR 1085, PR comments
+6812929855 and 6812930183).* The second review reproduced a create that
+landed after its charge was pruned and a stale destination created after a
+rebind. Both come from one cause: a replica paused between its last ledger
+write and the API server accepting its create. No client-side check, read or
+timeout closes that, so the bullets below harden what the API can and state
+the rest under "Limits of this slice". The slice's work order asked for "no
+session exists whose dispatch id is not charged"; that is more than an API
+replica can hold, and this amendment corrects it.
+
+*Amended again, coordinator, 2026-11-12 (short re-check of PR 1085, PR
+comments 6813721839 and 6813756080).* The attempt hold becomes 15 minutes.
+It covers the 2 minute create deadline, 5 minutes for clocks that differ and
+5 minutes for a forward step: that sum is 12 minutes, and the hold is 15.
+The hold applies to every charge, whether or not a Session of its id exists.
+One request makes at most 200 create attempts. Refusal text says there is no
+refund and that normal pruning applies. The 503 for a charge that has already
+left carries no retention sentence.
+
+- **The entry.** Each caller's key holds `clock`; `charges`, each
+  `{id, at, attempt, hash, name}`; `urgentRefusals`; and
+  `lastUrgentRefusal`. `hash` is the request hash (mode, lane and requested
+  name). `name` is the one session name the ledger binds this dispatch to. `at` is when
+  the charge was counted; `attempt` is the last time a create was about to be
+  made for it. A key that is absent is an empty entry; a value that is
+  present but empty, not a JSON object, repeats a member, lacks a required
+  member or has a wrong type is 503, with no write and no session. The count
+  of urgent refusals stops at its maximum.
+- **Time.** For one entry, "now" is the later of the replica's clock and the
+  entry's `clock`, and every write stores it back. A charge counts toward
+  `createsPerHour` while it is younger than 65 minutes by that clock: 60
+  minutes and 5 for replica clocks that differ. The limit is on charges, not
+  creates: at most `createsPerHour` charges in any 65 minutes by the entry's
+  clock. A create may follow its charge at any time inside that charge's
+  window, because a retry reuses it, so two creates can be closer together
+  than their charges. Assumed, whole: replica clocks agree within 5 minutes,
+  and none steps forward against real time by more than that. A larger
+  forward step expires charges early by the excess and can make an attempt
+  mark look old. No time authority is built here.
+- **Write before create.** A dispatch's first ledger write decides its
+  binding: a new charge; an attempt mark (`attempt` = now) on a charge of the
+  same id and hash still inside its window; or a re-charge (`at` and
+  `attempt` = now, counted again, subject to the hour) of a charge outside
+  its window whose Session does not exist. No dispatch creates on a charge it
+  only read. **Every create attempt** (the first, the one after a rebind,
+  the retry after NotFound) is then preceded by its own ledger write, the
+  mark: a compare-and-set that succeeds only if the ledger still binds the id
+  to the name about to be created, and otherwise writes nothing and returns
+  the current binding, which the dispatch follows (a Session of this id under
+  that name is this request's: 200). A mark applies the same window rule: an
+  attempt mark inside the window; outside it a re-charge, counted and subject
+  to the hour, or 429 and no create. **The deadline:** one absolute
+  deadline, the mark's monotonic reading plus 2 minutes, carried as one
+  context through the create and the read after its AlreadyExists; no
+  timeout is computed later. When it ends first the client refuses the call:
+  503. There is no refund, and normal pruning applies. One request makes at
+  most 200 create attempts (99 names, two attempts each, and two to spare);
+  past that the answer is 503, a charged failure. **Pruning:** a charge
+  leaves only when it is 65 minutes old and its `attempt` is at least 15
+  minutes old, whether or not a Session of its id exists. The 15 minutes
+  cover the 2 minute create deadline, 5 minutes for clocks that differ and
+  5 minutes for a forward step. So a create the client may still send, with
+  a mark at most 2 minutes old, keeps its charge while the clock assumption
+  holds. A charge with no Session is pruned only starting from one that is
+  already 65 minutes old: both ages are required. This replaces item 4's
+  "an hour old" for a caller's create.
+- **The binding.** A dispatch that finds a charge with its id and another
+  hash is refused with 409 and writes nothing. One with the same hash creates
+  the charge's `name`. On AlreadyExists for that name: a Session with this id
+  is 200 if it is this caller's and has this hash, else 409; a Session with
+  another id is a name clash, and the dispatch rebinds its charge to the next
+  free suffix by one more ledger write, then marks and creates. A rebind, and
+  the branch that finds another replica already moved the binding, apply the
+  window rule of a retry: a charge outside its window is re-charged in that
+  write, counted and subject to the hour, or the dispatch is refused with 429
+  and creates nothing. A NotFound right after AlreadyExists retries the same
+  name once, after its own mark. A Session that an authorized deleter removes
+  while its charge is held leaves that charge for the key's next create to
+  reuse; this is not built against, since a summoning caller cannot delete.
+- **What spends a charge.** A refusal before the first ledger write has
+  charged anything spends nothing: the 422s, 403s and 409s of the request and
+  its names, the pool's 429, and the hour's 429 at that first write. A
+  failure after a write that charged or marked the dispatch keeps the
+  charge, whatever its status (409 with no free name left, 422 from the API
+  server, 503 at the deadline or a ledger fault, 429 from a mark or rebind),
+  and its message says there is no refund and that normal pruning applies.
+  The 503 for a charge that left the ledger during the create carries no
+  retention sentence. Nothing is refunded.
+- **The generation.** Every summoned Session carries an annotation holding
+  an integer generation: the newest earlier Session's generation plus one;
+  the first is 1, and a Session without the annotation counts as 0. The
+  newest Session of a key is the one with the highest generation; creation
+  timestamps and names do not order. A tie goes to the greater UID, and a
+  generation that is not a non-negative integer is 503 (the answer to note
+  `op758-fix1-q-1`). The supported range is 0 to the largest 64-bit integer
+  less one: the largest value is refused the same way.
+- **The pool, until story 741.** The API counts the caller's unfinished
+  summoned Sessions uncached, under each replica's own create lock. That is
+  not a reservation: a pool can be exceeded by at most the number of API
+  replicas minus one (one, with two replicas), when every replica has a
+  create in flight at once. That bound holds for fixed limits and session
+  states, and when no earlier failed call is still able to land.
+- **Limits of this slice.** Two windows remain until story 741.
+  (1) *A create that lands after its charge was pruned:* the charge is
+  already 65 minutes old. A marks X and sends its create inside the
+  deadline; the API server has received it and not persisted it when another
+  replica's write, 15 minutes after the mark by the entry's clock, prunes X.
+  The 15 minutes cover the 2 minute create deadline, 5 minutes for clocks
+  that differ and 5 minutes for a forward step. The Session is then
+  persisted with no charge. A client-side deadline does not stop a request
+  the API server has already received, nor a process frozen before it sends,
+  nor a process frozen between its mark and the send for longer than the
+  hold allows. (2) *A stale destination after a rebind:* A marks X for N and
+  is paused before its create; B marks X for N, meets an unrelated Session
+  on N, rebinds X to N-2 and creates N-2; the unrelated Session is deleted,
+  freeing N; A resumes inside its deadline and creates N, so X has two
+  Sessions and the ledger binds X to N-2 only. Two statements are enforced at admission by the leader, in story
+  741, not in this slice: no summoned Session gets a pod or a volume unless
+  the ledger holds its dispatch id bound to that Session's name; and so no
+  dispatch id runs two Sessions. Until story 741 is installed, both can be
+  violated in these two windows, and the only callers before then are the
+  low-rate task lanes.
+
 **Admission.** Only the leader admits, so two admissions cannot race across
 API replicas (R6's race is the API's). In each pass it takes Queued sessions
 oldest first and admits each whose dispatch id is committed in the ledger (an

@@ -210,6 +210,13 @@ type Server struct {
 	Log logr.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// SummonClock is the clock a summoning create's deadline is measured on,
+	// and the context that carries it (DESIGN-064 5.9): the create runs under
+	// one context, done summonCreateDeadline after the monotonic reading of
+	// the ledger write before it. Nil is the process's own: time.Now, whose
+	// monotonic reading the deadline keeps, and context.WithDeadline. Tests
+	// set it.
+	SummonClock SummonClock
 	// SummonBoundary draws the 16 hex characters that fence a summon brief.
 	// Nil draws them from crypto/rand. Tests set it so a render is fixed.
 	SummonBoundary func() (string, error)

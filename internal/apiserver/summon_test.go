@@ -86,19 +86,49 @@ func summonTestPolicy() *v1alpha1.CallerPolicy {
 	}
 }
 
+// summonFixture is a fixture with the caller's policy and the create ledger.
+// A ledger passed in replaces the empty one. Its store refuses, and fails the
+// test, any summoned session whose dispatch id is not charged in the ledger
+// at the moment of its create (story 758, proof 9), unless the test set
+// summonLimit: a test of a stated limit (DESIGN-064 5.9, correction, "Limits
+// of this slice") lets that create through and reads summonUncharged. The
+// store also stands in for client-go's transport, which sends no request
+// whose context is already done: it refuses one with the context's error.
 func summonFixture(t *testing.T, objects ...client.Object) *fixture {
 	t.Helper()
 	if len(objects) == 0 {
 		objects = []client.Object{summonTestPolicy()}
+	}
+	hasLedger := false
+	for _, obj := range objects {
+		if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Namespace == ledgerTestNS && cm.Name == ledgerTestName {
+			hasLedger = true
+		}
+	}
+	if !hasLedger {
+		objects = append(objects, summonLedgerObject())
 	}
 	for _, obj := range objects {
 		if obj.GetUID() == "" {
 			obj.SetUID(uuid.NewUUID())
 		}
 	}
-	f := newFixtureWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+	var f *fixture
+	f = newFixtureWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if obj.GetUID() == "" {
 			obj.SetUID(uuid.NewUUID())
+		}
+		if sess, ok := obj.(*v1alpha1.AgentSession); ok {
+			if err := checkChargedAtCreate(ctx, c, sess); err != nil {
+				if !f.summonLimit {
+					t.Errorf("session %s created without a committed charge: %v", sess.Name, err)
+					return err
+				}
+				f.summonUncharged = append(f.summonUncharged, sess.Name)
+			}
 		}
 		return c.Create(ctx, obj, opts...)
 	}}, objects...)
@@ -515,7 +545,10 @@ func TestSummonedSessionCannotCreate(t *testing.T) {
 	}
 }
 
-func TestSummonIdempotencyIsStoredNotReplayed(t *testing.T) {
+// The key is stored on the session with the summoned request's hash, which
+// covers mode, lane and the requested name and not data (story 758). The
+// replay itself is TestSummonRepeatedKeyKeepsTheSession.
+func TestSummonIdempotencyKeyIsStored(t *testing.T) {
 	f := summonFixture(t)
 	first := map[string]any{"name": "rem-responder-1", "mode": "task", "lane": "remediation", "idempotencyKey": "alert-1"}
 	if w := summonPost(t, f, first); w.Code != http.StatusCreated {
@@ -525,15 +558,12 @@ func TestSummonIdempotencyIsStoredNotReplayed(t *testing.T) {
 	if stored.Spec.IdempotencyKey != "alert-1" || stored.Labels[v1alpha1.LabelIdempotencyKey] != "alert-1" {
 		t.Fatalf("key not stored: %+v %v", stored.Spec.IdempotencyKey, stored.Labels)
 	}
-	if stored.Annotations[v1alpha1.AnnotationRequestHash] != "" {
-		t.Fatal("ordinary request hash was written")
+	if stored.Annotations[v1alpha1.AnnotationRequestHash] == "" {
+		t.Fatal("no request hash")
 	}
-	second := summonPost(t, f, map[string]any{"name": "rem-responder-2", "mode": "task", "lane": "remediation", "idempotencyKey": "alert-1"})
-	if second.Code != http.StatusCreated {
-		t.Fatalf("repeat key with a new name: %d %s", second.Code, second.Body.String())
+	if stored.Annotations[v1alpha1.AnnotationRequestHash] == requestHash(apiv1.CreateSessionRequest{}) {
+		t.Fatal("the ordinary request hash was written")
 	}
-	again := summonPost(t, f, first)
-	wantError(t, again, http.StatusConflict, apiv1.CodeConflict)
 }
 
 func TestSummonCreateRefusesCaseDuplicateKeys(t *testing.T) {
@@ -697,12 +727,20 @@ func TestSummonCallerDoesNotOwnAPortalSession(t *testing.T) {
 	p := summonTestPolicy()
 	p.Name = "portal.actor-000000000001"
 	p.Spec.Summon.ServiceAccount = "portal/" + launchActor
+	// The same create hook as summonFixture (proof 9): this fixture adds a
+	// portal pod and a second policy.
 	f := newFixtureWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 		if obj.GetUID() == "" {
 			obj.SetUID(uuid.NewUUID())
 		}
+		if sess, ok := obj.(*v1alpha1.AgentSession); ok {
+			if err := checkChargedAtCreate(ctx, c, sess); err != nil {
+				t.Errorf("session %s created without a committed charge: %v", sess.Name, err)
+				return err
+			}
+		}
 		return c.Create(ctx, obj, opts...)
-	}}, pod, p)
+	}}, pod, p, summonLedgerObject())
 	id := saIdentity(portalReaderRef)
 	id.PodName, id.PodUID = pod.Name, string(pod.UID)
 	f.auth["tok-portal"] = id
