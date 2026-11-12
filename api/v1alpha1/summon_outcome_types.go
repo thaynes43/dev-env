@@ -30,7 +30,7 @@ type SummonClosedStatus struct {
 // OP768 resolves name collisions and records the child; spec.summon.filedFor
 // and the filing's charge, retry and abandonment are deliberately its seam.
 type SummonEscalationStatus struct {
-	// +kubebuilder:validation:MaxLength=7
+	// +kubebuilder:validation:MaxLength=16
 	// +kubebuilder:validation:Enum=Pending
 	State string `json:"state"`
 	// +kubebuilder:validation:MinLength=1

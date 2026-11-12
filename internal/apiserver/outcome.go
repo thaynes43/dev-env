@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"net/http"
+	"unicode"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
@@ -57,12 +58,17 @@ func (s *Server) reportOutcome(ctx context.Context, w http.ResponseWriter, r *ht
 			next.State = v1alpha1.OutcomeEscalated
 			next.Note = summonoutcome.FailedPrefix + req.Note
 		}
+		for _, ch := range next.Note {
+			if unicode.IsControl(ch) || unicode.Is(unicode.Cf, ch) {
+				return 0, nil, invalid(fieldError("note", "must not contain control or format characters (C0, C1, DEL or Unicode Cf)"))
+			}
+		}
 		if len(next.Note) > summonoutcome.MaxNoteBytes {
 			return 0, nil, invalid(fieldError("note", "stored note must be at most 1024 bytes (1007 before a remediation failed prefix)"))
 		}
 		if summonoutcome.Terminal(sess.Status.Outcome) {
 			code := http.StatusConflict
-			if sess.Status.Outcome.State == next.State && sess.Status.Outcome.Note == next.Note {
+			if sess.Status.Summon != nil && sess.Status.Summon.Closed != nil && sess.Status.Summon.Closed.Source == summonoutcome.Report && sess.Status.Outcome.State == next.State && sess.Status.Outcome.Note == next.Note {
 				code = http.StatusOK
 			}
 			return code, outcomeView(sess.Status.Outcome), nil

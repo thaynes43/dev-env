@@ -11,6 +11,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
@@ -63,11 +64,27 @@ func Write(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, d Dec
 			s.Status.Summon.Escalation = &v1alpha1.SummonEscalationStatus{State: "Pending", Name: EscalationName(s)}
 		}
 	}
-	if err := c.Status().Patch(ctx, s, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+	patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+	data, err := patch.Data(s)
+	if err != nil {
 		*s = *base
 		return false, err
 	}
+	// Decode into a clean object: unmarshalling into the submitted status keeps
+	// fields that a stale CRD pruned from the response. Precompute the same CAS
+	// patch so using a clean response body does not change what we send.
+	stored := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace}}
+	if err := c.Status().Patch(ctx, s, client.RawPatch(patch.Type(), data), client.WithSubResourceBody(stored)); err != nil {
+		*s = *base
+		return false, err
+	}
+	*s = *stored
 	if terminal {
+		if s.Status.Summon == nil || s.Status.Summon.Closed == nil {
+			err := fmt.Errorf("terminal outcome patch did not retain status.summon.closed; install the current AgentSession CRD before the operator")
+			log.FromContext(ctx).Error(err, "summoned terminal outcome is incomplete", "session", s.Name)
+			return false, err
+		}
 		// The operator's general logger writes stderr. These bounded event lines
 		// explicitly go to stdout, as DESIGN-064 requires. Never include note text.
 		_, _ = fmt.Fprintf(os.Stdout, "ops-event: event=outcome session=%s caller=%s lane=%s state=%s source=%s reason=%s note_bytes=%d\n", s.Name, s.Spec.Caller, s.Spec.Lane, d.State, d.Source, d.Reason, len(d.Note))

@@ -3323,7 +3323,7 @@ spec:
                       state:
                         enum:
                         - Pending
-                        maxLength: 7
+                        maxLength: 16
                         type: string
                     required:
                     - name

@@ -1272,6 +1272,21 @@ not use the escalation entry's prefix: it is named under `esc-rem-` (6.6).
 
 ### 6.6 OP740: outcome reporting and the guaranteed outcome
 
+**Correction, coordinator, 2026-11-12 (PR 1088 review, comment
+6816378356).** The text below stays; where it differs, this correction governs.
+In row 6, phase `Succeeded` or `Failed` is terminal on its own; every container
+terminated counts only when the pod's `spec.restartPolicy` is `Never`. Rows 5
+and 6 (`agent-interrupted`, `pod-terminated`) are skipped when the Session has a
+`deletionTimestamp` or `spec.operatingMode: Suspended`; rows 1, 2 and 4 stay as
+written, and story 741 defines what such an operator stop becomes. Before the
+length check, the report route refuses with 422 a note containing any C0 or C1
+control character (newline and tab included), DEL, or a Unicode format character
+(category Cf); printable Unicode such as `é` is accepted. An identical resulting
+terminal state and note returns 200 only when `status.summon.closed.source` is
+`report`; otherwise it returns 409 with the stored outcome, including a report
+equal to the guaranteed close's own write. No caller cutover (746, 747, 748,
+610) or story 768 filing is enabled before story 741's latch is installed.
+
 **The route and the verb.** `POST /v1/sessions/{name}/outcome`, body
 `{"state": "working"|"done"|"failed"|"escalate", "note": "..."}`. Only the
 session itself may call it: a session caller whose pod-bound token resolves

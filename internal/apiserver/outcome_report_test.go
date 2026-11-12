@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -238,15 +239,20 @@ func TestSummonReportPromotionAndAtomicFiling(t *testing.T) {
 				f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
 					s := o.(*v1alpha1.AgentSession)
 					patches++
-					requireClosed(t, s, "report", verb, lane == v1alpha1.LaneRemediation)
 					data, err := p.Data(o)
 					if err != nil {
 						t.Fatal(err)
 					}
-					var wire map[string]any
-					_ = json.Unmarshal(data, &wire)
-					if wire["metadata"].(map[string]any)["resourceVersion"] == nil {
+					wire := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: s.Name}}
+					if err := json.Unmarshal(data, wire); err != nil {
+						t.Fatal(err)
+					}
+					if wire.ResourceVersion == "" {
 						t.Fatal("outcome patch omitted optimistic lock")
+					}
+					requireClosed(t, wire, "report", verb, lane == v1alpha1.LaneRemediation)
+					if wire.Status.Outcome == nil || wire.Status.Outcome.State != s.Status.Outcome.State || wire.Status.Outcome.Note != s.Status.Outcome.Note || wire.Status.Outcome.At == nil || !wire.Status.Outcome.At.Equal(s.Status.Outcome.At) {
+						t.Fatal("atomic wire patch omitted or changed the outcome")
 					}
 					return c.SubResource(sub).Patch(ctx, o, p, opts...)
 				}})
@@ -349,6 +355,24 @@ func TestSummonGuaranteedCloseInputsAndOrder(t *testing.T) {
 					t.Fatal("guaranteed close changed taskResult")
 				}
 				requireClosed(t, got, "unreported", tc.reason, lane == v1alpha1.LaneRemediation)
+				var outcomeLine string
+				for _, line := range strings.Split(logs(), "\n") {
+					if strings.HasPrefix(line, "ops-event: event=outcome ") {
+						outcomeLine = line
+					}
+				}
+				fields := map[string]string{}
+				for _, field := range strings.Fields(strings.TrimPrefix(outcomeLine, "ops-event: ")) {
+					key, value, ok := strings.Cut(field, "=")
+					if !ok {
+						t.Fatalf("invalid close event field: %q", field)
+					}
+					fields[key] = value
+				}
+				wantFields := map[string]string{"event": "outcome", "session": reportSession, "caller": s.Spec.Caller, "lane": string(lane), "state": string(got.Status.Outcome.State), "source": "unreported", "reason": tc.reason, "note_bytes": strconv.Itoa(len(got.Status.Outcome.Note))}
+				if !reflect.DeepEqual(fields, wantFields) {
+					t.Fatalf("close event fields: got=%v want=%v", fields, wantFields)
+				}
 				before := got.Status.Outcome.DeepCopy()
 				record := summonRecord(t, got)
 				// Each call constructs a fresh reconciler, also proving a restarted leader.
@@ -477,7 +501,7 @@ func TestSummonDecisionWritersDoNotOwnOutcome(t *testing.T) {
 func TestSummonOutcomeLogFieldsExcludeNote(t *testing.T) {
 	logs := outcomeStdout(t)
 	f, tok := reportFixture(t, v1alpha1.LaneCuration)
-	note := "SYNTHETIC-PRIVATE-NOTE\nevent=forged"
+	note := "SYNTHETIC-PRIVATE-NOTE event=forged"
 	if w := f.do(http.MethodPost, reportPath(), tok, reportBody("done", note)); w.Code != 200 {
 		t.Fatal(w.Code)
 	}
@@ -531,5 +555,129 @@ func TestSummonWorkingDoesNotLogOutcome(t *testing.T) {
 	}
 	if strings.Contains(logs(), "ops-event:") {
 		t.Fatal("progress logged an outcome decision")
+	}
+}
+
+func TestSummonReportNoteCharacters(t *testing.T) {
+	for _, tc := range []struct {
+		name, note string
+		code       int
+	}{
+		{"newline", "line\nbreak", http.StatusUnprocessableEntity},
+		{"tab", "a\tb", http.StatusUnprocessableEntity},
+		{"nul", "a\x00b", http.StatusUnprocessableEntity},
+		{"escape", "\x1b[2J", http.StatusUnprocessableEntity},
+		{"del", "\x7f", http.StatusUnprocessableEntity},
+		{"c1-start", "\u0080", http.StatusUnprocessableEntity},
+		{"c1-end", "\u009f", http.StatusUnprocessableEntity},
+		{"bidi-format", "\u202e", http.StatusUnprocessableEntity},
+		{"zero-width-format", "\u200b", http.StatusUnprocessableEntity},
+		{"control-before-length", strings.Repeat("a", 1025) + "\n", http.StatusUnprocessableEntity},
+		{"accent", "é", http.StatusOK},
+	} {
+		for _, verb := range []string{"working", "done", "failed", "escalate"} {
+			t.Run(tc.name+"/"+verb, func(t *testing.T) {
+				logs := outcomeStdout(t)
+				f, tok := reportFixture(t, v1alpha1.LaneRemediation)
+				before := f.session(reportSession).DeepCopy()
+				writes := 0
+				f.srv.Client = countOutcomeWrites(f, &writes)
+				w := f.do(http.MethodPost, reportPath(), tok, reportBody(verb, tc.note))
+				if w.Code != tc.code {
+					t.Errorf("character validation: got %d want %d", w.Code, tc.code)
+				}
+				got := f.session(reportSession)
+				if tc.code == http.StatusUnprocessableEntity {
+					if writes != 0 || !reflect.DeepEqual(before, got) || strings.Contains(logs(), "ops-event:") {
+						t.Error("refused note wrote status or emitted an event")
+					}
+					if !strings.Contains(w.Body.String(), "control or format") {
+						t.Error("character refusal did not precede the length check")
+					}
+				} else {
+					wantNote := tc.note
+					if verb == "failed" {
+						wantNote = "reported failed: " + tc.note
+					}
+					if writes != 1 || got.Status.Outcome == nil || got.Status.Outcome.Note != wantNote {
+						t.Fatal("printable Unicode note not preserved")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestSummonReportEqualUnreportedOutcomeConflicts(t *testing.T) {
+	logs := outcomeStdout(t)
+	f, tok := reportFixture(t, v1alpha1.LaneCuration)
+	s := f.session(reportSession)
+	s.Status.Agent = &v1alpha1.AgentStatus{Status: "exited"}
+	if err := f.c.Status().Update(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	closeReportFixture(t, f, f.c)
+	before := f.session(reportSession).DeepCopy()
+	beforeLogs := logs()
+	writes := 0
+	f.srv.Client = countOutcomeWrites(f, &writes)
+	w := f.do(http.MethodPost, reportPath(), tok, reportBody("failed", "unreported: agent-exited"))
+	if w.Code != http.StatusConflict {
+		t.Errorf("matching an unreported close: got %d want 409", w.Code)
+	}
+	var got apiv1.Outcome
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || !reflect.DeepEqual(&got, outcomeView(before.Status.Outcome)) {
+		t.Fatalf("missing stored outcome: %s", w.Body.String())
+	}
+	if writes != 0 || !reflect.DeepEqual(before, f.session(reportSession)) || logs() != beforeLogs {
+		t.Fatal("matching report changed or logged the guaranteed close")
+	}
+}
+
+func TestSummonReportSessionReplacedBeforePatch(t *testing.T) {
+	logs := outcomeStdout(t)
+	f, tok := reportFixture(t, v1alpha1.LaneCuration)
+	var replacement *v1alpha1.AgentSession
+	writes, conflicts := 0, 0
+	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+		if replacement == nil {
+			old := f.session(reportSession)
+			old.Finalizers = nil
+			if err := c.Update(ctx, old); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Delete(ctx, old); err != nil {
+				t.Fatal(err)
+			}
+			replacement = old.DeepCopy()
+			replacement.UID = "replacement-session"
+			replacement.ResourceVersion = ""
+			if err := c.Create(ctx, replacement); err != nil {
+				t.Fatal(err)
+			}
+			// The fake client resets versions on create; ensure replacement gets
+			// a different version, as it would from the real API server.
+			if replacement.ResourceVersion == old.ResourceVersion {
+				if err := c.Update(ctx, replacement); err != nil {
+					t.Fatal(err)
+				}
+			}
+			replacement = f.session(reportSession).DeepCopy()
+		}
+		err := c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		if apierrors.IsConflict(err) {
+			conflicts++
+		}
+		if err == nil {
+			writes++
+		}
+		return err
+	}})
+	w := f.do(http.MethodPost, reportPath(), tok, reportBody("done", "previous session's result"))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("replacement report: %d %s", w.Code, w.Body.String())
+	}
+	if conflicts != 1 || writes != 0 || !reflect.DeepEqual(replacement, f.session(reportSession)) || strings.Contains(logs(), "ops-event:") {
+		t.Fatalf("replacement modified: conflicts=%d writes=%d", conflicts, writes)
 	}
 }

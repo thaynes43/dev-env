@@ -932,12 +932,18 @@ ending escalated records a pending filing; this release does not file the child.
 
 --note is stored without truncation. The stored limit is 1024 UTF-8 bytes,
 including the 17-byte remediation failed prefix: that verb accepts 1007 bytes
-of your note. A larger stored note is refused with 422.
+of your note. A larger stored note is refused with 422. Before checking length,
+the route refuses any C0 or C1 control character (including newline and tab),
+DEL, or Unicode format character (category Cf), also with 422.
 
 Terminal outcomes are final. An identical state and note returns 200 without a
-write. A different terminal report, or working after a terminal outcome, returns
-409: report prints the stored state and note and exits non-zero. This command
-sends once; after an unconfirmed response, read agent-run show before retrying.
+write only when closed.source is report. A report equal to a guaranteed close,
+a different terminal report, or working after a terminal outcome returns 409:
+report prints "outcome is final:" with the stored state and note and exits 1.
+A 409 error envelope instead prints
+"outcome write kept conflicting; read the session before retrying", also exit 1.
+This command sends once; after an unconfirmed response, read agent-run show
+before retrying.
 `,
 	"show": `Usage: agent-run show <name> [-o json]
        agent-run show <name> --json --once
