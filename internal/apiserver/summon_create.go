@@ -28,7 +28,7 @@ import (
 //
 //  1. The repeat. The newest of this caller's sessions of the key, by
 //     generation, if unfinished and with no terminal outcome, returns with 200,
-//     or 409 when its mode, lane or requested name differ. Nothing is charged
+//     or 409 when its mode, lane, requested name or entry priority differ. Nothing is charged
 //     or written. A generation that cannot be read is 503.
 //  2. The name: the requested one if free, else, for a re-fired key, the
 //     first free suffix -2 to -99. A name held by any other session is 409,
@@ -88,7 +88,7 @@ func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *c
 		if previous != nil && summonLive(previous) {
 			if previous.Annotations[v1alpha1.AnnotationRequestHash] != hash {
 				return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
-					"idempotency key %q already started session %s with a different mode, lane or name", key, previous.Name)
+					"idempotency key %q already started session %s with a different mode, lane, name or priority", key, previous.Name)
 			}
 			w.Header().Set("Location", apiv1.SessionPath(previous.Name))
 			return http.StatusOK, view(previous, false), nil
@@ -170,6 +170,9 @@ func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *c
 		// ledger keeps it, and its refusal says so.
 		return 0, nil, summonQueueRefusal(c, b, b.kept)
 	case summonGrantsUnreadable:
+		if b.kept {
+			return 0, nil, summonChargedFailure(summonGrantsFault())
+		}
 		return 0, nil, summonGrantsFault()
 	}
 	return s.createSummonCharged(ctx, w, c, req, sess, b, brief, candidates, urgent, c.policy.Spec.Summon.Limits.CreatesPerHour)
@@ -193,7 +196,7 @@ func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter,
 			return s.summonExisting(w, c, req.IdempotencyKey, hash, b.existing)
 		case summonOtherRequest:
 			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
-				"idempotency key %q is already charged for a create with a different mode, lane or name (DESIGN-064 5.9)", req.IdempotencyKey)
+				"idempotency key %q is already charged for a create with a different mode, lane, name or priority (DESIGN-064 5.9)", req.IdempotencyKey)
 		case summonNoFreeName:
 			return 0, nil, summonChargedFailure(newError(http.StatusConflict, apiv1.CodeConflict,
 				"no free session name: %s and its suffixes to -%d are taken", req.Name, summonMaxSuffix))
@@ -312,7 +315,7 @@ func summonDeadlinePassed() error {
 func (s *Server) summonExisting(w http.ResponseWriter, c *caller, key, hash string, held *v1alpha1.AgentSession) (int, any, error) {
 	if !summonOwns(c, held) || held.Annotations[v1alpha1.AnnotationRequestHash] != hash {
 		return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
-			"session %s carries this dispatch id for another caller or another mode, lane or name (idempotency key %q)", held.Name, key)
+			"session %s carries this dispatch id for another caller or another mode, lane, name or priority (idempotency key %q)", held.Name, key)
 	}
 	w.Header().Set("Location", apiv1.SessionPath(held.Name))
 	return http.StatusOK, view(held, false), nil
@@ -333,13 +336,15 @@ func summonChargedFailure(err error) error {
 	return &out
 }
 
-// summonRequestHash is what a repeat of a key must match: mode, lane and the
-// requested name, not data. A re-fire with fresher data returns the session
+// summonRequestHash is what a repeat of a key must match: mode, lane, the
+// requested name and the entry's priority, not data. Binding priority keeps a
+// charge from moving queues on a retry after a policy edit (OP778 F2).
+// A re-fire with fresher data returns the session
 // already running and does not change its brief. The requested name, not the
 // name the session took, so the repeat of a create that took a suffix still
 // matches.
-func summonRequestHash(req summonWire) string {
-	sum := sha256.Sum256([]byte("dev-env.summon.request.v1\x00" + req.Mode + "\x00" + req.Lane + "\x00" + req.Name))
+func summonRequestHash(req summonWire, priority v1alpha1.SummonPriority) string {
+	sum := sha256.Sum256([]byte("dev-env.summon.request.v2\x00" + req.Mode + "\x00" + req.Lane + "\x00" + req.Name + "\x00" + string(priority)))
 	return hex.EncodeToString(sum[:])
 }
 

@@ -1911,15 +1911,16 @@ largest value is refused the same way, since the next would not fit.
 
 - If that session is unfinished and has no terminal outcome (`done`,
   `failed` or `escalated`), the create returns it with 200. Nothing is
-  charged or written. The match covers `mode`, `lane` and the requested
-  `name`, not `data`: a repeat with other `data` gets the same session, and
-  its brief is not changed. So a 200 on a repeated key does not mean the new
+  charged or written. The match covers `mode`, `lane`, the requested
+  `name` and the entry's priority, not `data`: a repeat with other `data` gets
+  the same session, and its brief is not changed. So a 200 on a repeated key does not mean the new
   data was delivered. Do not read it as an update, and do not reuse a key for
   unrelated work.
 - While that session is live, the same key with another `mode`, `lane` or
-  `name` is 409. So is a create whose dispatch is already charged for a
-  request with another `mode`, `lane` or `name` (two replicas racing with one
-  key): the charge records the request, and the second one writes nothing.
+  `name`, or an edited entry priority, is 409. So is a create whose dispatch
+  is already charged for a request with another `mode`, `lane`, `name` or
+  priority (two replicas racing with one key): the charge records the request,
+  and the second one writes nothing.
 - If that session is finished, or has a terminal outcome, the create makes a
   new session, and may change `mode`, `lane` or `name`. It takes the
   requested name if no session holds it, else the first free suffix `-2` to
@@ -1935,8 +1936,8 @@ holds one key per caller, named after its policy. Its value is the caller's
 entry: `clock`, the latest time any write of it used; `charges`, each
 `{id, at, attempt, hash, name}`; `urgentRefusals`, the count of refused
 urgent creates; and `lastUrgentRefusal`, when the last was refused. A charge
-binds one dispatch id to its request's hash (mode, lane and requested name)
-and to the one session name it creates; `at` is when it was counted, and
+binds one dispatch id to its request's hash (mode, lane, requested name and
+entry priority) and to the one session name it creates; `at` is when it was counted, and
 `attempt` the last time a create was about to be made for it. GitOps
 precreates the object; the operator reads it uncached and writes it only
 with the resourceVersion it read. If it is missing or cannot be read, a
@@ -1998,7 +1999,9 @@ example from an installed schema that does not accept it); 503 when the
 deadline ends, the ledger cannot be written or the charge left it; and 429
 when a mark or a rebind finds the charge past its window and the hour full,
 or when a retry's first write, a mark or a rebind finds its queue full for a
-charge whose last attempt mark had passed the 15 minute hold.
+charge whose last attempt mark had passed the 15 minute hold. A first-bind
+503 for unreadable `_admission` also carries this sentence when it finds a
+charge already in the ledger; the same refusal for a new charge omits it.
 There is no refund, and normal pruning applies, so the message does not
 promise that the charge is still there; past its window it no longer counts.
 The 503 for a charge that has already left the ledger carries no retention
@@ -2222,14 +2225,37 @@ admitted (no `admittedAt`, and no grant in the ledger's reserved key
 and neither suspended nor being deleted. A charge records no lane, so it is
 put in the queue of the policy entry its request hash names (its name, or
 its name less a suffix `-2` to `-99`); a charge no current entry names (the
-policy was edited since) counts in every queue, so a bound can refuse early
-but is never exceeded. A charge whose attempt mark has passed the hold is in
-no queue; a later retry of it needs a place again, and a queue that filled
+policy was edited since) counts in every queue, so a bound can refuse early.
+The request hash binds the entry's priority as well as mode, lane and requested
+name. A retry after a priority edit gets the existing different-request 409
+and writes nothing: no charge, attempt mark or Session. A charge's attribution
+does not move to the edited entry's queue; if its original entry can no longer
+be identified, it counts in every queue during the attempt hold. A persisted
+Session counts by its own priority snapshot. A charge whose attempt mark has
+passed the hold is in no queue; a later retry of it needs a place again, and a queue that filled
 meanwhile refuses it with 429 (its charge is kept). The API reads
 `_admission` only to tell a granted session from a Queued one and carries it
 unchanged in every write; when it is present and cannot be read, a write
 that needs the count answers 503 and writes nothing, while a create already
-under way still makes its own mark.
+under way still makes its own mark. This 503 includes the no-refund/normal-pruning
+sentence when the charge was already in the ledger, including at the first
+bind; it omits that sentence for a new charge.
+
+**Queue limit boundary** (story 778 fix round 1, coordinator rulings in
+[PR 1094 comment 6833388211](https://github.com/thaynes43/dev-env/pull/1094#issuecomment-6833388211);
+not a ruling by Tom). The queue limits hold for every create whose Session
+lands within 15 minutes of its last attempt mark, under the clock assumptions
+above. The main cluster's API servers end a write after their request timeout:
+one minute, the default (coordinator read, 2026-11-12). A write received before
+the client's deadline but persisted after the attempt hold can land beside a
+later create that took its place. Each such late landing adds one extra Queued
+Session, with no volume or pod while it waits. If its charge is still bound,
+the leader does not close it `not-charged`; the leader's pool and single-flight
+lane bounds still hold. A priority edit racing a create already in flight is
+part of this stated limit: the pending Session can still land with its original
+snapshot. No new fence is added. Story 779 supplies `maxHold` closure and refuses
+every resume of a summoned session; `task` creates turn on only after both
+stories are installed.
 
 **Urgent refusals.** A refused create of priority `urgent` (remediation and
 escalation), whether by `createsPerHour`, by its pool (lanes off) or by its

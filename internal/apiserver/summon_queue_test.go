@@ -3,8 +3,9 @@ package apiserver
 // The proofs of story 778 (slice b of item 741; DESIGN-064 5.9 "The queues",
 // 6.4 "Limits", 6.7 "Holds"): with --enable-summoned-lanes a create past its
 // pool is Queued, and limits.queued and limits.queuedUrgent (per pool) hold
-// across two API replicas because the count is taken inside the create
-// ledger's compare-and-set (ruling D2). Two replicas are two Server values
+// across two API replicas within the attempt-hold boundary because the count
+// is taken inside the create ledger's compare-and-set (ruling D2, fix round 1 F1).
+// Two replicas are two Server values
 // over one store; their writes are interleaved by hooks, not by timing.
 
 import (
@@ -237,20 +238,24 @@ func TestSummonQueuePastAPool(t *testing.T) {
 // limits.queuedUrgent in its pool, 429 naming the queue and its pool,
 // counted once per refusal, no charge and no Session.
 func TestSummonQueueRefusals(t *testing.T) {
-	t.Run("queued", func(t *testing.T) {
-		f := lanesFixture(t, queuePolicy(1, 1, 1, 4, 6))
-		wantQueued(t, f, summonPost(t, f, upgradeBody("wo-1")), "wo-1")
-		version := f.ledgerVersion()
-		wantQueueRefusal(t, summonPost(t, f, upgradeBody("wo-2")), false, "")
-		wantQueueRefusal(t, summonPost(t, f, curationBody("wo-cigar-curate-1")), false, "")
-		if f.ledgerVersion() != version || len(f.ledger().Charges) != 1 || f.ledger().UrgentRefusals != 0 {
-			t.Fatalf("a refused normal create wrote the ledger: %+v", f.ledger())
-		}
-		wantNoSession(t, f, "wo-2")
-		wantNoSession(t, f, "wo-cigar-curate-1")
-		// The urgent queues are apart: a remediation is still Queued.
-		wantQueued(t, f, summonPost(t, f, keyedRemediation("rem-responder-1", "alert-1")), "rem-responder-1")
-	})
+	for _, priority := range []v1alpha1.SummonPriority{v1alpha1.SummonPriorityNormal, v1alpha1.SummonPriorityBulk} {
+		t.Run("queued/"+string(priority), func(t *testing.T) {
+			p := queuePolicy(1, 1, 1, 4, 6)
+			summonEntry(p.Spec.Summon.Sessions, "task", "curation").Priority = priority
+			f := lanesFixture(t, p)
+			wantQueued(t, f, summonPost(t, f, upgradeBody("wo-1")), "wo-1")
+			version := f.ledgerVersion()
+			wantQueueRefusal(t, summonPost(t, f, upgradeBody("wo-2")), false, "")
+			wantQueueRefusal(t, summonPost(t, f, curationBody("wo-cigar-curate-1")), false, "")
+			if f.ledgerVersion() != version || len(f.ledger().Charges) != 1 || f.ledger().UrgentRefusals != 0 {
+				t.Fatalf("a refused normal or bulk create wrote the ledger: %+v", f.ledger())
+			}
+			wantNoSession(t, f, "wo-2")
+			wantNoSession(t, f, "wo-cigar-curate-1")
+			// The urgent queues are apart: a remediation is still Queued.
+			wantQueued(t, f, summonPost(t, f, keyedRemediation("rem-responder-1", "alert-1")), "rem-responder-1")
+		})
+	}
 	t.Run("queuedUrgent", func(t *testing.T) {
 		f := lanesFixture(t, queuePolicy(1, 1, 4, 1, 6))
 		wantQueued(t, f, summonPost(t, f, keyedRemediation("rem-responder-1", "alert-1")), "rem-responder-1")
@@ -437,7 +442,7 @@ func TestSummonQueueEscalationsAndRemediationsApart(t *testing.T) {
 // every queue (coordinator answer op778-q-1).
 func TestSummonQueueChargeAttribution(t *testing.T) {
 	p := queuePolicy(1, 1, 4, 4, 6)
-	hash := summonRequestHash(summonWire{Mode: "task", Lane: "remediation", Name: "rem-responder-1"})
+	hash := summonRequestHash(summonWire{Mode: "task", Lane: "remediation", Name: "rem-responder-1"}, v1alpha1.SummonPriorityUrgent)
 	remediations := []summonQueue{{urgent: true}}
 	for _, tc := range []struct {
 		name string
@@ -455,7 +460,7 @@ func TestSummonQueueChargeAttribution(t *testing.T) {
 			t.Errorf("%s: queues %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	upgrade := summonRequestHash(summonWire{Mode: "remote", Lane: "upgrade", Name: "wo-1"})
+	upgrade := summonRequestHash(summonWire{Mode: "remote", Lane: "upgrade", Name: "wo-1"}, v1alpha1.SummonPriorityNormal)
 	if got := summonChargeQueues(p, upgrade, "wo-1"); !slices.Equal(got, []summonQueue{{}}) {
 		t.Errorf("upgrade: %v", got)
 	}
