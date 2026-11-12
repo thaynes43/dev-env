@@ -21,7 +21,7 @@ import (
 
 // descriptionWordBound is the measured total of the tool descriptions.
 // Each description is at most 30 words.
-const descriptionWordBound = 214
+const descriptionWordBound = 222
 
 // parentContinuationMax is the longest continuation parentCursorOK accepts.
 const parentContinuationMax = 4096
@@ -71,11 +71,12 @@ var frontDoorTools = []map[string]any{
 		"evidence": map[string]any{"type": "string"},
 	}, []string{"id", "evidence"}),
 	// Starts an agent that can reach the web. A repeat returns the retained session for coordinator-<item> and does not post another create while that record exists.
-	tool("coordinator_start", "Start one coordinator for an item. Model is required and is the full id Tom named. No effort.", hints(false, false, true, true), map[string]any{
+	tool("coordinator_start", "Start one coordinator for an item. Model is required and is the full id Tom named. No effort. Optional title is role text set at create.", hints(false, false, true, true), map[string]any{
 		"item":    map[string]any{"type": "integer", "minimum": 1},
 		"repo":    map[string]any{"type": "string"},
 		"project": map[string]any{"type": "string"},
 		"model":   map[string]any{"type": "string"},
+		"title":   map[string]any{"type": "string"},
 		"hours":   map[string]any{"type": "integer", "minimum": 1, "maximum": 4},
 		"workers": map[string]any{"type": "integer", "minimum": 1, "maximum": 4},
 	}, []string{"item", "model", "hours", "workers"}),
@@ -330,7 +331,7 @@ func (h *handler) coordinatorStart(ctx context.Context, args map[string]any) (st
 	if _, ok := args["effort"]; ok {
 		return "", errors.New("effort is not a setting; the model uses its preset")
 	}
-	if err := only(args, "item", "repo", "project", "model", "hours", "workers"); err != nil {
+	if err := only(args, "item", "repo", "project", "model", "title", "hours", "workers"); err != nil {
 		return "", err
 	}
 	item, ok, err := intArg(args, "item")
@@ -349,6 +350,10 @@ func (h *handler) coordinatorStart(ctx context.Context, args map[string]any) (st
 	if err != nil {
 		return "", err
 	}
+	title, _, err := strArg(args, "title")
+	if err != nil {
+		return "", err
+	}
 	hours, hoursOK, err := intArg(args, "hours")
 	if err != nil || !hoursOK {
 		return "", need(err, "hours")
@@ -358,7 +363,7 @@ func (h *handler) coordinatorStart(ctx context.Context, args map[string]any) (st
 		return "", need(err, "workers")
 	}
 	// PrepareCoordinatorStart refuses a missing model before Execute talks to the operator.
-	in := agentrun.CoordinatorStartInput{Item: item, Repo: repo, Project: project, Model: strings.TrimSpace(model), Hours: int(hours), Workers: int(workers)}
+	in := agentrun.CoordinatorStartInput{Item: item, Repo: repo, Project: project, Model: strings.TrimSpace(model), Title: title, Hours: int(hours), Workers: int(workers)}
 	out, err := agentrun.ExecuteCoordinatorStart(ctx, h.op, in)
 	if err != nil {
 		return "", plainRefusal(err)

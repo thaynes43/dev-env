@@ -24,6 +24,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
+	"github.com/thaynes43/dev-env/internal/sessiontitle"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
@@ -266,6 +267,15 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		Profile: req.Profile,
 		Parent:  c.parent,
 		Restore: req.Restore,
+	}
+	// Empty is absent and is not stored. A bad value is refused unchanged:
+	// the API does not trim or rewrite it.
+	if req.Title != "" {
+		if reason := sessiontitle.Validate(req.Title); reason != "" {
+			fields = append(fields, apiv1.FieldError{Field: "title", Reason: reason, Message: sessiontitle.Explain(reason)})
+		} else {
+			spec.Title = req.Title
+		}
 	}
 	if l := req.Limits; l != nil {
 		if req.Agent == "codex" && l.MaxTurns != 0 {

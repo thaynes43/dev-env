@@ -106,6 +106,37 @@ func TestWorkspacePodRequiresBothOptInsAndRetainsPrivateHome(t *testing.T) {
 	}
 }
 
+func TestSessionDocumentCarriesTitle(t *testing.T) {
+	s := taskSession()
+	without, err := sessionDocument(s, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(without, `"title"`) {
+		t.Fatalf("untitled document contains a title: %s", without)
+	}
+	s.Spec.Title = "Main coordinator"
+	with, err := sessionDocument(s, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(with, `"title":"Main coordinator"`) {
+		t.Fatalf("document %s", with)
+	}
+	parsed, err := protocol.ParseSession([]byte(with))
+	if err != nil || parsed.Title != "Main coordinator" {
+		t.Fatalf("parsed title %q %v", parsed.Title, err)
+	}
+	s.Spec.Title = ""
+	again, err := sessionDocument(s, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != without {
+		t.Fatalf("clearing the title changed the document\n%s\n%s", without, again)
+	}
+}
+
 func TestPodShape(t *testing.T) {
 	tmpl := exampleTemplates(t)
 	s := taskSession()

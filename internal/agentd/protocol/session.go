@@ -68,10 +68,13 @@ type Session struct {
 	Repo string `json:"repo"`
 	// Base is the ref the worktree branches from. Empty means origin's
 	// default branch.
-	Base   string `json:"base,omitempty"`
-	Agent  string `json:"agent"`
-	Mode   string `json:"mode"`
-	Model  string `json:"model"`
+	Base  string `json:"base,omitempty"`
+	Agent string `json:"agent"`
+	Mode  string `json:"mode"`
+	Model string `json:"model"`
+	// Title is optional role text (DESIGN-065). Empty is omitted, so a session
+	// without a title keeps today's document. An older agentd ignores the key.
+	Title  string `json:"title,omitempty"`
 	Effort string `json:"effort,omitempty"`
 	// Prompt is the task. Required in task mode. A remote session may carry
 	// one only when Caller is set, which is a summoned session (DESIGN-064

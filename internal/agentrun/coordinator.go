@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/sessiontitle"
 )
 
 //go:embed coordinator_brief.txt
@@ -64,11 +65,13 @@ func coordinatorKey(item int64, run string) (string, error) {
 
 // CoordinatorStartInput is one coordinator session as the caller names it.
 // Model is required. There is no effort field: the platform uses the model's preset.
+// Title is optional role text. Empty means no title, and there is no default.
 type CoordinatorStartInput struct {
 	Item    int64
 	Repo    string
 	Project string
 	Model   string
+	Title   string
 	Run     string
 	Hours   int
 	Workers int
@@ -124,9 +127,12 @@ func PrepareCoordinatorStart(in CoordinatorStartInput) (apiv1.CreateSessionReque
 	if agent == "codex" && in.Project == "" {
 		return apiv1.CreateSessionRequest{}, usageError("gpt-6-astra needs --project: managed Codex tasks run in a declared project")
 	}
+	if reason := sessiontitle.Validate(in.Title); reason != "" {
+		return apiv1.CreateSessionRequest{}, usageError("--title: %s", sessiontitle.Explain(reason))
+	}
 	workerCap := int32(in.Workers)
 	return apiv1.CreateSessionRequest{
-		Repo: in.Repo, Project: in.Project, Agent: agent, Model: in.Model, Mode: "task", Profile: "dev", Size: "M",
+		Repo: in.Repo, Project: in.Project, Agent: agent, Model: in.Model, Title: in.Title, Mode: "task", Profile: "dev", Size: "M",
 		Prompt:         fmt.Sprintf(coordinatorBriefTemplate, strconv.FormatInt(in.Item, 10), strconv.Itoa(in.Hours), strconv.Itoa(in.Workers)),
 		Limits:         &apiv1.Limits{Timeout: fmt.Sprintf("%dh", in.Hours), MaxWorkers: &workerCap},
 		IdempotencyKey: key,

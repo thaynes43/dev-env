@@ -38,7 +38,7 @@ file stops it before it listens. A missing authority file does not.
 ## Tools
 
 `tools/list` returns these fifteen tools. Each description is at most 30 words,
-and the descriptions together are 214 words.
+and the descriptions together are 222 words.
 
 | Tool | What it does |
 |---|---|
@@ -48,7 +48,7 @@ and the descriptions together are 214 words.
 | `backlog_groom` | Replace an item's scope, acceptance, or constraints, then read the item back. |
 | `backlog_order` | Set an item's priority, which decides what goes next, then read it back. |
 | `backlog_close` | Close with evidence; caller's coordinator takeover requires reclaimed pod and stopped workers. Holds stay held; retry reclaim refusals later. |
-| `coordinator_start` | Start one coordinator for an item. Model is required and is the full id Tom named. No effort. |
+| `coordinator_start` | Start one coordinator for an item. Model is required and is the full id Tom named. No effort. Optional title is role text set at create. |
 | `session_status` | Read one session this caller started, by name or item, including any retained outcome. |
 | `session_stop` | Stop one session this caller started. A refusal from the operator is reported plainly. |
 | `waiting_on_tom` | List open Asks for this caller's sessions and items that need Tom's approval or answer. |
@@ -166,7 +166,8 @@ about 1.2 MiB.
 
 `coordinator_start` takes `item`, exactly one of `repo` or `project`, `model`,
 `hours` (1 to 4) and `workers` (1 to 4). `model` is required. There is no
-default and there is no effort argument. An `effort` field is refused before
+default and there is no effort argument. An optional `title` is role text,
+set at create and not changed later. There is no default title. An `effort` field is refused before
 any operator request, and so is a missing or unknown model. The accepted full
 ids are `claude-opus-5-5`, `claude-fable-5-2` and `gpt-6-astra`. The Codex id
 needs `project`.

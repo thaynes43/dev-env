@@ -13,6 +13,7 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/sessiontitle"
 )
 
 // TmuxSession is the tmux session the agent runs in (DESIGN-001 3.6). Tom
@@ -363,10 +364,25 @@ func claudeArgs(s Settings, sess protocol.Session) []string {
 	return append(argv, "--dangerously-skip-permissions")
 }
 
-// remoteControlArgs register the CLI's Remote Control entry under the
-// session's name (backlog 03: the Remote Control name is the session id).
+// remoteControlArgs register the CLI's Remote Control entry. With no role
+// title the argument is the session name. With one, it is the composed
+// display title (DESIGN-065). Codex does not use this.
 func remoteControlArgs(sess protocol.Session) []string {
-	return []string{"--remote-control", sess.Name}
+	name := sess.Name
+	if title := remoteControlTitle(sess); title != "" {
+		name = title
+	}
+	return []string{"--remote-control", name}
+}
+
+// remoteControlTitle is what a Claude remote session passes to
+// --remote-control when it has role text. Empty means the session name is
+// passed, and the rest of the argv stays as it is. Codex returns empty.
+func remoteControlTitle(sess protocol.Session) string {
+	if sess.Agent != protocol.AgentClaude || sess.Mode != protocol.ModeRemote {
+		return ""
+	}
+	return sessiontitle.Compose(sess.Model, sess.Title)
 }
 
 // claudeCredentialCheck checks what agentd runs: Claude task and local

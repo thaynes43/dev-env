@@ -1,9 +1,9 @@
 # DESIGN-065: Session display titles and safe renaming
 
-- **Status:** Proposed 2026-11-12 for the coordinator
-  (dev-env-fable-coordinator-1109, story OP774, slice 1). Its rulings
-  (section 4) stand when the coordinator merges it. Nothing is built; the
-  phone test (section 5) has not run.
+- **Status:** Slice 1 (the field, creation and the launch argument) is built,
+  not installed (2026-11-12). The phone test (section 5) has not run, and
+  slice 1 does not merge before step 2's reading of "|" and "é" (ruling 7).
+  Slices 2 and 3 are not built. Rulings in section 4 stand.
 - **Tracking:** [Story OP774](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/774)
   under [Epic #91](https://work.haynesnetwork.com/work_packages/91). Builds
   on [DESIGN-038](038-remote-control-launch.md),

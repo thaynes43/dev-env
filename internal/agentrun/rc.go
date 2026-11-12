@@ -14,6 +14,7 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/sessiontitle"
 )
 
 const rcMaxHandoff = 8192
@@ -57,6 +58,11 @@ type rcRun struct {
 	reused   bool
 	wait     time.Duration
 	result   apiv1.RCLaunchResult
+	// title is role text for this create, already trimmed and checked.
+	title string
+	// errorMessage replaces the fixed code text for a title refusal. It is a
+	// fixed sentence and does not include the title or the API body.
+	errorMessage string
 	// sink, when set, receives the finished result instead of stdout:
 	// agent-run thread start translates it (DESIGN-057).
 	sink func(apiv1.RCLaunchResult)
@@ -100,7 +106,11 @@ func (r *rcRun) finish(outcome, code, phase string, exit int) error {
 	r.result.TotalMs = r.elapsed().Milliseconds()
 	r.result.DeadlineMs = max(0, r.wait.Milliseconds())
 	if code != "" {
-		r.result.Error = &apiv1.RCLaunchError{Code: code, Message: rcErrorMessages[code], Phase: phase}
+		msg := rcErrorMessages[code]
+		if r.errorMessage != "" {
+			msg = r.errorMessage
+		}
+		r.result.Error = &apiv1.RCLaunchError{Code: code, Message: msg, Phase: phase}
 	}
 	if r.sink != nil {
 		r.sink(r.result)
@@ -165,11 +175,12 @@ func (a *app) rc(ctx context.Context, args []string) error {
 // allowed here only. The existing run/restore --project refusals stay intact.
 func (r *rcRun) start(ctx context.Context, args []string) error {
 	cmd := newCommand("rc", outputJSON)
-	var project, repo, agent, model, effort, handoff, key string
+	var project, repo, agent, model, effort, handoff, key, titleFlag string
 	cmd.fs.StringVar(&project, "project", "", "")
 	cmd.fs.StringVar(&repo, "repo", "", "")
 	cmd.fs.StringVar(&agent, "agent", "", "")
 	cmd.fs.StringVar(&model, "model", "", "")
+	cmd.fs.StringVar(&titleFlag, "title", "", "")
 	cmd.fs.StringVar(&effort, "effort", "", "")
 	cmd.fs.StringVar(&handoff, "handoff", "", "")
 	cmd.fs.StringVar(&key, "idempotency-key", "", "")
@@ -185,6 +196,12 @@ func (r *rcRun) start(ctx context.Context, args []string) error {
 	if r.wait < 0 || r.wait > 10*time.Minute {
 		return r.finish("failed", "invalid_input", "", ExitUsage)
 	}
+	title, reason := normalizeTitle(titleFlag)
+	if reason != "" {
+		r.errorMessage = sessiontitle.Explain(reason)
+		return r.finish("failed", "invalid_input", "", ExitUsage)
+	}
+	r.title = title
 	if agent == "codex" {
 		return r.finish("blocked", "codex_adapter_not_implemented", "", ExitFailed)
 	}
@@ -222,7 +239,7 @@ func (r *rcRun) startClaude(ctx context.Context, conn connOpts, project, repo, a
 	if err != nil {
 		return r.finish("failed", "unauthenticated", "api_accepted", ExitAuth)
 	}
-	req := apiv1.CreateSessionRequest{Project: project, Repo: repo, Agent: agent, Mode: "remote", Model: model, Effort: effort, IdempotencyKey: key}
+	req := apiv1.CreateSessionRequest{Project: project, Repo: repo, Agent: agent, Mode: "remote", Model: model, Title: r.title, Effort: effort, IdempotencyKey: key}
 	payload, _ := json.Marshal(req)
 	status, raw, err := r.a.send(ctx, c, http.MethodPost, c.url+apiv1.SessionsPath, payload)
 	if err != nil {
@@ -239,6 +256,10 @@ func (r *rcRun) startClaude(ctx context.Context, conn connOpts, project, repo, a
 		return r.finish("unconfirmed", "status_unavailable", "api_accepted", ExitUnconfirmed)
 	}
 	if status != http.StatusCreated && status != http.StatusOK {
+		if req.Title != "" && unknownTitleField(string(raw)) {
+			r.errorMessage = olderOperatorTitle
+			return r.finish("failed", "invalid_input", "api_accepted", ExitFailed)
+		}
 		return r.refusal(status, raw, "api_accepted")
 	}
 	reason := "created"

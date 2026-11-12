@@ -793,6 +793,7 @@ func sessionDocument(s *v1alpha1.AgentSession, retentionLatch bool) (string, err
 		Agent:                  string(s.Spec.Agent),
 		Mode:                   string(s.Spec.Mode),
 		Model:                  s.Spec.Model,
+		Title:                  s.Spec.Title,
 		Effort:                 s.Spec.Effort,
 		Prompt:                 s.Spec.Prompt,
 		// Caller lets agentd allow a prompt on a summoned remote session

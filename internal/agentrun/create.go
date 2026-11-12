@@ -17,6 +17,7 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/sessiontitle"
 )
 
 // Waiting for a new session's pod (D-50): agent-run polls the session until its
@@ -54,12 +55,12 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	cmd := newCommand(cmdName, outputName, outputJSON)
 	fs := cmd.fs
 	var (
-		prompt, promptFile, repo, project, agent, model, effort, base, size, profile, timeout, key string
-		idleAfter, archiveAfter, dryRun                                                            string
-		maxTurns                                                                                   int
-		wait                                                                                       time.Duration
-		interactive, local, safe, once, coordinatorInstructions                                    bool
-		instructionPublisher                                                                       bool
+		prompt, promptFile, repo, project, agent, model, effort, base, size, profile, timeout, key, titleFlag string
+		idleAfter, archiveAfter, dryRun                                                                       string
+		maxTurns                                                                                              int
+		wait                                                                                                  time.Duration
+		interactive, local, safe, once, coordinatorInstructions                                               bool
+		instructionPublisher                                                                                  bool
 	)
 	fs.Func("dry-run", "", func(value string) error {
 		if value != "server" {
@@ -75,6 +76,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	fs.StringVar(&project, "project", "", "")
 	fs.StringVar(&agent, "agent", protocol.AgentClaude, "")
 	fs.StringVar(&model, "model", "", "")
+	fs.StringVar(&titleFlag, "title", "", "")
 	fs.StringVar(&effort, "effort", "", "")
 	fs.StringVar(&base, "base", "", "")
 	fs.StringVar(&size, "size", "", "")
@@ -269,6 +271,11 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		key = a.env.NewKey()
 	}
 
+	title, reason := normalizeTitle(titleFlag)
+	if reason != "" {
+		return usageError("--title: %s", sessiontitle.Explain(reason))
+	}
+
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
@@ -290,6 +297,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		Agent:                           agent,
 		Mode:                            mode,
 		Model:                           model,
+		Title:                           title,
 		Effort:                          effort,
 		Prompt:                          prompt,
 		Size:                            size,
@@ -309,6 +317,9 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		var raw json.RawMessage
 		status, err := a.callWith(ctx, &one, http.MethodPost, apiv1.PilotPreflightPath, nil, req, &raw, false)
 		if err != nil {
+			if next := titleRefusal(err, req.Title); next != err {
+				return next
+			}
 			return codexProjectHint(err, req)
 		}
 		var result apiv1.PilotPreflight
@@ -333,6 +344,9 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		var raw json.RawMessage
 		status, err := a.callWith(ctx, &one, http.MethodPost, apiv1.SessionsPath, nil, req, &raw, false)
 		if err != nil {
+			if next := titleRefusal(err, req.Title); next != err {
+				return next
+			}
 			return codexProjectHint(err, req)
 		}
 		if (status != http.StatusOK && status != http.StatusCreated) || !strictWireJSON(raw, reflect.TypeFor[apiv1.Session]()) {
@@ -352,6 +366,9 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	var sess apiv1.Session
 	status, err := a.call(ctx, c, http.MethodPost, apiv1.SessionsPath, nil, req, &sess)
 	if err != nil {
+		if next := titleRefusal(err, req.Title); next != err {
+			return next
+		}
 		return codexProjectHint(err, req)
 	}
 	if cmd.c.output == outputText {
@@ -382,7 +399,11 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 			a.outf("It runs Codex's phone daemon, not a TUI. Once agent-run show %s says running, pair a phone with: agent-run pair %s\n", sess.Name, sess.Name)
 			a.outf("Then start each thread in the ChatGPT app (Remote, then the paired computer). Threads from codex exec or codex queue never show on the phone.\n")
 		case interactive:
-			a.outf("It shows in the Claude app as %s once agent-run show %s says remote control: registered (about two minutes).\n", sess.Name, sess.Name)
+			shown := sess.Name
+			if composed := sessiontitle.Compose(sess.Model, sess.Title); composed != "" {
+				shown = composed
+			}
+			a.outf("It shows in the Claude app as %s once agent-run show %s says remote control: registered (about two minutes).\n", shown, sess.Name)
 			a.outf("If it says login-required instead, agent-run login %s status says which login it uses: renew the keeper's shared login (Tom signs in; a workbench session runs agent-run keeper-login claude url), or, for a pod with its own login, agent-run login %s url\n", sess.Name, sess.Name)
 			a.outf("Attach to its TUI with: agent-run attach %s (detach with ctrl-b d)\n", sess.Name)
 		case local:

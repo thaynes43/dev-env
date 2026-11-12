@@ -85,7 +85,7 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		}
 		st.Agent.Error = boot.CurrentStep
 		if sess.Mode == protocol.ModeRemote {
-			st.RemoteControl = &protocol.RemoteControl{Name: sess.Name, State: protocol.RemoteStarting}
+			st.RemoteControl = &protocol.RemoteControl{Name: sess.Name, State: protocol.RemoteStarting, Title: remoteControlTitle(sess)}
 		}
 		return st
 	}
@@ -207,7 +207,9 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	applyActivity(ctx, r, s, &st, pid, hasCur && cur.TUI, now)
 	switch {
 	case sess.Mode == protocol.ModeRemote && sess.Agent == protocol.AgentClaude:
-		st.RemoteControl = collectRemoteControl(s, sess, checkLogin(s).Usable(now), live, hasCur)
+		rc := collectRemoteControl(s, sess, checkLogin(s).Usable(now), live, hasCur)
+		rc.Title = remoteControlTitle(sess)
+		st.RemoteControl = rc
 	case hasCur && hasExplicit && explicitState != explicitClaudeRCUncertain && explicitRCAccepted(s, sess, cur):
 		rc := collectRemoteControl(s, sess, checkLogin(s).Usable(now), live, true)
 		rc.Name = cur.ExplicitClaudeRC.Title
