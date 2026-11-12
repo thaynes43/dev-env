@@ -1819,13 +1819,14 @@ cannot submit scheduled work.
 create: `task`, `remote` or both. It is empty by default, and empty refuses
 every summoning create. A create whose entry's kind the flag does not name
 is refused with 403; the message names the flag and the kind. The request's
-own checks come first (its keys, name prefix, lane, kind, model, data and the
-size of the rendered brief), so a request that fails one of them still gets
-its own refusal, such as 400 or 422. One check is not among them: the bound on
-the session document sent to agentd is made in the dispatch step, after the
-switch, and story 770 did not move it. So while a kind is off, a request that
-would fail only that bound gets the 403 instead of its 422. Neither refusal
-reads back, charges or creates anything. Then the switch's 403
+own checks come first (its keys, name prefix, lane, kind, model, data, the
+size of the rendered brief and, since story 778, the bound on the session
+document sent to agentd), so a request that fails one of them still gets
+its own refusal, such as 400 or 422. The agentd bound is checked before the
+switch on the longest name the create may take (the requested name with the
+suffix `-99`), that name's brief and a placeholder as long as a dispatch id
+(32 hex characters); it reads nothing. The dispatch step checks it again with
+the real id. Neither refusal reads back, charges or creates anything. Then the switch's 403
 comes before anything else: a repeat of a key gets the 403 and nothing
 of its session, nothing is charged in the create ledger, no Session is
 written and a refused urgent create is not counted. List and get answer as
@@ -1949,11 +1950,13 @@ The order of one create is fixed. The 422s, 403s and 409s of the request
 and its names come first. Then the API chooses the dispatch id: for a keyed
 create, a hash of the caller's account, the key and the UID of the key's
 newest earlier session (or none); for a keyless create, a random id. Then
-the pool. Then the first ledger write, which decides the binding: a new
-charge; or, for an id already charged with the same request, an attempt mark
-on its charge while the charge still counts; or a re-charge, counted again,
-of one past its window whose session does not exist. Nothing is created on a
-charge that was only read.
+the pool, with `--enable-summoned-lanes` off only (with it on, a create past
+its pool is Queued: see "The queues" below). Then the first ledger write,
+which decides the binding: a new charge, subject to the hour and then, with
+the lanes on, to its queue; or, for an id already charged with the same
+request, an attempt mark on its charge while the charge still counts; or a
+re-charge, counted again, of one past its window whose session does not
+exist. Nothing is created on a charge that was only read.
 
 Then each create attempt, and there may be more than one. First its mark: a
 compare-and-set ledger write that succeeds only if the ledger still binds the
@@ -1984,15 +1987,18 @@ before it sends, are outside what the client can stop; see the limits below.
 
 **What spends a charge.** A refusal before the first ledger write has
 charged anything spends nothing: the 422s, 403s and 409s of the request and
-its names, a 429 from the pool, and a 429 from `createsPerHour` when the
-first write finds the window full (for an urgent create that write only adds
-to the count of urgent refusals). A failure after a write that charged or
+its names, a 429 from the pool, and a 429 from `createsPerHour` or from a
+full queue when the first write finds the window or the queue full (for an
+urgent create that write only adds to the count of urgent refusals). A
+failure after a write that charged or
 marked the dispatch keeps the charge, whatever its status, and its message
 says so: 409 when no free name is left by the time
 of the create; 422 when the Kubernetes API server refuses the object (for
 example from an installed schema that does not accept it); 503 when the
 deadline ends, the ledger cannot be written or the charge left it; and 429
-when a mark or a rebind finds the charge past its window and the hour full.
+when a mark or a rebind finds the charge past its window and the hour full,
+or finds its queue full for a charge whose last attempt mark had passed the
+15 minute hold.
 There is no refund, and normal pruning applies, so the message does not
 promise that the charge is still there; past its window it no longer counts.
 The 503 for a charge that has already left the ledger carries no retention
@@ -2168,7 +2174,7 @@ and late-first-boot deadline guarantee also rest on the pinned 2.105.0
 `launch.go`, `status.go`, `daemon.go` and `start_deadline.go` source. These
 are source and test proofs, not a live cluster or provider failover test.
 
-**The API's pool, until story 778 adds queues.** The API counts the caller's
+**The API's pool, with `--enable-summoned-lanes` off.** The API counts the caller's
 unfinished summoned session records, uncached: escalations against
 `limits.escalations`, every other lane against `limits.concurrent`.
 "Unfinished" is what the session record says, not whether a pod runs: not
@@ -2177,15 +2183,59 @@ being deleted, not set to suspend, not in phase `Suspended`, `Archived` or
 charge. A session with a terminal outcome whose record is still unfinished
 still holds its slot. This is the API's own count, not the leader's: the
 leader counts admitted, unreleased records (above). The count is not a
-reservation: until story 778, a pool can be exceeded by at most the number of API replicas minus one (one,
+reservation: a pool can be exceeded by at most the number of API replicas minus one (one,
 with two replicas), when every replica has a create in flight at once. That
 bound holds for fixed limits and session states, and when no earlier failed
-call is still able to land.
+call is still able to land. The operator refuses to start with a summoning
+kind switched on and the lanes off, so this count applies only while every
+summoning create is refused anyway.
+
+**The queues, with `--enable-summoned-lanes` on** (DESIGN-064 5.9 "The
+queues" and its correction for story 778). The API no longer refuses a
+create past its pool: the create returns 201, the session is Queued (no
+`status.summon.admittedAt`, no pod, no volume) and the leader admits it when
+its lane and pool allow (above). What bounds the waiting is two queue limits
+per caller:
+
+- `limits.queued` (default 4, 0 to 16) counts Queued sessions of priority
+  `normal` and `bulk`, upgrades and curation together. Past it: 429 `summon
+  queue full`. The refusal writes nothing.
+- `limits.queuedUrgent` (default 4, 1 to 16) counts Queued sessions of
+  priority `urgent` per pool: Queued remediations (the `concurrent` pool)
+  apart from Queued escalations (the `escalations` pool). Past it: 429
+  `summon urgent queue full`, naming the pool, counted as an urgent refusal
+  (below). A full escalations queue never refuses a remediation, nor the
+  reverse.
+
+Every new create is Queued first, even with its pool free, until the
+leader's next pass admits it, so a burst of creates counts toward the queue
+until then. The count is taken inside the ledger's compare-and-set, in the
+same write that charges (ruling D2 on item 741): from the uncached session
+list that write reads, the caller's Queued sessions in that queue, plus the
+caller's charges that have no Session and whose last attempt mark is younger
+than the 15 minute hold (a create under way, or one that failed within the
+hold). So two API replicas racing for a queue's last place cannot both pass:
+one write wins and the other decides again on the winner's charge and gets
+429. Queued has one definition, the leader's (`summonoutcome.Queued`): not
+admitted (no `admittedAt`, and no grant in the ledger's reserved key
+`_admission`), not closed (no `status.summon.closed`, no terminal outcome),
+and neither suspended nor being deleted. A charge records no lane, so it is
+put in the queue of the policy entry its request hash names (its name, or
+its name less a suffix `-2` to `-99`); a charge no current entry names (the
+policy was edited since) counts in every queue, so a bound can refuse early
+but is never exceeded. A charge whose attempt mark has passed the hold is in
+no queue; a later retry of it needs a place again, and a queue that filled
+meanwhile refuses it with 429 (its charge is kept). The API reads
+`_admission` only to tell a granted session from a Queued one and carries it
+unchanged in every write; when it is present and cannot be read, a write
+that needs the count answers 503 and writes nothing, while a create already
+under way still makes its own mark.
 
 **Urgent refusals.** A refused create of priority `urgent` (remediation and
-escalation), whether by `createsPerHour` or by its pool, adds one to the
-caller's urgent refusals in the write that refuses it, once, whichever limit
-refused it. The count stops at its largest value rather than wrapping. If
+escalation), whether by `createsPerHour`, by its pool (lanes off) or by its
+queue (lanes on), adds one to the caller's urgent refusals in the write that
+refuses it, once, whichever limit refused it: the hour is checked first, and
+a create both limits refuse is counted once. The count stops at its largest value rather than wrapping. If
 that write cannot be made, the answer is 503 instead of 429. A refused
 `normal` or `bulk` create is logged and not counted. Story 742 pages on the
 count; nothing reads it yet.

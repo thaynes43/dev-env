@@ -988,6 +988,57 @@ where it differs, this governs.
   agent's `launch.go`, `status.go`, `daemon.go` and `start_deadline.go` source;
   no live-provider handover is claimed.
 
+**Correction, 2026-11-12 (story 778, slice b of #741; item 741 rulings D2
+and D4, and the coordinator's answer `op778-q-1`; written by the story's
+worker, not a ruling by Tom).** The text above stays; where it differs,
+this governs.
+
+1. *What a create past a pool gets.* With `--enable-summoned-lanes` on
+   (the API server reads the same option as the leader), a valid create
+   past its pool returns 201 and its session is Queued; the leader admits
+   it when its lane and pool allow. The API's count of "unfinished" records
+   at the pool refuses only with the lanes off, which the operator's start
+   check allows only while no summoning kind is switched on. Every new
+   create is Queued until the leader's next pass, so a burst counts toward
+   its queue until then.
+2. *How the queues are counted.* Inside the create ledger's
+   compare-and-set, in the write that would charge (D2): from the uncached
+   session list that write reads, the caller's Queued sessions in that
+   queue, plus its charges that have no Session and whose last attempt mark
+   is younger than the 15 minute hold. A charge records no lane or
+   priority, so it is put in the queue of the policy entry its request hash
+   names, by the charge's name or that name less a suffix `-2` to `-99`;
+   one that no current entry names counts in every queue, so a bound can
+   refuse early and is never exceeded. A mark or re-charge of a charge
+   whose attempt had passed the hold brings it back into the count, so it
+   needs a place too, after the hour's check; refused, it keeps its charge.
+   Past `queued`: 429 `summon queue full`, nothing written. Past
+   `queuedUrgent` in its pool: 429 `summon urgent queue full`, counted as
+   an urgent refusal in the refusing write. The hour is checked before the
+   queue; a create both refuse is counted once. An absent `queued` or
+   `queuedUrgent` reads as the CRD default 4.
+3. *One definition of Queued.* `summonoutcome.Queued`, which the leader's
+   admission uses too: not admitted (no `admittedAt` and no grant in
+   `_admission` for its name and UID), not closed (no `closed`, no terminal
+   outcome), and neither suspended nor being deleted. So a suspended or
+   deleting session that was never admitted is in no queue and no pool until
+   #741 slice c decides what that stop becomes; a summoning caller can do
+   neither. The API decodes `_admission` read only and still carries it
+   byte for byte. A present key that cannot be decoded gives 503 with no
+   write on a write that needs the count; a create already under way still
+   makes its own mark.
+4. *The order of checks.* The agentd transport bound is checked before the
+   switch, on the longest name the create may take, that name's brief and
+   a placeholder as long as a dispatch id (32 hex characters), reading
+   nothing (D4). So the correction of #770 above no longer holds where it
+   says this bound comes in the dispatch step after the switch and a
+   request that fails only that bound gets the switch's 403: it gets its own
+   422 whatever the switch says. The dispatch step checks it again with the
+   real id. The order is now: the request's own checks with the transport
+   bound, the switch, the repeat of a key, the names, the dispatch id, the
+   pool (lanes off only), the first ledger write (the hour, then the queue),
+   the marks and creates.
+
 ## 6. Contracts per build story
 
 ### 6.1 OP735: the ops egress tier

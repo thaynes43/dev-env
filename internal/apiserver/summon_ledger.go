@@ -120,10 +120,17 @@ func summonLedgerKey(c *caller) string {
 // on: those carrying a dispatch id, by that id, and every name held.
 // unsettled holds the dispatch id of every session that exists and is neither
 // admitted nor closed: the prune keeps its charge (summonledger.Prune, 7233).
+// items are the listed sessions, which the queue counts read (OP778), and
+// grantsRaw and grantsPresent the ledger's reserved key summonledger.GrantsKey
+// as this write read it: the queue counts decode it, read only, to tell a
+// granted session from a Queued one. Every write carries it byte-for-byte.
 type summonSessions struct {
-	byID      map[string]*v1alpha1.AgentSession
-	names     map[string]bool
-	unsettled map[string]bool
+	byID          map[string]*v1alpha1.AgentSession
+	names         map[string]bool
+	unsettled     map[string]bool
+	items         []v1alpha1.AgentSession
+	grantsRaw     string
+	grantsPresent bool
 }
 
 // summonUnsettled is a session the leader may still admit by its charge: not
@@ -142,6 +149,7 @@ func (s *Server) readSummonSessions(ctx context.Context) (summonSessions, error)
 		byID:      make(map[string]*v1alpha1.AgentSession, len(list.Items)),
 		names:     make(map[string]bool, len(list.Items)),
 		unsettled: map[string]bool{},
+		items:     list.Items,
 	}
 	for i := range list.Items {
 		it := &list.Items[i]
@@ -228,6 +236,7 @@ func (s *Server) updateSummonLedger(ctx context.Context, c *caller, decide func(
 		if err != nil {
 			return time.Time{}, fromKubeError(err, "list sessions")
 		}
+		live.grantsRaw, live.grantsPresent = cm.Data[summonledger.GrantsKey]
 		mono := s.summonClock().Now()
 		now := entry.Now(s.now())
 		if !decide(&entry, now, live) {
@@ -291,26 +300,48 @@ const (
 	summonNoFreeName
 	// summonChargeGone: a rebind found the id's charge gone. Nothing written.
 	summonChargeGone
+	// summonQueueFull: with --enable-summoned-lanes, the queue this charge
+	// would join holds its bound (OP778, refuseSummonQueue). Nothing was charged
+	// or marked; an urgent create was counted as a refusal in the same write.
+	summonQueueFull
+	// summonGrantsUnreadable: the queue had to be counted and the ledger's
+	// reserved key cannot be read, so a granted session cannot be told from a
+	// Queued one. Nothing written.
+	summonGrantsUnreadable
 )
 
 // summonBinding is a ledger decision for one dispatch: the result, the name
 // the ledger binds, for a mark the absolute deadline of the create it
-// precedes, and the session when it already exists.
+// precedes, the session when it already exists, and for summonQueueFull the
+// queue and its count.
 type summonBinding struct {
 	result   summonChargeResult
 	name     string
 	deadline time.Time
 	existing *v1alpha1.AgentSession
+	queue    summonQueue
+	queued   int
 }
 
 // chargeAttempt is the window rule for one more attempt on the charge at i
 // (DESIGN-064 5.9, the correction's amendment, ruling 3): inside its window
 // an attempt mark; outside it a re-charge, at and attempt now, counted again,
 // if the hour has room; else summonHourFull, and an urgent create's refusal is
-// counted in the same write. It returns the result and whether to write.
-func chargeAttempt(e *summonLedgerEntry, i int, now time.Time, urgent bool, perHour int32) (summonChargeResult, bool) {
+// counted in the same write. A charge whose last attempt mark is at least
+// summonledger.AttemptHold old is in no queue count, so with
+// --enable-summoned-lanes its mark or re-charge first needs room in its queue
+// (refuseSummonQueue), after the hour: a late retry cannot pass a queue that
+// filled meanwhile. It returns the result and whether to write; b carries a
+// queue refusal.
+func (s *Server) chargeAttempt(b *summonBinding, c *caller, e *summonLedgerEntry, i int, now time.Time, live summonSessions, urgent bool, perHour int32) (summonChargeResult, bool) {
 	ch := &e.Charges[i]
+	stale := now.Sub(ch.Attempt) >= summonledger.AttemptHold
 	if summonledger.ChargeCounts(*ch, now) {
+		if stale {
+			if stop, write := s.refuseSummonQueue(b, c, e, now, live, ch.ID, ch.Hash, ch.Name, urgent); stop {
+				return b.result, write
+			}
+		}
 		ch.Attempt = now
 		return summonMarked, true
 	}
@@ -320,6 +351,11 @@ func chargeAttempt(e *summonLedgerEntry, i int, now time.Time, urgent bool, perH
 		}
 		return summonHourFull, urgent
 	}
+	if stale {
+		if stop, write := s.refuseSummonQueue(b, c, e, now, live, ch.ID, ch.Hash, ch.Name, urgent); stop {
+			return b.result, write
+		}
+	}
 	ch.At, ch.Attempt = now, now
 	return summonRecharged, true
 }
@@ -328,9 +364,10 @@ func chargeAttempt(e *summonLedgerEntry, i int, now time.Time, urgent bool, perH
 // binding; the mark before its first create follows it. A session with the
 // id: nothing written. A charge with the id and another hash: nothing written
 // (409). The same hash: the window rule (chargeAttempt), and the charge's
-// name is the binding. No charge: a new one for name, subject to the hour,
-// unless nameErr refuses it. An urgent create refused by the hour adds one
-// to the caller's urgent refusals in the same write.
+// name is the binding. No charge: a new one for name, subject to the hour
+// and then, with --enable-summoned-lanes, to its queue (refuseSummonQueue),
+// unless nameErr refuses it. An urgent create refused by the hour or by its
+// queue adds one to the caller's urgent refusals in the same write, once.
 func (s *Server) bindSummonCharge(ctx context.Context, c *caller, id, hash, name string, nameErr error, urgent bool, perHour int32) (summonBinding, error) {
 	var b summonBinding
 	_, err := s.updateSummonLedger(ctx, c, func(e *summonLedgerEntry, now time.Time, live summonSessions) bool {
@@ -353,7 +390,7 @@ func (s *Server) bindSummonCharge(ctx context.Context, c *caller, id, hash, name
 				return false
 			}
 			var write bool
-			b.result, write = chargeAttempt(e, i, now, urgent, perHour)
+			b.result, write = s.chargeAttempt(&b, c, e, i, now, live, urgent, perHour)
 			b.name = e.Charges[i].Name
 			return write
 		}
@@ -363,6 +400,9 @@ func (s *Server) bindSummonCharge(ctx context.Context, c *caller, id, hash, name
 		}
 		if e.InWindow(now) >= int(perHour) {
 			return hourFull()
+		}
+		if stop, write := s.refuseSummonQueue(&b, c, e, now, live, id, hash, name, urgent); stop {
+			return write
 		}
 		e.Charges = append(e.Charges, summonCharge{ID: id, At: now, Attempt: now, Hash: hash, Name: name})
 		b.result, b.name = summonChargedNow, name
@@ -415,9 +455,9 @@ func (s *Server) rebindSummonCharge(ctx context.Context, c *caller, id, hash, fr
 				return false
 			}
 		}
-		r, write := chargeAttempt(e, i, now, urgent, perHour)
-		if r == summonHourFull {
-			b.result = summonHourFull
+		r, write := s.chargeAttempt(&b, c, e, i, now, live, urgent, perHour)
+		if r != summonMarked && r != summonRecharged {
+			b.result = r
 			return write
 		}
 		ch.Name = next
@@ -460,7 +500,7 @@ func (s *Server) markSummonAttempt(ctx context.Context, c *caller, id, hash, nam
 			return false
 		}
 		var write bool
-		b.result, write = chargeAttempt(e, i, now, urgent, perHour)
+		b.result, write = s.chargeAttempt(&b, c, e, i, now, live, urgent, perHour)
 		return write
 	})
 	if err == nil && (b.result == summonMarked || b.result == summonRecharged) {

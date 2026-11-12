@@ -33,11 +33,16 @@ import (
 //  2. The name: the requested one if free, else, for a re-fired key, the
 //     first free suffix -2 to -99. A name held by any other session is 409,
 //     unless the key's dispatch already holds a charge, whose name it creates.
-//  3. The dispatch id, chosen before anything is written.
-//  4. The pool, until story 741's queues: 429 past it.
+//  3. The dispatch id, chosen before anything is written, and the agentd
+//     transport bound on the longest name with that id. createSummonSession
+//     ran the same bound before the switch, with a placeholder id.
+//  4. The pool. With --enable-summoned-lanes off: 429 past it. On, nothing
+//     here: the create is Queued and the leader admits it (OP777, OP778).
 //  5. The ledger write that decides the binding: a new charge (429 when the
-//     hour is full), an attempt mark or a re-charge. A charge of the id with
-//     another hash is 409, and a session of the id is returned with 200.
+//     hour is full, then, with the lanes on, 429 when its queue is full,
+//     counted in that same write: summon_queue.go), an attempt mark or a
+//     re-charge. A charge of the id with another hash is 409, and a session
+//     of the id is returned with 200.
 //  6. Each create attempt: first the mark, a compare-and-set ledger write
 //     that succeeds only while the charge binds the id to the name about to
 //     be created (otherwise the dispatch follows the binding it returns), then
@@ -50,7 +55,8 @@ import (
 //     after its own mark.
 //
 // So every refusal before step 5 (422, 403, 409, and 429 by the pool) spends
-// nothing, and every create attempt follows its own ledger write naming its
+// nothing, nor does a 429 of the hour or of a queue at step 5's first write
+// for a new charge, and every create attempt follows its own ledger write naming its
 // id and its name. A failure after step 5's write keeps the charge, whatever
 // its status (409, 422, 429, 503 or another): there is no refund, and normal
 // pruning applies. The 503 for a charge that has already left the ledger
@@ -120,13 +126,12 @@ func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *c
 		sess.Annotations = map[string]string{}
 	}
 	sess.Annotations[v1alpha1.AnnotationSummonGeneration] = strconv.FormatInt(generation+1, 10)
-	// The longest name this create may take, with its brief, so a later
-	// suffix cannot add a transport refusal after the charge.
+	// The longest name this create may take, with its brief and its dispatch
+	// id, so a later suffix cannot add a transport refusal after the charge.
+	// createSummonSession ran the same check before the switch with a
+	// placeholder id of this length; this is the exact one.
 	candidates := summonNameSequence(req.Name)
-	preview := sess.DeepCopy()
-	preview.Name = candidates[len(candidates)-1]
-	preview.Spec.Prompt = brief(preview.Name)
-	if err := checkAgentd(preview); err != nil {
+	if err := checkSummonTransport(sess, req.Name, id, brief); err != nil {
 		return 0, nil, err
 	}
 
@@ -135,7 +140,9 @@ func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *c
 	if err != nil {
 		return 0, nil, err
 	}
-	if inPool >= limit {
+	// With --enable-summoned-lanes the pool is the leader's: a create past it
+	// is Queued, and its queue is counted inside the ledger write below.
+	if !s.SummonedLanes && inPool >= limit {
 		if urgent {
 			if err := s.countSummonUrgentRefusal(ctx, c); err != nil {
 				return 0, nil, err
@@ -158,6 +165,10 @@ func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *c
 	case summonHourFull:
 		return 0, nil, tooManyRequests("caller %s has made %d charges in the 65 minute window by the entry's clock, its createsPerHour (DESIGN-064 5.9)",
 			c.policy.Name, c.policy.Spec.Summon.Limits.CreatesPerHour)
+	case summonQueueFull:
+		return 0, nil, summonQueueRefusal(c, b, false)
+	case summonGrantsUnreadable:
+		return 0, nil, summonGrantsFault()
 	}
 	return s.createSummonCharged(ctx, w, c, req, sess, b, brief, candidates, urgent, c.policy.Spec.Summon.Limits.CreatesPerHour)
 }
@@ -194,6 +205,12 @@ func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter,
 			return 0, nil, tooManyRequests(
 				"caller %s has made %d charges in the 65 minute window by the entry's clock, its createsPerHour; this dispatch's charge is past its window and was not charged again; there is no refund and normal pruning applies; no session was created (DESIGN-064 5.9)",
 				c.policy.Name, perHour)
+		case summonQueueFull:
+			// A mark or rebind of a charge whose attempt had passed the hold,
+			// into a queue that filled meanwhile: the charge stays.
+			return 0, nil, summonQueueRefusal(c, b, true)
+		case summonGrantsUnreadable:
+			return 0, nil, summonChargedFailure(summonGrantsFault())
 		}
 		m, err := s.markSummonAttempt(ctx, c, id, hash, b.name, urgent, perHour)
 		if err != nil {
@@ -429,6 +446,26 @@ func summonNames(requested, key string, items []v1alpha1.AgentSession, mine map[
 		"no free session name: %s and its suffixes to -%d are taken", requested, summonMaxSuffix)
 }
 
+// summonDispatchIDPlaceholder is as long as both dispatch id forms, 32 hex
+// characters (summonDispatchID and newSummonDispatchID). The transport bound
+// before the switch uses it, since the id is chosen only after the switch.
+var summonDispatchIDPlaceholder = strings.Repeat("0", 32)
+
+// checkSummonTransport is the agentd transport bound for a summoning create
+// (DESIGN-064 5.9, the correction of 2026-11-12, and ruling D4 on item 741):
+// the session document of the longest name the create may take, with that
+// name's brief and dispatch id id, must fit agentd's bounds. It reads nothing.
+func checkSummonTransport(sess *v1alpha1.AgentSession, requested, id string, brief func(string) string) error {
+	candidates := summonNameSequence(requested)
+	preview := sess.DeepCopy()
+	preview.Name = candidates[len(candidates)-1]
+	preview.Spec.Prompt = brief(preview.Name)
+	if preview.Spec.Summon != nil {
+		preview.Spec.Summon.DispatchID = id
+	}
+	return checkAgentd(preview)
+}
+
 // summonNameSequence is every name a create for requested may take, in
 // order: requested, then -2 to -99.
 func summonNameSequence(requested string) []string {
@@ -441,13 +478,15 @@ func summonNameSequence(requested string) []string {
 }
 
 // summonPool counts the caller's unfinished summoned sessions in the entry's
-// pool, from an uncached list (DESIGN-064 6.4 "Limits", until story 741 adds
-// the queues): limits.escalations for the escalation entry, and
-// limits.concurrent for every other entry. It is not a reservation: each
-// replica counts under its own create lock, so replicas that each have a
-// create in flight can pass the same count. Until story 741, a pool can be
-// exceeded by at most the number of API replicas minus one (with two
-// replicas, one).
+// pool, from an uncached list (DESIGN-064 6.4 "Limits"): limits.escalations
+// for the escalation entry, and limits.concurrent for every other entry. Its
+// count refuses a create only with --enable-summoned-lanes off; with the lanes
+// on the leader's admission decides the pool, and the create is Queued
+// (summon_queue.go). Either way it refuses a policy whose pool limit is not
+// valid. It is not a reservation: each replica counts under its own create
+// lock, so replicas that each have a create in flight can pass the same
+// count, and a pool can be exceeded by at most the number of API replicas
+// minus one (with two replicas, one).
 func summonPool(c *caller, entry *v1alpha1.CallerPolicySummonSession, items []v1alpha1.AgentSession) (limit, n int, err error) {
 	limits := c.policy.Spec.Summon.Limits
 	escalation := entry.Lane == v1alpha1.LaneEscalation
