@@ -288,6 +288,7 @@ class LauncherTests(unittest.TestCase):
         for failed_phase in ("parse", "live"):
             for failure in failures:
                 with self.subTest(phase=failed_phase, failure=type(failure)):
+                    self.err = io.StringIO()
                     replies = ([subprocess.CompletedProcess([], 0, json.dumps(config()).encode(), b"")]
                                if failed_phase == "live" else []) + [failure]
                     with (mock.patch.object(launcher.subprocess, "run", side_effect=replies) as probe,
@@ -296,6 +297,8 @@ class LauncherTests(unittest.TestCase):
                         self.assertEqual(launcher.main(["kubectl", "get", "pods"]), 2)
                     self.assertEqual(probe.call_count, len(replies))
                     dispatch.assert_not_called()
+                    expected_stage = "Static config inspection" if failed_phase == "parse" else "Live identity verification"
+                    self.assertIn(expected_stage + " failed", self.err.getvalue())
                     self.assertNotIn(SENTINEL, self.err.getvalue())
 
     def test_config_change_after_parse_or_live_check_refuses_dispatch(self):

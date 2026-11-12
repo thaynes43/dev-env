@@ -85,7 +85,11 @@ positional or belong to a remote exec command, so they are preserved unchanged. 
 
 A missing file/client, mismatch, invalid config, or failed/timed-out identity
 check exits 2 without dispatch, login, refresh, fallback, or retry. Inspect the
-specific problem. Do not use the human kubeconfig, refresh Omni login, install
+specific problem. Errors identify static config inspection versus live identity
+verification; a live failure can be executor/network access or authentication,
+not necessarily the config. Read-only execution sandboxes may block network or
+client cache access. The launcher does not request or change executor permissions.
+Do not use the human kubeconfig, refresh Omni login, install
 credentials or silently bypass the launcher. Client commands preserve their own
 streams and exit code. A request failing after dispatch is not retried either.
 

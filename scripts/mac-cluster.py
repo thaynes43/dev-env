@@ -103,16 +103,20 @@ def unchanged(before):
         raise Refusal("The fixed kubeconfig changed during preflight. No command was launched; inspect before trying again.")
 
 
-def probe(argv, env):
+def probe(argv, env, stage):
+    # Stage is a fixed caller label, never client output. A live failure can be
+    # executor/network access or authentication; it does not prove bad config.
+    failure = stage + " failed. Check executor/client access" + (
+        " and network/identity" if stage == "Live identity verification" else " and the fixed config") + ". No command dispatched; no login, fallback or automatic retry."
     try:
         result = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL,
                                 capture_output=True, timeout=PROBE_TIMEOUT, check=False)
         if result.returncode or len(result.stdout) > MAX_CONFIG * 4:
-            raise Refusal("Local config or identity probe failed. Stop; no login, fallback or automatic retry.")
+            raise Refusal(failure)
         return json.loads(result.stdout)
     except (OSError, subprocess.TimeoutExpired, ValueError, UnicodeError):
         # Client output, exception strings and argv may contain credentials.
-        raise Refusal("Local config or identity probe failed. Stop; no login, fallback or automatic retry.") from None
+        raise Refusal(failure) from None
 
 
 def only_entry(config, key, name, body):
@@ -152,11 +156,11 @@ def launch(argv):
     # config view is a local parser, not an API/auth call. Never --raw, --flatten
     # or print its result. The token is redacted; whoami verifies the principal.
     validate(probe([KUBECTL, "--kubeconfig=" + str(CONFIG),
-                    "config", "view", "-o", "json"], env))
+                    "config", "view", "-o", "json"], env, "Static config inspection"))
     unchanged(before)
     if verify:
         result = probe([KUBECTL, *selectors(), "auth", "whoami",
-                        "--request-timeout=10s", "-o", "json"], env)
+                        "--request-timeout=10s", "-o", "json"], env, "Live identity verification")
         if (not isinstance(result, dict) or not isinstance(result.get("status"), dict)
                 or not isinstance(result["status"].get("userInfo"), dict)
                 or result["status"]["userInfo"].get("username") != IDENTITY):
