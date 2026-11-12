@@ -295,6 +295,10 @@ type Reconciler struct {
 	// summonNudge asks the leader's admission for a pass now; nil when the
 	// admission does not run.
 	summonNudge chan struct{}
+	// The two missing-heartbeat watchdog rows wait ten minutes after this
+	// process's first leader admission pass (OP779 fix round 1, O1).
+	summonWatchdogStart     sync.Once
+	summonWatchdogStartedAt time.Time
 	// summonRemoteLatch is slice d's seam: it lifts the RemoteLatchMissing
 	// hold once the remote latch exists. Nothing sets it in this slice; only
 	// tests do, to prove the escalation pool apart from the latch.
@@ -408,6 +412,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	if changed, err := r.reconcileSummonOutcome(ctx, &s); err != nil {
 		return ctrl.Result{}, err
 	} else if changed {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	// A recorded summoned reap is carried out only after a terminal outcome
+	// is stored, before any other lifecycle step (OP779 fix round 1, M1/M2).
+	if handled, err := r.reconcileSummonReap(ctx, &s); err != nil {
+		return ctrl.Result{}, err
+	} else if handled {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	// DESIGN-064 5.9: a closed summoned session's reservation is released once

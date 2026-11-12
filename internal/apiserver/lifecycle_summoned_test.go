@@ -90,7 +90,7 @@ func TestResumeRefusesEverySummonedSession(t *testing.T) {
 }
 
 // Ruling D1: the reap route records who reaped a summoned session, before
-// its delete, under the API's own name for the caller. An ordinary session's
+// the leader's delete, under the API's own name for the caller. An ordinary session's
 // reap writes nothing new. A suspend already records its caller.
 func TestReapRecordsWhoReapedASummonedSession(t *testing.T) {
 	f := summonFixture(t)
@@ -105,7 +105,7 @@ func TestReapRecordsWhoReapedASummonedSession(t *testing.T) {
 			t.Fatalf("reap %s: %d %s", who.name, w.Code, w.Body.String())
 		}
 		s := liveSession(t, f, who.name)
-		if s.DeletionTimestamp.IsZero() || s.Annotations[v1alpha1.AnnotationReapedBy] != who.want {
+		if !s.DeletionTimestamp.IsZero() || s.Annotations[v1alpha1.AnnotationReapedBy] != who.want {
 			t.Fatalf("%s: deleting=%v reaped-by=%q, want %q", who.name, !s.DeletionTimestamp.IsZero(), s.Annotations[v1alpha1.AnnotationReapedBy], who.want)
 		}
 		// A second reap by someone else changes nothing: the first stop counts.

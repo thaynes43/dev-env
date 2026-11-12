@@ -1456,6 +1456,41 @@ and the correction above stay; where they differ, this governs.
   stopped: its session is closed but its lane holds until it schedules. A
   reap's stop has the same limit (not tested further).
 
+**Correction, 2026-11-12: story 779 fix round 1, coordinator rulings in PR
+1095 comment 6832687441; not a ruling by Tom.** This supersedes the reap
+protocol and heartbeat timing in the preceding corrections.
+
+- For a session with `spec.caller`, the API's authorized reap records
+  `dev-env.haynesops.com/reaped-by` under the optimistic lock and returns
+  202 with the Session. It does not delete. Only an absent annotation on a
+  Session not being deleted may be written; the first recorded reap wins,
+  including against another caller. A recorded reap is itself the stop,
+  whether or not `deletionTimestamp` is set. The person's stop and other
+  stop rows remain D1's. Suspend attribution is unchanged.
+- After the close step, the leader deletes a marked Session only once its
+  outcome is terminal, with UID and resourceVersion preconditions. The
+  existing finalizer path then rescues and cleans up. No finalizer is added
+  at create. Even a reap immediately after create stores the close before
+  deletion. A delete made past the API before the first reconcile can still
+  remove the object without a close; only an operator-tier Kubernetes
+  identity can take that action. The annotations do not protect against a
+  privileged Kubernetes writer. The API derives caller attribution, and
+  the operator writes its own non-person suspend markers (`idle-timer`,
+  terminal task reclaim, `summon-close`).
+- A recorded reap whose close cannot be written stays recorded and is not
+  deleted by this protocol. An invalid `onUnreported` snapshot is already
+  refused by the CRD; this round adds no recovery path for it. Story 768
+  still owns keeping a pending filing past removal of its Session.
+- `never-started` and `heartbeat-lost` are judged only after ten minutes
+  since the leader's first admission pass in this process, recorded once
+  on the Reconciler using its own clock. A new leader starts its own ten
+  minutes. `deadline`, `session-lost`, `stale`, `escalation-bound` and
+  `hold-expired` retain their durable bounds.
+- A readable grants document with no grant for a Queued Session allows its
+  `maxHold` to be judged even if its caller's ledger entry is unreadable.
+  That unreadable entry still blocks `not-charged` and admission for the
+  caller. Once readable again, ordinary charge pruning applies.
+
 **The route and the verb.** `POST /v1/sessions/{name}/outcome`, body
 `{"state": "working"|"done"|"failed"|"escalate", "note": "..."}`. Only the
 session itself may call it: a session caller whose pod-bound token resolves

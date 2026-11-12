@@ -46,15 +46,14 @@ const (
 	// AnnotationCaller is a summoned session's CallerPolicy, also too long for
 	// a label value.
 	AnnotationCaller = LabelPrefix + "caller"
-	// AnnotationSuspendedBy says who suspended the session (D-60): "idle-timer"
-	// for the operator's idle timer, else the API caller. The API removes it on
-	// a resume.
+	// AnnotationSuspendedBy says who suspended the session (D-60): the API's
+	// caller name or the operator's own marker (idle timer, terminal task
+	// reclaim or summon-close). The API removes it on a resume.
 	AnnotationSuspendedBy = LabelPrefix + "suspended-by"
 	// AnnotationReapedBy says who reaped a summoned session: the API caller,
-	// written by the API's reap route just before its delete, for a session
-	// with spec.caller only (DESIGN-064 6.6, ruling D1 on item 741, OP779).
-	// A delete that did not come through that route has none, and counts as
-	// an unattributed stop.
+	// recorded once by the authorized reap route for spec.caller only. It is
+	// the stop; the leader closes the outcome before deleting (DESIGN-064 6.6,
+	// OP779 fix round 1). A delete without this marker is unattributed.
 	AnnotationReapedBy = LabelPrefix + "reaped-by"
 	// AnnotationResumedAt is when the API last resumed the session (RFC 3339,
 	// D-60). The idle timer counts from it too, so a resume that lands while

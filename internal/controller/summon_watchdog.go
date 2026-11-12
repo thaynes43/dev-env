@@ -56,6 +56,8 @@ const (
 	// summonHeartbeatLost is how long a remote session's pod may exist with no
 	// heartbeat (DESIGN-064 6.6, this design's default).
 	summonHeartbeatLost = 10 * time.Minute
+	// Give agentd time to report again after an outage of all API replicas.
+	summonHeartbeatRecovery = 10 * time.Minute
 	// summonEscalationReminder and summonEscalationBound are a remote
 	// escalation's idle bounds (DESIGN-064 6.7).
 	summonEscalationReminder = 24 * time.Hour
@@ -75,18 +77,38 @@ const (
 // summonStop reports the stop recorded on a Session (ruling D1): byPerson
 // when a person reaped or suspended it through the API, other for any other
 // stop: another session, an account that is not a person, a change made past
-// the API (no attribution) or the idle timer. The API writes both
-// annotations with its own caller's name; a session has no route that writes
-// them and no RBAC on AgentSessions.
+// the API (no attribution) or the idle timer. The API derives caller names;
+// the operator also writes its own non-person suspend markers. Privileged
+// Kubernetes writers are outside that API attribution boundary.
 func summonStop(s *v1alpha1.AgentSession) (byPerson, other bool) {
 	deleting := !s.DeletionTimestamp.IsZero()
+	reapedBy, recorded := s.Annotations[v1alpha1.AnnotationReapedBy]
 	suspended := s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended
-	if !deleting && !suspended {
+	if !recorded && !deleting && !suspended {
 		return false, false
 	}
-	person := deleting && strings.HasPrefix(s.Annotations[v1alpha1.AnnotationReapedBy], humanCallerPrefix) ||
+	person := recorded && strings.HasPrefix(reapedBy, humanCallerPrefix) ||
 		suspended && strings.HasPrefix(s.Annotations[v1alpha1.AnnotationSuspendedBy], humanCallerPrefix)
 	return person, !person
+}
+
+// reconcileSummonReap completes the API's recorded stop only after its close.
+// The delete is bound to that exact Session and terminal status snapshot.
+// A racing write is reconsidered on the next reconcile; finalizer cleanup
+// remains on the existing deletion path. No marker means no new delete.
+func (r *Reconciler) reconcileSummonReap(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
+	if s.Spec.Caller == "" || !s.DeletionTimestamp.IsZero() || !summonoutcome.Terminal(s.Status.Outcome) {
+		return false, nil
+	}
+	if _, recorded := s.Annotations[v1alpha1.AnnotationReapedBy]; !recorded {
+		return false, nil
+	}
+	err := r.Client.Delete(ctx, s, client.Preconditions{UID: &s.UID, ResourceVersion: &s.ResourceVersion},
+		client.PropagationPolicy(metav1.DeletePropagationBackground))
+	if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	return true, err
 }
 
 // summonTaskDeadline is the operator's task deadline (DESIGN-064 6.6, N7):
@@ -124,7 +146,8 @@ func (r *Reconciler) summonWatchdogInputs(ctx context.Context, s *v1alpha1.Agent
 	// and the deadline still bounds it.
 	pending := s.Status.Outcome == nil || s.Status.Outcome.State == v1alpha1.OutcomePending
 	reported := a != nil && a.LastHeartbeat != nil
-	in.NeverStarted = pending && !reported && !now.Before(admitted.Add(SummonStartWindow+summonStartGrace))
+	heartbeatsReady := !r.summonWatchdogStartedAt.IsZero() && !now.Before(r.summonWatchdogStartedAt.Add(summonHeartbeatRecovery))
+	in.NeverStarted = heartbeatsReady && pending && !reported && !now.Before(admitted.Add(SummonStartWindow+summonStartGrace))
 	switch s.Spec.Mode {
 	case v1alpha1.ModeTask:
 		if l := s.Spec.Limits; l != nil && l.Timeout != nil {
@@ -146,7 +169,7 @@ func (r *Reconciler) summonWatchdogInputs(ctx context.Context, s *v1alpha1.Agent
 			}
 		}
 	case v1alpha1.ModeRemote:
-		if a != nil && a.LastHeartbeat != nil && !now.Before(a.LastHeartbeat.Add(summonHeartbeatLost)) {
+		if heartbeatsReady && a != nil && a.LastHeartbeat != nil && !now.Before(a.LastHeartbeat.Add(summonHeartbeatLost)) {
 			pod, err := getOwned(ctx, r.APIReader, s, s.Name, &corev1.Pod{})
 			if err != nil {
 				return err

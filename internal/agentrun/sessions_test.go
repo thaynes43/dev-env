@@ -250,6 +250,27 @@ func TestReap(t *testing.T) {
 	}
 }
 
+func TestSummonedReapPrintsRecordedUntilLeaderDeletes(t *testing.T) {
+	for _, command := range [][]string{{"reap", name}, {"coordinator", "stop", name}} {
+		t.Run(strings.Join(command, " "), func(t *testing.T) {
+			h := newHarness(t)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if r.Method != http.MethodDelete || r.URL.Path != apiv1.SessionPath(name) {
+					t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+				s := testSession(name, "")
+				s.Caller = "upgrade-agent.alert-responder"
+				writeTestJSON(w, http.StatusAccepted, s) // recorded, not deleting yet
+			}
+			h.mustRun(ExitOK, command...)
+			contains(t, "recorded reap", h.stdout.String(), "reap recorded "+name, "leader", "outcome")
+			if strings.Contains(h.stdout.String(), "reaping ") {
+				t.Fatal("a recorded reap was described as already being deleted")
+			}
+		})
+	}
+}
+
 // DESIGN-025 25: a private session's reap keeps its HOME, so agent-run never
 // claims a rescue bundle or a volume archive for it. Before the operator has
 // judged the reap it says what the reap does; after, it prints the operator's

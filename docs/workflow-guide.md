@@ -1773,6 +1773,13 @@ start it reports `failed`, and `agent-failed` wins over `never-started`. A
 heartbeat of `busy` or `interrupted` before any provider spawn counts as a
 report, not as a started agent; the deadline still bounds it.
 
+After the leader's first admission pass in a process, `never-started` and
+`heartbeat-lost` wait ten minutes before being judged. The Reconciler records
+that first pass once on its own clock; a new leader starts its own ten
+minutes. This lets agentd heartbeats recover after an outage of all operator
+replicas. `deadline`, `session-lost`, `stale`, `escalation-bound` and
+`hold-expired` keep their durable bounds.
+
 **What a stop becomes** (ruling D1 on item 741). A reap or a suspend recorded
 before the close wins over every input above except `no-usable-model` and
 `agent-failed`, the start failures. A stop made by a person (a reap or a
@@ -1783,11 +1790,31 @@ of `spec.operatingMode` or a delete made past the API, and the idle timer's
 suspend) closes it by its `onUnreported`, reason `suspended-unreported`, so a
 remediation still escalates. The API's suspend route already records its
 caller in `suspended-by`; its reap route now records the caller in the
-annotation `dev-env.haynesops.com/reaped-by` just before the delete, for a
-summoned session only. Only the API writes either annotation, under its own
-name for the caller (`human/...` is a person). A reaped session's close is
-written before its finalizer lifts. A missing or invalid `spec.summon`
-snapshot is logged and leaves lifecycle work free to continue.
+annotation `dev-env.haynesops.com/reaped-by`, for a summoned session only.
+After authorization and the existing refusals, the API writes an absent
+marker under the optimistic lock and returns 202 with the Session. It does
+not delete it. The first recorded reap wins: repeated calls, including from
+another caller, write nothing. A Session already being deleted gets no
+marker. The marker itself is the stop, even without `deletionTimestamp`.
+The leader stores the close, then deletes the marked Session only once its
+outcome is terminal, with UID and resourceVersion preconditions. The usual
+finalizer path rescues and cleans up after that delete. An ordinary
+session's reap keeps its existing API delete path.
+
+The API derives caller attribution (`human/...` is a person). The operator
+also writes its own non-person suspend markers: `idle-timer`, the terminal
+task reclaim and `summon-close`. No API route copies caller-supplied
+annotations onto a Session. This does not protect the annotations from a
+privileged Kubernetes writer.
+
+The protocol stores the close even for a reap immediately after create,
+before the first reconcile has added the finalizer. A delete made past the
+API before that reconcile can still remove the object without a close; that
+action requires an operator-tier Kubernetes identity. If a recorded reap's
+close cannot be written, it remains recorded and this protocol does not
+delete the Session. The CRD already refuses an invalid `onUnreported`
+snapshot; there is no new recovery path for it. Keeping a pending filing
+after a reap removes the Session belongs to story 768.
 
 **Nobody resumes a summoned session** (N3). The resume route answers 409 for
 any session with `spec.caller`, for Tom, a session and a client alike, whether
@@ -2156,9 +2183,10 @@ session without one is built exactly as before.
   escalation is never held for its lane, and an open escalation never holds a
   remediation. A leader that restarts recomputes everything from these
   records. A missing ConfigMap, failed read or malformed grant document
-  holds admission and closes nothing. Grants for gone, replaced or released
-  Sessions are removed by the same kind of Update, together with a new
-  grant where there is one. With no summoned Sessions a pass makes just one
+  holds admission and prevents queued charge and hold closes. Grants for
+  gone, replaced or released Sessions are removed by the same kind of
+  Update, together with a new grant where there is one. With no summoned
+  Sessions a pass makes just one
   uncached Session list and defers grant cleanup until the next active pass;
   a stale grant never holds capacity. API charge, mark, rebind, prune and
   urgent-refusal writes carry `_admission` through unchanged and never
@@ -2169,6 +2197,11 @@ session without one is built exactly as before.
   filing), reason `not-charged`, and shows `SummonAdmitted=False NotCharged`.
   An existing ConfigMap emptied to `data: {}` has no charges and causes
   these closes; it is different from an unreadable or missing ConfigMap.
+  An unreadable caller entry blocks `not-charged` and admission for that
+  caller. When the grants document is readable and holds no grant for the
+  Queued Session, its independent `maxHold` is still judged: a remediation
+  can close `hold-expired` with its pending filing despite that unreadable
+  entry. Once the entry is readable again, normal charge pruning applies.
 - *Release.* `status.summon.closed.released` frees the lane and the pool slot,
   and true is never reversed. A report releases at once, in its terminal
   write. A close the operator declares releases in that write when the session
