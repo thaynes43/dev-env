@@ -1699,6 +1699,79 @@ and survival of an active native process still require rollout evidence.
 
 For CLI version and model admission changes, see the [CLI and model upgrade checklist](cli-model-upgrades.md).
 
+## Reporting a summoned session's outcome
+
+A session started under a CallerPolicy reports its work from its own pod:
+
+```sh
+agent-run report working --note "investigating"
+agent-run report done --note "the requested change is ready"
+agent-run show <session>
+```
+
+`agent-run report` uses the pod's projected token and hostname. The API verifies
+that the token belongs to the live session's pod and refuses every other caller
+with 403, including the policy that summoned it. Sessions without `spec.caller`
+cannot use this route. `agent-run show` prints the outcome's state and note.
+
+| Verb | Stored state | Effect |
+|---|---|---|
+| `working` | `running` | Moves the progress timestamp; work stays open. |
+| `done` | `done` | Ends the work. |
+| `failed` | `failed`, or `escalated` in lane `remediation` | Remediation prefixes the note with `reported failed: `. |
+| `escalate` | `escalated` | Ends the work with an escalation. |
+
+The note is preserved without truncation. Its stored limit is 1024 UTF-8 bytes;
+a remediation's `failed` accepts 1007 bytes before its 17-byte prefix. A longer
+stored note gets 422. The operator initializes `pending` and records `running`
+when the agent reports a started state (`busy`, `idle` or `waiting`). Ordinary
+observations do not refresh the progress timestamp.
+
+The first terminal write wins. The same resulting state and note again returns
+200 without a write. A different report, or `working` after a terminal outcome,
+returns 409 with the stored outcome. The CLI prints that state and note and exits
+non-zero. It sends once; after an unconfirmed response, read `agent-run show`
+before retrying. The decision-question path writes and clears outcomes only for
+sessions without `spec.caller`.
+
+The operator leader also closes a summoned session that ends without reporting.
+It applies the create-time `spec.summon.onUnreported` snapshot, with
+`unreported: <reason>` as the note. In order, the currently supported inputs are:
+
+1. A stored task result, or the existing result function's projection of stored
+   `status.agent.task` or `status.privateHistory.taskTerminal`: `timed-out` for
+   TimedOut, `exit-unknown` for Unknown,
+   otherwise `agent-exited`; `turn-cap` requires a result reason explicitly
+   naming the turn cap. Current result producers do not name it.
+2. Agent `exited` without a task result: `agent-exited`.
+3. Agent `failed`: `agent-failed`.
+4. Agent `interrupted`: `agent-interrupted`.
+5. A terminal pod, or every container terminated, without a task result:
+   `pod-terminated`.
+
+A fresh heartbeat suppresses none of these inputs. The close does not set a task
+result: that remains the ordinary controller's observation of the process. A
+timeout can therefore close in its first pass, before that observer materializes
+`status.taskResult`; no lifecycle work postpones the outcome.
+The outcome describes the work, so a process may succeed while reporting `failed`.
+
+One optimistic status write stores the terminal outcome and
+`status.summon.closed` (`at`, `source`, `reason`). A remediation ending `escalated`
+also stores `status.summon.escalation = {state: Pending, name}` in that write.
+Other lanes file nothing. This release retains the pending record; story 768
+adds the filing, name-collision handling and its blocked/abandoned states.
+
+Each successful terminal write emits one operator stdout line beginning
+`ops-event: event=outcome`, with session, caller, lane, state, source, reason and
+`note_bytes`. Report reasons are the requested verbs. The note text is never
+logged. A pending filing adds one `event=filing` line. Working reports, identical
+repeats and refusals add no outcome event.
+
+This slice does not release lanes or pools or read `closed` for admission.
+Story 741 adds those readers and the remaining loss, deadline, watchdog, queue
+and suspend inputs; 743 adds `no-usable-model`; 742 adds page events in the
+terminal write. The shared reason table already defines their ordering.
+
 ## Summoning callers
 
 A summoning caller is a ServiceAccount with one CallerPolicy in

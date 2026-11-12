@@ -18,6 +18,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/summonoutcome"
 )
 
 // dispatchSummon is the part of a summoning create after the request is
@@ -396,16 +397,9 @@ func summonLive(s *v1alpha1.AgentSession) bool {
 	return unfinished(s) && !summonTerminalOutcome(s)
 }
 
-// summonTerminalOutcome is a reported outcome of done, failed or escalated.
+// summonTerminalOutcome is a reported or guaranteed terminal outcome.
 func summonTerminalOutcome(s *v1alpha1.AgentSession) bool {
-	if s.Status.Outcome == nil {
-		return false
-	}
-	switch s.Status.Outcome.State {
-	case v1alpha1.OutcomeDone, v1alpha1.OutcomeFailed, v1alpha1.OutcomeEscalated:
-		return true
-	}
-	return false
+	return summonoutcome.Terminal(s.Status.Outcome)
 }
 
 // summonNames are the names a create may take, in order, from the first one

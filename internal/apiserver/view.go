@@ -100,7 +100,7 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 		v.RemoteControl = &apiv1.RemoteControl{Name: rc.Name, URL: rc.URL, State: rc.State}
 	}
 	if o := s.Status.Outcome; o != nil {
-		v.Outcome = &apiv1.Outcome{State: string(o.State), Note: o.Note, At: timeOf(o.At)}
+		v.Outcome = outcomeView(o)
 	}
 	// Raw legacy values remain in the CRD. Emitting them without provenance
 	// makes already-deployed clients invent zero or present an estimate as paid.

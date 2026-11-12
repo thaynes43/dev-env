@@ -235,6 +235,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.directory(ctx, rest)
 	case "canary":
 		return a.canary(ctx, rest)
+	case "report":
+		return a.report(ctx, rest)
 	case "show":
 		return a.show(ctx, rest)
 	case "usage":

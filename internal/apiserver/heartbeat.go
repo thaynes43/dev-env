@@ -58,7 +58,7 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 		return 0, nil, forbidden("session %s was replaced; the pod belongs to the earlier one", key.Name)
 	}
 	base := sess.DeepCopy()
-	if s.ManagedChildDecisions && sess.Spec.Agent == v1alpha1.AgentCodex && sess.Spec.Mode == v1alpha1.ModeTask && sess.Spec.Workspace != nil {
+	if sess.Spec.Caller == "" && s.ManagedChildDecisions && sess.Spec.Agent == v1alpha1.AgentCodex && sess.Spec.Mode == v1alpha1.ModeTask && sess.Spec.Workspace != nil {
 		if outcome := st.Decision; outcome != nil {
 			if c.pod == nil || outcome.SessionUID != string(sess.UID) || outcome.PodUID != string(c.pod.UID) || outcome.WriterGeneration == 0 ||
 				!protocol.ValidDecisionID(outcome.ID) || outcome.At.IsZero() {
