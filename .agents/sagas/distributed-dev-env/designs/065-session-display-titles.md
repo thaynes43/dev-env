@@ -11,11 +11,13 @@
   [DESIGN-001](001-dev-env-v2.md).
 - **Origin:** Tom, relayed by Meatball on 2026-11-12 (item 774 comment 7348),
   quoted in section 1. Nothing else here is Tom's.
-- **ADR:** needed, not written here. Ruling 1 adds a third spec field that
-  may change after create, which amends D-39 (decision 23: spec is immutable
-  except `operatingMode` and `lifecycle`), and ruling 4 decides who may
-  change it. That is a CRD contract and an access rule. ADR-026 is the next
-  free number. It is accepted before slice 1 merges.
+- **ADR:** needed before slice 3, not written here. In slice 1 the title is
+  set at create and cannot change, like the rest of spec, so D-39 stands
+  (decision 23: spec is immutable except `operatingMode` and `lifecycle`).
+  Slice 3 lets it change after create, and ruling 4 decides who may change
+  it. That amends D-39 and adds an access rule, so ADR-026 (the next free
+  number) is accepted before slice 3 merges, and only if the phone test
+  shows slice 3 is needed.
 - **Evidence:** dev-env `59169f1f` (origin/main), source reads only. Nothing
   in the cluster or the tracker was written for this document.
 
@@ -116,9 +118,10 @@ Empty means no title; `""` is treated as absent and never stored.
 
 Not an annotation: the schema cannot bound one, any client with patch can
 write one, and the API view does not carry it. Not the name: it is the pod
-name, the hostname, the volume `home-<name>` and every tool's key. The title
-is the third spec field that may change after create, only through the
-ruling 4 route. It never changes `metadata.name`, the UID,
+name, the hostname, the volume `home-<name>` and every tool's key. In slice 1 the
+title is set at create and cannot change. From slice 3 it is the third spec
+field that may change after create, only through the ruling 4 route. It
+never changes `metadata.name`, the UID,
 `status.agent.conversationId`, `status.remoteControl.sessionId` or `url`,
 the pod or the volume. `status.remoteControl.name` stays the session name. A
 new `status.remoteControl.title` records what agentd passed at this pod's
@@ -198,14 +201,17 @@ before the operator that sends it.
 6. CRD first: haynes-ops gets the `config/crd/` copy before the operator pin
    that writes a new field, or the API server prunes it (haynes-ops #3502).
    Slice 1 adds `spec.title` and `status.remoteControl.title` together, so
-   one copy serves both.
+   one copy serves both. Slice 3 changes the rule that lets the title
+   change, which is a second copy.
 7. Display only: no routing, authority, idempotency or selection decides by
    the title.
 
 **Ruling 7. The proof gates the change path.** Slices 1 and 2 may start
 before the phone test: they use only the launch name, the top of the
 documented precedence. Slice 3 waits for its readings; slice 4 for slices 1
-to 3 installed and the test passed.
+to 3 installed and the test passed. If the readings show that a resume keeps
+the owner's rename, slice 3 is scoped again before it starts, because the
+record is then not needed to keep a title on the phone.
 
 ## 5. The proof: one phone test
 
@@ -262,9 +268,9 @@ session. Tests use fakes at two CPUs. The new package gets its line in
 
 | Slice | What it changes | Acceptance | CRD copy | Operator pin | Agent image pin | Front door pin |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1. Field and creation | ADR-026; `spec.title` and `status.remoteControl.title` with CEL bounds; the composer; `title` on create, `--title` on create and `rc`, `title` on `coordinator_start`; agentd passes the composed title at launch and resume | `agentsession_validation_test.go` accepts and refuses each bound: empty, 48 and 49 characters, 96 and 97 bytes, `|`, a control character, U+10000, spacing. Launch and resume argv with and without a title; an untitled argv is byte-identical to today's; an old agentd ignores the key | Yes, first | Yes | Yes | Yes |
+| 1. Field and creation | `spec.title`, immutable after create, and `status.remoteControl.title` with CEL bounds; the composer; `title` on create, `--title` on create and `rc`, `title` on `coordinator_start`; agentd passes the composed title at launch and resume | `agentsession_validation_test.go` accepts and refuses each bound: empty, 48 and 49 characters, 96 and 97 bytes, `|`, a control character, U+10000, spacing. Launch and resume argv with and without a title; an untitled argv is byte-identical to today's; an old agentd ignores the key | Yes, first | Yes | Yes | Yes |
 | 2. Listings | TITLE in `list` and `fleet`; `title` in `show`; `title` and `displayTitle` in the API view; `displayTitle` in the portal; `session_status` | Golden tests with no, long and Unicode titles; the portal decoder takes the key and still refuses others; no script in dev-env or haynes-ops that parses these tables breaks | No | Yes, after a portal pin | Yes (agent-run) | Yes |
-| 3. Change it, keep it on resume | `PUT /v1/sessions/{name}/title` with `expect`; `agent-run title`; agentd reports `status.remoteControl.title`; `show` drops `registered as <name>` | Fakes: parent, human, trusted client and workbench allowed; the session itself and another session refused; stale `expect` is 409; a change leaves the pod, its UID and annotations alone; a resume after a change passes the new title and the same `--resume` id. Live on a fresh test session: section 5's readings after a change and one resume | No | Yes | Yes | No |
+| 3. Change it, keep it on resume | ADR-026; the CEL rule lets `spec.title` change; `PUT /v1/sessions/{name}/title` with `expect`; `agent-run title`; agentd reports `status.remoteControl.title`; `show` drops `registered as <name>` | Fakes: parent, human, trusted client and workbench allowed; the session itself and another session refused; stale `expect` is 409; a change leaves the pod, its UID and annotations alone; a resume after a change passes the new title and the same `--resume` id. Live on a fresh test session: section 5's readings after a change and one resume. An adversarial review by another model family before merge, because it adds a write route with an access rule | Yes, first | Yes | Yes | No |
 | 4. Backfill | For each session below: `agent-run title`, then the owner's app rename to the printed text, with R0 and R1 | Title in `agent-run list` and the same text in the app; no identity reading changed; nothing typed, resumed or restarted | No | No | No | No |
 
 The five, with the labels proposed on item 774 (not applied):

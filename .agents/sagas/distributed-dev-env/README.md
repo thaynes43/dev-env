@@ -6,7 +6,7 @@ coordinator. A session gets an optional title beside its stable name,
 shown as `<Family> | <role>`, set at create, recorded by the platform when
 it changes, and passed to the provider at the next launch or resume. The
 platform never types into a session. The phone test in its section 5 has
-not run, and ADR-026 is needed before slice 1. Nothing is built.
+not run, and ADR-026 is needed before slice 3. Nothing is built.
 [Decision 105](#decision-log).
 
 **2026-11-11 reuse paired Codex hosts, OP696:**
