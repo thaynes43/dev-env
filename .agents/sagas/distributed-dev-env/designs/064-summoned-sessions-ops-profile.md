@@ -847,8 +847,10 @@ ingress rule carries the same exclusions as the egress rules.
     permissions from GitHub's public record (`GET /apps/haynes-ops-bot`). An
     installation cannot hold a permission the registration lacks. Read on
     2026-11-11: contents, pull requests and issues write, checks read and
-    metadata read. That is v1's set and the metadata every App has. So the
-    playbook's sentence that the App grants no `issues` is the stale one.
+    metadata read. That is v1's set and the metadata every App has. The
+    registration is a ceiling, not proof of what the installation accepted:
+    the playbook's sentence that the installation grants no `issues` is
+    settled only by the first mint, below.
   - Before the ExternalSecret merges, the repositories: v1's own dated record
     (haynes-ops `upgrade-agent/dev-env-ops/app/resources/publish-report.sh`,
     probed from that pod on 2026-08-31 and 2026-09-06) names `haynes-ops` and
