@@ -4,10 +4,12 @@ package controller
 // a summoned remote session gets one pod, recorded by the remote executor
 // latch, and never a second by any path; its loss closes it session-lost;
 // a known non-attempt re-arms once; and an operator close of a launch that
-// may be in flight releases its reservation at the start deadline plus one
-// minute only in a pod whose agentd carries the start fence. Every test runs
-// on the fake API server and clock of summon_admission_test.go; writes are
-// interleaved by client hooks, never by goroutine timing.
+// may be in flight, its pod still present, releases its reservation only in
+// a pod whose agentd carries the start fence, once the start deadline plus
+// one minute and the close plus five minutes have both passed (ruling C1).
+// Every test runs on the fake API server and clock of
+// summon_admission_test.go; writes are interleaved by client hooks, never by
+// goroutine timing.
 
 import (
 	"context"
@@ -20,7 +22,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -324,7 +328,8 @@ func TestPodCarriesStartFence(t *testing.T) {
 // an admitted session whose first launch may be in flight suspends it at
 // once (OP779), and releases its reservation at the start deadline plus one
 // minute when its pod's agentd carries the fence; without the fence it holds
-// until the pod is gone. For a remote session and a task.
+// until the pod is gone. The close is at five minutes, so the deadline is the
+// later of ruling C1's two bounds. For a remote session and a task.
 func TestSummonReleaseAtStartDeadlineOnlyWithTheFence(t *testing.T) {
 	for _, lane := range []v1alpha1.Lane{v1alpha1.LaneUpgrade, v1alpha1.LaneRemediation} {
 		for _, image := range []string{fencedImage, unfencedImage} {
@@ -381,6 +386,290 @@ func TestSummonReleaseAtStartDeadlineOnlyWithTheFence(t *testing.T) {
 	}
 }
 
+// digestOnlyImage is an agent image pinned by digest with no release tag: it
+// carries no start fence (podCarriesStartFence).
+const digestOnlyImage = "ghcr.io/thaynes43/dev-env@sha256:0000000000000000000000000000000000000000000000000000000000000001"
+
+// bindUnstarted binds name's pod to a node whose kubelet never starts it (a
+// partitioned node): phase Pending with no start time and no container
+// status. A remote session's suspend must rescue such a pod before it goes,
+// and in this world, which has no rescuer, the pod stays.
+func (w *summonWorld) bindUnstarted(name string) {
+	w.t.Helper()
+	pod := w.pod(name)
+	if pod == nil {
+		w.t.Fatalf("%s has no pod", name)
+	}
+	pod.Spec.NodeName = summonNode
+	if err := w.base.Update(context.Background(), pod); err != nil {
+		w.t.Fatal(err)
+	}
+	pod = w.pod(name)
+	pod.Status = corev1.PodStatus{Phase: corev1.PodPending}
+	if err := w.base.Status().Update(context.Background(), pod); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// Ruling C1 (story 780 fix round 1, coordinator ruling in PR 1100 comment
+// 6837450502): with the session's pod still present, the start fence alone
+// frees a lane only once the start deadline plus one minute and
+// closed.at plus five minutes have both passed; until then the release waits
+// for the pod to go, as before the fence. Every close here is past the start
+// deadline plus one minute, so the close is the later bound.
+//
+//   - A fenced pod that still runs holds its lane at 4m59s after the close
+//     and frees it at 5m; the next session of the lane is admitted only then.
+//     The task is closed deadline by the leader's watchdog: its own timer did
+//     not stop it. The remote session is closed agent-interrupted.
+//   - The same pod ending one minute after the close frees the lane then: a
+//     task's pod by its terminal phase with its terminal record, a remote
+//     session's recorded pod by going (a remote session has no terminal
+//     record, and its release rule is unchanged).
+//   - A fenced pod that never started, which the operator's stop cannot end,
+//     frees its lane at 5m after its never-started close: a task's pod never
+//     scheduled, a remote session's pod bound to a node that never starts it.
+//     An unscheduled remote pod is deleted by the operator's suspend and
+//     frees its lane at once.
+//   - An unfenced pod, an image below the floor or a digest-only image,
+//     never frees its lane on time alone, only by going.
+func TestSummonFencedReleaseWaitsFiveMinutesAfterTheClose(t *testing.T) {
+	const never = time.Duration(-1)
+	for _, mode := range []struct {
+		name string
+		lane v1alpha1.Lane
+	}{{"task", v1alpha1.LaneRemediation}, {"remote", v1alpha1.LaneUpgrade}} {
+		for _, tc := range []struct {
+			name  string
+			image string
+			// pod is how the pod stands at the close: running, unscheduled
+			// or bound to a node that never starts it.
+			pod string
+			// endAt, when set, is when after the close the pod ends.
+			endAt time.Duration
+			// releaseAt is when after the close the lane is freed, or never.
+			releaseAt            time.Duration
+			remoteOnly, taskOnly bool
+		}{
+			{name: "fenced, running", image: fencedImage, pod: "running", releaseAt: 5 * time.Minute},
+			{name: "fenced, ends a minute after the close", image: fencedImage, pod: "running", endAt: time.Minute, releaseAt: time.Minute},
+			{name: "fenced, never scheduled", image: fencedImage, pod: "unscheduled", releaseAt: 5 * time.Minute, taskOnly: true},
+			{name: "fenced, bound and never started", image: fencedImage, pod: "unstarted", releaseAt: 5 * time.Minute, remoteOnly: true},
+			{name: "fenced, never scheduled, deleted by the suspend", image: fencedImage, pod: "unscheduled", releaseAt: 0, remoteOnly: true},
+			{name: "below the floor, running", image: unfencedImage, pod: "running", releaseAt: never},
+			{name: "digest only, running", image: digestOnlyImage, pod: "running", releaseAt: never},
+		} {
+			if tc.remoteOnly && mode.lane != v1alpha1.LaneUpgrade || tc.taskOnly && mode.lane == v1alpha1.LaneUpgrade {
+				continue
+			}
+			t.Run(mode.name+"/"+tc.name, func(t *testing.T) {
+				w := newSummonWorld(t, summonPolicyObject(callerA, 2, ptr.To[int32](1)))
+				w.useAgentImage(tc.image)
+				a := summonedFor("a-1", callerA, mode.lane, 2*time.Minute)
+				b := summonedFor("b-1", callerA, mode.lane, time.Minute)
+				b.Spec.Summon.MaxHold = "24h" // b waits out a's whole run without its own hold bound tripping
+				w.queue(a, b)
+				w.pass()
+				w.wantAdmitted("first", map[string]bool{"a-1": true, "b-1": false})
+				w.reconcile(a.Name)
+				pod := w.pod(a.Name)
+				if pod == nil || pod.Spec.Containers[0].Image != tc.image || podCarriesStartFence(pod) != (tc.image == fencedImage) {
+					t.Fatalf("pod %+v", pod)
+				}
+				if mode.lane == v1alpha1.LaneUpgrade {
+					if ex := w.executor(a.Name); ex == nil || ex.PodUID != string(pod.UID) {
+						t.Fatalf("the remote latch records no pod: %+v", ex)
+					}
+				}
+
+				// The close, past the start deadline plus one minute.
+				switch {
+				case tc.pod == "running" && mode.lane == v1alpha1.LaneRemediation:
+					w.schedule(a.Name, nil)
+					w.heartbeat(a.Name, protocol.AgentBusy)
+					w.reconcile(a.Name)
+					// 15m start allowance + the task's 40m timeout + 10m.
+					w.now = summonT0.Add(65 * time.Minute)
+					w.pass()
+					w.wantClosed(a.Name, summonoutcome.ReasonDeadline, v1alpha1.OutcomeEscalated)
+				case tc.pod == "running":
+					w.schedule(a.Name, nil)
+					w.heartbeat(a.Name, protocol.AgentBusy)
+					w.reconcile(a.Name)
+					w.now = summonT0.Add(30 * time.Minute)
+					w.heartbeat(a.Name, protocol.AgentInterrupted)
+					w.reconcile(a.Name)
+					w.wantClosed(a.Name, summonoutcome.ReasonAgentInterrupted, v1alpha1.OutcomeFailed)
+				default:
+					if tc.pod == "unstarted" {
+						w.bindUnstarted(a.Name)
+					}
+					w.now = summonT0.Add(SummonStartWindow + time.Minute)
+					w.pass()
+					w.wantClosed(a.Name, summonoutcome.ReasonNeverStarted, v1alpha1.OutcomeState(a.Spec.Summon.OnUnreported))
+				}
+				closedAt := w.closed(a.Name).At.Time
+				if !closedAt.Equal(w.now) {
+					t.Fatalf("closed at %s, want %s", closedAt.Sub(summonT0), w.now.Sub(summonT0))
+				}
+
+				// The operator suspends it at once, and the lane waits.
+				w.reconcile(a.Name)
+				if live := w.get(a.Name); live.Spec.OperatingMode != v1alpha1.OperatingModeSuspended || live.Annotations[v1alpha1.AnnotationSuspendedBy] != SummonCloseSuspender {
+					t.Fatalf("no operator suspend: %s by %q", live.Spec.OperatingMode, live.Annotations[v1alpha1.AnnotationSuspendedBy])
+				}
+				if tc.releaseAt == 0 {
+					if w.pod(a.Name) != nil || !w.released(a.Name) {
+						t.Fatalf("an unscheduled remote pod: present %v, released %v", w.pod(a.Name) != nil, w.released(a.Name))
+					}
+					w.pass()
+					w.wantAdmitted("the pod is gone", map[string]bool{"b-1": true})
+					return
+				}
+				step := func(after time.Duration, want bool) {
+					t.Helper()
+					w.now = closedAt.Add(after)
+					w.reconcile(a.Name)
+					if w.released(a.Name) != want {
+						t.Fatalf("%s after the close: released=%v, want %v", after, w.released(a.Name), want)
+					}
+					w.pass()
+					w.wantAdmitted(after.String()+" after the close", map[string]bool{"b-1": want})
+				}
+				if tc.endAt > 0 {
+					step(tc.endAt-time.Second, false)
+					w.now = closedAt.Add(tc.endAt)
+					if mode.lane == v1alpha1.LaneRemediation {
+						w.containersEnd(a.Name, corev1.PodFailed)
+					} else if err := w.base.Delete(context.Background(), w.pod(a.Name)); err != nil {
+						t.Fatal(err)
+					}
+					step(tc.endAt, true)
+					if mode.lane == v1alpha1.LaneRemediation && !executorTerminalRecorded(w.get(a.Name).Status.PrivateHistory) {
+						t.Fatal("released without the terminal record")
+					}
+					return
+				}
+				for _, after := range []time.Duration{time.Minute, 5*time.Minute - time.Second} {
+					step(after, false)
+				}
+				if w.pod(a.Name) == nil {
+					t.Fatal("the pod went in this world; the test needs it present")
+				}
+				if tc.releaseAt != never {
+					step(tc.releaseAt, true)
+					if w.pod(a.Name) == nil {
+						t.Fatal("released with the pod gone; the test needs it present")
+					}
+					return
+				}
+				for _, after := range []time.Duration{5 * time.Minute, time.Hour} {
+					step(after, false)
+				}
+				// Only the pod going frees an unfenced lane.
+				if err := w.base.Delete(context.Background(), w.pod(a.Name)); err != nil {
+					t.Fatal(err)
+				}
+				step(time.Hour+time.Minute, true)
+			})
+		}
+	}
+}
+
+// The recheck of ruling C1 (coordinator answer op780-fix1-q-1): a fenced pod
+// that cannot go is held by the two time bounds alone, and no event marks
+// them, so Reconcile asks to run again by the later one: the time left, at
+// least a second and at most a minute. Followed with no other event, from the
+// never-started close (both bounds: 16m and 21m after admission), the
+// release is written exactly at closed.at plus five minutes. A released
+// session and an unfenced pod get no recheck from this step. For a task with
+// a never-scheduled pod and a remote session whose pod is bound to a node
+// that never starts it.
+func TestSummonFencedReleaseRechecksAtTheLaterBound(t *testing.T) {
+	for _, lane := range []v1alpha1.Lane{v1alpha1.LaneRemediation, v1alpha1.LaneUpgrade} {
+		for _, image := range []string{fencedImage, unfencedImage} {
+			fenced := image == fencedImage
+			t.Run(string(lane)+"/"+map[bool]string{true: "fenced", false: "unfenced"}[fenced], func(t *testing.T) {
+				ctx := context.Background()
+				w := newSummonWorld(t, summonPolicyObject(callerA, 2, ptr.To[int32](1)))
+				w.useAgentImage(image)
+				a := summonedFor("a-1", callerA, lane, 2*time.Minute)
+				b := summonedFor("b-1", callerA, lane, time.Minute)
+				b.Spec.Summon.MaxHold = "24h"
+				w.queue(a, b)
+				w.pass()
+				w.reconcile(a.Name)
+				if lane == v1alpha1.LaneUpgrade {
+					w.bindUnstarted(a.Name)
+				}
+				w.now = summonT0.Add(SummonStartWindow + time.Minute)
+				w.pass()
+				w.wantClosed(a.Name, summonoutcome.ReasonNeverStarted, v1alpha1.OutcomeState(a.Spec.Summon.OnUnreported))
+				closedAt := w.closed(a.Name).At.Time
+				bound := closedAt.Add(5 * time.Minute)
+				req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "dev-agents", Name: a.Name}}
+
+				// The step alone, once suspended: the time left, clamped.
+				w.reconcile(a.Name)
+				if w.get(a.Name).Spec.OperatingMode != v1alpha1.OperatingModeSuspended || w.pod(a.Name) == nil || w.released(a.Name) {
+					t.Fatalf("not suspended and held with its pod: released %v", w.released(a.Name))
+				}
+				for _, tc := range []struct{ after, want time.Duration }{
+					{time.Minute, time.Minute},
+					{4*time.Minute + 30*time.Second, 30 * time.Second},
+					{5*time.Minute - 500*time.Millisecond, time.Second},
+					{time.Hour, 0},
+				} {
+					if !fenced && tc.want > 0 {
+						tc.want = 0
+					}
+					if fenced && tc.after >= 5*time.Minute {
+						continue // past the bound the step releases; checked below
+					}
+					w.now = closedAt.Add(tc.after)
+					changed, recheck, err := w.r.reconcileSummonClosed(ctx, w.get(a.Name))
+					if err != nil || changed || recheck != tc.want {
+						t.Fatalf("%s after the close: changed=%v recheck=%s err=%v, want recheck %s", tc.after, changed, recheck, err, tc.want)
+					}
+				}
+				if !fenced {
+					if w.released(a.Name) {
+						t.Fatal("an unfenced pod released on time alone")
+					}
+					return
+				}
+
+				// Reconcile followed by its own requeue and nothing else.
+				w.now = closedAt
+				for i := 0; ; i++ {
+					if i > 400 {
+						t.Fatalf("not released by %s after the close", w.now.Sub(closedAt))
+					}
+					res, err := w.r.Reconcile(ctx, req)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if w.released(a.Name) {
+						break
+					}
+					if res.RequeueAfter <= 0 || res.RequeueAfter > time.Minute {
+						t.Fatalf("%s after the close, held: RequeueAfter %s", w.now.Sub(closedAt), res.RequeueAfter)
+					}
+					w.now = w.now.Add(res.RequeueAfter)
+				}
+				if !w.now.Equal(bound) || w.pod(a.Name) == nil {
+					t.Fatalf("released %s after the close, want 5m0s, pod present %v", w.now.Sub(closedAt), w.pod(a.Name) != nil)
+				}
+				w.pass()
+				w.wantAdmitted("released at the later bound", map[string]bool{"b-1": true})
+				if changed, recheck, err := w.r.reconcileSummonClosed(ctx, w.get(a.Name)); err != nil || changed || recheck != 0 {
+					t.Fatalf("a released session: changed=%v recheck=%s err=%v", changed, recheck, err)
+				}
+			})
+		}
+	}
+}
+
 // agentdSettings is an agentd pod's settings under home, with the provider
 // CLI a script that leaves a marker if it ever runs.
 func agentdSettings(t *testing.T, home string) (agentd.Settings, string) {
@@ -431,9 +720,12 @@ func (f *tmuxHeld) LookPath(name string) (string, error) { return "/fake/bin/" +
 // deadline, with the deadline in it, and tmux is to start run-agent: the
 // path pauses there. The clock passes the start deadline; the leader's
 // watchdog closes the session never-started, the operator suspends it and,
-// its pod's agentd carrying the fence, releases it at the deadline plus one
-// minute, and admits the next session in that lane. The paused path resumes:
-// run-agent refuses, and no provider starts. For a task and a remote session.
+// its pod's agentd carrying the fence, releases it once the clock is past
+// both the deadline plus one minute and the close plus five minutes (ruling
+// C1; the remote session's unscheduled pod is deleted by the suspend and
+// releases at once), and admits the next session in that lane. The paused
+// path resumes: run-agent refuses, and no provider starts. For a task and a
+// remote session.
 //
 // run-agent's own clock is the wall clock, which is past summonT0's start
 // deadline for any run of this test after 2026-11-12T16:15Z.
@@ -444,6 +736,7 @@ func TestSummonPausedLaunchSpawnsNoProviderAfterRelease(t *testing.T) {
 			w.useAgentImage(fencedImage)
 			a := summonedFor("a-1", callerA, lane, 2*time.Minute)
 			b := summonedFor("b-1", callerA, lane, time.Minute)
+			b.Spec.Summon.MaxHold = "24h" // b waits past both bounds without its own hold bound tripping
 			w.queue(a, b)
 			w.pass() // admits a-1 at summonT0 and starts the heartbeat window
 			w.wantAdmitted("first", map[string]bool{"a-1": true, "b-1": false})
@@ -494,8 +787,15 @@ func TestSummonPausedLaunchSpawnsNoProviderAfterRelease(t *testing.T) {
 			w.pass()
 			w.wantClosed(a.Name, summonoutcome.ReasonNeverStarted, v1alpha1.OutcomeState(a.Spec.Summon.OnUnreported))
 			w.reconcile(a.Name)
-			if live := w.get(a.Name); live.Spec.OperatingMode != v1alpha1.OperatingModeSuspended || !w.released(a.Name) {
-				t.Fatalf("suspend %s released %v", live.Spec.OperatingMode, w.released(a.Name))
+			if live := w.get(a.Name); live.Spec.OperatingMode != v1alpha1.OperatingModeSuspended {
+				t.Fatalf("suspend %s", live.Spec.OperatingMode)
+			}
+			// Ruling C1: with its pod still present, the lane also waits for
+			// the close plus five minutes. Move the clock past both bounds.
+			w.now = w.closed(a.Name).At.Add(5 * time.Minute)
+			w.reconcile(a.Name)
+			if !w.released(a.Name) {
+				t.Fatalf("not released past both bounds (pod present %v)", w.pod(a.Name) != nil)
 			}
 			w.pass()
 			w.wantAdmitted("the lane went to the next", map[string]bool{"b-1": true})

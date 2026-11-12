@@ -1120,20 +1120,42 @@ above stays; where it differs, this governs.
    nothing, writes `start-refused.json`, and the status reports `failed`, so
    the `agent-failed` row closes the session. A record without the field runs
    as before.
-5. *"When a reservation is released", the in-flight row.* It releases at the
-   start deadline plus one minute, not at the start deadline, and only when
-   the pod still present runs a released agent image at or above 2.108
-   (`ghcr.io/thaynes43/dev-env:2.MINOR.PATCH@sha256:...`, MINOR at least
-   108, `summonStartFenceMinor`): the image the operator put in the pod,
-   which the session cannot change. agentd's self-report was not used: it is
-   replaced on every heartbeat, and a running provider can post one. Any
-   other pod keeps the rule above: hold until it is gone. The floor is right
-   only while no agent release at or above it was cut before this code
-   merged; the coordinator checks that at merge. The operator's suspend of
-   6.6's correction (ruling D3) is written before such a release, so the pod
-   still goes. A process paused between run-agent's check and its spawn for
-   longer than the minute is the "What still runs" limit above; it is not
-   fenced further.
+5. *"When a reservation is released", the in-flight row.* With the pod
+   still present, it releases only when that pod runs a released agent image
+   at or above 2.108 (`ghcr.io/thaynes43/dev-env:2.MINOR.PATCH@sha256:...`,
+   MINOR at least 108, `summonStartFenceMinor`): the image the operator put
+   in the pod, which the session cannot change. agentd's self-report was not
+   used: it is replaced on every heartbeat, and a running provider can post
+   one. Any other pod keeps the rule above: hold until it is gone. A fenced
+   pod releases once two bounds have both passed:
+   - the start deadline plus one minute, not the start deadline. After it
+     the pod's agentd starts no provider.
+   - `status.summon.closed.at` plus 5 minutes, by the operator's clock
+     (`summonFencedCloseWait`). A provider already started may still run: a
+     task closed `deadline` is one whose own timer did not stop it. With
+     this bound, a pod the operator can stop frees its lane when it has
+     stopped, so the next session of a single-flight lane does not overlap
+     it. A pod that cannot go (never scheduled, a partitioned node, a rescue
+     that hangs) holds its lane for at most 5 minutes after the close, not
+     forever. That is the "What still runs" case above and story 779's known
+     limit.
+
+   Before both have passed, the release waits for the pod to go, by the rows
+   above: the recorded pod gone or replaced, a terminal phase with its
+   record, a finished task whose pod retains its history, or a hold pod.
+   While only the two bounds hold a fenced pod, the operator reconciles the
+   session again by the later one: the time left, at least a second and at
+   most a minute. No other wait gets a new requeue. The second bound is
+   story 780 fix round 1, coordinator ruling C1 in PR 1100 comment
+   6837450502. The recheck is coordinator answer `op780-fix1-q-1`. Neither
+   is a ruling by Tom. Together they narrow the builder's first choice,
+   which released at the first bound "whether or not the provider started".
+   The floor is right only while no agent release at or above it was cut
+   before this code merged; the coordinator checks that at merge. The
+   operator's suspend of 6.6's correction (ruling D3) is written before such
+   a release, so the pod still goes. A process paused between run-agent's
+   check and its spawn for longer than the minute is the "What still runs"
+   limit above; it is not fenced further.
 6. *Start refusals (ruling D8).* The operator no longer refuses `remote` in
    `--summon-create-kinds`: the remote latch is in this binary. Naming
    `remote` still waits for #745 and a pinned agent image with this slice's

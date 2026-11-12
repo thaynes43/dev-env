@@ -2274,15 +2274,34 @@ session without one is built exactly as before.
   way: no latch record and no pod, or a known non-attempt, releases at once;
   the recorded pod gone or replaced releases; an attempt with no recorded
   pod and no pod needs `admittedAt` plus 16 minutes. Story 780 adds the
-  start fence's row for both modes: with the pod still present, its
-  reservation is released at `admittedAt` plus 15 minutes plus one minute
-  when the pod's agent container runs a released agent image
-  `ghcr.io/thaynes43/dev-env:2.MINOR.PATCH@sha256:...` with MINOR at least
-  108, the first release with the fence (`summonStartFenceMinor`). The image
-  is the one the operator put in the pod: a summoned pod always runs the
-  templates image. Any other image (an older release, a digest only, a
-  `sha-` tag) keeps the rule above: the reservation holds until the pod is
-  gone. An unreleased close keeps its lane and its slot.
+  start fence's row for both modes. With the pod still present, its
+  reservation is released when the pod's agent container runs a released
+  agent image `ghcr.io/thaynes43/dev-env:2.MINOR.PATCH@sha256:...` with
+  MINOR at least 108, the first release with the fence
+  (`summonStartFenceMinor`), once two bounds have both passed:
+  - `admittedAt` plus 15 minutes plus one minute. After it a fenced agentd
+    starts no provider.
+  - `status.summon.closed.at` plus 5 minutes, by the operator's clock
+    (`summonFencedCloseWait`). A provider the agent already started may
+    still run: a task closed `deadline` is one whose own timer did not stop
+    it. This bound lets a pod the operator can stop free its lane when it
+    has stopped, so the next session of a single-flight lane never overlaps
+    it. A pod that cannot go (never scheduled, a partitioned node, a rescue
+    that hangs) holds its lane for at most 5 minutes after the close, not
+    forever.
+
+  Before both have passed, the release waits for the pod to go, by the rows
+  above. While only the two bounds hold such a pod, the operator reconciles
+  the session again by the later bound: the time left, at least a second and
+  at most a minute. The second bound and the recheck are story 780 fix round
+  1 (coordinator ruling C1 in PR 1100 comment 6837450502, and coordinator
+  answer `op780-fix1-q-1`; not a ruling by Tom). They narrow the slice's
+  first build, which released at the first bound "whether or not the
+  provider started". The image is the one the operator put in the pod: a
+  summoned pod always runs the templates image. Any other image (an older
+  release, a digest only, a `sha-` tag) keeps the rule above: the
+  reservation holds until the pod is gone, and no recheck is asked. An
+  unreleased close keeps its lane and its slot.
 - *The operator's suspend* (story 779, item 779 comment 7377, ruling D3).
   After an operator close of an admitted session whose release waits for its
   pod (`deadline`, `agent-interrupted`, `agent-failed`, `never-started`,
@@ -2299,7 +2318,9 @@ session without one is built exactly as before.
   volume stay; nothing is deleted, and the task clean-up of ADR-020 applies
   later as to any ended task. Limit: a recorded pod that is never scheduled
   has no start time, so the stop cannot end it. Its session is still closed
-  (a remediation escalates), but the lane holds until the pod schedules
+  (a remediation escalates). With an image that carries the start fence, the
+  fence's row above frees its lane 5 minutes after the close (story 780 fix
+  round 1). With any other image the lane holds until the pod schedules
   (then agentd refuses the late launch and the stop ends it). A reap stops
   such a pod the same way, so it does not free the lane sooner; this was
   not tested further.
