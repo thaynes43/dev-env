@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,14 +121,14 @@ func TestSummonRecordedReapDeletePreconditions(t *testing.T) {
 // L1: exercise both complete entry points with the stop/reclaim flags on.
 // A cached open snapshot must not hide a fresh report-released outcome.
 func TestSummonFullReconcileSafetyMatrix(t *testing.T) {
-	for _, kind := range []string{"reported-task", "reported-remote", "open-task", "open-remote", "ordinary-task", "ordinary-remote"} {
+	for _, kind := range []string{"reported-task", "reported-remote", "open-task", "open-remote", "ordinary-task", "ordinary-remote", "ordinary-reaped-task", "ordinary-reaped-remote"} {
 		for _, stale := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/stale=%v", kind, stale), func(t *testing.T) {
 				ctx := context.Background()
 				var w *summonWorld
 				var s *v1alpha1.AgentSession
-				isTask := kind == "reported-task" || kind == "open-task" || kind == "ordinary-task"
-				ordinary := kind == "ordinary-task" || kind == "ordinary-remote"
+				isTask := strings.HasSuffix(kind, "-task")
+				ordinary := strings.HasPrefix(kind, "ordinary-")
 				if isTask {
 					w, s, _ = launchSummoned(t)
 					w.schedule(s.Name, nil)
@@ -141,6 +142,12 @@ func TestSummonFullReconcileSafetyMatrix(t *testing.T) {
 					// Turn the initialized fixture into the equivalent ordinary
 					// session. Its existing private task protection stays on.
 					live.Spec.Caller, live.Spec.Lane, live.Spec.Parent, live.Spec.Summon = "", "", "", nil
+					if strings.HasPrefix(kind, "ordinary-reaped-") {
+						if live.Annotations == nil {
+							live.Annotations = map[string]string{}
+						}
+						live.Annotations[v1alpha1.AnnotationReapedBy] = "human/dev-env-system/dev-env-human"
+					}
 					if err := w.base.Update(ctx, live); err != nil {
 						t.Fatal(err)
 					}
@@ -212,6 +219,9 @@ func TestSummonFullReconcileSafetyMatrix(t *testing.T) {
 				}
 				if isTask && !w.exists(&corev1.PersistentVolumeClaim{}, HomeClaimName(s.Name)) {
 					t.Fatal("the task's volume disappeared")
+				}
+				if ordinary && !apiequality.Semantic.DeepEqual(before, w.get(s.Name)) {
+					t.Fatal("the ordinary session changed")
 				}
 				if !ordinary && (stale || kind == "reported-task" || kind == "reported-remote") {
 					after := w.get(s.Name)
