@@ -161,9 +161,10 @@ with `{"title": "...", "expect": "<title last read>"}`. The API writes
 `setOperatingMode` (`internal/apiserver/lifecycle.go`), and answers 409
 `title_changed` when the stored title is not `expect`, so two renames cannot
 overwrite each other unseen. Allowed: the session's parent, Tom's human
-caller, a trusted client and a workbench session. Refused: the session
-itself and any other session, so no session can call itself the main
-coordinator. The command prints the composed text for the owner to type in
+caller, a trusted client, and a workbench session for any session but
+itself. Refused: the session itself, always, and every session that is
+neither its parent nor a workbench session. So no session can call itself
+the main coordinator. The command prints the composed text for the owner to type in
 the Claude app.
 
 The platform never types into a running session or sends `/rename`; a new
@@ -208,7 +209,9 @@ before the operator that sends it.
 
 **Ruling 7. The proof gates the change path.** Slices 1 and 2 may start
 before the phone test: they use only the launch name, the top of the
-documented precedence. Slice 3 waits for its readings; slice 4 for slices 1
+documented precedence. Slice 1 does not merge before step 2's reading of `|`
+and `é`, because it ships the separator and the character rule, and a change
+to either after it merged would be a second CRD copy. Slice 3 waits for its readings; slice 4 for slices 1
 to 3 installed and the test passed. If the readings show that a resume keeps
 the owner's rename, slice 3 is scoped again before it starts, because the
 record is then not needed to keep a title on the phone.
@@ -258,7 +261,8 @@ What changes the plan:
 - R2 changes either hash: a resume no longer brings back the same phone
   entry. File that bug; slice 3 waits.
 - The app refuses or changes `|` or `é`: Q-065-02 or Q-065-01 is answered
-  no, and the separator or character set changes before slice 1.
+  no, and the separator or character set changes before slice 1 merges
+  (ruling 7).
 
 ## 6. Slices
 
