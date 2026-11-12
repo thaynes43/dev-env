@@ -398,6 +398,11 @@ func encodeSummonLedgerEntry(e summonLedgerEntry) (string, error) {
 // received and persists later than the hold allows is the first stated limit
 // (see the top of this file). A retry after a drop maps to the same id and is
 // charged again: a double charge across two hours is acceptable.
+//
+// For story 741: this rule does not look at sessions. Once the leader admits
+// by the ledger (DESIGN-064 5.9), a charge whose session exists and is
+// neither admitted nor closed must be kept, however old it is, or a Queued
+// session would lose the charge it needs to be admitted.
 func pruneSummonCharges(charges []summonCharge, now time.Time) []summonCharge {
 	kept := make([]summonCharge, 0, len(charges))
 	for _, ch := range charges {
