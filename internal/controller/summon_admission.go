@@ -74,6 +74,8 @@ const (
 	SummonReasonPoolBusy   = "PoolBusy"
 	SummonReasonPolicyGone = "PolicyGone"
 	SummonReasonNotCharged = "NotCharged"
+	// SummonReasonHoldExpired: Queued past its maxHold and closed (OP779).
+	SummonReasonHoldExpired = "HoldExpired"
 	// SummonReasonRemoteLatchMissing holds every summoned remote session until
 	// slice d of item 741 builds the remote latch.
 	SummonReasonRemoteLatchMissing = "RemoteLatchMissing"
@@ -245,6 +247,14 @@ func (r *Reconciler) summonReleasable(ctx context.Context, s *v1alpha1.AgentSess
 			if gone || string(pod.UID) != h.LastExecutor.PodUID {
 				return true, nil
 			}
+			if podPhaseTerminal(&pod) && executorTerminalRecorded(h) {
+				// A pod in a terminal phase never runs a container again,
+				// and its whole-executor terminal record is stored (OP779,
+				// coordinator answer op779-q-1). Every container terminated
+				// under phase Running is not this: RestartPolicyAlways can
+				// start them again.
+				return true, nil
+			}
 			return summonTaskFinished(s) && podRetainsPrivateHistory(&pod), nil
 		}
 		// A NotFound is not disappearance of a recorded UID: the first
@@ -258,10 +268,22 @@ func (r *Reconciler) summonReleasable(ctx context.Context, s *v1alpha1.AgentSess
 	return gone || isHoldPod(&pod), nil
 }
 
-// reconcileSummonRelease runs in the leader's reconciler after the outcome
-// step. It writes closed.released under the optimistic lock once
-// summonReleasable allows it, then nudges the admission.
+// reconcileSummonRelease writes closed.released under the optimistic lock
+// once summonReleasable allows it, then nudges the admission. It reports a
+// change only when it released.
 func (r *Reconciler) reconcileSummonRelease(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
+	return r.summonReleaseStep(ctx, s, false)
+}
+
+// reconcileSummonClosed runs in the leader's reconciler after the outcome
+// step: it releases a closed session's reservation, or, when the release
+// waits for the pod, the operator suspends the session so its pod goes
+// (OP779, item 779 comment 7377, ruling D3).
+func (r *Reconciler) reconcileSummonClosed(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
+	return r.summonReleaseStep(ctx, s, true)
+}
+
+func (r *Reconciler) summonReleaseStep(ctx context.Context, s *v1alpha1.AgentSession, suspend bool) (bool, error) {
 	if st := s.Status.Summon; s.Spec.Caller == "" || st == nil || st.Closed == nil || st.Closed.Released {
 		return false, nil
 	}
@@ -276,8 +298,14 @@ func (r *Reconciler) reconcileSummonRelease(ctx context.Context, s *v1alpha1.Age
 		return false, nil
 	}
 	ok, err := r.summonReleasable(ctx, &live)
-	if err != nil || !ok {
+	if err != nil {
 		return false, err
+	}
+	if !ok {
+		if suspend {
+			return r.suspendClosedSummon(ctx, &live)
+		}
+		return false, nil
 	}
 	base := live.DeepCopy()
 	live.Status.Summon.Closed.Released = true
@@ -361,8 +389,8 @@ func summonReserved(s *v1alpha1.AgentSession) bool {
 }
 
 // summonQueued is a session the leader may admit: never admitted, not closed,
-// and neither suspended nor being deleted (slice c decides what those stops
-// become).
+// and neither suspended nor being deleted (the reconciler closes those by
+// ruling D1, OP779).
 func summonQueued(s *v1alpha1.AgentSession) bool {
 	st := s.Status.Summon
 	return s.Spec.Summon != nil && (st == nil || st.AdmittedAt == nil && st.Closed == nil) &&
@@ -443,16 +471,24 @@ func (r *Reconciler) SummonAdmissionPass(ctx context.Context) error {
 	}
 	// As in the API's ledger writer, bound contention and leave the next
 	// interval to retry. Never spin indefinitely against API writes.
+	p := &summonPass{}
 	for range 5 {
-		retry, err := r.summonAdmissionAttempt(ctx)
+		retry, err := r.summonAdmissionAttempt(ctx, p)
 		if !retry {
-			return err
+			return errors.Join(append(p.errs, err)...)
 		}
 	}
-	return errors.New("summoned admission ledger is busy")
+	return errors.Join(append(p.errs, errors.New("summoned admission ledger is busy"))...)
 }
 
-func (r *Reconciler) summonAdmissionAttempt(ctx context.Context) (bool, error) {
+// summonPass is what one pass keeps across its attempts: whether the
+// watchdog ran, and the errors it collected.
+type summonPass struct {
+	watched bool
+	errs    []error
+}
+
+func (r *Reconciler) summonAdmissionAttempt(ctx context.Context, p *summonPass) (bool, error) {
 	var list v1alpha1.AgentSessionList
 	if err := r.APIReader.List(ctx, &list, client.InNamespace(r.SessionNamespace)); err != nil {
 		return false, fmt.Errorf("list the sessions: %w", err)
@@ -467,6 +503,12 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context) (bool, error) {
 		// Coordinator op777-fix1-q-1: retain the one-list idle fast path.
 		// Gone grants are cleaned on the next active pass, before admitting.
 		return false, nil
+	}
+	if !p.watched {
+		// The watchdog (OP779) runs once per pass, before the ledger read, so
+		// the second list below sees its closes.
+		p.watched = true
+		p.errs = append(p.errs, r.summonWatch(ctx, list.Items)...)
 	}
 	ledger := summonLedgerRead{cm: &corev1.ConfigMap{}}
 	if err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: summonledger.Namespace, Name: summonledger.Name}, ledger.cm); err != nil {
@@ -515,6 +557,7 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context) (bool, error) {
 			occupy(s.UID, s.Spec.Lane, summonPoolOf(s))
 		}
 	}
+	var errs []error
 	kept := make([]summonledger.Grant, 0, len(grants.Items))
 	granted := map[types.UID]bool{}
 	for _, g := range grants.Items {
@@ -530,7 +573,10 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context) (bool, error) {
 			// rechecking policy, charge, quota or current task eligibility.
 			admitted, err := r.admitSummon(ctx, s, g.At)
 			if err != nil {
-				return false, err
+				// The grant already holds its slot, so the pass goes on; the
+				// next pass completes it (item 779 comment 7384).
+				errs = append(errs, err)
+				continue
 			}
 			if !admitted {
 				return true, nil
@@ -558,14 +604,17 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context) (bool, error) {
 		return a.UID < b.UID
 	})
 	now := r.now().UTC().Truncate(time.Second)
-	var errs []error
 	for _, s := range queued {
 		entry, ok := ledger.entry(s.Spec.Caller)
 		if !ok {
 			continue
 		}
-		if !entry.Binds(s.Spec.Summon.DispatchID, s.Name) {
-			if err := r.closeSummonNotCharged(ctx, s, now); err != nil {
+		// A Queued session's own rows of the one table: its charge (ruling
+		// D5) and its hold bound (6.7, C2). Story 743 adds QuotaHoldExpired
+		// when the hold was QuotaHold; until then a quota hold never happens.
+		in := summonoutcome.Inputs{NotCharged: !entry.Binds(s.Spec.Summon.DispatchID, s.Name), HoldExpired: summonHoldExpired(s, r.now())}
+		if reason := summonoutcome.FirstReason(in); reason != "" {
+			if err := r.closeSummonQueued(ctx, s, reason, now); err != nil {
 				errs = append(errs, err)
 			}
 			continue
@@ -598,6 +647,9 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context) (bool, error) {
 		}
 		if reason != "" {
 			if err := r.holdSummon(ctx, s, reason); err != nil {
+				errs = append(errs, err)
+			}
+			if err := r.summonHeldPage(ctx, s); err != nil {
 				errs = append(errs, err)
 			}
 			continue
@@ -684,6 +736,7 @@ var summonHoldMessages = map[string]string{
 	SummonReasonPoolBusy:           "held: its caller's pool is full",
 	SummonReasonPolicyGone:         "held: its CallerPolicy is gone or no longer names its account",
 	SummonReasonNotCharged:         "never admitted: the create ledger does not bind its dispatch id to this name",
+	SummonReasonHoldExpired:        "never admitted: Queued past its maxHold, and closed by its onUnreported",
 	SummonReasonRemoteLatchMissing: "held: a summoned remote session waits for the remote latch (item 741 slice d)",
 	SummonReasonTaskLatchMissing:   "held: the private task latch does not apply (both task latch flags, and a startable latch record)",
 	SummonReasonQuotaHold:          "held: quota",
@@ -703,27 +756,32 @@ func (r *Reconciler) holdSummon(ctx context.Context, s *v1alpha1.AgentSession, r
 	return nil
 }
 
-// closeSummonNotCharged closes a Queued session the ledger does not bind by
-// its onUnreported, reason not-charged (ruling D5), releasing at once: it was
-// never admitted. The condition follows in its own write.
-func (r *Reconciler) closeSummonNotCharged(ctx context.Context, s *v1alpha1.AgentSession, now time.Time) error {
+// closeSummonQueued closes a Queued session by its onUnreported with the
+// reason FirstReason chose from its own rows: not-charged, the ledger does
+// not bind it (ruling D5), or hold-expired, Queued past its maxHold (6.7,
+// OP779). It releases at once: it was never admitted. The condition follows
+// in its own write.
+func (r *Reconciler) closeSummonQueued(ctx context.Context, s *v1alpha1.AgentSession, reason string, now time.Time) error {
 	state := v1alpha1.OutcomeState(s.Spec.Summon.OnUnreported)
 	if state != v1alpha1.OutcomeFailed && state != v1alpha1.OutcomeEscalated {
 		log.FromContext(ctx).Error(nil, "summoned session has an invalid onUnreported snapshot", "session", s.Name)
 		return nil
 	}
-	reason := summonoutcome.FirstReason(summonoutcome.Inputs{NotCharged: true})
 	d := summonoutcome.Decision{State: state, Note: "unreported: " + reason, Source: summonoutcome.Unreported, Reason: reason, Released: true}
 	changed, err := summonoutcome.Write(ctx, r.Client, s, d, now)
 	if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("close %s not-charged: %w", s.Name, err)
+		return fmt.Errorf("close %s %s: %w", s.Name, reason, err)
 	}
 	if changed {
-		log.FromContext(ctx).Info("closed a summoned session the create ledger does not bind", "session", s.Name, "caller", s.Spec.Caller, "lane", s.Spec.Lane)
+		log.FromContext(ctx).Info("closed a Queued summoned session", "session", s.Name, "caller", s.Spec.Caller, "lane", s.Spec.Lane, "reason", reason)
 		r.nudgeSummonAdmission()
 	}
-	return r.holdSummon(ctx, s, SummonReasonNotCharged)
+	hold := SummonReasonNotCharged
+	if reason == summonoutcome.ReasonHoldExpired {
+		hold = SummonReasonHoldExpired
+	}
+	return r.holdSummon(ctx, s, hold)
 }

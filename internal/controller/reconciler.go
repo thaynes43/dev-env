@@ -411,8 +411,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	// DESIGN-064 5.9: a closed summoned session's reservation is released once
-	// no launch can follow (OP777).
-	if changed, err := r.reconcileSummonRelease(ctx, &s); err != nil {
+	// no launch can follow (OP777); until then the operator suspends it so
+	// its pod goes (OP779).
+	if changed, err := r.reconcileSummonClosed(ctx, &s); err != nil {
 		return ctrl.Result{}, err
 	} else if changed {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
@@ -752,7 +753,12 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 		obs.removalBlocked = errPrivateHistoryRetained
 		// Terminal task compute reclaim owns non-Reaping stops and its retry
 		// cadence. Do not repeat that path after a refusal or grace wait.
+		// The one other: a closed summoned task that is suspended has its
+		// recorded executor asked to end, as a reaped one's (OP779).
 		if s.DeletionTimestamp.IsZero() {
+			if summonStopDue(s) {
+				return r.requestPrivateExecutorStop(ctx, s, obs)
+			}
 			return ctrl.Result{}, false, nil
 		}
 		// A Reaping private Session's recorded executor is asked to end

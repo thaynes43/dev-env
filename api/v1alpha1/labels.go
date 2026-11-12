@@ -50,6 +50,12 @@ const (
 	// for the operator's idle timer, else the API caller. The API removes it on
 	// a resume.
 	AnnotationSuspendedBy = LabelPrefix + "suspended-by"
+	// AnnotationReapedBy says who reaped a summoned session: the API caller,
+	// written by the API's reap route just before its delete, for a session
+	// with spec.caller only (DESIGN-064 6.6, ruling D1 on item 741, OP779).
+	// A delete that did not come through that route has none, and counts as
+	// an unattributed stop.
+	AnnotationReapedBy = LabelPrefix + "reaped-by"
 	// AnnotationResumedAt is when the API last resumed the session (RFC 3339,
 	// D-60). The idle timer counts from it too, so a resume that lands while
 	// an idle suspend's rescue still runs, and keeps the old pod, is not

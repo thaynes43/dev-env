@@ -8,6 +8,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 //
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.admittedAt) || (has(self.admittedAt) && self.admittedAt == oldSelf.admittedAt)",message="admittedAt is set once and never changes"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.closed) || has(self.closed)",message="the closed record cannot be removed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.pages) || (has(self.pages) && oldSelf.pages.all(p, p in self.pages))",message="a page event is never removed or changed"
 type SummonStatus struct {
 	// AdmittedAt is when the operator leader admitted the session: its charge
 	// was in the create ledger under its own name, its single-flight lane was
@@ -22,6 +23,37 @@ type SummonStatus struct {
 	// OP768 adds filing, blocked and abandoned transitions; this slice files nothing.
 	// +optional
 	Escalation *SummonEscalationStatus `json:"escalation,omitempty"`
+	// Pages are the session's page events, each recorded once by the operator
+	// leader (DESIGN-064 6.8, ruling D9 on item 741, OP779). The keeper sends
+	// them (story 742); nothing sends them yet. Story 742 adds the terminal
+	// events. An entry is never removed or changed.
+	// +kubebuilder:validation:MaxItems=8
+	// +listType=atomic
+	// +optional
+	Pages []SummonPage `json:"pages,omitempty"`
+}
+
+// SummonPageEvent is a page event of DESIGN-064 6.8 recorded on a session.
+// This slice writes the two lifecycle events it decides; story 742 adds the
+// terminal events and the rest of 6.8's lifecycle events.
+// +kubebuilder:validation:Enum=escalation-held;escalation-reminder
+// +kubebuilder:validation:MaxLength=32
+type SummonPageEvent string
+
+const (
+	// PageEscalationHeld: an escalation Queued over 15 minutes (6.7).
+	PageEscalationHeld SummonPageEvent = "escalation-held"
+	// PageEscalationReminder: a remote escalation idle 24 hours (6.7).
+	PageEscalationReminder SummonPageEvent = "escalation-reminder"
+)
+
+// SummonPage is one page event: what happened and when the operator
+// recorded it (DESIGN-064 6.8's {event, at}).
+type SummonPage struct {
+	// +required
+	Event SummonPageEvent `json:"event"`
+	// +required
+	At metav1.Time `json:"at"`
 }
 
 // SummonClosedStatus identifies the one terminal transition (DESIGN-064 5.9).

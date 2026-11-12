@@ -20,7 +20,11 @@ import (
 func TestSummonQueuedSessionKeepsItsChargePast80Minutes(t *testing.T) {
 	for _, state := range []string{"queued", "admitted", "closed"} {
 		t.Run(state, func(t *testing.T) {
-			f := summonFixture(t, ledgerPolicy(4, 6))
+			// OP779: the leader's hold bound closes a remediation Queued past
+			// its maxHold (20m in the test policy); this proof waits 81 minutes.
+			p := ledgerPolicy(4, 6)
+			p.Spec.Summon.Sessions[0].MaxHold = "24h"
+			f := summonFixture(t, p)
 			t0 := f.now
 			wantStatus(t, summonPost(t, f, keyedRemediation("rem-responder-1", "alert-1")), http.StatusCreated)
 			sess := f.session("rem-responder-1")

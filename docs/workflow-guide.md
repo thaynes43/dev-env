@@ -1755,11 +1755,44 @@ It applies the create-time `spec.summon.onUnreported` snapshot, with
 5. A pod in phase `Succeeded` or `Failed`, or every container terminated with
    `spec.restartPolicy: Never`, without a task result: `pod-terminated`.
 
-The `agent-interrupted` and `pod-terminated` inputs are skipped when the Session
-has a `deletionTimestamp` or `spec.operatingMode: Suspended`; the task-result,
-`agent-exited` and `agent-failed` inputs are unchanged. Story 741 defines what
-such an operator stop becomes. A missing or invalid `spec.summon` snapshot is
-logged and leaves lifecycle work free to continue.
+The leader's watchdog (story 779) adds, below these, in this order:
+`session-lost` (a task's recorded executor pod is gone, or another pod holds
+its name, by an uncached read), `never-started` (admitted, outcome still
+`pending`, agentd never reported a heartbeat, and `admittedAt` plus 16 minutes
+has passed), `deadline` (a task past `admittedAt` plus 15 minutes, its
+`limits.timeout` and 10 minutes, whatever agentd reports), `heartbeat-lost`
+(a remote session whose pod exists with no heartbeat for 10 minutes), `stale`
+(a remote upgrade with no agent activity and no `working` report for its
+`staleAfter`) and `escalation-bound` (a remote escalation idle 72 hours; it
+closes `failed` and its note says so). A Queued session closes `not-charged`
+(below) or `hold-expired`, once it has waited its `maxHold` since it was
+created. A remediation's `onUnreported` is `escalated`, so a remediation held
+past 20 minutes records its pending filing; a curation closes `failed`.
+Upgrades and escalations have no hold bound. When agentd itself refuses a
+start it reports `failed`, and `agent-failed` wins over `never-started`. A
+heartbeat of `busy` or `interrupted` before any provider spawn counts as a
+report, not as a started agent; the deadline still bounds it.
+
+**What a stop becomes** (ruling D1 on item 741). A reap or a suspend recorded
+before the close wins over every input above except `no-usable-model` and
+`agent-failed`, the start failures. A stop made by a person (a reap or a
+suspend through the API as Tom) closes the session `failed`, reason
+`stopped`, with no pending filing, whatever its `onUnreported` says. Any other
+stop (another session, a client or any account that is not a person, a change
+of `spec.operatingMode` or a delete made past the API, and the idle timer's
+suspend) closes it by its `onUnreported`, reason `suspended-unreported`, so a
+remediation still escalates. The API's suspend route already records its
+caller in `suspended-by`; its reap route now records the caller in the
+annotation `dev-env.haynesops.com/reaped-by` just before the delete, for a
+summoned session only. Only the API writes either annotation, under its own
+name for the caller (`human/...` is a person). A reaped session's close is
+written before its finalizer lifts. A missing or invalid `spec.summon`
+snapshot is logged and leaves lifecycle work free to continue.
+
+**Nobody resumes a summoned session** (N3). The resume route answers 409 for
+any session with `spec.caller`, for Tom, a session and a client alike, whether
+it is suspended or not; a summoning caller has no lifecycle route and gets
+403. A later create starts the work again.
 
 A fresh heartbeat suppresses none of these inputs. The close does not set a task
 result: that remains the ordinary controller's observation of the process. A
@@ -1784,14 +1817,21 @@ copy the current CRD into haynes-ops before pinning the operator. A lost patch
 response can still leave a stored outcome without an event line. Stories 742
 and 768 read the durable record, never the log line.
 
-This slice does not release lanes or pools or read `closed` for admission.
-Story 741 adds those readers and the remaining loss, deadline, watchdog, queue
-and suspend inputs; 743 adds `no-usable-model`; 742 adds page events in the
-terminal write. The shared reason table already defines their ordering.
-Until story 741, a reap, a suspend or an in-place restart can leave an agent
-running under a final outcome, and its later reports get 409.
+Story 777 added release and admission (below); story 779 the watchdog, the
+stops and the operator's suspend; 743 adds `no-usable-model`; 742 adds page
+events in the terminal write. The shared reason table defines their ordering.
+Until story 780's agentd fence, an in-place restart can leave an agent running
+under a final outcome, and its later reports get 409.
 No caller cutover (746, 747, 748, 610) or story 768 filing is enabled before
-story 741's latch is installed.
+item 741's latch is installed.
+
+**Page events** (ruling D9, DESIGN-064 6.8). The leader records page events
+in `status.summon.pages[]`, a list of `{event, at}` of at most 8 entries from
+which nothing is removed or changed. This release writes two lifecycle
+events, each at most once per session: `escalation-held`, for an escalation
+Queued 15 minutes, and `escalation-reminder`, for a remote escalation idle 24
+hours. Nothing sends them yet; story 742 adds the keeper and the terminal
+events.
 
 ## Summoning callers
 
@@ -2143,7 +2183,32 @@ session without one is built exactly as before.
   executor and no known non-attempt, release needs both uncached pod
   absence and `admittedAt` plus 15 minutes plus one minute. A late first
   pod that appears holds the reservation until it is gone, even past that
-  deadline. An unreleased close keeps its lane and its slot.
+  deadline. Story 779 adds one row: the recorded executor pod is in a
+  terminal phase (`Failed` or `Succeeded`) by an uncached read, and its
+  terminal record for that pod UID is stored; such a pod never runs a
+  container again. Every container terminated while the phase is `Running`
+  is not enough. An unreleased close keeps its lane and its slot.
+- *The operator's suspend* (story 779, item 779 comment 7377, ruling D3).
+  After an operator close of an admitted session whose release waits for its
+  pod (`deadline`, `agent-interrupted`, `agent-failed`, `never-started`,
+  `heartbeat-lost` and the like), the operator suspends it with
+  `suspended-by: summon-close`. A remote session's suspend rescues and
+  deletes its pod as any suspend does, and the "pod gone" rule releases. A
+  task's executor is a private one, which a suspend never deletes: for a
+  closed, unreleased summoned task that is suspended, by the operator or by
+  anyone, the private executor stop applies (DESIGN-025 4: the pod's
+  `activeDeadlineSeconds`). The kubelet ends the pod, its terminal record is
+  written, and the terminal-phase row releases. The pod object and the
+  volume stay; nothing is deleted, and the task clean-up of ADR-020 applies
+  later as to any ended task. Limit: a recorded pod that is never scheduled
+  has no start time, so the stop cannot end it. Its session is still closed
+  (a remediation escalates), but the lane holds until the pod schedules
+  (then agentd refuses the late launch and the stop ends it). A reap stops
+  such a pod the same way, so it does not free the lane sooner; this was
+  not tested further.
+- *The pass goes on.* A failed status write while completing one kept grant
+  is reported and the pass continues; the grant still holds its slot, and
+  another lane's ready session is admitted in the same pass.
 - *The start deadline.* An admitted summoned pod gets
   `AGENTD_START_DEADLINE`, `admittedAt` plus 15 minutes. Pinned agent 2.105.0
   checks this before writing its first `launch.json`; it does not fence a

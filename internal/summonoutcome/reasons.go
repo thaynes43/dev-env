@@ -29,29 +29,52 @@ const (
 	// state: the create ledger does not hold the session's dispatch id bound
 	// to its name, so it is never admitted (OP777, ruling D5 on item 741).
 	ReasonNotCharged = "not-charged"
+	// ReasonStopped is a stop a person made: a reap or a suspend (OP779,
+	// ruling D1 on item 741). It always closes failed and files nothing.
+	ReasonStopped = "stopped"
 )
 
-// Inputs contains evidence, never inferred from heartbeat freshness. Only the
-// five existing inputs are populated today. Future producers fill these fields
-// and use FirstReason; they must not introduce a second precedence table.
+// Inputs contains evidence, never inferred from heartbeat freshness. The
+// operator's reconciler fills the agent, pod and stop inputs; the leader's
+// watchdog (OP779) fills the deadline, start, loss and hold inputs. Story 743
+// fills NoUsableModel and QuotaHoldExpired. Every producer uses FirstReason;
+// none may introduce a second precedence table.
 type Inputs struct {
 	TaskResult    *v1alpha1.TaskResultStatus // task sessions only
 	AgentStatus   string
 	NoUsableModel bool // OP743: the durable no-usable-model start evidence
 	PodTerminated bool
-	// Operator stops skip only rows 5 and 6. OP741 defines what the stop becomes.
-	SessionDeleting, SessionSuspended bool
-	// OP741: latch, admission, deadlines, watchdog, queued hold and suspend evidence.
-	SessionLost, NeverStarted, Deadline, HeartbeatLost               bool
-	Stale, EscalationBound, HoldExpired, QuotaHoldExpired, Suspended bool
+	// A recorded stop, a reap or a suspend (OP779, ruling D1 on item 741).
+	// StoppedByPerson is one a person made; Suspended is any other: another
+	// session, an account that is not a person, an unattributed change or the
+	// idle timer. A stop wins over every row but the two start failures.
+	StoppedByPerson, Suspended bool
+	// OP741: latch, admission, deadlines, watchdog and queued hold evidence.
+	SessionLost, NeverStarted, Deadline, HeartbeatLost    bool
+	Stale, EscalationBound, HoldExpired, QuotaHoldExpired bool
 	// NotCharged: the leader's uncached ledger read found no charge for the
 	// session's dispatch id bound to its name (OP777). Only a session that was
 	// never admitted has it, so no agent row can be true beside it.
 	NotCharged bool
 }
 
-// FirstReason is the single earliest-row-wins ordering of DESIGN-064 6.6.
+// FirstReason is the single earliest-row-wins ordering of DESIGN-064 6.6,
+// with ruling D1's stop rows: a stop recorded before the close wins over every
+// row except no-usable-model and agent-failed, which are start failures and
+// earlier than any stop.
 func FirstReason(in Inputs) string {
+	if in.StoppedByPerson || in.Suspended {
+		switch {
+		case in.NoUsableModel:
+			return ReasonNoUsableModel
+		case in.AgentStatus == "failed":
+			return ReasonAgentFailed
+		case in.StoppedByPerson:
+			return ReasonStopped
+		default:
+			return ReasonSuspendedUnreported
+		}
+	}
 	switch {
 	case in.TaskResult != nil:
 		switch in.TaskResult.State {
@@ -73,9 +96,9 @@ func FirstReason(in Inputs) string {
 		return ReasonNoUsableModel
 	case in.AgentStatus == "failed":
 		return ReasonAgentFailed
-	case in.AgentStatus == "interrupted" && !in.SessionDeleting && !in.SessionSuspended:
+	case in.AgentStatus == "interrupted":
 		return ReasonAgentInterrupted
-	case in.PodTerminated && !in.SessionDeleting && !in.SessionSuspended:
+	case in.PodTerminated:
 		return ReasonPodTerminated
 	case in.SessionLost:
 		return ReasonSessionLost
@@ -95,8 +118,6 @@ func FirstReason(in Inputs) string {
 		return ReasonQuotaHoldExpired
 	case in.HoldExpired:
 		return ReasonHoldExpired
-	case in.Suspended:
-		return ReasonSuspendedUnreported
 	default:
 		return ""
 	}

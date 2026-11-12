@@ -549,6 +549,16 @@ func (s *Server) reapSession(ctx context.Context, _ http.ResponseWriter, r *http
 		return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
 			"session %s lacks the %s finalizer, so a delete could lose its pod and volume unrescued; the operator adds it on its next reconcile", sess.Name, controller.Finalizer)
 	}
+	if sess.Spec.Caller != "" {
+		// Ruling D1 (DESIGN-064 6.6, OP779): what a summoned session's close
+		// becomes depends on who stopped it, so its reap is attributed first.
+		if err := s.recordReapedBy(ctx, &sess, c); err != nil {
+			return 0, nil, err
+		}
+		if !sess.DeletionTimestamp.IsZero() {
+			return http.StatusAccepted, view(&sess, false), nil
+		}
+	}
 	uid := sess.UID
 	err = s.Client.Delete(ctx, &sess,
 		client.PropagationPolicy(metav1.DeletePropagationBackground),
@@ -566,6 +576,43 @@ func (s *Server) reapSession(ctx context.Context, _ http.ResponseWriter, r *http
 	v := view(&sess, false)
 	v.Reaping = true
 	return http.StatusAccepted, v, nil
+}
+
+// recordReapedBy writes the reap's caller on a summoned session, under the
+// optimistic lock, just before the delete (ruling D1 on item 741, OP779). The
+// operator reads it once the session is being deleted: a person's reap closes
+// it failed, reason stopped; any other closes it by its onUnreported. Only
+// this route writes the annotation, with the API's own name for the caller,
+// so a session cannot forge it. A conflict reads the session again; a
+// session already being deleted keeps the attribution its first reap wrote.
+// On return sess is the session as stored.
+func (s *Server) recordReapedBy(ctx context.Context, sess *v1alpha1.AgentSession, c *caller) error {
+	for range 5 {
+		if !sess.DeletionTimestamp.IsZero() || sess.Annotations[v1alpha1.AnnotationReapedBy] == c.String() {
+			return nil
+		}
+		orig := sess.DeepCopy()
+		if sess.Annotations == nil {
+			sess.Annotations = map[string]string{}
+		}
+		sess.Annotations[v1alpha1.AnnotationReapedBy] = c.String()
+		err := s.Client.Patch(ctx, sess, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
+		if err == nil {
+			return nil
+		}
+		if !apierrors.IsConflict(err) {
+			return fromKubeError(err, "session "+sess.Name)
+		}
+		uid := orig.UID
+		*sess = v1alpha1.AgentSession{}
+		if err := s.Live.Get(ctx, client.ObjectKeyFromObject(orig), sess); err != nil {
+			return fromKubeError(err, "session "+orig.Name)
+		}
+		if sess.UID != uid {
+			return newError(http.StatusConflict, apiv1.CodeConflict, "session %s was replaced; try again", orig.Name)
+		}
+	}
+	return newError(http.StatusConflict, apiv1.CodeConflict, "session %s kept changing; try again", sess.Name)
 }
 
 // refuseRetainedExecutor refuses a caller that is a retained executor: a
