@@ -485,6 +485,12 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context) (bool, error) {
 	// created after the initial list but before this ledger read. That
 	// initial absence must never prune a live grant. If a grant changes
 	// after this read, the ConfigMap CAS below conflicts.
+	//
+	// The second list goes into a fresh object. The real client zeroes its
+	// decode target (controller-runtime's targetZeroingDecoder), so reusing
+	// the first list would be safe there, but a plain JSON decode merges into
+	// existing items, and a stale closed.released would free a held lane.
+	list = v1alpha1.AgentSessionList{}
 	if err := r.APIReader.List(ctx, &list, client.InNamespace(r.SessionNamespace)); err != nil {
 		return false, fmt.Errorf("list sessions for the ledger snapshot: %w", err)
 	}
