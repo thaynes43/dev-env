@@ -166,7 +166,9 @@ func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *c
 		return 0, nil, tooManyRequests("caller %s has made %d charges in the 65 minute window by the entry's clock, its createsPerHour (DESIGN-064 5.9)",
 			c.policy.Name, c.policy.Spec.Summon.Limits.CreatesPerHour)
 	case summonQueueFull:
-		return 0, nil, summonQueueRefusal(c, b, false)
+		// A new charge spends nothing; a retry of a charge already in the
+		// ledger keeps it, and its refusal says so.
+		return 0, nil, summonQueueRefusal(c, b, b.kept)
 	case summonGrantsUnreadable:
 		return 0, nil, summonGrantsFault()
 	}

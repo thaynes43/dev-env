@@ -313,7 +313,8 @@ const (
 // summonBinding is a ledger decision for one dispatch: the result, the name
 // the ledger binds, for a mark the absolute deadline of the create it
 // precedes, the session when it already exists, and for summonQueueFull the
-// queue and its count.
+// queue, its count and whether the refused charge was already in the ledger
+// (kept: a refusal that keeps a charge says so).
 type summonBinding struct {
 	result   summonChargeResult
 	name     string
@@ -321,6 +322,7 @@ type summonBinding struct {
 	existing *v1alpha1.AgentSession
 	queue    summonQueue
 	queued   int
+	kept     bool
 }
 
 // chargeAttempt is the window rule for one more attempt on the charge at i
@@ -339,6 +341,7 @@ func (s *Server) chargeAttempt(b *summonBinding, c *caller, e *summonLedgerEntry
 	if summonledger.ChargeCounts(*ch, now) {
 		if stale {
 			if stop, write := s.refuseSummonQueue(b, c, e, now, live, ch.ID, ch.Hash, ch.Name, urgent); stop {
+				b.kept = true
 				return b.result, write
 			}
 		}
@@ -353,6 +356,7 @@ func (s *Server) chargeAttempt(b *summonBinding, c *caller, e *summonLedgerEntry
 	}
 	if stale {
 		if stop, write := s.refuseSummonQueue(b, c, e, now, live, ch.ID, ch.Hash, ch.Name, urgent); stop {
+			b.kept = true
 			return b.result, write
 		}
 	}

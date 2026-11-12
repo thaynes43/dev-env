@@ -97,8 +97,20 @@ func wantQueued(t *testing.T, f *fixture, w *httptest.ResponseRecorder, name str
 	}
 }
 
-// wantQueueRefusal checks a 429 that names its queue.
+// summonRetention is the sentence a refusal carries when it keeps a charge
+// this dispatch already held (summonChargedFailure).
+const summonRetention = "there is no refund and normal pruning applies"
+
+// wantQueueRefusal checks a 429 that names its queue. A refusal of a new
+// charge spends nothing and so carries no retention sentence.
 func wantQueueRefusal(t *testing.T, w *httptest.ResponseRecorder, urgent bool, pool string) {
+	t.Helper()
+	if e := wantQueueRefusalOf(t, w, urgent, pool); strings.Contains(e.Message, summonRetention) {
+		t.Fatalf("a refusal of a new charge says it keeps one: %q", e.Message)
+	}
+}
+
+func wantQueueRefusalOf(t *testing.T, w *httptest.ResponseRecorder, urgent bool, pool string) apiv1.Error {
 	t.Helper()
 	e := wantError(t, w, http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
 	want, limit := "summon queue full: ", "its limits.queued;"
@@ -108,6 +120,7 @@ func wantQueueRefusal(t *testing.T, w *httptest.ResponseRecorder, urgent bool, p
 	if !strings.HasPrefix(e.Message, want) || !strings.Contains(e.Message, limit) {
 		t.Fatalf("message %q does not name the queue (%q, %q)", e.Message, want, limit)
 	}
+	return e
 }
 
 func wantNoSession(t *testing.T, f *fixture, name string) {
@@ -511,7 +524,11 @@ func TestSummonQueueChargeInsideTheHold(t *testing.T) {
 	f.now = t0.Add(summonledger.AttemptHold)
 	wantQueued(t, f, summonPost(t, f, keyedRemediation("rem-responder-2", "alert-2")), "rem-responder-2")
 	f.now = t0.Add(summonledger.AttemptHold + time.Minute)
-	wantQueueRefusal(t, summonPost(t, f, keyedRemediation("rem-responder-1", "alert-1")), true, "concurrent")
+	// The retry's charge stays, so its refusal says so (the advisory review
+	// of PR 1094, comment 4554468887).
+	if e := wantQueueRefusalOf(t, summonPost(t, f, keyedRemediation("rem-responder-1", "alert-1")), true, "concurrent"); !strings.Contains(e.Message, summonRetention) {
+		t.Fatalf("the late retry's refusal does not say its charge is kept: %q", e.Message)
+	}
 	ch, ok := f.ledger().charge(x)
 	if !ok || !ch.Attempt.Equal(t0) {
 		t.Fatalf("the late retry marked or dropped its charge: %+v", f.ledger().Charges)

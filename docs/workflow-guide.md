@@ -1997,8 +1997,8 @@ of the create; 422 when the Kubernetes API server refuses the object (for
 example from an installed schema that does not accept it); 503 when the
 deadline ends, the ledger cannot be written or the charge left it; and 429
 when a mark or a rebind finds the charge past its window and the hour full,
-or finds its queue full for a charge whose last attempt mark had passed the
-15 minute hold.
+or when a retry's first write, a mark or a rebind finds its queue full for a
+charge whose last attempt mark had passed the 15 minute hold.
 There is no refund, and normal pruning applies, so the message does not
 promise that the charge is still there; past its window it no longer counts.
 The 503 for a charge that has already left the ledger carries no retention

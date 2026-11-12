@@ -185,8 +185,9 @@ func (s *Server) refuseSummonQueue(b *summonBinding, c *caller, e *summonLedgerE
 
 // summonQueueRefusal is the 429 for a full queue. It names the queue: "summon
 // queue full" for limits.queued, "summon urgent queue full" for
-// limits.queuedUrgent and its pool. charged is a refusal after this
-// dispatch's charge was written, which keeps it.
+// limits.queuedUrgent and its pool. charged is a refusal of a charge already
+// in the ledger, which keeps it, so it carries the retention sentence; the
+// refusal of a new charge spends nothing and does not.
 func summonQueueRefusal(c *caller, b summonBinding, charged bool) error {
 	var err *apiError
 	if b.queue.urgent {
