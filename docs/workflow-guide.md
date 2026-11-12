@@ -1771,8 +1771,8 @@ the CLI at first launch is a later story.
 
 ### Repeating a create, the hourly limit and the pool
 
-These rules are DESIGN-064 5.9, with its correction of 2026-11-12, and 6.4
-(story 758). They apply to summoning callers only. Ordinary and
+These rules are DESIGN-064 5.9, with its correction of 2026-11-12 and that
+correction's amendment of the same day, and 6.4 (story 758). They apply to summoning callers only. Ordinary and
 budget-bound replay rules are unchanged, and Meatball's are too.
 
 **A repeated key.** `idempotencyKey` is per caller: the API looks among this
@@ -1781,10 +1781,12 @@ summoned session carries its generation, an annotation
 (`dev-env.haynesops.com/summon-generation`) holding an integer: 1 for a key's
 first session, else the newest earlier session's generation plus one. The
 newest is the session with the highest generation; creation times and names
-do not order. A session without the annotation counts as 0. A tie, which only
-sessions without the annotation or a hand edit can make, goes to the greater
-UID. A generation that is not a non-negative integer is 503: nothing is
-charged or created.
+do not order. A session without the annotation counts as 0. A tie, which
+sessions without the annotation, a hand edit or the stale-destination window
+below can make, goes to the greater UID. A generation that is not a
+non-negative integer is 503: nothing is charged or created. The supported
+range is 0 to 9223372036854775806, the largest 64-bit integer less one; the
+largest value is refused the same way, since the next would not fit.
 
 - If that session is unfinished and has no terminal outcome (`done`,
   `failed` or `escalated`), the create returns it with 200. Nothing is
@@ -1824,60 +1826,112 @@ lacks a required member or has a member of the wrong type is 503: nothing is
 written, nothing is created, and the value is left as it is.
 
 The order of one create is fixed. The 422s, 403s and 409s of the request
-and its names come first and spend nothing. Then the API chooses the
-dispatch id: for a keyed create, a hash of the caller's account, the key and
-the UID of the key's newest earlier session (or none); for a keyless create,
-a random id. Then the pool. Then a ledger write that names the id, before
-any create: a new charge; or, for an id already charged with the same
-request, an attempt mark on its charge while the charge still counts; or a
-re-charge, counted again, of one past its window whose session does not
-exist. Nothing is created on a charge that was only read. Then the session,
-carrying the id, under the charge's name. A retry of a create that failed
-after its charge maps to the same id, creates the same name and is not
-charged twice. If the create meets a name that another request took a
-moment before, the API reads that session: the same id is this request's
-session (200, or 409 if it is another caller's or another request's);
-another id moves the charge to the next free suffix by one more ledger
-write, then creates that.
+and its names come first. Then the API chooses the dispatch id: for a keyed
+create, a hash of the caller's account, the key and the UID of the key's
+newest earlier session (or none); for a keyless create, a random id. Then
+the pool. Then the first ledger write, which decides the binding: a new
+charge; or, for an id already charged with the same request, an attempt mark
+on its charge while the charge still counts; or a re-charge, counted again,
+of one past its window whose session does not exist. Nothing is created on a
+charge that was only read.
 
-The session create is issued within 2 minutes of the ledger write that names
-its id, measured on the replica's own monotonic clock. Past that the request
-answers 503 and creates nothing; the charge stays, and a keyed retry reuses
-it.
+Then each create attempt, and there may be more than one. First its mark: a
+compare-and-set ledger write that succeeds only if the ledger still binds the
+id to the name about to be created, and applies the same window rule (an
+attempt mark inside the charge's window, or a re-charge outside it, subject
+to the hour). If another replica moved the binding, the mark writes nothing
+and the dispatch follows the binding it returns; a session of this id under
+that name is this request's (200). Then the session, carrying the id, under
+that name. A retry of a create that failed after its charge maps to the same
+id, creates the same name and is not charged twice. If the create meets a
+name that another request took a moment before, the API reads that session:
+the same id is this request's session (200, or 409 if it is another caller's
+or another request's); another id moves the charge to the next free suffix by
+one more ledger write, under the same window rule, and the next attempt's
+mark follows. A NotFound right after AlreadyExists retries the name once,
+after its own mark.
 
-**Two refusals spend the hour's slot.** A create refused after its charge is
-a charged failure, and its message says the hour's slot was spent: when no
-free name is left by the time of the create (409), and when the Kubernetes
-API server refuses the object (for example 422 from an installed schema that
-does not accept it). These are the exceptions to "a refused request spends
-nothing". Nothing is refunded, since another replica may be creating under
-the same charge.
+**The deadline.** Each mark sets one absolute deadline: the mark's reading of
+the replica's own monotonic clock, plus 2 minutes. The create, and the read
+after its AlreadyExists, run under one context that ends at that deadline;
+nothing computes a fresh timeout later. A call the client still holds when
+it ends (in its rate limiter, on a slow connection, or in a paused process)
+is refused by the client: 503, and the charge stays. A request the API
+server has already received is outside what the client can stop; see the
+limits below.
 
-**`createsPerHour`.** A charge counts for 65 minutes from its `at`: 60
-minutes and 5 for replica clocks that differ. "Now", for one caller's entry,
-is the later of the replica's clock and the entry's `clock`, and every write
-stores it back, so a replica whose clock is behind writes the later time and
-a clock that jumps back does not move the entry back. The stated
-assumption: replica clocks agree within 5 minutes; inside it, never more
-than `createsPerHour` creates in any 60 minutes. A clock further ahead than
-that expires charges early by the excess, and once the entry holds that
-later time, charges count from it until the other clocks catch up. A create
-whose caller already has `createsPerHour` charges in the window gets 429,
-and nothing is charged or created. Of two API replicas racing for the last
-slot, the ledger's write decides: one update wins, and the other reads the
-ledger again, finds the window full, and answers 429.
+**What spends a charge.** A refusal before the first ledger write has
+charged anything spends nothing: the 422s, 403s and 409s of the request and
+its names, a 429 from the pool, and a 429 from `createsPerHour` when the
+first write finds the window full (for an urgent create that write only adds
+to the count of urgent refusals). A failure after a write that charged or
+marked the dispatch keeps the charge, whatever its status, and its message
+says so: 409 when no free name is left by the time
+of the create; 422 when the Kubernetes API server refuses the object (for
+example from an installed schema that does not accept it); 503 when the
+deadline ends, the ledger cannot be written or the charge left it; and 429
+when a mark or a rebind finds the charge past its window and the hour full
+(the charge stays, and no longer counts). Nothing is refunded, since another
+replica may be creating under the same charge.
+
+**`createsPerHour`.** The limit is on charges, not creates: at most
+`createsPerHour` charges in any window of 65 minutes by the entry's clock (60
+minutes and 5 for replica clocks that differ). A create may follow its
+charge at any time inside that charge's window, because a retry reuses it,
+so two creates can be closer together than their charges. For example, with
+`createsPerHour: 1`: a charge at minute 0 whose create fails, its retry
+creating the session at minute 64, and another key charged and created at
+minute 65 make two creates one minute apart.
+
+"Now", for one caller's entry, is the later of the replica's clock and the
+entry's `clock`, and every write stores it back, so a replica whose clock is
+behind writes the later time and a clock that jumps back does not move the
+entry back. The stated assumption, whole: replica clocks agree within 5
+minutes, and none steps forward against real time by more than that. A
+larger forward step, even one every replica takes together, expires charges
+early by the excess and can make an attempt mark look old; once the entry
+holds that later time, charges count from it until the other clocks catch
+up. Nothing here is a time authority. A create whose caller already has
+`createsPerHour` charges in the window gets 429, and nothing is charged or
+created. Of two API replicas racing for the last slot, the ledger's write
+decides: one update wins, and the other reads the ledger again, finds the
+window full, and answers 429.
 
 A charge leaves the ledger at a later write: once it is 65 minutes old and
 its session exists; or, when no session carries its id, once it is 65
-minutes old and its `attempt` is at least 10 minutes old. So a charge whose
-create is in flight, with an attempt mark at most 2 minutes old, is never
-pruned under it, and no session exists whose id was not charged at its
-create. A retry after a charge left is charged again, in its new window.
+minutes old and its `attempt` is at least 10 minutes old. So a create the
+client may still send, whose mark is at most 2 minutes old, keeps its charge
+while the clock assumption holds. A retry after a charge left is charged
+again, in its new window.
 
 One exception is not built against. A summoning caller cannot delete a
 session. If an authorized deleter (Tom, an operator) deletes a summoned
 session while its charge is still in the ledger, the key's next create maps
 to the same id and reuses that charge: a new session, no new charge.
+
+**Limits of this slice, until story 741.** No check, read or timeout in the
+API closes the time between a replica's last ledger write and the moment the
+Kubernetes API server accepts its create: two objects cannot be written as
+one from here. Two windows remain, each with its schedule:
+
+1. *A create that lands after its charge was pruned.* Replica A marks
+   dispatch X and sends its create inside the deadline. The API server has
+   received it and has not persisted it when, 10 minutes after the mark by
+   the entry's clock (5 with a replica clock 5 minutes ahead), another
+   replica's write finds no session of X and prunes X. The session is then
+   persisted with no charge.
+2. *A stale destination after a rebind.* A marks X for name N and is paused
+   before its create. B, a retry of the same request, marks X for N, meets
+   an unrelated session that took N, rebinds X to N-2 and creates N-2. That
+   unrelated session is deleted, so N is free again. A resumes inside its
+   deadline and creates N. Two sessions carry X, and the ledger binds X to
+   N-2 only.
+
+Two statements are enforced at admission by the leader, in story 741, not in
+this slice: no summoned session gets a pod or a volume unless the ledger
+holds its dispatch id bound to that session's name; and so no dispatch id
+runs two sessions. Until story 741 is installed, both can be violated in the
+two windows above. The only callers before then are the low-rate task lanes.
 
 **The pool, until story 741 adds queues.** The API counts the caller's
 unfinished summoned session records, uncached: escalations against

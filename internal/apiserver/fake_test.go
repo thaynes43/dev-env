@@ -86,6 +86,9 @@ type fixture struct {
 	now    time.Time
 	tmpl   *templates.Templates
 	tmplOK bool
+	// summonLimit and summonUncharged: see summonFixture.
+	summonLimit     bool
+	summonUncharged []string
 }
 
 func newFixture(t *testing.T, objs ...client.Object) *fixture {

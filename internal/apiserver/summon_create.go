@@ -34,20 +34,27 @@ import (
 //     unless the key's dispatch already holds a charge, whose name it creates.
 //  3. The dispatch id, chosen before anything is written.
 //  4. The pool, until story 741's queues: 429 past it.
-//  5. The ledger write that names the id: a new charge (429 when the hour is
-//     full), an attempt mark or a re-charge. A charge of the id with another
-//     hash is 409, and a session of the id is returned with 200.
-//  6. The create of the charge's name, within summonCreateDeadline of that
-//     write, carrying the id and the generation. On AlreadyExists the API
-//     reads that session: the same id is this request's (200, or 409 if it is
-//     not this caller's or has another hash); any other is a name clash, and
-//     the charge is rebound to the next free suffix by one more ledger write
-//     before the next create.
+//  5. The ledger write that decides the binding: a new charge (429 when the
+//     hour is full), an attempt mark or a re-charge. A charge of the id with
+//     another hash is 409, and a session of the id is returned with 200.
+//  6. Each create attempt: first the mark, a compare-and-set ledger write
+//     that succeeds only while the charge binds the id to the name about to
+//     be created (otherwise the dispatch follows the binding it returns), then
+//     the create of that name, carrying the id and the generation, under one
+//     context done summonCreateDeadline after the mark. On AlreadyExists the
+//     API reads that session under the same context: the same id is this
+//     request's (200, or 409 if it is not this caller's or has another hash);
+//     any other is a name clash, and the charge is rebound to the next free
+//     suffix by one more ledger write. A NotFound there retries the name once,
+//     after its own mark.
 //
-// So every 422, 403 and 409 before step 5 spends nothing, and no session is
-// created unless a ledger write naming its id came first. A create refused
-// after its charge (no free name left, or the API server refusing the object)
-// is a charged failure, and its text says so.
+// So every refusal before step 5 (422, 403, 409, and 429 by the pool) spends
+// nothing, and every create attempt follows its own ledger write naming its
+// id and its name. A failure after step 5's write keeps the charge, whatever
+// its status (409, 422, 429, 503 or another), and its text says the charge
+// stays. What a client cannot close, a create the API server persists after
+// its charge was pruned and a stale destination after a rebind, is stated at
+// the top of summon_ledger.go; admission in story 741 enforces the rest.
 func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *caller, req summonWire, entry *v1alpha1.CallerPolicySummonSession, sess *v1alpha1.AgentSession, brief func(name string) string) (int, any, error) {
 	if s.Live == nil {
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "sessions cannot be read")
@@ -148,14 +155,16 @@ func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *c
 		return 0, nil, tooManyRequests("caller %s has made %d summoning creates in the last hour, its createsPerHour (DESIGN-064 5.9)",
 			c.policy.Name, c.policy.Spec.Summon.Limits.CreatesPerHour)
 	}
-	return s.createSummonCharged(ctx, w, c, req, sess, b, brief, candidates)
+	return s.createSummonCharged(ctx, w, c, req, sess, b, brief, candidates, urgent, c.policy.Spec.Summon.Limits.CreatesPerHour)
 }
 
-// createSummonCharged creates the name a ledger write bound the dispatch to:
-// within summonCreateDeadline of that write, and once more if a NotFound
-// follows its AlreadyExists. A clash with another dispatch's session rebinds
-// the charge by one more ledger write, and the next create is of its name.
-func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter, c *caller, req summonWire, sess *v1alpha1.AgentSession, b summonBinding, brief func(string) string, candidates []string) (int, any, error) {
+// createSummonCharged creates the name the ledger binds the dispatch to. Each
+// attempt is preceded by its own mark (markSummonAttempt), and runs under one
+// context, done at the mark's absolute deadline: the create, and the read
+// after its AlreadyExists. A mark that finds the binding moved follows it. A
+// clash with another dispatch's session rebinds the charge by one more ledger
+// write; a NotFound after AlreadyExists retries the name once.
+func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter, c *caller, req summonWire, sess *v1alpha1.AgentSession, b summonBinding, brief func(string) string, candidates []string, urgent bool, perHour int32) (int, any, error) {
 	id := sess.Spec.Summon.DispatchID
 	hash := sess.Annotations[v1alpha1.AnnotationRequestHash]
 	retried := false
@@ -172,57 +181,98 @@ func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter,
 		case summonChargeGone:
 			return 0, nil, summonChargedFailure(newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
 				"the charge for this dispatch left the ledger during its create; no session was created"))
+		case summonHourFull:
+			// The charge stays in the ledger, past its window: it no longer
+			// counts, and it is not charged again.
+			return 0, nil, tooManyRequests(
+				"caller %s has made %d summoning creates in the last hour, its createsPerHour; this dispatch's charge is past its window and was not charged again, and it stays in the ledger; no session was created (DESIGN-064 5.9)",
+				c.policy.Name, perHour)
 		}
-		remaining := summonCreateDeadline - s.summonMonotonic().Sub(b.written)
-		if remaining <= 0 {
+		m, err := s.markSummonAttempt(ctx, c, id, hash, b.name, urgent, perHour)
+		if err != nil {
+			return 0, nil, summonChargedFailure(err)
+		}
+		if m.result != summonMarked && m.result != summonRecharged {
+			if m.result == summonMoved {
+				retried = false
+			}
+			b = m
+			continue
+		}
+		sess.Name = m.name
+		sess.ResourceVersion = ""
+		sess.Spec.Prompt = brief(m.name)
+		// One context, done at the mark's absolute deadline, for the create
+		// and the read after its AlreadyExists: a call still held in the
+		// client (its rate limiter, a slow connection, this process paused)
+		// is refused by the client once it is done. A request the API server
+		// has already received is out of the client's reach: the first
+		// stated limit.
+		callCtx, cancel := s.summonClock().WithDeadline(ctx, m.deadline)
+		if callCtx.Err() != nil {
+			cancel()
 			return 0, nil, summonChargedFailure(newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
 				"the session create could not be issued within %s of the ledger write naming its dispatch id; no session was created", summonCreateDeadline))
 		}
-		sess.Name = b.name
-		sess.ResourceVersion = ""
-		sess.Spec.Prompt = brief(b.name)
-		// The create, and the read after its AlreadyExists, run under what is
-		// left of the deadline, so a call held in the client's rate limiter or
-		// on a slow connection cannot reach the API server after the charge's
-		// attempt hold (the API server bounds its own handling of a request).
-		callCtx, cancel := context.WithTimeout(ctx, remaining)
-		err := s.Client.Create(callCtx, sess, client.FieldValidation(metav1.FieldValidationStrict))
+		err = s.Client.Create(callCtx, sess, client.FieldValidation(metav1.FieldValidationStrict))
 		if err == nil {
 			cancel()
+			charge := b.result
+			if m.result == summonRecharged {
+				charge = m.result
+			}
 			s.Log.Info("session created", "session", sess.Name, "caller", c.String(), "repo", sess.Spec.Repo,
 				"agent", sess.Spec.Agent, "mode", sess.Spec.Mode, "model", sess.Spec.Model, "lane", sess.Spec.Lane,
-				"dispatchID", id, "generation", sess.Annotations[v1alpha1.AnnotationSummonGeneration], "charge", summonChargeLog(b.result))
+				"dispatchID", id, "generation", sess.Annotations[v1alpha1.AnnotationSummonGeneration], "charge", summonChargeLog(charge))
 			w.Header().Set("Location", apiv1.SessionPath(sess.Name))
 			return http.StatusCreated, view(sess, false), nil
 		}
 		if !apierrors.IsAlreadyExists(err) {
+			late := callCtx.Err() != nil
 			cancel()
+			if late {
+				return 0, nil, summonDeadlinePassed()
+			}
 			// The charge stays: a spent slot of its hour. A keyed retry maps
 			// to the same id and is not charged again.
 			return 0, nil, summonChargedFailure(fromKubeError(err, "create session"))
 		}
 		var held v1alpha1.AgentSession
-		err = s.Live.Get(callCtx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: b.name}, &held)
+		err = s.Live.Get(callCtx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: m.name}, &held)
+		late := callCtx.Err() != nil
 		cancel()
 		if err != nil {
+			if late {
+				return 0, nil, summonDeadlinePassed()
+			}
 			if !apierrors.IsNotFound(err) {
-				return 0, nil, summonChargedFailure(fromKubeError(err, "session "+b.name))
+				return 0, nil, summonChargedFailure(fromKubeError(err, "session "+m.name))
 			}
 			if retried {
 				return 0, nil, summonChargedFailure(newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
-					"session %s was reported as existing and then not found, twice; no session was created", b.name))
+					"session %s was reported as existing and then not found, twice; no session was created", m.name))
 			}
 			retried = true
+			b = m
 			continue
 		}
 		if held.Spec.Summon != nil && held.Spec.Summon.DispatchID == id {
 			return s.summonExisting(w, c, req.IdempotencyKey, hash, &held)
 		}
-		if b, err = s.rebindSummonCharge(ctx, c, id, hash, b.name, candidates); err != nil {
+		if b, err = s.rebindSummonCharge(ctx, c, id, hash, m.name, candidates, urgent, perHour); err != nil {
 			return 0, nil, summonChargedFailure(err)
 		}
 		retried = false
 	}
+}
+
+// summonDeadlinePassed is the refusal when the create's context was done
+// before the create returned. The client sent nothing it knows of after the
+// deadline, but a request the API server had already received may still be
+// persisted: a keyed retry maps to the same id and returns that session.
+func summonDeadlinePassed() error {
+	return summonChargedFailure(newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
+		"the session create did not complete within %s of the ledger write naming its dispatch id; if the Kubernetes API server had already received it, the session may still be created, and a retry with the same idempotency key returns it", summonCreateDeadline))
 }
 
 // summonExisting answers for the session that already carries this
@@ -237,10 +287,10 @@ func (s *Server) summonExisting(w http.ResponseWriter, c *caller, key, hash stri
 	return http.StatusOK, view(held, false), nil
 }
 
-// summonChargedFailure marks a refusal made after the dispatch's charge was
-// written: the hour's slot is spent, and no refund is made, since another
-// replica may be using the same dispatch (DESIGN-064 5.9, the correction's
-// charged failures).
+// summonChargedFailure marks a refusal made after the dispatch's ledger
+// write, whatever its status: the charge stays, and no refund is made, since
+// another replica may be using the same dispatch (DESIGN-064 5.9, the
+// correction's charged failures and its amendment).
 func summonChargedFailure(err error) error {
 	var ae *apiError
 	if !errors.As(err, &ae) {
@@ -290,12 +340,12 @@ func summonKeySessions(c *caller, key string, items []v1alpha1.AgentSession) []*
 // newestSummonSession is the newest of one key's sessions: the highest
 // generation (v1alpha1.AnnotationSummonGeneration; none counts as 0), and
 // its generation. Creation times and names do not order. A tie on the
-// highest cannot come from this code, which binds one dispatch id to one
-// name; it comes only from sessions without the annotation or a hand edit,
-// and goes to the greater UID, so every replica picks the same session and
-// so the same dispatch id (coordinator, answer to op758-fix1-q-1). A
-// generation that is not a non-negative integer is 503: nothing is charged
-// or created.
+// highest comes from sessions without the annotation, a hand edit, or the
+// stale-destination limit (two sessions of one dispatch, so of one
+// generation; see summon_ledger.go), and goes to the greater UID, so every
+// replica picks the same session and so the same dispatch id (coordinator,
+// answer to op758-fix1-q-1). A generation that is not a non-negative integer
+// is 503: nothing is charged or created.
 func newestSummonSession(own []*v1alpha1.AgentSession) (*v1alpha1.AgentSession, int64, error) {
 	var best *v1alpha1.AgentSession
 	var bestGen int64
@@ -311,7 +361,10 @@ func newestSummonSession(own []*v1alpha1.AgentSession) (*v1alpha1.AgentSession, 
 	return best, bestGen, nil
 }
 
-// summonGeneration reads a session's generation: absent is 0.
+// summonGeneration reads a session's generation: absent is 0. The supported
+// range is 0 to math.MaxInt64-1; the maximum is refused like an unreadable
+// value, since the next generation would not fit, and so is any value with a
+// sign or another character.
 func summonGeneration(s *v1alpha1.AgentSession) (int64, error) {
 	v, ok := s.Annotations[v1alpha1.AnnotationSummonGeneration]
 	if !ok {
@@ -427,6 +480,8 @@ func summonChargeLog(r summonChargeResult) string {
 		return "charged again"
 	case summonRebound:
 		return "rebound"
+	case summonMoved:
+		return "rebound by another replica"
 	}
 	return "charged"
 }

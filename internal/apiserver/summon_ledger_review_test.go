@@ -146,8 +146,10 @@ func TestSummonLedgerPruneKeepsAnInflightCharge(t *testing.T) {
 }
 
 // Ruling 1, the deadline: the session create is issued within two minutes of
-// the ledger write that names its id, by the replica's monotonic clock, or
-// the request answers 503, creates nothing and leaves the charge.
+// the ledger write before it, its mark, by the replica's monotonic clock, or
+// the request answers 503, creates nothing and leaves the charge. Since fix
+// round 2 the deadline is a context, done at the mark's monotonic reading
+// plus 2 minutes (second review's rulings, 1).
 func TestSummonCreateDeadline(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -159,13 +161,13 @@ func TestSummonCreateDeadline(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := summonFixture(t)
-			mono := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
-			f.srv.SummonMonotonic = func() time.Time { return mono }
+			clock := newFakeSummonClock()
+			f.srv.SummonClock = clock
 			advance := tc.after
 			f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
 				err := c.Update(ctx, obj, opts...)
 				if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == ledgerTestName && err == nil {
-					mono = mono.Add(advance)
+					clock.Advance(advance)
 				}
 				return err
 			}})
@@ -200,29 +202,33 @@ func TestSummonCreateDeadline(t *testing.T) {
 	}
 }
 
-// The advisory review of 96fc3ec9: the create, and the read after its
-// AlreadyExists, run under what is left of the deadline, so neither can reach
-// the API server after the charge's attempt hold. Each ledger write here is
-// followed by 90 seconds on the monotonic clock, so 30 are left; a clash makes
-// the create, the read and, after the rebind write, the second create.
+// The second review's rulings, 1 (replacing fix round 1's "what is left of
+// the deadline"): the create, and the read after its AlreadyExists, run under
+// one context whose deadline is absolute, the monotonic reading of the mark
+// before that create plus 2 minutes, not a timeout started later. Each
+// ledger write here is followed by 90 seconds on the fake monotonic clock; a
+// clash makes the create, the read and, after the rebind and its own mark,
+// the second create.
 func TestSummonCreateRunsUnderTheDeadline(t *testing.T) {
 	f := summonFixture(t)
-	mono := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
-	f.srv.SummonMonotonic = func() time.Time { return mono }
-	var deadlines []string
-	bounded := func(what string, ctx context.Context) {
+	clock := newFakeSummonClock()
+	t0 := clock.Now()
+	f.srv.SummonClock = clock
+	var calls []string
+	record := func(what string, ctx context.Context) {
 		dl, ok := ctx.Deadline()
-		if !ok || time.Until(dl) > 30*time.Second {
-			t.Errorf("%s ran without the deadline's remaining 30s: %v %v", what, ok, time.Until(dl))
+		if !ok {
+			calls = append(calls, what+" without a deadline")
+			return
 		}
-		deadlines = append(deadlines, what)
+		calls = append(calls, what+" until "+dl.Sub(t0).String())
 	}
 	taken := false
 	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{
 		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
 			err := c.Update(ctx, obj, opts...)
 			if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == ledgerTestName && err == nil {
-				mono = mono.Add(90 * time.Second)
+				clock.Advance(90 * time.Second)
 			}
 			return err
 		},
@@ -231,14 +237,10 @@ func TestSummonCreateRunsUnderTheDeadline(t *testing.T) {
 			if !ok {
 				return c.Create(ctx, obj, opts...)
 			}
-			bounded("create "+s.Name, ctx)
+			record("create "+s.Name, ctx)
 			if s.Name == "rem-responder-1" && !taken {
 				taken = true
-				other := &v1alpha1.AgentSession{
-					ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: s.Name},
-					Spec:       v1alpha1.AgentSessionSpec{Repo: "haynes-ops", Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Prompt: "p", Parent: humanSA},
-				}
-				if err := c.Create(context.Background(), other); err != nil {
+				if err := c.Create(context.Background(), otherSession(s.Name)); err != nil {
 					return err
 				}
 			}
@@ -247,7 +249,7 @@ func TestSummonCreateRunsUnderTheDeadline(t *testing.T) {
 	})
 	f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 		if _, ok := obj.(*v1alpha1.AgentSession); ok {
-			bounded("read "+key.Name, ctx)
+			record("read "+key.Name, ctx)
 		}
 		return c.Get(ctx, key, obj, opts...)
 	}})
@@ -256,8 +258,12 @@ func TestSummonCreateRunsUnderTheDeadline(t *testing.T) {
 	if got := decode[apiv1.Session](t, w).Name; got != "rem-responder-1-2" {
 		t.Fatalf("name %s", got)
 	}
-	if want := "create rem-responder-1,read rem-responder-1,create rem-responder-1-2"; strings.Join(deadlines, ",") != want {
-		t.Fatalf("bounded calls %v, want %s", deadlines, want)
+	// The charge's write reads 0 and moves the clock to 1m30s; the mark reads
+	// 1m30s, so its deadline is 3m30s. The rebind reads 3m0s; its mark reads
+	// 4m30s, so the second create's deadline is 6m30s.
+	want := "create rem-responder-1 until 3m30s,read rem-responder-1 until 3m30s,create rem-responder-1-2 until 6m30s"
+	if got := strings.Join(calls, ","); got != want {
+		t.Fatalf("calls %s, want %s", got, want)
 	}
 }
 
@@ -538,7 +544,10 @@ func TestSummonGenerationTieAndUnreadable(t *testing.T) {
 			}
 		})
 	}
-	for _, gen := range []string{"x", "-1", "1.5", ""} {
+	// The supported range is 0 to the largest int64 less one; the largest
+	// value is refused, since the next generation would not fit (second
+	// review, choice 1; rulings, 6).
+	for _, gen := range []string{"x", "-1", "1.5", "", "9223372036854775807"} {
 		t.Run("unreadable "+strconv.Quote(gen), func(t *testing.T) {
 			s := plantKeySession("rem-responder-1", "uid-a", "alert-1", gen, true, req)
 			if gen == "" {

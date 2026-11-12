@@ -41,20 +41,41 @@ import (
 // Time. For one entry, "now" is the later of the replica's clock and the
 // entry's clock, and every write stores it back as the clock. A charge counts
 // toward createsPerHour while it is younger than summonChargeWindow by that
-// clock: 60 minutes and 5 for replica clocks that differ. The assumption,
-// stated: replica clocks agree within 5 minutes; inside it, never more than
-// createsPerHour creates in any 60 minutes. A clock further ahead than that
-// expires charges early by the excess.
+// clock: 60 minutes and 5 for replica clocks that differ. The limit is on
+// charges, not creates: at most createsPerHour charges in any
+// summonChargeWindow by the entry's clock. A create may follow its charge at
+// any time inside that charge's window, since a retry reuses it, so two
+// creates can be closer together than their charges. The assumption, stated
+// whole: replica clocks agree within 5 minutes, and none steps forward
+// against real time by more than that. A larger forward step expires charges
+// early by the excess and can make an attempt mark look old. No time
+// authority is built here.
 //
-// Every session create is preceded by a ledger write naming its id: a new
-// charge, an attempt mark on a charge of the same id and hash inside its
-// window, or a re-charge of one outside its window whose session does not
-// exist. Nothing creates on a charge it only read. The create is issued
-// within summonCreateDeadline of that write, by the replica's monotonic clock,
-// or the request answers 503. A charge without a session is pruned only once
-// its attempt is summonAttemptHold old, so a charge a create is in flight on
-// is never pruned under it, and no session exists whose dispatch id was not
-// charged when it was created.
+// Every session create attempt is preceded by its own ledger write, the mark
+// (markSummonAttempt): a compare-and-set that succeeds only while the charge
+// binds the id to the name about to be created, and otherwise returns the
+// binding, which the dispatch follows. The mark, the first write
+// (bindSummonCharge) and every rebind apply one window rule: an attempt mark
+// on a charge inside its window, or a re-charge, counted again and subject to
+// the hour, of one outside it. Nothing creates on a charge it only read. The
+// create, and the read after its AlreadyExists, run under one context that is
+// done summonCreateDeadline after the mark's monotonic reading. A charge
+// without a session is pruned only once its attempt is summonAttemptHold old.
+//
+// Limits of this slice (the correction's amendment). A client-side deadline
+// does not stop a request the API server has already received, nor a process
+// frozen between its last check and the send; a mark does not stop a replica
+// paused between it and its create. So two windows remain. (1) A create that
+// lands after its charge was pruned: A marks X and sends its create inside
+// the deadline; the API server has not persisted it when another replica's
+// write, summonAttemptHold after the mark by the entry's clock, prunes X; the
+// session is then persisted with no charge. (2) A stale destination: A marks
+// X for N and is paused before its create; B marks X for N, meets another
+// session on N, rebinds X to N-2 and creates N-2; N is freed; A resumes inside
+// its deadline and creates N, so X has two sessions. That no summoned session
+// gets a pod unless the ledger holds its id bound to its name, and so that no
+// id runs two sessions, is enforced at admission by the leader in story 741,
+// not here.
 const (
 	summonLedgerSchema       = "dev-env.summon-creates.v1"
 	summonLedgerFieldManager = "dev-env-summon-creates"
@@ -66,8 +87,9 @@ const (
 	// whose session does not exist may be pruned: the 2 minute create
 	// deadline, the 5 minute clock allowance and a margin.
 	summonAttemptHold = 10 * time.Minute
-	// summonCreateDeadline is how long after the ledger write that names its
-	// id a session create may still be issued.
+	// summonCreateDeadline is how long after the monotonic reading of the mark
+	// before it a session create, and the read after its AlreadyExists, may
+	// run: one absolute deadline, carried as one context.
 	summonCreateDeadline = 2 * time.Minute
 	// summonLedgerAttempts bounds the optimistic-lock retries of one write.
 	summonLedgerAttempts = 5
@@ -371,10 +393,12 @@ func summonChargeSettled(sess *v1alpha1.AgentSession) bool {
 // pruneSummonCharges drops each charge outside its window whose session is
 // settled, and each outside its window whose session does not exist once its
 // attempt is summonAttemptHold old. byID is an uncached read of the sessions,
-// by dispatch id. A create in flight has an attempt mark at most
-// summonCreateDeadline old by its replica's clock, so its charge stays. A
-// retry after a drop maps to the same id and is charged again: a double
-// charge across two hours is acceptable, an uncharged session is not.
+// by dispatch id. A create the client may still send has a mark at most
+// summonCreateDeadline old by its replica's monotonic clock, so its charge
+// stays while the clock assumption holds. A create the API server received
+// and persists later than that is the first stated limit (see the top of this
+// file). A retry after a drop maps to the same id and is charged again: a
+// double charge across two hours is acceptable.
 func pruneSummonCharges(charges []summonCharge, now time.Time, byID map[string]*v1alpha1.AgentSession) []summonCharge {
 	kept := make([]summonCharge, 0, len(charges))
 	for _, ch := range charges {
@@ -392,7 +416,8 @@ func pruneSummonCharges(charges []summonCharge, now time.Time, byID map[string]*
 }
 
 // summonLedgerUnavailable is the refusal when the ledger cannot be read or
-// written. A summoning create is never admitted without its charge.
+// written. A summoning create then makes no create at all: every create
+// attempt follows a ledger write naming its id and name.
 func summonLedgerUnavailable(why string) error {
 	return newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
 		"the summon create ledger %s/%s %s; no session was created (DESIGN-064 5.9)", summonLedgerNamespace, summonLedgerName, why)
@@ -429,12 +454,30 @@ func (s *Server) readSummonSessions(ctx context.Context) (summonSessions, error)
 	return out, nil
 }
 
-// summonMonotonic reads the clock the create deadline is measured on.
-func (s *Server) summonMonotonic() time.Time {
-	if s.SummonMonotonic != nil {
-		return s.SummonMonotonic()
+// SummonClock is the clock of a summoning create's deadline.
+type SummonClock interface {
+	// Now is a reading of a monotonic clock.
+	Now() time.Time
+	// WithDeadline is parent, done at deadline by this clock.
+	WithDeadline(parent context.Context, deadline time.Time) (context.Context, context.CancelFunc)
+}
+
+// processClock is the process's own: time.Now keeps its monotonic reading
+// through Add, and context.WithDeadline measures against it.
+type processClock struct{}
+
+func (processClock) Now() time.Time { return time.Now() }
+
+func (processClock) WithDeadline(parent context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	return context.WithDeadline(parent, deadline)
+}
+
+// summonClock is the clock the create deadline is measured on.
+func (s *Server) summonClock() SummonClock {
+	if s.SummonClock != nil {
+		return s.SummonClock
 	}
-	return time.Now()
+	return processClock{}
 }
 
 // readSummonLedger reads the caller's entry uncached, with the ConfigMap it
@@ -470,8 +513,8 @@ func (s *Server) readSummonLedger(ctx context.Context, c *caller) (summonLedgerE
 // ledger with the winner's charge. decide returns whether to write. Every
 // write stores the entry's now as its clock and drops the charges the ageing
 // rule lets go; nothing else ages the ledger. It returns the monotonic
-// reading taken when the written decision was made, the start of the create
-// deadline, or the zero time when nothing was written.
+// reading taken before the written decision was made, or the zero time when
+// nothing was written. A mark's reading starts its create's deadline.
 func (s *Server) updateSummonLedger(ctx context.Context, c *caller, decide func(e *summonLedgerEntry, now time.Time, live summonSessions) bool) (time.Time, error) {
 	key := summonLedgerKey(c)
 	for attempt := 0; attempt < summonLedgerAttempts; attempt++ {
@@ -483,7 +526,7 @@ func (s *Server) updateSummonLedger(ctx context.Context, c *caller, decide func(
 		if err != nil {
 			return time.Time{}, fromKubeError(err, "list sessions")
 		}
-		mono := s.summonMonotonic()
+		mono := s.summonClock().Now()
 		now := entry.now(s.now())
 		if !decide(&entry, now, live) {
 			return time.Time{}, nil
@@ -525,11 +568,16 @@ const (
 	// summonRecharged: the id's charge was outside its window and its session
 	// does not exist: it was counted again, at now.
 	summonRecharged
-	// summonRebound: a name clash moved the charge to the next free suffix.
+	// summonRebound: a name clash moved the charge to the next free suffix,
+	// or found another replica had moved it; the window rule applied.
 	summonRebound
-	// summonHourFull: createsPerHour charges are inside the window. Nothing
-	// was charged; an urgent create was counted as a refusal.
+	// summonHourFull: createsPerHour charges are inside the window, and the
+	// id has no charge inside its own. Nothing was charged; an urgent create
+	// was counted as a refusal.
 	summonHourFull
+	// summonMoved: a mark found the id's charge bound to another name, the
+	// one returned. Nothing written; the dispatch follows it.
+	summonMoved
 	// summonOtherRequest: the id's charge has another hash. Nothing written.
 	summonOtherRequest
 	// summonSessionExists: the id's session exists. Nothing written.
@@ -544,26 +592,46 @@ const (
 )
 
 // summonBinding is a ledger decision for one dispatch: the result, the name
-// to create, the monotonic reading of the write that named the id, and the
-// session when it already exists.
+// the ledger binds, for a mark the absolute deadline of the create it
+// precedes, and the session when it already exists.
 type summonBinding struct {
 	result   summonChargeResult
 	name     string
-	written  time.Time
+	deadline time.Time
 	existing *v1alpha1.AgentSession
 }
 
-// bindSummonCharge is the ledger write before a dispatch's first create. A
-// session with the id: nothing written. A charge with the id and another
-// hash: nothing written (409). The same hash inside the window: an attempt
-// mark, and the charge's name is created. Outside the window, with no
-// session: a re-charge, counted again, subject to the hour. No charge: a new
-// one for name, subject to the hour, unless nameErr refuses it. An urgent
-// create refused by the hour adds one to the caller's urgent refusals in the
-// same write.
+// chargeAttempt is the window rule for one more attempt on the charge at i
+// (DESIGN-064 5.9, the correction's amendment, ruling 3): inside its window
+// an attempt mark; outside it a re-charge, at and attempt now, counted again,
+// if the hour has room; else summonHourFull, and an urgent create's refusal is
+// counted in the same write. It returns the result and whether to write.
+func chargeAttempt(e *summonLedgerEntry, i int, now time.Time, urgent bool, perHour int32) (summonChargeResult, bool) {
+	ch := &e.Charges[i]
+	if summonChargeCounts(*ch, now) {
+		ch.Attempt = now
+		return summonMarked, true
+	}
+	if e.inWindow(now) >= int(perHour) {
+		if urgent {
+			e.countUrgentRefusal(now)
+		}
+		return summonHourFull, urgent
+	}
+	ch.At, ch.Attempt = now, now
+	return summonRecharged, true
+}
+
+// bindSummonCharge is a dispatch's first ledger write, which decides its
+// binding; the mark before its first create follows it. A session with the
+// id: nothing written. A charge with the id and another hash: nothing written
+// (409). The same hash: the window rule (chargeAttempt), and the charge's
+// name is the binding. No charge: a new one for name, subject to the hour,
+// unless nameErr refuses it. An urgent create refused by the hour adds one
+// to the caller's urgent refusals in the same write.
 func (s *Server) bindSummonCharge(ctx context.Context, c *caller, id, hash, name string, nameErr error, urgent bool, perHour int32) (summonBinding, error) {
 	var b summonBinding
-	written, err := s.updateSummonLedger(ctx, c, func(e *summonLedgerEntry, now time.Time, live summonSessions) bool {
+	_, err := s.updateSummonLedger(ctx, c, func(e *summonLedgerEntry, now time.Time, live summonSessions) bool {
 		b = summonBinding{}
 		if sess, ok := live.byID[id]; ok {
 			b.result, b.existing = summonSessionExists, sess
@@ -578,22 +646,14 @@ func (s *Server) bindSummonCharge(ctx context.Context, c *caller, id, hash, name
 			return true
 		}
 		if i := e.charge(id); i >= 0 {
-			ch := &e.Charges[i]
-			if ch.Hash != hash {
+			if e.Charges[i].Hash != hash {
 				b.result = summonOtherRequest
 				return false
 			}
-			if summonChargeCounts(*ch, now) {
-				ch.Attempt = now
-				b.result, b.name = summonMarked, ch.Name
-				return true
-			}
-			if e.inWindow(now) >= int(perHour) {
-				return hourFull()
-			}
-			ch.At, ch.Attempt = now, now
-			b.result, b.name = summonRecharged, ch.Name
-			return true
+			var write bool
+			b.result, write = chargeAttempt(e, i, now, urgent, perHour)
+			b.name = e.Charges[i].Name
+			return write
 		}
 		if nameErr != nil {
 			b.result = summonNameRefused
@@ -606,19 +666,18 @@ func (s *Server) bindSummonCharge(ctx context.Context, c *caller, id, hash, name
 		b.result, b.name = summonChargedNow, name
 		return true
 	})
-	if b.result == summonChargedNow || b.result == summonMarked || b.result == summonRecharged {
-		b.written = written
-	}
 	return b, err
 }
 
 // rebindSummonCharge is the ledger write after a name clash on from: the
 // charge moves to the first name after from in candidates that no session
-// holds, with an attempt mark. If another replica already moved it, the
-// charge's name is kept and marked. The charge stays counted where it was.
-func (s *Server) rebindSummonCharge(ctx context.Context, c *caller, id, hash, from string, candidates []string) (summonBinding, error) {
+// holds. If another replica already moved it, the charge's name is kept.
+// Either way the window rule applies (chargeAttempt): inside its window an
+// attempt mark; outside it a re-charge, counted again, or summonHourFull and
+// no move. The mark before the next create follows it.
+func (s *Server) rebindSummonCharge(ctx context.Context, c *caller, id, hash, from string, candidates []string, urgent bool, perHour int32) (summonBinding, error) {
 	var b summonBinding
-	written, err := s.updateSummonLedger(ctx, c, func(e *summonLedgerEntry, now time.Time, live summonSessions) bool {
+	_, err := s.updateSummonLedger(ctx, c, func(e *summonLedgerEntry, now time.Time, live summonSessions) bool {
 		b = summonBinding{}
 		if sess, ok := live.byID[id]; ok {
 			b.result, b.existing = summonSessionExists, sess
@@ -634,34 +693,76 @@ func (s *Server) rebindSummonCharge(ctx context.Context, c *caller, id, hash, fr
 			b.result = summonOtherRequest
 			return false
 		}
-		if ch.Name != from {
-			ch.Attempt = now
-			b.result, b.name = summonRebound, ch.Name
-			return true
-		}
-		next := ""
-		for j, cand := range candidates {
-			if cand != from {
-				continue
-			}
-			for _, later := range candidates[j+1:] {
-				if !live.names[later] {
-					next = later
-					break
+		next := ch.Name
+		if ch.Name == from {
+			next = ""
+			for j, cand := range candidates {
+				if cand != from {
+					continue
 				}
+				for _, later := range candidates[j+1:] {
+					if !live.names[later] {
+						next = later
+						break
+					}
+				}
+				break
 			}
-			break
+			if next == "" {
+				b.result = summonNoFreeName
+				return false
+			}
 		}
-		if next == "" {
-			b.result = summonNoFreeName
-			return false
+		r, write := chargeAttempt(e, i, now, urgent, perHour)
+		if r == summonHourFull {
+			b.result = summonHourFull
+			return write
 		}
-		ch.Name, ch.Attempt = next, now
+		ch.Name = next
 		b.result, b.name = summonRebound, next
 		return true
 	})
-	if b.result == summonRebound {
-		b.written = written
+	return b, err
+}
+
+// markSummonAttempt is the ledger write before each create attempt (the
+// correction's amendment, ruling 2): a compare-and-set on the binding. It
+// succeeds only if the ledger still binds id, with hash, to name: then the
+// window rule (chargeAttempt) marks or re-charges the charge, or refuses with
+// summonHourFull, and a mark or re-charge returns the create's absolute
+// deadline, this write's monotonic reading plus summonCreateDeadline.
+// Otherwise it writes nothing and returns what the ledger holds: the
+// session of the id (summonSessionExists), the name the charge is bound to
+// now (summonMoved), another request's charge or none.
+func (s *Server) markSummonAttempt(ctx context.Context, c *caller, id, hash, name string, urgent bool, perHour int32) (summonBinding, error) {
+	var b summonBinding
+	mono, err := s.updateSummonLedger(ctx, c, func(e *summonLedgerEntry, now time.Time, live summonSessions) bool {
+		b = summonBinding{}
+		if sess, ok := live.byID[id]; ok {
+			b.result, b.existing = summonSessionExists, sess
+			return false
+		}
+		i := e.charge(id)
+		if i < 0 {
+			b.result = summonChargeGone
+			return false
+		}
+		ch := &e.Charges[i]
+		if ch.Hash != hash {
+			b.result = summonOtherRequest
+			return false
+		}
+		b.name = ch.Name
+		if ch.Name != name {
+			b.result = summonMoved
+			return false
+		}
+		var write bool
+		b.result, write = chargeAttempt(e, i, now, urgent, perHour)
+		return write
+	})
+	if err == nil && (b.result == summonMarked || b.result == summonRecharged) {
+		b.deadline = mono.Add(summonCreateDeadline)
 	}
 	return b, err
 }

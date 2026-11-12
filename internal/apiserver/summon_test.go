@@ -89,7 +89,11 @@ func summonTestPolicy() *v1alpha1.CallerPolicy {
 // summonFixture is a fixture with the caller's policy and the create ledger.
 // A ledger passed in replaces the empty one. Its store refuses, and fails the
 // test, any summoned session whose dispatch id is not charged in the ledger
-// at the moment of its create (story 758, proof 9).
+// at the moment of its create (story 758, proof 9), unless the test set
+// summonLimit: a test of a stated limit (DESIGN-064 5.9, correction, "Limits
+// of this slice") lets that create through and reads summonUncharged. The
+// store also stands in for client-go's transport, which sends no request
+// whose context is already done: it refuses one with the context's error.
 func summonFixture(t *testing.T, objects ...client.Object) *fixture {
 	t.Helper()
 	if len(objects) == 0 {
@@ -109,14 +113,21 @@ func summonFixture(t *testing.T, objects ...client.Object) *fixture {
 			obj.SetUID(uuid.NewUUID())
 		}
 	}
-	f := newFixtureWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+	var f *fixture
+	f = newFixtureWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if obj.GetUID() == "" {
 			obj.SetUID(uuid.NewUUID())
 		}
 		if sess, ok := obj.(*v1alpha1.AgentSession); ok {
 			if err := checkChargedAtCreate(ctx, c, sess); err != nil {
-				t.Errorf("session %s created without a committed charge: %v", sess.Name, err)
-				return err
+				if !f.summonLimit {
+					t.Errorf("session %s created without a committed charge: %v", sess.Name, err)
+					return err
+				}
+				f.summonUncharged = append(f.summonUncharged, sess.Name)
 			}
 		}
 		return c.Create(ctx, obj, opts...)
