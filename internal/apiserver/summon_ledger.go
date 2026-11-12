@@ -17,7 +17,12 @@ import (
 // The create ledger (DESIGN-064 5.9, "The create ledger", N1, and its
 // correction of 2026-11-12). One operator-owned ConfigMap,
 // summonLedgerNamespace/summonLedgerName, holds one key per summoning caller:
-// its policy's name. Each key is one JSON document, the caller's entry:
+// its policy's name. The leader also owns summonledger.GrantsKey, which no
+// CallerPolicy can be named. Every API path below reads/changes only its
+// caller's key and updates the original ConfigMap, carrying that reserved key
+// byte-for-byte. Charge, mark, rebind, prune and urgent-refusal counts never
+// iterate over the ConfigMap's keys or decode the grants as a caller entry.
+// Each caller key is one JSON document, the caller's entry:
 //
 //	schema             summonledger.Schema
 //	clock              the latest "now" any write of this entry used

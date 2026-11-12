@@ -3972,6 +3972,9 @@ spec:
         - message: original task outcome cannot be erased
           rule: '!has(oldSelf.status) || !has(oldSelf.status.taskOutcome) || (has(self.status)
             && has(self.status.taskOutcome))'
+        - message: the summon record cannot be removed, including with status
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.summon) || (has(self.status)
+            && has(self.status.summon))'
     served: true
     storage: true
     subresources:

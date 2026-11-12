@@ -650,16 +650,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		if tErr != nil {
 			break
 		}
-		// OP777: a summoned session gets a volume and a pod only once the
-		// leader admitted it, and never once it is closed (DESIGN-064 5.9).
-		build, err := r.summonGate(ctx, &s)
-		if err != nil {
+		if err := r.ensure(ctx, &s, t, &obs); err != nil {
 			return ctrl.Result{}, err
-		}
-		if build {
-			if err := r.ensure(ctx, &s, t, &obs); err != nil {
-				return ctrl.Result{}, err
-			}
 		}
 		// An idle outdated session drains (DESIGN-001 5.2) instead of parking
 		// on the suspend timer. The timer still runs when drain does not apply.
@@ -1329,6 +1321,11 @@ func releaseSession(ctx context.Context, c client.Client, s *v1alpha1.AgentSessi
 func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates, obs *observation) error {
 	if !obs.pod.missing {
 		return nil
+	}
+	// Every resource-building caller, including a stored shared-workspace
+	// lifecycle, must pass the summoned-session gate (OP777, G1).
+	if build, err := r.summonGate(ctx, s); err != nil || !build {
+		return err
 	}
 	b, guardErr := r.originalHome(ctx, s)
 	if guardErr != nil {

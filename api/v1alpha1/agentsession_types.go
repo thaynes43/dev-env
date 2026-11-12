@@ -2070,6 +2070,7 @@ type RescuedRef struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.capturedUsage) || (has(self.status) && has(self.status.capturedUsage))",message="captured usage ledger cannot be erased with status"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.usageObservation) || (has(self.status) && has(self.status.usageObservation))",message="original usage observation cannot be erased"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.taskOutcome) || (has(self.status) && has(self.status.taskOutcome))",message="original task outcome cannot be erased"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.summon) || (has(self.status) && has(self.status.summon))",message="the summon record cannot be removed, including with status"
 type AgentSession struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

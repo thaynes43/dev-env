@@ -314,8 +314,11 @@ var guardedCalls = []struct {
 // variable that names them, an assignment to .ObjectMeta, and a Patch of, or an
 // assignment through *x of, an object built in the function from a composite
 // literal) may appear only in the releaseWriters, whose one caller and guard
-// guardedCalls pins; and no whole-object Update may appear at all, because it
-// can drop both lists. A new delete or release path cannot slip in without
+// guardedCalls pins. Whole-object Updates are forbidden except the one typed
+// ConfigMap write in writeSummonGrants (OP777, coordinator op777-fix1-q-2).
+// That ledger CAS preserves metadata and other keys; its argument and single
+// call site are pinned below, with metadata preservation proved separately.
+// Every Pod, PVC and Session Update ban remains. A new release path cannot slip in without
 // changing this test, which is where review looks (5.1). The scan reads syntax,
 // not types: it catches the ways TestGuardScanCatchesReleaseWrites lists, not
 // every conceivable one, and that test names the known gaps.
@@ -323,6 +326,9 @@ func TestOnlyTheGuardDeletes(t *testing.T) {
 	scan := scanGuards(t, ".")
 	for _, v := range scan.violations {
 		t.Error(v)
+	}
+	if n := scan.seen["ledger ConfigMap Update"]; n != 1 {
+		t.Errorf("ledger ConfigMap Update: seen %d call sites, want exactly one", n)
 	}
 	// The test must see every call it guards, once, and every release writer
 	// write, or it proves nothing.
@@ -392,6 +398,37 @@ func TestGuardScanCatchesReleaseWrites(t *testing.T) {
 	}
 }
 
+// OP777 permits just the typed ledger ConfigMap writer, not an Update of a
+// Pod/PVC/Session or another argument under that function's name. The
+// ordinary metadata-release scan still applies inside the permitted writer.
+func TestGuardScanPinsSummonLedgerUpdate(t *testing.T) {
+	for _, tc := range []struct {
+		name, source string
+		allowed      bool
+	}{
+		{"ledger", `func (r *Reconciler) writeSummonGrants(ctx context.Context, cm *corev1.ConfigMap) { r.Client.Update(ctx, cm) }`, true},
+		{"different function", `func (r *Reconciler) other(ctx context.Context, cm *corev1.ConfigMap) { r.Client.Update(ctx, cm) }`, false},
+		{"pod", `func (r *Reconciler) writeSummonGrants(ctx context.Context, cm *corev1.Pod) { r.Client.Update(ctx, cm) }`, false},
+		{"volume", `func (r *Reconciler) writeSummonGrants(ctx context.Context, cm *corev1.PersistentVolumeClaim) { r.Client.Update(ctx, cm) }`, false},
+		{"session", `func (r *Reconciler) writeSummonGrants(ctx context.Context, cm *v1alpha1.AgentSession) { r.Client.Update(ctx, cm) }`, false},
+		{"different argument", `func (r *Reconciler) writeSummonGrants(ctx context.Context, cm *corev1.ConfigMap) { r.Client.Update(ctx, pod) }`, false},
+		{"constructed here", `func (r *Reconciler) writeSummonGrants(ctx context.Context, cm *corev1.ConfigMap) { cm = &corev1.ConfigMap{}; r.Client.Update(ctx, cm) }`, false},
+		{"finalizers", `func (r *Reconciler) writeSummonGrants(ctx context.Context, cm *corev1.ConfigMap) { cm.Finalizers = nil; r.Client.Update(ctx, cm) }`, false},
+		{"owners", `func (r *Reconciler) writeSummonGrants(ctx context.Context, cm *corev1.ConfigMap) { cm.OwnerReferences = nil; r.Client.Update(ctx, cm) }`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte("package fixture\n"+tc.source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			scan := scanGuards(t, dir)
+			if (len(scan.violations) == 0) != tc.allowed {
+				t.Fatalf("allowed=%v, violations=%v", tc.allowed, scan.violations)
+			}
+		})
+	}
+}
+
 // guardScan is what scanGuards found: one message per violation, and how often
 // it saw each allowed guarded call.
 type guardScan struct {
@@ -440,7 +477,7 @@ func scanGuards(t *testing.T, dir string) guardScan {
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
 				if d.Body != nil {
-					scanBody(&scan, report, releaseNames, d.Name.Name, d.Body)
+					scanBody(&scan, report, releaseNames, d.Name.Name, d.Body, summonLedgerWriter(d))
 				}
 			case *ast.GenDecl:
 				// A package-level value runs no code by itself, but a function
@@ -450,7 +487,7 @@ func scanGuards(t *testing.T, dir string) guardScan {
 						for _, v := range vs.Values {
 							ast.Inspect(v, func(n ast.Node) bool {
 								if lit, ok := n.(*ast.FuncLit); ok {
-									scanBody(&scan, report, releaseNames, vs.Names[0].Name, lit.Body)
+									scanBody(&scan, report, releaseNames, vs.Names[0].Name, lit.Body, false)
 									return false
 								}
 								return true
@@ -518,7 +555,7 @@ func namesReleaseField(lit *ast.BasicLit) bool {
 
 // scanBody checks one function body, named fn, against guardedCalls and the
 // release rules.
-func scanBody(scan *guardScan, report func(token.Pos, string, string, ...any), releaseNames map[string]bool, fn string, body *ast.BlockStmt) {
+func scanBody(scan *guardScan, report func(token.Pos, string, string, ...any), releaseNames map[string]bool, fn string, body *ast.BlockStmt, ledgerWriter bool) {
 	first := map[string]token.Pos{}
 	// fresh are the local variables last set from a composite literal: an
 	// object built here, not read from the API server, so it has none of the
@@ -582,7 +619,11 @@ func scanBody(scan *guardScan, report func(token.Pos, string, string, ...any), r
 			}
 		}
 		if name == "Update" && !onSubresource(call) {
-			report(call.Pos(), fn, "a whole-object Update can drop finalizers and owner references; patch through a guarded function instead")
+			if ledgerWriter && len(call.Args) == 2 && isIdent(call.Args[1], "cm") && !fresh["cm"] {
+				scan.seen["ledger ConfigMap Update"]++
+			} else {
+				report(call.Pos(), fn, "a whole-object Update can drop finalizers and owner references; patch through a guarded function instead")
+			}
 		}
 		if name == "Patch" && !onSubresource(call) && len(call.Args) > 1 && freshObject(call.Args[1], fresh) {
 			release(call.Pos(), "a Patch of an object built here, which a merge patch empties of what it lacks,")
@@ -615,6 +656,26 @@ func scanBody(scan *guardScan, report func(token.Pos, string, string, ...any), r
 		}
 		return true
 	})
+}
+
+// This exception requires the exact function and a ConfigMap parameter. A
+// same-named helper taking a Pod, PVC, Session or generic Object gets none.
+func summonLedgerWriter(fn *ast.FuncDecl) bool {
+	if fn.Name.Name != "writeSummonGrants" || fn.Type.Params == nil {
+		return false
+	}
+	for _, param := range fn.Type.Params.List {
+		if len(param.Names) != 1 || param.Names[0].Name != "cm" {
+			continue
+		}
+		star, ok := param.Type.(*ast.StarExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := star.X.(*ast.SelectorExpr)
+		return ok && isIdent(sel.X, "corev1") && sel.Sel.Name == "ConfigMap"
+	}
+	return false
 }
 
 // compositeLiteral reports whether e is T{...} or &T{...}.

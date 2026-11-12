@@ -753,6 +753,8 @@ func TestSummonedLanesStartRefusals(t *testing.T) {
 		{"remote with everything", append([]string{"--summon-create-kinds=remote", "--enable-summoned-lanes"}, latch...), "may not name remote"},
 		{"remote without lanes", []string{"--summon-create-kinds=remote"}, "--enable-summoned-lanes"},
 		{"empty without lanes", []string{"--summon-create-kinds="}, ""},
+		{"lanes without election", []string{"--enable-summoned-lanes", "--leader-elect=false"}, "--leader-elect"},
+		{"task without election", append([]string{"--summon-create-kinds=task", "--enable-summoned-lanes", "--leader-elect=false"}, latch...), "--leader-elect"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := parseFlags(tc.args)
