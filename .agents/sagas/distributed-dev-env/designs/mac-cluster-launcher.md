@@ -26,9 +26,11 @@ route. No credential bytes are stored in source, test fixtures, logs, or new fil
    reading the config or invoking either client. The launcher is not an action
    authorization engine: writes and pod exec still require their existing approval.
 2. Use fixed absolute installed kubectl/Flux paths. Run Python in isolated mode.
-   Replace child `KUBECONFIG` with the fixed path, disable kuberc, and remove ambient
-   Kubernetes endpoint, proxy, and alternate TLS trust variables. Do not alter the
-   parent environment, files, shell configuration, or installed binaries.
+   Give children fixed HOME, system PATH, kubeconfig and disabled kuberc. Inherit
+   only the seven locale/terminal fields listed in the usage guide. Debug, helper,
+   loader, proxy, alternate TLS trust and all other ambient variables are absent.
+   In particular, Go HTTP/2 debugging must not expose Authorization headers.
+   Do not alter parent environment, files, shell configuration or installed binaries.
 3. Require a bounded, owner-only regular config file. Parse it with kubectl's
    **local-only**, redacted `config view -o json`, capturing output only in memory.
    This operation does not authenticate, run exec plugins, flatten external files,

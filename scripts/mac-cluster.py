@@ -77,15 +77,13 @@ def request(argv):
 
 
 def environment(source):
-    env = dict(source)
-    for name in tuple(env):
-        if name.upper() in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-                            "SSL_CERT_FILE", "SSL_CERT_DIR", "KUBERNETES_MASTER",
-                            "KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT",
-                            "KUBERC", "KUBECTL_KUBERC", "KUBECONFIG"):
-            env.pop(name)
-    env["KUBECONFIG"] = str(CONFIG)
-    env["KUBECTL_KUBERC"] = "false"
+    # Inherited Go HTTP/2 debugging can print Authorization headers. Use an
+    # allowlist, not an ever-growing debug/helper/proxy/trust variable denylist.
+    env = {name: source[name] for name in (
+        "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "COLUMNS", "LINES"
+    ) if name in source}
+    env.update({"HOME": "/Users/thaynes", "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "KUBECONFIG": str(CONFIG), "KUBECTL_KUBERC": "false"})
     return env
 
 

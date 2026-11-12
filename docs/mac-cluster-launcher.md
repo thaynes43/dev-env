@@ -40,10 +40,14 @@ client certificate, impersonation, alternative CA, TLS override or proxy is
 accepted. The launcher inspects only redacted local config metadata. It never
 asks kubectl for raw credentials and never prints config/probe output.
 
-Ambient `KUBECONFIG` is replaced in child processes, kuberc preferences are
-disabled, and inherited proxy/alternative TLS trust/Kubernetes endpoint variables
-are removed. All five selectors are also explicit command arguments. Parent
-process environment and all configuration files remain unchanged.
+Child processes receive a minimal environment: fixed `HOME=/Users/thaynes`,
+`PATH=/usr/bin:/bin:/usr/sbin:/sbin`, `KUBECONFIG`, and `KUBECTL_KUBERC=false`.
+Only `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `COLORTERM`, `COLUMNS` and `LINES`
+can be inherited for locale and terminal behavior. All other variables are
+absent, including Go HTTP/2 debugging (which can log authorization headers),
+helper/loader settings, proxies, alternative TLS trust and Kubernetes endpoints.
+All five selectors are also explicit command arguments. Parent environment and
+all configuration files remain unchanged.
 
 ## Supported commands
 
@@ -58,8 +62,8 @@ These are recognized built-ins, **not permission to perform them**. Existing tas
 approval, RBAC and safety rules still apply, including for reads of sensitive
 resources, runtime writes, port-forwards and remote exec. `config`, plugin/login
 commands, `create`, Flux bootstrap/install, and unknown verbs are not supported.
-`diff` and `cp` are also excluded: their external diff/local tar helper selection
-is outside this launcher's fixed-client contract.
+`diff` is excluded because its external diff helper is outside this launcher's
+fixed-client contract. `cp` is also outside the initial supported command set.
 Extend this list only with reviewed routing tests. The launcher never runs a
 shell to dispatch a command.
 

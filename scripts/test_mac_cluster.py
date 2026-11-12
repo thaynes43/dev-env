@@ -89,14 +89,20 @@ class LauncherTests(unittest.TestCase):
                    "http_proxy": "https://wrong.invalid", "ALL_PROXY": "https://wrong.invalid",
                    "SSL_CERT_FILE": "/wrong/ca", "SSL_CERT_DIR": "/wrong/certs",
                    "KUBERNETES_MASTER": "https://wrong.invalid", "KUBERNETES_SERVICE_HOST": "wrong.invalid",
-                   "KUBERNETES_SERVICE_PORT": "1234", "KEEP_ME": "yes"}
+                   "KUBERNETES_SERVICE_PORT": "1234", "DROP_ME": "yes",
+                   "GODEBUG": "http2debug=2", "GOTRACEBACK": "crash", "KUBECTL_EXTERNAL_DIFF": "/wrong/helper",
+                   "DYLD_INSERT_LIBRARIES": "/wrong/library", "LD_PRELOAD": "/wrong/library",
+                   "PYTHONPATH": "/wrong/python", "HOME": "/wrong/home", "PATH": "/wrong/path",
+                   "LANG": "en_US.UTF-8", "TERM": "xterm-256color", "LC_CTYPE": "UTF-8"}
         with mock.patch.dict(os.environ, ambient, clear=True):
             code, probe, dispatch = self.invoke(["kubectl", "get", "pods"])
             self.assertEqual(dict(os.environ), ambient)
         self.assertEqual(code, 0)
         for call in [*probe.call_args_list, dispatch.call_args]:
             self.assertEqual(call.kwargs["env"], {"KUBECONFIG": str(self.path),
-                                                 "KUBECTL_KUBERC": "false", "KEEP_ME": "yes"})
+                                                 "KUBECTL_KUBERC": "false", "HOME": "/Users/thaynes",
+                                                 "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
+                                                 "TERM": "xterm-256color", "LC_CTYPE": "UTF-8"})
 
     def test_missing_config_never_invokes_a_client(self):
         self.path.unlink()
@@ -234,7 +240,7 @@ class LauncherTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertEqual(dispatch.call_args.args[0][-len(args):], args)
 
-    def test_external_helper_commands_refused_before_client(self):
+    def test_external_helper_and_out_of_scope_commands_refused_before_client(self):
         with mock.patch.dict(os.environ, {"KUBECTL_EXTERNAL_DIFF": "/never-run", "PATH": "/untrusted"}):
             for command in ("diff", "cp"):
                 with self.subTest(command=command):
