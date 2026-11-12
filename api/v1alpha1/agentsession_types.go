@@ -767,6 +767,7 @@ type CoordinatorInstructionStatus struct {
 // in its memory.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sharedAdmission) || has(self.sharedAdmission)",message="shared admission evidence cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.privateHistory) || has(self.privateHistory)",message="private history retention cannot be removed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.summon) || has(self.summon)",message="the summon record cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.capturedUsage) || has(self.capturedUsage)",message="captured usage ledger cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sessionDirectory) || has(self.sessionDirectory)",message="directory creation evidence cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.coordinatorInstructionAttempt) || has(self.coordinatorInstructionAttempt)",message="instruction attempt evidence cannot be removed"
@@ -832,7 +833,8 @@ type AgentSessionStatus struct {
 	// +optional
 	Outcome *OutcomeStatus `json:"outcome,omitempty"`
 
-	// Summon records the summoned session's terminal transition (DESIGN-064 5.9).
+	// Summon records the summoned session's admission and its terminal
+	// transition (DESIGN-064 5.9).
 	// +optional
 	Summon *SummonStatus `json:"summon,omitempty"`
 

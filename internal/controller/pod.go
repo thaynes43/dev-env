@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -210,7 +211,9 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	// the templates image. This holds on every pod build, never fails a build
 	// (a rebuild after the first launch must not end the session), and the API
 	// refuses a scheduled session that asks for coordinator instructions.
-	if _, scheduled := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]; scheduled {
+	// An admitted summoned pod carries a start deadline too (OP777), so it
+	// follows the same rule.
+	if _, scheduled := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]; scheduled || summonStartDeadline(s) != "" {
 		for i := range pod.Spec.Containers {
 			if pod.Spec.Containers[i].Name == ContainerName {
 				pod.Spec.Containers[i].Image = templatesImage
@@ -623,18 +626,42 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 // fixed at create, so the session fails (SessionInvalid) instead of staying
 // Pending, which would never end its occurrence, and the API's precheck
 // refuses it before a create.
+//
+// An admitted summoned session's pod gets admittedAt plus SummonStartWindow
+// (DESIGN-064 5.9, OP777): agentd refuses a first launch past it. A session
+// that carried both would get the earlier; the API sets no scheduled-work
+// annotation on a summoned session.
 func startDeadlineEnv(s *v1alpha1.AgentSession, hold bool) (string, error) {
-	raw, ok := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]
-	if !ok || hold {
+	if hold {
 		return "", nil
 	}
-	if _, err := protocol.ParseStartDeadline(raw); err != nil {
+	summoned := summonStartDeadline(s)
+	raw, ok := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]
+	if !ok {
+		return summoned, nil
+	}
+	scheduled, err := protocol.ParseStartDeadline(raw)
+	if err != nil {
 		return "", sessionInvalidError{fmt.Errorf("invalid scheduled-work start deadline: %w", err)}
 	}
 	if s.Spec.Agent == v1alpha1.AgentCodex && s.Spec.Mode == v1alpha1.ModeRemote {
 		return "", sessionInvalidError{errors.New("a scheduled-work start deadline needs a first launch record, which a Codex remote session does not keep")}
 	}
+	if summoned != "" {
+		if at, err := protocol.ParseStartDeadline(summoned); err == nil && at.Before(scheduled) {
+			return summoned, nil
+		}
+	}
 	return raw, nil
+}
+
+// summonStartDeadline is an admitted summoned session's start deadline, in
+// agentd's form, or "" for any other session.
+func summonStartDeadline(s *v1alpha1.AgentSession) string {
+	if s.Spec.Caller == "" || s.Status.Summon == nil || s.Status.Summon.AdmittedAt == nil {
+		return ""
+	}
+	return s.Status.Summon.AdmittedAt.UTC().Add(SummonStartWindow).Format(time.RFC3339)
 }
 
 // remoteProfileContent reports whether this pod receives the profile's remote

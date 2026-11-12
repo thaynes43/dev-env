@@ -695,17 +695,18 @@ func TestSummonCreateKindsFlag(t *testing.T) {
 	if err != nil || len(o.summonCreateKinds) != 0 {
 		t.Fatalf("--summon-create-kinds must be empty by default: %v %v", o.summonCreateKinds, err)
 	}
+	// Since OP777 (ruling D8) a kind starts only with the lanes flag and, for
+	// task, both task latch flags; remote is refused until slice d
+	// (TestSummonedLanesStartRefusals). The parse itself is unchanged.
+	withLanes := []string{"--enable-summoned-lanes", "--enable-private-history-retention", "--enable-private-terminal-record", "--enable-private-executor-stop", "--enable-terminal-task-pod-reclaim"}
 	for _, tc := range []struct {
 		arg  string
 		want []v1alpha1.SummonKind
 	}{
 		{"--summon-create-kinds=", nil},
 		{"--summon-create-kinds=task", []v1alpha1.SummonKind{v1alpha1.SummonKindTask}},
-		{"--summon-create-kinds=remote", []v1alpha1.SummonKind{v1alpha1.SummonKindRemote}},
-		{"--summon-create-kinds=task,remote", []v1alpha1.SummonKind{v1alpha1.SummonKindTask, v1alpha1.SummonKindRemote}},
-		{"--summon-create-kinds=remote,task", []v1alpha1.SummonKind{v1alpha1.SummonKindRemote, v1alpha1.SummonKindTask}},
 	} {
-		o, err := parseFlags([]string{tc.arg})
+		o, err := parseFlags(append([]string{tc.arg}, withLanes...))
 		if err != nil || !slices.Equal(o.summonCreateKinds, tc.want) {
 			t.Errorf("%s: %v %v, want %v", tc.arg, o.summonCreateKinds, err, tc.want)
 		}
@@ -714,8 +715,8 @@ func TestSummonCreateKindsFlag(t *testing.T) {
 			t.Errorf("%s: start line value %q", tc.arg, got)
 		}
 	}
-	for _, v := range []string{"Task", "task,task", "task,", ",task", ",", "local", "task, remote", " task", "task,remote,task"} {
-		_, err := parseFlags([]string{"--summon-create-kinds=" + v})
+	for _, v := range []string{"Task", "task,task", "task,", ",task", ",", "local", "task, remote", " task", "task,remote,task", "remote", "task,remote", "remote,task"} {
+		_, err := parseFlags(append([]string{"--summon-create-kinds=" + v}, withLanes...))
 		if err == nil {
 			t.Errorf("--summon-create-kinds=%q was accepted", v)
 			continue
@@ -723,5 +724,46 @@ func TestSummonCreateKindsFlag(t *testing.T) {
 		if !strings.Contains(err.Error(), "--summon-create-kinds") {
 			t.Errorf("--summon-create-kinds=%q: the error does not name the flag: %v", v, err)
 		}
+	}
+}
+
+// OP777 (ruling D8 on item 741): --enable-summoned-lanes is off by default,
+// and the operator refuses to start with summoning creates switched on where
+// it cannot hold them: any kind without the lanes flag, task without both task
+// latch flags, and remote at all until slice d.
+func TestSummonedLanesStartRefusals(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.summonedLanes {
+		t.Fatalf("--enable-summoned-lanes must be off by default: %v %v", o.summonedLanes, err)
+	}
+	if o, err := parseFlags([]string{"--enable-summoned-lanes"}); err != nil || !o.summonedLanes {
+		t.Fatalf("the lanes flag alone, with no kind switched on, must start: %v", err)
+	}
+	latch := []string{"--enable-private-history-retention", "--enable-private-terminal-record", "--enable-private-executor-stop", "--enable-terminal-task-pod-reclaim"}
+	noRetention := []string{"--enable-private-terminal-record", "--enable-private-executor-stop", "--enable-terminal-task-pod-reclaim"}
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string // "" starts
+	}{
+		{"task without lanes", append([]string{"--summon-create-kinds=task"}, latch...), "--enable-summoned-lanes"},
+		{"task with lanes", append([]string{"--summon-create-kinds=task", "--enable-summoned-lanes"}, latch...), ""},
+		{"task without retention", append([]string{"--summon-create-kinds=task", "--enable-summoned-lanes"}, noRetention...), "--enable-private-history-retention and --enable-terminal-task-pod-reclaim"},
+		{"task without reclaim", []string{"--summon-create-kinds=task", "--enable-summoned-lanes", "--enable-private-history-retention", "--enable-private-terminal-record", "--enable-private-executor-stop"}, "--enable-private-history-retention and --enable-terminal-task-pod-reclaim"},
+		{"remote with everything", append([]string{"--summon-create-kinds=remote", "--enable-summoned-lanes"}, latch...), "may not name remote"},
+		{"remote without lanes", []string{"--summon-create-kinds=remote"}, "--enable-summoned-lanes"},
+		{"empty without lanes", []string{"--summon-create-kinds="}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseFlags(tc.args)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatalf("refused: %v", err)
+			case tc.want != "" && err == nil:
+				t.Fatal("started")
+			case tc.want != "" && !strings.Contains(err.Error(), tc.want):
+				t.Fatalf("error %q does not say %q", err, tc.want)
+			}
+		})
 	}
 }

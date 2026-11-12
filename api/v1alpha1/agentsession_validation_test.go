@@ -2582,3 +2582,92 @@ func TestSummonOutcomeStatusRoundTrip(t *testing.T) {
 		t.Fatal("CRD pruned the atomic terminal record")
 	}
 }
+
+// OP777 (DESIGN-064 5.9): status.summon.admittedAt is set once and never
+// changes, and the summon record that holds it cannot be removed. Each case
+// is one status write on a session whose admittedAt is already set.
+func TestSummonAdmittedAtIsSetOnce(t *testing.T) {
+	admitted := metav1.NewTime(time.Date(2026, 11, 12, 15, 0, 0, 0, time.UTC))
+	later := metav1.NewTime(admitted.Add(time.Minute))
+	for _, tc := range []struct {
+		name  string
+		edit  func(*v1alpha1.AgentSessionStatus)
+		valid bool
+	}{
+		{"unchanged", func(st *v1alpha1.AgentSessionStatus) {
+			st.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeRunning}
+		}, true},
+		{"changed", func(st *v1alpha1.AgentSessionStatus) { st.Summon.AdmittedAt = &later }, false},
+		{"removed", func(st *v1alpha1.AgentSessionStatus) { st.Summon.AdmittedAt = nil }, false},
+		{"summon-removed", func(st *v1alpha1.AgentSessionStatus) { st.Summon = nil }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := summonedTask()
+			if err := k8s.Create(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			// The first write sets it: an absent admittedAt may be set.
+			s.Status.Summon = &v1alpha1.SummonStatus{AdmittedAt: &admitted}
+			if err := k8s.Status().Update(ctx(t), s); err != nil {
+				t.Fatalf("setting admittedAt the first time: %v", err)
+			}
+			s = get(t, s)
+			tc.edit(&s.Status)
+			err := k8s.Status().Update(ctx(t), s)
+			switch {
+			case tc.valid && err != nil:
+				t.Fatal(err)
+			case tc.valid:
+				if got := get(t, s).Status.Summon; got == nil || got.AdmittedAt == nil || !got.AdmittedAt.Equal(&admitted) {
+					t.Fatalf("admittedAt did not round trip: %+v", got)
+				}
+			case tc.name == "summon-removed":
+				wantInvalid(t, err, "the summon record cannot be removed")
+			default:
+				wantInvalid(t, err, "admittedAt is set once and never changes")
+			}
+		})
+	}
+}
+
+// OP777: status.summon.closed.released may go from absent or false to true,
+// never back, and the closed record that holds it cannot be removed.
+func TestSummonClosedReleasedIsNeverReversed(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 11, 12, 15, 0, 0, 0, time.UTC))
+	for _, tc := range []struct {
+		name          string
+		first, second func(*v1alpha1.SummonStatus)
+		want          string
+	}{
+		{"absent-to-true", func(*v1alpha1.SummonStatus) {}, func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, ""},
+		{"true-to-false", func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, func(st *v1alpha1.SummonStatus) { st.Closed.Released = false }, "released is never reversed"},
+		{"true-closed-removed", func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, func(st *v1alpha1.SummonStatus) { st.Closed = nil }, "the closed record cannot be removed"},
+		{"true-stays-true", func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, func(st *v1alpha1.SummonStatus) { st.Closed.Reason = "agent-failed" }, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := summonedTask()
+			if err := k8s.Create(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			s.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeFailed, Note: "unreported: never-started", At: &at}
+			s.Status.Summon = &v1alpha1.SummonStatus{Closed: &v1alpha1.SummonClosedStatus{At: at, Source: "unreported", Reason: "never-started"}}
+			tc.first(s.Status.Summon)
+			if err := k8s.Status().Update(ctx(t), s); err != nil {
+				t.Fatalf("first write: %v", err)
+			}
+			s = get(t, s)
+			tc.second(s.Status.Summon)
+			err := k8s.Status().Update(ctx(t), s)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := get(t, s).Status.Summon; got == nil || got.Closed == nil || !got.Closed.Released {
+					t.Fatalf("released did not round trip: %+v", got)
+				}
+				return
+			}
+			wantInvalid(t, err, tc.want)
+		})
+	}
+}

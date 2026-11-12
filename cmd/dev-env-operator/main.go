@@ -159,6 +159,7 @@ type options struct {
 	codexHostMaxRunning          int
 	codexHostHandsOff            string
 	summonCreateKinds            []v1alpha1.SummonKind
+	summonedLanes                bool
 	coordinatorEnabled           bool
 	portalReaderEnabled          bool
 	portalConversationUsage      bool
@@ -291,6 +292,7 @@ func parseFlags(args []string) (options, error) {
 	codexRCImage := fs.String("codex-rc-agent-image", "", "digest-pinned released agent image for one existing Codex remote Session; does not restart it")
 	codexRCSession := fs.String("codex-rc-agent-session", "", "exact <session-name>/<SessionUID> for independent Codex RC image adoption; requires --codex-rc-agent-image")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
+	fs.BoolVar(&o.summonedLanes, "enable-summoned-lanes", false, "let the operator leader admit summoned sessions by the create ledger, their single-flight lane and their pool (DESIGN-064 5.9 and 6.7, OP777); off, nothing is admitted, and a summoned session never gets a volume or a pod without admission whatever this says; --summon-create-kinds needs it")
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
 	fs.BoolVar(&o.privateTerminalRecord, "enable-private-terminal-record", false, "record the durable terminal observation of a private executor, and the missed marker, in its Session's status (DESIGN-025 3); records only, deletes nothing")
 	fs.BoolVar(&o.terminalTaskPodReclaim, "enable-terminal-task-pod-reclaim", false, "reclaim original terminal headless task compute after its grace; retains HOME, history and outcome (DESIGN-025 24); needs private terminal record and executor stop")
@@ -716,6 +718,9 @@ func parseFlags(args []string) (options, error) {
 	if o.terminalTaskPodReclaim && (!o.privateTerminalRecord || !o.privateExecutorStop) {
 		return o, errors.New("--enable-terminal-task-pod-reclaim requires --enable-private-terminal-record and --enable-private-executor-stop")
 	}
+	if err := checkSummonCreateKinds(o); err != nil {
+		return o, err
+	}
 	if o.legacyTerminalTaskReclaim && !o.terminalTaskPodReclaim {
 		return o, errors.New("--enable-legacy-terminal-task-reclaim requires --enable-terminal-task-pod-reclaim")
 	}
@@ -834,6 +839,7 @@ func reconcilerForOptions(o options) *controller.Reconciler {
 		ManagedCodexTasks:           o.managedCodexTasks,
 		RetainedCommonRules:         o.retainedCommonRules,
 		PrivateHistoryRetention:     o.privateHistoryRetention,
+		SummonedLanes:               o.summonedLanes,
 		PrivateTerminalRecord:       o.privateTerminalRecord,
 		TerminalTaskPodReclaim:      o.terminalTaskPodReclaim,
 		LegacyTerminalTaskReclaim:   o.legacyTerminalTaskReclaim,
@@ -877,7 +883,7 @@ func run(args []string) error {
 	log := ctrl.Log.WithName(binaryName)
 	log.Info("starting", "version", version.Get().String(binaryName),
 		"sessionNamespace", o.sessionNamespace, "templates", o.templatesNamespace+"/"+o.templatesName,
-		"summonCreateKinds", summonCreateKindsValue(o.summonCreateKinds))
+		"summonCreateKinds", summonCreateKindsValue(o.summonCreateKinds), "summonedLanes", o.summonedLanes)
 
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
@@ -1479,6 +1485,28 @@ func parseSummonCreateKinds(raw string) ([]v1alpha1.SummonKind, error) {
 		out = append(out, kind)
 	}
 	return out, nil
+}
+
+// checkSummonCreateKinds refuses to start with summoning creates switched on
+// where the operator cannot hold them (OP777, ruling D8 on item 741): any kind
+// without --enable-summoned-lanes, since nothing would ever admit it; task
+// without both task latch flags, since a summoned task is admitted only when
+// the private task latch applies to it (DESIGN-064 5.9); and remote at all,
+// until slice d of item 741 builds the remote latch.
+func checkSummonCreateKinds(o options) error {
+	if len(o.summonCreateKinds) == 0 {
+		return nil
+	}
+	if !o.summonedLanes {
+		return errors.New("--summon-create-kinds requires --enable-summoned-lanes: without the leader's admission no summoned session would ever start (DESIGN-064 5.9, OP777)")
+	}
+	if slices.Contains(o.summonCreateKinds, v1alpha1.SummonKindTask) && (!o.privateHistoryRetention || !o.terminalTaskPodReclaim) {
+		return errors.New("--summon-create-kinds=task requires --enable-private-history-retention and --enable-terminal-task-pod-reclaim: a summoned task is admitted only under both halves of the private task latch (DESIGN-064 5.9)")
+	}
+	if slices.Contains(o.summonCreateKinds, v1alpha1.SummonKindRemote) {
+		return errors.New("--summon-create-kinds may not name remote yet: a summoned remote session waits for the remote latch of item 741 slice d")
+	}
+	return nil
 }
 
 // summonCreateKindsValue is the switch's value for the start line: the kinds

@@ -60,3 +60,18 @@ func TestEscalationNameBound(t *testing.T) {
 		}
 	}
 }
+
+// OP777: not-charged is the leader's ledger evidence. It sits after the agent
+// and watchdog rows and before the hold rows, and no other input displaces a
+// row above it.
+func TestNotChargedRow(t *testing.T) {
+	if got := FirstReason(Inputs{NotCharged: true, HoldExpired: true, QuotaHoldExpired: true, Suspended: true}); got != ReasonNotCharged {
+		t.Fatalf("reason %q", got)
+	}
+	if got := FirstReason(Inputs{NotCharged: true, EscalationBound: true}); got != ReasonEscalationBound {
+		t.Fatalf("reason %q", got)
+	}
+	if len(ReasonNotCharged) > 32 {
+		t.Fatal("closed.reason is at most 32 characters")
+	}
+}

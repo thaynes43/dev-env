@@ -124,7 +124,7 @@ func (r *Reconciler) initializePrivateHistory(ctx context.Context, s *v1alpha1.A
 	admission := "Unknown"
 	// No historical lifecycle gets a newly guessed original HOME binding.
 	if fresh.DeletionTimestamp.IsZero() && !wantsPodGone(fresh) && !controllerutil.ContainsFinalizer(fresh, Finalizer) &&
-		sharedNoResourceHistory(fresh) && fresh.Status.Phase == "" && fresh.Status.SuspendedAt == nil && len(fresh.Status.Conditions) == 0 &&
+		privateNoResourceHistory(fresh) && fresh.Status.Phase == "" && fresh.Status.SuspendedAt == nil && len(fresh.Status.Conditions) == 0 &&
 		r.privateResourcesAbsent(ctx, fresh) == nil {
 		admission = sharedNeverStarted
 	}
@@ -132,6 +132,21 @@ func (r *Reconciler) initializePrivateHistory(ctx context.Context, s *v1alpha1.A
 		HomeClaim: HomeClaimName(fresh.Name), BindingGeneration: fresh.Generation, Admission: admission,
 		Provider: string(fresh.Spec.Agent), StopState: "Unknown"}
 	return r.writePrivateHistory(ctx, s, fresh)
+}
+
+// privateNoResourceHistory is sharedNoResourceHistory for a private task,
+// except that a summoned session's own Pending outcome is not history: the
+// operator's outcome step writes it on the first reconcile, before anything
+// is built (summon_outcome.go), so without this every summoned task would be
+// recorded Unknown and never start (OP777). Any other outcome is history, and
+// privateResourcesAbsent still proves no pod or volume exists.
+func privateNoResourceHistory(s *v1alpha1.AgentSession) bool {
+	if o := s.Status.Outcome; s.Spec.Caller != "" && o != nil && o.State == v1alpha1.OutcomePending {
+		c := s.DeepCopy()
+		c.Status.Outcome = nil
+		return sharedNoResourceHistory(c)
+	}
+	return sharedNoResourceHistory(s)
 }
 
 func privateHistoryIdentity(s *v1alpha1.AgentSession) error {
@@ -252,6 +267,12 @@ func (r *Reconciler) reservePrivateExecutor(ctx context.Context, s *v1alpha1.Age
 	h := fresh.Status.PrivateHistory
 	if wantsPodGone(fresh) || h == nil || h.ExecutorAttempted && (!h.ExecutorNotCreated || h.ExecutorIntent == "" || h.LastExecutor != nil) {
 		return executorReservation{}, errors.New("private executor attempt is already recorded or Session stopped")
+	}
+	// OP777: a summoned task is latched only while it is admitted and open.
+	// This read is the one the latch write below is locked on, so a close
+	// that lands after the gate's read conflicts here and no Pod is created.
+	if why := summonBuildRefusal(fresh, r.summonTaskLatchOn()); why != "" {
+		return executorReservation{}, fmt.Errorf("summoned executor is refused: %s", why)
 	}
 	if _, err := r.privateHistoryHome(ctx, fresh); err != nil {
 		return executorReservation{}, err

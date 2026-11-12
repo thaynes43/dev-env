@@ -108,3 +108,40 @@ func TestWriteRejectsPrunedTerminalRecord(t *testing.T) {
 		})
 	}
 }
+
+// OP777 (DESIGN-064 5.9): a report releases its reservation at once, in the
+// terminal write; an operator close releases there only when its caller says
+// no launch can follow.
+func TestWriteReleasesAReportAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		d        Decision
+		released bool
+	}{
+		{"report", Decision{State: v1alpha1.OutcomeDone, Source: Report, Reason: "done"}, true},
+		{"operator close", Decision{State: v1alpha1.OutcomeFailed, Source: Unreported, Reason: ReasonAgentFailed}, false},
+		{"operator close, no launch can follow", Decision{State: v1alpha1.OutcomeFailed, Source: Unreported, Reason: ReasonNotCharged, Released: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			if err := v1alpha1.AddToScheme(scheme); err != nil {
+				t.Fatal(err)
+			}
+			s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "cur-1", Namespace: "sessions", UID: "cur-1"}, Spec: v1alpha1.AgentSessionSpec{Caller: "cigar-ns.curator", Lane: v1alpha1.LaneCuration}}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(s).WithObjects(s).Build()
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(s), s); err != nil {
+				t.Fatal(err)
+			}
+			if changed, err := Write(context.Background(), c, s, tc.d, time.Date(2026, 11, 12, 16, 0, 0, 0, time.UTC)); err != nil || !changed {
+				t.Fatalf("changed=%v err=%v", changed, err)
+			}
+			var stored v1alpha1.AgentSession
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(s), &stored); err != nil {
+				t.Fatal(err)
+			}
+			if got := stored.Status.Summon.Closed.Released; got != tc.released {
+				t.Fatalf("released %v, want %v", got, tc.released)
+			}
+		})
+	}
+}

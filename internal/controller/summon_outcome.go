@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -73,7 +72,10 @@ func (r *Reconciler) reconcileSummonOutcome(ctx context.Context, s *v1alpha1.Age
 			log.FromContext(ctx).Error(nil, "summoned session lacks its onUnreported snapshot", "session", s.Name)
 			return false, nil
 		}
-		next = summonoutcome.Decision{State: v1alpha1.OutcomeState(s.Spec.Summon.OnUnreported), Note: "unreported: " + reason, Source: summonoutcome.Unreported, Reason: reason}
+		// A session never admitted never had a volume or a pod, and the gate
+		// builds none once it is closed: its close releases at once (OP777).
+		neverAdmitted := s.Status.Summon == nil || s.Status.Summon.AdmittedAt == nil
+		next = summonoutcome.Decision{State: v1alpha1.OutcomeState(s.Spec.Summon.OnUnreported), Note: "unreported: " + reason, Source: summonoutcome.Unreported, Reason: reason, Released: neverAdmitted}
 		if next.State != v1alpha1.OutcomeFailed && next.State != v1alpha1.OutcomeEscalated {
 			log.FromContext(ctx).Error(nil, "summoned session has an invalid onUnreported snapshot", "session", s.Name)
 			return false, nil
@@ -89,13 +91,14 @@ func (r *Reconciler) reconcileSummonOutcome(ctx context.Context, s *v1alpha1.Age
 			return false, nil // Observations never refresh a working report's at.
 		}
 	}
-	now := time.Now()
-	if r.Now != nil {
-		now = r.Now()
-	}
+	now := r.now()
 	changed, err := summonoutcome.Write(ctx, r.Client, s, next, now)
 	if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
 		return true, nil
+	}
+	if changed && err == nil && summonoutcome.Terminal(s.Status.Outcome) {
+		// The close may free a lane or a slot, now or at its release.
+		r.nudgeSummonAdmission()
 	}
 	return changed, err
 }

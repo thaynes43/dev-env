@@ -3283,9 +3283,18 @@ spec:
                 maxLength: 128
                 type: string
               summon:
-                description: Summon records the summoned session's terminal transition
-                  (DESIGN-064 5.9).
+                description: |-
+                  Summon records the summoned session's admission and its terminal
+                  transition (DESIGN-064 5.9).
                 properties:
+                  admittedAt:
+                    description: |-
+                      AdmittedAt is when the operator leader admitted the session: its charge
+                      was in the create ledger under its own name, its single-flight lane was
+                      free and its pool had a slot (DESIGN-064 5.9, OP777). Until it is set the
+                      session has no volume and no pod. It is set once and never changes.
+                    format: date-time
+                    type: string
                   closed:
                     description: Closed is written atomically with the first terminal
                       outcome.
@@ -3299,6 +3308,12 @@ spec:
                         maxLength: 32
                         minLength: 1
                         type: string
+                      released:
+                        description: |-
+                          Released is true once the session's reservation, its lane and its pool
+                          slot, is free: at once for a report, and for an operator close once no
+                          further launch can follow (DESIGN-064 5.9). True is never reversed.
+                        type: boolean
                       source:
                         enum:
                         - report
@@ -3310,6 +3325,10 @@ spec:
                     - reason
                     - source
                     type: object
+                    x-kubernetes-validations:
+                    - message: released is never reversed
+                      rule: '!has(oldSelf.released) || !oldSelf.released || (has(self.released)
+                        && self.released)'
                   escalation:
                     description: |-
                       Escalation is the pending filing for a remediation ending escalated.
@@ -3330,6 +3349,12 @@ spec:
                     - state
                     type: object
                 type: object
+                x-kubernetes-validations:
+                - message: admittedAt is set once and never changes
+                  rule: '!has(oldSelf.admittedAt) || (has(self.admittedAt) && self.admittedAt
+                    == oldSelf.admittedAt)'
+                - message: the closed record cannot be removed
+                  rule: '!has(oldSelf.closed) || has(self.closed)'
               suspendedAt:
                 description: |-
                   SuspendedAt is when the operator first saw the session suspended with
@@ -3900,6 +3925,8 @@ spec:
               rule: '!has(oldSelf.sharedAdmission) || has(self.sharedAdmission)'
             - message: private history retention cannot be removed
               rule: '!has(oldSelf.privateHistory) || has(self.privateHistory)'
+            - message: the summon record cannot be removed
+              rule: '!has(oldSelf.summon) || has(self.summon)'
             - message: captured usage ledger cannot be removed
               rule: '!has(oldSelf.capturedUsage) || has(self.capturedUsage)'
             - message: directory creation evidence cannot be removed

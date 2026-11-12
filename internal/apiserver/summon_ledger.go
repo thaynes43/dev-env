@@ -1,23 +1,17 @@
 package apiserver
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
-	"math"
 	"net/http"
-	"regexp"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/summonledger"
 )
 
 // The create ledger (DESIGN-064 5.9, "The create ledger", N1, and its
@@ -25,7 +19,7 @@ import (
 // summonLedgerNamespace/summonLedgerName, holds one key per summoning caller:
 // its policy's name. Each key is one JSON document, the caller's entry:
 //
-//	schema             summonLedgerSchema
+//	schema             summonledger.Schema
 //	clock              the latest "now" any write of this entry used
 //	charges            each {id, at, attempt, hash, name}
 //	urgentRefusals     the count of refused urgent creates, stopping at its maximum
@@ -40,10 +34,10 @@ import (
 //
 // Time. For one entry, "now" is the later of the replica's clock and the
 // entry's clock, and every write stores it back as the clock. A charge counts
-// toward createsPerHour while it is younger than summonChargeWindow by that
+// toward createsPerHour while it is younger than summonledger.ChargeWindow by that
 // clock: 60 minutes and 5 for replica clocks that differ. The limit is on
 // charges, not creates: at most createsPerHour charges in any
-// summonChargeWindow by the entry's clock. A create may follow its charge at
+// summonledger.ChargeWindow by the entry's clock. A create may follow its charge at
 // any time inside that charge's window, since a retry reuses it, so two
 // creates can be closer together than their charges. The assumption, stated
 // whole: replica clocks agree within 5 minutes, and none steps forward
@@ -61,16 +55,18 @@ import (
 // create, and the read after its AlreadyExists, run under one context that is
 // done summonCreateDeadline after the mark's monotonic reading. One request
 // makes at most summonMaxCreateAttempts session creates. A charge is pruned
-// only when it is summonChargeWindow old and its last attempt mark is at
-// least summonAttemptHold old, whether or not a session of its id exists.
+// only when it is summonledger.ChargeWindow old and its last attempt mark is at
+// least summonledger.AttemptHold old, and no session of its id exists that is
+// neither admitted nor closed (summonledger.Prune; DESIGN-064 5.9 item 4,
+// OP777): a Queued session keeps the charge the leader admits it by.
 //
 // Limits of this slice (the correction's amendment). A client-side deadline
 // does not stop a request the API server has already received, nor a process
 // frozen between its last check and the send; a mark does not stop a replica
 // paused between it and its create. So two windows remain. (1) A create that
-// lands after its charge was pruned. The charge is already summonChargeWindow
+// lands after its charge was pruned. The charge is already summonledger.ChargeWindow
 // old. A marks X and sends its create inside the deadline; the API server has
-// not persisted it when another replica's write, summonAttemptHold after the
+// not persisted it when another replica's write, summonledger.AttemptHold after the
 // mark by the entry's clock, prunes X; the session is then persisted with no
 // charge. A process frozen before it sends, or between the mark and the send
 // for longer than the hold allows, is this same window. (2) A stale destination: A marks
@@ -79,19 +75,10 @@ import (
 // deleted, freeing N; A resumes inside its deadline and creates N, so X has
 // two sessions. That no summoned session gets a pod unless the ledger holds
 // its id bound to its name, and so that no id runs two sessions, is enforced
-// at admission by the leader in story 741, not here.
+// at admission by the operator leader (internal/controller/summon_admission.go,
+// OP777), not here: the uncharged or surplus session is closed not-charged.
 const (
-	summonLedgerSchema       = "dev-env.summon-creates.v1"
 	summonLedgerFieldManager = "dev-env-summon-creates"
-	// summonChargeWindow is how long a charge counts toward createsPerHour,
-	// from its at: 60 minutes and a 5 minute allowance for clocks that differ
-	// between replicas.
-	summonChargeWindow = 65 * time.Minute
-	// summonAttemptHold is how old a charge's last attempt mark must be before
-	// that charge may be pruned, whether or not a session of its id exists.
-	// It covers the 2 minute create deadline, 5 minutes for clocks that differ
-	// and 5 minutes for a forward step. That sum is 12 minutes; the hold is 15.
-	summonAttemptHold = 15 * time.Minute
 	// summonCreateDeadline is how long after the monotonic reading of the mark
 	// before it a session create, and the read after its AlreadyExists, may
 	// run: one absolute deadline, carried as one context.
@@ -102,316 +89,14 @@ const (
 	summonMaxCreateAttempts = 200
 	// summonLedgerAttempts bounds the optimistic-lock retries of one write.
 	summonLedgerAttempts = 5
-	// summonLedgerMaxEntry bounds one caller's document.
-	summonLedgerMaxEntry = 64 << 10
-	// summonLedgerMaxDepth bounds the nesting the member check walks.
-	summonLedgerMaxDepth = 32
 )
 
-// summonDispatchIDPattern is spec.summon.dispatchID's schema pattern. A
-// charge whose id does not match it is not a charge this API wrote.
-var summonDispatchIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.:_-]{0,127}$`)
-
-// summonRequestHashPattern is summonRequestHash's form: 64 lowercase hex.
-var summonRequestHashPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
-
-var errSummonLedgerUnreadable = errors.New("summon create ledger entry is unreadable")
-
-// summonCharge is one charge. Fields this version does not know are kept as
-// they were.
-type summonCharge struct {
-	ID      string
-	At      time.Time
-	Attempt time.Time
-	Hash    string
-	Name    string
-	extra   map[string]json.RawMessage
-}
-
-// summonLedgerEntry is one caller's key.
-type summonLedgerEntry struct {
-	Clock             time.Time
-	Charges           []summonCharge
-	UrgentRefusals    int64
-	LastUrgentRefusal *time.Time
-	extra             map[string]json.RawMessage
-}
-
-// now is "now" for this entry: the later of the replica's clock and the
-// entry's clock.
-func (e *summonLedgerEntry) now(replica time.Time) time.Time {
-	replica = replica.UTC()
-	if e.Clock.After(replica) {
-		return e.Clock
-	}
-	return replica
-}
-
-// inWindow counts the charges that still count toward createsPerHour at now.
-func (e *summonLedgerEntry) inWindow(now time.Time) int {
-	n := 0
-	for _, ch := range e.Charges {
-		if summonChargeCounts(ch, now) {
-			n++
-		}
-	}
-	return n
-}
-
-// charge is the index of id's charge, or -1.
-func (e *summonLedgerEntry) charge(id string) int {
-	for i := range e.Charges {
-		if e.Charges[i].ID == id {
-			return i
-		}
-	}
-	return -1
-}
-
-// countUrgentRefusal adds one urgent refusal at now. The count stops at its
-// maximum instead of wrapping.
-func (e *summonLedgerEntry) countUrgentRefusal(now time.Time) {
-	if e.UrgentRefusals < math.MaxInt64 {
-		e.UrgentRefusals++
-	}
-	at := now
-	e.LastUrgentRefusal = &at
-}
-
-func summonChargeCounts(ch summonCharge, now time.Time) bool {
-	return now.Sub(ch.At) < summonChargeWindow
-}
-
-// decodeSummonLedgerEntry reads one caller's key. An absent key is an empty
-// entry. A present value that is empty, is not a JSON object, repeats a member
-// at any depth, lacks a required member, has a member of the wrong type or
-// repeats a charge's id is errSummonLedgerUnreadable: the create is then
-// refused with 503, never admitted without a charge, and the key is not
-// overwritten. Unknown members, at the top and in a charge, are kept, so a
-// newer replica's field survives an older replica's write.
-func decodeSummonLedgerEntry(raw string, present bool) (summonLedgerEntry, error) {
-	var e summonLedgerEntry
-	if !present {
-		return e, nil
-	}
-	if raw == "" || len(raw) > summonLedgerMaxEntry {
-		return e, errSummonLedgerUnreadable
-	}
-	if err := checkLedgerMembersUnique([]byte(raw)); err != nil {
-		return e, err
-	}
-	top, err := decodeLedgerObject([]byte(raw))
-	if err != nil {
-		return e, err
-	}
-	var schema string
-	if err := takeLedgerMember(top, "schema", &schema); err != nil || schema != summonLedgerSchema {
-		return e, errSummonLedgerUnreadable
-	}
-	if err := takeLedgerTime(top, "clock", &e.Clock); err != nil {
-		return e, err
-	}
-	var items []json.RawMessage
-	if err := takeLedgerMember(top, "charges", &items); err != nil {
-		return e, err
-	}
-	seen := make(map[string]bool, len(items))
-	for _, item := range items {
-		ch, err := decodeSummonCharge(item)
-		if err != nil {
-			return e, err
-		}
-		if seen[ch.ID] {
-			return e, errSummonLedgerUnreadable
-		}
-		seen[ch.ID] = true
-		e.Charges = append(e.Charges, ch)
-	}
-	if err := takeLedgerMember(top, "urgentRefusals", &e.UrgentRefusals); err != nil || e.UrgentRefusals < 0 {
-		return e, errSummonLedgerUnreadable
-	}
-	last, ok := top["lastUrgentRefusal"]
-	if !ok {
-		return e, errSummonLedgerUnreadable
-	}
-	if !bytes.Equal(bytes.TrimSpace(last), []byte("null")) {
-		var at time.Time
-		if err := takeLedgerTime(top, "lastUrgentRefusal", &at); err != nil {
-			return e, err
-		}
-		e.LastUrgentRefusal = &at
-	}
-	delete(top, "lastUrgentRefusal")
-	if len(top) > 0 {
-		e.extra = top
-	}
-	return e, nil
-}
-
-func decodeSummonCharge(raw json.RawMessage) (summonCharge, error) {
-	var ch summonCharge
-	fields, err := decodeLedgerObject(raw)
-	if err != nil {
-		return ch, err
-	}
-	if takeLedgerMember(fields, "id", &ch.ID) != nil || !summonDispatchIDPattern.MatchString(ch.ID) ||
-		takeLedgerTime(fields, "at", &ch.At) != nil ||
-		takeLedgerTime(fields, "attempt", &ch.Attempt) != nil ||
-		takeLedgerMember(fields, "hash", &ch.Hash) != nil || !summonRequestHashPattern.MatchString(ch.Hash) ||
-		takeLedgerMember(fields, "name", &ch.Name) != nil || len(validation.IsDNS1123Label(ch.Name)) > 0 {
-		return ch, errSummonLedgerUnreadable
-	}
-	if len(fields) > 0 {
-		ch.extra = fields
-	}
-	return ch, nil
-}
-
-// takeLedgerMember decodes a required member that is not null into v and
-// removes it from obj.
-func takeLedgerMember(obj map[string]json.RawMessage, name string, v any) error {
-	raw, ok := obj[name]
-	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, v) != nil {
-		return errSummonLedgerUnreadable
-	}
-	delete(obj, name)
-	return nil
-}
-
-// takeLedgerTime is takeLedgerMember for a time that is not zero.
-func takeLedgerTime(obj map[string]json.RawMessage, name string, at *time.Time) error {
-	if err := takeLedgerMember(obj, name, at); err != nil || at.IsZero() {
-		return errSummonLedgerUnreadable
-	}
-	*at = at.UTC()
-	return nil
-}
-
-func decodeLedgerObject(raw []byte) (map[string]json.RawMessage, error) {
-	var obj map[string]json.RawMessage
-	if json.Unmarshal(raw, &obj) != nil || obj == nil {
-		return nil, errSummonLedgerUnreadable
-	}
-	return obj, nil
-}
-
-// checkLedgerMembersUnique refuses a document in which any object repeats a
-// member. encoding/json keeps the last of two, so without this a second
-// "charges": [] would silently empty an entry.
-func checkLedgerMembersUnique(raw []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	if err := walkLedgerValue(dec, 0); err != nil {
-		return err
-	}
-	if _, err := dec.Token(); err != io.EOF {
-		return errSummonLedgerUnreadable
-	}
-	return nil
-}
-
-func walkLedgerValue(dec *json.Decoder, depth int) error {
-	if depth > summonLedgerMaxDepth {
-		return errSummonLedgerUnreadable
-	}
-	tok, err := dec.Token()
-	if err != nil {
-		return errSummonLedgerUnreadable
-	}
-	delim, ok := tok.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch delim {
-	case '{':
-		seen := map[string]bool{}
-		for dec.More() {
-			key, err := dec.Token()
-			if err != nil {
-				return errSummonLedgerUnreadable
-			}
-			name, ok := key.(string)
-			if !ok || seen[name] {
-				return errSummonLedgerUnreadable
-			}
-			seen[name] = true
-			if err := walkLedgerValue(dec, depth+1); err != nil {
-				return err
-			}
-		}
-	case '[':
-		for dec.More() {
-			if err := walkLedgerValue(dec, depth+1); err != nil {
-				return err
-			}
-		}
-	default:
-		return errSummonLedgerUnreadable
-	}
-	if _, err := dec.Token(); err != nil {
-		return errSummonLedgerUnreadable
-	}
-	return nil
-}
-
-func encodeSummonLedgerEntry(e summonLedgerEntry) (string, error) {
-	top := map[string]any{}
-	for k, v := range e.extra {
-		top[k] = v
-	}
-	charges := make([]map[string]any, 0, len(e.Charges))
-	for _, ch := range e.Charges {
-		m := map[string]any{}
-		for k, v := range ch.extra {
-			m[k] = v
-		}
-		m["id"] = ch.ID
-		m["at"] = ch.At.UTC()
-		m["attempt"] = ch.Attempt.UTC()
-		m["hash"] = ch.Hash
-		m["name"] = ch.Name
-		charges = append(charges, m)
-	}
-	top["schema"] = summonLedgerSchema
-	top["clock"] = e.Clock.UTC()
-	top["charges"] = charges
-	top["urgentRefusals"] = e.UrgentRefusals
-	top["lastUrgentRefusal"] = nil
-	if e.LastUrgentRefusal != nil {
-		top["lastUrgentRefusal"] = e.LastUrgentRefusal.UTC()
-	}
-	b, err := json.Marshal(top)
-	if err != nil {
-		return "", err
-	}
-	if len(b) > summonLedgerMaxEntry {
-		return "", errSummonLedgerUnreadable
-	}
-	return string(b), nil
-}
-
-// pruneSummonCharges drops a charge only when it is outside its window and its
-// last attempt mark is at least summonAttemptHold old, whether or not a
-// session of its id exists. A create the client may still send has a mark at
-// most summonCreateDeadline old by its replica's monotonic clock, so the
-// charge is kept while the clock assumption holds. A create the API server
-// received and persists later than the hold allows is the first stated limit
-// (see the top of this file). A retry after a drop maps to the same id and is
-// charged again: a double charge across two hours is acceptable.
-//
-// For story 741: this rule does not look at sessions. Once the leader admits
-// by the ledger (DESIGN-064 5.9), a charge whose session exists and is
-// neither admitted nor closed must be kept, however old it is, or a Queued
-// session would lose the charge it needs to be admitted.
-func pruneSummonCharges(charges []summonCharge, now time.Time) []summonCharge {
-	kept := make([]summonCharge, 0, len(charges))
-	for _, ch := range charges {
-		if summonChargeCounts(ch, now) || now.Sub(ch.Attempt) < summonAttemptHold {
-			kept = append(kept, ch)
-		}
-	}
-	return kept
-}
+// The entry's types are the shared package's (internal/summonledger), which
+// the operator leader's admission reads too. The API keeps its write paths here.
+type (
+	summonCharge      = summonledger.Charge
+	summonLedgerEntry = summonledger.Entry
+)
 
 // summonLedgerUnavailable is the refusal when the ledger cannot be read or
 // written. A summoning create then makes no create at all: every create
@@ -428,9 +113,19 @@ func summonLedgerKey(c *caller) string {
 
 // summonSessions is an uncached read of the sessions a ledger write decides
 // on: those carrying a dispatch id, by that id, and every name held.
+// unsettled holds the dispatch id of every session that exists and is neither
+// admitted nor closed: the prune keeps its charge (summonledger.Prune, 7233).
 type summonSessions struct {
-	byID  map[string]*v1alpha1.AgentSession
-	names map[string]bool
+	byID      map[string]*v1alpha1.AgentSession
+	names     map[string]bool
+	unsettled map[string]bool
+}
+
+// summonUnsettled is a session the leader may still admit by its charge: not
+// admitted and not closed (DESIGN-064 5.9 item 4).
+func summonUnsettled(sess *v1alpha1.AgentSession) bool {
+	st := sess.Status.Summon
+	return st == nil || st.AdmittedAt == nil && st.Closed == nil
 }
 
 func (s *Server) readSummonSessions(ctx context.Context) (summonSessions, error) {
@@ -439,14 +134,18 @@ func (s *Server) readSummonSessions(ctx context.Context) (summonSessions, error)
 		return summonSessions{}, err
 	}
 	out := summonSessions{
-		byID:  make(map[string]*v1alpha1.AgentSession, len(list.Items)),
-		names: make(map[string]bool, len(list.Items)),
+		byID:      make(map[string]*v1alpha1.AgentSession, len(list.Items)),
+		names:     make(map[string]bool, len(list.Items)),
+		unsettled: map[string]bool{},
 	}
 	for i := range list.Items {
 		it := &list.Items[i]
 		out.names[it.Name] = true
 		if it.Spec.Summon != nil && it.Spec.Summon.DispatchID != "" {
 			out.byID[it.Spec.Summon.DispatchID] = it
+			if summonUnsettled(it) {
+				out.unsettled[it.Spec.Summon.DispatchID] = true
+			}
 		}
 	}
 	return out, nil
@@ -495,7 +194,7 @@ func (s *Server) readSummonLedger(ctx context.Context, c *caller) (summonLedgerE
 		return summonLedgerEntry{}, nil, summonLedgerUnavailable("cannot be written")
 	}
 	raw, present := cm.Data[summonLedgerKey(c)]
-	entry, err := decodeSummonLedgerEntry(raw, present)
+	entry, err := summonledger.Decode(raw, present)
 	if err != nil {
 		s.Log.Info("summon create ledger entry unreadable", "caller", c.String())
 		return summonLedgerEntry{}, nil, summonLedgerUnavailable("has an entry for this caller that cannot be read")
@@ -525,13 +224,13 @@ func (s *Server) updateSummonLedger(ctx context.Context, c *caller, decide func(
 			return time.Time{}, fromKubeError(err, "list sessions")
 		}
 		mono := s.summonClock().Now()
-		now := entry.now(s.now())
+		now := entry.Now(s.now())
 		if !decide(&entry, now, live) {
 			return time.Time{}, nil
 		}
 		entry.Clock = now
-		entry.Charges = pruneSummonCharges(entry.Charges, now)
-		raw, err := encodeSummonLedgerEntry(entry)
+		entry.Charges = summonledger.Prune(entry.Charges, now, live.unsettled)
+		raw, err := summonledger.Encode(entry)
 		if err != nil {
 			return time.Time{}, summonLedgerUnavailable("entry for this caller is too large")
 		}
@@ -606,13 +305,13 @@ type summonBinding struct {
 // counted in the same write. It returns the result and whether to write.
 func chargeAttempt(e *summonLedgerEntry, i int, now time.Time, urgent bool, perHour int32) (summonChargeResult, bool) {
 	ch := &e.Charges[i]
-	if summonChargeCounts(*ch, now) {
+	if summonledger.ChargeCounts(*ch, now) {
 		ch.Attempt = now
 		return summonMarked, true
 	}
-	if e.inWindow(now) >= int(perHour) {
+	if e.InWindow(now) >= int(perHour) {
 		if urgent {
-			e.countUrgentRefusal(now)
+			e.CountUrgentRefusal(now)
 		}
 		return summonHourFull, urgent
 	}
@@ -640,10 +339,10 @@ func (s *Server) bindSummonCharge(ctx context.Context, c *caller, id, hash, name
 			if !urgent {
 				return false
 			}
-			e.countUrgentRefusal(now)
+			e.CountUrgentRefusal(now)
 			return true
 		}
-		if i := e.charge(id); i >= 0 {
+		if i := e.Index(id); i >= 0 {
 			if e.Charges[i].Hash != hash {
 				b.result = summonOtherRequest
 				return false
@@ -657,7 +356,7 @@ func (s *Server) bindSummonCharge(ctx context.Context, c *caller, id, hash, name
 			b.result = summonNameRefused
 			return false
 		}
-		if e.inWindow(now) >= int(perHour) {
+		if e.InWindow(now) >= int(perHour) {
 			return hourFull()
 		}
 		e.Charges = append(e.Charges, summonCharge{ID: id, At: now, Attempt: now, Hash: hash, Name: name})
@@ -681,7 +380,7 @@ func (s *Server) rebindSummonCharge(ctx context.Context, c *caller, id, hash, fr
 			b.result, b.existing = summonSessionExists, sess
 			return false
 		}
-		i := e.charge(id)
+		i := e.Index(id)
 		if i < 0 {
 			b.result = summonChargeGone
 			return false
@@ -740,7 +439,7 @@ func (s *Server) markSummonAttempt(ctx context.Context, c *caller, id, hash, nam
 			b.result, b.existing = summonSessionExists, sess
 			return false
 		}
-		i := e.charge(id)
+		i := e.Index(id)
 		if i < 0 {
 			b.result = summonChargeGone
 			return false
@@ -773,7 +472,7 @@ func (s *Server) summonChargeHeld(ctx context.Context, c *caller, id, hash strin
 	if err != nil {
 		return false, err
 	}
-	i := entry.charge(id)
+	i := entry.Index(id)
 	return i >= 0 && entry.Charges[i].Hash == hash, nil
 }
 
@@ -782,7 +481,7 @@ func (s *Server) summonChargeHeld(ctx context.Context, c *caller, id, hash strin
 // nothing in this API reads it.
 func (s *Server) countSummonUrgentRefusal(ctx context.Context, c *caller) error {
 	_, err := s.updateSummonLedger(ctx, c, func(e *summonLedgerEntry, now time.Time, _ summonSessions) bool {
-		e.countUrgentRefusal(now)
+		e.CountUrgentRefusal(now)
 		return true
 	})
 	return err

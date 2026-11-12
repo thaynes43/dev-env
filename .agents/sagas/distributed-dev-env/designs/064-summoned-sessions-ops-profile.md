@@ -899,6 +899,43 @@ last charge; an hour-old charge with no Session dropped and its retry charged
 again. Each shows one charge per dispatch id within an hour and at most one
 admitted Session per id, not merely a successful ConfigMap update.
 
+**Correction, 2026-11-12 (story 777, slice a of #741; item 741 ruling D10,
+written by the story's worker, not a ruling by Tom).** The text above stays;
+where it differs, this governs.
+
+1. *The summoned task latch needs two flags, not one.* The controller's half
+   is `--enable-private-history-retention`. agentd's half, the pod's session
+   document saying the task is retained (`PrivateHistoryRetained`, so agentd
+   never continues a saved launch), is set only with
+   `--enable-terminal-task-pod-reclaim` on as well (which itself needs
+   `--enable-private-terminal-record` and `--enable-private-executor-stop`).
+   The leader admits a summoned task only with both on, and the operator
+   refuses to start with `task` in `--summon-create-kinds` and either off
+   (ruling D8).
+2. *The pools count admitted, unreleased records.* The leader's admission
+   counts them, per caller and pool, from one uncached list per pass
+   (`internal/controller/summon_admission.go`). Until story 778 turns the
+   API's 429 at the pool into Queued, that 429 still counts the caller's
+   "unfinished" session records: a suspended one is not counted there, and a
+   closed one whose record is unfinished is.
+3. *A summoned task's latch was recorded as never startable.* The outcome
+   step of 6.6 writes `outcome: pending` on a summoned session's first
+   reconcile, before the private task latch is recorded, and the latch's
+   check for a fresh lifecycle counted any outcome as history. Every summoned
+   task would have been recorded `Unknown` and never started. Story 777 fixes
+   it: a summoned session's own Pending outcome is not history; any other
+   outcome still is, and the uncached read that no pod or volume exists still
+   applies. Because that check also needs a status with no condition, the
+   leader writes nothing to a summoned task, neither admission nor a hold,
+   until the reconciler has recorded its latch.
+4. *Holds.* A remote summoned session is held `RemoteLatchMissing` until
+   #741 slice d builds the remote latch; a task while the operator lacks
+   either latch flag, or whose latch record cannot start, is held
+   `TaskLatchMissing`. A session whose dispatch id the ledger does not bind
+   to its name is closed by its `onUnreported`, reason `not-charged`, a row
+   of 6.6's one table after `escalation-bound` and before the hold rows
+   (ruling D5).
+
 ## 6. Contracts per build story
 
 ### 6.1 OP735: the ops egress tier

@@ -25,6 +25,10 @@ const (
 	ReasonHoldExpired         = "hold-expired"
 	ReasonQuotaHoldExpired    = "quota-hold-expired"
 	ReasonSuspendedUnreported = "suspended-unreported"
+	// ReasonNotCharged is evidence the operator leader read, not an agent
+	// state: the create ledger does not hold the session's dispatch id bound
+	// to its name, so it is never admitted (OP777, ruling D5 on item 741).
+	ReasonNotCharged = "not-charged"
 )
 
 // Inputs contains evidence, never inferred from heartbeat freshness. Only the
@@ -40,6 +44,10 @@ type Inputs struct {
 	// OP741: latch, admission, deadlines, watchdog, queued hold and suspend evidence.
 	SessionLost, NeverStarted, Deadline, HeartbeatLost               bool
 	Stale, EscalationBound, HoldExpired, QuotaHoldExpired, Suspended bool
+	// NotCharged: the leader's uncached ledger read found no charge for the
+	// session's dispatch id bound to its name (OP777). Only a session that was
+	// never admitted has it, so no agent row can be true beside it.
+	NotCharged bool
 }
 
 // FirstReason is the single earliest-row-wins ordering of DESIGN-064 6.6.
@@ -81,6 +89,8 @@ func FirstReason(in Inputs) string {
 		return ReasonStale
 	case in.EscalationBound:
 		return ReasonEscalationBound
+	case in.NotCharged:
+		return ReasonNotCharged
 	case in.QuotaHoldExpired:
 		return ReasonQuotaHoldExpired
 	case in.HoldExpired:

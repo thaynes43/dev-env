@@ -326,8 +326,16 @@ func TestSummonLedgerRetryInTheNextHour(t *testing.T) {
 
 		// 66 minutes after the re-charge the charge is 65 minutes old and its
 		// attempt is past the 15 minute hold, so the next write drops it. The
-		// session exists; that no longer drops a charge on its own.
+		// session exists; that no longer drops a charge on its own. Since
+		// OP777 (item 741 comments 7228 and 7233) a session settles only once
+		// it is admitted or closed: a Queued one keeps its charge.
 		f.editStatus("rem-responder-a", v1alpha1.PhaseFailed)
+		settled := f.session("rem-responder-a")
+		closedAt := metav1.NewTime(t0.Add(70 * time.Minute))
+		settled.Status.Summon = &v1alpha1.SummonStatus{AdmittedAt: &closedAt, Closed: &v1alpha1.SummonClosedStatus{At: closedAt, Source: "report", Reason: "done", Released: true}}
+		if err := f.c.Status().Update(context.Background(), settled); err != nil {
+			t.Fatal(err)
+		}
 		f.now = t0.Add(132 * time.Minute)
 		wantStatus(t, summonPost(t, f, b), http.StatusCreated)
 		e = f.ledger()
