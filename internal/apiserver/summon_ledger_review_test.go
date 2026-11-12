@@ -200,6 +200,67 @@ func TestSummonCreateDeadline(t *testing.T) {
 	}
 }
 
+// The advisory review of 96fc3ec9: the create, and the read after its
+// AlreadyExists, run under what is left of the deadline, so neither can reach
+// the API server after the charge's attempt hold. Each ledger write here is
+// followed by 90 seconds on the monotonic clock, so 30 are left; a clash makes
+// the create, the read and, after the rebind write, the second create.
+func TestSummonCreateRunsUnderTheDeadline(t *testing.T) {
+	f := summonFixture(t)
+	mono := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	f.srv.SummonMonotonic = func() time.Time { return mono }
+	var deadlines []string
+	bounded := func(what string, ctx context.Context) {
+		dl, ok := ctx.Deadline()
+		if !ok || time.Until(dl) > 30*time.Second {
+			t.Errorf("%s ran without the deadline's remaining 30s: %v %v", what, ok, time.Until(dl))
+		}
+		deadlines = append(deadlines, what)
+	}
+	taken := false
+	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			err := c.Update(ctx, obj, opts...)
+			if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == ledgerTestName && err == nil {
+				mono = mono.Add(90 * time.Second)
+			}
+			return err
+		},
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			s, ok := obj.(*v1alpha1.AgentSession)
+			if !ok {
+				return c.Create(ctx, obj, opts...)
+			}
+			bounded("create "+s.Name, ctx)
+			if s.Name == "rem-responder-1" && !taken {
+				taken = true
+				other := &v1alpha1.AgentSession{
+					ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: s.Name},
+					Spec:       v1alpha1.AgentSessionSpec{Repo: "haynes-ops", Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Prompt: "p", Parent: humanSA},
+				}
+				if err := c.Create(context.Background(), other); err != nil {
+					return err
+				}
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	})
+	f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*v1alpha1.AgentSession); ok {
+			bounded("read "+key.Name, ctx)
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}})
+	w := summonPost(t, f, keyedRemediation("rem-responder-1", "alert-1"))
+	wantStatus(t, w, http.StatusCreated)
+	if got := decode[apiv1.Session](t, w).Name; got != "rem-responder-1-2" {
+		t.Fatalf("name %s", got)
+	}
+	if want := "create rem-responder-1,read rem-responder-1,create rem-responder-1-2"; strings.Join(deadlines, ",") != want {
+		t.Fatalf("bounded calls %v, want %s", deadlines, want)
+	}
+}
+
 // Ruling 2 (review finding 2, HIGH): one charge binds one dispatch to its
 // request and its name. Two replicas, one key and two requested names: B's
 // whole create runs inside A's first ledger write. A then finds B's charge

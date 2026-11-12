@@ -173,15 +173,22 @@ func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter,
 			return 0, nil, summonChargedFailure(newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
 				"the charge for this dispatch left the ledger during its create; no session was created"))
 		}
-		if s.summonMonotonic().Sub(b.written) > summonCreateDeadline {
+		remaining := summonCreateDeadline - s.summonMonotonic().Sub(b.written)
+		if remaining <= 0 {
 			return 0, nil, summonChargedFailure(newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
 				"the session create could not be issued within %s of the ledger write naming its dispatch id; no session was created", summonCreateDeadline))
 		}
 		sess.Name = b.name
 		sess.ResourceVersion = ""
 		sess.Spec.Prompt = brief(b.name)
-		err := s.Client.Create(ctx, sess, client.FieldValidation(metav1.FieldValidationStrict))
+		// The create, and the read after its AlreadyExists, run under what is
+		// left of the deadline, so a call held in the client's rate limiter or
+		// on a slow connection cannot reach the API server after the charge's
+		// attempt hold (the API server bounds its own handling of a request).
+		callCtx, cancel := context.WithTimeout(ctx, remaining)
+		err := s.Client.Create(callCtx, sess, client.FieldValidation(metav1.FieldValidationStrict))
 		if err == nil {
+			cancel()
 			s.Log.Info("session created", "session", sess.Name, "caller", c.String(), "repo", sess.Spec.Repo,
 				"agent", sess.Spec.Agent, "mode", sess.Spec.Mode, "model", sess.Spec.Model, "lane", sess.Spec.Lane,
 				"dispatchID", id, "generation", sess.Annotations[v1alpha1.AnnotationSummonGeneration], "charge", summonChargeLog(b.result))
@@ -189,12 +196,15 @@ func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter,
 			return http.StatusCreated, view(sess, false), nil
 		}
 		if !apierrors.IsAlreadyExists(err) {
+			cancel()
 			// The charge stays: a spent slot of its hour. A keyed retry maps
 			// to the same id and is not charged again.
 			return 0, nil, summonChargedFailure(fromKubeError(err, "create session"))
 		}
 		var held v1alpha1.AgentSession
-		if err := s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: b.name}, &held); err != nil {
+		err = s.Live.Get(callCtx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: b.name}, &held)
+		cancel()
+		if err != nil {
 			if !apierrors.IsNotFound(err) {
 				return 0, nil, summonChargedFailure(fromKubeError(err, "session "+b.name))
 			}
