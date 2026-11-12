@@ -652,6 +652,10 @@ func (t *Templates) Validate() error {
 					}
 				}
 			}
+			// Nesting is refused only for pairs that involve this block.
+			// Document mounts and profile mounts keep the equality checks
+			// above, so a document that parses today still parses.
+			errs = append(errs, remoteBlockMountOverlaps(remoteWhere, p.Remote.Mounts, t.Mounts, p.Mounts)...)
 		}
 		for k, v := range p.Labels {
 			if msgs := validation.IsQualifiedName(k); len(msgs) > 0 {
@@ -752,6 +756,39 @@ func validateMounts(where string, mounts []Mount, names map[string]string) []err
 		}
 	}
 	return errs
+}
+
+// remoteBlockMountOverlaps refuses a mount in the block whose path is equal
+// to, inside, or above a document mount, a profile mount, or another mount in
+// the block. Pairs that do not involve the block are not checked here.
+func remoteBlockMountOverlaps(where string, remote, document, profile []Mount) []error {
+	var errs []error
+	for i, m := range remote {
+		if !cleanMountPath(m.Path) {
+			continue
+		}
+		for _, o := range document {
+			errs = appendOverlap(errs, where, m.Path, o.Path)
+		}
+		for _, o := range profile {
+			errs = appendOverlap(errs, where, m.Path, o.Path)
+		}
+		for j := i + 1; j < len(remote); j++ {
+			errs = appendOverlap(errs, where, m.Path, remote[j].Path)
+		}
+	}
+	return errs
+}
+
+func appendOverlap(errs []error, where, a, b string) []error {
+	if !cleanMountPath(b) || !overlaps(a, b) {
+		return errs
+	}
+	return append(errs, fmt.Errorf("%s.mounts: path %s overlaps %s", where, a, b))
+}
+
+func cleanMountPath(p string) bool {
+	return path.IsAbs(p) && path.Clean(p) == p
 }
 
 // validateGlobalMountPaths refuses a profile mount at the path of a mount every pod

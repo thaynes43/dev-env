@@ -275,14 +275,14 @@ flowchart LR
 | Kind | Claude credential | Supported today | Refresher |
 |---|---|---|---|
 | `task` (remediation, curation) | the static token `CLAUDE_CODE_OAUTH_TOKEN` from `dev-env-claude-secret`, which the operator sets for Claude task and local sessions on every profile (R21) | yes, for profile `ops` too | none: it is a setup token with no refresh token (DESIGN-001 6.1) |
-| `remote` (escalation, upgrade) | the keeper's access-only projection: `AGENTD_CLAUDE_LIVE_FILE` and the `dev-env-claude-live` mount (R22) | the projection is delivered in the profile's `remote` block | the keeper alone. agentd never refreshes, and refuses to start an agent when the pod's credentials hold a refresh token of their own (`ErrClaudeLoginConflict`) |
+| `remote` (escalation, upgrade) | the keeper's access-only projection: `AGENTD_CLAUDE_LIVE_FILE` and the `dev-env-claude-live` mount (R22) | the mechanism is in source and the `ops` rollout is not installed yet | the keeper alone. agentd never refreshes, and refuses to start an agent when the pod's credentials hold a refresh token of their own (`ErrClaudeLoginConflict`) |
 
 So "the ops profile follows the keeper's Claude login" (story 737's title)
-applies to remote sessions. A task keeps the static token. Profile `full`
-already mounts both for its task pods, and `ops` will match it. Which of the
-two the CLI uses for a task when both are present was not verified here.
-Neither path adds a refresher: one holds no refresh token, and the other reads
-a projection that holds none.
+applies to remote sessions. On `ops`, a task or local Claude pod keeps the
+static token only, and a remote agent pod receives the projection through the
+profile's `remote` block. `full` and `workbench` keep their existing behaviour,
+which this design does not change. Neither path adds a refresher: one holds no
+refresh token, and the other reads a projection that holds none.
 
 The Claude launch has no automatic metered fallback (R23): agentd strips the
 metered variables from the agent's starting environment, and no session

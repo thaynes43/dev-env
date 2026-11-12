@@ -92,6 +92,60 @@ func TestRemoteBlockRefused(t *testing.T) {
 	}
 }
 
+// The five nestings from the OP765 review, plus a sibling that must still parse.
+// Equality stays covered by TestRemoteBlockRefused; these are inside or above.
+func TestRemoteBlockRefusesNestedMounts(t *testing.T) {
+	cases := []struct {
+		name, block, path string
+	}{
+		{
+			"under the profile mount /creds",
+			"    remote:\n      mounts:\n        - { name: gh-token-file, secret: dev-env-claude-live, path: /creds/gh_token }\n",
+			"/creds/gh_token",
+		},
+		{
+			"under the document mount /etc/codex",
+			"    remote:\n      mounts:\n        - { name: codex-req-file, secret: dev-env-claude-live, path: /etc/codex/requirements.toml }\n",
+			"/etc/codex/requirements.toml",
+		},
+		{
+			"under the document mount /opt/dev-env/scripts",
+			"    remote:\n      mounts:\n        - { name: agent-run-file, secret: dev-env-claude-live, path: /opt/dev-env/scripts/agent-run }\n",
+			"/opt/dev-env/scripts/agent-run",
+		},
+		{
+			"above the document config mounts",
+			"    remote:\n      mounts:\n        - { name: config-root, secret: dev-env-claude-live, path: /opt/dev-env/config }\n",
+			"/opt/dev-env/config",
+		},
+		{
+			"a parent and a child inside the block",
+			"    remote:\n      mounts:\n        - { name: review-root, secret: dev-env-claude-live, path: /opt/review-root }\n        - { name: review-child, secret: dev-env-claude-live, path: /opt/review-root/child }\n",
+			"/opt/review-root/child",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := parse(t, withOpsRemote(t, c.block))
+			if err == nil || !strings.Contains(err.Error(), "overlaps") || !strings.Contains(err.Error(), c.path) {
+				t.Fatalf("want an overlap refusal for %s, got %v", c.path, err)
+			}
+		})
+	}
+}
+
+func TestRemoteBlockAcceptsSiblingMount(t *testing.T) {
+	const block = "    remote:\n      mounts:\n        - { name: creds-other, secret: dev-env-claude-live, path: /creds-other }\n"
+	tmpl, err := parse(t, withOpsRemote(t, block))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ops, err := tmpl.Profile("ops")
+	if err != nil || ops.Remote == nil || len(ops.Remote.Mounts) != 1 || ops.Remote.Mounts[0].Path != "/creds-other" {
+		t.Fatalf("sibling mount %+v %v", ops.Remote, err)
+	}
+}
+
 func TestDocumentWithoutRemoteBlockKeepsRevision(t *testing.T) {
 	tmpl, err := parse(t, example(t))
 	if err != nil {
