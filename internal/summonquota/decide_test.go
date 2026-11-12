@@ -157,18 +157,42 @@ func TestNoUsableReadingAdmitsAndSaysWhy(t *testing.T) {
 }
 
 // "Older than --summon-usage-max-age" is strict: a reading exactly that old
-// is fresh. A reading time ahead of the clock (another node's) is age zero.
+// is fresh, and so is one taken exactly at the clock.
+//
+// A reading from the future, its readAt after the clock (the clock went back,
+// or another node's is ahead), is unusable (fix round 1 on PR 1101, ruling
+// R1): it admits for every line with its own reason, and its age stays
+// negative, never zero.
 func TestReadingAgeAtTheMaxAge(t *testing.T) {
+	weekly := installLines
+	weekly.BulkSevenDay = 90
 	for _, tc := range []struct {
 		age   time.Duration
 		admit bool
-		want  time.Duration
-	}{{15 * time.Minute, false, 15 * time.Minute}, {15*time.Minute + time.Second, true, 15*time.Minute + time.Second}, {-time.Minute, false, 0}} {
-		r := reading(FiveHourMinutes, "99")
+		why   Why
+	}{
+		{15 * time.Minute, false, WhyFiveHourPast},
+		{15*time.Minute + time.Second, true, WhyStale},
+		{0, false, WhyFiveHourPast},
+		{-time.Nanosecond, true, WhyFromFuture},
+		{-time.Minute, true, WhyFromFuture},
+		{-time.Hour, true, WhyFromFuture},
+	} {
+		r := reading(FiveHourMinutes, "99", SevenDayMinutes, "99")
 		r.ReadAt = t0.Add(-tc.age)
-		d := Decide(v1alpha1.SummonPriorityBulk, r, installLines, t0)
-		if d.Admit != tc.admit || d.Age != tc.want || !d.HaveReading {
-			t.Errorf("reading %s old: %+v, want admit %v, age %s", tc.age, d, tc.admit, tc.want)
+		for _, p := range []v1alpha1.SummonPriority{v1alpha1.SummonPriorityNormal, v1alpha1.SummonPriorityBulk} {
+			d := Decide(p, r, weekly, t0)
+			if d.Admit != tc.admit || d.Reason != tc.why || d.Age != tc.age || !d.HaveReading {
+				t.Errorf("%s, reading %s old: %+v, want admit %v for %s, age %s", p, tc.age, d, tc.admit, tc.why, tc.age)
+			}
+			if tc.why != WhyFromFuture {
+				continue
+			}
+			// For every line set: the 5-hour line, and bulk's weekly line.
+			if d.FiveHour.Missing != WhyFromFuture || d.FiveHour.Past || d.SevenDay.Past ||
+				(p == v1alpha1.SummonPriorityBulk && d.SevenDay.Missing != WhyFromFuture) {
+				t.Errorf("%s, reading %s old: a line was used: %+v", p, tc.age, d)
+			}
 		}
 	}
 }

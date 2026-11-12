@@ -10,12 +10,15 @@
 // the admission's hook around it: one read per 30 seconds at most, a bounded
 // read, and one log line per decision.
 //
-// The gate fails open (ruling Q13 on item 743 comment 7458, and C8 in
-// DESIGN-064 section 10): an unset line is off; a reading that is stale,
-// missing or unreadable admits for every line; and a fresh reading that lacks
-// a window, or whose window has reset since it was read, admits for that
-// window's line. The readings come from running interactive Claude sessions
-// (DESIGN-059), so they go stale exactly when nobody is working.
+// The gate is best effort and fails open (ruling Q13 on item 743 comment
+// 7458, and C8 in DESIGN-064 section 10): an unset line is off; a reading that
+// is stale, missing, unreadable or from the future (its time after the gate's
+// clock; ruling R1 on PR 1101) admits for every line; and a fresh reading that
+// lacks a window, or whose window has reset since it was read, admits for
+// that window's line. The readings come from running interactive Claude
+// sessions (DESIGN-059), and a reading's time is when its numbers last
+// changed: an unchanged reading ages while the plan is in use, and a high one
+// stays fresh up to the max age after work stops.
 package summonquota
 
 import (
@@ -56,6 +59,9 @@ const (
 	WhyReadTimeout Why = "read-timeout"
 	// WhyStale: the reading is older than Lines.MaxAge.
 	WhyStale Why = "stale"
+	// WhyFromFuture: the reading's time is after the gate's clock (the clock
+	// went back, or another node's is ahead), so its age is unknown.
+	WhyFromFuture Why = "reading-from-future"
 	// Why one window of a fresh reading is not used.
 	WhyWindowMissing Why = "window-missing"
 	WhyWindowReset   Why = "window-reset"
@@ -122,11 +128,13 @@ type Decision struct {
 	Admit    bool
 	Priority v1alpha1.SummonPriority
 	// Reason is the hold's window when held. When admitted it is the first
-	// of: urgent, unknown-priority, no-line, the reading's Missing or stale,
-	// the 5-hour line's Missing, the 7-day line's Missing, within-lines.
+	// of: urgent, unknown-priority, no-line, the reading's Missing,
+	// reading-from-future or stale, the 5-hour line's Missing, the 7-day
+	// line's Missing, within-lines.
 	Reason             Why
 	FiveHour, SevenDay Window
-	// HaveReading says Age is the reading's age at now (never negative).
+	// HaveReading says Age is the reading's age at now. It is negative for a
+	// reading from the future, never made zero.
 	HaveReading bool
 	Age         time.Duration
 }
@@ -155,10 +163,15 @@ func Decide(p v1alpha1.SummonPriority, r Reading, l Lines, now time.Time) Decisi
 	}
 	if missing == "" {
 		d.HaveReading = true
-		d.Age = max(now.Sub(r.ReadAt), 0)
+		d.Age = now.Sub(r.ReadAt)
 		d.FiveHour.Used, d.FiveHour.Missing = window(r.Windows, FiveHourMinutes, now)
 		d.SevenDay.Used, d.SevenDay.Missing = window(r.Windows, SevenDayMinutes, now)
-		if d.Age > l.MaxAge {
+		switch {
+		case d.Age < 0:
+			// A time after the clock says nothing of how old the numbers
+			// are (ruling R1 on PR 1101): unusable for every line.
+			missing = WhyFromFuture
+		case d.Age > l.MaxAge:
 			missing = WhyStale
 		}
 	}

@@ -2276,26 +2276,40 @@ session without one is built exactly as before.
   - *Lines.* Each is a whole number from 1 to 100 and has no default in
     code: empty, the default, is off. A set line needs
     `--summon-usage-max-age`, a positive duration; anything else refuses to
-    start. They are set in the operator HelmRelease, so they live in git.
-    With every line off no gate is built and nothing is read.
+    start. The install will set them in the operator HelmRelease, so they
+    live in git; this change sets none. With every line off no gate is built
+    and nothing is read.
   - *Readings.* The gate reads the newest reading of the session's own agent
     (every summoned session runs Claude) from ConfigMap
     `dev-env-system/dev-env-session-allowances`, uncached, with a 5-second
     timeout. That ConfigMap is written by the operator's API, behind
     `--enable-session-allowances`, from the heartbeats of remote and local
-    Claude sessions on the keeper's login, at most every 5 minutes per
-    provider. Its `readAt` is when the numbers last changed, so a reading can
-    look older than it is. Summoned tasks never write one. Windows are
-    picked by length: 300 minutes and 10080 minutes. One read's result, the
-    readings or the failure, answers every decision for 30 seconds on the
-    gate's own clock: at most one read per 30 seconds, which is one per pass
-    whenever a pass takes less. The seam gets no pass id, so story 743b can
-    make it exact.
-  - *It fails open.* A reading older than `--summon-usage-max-age`, no
-    reading, a read error and a timeout admit, for every line. A fresh
-    reading that lacks a window, or whose window has reset since it was
-    read, admits for that window's line only. The readings come from running
-    interactive sessions, so they go stale exactly when nobody is working.
+    Claude sessions on the keeper's login. It writes a provider's reading
+    only when its `readAt` is newer than the last one written, and then at
+    most every 5 minutes, or after 1 minute when a window's reset moved by
+    more than 2 minutes or a window came or went. Its `readAt` is when the
+    numbers last changed, not when they were last seen: each session's
+    agentd keeps the earlier time while its values stay the same. So an
+    unchanged reading ages while Tom works, and a plan in use whose numbers
+    have not moved for the max age reads as stale and admits; and a high
+    reading stays fresh for up to the max age after he stops. A reading can
+    look older than it is, never newer. Summoned tasks never write one.
+    Windows are picked by length: 300 minutes and 10080 minutes. One read's
+    result, the readings or the failure, answers every decision for 30
+    seconds on the gate's own clock: at most one read per 30 seconds, which
+    is one per pass whenever a pass takes less. The seam gets no pass id, so
+    story 743b can make it exact.
+  - *It is best effort and fails open.* A reading older than
+    `--summon-usage-max-age`, no reading, a read error and a timeout admit,
+    for every line. So does a reading from the future, whose `readAt` is
+    after the gate's clock (the clock went back, or another node's is
+    ahead): its age is unknown, so it admits with reason
+    `reading-from-future` and the log shows its negative age, never zero. A
+    fresh reading that lacks a window, or whose window has reset since it
+    was read, admits for that window's line only. Staleness and a window's
+    reset are judged on the clock after the read returns; the 30-second
+    reuse is measured from before the read. A clock that went back reads
+    again.
   - *Log.* Each decision on a `normal` or `bulk` session logs one line,
     "quota gate admitted a summoned session" or "quota gate held a summoned
     session", with the session's name and lane, the priority, a fixed
