@@ -47,8 +47,8 @@ process environment and all configuration files remain unchanged.
 
 ## Supported commands
 
-- kubectl: `get`, `describe`, `logs`, `events`, `top`, `wait`, `exec`, `cp`,
-  `port-forward`, `rollout`, `apply`, `diff`, `patch`, `delete`, `scale`, `annotate`,
+- kubectl: `get`, `describe`, `logs`, `events`, `top`, `wait`, `exec`,
+  `port-forward`, `rollout`, `apply`, `patch`, `delete`, `scale`, `annotate`,
   `label`, `auth can-i`, `auth whoami`, `version`, `api-resources`, `api-versions`,
   `explain`, `cluster-info`.
 - Flux: `get`, `logs`, `events`, `check`, `stats`, `trace`, `tree`, `reconcile`,
@@ -58,6 +58,8 @@ These are recognized built-ins, **not permission to perform them**. Existing tas
 approval, RBAC and safety rules still apply, including for reads of sensitive
 resources, runtime writes, port-forwards and remote exec. `config`, plugin/login
 commands, `create`, Flux bootstrap/install, and unknown verbs are not supported.
+`diff` and `cp` are also excluded: their external diff/local tar helper selection
+is outside this launcher's fixed-client contract.
 Extend this list only with reviewed routing tests. The launcher never runs a
 shell to dispatch a command.
 

@@ -22,8 +22,8 @@ PROBE_TIMEOUT = 15
 # The set is routing scope, not approval to perform any of these operations.
 COMMANDS = {
     "kubectl": frozenset(("get", "describe", "logs", "events", "top", "wait",
-                          "exec", "cp", "port-forward", "rollout", "apply",
-                          "diff", "patch", "delete", "scale", "annotate",
+                          "exec", "port-forward", "rollout", "apply",
+                          "patch", "delete", "scale", "annotate",
                           "label", "auth", "version", "api-resources",
                           "api-versions", "explain", "cluster-info")),
     "flux": frozenset(("get", "logs", "events", "check", "stats", "trace",

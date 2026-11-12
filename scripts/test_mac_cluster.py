@@ -234,6 +234,15 @@ class LauncherTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertEqual(dispatch.call_args.args[0][-len(args):], args)
 
+    def test_external_helper_commands_refused_before_client(self):
+        with mock.patch.dict(os.environ, {"KUBECTL_EXTERNAL_DIFF": "/never-run", "PATH": "/untrusted"}):
+            for command in ("diff", "cp"):
+                with self.subTest(command=command):
+                    code, probe, dispatch = self.invoke(["kubectl", command, "pod"])
+                    self.assertEqual(code, 2)
+                    probe.assert_not_called()
+                    dispatch.assert_not_called()
+
     def test_unknown_plugin_config_and_auth_commands_refused(self):
         for args in (["kubectl", "oidc-login"], ["kubectl", "plugin", "run"],
                      ["kubectl", "create", "plugin"], ["kubectl", "config", "view", "--raw"],
