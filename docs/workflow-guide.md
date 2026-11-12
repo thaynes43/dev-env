@@ -1750,10 +1750,8 @@ The API writes the parent (the account), the caller (the policy name), the
 lane, the profile, the model, the effort, the limits and the immutable
 `spec.summon` snapshot from the entry, including the escalation entry copied
 for a remediation. It does not write `spec.base`; the default `origin/main`
-applies. `spec.summon.dispatchID` is a schema-valid random id. The ledger
-that charges an id before the create, the replay of `idempotencyKey`, the
-name suffix and the pool limits are a later slice. A key sent now is stored
-and is not replayed.
+applies. `spec.summon.dispatchID` is the id the create ledger charged
+before the session was created (below).
 
 The API renders the brief into `spec.prompt`. The entry's template is copied
 verbatim, then one line naming the session, its policy and its lane, then one
@@ -1769,3 +1767,72 @@ does not name is refused. Each value is at most 4096 bytes and the values
 together at most 16384. An ordinary remote session still cannot carry a prompt. A summoned
 remote session can, because the brief is that prompt. Handing the brief to
 the CLI at first launch is a later story.
+
+### Repeating a create, the hourly limit and the pool
+
+These rules are DESIGN-064 5.9 and 6.4 (story 758). They apply to summoning
+callers only. Ordinary and budget-bound replay rules are unchanged, and
+Meatball's are too.
+
+**A repeated key.** `idempotencyKey` is per caller: the API looks among this
+caller's own sessions that carry the key, and takes the newest.
+
+- If that session is unfinished and has no terminal outcome (`done`,
+  `failed` or `escalated`), the create returns it with 200. Nothing is
+  charged or written. The match covers `mode`, `lane` and the requested
+  `name`, not `data`: a repeat with other `data` gets the same session, and
+  its brief is not changed. So a 200 on a repeated key does not mean the new
+  data was delivered. Do not read it as an update, and do not reuse a key for
+  unrelated work.
+- The same key with another `mode`, `lane` or `name` is 409.
+- If that session is finished, or has a terminal outcome, the create makes a
+  new session. It takes the requested name if no session holds it, else the
+  first free suffix `-2` to `-99` (a name of 60 characters still fits in 63).
+  The earlier session is kept.
+- A requested name held by any session that is not one of this key's own is
+  409; so is a held name on a keyless create. A keyless create is never a
+  repeat.
+
+**The create ledger.** The ConfigMap `dev-env-system/dev-env-summon-creates`
+holds one key per caller, named after its policy: the caller's charges, each
+a dispatch id and a time, and its count of refused urgent creates with the
+time of the last. GitOps precreates it; the operator reads it uncached and
+writes it only with the resourceVersion it read. If it is missing or cannot
+be read, a summoning create is refused with 503 and nothing is created; a
+repeat that returns an existing session still answers 200.
+
+The order of one create is fixed. Every 422, 403 and 409 comes first, so a
+refused request spends nothing. Then the API chooses the dispatch id: for a
+keyed create, a hash of the caller's account, the key and the UID of the
+key's newest earlier session (or none); for a keyless create, a random id.
+Then the pool, then the charge, then the session, carrying the id. A retry
+of a create that failed after its charge maps to the same id and is not
+charged again. A charge whose session was never created is a spent slot of
+its hour, not a free session. If the create meets a name another request
+took a moment before, the API reads that session: the same id is this
+request's session (200); another id moves on to the next suffix.
+
+**`createsPerHour`.** A charge counts for 60 minutes from its time. A create
+whose caller already has `createsPerHour` charges in that window gets 429,
+and nothing is charged or created. Of two API replicas racing for the last
+slot, the ledger's write decides: one update wins, and the other reads the
+ledger again, finds the hour full, and answers 429. A charge leaves the
+ledger at a later write, once it is an hour old and its session exists or no
+session carries its id. A retry after that is charged again, in its new hour.
+
+**The pool, until story 741 adds queues.** The API counts the caller's
+unfinished summoned sessions, uncached: escalations against
+`limits.escalations`, every other lane against `limits.concurrent`. A create
+that would pass its pool gets 429. It is checked before the charge. A
+session with a terminal outcome whose pod still runs is still unfinished, so
+it still holds its slot.
+
+**Urgent refusals.** A refused create of priority `urgent` (remediation and
+escalation), whether by `createsPerHour` or by its pool, adds one to the
+caller's urgent refusals in the write that refuses it, once, whichever limit
+refused it. If that write cannot be made, the answer is 503 instead of 429.
+A refused `normal` or `bulk` create is logged and not counted. Story 742
+pages on the count; nothing reads it yet.
+
+Every refusal is logged with the caller, the lane and the reason, never a
+data value. A 422 logs the names of its fields only.
