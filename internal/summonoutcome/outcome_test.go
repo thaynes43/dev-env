@@ -64,8 +64,10 @@ func TestWriteRejectsPrunedTerminalRecord(t *testing.T) {
 				if err := c.SubResource(sub).Patch(ctx, stored, client.RawPatch(types.MergePatchType, data), options); err != nil {
 					return err
 				}
-				// The real client unmarshals the response into the supplied object.
-				// If it still holds the submitted status, omitted fields survive.
+				// This fake decodes the answer with plain json.Unmarshal, which keeps
+				// fields the answer omits. The real client zeroes its target first,
+				// so there the omission is seen either way; Write's separate response
+				// object makes the guard hold for both.
 				data, err = json.Marshal(stored)
 				if err != nil {
 					return err

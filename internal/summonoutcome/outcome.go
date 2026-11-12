@@ -70,9 +70,12 @@ func Write(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, d Dec
 		*s = *base
 		return false, err
 	}
-	// Decode into a clean object: unmarshalling into the submitted status keeps
-	// fields that a stale CRD pruned from the response. Precompute the same CAS
-	// patch so using a clean response body does not change what we send.
+	// Decode the answer into a separate object, so the guard below reads what
+	// the API server stored and not what was submitted. The real client zeroes
+	// its decode target first (controller-runtime's targetZeroingDecoder), so
+	// there a pruned status.summon is seen either way; a client that does not
+	// zero would hide it. The CAS patch is computed once, so the separate
+	// response body does not change what is sent.
 	stored := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace}}
 	if err := c.Status().Patch(ctx, s, client.RawPatch(patch.Type(), data), client.WithSubResourceBody(stored)); err != nil {
 		*s = *base
