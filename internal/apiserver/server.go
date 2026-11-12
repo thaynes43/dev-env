@@ -224,8 +224,10 @@ type Server struct {
 	// SummonCreateKinds are the session kinds a summoning caller may create,
 	// from --summon-create-kinds (DESIGN-064 5.9, the correction of
 	// 2026-11-12). A summoning create of any other kind is refused with 403
-	// after its request is validated and before anything is read back,
-	// charged or created. Empty, the default, refuses every summoning create;
+	// after the request's own checks and before anything is read back,
+	// charged or created; the agentd transport bound, which needs the final
+	// name, is checked only for a kind that is switched on. Empty, the
+	// default, refuses every summoning create;
 	// the front door's and every other caller's creates are not affected.
 	SummonCreateKinds []v1alpha1.SummonKind
 	// ChildUsageCapture records accepted direct-child usage on the parent.

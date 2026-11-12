@@ -1818,9 +1818,14 @@ cannot submit scheduled work.
 `--summon-create-kinds` names the session kinds a summoning caller may
 create: `task`, `remote` or both. It is empty by default, and empty refuses
 every summoning create. A create whose entry's kind the flag does not name
-is refused with 403; the message names the flag and the kind. The request is
-checked first, so an invalid one still gets its own refusal, such as 400 or
-422. Then the switch's 403 comes before anything else: a repeat of a key gets the 403 and nothing
+is refused with 403; the message names the flag and the kind. The request's
+own checks come first (its keys, name prefix, lane, kind, model, data and the
+size of the rendered brief), so a request that fails one of them still gets
+its own refusal, such as 400 or 422. One check is not among them: the bound on
+the session document sent to agentd depends on the final name and the dispatch
+id, so it is made only for a kind that is switched on; while the kind is off,
+a request that would fail only that bound gets the 403. Then the switch's 403
+comes before anything else: a repeat of a key gets the 403 and nothing
 of its session, nothing is charged in the create ledger, no Session is
 written and a refused urgent create is not counted. List and get answer as
 before, and Meatball's creates and every other caller's are unchanged.

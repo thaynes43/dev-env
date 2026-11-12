@@ -819,8 +819,13 @@ differs, this governs. Summoning creates are off until the operator's
 `--summon-create-kinds` names their kind: `task`, `remote` or both, and empty
 by default. A create whose entry's kind the flag does not name is refused
 with 403, and the message names the flag and the kind. The refusal comes
-after the request is validated, so an invalid request still gets its own
-4xx. It comes before the repeat of a key is answered, before any ledger
+after the request's own checks (keys, name prefix, lane, kind, model, data
+and the size of the rendered brief), so a request that fails one of them
+still gets its own 4xx. The bound on the session document sent to agentd is
+not among them: it depends on the final name and the dispatch id, so it is
+checked only for a kind that is switched on, and a request that would fail
+only that bound gets the 403 while its kind is off (the review of PR 1090,
+comment 6817599604). It comes before the repeat of a key is answered, before any ledger
 write, before any Session and before any count of a refused urgent create,
 so with the flag empty a summoning caller can change nothing. Its list and
 get are unchanged, and so are the front door's and every other caller's

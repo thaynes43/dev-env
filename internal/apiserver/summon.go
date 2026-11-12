@@ -288,8 +288,10 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 		return 0, nil, err
 	}
 	lane = string(entry.Lane)
-	// The switch: after the request is validated, before the replay of a key,
-	// any ledger write, any Session and any urgent-refusal count.
+	// The switch: after the request's own checks above, before the replay of a
+	// key, any ledger write, any Session and any urgent-refusal count. The
+	// agentd transport bound in dispatchSummon needs the final name and the
+	// dispatch id, so it is checked only for a kind that is switched on.
 	if err := s.summonKindSwitchedOn(entry.Kind); err != nil {
 		return 0, nil, err
 	}
