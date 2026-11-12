@@ -63,10 +63,11 @@ func renderSummonBrief(name, policy, lane, template string, fields []string, dat
 }
 
 // sanitizeSummonValue drops every control character except newline and tab,
-// and every Unicode format character (category Cf), then removes BEGIN DATA
-// and END DATA in any case until neither remains. Format characters go first
+// and every default-ignorable code point (category Cf, variation selectors,
+// and other default-ignorable code points), then removes literal BEGIN DATA
+// and END DATA in any case until neither remains. Those code points go first
 // so a marker they were splitting is removed too. One removal can rebuild
-// the phrase, so the removal repeats.
+// the phrase, so the removal repeats. The fence is the random boundary.
 func sanitizeSummonValue(s string) string {
 	s = stripSummonControls(s)
 	for {
@@ -96,7 +97,7 @@ func stripSummonControls(s string) string {
 		switch {
 		case r == '\n' || r == '\t':
 			b.WriteRune(r)
-		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Variation_Selector, r) || unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r):
 		default:
 			b.WriteRune(r)
 		}

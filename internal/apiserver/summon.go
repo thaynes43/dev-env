@@ -81,49 +81,99 @@ func summonCallerAllowed(c *caller, r *http.Request) error {
 	return summonRouteDenied()
 }
 
-// refuseSummonedChild refuses POST /v1/sessions from a session whose
-// spec.caller is set (DESIGN-064 6.4). The calling session is read from the
-// API server, not only the cache resolveCaller used.
+// summonedChildRefusal is the refusal for a session that is summoned, or
+// that was summoned when it was authenticated. spec.caller is immutable.
+const summonedChildRefusal = "a summoned session may not create sessions (DESIGN-064 6.4)"
+
+// refuseSummonedChild refuses a create from a session principal that is
+// summoned, or that cannot be confirmed as the same session (DESIGN-064 6.4).
+// The authenticated snapshot is not replaced by whatever object now has its
+// name. createSessionMode calls this before the canary and pilot branches.
+// admitCreate calls refuseSummonedParent under the create lock, which is the
+// same check for a scheduled dispatch.
 func (s *Server) refuseSummonedChild(ctx context.Context, c *caller) error {
 	if c == nil || c.kind != kindSession || c.session == nil {
 		return nil
 	}
-	sess := c.session
-	if s.Live != nil {
-		ns := sess.Namespace
-		if ns == "" {
-			ns = s.Policy.SessionNamespace
-		}
-		var fresh v1alpha1.AgentSession
-		if err := s.Live.Get(ctx, types.NamespacedName{Namespace: ns, Name: sess.Name}, &fresh); err != nil {
-			return fromKubeError(err, "the caller's session")
-		}
-		sess = &fresh
-	}
-	if sess.Spec.Caller != "" {
-		return forbidden("a summoned session may not create sessions (DESIGN-064 6.4)")
-	}
-	return nil
+	return s.confirmSessionCaller(ctx, c.session)
 }
 
-// refuseSummonedParent refuses a create whose parent is a session with
-// spec.caller set (DESIGN-064 6.4). The parent is read from the API server,
-// not from the cache resolveCaller used. A parent string that is not a session
-// name, or that names no session, is not this rule. Any other failed live read
-// refuses the create. createSessionMode also calls refuseSummonedChild first,
-// so a direct create, a canary and a private pilot still hear it before those
-// branches. admitCreate is the step every ordinary create shares, including a
-// scheduled dispatch of a record that already exists.
-func (s *Server) refuseSummonedParent(ctx context.Context, sess *v1alpha1.AgentSession) error {
-	if s == nil || sess == nil || s.Live == nil {
+// refuseSummonedParent refuses a create whose parent is a session principal
+// (DESIGN-064 6.4): the session's own request, or a scheduled dispatch on the
+// session basis. An account parent, a slash in the name, is not a session and
+// is not this rule. The snapshot is the session already in hand. Its UID is
+// the authenticated UID. On a scheduled dispatch that UID is d.Owner.UID:
+// scheduledCaller has refused any other, and d.Owner.UID is the authorizer's
+// SessionRef. A session created later under the same name has a new UID, so
+// it cannot be that ref. The owner pod's controller reference is not used,
+// because a later session can be written onto the pod.
+func (s *Server) refuseSummonedParent(ctx context.Context, c *caller, sess *v1alpha1.AgentSession) error {
+	if s == nil || sess == nil {
 		return nil
 	}
 	name := sess.Spec.Parent
 	if name == "" || strings.Contains(name, "/") || len(validation.IsDNS1123Label(name)) > 0 {
 		return nil
 	}
+	if c != nil && c.kind == kindSession && c.session != nil && c.session.Name == name {
+		return s.confirmSessionCaller(ctx, c.session)
+	}
+	return s.liveSummonedObject(ctx, s.Policy.SessionNamespace, name)
+}
+
+// confirmSessionCaller applies the session-principal rule to snapshot, the
+// authenticated or cached session. A spec.caller already set is refused
+// before the live read: that field is immutable, so a later disappearance or
+// a different object of the same name does not erase it. The live object
+// must be this UID. A missing object, a failed read, or another UID refuses.
+// A live spec.caller refuses too, which is the stale cache that omitted it.
+// Live nil does not invent an object; with no caller on the snapshot there
+// is nothing further to refuse. The snapshot is not modified.
+func (s *Server) confirmSessionCaller(ctx context.Context, snapshot *v1alpha1.AgentSession) error {
+	if snapshot == nil {
+		return nil
+	}
+	if snapshot.Spec.Caller != "" {
+		return forbidden("%s", summonedChildRefusal)
+	}
+	if s == nil || s.Live == nil {
+		return nil
+	}
+	ns := s.Policy.SessionNamespace
+	if ns == "" {
+		ns = snapshot.Namespace
+	}
+	var fresh v1alpha1.AgentSession
+	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: ns, Name: snapshot.Name}, &fresh); err != nil {
+		return fromKubeError(err, "the caller's session")
+	}
+	if fresh.UID != snapshot.UID {
+		// A summoned snapshot was refused above. A live object that is
+		// summoned is refused here, whichever UID it has. An ordinary
+		// session replaced by another ordinary session still creates:
+		// bindUsageCaptureParent copies a parent UID only when the live
+		// UID matches, and TestUsageCaptureCreateBinding requires that
+		// create. The pod controller reference is not consulted.
+		if fresh.Spec.Caller != "" {
+			return forbidden("%s", summonedChildRefusal)
+		}
+		return nil
+	}
+	if fresh.Spec.Caller != "" {
+		return forbidden("%s", summonedChildRefusal)
+	}
+	return nil
+}
+
+// liveSummonedObject is the caller check for a session-shaped parent that is
+// not the authenticated session. A missing object is not that principal.
+// Any other failed read refuses. A spec.caller on the object refuses.
+func (s *Server) liveSummonedObject(ctx context.Context, ns, name string) error {
+	if s == nil || s.Live == nil {
+		return nil
+	}
 	var parent v1alpha1.AgentSession
-	err := s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: name}, &parent)
+	err := s.Live.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &parent)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
@@ -131,7 +181,7 @@ func (s *Server) refuseSummonedParent(ctx context.Context, sess *v1alpha1.AgentS
 		return fromKubeError(err, "the parent session")
 	}
 	if parent.Spec.Caller != "" {
-		return forbidden("a summoned session may not create sessions (DESIGN-064 6.4)")
+		return forbidden("%s", summonedChildRefusal)
 	}
 	return nil
 }
@@ -191,9 +241,10 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 	if err := decodeJSON(w, r, maxCreateBody, &raw, true); err != nil {
 		return 0, nil, err
 	}
-	// Duplicate members are refused before any object map is built. encoding/json
-	// keeps one value and drops the other, including a key that differs only by
-	// an escape or by case.
+	// A member name outside printable ASCII, and two members of one field, are
+	// refused before any object map is built. encoding/json keeps one value
+	// and drops the other, including a key that differs only by an escape or
+	// by case.
 	dups, err := summonDuplicateFields(raw)
 	if err != nil {
 		return 0, nil, err
@@ -243,57 +294,135 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 	return http.StatusCreated, view(sess, false), nil
 }
 
-// summonDuplicateFields reports members that name one field twice, at the
-// body and inside data. Names are compared after JSON unescaping and without
-// regard to case. The scan decodes values as raw JSON, so it does not build
-// an object map that would keep one of the two.
+// summonMemberASCII is the refusal for a member name that is not printable
+// ASCII. Printable ASCII is the bytes 0x20 through 0x7e. With only those
+// names left, strings.ToLower and strings.EqualFold agree.
+const summonMemberASCII = "a summoning create's member names are printable ASCII"
+
+// summonDuplicateFields reports a member name that is not printable ASCII,
+// and members that name one field twice, at the body and inside data. A
+// non-ASCII name is refused before any map is built. Duplicate names are
+// compared after JSON unescaping and without regard to case. The scan
+// decodes values as raw JSON, so it does not build an object map that would
+// keep one of the two.
 func summonDuplicateFields(raw []byte) ([]apiv1.FieldError, error) {
 	return duplicateMemberFields(raw, "")
 }
 
+type summonMember struct {
+	key string
+	val json.RawMessage
+}
+
 func duplicateMemberFields(raw []byte, prefix string) ([]apiv1.FieldError, error) {
+	members, refused, err := decodeSummonMembers(raw, prefix)
+	if err != nil || refused != nil {
+		return refused, err
+	}
+	var inner []apiv1.FieldError
+	if prefix == "" {
+		if dataRaw, ok := oneSummonDataObject(members); ok {
+			inner, err = duplicateMemberFields(dataRaw, "data.")
+			if err != nil || summonASCIIRefusal(inner) {
+				return inner, err
+			}
+		}
+	}
+	fields := foldSummonDuplicates(members, prefix)
+	fields = append(fields, inner...)
+	slices.SortFunc(fields, func(a, b apiv1.FieldError) int { return strings.Compare(a.Field, b.Field) })
+	return fields, nil
+}
+
+// decodeSummonMembers reads one JSON object into a slice. A member name with
+// a byte outside printable ASCII is returned as a refusal and no map is built.
+// A non-object at prefix "" is a bad body. A non-object inside data is ignored
+// here; parseSummonData refuses it.
+func decodeSummonMembers(raw []byte, prefix string) ([]summonMember, []apiv1.FieldError, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	tok, err := dec.Token()
 	if err != nil || tok != json.Delim('{') {
 		if prefix != "" {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, badRequest("the body must be a JSON object")
+		return nil, nil, badRequest("the body must be a JSON object")
 	}
-	type spellings struct{ names []string }
-	seen := map[string]*spellings{}
-	var dataRaw json.RawMessage
-	dataCount := 0
+	var members []summonMember
 	for dec.More() {
 		tok, err = dec.Token()
 		if err != nil {
-			return nil, badRequest("the body must be a JSON object")
+			return nil, nil, badRequest("the body must be a JSON object")
 		}
 		key, ok := tok.(string)
 		if !ok {
-			return nil, badRequest("the body must be a JSON object")
+			return nil, nil, badRequest("the body must be a JSON object")
 		}
 		var val json.RawMessage
 		if err = dec.Decode(&val); err != nil {
-			return nil, badRequest("the body must be a JSON object")
+			return nil, nil, badRequest("the body must be a JSON object")
 		}
-		fold := strings.ToLower(key)
+		if !summonPrintableASCII(key) {
+			field := key
+			if prefix != "" {
+				field = prefix + key
+			}
+			return nil, []apiv1.FieldError{fieldError(field, "%s", summonMemberASCII)}, nil
+		}
+		members = append(members, summonMember{key: key, val: append(json.RawMessage(nil), val...)})
+	}
+	tok, err = dec.Token()
+	if err != nil || tok != json.Delim('}') || dec.More() {
+		return nil, nil, badRequest("the body must be a JSON object")
+	}
+	return members, nil, nil
+}
+
+func summonPrintableASCII(name string) bool {
+	for i := 0; i < len(name); i++ {
+		if name[i] < 0x20 || name[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func summonASCIIRefusal(fields []apiv1.FieldError) bool {
+	return len(fields) == 1 && fields[0].Message == summonMemberASCII
+}
+
+// oneSummonDataObject is the raw value of the one data member, when that
+// value is a JSON object. Two data members are duplicates, handled by the
+// fold, and are not scanned as an object.
+func oneSummonDataObject(members []summonMember) (json.RawMessage, bool) {
+	var raw json.RawMessage
+	n := 0
+	for _, m := range members {
+		if strings.ToLower(m.key) != "data" {
+			continue
+		}
+		n++
+		if n == 1 {
+			raw = m.val
+		}
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if n != 1 || len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, false
+	}
+	return raw, true
+}
+
+func foldSummonDuplicates(members []summonMember, prefix string) []apiv1.FieldError {
+	type spellings struct{ names []string }
+	seen := map[string]*spellings{}
+	for _, m := range members {
+		fold := strings.ToLower(m.key)
 		sk := seen[fold]
 		if sk == nil {
 			sk = &spellings{}
 			seen[fold] = sk
 		}
-		sk.names = append(sk.names, key)
-		if prefix == "" && fold == "data" {
-			dataCount++
-			if dataCount == 1 {
-				dataRaw = append(json.RawMessage(nil), val...)
-			}
-		}
-	}
-	tok, err = dec.Token()
-	if err != nil || tok != json.Delim('}') || dec.More() {
-		return nil, badRequest("the body must be a JSON object")
+		sk.names = append(sk.names, m.key)
 	}
 	folds := make([]string, 0, len(seen))
 	for fold := range seen {
@@ -316,15 +445,7 @@ func duplicateMemberFields(raw []byte, prefix string) ([]apiv1.FieldError, error
 			fields = append(fields, fieldError(field, "a summoning create names this field more than once"))
 		}
 	}
-	if prefix == "" && dataCount == 1 && len(bytes.TrimSpace(dataRaw)) > 0 && bytes.TrimSpace(dataRaw)[0] == '{' {
-		inner, err := duplicateMemberFields(dataRaw, "data.")
-		if err != nil {
-			return nil, err
-		}
-		fields = append(fields, inner...)
-	}
-	slices.SortFunc(fields, func(a, b apiv1.FieldError) int { return strings.Compare(a.Field, b.Field) })
-	return fields, nil
+	return fields
 }
 
 func dataRaw(keys map[string]json.RawMessage) json.RawMessage {

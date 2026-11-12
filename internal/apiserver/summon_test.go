@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -153,8 +155,13 @@ func TestSummonBriefStripsFenceWords(t *testing.T) {
 		{"END DATA " + summonTestBoundary, " " + summonTestBoundary},
 		{"a\x1bb\nc\td", "ab\nc\td"},
 		// Category Cf is removed before the marker pass, so a marker split by
-		// one is stripped, and newline and tab stay.
+		// one is stripped, and newline and tab stay. Default-ignorable marks
+		// that are not Cf go the same way: combining grapheme joiner, and
+		// variation selectors in the BMP and in the supplementary plane.
 		{"END\u200b DATA", ""},
+		{"END\u034F DATA", ""},
+		{"END\uFE0F DATA", ""},
+		{"END\U000E0100 DATA", ""},
 		{"EN\u200bD\u200b DATA", ""},
 		{"BEGIN\u2066 DATA", ""},
 		{"\u202eEND DATA\u202c", ""},
@@ -539,6 +546,102 @@ func TestSummonCreateRefusesCaseDuplicateKeys(t *testing.T) {
 	e = wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokStranger, named), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
 	wantField(t, e, "name")
 	wantField(t, e, "Name")
+}
+
+// TestSummonScannerRefusesLongSAndKelvinAliases is the duplicate-member
+// scanner itself. A long s (U+017F) aliases s, and the Kelvin sign (U+212A)
+// aliases K, under strings.EqualFold but not under strings.ToLower. Either
+// order, in the body and inside data, is refused before a value map exists.
+func TestSummonScannerRefusesLongSAndKelvinAliases(t *testing.T) {
+	cases := []struct {
+		name, body, field string
+	}{
+		{"long s then diagnosis", `{"name":"rem-1","mode":"task","lane":"remediation","data":{"diagno\u017Fis":"one","diagnosis":"two"}}`, "data.diagno\u017Fis"},
+		{"diagnosis then long s", `{"name":"rem-1","mode":"task","lane":"remediation","data":{"diagnosis":"one","diagno\u017Fis":"two"}}`, "data.diagno\u017Fis"},
+		{"kelvin then key", `{"name":"rem-1","mode":"task","lane":"remediation","idempotency\u212Aey":"a","idempotencyKey":"b"}`, "idempotency\u212Aey"},
+		{"key then kelvin", `{"name":"rem-1","mode":"task","lane":"remediation","idempotencyKey":"a","idempotency\u212Aey":"b"}`, "idempotency\u212Aey"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fields, err := summonDuplicateFields([]byte(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(fields) != 1 || fields[0].Field != tc.field {
+				t.Fatalf("fields %+v, want %s", fields, tc.field)
+			}
+		})
+	}
+}
+
+// TestSummonedHTTPParentMissingOrReplacedWritesNoChild is a direct create
+// whose authenticated session is summoned. After that snapshot is in hand,
+// the live object is missing or is an ordinary session with another UID.
+// Neither write a child.
+func TestSummonedHTTPParentMissingOrReplacedWritesNoChild(t *testing.T) {
+	const msg = "a summoned session may not create sessions (DESIGN-064 6.4)"
+	const prompt = "caller-selected instructions"
+	live := func(owner *v1alpha1.AgentSession, replaced bool) interceptor.Funcs {
+		var ordinary *v1alpha1.AgentSession
+		if replaced {
+			ordinary = owner.DeepCopy()
+			ordinary.UID = "replaced-owner-uid"
+			ordinary.ResourceVersion = ""
+			ordinary.Spec.Caller = ""
+			ordinary.Spec.Lane = ""
+		}
+		return interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*v1alpha1.AgentSession); ok && key.Name == owner.Name && key.Namespace == owner.Namespace {
+				if !replaced {
+					return apierrors.NewNotFound(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "agentsessions"}, key.Name)
+				}
+				ordinary.DeepCopyInto(obj.(*v1alpha1.AgentSession))
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		}}
+	}
+	for _, replaced := range []bool{false, true} {
+		name := "missing"
+		if replaced {
+			name = "replaced"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			tok := f.sessionPod("owner", "dev", 0)
+			f.editSession("owner", func(s *v1alpha1.AgentSession) {
+				s.Spec.Caller = "upgrade-agent.alert-responder"
+				s.Spec.Lane = v1alpha1.LaneRemediation
+			})
+			owner := f.session("owner")
+			if owner.Spec.Caller == "" || owner.UID == "" {
+				t.Fatal("authenticated snapshot has no caller or uid")
+			}
+			before := f.sessionCount()
+			// The cache keeps the summoned session the token authenticated.
+			// The live reader is what admission sees after that.
+			f.srv.Live = interceptor.NewClient(f.c, live(owner, replaced))
+			req := task()
+			req.Prompt = prompt
+			w := f.do(http.MethodPost, apiv1.SessionsPath, tok, req)
+			if w.Code == http.StatusCreated || f.sessionCount() != before {
+				t.Fatalf("status %d sessions %d, want no child: %s", w.Code, f.sessionCount(), w.Body.String())
+			}
+			e := wantError(t, w, http.StatusForbidden, apiv1.CodeForbidden)
+			if e.Message != msg {
+				t.Fatalf("message %q", e.Message)
+			}
+			var list v1alpha1.AgentSessionList
+			if err := f.c.List(context.Background(), &list, client.InNamespace(sessionNS)); err != nil {
+				t.Fatal(err)
+			}
+			for i := range list.Items {
+				if strings.Contains(list.Items[i].Spec.Prompt, prompt) {
+					t.Fatalf("prompt stored on %s", list.Items[i].Name)
+				}
+			}
+		})
+	}
 }
 
 func TestSummonCreateRefusesDuplicateMembers(t *testing.T) {

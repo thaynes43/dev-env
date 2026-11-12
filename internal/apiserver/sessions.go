@@ -589,7 +589,7 @@ func refuseRetainedExecutor(c *caller) error {
 // under the create lock, after a repeat of the same create has had its answer
 // (createSessionMode, CreateScheduledSession).
 func (s *Server) admitCreate(ctx context.Context, c *caller, sess *v1alpha1.AgentSession) error {
-	if err := s.refuseSummonedParent(ctx, sess); err != nil {
+	if err := s.refuseSummonedParent(ctx, c, sess); err != nil {
 		return err
 	}
 	if err := s.admitCallerCapacity(ctx, c); err != nil {

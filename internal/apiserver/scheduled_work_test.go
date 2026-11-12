@@ -1328,3 +1328,101 @@ func dispatchSummonedRecord(t *testing.T, f *swFixture, reader client.Reader) {
 		}
 	}
 }
+
+// TestSummonedDispatchParentMissingOrReplacedWritesNoChild is a scheduled
+// dispatch the authorizer has already granted for a live summoned owner.
+// After that read, the live session is missing, or an ordinary session with
+// another UID has the name. The cache still holds the granted owner. Neither
+// writes a child. The ordinary-owner tests and the stale-cache test are
+// separate.
+func TestSummonedDispatchParentMissingOrReplacedWritesNoChild(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		dispatchSummonedAfterAuthorize(t, func(f *swFixture, owner *v1alpha1.AgentSession) {
+			f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*v1alpha1.AgentSession); ok && key.Name == owner.Name && key.Namespace == owner.Namespace {
+						return apierrors.NewNotFound(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "agentsessions"}, key.Name)
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+		})
+	})
+	t.Run("replaced", func(t *testing.T) {
+		dispatchSummonedAfterAuthorize(t, func(f *swFixture, owner *v1alpha1.AgentSession) {
+			ordinary := owner.DeepCopy()
+			ordinary.UID = "replaced-owner-uid"
+			ordinary.ResourceVersion = ""
+			ordinary.Spec.Caller = ""
+			ordinary.Spec.Lane = ""
+			f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					sess, ok := obj.(*v1alpha1.AgentSession)
+					if ok && key.Name == owner.Name && key.Namespace == owner.Namespace {
+						ordinary.DeepCopyInto(sess)
+						return nil
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+		})
+	})
+}
+
+// dispatchSummonedAfterAuthorize grants the session basis from the cache,
+// then calls after so the live reader can drop or replace the owner, then
+// creates. No child is written.
+func dispatchSummonedAfterAuthorize(t *testing.T, after func(*swFixture, *v1alpha1.AgentSession)) {
+	t.Helper()
+	f := scheduledWorkFixture(t)
+	f.sessionPod("owner", "dev", 0)
+	proveLiveSummonedOwner(t, f, "owner", true)
+	ctx := context.Background()
+	owner := f.session("owner")
+	if owner.Spec.Caller == "" || owner.UID == "" {
+		t.Fatal("owner snapshot has no caller or uid")
+	}
+	principal := "session/owner/" + string(owner.UID)
+	work := &v1alpha1.ScheduledWork{
+		ObjectMeta: metav1.ObjectMeta{Namespace: swNS, Name: "audit", UID: swUID},
+		Spec: v1alpha1.ScheduledWorkSpec{
+			Title: "audit", Owner: principal, Editor: principal,
+			Mode: v1alpha1.ScheduledWorkHeadless,
+			Work: v1alpha1.ScheduledWorkOrder{Template: "ops-audit", Repo: "haynes-ops", Prompt: "caller-selected instructions"},
+		},
+	}
+	if err := f.c.Create(ctx, work); err != nil {
+		t.Fatal(err)
+	}
+	sources := &executor.Sources{Reader: f.c, SessionNamespace: sessionNS}
+	auth, err := sources.Authorize(ctx, work, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth.Basis != executor.BasisSession || auth.Owner == nil || auth.Owner.Name != "owner" || auth.Owner.UID != owner.UID {
+		t.Fatalf("authorizer %+v", auth)
+	}
+	after(f, owner)
+	before := f.sessionCount()
+	req := swRequest()
+	req.Prompt = "caller-selected instructions"
+	d := swDispatch()
+	d.Owner = auth.Owner
+	_, _, _, err = f.srv.CreateScheduledSession(ctx, req, d)
+	if f.sessionCount() != before {
+		t.Fatalf("sessions %d, want %d; err %v", f.sessionCount(), before, err)
+	}
+	wantRefused(t, err, "DESIGN-064 6.4")
+	if err := f.c.Get(ctx, client.ObjectKey{Namespace: sessionNS, Name: swName}, &v1alpha1.AgentSession{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("child read: %v", err)
+	}
+	var list v1alpha1.AgentSessionList
+	if err := f.c.List(ctx, &list, client.InNamespace(sessionNS)); err != nil {
+		t.Fatal(err)
+	}
+	for i := range list.Items {
+		if strings.Contains(list.Items[i].Spec.Prompt, "caller-selected instructions") {
+			t.Fatalf("prompt stored on %s", list.Items[i].Name)
+		}
+	}
+}
