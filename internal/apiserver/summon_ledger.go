@@ -59,17 +59,21 @@ import (
 // on a charge inside its window, or a re-charge, counted again and subject to
 // the hour, of one outside it. Nothing creates on a charge it only read. The
 // create, and the read after its AlreadyExists, run under one context that is
-// done summonCreateDeadline after the mark's monotonic reading. A charge
-// without a session is pruned only once its attempt is summonAttemptHold old.
+// done summonCreateDeadline after the mark's monotonic reading. One request
+// makes at most summonMaxCreateAttempts session creates. A charge is pruned
+// only when it is summonChargeWindow old and its last attempt mark is at
+// least summonAttemptHold old, whether or not a session of its id exists.
 //
 // Limits of this slice (the correction's amendment). A client-side deadline
 // does not stop a request the API server has already received, nor a process
 // frozen between its last check and the send; a mark does not stop a replica
 // paused between it and its create. So two windows remain. (1) A create that
-// lands after its charge was pruned: A marks X and sends its create inside
-// the deadline; the API server has not persisted it when another replica's
-// write, summonAttemptHold after the mark by the entry's clock, prunes X; the
-// session is then persisted with no charge. (2) A stale destination: A marks
+// lands after its charge was pruned. The charge is already summonChargeWindow
+// old. A marks X and sends its create inside the deadline; the API server has
+// not persisted it when another replica's write, summonAttemptHold after the
+// mark by the entry's clock, prunes X; the session is then persisted with no
+// charge. A process frozen before it sends, or between the mark and the send
+// for longer than the hold allows, is this same window. (2) A stale destination: A marks
 // X for N and is paused before its create; B marks X for N, meets another
 // session on N, rebinds X to N-2 and creates N-2; that other session is
 // deleted, freeing N; A resumes inside its deadline and creates N, so X has
@@ -83,14 +87,19 @@ const (
 	// from its at: 60 minutes and a 5 minute allowance for clocks that differ
 	// between replicas.
 	summonChargeWindow = 65 * time.Minute
-	// summonAttemptHold is how old a charge's attempt must be before a charge
-	// whose session does not exist may be pruned: the 2 minute create
-	// deadline, the 5 minute clock allowance and a margin.
-	summonAttemptHold = 10 * time.Minute
+	// summonAttemptHold is how old a charge's last attempt mark must be before
+	// that charge may be pruned, whether or not a session of its id exists.
+	// It covers the 2 minute create deadline, 5 minutes for clocks that differ
+	// and 5 minutes for a forward step. That sum is 12 minutes; the hold is 15.
+	summonAttemptHold = 15 * time.Minute
 	// summonCreateDeadline is how long after the monotonic reading of the mark
 	// before it a session create, and the read after its AlreadyExists, may
 	// run: one absolute deadline, carried as one context.
 	summonCreateDeadline = 2 * time.Minute
+	// summonMaxCreateAttempts is how many session creates one request may
+	// make: 99 names, two attempts each, and two to spare. Past this the
+	// request answers 503, a charged failure, whatever the ledger does meanwhile.
+	summonMaxCreateAttempts = 200
 	// summonLedgerAttempts bounds the optimistic-lock retries of one write.
 	summonLedgerAttempts = 5
 	// summonLedgerMaxEntry bounds one caller's document.
@@ -381,36 +390,20 @@ func encodeSummonLedgerEntry(e summonLedgerEntry) (string, error) {
 	return string(b), nil
 }
 
-// summonChargeSettled is the "session exists" test of the ageing rule
-// (DESIGN-064 5.9): a charge 65 minutes old leaves the ledger once its session
-// exists. Today every session that exists settles its charge. Story 741
-// narrows this to "admitted or closed": a Queued session keeps its charge,
-// because the leader admits only a session whose id the ledger holds.
-func summonChargeSettled(sess *v1alpha1.AgentSession) bool {
-	return sess != nil
-}
-
-// pruneSummonCharges drops each charge outside its window whose session is
-// settled, and each outside its window whose session does not exist once its
-// attempt is summonAttemptHold old. byID is an uncached read of the sessions,
-// by dispatch id. A create the client may still send has a mark at most
-// summonCreateDeadline old by its replica's monotonic clock, so its charge
-// stays while the clock assumption holds. A create the API server received
-// and persists later than that is the first stated limit (see the top of this
-// file). A retry after a drop maps to the same id and is charged again: a
-// double charge across two hours is acceptable.
-func pruneSummonCharges(charges []summonCharge, now time.Time, byID map[string]*v1alpha1.AgentSession) []summonCharge {
+// pruneSummonCharges drops a charge only when it is outside its window and its
+// last attempt mark is at least summonAttemptHold old, whether or not a
+// session of its id exists. A create the client may still send has a mark at
+// most summonCreateDeadline old by its replica's monotonic clock, so the
+// charge is kept while the clock assumption holds. A create the API server
+// received and persists later than the hold allows is the first stated limit
+// (see the top of this file). A retry after a drop maps to the same id and is
+// charged again: a double charge across two hours is acceptable.
+func pruneSummonCharges(charges []summonCharge, now time.Time) []summonCharge {
 	kept := make([]summonCharge, 0, len(charges))
 	for _, ch := range charges {
-		sess, found := byID[ch.ID]
-		switch {
-		case summonChargeCounts(ch, now):
-		case found && !summonChargeSettled(sess):
-		case !found && now.Sub(ch.Attempt) < summonAttemptHold:
-		default:
-			continue
+		if summonChargeCounts(ch, now) || now.Sub(ch.Attempt) < summonAttemptHold {
+			kept = append(kept, ch)
 		}
-		kept = append(kept, ch)
 	}
 	return kept
 }
@@ -532,7 +525,7 @@ func (s *Server) updateSummonLedger(ctx context.Context, c *caller, decide func(
 			return time.Time{}, nil
 		}
 		entry.Clock = now
-		entry.Charges = pruneSummonCharges(entry.Charges, now, live.byID)
+		entry.Charges = pruneSummonCharges(entry.Charges, now)
 		raw, err := encodeSummonLedgerEntry(entry)
 		if err != nil {
 			return time.Time{}, summonLedgerUnavailable("entry for this caller is too large")

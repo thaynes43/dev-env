@@ -51,10 +51,13 @@ import (
 // So every refusal before step 5 (422, 403, 409, and 429 by the pool) spends
 // nothing, and every create attempt follows its own ledger write naming its
 // id and its name. A failure after step 5's write keeps the charge, whatever
-// its status (409, 422, 429, 503 or another), and its text says the charge
-// stays. What a client cannot close, a create the API server persists after
-// its charge was pruned and a stale destination after a rebind, is stated at
-// the top of summon_ledger.go; admission in story 741 enforces the rest.
+// its status (409, 422, 429, 503 or another): there is no refund, and normal
+// pruning applies. The 503 for a charge that has already left the ledger
+// carries no retention sentence. One request makes at most
+// summonMaxCreateAttempts session creates. What a client cannot close, a
+// create the API server persists after its charge was pruned and a stale
+// destination after a rebind, is stated at the top of summon_ledger.go;
+// admission in story 741 enforces the rest.
 func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *caller, req summonWire, entry *v1alpha1.CallerPolicySummonSession, sess *v1alpha1.AgentSession, brief func(name string) string) (int, any, error) {
 	if s.Live == nil {
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "sessions cannot be read")
@@ -152,7 +155,7 @@ func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *c
 	case summonNameRefused:
 		return 0, nil, nameErr
 	case summonHourFull:
-		return 0, nil, tooManyRequests("caller %s has made %d summoning creates in the last hour, its createsPerHour (DESIGN-064 5.9)",
+		return 0, nil, tooManyRequests("caller %s has made %d charges in the 65 minute window by the entry's clock, its createsPerHour (DESIGN-064 5.9)",
 			c.policy.Name, c.policy.Spec.Summon.Limits.CreatesPerHour)
 	}
 	return s.createSummonCharged(ctx, w, c, req, sess, b, brief, candidates, urgent, c.policy.Spec.Summon.Limits.CreatesPerHour)
@@ -163,11 +166,13 @@ func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *c
 // context, done at the mark's absolute deadline: the create, and the read
 // after its AlreadyExists. A mark that finds the binding moved follows it. A
 // clash with another dispatch's session rebinds the charge by one more ledger
-// write; a NotFound after AlreadyExists retries the name once.
+// write; a NotFound after AlreadyExists retries the name once. The request
+// stops after summonMaxCreateAttempts session creates.
 func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter, c *caller, req summonWire, sess *v1alpha1.AgentSession, b summonBinding, brief func(string) string, candidates []string, urgent bool, perHour int32) (int, any, error) {
 	id := sess.Spec.Summon.DispatchID
 	hash := sess.Annotations[v1alpha1.AnnotationRequestHash]
 	retried := false
+	creates := 0
 	for {
 		switch b.result {
 		case summonSessionExists:
@@ -179,13 +184,14 @@ func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter,
 			return 0, nil, summonChargedFailure(newError(http.StatusConflict, apiv1.CodeConflict,
 				"no free session name: %s and its suffixes to -%d are taken", req.Name, summonMaxSuffix))
 		case summonChargeGone:
-			return 0, nil, summonChargedFailure(newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
-				"the charge for this dispatch left the ledger during its create; no session was created"))
+			// The charge has already left. This 503 carries no retention sentence.
+			return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
+				"the charge for this dispatch left the ledger during its create; no session was created")
 		case summonHourFull:
-			// The charge stays in the ledger, past its window: it no longer
-			// counts, and it is not charged again.
+			// Past its window, and not charged again. There is no refund, and
+			// normal pruning applies; this write may already have dropped it.
 			return 0, nil, tooManyRequests(
-				"caller %s has made %d summoning creates in the last hour, its createsPerHour; this dispatch's charge is past its window and was not charged again, and it stays in the ledger; no session was created (DESIGN-064 5.9)",
+				"caller %s has made %d charges in the 65 minute window by the entry's clock, its createsPerHour; this dispatch's charge is past its window and was not charged again; there is no refund and normal pruning applies; no session was created (DESIGN-064 5.9)",
 				c.policy.Name, perHour)
 		}
 		m, err := s.markSummonAttempt(ctx, c, id, hash, b.name, urgent, perHour)
@@ -199,6 +205,11 @@ func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter,
 			b = m
 			continue
 		}
+		if creates >= summonMaxCreateAttempts {
+			return 0, nil, summonChargedFailure(newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
+				"this request made %d session create attempts; no session was created", summonMaxCreateAttempts))
+		}
+		creates++
 		sess.Name = m.name
 		sess.ResourceVersion = ""
 		sess.Spec.Prompt = brief(m.name)
@@ -206,8 +217,8 @@ func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter,
 		// and the read after its AlreadyExists: a call still held in the
 		// client (its rate limiter, a slow connection, this process paused)
 		// is refused by the client once it is done. A request the API server
-		// has already received is out of the client's reach: the first
-		// stated limit.
+		// has already received, and a process frozen before it sends, are
+		// out of the client's reach: the first stated limit.
 		callCtx, cancel := s.summonClock().WithDeadline(ctx, m.deadline)
 		if callCtx.Err() != nil {
 			cancel()
@@ -233,8 +244,8 @@ func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter,
 			if late {
 				return 0, nil, summonDeadlinePassed()
 			}
-			// The charge stays: a spent slot of its hour. A keyed retry maps
-			// to the same id and is not charged again.
+			// There is no refund, and normal pruning applies. A keyed retry maps
+			// to the same id and is not charged again while the charge remains.
 			return 0, nil, summonChargedFailure(fromKubeError(err, "create session"))
 		}
 		var held v1alpha1.AgentSession
@@ -288,16 +299,17 @@ func (s *Server) summonExisting(w http.ResponseWriter, c *caller, key, hash stri
 }
 
 // summonChargedFailure marks a refusal made after the dispatch's ledger
-// write, whatever its status: the charge stays, and no refund is made, since
-// another replica may be using the same dispatch (DESIGN-064 5.9, the
-// correction's charged failures and its amendment).
+// write, whatever its status. There is no refund, and normal pruning applies,
+// since another replica may be using the same dispatch (DESIGN-064 5.9, the
+// correction's charged failures and its amendment). A charge that has already
+// left is not this function's: that 503 carries no retention sentence.
 func summonChargedFailure(err error) error {
 	var ae *apiError
 	if !errors.As(err, &ae) {
 		ae = internal("%v", err)
 	}
 	out := *ae
-	out.body.Message += "; the hour's slot was spent and the charge for this dispatch stays (DESIGN-064 5.9)"
+	out.body.Message += "; there is no refund and normal pruning applies (DESIGN-064 5.9)"
 	return &out
 }
 

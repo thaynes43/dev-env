@@ -1849,16 +1849,18 @@ the same id is this request's session (200, or 409 if it is another caller's
 or another request's); another id moves the charge to the next free suffix by
 one more ledger write, under the same window rule, and the next attempt's
 mark follows. A NotFound right after AlreadyExists retries the name once,
-after its own mark.
+after its own mark. One request makes at most 200 create attempts: 99 names,
+two attempts each, and two to spare. Past that it answers 503. There is no
+refund, and normal pruning applies.
 
 **The deadline.** Each mark sets one absolute deadline: the mark's reading of
 the replica's own monotonic clock, plus 2 minutes. The create, and the read
 after its AlreadyExists, run under one context that ends at that deadline;
 nothing computes a fresh timeout later. A call the client still holds when
 it ends (in its rate limiter, on a slow connection, or in a paused process)
-is refused by the client: 503, and the charge stays. A request the API
-server has already received is outside what the client can stop; see the
-limits below.
+is refused by the client: 503. There is no refund, and normal pruning
+applies. A request the API server has already received, and a process frozen
+before it sends, are outside what the client can stop; see the limits below.
 
 **What spends a charge.** A refusal before the first ledger write has
 charged anything spends nothing: the 422s, 403s and 409s of the request and
@@ -1870,9 +1872,12 @@ says so: 409 when no free name is left by the time
 of the create; 422 when the Kubernetes API server refuses the object (for
 example from an installed schema that does not accept it); 503 when the
 deadline ends, the ledger cannot be written or the charge left it; and 429
-when a mark or a rebind finds the charge past its window and the hour full
-(the charge stays, and no longer counts). Nothing is refunded, since another
-replica may be creating under the same charge.
+when a mark or a rebind finds the charge past its window and the hour full.
+There is no refund, and normal pruning applies, so the message does not
+promise that the charge is still there; past its window it no longer counts.
+The 503 for a charge that has already left the ledger carries no retention
+sentence. Nothing is refunded, since another replica may be creating under
+the same charge.
 
 **`createsPerHour`.** The limit is on charges, not creates: at most
 `createsPerHour` charges in any window of 65 minutes by the entry's clock (60
@@ -1897,12 +1902,16 @@ created. Of two API replicas racing for the last slot, the ledger's write
 decides: one update wins, and the other reads the ledger again, finds the
 window full, and answers 429.
 
-A charge leaves the ledger at a later write: once it is 65 minutes old and
-its session exists; or, when no session carries its id, once it is 65
-minutes old and its `attempt` is at least 10 minutes old. So a create the
-client may still send, whose mark is at most 2 minutes old, keeps its charge
-while the clock assumption holds. A retry after a charge left is charged
-again, in its new window.
+A charge leaves the ledger at a later write only when it is 65 minutes old
+and its last attempt mark is at least 15 minutes old, whether or not a
+session of its id exists. The 15 minutes cover the 2 minute create deadline,
+5 minutes for clocks that differ and 5 minutes for a forward step. So a
+create the client may still send, whose mark is at most 2 minutes old, keeps
+its charge while the clock assumption holds. When no session carries the id,
+pruning starts from a charge that is already 65 minutes old: both ages are
+required, and an attempt mark alone does not drop a charge that is still
+inside its window. A retry after a charge left is charged again, in its new
+window.
 
 One exception is not built against. A summoning caller cannot delete a
 session. If an authorized deleter (Tom, an operator) deletes a summoned
@@ -1914,12 +1923,16 @@ API closes the time between a replica's last ledger write and the moment the
 Kubernetes API server accepts its create: two objects cannot be written as
 one from here. Two windows remain, each with its schedule:
 
-1. *A create that lands after its charge was pruned.* Replica A marks
-   dispatch X and sends its create inside the deadline. The API server has
-   received it and has not persisted it when, 10 minutes after the mark by
-   the entry's clock (5 with a replica clock 5 minutes ahead), another
-   replica's write finds no session of X and prunes X. The session is then
-   persisted with no charge.
+1. *A create that lands after its charge was pruned.* The charge is already
+   65 minutes old. Replica A marks dispatch X and sends its create inside
+   the deadline. The API server has received it and has not persisted it
+   when, 15 minutes after the mark by the entry's clock, another replica's
+   write prunes X. The 15 minutes cover the 2 minute create deadline, 5
+   minutes for clocks that differ and 5 minutes for a forward step. A
+   process frozen before it sends, and a request the API server has already
+   received, are outside what the client can stop; so is a process frozen
+   between the mark and the send for longer than the hold allows. The
+   session is then persisted with no charge.
 2. *A stale destination after a rebind.* A marks X for name N and is paused
    before its create. B, a retry of the same request, marks X for N, meets
    an unrelated session that took N, rebinds X to N-2 and creates N-2. That
@@ -1942,7 +1955,9 @@ being deleted, not set to suspend, not in phase `Suspended`, `Archived` or
 charge. A session with a terminal outcome whose record is still unfinished
 still holds its slot. The count is not a reservation: until story 741, a
 pool can be exceeded by at most the number of API replicas minus one (one,
-with two replicas), when every replica has a create in flight at once.
+with two replicas), when every replica has a create in flight at once. That
+bound holds for fixed limits and session states, and when no earlier failed
+call is still able to land.
 
 **Urgent refusals.** A refused create of priority `urgent` (remediation and
 escalation), whether by `createsPerHour` or by its pool, adds one to the

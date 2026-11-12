@@ -135,8 +135,8 @@ func crashFirstCreate(t *testing.T, f *fixture, body map[string]any) string {
 // reading of the ledger write before the create plus 2 minutes, carried as
 // one context through the create. The review's schedule: X was charged at
 // t=0 and its create failed; A retries at 64:59 and marks X; A is paused for
-// 11 minutes, after its deadline check or inside its client's create before
-// the request is sent; B charges Y at 75:59, finds no session of X and
+// 16 minutes, after its deadline check or inside its client's create before
+// the request is sent; B charges Y at 80:59, finds no session of X and
 // prunes X. A's create then runs under a context that is done, and the
 // client refuses it: 503, and no session of X persisted by A.
 //
@@ -158,8 +158,8 @@ func TestSummonDeadlineFencesAPausedCreate(t *testing.T) {
 			paused := false
 			hold := func() {
 				paused = true
-				clock.Advance(11 * time.Minute)
-				f.now = t0.Add(75*time.Minute + 59*time.Second)
+				clock.Advance(16 * time.Minute)
+				f.now = t0.Add(80*time.Minute + 59*time.Second)
 				bw = post(t, b.Handler(), tokStranger, keyedRemediation("rem-responder-2", "alert-2"))
 			}
 			var ac client.Client = f.c
@@ -205,7 +205,7 @@ func TestSummonDeadlineFencesAPausedCreate(t *testing.T) {
 				return
 			}
 			e := wantError(t, aw, http.StatusServiceUnavailable, apiv1.CodeUnavailable)
-			if !strings.Contains(e.Message, "2m0s") || !strings.Contains(e.Message, "charge") {
+			if !strings.Contains(e.Message, "2m0s") || !strings.Contains(e.Message, "no refund") || !strings.Contains(e.Message, "normal pruning") || strings.Contains(e.Message, "stays") {
 				t.Fatalf("message %q", e.Message)
 			}
 			if got := sessionsOfID(f, x); len(got) != 0 {

@@ -185,8 +185,8 @@ func TestSummonCreateDeadline(t *testing.T) {
 			if n := len(f.summonedSessions()); n != 0 {
 				t.Fatalf("%d sessions past the deadline", n)
 			}
-			if !strings.Contains(w.Body.String(), "charge") {
-				t.Fatalf("the refusal does not say the charge stays: %s", w.Body.String())
+			if !strings.Contains(w.Body.String(), "no refund") || !strings.Contains(w.Body.String(), "normal pruning") || strings.Contains(w.Body.String(), "stays") {
+				t.Fatalf("the refusal does not say there is no refund and that normal pruning applies: %s", w.Body.String())
 			}
 
 			// The retry, inside the deadline, marks the same charge and creates.
@@ -724,7 +724,7 @@ func TestSummonChargedFailures(t *testing.T) {
 		}})
 		f.now = f.now.Add(time.Minute)
 		e := wantError(t, summonPost(t, f, body), http.StatusConflict, apiv1.CodeConflict)
-		if !strings.Contains(e.Message, "the hour's slot was spent") {
+		if !strings.Contains(e.Message, "no refund") || !strings.Contains(e.Message, "normal pruning") || strings.Contains(e.Message, "stays") {
 			t.Fatalf("message %q", e.Message)
 		}
 		if n := len(f.ledger().Charges); n != 2 {
@@ -745,7 +745,7 @@ func TestSummonChargedFailures(t *testing.T) {
 		}})
 		body := keyedRemediation("rem-responder-1", "alert-1")
 		e := wantError(t, summonPost(t, f, body), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-		if !strings.Contains(e.Message, "the hour's slot was spent") {
+		if !strings.Contains(e.Message, "no refund") || !strings.Contains(e.Message, "normal pruning") || strings.Contains(e.Message, "stays") {
 			t.Fatalf("message %q", e.Message)
 		}
 		if n, s := len(f.ledger().Charges), len(f.summonedSessions()); n != 1 || s != 0 {

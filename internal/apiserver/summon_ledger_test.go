@@ -324,7 +324,9 @@ func TestSummonLedgerRetryInTheNextHour(t *testing.T) {
 			t.Fatalf("after the second refusal %+v", e)
 		}
 
-		// 65 minutes after the re-charge it is dropped, its session existing.
+		// 66 minutes after the re-charge the charge is 65 minutes old and its
+		// attempt is past the 15 minute hold, so the next write drops it. The
+		// session exists; that no longer drops a charge on its own.
 		f.editStatus("rem-responder-a", v1alpha1.PhaseFailed)
 		f.now = t0.Add(132 * time.Minute)
 		wantStatus(t, summonPost(t, f, b), http.StatusCreated)
