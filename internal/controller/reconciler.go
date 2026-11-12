@@ -420,12 +420,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	// no launch can follow (OP777); until then the operator suspends it so
 	// its pod goes (OP779). A failed reap must not skip this step; return
 	// its error afterwards, retaining any release error too (OP779 N2).
-	changed, releaseErr := r.reconcileSummonClosed(ctx, &s)
+	changed, releaseRecheck, releaseErr := r.reconcileSummonClosed(ctx, &s)
 	if err := errors.Join(reapErr, releaseErr); err != nil {
 		return ctrl.Result{}, err
 	}
 	if changed {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	if releaseRecheck > 0 {
+		// A present fenced pod's release waits only for its two time bounds,
+		// which no event marks (story 780 fix round 1, coordinator answer
+		// op780-fix1-q-1): run again by then, whatever else this asks for.
+		defer func() {
+			if outcomeErr == nil {
+				out = sooner(out, ctrl.Result{RequeueAfter: releaseRecheck})
+			}
+		}()
 	}
 	// DESIGN-054's releaser precedes the other lifecycle work: it lifts only the
 	// scheduled-work finalizer, and a held release never stops the rescue and
