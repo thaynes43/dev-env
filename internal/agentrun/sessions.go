@@ -193,6 +193,9 @@ func (a *app) printSession(s apiv1.Session) {
 	if s.Pending != "" && s.Phase == "Pending" {
 		row("pending", "%s", s.Pending)
 	}
+	if o := s.Outcome; o != nil {
+		row("outcome", "%s: %s", o.State, o.Note)
+	}
 	if v := s.TaskVerdict(); v != nil {
 		row("task result", "%s (%s): %s", v.State, v.Reason, v.Message)
 	}

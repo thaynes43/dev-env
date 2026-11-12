@@ -162,7 +162,7 @@ func (s *Server) writeDecisionAuthority(ctx context.Context, sess *v1alpha1.Agen
 		}
 		base := sess.DeepCopy()
 		prior, authority := sess.Status.Outcome, sess.Status.DecisionAnswer
-		if expected == nil && next.Phase == "Reserved" && prior != nil && prior.State == v1alpha1.OutcomeEscalated && authority != nil && authority.Phase == "Confirmed" &&
+		if sess.Spec.Caller == "" && expected == nil && next.Phase == "Reserved" && prior != nil && prior.State == v1alpha1.OutcomeEscalated && authority != nil && authority.Phase == "Confirmed" &&
 			prior.Note == "decision/"+authority.DecisionID && authority.DecisionID != next.DecisionID &&
 			authority.Session == sess.Name && next.Session == sess.Name && authority.SessionUID == string(sess.UID) && authority.SessionUID == next.SessionUID &&
 			authority.PodUID == string(pod.UID) && authority.PodUID == next.PodUID && authority.ThreadID == next.ThreadID && authority.WriterGeneration == next.WriterGeneration {

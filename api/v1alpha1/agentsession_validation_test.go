@@ -2529,3 +2529,56 @@ func TestInstructionPublisherImmutableAndDefaultOff(t *testing.T) {
 		t.Fatal("lifecycle update lost publisher selection")
 	}
 }
+
+// DESIGN-064 6.6: MaxLength bounds the CEL input; bytes() also bounds UTF-8
+// storage, since OpenAPI maxLength alone counts Unicode code points.
+func TestSummonOutcomeNoteByteValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, note string
+		valid      bool
+	}{
+		{"ascii-limit", strings.Repeat("a", 1024), true},
+		{"ascii-over", strings.Repeat("a", 1025), false},
+		{"utf8-limit", strings.Repeat("é", 512), true},
+		{"utf8-over", strings.Repeat("é", 512) + "a", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := taskSession()
+			if err := k8s.Create(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			s.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeDone, Note: tc.note}
+			err := k8s.Status().Update(ctx(t), s)
+			if tc.valid {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := get(t, s).Status.Outcome; got == nil || got.Note != tc.note {
+					t.Fatal("note did not round trip")
+				}
+			} else {
+				wantInvalid(t, err, "note")
+			}
+		})
+	}
+}
+
+func TestSummonOutcomeStatusRoundTrip(t *testing.T) {
+	s := summonedTask()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	at := metav1.NewTime(time.Date(2026, 11, 12, 5, 30, 0, 0, time.UTC))
+	s.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: "unreported: agent-failed", At: &at}
+	s.Status.Summon = &v1alpha1.SummonStatus{
+		Closed:     &v1alpha1.SummonClosedStatus{At: at, Source: "unreported", Reason: "agent-failed"},
+		Escalation: &v1alpha1.SummonEscalationStatus{State: "Pending", Name: "esc-" + s.Name},
+	}
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	got := get(t, s)
+	if !apiequality.Semantic.DeepEqual(got.Status.Summon, s.Status.Summon) || !apiequality.Semantic.DeepEqual(got.Status.Outcome, s.Status.Outcome) {
+		t.Fatal("CRD pruned the atomic terminal record")
+	}
+}
