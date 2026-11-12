@@ -210,6 +210,9 @@ type Server struct {
 	Log logr.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// SummonBoundary draws the 16 hex characters that fence a summon brief.
+	// Nil draws them from crypto/rand. Tests set it so a render is fixed.
+	SummonBoundary func() (string, error)
 	// ChildUsageCapture records accepted direct-child usage on the parent.
 	// Default off: no parent read or write and no receipt view.
 	ChildUsageCapture bool
@@ -481,6 +484,9 @@ func (s *Server) serve(rt route) http.Handler {
 				return 0, err
 			}
 			if err := policyCallerAllowed(c, r); err != nil {
+				return 0, err
+			}
+			if err := summonCallerAllowed(c, r); err != nil {
 				return 0, err
 			}
 			if c.kind == kindPortalReader {

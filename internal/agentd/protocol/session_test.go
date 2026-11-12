@@ -111,6 +111,15 @@ func TestValidate(t *testing.T) {
 		{"mode", func(s *Session) { s.Mode = "both" }, "not task, local or remote"},
 		{"task without prompt", func(s *Session) { s.Prompt = "  " }, "needs a prompt"},
 		{"prompt outside task", func(s *Session) { s.Mode = ModeRemote }, "task mode only"},
+		{"summoned remote with a prompt", func(s *Session) {
+			s.Mode = ModeRemote
+			s.Caller = "upgrade-agent.alert-responder"
+			s.Limits = nil
+		}, ""},
+		{"summoned local still refuses a prompt", func(s *Session) {
+			s.Mode = ModeLocal
+			s.Caller = "upgrade-agent.alert-responder"
+		}, "task mode only"},
 		{"huge prompt", func(s *Session) { s.Prompt = strings.Repeat("x", MaxPromptBytes+1) }, "more than"},
 		{"effort", func(s *Session) { s.Effort = "x high" }, "not a level name"},
 		{"timeout", func(s *Session) { s.Limits.Timeout = "forever" }, "positive duration"},

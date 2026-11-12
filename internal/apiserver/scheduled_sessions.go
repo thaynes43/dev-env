@@ -103,6 +103,9 @@ func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSes
 		return "", "", false, &scheduledwork.RefusedError{Reason: fmt.Sprintf("%s is bound to a task budget; scheduled work is not dispatched outside its reservation", c)}
 	}
 	sess.Name = name
+	if err := refuseReservedSessionName(sess.Name); err != nil {
+		return "", "", false, scheduledRefusal(err)
+	}
 	controllerutil.AddFinalizer(sess, v1alpha1.ScheduledWorkFinalizer)
 	sess.Labels[v1alpha1.LabelScheduledWork] = string(d.ItemUID)
 	if sess.Annotations == nil {
@@ -193,6 +196,12 @@ func (s *Server) scheduledCaller(ctx context.Context, d scheduledwork.Dispatch) 
 	if err != nil {
 		return nil, err
 	}
+	// d.Owner.UID is the authorizer's SessionRef: the record's owner
+	// principal, accepted only when the session read then had this UID.
+	// Admission compares the live object with the cached session, whose UID
+	// this check has required to be d.Owner.UID. A replacement under the
+	// same name has a new UID. The pod controller reference is not that
+	// comparison: the pod can be adopted by the replacement.
 	if c.kind != kindSession || c.session == nil || c.session.Name != d.Owner.Name || c.session.UID != d.Owner.UID {
 		return nil, forbidden("pod %s does not speak for the owner session %s", pod.Name, d.Owner.Name)
 	}

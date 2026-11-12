@@ -1698,3 +1698,74 @@ The model-free TLS regressions cover these boundaries. Actual endpoint timing
 and survival of an active native process still require rollout evidence.
 
 For CLI version and model admission changes, see the [CLI and model upgrade checklist](cli-model-upgrades.md).
+
+## Summoning callers
+
+A summoning caller is a ServiceAccount with one CallerPolicy in
+`dev-env-system`, named `<namespace>.<name>` (DESIGN-064 6.4 and 5.6, ADR-025
+decisions 1, 12 and 13). The API reads that object uncached. It admits the
+caller only when `spec.summon.serviceAccount` is that account and the object
+is not being deleted. Any other account still receives 403.
+
+Meatball's policy and route list are unchanged. One refusal sentence changed:
+an account with no CallerPolicy is told it is not Tom's, a client's or a
+session's ServiceAccount, nor a summoning caller with a CallerPolicy. The
+reserved name prefix `esc-rem-` applies to every
+caller-driven create, Meatball's included. Nothing in this section installs
+a caller's policy.
+
+The caller may create a session, and may list or get a session only when
+`spec.caller` is its policy's name and `spec.parent` is its account. It may
+not delete a session, read a log, or write a parent note. A summoned session
+cannot submit scheduled work.
+
+A create whose parent is a session — the session's own request, or a
+scheduled dispatch on the session basis — is refused when the session already
+in hand has `spec.caller` set. The API then reads that session live and
+refuses when it is missing, when the read fails, or when the live object has
+`spec.caller` set. No child is written in those cases. On a scheduled
+dispatch the UID compared is the authorizer's session reference, already on
+the dispatch; a later session of the same name has a different UID. An
+ordinary session whose live object has another UID and no `spec.caller`
+still creates: the usage-capture binding does not copy that UID. A parent
+that is an account (a slash in the name) is not a session and is not this
+rule.
+
+A create may carry `name`, `mode`, `lane`, `idempotencyKey` and `data`. It
+may also repeat `agent` as `claude`, `model` as the entry's default, and
+`profile` as the entry's profile, or leave those three empty. Any other
+field is refused with 422, named. A member name in the body or inside `data`
+that contains any byte outside printable ASCII is refused before a value map
+is decoded. Two printable-ASCII members of the same name, compared after JSON
+unescaping and without regard to case, are refused the same way, before a
+value is kept; a body with two `data` members is refused for that, without a
+look inside either. `mode` and `lane` select the policy entry,
+or the create is refused. `name` is required: a DNS label of at most 60
+characters, starting with one of that entry's prefixes. A final name starting
+with `esc-rem-` is refused for every caller-driven create, including a name
+generated from the repository. A create in lane upgrade whose name
+starts with `wo-cigar-curate-` is refused.
+
+The API writes the parent (the account), the caller (the policy name), the
+lane, the profile, the model, the effort, the limits and the immutable
+`spec.summon` snapshot from the entry, including the escalation entry copied
+for a remediation. It does not write `spec.base`; the default `origin/main`
+applies. `spec.summon.dispatchID` is a schema-valid random id. The ledger
+that charges an id before the create, the replay of `idempotencyKey`, the
+name suffix and the pool limits are a later slice. A key sent now is stored
+and is not replayed.
+
+The API renders the brief into `spec.prompt`. The entry's template is copied
+verbatim, then one line naming the session, its policy and its lane, then one
+fenced block of the data fields in the order `brief.fields` lists them. The
+fence boundary is 16 random hex characters. Before rendering, each value loses
+every control character except newline and tab, and every default-ignorable
+code point: category Cf, variation selectors, and other default-ignorable
+code points. Then every literal `BEGIN DATA` and `END DATA`, in any case, is
+removed, repeatedly, so a marker joined by one of those removed characters is
+removed too. The fence is the random boundary. Nothing here says how a model
+reads other text. A `prompt` on the create is refused. A data key the entry
+does not name is refused. Each value is at most 4096 bytes and the values
+together at most 16384. An ordinary remote session still cannot carry a prompt. A summoned
+remote session can, because the brief is that prompt. Handing the brief to
+the CLI at first launch is a later story.

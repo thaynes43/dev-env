@@ -47,6 +47,15 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 	if err := refuseRetainedExecutor(c); err != nil {
 		return 0, nil, err
 	}
+	if err := s.refuseSummonedChild(ctx, c); err != nil {
+		return 0, nil, err
+	}
+	if c.kind == kindSummon {
+		if dryRun {
+			return 0, nil, summonRouteDenied()
+		}
+		return s.createSummonSession(ctx, w, r, c)
+	}
 	var raw json.RawMessage
 	if err := decodeJSON(w, r, maxCreateBody, &raw, true); err != nil {
 		return 0, nil, err
@@ -144,6 +153,9 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 		sess.Name = base
 		if i > 1 {
 			sess.Name = fmt.Sprintf("%s-%d", base, i)
+		}
+		if err := refuseReservedSessionName(sess.Name); err != nil {
+			return 0, nil, err
 		}
 		if err := checkAgentd(sess); err != nil {
 			return 0, nil, err
@@ -336,7 +348,7 @@ func (s *Server) listSessions(ctx context.Context, _ http.ResponseWriter, r *htt
 	}
 	var list v1alpha1.AgentSessionList
 	reader := client.Reader(s.Client)
-	if c.kind == kindCoordinator || c.kind == kindPolicy {
+	if c.kind == kindCoordinator || c.kind == kindPolicy || c.kind == kindSummon {
 		reader = s.Live
 	}
 	if err := reader.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
@@ -352,6 +364,9 @@ func (s *Server) listSessions(ctx context.Context, _ http.ResponseWriter, r *htt
 	out := apiv1.SessionList{Sessions: []apiv1.Session{}}
 	for i := range items {
 		if c.kind == kindPolicy && !policyOwns(c, &items[i]) {
+			continue
+		}
+		if c.kind == kindSummon && !summonOwns(c, &items[i]) {
 			continue
 		}
 		if (c.kind != kindCoordinator || items[i].Spec.Parent == c.parent) && f.match(&items[i], c) {
@@ -446,6 +461,16 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 			return 0, nil, err
 		}
 		return http.StatusOK, view(sess, true), nil
+	}
+	if c.kind == kindSummon {
+		if s.Live == nil {
+			return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "sessions cannot be read")
+		}
+		var own v1alpha1.AgentSession
+		if s.Live.Get(ctx, key, &own) != nil || !summonOwns(c, &own) {
+			return 0, nil, summonReadDenied()
+		}
+		return http.StatusOK, view(&own, true), nil
 	}
 	opted := r.Header.Get(apiv1.UsageCaptureHeader) == apiv1.UsageCaptureDirectV1
 	if c.kind == kindCoordinator {
@@ -557,12 +582,16 @@ func refuseRetainedExecutor(c *caller) error {
 }
 
 // admitCreate is the part of a create's admission that reads the session it
-// would make and the sessions already there: the instruction image, the
-// private project gate, the portal launch cap, the named coordinator rule and
-// a session caller's depth and child cap. Every create path that makes an
-// ordinary session runs it under the create lock, after a repeat of the same
-// create has had its answer (createSessionMode, CreateScheduledSession).
+// would make and the sessions already there: a parent that is itself a
+// summoned session, the instruction image, the private project gate, the
+// portal launch cap, the named coordinator rule and a session caller's depth
+// and child cap. Every create path that makes an ordinary session runs it
+// under the create lock, after a repeat of the same create has had its answer
+// (createSessionMode, CreateScheduledSession).
 func (s *Server) admitCreate(ctx context.Context, c *caller, sess *v1alpha1.AgentSession) error {
+	if err := s.refuseSummonedParent(ctx, c, sess); err != nil {
+		return err
+	}
 	if err := s.admitCallerCapacity(ctx, c); err != nil {
 		return err
 	}

@@ -33,6 +33,9 @@ const (
 	// kindPolicy is the first CallerPolicy caller, Meatball (DESIGN-060).
 	// It is never a client or a session and has its own positive route list.
 	kindPolicy callerKind = "policy"
+	// kindSummon is a summoning CallerPolicy caller (DESIGN-064 6.4). It is
+	// not kindPolicy: Meatball's route list, read path and tests stay theirs.
+	kindSummon callerKind = "summon"
 	// kindPortalReader is the default-off portal ServiceAccount. It is not a
 	// human, client, session, or coordinator.
 	kindPortalReader callerKind = "portal-reader"
@@ -105,7 +108,7 @@ type caller struct {
 	// the profile an ordinary session's children run on. A workbench
 	// session's children do not inherit it (OP502).
 	profile string
-	// policy is the live policy read for kindPolicy only.
+	// policy is the live policy read for kindPolicy and kindSummon.
 	policy *v1alpha1.CallerPolicy
 }
 
@@ -165,7 +168,14 @@ func (s *Server) resolveCaller(ctx context.Context, id Identity) (*caller, error
 			return &caller{kind: kindPolicy, identity: id, parent: ref, policy: p}, nil
 		}
 	}
-	return nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy) arrive in plan 10", ref)
+	p, err := s.readSummonPolicy(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	if p != nil {
+		return &caller{kind: kindSummon, identity: id, parent: ref, policy: p}, nil
+	}
+	return nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, nor a summoning caller with a CallerPolicy", ref)
 }
 
 // ValidatePortalCaller rejects a policy that also names the portal ServiceAccount
