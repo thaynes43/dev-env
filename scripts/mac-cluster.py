@@ -68,7 +68,10 @@ def request(argv):
                 raise Refusal("Connection, identity, credential, TLS, kuberc and debug overrides are refused.")
         elif arg.startswith("-") and arg != "-":
             # Never admit -s/-v or arbitrary clusters such as -AsURL/-iv9.
-            if arg not in SHORT_BOOL and arg[:2] not in SHORT_VALUE:
+            # Arity differs by subcommand: -f/-p take values for some but
+            # mean booleans for logs, where -fsURL would smuggle a -s flag.
+            # Accept exact tokens only; values must be separate argv entries.
+            if arg not in SHORT_BOOL and arg not in SHORT_VALUE:
                 raise Refusal("Unsupported short option; use a supported long option. Server and debug overrides are refused.")
     return tool, args, True
 

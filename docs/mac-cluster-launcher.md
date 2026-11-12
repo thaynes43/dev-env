@@ -66,7 +66,10 @@ Connection and identity overrides are refused even when their values match:
 certificate/TLS options, impersonation flags, and `--kuberc`. Debug verbosity and
 profiling flags are refused. Underscore variants and arbitrary short-option
 clusters are refused too. Use separate short options or long options; common
-short value flags (`-n`, `-o`, `-l`, `-f`, `-k`, `-c`, `-p`) and `-it` work.
+short flags (`-n`, `-o`, `-l`, `-f`, `-k`, `-c`, `-p`) and `-it` work. Short
+flags must be exact tokens: use `-n dev`, not `-ndev`. Some flags have different
+arity by command (`logs -f` is boolean), so attached values or other clusters
+could conceal an override and are refused.
 A `--` directly after an option without `=` is refused because the client could
 consume it as that option's value. Put values explicitly before the separator,
 for example `exec -n dev pod -- command`. Arguments after a genuine `--` are

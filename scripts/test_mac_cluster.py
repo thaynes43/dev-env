@@ -216,8 +216,17 @@ class LauncherTests(unittest.TestCase):
                 probe.assert_not_called()
                 dispatch.assert_not_called()
 
+    def test_command_dependent_short_clusters_cannot_smuggle_overrides(self):
+        for option in ("-fshttps://other.invalid", "-pshttps://other.invalid", "-pv9", "-fv9",
+                       "-nvalue", "-ojson", "-lapp=example", "-f=manifest.yaml"):
+            with self.subTest(option=option):
+                code, probe, dispatch = self.invoke(["kubectl", "logs", "pod", option])
+                self.assertEqual(code, 2)
+                probe.assert_not_called()
+                dispatch.assert_not_called()
+
     def test_approved_short_values_and_remote_exec_boundary(self):
-        for args in (["get", "pods", "-ndev", "-ojson", "-lapp=example"],
+        for args in (["get", "pods", "-n", "dev", "-o", "json", "-l", "app=example"],
                      ["exec", "-it", "pod", "-n", "dev", "--", "sh", "-c", "echo --context=remote"],
                      ["exec", "pod", "--", "program", "--context=remote", "-sremote"]):
             with self.subTest(args=args):
