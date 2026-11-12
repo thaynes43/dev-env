@@ -2712,3 +2712,80 @@ func TestSummonCannotEraseWholeStatus(t *testing.T) {
 		}
 	}
 }
+
+// OP780 (DESIGN-064 5.9, F3): the remote executor latch. Each rule accepts
+// the write it allows and refuses the one it forbids; the record itself and
+// every field a rule reads stay under their bounds.
+func TestSummonExecutorLatchRules(t *testing.T) {
+	attempt := func(st *v1alpha1.SummonStatus) {
+		st.Executor = &v1alpha1.SummonExecutorStatus{Attempted: true, Intent: "intent-1"}
+	}
+	for _, tc := range []struct {
+		name          string
+		first, second func(*v1alpha1.SummonStatus)
+		want          string
+	}{
+		// An attempt is never reversed.
+		{"attempt-recorded", func(*v1alpha1.SummonStatus) {}, attempt, ""},
+		{"attempt-kept", attempt, func(st *v1alpha1.SummonStatus) { st.Executor.PodUID = "pod-uid-1" }, ""},
+		{"attempt-reversed", attempt, func(st *v1alpha1.SummonStatus) { st.Executor.Attempted = false }, "an executor attempt is never reversed"},
+		// The intent never changes.
+		{"intent-changed", attempt, func(st *v1alpha1.SummonStatus) { st.Executor.Intent = "intent-2" }, "the executor intent never changes"},
+		// An attempt has one intent.
+		{"attempt-without-intent", func(*v1alpha1.SummonStatus) {}, func(st *v1alpha1.SummonStatus) {
+			st.Executor = &v1alpha1.SummonExecutorStatus{Attempted: true}
+		}, "an executor attempt has one intent"},
+		// podUID once set never changes or goes.
+		{"pod-uid-changed", func(st *v1alpha1.SummonStatus) { attempt(st); st.Executor.PodUID = "pod-uid-1" },
+			func(st *v1alpha1.SummonStatus) { st.Executor.PodUID = "pod-uid-2" }, "the recorded executor pod UID never changes or goes"},
+		{"pod-uid-removed", func(st *v1alpha1.SummonStatus) { attempt(st); st.Executor.PodUID = "pod-uid-1" },
+			func(st *v1alpha1.SummonStatus) { st.Executor.PodUID = "" }, "the recorded executor pod UID never changes or goes"},
+		{"pod-uid-without-attempt", func(*v1alpha1.SummonStatus) {}, func(st *v1alpha1.SummonStatus) {
+			st.Executor = &v1alpha1.SummonExecutorStatus{Intent: "intent-1", PodUID: "pod-uid-1"}
+		}, "an executor pod is recorded only for an attempt"},
+		// The known non-attempt: only an attempt with no recorded pod, and it
+		// may be cleared again (the one re-arm).
+		{"not-created-marked", attempt, func(st *v1alpha1.SummonStatus) { st.Executor.NotCreated = true }, ""},
+		{"not-created-cleared", func(st *v1alpha1.SummonStatus) { attempt(st); st.Executor.NotCreated = true },
+			func(st *v1alpha1.SummonStatus) { st.Executor.NotCreated = false }, ""},
+		{"not-created-with-pod", func(st *v1alpha1.SummonStatus) { attempt(st); st.Executor.PodUID = "pod-uid-1" },
+			func(st *v1alpha1.SummonStatus) { st.Executor.NotCreated = true }, "only an attempt with no recorded pod can be marked not created"},
+		{"not-created-without-attempt", func(*v1alpha1.SummonStatus) {}, func(st *v1alpha1.SummonStatus) {
+			st.Executor = &v1alpha1.SummonExecutorStatus{NotCreated: true}
+		}, "only an attempt with no recorded pod can be marked not created"},
+		// The latch is never removed.
+		{"latch-removed", attempt, func(st *v1alpha1.SummonStatus) { st.Executor = nil }, "the executor latch cannot be removed"},
+		// Bounds: every string a rule reads has a MaxLength.
+		{"intent-too-long", func(*v1alpha1.SummonStatus) {}, func(st *v1alpha1.SummonStatus) {
+			st.Executor = &v1alpha1.SummonExecutorStatus{Attempted: true, Intent: strings.Repeat("i", 129)}
+		}, "Too long"},
+		{"pod-uid-too-long", attempt, func(st *v1alpha1.SummonStatus) { st.Executor.PodUID = strings.Repeat("p", 129) }, "Too long"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := summonedRemote()
+			if err := k8s.Create(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			at := metav1.NewTime(time.Date(2026, 11, 12, 15, 0, 0, 0, time.UTC))
+			s.Status.Summon = &v1alpha1.SummonStatus{AdmittedAt: &at}
+			tc.first(s.Status.Summon)
+			if err := k8s.Status().Update(ctx(t), s); err != nil {
+				t.Fatalf("first write: %v", err)
+			}
+			s = get(t, s)
+			tc.second(s.Status.Summon)
+			want := s.Status.Summon.Executor.DeepCopy()
+			err := k8s.Status().Update(ctx(t), s)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := get(t, s).Status.Summon; got == nil || !apiequality.Semantic.DeepEqual(got.Executor, want) {
+					t.Fatalf("the executor latch did not round trip: %+v, want %+v", got, want)
+				}
+				return
+			}
+			wantInvalid(t, err, tc.want)
+		})
+	}
+}

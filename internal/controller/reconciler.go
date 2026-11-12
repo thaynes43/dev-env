@@ -299,10 +299,6 @@ type Reconciler struct {
 	// process's first leader admission pass (OP779 fix round 1, O1).
 	summonWatchdogStart     sync.Once
 	summonWatchdogStartedAt time.Time
-	// summonRemoteLatch is slice d's seam: it lifts the RemoteLatchMissing
-	// hold once the remote latch exists. Nothing sets it in this slice; only
-	// tests do, to prove the escalation pool apart from the latch.
-	summonRemoteLatch bool
 	// releaseJudged, when set, sees every pass of the scheduled-work releaser:
 	// the cached session it judged, whether it released, and when it asked to
 	// look again. Tests set it to prove the releaser ran; the operator leaves
@@ -486,6 +482,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	pod, err := getOwned(ctx, r.Client, &s, s.Name, &corev1.Pod{})
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	// DESIGN-064 5.9 (OP780): the remote latch records its pod's UID once the
+	// pod appears, before anything else here reads the latch.
+	if changed, err := r.observeSummonExecutor(ctx, &s); err != nil || changed {
+		return ctrl.Result{RequeueAfter: time.Second}, err
 	}
 	if budgetBound(&s) && s.Spec.Workspace == nil {
 		if stop, err := r.reconcilePrivateTaskBudget(ctx, &s, &pod); stop || err != nil {
@@ -1465,6 +1466,18 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 		}
 		pod.Annotations[privateHistoryHomeAnnotation] = s.Status.PrivateHistory.HomeUID
 		pod.Annotations[privateHistoryExecutorAnnotation] = s.Status.PrivateHistory.ExecutorIntent
+	} else if summonRemoteLatched(s) {
+		// DESIGN-064 5.9 (OP780): a summoned remote session's one pod attempt
+		// is recorded and confirmed before its create, so no path makes a
+		// second pod.
+		var err error
+		reserved, err = r.reserveSummonExecutor(ctx, s)
+		if err != nil {
+			r.recordExecutorNotCreated(ctx, s, reserved)
+			obs.removalBlocked = err
+			return nil
+		}
+		pod.Annotations[summonExecutorAnnotation] = s.Status.Summon.Executor.Intent
 	}
 	if budgetBound(s) {
 		l, err := r.observeTaskBudget(ctx, s, nil)

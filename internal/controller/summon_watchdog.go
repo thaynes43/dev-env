@@ -169,6 +169,22 @@ func (r *Reconciler) summonWatchdogInputs(ctx context.Context, s *v1alpha1.Agent
 			}
 		}
 	case v1alpha1.ModeRemote:
+		if ex := st.Executor; summonRemoteLatched(s) && ex != nil && ex.Attempted && ex.PodUID != "" {
+			// session-lost (OP780): the remote latch's recorded pod is gone,
+			// or another pod holds its name, by an uncached read. A hold pod
+			// under the name is another pod; it is made only for a suspend or
+			// a reap, whose stop row wins over this one (FirstReason).
+			var pod corev1.Pod
+			err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: s.Name}, &pod)
+			switch {
+			case apierrors.IsNotFound(err):
+				in.SessionLost = true
+			case err != nil:
+				return fmt.Errorf("read the recorded executor of %s: %w", s.Name, err)
+			default:
+				in.SessionLost = string(pod.UID) != ex.PodUID
+			}
+		}
 		if heartbeatsReady && a != nil && a.LastHeartbeat != nil && !now.Before(a.LastHeartbeat.Add(summonHeartbeatLost)) {
 			pod, err := getOwned(ctx, r.APIReader, s, s.Name, &corev1.Pod{})
 			if err != nil {

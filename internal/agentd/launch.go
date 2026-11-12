@@ -37,6 +37,9 @@ const (
 	// taskSourceFile is a private project task's source pin, written once
 	// before its worktree is created (DESIGN-006).
 	taskSourceFile = "task-source.json"
+	// startRefusedFile records run-agent's refusal to spawn a summoned
+	// session's provider past its start deadline (DESIGN-064 5.9, N2).
+	startRefusedFile = "start-refused.json"
 )
 
 // Launch is everything `agentd run-agent` needs to run the agent: agentd
@@ -90,6 +93,13 @@ type Launch struct {
 	// ExplicitClaudeRC is set only by an accepted explicit user continuation
 	// of one retained private Claude task. Automatic resume never sets it.
 	ExplicitClaudeRC *ExplicitClaudeRCLaunch `json:"explicitClaudeRC,omitempty"`
+	// StartDeadline is the pod's start deadline (AGENTD_START_DEADLINE, in
+	// protocol.ParseStartDeadline's form), copied by BuildLaunch only into a
+	// summoned session's first launch (DESIGN-064 5.9, N2, OP780). run-agent
+	// checks it again immediately before it spawns the provider and, past
+	// it, starts nothing. Absent, as in every ordinary launch and every
+	// record an older agentd wrote, run-agent spawns as before.
+	StartDeadline string `json:"startDeadline,omitempty"`
 }
 
 // ErrNotInPlan01 marks a session kind that a later plan builds.
@@ -185,6 +195,21 @@ func sharedGuard(ws protocol.Workspace, task bool) string {
 // agent is named: an agent this agentd does not know is refused, never run
 // as Claude.
 func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootID string, now time.Time) (Launch, error) {
+	l, err := buildFirstLaunch(s, sess, ws, bootID, now)
+	if err != nil {
+		return Launch{}, err
+	}
+	// A summoned session's first launch carries the start deadline to
+	// run-agent's pre-spawn fence (DESIGN-064 5.9, N2). Only a summoned
+	// session gets it: a scheduled session keeps today's launch, whose
+	// deadline bounds the launch record alone (DESIGN-054).
+	if sess.Caller != "" {
+		l.StartDeadline = s.StartDeadline
+	}
+	return l, nil
+}
+
+func buildFirstLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootID string, now time.Time) (Launch, error) {
 	switch sess.Agent {
 	case protocol.AgentCodex:
 		return buildCodexLaunch(s, sess, ws, nil, bootID, now)
@@ -285,6 +310,11 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first Launch, bootID string, now time.Time) (Launch, error) {
 	if retainedPrivateTask(s, sess) {
 		return Launch{}, errors.New("a terminal private task cannot automatically resume its provider")
+	}
+	if sess.Caller != "" {
+		// DESIGN-064 5.9 and N3: nothing continues a summoned session, so no
+		// path (a boot, a decision answer) can start its provider twice.
+		return Launch{}, errors.New("a summoned session is never resumed: its provider starts once")
 	}
 	switch sess.Agent {
 	case protocol.AgentCodex:
@@ -477,6 +507,23 @@ func writeJSONFile(path string, v any) error {
 		return err
 	}
 	return writeFileAtomic(path, append(data, '\n'), 0o600)
+}
+
+// summonedLaunched reports whether a summoned session (DESIGN-064, spec.caller
+// set) already has its first launch: a saved launch record, or a task result,
+// whatever the mode. Such a session starts nothing again on any boot
+// (DESIGN-064 5.9, OP780): no TUI resume and no provider. As for a retained
+// private task, a record agentd cannot stat counts as present.
+func summonedLaunched(s Settings, sess protocol.Session) bool {
+	if sess.Caller == "" {
+		return false
+	}
+	for _, name := range []string{launchFile, resultFile} {
+		if _, err := os.Lstat(s.statePath(name)); !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	return false
 }
 
 func retainedPrivateTask(s Settings, sess protocol.Session) bool {

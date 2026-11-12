@@ -40,6 +40,10 @@ type daemonProcess struct {
 // as busy before its pid file appears.
 const startWindow = time.Minute
 
+// summonedInterrupted is a summoned session's interrupted message: its first
+// run is gone without a result, and nothing starts it again (DESIGN-064 5.9).
+const summonedInterrupted = "the summoned session's process is gone without a result; agentd never starts it again (DESIGN-064 5.9)"
+
 // CollectStatus builds the session's status from agentd's state files and the
 // worktree. The heartbeat and `agentd ctl status` both use it, so the
 // operator sees the same thing either way. It reads; it never changes state.
@@ -130,13 +134,24 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	if hasExplicit && explicitState != explicitClaudeRCUncertain {
 		cur, hasCur = explicitLaunch, true
 	}
+	// A summoned session's first run is its only one (DESIGN-064 5.9,
+	// OP780): after a later boot, which starts nothing, the status says how
+	// that run ended, never that a login is wanted for a start that will not
+	// happen.
+	summonedRun := sess.Caller != "" && launched
+	var refused startRefused
 	switch {
 	case boot.AgentError != "":
 		st.Agent = protocol.AgentState{State: protocol.AgentFailed, Error: boot.AgentError}
+	case launched && readJSONFile(s.statePath(startRefusedFile), &refused) == nil && refused.ConversationID == first.ConversationID && refused.BootID == first.BootID:
+		// run-agent's start fence refused the provider spawn (N2): the
+		// launch failed and no provider ran.
+		created := first.CreatedAt
+		st.Agent = protocol.AgentState{State: protocol.AgentFailed, StartedAt: &created, Error: "run-agent refused to start the provider: " + refused.Reason}
 	case codexRemoteSession(sess):
 		// Story110 T17: the agent is the phone daemon, read from its own state.
 		st.RemoteControl, st.Agent = collectCodexRemote(ctx, s, sess, boot.BootID, now)
-	case sess.Mode == protocol.ModeRemote && !hasCur && !checkLogin(s).Usable(now):
+	case sess.Mode == protocol.ModeRemote && !hasCur && !summonedRun && !checkLogin(s).Usable(now):
 		// Story110 T03: a remote pod without a usable login has not started
 		// its agent. The message names the way forward, never a secret.
 		msg := "no usable Claude login in this pod; run: agent-run login " + sess.Name + " url"
@@ -152,6 +167,13 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	case finished:
 		started := res.StartedAt
 		st.Agent = protocol.AgentState{State: protocol.AgentExited, StartedAt: &started}
+	case summonedRun && first.TUI:
+		// A later boot of a summoned TUI session: its first run's own exit
+		// record says whether it exited; otherwise it was interrupted.
+		st.Agent = tuiState(s, first, now)
+		if st.Agent.State == protocol.AgentInterrupted {
+			st.Agent.Error = summonedInterrupted
+		}
 	case launched:
 		created := first.CreatedAt
 		st.Agent = protocol.AgentState{StartedAt: &created}
@@ -166,6 +188,8 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 			st.Agent.Error = "the agent's process is gone and it left no result; agentd does not run a task's prompt twice (D-42), and the next boot resumes it (D-58)"
 			if retainedPrivateTask(s, sess) {
 				st.Agent.Error = "the private task's process is gone without a result; its launch and HOME remain retained, and agentd never automatically resumes it"
+			} else if sess.Caller != "" {
+				st.Agent.Error = summonedInterrupted
 			}
 		}
 	}

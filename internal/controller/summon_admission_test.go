@@ -569,9 +569,9 @@ func TestSummonSingleFlightLaneAcrossCallers(t *testing.T) {
 }
 
 // Two escalations run at once, apart from any remediation, and two open
-// escalations never hold a remediation (C2). Escalations are remote, which
-// this slice holds for the remote latch: with the seam closed they are held
-// RemoteLatchMissing; with it lifted (slice d) both are admitted.
+// escalations never hold a remediation (C2). Escalations are remote; slice d
+// (OP780) built the remote latch, so no RemoteLatchMissing hold remains and
+// both are admitted in the first pass.
 func TestSummonEscalationsRunAtOnceAndNeverHoldARemediation(t *testing.T) {
 	w := newSummonWorld(t, summonPolicyObject(callerA, 1, ptr.To[int32](2)))
 	e1 := summonedFor("esc-1", callerA, v1alpha1.LaneEscalation, 3*time.Minute)
@@ -579,15 +579,7 @@ func TestSummonEscalationsRunAtOnceAndNeverHoldARemediation(t *testing.T) {
 	rem := summonedFor("rem-1", callerA, v1alpha1.LaneRemediation, time.Minute)
 	w.queue(e1, e2, rem)
 	w.pass()
-	w.wantAdmitted("latch missing", map[string]bool{"esc-1": false, "esc-2": false, "rem-1": true})
-	for _, n := range []string{"esc-1", "esc-2"} {
-		if w.hold(n) != "False/"+SummonReasonRemoteLatchMissing {
-			t.Fatalf("%s held %s", n, w.hold(n))
-		}
-	}
-	w.r.summonRemoteLatch = true
-	w.pass()
-	w.wantAdmitted("latch lifted", map[string]bool{"esc-1": true, "esc-2": true, "rem-1": true})
+	w.wantAdmitted("remote latch built", map[string]bool{"esc-1": true, "esc-2": true, "rem-1": true})
 	// A third escalation waits for the escalations pool, and a second
 	// remediation waits for its lane, not for the escalations.
 	e3 := summonedFor("esc-3", callerA, v1alpha1.LaneEscalation, 0)

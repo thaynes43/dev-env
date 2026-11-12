@@ -1490,10 +1490,12 @@ func parseSummonCreateKinds(raw string) ([]v1alpha1.SummonKind, error) {
 
 // checkSummonCreateKinds refuses to start with summoning creates switched on
 // where the operator cannot hold them (OP777, ruling D8 on item 741): any kind
-// without --enable-summoned-lanes, since nothing would ever admit it; task
+// without --enable-summoned-lanes, since nothing would ever admit it; and task
 // without both task latch flags, since a summoned task is admitted only when
-// the private task latch applies to it (DESIGN-064 5.9); and remote at all,
-// until slice d of item 741 builds the remote latch. Lanes also require
+// the private task latch applies to it (DESIGN-064 5.9). Remote is no longer
+// refused: slice d of item 741 (OP780) built the remote latch into this
+// binary. Naming remote still waits, in haynes-ops, for story 745 and an
+// agent image that carries agentd's half of the latch. Lanes also require
 // leader election, even with no creates switched on.
 func checkSummonCreateKinds(o options) error {
 	if o.summonedLanes && !o.leaderElect {
@@ -1507,9 +1509,6 @@ func checkSummonCreateKinds(o options) error {
 	}
 	if slices.Contains(o.summonCreateKinds, v1alpha1.SummonKindTask) && (!o.privateHistoryRetention || !o.terminalTaskPodReclaim) {
 		return errors.New("--summon-create-kinds=task requires --enable-private-history-retention and --enable-terminal-task-pod-reclaim: a summoned task is admitted only under both halves of the private task latch (DESIGN-064 5.9)")
-	}
-	if slices.Contains(o.summonCreateKinds, v1alpha1.SummonKindRemote) {
-		return errors.New("--summon-create-kinds may not name remote yet: a summoned remote session waits for the remote latch of item 741 slice d")
 	}
 	return nil
 }

@@ -321,6 +321,14 @@ func (d *Daemon) bootHeartbeat(ctx context.Context) func() {
 // (DESIGN-025 24). It returns the boot step and,
 // when the agent cannot run, why.
 func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Step, bootID string) (Step, string) {
+	if summonedLaunched(d.S, d.Session) {
+		// DESIGN-064 5.9 (OP780): a summoned session's provider starts once.
+		// A boot that finds its launch record, in any mode and whatever the
+		// repo step did, starts nothing: no TUI resume, no explicit
+		// continuation, no provider. Its status reports how the first run
+		// ended (CollectStatus), so the operator closes it once.
+		return newStep("agent", []string{"summoned session's first launch is recorded; agentd starts nothing again (DESIGN-064 5.9)"}, nil), ""
+	}
 	if repo.State != StepFail && retainedPrivateTask(d.S, d.Session) {
 		// A retained private task still does not resume on its own. A supervised
 		// explicit continuation is a separate record and is restarted only when

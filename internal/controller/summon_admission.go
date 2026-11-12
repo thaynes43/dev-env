@@ -76,9 +76,6 @@ const (
 	SummonReasonNotCharged = "NotCharged"
 	// SummonReasonHoldExpired: Queued past its maxHold and closed (OP779).
 	SummonReasonHoldExpired = "HoldExpired"
-	// SummonReasonRemoteLatchMissing holds every summoned remote session until
-	// slice d of item 741 builds the remote latch.
-	SummonReasonRemoteLatchMissing = "RemoteLatchMissing"
 	// SummonReasonTaskLatchMissing holds a summoned task while the operator
 	// runs without both latch flags (--enable-private-history-retention and
 	// --enable-terminal-task-pod-reclaim).
@@ -120,6 +117,10 @@ func summonBuildRefusal(s *v1alpha1.AgentSession, taskLatch bool) string {
 		return "closed"
 	case s.Spec.Mode == v1alpha1.ModeTask && !summonTaskLatchApplies(s, taskLatch):
 		return "the private task latch does not apply"
+	case summonRemoteLatched(s) && summonExecutorAttempted(s):
+		// The remote latch's one attempt is recorded (OP780): a missing pod
+		// is lost, or its create is in flight, and never gets a second.
+		return "the remote executor latch records its one attempt"
 	}
 	return ""
 }
@@ -212,24 +213,41 @@ func podRetainsPrivateHistory(p *corev1.Pod) bool {
 
 // summonReleasable decides, on an uncached Session, whether its reservation
 // may be released now (DESIGN-064 5.9, "When a reservation is released").
-// Until run-agent's pre-spawn check is built (slice d), an operator close
-// whose launch may be in flight releases only once the pod is confirmed gone.
-func (r *Reconciler) summonReleasable(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
+// early is true when it releases with the session's pod still present, on
+// the start fence alone: an operator close of an attempt whose first launch
+// may be in flight, at the start deadline plus one minute, in a pod whose
+// agentd carries the fence (podCarriesStartFence, OP780). Without the fence
+// such a close releases only once the pod is confirmed gone.
+func (r *Reconciler) summonReleasable(ctx context.Context, s *v1alpha1.AgentSession) (ok, early bool, err error) {
 	st := s.Status.Summon
 	if s.Spec.Caller == "" || st == nil || st.Closed == nil || st.Closed.Released {
-		return false, nil
+		return false, false, nil
 	}
 	if st.Closed.Source == summonoutcome.Report || st.AdmittedAt == nil {
 		// A report comes from the session's own pod; a session never admitted
 		// never had a volume or a pod, and the gate builds none once closed.
-		return true, nil
+		return true, false, nil
+	}
+	// Past the start deadline plus one minute, a fenced agentd starts no
+	// provider: run-agent refuses the spawn and agentd refuses a late first
+	// launch and every boot with a launch record.
+	fenced := func(p *corev1.Pod) bool {
+		return podCarriesStartFence(p) && !r.now().Before(st.AdmittedAt.Add(SummonStartWindow+time.Minute))
 	}
 	h := s.Status.PrivateHistory
 	latchedTask := s.Spec.Mode == v1alpha1.ModeTask && privateHistoryProtected(s) && h != nil
 	if latchedTask && (!h.ExecutorAttempted || h.ExecutorNotCreated && h.LastExecutor == nil) {
 		// No attempt, or a known non-attempt: the closed record now refuses
 		// every new latch write (reservePrivateExecutor).
-		return true, nil
+		return true, false, nil
+	}
+	if summonRemoteLatched(s) {
+		if ex := st.Executor; ex != nil && (!ex.Attempted || ex.NotCreated && ex.PodUID == "") {
+			// A known non-attempt: the closed record refuses every new latch
+			// write (reserveSummonExecutor). With no latch record at all the
+			// pod is read below, as before the latch.
+			return true, false, nil
+		}
 	}
 	podKey := client.ObjectKeyFromObject(s)
 	if latchedTask && h.LastExecutor != nil {
@@ -240,12 +258,12 @@ func (r *Reconciler) summonReleasable(ctx context.Context, s *v1alpha1.AgentSess
 	if err := r.APIReader.Get(ctx, podKey, &pod); apierrors.IsNotFound(err) {
 		gone = true
 	} else if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if latchedTask {
 		if h.LastExecutor != nil {
 			if gone || string(pod.UID) != h.LastExecutor.PodUID {
-				return true, nil
+				return true, false, nil
 			}
 			if podPhaseTerminal(&pod) && executorTerminalRecorded(h) {
 				// A pod in a terminal phase never runs a container again,
@@ -253,19 +271,47 @@ func (r *Reconciler) summonReleasable(ctx context.Context, s *v1alpha1.AgentSess
 				// coordinator answer op779-q-1). Every container terminated
 				// under phase Running is not this: RestartPolicyAlways can
 				// start them again.
-				return true, nil
+				return true, false, nil
 			}
-			return summonTaskFinished(s) && podRetainsPrivateHistory(&pod), nil
+			if summonTaskFinished(s) && podRetainsPrivateHistory(&pod) {
+				return true, false, nil
+			}
+			return fenced(&pod), true, nil
 		}
 		// A NotFound is not disappearance of a recorded UID: the first
 		// Create may still be in flight. Past the deadline plus one minute,
 		// a late first pod boots an agent that refuses its initial launch.
-		// A present pod can have a pending first spawn and always holds.
-		return gone && !r.now().Before(st.AdmittedAt.Add(SummonStartWindow+time.Minute)), nil
+		// A present pod can have a pending first spawn and holds, unless its
+		// agentd carries the start fence and the deadline has passed.
+		if gone {
+			return !r.now().Before(st.AdmittedAt.Add(SummonStartWindow + time.Minute)), false, nil
+		}
+		return fenced(&pod), true, nil
+	}
+	if summonRemoteLatched(s) {
+		ex := st.Executor
+		switch {
+		case ex != nil && ex.PodUID != "" && (gone || string(pod.UID) != ex.PodUID):
+			// The recorded pod is gone or replaced; the latch refuses a second.
+			return true, false, nil
+		case gone && ex != nil:
+			// An attempt with no recorded pod: its Create may still land. A
+			// late first pod boots an agentd that refuses its first launch
+			// past the start deadline (agent 2.105.0 and later).
+			return !r.now().Before(st.AdmittedAt.Add(SummonStartWindow + time.Minute)), false, nil
+		case gone:
+			// No latch record and no pod: nothing was attempted, and the
+			// closed record refuses the first latch write.
+			return true, false, nil
+		case isHoldPod(&pod):
+			// The rescue pod under its name runs no agent (D-55).
+			return true, false, nil
+		}
+		return fenced(&pod), true, nil
 	}
 	// Otherwise only when the session's agent pod is confirmed gone. A hold
 	// pod under its name is the rescue pod (D-55) and runs no agent.
-	return gone || isHoldPod(&pod), nil
+	return gone || isHoldPod(&pod), false, nil
 }
 
 // reconcileSummonRelease writes closed.released under the optimistic lock
@@ -297,14 +343,19 @@ func (r *Reconciler) summonReleaseStep(ctx context.Context, s *v1alpha1.AgentSes
 	if live.UID != s.UID {
 		return false, nil
 	}
-	ok, err := r.summonReleasable(ctx, &live)
+	ok, early, err := r.summonReleasable(ctx, &live)
 	if err != nil {
 		return false, err
 	}
-	if !ok {
-		if suspend {
-			return r.suspendClosedSummon(ctx, &live)
+	if suspend && (!ok || early) {
+		// The operator's own suspend (OP779, ruling D3) comes first whenever
+		// the pod still runs: while the release waits for it, and before a
+		// release on the start fence alone (OP780), so the pod still goes.
+		if changed, err := r.suspendClosedSummon(ctx, &live); changed || err != nil {
+			return changed, err
 		}
+	}
+	if !ok {
 		return false, nil
 	}
 	base := live.DeepCopy()
@@ -642,8 +693,6 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context, p *summonPass) 
 		switch {
 		case p == nil:
 			reason = SummonReasonPolicyGone
-		case s.Spec.Mode == v1alpha1.ModeRemote && !r.summonRemoteLatch:
-			reason = SummonReasonRemoteLatchMissing
 		case s.Spec.Mode == v1alpha1.ModeTask && (!r.summonTaskLatchOn() || !summonTaskLatchStartable(s)):
 			reason = SummonReasonTaskLatchMissing
 		case summonSingleFlight(s.Spec.Lane) && lanes[s.Spec.Lane]:
@@ -740,14 +789,13 @@ func (r *Reconciler) admitSummon(ctx context.Context, s *v1alpha1.AgentSession, 
 }
 
 var summonHoldMessages = map[string]string{
-	SummonReasonLaneBusy:           "held: another session holds its single-flight lane",
-	SummonReasonPoolBusy:           "held: its caller's pool is full",
-	SummonReasonPolicyGone:         "held: its CallerPolicy is gone or no longer names its account",
-	SummonReasonNotCharged:         "never admitted: the create ledger does not bind its dispatch id to this name",
-	SummonReasonHoldExpired:        "never admitted: Queued past its maxHold, and closed by its onUnreported",
-	SummonReasonRemoteLatchMissing: "held: a summoned remote session waits for the remote latch (item 741 slice d)",
-	SummonReasonTaskLatchMissing:   "held: the private task latch does not apply (both task latch flags, and a startable latch record)",
-	SummonReasonQuotaHold:          "held: quota",
+	SummonReasonLaneBusy:         "held: another session holds its single-flight lane",
+	SummonReasonPoolBusy:         "held: its caller's pool is full",
+	SummonReasonPolicyGone:       "held: its CallerPolicy is gone or no longer names its account",
+	SummonReasonNotCharged:       "never admitted: the create ledger does not bind its dispatch id to this name",
+	SummonReasonHoldExpired:      "never admitted: Queued past its maxHold, and closed by its onUnreported",
+	SummonReasonTaskLatchMissing: "held: the private task latch does not apply (both task latch flags, and a startable latch record)",
+	SummonReasonQuotaHold:        "held: quota",
 }
 
 // holdSummon records why a Queued session waits, once per reason.

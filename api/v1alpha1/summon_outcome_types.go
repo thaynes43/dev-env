@@ -9,6 +9,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.admittedAt) || (has(self.admittedAt) && self.admittedAt == oldSelf.admittedAt)",message="admittedAt is set once and never changes"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.closed) || has(self.closed)",message="the closed record cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.pages) || (has(self.pages) && oldSelf.pages.all(p, p in self.pages))",message="a page event is never removed or changed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.executor) || has(self.executor)",message="the executor latch cannot be removed"
 type SummonStatus struct {
 	// AdmittedAt is when the operator leader admitted the session: its charge
 	// was in the create ledger under its own name, its single-flight lane was
@@ -31,6 +32,44 @@ type SummonStatus struct {
 	// +listType=atomic
 	// +optional
 	Pages []SummonPage `json:"pages,omitempty"`
+	// Executor is a summoned remote session's executor latch (DESIGN-064 5.9,
+	// F3, OP780): the operator records its one pod attempt before the Pod
+	// create and the pod's UID once it appears, so no path builds a second
+	// pod. A summoned task uses status.privateHistory instead. It is never
+	// removed.
+	// +optional
+	Executor *SummonExecutorStatus `json:"executor,omitempty"`
+}
+
+// SummonExecutorStatus is the remote executor latch, in the shape of the
+// private task latch (status.privateHistory's executorAttempted,
+// executorIntent, executorNotCreated and lastExecutor.podUID): an attempt is
+// never reversed and a recorded pod UID never changes.
+//
+// +kubebuilder:validation:XValidation:rule="!oldSelf.attempted || self.attempted",message="an executor attempt is never reversed"
+// +kubebuilder:validation:XValidation:rule="size(oldSelf.intent) == 0 || self.intent == oldSelf.intent",message="the executor intent never changes"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.podUID) || (has(self.podUID) && self.podUID == oldSelf.podUID)",message="the recorded executor pod UID never changes or goes"
+// +kubebuilder:validation:XValidation:rule="!self.attempted || size(self.intent) > 0",message="an executor attempt has one intent"
+// +kubebuilder:validation:XValidation:rule="!has(self.podUID) || self.attempted",message="an executor pod is recorded only for an attempt"
+// +kubebuilder:validation:XValidation:rule="!has(self.notCreated) || !self.notCreated || (self.attempted && !has(self.podUID))",message="only an attempt with no recorded pod can be marked not created"
+type SummonExecutorStatus struct {
+	// Attempted is written, and confirmed, before the one Pod create. It is
+	// never reversed: a create whose result is unknown stays an attempt.
+	Attempted bool `json:"attempted"`
+	// Intent names that one create; the pod carries it in an annotation.
+	// +kubebuilder:validation:MaxLength=128
+	Intent string `json:"intent"`
+	// PodUID is the pod that create made, recorded once an uncached read
+	// finds it with the intent. It never changes.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	PodUID string `json:"podUID,omitempty"`
+	// NotCreated is DESIGN-019's known non-attempt: the operator returned
+	// before calling Create for Intent because an observation failed. Only
+	// then may the same intent re-arm, once per mark.
+	// +optional
+	NotCreated bool `json:"notCreated,omitempty"`
 }
 
 // SummonPageEvent is a page event of DESIGN-064 6.8 recorded on a session.

@@ -1088,6 +1088,57 @@ attribution and the retained-charge error contract.
 Story 779 supplies `maxHold` closure and refuses every resume of a summoned
 session. `task` creates turn on only after both stories are installed.
 
+**Correction, 2026-11-12 (story 780, slice d of #741; coordinator answer
+`op780-q-1`; written by the story's worker, not a ruling by Tom).** The text
+above stays; where it differs, this governs.
+
+1. *The remote latch* is `status.summon.executor` as designed (`attempted`,
+   `intent`, `podUID`, `notCreated`; an attempt is never reversed, the intent
+   and a recorded `podUID` never change, and the record is never removed).
+   The pod carries the intent in the annotation
+   `dev-env.haynesops.com/summon-executor-intent`, and only a pod with it is
+   recorded. A summoned remote session with no latch record that already
+   shows a pod, an agent or a rescue (only one admitted before this latch, or
+   written past the operator) gets no pod either.
+2. *`session-lost` for a remote session* reads the recorded pod uncached, as
+   a task's reads `lastExecutor`. A rescue hold pod under the name is
+   another UID, so it counts as the recorded pod gone: the design does not
+   exempt it. A hold pod is made only for a suspend or a reap, whose stop row
+   wins over `session-lost` (`summonoutcome.FirstReason`), so no close says
+   `session-lost` for it.
+3. *agentd's half.* A session whose document carries `caller` and that has a
+   launch record starts nothing on any boot, in every mode and whatever the
+   repo step did. Its status reports the first run as `exited`,
+   `interrupted` or, new, `failed` when run-agent's start fence refused the
+   spawn; a remote one reports that instead of `login-required`. N3 reaches
+   agentd too: `BuildResume` and the explicit Claude continuation refuse a
+   summoned session, so neither a boot nor a decision answer continues it.
+4. *The fence.* `BuildLaunch` copies the pod's start deadline into a
+   summoned session's first launch record (`startDeadline`); run-agent checks
+   it after its existing pre-spawn check (`nativeLease.beforeSpawn`) and
+   immediately before `cmd.Start`, for a task and a TUI. Past it, it spawns
+   nothing, writes `start-refused.json`, and the status reports `failed`, so
+   the `agent-failed` row closes the session. A record without the field runs
+   as before.
+5. *"When a reservation is released", the in-flight row.* It releases at the
+   start deadline plus one minute, not at the start deadline, and only when
+   the pod still present runs a released agent image at or above 2.108
+   (`ghcr.io/thaynes43/dev-env:2.MINOR.PATCH@sha256:...`, MINOR at least
+   108, `summonStartFenceMinor`): the image the operator put in the pod,
+   which the session cannot change. agentd's self-report was not used: it is
+   replaced on every heartbeat, and a running provider can post one. Any
+   other pod keeps the rule above: hold until it is gone. The floor is right
+   only while no agent release at or above it was cut before this code
+   merged; the coordinator checks that at merge. The operator's suspend of
+   6.6's correction (ruling D3) is written before such a release, so the pod
+   still goes. A process paused between run-agent's check and its spawn for
+   longer than the minute is the "What still runs" limit above; it is not
+   fenced further.
+6. *Start refusals (ruling D8).* The operator no longer refuses `remote` in
+   `--summon-create-kinds`: the remote latch is in this binary. Naming
+   `remote` still waits for #745 and a pinned agent image with this slice's
+   agentd half; that gate is the haynes-ops switch, not code.
+
 ## 6. Contracts per build story
 
 ### 6.1 OP735: the ops egress tier
