@@ -57,7 +57,7 @@ func TestReportRequiresPodAndValidVerb(t *testing.T) {
 func TestReportHelpAndShowOutcome(t *testing.T) {
 	h := newHarness(t)
 	h.mustRun(ExitOK, "help", "report")
-	contains(t, "report help", h.stdout.String(), "own pod", "working", "done", "failed", "escalate", "1024", "1007", "409")
+	contains(t, "report help", h.stdout.String(), "own pod", "working", "done", "failed", "escalate", "1024", "1007", "409", "C0", "C1", "DEL", "Cf", "newline", "tab", "outcome is final:", "outcome write kept conflicting; read the session before retrying")
 	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 		writeTestJSON(w, 200, apiv1.Session{Name: "rem-own-session", Outcome: &apiv1.Outcome{State: "escalated", Note: "needs an owner"}})
 	}
@@ -82,4 +82,48 @@ func TestReportConflictPrintsStoredOutcome(t *testing.T) {
 	}
 	h.mustRun(ExitFailed, "report", "done")
 	contains(t, "ordinary conflict", h.stderr.String(), "outcome write kept conflicting")
+}
+
+func TestReportRefusalExitCodes(t *testing.T) {
+	for _, tc := range []struct {
+		status, exit int
+		code         string
+		message      string
+	}{
+		{http.StatusForbidden, ExitAuth, apiv1.CodeForbidden, "only the session's own pod may report"},
+		{http.StatusUnprocessableEntity, ExitFailed, apiv1.CodeInvalid, "note must not contain control or format characters"},
+	} {
+		t.Run(tc.message, func(t *testing.T) {
+			h := newHarness(t)
+			h.vars["HOSTNAME"] = "rem-own-session"
+			h.vars[envAgentdTokenFile] = h.write("projected-token", testToken)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				writeTestJSON(w, tc.status, apiv1.ErrorResponse{Error: apiv1.Error{Code: tc.code, Message: tc.message}})
+			}
+			h.mustRun(tc.exit, "report", "done")
+			contains(t, "refusal", h.stderr.String(), tc.message)
+			if len(h.api.requests()) != 1 || len(h.sleeps) != 0 || h.stdout.Len() != 0 {
+				t.Fatal("refused report retried or printed a confirmed outcome")
+			}
+		})
+	}
+}
+
+func TestReportNoAnswerIsUnconfirmed(t *testing.T) {
+	h := newHarness(t)
+	h.vars["HOSTNAME"] = "rem-own-session"
+	h.vars[envAgentdTokenFile] = h.write("projected-token", testToken)
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = conn.Close()
+	}
+	h.mustRun(ExitUnconfirmed, "report", "done")
+	contains(t, "unconfirmed report", h.stderr.String(), "no confirmed outcome response", "read agent-run show before retrying")
+	if len(h.api.requests()) != 1 || len(h.sleeps) != 0 || h.stdout.Len() != 0 {
+		t.Fatal("unconfirmed report retried or printed a confirmed outcome")
+	}
 }

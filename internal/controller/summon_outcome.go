@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -18,7 +19,7 @@ import (
 // work can reclaim a terminal pod. Every decision uses an uncached Session and,
 // when needed, an owned Pod. A missing pod alone proves no loss in slice a.
 func (r *Reconciler) reconcileSummonOutcome(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
-	if s.Spec.Caller == "" {
+	if s.Spec.Caller == "" || summonoutcome.Terminal(s.Status.Outcome) {
 		return false, nil
 	}
 	if r.APIReader == nil {
@@ -35,7 +36,10 @@ func (r *Reconciler) reconcileSummonOutcome(ctx context.Context, s *v1alpha1.Age
 	if summonoutcome.Terminal(s.Status.Outcome) {
 		return false, nil
 	}
-	in := summonoutcome.Inputs{}
+	in := summonoutcome.Inputs{
+		SessionDeleting:  !s.DeletionTimestamp.IsZero(),
+		SessionSuspended: s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended,
+	}
 	if s.Spec.Mode == v1alpha1.ModeTask {
 		in.TaskResult = s.Status.TaskResult
 		if in.TaskResult == nil {
@@ -66,11 +70,13 @@ func (r *Reconciler) reconcileSummonOutcome(ctx context.Context, s *v1alpha1.Age
 	next := summonoutcome.Decision{}
 	if reason != "" {
 		if s.Spec.Summon == nil {
-			return false, fmt.Errorf("summoned session lacks its onUnreported snapshot")
+			log.FromContext(ctx).Error(nil, "summoned session lacks its onUnreported snapshot", "session", s.Name)
+			return false, nil
 		}
 		next = summonoutcome.Decision{State: v1alpha1.OutcomeState(s.Spec.Summon.OnUnreported), Note: "unreported: " + reason, Source: summonoutcome.Unreported, Reason: reason}
 		if next.State != v1alpha1.OutcomeFailed && next.State != v1alpha1.OutcomeEscalated {
-			return false, fmt.Errorf("summoned session has an invalid onUnreported snapshot")
+			log.FromContext(ctx).Error(nil, "summoned session has an invalid onUnreported snapshot", "session", s.Name)
+			return false, nil
 		}
 	} else {
 		started := in.AgentStatus == protocol.AgentBusy || in.AgentStatus == protocol.AgentIdle || in.AgentStatus == protocol.AgentWaiting
@@ -94,13 +100,14 @@ func (r *Reconciler) reconcileSummonOutcome(ctx context.Context, s *v1alpha1.Age
 	return changed, err
 }
 
-// A phase is terminal evidence on its own. Otherwise every admitted regular,
-// init (including sidecars) and ephemeral container needs a terminated status.
+// A phase is terminal evidence on its own. Otherwise the pod must use
+// RestartPolicyNever and every admitted regular, init (including sidecars)
+// and ephemeral container must have a terminated status.
 func summonPodTerminated(p *corev1.Pod) bool {
 	if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
 		return true
 	}
-	if len(p.Spec.Containers) == 0 {
+	if p.Spec.RestartPolicy != corev1.RestartPolicyNever || len(p.Spec.Containers) == 0 {
 		return false
 	}
 	complete := func(names []string, statuses []corev1.ContainerStatus) bool {

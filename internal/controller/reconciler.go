@@ -375,8 +375,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	// DESIGN-064 6.6: retain a summoned outcome before any lifecycle cleanup.
 	// Row 1 also uses taskResult's pure projection of stored task evidence;
 	// only the ordinary observer below writes status.taskResult (OP740 Q-4).
-	if changed, err := r.reconcileSummonOutcome(ctx, &s); changed || err != nil {
-		return ctrl.Result{RequeueAfter: time.Second}, err
+	if changed, err := r.reconcileSummonOutcome(ctx, &s); err != nil {
+		return ctrl.Result{}, err
+	} else if changed {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	// DESIGN-054's releaser precedes the other lifecycle work: it lifts only the
 	// scheduled-work finalizer, and a held release never stops the rescue and

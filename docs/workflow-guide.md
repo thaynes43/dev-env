@@ -1721,16 +1721,22 @@ cannot use this route. `agent-run show` prints the outcome's state and note.
 | `failed` | `failed`, or `escalated` in lane `remediation` | Remediation prefixes the note with `reported failed: `. |
 | `escalate` | `escalated` | Ends the work with an escalation. |
 
-The note is preserved without truncation. Its stored limit is 1024 UTF-8 bytes;
+The note is preserved without truncation. Before checking length, the route
+refuses with 422 any C0 or C1 control character (including newline and tab),
+DEL, or Unicode format character (category Cf). Printable Unicode such as `é`
+is accepted. Its stored limit is 1024 UTF-8 bytes;
 a remediation's `failed` accepts 1007 bytes before its 17-byte prefix. A longer
 stored note gets 422. The operator initializes `pending` and records `running`
 when the agent reports a started state (`busy`, `idle` or `waiting`). Ordinary
 observations do not refresh the progress timestamp.
 
 The first terminal write wins. The same resulting state and note again returns
-200 without a write. A different report, or `working` after a terminal outcome,
-returns 409 with the stored outcome. The CLI prints that state and note and exits
-non-zero. It sends once; after an unconfirmed response, read `agent-run show`
+200 without a write only when `status.summon.closed.source` is `report`. A report
+equal to a guaranteed close, a different report, or `working` after a terminal
+outcome returns 409 with the stored outcome. The CLI prints `outcome is final:`
+with that state and note and exits 1. A 409 error envelope instead prints
+`outcome write kept conflicting; read the session before retrying`, also with
+exit 1. It sends once; after an unconfirmed response, read `agent-run show`
 before retrying. The decision-question path writes and clears outcomes only for
 sessions without `spec.caller`.
 
@@ -1746,8 +1752,14 @@ It applies the create-time `spec.summon.onUnreported` snapshot, with
 2. Agent `exited` without a task result: `agent-exited`.
 3. Agent `failed`: `agent-failed`.
 4. Agent `interrupted`: `agent-interrupted`.
-5. A terminal pod, or every container terminated, without a task result:
-   `pod-terminated`.
+5. A pod in phase `Succeeded` or `Failed`, or every container terminated with
+   `spec.restartPolicy: Never`, without a task result: `pod-terminated`.
+
+The `agent-interrupted` and `pod-terminated` inputs are skipped when the Session
+has a `deletionTimestamp` or `spec.operatingMode: Suspended`; the task-result,
+`agent-exited` and `agent-failed` inputs are unchanged. Story 741 defines what
+such an operator stop becomes. A missing or invalid `spec.summon` snapshot is
+logged and leaves lifecycle work free to continue.
 
 A fresh heartbeat suppresses none of these inputs. The close does not set a task
 result: that remains the ordinary controller's observation of the process. A
@@ -1761,16 +1773,25 @@ also stores `status.summon.escalation = {state: Pending, name}` in that write.
 Other lanes file nothing. This release retains the pending record; story 768
 adds the filing, name-collision handling and its blocked/abandoned states.
 
-Each successful terminal write emits one operator stdout line beginning
+Each confirmed terminal write that retains `status.summon.closed` emits one
+operator stdout line beginning
 `ops-event: event=outcome`, with session, caller, lane, state, source, reason and
 `note_bytes`. Report reasons are the requested verbs. The note text is never
 logged. A pending filing adds one `event=filing` line. Working reports, identical
-repeats and refusals add no outcome event.
+repeats and refusals add no outcome event. A terminal patch response missing
+`status.summon.closed` returns and logs an error, with no outcome or filing event;
+copy the current CRD into haynes-ops before pinning the operator. A lost patch
+response can still leave a stored outcome without an event line. Stories 742
+and 768 read the durable record, never the log line.
 
 This slice does not release lanes or pools or read `closed` for admission.
 Story 741 adds those readers and the remaining loss, deadline, watchdog, queue
 and suspend inputs; 743 adds `no-usable-model`; 742 adds page events in the
 terminal write. The shared reason table already defines their ordering.
+Until story 741, a reap, a suspend or an in-place restart can leave an agent
+running under a final outcome, and its later reports get 409.
+No caller cutover (746, 747, 748, 610) or story 768 filing is enabled before
+story 741's latch is installed.
 
 ## Summoning callers
 

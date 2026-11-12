@@ -35,6 +35,8 @@ type Inputs struct {
 	AgentStatus   string
 	NoUsableModel bool // OP743: the durable no-usable-model start evidence
 	PodTerminated bool
+	// Operator stops skip only rows 5 and 6. OP741 defines what the stop becomes.
+	SessionDeleting, SessionSuspended bool
 	// OP741: latch, admission, deadlines, watchdog, queued hold and suspend evidence.
 	SessionLost, NeverStarted, Deadline, HeartbeatLost               bool
 	Stale, EscalationBound, HoldExpired, QuotaHoldExpired, Suspended bool
@@ -63,9 +65,9 @@ func FirstReason(in Inputs) string {
 		return ReasonNoUsableModel
 	case in.AgentStatus == "failed":
 		return ReasonAgentFailed
-	case in.AgentStatus == "interrupted":
+	case in.AgentStatus == "interrupted" && !in.SessionDeleting && !in.SessionSuspended:
 		return ReasonAgentInterrupted
-	case in.PodTerminated:
+	case in.PodTerminated && !in.SessionDeleting && !in.SessionSuspended:
 		return ReasonPodTerminated
 	case in.SessionLost:
 		return ReasonSessionLost
