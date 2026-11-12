@@ -1492,8 +1492,12 @@ func parseSummonCreateKinds(raw string) ([]v1alpha1.SummonKind, error) {
 // without --enable-summoned-lanes, since nothing would ever admit it; task
 // without both task latch flags, since a summoned task is admitted only when
 // the private task latch applies to it (DESIGN-064 5.9); and remote at all,
-// until slice d of item 741 builds the remote latch.
+// until slice d of item 741 builds the remote latch. Lanes also require
+// leader election, even with no creates switched on.
 func checkSummonCreateKinds(o options) error {
+	if o.summonedLanes && !o.leaderElect {
+		return errors.New("--enable-summoned-lanes requires --leader-elect: admission runs only in the elected operator leader")
+	}
 	if len(o.summonCreateKinds) == 0 {
 		return nil
 	}

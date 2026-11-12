@@ -912,9 +912,10 @@ where it differs, this governs.
    The leader admits a summoned task only with both on, and the operator
    refuses to start with `task` in `--summon-create-kinds` and either off
    (ruling D8).
-2. *The pools count admitted, unreleased records.* The leader's admission
-   counts them, per caller and pool, from one uncached list per pass
-   (`internal/controller/summon_admission.go`). Until story 778 turns the
+2. *The pools count admitted, unreleased records and open grants.* The
+   leader counts their union by Session UID, per caller and pool, from
+   uncached reads (`internal/controller/summon_admission.go`; the amendment
+   below serializes grants). Until story 778 turns the
    API's 429 at the pool into Queued, that 429 still counts the caller's
    "unfinished" session records: a suspended one is not counted there, and a
    closed one whose record is unfinished is.
@@ -935,6 +936,57 @@ where it differs, this governs.
    to its name is closed by its `onUnreported`, reason `not-charged`, a row
    of 6.6's one table after `escalation-bound` and before the hold rows
    (ruling D5).
+
+*Amended, 2026-11-12 (PR 1091 fix round 1, coordinator rulings in comment
+6828699245; implemented by the successor worker, not a ruling by Tom).*
+
+- **Grants use the create ledger's compare-and-set.** Its reserved key
+  `_admission` cannot be a CallerPolicy name and holds open grants with
+  Session name, UID, lane, caller, pool and time. A pass counts admitted,
+  unreleased Sessions and grants whose Session exists with the same UID and
+  is not released, once per UID. Each new grant is an Update of
+  `dev-env-summon-creates` on the resourceVersion read for the decision;
+  only confirmation permits the `admittedAt` write. A conflict reads and
+  decides again from scratch; an unknown result stops further grants in
+  that pass. A grant without `admittedAt` is completed at its original time,
+  never decided again. Gone, replaced and released grants are removed with
+  the same kind of Update. The API preserves the key unchanged through
+  charge, mark, rebind, prune and urgent count; it never interprets it as a
+  caller entry. No new object, Lease or RBAC permission is added. Lanes on
+  with leader election off refuses operator startup.
+- **Idle cleanup (coordinator answer `op777-fix1-q-1`).** With no summoned
+  Sessions a pass retains the one-list fast path and reads no ledger. Stale
+  grants are removed in the next pass that reads it, in a grant-adding
+  Update if there is one, otherwise an Update solely for cleanup. A grant
+  for a gone or replaced UID never holds capacity.
+- **The gate is inside `ensure`.** Every resource-building caller, including
+  a stored shared-workspace task, passes it. A close after the gate's read
+  prevents the task's Pod Create when the close lands before the executor
+  latch write commits. After that boundary an already sent first Create
+  can still land; release must account for it.
+- **Release uses completed-task evidence.** For an admitted task closed by
+  the operator: no attempt or a known non-attempt releases; a recorded
+  executor gone or replaced by an uncached read releases; a stored
+  `agent.task` result or its `privateHistory.taskTerminal` copy plus the
+  pod's retained-task latch releases. A heartbeat of `Busy`, `Interrupted`
+  or another state alone does not. A first spawn can still be pending, so
+  otherwise the pod must be gone. With an unknown attempt and no recorded
+  executor, uncached absence also needs `admittedAt` + 15 minutes + one
+  minute. A pod that appears holds until it is gone. This uses pinned
+  agent 2.105.0's refusal of a late first boot before `launch.json`; the
+  pre-provider-spawn fence remains story 780. Report closes still release
+  in their terminal write, and never-admitted closes release at once.
+- **Pass timing.** A pass follows the leader's own close or release at once.
+  A report through the API is picked up by the next pass, within 60 seconds.
+- **Proof boundary.** The concurrent writes, lost replies, delayed Create,
+  release and resource-count proofs are fake-client controller tests with
+  request barriers and a fake clock. They do not run a provider. Envtests
+  reject nested and whole-status erasure and exercise the ordinary gate.
+  `TestTerminalPrivateTaskNeverAutomaticallyResumes` in `internal/agentd`
+  proves no runner call on restart with a retained task. The pre-spawn
+  heartbeat states and late-first-boot refusal also rest on the pinned
+  agent's `launch.go`, `status.go`, `daemon.go` and `start_deadline.go` source;
+  no live-provider handover is claimed.
 
 ## 6. Contracts per build story
 

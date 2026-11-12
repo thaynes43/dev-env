@@ -2671,3 +2671,44 @@ func TestSummonClosedReleasedIsNeverReversed(t *testing.T) {
 		})
 	}
 }
+
+// S1: nested transition rules must also survive removal of the optional
+// status object. Deliberately omit privateHistory and every other root guard.
+func TestSummonCannotEraseWholeStatus(t *testing.T) {
+	for _, record := range []string{"admitted-only", "released-only"} {
+		for _, patch := range []struct {
+			name string
+			kind types.PatchType
+			body string
+		}{
+			{"remove", types.JSONPatchType, `[{"op":"remove","path":"/status"}]`},
+			{"null", types.MergePatchType, `{"status":null}`},
+		} {
+			t.Run(record+"/"+patch.name, func(t *testing.T) {
+				s := summonedTask()
+				if err := k8s.Create(ctx(t), s); err != nil {
+					t.Fatal(err)
+				}
+				at := metav1.NewTime(time.Date(2026, 11, 12, 16, 0, 0, 0, time.UTC))
+				s.Status.Summon = &v1alpha1.SummonStatus{}
+				if record == "admitted-only" {
+					s.Status.Summon.AdmittedAt = &at
+				} else {
+					s.Status.Summon.Closed = &v1alpha1.SummonClosedStatus{At: at, Source: "unreported", Reason: "not-charged", Released: true}
+				}
+				if err := k8s.Status().Update(ctx(t), s); err != nil {
+					t.Fatal(err)
+				}
+				before := get(t, s)
+				err := k8s.Status().Patch(ctx(t), s, client.RawPatch(patch.kind, []byte(patch.body)))
+				if !apierrors.IsInvalid(err) {
+					t.Errorf("whole-status %s accepted: %v", patch.name, err)
+				}
+				after := get(t, s)
+				if !apiequality.Semantic.DeepEqual(before.Status, after.Status) {
+					t.Fatal("refused write changed stored summon state")
+				}
+			})
+		}
+	}
+}

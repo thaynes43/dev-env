@@ -52,6 +52,16 @@ func TestSummonQueuedSessionKeepsItsChargePast80Minutes(t *testing.T) {
 			case state != "queued" && kept:
 				t.Fatalf("a %s session's old charge was kept: %+v", state, f.ledger().Charges)
 			}
+			if state == "queued" {
+				// The retained charge must actually fund the leader's decision,
+				// including after the waiter is older than both ageing windows.
+				f.now = t0.Add(81 * time.Minute)
+				lead(t, f, leaderOver(t, f), sess.Name, "rem-responder-2")
+				wantAdmittedAndBuilt(t, f, sess.Name)
+				if st := f.session("rem-responder-2").Status.Summon; st != nil && st.AdmittedAt != nil {
+					t.Fatal("younger waiter overtook the aged waiter")
+				}
+			}
 		})
 	}
 }

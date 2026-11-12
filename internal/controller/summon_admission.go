@@ -4,30 +4,37 @@ package controller
 // item 741). A session with spec.caller gets no volume and no pod until the
 // operator leader has admitted it, and never another once it is closed:
 //
-//   - The gate (summonGate) runs before the one ensure call in Reconcile. It
+//   - The gate (summonGate) runs inside ensure, on every resource-building path. It
 //     reads the session uncached and builds nothing unless status.summon.
 //     admittedAt is set, the outcome is not terminal and, for a task, the
 //     private task latch applies to it. It applies whatever
 //     --enable-summoned-lanes says. reservePrivateExecutor repeats the check
 //     on the Session it latches, under that write's optimistic lock, so a
-//     close that lands after the gate's read still stops the pod.
+//     close before the latch write commits still stops the pod. A first Pod
+//     Create already sent after that write is handled by release, below.
 //   - The leader's admission (summonAdmission, summonAdmissionPass) runs in
 //     the leader only, every SummonAdmissionEvery and on a nudge after a
-//     terminal write or a release, and only with --enable-summoned-lanes. Each
-//     pass reads every session uncached, counts the admitted, unreleased ones
+//     leader's own close or release, and only with --enable-summoned-lanes.
+//     API reports wait for the next pass (within 60 seconds). Each pass
+//     reads every session uncached, counts admitted, unreleased Sessions and
+//     open grants in the create ledger, once per Session UID,
 //     per single-flight lane and per pool, and takes the Queued ones oldest
 //     first (creationTimestamp, then UID). A session is admitted only when an
 //     uncached read of the create ledger binds its dispatch id to its own name
 //     (item 741 comment 7228), its CallerPolicy still names its account, its
 //     latch applies, its lane is free, its pool has a slot and the quota hook
-//     (story 743's seam) lets it. admittedAt is written under the optimistic
-//     lock. A session the ledger does not bind is closed by its onUnreported
+//     (story 743's seam) lets it. A grant is committed by the ledger's shared
+//     CAS before admittedAt is written on the Session. A conflict starts a
+//     fresh decision; an unknown write result stops the pass. A grant without
+//     admittedAt is completed, never decided again. A session the ledger does
+//     not bind is closed by its onUnreported
 //     with reason not-charged (ruling D5) and never admitted.
 //   - Release (reconcileSummonRelease) sets status.summon.closed.released:
 //     at once for a report (summonoutcome.Write), for an operator close once
 //     no launch can follow: no attempt, the latch's recorded pod gone by an
-//     uncached read, or a task whose agent started on a pod carrying
-//     PrivateHistoryRetained; otherwise only once the pod is confirmed gone.
+//     uncached read, or a stored task result and a pod carrying
+//     PrivateHistoryRetained. An uncertain attempt with no recorded executor
+//     needs uncached absence and admittedAt + 15 minutes + one minute.
 //
 // Every branch keys on spec.caller, so an ordinary session is built exactly
 // as before.
@@ -170,26 +177,14 @@ func (r *Reconciler) now() time.Time {
 	return time.Now()
 }
 
-// summonAgentStarted reports durable evidence that the session's agent was
-// launched: a task result, a terminal task record, or a heartbeat state that
-// only a launched agent reports. A failed report is not evidence: agentd
-// reports failed when it refuses a launch (start deadline, login, clone).
-func summonAgentStarted(s *v1alpha1.AgentSession) bool {
+// summonTaskFinished requires a stored run-agent result, or its durable
+// terminal copy. Busy/Interrupted can follow launch.json before the first
+// provider spawn (agent 2.105.0); no heartbeat state proves completion.
+func summonTaskFinished(s *v1alpha1.AgentSession) bool {
 	if h := s.Status.PrivateHistory; h != nil && h.TaskTerminal != nil {
 		return true
 	}
-	a := s.Status.Agent
-	if a == nil {
-		return false
-	}
-	if a.Task != nil {
-		return true
-	}
-	switch a.Status {
-	case protocol.AgentBusy, protocol.AgentIdle, protocol.AgentWaiting, protocol.AgentExited, protocol.AgentInterrupted:
-		return true
-	}
-	return false
+	return s.Status.Agent != nil && s.Status.Agent.Task != nil
 }
 
 // podRetainsPrivateHistory reports whether the pod's agentd was told the task
@@ -227,25 +222,36 @@ func (r *Reconciler) summonReleasable(ctx context.Context, s *v1alpha1.AgentSess
 		// never had a volume or a pod, and the gate builds none once closed.
 		return true, nil
 	}
+	h := s.Status.PrivateHistory
+	latchedTask := s.Spec.Mode == v1alpha1.ModeTask && privateHistoryProtected(s) && h != nil
+	if latchedTask && (!h.ExecutorAttempted || h.ExecutorNotCreated && h.LastExecutor == nil) {
+		// No attempt, or a known non-attempt: the closed record now refuses
+		// every new latch write (reservePrivateExecutor).
+		return true, nil
+	}
+	podKey := client.ObjectKeyFromObject(s)
+	if latchedTask && h.LastExecutor != nil {
+		podKey.Name = h.LastExecutor.PodName
+	}
 	var pod corev1.Pod
 	gone := false
-	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &pod); apierrors.IsNotFound(err) {
+	if err := r.APIReader.Get(ctx, podKey, &pod); apierrors.IsNotFound(err) {
 		gone = true
 	} else if err != nil {
 		return false, err
 	}
-	if h := s.Status.PrivateHistory; s.Spec.Mode == v1alpha1.ModeTask && privateHistoryProtected(s) && h != nil {
-		switch {
-		case !h.ExecutorAttempted || h.ExecutorNotCreated && h.LastExecutor == nil:
-			// No attempt, or a known non-attempt; the closed record now
-			// refuses every new latch write (reservePrivateExecutor).
-			return true, nil
-		case h.LastExecutor != nil:
+	if latchedTask {
+		if h.LastExecutor != nil {
 			if gone || string(pod.UID) != h.LastExecutor.PodUID {
 				return true, nil
 			}
-			return summonAgentStarted(s) && podRetainsPrivateHistory(&pod), nil
+			return summonTaskFinished(s) && podRetainsPrivateHistory(&pod), nil
 		}
+		// A NotFound is not disappearance of a recorded UID: the first
+		// Create may still be in flight. Past the deadline plus one minute,
+		// a late first pod boots an agent that refuses its initial launch.
+		// A present pod can have a pending first spawn and always holds.
+		return gone && !r.now().Before(st.AdmittedAt.Add(SummonStartWindow+time.Minute)), nil
 	}
 	// Otherwise only when the session's agent pod is confirmed gone. A hold
 	// pod under its name is the rescue pod (D-55) and runs no agent.
@@ -382,14 +388,13 @@ func (r *Reconciler) summonQuotaAdmits(s *v1alpha1.AgentSession) bool {
 
 // summonLedgerRead is one pass's uncached read of the create ledger.
 type summonLedgerRead struct {
-	cm  *corev1.ConfigMap
-	err error
+	cm *corev1.ConfigMap
 }
 
 // entry decodes the caller's key. ok is false when the ledger or the entry
 // cannot be read: then nothing is admitted or closed by it this pass.
 func (l summonLedgerRead) entry(caller string) (summonledger.Entry, bool) {
-	if l.err != nil || l.cm == nil {
+	if l.cm == nil {
 		return summonledger.Entry{}, false
 	}
 	raw, present := l.cm.Data[caller]
@@ -426,12 +431,9 @@ func summonPoolCap(p *v1alpha1.CallerPolicy, pool summonPool) int32 {
 	return p.Spec.Summon.Limits.Concurrent
 }
 
-// SummonAdmissionPass is one pass of the leader's admission; the leader-only
-// runnable calls it, and so do the API's replays of the ledger windows. Its counts come
-// from one uncached list, and only this pass writes admittedAt, so a slot it
-// gives cannot be given twice. A write that conflicts keeps its lane and slot
-// reserved for the rest of the pass, so no younger session overtakes it; the
-// next pass decides it again.
+// SummonAdmissionPass serializes grants on the create ledger's resourceVersion.
+// Leader election chooses the driver; the shared CAS also fences requests
+// already sent by a deposed leader. Conflicts restart the whole decision.
 func (r *Reconciler) SummonAdmissionPass(ctx context.Context) error {
 	if !r.SummonedLanes {
 		return nil
@@ -439,28 +441,107 @@ func (r *Reconciler) SummonAdmissionPass(ctx context.Context) error {
 	if r.APIReader == nil || r.SessionNamespace == "" {
 		return errors.New("summoned admission requires the uncached API reader and the session namespace")
 	}
+	// As in the API's ledger writer, bound contention and leave the next
+	// interval to retry. Never spin indefinitely against API writes.
+	for range 5 {
+		retry, err := r.summonAdmissionAttempt(ctx)
+		if !retry {
+			return err
+		}
+	}
+	return errors.New("summoned admission ledger is busy")
+}
+
+func (r *Reconciler) summonAdmissionAttempt(ctx context.Context) (bool, error) {
 	var list v1alpha1.AgentSessionList
 	if err := r.APIReader.List(ctx, &list, client.InNamespace(r.SessionNamespace)); err != nil {
-		return fmt.Errorf("list the sessions: %w", err)
+		return false, fmt.Errorf("list the sessions: %w", err)
 	}
+	listed := map[types.UID]bool{}
+	for i := range list.Items {
+		if list.Items[i].Spec.Caller != "" {
+			listed[list.Items[i].UID] = true
+		}
+	}
+	if len(listed) == 0 {
+		// Coordinator op777-fix1-q-1: retain the one-list idle fast path.
+		// Gone grants are cleaned on the next active pass, before admitting.
+		return false, nil
+	}
+	ledger := summonLedgerRead{cm: &corev1.ConfigMap{}}
+	if err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: summonledger.Namespace, Name: summonledger.Name}, ledger.cm); err != nil {
+		log.FromContext(ctx).Info("summoned admission holds every Queued session: the create ledger cannot be read", "error", err.Error())
+		return false, nil
+	}
+	if ledger.cm.ResourceVersion == "" || !ledger.cm.DeletionTimestamp.IsZero() || ledger.cm.Immutable != nil && *ledger.cm.Immutable {
+		return false, errors.New("summoned admission ledger cannot be written")
+	}
+	raw, present := ledger.cm.Data[summonledger.GrantsKey]
+	grants, err := summonledger.DecodeGrants(raw, present)
+	if err != nil {
+		return false, fmt.Errorf("read admission grants: %w", err)
+	}
+	// Read Sessions AFTER the ledger: a grant's Session may have been
+	// created after the initial list but before this ledger read. That
+	// initial absence must never prune a live grant. If a grant changes
+	// after this read, the ConfigMap CAS below conflicts.
+	if err := r.APIReader.List(ctx, &list, client.InNamespace(r.SessionNamespace)); err != nil {
+		return false, fmt.Errorf("list sessions for the ledger snapshot: %w", err)
+	}
+	byName := make(map[string]*v1alpha1.AgentSession, len(list.Items))
 	lanes := map[v1alpha1.Lane]bool{}
 	pools := map[summonPool]int32{}
+	counted := map[types.UID]bool{}
+	occupy := func(uid types.UID, lane v1alpha1.Lane, pool summonPool) {
+		if counted[uid] {
+			return
+		}
+		counted[uid] = true
+		if summonSingleFlight(lane) {
+			lanes[lane] = true
+		}
+		pools[pool]++
+	}
+	for i := range list.Items {
+		s := &list.Items[i]
+		byName[s.Name] = s
+		if s.Spec.Caller != "" && summonReserved(s) {
+			occupy(s.UID, s.Spec.Lane, summonPoolOf(s))
+		}
+	}
+	kept := make([]summonledger.Grant, 0, len(grants.Items))
+	granted := map[types.UID]bool{}
+	for _, g := range grants.Items {
+		s := byName[g.Name]
+		if s == nil || string(s.UID) != g.UID || s.Status.Summon != nil && s.Status.Summon.Closed != nil && s.Status.Summon.Closed.Released {
+			continue
+		}
+		kept = append(kept, g)
+		granted[s.UID] = true
+		occupy(s.UID, v1alpha1.Lane(g.Lane), summonPool{caller: g.Caller, escalations: g.Pool == summonledger.PoolEscalations})
+		if s.Status.Summon == nil || s.Status.Summon.AdmittedAt == nil {
+			// Already granted. Complete it using its original time, without
+			// rechecking policy, charge, quota or current task eligibility.
+			admitted, err := r.admitSummon(ctx, s, g.At)
+			if err != nil {
+				return false, err
+			}
+			if !admitted {
+				return true, nil
+			}
+		}
+	}
+	dirty := len(kept) != len(grants.Items)
+	grants.Items = kept
 	var queued []*v1alpha1.AgentSession
 	for i := range list.Items {
 		s := &list.Items[i]
-		switch {
-		case s.Spec.Caller == "":
-		case summonReserved(s):
-			if summonSingleFlight(s.Spec.Lane) {
-				lanes[s.Spec.Lane] = true
-			}
-			pools[summonPoolOf(s)]++
-		case summonQueued(s):
+		// Only the first list's candidates may be judged against this
+		// ledger: a later Session could have been charged after its read.
+		// The second list exists to validate grants, not to widen that set.
+		if s.Spec.Caller != "" && listed[s.UID] && !granted[s.UID] && summonQueued(s) {
 			queued = append(queued, s)
 		}
-	}
-	if len(queued) == 0 {
-		return nil
 	}
 	// D6: oldest first in each lane and pool; two lanes never hold each other.
 	sort.SliceStable(queued, func(i, j int) bool {
@@ -470,19 +551,9 @@ func (r *Reconciler) SummonAdmissionPass(ctx context.Context) error {
 		}
 		return a.UID < b.UID
 	})
-	// The ledger is read after the list: every listed session's charge was
-	// committed before its create, and the API writes no charge, mark or
-	// rebind for an id once a session of it exists, so a binding this read
-	// lacks will not appear later.
-	ledger := summonLedgerRead{cm: &corev1.ConfigMap{}}
-	if err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: summonledger.Namespace, Name: summonledger.Name}, ledger.cm); err != nil {
-		ledger.err = err
-		log.FromContext(ctx).Info("summoned admission holds every Queued session: the create ledger cannot be read", "error", err.Error())
-	}
-	now := r.now()
+	now := r.now().UTC().Truncate(time.Second)
 	var errs []error
 	for _, s := range queued {
-		lg := log.FromContext(ctx).WithValues("session", s.Name, "caller", s.Spec.Caller, "lane", s.Spec.Lane)
 		entry, ok := ledger.entry(s.Spec.Caller)
 		if !ok {
 			continue
@@ -494,11 +565,8 @@ func (r *Reconciler) SummonAdmissionPass(ctx context.Context) error {
 			continue
 		}
 		if s.Spec.Mode == v1alpha1.ModeTask && r.summonTaskLatchOn() && s.Status.PrivateHistory == nil {
-			// The reconciler records the task latch first. It can record a
-			// startable lifecycle only while the status has no condition, so
-			// the leader writes nothing to this session, not even a hold,
-			// until it has. The list shows the record or not; a write locked
-			// on a list without it conflicts if the reconciler wrote it since.
+			// Recording a hold before the reconciler initializes the task
+			// latch would turn that fresh lifecycle into Unknown.
 			continue
 		}
 		p, err := r.summonPolicy(ctx, s)
@@ -513,9 +581,7 @@ func (r *Reconciler) SummonAdmissionPass(ctx context.Context) error {
 			reason = SummonReasonPolicyGone
 		case s.Spec.Mode == v1alpha1.ModeRemote && !r.summonRemoteLatch:
 			reason = SummonReasonRemoteLatchMissing
-		case s.Spec.Mode == v1alpha1.ModeTask && !r.summonTaskLatchOn():
-			reason = SummonReasonTaskLatchMissing
-		case s.Spec.Mode == v1alpha1.ModeTask && !summonTaskLatchStartable(s):
+		case s.Spec.Mode == v1alpha1.ModeTask && (!r.summonTaskLatchOn() || !summonTaskLatchStartable(s)):
 			reason = SummonReasonTaskLatchMissing
 		case summonSingleFlight(s.Spec.Lane) && lanes[s.Spec.Lane]:
 			reason = SummonReasonLaneBusy
@@ -530,22 +596,60 @@ func (r *Reconciler) SummonAdmissionPass(ctx context.Context) error {
 			}
 			continue
 		}
+		poolName := summonledger.PoolConcurrent
+		if pool.escalations {
+			poolName = summonledger.PoolEscalations
+		}
+		grants.Items = append(grants.Items, summonledger.Grant{Name: s.Name, UID: string(s.UID), Lane: string(s.Spec.Lane), Caller: s.Spec.Caller, Pool: poolName, At: now})
+		if err := r.writeSummonGrants(ctx, ledger.cm, grants); err != nil {
+			if apierrors.IsConflict(err) {
+				return true, nil
+			}
+			// The request may have committed. No further grant in this pass;
+			// a subsequent pass recovers the durable reservation, if any.
+			return false, errors.Join(append(errs, err)...)
+		}
+		dirty = false // stale grants were removed in this same confirmed CAS
+		occupy(s.UID, s.Spec.Lane, pool)
 		admitted, err := r.admitSummon(ctx, s, now)
 		if err != nil {
-			errs = append(errs, err)
-			continue
+			return false, errors.Join(append(errs, err)...)
 		}
-		// Admitted, or a conflict: either way the lane and the slot stay
-		// taken for the rest of this pass.
-		if summonSingleFlight(s.Spec.Lane) {
-			lanes[s.Spec.Lane] = true
+		if !admitted {
+			return true, nil
 		}
-		pools[pool]++
-		if admitted {
-			lg.Info("admitted a summoned session", "pool", map[bool]string{true: "escalations", false: "concurrent"}[pool.escalations], "inPool", pools[pool])
+		log.FromContext(ctx).Info("admitted a summoned session", "session", s.Name, "caller", s.Spec.Caller, "lane", s.Spec.Lane, "pool", poolName, "inPool", pools[pool])
+	}
+	if dirty {
+		if err := r.writeSummonGrants(ctx, ledger.cm, grants); err != nil {
+			if apierrors.IsConflict(err) {
+				return true, nil
+			}
+			return false, errors.Join(append(errs, err)...)
 		}
 	}
-	return errors.Join(errs...)
+	return false, errors.Join(errs...)
+}
+
+// writeSummonGrants updates the same object and resourceVersion read for
+// this decision. Caller entries remain byte-for-byte unchanged.
+func (r *Reconciler) writeSummonGrants(ctx context.Context, cm *corev1.ConfigMap, grants summonledger.Grants) error {
+	// The only callers pass this attempt's uncached ledger snapshot (or
+	// its confirmed Update response). Never use a fabricated object or an
+	// unconditional Update; this exception to the lifecycle source guard
+	// is solely the named ledger's data CAS, not a resource release path.
+	if cm == nil || cm.Name != summonledger.Name || cm.Namespace != summonledger.Namespace || cm.ResourceVersion == "" {
+		return errors.New("summoned grant write requires the named ledger's uncached resourceVersion")
+	}
+	raw, err := summonledger.EncodeGrants(grants)
+	if err != nil {
+		return err
+	}
+	if cm.Data == nil {
+		cm.Data = map[string]string{}
+	}
+	cm.Data[summonledger.GrantsKey] = raw
+	return r.Client.Update(ctx, cm)
 }
 
 // admitSummon writes admittedAt and SummonAdmitted=True under the optimistic

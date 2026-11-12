@@ -159,7 +159,9 @@ func (w *summonWorld) writeLedger() {
 	if err := w.base.Get(context.Background(), types.NamespacedName{Namespace: summonledger.Namespace, Name: summonledger.Name}, &cm); err != nil {
 		w.t.Fatal(err)
 	}
-	cm.Data = map[string]string{}
+	if cm.Data == nil {
+		cm.Data = map[string]string{}
+	}
 	for caller, e := range w.ledger {
 		raw, err := summonledger.Encode(*e)
 		if err != nil {
@@ -770,10 +772,11 @@ func TestSummonTaskNeedsBothLatchFlags(t *testing.T) {
 	}
 }
 
-// After a terminal outcome no pod is ever built again: a real pod loss after
+// After a terminal outcome no pod is ever built again: a fake-client pod loss after
 // admission gives no second pod (the task latch), a close on
 // agent-interrupted, an operator restart and a recreated pod. Each step
-// checks that no second provider launch could follow: one pod create, ever.
+// checks one pod create, ever. Daemon restart is separately proved by
+// internal/agentd's TestTerminalPrivateTaskNeverAutomaticallyResumes.
 func TestSummonNoSecondPodAfterLossOrClose(t *testing.T) {
 	rem := summonedFor("rem-1", callerA, v1alpha1.LaneRemediation, time.Minute)
 	w := newSummonWorld(t, summonPolicyObject(callerA, 4, ptr.To[int32](1)))
@@ -784,8 +787,8 @@ func TestSummonNoSecondPodAfterLossOrClose(t *testing.T) {
 	if !w.exists(&pod, rem.Name) || w.podCreates(rem.Name) != 1 {
 		t.Fatalf("pods %v", w.pods)
 	}
-	// An in-place agentd restart starts no provider: the pod tells agentd the
-	// task is retained, so it never continues a saved launch.
+	// This controller assertion proves the pod carries the retained-task
+	// latch; it does not itself restart agentd or count provider launches.
 	if !podRetainsPrivateHistory(&pod) {
 		t.Fatal("the pod lacks PrivateHistoryRetained")
 	}
@@ -876,11 +879,11 @@ func TestSummonCloseBetweenGateAndLatchCreatesNoPod(t *testing.T) {
 
 // Release (DESIGN-064 5.9): at once for a report; for an operator close, when
 // there was no attempt, when the latch's recorded pod is gone by an uncached
-// read, or when the task's agent started on a pod carrying
+// read, or when a stored task result exists on a pod carrying
 // PrivateHistoryRetained; otherwise only once the pod is confirmed gone.
 func TestSummonReleaseRules(t *testing.T) {
 	type state struct {
-		admitted, attempted, notCreated, recorded, podPresent, podOther, agentStarted, retainedPod, remote, report bool
+		admitted, attempted, notCreated, recorded, podPresent, podOther, interrupted, retainedPod, remote, report bool
 	}
 	for _, tc := range []struct {
 		name string
@@ -893,11 +896,11 @@ func TestSummonReleaseRules(t *testing.T) {
 		{"known non-attempt", state{admitted: true, attempted: true, notCreated: true}, true},
 		{"recorded pod gone", state{admitted: true, attempted: true, recorded: true}, true},
 		{"recorded pod replaced", state{admitted: true, attempted: true, recorded: true, podPresent: true, podOther: true}, true},
-		{"agent started, retained pod", state{admitted: true, attempted: true, recorded: true, podPresent: true, agentStarted: true, retainedPod: true}, true},
-		{"agent started, pod not retained", state{admitted: true, attempted: true, recorded: true, podPresent: true, agentStarted: true}, false},
+		{"interrupted, retained pod", state{admitted: true, attempted: true, recorded: true, podPresent: true, interrupted: true, retainedPod: true}, false},
+		{"interrupted, pod not retained", state{admitted: true, attempted: true, recorded: true, podPresent: true, interrupted: true}, false},
 		{"agent not started", state{admitted: true, attempted: true, recorded: true, podPresent: true, retainedPod: true}, false},
 		{"attempt unknown, pod present", state{admitted: true, attempted: true, podPresent: true}, false},
-		{"attempt unknown, pod gone", state{admitted: true, attempted: true}, true},
+		{"attempt unknown, pod absent before deadline", state{admitted: true, attempted: true}, false},
 		{"remote, pod present", state{admitted: true, remote: true, podPresent: true}, false},
 		{"remote, pod gone", state{admitted: true, remote: true}, true},
 	} {
@@ -929,7 +932,7 @@ func TestSummonReleaseRules(t *testing.T) {
 					s.Status.PrivateHistory.LastExecutor = &v1alpha1.PrivateExecutorStatus{PodUID: "recorded-pod", PodName: s.Name, Generation: 1}
 				}
 			}
-			if tc.st.agentStarted {
+			if tc.st.interrupted {
 				s.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentInterrupted}
 			}
 			objs := []client.Object{s}
