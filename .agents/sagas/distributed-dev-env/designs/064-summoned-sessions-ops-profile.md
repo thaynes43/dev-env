@@ -682,9 +682,9 @@ replica can hold, and this amendment corrects it.
   a process frozen between its last check and the send. (2) *A stale
   destination after a rebind:* A marks X for N and is paused before its
   create; B marks X for N, meets an unrelated Session on N, rebinds X to N-2
-  and creates N-2; that Session is deleted, freeing N; A resumes inside its
-  deadline and creates N, so X has two Sessions and the ledger binds X to
-  N-2 only. Two statements are enforced at admission by the leader, in story
+  and creates N-2; the unrelated Session is deleted, freeing N; A resumes
+  inside its deadline and creates N, so X has two Sessions and the ledger
+  binds X to N-2 only. Two statements are enforced at admission by the leader, in story
   741, not in this slice: no summoned Session gets a pod or a volume unless
   the ledger holds its dispatch id bound to that Session's name; and so no
   dispatch id runs two Sessions. Until story 741 is installed, both can be

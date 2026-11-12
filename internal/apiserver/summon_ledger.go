@@ -71,11 +71,11 @@ import (
 // write, summonAttemptHold after the mark by the entry's clock, prunes X; the
 // session is then persisted with no charge. (2) A stale destination: A marks
 // X for N and is paused before its create; B marks X for N, meets another
-// session on N, rebinds X to N-2 and creates N-2; N is freed; A resumes inside
-// its deadline and creates N, so X has two sessions. That no summoned session
-// gets a pod unless the ledger holds its id bound to its name, and so that no
-// id runs two sessions, is enforced at admission by the leader in story 741,
-// not here.
+// session on N, rebinds X to N-2 and creates N-2; that other session is
+// deleted, freeing N; A resumes inside its deadline and creates N, so X has
+// two sessions. That no summoned session gets a pod unless the ledger holds
+// its id bound to its name, and so that no id runs two sessions, is enforced
+// at admission by the leader in story 741, not here.
 const (
 	summonLedgerSchema       = "dev-env.summon-creates.v1"
 	summonLedgerFieldManager = "dev-env-summon-creates"
