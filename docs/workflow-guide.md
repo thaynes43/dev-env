@@ -2228,9 +2228,13 @@ its name less a suffix `-2` to `-99`); a charge no current entry names (the
 policy was edited since) counts in every queue, so a bound can refuse early.
 The request hash binds the entry's priority as well as mode, lane and requested
 name. A retry after a priority edit gets the existing different-request 409
-and writes nothing: no charge, attempt mark or Session. A charge's attribution
-does not move to the edited entry's queue; if its original entry can no longer
-be identified, it counts in every queue during the attempt hold. A persisted
+and writes nothing: no charge, attempt mark or Session. A charge is never
+attributed to the edited entry's queue alone: after a priority edit its entry
+can no longer be told, so it counts in every queue during the attempt hold.
+The key stays refused until that charge leaves the ledger: not before its
+65-minute window ends, and then only when another create of that caller writes
+its entry. Use a new key. This 409 names no session, and a caller must not
+read it as "already started". A persisted
 Session counts by its own priority snapshot. A charge whose attempt mark has
 passed the hold is in no queue; a later retry of it needs a place again, and a queue that filled
 meanwhile refuses it with 429 (its charge is kept). The API reads
@@ -2245,8 +2249,10 @@ bind; it omits that sentence for a new charge.
 [PR 1094 comment 6833388211](https://github.com/thaynes43/dev-env/pull/1094#issuecomment-6833388211);
 not a ruling by Tom). The queue limits hold for every create whose Session
 lands within 15 minutes of its last attempt mark, under the clock assumptions
-above. The main cluster's API servers end a write after their request timeout:
-one minute, the default (coordinator read, 2026-11-12). A write received before
+above, apart from the stale-destination limit above, whose surplus Session is
+Queued until the leader's next pass closes it `not-charged`. The main
+cluster's API servers time a request out after one minute, the default
+(coordinator read, 2026-11-12). A write received before
 the client's deadline but persisted after the attempt hold can land beside a
 later create that took its place. Each such late landing adds one extra Queued
 Session, with no volume or pod while it waits. If its charge is still bound,

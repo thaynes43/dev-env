@@ -1048,9 +1048,12 @@ attribution and the retained-charge error contract.
 
 1. *The attempt-hold boundary (F1).* The queue limits hold for every create
    whose Session lands within 15 minutes of its last attempt mark, under the
-   clock assumptions above. The main cluster's API servers end a write after
-   their request timeout: one minute, the default (coordinator read,
-   2026-11-12: five API servers, v1.35.5, no `--request-timeout` flag). A
+   clock assumptions above, apart from the create ledger's stale-destination
+   limit (a rebind whose old destination still lands), whose surplus Session
+   is Queued until the leader's next pass closes it `not-charged`. The main
+   cluster's API servers time a request out after one minute, the default
+   (coordinator read, 2026-11-12: five API servers, v1.35.5, no
+   `--request-timeout` flag). A
    received write that persists after the hold can land beside a later create
    that took its place. Each such late landing adds one extra Queued Session,
    with no volume or pod while it waits. A still-bound charge is valid: neither
@@ -1063,9 +1066,13 @@ attribution and the retained-charge error contract.
    priority as well as mode, lane and requested name. This is the smaller
    mechanism: no new charge field. A same-key retry after a priority edit gets
    the existing different-request 409 and writes nothing: no charge, mark or
-   Session. The charge never moves to the edited entry's queue. If the current
-   policy can no longer identify its original entry, it counts in every queue
-   during the attempt hold, as an entry removed from the policy does. The
+   Session. The charge is never attributed to the edited entry's queue alone:
+   after a priority edit its entry can no longer be told, so it counts in
+   every queue during the attempt hold, as an entry removed from the policy
+   does. The key stays refused until that charge leaves the ledger: not before
+   its 65-minute window ends, and then only when another create of that caller
+   writes its entry. A caller uses a new key, and must not read this 409, which
+   names no session, as success. The
    15-minute counting hold and normal pruning still apply. A Session counts by
    its immutable snapshot. A priority edit racing a create already in flight
    belongs to F1's stated limit: that Session can still land with its original
