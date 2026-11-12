@@ -1491,6 +1491,26 @@ protocol and heartbeat timing in the preceding corrections.
   That unreadable entry still blocks `not-charged` and admission for the
   caller. Once readable again, ordinary charge pruning applies.
 
+**Correction, 2026-11-12: story 779 fix round 2, coordinator rulings in PR
+1095 comment 6833983288; not a ruling by Tom.** This closes the admission
+gap in the recorded-reap protocol above.
+
+- A Session carrying `reaped-by`, even with an empty value, leaves the
+  leader's queue at once. For a never-admitted session with that marker,
+  the admission pass writes no close, hold condition, page, new grant or
+  `admittedAt`. An existing grant continues to reserve its lane and pool
+  slot until the reconciler's close releases it. Only `closeSummon` and
+  `FirstReason` decide its close; the Queued loop adds no second ordering
+  of the stop rows.
+- When the leader's delete fails with an error other than a conflict or
+  not-found, `Reconcile` still runs the release and suspend step, then
+  returns the delete error. A failing delete does not itself hold the
+  lane. The existing safe-release evidence remains required; the operator
+  still suspends a closed session whose release waits for its pod.
+- An ordinary private task or remote session carrying the marker remains
+  outside this protocol: it gets no summoned Session delete or other new
+  lifecycle change.
+
 **The route and the verb.** `POST /v1/sessions/{name}/outcome`, body
 `{"state": "working"|"done"|"failed"|"escalate", "note": "..."}`. Only the
 session itself may call it: a session caller whose pod-bound token resolves

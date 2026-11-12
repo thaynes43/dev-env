@@ -1796,10 +1796,22 @@ marker under the optimistic lock and returns 202 with the Session. It does
 not delete it. The first recorded reap wins: repeated calls, including from
 another caller, write nothing. A Session already being deleted gets no
 marker. The marker itself is the stop, even without `deletionTimestamp`.
+Its presence, even with an empty value, removes the session from the
+leader's queue at once. For a never-admitted session with that marker, an
+admission pass writes no close, hold condition, page, new grant or
+`admittedAt`. An existing grant keeps its lane and pool slot until the
+reconciler's close releases it; only `closeSummon` and the shared reason
+ordering decide the stop's outcome.
 The leader stores the close, then deletes the marked Session only once its
 outcome is terminal, with UID and resourceVersion preconditions. The usual
 finalizer path rescues and cleans up after that delete. An ordinary
 session's reap keeps its existing API delete path.
+
+If that delete fails with an error other than a conflict or not-found, the
+reconciler still runs the release and suspend step before returning the
+delete error. A failing delete therefore does not itself hold the lane:
+the existing safe-release evidence is still required, and the operator
+still suspends a closed session whose release waits for its pod.
 
 The API derives caller attribution (`human/...` is a person). The operator
 also writes its own non-person suspend markers: `idle-timer`, the terminal

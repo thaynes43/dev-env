@@ -416,17 +416,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	}
 	// A recorded summoned reap is carried out only after a terminal outcome
 	// is stored, before any other lifecycle step (OP779 fix round 1, M1/M2).
-	if handled, err := r.reconcileSummonReap(ctx, &s); err != nil {
-		return ctrl.Result{}, err
-	} else if handled {
+	handled, reapErr := r.reconcileSummonReap(ctx, &s)
+	if handled && reapErr == nil {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	// DESIGN-064 5.9: a closed summoned session's reservation is released once
 	// no launch can follow (OP777); until then the operator suspends it so
-	// its pod goes (OP779).
-	if changed, err := r.reconcileSummonClosed(ctx, &s); err != nil {
+	// its pod goes (OP779). A failed reap must not skip this step; return
+	// its error afterwards, retaining any release error too (OP779 N2).
+	changed, releaseErr := r.reconcileSummonClosed(ctx, &s)
+	if err := errors.Join(reapErr, releaseErr); err != nil {
 		return ctrl.Result{}, err
-	} else if changed {
+	}
+	if changed {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	// DESIGN-054's releaser precedes the other lifecycle work: it lifts only the

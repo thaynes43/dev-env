@@ -389,12 +389,13 @@ func summonReserved(s *v1alpha1.AgentSession) bool {
 }
 
 // summonQueued is a session the leader may admit: never admitted, not closed,
-// and neither suspended nor being deleted (the reconciler closes those by
-// ruling D1, OP779).
+// and with no recorded reap, suspension or deletion (the reconciler closes
+// those by ruling D1, OP779).
 func summonQueued(s *v1alpha1.AgentSession) bool {
 	st := s.Status.Summon
+	_, reaped := s.Annotations[v1alpha1.AnnotationReapedBy]
 	return s.Spec.Summon != nil && (st == nil || st.AdmittedAt == nil && st.Closed == nil) &&
-		!summonoutcome.Terminal(s.Status.Outcome) && !wantsPodGone(s)
+		!summonoutcome.Terminal(s.Status.Outcome) && !wantsPodGone(s) && !reaped
 }
 
 // summonTaskLatchStartable reports whether a Queued task's latch record can
@@ -569,6 +570,11 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context, p *summonPass) 
 		kept = append(kept, g)
 		granted[s.UID] = true
 		occupy(s.UID, v1alpha1.Lane(g.Lane), summonPool{caller: g.Caller, escalations: g.Pool == summonledger.PoolEscalations})
+		if _, reaped := s.Annotations[v1alpha1.AnnotationReapedBy]; reaped {
+			// The recorded stop cannot be admitted. Keep its lane and pool
+			// slot until the reconciler's close releases this grant (OP779 N1).
+			continue
+		}
 		if s.Status.Summon == nil || s.Status.Summon.AdmittedAt == nil {
 			// Already granted. Complete it using its original time, without
 			// rechecking policy, charge, quota or current task eligibility.
