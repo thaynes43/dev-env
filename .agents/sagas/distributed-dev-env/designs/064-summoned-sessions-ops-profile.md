@@ -823,6 +823,8 @@ ingress rule carries the same exclusions as the egress rules.
   bot with the same rights. #736 still reads the installation's permissions
   and repositories from the App before that ExternalSecret PR merges; if they
   are wider than this design describes, the coordinator asks Tom again.
+  (Corrected on 2026-11-12, below: that read cannot be made before the
+  install.)
 - Q-09: the playbook (`cigar-curation.md`, "Today the fallback is what
   actually fires") says the installation covers cigar-journal but grants no
   `issues`; the HelmRelease asks for `issues: write`; DESIGN-001 6.4 says
@@ -835,6 +837,41 @@ ingress rule carries the same exclusions as the egress rules.
   DESIGN-001 6.4) is corrected in the story that touches it. Any widening is a
   question for Tom. Q-14 (moving the App key to the keeper) is ruled yes by
   Tom inside gate T-1 (8.1), for the same bot with the same rights.
+- **Correction, coordinator, 2026-11-12** (from the second-family review of
+  haynes-ops PRs 4834 and 4835). Reading the installation needs the App's key
+  or an installation token. No v2 component may hold either before the
+  ExternalSecret exists, so the two sentences above that ask for that read
+  before the install cannot be met as written. What is checked instead, and
+  when:
+  - Before the ExternalSecret merges, the permissions: the App's registered
+    permissions from GitHub's public record (`GET /apps/haynes-ops-bot`). An
+    installation cannot hold a permission the registration lacks. Read on
+    2026-11-11: contents, pull requests and issues write, checks read and
+    metadata read. That is v1's set and the metadata every App has. The
+    registration is a ceiling, not proof of what the installation accepted:
+    the playbook's sentence that the installation grants no `issues` is
+    settled only by the first mint, below.
+  - Before the ExternalSecret merges, the repositories: v1's own dated record
+    (haynes-ops `upgrade-agent/dev-env-ops/app/resources/publish-report.sh`,
+    probed from that pod on 2026-08-31 and 2026-09-06) names `haynes-ops` and
+    `cigar-journal`. That is history, not a read of today's installation.
+    `--ops-gh-token-repositories` is set to those two names. The list may be
+    narrower than the installation; it is never wider than the ruling allows.
+  - At the first mint, before any session uses the token: GitHub issues a
+    token limited to those two repositories with the four permissions, and
+    the keeper logs no `permissionsNotGranted`. A repository that has left
+    the installation makes GitHub refuse the mint, and the keeper is then not
+    ready. A permission the installation has not accepted either makes GitHub
+    refuse the mint, or comes back as a short grant. The keeper treats a short
+    grant as a success: it writes the token, is ready, and logs
+    `permissionsNotGranted`. So readiness alone does not settle the
+    permissions: the coordinator reads that log line before any session uses
+    the token, and turns the flag off again if it shows a shortfall.
+  - Not checked, and said so wherever the install is described: whether the
+    installation covers further repositories. The token cannot reach them:
+    the list is in git and adding a name is a question for Tom. The key
+    could, as the same key can in v1 today. Gate T-1 moved that key with that
+    reach: the same bot with the same rights.
 - An installation token has no refresh token. The keeper and the
   `gh-refresher` sidecar minting the same App during the overlap do not
   revoke each other.
