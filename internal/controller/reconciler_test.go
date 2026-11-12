@@ -61,10 +61,9 @@ func TestInvariantNoOwnerReferenceToTheOperator(t *testing.T) {
 		newSession(t, nil),
 		newSession(t, func(s *v1alpha1.AgentSession) { s.Spec.Mode, s.Spec.Prompt = v1alpha1.ModeLocal, "" }),
 		newSession(t, func(s *v1alpha1.AgentSession) { s.Spec.Mode, s.Spec.Prompt = v1alpha1.ModeRemote, "" }),
-		newSession(t, func(s *v1alpha1.AgentSession) {
-			s.Spec.Caller, s.Spec.Lane, s.Spec.Profile = "alert-responder", v1alpha1.LaneRemediation, "ops"
-			s.Spec.Summon = remediationSummon()
-		}),
+		// A summoned session is built only once admitted, under the task
+		// latch (OP777); TestSummonedSessionIsBuiltOnlyAfterAdmission checks
+		// its pod's and volume's owner references.
 	}
 	for _, s := range sessions {
 		live := session(t, s.Name)

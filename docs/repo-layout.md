@@ -137,6 +137,7 @@ internal/asks/           the Ask store: create, list, withdraw, a set-once answe
 internal/contextpublication/  the PublishedContext store: immutable published excerpts, Create only, uncached reads
 internal/delegatedresult/  pure delegated-result codec: strict bounded request and receipt decoding, frozen attempt identity and digest; Admission and Store have only the refusing Disabled implementation; no route, storage, provider or caller
 internal/sessiondirectory/  the SessionDirectory store: bounded original session metadata and CAS witnesses
+internal/summonledger/  DESIGN-064 5.9: the create ledger's entry and charge types, codec and time rules (window, attempt hold, prune), shared by the API's write paths and the operator leader's admission
 internal/summonoutcome/  DESIGN-064 6.6: the shared optimistic outcome/closure/pending-filing write and the one ordered guaranteed-close reason table
 internal/taskbudget/     the task budget ledger: retained, deterministic task admission in ConfigMaps behind CAS (KubeStore)
 internal/coordretention/ read-only paged coordination-record summaries and fail-closed release eligibility evaluation (DESIGN-024 R3 prerequisite)

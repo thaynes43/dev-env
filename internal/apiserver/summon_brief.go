@@ -3,6 +3,8 @@ package apiserver
 import (
 	"strings"
 	"unicode"
+
+	"github.com/thaynes43/dev-env/internal/summonledger"
 )
 
 // Bounds from DESIGN-064 5.6. The rendered brief also stays within
@@ -25,8 +27,8 @@ const (
 	// (DESIGN-064 5.9, summon_ledger.go): one ConfigMap in the operator's own
 	// namespace. GitOps precreates it; the operator needs get and update on it.
 	// Without it a summoning create is refused with 503.
-	summonLedgerNamespace = "dev-env-system"
-	summonLedgerName      = "dev-env-summon-creates"
+	summonLedgerNamespace = summonledger.Namespace
+	summonLedgerName      = summonledger.Name
 	// summonMaxSuffix is the last name suffix a re-fired key may take (6.4).
 	summonMaxSuffix = 99
 )

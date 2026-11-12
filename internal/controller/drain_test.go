@@ -263,11 +263,17 @@ func TestDrainLeavesASummonedSession(t *testing.T) {
 	rt := &fakeRestarter{fn: func(*corev1.Pod) (protocol.RestartReport, error) {
 		return protocol.RestartReport{}, errors.New("should not run")
 	}}
-	startOperator(t, func(r *Reconciler) { r.Restarter = rt })
+	// Since OP777 a summoned session is built only once admitted, and a
+	// summoned task only under both task latch flags.
+	startOperator(t, func(r *Reconciler) {
+		r.Restarter = rt
+		summonLatchOn(r)
+	})
 	live := newSession(t, func(s *v1alpha1.AgentSession) {
 		s.Spec.Caller, s.Spec.Lane, s.Spec.Profile = "alert-responder", v1alpha1.LaneRemediation, "ops"
 		s.Spec.Summon = remediationSummon()
 	})
+	admitSession(t, live.Name)
 	leaveBusy(t, live.Name)
 	markRunning(t, waitPod(t, live.Name), "talosw02")
 	before := waitPod(t, live.Name)

@@ -282,6 +282,23 @@ type Reconciler struct {
 	// ScheduledWorkNamespace holds the ScheduledWork objects; empty means the
 	// templates' namespace (dev-env-system), where the Reminders live.
 	ScheduledWorkNamespace string
+	// SummonedLanes lets the leader admit summoned sessions
+	// (--enable-summoned-lanes, DESIGN-064 5.9 and 6.7, OP777). Off, nothing
+	// is admitted; the gate before ensure applies whatever it says, so a
+	// summoned session never gets a volume or a pod without admission.
+	SummonedLanes bool
+	// SummonAdmissionEvery is the admission's interval; zero means
+	// SummonAdmissionEvery.
+	SummonAdmissionEvery time.Duration
+	// SummonQuota is story 743's quota gate for admission; nil admits.
+	SummonQuota func(*v1alpha1.AgentSession) bool
+	// summonNudge asks the leader's admission for a pass now; nil when the
+	// admission does not run.
+	summonNudge chan struct{}
+	// summonRemoteLatch is slice d's seam: it lifts the RemoteLatchMissing
+	// hold once the remote latch exists. Nothing sets it in this slice; only
+	// tests do, to prove the escalation pool apart from the latch.
+	summonRemoteLatch bool
 	// releaseJudged, when set, sees every pass of the scheduled-work releaser:
 	// the cached session it judged, whether it released, and when it asked to
 	// look again. Tests set it to prove the releaser ran; the operator leaves
@@ -336,6 +353,19 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, opts ...func(*ctrl.Build
 		}
 		b = b.WatchesRawSource(source.Channel(events, &handler.EnqueueRequestForObject{}))
 	}
+	if r.SummonedLanes && r.SessionNamespace != "" && r.APIReader != nil {
+		// The leader's admission of summoned sessions (OP777). Its writes to a
+		// session's status reach the reconciler through the session watch.
+		r.summonNudge = make(chan struct{}, 1)
+		every := r.SummonAdmissionEvery
+		if every <= 0 {
+			every = SummonAdmissionEvery
+		}
+		if err := mgr.Add(&summonAdmission{r: r, every: every, nudge: r.summonNudge,
+			log: mgr.GetLogger().WithName("summoned-admission")}); err != nil {
+			return err
+		}
+	}
 	for _, o := range opts {
 		o(b)
 	}
@@ -376,6 +406,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	// Row 1 also uses taskResult's pure projection of stored task evidence;
 	// only the ordinary observer below writes status.taskResult (OP740 Q-4).
 	if changed, err := r.reconcileSummonOutcome(ctx, &s); err != nil {
+		return ctrl.Result{}, err
+	} else if changed {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	// DESIGN-064 5.9: a closed summoned session's reservation is released once
+	// no launch can follow (OP777).
+	if changed, err := r.reconcileSummonRelease(ctx, &s); err != nil {
 		return ctrl.Result{}, err
 	} else if changed {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
@@ -1284,6 +1321,11 @@ func releaseSession(ctx context.Context, c client.Client, s *v1alpha1.AgentSessi
 func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates, obs *observation) error {
 	if !obs.pod.missing {
 		return nil
+	}
+	// Every resource-building caller, including a stored shared-workspace
+	// lifecycle, must pass the summoned-session gate (OP777, G1).
+	if build, err := r.summonGate(ctx, s); err != nil || !build {
+		return err
 	}
 	b, guardErr := r.originalHome(ctx, s)
 	if guardErr != nil {

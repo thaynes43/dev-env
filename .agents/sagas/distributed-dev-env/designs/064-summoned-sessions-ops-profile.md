@@ -899,6 +899,95 @@ last charge; an hour-old charge with no Session dropped and its retry charged
 again. Each shows one charge per dispatch id within an hour and at most one
 admitted Session per id, not merely a successful ConfigMap update.
 
+**Correction, 2026-11-12 (story 777, slice a of #741; item 741 ruling D10,
+written by the story's worker, not a ruling by Tom).** The text above stays;
+where it differs, this governs.
+
+1. *The summoned task latch needs two flags, not one.* The controller's half
+   is `--enable-private-history-retention`. agentd's half, the pod's session
+   document saying the task is retained (`PrivateHistoryRetained`, so agentd
+   never continues a saved launch), is set only with
+   `--enable-terminal-task-pod-reclaim` on as well (which itself needs
+   `--enable-private-terminal-record` and `--enable-private-executor-stop`).
+   The leader admits a summoned task only with both on, and the operator
+   refuses to start with `task` in `--summon-create-kinds` and either off
+   (ruling D8).
+2. *The pools count admitted, unreleased records and open grants.* The
+   leader counts their union by Session UID, per caller and pool, from
+   uncached reads (`internal/controller/summon_admission.go`; the amendment
+   below serializes grants). Until story 778 turns the
+   API's 429 at the pool into Queued, that 429 still counts the caller's
+   "unfinished" session records: a suspended one is not counted there, and a
+   closed one whose record is unfinished is.
+3. *A summoned task's latch was recorded as never startable.* The outcome
+   step of 6.6 writes `outcome: pending` on a summoned session's first
+   reconcile, before the private task latch is recorded, and the latch's
+   check for a fresh lifecycle counted any outcome as history. Every summoned
+   task would have been recorded `Unknown` and never started. Story 777 fixes
+   it: a summoned session's own Pending outcome is not history; any other
+   outcome still is, and the uncached read that no pod or volume exists still
+   applies. Because that check also needs a status with no condition, the
+   leader writes nothing to a summoned task, neither admission nor a hold,
+   until the reconciler has recorded its latch.
+4. *Holds.* A remote summoned session is held `RemoteLatchMissing` until
+   #741 slice d builds the remote latch; a task while the operator lacks
+   either latch flag, or whose latch record cannot start, is held
+   `TaskLatchMissing`. A session whose dispatch id the ledger does not bind
+   to its name is closed by its `onUnreported`, reason `not-charged`, a row
+   of 6.6's one table after `escalation-bound` and before the hold rows
+   (ruling D5).
+
+*Amended, 2026-11-12 (PR 1091 fix round 1, coordinator rulings in comment
+6828699245; implemented by the successor worker, not a ruling by Tom).*
+
+- **Grants use the create ledger's compare-and-set.** Its reserved key
+  `_admission` cannot be a CallerPolicy name and holds open grants with
+  Session name, UID, lane, caller, pool and time. A pass counts admitted,
+  unreleased Sessions and grants whose Session exists with the same UID and
+  is not released, once per UID. Each new grant is an Update of
+  `dev-env-summon-creates` on the resourceVersion read for the decision;
+  only confirmation permits the `admittedAt` write. A conflict reads and
+  decides again from scratch; an unknown result stops further grants in
+  that pass. A grant without `admittedAt` is completed at its original time,
+  never decided again. Gone, replaced and released grants are removed with
+  the same kind of Update. The API preserves the key unchanged through
+  charge, mark, rebind, prune and urgent count; it never interprets it as a
+  caller entry. No new object, Lease or RBAC permission is added. Lanes on
+  with leader election off refuses operator startup.
+- **Idle cleanup (coordinator answer `op777-fix1-q-1`).** With no summoned
+  Sessions a pass retains the one-list fast path and reads no ledger. Stale
+  grants are removed in the next pass that reads it, in a grant-adding
+  Update if there is one, otherwise an Update solely for cleanup. A grant
+  for a gone or replaced UID never holds capacity.
+- **The gate is inside `ensure`.** Every resource-building caller, including
+  a stored shared-workspace task, passes it. A close after the gate's read
+  prevents the task's Pod Create when the close lands before the executor
+  latch write commits. After that boundary an already sent first Create
+  can still land; release must account for it.
+- **Release uses completed-task evidence.** For an admitted task closed by
+  the operator: no attempt or a known non-attempt releases; a recorded
+  executor gone or replaced by an uncached read releases; a stored
+  `agent.task` result or its `privateHistory.taskTerminal` copy plus the
+  pod's retained-task latch releases. A heartbeat of `Busy`, `Interrupted`
+  or another state alone does not. A first spawn can still be pending, so
+  otherwise the pod must be gone. With an unknown attempt and no recorded
+  executor, uncached absence also needs `admittedAt` + 15 minutes + one
+  minute. A pod that appears holds until it is gone. This uses pinned
+  agent 2.105.0's refusal of a late first boot before `launch.json`; the
+  pre-provider-spawn fence remains story 780. Report closes still release
+  in their terminal write, and never-admitted closes release at once.
+- **Pass timing.** A pass follows the leader's own close or release at once.
+  A report through the API is picked up by the next pass, within 60 seconds.
+- **Proof boundary.** The concurrent writes, lost replies, delayed Create,
+  release and resource-count proofs are fake-client controller tests with
+  request barriers and a fake clock. They do not run a provider. Envtests
+  reject nested and whole-status erasure and exercise the ordinary gate.
+  `TestTerminalPrivateTaskNeverAutomaticallyResumes` in `internal/agentd`
+  proves no runner call on restart with a retained task. The pre-spawn
+  heartbeat states and late-first-boot refusal also rest on the pinned
+  agent's `launch.go`, `status.go`, `daemon.go` and `start_deadline.go` source;
+  no live-provider handover is claimed.
+
 ## 6. Contracts per build story
 
 ### 6.1 OP735: the ops egress tier

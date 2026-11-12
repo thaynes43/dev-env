@@ -33,9 +33,13 @@ func Terminal(o *v1alpha1.OutcomeStatus) bool {
 
 // Decision is selected before the write. Source and Reason are controlled words;
 // the note is data and never goes into logs. Nonterminal observations have no source.
+// Released frees the session's reservation in the same terminal write: the
+// caller sets it only when no launch can follow (DESIGN-064 5.9). A report
+// always releases at once, whatever Released says.
 type Decision struct {
 	State                v1alpha1.OutcomeState
 	Note, Source, Reason string
+	Released             bool
 }
 
 // Write uses the resource version of a live snapshot. On conflict the caller must
@@ -54,9 +58,12 @@ func Write(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, d Dec
 		if s.Status.Summon == nil {
 			s.Status.Summon = &v1alpha1.SummonStatus{}
 		}
-		// OP741: closed is the durable terminal record; reservation release is added
-		// there under its latch/stop proof. This write grants no admission capacity.
-		s.Status.Summon.Closed = &v1alpha1.SummonClosedStatus{At: at, Source: d.Source, Reason: d.Reason}
+		// closed is the durable terminal record. A report releases the
+		// reservation at once (5.9); an operator close releases here only when
+		// its caller proved no launch can follow, and otherwise later, through
+		// the leader's release step (internal/controller, OP777).
+		released := d.Source == Report || d.Released
+		s.Status.Summon.Closed = &v1alpha1.SummonClosedStatus{At: at, Source: d.Source, Reason: d.Reason, Released: released}
 		// OP742: derive and add the terminal page event here, before this same CAS.
 		if filing {
 			// OP768 step 1: retain Pending here; the leader's filing worker will charge,

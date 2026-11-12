@@ -767,6 +767,7 @@ type CoordinatorInstructionStatus struct {
 // in its memory.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sharedAdmission) || has(self.sharedAdmission)",message="shared admission evidence cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.privateHistory) || has(self.privateHistory)",message="private history retention cannot be removed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.summon) || has(self.summon)",message="the summon record cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.capturedUsage) || has(self.capturedUsage)",message="captured usage ledger cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sessionDirectory) || has(self.sessionDirectory)",message="directory creation evidence cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.coordinatorInstructionAttempt) || has(self.coordinatorInstructionAttempt)",message="instruction attempt evidence cannot be removed"
@@ -832,7 +833,8 @@ type AgentSessionStatus struct {
 	// +optional
 	Outcome *OutcomeStatus `json:"outcome,omitempty"`
 
-	// Summon records the summoned session's terminal transition (DESIGN-064 5.9).
+	// Summon records the summoned session's admission and its terminal
+	// transition (DESIGN-064 5.9).
 	// +optional
 	Summon *SummonStatus `json:"summon,omitempty"`
 
@@ -2068,6 +2070,7 @@ type RescuedRef struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.capturedUsage) || (has(self.status) && has(self.status.capturedUsage))",message="captured usage ledger cannot be erased with status"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.usageObservation) || (has(self.status) && has(self.status.usageObservation))",message="original usage observation cannot be erased"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.taskOutcome) || (has(self.status) && has(self.status.taskOutcome))",message="original task outcome cannot be erased"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.summon) || (has(self.status) && has(self.status.summon))",message="the summon record cannot be removed, including with status"
 type AgentSession struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

@@ -1834,7 +1834,10 @@ before, and Meatball's creates and every other caller's are unchanged.
 stories 741 and 745 are installed and the pinned agent image accepts a
 summoned remote session. A value other than `task` or `remote`, a value
 named twice or an empty element stops the operator at start, and its start
-line logs the value. The rules below apply once a kind is on.
+line logs the value. Since story 777 the operator also refuses to start with a
+kind named and `--enable-summoned-lanes` off, with `task` named and either task
+latch flag off, and with `remote` named at all (see "Admission by the leader"
+below). The rules below apply once a kind is on.
 
 A create whose parent is a session — the session's own request, or a
 scheduled dispatch on the session basis — is refused when the session already
@@ -2020,8 +2023,10 @@ decides: one update wins, and the other reads the ledger again, finds the
 window full, and answers 429.
 
 A charge leaves the ledger at a later write only when it is 65 minutes old
-and its last attempt mark is at least 15 minutes old, whether or not a
-session of its id exists. The 15 minutes cover the 2 minute create deadline,
+and its last attempt mark is at least 15 minutes old, and no session of its
+id exists that is neither admitted nor closed (story 777): a Queued session
+keeps the charge the leader admits it by, however long it waits. The 15
+minutes cover the 2 minute create deadline,
 5 minutes for clocks that differ and 5 minutes for a forward step. So a
 create the client may still send, whose mark is at most 2 minutes old, keeps
 its charge while the clock assumption holds. When no session carries the id,
@@ -2035,10 +2040,10 @@ session. If an authorized deleter (Tom, an operator) deletes a summoned
 session while its charge is still in the ledger, the key's next create maps
 to the same id and reuses that charge: a new session, no new charge.
 
-**Limits of this slice, until story 741.** No check, read or timeout in the
+**The two windows the API cannot close.** No check, read or timeout in the
 API closes the time between a replica's last ledger write and the moment the
 Kubernetes API server accepts its create: two objects cannot be written as
-one from here. Two windows remain, each with its schedule:
+one from here. Two windows remain at the API, each with its schedule:
 
 1. *A create that lands after its charge was pruned.* The charge is already
    65 minutes old. Replica A marks dispatch X and sends its create inside
@@ -2057,21 +2062,122 @@ one from here. Two windows remain, each with its schedule:
    deadline and creates N. Two sessions carry X, and the ledger binds X to
    N-2 only.
 
-Two statements are enforced at admission by the leader, in story 741, not in
-this slice: no summoned session gets a pod or a volume unless the ledger
-holds its dispatch id bound to that session's name; and so no dispatch id
-runs two sessions. Until story 741 is installed, both can be violated in the
-two windows above. The only callers before then are the low-rate task lanes.
+Since story 777 the operator leader closes both at admission (below): no
+summoned session gets a pod or a volume unless an uncached read of the ledger
+holds its dispatch id bound to that session's name, so no dispatch id runs two
+sessions. The uncharged session of the first window and the surplus session of
+the second are closed `not-charged` and never get a pod or a volume; the
+session the ledger binds runs. Until story 777's operator is installed, both
+could be violated in the two windows above.
 
-**The pool, until story 741 adds queues.** The API counts the caller's
+**Admission by the leader** (DESIGN-064 5.9 and 6.7, story 777). A summoned
+session gets no volume and no pod until the operator leader admits it, and
+never another once it is closed. Every rule here keys on `spec.caller`, so a
+session without one is built exactly as before.
+
+- *The gate.* Inside `ensure`, including the shared-workspace path, before
+  the reconciler builds a summoned session's volume and pod,
+  it reads the session from the API server, past the cache, and builds
+  nothing unless `status.summon.admittedAt` is set, the outcome is not
+  terminal, and, for a task, the private task latch applies to it. It holds
+  whatever `--enable-summoned-lanes` says. The task latch's write repeats the
+  check on the record it locks. A close after the gate's read stops the pod
+  if it lands before the latch write commits. After that boundary a first
+  Pod Create can already be in flight; the release rules below keep its
+  reservation while that first launch remains possible.
+- *Admission.* With `--enable-summoned-lanes` (default off) the leader runs a
+  pass at start, every 60 seconds, and at once after the leader's own close
+  or release. A terminal report through the API is picked up by the next
+  pass, within 60 seconds. Each pass reads Sessions and the ledger uncached.
+  Occupancy is the union, by Session UID, of admitted, unreleased Sessions
+  and open grants whose Session exists with that UID and is not released:
+  one per single-flight lane (`remediation`, `upgrade`,
+  `curation`, across callers) and one slot each in the caller's pool
+  (`limits.escalations` for escalations, `limits.concurrent` for every other
+  lane). It takes the Queued sessions oldest first (creation time, then UID)
+  and admits each whose dispatch id an uncached read of the create ledger
+  binds to its own name, whose CallerPolicy still names its account, whose
+  latch applies, whose lane is free and whose pool has a slot.
+  Before writing `status.summon.admittedAt`, the leader adds a grant to
+  ConfigMap `dev-env-system/dev-env-summon-creates` with an Update on the
+  resourceVersion read for that decision. The reserved key `_admission`,
+  which cannot be a CallerPolicy name, holds each grant's Session name,
+  UID, lane, caller, pool and time. Only a confirmed Update permits the
+  Session admission write. A conflict restarts the decision from fresh
+  reads; an unknown write result stops further grants in that pass. A grant
+  without `admittedAt` is completed using its original time, without being
+  decided again. This shared compare-and-set fences overlapping leaders,
+  including an old leader's request completing after a handover.
+  The Session write also sets `SummonAdmitted=True`. A held session shows
+  `SummonAdmitted=False` with `LaneBusy`, `PoolBusy`, `PolicyGone`,
+  `TaskLatchMissing` (a task while the operator lacks either latch flag, or
+  whose latch record cannot start) or `RemoteLatchMissing` (every summoned
+  remote session, until slice d of item 741 builds the remote latch). An
+  escalation is never held for its lane, and an open escalation never holds a
+  remediation. A leader that restarts recomputes everything from these
+  records. A missing ConfigMap, failed read or malformed grant document
+  holds admission and closes nothing. Grants for gone, replaced or released
+  Sessions are removed by the same kind of Update, together with a new
+  grant where there is one. With no summoned Sessions a pass makes just one
+  uncached Session list and defers grant cleanup until the next active pass;
+  a stale grant never holds capacity. API charge, mark, rebind, prune and
+  urgent-refusal writes carry `_admission` through unchanged and never
+  count or decode it as a caller's entry.
+- *Not charged* (ruling D5 on item 741). A Queued session whose dispatch id
+  the ledger does not hold, or holds for another name, is never admitted. It
+  is closed by its `onUnreported` (a remediation `escalated`, with its pending
+  filing), reason `not-charged`, and shows `SummonAdmitted=False NotCharged`.
+  An existing ConfigMap emptied to `data: {}` has no charges and causes
+  these closes; it is different from an unreadable or missing ConfigMap.
+- *Release.* `status.summon.closed.released` frees the lane and the pool slot,
+  and true is never reversed. A report releases at once, in its terminal
+  write. A close the operator declares releases in that write when the session
+  was never admitted, and otherwise once no launch can follow: when there was
+  no attempt or a known non-attempt, when the latch's recorded executor pod
+  is gone or replaced by an uncached read, or when a stored task result
+  exists (`status.agent.task` or its `privateHistory.taskTerminal` copy)
+  and that pod carries the retained-task latch. `Busy`, `Interrupted`, and
+  other heartbeat states alone are no evidence that run-agent finished;
+  they can precede the first provider spawn. Otherwise the reservation
+  stays until the pod is gone. With an attempt recorded but no recorded
+  executor and no known non-attempt, release needs both uncached pod
+  absence and `admittedAt` plus 15 minutes plus one minute. A late first
+  pod that appears holds the reservation until it is gone, even past that
+  deadline. An unreleased close keeps its lane and its slot.
+- *The start deadline.* An admitted summoned pod gets
+  `AGENTD_START_DEADLINE`, `admittedAt` plus 15 minutes. Pinned agent 2.105.0
+  checks this before writing its first `launch.json`; it does not fence a
+  provider spawn already pending after that write (story 780). Such a pod
+  runs on the templates image, as a scheduled session's does.
+- *Start refusals* (ruling D8). The operator refuses to start with
+  `--enable-summoned-lanes` on and `--leader-elect=false`; with
+  `--summon-create-kinds` set and `--enable-summoned-lanes` off; with `task`
+  named and either `--enable-private-history-retention` or
+  `--enable-terminal-task-pod-reclaim` off; and with `remote` named at all,
+  until slice d.
+
+The admission, overlapping-write, release and delayed-Create proofs use
+fake-client controller tests with request hooks and a fake clock. They
+assert stored reservations and resource creates, without launching a
+provider. Envtests prove schema rejection, including removal or nulling of
+the whole `status`, and the ordinary admission gate against an API server.
+`internal/agentd`'s existing `TestTerminalPrivateTaskNeverAutomaticallyResumes`
+checks that retained launches/results make no runner calls on a reconstructed
+daemon and that `BuildResume` refuses them. The pending-first-spawn states
+and late-first-boot deadline guarantee also rest on the pinned 2.105.0
+`launch.go`, `status.go`, `daemon.go` and `start_deadline.go` source. These
+are source and test proofs, not a live cluster or provider failover test.
+
+**The API's pool, until story 778 adds queues.** The API counts the caller's
 unfinished summoned session records, uncached: escalations against
 `limits.escalations`, every other lane against `limits.concurrent`.
 "Unfinished" is what the session record says, not whether a pod runs: not
 being deleted, not set to suspend, not in phase `Suspended`, `Archived` or
 `Failed`, and no agent that exited, failed or was interrupted. A create that would pass its pool gets 429. It is checked before the
 charge. A session with a terminal outcome whose record is still unfinished
-still holds its slot. The count is not a reservation: until story 741, a
-pool can be exceeded by at most the number of API replicas minus one (one,
+still holds its slot. This is the API's own count, not the leader's: the
+leader counts admitted, unreleased records (above). The count is not a
+reservation: until story 778, a pool can be exceeded by at most the number of API replicas minus one (one,
 with two replicas), when every replica has a create in flight at once. That
 bound holds for fixed limits and session states, and when no earlier failed
 call is still able to land.

@@ -2,9 +2,19 @@ package v1alpha1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-// SummonStatus is the operator's durable accounting for a summoned session.
-// OP741 adds admission and reservation release; no admission reader uses this yet.
+// SummonStatus is the operator's durable accounting for a summoned session
+// (DESIGN-064 5.9): when the leader admitted it, and its one terminal
+// transition with the release of its reservation.
+//
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.admittedAt) || (has(self.admittedAt) && self.admittedAt == oldSelf.admittedAt)",message="admittedAt is set once and never changes"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.closed) || has(self.closed)",message="the closed record cannot be removed"
 type SummonStatus struct {
+	// AdmittedAt is when the operator leader admitted the session: its charge
+	// was in the create ledger under its own name, its single-flight lane was
+	// free and its pool had a slot (DESIGN-064 5.9, OP777). Until it is set the
+	// session has no volume and no pod. It is set once and never changes.
+	// +optional
+	AdmittedAt *metav1.Time `json:"admittedAt,omitempty"`
 	// Closed is written atomically with the first terminal outcome.
 	// +optional
 	Closed *SummonClosedStatus `json:"closed,omitempty"`
@@ -15,6 +25,8 @@ type SummonStatus struct {
 }
 
 // SummonClosedStatus identifies the one terminal transition (DESIGN-064 5.9).
+//
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.released) || !oldSelf.released || (has(self.released) && self.released)",message="released is never reversed"
 type SummonClosedStatus struct {
 	At metav1.Time `json:"at"`
 	// +kubebuilder:validation:MaxLength=10
@@ -24,6 +36,11 @@ type SummonClosedStatus struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=32
 	Reason string `json:"reason"`
+	// Released is true once the session's reservation, its lane and its pool
+	// slot, is free: at once for a report, and for an operator close once no
+	// further launch can follow (DESIGN-064 5.9). True is never reversed.
+	// +optional
+	Released bool `json:"released,omitempty"`
 }
 
 // SummonEscalationStatus reserves a filing name in the terminal write.
