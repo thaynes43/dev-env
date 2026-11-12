@@ -388,14 +388,13 @@ func summonReserved(s *v1alpha1.AgentSession) bool {
 	return st != nil && st.AdmittedAt != nil && (st.Closed == nil || !st.Closed.Released)
 }
 
-// summonQueued is a session the leader may admit: never admitted, not closed,
-// and with no recorded reap, suspension or deletion (the reconciler closes
-// those by ruling D1, OP779).
-func summonQueued(s *v1alpha1.AgentSession) bool {
-	st := s.Status.Summon
-	_, reaped := s.Annotations[v1alpha1.AnnotationReapedBy]
-	return s.Spec.Summon != nil && (st == nil || st.AdmittedAt == nil && st.Closed == nil) &&
-		!summonoutcome.Terminal(s.Status.Outcome) && !wantsPodGone(s) && !reaped
+// summonQueued is a session the leader may admit: never admitted (granted is
+// an open grant for its name and UID), not closed, and with no recorded reap,
+// suspension or deletion (the reconciler closes those by ruling D1, OP779).
+// It is the shared definition the API's queue counts use too
+// (summonoutcome.Queued).
+func summonQueued(s *v1alpha1.AgentSession, granted bool) bool {
+	return summonoutcome.Queued(s, granted)
 }
 
 // summonTaskLatchStartable reports whether a Queued task's latch record can
@@ -598,7 +597,7 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context, p *summonPass) 
 		// Only the first list's candidates may be judged against this
 		// ledger: a later Session could have been charged after its read.
 		// The second list exists to validate grants, not to widen that set.
-		if s.Spec.Caller != "" && listed[s.UID] && !granted[s.UID] && summonQueued(s) {
+		if s.Spec.Caller != "" && listed[s.UID] && summonQueued(s, granted[s.UID]) {
 			queued = append(queued, s)
 		}
 	}

@@ -31,6 +31,29 @@ func Terminal(o *v1alpha1.OutcomeStatus) bool {
 	return o.State == v1alpha1.OutcomeDone || o.State == v1alpha1.OutcomeFailed || o.State == v1alpha1.OutcomeEscalated
 }
 
+// Queued is the one definition of a Queued summoned session (DESIGN-064 5.9,
+// "States of a summoned session"), shared by the operator leader's admission
+// (internal/controller) and the API's queue counts (internal/apiserver), so
+// the two cannot drift. A Queued session carries spec.summon, is not admitted
+// (no status.summon.admittedAt, and granted is false: the create ledger's
+// reserved key holds no grant for its name and UID), is not closed (no
+// status.summon.closed and no terminal outcome), and carries no stop: it is
+// neither suspended nor being deleted, and has no recorded reap (the
+// annotation reaped-by, present with any value, which the API's reap route
+// writes once and nothing removes). An admitted session, a granted one
+// included, is not Queued; a closed one is neither. A stopped session that
+// was never admitted is not Queued either: the leader does not admit it, the
+// API does not count it, and the reconciler closes it by ruling D1 (OP779).
+func Queued(s *v1alpha1.AgentSession, granted bool) bool {
+	if s == nil || s.Spec.Summon == nil || granted {
+		return false
+	}
+	st := s.Status.Summon
+	_, reaped := s.Annotations[v1alpha1.AnnotationReapedBy]
+	return (st == nil || st.AdmittedAt == nil && st.Closed == nil) && !Terminal(s.Status.Outcome) &&
+		s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended && s.DeletionTimestamp.IsZero() && !reaped
+}
+
 // Decision is selected before the write. Source and Reason are controlled words;
 // the note is data and never goes into logs. Nonterminal observations have no source.
 // Released frees the session's reservation in the same terminal write: the

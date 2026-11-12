@@ -409,7 +409,7 @@ func wantBriefNames(t *testing.T, s *v1alpha1.AgentSession, requested string) {
 	if requested != s.Name && strings.Contains(s.Spec.Prompt, "Session "+requested+",") {
 		t.Fatalf("brief of %s names the requested %s", s.Name, requested)
 	}
-	if got, want := s.Annotations[v1alpha1.AnnotationRequestHash], summonRequestHash(summonWire{Name: requested, Mode: string(s.Spec.Mode), Lane: string(s.Spec.Lane)}); got != want {
+	if got, want := s.Annotations[v1alpha1.AnnotationRequestHash], summonRequestHash(summonWire{Name: requested, Mode: string(s.Spec.Mode), Lane: string(s.Spec.Lane)}, s.Spec.Summon.Priority); got != want {
 		t.Fatalf("request hash %s, want the requested name's %s", got, want)
 	}
 	if err := checkAgentd(s); err != nil {
@@ -500,12 +500,12 @@ func plantKeySession(name, uid, key, gen string, finished bool, body summonWire)
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: sessionNS, Name: name, UID: types.UID(uid),
 			Labels:      map[string]string{v1alpha1.LabelDepth: "0", v1alpha1.LabelIdempotencyKey: key},
-			Annotations: map[string]string{v1alpha1.AnnotationRequestHash: summonRequestHash(body)},
+			Annotations: map[string]string{v1alpha1.AnnotationRequestHash: summonRequestHash(body, v1alpha1.SummonPriorityUrgent)},
 		},
 		Spec: v1alpha1.AgentSessionSpec{
 			Repo: "haynes-ops", Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Prompt: "p",
 			Parent: summonTestAccount, Caller: ledgerTestKey, Lane: v1alpha1.LaneRemediation, IdempotencyKey: key,
-			Summon: &v1alpha1.SessionSummon{DispatchID: "planted-" + uid},
+			Summon: &v1alpha1.SessionSummon{DispatchID: "planted-" + uid, Priority: v1alpha1.SummonPriorityUrgent},
 		},
 	}
 	if gen != "" {

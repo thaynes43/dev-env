@@ -225,11 +225,20 @@ type Server struct {
 	// from --summon-create-kinds (DESIGN-064 5.9, the correction of
 	// 2026-11-12). A summoning create of any other kind is refused with 403
 	// after the request's own checks and before anything is read back,
-	// charged or created; the agentd transport bound is checked later, in
-	// dispatchSummon, so only for a kind that is switched on. Empty, the
-	// default, refuses every summoning create;
+	// charged or created. The agentd transport bound is checked before it, on
+	// the longest name the create may take (OP778, ruling D4), so a request
+	// that fails that bound gets its own 422 whatever the switch says. Empty,
+	// the default, refuses every summoning create;
 	// the front door's and every other caller's creates are not affected.
 	SummonCreateKinds []v1alpha1.SummonKind
+	// SummonedLanes is the operator's --enable-summoned-lanes (DESIGN-064 5.9
+	// and 6.7, OP777 and OP778): the same option that lets the leader admit.
+	// On, a summoning create past its pool is created Queued (201) and the
+	// leader admits it, and the caller's queues (limits.queued, and
+	// limits.queuedUrgent per pool) are counted inside the create ledger's
+	// compare-and-set. Off, a create past its pool is refused with 429, as
+	// before, and no queue is counted.
+	SummonedLanes bool
 	// ChildUsageCapture records accepted direct-child usage on the parent.
 	// Default off: no parent read or write and no receipt view.
 	ChildUsageCapture bool

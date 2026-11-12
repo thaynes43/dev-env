@@ -362,6 +362,7 @@ func replica(f *fixture, c client.Client) *Server {
 		SummonBoundary: f.srv.SummonBoundary,
 		// The fixture's switch: every replica runs one operator's flags.
 		SummonCreateKinds: f.srv.SummonCreateKinds,
+		SummonedLanes:     f.srv.SummonedLanes,
 		// SummonClock is left nil: each replica has its own clock.
 	}
 }
