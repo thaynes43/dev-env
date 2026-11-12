@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.106.0](https://github.com/thaynes43/dev-env/compare/v2.105.0...v2.106.0) (2026-11-12)
+
+
+### Features
+
+* **apiserver:** a summoned session reports its outcome and an unreported one is closed (DESIGN-064 6.6, OP740) ([#1088](https://github.com/thaynes43/dev-env/issues/1088)) ([db8f0a3](https://github.com/thaynes43/dev-env/commit/db8f0a3f497ace8505b1f50d42da70002fcf9158))
+* **apiserver:** a summoning create is charged in the create ledger before its session, repeats safely and stops at its hour and pool (DESIGN-064 5.9, OP758) ([#1085](https://github.com/thaynes43/dev-env/issues/1085)) ([ac1bbb5](https://github.com/thaynes43/dev-env/commit/ac1bbb580e3f27e1dae2794a8b5f945e2693804c))
+* **apiserver:** summoning callers are admitted under their policy and the platform writes the brief (DESIGN-064 6.4 and 5.6, OP757) ([#1081](https://github.com/thaynes43/dev-env/issues/1081)) ([4534516](https://github.com/thaynes43/dev-env/commit/4534516d5034bea2a497923e5b74d627d2b5432a))
+* **apiserver:** summoning creates are off until --summon-create-kinds names their kind (DESIGN-064 5.9, OP770) ([#1090](https://github.com/thaynes43/dev-env/issues/1090)) ([0727ede](https://github.com/thaynes43/dev-env/commit/0727ede06360546d574ca0dbb849d0cfe84099a9))
+* **keeper:** a second App token loop for the ops bot, off by default (DESIGN-064 6.2, OP736) ([#1078](https://github.com/thaynes43/dev-env/issues/1078)) ([1ae9c7c](https://github.com/thaynes43/dev-env/commit/1ae9c7ca2c0595157ab93bab74ff8640b3896ad7))
+* **templates:** a profile's remote-only env and mounts (DESIGN-064 6.3, OP765) ([#1083](https://github.com/thaynes43/dev-env/issues/1083)) ([4710923](https://github.com/thaynes43/dev-env/commit/4710923d3c5c8322b8205b32f4978d5cde2999b9))
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/jackc/pgx/v5 to v5.13.0 ([#1086](https://github.com/thaynes43/dev-env/issues/1086)) ([3a7213f](https://github.com/thaynes43/dev-env/commit/3a7213f4e591b22bef2d55d891d00bb8dd24625c))
+* **deps:** update module golang.org/x/crypto to v0.59.0 ([#1087](https://github.com/thaynes43/dev-env/issues/1087)) ([d8825fe](https://github.com/thaynes43/dev-env/commit/d8825fec0d383ca82bd3433d3eb3898f074f7bf6))
+
 ## [2.105.0](https://github.com/thaynes43/dev-env/compare/v2.104.0...v2.105.0) (2026-11-11)
 
 
