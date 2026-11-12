@@ -22,8 +22,11 @@ package apiserver
 // under way, or one that failed within that hold. A charge records no lane or
 // priority, so it is put in the queue of the policy entry its request hash
 // names (summonChargeQueues); one that no current entry names counts in every
-// queue, so a bound can refuse early but is never exceeded (coordinator
-// answer op778-q-1).
+// queue, so a bound can refuse early (coordinator answer op778-q-1).
+// Priority is bound in the hash, so a policy edit cannot move a charge to
+// another queue. The bounds assume Session creates land within the attempt
+// hold: each late landing can add one Queued Session, while the leader still
+// bounds admission by lane and pool (OP778 fix round 1, F1/F2).
 
 import (
 	"net/http"
@@ -92,7 +95,7 @@ func summonRequestedNames(name string) []string {
 }
 
 // summonChargeQueues are the queues a charge with request hash hash, bound to
-// name, counts in: the queue of the policy entry whose mode, lane and one of
+// name, counts in: the queue of the policy entry whose mode, lane, priority and one of
 // summonRequestedNames(name) hash to hash (summonRequestHash). A hash no
 // current entry gives, a policy edited since the charge for example, counts
 // in every queue.
@@ -101,7 +104,7 @@ func summonChargeQueues(p *v1alpha1.CallerPolicy, hash, name string) []summonQue
 		for _, requested := range summonRequestedNames(name) {
 			for i := range p.Spec.Summon.Sessions {
 				e := &p.Spec.Summon.Sessions[i]
-				if summonRequestHash(summonWire{Mode: string(e.Kind), Lane: string(e.Lane), Name: requested}) == hash {
+				if summonRequestHash(summonWire{Mode: string(e.Kind), Lane: string(e.Lane), Name: requested}, e.Priority) == hash {
 					return []summonQueue{summonQueueOf(e.Priority, e.Lane)}
 				}
 			}

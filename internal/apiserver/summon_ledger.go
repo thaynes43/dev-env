@@ -30,8 +30,8 @@ import (
 //	urgentRefusals     the count of refused urgent creates, stopping at its maximum
 //	lastUrgentRefusal  when the last was refused, or null
 //
-// A charge binds one dispatch id to its request's hash (mode, lane and the
-// requested name) and to the one session name it creates. at is when it was
+// A charge binds one dispatch id to its request's hash (mode, lane, entry
+// priority and the requested name) and to the one session name it creates. at is when it was
 // counted toward createsPerHour; attempt is the last time a create was about
 // to be made for it. GitOps precreates the object with no data; the operator
 // reads it uncached and writes it only by Update with the resourceVersion it

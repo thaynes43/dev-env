@@ -668,7 +668,7 @@ func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWi
 	if req.IdempotencyKey != "" {
 		sess.Labels[v1alpha1.LabelIdempotencyKey] = req.IdempotencyKey
 	}
-	sess.Annotations = map[string]string{v1alpha1.AnnotationRequestHash: summonRequestHash(req)}
+	sess.Annotations = map[string]string{v1alpha1.AnnotationRequestHash: summonRequestHash(req, entry.Priority)}
 	return sess, entry, brief, nil
 }
 
