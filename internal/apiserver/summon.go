@@ -283,7 +283,7 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 	if err != nil {
 		return 0, nil, err
 	}
-	sess, entry, err := s.buildSummonSession(ctx, c, req, data)
+	sess, entry, brief, err := s.buildSummonSession(ctx, c, req, data)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -294,7 +294,7 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 	if err := s.admitCreate(ctx, c, sess); err != nil {
 		return 0, nil, err
 	}
-	return s.dispatchSummon(ctx, w, c, req, entry, sess)
+	return s.dispatchSummon(ctx, w, c, req, entry, sess, brief)
 }
 
 // summonMemberASCII is the refusal for a member name that is not printable
@@ -535,32 +535,36 @@ func jsonStringValue(raw json.RawMessage) (string, bool) {
 // buildSummonSession checks the request against the caller's policy and
 // builds the session it asks for, with every 422 and 403 decided here. The
 // dispatch id is left empty: dispatchSummon chooses it, after the repeat and
-// the name checks and before anything is written.
-func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWire, data map[string]string) (*v1alpha1.AgentSession, *v1alpha1.CallerPolicySummonSession, error) {
+// the name checks and before anything is written. brief renders the brief
+// for the session's final name, which its platform line carries (DESIGN-064
+// 5.6; the correction of 5.9, 2026-11-12): the requested name, or a suffix
+// of it. Its size is checked here with the longest suffix, so no final name
+// can make it too large after the charge.
+func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWire, data map[string]string) (*v1alpha1.AgentSession, *v1alpha1.CallerPolicySummonSession, func(name string) string, error) {
 	if req.Name == "" || len(req.Name) > summonNameMaxLen || len(validation.IsDNS1123Label(req.Name)) > 0 {
-		return nil, nil, invalid(fieldError("name", "a summoning session name is a DNS label of at most %d characters", summonNameMaxLen))
+		return nil, nil, nil, invalid(fieldError("name", "a summoning session name is a DNS label of at most %d characters", summonNameMaxLen))
 	}
 	if err := refuseReservedSessionName(req.Name); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	entry := summonEntry(c.policy.Spec.Summon.Sessions, req.Mode, req.Lane)
 	if entry == nil {
-		return nil, nil, invalid(fieldError("lane", "no policy entry for mode %q and lane %q", req.Mode, req.Lane))
+		return nil, nil, nil, invalid(fieldError("lane", "no policy entry for mode %q and lane %q", req.Mode, req.Lane))
 	}
 	if entry.Lane == v1alpha1.LaneUpgrade && strings.HasPrefix(req.Name, summonCurationPrefix) {
-		return nil, nil, invalid(fieldError("name", "an upgrade session cannot be named under wo-cigar-curate-"))
+		return nil, nil, nil, invalid(fieldError("name", "an upgrade session cannot be named under wo-cigar-curate-"))
 	}
 	if !summonHasPrefix(req.Name, entry.NamePrefixes) {
-		return nil, nil, invalid(fieldError("name", "must start with one of the entry's prefixes (%s)", strings.Join(entry.NamePrefixes, ", ")))
+		return nil, nil, nil, invalid(fieldError("name", "must start with one of the entry's prefixes (%s)", strings.Join(entry.NamePrefixes, ", ")))
 	}
 	if req.Agent != "" && req.Agent != string(v1alpha1.AgentClaude) {
-		return nil, nil, invalid(fieldError("agent", "a summoned session runs agent claude"))
+		return nil, nil, nil, invalid(fieldError("agent", "a summoned session runs agent claude"))
 	}
 	if req.Model != "" && req.Model != entry.Model.Default {
-		return nil, nil, invalid(fieldError("model", "the model must be empty or the entry's default"))
+		return nil, nil, nil, invalid(fieldError("model", "the model must be empty or the entry's default"))
 	}
 	if req.Profile != "" && req.Profile != entry.Profile {
-		return nil, nil, invalid(fieldError("profile", "the profile must be empty or the entry's profile"))
+		return nil, nil, nil, invalid(fieldError("profile", "the profile must be empty or the entry's profile"))
 	}
 	if req.IdempotencyKey != "" {
 		var fields []apiv1.FieldError
@@ -568,36 +572,39 @@ func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWi
 			fields = append(fields, fieldError("idempotencyKey", "%s", msg))
 		}
 		if len(fields) > 0 {
-			return nil, nil, invalid(fields...)
+			return nil, nil, nil, invalid(fields...)
 		}
 	}
 	if err := checkSummonData(entry.Brief.Fields, data); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if !apiv1.ClaudeEffortAccepted(entry.Model.Default, entry.Effort) {
-		return nil, nil, invalid(fieldError("effort", "the policy entry's effort is not one %s takes", entry.Model.Default))
+		return nil, nil, nil, invalid(fieldError("effort", "the policy entry's effort is not one %s takes", entry.Model.Default))
 	}
 	if s.Templates != nil {
 		t, err := s.Templates(ctx)
 		if err != nil {
-			return nil, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the templates cannot be read")
+			return nil, nil, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the templates cannot be read")
 		}
 		if _, _, err := t.Profile(entry.Profile); err != nil {
-			return nil, nil, invalid(fieldError("profile", "%v", err))
+			return nil, nil, nil, invalid(fieldError("profile", "%v", err))
 		}
 	}
 	boundary, err := s.summonBoundary()
 	if err != nil {
 		s.Log.Error(err, "summon boundary")
-		return nil, nil, internal("the brief boundary could not be drawn")
+		return nil, nil, nil, internal("the brief boundary could not be drawn")
 	}
-	brief := renderSummonBrief(req.Name, c.policy.Name, string(entry.Lane), entry.Brief.Template, entry.Brief.Fields, data, boundary)
-	if len(brief) > protocol.MaxPromptBytes {
-		return nil, nil, invalid(fieldError("data", "the rendered brief is %d bytes, more than %d", len(brief), protocol.MaxPromptBytes))
+	brief := func(name string) string {
+		return renderSummonBrief(name, c.policy.Name, string(entry.Lane), entry.Brief.Template, entry.Brief.Fields, data, boundary)
+	}
+	names := summonNameSequence(req.Name)
+	if longest := brief(names[len(names)-1]); len(longest) > protocol.MaxPromptBytes {
+		return nil, nil, nil, invalid(fieldError("data", "the rendered brief is %d bytes, more than %d", len(longest), protocol.MaxPromptBytes))
 	}
 	snap, err := summonSnapshot(c.policy, entry, "")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	spec := v1alpha1.AgentSessionSpec{
 		Repo:    entry.Repo,
@@ -605,7 +612,7 @@ func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWi
 		Mode:    v1alpha1.SessionMode(entry.Kind),
 		Model:   entry.Model.Default,
 		Effort:  entry.Effort,
-		Prompt:  brief,
+		Prompt:  brief(req.Name),
 		Profile: entry.Profile,
 		Parent:  c.parent,
 		Caller:  c.policy.Name,
@@ -618,7 +625,7 @@ func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWi
 	if entry.Kind == v1alpha1.SummonKindTask {
 		d, err := time.ParseDuration(entry.Timeout)
 		if err != nil || d <= 0 {
-			return nil, nil, forbidden("CallerPolicy entry is not a valid summon entry")
+			return nil, nil, nil, forbidden("CallerPolicy entry is not a valid summon entry")
 		}
 		spec.Limits = &v1alpha1.SessionLimits{Timeout: &metav1.Duration{Duration: d}}
 		if entry.MaxTurns != nil {
@@ -637,7 +644,7 @@ func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWi
 		sess.Labels[v1alpha1.LabelIdempotencyKey] = req.IdempotencyKey
 	}
 	sess.Annotations = map[string]string{v1alpha1.AnnotationRequestHash: summonRequestHash(req)}
-	return sess, entry, nil
+	return sess, entry, brief, nil
 }
 
 func summonEntry(sessions []v1alpha1.CallerPolicySummonSession, mode, lane string) *v1alpha1.CallerPolicySummonSession {

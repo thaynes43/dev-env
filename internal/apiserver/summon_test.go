@@ -716,9 +716,17 @@ func TestSummonCallerDoesNotOwnAPortalSession(t *testing.T) {
 	p := summonTestPolicy()
 	p.Name = "portal.actor-000000000001"
 	p.Spec.Summon.ServiceAccount = "portal/" + launchActor
+	// The same create hook as summonFixture (proof 9): this fixture adds a
+	// portal pod and a second policy.
 	f := newFixtureWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 		if obj.GetUID() == "" {
 			obj.SetUID(uuid.NewUUID())
+		}
+		if sess, ok := obj.(*v1alpha1.AgentSession); ok {
+			if err := checkChargedAtCreate(ctx, c, sess); err != nil {
+				t.Errorf("session %s created without a committed charge: %v", sess.Name, err)
+				return err
+			}
 		}
 		return c.Create(ctx, obj, opts...)
 	}}, pod, p, summonLedgerObject())

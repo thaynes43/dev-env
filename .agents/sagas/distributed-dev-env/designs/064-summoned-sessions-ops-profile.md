@@ -582,6 +582,60 @@ time of the last one. The charge always comes first:
      or once the filing is `Abandoned` (6.6). Admission reads one place, the
      ledger.
 
+**Correction, coordinator, 2026-11-12 (review of PR 1085).** The review of
+#738's ledger reproduced a session created after its charge was pruned, one
+charge funding two sessions, and a newest session chosen wrongly. The text
+above stays; where it differs, this governs.
+
+- **The entry.** Each caller's key holds `clock`; `charges`, each
+  `{id, at, attempt, hash, name}`; `urgentRefusals`; and
+  `lastUrgentRefusal`. `hash` is the request hash (mode, lane and requested
+  name). `name` is the one session name this dispatch creates. `at` is when
+  the charge was counted; `attempt` is the last time a create was about to be
+  made for it. A key that is absent is an empty entry; a value that is
+  present but empty, not a JSON object, repeats a member, lacks a required
+  member or has a wrong type is 503, with no write and no session. The count
+  of urgent refusals stops at its maximum.
+- **Time.** For one entry, "now" is the later of the replica's clock and the
+  entry's `clock`, and every write stores it back. A charge counts toward
+  `createsPerHour` while it is younger than 65 minutes by that clock: 60
+  minutes and 5 for replica clocks that differ. Assumed: replica clocks agree
+  within 5 minutes; inside it, never more than `createsPerHour` creates in any
+  60 minutes. A clock further ahead than that expires charges early by the
+  excess.
+- **Write before create.** Every Session create is preceded by a ledger write
+  that names its id: a new charge; an attempt mark (`attempt` = now) on a
+  charge of the same id and hash still inside its window; or a re-charge
+  (`at` and `attempt` = now, counted again, subject to the hour) of a charge
+  outside its window whose Session does not exist. No dispatch creates on a
+  charge it only read. The create is issued within 2 minutes of that write,
+  by the replica's monotonic clock, or the request answers 503 and creates
+  nothing; the charge stays. **Pruning:** a charge whose Session exists
+  leaves once it is 65 minutes old; a charge whose Session does not exist
+  leaves once it is 65 minutes old and its `attempt` is at least 10 minutes
+  old. So an in-flight create always has a mark at most 2 minutes old, and
+  its charge cannot be pruned under it. This replaces item 4's "an hour old"
+  for a caller's create.
+- **The binding.** A dispatch that finds a charge with its id and another
+  hash is refused with 409 and writes nothing. One with the same hash creates
+  the charge's `name`. On AlreadyExists for that name: a Session with this id
+  is 200 if it is this caller's and has this hash, else 409; a Session with
+  another id is a name clash, and the dispatch rebinds its charge to the next
+  free suffix by one more ledger write, then creates. A NotFound right after
+  AlreadyExists retries the same name once. A create refused after its charge
+  (no free name left at the create, or the API server refusing the object)
+  is a charged failure: its refusal says the hour's slot was spent, and
+  nothing is refunded. A Session that an authorized deleter removes while its
+  charge is held leaves that charge for the key's next create to reuse; this
+  is not built against, since a summoning caller cannot delete.
+- **The generation.** Every summoned Session carries an annotation holding
+  an integer generation: the newest earlier Session's generation plus one;
+  the first is 1, and a Session without the annotation counts as 0. The
+  newest Session of a key is the one with the highest generation; creation
+  timestamps and names do not order. A tie goes to the greater UID, and a
+  generation that is not a non-negative integer is 503 (the answer to note
+  `op758-fix1-q-1`).
+
 **Admission.** Only the leader admits, so two admissions cannot race across
 API replicas (R6's race is the API's). In each pass it takes Queued sessions
 oldest first and admits each whose dispatch id is committed in the ledger (an

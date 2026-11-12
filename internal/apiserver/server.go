@@ -210,6 +210,11 @@ type Server struct {
 	Log logr.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// SummonMonotonic is the clock a summoning create's deadline is measured
+	// on (DESIGN-064 5.9): the session create is issued within
+	// summonCreateDeadline of the ledger write that names its id. Nil is
+	// time.Now, whose monotonic reading Sub uses. Tests set it.
+	SummonMonotonic func() time.Time
 	// SummonBoundary draws the 16 hex characters that fence a summon brief.
 	// Nil draws them from crypto/rand. Tests set it so a render is fixed.
 	SummonBoundary func() (string, error)

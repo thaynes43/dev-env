@@ -5,7 +5,8 @@ package apiserver
 // test reads the ledger and the sessions themselves, not only a status code.
 // The fixture's create hook (summonFixture) also checks, on every summoned
 // create, that the session's dispatch id is charged in the ledger at that
-// moment (proof 9).
+// moment, bound to this session's name and request hash, and that no other
+// session carries the id (proof 9).
 
 import (
 	"context"
@@ -43,15 +44,19 @@ func summonLedgerObject() *corev1.ConfigMap {
 }
 
 type ledgerTestCharge struct {
-	ID string    `json:"id"`
-	At time.Time `json:"at"`
+	ID      string    `json:"id"`
+	At      time.Time `json:"at"`
+	Attempt time.Time `json:"attempt"`
+	Hash    string    `json:"hash"`
+	Name    string    `json:"name"`
 }
 
 type ledgerTestEntry struct {
-	Schema              string             `json:"schema"`
-	Charges             []ledgerTestCharge `json:"charges"`
-	UrgentRefusals      int64              `json:"urgentRefusals"`
-	LastUrgentRefusalAt *time.Time         `json:"lastUrgentRefusalAt"`
+	Schema            string             `json:"schema"`
+	Clock             time.Time          `json:"clock"`
+	Charges           []ledgerTestCharge `json:"charges"`
+	UrgentRefusals    int64              `json:"urgentRefusals"`
+	LastUrgentRefusal *time.Time         `json:"lastUrgentRefusal"`
 }
 
 func (e ledgerTestEntry) charge(id string) (ledgerTestCharge, bool) {
@@ -98,17 +103,33 @@ func (f *fixture) ledgerVersion() string {
 }
 
 // checkChargedAtCreate is the store's create hook for proof 9: a summoned
-// session's dispatch id must be charged in the ledger when it is created.
+// session's dispatch id must be charged in the ledger when it is created, the
+// charge must bind this name and this request hash, and no other session may
+// carry the id (ruling 2: one session per dispatch id).
 func checkChargedAtCreate(ctx context.Context, r client.Reader, sess *v1alpha1.AgentSession) error {
 	if sess.Spec.Summon == nil {
 		return nil
 	}
+	id := sess.Spec.Summon.DispatchID
 	e, _, err := readLedgerConfigMap(ctx, r, sess.Spec.Caller)
 	if err != nil {
 		return err
 	}
-	if _, ok := e.charge(sess.Spec.Summon.DispatchID); !ok {
-		return errors.New("dispatch id " + sess.Spec.Summon.DispatchID + " is not charged")
+	ch, ok := e.charge(id)
+	if !ok {
+		return errors.New("dispatch id " + id + " is not charged")
+	}
+	if ch.Name != sess.Name || ch.Hash != sess.Annotations[v1alpha1.AnnotationRequestHash] {
+		return errors.New("dispatch id " + id + " is charged for " + ch.Name + ", not " + sess.Name + ", or for another request")
+	}
+	var list v1alpha1.AgentSessionList
+	if err := r.List(ctx, &list, client.InNamespace(sess.Namespace)); err != nil {
+		return err
+	}
+	for _, other := range list.Items {
+		if other.Spec.Summon != nil && other.Spec.Summon.DispatchID == id {
+			return errors.New("session " + other.Name + " already carries dispatch id " + id)
+		}
 	}
 	return nil
 }
@@ -237,10 +258,10 @@ func TestSummonLedgerCrashAfterSessionReturnsIt(t *testing.T) {
 	}
 }
 
-// Proof 3: a retry in the next hour. An hour-old charge whose session was
-// never created is dropped, and its retry is charged again and creates one
-// session; and the retry of proof 1 across the hour's rollover, where the
-// re-charge takes a slot of the new hour.
+// Proof 3: a retry in the next hour. A charge past its 65 minute window
+// whose session was never created is charged again by its retry, which
+// creates one session; and the retry of proof 1 across the hour's rollover,
+// where the re-charge takes a slot of the new hour.
 func TestSummonLedgerRetryInTheNextHour(t *testing.T) {
 	t.Run("dropped and charged again", func(t *testing.T) {
 		f := summonFixture(t)
@@ -255,7 +276,7 @@ func TestSummonLedgerRetryInTheNextHour(t *testing.T) {
 		}
 		id, t0 := e.Charges[0].ID, e.Charges[0].At
 
-		f.now = t0.Add(time.Hour + time.Minute)
+		f.now = t0.Add(66 * time.Minute)
 		wantStatus(t, summonPost(t, f, body), http.StatusCreated)
 		e = f.ledger()
 		if len(e.Charges) != 1 || e.Charges[0].ID != id || !e.Charges[0].At.Equal(f.now) {
@@ -288,8 +309,8 @@ func TestSummonLedgerRetryInTheNextHour(t *testing.T) {
 			t.Fatalf("after the refusal %+v", e)
 		}
 
-		// Past the hour the orphan is dropped and a's retry is charged again.
-		f.now = t0.Add(61 * time.Minute)
+		// Past its window the orphan's retry is charged again.
+		f.now = t0.Add(66 * time.Minute)
 		wantStatus(t, summonPost(t, f, a), http.StatusCreated)
 		e := f.ledger()
 		if len(e.Charges) != 1 || e.Charges[0].ID != idA || !e.Charges[0].At.Equal(f.now) {
@@ -297,15 +318,15 @@ func TestSummonLedgerRetryInTheNextHour(t *testing.T) {
 		}
 
 		// That re-charge is a slot of the new hour.
-		f.now = t0.Add(62 * time.Minute)
+		f.now = t0.Add(67 * time.Minute)
 		wantError(t, summonPost(t, f, b), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
 		if e := f.ledger(); len(e.Charges) != 1 || e.UrgentRefusals != 2 {
 			t.Fatalf("after the second refusal %+v", e)
 		}
 
-		// An hour after the re-charge it is dropped once its session exists.
+		// 65 minutes after the re-charge it is dropped, its session existing.
 		f.editStatus("rem-responder-a", v1alpha1.PhaseFailed)
-		f.now = t0.Add(125 * time.Minute)
+		f.now = t0.Add(132 * time.Minute)
 		wantStatus(t, summonPost(t, f, b), http.StatusCreated)
 		e = f.ledger()
 		if len(e.Charges) != 1 || e.Charges[0].ID == idA {
@@ -329,6 +350,7 @@ func replica(f *fixture, c client.Client) *Server {
 		Log:            logr.Discard(),
 		Now:            f.srv.Now,
 		SummonBoundary: f.srv.SummonBoundary,
+		// SummonMonotonic is left nil: each replica has its own clock.
 	}
 }
 
@@ -528,8 +550,8 @@ func TestSummonLedgerUrgentRefusalsCountedOnce(t *testing.T) {
 				f.now = f.now.Add(time.Minute)
 				wantError(t, summonPost(t, f, keyedRemediation("rem-responder-2", "alert-2")), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
 				e := f.ledger()
-				if e.UrgentRefusals != int64(i) || e.LastUrgentRefusalAt == nil || !e.LastUrgentRefusalAt.Equal(f.now) {
-					t.Fatalf("refusal %d: count %d last %v", i, e.UrgentRefusals, e.LastUrgentRefusalAt)
+				if e.UrgentRefusals != int64(i) || e.LastUrgentRefusal == nil || !e.LastUrgentRefusal.Equal(f.now) {
+					t.Fatalf("refusal %d: count %d last %v", i, e.UrgentRefusals, e.LastUrgentRefusal)
 				}
 				if len(e.Charges) != 1 || len(f.summonedSessions()) != 1 {
 					t.Fatalf("refusal %d charged %+v or created", i, e.Charges)
@@ -771,7 +793,7 @@ func TestSummonSuffixesEndAtNinetyNine(t *testing.T) {
 func TestSummonLedgerKeepsUnknownFields(t *testing.T) {
 	cm := summonLedgerObject()
 	cm.Data = map[string]string{
-		ledgerTestKey:  `{"schema":"dev-env.summon-creates.v1","charges":[],"urgentRefusals":2,"pagedRefusals":1}`,
+		ledgerTestKey:  `{"schema":"dev-env.summon-creates.v1","clock":"2026-10-06T17:20:00Z","charges":[],"urgentRefusals":2,"lastUrgentRefusal":null,"pagedRefusals":1}`,
 		"other.caller": `{"schema":"dev-env.summon-creates.v1","charges":[]}`,
 	}
 	f := summonFixture(t, summonTestPolicy(), cm)

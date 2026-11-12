@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -20,23 +22,33 @@ import (
 
 // dispatchSummon is the part of a summoning create after the request is
 // checked against the policy (DESIGN-064 6.4 "Idempotency" and "Limits",
-// 5.9 "The create ledger"). It runs under the create lock, in this order:
+// 5.9 "The create ledger" and its correction of 2026-11-12). It runs under the
+// create lock, in this order:
 //
-//  1. The repeat. A key whose newest session of this caller is unfinished
-//     and has no terminal outcome returns that session with 200, or 409 when
-//     its mode, lane or requested name differ. Nothing is charged or written.
+//  1. The repeat. The newest of this caller's sessions of the key, by
+//     generation, if unfinished and with no terminal outcome, returns with 200,
+//     or 409 when its mode, lane or requested name differ. Nothing is charged
+//     or written. A generation that cannot be read is 503.
 //  2. The name: the requested one if free, else, for a re-fired key, the
-//     first free suffix -2 to -99. A name held by any other session is 409.
+//     first free suffix -2 to -99. A name held by any other session is 409,
+//     unless the key's dispatch already holds a charge, whose name it creates.
 //  3. The dispatch id, chosen before anything is written.
 //  4. The pool, until story 741's queues: 429 past it.
-//  5. The charge, committed in the ledger; 429 when the hour is full.
-//  6. The create, carrying the id. On AlreadyExists the API reads that
-//     session: the same id is this request's (200), any other takes the next
-//     suffix.
+//  5. The ledger write that names the id: a new charge (429 when the hour is
+//     full), an attempt mark or a re-charge. A charge of the id with another
+//     hash is 409, and a session of the id is returned with 200.
+//  6. The create of the charge's name, within summonCreateDeadline of that
+//     write, carrying the id and the generation. On AlreadyExists the API
+//     reads that session: the same id is this request's (200, or 409 if it is
+//     not this caller's or has another hash); any other is a name clash, and
+//     the charge is rebound to the next free suffix by one more ledger write
+//     before the next create.
 //
-// So every 422, 403 and 409 comes before the charge and spends nothing, and
-// no session is created before its charge is committed.
-func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *caller, req summonWire, entry *v1alpha1.CallerPolicySummonSession, sess *v1alpha1.AgentSession) (int, any, error) {
+// So every 422, 403 and 409 before step 5 spends nothing, and no session is
+// created unless a ledger write naming its id came first. A create refused
+// after its charge (no free name left, or the API server refusing the object)
+// is a charged failure, and its text says so.
+func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *caller, req summonWire, entry *v1alpha1.CallerPolicySummonSession, sess *v1alpha1.AgentSession, brief func(name string) string) (int, any, error) {
 	if s.Live == nil {
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "sessions cannot be read")
 	}
@@ -45,13 +57,19 @@ func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *c
 		return 0, nil, fromKubeError(err, "list sessions")
 	}
 	key := req.IdempotencyKey
+	hash := sess.Annotations[v1alpha1.AnnotationRequestHash]
 	var previous *v1alpha1.AgentSession
+	var generation int64
 	var mine map[types.UID]bool
 	if key != "" {
 		own := summonKeySessions(c, key, list.Items)
-		previous = newestSummonSession(c.parent, key, own)
+		var err error
+		previous, generation, err = newestSummonSession(own)
+		if err != nil {
+			return 0, nil, err
+		}
 		if previous != nil && summonLive(previous) {
-			if previous.Annotations[v1alpha1.AnnotationRequestHash] != sess.Annotations[v1alpha1.AnnotationRequestHash] {
+			if previous.Annotations[v1alpha1.AnnotationRequestHash] != hash {
 				return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
 					"idempotency key %q already started session %s with a different mode, lane or name", key, previous.Name)
 			}
@@ -63,23 +81,40 @@ func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *c
 			mine[it.UID] = true
 		}
 	}
-	names, err := summonNames(req.Name, key, list.Items, mine)
-	if err != nil {
-		return 0, nil, err
-	}
+	names, nameErr := summonNames(req.Name, key, list.Items, mine)
 
 	id := summonDispatchID(c.parent, key, previous)
 	if key == "" {
+		if nameErr != nil {
+			return 0, nil, nameErr
+		}
+		var err error
 		if id, err = newSummonDispatchID(); err != nil {
 			s.Log.Error(err, "summon dispatch id")
 			return 0, nil, internal("the dispatch id could not be drawn")
 		}
+	} else if nameErr != nil {
+		// A refused name spends nothing, unless this dispatch is already
+		// charged: then it creates the charge's name, not one of its own.
+		held, err := s.summonChargeHeld(ctx, c, id, hash)
+		if err != nil {
+			return 0, nil, err
+		}
+		if !held {
+			return 0, nil, nameErr
+		}
 	}
 	sess.Spec.Summon.DispatchID = id
-	// The longest name this create may take, so a later suffix cannot add a
-	// transport refusal after the charge.
+	if sess.Annotations == nil {
+		sess.Annotations = map[string]string{}
+	}
+	sess.Annotations[v1alpha1.AnnotationSummonGeneration] = strconv.FormatInt(generation+1, 10)
+	// The longest name this create may take, with its brief, so a later
+	// suffix cannot add a transport refusal after the charge.
+	candidates := summonNameSequence(req.Name)
 	preview := sess.DeepCopy()
-	preview.Name = names[len(names)-1]
+	preview.Name = candidates[len(candidates)-1]
+	preview.Spec.Prompt = brief(preview.Name)
 	if err := checkAgentd(preview); err != nil {
 		return 0, nil, err
 	}
@@ -98,45 +133,112 @@ func (s *Server) dispatchSummon(ctx context.Context, w http.ResponseWriter, c *c
 		return 0, nil, tooManyRequests("caller %s has %d unfinished summoned sessions in the %s pool, its limit; one must finish first (DESIGN-064 6.4)",
 			c.policy.Name, inPool, summonPoolName(entry))
 	}
-	result, err := s.chargeSummon(ctx, c, id, urgent, c.policy.Spec.Summon.Limits.CreatesPerHour)
+	first := ""
+	if len(names) > 0 {
+		first = names[0]
+	}
+	b, err := s.bindSummonCharge(ctx, c, id, hash, first, nameErr, urgent, c.policy.Spec.Summon.Limits.CreatesPerHour)
 	if err != nil {
 		return 0, nil, err
 	}
-	if result == summonHourFull {
+	switch b.result {
+	case summonNameRefused:
+		return 0, nil, nameErr
+	case summonHourFull:
 		return 0, nil, tooManyRequests("caller %s has made %d summoning creates in the last hour, its createsPerHour (DESIGN-064 5.9)",
 			c.policy.Name, c.policy.Spec.Summon.Limits.CreatesPerHour)
 	}
+	return s.createSummonCharged(ctx, w, c, req, sess, b, brief, candidates)
+}
 
-	for _, name := range names {
-		sess.Name = name
+// createSummonCharged creates the name a ledger write bound the dispatch to:
+// within summonCreateDeadline of that write, and once more if a NotFound
+// follows its AlreadyExists. A clash with another dispatch's session rebinds
+// the charge by one more ledger write, and the next create is of its name.
+func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter, c *caller, req summonWire, sess *v1alpha1.AgentSession, b summonBinding, brief func(string) string, candidates []string) (int, any, error) {
+	id := sess.Spec.Summon.DispatchID
+	hash := sess.Annotations[v1alpha1.AnnotationRequestHash]
+	retried := false
+	for {
+		switch b.result {
+		case summonSessionExists:
+			return s.summonExisting(w, c, req.IdempotencyKey, hash, b.existing)
+		case summonOtherRequest:
+			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
+				"idempotency key %q is already charged for a create with a different mode, lane or name (DESIGN-064 5.9)", req.IdempotencyKey)
+		case summonNoFreeName:
+			return 0, nil, summonChargedFailure(newError(http.StatusConflict, apiv1.CodeConflict,
+				"no free session name: %s and its suffixes to -%d are taken", req.Name, summonMaxSuffix))
+		case summonChargeGone:
+			return 0, nil, summonChargedFailure(newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
+				"the charge for this dispatch left the ledger during its create; no session was created"))
+		}
+		if s.summonMonotonic().Sub(b.written) > summonCreateDeadline {
+			return 0, nil, summonChargedFailure(newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
+				"the session create could not be issued within %s of the ledger write naming its dispatch id; no session was created", summonCreateDeadline))
+		}
+		sess.Name = b.name
 		sess.ResourceVersion = ""
+		sess.Spec.Prompt = brief(b.name)
 		err := s.Client.Create(ctx, sess, client.FieldValidation(metav1.FieldValidationStrict))
 		if err == nil {
 			s.Log.Info("session created", "session", sess.Name, "caller", c.String(), "repo", sess.Spec.Repo,
 				"agent", sess.Spec.Agent, "mode", sess.Spec.Mode, "model", sess.Spec.Model, "lane", sess.Spec.Lane,
-				"dispatchID", id, "charge", summonChargeLog(result))
+				"dispatchID", id, "generation", sess.Annotations[v1alpha1.AnnotationSummonGeneration], "charge", summonChargeLog(b.result))
 			w.Header().Set("Location", apiv1.SessionPath(sess.Name))
 			return http.StatusCreated, view(sess, false), nil
 		}
 		if !apierrors.IsAlreadyExists(err) {
 			// The charge stays: a spent slot of its hour. A keyed retry maps
 			// to the same id and is not charged again.
-			return 0, nil, fromKubeError(err, "create session")
+			return 0, nil, summonChargedFailure(fromKubeError(err, "create session"))
 		}
 		var held v1alpha1.AgentSession
-		if err := s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: name}, &held); err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
+		if err := s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: b.name}, &held); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return 0, nil, summonChargedFailure(fromKubeError(err, "session "+b.name))
 			}
-			return 0, nil, fromKubeError(err, "session "+name)
+			if retried {
+				return 0, nil, summonChargedFailure(newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
+					"session %s was reported as existing and then not found, twice; no session was created", b.name))
+			}
+			retried = true
+			continue
 		}
-		if held.Spec.Summon != nil && held.Spec.Summon.DispatchID == id && summonOwns(c, &held) {
-			w.Header().Set("Location", apiv1.SessionPath(held.Name))
-			return http.StatusOK, view(&held, false), nil
+		if held.Spec.Summon != nil && held.Spec.Summon.DispatchID == id {
+			return s.summonExisting(w, c, req.IdempotencyKey, hash, &held)
 		}
+		if b, err = s.rebindSummonCharge(ctx, c, id, hash, b.name, candidates); err != nil {
+			return 0, nil, summonChargedFailure(err)
+		}
+		retried = false
 	}
-	return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
-		"no free session name: %s and its suffixes to -%d are taken", req.Name, summonMaxSuffix)
+}
+
+// summonExisting answers for the session that already carries this
+// dispatch's id: 200 if it is this caller's and has this request's hash,
+// else 409.
+func (s *Server) summonExisting(w http.ResponseWriter, c *caller, key, hash string, held *v1alpha1.AgentSession) (int, any, error) {
+	if !summonOwns(c, held) || held.Annotations[v1alpha1.AnnotationRequestHash] != hash {
+		return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
+			"session %s carries this dispatch id for another caller or another mode, lane or name (idempotency key %q)", held.Name, key)
+	}
+	w.Header().Set("Location", apiv1.SessionPath(held.Name))
+	return http.StatusOK, view(held, false), nil
+}
+
+// summonChargedFailure marks a refusal made after the dispatch's charge was
+// written: the hour's slot is spent, and no refund is made, since another
+// replica may be using the same dispatch (DESIGN-064 5.9, the correction's
+// charged failures).
+func summonChargedFailure(err error) error {
+	var ae *apiError
+	if !errors.As(err, &ae) {
+		ae = internal("%v", err)
+	}
+	out := *ae
+	out.body.Message += "; the hour's slot was spent and the charge for this dispatch stays (DESIGN-064 5.9)"
+	return &out
 }
 
 // summonRequestHash is what a repeat of a key must match: mode, lane and the
@@ -175,37 +277,42 @@ func summonKeySessions(c *caller, key string, items []v1alpha1.AgentSession) []*
 	return out
 }
 
-// newestSummonSession is the newest of one key's sessions by creation time.
-// Two created in one second are ordered by their ids: a session whose id is
-// the hash over the other's UID came after it. The name decides the rest.
-func newestSummonSession(account, key string, own []*v1alpha1.AgentSession) *v1alpha1.AgentSession {
+// newestSummonSession is the newest of one key's sessions: the highest
+// generation (v1alpha1.AnnotationSummonGeneration; none counts as 0), and
+// its generation. Creation times and names do not order. A tie on the
+// highest cannot come from this code, which binds one dispatch id to one
+// name; it comes only from sessions without the annotation or a hand edit,
+// and goes to the greater UID, so every replica picks the same session and
+// so the same dispatch id (coordinator, answer to op758-fix1-q-1). A
+// generation that is not a non-negative integer is 503: nothing is charged
+// or created.
+func newestSummonSession(own []*v1alpha1.AgentSession) (*v1alpha1.AgentSession, int64, error) {
 	var best *v1alpha1.AgentSession
+	var bestGen int64
 	for _, it := range own {
-		if best == nil || summonNewer(account, key, it, best) {
-			best = it
+		g, err := summonGeneration(it)
+		if err != nil {
+			return nil, 0, err
+		}
+		if best == nil || g > bestGen || (g == bestGen && it.UID > best.UID) {
+			best, bestGen = it, g
 		}
 	}
-	return best
+	return best, bestGen, nil
 }
 
-func summonNewer(account, key string, a, b *v1alpha1.AgentSession) bool {
-	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
-		return b.CreationTimestamp.Before(&a.CreationTimestamp)
+// summonGeneration reads a session's generation: absent is 0.
+func summonGeneration(s *v1alpha1.AgentSession) (int64, error) {
+	v, ok := s.Annotations[v1alpha1.AnnotationSummonGeneration]
+	if !ok {
+		return 0, nil
 	}
-	if summonDispatchOf(a) == summonDispatchID(account, key, b) {
-		return true
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || v == "" || strings.Trim(v, "0123456789") != "" || n == math.MaxInt64 {
+		return 0, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
+			"session %s has a generation that is not a non-negative integer; nothing was charged or created (DESIGN-064 5.9)", s.Name)
 	}
-	if summonDispatchOf(b) == summonDispatchID(account, key, a) {
-		return false
-	}
-	return a.Name > b.Name
-}
-
-func summonDispatchOf(s *v1alpha1.AgentSession) string {
-	if s.Spec.Summon == nil {
-		return ""
-	}
-	return s.Spec.Summon.DispatchID
+	return n, nil
 }
 
 // summonLive is a session a repeat of its key returns: unfinished, and no
@@ -237,11 +344,7 @@ func summonNames(requested, key string, items []v1alpha1.AgentSession, mine map[
 	for i := range items {
 		held[items[i].Name] = &items[i]
 	}
-	all := make([]string, 0, summonMaxSuffix)
-	all = append(all, requested)
-	for i := 2; i <= summonMaxSuffix; i++ {
-		all = append(all, fmt.Sprintf("%s-%d", requested, i))
-	}
+	all := summonNameSequence(requested)
 	if h := held[requested]; h != nil {
 		if key == "" || !mine[h.UID] {
 			return nil, newError(http.StatusConflict, apiv1.CodeConflict,
@@ -257,10 +360,25 @@ func summonNames(requested, key string, items []v1alpha1.AgentSession, mine map[
 		"no free session name: %s and its suffixes to -%d are taken", requested, summonMaxSuffix)
 }
 
+// summonNameSequence is every name a create for requested may take, in
+// order: requested, then -2 to -99.
+func summonNameSequence(requested string) []string {
+	all := make([]string, 0, summonMaxSuffix)
+	all = append(all, requested)
+	for i := 2; i <= summonMaxSuffix; i++ {
+		all = append(all, fmt.Sprintf("%s-%d", requested, i))
+	}
+	return all
+}
+
 // summonPool counts the caller's unfinished summoned sessions in the entry's
 // pool, from an uncached list (DESIGN-064 6.4 "Limits", until story 741 adds
 // the queues): limits.escalations for the escalation entry, and
-// limits.concurrent for every other entry.
+// limits.concurrent for every other entry. It is not a reservation: each
+// replica counts under its own create lock, so replicas that each have a
+// create in flight can pass the same count. Until story 741, a pool can be
+// exceeded by at most the number of API replicas minus one (with two
+// replicas, one).
 func summonPool(c *caller, entry *v1alpha1.CallerPolicySummonSession, items []v1alpha1.AgentSession) (limit, n int, err error) {
 	limits := c.policy.Spec.Summon.Limits
 	escalation := entry.Lane == v1alpha1.LaneEscalation
@@ -292,8 +410,13 @@ func summonPoolName(entry *v1alpha1.CallerPolicySummonSession) string {
 }
 
 func summonChargeLog(r summonChargeResult) string {
-	if r == summonChargedBefore {
-		return "already charged"
+	switch r {
+	case summonMarked:
+		return "already charged, marked"
+	case summonRecharged:
+		return "charged again"
+	case summonRebound:
+		return "rebound"
 	}
 	return "charged"
 }
