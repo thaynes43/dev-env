@@ -37,18 +37,21 @@ func Terminal(o *v1alpha1.OutcomeStatus) bool {
 // the two cannot drift. A Queued session carries spec.summon, is not admitted
 // (no status.summon.admittedAt, and granted is false: the create ledger's
 // reserved key holds no grant for its name and UID), is not closed (no
-// status.summon.closed and no terminal outcome), and is neither suspended
-// nor being deleted. An admitted session, a granted one included, is not
-// Queued; a closed one is neither. A suspended or deleting session that was
-// never admitted is not Queued either: the leader does not admit it, and story
-// 779 decides what that stop becomes.
+// status.summon.closed and no terminal outcome), and carries no stop: it is
+// neither suspended nor being deleted, and has no recorded reap (the
+// annotation reaped-by, present with any value, which the API's reap route
+// writes once and nothing removes). An admitted session, a granted one
+// included, is not Queued; a closed one is neither. A stopped session that
+// was never admitted is not Queued either: the leader does not admit it, the
+// API does not count it, and the reconciler closes it by ruling D1 (OP779).
 func Queued(s *v1alpha1.AgentSession, granted bool) bool {
 	if s == nil || s.Spec.Summon == nil || granted {
 		return false
 	}
 	st := s.Status.Summon
+	_, reaped := s.Annotations[v1alpha1.AnnotationReapedBy]
 	return (st == nil || st.AdmittedAt == nil && st.Closed == nil) && !Terminal(s.Status.Outcome) &&
-		s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended && s.DeletionTimestamp.IsZero()
+		s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended && s.DeletionTimestamp.IsZero() && !reaped
 }
 
 // Decision is selected before the write. Source and Reason are controlled words;

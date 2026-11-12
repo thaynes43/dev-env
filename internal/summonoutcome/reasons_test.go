@@ -11,8 +11,10 @@ import (
 
 // Deferred inputs already occupy their design row; their future producers
 // cannot displace a higher-priority durable input or add another ordering.
+// Ruling D1 (item 741 comment 7355, OP779): a recorded stop sits above every
+// row but the two start failures; the old last row is gone.
 func TestFirstReasonOrder(t *testing.T) {
-	in := Inputs{TaskResult: &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultTimedOut}, AgentStatus: "exited", NoUsableModel: true, PodTerminated: true, SessionLost: true, NeverStarted: true, Deadline: true, HeartbeatLost: true, Stale: true, EscalationBound: true, HoldExpired: true, QuotaHoldExpired: true, Suspended: true}
+	in := Inputs{TaskResult: &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultTimedOut}, AgentStatus: "exited", NoUsableModel: true, PodTerminated: true, SessionLost: true, NeverStarted: true, Deadline: true, HeartbeatLost: true, Stale: true, EscalationBound: true, HoldExpired: true, QuotaHoldExpired: true}
 	for _, step := range []struct {
 		want   string
 		remove func()
@@ -31,7 +33,6 @@ func TestFirstReasonOrder(t *testing.T) {
 		{ReasonEscalationBound, func() { in.EscalationBound = false }},
 		{ReasonQuotaHoldExpired, func() { in.QuotaHoldExpired = false }},
 		{ReasonHoldExpired, func() { in.HoldExpired = false }},
-		{ReasonSuspendedUnreported, func() { in.Suspended = false }},
 	} {
 		if got := FirstReason(in); got != step.want {
 			t.Fatalf("reason %q, want %q", got, step.want)
@@ -40,6 +41,60 @@ func TestFirstReasonOrder(t *testing.T) {
 	}
 	if got := FirstReason(in); got != "" {
 		t.Fatalf("no input returned %q", got)
+	}
+}
+
+// Ruling D1, row by row: a stop recorded before the close wins over rows 1
+// and 2 and 5 onward; rows 3 and 4, the start failures, keep winning. A
+// person's stop is reason stopped; any other stop is suspended-unreported.
+func TestFirstReasonStopRows(t *testing.T) {
+	rows := []struct {
+		name  string
+		in    Inputs
+		start string // the start failure that keeps winning, or ""
+	}{
+		{"task-result", Inputs{TaskResult: &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultSucceeded}}, ""},
+		{"exited", Inputs{AgentStatus: "exited"}, ""},
+		{"no-usable-model", Inputs{NoUsableModel: true}, ReasonNoUsableModel},
+		{"agent-failed", Inputs{AgentStatus: "failed"}, ReasonAgentFailed},
+		{"interrupted", Inputs{AgentStatus: "interrupted"}, ""},
+		{"pod-terminated", Inputs{PodTerminated: true}, ""},
+		{"session-lost", Inputs{SessionLost: true}, ""},
+		{"never-started", Inputs{NeverStarted: true}, ""},
+		{"deadline", Inputs{Deadline: true}, ""},
+		{"heartbeat-lost", Inputs{HeartbeatLost: true}, ""},
+		{"stale", Inputs{Stale: true}, ""},
+		{"escalation-bound", Inputs{EscalationBound: true}, ""},
+		{"not-charged", Inputs{NotCharged: true}, ""},
+		{"quota-hold-expired", Inputs{QuotaHoldExpired: true}, ""},
+		{"hold-expired", Inputs{HoldExpired: true}, ""},
+		{"nothing", Inputs{}, ""},
+	}
+	for _, row := range rows {
+		for _, stop := range []struct {
+			name string
+			set  func(*Inputs)
+			want string
+		}{
+			{"person", func(in *Inputs) { in.StoppedByPerson = true }, ReasonStopped},
+			{"other", func(in *Inputs) { in.Suspended = true }, ReasonSuspendedUnreported},
+			{"both", func(in *Inputs) { in.StoppedByPerson, in.Suspended = true, true }, ReasonStopped},
+		} {
+			t.Run(row.name+"/"+stop.name, func(t *testing.T) {
+				in := row.in
+				stop.set(&in)
+				want := stop.want
+				if row.start != "" {
+					want = row.start
+				}
+				if got := FirstReason(in); got != want {
+					t.Fatalf("reason %q, want %q", got, want)
+				}
+			})
+		}
+	}
+	if len(ReasonStopped) > 32 {
+		t.Fatal("closed.reason is at most 32 characters")
 	}
 }
 
@@ -65,7 +120,7 @@ func TestEscalationNameBound(t *testing.T) {
 // and watchdog rows and before the hold rows, and no other input displaces a
 // row above it.
 func TestNotChargedRow(t *testing.T) {
-	if got := FirstReason(Inputs{NotCharged: true, HoldExpired: true, QuotaHoldExpired: true, Suspended: true}); got != ReasonNotCharged {
+	if got := FirstReason(Inputs{NotCharged: true, HoldExpired: true, QuotaHoldExpired: true}); got != ReasonNotCharged {
 		t.Fatalf("reason %q", got)
 	}
 	if got := FirstReason(Inputs{NotCharged: true, EscalationBound: true}); got != ReasonEscalationBound {

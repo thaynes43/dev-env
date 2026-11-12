@@ -16,8 +16,18 @@ import (
 
 // reconcileSummonOutcome runs only in the leader's reconciler, before lifecycle
 // work can reclaim a terminal pod. Every decision uses an uncached Session and,
-// when needed, an owned Pod. A missing pod alone proves no loss in slice a.
+// when needed, an owned Pod. A missing pod alone proves no loss here; the
+// leader's watchdog (summonWatch) adds the latch's loss and the time bounds.
 func (r *Reconciler) reconcileSummonOutcome(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
+	return r.closeSummon(ctx, s, false)
+}
+
+// closeSummon is the one guaranteed-close step (DESIGN-064 6.6). The
+// reconciler calls it with watchdog false; the leader's admission pass calls
+// it with watchdog true, which adds 6.7's watchdog inputs on the leader's
+// clock. Both feed summonoutcome.FirstReason, the one ordering, and write
+// through summonoutcome.Write, the one terminal transition.
+func (r *Reconciler) closeSummon(ctx context.Context, s *v1alpha1.AgentSession, watchdog bool) (bool, error) {
 	if s.Spec.Caller == "" || summonoutcome.Terminal(s.Status.Outcome) {
 		return false, nil
 	}
@@ -35,10 +45,9 @@ func (r *Reconciler) reconcileSummonOutcome(ctx context.Context, s *v1alpha1.Age
 	if summonoutcome.Terminal(s.Status.Outcome) {
 		return false, nil
 	}
-	in := summonoutcome.Inputs{
-		SessionDeleting:  !s.DeletionTimestamp.IsZero(),
-		SessionSuspended: s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended,
-	}
+	// Ruling D1: a recorded stop, attributed to a person or not.
+	in := summonoutcome.Inputs{}
+	in.StoppedByPerson, in.Suspended = summonStop(s)
 	if s.Spec.Mode == v1alpha1.ModeTask {
 		in.TaskResult = s.Status.TaskResult
 		if in.TaskResult == nil {
@@ -63,8 +72,15 @@ func (r *Reconciler) reconcileSummonOutcome(ctx context.Context, s *v1alpha1.Age
 		}
 		reason = summonoutcome.FirstReason(in)
 	}
-	// OP741 supplies admission/latch/deadline/watchdog/hold/suspend evidence;
-	// OP743 supplies no-usable-model. Feed them into Inputs above, retaining
+	if reason == "" && watchdog {
+		// The watchdog's rows all sit below the rows above, so adding them
+		// only when nothing above holds gives FirstReason's own answer.
+		if err := r.summonWatchdogInputs(ctx, s, &in); err != nil {
+			return false, err
+		}
+		reason = summonoutcome.FirstReason(in)
+	}
+	// OP743 supplies no-usable-model. Feed it into Inputs above, retaining
 	// summonoutcome.FirstReason as the one table. No heartbeat age hides an input.
 	next := summonoutcome.Decision{}
 	if reason != "" {
@@ -75,7 +91,16 @@ func (r *Reconciler) reconcileSummonOutcome(ctx context.Context, s *v1alpha1.Age
 		// A session never admitted never had a volume or a pod, and the gate
 		// builds none once it is closed: its close releases at once (OP777).
 		neverAdmitted := s.Status.Summon == nil || s.Status.Summon.AdmittedAt == nil
-		next = summonoutcome.Decision{State: v1alpha1.OutcomeState(s.Spec.Summon.OnUnreported), Note: "unreported: " + reason, Source: summonoutcome.Unreported, Reason: reason, Released: neverAdmitted}
+		state, note := v1alpha1.OutcomeState(s.Spec.Summon.OnUnreported), "unreported: "+reason
+		switch reason {
+		case summonoutcome.ReasonStopped:
+			// Ruling D1: a person's stop closes failed, whatever onUnreported
+			// says, so a remediation a person stopped files nothing.
+			state, note = v1alpha1.OutcomeFailed, "unreported: stopped by a person"
+		case summonoutcome.ReasonEscalationBound:
+			state, note = v1alpha1.OutcomeFailed, "unreported: escalation-bound: idle for 72 hours"
+		}
+		next = summonoutcome.Decision{State: state, Note: note, Source: summonoutcome.Unreported, Reason: reason, Released: neverAdmitted}
 		if next.State != v1alpha1.OutcomeFailed && next.State != v1alpha1.OutcomeEscalated {
 			log.FromContext(ctx).Error(nil, "summoned session has an invalid onUnreported snapshot", "session", s.Name)
 			return false, nil
@@ -98,6 +123,9 @@ func (r *Reconciler) reconcileSummonOutcome(ctx context.Context, s *v1alpha1.Age
 	}
 	if changed && err == nil && summonoutcome.Terminal(s.Status.Outcome) {
 		// The close may free a lane or a slot, now or at its release.
+		if watchdog {
+			log.FromContext(ctx).Info("the watchdog closed a summoned session", "session", s.Name, "caller", s.Spec.Caller, "lane", s.Spec.Lane, "reason", reason)
+		}
 		r.nudgeSummonAdmission()
 	}
 	return changed, err

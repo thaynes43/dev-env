@@ -507,8 +507,9 @@ func (s *Server) withUsageRollup(ctx context.Context, sess *v1alpha1.AgentSessio
 	return v
 }
 
-// reapSession serves DELETE /v1/sessions/{name}: it deletes the AgentSession,
-// which is a reap (D-45). The operator's rescue finalizer holds the session, its
+// reapSession serves DELETE /v1/sessions/{name}: it deletes an ordinary
+// AgentSession, or records a summoned reap for the leader to close and delete
+// (DESIGN-064 6.6, OP779 fix round 1). The rescue finalizer holds the session, its
 // pod and its volume until the rescue; there is no way to skip it here
 // (DESIGN-001 3.4). Any caller the API serves may reap any session, as in v1:
 // nothing is lost, because the rescue comes first.
@@ -549,6 +550,15 @@ func (s *Server) reapSession(ctx context.Context, _ http.ResponseWriter, r *http
 		return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
 			"session %s lacks the %s finalizer, so a delete could lose its pod and volume unrescued; the operator adds it on its next reconcile", sess.Name, controller.Finalizer)
 	}
+	if sess.Spec.Caller != "" {
+		// The recorded reap is the stop. Only the leader may delete after
+		// retaining the outcome, even before the first reconcile/finalizer.
+		if err := s.recordReapedBy(ctx, &sess, c); err != nil {
+			return 0, nil, err
+		}
+		s.Log.Info("summoned session reap accepted", "session", sess.Name, "caller", c.String())
+		return http.StatusAccepted, view(&sess, false), nil
+	}
 	uid := sess.UID
 	err = s.Client.Delete(ctx, &sess,
 		client.PropagationPolicy(metav1.DeletePropagationBackground),
@@ -566,6 +576,42 @@ func (s *Server) reapSession(ctx context.Context, _ http.ResponseWriter, r *http
 	v := view(&sess, false)
 	v.Reaping = true
 	return http.StatusAccepted, v, nil
+}
+
+// recordReapedBy writes the reap's caller on a summoned session, under the
+// optimistic lock (OP779 fix round 1). The marker is the stop: the leader
+// closes the outcome before deleting. Among API routes only this authorized
+// route writes the annotation, using the API's own name for the caller.
+// A conflict reads again; an existing marker or deletion is never changed.
+// On return sess is the session as stored.
+func (s *Server) recordReapedBy(ctx context.Context, sess *v1alpha1.AgentSession, c *caller) error {
+	for range 5 {
+		_, recorded := sess.Annotations[v1alpha1.AnnotationReapedBy]
+		if !sess.DeletionTimestamp.IsZero() || recorded {
+			return nil
+		}
+		orig := sess.DeepCopy()
+		if sess.Annotations == nil {
+			sess.Annotations = map[string]string{}
+		}
+		sess.Annotations[v1alpha1.AnnotationReapedBy] = c.String()
+		err := s.Client.Patch(ctx, sess, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
+		if err == nil {
+			return nil
+		}
+		if !apierrors.IsConflict(err) {
+			return fromKubeError(err, "session "+sess.Name)
+		}
+		uid := orig.UID
+		*sess = v1alpha1.AgentSession{}
+		if err := s.Live.Get(ctx, client.ObjectKeyFromObject(orig), sess); err != nil {
+			return fromKubeError(err, "session "+orig.Name)
+		}
+		if sess.UID != uid {
+			return newError(http.StatusConflict, apiv1.CodeConflict, "session %s was replaced; try again", orig.Name)
+		}
+	}
+	return newError(http.StatusConflict, apiv1.CodeConflict, "session %s kept changing; try again", sess.Name)
 }
 
 // refuseRetainedExecutor refuses a caller that is a retained executor: a

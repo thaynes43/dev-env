@@ -355,7 +355,7 @@ func (a *app) coordinatorStop(ctx context.Context, args []string) error {
 	if cmd.c.output == outputJSON {
 		return a.printJSON(s)
 	}
-	a.outf("reaping %s: %s\n", s.Name, reapText(s))
+	a.outf("%s %s: %s\n", reapAction(s), s.Name, reapText(s))
 	return nil
 }
 

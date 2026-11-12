@@ -21,7 +21,8 @@ import (
 // resume marks the last rescue superseded and starts a new pod on the volume,
 // whose agentd resumes the conversation (D-58). Any caller may suspend or
 // resume any session, as any caller may reap one (D-46): no work is lost
-// either way.
+// either way. The one exception: a summoned session (spec.caller) is never
+// resumed, by anyone (DESIGN-064 5.9, N3, OP779).
 
 func (s *Server) suspendSession(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	return s.setOperatingMode(ctx, r, c, v1alpha1.OperatingModeSuspended)
@@ -54,6 +55,13 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 		}
 		if err := s.authorizeChildMutation(ctx, &sess, c); err != nil {
 			return 0, nil, err
+		}
+		if mode == v1alpha1.OperatingModeRunning && sess.Spec.Caller != "" {
+			// N3 (DESIGN-064 5.9, OP779): nobody resumes a summoned session, a
+			// person included. A lost or stopped one is closed, never resumed;
+			// a later create starts the work again.
+			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
+				"session %s is a summoned session: it is never resumed, by anyone (DESIGN-064 5.9, N3); its caller creates a new one", sess.Name)
 		}
 		if mode == v1alpha1.OperatingModeRunning {
 			if err := s.checkSessionTaskBudget(ctx, &sess); err != nil {

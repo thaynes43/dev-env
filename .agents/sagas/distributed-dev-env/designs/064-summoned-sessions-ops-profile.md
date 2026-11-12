@@ -1025,7 +1025,10 @@ this governs.
    outcome), and neither suspended nor being deleted. So a suspended or
    deleting session that was never admitted is in no queue and no pool until
    #741 slice c decides what that stop becomes; a summoning caller can do
-   neither. The API decodes `_admission` read only and still carries it
+   neither. Slice c (story 779, 6.6's correction of this date) adds the
+   recorded reap: a session that carries `reaped-by` is not Queued either,
+   for the leader and for the API's count, through this one predicate. The
+   API decodes `_admission` read only and still carries it
    byte for byte. A present key that cannot be decoded gives 503 with no
    write on a write that needs the count; a create already under way still
    makes its own mark.
@@ -1502,6 +1505,113 @@ terminal state and note returns 200 only when `status.summon.closed.source` is
 equal to the guaranteed close's own write. No caller cutover (746, 747, 748,
 610) or story 768 filing is enabled before story 741's latch is installed.
 
+**Correction, 2026-11-12 (story 779, slice c of #741; ruling D1 on item 741,
+comment 7355; written by the story's worker, not a ruling by Tom).** The text
+and the correction above stay; where they differ, this governs.
+
+- *The stop rows replace row 13 and the skip of rows 5 and 6.* A reap
+  (`deletionTimestamp`) or a suspend (`spec.operatingMode: Suspended`)
+  recorded before the close wins over every row except `no-usable-model` and
+  `agent-failed`, the start failures, which keep winning. A stop made by a
+  **person** closes the session `failed`, whatever `onUnreported` says, reason
+  `stopped`, note `unreported: stopped by a person`, with no pending filing.
+  Any other stop (another session, a client or any account that is not a
+  person, a change of `operatingMode` or a delete made past the API, and the
+  idle timer's suspend) closes it by its `onUnreported`, reason
+  `suspended-unreported`, so a remediation still escalates. One table holds
+  both: `summonoutcome.FirstReason`.
+- *Who stopped it.* A suspend is attributed by `suspended-by`, which the API
+  writes with its own name for the caller (`human/<namespace>/<name>` for
+  Tom). A reap had no attribution, so the API's reap route now writes the
+  annotation `dev-env.haynesops.com/reaped-by` the same way, under the
+  optimistic lock, just before its delete, for a session with `spec.caller`
+  only. No route lets a session write either annotation, and sessions have
+  no RBAC on AgentSessions. A delete or a mode change made past the API has
+  neither and is unattributed. A reap whose delete fails after the annotation
+  landed leaves it on the live session; a later unattributed delete then
+  counts as that caller's (a stated limit). A reaped session's close is
+  written before its finalizer lifts: the close is the first step of
+  `Reconcile`.
+- *Watchdog rows* (6.7). `session-lost` is read for a task from the latch's
+  `status.privateHistory.lastExecutor` (gone or another UID by an uncached
+  read); a remote session's comes with slice d's latch. `never-started`
+  needs the outcome still `pending` and no heartbeat ever accepted
+  (`status.agent.lastHeartbeat` unset). `stale` counts from the latest of
+  `admittedAt`, `status.agent.lastActivity` and `status.outcome.at`;
+  `escalation-bound` from the later of `admittedAt` and `lastActivity`, and
+  closes `failed` with the note `unreported: escalation-bound: idle for 72
+  hours`. `heartbeat-lost` needs a heartbeat older than 10 minutes and the
+  session's own pod by an uncached read. `hold-expired` counts `maxHold` from
+  the creation time, in the leader's pass, for a Queued session that holds no
+  grant; `quota-hold-expired` stays story 743's.
+- *The operator's suspend frees a held lane* (item 779 comment 7377, ruling
+  D3, coordinator answer op779-q-1). After an operator close of an admitted
+  session whose release waits for its pod, the operator suspends it with
+  `suspended-by: summon-close`. A remote session's pod is rescued and
+  deleted as on any suspend. A task's private executor is never deleted by
+  a suspend; for a closed, unreleased, suspended summoned task the private
+  executor stop of DESIGN-025 4 applies, the kubelet ends the pod, its
+  terminal record is written, and release accepts a recorded executor in a
+  terminal phase with that record (5.9). The pod object and the volume stay.
+  A recorded pod that is never scheduled has no start time and cannot be
+  stopped: its session is closed but its lane holds until it schedules. A
+  reap's stop has the same limit (not tested further).
+
+**Correction, 2026-11-12: story 779 fix round 1, coordinator rulings in PR
+1095 comment 6832687441; not a ruling by Tom.** This supersedes the reap
+protocol and heartbeat timing in the preceding corrections.
+
+- For a session with `spec.caller`, the API's authorized reap records
+  `dev-env.haynesops.com/reaped-by` under the optimistic lock and returns
+  202 with the Session. It does not delete. Only an absent annotation on a
+  Session not being deleted may be written; the first recorded reap wins,
+  including against another caller. A recorded reap is itself the stop,
+  whether or not `deletionTimestamp` is set. The person's stop and other
+  stop rows remain D1's. Suspend attribution is unchanged.
+- After the close step, the leader deletes a marked Session only once its
+  outcome is terminal, with UID and resourceVersion preconditions. The
+  existing finalizer path then rescues and cleans up. No finalizer is added
+  at create. Even a reap immediately after create stores the close before
+  deletion. A delete made past the API before the first reconcile can still
+  remove the object without a close; only an operator-tier Kubernetes
+  identity can take that action. The annotations do not protect against a
+  privileged Kubernetes writer. The API derives caller attribution, and
+  the operator writes its own non-person suspend markers (`idle-timer`,
+  terminal task reclaim, `summon-close`).
+- A recorded reap whose close cannot be written stays recorded and is not
+  deleted by this protocol. An invalid `onUnreported` snapshot is already
+  refused by the CRD; this round adds no recovery path for it. Story 768
+  still owns keeping a pending filing past removal of its Session.
+- `never-started` and `heartbeat-lost` are judged only after ten minutes
+  since the leader's first admission pass in this process, recorded once
+  on the Reconciler using its own clock. A new leader starts its own ten
+  minutes. `deadline`, `session-lost`, `stale`, `escalation-bound` and
+  `hold-expired` retain their durable bounds.
+- A readable grants document with no grant for a Queued Session allows its
+  `maxHold` to be judged even if its caller's ledger entry is unreadable.
+  That unreadable entry still blocks `not-charged` and admission for the
+  caller. Once readable again, ordinary charge pruning applies.
+
+**Correction, 2026-11-12: story 779 fix round 2, coordinator rulings in PR
+1095 comment 6833983288; not a ruling by Tom.** This closes the admission
+gap in the recorded-reap protocol above.
+
+- A Session carrying `reaped-by`, even with an empty value, leaves the
+  leader's queue at once. For a never-admitted session with that marker,
+  the admission pass writes no close, hold condition, page, new grant or
+  `admittedAt`. An existing grant continues to reserve its lane and pool
+  slot until the reconciler's close releases it. Only `closeSummon` and
+  `FirstReason` decide its close; the Queued loop adds no second ordering
+  of the stop rows.
+- When the leader's delete fails with an error other than a conflict or
+  not-found, `Reconcile` still runs the release and suspend step, then
+  returns the delete error. A failing delete does not itself hold the
+  lane. The existing safe-release evidence remains required; the operator
+  still suspends a closed session whose release waits for its pod.
+- An ordinary private task or remote session carrying the marker remains
+  outside this protocol: it gets no summoned Session delete or other new
+  lifecycle change.
+
 **The route and the verb.** `POST /v1/sessions/{name}/outcome`, body
 `{"state": "working"|"done"|"failed"|"escalate", "note": "..."}`. Only the
 session itself may call it: a session caller whose pod-bound token resolves
@@ -1686,6 +1796,16 @@ line 102). `docs/workflow-guide.md` gets a section on summoned sessions, and
 
 ### 6.7 OP741: lanes, holds, the latch and the watchdog
 
+**Correction, 2026-11-12 (story 779, slice c of #741; written by the
+story's worker, not a ruling by Tom).** The watchdog runs in the leader's
+admission pass (every 60 seconds, the operator's clock), not a separate
+runnable; its rows and the stop rows are 6.6's correction of this date. A
+Queued escalation's held event and a remote escalation's reminder are
+recorded once each in `status.summon.pages[]` (ruling D9; 6.8's correction).
+Nobody resumes a summoned session: the resume route answers 409 for every
+session with `spec.caller`, and a summoning caller has no lifecycle route
+(403). The text below stays; where it differs, this governs.
+
 All of this runs in the operator leader, behind a new default-off flag
 (for example `--enable-summoned-lanes`). Its accounting is 5.9's.
 
@@ -1832,6 +1952,21 @@ lifecycle events, which never stand in for a terminal event.
 | `escalation-abandoned` | a remediation's escalation was still Pending 24 hours after the remediation closed, and is given up: says it was never filed and why (6.6, N4) |
 | `overflow` | a caller's urgent creates were refused, past `queuedUrgent` or past `createsPerHour` (5.9, N6, R1): at most one per caller per hour, carrying the caller and the number of refusals not yet in an `overflow` page |
 | `static-token-rejected` | a summoned task's agent ended with a rejected login on the static token (below); at most once a day; a credential alarm beside the session's terminal event, never instead of it |
+
+**Correction, 2026-11-12 (story 779, slice c of #741; rulings D1 and D9 on
+item 741; written by the story's worker, not a ruling by Tom).** The text
+below stays; where it differs, this governs. Story 779 adds
+`status.summon.pages[]` in this shape, `{event, at}`, at most 8 entries,
+none ever removed or changed, and writes only the lifecycle events
+`escalation-held` and `escalation-reminder`, once each per session; the
+schema's event enum holds those two, and story 742 adds the terminal events,
+the other lifecycle events and the keeper. Reason `stopped` (a person's
+reap or suspend, 6.6's correction) gets its own row, before every other
+`failed` row, in every lane: `any lane | failed | unreported | stopped |
+digest`. It never pages and never files: Tom stopped the work himself. This
+is the plan's option C for D1, narrowed by the ruling to a person's stop.
+`suspended-unreported` keeps its rows: a remediation `escalated` (its filing
+pages), any other lane `failed`.
 
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row

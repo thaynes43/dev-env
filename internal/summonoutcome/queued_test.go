@@ -38,6 +38,15 @@ func TestQueued(t *testing.T) {
 		}, false, false},
 		{"suspended", func(s *v1alpha1.AgentSession) { s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended }, false, false},
 		{"deleting", func(s *v1alpha1.AgentSession) { s.DeletionTimestamp = &at }, false, false},
+		{"reap recorded by a person", func(s *v1alpha1.AgentSession) {
+			s.Annotations = map[string]string{v1alpha1.AnnotationReapedBy: "human/dev-env-system/dev-env-human"}
+		}, false, false},
+		{"reap recorded by a session", func(s *v1alpha1.AgentSession) {
+			s.Annotations = map[string]string{v1alpha1.AnnotationReapedBy: "session/dev-agents/worker"}
+		}, false, false},
+		{"reap recorded with an empty value", func(s *v1alpha1.AgentSession) {
+			s.Annotations = map[string]string{v1alpha1.AnnotationReapedBy: ""}
+		}, false, false},
 		{"not summoned", func(s *v1alpha1.AgentSession) { s.Spec.Summon = nil }, false, false},
 	}
 	for _, tc := range cases {

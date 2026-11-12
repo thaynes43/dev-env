@@ -275,6 +275,10 @@ func TestSummonPendingFirstSpawnHoldsUntilPodGone(t *testing.T) {
 	for _, state := range []string{protocol.AgentBusy, protocol.AgentInterrupted, protocol.AgentIdle, protocol.AgentWaiting, protocol.AgentExited} {
 		t.Run(state, func(t *testing.T) {
 			w, a, b := admissionPair(t, "lane")
+			// OP779: the 20 minutes below would pass b's 20m maxHold, and the
+			// hold bound would close it hold-expired; this proof is about a's
+			// release, so b waits without one.
+			b.Spec.Summon.MaxHold = "24h"
 			w.queue(a, b)
 			w.pass()
 			w.reconcile(a.Name)

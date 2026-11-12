@@ -181,65 +181,8 @@ func TestSummonOutcomeDerivedTaskResultClosesImmediately(t *testing.T) {
 	}
 }
 
-func TestSummonOutcomeOperatorStopSkipsCrashInputs(t *testing.T) {
-	for _, stop := range []string{"deleting", "suspended"} {
-		for _, input := range []string{"interrupted", "pod", "task-result", "exited", "failed"} {
-			t.Run(stop+"/"+input, func(t *testing.T) {
-				c, r, s, p := summonOutcomeFixture(t)
-				if stop == "suspended" {
-					s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
-				} else {
-					s.Finalizers = []string{Finalizer}
-				}
-				if err := c.Update(context.Background(), s); err != nil {
-					t.Fatal(err)
-				}
-				if stop == "deleting" {
-					if err := c.Delete(context.Background(), s); err != nil {
-						t.Fatal(err)
-					}
-					if err := c.Get(context.Background(), client.ObjectKeyFromObject(s), s); err != nil {
-						t.Fatal(err)
-					}
-				}
-				s.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeRunning}
-				s.Status.Agent = &v1alpha1.AgentStatus{Status: input}
-				wantReason := ""
-				switch input {
-				case "pod":
-					s.Status.Agent.Status = "busy"
-					p.Status.Phase = corev1.PodFailed
-					if err := c.Status().Update(context.Background(), p); err != nil {
-						t.Fatal(err)
-					}
-				case "task-result":
-					s.Status.TaskResult = &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultTimedOut}
-					wantReason = "timed-out"
-				case "exited", "failed":
-					wantReason = "agent-" + input
-				}
-				if err := c.Status().Update(context.Background(), s); err != nil {
-					t.Fatal(err)
-				}
-				before := s.Status.DeepCopy()
-				changed, err := r.reconcileSummonOutcome(context.Background(), s)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := c.Get(context.Background(), client.ObjectKeyFromObject(s), s); err != nil {
-					t.Fatal(err)
-				}
-				if wantReason == "" {
-					if changed || !reflect.DeepEqual(before, &s.Status) {
-						t.Fatal("operator stop closed or changed the session through a crash input")
-					}
-				} else if !changed || s.Status.Summon == nil || s.Status.Summon.Closed == nil || s.Status.Summon.Closed.Reason != wantReason {
-					t.Fatalf("operator stop suppressed an unchanged row: %+v", s.Status)
-				}
-			})
-		}
-	}
-}
+// TestSummonOutcomeOperatorStopSkipsCrashInputs (slice a's partial skip of
+// rows 5 and 6) is replaced by ruling D1's TestSummonStopRowByRow (OP779).
 
 func TestSummonOutcomeInvalidSnapshotLeavesLifecycleOpen(t *testing.T) {
 	for _, invalid := range []string{"missing", "invalid"} {

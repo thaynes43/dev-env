@@ -289,6 +289,11 @@ var guardedCalls = []struct {
 	// after its own guard, from the one caller that read it uncached.
 	{"Delete", "deleteCleanedTaskSession", "taskSessionRemovalAllowed"},
 	{"deleteCleanedTaskSession", "removeCleanedTaskSession", "taskSessionRemovalAllowed"},
+	// OP779 fix round 1: the leader completes the API's recorded summoned
+	// reap after the outcome step. Only this terminal Session delete is new;
+	// every pod, volume and finalizer still goes through its existing guard.
+	{"Delete", "reconcileSummonReap", "Terminal"},
+	{"reconcileSummonReap", "Reconcile", "reconcileSummonOutcome"},
 	// DESIGN-054's releaser: the scheduled-work finalizer, and only it, lifted
 	// after its own guard, from the one caller that recorded the occurrence's
 	// outcome or proved there is none to record
