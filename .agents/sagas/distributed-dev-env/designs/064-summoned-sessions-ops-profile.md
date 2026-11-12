@@ -1968,6 +1968,63 @@ is the plan's option C for D1, narrowed by the ruling to a person's stop.
 `suspended-unreported` keeps its rows: a remediation `escalated` (its filing
 pages), any other lane `failed`.
 
+**Correction, 2026-11-12: story 782, coordinator rulings on item 742 comment
+7457; not a ruling by Tom.** The text and the correction above stay; where
+they differ, this governs. Two answers the coordinator gave this story's
+worker (notes op782-q-1 and op782-q-2, also not Tom's) are folded in.
+
+- *Q1, the terminal event is derived, not stored.* No terminal event is
+  written to `status.summon.pages[]` or anywhere on the Session. The keeper
+  derives `failed`, `lost`, `escalated` or the digest from the close record
+  (`status.summon.closed` with the lane and the outcome's state) through one
+  pure table function, `summonoutcome.TerminalPage`
+  (`internal/summonoutcome/pages.go`). This replaces "the operator records each
+  page event" above for terminal events, and the part of ruling D9 (item 741
+  comment 7355) that said story 742 adds the terminal events to `pages[]`.
+  Lifecycle events stay in `pages[]`. The table's rows are exclusive, so the
+  key (session UID and event) never sees two terminal events for a session.
+- *Q2, the keeper's read is bounded by a label.* The API's summoning create
+  sets the label `dev-env.haynesops.com/summoned=true`, and no other create
+  path does. The keeper leader lists AgentSessions by that selector, 500 a
+  page and at most 20 pages, every 60 seconds, and still requires
+  `spec.caller`; a list that does not finish sends nothing. A session without
+  the label is never paged; only an operator-tier writer can remove it (a
+  stated limit). The keeper's new RBAC is `list` on agentsessions in the
+  session namespace; it needs no `get` for this.
+- *Q4, a dated row.* `curation, upgrade, escalation | failed | unreported |
+  not-charged | failed`: a platform fault. In lane remediation `not-charged`
+  closes `escalated` and takes the second row.
+- *The fallback (op782-q-1).* A close that no row names pages `failed`. No
+  operator writes one today: `onUnreported` is `escalated` only for
+  remediation, `escalation-bound` is a lane escalation watchdog row, and the
+  controller writes `done` only by report. Only a keeper older than its
+  operator can meet one, and a close nobody expected is a fault Tom should
+  hear about; the cap bounds it. Its fixed text says the close matched no row
+  and shows the stored lane, state, source and reason, each only if it is at
+  most 64 lower-case letters, digits and hyphens, else `unknown`. The table
+  test names every reachable lane and reason cell, so a new reason in
+  `reasons.go` fails the test until it gets a row.
+- *Q5 and op782-q-2, the cap.* At most 6 summoned page attempts in any 60
+  minutes (a rolling window, as the Ask cap), at priority 0, the drill and
+  the summary included; Ask pushes keep their own cap, and the digest is
+  outside it. An event that finds the window full is recorded `capped` in the
+  ledger and never paged. The "N more events" page (`[dev-env] more-events`)
+  goes as the first send once the window has room again, counts toward the 6,
+  and carries the number of events capped since the last such page; its
+  ledger entry is written before the send like any other, so each capped
+  event is counted in exactly one page attempt. The digest (742b) lists the
+  capped events.
+- *Q9, content-free page records.* A page record holds the fixed title, the
+  session name and the note's byte count, never the note's text or a link.
+- *Q10, a stated limit.* The leader deletes a reaped session right after its
+  close; with a 60-second tick its page (or digest line) can be missed. It is
+  revisited with story 768's record that survives the Session (768 comment
+  7415).
+- *Nothing is retried.* Each event gets one attempt: an unknown result is
+  recorded `ambiguous`, a refusal `failed`, an attempt whose result was never
+  stored stays `recorded`, and none is sent again. While the Pushover
+  credential files are absent the pager reads and sends nothing.
+
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row
 says: one terminal event or the digest. The reason is the one 6.6's close

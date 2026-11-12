@@ -20,6 +20,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/summonoutcome"
 )
 
 // summonCreateKeys are the only JSON keys a summoning create may carry
@@ -661,7 +662,10 @@ func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWi
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: s.Policy.SessionNamespace,
 			Name:      req.Name,
-			Labels:    map[string]string{v1alpha1.LabelDepth: "0"},
+			// The summoned label marks the session for the keeper's pager,
+			// which lists by it (DESIGN-064 6.8; story 782, ruling Q2). Only
+			// this create sets it.
+			Labels: map[string]string{v1alpha1.LabelDepth: "0", summonoutcome.LabelSummoned: summonoutcome.LabelSummonedValue},
 		},
 		Spec: spec,
 	}

@@ -1857,8 +1857,9 @@ response can still leave a stored outcome without an event line. Stories 742
 and 768 read the durable record, never the log line.
 
 Story 777 added release and admission (below); story 779 the watchdog, the
-stops and the operator's suspend; 743 adds `no-usable-model`; 742 adds page
-events in the terminal write. The shared reason table defines their ordering.
+stops and the operator's suspend; 743 adds `no-usable-model`. Story 782 (742a)
+stores no terminal page event: the keeper derives it from the close record
+(below). The shared reason table defines their ordering.
 Until story 780's agentd fence, an in-place restart can leave an agent running
 under a final outcome, and its later reports get 409.
 No caller cutover (746, 747, 748, 610) or story 768 filing is enabled before
@@ -1869,8 +1870,62 @@ in `status.summon.pages[]`, a list of `{event, at}` of at most 8 entries from
 which nothing is removed or changed. This release writes two lifecycle
 events, each at most once per session: `escalation-held`, for an escalation
 Queued 15 minutes, and `escalation-reminder`, for a remote escalation idle 24
-hours. Nothing sends them yet; story 742 adds the keeper and the terminal
-events.
+hours. The keeper's pager (below) sends them.
+
+## Pages for summoned sessions
+
+The keeper pages Tom by Pushover when a summoned session needs him
+(DESIGN-064 6.8; story 782, slice a of 742). It is off by default.
+
+- **What pages.** One terminal page per closed session, `failed`, `lost` or
+  `escalated`, and one page per lifecycle event recorded in
+  `status.summon.pages[]` (`escalation-held`, `escalation-reminder`). The
+  terminal page is not stored on the Session: the keeper derives it from
+  `status.summon.closed` (lane, state, source, reason) with one table,
+  `summonoutcome.TerminalPage`. A close whose row says digest pages nothing; the
+  daily digest is story 742b, not built yet.
+- **The table.** A report of `failed` pages `failed` and a report of
+  `escalate` pages `escalated`, in every lane but remediation. A remediation
+  never pages for itself: its filing will (story 768). Unreported, a quiet exit
+  (`agent-exited`, `exit-unknown`, `turn-cap`) and a curation's hold expiry go
+  to the digest; a lost session or pod (`session-lost`, `heartbeat-lost`,
+  `agent-interrupted`, `pod-terminated`) pages `lost`; every other reason pages
+  `failed`, `not-charged` included. A person's stop (`stopped`) never pages. A
+  close no row names pages `failed` with its own text, which names the stored
+  words; no operator writes one today.
+- **Which sessions.** The API's summoning create labels its session
+  `dev-env.haynesops.com/summoned=true`. The keeper leader lists that label in
+  the session namespace every 60 seconds, 500 a page and at most 20 pages, and
+  still requires `spec.caller`. A session without the label is never paged.
+  A reaped session deleted before the next tick can miss its page.
+- **Once each.** The ledger is the ConfigMap `dev-env-keeper-summon-pages` in
+  the keeper's namespace, which GitOps creates. Its key is the session UID and
+  the event. The keeper writes the entry, the rate window and the page record
+  in one update before it sends; a failed or conflicting write sends nothing. A
+  send is never retried: an unknown result stays `ambiguous`, a refusal
+  `failed`, an attempt whose result was never stored `recorded`. This proves
+  attempts, not delivery.
+- **The cap.** At most 6 pages in any 60 minutes, the drill and the summary
+  included, at priority 0 and at any hour. An event that finds the window
+  full is recorded `capped` and never paged. When the window has room again,
+  the first page is `[dev-env] more-events: N more events were not paged`,
+  which counts each capped event once. Ask pushes keep their own cap.
+- **The text.** Fixed templates in keeper source. A page starts `[dev-env]`
+  and the event; a drill starts `DRILL`. A session's note follows the label
+  `session note:`, with every link replaced by `[link removed]`, cut to 200
+  characters. The only link is `status.remoteControl.url` when it is
+  `https://claude.ai/code/session_...`; otherwise the console's sessions list.
+  Page records hold the fixed title, the session name and the note's byte
+  count, never the note.
+- **Flags.** `--enable-summon-pages`, `--summon-pages-portal-origin` (the
+  console's HTTPS origin), `--summon-pages-drill=<id>` (one `DRILL` page per id,
+  ever) and `--summon-pages-state-configmap`. The session namespace is
+  `--session-namespace`. A bad or incomplete set turns off only the pager and
+  logs why. A missing or unreadable ledger logs `summon page state
+  unavailable` and sends nothing. The pager never stops the keeper or its
+  login refresher, and leaves the Ask notifier and its ledger as they are.
+- **Reading the record.** `kubectl -n dev-env-system get cm
+  dev-env-keeper-summon-pages -o json | agent-run pages list`.
 
 ## Summoning callers
 

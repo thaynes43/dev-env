@@ -135,6 +135,7 @@ type options struct {
 	notices          keeper.NoticeOptions
 	reminders        keeper.RemindersOptions
 	askNotifications keeper.AskNotificationOptions
+	summonPages      keeper.SummonPageOptions
 }
 
 func defaultPermissions() string {
@@ -211,6 +212,10 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.askNotifications.Window, "ask-notify-window", "", "optional ALLOWED local delivery window HH:MM-HH:MM; empty permits all hours within caps")
 	fs.StringVar(&o.askNotifications.Timezone, "ask-notify-timezone", keeper.DefaultNoticeZone, "IANA timezone for the Ask delivery window; independent of login notices")
 	fs.StringVar(&o.askNotifications.StateConfigMap, "ask-notify-state-configmap", keeper.DefaultAskNotificationConfigMap, "precreated keeper-owned ConfigMap for Ask dedupe, rate timestamps and content-free page records")
+	fs.BoolVar(&o.summonPages.Enabled, "enable-summon-pages", false, "page Tom once per failed, lost or escalated summoned session and once per recorded lifecycle event (DESIGN-064 6.8), at most 6 pages in any 60 minutes; needs leader election, the precreated ledger ConfigMap, list on agentsessions in --session-namespace and the Pushover files above")
+	fs.StringVar(&o.summonPages.PortalOrigin, "summon-pages-portal-origin", "", "HTTPS console origin: a page whose session has no verified Remote Control link links the console's sessions list here")
+	fs.StringVar(&o.summonPages.Drill, "summon-pages-drill", "", "send one page starting DRILL for this id, once ever (1 to 63 lower-case letters, digits or hyphens); empty sends none")
+	fs.StringVar(&o.summonPages.StateConfigMap, "summon-pages-state-configmap", keeper.DefaultSummonPagesConfigMap, "precreated keeper-owned ConfigMap for the pager's dedupe, rate window and content-free page records; get and update by name only")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -239,6 +244,11 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("claude auth requires leader election, separate private/public namespaces, an absolute login directory and nonempty named configuration")
 	}
 	o.askNotifications = o.askNotifications.DisableInvalid(o.notices, o.leaderElect,
+		logr.FromSlogHandler(slog.NewJSONHandler(noticeFailureLog, nil)).WithName(binaryName))
+	// The pager lists sessions where the credential grants live; a bad pager
+	// flag turns the pager off and is logged, and stops nothing else.
+	o.summonPages.SessionNamespace = o.proxmoxGrants.SessionNamespace
+	o.summonPages = o.summonPages.DisableInvalid(o.notices, o.askNotifications, o.leaderElect,
 		logr.FromSlogHandler(slog.NewJSONHandler(noticeFailureLog, nil)).WithName(binaryName))
 	if err := o.notices.Validate(); err != nil {
 		// Plan 13, story 13.1 follow-up 1: a bad notice flag disables notices
@@ -301,6 +311,7 @@ func (o options) keeperOptions(userAgent string) keeper.Options {
 		Notices:          o.notices,
 		Reminders:        o.reminders,
 		AskNotifications: o.askNotifications,
+		SummonPages:      o.summonPages,
 		Interval:         o.interval,
 		LeaderElect:      o.leaderElect,
 		MetricsAddr:      o.metricsAddr,
