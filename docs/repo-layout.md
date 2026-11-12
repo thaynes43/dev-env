@@ -149,6 +149,7 @@ images/frontdoor/        Dockerfile: ghcr.io/thaynes43/dev-env-frontdoor, Meatba
 images/agent/            Dockerfile: ghcr.io/thaynes43/dev-env, tag line 2.x (D-53); smoke-test.sh; tools/ (pve, hw-ssh, v1 copies). CI only, never in the pod
 images/codex-login/      Dockerfile: ghcr.io/thaynes43/dev-env-codex-login, the keeper's login-only helper (D-78); published by publish.yml
 images/git-wait/         the git-wait trial fixture: a patched Git build recipe; publish-git-wait.yml, fixture tags only
+scripts/mac-cluster.py  explicit Mac kubectl/Flux selection, live identity guard and offline tests; [usage](docs/mac-cluster-launcher.md)
 scripts/codex-clean-session.py  native client-only clean launcher and offline tests; [usage](docs/codex-clean-session.md), no operator or daemon changes
 scripts/trials/          bounded synthetic trial scripts and their checks (git-wait, workspace CephFS); run only in reviewed fixture Jobs
 scripts/trials/native_lifecycle_profile/  renders the isolated native lifecycle profile; provisions nothing
