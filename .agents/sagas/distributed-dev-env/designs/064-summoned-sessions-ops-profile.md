@@ -524,7 +524,8 @@ this design's own defaults, not from v1 or a record:
   its pending filing (6.6, Blocked).
 
 So a caller's retained backlog is at most `queued` plus twice
-`queuedUrgent` Queued records, whatever arrives.
+`queuedUrgent` Queued records within the attempt-hold boundary stated in the
+story 778 fix round 1 correction below.
 
 **Nothing is created for a Queued session.** Before admission a summoned
 session has no pod and no volume. At the pinned commit the controller
@@ -608,8 +609,8 @@ left carries no retention sentence.
 
 - **The entry.** Each caller's key holds `clock`; `charges`, each
   `{id, at, attempt, hash, name}`; `urgentRefusals`; and
-  `lastUrgentRefusal`. `hash` is the request hash (mode, lane and requested
-  name). `name` is the one session name the ledger binds this dispatch to. `at` is when
+  `lastUrgentRefusal`. `hash` is the request hash (mode, lane, entry priority
+  and requested name). `name` is the one session name the ledger binds this dispatch to. `at` is when
   the charge was counted; `attempt` is the last time a create was about to be
   made for it. A key that is absent is an empty entry; a value that is
   present but empty, not a JSON object, repeats a member, lacks a required
@@ -988,6 +989,102 @@ where it differs, this governs.
   agent's `launch.go`, `status.go`, `daemon.go` and `start_deadline.go` source;
   no live-provider handover is claimed.
 
+**Correction, 2026-11-12 (story 778, slice b of #741; item 741 rulings D2
+and D4, and the coordinator's answer `op778-q-1`; written by the story's
+worker, not a ruling by Tom).** The text above stays; where it differs,
+this governs.
+
+1. *What a create past a pool gets.* With `--enable-summoned-lanes` on
+   (the API server reads the same option as the leader), a valid create
+   past its pool returns 201 and its session is Queued; the leader admits
+   it when its lane and pool allow. The API's count of "unfinished" records
+   at the pool refuses only with the lanes off, which the operator's start
+   check allows only while no summoning kind is switched on. Every new
+   create is Queued until the leader's next pass, so a burst counts toward
+   its queue until then.
+2. *How the queues are counted.* Inside the create ledger's
+   compare-and-set, in the write that would charge (D2): from the uncached
+   session list that write reads, the caller's Queued sessions in that
+   queue, plus its charges that have no Session and whose last attempt mark
+   is younger than the 15 minute hold. A charge records no lane or
+   priority, so it is put in the queue of the policy entry its request hash
+   names, by the charge's name or that name less a suffix `-2` to `-99`;
+   one that no current entry names counts in every queue, so a bound can
+   refuse early. The story 778 fix round 1 correction below states the
+   attempt-hold boundary on these limits. A mark or re-charge of a charge
+   whose attempt had passed the hold brings it back into the count, so it
+   needs a place too, after the hour's check; refused, it keeps its charge.
+   Past `queued`: 429 `summon queue full`, nothing written. Past
+   `queuedUrgent` in its pool: 429 `summon urgent queue full`, counted as
+   an urgent refusal in the refusing write. The hour is checked before the
+   queue; a create both refuse is counted once. An absent `queued` or
+   `queuedUrgent` reads as the CRD default 4.
+3. *One definition of Queued.* `summonoutcome.Queued`, which the leader's
+   admission uses too: not admitted (no `admittedAt` and no grant in
+   `_admission` for its name and UID), not closed (no `closed`, no terminal
+   outcome), and neither suspended nor being deleted. So a suspended or
+   deleting session that was never admitted is in no queue and no pool until
+   #741 slice c decides what that stop becomes; a summoning caller can do
+   neither. The API decodes `_admission` read only and still carries it
+   byte for byte. A present key that cannot be decoded gives 503 with no
+   write on a write that needs the count; a create already under way still
+   makes its own mark.
+4. *The order of checks.* The agentd transport bound is checked before the
+   switch, on the longest name the create may take, that name's brief and
+   a placeholder as long as a dispatch id (32 hex characters), reading
+   nothing (D4). So the correction of #770 above no longer holds where it
+   says this bound comes in the dispatch step after the switch and a
+   request that fails only that bound gets the switch's 403: it gets its own
+   422 whatever the switch says. The dispatch step checks it again with the
+   real id. The order is now: the request's own checks with the transport
+   bound, the switch, the repeat of a key, the names, the dispatch id, the
+   pool (lanes off only), the first ledger write (the hour, then the queue),
+   the marks and creates.
+
+**Correction, 2026-11-12 (story 778 fix round 1, coordinator rulings in
+[PR 1094 comment 6833388211](https://github.com/thaynes43/dev-env/pull/1094#issuecomment-6833388211);
+not a ruling by Tom).** This narrows the queue claim above and fixes charge
+attribution and the retained-charge error contract.
+
+1. *The attempt-hold boundary (F1).* The queue limits hold for every create
+   whose Session lands within 15 minutes of its last attempt mark, under the
+   clock assumptions above, apart from the create ledger's stale-destination
+   limit (a rebind whose old destination still lands), whose surplus Session
+   is Queued until the leader's next pass closes it `not-charged`. The main
+   cluster's API servers time a request out after one minute, the default
+   (coordinator read, 2026-11-12: five API servers, v1.35.5, no
+   `--request-timeout` flag). A
+   received write that persists after the hold can land beside a later create
+   that took its place. Each such late landing adds one extra Queued Session,
+   with no volume or pod while it waits. A still-bound charge is valid: neither
+   Session is closed `not-charged`. The leader's pool and single-flight lane
+   bounds still hold. No new fence is added. The deterministic proof for both
+   `queued` and `queuedUrgent` receives a fresh charged create, advances 16
+   minutes with the pool occupied, accepts a second create, persists the first,
+   and runs the leader; it also frees the pool and proves only one is admitted.
+2. *A charge's queue is fixed (F2).* The request hash now binds the entry's
+   priority as well as mode, lane and requested name. This is the smaller
+   mechanism: no new charge field. A same-key retry after a priority edit gets
+   the existing different-request 409 and writes nothing: no charge, mark or
+   Session. The charge is never attributed to the edited entry's queue alone:
+   after a priority edit its entry can no longer be told, so it counts in
+   every queue during the attempt hold, as an entry removed from the policy
+   does. The key stays refused until that charge leaves the ledger: not before
+   its 65-minute window ends, and then only when another create of that caller
+   writes its entry. A caller uses a new key, and must not read this 409, which
+   names no session, as success. The
+   15-minute counting hold and normal pruning still apply. A Session counts by
+   its immutable snapshot. A priority edit racing a create already in flight
+   belongs to F1's stated limit: that Session can still land with its original
+   snapshot. No fence for that race is added.
+3. *An unreadable admission key (F3).* A first-bind 503 for unreadable
+   `_admission` includes the no-refund/normal-pruning sentence when the charge
+   was already in the ledger (`b.kept`); a new charge's 503 omits it. Both write
+   nothing and create no Session.
+
+Story 779 supplies `maxHold` closure and refuses every resume of a summoned
+session. `task` creates turn on only after both stories are installed.
+
 ## 6. Contracts per build story
 
 ### 6.1 OP735: the ops egress tier
@@ -1288,12 +1385,13 @@ not use the escalation entry's prefix: it is named under `esc-rem-` (6.6).
   filings carry no caller key (6.6), so a re-fired remediation key never finds
   its escalation. A key whose newest session is unfinished **and** has no
   terminal outcome returns that session with 200 and charges nothing. The
-  request hash for a summoned session covers `mode`, `lane` and `name`, not
+  request hash for a summoned session covers `mode`, `lane`, `name` and the
+  entry's priority (story 778 fix round 1, 5.9), not
   `data`, so a re-fire with fresher alert text returns the running session
   and does not change its brief. A 200 on a repeated key does not mean the
   new data was taken: a caller must not read it as delivery of an update,
-  nor reuse a key for unrelated work. A different `mode`, `lane` or `name` under
-  the same key is 409, as today (`sessions.go` lines 114–125). If the newest
+  nor reuse a key for unrelated work. A different `mode`, `lane`, `name` or
+  entry priority under the same key is 409. If the newest
   session is finished or has a terminal outcome, the new session takes the
   requested name if it is free, else the first free suffix `-2` to `-99`; the
   earlier record is kept (finished tasks stay 7 days, R17). A name held by a

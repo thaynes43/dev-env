@@ -288,12 +288,17 @@ func (s *Server) createSummonSession(ctx context.Context, w http.ResponseWriter,
 		return 0, nil, err
 	}
 	lane = string(entry.Lane)
-	// The switch: after the request's own checks above, before the replay of a
-	// key, any ledger write, any Session and any urgent-refusal count. The
-	// agentd transport bound stays in dispatchSummon, after this switch, so
-	// while a kind is off a request that would fail only that bound gets the
-	// 403. It could run here on the longest name and a placeholder dispatch
-	// id; story 741 may move it.
+	// The agentd transport bound, before the switch (ruling D4 on item 741,
+	// OP778): on the longest name this create may take, its brief, and a
+	// placeholder as long as a dispatch id. It reads nothing, so a request that
+	// would fail only that bound gets its own 422 whatever the switch says.
+	// dispatchSummon checks it again with the chosen id.
+	if err := checkSummonTransport(sess, req.Name, summonDispatchIDPlaceholder, brief); err != nil {
+		return 0, nil, err
+	}
+	// The switch: after the request's own checks above, the transport bound
+	// included, and before the replay of a key, any ledger write, any Session
+	// and any urgent-refusal count.
 	if err := s.summonKindSwitchedOn(entry.Kind); err != nil {
 		return 0, nil, err
 	}
@@ -663,7 +668,7 @@ func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWi
 	if req.IdempotencyKey != "" {
 		sess.Labels[v1alpha1.LabelIdempotencyKey] = req.IdempotencyKey
 	}
-	sess.Annotations = map[string]string{v1alpha1.AnnotationRequestHash: summonRequestHash(req)}
+	sess.Annotations = map[string]string{v1alpha1.AnnotationRequestHash: summonRequestHash(req, entry.Priority)}
 	return sess, entry, brief, nil
 }
 
