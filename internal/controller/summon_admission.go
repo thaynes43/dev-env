@@ -469,6 +469,7 @@ func (r *Reconciler) SummonAdmissionPass(ctx context.Context) error {
 	if r.APIReader == nil || r.SessionNamespace == "" {
 		return errors.New("summoned admission requires the uncached API reader and the session namespace")
 	}
+	r.summonWatchdogStart.Do(func() { r.summonWatchdogStartedAt = r.now() })
 	// As in the API's ledger writer, bound contention and leave the next
 	// interval to retry. Never spin indefinitely against API writes.
 	p := &summonPass{}
@@ -606,18 +607,20 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context, p *summonPass) 
 	now := r.now().UTC().Truncate(time.Second)
 	for _, s := range queued {
 		entry, ok := ledger.entry(s.Spec.Caller)
-		if !ok {
-			continue
-		}
 		// A Queued session's own rows of the one table: its charge (ruling
 		// D5) and its hold bound (6.7, C2). Story 743 adds QuotaHoldExpired
 		// when the hold was QuotaHold; until then a quota hold never happens.
-		in := summonoutcome.Inputs{NotCharged: !entry.Binds(s.Spec.Summon.DispatchID, s.Name), HoldExpired: summonHoldExpired(s, r.now())}
+		// Grants are readable and this Session has none. Its independent hold
+		// bound still applies when the caller's charge entry cannot be read.
+		in := summonoutcome.Inputs{NotCharged: ok && !entry.Binds(s.Spec.Summon.DispatchID, s.Name), HoldExpired: summonHoldExpired(s, r.now())}
 		if reason := summonoutcome.FirstReason(in); reason != "" {
 			if err := r.closeSummonQueued(ctx, s, reason, now); err != nil {
 				errs = append(errs, err)
 			}
 			continue
+		}
+		if !ok {
+			continue // Unknown charge state permits neither not-charged nor admission.
 		}
 		if s.Spec.Mode == v1alpha1.ModeTask && r.summonTaskLatchOn() && s.Status.PrivateHistory == nil {
 			// Recording a hold before the reconciler initializes the task

@@ -476,7 +476,7 @@ func (a *app) reap(ctx context.Context, args []string) error {
 		}
 		reaped = append(reaped, s)
 		if cmd.c.output == outputText {
-			a.outf("reaping %s: %s\n", s.Name, reapText(s))
+			a.outf("%s %s: %s\n", reapAction(s), s.Name, reapText(s))
 		}
 	}
 	if cmd.c.output == outputJSON {
@@ -495,12 +495,22 @@ func (a *app) reap(ctx context.Context, args []string) error {
 	return first
 }
 
+func reapAction(s apiv1.Session) string {
+	if s.Caller != "" && !s.Reaping {
+		return "reap recorded"
+	}
+	return "reaping"
+}
+
 // reapText is what a reap means for the session the API returned. A private
 // session (it has a privateHistory record) keeps its HOME: the operator asks
 // its agent to stop and makes no rescue bundle and no archive (DESIGN-025
 // 25). Once the operator has judged the reap, its RemovalBlocked condition
 // says what is true, and that is printed as it is.
 func reapText(s apiv1.Session) string {
+	if s.Caller != "" && !s.Reaping {
+		return "the leader will carry out the recorded reap after the outcome is closed; agent-run show " + s.Name + " follows it"
+	}
 	if s.PrivateHistory == nil {
 		return "the operator rescues its work to a bundle, then stops its pod and archives its volume"
 	}

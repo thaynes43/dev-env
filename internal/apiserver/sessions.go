@@ -507,8 +507,9 @@ func (s *Server) withUsageRollup(ctx context.Context, sess *v1alpha1.AgentSessio
 	return v
 }
 
-// reapSession serves DELETE /v1/sessions/{name}: it deletes the AgentSession,
-// which is a reap (D-45). The operator's rescue finalizer holds the session, its
+// reapSession serves DELETE /v1/sessions/{name}: it deletes an ordinary
+// AgentSession, or records a summoned reap for the leader to close and delete
+// (DESIGN-064 6.6, OP779 fix round 1). The rescue finalizer holds the session, its
 // pod and its volume until the rescue; there is no way to skip it here
 // (DESIGN-001 3.4). Any caller the API serves may reap any session, as in v1:
 // nothing is lost, because the rescue comes first.
@@ -550,14 +551,13 @@ func (s *Server) reapSession(ctx context.Context, _ http.ResponseWriter, r *http
 			"session %s lacks the %s finalizer, so a delete could lose its pod and volume unrescued; the operator adds it on its next reconcile", sess.Name, controller.Finalizer)
 	}
 	if sess.Spec.Caller != "" {
-		// Ruling D1 (DESIGN-064 6.6, OP779): what a summoned session's close
-		// becomes depends on who stopped it, so its reap is attributed first.
+		// The recorded reap is the stop. Only the leader may delete after
+		// retaining the outcome, even before the first reconcile/finalizer.
 		if err := s.recordReapedBy(ctx, &sess, c); err != nil {
 			return 0, nil, err
 		}
-		if !sess.DeletionTimestamp.IsZero() {
-			return http.StatusAccepted, view(&sess, false), nil
-		}
+		s.Log.Info("summoned session reap accepted", "session", sess.Name, "caller", c.String())
+		return http.StatusAccepted, view(&sess, false), nil
 	}
 	uid := sess.UID
 	err = s.Client.Delete(ctx, &sess,
@@ -579,16 +579,15 @@ func (s *Server) reapSession(ctx context.Context, _ http.ResponseWriter, r *http
 }
 
 // recordReapedBy writes the reap's caller on a summoned session, under the
-// optimistic lock, just before the delete (ruling D1 on item 741, OP779). The
-// operator reads it once the session is being deleted: a person's reap closes
-// it failed, reason stopped; any other closes it by its onUnreported. Only
-// this route writes the annotation, with the API's own name for the caller,
-// so a session cannot forge it. A conflict reads the session again; a
-// session already being deleted keeps the attribution its first reap wrote.
+// optimistic lock (OP779 fix round 1). The marker is the stop: the leader
+// closes the outcome before deleting. Among API routes only this authorized
+// route writes the annotation, using the API's own name for the caller.
+// A conflict reads again; an existing marker or deletion is never changed.
 // On return sess is the session as stored.
 func (s *Server) recordReapedBy(ctx context.Context, sess *v1alpha1.AgentSession, c *caller) error {
 	for range 5 {
-		if !sess.DeletionTimestamp.IsZero() || sess.Annotations[v1alpha1.AnnotationReapedBy] == c.String() {
+		_, recorded := sess.Annotations[v1alpha1.AnnotationReapedBy]
+		if !sess.DeletionTimestamp.IsZero() || recorded {
 			return nil
 		}
 		orig := sess.DeepCopy()

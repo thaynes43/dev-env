@@ -645,8 +645,9 @@ func controllerutilHas(list []string, s string) bool {
 func TestSummonKeptGrantFailureDoesNotBlockAnotherLane(t *testing.T) {
 	stuck := summonedFor("stuck", callerA, v1alpha1.LaneRemediation, 2*time.Minute)
 	other := summonedFor("other", callerB, v1alpha1.LaneCuration, time.Minute)
+	contender := summonedFor("contender", callerB, v1alpha1.LaneRemediation, time.Minute)
 	w := newSummonWorld(t, summonPolicyObject(callerA, 1, ptr.To[int32](1)), summonPolicyObject(callerB, 1, ptr.To[int32](1)))
-	w.queue(stuck, other)
+	w.queue(stuck, other, contender)
 	putTestGrants(t, w.base, grantFor(w.get(stuck.Name), summonT0))
 	failing := errors.New("fixture: this Session's status write always fails")
 	w.r = w.leader(&interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
@@ -659,7 +660,10 @@ func TestSummonKeptGrantFailureDoesNotBlockAnotherLane(t *testing.T) {
 	if !errors.Is(err, failing) {
 		t.Fatalf("the pass hid the failing write: %v", err)
 	}
-	w.wantAdmitted("another lane in the same pass", map[string]bool{other.Name: true, stuck.Name: false})
+	w.wantAdmitted("another lane in the same pass", map[string]bool{other.Name: true, stuck.Name: false, contender.Name: false})
+	if got := w.hold(contender.Name); got != "False/"+SummonReasonLaneBusy {
+		t.Fatalf("the failing grant's lane was not held against its contender: %s", got)
+	}
 	if names := w.grantNames(); len(names) != 2 {
 		t.Fatalf("grants %v: the failing one keeps its slot", names)
 	}
@@ -755,6 +759,7 @@ func TestSummonWatchdogHeartbeatLost(t *testing.T) {
 		t.Run(map[bool]string{true: "pod exists", false: "pod gone"}[withPod], func(t *testing.T) {
 			w, s := remoteAdmitted(t, v1alpha1.LaneEscalation, "esc-lost")
 			w.beat(s.Name, protocol.AgentIdle, summonT0)
+			w.pass() // start this leader's ten-minute heartbeat recovery window
 			if !withPod {
 				var pod corev1.Pod
 				w.exists(&pod, s.Name)
