@@ -2260,6 +2260,50 @@ session without one is built exactly as before.
   (then agentd refuses the late launch and the stop ends it). A reap stops
   such a pod the same way, so it does not free the lane sooner; this was
   not tested further.
+- *The quota gate* (DESIGN-064 6.9, story 783). One plan serves Tom's own
+  sessions and the summoned ones. With a line set, the leader holds a
+  `normal` session (an upgrade) while the plan's 5-hour usage window is past
+  `--summon-normal-max-five-hour`, and a `bulk` one (curation) while it is
+  past `--summon-bulk-max-five-hour` or, only when that flag is set, the
+  7-day window is past `--summon-bulk-max-seven-day`. "Past" is strictly
+  greater: bulk at 80 % with the line at 80 starts, at 81 % it waits. An
+  `urgent` session (an escalation or a remediation) is never held. The held
+  session shows `SummonAdmitted=False QuotaHold` and is decided again on the
+  next pass. The gate is the last check of the hold switch, after lane and
+  pool, and the pass asks it only for a Queued session with `spec.caller`
+  (`internal/controller/summon_admission.go`, the queued list and the hold
+  switch), so an ordinary session is never gated.
+  - *Lines.* Each is a whole number from 1 to 100 and has no default in
+    code: empty, the default, is off. A set line needs
+    `--summon-usage-max-age`, a positive duration; anything else refuses to
+    start. They are set in the operator HelmRelease, so they live in git.
+    With every line off no gate is built and nothing is read.
+  - *Readings.* The gate reads the newest reading of the session's own agent
+    (every summoned session runs Claude) from ConfigMap
+    `dev-env-system/dev-env-session-allowances`, uncached, with a 5-second
+    timeout. That ConfigMap is written by the operator's API, behind
+    `--enable-session-allowances`, from the heartbeats of remote and local
+    Claude sessions on the keeper's login, at most every 5 minutes per
+    provider. Its `readAt` is when the numbers last changed, so a reading can
+    look older than it is. Summoned tasks never write one. Windows are
+    picked by length: 300 minutes and 10080 minutes. One read's result, the
+    readings or the failure, answers every decision for 30 seconds on the
+    gate's own clock: at most one read per 30 seconds, which is one per pass
+    whenever a pass takes less. The seam gets no pass id, so story 743b can
+    make it exact.
+  - *It fails open.* A reading older than `--summon-usage-max-age`, no
+    reading, a read error and a timeout admit, for every line. A fresh
+    reading that lacks a window, or whose window has reset since it was
+    read, admits for that window's line only. The readings come from running
+    interactive sessions, so they go stale exactly when nobody is working.
+  - *Log.* Each decision on a `normal` or `bulk` session logs one line,
+    "quota gate admitted a summoned session" or "quota gate held a summoned
+    session", with the session's name and lane, the priority, a fixed
+    `reason`, `fiveHourUsed`, `fiveHourLine`, `sevenDayUsed`,
+    `sevenDayLine` (`none` or `off` when absent) and `readingAge`. The
+    condition's text stays "held: quota"; the numbers in the condition, the
+    `quota-hold-expired` close and `agent-run show` are story 743b. Until
+    then a curation run held past its `maxHold` closes `hold-expired`.
 - *The pass goes on.* A failed status write while completing one kept grant
   is reported and the pass continues; the grant still holds its slot, and
   another lane's ready session is admitted in the same pass.

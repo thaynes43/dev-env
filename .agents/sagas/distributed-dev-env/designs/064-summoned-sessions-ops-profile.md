@@ -2139,6 +2139,46 @@ remediation, whose escalation pages. v1 paged this case only after its
 180-minute watchdog. Once #743 lands it is `no-usable-model`, which pages
 (C9).
 
+**Correction, 2026-11-12 (story 783, slice a of #743; coordinator rulings on
+item 743 comment 7458 and the coordinator's answer to op783-q-1; not a ruling
+by Tom).** The text above stays; where it differs, this governs.
+
+1. *The lines are operator flags with no code defaults* (Q12). An unset line
+   is off. `--summon-normal-max-five-hour`, `--summon-bulk-max-five-hour`
+   and `--summon-bulk-max-seven-day` each take a whole number from 1 to 100;
+   a set line needs a positive `--summon-usage-max-age`, or the operator
+   refuses to start. The values above (95, 80, the weekly line unset, 15m)
+   are set in the operator HelmRelease, in git, not in code. This replaces
+   item 743's thresholds "in `api/`".
+2. *Stale, missing or unreadable admits and logs, for every priority* (Q13).
+   A fresh reading that lacks a window counts as missing for that window's
+   line only. So does a window whose reset is at or before the gate's clock
+   (op783-q-1, gap B): its numbers describe an old window, and agentd leaves
+   such windows out when it builds a reading.
+3. *What the readings are* (the slice plan, read at `59169f1f` and live at
+   21:30Z). ConfigMap `dev-env-system/dev-env-session-allowances` is written
+   by the operator's API on the heartbeats of remote and local Claude
+   sessions on the keeper's login (`--enable-session-allowances`), at most
+   every 5 minutes per provider. `readAt` is when the numbers last changed,
+   so a reading can look older than it is, never newer. Summoned tasks run
+   on the static token and never write one. At 21:30Z the newest Claude
+   reading was 29.5 minutes old and carried only the 7-day window (90 %);
+   `dev-env-provider-allowances` was 8 days old. The readings measure the
+   keeper login's plan; that the static token draws on the same plan is this
+   design's statement, not verified in code (Q14). So the gate can only fail
+   open: it yields to Tom while he is working, and admits when nobody is.
+   On R33 above: the plan found the session readings the only fresh source,
+   and the gate reads only them.
+4. *The seam stays boolean* (Q15). The gate is `Reconciler.SummonQuota`,
+   built in `cmd/dev-env-operator/main.go` from `SessionAllowanceStore.Newest`
+   and `internal/summonquota.Decide`. It gets no pass id, so one read's
+   result answers for 30 seconds on the gate's own clock (op783-q-1, gap A):
+   at most one read per 30 seconds, with a 5-second timeout that admits.
+   Story 743b reshapes the seam to carry the decision, can make the bound
+   exact per pass, and adds `quota-hold-expired` and the numbers in the
+   condition. Until then the condition reads "held: quota" and a curation
+   run held past its `maxHold` closes `hold-expired`.
+
 ### 6.10 OP745: joinable remote sessions with a verified link
 
 - A summoned `remote` session on profile `ops` is created with the caller's
