@@ -133,6 +133,9 @@ func summonFixture(t *testing.T, objects ...client.Object) *fixture {
 		return c.Create(ctx, obj, opts...)
 	}}, objects...)
 	f.srv.SummonBoundary = func() (string, error) { return summonTestBoundary, nil }
+	// Both kinds on, so the summon tests keep today's behaviour; the switch's
+	// own tests (summon_switch_test.go) set the list themselves.
+	f.srv.SummonCreateKinds = []v1alpha1.SummonKind{v1alpha1.SummonKindTask, v1alpha1.SummonKindRemote}
 	return f
 }
 
@@ -751,6 +754,7 @@ func TestSummonCallerDoesNotOwnAPortalSession(t *testing.T) {
 	f.srv.PortalLaunchMaxUnfinished = apiv1.MaxPortalLaunchMaxUnfinished
 	f.srv.PortalLaunchRepos = map[string]struct{}{"dev-env": {}}
 	f.srv.SummonBoundary = func() (string, error) { return summonTestBoundary, nil }
+	f.srv.SummonCreateKinds = []v1alpha1.SummonKind{v1alpha1.SummonKindTask, v1alpha1.SummonKindRemote}
 	f.h = f.srv.Handler()
 
 	launched := f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", launchTask())

@@ -158,6 +158,7 @@ type options struct {
 	codexHostMaxPerCell          int
 	codexHostMaxRunning          int
 	codexHostHandsOff            string
+	summonCreateKinds            []v1alpha1.SummonKind
 	coordinatorEnabled           bool
 	portalReaderEnabled          bool
 	portalConversationUsage      bool
@@ -261,6 +262,7 @@ func parseFlags(args []string) (options, error) {
 		o.codexHostHandsOff = v
 		return nil
 	})
+	summonKinds := fs.String("summon-create-kinds", "", "comma-separated session kinds, task and remote, a summoning caller may create (DESIGN-064 5.9, the correction of 2026-11-12); empty, the default, refuses every summoning create with 403 after it is validated and before anything is read back, charged or created; task is named only once story 741 is installed, remote only once stories 741 and 745 are installed and the pinned agent image accepts a summoned remote session; the front door's and every other caller's creates are not affected")
 	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
 	fs.BoolVar(&o.scheduledWork.enabled, "enable-scheduled-work", false, "run the leader-only scheduled-work executor (DESIGN-054 S3b): it claims each due ScheduledWork occurrence with a compare-and-set and creates its session through the API's creation path under a derived name; default off; needs the API and leader election. Each occurrence dispatches only on a basis checked at its due time (a human owner, a live session owner or a human approval) that its dispatch template admits; the templates are the ConfigMap dev-env-scheduled-work in the operator's namespace, and without it, or without such a basis, the occurrence parks and nothing dispatches")
 	fs.BoolVar(&o.scheduledWork.apiEnabled, "enable-scheduled-work-api", false, "serve /v1/scheduled-work (DESIGN-054 S5b): create, list, show, edit, cancel, approve and retry scheduled agent work, for agent-run schedule; default off, and every route answers 404 while off; needs the API (--api-bind-address), the ScheduledWork CRD installed and a reviewed Role on it, and get on the CRD and on the ConfigMap dev-env-scheduled-work for approve. It only records and decides items: nothing dispatches unless --enable-scheduled-work is also on")
@@ -449,6 +451,9 @@ func parseFlags(args []string) (options, error) {
 		return o, err
 	}
 	if o.legacyGrantDelegates, err = broker.ParseLegacyGrantDelegates(*legacyDelegates, o.sessionNamespace, controller.ServiceAccountName); err != nil {
+		return o, err
+	}
+	if o.summonCreateKinds, err = parseSummonCreateKinds(*summonKinds); err != nil {
 		return o, err
 	}
 	o.reservedDecisionClasses, err = grantattest.ParseReservedClasses(*reservedClasses)
@@ -871,7 +876,8 @@ func run(args []string) error {
 	ctrl.SetLogger(logr.FromSlogHandler(logHandler))
 	log := ctrl.Log.WithName(binaryName)
 	log.Info("starting", "version", version.Get().String(binaryName),
-		"sessionNamespace", o.sessionNamespace, "templates", o.templatesNamespace+"/"+o.templatesName)
+		"sessionNamespace", o.sessionNamespace, "templates", o.templatesNamespace+"/"+o.templatesName,
+		"summonCreateKinds", summonCreateKindsValue(o.summonCreateKinds))
 
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
@@ -1196,6 +1202,7 @@ func run(args []string) error {
 			Asks:                       askStore,
 			ProviderSourceReports:      sourceReports,
 			AggregateAllowanceReports:  aggregateReports,
+			SummonCreateKinds:          o.summonCreateKinds,
 		}
 		if o.codexHostSelect {
 			api.CodexHosts = &apiserver.CodexHostConfig{
@@ -1449,4 +1456,37 @@ func splitComma(s string) []string {
 		}
 	}
 	return out
+}
+
+// parseSummonCreateKinds reads --summon-create-kinds: a comma-separated list
+// of task and remote, each at most once, exactly as written. Empty is no kind.
+// An unknown value, a repeated value or an empty element refuses to start.
+func parseSummonCreateKinds(raw string) ([]v1alpha1.SummonKind, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var out []v1alpha1.SummonKind
+	for _, part := range strings.Split(raw, ",") {
+		kind := v1alpha1.SummonKind(part)
+		switch {
+		case part == "":
+			return nil, fmt.Errorf("--summon-create-kinds %q has an empty element; name task, remote or both, or leave it empty", raw)
+		case kind != v1alpha1.SummonKindTask && kind != v1alpha1.SummonKindRemote:
+			return nil, fmt.Errorf("--summon-create-kinds: %q is not a summoning session kind; the kinds are task and remote", part)
+		case slices.Contains(out, kind):
+			return nil, fmt.Errorf("--summon-create-kinds names %s more than once", part)
+		}
+		out = append(out, kind)
+	}
+	return out, nil
+}
+
+// summonCreateKindsValue is the switch's value for the start line: the kinds
+// as the flag names them, and "" when none is.
+func summonCreateKindsValue(kinds []v1alpha1.SummonKind) string {
+	parts := make([]string, len(kinds))
+	for i, k := range kinds {
+		parts[i] = string(k)
+	}
+	return strings.Join(parts, ",")
 }
