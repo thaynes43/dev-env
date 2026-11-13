@@ -1139,9 +1139,11 @@ profile label is P. Otherwise the reconciler suspends the session.
   cluster's admin subjects), and no admission rule fenced pod labels. So
   slice (a) adds one as an install step (section 11, rule 2), for `pods` and
   for `pods/status`. A label set through the first bind leaves no
-  `managedFields` entry of its own; the bind rule refuses it, and for a
-  listed session a label that no longer equals `spec.profile` is itself the
-  mismatch.
+  `managedFields` entry of its own, so the field-manager test does not see
+  it. The bind rule refuses it. If one got through on a listed session, it
+  names a profile the pod was not built for: the account-and-label check
+  then finds no profile that matches both, or finds one that no record
+  covers, and the watchdog suspends.
 - **Who is touched.** A session the ledger never listed is never touched, so
   a template change cannot suspend never-raised sessions. With both flags off
   no record is honoured, so every raised pod is uncovered and is suspended.
@@ -1843,4 +1845,13 @@ is turned away as a conflict before admission. One new finding:
 | Finding | What it said | Ruling | Where the design answers it |
 | --- | --- | --- | --- |
 | 1, HIGH | On v1.35 the first bind copies the Binding's labels onto the pod (`BindingREST.setPodNodeAndMetadata`), with no admission on the pod | A separate rule refuses a Binding in `dev-agents` that carries either label, with `failurePolicy: Ignore`; the coordinator's read-only resolution found only the scheduler, the daemon-set controller and the cluster's admin subjects can bind there | Section 11, rule 2; section 7.5 |
+
+Third pass, Grok 4.7 on the delta `e4c178e4..0cb4d543`,
+`~/.shared/handoffs/op830/install-review-grok-3.md`: the delta is approved,
+with no finding. It read the v1.35.5 source for the bind rule: the
+scheduler's binder sends no labels, the topology plugin adds only its two
+keys before the rule runs, no other create on a subresource writes pod labels
+without admission on the pod, and no Binding a caller can send both carries a
+guarded key and makes the expression error. It also confirmed that a label
+copied by the bind gets no `managedFields` entry (section 7.5).
 
