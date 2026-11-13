@@ -215,6 +215,27 @@ type summonPager struct {
 	// drillRefused keeps the refusal of a drill id past the bound to one log
 	// line a process.
 	drillRefused bool
+	// proofAfter is the last prune candidate a proof read answered: the next
+	// tick's reads start after it (story 782 fix round 2, F3). It lives in
+	// memory only; a new process starts from the oldest again.
+	proofAfter summonProofKey
+}
+
+// summonProofKey orders prune candidates: oldest entry first, then UID, then
+// stored name. The zero key sorts before every candidate.
+type summonProofKey struct {
+	at        int64
+	uid, name string
+}
+
+func (a summonProofKey) less(b summonProofKey) bool {
+	if a.at != b.at {
+		return a.at < b.at
+	}
+	if a.uid != b.uid {
+		return a.uid < b.uid
+	}
+	return a.name < b.name
 }
 
 func newSummonPager(o SummonPageOptions, reader summonSessionReader, store summonPageStore, sender *PushoverSender, clk clock.Clock, log logr.Logger) *summonPager {
@@ -241,7 +262,12 @@ func summonPagerFor(o Options, cfg *rest.Config, log logr.Logger) *summonPager {
 	}
 	c, err := newSummonPagesClient(cfg, sp)
 	if err != nil {
-		log.Error(nil, "summon pages disabled: the pager's own client could not be built")
+		var hooks summonConfigHooks
+		if errors.As(err, &hooks) {
+			log.Error(nil, "summon pages disabled: the pager's own client could not be built", "reason", hooks.Error())
+		} else {
+			log.Error(nil, "summon pages disabled: the pager's own client could not be built")
+		}
 		return nil
 	}
 	notices := o.Notices.withDefaults()
@@ -259,7 +285,9 @@ func summonPagerFor(o Options, cfg *rest.Config, log logr.Logger) *summonPager {
 //     background context, so only the HTTP client's timeout bounds it);
 //   - a dialer of its own, which keeps client-go's transport cache from
 //     handing it the keeper's transport and connections;
-//   - its own rate limiter, HTTP client and REST mapper.
+//   - no client-side rate limiter, so no request waits for a token outside
+//     that timeout (fix round 2);
+//   - its own HTTP client and REST mapper.
 func newSummonPagesClient(cfg *rest.Config, o SummonPageOptions) (client.Client, error) {
 	pc, err := summonPagesRESTConfig(cfg, o)
 	if err != nil {
@@ -280,23 +308,58 @@ func newSummonPagesClient(cfg *rest.Config, o SummonPageOptions) (client.Client,
 	return client.New(pc, client.Options{Scheme: scheme, HTTPClient: hc, Mapper: mapper})
 }
 
+// summonConfigHooks names, in fixed words, the hooks of its own a keeper REST
+// config carries that the pager refuses; never a value.
+type summonConfigHooks []string
+
+func (h summonConfigHooks) Error() string {
+	words := strings.Join(h, ", ")
+	if i := strings.LastIndex(words, ", "); i >= 0 {
+		words = words[:i] + " and " + words[i+2:]
+	}
+	return "the keeper's REST config has its own " + words
+}
+
 // summonPagesRESTConfig is the pager's copy of the keeper's REST config; cfg
-// is not changed. A config that carries a transport of its own is refused:
-// that transport would be shared.
+// is not changed. A config that carries a transport, a transport wrapper or a
+// dialer of its own is refused (story 782 fix round 2, F1): the pager cannot
+// show that one shares no lock, client or connection with the keeper's other
+// workers, and nothing of the config, its authentication included, is dropped
+// to make it fit. The keeper's production config, ctrl.GetConfig's in-cluster
+// config, carries none of the three.
+//
+// The copy does no client-side rate limiting (QPS below zero, no rate
+// limiter; ctrl.GetConfig already sets the keeper's QPS so): client-go waits
+// for a token before it starts the request timeout, and discovery runs on a
+// background context, so a limiter's wait would be outside every bound. The
+// pager makes one list, at most 20 proof reads and a few ledger calls a
+// minute, and the API server's priority and fairness still applies.
 func summonPagesRESTConfig(cfg *rest.Config, o SummonPageOptions) (*rest.Config, error) {
-	if cfg == nil || cfg.Transport != nil {
+	if cfg == nil {
 		return nil, errSummonPages
+	}
+	var hooks summonConfigHooks
+	if cfg.Transport != nil {
+		hooks = append(hooks, "transport")
+	}
+	if cfg.WrapTransport != nil {
+		hooks = append(hooks, "transport wrapper")
+	}
+	if cfg.Dial != nil {
+		hooks = append(hooks, "dialer")
+	}
+	if len(hooks) > 0 {
+		return nil, hooks
 	}
 	pc := rest.CopyConfig(cfg)
 	pc.Timeout = summonPagesRequestTimeout
 	if o.requestTimeout > 0 {
 		pc.Timeout = o.requestTimeout
 	}
-	pc.RateLimiter = nil
-	if pc.Dial == nil {
-		pc.Dial = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
-	}
+	pc.RateLimiter, pc.QPS = nil, -1
+	pc.Dial = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	if o.wrapTransport != nil {
+		// A test seam only: no option or flag sets it.
 		pc.Wrap(o.wrapTransport)
 	}
 	return pc, nil
@@ -466,10 +529,12 @@ func (p *summonPager) fresh(l *summonPageLedger, jobs []summonJob, now time.Time
 // can be removed and restored. A session's entry goes only once it is an hour
 // old and a read of its stored session name proves the session gone, not
 // found or found with another UID (UIDs are never reused, so a gone session
-// cannot page again). At most summonPagesProofReads reads a tick, the oldest
-// entries first; the rest wait for a later tick, and a failed read ends this
-// tick's reads. A summary's entry goes after a day. A drill id is never
-// forgotten.
+// cannot page again). At most summonPagesProofReads reads a tick, in the order
+// oldest entry first, starting after the candidate the last answered read was
+// for and going round to the oldest at the end (fix round 2, F3): sessions
+// still there cannot use every read of every tick. A failed read ends this
+// tick's reads, and the next tick starts with it. A summary's entry goes after
+// a day. A drill id is never forgotten.
 func (p *summonPager) prune(ctx context.Context, l *summonPageLedger, live map[string]bool, now time.Time) {
 	type owner struct{ uid, name string }
 	oldest := map[owner]int64{}
@@ -492,32 +557,22 @@ func (p *summonPager) prune(ctx context.Context, l *summonPageLedger, live map[s
 			}
 		}
 	}
-	candidates := make([]owner, 0, len(oldest))
-	for o := range oldest {
-		candidates = append(candidates, o)
+	candidates := make([]summonProofKey, 0, len(oldest))
+	for o, at := range oldest {
+		candidates = append(candidates, summonProofKey{at: at, uid: o.uid, name: o.name})
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		a, b := candidates[i], candidates[j]
-		if oldest[a] != oldest[b] {
-			return oldest[a] < oldest[b]
-		}
-		if a.uid != b.uid {
-			return a.uid < b.uid
-		}
-		return a.name < b.name
-	})
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].less(candidates[j]) })
+	start := sort.Search(len(candidates), func(i int) bool { return p.proofAfter.less(candidates[i]) })
 	gone := map[owner]bool{}
-	for i, o := range candidates {
-		if i == summonPagesProofReads || ctx.Err() != nil {
+	for n := 0; n < min(summonPagesProofReads, len(candidates)) && ctx.Err() == nil; n++ {
+		c := candidates[(start+n)%len(candidates)]
+		uid, err := p.reader.uid(ctx, c.name)
+		if err != nil && !errors.Is(err, errSummonSessionGone) {
 			break
 		}
-		uid, err := p.reader.uid(ctx, o.name)
-		if errors.Is(err, errSummonSessionGone) || (err == nil && string(uid) != o.uid) {
-			gone[o] = true
-			continue
-		}
-		if err != nil {
-			break
+		p.proofAfter = c
+		if err != nil || string(uid) != c.uid {
+			gone[owner{c.uid, c.name}] = true
 		}
 	}
 	for key, e := range l.State.Events {
@@ -622,16 +677,16 @@ var (
 	// summonVerifiedLink is status.remoteControl.url as agentd writes it for a
 	// registered session (internal/agentd/remote.go): nothing else is a link.
 	summonVerifiedLink = regexp.MustCompile(`^https://claude\.ai/code/session_[A-Za-z0-9_-]{1,120}$`)
-	// summonURLLike is anything in a note that looks like a link: a scheme
-	// with //, a scheme Pushover or a phone could open, a www. host, a dotted
-	// host or address followed by a port, path, query or fragment, or a
-	// dotted host whose last label is two or more letters or starts xn--,
-	// with or without them (F6, and the coordinator's answer op782-fix1-a-1:
-	// evil.example, evil.example:443, 10.0.0.1:8080, evil.xn--p1ai and a file
-	// name such as main.go; a dotted number alone, such as 2.105.0, stays).
+	// summonURLLike finds anything in a note that may be a link: a scheme
+	// with //, a scheme Pushover or a phone could open, a www. host, or a
+	// dotted run of labels (groups 1 and 2: the run and any port, path, query
+	// or fragment after it). A label is letters with their combining marks,
+	// decimal digits and hyphens, of any script; any other character, an
+	// underscore included, ends it (story 782 fix round 2, F6, and the
+	// coordinator's answer op782-fix2-a-1). summonRedact decides which runs
+	// are hosts.
 	summonURLLike = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://\S*|\b(?:mailto|tel|sms|javascript|data|file|vbscript):\S+|\bwww\.\S+|` +
-		`\b[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::[0-9]+(?:[/?#]\S*)?|[/?#]\S*)|` +
-		`\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:xn--[a-z0-9-]+|[a-z]{2,})\b(?::[0-9]+)?(?:[/?#]\S*)?`)
+		`([\p{L}\p{M}\p{Nd}-]+(?:\.[\p{L}\p{M}\p{Nd}-]+)+)((?::[0-9]+)?(?:[/?#]\S*)?)`)
 	summonWordShape = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 )
 
@@ -678,16 +733,83 @@ func summonNote(note string) string {
 	return note
 }
 
+// summonRedact replaces every link in note with [link removed]: each scheme
+// or www. match; a dotted run followed by a port, path, query or fragment,
+// whatever its labels (an address such as 10.0.0.1:8080 or 10.0.0.1/admin);
+// and the dotted host that starts a bare run, if any (F6, and the
+// coordinator's answers op782-fix1-a-1 and op782-fix2-a-1: evil.example,
+// é.example, пример.xn--p1ai, उदाहरण.भारत and a file name such as main.go; a
+// dotted number alone, such as 2.105.0, stays).
 func summonRedact(note string) string {
-	return summonURLLike.ReplaceAllStringFunc(note, func(m string) string {
-		// Trailing punctuation belongs to the sentence, and so does a closing
-		// parenthesis the link did not open.
-		trimmed := strings.TrimRight(m, ".,;:!?")
-		if strings.HasSuffix(trimmed, ")") && strings.Count(trimmed, "(") < strings.Count(trimmed, ")") {
-			trimmed = strings.TrimSuffix(trimmed, ")")
+	var b strings.Builder
+	last := 0
+	for _, m := range summonURLLike.FindAllStringSubmatchIndex(note, -1) {
+		start, end := m[0], m[1]
+		if m[2] >= 0 && m[4] == m[5] {
+			// A bare run: only its host, if it starts with one, is a link.
+			host := summonHostEnd(note[m[2]:m[3]])
+			if host == 0 {
+				continue
+			}
+			end = m[2] + host
 		}
-		return "[link removed]" + m[len(trimmed):]
-	})
+		b.WriteString(note[last:start])
+		b.WriteString(summonLinkRemoved(note[start:end]))
+		last = end
+	}
+	b.WriteString(note[last:])
+	return b.String()
+}
+
+// summonLinkRemoved is the replacement of one link. Trailing punctuation
+// belongs to the sentence, and so does a closing parenthesis the link did not
+// open.
+func summonLinkRemoved(m string) string {
+	trimmed := strings.TrimRight(m, ".,;:!?")
+	if strings.HasSuffix(trimmed, ")") && strings.Count(trimmed, "(") < strings.Count(trimmed, ")") {
+		trimmed = strings.TrimSuffix(trimmed, ")")
+	}
+	return "[link removed]" + m[len(trimmed):]
+}
+
+// summonHostEnd is the length of the longest dotted host that starts a run
+// of labels: two or more labels, the last of them a top label, ending at the
+// run's end, a dot or a hyphen (so the host in a.example-b and a.example.123
+// is a.example); 0 when there is none.
+func summonHostEnd(run string) int {
+	for end := len(run); ; {
+		dot := strings.LastIndexByte(run[:end], '.')
+		if dot < 0 {
+			return 0
+		}
+		label := run[dot+1 : end]
+		if summonTopLabel(label) {
+			return end
+		}
+		if i := strings.IndexByte(label, '-'); i > 0 && summonTopLabel(label[:i]) {
+			return dot + 1 + i
+		}
+		end = dot
+	}
+}
+
+// summonTopLabel reports whether a label can end a host: it starts xn--, or it
+// is two or more letters of any script, with any combining marks.
+func summonTopLabel(label string) bool {
+	if len(label) > 4 && strings.EqualFold(label[:4], "xn--") {
+		return true
+	}
+	letters := 0
+	for _, r := range label {
+		switch {
+		case unicode.IsLetter(r):
+			letters++
+		case unicode.IsMark(r):
+		default:
+			return false
+		}
+	}
+	return letters >= 2
 }
 
 // render builds the fixed-template notice and its content-free record: the

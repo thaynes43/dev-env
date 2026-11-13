@@ -2077,6 +2077,53 @@ Where this differs from the correction above, this governs. As built:
   read (an operator projection or a dedicated namespace) would be its own
   design.
 
+**Correction, 2026-11-13: story 782 fix round 2, coordinator rulings in PR
+1102 comment 6840605385; not a ruling by Tom.** The coordinator accepted every
+finding of the re-check of fix round 1 (PR 1102 comment 6840550572) and
+answered one question of this round (note op782-fix2-a-1, also not Tom's).
+Where this differs from the corrections above, this governs. As built:
+
+- *F1, what turns the pager off.* A keeper REST config that carries a
+  transport, a transport wrapper or a dialer of its own turns the pager off.
+  The keeper logs `summon pages disabled: the pager's own client could not be
+  built` with a reason that names which of the three, in fixed words and
+  never a value. The pager cannot show that such a hook shares no lock,
+  client or connection with the login refresher, the credential fence or the
+  Ask notifier, and it drops nothing of the config, its authentication
+  included, to make it fit. The keeper's production config is the
+  `ctrl.GetConfig()` call in `cmd/dev-env-keeper/main.go`; in the pod that is
+  client-go's `rest.InClusterConfig` (a host, a CA file and a bearer token
+  file), which carries none of the three.
+- *F1, no client-side rate limiting.* The pager's copy of the config has no
+  client-side rate limiter (QPS below zero, as `ctrl.GetConfig` already sets
+  the keeper's). client-go waits for a rate-limit token before the request
+  timeout starts, and discovery runs on a background context, so a limiter's
+  wait would sit outside every bound. Without one, the 5-second request
+  timeout bounds every request, discovery included. The pager makes one list,
+  at most 20 proof reads and a few ledger calls a minute, and the API
+  server's priority and fairness still applies.
+- *F3, pruning makes progress.* A tick's 20 proof reads start after the
+  session the last answered read was for, oldest entry first, and go round to
+  the oldest at the end. Sessions that are still there cannot use every read
+  of every tick, so later deleted sessions are proved gone, their entries
+  pruned, and a full ledger gets room again. Still at most 20 reads a tick,
+  only in a tick that has an entry to add; a failed read ends that tick's
+  reads and the next tick starts with it; an entry goes only on proof. The
+  place is kept in memory, so a restarted keeper starts from the oldest.
+- *F6, host labels in any script.* A label is letters with their combining
+  marks, decimal digits and hyphens, of any script; any other character, an
+  underscore included, ends it. A dotted run of labels followed by a port,
+  path, query or fragment is redacted whatever its labels. A bare dotted run
+  is redacted up to its last label that is two or more letters (with any
+  marks) or starts `xn--`, cut at the run's end, a dot or a hyphen (so
+  `a.example-b` keeps `-b`, as before). `é.example`, `例.example`,
+  `пример.xn--p1ai`, `उदाहरण.भारत` and `ตัวอย่าง.ไทย` are redacted, with
+  or without a port; a dotted number such as `2.105.0` stays.
+- *Test isolation.* The shared envtest helper `internal/testenv` sets
+  `UseExistingCluster` to false, so an inherited `USE_EXISTING_CLUSTER=true`
+  cannot point any suite at a real cluster. This closes the route the
+  re-check found after the incident on tracker item 782 (comment 7521).
+
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row
 says: one terminal event or the digest. The reason is the one 6.6's close
