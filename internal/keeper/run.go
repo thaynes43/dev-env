@@ -65,6 +65,9 @@ type Options struct {
 	Reminders RemindersOptions
 	// AskNotifications is source-only/default off (DESIGN-034 lane B).
 	AskNotifications AskNotificationOptions
+	// SummonPages pages Tom for summoned sessions (DESIGN-064 6.8, story
+	// 782); off by default. A bad option set disables only the pager.
+	SummonPages SummonPageOptions
 	// Interval is the longest wait between two refreshes; DefaultInterval when
 	// zero.
 	Interval time.Duration
@@ -263,6 +266,16 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 			return err
 		}
 		if err := mgr.Add(nf); err != nil {
+			return err
+		}
+	}
+	// The summoned-session pager: nil when off or invalid, so a bad flag
+	// stops nothing else. Its Start never returns an error. It gets the REST
+	// config, not c: it builds its own client, REST mapper and transport, so
+	// a stalled pager request blocks nothing the login refresher, the
+	// credential fence or the Ask notifier uses (story 782 fix round 1, F1).
+	if sp := summonPagerFor(o, cfg, o.Log.WithName("summon-pages")); sp != nil {
+		if err := mgr.Add(sp); err != nil {
 			return err
 		}
 	}

@@ -2121,6 +2121,252 @@ is the plan's option C for D1, narrowed by the ruling to a person's stop.
 `suspended-unreported` keeps its rows: a remediation `escalated` (its filing
 pages), any other lane `failed`.
 
+**Correction, 2026-11-12: story 782, coordinator rulings on item 742 comment
+7457; not a ruling by Tom.** The text and the correction above stay; where
+they differ, this governs. Two answers the coordinator gave this story's
+worker (notes op782-q-1 and op782-q-2, also not Tom's) are folded in.
+
+- *Q1, the terminal event is derived, not stored.* No terminal event is
+  written to `status.summon.pages[]` or anywhere on the Session. The keeper
+  derives `failed`, `lost`, `escalated` or the digest from the close record
+  (`status.summon.closed` with the lane and the outcome's state) through one
+  pure table function, `summonoutcome.TerminalPage`
+  (`internal/summonoutcome/pages.go`). This replaces "the operator records each
+  page event" above for terminal events, and the part of ruling D9 (item 741
+  comment 7355) that said story 742 adds the terminal events to `pages[]`.
+  Lifecycle events stay in `pages[]`. The table's rows are exclusive, so the
+  key (session UID and event) never sees two terminal events for a session.
+- *Q2, the keeper's read is bounded by a label.* The API's summoning create
+  sets the label `dev-env.haynesops.com/summoned=true`, and no other create
+  path does. The keeper leader lists AgentSessions by that selector, 500 a
+  page and at most 20 pages, every 60 seconds, and still requires
+  `spec.caller`; a list that does not finish sends nothing. A session without
+  the label is never paged; only an operator-tier writer can remove it (a
+  stated limit). The keeper's new RBAC is `list` on agentsessions in the
+  session namespace; it needs no `get` for this.
+- *Q4, a dated row.* `curation, upgrade, escalation | failed | unreported |
+  not-charged | failed`: a platform fault. In lane remediation `not-charged`
+  closes `escalated` and takes the second row.
+- *The fallback (op782-q-1).* A close that no row names pages `failed`. No
+  operator writes one today: `onUnreported` is `escalated` only for
+  remediation, `escalation-bound` is a lane escalation watchdog row, and the
+  controller writes `done` only by report. Only a keeper older than its
+  operator can meet one, and a close nobody expected is a fault Tom should
+  hear about; the cap bounds it. Its fixed text says the close matched no row
+  and shows the stored lane, state, source and reason, each only if it is at
+  most 64 lower-case letters, digits and hyphens, else `unknown`. The table
+  test names every reachable lane and reason cell, so a new reason in
+  `reasons.go` fails the test until it gets a row.
+- *Q5 and op782-q-2, the cap.* At most 6 summoned page attempts in any 60
+  minutes (a rolling window, as the Ask cap), at priority 0, the drill and
+  the summary included; Ask pushes keep their own cap, and the digest is
+  outside it. An event that finds the window full is recorded `capped` in the
+  ledger and never paged. The "N more events" page (`[dev-env] more-events`)
+  goes as the first send once the window has room again, counts toward the 6,
+  and carries the number of events capped since the last such page; its
+  ledger entry is written before the send like any other, so each capped
+  event is counted in exactly one page attempt. The digest (742b) lists the
+  capped events.
+- *Q9, content-free page records.* A page record holds the fixed title, the
+  session name and the note's byte count, never the note's text or a link.
+- *Q10, a stated limit.* The leader deletes a reaped session right after its
+  close; with a 60-second tick its page (or digest line) can be missed. It is
+  revisited with story 768's record that survives the Session (768 comment
+  7415).
+- *Nothing is retried.* Each event gets one attempt: an unknown result is
+  recorded `ambiguous`, a refusal `failed`, an attempt whose result was never
+  stored stays `recorded`, and none is sent again. While the Pushover
+  credential files are absent the pager reads and sends nothing.
+
+**Correction, 2026-11-13: story 782 fix round 1, coordinator rulings in PR
+1102 comment 6839324435; not a ruling by Tom.** The coordinator accepted all
+eight findings of the second-family review (PR 1102 comment 6839253446) and
+answered one question of this round (note op782-fix1-a-1, also not Tom's).
+Where this differs from the correction above, this governs. As built:
+
+- *F1, the pager's own client.* The pager is given the keeper's REST config,
+  never its client. It builds its own client, REST mapper, HTTP transport and
+  rate limiter, with a 5-second request timeout that also bounds the mapper's
+  discovery (discovery runs on a background context), and a Pushover
+  transport of its own. It shares no client, mapper, lock or transport with
+  the login refresher, the credential fence or the Ask notifier, so a stalled
+  pager request blocks none of them; the pager's tick ends with `scan
+  unavailable` or `state unavailable`.
+- *F2, no pager flag stops the keeper.* A pager flag with a malformed value,
+  `--enable-summon-pages` included, or a pager flag given last with no value,
+  turns off only the pager and logs why, without the value. Other flags keep
+  their parsing and failures.
+- *F3, absence from the labelled list is not deletion.* A session's ledger
+  entry is pruned only when it is an hour old and a read of its stored session
+  name returns not-found or a session with another UID. The keeper reads with
+  the `get` on AgentSessions it already holds (haynes-ops
+  `keeper-credentials.yaml`), so Q2's "it needs no `get`" above no longer
+  holds; no new RBAC. At most 20 such reads a tick, oldest first, made only in
+  a tick that has an entry to add; a failed read ends that tick's reads; the
+  rest wait.
+- *F4, the window.* The rolling window is pruned against the current time,
+  never a later one; each attempt keeps its conservative timestamp, the
+  latest instant it may be sent.
+- *F5, the ledger's members.* Every member of `state.json` but an entry's
+  `session` must be present and not null; a populated ledger that lacks one,
+  or holds it (or a map or list element) as null, is `state unavailable`: no
+  scan and no send.
+- *F6, the note.* Every control or format character and every Unicode line or
+  paragraph separator (U+2028 and U+2029 included) becomes a space. A dotted
+  host or address is redacted with or without a port, path, query or fragment
+  when its last label is two or more letters or starts `xn--`; a dotted
+  number followed by a port or a path is redacted too (op782-fix1-a-1). That
+  also redacts a file name such as `main.go`: the page is a pointer and the
+  session holds the detail. A dotted number alone, such as `2.105.0`, stays.
+  The note is cut to 200 characters, and a cut that leaves a host behind is
+  redacted again.
+- *F7, the namespace.* No other option's namespace stands in for an empty
+  session namespace: the pager is off and says so. It logs the namespace it
+  lists once at start.
+- *F8, drill ids.* A used drill id is never forgotten. The ledger keeps up to
+  16; past that a new id is refused and logged once, and nothing is sent.
+- *Recorded, not changed.* `list` on AgentSessions in the session namespace is
+  wider than the pager needs, and RBAC cannot restrict it by label; a narrower
+  read (an operator projection or a dedicated namespace) would be its own
+  design.
+
+**Correction, 2026-11-13: story 782 fix round 2, coordinator rulings in PR
+1102 comment 6840605385; not a ruling by Tom.** The coordinator accepted every
+finding of the re-check of fix round 1 (PR 1102 comment 6840550572) and
+answered one question of this round (note op782-fix2-a-1, also not Tom's).
+Where this differs from the corrections above, this governs. As built:
+
+- *F1, what turns the pager off.* A keeper REST config that carries a
+  transport, a transport wrapper or a dialer of its own turns the pager off.
+  The keeper logs `summon pages disabled: the pager's own client could not be
+  built` with a reason that names which of the three, in fixed words and
+  never a value. The pager cannot show that such a hook shares no lock,
+  client or connection with the login refresher, the credential fence or the
+  Ask notifier, and it drops nothing of the config, its authentication
+  included, to make it fit. The keeper's production config is the
+  `ctrl.GetConfig()` call in `cmd/dev-env-keeper/main.go`; in the pod that is
+  client-go's `rest.InClusterConfig` (a host, a CA file and a bearer token
+  file), which carries none of the three.
+- *F1, no client-side rate limiting.* The pager's copy of the config has no
+  client-side rate limiter (QPS below zero, as `ctrl.GetConfig` already sets
+  the keeper's). client-go waits for a rate-limit token before the request
+  timeout starts, and discovery runs on a background context, so a limiter's
+  wait would sit outside every bound. Without one, the 5-second request
+  timeout bounds every request, discovery included. The pager makes one list,
+  at most 20 proof reads and a few ledger calls a minute, and the API
+  server's priority and fairness still applies.
+- *F3, pruning makes progress.* A tick's 20 proof reads start after the
+  session the last answered read was for, oldest entry first, and go round to
+  the oldest at the end. Sessions that are still there cannot use every read
+  of every tick, so later deleted sessions are proved gone, their entries
+  pruned, and a full ledger gets room again. Still at most 20 reads a tick,
+  only in a tick that has an entry to add; a failed read ends that tick's
+  reads and the next tick starts with it; an entry goes only on proof. The
+  place is kept in memory, so a restarted keeper starts from the oldest.
+- *F6, host labels in any script.* A label is letters with their combining
+  marks, decimal digits and hyphens, of any script; any other character, an
+  underscore included, ends it. A dotted run of labels followed by a port,
+  path, query or fragment is redacted whatever its labels. A bare dotted run
+  is redacted up to its last label that is two or more letters (with any
+  marks) or starts `xn--`, cut at the run's end, a dot or a hyphen (so
+  `a.example-b` keeps `-b`, as before). `é.example`, `例.example`,
+  `пример.xn--p1ai`, `उदाहरण.भारत` and `ตัวอย่าง.ไทย` are redacted, with
+  or without a port; a dotted number such as `2.105.0` stays.
+- *Test isolation.* The shared envtest helper `internal/testenv` sets
+  `UseExistingCluster` to false, so an inherited `USE_EXISTING_CLUSTER=true`
+  cannot point any suite at a real cluster. This closes the route the
+  re-check found after the incident on tracker item 782 (comment 7521).
+
+**Correction, 2026-11-13: story 782 fix round 3, coordinator rulings in PR
+1102 comment 6841848115; not a ruling by Tom.** The coordinator ruled on the
+two findings the re-check of fix round 2 left open (PR 1102 comment
+6841787920). Where this differs from the corrections above, this governs. As
+built:
+
+- *F1, every field that can carry a callback or shared state.* Besides a
+  transport, a transport wrapper and a dialer, a keeper REST config that
+  carries a proxy function, an auth provider, an auth config persister, an
+  exec credential plugin or a warning handler of either kind turns the pager
+  off. The same log line, `summon pages disabled: the pager's own client
+  could not be built`, names which in fixed words and never a value. Nothing
+  of the config is dropped to make it fit. The keeper's in-cluster config
+  carries none of them, so production is unchanged.
+- *A guard for the next client-go.* A test walks every field of
+  `rest.Config`, and of the `TLSClientConfig`, `ContentConfig` and
+  `ImpersonationConfig` it holds, against a table: a plain value, refused, or
+  replaced by the pager. A field missing from the table fails, and so does a
+  field that can carry a callback or a shared object (function or interface
+  kind, or a pointer, slice or map holding one) listed as plain. Today the
+  table refuses the nine fields above; replaces `Timeout`, `QPS`,
+  `RateLimiter` and `NegotiatedSerializer` (the pager's discovery client and
+  its per-kind clients each set their own serializer); and keeps every other
+  field as a plain value.
+- *What the timeout bounds.* The 5-second request timeout bounds one
+  request's network I/O and retries. A reload of the bearer token file is
+  local I/O outside it. Discovery and a tick are several requests, each
+  bounded, not one bounded operation. A tick makes one paginated scan of at
+  most 20 list calls, at most 20 reads by name and the ledger calls, then
+  waits 60 seconds. This corrects fix round 2's "bounds every request" and
+  "one list".
+- *F6, a dotted run cannot hide a scheme.* No scheme link survives, in whole
+  or in part, whatever stands before it. No alternative of the matcher asks
+  what stands before it, and the part of a dotted run that is not a host is
+  searched again: `é.example-http://192.0.2.1` and
+  `é.example-http://localhost` become `[link removed]-[link removed]`,
+  `x.é-http://192.0.2.1` becomes `x.é-[link removed]`, and
+  `_x.y-http://192.0.2.1` and `_http://192.0.2.1` become `_[link removed]`.
+  `2.105.0`, `a.example-b`, `a_b.example` and the 200-character cut keep
+  their rules.
+- *F6, the other dots.* U+3002, U+FF0E and U+FF61 count as the dot between
+  labels wherever the ASCII dot does, as the IDNA lookup maps them to it:
+  `evil。example`, `evil．example` and `evil｡example`, with or without a
+  port, are redacted, and a dotted number written with them stays.
+- *Pruning while reads fail, a stated limit.* While a read by name fails,
+  proof pruning stops, and a full ledger then records nothing new: the
+  fail-closed side of "an entry goes only on proof", and the reads fail
+  together or not at all (one `get` rule). A tick whose proof read fails logs
+  `summon page proof read failed: pruning waits for the next tick`; a full
+  ledger already logged `summon page dedupe capacity reached`. Each is at
+  most one line a tick, in fixed words. Before the pager flag is set in
+  haynes-ops, the installer checks that the keeper's ServiceAccount is still
+  bound to `get` on AgentSessions in `dev-agents`; nothing in this repository
+  makes that check.
+
+**Correction, 2026-11-13: story 782 fix round 4, coordinator rulings in PR
+1102 comment 6842728336; not a ruling by Tom.** The coordinator ruled on the
+one finding the re-check of fix round 3 left open (PR 1102 comment
+6842706082: a host match could take a scheme's word and leave its target, so
+`é.http://localhost` became `[link removed]://localhost`). Where this differs
+from the corrections above, this governs. As built:
+
+- *F6, scheme links first.* Scheme links are found in the note as written,
+  before any host is replaced, and the host rules apply only to the text
+  between them. For every scheme link, neither its delimiter (`://`, or the
+  scheme word with its colon) nor its target survives, whatever stands
+  before it. A scheme with `://` is found from any offset, as before:
+  `é.http://localhost`, `é.http://192.0.2.1` and `é.mailto:a@localhost`
+  become `é.[link removed]`, `foo。http://localhost` becomes
+  `foo。[link removed]` and `1。http://192.0.2.1` becomes `1。[link removed]`.
+  As the scheme is found first, `é.example-http://192.0.2.1` and
+  `é.example-http://localhost` now become `é.[link removed]` (the scheme
+  word is `example-http`), not fix round 3's `[link removed]-[link removed]`;
+  `x.é-http://192.0.2.1` and `_x.y-http://192.0.2.1` keep fix round 3's
+  results.
+- *F6, a colon-only scheme word.* `mailto:`, `tel:`, `sms:`, `javascript:`,
+  `data:`, `file:` and `vbscript:` are links only when the character directly
+  before the word is not a letter or a combining mark of any script. The
+  start of the note, a space, a digit, an underscore, a dot and any other
+  character leave it a link: `x_javascript:alert(1)` becomes
+  `x_[link removed]` and `1tel:555` becomes `1[link removed]`. So
+  `profile:ops must approve`, `metadata:x`, `hotel:5` and `éfile:x` stay
+  whole. This takes back fix round 3's sentence that a scheme word inside a
+  longer word is redacted too (`hotel:5` became `ho[link removed]`), dropped
+  above. A word kept whole hides no scheme after it:
+  `hotel:http://localhost` becomes `hotel:[link removed]`.
+- *Unchanged.* The other dots, `2.105.0` in every spelling, `a.example-b`,
+  `a_b.example`, the 200-character cut after redaction and a host at the cut
+  keep their rules.
+
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row
 says: one terminal event or the digest. The reason is the one 6.6's close
