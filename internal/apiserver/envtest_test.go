@@ -136,7 +136,10 @@ func startLiveWith(t *testing.T, configure func(*Server)) *live {
 	api := &Server{
 		Client: mgr.GetClient(),
 		Live:   mgr.GetAPIReader(),
-		Auth:   TokenReviewer{Client: mgr.GetClient()},
+		// The suite's sessions are named by the flag, so a heartbeat still
+		// answers 200 with the title object. The operator's default is empty.
+		TitleRename: mustTitleRename(t, "*"),
+		Auth:        TokenReviewer{Client: mgr.GetClient()},
 		Policy: Policy{
 			Human:                 humanSA,
 			Clients:               []string{clientSA},
@@ -329,7 +332,7 @@ func TestEnvtestAPI(t *testing.T) {
 	agent := l.token(sessionNS+"/"+controller.ServiceAccountName, []string{apiv1.TokenAudience}, pod)
 
 	t.Run("the session's pod posts its heartbeat", func(t *testing.T) {
-		l.want(http.MethodPost, protocol.HeartbeatPath(sess.Name), agent, status(sess.Name), http.StatusNoContent)
+		l.want(http.MethodPost, protocol.HeartbeatPath(sess.Name), agent, status(sess.Name), http.StatusOK)
 		var s v1alpha1.AgentSession
 		if err := l.k8s.Get(ctx, client.ObjectKeyFromObject(&sess), &s); err != nil {
 			t.Fatal(err)
@@ -352,7 +355,7 @@ func TestEnvtestAPI(t *testing.T) {
 			Projects: []protocol.ProjectBootstrapProject{{Name: "sample", State: protocol.BootstrapFailed, Reason: protocol.ReasonAnchorUnproven, Repository: "extra", Cause: protocol.ReasonUnsupportedTrackedEntry}},
 		}
 		st.Problems = []protocol.Step{{Name: "project-bootstrap", State: "fail", Notes: []string{"catalog bootstrap outcome Partial: extra=UnsupportedTrackedEntry; project sample=AnchorUnproven@extra(UnsupportedTrackedEntry)"}}}
-		l.want(http.MethodPost, protocol.HeartbeatPath(sess.Name), agent, st, http.StatusNoContent)
+		l.want(http.MethodPost, protocol.HeartbeatPath(sess.Name), agent, st, http.StatusOK)
 		var s v1alpha1.AgentSession
 		if err := l.k8s.Get(ctx, client.ObjectKeyFromObject(&sess), &s); err != nil {
 			t.Fatal(err)
@@ -376,7 +379,7 @@ func TestEnvtestAPI(t *testing.T) {
 				v.ProjectBootstrap.Projects[0].Cause == "UnsupportedTrackedEntry" && len(v.ProjectBootstrap.Repositories) == 3
 		})
 		// A heartbeat without a bootstrap clears it.
-		l.want(http.MethodPost, protocol.HeartbeatPath(sess.Name), agent, status(sess.Name), http.StatusNoContent)
+		l.want(http.MethodPost, protocol.HeartbeatPath(sess.Name), agent, status(sess.Name), http.StatusOK)
 		if err := l.k8s.Get(ctx, client.ObjectKeyFromObject(&sess), &s); err != nil {
 			t.Fatal(err)
 		}
@@ -469,7 +472,7 @@ func TestEnvtestAPI(t *testing.T) {
 			t.Fatalf("the session should wait on its finalizer: %v %v", err, s.DeletionTimestamp)
 		}
 		// The pod still runs, and still reports.
-		l.want(http.MethodPost, protocol.HeartbeatPath(sess.Name), agent, status(sess.Name), http.StatusNoContent)
+		l.want(http.MethodPost, protocol.HeartbeatPath(sess.Name), agent, status(sess.Name), http.StatusOK)
 	})
 
 	t.Run("a pod's token dies with the pod", func(t *testing.T) {
@@ -478,7 +481,7 @@ func TestEnvtestAPI(t *testing.T) {
 		}
 		// The API refuses as soon as its cache sees the delete, because the
 		// pod is gone (403). The pod is read from the informer cache first, so a
-		// call that races the watch event can still pass (204) for a moment.
+		// call that races the watch event can still pass (200) for a moment.
 		// The API server's own TokenReview follows once its 10-second cache of
 		// the review expires (401).
 		start := time.Now()
@@ -488,7 +491,7 @@ func TestEnvtestAPI(t *testing.T) {
 			if code == http.StatusUnauthorized {
 				break
 			}
-			cacheLag := code == http.StatusNoContent && time.Since(start) < 5*time.Second
+			cacheLag := code == http.StatusOK && time.Since(start) < 5*time.Second
 			if (code != http.StatusForbidden && !cacheLag) || time.Now().After(deadline) {
 				t.Fatalf("a deleted pod's token: %d %s", code, b)
 			}

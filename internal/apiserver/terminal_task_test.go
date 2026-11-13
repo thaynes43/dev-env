@@ -34,7 +34,7 @@ func TestTerminalTaskHeartbeatAcceptsOnlyOriginalExitedAttempt(t *testing.T) {
 			st.Agent.Task = &protocol.TaskResult{ExitSource: &u.Source, ExitCode: 1, FinishedAt: f.now, Subtype: "error_during_execution"}
 			test.edit(&st)
 			w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st)
-			if w.Code != http.StatusNoContent {
+			if w.Code != http.StatusOK {
 				t.Fatalf("proof failure blocked ordinary outcome: %d %s", w.Code, w.Body.String())
 			}
 			got := f.session(name).Status.Agent.Task

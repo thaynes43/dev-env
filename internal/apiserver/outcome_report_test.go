@@ -487,7 +487,7 @@ func TestSummonDecisionWritersDoNotOwnOutcome(t *testing.T) {
 					state = "Delivered"
 				}
 				st.Decision = &protocol.DecisionOutcome{ID: record.ID, SessionUID: record.SessionUID, PodUID: record.PodUID, ThreadID: record.ThreadID, WriterGeneration: record.WriterGeneration, State: state, AnswerDigest: authority.Digest, At: f.now}
-				if w := f.do(http.MethodPost, protocol.HeartbeatPath(s.Name), "tok-session-"+s.Name, st); w.Code != 204 {
+				if w := f.do(http.MethodPost, protocol.HeartbeatPath(s.Name), "tok-session-"+s.Name, st); w.Code != http.StatusOK {
 					t.Fatal(w.Code)
 				}
 			}

@@ -48,6 +48,55 @@ func writeFileAtomic(path string, data []byte, mode fs.FileMode) error {
 	return nil
 }
 
+// writeFileDurable replaces path with data, syncing the file before the
+// rename and the directory after it, so a crash does not leave the new
+// bytes only in a cache.
+func writeFileDurable(path string, data []byte, mode fs.FileMode) error {
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".agentd-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Chmod(mode); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	ok = true
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
+}
+
 // writeFileOnce publishes data at path only when nothing is there. It syncs a
 // temporary file beside path and hard-links it into place, so a reader sees
 // the whole file or none, and an existing file is never replaced: that case

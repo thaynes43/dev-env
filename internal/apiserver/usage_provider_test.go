@@ -62,7 +62,7 @@ func TestUsageHeartbeatRetainsProviderReportedServedModels(t *testing.T) {
 		servedModel("claude-haiku-4-5", 10, "0.05"), servedModel("claude-opus-5-5", 20, "0.7"))
 	st := status(name)
 	st.UsageObservation = &u
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	got := f.session(name)
@@ -98,7 +98,7 @@ func TestUsageHeartbeatRefusesInventedServedModel(t *testing.T) {
 	u.ActualModelState = protocol.UsageProviderReported // no served model behind it
 	st := status(name)
 	st.UsageObservation = &u
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 		t.Fatal("usage refusal blocked liveness", w.Code)
 	}
 	got := f.session(name)

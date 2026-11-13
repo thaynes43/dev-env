@@ -189,7 +189,7 @@ func TestShowRemoteControl(t *testing.T) {
 	cases := []struct {
 		agent, state, want string
 	}{
-		{"claude", "registered", "registered as " + name + ": registered with the Claude app (-o json has the link)"},
+		{"claude", "registered", "registered; recorded title none; provider title none"},
 		{"claude", "starting", "starting as " + name + ": not registered with the Claude app yet"},
 		{"claude", "offline", "offline as " + name + ": agentd records no live CLI process"},
 		{"codex", "starting", "the Codex daemon is not connected yet"},
