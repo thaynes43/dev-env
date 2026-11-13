@@ -2560,8 +2560,9 @@ Story 791's proofs: `TestPreflightFirstModelAnswers`,
 `TestPreflightRestartStartsNothingAgain`, `TestPreflightStatusWhileItRuns`,
 `TestPreflightOnlyForASummonedTask`, `TestOrdinaryTaskRunsNoPreflight`,
 `TestClassifyPreflightRealStreams`, `TestClassifyPreflight`,
-`TestPreflightTurnArgumentsAndPrompt`, `TestPreflightTurnStoppedAtItsLimit`
-and `TestNoTestReachesTheRealClaude` in `internal/agentd`;
+`TestPreflightTurnArgumentsAndPrompt`, `TestPreflightTurnStoppedAtItsLimit`,
+`TestNoTestReachesTheRealClaude` and `TestReexecutedChildLeavesNoGuard` in
+`internal/agentd`;
 `TestAgentStartStatusCopiesOnlyTheFixedSet` and
 `TestHeartbeatStoresTheStartRecordOnce` in `internal/apiserver`;
 `TestSummonNoUsableModelClosesFromTheTypedRecordOnce` and

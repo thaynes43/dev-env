@@ -74,30 +74,28 @@ func TestGuardProbeChild(t *testing.T) {
 
 // A re-executed child of this test binary leaves no guard directory behind,
 // whether it inherited the environment (and so the guard on PATH) or was
-// started with a cleared one.
+// started with a cleared one. Each child gets its own TMPDIR, where a guard
+// of its own would be made, and only that directory is checked, so another
+// test run's guard elsewhere in /tmp cannot fail this test.
 func TestReexecutedChildLeavesNoGuard(t *testing.T) {
 	scrubClusterEnv(t)
 	bin, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	guards := func() []string {
-		found, _ := filepath.Glob(filepath.Join(os.TempDir(), realClaudeGuardPrefix+"*"))
-		more, _ := filepath.Glob(filepath.Join("/tmp", realClaudeGuardPrefix+"*"))
-		return append(found, more...)
-	}
-	before := strings.Join(guards(), "\n")
-	for name, env := range map[string][]string{
-		"inherited": append(os.Environ(), guardProbeEnv+"=1"),
-		"cleared":   {guardProbeEnv + "=1"},
-	} {
+	for _, name := range []string{"inherited", "cleared"} {
+		tmp := t.TempDir()
+		env := []string{guardProbeEnv + "=1", "TMPDIR=" + tmp}
+		if name == "inherited" {
+			env = append(os.Environ(), env...)
+		}
 		cmd := exec.Command(bin, "-test.run=^TestGuardProbeChild$")
 		cmd.Env = env
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%s child: %v %s", name, err, out)
 		}
-		if after := strings.Join(guards(), "\n"); after != before {
-			t.Fatalf("a child with the %s environment left a guard directory:\nbefore %q\nafter  %q", name, before, after)
+		if left, _ := filepath.Glob(filepath.Join(tmp, realClaudeGuardPrefix+"*")); len(left) != 0 {
+			t.Fatalf("a child with the %s environment left a guard directory: %q", name, left)
 		}
 	}
 }
