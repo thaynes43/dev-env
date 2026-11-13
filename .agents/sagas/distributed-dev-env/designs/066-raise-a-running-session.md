@@ -1,22 +1,21 @@
 # DESIGN-066: Raise a running session from outside it
 
-- **Status:** Proposed 2026-11-13, for the coordinator's review. Revised three
-  times the same day: after Tom answered Q-066-01 (section 1.2), so the
-  go-ahead is his word to an agent; then after two design reviews by another
-  model family, with the coordinator's rulings on each finding (section 15);
-  and once more for the advisory reviewer's threads on the pull request
-  (section 15.3). Nothing is built or installed. No flag, CRD change, route, command or
-  haynes-ops change exists for it.
-  [ADR-028](../adrs/028-raise-a-running-session.md) was proposed with it and
-  is Accepted. **Approved by Tom on 2026-11-13** as summarised to him in a
+- **Status:** Accepted for building 2026-11-13; nothing is built or
+  installed. No flag, CRD change, route, command or haynes-ops change exists
+  for it. Proposed the same day for the coordinator's review and revised
+  three times: after Tom answered Q-066-01 (section 1.2), so the go-ahead is
+  his word to an agent; then after two design reviews by another model
+  family, with the coordinator's rulings on each finding (section 15); and
+  once more for the advisory reviewer's threads on the pull request (section
+  15.3). [ADR-028](../adrs/028-raise-a-running-session.md) was proposed with
+  it and is Accepted. **Approved by Tom on 2026-11-13** as summarised to him in a
   phone prompt: he tells a superuser coordinator or Meatball; his phone gets a
   notice naming the session, who raised it and the words attributed to him;
   it takes effect two minutes later unless taken back; a change to superuser
   restarts that session once at a quiet moment and keeps its conversation;
   workers it starts stay ordinary. His answer: "Approve, build all of it
   (Recommended)" (story 830). The mechanisms under that summary are the
-  coordinator's design. The design is accepted for building; it stays
-  "Proposed" in the sense that nothing is built yet.
+  coordinator's design.
 - **Tracking:** [Story OP830](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/830).
   Tom's ask is recorded on story 828 comment 7927, and his answer on how he
   gives the go-ahead on story 830 comment 7980. Why the case's session
@@ -26,10 +25,10 @@
   former Q-066-02 to Q-066-04 and its rulings on the two reviews are marked as
   the coordinator's (`dev-env-fable-coordinator-1109`, 2026-11-13). The rest
   is proposed by a worker for the coordinator, which decides it.
-- **ADR:** [ADR-028](../adrs/028-raise-a-running-session.md), Proposed. It
-  adds one named exemption to the depth rule of DESIGN-001 section 3.4 and
-  one optional right to the front-door CallerPolicy of DESIGN-060 section
-  7.1, so it is accepted before any slice merges.
+- **ADR:** [ADR-028](../adrs/028-raise-a-running-session.md), Accepted
+  2026-11-13. It adds one named exemption to the depth rule of DESIGN-001
+  section 3.4 and one optional right to the front-door CallerPolicy of
+  DESIGN-060 section 7.1, so it was accepted before any slice merges.
 - **Builds on:** [DESIGN-001](001-dev-env-v2.md) section 3.4, D-19, D-46 and
   D-88 (agent attestation); [DESIGN-060](060-meatball-front-door.md) section
   7.1 (the CallerPolicy); [DESIGN-064](064-summoned-sessions-ops-profile.md)
@@ -46,7 +45,8 @@
   the case and the installed flags and rights in section 2 are the
   coordinator's readings of 2026-11-13, quoted and not measured again.
   Nothing in the cluster, the tracker or any session was read or written for
-  this document.
+  this document, except one read-only pod listing by the coordinator on
+  2026-11-13 to check the command in section 7.6.
 
 ## 1. Problem and the case
 
@@ -535,9 +535,10 @@ creation".
 
 The coordinator's ruling of 2026-11-13 on the former Q-066-04, and its
 rulings R4 and N8: a raised session's children never inherit the raised
-profile. A **raised parent** is a session whose pod runs as an account other
-than the account of its `spec.profile`; the pod's labels play no part. Its
-child admission is its own branch, run before every other profile case
+profile. A **raised parent** is a session whose pod was not built for its
+`spec.profile`: the pod runs as another account, or carries another profile
+label. Either is enough, and a label equal to `spec.profile` never clears a
+pod on another account. Its child admission is its own branch, run before every other profile case
 (section 8.2): the child gets the profile it names, or the templates' default
 when it names none; the create is refused when that profile runs as the
 workbench account or a named coordinator identity, on every path, an omitted
@@ -610,11 +611,15 @@ Section 6.4.
 
 **Ruling 11. Power never outlives its record** (R3, N7). In every operator
 build that has slice (b), whatever the flags say, the reconciler checks every
-session its ledger says was ever raised, in any state. When such a session's
-pod runs as an account other than the account of its `spec.profile`, and no
-record that counts and is `active` names a profile on the flag whose account
-is that pod's account, the reconciler suspends it, rescue first (section
-7.5). Sessions never raised are never touched. With both flags off no record
+session its ledger says was ever raised, in any state. Such a session's pod
+must have been built for its `spec.profile`: its ServiceAccount is that
+profile's account and its profile label is that profile, set by the operator.
+When it was built for any other profile, or its label was set by another
+field manager, and no record that counts and is `active` names a profile on
+the flag that covers the profile the pod was built for, the reconciler
+suspends it, rescue first (section 7.5). So a raise to a profile on the same
+account with wider env or mounts, and a label patched back over a raised
+pod, are both caught. Sessions never raised are never touched. With both flags off no record
 is honoured, so every raised pod is uncovered and is suspended. A rollback
 below the build of slice (b) stays a written procedure (section 7.6).
 
@@ -935,7 +940,14 @@ secret is shared between the operator and the keeper (N1, N10).
   It makes the pair with `ed25519.GenerateKey`, writes the private key into
   its own Secret with a `resourceVersion` precondition, so when two replicas
   race only one write lands, and then publishes the public key with its
-  `keyId` in its own public-key ConfigMap the same way. Every replica, the
+  `keyId` in its own public-key ConfigMap the same way. The publish does not
+  depend on having just made the pair: whenever the Secret holds a key and
+  the public-key ConfigMap is empty, the leader derives the public key from
+  the stored private key and publishes it, with the same `resourceVersion`
+  precondition. So a leader that dies between the Secret write and the
+  publish leaves nothing stuck: the next leader finds the key and publishes
+  it. A ConfigMap that holds a different key is never overwritten; it is the
+  mismatch below. Every replica, the
   writer included, signs only with the key it reads back from the Secret,
   never with a key it holds only in memory, and checks that the published
   public key matches it. A Secret that cannot be read, holds no key, or does
@@ -1131,12 +1143,14 @@ the install step of slice (b) for any rollback (section 11):
    10). A read-only `kubectl -n dev-env-system get configmap
    dev-env-session-raise-ledger -o json` lists every session ever raised. A
    read-only `kubectl -n dev-agents get pods -o
-   custom-columns=NAME:.metadata.name,SA:.spec.serviceAccountName` shows
-   each pod's account.
+   'custom-columns=NAME:.metadata.name,SA:.spec.serviceAccountName,PROFILE:.metadata.labels.dev-env\.haynesops\.com/profile'`
+   shows each pod's account and profile label (the command was run read-only
+   on 2026-11-13; today `dev` and `full` both run as `dev-env-agent`).
 2. Take back each `pending` or `active` raise with `agent-run raise <name>
    --take-back`, which suspends a raised pod at once.
-3. Check that no pod of a listed session runs as an account other than its
-   `spec.profile`'s.
+3. Check that every pod of a listed session was built for its
+   `spec.profile`: the account is that profile's and the profile label is
+   that profile.
 4. Only then roll back.
 
 If that procedure is skipped, a pod already running raised keeps, until it
@@ -1177,12 +1191,21 @@ In `admitCreate`, where it now refuses (`sessions.go:699-702`):
 
 ### 8.2 The profile of a raised session's child (R4, N8)
 
-A session caller is a **raised parent** when its pod's ServiceAccount is not
-the account of its `spec.profile`, resolved to the templates' default when
-empty. The pod's labels play no part. That holds for an active profile raise
-on the pod, and for a pod that still runs raised after a take-back until the
-watchdog suspends it. A dispatch-only raise leaves the account as created, so
-its children follow today's rule.
+A session caller is a **raised parent** when its pod was not built for its
+`spec.profile`, resolved to the templates' default when empty: its
+ServiceAccount is not that profile's account, or its profile label is not
+that profile. Either is enough (the coordinator's ruling of 2026-11-13,
+section 15.3). The account catches a label patched back over a raised pod; a
+label equal to `spec.profile` never clears a pod on another account. The
+label catches a raise to a profile on the same account: without it, such a
+session's child that names no profile would copy the raised profile from the
+pod label (`validate.go:341-344`) and be on it by creation. That holds for an
+active profile raise on the pod, and for a pod that still runs raised after a
+take-back until the watchdog suspends it. A dispatch-only raise leaves the
+pod as built, so its children follow today's rule. One side effect: a session
+created with no profile, whose pod was built before the templates' default
+changed, counts as a raised parent until its next pod; its child that names
+no profile gets the new default, as a trusted client's create does.
 
 In `newSession`'s profile switch (`validate.go:330-348`), a new case comes
 first, before the Codex host case:
@@ -1432,7 +1455,10 @@ sessions.**
   record over 4 KiB encoded is refused before its word is spent, and words
   with `<`, `>` and `&` encode without escapes; two replicas starting on an
   empty key Secret leave one key, and a replica signs only with the key it
-  read back; an empty, unreadable or mismatched key refuses `POST`; a self
+  read back; a leader that finds a key in the Secret and an empty public-key
+  ConfigMap publishes the public key derived from it, and one that finds a
+  different key published does not overwrite it; an empty, unreadable or
+  mismatched key refuses `POST`; a self
   take-back writes the ledger and the record before the suspend.
 - **Install steps, each with its check.** All in haynes-ops, before any flag.
   The admission rules follow the shape of `dev-env-maintenance-annotations`
@@ -1506,7 +1532,9 @@ step.**
   with wider env or mounts, and never touches a session the ledger does not
   list, even after a template change; a profile label set by any field
   manager but the operator's is a mismatch; a raised parent's child that names no profile
-  gets the default, never the pod label; a raised parent's child is refused
+  gets the default, never the pod label, also when the parent was raised to
+  a profile on its own account; a pod on another account whose label was
+  patched back to `spec.profile` is still a raised parent; a raised parent's child is refused
   on a workbench-account profile, the default included, and a raised
   parent's Codex host is refused when the default runs as the workbench
   account; a failed templates read refuses the create; a raised depth-0
@@ -1686,7 +1714,7 @@ closed; 11 new findings (4 HIGH, 6 MEDIUM, 1 LOW).
 | B4, HIGH | The code does not cover the verbatim words; the hash is not rechecked | N4 | Section 6.6 (what is signed); Ruling 2 |
 | B5, MEDIUM | Active at Pushover's accept, before Tom can act; the quiet window delays notices | N5 | Ruling 10; section 6.4 (two minutes, any hour); section 10 (never says Tom saw it) |
 | B6, MEDIUM | Punctuation and fullwidth forms bypass "used once"; the ledger is unfenced | N6 | Section 6.3 (NFKC and punctuation fold); section 6.5; slice (a) install step 3 |
-| B7, MEDIUM | The watchdog is dodged by patching the label back | N7 | Section 7.5 (account only, ledger-listed sessions, any flags) |
+| B7, MEDIUM | The watchdog is dodged by patching the label back | N7 | Section 7.5 (built for `spec.profile`: account and label both, the label set by the operator; ledger-listed sessions; any flags), as changed for advisory thread 4566641724 |
 | B8, MEDIUM | The child branch runs after the Codex case and keys on the label | N8 | Section 8.2 (first, by account, every path, failed templates read refuses); section 8.4 |
 | B9, MEDIUM | A pending raise and an attached client slip past the suspend rule | N9 | Section 7.3 |
 | B10, MEDIUM | The keeper holds the signing key; no startup refusal | N1, N10 | Section 6.6 (two pairs; install check, not a startup check); slice (a) install step 6 |
@@ -1695,7 +1723,7 @@ closed; 11 new findings (4 HIGH, 6 MEDIUM, 1 LOW).
 
 ### 15.3 Advisory review threads on the pull request
 
-The automatic Claude Code reviewer left eight inline threads on dev-env PR
+The automatic Claude Code reviewer left twelve inline threads on dev-env PR
 1143 across the revisions. Each is answered on its thread.
 
 | Thread | What it said | Ruling | Where the design answers it |
@@ -1708,3 +1736,16 @@ The automatic Claude Code reviewer left eight inline threads on dev-env PR
 | 4566642264, MEDIUM | A shared HMAC key lets the keeper forge | Answered by N1, N10 | Section 6.6 (two key pairs) |
 | 4566642699, MEDIUM | The 2 KiB bound breaks under JSON escaping | The coordinator's: bound the encoded record, no HTML escaping, check before spending | Section 6.1; section 6.3; section 6.7 |
 | 4567084402, MEDIUM | Key generation races between replicas; emptying the Secret through GitOps does not work | The worker's fix, for the coordinator's review | Section 6.6 (leader makes the pair, read back; rotation under a new name) |
+| 4567132087, MEDIUM | Ruling 11 and the B7 row in 15.2 still gave the account-only watchdog rule | The coordinator's: restate both in the terms of 7.5 | Ruling 11; section 15.2 row B7 |
+| 4567132490, MEDIUM | A leader that dies between the key write and the publish leaves the public key empty for good | The coordinator's: publish from the stored key whenever the ConfigMap is empty; never overwrite a different key | Section 6.6 (how a pair is made); slice (a) tests |
+| 4567160467, MEDIUM | The header still called ADR-028 and the design "Proposed" | The coordinator's: say Accepted | The Status and ADR lines of the header |
+| 4567160713, MEDIUM | ADR-028 said Tom's only words in it are the two sentences under Context, and its Status quotes a third | The coordinator's: name all three | ADR-028, Decider line |
+
+One more change is the coordinator's own, found while answering thread
+4567132087 and not raised by a reviewer: a raised parent (sections 4 and 8.2)
+was decided by the pod's account alone, so a session raised to a profile on
+its own account would have passed that profile to a child that names none.
+The ruling: a raised parent is a session whose pod was not built for its
+`spec.profile`, by account or by profile label. Section 8.2, the sentence
+before Ruling 8, slice (b)'s tests, section 7.6 step 3 and ADR-028 decision 9
+say so.

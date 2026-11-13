@@ -13,7 +13,8 @@
 - **Date:** 2026-11-13
 - **Decider:** The coordinator session `dev-env-fable-coordinator-1109`,
   under OpenProject #830, from a worker's draft. The only words of Tom's
-  here are the two sentences quoted under Context. The coordinator's rulings
+  here are the two sentences quoted under Context and his answer to the
+  approval prompt quoted under Status. The coordinator's rulings
   on restart, duration and workers, and on the two reviews (R1 to R11, N1 to
   N11), are the coordinator's, not Tom's. Everything else is the
   coordinator's to accept or send back.
@@ -137,8 +138,9 @@ pod's ServiceAccount is fixed for its life (`internal/controller/pod.go:378-394`
    Kubernetes right of the workbench account, exec into other pods included,
    and can act through another session's pod; that is what raising to that
    profile means, it is Tom's choice each time, and the notice says the
-   session "will run as the superuser account" (the coordinator's ruling). A raised parent is decided by its pod's account
-   against `spec.profile`, before any other profile case; its children get
+   session "will run as the superuser account" (the coordinator's ruling). A raised parent is a session whose pod was not
+   built for its `spec.profile`, by account or by profile label, decided
+   before any other profile case; its children get
    the profile they name or the default, never the pod's label, and are
    refused on any profile that runs as the workbench account or a named
    coordinator identity, on every path; a failed templates read refuses. In
