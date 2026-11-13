@@ -426,12 +426,15 @@ image whose agentd applies it (rule 8.10).
   as `providerTitle`. Recommendation: the platform never adopts it as
   `spec.title` and never types to undo it. Listings show the record, `show`
   shows both, and an agent records the owner's text if it should stay.
-- **Q-065-12. Screen fixtures per CLI version.** The empty-input test reads
-  the screen, which a CLI release can change. Recommendation: agentd holds
-  fixtures for the CLI versions the build recorded, and holds every rename
-  with reason `cli-version` on any other. The agent image PR that changes
-  the CLI version records new fixtures on a test session, read-only, or
-  renames hold until a later PR does.
+- **Q-065-12. Screen fixtures per CLI version.** Answered by the coordinator
+  on 2026-11-13 (rule 8.5, condition 8). The empty-input test reads the
+  screen, which a CLI release can change. agentd holds fixtures for the CLI
+  versions the build recorded and accepts any patch release of the same
+  major and minor version; on another minor or major it holds every rename
+  with reason `cli-version`. The agent image PR that moves the CLI to a new
+  minor version records new fixtures on a test session, read-only, or
+  renames hold until a later PR does. An unrecognised screen holds in every
+  case (condition 9).
 - **Q-065-13. Text agentd typed but did not send.** After a failed second
   check its text stays in the input line (rule 8.6). Recommendation: agentd
   never removes it, since a person may have typed beside it. It reports
@@ -493,7 +496,16 @@ Readings by the coordinator on the unused test session
   rename. For a session only named at launch it holds a derived local name
   with `nameSource` "derived" (item 785 comment 7560). So the record shows a
   rename and does not show a launch title. Its `status` read "idle" and
-  "busy" in those readings.
+  "busy" in those readings. On 2026-11-13 at about 02:50Z the coordinator read
+  the same record, without typing anything, on four working coordinators:
+  two read "idle" and two read "shell", a value whose meaning is not
+  established. Rule 8.5 holds on every value but "idle".
+- A second incident of the same kind: on 2026-11-13 at 03:02Z a long
+  `agent-run msg` from another coordinator landed in a phone prompt the main
+  coordinator had open for Tom and came back as its answer; the sender had
+  read "agent state: busy" one second earlier (item 774 comment 7573). The
+  state a peer reads is as old as the last heartbeat. agentd reads its own
+  pod, so rule 8.5 does not depend on a heartbeat.
 - The bar and the non-ASCII letter were accepted by the CLI.
 - The risk: on 2026-11-12 a routine `agent-run msg` landed in an open phone
   question on another coordinator and came back as that question's answer
@@ -729,8 +741,12 @@ held reason. A read that fails or times out holds the rename.
    rule: ADR-024's active-pane and pane-synchronisation findings, and a
    shell or tool the CLI runs in the foreground would take the keys.
 8. **CLI version.** The CLI's version (one `claude --version` per boot)
-   is one for which the build recorded screen fixtures (rule 8.11). Reason
-   `cli-version` (Q-065-12).
+   has the same major and minor number as a version for which the build
+   recorded screen fixtures (rule 8.11); a patch release does not hold
+   renames. Reason `cli-version`. Coordinator's ruling on Q-065-12: the
+   screen check of condition 9 already holds on any screen it does not
+   recognise, so an exact-version gate would only stop every rename at each
+   routine CLI patch until someone recorded fixtures again.
 9. **An empty input line and no prompt.** `tmux capture-pane -p -e -t %N`
    (the visible screen only, with attributes) matches the recorded fixture
    of an idle screen with an empty input line: the CLI's input box is the
@@ -760,7 +776,9 @@ start with a hyphen and holds no control character. agentd then:
    and flags. The record, read again, has the same `procStart`, `status`
    "idle" and the same `updatedAt` as at condition 2. No client is
    attached. `capture-pane` shows the input row holding exactly the typed
-   text, and no prompt.
+   text, and no prompt. While a slash command is typed the CLI may show its
+   own hint for that command under the input box; the typed-state fixture
+   records that hint, and the check accepts it and nothing else there.
 3. If that check passes, and less than 1 second has gone by since it began,
    runs `tmux send-keys -t %N Enter`.
 
