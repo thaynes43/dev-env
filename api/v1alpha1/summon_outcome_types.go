@@ -149,9 +149,8 @@ type SummonExecutorStatus struct {
 // session. Story 779 writes escalation-held and escalation-reminder; story
 // 794 writes escalation-started, only with status.summon.registration's
 // result (6.10); story 742 adds the rest of 6.8's lifecycle events. A
-// terminal event is never a page
-// event here: the keeper derives it from the close record (ruling Q1 on item
-// 742, built in PR 1102).
+// terminal event is never a page event here: the keeper derives it from the
+// close record (ruling Q1 on item 742, built in PR 1102).
 // +kubebuilder:validation:Enum=escalation-held;escalation-reminder;escalation-started
 // +kubebuilder:validation:MaxLength=32
 type SummonPageEvent string
