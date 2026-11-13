@@ -24,6 +24,21 @@ import (
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
+func titleIs(f *fixture, name, want string) bool {
+	s := f.session(name)
+	if s.Spec.Title != "" {
+		return false
+	}
+	got, ok := s.Annotations[v1alpha1.AnnotationTitle]
+	return ok && got == want
+}
+
+func titleUntouched(f *fixture, name string) bool {
+	s := f.session(name)
+	_, ok := s.Annotations[v1alpha1.AnnotationTitle]
+	return s.Spec.Title == "" && !ok
+}
+
 func putTitle(f *fixture, token, name, title, expect string) *httptest.ResponseRecorder {
 	f.t.Helper()
 	return f.do(http.MethodPut, apiv1.SessionTitlePath(name), token, map[string]string{"title": title, "expect": expect})
@@ -34,7 +49,7 @@ func TestTitleAccess(t *testing.T) {
 		f := newFixture(t)
 		f.sessionPod("title-human", "full", 0)
 		w := putTitle(f, tokHuman, "title-human", "Cafe", "")
-		if w.Code != http.StatusOK || f.session("title-human").Spec.Title != "Cafe" {
+		if w.Code != http.StatusOK || !titleIs(f, "title-human", "Cafe") {
 			t.Fatalf("%d %s", w.Code, w.Body.String())
 		}
 	})
@@ -42,7 +57,7 @@ func TestTitleAccess(t *testing.T) {
 		f := newFixture(t)
 		f.sessionPod("title-client", "full", 0)
 		w := putTitle(f, tokClient, "title-client", "Cafe", "")
-		if w.Code != http.StatusOK || f.session("title-client").Spec.Title != "Cafe" {
+		if w.Code != http.StatusOK || !titleIs(f, "title-client", "Cafe") {
 			t.Fatalf("%d %s", w.Code, w.Body.String())
 		}
 	})
@@ -56,7 +71,7 @@ func TestTitleAccess(t *testing.T) {
 			t.Fatal(err)
 		}
 		w := putTitle(f, parent, "title-child", "Cafe", "")
-		if w.Code != http.StatusOK || f.session("title-child").Spec.Title != "Cafe" {
+		if w.Code != http.StatusOK || !titleIs(f, "title-child", "Cafe") {
 			t.Fatalf("%d %s", w.Code, w.Body.String())
 		}
 	})
@@ -70,7 +85,7 @@ func TestTitleAccess(t *testing.T) {
 		f.auth[tok] = id
 		f.sessionPod("title-other", "full", 0)
 		w := putTitle(f, tok, "title-other", "Cafe", "")
-		if w.Code != http.StatusOK || f.session("title-other").Spec.Title != "Cafe" {
+		if w.Code != http.StatusOK || !titleIs(f, "title-other", "Cafe") {
 			t.Fatalf("%d %s", w.Code, w.Body.String())
 		}
 	})
@@ -83,7 +98,7 @@ func TestTitleAccess(t *testing.T) {
 			t.Fatal(err)
 		}
 		w := putTitle(f, tokCoordinator, "title-coord", "Cafe", "")
-		if w.Code != http.StatusOK || f.session("title-coord").Spec.Title != "Cafe" {
+		if w.Code != http.StatusOK || !titleIs(f, "title-coord", "Cafe") {
 			t.Fatalf("%d %s", w.Code, w.Body.String())
 		}
 	})
@@ -91,7 +106,7 @@ func TestTitleAccess(t *testing.T) {
 		f := newFixture(t)
 		tok := f.sessionPod("title-self", "full", 0)
 		wantError(t, putTitle(f, tok, "title-self", "Cafe", ""), http.StatusForbidden, apiv1.CodeForbidden)
-		if f.session("title-self").Spec.Title != "" {
+		if !titleUntouched(f, "title-self") {
 			t.Fatal("a session set its own title")
 		}
 	})
@@ -132,7 +147,7 @@ func TestTitleAccess(t *testing.T) {
 		f := meatballFixture(t, meatballPolicy())
 		f.sessionPod("title-meatball", "full", 0)
 		wantError(t, putTitle(f, tokMeatball, "title-meatball", "Cafe", ""), http.StatusForbidden, apiv1.CodeForbidden)
-		if f.session("title-meatball").Spec.Title != "" {
+		if !titleUntouched(f, "title-meatball") {
 			t.Fatal("Meatball set a title")
 		}
 	})
@@ -177,7 +192,7 @@ func TestTitleAccess(t *testing.T) {
 		if !errors.As(err, &ae) || ae.status != http.StatusForbidden {
 			t.Fatalf("portal launch: %v", err)
 		}
-		if f.session("title-launch").Spec.Title != "" {
+		if !titleUntouched(f, "title-launch") {
 			t.Fatal("a portal launch set a title")
 		}
 	})
@@ -192,7 +207,7 @@ func TestTitleSummonedTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := wantError(t, putTitle(f, tokHuman, "title-summoned", "Cafe", ""), http.StatusConflict, apiv1.CodeConflict)
-	if !strings.Contains(e.Message, "summoned") || f.session("title-summoned").Spec.Title != "" {
+	if !strings.Contains(e.Message, "summoned") || !titleUntouched(f, "title-summoned") {
 		t.Fatalf("%s title %q", e.Message, f.session("title-summoned").Spec.Title)
 	}
 }
@@ -207,7 +222,7 @@ func TestTitleReaping(t *testing.T) {
 		t.Fatal("delete did not mark the session")
 	}
 	e := wantError(t, putTitle(f, tokHuman, "title-reap", "Cafe", ""), http.StatusConflict, apiv1.CodeConflict)
-	if !strings.Contains(e.Message, "reaped") || f.session("title-reap").Spec.Title != "" {
+	if !strings.Contains(e.Message, "reaped") || !titleUntouched(f, "title-reap") {
 		t.Fatalf("%s", e.Message)
 	}
 }
@@ -219,14 +234,14 @@ func TestTitleStaleExpect(t *testing.T) {
 	if e.Reason != "title_changed" || strings.Contains(e.Message, "Cafe") || strings.Contains(strings.ToLower(e.Message), "try again") || strings.Contains(strings.ToLower(e.Message), "retry") {
 		t.Fatalf("%+v", e)
 	}
-	if f.session("title-expect").Spec.Title != "" {
+	if !titleUntouched(f, "title-expect") {
 		t.Fatal("a stale expect wrote the title")
 	}
 	if w := putTitle(f, tokHuman, "title-expect", "Cafe", ""); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	e = wantError(t, putTitle(f, tokHuman, "title-expect", "Cafe", ""), http.StatusConflict, apiv1.CodeConflict)
-	if e.Reason != "title_changed" || f.session("title-expect").Spec.Title != "Cafe" {
+	if e.Reason != "title_changed" || !titleIs(f, "title-expect", "Cafe") {
 		t.Fatalf("matching title with a stale expect: %+v stored %q", e, f.session("title-expect").Spec.Title)
 	}
 }
@@ -258,11 +273,11 @@ func TestTitleRateLimit(t *testing.T) {
 	}
 	f.now = start.Add(59 * time.Second)
 	wantError(t, putTitle(f, tokHuman, "title-rate", "Two", "One"), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
-	if f.session("title-rate").Spec.Title != "One" {
+	if !titleIs(f, "title-rate", "One") {
 		t.Fatal("a limited change wrote")
 	}
 	f.now = start.Add(time.Minute)
-	if w := putTitle(f, tokHuman, "title-rate", "Two", "One"); w.Code != http.StatusOK || f.session("title-rate").Spec.Title != "Two" {
+	if w := putTitle(f, tokHuman, "title-rate", "Two", "One"); w.Code != http.StatusOK || !titleIs(f, "title-rate", "Two") {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 }
@@ -290,7 +305,7 @@ func TestTitleMissingKeys(t *testing.T) {
 	for _, body := range []string{`{"title":"Cafe"}`, `{"expect":""}`, `{}`} {
 		wantError(t, f.do(http.MethodPut, apiv1.SessionTitlePath("title-keys"), tokHuman, body), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
 	}
-	if f.session("title-keys").Spec.Title != "" {
+	if !titleUntouched(f, "title-keys") {
 		t.Fatal("a partial body wrote")
 	}
 }
@@ -311,8 +326,8 @@ func TestTitleClear(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	f.now = f.now.Add(time.Minute)
-	if w := putTitle(f, tokHuman, "title-clear", "", "Cafe"); w.Code != http.StatusOK || f.session("title-clear").Spec.Title != "" {
-		t.Fatalf("clear: %d %s stored %q", w.Code, w.Body.String(), f.session("title-clear").Spec.Title)
+	if w := putTitle(f, tokHuman, "title-clear", "", "Cafe"); w.Code != http.StatusOK || !titleIs(f, "title-clear", "") {
+		t.Fatalf("clear: %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -333,6 +348,15 @@ func TestTitleChangeLeavesPodAndAnnotations(t *testing.T) {
 	}
 	before, _ := json.Marshal(pod)
 	uid := f.session("title-stable").UID
+	withDecision := f.session("title-stable")
+	withDecision.Status.DecisionAnswer = &v1alpha1.DecisionAnswerStatus{
+		Version: 1, Session: "title-stable", SessionUID: string(uid), PodUID: "pod-uid",
+		DecisionID: "11111111-1111-4111-8111-111111111111", ThreadID: "22222222-2222-4222-8222-222222222222",
+		WriterGeneration: 3, Digest: strings.Repeat("ab", 32), Phase: "Confirmed",
+	}
+	if err := f.c.Status().Update(context.Background(), withDecision); err != nil {
+		t.Fatal(err)
+	}
 	if w := putTitle(f, tokHuman, "title-stable", "Cafe", ""); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -345,8 +369,11 @@ func TestTitleChangeLeavesPodAndAnnotations(t *testing.T) {
 		t.Fatalf("pod changed\n%s", got)
 	}
 	stored := f.session("title-stable")
-	if stored.UID != uid || stored.Annotations["keep"] != "yes" || stored.Annotations[v1alpha1.AnnotationTitleSetBy] == "" || stored.Annotations[v1alpha1.AnnotationTitleSetAt] == "" {
+	if stored.UID != uid || stored.Spec.Title != "" || stored.Annotations[v1alpha1.AnnotationTitle] != "Cafe" || stored.Annotations["keep"] != "yes" || stored.Annotations[v1alpha1.AnnotationTitleSetBy] == "" || stored.Annotations[v1alpha1.AnnotationTitleSetAt] == "" {
 		t.Fatalf("annotations %+v", stored.Annotations)
+	}
+	if stored.Status.DecisionAnswer == nil || stored.Status.DecisionAnswer.Phase != "Confirmed" || stored.Status.DecisionAnswer.WriterGeneration != 3 {
+		t.Fatalf("decision %+v", stored.Status.DecisionAnswer)
 	}
 }
 
@@ -460,5 +487,105 @@ func TestOlderOperatorDropsProviderTitleAndRename(t *testing.T) {
 	}
 	if err := json.Unmarshal(raw, &old); err != nil || old.Name != "dev-env-1019-120000" || old.Title != "Opus | Cafe" {
 		t.Fatalf("%+v %v", old, err)
+	}
+}
+
+func TestHeartbeatTitleFollowsTheFlag(t *testing.T) {
+	const named = "title-flag-on"
+	const other = "title-flag-off"
+	f := newFixture(t)
+	f.srv.TitleRename = mustTitleRename(t, named+",title-flag-two")
+	tokOn := f.sessionPod(named, "full", 0)
+	tokOff := f.sessionPod(other, "full", 0)
+	for _, name := range []string{named, other} {
+		s := f.session(name)
+		s.Spec.Title = "Cafe"
+		if err := f.c.Update(context.Background(), s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	on := f.do(http.MethodPost, protocol.HeartbeatPath(named), tokOn, status(named))
+	if on.Code != http.StatusOK || !strings.Contains(on.Body.String(), `"text":"Cafe"`) {
+		t.Fatalf("named %d %s", on.Code, on.Body.String())
+	}
+	off := f.do(http.MethodPost, protocol.HeartbeatPath(other), tokOff, status(other))
+	if off.Code != http.StatusNoContent || off.Body.Len() != 0 {
+		t.Fatalf("unnamed %d %s", off.Code, off.Body.String())
+	}
+	f.srv.TitleRename = mustTitleRename(t, "*")
+	star := f.do(http.MethodPost, protocol.HeartbeatPath(other), tokOff, status(other))
+	if star.Code != http.StatusOK || !strings.Contains(star.Body.String(), `"text":"Cafe"`) {
+		t.Fatalf("star %d %s", star.Code, star.Body.String())
+	}
+	f.srv.TitleRename = TitleRename{}
+	none := f.do(http.MethodPost, protocol.HeartbeatPath(named), tokOn, status(named))
+	if none.Code != http.StatusNoContent || none.Body.Len() != 0 {
+		t.Fatalf("empty %d %s", none.Code, none.Body.String())
+	}
+}
+
+func TestShowSaysTitleRenameOff(t *testing.T) {
+	f := newFixture(t)
+	f.srv.TitleRename = TitleRename{}
+	f.sessionPod("title-show-off", "full", 0)
+	w := f.do(http.MethodGet, apiv1.SessionPath("title-show-off"), tokHuman, nil)
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var off apiv1.Session
+	if err := json.Unmarshal(w.Body.Bytes(), &off); err != nil || off.TitleRename != "off" {
+		t.Fatalf("%+v %s", off, w.Body.String())
+	}
+	f.srv.TitleRename = mustTitleRename(t, "title-show-off")
+	w = f.do(http.MethodGet, apiv1.SessionPath("title-show-off"), tokHuman, nil)
+	var on apiv1.Session
+	if err := json.Unmarshal(w.Body.Bytes(), &on); err != nil || on.TitleRename != "" || !strings.Contains(w.Body.String(), `"name":"title-show-off"`) {
+		t.Fatalf("%+v %s", on, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "titleRename") {
+		t.Fatalf("enabled session carried the off switch: %s", w.Body.String())
+	}
+}
+
+func TestEffectiveTitleLeavesSpecAndFeedsHeartbeat(t *testing.T) {
+	f := newFixture(t)
+	const name = "title-effective"
+	tok := f.sessionPod(name, "full", 0)
+	s := f.session(name)
+	s.Spec.Title = "Old"
+	if err := f.c.Update(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	before := f.session(name).Generation
+	w := putTitle(f, tokHuman, name, "New", "Old")
+	got := f.session(name)
+	if w.Code != http.StatusOK || got.Spec.Title != "Old" || got.Annotations[v1alpha1.AnnotationTitle] != "New" || got.Generation != before || publishedGeneration(got) != before {
+		t.Fatalf("code %d spec %q ann %q generation %d/%d canary %d body %s", w.Code, got.Spec.Title, got.Annotations[v1alpha1.AnnotationTitle], before, got.Generation, publishedGeneration(got), w.Body.String())
+	}
+	var view apiv1.Session
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil || view.Title != "New" || view.CreatedTitle == nil || *view.CreatedTitle != "Old" || view.TitleIgnored {
+		t.Fatalf("view %+v %v", view, err)
+	}
+	beat := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, status(name))
+	if beat.Code != http.StatusOK || !strings.Contains(beat.Body.String(), `"text":"New"`) {
+		t.Fatalf("heartbeat %d %s", beat.Code, beat.Body.String())
+	}
+	got = f.session(name)
+	got.Annotations[v1alpha1.AnnotationTitle] = "ab;"
+	if err := f.c.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	shown := f.do(http.MethodGet, apiv1.SessionPath(name), tokHuman, nil)
+	view = apiv1.Session{}
+	if err := json.Unmarshal(shown.Body.Bytes(), &view); err != nil || view.Title != "Old" || !view.TitleIgnored || view.CreatedTitle != nil {
+		t.Fatalf("ignored %+v %s", view, shown.Body.String())
+	}
+	beat = f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, status(name))
+	if beat.Code != http.StatusOK || !strings.Contains(beat.Body.String(), `"text":"Old"`) || strings.Contains(beat.Body.String(), "ab;") {
+		t.Fatalf("ignored heartbeat %s", beat.Body.String())
+	}
+	e := wantError(t, putTitle(f, tokHuman, name, "Later", "ab;"), http.StatusConflict, apiv1.CodeConflict)
+	if e.Reason != "title_changed" {
+		t.Fatalf("expect against the ignored annotation: %+v", e)
 	}
 }

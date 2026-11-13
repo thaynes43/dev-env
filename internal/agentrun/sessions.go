@@ -178,6 +178,16 @@ func (a *app) printSession(s apiv1.Session) {
 	if s.Title != "" {
 		row("title", "%s", s.Title)
 	}
+	if s.CreatedTitle != nil {
+		created := *s.CreatedTitle
+		if created == "" {
+			created = "none"
+		}
+		row("title at create", "%s", created)
+	}
+	if s.TitleIgnored {
+		row("title annotation", "the title annotation was ignored")
+	}
 	phase := s.Phase
 	if s.Node != "" {
 		phase += " on " + s.Node
@@ -224,7 +234,7 @@ func (a *app) printSession(s apiv1.Session) {
 		row("revision", "%s", rev)
 	}
 	if rc := s.RemoteControl; rc != nil && rc.State != "" {
-		row("remote control", "%s", remoteControlLine(s, *rc))
+		row("remote control", "%s", remoteControlLine(s, *rc, now))
 	}
 	if st := s.AgentStatus; st != nil {
 		row("agent state", "%s", firstOf(st.State, "-"))
@@ -377,7 +387,7 @@ func (a *app) printSession(s apiv1.Session) {
 // remoteControlLine is show's one-line reading of status.remoteControl. The
 // link stays in -o json only: a show pasted into a ticket or log carries no
 // session URL. The Codex states are agentd's free text (codex_remote.go).
-func remoteControlLine(s apiv1.Session, rc apiv1.RemoteControl) string {
+func remoteControlLine(s apiv1.Session, rc apiv1.RemoteControl, now time.Time) string {
 	line := rc.State
 	if rc.Name != "" {
 		line += " as " + rc.Name
@@ -386,7 +396,7 @@ func remoteControlLine(s apiv1.Session, rc apiv1.RemoteControl) string {
 	switch rc.State {
 	case protocol.RemoteRegistered:
 		if !codex {
-			return claudeRegisteredLine(s, rc)
+			return claudeRegisteredLine(s, rc, now)
 		}
 		return line + ": registered with the Claude app (-o json has the link)"
 	case protocol.RemoteStarting:
@@ -415,7 +425,7 @@ func remoteControlLine(s apiv1.Session, rc apiv1.RemoteControl) string {
 }
 
 // claudeRegisteredLine replaces "registered as <name>" (DESIGN-065 rule 8.8).
-func claudeRegisteredLine(s apiv1.Session, rc apiv1.RemoteControl) string {
+func claudeRegisteredLine(s apiv1.Session, rc apiv1.RemoteControl, now time.Time) string {
 	recorded := s.Title
 	if recorded == "" {
 		recorded = "none"
@@ -425,15 +435,18 @@ func claudeRegisteredLine(s apiv1.Session, rc apiv1.RemoteControl) string {
 		provider = "none"
 	}
 	line := "registered; recorded title " + recorded + "; provider title " + provider
+	if s.TitleRename == "off" {
+		return line + "; not enabled for this session"
+	}
 	if rc.Rename != nil {
-		if extra := renameShowLine(*rc.Rename); extra != "" {
+		if extra := renameShowLine(*rc.Rename, now); extra != "" {
 			line += "; " + extra
 		}
 	}
 	return line
 }
 
-func renameShowLine(rn apiv1.RemoteRename) string {
+func renameShowLine(rn apiv1.RemoteRename, now time.Time) string {
 	when := "unknown"
 	if !rn.Since.IsZero() {
 		when = rn.Since.UTC().Format("15:04Z")
@@ -442,7 +455,7 @@ func renameShowLine(rn apiv1.RemoteRename) string {
 	case "Applied":
 		return "applied"
 	case "Held":
-		return "held since " + when + ": " + rn.Reason + "; it is typed when the session is idle with an empty input line"
+		return "held for " + age(now, rn.Since) + ": " + rn.Reason + "; it is typed when the session is idle with an empty input line"
 	case "Typed":
 		return "typed at " + when + ", not yet confirmed"
 	case "Failed":

@@ -136,7 +136,10 @@ func startLiveWith(t *testing.T, configure func(*Server)) *live {
 	api := &Server{
 		Client: mgr.GetClient(),
 		Live:   mgr.GetAPIReader(),
-		Auth:   TokenReviewer{Client: mgr.GetClient()},
+		// The suite's sessions are named by the flag, so a heartbeat still
+		// answers 200 with the title object. The operator's default is empty.
+		TitleRename: mustTitleRename(t, "*"),
+		Auth:        TokenReviewer{Client: mgr.GetClient()},
 		Policy: Policy{
 			Human:                 humanSA,
 			Clients:               []string{clientSA},

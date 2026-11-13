@@ -172,7 +172,13 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 			s.Log.V(1).Info("allowance reading not stored", "session", key.Name, "reason", err.Error())
 		}
 	}
-	return http.StatusOK, heartbeatTitleBody{Title: heartbeatTitleText{Text: sess.Spec.Title}}, nil
+	// A session the operator's flag does not name gets the answer main gives
+	// today: 204 and no body. agentd then types nothing.
+	if !s.TitleRename.Allows(key.Name) {
+		return http.StatusNoContent, nil, nil
+	}
+	text, _ := sessionEffectiveTitle(&sess)
+	return http.StatusOK, heartbeatTitleBody{Title: heartbeatTitleText{Text: text}}, nil
 }
 
 // heartbeatTitleBody is the heartbeat answer (DESIGN-065 rule 8.3). text is
@@ -234,7 +240,7 @@ func renameReasonOK(reason string) bool {
 	case "launch", "confirmed", "already", "process", "not-registered", "busy", "waiting",
 		"status-unknown", "quiet", "clock", "attached", "pane", "cli-version", "input",
 		"screen-unknown", "paced", "delivering", "left-in-input", "not-confirmed",
-		"invalid-title", "record-shape":
+		"invalid-title", "record-shape", "state", "command-shadowed", "interrupted":
 		return true
 	default:
 		return false

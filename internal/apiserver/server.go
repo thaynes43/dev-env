@@ -80,6 +80,10 @@ import (
 
 // Server holds the API's handlers and what they read and write.
 type Server struct {
+	// TitleRename names the sessions whose heartbeat answers carry a title.
+	// The zero value names none: those heartbeats stay the empty 204 of main,
+	// so agentd types nothing. The title route itself stays on.
+	TitleRename  TitleRename
 	OriginalHome *homeguard.Binding // nil leaves original-HOME admission off
 	// PortalConversationTargets is an explicit Session UID to name read scope; nil disables it.
 	PortalConversationTargets map[string]string

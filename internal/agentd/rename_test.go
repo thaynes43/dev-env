@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,9 +11,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/sessiontitle"
@@ -53,28 +56,36 @@ type recSpec struct {
 	omitName, omitSource               bool
 	statusNum                          bool
 	updated                            int64
+	updatedNull, updatedString         bool
 }
 
 type renameWorld struct {
-	t       *testing.T
-	s       Settings
-	sess    protocol.Session
-	run     *fakeRunner
-	clock   *renameClock
-	app     *TitleApplier
-	pid     int
-	start   string
-	spec    recSpec
-	panes   string
-	clients string
-	version string
-	screens []string
-	capN    int
-	paneN   int
+	t               *testing.T
+	s               Settings
+	sess            protocol.Session
+	run             *fakeRunner
+	clock           *renameClock
+	app             *TitleApplier
+	pid             int
+	start           string
+	spec            recSpec
+	panes           string
+	clients         string
+	clientsExact    string
+	clientsExactSet bool
+	version         string
+	screens         []string
+	lastScreen      string
+	capN            int
+	paneN           int
+	cursorX         int
+	cursorY         int
+	cursorSet       bool
 
 	versionErr bool
 	clientErr  bool
 	captureErr bool
+	cursorErr  bool
 	paneErr    bool
 	sendErr    bool
 	enterErr   bool
@@ -96,7 +107,7 @@ func newRenameWorld(t *testing.T) *renameWorld {
 	w := &renameWorld{
 		t: t, s: s, pid: pid, start: start,
 		clock:   &renameClock{at: time.Date(2026, 11, 13, 14, 0, 0, 0, time.UTC)},
-		panes:   "0 0 %0 0 0 0 2028 claude",
+		panes:   sessiontitle.RecordedPaneLine(),
 		version: "2.1.321 (Claude Code)\n",
 		screens: []string{sessiontitle.IdleEmptyScreen},
 		spec: recSpec{
@@ -127,9 +138,13 @@ func (w *renameWorld) boot(first bool) {
 	_ = os.Remove(w.s.statePath(launchFile))
 	const id = "boot-1"
 	writeJSON(w.t, w.s.statePath(bootFile), bootRecord{BootID: id, Boot: protocol.BootReady})
+	proj := filepath.Join(w.s.Home, "proj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		w.t.Fatal(err)
+	}
 	l := Launch{
 		Session: w.sess.Name, SessionUID: w.sess.SessionUID, BootID: id,
-		TUI: true, Resume: !first, ConversationID: "conv-1",
+		TUI: true, Resume: !first, ConversationID: "conv-1", Dir: proj,
 		Argv: []string{"claude", "--remote-control", "Haiku | Café"},
 	}
 	file := resumeFile
@@ -172,6 +187,12 @@ func (w *renameWorld) writeRecord() {
 	}
 	if w.spec.statusNum {
 		m["status"] = 1
+	}
+	if w.spec.updatedNull {
+		m["updatedAt"] = nil
+	}
+	if w.spec.updatedString {
+		m["updatedAt"] = "1"
 	}
 	writeJSON(w.t, w.recordPath(), m)
 }
@@ -225,6 +246,9 @@ func (w *renameWorld) answer(c Cmd) (Result, error) {
 		if w.clientErr {
 			return Result{}, errTest("clients")
 		}
+		if w.clientsExactSet {
+			return Result{Stdout: []byte(w.clientsExact)}, nil
+		}
 		if w.clients == "" {
 			return Result{}, nil
 		}
@@ -242,7 +266,20 @@ func (w *renameWorld) answer(c Cmd) (Result, error) {
 			screen = w.screens[i]
 			w.capN++
 		}
+		w.lastScreen = screen
 		return Result{Stdout: []byte(screen)}, nil
+	case "display-message":
+		if w.cursorErr {
+			return Result{}, errTest("cursor")
+		}
+		if w.cursorSet {
+			return Result{Stdout: []byte(strconv.Itoa(w.cursorX) + " " + strconv.Itoa(w.cursorY) + "\n")}, nil
+		}
+		cur := sessiontitle.ObservedCursor(w.lastScreen)
+		if !cur.Known {
+			return Result{}, errTest("cursor")
+		}
+		return Result{Stdout: []byte(strconv.Itoa(cur.X) + " " + strconv.Itoa(cur.Y) + "\n")}, nil
 	case "send-keys":
 		literal := slices.Contains(c.Args, "-l")
 		if literal {
@@ -259,6 +296,13 @@ func (w *renameWorld) answer(c Cmd) (Result, error) {
 			w.spec.source = "user"
 			w.spec.updated = 0
 			w.writeRecord()
+		}
+		if slices.Contains(c.Args, "Backspace") {
+			w.screens = []string{sessiontitle.IdleEmptyScreen}
+			w.capN = 0
+			w.lastScreen = sessiontitle.IdleEmptyScreen
+			w.cursorSet = false
+			return Result{}, nil
 		}
 		if w.enterErr {
 			return Result{}, errTest("enter")
@@ -295,8 +339,22 @@ func (w *renameWorld) writes() [][]string {
 
 func (w *renameWorld) assertNoWrite(t *testing.T) {
 	t.Helper()
-	if got := w.writes(); len(got) != 0 {
-		t.Fatalf("tmux write %q", got)
+	allowed := map[string]bool{
+		"list-panes": true, "list-clients": true, "capture-pane": true, "display-message": true,
+	}
+	for _, c := range w.run.snapshot() {
+		switch c.Name {
+		case "claude":
+			if !slices.Equal(c.Args, []string{"--version"}) {
+				t.Fatalf("claude %q", c.Args)
+			}
+		case "tmux":
+			if len(c.Args) == 0 || !allowed[c.Args[0]] {
+				t.Fatalf("tmux subcommand %q is not read-only", c.Args)
+			}
+		default:
+			t.Fatalf("command %s %q", c.Name, c.Args)
+		}
 	}
 }
 
@@ -451,10 +509,32 @@ func TestRenameGuardWaiting(t *testing.T) {
 
 func TestRenameGuardStatusUnknown(t *testing.T) {
 	w := newRenameWorld(t)
-	w.spec.status = "shell"
+	w.spec.status = "thinking"
 	w.spec.updated = 0
 	w.writeRecord()
 	w.hold(t, "Café", "status-unknown")
+}
+
+func TestRenameGuardShell(t *testing.T) {
+	w := newRenameWorld(t)
+	w.spec.status = "shell"
+	target := w.composed("Café")
+	w.arm(target, true)
+	w.writeRecord()
+	disk := w.apply("Café")
+	w.assertTyped(t, target)
+	if disk.State != "Applied" || disk.Reason != "confirmed" || disk.Applied != target {
+		t.Fatalf("shell was not applied: %+v", disk)
+	}
+}
+
+func TestRenameGuardShellRecentHoldsQuiet(t *testing.T) {
+	w := newRenameWorld(t)
+	w.spec.status = "shell"
+	w.spec.updated = 0
+	w.spec.age = 10 * time.Second
+	w.writeRecord()
+	w.hold(t, "Café", "quiet")
 }
 
 func TestRenameGuardQuietIdle10s(t *testing.T) {
@@ -590,14 +670,21 @@ func TestRenameGuardInputText(t *testing.T) {
 }
 
 func TestRenameGuardScreenUnknownQuestion(t *testing.T) {
+	// question-open.2.1.321.ansi is the recorded screen with a question open.
 	w := newRenameWorld(t)
-	w.screens = []string{"Allow this tool?\n1. Yes\n2. No\n"}
+	w.screens = []string{sessiontitle.QuestionOpenScreen}
 	w.hold(t, "Café", "screen-unknown")
 }
 
 func TestRenameGuardScreenUnknownPermission(t *testing.T) {
+	// Derived from question-open.2.1.321.ansi by renaming the question words.
+	// The selection list and the cancel hint are the recorded ones.
 	w := newRenameWorld(t)
-	w.screens = []string{"Permission required to run a command\n"}
+	derived := strings.ReplaceAll(sessiontitle.QuestionOpenScreen, "Fixture: pick one", "Permission: pick one")
+	if derived == sessiontitle.QuestionOpenScreen {
+		t.Fatal("derived screen matches the recorded question")
+	}
+	w.screens = []string{derived}
 	w.hold(t, "Café", "screen-unknown")
 }
 
@@ -644,8 +731,10 @@ func TestRenameGuardDelivering(t *testing.T) {
 	if disk.Reason != "delivering" {
 		t.Fatal(disk.Reason)
 	}
-	if calls := w.run.snapshot(); len(calls) != 0 {
-		t.Fatalf("a held delivery read the session: %q", w.run.lines())
+	for _, c := range w.run.snapshot() {
+		if c.Name != "claude" || !slices.Equal(c.Args, []string{"--version"}) {
+			t.Fatalf("a held delivery read the session: %q", w.run.lines())
+		}
 	}
 }
 
@@ -722,39 +811,57 @@ func TestRenameCLIVersionOncePerBoot(t *testing.T) {
 
 func TestRenameSecondCheckWithholdsEnter(t *testing.T) {
 	target := sessiontitle.Compose("claude-haiku-4-5", "Café")
+	// interrupt is a second check that fails while the input row still holds
+	// the text this pod typed. agentd then sends one Backspace per rune.
+	// The other cases are screens that do not hold that text, so nothing
+	// else is typed.
 	cases := []struct {
-		name string
-		edit func(*renameWorld)
+		name      string
+		interrupt bool
+		edit      func(*renameWorld)
 	}{
-		{"status", func(w *renameWorld) {
+		{"status", true, func(w *renameWorld) {
 			w.arm(target, false)
 			w.afterText = func() {
 				w.spec.status = "busy"
 				w.writeRecord()
 			}
 		}},
-		{"updatedAt", func(w *renameWorld) {
+		{"updatedAt", true, func(w *renameWorld) {
 			w.arm(target, false)
 			w.afterText = func() {
 				w.spec.updated = w.clock.Now().UnixMilli()
 				w.writeRecord()
 			}
 		}},
-		{"pane", func(w *renameWorld) {
+		{"pane", true, func(w *renameWorld) {
 			w.arm(target, false)
 			w.afterText = func() { w.panes = "0 0 %1 0 0 0 2028 claude" }
 		}},
-		{"client", func(w *renameWorld) {
+		{"client", true, func(w *renameWorld) {
 			w.arm(target, false)
 			w.afterText = func() { w.clients = "/dev/pts/4" }
 		}},
-		{"input", func(w *renameWorld) {
+		{"input", false, func(w *renameWorld) {
 			w.screens = []string{sessiontitle.IdleEmptyScreen, sessiontitle.IdleEmptyScreen}
 		}},
-		{"prompt", func(w *renameWorld) {
-			w.screens = []string{sessiontitle.IdleEmptyScreen, "Allow this tool?\n1. Yes\n"}
+		{"prompt", false, func(w *renameWorld) {
+			// The second capture is the recorded question-open screen.
+			w.screens = []string{sessiontitle.IdleEmptyScreen, sessiontitle.QuestionOpenScreen}
 		}},
-		{"slow", func(w *renameWorld) {
+		{"foreground", true, func(w *renameWorld) {
+			w.arm(target, false)
+			w.afterText = func() {
+				readProcIDs = func(int) (procIDs, error) {
+					return procIDs{ppid: 2028, pgrp: 7, tpgid: 9}, nil
+				}
+			}
+		}},
+		{"cursor", false, func(w *renameWorld) {
+			w.arm(target, false)
+			w.afterText = func() { w.cursorX, w.cursorY, w.cursorSet = 2, 46, true }
+		}},
+		{"slow", true, func(w *renameWorld) {
 			w.arm(target, false)
 			w.onRecheck = func() { w.clock.Advance(time.Second) }
 		}},
@@ -764,15 +871,105 @@ func TestRenameSecondCheckWithholdsEnter(t *testing.T) {
 			w := newRenameWorld(t)
 			tc.edit(w)
 			disk := w.apply("Café")
-			if disk.State != "Failed" || disk.Reason != "left-in-input" || !disk.Stopped || disk.Attempts != 1 {
+			text := []string{"send-keys", "-t", "%0", "-l", "--", "/rename " + target}
+			if !tc.interrupt {
+				if disk.State != "Failed" || disk.Reason != "left-in-input" || !disk.Stopped || disk.Attempts != 1 {
+					t.Fatalf("disk %+v", disk)
+				}
+				if !reflect.DeepEqual(w.writes(), [][]string{text}) {
+					t.Fatalf("writes %q", w.writes())
+				}
+				return
+			}
+			if disk.State != "Held" || disk.Reason != "interrupted" || disk.Stopped || disk.Attempts != 0 {
 				t.Fatalf("disk %+v", disk)
 			}
-			got := w.writes()
-			want := [][]string{{"send-keys", "-t", "%0", "-l", "--", "/rename " + target}}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("writes %q", got)
+			backs := make([]string, utf8.RuneCountInString("/rename "+target))
+			for i := range backs {
+				backs[i] = "Backspace"
+			}
+			want := [][]string{text, append([]string{"send-keys", "-t", "%0"}, backs...)}
+			if !reflect.DeepEqual(w.writes(), want) {
+				t.Fatalf("writes\n got %q\nwant %q", w.writes(), want)
 			}
 		})
+	}
+}
+
+func TestRenameInterruptedClearsExactText(t *testing.T) {
+	w := newRenameWorld(t)
+	w.sess.Model = "custom-model"
+	const title = "Café"
+	typed := "/rename " + title
+	if utf8.RuneCountInString(typed) == len(typed) || !strings.Contains(typed, "é") {
+		t.Fatalf("fixture %q is not a non-ASCII title", typed)
+	}
+	w.screens = []string{sessiontitle.IdleEmptyScreen, screenHolding(typed), sessiontitle.IdleEmptyScreen}
+	w.afterText = func() {
+		w.spec.status = "busy"
+		w.writeRecord()
+	}
+	disk := w.apply(title)
+	if disk.State != "Held" || disk.Reason != "interrupted" || disk.Stopped || disk.Attempts != 0 || disk.LastTypedAt.IsZero() {
+		t.Fatalf("disk %+v", disk)
+	}
+	backs := make([]string, utf8.RuneCountInString(typed))
+	for i := range backs {
+		backs[i] = "Backspace"
+	}
+	want := [][]string{
+		{"send-keys", "-t", "%0", "-l", "--", typed},
+		append([]string{"send-keys", "-t", "%0"}, backs...),
+	}
+	if !reflect.DeepEqual(w.writes(), want) {
+		t.Fatalf("writes\n got %q\nwant %q", w.writes(), want)
+	}
+}
+
+func TestRenameNoBackspaceWhenTheRowDiffers(t *testing.T) {
+	w := newRenameWorld(t)
+	w.sess.Model = "custom-model"
+	typed := "/rename Café"
+	w.screens = []string{sessiontitle.IdleEmptyScreen, screenHolding(typed + "x")}
+	disk := w.apply("Café")
+	if disk.State != "Failed" || disk.Reason != "left-in-input" || !disk.Stopped || disk.Attempts != 1 {
+		t.Fatalf("disk %+v", disk)
+	}
+	want := [][]string{{"send-keys", "-t", "%0", "-l", "--", typed}}
+	if !reflect.DeepEqual(w.writes(), want) {
+		t.Fatalf("writes %q", w.writes())
+	}
+}
+
+func TestRenameNoBackspaceWhenTheCursorIsElsewhere(t *testing.T) {
+	w := newRenameWorld(t)
+	w.sess.Model = "custom-model"
+	typed := "/rename Café"
+	w.screens = []string{sessiontitle.IdleEmptyScreen, screenHolding(typed)}
+	w.afterText = func() { w.cursorX, w.cursorY, w.cursorSet = 2, 46, true }
+	disk := w.apply("Café")
+	if disk.State != "Failed" || disk.Reason != "left-in-input" || disk.Attempts != 1 {
+		t.Fatalf("disk %+v", disk)
+	}
+	want := [][]string{{"send-keys", "-t", "%0", "-l", "--", typed}}
+	if !reflect.DeepEqual(w.writes(), want) {
+		t.Fatalf("writes %q", w.writes())
+	}
+}
+
+func TestRenameNoBackspaceWhenCaptureFails(t *testing.T) {
+	w := newRenameWorld(t)
+	w.sess.Model = "custom-model"
+	typed := "/rename Café"
+	w.screens = []string{sessiontitle.IdleEmptyScreen, screenHolding(typed)}
+	w.afterText = func() { w.captureErr = true }
+	disk := w.apply("Café")
+	if disk.State != "Failed" || disk.Reason != "left-in-input" || disk.Attempts != 1 {
+		t.Fatalf("disk %+v", disk)
+	}
+	want := [][]string{{"send-keys", "-t", "%0", "-l", "--", typed}}
+	if !reflect.DeepEqual(w.writes(), want) {
+		t.Fatalf("writes %q", w.writes())
 	}
 }
 
@@ -971,17 +1168,35 @@ func TestRenameLeftInInputLaterSentBecomesApplied(t *testing.T) {
 	}
 }
 
-func TestRenameFirstLaunchTypesNothing(t *testing.T) {
+func TestRenameFirstLaunchTitleTypesNothing(t *testing.T) {
 	w := newRenameWorld(t)
 	w.boot(true)
-	disk := w.apply("Other")
+	disk := w.apply("Café")
 	if disk.State != "Applied" || disk.Reason != "launch" || disk.Applied != "Haiku | Café" {
 		t.Fatalf("disk %+v", disk)
 	}
 	w.assertNoWrite(t)
 	again := w.apply("Café")
-	if again.Reason != "launch" || len(w.writes()) != 0 {
-		t.Fatalf("second boot heartbeat %+v writes %q", again, w.writes())
+	if again.Reason != "launch" || again.Applied != "Haiku | Café" {
+		t.Fatalf("second heartbeat %+v", again)
+	}
+	w.assertNoWrite(t)
+}
+
+func TestRenameFirstLaunchLaterTitleTypes(t *testing.T) {
+	w := newRenameWorld(t)
+	w.boot(true)
+	first := w.apply("Café")
+	if first.Reason != "launch" {
+		t.Fatalf("launch %+v", first)
+	}
+	w.assertNoWrite(t)
+	target := w.composed("Other")
+	w.arm(target, true)
+	disk := w.apply("Other")
+	w.assertTyped(t, target)
+	if disk.State != "Applied" || disk.Reason != "confirmed" || disk.Applied != target {
+		t.Fatalf("later %+v", disk)
 	}
 }
 
@@ -1011,8 +1226,11 @@ func TestRenameResumeWithNoChangeTypesNothing(t *testing.T) {
 func TestRenameNoTitleFileAndNoTitleTypesNothing(t *testing.T) {
 	w := newRenameWorld(t)
 	disk := w.apply("")
-	if disk.State != "Applied" || disk.Reason != "already" || disk.Applied != w.sess.Name {
+	if disk.found || disk.State != "" || disk.Applied != "" {
 		t.Fatalf("disk %+v", disk)
+	}
+	if _, err := os.Stat(w.s.statePath(titleStateFile)); !os.IsNotExist(err) {
+		t.Fatal("a session that never had a title wrote title.json")
 	}
 	w.assertNoWrite(t)
 }
@@ -1104,6 +1322,279 @@ func TestRenameLockReleasedBeforeConfirm(t *testing.T) {
 	disk := w.apply("Café")
 	if !acquired || disk.State != "Typed" {
 		t.Fatalf("acquired %v disk %+v sleeps %d", acquired, disk, n)
+	}
+}
+
+func TestRenameForeignLaunchTypesNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(*Launch)
+	}{
+		{"other session", func(l *Launch) { l.Session = "other-session" }},
+		{"other uid", func(l *Launch) { l.SessionUID = "other-uid" }},
+		{"not a tui", func(l *Launch) { l.TUI = false }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newRenameWorld(t)
+			w.boot(true)
+			var l Launch
+			if readJSONFile(w.s.statePath(launchFile), &l) != nil {
+				t.Fatal("launch")
+			}
+			tc.edit(&l)
+			writeJSON(t, w.s.statePath(launchFile), l)
+			disk := w.hold(t, "Café", "process")
+			if disk.Applied != "" {
+				t.Fatalf("seeded %q", disk.Applied)
+			}
+		})
+	}
+}
+
+func TestRenameTitleWriteFailureTypesNothing(t *testing.T) {
+	w := newRenameWorld(t)
+	target := w.composed("Café")
+	w.arm(target, true)
+	orig := writeTitleFile
+	n := 0
+	writeTitleFile = func(s Settings, d *titleDisk) error {
+		n++
+		if n == 1 {
+			return errors.New("full")
+		}
+		return orig(s, d)
+	}
+	t.Cleanup(func() { writeTitleFile = orig })
+	disk := w.apply("Café")
+	if disk.State != "Held" || disk.Reason != "state" {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertNoWrite(t)
+}
+
+func TestRenameUpdatedAtNotAPositiveNumber(t *testing.T) {
+	t.Run("null", func(t *testing.T) {
+		w := newRenameWorld(t)
+		w.spec.updatedNull = true
+		w.spec.updated = 0
+		w.writeRecord()
+		disk := w.apply("Café")
+		if disk.State != "Unknown" || disk.Reason != "record-shape" {
+			t.Fatalf("%+v", disk)
+		}
+		w.assertNoWrite(t)
+	})
+	t.Run("string", func(t *testing.T) {
+		w := newRenameWorld(t)
+		w.spec.updatedString = true
+		w.spec.updated = 0
+		w.writeRecord()
+		disk := w.apply("Café")
+		if disk.State != "Unknown" || disk.Reason != "record-shape" {
+			t.Fatalf("%+v", disk)
+		}
+		w.assertNoWrite(t)
+	})
+	t.Run("zero", func(t *testing.T) {
+		w := newRenameWorld(t)
+		writeJSON(t, w.recordPath(), map[string]any{
+			"bridgeSessionId": "session_01AbCdEf", "procStart": w.start,
+			"status": "idle", "updatedAt": 0, "name": "derived-name", "nameSource": "api",
+		})
+		disk := w.apply("Café")
+		if disk.State != "Unknown" || disk.Reason != "record-shape" {
+			t.Fatalf("%+v", disk)
+		}
+		w.assertNoWrite(t)
+	})
+	t.Run("missing", func(t *testing.T) {
+		w := newRenameWorld(t)
+		writeJSON(t, w.recordPath(), map[string]any{
+			"bridgeSessionId": "session_01AbCdEf", "procStart": w.start,
+			"status": "idle", "name": "derived-name", "nameSource": "api",
+		})
+		disk := w.apply("Café")
+		if disk.State != "Unknown" || disk.Reason != "record-shape" {
+			t.Fatalf("%+v", disk)
+		}
+		w.assertNoWrite(t)
+	})
+}
+
+type hangRunner struct {
+	inner Runner
+	hang  atomic.Bool
+}
+
+func (h *hangRunner) LookPath(name string) (string, error) { return h.inner.LookPath(name) }
+
+func (h *hangRunner) Run(ctx context.Context, c Cmd) (Result, error) {
+	if h.hang.Load() && c.Name == "tmux" && len(c.Args) > 0 && c.Args[0] == "list-clients" {
+		h.hang.Store(false)
+		<-ctx.Done()
+		return Result{}, ctx.Err()
+	}
+	return h.inner.Run(ctx, c)
+}
+
+func TestRenameHungCallDoesNotStopLaterHeartbeats(t *testing.T) {
+	w := newRenameWorld(t)
+	h := &hangRunner{inner: w.run}
+	h.hang.Store(true)
+	start := time.Now()
+	w.app.Apply(context.Background(), h, w.s, w.sess, slog.New(slog.DiscardHandler), HeartbeatTitle{Present: true, Text: "Café"})
+	if time.Since(start) > 4*time.Second {
+		t.Fatalf("heartbeat waited %s", time.Since(start))
+	}
+	disk := loadTitle(w.s, w.sess)
+	if disk.Reason != "attached" {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertNoWrite(t)
+	target := w.composed("Café")
+	w.arm(target, true)
+	start = time.Now()
+	disk = w.apply("Café")
+	if time.Since(start) > time.Second {
+		t.Fatalf("later heartbeat waited %s", time.Since(start))
+	}
+	w.assertTyped(t, target)
+}
+
+func TestRenameWhitespaceAndMultilineInputTypesNothing(t *testing.T) {
+	t.Run("spaces", func(t *testing.T) {
+		w := newRenameWorld(t)
+		// Derived from the recorded idle fixture: spaces in its input row.
+		w.screens = []string{screenHolding("   ")}
+		w.hold(t, "Café", "screen-unknown")
+	})
+	t.Run("multiline", func(t *testing.T) {
+		w := newRenameWorld(t)
+		// Derived from the recorded idle fixture by a blank row inside the box.
+		base := sessiontitle.IdleEmptyScreen
+		const mark = "❯\u00a0"
+		i := strings.LastIndex(base, mark)
+		nl := strings.IndexByte(base[i:], '\n')
+		at := i + nl + 1
+		w.screens = []string{base[:at] + "\n" + base[at:]}
+		w.hold(t, "Café", "screen-unknown")
+	})
+}
+
+func TestRenameTrailingSemicolonTypesNothing(t *testing.T) {
+	w := newRenameWorld(t)
+	disk := w.apply("ab;")
+	if disk.State != "Failed" || disk.Reason != "invalid-title" || !disk.Stopped {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertNoWrite(t)
+}
+
+func TestRenameListPanesFormatIsRecorded(t *testing.T) {
+	raw, err := os.ReadFile("../sessiontitle/testdata/tmux-facts.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("facts %q", lines)
+	}
+	format := lines[3]
+	if format != sessiontitle.ListPanesFormat() || strings.Contains(format, "window_synchronized") || !strings.Contains(format, "#{pane_synchronized}") {
+		t.Fatal(format)
+	}
+	w := newRenameWorld(t)
+	if w.panes != lines[1] {
+		t.Fatalf("fake pane line %q", w.panes)
+	}
+	target := w.composed("Café")
+	w.arm(target, true)
+	w.apply("Café")
+	saw := false
+	for _, c := range w.run.snapshot() {
+		if c.Name == "tmux" && len(c.Args) > 0 && c.Args[0] == "list-panes" {
+			saw = true
+			if !slices.Contains(c.Args, format) {
+				t.Fatalf("argv %q", c.Args)
+			}
+		}
+	}
+	if !saw {
+		t.Fatal("no list-panes")
+	}
+}
+
+func TestRenameBlankClientCounts(t *testing.T) {
+	w := newRenameWorld(t)
+	w.clientsExact = "\n"
+	w.clientsExactSet = true
+	w.hold(t, "Café", "attached")
+}
+
+func TestRenameCommandShadowed(t *testing.T) {
+	w := newRenameWorld(t)
+	dir := filepath.Join(w.s.Home, "proj", ".claude", "commands")
+	writeFile(t, filepath.Join(dir, "rename.md"), "name\n")
+	w.hold(t, "Café", "command-shadowed")
+}
+
+func TestRenameCommandShadowUnreadable(t *testing.T) {
+	w := newRenameWorld(t)
+	if err := os.MkdirAll(filepath.Join(w.s.ClaudeConfigDir, "settings.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w.hold(t, "Café", "command-shadowed")
+}
+
+func TestRenameSinceSetOnceAndFileNotRewritten(t *testing.T) {
+	w := newRenameWorld(t)
+	w.spec.status = "busy"
+	w.spec.updated = 0
+	w.writeRecord()
+	first := w.hold(t, "Café", "busy")
+	path := w.s.statePath(titleStateFile)
+	old := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	w.clock.Advance(time.Minute)
+	second := w.hold(t, "Café", "busy")
+	if !second.Since.Equal(first.Since) {
+		t.Fatalf("since %s -> %s", first.Since, second.Since)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().UTC().Equal(old) {
+		t.Fatalf("rewrote title.json at %s", info.ModTime())
+	}
+}
+
+func TestRenameClearWhenAlreadyTheSessionName(t *testing.T) {
+	w := newRenameWorld(t)
+	w.saveDisk(titleDisk{Applied: w.sess.Name, Target: w.sess.Name, State: "Applied", Reason: "already"})
+	disk := w.apply("")
+	if disk.State != "Applied" || disk.Reason != "already" || disk.Applied != w.sess.Name {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertNoWrite(t)
+}
+
+func TestRenameUnknownTitleTextDoesNotClear(t *testing.T) {
+	w := newRenameWorld(t)
+	target := w.composed("Café")
+	w.saveDisk(titleDisk{Applied: target, Target: target, State: "Applied", Reason: "confirmed"})
+	before, err := os.ReadFile(w.s.statePath(titleStateFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.app.Apply(context.Background(), w.run, w.s, w.sess, slog.New(slog.DiscardHandler), HeartbeatTitle{Unknown: true})
+	w.assertNoWrite(t)
+	after, err := os.ReadFile(w.s.statePath(titleStateFile))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("state changed %s", after)
 	}
 }
 

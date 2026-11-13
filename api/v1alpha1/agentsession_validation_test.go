@@ -817,13 +817,13 @@ func TestSpecImmutableExceptOperatingModeAndLifecycle(t *testing.T) {
 			s := remoteSession()
 			s.Spec.Title = "Main coordinator"
 			return s
-		}, func(s *v1alpha1.AgentSessionSpec) { s.Title = "Ops migration" }, ""},
-		{"add title", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Title = "Main coordinator" }, ""},
+		}, func(s *v1alpha1.AgentSessionSpec) { s.Title = "Ops migration" }, immutable},
+		{"add title", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Title = "Main coordinator" }, presence},
 		{"remove title", func() *v1alpha1.AgentSession {
 			s := remoteSession()
 			s.Spec.Title = "Main coordinator"
 			return s
-		}, func(s *v1alpha1.AgentSessionSpec) { s.Title = "" }, ""},
+		}, func(s *v1alpha1.AgentSessionSpec) { s.Title = "" }, presence},
 		{"change base", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Base = "origin/dev" }, "spec.base"},
 		{"change size", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Size = v1alpha1.SizeL }, "spec.size"},
 		{"change the prompt", taskSession, func(s *v1alpha1.AgentSessionSpec) { s.Prompt = "something else" }, "spec.prompt"},
@@ -2803,8 +2803,9 @@ func TestSummonExecutorLatchRules(t *testing.T) {
 }
 
 // TestTitleBounds is DESIGN-065 ruling 1: each bound accepts and refuses.
-// Adding, changing and removing a title are accepted (rule 8.1); the bounds
-// on an update are TestTitleBoundsOnUpdate.
+// spec.title does not change after create (ADR-027). Adding, changing and
+// removing it are refused by TestSpecImmutableExceptOperatingModeAndLifecycle.
+// The bounds on an update are TestTitleBoundsOnUpdate.
 func TestTitleBounds(t *testing.T) {
 	title96 := strings.Repeat("é", 48)
 	title97 := strings.Repeat("é", 47) + "€"
@@ -2821,6 +2822,7 @@ func TestTitleBounds(t *testing.T) {
 		{"leading digit", "1a"},
 		{"letter then combining mark", "e\u0301"},
 		{"hyphen later", "Main-coordinator"},
+		{"semicolon in the middle", "a;b"},
 		{"48 characters", strings.Repeat("a", 48)},
 		{"96 bytes", title96},
 	}
@@ -2849,6 +2851,8 @@ func TestTitleBounds(t *testing.T) {
 		{"48 euros", euro48, "at most 96 bytes"},
 		{"bar", "|", "no bar"},
 		{"bar in text", "a|b", "no bar"},
+		{"trailing semicolon", "ab;", "semicolon"},
+		{"backslash", "a\\b", "backslash"},
 		{"control character", "a\u0007b", "no control"},
 		{"tab", "a\tb", "letter or a digit"},
 		{"newline", "a\nb", "letter or a digit"},
@@ -2896,9 +2900,9 @@ func TestTitleBounds(t *testing.T) {
 	wantInvalid(t, k8s.Status().Update(ctx(t), got), "at most 128 bytes")
 }
 
-// TestTitleBoundsOnUpdate is DESIGN-065 rule 8.1: every title bound still
-// refuses an update, and no other spec field becomes changeable. Adding,
-// changing and removing a valid title are TestSpecImmutableExceptOperatingModeAndLifecycle.
+// TestTitleBoundsOnUpdate refuses a title that breaks a bound. spec.title is
+// also immutable, so the refusal may name that. Adding, changing and removing
+// a valid title are TestSpecImmutableExceptOperatingModeAndLifecycle.
 func TestTitleBoundsOnUpdate(t *testing.T) {
 	title97 := strings.Repeat("é", 47) + "€"
 	refuse := []struct {
@@ -2909,6 +2913,8 @@ func TestTitleBoundsOnUpdate(t *testing.T) {
 		{"49 characters", func(s *v1alpha1.AgentSessionSpec) { s.Title = strings.Repeat("a", 49) }, "spec.title"},
 		{"97 bytes", func(s *v1alpha1.AgentSessionSpec) { s.Title = title97 }, "at most 96 bytes"},
 		{"bar", func(s *v1alpha1.AgentSessionSpec) { s.Title = "a|b" }, "no bar"},
+		{"trailing semicolon", func(s *v1alpha1.AgentSessionSpec) { s.Title = "ab;" }, "semicolon"},
+		{"backslash", func(s *v1alpha1.AgentSessionSpec) { s.Title = "a\\b" }, "backslash"},
 		{"control character", func(s *v1alpha1.AgentSessionSpec) { s.Title = "a\u0007b" }, "no control"},
 		{"leading space", func(s *v1alpha1.AgentSessionSpec) { s.Title = " Main" }, "no leading or trailing space"},
 		{"change repo", func(s *v1alpha1.AgentSessionSpec) { s.Repo = "haynesnetwork" }, "spec.repo"},
@@ -2948,6 +2954,13 @@ func TestRemoteRenameStatusBounds(t *testing.T) {
 	}
 	if err := set(ok); err != nil {
 		t.Fatal(err)
+	}
+	for _, reason := range []string{"state", "command-shadowed", "interrupted"} {
+		rc := ok
+		rc.Rename = &v1alpha1.RemoteRenameStatus{State: "Held", Reason: reason, Since: &at}
+		if err := set(rc); err != nil {
+			t.Fatalf("reason %s: %v", reason, err)
+		}
 	}
 	for _, attempts := range []int32{0, 1, 2} {
 		rc := ok

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/sessiontitle"
@@ -27,14 +28,18 @@ const (
 	renameConfirmFor = 10 * time.Second
 	renameConfirmGap = 500 * time.Millisecond
 	renameTypedFor   = 2 * time.Minute
+	renameCallFor    = 2 * time.Second
+	renameBudget     = 5 * time.Second
 	titleStateFile   = "title.json"
 )
 
 // HeartbeatTitle is the title object in a heartbeat answer. Present is false
 // for a 204, an empty body, or a body with no title object: agentd then types
-// nothing and keeps the state it had.
+// nothing and keeps the state it had. Unknown is a title object whose text is
+// missing or not a string: nothing is typed and nothing is cleared.
 type HeartbeatTitle struct {
 	Present bool
+	Unknown bool
 	Text    string
 }
 
@@ -50,6 +55,16 @@ type TitleClock interface {
 type TitleApplier struct {
 	Clock    TitleClock
 	versions cliVersionCache
+	pace     paceFloor
+}
+
+// paceFloor keeps the last attempt in memory when title.json cannot be
+// written, so a failed write does not let the next heartbeat type immediately.
+type paceFloor struct {
+	mu       sync.Mutex
+	target   string
+	at       time.Time
+	attempts int
 }
 
 type cliVersionCache struct {
@@ -74,13 +89,13 @@ type titleDisk struct {
 }
 
 func (d *titleDisk) set(state, reason, target string, now time.Time) {
-	keep := state == "Held" && d.State == "Held" && d.Target == target && !d.Since.IsZero()
+	if state == "Typed" {
+		reason = ""
+	}
+	keep := d.State == state && d.Reason == reason && d.Target == target && !d.Since.IsZero()
 	d.State = state
 	d.Reason = reason
 	d.Target = target
-	if state == "Typed" {
-		d.Reason = ""
-	}
 	if !keep {
 		d.Since = now.UTC()
 	}
@@ -89,7 +104,7 @@ func (d *titleDisk) set(state, reason, target string, now time.Time) {
 // Apply types the recorded title when the guard allows it (DESIGN-065 rules
 // 8.3 to 8.8). It types nothing when the answer has no title object.
 func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess protocol.Session, log *slog.Logger, ans HeartbeatTitle) {
-	if a == nil || !ans.Present {
+	if a == nil || !ans.Present || ans.Unknown {
 		return
 	}
 	log = titleLogger(log)
@@ -98,13 +113,15 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 	}
 	disk := loadTitle(s, sess)
 	prev := disk
-	if value, ok := firstLaunchValue(s, sess); ok {
+	// A first launch records the title the CLI was given. Only that value is
+	// left untyped. A different target later in this pod's life is applied.
+	if value, ok := firstLaunchValue(s, sess); ok && disk.Applied == "" {
 		disk.UID = sess.SessionUID
 		disk.Applied = value
 		disk.Stopped = false
-		disk.set("Applied", "launch", value, a.now())
-		disk.save(s, log, prev)
-		return
+		if disk.State == "" {
+			disk.set("Applied", "launch", value, a.now())
+		}
 	}
 	target, ok := renameTarget(sess, ans.Text)
 	if !ok {
@@ -114,12 +131,7 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 		disk.save(s, log, prev)
 		return
 	}
-	if !disk.found && ans.Text == "" {
-		disk.UID = sess.SessionUID
-		disk.Applied = sess.Name
-		disk.Stopped = false
-		disk.set("Applied", "already", sess.Name, a.now())
-		disk.save(s, log, prev)
+	if !disk.found && ans.Text == "" && disk.Applied == "" {
 		return
 	}
 	disk.UID = sess.SessionUID
@@ -131,8 +143,16 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 		disk.Reason = ""
 		disk.Target = target
 	}
+	a.applyFloor(&disk, target)
 	if !a.willType(disk, target) {
 		a.reconcile(&disk, s, target, prev)
+		disk.save(s, log, prev)
+		return
+	}
+	budget, stop := context.WithTimeout(ctx, renameBudget)
+	defer stop()
+	if _, ok := a.cliMinor(budget, r, s); !ok {
+		disk.set("Held", "cli-version", target, a.now())
 		disk.save(s, log, prev)
 		return
 	}
@@ -142,18 +162,47 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 		disk.save(s, log, prev)
 		return
 	}
-	held := true
-	defer func() {
-		if held {
+	released := false
+	release := func() {
+		if !released && unlock != nil {
+			released = true
 			unlock()
 		}
-	}()
-	if a.guardAndType(ctx, r, s, sess, log, &disk, target) {
-		held = false
-		unlock()
-		a.confirm(ctx, s, &disk, target)
+	}
+	defer release()
+	if a.guardAndType(budget, r, s, sess, log, &disk, target) {
+		release()
+		a.confirm(budget, s, &disk, target)
 	}
 	disk.save(s, log, prev)
+}
+
+func (a *TitleApplier) applyFloor(disk *titleDisk, target string) {
+	if a == nil {
+		return
+	}
+	a.pace.mu.Lock()
+	defer a.pace.mu.Unlock()
+	if a.pace.target != target || a.pace.attempts == 0 {
+		return
+	}
+	if a.pace.attempts > disk.Attempts {
+		disk.Attempts = a.pace.attempts
+	}
+	if !a.pace.at.IsZero() && disk.LastTypedAt.Before(a.pace.at) {
+		disk.LastTypedAt = a.pace.at
+	}
+}
+
+func (a *TitleApplier) rememberPace(target string, attempts int, at time.Time) {
+	if a == nil {
+		return
+	}
+	a.pace.mu.Lock()
+	a.pace.target = target
+	a.pace.attempts = attempts
+	a.pace.at = at
+	a.pace.mu.Unlock()
 }
 
 // willType is true only on the path that may send keys. The delivery lock is
@@ -199,19 +248,26 @@ func (a *TitleApplier) reconcile(disk *titleDisk, s Settings, target string, pre
 // when Enter was sent and the lock may be released for the confirmation poll.
 func (a *TitleApplier) guardAndType(ctx context.Context, r Runner, s Settings, sess protocol.Session, log *slog.Logger, disk *titleDisk, target string) bool {
 	now := a.now()
+	hold := func(state, reason string) bool {
+		if state == "Failed" {
+			disk.Stopped = true
+		}
+		disk.set(state, reason, target, a.now())
+		return false
+	}
+	if ctx.Err() != nil {
+		return hold("Held", "process")
+	}
 	p := liveCLI(s)
 	if !cliOfThisBoot(s, sess) || !pidAlive(p) {
-		disk.set("Held", "process", target, now)
-		return false
+		return hold("Held", "process")
 	}
 	rec, fail := readTitleRecord(s, p)
 	if fail == "process" {
-		disk.set("Held", "process", target, now)
-		return false
+		return hold("Held", "process")
 	}
 	if fail == "record-shape" {
-		disk.set("Unknown", "record-shape", target, now)
-		return false
+		return hold("Unknown", "record-shape")
 	}
 	disk.ProviderTitle = providerTitle(rec)
 	if rec.name == target {
@@ -225,65 +281,98 @@ func (a *TitleApplier) guardAndType(ctx context.Context, r Runner, s Settings, s
 		return false
 	}
 	if !bridgeSessionID.MatchString(rec.bridge) {
-		disk.set("Held", "not-registered", target, now)
-		return false
+		return hold("Held", "not-registered")
 	}
 	if reason := idleReason(rec, now); reason != "" {
-		disk.set("Held", reason, target, now)
-		return false
+		return hold("Held", reason)
 	}
 	n, err := strictClientCount(ctx, r, s)
 	if err != nil || n != 0 {
-		disk.set("Held", "attached", target, now)
-		return false
+		return hold("Held", "attached")
 	}
 	pane, err := readAgentPane(ctx, r, s)
 	if err != nil || !paneForeground(p.Pid, pane) {
-		disk.set("Held", "pane", target, now)
-		return false
-	}
-	if _, ok := a.cliMinor(ctx, r, s); !ok {
-		disk.set("Held", "cli-version", target, now)
-		return false
+		return hold("Held", "pane")
 	}
 	screen, err := capturePane(ctx, r, s, pane.id)
 	if err != nil {
-		disk.set("Held", "screen-unknown", target, now)
-		return false
+		return hold("Held", "screen-unknown")
 	}
-	switch sessiontitle.ClassifyInput(screen, "") {
+	cur, err := readCursor(ctx, r, s, pane.id)
+	if err != nil {
+		return hold("Held", "screen-unknown")
+	}
+	switch sessiontitle.ClassifyInput(screen, "", cur) {
 	case sessiontitle.InputEmpty:
 	case sessiontitle.InputOther:
-		disk.set("Held", "input", target, now)
-		return false
+		return hold("Held", "input")
 	default:
-		disk.set("Held", "screen-unknown", target, now)
-		return false
+		return hold("Held", "screen-unknown")
 	}
 	if (!disk.LastTypedAt.IsZero() && now.Sub(disk.LastTypedAt) < renamePaceFor) || disk.Attempts >= renameMaxTries {
-		disk.set("Held", "paced", target, now)
-		return false
+		return hold("Held", "paced")
+	}
+	project := ""
+	if launch, ok := currentLaunch(s); ok {
+		project = launch.Dir
+	}
+	if commandShadowed(project, s.ClaudeConfigDir) {
+		return hold("Held", "command-shadowed")
 	}
 	typed := "/rename " + target
+	if strings.HasSuffix(typed, ";") {
+		return hold("Failed", "invalid-title")
+	}
+	staged := *disk
+	staged.Attempts++
+	staged.LastTypedAt = a.now().UTC()
+	a.rememberPace(target, staged.Attempts, staged.LastTypedAt)
+	if err := writeTitleFile(s, &staged); err != nil {
+		disk.Attempts = staged.Attempts
+		disk.LastTypedAt = staged.LastTypedAt
+		return hold("Held", "state")
+	}
+	disk.Attempts = staged.Attempts
+	disk.LastTypedAt = staged.LastTypedAt
+	// The log is before this read. The read is the last thing before the keys.
 	log.Info("session title keystroke", "kind", "text", "titleHash", sessiontitle.HashPrefix(target))
-	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"send-keys", "-t", pane.id, "-l", "--", typed}}); err != nil {
-		disk.Attempts++
-		disk.LastTypedAt = a.now()
+	fresh, fail := readTitleRecord(s, p)
+	if fail == "process" {
+		return hold("Held", "process")
+	}
+	if fail == "record-shape" {
+		return hold("Unknown", "record-shape")
+	}
+	if fresh.status != rec.status || fresh.updated != rec.updated {
+		if reason := idleReason(fresh, a.now()); reason != "" {
+			return hold("Held", reason)
+		}
+		return hold("Held", "quiet")
+	}
+	if _, err := renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: []string{"send-keys", "-t", pane.id, "-l", "--", typed}}); err != nil {
 		disk.Stopped = true
 		disk.set("Failed", "left-in-input", target, a.now())
 		return false
 	}
-	disk.Attempts++
-	disk.LastTypedAt = a.now()
 	a.sleep(renameSettle)
 	began := a.now()
 	if !secondCheck(ctx, r, s, p, pane, rec, typed) || a.now().Sub(began) >= renameEnterFor {
+		if clearTyped(ctx, r, s, pane.id, typed) {
+			if disk.Attempts > 0 {
+				disk.Attempts--
+			}
+			a.rememberPace(target, disk.Attempts, disk.LastTypedAt)
+			if err := writeTitleFile(s, disk); err != nil {
+				return hold("Held", "state")
+			}
+			return hold("Held", "interrupted")
+		}
 		disk.Stopped = true
 		disk.set("Failed", "left-in-input", target, a.now())
 		return false
 	}
 	log.Info("session title keystroke", "kind", "enter", "titleHash", sessiontitle.HashPrefix(target))
-	_, _ = r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"send-keys", "-t", pane.id, "Enter"}})
+	_, _ = renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: []string{"send-keys", "-t", pane.id, "Enter"}})
 	disk.set("Typed", "", target, a.now())
 	return true
 }
@@ -332,7 +421,7 @@ func (a *TitleApplier) cliMinor(ctx context.Context, r Runner, s Settings) (stri
 	defer a.versions.mu.Unlock()
 	if !a.versions.done {
 		a.versions.done = true
-		res, err := r.Run(ctx, Cmd{Name: s.ClaudeBin, Args: []string{"--version"}})
+		res, err := renameRun(ctx, r, Cmd{Name: s.ClaudeBin, Args: []string{"--version"}})
 		if err == nil {
 			minor, ok := sessiontitle.CLIMinor(string(res.Stdout))
 			a.versions.minor = minor
@@ -400,7 +489,10 @@ func loadTitle(s Settings, sess protocol.Session) titleDisk {
 }
 
 func (d *titleDisk) save(s Settings, log *slog.Logger, prev titleDisk) {
-	if err := writeJSONFile(s.statePath(titleStateFile), d); err != nil {
+	if prev.found && titleSame(d, &prev) {
+		return
+	}
+	if err := writeTitleFile(s, d); err != nil {
 		log.Warn("session title state", "err", err.Error())
 		return
 	}
@@ -408,6 +500,27 @@ func (d *titleDisk) save(s Settings, log *slog.Logger, prev titleDisk) {
 		return
 	}
 	log.Info("session title", "state", d.State, "reason", d.Reason, "attempts", d.Attempts, "titleHash", sessiontitle.HashPrefix(d.Target))
+}
+
+func titleSame(a, b *titleDisk) bool {
+	left, errA := json.Marshal(titleCopy(a))
+	right, errB := json.Marshal(titleCopy(b))
+	return errA == nil && errB == nil && string(left) == string(right)
+}
+
+func titleCopy(d *titleDisk) titleDisk {
+	c := *d
+	c.found = false
+	return c
+}
+
+// writeTitleFile is the durable title.json write. Tests replace it.
+var writeTitleFile = func(s Settings, d *titleDisk) error {
+	data, err := json.MarshalIndent(titleCopy(d), "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFileDurable(s.statePath(titleStateFile), append(data, '\n'), 0o600)
 }
 
 func tryDeliverLock(s Settings) (func(), bool) {
@@ -479,10 +592,14 @@ func jsonString(raw json.RawMessage, dest *string) bool {
 }
 
 func jsonNumber(raw json.RawMessage, dest *int64) bool {
-	if len(raw) == 0 || raw[0] == '"' {
+	text := strings.TrimSpace(string(raw))
+	if text == "" || text == "null" || text[0] == '"' {
 		return false
 	}
-	return json.Unmarshal(raw, dest) == nil
+	if json.Unmarshal(raw, dest) != nil || *dest <= 0 {
+		return false
+	}
+	return true
 }
 
 func providerTitle(rec titleRecord) string {
@@ -498,7 +615,7 @@ func idleReason(rec titleRecord, now time.Time) string {
 		return "busy"
 	case "waiting":
 		return "waiting"
-	case "idle":
+	case "idle", "shell":
 		at := time.UnixMilli(rec.updated)
 		if at.After(now) {
 			return "clock"
@@ -513,15 +630,17 @@ func idleReason(rec titleRecord, now time.Time) string {
 }
 
 func strictClientCount(ctx context.Context, r Runner, s Settings) (int, error) {
-	res, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"list-clients", "-t", "=" + TmuxSession, "-F", "#{client_tty}"}})
+	res, err := renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: []string{"list-clients", "-t", "=" + TmuxSession, "-F", "#{client_tty}"}})
 	if err != nil {
 		return 0, err
 	}
-	n := 0
-	for _, line := range strings.Split(strings.TrimSpace(string(res.Stdout)), "\n") {
-		if strings.TrimSpace(line) != "" {
-			n++
-		}
+	out := string(res.Stdout)
+	if out == "" {
+		return 0, nil
+	}
+	n := strings.Count(out, "\n")
+	if !strings.HasSuffix(out, "\n") {
+		n++
 	}
 	return n, nil
 }
@@ -534,15 +653,14 @@ type paneSnap struct {
 }
 
 func readAgentPane(ctx context.Context, r Runner, s Settings) (paneSnap, error) {
-	res, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{
-		"list-panes", "-s", "-t", "=" + TmuxSession, "-F",
-		"#{window_index} #{pane_index} #{pane_id} #{pane_dead} #{pane_in_mode} #{window_synchronized} #{pane_pid} #{pane_current_command}",
+	res, err := renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: []string{
+		"list-panes", "-s", "-t", "=" + TmuxSession, "-F", sessiontitle.ListPanesFormat(),
 	}})
 	if err != nil {
 		return paneSnap{}, err
 	}
 	var lines []string
-	for _, line := range strings.Split(strings.TrimSpace(string(res.Stdout)), "\n") {
+	for _, line := range strings.Split(strings.TrimRight(string(res.Stdout), "\n"), "\n") {
 		if strings.TrimSpace(line) != "" {
 			lines = append(lines, line)
 		}
@@ -551,12 +669,17 @@ func readAgentPane(ctx context.Context, r Runner, s Settings) (paneSnap, error) 
 		return paneSnap{}, errors.New("pane")
 	}
 	fields := strings.SplitN(lines[0], " ", 8)
-	if len(fields) < 7 || !strings.HasPrefix(fields[2], "%") {
+	if len(fields) != 8 || fields[7] == "" || !strings.HasPrefix(fields[2], "%") {
 		return paneSnap{}, errors.New("pane")
 	}
+	for _, flag := range []string{fields[3], fields[4], fields[5]} {
+		if flag != "0" && flag != "1" {
+			return paneSnap{}, errors.New("pane")
+		}
+	}
 	pid, err := strconv.Atoi(fields[6])
-	if err != nil {
-		return paneSnap{}, err
+	if err != nil || pid <= 0 {
+		return paneSnap{}, errors.New("pane")
 	}
 	return paneSnap{id: fields[2], pid: pid, dead: fields[3], mode: fields[4], sync: fields[5]}, nil
 }
@@ -608,20 +731,101 @@ func paneForeground(cli int, pane paneSnap) bool {
 }
 
 func capturePane(ctx context.Context, r Runner, s Settings, paneID string) (string, error) {
-	res, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"capture-pane", "-p", "-e", "-t", paneID}})
+	res, err := renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: []string{"capture-pane", "-p", "-e", "-t", paneID}})
 	if err != nil {
 		return "", err
 	}
 	return string(res.Stdout), nil
 }
 
+func readCursor(ctx context.Context, r Runner, s Settings, paneID string) (sessiontitle.Cursor, error) {
+	res, err := renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: []string{
+		"display-message", "-p", "-t", paneID, "#{cursor_x} #{cursor_y}",
+	}})
+	if err != nil {
+		return sessiontitle.Cursor{}, err
+	}
+	fields := strings.Fields(string(res.Stdout))
+	if len(fields) != 2 {
+		return sessiontitle.Cursor{}, errors.New("cursor")
+	}
+	x, errX := strconv.Atoi(fields[0])
+	y, errY := strconv.Atoi(fields[1])
+	if errX != nil || errY != nil || x < 0 || y < 0 {
+		return sessiontitle.Cursor{}, errors.New("cursor")
+	}
+	return sessiontitle.Cursor{X: x, Y: y, Known: true}, nil
+}
+
+// renameRun gives one subprocess its own two-second limit and does not wait
+// past that limit. The caller's context is the five-second budget.
+func renameRun(ctx context.Context, r Runner, c Cmd) (Result, error) {
+	if ctx.Err() != nil {
+		return Result{}, ctx.Err()
+	}
+	call, cancel := context.WithTimeout(ctx, renameCallFor)
+	defer cancel()
+	type outcome struct {
+		res Result
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := r.Run(call, c)
+		done <- outcome{res, err}
+	}()
+	select {
+	case <-call.Done():
+		return Result{}, call.Err()
+	case got := <-done:
+		return got.res, got.err
+	}
+}
+
+func quietStatus(status string) bool {
+	return status == "idle" || status == "shell"
+}
+
+// clearTyped removes exactly the text this pod just typed, one Backspace per
+// rune, and only when the input row still holds that text with the cursor
+// directly after it. It reports whether the row is empty again.
+func clearTyped(ctx context.Context, r Runner, s Settings, paneID, typed string) bool {
+	screen, err := capturePane(ctx, r, s, paneID)
+	if err != nil {
+		return false
+	}
+	cur, err := readCursor(ctx, r, s, paneID)
+	if err != nil {
+		return false
+	}
+	if sessiontitle.ClassifyInput(screen, typed, cur) != sessiontitle.InputExact {
+		return false
+	}
+	args := []string{"send-keys", "-t", paneID}
+	for range utf8.RuneCountInString(typed) {
+		args = append(args, "Backspace")
+	}
+	if _, err := renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: args}); err != nil {
+		return false
+	}
+	again, err := capturePane(ctx, r, s, paneID)
+	if err != nil {
+		return false
+	}
+	cur, err = readCursor(ctx, r, s, paneID)
+	if err != nil {
+		return false
+	}
+	return sessiontitle.ClassifyInput(again, "", cur) == sessiontitle.InputEmpty
+}
+
 func secondCheck(ctx context.Context, r Runner, s Settings, p agentPid, pane paneSnap, rec titleRecord, typed string) bool {
 	again, err := readAgentPane(ctx, r, s)
-	if err != nil || again != pane {
+	if err != nil || again != pane || !paneForeground(p.Pid, again) {
 		return false
 	}
 	fresh, fail := readTitleRecord(s, p)
-	if fail != "" || fresh.status != "idle" || fresh.updated != rec.updated {
+	if fail != "" || fresh.updated != rec.updated || fresh.status != rec.status || !quietStatus(fresh.status) {
 		return false
 	}
 	n, err := strictClientCount(ctx, r, s)
@@ -632,7 +836,11 @@ func secondCheck(ctx context.Context, r Runner, s Settings, p agentPid, pane pan
 	if err != nil {
 		return false
 	}
-	return sessiontitle.ClassifyInput(screen, typed) == sessiontitle.InputExact
+	cur, err := readCursor(ctx, r, s, pane.id)
+	if err != nil {
+		return false
+	}
+	return sessiontitle.ClassifyInput(screen, typed, cur) == sessiontitle.InputExact
 }
 
 // overlayRecordedTitle copies title.json onto a heartbeat when this session

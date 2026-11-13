@@ -241,11 +241,20 @@ type Session struct {
 	Mode           string          `json:"mode"`
 	Model          string          `json:"model"`
 	Title          string          `json:"title,omitempty"`
-	Effort         string          `json:"effort,omitempty"`
-	Size           string          `json:"size,omitempty"`
-	Profile        string          `json:"profile,omitempty"`
-	Tools          []string        `json:"tools,omitempty"`
-	Limits         *Limits         `json:"limits,omitempty"`
+	// CreatedTitle is spec.title when a later annotation differs from it.
+	// An empty string is a session that was created with no title.
+	CreatedTitle *string `json:"createdTitle,omitempty"`
+	// TitleIgnored is set when the title annotation is present and
+	// sessiontitle.Validate refuses it. The session then shows spec.title.
+	TitleIgnored bool `json:"titleIgnored,omitempty"`
+	// TitleRename is "off" when this operator's --title-rename-sessions does
+	// not name the session. It is omitted when typing is enabled for it.
+	TitleRename string   `json:"titleRename,omitempty"`
+	Effort      string   `json:"effort,omitempty"`
+	Size        string   `json:"size,omitempty"`
+	Profile     string   `json:"profile,omitempty"`
+	Tools       []string `json:"tools,omitempty"`
+	Limits      *Limits  `json:"limits,omitempty"`
 	// Lifecycle is the session's own timers, when it has any.
 	Lifecycle      *Lifecycle `json:"lifecycle,omitempty"`
 	Parent         string     `json:"parent,omitempty"`

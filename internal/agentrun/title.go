@@ -2,6 +2,7 @@ package agentrun
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -58,6 +59,9 @@ func (a *app) title(ctx context.Context, args []string) error {
 	}
 	var cur apiv1.Session
 	if _, err := a.call(ctx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(name)), nil, nil, &cur); err != nil {
+		if missingSession(err) {
+			return fail(ExitNotFound, "no such session")
+		}
 		return err
 	}
 	body := struct {
@@ -66,8 +70,11 @@ func (a *app) title(ctx context.Context, args []string) error {
 	}{Title: text, Expect: cur.Title}
 	var next apiv1.Session
 	status, err := a.callOnce(ctx, c, http.MethodPut, apiv1.SessionTitlePath(url.PathEscape(name)), body, &next)
-	if status == http.StatusNotFound || status == http.StatusMethodNotAllowed {
+	if status == http.StatusMethodNotAllowed || (status == http.StatusNotFound && !missingSession(err)) {
 		return fail(ExitFailed, "this operator has no session title route; nothing was changed")
+	}
+	if missingSession(err) {
+		return fail(ExitNotFound, "no such session")
 	}
 	if err != nil {
 		return err
@@ -75,12 +82,17 @@ func (a *app) title(ctx context.Context, args []string) error {
 	if cmd.c.output == outputJSON {
 		return a.printJSON(next)
 	}
-	shown := next.Title
-	if shown == "" {
-		shown = "none"
+	shown := next.Name
+	if next.Title != "" {
+		shown = sessiontitle.Compose(next.Model, next.Title)
 	}
-	a.outf("%s title: %s\n", next.Name, shown)
+	a.outf("%s\nIt is typed when the session is idle with an empty input line.\n", shown)
 	return nil
+}
+
+func missingSession(err error) bool {
+	var ee *exitError
+	return errors.As(err, &ee) && ee.code == ExitNotFound && strings.Contains(ee.msg, "session ") && strings.Contains(ee.msg, "not found") && !strings.Contains(ee.msg, "no route")
 }
 
 // titleRefusal replaces an older operator's unknown-field refusal. Any other

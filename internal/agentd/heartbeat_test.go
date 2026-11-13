@@ -84,14 +84,17 @@ func TestHeartbeatExchangeTitleShapes(t *testing.T) {
 		status  int
 		body    string
 		present bool
+		unknown bool
 		text    string
 	}{
-		{"204", http.StatusNoContent, "", false, ""},
-		{"empty", http.StatusOK, "", false, ""},
-		{"no title object", http.StatusOK, `{"ok":true}`, false, ""},
-		{"null title", http.StatusOK, `{"title":null}`, false, ""},
-		{"empty text", http.StatusOK, `{"title":{"text":""}}`, true, ""},
-		{"text", http.StatusOK, `{"title":{"text":"Café"}}`, true, "Café"},
+		{"204", http.StatusNoContent, "", false, false, ""},
+		{"empty", http.StatusOK, "", false, false, ""},
+		{"no title object", http.StatusOK, `{"ok":true}`, false, false, ""},
+		{"null title", http.StatusOK, `{"title":null}`, false, false, ""},
+		{"missing text", http.StatusOK, `{"title":{}}`, false, true, ""},
+		{"null text", http.StatusOK, `{"title":{"text":null}}`, false, true, ""},
+		{"empty text", http.StatusOK, `{"title":{"text":""}}`, true, false, ""},
+		{"text", http.StatusOK, `{"title":{"text":"Café"}}`, true, false, "Café"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -110,7 +113,7 @@ func TestHeartbeatExchangeTitleShapes(t *testing.T) {
 				t.Fatal(err)
 			}
 			ans, err := h.Exchange(context.Background(), protocol.Status{})
-			if err != nil || ans.Present != tc.present || ans.Text != tc.text {
+			if err != nil || ans.Present != tc.present || ans.Unknown != tc.unknown || ans.Text != tc.text {
 				t.Fatalf("ans %+v err %v", ans, err)
 			}
 		})

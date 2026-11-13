@@ -2,12 +2,14 @@ package sessiontitle
 
 import (
 	_ "embed"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
 
 // Screens recorded from Claude Code 2.1.321 (DESIGN-065 rule 8.11). They are
-// the only captures ClassifyInput treats as known.
+// capture-pane -e output. QuestionOpenScreen is the recorded AskUserQuestion
+// screen: it has no input box, and it must stay unknown.
 //
 //go:embed testdata/idle-empty-input.2.1.321.ansi
 var IdleEmptyScreen string
@@ -18,19 +20,51 @@ var IdlePlaceholderScreen string
 //go:embed testdata/typed-rename-zz.2.1.321.ansi
 var TypedRenameScreen string
 
+//go:embed testdata/question-open.2.1.321.ansi
+var QuestionOpenScreen string
+
+//go:embed testdata/tmux-facts.txt
+var tmuxFacts string
+
+// ListPanesFormat is the tmux 3.3a list-panes format in testdata/tmux-facts.txt.
+// The recorded line was produced with pane_synchronized.
+func ListPanesFormat() string {
+	lines := tmuxFactLines()
+	if len(lines) < 4 {
+		return ""
+	}
+	return lines[3]
+}
+
+// RecordedPaneLine is the list-panes line recorded beside that format.
+func RecordedPaneLine() string {
+	lines := tmuxFactLines()
+	if len(lines) < 2 {
+		return ""
+	}
+	return lines[1]
+}
+
+func tmuxFactLines() []string {
+	return strings.Split(strings.TrimRight(tmuxFacts, "\n"), "\n")
+}
+
 // InputKind is what ClassifyInput can say about one capture-pane -e screen.
 type InputKind int
 
 const (
-	// InputUnknown is a screen this build has not recorded: a question, a
-	// permission prompt, a capture it cannot parse, or chrome it does not know.
+	// InputUnknown is a screen that is not one idle input box: a question, a
+	// permission prompt, a selection list, a spinner, more than one input row,
+	// or a cursor that is not where that box's text ends.
 	InputUnknown InputKind = iota
-	// InputEmpty is the recorded idle box with nothing in the input row, or
-	// with the recorded dim placeholder and nothing else.
+	// InputEmpty is the one idle box with nothing in the input row, or with
+	// the recorded dim placeholder and nothing else, and the cursor just after
+	// the prompt mark.
 	InputEmpty
-	// InputExact is that box whose input row holds exactly the text asked about.
+	// InputExact is that box whose input row holds exactly the text asked
+	// about, with the cursor directly after it.
 	InputExact
-	// InputOther is that box with any other text in the input row.
+	// InputOther is that box with other non-blank text in the input row.
 	InputOther
 )
 
@@ -46,38 +80,165 @@ const (
 	fgCycle      = 246
 )
 
-// ClassifyInput reads a capture-pane -e screen. exact is the input text a
-// second check wants; an empty exact never returns InputExact. Anything that
-// is not the recorded idle box is InputUnknown.
-func ClassifyInput(screen, exact string) InputKind {
+// Cursor is a pane cursor from tmux display-message. Known is false when that
+// read failed or was not supplied; ClassifyInput then answers unknown.
+type Cursor struct {
+	X, Y  int
+	Known bool
+}
+
+// ClassifyInput reads the whole visible screen. exact is the input text a
+// second check wants; an empty exact never returns InputExact. Empty input
+// and an exact match both require the cursor. Anything else is unknown,
+// except other non-blank text in the one well-formed input row.
+func ClassifyInput(screen, exact string, cur Cursor) InputKind {
 	lines := parseScreen(screen)
-	var idx []int
-	for i, line := range lines {
-		if !blankCells(line) {
-			idx = append(idx, i)
+	row, ok := findInputRow(lines)
+	if !ok || !cur.Known {
+		return InputUnknown
+	}
+	text, dim, good := inputText(lines[row])
+	if !good {
+		return InputUnknown
+	}
+	const afterPrompt = 2
+	if text == "" || (text == placeholderText && dim) {
+		if cur.Y == row && cur.X == afterPrompt {
+			return InputEmpty
+		}
+		return InputUnknown
+	}
+	if strings.TrimSpace(text) == "" {
+		return InputUnknown
+	}
+	end := afterPrompt + utf8.RuneCountInString(text)
+	if exact != "" && text == exact {
+		if cur.Y == row && cur.X == end {
+			return InputExact
+		}
+		return InputUnknown
+	}
+	if cur.Y == row && cur.X >= afterPrompt {
+		return InputOther
+	}
+	return InputUnknown
+}
+
+// ObservedCursor is the cursor a recorded box would have: on the input row,
+// just after the prompt mark when the row is empty or a dim placeholder, and
+// just after any other text. A screen with no such box is not known.
+func ObservedCursor(screen string) Cursor {
+	lines := parseScreen(screen)
+	row, ok := findInputRow(lines)
+	if !ok {
+		return Cursor{}
+	}
+	text, dim, good := inputText(lines[row])
+	if !good {
+		return Cursor{}
+	}
+	x := 2
+	if text != "" && (text != placeholderText || !dim) && strings.TrimSpace(text) != "" {
+		x += utf8.RuneCountInString(text)
+	}
+	return Cursor{X: x, Y: row, Known: true}
+}
+
+// findInputRow reports the input row when the screen is exactly one input box
+// and that box is the last element before the status row. A selection hint, a
+// numbered option or a spinner anywhere on the screen is not that box.
+func findInputRow(lines [][]cell) (int, bool) {
+	for _, line := range lines {
+		if disqualifyingRow(line) {
+			return 0, false
 		}
 	}
-	if len(idx) < 4 {
-		return InputUnknown
+	var content []int
+	for i, line := range lines {
+		if !blankCells(line) {
+			content = append(content, i)
+		}
 	}
-	top := lines[idx[len(idx)-4]]
-	input := lines[idx[len(idx)-3]]
-	bottom := lines[idx[len(idx)-2]]
-	footer := lines[idx[len(idx)-1]]
-	if !footerOK(footer) || !dashRule(bottom) || !topRule(top) {
-		return InputUnknown
+	footers := 0
+	for i := len(content) - 1; i >= 0; i-- {
+		if !footerOK(lines[content[i]]) {
+			break
+		}
+		footers++
 	}
-	text, dim, ok := inputText(input)
-	if !ok {
-		return InputUnknown
+	if footers < 1 {
+		return 0, false
 	}
-	if text == "" || (text == placeholderText && dim) {
-		return InputEmpty
+	rest := content[:len(content)-footers]
+	if len(rest) < 3 {
+		return 0, false
 	}
-	if exact != "" && text == exact {
-		return InputExact
+	bottom := rest[len(rest)-1]
+	input := rest[len(rest)-2]
+	top := rest[len(rest)-3]
+	if bottom != input+1 || input != top+1 {
+		return 0, false
 	}
-	return InputOther
+	if !dashRule(lines[bottom]) || !isPromptRow(lines[input]) || !topRule(lines[top]) {
+		return 0, false
+	}
+	n := 0
+	for _, line := range lines {
+		if isPromptRow(line) {
+			n++
+		}
+	}
+	if n != 1 {
+		return 0, false
+	}
+	return input, true
+}
+
+func isPromptRow(line []cell) bool {
+	return len(line) >= 2 && line[0].r == '❯' && line[1].r == '\u00a0'
+}
+
+var numberedOption = regexp.MustCompile(`^(?:❯[ \t]+)?\d+\.\s+\S`)
+
+func disqualifyingRow(line []cell) bool {
+	text := strings.TrimSpace(rowText(line))
+	if text == "" {
+		return false
+	}
+	low := strings.ToLower(text)
+	if strings.Contains(low, "enter to select") || strings.Contains(low, "esc to cancel") || strings.Contains(low, "esc to interrupt") {
+		return true
+	}
+	if numberedOption.MatchString(text) {
+		return true
+	}
+	return spinnerRow(text)
+}
+
+func spinnerRow(text string) bool {
+	low := strings.ToLower(text)
+	if strings.Contains(low, "done") || strings.Contains(low, "crunched") {
+		return false
+	}
+	t := strings.TrimLeft(text, " \t")
+	if t == "" {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(t)
+	switch r {
+	case '✻', '✽', '✶', '✢', '✳', '✺':
+		return true
+	default:
+		return false
+	}
+}
+
+func rowText(line []cell) string {
+	var b strings.Builder
+	for _, c := range line {
+		b.WriteRune(c.r)
+	}
+	return b.String()
 }
 
 type cell struct {
@@ -234,7 +395,7 @@ func phraseFG(line []cell, phrase string, fg int) bool {
 }
 
 func inputText(line []cell) (string, bool, bool) {
-	if len(line) < 2 || line[0].r != '❯' || line[1].r != '\u00a0' {
+	if !isPromptRow(line) {
 		return "", false, false
 	}
 	var b strings.Builder

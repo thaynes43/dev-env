@@ -25,7 +25,7 @@ import (
 //     profile other than full or workbench, and runs agent claude only
 //     (3.7, D-36, DESIGN-064 6.4);
 //   - spec.summon is present exactly when caller is, and it is immutable;
-//   - spec is immutable after create except operatingMode, lifecycle and title.
+//   - spec is immutable after create except operatingMode and lifecycle.
 //
 // Rules about a caller rather than a session (urgent priority for the
 // remediation and escalation lanes, a fallback model that differs from the
@@ -166,7 +166,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.summon) || ((self.lane == 'remediation') == has(self.summon.escalation))",message="summon.escalation is present exactly for a remediation"
 // +kubebuilder:validation:XValidation:rule="!has(self.summon) || (self.lane == 'remediation' ? self.summon.onUnreported == 'escalated' : self.summon.onUnreported == 'failed')",message="summon.onUnreported is escalated for remediation and failed for every other lane"
 // +kubebuilder:validation:XValidation:rule="!has(self.summon) || !(self.lane == 'remediation' || self.lane == 'escalation') || self.summon.priority == 'urgent'",message="summon.priority is urgent for lanes remediation and escalation"
-// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot) && has(self.usageCaptureParentUID) == has(oldSelf.usageCaptureParentUID) && has(self.coordinatorInstructionParentUID) == has(oldSelf.coordinatorInstructionParentUID) && has(self.summon) == has(oldSelf.summon)",message="immutable after create: no spec field may be added or removed, except operatingMode, lifecycle and title"
+// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot) && has(self.usageCaptureParentUID) == has(oldSelf.usageCaptureParentUID) && has(self.coordinatorInstructionParentUID) == has(oldSelf.coordinatorInstructionParentUID) && has(self.summon) == has(oldSelf.summon) && has(self.title) == has(oldSelf.title)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
 // +kubebuilder:validation:XValidation:rule="!has(self.projectCanary) || (self.mode == 'task' && self.agent in ['claude', 'codex'] && self.size == 'S' && has(self.parent) && self.parent == self.projectCanary.client && !has(self.workspace) && !has(self.restore) && !has(self.tools) && !has(self.llm) && !has(self.caller) && !has(self.lane) && !has(self.lifecycle) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) <= duration('180s') && (self.agent == 'codex' ? (!has(self.limits.maxTurns) || self.limits.maxTurns == 0) : (has(self.limits.maxTurns) && self.limits.maxTurns > 0 && self.limits.maxTurns <= 3)))",message="project canaries require their fixed private bounded subscription task contract"
 // +kubebuilder:validation:XValidation:rule="!has(self.commonRules) || (has(self.projectCanary) && has(self.projectCanary.commonRevision) && self.projectCanary.commonRevision == self.commonRules.commonRevision) || (has(self.privatePilot) && self.privatePilot.commonRevision == self.commonRules.commonRevision) || (!has(self.projectCanary) && !has(self.privatePilot) && !has(self.workspace) && self.mode == 'task' && self.agent in ['claude', 'codex'] && has(self.profile) && self.profile == 'dev' && has(self.parent) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) > duration('0s') && duration(self.limits.timeout) <= duration('45m'))",message="common rules require a matching managed canary or finite private task binding"
 // +kubebuilder:validation:XValidation:rule="!has(self.sessionDirectory) || has(self.projectCanary) || has(self.privatePilot)",message="directory enrollment requires a managed canary"
@@ -240,10 +240,10 @@ type AgentSessionSpec struct {
 	Model string `json:"model"`
 
 	// Title is optional role text for the phone and the listings (DESIGN-065).
-	// It may be added, changed or removed after create, and the only writer
-	// after create is PUT /v1/sessions/{name}/title. Empty is absent and is
-	// never stored. The display title is the model family plus this text;
-	// this field holds only the role text.
+	// It is set at create and does not change. A later title is the annotation
+	// dev-env.haynesops.com/title (ADR-027), not this field. Empty is absent
+	// and is never stored. The display title is the model family plus this
+	// text; this field holds only the role text.
 	//
 	// MaxLength bounds code points. The CEL rules also bound UTF-8 bytes, the
 	// character set and the spacing, on create and on every update. Letters,
@@ -253,8 +253,9 @@ type AgentSessionSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=48
 	// +kubebuilder:validation:XValidation:rule="size(bytes(self)) <= 96",message="at most 96 bytes"
-	// +kubebuilder:validation:XValidation:rule="self.matches('^[\\\\p{L}\\\\p{Nd}][\\\\p{L}\\\\p{M}\\\\p{Nd}\\\\p{P}\\\\p{S} ]*$') && !self.contains('|') && !self.matches('[\\\\x{10000}-\\\\x{10FFFF}]')",message="letters, marks, digits, punctuation and symbols only; the first character is a letter or a digit; no bar, no control or format character, and nothing above U+FFFF"
+	// +kubebuilder:validation:XValidation:rule="self.matches('^[\\\\p{L}\\\\p{Nd}][\\\\p{L}\\\\p{M}\\\\p{Nd}\\\\p{P}\\\\p{S} ]*$') && !self.contains('|') && !self.endsWith(';') && !self.contains('\\\\') && !self.matches('[\\\\x{10000}-\\\\x{10FFFF}]')",message="letters, marks, digits, punctuation and symbols only; the first character is a letter or a digit; no bar, no backslash, no trailing semicolon, no control or format character, and nothing above U+FFFF"
 	// +kubebuilder:validation:XValidation:rule="!self.startsWith(' ') && !self.endsWith(' ') && !self.contains('  ')",message="no leading or trailing space, and no two spaces in a row"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Title string `json:"title,omitempty"`
 
@@ -1620,7 +1621,7 @@ type RemoteRenameStatus struct {
 	State string `json:"state,omitempty"`
 
 	// Reason is the code for State. Typed has none. Held includes quiet.
-	// +kubebuilder:validation:Enum=launch;confirmed;already;process;not-registered;busy;waiting;status-unknown;quiet;clock;attached;pane;cli-version;input;screen-unknown;paced;delivering;left-in-input;not-confirmed;invalid-title;record-shape
+	// +kubebuilder:validation:Enum=launch;confirmed;already;process;not-registered;busy;waiting;status-unknown;quiet;clock;attached;pane;cli-version;input;screen-unknown;paced;delivering;left-in-input;not-confirmed;invalid-title;record-shape;state;command-shadowed;interrupted
 	// +kubebuilder:validation:MaxLength=32
 	// +optional
 	Reason string `json:"reason,omitempty"`

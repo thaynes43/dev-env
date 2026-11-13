@@ -21,14 +21,28 @@ const (
 
 	// ReasonTooLong is more than 48 code points or more than 96 bytes.
 	ReasonTooLong = "title_too_long"
-	// ReasonCharacters is a bar, a control or format character, a code point
-	// above U+FFFF, a first character that is not a letter or a digit, or
-	// anything that is not a letter, mark, digit, punctuation character,
-	// symbol or ASCII space.
+	// ReasonCharacters is a bar, a backslash, a trailing semicolon, a control
+	// or format character, a code point above U+FFFF, a first character that
+	// is not a letter or a digit, or anything that is not a letter, mark,
+	// digit, punctuation character, symbol or ASCII space.
 	ReasonCharacters = "title_characters"
 	// ReasonSpacing is a leading space, a trailing space, or two spaces in a row.
 	ReasonSpacing = "title_spacing"
 )
+
+// Effective is the title a session shows. present is whether the title
+// annotation exists. An absent annotation leaves specTitle. A present value
+// that Validate accepts, including empty, is the title. A present value
+// Validate refuses is ignored: the title is specTitle and ignored is true.
+func Effective(annotation string, present bool, specTitle string) (string, bool) {
+	if !present {
+		return specTitle, false
+	}
+	if annotation != "" && Validate(annotation) != "" {
+		return specTitle, true
+	}
+	return annotation, false
+}
 
 // Validate reports why title cannot be stored. An empty title is absent and
 // valid to omit. The checks run spacing, then characters, then length, so a
@@ -44,6 +58,11 @@ func Validate(title string) string {
 		if !runeAllowed(r) {
 			return ReasonCharacters
 		}
+	}
+	// tmux's argument parser strips a trailing semicolon, and a backslash is
+	// an escape in that parser. A semicolon in the middle is a title character.
+	if strings.HasSuffix(title, ";") || strings.Contains(title, `\`) {
+		return ReasonCharacters
 	}
 	// The CLI's --remote-control takes an optional value, so a value that
 	// begins with a hyphen would be read as an option. The first character
@@ -83,7 +102,7 @@ func Explain(reason string) string {
 	case ReasonTooLong:
 		return "title_too_long: a title is 1 to 48 characters and at most 96 bytes"
 	case ReasonCharacters:
-		return "title_characters: letters, marks, digits, punctuation and symbols only; the first character is a letter or a digit; no bar, no control or format character, and nothing above U+FFFF"
+		return "title_characters: letters, marks, digits, punctuation and symbols only; the first character is a letter or a digit; no bar, no backslash, no trailing semicolon, no control or format character, and nothing above U+FFFF"
 	case ReasonSpacing:
 		return "title_spacing: no leading or trailing space, and no two spaces in a row"
 	default:

@@ -126,6 +126,16 @@ func TestSessionDocumentCarriesTitle(t *testing.T) {
 	if !strings.Contains(with, `"title":"Main coordinator"`) {
 		t.Fatalf("document %s", with)
 	}
+	s.Annotations = map[string]string{v1alpha1.AnnotationTitle: "Ops migration"}
+	over, err := sessionDocument(s, false)
+	if err != nil || !strings.Contains(over, `"title":"Ops migration"`) || strings.Contains(over, "Main coordinator") {
+		t.Fatalf("annotation document %s %v", over, err)
+	}
+	s.Annotations[v1alpha1.AnnotationTitle] = "ab;"
+	ignored, err := sessionDocument(s, false)
+	if err != nil || !strings.Contains(ignored, `"title":"Main coordinator"`) || strings.Contains(ignored, "ab;") {
+		t.Fatalf("ignored annotation document %s %v", ignored, err)
+	}
 	parsed, err := protocol.ParseSession([]byte(with))
 	if err != nil || parsed.Title != "Main coordinator" {
 		t.Fatalf("parsed title %q %v", parsed.Title, err)

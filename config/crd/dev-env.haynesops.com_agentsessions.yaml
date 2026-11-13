@@ -674,10 +674,10 @@ spec:
               title:
                 description: |-
                   Title is optional role text for the phone and the listings (DESIGN-065).
-                  It may be added, changed or removed after create, and the only writer
-                  after create is PUT /v1/sessions/{name}/title. Empty is absent and is
-                  never stored. The display title is the model family plus this text;
-                  this field holds only the role text.
+                  It is set at create and does not change. A later title is the annotation
+                  dev-env.haynesops.com/title (ADR-027), not this field. Empty is absent
+                  and is never stored. The display title is the model family plus this
+                  text; this field holds only the role text.
 
                   MaxLength bounds code points. The CEL rules also bound UTF-8 bytes, the
                   character set and the spacing, on create and on every update. Letters,
@@ -691,12 +691,17 @@ spec:
                 - message: at most 96 bytes
                   rule: size(bytes(self)) <= 96
                 - message: letters, marks, digits, punctuation and symbols only; the
-                    first character is a letter or a digit; no bar, no control or
-                    format character, and nothing above U+FFFF
+                    first character is a letter or a digit; no bar, no backslash,
+                    no trailing semicolon, no control or format character, and nothing
+                    above U+FFFF
                   rule: self.matches('^[\\p{L}\\p{Nd}][\\p{L}\\p{M}\\p{Nd}\\p{P}\\p{S}
-                    ]*$') && !self.contains('|') && !self.matches('[\\x{10000}-\\x{10FFFF}]')
+                    ]*$') && !self.contains('|') && !self.endsWith(';') && !self.contains('\\')
+                    && !self.matches('[\\x{10000}-\\x{10FFFF}]')
                 - message: no leading or trailing space, and no two spaces in a row
                   rule: '!self.startsWith('' '') && !self.endsWith('' '') && !self.contains(''  '')'
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               tools:
                 description: |-
                   Tools are the tool pools registered at boot (DESIGN-001 8.1), by ToolPool
@@ -798,7 +803,7 @@ spec:
               rule: '!has(self.summon) || !(self.lane == ''remediation'' || self.lane
                 == ''escalation'') || self.summon.priority == ''urgent'''
             - message: 'immutable after create: no spec field may be added or removed,
-                except operatingMode, lifecycle and title'
+                except operatingMode and lifecycle'
               rule: has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort)
                 && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size)
                 && has(self.profile) == has(oldSelf.profile) && has(self.tools) ==
@@ -812,7 +817,7 @@ spec:
                 == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot)
                 && has(self.usageCaptureParentUID) == has(oldSelf.usageCaptureParentUID)
                 && has(self.coordinatorInstructionParentUID) == has(oldSelf.coordinatorInstructionParentUID)
-                && has(self.summon) == has(oldSelf.summon)
+                && has(self.summon) == has(oldSelf.summon) && has(self.title) == has(oldSelf.title)
             - message: project canaries require their fixed private bounded subscription
                 task contract
               rule: '!has(self.projectCanary) || (self.mode == ''task'' && self.agent
@@ -3046,6 +3051,9 @@ spec:
                         - not-confirmed
                         - invalid-title
                         - record-shape
+                        - state
+                        - command-shadowed
+                        - interrupted
                         maxLength: 32
                         type: string
                       since:

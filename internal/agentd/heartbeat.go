@@ -117,14 +117,30 @@ func parseHeartbeatTitle(body []byte) HeartbeatTitle {
 		return HeartbeatTitle{}
 	}
 	var doc struct {
-		Title *struct {
-			Text string `json:"text"`
-		} `json:"title"`
+		Title json.RawMessage `json:"title"`
 	}
-	if json.Unmarshal(body, &doc) != nil || doc.Title == nil {
+	if json.Unmarshal(body, &doc) != nil {
 		return HeartbeatTitle{}
 	}
-	return HeartbeatTitle{Present: true, Text: doc.Title.Text}
+	title := bytes.TrimSpace(doc.Title)
+	if len(title) == 0 || string(title) == "null" {
+		return HeartbeatTitle{}
+	}
+	var obj struct {
+		Text json.RawMessage `json:"text"`
+	}
+	if json.Unmarshal(title, &obj) != nil {
+		return HeartbeatTitle{Unknown: true}
+	}
+	raw := bytes.TrimSpace(obj.Text)
+	if len(raw) == 0 || string(raw) == "null" || raw[0] != '"' {
+		return HeartbeatTitle{Unknown: true}
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return HeartbeatTitle{Unknown: true}
+	}
+	return HeartbeatTitle{Present: true, Text: text}
 }
 
 // ReadDecisionAuthority uses the pod's rotating authenticated API token and an

@@ -55,8 +55,12 @@ const (
 	// the stop; the leader closes the outcome before deleting (DESIGN-064 6.6,
 	// OP779 fix round 1). A delete without this marker is unattributed.
 	AnnotationReapedBy = LabelPrefix + "reaped-by"
-	// AnnotationTitleSetBy names who last changed spec.title (DESIGN-065 rule
-	// 8.1): the API caller, as caller.String().
+	// AnnotationTitle is the title recorded after create (ADR-027). An empty
+	// value means no title. A value sessiontitle.Validate refuses is ignored
+	// and the session keeps spec.title. spec.title itself does not change.
+	AnnotationTitle = LabelPrefix + "title"
+	// AnnotationTitleSetBy names who last changed AnnotationTitle (DESIGN-065
+	// rule 8.1): the API caller, as caller.String().
 	AnnotationTitleSetBy = LabelPrefix + "title-set-by"
 	// AnnotationTitleSetAt is when that change was recorded, RFC 3339. The
 	// title route allows one recorded change per 60 seconds from this time.

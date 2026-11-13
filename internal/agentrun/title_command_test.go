@@ -33,7 +33,7 @@ func TestTitleCommandReadsExpectThenPuts(t *testing.T) {
 		}
 	}
 	h.mustRun(ExitOK, "title", name, "Cafe")
-	contains(t, "stdout", h.stdout.String(), name+" title: Cafe")
+	contains(t, "stdout", h.stdout.String(), "Opus | Cafe\nIt is typed when the session is idle with an empty input line.")
 	puts := 0
 	for _, r := range h.api.requests() {
 		if r.method == http.MethodPut {
@@ -65,7 +65,7 @@ func TestTitleCommandClear(t *testing.T) {
 		writeTestJSON(w, http.StatusOK, cur)
 	}
 	h.mustRun(ExitOK, "title", name, "--clear")
-	contains(t, "stdout", h.stdout.String(), "title: none")
+	contains(t, "stdout", h.stdout.String(), name+"\nIt is typed when the session is idle with an empty input line.")
 }
 
 func TestTitleCommandExplainsTitleChanged(t *testing.T) {
@@ -112,7 +112,7 @@ func TestTitleCommandSessionNotFound(t *testing.T) {
 		apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "session "+name+": not found")
 	}
 	h.mustRun(ExitNotFound, "title", name, "Cafe")
-	if strings.Contains(h.stderr.String(), "no session title route") || len(h.api.requests()) != 1 {
+	if h.stderr.String() != "agent-run: no such session\n" || len(h.api.requests()) != 1 {
 		t.Fatalf("stderr %q requests %d", h.stderr.String(), len(h.api.requests()))
 	}
 }
@@ -133,7 +133,7 @@ func TestShowRenameLine(t *testing.T) {
 	h := newHarness(t)
 	s := runningOn(testSession(name, ""), "talosw02")
 	s.Agent, s.Mode, s.Title = "claude", "remote", "Café"
-	since := time.Date(2026, 11, 13, 14, 2, 0, 0, time.UTC)
+	since := testNow.Add(-2 * time.Minute)
 	s.RemoteControl = &apiv1.RemoteControl{
 		Name: name, State: "registered", ProviderTitle: "Someone",
 		Rename: &apiv1.RemoteRename{State: "Held", Reason: "busy", Since: since, Attempts: 1},
@@ -141,7 +141,7 @@ func TestShowRenameLine(t *testing.T) {
 	serveSession(h, s)
 	h.mustRun(ExitOK, "show", name)
 	contains(t, "show", h.stdout.String(),
-		"registered; recorded title Café; provider title Someone; held since 14:02Z: busy; it is typed when the session is idle with an empty input line")
+		"registered; recorded title Café; provider title Someone; held for 2m: busy; it is typed when the session is idle with an empty input line")
 	if strings.Contains(h.stdout.String(), "claude.ai") {
 		t.Fatal("show printed the link")
 	}
@@ -176,4 +176,33 @@ func TestShowRenameLine(t *testing.T) {
 	serveSession(h, s)
 	h.mustRun(ExitOK, "show", name)
 	contains(t, "unknown", h.stdout.String(), "unknown: the CLI's record has a shape agentd does not know, so nothing is typed")
+
+	for _, reason := range []string{"state", "command-shadowed", "interrupted"} {
+		s.RemoteControl.Rename = &apiv1.RemoteRename{State: "Held", Reason: reason, Since: since}
+		serveSession(h, s)
+		h.mustRun(ExitOK, "show", name)
+		contains(t, reason, h.stdout.String(), "held for 2m: "+reason+"; it is typed when the session is idle with an empty input line")
+	}
+	s.TitleRename = "off"
+	serveSession(h, s)
+	h.mustRun(ExitOK, "show", name)
+	contains(t, "off", h.stdout.String(), "not enabled for this session")
+
+	s.TitleRename = ""
+	created := "Old"
+	s.Title = "New"
+	s.CreatedTitle = &created
+	serveSession(h, s)
+	h.mustRun(ExitOK, "show", name)
+	contains(t, "created", h.stdout.String(), "title at create:")
+	if !strings.Contains(h.stdout.String(), "Old") {
+		t.Fatalf("show dropped the create-time title:\n%s", h.stdout.String())
+	}
+
+	s.Title = "Old"
+	s.CreatedTitle = nil
+	s.TitleIgnored = true
+	serveSession(h, s)
+	h.mustRun(ExitOK, "show", name)
+	contains(t, "ignored", h.stdout.String(), "the title annotation was ignored")
 }

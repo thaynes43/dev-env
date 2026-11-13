@@ -460,7 +460,9 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 		if err != nil {
 			return 0, nil, err
 		}
-		return http.StatusOK, view(sess, true), nil
+		v := view(sess, true)
+		s.noteTitleRename(sess.Name, &v)
+		return http.StatusOK, v, nil
 	}
 	if c.kind == kindSummon {
 		if s.Live == nil {
@@ -470,7 +472,9 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 		if s.Live.Get(ctx, key, &own) != nil || !summonOwns(c, &own) {
 			return 0, nil, summonReadDenied()
 		}
-		return http.StatusOK, view(&own, true), nil
+		v := view(&own, true)
+		s.noteTitleRename(own.Name, &v)
+		return http.StatusOK, v, nil
 	}
 	opted := r.Header.Get(apiv1.UsageCaptureHeader) == apiv1.UsageCaptureDirectV1
 	if c.kind == kindCoordinator {
@@ -504,7 +508,17 @@ func (s *Server) withUsageRollup(ctx context.Context, sess *v1alpha1.AgentSessio
 	if capture {
 		v.CapturedUsage = capturedUsageView(sess, c, s.ChildUsageCapture)
 	}
+	s.noteTitleRename(sess.Name, &v)
 	return v
+}
+
+// noteTitleRename tells show that typing is off for this session. A session
+// the flag names, and the value *, leave the field out.
+func (s *Server) noteTitleRename(name string, v *apiv1.Session) {
+	if s == nil || v == nil || s.TitleRename.Allows(name) {
+		return
+	}
+	v.TitleRename = "off"
 }
 
 // reapSession serves DELETE /v1/sessions/{name}: it deletes an ordinary

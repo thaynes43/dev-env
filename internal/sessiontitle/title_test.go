@@ -27,6 +27,7 @@ func TestValidate(t *testing.T) {
 		{"1a", ""},
 		{"e\u0301", ""},
 		{"Main-coordinator", ""},
+		{"a;b", ""},
 		{strings.Repeat("a", 48), ""},
 		{title96, ""},
 		{strings.Repeat("a", 49), ReasonTooLong},
@@ -34,6 +35,8 @@ func TestValidate(t *testing.T) {
 		{strings.Repeat("\u4e00", 48), ReasonTooLong},
 		{"|", ReasonCharacters},
 		{"a|b", ReasonCharacters},
+		{"ab;", ReasonCharacters},
+		{"a\\b", ReasonCharacters},
 		{"a\u0007b", ReasonCharacters},
 		{"a\tb", ReasonCharacters},
 		{"a\nb", ReasonCharacters},
@@ -97,5 +100,20 @@ func TestFamilyAndCompose(t *testing.T) {
 	}
 	if strings.Contains(Explain(ReasonTooLong), "Main") {
 		t.Fatal("Explain included a title")
+	}
+}
+
+func TestEffective(t *testing.T) {
+	if got, ignored := Effective("", false, "Old"); got != "Old" || ignored {
+		t.Fatalf("absent %q %v", got, ignored)
+	}
+	if got, ignored := Effective("New", true, "Old"); got != "New" || ignored {
+		t.Fatalf("annotation %q %v", got, ignored)
+	}
+	if got, ignored := Effective("", true, "Old"); got != "" || ignored {
+		t.Fatalf("clear %q %v", got, ignored)
+	}
+	if got, ignored := Effective("ab;", true, "Old"); got != "Old" || !ignored {
+		t.Fatalf("ignored %q %v", got, ignored)
 	}
 }
