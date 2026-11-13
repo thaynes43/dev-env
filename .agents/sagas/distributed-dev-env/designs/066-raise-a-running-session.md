@@ -441,9 +441,10 @@ write, so `metadata.generation` does not move (ADR-027). Three things make it
 count, and every reader checks all three:
 
 1. it names the session's UID;
-2. its Ed25519 signature, made with a private key only the operator reads,
-   verifies over every field but the signature, Tom's words included, and
-   the hash of the words matches the words (N1, N4, N10; section 6.6);
+2. its Ed25519 signature, made with the operator's private key (section
+   6.6; known limit 7 says who else can read it), verifies over every field
+   but the signature, Tom's words included, and the hash of the words
+   matches the words (N1, N4, N10);
 3. its `id` and `state` match the operator's own ledger (N3; section 6.5).
 
 A record that fails any check is ignored, as if absent, and logged. So a
@@ -672,8 +673,9 @@ below the build of slice (b) stays a written procedure (section 7.6).
     coordinator identity, not being reaped and not archived.
 14. **Fenced state.** Admission rules in haynes-ops let only the operator's
     account change the annotation and its ledger, only the keeper's account
-    change its notice ledger, only each owner change its public key, and
-    nobody change the depth label after create. They are install steps of
+    change its notice ledger, only each owner change its public key and its
+    private-key Secret, and nobody change the depth label after create.
+    Admission cannot fence who reads a private key (known limit 7). They are install steps of
     slice (a), each with its check (section 11).
 15. **Rate limits that survive a restart, never on a take-back.** Per
     target: one raise in any 60 seconds after the target's last raise or
@@ -928,8 +930,8 @@ secret is shared between the operator and the keeper (N1, N10).
 
 | Pair | Signs | Private key | Public key | Verified by |
 | --- | --- | --- | --- | --- |
-| Operator | Every raise record | Secret `dev-env-system/dev-env-session-raise-operator-key`, read only by the operator | ConfigMap `dev-env-system/dev-env-session-raise-operator-public` | Every reader in the operator, and the keeper before it sends a notice |
-| Keeper | Every notice outcome | Secret `dev-env-system/dev-env-session-raise-keeper-key`, read only by the keeper | ConfigMap `dev-env-system/dev-env-session-raise-keeper-public` | The operator before it activates a raise |
+| Operator | Every raise record | Secret `dev-env-system/dev-env-session-raise-operator-key`, written only by the operator; for who can read it see below | ConfigMap `dev-env-system/dev-env-session-raise-operator-public` | Every reader in the operator, and the keeper before it sends a notice |
+| Keeper | Every notice outcome | Secret `dev-env-system/dev-env-session-raise-keeper-key`, written only by the keeper; for who can read it see below | ConfigMap `dev-env-system/dev-env-session-raise-keeper-public` | The operator before it activates a raise |
 
 - **What is signed** (N4). One canonical byte string: the prefix
   `dev-env/session-raise/v1/record` and a newline, then the record's JSON with
@@ -1505,7 +1507,9 @@ sessions.**
      `dev-env-session-raise-keeper-public` and the Secret
      `dev-env-session-raise-keeper-key`.
   5. *The objects:* the two private-key Secrets and the four ConfigMaps,
-     precreated empty; get and update by name for their owner only; the
+     precreated empty; the install grants get and update by name to each
+     object's owner only, and takes no right from any other account (rule
+     6); the
      operator's get on the keeper's ledger and public key; the keeper's get
      on the operator ledger and public key, and list on AgentSessions in
      `dev-agents`.
@@ -1812,6 +1816,6 @@ updates them. The rulings are the coordinator's, of 2026-11-13.
 | --- | --- | --- | --- |
 | 1, HIGH | The pod rule is passed in two updates: drop the pod's session label, then change the profile label | Nobody but the operator may change the session label | Section 11, rule 2 |
 | 2, HIGH | The API server keeps a label sent through `pods/status`, and the rule did not match it; multus, the scheduler and other controllers hold that right | Match `pods/status` too; a status write that leaves the labels alone passes for every caller | Section 11, rule 2; section 7.5; slice (b) tests |
-| 3, HIGH | The key Secrets are not owner-only: about 36 controller ServiceAccounts read every Secret, some write them | Writes and deletes owner-only by admission; reads accepted as a stated limit | Section 11, rules 3, 4 and 6; section 6.6; known limit 7; ADR-029 |
+| 3, HIGH | The key Secrets are not owner-only: about 36 controller ServiceAccounts read every Secret, some write them | Writes and deletes owner-only by admission; reads accepted as a stated limit | Section 11, rules 3, 4 and 6; Ruling 2; safety rule 14; section 6.6; known limit 7; ADR-029 |
 | 4, LOW | The test missed the two-update case and the status route; the workflow would not run on a later policy edit | Fix both in the install pull request | haynes-ops PR 4888 |
 

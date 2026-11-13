@@ -5,10 +5,7 @@
 [ADR-028](adrs/028-raise-a-running-session.md): Tom approved the design as
 summarised to him ("Approve, build all of it (Recommended)", story 830
 comment 8085) and the coordinator accepted ADR-028. Nothing is built yet.
-After the review of the haynes-ops install rules the coordinator added
-[ADR-029](adrs/029-raise-keys-readers.md): the signing keys can be read by
-the cluster's Secret readers, and admission and the ledger are the fence.
-They answer the last clause of Tom's answer recorded on
+DESIGN-066 and ADR-028 answer the last clause of Tom's answer recorded on
 story 828 comment 7927: "build a way to elevate agents permissions OUTSIDE of
 their session". Asked how he gives the go-ahead, Tom answered, recorded on
 story 830 comment 7980: "My word to a superuser or meatball or a meatball
@@ -27,6 +24,10 @@ another model family were answered by the coordinator's rulings (the
 design's section 15); four limits are stated (its section 12). No question
 for Tom remains. Nothing is built or installed.
 [Decision 108](#decision-log).
+After the review of the haynes-ops install rules the coordinator added
+[ADR-029](adrs/029-raise-keys-readers.md): the signing keys can be read by
+the cluster's Secret readers, and admission and the ledger are the fence.
+[Decision 109](#decision-log).
 
 **2026-11-13 agents rename a running session, OP787:**
 [ADR-026](adrs/026-agents-rename-a-running-session.md) is Accepted, with the

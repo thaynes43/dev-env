@@ -14,8 +14,8 @@
   a private key" to an install check without saying what the check accepts.
   ADR-028 stays Accepted and is not edited. Everything else in it stands.
 - **Amends:** [DESIGN-066](../designs/066-raise-a-running-session.md)
-  sections 6.6, 7.5, 11 (install rules 2, 3, 4 and 6) and 12 (known limit
-  7). Each change is marked with section 15.4.
+  Ruling 2, safety rule 14, sections 6.6, 7.5, 11 (install rules 2 to 6) and
+  12 (known limit 7). The review and its rulings are in section 15.4.
 - **Tracking:** OpenProject [#830](https://work.haynesnetwork.com/work_packages/830).
 
 ## Context
