@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.108.0](https://github.com/thaynes43/dev-env/compare/v2.107.0...v2.108.0) (2026-11-13)
+
+
+### Features
+
+* **agentd:** no summoned session starts a provider twice or past its start deadline (DESIGN-064 5.9, OP780) ([#1100](https://github.com/thaynes43/dev-env/issues/1100)) ([ff0c9e8](https://github.com/thaynes43/dev-env/commit/ff0c9e8e74da14ef5ed901b89da1caff6ca65a06))
+
 ## [2.107.0](https://github.com/thaynes43/dev-env/compare/v2.106.0...v2.107.0) (2026-11-13)
 
 
