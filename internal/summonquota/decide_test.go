@@ -131,6 +131,7 @@ func TestNoUsableReadingAdmitsAndSaysWhy(t *testing.T) {
 		{"read timeout", Reading{Missing: WhyReadTimeout}, WhyReadTimeout},
 		{"zero reading", Reading{}, WhyNoReading},
 		{"stale", stale, WhyStale},
+		{"judged stale before by the gate", Reading{Missing: WhyStale}, WhyStale},
 		{"no 5-hour window", reading(SevenDayMinutes, "10"), WhyWindowMissing},
 		{"5-hour percent not canonical", reading(FiveHourMinutes, "99.0"), WhyWindowMissing},
 		{"5-hour window reset", reset, WhyWindowReset},

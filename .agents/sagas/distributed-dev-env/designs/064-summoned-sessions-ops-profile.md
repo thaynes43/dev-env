@@ -2162,7 +2162,16 @@ Tom).** The text above stays; where it differs, this governs.
    its age stays negative, never zero (ruling R1 on PR 1101). Staleness and
    a window's reset are judged on the clock after the read returns, past the
    read and any wait for the lock; the 30-second reuse below is measured
-   from before the read (ruling R2 on PR 1101).
+   from before the read (ruling R2 on PR 1101). A reading once judged stale
+   never holds again (story 783 fix round 2, coordinator rulings in PR 1101
+   comment 6839647832; not a ruling by Tom): the gate keeps, per provider,
+   the newest `readAt` it has judged stale, and that reading or an older one
+   admits with reason `stale` whatever the clock says later; a strictly
+   newer one is judged normally. `Decide` stays pure: the gate passes the
+   mark in as the reading's missing reason, and the read cadence is
+   unchanged. Limit: the mark is in the operator's memory and starts empty
+   when the operator starts or another replica takes the lead, so what the
+   clock did before then is unknown.
 3. *What the readings are* (the slice plan, read at `59169f1f` and live at
    21:30Z). ConfigMap `dev-env-system/dev-env-session-allowances` is written
    by the operator's API on the heartbeats of remote and local Claude
