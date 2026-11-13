@@ -1865,8 +1865,9 @@ response can still leave a stored outcome without an event line. Stories 742
 and 768 read the durable record, never the log line.
 
 Story 777 added release and admission (below); story 779 the watchdog, the
-stops and the operator's suspend; 743 adds `no-usable-model`; 742 adds page
-events in the terminal write. The shared reason table defines their ordering.
+stops and the operator's suspend; 743 adds `no-usable-model`. Story 782 (742a)
+stores no terminal page event: the keeper derives it from the close record
+(below). The shared reason table defines their ordering.
 Until story 780's agentd fence, an in-place restart can leave an agent running
 under a final outcome, and its later reports get 409.
 No caller cutover (746, 747, 748, 610) or story 768 filing is enabled before
@@ -1877,8 +1878,147 @@ in `status.summon.pages[]`, a list of `{event, at}` of at most 8 entries from
 which nothing is removed or changed. This release writes two lifecycle
 events, each at most once per session: `escalation-held`, for an escalation
 Queued 15 minutes, and `escalation-reminder`, for a remote escalation idle 24
-hours. Nothing sends them yet; story 742 adds the keeper and the terminal
-events.
+hours. The keeper's pager (below) sends them.
+
+## Pages for summoned sessions
+
+The keeper pages Tom by Pushover when a summoned session needs him
+(DESIGN-064 6.8; story 782, slice a of 742). It is off by default. The rules
+marked "fix round 1" are story 782 fix round 1, coordinator rulings in PR 1102
+comment 6839324435; those marked "fix round 2" are story 782 fix round 2,
+coordinator rulings in PR 1102 comment 6840605385 and the coordinator's answer
+op782-fix2-a-1; those marked "fix round 3" are story 782 fix round 3,
+coordinator rulings in PR 1102 comment 6841848115; those marked "fix round 4"
+are story 782 fix round 4, coordinator rulings in PR 1102 comment 6842728336.
+None is a ruling by Tom.
+
+- **What pages.** One terminal page per closed session, `failed`, `lost` or
+  `escalated`, and one page per lifecycle event recorded in
+  `status.summon.pages[]` (`escalation-held`, `escalation-reminder`). The
+  terminal page is not stored on the Session: the keeper derives it from
+  `status.summon.closed` (lane, state, source, reason) with one table,
+  `summonoutcome.TerminalPage`. A close whose row says digest pages nothing; the
+  daily digest is story 742b, not built yet.
+- **The table.** A report of `failed` pages `failed` and a report of
+  `escalate` pages `escalated`, in every lane but remediation. A remediation
+  never pages for itself: its filing will (story 768). Unreported, a quiet exit
+  (`agent-exited`, `exit-unknown`, `turn-cap`) and a curation's hold expiry go
+  to the digest; a lost session or pod (`session-lost`, `heartbeat-lost`,
+  `agent-interrupted`, `pod-terminated`) pages `lost`; every other reason pages
+  `failed`, `not-charged` included. A person's stop (`stopped`) never pages. A
+  close no row names pages `failed` with its own text, which names the stored
+  words; no operator writes one today.
+- **Which sessions.** The API's summoning create labels its session
+  `dev-env.haynesops.com/summoned=true`. The keeper leader lists that label in
+  the session namespace every 60 seconds, 500 a page and at most 20 pages, and
+  still requires `spec.caller`. A session without the label is never paged.
+  A reaped session deleted before the next tick can miss its page.
+  Absence from that list is not deletion (fix round 1): a session whose label
+  was removed keeps its ledger entries, and with the label back it is not
+  paged or counted again.
+- **Once each.** The ledger is the ConfigMap `dev-env-keeper-summon-pages` in
+  the keeper's namespace, which GitOps creates. Its key is the session UID and
+  the event. The keeper writes the entry, the rate window and the page record
+  in one update before it sends; a failed or conflicting write sends nothing,
+  and so does a write that commits but answers an error or answers after the
+  send's deadline. Two keepers racing for one entry send once. A send is never
+  retried: an unknown result stays `ambiguous`, a refusal `failed`, an attempt
+  whose result was never stored `recorded`. This proves attempts, not
+  delivery. An entry is pruned only on proof that its session is gone (fix
+  round 1): an hour after it was written, a read of its stored session name
+  finds nothing, or a session with another UID. At most 20 such reads a tick,
+  and only in a tick that has an entry to add; the rest wait. A tick's reads
+  start after the session the last answered read was for, oldest entry
+  first, and go round to the oldest at the end (fix round 2), so sessions
+  that are still there cannot use every read and a full ledger gets room
+  again. A failed read ends the tick's reads, and the next tick starts with
+  it. The place is kept in memory: a restarted keeper starts from the
+  oldest. While reads by name fail, proof pruning stops, and a full ledger
+  then records nothing new (fix round 3, a stated limit): a tick whose proof
+  read fails logs `summon page proof read failed: pruning waits for the next
+  tick`, and a full ledger logs `summon page dedupe capacity reached`, each
+  at most one line a tick and in fixed words. Before the pager flag is set
+  in haynes-ops, the installer checks that the keeper's ServiceAccount is
+  still bound to `get` on AgentSessions in `dev-agents`; nothing in this
+  repository makes that check. A drill id is
+  never forgotten: the ledger keeps up to 16, and past that a new id is refused
+  and logged, and nothing is sent. Every member of `state.json` but an entry's
+  `session` must be present and not null; a ledger that lacks one, or holds it
+  as null, is `state unavailable`.
+- **The cap.** At most 6 pages in any 60 minutes, the drill and the summary
+  included, at priority 0 and at any hour. Each attempt counts from the latest
+  instant it may be sent, and the window is pruned against the current time,
+  never a later one (fix round 1), so a slow save cannot let in a seventh. An
+  event that finds the window full is recorded `capped` and never paged. When the window has room again,
+  the first page is `[dev-env] more-events: N more events were not paged`,
+  which counts each capped event once. Ask pushes keep their own cap.
+- **The text.** Fixed templates in keeper source. A page starts `[dev-env]`
+  and the event; a drill starts `DRILL`. A session's note follows the label
+  `session note:`. Every control or format character and every line or
+  paragraph separator (U+2028 and U+2029 included) becomes a space; every link
+  becomes `[link removed]`, then the note is cut to 200 characters, and a cut
+  that leaves a host is redacted again. A link is a scheme URL, a `www.` host,
+  a dotted host or address with a port, path, query or fragment, or a dotted
+  host whose last label is two or more letters or starts `xn--`, with or
+  without them (fix round 1, and the coordinator's answer op782-fix1-a-1).
+  A label is letters with their combining marks, decimal digits and hyphens,
+  of any script; any other character, an underscore included, ends it (fix
+  round 2). The dot between labels is the ASCII dot or `。` (U+3002), `．`
+  (U+FF0E) or `｡` (U+FF61), which the IDNA lookup maps to it (fix round 3).
+  `evil.example`, `evil.example:443`, `10.0.0.1:8080`,
+  `evil.xn--p1ai`, `é.example`, `例.example:443`, `пример.xn--p1ai`,
+  `उदाहरण.भारत`, `ตัวอย่าง.ไทย`, `evil。example:443` and a file name such as
+  `main.go` all become `[link removed]`; a dotted number alone, such as
+  `2.105.0` or `2。105。0`, stays. Scheme links are found first, in the note
+  as written, before any host is replaced (fix round 4), so a host can never
+  take a scheme's word and leave its target: for every scheme link, neither
+  its delimiter (`://`, or the scheme word with its colon) nor its target
+  survives, whatever stands before it. A scheme with `://` is found from any
+  offset: `é.http://localhost` and `é.example-http://192.0.2.1` become
+  `é.[link removed]`, `foo。http://localhost` becomes `foo。[link removed]`,
+  `x.é-http://192.0.2.1` becomes `x.é-[link removed]` and
+  `_http://192.0.2.1` becomes `_[link removed]`. A scheme written with its
+  colon only (`mailto:`, `tel:`, `sms:`, `javascript:`, `data:`, `file:` or
+  `vbscript:`) is a link unless a letter or a combining mark of any script
+  stands directly before its word; the start of the note, a space, a digit,
+  an underscore, a dot or any other character leaves it a link. So
+  `x_javascript:alert(1)`, `1tel:555` and `é.mailto:a@localhost` lose the
+  link, and `profile:ops`, `metadata:x`, `hotel:5` and `éfile:x` stay whole
+  (fix round 4).
+  The only link is `status.remoteControl.url` when it is
+  `https://claude.ai/code/session_...`; otherwise the console's sessions list.
+  Page records hold the fixed title, the session name and the note's byte
+  count, never the note.
+- **Flags.** `--enable-summon-pages`, `--summon-pages-portal-origin` (the
+  console's HTTPS origin), `--summon-pages-drill=<id>` (one `DRILL` page per id,
+  ever) and `--summon-pages-state-configmap`. The session namespace is
+  `--session-namespace`; no other option's namespace stands in for an empty
+  one, which turns the pager off, and the pager logs the namespace it lists
+  once at start. A bad or incomplete set turns off only the pager and logs
+  why. So does a pager flag with a malformed value, `--enable-summon-pages`
+  included, and a pager flag given last with no value (fix round 1); other
+  flags keep their parsing and failures. A missing or unreadable ledger logs
+  `summon page state unavailable` and sends nothing. The pager never stops
+  the keeper or its login refresher, and leaves the Ask notifier and its
+  ledger as they are. It has its own Kubernetes client, REST mapper and
+  transport, and its own Pushover transport (fix round 1): a stalled pager
+  request holds nothing the login refresher, the credential fence or the Ask
+  notifier uses, and its tick ends with `summon page scan unavailable` or
+  `summon page state unavailable`. Its client does no client-side rate
+  limiting (fix round 2). The 5-second request timeout bounds one request's
+  network I/O and retries, each discovery request included; a reload of the
+  bearer token file is local I/O outside it, and discovery and a tick are
+  several requests, each bounded, not one bounded operation (fix round 3). A
+  tick makes one paginated scan of at most 20 list calls, at most 20 reads by
+  name and the ledger calls, then waits 60 seconds. A keeper REST config that
+  carries a transport, a transport wrapper, a dialer, a proxy function, an
+  auth provider, an auth config persister, an exec credential plugin or a
+  warning handler of either kind turns the pager off and logs `summon pages
+  disabled: the pager's own client could not be built` with which ones, in
+  fixed words and never a value (fix rounds 2 and 3). Nothing of the config
+  is dropped to make it fit; the keeper's in-cluster config carries none.
+- **Reading the record.** `kubectl -n dev-env-system get cm
+  dev-env-keeper-summon-pages -o json | agent-run pages list`.
 
 ## Summoning callers
 
