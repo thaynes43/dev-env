@@ -220,7 +220,8 @@ before the operator that sends it.
 4. No change of owner, parent, profile, grant or access.
 5. Absent means today: an untitled session launches, resumes and lists as
    now. Older agent-run, front door and agentd ignore the new fields; an
-   older portal is handled by pin order.
+   older portal is handled by pin order. (Corrected 2026-11-13, section 9.7:
+   an older agent-run does not ignore a new field on two strict paths.)
 6. CRD first: haynes-ops gets the `config/crd/` copy before the operator pin
    that writes a new field, or the API server prunes it (haynes-ops #3502).
    Slice 1 adds `spec.title` and `status.remoteControl.title` together, so
@@ -1435,3 +1436,34 @@ rename is typed only while the session is idle with an empty input line.
    process 1, so no text outlives agentd. The only gap is a final
    `title.json` write that fails after a good staged write, together with a
    failed cleanup.
+
+### 9.7 The session view and older readers (the coordinator, 2026-11-13, not Tom)
+
+Found by an independent read of the operator pin (haynes-ops PR 4879), before
+anything was installed.
+
+- **The fact.** `agent-run show <name> --json --once` and `agent-run usage
+  export` read `GET /v1/sessions/{name}` strictly: `strictWireJSON` refuses a
+  key the binary's own `apiv1.Session` does not have. Safety rule 5's
+  sentence "Older agent-run ... ignore the new fields" is wrong for those two
+  paths. Plain `show`, `list` and the create answers are not affected.
+- **What the first build did.** The operator set `titleRename: "off"` on
+  that view for every session the flag does not name, with the flag empty
+  too. Pinned as it was, it would have made those two commands fail for
+  every session, from every pod whose agent-run is older than 2.109.0.
+- **Ruling.** A new key appears in the single-session view only on a session
+  that uses the feature. `titleRename: "off"` is set only when the session
+  has the title annotation, that is, when a title change was recorded, and
+  the flag does not name it. `createdTitle`, `titleIgnored`,
+  `remoteControl.providerTitle` and `remoteControl.rename` already follow
+  this rule. The title route's own answer says `off` whenever the flag does
+  not name the session, because only an agent-run that knows the route reads
+  it. That also makes `agent-run title` say "not enabled for this session"
+  against a real operator: the first build's route never set the key.
+- **What stays true.** A session with a recorded title change, or one whose
+  agentd reports a rename, carries new keys. An agent-run older than 2.109.0
+  cannot read that one session with the two strict commands. That is the
+  cost of using the feature on a session, as slice 1's title keys were for
+  an agent-run older than 2.107.0.
+- **Test.** `TestShowSaysTitleRenameOff`: an unrenamed session's view holds
+  none of the five new keys.

@@ -524,26 +524,64 @@ func TestHeartbeatTitleFollowsTheFlag(t *testing.T) {
 	}
 }
 
+// newViewKeys are the session-view keys this slice added. An older agent-run
+// reads a single session strictly (show --json --once, usage export) and
+// refuses any key it does not know, so a session nobody renamed must carry
+// none of them (DESIGN-065 section 9.7).
+var newViewKeys = []string{`"titleRename"`, `"createdTitle"`, `"titleIgnored"`, `"providerTitle"`, `"rename"`}
+
 func TestShowSaysTitleRenameOff(t *testing.T) {
 	f := newFixture(t)
+	const name = "title-show-off"
 	f.srv.TitleRename = TitleRename{}
-	f.sessionPod("title-show-off", "full", 0)
-	w := f.do(http.MethodGet, apiv1.SessionPath("title-show-off"), tokHuman, nil)
-	if w.Code != http.StatusOK {
-		t.Fatal(w.Code, w.Body.String())
+	f.sessionPod(name, "full", 0)
+	get := func() (apiv1.Session, string) {
+		t.Helper()
+		w := f.do(http.MethodGet, apiv1.SessionPath(name), tokHuman, nil)
+		if w.Code != http.StatusOK {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		var v apiv1.Session
+		if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil || v.Name != name {
+			t.Fatalf("%v %s", err, w.Body.String())
+		}
+		return v, w.Body.String()
 	}
-	var off apiv1.Session
-	if err := json.Unmarshal(w.Body.Bytes(), &off); err != nil || off.TitleRename != "off" {
-		t.Fatalf("%+v %s", off, w.Body.String())
+	// The flag names nobody and nobody renamed this session: the view is the
+	// one an older strict reader accepts.
+	if v, body := get(); v.TitleRename != "" {
+		t.Fatalf("an unrenamed session carried the off switch: %s", body)
+	} else {
+		for _, key := range newViewKeys {
+			if strings.Contains(body, key) {
+				t.Fatalf("an unrenamed session's view carries the new key %s: %s", key, body)
+			}
+		}
 	}
-	f.srv.TitleRename = mustTitleRename(t, "title-show-off")
-	w = f.do(http.MethodGet, apiv1.SessionPath("title-show-off"), tokHuman, nil)
-	var on apiv1.Session
-	if err := json.Unmarshal(w.Body.Bytes(), &on); err != nil || on.TitleRename != "" || !strings.Contains(w.Body.String(), `"name":"title-show-off"`) {
-		t.Fatalf("%+v %s", on, w.Body.String())
+	// The title route's own answer says off, on the write and on the repeat
+	// that writes nothing.
+	for _, pass := range []string{"write", "repeat"} {
+		expect := ""
+		if pass == "repeat" {
+			expect = "Cafe"
+		}
+		w := putTitle(f, tokHuman, name, "Cafe", expect)
+		var put apiv1.Session
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &put) != nil || put.TitleRename != "off" {
+			t.Fatalf("%s: %d %s", pass, w.Code, w.Body.String())
+		}
 	}
-	if strings.Contains(w.Body.String(), "titleRename") {
-		t.Fatalf("enabled session carried the off switch: %s", w.Body.String())
+	// A recorded change, and the flag still names nobody: show says off.
+	if v, body := get(); v.TitleRename != "off" {
+		t.Fatalf("a renamed session did not say off: %s", body)
+	}
+	// The flag names the session: the field is left out of both answers.
+	f.srv.TitleRename = mustTitleRename(t, name)
+	if v, body := get(); v.TitleRename != "" || strings.Contains(body, "titleRename") {
+		t.Fatalf("enabled session carried the off switch: %s", body)
+	}
+	if w := putTitle(f, tokHuman, name, "Cafe", "Cafe"); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "titleRename") {
+		t.Fatalf("enabled session's title answer carried the off switch: %d %s", w.Code, w.Body.String())
 	}
 }
 

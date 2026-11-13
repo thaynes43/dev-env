@@ -810,8 +810,12 @@ agentd removes it with one Backspace per character and tries again later. The
 operator flag `--title-rename-sessions` names the sessions whose heartbeat
 answers carry that text, or `*` for every session. Empty, the default,
 names no session: the heartbeat is the old empty answer and agentd types
-nothing, while `agent-run title` still only records. `agent-run show` then
-says the rename is not enabled for this session. A title set at launch is
+nothing, while `agent-run title` still only records and says so. For a
+session with a recorded title change, `agent-run show` then
+says the rename is not enabled for this session. A session nobody renamed
+gets no new key in its view, so an older `agent-run`, whose
+`show --json --once` and `usage export` refuse a key they do not know,
+still reads it. A title set at launch is
 not typed again; a different title recorded later in the same pod is typed
 under the same guard. A title may not end with a semicolon and may not
 contain a backslash. This typed rename is built and not installed.
