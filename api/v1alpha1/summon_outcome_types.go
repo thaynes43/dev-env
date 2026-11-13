@@ -10,6 +10,8 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.closed) || has(self.closed)",message="the closed record cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.pages) || (has(self.pages) && oldSelf.pages.all(p, p in self.pages))",message="a page event is never removed or changed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.executor) || has(self.executor)",message="the executor latch cannot be removed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.registration) || has(self.registration)",message="the registration record cannot be removed"
+// +kubebuilder:validation:XValidation:rule="(has(self.registration) && has(self.registration.result)) == (has(self.pages) && self.pages.exists(p, p.event == 'escalation-started'))",message="pages hold escalation-started exactly when the registration has a result"
 type SummonStatus struct {
 	// AdmittedAt is when the operator leader admitted the session: its charge
 	// was in the create ledger under its own name, its single-flight lane was
@@ -41,6 +43,75 @@ type SummonStatus struct {
 	// removed.
 	// +optional
 	Executor *SummonExecutorStatus `json:"executor,omitempty"`
+	// Registration is a remote escalation's settled Remote Control
+	// registration (DESIGN-064 6.10; story 794, coordinator rulings O1, O2,
+	// O3 and O13 on item 745 comments 7680 and 7685, not rulings by Tom).
+	// The operator leader writes it, and appends escalation-started to
+	// pages in the same write as its result. Each field is set once; the
+	// record is never removed.
+	// +optional
+	Registration *SummonRegistrationStatus `json:"registration,omitempty"`
+}
+
+// SummonRegistrationResult is a settled registration: Remote Control
+// registered under the session's name with a verified link, or it did not
+// within its bound.
+// +kubebuilder:validation:Enum=registered;unavailable
+// +kubebuilder:validation:MaxLength=16
+type SummonRegistrationResult string
+
+const (
+	RegistrationRegistered  SummonRegistrationResult = "registered"
+	RegistrationUnavailable SummonRegistrationResult = "unavailable"
+)
+
+// SummonRegistrationReason is why a registration settled unavailable, read
+// at the pass that settled it, from a closed set. No other text from the
+// status is ever copied into it.
+// +kubebuilder:validation:Enum=starting;offline;login-required;link-unverified;name-mismatch;not-reported
+// +kubebuilder:validation:MaxLength=32
+type SummonRegistrationReason string
+
+const (
+	// The Remote Control state word, as reported.
+	RegistrationReasonStarting      SummonRegistrationReason = "starting"
+	RegistrationReasonOffline       SummonRegistrationReason = "offline"
+	RegistrationReasonLoginRequired SummonRegistrationReason = "login-required"
+	// State registered and the name matches, but the URL does not match the
+	// verified link pattern.
+	RegistrationReasonLinkUnverified SummonRegistrationReason = "link-unverified"
+	// State registered under a name that is not the session's.
+	RegistrationReasonNameMismatch SummonRegistrationReason = "name-mismatch"
+	// No Remote Control record, or a state word outside the four known ones.
+	RegistrationReasonNotReported SummonRegistrationReason = "not-reported"
+)
+
+// SummonRegistrationStatus is the operator leader's one settlement of a
+// remote escalation's registration (DESIGN-064 6.10, story 794). AgentSeenAt
+// is the leader's clock at the first pass that read a fresh heartbeat with
+// the agent busy, idle or waiting; it is never invented when the session
+// settles first. Result and At are written together, with the reason for
+// unavailable and the escalation-started page event, in one status write.
+//
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.agentSeenAt) || (has(self.agentSeenAt) && self.agentSeenAt == oldSelf.agentSeenAt)",message="agentSeenAt is set once and never changes"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.result) || (has(self.result) && self.result == oldSelf.result)",message="the registration result is set once and never changes"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.reason) || (has(self.reason) && self.reason == oldSelf.reason)",message="the registration reason is set once and never changes"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.at) || (has(self.at) && self.at == oldSelf.at)",message="the registration time is set once and never changes"
+// +kubebuilder:validation:XValidation:rule="has(self.result) == has(self.at)",message="the registration result and its time are set together"
+// +kubebuilder:validation:XValidation:rule="has(self.reason) == (has(self.result) && self.result == 'unavailable')",message="a registration reason is set exactly when the result is unavailable"
+type SummonRegistrationStatus struct {
+	// AgentSeenAt is when the leader first saw the agent started.
+	// +optional
+	AgentSeenAt *metav1.Time `json:"agentSeenAt,omitempty"`
+	// Result is the settlement.
+	// +optional
+	Result SummonRegistrationResult `json:"result,omitempty"`
+	// Reason is set exactly when Result is unavailable.
+	// +optional
+	Reason SummonRegistrationReason `json:"reason,omitempty"`
+	// At is when the leader settled the registration.
+	// +optional
+	At *metav1.Time `json:"at,omitempty"`
 }
 
 // SummonExecutorStatus is the remote executor latch, in the shape of the
@@ -75,11 +146,13 @@ type SummonExecutorStatus struct {
 }
 
 // SummonPageEvent is a lifecycle page event of DESIGN-064 6.8 recorded on a
-// session. This slice writes the two lifecycle events it decides; story 742
-// adds the rest of 6.8's lifecycle events. A terminal event is never a page
+// session. Story 779 writes escalation-held and escalation-reminder; story
+// 794 writes escalation-started, only with status.summon.registration's
+// result (6.10); story 742 adds the rest of 6.8's lifecycle events. A
+// terminal event is never a page
 // event here: the keeper derives it from the close record (ruling Q1 on item
 // 742, built in PR 1102).
-// +kubebuilder:validation:Enum=escalation-held;escalation-reminder
+// +kubebuilder:validation:Enum=escalation-held;escalation-reminder;escalation-started
 // +kubebuilder:validation:MaxLength=32
 type SummonPageEvent string
 
@@ -88,6 +161,9 @@ const (
 	PageEscalationHeld SummonPageEvent = "escalation-held"
 	// PageEscalationReminder: a remote escalation idle 24 hours (6.7).
 	PageEscalationReminder SummonPageEvent = "escalation-reminder"
+	// PageEscalationStarted: a remote escalation's registration settled
+	// (6.10, story 794), written with status.summon.registration's result.
+	PageEscalationStarted SummonPageEvent = "escalation-started"
 )
 
 // SummonPage is one page event: what happened and when the operator

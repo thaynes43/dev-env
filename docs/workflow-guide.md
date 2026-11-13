@@ -2022,6 +2022,22 @@ None is a ruling by Tom.
   is dropped to make it fit; the keeper's in-cluster config carries none.
 - **Reading the record.** `kubectl -n dev-env-system get cm
   dev-env-keeper-summon-pages -o json | agent-run pages list`.
+- **A remote escalation's registration** (story 794, coordinator rulings on
+  item 745 comments 7680 and 7685; not a ruling by Tom). The operator leader
+  records once, in `status.summon.registration`, whether an admitted, open
+  remote escalation registered with the Claude app under its own name with a
+  verified link (`registered`), or that it did not (`unavailable`, with one
+  reason word: `starting`, `offline`, `login-required`, `link-unverified`,
+  `name-mismatch` or `not-reported`). It reads only a heartbeat at most
+  3 minutes old. It settles `unavailable` 5 minutes after it first saw the
+  agent busy, idle or waiting (`agentSeenAt`), or 10 minutes after admission
+  if it never saw it; one `offline` reading or a pending login never settles
+  it early. In the same write it appends `escalation-started` to
+  `status.summon.pages[]`. A settled record never changes. Lane `upgrade`
+  records nothing. **Nothing sends `escalation-started` yet:** the keeper
+  skips an event that has no template, and the page is story 796. Read it
+  with `kubectl -n dev-agents get agentsession <name> -o
+  jsonpath='{.status.summon.registration}'`.
 
 ## Summoning callers
 

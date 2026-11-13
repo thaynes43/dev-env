@@ -1241,6 +1241,26 @@ differs from fix round 2's correction, this governs.
    client and copies its output), may have started the provider, so it is
    `ambiguous`.
 
+**Correction, 2026-11-13: story 794, coordinator rulings on item 745 comments
+7680 and 7685; not a ruling by Tom.** The text above stays; where it
+differs, this governs.
+
+- *A new record.* `status.summon.registration` (6.10's correction of this
+  date) is the operator leader's record of a remote escalation's Remote
+  Control registration: `agentSeenAt`, `result`, `reason` and `at`, each set
+  once, the record never removed, and the result written with the
+  `escalation-started` page event in one status write. It holds nothing (no
+  lane, no slot) and counts in no pool or queue. Only an admitted, open
+  remote escalation gets one; a Queued session, a task, an upgrade and a
+  closed session never do. The observation it settles from is the pod's own
+  claim, copied by the heartbeat, not an attestation by the provider.
+- *"Stays joinable", made exact* (the slice plan's 1.3, item 9; ruling O5).
+  "A terminal remote session ... whose pod still runs stays joinable until
+  its idle suspend" (No resume, above) holds only for a close the session
+  reported. An operator close of an admitted remote session suspends it at
+  once (`suspendClosedSummon`, ruling D3), so its pod goes and it cannot be
+  joined after that close. The timers are not changed.
+
 ## 6. Contracts per build story
 
 ### 6.1 OP735: the ops egress tier
@@ -2728,6 +2748,88 @@ of the correction above.
 - Retention follows Q-12. A drill page starts `DRILL`.
 - Not verified: whether the keeper's phone-list archive treats summoned
   remote sessions like others.
+
+**Correction, 2026-11-13: story 794, coordinator rulings on item 745 comments
+7680 and 7685; not a ruling by Tom.** Comment 7685 amends ruling O3 of comment
+7680; where they differ, 7685 governs. The text above stays; where it
+differs, this governs.
+
+1. *Who settles (O1).* The operator leader, in its watch pass (`summonWatch`,
+   every 60 seconds, after the reminder step), on its own clock, with no
+   timer of its own. The caller does not wait and the keeper does not decide.
+   It reads only a session with `spec.caller`, mode `remote`, lane
+   `escalation`, `status.summon.admittedAt`, no terminal outcome, no
+   `status.summon.closed` and no settled result. Lane `upgrade` records
+   nothing: it is quiet on success. A task, an ordinary session and a Queued
+   session are never read. A session the same pass closes gets nothing: its
+   terminal page speaks.
+2. *Where (O2).* `status.summon.registration`: `agentSeenAt`, `result`
+   (`registered` or `unavailable`), `reason` and `at`. Each field is set once
+   and never changes or goes, and the record is never removed. `result` and
+   `at` are written together, `reason` exactly when the result is
+   `unavailable`, and `{escalation-started, at}` is appended to
+   `status.summon.pages[]` in the same status write, under the optimistic
+   lock. The CRD refuses a result without the event and the event without a
+   result. A conflict or a not-found waits for the next pass, which decides
+   again from the stored record. With `pages[]` at its 8 entries the leader
+   logs and writes neither the event nor the result.
+3. *The rules (O3 as amended),* in this order, by one pure function,
+   `summonoutcome.Registration`, from the session's name,
+   `status.remoteControl`, `status.agent`, `status.summon` and the leader's
+   clock:
+   1. **A fresh heartbeat or nothing.** No `status.agent.lastHeartbeat`, or
+      one more than 3 minutes old, settles nothing. A pod that does not report
+      is the watchdog's `never-started` and `heartbeat-lost` rows' business.
+   2. **Registered:** Remote Control state `registered`, `url` matching the
+      shared pattern (item 5), and `name` equal to the session's name,
+      whether or not the agent was seen first.
+   3. **Agent seen:** the first pass that reads the agent's word `busy`,
+      `idle` or `waiting` records the leader's clock, to the second, as
+      `agentSeenAt`. No other word counts. A session that settles before that
+      keeps it unset: it is never invented.
+   4. **Unavailable, 5 minutes after `agentSeenAt`** without registering.
+   5. **Unavailable, 10 minutes after `admittedAt`** when the agent was never
+      seen. This is wider than comment 7680, which named only a reported
+      `login-required`: a pod that reports while its agent stays `pending`
+      would otherwise be silent until the 72-hour bound.
+   6. Otherwise nothing yet.
+
+   So one `offline` reading, a pending login or a slow start never settles
+   early; the two bounds are the only way to `unavailable`. A settled session
+   is never written again: a registration after `unavailable` and a link that
+   goes after `registered` change nothing. This replaces "`login-required`,
+   or `starting` (or absent) for 120 seconds after the agent started ..., or
+   `offline` before it registered" above. The Session has no durable agent
+   start time, a heartbeat of `busy` can come before any provider process
+   (the comment in `summonWatchdogInputs`, agent 2.105.0), one `offline`
+   reading shows on a healthy start, and on the ops
+   profile `login-required` is also the state while the keeper's projection
+   is pending or refreshing (the slice plan's 1.3, items 2, 3 and 4).
+4. *The reason word* of an `unavailable` settlement is read at that pass,
+   from a closed set: `starting`, `offline` and `login-required` (the Remote
+   Control state as reported); `link-unverified` (state `registered` under
+   the session's name, but the URL does not match the pattern);
+   `name-mismatch` (state `registered` under another name); `not-reported`
+   (no `status.remoteControl`, or a state word outside those four). No other
+   text from the status is copied, and no log line carries the URL.
+5. *The shared pattern (O13).* `summonoutcome.RemoteControlLinkPattern`,
+   `^https://claude\.ai/code/session_[A-Za-z0-9_-]{1,120}$`, the one agentd
+   and the keeper use today. This replaces "a URL matching
+   `https://claude.ai/code/<id>`" above. In story 794 only the operator's
+   settlement reads it; agentd and the keeper move to it in stories 795 and
+   796.
+6. *What the record is.* The observation is the pod's own claim: agentd's
+   reading of the CLI's record for its live process, copied by the heartbeat
+   route into `status.remoteControl` and `status.agent`. It is not an
+   attestation by the provider, as the text above says.
+7. *Nothing sends it yet.* The keeper skips an event with no template row;
+   story 796 adds the page for `escalation-started`, chosen by the recorded
+   settlement.
+8. *Joinable after a close only if the session reported it* (the slice
+   plan's 1.3, item 9; ruling O5). An operator close of an admitted remote
+   session suspends it at once (ruling D3), so its pod goes and it cannot be
+   joined. After a close the session reported, its pod stays until the idle
+   suspend. 5.9's correction of this date says the same.
 
 ### 6.11 OP746: move curation
 

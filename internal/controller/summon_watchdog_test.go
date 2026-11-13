@@ -816,7 +816,9 @@ func TestSummonWatchdogStale(t *testing.T) {
 
 // Part B: a remote escalation idle 24 hours gets one reminder page event,
 // never two; idle 72 hours it closes failed, reason escalation-bound, and the
-// note says so. A fresh heartbeat hides neither.
+// note says so. A fresh heartbeat hides neither. Since story 794 the same
+// session also settles its registration (it reports no Remote Control
+// record), so the reminder is counted apart from escalation-started.
 func TestSummonWatchdogEscalationReminderAndBound(t *testing.T) {
 	w, s := remoteAdmitted(t, v1alpha1.LaneEscalation, "esc-idle")
 	step := func(at time.Duration) {
@@ -824,23 +826,35 @@ func TestSummonWatchdogEscalationReminderAndBound(t *testing.T) {
 		w.beat(s.Name, protocol.AgentIdle, summonT0)
 		w.pass()
 	}
+	reminders := func() []v1alpha1.SummonPage {
+		var out []v1alpha1.SummonPage
+		for _, p := range w.pages(s.Name) {
+			if p.Event == v1alpha1.PageEscalationReminder {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
 	step(24*time.Hour - time.Second)
-	if len(w.pages(s.Name)) != 0 {
-		t.Fatalf("a reminder before 24 hours: %+v", w.pages(s.Name))
+	if p := reminders(); len(p) != 0 {
+		t.Fatalf("a reminder before 24 hours: %+v", p)
 	}
 	step(24 * time.Hour)
 	step(25 * time.Hour)
 	step(72*time.Hour - time.Second)
 	w.wantOpen("a second before 72 hours", s.Name)
-	if p := w.pages(s.Name); len(p) != 1 || p[0].Event != v1alpha1.PageEscalationReminder || !p[0].At.Time.Equal(summonT0.Add(24*time.Hour)) {
+	if p := reminders(); len(p) != 1 || !p[0].At.Time.Equal(summonT0.Add(24*time.Hour)) {
 		t.Fatalf("want one reminder at 24 hours: %+v", p)
+	}
+	if p := startedPages(w.pages(s.Name)); len(p) != 1 || !p[0].At.Time.Equal(summonT0.Add(25*time.Hour)) {
+		t.Fatalf("want one escalation-started at 25 hours, 5 minutes after the agent was seen: %+v", p)
 	}
 	step(72 * time.Hour)
 	w.wantClosed(s.Name, summonoutcome.ReasonEscalationBound, v1alpha1.OutcomeFailed)
 	if note := w.get(s.Name).Status.Outcome.Note; !strings.Contains(note, "escalation-bound") || !strings.Contains(note, "72 hours") {
 		t.Fatalf("note %q", note)
 	}
-	if p := w.pages(s.Name); len(p) != 1 {
+	if p := w.pages(s.Name); len(p) != 2 {
 		t.Fatalf("pages after the close: %+v", p)
 	}
 }

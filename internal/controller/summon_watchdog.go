@@ -229,6 +229,9 @@ func (r *Reconciler) summonWatch(ctx context.Context, items []v1alpha1.AgentSess
 		if err := r.summonReminder(ctx, s); err != nil {
 			errs = append(errs, err)
 		}
+		if err := r.summonRegistration(ctx, s); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return errs
 }
