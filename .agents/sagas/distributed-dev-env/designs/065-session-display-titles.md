@@ -1266,7 +1266,7 @@ ADR-026's guarded typed rename.
 ### 9.5 Fix round 2 (the coordinator, 2026-11-13, not Tom)
 
 These rulings are the coordinator's, from the second review of pull request
-1127. They are not Tom's. ADR-027 stays Proposed. ADR-026 stays Accepted and
+1127. They are not Tom's. ADR-027 stays Proposed (it was accepted later the same day; see ADR-027). ADR-026 stays Accepted and
 is not edited. Tom's ruling stands: a rename is typed only while the session
 is idle with an empty input line. A rename is not typed while a turn runs.
 
@@ -1361,7 +1361,7 @@ is idle with an empty input line. A rename is not typed while a turn runs.
 ### 9.6 Fix round 3 (the coordinator, 2026-11-13, not Tom)
 
 These rulings are the coordinator's, from the third review of pull request
-1127. They are not Tom's. ADR-027 stays Proposed. Tom's ruling stands: a
+1127. They are not Tom's. ADR-027 stays Proposed (it was accepted later the same day; see ADR-027). Tom's ruling stands: a
 rename is typed only while the session is idle with an empty input line.
 
 1. **A refused text does not wipe the mark.** While `title.json` records
