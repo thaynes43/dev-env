@@ -19,6 +19,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/commonrules"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
+	"github.com/thaynes43/dev-env/internal/sessiontitle"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
@@ -783,6 +784,22 @@ func CheckAgentdSession(s *v1alpha1.AgentSession) error {
 // starts a pod whose agentd would refuse its session at boot. retentionLatch
 // is false unless terminal task reclaim is on: with reclaim off, a retained
 // private task keeps D-58's TUI resume after a container restart.
+// launchedTitle is the title a new pod is started with. A later annotation
+// wins when it validates. An invalid annotation is ignored, so a new pod
+// keeps the title given at create. A pod that is already running is not
+// rebuilt for this.
+func launchedTitle(s *v1alpha1.AgentSession) string {
+	if s == nil {
+		return ""
+	}
+	raw, present := "", false
+	if s.Annotations != nil {
+		raw, present = s.Annotations[v1alpha1.AnnotationTitle]
+	}
+	title, _ := sessiontitle.Effective(raw, present, s.Spec.Title)
+	return title
+}
+
 func sessionDocument(s *v1alpha1.AgentSession, retentionLatch bool) (string, error) {
 	d := protocol.Session{
 		PrivateHistoryRetained: retentionLatch && privateHistoryProtected(s) && terminalTaskReclaimScope(s),
@@ -793,7 +810,7 @@ func sessionDocument(s *v1alpha1.AgentSession, retentionLatch bool) (string, err
 		Agent:                  string(s.Spec.Agent),
 		Mode:                   string(s.Spec.Mode),
 		Model:                  s.Spec.Model,
-		Title:                  s.Spec.Title,
+		Title:                  launchedTitle(s),
 		Effort:                 s.Spec.Effort,
 		Prompt:                 s.Spec.Prompt,
 		// Caller lets agentd allow a prompt on a summoned remote session

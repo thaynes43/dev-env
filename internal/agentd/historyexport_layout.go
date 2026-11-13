@@ -194,6 +194,9 @@ var agentdLayout = []historyRule{
 	// Pod-local continuation control is retained on HOME, never exported as
 	// authority that a restored session could replay.
 	{"explicit-claude-rc.json", protocol.HistoryClassNotHistory, kindAny},
+	// The typed rename's local state (DESIGN-065). It holds the title text,
+	// so it stays on the pod and is never exported.
+	{"title.json", protocol.HistoryClassNotHistory, kindAny},
 	// Local protocol state: this process verified its own exit and the server
 	// end POST did not confirm. Listed, not exported. It is not server
 	// acceptance, a consumption receipt, or permission to start another attempt.

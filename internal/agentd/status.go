@@ -256,6 +256,9 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	case sess.Mode == protocol.ModeRemote && sess.Agent == protocol.AgentClaude:
 		rc := collectRemoteControl(s, sess, checkLogin(s).Usable(now), live, hasCur)
 		rc.Title = remoteTitleForReport(sess, hasCur, st.Agent.State)
+		if !hasExplicit && sess.Caller == "" {
+			overlayRecordedTitle(s, sess, rc)
+		}
 		st.RemoteControl = rc
 	case hasCur && hasExplicit && explicitState != explicitClaudeRCUncertain && explicitRCAccepted(s, sess, cur):
 		rc := collectRemoteControl(s, sess, checkLogin(s).Usable(now), live, true)

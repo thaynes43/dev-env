@@ -31,7 +31,8 @@ const (
 
 // heartbeat serves POST /v1/sessions/{name}/heartbeat (D-41): agentd's status,
 // from the session's own pod only. It copies the status into status.agent and
-// status.usage and answers 204.
+// status.usage and answers 200 with the recorded role title (DESIGN-065 rule
+// 8.3). An older agentd treats any 2xx as success and discards the body.
 func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	key, err := s.sessionKey(r)
 	if err != nil {
@@ -174,7 +175,23 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 			s.Log.V(1).Info("allowance reading not stored", "session", key.Name, "reason", err.Error())
 		}
 	}
-	return http.StatusNoContent, nil, nil
+	// A session the operator's flag does not name gets the answer main gives
+	// today: 204 and no body. agentd then types nothing.
+	if !s.TitleRename.Allows(key.Name) {
+		return http.StatusNoContent, nil, nil
+	}
+	text, _ := sessionEffectiveTitle(&sess)
+	return http.StatusOK, heartbeatTitleBody{Title: heartbeatTitleText{Text: text}}, nil
+}
+
+// heartbeatTitleBody is the heartbeat answer (DESIGN-065 rule 8.3). text is
+// the role text, empty when the session has no title. agentd composes it.
+type heartbeatTitleBody struct {
+	Title heartbeatTitleText `json:"title"`
+}
+
+type heartbeatTitleText struct {
+	Text string `json:"text"`
 }
 
 // remoteControlStatus is status.remoteControl from a heartbeat: the entry's
@@ -184,11 +201,52 @@ func remoteControlStatus(rc *protocol.RemoteControl) *v1alpha1.RemoteControlStat
 		return nil
 	}
 	return &v1alpha1.RemoteControlStatus{
-		Name:      clip(rc.Name, maxShort),
-		SessionID: clip(rc.SessionID, maxShort),
-		URL:       clip(rc.URL, maxMessage),
-		State:     clip(rc.State, maxShort),
-		Title:     clipRemoteTitle(rc.Title),
+		Name:          clip(rc.Name, maxShort),
+		SessionID:     clip(rc.SessionID, maxShort),
+		URL:           clip(rc.URL, maxMessage),
+		State:         clip(rc.State, maxShort),
+		Title:         clipRemoteTitle(rc.Title),
+		ProviderTitle: clipRemoteTitle(rc.ProviderTitle),
+		Rename:        remoteRenameStatus(rc.Rename),
+	}
+}
+
+// remoteRenameStatus copies a rename the CRD will accept. An unknown state
+// or reason, or an attempt count outside 0 to 2, is dropped so the heartbeat
+// is not refused.
+func remoteRenameStatus(in *protocol.RemoteRename) *v1alpha1.RemoteRenameStatus {
+	if in == nil || !renameStateOK(in.State) || in.Attempts < 0 || in.Attempts > 2 {
+		return nil
+	}
+	if in.Reason != "" && !renameReasonOK(in.Reason) {
+		return nil
+	}
+	out := &v1alpha1.RemoteRenameStatus{State: in.State, Reason: in.Reason, Attempts: int32(in.Attempts)}
+	if !in.Since.IsZero() {
+		at := metav1.NewTime(in.Since.UTC())
+		out.Since = &at
+	}
+	return out
+}
+
+func renameStateOK(state string) bool {
+	switch state {
+	case "Applied", "Held", "Typed", "Failed", "Unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func renameReasonOK(reason string) bool {
+	switch reason {
+	case "launch", "confirmed", "already", "process", "not-registered", "busy", "waiting",
+		"status-unknown", "quiet", "clock", "attached", "pane", "cli-version", "input",
+		"screen-unknown", "paced", "delivering", "left-in-input", "not-confirmed",
+		"invalid-title", "record-shape", "state", "command-shadowed", "interrupted":
+		return true
+	default:
+		return false
 	}
 }
 
