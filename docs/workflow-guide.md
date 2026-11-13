@@ -2308,8 +2308,20 @@ session without one is built exactly as before.
     fresh reading that lacks a window, or whose window has reset since it
     was read, admits for that window's line only. Staleness and a window's
     reset are judged on the clock after the read returns; the 30-second
-    reuse is measured from before the read. A clock that went back reads
-    again.
+    reuse is measured from before the read, and a read is repeated sooner
+    only when the time since the last read is negative.
+  - *Once stale, always stale* (story 783 fix round 2, coordinator rulings
+    in PR 1101 comment 6839647832; not a ruling by Tom). The gate keeps, per
+    agent, the newest `readAt` it has judged stale. That reading and any
+    older one stay unusable and admit with reason `stale`, whatever the
+    clock says later, on a cache hit and after a new read alike; their log
+    line shows `readingAge` and the windows' percents as `none`. A strictly
+    newer reading is judged normally. So a clock that goes back cannot make
+    a reading fresh again once the gate has seen it stale. Limit: the mark
+    lives in the operator's memory. It starts empty when the operator starts
+    or another replica takes the lead, and what the clock did before then is
+    unknown: a reading the gate never saw stale, which looks fresh on a
+    clock that went back, is judged as fresh.
   - *Log.* Each decision on a `normal` or `bulk` session logs one line,
     "quota gate admitted a summoned session" or "quota gate held a summoned
     session", with the session's name and lane, the priority, a fixed

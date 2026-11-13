@@ -98,7 +98,8 @@ func TestGateReadsAtMostOncePerThirtySeconds(t *testing.T) {
 	if w.store.reads != 2 {
 		t.Fatalf("30 s later: %d reads, want 2", w.store.reads)
 	}
-	// A clock that went back reads again rather than keep an old read.
+	// A clock that went back past the last read reads again rather than keep
+	// an old read; that is the only early read.
 	w.now = t0.Add(-time.Minute)
 	w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk))
 	if w.store.reads != 3 {
@@ -363,5 +364,105 @@ func TestGateCachedReadingGoesStaleInsideTheReuse(t *testing.T) {
 	}
 	if w.store.reads != 1 || !strings.Contains(w.logs.lines[1], `"reason"="stale"`) || !strings.Contains(w.logs.lines[1], `"readingAge"="15m10s"`) {
 		t.Fatalf("%d reads, logs %q", w.store.reads, w.logs.lines)
+	}
+}
+
+// Story 783 fix round 2 (coordinator rulings in PR 1101 comment 6839647832):
+// a reading the gate has once judged stale never holds again, whatever the
+// clock says later. The clock first sees a 99 % reading 16 minutes old, then
+// goes back to a time still after the reading, where the same data would
+// look a minute old. It admits as stale on that call, on a cache hit and
+// after a later read; an older reading stays stale too, even when the clock
+// goes back before its time; a strictly newer one is judged normally.
+func TestGateReadingOnceJudgedStaleNeverHoldsAgain(t *testing.T) {
+	watermark := t0.Add(-16 * time.Minute)
+	at := func(readAt time.Time) map[string]Reading {
+		r := reading(FiveHourMinutes, "99")
+		r.ReadAt = readAt
+		return map[string]Reading{protocol.AgentClaude: r}
+	}
+	w := newGate(installLines, at(watermark))
+	step := func(name string, now time.Time, reads int, admit bool, reason Why) {
+		t.Helper()
+		w.now = now
+		n := len(w.logs.lines)
+		if got := w.g.Admits(summoned(name, v1alpha1.SummonPriorityBulk)); got != admit {
+			t.Fatalf("%s: admit %v, want %v; logs %q", name, got, admit, w.logs.lines[n:])
+		}
+		if w.store.reads != reads {
+			t.Fatalf("%s: %d reads, want %d", name, w.store.reads, reads)
+		}
+		if len(w.logs.lines) != n+1 || !strings.Contains(w.logs.lines[n], `"reason"="`+string(reason)+`"`) {
+			t.Fatalf("%s: logs %q, want one line with reason %s", name, w.logs.lines[n:], reason)
+		}
+	}
+	step("first-seen-stale", t0, 1, true, WhyStale)
+	// The clock goes back 15 minutes: a new read, the same data, a minute old
+	// on this clock. Before the fix it held with five-hour-past-line.
+	back := t0.Add(-15 * time.Minute)
+	step("rollback-call", back, 2, true, WhyStale)
+	// The marked reading reaches Decide as Missing: no age, no percent.
+	if l := w.logs.lines[1]; !strings.Contains(l, `"readingAge"="none"`) || !strings.Contains(l, `"fiveHourUsed"="none"`) || !strings.Contains(l, `"fiveHourLine"="80"`) {
+		t.Fatalf("rollback-call log %q", l)
+	}
+	step("cache-hit", back.Add(10*time.Second), 2, true, WhyStale)
+	step("later-read", back.Add(DefaultReuse), 3, true, WhyStale)
+	// The clock goes back before the reading's own time: still stale, not
+	// reading-from-future.
+	step("clock-before-the-reading", watermark.Add(-time.Minute), 4, true, WhyStale)
+	// An older reading, fresh on this clock, is stale too.
+	w.store.readings = at(watermark.Add(-time.Minute))
+	step("older-reading", watermark.Add(-30*time.Second), 5, true, WhyStale)
+	// A reading one nanosecond newer than the mark is judged normally: fresh
+	// and past the line, it holds, and so does its cache hit.
+	w.store.readings = at(watermark.Add(time.Nanosecond))
+	step("newer-reading", watermark.Add(time.Minute), 6, false, WhyFiveHourPast)
+	step("newer-reading-cache-hit", watermark.Add(time.Minute+10*time.Second), 6, false, WhyFiveHourPast)
+	// A newer reading from the future keeps its own reason.
+	w.store.readings = at(watermark.Add(5 * time.Minute))
+	step("future-reading", watermark.Add(2*time.Minute), 7, true, WhyFromFuture)
+}
+
+// The mark is per provider: a Codex reading judged stale does not make a
+// Claude reading with the same time stale.
+func TestGateStaleMarkIsPerProvider(t *testing.T) {
+	stale := t0.Add(-16 * time.Minute)
+	claude, codex := reading(FiveHourMinutes, "99"), reading(FiveHourMinutes, "99")
+	claude.ReadAt, codex.ReadAt = stale, stale
+	w := newGate(installLines, map[string]Reading{protocol.AgentCodex: codex})
+	cx := summoned("codex-one", v1alpha1.SummonPriorityBulk)
+	cx.Spec.Agent = v1alpha1.AgentCodex
+	if !w.g.Admits(cx) || !strings.Contains(w.logs.lines[0], `"reason"="stale"`) {
+		t.Fatalf("a stale Codex reading: logs %q", w.logs.lines)
+	}
+	w.store.readings = map[string]Reading{protocol.AgentCodex: codex, protocol.AgentClaude: claude}
+	w.now = t0.Add(-15 * time.Minute)
+	if w.g.Admits(summoned("claude-one", v1alpha1.SummonPriorityBulk)) || !strings.Contains(w.logs.lines[1], `"reason"="five-hour-past-line"`) {
+		t.Fatalf("a fresh Claude reading at 99 %% was not held after a Codex reading went stale: logs %q", w.logs.lines)
+	}
+	if !w.g.Admits(cx) || !strings.Contains(w.logs.lines[2], `"reason"="stale"`) {
+		t.Fatalf("the Codex reading held again after it was judged stale: logs %q", w.logs.lines)
+	}
+	if w.store.reads != 2 {
+		t.Fatalf("%d reads, want 2", w.store.reads)
+	}
+}
+
+// With every line unset nothing is read, however the clock moves, so no
+// reading is ever judged stale.
+func TestGateWithEveryLineUnsetReadsNothingAcrossARollback(t *testing.T) {
+	stale := reading(FiveHourMinutes, "100")
+	stale.ReadAt = t0.Add(-16 * time.Minute)
+	w := newGate(Lines{MaxAge: 15 * time.Minute}, map[string]Reading{protocol.AgentClaude: stale})
+	for _, now := range []time.Time{t0, t0.Add(-15 * time.Minute), t0.Add(time.Hour)} {
+		w.now = now
+		for _, p := range []v1alpha1.SummonPriority{v1alpha1.SummonPriorityUrgent, v1alpha1.SummonPriorityNormal, v1alpha1.SummonPriorityBulk} {
+			if !w.g.Admits(summoned("a", p)) {
+				t.Fatalf("%s held with no line set at %s", p, now)
+			}
+		}
+	}
+	if w.store.reads != 0 {
+		t.Fatalf("%d reads with every line unset", w.store.reads)
 	}
 }

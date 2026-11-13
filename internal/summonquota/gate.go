@@ -48,6 +48,13 @@ type Gate struct {
 	at       time.Time
 	readings map[string]Reading
 	failure  Why
+	// staleAt is, per provider, the newest readAt the gate has judged
+	// stale. A reading at or before it stays stale whatever the clock says
+	// later; a strictly newer one is judged normally (story 783 fix round 2,
+	// coordinator rulings in PR 1101 comment 6839647832). It is memory only:
+	// each operator process starts with none, so a restart or a new leader
+	// knows nothing of the clock before it.
+	staleAt map[string]time.Time
 }
 
 // Admits reports whether the quota lets s start now. A session without
@@ -58,6 +65,11 @@ type Gate struct {
 // any wait for the lock, so staleness and a window's reset are judged at the
 // time the session would start (ruling R2 on PR 1101). The 30-second reuse
 // keeps the time taken before the read.
+//
+// A reading Decide finds stale marks its provider: from then on that reading,
+// and any older one, reaches Decide as Missing WhyStale, so a clock that goes
+// back cannot make it fresh again (story 783 fix round 2). A caller that took
+// the same reading before the mark was written decides on its own clock.
 func (g *Gate) Admits(s *v1alpha1.AgentSession) bool {
 	if s == nil || s.Spec.Caller == "" {
 		return true
@@ -66,13 +78,17 @@ func (g *Gate) Admits(s *v1alpha1.AgentSession) bool {
 	if s.Spec.Summon != nil {
 		p = s.Spec.Summon.Priority
 	}
+	agent := string(s.Spec.Agent)
 	now := g.now()
 	r := Reading{Missing: WhyNoReading}
 	if g.Lines.For(p) {
-		r = g.reading(string(s.Spec.Agent), now)
+		r = g.reading(agent, now)
 		now = g.now()
 	}
 	d := Decide(p, r, g.Lines, now)
+	if d.HaveReading && d.Reason == WhyStale {
+		g.markStale(agent, r.ReadAt)
+	}
 	if p != v1alpha1.SummonPriorityUrgent {
 		g.log(s, d)
 	}
@@ -88,7 +104,8 @@ func (g *Gate) now() time.Time {
 
 // reading is agent's newest reading from the last read, read again when that
 // read is Reuse old or the clock went back past it. The lock is held through
-// the read, so two callers never read at once.
+// the read, so two callers never read at once. A reading at or before the
+// provider's stale mark is returned as Missing WhyStale.
 func (g *Gate) reading(agent string, now time.Time) Reading {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -107,7 +124,24 @@ func (g *Gate) reading(agent string, now time.Time) Reading {
 	if !ok || r.ReadAt.IsZero() {
 		return Reading{Missing: WhyNoReading}
 	}
+	if mark, ok := g.staleAt[agent]; ok && !r.ReadAt.After(mark) {
+		return Reading{Missing: WhyStale}
+	}
 	return r
+}
+
+// markStale records readAt as agent's stale mark unless the mark is already
+// at or after it.
+func (g *Gate) markStale(agent string, readAt time.Time) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if mark, ok := g.staleAt[agent]; ok && !readAt.After(mark) {
+		return
+	}
+	if g.staleAt == nil {
+		g.staleAt = map[string]time.Time{}
+	}
+	g.staleAt[agent] = readAt
 }
 
 // readOnce is one read bounded by ReadTimeout. The seam carries no context,

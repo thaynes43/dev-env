@@ -15,10 +15,13 @@
 // is stale, missing, unreadable or from the future (its time after the gate's
 // clock; ruling R1 on PR 1101) admits for every line; and a fresh reading that
 // lacks a window, or whose window has reset since it was read, admits for
-// that window's line. The readings come from running interactive Claude
-// sessions (DESIGN-059), and a reading's time is when its numbers last
-// changed: an unchanged reading ages while the plan is in use, and a high one
-// stays fresh up to the max age after work stops.
+// that window's line. A reading the gate has once judged stale stays stale,
+// and so does any older one of its provider, whatever the clock says later;
+// the gate keeps that mark in memory only (story 783 fix round 2). The
+// readings come from running interactive Claude sessions (DESIGN-059), and a
+// reading's time is when its numbers last changed: an unchanged reading ages
+// while the plan is in use, and a high one stays fresh up to the max age
+// after work stops.
 package summonquota
 
 import (
@@ -57,7 +60,9 @@ const (
 	WhyNoReading   Why = "no-reading"
 	WhyReadError   Why = "read-error"
 	WhyReadTimeout Why = "read-timeout"
-	// WhyStale: the reading is older than Lines.MaxAge.
+	// WhyStale: the reading is older than Lines.MaxAge, or the gate has
+	// judged it, or a newer reading of its provider, stale before (story
+	// 783 fix round 2), and passes it as the reading's Missing.
 	WhyStale Why = "stale"
 	// WhyFromFuture: the reading's time is after the gate's clock (the clock
 	// went back, or another node's is ahead), so its age is unknown.
@@ -104,8 +109,9 @@ func (l Lines) of(p v1alpha1.SummonPriority) (fiveHour, sevenDay int) {
 // Reading is the newest reading of the session's provider, or why there is
 // none. A Reading with Missing empty and a zero ReadAt is no reading.
 type Reading struct {
-	// Missing is why there is no reading: WhyNoReading, WhyReadError or
-	// WhyReadTimeout. Empty when ReadAt and Windows hold one.
+	// Missing is why there is no usable reading: WhyNoReading, WhyReadError,
+	// WhyReadTimeout, or WhyStale from the gate's stale mark. Empty when
+	// ReadAt and Windows hold one.
 	Missing Why
 	// ReadAt is when the numbers last changed (DESIGN-059 4.4): a reading
 	// can look older than it is, never newer.
