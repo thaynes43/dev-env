@@ -99,8 +99,10 @@ const (
 	// two things: a pod the operator can stop frees its lane when it has
 	// stopped, so the next session of a single-flight lane never overlaps a
 	// provider that may still run; and a pod that cannot go (never
-	// scheduled, a partitioned node, a rescue that hangs) holds its lane for
-	// at most this long after the close, not forever.
+	// scheduled, a partitioned node, a rescue that hangs) does not hold its
+	// lane forever: it is released at the first reconcile at or after the
+	// later of the start deadline plus one minute and this long after the
+	// close.
 	summonFencedCloseWait = 5 * time.Minute
 
 	// summonPolicyNamespace is where CallerPolicies live: the API's
