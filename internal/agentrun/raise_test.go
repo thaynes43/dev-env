@@ -2,6 +2,7 @@ package agentrun
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -93,11 +94,11 @@ func TestRaiseShowListAndFleet(t *testing.T) {
 	}}
 	var lines []string
 	row := func(k, format string, args ...any) {
-		lines = append(lines, k)
+		lines = append(lines, k+": "+fmt.Sprintf(format, args...))
 	}
 	(&app{}).printRaise(row, s)
 	got := strings.Join(lines, " ")
-	if !strings.Contains(got, "raised") || !strings.Contains(got, "on Tom's word") || !strings.Contains(got, "pod runs as") {
+	if !strings.Contains(got, "raised") || !strings.Contains(got, "on Tom's word") || !strings.Contains(got, "pod runs as") || !strings.Contains(got, "--restart") {
 		t.Fatalf("show labels: %s", got)
 	}
 	if note(s) != "raised: workbench; raised: may start sessions" {
@@ -110,5 +111,13 @@ func TestRaiseShowListAndFleet(t *testing.T) {
 	header := fleetRaised([]apiv1.FleetSession{{Name: "raised", Raise: s.Raise}, {Name: "plain"}})
 	if header != "raised (workbench); raised (may start sessions)" {
 		t.Fatalf("fleet: %s", header)
+	}
+	lines = nil
+	s.Raise.Profile = ""
+	s.Raise.PodAccount = ""
+	(&app{}).printRaise(row, s)
+	startOnly := strings.Join(lines, " ")
+	if strings.Contains(startOnly, "pod runs as") || strings.Contains(startOnly, "--restart") || !strings.Contains(startOnly, "raised") {
+		t.Fatalf("start-sessions show: %s", startOnly)
 	}
 }

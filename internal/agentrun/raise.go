@@ -133,6 +133,11 @@ func (a *app) printRaise(row func(k, format string, args ...any), s apiv1.Sessio
 		}
 		row("on Tom's word", "%q (%s in %s, %s%s)", r.Owner.Words, raiseWhere(r.Owner.Where), r.Owner.Session, r.Owner.SaidAt, ref)
 	}
+	// A start-sessions raise has no profile to apply at the next pod. The
+	// depth exemption already honours it. --restart is slice (b).
+	if r.Profile == "" {
+		return
+	}
 	if r.PodAccount != "" {
 		row("pod runs as", "%s; the raised profile applies at its next start (agent-run raise %s --restart)", r.PodAccount, s.Name)
 		return
