@@ -7,7 +7,16 @@
   and once more for the advisory reviewer's threads on the pull request
   (section 15.3). Nothing is built or installed. No flag, CRD change, route, command or
   haynes-ops change exists for it.
-  [ADR-028](../adrs/028-raise-a-running-session.md) is Proposed with it.
+  [ADR-028](../adrs/028-raise-a-running-session.md) was proposed with it and
+  is Accepted. **Approved by Tom on 2026-11-13** as summarised to him in a
+  phone prompt: he tells a superuser coordinator or Meatball; his phone gets a
+  notice naming the session, who raised it and the words attributed to him;
+  it takes effect two minutes later unless taken back; a change to superuser
+  restarts that session once at a quiet moment and keeps its conversation;
+  workers it starts stay ordinary. His answer: "Approve, build all of it
+  (Recommended)" (story 830). The mechanisms under that summary are the
+  coordinator's design. The design is accepted for building; it stays
+  "Proposed" in the sense that nothing is built yet.
 - **Tracking:** [Story OP830](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/830).
   Tom's ask is recorded on story 828 comment 7927, and his answer on how he
   gives the go-ahead on story 830 comment 7980. Why the case's session

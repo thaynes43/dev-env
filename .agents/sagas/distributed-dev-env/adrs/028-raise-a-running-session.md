@@ -1,6 +1,10 @@
 # ADR-028: A running session is raised from outside it on Tom's word, gated by a notice to him, and recorded in a signed, ledger-matched annotation
 
-- **Status:** Proposed 2026-11-13, for the coordinator's review. Revised three
+- **Status:** Accepted 2026-11-13 by the coordinator session
+  `dev-env-fable-coordinator-1109`, after two design reviews by another model
+  family and after Tom approved the design as he will see it (his answer
+  "Approve, build all of it (Recommended)" to a phone prompt, OpenProject
+  #830). Proposed the same day, for the coordinator's review. Revised three
   times the same day: after Tom's answer on how he gives the go-ahead, and
   after two design reviews by another model family, with the coordinator's
   rulings on each finding (DESIGN-066 section 15), then once more for the
