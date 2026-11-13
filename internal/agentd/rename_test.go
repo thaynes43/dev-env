@@ -1293,6 +1293,46 @@ func TestRenameLaunchTitleOutsideTheCharacterSetStaysApplied(t *testing.T) {
 	w.assertNoWrite(t)
 }
 
+func TestRenameResumeKeepsATitleTheRecordAlreadyShows(t *testing.T) {
+	w := newRenameWorld(t)
+	w.boot(false)
+	title := "Cost \u2014 review"
+	shown := sessiontitle.Compose(w.sess.Model, title)
+	w.spec.name = shown
+	w.writeRecord()
+	disk := w.apply(title)
+	if disk.State != "Applied" || disk.Reason != "already" || disk.Applied != shown || disk.Stopped {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertNoWrite(t)
+
+	// title.json from the previous boot already records the composed text.
+	// The record's name is something else. The state stays Applied.
+	w.saveDisk(titleDisk{Applied: shown, Target: shown, State: "Applied", Reason: "launch"})
+	w.spec.name = "derived-name"
+	w.writeRecord()
+	kept := w.apply(title)
+	if kept.State != "Applied" || kept.Reason != "launch" || kept.Applied != shown || kept.Stopped {
+		t.Fatalf("kept %+v", kept)
+	}
+	w.assertNoWrite(t)
+}
+
+func TestRenameClearAfterATypedTitleTypesTheSessionName(t *testing.T) {
+	w := newRenameWorld(t)
+	target := w.composed("Café")
+	w.saveDisk(titleDisk{
+		Applied: "", Target: target, Attempts: 1,
+		State: "Typed", Since: w.clock.Now(),
+	})
+	w.arm(w.sess.Name, true)
+	disk := w.apply("")
+	w.assertTyped(t, w.sess.Name)
+	if disk.State != "Applied" || disk.Reason != "confirmed" || disk.Applied != w.sess.Name {
+		t.Fatalf("%+v", disk)
+	}
+}
+
 func TestRenameInvalidAnswerOnFirstLaunchStaysFailed(t *testing.T) {
 	w := newRenameWorld(t)
 	w.boot(true)

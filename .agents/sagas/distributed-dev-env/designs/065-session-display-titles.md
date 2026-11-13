@@ -1263,10 +1263,13 @@ is idle with an empty input line. A rename is not typed while a turn runs.
    is Failed, `invalid-title`, and nothing is typed. A session that already
    has such a title keeps it. It is never typed. When the heartbeat answer is
    that launch title, the state stays Applied with reason `launch`. It is not
-   Failed `invalid-title`, because the provider already shows it. A different
-   text that the character rule refuses is still Failed `invalid-title`, and
-   nothing is typed. A wide character, a combining mark, a zero-width
-   character and U+00AD are refused. é is accepted.
+   Failed `invalid-title`, because the provider already shows it. A resume
+   does the same when `title.json` already records that composed text, or
+   when the CLI record's name is that text: the state is Applied, reason
+   `already` when the record is what shows it. A different text that the
+   character rule refuses is still Failed `invalid-title`, and nothing is
+   typed. A wide character, a combining mark, a zero-width character and
+   U+00AD are refused. é is accepted.
 2. **Cleanup.** The Backspace cleanup of this pod's own unsent text does not
    depend on busy or idle, and a spinner row does not block it. All of these
    are read fresh, directly before the keys: no attached client; the same
@@ -1323,8 +1326,11 @@ is idle with an empty input line. A rename is not typed while a turn runs.
    model, the effort and `--dangerously-skip-permissions`.
 9. **An untyped clear, and an untitled launch.** When `applied` is empty,
    `attempts` is 0 and the target is the session name, agentd sets `applied`
-   to that name and does not type it. A missing `title.json` is not created
-   for that. An untitled first launch, whose text is empty and whose launch
+   to that name and does not type it. `attempts` and the state are the values
+   from before a target change. A title that was typed, and whose confirm did
+   not finish, is not treated as never typed: a later clear types the session
+   name under the guard. A missing `title.json` is not created for an untyped
+   clear. An untitled first launch, whose text is empty and whose launch
    value is the session name, is not seeded and does not report a rename.
 10. **The version cache.** `cliMinor` caches only a parsed answer. A timeout
     or unparsed output is not cached. A parsed minor that is not one of the

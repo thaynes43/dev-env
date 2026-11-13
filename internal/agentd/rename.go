@@ -138,14 +138,9 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 	}
 	target, ok := renameTarget(sess, ans.Text)
 	if !ok {
-		// The CLI was already started with this title, so the provider shows
-		// it. The character rule refuses to type it, and the state stays the
-		// launch record rather than a failed rename.
-		if value, launched := firstLaunchValue(s, sess); launched && answerIsLaunch(sess, ans.Text, value) && (disk.Applied == "" || disk.Applied == value) {
-			disk.UID = sess.SessionUID
-			disk.Applied = value
-			disk.Stopped = false
-			disk.set("Applied", "launch", value, a.now())
+		// The character rule refuses to type this text. When the provider
+		// already shows it, the state stays Applied and nothing is typed.
+		if a.keepShownTitle(&disk, s, sess, ans.Text) {
 			disk.save(s, log, prev)
 			return
 		}
@@ -166,6 +161,10 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 		return
 	}
 	disk.UID = sess.SessionUID
+	// The attempt count is the one from before a target change. The reset
+	// below zeroes it, and a clear must not treat a typed title as never typed.
+	prevAttempts := disk.Attempts
+	prevState := disk.State
 	if disk.Target != target {
 		disk.Attempts = 0
 		disk.Interrupted = 0
@@ -177,7 +176,7 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 	}
 	// A clear of a title that was never typed sets the session name as
 	// applied and does not type it.
-	if disk.found && disk.Applied == "" && disk.Attempts == 0 && target == sess.Name {
+	if disk.found && disk.Applied == "" && prevAttempts == 0 && prevState != "Typed" && target == sess.Name {
 		disk.Applied = target
 		disk.Stopped = false
 		disk.set("Applied", "already", target, a.now())
@@ -612,13 +611,42 @@ func titleKind(ctx context.Context, r Runner, s Settings, sess protocol.Session,
 	return !explicit
 }
 
-// answerIsLaunch reports whether text is the role title the CLI was already
-// given. launch is the --remote-control value, which is the composed title.
-func answerIsLaunch(sess protocol.Session, text, launch string) bool {
-	if text == "" || launch == "" {
+// keepShownTitle reports Applied when the provider already shows text, and
+// types nothing. A first launch matches the --remote-control value. A resume
+// matches title.json's applied value, or the CLI record's name. text is the
+// role title. The compared string is the composed display title.
+func (a *TitleApplier) keepShownTitle(disk *titleDisk, s Settings, sess protocol.Session, text string) bool {
+	if text == "" {
 		return false
 	}
-	return sessiontitle.Compose(sess.Model, text) == launch
+	shown := sessiontitle.Compose(sess.Model, text)
+	if shown == "" {
+		return false
+	}
+	if value, launched := firstLaunchValue(s, sess); launched && value == shown && (disk.Applied == "" || disk.Applied == value) {
+		disk.UID = sess.SessionUID
+		disk.Applied = value
+		disk.Stopped = false
+		disk.set("Applied", "launch", value, a.now())
+		return true
+	}
+	if disk.found && disk.Applied == shown {
+		disk.UID = sess.SessionUID
+		disk.Stopped = false
+		if disk.State != "Applied" {
+			disk.set("Applied", "already", shown, a.now())
+		}
+		return true
+	}
+	rec, fail := readTitleRecord(s, liveCLI(s))
+	if fail == "" && rec.name == shown && disk.Applied == "" {
+		disk.UID = sess.SessionUID
+		disk.Applied = shown
+		disk.Stopped = false
+		disk.set("Applied", "already", shown, a.now())
+		return true
+	}
+	return false
 }
 
 func renameTarget(sess protocol.Session, text string) (string, bool) {
