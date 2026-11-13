@@ -7,8 +7,12 @@
   his word to an agent; then after two design reviews by another model
   family, with the coordinator's rulings on each finding (section 15); and
   once more for the advisory reviewer's threads on the pull request (section
-  15.3). [ADR-028](../adrs/028-raise-a-running-session.md) was proposed with
-  it and is Accepted. **Approved by Tom on 2026-11-13** as summarised to him in a
+  15.3). Amended 2026-11-13 after the review of the haynes-ops install rules
+  (section 15.4): who can read the signing keys is now a stated limit
+  ([ADR-029](../adrs/029-raise-keys-readers.md)), and install rules 2 to 6
+  change: 2 to 4 are tighter, 5 says what the grants do not take away, and 6
+  accepts the cluster-wide readers (known limit 7). [ADR-028](../adrs/028-raise-a-running-session.md) was proposed
+  with it and is Accepted. **Approved by Tom on 2026-11-13** as summarised to him in a
   phone prompt: he tells a superuser coordinator or Meatball; his phone gets a
   notice naming the session, who raised it and the words attributed to him;
   it takes effect two minutes later unless taken back; a change to superuser
@@ -438,9 +442,10 @@ write, so `metadata.generation` does not move (ADR-027). Three things make it
 count, and every reader checks all three:
 
 1. it names the session's UID;
-2. its Ed25519 signature, made with a private key only the operator reads,
-   verifies over every field but the signature, Tom's words included, and
-   the hash of the words matches the words (N1, N4, N10; section 6.6);
+2. its Ed25519 signature, made with the operator's private key (section
+   6.6; known limit 7 says who else can read it), verifies over every field
+   but the signature, Tom's words included, and the hash of the words
+   matches the words (N1, N4, N10);
 3. its `id` and `state` match the operator's own ledger (N3; section 6.5).
 
 A record that fails any check is ignored, as if absent, and logged. So a
@@ -669,9 +674,10 @@ below the build of slice (b) stays a written procedure (section 7.6).
     coordinator identity, not being reaped and not archived.
 14. **Fenced state.** Admission rules in haynes-ops let only the operator's
     account change the annotation and its ledger, only the keeper's account
-    change its notice ledger, only each owner change its public key, and
-    nobody change the depth label after create. They are install steps of
-    slice (a), each with its check (section 11).
+    change its notice ledger, only each owner change its public key and its
+    private-key Secret, and nobody change the depth label after create. The
+    rules are install steps of slice (a), each with its check (section 11).
+    Admission cannot fence who reads a private key (known limit 7).
 15. **Rate limits that survive a restart, never on a take-back.** Per
     target: one raise in any 60 seconds after the target's last raise or
     take-back. Per performer: at most three raises in any rolling hour. Both
@@ -925,8 +931,8 @@ secret is shared between the operator and the keeper (N1, N10).
 
 | Pair | Signs | Private key | Public key | Verified by |
 | --- | --- | --- | --- | --- |
-| Operator | Every raise record | Secret `dev-env-system/dev-env-session-raise-operator-key`, read only by the operator | ConfigMap `dev-env-system/dev-env-session-raise-operator-public` | Every reader in the operator, and the keeper before it sends a notice |
-| Keeper | Every notice outcome | Secret `dev-env-system/dev-env-session-raise-keeper-key`, read only by the keeper | ConfigMap `dev-env-system/dev-env-session-raise-keeper-public` | The operator before it activates a raise |
+| Operator | Every raise record | Secret `dev-env-system/dev-env-session-raise-operator-key`, written only by the operator; for who can read it see below | ConfigMap `dev-env-system/dev-env-session-raise-operator-public` | Every reader in the operator, and the keeper before it sends a notice |
+| Keeper | Every notice outcome | Secret `dev-env-system/dev-env-session-raise-keeper-key`, written only by the keeper; for who can read it see below | ConfigMap `dev-env-system/dev-env-session-raise-keeper-public` | The operator before it activates a raise |
 
 - **What is signed** (N4). One canonical byte string: the prefix
   `dev-env/session-raise/v1/record` and a newline, then the record's JSON with
@@ -971,12 +977,25 @@ secret is shared between the operator and the keeper (N1, N10).
   match is what retires an old record.
 - **Who else can read a private key.** The operator cannot check from inside
   which other accounts can read its Secret, so it does not try. It is an
-  install step with an exact check (section 11).
+  install step with an exact check (section 11). The install review of
+  2026-11-13 resolved the answer from the cluster's bindings: beside each
+  key's owner and the cluster's admin subjects, about 36 controller
+  ServiceAccounts hold Secret read across the whole cluster (Flux's
+  controllers, cert-manager, external-secrets, storage and observability
+  operators and others), and some hold Secret write. Admission does not run
+  on a read, so nothing in this design can fence it. The key is not
+  owner-only to read, and this design does not claim that it is (known limit
+  7, [ADR-029](../adrs/029-raise-keys-readers.md)). Writes and deletes of the
+  two key Secrets are owner-only by admission (section 11, rules 3 and 4), so
+  nobody else can plant or replace a key.
 
 Whoever can read a private key, run code in its owner's pod, or change the
-owner's Deployment or public-key ConfigMap through haynes-ops can forge in
-that owner's name. That is the owner's own trust root, and the haynes-ops
-delivery path behind it (DESIGN-039, Proposed).
+owner's Deployment or public-key ConfigMap through haynes-ops can sign in
+that owner's name. A signature alone raises nothing: only the operator can
+write the record and its ledger, only the keeper its notice ledger (section
+11, rules 1, 3 and 4), and a record counts only when it matches the operator
+ledger. The owner's pod and Deployment are the owner's own trust root, with
+the haynes-ops delivery path behind it (DESIGN-039, Proposed).
 
 ### 6.7 Refusals
 
@@ -1112,12 +1131,20 @@ profile label is P. Otherwise the reconciler suspends the session.
   account.
 - **A label changed after the pod was created is a mismatch.** The reconciler
   reads the pod's `managedFields`: a profile label owned by any field manager
-  but the operator's counts as not built for any profile. Whether anything
-  but the operator can edit a session pod's labels today is Unknown: the
-  workbench tier lists pod delete and exec, not patch
-  (`docs/v2-quickstart.md:143-151`), but cluster admins can, and no admission
-  rule in this repo fences pod labels. So slice (a) adds one as an install
-  step (section 11, rule 2).
+  but the operator's counts as not built for any profile. An entry written
+  through the `pods/status` subresource (`subresource: status` in
+  `managedFields`) counts the same way. The workbench tier lists pod delete
+  and exec, not patch (`docs/v2-quickstart.md:143-151`), but the install
+  review of 2026-11-13 found other accounts that can patch a session pod or
+  its status today (multus, the scheduler and other controllers, the
+  cluster's admin subjects), and no admission rule fenced pod labels. So
+  slice (a) adds one as an install step (section 11, rule 2), for `pods` and
+  for `pods/status`. A label set through the first bind leaves no
+  `managedFields` entry of its own, so the field-manager test does not see
+  it. The bind rule refuses it. If one got through on a listed session, it
+  names a profile the pod was not built for: the account-and-label check
+  then finds no profile that matches both, or finds one that no record
+  covers, and the watchdog suspends.
 - **Who is touched.** A session the ledger never listed is never touched, so
   a template change cannot suspend never-raised sessions. With both flags off
   no record is honoured, so every raised pod is uncovered and is suspended.
@@ -1472,15 +1499,31 @@ sessions.**
      and only the operator's account may change
      `dev-env.haynesops.com/profile` on a pod in `dev-agents` labelled
      `app.kubernetes.io/name: dev-env-session` (`api/v1alpha1/labels.go:85-87`).
-  3. *The operator ledger and its public key:* only the operator's account
-     may update or delete `dev-env-session-raise-ledger` and
-     `dev-env-session-raise-operator-public`.
-  4. *The keeper ledger and its public key:* only
+     The pod rule also refuses anyone but the operator who changes or removes
+     that `app.kubernetes.io/name` label, so a pod cannot first be taken out
+     of the rule, and it matches the `pods/status` subresource as well,
+     because the API server keeps a label sent there (section 15.4). One
+     more rule covers the bind: on Kubernetes 1.35 the first bind of a pod
+     copies the labels of the Binding onto the pod without admission on the
+     pod, so a Binding in `dev-agents` that carries either label is refused.
+     That rule alone has `failurePolicy: Ignore`: every start and resume of a
+     session pod passes through it, an evaluation error must never stop a
+     session from being scheduled, and the only accounts that can bind there
+     are the scheduler, the daemon-set controller and the cluster's admin
+     subjects.
+  3. *The operator ledger, its public key and its private key:* only the
+     operator's account may update or delete `dev-env-session-raise-ledger`,
+     `dev-env-session-raise-operator-public` and the Secret
+     `dev-env-session-raise-operator-key`.
+  4. *The keeper ledger, its public key and its private key:* only
      `system:serviceaccount:dev-env-system:dev-env-keeper` may update or
-     delete `dev-env-keeper-raise-notices` and
-     `dev-env-session-raise-keeper-public`.
+     delete `dev-env-keeper-raise-notices`,
+     `dev-env-session-raise-keeper-public` and the Secret
+     `dev-env-session-raise-keeper-key`.
   5. *The objects:* the two private-key Secrets and the four ConfigMaps,
-     precreated empty; get and update by name for their owner only; the
+     precreated empty; the install grants get and update by name to each
+     object's owner only, and takes no right from any other account (rule
+     6); the
      operator's get on the keeper's ledger and public key; the keeper's get
      on the operator ledger and public key, and list on AgentSessions in
      `dev-agents`.
@@ -1489,8 +1532,16 @@ sessions.**
      -n dev-env-system -o json`, `kubectl get clusterrolebindings -o json`),
      resolving each bound role's rules, lists every subject that can get,
      list or watch `secrets` in `dev-env-system`, or create `pods/exec`
-     there. The only subjects allowed are the key's owner and the cluster's
-     admin groups, named in the check's record on story 830. Where the
+     there, and every subject that can update or delete Secrets there. The
+     record on story 830 names each subject in one of three classes: the
+     key's owner; the cluster's admin subjects; and accounts that hold the
+     right across the whole cluster (about 36 controller ServiceAccounts in
+     the install review of 2026-11-13). The third class is accepted as a
+     stated limit (known limit 7, ADR-029): each of them can already read
+     every Secret in `dev-env-system`, and the key alone raises nothing. A
+     subject in none of the three classes, for example one bound in
+     `dev-env-system` to a role that names Secrets, is removed or accepted by
+     name with a reason before a key is written. Where the
      checking account may impersonate, `kubectl auth can-i get
      secret/<name> -n dev-env-system --as=system:serviceaccount:<ns>:<sa>`
      confirms each. The operator cannot run this check on itself, so it is
@@ -1500,10 +1551,17 @@ sessions.**
   <name> -o yaml` and `kubectl get validatingadmissionpolicybinding <name> -o
   yaml` show the expression naming only the owner account, `failurePolicy:
   Fail`, `validationActions: [Deny]`, and no type-checking warnings in the
-  policy's status. The check for rule 5: each object exists by name, and the
-  owner's first start has filled its key and published its public key. Even
-  where a rule is missing, a forged or replayed annotation does not count,
-  because it does not match the operator ledger (N3).
+  policy's status. The bind rule of rule 2 shows `failurePolicy: Ignore`
+  instead. The check for rule 5: each object exists by name, and the
+  owner's first start has filled its key and published its public key. The
+  coordinator's account cannot read Secrets, so for the two key Secrets it
+  reads the Flux Kustomization's inventory and the published public keys.
+  Even where one rule is missing, a forged or replayed annotation does not
+  count, because it does not match the operator ledger (N3). With the record
+  rule and the ledger rule both missing, an account that can read the
+  operator's key and write both objects could forge a record that counts:
+  the admission rules are the fence, and the signature is the second line
+  (known limit 7).
 - **When run alone.** An operator build with slice (a) and without (b)
   refuses to start with `--session-raise-profiles` set (section 6.2). With
   `--enable-session-raise-dispatch` it grants only the right to start
@@ -1531,7 +1589,8 @@ step.**
   `spec.profile`, and when it was raised to a profile on the same account
   with wider env or mounts, and never touches a session the ledger does not
   list, even after a template change; a profile label set by any field
-  manager but the operator's is a mismatch; a raised parent's child that names no profile
+  manager but the operator's is a mismatch, also when it was written through
+  the status subresource; a raised parent's child that names no profile
   gets the default, never the pod label, also when the parent was raised to
   a profile on its own account; a pod on another account whose label was
   patched back to `spec.profile` is still a raised parent; a raised parent's child is refused
@@ -1629,6 +1688,16 @@ coordinator's rulings of 2026-11-13).
 6. **A self take-back ends the caller's turn.** When a session takes back its
    own profile raise, the suspend cuts its own turn; the take-back stands, but
    its answer may not reach it.
+7. **The signing keys can be read by the cluster's Secret readers** (install
+   review, section 15.4; ADR-029). Beside each key's owner and the cluster's
+   admin subjects, about 36 controller ServiceAccounts hold Secret read
+   across the whole cluster, and admission cannot fence a read. Those
+   accounts can already read every other Secret in `dev-env-system`. The key
+   alone raises
+   nothing: only the operator can write the record and its ledger, and only
+   the keeper its notice ledger (section 11, rules 1, 3 and 4). The signature
+   is the second line, for a missing rule, and there it holds only against
+   accounts that cannot read Secrets.
 
 ## 13. Open questions for the owner
 
@@ -1749,3 +1818,41 @@ The ruling: a raised parent is a session whose pod was not built for its
 `spec.profile`, by account or by profile label. Section 8.2, the sentence
 before Ruling 8, slice (b)'s tests, section 7.6 step 3 and ADR-028 decision 9
 say so.
+
+### 15.4 Review of the haynes-ops install rules
+
+Grok 4.7 on haynes-ops PR 4888 at head `bf254008`, the draft that holds
+install steps 1 to 5 of slice (a):
+`~/.shared/handoffs/op830/install-review-grok.md`. Verdict: request changes;
+3 HIGH, 1 LOW. It found no wrong refusal, and confirmed against the running
+kustomize-controller that Flux creates the precreated objects once and never
+updates them. The rulings are the coordinator's, of 2026-11-13.
+
+| Finding | What it said | Ruling | Where the design answers it |
+| --- | --- | --- | --- |
+| 1, HIGH | The pod rule is passed in two updates: drop the pod's session label, then change the profile label | Nobody but the operator may change the session label | Section 11, rule 2 |
+| 2, HIGH | The API server keeps a label sent through `pods/status`, and the rule did not match it; multus, the scheduler and other controllers hold that right | Match `pods/status` too; a status write that leaves the labels alone passes for every caller | Section 11, rule 2; section 7.5; slice (b) tests |
+| 3, HIGH | The key Secrets are not owner-only: about 36 controller ServiceAccounts read every Secret, some write them | Writes and deletes owner-only by admission; reads accepted as a stated limit | Section 11, rules 3, 4 and 6; Ruling 2; safety rule 14; section 6.6; known limit 7; ADR-029 |
+| 4, LOW | The test missed the two-update case and the status route; the workflow would not run on a later policy edit | Fix both in the install pull request | haynes-ops PR 4888 |
+
+Second pass, Grok 4.7 on the delta `bf254008..e4c178e4`,
+`~/.shared/handoffs/op830/install-review-grok-2.md`: findings 1 to 3 closed.
+It read the Kubernetes v1.35.5 source for every ordinary writer of a session
+pod's status (the kubelet, the scheduler, node lifecycle, disruption, the
+garbage collectors, multus) and found that none can be refused by the pod
+rule: each sends a patch without labels, or a full object whose stale copy
+is turned away as a conflict before admission. One new finding:
+
+| Finding | What it said | Ruling | Where the design answers it |
+| --- | --- | --- | --- |
+| 1, HIGH | On v1.35 the first bind copies the Binding's labels onto the pod (`BindingREST.setPodNodeAndMetadata`), with no admission on the pod | A separate rule refuses a Binding in `dev-agents` that carries either label, with `failurePolicy: Ignore`; the coordinator's read-only resolution found only the scheduler, the daemon-set controller and the cluster's admin subjects can bind there | Section 11, rule 2; section 7.5 |
+
+Third pass, Grok 4.7 on the delta `e4c178e4..0cb4d543`,
+`~/.shared/handoffs/op830/install-review-grok-3.md`: the delta is approved,
+with no finding. It read the v1.35.5 source for the bind rule: the
+scheduler's binder sends no labels, the topology plugin adds only its two
+keys before the rule runs, no other create on a subresource writes pod labels
+without admission on the pod, and no Binding a caller can send both carries a
+guarded key and makes the expression error. It also confirmed that a label
+copied by the bind gets no `managedFields` entry (section 7.5).
+
