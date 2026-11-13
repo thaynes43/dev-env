@@ -1598,6 +1598,92 @@ func TestRenameUnknownTitleTextDoesNotClear(t *testing.T) {
 	}
 }
 
+// paceRunner sleeps on the first calls so the five-second budget is partly
+// gone. blockSecond makes the second list-panes wait until its own context
+// ends, which is the second check.
+type paceRunner struct {
+	inner       Runner
+	sleep       time.Duration
+	n           int
+	calls       int
+	panes       int
+	blockSecond bool
+	waited      bool
+}
+
+func (p *paceRunner) LookPath(name string) (string, error) { return p.inner.LookPath(name) }
+
+func (p *paceRunner) Run(ctx context.Context, c Cmd) (Result, error) {
+	p.calls++
+	if p.calls <= p.n && p.sleep > 0 {
+		time.Sleep(p.sleep)
+	}
+	if len(c.Args) > 0 && c.Args[0] == "list-panes" {
+		p.panes++
+		if p.panes == 2 && p.blockSecond {
+			<-ctx.Done()
+			return Result{}, ctx.Err()
+		}
+	}
+	if p.blockSecond && p.panes >= 2 && !p.waited {
+		p.waited = true
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return Result{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return p.inner.Run(ctx, c)
+}
+
+func TestRenameShortBudgetTypesNothing(t *testing.T) {
+	w := newRenameWorld(t)
+	p := &paceRunner{inner: w.run, sleep: 850 * time.Millisecond, n: 4}
+	w.app.Apply(context.Background(), p, w.s, w.sess, slog.New(slog.DiscardHandler), HeartbeatTitle{Present: true, Text: "Café"})
+	disk := loadTitle(w.s, w.sess)
+	if disk.State != "Held" || disk.Reason != "screen-unknown" || disk.Attempts != 0 {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertNoWrite(t)
+}
+
+func TestRenameSecondCheckOutlivesTheBudget(t *testing.T) {
+	w := newRenameWorld(t)
+	w.sess.Model = "custom-model"
+	w.arm("Café", false)
+	p := &paceRunner{inner: w.run, sleep: 650 * time.Millisecond, n: 4, blockSecond: true}
+	w.app.Apply(context.Background(), p, w.s, w.sess, slog.New(slog.DiscardHandler), HeartbeatTitle{Present: true, Text: "Café"})
+	disk := loadTitle(w.s, w.sess)
+	if disk.State != "Held" || disk.Reason != "interrupted" || disk.Attempts != 0 {
+		t.Fatalf("%+v", disk)
+	}
+	sawBackspace := false
+	for _, args := range w.writes() {
+		if slices.Contains(args, "Backspace") {
+			sawBackspace = true
+		}
+	}
+	if !sawBackspace {
+		t.Fatalf("writes %q", w.writes())
+	}
+}
+
+func TestRenameConfirmStopsWhenTheContextEnds(t *testing.T) {
+	w := newRenameWorld(t)
+	target := w.composed("Café")
+	n := 0
+	w.clock.onSleep = func() { n++ }
+	disk := titleDisk{UID: w.sess.SessionUID, Target: target, State: "Typed", Attempts: 1, Since: w.clock.Now()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w.app.confirm(ctx, w.s, &disk, target)
+	if n != 0 || disk.State != "Typed" {
+		t.Fatalf("sleeps %d disk %+v", n, disk)
+	}
+}
+
 type lineLog struct{ b *strings.Builder }
 
 func (l *lineLog) Enabled(context.Context, slog.Level) bool { return true }

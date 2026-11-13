@@ -95,6 +95,16 @@ func TestClassifyInputOtherAndUnknown(t *testing.T) {
 	if ClassifyInput(IdleEmptyScreen, "", wrong) != InputUnknown {
 		t.Fatal("cursor not after the prompt")
 	}
+	// Derived from the recorded idle fixture by inserting a numbered list in
+	// the conversation. The whole-screen rule makes that unknown.
+	mark := strings.LastIndex(IdleEmptyScreen, "❯\u00a0")
+	if mark < 0 {
+		t.Fatal("idle fixture has no input mark")
+	}
+	numbered := IdleEmptyScreen[:mark] + "1. Fix the bug\n" + IdleEmptyScreen[mark:]
+	if ClassifyInput(numbered, "", ObservedCursor(numbered)) != InputUnknown {
+		t.Fatal("numbered list in the conversation")
+	}
 }
 
 func TestRecordedCLIMinorsMatchFixtures(t *testing.T) {

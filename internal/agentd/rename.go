@@ -30,7 +30,11 @@ const (
 	renameTypedFor   = 2 * time.Minute
 	renameCallFor    = 2 * time.Second
 	renameBudget     = 5 * time.Second
-	titleStateFile   = "title.json"
+	// renameAfter bounds the second check, the clear and Enter once the text
+	// has been sent. It comes from the caller's context, so the five-second
+	// budget ending does not skip the clear.
+	renameAfter    = 4 * time.Second
+	titleStateFile = "title.json"
 )
 
 // HeartbeatTitle is the title object in a heartbeat answer. Present is false
@@ -170,7 +174,7 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 		}
 	}
 	defer release()
-	if a.guardAndType(budget, r, s, sess, log, &disk, target) {
+	if a.guardAndType(ctx, budget, r, s, sess, log, &disk, target) {
 		release()
 		a.confirm(budget, s, &disk, target)
 	}
@@ -246,7 +250,8 @@ func (a *TitleApplier) reconcile(disk *titleDisk, s Settings, target string, pre
 
 // guardAndType runs conditions 2 to 10 and the keystrokes. It returns true
 // when Enter was sent and the lock may be released for the confirmation poll.
-func (a *TitleApplier) guardAndType(ctx context.Context, r Runner, s Settings, sess protocol.Session, log *slog.Logger, disk *titleDisk, target string) bool {
+// parent is the caller's context. ctx is the five-second budget.
+func (a *TitleApplier) guardAndType(parent, ctx context.Context, r Runner, s Settings, sess protocol.Session, log *slog.Logger, disk *titleDisk, target string) bool {
 	now := a.now()
 	hold := func(state, reason string) bool {
 		if state == "Failed" {
@@ -324,6 +329,8 @@ func (a *TitleApplier) guardAndType(ctx context.Context, r Runner, s Settings, s
 		return hold("Failed", "invalid-title")
 	}
 	staged := *disk
+	prevAttempts := disk.Attempts
+	prevTypedAt := disk.LastTypedAt
 	staged.Attempts++
 	staged.LastTypedAt = a.now().UTC()
 	a.rememberPace(target, staged.Attempts, staged.LastTypedAt)
@@ -349,6 +356,19 @@ func (a *TitleApplier) guardAndType(ctx context.Context, r Runner, s Settings, s
 		}
 		return hold("Held", "quiet")
 	}
+	// Do not start the text unless one full call still fits. A budget that
+	// is already nearly gone holds, and the attempt recorded above is undone.
+	if d, ok := ctx.Deadline(); ok && time.Until(d) < renameCallFor {
+		disk.Attempts = prevAttempts
+		disk.LastTypedAt = prevTypedAt
+		a.rememberPace(target, prevAttempts, prevTypedAt)
+		if err := writeTitleFile(s, disk); err != nil {
+			return hold("Held", "state")
+		}
+		return hold("Held", "screen-unknown")
+	}
+	tail, stopTail := context.WithTimeout(parent, renameAfter)
+	defer stopTail()
 	if _, err := renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: []string{"send-keys", "-t", pane.id, "-l", "--", typed}}); err != nil {
 		disk.Stopped = true
 		disk.set("Failed", "left-in-input", target, a.now())
@@ -356,25 +376,34 @@ func (a *TitleApplier) guardAndType(ctx context.Context, r Runner, s Settings, s
 	}
 	a.sleep(renameSettle)
 	began := a.now()
-	if !secondCheck(ctx, r, s, p, pane, rec, typed) || a.now().Sub(began) >= renameEnterFor {
-		if clearTyped(ctx, r, s, pane.id, typed) {
-			if disk.Attempts > 0 {
-				disk.Attempts--
-			}
-			a.rememberPace(target, disk.Attempts, disk.LastTypedAt)
-			if err := writeTitleFile(s, disk); err != nil {
-				return hold("Held", "state")
-			}
-			return hold("Held", "interrupted")
-		}
-		disk.Stopped = true
-		disk.set("Failed", "left-in-input", target, a.now())
-		return false
+	if !secondCheck(tail, r, s, p, pane, rec, typed) || a.now().Sub(began) >= renameEnterFor {
+		return a.afterKeys(tail, r, s, disk, pane.id, typed, target)
 	}
 	log.Info("session title keystroke", "kind", "enter", "titleHash", sessiontitle.HashPrefix(target))
-	_, _ = renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: []string{"send-keys", "-t", pane.id, "Enter"}})
+	_, _ = renameRun(tail, r, Cmd{Name: s.TmuxBin, Args: []string{"send-keys", "-t", pane.id, "Enter"}})
 	disk.set("Typed", "", target, a.now())
 	return true
+}
+
+// afterKeys removes the text this pod just typed when the second check did
+// not pass. The row coming back empty refunds the attempt. Anything else
+// leaves the line and stops.
+func (a *TitleApplier) afterKeys(ctx context.Context, r Runner, s Settings, disk *titleDisk, paneID, typed, target string) bool {
+	if clearTyped(ctx, r, s, paneID, typed) {
+		if disk.Attempts > 0 {
+			disk.Attempts--
+		}
+		a.rememberPace(target, disk.Attempts, disk.LastTypedAt)
+		if err := writeTitleFile(s, disk); err != nil {
+			disk.set("Held", "state", target, a.now())
+			return false
+		}
+		disk.set("Held", "interrupted", target, a.now())
+		return false
+	}
+	disk.Stopped = true
+	disk.set("Failed", "left-in-input", target, a.now())
+	return false
 }
 
 func (a *TitleApplier) confirm(ctx context.Context, s Settings, disk *titleDisk, target string) {

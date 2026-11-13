@@ -1068,7 +1068,10 @@ sections 9.1 and 9.2 stays.
    multi-row input is not empty. "Holds exactly this text" needs the same
    structure, the exact text, and the cursor directly after it. Everything
    else is unknown. The recorded fixture `question-open.2.1.321.ansi` is
-   unknown, and nothing is typed on it.
+   unknown, and nothing is typed on it. Answered on the advisory review of
+   this fix, and not a new ruling by Tom: a numbered list in the
+   conversation is one of those rows. That hold is expected, because the
+   check is the whole screen, not only the rows next to the box.
 2. **The off switch (F1b).** The operator flag `--title-rename-sessions` is
    a comma-separated list of session names, or the single value `*`. Empty,
    the default, names no session. The heartbeat answer carries the title
@@ -1089,7 +1092,17 @@ sections 9.1 and 9.2 stays.
    cached. The whole guard-and-type sequence has a budget of 5 seconds,
    after which it holds. A timeout or error holds with the reason of the
    condition being read. The delivery lock is released on every path. A
-   hung tmux does not stop a later heartbeat.
+   hung tmux does not stop a later heartbeat. The advisory review of this
+   fix is answered here, and it is not a new ruling by Tom. agentd does not
+   send the text unless one 2-second call still fits in the budget;
+   otherwise it holds with reason `screen-unknown` and types nothing, and
+   it does not keep the attempt. After the text is sent, the second check,
+   the clear and Enter run on a 4-second deadline taken from the caller's
+   context, so the budget ending does not skip the clear. That deadline is
+   the only time past the 5 seconds, and only once the text is already
+   sent. The confirmation poll of rule 8.8 runs only while the 5-second
+   budget remains. A poll that stops leaves Typed, and later heartbeats
+   continue the 10-second window.
 5. **A later title in the same boot (F4).** "Nothing is typed after a first
    launch" in rule 8.4 means only that the launch title itself is not typed
    again. A title change recorded later, in the same pod's life, is applied
