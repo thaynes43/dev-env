@@ -1219,7 +1219,9 @@ sections 9.1 and 9.2 stays.
 
 The coordinator answered the generation question the same day. These
 rulings replace the sentences they name. ADR-026 stays Accepted and is not
-edited. [ADR-027](../adrs/027-session-title-annotation.md) is Proposed. It
+edited. [ADR-027](../adrs/027-session-title-annotation.md) is Proposed
+(accepted later the same day, after the reviews of the build; its decisions
+5 to 7 carry sections 9.5 and 9.6). It
 supersedes ADR-026's decision that `spec.title` may change, and it keeps
 ADR-026's guarded typed rename.
 
