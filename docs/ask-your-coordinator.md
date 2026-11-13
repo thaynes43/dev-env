@@ -44,8 +44,9 @@ Session must have no workspace. `spec.project` alone is not what is checked.
 - The inbox serves only the projects the operator lists in `--inbox-projects`
   (`internal/apiserver/inbox.go:101-103` for reads, `:172-173` for send and
   ask). As read from the live operator Deployment on 2026-11-13, that list is
-  `dev-env` and `haynes-studio` (haynes-ops#4877, OpenProject #799; it was
-  `dev-env` only until then). In any other project every inbox call answers
+  `dev-env`, `haynes-studio` and `haynesnetwork` (haynes-ops#4877 for
+  OpenProject #799 and haynes-ops#4887 for #829; it was `dev-env` only until
+  then). In any other project every inbox call answers
   404, even between two project-bound Sessions, and starting the coordinator
   as a project task does not change that.
 - The same list gates three more routes. A child's `agent-run parent tell` is
