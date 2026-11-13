@@ -117,15 +117,10 @@ func (p *RaisePager) announce(ctx context.Context) {
 		return
 	}
 	now := p.now().UTC().Truncate(time.Second)
-	live := map[string]bool{}
-	for i := range list.Items {
-		if list.Items[i].UID != "" {
-			live[string(list.Items[i].UID)] = true
-		}
-	}
-	// A session that is gone drops its notice even when this pass cannot
-	// announce, so a missing operator key does not grow the ledger.
-	p.pruneNotices(ctx, live, now)
+	// A session that is gone, or that no longer carries this record, drops
+	// its notice even when this pass cannot announce. A live session keeps
+	// the row for its current record, so an old Sent is not sent again.
+	p.pruneNotices(ctx, list.Items)
 	pub, err := sessionraise.ReadPublic(ctx, store, sessionraise.OperatorPublicName)
 	if err != nil {
 		return
@@ -143,9 +138,24 @@ func (p *RaisePager) announce(ctx context.Context) {
 	}
 }
 
-// pruneNotices drops a notice whose session is gone, or whose time is older
-// than the word retention. Rows that remain keep the signature they had.
-func (p *RaisePager) pruneNotices(ctx context.Context, live map[string]bool, now time.Time) {
+// pruneNotices drops a notice whose session is gone, or whose id is not
+// the id in that session's current annotation. A live session keeps the
+// row for its current record, however old, so a Sent is not sent again.
+// Rows that remain keep the signature they had.
+func (p *RaisePager) pruneNotices(ctx context.Context, sessions []v1alpha1.AgentSession) {
+	current := map[string]string{}
+	for i := range sessions {
+		uid := string(sessions[i].UID)
+		if uid == "" {
+			continue
+		}
+		rec, err := sessionraise.Parse(sessions[i].Annotations[v1alpha1.AnnotationRaise])
+		if err != nil || rec.ID == "" {
+			current[uid] = ""
+			continue
+		}
+		current[uid] = rec.ID
+	}
 	store := p.store()
 	obj, err := store.Get(ctx, sessionraise.NoticeLedgerName)
 	if err != nil {
@@ -157,8 +167,8 @@ func (p *RaisePager) pruneNotices(ctx context.Context, live map[string]bool, now
 	}
 	kept := make([]sessionraise.Notice, 0, len(led.Items))
 	for _, n := range led.Items {
-		at, perr := time.Parse(time.RFC3339, n.At)
-		if n.SessionUID == "" || !live[n.SessionUID] || perr != nil || now.Sub(at) > sessionraise.WordRetention {
+		id, live := current[n.SessionUID]
+		if !live || id == "" || n.ID != id {
 			continue
 		}
 		kept = append(kept, n)

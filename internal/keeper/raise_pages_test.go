@@ -222,6 +222,64 @@ func TestRaiseNoticeDropsAGoneSession(t *testing.T) {
 	}
 }
 
+func TestRaiseNoticeDoesNotRepeatAfterRetention(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, c)
+	ctx := context.Background()
+	store := sessionraise.Kube{Reader: c, Writer: c, Namespace: sessionraise.ObjectNamespace, Secrets: map[string]bool{sessionraise.OperatorSecretName: true}}
+	priv, err := sessionraise.Ensure(ctx, store, sessionraise.OperatorSecretName, sessionraise.OperatorPublicName, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	now := when
+	at := when.Format(time.RFC3339)
+	const uid = "uid-raise-keep"
+	hash := sessionraise.WordsHash("yes please")
+	id := sessionraise.RecordID(uid, at, hash)
+	rec, err := sessionraise.Sign(sessionraise.Record{
+		ID: id, SessionUID: uid, State: sessionraise.StatePending, StartSessions: true, Depth: "2",
+		Owner:       sessionraise.Owner{Words: "yes please", WordsHash: hash, Where: sessionraise.WherePhone, Session: "bench", SaidAt: at},
+		PerformedBy: "session/bench", PerformedAt: at,
+	}, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := rec.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := &v1alpha1.AgentSession{
+		ObjectMeta: metav1.ObjectMeta{Name: "raised", Namespace: "dev-agents", UID: uid, Annotations: map[string]string{v1alpha1.AnnotationRaise: string(raw)}},
+		Spec:       v1alpha1.AgentSessionSpec{Repo: "haynes-ops", Agent: v1alpha1.AgentClaude, Mode: v1alpha1.ModeRemote, Model: "claude-opus-5-5", Prompt: "x"},
+	}
+	if err := c.Create(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+	led := &sessionraise.Ledger{Sessions: []sessionraise.SessionEntry{{
+		Name: "raised", UID: uid, ID: id, State: sessionraise.StatePending, ChangedAt: when,
+		StartSessions: true, Depth: "2", WordsHash: hash, PerformedBy: "session/bench", PerformedAt: at,
+	}}}
+	body, err := led.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(ctx, sessionraise.LedgerName, map[string][]byte{sessionraise.LedgerField: body}, mustRV(t, c, sessionraise.LedgerName)); err != nil {
+		t.Fatal(err)
+	}
+	sender := &fakeRaiseSender{}
+	p := &RaisePager{Client: c, Live: c, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents", Sender: sender, Now: func() time.Time { return now }}
+	p.announce(ctx)
+	if sender.n != 1 {
+		t.Fatalf("sends: %d", sender.n)
+	}
+	now = when.Add(sessionraise.WordRetention + time.Hour)
+	p.announce(ctx)
+	if sender.n != 1 {
+		t.Fatalf("paged again after the word retention: %d", sender.n)
+	}
+}
+
 func mustRV(t *testing.T, c client.Client, name string) string {
 	t.Helper()
 	cm := &corev1.ConfigMap{}
