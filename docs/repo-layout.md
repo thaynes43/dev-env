@@ -137,7 +137,7 @@ internal/asks/           the Ask store: create, list, withdraw, a set-once answe
 internal/contextpublication/  the PublishedContext store: immutable published excerpts, Create only, uncached reads
 internal/delegatedresult/  pure delegated-result codec: strict bounded request and receipt decoding, frozen attempt identity and digest; Admission and Store have only the refusing Disabled implementation; no route, storage, provider or caller
 internal/sessiondirectory/  the SessionDirectory store: bounded original session metadata and CAS witnesses
-internal/sessiontitle/  DESIGN-065: validates a session title, names the model family and composes the display title
+internal/sessiontitle/  DESIGN-065: validates a session title, names the model family, composes the display title, and classifies a recorded Claude Code capture-pane screen
 internal/summonbrief/    DESIGN-064 5.6 (OP800): the summon brief: the platform line, the renderer and the sanitizer that fences caller data; the API's create renders with it, and the operator leader's filing (OP768) can import it
 internal/summonledger/  DESIGN-064 5.9: the create ledger's entry and charge types, codec and time rules (window, attempt hold, prune), the request hash, name sequence, queue attribution and queue count (OP800), shared by the API's write paths and the operator leader's admission, and importable by its filing (OP768)
 internal/summonoutcome/  DESIGN-064 6.6 and 6.8: the shared optimistic outcome/closure/pending-filing write, the one ordered guaranteed-close reason table, and the terminal page table

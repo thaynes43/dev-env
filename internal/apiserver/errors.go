@@ -28,6 +28,12 @@ func newError(status int, code, format string, args ...any) *apiError {
 	return &apiError{status: status, body: apiv1.Error{Code: code, Message: fmt.Sprintf(format, args...)}}
 }
 
+func conflictReason(reason, format string, args ...any) *apiError {
+	e := newError(http.StatusConflict, apiv1.CodeConflict, format, args...)
+	e.body.Reason = reason
+	return e
+}
+
 func badRequest(format string, args ...any) *apiError {
 	return newError(http.StatusBadRequest, apiv1.CodeBadRequest, format, args...)
 }

@@ -30,7 +30,7 @@ func TestUsageHeartbeatMalformedJSONMetadataPreservesOriginalAndLiveness(t *test
 			u := fixtureUsage(f, name, token)
 			st := status(name)
 			st.UsageObservation = &u
-			if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+			if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 				t.Fatal(w.Code)
 			}
 			original := f.session(name).Status.UsageObservation.DeepCopy()
@@ -39,7 +39,7 @@ func TestUsageHeartbeatMalformedJSONMetadataPreservesOriginalAndLiveness(t *test
 			w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, body)
 			got := f.session(name)
 			h := sha256.Sum256([]byte(malformed))
-			if w.Code != http.StatusNoContent || !apiequality.Semantic.DeepEqual(original, got.Status.UsageObservation) || got.Status.Agent.Status != protocol.AgentBusy || !got.Status.Agent.LastHeartbeat.Equal(&metav1.Time{Time: f.now}) || got.Status.UsageConflict == nil || got.Status.UsageConflict.Reason != "InvalidPayload" || got.Status.UsageConflict.IncomingSHA256 != hex.EncodeToString(h[:]) {
+			if w.Code != http.StatusOK || !apiequality.Semantic.DeepEqual(original, got.Status.UsageObservation) || got.Status.Agent.Status != protocol.AgentBusy || !got.Status.Agent.LastHeartbeat.Equal(&metav1.Time{Time: f.now}) || got.Status.UsageConflict == nil || got.Status.UsageConflict.Reason != "InvalidPayload" || got.Status.UsageConflict.IncomingSHA256 != hex.EncodeToString(h[:]) {
 				t.Fatal("malformed usage blocked liveness or erased original", w.Code, got.Status)
 			}
 		})
@@ -75,7 +75,7 @@ func TestUsageHeartbeatOriginalReplayConflictAndLegacy(t *testing.T) {
 	u := fixtureUsage(f, name, token)
 	st := status(name)
 	st.UsageObservation = &u
-	if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	first := f.session(name).Status.UsageObservation.DeepCopy()
@@ -86,19 +86,19 @@ func TestUsageHeartbeatOriginalReplayConflictAndLegacy(t *testing.T) {
 		t.Fatal("legacy raw evidence changed")
 	}
 	f.now = f.now.Add(time.Minute)
-	if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent || !apiequality.Semantic.DeepEqual(first, f.session(name).Status.UsageObservation) || f.session(name).Status.UsageConflict != nil {
+	if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusOK || !apiequality.Semantic.DeepEqual(first, f.session(name).Status.UsageObservation) || f.session(name).Status.UsageConflict != nil {
 		t.Fatal("identical replay changed snapshot", w.Code)
 	}
 	st.UsageObservation = nil
 	st.Usage = &protocol.Usage{CostUSD: 999}
 	st.Agent.State = protocol.AgentBusy
-	if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent || !apiequality.Semantic.DeepEqual(first, f.session(name).Status.UsageObservation) || f.session(name).Status.Usage.CostUSD != "777" {
+	if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusOK || !apiequality.Semantic.DeepEqual(first, f.session(name).Status.UsageObservation) || f.session(name).Status.Usage.CostUSD != "777" {
 		t.Fatal("legacy heartbeat erased/relabelled evidence")
 	}
 	u.Cost.Amount = "99"
 	st.UsageObservation = &u
 	f.now = f.now.Add(time.Minute)
-	if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusOK {
 		t.Fatal("usage conflict blocked heartbeat", w.Code)
 	}
 	got := f.session(name)
@@ -162,7 +162,7 @@ func TestUsageHeartbeatForeignSourceAndMalformedMetrics(t *testing.T) {
 			}
 			st := status(name)
 			st.UsageObservation = &u
-			if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+			if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 				t.Fatal("usage refusal blocked liveness", w.Code)
 			}
 			got := f.session(name)
@@ -212,7 +212,7 @@ func TestUsageHeartbeatConcurrentSnapshotPreservesLiveness(t *testing.T) {
 		}
 		return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
 	}})
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 		t.Fatal("usage CAS conflict blocked liveness", w.Code, w.Body.String())
 	}
 	got := f.session(name)
@@ -221,7 +221,7 @@ func TestUsageHeartbeatConcurrentSnapshotPreservesLiveness(t *testing.T) {
 	}
 	f.srv.Client = f.c
 	f.now = f.now.Add(time.Minute)
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent || f.session(name).Status.UsageConflict == nil || !apiequality.Semantic.DeepEqual(want, f.session(name).Status.UsageObservation) || !apiequality.Semantic.DeepEqual(confirmed, f.session(name).Status.SessionDirectory) || !f.session(name).Status.Agent.LastHeartbeat.Equal(&metav1.Time{Time: f.now}) {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK || f.session(name).Status.UsageConflict == nil || !apiequality.Semantic.DeepEqual(want, f.session(name).Status.UsageObservation) || !apiequality.Semantic.DeepEqual(confirmed, f.session(name).Status.SessionDirectory) || !f.session(name).Status.Agent.LastHeartbeat.Equal(&metav1.Time{Time: f.now}) {
 		t.Fatal("retained replay replaced concurrent original")
 	}
 }

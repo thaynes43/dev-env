@@ -227,7 +227,7 @@ func TestEnvtestTaskOutcomeRetention(t *testing.T) {
 			exit   int
 			record *protocol.TaskOutcomeRecord
 		}{{done, 0, fullRecord()}, {failed, 1, fullRecord()}, {missing, 0, nil}, {partial, 0, partialRecord}} {
-			l.want(http.MethodPost, protocol.HeartbeatPath(c.o.name), c.o.agent, exitHeartbeat(c.o, c.exit, c.record), http.StatusNoContent)
+			l.want(http.MethodPost, protocol.HeartbeatPath(c.o.name), c.o.agent, exitHeartbeat(c.o, c.exit, c.record), http.StatusOK)
 		}
 		var s v1alpha1.AgentSession
 		if err := l.k8s.Get(ctx, types.NamespacedName{Namespace: sessionNS, Name: done.name}, &s); err != nil {
@@ -241,7 +241,7 @@ func TestEnvtestTaskOutcomeRetention(t *testing.T) {
 		// record, does not replace the first snapshot.
 		replacement := fullRecord()
 		replacement.Summary = "replacement"
-		l.want(http.MethodPost, protocol.HeartbeatPath(done.name), done.agent, exitHeartbeat(done, 0, replacement), http.StatusNoContent)
+		l.want(http.MethodPost, protocol.HeartbeatPath(done.name), done.agent, exitHeartbeat(done, 0, replacement), http.StatusOK)
 		if err := l.k8s.Get(ctx, types.NamespacedName{Namespace: sessionNS, Name: done.name}, &s); err != nil {
 			t.Fatal(err)
 		}
@@ -447,7 +447,7 @@ func TestEnvtestTaskOutcomeAfterReleaseGap(t *testing.T) {
 	l := startLive(t)
 	human := l.token(humanSA, []string{apiv1.TokenAudience}, nil)
 	o := newOutcomeTask(t, l, human)
-	l.want(http.MethodPost, protocol.HeartbeatPath(o.name), o.agent, exitHeartbeat(o, 0, fullRecord()), http.StatusNoContent)
+	l.want(http.MethodPost, protocol.HeartbeatPath(o.name), o.agent, exitHeartbeat(o, 0, fullRecord()), http.StatusOK)
 	zero := int64(0)
 	if err := l.k8s.Delete(ctx, o.pod, &client.DeleteOptions{GracePeriodSeconds: &zero}); err != nil {
 		t.Fatal(err)

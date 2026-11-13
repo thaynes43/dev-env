@@ -69,7 +69,7 @@ func beatWith(t *testing.T, f *fixture, name, tok string, r *protocol.AllowanceR
 	t.Helper()
 	st := status(name)
 	st.Allowance = r
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 }
@@ -320,7 +320,7 @@ func TestSessionAllowancesMalformedKeepsTheHeartbeat(t *testing.T) {
 	for _, malformed := range []string{`"text"`, `{"windows":"x"}`, `{"provider":"codex","source":"codex-rollout","readAt":"2026-10-06T17:30:00Z","windows":[{"minutes":"x"}]}`} {
 		f.now = f.now.Add(2 * time.Minute)
 		body := `{"session":"` + sessionAllowanceTestName + `","agent":{"state":"busy"},"allowance":` + malformed + `}`
-		if w := f.do(http.MethodPost, protocol.HeartbeatPath(sessionAllowanceTestName), tok, body); w.Code != http.StatusNoContent {
+		if w := f.do(http.MethodPost, protocol.HeartbeatPath(sessionAllowanceTestName), tok, body); w.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", malformed, w.Code, w.Body.String())
 		}
 		if got := f.session(sessionAllowanceTestName).Status.Agent; got == nil || got.Status != protocol.AgentBusy {

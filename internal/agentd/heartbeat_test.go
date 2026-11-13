@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -51,6 +52,95 @@ func TestHeartbeatSend(t *testing.T) {
 	if err := h.Send(context.Background(), protocol.Status{}); err != nil || gotAuth != "Bearer tok-2" {
 		t.Errorf("rotated token: %q %v", gotAuth, err)
 	}
+}
+
+func TestOlderAgentdSendIgnoresHeartbeatTitle(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"title":{"text":"Café"}}`))
+	}))
+	defer srv.Close()
+	s := testSettings(t, t.TempDir())
+	s.APIURL = srv.URL
+	tok := filepath.Join(t.TempDir(), "token")
+	writeFile(t, tok, "secret-token")
+	s.APITokenFile = tok
+	h, err := NewHeartbeatClient(s, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Send(context.Background(), protocol.Status{Session: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	ans, err := h.Exchange(context.Background(), protocol.Status{Session: "s"})
+	if err != nil || !ans.Present || ans.Text != "Café" {
+		t.Fatalf("exchange %+v %v", ans, err)
+	}
+}
+
+func TestHeartbeatExchangeTitleShapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		body    string
+		present bool
+		unknown bool
+		text    string
+	}{
+		{"204", http.StatusNoContent, "", false, false, ""},
+		{"empty", http.StatusOK, "", false, false, ""},
+		{"no title object", http.StatusOK, `{"ok":true}`, false, false, ""},
+		{"null title", http.StatusOK, `{"title":null}`, false, false, ""},
+		{"missing text", http.StatusOK, `{"title":{}}`, false, true, ""},
+		{"null text", http.StatusOK, `{"title":{"text":null}}`, false, true, ""},
+		{"empty text", http.StatusOK, `{"title":{"text":""}}`, true, false, ""},
+		{"text", http.StatusOK, `{"title":{"text":"Café"}}`, true, false, "Café"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			s := testSettings(t, t.TempDir())
+			s.APIURL = srv.URL
+			tok := filepath.Join(t.TempDir(), "token")
+			writeFile(t, tok, "tok")
+			s.APITokenFile = tok
+			h, err := NewHeartbeatClient(s, "s")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ans, err := h.Exchange(context.Background(), protocol.Status{})
+			if err != nil || ans.Present != tc.present || ans.Unknown != tc.unknown || ans.Text != tc.text {
+				t.Fatalf("ans %+v err %v", ans, err)
+			}
+		})
+	}
+}
+
+func TestRenameNewAgentdOn204TypesNothing(t *testing.T) {
+	w := newRenameWorld(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	s := w.s
+	s.APIURL = srv.URL
+	tok := filepath.Join(t.TempDir(), "token")
+	writeFile(t, tok, "tok")
+	s.APITokenFile = tok
+	h, err := NewHeartbeatClient(s, w.sess.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans, err := h.Exchange(context.Background(), protocol.Status{})
+	if err != nil || ans.Present {
+		t.Fatalf("%+v %v", ans, err)
+	}
+	w.app.Apply(context.Background(), w.run, w.s, w.sess, slog.New(slog.DiscardHandler), ans)
+	w.assertNoWrite(t)
 }
 
 func TestHeartbeatErrors(t *testing.T) {

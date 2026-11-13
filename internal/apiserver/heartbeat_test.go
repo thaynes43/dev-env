@@ -51,7 +51,7 @@ func TestHeartbeat(t *testing.T) {
 	path := protocol.HeartbeatPath(name)
 
 	w := f.do(http.MethodPost, path, tok, status(name))
-	if w.Code != http.StatusNoContent || w.Body.Len() != 0 {
+	if w.Code != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	s := f.session(name)
@@ -77,7 +77,7 @@ func TestHeartbeat(t *testing.T) {
 	next := status(name)
 	next.Problems, next.Agent.Task = nil, nil
 	next.Agent.State, next.Agent.Error = protocol.AgentFailed, "claude: not found"
-	if w := f.do(http.MethodPost, path, tok, next); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, path, tok, next); w.Code != http.StatusOK {
 		t.Fatalf("second heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	a = f.session(name).Status.Agent
@@ -86,7 +86,7 @@ func TestHeartbeat(t *testing.T) {
 	}
 
 	// A newer agentd's extra fields are ignored, not refused.
-	if w := f.do(http.MethodPost, path, tok, `{"session":"`+name+`","boot":"ready","agent":{"state":"busy"},"fromTheFuture":1}`); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, path, tok, `{"session":"`+name+`","boot":"ready","agent":{"state":"busy"},"fromTheFuture":1}`); w.Code != http.StatusOK {
 		t.Errorf("unknown fields: %d %s", w.Code, w.Body.String())
 	}
 
@@ -213,7 +213,7 @@ func TestDecisionHeartbeatDiscoveryUsesExistingOutcomeWithoutPrivateContext(t *t
 					t.Fatal("foreign decision outcome persisted")
 				}
 			case "valid", "future":
-				if w.Code != http.StatusNoContent {
+				if w.Code != http.StatusOK {
 					t.Fatal(w.Code, w.Body.String())
 				}
 				got := f.session(name).Status.Outcome
@@ -225,7 +225,7 @@ func TestDecisionHeartbeatDiscoveryUsesExistingOutcomeWithoutPrivateContext(t *t
 					t.Fatal("private decision context escaped into status")
 				}
 				st.Decision = nil
-				if f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st).Code != http.StatusNoContent || f.session(name).Status.Outcome == nil {
+				if f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st).Code != http.StatusOK || f.session(name).Status.Outcome == nil {
 					t.Fatal("omitted decision cleared pending escalation")
 				}
 				saved := f.session(name)
@@ -233,11 +233,11 @@ func TestDecisionHeartbeatDiscoveryUsesExistingOutcomeWithoutPrivateContext(t *t
 				if err := f.c.Status().Update(context.Background(), saved); err != nil {
 					t.Fatal(err)
 				}
-				if f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st).Code != http.StatusNoContent || f.session(name).Status.Outcome.Note != "unrelated escalation" {
+				if f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st).Code != http.StatusOK || f.session(name).Status.Outcome.Note != "unrelated escalation" {
 					t.Fatal("decision heartbeat cleared unrelated Outcome")
 				}
 			default:
-				if w.Code != http.StatusNoContent || f.session(name).Status.Outcome != nil {
+				if w.Code != http.StatusOK || f.session(name).Status.Outcome != nil {
 					t.Fatal("disabled/inapplicable decision changed legacy status")
 				}
 			}
@@ -270,7 +270,7 @@ func TestDecisionHeartbeatsPreserveUnrelatedOutcomesAndChangeOnlyOwnedNote(t *te
 						st.Decision = &protocol.DecisionOutcome{ID: record.Decision.ID, SessionUID: record.Decision.SessionUID, PodUID: record.Decision.PodUID, ThreadID: record.Decision.ThreadID, WriterGeneration: record.Decision.WriterGeneration, State: decisionState, AnswerDigest: authority.Digest, At: f.now}
 					}
 					w := f.do(http.MethodPost, protocol.HeartbeatPath(sess.Name), "tok-session-"+sess.Name, st)
-					if w.Code != http.StatusNoContent {
+					if w.Code != http.StatusOK {
 						t.Fatal("valid decision heartbeat refused", w.Code)
 					}
 					got := f.session(sess.Name).Status.Outcome
@@ -356,7 +356,7 @@ func TestDecisionRepeatedOpenHeartbeatPreservesFirstObservationAcrossClockPrecis
 			st := status(sess.Name)
 			st.Decision = &protocol.DecisionOutcome{ID: record.Decision.ID, SessionUID: record.Decision.SessionUID, PodUID: record.Decision.PodUID, ThreadID: record.Decision.ThreadID, WriterGeneration: record.Decision.WriterGeneration, State: "Open", At: incomingAt}
 			path, token := protocol.HeartbeatPath(sess.Name), "tok-session-"+sess.Name
-			if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent {
+			if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusOK {
 				t.Fatal("initial open heartbeat refused", w.Code)
 			}
 			saved := f.session(sess.Name)
@@ -383,7 +383,7 @@ func TestDecisionRepeatedOpenHeartbeatPreservesFirstObservationAcrossClockPrecis
 			}})
 			w := f.do(http.MethodPost, path, token, st)
 			got := f.session(sess.Name)
-			if w.Code != http.StatusNoContent || patches != 1 || got.Status.Agent == nil || got.Status.Agent.LastHeartbeat == nil || !got.Status.Agent.LastHeartbeat.Time.Equal(f.now.Truncate(time.Second)) || got.Status.Outcome == nil || got.Status.Outcome.At == nil || !got.Status.Outcome.At.Time.Equal(firstAt) || len(got.Status.Conditions) != 1 || got.Status.Conditions[0].Type != "ConcurrentFixture" {
+			if w.Code != http.StatusOK || patches != 1 || got.Status.Agent == nil || got.Status.Agent.LastHeartbeat == nil || !got.Status.Agent.LastHeartbeat.Time.Equal(f.now.Truncate(time.Second)) || got.Status.Outcome == nil || got.Status.Outcome.At == nil || !got.Status.Outcome.At.Time.Equal(firstAt) || len(got.Status.Conditions) != 1 || got.Status.Conditions[0].Type != "ConcurrentFixture" {
 				t.Fatal("repeated open heartbeat lost liveness, original age, or concurrent status", w.Code)
 			}
 		})
@@ -406,7 +406,7 @@ func TestDecisionDeliveredHeartbeatAfterClearAcceptsConcurrentStatusUpdate(t *te
 	st := status(sess.Name)
 	st.Decision = &protocol.DecisionOutcome{ID: record.Decision.ID, SessionUID: record.Decision.SessionUID, PodUID: record.Decision.PodUID, ThreadID: record.Decision.ThreadID, WriterGeneration: record.Decision.WriterGeneration, State: "Delivered", AnswerDigest: authority.Digest, At: f.now}
 	path, token := protocol.HeartbeatPath(sess.Name), "tok-session-"+sess.Name
-	if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent || f.session(sess.Name).Status.Outcome != nil {
+	if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusOK || f.session(sess.Name).Status.Outcome != nil {
 		t.Fatal("first delivered heartbeat did not clear owned outcome", w.Code)
 	}
 	f.now = f.now.Add(time.Minute)
@@ -423,7 +423,7 @@ func TestDecisionDeliveredHeartbeatAfterClearAcceptsConcurrentStatusUpdate(t *te
 	}})
 	w := f.do(http.MethodPost, path, token, st)
 	got := f.session(sess.Name)
-	if w.Code != http.StatusNoContent || patches != 1 || got.Status.Agent == nil || got.Status.Agent.LastHeartbeat == nil || !got.Status.Agent.LastHeartbeat.Time.Equal(f.now) || got.Status.Outcome == nil || *got.Status.Outcome != *concurrent {
+	if w.Code != http.StatusOK || patches != 1 || got.Status.Agent == nil || got.Status.Agent.LastHeartbeat == nil || !got.Status.Agent.LastHeartbeat.Time.Equal(f.now) || got.Status.Outcome == nil || *got.Status.Outcome != *concurrent {
 		t.Fatal("unchanged delivered outcome blocked liveness or changed concurrent outcome", w.Code)
 	}
 }
@@ -477,7 +477,7 @@ func TestDecisionNextQuestionSupersedesOnlyConfirmedSameWriterEscalation(t *test
 					t.Fatal("reserve B stranded A or invented delivery")
 				}
 			}
-			if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent {
+			if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusOK {
 				t.Fatal("B heartbeat refused", w.Code)
 			}
 			got := f.session(sess.Name).Status.Outcome
@@ -492,7 +492,7 @@ func TestDecisionNextQuestionSupersedesOnlyConfirmedSameWriterEscalation(t *test
 			}
 			firstBAt := got.At.Time
 			f.now = f.now.Add(time.Minute)
-			if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent {
+			if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusOK {
 				t.Fatal("repeated B heartbeat refused", w.Code)
 			}
 			if got := f.session(sess.Name).Status.Outcome; got == nil || !got.At.Time.Equal(firstBAt) {
@@ -506,7 +506,7 @@ func TestDecisionNextQuestionSupersedesOnlyConfirmedSameWriterEscalation(t *test
 				t.Fatal(err)
 			}
 			st.Decision.State, st.Decision.AnswerDigest = "Delivered", b.Digest
-			if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent || f.session(sess.Name).Status.Outcome != nil {
+			if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusOK || f.session(sess.Name).Status.Outcome != nil {
 				t.Fatal("B's own confirmed delivery did not clear B", w.Code)
 			}
 		})
@@ -526,7 +526,7 @@ func TestHeartbeatCopiesRemoteControl(t *testing.T) {
 	st.RemoteControl = &protocol.RemoteControl{
 		Name: name, SessionID: "session_abc", URL: "https://claude.ai/code/session_abc", State: protocol.RemoteRegistered,
 	}
-	if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	rc := f.session(name).Status.RemoteControl
@@ -535,7 +535,7 @@ func TestHeartbeatCopiesRemoteControl(t *testing.T) {
 	}
 
 	st.RemoteControl = &protocol.RemoteControl{Name: name, State: strings.Repeat("x", 500)}
-	if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	if rc := f.session(name).Status.RemoteControl; rc == nil || len(rc.State) > maxShort+4 || rc.URL != "" {
@@ -543,7 +543,7 @@ func TestHeartbeatCopiesRemoteControl(t *testing.T) {
 	}
 
 	st.RemoteControl = nil
-	if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	if rc := f.session(name).Status.RemoteControl; rc != nil {
@@ -570,21 +570,21 @@ func TestHeartbeatStoresRemoteTitle(t *testing.T) {
 	st := status(name)
 	st.Agent = protocol.AgentState{State: protocol.AgentBusy}
 	st.RemoteControl = &protocol.RemoteControl{Name: name, State: protocol.RemoteRegistered, Title: "Opus | Main coordinator"}
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	if rc := f.session(name).Status.RemoteControl; rc == nil || rc.Title != "Opus | Main coordinator" || rc.Name != name {
 		t.Fatalf("stored %+v", rc)
 	}
 	st.RemoteControl.Title = long
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	if rc := f.session(name).Status.RemoteControl; rc == nil || len(rc.Title) > 128 || !strings.HasSuffix(rc.Title, "…") {
 		t.Fatalf("clipped status %+v", rc)
 	}
 	st.RemoteControl.Title = ""
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	if rc := f.session(name).Status.RemoteControl; rc == nil || rc.Title != "" || rc.Name != name || rc.State != protocol.RemoteRegistered {

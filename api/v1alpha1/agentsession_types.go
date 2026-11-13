@@ -240,19 +240,21 @@ type AgentSessionSpec struct {
 	Model string `json:"model"`
 
 	// Title is optional role text for the phone and the listings (DESIGN-065).
-	// It is set at create and stays unchanged in this slice. Empty is absent
+	// It is set at create and does not change. A later title is the annotation
+	// dev-env.haynesops.com/title (ADR-027), not this field. Empty is absent
 	// and is never stored. The display title is the model family plus this
 	// text; this field holds only the role text.
 	//
 	// MaxLength bounds code points. The CEL rules also bound UTF-8 bytes, the
-	// character set and the spacing. Letters, marks, digits, punctuation and
-	// symbols are allowed, plus ASCII space. The first character is a letter
-	// or a digit. A bar, a control or format character, and anything above
+	// character set and the spacing, on create and on every update. A title
+	// may hold printable ASCII (U+0020 to U+007E) and U+00A1 to U+024F except
+	// U+00AD. The first character is a letter or a digit. A bar, a backslash,
+	// a trailing semicolon, a control or format character, and anything above
 	// U+FFFF are not.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=48
 	// +kubebuilder:validation:XValidation:rule="size(bytes(self)) <= 96",message="at most 96 bytes"
-	// +kubebuilder:validation:XValidation:rule="self.matches('^[\\\\p{L}\\\\p{Nd}][\\\\p{L}\\\\p{M}\\\\p{Nd}\\\\p{P}\\\\p{S} ]*$') && !self.contains('|') && !self.matches('[\\\\x{10000}-\\\\x{10FFFF}]')",message="letters, marks, digits, punctuation and symbols only; the first character is a letter or a digit; no bar, no control or format character, and nothing above U+FFFF"
+	// +kubebuilder:validation:XValidation:rule="self.matches('^[\\\\x20-\\\\x7E\\\\x{00A1}-\\\\x{00AC}\\\\x{00AE}-\\\\x{024F}]*$') && self.matches('^[\\\\p{L}\\\\p{Nd}]') && !self.contains('|') && !self.endsWith(';') && !self.contains('\\\\')",message="printable ASCII and U+00A1 to U+024F except U+00AD; the first character is a letter or a digit; no bar, no backslash, no trailing semicolon, no control or format character, and nothing above U+FFFF"
 	// +kubebuilder:validation:XValidation:rule="!self.startsWith(' ') && !self.endsWith(' ') && !self.contains('  ')",message="no leading or trailing space, and no two spaces in a row"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
@@ -1594,6 +1596,46 @@ type RemoteControlStatus struct {
 	// +kubebuilder:validation:XValidation:rule="size(bytes(self)) <= 128",message="at most 128 bytes"
 	// +optional
 	Title string `json:"title,omitempty"`
+
+	// ProviderTitle is the CLI record's name when nameSource is "user"
+	// (DESIGN-065 rule 8.8). Empty means the record holds a derived name.
+	// MaxLength bounds code points; the CEL rule also bounds UTF-8 bytes.
+	// The heartbeat clips a longer value so the stored text fits both.
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="size(bytes(self)) <= 128",message="at most 128 bytes"
+	// +optional
+	ProviderTitle string `json:"providerTitle,omitempty"`
+
+	// Rename is agentd's typed-rename report. It is absent while nothing
+	// was ever to apply.
+	// +optional
+	Rename *RemoteRenameStatus `json:"rename,omitempty"`
+}
+
+// RemoteRenameStatus is one typed rename (DESIGN-065 rule 8.8). It carries
+// no title text.
+type RemoteRenameStatus struct {
+	// State is Applied, Held, Typed, Failed or Unknown.
+	// +kubebuilder:validation:Enum=Applied;Held;Typed;Failed;Unknown
+	// +kubebuilder:validation:MaxLength=16
+	// +optional
+	State string `json:"state,omitempty"`
+
+	// Reason is the code for State. Typed has none. Held includes quiet.
+	// +kubebuilder:validation:Enum=launch;confirmed;already;process;not-registered;busy;waiting;status-unknown;quiet;clock;attached;pane;cli-version;input;screen-unknown;paced;delivering;left-in-input;not-confirmed;invalid-title;record-shape;state;command-shadowed;interrupted
+	// +kubebuilder:validation:MaxLength=32
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Since is when this state began for the current target.
+	// +optional
+	Since *metav1.Time `json:"since,omitempty"`
+
+	// Attempts is how many times agentd has typed the current target.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2
+	// +optional
+	Attempts int32 `json:"attempts"`
 }
 
 // OutcomeStatus is what a summoned session reported about its own work.
