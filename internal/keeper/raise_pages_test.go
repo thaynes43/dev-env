@@ -191,6 +191,37 @@ func TestRaiseNoticeSkipsUnknownProfile(t *testing.T) {
 	}
 }
 
+func TestRaiseNoticeDropsAGoneSession(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, c)
+	ctx := context.Background()
+	store := sessionraise.Kube{Reader: c, Writer: c, Namespace: sessionraise.ObjectNamespace, Secrets: map[string]bool{sessionraise.KeeperSecretName: true}}
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	old := when.Add(-sessionraise.WordRetention - time.Hour).Format(time.RFC3339)
+	led := &sessionraise.NoticeLedger{}
+	led.Put(sessionraise.Notice{ID: "gonenotice000001", SessionUID: "gone", Kind: sessionraise.KindRaise, Attempt: 1, Outcome: sessionraise.OutcomeSent, At: old, SentAt: old})
+	raw, err := led.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(ctx, sessionraise.NoticeLedgerName, map[string][]byte{sessionraise.LedgerField: raw}, mustRV(t, c, sessionraise.NoticeLedgerName)); err != nil {
+		t.Fatal(err)
+	}
+	p := &RaisePager{Client: c, Live: c, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents", Sender: &fakeRaiseSender{}, Now: func() time.Time { return when }}
+	p.announce(ctx)
+	obj, err := p.store().Get(ctx, sessionraise.NoticeLedgerName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := sessionraise.UnmarshalNotice(obj.Data[sessionraise.LedgerField])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Find("gonenotice000001", sessionraise.KindRaise) != nil {
+		t.Fatal("a notice for a session that is gone was kept")
+	}
+}
+
 func mustRV(t *testing.T, c client.Client, name string) string {
 	t.Helper()
 	cm := &corev1.ConfigMap{}

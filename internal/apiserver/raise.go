@@ -226,14 +226,16 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 		in.OwnerSession = entry.OwnerSession
 		in.PerformedBy = entry.PerformedBy
 	}
-	rec := recordFrom(sessionraise.SessionEntry{
-		ID: in.ID, UID: in.UID, State: sessionraise.StatePending,
-		Profile: in.Profile, FromProfile: in.FromProfile, StartSessions: in.StartSessions,
-		Depth: in.Depth, WordsHash: hash, PerformedBy: in.PerformedBy, PerformedAt: in.PerformedAt,
-		Where: in.Where, SaidAt: in.SaidAt, Ref: in.Ref, OwnerSession: in.OwnerSession,
-	}, req.Owner.Words)
+	var rec sessionraise.Record
 	if same {
-		rec.State = entry.State
+		rec = recordFrom(entry, req.Owner.Words)
+	} else {
+		rec = recordFrom(sessionraise.SessionEntry{
+			ID: in.ID, UID: in.UID, State: sessionraise.StatePending,
+			Profile: in.Profile, FromProfile: in.FromProfile, StartSessions: in.StartSessions,
+			Depth: in.Depth, WordsHash: hash, PerformedBy: in.PerformedBy, PerformedAt: in.PerformedAt,
+			Where: in.Where, SaidAt: in.SaidAt, Ref: in.Ref, OwnerSession: in.OwnerSession,
+		}, req.Owner.Words)
 	}
 	signed, err := sessionraise.Sign(rec, priv)
 	if err != nil {
@@ -296,10 +298,6 @@ func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http
 			return 0, nil, notFound("Session %s has no raise to take back.", sess.Name)
 		}
 	}
-	priv, err := s.raiseKey(ctx, cfg)
-	if err != nil {
-		return 0, nil, err
-	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
 	fresh, err := s.raiseTarget(ctx, r)
@@ -334,7 +332,12 @@ func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http
 	if err != nil {
 		return 0, nil, s.raiseLedgerErr(err, c, fresh.Name)
 	}
-	if !annotationTakenBack(fresh, priv.Public().(ed25519.PublicKey), &entry) {
+	// The ledger write is what stops the record counting. A missing key
+	// does not undo it. The annotation is re-signed when the key can be read.
+	priv, keyErr := s.raiseKey(ctx, cfg)
+	if keyErr != nil {
+		s.Log.Info("The take-back stands. The session annotation could not be re-signed.", "session", fresh.Name, "error", keyErr.Error())
+	} else if !annotationTakenBack(fresh, priv.Public().(ed25519.PublicKey), &entry) {
 		rec, words := takenBackRecord(fresh, entry)
 		signed, err := sessionraise.Sign(rec, priv)
 		if err != nil {

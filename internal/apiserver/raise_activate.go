@@ -115,11 +115,13 @@ func (s *Server) activateOne(ctx context.Context, cfg RaiseConfig, sess *v1alpha
 }
 
 func (s *Server) rewriteActivated(ctx context.Context, cfg RaiseConfig, sess *v1alpha1.AgentSession, rec sessionraise.Record, entry sessionraise.SessionEntry, priv ed25519.PrivateKey) {
-	rec.State = entry.State
-	rec.NoticeSentAt = entry.NoticeSentAt
-	rec.ActiveFrom = entry.ActiveFrom
-	rec.Sig = ""
-	signed, err := sessionraise.Sign(rec, priv)
+	// The ledger row is what gets signed. An annotation that keeps the id
+	// but changes the profile, the depth or the words is not signed.
+	if rec.ID != entry.ID || rec.SessionUID != entry.UID || rec.Owner.WordsHash != entry.WordsHash || sessionraise.WordsHash(rec.Owner.Words) != entry.WordsHash {
+		s.Log.Info("raise annotation does not match the ledger, so it was not re-signed", "session", sess.Name)
+		return
+	}
+	signed, err := sessionraise.Sign(recordFrom(entry, rec.Owner.Words), priv)
 	if err != nil {
 		s.Log.Error(err, "raise activation sign", "session", sess.Name)
 		return

@@ -111,6 +111,21 @@ func (p *RaisePager) announce(ctx context.Context) {
 		p.Log.Info("raise notice key was not published", "error", err.Error())
 		return
 	}
+	var list v1alpha1.AgentSessionList
+	if err := p.reader().List(ctx, &list, client.InNamespace(p.sessionNamespace())); err != nil {
+		p.Log.Error(err, "raise notice list")
+		return
+	}
+	now := p.now().UTC().Truncate(time.Second)
+	live := map[string]bool{}
+	for i := range list.Items {
+		if list.Items[i].UID != "" {
+			live[string(list.Items[i].UID)] = true
+		}
+	}
+	// A session that is gone drops its notice even when this pass cannot
+	// announce, so a missing operator key does not grow the ledger.
+	p.pruneNotices(ctx, live, now)
 	pub, err := sessionraise.ReadPublic(ctx, store, sessionraise.OperatorPublicName)
 	if err != nil {
 		return
@@ -123,14 +138,46 @@ func (p *RaisePager) announce(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	var list v1alpha1.AgentSessionList
-	if err := p.reader().List(ctx, &list, client.InNamespace(p.sessionNamespace())); err != nil {
-		p.Log.Error(err, "raise notice list")
-		return
-	}
-	now := p.now().UTC().Truncate(time.Second)
 	for i := range list.Items {
 		p.announceOne(ctx, priv, pub, led, &list.Items[i], now)
+	}
+}
+
+// pruneNotices drops a notice whose session is gone, or whose time is older
+// than the word retention. Rows that remain keep the signature they had.
+func (p *RaisePager) pruneNotices(ctx context.Context, live map[string]bool, now time.Time) {
+	store := p.store()
+	obj, err := store.Get(ctx, sessionraise.NoticeLedgerName)
+	if err != nil {
+		return
+	}
+	led, err := sessionraise.UnmarshalNotice(obj.Data[sessionraise.LedgerField])
+	if err != nil || led == nil || len(led.Items) == 0 {
+		return
+	}
+	kept := make([]sessionraise.Notice, 0, len(led.Items))
+	for _, n := range led.Items {
+		at, perr := time.Parse(time.RFC3339, n.At)
+		if n.SessionUID == "" || !live[n.SessionUID] || perr != nil || now.Sub(at) > sessionraise.WordRetention {
+			continue
+		}
+		kept = append(kept, n)
+	}
+	if len(kept) == len(led.Items) {
+		return
+	}
+	led.Items = kept
+	raw, err := led.Marshal()
+	if err != nil {
+		return
+	}
+	data := make(map[string][]byte, len(obj.Data)+1)
+	for k, v := range obj.Data {
+		data[k] = append([]byte(nil), v...)
+	}
+	data[sessionraise.LedgerField] = raw
+	if err := store.Update(ctx, sessionraise.NoticeLedgerName, data, obj.RV); err != nil {
+		p.Log.Info("raise notice ledger was not pruned", "error", err.Error())
 	}
 }
 

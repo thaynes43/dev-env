@@ -951,6 +951,164 @@ func TestTakeBackBeforeActivationWinsOverLaterSent(t *testing.T) {
 	}
 }
 
+func TestActivationDoesNotSignAnEditedAnnotation(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	keeper, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.publishKeeper(keeper)
+	f.sessionPod("creator", "full", 2)
+	sess := f.session("creator")
+	f.putPending(sess)
+	current := f.session("creator")
+	rec, err := sessionraise.Parse(current.Annotations[v1alpha1.AnnotationRaise])
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Owner.Words = "edited words"
+	rec.Owner.WordsHash = sessionraise.WordsHash("edited words")
+	rec.Profile = "workbench"
+	rec.Sig = ""
+	raw, err := rec.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Annotations[v1alpha1.AnnotationRaise] = string(raw)
+	if err := f.c.Update(context.Background(), current); err != nil {
+		t.Fatal(err)
+	}
+	cfg := f.srv.Raise.filled()
+	led, err := f.srv.readLedger(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := led.Find(string(sess.UID))
+	row.State = sessionraise.StateActive
+	saved, err := led.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm := &corev1.ConfigMap{}
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: cfg.Namespace, Name: cfg.Ledger}, cm); err != nil {
+		t.Fatal(err)
+	}
+	cm.Data[sessionraise.LedgerField] = string(saved)
+	if err := f.c.Update(context.Background(), cm); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.activateRaises(context.Background())
+	got, err := sessionraise.Parse(f.session("creator").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := sessionraise.ReadPublic(context.Background(), f.srv.raiseStore(cfg), cfg.OperatorPublic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessionraise.Verify(got, pub) {
+		t.Fatalf("edited annotation was signed: profile %s words %s", got.Profile, got.Owner.Words)
+	}
+	rec.Owner.Words = "please start"
+	rec.Owner.WordsHash = sessionraise.WordsHash("please start")
+	rec.Profile = "workbench"
+	rec.Sig = ""
+	raw, err = rec.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current = f.session("creator")
+	current.Annotations[v1alpha1.AnnotationRaise] = string(raw)
+	if err := f.c.Update(context.Background(), current); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.activateRaises(context.Background())
+	got, err = sessionraise.Parse(f.session("creator").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Profile != "" || !sessionraise.Verify(got, pub) {
+		t.Fatalf("ledger profile was not what got signed: profile %q verified %v", got.Profile, sessionraise.Verify(got, pub))
+	}
+}
+
+func TestTakeBackStandsWhenTheKeyIsMissing(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	body := f.raiseReq(string(target.UID), "", "please start sessions", sessionraise.WherePhone, true)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("raise: %d %s", w.Code, w.Body.String())
+	}
+	sec := &corev1.Secret{}
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionraise.ObjectNamespace, Name: sessionraise.OperatorSecretName}, sec); err != nil {
+		t.Fatal(err)
+	}
+	sec.Data = map[string][]byte{}
+	if err := f.c.Update(context.Background(), sec); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tok, apiv1.TakeBackRequest{ExpectUID: string(target.UID)})
+	if w.Code != http.StatusOK {
+		t.Fatalf("take-back: %d %s", w.Code, w.Body.String())
+	}
+	if got := f.ledgerEntry(string(target.UID)); got.State != sessionraise.StateTakenBack {
+		t.Fatalf("ledger: %s", got.State)
+	}
+}
+
+func TestSameRaiseKeepsWhenItTookEffect(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	body := f.raiseReq(string(target.UID), "", "please start sessions", sessionraise.WherePhone, true)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("raise: %d %s", w.Code, w.Body.String())
+	}
+	cfg := f.srv.Raise.filled()
+	led, err := f.srv.readLedger(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := led.Find(string(target.UID))
+	sent := f.now.Add(-3 * time.Minute).UTC().Truncate(time.Second).Format(time.RFC3339)
+	from := f.now.Add(-time.Minute).UTC().Truncate(time.Second).Format(time.RFC3339)
+	row.State = sessionraise.StateActive
+	row.NoticeSentAt = sent
+	row.ActiveFrom = from
+	saved, err := led.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm := &corev1.ConfigMap{}
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: cfg.Namespace, Name: cfg.Ledger}, cm); err != nil {
+		t.Fatal(err)
+	}
+	cm.Data[sessionraise.LedgerField] = string(saved)
+	if err := f.c.Update(context.Background(), cm); err != nil {
+		t.Fatal(err)
+	}
+	current := f.session("target")
+	delete(current.Annotations, v1alpha1.AnnotationRaise)
+	if err := f.c.Update(context.Background(), current); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("same raise: %d %s", w.Code, w.Body.String())
+	}
+	got, err := sessionraise.Parse(f.session("target").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != sessionraise.StateActive || got.NoticeSentAt != sent || got.ActiveFrom != from {
+		t.Fatalf("retry dropped when the raise took effect: state %s sent %s from %s", got.State, got.NoticeSentAt, got.ActiveFrom)
+	}
+}
+
 func TestRaisedToWorkbenchMayNotRaiseOthers(t *testing.T) {
 	f := newFixture(t)
 	f.raiseReady(true, "workbench")
