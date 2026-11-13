@@ -84,7 +84,7 @@ func (s *Server) refuseSummonQueue(b *summonBinding, c *caller, e *summonLedgerE
 	}
 	limits := c.policy.Spec.Summon.Limits
 	for _, q := range summonledger.ChargeQueues(c.policy, hash, name) {
-		n := summonledger.QueueCount(c.policy, e.Charges, live.items, live.byID, grants, q, id, now)
+		n := summonledger.QueueCount(c.policy.Name, c.policy, e.Charges, live.items, live.byID, grants, q, id, now)
 		if n < summonQueueBound(limits, q) {
 			continue
 		}

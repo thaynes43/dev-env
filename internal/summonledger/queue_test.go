@@ -93,8 +93,37 @@ func TestQueueCount(t *testing.T) {
 		{"urgent, concurrent pool, nothing skipped", urgentQ, "", 5, "and the session skipped"},
 		{"urgent, escalations pool, a charge skipped", escalationsQ, "c-esc", 2, "q-esc c-unknown"},
 	} {
-		if got := QueueCount(p, charges, sessions, byID, grants, tc.q, tc.skip, now); got != tc.want {
+		if got := QueueCount(queueTestCaller, p, charges, sessions, byID, grants, tc.q, tc.skip, now); got != tc.want {
 			t.Errorf("%s: %d, want %d (%s)", tc.name, got, tc.want, tc.items)
+		}
+	}
+}
+
+// With no policy, a policy that is gone, QueueCount does not dereference it:
+// a charge with no Session and a young attempt mark counts in every queue,
+// even one whose hash a policy entry would place in one queue, and the
+// caller's Queued sessions still count by their own priority and lane.
+func TestQueueCountNilPolicy(t *testing.T) {
+	now := time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	fresh := now.Add(-time.Minute)
+	sessions := []v1alpha1.AgentSession{
+		queueTestSession("q-rem", queueTestCaller, v1alpha1.LaneRemediation, v1alpha1.SummonPriorityUrgent, nil),
+		queueTestSession("other-caller", "someone.else", v1alpha1.LaneUpgrade, v1alpha1.SummonPriorityNormal, nil),
+	}
+	byID := map[string]*v1alpha1.AgentSession{"id-q-rem": &sessions[0], "id-other-caller": &sessions[1]}
+	charges := []Charge{{ID: "c-esc", At: fresh, Attempt: fresh,
+		Hash: RequestHash("remote", "escalation", "esc-x", v1alpha1.SummonPriorityUrgent), Name: "esc-x"}}
+	for _, tc := range []struct {
+		name string
+		q    Queue
+		want int
+	}{
+		{"normal", Queue{}, 1},
+		{"urgent, concurrent pool", Queue{Urgent: true}, 2},
+		{"urgent, escalations pool", Queue{Urgent: true, Escalations: true}, 1},
+	} {
+		if got := QueueCount(queueTestCaller, nil, charges, sessions, byID, Grants{}, tc.q, "", now); got != tc.want {
+			t.Errorf("%s: %d, want %d", tc.name, got, tc.want)
 		}
 	}
 }

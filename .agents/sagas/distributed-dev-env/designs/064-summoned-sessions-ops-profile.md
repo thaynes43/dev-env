@@ -1252,32 +1252,39 @@ stays; where it differs, this governs.
    (`RequestHash`), the name sequence (`NameSequence`: the name, then `-2`
    to `-99`, `MaxSuffix`), the queues (`Queue`, `QueueOf`, `AllQueues`),
    which queues a charge counts in (`ChargeQueues`), whether a grant admits
-   a session (`Granted`), the count of one queue (`QueueCount`), and the
-   filing's id (`FilingID`, `filing:<UID>`). A new package
-   `internal/summonbrief` holds the brief of 5.6: the platform line
-   (`PlatformLine`), the renderer (`Render`) and the sanitizer (`Sanitize`).
-   The API calls them. The queue bounds and their default, the refusals,
-   the ledger's compare-and-set and the create stay in the API. What a
-   caller's create checks, charges, counts and answers is unchanged: the
-   existing suites pass, and the golden brief renders byte for byte from
-   both packages.
+   a session (`Granted`), the count of one queue (`QueueCount`), the
+   filing's id (`FilingID`, `filing:<UID>`) and the prune's keep rule
+   (`Keep`, item 2; fix round 1, PR 1133 comment 6856570556). `QueueCount`
+   takes the caller's name as its own argument and never dereferences the
+   policy: with no policy, a policy that is gone, each charge counts in
+   every queue, as `ChargeQueues` already does, and sessions count by their
+   own priority and lane. A new package `internal/summonbrief` holds the
+   brief of 5.6: the platform line (`PlatformLine`), the renderer (`Render`)
+   and the sanitizer (`Sanitize`). The API calls them. The queue bounds and
+   their default, the refusals, the ledger's compare-and-set and the create
+   stay in the API. What a caller's create checks, charges, counts and
+   answers is unchanged: the existing suites pass, and the golden brief
+   renders byte for byte from both packages.
 2. *A Pending filing keeps its charge.* Item 4 above says a filing's entry
-   stays until it is an hour old and its child is admitted or closed, or
-   the filing is `Abandoned`. The prune kept an old charge only while an
+   stays until it is an hour old and its child is admitted or closed, or the
+   filing is `Abandoned`. The prune kept an old charge only while an
    existing Session that is neither admitted nor closed carries its id. A
-   blocked filing has no child, so the caller's next ledger write would
-   have dropped the charge, and the child would later close `not-charged`.
-   As built: before each ledger write the API lists the sessions uncached,
-   as before, and keeps from pruning the id `filing:<UID>` of every listed
+   blocked filing has no child, so the caller's next ledger write would have
+   dropped the charge, and the child would later close `not-charged`. As
+   built: before each ledger write the API lists the sessions uncached, as
+   before, and keeps from pruning the id `filing:<UID>` of every listed
    Session whose `status.summon.escalation.state` is `Pending`, `<UID>`
    being that Session's own UID. These ids join the ids of unsettled
-   Sessions in one set, and only the prune reads that set. Once the record
-   is no longer `Pending`, or the remediation's Session is gone, the
-   existing rule decides: the child carries the same id and keeps the
-   charge while it is neither admitted nor closed. A Session being deleted
-   is still listed, so its Pending filing keeps the charge until the
-   Session is gone. While the record is `Pending` the charge stays even if
-   its child is already admitted, which is longer than item 4 says.
+   Sessions in one set, and only the prune reads that set. One function,
+   `summonledger.Keep`, builds the set from the listed Sessions: every
+   ledger write of the API prunes by it, and the operator leader's filing
+   write (#801) is to prune by it too, so the two keep one rule. Once the
+   record is no longer `Pending`, or the remediation's Session is gone, the
+   existing rule decides: the child carries the same id and keeps the charge
+   while it is neither admitted nor closed. A Session being deleted is still
+   listed, so its Pending filing keeps the charge until the Session is gone.
+   While the record is `Pending` the charge stays even if its child is
+   already admitted, which is longer than item 4 says.
 3. *What a kept charge changes.* Nothing a caller's create counts or
    answers, with one limit. The rule keeps only a charge outside its window
    (the window keeps the rest), so it does not count toward
