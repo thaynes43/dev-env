@@ -1888,7 +1888,9 @@ marked "fix round 1" are story 782 fix round 1, coordinator rulings in PR 1102
 comment 6839324435; those marked "fix round 2" are story 782 fix round 2,
 coordinator rulings in PR 1102 comment 6840605385 and the coordinator's answer
 op782-fix2-a-1; those marked "fix round 3" are story 782 fix round 3,
-coordinator rulings in PR 1102 comment 6841848115. None is a ruling by Tom.
+coordinator rulings in PR 1102 comment 6841848115; those marked "fix round 4"
+are story 782 fix round 4, coordinator rulings in PR 1102 comment 6842728336.
+None is a ruling by Tom.
 
 - **What pages.** One terminal page per closed session, `failed`, `lost` or
   `escalated`, and one page per lifecycle event recorded in
@@ -1967,14 +1969,22 @@ coordinator rulings in PR 1102 comment 6841848115. None is a ruling by Tom.
   `evil.xn--p1ai`, `é.example`, `例.example:443`, `пример.xn--p1ai`,
   `उदाहरण.भारत`, `ตัวอย่าง.ไทย`, `evil。example:443` and a file name such as
   `main.go` all become `[link removed]`; a dotted number alone, such as
-  `2.105.0` or `2。105。0`, stays. No scheme link survives, in whole or in
-  part, whatever stands before it (fix round 3): the part of a dotted run that
-  is not a host is searched again, so `é.example-http://192.0.2.1` becomes
-  `[link removed]-[link removed]`, `x.é-http://192.0.2.1` becomes
-  `x.é-[link removed]` and `_http://192.0.2.1` becomes `_[link removed]`.
-  With no word boundary, a scheme word inside a longer word is redacted too
-  (`hotel:5` becomes `ho[link removed]`); that is accepted, as removing more
-  is the safe side.
+  `2.105.0` or `2。105。0`, stays. Scheme links are found first, in the note
+  as written, before any host is replaced (fix round 4), so a host can never
+  take a scheme's word and leave its target: for every scheme link, neither
+  its delimiter (`://`, or the scheme word with its colon) nor its target
+  survives, whatever stands before it. A scheme with `://` is found from any
+  offset: `é.http://localhost` and `é.example-http://192.0.2.1` become
+  `é.[link removed]`, `foo。http://localhost` becomes `foo。[link removed]`,
+  `x.é-http://192.0.2.1` becomes `x.é-[link removed]` and
+  `_http://192.0.2.1` becomes `_[link removed]`. A scheme written with its
+  colon only (`mailto:`, `tel:`, `sms:`, `javascript:`, `data:`, `file:` or
+  `vbscript:`) is a link unless a letter or a combining mark of any script
+  stands directly before its word; the start of the note, a space, a digit,
+  an underscore, a dot or any other character leaves it a link. So
+  `x_javascript:alert(1)`, `1tel:555` and `é.mailto:a@localhost` lose the
+  link, and `profile:ops`, `metadata:x`, `hotel:5` and `éfile:x` stay whole
+  (fix round 4).
   The only link is `status.remoteControl.url` when it is
   `https://claude.ai/code/session_...`; otherwise the console's sessions list.
   Page records hold the fixed title, the session name and the note's byte

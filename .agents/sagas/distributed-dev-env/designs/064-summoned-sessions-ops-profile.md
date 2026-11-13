@@ -2315,9 +2315,6 @@ built:
   `é.example-http://localhost` become `[link removed]-[link removed]`,
   `x.é-http://192.0.2.1` becomes `x.é-[link removed]`, and
   `_x.y-http://192.0.2.1` and `_http://192.0.2.1` become `_[link removed]`.
-  With no word boundary, a scheme word inside a longer word is redacted too
-  (`hotel:5` becomes `ho[link removed]`); that is accepted, as removing more
-  is the safe side.
   `2.105.0`, `a.example-b`, `a_b.example` and the 200-character cut keep
   their rules.
 - *F6, the other dots.* U+3002, U+FF0E and U+FF61 count as the dot between
@@ -2334,6 +2331,41 @@ built:
   haynes-ops, the installer checks that the keeper's ServiceAccount is still
   bound to `get` on AgentSessions in `dev-agents`; nothing in this repository
   makes that check.
+
+**Correction, 2026-11-13: story 782 fix round 4, coordinator rulings in PR
+1102 comment 6842728336; not a ruling by Tom.** The coordinator ruled on the
+one finding the re-check of fix round 3 left open (PR 1102 comment
+6842706082: a host match could take a scheme's word and leave its target, so
+`é.http://localhost` became `[link removed]://localhost`). Where this differs
+from the corrections above, this governs. As built:
+
+- *F6, scheme links first.* Scheme links are found in the note as written,
+  before any host is replaced, and the host rules apply only to the text
+  between them. For every scheme link, neither its delimiter (`://`, or the
+  scheme word with its colon) nor its target survives, whatever stands
+  before it. A scheme with `://` is found from any offset, as before:
+  `é.http://localhost`, `é.http://192.0.2.1` and `é.mailto:a@localhost`
+  become `é.[link removed]`, `foo。http://localhost` becomes
+  `foo。[link removed]` and `1。http://192.0.2.1` becomes `1。[link removed]`.
+  As the scheme is found first, `é.example-http://192.0.2.1` and
+  `é.example-http://localhost` now become `é.[link removed]` (the scheme
+  word is `example-http`), not fix round 3's `[link removed]-[link removed]`;
+  `x.é-http://192.0.2.1` and `_x.y-http://192.0.2.1` keep fix round 3's
+  results.
+- *F6, a colon-only scheme word.* `mailto:`, `tel:`, `sms:`, `javascript:`,
+  `data:`, `file:` and `vbscript:` are links only when the character directly
+  before the word is not a letter or a combining mark of any script. The
+  start of the note, a space, a digit, an underscore, a dot and any other
+  character leave it a link: `x_javascript:alert(1)` becomes
+  `x_[link removed]` and `1tel:555` becomes `1[link removed]`. So
+  `profile:ops must approve`, `metadata:x`, `hotel:5` and `éfile:x` stay
+  whole. This takes back fix round 3's sentence that a scheme word inside a
+  longer word is redacted too (`hotel:5` became `ho[link removed]`), dropped
+  above. A word kept whole hides no scheme after it:
+  `hotel:http://localhost` becomes `hotel:[link removed]`.
+- *Unchanged.* The other dots, `2.105.0` in every spelling, `a.example-b`,
+  `a_b.example`, the 200-character cut after redaction and a host at the cut
+  keep their rules.
 
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row

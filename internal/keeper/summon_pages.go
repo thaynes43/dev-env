@@ -706,19 +706,25 @@ var (
 	// summonVerifiedLink is status.remoteControl.url as agentd writes it for a
 	// registered session (internal/agentd/remote.go): nothing else is a link.
 	summonVerifiedLink = regexp.MustCompile(`^https://claude\.ai/code/session_[A-Za-z0-9_-]{1,120}$`)
-	// summonURLLike finds anything in a note that may be a link: a scheme
-	// with //, a scheme Pushover or a phone could open, a www. host, or a
+	// summonSchemeLink finds a scheme link in a note: a scheme with //, or a
+	// scheme Pushover or a phone could open written with its colon only
+	// (group 1). The pattern asks nothing of what stands before it (no \b,
+	// fix round 3): a scheme with // after an underscore, a digit, a dot or
+	// any other character is a scheme, and matching from any offset of a note
+	// is matching in the whole note. summonRedact takes a colon-only scheme
+	// only when no letter or combining mark stands directly before its word
+	// (story 782 fix round 4, ruling 2): Go's regexp cannot look behind.
+	summonSchemeLink = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://\S*|((?:mailto|tel|sms|javascript|data|file|vbscript):\S+)`)
+	// summonURLLike finds what else in a note may be a link: a www. host, or a
 	// dotted run of labels (groups 1 and 2: the run and any port, path, query
 	// or fragment after it). A label is letters with their combining marks,
 	// decimal digits and hyphens, of any script; any other character, an
 	// underscore included, ends it (story 782 fix round 2, F6, and the
 	// coordinator's answer op782-fix2-a-1). The dot between labels is the
 	// ASCII dot or U+3002, U+FF0E or U+FF61, which the IDNA lookup maps to it
-	// (fix round 3). summonRedact decides which runs are hosts. No
-	// alternative asks what stands before it (no \b, fix round 3): a scheme
-	// after an underscore, a digit or a dotted run is still a scheme, and
-	// matching from any offset of a note is matching in the whole note.
-	summonURLLike = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://\S*|(?:mailto|tel|sms|javascript|data|file|vbscript):\S+|www` + summonDotClass + `\S+|` +
+	// (fix round 3). summonRedact decides which runs are hosts, and looks
+	// only in what the scheme links leave (fix round 4, ruling 1).
+	summonURLLike = regexp.MustCompile(`(?i)www` + summonDotClass + `\S+|` +
 		`([\p{L}\p{M}\p{Nd}-]+(?:` + summonDotClass + `[\p{L}\p{M}\p{Nd}-]+)+)((?::[0-9]+)?(?:[/?#]\S*)?)`)
 	summonWordShape = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 )
@@ -773,8 +779,52 @@ func summonNote(note string) string {
 	return note
 }
 
-// summonRedact replaces every link in note with [link removed]: each scheme
-// or www. match; a dotted run followed by a port, path, query or fragment,
+// summonRedact replaces every link in note with [link removed]. Scheme links
+// come first, found in the note as written, before any host is replaced
+// (story 782 fix round 4, ruling 1; coordinator rulings in PR 1102 comment
+// 6842728336): each scheme with //, from any offset, and each colon-only
+// scheme whose word has no letter or combining mark of any script directly
+// before it (ruling 2). So é.http://localhost becomes é.[link removed] and
+// x_javascript:alert(1), 1tel:555 and é.mailto:a@localhost lose the link,
+// while profile:ops, metadata:x, hotel:5 and éfile:x stay whole. A scheme
+// link runs to the next space, so neither its delimiter nor its target
+// survives, and no host match can take its word. The text between scheme
+// links then goes through summonRedactHosts.
+func summonRedact(note string) string {
+	var b strings.Builder
+	last, pos := 0, 0
+	for pos < len(note) {
+		m := summonSchemeLink.FindStringSubmatchIndex(note[pos:])
+		if m == nil {
+			break
+		}
+		start, end := pos+m[0], pos+m[1]
+		if m[2] >= 0 && summonGlued(note[:start]) {
+			// A scheme word glued to a letter is no link; a scheme may still
+			// start inside it (hotel:http://localhost), so the search goes on
+			// at its next character.
+			_, size := utf8.DecodeRuneInString(note[start:])
+			pos = start + size
+			continue
+		}
+		b.WriteString(summonRedactHosts(note[last:start]))
+		b.WriteString(summonLinkRemoved(note[start:end]))
+		last, pos = end, end
+	}
+	b.WriteString(summonRedactHosts(note[last:]))
+	return b.String()
+}
+
+// summonGlued reports whether before ends with a letter or a combining mark,
+// of any script. The start of a note, a space, a digit, an underscore, a dot
+// and any other character are not.
+func summonGlued(before string) bool {
+	r, size := utf8.DecodeLastRuneInString(before)
+	return size > 0 && (unicode.IsLetter(r) || unicode.IsMark(r))
+}
+
+// summonRedactHosts replaces the hosts in text that has no scheme link: each
+// www. match; a dotted run followed by a port, path, query or fragment,
 // whatever its labels (an address such as 10.0.0.1:8080 or 10.0.0.1/admin);
 // and the dotted host that starts a bare run, if any (F6, and the
 // coordinator's answers op782-fix1-a-1 and op782-fix2-a-1: evil.example,
@@ -782,16 +832,15 @@ func summonNote(note string) string {
 // dotted number alone, such as 2.105.0, stays).
 //
 // A bare run is never skipped whole (fix round 3): what of it is not a host
-// is looked at again, so a scheme that starts inside it, as in
-// é.example-http://192.0.2.1 or x.é-http://192.0.2.1, is still found. After
-// a host the search goes on at the host's end; a run with no host keeps its
-// first character and the search goes on at the next. A note is at most 1024
-// bytes, so the searches stay small.
-func summonRedact(note string) string {
+// is looked at again, so a www. host that starts inside it, as in
+// x.é-www.y, is still found. After a host the search goes on at the host's
+// end; a run with no host keeps its first character and the search goes on
+// at the next. A note is at most 1024 bytes, so the searches stay small.
+func summonRedactHosts(text string) string {
 	var b strings.Builder
 	last, pos := 0, 0
-	for pos < len(note) {
-		m := summonURLLike.FindStringSubmatchIndex(note[pos:])
+	for pos < len(text) {
+		m := summonURLLike.FindStringSubmatchIndex(text[pos:])
 		if m == nil {
 			break
 		}
@@ -803,19 +852,19 @@ func summonRedact(note string) string {
 		start, end := m[0], m[1]
 		if m[2] >= 0 && m[4] == m[5] {
 			// A bare run: only its host, if it starts with one, is a link.
-			host := summonHostEnd(note[m[2]:m[3]])
+			host := summonHostEnd(text[m[2]:m[3]])
 			if host == 0 {
-				_, size := utf8.DecodeRuneInString(note[start:])
+				_, size := utf8.DecodeRuneInString(text[start:])
 				pos = start + size
 				continue
 			}
 			end = m[2] + host
 		}
-		b.WriteString(note[last:start])
-		b.WriteString(summonLinkRemoved(note[start:end]))
+		b.WriteString(text[last:start])
+		b.WriteString(summonLinkRemoved(text[start:end]))
 		last, pos = end, end
 	}
-	b.WriteString(note[last:])
+	b.WriteString(text[last:])
 	return b.String()
 }
 
