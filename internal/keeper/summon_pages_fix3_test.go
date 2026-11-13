@@ -516,10 +516,17 @@ func (s summonCountingSerializer) DecoderToVersion(d runtime.Decoder, gv runtime
 // survives, in whole or in part, whatever stands before it: the re-check's
 // four inputs, and a scheme after an underscore, a digit, a dotted number or
 // another letter. The cases that passed before still pass.
+//
+// Story 782 fix round 4 (coordinator rulings in PR 1102 comment 6842728336):
+// scheme links are found in the original text before any host is replaced,
+// so no host match takes a scheme word and leaves its target (ruling 1); a
+// scheme written with a colon only is a link unless a letter or a combining
+// mark stands directly before its word (ruling 2). é.example-http://... is
+// now é.[link removed]: example-http is the scheme word, found first.
 func TestSummonPagesNoteSchemeAfterADottedRun(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
-		{"é.example-http://192.0.2.1", "[link removed]-[link removed]"},
-		{"é.example-http://localhost", "[link removed]-[link removed]"},
+		{"é.example-http://192.0.2.1", "é.[link removed]"},
+		{"é.example-http://localhost", "é.[link removed]"},
 		{"x.é-http://192.0.2.1", "x.é-[link removed]"},
 		{"_x.y-http://192.0.2.1", "_[link removed]"},
 		{"see x.é-https://localhost/a?b now", "see x.é-[link removed] now"},
@@ -528,12 +535,28 @@ func TestSummonPagesNoteSchemeAfterADottedRun(t *testing.T) {
 		{"2.105.0-http://192.0.2.1", "2.105.0-[link removed]"},
 		{"é.example-mailto:a@localhost", "[link removed]-[link removed]"},
 		{"x_javascript:alert(1)", "x_[link removed]"},
+		// Fix round 4, ruling 1: a host match takes no scheme word.
+		{"é.http://localhost", "é.[link removed]"},
+		{"é.http://192.0.2.1", "é.[link removed]"},
+		{"foo。http://localhost", "foo。[link removed]"},
+		{"1。http://192.0.2.1", "1。[link removed]"},
+		{"é.mailto:a@localhost", "é.[link removed]"},
+		{"see é.example.http://localhost now", "see é.[link removed] now"},
+		{"see пример.рф.http://localhost now", "see [link removed].[link removed] now"},
+		{"see é.example/http://localhost now", "see [link removed][link removed] now"},
+		// Fix round 4, ruling 2: what stands before a colon-only scheme word
+		// and is not a letter or a mark leaves it a link.
+		{"1tel:555", "1[link removed]"},
+		{"mailto:a@localhost", "[link removed]"},
+		{"call tel:555 now", "call [link removed] now"},
+		{"(tel:555)", "([link removed])"},
+		{"profile:javascript:alert(1)", "profile:[link removed]"},
 	} {
 		got := summonNote(tc.in)
 		if got != tc.want {
 			t.Errorf("summonNote(%q) = %q, want %q", tc.in, got, tc.want)
 		}
-		for _, left := range []string{"://", "http", "192.0.2.1", "localhost", "mailto", "javascript"} {
+		for _, left := range []string{"://", "http", "192.0.2.1", "localhost", "mailto", "javascript", "tel:", "555", "alert"} {
 			if strings.Contains(strings.ToLower(got), left) {
 				t.Errorf("summonNote(%q) = %q keeps %q", tc.in, got, left)
 			}
@@ -546,6 +569,18 @@ func TestSummonPagesNoteSchemeAfterADottedRun(t *testing.T) {
 		{"see a.example.123 now", "see [link removed].123 now"},
 		{"v2.105.0-rc.1 and go1.27.3", "v2.105.0-rc.1 and go1.27.3"},
 		{"e.g. this", "e.g. this"},
+		// Fix round 4, ruling 2: a scheme word glued to a letter or a mark of
+		// any script is no link, and the note keeps it whole.
+		{"profile:ops must approve", "profile:ops must approve"},
+		{"retry metadata:x", "retry metadata:x"},
+		{"hotel:5", "hotel:5"},
+		{"éfile:x", "éfile:x"},
+		{"Ωmailto:x пtel:5 日sms:1 ñjavascript:x", "Ωmailto:x пtel:5 日sms:1 ñjavascript:x"},
+		{"e\u0301data:x", "e\u0301data:x"},
+		{"xMAILTO:x", "xMAILTO:x"},
+		// A word kept whole hides no scheme link after it.
+		{"hotel:http://localhost", "hotel:[link removed]"},
+		{"éfile:mailto:a@localhost", "éfile:[link removed]"},
 	} {
 		if got := summonNote(tc.in); got != tc.want {
 			t.Errorf("summonNote(%q) = %q, want %q", tc.in, got, tc.want)
@@ -578,26 +613,33 @@ func TestSummonPagesNoteOtherDots(t *testing.T) {
 	}
 }
 
-// Rulings 4 and 5 in the fake endpoint's final message.
+// Rulings 4 and 5 in the fake endpoint's final message, and fix round 4's
+// rulings 1 and 2: no scheme link's delimiter or target is left, and a scheme
+// word glued to a letter stays whole.
 func TestSummonPagesNoteSchemesAndDotsInTheMessage(t *testing.T) {
 	f := newSummonFix(t)
 	const schemes = "runs é.example-http://192.0.2.1 é.example-http://localhost x.é-http://192.0.2.1 _x.y-http://192.0.2.1 _http://192.0.2.1; 2.105.0 stays"
-	const schemesShown = "runs [link removed]-[link removed] [link removed]-[link removed] x.é-[link removed] _[link removed] _[link removed]; 2.105.0 stays"
+	const schemesShown = "runs é.[link removed] é.[link removed] x.é-[link removed] _[link removed] _[link removed]; 2.105.0 stays"
 	const dots = "dots evil。example evil．example evil｡example evil。example:443 evil．example:443 evil｡example:443; 2。105．0 stays"
 	const dotsShown = "dots [link removed] [link removed] [link removed] [link removed] [link removed] [link removed]; 2。105．0 stays"
-	for _, s := range []string{schemesShown, dotsShown} {
+	const first = "first é.http://localhost é.http://192.0.2.1 foo。http://localhost 1。http://192.0.2.1 é.mailto:a@localhost x_javascript:alert(1) 1tel:555"
+	const firstShown = "first é.[link removed] é.[link removed] foo。[link removed] 1。[link removed] é.[link removed] x_[link removed] 1[link removed]"
+	const kept = "kept profile:ops must approve, metadata:x, hotel:5, éfile:x"
+	for _, s := range []string{schemesShown, dotsShown, firstShown, kept} {
 		if n := len([]rune(s)); n > summonNoteMax {
 			t.Fatalf("the expected note is %d characters: the cut would hide a case", n)
 		}
 	}
 	f.add(f.close(f.session("wo-upgrade-1", v1alpha1.LaneUpgrade), v1alpha1.OutcomeFailed, summonoutcome.Report, "failed", schemes),
-		f.close(f.session("wo-upgrade-2", v1alpha1.LaneUpgrade), v1alpha1.OutcomeFailed, summonoutcome.Report, "failed", dots))
+		f.close(f.session("wo-upgrade-2", v1alpha1.LaneUpgrade), v1alpha1.OutcomeFailed, summonoutcome.Report, "failed", dots),
+		f.close(f.session("wo-upgrade-3", v1alpha1.LaneUpgrade), v1alpha1.OutcomeFailed, summonoutcome.Report, "failed", first),
+		f.close(f.session("wo-upgrade-4", v1alpha1.LaneUpgrade), v1alpha1.OutcomeFailed, summonoutcome.Report, "failed", kept))
 	f.tick()
-	if f.push.count() != 2 {
+	if f.push.count() != 4 {
 		t.Fatalf("sent %d", f.push.count())
 	}
 	shown := map[string]string{}
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 4; i++ {
 		msg := f.push.form(i).Get("message")
 		for _, left := range []string{"://", "http", "192.0.2.1", "localhost", "evil", "example"} {
 			if strings.Contains(msg, left) {
@@ -608,7 +650,7 @@ func TestSummonPagesNoteSchemesAndDotsInTheMessage(t *testing.T) {
 		if !ok {
 			t.Fatalf("no note in %q", msg)
 		}
-		for _, name := range []string{"wo-upgrade-1", "wo-upgrade-2"} {
+		for _, name := range []string{"wo-upgrade-1", "wo-upgrade-2", "wo-upgrade-3", "wo-upgrade-4"} {
 			if strings.Contains(msg, "session "+name+" ") {
 				shown[name] = note
 			}
@@ -619,6 +661,17 @@ func TestSummonPagesNoteSchemesAndDotsInTheMessage(t *testing.T) {
 	}
 	if shown["wo-upgrade-2"] != dotsShown {
 		t.Fatalf("note %q, want %q", shown["wo-upgrade-2"], dotsShown)
+	}
+	for _, left := range []string{"mailto", "javascript", "tel:", "555", "alert", "a@"} {
+		if strings.Contains(shown["wo-upgrade-3"], left) {
+			t.Fatalf("the note keeps %q: %q", left, shown["wo-upgrade-3"])
+		}
+	}
+	if shown["wo-upgrade-3"] != firstShown {
+		t.Fatalf("note %q, want %q", shown["wo-upgrade-3"], firstShown)
+	}
+	if shown["wo-upgrade-4"] != kept {
+		t.Fatalf("note %q, want %q", shown["wo-upgrade-4"], kept)
 	}
 }
 
