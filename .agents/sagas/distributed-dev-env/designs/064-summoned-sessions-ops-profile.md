@@ -2124,6 +2124,59 @@ Where this differs from the corrections above, this governs. As built:
   cannot point any suite at a real cluster. This closes the route the
   re-check found after the incident on tracker item 782 (comment 7521).
 
+**Correction, 2026-11-13: story 782 fix round 3, coordinator rulings in PR
+1102 comment 6841848115; not a ruling by Tom.** The coordinator ruled on the
+two findings the re-check of fix round 2 left open (PR 1102 comment
+6841787920). Where this differs from the corrections above, this governs. As
+built:
+
+- *F1, every field that can carry a callback or shared state.* Besides a
+  transport, a transport wrapper and a dialer, a keeper REST config that
+  carries a proxy function, an auth provider, an auth config persister, an
+  exec credential plugin or a warning handler of either kind turns the pager
+  off. The same log line, `summon pages disabled: the pager's own client
+  could not be built`, names which in fixed words and never a value. Nothing
+  of the config is dropped to make it fit. The keeper's in-cluster config
+  carries none of them, so production is unchanged.
+- *A guard for the next client-go.* A test walks every field of
+  `rest.Config`, and of the `TLSClientConfig`, `ContentConfig` and
+  `ImpersonationConfig` it holds, against a table: a plain value, refused, or
+  replaced by the pager. A field missing from the table fails, and so does a
+  field that can carry a callback or a shared object (function or interface
+  kind, or a pointer, slice or map holding one) listed as plain. Today the
+  table refuses the nine fields above; replaces `Timeout`, `QPS`,
+  `RateLimiter` and `NegotiatedSerializer` (the pager's discovery client and
+  its per-kind clients each set their own serializer); and keeps every other
+  field as a plain value.
+- *What the timeout bounds.* The 5-second request timeout bounds one
+  request's network I/O and retries. A reload of the bearer token file is
+  local I/O outside it. Discovery and a tick are several requests, each
+  bounded, not one bounded operation. A tick makes one paginated scan of at
+  most 20 list calls, at most 20 reads by name and the ledger calls, then
+  waits 60 seconds. This corrects fix round 2's "bounds every request" and
+  "one list".
+- *F6, a dotted run cannot hide a scheme.* No scheme link survives, in whole
+  or in part, whatever stands before it. No alternative of the matcher asks
+  what stands before it, and the part of a dotted run that is not a host is
+  searched again: `é.example-http://192.0.2.1` and
+  `é.example-http://localhost` become `[link removed]-[link removed]`,
+  `x.é-http://192.0.2.1` becomes `x.é-[link removed]`, and
+  `_x.y-http://192.0.2.1` and `_http://192.0.2.1` become `_[link removed]`.
+  `2.105.0`, `a.example-b`, `a_b.example` and the 200-character cut keep
+  their rules.
+- *F6, the other dots.* U+3002, U+FF0E and U+FF61 count as the dot between
+  labels wherever the ASCII dot does, as the IDNA lookup maps them to it:
+  `evil。example`, `evil．example` and `evil｡example`, with or without a
+  port, are redacted, and a dotted number written with them stays.
+- *Pruning while reads fail, a stated limit.* While a read by name fails,
+  proof pruning stops, and a full ledger then records nothing new: the
+  fail-closed side of "an entry goes only on proof", and the reads fail
+  together or not at all (one `get` rule). A tick whose proof read fails logs
+  `summon page proof read failed: pruning waits for the next tick`; a full
+  ledger already logged `summon page dedupe capacity reached`. Each is at
+  most one line a tick, in fixed words. The install checks that the keeper's `get` on
+  AgentSessions is bound before it switches the pager on.
+
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row
 says: one terminal event or the digest. The reason is the one 6.6's close
