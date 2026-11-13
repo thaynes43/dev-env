@@ -435,7 +435,8 @@ type summonJob struct {
 	named   bool                   // a terminal page whose close a row names
 	count   int                    // a more-events page's count
 	// An overflow page's caller, its count of urgent refusals (the new
-	// reference) and the refusals since its last overflow event (story 793).
+	// reference once a page is attempted) and the refusals since its caller's
+	// reference (story 793).
 	caller         string
 	refused, since int64
 }
@@ -483,7 +484,7 @@ func (p *summonPager) tick(ctx context.Context) {
 	// The overflow events (story 793): read after the scan, never stopping
 	// the pages or the digest. A job without a session sorts after the drill
 	// and before the session pages, by its caller's last refusal.
-	overflow, lowered := p.overflowJobs(ctx, ledger, now)
+	overflow, lowered, owing := p.overflowJobs(ctx, ledger, now)
 	jobs = append(jobs, overflow...)
 	// The digest's watermark is the pager's first run (story 792, ruling Q6);
 	// it is saved with this tick's first write, or alone.
@@ -493,7 +494,7 @@ func (p *summonPager) tick(ctx context.Context) {
 	// notifier's is, so a saved ledger never has an empty dedupe beside its
 	// page records (which load refuses as a reset). Its proof reads are made
 	// only in a tick that may add one: a page, or a digest line's entry.
-	if p.fresh(ledger, jobs, now) || len(ledger.State.newDigestOutcomes(outcomes)) > 0 || ledger.State.digestMissingEntries() {
+	if p.fresh(ledger, jobs, now, owing) || len(ledger.State.newDigestOutcomes(outcomes)) > 0 || ledger.State.digestMissingEntries() {
 		p.prune(ctx, ledger, live, now)
 	}
 	dedupeFull, overflowFull := false, false
@@ -536,7 +537,7 @@ func (p *summonPager) tick(ctx context.Context) {
 			}
 			continue
 		}
-		if j.event == summonEventOverflow && !ledger.State.overflowRoom(j.caller, now) {
+		if j.event == summonEventOverflow && !ledger.State.overflowRoom(j.caller, now, owing) {
 			// The member is at its bound and holds no spare: the caller waits,
 			// its refusals still counted in the create ledger (story 793).
 			if !overflowFull {
@@ -553,11 +554,13 @@ func (p *summonPager) tick(ctx context.Context) {
 		if !ledger.State.room(now) {
 			ledger.State.Events[j.key] = summonPageEntry{At: now.Unix(), State: summonStateCapped, Session: sessionName(j.session)}
 			ledger.State.Capped++
-			ledger.State.markOverflow(j, now)
+			// A capped overflow event takes its caller's hour and keeps its
+			// refusals for the next page (story 793 fix round 1, ruling 1).
+			ledger.State.markOverflow(j, now, false, owing)
 			dirty = true
 			continue
 		}
-		if !p.attempt(ctx, ledger, j, now) {
+		if !p.attempt(ctx, ledger, j, now, owing) {
 			return
 		}
 		dirty = false
@@ -587,7 +590,7 @@ func (p *summonPager) tick(ctx context.Context) {
 // window has room for, or a page whose key the dedupe lacks (a drill past the
 // bound excepted, and an overflow event whose caller the overflow member has
 // no room for; story 793).
-func (p *summonPager) fresh(l *summonPageLedger, jobs []summonJob, now time.Time) bool {
+func (p *summonPager) fresh(l *summonPageLedger, jobs []summonJob, now time.Time, owing map[string]bool) bool {
 	if l.State.Capped > 0 && l.State.room(now) {
 		return true
 	}
@@ -598,7 +601,7 @@ func (p *summonPager) fresh(l *summonPageLedger, jobs []summonJob, now time.Time
 		if j.event == summonEventDrill && l.State.drills() >= summonPagesMaxDrills {
 			continue
 		}
-		if j.event == summonEventOverflow && !l.State.overflowRoom(j.caller, now) {
+		if j.event == summonEventOverflow && !l.State.overflowRoom(j.caller, now, owing) {
 			continue
 		}
 		return true
@@ -700,12 +703,13 @@ func summonJobs(s *v1alpha1.AgentSession) []summonJob {
 
 // attempt reserves one page in the ledger, sends it only once that write is
 // confirmed, and stores the result. It reports whether the tick may go on.
-func (p *summonPager) attempt(ctx context.Context, ledger *summonPageLedger, j summonJob, now time.Time) bool {
+// owing is the tick's callers that owe overflow refusals (overflowJobs).
+func (p *summonPager) attempt(ctx context.Context, ledger *summonPageLedger, j summonJob, now time.Time, owing map[string]bool) bool {
 	notice, record := p.render(j)
 	dispatchBy := now.Add(noticeStoreTimeout)
 	ledger.State.reserve(now, dispatchBy)
 	ledger.State.Events[j.key] = summonPageEntry{At: now.Unix(), State: string(pages.StateRecorded), Session: sessionName(j.session)}
-	ledger.State.markOverflow(j, now)
+	ledger.State.markOverflow(j, now, true, owing)
 	if j.event == summonEventMore {
 		ledger.State.Capped -= j.count
 		ledger.State.More++

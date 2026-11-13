@@ -1998,7 +1998,9 @@ None is a ruling by Tom.
   last one by the hour or the day. A close already in `digest.listed` is not
   listed again, even when its ledger entry is gone.
 - **Overflow** (story 793, slice c of 742; coordinator rulings on item 742
-  comment 7457 and answer op793-q-1, none a ruling by Tom). An urgent create
+  comment 7457 and answer op793-q-1; story 793 fix round 1, coordinator
+  rulings in PR 1130 comment 6846451603 and answer op793-fix1-q-1; none a
+  ruling by Tom). An urgent create
   the API refuses (a full queue of urgent sessions, or the hour's creates
   spent) has no session to page, so the API counts it in the create ledger,
   `urgentRefusals` per caller in the ConfigMap `dev-env-summon-creates` in
@@ -2008,13 +2010,25 @@ None is a ruling by Tom.
   one overflow event an hour: a page, `[dev-env] overflow: N urgent session
   creates from caller <caller> were refused and not yet paged`, at priority
   0 with the console's sessions list as its one link, or, past the cap,
-  `capped`. Either way the event takes the count, so every refused urgent
-  create is in exactly one event, and refusals after it wait for the next.
-  An overflow page counts toward the 6 an hour; it goes after the drill and
-  before the session pages of its tick, callers by their last refusal,
-  oldest first. A capped one is counted in the `more-events` page and listed
-  in the next digest as `<caller> unknown capped overflow` (the count does
-  not say which lane was refused). A count below the one last taken (the
+  `capped`. Either way the event takes the caller's hour. A page that is
+  attempted also takes the count, and refusals after it wait for the next;
+  a capped event leaves the count where it was (0 for a caller never paged),
+  so the caller's next page carries its refusals too. So every refused
+  urgent create is in exactly one page attempt. An overflow page counts
+  toward the 6 an hour; it goes after the drill and before the session pages
+  of its tick, callers by their last refusal, oldest first: of two callers
+  with one slot left, the older last refusal pages and the other is capped.
+  A capped one is counted in the `more-events` page and listed in the next
+  digest as `<caller> unknown capped overflow` (the count does not say which
+  lane was refused). So k callers with refusals take about k of an hour's 6
+  slots, and session pages keep about 6 − k − 1 (one for the `more-events`
+  page; a drill takes one more, once). That is the usual figure, not a floor
+  for every 60 minutes: the window slides, so the `more-events` page can go
+  twice inside one 60 minutes, and a page's slot is stamped at its send
+  deadline, so one caller's two overflow pages can both count for up to 6
+  seconds. Only callers with urgent lanes (`remediation`, `escalation`) can
+  have refusals: three CallerPolicies on 2026-11-13, so k is at most 3
+  today. A count below the one last taken (the
   key was reset) or a key that is gone sets the reference to 0 at once: every
   refusal the key then holds is new; the caller keeps its record and its
   hour. Once each, as for a page: the caller's record, the dedupe entry and
@@ -2027,14 +2041,25 @@ None is a ruling by Tom.
   that cannot be decoded makes only that caller wait, with `summon overflow:
   a caller's create ledger entry is unreadable; that caller waits`, and no
   value from it. The pages and the digest go on either way. The ledger keeps
-  at most 64 callers; at that bound a new caller waits and the keeper logs
-  `summon overflow caller capacity reached` once a tick, unless a caller
-  whose key is gone (or reset to zero) has had no overflow event for an
-  hour: that record goes first, the oldest first. A record ahead of the
-  keeper's clock holds that caller until the clock has passed it by the
-  hour, with `summon overflow ledger time is ahead of the keeper's clock`.
-  Stated limit: a key reset and refilled past its old count between two
-  ticks is not seen as reset, and that many of its refusals are not paged.
+  at most 64 callers, for all time: the create ledger never removes a caller
+  or lowers its count, so a record whose count is above 0 is never dropped
+  (that would page its old refusals again). The first 64 callers ever
+  refused keep their places; a 65th is never paged, and the keeper logs
+  `summon overflow caller capacity reached` once a tick. Freeing a place is
+  an operator's edit of the pager's ledger. The one exception is a record
+  whose key is gone or holds a count of 0 (removed or reset to zero by hand)
+  and that has had no overflow event for an hour: it goes for a new caller,
+  the oldest first. A record that still owes refusals (only capped events so
+  far, or a key reset to a lower count above 0), or whose entry cannot be
+  decoded, keeps its place. A record ahead of the keeper's clock
+  holds that caller until the clock has passed it by the hour, with
+  `summon overflow ledger time is ahead of the keeper's clock`. Stated
+  limits: a key reset and refilled past its old count between two
+  successful reads of the create ledger is not seen as reset, and that many
+  of its refusals are not paged; that time can be hours while reads fail,
+  the keeper's Role rule is missing or the keeper is down. The reverse: an
+  old copy of the create ledger restored after a reset pages old refusals
+  again.
 - **The text.** Fixed templates in keeper source. A page starts `[dev-env]`
   and the event; a drill starts `DRILL`. A session's note follows the label
   `session note:`. Every control or format character and every line or
@@ -2095,7 +2120,10 @@ None is a ruling by Tom.
   tick makes one paginated scan of at most 20 list calls, at most 20 reads by
   name, one read of the create ledger (story 793) and the ledger calls, then
   waits 60 seconds. A stalled read of the create ledger holds nothing either:
-  it ends on the same timeout, and the tick goes on without overflow pages. A keeper REST config that
+  it ends on the same timeout, and the tick goes on without overflow pages.
+  The read comes before the tick's sends, so it can delay that tick's pages
+  by at most that timeout, 5 seconds (the local reload of the bearer token
+  file above aside). A keeper REST config that
   carries a transport, a transport wrapper, a dialer, a proxy function, an
   auth provider, an auth config persister, an exec credential plugin or a
   warning handler of either kind turns the pager off and logs `summon pages
