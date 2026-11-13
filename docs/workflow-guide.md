@@ -1758,9 +1758,12 @@ It applies the create-time `spec.summon.onUnreported` snapshot, with
    otherwise `agent-exited`; `turn-cap` requires a result reason explicitly
    naming the turn cap. Current result producers do not name it.
 2. Agent `exited` without a task result: `agent-exited`.
-3. Agent `failed`: `agent-failed`.
-4. Agent `interrupted`: `agent-interrupted`.
-5. A pod in phase `Succeeded` or `Failed`, or every container terminated with
+3. A start record that names a failure (`status.agent.start.failure`, story
+   791, below): `no-usable-model`. Only that typed field counts, never a
+   message.
+4. Agent `failed`: `agent-failed`.
+5. Agent `interrupted`: `agent-interrupted`.
+6. A pod in phase `Succeeded` or `Failed`, or every container terminated with
    `spec.restartPolicy: Never`, without a task result: `pod-terminated`.
 
 The leader's watchdog (story 779) adds, below these, in this order:
@@ -2460,6 +2463,43 @@ session without one is built exactly as before.
   field (every ordinary session's, every older record) runs as before; a
   scheduled session's launch never gets it. Such a pod runs on the templates
   image, as a scheduled session's does.
+- *The model pre-flight* (story 791, DESIGN-064 6.9 and its correction of
+  2026-11-13). From story 791's agent image, a summoned **task**'s first
+  launch record carries `preflight` (its `spec.model` and the
+  `spec.summon.fallbackModel` the operator copies into the session document
+  as `fallbackModel`). Before the provider starts, run-agent runs one short
+  turn on `spec.model`: `claude --model <model> --tools "" --strict-mcp-config
+  --no-session-persistence --max-turns 1 --output-format stream-json --verbose
+  -p`, with `reply with ok` on stdin, so the turn has no tools, no MCP
+  servers and no saved conversation. It reads the turn with agentd's
+  transcript classifier: a real model response from a CLI that exited 0 is
+  an answer; a 401 or `authentication_failed` is a rejected login; an API
+  error with v1's fragments ("out of usage credits", "usage limit", "rate
+  limit"; "unknown model", "invalid model", "not available", "/model to
+  switch") is a quota or a model refusal; anything else is no answer. When
+  `spec.model` did not answer and its login was not rejected, run-agent
+  tries the fallback once, then starts the task on the first model that
+  answered. One provider process runs at a time: a turn is stopped and
+  waited for before the next spawn, and one that cannot be shown gone starts
+  nothing further. The start deadline is checked before each turn and before
+  the real start, and a turn's limit is the smaller of 90 seconds and the
+  time left; a turn the deadline cut short is the fence's refusal
+  (`start-refused.json`, `agent-failed`). While the pre-flight runs the
+  status reads `busy`. Its outcome is in `~/.agentd/start-preflight.json`
+  and, through the heartbeat, in `status.agent.start`: `model` (the model the
+  task started on), `fallbackCause` beside a fallback model (why `spec.model`
+  did not answer), or `failure` when nothing started (`ModelRefused`,
+  `QuotaRefused`, `LoginRejected`, `NoAnswer`: the last model's cause). A
+  failure starts no provider and writes no task result; the status reports
+  `failed` and the session closes by its `onUnreported`, reason
+  `no-usable-model` (DESIGN-064 6.8 maps it to the `failed` page). The API
+  copies the record only for a summoned task, only in those shapes and only
+  with `spec.model` or the fallback; anything else is dropped and the heartbeat still answers 204.
+  Once stored, the record never changes, by the API and by the CRD's rules.
+  A summoned remote session and every ordinary session get no pre-flight.
+  The pre-flight's own usage is not recorded: one short turn a start, two
+  when the fallback is tried. No test calls a real provider, and the
+  fragments are v1's, not checked against the real CLI.
 - *Start refusals* (ruling D8). The operator refuses to start with
   `--enable-summoned-lanes` on and `--leader-elect=false`; with
   `--summon-create-kinds` set and `--enable-summoned-lanes` off; with `task`
@@ -2492,6 +2532,19 @@ Story 780's proofs: `TestSummonExecutorLatchRules` (envtest, the CEL rules),
 and `RunAgent` beside the fake operator); `TestSummonedLaunchRecordStartsNothingOnBoot`,
 `TestOrdinaryBootWithLaunchRecordResumesAsToday`, `TestRunAgentStartFence`
 and `TestSummonedPausedLaunchRefusedPastStartDeadline` in `internal/agentd`.
+Story 791's proofs: `TestPreflightFirstModelAnswers`,
+`TestPreflightFallsBackOnce`, `TestPreflightNeitherAnswersStartsNothing`,
+`TestPreflightRejectedLoginTriesNoFallback`, `TestPreflightInsideTheStartFence`,
+`TestPreflightRestartStartsNothingAgain`, `TestPreflightStatusWhileItRuns`,
+`TestPreflightOnlyForASummonedTask`, `TestOrdinaryTaskRunsNoPreflight`,
+`TestClassifyPreflight`, `TestPreflightTurnArgumentsAndPrompt` and
+`TestPreflightTurnStoppedAtItsLimit` in `internal/agentd`;
+`TestAgentStartStatusCopiesOnlyTheFixedSet` and
+`TestHeartbeatStoresTheStartRecordOnce` in `internal/apiserver`;
+`TestSummonNoUsableModelClosesFromTheTypedRecordOnce` and
+`TestSessionDocumentCarriesTheFallbackOnlyForASummonedSession` in
+`internal/controller`; `TestAgentStartRecordShape` and
+`TestAgentStartRecordNeverChanges` (envtest) in `api/v1alpha1`.
 
 **The API's pool, with `--enable-summoned-lanes` off.** The API counts the caller's
 unfinished summoned session records, uncached: escalations against

@@ -36,13 +36,13 @@ const (
 
 // Inputs contains evidence, never inferred from heartbeat freshness. The
 // operator's reconciler fills the agent, pod and stop inputs; the leader's
-// watchdog (OP779) fills the deadline, start, loss and hold inputs. Story 743
-// fills NoUsableModel and QuotaHoldExpired. Every producer uses FirstReason;
+// watchdog (OP779) fills the deadline, start, loss and hold inputs. Story 791
+// fills NoUsableModel from status.agent.start; story 743 QuotaHoldExpired. Every producer uses FirstReason;
 // none may introduce a second precedence table.
 type Inputs struct {
 	TaskResult    *v1alpha1.TaskResultStatus // task sessions only
 	AgentStatus   string
-	NoUsableModel bool // OP743: the durable no-usable-model start evidence
+	NoUsableModel bool // OP791: status.agent.start names a failure (DESIGN-064 6.9)
 	PodTerminated bool
 	// A recorded stop, a reap or a suspend (OP779, ruling D1 on item 741).
 	// StoppedByPerson is one a person made; Suspended is any other: another

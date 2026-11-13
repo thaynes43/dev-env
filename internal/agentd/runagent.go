@@ -66,8 +66,15 @@ func spawnFence(l Launch, stateDir string) string {
 	if why == "" {
 		return ""
 	}
-	_ = writeJSONFile(filepath.Join(stateDir, startRefusedFile), startRefused{Reason: why, At: now.UTC(), ConversationID: l.ConversationID, BootID: l.BootID})
+	writeStartRefused(l, stateDir, why, now)
 	return why
+}
+
+// writeStartRefused records the start fence's refusal of l's provider spawn:
+// spawnFence's, or the model pre-flight's when the start deadline cut a turn
+// short (DESIGN-064 6.9, ruling (c)).
+func writeStartRefused(l Launch, stateDir, why string, now time.Time) {
+	_ = writeJSONFile(filepath.Join(stateDir, startRefusedFile), startRefused{Reason: why, At: now.UTC(), ConversationID: l.ConversationID, BootID: l.BootID})
 }
 
 // taskResult is ~/.agentd/task-result.json, written when the agent exits.
@@ -177,6 +184,22 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		}
 	}
 
+	// A summoned task's model pre-flight (DESIGN-064 6.9, OP791): only its
+	// first launch carries Preflight. It runs inside the start fence, and
+	// when no model answered nothing starts. The launch value l is not
+	// changed: only the spawned argv names the model that answered.
+	argv, fallbackCause := l.Argv, ""
+	if l.Preflight != nil {
+		note := func(format string, a ...any) {
+			_, _ = fmt.Fprintf(out, "[agentd] task %s: "+format+"\n", append([]any{l.Session}, a...)...)
+		}
+		model, cause, ok := runPreflight(l, stateDir, note, signals)
+		if !ok {
+			return 1
+		}
+		argv, fallbackCause = withModel(l.Argv, preflightModelArg(l.Argv, l.Preflight.Model), model), cause
+	}
+
 	// Only native stdout enters the event parser. Stderr remains diagnostic,
 	// with bounded draining even when a child inherits the descriptor.
 	pr, pw, err := os.Pipe()
@@ -184,7 +207,7 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		_, _ = fmt.Fprintf(out, "agentd run-agent: %v\n", err)
 		return 1
 	}
-	cmd := exec.Command(l.Argv[0], l.Argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = l.Dir
 	cmd.Env = agentEnv(os.Environ(), l)
 	cmd.Stdin = strings.NewReader(l.Prompt)
@@ -220,6 +243,9 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	_ = pw.Close()
 	pid := cmd.Process.Pid
 	_ = writeJSONFile(filepath.Join(stateDir, pidFile), agentPid{Pid: pid, Start: procStartTime(pid)})
+	if l.Preflight != nil {
+		recordPreflightStarted(l, stateDir, argv[preflightModelArg(l.Argv, l.Preflight.Model)], fallbackCause)
+	}
 	if err := nativeLease.recordStarted(l, pid); err != nil {
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		_ = cmd.Wait()

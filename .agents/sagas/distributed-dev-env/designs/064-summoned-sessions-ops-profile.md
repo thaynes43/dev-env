@@ -2357,6 +2357,87 @@ Tom).** The text above stays; where it differs, this governs.
    condition. Until then the condition reads "held: quota" and a curation
    run held past its `maxHold` closes `hold-expired`.
 
+**Correction, 2026-11-13 (story 791, slice c of #743; coordinator rulings
+on item 743 comments 7458 and 7540, and coordinator answer op791-a-1; not a
+ruling by Tom).** The fallback text above stays; where it differs, this
+governs.
+
+1. *Who gets the pre-flight.* A summoned **task**'s first launch only. "For
+   a summoned session" above is narrowed: a summoned remote session's TUI
+   gets none in this slice (743d), and no ordinary session ever does. The
+   operator copies `spec.summon.fallbackModel` into the session document as
+   `fallbackModel`, for a summoned session only; agentd puts both models in
+   the first launch record (`preflight`). A launch record or a session
+   document without them runs as before.
+2. *The pre-flight sits inside the start fence (ruling (c)).* Each turn is a
+   provider process. run-agent checks the start deadline before each turn
+   (the model, then the fallback) and again before the real start, and cuts
+   each turn's limit to the smaller of 90 seconds and the time left. A turn
+   the deadline cut short, or a deadline already passed, is the fence's
+   refusal (`start-refused.json`, status `failed`, close `agent-failed`):
+   time ran out, no model was refused.
+3. *When the fallback is tried (op791-a-1).* This replaces "If that is
+   refused, for a model error or a quota error" as the condition. The
+   fallback is tried once whenever `spec.model` did not answer and its login
+   was not rejected: a recognised model refusal, a recognised quota refusal,
+   an unmatched API error, a non-zero exit with no entry, or the turn's own
+   limit. That is v1's rule (`probe_model`: a credential match tries no
+   fallback, any other failure does). agentd cannot know every wording the
+   CLI uses for a refusal, so recognition names the cause and does not decide
+   the try. An answer is agentd's existing transcript classifier's
+   `Accepted` (a real model name and non-zero usage) from a CLI that exited
+   0; a rejected login is its `Revoked`. Quota and model refusals are named
+   by v1's fragments ("out of usage credits", "usage limit", "rate limit";
+   "unknown model", "invalid model", "not available", "/model to switch"),
+   matched only on an entry the classifier already calls an API error. Not
+   verified against the real CLI.
+4. *A rejected login tries no fallback (ruling (d)),* on either turn: both
+   models use the same static token. Nothing starts.
+5. *One provider process at a time (op791-a-1).* A turn is stopped and
+   waited for before the next turn or the real start is spawned. One that
+   cannot be shown gone starts nothing further, and its cause is no answer.
+   The turn runs `--tools ""`, `--strict-mcp-config`,
+   `--no-session-persistence` and `--max-turns 1`, with no
+   `--dangerously-skip-permissions`, so no tool can run in it.
+6. *The typed record.* agentd reports it in its status and the operator's
+   API copies it into `status.agent.start`: `model`, the model the task
+   started on; `fallbackCause` beside a fallback model, why `spec.model` did
+   not answer; or `failure` when nothing started, the cause of the last model
+   tried (`ModelRefused`, `QuotaRefused`, `LoginRejected`, `NoAnswer`). The
+   API copies only those shapes, only for a summoned task and only with
+   `spec.model` (no cause) or `spec.summon.fallbackModel` (with one);
+   anything else is dropped, not refused, so the heartbeat still counts.
+   Once recorded it never changes; the CRD's rules refuse a change or a
+   removal. The CRD bounds the record's shape but does not bind its model to
+   the spec: a root rule that reads `spec.summon` does not compile against an
+   installed spec schema that predates it
+   (`TestPrivatePilotPreflightRealSchemaAdmission`), so that binding is the
+   API's alone. The session's own pod writes it, and that pod can already end
+   its session with a reported outcome, so a forged start failure gains it
+   no more than that (item 791 comment 7542; for the reviewer to check).
+   Slice 742d raises `static-token-rejected` from `failure: LoginRejected`.
+7. *The close.* The controller sets `Inputs.NoUsableModel` from
+   `status.agent.start.failure` only, never from a message, and
+   `summonoutcome.FirstReason` stays the one table: `no-usable-model` before
+   `agent-failed` (6.6). A failure starts no provider and writes no task
+   result, so the agent reports `failed` and the session closes once, by its
+   `onUnreported`.
+8. *`no-usable-model` pages `failed` for every priority (ruling (e)),* a
+   curation run whose two models both refused for quota included. This
+   slice changes no page table; the typed cause lets a later ruling move the
+   quota case to the digest without a schema change.
+9. *While it runs,* the status reads `busy`, as the start window does
+   before a pid file appears: the run-agent named in
+   `~/.agentd/start-preflight.json` lives and no provider has a pid yet. A
+   restart at any point starts nothing again (5.9's latch): the later boot
+   finds the launch record, and the status reads `interrupted`.
+10. *Usage.* The pre-flight's own usage is not recorded, one short turn a
+    start and two when the fallback is tried. A task that starts on the
+    fallback keeps `spec.model` as its usage source's requested model, since
+    the launch record agentd wrote, and the receipt bound to it, are not
+    changed; the result event's served models name the fallback when the CLI
+    reports them.
+
 ### 6.10 OP745: joinable remote sessions with a verified link
 
 - A summoned `remote` session on profile `ops` is created with the caller's

@@ -97,6 +97,9 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 
 	}
 	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
+	// A summoned task's start record is written once and kept on every later
+	// heartbeat (DESIGN-064 6.9, OP791).
+	sess.Status.Agent.Start = agentStartStatus(&sess, base.Status.Agent, st.Start)
 	// The reporting pod is the caller resolveSession authenticated, never a
 	// field of the body. A caller with no pod leaves it empty.
 	if c.pod != nil {
@@ -230,6 +233,40 @@ func agentStatus(st protocol.Status, now metav1.Time) *v1alpha1.AgentStatus {
 		}
 	}
 	return a
+}
+
+// agentStartStatus is status.agent.start (DESIGN-064 6.9, OP791): how a
+// summoned task's start went after its model pre-flight. The record comes
+// from the session's own pod, so only the fixed set is copied, for a
+// summoned task only: spec.model alone; spec.summon.fallbackModel beside the
+// cause spec.model gave (a refused model, a quota refusal or no answer); or
+// a failure from protocol.StartFailures alone. Anything else is dropped,
+// never refused, as projectBootstrapStatus drops unknown values, so the
+// heartbeat that carries it still counts. Once a record is stored it is
+// kept, whatever a later heartbeat says or omits.
+func agentStartStatus(sess *v1alpha1.AgentSession, stored *v1alpha1.AgentStatus, rec *protocol.StartRecord) *v1alpha1.AgentStartStatus {
+	if stored != nil && stored.Start != nil {
+		kept := *stored.Start
+		return &kept
+	}
+	if rec == nil || sess.Spec.Caller == "" || sess.Spec.Summon == nil || sess.Spec.Mode != v1alpha1.ModeTask {
+		return nil
+	}
+	switch {
+	case rec.Model != "" && rec.Failure == "" && rec.FallbackCause == "":
+		if rec.Model != sess.Spec.Model {
+			return nil
+		}
+		return &v1alpha1.AgentStartStatus{Model: rec.Model}
+	case rec.Model != "" && rec.Failure == "":
+		if rec.Model != sess.Spec.Summon.FallbackModel || rec.FallbackCause == protocol.StartFailureLoginRejected || !protocol.InSet(protocol.StartFailures, rec.FallbackCause) {
+			return nil
+		}
+		return &v1alpha1.AgentStartStatus{Model: rec.Model, FallbackCause: rec.FallbackCause}
+	case rec.Model == "" && rec.FallbackCause == "" && protocol.InSet(protocol.StartFailures, rec.Failure):
+		return &v1alpha1.AgentStartStatus{Failure: rec.Failure}
+	}
+	return nil
 }
 
 // projectBootstrapStatus is status.agent.projectBootstrap from agentd's

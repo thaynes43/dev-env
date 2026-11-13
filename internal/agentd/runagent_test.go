@@ -23,11 +23,18 @@ not json at all
 {"type":"result","subtype":"success","is_error":false,"num_turns":3,"result":"Done.","session_id":"conv-1","total_cost_usd":0.0123,"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":5000,"cache_creation_input_tokens":300}}
 `
 
-// fakeCLI writes a shell script that stands in for the claude CLI.
+// fakeCLI writes a shell script that stands in for the claude CLI. A
+// summoned task's model pre-flight turn (OP791, recognised by its
+// --no-session-persistence flag, which no other launch passes) is answered
+// with an accepted reply before body runs, so body runs only for the real
+// start. The test's environment loses every KUBERNETES_* variable and points
+// KUBECONFIG at a missing file, so the stand-in cannot reach a cluster
+// (item 782 comment 7521).
 func fakeCLI(t *testing.T, dir, body string) string {
 	t.Helper()
+	scrubClusterEnv(t)
 	p := filepath.Join(dir, "fake-claude")
-	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+preflightAnswerSh+body+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return p

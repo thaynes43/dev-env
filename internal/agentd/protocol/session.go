@@ -82,8 +82,14 @@ type Session struct {
 	Prompt string `json:"prompt,omitempty"`
 	// Caller is the CallerPolicy of a summoned session, copied from
 	// spec.caller. Empty for an ordinary session.
-	Caller string  `json:"caller,omitempty"`
-	Limits *Limits `json:"limits,omitempty"`
+	Caller string `json:"caller,omitempty"`
+	// FallbackModel is a summoned session's fallback, a full Claude id,
+	// copied from spec.summon.fallbackModel (DESIGN-064 6.9, OP791). A
+	// summoned task's model pre-flight tries it once when Model did not
+	// answer. Empty for an ordinary session, and for a document an older
+	// operator wrote; an older agentd ignores the key.
+	FallbackModel string  `json:"fallbackModel,omitempty"`
+	Limits        *Limits `json:"limits,omitempty"`
 	// Restore names a rescue on the shared volume, <session>/<name> (D-67).
 	// On the first boot, after the clone, agentd fetches that rescue's bundle
 	// for this repo into refs/rescued/*.
@@ -320,6 +326,14 @@ func (s Session) Validate() error {
 		}
 	default:
 		errs = append(errs, fmt.Errorf("mode %q is not task, local or remote", s.Mode))
+	}
+	if s.FallbackModel != "" {
+		if s.Caller == "" {
+			errs = append(errs, errors.New("fallbackModel is for a summoned session only"))
+		}
+		if err := ValidateClaudeModel(s.FallbackModel); err != nil {
+			errs = append(errs, fmt.Errorf("fallbackModel: %w", err))
+		}
 	}
 	if len(s.Prompt) > MaxPromptBytes {
 		errs = append(errs, fmt.Errorf("prompt is %d bytes, more than %d", len(s.Prompt), MaxPromptBytes))

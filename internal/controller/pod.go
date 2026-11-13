@@ -802,6 +802,12 @@ func sessionDocument(s *v1alpha1.AgentSession, retentionLatch bool) (string, err
 		// The rescue the session restores from (D-67).
 		Restore: s.Spec.Restore,
 	}
+	// A summoned session's fallback model reaches agentd for its task's
+	// model pre-flight (DESIGN-064 6.9, OP791). An ordinary session's
+	// document is unchanged.
+	if s.Spec.Caller != "" && s.Spec.Summon != nil {
+		d.FallbackModel = s.Spec.Summon.FallbackModel
+	}
 	if s.Spec.CommonRules != nil {
 		if projectcanary.IsPilot(s) {
 			if _, err := projectcanary.BoundPilot(s); err != nil {

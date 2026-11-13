@@ -1413,6 +1413,51 @@ type AgentStatus struct {
 	// reason codes, never a path, an object id or detail text.
 	// +optional
 	ProjectBootstrap *ProjectBootstrapStatus `json:"projectBootstrap,omitempty"`
+
+	// Start is how a summoned task's start went after its model pre-flight
+	// (DESIGN-064 6.9, OP791): the model it started on, or why no model was
+	// usable. The API copies it from the session's own heartbeat once, for a
+	// summoned task only and only with spec.model or
+	// spec.summon.fallbackModel, and keeps it on every later heartbeat; it
+	// never changes once recorded. The schema bounds its shape and refuses a
+	// change; the binding to spec is the API's, since a root rule that reads
+	// spec.summon does not compile against an installed spec schema that
+	// predates it (TestPrivatePilotPreflightRealSchemaAdmission).
+	// +optional
+	Start *AgentStartStatus `json:"start,omitempty"`
+}
+
+// AgentStartStatus is a summoned task's start after its model pre-flight
+// (DESIGN-064 6.9, OP791). Exactly one field is set. The operator closes a
+// session whose record names a failure with reason no-usable-model.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.model) != has(self.failure)",message="a start record names either the model the task started on or why no model was usable"
+// +kubebuilder:validation:XValidation:rule="!has(self.fallbackCause) || has(self.model)",message="a fallback's cause goes only beside the model the task started on"
+type AgentStartStatus struct {
+	// Model is the full model id the task started on: spec.model, or
+	// spec.summon.fallbackModel when spec.model did not answer.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^\S+$`
+	// +optional
+	Model string `json:"model,omitempty"`
+
+	// FallbackCause is set only beside a model that is
+	// spec.summon.fallbackModel: why spec.model did not answer. A rejected
+	// login tries no fallback, so it is never a fallback's cause.
+	// +kubebuilder:validation:Enum=ModelRefused;QuotaRefused;NoAnswer
+	// +kubebuilder:validation:MaxLength=32
+	// +optional
+	FallbackCause string `json:"fallbackCause,omitempty"`
+
+	// Failure is why nothing started, the cause of the last model tried: a
+	// refused model, a quota refusal, a rejected login (the fallback is not
+	// tried) or no answer in time. A start the start deadline refused is not
+	// recorded here.
+	// +kubebuilder:validation:Enum=ModelRefused;QuotaRefused;LoginRejected;NoAnswer
+	// +kubebuilder:validation:MaxLength=32
+	// +optional
+	Failure string `json:"failure,omitempty"`
 }
 
 // ProjectBootstrapStatus is a private catalog bootstrap's outcome. The API
@@ -2100,6 +2145,7 @@ type RescuedRef struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.usageObservation) || (has(self.status) && has(self.status.usageObservation))",message="original usage observation cannot be erased"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.taskOutcome) || (has(self.status) && has(self.status.taskOutcome))",message="original task outcome cannot be erased"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.summon) || (has(self.status) && has(self.status.summon))",message="the summon record cannot be removed, including with status"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.agent) || !has(oldSelf.status.agent.start) || (has(self.status) && has(self.status.agent) && has(self.status.agent.start) && self.status.agent.start == oldSelf.status.agent.start)",message="a summoned task's start record never changes once recorded"
 type AgentSession struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

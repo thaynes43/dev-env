@@ -166,6 +166,9 @@ var agentdLayout = []historyRule{
 	// The tmux handoff of a summoned session's first launch (OP780 fix round
 	// 3): written before tmux is asked, then how far that start got.
 	{"start-handoff.json", classHistory, kindFile},
+	// A summoned task's model pre-flight (OP791): the model it started on,
+	// or why no model was usable and nothing started.
+	{"start-preflight.json", classHistory, kindFile},
 	{"task-events.jsonl", classHistory, kindFile},
 	{"task-source.json", classHistory, kindFile},
 	{"child-decision.json", classHistory, kindFile},

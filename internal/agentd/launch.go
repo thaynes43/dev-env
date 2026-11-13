@@ -107,6 +107,12 @@ type Launch struct {
 	// it, starts nothing. Absent, as in every ordinary launch and every
 	// record an older agentd wrote, run-agent spawns as before.
 	StartDeadline string `json:"startDeadline,omitempty"`
+	// Preflight is set by BuildLaunch only on a summoned Claude task's first
+	// launch (DESIGN-064 6.9, OP791): run-agent runs one short turn on its
+	// model, then on its fallback when the model did not answer, before the
+	// provider starts. Absent, as in every ordinary launch, every TUI and
+	// every record an older agentd wrote, run-agent starts as before.
+	Preflight *launchPreflight `json:"preflight,omitempty"`
 }
 
 // ErrNotInPlan01 marks a session kind that a later plan builds.
@@ -212,6 +218,12 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 	// deadline bounds the launch record alone (DESIGN-054).
 	if sess.Caller != "" {
 		l.StartDeadline = s.StartDeadline
+	}
+	// A summoned task checks its model before it starts and falls back once
+	// (DESIGN-064 6.9, OP791). A remote session's TUI gets no pre-flight in
+	// this slice (743d); no ordinary session ever gets one.
+	if sess.Caller != "" && sess.Mode == protocol.ModeTask && sess.Agent == protocol.AgentClaude && !l.TUI {
+		l.Preflight = &launchPreflight{Model: sess.Model, Fallback: sess.FallbackModel}
 	}
 	return l, nil
 }
