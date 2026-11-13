@@ -42,9 +42,10 @@ const (
 	// startRefusedFile records run-agent's refusal to spawn a summoned
 	// session's provider past its start deadline (DESIGN-064 5.9, N2).
 	startRefusedFile = "start-refused.json"
-	// startFailedFile records that the tmux start of a summoned session's
-	// first launch returned an error (DESIGN-064 5.9, OP780 fix round 2).
-	startFailedFile = "start-failed.json"
+	// startHandoffFile records the tmux handoff of a summoned session's
+	// first launch: written before tmux is asked, updated when it answers
+	// (DESIGN-064 5.9, OP780 fix round 3).
+	startHandoffFile = "start-handoff.json"
 )
 
 // Launch is everything `agentd run-agent` needs to run the agent: agentd
@@ -437,38 +438,60 @@ func StartAgent(ctx context.Context, r Runner, s Settings, l Launch, self string
 	return startLaunch(ctx, r, s, l, self, false)
 }
 
-// startFailed is ~/.agentd/start-failed.json: the tmux start of the summoned
-// session's first launch it names returned an error (DESIGN-064 5.9, OP780
-// fix round 2, coordinator rulings in PR 1100 comment 6839380816). The launch
-// record stays, so no boot starts the session again. MayHaveStarted says
-// what the status reports: false only when nothing of this launch can have
-// started (tmux was never asked to start it, or the tmux client itself could
-// not be run), and the launch failed; true for any other error, since the
-// tmux server may have started run-agent and so the provider, and the launch
-// was interrupted. Reason names the error without tmux's output.
-type startFailed struct {
-	MayHaveStarted bool      `json:"mayHaveStarted"`
-	Reason         string    `json:"reason"`
+// startHandoff is ~/.agentd/start-handoff.json: how far the tmux start of
+// the summoned session's first launch it names got (DESIGN-064 5.9, story
+// 780 fix round 3, coordinator rulings in PR 1100 comment 6840263445).
+// agentd writes it durably, state handoffAsked, before it asks tmux anything,
+// and calls no tmux when that write fails. When tmux answers, agentd updates
+// it to handoffStarted, handoffNothingStarted or handoffAmbiguous; a failed
+// update leaves handoffAsked. The launch record always stays, so no boot
+// starts the session again (summonedLaunched). The status follows this
+// record (summonedRunState). Reason names the error without tmux's output.
+type startHandoff struct {
+	State          string    `json:"state"`
+	Reason         string    `json:"reason,omitempty"`
 	At             time.Time `json:"at"`
 	ConversationID string    `json:"conversationId"`
 	BootID         string    `json:"bootId"`
 }
 
-// tmuxNeverRan reports whether err proves the tmux client never ran: it could
-// not be found or executed, so it sent the server nothing. Any other error (a
-// non-zero exit, a signal, a time limit, a lost answer) leaves open that the
-// server created the session and started its pane.
+// The states of a startHandoff.
+const (
+	// handoffAsked: tmux may be starting the launch, and its answer is not
+	// recorded.
+	handoffAsked = "asked"
+	// handoffStarted: tmux started the session that runs run-agent.
+	handoffStarted = "started"
+	// handoffNothingStarted: nothing of this launch can have started. tmux
+	// was never asked (its session already existed), or the tmux client
+	// itself could not be run (tmuxNeverRan).
+	handoffNothingStarted = "nothing-started"
+	// handoffAmbiguous: tmux returned another error, so its server may have
+	// started run-agent and so the provider.
+	handoffAmbiguous = "ambiguous"
+)
+
+// tmuxNeverRan reports whether err proves the tmux client never ran, so it
+// sent its server nothing: it could not be found (*exec.Error), or the
+// fork/exec that would start it failed (story 780 fix round 3, R2-F1b). Any
+// other error, another path error included (Run also waits and copies the
+// client's output), leaves open that the server created the session and
+// started its pane.
 func tmuxNeverRan(err error) bool {
 	var execErr *exec.Error
+	if errors.As(err, &execErr) {
+		return true
+	}
 	var pathErr *fs.PathError
-	return errors.As(err, &execErr) || errors.As(err, &pathErr)
+	return errors.As(err, &pathErr) && pathErr.Op == "fork/exec"
 }
 
 // startLaunch is StartAgent. summoned is set only for a summoned session's
 // first launch (spec.caller, DESIGN-064 5.9): its provider starts once, so a
-// failed start never removes its launch record, and start-failed.json says
-// whether anything can have started. Every other launch keeps today's
-// behaviour, the removal and so the retry on a later boot included.
+// failed start never removes its launch record, and start-handoff.json,
+// written before tmux is asked, says how far the start got. Every other
+// launch writes no handoff record and keeps today's behaviour, the removal
+// and so the retry on a later boot included.
 func startLaunch(ctx context.Context, r Runner, s Settings, l Launch, self string, summoned bool) error {
 	file := launchFile
 	if l.Resume {
@@ -495,11 +518,18 @@ func startLaunch(ctx context.Context, r Runner, s Settings, l Launch, self strin
 	if writeErr != nil {
 		return writeErr
 	}
+	if summoned {
+		// The evidence of the handoff exists before tmux is asked. Without
+		// it, tmux is not asked: nothing starts, and the launch record stays.
+		if err := writeStartHandoff(s, l, handoffAsked, ""); err != nil {
+			return fmt.Errorf("the summoned launch's handoff record could not be written, so tmux was not asked to start it: %w", err)
+		}
+	}
 	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"has-session", "-t", "=" + TmuxSession}}); err == nil {
 		exists := fmt.Errorf("tmux session %q already exists", TmuxSession)
 		if summoned {
 			// tmux was never asked to start this launch: nothing started.
-			recordStartFailed(s, l, false, exists.Error())
+			_ = writeStartHandoff(s, l, handoffNothingStarted, exists.Error())
 		}
 		return exists
 	}
@@ -510,11 +540,16 @@ func startLaunch(ctx context.Context, r Runner, s Settings, l Launch, self strin
 	if err != nil {
 		switch {
 		case summoned:
-			// DESIGN-064 5.9 (OP780 fix round 2): the tmux server may have
-			// started run-agent despite the error, and a summoned session's
-			// provider starts once. Its launch record stays, so no later
-			// boot starts it again (summonedLaunched).
-			recordStartFailed(s, l, !tmuxNeverRan(err), err.Error())
+			// DESIGN-064 5.9 (OP780 fix rounds 2 and 3): the tmux server may
+			// have started run-agent despite the error, and a summoned
+			// session's provider starts once. Its launch record stays, so no
+			// later boot starts it again (summonedLaunched). A failed update
+			// leaves the record at handoffAsked.
+			state := handoffAmbiguous
+			if tmuxNeverRan(err) {
+				state = handoffNothingStarted
+			}
+			_ = writeStartHandoff(s, l, state, err.Error())
 		case l.Provider != protocol.AgentCodex:
 			// Legacy starts retain their existing retry behavior. A native
 			// Codex start may have succeeded despite an ambiguous tmux
@@ -524,14 +559,18 @@ func startLaunch(ctx context.Context, r Runner, s Settings, l Launch, self strin
 		}
 		return fmt.Errorf("tmux: %s", cmdDetail(err))
 	}
+	if summoned {
+		// A failed update leaves the record at handoffAsked.
+		_ = writeStartHandoff(s, l, handoffStarted, "")
+	}
 	return nil
 }
 
-// recordStartFailed writes start-failed.json for l. It is best effort: the
-// launch record already stays, so a failed write starts nothing twice; the
-// status then reads the launch record alone.
-func recordStartFailed(s Settings, l Launch, mayHaveStarted bool, reason string) {
-	_ = writeJSONFile(s.statePath(startFailedFile), startFailed{MayHaveStarted: mayHaveStarted, Reason: reason, At: time.Now().UTC(), ConversationID: l.ConversationID, BootID: l.BootID})
+// writeStartHandoff durably writes start-handoff.json for l: the file and its
+// directory are synced before it returns, and a non-regular file in its place
+// is refused, not replaced.
+func writeStartHandoff(s Settings, l Launch, state, reason string) error {
+	return writeWorkspaceJSON(s.statePath(startHandoffFile), startHandoff{State: state, Reason: reason, At: time.Now().UTC(), ConversationID: l.ConversationID, BootID: l.BootID})
 }
 
 // newUUID is a random (version 4) UUID, the form `claude --session-id` wants.

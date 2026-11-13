@@ -1170,29 +1170,11 @@ from the correction above or from 6.6's corrections, this governs.
 1. *A summoned launch's record is never deleted (F1).* When the tmux start
    of a summoned session's first launch returns an error, `launch.json`
    stays, whether or not the provider may have started, so no later boot
-   starts anything (item 3 above). agentd writes `~/.agentd/start-failed.json`
-   for that launch, and the status says how the launch ended. It is never a
-   state the operator counts as running (`busy`, `idle`, `waiting`),
-   whatever the pid file or the start window says:
-   - `failed` when nothing of this launch can have started: tmux was never
-     asked (its session already existed), or the tmux client could not be
-     found or executed, so it sent its server nothing; and when run-agent's
-     start fence refused the spawn (`start-refused.json` for that launch).
-     The session closes `agent-failed`.
-   - `interrupted` for any other error (a non-zero exit, a signal, a time
-     limit, no answer): the tmux server may have started run-agent and so
-     the provider. The session closes `agent-interrupted`, and for a task
-     the stop of item 2 ends a provider that did start. A task result the
-     provider wrote still reaches the operator in `status.agent.task`, the
-     close table's first row.
-
-   The evidence that decides is the error tmux returned, read when it
-   returns, and the fence's own record. agentd infers neither a start nor
-   its absence from a pid file, a log or the time. If `start-failed.json`
-   cannot be written, the launch record still stays and the status reads
-   the record alone, as for any summoned launch (item 3). An ordinary launch
-   keeps its removal, and so its retry on a later boot; a native Codex
-   launch keeps its own record, as before.
+   starts anything (item 3 above). An ordinary launch keeps its removal, and
+   so its retry on a later boot; a native Codex launch keeps its own record,
+   as before. How the status reads such a launch is fix round 3's correction
+   below, which replaces this item's first rule (a failure record written
+   after tmux answered, and a status that was never running).
 2. *The stop outlives the release (F2).* The private executor stop is due
    for a summoned task that is admitted, closed by the operator
    (`closed.source` `unreported`), suspended and not being deleted, whether
@@ -1215,6 +1197,47 @@ from the correction above or from 6.6's corrections, this governs.
    close. The pod itself can outlive the release: the stop of item 2 ends a
    task's pod once it can, and a pod that never starts is 6.6's stated
    limit.
+
+**Correction, 2026-11-13: story 780 fix round 3, coordinator rulings in PR
+1100 comment 6840263445; not a ruling by Tom.** They answer the
+second-model-family re-check in PR 1100 comment 6840179200. Where this
+differs from fix round 2's correction, this governs.
+
+1. *The handoff record is written before tmux is asked (R2-F1a).* For a
+   summoned session's first launch, after `launch.json`, agentd durably
+   writes `~/.agentd/start-handoff.json` (the file and its directory synced)
+   naming that launch, its conversation and boot, with state `asked`, and
+   only then asks tmux anything. If that write fails, tmux is not asked:
+   nothing starts, `launch.json` stays, and the start fails. When tmux
+   answers, agentd updates the record: `started` when tmux started its
+   session; `nothing-started` when tmux was never asked to start the launch
+   (its session already existed) or the error proves its client never ran
+   (item 2); `ambiguous` for any other error. If the update fails, the
+   record still says `asked`. An ordinary launch writes no handoff record
+   and keeps today's path.
+
+   The status of a summoned launch follows that record, never the boot's
+   agent error or the start window of a later boot:
+
+   | Handoff record | Status | Close |
+   |---|---|---|
+   | `nothing-started`, or the start fence refused this launch's spawn | `failed` | `agent-failed` |
+   | `started` | as for any launch: `busy` while it runs, `exited` with a task result or the TUI's own exit record, otherwise `interrupted`; only the launch's own boot counts the start window | by the state it reads |
+   | `asked` or `ambiguous` | `busy` while a process lives, and inside the start window of the launch's own boot; `interrupted` after that window, and at once on a later boot. Never `failed` or `exited` | `agent-interrupted`; a task result in `status.agent.task` is the close table's first row |
+   | missing, unreadable or truncated, of another launch, or an unknown state | as `asked` | as `asked` |
+
+   No record at all is a launch record written by fix round 2's code or an
+   older agentd, or by a boot that ended between the two writes. So a
+   failed first write fails the start and closes the session
+   `agent-interrupted`, not `agent-failed`: the conservative side
+   (coordinator answer to question op780-fix3-q-1). A later boot never
+   reports `busy` for a launch with no live process, and a failed write can
+   no longer turn a launch that may have started into `failed`.
+2. *Only two errors prove that tmux never ran (R2-F1b):* a lookup failure
+   (`*exec.Error`) and a path error whose operation is `fork/exec`. Any
+   other error, another path error included (the runner also waits for the
+   client and copies its output), may have started the provider, so it is
+   `ambiguous`.
 
 ## 6. Contracts per build story
 
