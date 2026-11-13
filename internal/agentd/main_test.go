@@ -3,7 +3,9 @@ package agentd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -21,13 +23,33 @@ echo "agentd test guard: this is not the real claude; a test must start a fake C
 exit 97
 `
 
+// realClaudeGuardPrefix names the guard's directory.
+const realClaudeGuardPrefix = "agentd-claude-guard-"
+
+// TestMain makes the guard only in the top-level test process. Some tests
+// start this test binary again as a child (cursor_scaffold_test.go), which
+// may exit or be killed before it could remove a guard of its own. A child
+// that inherited the environment finds the guard first on PATH and reuses
+// it; one started with no PATH cannot reach any claude by name and needs
+// none.
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "agentd-claude-guard-")
+	path := os.Getenv("PATH")
+	first, _, _ := strings.Cut(path, string(os.PathListSeparator))
+	switch {
+	case path == "":
+		os.Exit(m.Run())
+	case strings.HasPrefix(filepath.Base(first), realClaudeGuardPrefix):
+		if raw, err := os.ReadFile(filepath.Join(first, "claude")); err == nil && string(raw) == realClaudeGuardScript {
+			realClaudeGuard = first
+			os.Exit(m.Run())
+		}
+	}
+	dir, err := os.MkdirTemp("", realClaudeGuardPrefix)
 	if err == nil {
 		err = os.WriteFile(filepath.Join(dir, "claude"), []byte(realClaudeGuardScript), 0o755)
 	}
 	if err == nil {
-		err = os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		err = os.Setenv("PATH", dir+string(os.PathListSeparator)+path)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agentd tests: the claude guard could not be put on PATH: %v\n", err)
@@ -37,4 +59,45 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// guardProbeEnv makes TestGuardProbeChild exit at once, as a re-executed
+// child that is killed or calls os.Exit does, before TestMain could remove
+// a guard of its own.
+const guardProbeEnv = "AGENTD_TEST_GUARD_PROBE"
+
+func TestGuardProbeChild(t *testing.T) {
+	if os.Getenv(guardProbeEnv) == "1" {
+		os.Exit(0)
+	}
+}
+
+// A re-executed child of this test binary leaves no guard directory behind,
+// whether it inherited the environment (and so the guard on PATH) or was
+// started with a cleared one.
+func TestReexecutedChildLeavesNoGuard(t *testing.T) {
+	scrubClusterEnv(t)
+	bin, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	guards := func() []string {
+		found, _ := filepath.Glob(filepath.Join(os.TempDir(), realClaudeGuardPrefix+"*"))
+		more, _ := filepath.Glob(filepath.Join("/tmp", realClaudeGuardPrefix+"*"))
+		return append(found, more...)
+	}
+	before := strings.Join(guards(), "\n")
+	for name, env := range map[string][]string{
+		"inherited": append(os.Environ(), guardProbeEnv+"=1"),
+		"cleared":   {guardProbeEnv + "=1"},
+	} {
+		cmd := exec.Command(bin, "-test.run=^TestGuardProbeChild$")
+		cmd.Env = env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s child: %v %s", name, err, out)
+		}
+		if after := strings.Join(guards(), "\n"); after != before {
+			t.Fatalf("a child with the %s environment left a guard directory:\nbefore %q\nafter  %q", name, before, after)
+		}
+	}
 }
