@@ -160,7 +160,7 @@ ARG CNPG_PLUGIN_VERSION=1.30.1
 # build (the changelog has no 2.1.320 or 2.1.321 entries yet). The usage collector's
 # exact-version set does not include it: see docs/operator-allowance-collector.md.
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_CODE_VERSION=2.1.321
+ARG CLAUDE_CODE_VERSION=2.1.325
 # Codex is the managed STANDALONE, not the npm package — only the standalone can run
 # `codex remote-control`. v1 installed it at boot onto the PVC (dev-init.sh); here the
 # image installs it, under /opt/dev-env/codex (never under CODEX_HOME, which is the
