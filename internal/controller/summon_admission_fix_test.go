@@ -24,6 +24,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/summonledger"
 	"github.com/thaynes43/dev-env/internal/summonoutcome"
+	"github.com/thaynes43/dev-env/internal/summonquota"
 )
 
 // Spell out the on-disk contract so these regressions also run on the
@@ -246,7 +247,7 @@ func TestSummonGrantRecoveryAndCleanup(t *testing.T) {
 	putTestGrants(t, w.base, grant)
 	// A granted session is completed even if policy/quota now deny it. It
 	// already owns capacity; redeciding could hand that capacity to B.
-	w.r.SummonQuota = func(*v1alpha1.AgentSession) bool { return false }
+	w.r.SummonQuota = func(context.Context, *v1alpha1.AgentSession) summonquota.Decision { return summonquota.Decision{} }
 	w.pass()
 	w.wantAdmitted("complete existing grant", map[string]bool{a.Name: true, b.Name: false})
 	if !w.get(a.Name).Status.Summon.AdmittedAt.Time.Equal(grant.At) {
@@ -662,7 +663,7 @@ func TestSummonAdmissionSnapshotOrdering(t *testing.T) {
 			if boundary == "after-ledger" {
 				// No earlier grant CAS may mask the stale charge decision by
 				// conflicting first. A legitimate quota hold leaves only B.
-				w.r.SummonQuota = func(*v1alpha1.AgentSession) bool { return false }
+				w.r.SummonQuota = func(context.Context, *v1alpha1.AgentSession) summonquota.Decision { return summonquota.Decision{} }
 			}
 			fired := false
 			inject := func() {

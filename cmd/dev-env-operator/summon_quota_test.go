@@ -3,7 +3,8 @@ package main
 // The operator-side proofs of story 783 (slice a of item 743; DESIGN-064 6.9):
 // the four flags have no code defaults and refuse to start on a bad value;
 // with every line unset no gate is built and nothing is read; the gate reads
-// the session allowance store at most once per 30 seconds, through a bounded
+// the session allowance store at most once per admission pass (story 790's
+// exact bound, which replaced slice a's 30-second reuse), through a bounded
 // read that admits on a timeout; and in a real admission pass on a fake API
 // server only sessions with spec.caller reach the gate.
 
@@ -198,8 +199,8 @@ func (l *quotaLogs) logger() logr.Logger {
 }
 
 // The hook reads the real SessionAllowanceStore once for several sessions
-// at one time, and decides by it: bulk at 81 % of the 5-hour window waits,
-// normal at 81 % starts.
+// in one pass, and decides by it: bulk at 81 % of the 5-hour window waits,
+// normal at 81 % starts. The next pass reads again, a second later.
 func TestSummonQuotaHookReadsTheStoreOnce(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(quotaScheme(t)).WithObjects(allowanceConfigMap(t, "81", "90")).Build()
 	spy := &countingReader{Reader: c}
@@ -209,28 +210,29 @@ func TestSummonQuotaHookReadsTheStoreOnce(t *testing.T) {
 	if hook == nil {
 		t.Fatal("no hook with the install lines")
 	}
-	if hook(quotaSession("bulk-a", v1alpha1.SummonPriorityBulk)) || hook(quotaSession("bulk-b", v1alpha1.SummonPriorityBulk)) {
+	pass := summonquota.WithPass(context.Background())
+	if hook(pass, quotaSession("bulk-a", v1alpha1.SummonPriorityBulk)).Admit || hook(pass, quotaSession("bulk-b", v1alpha1.SummonPriorityBulk)).Admit {
 		t.Error("bulk at 81 % of the 5-hour window, line 80, admitted")
 	}
-	if !hook(quotaSession("normal-a", v1alpha1.SummonPriorityNormal)) || !hook(quotaSession("urgent-a", v1alpha1.SummonPriorityUrgent)) {
+	if !hook(pass, quotaSession("normal-a", v1alpha1.SummonPriorityNormal)).Admit || !hook(pass, quotaSession("urgent-a", v1alpha1.SummonPriorityUrgent)).Admit {
 		t.Error("normal at 81 % or urgent held")
 	}
 	if spy.gets != 1 {
-		t.Fatalf("%d store reads for four sessions at one time, want 1", spy.gets)
+		t.Fatalf("%d store reads for four sessions in one pass, want 1", spy.gets)
 	}
 	if len(logs.lines) != 3 || !strings.Contains(logs.lines[0], `"fiveHourUsed"="81"`) || !strings.Contains(logs.lines[0], `"sevenDayUsed"="90"`) || !strings.Contains(logs.lines[0], `"readingAge"="2m0s"`) {
 		t.Fatalf("logs %q", logs.lines)
 	}
-	now = now.Add(summonquota.DefaultReuse)
-	hook(quotaSession("bulk-a", v1alpha1.SummonPriorityBulk))
+	now = now.Add(time.Second)
+	hook(summonquota.WithPass(context.Background()), quotaSession("bulk-a", v1alpha1.SummonPriorityBulk))
 	if spy.gets != 2 {
-		t.Fatalf("30 s later: %d store reads, want 2", spy.gets)
+		t.Fatalf("the next pass, a second later: %d store reads, want 2", spy.gets)
 	}
 	// A store with no ConfigMap is no reading: admitted, and it says so.
 	empty := &countingReader{Reader: fake.NewClientBuilder().WithScheme(quotaScheme(t)).Build()}
 	logs.lines = nil
 	hook = summonQuotaHook(summonquota.Lines{BulkFiveHour: 80, MaxAge: 15 * time.Minute}, empty, logs.logger(), func() time.Time { return now })
-	if !hook(quotaSession("bulk-a", v1alpha1.SummonPriorityBulk)) || empty.gets != 1 || !strings.Contains(logs.lines[0], `"reason"="no-reading"`) {
+	if !hook(context.Background(), quotaSession("bulk-a", v1alpha1.SummonPriorityBulk)).Admit || empty.gets != 1 || !strings.Contains(logs.lines[0], `"reason"="no-reading"`) {
 		t.Fatalf("no ConfigMap: %d reads, logs %q", empty.gets, logs.lines)
 	}
 }
@@ -242,7 +244,7 @@ func TestSummonQuotaHookTimeoutAdmits(t *testing.T) {
 	logs := &quotaLogs{}
 	gate := summonQuotaGate(summonquota.Lines{BulkFiveHour: 80, MaxAge: 15 * time.Minute}, spy, logs.logger(), func() time.Time { return quotaT0 })
 	gate.ReadTimeout = 20 * time.Millisecond
-	if !gate.Admits(quotaSession("bulk-a", v1alpha1.SummonPriorityBulk)) || spy.gets != 1 || !strings.Contains(logs.lines[0], `"reason"="read-timeout"`) {
+	if !gate.DecideSession(context.Background(), quotaSession("bulk-a", v1alpha1.SummonPriorityBulk)).Admit || spy.gets != 1 || !strings.Contains(logs.lines[0], `"reason"="read-timeout"`) {
 		t.Fatalf("%d reads, logs %q", spy.gets, logs.lines)
 	}
 	// main.go leaves ReadTimeout zero: the gate's 5-second default.
@@ -313,9 +315,9 @@ func newQuotaPass(t *testing.T, used string) *quotaPass {
 	w.r = &controller.Reconciler{Client: w.c, APIReader: w.c, SessionNamespace: "dev-agents", SummonedLanes: true,
 		PrivateHistoryRetention: true, PrivateTerminalRecord: true, PrivateExecutorStop: true, TerminalTaskPodReclaim: true,
 		Now: clock,
-		SummonQuota: func(s *v1alpha1.AgentSession) bool {
+		SummonQuota: func(ctx context.Context, s *v1alpha1.AgentSession) summonquota.Decision {
 			w.seen = append(w.seen, s.Name)
-			return hook(s)
+			return hook(ctx, s)
 		}}
 	return w
 }
@@ -379,8 +381,9 @@ func TestSummonQuotaInTheAdmissionPass(t *testing.T) {
 
 // The review's gap: a session held on a high reading is admitted on a later
 // pass once a lower reading is read. The first pass holds all three at 81 %;
-// a new reading at 80 % lands; 30 seconds later the next pass reads it and
-// admits the oldest.
+// a new reading at 80 % lands; a second later the next pass reads it and
+// admits the oldest (slice a's 30-second reuse would have answered it from
+// the first read).
 func TestSummonQuotaHeldSessionAdmittedOnALaterPass(t *testing.T) {
 	w := newQuotaPass(t, "81")
 	if err := w.r.SummonAdmissionPass(context.Background()); err != nil {
@@ -399,13 +402,13 @@ func TestSummonQuotaHeldSessionAdmittedOnALaterPass(t *testing.T) {
 	if err := w.c.Update(context.Background(), &cm); err != nil {
 		t.Fatal(err)
 	}
-	w.now = quotaT0.Add(summonquota.DefaultReuse)
+	w.now = quotaT0.Add(time.Second)
 	w.seen = nil
 	if err := w.r.SummonAdmissionPass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if w.spy.gets != 2 {
-		t.Errorf("%d store reads in two passes 30 s apart, want 2", w.spy.gets)
+		t.Errorf("%d store reads in two passes a second apart, want 2", w.spy.gets)
 	}
 	admitted, cond := w.session(t, "curate-1")
 	if !admitted || cond == nil || cond.Status != metav1.ConditionTrue {
@@ -428,11 +431,11 @@ func TestSummonQuotaClockRolledBackBehindAStoredReadingAdmits(t *testing.T) {
 	now := quotaT0
 	logs := &quotaLogs{}
 	hook := summonQuotaHook(summonquota.Lines{BulkFiveHour: 80, MaxAge: 15 * time.Minute}, spy, logs.logger(), func() time.Time { return now })
-	if hook(quotaSession("bulk-a", v1alpha1.SummonPriorityBulk)) {
+	if hook(context.Background(), quotaSession("bulk-a", v1alpha1.SummonPriorityBulk)).Admit {
 		t.Fatal("bulk at 99 %, line 80, admitted before the clock went back")
 	}
 	now = quotaT0.Add(-time.Hour)
-	if !hook(quotaSession("bulk-b", v1alpha1.SummonPriorityBulk)) {
+	if !hook(context.Background(), quotaSession("bulk-b", v1alpha1.SummonPriorityBulk)).Admit {
 		t.Fatal("the clock went back an hour behind a 99 % reading and the session was held")
 	}
 	if spy.gets != 2 {
