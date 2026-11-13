@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -25,6 +26,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -65,6 +67,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/standby"
+	"github.com/thaynes43/dev-env/internal/summonquota"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/templates"
@@ -160,6 +163,7 @@ type options struct {
 	codexHostHandsOff            string
 	summonCreateKinds            []v1alpha1.SummonKind
 	summonedLanes                bool
+	summonQuota                  summonquota.Lines
 	coordinatorEnabled           bool
 	portalReaderEnabled          bool
 	portalConversationUsage      bool
@@ -264,6 +268,12 @@ func parseFlags(args []string) (options, error) {
 		return nil
 	})
 	summonKinds := fs.String("summon-create-kinds", "", "comma-separated session kinds, task and remote, a summoning caller may create (DESIGN-064 5.9, the correction of 2026-11-12); empty, the default, refuses every summoning create with 403 after the request's own checks and before anything is read back, charged or created (the agentd transport bound is checked before it, so a request that fails that bound gets its own 422 whatever this says; OP778); task is named only once story 741 is installed, remote only once stories 741 and 745 are installed and the pinned agent image accepts a summoned remote session; the front door's and every other caller's creates are not affected")
+	// Story 783 (DESIGN-064 6.9, slice a of item 743): the quota gate's lines.
+	// No code defaults (ruling Q12 on item 743 comment 7458): empty is off.
+	quotaNormal := fs.String("summon-normal-max-five-hour", "", "the quota gate's line for a normal summoned session (an upgrade): the operator leader holds it Queued while the plan's 5-hour usage window is past this percentage, a whole number from 1 to 100 (DESIGN-064 6.9, OP783); empty, the default, is off; needs --summon-usage-max-age; an urgent session (an escalation or a remediation) and every session without spec.caller are never gated, and a stale, missing or unreadable reading admits")
+	quotaBulk := fs.String("summon-bulk-max-five-hour", "", "the quota gate's 5-hour line for a bulk summoned session (curation): held Queued while the plan's 5-hour usage window is past this percentage, a whole number from 1 to 100 (DESIGN-064 6.9, OP783); empty, the default, is off; needs --summon-usage-max-age")
+	quotaWeekly := fs.String("summon-bulk-max-seven-day", "", "the quota gate's weekly line for a bulk summoned session (curation): held Queued while the plan's 7-day usage window is past this percentage, a whole number from 1 to 100 (DESIGN-064 6.9, C8, OP783); empty, the default, is off and the weekly window is not consulted; needs --summon-usage-max-age")
+	fs.DurationVar(&o.summonQuota.MaxAge, "summon-usage-max-age", 0, "how old the newest session allowance reading may be before the quota gate treats it as stale and admits (DESIGN-064 6.9, C8, OP783); zero, the default, is unset, and any quota line then refuses to start; it changes nothing while every line is off")
 	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
 	fs.BoolVar(&o.scheduledWork.enabled, "enable-scheduled-work", false, "run the leader-only scheduled-work executor (DESIGN-054 S3b): it claims each due ScheduledWork occurrence with a compare-and-set and creates its session through the API's creation path under a derived name; default off; needs the API and leader election. Each occurrence dispatches only on a basis checked at its due time (a human owner, a live session owner or a human approval) that its dispatch template admits; the templates are the ConfigMap dev-env-scheduled-work in the operator's namespace, and without it, or without such a basis, the occurrence parks and nothing dispatches")
 	fs.BoolVar(&o.scheduledWork.apiEnabled, "enable-scheduled-work-api", false, "serve /v1/scheduled-work (DESIGN-054 S5b): create, list, show, edit, cancel, approve and retry scheduled agent work, for agent-run schedule; default off, and every route answers 404 while off; needs the API (--api-bind-address), the ScheduledWork CRD installed and a reviewed Role on it, and get on the CRD and on the ConfigMap dev-env-scheduled-work for approve. It only records and decides items: nothing dispatches unless --enable-scheduled-work is also on")
@@ -456,6 +466,9 @@ func parseFlags(args []string) (options, error) {
 		return o, err
 	}
 	if o.summonCreateKinds, err = parseSummonCreateKinds(*summonKinds); err != nil {
+		return o, err
+	}
+	if o.summonQuota, err = parseSummonQuota(*quotaNormal, *quotaBulk, *quotaWeekly, o.summonQuota.MaxAge); err != nil {
 		return o, err
 	}
 	o.reservedDecisionClasses, err = grantattest.ParseReservedClasses(*reservedClasses)
@@ -989,6 +1002,13 @@ func run(args []string) error {
 	r.RescueVerifier = &shelf.RescueVerifier{Shelf: rescueShelf, Slots: shelfSlots}
 	r.TaskCleanupCounters = taskCleanupCounters
 	r.APIReader = mgr.GetAPIReader()
+	// The quota gate (story 783): nil with every line unset, so the seam
+	// admits as before and nothing is read.
+	r.SummonQuota = summonQuotaHook(o.summonQuota, mgr.GetAPIReader(), ctrl.Log.WithName("summoned-quota"), nil)
+	if r.SummonQuota != nil {
+		log.Info("summoned quota gate on", "normalMaxFiveHour", o.summonQuota.NormalFiveHour, "bulkMaxFiveHour", o.summonQuota.BulkFiveHour,
+			"bulkMaxSevenDay", o.summonQuota.BulkSevenDay, "usageMaxAge", o.summonQuota.MaxAge.String())
+	}
 	r.Rescuer = rescuer
 	r.WorkspaceStopper = rescuer
 	r.Recorder = mgr.GetEventRecorder(binaryName)
@@ -1522,4 +1542,70 @@ func summonCreateKindsValue(kinds []v1alpha1.SummonKind) string {
 		parts[i] = string(k)
 	}
 	return strings.Join(parts, ",")
+}
+
+// parseSummonQuota reads the quota gate's flags (story 783, DESIGN-064 6.9).
+// Each line is empty, which is off, or a whole number from 1 to 100 written
+// plainly; a set line needs a positive --summon-usage-max-age. A max age with
+// every line off is inert.
+func parseSummonQuota(normal, bulk, weekly string, maxAge time.Duration) (summonquota.Lines, error) {
+	l := summonquota.Lines{MaxAge: maxAge}
+	for _, f := range []struct {
+		name, raw string
+		line      *int
+	}{
+		{"summon-normal-max-five-hour", normal, &l.NormalFiveHour},
+		{"summon-bulk-max-five-hour", bulk, &l.BulkFiveHour},
+		{"summon-bulk-max-seven-day", weekly, &l.BulkSevenDay},
+	} {
+		if f.raw == "" {
+			continue
+		}
+		n, err := strconv.Atoi(f.raw)
+		if err != nil || n < 1 || n > 100 || strconv.Itoa(n) != f.raw {
+			return summonquota.Lines{}, fmt.Errorf("--%s=%q: a quota line is a whole percentage of its window from 1 to 100; leave it empty to switch that line off (DESIGN-064 6.9, OP783)", f.name, f.raw)
+		}
+		*f.line = n
+	}
+	if l.Set() && maxAge <= 0 {
+		return summonquota.Lines{}, errors.New("--summon-usage-max-age must be a positive duration while a summon quota line is set: it says when a usage reading is stale, and a stale reading admits (DESIGN-064 6.9, OP783)")
+	}
+	return l, nil
+}
+
+// summonQuotaHook is the reconciler's SummonQuota for these lines: nil when
+// every line is unset, so the seam admits and the store is never read.
+func summonQuotaHook(lines summonquota.Lines, live client.Reader, log logr.Logger, now func() time.Time) func(*v1alpha1.AgentSession) bool {
+	if !lines.Set() {
+		return nil
+	}
+	return summonQuotaGate(lines, live, log, now).Admits
+}
+
+// summonQuotaGate builds the gate on the session allowance store's Newest,
+// read uncached through live. The gate's store is its own, read only: its
+// writer refuses, and it does not depend on --enable-session-allowances.
+// With that flag off no new reading is written; nothing clears the old ones,
+// so they go stale, and a stale or missing reading admits.
+func summonQuotaGate(lines summonquota.Lines, live client.Reader, log logr.Logger, now func() time.Time) *summonquota.Gate {
+	store := &apiserver.SessionAllowanceStore{Writer: quotaReadOnly{}, Live: live}
+	return &summonquota.Gate{Lines: lines, Now: now, Log: log, Read: func(ctx context.Context) (map[string]summonquota.Reading, error) {
+		newest, err := store.Newest(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]summonquota.Reading, len(newest))
+		for agent, r := range newest {
+			out[agent] = summonquota.Reading{ReadAt: r.ReadAt, Windows: r.Windows}
+		}
+		return out, nil
+	}}
+}
+
+// quotaReadOnly is the quota gate store's writer: SessionAllowanceStore needs
+// one to be ready, and the gate only reads.
+type quotaReadOnly struct{}
+
+func (quotaReadOnly) Update(context.Context, client.Object, ...client.UpdateOption) error {
+	return errors.New("the summoned quota gate never writes the session allowance readings")
 }
