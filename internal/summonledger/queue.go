@@ -68,20 +68,24 @@ func Granted(g Grants, s *v1alpha1.AgentSession) bool {
 	return false
 }
 
-// QueueCount counts queue q for the caller whose policy is p at now, from what
+// QueueCount counts queue q for the caller named caller at now, from what
 // one ledger write read: the caller's entry's charges, the listed sessions,
 // those sessions by dispatch id, and the ledger's reserved key decoded read
-// only. It is the caller's Queued sessions in q (summonoutcome.Queued; a
-// session grants holds is admitted, not Queued), and its charges in q that
-// have no Session and whose attempt mark is younger than AttemptHold. skip,
-// the dispatch being decided, is not counted. The caller is p's name, the
-// spec.caller of its sessions.
-func QueueCount(p *v1alpha1.CallerPolicy, charges []Charge, sessions []v1alpha1.AgentSession, byID map[string]*v1alpha1.AgentSession, grants Grants, q Queue, skip string, now time.Time) int {
-	key := p.Name
+// only. caller is the spec.caller of the caller's sessions, which is also its
+// policy's name and its ledger key. It is the caller's Queued sessions in q
+// (summonoutcome.Queued; a session grants holds is admitted, not Queued), each
+// in the queue of its own priority and lane, and its charges in q that have no
+// Session and whose attempt mark is younger than AttemptHold. skip, the
+// dispatch being decided, is not counted.
+//
+// p, the caller's policy, only places a charge in its queues (ChargeQueues)
+// and is never dereferenced here. A nil p, a policy that is gone, counts each
+// such charge in every queue; the sessions are counted as with a policy.
+func QueueCount(caller string, p *v1alpha1.CallerPolicy, charges []Charge, sessions []v1alpha1.AgentSession, byID map[string]*v1alpha1.AgentSession, grants Grants, q Queue, skip string, now time.Time) int {
 	n := 0
 	for i := range sessions {
 		it := &sessions[i]
-		if it.Spec.Caller != key || it.Spec.Summon == nil || it.Spec.Summon.DispatchID == skip {
+		if it.Spec.Caller != caller || it.Spec.Summon == nil || it.Spec.Summon.DispatchID == skip {
 			continue
 		}
 		if summonoutcome.Queued(it, Granted(grants, it)) && QueueOf(it.Spec.Summon.Priority, it.Spec.Lane) == q {
