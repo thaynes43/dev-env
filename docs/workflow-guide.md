@@ -2256,8 +2256,11 @@ session without one is built exactly as before.
   `started`; `nothing-started` when tmux was never asked to start the
   launch (its session already existed) or its client never ran (it could
   not be found, or its `fork/exec` failed); or `ambiguous` for any other
-  error, another path error included. If the update fails, the record still
-  says `asked`. An ordinary launch writes no handoff record. The status
+  error, another path error included. If the update fails before the new
+  record is in place, the record still says `asked`; if it fails after
+  (the directory could not be synced), the record already shows tmux's
+  answer, which is true, and only its durability is unconfirmed. An
+  ordinary launch writes no handoff record. The status
   follows the record, never the boot's agent error or a later boot's start
   window:
 

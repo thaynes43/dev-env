@@ -443,8 +443,10 @@ func StartAgent(ctx context.Context, r Runner, s Settings, l Launch, self string
 // 780 fix round 3, coordinator rulings in PR 1100 comment 6840263445).
 // agentd writes it durably, state handoffAsked, before it asks tmux anything,
 // and calls no tmux when that write fails. When tmux answers, agentd updates
-// it to handoffStarted, handoffNothingStarted or handoffAmbiguous; a failed
-// update leaves handoffAsked. The launch record always stays, so no boot
+// it to handoffStarted, handoffNothingStarted or handoffAmbiguous. An update
+// that fails before the new record is in place leaves handoffAsked; one that
+// fails after (the directory sync) leaves tmux's answer in place, true but
+// of unconfirmed durability. The launch record always stays, so no boot
 // starts the session again (summonedLaunched). The status follows this
 // record (summonedRunState). Reason names the error without tmux's output.
 type startHandoff struct {
@@ -544,7 +546,8 @@ func startLaunch(ctx context.Context, r Runner, s Settings, l Launch, self strin
 			// have started run-agent despite the error, and a summoned
 			// session's provider starts once. Its launch record stays, so no
 			// later boot starts it again (summonedLaunched). A failed update
-			// leaves the record at handoffAsked.
+			// leaves handoffAsked, or tmux's answer if it was already in
+			// place (startHandoff).
 			state := handoffAmbiguous
 			if tmuxNeverRan(err) {
 				state = handoffNothingStarted
@@ -560,7 +563,8 @@ func startLaunch(ctx context.Context, r Runner, s Settings, l Launch, self strin
 		return fmt.Errorf("tmux: %s", cmdDetail(err))
 	}
 	if summoned {
-		// A failed update leaves the record at handoffAsked.
+		// A failed update leaves handoffAsked, or the answer if it was
+		// already in place (startHandoff).
 		_ = writeStartHandoff(s, l, handoffStarted, "")
 	}
 	return nil

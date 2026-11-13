@@ -1212,9 +1212,11 @@ differs from fix round 2's correction, this governs.
    answers, agentd updates the record: `started` when tmux started its
    session; `nothing-started` when tmux was never asked to start the launch
    (its session already existed) or the error proves its client never ran
-   (item 2); `ambiguous` for any other error. If the update fails, the
-   record still says `asked`. An ordinary launch writes no handoff record
-   and keeps today's path.
+   (item 2); `ambiguous` for any other error. If the update fails before
+   the new record is in place, the record still says `asked`; if it fails
+   after (the directory could not be synced), the record already shows
+   tmux's answer, which is true, and only its durability is unconfirmed.
+   An ordinary launch writes no handoff record and keeps today's path.
 
    The status of a summoned launch follows that record, never the boot's
    agent error or the start window of a later boot:
