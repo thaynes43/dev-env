@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/sessiontitle"
 )
 
 // Messages and logs (DESIGN-001 6.8, D-16 tier 3, D-65). The operator runs
@@ -126,6 +127,9 @@ func Deliver(ctx context.Context, r Runner, s Settings, sess protocol.Session, f
 		return notSentError{err}
 	}
 	defer unlock()
+	if err := deliverClearLeftInInput(ctx, r, s, sess); err != nil {
+		return notSentError{err}
+	}
 	if sess.Agent == protocol.AgentCodex && l.Provider == protocol.AgentCodex {
 		var first Launch
 		if !l.Resume || !l.NativeThreadConfirmed || l.Session != sess.Name || l.SessionUID == "" || l.SessionUID != sess.SessionUID ||
@@ -189,6 +193,41 @@ func lockFileWait(path string, wait time.Duration) (func(), error) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// errUnsentRename is the sentence agent-run msg prints when title.json records
+// left-in-input and the input row is not empty. Deliver sends no key for it.
+var errUnsentRename = errors.New("not delivered: the session's input line holds unsent rename text")
+
+// deliverClearLeftInInput reads the screen when title.json records
+// left-in-input. It pastes only when the one input box is empty with the
+// cursor at column 2, and then clears the mark. It sends no Backspace.
+// With no mark it reads nothing.
+func deliverClearLeftInInput(ctx context.Context, r Runner, s Settings, sess protocol.Session) error {
+	disk := loadTitle(s, sess)
+	if !disk.found || disk.State != "Failed" || disk.Reason != "left-in-input" {
+		return nil
+	}
+	pane, err := readAgentPane(ctx, r, s)
+	if err != nil {
+		return errUnsentRename
+	}
+	screen, err := capturePane(ctx, r, s, pane.id)
+	if err != nil {
+		return errUnsentRename
+	}
+	cur, err := readCursor(ctx, r, s, pane.id)
+	if err != nil {
+		return errUnsentRename
+	}
+	if sessiontitle.ClassifyBox(screen, "", cur) != sessiontitle.InputEmpty {
+		return errUnsentRename
+	}
+	disk.clearLeft()
+	if err := writeTitleFile(s, &disk); err != nil {
+		return errUnsentRename
+	}
+	return nil
 }
 
 // deliverSettle is how long Deliver waits between the paste and Enter.

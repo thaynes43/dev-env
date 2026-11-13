@@ -66,11 +66,22 @@ type RemoteControl struct {
 	// Name is the session's stable name. Title is the display title passed to
 	// --remote-control when the session has role text; empty means the stable
 	// name was passed (DESIGN-065).
-	Name      string `json:"name,omitempty"`
-	SessionID string `json:"sessionId,omitempty"`
-	URL       string `json:"url,omitempty"`
-	State     string `json:"state,omitempty"`
-	Title     string `json:"title,omitempty"`
+	Name          string        `json:"name,omitempty"`
+	SessionID     string        `json:"sessionId,omitempty"`
+	URL           string        `json:"url,omitempty"`
+	State         string        `json:"state,omitempty"`
+	Title         string        `json:"title,omitempty"`
+	ProviderTitle string        `json:"providerTitle,omitempty"`
+	Rename        *RemoteRename `json:"rename,omitempty"`
+}
+
+// RemoteRename is agentd's typed-rename report (DESIGN-065 rule 8.8). It
+// carries no title text. An older operator drops the object.
+type RemoteRename struct {
+	State    string    `json:"state,omitempty"`
+	Reason   string    `json:"reason,omitempty"`
+	Since    time.Time `json:"since,omitempty"`
+	Attempts int       `json:"attempts,omitempty"`
 }
 
 // Step is the outcome of one boot step. Steps never stop the boot: a failed

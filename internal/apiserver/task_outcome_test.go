@@ -36,7 +36,7 @@ func TestTaskOutcomeHeartbeat(t *testing.T) {
 	st := outcomeHeartbeat(f, name, tok)
 	post := func(st protocol.Status) {
 		t.Helper()
-		if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+		if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusOK {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
@@ -117,7 +117,7 @@ func TestTaskOutcomeHeartbeatRefusals(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+			if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusOK {
 				t.Fatal("invalid outcome blocked liveness", w.Code, w.Body.String())
 			}
 			if s := f.session(name); s.Status.TaskOutcome != nil || s.Status.Agent == nil {
@@ -145,7 +145,7 @@ func TestTaskOutcomeConcurrentFirstWrite(t *testing.T) {
 		}
 		return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
 	}})
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	got := f.session(name)
@@ -159,7 +159,7 @@ func TestTaskOutcomeNegotiatedRead(t *testing.T) {
 	name := "outcome-read"
 	tok := f.sessionPod(name, "full", 0)
 	st := outcomeHeartbeat(f, name, tok)
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	for _, path := range []string{apiv1.SessionPath(name), apiv1.SessionsPath} {
@@ -205,7 +205,7 @@ func TestTaskOutcomeSchemaRefusalKeepsHeartbeatAndChildUsage(t *testing.T) {
 	}})
 	st := outcomeHeartbeat(f, name, tok)
 	for beat := 1; beat <= 2; beat++ {
-		if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+		if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusOK {
 			t.Fatalf("beat %d: schema refusal failed the heartbeat: %d %s", beat, w.Code, w.Body.String())
 		}
 	}

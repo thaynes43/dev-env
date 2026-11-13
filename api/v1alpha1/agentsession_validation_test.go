@@ -817,7 +817,7 @@ func TestSpecImmutableExceptOperatingModeAndLifecycle(t *testing.T) {
 			s := remoteSession()
 			s.Spec.Title = "Main coordinator"
 			return s
-		}, func(s *v1alpha1.AgentSessionSpec) { s.Title = "Ops migration" }, "spec.title"},
+		}, func(s *v1alpha1.AgentSessionSpec) { s.Title = "Ops migration" }, immutable},
 		{"add title", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Title = "Main coordinator" }, presence},
 		{"remove title", func() *v1alpha1.AgentSession {
 			s := remoteSession()
@@ -2943,8 +2943,10 @@ func TestSummonRegistrationRules(t *testing.T) {
 	}
 }
 
-// TestTitleBounds is DESIGN-065 ruling 1: each bound accepts and refuses, and
-// a title cannot be changed, added or removed after create.
+// TestTitleBounds is DESIGN-065 ruling 1: each bound accepts and refuses.
+// spec.title does not change after create (ADR-027). Adding, changing and
+// removing it are refused by TestSpecImmutableExceptOperatingModeAndLifecycle.
+// The bounds on an update are TestTitleBoundsOnUpdate.
 func TestTitleBounds(t *testing.T) {
 	title96 := strings.Repeat("é", 48)
 	title97 := strings.Repeat("é", 47) + "€"
@@ -2959,8 +2961,8 @@ func TestTitleBounds(t *testing.T) {
 		{"role text", "Main coordinator"},
 		{"accented letter", "Café"},
 		{"leading digit", "1a"},
-		{"letter then combining mark", "e\u0301"},
 		{"hyphen later", "Main-coordinator"},
+		{"semicolon in the middle", "a;b"},
 		{"48 characters", strings.Repeat("a", 48)},
 		{"96 bytes", title96},
 	}
@@ -2987,8 +2989,13 @@ func TestTitleBounds(t *testing.T) {
 		{"97 bytes", title97, "at most 96 bytes"},
 		{"144 bytes", cjk144, "at most 96 bytes"},
 		{"48 euros", euro48, "at most 96 bytes"},
+		{"letter then combining mark", "e\u0301", "U+00A1"},
+		{"wide character", "a测b", "U+00A1"},
+		{"soft hyphen", "a\u00adb", "U+00AD"},
 		{"bar", "|", "no bar"},
 		{"bar in text", "a|b", "no bar"},
+		{"trailing semicolon", "ab;", "semicolon"},
+		{"backslash", "a\\b", "backslash"},
 		{"control character", "a\u0007b", "no control"},
 		{"tab", "a\tb", "letter or a digit"},
 		{"newline", "a\nb", "letter or a digit"},
@@ -3034,6 +3041,95 @@ func TestTitleBounds(t *testing.T) {
 		t.Fatalf("status byte fixture is %d bytes", len(got.Status.RemoteControl.Title))
 	}
 	wantInvalid(t, k8s.Status().Update(ctx(t), got), "at most 128 bytes")
+}
+
+// TestTitleBoundsOnUpdate refuses a title that breaks a bound. spec.title is
+// also immutable, so the refusal may name that. Adding, changing and removing
+// a valid title are TestSpecImmutableExceptOperatingModeAndLifecycle.
+func TestTitleBoundsOnUpdate(t *testing.T) {
+	title97 := strings.Repeat("é", 47) + "€"
+	refuse := []struct {
+		name string
+		edit func(*v1alpha1.AgentSessionSpec)
+		want string
+	}{
+		{"49 characters", func(s *v1alpha1.AgentSessionSpec) { s.Title = strings.Repeat("a", 49) }, "spec.title"},
+		{"97 bytes", func(s *v1alpha1.AgentSessionSpec) { s.Title = title97 }, "at most 96 bytes"},
+		{"bar", func(s *v1alpha1.AgentSessionSpec) { s.Title = "a|b" }, "no bar"},
+		{"trailing semicolon", func(s *v1alpha1.AgentSessionSpec) { s.Title = "ab;" }, "semicolon"},
+		{"backslash", func(s *v1alpha1.AgentSessionSpec) { s.Title = "a\\b" }, "backslash"},
+		{"control character", func(s *v1alpha1.AgentSessionSpec) { s.Title = "a\u0007b" }, "no control"},
+		{"leading space", func(s *v1alpha1.AgentSessionSpec) { s.Title = " Main" }, "no leading or trailing space"},
+		{"change repo", func(s *v1alpha1.AgentSessionSpec) { s.Repo = "haynesnetwork" }, "spec.repo"},
+		{"change model", func(s *v1alpha1.AgentSessionSpec) { s.Model = "claude-opus-5" }, "spec.model"},
+	}
+	for _, c := range refuse {
+		t.Run(c.name, func(t *testing.T) {
+			s := remoteSession()
+			s.Spec.Title = "Main coordinator"
+			if err := k8s.Create(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			c.edit(&s.Spec)
+			wantInvalid(t, k8s.Update(ctx(t), s), c.want)
+		})
+	}
+}
+
+// TestRemoteRenameStatusBounds is DESIGN-065 rule 8.8: providerTitle and
+// rename accept their bounds and refuse past them, including the held
+// reason quiet.
+func TestRemoteRenameStatusBounds(t *testing.T) {
+	s := remoteSession()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	at := metav1.NewTime(time.Date(2026, 11, 13, 14, 2, 0, 0, time.UTC))
+	set := func(rc v1alpha1.RemoteControlStatus) error {
+		t.Helper()
+		got := get(t, s)
+		got.Status.RemoteControl = rc.DeepCopy()
+		return k8s.Status().Update(ctx(t), got)
+	}
+	ok := v1alpha1.RemoteControlStatus{
+		ProviderTitle: strings.Repeat("a", 128),
+		Rename:        &v1alpha1.RemoteRenameStatus{State: "Held", Reason: "quiet", Since: &at, Attempts: 0},
+	}
+	if err := set(ok); err != nil {
+		t.Fatal(err)
+	}
+	for _, reason := range []string{"state", "command-shadowed", "interrupted"} {
+		rc := ok
+		rc.Rename = &v1alpha1.RemoteRenameStatus{State: "Held", Reason: reason, Since: &at}
+		if err := set(rc); err != nil {
+			t.Fatalf("reason %s: %v", reason, err)
+		}
+	}
+	for _, attempts := range []int32{0, 1, 2} {
+		rc := ok
+		rc.Rename = &v1alpha1.RemoteRenameStatus{State: "Applied", Reason: "confirmed", Attempts: attempts}
+		if err := set(rc); err != nil {
+			t.Fatalf("attempts %d: %v", attempts, err)
+		}
+	}
+	long := ok
+	long.ProviderTitle = strings.Repeat("a", 129)
+	wantInvalid(t, set(long), "status.remoteControl.providerTitle")
+	bytes129 := ok
+	bytes129.ProviderTitle = strings.Repeat("€", 43)
+	if len(bytes129.ProviderTitle) != 129 {
+		t.Fatalf("byte fixture is %d", len(bytes129.ProviderTitle))
+	}
+	wantInvalid(t, set(bytes129), "at most 128 bytes")
+	badState := ok
+	badState.Rename = &v1alpha1.RemoteRenameStatus{State: "held", Reason: "quiet"}
+	wantInvalid(t, set(badState), "status.remoteControl.rename.state")
+	badReason := ok
+	badReason.Rename = &v1alpha1.RemoteRenameStatus{State: "Held", Reason: "nope"}
+	wantInvalid(t, set(badReason), "status.remoteControl.rename.reason")
+	badAttempts := ok
+	badAttempts.Rename = &v1alpha1.RemoteRenameStatus{State: "Held", Reason: "paced", Attempts: 3}
+	wantInvalid(t, set(badAttempts), "status.remoteControl.rename.attempts")
 }
 
 func createTitle(t *testing.T, title any) *v1alpha1.AgentSession {

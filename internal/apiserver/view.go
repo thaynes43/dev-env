@@ -14,6 +14,7 @@ import (
 // view is a session as the API shows it. The prompt is in a single session's
 // view only, never in a list.
 func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
+	title, ignored := sessionEffectiveTitle(s)
 	v := apiv1.Session{
 		Name:           s.Name,
 		UID:            string(s.UID),
@@ -22,7 +23,8 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 		Agent:          string(s.Spec.Agent),
 		Mode:           string(s.Spec.Mode),
 		Model:          s.Spec.Model,
-		Title:          s.Spec.Title,
+		Title:          title,
+		TitleIgnored:   ignored,
 		Effort:         s.Spec.Effort,
 		Size:           string(s.Spec.Size),
 		Profile:        s.Spec.Profile,
@@ -41,6 +43,10 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 		Node:           s.Status.NodeName,
 		Revision:       s.Status.Revision,
 		Outdated:       meta.IsStatusConditionTrue(s.Status.Conditions, controller.ConditionOutdated),
+	}
+	if _, present := titleAnnotation(s); present && !ignored && title != s.Spec.Title {
+		created := s.Spec.Title
+		v.CreatedTitle = &created
 	}
 	if h := s.Status.PrivateHistory; h != nil {
 		v.PrivateHistory = &apiv1.PrivateHistory{Version: h.Version, SessionUID: h.SessionUID, HomeClaim: h.HomeClaim,
@@ -98,7 +104,17 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 		}
 	}
 	if rc := s.Status.RemoteControl; rc != nil {
-		v.RemoteControl = &apiv1.RemoteControl{Name: rc.Name, URL: rc.URL, State: rc.State}
+		v.RemoteControl = &apiv1.RemoteControl{
+			Name: rc.Name, URL: rc.URL, State: rc.State,
+			Title: rc.Title, ProviderTitle: rc.ProviderTitle,
+		}
+		if rn := rc.Rename; rn != nil {
+			view := &apiv1.RemoteRename{State: rn.State, Reason: rn.Reason, Attempts: int(rn.Attempts)}
+			if rn.Since != nil {
+				view.Since = rn.Since.UTC()
+			}
+			v.RemoteControl.Rename = view
+		}
 	}
 	if o := s.Status.Outcome; o != nil {
 		v.Outcome = outcomeView(o)
