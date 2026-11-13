@@ -1875,7 +1875,9 @@ hours. The keeper's pager (below) sends them.
 ## Pages for summoned sessions
 
 The keeper pages Tom by Pushover when a summoned session needs him
-(DESIGN-064 6.8; story 782, slice a of 742). It is off by default.
+(DESIGN-064 6.8; story 782, slice a of 742). It is off by default. The rules
+marked "fix round 1" are story 782 fix round 1, coordinator rulings in PR 1102
+comment 6839324435; not a ruling by Tom.
 
 - **What pages.** One terminal page per closed session, `failed`, `lost` or
   `escalated`, and one page per lifecycle event recorded in
@@ -1898,32 +1900,64 @@ The keeper pages Tom by Pushover when a summoned session needs him
   the session namespace every 60 seconds, 500 a page and at most 20 pages, and
   still requires `spec.caller`. A session without the label is never paged.
   A reaped session deleted before the next tick can miss its page.
+  Absence from that list is not deletion (fix round 1): a session whose label
+  was removed keeps its ledger entries, and with the label back it is not
+  paged or counted again.
 - **Once each.** The ledger is the ConfigMap `dev-env-keeper-summon-pages` in
   the keeper's namespace, which GitOps creates. Its key is the session UID and
   the event. The keeper writes the entry, the rate window and the page record
-  in one update before it sends; a failed or conflicting write sends nothing. A
-  send is never retried: an unknown result stays `ambiguous`, a refusal
-  `failed`, an attempt whose result was never stored `recorded`. This proves
-  attempts, not delivery.
+  in one update before it sends; a failed or conflicting write sends nothing,
+  and so does a write that commits but answers an error or answers after the
+  send's deadline. Two keepers racing for one entry send once. A send is never
+  retried: an unknown result stays `ambiguous`, a refusal `failed`, an attempt
+  whose result was never stored `recorded`. This proves attempts, not
+  delivery. An entry is pruned only on proof that its session is gone (fix
+  round 1): an hour after it was written, a read of its stored session name
+  finds nothing, or a session with another UID. At most 20 such reads a tick,
+  and only in a tick that has an entry to add; the rest wait. A drill id is
+  never forgotten: the ledger keeps up to 16, and past that a new id is refused
+  and logged, and nothing is sent. Every member of `state.json` but an entry's
+  `session` must be present and not null; a ledger that lacks one, or holds it
+  as null, is `state unavailable`.
 - **The cap.** At most 6 pages in any 60 minutes, the drill and the summary
-  included, at priority 0 and at any hour. An event that finds the window
-  full is recorded `capped` and never paged. When the window has room again,
+  included, at priority 0 and at any hour. Each attempt counts from the latest
+  instant it may be sent, and the window is pruned against the current time,
+  never a later one (fix round 1), so a slow save cannot let in a seventh. An
+  event that finds the window full is recorded `capped` and never paged. When the window has room again,
   the first page is `[dev-env] more-events: N more events were not paged`,
   which counts each capped event once. Ask pushes keep their own cap.
 - **The text.** Fixed templates in keeper source. A page starts `[dev-env]`
   and the event; a drill starts `DRILL`. A session's note follows the label
-  `session note:`, with every link replaced by `[link removed]`, cut to 200
-  characters. The only link is `status.remoteControl.url` when it is
+  `session note:`. Every control or format character and every line or
+  paragraph separator (U+2028 and U+2029 included) becomes a space; every link
+  becomes `[link removed]`, then the note is cut to 200 characters, and a cut
+  that leaves a host is redacted again. A link is a scheme URL, a `www.` host,
+  a dotted host or address with a port, path, query or fragment, or a dotted
+  host whose last label is two or more letters or starts `xn--`, with or
+  without them (fix round 1, and the coordinator's answer op782-fix1-a-1):
+  `evil.example`, `evil.example:443`, `10.0.0.1:8080`, `evil.xn--p1ai` and a
+  file name such as `main.go` all become `[link removed]`; a dotted number
+  alone, such as `2.105.0`, stays. The only link is `status.remoteControl.url` when it is
   `https://claude.ai/code/session_...`; otherwise the console's sessions list.
   Page records hold the fixed title, the session name and the note's byte
   count, never the note.
 - **Flags.** `--enable-summon-pages`, `--summon-pages-portal-origin` (the
   console's HTTPS origin), `--summon-pages-drill=<id>` (one `DRILL` page per id,
   ever) and `--summon-pages-state-configmap`. The session namespace is
-  `--session-namespace`. A bad or incomplete set turns off only the pager and
-  logs why. A missing or unreadable ledger logs `summon page state
-  unavailable` and sends nothing. The pager never stops the keeper or its
-  login refresher, and leaves the Ask notifier and its ledger as they are.
+  `--session-namespace`; no other option's namespace stands in for an empty
+  one, which turns the pager off, and the pager logs the namespace it lists
+  once at start. A bad or incomplete set turns off only the pager and logs
+  why. So does a pager flag with a malformed value, `--enable-summon-pages`
+  included, and a pager flag given last with no value (fix round 1); other
+  flags keep their parsing and failures. A missing or unreadable ledger logs
+  `summon page state unavailable` and sends nothing. The pager never stops
+  the keeper or its login refresher, and leaves the Ask notifier and its
+  ledger as they are. It has its own Kubernetes client, REST mapper,
+  transport and rate limiter, whose 5-second request timeout also bounds
+  discovery, and its own Pushover transport (fix round 1): a stalled pager
+  request holds nothing the login refresher, the credential fence or the Ask
+  notifier uses, and its tick ends with `summon page scan unavailable` or
+  `summon page state unavailable`.
 - **Reading the record.** `kubectl -n dev-env-system get cm
   dev-env-keeper-summon-pages -o json | agent-run pages list`.
 

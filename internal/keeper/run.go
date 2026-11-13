@@ -270,8 +270,11 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		}
 	}
 	// The summoned-session pager: nil when off or invalid, so a bad flag
-	// stops nothing else. Its Start never returns an error.
-	if sp := summonPagerFor(o, c, o.Log.WithName("summon-pages")); sp != nil {
+	// stops nothing else. Its Start never returns an error. It gets the REST
+	// config, not c: it builds its own client, REST mapper and transport, so
+	// a stalled pager request blocks nothing the login refresher, the
+	// credential fence or the Ask notifier uses (story 782 fix round 1, F1).
+	if sp := summonPagerFor(o, cfg, o.Log.WithName("summon-pages")); sp != nil {
 		if err := mgr.Add(sp); err != nil {
 			return err
 		}

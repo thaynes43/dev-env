@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -544,7 +545,7 @@ func TestOpsMintRefusesNumericAppIDInClientIDFile(t *testing.T) {
 		t.Fatalf("the refusal is not the different-forms check:\n%s", text)
 	}
 	for _, id := range []string{numericAppID, testClientID, testInstallationID, opsInstallation} {
-		if strings.Contains(text, id) {
+		if logQuotesID(text, id) {
 			t.Errorf("the log quotes an id %q", id)
 		}
 	}
@@ -576,3 +577,52 @@ func (o *opsLoop) secret(name string) *corev1.Secret {
 
 // clock.Clock is implemented by armClock through the embedded fake clock.
 var _ clock.Clock = (*armClock)(nil)
+
+// logQuotesID reports whether a JSON log quotes id as a value (story 784).
+// Each line's own "time" member is dropped first: a nanosecond timestamp can
+// hold any run of digits. The id must then stand alone, not inside a longer
+// run of digits. A line that is not JSON is checked whole.
+func logQuotesID(logs, id string) bool {
+	alone := regexp.MustCompile(`(^|[^0-9])` + regexp.QuoteMeta(id) + `($|[^0-9])`)
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var entry map[string]any
+		if json.Unmarshal([]byte(line), &entry) == nil {
+			delete(entry, "time")
+			raw, err := json.Marshal(entry)
+			if err != nil {
+				return true
+			}
+			line = string(raw)
+		}
+		if alone.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
+// Story 784: the check finds an id quoted as a value, and never matches a
+// timestamp that holds its digits.
+func TestLogQuotesIDIgnoresTimestamps(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{
+		{`{"time":"2026-11-12T23:46:46.4242Z","level":"INFO","msg":"minted"}`, false},
+		{`{"time":"2026-11-12T23:46:46.424212345Z","level":"INFO","msg":"minted"}`, false},
+		{`{"time":"2026-11-12T23:42:42.000004242Z","level":"INFO","msg":"minted","n":42420}`, false},
+		{`{"time":"2026-11-12T23:46:46.1Z","msg":"minted","installation":"4242"}`, true},
+		{`{"time":"2026-11-12T23:46:46.1Z","msg":"mint refused for installation 4242"}`, true},
+		{`{"time":"2026-11-12T23:46:46.1Z","msg":"POST /app/installations/4242/access_tokens"}`, true},
+		{`{"time":"2026-11-12T23:46:46.1Z","msg":"minted","n":4242}`, true},
+		{`{"time":"2026-11-12T23:46:46.1Z","msg":"installation4242"}`, true},
+		{"not json 4242", true},
+	} {
+		if got := logQuotesID(tc.line+"\n", testInstallationID); got != tc.want {
+			t.Errorf("logQuotesID(%s) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+}

@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -154,6 +155,64 @@ func mustPermissions(p map[string]string) string {
 	return string(b)
 }
 
+// summonPageFlags are the pager's flags (story 782 fix round 1, F2): no value
+// given to one of them can stop the keeper. A malformed one disables only the
+// pager, logged without its value.
+var summonPageFlags = map[string]bool{"enable-summon-pages": true, "summon-pages-portal-origin": true, "summon-pages-drill": true, "summon-pages-state-configmap": true}
+
+// summonPagesBool is --enable-summon-pages. A value that is not a boolean
+// turns the pager off and is reported after parsing, never as a parse error.
+type summonPagesBool struct {
+	on, malformed *bool
+}
+
+func (b summonPagesBool) IsBoolFlag() bool { return true }
+
+func (b summonPagesBool) String() string {
+	return strconv.FormatBool(b.on != nil && *b.on)
+}
+
+func (b summonPagesBool) Set(v string) error {
+	on, err := strconv.ParseBool(v)
+	if err != nil {
+		*b.malformed = true
+		on = false
+	}
+	*b.on = on
+	return nil
+}
+
+// trailingSummonPageFlag reports whether args end with a pager flag that
+// takes a value and has none, which the flag package refuses for the whole
+// command line. It walks args as the flag package does.
+func trailingSummonPageFlag(fs *flag.FlagSet, args []string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if len(a) < 2 || a[0] != '-' || a == "--" {
+			return "", false // the flags end here
+		}
+		name := strings.TrimPrefix(a[1:], "-")
+		if name == "" || name[0] == '-' || name[0] == '=' {
+			return "", false
+		}
+		if strings.Contains(name, "=") {
+			continue
+		}
+		f := fs.Lookup(name)
+		if f == nil {
+			return "", false
+		}
+		if b, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && b.IsBoolFlag() {
+			continue
+		}
+		if i == len(args)-1 {
+			return name, summonPageFlags[name]
+		}
+		i++ // its value
+	}
+	return "", false
+}
+
 func parseFlags(args []string) (options, error) {
 	// The keeper's own namespace, from the downward API in the Deployment;
 	// dev-env-system when unset (D-02).
@@ -212,12 +271,23 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.askNotifications.Window, "ask-notify-window", "", "optional ALLOWED local delivery window HH:MM-HH:MM; empty permits all hours within caps")
 	fs.StringVar(&o.askNotifications.Timezone, "ask-notify-timezone", keeper.DefaultNoticeZone, "IANA timezone for the Ask delivery window; independent of login notices")
 	fs.StringVar(&o.askNotifications.StateConfigMap, "ask-notify-state-configmap", keeper.DefaultAskNotificationConfigMap, "precreated keeper-owned ConfigMap for Ask dedupe, rate timestamps and content-free page records")
-	fs.BoolVar(&o.summonPages.Enabled, "enable-summon-pages", false, "page Tom once per failed, lost or escalated summoned session and once per recorded lifecycle event (DESIGN-064 6.8), at most 6 pages in any 60 minutes; needs leader election, the precreated ledger ConfigMap, list on agentsessions in --session-namespace and the Pushover files above")
+	var summonPagesMalformed bool
+	fs.Var(summonPagesBool{on: &o.summonPages.Enabled, malformed: &summonPagesMalformed}, "enable-summon-pages", "page Tom once per failed, lost or escalated summoned session and once per recorded lifecycle event (DESIGN-064 6.8), at most 6 pages in any 60 minutes; needs leader election, the precreated ledger ConfigMap, list on agentsessions in --session-namespace and the Pushover files above; a malformed pager flag disables only the pager")
 	fs.StringVar(&o.summonPages.PortalOrigin, "summon-pages-portal-origin", "", "HTTPS console origin: a page whose session has no verified Remote Control link links the console's sessions list here")
 	fs.StringVar(&o.summonPages.Drill, "summon-pages-drill", "", "send one page starting DRILL for this id, once ever (1 to 63 lower-case letters, digits or hyphens); empty sends none")
 	fs.StringVar(&o.summonPages.StateConfigMap, "summon-pages-state-configmap", keeper.DefaultSummonPagesConfigMap, "precreated keeper-owned ConfigMap for the pager's dedupe, rate window and content-free page records; get and update by name only")
+	// A pager flag given last with no value would fail the whole parse: it is
+	// dropped, and the pager is turned off below (F2).
+	summonPagesProblem, summonPagesFlag := "", ""
+	if name, ok := trailingSummonPageFlag(fs, args); ok {
+		args = args[:len(args)-1]
+		summonPagesProblem, summonPagesFlag = "a pager flag was given last with no value", name
+	}
 	if err := fs.Parse(args); err != nil {
 		return o, err
+	}
+	if summonPagesMalformed {
+		summonPagesProblem, summonPagesFlag = "the flag's value is not true or false", "enable-summon-pages"
 	}
 	if fs.NArg() > 0 {
 		return o, fmt.Errorf("unexpected arguments %q", fs.Args())
@@ -248,6 +318,11 @@ func parseFlags(args []string) (options, error) {
 	// The pager lists sessions where the credential grants live; a bad pager
 	// flag turns the pager off and is logged, and stops nothing else.
 	o.summonPages.SessionNamespace = o.proxmoxGrants.SessionNamespace
+	if summonPagesProblem != "" {
+		o.summonPages.Enabled = false
+		logr.FromSlogHandler(slog.NewJSONHandler(noticeFailureLog, nil)).WithName(binaryName).
+			Error(nil, "summon pages disabled: invalid configuration", "reason", summonPagesProblem, "flag", summonPagesFlag)
+	}
 	o.summonPages = o.summonPages.DisableInvalid(o.notices, o.askNotifications, o.leaderElect,
 		logr.FromSlogHandler(slog.NewJSONHandler(noticeFailureLog, nil)).WithName(binaryName))
 	if err := o.notices.Validate(); err != nil {

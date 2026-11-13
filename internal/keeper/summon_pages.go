@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
@@ -13,10 +15,15 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/rest"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/pages"
@@ -34,8 +41,10 @@ import (
 // It never stops the keeper: Start returns no error, a bad flag set disables
 // only the pager (DisableInvalid), and an unavailable ledger, list or
 // credential sends nothing and waits for the next tick. It shares no state
-// with the Ask notifier or the login refresher; it reads the same Pushover
-// credential files on each send, as every keeper notice does.
+// with the Ask notifier or the login refresher: it has its own Kubernetes
+// client, REST mapper and transport, and its own Pushover transport (story
+// 782 fix round 1, F1); it reads the same Pushover credential files on each
+// send, as every keeper notice does.
 const (
 	summonPagesEvery = 60 * time.Second
 	// At most six page attempts in any 60 minutes, the drill and the
@@ -45,7 +54,13 @@ const (
 	// The list is bounded as the Ask store's is (ruling Q2).
 	summonPagesListPage  = 500
 	summonPagesListPages = 20
-	summonNoteMax        = 200
+	// summonPagesProofReads bounds the reads, a tick, that prove a session
+	// gone before its entries are pruned (story 782 fix round 1, F3).
+	summonPagesProofReads = 20
+	// summonPagesRequestTimeout bounds every request of the pager's own
+	// client, its REST mapper's discovery included (F1).
+	summonPagesRequestTimeout = noticeStoreTimeout
+	summonNoteMax             = 200
 	// summonConsolePath is the console's sessions list: the link of a page
 	// whose session has no verified link (6.8; the console has no per-session
 	// page whose pattern this slice could verify).
@@ -62,12 +77,20 @@ type SummonPageOptions struct {
 	// PortalOrigin is the console's HTTPS origin, for the sessions list link.
 	PortalOrigin string
 	// Drill, when set, sends one page starting DRILL for this id, once ever
-	// (ruling Q8). 1 to 63 lower-case letters, digits and hyphens.
+	// (ruling Q8). 1 to 63 lower-case letters, digits and hyphens. The ledger
+	// remembers every id it sent; past summonPagesMaxDrills ids a new one is
+	// refused and logged (F8).
 	Drill string
 	// StateConfigMap is the precreated ledger in the keeper's namespace.
 	StateConfigMap string
-	// SessionNamespace is where the AgentSessions live.
+	// SessionNamespace is where the AgentSessions live. Empty disables the
+	// pager; no other option's namespace stands in for it (F7).
 	SessionNamespace string
+
+	// requestTimeout replaces summonPagesRequestTimeout, and wrapTransport
+	// wraps the pager's own transport: test seams only.
+	requestTimeout time.Duration
+	wrapTransport  func(http.RoundTripper) http.RoundTripper
 }
 
 func (o SummonPageOptions) withDefaults() SummonPageOptions {
@@ -126,7 +149,12 @@ func httpsOrigin(origin string) bool {
 
 type summonSessionReader interface {
 	list(context.Context) ([]v1alpha1.AgentSession, error)
+	// uid reads one session by name: its UID, errSummonSessionGone when no
+	// session has that name, or another error when the read failed.
+	uid(ctx context.Context, name string) (types.UID, error)
 }
+
+var errSummonSessionGone = errors.New("summoned session not found")
 
 // kubeSummonSessions lists the labelled AgentSessions by an uncached read:
 // 500 a page and at most 20 pages; a list that does not finish is an error.
@@ -159,16 +187,34 @@ func (k *kubeSummonSessions) list(ctx context.Context) ([]v1alpha1.AgentSession,
 	return nil, errSummonPages
 }
 
+func (k *kubeSummonSessions) uid(ctx context.Context, name string) (types.UID, error) {
+	gctx, cancel := context.WithTimeout(ctx, noticeStoreTimeout)
+	defer cancel()
+	var s v1alpha1.AgentSession
+	err := k.reader.Get(gctx, types.NamespacedName{Namespace: k.namespace, Name: name}, &s)
+	switch {
+	case apierrors.IsNotFound(err):
+		return "", errSummonSessionGone
+	case err != nil:
+		return "", errSummonPages
+	}
+	return s.UID, nil
+}
+
 // summonPager is the leader-only runnable. Its sender is the Pushover sender
 // and nothing else: there is no email or other path (R-01).
 type summonPager struct {
-	reader summonSessionReader
-	store  summonPageStore
-	sender *PushoverSender
-	clock  clock.Clock
-	log    logr.Logger
-	origin string
-	drill  string
+	reader    summonSessionReader
+	store     summonPageStore
+	sender    *PushoverSender
+	clock     clock.Clock
+	log       logr.Logger
+	origin    string
+	drill     string
+	namespace string
+	// drillRefused keeps the refusal of a drill id past the bound to one log
+	// line a process.
+	drillRefused bool
 }
 
 func newSummonPager(o SummonPageOptions, reader summonSessionReader, store summonPageStore, sender *PushoverSender, clk clock.Clock, log logr.Logger) *summonPager {
@@ -182,31 +228,97 @@ func newSummonPager(o SummonPageOptions, reader summonSessionReader, store summo
 		log = logr.Discard()
 	}
 	return &summonPager{reader: reader, store: store, sender: sender, clock: clk, log: log,
-		origin: strings.TrimSuffix(o.PortalOrigin, "/"), drill: o.Drill}
+		origin: strings.TrimSuffix(o.PortalOrigin, "/"), drill: o.Drill, namespace: o.SessionNamespace}
 }
 
-// summonPagerFor builds the pager Run adds, or nil when it is off or its
-// options are invalid. Nothing is read here.
-func summonPagerFor(o Options, c client.Client, log logr.Logger) *summonPager {
-	sp := o.SummonPages
-	if sp.SessionNamespace == "" {
-		sp.SessionNamespace = o.GHTokenSecret.Namespace
-	}
-	sp = sp.withDefaults().DisableInvalid(o.Notices, o.AskNotifications, o.LeaderElect, log)
+// summonPagerFor builds the pager Run adds, or nil when it is off, its
+// options are invalid or its own client cannot be built. It is given the
+// keeper's REST config, never the keeper's client. Nothing is read here.
+func summonPagerFor(o Options, cfg *rest.Config, log logr.Logger) *summonPager {
+	sp := o.SummonPages.withDefaults().DisableInvalid(o.Notices, o.AskNotifications, o.LeaderElect, log)
 	if !sp.Enabled {
+		return nil
+	}
+	c, err := newSummonPagesClient(cfg, sp)
+	if err != nil {
+		log.Error(nil, "summon pages disabled: the pager's own client could not be built")
 		return nil
 	}
 	notices := o.Notices.withDefaults()
 	return newSummonPager(sp, &kubeSummonSessions{reader: c, namespace: sp.SessionNamespace},
 		&configMapSummonPageStore{client: c, name: types.NamespacedName{Namespace: o.Namespace, Name: sp.StateConfigMap}},
-		&PushoverSender{URL: notices.URL, TokenFile: notices.TokenFile, UserFile: notices.UserFile}, o.Clock, log)
+		&PushoverSender{URL: notices.URL, TokenFile: notices.TokenFile, UserFile: notices.UserFile, Client: newSummonPushClient()}, o.Clock, log)
+}
+
+// newSummonPagesClient builds the pager's own uncached client (story 782 fix
+// round 1, F1). It shares no client, REST mapper, lock, rate limiter or
+// transport with the login refresher, the credential fence or the Ask
+// notifier, so a stalled pager request holds nothing they need:
+//   - a copy of the keeper's REST config whose request timeout bounds every
+//     request, the REST mapper's discovery included (discovery runs on a
+//     background context, so only the HTTP client's timeout bounds it);
+//   - a dialer of its own, which keeps client-go's transport cache from
+//     handing it the keeper's transport and connections;
+//   - its own rate limiter, HTTP client and REST mapper.
+func newSummonPagesClient(cfg *rest.Config, o SummonPageOptions) (client.Client, error) {
+	pc, err := summonPagesRESTConfig(cfg, o)
+	if err != nil {
+		return nil, err
+	}
+	scheme := runtime.NewScheme()
+	if err := errors.Join(corev1.AddToScheme(scheme), v1alpha1.AddToScheme(scheme)); err != nil {
+		return nil, err
+	}
+	hc, err := rest.HTTPClientFor(pc)
+	if err != nil {
+		return nil, err
+	}
+	mapper, err := apiutil.NewDynamicRESTMapper(pc, hc)
+	if err != nil {
+		return nil, err
+	}
+	return client.New(pc, client.Options{Scheme: scheme, HTTPClient: hc, Mapper: mapper})
+}
+
+// summonPagesRESTConfig is the pager's copy of the keeper's REST config; cfg
+// is not changed. A config that carries a transport of its own is refused:
+// that transport would be shared.
+func summonPagesRESTConfig(cfg *rest.Config, o SummonPageOptions) (*rest.Config, error) {
+	if cfg == nil || cfg.Transport != nil {
+		return nil, errSummonPages
+	}
+	pc := rest.CopyConfig(cfg)
+	pc.Timeout = summonPagesRequestTimeout
+	if o.requestTimeout > 0 {
+		pc.Timeout = o.requestTimeout
+	}
+	pc.RateLimiter = nil
+	if pc.Dial == nil {
+		pc.Dial = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	}
+	if o.wrapTransport != nil {
+		pc.Wrap(o.wrapTransport)
+	}
+	return pc, nil
+}
+
+// newSummonPushClient is the pager's Pushover client: the sender's timeout
+// and a transport of its own, not the process's default transport the other
+// notices use (F1).
+func newSummonPushClient() *http.Client {
+	t, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return &http.Client{Timeout: noticeHTTPTimeout, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}}
+	}
+	return &http.Client{Timeout: noticeHTTPTimeout, Transport: t.Clone()}
 }
 
 func (*summonPager) NeedLeaderElection() bool { return true }
 
 // Start never returns an error: a runnable's error would stop the manager and
-// with it the login refresher.
+// with it the login refresher. It logs the namespace it lists once (F7).
 func (p *summonPager) Start(ctx context.Context) error {
+	p.log.Info("summon pages started", "sessionNamespace", p.namespace)
 	for {
 		p.tick(ctx)
 		select {
@@ -263,8 +375,11 @@ func (p *summonPager) tick(ctx context.Context) {
 	}
 	// A prune is saved only with a write that adds an entry, as the Ask
 	// notifier's is, so a saved ledger never has an empty dedupe beside its
-	// page records (which load refuses as a reset).
-	ledger.prune(live, p.drill, now)
+	// page records (which load refuses as a reset). Its proof reads are made
+	// only in a tick that may add one.
+	if p.fresh(ledger, jobs, now) {
+		p.prune(ctx, ledger, live, now)
+	}
 	dirty := false
 	sort.SliceStable(jobs, func(i, j int) bool {
 		a, b := jobs[i], jobs[j]
@@ -296,6 +411,15 @@ func (p *summonPager) tick(ctx context.Context) {
 		if _, seen := ledger.State.Events[j.key]; seen {
 			continue
 		}
+		if j.event == summonEventDrill && ledger.State.drills() >= summonPagesMaxDrills {
+			// A used drill id is never forgotten, so the ledger has no room
+			// for another (F8): nothing is sent or recorded.
+			if !p.drillRefused {
+				p.drillRefused = true
+				p.log.Error(nil, "summon page drill refused: the ledger holds the most drill ids it keeps")
+			}
+			continue
+		}
 		if len(ledger.State.Events) >= summonPagesMaxEvents {
 			p.log.Error(nil, "summon page dedupe capacity reached")
 			break
@@ -314,6 +438,92 @@ func (p *summonPager) tick(ctx context.Context) {
 	if dirty && ctx.Err() == nil {
 		if err := p.store.save(ctx, ledger); err != nil {
 			p.log.Error(nil, "summon page ledger update unconfirmed")
+		}
+	}
+}
+
+// fresh reports whether this tick may add a ledger entry: a summary the
+// window has room for, or a page whose key the dedupe lacks (a drill past the
+// bound excepted).
+func (p *summonPager) fresh(l *summonPageLedger, jobs []summonJob, now time.Time) bool {
+	if l.State.Capped > 0 && l.State.room(now) {
+		return true
+	}
+	for _, j := range jobs {
+		if _, seen := l.State.Events[j.key]; seen {
+			continue
+		}
+		if j.event == summonEventDrill && l.State.drills() >= summonPagesMaxDrills {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// prune drops, in memory, what can never be needed again (story 782 fix
+// round 1, F3 and F8). Absence from the labelled list proves nothing: a label
+// can be removed and restored. A session's entry goes only once it is an hour
+// old and a read of its stored session name proves the session gone, not
+// found or found with another UID (UIDs are never reused, so a gone session
+// cannot page again). At most summonPagesProofReads reads a tick, the oldest
+// entries first; the rest wait for a later tick, and a failed read ends this
+// tick's reads. A summary's entry goes after a day. A drill id is never
+// forgotten.
+func (p *summonPager) prune(ctx context.Context, l *summonPageLedger, live map[string]bool, now time.Time) {
+	type owner struct{ uid, name string }
+	oldest := map[owner]int64{}
+	old := func(e summonPageEntry) bool { return !now.Before(time.Unix(e.At, 0).Add(time.Hour)) }
+	for key, e := range l.State.Events {
+		uid, _, _ := cutSummonKey(key)
+		switch uid {
+		case "drill":
+		case "more":
+			if !now.Before(time.Unix(e.At, 0).Add(24 * time.Hour)) {
+				delete(l.State.Events, key)
+			}
+		default:
+			if live[uid] || e.Session == "" || !old(e) {
+				continue
+			}
+			o := owner{uid, e.Session}
+			if at, ok := oldest[o]; !ok || e.At < at {
+				oldest[o] = e.At
+			}
+		}
+	}
+	candidates := make([]owner, 0, len(oldest))
+	for o := range oldest {
+		candidates = append(candidates, o)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
+		if oldest[a] != oldest[b] {
+			return oldest[a] < oldest[b]
+		}
+		if a.uid != b.uid {
+			return a.uid < b.uid
+		}
+		return a.name < b.name
+	})
+	gone := map[owner]bool{}
+	for i, o := range candidates {
+		if i == summonPagesProofReads || ctx.Err() != nil {
+			break
+		}
+		uid, err := p.reader.uid(ctx, o.name)
+		if errors.Is(err, errSummonSessionGone) || (err == nil && string(uid) != o.uid) {
+			gone[o] = true
+			continue
+		}
+		if err != nil {
+			break
+		}
+	}
+	for key, e := range l.State.Events {
+		uid, _, _ := cutSummonKey(key)
+		if gone[owner{uid, e.Session}] && old(e) {
+			delete(l.State.Events, key)
 		}
 	}
 }
@@ -342,7 +552,7 @@ func summonJobs(s *v1alpha1.AgentSession) []summonJob {
 func (p *summonPager) attempt(ctx context.Context, ledger *summonPageLedger, j summonJob, now time.Time) bool {
 	notice, record := p.render(j)
 	dispatchBy := now.Add(noticeStoreTimeout)
-	ledger.State.reserve(dispatchBy)
+	ledger.State.reserve(now, dispatchBy)
 	ledger.State.Events[j.key] = summonPageEntry{At: now.Unix(), State: string(pages.StateRecorded), Session: sessionName(j.session)}
 	if j.event == summonEventMore {
 		ledger.State.Capped -= j.count
@@ -413,9 +623,15 @@ var (
 	// registered session (internal/agentd/remote.go): nothing else is a link.
 	summonVerifiedLink = regexp.MustCompile(`^https://claude\.ai/code/session_[A-Za-z0-9_-]{1,120}$`)
 	// summonURLLike is anything in a note that looks like a link: a scheme
-	// with //, a scheme Pushover or a phone could open, a www. host, or a
-	// dotted host or address followed by a port, path, query or fragment.
-	summonURLLike   = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://\S*|\b(?:mailto|tel|sms|javascript|data|file|vbscript):\S+|\bwww\.\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::[0-9]+)?[/?#]\S*`)
+	// with //, a scheme Pushover or a phone could open, a www. host, a dotted
+	// host or address followed by a port, path, query or fragment, or a
+	// dotted host whose last label is two or more letters or starts xn--,
+	// with or without them (F6, and the coordinator's answer op782-fix1-a-1:
+	// evil.example, evil.example:443, 10.0.0.1:8080, evil.xn--p1ai and a file
+	// name such as main.go; a dotted number alone, such as 2.105.0, stays).
+	summonURLLike = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://\S*|\b(?:mailto|tel|sms|javascript|data|file|vbscript):\S+|\bwww\.\S+|` +
+		`\b[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::[0-9]+(?:[/?#]\S*)?|[/?#]\S*)|` +
+		`\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:xn--[a-z0-9-]+|[a-z]{2,})\b(?::[0-9]+)?(?:[/?#]\S*)?`)
 	summonWordShape = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 )
 
@@ -438,12 +654,32 @@ func summonStoredName(s string) string {
 	return "unknown"
 }
 
-// summonNote is a session's note as a page shows it: every link replaced by
-// [link removed], every control or format character by a space, then cut to
-// 200 characters.
+// summonNote is a session's note as a page shows it: every control or format
+// character and every line or paragraph separator (U+2028 and U+2029
+// included) a space, every link replaced by [link removed], then cut to 200
+// characters. A cut can end a word as a host ("evil.co1x" cut to "evil.co"),
+// so the cut text is redacted once more and cut again; that second cut can
+// only shorten the last [link removed].
 func summonNote(note string) string {
-	note = strings.ToValidUTF8(note, "�")
-	note = summonURLLike.ReplaceAllStringFunc(note, func(m string) string {
+	note = strings.ToValidUTF8(note, "\ufffd")
+	note = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return ' '
+		}
+		return r
+	}, note)
+	note = summonRedact(note)
+	if utf8.RuneCountInString(note) > summonNoteMax {
+		note = summonRedact(string([]rune(note)[:summonNoteMax]))
+		if utf8.RuneCountInString(note) > summonNoteMax {
+			note = string([]rune(note)[:summonNoteMax])
+		}
+	}
+	return note
+}
+
+func summonRedact(note string) string {
+	return summonURLLike.ReplaceAllStringFunc(note, func(m string) string {
 		// Trailing punctuation belongs to the sentence, and so does a closing
 		// parenthesis the link did not open.
 		trimmed := strings.TrimRight(m, ".,;:!?")
@@ -452,16 +688,6 @@ func summonNote(note string) string {
 		}
 		return "[link removed]" + m[len(trimmed):]
 	})
-	note = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			return ' '
-		}
-		return r
-	}, note)
-	if utf8.RuneCountInString(note) > summonNoteMax {
-		note = string([]rune(note)[:summonNoteMax])
-	}
-	return note
 }
 
 // render builds the fixed-template notice and its content-free record: the
