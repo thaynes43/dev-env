@@ -22,6 +22,7 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 		Agent:          string(s.Spec.Agent),
 		Mode:           string(s.Spec.Mode),
 		Model:          s.Spec.Model,
+		Title:          s.Spec.Title,
 		Effort:         s.Spec.Effort,
 		Size:           string(s.Spec.Size),
 		Profile:        s.Spec.Profile,

@@ -19,7 +19,8 @@ package controller
 //     waits for its pod suspends the session with SummonCloseSuspender, so
 //     its pod goes. A remote session's pod is rescued and deleted as on any
 //     suspend; a task's recorded executor is asked to end by the private
-//     executor stop (summonStopDue, DESIGN-025 4), and release then accepts
+//     executor stop (summonStopDue, DESIGN-025 4), released or not (story
+//     780 fix round 2), and release then accepts
 //     its terminal phase with its terminal record (coordinator answer
 //     op779-q-1, option A). The volume is kept; nothing is deleted.
 //
@@ -169,6 +170,22 @@ func (r *Reconciler) summonWatchdogInputs(ctx context.Context, s *v1alpha1.Agent
 			}
 		}
 	case v1alpha1.ModeRemote:
+		if ex := st.Executor; summonRemoteLatched(s) && ex != nil && ex.Attempted && ex.PodUID != "" {
+			// session-lost (OP780): the remote latch's recorded pod is gone,
+			// or another pod holds its name, by an uncached read. A hold pod
+			// under the name is another pod; it is made only for a suspend or
+			// a reap, whose stop row wins over this one (FirstReason).
+			var pod corev1.Pod
+			err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: s.Name}, &pod)
+			switch {
+			case apierrors.IsNotFound(err):
+				in.SessionLost = true
+			case err != nil:
+				return fmt.Errorf("read the recorded executor of %s: %w", s.Name, err)
+			default:
+				in.SessionLost = string(pod.UID) != ex.PodUID
+			}
+		}
 		if heartbeatsReady && a != nil && a.LastHeartbeat != nil && !now.Before(a.LastHeartbeat.Add(summonHeartbeatLost)) {
 			pod, err := getOwned(ctx, r.APIReader, s, s.Name, &corev1.Pod{})
 			if err != nil {
@@ -228,15 +245,22 @@ func summonHoldExpired(s *v1alpha1.AgentSession, now time.Time) bool {
 }
 
 // summonStopDue reports whether a summoned task's recorded executor is asked
-// to end: the session is admitted, closed, not released and suspended, by
-// the operator's own suspend after its close or by anyone. Its work is over
-// and nothing resumes it (N3), so its executor is stopped as a reaped one's
-// is (DESIGN-025 4): the kubelet ends the pod, and the pod object and the
-// volume stay (coordinator answer op779-q-1, option A).
+// to end: the session is admitted, closed by the operator (source
+// unreported) and suspended, by the operator's own suspend after its close or
+// by anyone, and not being deleted. Its work is over and nothing resumes it
+// (N3), so its executor is stopped as a reaped one's is (DESIGN-025 4): the
+// kubelet ends the pod, and the pod object and the volume stay (coordinator
+// answer op779-q-1, option A). The stop stays due after closed.released is
+// set, with its retries, until the recorded executor has ended
+// (terminalRecordApplies, privateStopNeeded): a release on the start fence
+// and the two time bounds alone (OP780) must not end it (story 780 fix round
+// 2, F2, coordinator rulings in PR 1100 comment 6839380816). A session that
+// reported its own outcome keeps its pod for the post-mortem, and every hold
+// of the stop path (the owner's HOME-expiry hold among them) still applies.
 func summonStopDue(s *v1alpha1.AgentSession) bool {
 	st := s.Status.Summon
 	return s.Spec.Caller != "" && s.Spec.Mode == v1alpha1.ModeTask && st != nil && st.AdmittedAt != nil &&
-		st.Closed != nil && !st.Closed.Released && s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && s.DeletionTimestamp.IsZero()
+		st.Closed != nil && st.Closed.Source == summonoutcome.Unreported && s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && s.DeletionTimestamp.IsZero()
 }
 
 // suspendClosedSummon is the operator's own suspend of a closed, admitted

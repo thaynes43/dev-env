@@ -175,6 +175,9 @@ func (a *app) printSession(s apiv1.Session) {
 		_, _ = fmt.Fprintf(tw, "%s:\t%s\n", k, fmt.Sprintf(format, args...))
 	}
 	row("name", "%s", s.Name)
+	if s.Title != "" {
+		row("title", "%s", s.Title)
+	}
 	phase := s.Phase
 	if s.Node != "" {
 		phase += " on " + s.Node

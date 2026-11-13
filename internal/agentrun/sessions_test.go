@@ -101,6 +101,24 @@ func TestListWithNoSessions(t *testing.T) {
 	}
 }
 
+func TestShowPrintsTitle(t *testing.T) {
+	h := newHarness(t)
+	s := testSession(name, "Running")
+	s.Title = "Main coordinator"
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		writeTestJSON(w, http.StatusOK, s)
+	}
+	h.mustRun(ExitOK, "show", name)
+	if !strings.Contains(h.stdout.String(), "title:") || !strings.Contains(h.stdout.String(), "Main coordinator") {
+		t.Fatalf("show %s", h.stdout.String())
+	}
+	s.Title = ""
+	h.mustRun(ExitOK, "show", name)
+	if strings.Contains(h.stdout.String(), "title:") {
+		t.Fatalf("untitled show printed a title: %s", h.stdout.String())
+	}
+}
+
 func TestShow(t *testing.T) {
 	h := newHarness(t)
 	s := runningOn(testSession(name, ""), "talosw02")

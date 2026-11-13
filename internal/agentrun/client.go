@@ -267,6 +267,7 @@ var flagOf = map[string]string{
 	"base":            "--base",
 	"agent":           "--agent",
 	"model":           "--model",
+	"title":           "--title",
 	"effort":          "--effort",
 	"prompt":          "-p",
 	"size":            "--size",

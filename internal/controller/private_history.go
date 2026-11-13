@@ -251,6 +251,9 @@ func (r *Reconciler) bindPrivateHistoryHome(ctx context.Context, s *v1alpha1.Age
 type executorReservation struct {
 	intent          string
 	resourceVersion string
+	// summon is true for the remote executor latch (status.summon.executor,
+	// reserveSummonExecutor), false for the private task latch.
+	summon bool
 }
 
 // Record the attempt before Pod creation. A failed/lost create is uncertain,
@@ -312,6 +315,10 @@ func (r *Reconciler) reservePrivateExecutor(ctx context.Context, s *v1alpha1.Age
 // confirmed, the attempt stays latched, as it was before.
 func (r *Reconciler) recordExecutorNotCreated(ctx context.Context, s *v1alpha1.AgentSession, res executorReservation) {
 	if res.intent == "" || res.resourceVersion == "" {
+		return
+	}
+	if res.summon {
+		r.recordSummonNotCreated(ctx, s, res)
 		return
 	}
 	fresh, err := r.privateHistorySession(ctx, s)

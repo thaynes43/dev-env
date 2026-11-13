@@ -327,6 +327,11 @@ func (req ExplicitClaudeRCRequest) validate() error {
 }
 
 func explicitSessionAllowed(s Settings, sess protocol.Session, req ExplicitClaudeRCRequest) error {
+	if sess.Caller != "" {
+		// DESIGN-064 5.9 and N3 (OP780): a summoned session's provider starts
+		// once; no continuation, explicit or automatic, starts it again.
+		return errors.New("explicit continuation is refused for a summoned session: its provider starts once")
+	}
 	if sess.Agent != protocol.AgentClaude || sess.Mode != protocol.ModeTask || sess.Workspace != nil || !sess.PrivateHistoryRetained || req.SessionUID != sess.SessionUID || !retainedPrivateTask(s, sess) {
 		return errors.New("explicit continuation is only for the retained private Claude task on this pod")
 	}

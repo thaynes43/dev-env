@@ -30,6 +30,46 @@ var beforeTaskInstructionPublish func(Launch)
 // maxStreamLine is the longest stream-json line run-agent parses.
 var maxStreamLine = 16 << 20
 
+// runAgentNow is run-agent's clock for its start fence; tests replace it.
+var runAgentNow = time.Now
+
+// beforeProviderSpawn is nil in production. Tests pause there, between the
+// launch record and the provider spawn, to prove the start fence (N2).
+var beforeProviderSpawn func(Launch)
+
+// startRefused is ~/.agentd/start-refused.json: run-agent refused to spawn the
+// provider of the launch it names because its start deadline had passed
+// (DESIGN-064 5.9, N2, OP780). The status reports the launch failed, so the
+// operator closes the session agent-failed; no task result or TUI exit is
+// written, since no provider ran.
+type startRefused struct {
+	Reason         string    `json:"reason"`
+	At             time.Time `json:"at"`
+	ConversationID string    `json:"conversationId"`
+	BootID         string    `json:"bootId"`
+}
+
+// spawnFence is run-agent's start fence, called immediately before each
+// provider spawn: a launch that carries a start deadline (only a summoned
+// session's first launch does) spawns nothing at or past it, and records why.
+// A launch without one, every ordinary launch and every older record, spawns
+// as before. It returns why it refused, or "".
+func spawnFence(l Launch, stateDir string) string {
+	if beforeProviderSpawn != nil {
+		beforeProviderSpawn(l)
+	}
+	if l.StartDeadline == "" {
+		return ""
+	}
+	now := runAgentNow()
+	why := startDeadlineRefusal(l.StartDeadline, false, now)
+	if why == "" {
+		return ""
+	}
+	_ = writeJSONFile(filepath.Join(stateDir, startRefusedFile), startRefused{Reason: why, At: now.UTC(), ConversationID: l.ConversationID, BootID: l.BootID})
+	return why
+}
+
 // taskResult is ~/.agentd/task-result.json, written when the agent exits.
 type taskResult struct {
 	protocol.TaskResult
@@ -161,6 +201,12 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		_ = pr.Close()
 		_ = pw.Close()
 		_, _ = fmt.Fprintln(out, "agentd: shared writer proof changed before spawn")
+		return 1
+	}
+	if why := spawnFence(l, stateDir); why != "" {
+		_ = pr.Close()
+		_ = pw.Close()
+		_, _ = fmt.Fprintf(out, "[agentd] task %s: %s; the provider was not started (DESIGN-064 5.9)\n", l.Session, why)
 		return 1
 	}
 	if err := cmd.Start(); err != nil {
@@ -442,6 +488,12 @@ func runTUI(l Launch, stateDir string, tty *os.File, pane io.Writer, signals <-c
 	if err := nativeLease.beforeSpawn(l, started); err != nil {
 		note("shared writer proof changed before spawn")
 		record(1)
+		return 1
+	}
+	if why := spawnFence(l, stateDir); why != "" {
+		// No TUI exit is recorded: no provider ran, and the status reports
+		// the refusal (start-refused.json) as a failed launch.
+		note("%s: %s; the provider was not started (DESIGN-064 5.9)", l.Session, why)
 		return 1
 	}
 	if err := cmd.Start(); err != nil {
