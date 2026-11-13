@@ -696,8 +696,8 @@ func TestSummonCreateKindsFlag(t *testing.T) {
 		t.Fatalf("--summon-create-kinds must be empty by default: %v %v", o.summonCreateKinds, err)
 	}
 	// Since OP777 (ruling D8) a kind starts only with the lanes flag and, for
-	// task, both task latch flags; remote is refused until slice d
-	// (TestSummonedLanesStartRefusals). The parse itself is unchanged.
+	// task, both task latch flags (TestSummonedLanesStartRefusals); remote
+	// starts since slice d (OP780). The parse itself is unchanged.
 	withLanes := []string{"--enable-summoned-lanes", "--enable-private-history-retention", "--enable-private-terminal-record", "--enable-private-executor-stop", "--enable-terminal-task-pod-reclaim"}
 	for _, tc := range []struct {
 		arg  string
@@ -705,6 +705,9 @@ func TestSummonCreateKindsFlag(t *testing.T) {
 	}{
 		{"--summon-create-kinds=", nil},
 		{"--summon-create-kinds=task", []v1alpha1.SummonKind{v1alpha1.SummonKindTask}},
+		{"--summon-create-kinds=remote", []v1alpha1.SummonKind{v1alpha1.SummonKindRemote}},
+		{"--summon-create-kinds=task,remote", []v1alpha1.SummonKind{v1alpha1.SummonKindTask, v1alpha1.SummonKindRemote}},
+		{"--summon-create-kinds=remote,task", []v1alpha1.SummonKind{v1alpha1.SummonKindRemote, v1alpha1.SummonKindTask}},
 	} {
 		o, err := parseFlags(append([]string{tc.arg}, withLanes...))
 		if err != nil || !slices.Equal(o.summonCreateKinds, tc.want) {
@@ -715,7 +718,7 @@ func TestSummonCreateKindsFlag(t *testing.T) {
 			t.Errorf("%s: start line value %q", tc.arg, got)
 		}
 	}
-	for _, v := range []string{"Task", "task,task", "task,", ",task", ",", "local", "task, remote", " task", "task,remote,task", "remote", "task,remote", "remote,task"} {
+	for _, v := range []string{"Task", "task,task", "task,", ",task", ",", "local", "task, remote", " task", "task,remote,task"} {
 		_, err := parseFlags(append([]string{"--summon-create-kinds=" + v}, withLanes...))
 		if err == nil {
 			t.Errorf("--summon-create-kinds=%q was accepted", v)
@@ -750,7 +753,11 @@ func TestSummonedLanesStartRefusals(t *testing.T) {
 		{"task with lanes", append([]string{"--summon-create-kinds=task", "--enable-summoned-lanes"}, latch...), ""},
 		{"task without retention", append([]string{"--summon-create-kinds=task", "--enable-summoned-lanes"}, noRetention...), "--enable-private-history-retention and --enable-terminal-task-pod-reclaim"},
 		{"task without reclaim", []string{"--summon-create-kinds=task", "--enable-summoned-lanes", "--enable-private-history-retention", "--enable-private-terminal-record", "--enable-private-executor-stop"}, "--enable-private-history-retention and --enable-terminal-task-pod-reclaim"},
-		{"remote with everything", append([]string{"--summon-create-kinds=remote", "--enable-summoned-lanes"}, latch...), "may not name remote"},
+		// OP780 (slice d of item 741) lifts the refusal of remote (ruling D8):
+		// the remote latch is in this binary. It needs no task latch flag.
+		{"remote with everything", append([]string{"--summon-create-kinds=remote", "--enable-summoned-lanes"}, latch...), ""},
+		{"remote with lanes", []string{"--summon-create-kinds=remote", "--enable-summoned-lanes"}, ""},
+		{"task and remote without reclaim", []string{"--summon-create-kinds=task,remote", "--enable-summoned-lanes", "--enable-private-history-retention", "--enable-private-terminal-record", "--enable-private-executor-stop"}, "--enable-private-history-retention and --enable-terminal-task-pod-reclaim"},
 		{"remote without lanes", []string{"--summon-create-kinds=remote"}, "--enable-summoned-lanes"},
 		{"empty without lanes", []string{"--summon-create-kinds="}, ""},
 		{"lanes without election", []string{"--enable-summoned-lanes", "--leader-elect=false"}, "--leader-elect"},

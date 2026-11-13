@@ -2205,10 +2205,11 @@ session without one is built exactly as before.
   decided again. This shared compare-and-set fences overlapping leaders,
   including an old leader's request completing after a handover.
   The Session write also sets `SummonAdmitted=True`. A held session shows
-  `SummonAdmitted=False` with `LaneBusy`, `PoolBusy`, `PolicyGone`,
-  `TaskLatchMissing` (a task while the operator lacks either latch flag, or
-  whose latch record cannot start) or `RemoteLatchMissing` (every summoned
-  remote session, until slice d of item 741 builds the remote latch). An
+  `SummonAdmitted=False` with `LaneBusy`, `PoolBusy`, `PolicyGone`
+  or `TaskLatchMissing` (a task while the operator lacks either latch flag, or
+  whose latch record cannot start). Story 780 (slice d of item 741) built the
+  remote latch, so the `RemoteLatchMissing` hold that held every summoned
+  remote session until then is gone. An
   escalation is never held for its lane, and an open escalation never holds a
   remediation. A leader that restarts recomputes everything from these
   records. A missing ConfigMap, failed read or malformed grant document
@@ -2220,6 +2221,67 @@ session without one is built exactly as before.
   a stale grant never holds capacity. API charge, mark, rebind, prune and
   urgent-refusal writes carry `_admission` through unchanged and never
   count or decode it as a caller's entry.
+- *The remote executor latch* (story 780, DESIGN-064 5.9). A summoned task
+  uses the private task latch (`status.privateHistory`). A summoned remote
+  session uses `status.summon.executor`: before its one Pod create the
+  operator records `attempted` and an `intent`, confirmed by an uncached
+  re-read and locked on the read that found the session admitted and open,
+  so a close that lands first stops the create. The pod carries the intent
+  in the annotation `dev-env.haynesops.com/summon-executor-intent`; once an
+  uncached read finds that pod, its UID is recorded in `podUID`. An attempt
+  is never reversed and `podUID` never changes (CEL). After an attempt no
+  path builds another pod: not a recreate after an eviction, not a resume,
+  not an image move, not a lost create response. The one exception is
+  DESIGN-019's known non-attempt: when the operator returned before calling
+  Create because an observation failed, it marks `notCreated` over its own
+  write, and the same intent re-arms once per mark. A session with no latch
+  record that already shows a pod, an agent or a rescue gets no pod either.
+  The leader's watchdog reads the recorded pod uncached: gone, or another UID
+  under its name, closes the session `session-lost`. A rescue hold pod under
+  the name is another UID; it is made only for a suspend or a reap, whose
+  stop row wins over `session-lost`.
+- *agentd's half* (story 780, in the agent image). A session whose session
+  document carries `caller` and that has a launch record (`launch.json` or a
+  task result) starts nothing on any boot, in every mode, whatever the repo
+  step did: no TUI resume, no explicit continuation, no provider. Its status
+  says how the first run ended, by the handoff record below: for a launch
+  tmux started, `exited` (a task result, or the first TUI run's own exit
+  record), `failed` (refused by the start fence, below) or `interrupted`.
+  A remote one reports that, not `login-required`.
+  `BuildResume` and the explicit Claude continuation refuse a summoned
+  session too. A session without `caller` boots exactly as before.
+  When the tmux start of a summoned session's first launch returns an
+  error, its `launch.json` stays (story 780 fix round 2, coordinator rulings
+  in PR 1100 comment 6839380816; not a ruling by Tom): the provider may have
+  started, so no later boot starts it again. An ordinary launch's record
+  still goes on such an error, and a later boot starts it again.
+  Before agentd asks tmux to start a summoned session's first launch, it
+  durably writes `~/.agentd/start-handoff.json` naming that launch (its
+  conversation and boot) with state `asked` (story 780 fix round 3,
+  coordinator rulings in PR 1100 comment 6840263445; not a ruling by Tom).
+  If that write fails, tmux is not asked: nothing starts, the start fails
+  and `launch.json` stays. When tmux answers, agentd updates the record to
+  `started`; `nothing-started` when tmux was never asked to start the
+  launch (its session already existed) or its client never ran (it could
+  not be found, or its `fork/exec` failed); or `ambiguous` for any other
+  error, another path error included. If the update fails before the new
+  record is in place, the record still says `asked`; if it fails after
+  (the directory could not be synced), the record already shows tmux's
+  answer, which is true, and only its durability is unconfirmed. An
+  ordinary launch writes no handoff record. The status
+  follows the record, never the boot's agent error or a later boot's start
+  window:
+
+  | Handoff record | Status |
+  |---|---|
+  | `nothing-started`, or the start fence refused this launch | `failed` |
+  | `started` | as for any launch: `busy` while it runs, `exited` with a task result or the TUI's own exit record, otherwise `interrupted`; only the launch's own boot counts the start window |
+  | `asked` or `ambiguous` | `busy` while a process lives, and inside the start window of the launch's own boot; then `interrupted`, at once on a later boot. Never `failed` or `exited`; a task result still reaches the operator in `status.agent.task` |
+  | missing, unreadable, truncated, of another launch | as `asked` |
+
+  So a failed first write closes the session `agent-interrupted`, not
+  `agent-failed`, and a summoned launch recorded by an agentd without this
+  record reads as `asked` (coordinator answer to question op780-fix3-q-1).
 - *Not charged* (ruling D5 on item 741). A Queued session whose dispatch id
   the ledger does not hold, or holds for another name, is never admitted. It
   is closed by its `onUnreported` (a remediation `escalated`, with its pending
@@ -2249,22 +2311,68 @@ session without one is built exactly as before.
   terminal phase (`Failed` or `Succeeded`) by an uncached read, and its
   terminal record for that pod UID is stored; such a pod never runs a
   container again. Every container terminated while the phase is `Running`
-  is not enough. An unreleased close keeps its lane and its slot.
+  is not enough. For a remote session the latch's own rows apply the same
+  way: no latch record and no pod, or a known non-attempt, releases at once;
+  the recorded pod gone or replaced releases; an attempt with no recorded
+  pod and no pod needs `admittedAt` plus 16 minutes. Story 780 adds the
+  start fence's row for both modes. With the pod still present, its
+  reservation is released when the pod's agent container runs a released
+  agent image `ghcr.io/thaynes43/dev-env:2.MINOR.PATCH@sha256:...` with
+  MINOR at least 108, the first release with the fence
+  (`summonStartFenceMinor`), once two bounds have both passed:
+  - `admittedAt` plus 15 minutes plus one minute. After it a fenced agentd
+    starts no provider.
+  - `status.summon.closed.at` plus 5 minutes, by the operator's clock
+    (`summonFencedCloseWait`). A provider the agent already started may
+    still run: a task closed `deadline` is one whose own timer did not stop
+    it. This bound lets a pod the operator can stop free its lane when it
+    has stopped, so the next session of a single-flight lane never overlaps
+    it. A pod that cannot go (never scheduled, a partitioned node, a rescue
+    that hangs) holds its lane until the later of the start deadline plus
+    one minute and 5 minutes after the close, subject to a reconcile; not
+    forever, and not always within 5 minutes of the close: a close 5 minutes
+    after admission holds until 11 minutes after the close, which is 16
+    minutes after admission (story 780 fix round 2, coordinator rulings in
+    PR 1100 comment 6839380816; not a ruling by Tom).
+
+  Before both have passed, the release waits for the pod to go, by the rows
+  above. While only the two bounds hold such a pod, the operator reconciles
+  the session again by the later bound: the time left, at least a second and
+  at most a minute. The second bound and the recheck are story 780 fix round
+  1 (coordinator ruling C1 in PR 1100 comment 6837450502, and coordinator
+  answer `op780-fix1-q-1`; not a ruling by Tom). They narrow the slice's
+  first build, which released at the first bound "whether or not the
+  provider started". The image is the one the operator put in the pod: a
+  summoned pod always runs the templates image. Any other image (an older
+  release, a digest only, a `sha-` tag) keeps the rule above: the
+  reservation holds until the pod is gone, and no recheck is asked. An
+  unreleased close keeps its lane and its slot.
 - *The operator's suspend* (story 779, item 779 comment 7377, ruling D3).
   After an operator close of an admitted session whose release waits for its
   pod (`deadline`, `agent-interrupted`, `agent-failed`, `never-started`,
   `heartbeat-lost` and the like), the operator suspends it with
-  `suspended-by: summon-close`. A remote session's suspend rescues and
+  `suspended-by: summon-close`. Since story 780 it does the same before a
+  release on the start fence alone, with the pod still present: the suspend
+  is written first, then the release, and a task's stop stays due after the
+  release, so the pod still goes. A remote session's suspend rescues and
   deletes its pod as any suspend does, and the "pod gone" rule releases. A
   task's executor is a private one, which a suspend never deletes: for a
-  closed, unreleased summoned task that is suspended, by the operator or by
-  anyone, the private executor stop applies (DESIGN-025 4: the pod's
-  `activeDeadlineSeconds`). The kubelet ends the pod, its terminal record is
-  written, and the terminal-phase row releases. The pod object and the
+  summoned task the operator closed (`closed.source` `unreported`) that is
+  suspended, by the operator or by anyone, the private executor stop
+  applies (DESIGN-025 4: the pod's `activeDeadlineSeconds`), released or
+  not, with its retries, until the recorded executor has ended (story 780
+  fix round 2). So a lane released on the start fence alone still has its
+  old pod stopped, even when the first reconcile comes after both bounds or
+  the stop failed until then. A session that reported its own outcome keeps
+  its pod for the post-mortem, and the owner's HOME-expiry hold still
+  blocks the stop. The kubelet ends the pod, its terminal record is
+  written, and the terminal-phase row releases if the lane is still held. The pod object and the
   volume stay; nothing is deleted, and the task clean-up of ADR-020 applies
   later as to any ended task. Limit: a recorded pod that is never scheduled
   has no start time, so the stop cannot end it. Its session is still closed
-  (a remediation escalates), but the lane holds until the pod schedules
+  (a remediation escalates). With an image that carries the start fence, the
+  fence's row above frees its lane at the later of its two bounds (story 780
+  fix rounds 1 and 2). With any other image the lane holds until the pod schedules
   (then agentd refuses the late launch and the stop ends it). A reap stops
   such a pod the same way, so it does not free the lane sooner; this was
   not tested further.
@@ -2342,16 +2450,24 @@ session without one is built exactly as before.
   is reported and the pass continues; the grant still holds its slot, and
   another lane's ready session is admitted in the same pass.
 - *The start deadline.* An admitted summoned pod gets
-  `AGENTD_START_DEADLINE`, `admittedAt` plus 15 minutes. Pinned agent 2.105.0
-  checks this before writing its first `launch.json`; it does not fence a
-  provider spawn already pending after that write (story 780). Such a pod
-  runs on the templates image, as a scheduled session's does.
+  `AGENTD_START_DEADLINE`, `admittedAt` plus 15 minutes. Agent 2.105.0 and
+  later check this before writing the first `launch.json`. From story 780's
+  agent image, agentd also copies it into a summoned session's first launch
+  record (`startDeadline`), and run-agent checks it again immediately before
+  it spawns the provider, task or TUI: at or past it, it spawns nothing,
+  writes `~/.agentd/start-refused.json` and the status reports the launch
+  `failed`, so the session closes `agent-failed`. A launch record without the
+  field (every ordinary session's, every older record) runs as before; a
+  scheduled session's launch never gets it. Such a pod runs on the templates
+  image, as a scheduled session's does.
 - *Start refusals* (ruling D8). The operator refuses to start with
   `--enable-summoned-lanes` on and `--leader-elect=false`; with
   `--summon-create-kinds` set and `--enable-summoned-lanes` off; with `task`
   named and either `--enable-private-history-retention` or
-  `--enable-terminal-task-pod-reclaim` off; and with `remote` named at all,
-  until slice d.
+  `--enable-terminal-task-pod-reclaim` off. Story 780 lifted the refusal of
+  `remote`: its latch is in the binary. Naming `remote` still waits, in
+  haynes-ops, for story 745 and a pinned agent image with story 780's agentd
+  half (DESIGN-064 5.9); no code checks that.
 
 The admission, overlapping-write, release and delayed-Create proofs use
 fake-client controller tests with request hooks and a fake clock. They
@@ -2364,6 +2480,18 @@ daemon and that `BuildResume` refuses them. The pending-first-spawn states
 and late-first-boot deadline guarantee also rest on the pinned 2.105.0
 `launch.go`, `status.go`, `daemon.go` and `start_deadline.go` source. These
 are source and test proofs, not a live cluster or provider failover test.
+Story 780's proofs: `TestSummonExecutorLatchRules` (envtest, the CEL rules),
+`TestSummonRemoteLatchOnePodThenSessionLost`,
+`TestSummonRemoteCloseBeforeLatchWriteCreatesNoPod`,
+`TestSummonRemoteSamePodRestartClosesOnce`,
+`TestSummonRemoteKnownNonAttemptRearmsOnce`,
+`TestSummonReleaseAtStartDeadlineOnlyWithTheFence`,
+`TestOrdinaryRemoteSessionBuildsAsToday` and
+`TestSummonPausedLaunchSpawnsNoProviderAfterRelease` in
+`internal/controller` (the last runs agentd's `BuildLaunch`, `StartAgent`
+and `RunAgent` beside the fake operator); `TestSummonedLaunchRecordStartsNothingOnBoot`,
+`TestOrdinaryBootWithLaunchRecordResumesAsToday`, `TestRunAgentStartFence`
+and `TestSummonedPausedLaunchRefusedPastStartDeadline` in `internal/agentd`.
 
 **The API's pool, with `--enable-summoned-lanes` off.** The API counts the caller's
 unfinished summoned session records, uncached: escalations against

@@ -40,6 +40,10 @@ type daemonProcess struct {
 // as busy before its pid file appears.
 const startWindow = time.Minute
 
+// summonedInterrupted is a summoned session's interrupted message: its first
+// run is gone without a result, and nothing starts it again (DESIGN-064 5.9).
+const summonedInterrupted = "the summoned session's process is gone without a result; agentd never starts it again (DESIGN-064 5.9)"
+
 // CollectStatus builds the session's status from agentd's state files and the
 // worktree. The heartbeat and `agentd ctl status` both use it, so the
 // operator sees the same thing either way. It reads; it never changes state.
@@ -131,13 +135,34 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	if hasExplicit && explicitState != explicitClaudeRCUncertain {
 		cur, hasCur = explicitLaunch, true
 	}
+	// A summoned session's first run is its only one (DESIGN-064 5.9,
+	// OP780): after a later boot, which starts nothing, the status says how
+	// that run ended, never that a login is wanted for a start that will not
+	// happen.
+	summonedRun := sess.Caller != "" && launched
+	var refused startRefused
+	// A summoned launch's state follows its tmux handoff record (story 780
+	// fix round 3), never this boot's agent error or a later boot's start
+	// window. Only a launch tmux started reads the branches below.
+	var summoned protocol.AgentState
+	summonedSettled := false
+	if summonedRun {
+		summoned, summonedSettled = summonedRunState(s, first, boot.BootID, now)
+	}
 	switch {
-	case boot.AgentError != "":
+	case summonedSettled:
+		st.Agent = summoned
+	case boot.AgentError != "" && !summonedRun:
 		st.Agent = protocol.AgentState{State: protocol.AgentFailed, Error: boot.AgentError}
+	case launched && readJSONFile(s.statePath(startRefusedFile), &refused) == nil && refused.ConversationID == first.ConversationID && refused.BootID == first.BootID:
+		// run-agent's start fence refused the provider spawn (N2): the
+		// launch failed and no provider ran.
+		created := first.CreatedAt
+		st.Agent = protocol.AgentState{State: protocol.AgentFailed, StartedAt: &created, Error: "run-agent refused to start the provider: " + refused.Reason}
 	case codexRemoteSession(sess):
 		// Story110 T17: the agent is the phone daemon, read from its own state.
 		st.RemoteControl, st.Agent = collectCodexRemote(ctx, s, sess, boot.BootID, now)
-	case sess.Mode == protocol.ModeRemote && !hasCur && !checkLogin(s).Usable(now):
+	case sess.Mode == protocol.ModeRemote && !hasCur && !summonedRun && !checkLogin(s).Usable(now):
 		// Story110 T03: a remote pod without a usable login has not started
 		// its agent. The message names the way forward, never a secret.
 		msg := "no usable Claude login in this pod; run: agent-run login " + sess.Name + " url"
@@ -153,6 +178,15 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	case finished:
 		started := res.StartedAt
 		st.Agent = protocol.AgentState{State: protocol.AgentExited, StartedAt: &started}
+	case summonedRun && first.TUI:
+		// A later boot of a summoned TUI session: its first run's own exit
+		// record says whether it exited; otherwise it was interrupted. This
+		// boot started nothing, so the start window does not count (story
+		// 780 fix round 3).
+		st.Agent = tuiStateAt(s, first, now, false)
+		if st.Agent.State == protocol.AgentInterrupted {
+			st.Agent.Error = summonedInterrupted
+		}
 	case launched:
 		created := first.CreatedAt
 		st.Agent = protocol.AgentState{StartedAt: &created}
@@ -167,6 +201,8 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 			st.Agent.Error = "the agent's process is gone and it left no result; agentd does not run a task's prompt twice (D-42), and the next boot resumes it (D-58)"
 			if retainedPrivateTask(s, sess) {
 				st.Agent.Error = "the private task's process is gone without a result; its launch and HOME remain retained, and agentd never automatically resumes it"
+			} else if sess.Caller != "" {
+				st.Agent.Error = summonedInterrupted
 			}
 		}
 	}
@@ -233,6 +269,68 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	return st
 }
 
+// summonedHandoff is the handoff record of the summoned session's first
+// launch l (story 780 fix round 3). A record that is missing, unreadable or
+// truncated, names another launch or holds an unknown state counts as
+// handoffAsked: a launch record written before any handoff record (fix round
+// 2's code, or a boot that ended between the two writes), or a handoff whose
+// update was lost.
+func summonedHandoff(s Settings, l Launch) startHandoff {
+	var h startHandoff
+	if readJSONFile(s.statePath(startHandoffFile), &h) != nil || h.ConversationID != l.ConversationID || h.BootID != l.BootID {
+		return startHandoff{State: handoffAsked}
+	}
+	switch h.State {
+	case handoffStarted, handoffNothingStarted, handoffAmbiguous:
+		return h
+	}
+	return startHandoff{State: handoffAsked}
+}
+
+// summonedRunState is the state of a summoned session's first launch, from
+// its handoff record (DESIGN-064 5.9, story 780 fix round 3, coordinator
+// rulings in PR 1100 comment 6840263445). settled is false only when tmux
+// started the launch: its state is then read as for any launch, without the
+// boot's agent error. Otherwise:
+//
+//   - nothing of the launch can have started, or run-agent's fence refused
+//     its spawn: failed;
+//   - tmux was asked and its answer is ambiguous or not recorded: busy while
+//     a process is live, and inside the start window of the launch's own
+//     boot; interrupted after it, and at once on any later boot. Never
+//     failed, since the provider may have started.
+func summonedRunState(s Settings, first Launch, bootID string, now time.Time) (st protocol.AgentState, settled bool) {
+	created := first.CreatedAt
+	st = protocol.AgentState{StartedAt: &created}
+	h := summonedHandoff(s, first)
+	var refused startRefused
+	switch {
+	case readJSONFile(s.statePath(startRefusedFile), &refused) == nil && refused.ConversationID == first.ConversationID && refused.BootID == first.BootID:
+		st.State, st.Error = protocol.AgentFailed, "run-agent refused to start the provider: "+refused.Reason
+		return st, true
+	case h.State == handoffNothingStarted:
+		st.State, st.Error = protocol.AgentFailed, "the tmux start of the summoned session's first launch failed before anything could start ("+h.Reason+"); agentd never starts it again (DESIGN-064 5.9)"
+		return st, true
+	case h.State == handoffStarted:
+		return protocol.AgentState{}, false
+	}
+	var p agentPid
+	switch {
+	case readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p):
+		st.State = protocol.AgentBusy
+	case first.BootID == bootID && now.Sub(first.CreatedAt) < startWindow:
+		st.State = protocol.AgentBusy
+	default:
+		why := "tmux's answer is not recorded"
+		if h.State == handoffAmbiguous {
+			why = "tmux returned an error (" + h.Reason + ")"
+		}
+		st.State = protocol.AgentInterrupted
+		st.Error = "the summoned session's first launch was handed to tmux, " + why + ", so its provider may have started, and no process of it is live; agentd never starts it again (DESIGN-064 5.9)"
+	}
+	return st, true
+}
+
 // remoteTitleForReport is status.remoteControl.title. It stays empty until
 // this boot's CLI process is live, and it keeps the value passed at launch
 // after that process exits. Empty also means the launch passed the session name.
@@ -276,6 +374,12 @@ func workspaceLaunchPending(s Settings, l Launch, now time.Time) bool {
 // runs (plan 02's idle detection refines that), exited once it recorded its
 // exit, and interrupted when it is gone without one.
 func tuiState(s Settings, l Launch, now time.Time) protocol.AgentState {
+	return tuiStateAt(s, l, now, true)
+}
+
+// tuiStateAt is tuiState; window false leaves out the start window, for a
+// boot that did not start the TUI (story 780 fix round 3).
+func tuiStateAt(s Settings, l Launch, now time.Time, window bool) protocol.AgentState {
 	created := l.CreatedAt
 	st := protocol.AgentState{StartedAt: &created}
 	var p agentPid
@@ -288,7 +392,7 @@ func tuiState(s Settings, l Launch, now time.Time) protocol.AgentState {
 		if exit.ExitCode != 0 {
 			st.Error = fmt.Sprintf("the TUI exited with code %d at %s", exit.ExitCode, exit.FinishedAt.Format(time.RFC3339))
 		}
-	case now.Sub(l.CreatedAt) < startWindow:
+	case window && now.Sub(l.CreatedAt) < startWindow:
 		st.State = protocol.AgentBusy
 	default:
 		st.State = protocol.AgentInterrupted

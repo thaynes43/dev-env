@@ -3388,12 +3388,65 @@ spec:
                     - name
                     - state
                     type: object
+                  executor:
+                    description: |-
+                      Executor is a summoned remote session's executor latch (DESIGN-064 5.9,
+                      F3, OP780): the operator records its one pod attempt before the Pod
+                      create and the pod's UID once it appears, so no path builds a second
+                      pod. A summoned task uses status.privateHistory instead. It is never
+                      removed.
+                    properties:
+                      attempted:
+                        description: |-
+                          Attempted is written, and confirmed, before the one Pod create. It is
+                          never reversed: a create whose result is unknown stays an attempt.
+                        type: boolean
+                      intent:
+                        description: Intent names that one create; the pod carries
+                          it in an annotation.
+                        maxLength: 128
+                        type: string
+                      notCreated:
+                        description: |-
+                          NotCreated is DESIGN-019's known non-attempt: the operator returned
+                          before calling Create for Intent because an observation failed. Only
+                          then may the same intent re-arm, once per mark.
+                        type: boolean
+                      podUID:
+                        description: |-
+                          PodUID is the pod that create made, recorded once an uncached read
+                          finds it with the intent. It never changes.
+                        maxLength: 128
+                        minLength: 1
+                        type: string
+                    required:
+                    - attempted
+                    - intent
+                    type: object
+                    x-kubernetes-validations:
+                    - message: an executor attempt is never reversed
+                      rule: '!oldSelf.attempted || self.attempted'
+                    - message: the executor intent never changes
+                      rule: size(oldSelf.intent) == 0 || self.intent == oldSelf.intent
+                    - message: the recorded executor pod UID never changes or goes
+                      rule: '!has(oldSelf.podUID) || (has(self.podUID) && self.podUID
+                        == oldSelf.podUID)'
+                    - message: an executor attempt has one intent
+                      rule: '!self.attempted || size(self.intent) > 0'
+                    - message: an executor pod is recorded only for an attempt
+                      rule: '!has(self.podUID) || self.attempted'
+                    - message: only an attempt with no recorded pod can be marked
+                        not created
+                      rule: '!has(self.notCreated) || !self.notCreated || (self.attempted
+                        && !has(self.podUID))'
                   pages:
                     description: |-
-                      Pages are the session's page events, each recorded once by the operator
-                      leader (DESIGN-064 6.8, ruling D9 on item 741, OP779). The keeper sends
-                      them (story 742); nothing sends them yet. Story 742 adds the terminal
-                      events. An entry is never removed or changed.
+                      Pages are the session's lifecycle page events, each recorded once by
+                      the operator leader (DESIGN-064 6.8, ruling D9 on item 741, OP779). The
+                      keeper sends them (story 742); nothing sends them yet. No terminal event
+                      is stored here or anywhere: the keeper derives a session's terminal page
+                      from its close record (ruling Q1 on item 742, built in PR 1102). An
+                      entry is never removed or changed.
                     items:
                       description: |-
                         SummonPage is one page event: what happened and when the operator
@@ -3404,9 +3457,11 @@ spec:
                           type: string
                         event:
                           description: |-
-                            SummonPageEvent is a page event of DESIGN-064 6.8 recorded on a session.
-                            This slice writes the two lifecycle events it decides; story 742 adds the
-                            terminal events and the rest of 6.8's lifecycle events.
+                            SummonPageEvent is a lifecycle page event of DESIGN-064 6.8 recorded on a
+                            session. This slice writes the two lifecycle events it decides; story 742
+                            adds the rest of 6.8's lifecycle events. A terminal event is never a page
+                            event here: the keeper derives it from the close record (ruling Q1 on item
+                            742, built in PR 1102).
                           enum:
                           - escalation-held
                           - escalation-reminder
@@ -3429,6 +3484,8 @@ spec:
                 - message: a page event is never removed or changed
                   rule: '!has(oldSelf.pages) || (has(self.pages) && oldSelf.pages.all(p,
                     p in self.pages))'
+                - message: the executor latch cannot be removed
+                  rule: '!has(oldSelf.executor) || has(self.executor)'
               suspendedAt:
                 description: |-
                   SuspendedAt is when the operator first saw the session suspended with

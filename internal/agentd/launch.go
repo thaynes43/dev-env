@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +40,13 @@ const (
 	// taskSourceFile is a private project task's source pin, written once
 	// before its worktree is created (DESIGN-006).
 	taskSourceFile = "task-source.json"
+	// startRefusedFile records run-agent's refusal to spawn a summoned
+	// session's provider past its start deadline (DESIGN-064 5.9, N2).
+	startRefusedFile = "start-refused.json"
+	// startHandoffFile records the tmux handoff of a summoned session's
+	// first launch: written before tmux is asked, updated when it answers
+	// (DESIGN-064 5.9, OP780 fix round 3).
+	startHandoffFile = "start-handoff.json"
 )
 
 // Launch is everything `agentd run-agent` needs to run the agent: agentd
@@ -91,6 +100,13 @@ type Launch struct {
 	// ExplicitClaudeRC is set only by an accepted explicit user continuation
 	// of one retained private Claude task. Automatic resume never sets it.
 	ExplicitClaudeRC *ExplicitClaudeRCLaunch `json:"explicitClaudeRC,omitempty"`
+	// StartDeadline is the pod's start deadline (AGENTD_START_DEADLINE, in
+	// protocol.ParseStartDeadline's form), copied by BuildLaunch only into a
+	// summoned session's first launch (DESIGN-064 5.9, N2, OP780). run-agent
+	// checks it again immediately before it spawns the provider and, past
+	// it, starts nothing. Absent, as in every ordinary launch and every
+	// record an older agentd wrote, run-agent spawns as before.
+	StartDeadline string `json:"startDeadline,omitempty"`
 }
 
 // ErrNotInPlan01 marks a session kind that a later plan builds.
@@ -186,6 +202,21 @@ func sharedGuard(ws protocol.Workspace, task bool) string {
 // agent is named: an agent this agentd does not know is refused, never run
 // as Claude.
 func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootID string, now time.Time) (Launch, error) {
+	l, err := buildFirstLaunch(s, sess, ws, bootID, now)
+	if err != nil {
+		return Launch{}, err
+	}
+	// A summoned session's first launch carries the start deadline to
+	// run-agent's pre-spawn fence (DESIGN-064 5.9, N2). Only a summoned
+	// session gets it: a scheduled session keeps today's launch, whose
+	// deadline bounds the launch record alone (DESIGN-054).
+	if sess.Caller != "" {
+		l.StartDeadline = s.StartDeadline
+	}
+	return l, nil
+}
+
+func buildFirstLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootID string, now time.Time) (Launch, error) {
 	switch sess.Agent {
 	case protocol.AgentCodex:
 		return buildCodexLaunch(s, sess, ws, nil, bootID, now)
@@ -286,6 +317,11 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first Launch, bootID string, now time.Time) (Launch, error) {
 	if retainedPrivateTask(s, sess) {
 		return Launch{}, errors.New("a terminal private task cannot automatically resume its provider")
+	}
+	if sess.Caller != "" {
+		// DESIGN-064 5.9 and N3: nothing continues a summoned session, so no
+		// path (a boot, a decision answer) can start its provider twice.
+		return Launch{}, errors.New("a summoned session is never resumed: its provider starts once")
 	}
 	switch sess.Agent {
 	case protocol.AgentCodex:
@@ -424,6 +460,66 @@ func claudeCredentialCheck(s Settings, sess protocol.Session) error {
 // second time (D-42), and every later boot resumes from it (D-58). A resume
 // goes to resume.json.
 func StartAgent(ctx context.Context, r Runner, s Settings, l Launch, self string) error {
+	return startLaunch(ctx, r, s, l, self, false)
+}
+
+// startHandoff is ~/.agentd/start-handoff.json: how far the tmux start of
+// the summoned session's first launch it names got (DESIGN-064 5.9, story
+// 780 fix round 3, coordinator rulings in PR 1100 comment 6840263445).
+// agentd writes it durably, state handoffAsked, before it asks tmux anything,
+// and calls no tmux when that write fails. When tmux answers, agentd updates
+// it to handoffStarted, handoffNothingStarted or handoffAmbiguous. An update
+// that fails before the new record is in place leaves handoffAsked; one that
+// fails after (the directory sync) leaves tmux's answer in place, true but
+// of unconfirmed durability. The launch record always stays, so no boot
+// starts the session again (summonedLaunched). The status follows this
+// record (summonedRunState). Reason names the error without tmux's output.
+type startHandoff struct {
+	State          string    `json:"state"`
+	Reason         string    `json:"reason,omitempty"`
+	At             time.Time `json:"at"`
+	ConversationID string    `json:"conversationId"`
+	BootID         string    `json:"bootId"`
+}
+
+// The states of a startHandoff.
+const (
+	// handoffAsked: tmux may be starting the launch, and its answer is not
+	// recorded.
+	handoffAsked = "asked"
+	// handoffStarted: tmux started the session that runs run-agent.
+	handoffStarted = "started"
+	// handoffNothingStarted: nothing of this launch can have started. tmux
+	// was never asked (its session already existed), or the tmux client
+	// itself could not be run (tmuxNeverRan).
+	handoffNothingStarted = "nothing-started"
+	// handoffAmbiguous: tmux returned another error, so its server may have
+	// started run-agent and so the provider.
+	handoffAmbiguous = "ambiguous"
+)
+
+// tmuxNeverRan reports whether err proves the tmux client never ran, so it
+// sent its server nothing: it could not be found (*exec.Error), or the
+// fork/exec that would start it failed (story 780 fix round 3, R2-F1b). Any
+// other error, another path error included (Run also waits and copies the
+// client's output), leaves open that the server created the session and
+// started its pane.
+func tmuxNeverRan(err error) bool {
+	var execErr *exec.Error
+	if errors.As(err, &execErr) {
+		return true
+	}
+	var pathErr *fs.PathError
+	return errors.As(err, &pathErr) && pathErr.Op == "fork/exec"
+}
+
+// startLaunch is StartAgent. summoned is set only for a summoned session's
+// first launch (spec.caller, DESIGN-064 5.9): its provider starts once, so a
+// failed start never removes its launch record, and start-handoff.json,
+// written before tmux is asked, says how far the start got. Every other
+// launch writes no handoff record and keeps today's behaviour, the removal
+// and so the retry on a later boot included.
+func startLaunch(ctx context.Context, r Runner, s Settings, l Launch, self string, summoned bool) error {
 	file := launchFile
 	if l.Resume {
 		file = resumeFile
@@ -449,23 +545,61 @@ func StartAgent(ctx context.Context, r Runner, s Settings, l Launch, self string
 	if writeErr != nil {
 		return writeErr
 	}
+	if summoned {
+		// The evidence of the handoff exists before tmux is asked. Without
+		// it, tmux is not asked: nothing starts, and the launch record stays.
+		if err := writeStartHandoff(s, l, handoffAsked, ""); err != nil {
+			return fmt.Errorf("the summoned launch's handoff record could not be written, so tmux was not asked to start it: %w", err)
+		}
+	}
 	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"has-session", "-t", "=" + TmuxSession}}); err == nil {
-		return fmt.Errorf("tmux session %q already exists", TmuxSession)
+		exists := fmt.Errorf("tmux session %q already exists", TmuxSession)
+		if summoned {
+			// tmux was never asked to start this launch: nothing started.
+			_ = writeStartHandoff(s, l, handoffNothingStarted, exists.Error())
+		}
+		return exists
 	}
 	_, err = r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{
 		"new-session", "-d", "-s", TmuxSession, "-x", "200", "-y", "50", "-c", l.Dir,
 		self, "run-agent", "--launch", s.statePath(file),
 	}})
 	if err != nil {
-		// Legacy starts retain their existing retry behavior. A native Codex
-		// start may have succeeded despite an ambiguous tmux response, so its
-		// durable unconfirmed launch must survive and prevent prompt replay.
-		if l.Provider != protocol.AgentCodex {
+		switch {
+		case summoned:
+			// DESIGN-064 5.9 (OP780 fix rounds 2 and 3): the tmux server may
+			// have started run-agent despite the error, and a summoned
+			// session's provider starts once. Its launch record stays, so no
+			// later boot starts it again (summonedLaunched). A failed update
+			// leaves handoffAsked, or tmux's answer if it was already in
+			// place (startHandoff).
+			state := handoffAmbiguous
+			if tmuxNeverRan(err) {
+				state = handoffNothingStarted
+			}
+			_ = writeStartHandoff(s, l, state, err.Error())
+		case l.Provider != protocol.AgentCodex:
+			// Legacy starts retain their existing retry behavior. A native
+			// Codex start may have succeeded despite an ambiguous tmux
+			// response, so its durable unconfirmed launch must survive and
+			// prevent prompt replay.
 			_ = os.Remove(s.statePath(file))
 		}
 		return fmt.Errorf("tmux: %s", cmdDetail(err))
 	}
+	if summoned {
+		// A failed update leaves handoffAsked, or the answer if it was
+		// already in place (startHandoff).
+		_ = writeStartHandoff(s, l, handoffStarted, "")
+	}
 	return nil
+}
+
+// writeStartHandoff durably writes start-handoff.json for l: the file and its
+// directory are synced before it returns, and a non-regular file in its place
+// is refused, not replaced.
+func writeStartHandoff(s Settings, l Launch, state, reason string) error {
+	return writeWorkspaceJSON(s.statePath(startHandoffFile), startHandoff{State: state, Reason: reason, At: time.Now().UTC(), ConversationID: l.ConversationID, BootID: l.BootID})
 }
 
 // newUUID is a random (version 4) UUID, the form `claude --session-id` wants.
@@ -502,6 +636,23 @@ func writeJSONFile(path string, v any) error {
 		return err
 	}
 	return writeFileAtomic(path, append(data, '\n'), 0o600)
+}
+
+// summonedLaunched reports whether a summoned session (DESIGN-064, spec.caller
+// set) already has its first launch: a saved launch record, or a task result,
+// whatever the mode. Such a session starts nothing again on any boot
+// (DESIGN-064 5.9, OP780): no TUI resume and no provider. As for a retained
+// private task, a record agentd cannot stat counts as present.
+func summonedLaunched(s Settings, sess protocol.Session) bool {
+	if sess.Caller == "" {
+		return false
+	}
+	for _, name := range []string{launchFile, resultFile} {
+		if _, err := os.Lstat(s.statePath(name)); !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	return false
 }
 
 func retainedPrivateTask(s Settings, sess protocol.Session) bool {

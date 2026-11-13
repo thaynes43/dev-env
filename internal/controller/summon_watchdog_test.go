@@ -850,7 +850,12 @@ func TestSummonWatchdogEscalationReminderAndBound(t *testing.T) {
 func TestSummonHeldEscalationPagesOnce(t *testing.T) {
 	esc := summonedFor("esc-held", callerA, v1alpha1.LaneEscalation, 0)
 	up := summonedFor("wo-held", callerA, v1alpha1.LaneUpgrade, 0)
+	// The escalations pool is full, so esc-held is held for it (PoolBusy).
+	// Until OP780 the remote latch's absence held it.
+	busy := summonedFor("esc-busy", callerA, v1alpha1.LaneEscalation, time.Hour)
 	w := newSummonWorld(t, summonPolicyObject(callerA, 1, ptr.To[int32](1)))
+	w.queue(busy)
+	w.admitDirect(busy)
 	w.queue(esc, up)
 	for _, at := range []time.Duration{15*time.Minute - time.Second, 15 * time.Minute, 16 * time.Minute, 30 * time.Minute, 24 * time.Hour} {
 		w.now = summonT0.Add(at)
@@ -866,7 +871,7 @@ func TestSummonHeldEscalationPagesOnce(t *testing.T) {
 			t.Fatalf("an upgrade got a page: %+v", p)
 		}
 	}
-	if w.admitted(esc.Name) || w.hold(esc.Name) != "False/"+SummonReasonRemoteLatchMissing {
+	if w.admitted(esc.Name) || w.hold(esc.Name) != "False/"+SummonReasonPoolBusy {
 		t.Fatalf("the held escalation: %s", w.hold(esc.Name))
 	}
 }

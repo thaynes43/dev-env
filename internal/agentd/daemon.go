@@ -321,6 +321,14 @@ func (d *Daemon) bootHeartbeat(ctx context.Context) func() {
 // (DESIGN-025 24). It returns the boot step and,
 // when the agent cannot run, why.
 func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Step, bootID string) (Step, string) {
+	if summonedLaunched(d.S, d.Session) {
+		// DESIGN-064 5.9 (OP780): a summoned session's provider starts once.
+		// A boot that finds its launch record, in any mode and whatever the
+		// repo step did, starts nothing: no TUI resume, no explicit
+		// continuation, no provider. Its status reports how the first run
+		// ended (CollectStatus), so the operator closes it once.
+		return newStep("agent", []string{"summoned session's first launch is recorded; agentd starts nothing again (DESIGN-064 5.9)"}, nil), ""
+	}
 	if repo.State != StepFail && retainedPrivateTask(d.S, d.Session) {
 		// A retained private task still does not resume on its own. A supervised
 		// explicit continuation is a separate record and is restarted only when
@@ -421,12 +429,17 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	}
 	// Admission can wait up to sharedGitAdminBudget for the workspace's lock,
 	// so the deadline is checked again after it, right before StartAgent writes
-	// launch.json. The deadline bounds that record: once it exists, the session
-	// counts as launched, and run-agent does not check the deadline again.
+	// launch.json. The deadline bounds that record. For an ordinary scheduled
+	// launch, once the record exists the session counts as launched, and
+	// run-agent does not check the deadline again. A summoned session's first
+	// launch carries it (startDeadline), and run-agent checks it again
+	// immediately before the spawn (DESIGN-064 5.9, N2).
 	if why := startDeadlineRefusal(d.S.StartDeadline, false, d.now()); why != "" {
 		return d.refuseLaunch(ctx, why)
 	}
-	if err := StartAgent(ctx, d.R, d.S, launch, d.Self); err != nil {
+	// A summoned session's launch record is never removed, even when the tmux
+	// start fails (OP780 fix round 2): its provider may have started.
+	if err := startLaunch(ctx, d.R, d.S, launch, d.Self, d.Session.Caller != ""); err != nil {
 		return newStep(name, nil, err), err.Error()
 	}
 	if launch.Provider == protocol.AgentCursor {

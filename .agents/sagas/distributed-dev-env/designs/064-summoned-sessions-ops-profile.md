@@ -1088,6 +1088,159 @@ attribution and the retained-charge error contract.
 Story 779 supplies `maxHold` closure and refuses every resume of a summoned
 session. `task` creates turn on only after both stories are installed.
 
+**Correction, 2026-11-12 (story 780, slice d of #741; coordinator answer
+`op780-q-1`; written by the story's worker, not a ruling by Tom).** The text
+above stays; where it differs, this governs.
+
+1. *The remote latch* is `status.summon.executor` as designed (`attempted`,
+   `intent`, `podUID`, `notCreated`; an attempt is never reversed, the intent
+   and a recorded `podUID` never change, and the record is never removed).
+   The pod carries the intent in the annotation
+   `dev-env.haynesops.com/summon-executor-intent`, and only a pod with it is
+   recorded. A summoned remote session with no latch record that already
+   shows a pod, an agent or a rescue (only one admitted before this latch, or
+   written past the operator) gets no pod either.
+2. *`session-lost` for a remote session* reads the recorded pod uncached, as
+   a task's reads `lastExecutor`. A rescue hold pod under the name is
+   another UID, so it counts as the recorded pod gone: the design does not
+   exempt it. A hold pod is made only for a suspend or a reap, whose stop row
+   wins over `session-lost` (`summonoutcome.FirstReason`), so no close says
+   `session-lost` for it.
+3. *agentd's half.* A session whose document carries `caller` and that has a
+   launch record starts nothing on any boot, in every mode and whatever the
+   repo step did. Its status reports the first run as `exited`,
+   `interrupted` or, new, `failed` when run-agent's start fence refused the
+   spawn; a remote one reports that instead of `login-required`. N3 reaches
+   agentd too: `BuildResume` and the explicit Claude continuation refuse a
+   summoned session, so neither a boot nor a decision answer continues it.
+4. *The fence.* `BuildLaunch` copies the pod's start deadline into a
+   summoned session's first launch record (`startDeadline`); run-agent checks
+   it after its existing pre-spawn check (`nativeLease.beforeSpawn`) and
+   immediately before `cmd.Start`, for a task and a TUI. Past it, it spawns
+   nothing, writes `start-refused.json`, and the status reports `failed`, so
+   the `agent-failed` row closes the session. A record without the field runs
+   as before.
+5. *"When a reservation is released", the in-flight row.* With the pod
+   still present, it releases only when that pod runs a released agent image
+   at or above 2.108 (`ghcr.io/thaynes43/dev-env:2.MINOR.PATCH@sha256:...`,
+   MINOR at least 108, `summonStartFenceMinor`): the image the operator put
+   in the pod, which the session cannot change. agentd's self-report was not
+   used: it is replaced on every heartbeat, and a running provider can post
+   one. Any other pod keeps the rule above: hold until it is gone. A fenced
+   pod releases once two bounds have both passed:
+   - the start deadline plus one minute, not the start deadline. After it
+     the pod's agentd starts no provider.
+   - `status.summon.closed.at` plus 5 minutes, by the operator's clock
+     (`summonFencedCloseWait`). A provider already started may still run: a
+     task closed `deadline` is one whose own timer did not stop it. With
+     this bound, a pod the operator can stop frees its lane when it has
+     stopped, so the next session of a single-flight lane does not overlap
+     it. A pod that cannot go (never scheduled, a partitioned node, a rescue
+     that hangs) holds its lane until the later of the two bounds, subject to
+     a reconcile, not forever (fix round 2 below states it). That is the
+     "What still runs" case above and story 779's known limit.
+
+   Before both have passed, the release waits for the pod to go, by the rows
+   above: the recorded pod gone or replaced, a terminal phase with its
+   record, a finished task whose pod retains its history, or a hold pod.
+   While only the two bounds hold a fenced pod, the operator reconciles the
+   session again by the later one: the time left, at least a second and at
+   most a minute. No other wait gets a new requeue. The second bound is
+   story 780 fix round 1, coordinator ruling C1 in PR 1100 comment
+   6837450502. The recheck is coordinator answer `op780-fix1-q-1`. Neither
+   is a ruling by Tom. Together they narrow the builder's first choice,
+   which released at the first bound "whether or not the provider started".
+   The floor is right only while no agent release at or above it was cut
+   before this code merged; the coordinator checks that at merge. The
+   operator's suspend of 6.6's correction (ruling D3) is written before such
+   a release, and a task's stop stays due after it (fix round 2 below), so
+   the pod still goes. A process paused between run-agent's
+   check and its spawn for longer than the minute is the "What still runs"
+   limit above; it is not fenced further.
+6. *Start refusals (ruling D8).* The operator no longer refuses `remote` in
+   `--summon-create-kinds`: the remote latch is in this binary. Naming
+   `remote` still waits for #745 and a pinned agent image with this slice's
+   agentd half; that gate is the haynes-ops switch, not code.
+
+**Correction, 2026-11-13: story 780 fix round 2, coordinator rulings in PR
+1100 comment 6839380816; not a ruling by Tom.** They answer the
+second-model-family review in PR 1100 comment 6839329693. Where this differs
+from the correction above or from 6.6's corrections, this governs.
+
+1. *A summoned launch's record is never deleted (F1).* When the tmux start
+   of a summoned session's first launch returns an error, `launch.json`
+   stays, whether or not the provider may have started, so no later boot
+   starts anything (item 3 above). An ordinary launch keeps its removal, and
+   so its retry on a later boot; a native Codex launch keeps its own record,
+   as before. How the status reads such a launch is fix round 3's correction
+   below, which replaces this item's first rule (a failure record written
+   after tmux answered, and a status that was never running).
+2. *The stop outlives the release (F2).* The private executor stop is due
+   for a summoned task that is admitted, closed by the operator
+   (`closed.source` `unreported`), suspended and not being deleted, whether
+   or not `closed.released` is set, with its retries (30 seconds after a
+   failure), until its recorded executor has ended: its terminal record is
+   stored, or its pod is terminal or already has the stop's deadline. A
+   release on the start fence and the two bounds alone (item 5 above) does
+   not end the stop. A first reconcile that comes only after both bounds
+   suspends, releases and then still stops the recorded executor, and a
+   stop that fails through the five minutes is retried after the release. A
+   session that reported its own outcome keeps its pod for the post-mortem,
+   as before. Every hold of the stop path still applies, the owner's
+   HOME-expiry hold among them. This replaces "unreleased" in 6.6's
+   correction of the operator's suspend (ruling D3).
+3. *The bound as it is (F3).* A fenced pod that cannot go holds its lane
+   until the later of the start deadline plus one minute (`admittedAt` plus
+   16 minutes) and five minutes after the close, subject to a reconcile
+   (item 5's recheck); not "at most 5 minutes after the close". A close five
+   minutes after admission holds its lane until eleven minutes after the
+   close. The pod itself can outlive the release: the stop of item 2 ends a
+   task's pod once it can, and a pod that never starts is 6.6's stated
+   limit.
+
+**Correction, 2026-11-13: story 780 fix round 3, coordinator rulings in PR
+1100 comment 6840263445; not a ruling by Tom.** They answer the
+second-model-family re-check in PR 1100 comment 6840179200. Where this
+differs from fix round 2's correction, this governs.
+
+1. *The handoff record is written before tmux is asked (R2-F1a).* For a
+   summoned session's first launch, after `launch.json`, agentd durably
+   writes `~/.agentd/start-handoff.json` (the file and its directory synced)
+   naming that launch, its conversation and boot, with state `asked`, and
+   only then asks tmux anything. If that write fails, tmux is not asked:
+   nothing starts, `launch.json` stays, and the start fails. When tmux
+   answers, agentd updates the record: `started` when tmux started its
+   session; `nothing-started` when tmux was never asked to start the launch
+   (its session already existed) or the error proves its client never ran
+   (item 2); `ambiguous` for any other error. If the update fails before
+   the new record is in place, the record still says `asked`; if it fails
+   after (the directory could not be synced), the record already shows
+   tmux's answer, which is true, and only its durability is unconfirmed.
+   An ordinary launch writes no handoff record and keeps today's path.
+
+   The status of a summoned launch follows that record, never the boot's
+   agent error or the start window of a later boot:
+
+   | Handoff record | Status | Close |
+   |---|---|---|
+   | `nothing-started`, or the start fence refused this launch's spawn | `failed` | `agent-failed` |
+   | `started` | as for any launch: `busy` while it runs, `exited` with a task result or the TUI's own exit record, otherwise `interrupted`; only the launch's own boot counts the start window | by the state it reads |
+   | `asked` or `ambiguous` | `busy` while a process lives, and inside the start window of the launch's own boot; `interrupted` after that window, and at once on a later boot. Never `failed` or `exited` | `agent-interrupted`; a task result in `status.agent.task` is the close table's first row |
+   | missing, unreadable or truncated, of another launch, or an unknown state | as `asked` | as `asked` |
+
+   No record at all is a launch record written by fix round 2's code or an
+   older agentd, or by a boot that ended between the two writes. So a
+   failed first write fails the start and closes the session
+   `agent-interrupted`, not `agent-failed`: the conservative side
+   (coordinator answer to question op780-fix3-q-1). A later boot never
+   reports `busy` for a launch with no live process, and a failed write can
+   no longer turn a launch that may have started into `failed`.
+2. *Only two errors prove that tmux never ran (R2-F1b):* a lookup failure
+   (`*exec.Error`) and a path error whose operation is `fork/exec`. Any
+   other error, another path error included (the runner also waits for the
+   client and copies its output), may have started the provider, so it is
+   `ambiguous`.
+
 ## 6. Contracts per build story
 
 ### 6.1 OP735: the ops egress tier
