@@ -7,7 +7,7 @@ import (
 	"errors"
 	"io"
 	"regexp"
-	"sort"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -35,6 +35,8 @@ const (
 	// summonPagesMaxEvents bounds the dedupe. A summoned session lives at most
 	// seven days after it ends (ADR-020), and each has a few events.
 	summonPagesMaxEvents = 2048
+	// summonPagesMaxDrills bounds the drill ids the ledger remembers. A used
+	// id is never forgotten; past the bound a new one is refused (F8).
 	summonPagesMaxDrills = 16
 	summonPagesMaxLines  = 256
 	summonPagesMaxListed = 4096
@@ -107,6 +109,65 @@ type summonDigestLine struct {
 type summonOverflowEntry struct {
 	LastPagedCount int64 `json:"lastPagedCount"`
 	LastPagedAt    int64 `json:"lastPagedAt"`
+}
+
+// Every member of state.json but an entry's session is required, present and
+// not null (story 782 fix round 1, F5): a missing or null member would decode
+// as zero and, for capped or more, lose a count or reuse a summary key. Each
+// type decodes its own object, refusing a missing, null or unknown member.
+var (
+	summonStateMembers    = []string{"version", "events", "window", "capped", "more", "digest", "overflow"}
+	summonEntryMembers    = []string{"at", "state"}
+	summonDigestMembers   = []string{"since", "lastAt", "pending", "listed"}
+	summonLineMembers     = []string{"key", "session", "lane", "state", "reason", "at"}
+	summonOverflowMembers = []string{"lastPagedCount", "lastPagedAt"}
+)
+
+// decodeSummonObject decodes one JSON object into v (a pointer to a type
+// without its own UnmarshalJSON) once every required member is present and
+// not null; an unknown member is refused.
+func decodeSummonObject(raw []byte, v any, required []string) error {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil || members == nil {
+		return errSummonPages
+	}
+	for _, name := range required {
+		m, ok := members[name]
+		if !ok || string(bytes.TrimSpace(m)) == "null" {
+			return errSummonPages
+		}
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if dec.Decode(v) != nil {
+		return errSummonPages
+	}
+	return nil
+}
+
+func (s *summonPageState) UnmarshalJSON(raw []byte) error {
+	type plain summonPageState
+	return decodeSummonObject(raw, (*plain)(s), summonStateMembers)
+}
+
+func (e *summonPageEntry) UnmarshalJSON(raw []byte) error {
+	type plain summonPageEntry
+	return decodeSummonObject(raw, (*plain)(e), summonEntryMembers)
+}
+
+func (d *summonDigestState) UnmarshalJSON(raw []byte) error {
+	type plain summonDigestState
+	return decodeSummonObject(raw, (*plain)(d), summonDigestMembers)
+}
+
+func (l *summonDigestLine) UnmarshalJSON(raw []byte) error {
+	type plain summonDigestLine
+	return decodeSummonObject(raw, (*plain)(l), summonLineMembers)
+}
+
+func (o *summonOverflowEntry) UnmarshalJSON(raw []byte) error {
+	type plain summonOverflowEntry
+	return decodeSummonObject(raw, (*plain)(o), summonOverflowMembers)
 }
 
 func newSummonPageState() summonPageState {
@@ -269,59 +330,28 @@ func (s summonPageState) room(now time.Time) bool {
 }
 
 // reserve records one page attempt at the latest instant it may be sent, as
-// the Ask notifier does: a slow save cannot shorten the window.
-func (s *summonPageState) reserve(dispatchBy time.Time) {
+// the Ask notifier does: a slow save cannot shorten the window. The window is
+// pruned against now, never against that later instant (F4): an attempt
+// counts until an hour after its reserved second.
+func (s *summonPageState) reserve(now, dispatchBy time.Time) {
 	kept := s.Window[:0]
 	for _, at := range s.Window {
-		if dispatchBy.Before(time.Unix(at, 0).Add(summonPagesWindow)) {
+		if now.Before(time.Unix(at, 0).Add(summonPagesWindow)) {
 			kept = append(kept, at)
 		}
 	}
 	s.Window = append(kept, askNotificationSecond(dispatchBy))
 }
 
-// prune drops, in memory, what can never be needed again. A session's
-// entries go once it is gone from a complete list and the entry is an hour
-// old (UIDs are never reused, so a gone session cannot page again); a
-// summary's after a day; the oldest drills beyond the bound, never the
-// current one. It reports a change.
-func (l *summonPageLedger) prune(live map[string]bool, drill string, now time.Time) bool {
-	changed := false
-	var drills []string
-	for key, e := range l.State.Events {
-		owner, _, _ := cutSummonKey(key)
-		old := !now.Before(time.Unix(e.At, 0).Add(time.Hour))
-		switch owner {
-		case "drill":
-			if key != "drill/"+drill {
-				drills = append(drills, key)
-			}
-		case "more":
-			if !now.Before(time.Unix(e.At, 0).Add(24 * time.Hour)) {
-				delete(l.State.Events, key)
-				changed = true
-			}
-		default:
-			if old && !live[owner] {
-				delete(l.State.Events, key)
-				changed = true
-			}
+// drills counts the drill ids the ledger remembers.
+func (s summonPageState) drills() int {
+	n := 0
+	for key := range s.Events {
+		if strings.HasPrefix(key, "drill/") {
+			n++
 		}
 	}
-	if len(drills) > summonPagesMaxDrills-1 {
-		sort.Slice(drills, func(i, j int) bool {
-			a, b := l.State.Events[drills[i]], l.State.Events[drills[j]]
-			if a.At != b.At {
-				return a.At < b.At
-			}
-			return drills[i] < drills[j]
-		})
-		for _, key := range drills[:len(drills)-(summonPagesMaxDrills-1)] {
-			delete(l.State.Events, key)
-			changed = true
-		}
-	}
-	return changed
+	return n
 }
 
 func cutSummonKey(key string) (owner, event string, ok bool) {

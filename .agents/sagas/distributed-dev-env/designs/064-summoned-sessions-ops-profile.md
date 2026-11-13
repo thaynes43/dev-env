@@ -2025,6 +2025,58 @@ worker (notes op782-q-1 and op782-q-2, also not Tom's) are folded in.
   stored stays `recorded`, and none is sent again. While the Pushover
   credential files are absent the pager reads and sends nothing.
 
+**Correction, 2026-11-13: story 782 fix round 1, coordinator rulings in PR
+1102 comment 6839324435; not a ruling by Tom.** The coordinator accepted all
+eight findings of the second-family review (PR 1102 comment 6839253446) and
+answered one question of this round (note op782-fix1-a-1, also not Tom's).
+Where this differs from the correction above, this governs. As built:
+
+- *F1, the pager's own client.* The pager is given the keeper's REST config,
+  never its client. It builds its own client, REST mapper, HTTP transport and
+  rate limiter, with a 5-second request timeout that also bounds the mapper's
+  discovery (discovery runs on a background context), and a Pushover
+  transport of its own. It shares no client, mapper, lock or transport with
+  the login refresher, the credential fence or the Ask notifier, so a stalled
+  pager request blocks none of them; the pager's tick ends with `scan
+  unavailable` or `state unavailable`.
+- *F2, no pager flag stops the keeper.* A pager flag with a malformed value,
+  `--enable-summon-pages` included, or a pager flag given last with no value,
+  turns off only the pager and logs why, without the value. Other flags keep
+  their parsing and failures.
+- *F3, absence from the labelled list is not deletion.* A session's ledger
+  entry is pruned only when it is an hour old and a read of its stored session
+  name returns not-found or a session with another UID. The keeper reads with
+  the `get` on AgentSessions it already holds (haynes-ops
+  `keeper-credentials.yaml`), so Q2's "it needs no `get`" above no longer
+  holds; no new RBAC. At most 20 such reads a tick, oldest first, made only in
+  a tick that has an entry to add; a failed read ends that tick's reads; the
+  rest wait.
+- *F4, the window.* The rolling window is pruned against the current time,
+  never a later one; each attempt keeps its conservative timestamp, the
+  latest instant it may be sent.
+- *F5, the ledger's members.* Every member of `state.json` but an entry's
+  `session` must be present and not null; a populated ledger that lacks one,
+  or holds it (or a map or list element) as null, is `state unavailable`: no
+  scan and no send.
+- *F6, the note.* Every control or format character and every Unicode line or
+  paragraph separator (U+2028 and U+2029 included) becomes a space. A dotted
+  host or address is redacted with or without a port, path, query or fragment
+  when its last label is two or more letters or starts `xn--`; a dotted
+  number followed by a port or a path is redacted too (op782-fix1-a-1). That
+  also redacts a file name such as `main.go`: the page is a pointer and the
+  session holds the detail. A dotted number alone, such as `2.105.0`, stays.
+  The note is cut to 200 characters, and a cut that leaves a host behind is
+  redacted again.
+- *F7, the namespace.* No other option's namespace stands in for an empty
+  session namespace: the pager is off and says so. It logs the namespace it
+  lists once at start.
+- *F8, drill ids.* A used drill id is never forgotten. The ledger keeps up to
+  16; past that a new id is refused and logged once, and nothing is sent.
+- *Recorded, not changed.* `list` on AgentSessions in the session namespace is
+  wider than the pager needs, and RBAC cannot restrict it by label; a narrower
+  read (an operator projection or a dedicated namespace) would be its own
+  design.
+
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row
 says: one terminal event or the digest. The reason is the one 6.6's close

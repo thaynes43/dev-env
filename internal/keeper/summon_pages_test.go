@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -66,6 +67,8 @@ type summonPush struct {
 	status int
 	body   string
 	before func()
+	// statusFor, when set, answers request n (1-based) with its status.
+	statusFor func(n int) int
 }
 
 func newSummonPush(t *testing.T, clk *clocktesting.FakeClock) *summonPush {
@@ -84,6 +87,9 @@ func newSummonPush(t *testing.T, clk *clocktesting.FakeClock) *summonPush {
 		p.forms = append(p.forms, form)
 		p.times = append(p.times, p.clock.Now())
 		n, status, body := len(p.forms), p.status, p.body
+		if p.statusFor != nil {
+			status = p.statusFor(n)
+		}
 		p.mu.Unlock()
 		if status == 0 {
 			status = http.StatusOK
@@ -132,8 +138,11 @@ type summonFix struct {
 	// hooks
 	failUpdate   func(n int) bool // n is the 1-based update count
 	beforeUpdate func(n int)
-	getErr       error
-	listHook     func(list *v1alpha1.AgentSessionList, n int) error
+	// commitThenFail commits update n and then answers it with an error.
+	commitThenFail func(n int) bool
+	getErr         error
+	listHook       func(list *v1alpha1.AgentSessionList, n int) error
+	sessionGets    int
 }
 
 var summonLedgerName = types.NamespacedName{Namespace: "dev-env-system", Name: DefaultSummonPagesConfigMap}
@@ -158,6 +167,9 @@ func newSummonFix(t *testing.T) *summonFix {
 						return f.getErr
 					}
 				}
+				if _, ok := obj.(*v1alpha1.AgentSession); ok {
+					f.sessionGets++
+				}
 				return c.Get(ctx, key, obj, opts...)
 			},
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
@@ -181,6 +193,12 @@ func newSummonFix(t *testing.T) *summonFix {
 					}
 					if f.failUpdate != nil && f.failUpdate(f.updates) {
 						return errors.New("update refused by the test")
+					}
+					if f.commitThenFail != nil && f.commitThenFail(f.updates) {
+						if err := c.Update(ctx, obj, opts...); err != nil {
+							return err
+						}
+						return errors.New("update committed, then answered with an error by the test")
 					}
 				}
 				return c.Update(ctx, obj, opts...)
@@ -638,7 +656,7 @@ func TestSummonPagesNoteRules(t *testing.T) {
 		{"www.example.org/x", "[link removed]"},
 		{"host.example:8443/x and 10.0.0.1/admin", "[link removed] and [link removed]"},
 		{"javascript:alert(1) tel:+1555", "[link removed] [link removed]"},
-		{"edited internal/keeper/run.go", "edited internal/keeper/run.go"},
+		{"edited internal/keeper/run.go", "edited internal/keeper/[link removed]"}, // F6: a file name is a dotted host
 		{"tab\there", "tab here"},
 	} {
 		if got := summonNote(tc.in); got != tc.want {
@@ -721,26 +739,20 @@ func TestSummonPagesOnlyPushoverSends(t *testing.T) {
 }
 
 func TestSummonPagesOffReadsNothing(t *testing.T) {
+	// Every request the pager's client could make lands here.
 	calls := 0
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = v1alpha1.AddToScheme(scheme)
-	c := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
-		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
-			calls++
-			return nil
-		},
-		List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
-			calls++
-			return nil
-		},
-	}).Build()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(api.Close)
+	cfg := &rest.Config{Host: api.URL}
 	for _, o := range []Options{
 		{Namespace: "dev-env-system", GHTokenSecret: types.NamespacedName{Namespace: summonTestNS, Name: "gh"}, LeaderElect: true},
 		{Namespace: "dev-env-system", GHTokenSecret: types.NamespacedName{Namespace: summonTestNS, Name: "gh"}, LeaderElect: true,
-			SummonPages: SummonPageOptions{Enabled: true, PortalOrigin: "http://not-https.example"}},
+			SummonPages: SummonPageOptions{Enabled: true, PortalOrigin: "http://not-https.example", SessionNamespace: summonTestNS}},
 	} {
-		if r := summonPagerFor(o, c, logr.Discard()); r != nil {
+		if r := summonPagerFor(o, cfg, logr.Discard()); r != nil {
 			t.Fatal("an off or invalid pager was built")
 		}
 	}
@@ -887,8 +899,9 @@ func TestSummonPagesScanBounded(t *testing.T) {
 	}
 }
 
-// A session gone from a complete list loses its ledger entries an hour after
-// they were written; a session still listed keeps them.
+// A session proved gone (a read of its name finds nothing) loses its ledger
+// entries an hour after they were written, saved with the next entry; a
+// session still listed keeps them.
 func TestSummonPagesPrunesGoneSessions(t *testing.T) {
 	f := newSummonFix(t)
 	gone := f.close(f.session("wo-upgrade-1", v1alpha1.LaneUpgrade), v1alpha1.OutcomeFailed, summonoutcome.Report, "failed", "")
@@ -1009,6 +1022,10 @@ func (summonPanicReader) list(context.Context) ([]v1alpha1.AgentSession, error) 
 	panic("a private panic value")
 }
 
+func (summonPanicReader) uid(context.Context, string) (types.UID, error) {
+	panic("a private panic value")
+}
+
 // Proof 7: Start never returns an error, and a fault in one tick does not
 // escape it.
 func TestSummonPagesStartNeverReturnsError(t *testing.T) {
@@ -1055,11 +1072,15 @@ func TestSummonPagesKeeperRunsBesideThem(t *testing.T) {
 		pages  SummonPageOptions
 		expect string
 		absent string
+		once   string // a line the keeper logs exactly once
 	}{
 		{name: "invalid", pages: SummonPageOptions{Enabled: true, PortalOrigin: "https://private-marker.example/path"},
 			expect: "summon pages disabled: invalid configuration", absent: "summon page state unavailable"},
-		{name: "ledger-missing", pages: SummonPageOptions{Enabled: true, PortalOrigin: "https://portal.example"},
-			expect: "summon page state unavailable", absent: "summon pages disabled"},
+		{name: "ledger-missing", pages: SummonPageOptions{Enabled: true, PortalOrigin: "https://portal.example", SessionNamespace: "summon-pages-agents-ledger-missing"},
+			expect: "summon page state unavailable", absent: "summon pages disabled", once: `"sessionNamespace":"summon-pages-agents-ledger-missing"`},
+		// F7: no other option's namespace stands in for an empty one.
+		{name: "no-namespace", pages: SummonPageOptions{Enabled: true, PortalOrigin: "https://portal.example"},
+			expect: "the session namespace is empty", absent: "summon page state unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -1100,7 +1121,8 @@ func TestSummonPagesKeeperRunsBesideThem(t *testing.T) {
 			r.stop(t)
 			logs := r.logs.String()
 			if strings.Count(logs, "summon pages disabled: invalid configuration") > 1 || strings.Contains(logs, tc.absent) ||
-				strings.Contains(logs, "private-marker") || strings.Contains(logs, summonTokenCanary) {
+				strings.Contains(logs, "private-marker") || strings.Contains(logs, summonTokenCanary) ||
+				(tc.once != "" && strings.Count(logs, tc.once) != 1) {
 				t.Fatalf("logs: %s", logs)
 			}
 		})
