@@ -57,8 +57,11 @@ const (
 	// summonPagesProofReads bounds the reads, a tick, that prove a session
 	// gone before its entries are pruned (story 782 fix round 1, F3).
 	summonPagesProofReads = 20
-	// summonPagesRequestTimeout bounds every request of the pager's own
-	// client, its REST mapper's discovery included (F1).
+	// summonPagesRequestTimeout bounds one request of the pager's own client,
+	// each discovery request of its REST mapper included: that request's
+	// network I/O and retries (F1). A reload of the bearer token file is local
+	// I/O outside it, and discovery and a tick are several requests, each
+	// bounded, not one bounded operation (story 782 fix round 3).
 	summonPagesRequestTimeout = noticeStoreTimeout
 	summonNoteMax             = 200
 	// summonConsolePath is the console's sessions list: the link of a page
@@ -280,9 +283,11 @@ func summonPagerFor(o Options, cfg *rest.Config, log logr.Logger) *summonPager {
 // round 1, F1). It shares no client, REST mapper, lock, rate limiter or
 // transport with the login refresher, the credential fence or the Ask
 // notifier, so a stalled pager request holds nothing they need:
-//   - a copy of the keeper's REST config whose request timeout bounds every
-//     request, the REST mapper's discovery included (discovery runs on a
-//     background context, so only the HTTP client's timeout bounds it);
+//   - a copy of the keeper's REST config, refused when it carries a callback
+//     or shared object of its own (summonPagesRESTConfig), whose request
+//     timeout bounds each request's network I/O and retries, each discovery
+//     request of the REST mapper included (discovery runs on a background
+//     context, so only the HTTP client's timeout bounds it; fix round 3);
 //   - a dialer of its own, which keeps client-go's transport cache from
 //     handing it the keeper's transport and connections;
 //   - no client-side rate limiter, so no request waits for a token outside
@@ -312,6 +317,25 @@ func newSummonPagesClient(cfg *rest.Config, o SummonPageOptions) (client.Client,
 // config carries that the pager refuses; never a value.
 type summonConfigHooks []string
 
+// summonRefusedHooks is every rest.Config field that can carry a callback or
+// shared state, with its fixed words, in the order a refusal names them
+// (story 782 fix rounds 2 and 3, F1). The test's field table holds every
+// other field as a plain value or one the pager replaces.
+var summonRefusedHooks = []struct {
+	words string
+	set   func(*rest.Config) bool
+}{
+	{"transport", func(c *rest.Config) bool { return c.Transport != nil }},
+	{"transport wrapper", func(c *rest.Config) bool { return c.WrapTransport != nil }},
+	{"dialer", func(c *rest.Config) bool { return c.Dial != nil }},
+	{"proxy function", func(c *rest.Config) bool { return c.Proxy != nil }},
+	{"auth provider", func(c *rest.Config) bool { return c.AuthProvider != nil }},
+	{"auth config persister", func(c *rest.Config) bool { return c.AuthConfigPersister != nil }},
+	{"exec credential plugin", func(c *rest.Config) bool { return c.ExecProvider != nil }},
+	{"warning handler", func(c *rest.Config) bool { return c.WarningHandler != nil }},
+	{"context warning handler", func(c *rest.Config) bool { return c.WarningHandlerWithContext != nil }},
+}
+
 func (h summonConfigHooks) Error() string {
 	words := strings.Join(h, ", ")
 	if i := strings.LastIndex(words, ", "); i >= 0 {
@@ -321,32 +345,32 @@ func (h summonConfigHooks) Error() string {
 }
 
 // summonPagesRESTConfig is the pager's copy of the keeper's REST config; cfg
-// is not changed. A config that carries a transport, a transport wrapper or a
-// dialer of its own is refused (story 782 fix round 2, F1): the pager cannot
-// show that one shares no lock, client or connection with the keeper's other
-// workers, and nothing of the config, its authentication included, is dropped
-// to make it fit. The keeper's production config, ctrl.GetConfig's in-cluster
-// config, carries none of the three.
+// is not changed. A config that carries a transport, a transport wrapper, a
+// dialer, a proxy function, an auth provider, an auth config persister, an
+// exec credential plugin or a warning handler of either kind is refused (story
+// 782 fix rounds 2 and 3, F1): each can carry a callback or state shared with
+// the keeper's other workers, which the pager cannot show holds no lock,
+// client or connection they need, and nothing of the config, its
+// authentication included, is dropped to make it fit. The keeper's production
+// config, ctrl.GetConfig's in-cluster config (a host, a CA file, a bearer
+// token and its file), carries none of them.
 //
 // The copy does no client-side rate limiting (QPS below zero, no rate
 // limiter; ctrl.GetConfig already sets the keeper's QPS so): client-go waits
 // for a token before it starts the request timeout, and discovery runs on a
-// background context, so a limiter's wait would be outside every bound. The
-// pager makes one list, at most 20 proof reads and a few ledger calls a
-// minute, and the API server's priority and fairness still applies.
+// background context, so a limiter's wait would be outside every bound. A
+// tick makes one paginated scan of at most 20 list calls, at most 20 reads by
+// name and the ledger calls, then waits 60 seconds, and the API server's
+// priority and fairness still applies (fix round 3).
 func summonPagesRESTConfig(cfg *rest.Config, o SummonPageOptions) (*rest.Config, error) {
 	if cfg == nil {
 		return nil, errSummonPages
 	}
 	var hooks summonConfigHooks
-	if cfg.Transport != nil {
-		hooks = append(hooks, "transport")
-	}
-	if cfg.WrapTransport != nil {
-		hooks = append(hooks, "transport wrapper")
-	}
-	if cfg.Dial != nil {
-		hooks = append(hooks, "dialer")
+	for _, h := range summonRefusedHooks {
+		if h.set(cfg) {
+			hooks = append(hooks, h.words)
+		}
 	}
 	if len(hooks) > 0 {
 		return nil, hooks
@@ -533,8 +557,10 @@ func (p *summonPager) fresh(l *summonPageLedger, jobs []summonJob, now time.Time
 // oldest entry first, starting after the candidate the last answered read was
 // for and going round to the oldest at the end (fix round 2, F3): sessions
 // still there cannot use every read of every tick. A failed read ends this
-// tick's reads, and the next tick starts with it. A summary's entry goes after
-// a day. A drill id is never forgotten.
+// tick's reads and logs one line, and the next tick starts with it: while
+// reads fail, proof pruning stops, and a full ledger then records nothing new
+// (fix round 3, a stated limit). A summary's entry goes after a day. A drill
+// id is never forgotten.
 func (p *summonPager) prune(ctx context.Context, l *summonPageLedger, live map[string]bool, now time.Time) {
 	type owner struct{ uid, name string }
 	oldest := map[owner]int64{}
@@ -568,6 +594,9 @@ func (p *summonPager) prune(ctx context.Context, l *summonPageLedger, live map[s
 		c := candidates[(start+n)%len(candidates)]
 		uid, err := p.reader.uid(ctx, c.name)
 		if err != nil && !errors.Is(err, errSummonSessionGone) {
+			// Proof pruning stops while reads fail; one line a tick, never
+			// the name (story 782 fix round 3).
+			p.log.Error(nil, "summon page proof read failed: pruning waits for the next tick")
 			break
 		}
 		p.proofAfter = c
@@ -683,11 +712,22 @@ var (
 	// or fragment after it). A label is letters with their combining marks,
 	// decimal digits and hyphens, of any script; any other character, an
 	// underscore included, ends it (story 782 fix round 2, F6, and the
-	// coordinator's answer op782-fix2-a-1). summonRedact decides which runs
-	// are hosts.
-	summonURLLike = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://\S*|\b(?:mailto|tel|sms|javascript|data|file|vbscript):\S+|\bwww\.\S+|` +
-		`([\p{L}\p{M}\p{Nd}-]+(?:\.[\p{L}\p{M}\p{Nd}-]+)+)((?::[0-9]+)?(?:[/?#]\S*)?)`)
+	// coordinator's answer op782-fix2-a-1). The dot between labels is the
+	// ASCII dot or U+3002, U+FF0E or U+FF61, which the IDNA lookup maps to it
+	// (fix round 3). summonRedact decides which runs are hosts. No
+	// alternative asks what stands before it (no \b, fix round 3): a scheme
+	// after an underscore, a digit or a dotted run is still a scheme, and
+	// matching from any offset of a note is matching in the whole note.
+	summonURLLike = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://\S*|(?:mailto|tel|sms|javascript|data|file|vbscript):\S+|www` + summonDotClass + `\S+|` +
+		`([\p{L}\p{M}\p{Nd}-]+(?:` + summonDotClass + `[\p{L}\p{M}\p{Nd}-]+)+)((?::[0-9]+)?(?:[/?#]\S*)?)`)
 	summonWordShape = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
+)
+
+// summonDots are the dots between the labels of a host name: the ASCII dot,
+// U+3002, U+FF0E and U+FF61 (fix round 3).
+const (
+	summonDots     = ".\u3002\uff0e\uff61"
+	summonDotClass = "[" + summonDots + "]"
 )
 
 // summonWord shows an operator-written word (a lane, state, source or
@@ -740,22 +780,40 @@ func summonNote(note string) string {
 // coordinator's answers op782-fix1-a-1 and op782-fix2-a-1: evil.example,
 // é.example, пример.xn--p1ai, उदाहरण.भारत and a file name such as main.go; a
 // dotted number alone, such as 2.105.0, stays).
+//
+// A bare run is never skipped whole (fix round 3): what of it is not a host
+// is looked at again, so a scheme that starts inside it, as in
+// é.example-http://192.0.2.1 or x.é-http://192.0.2.1, is still found. After
+// a host the search goes on at the host's end; a run with no host keeps its
+// first character and the search goes on at the next. A note is at most 1024
+// bytes, so the searches stay small.
 func summonRedact(note string) string {
 	var b strings.Builder
-	last := 0
-	for _, m := range summonURLLike.FindAllStringSubmatchIndex(note, -1) {
+	last, pos := 0, 0
+	for pos < len(note) {
+		m := summonURLLike.FindStringSubmatchIndex(note[pos:])
+		if m == nil {
+			break
+		}
+		for i := range m {
+			if m[i] >= 0 {
+				m[i] += pos
+			}
+		}
 		start, end := m[0], m[1]
 		if m[2] >= 0 && m[4] == m[5] {
 			// A bare run: only its host, if it starts with one, is a link.
 			host := summonHostEnd(note[m[2]:m[3]])
 			if host == 0 {
+				_, size := utf8.DecodeRuneInString(note[start:])
+				pos = start + size
 				continue
 			}
 			end = m[2] + host
 		}
 		b.WriteString(note[last:start])
 		b.WriteString(summonLinkRemoved(note[start:end]))
-		last = end
+		last, pos = end, end
 	}
 	b.WriteString(note[last:])
 	return b.String()
@@ -775,19 +833,20 @@ func summonLinkRemoved(m string) string {
 // summonHostEnd is the length of the longest dotted host that starts a run
 // of labels: two or more labels, the last of them a top label, ending at the
 // run's end, a dot or a hyphen (so the host in a.example-b and a.example.123
-// is a.example); 0 when there is none.
+// is a.example); 0 when there is none. Any of summonDots is a dot.
 func summonHostEnd(run string) int {
 	for end := len(run); ; {
-		dot := strings.LastIndexByte(run[:end], '.')
+		dot := strings.LastIndexAny(run[:end], summonDots)
 		if dot < 0 {
 			return 0
 		}
-		label := run[dot+1 : end]
+		_, size := utf8.DecodeRuneInString(run[dot:])
+		label := run[dot+size : end]
 		if summonTopLabel(label) {
 			return end
 		}
 		if i := strings.IndexByte(label, '-'); i > 0 && summonTopLabel(label[:i]) {
-			return dot + 1 + i
+			return dot + size + i
 		}
 		end = dot
 	}
