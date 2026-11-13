@@ -7,7 +7,19 @@ import (
 	"net/url"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
-	"github.com/thaynes43/dev-env/internal/sessionraise"
+)
+
+// These match internal/sessionraise. agent-run does not import that package:
+// the binary may link only the standard library, apiv1 and agentd's protocol.
+const (
+	raiseWherePhone       = "phone-prompt"
+	raiseWhereOwn         = "own-call"
+	raiseWhereChat        = "chat"
+	raiseStatePending     = "pending"
+	raiseStateActive      = "active"
+	raiseStateUnannounced = "unannounced"
+	raiseStateTakenBack   = "taken-back"
+	raiseNoticeAttempts   = 12
 )
 
 // raise performs a raise or takes one back. This build does not restart the
@@ -51,9 +63,9 @@ func (a *app) raise(ctx context.Context, args []string) error {
 	if *takeBack {
 		status, err = a.call(ctx, c, http.MethodDelete, path, nil, apiv1.TakeBackRequest{ExpectUID: cur.UID}, &next)
 	} else {
-		where := sessionraise.WhereOwn
+		where := raiseWhereOwn
 		if a.inSessionPod() {
-			where = sessionraise.WherePhone
+			where = raiseWherePhone
 		}
 		status, err = a.call(ctx, c, http.MethodPost, path, nil, apiv1.RaiseRequest{
 			ExpectUID: cur.UID, Profile: *profile, StartSessions: *start,
@@ -91,17 +103,17 @@ func (a *app) printRaise(row func(k, format string, args ...any), s apiv1.Sessio
 		return
 	}
 	switch r.State {
-	case sessionraise.StatePending:
+	case raiseStatePending:
 		if r.NoticeSentAt != "" {
 			row("raise pending", "notice accepted at %s, takes effect at %s", r.NoticeSentAt, r.ActiveFrom)
 			return
 		}
-		row("raise pending", "notice not yet accepted (attempt %d of %d)", r.NoticeAttempt, sessionraise.NoticeAttempts)
+		row("raise pending", "notice not yet accepted (attempt %d of %d)", r.NoticeAttempt, raiseNoticeAttempts)
 		return
-	case sessionraise.StateUnannounced:
+	case raiseStateUnannounced:
 		row("raise unannounced", "the notice could not be sent, so it never took effect")
 		return
-	case sessionraise.StateTakenBack:
+	case raiseStateTakenBack:
 		row("raise taken back by", "%s at %s", r.TakenBackBy, r.TakenBackAt)
 		return
 	}
@@ -130,11 +142,11 @@ func (a *app) printRaise(row func(k, format string, args ...any), s apiv1.Sessio
 
 func raiseWhere(where string) string {
 	switch where {
-	case sessionraise.WherePhone:
+	case raiseWherePhone:
 		return "phone prompt"
-	case sessionraise.WhereOwn:
+	case raiseWhereOwn:
 		return "Tom's own call"
-	case sessionraise.WhereChat:
+	case raiseWhereChat:
 		return "chat"
 	default:
 		return where
@@ -147,9 +159,9 @@ func raiseNote(r *apiv1.SessionRaise) string {
 	}
 	var parts []string
 	switch r.State {
-	case sessionraise.StatePending:
+	case raiseStatePending:
 		return "raise pending"
-	case sessionraise.StateActive:
+	case raiseStateActive:
 		if r.Profile != "" {
 			parts = append(parts, "raised: "+r.Profile)
 		}
@@ -175,7 +187,7 @@ func fleetRaised(sessions []apiv1.FleetSession) string {
 	var parts []string
 	for _, s := range sessions {
 		r := s.Raise
-		if r == nil || r.State != sessionraise.StateActive || r.Ignored != "" {
+		if r == nil || r.State != raiseStateActive || r.Ignored != "" {
 			continue
 		}
 		if r.Profile != "" {
