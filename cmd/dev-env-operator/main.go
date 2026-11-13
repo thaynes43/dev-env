@@ -1574,11 +1574,11 @@ func parseSummonQuota(normal, bulk, weekly string, maxAge time.Duration) (summon
 
 // summonQuotaHook is the reconciler's SummonQuota for these lines: nil when
 // every line is unset, so the seam admits and the store is never read.
-func summonQuotaHook(lines summonquota.Lines, live client.Reader, log logr.Logger, now func() time.Time) func(*v1alpha1.AgentSession) bool {
+func summonQuotaHook(lines summonquota.Lines, live client.Reader, log logr.Logger, now func() time.Time) func(context.Context, *v1alpha1.AgentSession) summonquota.Decision {
 	if !lines.Set() {
 		return nil
 	}
-	return summonQuotaGate(lines, live, log, now).Admits
+	return summonQuotaGate(lines, live, log, now).DecideSession
 }
 
 // summonQuotaGate builds the gate on the session allowance store's Newest,

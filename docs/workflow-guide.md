@@ -1773,9 +1773,12 @@ has passed), `deadline` (a task past `admittedAt` plus 15 minutes, its
 (a remote upgrade with no agent activity and no `working` report for its
 `staleAfter`) and `escalation-bound` (a remote escalation idle 72 hours; it
 closes `failed` and its note says so). A Queued session closes `not-charged`
-(below) or `hold-expired`, once it has waited its `maxHold` since it was
-created. A remediation's `onUnreported` is `escalated`, so a remediation held
-past 20 minutes records its pending filing; a curation closes `failed`.
+(below), or, once it has waited its `maxHold` since it was created,
+`quota-hold-expired` when the hold recorded on it at that pass is `QuotaHold`
+and `hold-expired` otherwise (story 790, ruling (f) on item 743). The clock
+runs from creation: a change of hold does not restart it. A remediation's
+`onUnreported` is `escalated`, so a remediation held past 20 minutes records
+its pending filing; a curation closes `failed`.
 Upgrades and escalations have no hold bound. When agentd itself refuses a
 start it reports `failed`, and `agent-failed` wins over `never-started`. A
 heartbeat of `busy` or `interrupted` before any provider spawn counts as a
@@ -1785,8 +1788,8 @@ After the leader's first admission pass in a process, `never-started` and
 `heartbeat-lost` wait ten minutes before being judged. The Reconciler records
 that first pass once on its own clock; a new leader starts its own ten
 minutes. This lets agentd heartbeats recover after an outage of all operator
-replicas. `deadline`, `session-lost`, `stale`, `escalation-bound` and
-`hold-expired` keep their durable bounds.
+replicas. `deadline`, `session-lost`, `stale`, `escalation-bound`,
+`hold-expired` and `quota-hold-expired` keep their durable bounds.
 
 **What a stop becomes** (ruling D1 on item 741). A reap or a suspend recorded
 before the close wins over every input above except `no-usable-model` and
@@ -2570,7 +2573,11 @@ session without one is built exactly as before.
   next pass. The gate is the last check of the hold switch, after lane and
   pool, and the pass asks it only for a Queued session with `spec.caller`
   (`internal/controller/summon_admission.go`, the queued list and the hold
-  switch), so an ordinary session is never gated.
+  switch), so an ordinary session is never gated. The seam,
+  `Reconciler.SummonQuota`, takes the pass's context and returns the gate's
+  decision (`summonquota.Decision`): admit or hold, the window that holds,
+  its percentage and line, the reading's `readAt`, and for an admit the
+  fixed reason, `stale` or `read-error` among them (story 790).
   - *Lines.* Each is a whole number from 1 to 100 and has no default in
     code: empty, the default, is off. A set line needs
     `--summon-usage-max-age`, a positive duration; anything else refuses to
@@ -2592,11 +2599,16 @@ session without one is built exactly as before.
     have not moved for the max age reads as stale and admits; and a high
     reading stays fresh for up to the max age after he stops. A reading can
     look older than it is, never newer. Summoned tasks never write one.
-    Windows are picked by length: 300 minutes and 10080 minutes. One read's
-    result, the readings or the failure, answers every decision for 30
-    seconds on the gate's own clock: at most one read per 30 seconds, which
-    is one per pass whenever a pass takes less. The seam gets no pass id, so
-    story 743b can make it exact.
+    Windows are picked by length: 300 minutes and 10080 minutes. *One read
+    per pass* (story 790, which replaced slice a's 30-second reuse): the
+    admission pass marks its context once, before its first attempt
+    (`summonquota.WithPass`), and the first decision of the pass that needs
+    a reading makes the one read, under that context and its 5-second
+    timeout. Every later decision of the pass, in any of its attempts, is
+    answered from it, the readings or the failure; the next pass reads
+    again, however soon it follows. A pass with no session reaching the gate
+    reads nothing. So a hold lifts in the first pass after a lower reading
+    is stored.
   - *It is best effort and fails open.* A reading older than
     `--summon-usage-max-age`, no reading, a read error and a timeout admit,
     for every line. So does a reading from the future, whose `readAt` is
@@ -2605,14 +2617,15 @@ session without one is built exactly as before.
     `reading-from-future` and the log shows its negative age, never zero. A
     fresh reading that lacks a window, or whose window has reset since it
     was read, admits for that window's line only. Staleness and a window's
-    reset are judged on the clock after the read returns; the 30-second
-    reuse is measured from before the read, and a read is repeated sooner
-    only when the time since the last read is negative.
+    reset are judged on the clock after the read returns, and each later
+    decision of the pass on its own clock. A read cut off by its timeout
+    logs `read-timeout`; any other failed read, a pass whose context is
+    already done among them, logs `read-error`.
   - *Once stale, always stale* (story 783 fix round 2, coordinator rulings
     in PR 1101 comment 6839647832; not a ruling by Tom). The gate keeps, per
     agent, the newest `readAt` it has judged stale. That reading and any
     older one stay unusable and admit with reason `stale`, whatever the
-    clock says later, on a cache hit and after a new read alike; their log
+    clock says later, later in the pass and in a new pass alike; their log
     line shows `readingAge` and the windows' percents as `none`. A strictly
     newer reading is judged normally. So a clock that goes back cannot make
     a reading fresh again once the gate has seen it stale. Limit: the mark
@@ -2624,10 +2637,27 @@ session without one is built exactly as before.
     "quota gate admitted a summoned session" or "quota gate held a summoned
     session", with the session's name and lane, the priority, a fixed
     `reason`, `fiveHourUsed`, `fiveHourLine`, `sevenDayUsed`,
-    `sevenDayLine` (`none` or `off` when absent) and `readingAge`. The
-    condition's text stays "held: quota"; the numbers in the condition, the
-    `quota-hold-expired` close and `agent-run show` are story 743b. Until
-    then a curation run held past its `maxHold` closes `hold-expired`.
+    `sevenDayLine` (`none` or `off` when absent) and `readingAge`.
+  - *The hold's message* (story 790). The `QuotaHold` condition names the
+    window, the percentage the reading showed, the line and the reading's
+    `readAt`, for example "held: quota: the 5-hour window is 81% used, past
+    its line of 80% (reading taken at 2026-11-12T15:59:00Z)". It never names
+    the reading's age, so the condition is rewritten only when the window,
+    the percentage, the line or `readAt` changes: a session held on the same
+    reading gets no status write per pass. Every value is the operator's own
+    or a checked reading's; no session text. `agent-run show <name>` prints
+    it as a condition line, `SummonAdmitted=False QuotaHold: held: quota:
+    ...`, as it prints every condition.
+  - *The bound* (story 790, ruling (f) on item 743 comment 7540; not a
+    ruling by Tom). A `bulk` session, whose curation entry has `maxHold`
+    12 hours, found past it with its recorded hold `QuotaHold` closes by its
+    `onUnreported` (`failed`) with reason `quota-hold-expired`, once, and is
+    released at once; its condition then reads `SummonAdmitted=False
+    QuotaHoldExpired`. Past it with any other recorded hold it closes
+    `hold-expired`, condition `HoldExpired`. DESIGN-064 6.8 sends both to the
+    daily digest, not a page: the plan being busy is not a fault (the
+    keeper's digest is story 742b). A `normal` session has no `maxHold`, so
+    a quota hold never expires; an `urgent` one is never held by the gate.
 - *The pass goes on.* A failed status write while completing one kept grant
   is reported and the pass continues; the grant still holds its slot, and
   another lane's ready session is admitted in the same pass.

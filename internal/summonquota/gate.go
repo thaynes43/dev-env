@@ -2,6 +2,7 @@ package summonquota
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -11,43 +12,28 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
 
-const (
-	// DefaultReadTimeout bounds one read of the readings. A read that runs
-	// past it is a read error, and the session is admitted.
-	DefaultReadTimeout = 5 * time.Second
-	// DefaultReuse is how long one read's result, the readings or the read
-	// failure, answers every decision: half the leader's 60-second admission
-	// interval. The seam (controller.Reconciler.SummonQuota) gets no pass id
-	// or pass time, so this is the bound: at most one read per 30 seconds,
-	// which is one per pass whenever a pass takes less (the coordinator's
-	// answer to op783-q-1, gap A; story 743b can make it exact when it
-	// reshapes the seam).
-	DefaultReuse = 30 * time.Second
-)
+// DefaultReadTimeout bounds one read of the readings. A read that runs past
+// it is a read timeout, and the session is admitted.
+const DefaultReadTimeout = 5 * time.Second
 
 // ReadFunc returns each provider's newest reading, keyed by agent ("claude",
 // "codex"); a provider with no reading is absent. It must honour ctx.
 type ReadFunc func(ctx context.Context) (map[string]Reading, error)
 
-// Gate is the leader's quota hook: its Admits is Reconciler.SummonQuota.
-// The admission pass calls it last in the hold switch, only for a Queued
-// session with spec.caller whose lane and pool are free.
+// Gate is the leader's quota hook: its DecideSession is
+// Reconciler.SummonQuota. The admission pass calls it last in the hold
+// switch, only for a Queued session with spec.caller whose lane and pool are
+// free, under the pass's context (WithPass).
 type Gate struct {
 	Lines Lines
 	Read  ReadFunc
 	// Now is the gate's clock; nil is time.Now.
 	Now func() time.Time
 	Log logr.Logger
-	// ReadTimeout and Reuse are zero for DefaultReadTimeout and DefaultReuse.
+	// ReadTimeout is zero for DefaultReadTimeout.
 	ReadTimeout time.Duration
-	Reuse       time.Duration
 
 	mu sync.Mutex
-	// held says at, readings and failure hold the last read's result.
-	held     bool
-	at       time.Time
-	readings map[string]Reading
-	failure  Why
 	// staleAt is, per provider, the newest readAt the gate has judged
 	// stale. A reading at or before it stays stale whatever the clock says
 	// later; a strictly newer one is judged normally (story 783 fix round 2,
@@ -57,42 +43,66 @@ type Gate struct {
 	staleAt map[string]time.Time
 }
 
-// Admits reports whether the quota lets s start now. A session without
-// spec.caller, an urgent session and a priority with no line set read
-// nothing; every decision on a normal or bulk session logs one line.
+// passKey is the context key of one admission pass's read.
+type passKey struct{}
+
+// passRead is one admission pass's read of the readings, made at most once:
+// by the first decision of the pass that needs a reading. Every later
+// decision of the pass is answered from it, the readings or the failure.
+type passRead struct {
+	mu       sync.Mutex
+	done     bool
+	readings map[string]Reading
+	failure  Why
+}
+
+// WithPass returns ctx marked as one admission pass (story 790): every
+// DecideSession under it shares one read of the readings, so the gate reads
+// at most once per pass however many Queued sessions reach it and however
+// long the pass takes, and the next pass reads again. The pass's attempts
+// share it too. A decision whose context carries no pass reads for itself.
+// The admission pass marks its context once, before its first attempt.
+func WithPass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, passKey{}, &passRead{})
+}
+
+// DecideSession is the gate's decision on s now, as the admission pass
+// needs it: admit or hold and what it read (Decision). A session without
+// spec.caller is admitted with an empty reason; an urgent session and a
+// priority with no line set read nothing; every decision on a normal or bulk
+// session logs one line.
 //
-// The decision's clock is read after the reading returns, past the read and
-// any wait for the lock, so staleness and a window's reset are judged at the
-// time the session would start (ruling R2 on PR 1101). The 30-second reuse
-// keeps the time taken before the read.
+// The read runs under ctx, the pass's context, bounded by ReadTimeout. The
+// decision's clock is read after the reading returns, past the read and any
+// wait for the pass's lock, so staleness and a window's reset are judged at
+// the time the session would start (ruling R2 on PR 1101), and each later
+// decision of the pass on its own clock.
 //
 // A reading Decide finds stale marks its provider: from then on that reading,
 // and any older one, reaches Decide as Missing WhyStale, so a clock that goes
 // back cannot make it fresh again (story 783 fix round 2). A caller that took
 // the same reading before the mark was written decides on its own clock.
-func (g *Gate) Admits(s *v1alpha1.AgentSession) bool {
+func (g *Gate) DecideSession(ctx context.Context, s *v1alpha1.AgentSession) Decision {
 	if s == nil || s.Spec.Caller == "" {
-		return true
+		return Decision{Admit: true}
 	}
 	var p v1alpha1.SummonPriority
 	if s.Spec.Summon != nil {
 		p = s.Spec.Summon.Priority
 	}
 	agent := string(s.Spec.Agent)
-	now := g.now()
 	r := Reading{Missing: WhyNoReading}
 	if g.Lines.For(p) {
-		r = g.reading(agent, now)
-		now = g.now()
+		r = g.reading(ctx, agent)
 	}
-	d := Decide(p, r, g.Lines, now)
+	d := Decide(p, r, g.Lines, g.now())
 	if d.HaveReading && d.Reason == WhyStale {
 		g.markStale(agent, r.ReadAt)
 	}
 	if p != v1alpha1.SummonPriorityUrgent {
 		g.log(s, d)
 	}
-	return d.Admit
+	return d
 }
 
 func (g *Gate) now() time.Time {
@@ -102,29 +112,33 @@ func (g *Gate) now() time.Time {
 	return time.Now()
 }
 
-// reading is agent's newest reading from the last read, read again when that
-// read is Reuse old or the clock went back past it. The lock is held through
-// the read, so two callers never read at once. A reading at or before the
+// reading is agent's newest reading from the pass's one read, made now if
+// the pass has none yet. The pass's lock is held through the read, so two
+// decisions of one pass never read twice. A reading at or before the
 // provider's stale mark is returned as Missing WhyStale.
-func (g *Gate) reading(agent string, now time.Time) Reading {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	reuse := g.Reuse
-	if reuse <= 0 {
-		reuse = DefaultReuse
+func (g *Gate) reading(ctx context.Context, agent string) Reading {
+	pr, _ := ctx.Value(passKey{}).(*passRead)
+	if pr == nil {
+		pr = &passRead{}
 	}
-	if since := now.Sub(g.at); !g.held || since < 0 || since >= reuse {
-		g.readings, g.failure = g.readOnce()
-		g.held, g.at = true, now
+	pr.mu.Lock()
+	if !pr.done {
+		pr.readings, pr.failure = g.readOnce(ctx)
+		pr.done = true
 	}
-	if g.failure != "" {
-		return Reading{Missing: g.failure}
+	readings, failure := pr.readings, pr.failure
+	pr.mu.Unlock()
+	if failure != "" {
+		return Reading{Missing: failure}
 	}
-	r, ok := g.readings[agent]
+	r, ok := readings[agent]
 	if !ok || r.ReadAt.IsZero() {
 		return Reading{Missing: WhyNoReading}
 	}
-	if mark, ok := g.staleAt[agent]; ok && !r.ReadAt.After(mark) {
+	g.mu.Lock()
+	mark, marked := g.staleAt[agent]
+	g.mu.Unlock()
+	if marked && !r.ReadAt.After(mark) {
 		return Reading{Missing: WhyStale}
 	}
 	return r
@@ -144,9 +158,10 @@ func (g *Gate) markStale(agent string, readAt time.Time) {
 	g.staleAt[agent] = readAt
 }
 
-// readOnce is one read bounded by ReadTimeout. The seam carries no context,
-// so the read gets its own.
-func (g *Gate) readOnce() (map[string]Reading, Why) {
+// readOnce is one read under the pass's context, bounded by ReadTimeout. A
+// read cut off by that bound is a timeout; any other failure, a pass context
+// that is done among them, is a read error. Both admit.
+func (g *Gate) readOnce(ctx context.Context) (map[string]Reading, Why) {
 	if g.Read == nil {
 		return nil, WhyReadError
 	}
@@ -154,11 +169,11 @@ func (g *Gate) readOnce() (map[string]Reading, Why) {
 	if timeout <= 0 {
 		timeout = DefaultReadTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	readings, err := g.Read(ctx)
+	readings, err := g.Read(rctx)
 	switch {
-	case err != nil && ctx.Err() != nil:
+	case err != nil && errors.Is(rctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
 		return nil, WhyReadTimeout
 	case err != nil:
 		return nil, WhyReadError
