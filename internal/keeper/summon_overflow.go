@@ -69,8 +69,9 @@ const (
 	// bound is for all time (fix round 1, ruling 2): the create ledger never
 	// removes a caller or lowers its count, so a member with a reference
 	// above 0 is never dropped (dropping it would page its old refusals
-	// again). The first 64 callers ever refused keep their slots; a 65th is
-	// never paged, and freeing a slot is an operator's edit of the ledger.
+	// again), nor is one whose caller still owes refusals (overflowSpare).
+	// The first 64 callers ever refused keep their slots; a 65th is never
+	// paged, and freeing a slot is an operator's edit of the ledger.
 	summonOverflowMaxCallers = 64
 	// summonOverflowOwner starts the owner part of an overflow event's
 	// dedupe key, overflow-<unix second>-<16 hex of the caller's SHA-256>.
@@ -131,15 +132,17 @@ func summonOverflowEntryKey(key string) bool {
 // one for each caller whose count is above its reference and whose last
 // overflow event is at least an hour old. It lowers, in memory, the reference
 // of a caller whose count went down or whose key is gone, and reports whether
-// it changed the ledger. It logs each fixed line at most once a tick.
-func (p *summonPager) overflowJobs(ctx context.Context, l *summonPageLedger, now time.Time) ([]summonJob, bool) {
+// it changed the ledger. It also returns the callers that owe: those whose
+// entry holds refusals or cannot be decoded this tick. A member of one is
+// never a spare (overflowSpare). It logs each fixed line at most once a tick.
+func (p *summonPager) overflowJobs(ctx context.Context, l *summonPageLedger, now time.Time) ([]summonJob, bool, map[string]bool) {
 	if p.creates == nil {
-		return nil, false
+		return nil, false, nil
 	}
 	data, err := p.creates.read(ctx)
 	if err != nil {
 		p.log.Error(nil, "summon overflow: the create ledger is unavailable")
-		return nil, false
+		return nil, false, nil
 	}
 	st := &l.State
 	callers := make([]string, 0, len(data))
@@ -150,12 +153,17 @@ func (p *summonPager) overflowJobs(ctx context.Context, l *summonPageLedger, now
 	}
 	sort.Strings(callers)
 	var jobs []summonJob
+	owing := map[string]bool{}
 	changed, unreadable, ahead := false, false, false
 	for _, caller := range callers {
 		e, err := summonledger.Decode(data[caller], true)
 		if err != nil {
 			unreadable = true // no value from the entry is logged
+			owing[caller] = true
 			continue
+		}
+		if e.UrgentRefusals > 0 {
+			owing[caller] = true
 		}
 		o, kept := st.Overflow[caller]
 		if e.UrgentRefusals < o.LastPagedCount {
@@ -197,18 +205,23 @@ func (p *summonPager) overflowJobs(ctx context.Context, l *summonPageLedger, now
 	if ahead {
 		p.log.Error(nil, "summon overflow ledger time is ahead of the keeper's clock")
 	}
-	return jobs, changed
+	return jobs, changed, owing
 }
 
 // overflowSpare is the member the bound may drop to make room: one whose
-// reference is 0 (its caller's key is gone or was reset to zero, or it has
-// had only capped events) and whose last overflow event is at least an hour
-// old, the oldest first. Dropping it changes nothing: a caller with no member
-// counts from 0, and its hour has passed. "" when there is none.
-func (s summonPageState) overflowSpare(now time.Time) string {
+// reference is 0, whose caller owes nothing this tick (its key is gone or
+// holds a count of 0; owing, from overflowJobs, has the others) and whose last
+// overflow event is at least an hour old, the oldest first. Dropping it
+// changes nothing: a caller with no member counts from 0, it has no refusals
+// to page, and its hour has passed. A member with reference 0 that owes
+// refusals (it has had only capped events, or its key was reset to a lower
+// count above 0) is never a spare, so a new caller cannot take its slot
+// (story 793 fix round 1, the advisory review on PR 1131). "" when there is
+// none.
+func (s summonPageState) overflowSpare(now time.Time, owing map[string]bool) string {
 	spare, at := "", int64(0)
 	for caller, o := range s.Overflow {
-		if o.LastPagedCount != 0 || now.Before(time.Unix(o.LastPagedAt, 0).Add(summonOverflowEvery)) {
+		if o.LastPagedCount != 0 || owing[caller] || now.Before(time.Unix(o.LastPagedAt, 0).Add(summonOverflowEvery)) {
 			continue
 		}
 		if spare == "" || o.LastPagedAt < at || (o.LastPagedAt == at && caller < spare) {
@@ -220,11 +233,11 @@ func (s summonPageState) overflowSpare(now time.Time) string {
 
 // overflowRoom reports whether caller has a member, or can get one: the
 // member is below its bound, or holds a spare one.
-func (s summonPageState) overflowRoom(caller string, now time.Time) bool {
+func (s summonPageState) overflowRoom(caller string, now time.Time, owing map[string]bool) bool {
 	if _, ok := s.Overflow[caller]; ok {
 		return true
 	}
-	return len(s.Overflow) < summonOverflowMaxCallers || s.overflowSpare(now) != ""
+	return len(s.Overflow) < summonOverflowMaxCallers || s.overflowSpare(now, owing) != ""
 }
 
 // markOverflow records an overflow event in its caller's member, in memory:
@@ -233,13 +246,13 @@ func (s summonPageState) overflowRoom(caller string, now time.Time) bool {
 // for a caller with no member yet), so its refusals wait for the caller's next
 // page (fix round 1, ruling 1). It drops a spare member first when the member
 // is at its bound. Other jobs are left alone.
-func (s *summonPageState) markOverflow(j summonJob, now time.Time, attempted bool) {
+func (s *summonPageState) markOverflow(j summonJob, now time.Time, attempted bool, owing map[string]bool) {
 	if j.event != summonEventOverflow {
 		return
 	}
 	o, ok := s.Overflow[j.caller]
 	if !ok && len(s.Overflow) >= summonOverflowMaxCallers {
-		if spare := s.overflowSpare(now); spare != "" {
+		if spare := s.overflowSpare(now, owing); spare != "" {
 			delete(s.Overflow, spare)
 		}
 	}

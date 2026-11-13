@@ -1122,3 +1122,79 @@ func TestSummonOverflowOrderCostsSessionPages(t *testing.T) {
 	}
 	f.assertRollingCap()
 }
+
+// Story 793 fix round 1, the advisory review's finding on PR 1131: with
+// ruling 1 a member can have reference 0 while its caller's entry still holds
+// refusals (it has had only capped events, or its key was reset to a lower
+// count above 0). Such a member is never a spare. At the bound, a new caller
+// whose last refusal is older, and so sorts first in the tick, cannot take
+// its slot: the member pages its refusals, and the new caller waits. A member
+// whose entry cannot be read is not a spare either. A member whose key is
+// gone or reset to zero still makes room.
+func TestSummonOverflowSpareOwesNothing(t *testing.T) {
+	const full = "summon overflow caller capacity reached"
+	const owing = "ns-63.caller" // the member a capped event left: reference 0
+	setup := func(t *testing.T, owingEntry func(t0 time.Time) string) (*summonFix, map[string]string) {
+		f := newSummonFix(t)
+		t0 := f.clock.Now()
+		st := newSummonPageState()
+		data := map[string]string{}
+		for i := 0; i < summonOverflowMaxCallers-1; i++ {
+			caller := fmt.Sprintf("ns-%02d.caller", i)
+			st.Overflow[caller] = summonOverflowEntry{LastPagedCount: 1, LastPagedAt: t0.Add(-2 * time.Hour).Unix()}
+			data[caller] = refusals(t, 1, t0.Add(-3*time.Hour))
+		}
+		st.Overflow[owing] = summonOverflowEntry{LastPagedCount: 0, LastPagedAt: t0.Add(-2 * time.Hour).Unix()}
+		raw, err := json.Marshal(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSummonLedger(t, f, string(raw), false)
+		data[owing] = owingEntry(t0)
+		data[summonCallerA] = refusals(t, 2, t0.Add(-30*time.Minute)) // older: sorts first
+		f.creates(data)
+		return f, data
+	}
+	t.Run("a member that owes refusals keeps its slot", func(t *testing.T) {
+		f, _ := setup(t, func(t0 time.Time) string { return refusals(t, 3, t0.Add(-time.Minute)) })
+		f.tick()
+		l := f.ledger()
+		if got := f.overflowCounts(); len(got) != 1 || got[0] != owing+"=3" {
+			t.Fatalf("pages %v", got)
+		}
+		if _, ok := l.State.Overflow[summonCallerA]; ok || l.State.Overflow[owing].LastPagedCount != 3 || len(l.State.Overflow) != summonOverflowMaxCallers {
+			t.Fatalf("members %d, A present %v, owing %+v", len(l.State.Overflow), ok, l.State.Overflow[owing])
+		}
+		if strings.Count(f.logs.String(), full) != 1 {
+			t.Fatalf("logs %s", f.logs.String())
+		}
+	})
+	t.Run("an unreadable entry keeps its slot", func(t *testing.T) {
+		f, data := setup(t, func(time.Time) string { return "not a create ledger entry" })
+		f.tick()
+		if f.push.count() != 0 || !strings.Contains(f.logs.String(), full) {
+			t.Fatalf("pages %v", f.overflowCounts())
+		}
+		if o, ok := f.ledger().State.Overflow[owing]; !ok || o.LastPagedCount != 0 {
+			t.Fatalf("the member %+v kept %v", o, ok)
+		}
+		data[owing] = refusals(t, 3, f.clock.Now().Add(-time.Second))
+		f.creates(data)
+		f.clock.Step(time.Minute)
+		f.tick()
+		if got := f.overflowCounts(); len(got) != 1 || got[0] != owing+"=3" {
+			t.Fatalf("pages %v", got)
+		}
+	})
+	t.Run("a member reset to zero makes room", func(t *testing.T) {
+		f, _ := setup(t, func(t0 time.Time) string { return refusals(t, 0, t0.Add(-time.Hour)) })
+		f.tick()
+		l := f.ledger()
+		if got := f.overflowCounts(); len(got) != 1 || got[0] != summonCallerA+"=2" {
+			t.Fatalf("pages %v", got)
+		}
+		if _, ok := l.State.Overflow[owing]; ok || len(l.State.Overflow) != summonOverflowMaxCallers {
+			t.Fatalf("members %d, the spare kept %v", len(l.State.Overflow), ok)
+		}
+	})
+}

@@ -2556,10 +2556,15 @@ these words and the tests.
   64 callers ever refused keep their slots, and a 65th is never paged; the
   keeper logs `summon overflow caller capacity reached` once a tick. Freeing
   a slot is an operator's edit of the pager's ledger. The one exception is a
-  member with `lastPagedCount` 0 and a `lastPagedAt` at least an hour old
-  (its key removed or reset to zero by hand, or only capped events so far):
-  it goes for a new caller, the oldest first, which changes nothing (a
-  caller with no member counts from 0, and its hour has passed). With every bound filled and each value at
+  member with `lastPagedCount` 0, a `lastPagedAt` at least an hour old, and
+  a key that this tick is gone or holds a count of 0 (removed or reset to
+  zero by hand): it goes for a new caller, the oldest first, which changes
+  nothing (a caller with no member counts from 0, it has nothing to page, and
+  its hour has passed). A member with `lastPagedCount` 0 that still owes
+  refusals (only capped events so far, or a key reset to a lower count above
+  0) or whose entry cannot be decoded is never dropped, so a new caller
+  cannot take its slot (the advisory review on PR 1131, fixed in that round).
+  With every bound filled and each value at
   the longest this code writes (2048 dedupe entries, 256 pending lines with
   127-character callers and 64-character words, 2304 listed keys, 64 members
   of 127-character callers), `state.json` is 642,103 bytes, under the

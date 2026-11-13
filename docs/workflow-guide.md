@@ -2047,9 +2047,11 @@ None is a ruling by Tom.
   refused keep their places; a 65th is never paged, and the keeper logs
   `summon overflow caller capacity reached` once a tick. Freeing a place is
   an operator's edit of the pager's ledger. The one exception is a record
-  whose count is 0 (its key removed or reset to zero by hand, or only capped
-  events so far) and that has had no overflow event for an hour: it goes
-  for a new caller, the oldest first. A record ahead of the keeper's clock
+  whose key is gone or holds a count of 0 (removed or reset to zero by hand)
+  and that has had no overflow event for an hour: it goes for a new caller,
+  the oldest first. A record that still owes refusals (only capped events so
+  far, or a key reset to a lower count above 0), or whose entry cannot be
+  decoded, keeps its place. A record ahead of the keeper's clock
   holds that caller until the clock has passed it by the hour, with
   `summon overflow ledger time is ahead of the keeper's clock`. Stated
   limits: a key reset and refilled past its old count between two
