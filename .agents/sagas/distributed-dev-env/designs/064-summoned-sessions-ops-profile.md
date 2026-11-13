@@ -1249,8 +1249,12 @@ differs, this governs.
   date) is the operator leader's record of a remote escalation's Remote
   Control registration: `agentSeenAt`, `result`, `reason` and `at`, each set
   once, the record never removed, and the result written with the
-  `escalation-started` page event in one status write. It holds nothing (no
-  lane, no slot) and counts in no pool or queue. Only an admitted, open
+  `escalation-started` page event in one status write. *Since story 794 fix
+  round 1 (coordinator rulings in PR 1132 comment 6856616130 and item 745
+  comment 7855; not a ruling by Tom):* `pages[]` holds at most one
+  `escalation-started`, which the CRD enforces, and a session whose `pages[]`
+  already holds it counts as settled. It holds nothing (no lane, no slot) and
+  counts in no pool or queue. Only an admitted, open
   remote escalation gets one; a Queued session, a task, an upgrade and a
   closed session never do. The observation it settles from is the pod's own
   claim, copied by the heartbeat, not an attestation by the provider.
@@ -2773,13 +2777,32 @@ differs, this governs.
    result. A conflict or a not-found waits for the next pass, which decides
    again from the stored record. With `pages[]` at its 8 entries the leader
    logs and writes neither the event nor the result.
+
+   *The write is checked, and one event* (story 794 fix round 1,
+   coordinator rulings in PR 1132 comment 6856616130 and item 745 comment
+   7855; not a ruling by Tom). The leader decodes the patch's answer into a
+   separate object, as `summonoutcome.Write` does, and requires what the API
+   server stored to carry what was written: `agentSeenAt` for the agent-seen
+   write; `result`, `at` and exactly one `escalation-started` for a
+   settlement. If it does not, because the cluster's CRD copy is older than
+   this story and prunes the field, the write succeeds and stores nothing;
+   the step then returns an error that says to install the current
+   AgentSession CRD before the operator, logs nothing as recorded, and keeps
+   no change on the object in memory. A session whose `pages[]` already
+   holds `escalation-started` counts as settled and is not read again, so a
+   copy that kept the event but pruned the record cannot repeat it. The CRD
+   holds `pages[]` to at most one `escalation-started`.
 3. *The rules (O3 as amended),* in this order, by one pure function,
    `summonoutcome.Registration`, from the session's name,
    `status.remoteControl`, `status.agent`, `status.summon` and the leader's
    clock:
-   1. **A fresh heartbeat or nothing.** No `status.agent.lastHeartbeat`, or
-      one more than 3 minutes old, settles nothing. A pod that does not report
-      is the watchdog's `never-started` and `heartbeat-lost` rows' business.
+   1. **A fresh heartbeat or nothing.** No `status.agent.lastHeartbeat`, one
+      more than 3 minutes old, or one stamped more than 30 seconds after the
+      leader's clock settles nothing. The stamp is the API replica's clock,
+      not the leader's; the 30 seconds are story 794 fix round 1's
+      (coordinator rulings in PR 1132 comment 6856616130 and item 745 comment
+      7855; not a ruling by Tom). A pod that does not report is the
+      watchdog's `never-started` and `heartbeat-lost` rows' business.
    2. **Registered:** Remote Control state `registered`, `url` matching the
       shared pattern (item 5), and `name` equal to the session's name,
       whether or not the agent was seen first.
@@ -2793,6 +2816,18 @@ differs, this governs.
       `login-required`: a pod that reports while its agent stays `pending`
       would otherwise be silent until the 72-hour bound.
    6. Otherwise nothing yet.
+
+   *A reading from the bound or later* (story 794 fix round 1, coordinator
+   rulings in PR 1132 comment 6856616130 and item 745 comment 7855; not a
+   ruling by Tom). For rules 4 and 5, the leader's clock and the heartbeat
+   it reads must both be at or after the bound: `agentSeenAt` plus 5
+   minutes, or `admittedAt` plus 10 minutes when the agent was never seen.
+   A reading taken before the bound settles nothing, however fresh; a pod
+   that keeps reporting settles within one heartbeat after the bound.
+   Comment 7685 let an `unavailable` settlement rest on any heartbeat up to
+   3 minutes old, so a session could be told to Tom as having no link from a
+   reading taken before its bound, after as little as about 2 minutes.
+   `registered` (rule 2) still reads any heartbeat rule 1 lets through.
 
    So one `offline` reading, a pending login or a slow start never settles
    early; the two bounds are the only way to `unavailable`. A settled session

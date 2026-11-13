@@ -10,6 +10,7 @@ package controller
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -551,5 +552,212 @@ func TestDrainLeavesASummonedRemoteEscalation(t *testing.T) {
 	s.Status.Phase, s.Status.Restart = v1alpha1.PhaseRunning, nil
 	if phase, _ := podPhase(s, observation{pod: owned[*corev1.Pod]{obj: pod}, templates: tmpl}); phase == v1alpha1.PhaseDraining {
 		t.Fatal("a summoned remote escalation was marked Draining")
+	}
+}
+
+// prunedLeader is a leader whose API server drops status.summon.registration
+// from every status patch, as a CRD copy older than story 794 prunes the
+// field: the patch succeeds, and the stored object, and so the patch's
+// answer, lacks the record. The page event stays, as on a copy with the
+// enum value but not the field. bodies holds each such write as sent.
+func (w *summonWorld) prunedLeader() *regWrites {
+	rw := &regWrites{}
+	w.r = w.leader(&interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+		data, err := patch.Data(obj)
+		if err != nil {
+			return err
+		}
+		if !bytes.Contains(data, []byte(`"registration"`)) {
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		}
+		rw.bodies = append(rw.bodies, obj.GetName()+" "+string(data))
+		var body map[string]any
+		if err := json.Unmarshal(data, &body); err != nil {
+			return err
+		}
+		if st, ok := body["status"].(map[string]any); ok {
+			if sum, ok := st["summon"].(map[string]any); ok {
+				delete(sum, "registration")
+			}
+		}
+		pruned, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		return c.SubResource(sub).Patch(ctx, obj, client.RawPatch(patch.Type(), pruned), opts...)
+	}})
+	return rw
+}
+
+// Story 794 fix round 1, ruling 2 (coordinator rulings in PR 1132 comment
+// 6856616130 and item 745 comment 7855; not a ruling by Tom): the step reads
+// what the API server stored. When the answer lacks what was written, the
+// step returns an error that names the CRD install, logs nothing as
+// recorded, and keeps no change on the object in memory. Across ten passes
+// nothing is logged as recorded, and a settlement whose event was kept is
+// not written again: no second escalation-started.
+func TestSummonRegistrationWriteNotKeptIsAnError(t *testing.T) {
+	const install = "install the current AgentSession CRD before the operator"
+	for _, tc := range []struct {
+		name, agent, state string
+		// passErr: each later pass returns the error (the agent-seen write
+		// repeats); otherwise the kept event settles it and nothing is sent.
+		passErr bool
+		writes  int
+		started int
+	}{
+		{"agent seen", protocol.AgentBusy, protocol.RemoteStarting, true, 11, 0},
+		{"settlement", protocol.AgentPending, protocol.RemoteRegistered, false, 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, s := remoteAdmitted(t, v1alpha1.LaneEscalation, "esc-stale-crd")
+			writes := w.prunedLeader()
+			var logs strings.Builder
+			ctx := logr.NewContext(context.Background(), funcr.New(func(prefix, args string) { logs.WriteString(prefix + args + "\n") }, funcr.Options{}))
+			w.now = summonT0.Add(time.Minute)
+			w.report(s.Name, tc.agent, rcFor(s.Name, tc.state))
+			live := w.get(s.Name)
+			before := live.DeepCopy()
+			err := w.r.summonRegistration(ctx, live)
+			if err == nil || !strings.Contains(err.Error(), install) || !strings.Contains(err.Error(), s.Name) {
+				t.Fatalf("a write the API server did not keep: %v, want an error naming the CRD install", err)
+			}
+			if !apiequality.Semantic.DeepEqual(live, before) {
+				t.Fatalf("the object in memory kept the write: %+v", live.Status.Summon)
+			}
+			for i := range 10 {
+				w.now = summonT0.Add(2*time.Minute + time.Duration(i)*time.Minute)
+				w.report(s.Name, tc.agent, rcFor(s.Name, tc.state))
+				err := w.r.SummonAdmissionPass(ctx)
+				if tc.passErr != (err != nil) || err != nil && !strings.Contains(err.Error(), install) {
+					t.Fatalf("pass %d: %v, want an error %v", i+2, err, tc.passErr)
+				}
+			}
+			if strings.Contains(logs.String(), "recorded") {
+				t.Fatalf("a write that was not kept was logged as recorded: %q", logs.String())
+			}
+			if len(writes.bodies) != tc.writes || w.registration(s.Name) != nil || len(startedPages(w.pages(s.Name))) != tc.started {
+				t.Fatalf("writes %d %v, registration %+v, pages %+v", len(writes.bodies), writes.bodies, w.registration(s.Name), w.pages(s.Name))
+			}
+		})
+	}
+}
+
+// Story 794 fix round 1, ruling 2: a session whose pages[] already holds
+// escalation-started is settled, with or without a result, and is not read
+// again.
+func TestSummonRegistrationStartedEventIsSettled(t *testing.T) {
+	w, s := remoteAdmitted(t, v1alpha1.LaneEscalation, "esc-started")
+	live := w.get(s.Name)
+	seen := metav1.NewTime(summonT0)
+	live.Status.Summon.Registration = &v1alpha1.SummonRegistrationStatus{AgentSeenAt: &seen}
+	live.Status.Summon.Pages = []v1alpha1.SummonPage{{Event: v1alpha1.PageEscalationStarted, At: metav1.NewTime(summonT0.Add(time.Minute))}}
+	if err := w.base.Status().Update(context.Background(), live); err != nil {
+		t.Fatal(err)
+	}
+	if summonRegistrationDue(w.get(s.Name)) {
+		t.Fatal("a session with escalation-started is due")
+	}
+	writes := w.countingLeader(nil)
+	for i, rc := range []*v1alpha1.RemoteControlStatus{rcFor(s.Name, protocol.RemoteRegistered), rcFor(s.Name, protocol.RemoteOffline), nil} {
+		w.step(s.Name, 10*time.Minute+time.Duration(i)*time.Minute, protocol.AgentBusy, rc)
+	}
+	if len(writes.bodies) != 0 || len(startedPages(w.pages(s.Name))) != 1 || w.registration(s.Name).Result != "" {
+		t.Fatalf("writes %v registration %+v pages %+v", writes.bodies, w.registration(s.Name), w.pages(s.Name))
+	}
+}
+
+// nonZeroingPrunedLeader is a leader whose API server drops what prune
+// removes from status.summon in every registration patch, and whose client
+// decodes the answer into the step's target without zeroing it first: a key
+// the answer lacks keeps the target's own value. The fake client zeroes its
+// target (as controller-runtime's real client does), so this is the client
+// that would hide a pruned answer from a check whose target already held
+// what was written.
+func (w *summonWorld) nonZeroingPrunedLeader(prune func(summon map[string]any)) {
+	w.r = w.leader(&interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+		data, err := patch.Data(obj)
+		if err != nil {
+			return err
+		}
+		if !bytes.Contains(data, []byte(`"registration"`)) {
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(data, &body); err != nil {
+			return err
+		}
+		if st, ok := body["status"].(map[string]any); ok {
+			if sum, ok := st["summon"].(map[string]any); ok {
+				prune(sum)
+			}
+		}
+		pruned, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		target := (&client.SubResourcePatchOptions{}).ApplyOptions(opts).SubResourceBody
+		if target == nil {
+			return errors.New("the step sent no separate answer target")
+		}
+		scratch := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: obj.GetName(), Namespace: obj.GetNamespace()}}
+		if err := c.SubResource(sub).Patch(ctx, obj, client.RawPatch(patch.Type(), pruned), client.WithSubResourceBody(scratch)); err != nil {
+			return err
+		}
+		answer, err := json.Marshal(scratch)
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(answer, target)
+	}})
+}
+
+// Story 794 fix round 1, ruling 2, with a client that does not zero its
+// decode target: the answer's target is a copy of the object as read, which
+// lacks what the step writes, so a pruned answer is still an error. Cases:
+// the agent-seen write, a settlement after the agent was seen, and a
+// settlement whose page event was dropped.
+func TestSummonRegistrationPrunedAnswerIsAnErrorWithoutZeroing(t *testing.T) {
+	const install = "install the current AgentSession CRD before the operator"
+	dropRecord := func(sum map[string]any) { delete(sum, "registration") }
+	dropPages := func(sum map[string]any) { delete(sum, "pages") }
+	for _, tc := range []struct {
+		name, agent, state string
+		seen               bool
+		prune              func(map[string]any)
+		missing            string
+	}{
+		{"agent seen", protocol.AgentBusy, protocol.RemoteStarting, false, dropRecord, "agentSeenAt"},
+		{"settlement after seen", protocol.AgentBusy, protocol.RemoteRegistered, true, dropRecord, "registration.result"},
+		{"page event", protocol.AgentPending, protocol.RemoteRegistered, false, dropPages, "escalation-started"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, s := remoteAdmitted(t, v1alpha1.LaneEscalation, "esc-no-zero")
+			if tc.seen {
+				live := w.get(s.Name)
+				seen := metav1.NewTime(summonT0.Add(30 * time.Second))
+				live.Status.Summon.Registration = &v1alpha1.SummonRegistrationStatus{AgentSeenAt: &seen}
+				if err := w.base.Status().Update(context.Background(), live); err != nil {
+					t.Fatal(err)
+				}
+			}
+			w.nonZeroingPrunedLeader(tc.prune)
+			var logs strings.Builder
+			ctx := logr.NewContext(context.Background(), funcr.New(func(prefix, args string) { logs.WriteString(prefix + args + "\n") }, funcr.Options{}))
+			w.now = summonT0.Add(time.Minute)
+			w.report(s.Name, tc.agent, rcFor(s.Name, tc.state))
+			live := w.get(s.Name)
+			before := live.DeepCopy()
+			err := w.r.summonRegistration(ctx, live)
+			if err == nil || !strings.Contains(err.Error(), install) || !strings.Contains(err.Error(), tc.missing) {
+				t.Fatalf("a pruned answer decoded without zeroing: %v, want an error naming %s and the CRD install", err, tc.missing)
+			}
+			if !apiequality.Semantic.DeepEqual(live, before) {
+				t.Fatalf("the object in memory kept the write: %+v", live.Status.Summon)
+			}
+			if strings.Contains(logs.String(), "recorded") {
+				t.Fatalf("logged as recorded: %q", logs.String())
+			}
+		})
 	}
 }
