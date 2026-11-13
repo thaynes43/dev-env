@@ -810,8 +810,12 @@ agentd removes it with one Backspace per character and tries again later. The
 operator flag `--title-rename-sessions` names the sessions whose heartbeat
 answers carry that text, or `*` for every session. Empty, the default,
 names no session: the heartbeat is the old empty answer and agentd types
-nothing, while `agent-run title` still only records. `agent-run show` then
-says the rename is not enabled for this session. A title set at launch is
+nothing, while `agent-run title` still only records and says so. For a
+session with a recorded title change, `agent-run show` then
+says the rename is not enabled for this session. A session nobody renamed
+gets no new key in its view, so an older `agent-run`, whose
+`show --json --once` and `usage export` refuse a key they do not know,
+still reads it. A title set at launch is
 not typed again; a different title recorded later in the same pod is typed
 under the same guard. A title may not end with a semicolon and may not
 contain a backslash. This typed rename is built and not installed.
@@ -1083,6 +1087,10 @@ The operator flag `--enable-parent-notes` defaults to false and requires
 nothing; an operator older than this feature answers 404. The wait needs the
 verb watch on inboxmessages for the operator's Role, granted in haynes-ops
 before the flag is on. This source does not enable the flag in the cluster.
+The child's project must also be in the operator's `--inbox-projects` list.
+A child of any other project is hidden, and its `parent tell` answers 404
+(`internal/apiserver/parent_note.go:87`). On 2026-11-13 the live list is
+`dev-env,haynes-studio` (OpenProject #799).
 The parent finds notes by listing them or with `parent wait-any`. A child whose recorded parent is the
 Meatball account `dev-env-system/dev-env-meatball` uses the same `parent tell`.
 The server stores `callerRecipient` from the live CallerPolicy. Any other
