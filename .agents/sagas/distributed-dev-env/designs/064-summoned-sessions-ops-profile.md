@@ -2433,10 +2433,34 @@ built:
   tick. A line needs a dedupe entry: a full dedupe logs `summon page dedupe
   capacity reached` and the line waits.
 - *Stated limits.* As Q10 says, a session deleted before the keeper's next
-  tick can miss its line. A capped event recorded by a keeper without the
-  digest, or before the watermark, is in no digest. The digest proves
-  attempts, not delivery; 742's acceptance asks Tom once whether the first
-  real digest arrived.
+  tick can miss its line. A capped event is in no digest when it was recorded
+  before the watermark, or when its entry was pruned before a digest listed
+  it. The digest proves attempts, not delivery; 742's acceptance asks Tom
+  once whether the first real digest arrived.
+
+**Correction, 2026-11-13: story 792 fix round 1, coordinator rulings in PR
+1126 comment 6844882457; not a ruling by Tom.** Where this differs from the
+correction above, this governs. As built:
+
+- *The early digest has a floor of one hour.* Eight or more pending lines
+  send a digest only when at least one hour has passed since the last digest
+  (`digest.lastAt`), or, before the first digest, since the watermark
+  (`digest.since`), to the second. Eight new lines a minute therefore mean at
+  most one digest an hour, not one a minute. The 24-hour rule is unchanged.
+  While the floor makes lines wait, their entries are held from pruning for
+  up to an hour longer; the 256-line pending bound and the 2048-entry dedupe
+  bound still hold, each with its one log line a tick.
+- *A clock behind the ledger is said.* When `digest.since` or
+  `digest.lastAt` is ahead of the keeper's clock, the pager logs one fixed
+  line a tick, `summon digest ledger time is ahead of the keeper's clock`,
+  with no name and no value. Nothing from before the watermark is listed,
+  and both rules count from `digest.lastAt` (before the first digest,
+  `digest.since`), so no digest goes until the clock has passed that time by
+  the hour or the day; nothing is sent twice. A reservation whose second is
+  not after `digest.lastAt` takes the next second as its record key, so two
+  attempts never share one.
+- *`digest.listed` is a guard too.* A close whose key is already in
+  `digest.listed` is not pended again, even when its dedupe entry is gone.
 
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row

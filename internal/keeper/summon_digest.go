@@ -27,8 +27,12 @@ import (
 //     the watermark) gets a pending line too (ruling Q5). Its state word is
 //     capped, which no outcome state uses, and its last word is the event.
 //   - A digest is due 24 hours after the last one, or early once 8 lines are
-//     pending, at any hour (ruling Q7), never while nothing is pending. It is
-//     outside the hourly cap: it takes no slot and waits for none.
+//     pending and at least an hour has passed since the last one, at any hour
+//     (ruling Q7; the hour is fix round 1's ruling 1), never while nothing is
+//     pending. It is outside the hourly cap: it takes no slot and waits for
+//     none.
+//   - A watermark or last digest time ahead of the keeper's clock is said in
+//     one fixed line a tick (fix round 1, ruling 2).
 //   - Its reservation moves every pending line to digest.listed, sets
 //     digest.lastAt and begins its content-free record, in one write before
 //     the send (ruling Q9). A line is in exactly one digest attempt, ever; a
@@ -39,6 +43,10 @@ const (
 	// upgrade-agent/dev-env-ops/app/helmrelease.yaml).
 	summonDigestEvery = 24 * time.Hour
 	summonDigestEarly = 8
+	// summonDigestEarlyFloor is the least time from the last digest (before the
+	// first, the watermark) to an early one: story 792 fix round 1, ruling 1 in
+	// PR 1126 comment 6844882457, the coordinator's, not Tom's.
+	summonDigestEarlyFloor = time.Hour
 	// summonDigestBodyMax is the cut of the message, footer included: v1's
 	// OPS_DIGEST_MAX_CHARS, under Pushover's 1024 (internal/pages MaxBody).
 	summonDigestBodyMax = 950
@@ -81,11 +89,15 @@ func (s *summonPageState) watermark(now time.Time) bool {
 }
 
 // newDigestOutcomes are the digest-row closes this tick may add: at or after
-// the watermark, and not in the dedupe. Oldest close first.
+// the watermark, not in the dedupe and not already in digest.listed (fix
+// round 1, ruling 5: a listed key whose entry went still gets no second
+// line). Oldest close first.
 func (s summonPageState) newDigestOutcomes(outcomes []summonDigestLine) []summonDigestLine {
 	var out []summonDigestLine
 	for _, line := range outcomes {
-		if _, seen := s.Events[line.Key]; seen || s.Digest.Since <= 0 || line.At < s.Digest.Since {
+		_, seen := s.Events[line.Key]
+		_, listed := s.Digest.Listed[line.Key]
+		if seen || listed || s.Digest.Since <= 0 || line.At < s.Digest.Since {
 			continue
 		}
 		out = append(out, line)
@@ -142,9 +154,14 @@ func (s summonPageState) digestMissingEntries() bool {
 // whether it changed it. lanes maps a listed session's UID to its lane word,
 // for a capped event's line. dedupeFull says the tick has already logged a
 // full dedupe. Every line keeps a dedupe entry, so the dedupe is never empty
-// beside a digest record.
+// beside a digest record. It runs once a tick, so it also says, in one fixed
+// line with no value, when the ledger's digest times are ahead of the clock
+// (fix round 1, ruling 2).
 func (p *summonPager) pend(l *summonPageLedger, outcomes []summonDigestLine, lanes map[string]string, now time.Time, dedupeFull bool) bool {
 	st, d := &l.State, &l.State.Digest
+	if d.ahead(now) {
+		p.log.Error(nil, "summon digest ledger time is ahead of the keeper's clock")
+	}
 	changed, pendingFull := false, false
 	full := func() bool {
 		if len(d.Pending) < summonPagesMaxLines {
@@ -224,21 +241,30 @@ func summonCappedLine(key string, e summonPageEntry, lanes map[string]string) su
 	return line
 }
 
-// due reports whether a digest goes now: something is pending, and either 8
-// lines are or 24 hours have passed since the last digest, to the second.
-// Before the first digest the last one is the watermark (op792-q-1).
+// due reports whether a digest goes now: something is pending, and either 24
+// hours have passed since the last digest, or 8 lines are pending and an hour
+// has (fix round 1, ruling 1), each to the second. Before the first digest the
+// last one is the watermark (op792-q-1). A last digest ahead of the clock
+// holds both until the clock has passed it by as long.
 func (d summonDigestState) due(now time.Time) bool {
 	if len(d.Pending) == 0 {
 		return false
-	}
-	if len(d.Pending) >= summonDigestEarly {
-		return true
 	}
 	ref := d.LastAt
 	if ref <= 0 {
 		ref = d.Since
 	}
-	return !now.Before(time.Unix(ref, 0).Add(summonDigestEvery))
+	last := time.Unix(ref, 0)
+	if len(d.Pending) >= summonDigestEarly && !now.Before(last.Add(summonDigestEarlyFloor)) {
+		return true
+	}
+	return !now.Before(last.Add(summonDigestEvery))
+}
+
+// ahead reports whether the watermark or the last digest's time is after now:
+// the keeper's clock is behind the ledger (fix round 1, ruling 2).
+func (d summonDigestState) ahead(now time.Time) bool {
+	return time.Unix(d.Since, 0).After(now) || time.Unix(d.LastAt, 0).After(now)
 }
 
 // sendDigest reserves one digest attempt and sends it once that write is

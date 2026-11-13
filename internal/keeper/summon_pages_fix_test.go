@@ -192,6 +192,13 @@ func TestSummonPagesPrunesOnProofOfDeletion(t *testing.T) {
 // that saves nothing reads nothing.
 func TestSummonPagesProofReadsBounded(t *testing.T) {
 	f := newSummonFix(t)
+	// The digest's watermark is two hours before the first tick, so that
+	// tick's early digest lists the nineteen capped events at once, as before
+	// story 792 fix round 1: its one-hour floor would otherwise hold their
+	// entries from pruning until the second tick's digest (coordinator answer
+	// op792-fix1-q-1, not a ruling by Tom).
+	writeSummonLedger(t, f, fmt.Sprintf(`{"version":1,"events":{},"window":[],"capped":0,"more":0,"digest":{"since":%d,"lastAt":0,"pending":[],"listed":{}},"overflow":{}}`,
+		f.clock.Now().Add(-2*time.Hour).Unix()), false)
 	var gone []*v1alpha1.AgentSession
 	for i := 1; i <= 25; i++ {
 		gone = append(gone, f.failedSession(fmt.Sprintf("wo-gone-%d", i), time.Duration(60-i)*time.Minute))

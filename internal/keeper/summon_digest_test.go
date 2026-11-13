@@ -160,8 +160,11 @@ func TestSummonDigestEveryDigestRowOneLine(t *testing.T) {
 	if digestRows == 0 || digestRows == len(cells) {
 		t.Fatalf("the walk found %d digest rows of %d cells", digestRows, len(cells))
 	}
-	// At most 256 lines are pending at once, so the walk takes a few ticks.
+	// At most 256 lines are pending at once, so the walk takes a few ticks, an
+	// hour apart: an early digest waits an hour from the last one (story 792
+	// fix round 1, ruling 1).
 	for i := 0; i < 6; i++ {
+		f.clock.Step(time.Hour)
 		f.tick()
 	}
 	l := f.ledger()
@@ -199,7 +202,8 @@ func TestSummonDigestEveryDigestRowOneLine(t *testing.T) {
 // Proof 2: the first digest goes 24 hours after the pager's first run, never
 // at 23 hours 59 minutes nor one second before (op792-q-1); each later one 24
 // hours after the last, not one second before; early once 8 lines are
-// pending; never while nothing is pending.
+// pending and an hour has passed since the last digest (fix round 1, ruling
+// 1); never while nothing is pending.
 func TestSummonDigestTiming(t *testing.T) {
 	f := newSummonFix(t)
 	since := f.start()
@@ -237,7 +241,9 @@ func TestSummonDigestTiming(t *testing.T) {
 	if len(f.digests()) != 2 {
 		t.Fatal("no second digest 24 hours after the first")
 	}
-	// Early: seven pending lines wait, the eighth sends them all.
+	second := f.clock.Now()
+	// Early: seven pending lines wait; with the eighth they go once an hour
+	// has passed since the last digest.
 	f.clock.Step(2 * time.Minute)
 	for i := 3; i <= 9; i++ {
 		f.add(f.quiet(fmt.Sprintf("wo-cigar-curate-%d", i)))
@@ -248,6 +254,11 @@ func TestSummonDigestTiming(t *testing.T) {
 	}
 	f.clock.Step(time.Minute)
 	f.add(f.quiet("wo-cigar-curate-10"))
+	f.tick()
+	if len(f.digests()) != 2 || len(f.ledger().State.Digest.Pending) != 8 {
+		t.Fatalf("eight lines sent within an hour of the last digest: %d digests", len(f.digests()))
+	}
+	f.clock.SetTime(second.Add(time.Hour))
 	f.tick()
 	if len(f.digests()) != 3 || len(digestLines(f.digests()[2].Get("message"))) != 8 {
 		t.Fatalf("eight lines did not send early: %d digests", len(f.digests()))
@@ -324,6 +335,7 @@ func TestSummonDigestText(t *testing.T) {
 			f.add(f.quiet(name))
 			f.clock.Step(time.Second)
 		}
+		f.clock.Step(time.Hour) // an early digest waits an hour from the watermark
 		f.tick()
 		d := f.digests()
 		if len(d) != 1 {
@@ -342,7 +354,7 @@ func TestSummonDigestText(t *testing.T) {
 				t.Fatalf("line %d %q", i, line)
 			}
 		}
-		// The cut keeps every whole line that fits: one more would not.
+		// The cut keeps the longest run of whole lines that fits: one more would not.
 		withOne := strings.TrimSuffix(msg, footer) + "\n" + names[len(shown)] + " curation done done" +
 			fmt.Sprintf("\n%d more lines left out to fit; they are not sent again.", left-1)
 		if utf8.RuneCountInString(withOne) <= summonDigestBodyMax {
@@ -387,6 +399,8 @@ func (s *summonCrashStore) save(ctx context.Context, l *summonPageLedger) error 
 // after a save that lands past the dispatch deadline, no digest goes twice
 // and no line is in two attempts.
 func TestSummonDigestOnceAcrossRestartsAndRaces(t *testing.T) {
+	// eight adds eight lines and steps an hour, so the next tick's early
+	// digest is due (fix round 1, ruling 1).
 	eight := func(f *summonFix) []*v1alpha1.AgentSession {
 		var out []*v1alpha1.AgentSession
 		for i := 1; i <= 8; i++ {
@@ -394,6 +408,7 @@ func TestSummonDigestOnceAcrossRestartsAndRaces(t *testing.T) {
 			out = append(out, s)
 			f.add(s)
 		}
+		f.clock.Step(time.Hour)
 		return out
 	}
 	// after runs two restarts and ticks, a day apart, and checks one attempt:
@@ -682,17 +697,19 @@ func TestSummonDigestListsCappedEvents(t *testing.T) {
 
 // Proof 7: the digest is outside the hourly cap. It takes no slot of the
 // window, and a window a full hour of pages has filled does not delay it.
+// Each early digest is an hour after the last (fix round 1, ruling 1).
 func TestSummonDigestOutsideTheCap(t *testing.T) {
 	f := newSummonFix(t)
 	f.start()
 	for i := 1; i <= 8; i++ {
 		f.add(f.quiet(fmt.Sprintf("wo-cigar-curate-%d", i)))
 	}
+	f.clock.Step(time.Hour)
 	f.tick()
 	if len(f.digests()) != 1 || len(f.ledger().State.Window) != 0 {
 		t.Fatalf("the digest took a slot: %+v", f.ledger().State.Window)
 	}
-	f.clock.Step(time.Minute)
+	f.clock.Step(time.Hour)
 	for i := 1; i <= 6; i++ {
 		f.add(f.failedSession(fmt.Sprintf("wo-upgrade-%d", i), time.Duration(10-i)*time.Second))
 	}
@@ -723,7 +740,8 @@ func TestSummonDigestOutsideTheCap(t *testing.T) {
 
 // Proof 8, second half: a ledger story 782's keeper wrote, with a page sent
 // and the digest members empty, loads and works: pages go on, the digest
-// starts, and nothing is reset.
+// starts an hour after the watermark (fix round 1, ruling 1), and nothing is
+// reset.
 func TestSummonDigestReadsAStory782Ledger(t *testing.T) {
 	f := newSummonFix(t)
 	writeSummonLedger(t, f, fmt.Sprintf(`{"version":1,"events":{"00000000-0000-4000-8000-000000000776/failed":{"at":%d,"state":"sent","session":"wo-upgrade-776"}},"window":[%d],"capped":0,"more":0,`+
@@ -735,8 +753,14 @@ func TestSummonDigestReadsAStory782Ledger(t *testing.T) {
 	}
 	f.tick()
 	l := f.ledger()
-	if f.push.count() != 2 || len(f.digests()) != 1 || l.State.Digest.Since != since.Unix() || len(l.State.Window) != 2 ||
-		l.Pages.Find("summon/00000000-0000-4000-8000-000000000776/failed") == nil || len(digestRecords(l)) != 1 {
+	if f.push.count() != 1 || len(f.digests()) != 0 || l.State.Digest.Since != since.Unix() || len(l.State.Window) != 2 ||
+		l.Pages.Find("summon/00000000-0000-4000-8000-000000000776/failed") == nil || len(l.State.Digest.Pending) != 8 {
+		t.Fatalf("pages %v state %+v", f.push.titles(), l.State)
+	}
+	f.clock.SetTime(since.Add(time.Hour))
+	f.tick()
+	l = f.ledger()
+	if f.push.count() != 2 || len(f.digests()) != 1 || l.Pages.Find("summon/00000000-0000-4000-8000-000000000776/failed") == nil || len(digestRecords(l)) != 1 {
 		t.Fatalf("pages %v state %+v", f.push.titles(), l.State)
 	}
 	if strings.Contains(f.logs.String(), "summon page state unavailable") {
@@ -839,20 +863,43 @@ func TestSummonDigestKeepsTheDedupeBesideItsRecords(t *testing.T) {
 }
 
 // More closes than the pending lines' bound in one tick: 256 wait at once and
-// go in one digest; the rest go next tick, each line in one attempt.
+// go in one digest; the rest go in the next, each line in one attempt. While
+// the one-hour floor makes the lines wait (fix round 1, ruling 1), the bound
+// holds and its line is logged once a tick.
 func TestSummonDigestPendingBound(t *testing.T) {
 	f := newSummonFix(t)
-	f.start()
+	since := f.start()
 	var all []client.Object
 	for i := 0; i < summonPagesMaxLines+20; i++ {
 		s := f.quiet(fmt.Sprintf("wo-cigar-curate-%03d", i))
 		all = append(all, s)
 		f.add(s)
 	}
+	const full = "summon digest pending capacity reached"
+	for i, at := range []time.Duration{2 * time.Minute, 30 * time.Minute, time.Hour - time.Second} {
+		f.clock.SetTime(since.Add(at))
+		f.tick()
+		if len(f.digests()) != 0 || len(f.ledger().State.Digest.Pending) != summonPagesMaxLines || strings.Count(f.logs.String(), full) != i+1 {
+			t.Fatalf("%s: digests %d pending %d logs %s", at, len(f.digests()), len(f.ledger().State.Digest.Pending), f.logs.String())
+		}
+	}
+	f.clock.SetTime(since.Add(time.Hour))
 	f.tick()
-	if len(f.digests()) != 1 || !strings.Contains(f.logs.String(), "summon digest pending capacity reached") {
+	if len(f.digests()) != 1 || strings.Count(f.logs.String(), full) != 4 {
 		t.Fatalf("digests %d logs %s", len(f.digests()), f.logs.String())
 	}
+	first := f.clock.Now()
+	f.clock.Step(time.Minute)
+	f.tick()
+	if len(f.digests()) != 1 || len(f.ledger().State.Digest.Pending) != 20 || strings.Count(f.logs.String(), full) != 4 {
+		t.Fatalf("the rest: digests %d pending %d", len(f.digests()), len(f.ledger().State.Digest.Pending))
+	}
+	f.clock.SetTime(first.Add(time.Hour - time.Second))
+	f.tick()
+	if len(f.digests()) != 1 {
+		t.Fatal("the rest went within an hour of the first digest")
+	}
+	f.clock.SetTime(first.Add(time.Hour))
 	f.tick()
 	l := f.ledger()
 	r := digestRecords(l)
