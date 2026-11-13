@@ -137,6 +137,13 @@ func (p *RaisePager) announce(ctx context.Context) {
 			need = append(need, e)
 		}
 	}
+	// A UID that has left the operator ledger takes its notices with it.
+	// Admit drops a gone session only when the ledger is already full, and
+	// this matches that row. It does not list sessions, and it does not
+	// treat an annotation that does not count as a new record.
+	if absent := uidsAbsent(led, notices); len(absent) > 0 {
+		p.dropNotices(ctx, absent, nil)
+	}
 	if len(need) == 0 {
 		return
 	}
@@ -171,6 +178,32 @@ func (p *RaisePager) noteQuietLog(msg string, err error) {
 		return
 	}
 	p.Log.Info(msg)
+}
+
+// uidsAbsent is every notice session UID that the operator ledger does not
+// hold. The caller has already read that ledger.
+func uidsAbsent(led *sessionraise.Ledger, notices *sessionraise.NoticeLedger) []string {
+	present := map[string]bool{}
+	if led != nil {
+		for _, e := range led.Sessions {
+			if e.UID != "" {
+				present[e.UID] = true
+			}
+		}
+	}
+	var absent []string
+	seen := map[string]bool{}
+	if notices == nil {
+		return nil
+	}
+	for _, n := range notices.Items {
+		if n.SessionUID == "" || present[n.SessionUID] || seen[n.SessionUID] {
+			continue
+		}
+		seen[n.SessionUID] = true
+		absent = append(absent, n.SessionUID)
+	}
+	return absent
 }
 
 func rowNeedsNotice(now time.Time, e sessionraise.SessionEntry, notices *sessionraise.NoticeLedger) bool {

@@ -65,6 +65,51 @@ func TestRaisePagerDoesNotListWhenNothingNeedsANotice(t *testing.T) {
 	}
 }
 
+func TestNoticeForAUIDNotInTheLedgerIsDropped(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, base)
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	at := when.Format(time.RFC3339)
+	writeLedger(t, base, sessionraise.SessionEntry{
+		Name: "kept", UID: "uid-keep", ID: "keepnotice000001", State: sessionraise.StateActive, ChangedAt: when,
+	})
+	notes := &sessionraise.NoticeLedger{}
+	notes.Put(sessionraise.Notice{ID: "keepnotice000001", SessionUID: "uid-keep", Kind: sessionraise.KindRaise, Attempt: 1, Outcome: sessionraise.OutcomeSent, At: at, SentAt: at})
+	notes.Put(sessionraise.Notice{ID: "oldnotice0000001", SessionUID: "uid-old", Kind: sessionraise.KindRaise, Attempt: 2, Outcome: sessionraise.OutcomeFailed, At: at})
+	raw, err := notes.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := sessionraise.Kube{Reader: base, Writer: base, Namespace: sessionraise.ObjectNamespace}
+	if err := store.Update(context.Background(), sessionraise.NoticeLedgerName, map[string][]byte{sessionraise.LedgerField: raw}, mustRV(t, base, sessionraise.NoticeLedgerName)); err != nil {
+		t.Fatal(err)
+	}
+	counter := &countList{Client: base}
+	p := &RaisePager{
+		Client: base, Live: counter, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: &fakeRaiseSender{}, Now: func() time.Time { return when }, Log: logr.Discard(),
+	}
+	p.announce(context.Background())
+	if counter.lists != 0 {
+		t.Fatalf("listed sessions while dropping a ledger-less notice: %d", counter.lists)
+	}
+	obj, err := store.Get(context.Background(), sessionraise.NoticeLedgerName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := sessionraise.UnmarshalNotice(obj.Data[sessionraise.LedgerField])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Find("oldnotice0000001", sessionraise.KindRaise) != nil {
+		t.Fatal("a notice whose session is not in the operator ledger was kept")
+	}
+	kept := got.Find("keepnotice000001", sessionraise.KindRaise)
+	if kept == nil || kept.Attempt != 1 || kept.Outcome != sessionraise.OutcomeSent {
+		t.Fatalf("the notice for a session still in the ledger was changed: %+v", kept)
+	}
+}
+
 func TestRaisePagerIsQuietWhenTheKeyIsMissing(t *testing.T) {
 	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
 	counter := &countGet{Client: base}

@@ -232,8 +232,8 @@ func TestRaiseNoticeDropsAGoneSession(t *testing.T) {
 	if got.Find("gonenotice000001", sessionraise.KindRaise) != nil {
 		t.Fatal("a notice for a session that is gone was kept")
 	}
-	if orphan := got.Find("orphannotice0001", sessionraise.KindRaise); orphan == nil || orphan.Attempt != 4 {
-		t.Fatalf("an orphan notice with no ledger row was pruned: %+v", orphan)
+	if got.Find("orphannotice0001", sessionraise.KindRaise) != nil {
+		t.Fatal("a notice whose session is not in the operator ledger was kept")
 	}
 }
 

@@ -917,7 +917,11 @@ not from whether the annotation counts. The keeper does not read the
 templates ConfigMap in slice (a). A record that names a profile is not
 sent, is logged once ("profile raises need slice (b)") and never blocks a
 take-back notice. Notice rows are pruned only by records that count; an
-annotation that does not count never resets an attempt count. The keeper
+annotation that does not count never resets an attempt count. A notice
+whose session UID is not in the operator ledger is also dropped on that
+pass, with no session list. Admit drops a gone session's row only when
+the ledger is already full, and the notice must not outlive that row.
+This is the answer to the advisory finding on dev-env PR 1145. The keeper
 takes a fresh time just before the reservation and the push, and that time
 is the effect time in the message. It signs `sentAt` with a time read after
 the push returned. A verified Sent whose `sentAt` is earlier than the
