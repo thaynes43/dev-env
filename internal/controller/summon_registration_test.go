@@ -666,3 +666,98 @@ func TestSummonRegistrationStartedEventIsSettled(t *testing.T) {
 		t.Fatalf("writes %v registration %+v pages %+v", writes.bodies, w.registration(s.Name), w.pages(s.Name))
 	}
 }
+
+// nonZeroingPrunedLeader is a leader whose API server drops what prune
+// removes from status.summon in every registration patch, and whose client
+// decodes the answer into the step's target without zeroing it first: a key
+// the answer lacks keeps the target's own value. The fake client zeroes its
+// target (as controller-runtime's real client does), so this is the client
+// that would hide a pruned answer from a check whose target already held
+// what was written.
+func (w *summonWorld) nonZeroingPrunedLeader(prune func(summon map[string]any)) {
+	w.r = w.leader(&interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+		data, err := patch.Data(obj)
+		if err != nil {
+			return err
+		}
+		if !bytes.Contains(data, []byte(`"registration"`)) {
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(data, &body); err != nil {
+			return err
+		}
+		if st, ok := body["status"].(map[string]any); ok {
+			if sum, ok := st["summon"].(map[string]any); ok {
+				prune(sum)
+			}
+		}
+		pruned, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		target := (&client.SubResourcePatchOptions{}).ApplyOptions(opts).SubResourceBody
+		if target == nil {
+			return errors.New("the step sent no separate answer target")
+		}
+		scratch := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: obj.GetName(), Namespace: obj.GetNamespace()}}
+		if err := c.SubResource(sub).Patch(ctx, obj, client.RawPatch(patch.Type(), pruned), client.WithSubResourceBody(scratch)); err != nil {
+			return err
+		}
+		answer, err := json.Marshal(scratch)
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(answer, target)
+	}})
+}
+
+// Story 794 fix round 1, ruling 2, with a client that does not zero its
+// decode target: the answer's target is a copy of the object as read, which
+// lacks what the step writes, so a pruned answer is still an error. Cases:
+// the agent-seen write, a settlement after the agent was seen, and a
+// settlement whose page event was dropped.
+func TestSummonRegistrationPrunedAnswerIsAnErrorWithoutZeroing(t *testing.T) {
+	const install = "install the current AgentSession CRD before the operator"
+	dropRecord := func(sum map[string]any) { delete(sum, "registration") }
+	dropPages := func(sum map[string]any) { delete(sum, "pages") }
+	for _, tc := range []struct {
+		name, agent, state string
+		seen               bool
+		prune              func(map[string]any)
+		missing            string
+	}{
+		{"agent seen", protocol.AgentBusy, protocol.RemoteStarting, false, dropRecord, "agentSeenAt"},
+		{"settlement after seen", protocol.AgentBusy, protocol.RemoteRegistered, true, dropRecord, "registration.result"},
+		{"page event", protocol.AgentPending, protocol.RemoteRegistered, false, dropPages, "escalation-started"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, s := remoteAdmitted(t, v1alpha1.LaneEscalation, "esc-no-zero")
+			if tc.seen {
+				live := w.get(s.Name)
+				seen := metav1.NewTime(summonT0.Add(30 * time.Second))
+				live.Status.Summon.Registration = &v1alpha1.SummonRegistrationStatus{AgentSeenAt: &seen}
+				if err := w.base.Status().Update(context.Background(), live); err != nil {
+					t.Fatal(err)
+				}
+			}
+			w.nonZeroingPrunedLeader(tc.prune)
+			var logs strings.Builder
+			ctx := logr.NewContext(context.Background(), funcr.New(func(prefix, args string) { logs.WriteString(prefix + args + "\n") }, funcr.Options{}))
+			w.now = summonT0.Add(time.Minute)
+			w.report(s.Name, tc.agent, rcFor(s.Name, tc.state))
+			live := w.get(s.Name)
+			before := live.DeepCopy()
+			err := w.r.summonRegistration(ctx, live)
+			if err == nil || !strings.Contains(err.Error(), install) || !strings.Contains(err.Error(), tc.missing) {
+				t.Fatalf("a pruned answer decoded without zeroing: %v, want an error naming %s and the CRD install", err, tc.missing)
+			}
+			if !apiequality.Semantic.DeepEqual(live, before) {
+				t.Fatalf("the object in memory kept the write: %+v", live.Status.Summon)
+			}
+			if strings.Contains(logs.String(), "recorded") {
+				t.Fatalf("logged as recorded: %q", logs.String())
+			}
+		})
+	}
+}

@@ -132,7 +132,11 @@ func (r *Reconciler) summonRegistration(ctx context.Context, s *v1alpha1.AgentSe
 		*s = *base
 		return fmt.Errorf("record the registration of %s: %w", s.Name, err)
 	}
-	stored := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace}}
+	// The answer's target is a copy of the object as read, never one built
+	// here, so it carries the stored metadata (TestOnlyTheGuardDeletes). It
+	// lacks what this step writes, so a decoder that does not zero its
+	// target still shows a pruned answer to the check below.
+	stored := base.DeepCopy()
 	if err := r.Client.Status().Patch(ctx, s, client.RawPatch(patch.Type(), data), client.WithSubResourceBody(stored)); err != nil {
 		*s = *base
 		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
