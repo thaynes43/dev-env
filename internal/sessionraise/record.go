@@ -43,8 +43,19 @@ const (
 	IgnoreLedger    = "ledger mismatch"
 )
 
-// ErrTooBig is a record whose encoding is over MaxEncoded. Spend nothing.
+// ErrTooBig is a record whose encoding is over the encoded limit. Spend nothing.
 var ErrTooBig = errors.New("raise record is over 4 KiB")
+
+// encodedLimit is MaxEncoded except in the route test that injects a lower bound.
+var encodedLimit = MaxEncoded
+
+// SetEncodedLimitForTest lowers the annotation size check. The returned
+// function puts the limit back. Tests do not run it in parallel.
+func SetEncodedLimitForTest(n int) func() {
+	prev := encodedLimit
+	encodedLimit = n
+	return func() { encodedLimit = prev }
+}
 
 // Owner is Tom's words as the performing agent stated them.
 type Owner struct {
@@ -151,7 +162,7 @@ func (r Record) TooBig() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return len(raw) > MaxEncoded, nil
+	return len(raw) > encodedLimit, nil
 }
 
 // SigningMessage is the domain prefix, a newline, and the canonical body.
@@ -211,6 +222,12 @@ func Parse(raw string) (Record, error) {
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
 		return Record{}, errors.New("raise record has trailing data")
+	}
+	// The bytes must be exactly Encode of the record just read. A duplicate
+	// key or a case-folded key decodes, then fails this comparison.
+	canonical, err := rec.Encode()
+	if err != nil || string(canonical) != raw {
+		return Record{}, errors.New("raise record is not its canonical encoding")
 	}
 	return rec, nil
 }

@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -31,13 +32,13 @@ func (s *Server) readNotices(ctx context.Context, cfg RaiseConfig) (*sessionrais
 	return led, pub, nil
 }
 
-// activateRaises moves pending rows the keeper has announced. It runs only
-// when the dispatch flag is on, so a flags-off operator honours nothing.
-// The ledger is written before the annotation. A row that is no longer
-// pending is left alone, so a take-back wins over a later Sent.
+// activateRaises moves pending rows the keeper has announced. It runs when
+// dispatch is on or a profile list is configured. The ledger is written
+// before the annotation. A row that is no longer pending is left alone, so
+// a take-back wins over a later Sent.
 func (s *Server) activateRaises(ctx context.Context) {
 	cfg, ok := s.raiseConfig()
-	if !ok || !cfg.Dispatch || s.Live == nil {
+	if !ok || s.Live == nil || (!cfg.Dispatch && len(cfg.Profiles) == 0) {
 		return
 	}
 	var list v1alpha1.AgentSessionList
@@ -60,25 +61,54 @@ func (s *Server) activateRaises(ctx context.Context) {
 }
 
 func (s *Server) activateOne(ctx context.Context, cfg RaiseConfig, sess *v1alpha1.AgentSession, notices *sessionraise.NoticeLedger, pub ed25519.PublicKey, priv ed25519.PrivateKey, now time.Time) {
-	raw := sess.Annotations[v1alpha1.AnnotationRaise]
-	if raw == "" {
+	s.activateOneDepth(ctx, cfg, sess, notices, pub, priv, now, 0)
+}
+
+func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1alpha1.AgentSession, notices *sessionraise.NoticeLedger, pub ed25519.PublicKey, priv ed25519.PrivateKey, now time.Time, depth int) {
+	if depth > 2 || sess == nil || s.Live == nil {
 		return
 	}
-	rec, err := sessionraise.Parse(raw)
-	if err != nil {
+	var live v1alpha1.AgentSession
+	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, &live); err != nil {
 		return
 	}
-	entry, err := s.raiseEntry(ctx, cfg, string(sess.UID))
-	if err != nil || entry == nil || entry.ID != rec.ID {
+	entry, err := s.raiseEntry(ctx, cfg, string(live.UID))
+	if err != nil || entry == nil || entry.ID == "" {
 		return
 	}
-	// Finish an annotation the ledger already moved, so a lost write still
-	// comes to match the row that counts.
-	if rec.State == sessionraise.StatePending && (entry.State == sessionraise.StateActive || entry.State == sessionraise.StateUnannounced) {
-		s.rewriteActivated(ctx, cfg, sess, rec, *entry, priv)
+	opPub := priv.Public().(ed25519.PublicKey)
+	ann, annOK := verifiedRaiseWords(&live, opPub, entry.ID)
+	// The annotation and the ledger disagree. Re-sign from the ledger row
+	// and the verified words, including a taken-back row. An annotation that
+	// does not verify is left as it is and logged.
+	if annOK && ann.State != entry.State {
+		if sessionraise.WordsHash(ann.Owner.Words) != entry.WordsHash || sessionraise.WordsProblem(ann.Owner.Words) != "" {
+			s.logOnce(entry.ID, "words do not verify", "raise words do not verify, so the annotation was not re-signed")
+			return
+		}
+		if err := s.writeSignedFromLedger(ctx, &live, *entry, ann.Owner.Words, ann.State, priv); errors.Is(err, errRaiseAnnotationMoved) {
+			s.activateOneDepth(ctx, cfg, &live, notices, pub, priv, now, depth+1)
+		}
 		return
+	}
+	if !annOK && annotationState(live) != entry.State {
+		s.logOnce(entry.ID, "annotation does not verify", "raise annotation does not verify, so it was not re-signed")
 	}
 	if entry.State != sessionraise.StatePending {
+		return
+	}
+	// Before the ledger swap: the stored annotation must verify, name this
+	// row, and be pending. Otherwise the row stays pending.
+	if !annOK || ann.State != sessionraise.StatePending {
+		s.logOnce(entry.ID, "annotation is not pending", "raise annotation is not a verified pending record, so the ledger row stays pending")
+		return
+	}
+	if sessionraise.WordsProblem(ann.Owner.Words) != "" || sessionraise.WordsHash(ann.Owner.Words) != entry.WordsHash {
+		s.logOnce(entry.ID, "words do not verify", "raise words do not verify, so the ledger row stays pending")
+		return
+	}
+	if sent, ok := sessionraise.SentTime(*entry, notices.Items, pub); ok && sessionraise.SentBeforePerformed(sent, entry.PerformedAt) {
+		s.logOnce(entry.ID, "notice sent before the raise", "a raise notice was sent before the raise, so the row stays pending")
 		return
 	}
 	action := sessionraise.Activation(now, *entry, notices.Items, pub)
@@ -103,37 +133,65 @@ func (s *Server) activateOne(ctx context.Context, cfg RaiseConfig, sess *v1alpha
 	var finished sessionraise.SessionEntry
 	ok := false
 	err = s.commitLedger(ctx, cfg, func(led *sessionraise.Ledger) (bool, error) {
-		got, wrote := led.Finish(string(sess.UID), rec.ID, state, sentAt, activeFrom, now)
+		got, wrote := led.Finish(string(live.UID), entry.ID, state, sentAt, activeFrom, now)
 		finished = got
 		ok = wrote
 		return wrote, nil
 	})
-	if err != nil || !ok {
+	if err != nil {
 		return
 	}
-	s.rewriteActivated(ctx, cfg, sess, rec, finished, priv)
+	if !ok {
+		s.activateOneDepth(ctx, cfg, &live, notices, pub, priv, now, depth+1)
+		return
+	}
+	if err := s.writeSignedFromLedger(ctx, &live, finished, ann.Owner.Words, sessionraise.StatePending, priv); errors.Is(err, errRaiseAnnotationMoved) {
+		s.activateOneDepth(ctx, cfg, &live, notices, pub, priv, now, depth+1)
+		return
+	} else if err != nil {
+		s.Log.Error(err, "raise activation annotation", "session", live.Name, "id", entry.ID)
+		return
+	}
+	signed := recordFrom(finished, ann.Owner.Words)
+	if state == sessionraise.StateUnannounced {
+		s.logRaise("raise unannounced", signed)
+		return
+	}
+	s.logRaise("raise active", signed)
 }
 
-func (s *Server) rewriteActivated(ctx context.Context, cfg RaiseConfig, sess *v1alpha1.AgentSession, rec sessionraise.Record, entry sessionraise.SessionEntry, priv ed25519.PrivateKey) {
-	// The ledger row is what gets signed. An annotation that keeps the id
-	// but changes the profile, the depth or the words is not signed.
-	if rec.ID != entry.ID || rec.SessionUID != entry.UID || rec.Owner.WordsHash != entry.WordsHash || sessionraise.WordsHash(rec.Owner.Words) != entry.WordsHash {
-		s.Log.Info("raise annotation does not match the ledger, so it was not re-signed", "session", sess.Name)
-		return
-	}
-	signed, err := sessionraise.Sign(recordFrom(entry, rec.Owner.Words), priv)
+// annotationState is the state in the stored annotation, or "" when it does
+// not parse. It is only used to see whether the annotation and the ledger
+// disagree before a re-sign, which still requires a verified record.
+func annotationState(sess v1alpha1.AgentSession) string {
+	rec, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
 	if err != nil {
-		s.Log.Error(err, "raise activation sign", "session", sess.Name)
-		return
+		return ""
+	}
+	return rec.State
+}
+
+// writeSignedFromLedger signs the ledger row with words that have already
+// been verified, and writes that annotation only while the stored annotation
+// still has the same id and the state this decision was made from.
+func (s *Server) writeSignedFromLedger(ctx context.Context, sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, words, fromState string, priv ed25519.PrivateKey) error {
+	if sessionraise.WordsProblem(words) != "" || sessionraise.WordsHash(words) != entry.WordsHash {
+		s.logOnce(entry.ID, "words do not verify", "raise words do not verify, so the annotation was not re-signed")
+		return nil
+	}
+	signed, err := sessionraise.Sign(recordFrom(entry, words), priv)
+	if err != nil {
+		s.Log.Error(err, "raise activation sign", "session", sess.Name, "id", entry.ID)
+		return err
 	}
 	raw, err := signed.Encode()
 	if err != nil {
-		return
+		return err
 	}
-	if err := s.writeRaiseAnnotation(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, sess.UID, string(raw)); err != nil {
-		s.Log.Error(err, "raise activation annotation", "session", sess.Name)
-	}
-	_ = cfg
+	return s.writeRaiseAnnotationWhen(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, sess.UID, string(raw), func(cur *v1alpha1.AgentSession) bool {
+		rec, err := sessionraise.Parse(cur.Annotations[v1alpha1.AnnotationRaise])
+		return err == nil && rec.ID == entry.ID && rec.State == fromState
+	})
 }
 
 // RaiseActivator is the leader loop. It does nothing when the dispatch flag
@@ -165,23 +223,61 @@ func (a *RaiseActivator) Start(ctx context.Context) error {
 	}
 }
 
-// RaiseKeyOwner publishes the operator raise key on the leader. A missing
-// Secret is logged and the operator keeps running. POST then refuses.
+// RaiseKeyOwner publishes the operator raise key on the leader. It retries
+// Ensure until the key is published, then keeps waiting. A missing Secret
+// is logged at most once an hour. POST refuses until Ensure succeeds.
 type RaiseKeyOwner struct {
-	Server *Server
+	Server  *Server
+	Every   time.Duration
+	lastLog time.Time
 }
 
 // NeedLeaderElection is true: only the leader fills an empty key Secret.
 func (k *RaiseKeyOwner) NeedLeaderElection() bool { return true }
 
-// Start publishes the key once, then waits until the manager stops.
+func (k *RaiseKeyOwner) interval() time.Duration {
+	if k.Every > 0 {
+		return k.Every
+	}
+	return sessionraise.QuietRetry
+}
+
+// Start retries Ensure on a ticker, then waits until the manager stops.
 func (k *RaiseKeyOwner) Start(ctx context.Context) error {
-	if k.Server != nil && k.Server.Raise != nil {
-		cfg := k.Server.Raise.filled()
-		if _, err := sessionraise.Ensure(ctx, k.Server.raiseStore(cfg), cfg.OperatorSecret, cfg.OperatorPublic, true); err != nil {
-			k.Server.Log.Info("raise key was not published", "error", err.Error())
+	tick := time.NewTicker(k.interval())
+	defer tick.Stop()
+	k.ensure(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-tick.C:
+			k.ensure(ctx)
 		}
 	}
-	<-ctx.Done()
-	return nil
+}
+
+func (k *RaiseKeyOwner) ensure(ctx context.Context) {
+	if k == nil || k.Server == nil || k.Server.Raise == nil {
+		return
+	}
+	cfg := k.Server.Raise.filled()
+	if _, err := sessionraise.Ensure(ctx, k.Server.raiseStore(cfg), cfg.OperatorSecret, cfg.OperatorPublic, true); err != nil {
+		k.note(err)
+	}
+}
+
+func (k *RaiseKeyOwner) note(err error) {
+	if k.Server == nil {
+		return
+	}
+	now := time.Now()
+	if k.Server.Now != nil {
+		now = k.Server.Now()
+	}
+	if !k.lastLog.IsZero() && now.Sub(k.lastLog) < sessionraise.QuietLog {
+		return
+	}
+	k.lastLog = now
+	k.Server.Log.Info("raise key was not published", "error", err.Error())
 }

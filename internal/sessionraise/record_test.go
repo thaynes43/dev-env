@@ -157,3 +157,23 @@ func TestEditedSignatureDoesNotSurviveAFieldChange(t *testing.T) {
 		t.Fatal("changing a signed field still verified")
 	}
 }
+
+func TestParseRefusesDuplicateAndCaseFoldedKeys(t *testing.T) {
+	_, priv := testKey(t)
+	rec := sample(t, priv)
+	raw, err := rec.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	dup := strings.Replace(string(raw), `"id":`, `"id":"other","id":`, 1)
+	if _, err := Parse(dup); err == nil {
+		t.Fatal("a duplicate key was accepted")
+	}
+	folded := strings.Replace(string(raw), `"state":`, `"State":`, 1)
+	if _, err := Parse(folded); err == nil {
+		t.Fatal("a case-folded key was accepted")
+	}
+}

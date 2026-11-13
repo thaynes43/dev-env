@@ -705,6 +705,14 @@ func (s *Server) admitCreatePath(ctx context.Context, c *caller, sess *v1alpha1.
 		}
 	}
 
+	// The depth exemption is the only create that reaches here above depth 2.
+	// Refuse a workbench or coordinator child before the named-coordinator
+	// launch rule, so the refusal is the design 8.2 sentence.
+	if direct && c.kind == kindSession && c.depth > maxSessionDepth && s.depthExempt(ctx, c) {
+		if err := s.refuseRaisedChild(ctx, sess); err != nil {
+			return err
+		}
+	}
 	if err := s.admitNamedCoordinator(ctx, sess); err != nil {
 		return err
 	}

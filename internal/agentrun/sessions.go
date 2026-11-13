@@ -219,7 +219,11 @@ func (a *app) printSession(s apiv1.Session) {
 	row("agent", "%s %s, %s, %s mode", s.Agent, s.Model, effortText(s.Effort), s.Mode)
 	row("size", "%s", firstOf(s.Size, "M"))
 	if s.Profile != "" {
-		row("profile", "%s", s.Profile)
+		shown := s.Profile
+		if s.Raise != nil && s.Raise.Ignored == "" && s.Raise.State != "" && s.Raise.State != "ignored" {
+			shown += " (at creation)"
+		}
+		row("profile", "%s", shown)
 	}
 	a.printRaise(row, s)
 	if l := s.Limits; l != nil {

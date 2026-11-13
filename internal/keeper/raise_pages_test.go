@@ -199,12 +199,24 @@ func TestRaiseNoticeDropsAGoneSession(t *testing.T) {
 	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
 	old := when.Add(-sessionraise.WordRetention - time.Hour).Format(time.RFC3339)
 	led := &sessionraise.NoticeLedger{}
-	led.Put(sessionraise.Notice{ID: "gonenotice000001", SessionUID: "gone", Kind: sessionraise.KindRaise, Attempt: 1, Outcome: sessionraise.OutcomeSent, At: old, SentAt: old})
+	led.Put(sessionraise.Notice{ID: "gonenotice000001", SessionUID: "gone", Kind: sessionraise.KindRaise, Attempt: 1, Outcome: sessionraise.OutcomeFailed, At: old})
+	led.Put(sessionraise.Notice{ID: "orphannotice0001", SessionUID: "orphan", Kind: sessionraise.KindRaise, Attempt: 4, Outcome: sessionraise.OutcomeFailed, At: old})
 	raw, err := led.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Update(ctx, sessionraise.NoticeLedgerName, map[string][]byte{sessionraise.LedgerField: raw}, mustRV(t, c, sessionraise.NoticeLedgerName)); err != nil {
+		t.Fatal(err)
+	}
+	op := &sessionraise.Ledger{Sessions: []sessionraise.SessionEntry{{
+		Name: "missing", UID: "gone", ID: "gonenotice000001", State: sessionraise.StatePending, ChangedAt: when,
+	}}}
+	body, err := op.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opStore := sessionraise.Kube{Reader: c, Writer: c, Namespace: sessionraise.ObjectNamespace}
+	if err := opStore.Update(ctx, sessionraise.LedgerName, map[string][]byte{sessionraise.LedgerField: body}, mustRV(t, c, sessionraise.LedgerName)); err != nil {
 		t.Fatal(err)
 	}
 	p := &RaisePager{Client: c, Live: c, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents", Sender: &fakeRaiseSender{}, Now: func() time.Time { return when }}
@@ -219,6 +231,9 @@ func TestRaiseNoticeDropsAGoneSession(t *testing.T) {
 	}
 	if got.Find("gonenotice000001", sessionraise.KindRaise) != nil {
 		t.Fatal("a notice for a session that is gone was kept")
+	}
+	if orphan := got.Find("orphannotice0001", sessionraise.KindRaise); orphan == nil || orphan.Attempt != 4 {
+		t.Fatalf("an orphan notice with no ledger row was pruned: %+v", orphan)
 	}
 }
 

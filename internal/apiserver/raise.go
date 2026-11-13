@@ -109,6 +109,9 @@ func raiseUnavailable(format string, args ...any) *apiError {
 }
 
 func (s *Server) getRaise(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	if err := s.refuseRaiseCaller(ctx, c, r.PathValue("name")); err != nil {
+		return 0, nil, err
+	}
 	sess, err := s.raiseTarget(ctx, r)
 	if err != nil {
 		return 0, nil, err
@@ -120,6 +123,9 @@ func (s *Server) getRaise(ctx context.Context, _ http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	if err := s.refuseRaiseCaller(ctx, c, r.PathValue("name")); err != nil {
+		return 0, nil, err
+	}
 	cfg, ok := s.raiseConfig()
 	if !ok || (!cfg.Dispatch && len(cfg.Profiles) == 0) {
 		return 0, nil, forbidden("%s", raiseOff)
@@ -258,7 +264,7 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 	if req.Profile != "" {
 		target = req.Profile
 	}
-	s.Log.Info(fmt.Sprintf("Raised %s to %s. Tom is being told; it takes effect two minutes after the notice is accepted, unless taken back.", fresh.Name, target), "id", signed.ID)
+	s.logRaise(fmt.Sprintf("Raised %s to %s. Tom is being told; it takes effect two minutes after the notice is accepted, unless taken back.", fresh.Name, target), signed)
 	updated, err := s.raiseTarget(ctx, r)
 	if err != nil {
 		updated = fresh
@@ -271,6 +277,9 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 }
 
 func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	if err := s.refuseRaiseCaller(ctx, c, r.PathValue("name")); err != nil {
+		return 0, nil, err
+	}
 	cfg, ok := s.raiseConfig()
 	if !ok {
 		return 0, nil, forbidden("%s", raiseOff)
@@ -332,31 +341,31 @@ func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http
 	if err != nil {
 		return 0, nil, s.raiseLedgerErr(err, c, fresh.Name)
 	}
-	// The ledger write is what stops the record counting. A missing key
-	// does not undo it. The annotation is re-signed when the key can be read.
+	// The ledger write is what stops the record counting. The grant release
+	// and the suspend run after it, whatever the annotation write does.
+	var annErr error
 	priv, keyErr := s.raiseKey(ctx, cfg)
 	if keyErr != nil {
 		s.Log.Info("The take-back stands. The session annotation could not be re-signed.", "session", fresh.Name, "error", keyErr.Error())
 	} else if !annotationTakenBack(fresh, priv.Public().(ed25519.PublicKey), &entry) {
-		rec, words := takenBackRecord(fresh, entry)
+		rec := takenBackRecord(fresh, entry, priv.Public().(ed25519.PublicKey))
 		signed, err := sessionraise.Sign(rec, priv)
 		if err != nil {
-			return 0, nil, raiseUnavailable("%s", raiseKeyUnreadable)
-		}
-		_ = words
-		raw, err := signed.Encode()
-		if err != nil {
-			return 0, nil, raiseUnavailable("%s", raiseLedgerUnread)
-		}
-		if err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw)); err != nil {
-			return 0, nil, raiseUnavailable("The take-back is recorded but the session annotation could not be written. Send the take-back again.")
+			annErr = err
+		} else if raw, err := signed.Encode(); err != nil {
+			annErr = err
+		} else if err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw)); err != nil {
+			annErr = err
 		}
 	}
 	s.releaseRaisedGrants(ctx, fresh.UID, entry.Profile)
 	if err := s.suspendIfRaisedAccount(ctx, fresh, entry.Profile, c.String()); err != nil {
 		s.Log.Error(err, "raise take-back suspend", "session", fresh.Name)
 	}
-	s.Log.Info("took back a raise", "session", fresh.Name, "by", c.String(), "id", entry.ID)
+	if annErr != nil {
+		return 0, nil, raiseUnavailable("The take-back is recorded but the session annotation could not be written. Send the take-back again.")
+	}
+	s.logRaise("took back a raise of "+fresh.Name, recordFrom(entry, ""))
 	updated, err := s.raiseTarget(ctx, r)
 	if err != nil {
 		updated = fresh
@@ -379,19 +388,71 @@ func recordFrom(entry sessionraise.SessionEntry, words string) sessionraise.Reco
 	}
 }
 
-func takenBackRecord(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry) (sessionraise.Record, string) {
+func takenBackRecord(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, pub ed25519.PublicKey) sessionraise.Record {
 	words := ""
-	if prev, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise]); err == nil {
+	// Words are copied only from an annotation that verifies under the
+	// operator key, names this ledger row, and passes the words check.
+	if prev, ok := verifiedRaiseWords(sess, pub, entry.ID); ok && sessionraise.WordsHash(prev.Owner.Words) == entry.WordsHash {
 		words = prev.Owner.Words
-		if entry.WordsHash == "" {
-			entry.WordsHash = prev.Owner.WordsHash
-		}
 	}
 	entry.State = sessionraise.StateTakenBack
 	if entry.UID == "" {
 		entry.UID = string(sess.UID)
 	}
-	return recordFrom(entry, words), words
+	return recordFrom(entry, words)
+}
+
+// verifiedRaiseWords is an annotation that parses as its own canonical
+// bytes, verifies under the operator key, names id, and whose words pass
+// the shape check and match their own hash.
+func verifiedRaiseWords(sess *v1alpha1.AgentSession, pub ed25519.PublicKey, id string) (sessionraise.Record, bool) {
+	if sess == nil || id == "" || len(pub) != ed25519.PublicKeySize {
+		return sessionraise.Record{}, false
+	}
+	rec, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
+	if err != nil || rec.ID != id || !sessionraise.Verify(rec, pub) {
+		return sessionraise.Record{}, false
+	}
+	if sessionraise.WordsProblem(rec.Owner.Words) != "" || sessionraise.WordsHash(rec.Owner.Words) != rec.Owner.WordsHash {
+		return sessionraise.Record{}, false
+	}
+	return rec, true
+}
+
+// refuseRaiseCaller answers from the caller kind before the target session
+// is read. A caller who may not see a session gets the same answer whether
+// the name exists or not. A human, the target itself, and a session that
+// was created as the workbench go on to the read.
+func (s *Server) refuseRaiseCaller(ctx context.Context, c *caller, name string) error {
+	if c == nil {
+		return forbidden("%s", raiseOtherCaller)
+	}
+	if c.kind == kindPolicy {
+		return forbidden("%s", raisePolicy)
+	}
+	switch c.kind {
+	case kindHuman:
+		return nil
+	case kindSession:
+		if c.session != nil && c.session.Name == name {
+			return nil
+		}
+		if c.session != nil {
+			if byCreation, _ := s.workbenchByCreation(ctx, c.session); byCreation {
+				return nil
+			}
+			// This reads the caller's own record, not the target, so a missing
+			// name gets the same answer as a name that exists.
+			if raised, err := s.raisedToWorkbench(ctx, c.session); err != nil {
+				return err
+			} else if raised {
+				return forbidden("%s was raised to workbench, not started on it, so it may not raise others.", c.session.Name)
+			}
+		}
+		return forbidden("%s", raiseOtherCaller)
+	default:
+		return forbidden("%s", raiseOtherCaller)
+	}
 }
 
 func annotationCounts(sess *v1alpha1.AgentSession, pub ed25519.PublicKey, entry *sessionraise.SessionEntry) bool {
@@ -727,7 +788,17 @@ func (s *Server) raiseLedgerErr(err error, c *caller, name string) error {
 	}
 	var full *sessionraise.FullError
 	if errors.As(err, &full) {
+		if full.Bytes {
+			return raiseUnavailable("This raise would make the operator's raise ledger too big. Take a raise back before recording another.")
+		}
+		if full.Sessions {
+			return raiseUnavailable("The operator's raise ledger holds %d sessions, so it records no new raise.", sessionraise.MaxSessions)
+		}
 		return raiseUnavailable("The operator's raise ledger is full. Raises resume as old entries expire on %s.", full.Resume.UTC().Format("2006-01-02"))
+	}
+	var still *sessionraise.StillRaisedError
+	if errors.As(err, &still) {
+		return raiseConflict("Session %s already has a raise that is %s. Take it back first: agent-run raise %s --take-back", name, still.State, name)
 	}
 	if errors.Is(err, sessionraise.ErrUsedWords) {
 		return raiseConflict("%s already used these words for a raise. A new raise needs a new word from Tom.", c.String())
@@ -814,6 +885,8 @@ func (s *Server) liveUIDs(ctx context.Context) map[string]bool {
 	return out
 }
 
+var errRaiseAnnotationMoved = errors.New("raise annotation moved")
+
 func (s *Server) writeRaiseAnnotation(ctx context.Context, key types.NamespacedName, uid types.UID, raw string) error {
 	var last error
 	for range 5 {
@@ -835,6 +908,32 @@ func (s *Server) writeRaiseAnnotation(ctx context.Context, key types.NamespacedN
 		return last
 	}
 	return last
+}
+
+// writeRaiseAnnotationWhen writes raw only when ready accepts the session
+// just read. The update carries that resourceVersion. A conflict or a
+// ready refusal is errRaiseAnnotationMoved: the caller re-reads and decides
+// again, and does not write the same bytes over a taken-back record.
+func (s *Server) writeRaiseAnnotationWhen(ctx context.Context, key types.NamespacedName, uid types.UID, raw string, ready func(*v1alpha1.AgentSession) bool) error {
+	var sess v1alpha1.AgentSession
+	if err := s.Live.Get(ctx, key, &sess); err != nil {
+		return err
+	}
+	if sess.UID != uid {
+		return raiseConflict("Session %s was replaced: its UID is not the one you read. Read it again.", key.Name)
+	}
+	if ready != nil && !ready(&sess) {
+		return errRaiseAnnotationMoved
+	}
+	if sess.Annotations == nil {
+		sess.Annotations = map[string]string{}
+	}
+	sess.Annotations[v1alpha1.AnnotationRaise] = raw
+	err := s.Client.Update(ctx, &sess)
+	if apierrors.IsConflict(err) {
+		return errRaiseAnnotationMoved
+	}
+	return err
 }
 
 func (s *Server) podProfile(ctx context.Context, sess *v1alpha1.AgentSession) string {
@@ -982,9 +1081,15 @@ func (s *Server) attachRaise(ctx context.Context, sess *v1alpha1.AgentSession, v
 			reason = sessionraise.Counts(rec, string(sess.UID), pub, entry)
 		}
 	}
+	// With both flags off, a record that would count and is pending or active
+	// is shown as ignored. A taken-back or unannounced record is shown as it is.
+	if reason == "" && (rec.State == sessionraise.StatePending || rec.State == sessionraise.StateActive) && s.raisingOff() {
+		reason = "raising is switched off"
+	}
 	if reason != "" {
 		view.Ignored = reason
 		view.State = "ignored"
+		s.logIgnored(rec.ID, reason)
 	} else if rec.State == sessionraise.StatePending {
 		s.overlayNotice(ctx, cfg, view, entry, pub)
 	}
@@ -1093,8 +1198,98 @@ func (s *Server) depthExempt(ctx context.Context, c *caller) bool {
 
 func (s *Server) depthRefusal(c *caller) *apiError {
 	msg := fmt.Sprintf("session %s is %d levels deep and may not start sessions: two levels is the limit (DESIGN-001 3.4)", c.parent, c.depth-1)
-	if c.session != nil && c.session.Labels[v1alpha1.LabelDepth] == "2" {
+	cfg, ok := s.raiseConfig()
+	if ok && cfg.Dispatch && c.session != nil && c.session.Labels[v1alpha1.LabelDepth] == "2" {
 		msg += ". A session at depth 2 can be raised to start sessions (agent-run help raise)."
 	}
 	return forbidden("%s", msg)
+}
+
+// raisingOff is both flags off, or no raise config at all.
+func (s *Server) raisingOff() bool {
+	cfg, ok := s.raiseConfig()
+	return !ok || (!cfg.Dispatch && len(cfg.Profiles) == 0)
+}
+
+// refuseRaisedChild refuses a child admitted through the depth exemption
+// when the child's profile, named or the templates' default, runs as the
+// workbench account or a named coordinator. A failed templates read refuses
+// the create. The sentence is design 8.2.
+func (s *Server) refuseRaisedChild(ctx context.Context, sess *v1alpha1.AgentSession) error {
+	const sentence = "A raised session's child never runs as the workbench or a named coordinator; name another profile."
+	if s.Templates == nil {
+		return raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile the child runs as.")
+	}
+	t, err := s.Templates(ctx)
+	if err != nil || t == nil {
+		return raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile the child runs as.")
+	}
+	name := ""
+	if sess != nil {
+		name = sess.Spec.Profile
+	}
+	if name == "" {
+		name = t.DefaultProfile
+	}
+	_, profile, err := t.Profile(name)
+	if err != nil {
+		return raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile the child runs as.")
+	}
+	if profile.ServiceAccount == templates.WorkbenchServiceAccount || templates.IsCoordinatorServiceAccount(profile.ServiceAccount) {
+		return forbidden("%s", sentence)
+	}
+	return nil
+}
+
+func (s *Server) logRaise(msg string, rec sessionraise.Record) {
+	if s == nil || s.Log.GetSink() == nil {
+		return
+	}
+	s.Log.Info(msg, raiseLogFields(rec)...)
+}
+
+func (s *Server) logIgnored(id, reason string) {
+	s.logOnce(id, reason, "raise record ignored")
+}
+
+func (s *Server) logOnce(id, reason, msg string) {
+	if s == nil || id == "" || reason == "" {
+		return
+	}
+	if _, loaded := s.raiseIgnored.LoadOrStore(id+"\n"+reason, struct{}{}); loaded {
+		return
+	}
+	if s.Log.GetSink() == nil {
+		return
+	}
+	s.Log.Info(msg, "id", id, "reason", reason)
+}
+
+func raiseLogFields(rec sessionraise.Record) []any {
+	words := rec.Owner.Words
+	if sessionraise.WordsProblem(words) != "" {
+		words = ""
+	}
+	return []any{
+		"v", rec.V,
+		"id", rec.ID,
+		"sessionUID", rec.SessionUID,
+		"state", rec.State,
+		"profile", rec.Profile,
+		"fromProfile", rec.FromProfile,
+		"startSessions", rec.StartSessions,
+		"depth", rec.Depth,
+		"words", words,
+		"wordsHash", rec.Owner.WordsHash,
+		"where", rec.Owner.Where,
+		"ownerSession", rec.Owner.Session,
+		"saidAt", rec.Owner.SaidAt,
+		"ref", rec.Owner.Ref,
+		"performedBy", rec.PerformedBy,
+		"performedAt", rec.PerformedAt,
+		"noticeSentAt", rec.NoticeSentAt,
+		"activeFrom", rec.ActiveFrom,
+		"takenBackBy", rec.TakenBackBy,
+		"takenBackAt", rec.TakenBackAt,
+	}
 }

@@ -1,6 +1,7 @@
 package sessionraise
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -8,6 +9,11 @@ import (
 	"errors"
 	"sync"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 type memStore struct {
@@ -166,4 +172,73 @@ func TestLeaderPublishesAndDoesNotOverwrite(t *testing.T) {
 
 func encodePublic(pub ed25519.PublicKey) string {
 	return base64.StdEncoding.EncodeToString(pub)
+}
+
+func TestKeyMustEqualItsSeed(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := newMem()
+	bad := append([]byte(nil), priv...)
+	bad[ed25519.SeedSize] ^= 0xff
+	st.objects[OperatorSecretName] = Object{Data: map[string][]byte{SecretKey: bad}, RV: "1"}
+	if _, err := readKey(context.Background(), st, OperatorSecretName); !errors.Is(err, ErrUnreadable) {
+		t.Fatalf("mismatched key: %v", err)
+	}
+	short := Object{Data: map[string][]byte{SecretKey: priv[:8]}, RV: "1"}
+	st.objects[OperatorSecretName] = short
+	if _, err := readKey(context.Background(), st, OperatorSecretName); !errors.Is(err, ErrUnreadable) {
+		t.Fatalf("short key: %v", err)
+	}
+	st.objects[OperatorSecretName] = Object{Data: map[string][]byte{}, RV: "1"}
+	if _, err := readKey(context.Background(), st, OperatorSecretName); !errors.Is(err, ErrNoKey) {
+		t.Fatalf("empty key: %v", err)
+	}
+}
+
+func TestTwoReplicasLeaveOneKeyInKube(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ObjectNamespace, Name: OperatorSecretName}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: ObjectNamespace, Name: OperatorPublicName}},
+	).Build()
+	st := Kube{Reader: c, Writer: c, Namespace: ObjectNamespace, Secrets: map[string]bool{OperatorSecretName: true}}
+	var wg sync.WaitGroup
+	got := make([]ed25519.PrivateKey, 2)
+	errs := make([]error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			got[i], errs[i] = Ensure(context.Background(), st, OperatorSecretName, OperatorPublicName, true)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("replica %d: %v", i, err)
+		}
+	}
+	if !got[0].Equal(got[1]) {
+		t.Fatal("replicas returned different keys")
+	}
+	first, err := st.Get(context.Background(), OperatorSecretName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := bytes.Repeat([]byte{7}, ed25519.PrivateKeySize)
+	if err := st.Update(context.Background(), OperatorSecretName, map[string][]byte{SecretKey: other}, first.RV+"stale"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale resourceVersion: %v", err)
+	}
+	again, err := st.Get(context.Background(), OperatorSecretName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(again.Data[SecretKey], first.Data[SecretKey]) {
+		t.Fatal("a stale write replaced the key")
+	}
 }

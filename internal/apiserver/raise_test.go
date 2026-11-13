@@ -1010,6 +1010,8 @@ func TestActivationDoesNotSignAnEditedAnnotation(t *testing.T) {
 	if sessionraise.Verify(got, pub) {
 		t.Fatalf("edited annotation was signed: profile %s words %s", got.Profile, got.Owner.Words)
 	}
+	// A stripped signature is not re-signed, even when the words hash matches
+	// the ledger row. The ledger row stands.
 	rec.Owner.Words = "please start"
 	rec.Owner.WordsHash = sessionraise.WordsHash("please start")
 	rec.Profile = "workbench"
@@ -1028,8 +1030,8 @@ func TestActivationDoesNotSignAnEditedAnnotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Profile != "" || !sessionraise.Verify(got, pub) {
-		t.Fatalf("ledger profile was not what got signed: profile %q verified %v", got.Profile, sessionraise.Verify(got, pub))
+	if sessionraise.Verify(got, pub) || got.State == sessionraise.StateActive {
+		t.Fatalf("stripped annotation was signed: profile %q state %s", got.Profile, got.State)
 	}
 }
 

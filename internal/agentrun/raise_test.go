@@ -109,7 +109,7 @@ func TestRaiseShowListAndFleet(t *testing.T) {
 		t.Fatalf("unraised note: %s", note(plain))
 	}
 	header := fleetRaised([]apiv1.FleetSession{{Name: "raised", Raise: s.Raise}, {Name: "plain"}})
-	if header != "raised (workbench); raised (may start sessions)" {
+	if header != "raised (workbench), raised (may start sessions)" {
 		t.Fatalf("fleet: %s", header)
 	}
 	lines = nil
@@ -119,5 +119,89 @@ func TestRaiseShowListAndFleet(t *testing.T) {
 	startOnly := strings.Join(lines, " ")
 	if strings.Contains(startOnly, "pod runs as") || strings.Contains(startOnly, "--restart") || !strings.Contains(startOnly, "raised") {
 		t.Fatalf("start-sessions show: %s", startOnly)
+	}
+	lines = nil
+	s.Raise.Owner.Session = ""
+	s.Raise.Owner.Where = sessionraise.WhereOwn
+	(&app{}).printRaise(row, s)
+	own := strings.Join(lines, " ")
+	if strings.Contains(own, "in ,") {
+		t.Fatalf("empty session printed: %s", own)
+	}
+	if !strings.Contains(own, "Tom's own call,") {
+		t.Fatalf("own call: %s", own)
+	}
+}
+
+func TestRaiseAllowsProfileAndStartSessionsTogether(t *testing.T) {
+	h := newHarness(t)
+	cur := testSession(name, "Running")
+	cur.UID = "uid-1"
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath(name):
+			writeTestJSON(w, http.StatusOK, cur)
+		case r.Method == http.MethodPost && r.URL.Path == apiv1.SessionRaisePath(name):
+			var req apiv1.RaiseRequest
+			if err := json.Unmarshal(body, &req); err != nil || req.Profile != "workbench" || !req.StartSessions {
+				t.Errorf("post %s", body)
+			}
+			writeTestJSON(w, http.StatusAccepted, cur)
+		default:
+			apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "no such route")
+		}
+	}
+	h.mustRun(ExitUsage, "raise", name, "--words", "yes please", "--said-at", "2026-11-13T18:00:00Z")
+	h.mustRun(ExitOK, "raise", name, "--profile", "workbench", "--start-sessions", "--words", "yes please", "--said-at", "2026-11-13T18:00:00Z")
+}
+
+func TestNoRaisePrintsTheAPISentence(t *testing.T) {
+	h := newHarness(t)
+	cur := testSession(name, "Running")
+	cur.UID = "uid-1"
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		if r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath(name) {
+			writeTestJSON(w, http.StatusOK, cur)
+			return
+		}
+		apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "Session "+name+" has no raise to take back.")
+	}
+	h.mustRun(ExitNotFound, "raise", name, "--take-back")
+	if strings.Contains(h.stderr.String(), "does not have the raise routes") || !strings.Contains(h.stderr.String(), "has no raise to take back") {
+		t.Fatalf("stderr: %s", h.stderr.String())
+	}
+	h.stderr.Reset()
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		if r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath(name) {
+			writeTestJSON(w, http.StatusOK, cur)
+			return
+		}
+		http.Error(w, "404 page not found", http.StatusNotFound)
+	}
+	h.mustRun(ExitNotFound, "raise", name, "--take-back")
+	if !strings.Contains(h.stderr.String(), "This operator does not have the raise routes.") {
+		t.Fatalf("bare 404: %s", h.stderr.String())
+	}
+}
+
+func TestShowSaysProfileAtCreation(t *testing.T) {
+	h := newHarness(t)
+	s := testSession("raised", "Running")
+	s.Profile = "full"
+	s.Raise = &apiv1.SessionRaise{
+		State: sessionraise.StateActive, Profile: "workbench",
+		PerformedBy: "human/tom", PerformedAt: "2026-11-13T19:00:00Z", ActiveFrom: "2026-11-13T19:02:00Z",
+		Owner: &apiv1.RaiseOwner{Words: "yes", Where: sessionraise.WhereOwn, SaidAt: "2026-11-13T18:55:00Z"},
+	}
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		if r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath("raised") {
+			writeTestJSON(w, http.StatusOK, s)
+			return
+		}
+		apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "no such route")
+	}
+	h.mustRun(ExitOK, "show", "raised")
+	if !strings.Contains(h.stdout.String(), "full (at creation)") || strings.Contains(h.stdout.String(), "in ,") {
+		t.Fatalf("show:\n%s", h.stdout.String())
 	}
 }

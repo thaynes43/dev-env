@@ -285,8 +285,12 @@ type Server struct {
 	// field and leaves the route as it was.
 	SessionAllowances *SessionAllowanceStore
 	// Raise is DESIGN-066. Nil leaves POST refused. With both flags off, POST
-	// is refused and no record is honoured; GET and DELETE still run.
+	// is refused, a pending or active record is shown as ignored, and the
+	// depth exemption grants nothing. GET and DELETE still run.
 	Raise *RaiseConfig
+	// raiseIgnored remembers an ignored record's id and reason so the
+	// operator logs that pair once.
+	raiseIgnored sync.Map
 
 	// createMu serialises this replica's creates, so its idempotency,
 	// child-count, grant-merge and pending-grant checks see each other's writes.
@@ -376,7 +380,7 @@ func (s *Server) Handler() http.Handler {
 		http.MethodGet:    s.getSession,
 		http.MethodDelete: s.reapSession,
 	}}))
-	mux.Handle(apiv1.SessionsPath+"/{name}/raise", s.serve(route{coordinator: true, methods: map[string]handler{
+	mux.Handle(apiv1.SessionsPath+"/{name}/raise", s.serve(route{coordinator: false, methods: map[string]handler{
 		http.MethodGet:    s.getRaise,
 		http.MethodPost:   s.postRaise,
 		http.MethodDelete: s.deleteRaise,

@@ -7,12 +7,11 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/sessionraise"
-	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 // RaisePageOptions selects the keeper's raise notices. The zero value uses
@@ -36,6 +35,9 @@ type RaisePager struct {
 	Now              func() time.Time
 	Log              logr.Logger
 	Every            time.Duration
+	quietUntil       time.Time
+	lastQuiet        time.Time
+	profileLogged    map[string]struct{}
 }
 
 // NeedLeaderElection is true: only the leader sends and signs.
@@ -99,62 +101,178 @@ func (p *RaisePager) sessionNamespace() string {
 	return "dev-agents"
 }
 
-// announce sends every pending raise and every take-back whose record
-// counts and whose notice is due. It does not look at the time of day.
+// announce sends a pending raise whose record counts, and a take-back from
+// the operator ledger row. It reads the ledger first and fetches, by name,
+// only the sessions whose rows need a notice. It does not look at the time
+// of day, and a missing object never fails the keeper.
 func (p *RaisePager) announce(ctx context.Context) {
-	if p.Client == nil || p.Sender == nil {
+	if p.Client == nil || p.Sender == nil || p.quiet() {
 		return
 	}
 	store := p.store()
 	priv, err := sessionraise.Ensure(ctx, store, p.secretName(), sessionraise.KeeperPublicName, true)
 	if err != nil {
-		p.Log.Info("raise notice key was not published", "error", err.Error())
-		return
-	}
-	var list v1alpha1.AgentSessionList
-	if err := p.reader().List(ctx, &list, client.InNamespace(p.sessionNamespace())); err != nil {
-		p.Log.Error(err, "raise notice list")
-		return
-	}
-	now := p.now().UTC().Truncate(time.Second)
-	// A session that is gone, or that no longer carries this record, drops
-	// its notice even when this pass cannot announce. A live session keeps
-	// the row for its current record, so an old Sent is not sent again.
-	p.pruneNotices(ctx, list.Items)
-	pub, err := sessionraise.ReadPublic(ctx, store, sessionraise.OperatorPublicName)
-	if err != nil {
+		p.noteQuiet("raise notice key was not published", err)
 		return
 	}
 	ledObj, err := store.Get(ctx, sessionraise.LedgerName)
 	if err != nil {
+		p.noteQuiet("raise notice ledger was not read", err)
 		return
 	}
 	led, err := sessionraise.Unmarshal(ledObj.Data[sessionraise.LedgerField])
 	if err != nil {
+		p.noteQuiet("raise notice ledger was not read", err)
 		return
 	}
-	for i := range list.Items {
-		p.announceOne(ctx, priv, pub, led, &list.Items[i], now)
+	notices, err := p.readNotices(ctx)
+	if err != nil {
+		p.noteQuiet("raise notice ledger was not read", err)
+		return
+	}
+	now := p.now().UTC().Truncate(time.Second)
+	var need []sessionraise.SessionEntry
+	for _, e := range led.Sessions {
+		if rowNeedsNotice(now, e, notices) {
+			need = append(need, e)
+		}
+	}
+	if len(need) == 0 {
+		return
+	}
+	pub, pubErr := sessionraise.ReadPublic(ctx, store, sessionraise.OperatorPublicName)
+	if pubErr != nil {
+		p.noteQuietLog("raise operator key was not read", pubErr)
+	}
+	found, gone := p.sessionsFor(ctx, need)
+	p.dropNotices(ctx, gone, p.countingIDs(found, pub, led))
+	for i := range found {
+		p.announceOne(ctx, priv, pub, pubErr, led, &found[i])
 	}
 }
 
-// pruneNotices drops a notice whose session is gone, or whose id is not
-// the id in that session's current annotation. A live session keeps the
-// row for its current record, however old, so a Sent is not sent again.
-// Rows that remain keep the signature they had.
-func (p *RaisePager) pruneNotices(ctx context.Context, sessions []v1alpha1.AgentSession) {
-	current := map[string]string{}
+func (p *RaisePager) quiet() bool {
+	return !p.quietUntil.IsZero() && p.now().Before(p.quietUntil)
+}
+
+func (p *RaisePager) noteQuiet(msg string, err error) {
+	p.quietUntil = p.now().Add(sessionraise.QuietRetry)
+	p.noteQuietLog(msg, err)
+}
+
+func (p *RaisePager) noteQuietLog(msg string, err error) {
+	now := p.now()
+	if !p.lastQuiet.IsZero() && now.Sub(p.lastQuiet) < sessionraise.QuietLog {
+		return
+	}
+	p.lastQuiet = now
+	if err != nil {
+		p.Log.Info(msg, "error", err.Error())
+		return
+	}
+	p.Log.Info(msg)
+}
+
+func rowNeedsNotice(now time.Time, e sessionraise.SessionEntry, notices *sessionraise.NoticeLedger) bool {
+	kind := ""
+	switch e.State {
+	case sessionraise.StatePending:
+		kind = sessionraise.KindRaise
+	case sessionraise.StateTakenBack:
+		kind = sessionraise.KindTakeBack
+	default:
+		return false
+	}
+	if e.ID == "" || e.UID == "" {
+		return false
+	}
+	_, due := noticeDue(now, notices.Find(e.ID, kind))
+	return due
+}
+
+// sessionsFor fetches each needed row by name. It lists AgentSessions only
+// when a needed row has no name, or the named session has a different UID.
+func (p *RaisePager) sessionsFor(ctx context.Context, need []sessionraise.SessionEntry) ([]v1alpha1.AgentSession, []string) {
+	var found []v1alpha1.AgentSession
+	var gone []string
+	var unnamed []sessionraise.SessionEntry
+	for _, e := range need {
+		if e.Name == "" {
+			unnamed = append(unnamed, e)
+			continue
+		}
+		var sess v1alpha1.AgentSession
+		err := p.reader().Get(ctx, client.ObjectKey{Namespace: p.sessionNamespace(), Name: e.Name}, &sess)
+		if apierrors.IsNotFound(err) {
+			gone = append(gone, e.UID)
+			continue
+		}
+		if err != nil {
+			p.noteQuiet("raise notice session was not read", err)
+			continue
+		}
+		if string(sess.UID) != e.UID {
+			unnamed = append(unnamed, e)
+			continue
+		}
+		found = append(found, sess)
+	}
+	if len(unnamed) == 0 {
+		return found, gone
+	}
+	var list v1alpha1.AgentSessionList
+	if err := p.reader().List(ctx, &list, client.InNamespace(p.sessionNamespace())); err != nil {
+		p.noteQuiet("raise notice list", err)
+		return found, gone
+	}
+	byUID := map[string]v1alpha1.AgentSession{}
+	for i := range list.Items {
+		byUID[string(list.Items[i].UID)] = list.Items[i]
+	}
+	for _, e := range unnamed {
+		sess, ok := byUID[e.UID]
+		if !ok {
+			gone = append(gone, e.UID)
+			continue
+		}
+		found = append(found, sess)
+	}
+	return found, gone
+}
+
+// countingIDs is the id of a record that counts, by session UID. An
+// annotation that does not count is absent, so it cannot reset an attempt.
+func (p *RaisePager) countingIDs(sessions []v1alpha1.AgentSession, pub ed25519.PublicKey, led *sessionraise.Ledger) map[string]string {
+	out := map[string]string{}
+	if len(pub) == 0 {
+		return out
+	}
 	for i := range sessions {
 		uid := string(sessions[i].UID)
-		if uid == "" {
-			continue
-		}
 		rec, err := sessionraise.Parse(sessions[i].Annotations[v1alpha1.AnnotationRaise])
-		if err != nil || rec.ID == "" {
-			current[uid] = ""
+		if err != nil {
 			continue
 		}
-		current[uid] = rec.ID
+		if sessionraise.Counts(rec, uid, pub, led.Find(uid)) != "" {
+			continue
+		}
+		out[uid] = rec.ID
+	}
+	return out
+}
+
+// dropNotices removes a notice whose session is known gone, and a notice
+// whose id is not the id of the counting record for that session. Anything
+// else stays, including a notice for an annotation that does not count.
+func (p *RaisePager) dropNotices(ctx context.Context, gone []string, counting map[string]string) {
+	if len(gone) == 0 && len(counting) == 0 {
+		return
+	}
+	goneSet := map[string]bool{}
+	for _, uid := range gone {
+		if uid != "" {
+			goneSet[uid] = true
+		}
 	}
 	store := p.store()
 	obj, err := store.Get(ctx, sessionraise.NoticeLedgerName)
@@ -167,8 +285,10 @@ func (p *RaisePager) pruneNotices(ctx context.Context, sessions []v1alpha1.Agent
 	}
 	kept := make([]sessionraise.Notice, 0, len(led.Items))
 	for _, n := range led.Items {
-		id, live := current[n.SessionUID]
-		if !live || id == "" || n.ID != id {
+		if goneSet[n.SessionUID] {
+			continue
+		}
+		if id, ok := counting[n.SessionUID]; ok && n.ID != id {
 			continue
 		}
 		kept = append(kept, n)
@@ -191,52 +311,71 @@ func (p *RaisePager) pruneNotices(ctx context.Context, sessions []v1alpha1.Agent
 	}
 }
 
-func (p *RaisePager) announceOne(ctx context.Context, priv ed25519.PrivateKey, pub ed25519.PublicKey, led *sessionraise.Ledger, sess *v1alpha1.AgentSession, now time.Time) {
-	raw := sess.Annotations[v1alpha1.AnnotationRaise]
-	if raw == "" {
-		return
-	}
-	rec, err := sessionraise.Parse(raw)
-	if err != nil {
-		return
-	}
+func (p *RaisePager) announceOne(ctx context.Context, priv ed25519.PrivateKey, pub ed25519.PublicKey, pubErr error, led *sessionraise.Ledger, sess *v1alpha1.AgentSession) {
 	entry := led.Find(string(sess.UID))
-	if sessionraise.Counts(rec, string(sess.UID), pub, entry) != "" {
+	if entry == nil || entry.UID != string(sess.UID) || entry.ID == "" {
 		return
 	}
-	kind := ""
-	switch rec.State {
-	case sessionraise.StatePending:
-		kind = sessionraise.KindRaise
-	case sessionraise.StateTakenBack:
-		kind = sessionraise.KindTakeBack
-	default:
+	// A take-back is decided from the operator ledger row. It does not wait
+	// on the annotation or the operator public key.
+	if entry.State == sessionraise.StateTakenBack {
+		p.sendNotice(ctx, priv, sess, entry, sessionraise.KindTakeBack, sessionraise.Record{})
 		return
 	}
+	if entry.State != sessionraise.StatePending || pubErr != nil {
+		return
+	}
+	rec, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
+	if err != nil || sessionraise.Counts(rec, string(sess.UID), pub, entry) != "" {
+		return
+	}
+	if rec.Profile != "" {
+		p.logProfile(rec.ID)
+		return
+	}
+	p.sendNotice(ctx, priv, sess, entry, sessionraise.KindRaise, rec)
+}
+
+func (p *RaisePager) logProfile(id string) {
+	if p.profileLogged == nil {
+		p.profileLogged = map[string]struct{}{}
+	}
+	if _, ok := p.profileLogged[id]; ok {
+		return
+	}
+	p.profileLogged[id] = struct{}{}
+	p.Log.Info("profile raises need slice (b)", "id", id)
+}
+
+func (p *RaisePager) sendNotice(ctx context.Context, priv ed25519.PrivateKey, sess *v1alpha1.AgentSession, entry *sessionraise.SessionEntry, kind string, rec sessionraise.Record) {
 	notices, err := p.readNotices(ctx)
 	if err != nil {
+		p.noteQuiet("raise notice ledger was not read", err)
 		return
 	}
-	attempt, ok := noticeDue(now, notices.Find(rec.ID, kind))
+	atTime := p.now().UTC().Truncate(time.Second)
+	attempt, ok := noticeDue(atTime, notices.Find(entry.ID, kind))
 	if !ok {
-		return
-	}
-	super, known := p.superuser(ctx, rec.Profile)
-	if !known {
 		return
 	}
 	text := sessionraise.NoticeText{
 		Session: sess.Name, Title: sess.Annotations[v1alpha1.AnnotationTitle],
-		Performer: rec.PerformedBy, From: rec.FromProfile, Profile: rec.Profile,
-		Superuser: super, StartSessions: rec.StartSessions,
-		Words: rec.Owner.Words, Where: rec.Owner.Where, SaidAt: rec.Owner.SaidAt,
-		Effect:   now.Add(sessionraise.EffectDelay).Format(time.RFC3339),
-		TakeBack: kind == sessionraise.KindTakeBack, TakenBy: rec.TakenBackBy, TakenAt: rec.TakenBackAt,
+		TakeBack: kind == sessionraise.KindTakeBack, TakenBy: entry.TakenBackBy, TakenAt: entry.TakenBackAt,
+	}
+	if kind == sessionraise.KindRaise {
+		text.Performer = rec.PerformedBy
+		text.From = rec.FromProfile
+		text.Profile = rec.Profile
+		text.StartSessions = rec.StartSessions
+		text.Words = rec.Owner.Words
+		text.Where = rec.Owner.Where
+		text.SaidAt = rec.Owner.SaidAt
+		text.Effect = atTime.Add(sessionraise.EffectDelay).Format(time.RFC3339)
 	}
 	title, body := sessionraise.Message(text, summonRedact)
-	at := now.Format(time.RFC3339)
+	at := atTime.Format(time.RFC3339)
 	if err := p.writeNotice(ctx, priv, sessionraise.Notice{
-		ID: rec.ID, SessionUID: rec.SessionUID, Kind: kind, Attempt: attempt,
+		ID: entry.ID, SessionUID: entry.UID, Kind: kind, Attempt: attempt,
 		Outcome: sessionraise.OutcomeReserved, At: at,
 	}); err != nil {
 		p.Log.Info("raise notice reservation was not written", "session", sess.Name, "error", err.Error())
@@ -244,11 +383,11 @@ func (p *RaisePager) announceOne(ctx context.Context, priv ed25519.PrivateKey, p
 	}
 	outcome := classifyRaiseSend(ctx, p.Sender, Notice{Title: title, Message: body})
 	sent := sessionraise.Notice{
-		ID: rec.ID, SessionUID: rec.SessionUID, Kind: kind, Attempt: attempt,
+		ID: entry.ID, SessionUID: entry.UID, Kind: kind, Attempt: attempt,
 		Outcome: outcome, At: at,
 	}
 	if outcome == sessionraise.OutcomeSent {
-		sent.SentAt = at
+		sent.SentAt = p.now().UTC().Truncate(time.Second).Format(time.RFC3339)
 	}
 	if err := p.writeNotice(ctx, priv, sent); err != nil {
 		p.Log.Info("raise notice outcome was not written", "session", sess.Name, "error", err.Error())
@@ -275,29 +414,6 @@ func noticeDue(now time.Time, cur *sessionraise.Notice) (int, bool) {
 		return 0, false
 	}
 	return cur.Attempt + 1, true
-}
-
-func (p *RaisePager) superuser(ctx context.Context, profile string) (bool, bool) {
-	if profile == "" {
-		return false, true
-	}
-	ns := p.Namespace
-	if ns == "" {
-		ns = sessionraise.ObjectNamespace
-	}
-	var cm corev1.ConfigMap
-	if err := p.reader().Get(ctx, client.ObjectKey{Namespace: ns, Name: templates.DefaultName}, &cm); err != nil {
-		return false, false
-	}
-	doc, err := templates.Parse(cm.Data)
-	if err != nil {
-		return false, false
-	}
-	_, prof, err := doc.Profile(profile)
-	if err != nil {
-		return false, false
-	}
-	return prof.ServiceAccount == templates.WorkbenchServiceAccount, true
 }
 
 func (p *RaisePager) readNotices(ctx context.Context) (*sessionraise.NoticeLedger, error) {

@@ -19,6 +19,15 @@ func TestSessionRaiseFlagsDefaultOff(t *testing.T) {
 	}
 }
 
+func TestRaiseActivationFollowsDispatchOrProfiles(t *testing.T) {
+	if raiseActivationOn(false, "") {
+		t.Fatal("both flags off started the activation loop")
+	}
+	if !raiseActivationOn(true, "") || !raiseActivationOn(false, "workbench") {
+		t.Fatal("dispatch or a profile list did not start the activation loop")
+	}
+}
+
 func TestProfileFlagRefusesStartupWithoutSliceB(t *testing.T) {
 	_, err := parseFlags([]string{"--session-raise-profiles", "workbench"})
 	if err == nil || err.Error() != "Profile raises need the pod change of DESIGN-066 slice (b)." {

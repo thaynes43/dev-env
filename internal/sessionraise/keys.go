@@ -1,6 +1,7 @@
 package sessionraise
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -118,8 +119,14 @@ func readKey(ctx context.Context, keys Store, name string) (ed25519.PrivateKey, 
 	if len(raw) == 0 {
 		return nil, ErrNoKey
 	}
+	// A key counts only when its 64 bytes are exactly the key derived from
+	// its first 32. Anything else, including a wrong length, is unreadable.
 	if len(raw) != ed25519.PrivateKeySize {
-		return nil, ErrNoKey
+		return nil, ErrUnreadable
+	}
+	want := ed25519.NewKeyFromSeed(raw[:ed25519.SeedSize])
+	if !bytes.Equal(raw, want) {
+		return nil, ErrUnreadable
 	}
 	return ed25519.PrivateKey(append([]byte(nil), raw...)), nil
 }

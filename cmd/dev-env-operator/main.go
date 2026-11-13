@@ -228,6 +228,13 @@ type options struct {
 	sessionRaiseKeySecret string
 }
 
+// raiseActivationOn is when the activation loop is added. Dispatch or a
+// profile list turns it on. Slice (a) refuses a non-empty profile list at
+// startup, so that branch waits for slice (b).
+func raiseActivationOn(dispatch bool, profiles string) bool {
+	return dispatch || strings.TrimSpace(profiles) != ""
+}
+
 func parseFlags(args []string) (options, error) {
 	// The operator's own namespace, from the downward API in the Deployment;
 	// dev-env-system when unset (D-02).
@@ -1290,7 +1297,7 @@ func run(args []string) error {
 		if err := mgr.Add(&apiserver.RaiseKeyOwner{Server: api}); err != nil {
 			return err
 		}
-		if o.sessionRaiseDispatch {
+		if raiseActivationOn(o.sessionRaiseDispatch, o.sessionRaiseProfiles) {
 			if err := mgr.Add(&apiserver.RaiseActivator{Server: api}); err != nil {
 				return err
 			}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
@@ -43,7 +44,7 @@ func (a *app) raise(ctx context.Context, args []string) error {
 	if *takeBack && (*profile != "" || *start || *words != "" || *saidAt != "" || *ref != "") {
 		return usageError("take-back takes only the session; agent-run help raise")
 	}
-	if !*takeBack && (*words == "" || *saidAt == "" || (*profile != "") == *start) {
+	if !*takeBack && (*words == "" || *saidAt == "" || (*profile == "" && !*start)) {
 		return usageError("a raise names a profile or --start-sessions, Tom's words and when he said them; agent-run help raise")
 	}
 	c, err := a.connect(ctx, cmd.c.conn)
@@ -72,10 +73,10 @@ func (a *app) raise(ctx context.Context, args []string) error {
 			Owner: apiv1.RaiseOwner{Words: *words, Where: where, SaidAt: *saidAt, Ref: *ref},
 		}, &next)
 	}
-	if status == http.StatusNotFound {
-		return fail(ExitNotFound, "This operator does not have the raise routes.")
-	}
 	if err != nil {
+		if status == http.StatusNotFound && raiseRoutesMissing(err) {
+			return fail(ExitNotFound, "This operator does not have the raise routes.")
+		}
 		return err
 	}
 	if cmd.c.output == outputJSON {
@@ -131,7 +132,11 @@ func (a *app) printRaise(row func(k, format string, args ...any), s apiv1.Sessio
 		if r.Owner.Ref != "" {
 			ref = "; " + r.Owner.Ref
 		}
-		row("on Tom's word", "%q (%s in %s, %s%s)", r.Owner.Words, raiseWhere(r.Owner.Where), r.Owner.Session, r.Owner.SaidAt, ref)
+		if r.Owner.Session == "" {
+			row("on Tom's word", "%q (%s, %s%s)", r.Owner.Words, raiseWhere(r.Owner.Where), r.Owner.SaidAt, ref)
+		} else {
+			row("on Tom's word", "%q (%s in %s, %s%s)", r.Owner.Words, raiseWhere(r.Owner.Where), r.Owner.Session, r.Owner.SaidAt, ref)
+		}
 	}
 	// A start-sessions raise has no profile to apply at the next pod. The
 	// depth exemption already honours it. --restart is slice (b).
@@ -205,5 +210,13 @@ func fleetRaised(sessions []apiv1.FleetSession) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return joinNotes(parts)
+	return strings.Join(parts, ", ")
+}
+
+func raiseRoutesMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "not an API error") || strings.Contains(msg, "no route ")
 }

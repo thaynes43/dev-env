@@ -3,6 +3,7 @@ package sessionraise
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -25,6 +26,13 @@ const (
 	NoticeAttempts = 12
 	// NoticeRetry is how long the keeper waits before another attempt.
 	NoticeRetry = 5 * time.Minute
+	// QuietRetry is how long a missing key or ledger waits before another try.
+	QuietRetry = 5 * time.Minute
+	// QuietLog is the most often a missing object is logged.
+	QuietLog = time.Hour
+	// MaxLedgerBytes is the encoded ledger budget. A raise that would pass
+	// it is refused, so a take-back still fits in the ConfigMap.
+	MaxLedgerBytes = 768 * 1024
 )
 
 // SessionEntry is one raised session. The record counts only when its id and
@@ -102,9 +110,12 @@ type AdmitResult struct {
 }
 
 // FullError is a ledger that cannot take another row. Resume is when the
-// oldest row that is holding the cap expires.
+// oldest used word expires. Sessions is the session cap. Bytes is the
+// encoded budget. A take-back does not go through Admit, so it still fits.
 type FullError struct {
-	Resume time.Time
+	Resume   time.Time
+	Sessions bool
+	Bytes    bool
 }
 
 func (e *FullError) Error() string { return "raise ledger is full" }
@@ -124,6 +135,14 @@ var ErrUsedWords = errors.New("words already used")
 
 // ErrNoEntry is a take-back of a session the ledger does not hold.
 var ErrNoEntry = errors.New("no raise entry")
+
+// StillRaisedError is a POST for a session whose row is already pending or
+// active and is not the same raise. State is that row's state.
+type StillRaisedError struct {
+	State string
+}
+
+func (e *StillRaisedError) Error() string { return "raise still raised" }
 
 // Find is the row for uid, or nil.
 func (l *Ledger) Find(uid string) *SessionEntry {
@@ -175,6 +194,15 @@ func (l *Ledger) Admit(now time.Time, in AdmitInput, live map[string]bool) (Admi
 	if l.used(in.PerformedBy, in.WordsHash) {
 		return AdmitResult{}, ErrUsedWords
 	}
+	// Another performer, or any other body, does not replace a raise that
+	// is still pending or active. The same words are used words. A different
+	// body is a conflict. Only a taken-back or unannounced row is replaced.
+	if cur := l.Find(in.UID); cur != nil && (cur.State == StatePending || cur.State == StateActive) {
+		if cur.WordsHash == in.WordsHash {
+			return AdmitResult{}, ErrUsedWords
+		}
+		return AdmitResult{}, &StillRaisedError{State: cur.State}
+	}
 	if cur := l.Find(in.UID); cur != nil {
 		if wait := TargetGap - now.Sub(cur.ChangedAt); wait > 0 {
 			return AdmitResult{}, &RateError{Until: cur.ChangedAt.Add(TargetGap), Target: true, Wait: wait}
@@ -186,6 +214,9 @@ func (l *Ledger) Admit(now time.Time, in AdmitInput, live map[string]bool) (Admi
 	if err := l.makeRoom(now, in.UID, live); err != nil {
 		return AdmitResult{}, err
 	}
+	snapSessions := slices.Clone(l.Sessions)
+	snapWords := slices.Clone(l.Words)
+	snapRaises := slices.Clone(l.Raises)
 	entry := SessionEntry{
 		Name: in.Name, UID: in.UID, ID: in.ID, State: StatePending, ChangedAt: now,
 		Profile: in.Profile, FromProfile: in.FromProfile, StartSessions: in.StartSessions,
@@ -206,6 +237,11 @@ func (l *Ledger) Admit(now time.Time, in AdmitInput, live map[string]bool) (Admi
 	}
 	l.Words = append(l.Words, WordUse{Performer: in.PerformedBy, Hash: in.WordsHash, TargetUID: in.UID, At: now})
 	l.Raises = append(l.Raises, RaiseStamp{Performer: in.PerformedBy, At: now})
+	raw, err := json.Marshal(l)
+	if err != nil || len(raw) > MaxLedgerBytes {
+		l.Sessions, l.Words, l.Raises = snapSessions, snapWords, snapRaises
+		return AdmitResult{}, &FullError{Bytes: true}
+	}
 	return AdmitResult{Entry: entry}, nil
 }
 
@@ -213,7 +249,8 @@ func sameRaise(cur *SessionEntry, in AdmitInput) bool {
 	if cur.State != StatePending && cur.State != StateActive {
 		return false
 	}
-	return cur.WordsHash == in.WordsHash && cur.Profile == in.Profile && cur.StartSessions == in.StartSessions && cur.ID != ""
+	return cur.WordsHash == in.WordsHash && cur.Profile == in.Profile && cur.StartSessions == in.StartSessions &&
+		cur.PerformedBy == in.PerformedBy && cur.Where == in.Where && cur.ID != ""
 }
 
 func (l *Ledger) used(performer, hash string) bool {
@@ -249,7 +286,7 @@ func (l *Ledger) makeRoom(now time.Time, uid string, live map[string]bool) error
 	}
 	if len(l.Sessions) >= MaxSessions {
 		if live == nil {
-			return &FullError{Resume: l.resume(now)}
+			return &FullError{Sessions: true}
 		}
 		kept := l.Sessions[:0]
 		for _, s := range l.Sessions {
@@ -260,7 +297,7 @@ func (l *Ledger) makeRoom(now time.Time, uid string, live map[string]bool) error
 		l.Sessions = kept
 	}
 	if len(l.Sessions) >= MaxSessions {
-		return &FullError{Resume: l.resume(now)}
+		return &FullError{Sessions: true}
 	}
 	return l.roomForWord(now)
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -124,6 +125,12 @@ func Activation(now time.Time, entry SessionEntry, notices []Notice, pub ed25519
 	return ActionNone
 }
 
+// SentBeforePerformed reports a verified Sent whose sentAt is earlier than
+// the raise. The operator leaves that row pending.
+func SentBeforePerformed(sentAt, performedAt string) bool {
+	return sentAt != "" && performedAt != "" && sentAt < performedAt
+}
+
 // SentTime is the signed Sent time for a pending raise, when one verifies.
 func SentTime(entry SessionEntry, notices []Notice, pub ed25519.PublicKey) (string, bool) {
 	n, ok := raisedSent(entry, notices, pub)
@@ -141,7 +148,7 @@ func raisedSent(entry SessionEntry, notices []Notice, pub ed25519.PublicKey) (No
 	var sent *Notice
 	for i := range notices {
 		n := notices[i]
-		if n.ID != entry.ID || n.SessionUID != entry.UID || n.Kind != KindRaise || n.SentAt == "" || !VerifyNotice(n, pub) {
+		if n.ID != entry.ID || n.SessionUID != entry.UID || n.Kind != KindRaise || n.Outcome != OutcomeSent || n.SentAt == "" || !VerifyNotice(n, pub) {
 			continue
 		}
 		if sent == nil || n.SentAt < sent.SentAt {
@@ -211,9 +218,12 @@ func Message(in NoticeText, redact func(string) string) (string, string) {
 	if in.StartSessions {
 		body += ". It may start sessions one level deeper"
 	}
-	body += ". Tom said, " + in.Where + ", at " + in.SaidAt + ": " + redact(in.Words) + "."
-	body += " It takes effect at " + in.Effect + ", two minutes after this notice is accepted, unless taken back."
+	body += ". It takes effect at " + in.Effect + ", two minutes after this notice is accepted, unless taken back."
 	body += " To stop it: agent-run raise " + in.Session + " --take-back."
+	// The words are the performer's claim, quoted, and last. A double quote
+	// inside them becomes a single quote, so it cannot close the quotation.
+	shown := strings.ReplaceAll(redact(in.Words), `"`, "'")
+	body += " " + in.Performer + ` says you said: "` + shown + `" (` + in.Where + ", " + in.SaidAt + ")."
 	return title, body
 }
 

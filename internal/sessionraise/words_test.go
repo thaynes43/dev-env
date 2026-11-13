@@ -29,6 +29,13 @@ func TestNormalizeFoldsWords(t *testing.T) {
 	}
 }
 
+func TestSecretShapeSeesUnicodeSpaces(t *testing.T) {
+	words := "Bearer\u00a0abcdefghijklmnop"
+	if got := SecretShape(words); got != "a bearer credential" {
+		t.Fatalf("NFKC space: %q", got)
+	}
+}
+
 func TestSecretShapes(t *testing.T) {
 	cases := []struct {
 		words string

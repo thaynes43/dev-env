@@ -41,7 +41,19 @@ var secretShapes = []secretShape{
 }
 
 // SecretShape returns the phrase for the first shape words matches, or "".
+// It also checks the NFKC form, so a Unicode space cannot hide a shape.
 func SecretShape(words string) string {
+	if shape := matchSecretShape(words); shape != "" {
+		return shape
+	}
+	folded := norm.NFKC.String(words)
+	if folded != words {
+		return matchSecretShape(folded)
+	}
+	return ""
+}
+
+func matchSecretShape(words string) string {
 	for _, s := range secretShapes {
 		if s.re.MatchString(words) {
 			return s.name
