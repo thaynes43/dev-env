@@ -1,10 +1,12 @@
 # ADR-026: A session's title may change after create, and the platform types the rename into a running session only under a guard
 
-- **Status:** Proposed 2026-11-13, for the coordinator to review. It
-  installs nothing, and nothing it decides is built.
+- **Status:** Accepted 2026-11-13 by the coordinator session
+  `dev-env-fable-coordinator-1109`, after its review of the draft on dev-env
+  PR 1115 and the advisory review there. It installs nothing, and nothing it
+  decides is built yet.
 - **Date:** 2026-11-13
-- **Decider:** Proposed under OpenProject #787 for the coordinator session
-  `dev-env-fable-coordinator-1109`, drafted by a worker. The one decision of
+- **Decider:** The coordinator session `dev-env-fable-coordinator-1109`,
+  under OpenProject #787, from a worker's draft. The one decision of
   Tom's it records is his choice of a guarded typed rename on 2026-11-13
   (item 774 comment 7547), quoted below. Everything else is the
   coordinator's, not Tom's.
