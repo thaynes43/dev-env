@@ -2236,23 +2236,41 @@ session without one is built exactly as before.
   document carries `caller` and that has a launch record (`launch.json` or a
   task result) starts nothing on any boot, in every mode, whatever the repo
   step did: no TUI resume, no explicit continuation, no provider. Its status
-  says how the first run ended: `exited` (a task result, or the first TUI
-  run's own exit record), `failed` (refused by the start fence, below) or
-  `interrupted`. A remote one reports that, not `login-required`.
+  says how the first run ended, by the handoff record below: for a launch
+  tmux started, `exited` (a task result, or the first TUI run's own exit
+  record), `failed` (refused by the start fence, below) or `interrupted`.
+  A remote one reports that, not `login-required`.
   `BuildResume` and the explicit Claude continuation refuse a summoned
   session too. A session without `caller` boots exactly as before.
   When the tmux start of a summoned session's first launch returns an
   error, its `launch.json` stays (story 780 fix round 2, coordinator rulings
   in PR 1100 comment 6839380816; not a ruling by Tom): the provider may have
-  started, so no later boot starts it again. agentd records the error in
-  `~/.agentd/start-failed.json`, and the status reports the launch `failed`
-  when nothing can have started (tmux was never asked because its session
-  already existed, the tmux client could not be run, or the start fence
-  refused the spawn) and `interrupted` for any other error, in that boot
-  and every later one. It is never `busy`, `idle` or `waiting`, the states
-  the operator counts as running.
-  An ordinary launch's record still goes on such an error, and a later boot
-  starts it again.
+  started, so no later boot starts it again. An ordinary launch's record
+  still goes on such an error, and a later boot starts it again.
+  Before agentd asks tmux to start a summoned session's first launch, it
+  durably writes `~/.agentd/start-handoff.json` naming that launch (its
+  conversation and boot) with state `asked` (story 780 fix round 3,
+  coordinator rulings in PR 1100 comment 6840263445; not a ruling by Tom).
+  If that write fails, tmux is not asked: nothing starts, the start fails
+  and `launch.json` stays. When tmux answers, agentd updates the record to
+  `started`; `nothing-started` when tmux was never asked to start the
+  launch (its session already existed) or its client never ran (it could
+  not be found, or its `fork/exec` failed); or `ambiguous` for any other
+  error, another path error included. If the update fails, the record still
+  says `asked`. An ordinary launch writes no handoff record. The status
+  follows the record, never the boot's agent error or a later boot's start
+  window:
+
+  | Handoff record | Status |
+  |---|---|
+  | `nothing-started`, or the start fence refused this launch | `failed` |
+  | `started` | as for any launch: `busy` while it runs, `exited` with a task result or the TUI's own exit record, otherwise `interrupted`; only the launch's own boot counts the start window |
+  | `asked` or `ambiguous` | `busy` while a process lives, and inside the start window of the launch's own boot; then `interrupted`, at once on a later boot. Never `failed` or `exited`; a task result still reaches the operator in `status.agent.task` |
+  | missing, unreadable, truncated, of another launch | as `asked` |
+
+  So a failed first write closes the session `agent-interrupted`, not
+  `agent-failed`, and a summoned launch recorded by an agentd without this
+  record reads as `asked` (coordinator answer to question op780-fix3-q-1).
 - *Not charged* (ruling D5 on item 741). A Queued session whose dispatch id
   the ledger does not hold, or holds for another name, is never admitted. It
   is closed by its `onUnreported` (a remediation `escalated`, with its pending

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -68,6 +69,12 @@ func TestSummonedLaunchRecordStartsNothingOnBoot(t *testing.T) {
 						t.Fatal(err)
 					}
 					if err := writeJSONFile(s.statePath(launchFile), first); err != nil {
+						t.Fatal(err)
+					}
+					// The handoff record a tmux start that succeeded leaves
+					// (fix round 3). Without one the launch reads "asked",
+					// which is never exited (TestSummonedStartHandoffStatusTable).
+					if err := writeJSONFile(s.statePath(handoffRecordName), handoffOnDisk{State: "started", ConversationID: first.ConversationID, BootID: first.BootID}); err != nil {
 						t.Fatal(err)
 					}
 					switch {
@@ -373,8 +380,10 @@ func TestSummonedPausedLaunchRefusedPastStartDeadline(t *testing.T) {
 // 6839380816): when the tmux start of a summoned session's first launch
 // returns an error, its launch record stays, whether or not the provider may
 // have started, so no later boot starts it again: no tmux, no provider. The
-// status says how that launch ended, in the boot that failed and after it,
-// and is never busy, idle or waiting, which the operator counts as running:
+// status says how that launch ended, in the boot that failed and after it.
+// Since fix round 3 a launch that may have started reads busy inside the start
+// window of the boot that failed (TestSummonedStartHandoffRecord); after it,
+// and on every later boot, it is never busy, idle or waiting:
 //
 //   - interrupted when tmux may have started run-agent: the fake tmux loads
 //     the launch and runs it, the provider starts once, and then tmux
@@ -482,8 +491,8 @@ exit 0`)
 					if recordErr == nil {
 						t.Fatal("an ordinary launch record survived a failed tmux start")
 					}
-					if _, err := os.Lstat(s.statePath("start-failed.json")); !os.IsNotExist(err) {
-						t.Fatalf("an ordinary failed start wrote start-failed.json: %v", err)
+					if _, err := os.Lstat(s.statePath(handoffRecordName)); !os.IsNotExist(err) {
+						t.Fatalf("an ordinary failed start wrote a handoff record: %v", err)
 					}
 					runner.calls = nil
 					d2 := quietDaemon(s, sess, runner, loginNow.Add(time.Minute))
@@ -503,8 +512,13 @@ exit 0`)
 				wantStatus := func(when string, at time.Time) {
 					t.Helper()
 					st := CollectStatus(ctx, &fakeRunner{}, s, sess, at)
-					if st.Agent.State != tc.want {
-						t.Fatalf("%s: status %+v, want %s", when, st.Agent, tc.want)
+					want := tc.want
+					if want == protocol.AgentInterrupted && when == "the boot that failed, inside the start window" {
+						// Fix round 3: tmux may still be starting it.
+						want = protocol.AgentBusy
+					}
+					if st.Agent.State != want {
+						t.Fatalf("%s: status %+v, want %s", when, st.Agent, want)
 					}
 					if st.Agent.ConversationID != first.ConversationID || strings.Contains(st.Agent.Error, "D-58") {
 						t.Fatalf("%s: status %+v", when, st.Agent)
@@ -513,12 +527,14 @@ exit 0`)
 						t.Fatalf("%s: the task's own result is not in the status: %+v", when, st.Agent.Task)
 					}
 				}
-				// The heartbeat of the boot that failed, inside the start
-				// window, where a launch with no other record reads busy.
+				// The heartbeat of the boot that failed. Inside the start
+				// window a launch that may have started reads busy (fix round
+				// 3); after it, how the launch ended.
 				if err := writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "first-boot", Boot: protocol.BootFailed, AgentError: why}); err != nil {
 					t.Fatal(err)
 				}
-				wantStatus("the boot that failed", loginNow)
+				wantStatus("the boot that failed, inside the start window", loginNow)
+				wantStatus("the boot that failed, after the start window", loginNow.Add(startWindow))
 
 				// Later boots, of the same pod or a recreated one, start nothing.
 				for i, at := range []time.Duration{30 * time.Second, 2 * time.Minute, time.Hour} {
@@ -536,6 +552,414 @@ exit 0`)
 				}
 				if got := providerRuns(); got != tc.started {
 					t.Fatalf("the provider ran %d times, want %d", got, tc.started)
+				}
+			})
+		}
+	}
+}
+
+// handoffOnDisk is the part of ~/.agentd/start-handoff.json these tests read.
+type handoffOnDisk struct {
+	State          string `json:"state"`
+	ConversationID string `json:"conversationId"`
+	BootID         string `json:"bootId"`
+}
+
+const handoffRecordName = "start-handoff.json"
+
+// R2-F1a of story 780 fix round 3 (coordinator rulings in PR 1100 comment
+// 6840263445): before agentd asks tmux to start a summoned session's first
+// launch, it durably writes a handoff record, state "asked", naming that
+// launch. If that write fails, tmux is not called at all. After tmux returns,
+// agentd updates the record; if the update fails, the record still says
+// "asked" (here: a directory stands in its place, so it cannot be read, which
+// counts as "asked" too). The status follows the record, never the boot's
+// agent error or the start window of a later boot:
+//
+//   - "asked" or "ambiguous": a live process is busy; otherwise busy inside
+//     the start window of the launch's own boot, and interrupted after it
+//     and at once on any later boot. Never failed.
+//   - "started": as today; here the provider ran and left its result or
+//     exit record, so exited, and busy while a process is live (remote).
+//
+// For a task and for a remote session, no later boot starts tmux or the
+// provider again.
+func TestSummonedStartHandoffRecord(t *testing.T) {
+	ambiguous := &CmdError{Name: "tmux", Sub: "new-session", ExitCode: 1, Stderr: "server exited unexpectedly"}
+	readErr := fmt.Errorf("tmux: %w", &fs.PathError{Op: "read", Path: "|0", Err: os.ErrClosed})
+	for _, mode := range []string{protocol.ModeTask, protocol.ModeRemote} {
+		for _, tc := range []struct {
+			name string
+			// blockFirst: a directory stands where the record goes, so its
+			// first write fails. blockUpdate: the fake tmux puts one there
+			// after the first write, so the update fails.
+			blockFirst, blockUpdate bool
+			// load: the fake tmux loads the launch and runs run-agent on it
+			// before it answers err.
+			load bool
+			err  error
+			// record is the record's state after the start; "" when it
+			// cannot be read.
+			record    string
+			stepFails bool
+			// tmux is how often new-session was sent; started how often the
+			// provider ran.
+			tmux, started int
+		}{
+			{name: "the first write fails", blockFirst: true, stepFails: true},
+			{name: "the update fails after an ambiguous error", blockUpdate: true, load: true, err: ambiguous, stepFails: true, tmux: 1, started: 1},
+			{name: "the update fails after an ambiguous error and nothing ran", blockUpdate: true, err: ambiguous, stepFails: true, tmux: 1},
+			{name: "the update fails after a success", blockUpdate: true, load: true, tmux: 1, started: 1},
+			{name: "tmux loads the launch and returns a wrapped read path error", load: true, err: readErr, record: "ambiguous", stepFails: true, tmux: 1, started: 1},
+			{name: "an ambiguous error", err: ambiguous, record: "ambiguous", stepFails: true, tmux: 1},
+			{name: "a success", load: true, record: "started", tmux: 1, started: 1},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				ctx := context.Background()
+				s, sess, ws := summonedFixture(t, mode)
+				s.StartDeadline = loginNow.Add(15 * time.Minute).Format(time.RFC3339)
+				dir := t.TempDir()
+				ran := filepath.Join(dir, "provider-ran")
+				s.ClaudeBin = fakeCLI(t, dir, `echo ran >> "`+ran+`"
+exit 0`)
+				restoreNow := runAgentNow
+				t.Cleanup(func() { runAgentNow = restoreNow })
+				runAgentNow = func() time.Time { return loginNow }
+				record := s.statePath(handoffRecordName)
+				block := func() {
+					t.Helper()
+					_ = os.Remove(record)
+					if err := os.Mkdir(record, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.blockFirst {
+					block()
+				}
+				var atTmux handoffOnDisk
+				runner := &fakeRunner{handle: func(c Cmd) (Result, error) {
+					switch {
+					case len(c.Args) > 0 && c.Args[0] == "has-session":
+						return Result{}, errNoSession
+					case len(c.Args) > 0 && c.Args[0] == "new-session":
+						// The record is on disk, naming this launch, before
+						// tmux is asked.
+						if err := readJSONFile(record, &atTmux); err != nil {
+							t.Errorf("tmux was asked before the handoff record was written: %v", err)
+						}
+						if tc.load {
+							path := c.Args[len(c.Args)-1]
+							var l Launch
+							if err := readJSONFile(path, &l); err != nil {
+								t.Fatalf("tmux could not load the launch: %v", err)
+							}
+							for _, d := range []string{l.Dir, filepath.Dir(l.LogPath)} {
+								if err := os.MkdirAll(d, 0o700); err != nil {
+									t.Fatal(err)
+								}
+							}
+							RunAgent(path, &syncBuffer{}, make(chan os.Signal), time.Second)
+						}
+						if tc.blockUpdate {
+							block()
+						}
+						return Result{}, tc.err
+					}
+					return Result{}, nil
+				}}
+				count := func(sub string) int {
+					n := 0
+					for _, c := range runner.calls {
+						if len(c.Args) > 0 && c.Args[0] == sub {
+							n++
+						}
+					}
+					return n
+				}
+				d := quietDaemon(s, sess, runner, loginNow)
+				step, why := d.startAgent(ctx, ws, Step{Name: "repo", State: StepOK}, "first-boot")
+				if tc.stepFails != (why != "" && step.State == StepFail) {
+					t.Fatalf("start step %+v %q, want failed=%v", step, why, tc.stepFails)
+				}
+				if tc.blockFirst && len(runner.calls) != 0 {
+					t.Fatalf("tmux was called although the handoff record was not written: %+v", runner.calls)
+				}
+				if got := count("new-session"); got != tc.tmux {
+					t.Fatalf("new-session sent %d times, want %d", got, tc.tmux)
+				}
+				var first Launch
+				if err := readJSONFile(s.statePath(launchFile), &first); err != nil {
+					t.Fatalf("the summoned launch record went: %v", err)
+				}
+				if tc.tmux > 0 && (atTmux.State != "asked" || atTmux.ConversationID != first.ConversationID || atTmux.BootID != first.BootID) {
+					t.Fatalf("the record when tmux was asked: %+v, want asked for %s/%s", atTmux, first.ConversationID, first.BootID)
+				}
+				var after handoffOnDisk
+				if err := readJSONFile(record, &after); (err == nil) != (tc.record != "") || after.State != tc.record {
+					t.Fatalf("the record after the start: %+v %v, want %q", after, err, tc.record)
+				}
+
+				me := agentPid{Pid: os.Getpid(), Start: procStartTime(os.Getpid())}
+				want := func(live bool, boot string, at time.Duration) string {
+					t.Helper()
+					switch {
+					case tc.record == "started" && mode == protocol.ModeRemote && live:
+						return protocol.AgentBusy
+					case tc.record == "started":
+						return protocol.AgentExited
+					case live, boot == "first-boot" && at < startWindow:
+						return protocol.AgentBusy
+					}
+					return protocol.AgentInterrupted
+				}
+				check := func(point, boot string, at time.Duration, live bool) {
+					t.Helper()
+					if live {
+						if err := writeJSONFile(s.statePath(pidFile), me); err != nil {
+							t.Fatal(err)
+						}
+						defer func() { _ = os.Remove(s.statePath(pidFile)) }()
+					}
+					st := CollectStatus(ctx, &fakeRunner{}, s, sess, loginNow.Add(at))
+					if w := want(live, boot, at); st.Agent.State != w {
+						t.Fatalf("%s: status %+v, want %s", point, st.Agent, w)
+					}
+					if st.Agent.ConversationID != first.ConversationID || strings.Contains(st.Agent.Error, "D-58") {
+						t.Fatalf("%s: status %+v", point, st.Agent)
+					}
+					if mode == protocol.ModeTask && (st.Agent.Task != nil) != (tc.started == 1) {
+						t.Fatalf("%s: the task's own result is not in the status: %+v", point, st.Agent.Task)
+					}
+				}
+				// The boot that started the launch, as its heartbeat reads it.
+				failed := bootRecord{BootID: "first-boot", Boot: protocol.BootReady}
+				if why != "" {
+					failed.Boot, failed.AgentError = protocol.BootFailed, why
+				}
+				if err := writeJSONFile(s.statePath(bootFile), failed); err != nil {
+					t.Fatal(err)
+				}
+				check("the launch's boot, inside the start window", "first-boot", 0, false)
+				check("the launch's boot, a live process", "first-boot", 2*time.Minute, true)
+				check("the launch's boot, after the start window", "first-boot", startWindow, false)
+
+				// Later boots, of the same pod or a recreated one, start nothing.
+				for i, p := range []struct {
+					at   time.Duration
+					live bool
+				}{{30 * time.Second, false}, {40 * time.Second, true}, {2 * time.Minute, true}, {time.Hour, false}} {
+					boot := fmt.Sprintf("boot-%d", i+2)
+					runner.calls = nil
+					runAgentNow = func() time.Time { return loginNow.Add(p.at) }
+					d2 := quietDaemon(s, sess, runner, loginNow.Add(p.at))
+					if step, why := d2.startAgent(ctx, ws, Step{Name: "repo", State: StepOK}, boot); why != "" || step.State == StepFail || len(runner.calls) != 0 {
+						t.Fatalf("%s: a later boot started again: %+v %q %+v", boot, step, why, runner.calls)
+					}
+					if err := writeJSONFile(s.statePath(bootFile), bootRecord{BootID: boot, Boot: protocol.BootReady}); err != nil {
+						t.Fatal(err)
+					}
+					check(fmt.Sprintf("%s at %s, live=%v", boot, p.at, p.live), boot, p.at, p.live)
+				}
+				data, err := os.ReadFile(ran)
+				if err != nil && !errors.Is(err, os.ErrNotExist) {
+					t.Fatal(err)
+				}
+				if got := strings.Count(string(data), "ran\n"); got != tc.started {
+					t.Fatalf("the provider ran %d times, want %d", got, tc.started)
+				}
+			})
+		}
+	}
+}
+
+// The status table of R2-F1a for each record state, read straight from the
+// files agentd leaves: a record of another launch, a truncated one, a
+// directory in its place and no record at all (a launch record written by
+// round 2's code, or a boot that died between the two writes) all count as
+// "asked". "nothing-started" and a matching fence refusal are failed,
+// whatever the pid file says.
+func TestSummonedStartHandoffStatusTable(t *testing.T) {
+	for _, mode := range []string{protocol.ModeTask, protocol.ModeRemote} {
+		for _, rec := range []string{"asked", "ambiguous", "nothing-started", "started", "fence-refused", "other-launch", "truncated", "directory", "none"} {
+			t.Run(mode+"/"+rec, func(t *testing.T) {
+				ctx := context.Background()
+				s, sess, ws := summonedFixture(t, mode)
+				first, err := BuildLaunch(s, sess, ws, "first-boot", loginNow)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := writeJSONFile(s.statePath(launchFile), first); err != nil {
+					t.Fatal(err)
+				}
+				path := s.statePath(handoffRecordName)
+				put := func(state, conversation string) {
+					t.Helper()
+					if err := writeJSONFile(path, map[string]any{"state": state, "at": loginNow, "conversationId": conversation, "bootId": first.BootID}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				switch rec {
+				case "asked", "ambiguous", "nothing-started", "started":
+					put(rec, first.ConversationID)
+				case "fence-refused":
+					put("ambiguous", first.ConversationID)
+					if err := writeJSONFile(s.statePath(startRefusedFile), startRefused{Reason: protocol.StartDeadlinePassed, At: loginNow, ConversationID: first.ConversationID, BootID: first.BootID}); err != nil {
+						t.Fatal(err)
+					}
+				case "other-launch":
+					put("nothing-started", "another-conversation")
+				case "truncated":
+					if err := os.WriteFile(path, []byte(`{"state":"nothing-st`), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				case "directory":
+					if err := os.Mkdir(path, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				me := agentPid{Pid: os.Getpid(), Start: procStartTime(os.Getpid())}
+				for _, p := range []struct {
+					boot string
+					at   time.Duration
+					live bool
+				}{
+					{"first-boot", 0, false}, {"first-boot", 0, true}, {"first-boot", startWindow, false}, {"first-boot", time.Hour, true},
+					{"later-boot", 0, false}, {"later-boot", 30 * time.Second, true}, {"later-boot", time.Hour, false},
+				} {
+					_ = os.Remove(s.statePath(pidFile))
+					if p.live {
+						if err := writeJSONFile(s.statePath(pidFile), me); err != nil {
+							t.Fatal(err)
+						}
+					}
+					// The boot's own error never decides a summoned launch's state.
+					if err := writeJSONFile(s.statePath(bootFile), bootRecord{BootID: p.boot, Boot: protocol.BootFailed, AgentError: "tmux: exit status 1"}); err != nil {
+						t.Fatal(err)
+					}
+					var want string
+					switch {
+					case rec == "nothing-started" || rec == "fence-refused":
+						want = protocol.AgentFailed
+					case p.live:
+						want = protocol.AgentBusy
+					case p.boot == "first-boot" && p.at < startWindow:
+						// "started" as today; "asked" and "ambiguous" alike.
+						// A later boot never counts the start window.
+						want = protocol.AgentBusy
+					default:
+						want = protocol.AgentInterrupted
+					}
+					st := CollectStatus(ctx, &fakeRunner{}, s, sess, loginNow.Add(p.at))
+					if st.Agent.State != want {
+						t.Fatalf("%s at %s live=%v: status %+v, want %s", p.boot, p.at, p.live, st.Agent, want)
+					}
+					if strings.Contains(st.Agent.Error, "D-58") {
+						t.Fatalf("a summoned status promises a resume: %q", st.Agent.Error)
+					}
+				}
+			})
+		}
+	}
+}
+
+// R2-F1b: only a lookup failure and a path error of fork/exec prove the tmux
+// client never ran. The real runner's own errors for a missing binary and for
+// files it cannot execute are those; any other error, another path error
+// included, may have started. No real program runs here: each command fails
+// before it executes, and its environment carries no cluster variable.
+func TestTmuxNeverRanOnlyForLookupAndExecFailures(t *testing.T) {
+	dir := t.TempDir()
+	notExec := filepath.Join(dir, "tmux-not-executable")
+	if err := os.WriteFile(notExec, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	noFormat := filepath.Join(dir, "tmux-no-format")
+	if err := os.WriteFile(noFormat, []byte("not a program\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	run := ExecRunner{BaseEnv: []string{"PATH=/nonexistent"}}
+	runErr := func(name, cwd string) error {
+		t.Helper()
+		_, err := run.Run(context.Background(), Cmd{Name: name, Dir: cwd, Args: []string{"new-session", "-d"}})
+		if err == nil {
+			t.Fatalf("%s ran", name)
+		}
+		return err
+	}
+	for _, tc := range []struct {
+		name     string
+		err      error
+		neverRan bool
+	}{
+		{"lookup failure", runErr("agentd-test-no-such-tmux-780", ""), true},
+		{"not executable", runErr(notExec, ""), true},
+		{"no executable format", runErr(noFormat, ""), true},
+		// The runner sets SysProcAttr, so a missing directory fails in the
+		// child before its exec, and Go reports it as fork/exec too.
+		{"a missing directory", runErr(noFormat, filepath.Join(dir, "missing")), true},
+		{"a wrapped read path error", fmt.Errorf("tmux: %w", &fs.PathError{Op: "read", Path: "|0", Err: os.ErrClosed}), false},
+		{"a path error of open", &fs.PathError{Op: "open", Path: "/dev/null", Err: os.ErrPermission}, false},
+		{"a non-zero exit", &CmdError{Name: "tmux", Sub: "new-session", ExitCode: 1}, false},
+		{"a time limit", fmt.Errorf("tmux: %w", context.DeadlineExceeded), false},
+		{"a lost answer", errors.New("tmux: signal: killed"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tmuxNeverRan(tc.err); got != tc.neverRan {
+				t.Fatalf("tmuxNeverRan(%v) = %v, want %v", tc.err, got, tc.neverRan)
+			}
+		})
+	}
+}
+
+// R2-F1b end to end: the daemon's first launch of a summoned session through
+// the real runner, with a tmux it cannot find or cannot execute, records
+// "nothing-started", and the status is failed on that boot and every later
+// one, which starts nothing.
+func TestSummonedRealTmuxLookupAndExecFailuresFail(t *testing.T) {
+	for _, mode := range []string{protocol.ModeTask, protocol.ModeRemote} {
+		for _, bin := range []string{"missing", "not-executable"} {
+			t.Run(mode+"/"+bin, func(t *testing.T) {
+				ctx := context.Background()
+				s, sess, ws := summonedFixture(t, mode)
+				s.TmuxBin = "agentd-test-no-such-tmux-780"
+				if bin == "not-executable" {
+					s.TmuxBin = filepath.Join(t.TempDir(), "tmux")
+					if err := os.WriteFile(s.TmuxBin, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				run := ExecRunner{BaseEnv: []string{"PATH=/nonexistent"}}
+				runner := &fakeRunner{handle: func(c Cmd) (Result, error) {
+					if c.Name == s.TmuxBin {
+						return run.Run(ctx, c)
+					}
+					return Result{}, nil
+				}}
+				d := quietDaemon(s, sess, runner, loginNow)
+				step, why := d.startAgent(ctx, ws, Step{Name: "repo", State: StepOK}, "first-boot")
+				if why == "" || step.State != StepFail {
+					t.Fatalf("the failed tmux start was not reported: %+v %q", step, why)
+				}
+				var rec handoffOnDisk
+				if err := readJSONFile(s.statePath(handoffRecordName), &rec); err != nil || rec.State != "nothing-started" {
+					t.Fatalf("handoff record %+v %v, want nothing-started", rec, err)
+				}
+				for i, at := range []time.Duration{0, 30 * time.Second, time.Hour} {
+					boot := "first-boot"
+					if i > 0 {
+						boot = fmt.Sprintf("boot-%d", i+1)
+						runner.calls = nil
+						d2 := quietDaemon(s, sess, runner, loginNow.Add(at))
+						if step, why := d2.startAgent(ctx, ws, Step{Name: "repo", State: StepOK}, boot); why != "" || step.State == StepFail || len(runner.calls) != 0 {
+							t.Fatalf("%s: a later boot started again: %+v %q %+v", boot, step, why, runner.calls)
+						}
+					}
+					if err := writeJSONFile(s.statePath(bootFile), bootRecord{BootID: boot, Boot: protocol.BootReady}); err != nil {
+						t.Fatal(err)
+					}
+					if st := CollectStatus(ctx, &fakeRunner{}, s, sess, loginNow.Add(at)); st.Agent.State != protocol.AgentFailed {
+						t.Fatalf("%s: status %+v, want failed", boot, st.Agent)
+					}
 				}
 			})
 		}

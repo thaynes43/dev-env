@@ -163,10 +163,9 @@ var agentdLayout = []historyRule{
 	// run-agent's start fence refused a summoned launch's spawn (OP780): how
 	// that launch ended, as tui-exit.json and task-result.json say for others.
 	{"start-refused.json", classHistory, kindFile},
-	// The tmux start of a summoned session's first launch returned an error
-	// (OP780 fix round 2): how that launch ended, and whether it may have
-	// started.
-	{"start-failed.json", classHistory, kindFile},
+	// The tmux handoff of a summoned session's first launch (OP780 fix round
+	// 3): written before tmux is asked, then how far that start got.
+	{"start-handoff.json", classHistory, kindFile},
 	{"task-events.jsonl", classHistory, kindFile},
 	{"task-source.json", classHistory, kindFile},
 	{"child-decision.json", classHistory, kindFile},
