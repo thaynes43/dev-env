@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.107.0](https://github.com/thaynes43/dev-env/compare/v2.106.0...v2.107.0) (2026-11-13)
+
+
+### Features
+
+* **api:** an optional session title set at create and passed to Remote Control (DESIGN-065 slice 1, OP785) ([#1104](https://github.com/thaynes43/dev-env/issues/1104)) ([e6f36eb](https://github.com/thaynes43/dev-env/commit/e6f36eb8792defa56e75f678ddbdf6e501831705))
+* **apiserver:** a create past its pool is Queued and the queues hold across both API replicas (DESIGN-064 5.9, OP778) ([#1094](https://github.com/thaynes43/dev-env/issues/1094)) ([0977582](https://github.com/thaynes43/dev-env/commit/09775825dbabd2e6f25c4d641763f4c256b69daf))
+* **controller:** a hung, held, lost or stopped summoned session is closed once and frees its lane (DESIGN-064 6.6 and 6.7, OP779) ([#1095](https://github.com/thaynes43/dev-env/issues/1095)) ([59169f1](https://github.com/thaynes43/dev-env/commit/59169f1ff9685a73945df985b372abe304659188))
+* **controller:** a summoned session gets a pod only after the leader admits it (DESIGN-064 5.9, OP777) ([#1091](https://github.com/thaynes43/dev-env/issues/1091)) ([c4bc870](https://github.com/thaynes43/dev-env/commit/c4bc870d914e48d2ac446e29ba39b6ba58c7d34a))
+* **operator:** summoned upgrades and curation wait while the plan's usage window is past a line set by flag (DESIGN-064 6.9, OP783) ([#1101](https://github.com/thaynes43/dev-env/issues/1101)) ([14f42c9](https://github.com/thaynes43/dev-env/commit/14f42c986c244c339d54329213eee39ea65d27d0))
+
 ## [2.106.0](https://github.com/thaynes43/dev-env/compare/v2.105.0...v2.106.0) (2026-11-12)
 
 
