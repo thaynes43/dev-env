@@ -2139,6 +2139,71 @@ remediation, whose escalation pages. v1 paged this case only after its
 180-minute watchdog. Once #743 lands it is `no-usable-model`, which pages
 (C9).
 
+**Correction, 2026-11-12 (story 783, slice a of #743; coordinator rulings on
+item 743 comment 7458, the coordinator's answer to op783-q-1 and the
+coordinator's rulings R1 to R3 on the review of PR 1101; not a ruling by
+Tom).** The text above stays; where it differs, this governs.
+
+1. *The lines are operator flags with no code defaults* (Q12). An unset line
+   is off. `--summon-normal-max-five-hour`, `--summon-bulk-max-five-hour`
+   and `--summon-bulk-max-seven-day` each take a whole number from 1 to 100;
+   a set line needs a positive `--summon-usage-max-age`, or the operator
+   refuses to start. The values above (95, 80, the weekly line unset, 15m)
+   are what the install will set in the operator HelmRelease, in git, not in
+   code; story 783 sets none. This replaces item 743's thresholds "in
+   `api/`".
+2. *Stale, missing or unreadable admits and logs, for every priority* (Q13).
+   A fresh reading that lacks a window counts as missing for that window's
+   line only. So does a window whose reset is at or before the gate's clock
+   (op783-q-1, gap B): its numbers describe an old window, and agentd leaves
+   such windows out when it builds a reading. A reading whose `readAt` is
+   after the gate's clock (the clock went back, or another node's is ahead)
+   is unusable and admits for every line, with reason `reading-from-future`;
+   its age stays negative, never zero (ruling R1 on PR 1101). Staleness and
+   a window's reset are judged on the clock after the read returns, past the
+   read and any wait for the lock; the 30-second reuse below is measured
+   from before the read (ruling R2 on PR 1101). A reading once judged stale
+   never holds again (story 783 fix round 2, coordinator rulings in PR 1101
+   comment 6839647832; not a ruling by Tom): the gate keeps, per provider,
+   the newest `readAt` it has judged stale, and that reading or an older one
+   admits with reason `stale` whatever the clock says later; a strictly
+   newer one is judged normally. `Decide` stays pure: the gate passes the
+   mark in as the reading's missing reason, and the read cadence is
+   unchanged. Limit: the mark is in the operator's memory and starts empty
+   when the operator starts or another replica takes the lead, so what the
+   clock did before then is unknown.
+3. *What the readings are* (the slice plan, read at `59169f1f` and live at
+   21:30Z). ConfigMap `dev-env-system/dev-env-session-allowances` is written
+   by the operator's API on the heartbeats of remote and local Claude
+   sessions on the keeper's login (`--enable-session-allowances`), only when
+   a reading's `readAt` is newer than the last one written, and then at most
+   every 5 minutes per provider, or after 1 minute when a window's reset
+   moved by more than 2 minutes or a window came or went. `readAt` is when
+   the numbers last changed, not when they were last seen: each session's
+   agentd keeps the earlier time while its values stay the same. So a
+   reading can look older than it is, never newer. Summoned tasks run
+   on the static token and never write one. At 21:30Z the newest Claude
+   reading was 29.5 minutes old and carried only the 7-day window (90 %);
+   `dev-env-provider-allowances` was 8 days old. The readings measure the
+   keeper login's plan; that the static token draws on the same plan is this
+   design's statement, not verified in code (Q14). So the gate is best
+   effort and fails open, and "they go stale exactly when nobody is working"
+   above overstates it (R3 on PR 1101): an unchanged reading ages while Tom
+   works, so a plan in use whose numbers have not moved for the max age
+   admits; and a high reading stays fresh for up to the max age after he
+   stops, so the gate can hold briefly when nobody is working.
+   On R33 above: the plan found the session readings the only fresh source,
+   and the gate reads only them.
+4. *The seam stays boolean* (Q15). The gate is `Reconciler.SummonQuota`,
+   built in `cmd/dev-env-operator/main.go` from `SessionAllowanceStore.Newest`
+   and `internal/summonquota.Decide`. It gets no pass id, so one read's
+   result answers for 30 seconds on the gate's own clock (op783-q-1, gap A):
+   at most one read per 30 seconds, with a 5-second timeout that admits.
+   Story 743b reshapes the seam to carry the decision, can make the bound
+   exact per pass, and adds `quota-hold-expired` and the numbers in the
+   condition. Until then the condition reads "held: quota" and a curation
+   run held past its `maxHold` closes `hold-expired`.
+
 ### 6.10 OP745: joinable remote sessions with a verified link
 
 - A summoned `remote` session on profile `ops` is created with the caller's
