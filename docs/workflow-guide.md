@@ -1897,8 +1897,8 @@ None is a ruling by Tom.
   `status.summon.pages[]` (`escalation-held`, `escalation-reminder`). The
   terminal page is not stored on the Session: the keeper derives it from
   `status.summon.closed` (lane, state, source, reason) with one table,
-  `summonoutcome.TerminalPage`. A close whose row says digest pages nothing; the
-  daily digest is story 742b, not built yet.
+  `summonoutcome.TerminalPage`. A close whose row says digest pages nothing;
+  it goes into the daily digest (below).
 - **The table.** A report of `failed` pages `failed` and a report of
   `escalate` pages `escalated`, in every lane but remediation. A remediation
   never pages for itself: its filing will (story 768). Unreported, a quiet exit
@@ -1952,6 +1952,34 @@ None is a ruling by Tom.
   event that finds the window full is recorded `capped` and never paged. When the window has room again,
   the first page is `[dev-env] more-events: N more events were not paged`,
   which counts each capped event once. Ask pushes keep their own cap.
+- **The digest** (story 792, slice b of 742; coordinator rulings on item 742
+  comment 7457 and answer op792-q-1, none a ruling by Tom). Every close whose
+  row says digest gets one line in one quiet message, `[dev-env] digest`, at
+  priority -1 and at any hour: `<session> <lane> <state> <reason>`, with no
+  note text, each word in the shape a page shows it (else `unknown`). An
+  event the cap held back gets a line too, `<session> <lane> capped
+  <event>`, and stays counted in the `more-events` page. Only closes and
+  capped events at or after the pager's first run (`digest.since`, set by
+  the first tick of a keeper with the digest) are listed. The digest goes 24
+  hours after the last one, to the second, or early once 8 lines are
+  pending, and never while nothing is pending. Before the first digest the
+  reference is the pager's first run, so the first real digest after install
+  can wait up to a day; v1's went at once. It is outside the cap: it takes no
+  slot and a full hour of pages does not delay it. Its one link is the
+  console's sessions list. The message, footer included, is at most 950
+  characters of whole lines; when lines are left out, a footer says how many,
+  and they are in that same digest, never sent again. Once each: a line's
+  ledger entry (`<session UID>/digest`) and its pending line are written
+  together; the digest's reservation moves every pending line to
+  `digest.listed` and begins its record in one write before the send. A
+  refused, conflicting or unconfirmed reservation sends nothing, one saved
+  past its deadline is `failed`, an unknown result is `ambiguous`, and
+  nothing is retried, across restarts and between two keepers. Its record
+  holds the title, priority, time, state, line count and request id, never
+  the text. An entry the digest still needs is never pruned. At most 256
+  lines wait at once (`summon digest pending capacity reached`). A session
+  deleted before the next tick can miss its line, and a capped event a keeper
+  without the digest recorded is in no digest.
 - **The text.** Fixed templates in keeper source. A page starts `[dev-env]`
   and the event; a drill starts `DRILL`. A session's note follows the label
   `session note:`. Every control or format character and every line or

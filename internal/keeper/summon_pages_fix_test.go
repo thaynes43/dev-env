@@ -346,12 +346,13 @@ func TestSummonPagesLedgerRequiresEveryMember(t *testing.T) {
 		}
 	}
 	// The populated ledger itself is read, scanned and sent from: the summary
-	// of its two capped events, then the session's page.
+	// of its two capped events, then the session's page, then (story 792) the
+	// digest of its pending line, whose last digest was a year before.
 	f := newSummonFix(t)
 	f.add(f.failedSession("wo-upgrade-1", time.Minute))
 	set(f, summonPopulatedLedger)
 	f.tick()
-	if f.push.count() != 2 || f.lists != 1 {
+	if f.push.count() != 3 || f.lists != 1 {
 		t.Fatalf("the populated ledger was not read: sends %d lists %d logs %s", f.push.count(), f.lists, f.logs.String())
 	}
 	for _, c := range cases {

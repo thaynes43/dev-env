@@ -2367,6 +2367,77 @@ from the corrections above, this governs. As built:
   `a_b.example`, the 200-character cut after redaction and a host at the cut
   keep their rules.
 
+**Correction, 2026-11-13: story 792, coordinator rulings on item 742 comment
+7457; not a ruling by Tom.** Story 792 (slice b of #742) builds the digest
+described under "The digest" below, in the keeper's pager tick
+(`internal/keeper/summon_digest.go`), with the pager's own client, ledger and
+Pushover sender: no new client, lock, transport, goroutine or flag. It also
+folds in the coordinator's answer op792-q-1 (also not Tom's). Where this
+differs from the text below and the corrections above, this governs. As
+built:
+
+- *What is listed.* A close whose terminal row is the digest gets one line,
+  `<session> <lane> <state> <reason>`, with no note text (Q6). Each word is
+  shown only in the shape a page shows it: the stored session name or
+  `unknown`, and each operator word only when it is at most 64 lower-case
+  letters, digits and hyphens, else `unknown`. An event the hourly cap left
+  out gets a line too (Q5): `<session> <lane> capped <event>`, told apart by
+  the state word `capped`, which no outcome state uses; a capped drill reads
+  `<id> drill capped drill`. The capped event stays `capped` in the dedupe
+  and is still counted in the `more-events` page.
+- *The watermark (Q6).* `digest.since` is set at the first tick of a keeper
+  that has the digest, which loads the ledger with the Pushover credentials
+  present; story 782's keeper writes it 0. A close is in a digest when its
+  close time is at or after that second; so is a capped event recorded at or
+  after it. Earlier closes and capped events are in no digest.
+- *When it goes.* 24 hours after the last digest, to the second, or early
+  once 8 lines are pending; never while nothing is pending; at any hour (Q7).
+  Before the first digest the reference is the watermark (op792-q-1): the
+  first digest goes 24 hours after the pager's first run, or early at 8. This
+  differs from v1 (`ops-digest.sh`, whose first digest goes at once) only
+  inside the first 24 hours after the pager's first run, so the first real
+  digest after install can wait up to a day. The digest is outside the hourly
+  cap (Q5): it takes no slot of the window and a full window does not delay
+  it.
+- *The message.* Title `[dev-env] digest`, priority -1, a fixed head, the
+  lines in the order they were pended, and the one link, the console's
+  sessions list. The message, footer included, is at most 950 characters and
+  shows only whole lines. When the lines do not all fit, a footer says how
+  many were left out; a line left out is in that same attempt, listed and
+  never sent again, and only the footer's number names it. v1 cuts at 950 in
+  the middle of a line and adds its footer after the cut.
+- *Once, across restarts.* A line's dedupe entry, `<session UID>/digest`
+  (state `recorded`), and its pending line are written together, so a close is
+  pended once. The digest's reservation moves every pending line to
+  `digest.listed` with the attempt's time, sets `digest.lastAt` and begins the
+  digest's record, in one write before the send. A refused, conflicting or
+  unconfirmed reservation sends nothing; a reservation that commits but
+  answers an error, or a keeper stopped after it, sends nothing and the
+  attempt stays `recorded`; a reservation saved after its dispatch deadline
+  is `failed`, as a page's is; an unknown result is `ambiguous`; nothing is
+  retried. Two keepers racing for one reservation send once. Each outcome
+  entry then takes its digest's state.
+- *Content-free (Q9).* The digest's record holds the fixed title, priority
+  -1, its time, its state, its line count and how many were left out, and the
+  Pushover request id once sent; never the text or a link. Once sent, what
+  stays of its lines is their keys in `digest.listed`.
+- *Pruning.* An entry still goes only on proof (story 782's rule), and never
+  while the digest needs it: a pending line's entry, and a capped event's not
+  yet listed, stay whatever the proof says, and cost no proof read. A listed
+  key whose entry was pruned is dropped at the next digest's reservation. A
+  pending line whose entry a keeper without the digest pruned gets it back,
+  and the store never saves an empty dedupe beside page or digest records,
+  which load refuses as a reset.
+- *Bounds.* At most 256 lines wait at once; more wait for the next tick, and
+  the keeper logs `summon digest pending capacity reached`, at most once a
+  tick. A line needs a dedupe entry: a full dedupe logs `summon page dedupe
+  capacity reached` and the line waits.
+- *Stated limits.* As Q10 says, a session deleted before the keeper's next
+  tick can miss its line. A capped event recorded by a keeper without the
+  digest, or before the watermark, is in no digest. The digest proves
+  attempts, not delivery; 742's acceptance asks Tom once whether the first
+  real digest arrived.
+
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row
 says: one terminal event or the digest. The reason is the one 6.6's close
