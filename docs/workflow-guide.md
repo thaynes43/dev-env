@@ -2241,6 +2241,18 @@ session without one is built exactly as before.
   `interrupted`. A remote one reports that, not `login-required`.
   `BuildResume` and the explicit Claude continuation refuse a summoned
   session too. A session without `caller` boots exactly as before.
+  When the tmux start of a summoned session's first launch returns an
+  error, its `launch.json` stays (story 780 fix round 2, coordinator rulings
+  in PR 1100 comment 6839380816; not a ruling by Tom): the provider may have
+  started, so no later boot starts it again. agentd records the error in
+  `~/.agentd/start-failed.json`, and the status reports the launch `failed`
+  when nothing can have started (tmux was never asked because its session
+  already existed, the tmux client could not be run, or the start fence
+  refused the spawn) and `interrupted` for any other error, in that boot
+  and every later one. It is never `busy`, `idle` or `waiting`, the states
+  the operator counts as running.
+  An ordinary launch's record still goes on such an error, and a later boot
+  starts it again.
 - *Not charged* (ruling D5 on item 741). A Queued session whose dispatch id
   the ledger does not hold, or holds for another name, is never admitted. It
   is closed by its `onUnreported` (a remediation `escalated`, with its pending
@@ -2287,8 +2299,11 @@ session without one is built exactly as before.
     it. This bound lets a pod the operator can stop free its lane when it
     has stopped, so the next session of a single-flight lane never overlaps
     it. A pod that cannot go (never scheduled, a partitioned node, a rescue
-    that hangs) holds its lane for at most 5 minutes after the close, not
-    forever.
+    that hangs) holds its lane until the later of the start deadline plus
+    one minute and 5 minutes after the close, subject to a reconcile; not
+    forever, and not always within 5 minutes of the close: a close 5 minutes
+    after admission holds until 11 minutes after it (story 780 fix round 2,
+    coordinator rulings in PR 1100 comment 6839380816; not a ruling by Tom).
 
   Before both have passed, the release waits for the pod to go, by the rows
   above. While only the two bounds hold such a pod, the operator reconciles
@@ -2308,19 +2323,26 @@ session without one is built exactly as before.
   `heartbeat-lost` and the like), the operator suspends it with
   `suspended-by: summon-close`. Since story 780 it does the same before a
   release on the start fence alone, with the pod still present: the suspend
-  is written first, then the release, so the pod still goes. A remote session's suspend rescues and
+  is written first, then the release, and a task's stop stays due after the
+  release, so the pod still goes. A remote session's suspend rescues and
   deletes its pod as any suspend does, and the "pod gone" rule releases. A
   task's executor is a private one, which a suspend never deletes: for a
-  closed, unreleased summoned task that is suspended, by the operator or by
-  anyone, the private executor stop applies (DESIGN-025 4: the pod's
-  `activeDeadlineSeconds`). The kubelet ends the pod, its terminal record is
-  written, and the terminal-phase row releases. The pod object and the
+  summoned task the operator closed (`closed.source` `unreported`) that is
+  suspended, by the operator or by anyone, the private executor stop
+  applies (DESIGN-025 4: the pod's `activeDeadlineSeconds`), released or
+  not, with its retries, until the recorded executor has ended (story 780
+  fix round 2). So a lane released on the start fence alone still has its
+  old pod stopped, even when the first reconcile comes after both bounds or
+  the stop failed until then. A session that reported its own outcome keeps
+  its pod for the post-mortem, and the owner's HOME-expiry hold still
+  blocks the stop. The kubelet ends the pod, its terminal record is
+  written, and the terminal-phase row releases if the lane is still held. The pod object and the
   volume stay; nothing is deleted, and the task clean-up of ADR-020 applies
   later as to any ended task. Limit: a recorded pod that is never scheduled
   has no start time, so the stop cannot end it. Its session is still closed
   (a remediation escalates). With an image that carries the start fence, the
-  fence's row above frees its lane 5 minutes after the close (story 780 fix
-  round 1). With any other image the lane holds until the pod schedules
+  fence's row above frees its lane at the later of its two bounds (story 780
+  fix rounds 1 and 2). With any other image the lane holds until the pod schedules
   (then agentd refuses the late launch and the stop ends it). A reap stops
   such a pod the same way, so it does not free the lane sooner; this was
   not tested further.

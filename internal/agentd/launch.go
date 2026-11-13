@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +42,9 @@ const (
 	// startRefusedFile records run-agent's refusal to spawn a summoned
 	// session's provider past its start deadline (DESIGN-064 5.9, N2).
 	startRefusedFile = "start-refused.json"
+	// startFailedFile records that the tmux start of a summoned session's
+	// first launch returned an error (DESIGN-064 5.9, OP780 fix round 2).
+	startFailedFile = "start-failed.json"
 )
 
 // Launch is everything `agentd run-agent` needs to run the agent: agentd
@@ -429,6 +434,42 @@ func claudeCredentialCheck(s Settings, sess protocol.Session) error {
 // second time (D-42), and every later boot resumes from it (D-58). A resume
 // goes to resume.json.
 func StartAgent(ctx context.Context, r Runner, s Settings, l Launch, self string) error {
+	return startLaunch(ctx, r, s, l, self, false)
+}
+
+// startFailed is ~/.agentd/start-failed.json: the tmux start of the summoned
+// session's first launch it names returned an error (DESIGN-064 5.9, OP780
+// fix round 2, coordinator rulings in PR 1100 comment 6839380816). The launch
+// record stays, so no boot starts the session again. MayHaveStarted says
+// what the status reports: false only when nothing of this launch can have
+// started (tmux was never asked to start it, or the tmux client itself could
+// not be run), and the launch failed; true for any other error, since the
+// tmux server may have started run-agent and so the provider, and the launch
+// was interrupted. Reason names the error without tmux's output.
+type startFailed struct {
+	MayHaveStarted bool      `json:"mayHaveStarted"`
+	Reason         string    `json:"reason"`
+	At             time.Time `json:"at"`
+	ConversationID string    `json:"conversationId"`
+	BootID         string    `json:"bootId"`
+}
+
+// tmuxNeverRan reports whether err proves the tmux client never ran: it could
+// not be found or executed, so it sent the server nothing. Any other error (a
+// non-zero exit, a signal, a time limit, a lost answer) leaves open that the
+// server created the session and started its pane.
+func tmuxNeverRan(err error) bool {
+	var execErr *exec.Error
+	var pathErr *fs.PathError
+	return errors.As(err, &execErr) || errors.As(err, &pathErr)
+}
+
+// startLaunch is StartAgent. summoned is set only for a summoned session's
+// first launch (spec.caller, DESIGN-064 5.9): its provider starts once, so a
+// failed start never removes its launch record, and start-failed.json says
+// whether anything can have started. Every other launch keeps today's
+// behaviour, the removal and so the retry on a later boot included.
+func startLaunch(ctx context.Context, r Runner, s Settings, l Launch, self string, summoned bool) error {
 	file := launchFile
 	if l.Resume {
 		file = resumeFile
@@ -455,22 +496,42 @@ func StartAgent(ctx context.Context, r Runner, s Settings, l Launch, self string
 		return writeErr
 	}
 	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"has-session", "-t", "=" + TmuxSession}}); err == nil {
-		return fmt.Errorf("tmux session %q already exists", TmuxSession)
+		exists := fmt.Errorf("tmux session %q already exists", TmuxSession)
+		if summoned {
+			// tmux was never asked to start this launch: nothing started.
+			recordStartFailed(s, l, false, exists.Error())
+		}
+		return exists
 	}
 	_, err = r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{
 		"new-session", "-d", "-s", TmuxSession, "-x", "200", "-y", "50", "-c", l.Dir,
 		self, "run-agent", "--launch", s.statePath(file),
 	}})
 	if err != nil {
-		// Legacy starts retain their existing retry behavior. A native Codex
-		// start may have succeeded despite an ambiguous tmux response, so its
-		// durable unconfirmed launch must survive and prevent prompt replay.
-		if l.Provider != protocol.AgentCodex {
+		switch {
+		case summoned:
+			// DESIGN-064 5.9 (OP780 fix round 2): the tmux server may have
+			// started run-agent despite the error, and a summoned session's
+			// provider starts once. Its launch record stays, so no later
+			// boot starts it again (summonedLaunched).
+			recordStartFailed(s, l, !tmuxNeverRan(err), err.Error())
+		case l.Provider != protocol.AgentCodex:
+			// Legacy starts retain their existing retry behavior. A native
+			// Codex start may have succeeded despite an ambiguous tmux
+			// response, so its durable unconfirmed launch must survive and
+			// prevent prompt replay.
 			_ = os.Remove(s.statePath(file))
 		}
 		return fmt.Errorf("tmux: %s", cmdDetail(err))
 	}
 	return nil
+}
+
+// recordStartFailed writes start-failed.json for l. It is best effort: the
+// launch record already stays, so a failed write starts nothing twice; the
+// status then reads the launch record alone.
+func recordStartFailed(s Settings, l Launch, mayHaveStarted bool, reason string) {
+	_ = writeJSONFile(s.statePath(startFailedFile), startFailed{MayHaveStarted: mayHaveStarted, Reason: reason, At: time.Now().UTC(), ConversationID: l.ConversationID, BootID: l.BootID})
 }
 
 // newUUID is a random (version 4) UUID, the form `claude --session-id` wants.

@@ -24,10 +24,12 @@ type SummonStatus struct {
 	// OP768 adds filing, blocked and abandoned transitions; this slice files nothing.
 	// +optional
 	Escalation *SummonEscalationStatus `json:"escalation,omitempty"`
-	// Pages are the session's page events, each recorded once by the operator
-	// leader (DESIGN-064 6.8, ruling D9 on item 741, OP779). The keeper sends
-	// them (story 742); nothing sends them yet. Story 742 adds the terminal
-	// events. An entry is never removed or changed.
+	// Pages are the session's lifecycle page events, each recorded once by
+	// the operator leader (DESIGN-064 6.8, ruling D9 on item 741, OP779). The
+	// keeper sends them (story 742); nothing sends them yet. No terminal event
+	// is stored here or anywhere: the keeper derives a session's terminal page
+	// from its close record (ruling Q1 on item 742, built in PR 1102). An
+	// entry is never removed or changed.
 	// +kubebuilder:validation:MaxItems=8
 	// +listType=atomic
 	// +optional
@@ -72,9 +74,11 @@ type SummonExecutorStatus struct {
 	NotCreated bool `json:"notCreated,omitempty"`
 }
 
-// SummonPageEvent is a page event of DESIGN-064 6.8 recorded on a session.
-// This slice writes the two lifecycle events it decides; story 742 adds the
-// terminal events and the rest of 6.8's lifecycle events.
+// SummonPageEvent is a lifecycle page event of DESIGN-064 6.8 recorded on a
+// session. This slice writes the two lifecycle events it decides; story 742
+// adds the rest of 6.8's lifecycle events. A terminal event is never a page
+// event here: the keeper derives it from the close record (ruling Q1 on item
+// 742, built in PR 1102).
 // +kubebuilder:validation:Enum=escalation-held;escalation-reminder
 // +kubebuilder:validation:MaxLength=32
 type SummonPageEvent string
