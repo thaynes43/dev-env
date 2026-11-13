@@ -2162,6 +2162,9 @@ built:
   `é.example-http://localhost` become `[link removed]-[link removed]`,
   `x.é-http://192.0.2.1` becomes `x.é-[link removed]`, and
   `_x.y-http://192.0.2.1` and `_http://192.0.2.1` become `_[link removed]`.
+  With no word boundary, a scheme word inside a longer word is redacted too
+  (`hotel:5` becomes `ho[link removed]`); that is accepted, as removing more
+  is the safe side.
   `2.105.0`, `a.example-b`, `a_b.example` and the 200-character cut keep
   their rules.
 - *F6, the other dots.* U+3002, U+FF0E and U+FF61 count as the dot between
@@ -2174,8 +2177,10 @@ built:
   together or not at all (one `get` rule). A tick whose proof read fails logs
   `summon page proof read failed: pruning waits for the next tick`; a full
   ledger already logged `summon page dedupe capacity reached`. Each is at
-  most one line a tick, in fixed words. The install checks that the keeper's `get` on
-  AgentSessions is bound before it switches the pager on.
+  most one line a tick, in fixed words. Before the pager flag is set in
+  haynes-ops, the installer checks that the keeper's ServiceAccount is still
+  bound to `get` on AgentSessions in `dev-agents`; nothing in this repository
+  makes that check.
 
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row

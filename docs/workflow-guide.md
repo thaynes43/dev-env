@@ -1927,8 +1927,10 @@ coordinator rulings in PR 1102 comment 6841848115. None is a ruling by Tom.
   then records nothing new (fix round 3, a stated limit): a tick whose proof
   read fails logs `summon page proof read failed: pruning waits for the next
   tick`, and a full ledger logs `summon page dedupe capacity reached`, each
-  at most one line a tick and in fixed words. The install checks that the keeper's `get`
-  on AgentSessions is bound before it switches the pager on. A drill id is
+  at most one line a tick and in fixed words. Before the pager flag is set
+  in haynes-ops, the installer checks that the keeper's ServiceAccount is
+  still bound to `get` on AgentSessions in `dev-agents`; nothing in this
+  repository makes that check. A drill id is
   never forgotten: the ledger keeps up to 16, and past that a new id is refused
   and logged, and nothing is sent. Every member of `state.json` but an entry's
   `session` must be present and not null; a ledger that lacks one, or holds it
@@ -1962,6 +1964,9 @@ coordinator rulings in PR 1102 comment 6841848115. None is a ruling by Tom.
   is not a host is searched again, so `é.example-http://192.0.2.1` becomes
   `[link removed]-[link removed]`, `x.é-http://192.0.2.1` becomes
   `x.é-[link removed]` and `_http://192.0.2.1` becomes `_[link removed]`.
+  With no word boundary, a scheme word inside a longer word is redacted too
+  (`hotel:5` becomes `ho[link removed]`); that is accepted, as removing more
+  is the safe side.
   The only link is `status.remoteControl.url` when it is
   `https://claude.ai/code/session_...`; otherwise the console's sessions list.
   Page records hold the fixed title, the session name and the note's byte
