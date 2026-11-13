@@ -138,6 +138,17 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 	}
 	target, ok := renameTarget(sess, ans.Text)
 	if !ok {
+		// The CLI was already started with this title, so the provider shows
+		// it. The character rule refuses to type it, and the state stays the
+		// launch record rather than a failed rename.
+		if value, launched := firstLaunchValue(s, sess); launched && answerIsLaunch(sess, ans.Text, value) && (disk.Applied == "" || disk.Applied == value) {
+			disk.UID = sess.SessionUID
+			disk.Applied = value
+			disk.Stopped = false
+			disk.set("Applied", "launch", value, a.now())
+			disk.save(s, log, prev)
+			return
+		}
 		disk.UID = sess.SessionUID
 		disk.Stopped = true
 		disk.set("Failed", "invalid-title", "", a.now())
@@ -599,6 +610,15 @@ func titleKind(ctx context.Context, r Runner, s Settings, sess protocol.Session,
 	}
 	_, _, explicit := explicitClaudeRCStatus(ctx, r, s, sess, now)
 	return !explicit
+}
+
+// answerIsLaunch reports whether text is the role title the CLI was already
+// given. launch is the --remote-control value, which is the composed title.
+func answerIsLaunch(sess protocol.Session, text, launch string) bool {
+	if text == "" || launch == "" {
+		return false
+	}
+	return sessiontitle.Compose(sess.Model, text) == launch
 }
 
 func renameTarget(sess protocol.Session, text string) (string, bool) {

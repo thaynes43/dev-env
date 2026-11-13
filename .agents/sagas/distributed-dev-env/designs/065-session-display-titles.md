@@ -1261,8 +1261,12 @@ is idle with an empty input line. A rename is not typed while a turn runs.
    one rule. The same bound is a CEL rule on `spec.title`. agentd refuses to
    type any text that holds another character, whatever its source: the state
    is Failed, `invalid-title`, and nothing is typed. A session that already
-   has such a title keeps it. It is never typed. A wide character, a combining
-   mark, a zero-width character and U+00AD are refused. é is accepted.
+   has such a title keeps it. It is never typed. When the heartbeat answer is
+   that launch title, the state stays Applied with reason `launch`. It is not
+   Failed `invalid-title`, because the provider already shows it. A different
+   text that the character rule refuses is still Failed `invalid-title`, and
+   nothing is typed. A wide character, a combining mark, a zero-width
+   character and U+00AD are refused. é is accepted.
 2. **Cleanup.** The Backspace cleanup of this pod's own unsent text does not
    depend on busy or idle, and a spinner row does not block it. All of these
    are read fresh, directly before the keys: no attached client; the same

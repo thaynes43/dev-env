@@ -1261,6 +1261,48 @@ func TestRenameFirstLaunchTitleTypesNothing(t *testing.T) {
 	w.assertNoWrite(t)
 }
 
+func TestRenameLaunchTitleOutsideTheCharacterSetStaysApplied(t *testing.T) {
+	w := newRenameWorld(t)
+	w.boot(true)
+	title := "Cost \u2014 review"
+	launched := sessiontitle.Compose(w.sess.Model, title)
+	var l Launch
+	if err := readJSONFile(w.s.statePath(launchFile), &l); err != nil {
+		t.Fatal(err)
+	}
+	l.Argv = []string{"claude", "--remote-control", launched}
+	writeJSON(t, w.s.statePath(launchFile), l)
+	disk := w.apply(title)
+	if disk.State != "Applied" || disk.Reason != "launch" || disk.Applied != launched || disk.Stopped {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertNoWrite(t)
+	again := w.apply(title)
+	if again.State != "Applied" || again.Reason != "launch" || again.Applied != launched || again.Stopped {
+		t.Fatalf("second %+v", again)
+	}
+	w.assertNoWrite(t)
+
+	// A previous pass recorded the refusal. The next heartbeat reports the
+	// launch again, because the provider already shows that title.
+	w.saveDisk(titleDisk{Applied: launched, State: "Failed", Reason: "invalid-title", Stopped: true})
+	restored := w.apply(title)
+	if restored.State != "Applied" || restored.Reason != "launch" || restored.Applied != launched || restored.Stopped {
+		t.Fatalf("restored %+v", restored)
+	}
+	w.assertNoWrite(t)
+}
+
+func TestRenameInvalidAnswerOnFirstLaunchStaysFailed(t *testing.T) {
+	w := newRenameWorld(t)
+	w.boot(true)
+	disk := w.apply("测")
+	if disk.State != "Failed" || disk.Reason != "invalid-title" || !disk.Stopped {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertNoWrite(t)
+}
+
 func TestRenameFirstLaunchLaterTitleTypes(t *testing.T) {
 	w := newRenameWorld(t)
 	w.boot(true)
