@@ -3,8 +3,9 @@
 - **Status:** Proposed 2026-11-13, for the coordinator's review. Revised three
   times the same day: after Tom answered Q-066-01 (section 1.2), so the
   go-ahead is his word to an agent; then after two design reviews by another
-  model family, with the coordinator's rulings on each finding (section 15).
-  Nothing is built or installed. No flag, CRD change, route, command or
+  model family, with the coordinator's rulings on each finding (section 15);
+  and once more for the advisory reviewer's threads on the pull request
+  (section 15.3). Nothing is built or installed. No flag, CRD change, route, command or
   haynes-ops change exists for it.
   [ADR-028](../adrs/028-raise-a-running-session.md) is Proposed with it.
 - **Tracking:** [Story OP830](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/830).
@@ -487,8 +488,10 @@ and the target itself, may take one back. Taking back needs no word from
 Tom. It takes the create lock before it writes (R7). It writes the ledger
 first and the annotation second, so the record stops counting at the ledger
 write. It suspends at once, rescue first, a session whose pod runs on the
-raised account; there is no option to keep it running (R3). A take-back of a
-`pending` raise wins over any later notice outcome (N2). Children already
+raised account; there is no option to keep it running (R3), even when the
+target takes back its own raise, which ends its own turn (section 9). A
+take-back is never refused for a rate limit. A take-back of a `pending`
+raise wins over any later notice outcome (N2). Children already
 started keep running and keep counting against the cap. Tom is told. Section
 9.
 
@@ -496,12 +499,25 @@ started keep running and keep counting against the cap. Tom is told. Section
 profile. A raise is shown beside it, with Tom's words, in one new key that
 appears only on a session that has a raise record. Section 10.
 
-**Ruling 7. A raise never spreads.** A session raised to workbench is a
-workbench session for its own pod, its Kubernetes rights and the API routes
-that check the workbench account (section 8.4). It is not one for three
-things: it may not perform a raise; it may not launch a named coordinator
-identity (R6: today's code does not refuse it; slice (b) changes it); and its
-children never get the workbench account.
+**Ruling 7. A raise never spreads through the platform's own routes.** A
+session raised to workbench runs as the workbench account, and it holds
+everything that account holds in Kubernetes. Today that is v1's OPERATOR
+tier: pod delete, exec into pods, `services/proxy` and `pods/proxy`, Job
+create and Flux patches (`docs/v2-quickstart.md:143-151`), a tier that "lets
+an agent act as another namespace's ServiceAccount" (haynes-ops #3392,
+`.agents/HANDOFF.md:3480-3482`). That is what raising to that profile means,
+and it is Tom's choice each time; the notice says the session "will run as
+the superuser account" (the coordinator's ruling on the advisory review).
+It is also a workbench session for the API routes that check the workbench
+account (section 8.4).
+
+"Never spreads" covers the platform's own routes, and no more: through them
+a session raised to workbench may not perform a raise; it may not start a
+child on the workbench account; and it may not launch a named coordinator
+identity (R6: today's code does not refuse it; slice (b) changes it). It
+does not stop a raised pod from using its Kubernetes rights, for example to
+exec into another session's pod, a workbench-by-creation one included, and
+call the API as that pod. Nothing in this design fences that (section 12).
 
 A session is **workbench by creation** only when its `spec.profile`,
 resolved to the templates' default when empty, names a profile that runs as
@@ -623,8 +639,11 @@ below the build of slice (b) stays a written procedure (section 7.6).
    starts anything. The child cap is unchanged.
 10. **Never a named coordinator identity.** A raise never gives such a
     profile, and a raised session never launches one.
-11. **A raise never spreads** (Ruling 7). A raised session's children never
-    inherit the raised profile and are never workbench.
+11. **A raise never spreads through the platform's routes** (Ruling 7). A
+    raised session's children never inherit the raised profile and are never
+    workbench; a session raised to workbench never performs a raise or
+    launches a named coordinator. A session raised to workbench still holds
+    every Kubernetes right of the workbench account.
 12. **No restart to apply a raise; no power without a record.** The operator
     never suspends or restarts a session to apply a raise. `--restart` and
     the ordinary suspend refuse a session that is busy, waiting or attached
@@ -639,9 +658,12 @@ below the build of slice (b) stays a written procedure (section 7.6).
     change its notice ledger, only each owner change its public key, and
     nobody change the depth label after create. They are install steps of
     slice (a), each with its check (section 11).
-15. **Rate limits that survive a restart.** Per target: one record change in
-    any 60 seconds. Per performer: at most three raises in any rolling hour;
-    take-backs are not counted. Both are read from the operator ledger.
+15. **Rate limits that survive a restart, never on a take-back.** Per
+    target: one raise in any 60 seconds after the target's last raise or
+    take-back. Per performer: at most three raises in any rolling hour. Both
+    are read from the operator ledger. A take-back is exempt from every rate
+    limit, and so are the operator's own writes (activation, `unannounced`,
+    the watchdog).
 16. **Schema order.** The AgentSession and Ask CRDs do not change. The
     CallerPolicy CRD gains `spec.raise` in slice (c), so haynes-ops gets that
     copy before the operator pin that reads it.
@@ -656,8 +678,11 @@ below the build of slice (b) stays a written procedure (section 7.6).
 
 ### 6.1 The record
 
-The annotation `dev-env.haynesops.com/raise` holds one JSON object of at most
-2 KiB:
+The annotation `dev-env.haynesops.com/raise` holds one JSON object, encoded
+without HTML escaping (`json.Encoder` with `SetEscapeHTML(false)`), of at
+most 4 KiB encoded. The route builds and measures the encoded record before
+the ledger write that spends the word, and refuses a record over the bound
+then, so a refusal never spends a word:
 
 ```json
 {
@@ -748,7 +773,7 @@ may perform or take back a raise may read it.
 It takes the create lock, writes `taken-back` to the ledger and then to the
 signed record, writes its log line, suspends a session whose pod runs on the
 raised account, hands the take-back notice to the keeper, and acts as
-section 9 says. 200 with the view.
+section 9 says. 200 with the view. It is exempt from every rate limit.
 
 **Flags.** `--session-raise-profiles` (a comma list of profiles a raise may
 give) and `--enable-session-raise-dispatch`, both off by default. With both
@@ -774,7 +799,7 @@ under 30 words (DESIGN-060 section 6).
 
 | Field | Rule |
 | --- | --- |
-| `words` | Required. 1 to 300 characters, the most the notice shows in full (N11); longer words are refused. Verbatim as Tom said or typed them. When what he gave was a choice in a phone prompt, `words` holds the question as asked and the option he chose, in that order, both verbatim. No control or format characters. Refused when it matches a secret shape (below). |
+| `words` | Required. 1 to 300 characters, the most the notice shows in full (N11); longer words are refused. Verbatim as Tom said or typed them. When what he gave was a choice in a phone prompt, `words` holds the question as asked and the option he chose, in that order, both verbatim. No control or format characters, and no U+2028 or U+2029, which an encoder may escape to six bytes; so 300 characters encode to at most about 1.2 KB. Refused when it matches a secret shape (below). |
 | `where` | Required. `phone-prompt`: Tom's answer to this session's phone prompt, or a message he typed to this session; only a session caller sends it, and the API sets `session` to the caller's own name. `chat`: a chat message to the always-on agent that performs the raise; only a policy caller sends it. `own-call`: only Tom's ServiceAccount sends it, and `words` is his own reason. Any other pairing of caller and `where` is refused. |
 | `saidAt` | Required. When Tom said it, as the agent states. Not more than 5 minutes after the operator's clock and not more than 24 hours before it. This bounds the stated time against the operator's clock. It proves nothing about when Tom spoke (Ruling 8). |
 | `ref` | Optional. A nonsecret reference to where the words are also kept, such as a tracker comment, in the shape `grantattest.ValidRef` allows (`attest.go:52`). |
@@ -817,7 +842,8 @@ pager, it sends at any hour.
 
 **What it says.** Title: "[dev-env] raise: `<session>`". Message: "`<session>`
 (`<title>`) was raised by `<performer>`: profile `<from>` to `<profile>`;
-may start sessions one level deeper. It says you said: "`<words>`"
+it will run as the superuser account (said when that profile runs as the
+workbench account); may start sessions one level deeper. It says you said: "`<words>`"
 (`<where>`, `<saidAt>`). It takes effect at `<time>`, two minutes after this
 notice was accepted. To stop it: agent-run raise `<session>` --take-back".
 The words, at most 300 characters, are shown in full. The title and the
@@ -895,17 +921,32 @@ secret is shared between the operator and the keeper (N1, N10).
   and the outcome's JSON. This copies the home-retention form
   (`internal/homeretention/verify.go:95-115`). Every reader also recomputes
   `wordsHash` from `words` and refuses a mismatch.
-- **How a pair is made.** Each process makes its own pair at its first start
-  with `ed25519.GenerateKey`, writes the private key into its own Secret, and
-  publishes the public key with its `keyId` in its own public-key ConfigMap.
-  GitOps precreates both objects empty; the owner has get and update on those
-  two names only, with no create, list or watch. The private key never leaves
-  its process and its Secret; no person or agent handles it.
-- **Rotation is a re-key.** To replace a key, the coordinator first takes
-  back every raise (section 7.6), then empties the owner's Secret through
-  GitOps; the owner makes a new pair at its next start. Records signed with
-  the old key stop counting, so any raised pod that was missed is suspended
-  by the watchdog. A take-back does not rotate the key (N3); the ledger
+- **How a pair is made.** Only the leader makes a pair (the operator and the
+  keeper both run leader election), and only when its Secret holds no key.
+  It makes the pair with `ed25519.GenerateKey`, writes the private key into
+  its own Secret with a `resourceVersion` precondition, so when two replicas
+  race only one write lands, and then publishes the public key with its
+  `keyId` in its own public-key ConfigMap the same way. Every replica, the
+  writer included, signs only with the key it reads back from the Secret,
+  never with a key it holds only in memory, and checks that the published
+  public key matches it. A Secret that cannot be read, holds no key, or does
+  not match the published public key refuses every `POST` (and, for the
+  keeper, every signed outcome). GitOps precreates both objects empty; the
+  owner has get and update on those two names only, with no create, list or
+  watch. The private key never leaves its process and its Secret; no person
+  or agent handles it.
+- **Rotation is a re-key under a new name.** Flux owns only the fields its
+  manifest declares, so emptying the Secret in git would not remove the
+  `data` the owner wrote (as the advisory review notes; Flux's field
+  ownership was not read here). So the Secret's name is an operator flag
+  (and a keeper flag for the keeper's). To replace a key, the coordinator
+  first takes back every raise (section 7.6), then changes in haynes-ops the
+  precreated Secret's name and the flag that names it, for example to
+  `...-key-2`; the owner's leader makes a new pair into the new, empty
+  Secret. Records signed with the old key stop counting, so any raised pod
+  that was missed is suspended by the watchdog. Whether Flux prunes the old
+  Secret depends on its Kustomization: Unknown here; otherwise a cluster
+  admin deletes it. A take-back does not rotate the key (N3); the ledger
   match is what retires an old record.
 - **Who else can read a private key.** The operator cannot check from inside
   which other accounts can read its Secret, so it does not try. It is an
@@ -930,6 +971,7 @@ Every refusal is one plain sentence.
 | Any other caller not in Ruling 1 | 403 | "Only a superuser session, an always-on agent whose policy allows it, or Tom may raise a session." |
 | No `owner`, or empty `words` | 422 | "A raise needs Tom's words: what he said, where and when." |
 | `words` over 300 characters | 422 | "Tom's words must fit in 300 characters so the notice shows them whole." |
+| The encoded record over 4 KiB | 422 | "This raise does not fit in its record. Shorten the words or the reference." Checked before the word is spent. |
 | `where` does not match the caller | 422 | "A `<caller kind>` records only words Tom gave it directly (`<allowed where>`); have the agent he told perform the raise." |
 | `words` match a secret shape | 422 | "Tom's words look like they hold `<shape>`. Leave it out and send his words again." |
 | `saidAt` too old or in the future | 422 | "The time you give for Tom's words must be within the last 24 hours. Ask him again." |
@@ -942,7 +984,7 @@ Every refusal is one plain sentence.
 | Profile runs as a named coordinator identity | 422 | "Profile `<p>` runs as a named coordinator identity; a raise never gives one." |
 | `startSessions` at depth 0 or 1 | 422 | "Session `<name>` sits at depth `<d>` and may already start sessions." |
 | `startSessions` at depth 3 or a bad label | 422 | "Only a session at depth 2 may be raised to start sessions." |
-| Within 60 seconds of a change on the target | 429 | "Session `<name>`'s raise changed less than a minute ago. Try again in `<n>` seconds." |
+| A raise within 60 seconds of the target's last raise or take-back | 429 | "Session `<name>`'s raise changed less than a minute ago. Try again in `<n>` seconds." A take-back is never refused for a rate limit. |
 | A fourth raise by this performer in an hour | 429 | "`<caller>` has made three raises in the last hour. Try again after `<time>`." |
 | No signing key | 503 | "This operator has no raise key yet." |
 | Both flags off | 403 | "This operator does not raise sessions." |
@@ -1035,20 +1077,32 @@ pod's ServiceAccount and profile label.
 
 In every operator build that has slice (b), whatever the flags say, the
 AgentSession reconciler checks every session the operator ledger lists as
-ever raised, in any state, that has an agent pod (not a hold pod). It
-suspends the session when both hold:
+ever raised, in any state, that has an agent pod (not a hold pod). The rule
+(the coordinator's ruling on the advisory review): **the pod must have been
+built for `spec.profile`, resolved to the templates' default when empty,
+unless a record that counts (Ruling 2), is `active`, and names a profile on
+`--session-raise-profiles` covers the profile the pod was built for.** A pod
+was built for profile P when both its ServiceAccount is P's account and its
+profile label is P. Otherwise the reconciler suspends the session.
 
-- the pod's ServiceAccount is not the account of `spec.profile`, resolved to
-  the templates' default when empty; and
-- no record that counts (Ruling 2) and is `active` names a profile that is on
-  `--session-raise-profiles` and whose account is the pod's ServiceAccount.
-
-The pod's labels play no part, so patching a label does not dodge it. A
-session the ledger never listed is never touched, so a template change that
-moves a profile to another account cannot suspend sessions by itself. With
-both flags off no record is honoured, so every raised pod is uncovered and is
-suspended. Removing a profile from `--session-raise-profiles` suspends the
-sessions running raised on it. A record that does not count is no record.
+- **Both, not one.** The account alone would miss a raise to a profile that
+  runs as the same account with wider env, mounts or egress labels. The
+  label alone would miss a label patched back over a pod still on the raised
+  account.
+- **A label changed after the pod was created is a mismatch.** The reconciler
+  reads the pod's `managedFields`: a profile label owned by any field manager
+  but the operator's counts as not built for any profile. Whether anything
+  but the operator can edit a session pod's labels today is Unknown: the
+  workbench tier lists pod delete and exec, not patch
+  (`docs/v2-quickstart.md:143-151`), but cluster admins can, and no admission
+  rule in this repo fences pod labels. So slice (a) adds one as an install
+  step (section 11, rule 2).
+- **Who is touched.** A session the ledger never listed is never touched, so
+  a template change cannot suspend never-raised sessions. With both flags off
+  no record is honoured, so every raised pod is uncovered and is suspended.
+  Removing a profile from `--session-raise-profiles` suspends the sessions
+  running raised on it, whatever account it runs as. A record that does not
+  count is no record.
 
 The suspend is the operator's own: `spec.operatingMode` Suspended and
 suspended-by `raise-without-record`, under the optimistic lock of an uncached
@@ -1181,7 +1235,7 @@ reference to ADR-028. DESIGN-001 is accepted and is not edited.
 | Legacy delegate (`legacy_delegate.go:87-91`) | Requires the configured binding, depth `"1"` and `full`: a raised session is not that binding | Refused |
 | Child decisions (`pod.go:89-93`) | Only for a session whose `spec.parent` is a configured coordinator account: never a raised Claude session | Its parent is a session name: never |
 | Raise route (section 6.2) | A session raised to workbench may not perform a raise (Ruling 7) | Not workbench: refused |
-| The watchdog (section 7.5) | Reads the pod's account, never its labels | Never raised itself: not listed, never touched |
+| The watchdog (section 7.5) | Reads the pod's account and its profile label, and who last set the label | Never raised itself: not listed, never touched |
 
 ### 8.5 The depth label itself (R9)
 
@@ -1220,8 +1274,14 @@ changes it after create, so the rule costs nothing.
   no option to keep it running (R3). Its next pod runs on `spec.profile`. A
   pod that has not yet taken the raised profile is left alone. If the suspend
   write fails, the watchdog suspends it on its next pass.
+- **A self take-back.** When the target takes back its own profile raise
+  and its pod runs on the raised account, the suspend ends the caller's own
+  turn. The ledger and the record are written before the suspend, so the
+  take-back stands, but the answer may not reach the caller. Its next pod
+  runs on `spec.profile`.
 - **The notice.** A take-back notice is handed to the keeper (section 6.4).
   It never holds the take-back.
+- **No rate limit** applies to a take-back (safety rule 15).
 - **The record** is kept, with Tom's words, `takenBackBy` and `takenBackAt`.
   One log line is written. The key is not rotated (N3).
 - **Children it started.** They keep running and keep counting against the
@@ -1359,7 +1419,12 @@ sessions.**
   creates a child labelled `"3"` under the cap; a cached active record after a
   take-back does not pass; a depth-3 caller is refused; scheduled work stays
   refused; a table test of every reader in 8.3 at depth 3; rate limits hold
-  across a restart.
+  across a restart; a take-back within a minute of a raise is not refused; a
+  record over 4 KiB encoded is refused before its word is spent, and words
+  with `<`, `>` and `&` encode without escapes; two replicas starting on an
+  empty key Secret leave one key, and a replica signs only with the key it
+  read back; an empty, unreadable or mismatched key refuses `POST`; a self
+  take-back writes the ledger and the record before the suspend.
 - **Install steps, each with its check.** All in haynes-ops, before any flag.
   The admission rules follow the shape of `dev-env-maintenance-annotations`
   (section 2.5): a ValidatingAdmissionPolicy with `failurePolicy: Fail` and a
@@ -1367,8 +1432,11 @@ sessions.**
   1. *The record:* only `system:serviceaccount:dev-env-system:dev-env-operator`
      may change the annotation `dev-env.haynesops.com/raise` on an
      AgentSession.
-  2. *The depth label:* nobody may change or remove
-     `dev-env.haynesops.com/depth` on an AgentSession after create.
+  2. *The depth label and the pod's profile label:* nobody may change or
+     remove `dev-env.haynesops.com/depth` on an AgentSession after create,
+     and only the operator's account may change
+     `dev-env.haynesops.com/profile` on a pod in `dev-agents` labelled
+     `app.kubernetes.io/name: dev-env-session` (`api/v1alpha1/labels.go:85-87`).
   3. *The operator ledger and its public key:* only the operator's account
      may update or delete `dev-env-session-raise-ledger` and
      `dev-env-session-raise-operator-public`.
@@ -1424,9 +1492,11 @@ step.**
   `spec.profile`; the hold pod and the volume are unchanged; a named
   coordinator profile is never used; the watchdog suspends a listed
   session's pod that runs raised with no covering record, with the flags off,
-  after its profile left the flag, and after its label was patched back to
-  `spec.profile`, and never touches a session the ledger does not list, even
-  after a template change; a raised parent's child that names no profile
+  after its profile left the flag, after its label was patched back to
+  `spec.profile`, and when it was raised to a profile on the same account
+  with wider env or mounts, and never touches a session the ledger does not
+  list, even after a template change; a profile label set by any field
+  manager but the operator's is a mismatch; a raised parent's child that names no profile
   gets the default, never the pod label; a raised parent's child is refused
   on a workbench-account profile, the default included, and a raised
   parent's Codex host is refused when the default runs as the workbench
@@ -1513,6 +1583,15 @@ coordinator's rulings of 2026-11-13).
    start nothing and counts against the cap.
 4. **Rollback below the watchdog.** An operator build without slice (b) has
    no watchdog; section 7.6 is the procedure.
+5. **A raise to workbench is the whole workbench account** (the coordinator's
+   ruling on the advisory review). "Never spreads" binds the platform's own
+   routes only. A session raised to workbench holds every Kubernetes right of
+   that account, exec into other pods included, and can act through another
+   session's pod. That is what raising to that profile means, and it is Tom's
+   choice each time; the notice says so.
+6. **A self take-back ends the caller's turn.** When a session takes back its
+   own profile raise, the suspend cuts its own turn; the take-back stands, but
+   its answer may not reach it.
 
 ## 13. Open questions for the owner
 
@@ -1604,3 +1683,19 @@ closed; 11 new findings (4 HIGH, 6 MEDIUM, 1 LOW).
 | B10, MEDIUM | The keeper holds the signing key; no startup refusal | N1, N10 | Section 6.6 (two pairs; install check, not a startup check); slice (a) install step 6 |
 | B11, LOW | Words cut at 300 of 500; the title is not redacted | N11 | Section 6.3 (300-character cap); section 6.4 (title redacted) |
 | C | The rollback procedure and the admission rules sit in no slice; what each slice does alone | Ruling on C | Section 11 (install steps and "when run alone" per slice) |
+
+### 15.3 Advisory review threads on the pull request
+
+The automatic Claude Code reviewer left eight inline threads on dev-env PR
+1143 across the revisions. Each is answered on its thread.
+
+| Thread | What it said | Ruling | Where the design answers it |
+| --- | --- | --- | --- |
+| 4566184083, HIGH | "Never spreads" is an API rule only; a pod raised to workbench has the workbench tier's exec and can act as another pod | The coordinator's: state it, do not claim more | Ruling 7; safety rule 11; section 6.4 notice text; known limit 5 |
+| 4566184417, MEDIUM | A self take-back suspends the caller mid-call | The coordinator's: keep the suspend, say what happens | Section 9 (self take-back); Ruling 5; known limit 6 |
+| 4566293470, HIGH | The per-target 60-second limit blocks a take-back | The coordinator's: take-back is exempt from every limit | Safety rule 15; section 6.2; section 6.7; section 9 |
+| 4566293939, MEDIUM | "Used once" checks only the last taken-back record | Answered by R2 | Section 6.5 (used words); safety rule 3; section 6.3 |
+| 4566641724, MEDIUM | A same-account raise to a wider profile never trips the watchdog | The coordinator's: built for `spec.profile`, account and label both | Section 7.5; slice (a) install rule 2; slice (b) tests |
+| 4566642264, MEDIUM | A shared HMAC key lets the keeper forge | Answered by N1, N10 | Section 6.6 (two key pairs) |
+| 4566642699, MEDIUM | The 2 KiB bound breaks under JSON escaping | The coordinator's: bound the encoded record, no HTML escaping, check before spending | Section 6.1; section 6.3; section 6.7 |
+| 4567084402, MEDIUM | Key generation races between replicas; emptying the Secret through GitOps does not work | The worker's fix, for the coordinator's review | Section 6.6 (leader makes the pair, read back; rotation under a new name) |

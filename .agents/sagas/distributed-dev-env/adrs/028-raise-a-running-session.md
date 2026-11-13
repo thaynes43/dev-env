@@ -3,8 +3,9 @@
 - **Status:** Proposed 2026-11-13, for the coordinator's review. Revised three
   times the same day: after Tom's answer on how he gives the go-ahead, and
   after two design reviews by another model family, with the coordinator's
-  rulings on each finding (DESIGN-066 section 15). Nothing it decides is built
-  or installed.
+  rulings on each finding (DESIGN-066 section 15), then once more for the
+  advisory reviewer's threads on the pull request (section 15.3). Nothing it
+  decides is built or installed.
 - **Date:** 2026-11-13
 - **Decider:** The coordinator session `dev-env-fable-coordinator-1109`,
   under OpenProject #830, from a worker's draft. The only words of Tom's
@@ -83,15 +84,21 @@ pod's ServiceAccount is fixed for its life (`internal/controller/pod.go:378-394`
    counts only when it names the session's UID; its Ed25519 signature, made
    with a private key only the operator reads, verifies over every field but
    the signature, Tom's verbatim words included, and the words hash matches
-   the words; and its `id` and `state` match the operator's own ledger. A
+   the words; and its `id` and `state` match the operator's own ledger. The
+   record is encoded without HTML escaping and bounded at 4 KiB encoded,
+   checked before the word is spent. A
    replayed, edited or forged annotation counts for nothing, even where an
    admission rule is missing. It is not a spec write, so
    `metadata.generation` does not move (ADR-027).
 6. **Two key pairs, two ledgers, no shared secret.** The operator signs
    records; the keeper verifies them with the operator's public key. The
    keeper signs notice outcomes; the operator verifies them with the keeper's
-   public key. Each process makes its own Ed25519 pair (`crypto/ed25519`, as
-   the repo's home-retention receipts already use) at first start. The
+   public key. Each process's leader makes its own Ed25519 pair
+   (`crypto/ed25519`, as the repo's home-retention receipts already use) into
+   an empty Secret with a `resourceVersion` precondition, and every replica
+   signs only with the key it reads back; an empty, unreadable or mismatched
+   key refuses. A key is replaced by taking back every raise and moving the
+   owner to a newly named, empty Secret through haynes-ops. The
    operator ledger holds each raised session's record `id` and `state`, every
    used word, and the rate limits; the keeper ledger holds each notice and
    its signed outcome. Words are used once per performer across every target,
@@ -118,23 +125,33 @@ pod's ServiceAccount is fixed for its life (`internal/controller/pod.go:378-394`
    or active and not on the pod, the ordinary suspend route refuses a busy,
    waiting or attached session; the take-back route does not. A profile that
    runs as a named coordinator identity is never given.
-9. **A raise never spreads, and power never outlives its record.** A session
-   raised to workbench may not perform a raise or launch a named coordinator
-   identity: the launcher class becomes workbench by creation, which today's
-   code does not check. A raised parent is decided by its pod's account
+9. **A raise never spreads through the platform's routes, and power never
+   outlives its record.** A session raised to workbench may not perform a
+   raise or launch a named coordinator identity: the launcher class becomes
+   workbench by creation, which today's code does not check. That binds the
+   platform's own routes only. A session raised to workbench holds every
+   Kubernetes right of the workbench account, exec into other pods included,
+   and can act through another session's pod; that is what raising to that
+   profile means, it is Tom's choice each time, and the notice says the
+   session "will run as the superuser account" (the coordinator's ruling). A raised parent is decided by its pod's account
    against `spec.profile`, before any other profile case; its children get
    the profile they name or the default, never the pod's label, and are
    refused on any profile that runs as the workbench account or a named
    coordinator identity, on every path; a failed templates read refuses. In
    every operator build that has it, whatever the flags say, the watchdog
-   suspends a session the ledger lists as ever raised whose pod runs as an
-   account other than its `spec.profile`'s with no active record that covers
-   that account. Sessions never raised are never touched.
+   suspends a session the ledger lists as ever raised whose pod was not built
+   for its `spec.profile`, account and profile label both, unless an active
+   record covers the profile the pod was built for; a profile label set by
+   anyone but the operator is a mismatch. Sessions never raised are never
+   touched.
 10. **How long, taking it back, and rollback.** The coordinator's ruling: a
     raise lasts until it is taken back or the session is removed. Taking it
-    back needs no word from Tom: ledger first, then the record; it suspends at
-    once a pod on the raised account, announces the take-back, and releases
-    the grants the raised pod requested. The key is not rotated on take-back.
+    back needs no word from Tom and is exempt from every rate limit: ledger
+    first, then the record; it suspends at once a pod on the raised account,
+    announces the take-back, and releases the grants the raised pod
+    requested. When a session takes back its own profile raise, the suspend
+    ends its own turn and the answer may not reach it; the take-back stands.
+    The key is not rotated on take-back.
     Both flags are off by default. Rollback below the build that has the
     watchdog is a written take-back-first procedure.
 
@@ -172,6 +189,7 @@ pod's ServiceAccount is fixed for its life (`internal/controller/pod.go:378-394`
 | C-76 | Neutral: new state outside the AgentSession: two private-key Secrets, two public-key ConfigMaps and two ledger ConfigMaps, with admission rules, all set up in haynes-ops before any flag. |
 | C-77 | Neutral: rollback below the build that has the watchdog is a take-back-first procedure (known limit 4). |
 | C-78 | Neutral: the CallerPolicy CRD gains `spec.raise`, so haynes-ops gets that copy before the operator pin that reads it. An older `agent-run` cannot read a raised session with `show --json --once` or `usage export`. |
+| C-79 | Bad: a session raised to workbench holds the whole workbench account in Kubernetes; "never spreads" binds only the platform's routes (DESIGN-066 known limit 5). |
 
 ## What I could not determine
 
