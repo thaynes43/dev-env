@@ -21,24 +21,24 @@ package apiserver
 // whose last attempt mark is younger than summonledger.AttemptHold: a create
 // under way, or one that failed within that hold. A charge records no lane or
 // priority, so it is put in the queue of the policy entry its request hash
-// names (summonChargeQueues); one that no current entry names counts in every
-// queue, so a bound can refuse early (coordinator answer op778-q-1).
+// names (summonledger.ChargeQueues); one that no current entry names counts in
+// every queue, so a bound can refuse early (coordinator answer op778-q-1).
 // Priority is bound in the hash, so a policy edit cannot move a charge to
 // another queue. The bounds assume Session creates land within the attempt
 // hold: each late landing can add one Queued Session, while the leader still
 // bounds admission by lane and pool (OP778 fix round 1, F1/F2).
+//
+// Which queue a session or charge is in, and the count itself, live in
+// internal/summonledger (story 800), a leaf package the operator leader's
+// filing can import too; the bound and the refusal stay here.
 
 import (
 	"net/http"
-	"slices"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/summonledger"
-	"github.com/thaynes43/dev-env/internal/summonoutcome"
 )
 
 // summonQueueDefault is limits.queued's and limits.queuedUrgent's CRD
@@ -46,110 +46,21 @@ import (
 // reads as the default.
 const summonQueueDefault = 4
 
-// summonQueue is one of a caller's queues: limits.queued (urgent false), or
-// limits.queuedUrgent for one pool (urgent true; escalations picks the
-// escalations pool, else the concurrent pool).
-type summonQueue struct {
-	urgent      bool
-	escalations bool
-}
-
-// summonQueues is every queue, the ones a charge no entry names counts in.
-var summonQueues = []summonQueue{{}, {urgent: true}, {urgent: true, escalations: true}}
-
-// summonQueueOf is the queue of a session or entry of priority p in lane l.
-// Normal and bulk share one queue whatever the lane; urgent is per pool.
-func summonQueueOf(p v1alpha1.SummonPriority, l v1alpha1.Lane) summonQueue {
-	if p != v1alpha1.SummonPriorityUrgent {
-		return summonQueue{}
-	}
-	return summonQueue{urgent: true, escalations: l == v1alpha1.LaneEscalation}
-}
+// summonQueue is one of a caller's queues (summonledger.Queue):
+// limits.queued (Urgent false), or limits.queuedUrgent for one pool (Urgent
+// true; Escalations picks the escalations pool, else the concurrent pool).
+type summonQueue = summonledger.Queue
 
 // summonQueueBound is the caller's limit for q.
 func summonQueueBound(l v1alpha1.CallerPolicySummonLimits, q summonQueue) int {
 	v := l.Queued
-	if q.urgent {
+	if q.Urgent {
 		v = l.QueuedUrgent
 	}
 	if v == nil {
 		return summonQueueDefault
 	}
 	return int(*v)
-}
-
-// summonRequestedNames are the requested names a charge bound to name can
-// come from: name itself, and, when name ends in a suffix -2 to -99, the name
-// before it (summonNameSequence).
-func summonRequestedNames(name string) []string {
-	out := []string{name}
-	i := strings.LastIndexByte(name, '-')
-	if i <= 0 {
-		return out
-	}
-	n, err := strconv.Atoi(name[i+1:])
-	if err == nil && n >= 2 && n <= summonMaxSuffix && strconv.Itoa(n) == name[i+1:] {
-		out = append(out, name[:i])
-	}
-	return out
-}
-
-// summonChargeQueues are the queues a charge with request hash hash, bound to
-// name, counts in: the queue of the policy entry whose mode, lane, priority and one of
-// summonRequestedNames(name) hash to hash (summonRequestHash). A hash no
-// current entry gives, a policy edited since the charge for example, counts
-// in every queue.
-func summonChargeQueues(p *v1alpha1.CallerPolicy, hash, name string) []summonQueue {
-	if p != nil && p.Spec.Summon != nil {
-		for _, requested := range summonRequestedNames(name) {
-			for i := range p.Spec.Summon.Sessions {
-				e := &p.Spec.Summon.Sessions[i]
-				if summonRequestHash(summonWire{Mode: string(e.Kind), Lane: string(e.Lane), Name: requested}, e.Priority) == hash {
-					return []summonQueue{summonQueueOf(e.Priority, e.Lane)}
-				}
-			}
-		}
-	}
-	return summonQueues
-}
-
-// summonGranted reports whether grants hold an open grant for this session,
-// by name and UID: the leader has admitted it, though admittedAt may not be
-// written yet.
-func summonGranted(g summonledger.Grants, s *v1alpha1.AgentSession) bool {
-	for _, it := range g.Items {
-		if it.Name == s.Name && it.UID == string(s.UID) {
-			return true
-		}
-	}
-	return false
-}
-
-// summonQueueCount counts queue q for the caller at now, from what one ledger
-// write read: its Queued sessions in q, and its charges in q that have no
-// Session and whose attempt mark is younger than summonledger.AttemptHold.
-// skip, the dispatch being decided, is not counted.
-func summonQueueCount(c *caller, e *summonLedgerEntry, now time.Time, live summonSessions, grants summonledger.Grants, q summonQueue, skip string) int {
-	key := summonLedgerKey(c)
-	n := 0
-	for i := range live.items {
-		it := &live.items[i]
-		if it.Spec.Caller != key || it.Spec.Summon == nil || it.Spec.Summon.DispatchID == skip {
-			continue
-		}
-		if summonoutcome.Queued(it, summonGranted(grants, it)) && summonQueueOf(it.Spec.Summon.Priority, it.Spec.Lane) == q {
-			n++
-		}
-	}
-	for _, ch := range e.Charges {
-		if ch.ID == skip || live.byID[ch.ID] != nil || now.Sub(ch.Attempt) >= summonledger.AttemptHold {
-			continue
-		}
-		if slices.Contains(summonChargeQueues(c.policy, ch.Hash, ch.Name), q) {
-			n++
-		}
-	}
-	return n
 }
 
 // refuseSummonQueue applies the queue bound to a charge about to join the
@@ -172,8 +83,8 @@ func (s *Server) refuseSummonQueue(b *summonBinding, c *caller, e *summonLedgerE
 		return true, false
 	}
 	limits := c.policy.Spec.Summon.Limits
-	for _, q := range summonChargeQueues(c.policy, hash, name) {
-		n := summonQueueCount(c, e, now, live, grants, q, id)
+	for _, q := range summonledger.ChargeQueues(c.policy, hash, name) {
+		n := summonledger.QueueCount(c.policy, e.Charges, live.items, live.byID, grants, q, id, now)
 		if n < summonQueueBound(limits, q) {
 			continue
 		}
@@ -193,9 +104,9 @@ func (s *Server) refuseSummonQueue(b *summonBinding, c *caller, e *summonLedgerE
 // refusal of a new charge spends nothing and does not.
 func summonQueueRefusal(c *caller, b summonBinding, charged bool) error {
 	var err *apiError
-	if b.queue.urgent {
+	if b.queue.Urgent {
 		pool := "concurrent"
-		if b.queue.escalations {
+		if b.queue.Escalations {
 			pool = "escalations"
 		}
 		err = tooManyRequests("summon urgent queue full: caller %s has %d urgent sessions Queued or being created in its %s pool, its limits.queuedUrgent; no session was created (DESIGN-064 5.9)",

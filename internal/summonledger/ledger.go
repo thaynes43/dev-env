@@ -158,7 +158,9 @@ func ChargeCounts(ch Charge, now time.Time) bool {
 // keep is the dispatch ids of the sessions that exist and are neither
 // admitted nor closed (DESIGN-064 5.9 item 4, item 741 comment 7233): a
 // Queued session's charge is what the leader admits it by, so it is kept
-// however old it is. nil keeps nothing extra.
+// however old it is. The API's keep also holds the id of each filing that
+// waits (FilingID of a session whose filing is Pending; story 800), whose
+// child may not exist yet. nil keeps nothing extra.
 func Prune(charges []Charge, now time.Time, keep map[string]bool) []Charge {
 	kept := make([]Charge, 0, len(charges))
 	for _, ch := range charges {
