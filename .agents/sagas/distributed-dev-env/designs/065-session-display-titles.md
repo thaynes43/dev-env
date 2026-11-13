@@ -1219,7 +1219,9 @@ sections 9.1 and 9.2 stays.
 
 The coordinator answered the generation question the same day. These
 rulings replace the sentences they name. ADR-026 stays Accepted and is not
-edited. [ADR-027](../adrs/027-session-title-annotation.md) is Proposed. It
+edited. [ADR-027](../adrs/027-session-title-annotation.md) is Proposed
+(accepted later the same day, after the reviews of the build; its decisions
+5 to 7 carry sections 9.5 and 9.6). It
 supersedes ADR-026's decision that `spec.title` may change, and it keeps
 ADR-026's guarded typed rename.
 
@@ -1264,7 +1266,7 @@ ADR-026's guarded typed rename.
 ### 9.5 Fix round 2 (the coordinator, 2026-11-13, not Tom)
 
 These rulings are the coordinator's, from the second review of pull request
-1127. They are not Tom's. ADR-027 stays Proposed. ADR-026 stays Accepted and
+1127. They are not Tom's. ADR-027 stays Proposed (it was accepted later the same day; see ADR-027). ADR-026 stays Accepted and
 is not edited. Tom's ruling stands: a rename is typed only while the session
 is idle with an empty input line. A rename is not typed while a turn runs.
 
@@ -1359,7 +1361,7 @@ is idle with an empty input line. A rename is not typed while a turn runs.
 ### 9.6 Fix round 3 (the coordinator, 2026-11-13, not Tom)
 
 These rulings are the coordinator's, from the third review of pull request
-1127. They are not Tom's. ADR-027 stays Proposed. Tom's ruling stands: a
+1127. They are not Tom's. ADR-027 stays Proposed (it was accepted later the same day; see ADR-027). Tom's ruling stands: a
 rename is typed only while the session is idle with an empty input line.
 
 1. **A refused text does not wipe the mark.** While `title.json` records
