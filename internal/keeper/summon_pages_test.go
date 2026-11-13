@@ -38,6 +38,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/pages"
+	"github.com/thaynes43/dev-env/internal/summonledger"
 	"github.com/thaynes43/dev-env/internal/summonoutcome"
 	"github.com/thaynes43/dev-env/internal/testsock"
 )
@@ -146,6 +147,10 @@ type summonFix struct {
 	// sessionGet, when set, sees each session read by name first; an error it
 	// returns answers that read.
 	sessionGet func(name string) error
+	// createsErr, when set, answers each read of the create ledger (story
+	// 793); createsGets counts them.
+	createsErr  error
+	createsGets int
 }
 
 var summonLedgerName = types.NamespacedName{Namespace: "dev-env-system", Name: DefaultSummonPagesConfigMap}
@@ -168,6 +173,12 @@ func newSummonFix(t *testing.T) *summonFix {
 					f.cmGets++
 					if f.getErr != nil {
 						return f.getErr
+					}
+					if key.Namespace == summonledger.Namespace && key.Name == summonledger.Name {
+						f.createsGets++
+						if f.createsErr != nil {
+							return f.createsErr
+						}
 					}
 				}
 				if _, ok := obj.(*v1alpha1.AgentSession); ok {
@@ -227,7 +238,9 @@ func newSummonFix(t *testing.T) *summonFix {
 }
 
 // restart builds a new pager, a new store and a new reader over the same API
-// state: a keeper restart, or a new leader in another pod.
+// state: a keeper restart, or a new leader in another pod. It reads the
+// create ledger as summonPagerFor wires it (story 793); the fixture creates no
+// create ledger, so every story 782 and 792 test also runs with it missing.
 func (f *summonFix) restart() {
 	f.t.Helper()
 	f.p = newSummonPager(f.opts, &kubeSummonSessions{reader: f.c, namespace: summonTestNS},
@@ -237,6 +250,7 @@ func (f *summonFix) restart() {
 	if f.p == nil {
 		f.t.Fatal("valid options built no pager")
 	}
+	f.p.creates = &kubeSummonCreates{reader: f.c}
 }
 
 func (f *summonFix) tick() { f.t.Helper(); f.p.tick(f.ctx) }

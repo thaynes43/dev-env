@@ -2462,6 +2462,88 @@ correction above, this governs. As built:
 - *`digest.listed` is a guard too.* A close whose key is already in
   `digest.listed` is not pended again, even when its dedupe entry is gone.
 
+**Correction, 2026-11-13: story 793, coordinator rulings on item 742 comment
+7457; not a ruling by Tom.** Story 793 (slice c of #742) builds "Overflow
+(N6, R1)" below in the keeper's pager tick (`internal/keeper/summon_overflow.go`),
+with the pager's own client, ledger and Pushover sender: no new client, lock,
+transport, goroutine or flag. It folds in the coordinator's answer op793-q-1
+(also not Tom's). Where this differs from the text below and the corrections
+above, this governs. As built:
+
+- *The read.* Each tick, after the pager's ledger load and its scan, one get of
+  `dev-env-summon-creates` in `dev-env-system` by name, bounded like the
+  pager's other requests, decoded per caller key with `summonledger.Decode`.
+  The keeper never writes it. A key that is not a summoning caller's name
+  (`<namespace>.<name>`, two DNS labels) is not read; the grants key
+  `_admission` never has that shape. A ConfigMap that is missing, refused or
+  cannot be read as a whole sends no overflow page that tick and logs `summon
+  overflow: the create ledger is unavailable`; one caller's entry that
+  `Decode` refuses makes only that caller wait, with `summon overflow: a
+  caller's create ledger entry is unreadable; that caller waits` and no value
+  from the entry, and the other callers page (op793-q-1, answer 2). Each line
+  is at most once a tick, and the pages and the digest go on. A tick whose
+  ledger load or scan fails sends no overflow page either.
+- *The event and its reference.* "The refusal count it last paged and when"
+  is the overflow member, `{lastPagedCount, lastPagedAt}` per caller: the
+  count and the time of the caller's last overflow event, a page or a capped
+  one. A caller whose count is above `lastPagedCount` and whose
+  `lastPagedAt` is at least an hour old gets one event, carrying the caller
+  and the count minus `lastPagedCount`; the event takes the count and the
+  time. So "at most one per caller per hour" holds for events, a capped one
+  included, and every refused urgent create is in exactly one event. This
+  replaces "the refusals since its last `overflow` page".
+- *A count that went down.* A count below `lastPagedCount` (the key was
+  reset) and a key that is gone (an absent key is an empty entry, count 0)
+  set `lastPagedCount` to 0 at once; `lastPagedAt` and the member are kept.
+  Every refusal the key then holds is new, and waits for the caller's hour.
+- *The cap (ruling Q5).* An overflow page counts toward the 6 in any 60
+  minutes like any page. It goes after the drill and before the session pages
+  of its tick, callers by the time of their last refusal, oldest first
+  (op793-q-1, answer 1): story 782's order, which puts every job without a
+  session first, is unchanged. Past the cap the event is recorded `capped`,
+  counted in the `more-events` page and listed in the next digest as
+  `<caller> unknown capped overflow`; the lane is `unknown` because the count
+  does not say which lane was refused.
+- *Once.* The dedupe key is not "caller and hour" (Limits, below) but
+  `overflow-<unix second>-<16 hex of the caller's SHA-256>/overflow`, a key
+  the store of stories 782 and 792 already accepts; the member is the
+  caller's dedupe. The member, the dedupe entry and the page record are
+  written in one update before the send, as a page's are, and the send's
+  outcomes are a page's: nothing is retried. The dedupe entry carries no
+  name; a capped event's digest line finds its caller through the member
+  whose hash its key carries (`unknown` once the bound has dropped that
+  member). An overflow dedupe entry goes an hour after it was written,
+  without a proof read, unless the digest still needs it.
+- *Content-free (Q9).* The record holds the fixed title, the caller's name
+  (as the page shows it) and the count; never a link. The template is fixed
+  in keeper source; its one link is the console's sessions list.
+- *Bounds.* The member keeps at most 64 callers, below the store's schema
+  bound of 256, so a keeper of story 782 or 792 still reads it. At 64 a new
+  caller waits and the keeper logs `summon overflow caller capacity reached`
+  once a tick, unless a member has `lastPagedCount` 0 (its key gone or reset
+  to zero) and a `lastPagedAt` at least an hour old: that member goes first,
+  the oldest first, which changes nothing (a caller with no member counts
+  from 0, and its hour has passed). With every bound filled and each value at
+  the longest this code writes (2048 dedupe entries, 256 pending lines with
+  127-character callers and 64-character words, 2304 listed keys, 64 members
+  of 127-character callers), `state.json` is 642,103 bytes, under the
+  store's cap of 655,360. Listed keys are at most 2304 because a digest's
+  reservation keeps only listed keys that still have a dedupe entry (at most
+  2048) and adds its lines (at most 256); the store accepts 4096, and at that
+  bound the ledger is over the cap even without an overflow member. At the
+  cap a save refuses and nothing is sent, as today (`summon page reservation
+  unconfirmed`).
+- *Stated limits.* A key reset and refilled past its old count between two
+  reads is not seen as reset, and that many of its refusals are not paged.
+  A record ahead of the keeper's clock holds that caller until the clock has
+  passed it by the hour, logged once a tick as `summon overflow ledger time
+  is ahead of the keeper's clock`. A rolled-back keeper of story 782 or 792
+  keeps the members as read and never prunes an overflow dedupe entry (it
+  has no session), and its digest names a capped overflow event's caller
+  `unknown`. The install adds one rule to the keeper's Role in
+  `dev-env-system`: get on ConfigMap `dev-env-summon-creates` by name; until
+  it is reconciled, the read is refused and logged once a tick.
+
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row
 says: one terminal event or the digest. The reason is the one 6.6's close

@@ -1997,6 +1997,44 @@ None is a ruling by Tom.
   with no name or value, and no digest goes until the clock has passed the
   last one by the hour or the day. A close already in `digest.listed` is not
   listed again, even when its ledger entry is gone.
+- **Overflow** (story 793, slice c of 742; coordinator rulings on item 742
+  comment 7457 and answer op793-q-1, none a ruling by Tom). An urgent create
+  the API refuses (a full queue of urgent sessions, or the hour's creates
+  spent) has no session to page, so the API counts it in the create ledger,
+  `urgentRefusals` per caller in the ConfigMap `dev-env-summon-creates` in
+  `dev-env-system`, and the keeper reads that count by name each tick,
+  through the pager's own client, after its scan. It never writes it. For a
+  caller whose count is above the one its last overflow event took, at most
+  one overflow event an hour: a page, `[dev-env] overflow: N urgent session
+  creates from caller <caller> were refused and not yet paged`, at priority
+  0 with the console's sessions list as its one link, or, past the cap,
+  `capped`. Either way the event takes the count, so every refused urgent
+  create is in exactly one event, and refusals after it wait for the next.
+  An overflow page counts toward the 6 an hour; it goes after the drill and
+  before the session pages of its tick, callers by their last refusal,
+  oldest first. A capped one is counted in the `more-events` page and listed
+  in the next digest as `<caller> unknown capped overflow` (the count does
+  not say which lane was refused). A count below the one last taken (the
+  key was reset) or a key that is gone sets the reference to 0 at once: every
+  refusal the key then holds is new; the caller keeps its record and its
+  hour. Once each, as for a page: the caller's record, the dedupe entry and
+  the page record are written in one update before the send, an unknown
+  result is `ambiguous`, and nothing is retried, across restarts and between
+  two keepers. The record holds the title, the caller and the count. A
+  create ledger that is missing, refused (the keeper's Role needs `get` on
+  it) or cannot be read as a whole sends no overflow page and logs `summon
+  overflow: the create ledger is unavailable` once a tick; one caller's entry
+  that cannot be decoded makes only that caller wait, with `summon overflow:
+  a caller's create ledger entry is unreadable; that caller waits`, and no
+  value from it. The pages and the digest go on either way. The ledger keeps
+  at most 64 callers; at that bound a new caller waits and the keeper logs
+  `summon overflow caller capacity reached` once a tick, unless a caller
+  whose key is gone (or reset to zero) has had no overflow event for an
+  hour: that record goes first, the oldest first. A record ahead of the
+  keeper's clock holds that caller until the clock has passed it by the
+  hour, with `summon overflow ledger time is ahead of the keeper's clock`.
+  Stated limit: a key reset and refilled past its old count between two
+  ticks is not seen as reset, and that many of its refusals are not paged.
 - **The text.** Fixed templates in keeper source. A page starts `[dev-env]`
   and the event; a drill starts `DRILL`. A session's note follows the label
   `session note:`. Every control or format character and every line or
@@ -2055,7 +2093,9 @@ None is a ruling by Tom.
   bearer token file is local I/O outside it, and discovery and a tick are
   several requests, each bounded, not one bounded operation (fix round 3). A
   tick makes one paginated scan of at most 20 list calls, at most 20 reads by
-  name and the ledger calls, then waits 60 seconds. A keeper REST config that
+  name, one read of the create ledger (story 793) and the ledger calls, then
+  waits 60 seconds. A stalled read of the create ledger holds nothing either:
+  it ends on the same timeout, and the tick goes on without overflow pages. A keeper REST config that
   carries a transport, a transport wrapper, a dialer, a proxy function, an
   auth provider, an auth config persister, an exec credential plugin or a
   warning handler of either kind turns the pager off and logs `summon pages
