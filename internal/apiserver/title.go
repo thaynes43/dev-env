@@ -65,7 +65,7 @@ func (s *Server) setTitle(ctx context.Context, w http.ResponseWriter, r *http.Re
 		}
 		stored, present := titleAnnotation(&sess)
 		if (present && !ignored && stored == title) || (!present && sess.Spec.Title == title) {
-			return http.StatusOK, view(&sess, false), nil
+			return http.StatusOK, s.titleView(&sess), nil
 		}
 		if at, ok := titleSetAt(sess.Annotations); ok && s.now().Sub(at) < time.Minute {
 			return 0, nil, tooManyRequests("a session title can change once a minute")
@@ -85,9 +85,21 @@ func (s *Server) setTitle(ctx context.Context, w http.ResponseWriter, r *http.Re
 			return 0, nil, fromKubeError(err, "session "+key.Name)
 		}
 		s.Log.Info("session title set", "session", sess.Name, "caller", c.String(), "titleHash", sessiontitle.HashPrefix(titleTarget(sess.Spec.Model, title, sess.Name)))
-		return http.StatusOK, view(&sess, false), nil
+		return http.StatusOK, s.titleView(&sess), nil
 	}
 	return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "session %s kept changing; try again", key.Name)
+}
+
+// titleView is the title route's answer. It says "off" whenever the flag does
+// not name the session, with or without a recorded change, so agent-run title
+// can say that the text is recorded and will not be typed. Only an agent-run
+// that knows this route reads the answer, so the key breaks no older reader.
+func (s *Server) titleView(sess *v1alpha1.AgentSession) apiv1.Session {
+	v := view(sess, false)
+	if !s.TitleRename.Allows(sess.Name) {
+		v.TitleRename = "off"
+	}
+	return v
 }
 
 // titleTarget is the composed title, or the session name when the role text
