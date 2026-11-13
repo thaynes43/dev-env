@@ -731,7 +731,15 @@ func daemon(ctx context.Context, log *slog.Logger, getenv func(string) string, r
 	if hb, err := agentd.NewHeartbeatClient(s, sess.Name); err != nil {
 		log.Warn("heartbeats are off", "why", err)
 	} else {
-		d.Send = hb.Send
+		titles := &agentd.TitleApplier{}
+		d.Send = func(ctx context.Context, st protocol.Status) error {
+			ans, err := hb.Exchange(ctx, st)
+			if err != nil {
+				return err
+			}
+			titles.Apply(ctx, d.R, d.S, d.Session, d.Log, ans)
+			return nil
+		}
 	}
 	if err := d.Run(ctx); err != nil {
 		log.Error("agentd", "err", err)

@@ -307,7 +307,7 @@ func TestDecisionOwnAuthorityReadIsLiveUIDBoundAndHeartbeatCannotForgeIt(t *test
 	forged["decisionAnswer"] = authority
 	w := f.do(http.MethodPost, protocol.HeartbeatPath(sess.Name), token, forged)
 	got := f.session(sess.Name)
-	if w.Code != http.StatusNoContent || got.Status.DecisionAnswer != nil || got.Status.Outcome == nil || !got.Status.Outcome.At.Time.Equal(f.now) || got.Status.Agent == nil {
+	if w.Code != http.StatusOK || got.Status.DecisionAnswer != nil || got.Status.Outcome == nil || !got.Status.Outcome.At.Time.Equal(f.now) || got.Status.Agent == nil {
 		t.Fatal("own heartbeat forged authority, cleared escalation or rejected skew", w.Code)
 	}
 	result := decode[protocol.DecisionAuthorityResult](t, f.do(http.MethodGet, protocol.DecisionAuthorityPath(sess.Name), token, nil))
@@ -321,11 +321,11 @@ func TestDecisionOwnAuthorityReadIsLiveUIDBoundAndHeartbeatCannotForgeIt(t *test
 		t.Fatal(err)
 	}
 	st.Decision.AnswerDigest = strings.Repeat("0", 64)
-	if f.do(http.MethodPost, protocol.HeartbeatPath(sess.Name), token, st).Code != http.StatusNoContent || f.session(sess.Name).Status.Outcome == nil {
+	if f.do(http.MethodPost, protocol.HeartbeatPath(sess.Name), token, st).Code != http.StatusOK || f.session(sess.Name).Status.Outcome == nil {
 		t.Fatal("foreign digest cleared escalation")
 	}
 	st.Decision.AnswerDigest = authority.Digest
-	if f.do(http.MethodPost, protocol.HeartbeatPath(sess.Name), token, st).Code != http.StatusNoContent || f.session(sess.Name).Status.Outcome != nil {
+	if f.do(http.MethodPost, protocol.HeartbeatPath(sess.Name), token, st).Code != http.StatusOK || f.session(sess.Name).Status.Outcome != nil {
 		t.Fatal("exact parent-confirmed answer could not complete discovery")
 	}
 	got = f.session(sess.Name)

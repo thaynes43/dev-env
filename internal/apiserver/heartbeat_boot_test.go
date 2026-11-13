@@ -21,7 +21,7 @@ func TestHeartbeatBootPreservesPriorConversationAndTask(t *testing.T) {
 	tok := f.sessionPod(name, "full", 0)
 	path := protocol.HeartbeatPath(name)
 	prior := status(name)
-	if w := f.do(http.MethodPost, path, tok, prior); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, path, tok, prior); w.Code != http.StatusOK {
 		t.Fatalf("prior heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	want := f.session(name).Status.Agent.DeepCopy()
@@ -40,7 +40,7 @@ func TestHeartbeatBootPreservesPriorConversationAndTask(t *testing.T) {
 		}
 	}
 	boot := agentd.CollectStatus(context.Background(), nil, s, protocol.Session{Name: name, Agent: protocol.AgentClaude, Mode: protocol.ModeRemote}, f.now)
-	if w := f.do(http.MethodPost, path, tok, boot); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, path, tok, boot); w.Code != http.StatusOK {
 		t.Fatalf("boot heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	got := f.session(name)

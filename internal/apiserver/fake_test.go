@@ -151,6 +151,9 @@ func newFixtureWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object
 		},
 		Log: logr.Discard(),
 		Now: func() time.Time { return f.now },
+		// Existing tests expect the title object. Production's default is empty,
+		// which names no session; the flag tests set that themselves.
+		TitleRename: mustTitleRename(t, "*"),
 	}
 	f.h = f.srv.Handler()
 	return f

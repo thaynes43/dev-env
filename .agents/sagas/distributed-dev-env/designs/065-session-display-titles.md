@@ -6,14 +6,15 @@
   rename a session himself and that his ask is for agents to do the naming
   (ruling 7, as amended). Slice 1 merges on its reviews and checks.
   The coordinator amended ruling 1, safety rule 6 and the slice table on
-  2026-11-13; that amendment is not Tom's. Slices 2 and 3 are not built.
+  2026-11-13; that amendment is not Tom's. Slice 2 is not built. Slice 3 (an
+  agent renames a running session) is built, not installed (2026-11-13, OP787).
   Rulings in section 4 stand.
   Slice 1 is installed except its front door pin (item 785 comment 7560,
   2026-11-13). Section 9 designs slice 3 (amendment of 2026-11-13, OP787):
   Tom chose a typed rename under a guard (Q-065-07), and ruling 8 and the
   rules of section 9 are the coordinator's design of it. That amendment
   also changes ruling 4, safety rule 1, Q-065-05, Q-065-07 and the slice 3
-  and 4 rows. Nothing of it is built.
+  and 4 rows. Slice 3's code is built and not installed. Slice 4 is not built.
 - **Tracking:** [Story OP774](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/774)
   under [Epic #91](https://work.haynesnetwork.com/work_packages/91). Builds
   on [DESIGN-038](038-remote-control-launch.md),
@@ -460,7 +461,11 @@ A title for summoned sessions. Any change to a session's name.
 ## 9. Amendment 2026-11-13: agents rename a running session (OP787)
 
 Slice 3, story [OP787](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/787).
-Builds nothing.
+Slice 3 is built and not installed (amended 2026-11-13, fix round 1, the
+coordinator, not Tom). The words here were "Builds nothing." Section 9.3
+records each change from that round. ADR-026 stays Accepted as it is on
+main, including its statement that nothing it decides is built yet; that
+ADR is not edited.
 
 **Origin.** Tom, by phone prompt in coordinator session
 `dev-env-fable-coordinator-1109` on 2026-11-13, recorded on item 774
@@ -561,16 +566,51 @@ not sent left the record's `status`, `updatedAt` and `statusUpdatedAt`
 unchanged, and the input row showed the prompt mark followed by exactly that
 text. So the second check of rule 8.6 can require an unchanged `updatedAt`.
 
-Not tested: what a question or permission prompt sets in the record's
-`status`; what the record's `status` "shell" means, and so whether a
-session that keeps a background command running ever reads "idle" (two of
-the four working coordinators read "shell", one of them for hours; rule 8.5
-holds on it, and a held rename has no expiry, so such a session may wait
-for its title until this is known); how a question or a permission prompt
-renders in `tmux capture-pane`; whether a bracketed paste of the command
-runs it; whether the owner's rename in the Claude app reaches the record;
-whether a resume with a different name replaces a name that was only set at
-launch.
+Measured by the coordinator on 2026-11-13, fix round 1, and written here by
+that round (not Tom): with a question open the CLI record's `status` is
+"waiting", and the visible screen is the fixture
+`question-open.2.1.321.ansi`. Typed, unsent text leaves `status` and
+`updatedAt` unchanged, which the paragraph above already records. "shell"
+holds with its own reason `shell` and is never treated as idle. Amended
+later the same day, the coordinator, not Tom (story 787 comment 7645,
+section 9.4): that last sentence does not stand. "shell" is accepted as
+"idle" is, on the same 30 seconds of quiet.
+
+Still not tested: whether a session that keeps a background command running
+ever reads "idle" (two of the four working coordinators read "shell", one
+of them for hours; a held rename has no expiry); whether a bracketed paste
+of the command runs it; whether the owner's rename in the Claude app
+reaches the record; whether a resume with a different name replaces a name
+that was only set at launch.
+
+Measured by the coordinator on 2026-11-13, fix round 2, and written here by
+that round (not Tom). These are the coordinator's readings, quoted, not
+measured again:
+
+- The cursor: idle empty input is column 2 on the input row; "/rename zz"
+  typed is column 12; "/rename é|z" is column 13; ten Backspace keys return
+  it to column 2 with an empty row.
+- The screen does not show that a turn is running. In 70 frames of one
+  running turn the record status was "busy" every time, the footer never
+  showed "esc to interrupt", 54 frames had no spinner row, and 16 had a row
+  "<mark> <Word>… (...)" with the marks U+273B, U+2722, U+273D, U+2736,
+  U+00B7 and U+002A. The record is the only busy signal.
+- "/rename <text>" and Enter sent while a turn runs renames at once and does
+  not disturb the turn. Backspace keys during a running turn erase typed
+  text and do not disturb the turn.
+
+Measured by the coordinator on 2026-11-13, fix round 3, on its own idle test
+session, and written here from `wrap-facts.2.1.321.txt` (not measured again).
+The pane was 200 columns by 50 rows. The display-message format was
+`#{cursor_x} #{cursor_y} #{pane_width} #{pane_height}`. At N = 196 the cursor
+read `198 46 200 50`, and after 196 Backspace keys it read `2 46 200 50`. At
+N = 197 the cursor read `3 46 200 50`, and after 197 Backspace keys it read
+`2 46 200 50`. The file's reading: text of N characters stays on the one
+input row while N <= pane_width - 4, with the cursor at column 2 + N. At
+N = pane_width - 3 the input wraps and the cursor column is no longer 2 + N.
+N Backspace keys still empty a wrapped input. Not measured at any other pane
+width, and not measured whether tmux keeps a narrow size after a client
+detaches.
 
 ### 9.2 Rules
 
@@ -585,6 +625,11 @@ field's bounds (`MinLength`, `MaxLength`, the byte, character and spacing
 rules) stay and now also run on every update. So a title can be added to an
 untitled session, changed, and removed. Reason: the five coordinators have
 none and need an add; a clear undoes a wrong title.
+
+Amended 2026-11-13, fix round 1, the coordinator, not Tom (ADR-027, section
+9.4): this paragraph does not stand. `spec.title` stays immutable, as slice
+1 installed it. The two CEL relaxations are not made. D-39 is not amended.
+The changed title is the annotation `dev-env.haynesops.com/title`.
 
 The only code that writes `spec.title` after create is
 `PUT /v1/sessions/{name}/title`. The schema cannot tell routes apart, but
@@ -601,26 +646,30 @@ the common rules), so for agents the route is the only path.
   and `dev-env.haynesops.com/title-set-at` (RFC 3339), with the
   `resourceVersion` precondition and retry of `setOperatingMode`
   (`internal/apiserver/lifecycle.go`). It answers 200 with the view.
+  Amended 2026-11-13, fix round 1, the coordinator, not Tom: the patch
+  writes `dev-env.haynesops.com/title` and those two annotations, and does
+  not write `spec.title`. `expect` is compared with the effective title.
 - A bad title is ruling 3's 422. A session being reaped is 409. A summoned
   session (`spec.caller`) is 409: summoned sessions take no title (ruling 3,
   section 8).
 - `agent-run title` against an operator without the route says so and does
   nothing else.
 
-**Clearing.** `"title": ""` removes `spec.title`. On the provider, agentd
+**Clearing.** `"title": ""` removes `spec.title`. Amended 2026-11-13, fix
+round 1, the coordinator, not Tom: a clear writes the title annotation with
+an empty value and leaves `spec.title`. On the provider, agentd
 types `/rename <session name>`, so the phone shows the session name, as it
 does for an untitled session. Reason: a resume does not replace a typed
 title (item 774 comment 7546), so only a typed rename takes back a title that
 was typed. Leaving it would show a role nobody records.
 
-**CRD copy.** haynes-ops gets `config/crd/` before the operator pin that
-serves the route. Without it the API server refuses the PUT under the old
-rule and prunes the status fields of rule 8.8 (haynes-ops #3502). One copy
-serves both. Safety rule 6's rollback rule gets stronger: with the add and
-remove term gone, an operator older than slice 1 that drops `spec.title` on
-a full-object update is no longer refused, so the title would be lost with
-no error. Roll the operator back below slice 1 only when no session has a
-title.
+**CRD copy.** Amended 2026-11-13, fix round 2, the coordinator, not Tom.
+haynes-ops still gets a copy of `config/crd/` before the operator pin that
+needs it. The title route writes only annotations, so an old CRD does not
+refuse the PUT. An old CRD does still prune
+`status.remoteControl.providerTitle` and `status.remoteControl.rename`
+(haynes-ops #3502). `spec.title` stays immutable, so rolling the operator
+back does not drop a spec title.
 
 **8.2 Who may change it.** Ruling 4's rule stands. By caller kind
 (`internal/apiserver/caller.go`):
@@ -732,8 +781,11 @@ held reason. A read that fails or times out holds the rename.
    present, with the types seen. Otherwise the state is Unknown, reason
    `record-shape`, and nothing is typed (rule 8.8).
 5. **Idle and quiet.** `status` is exactly "idle", and `updatedAt` is at
-   least 30 seconds before now and not after now. "busy" holds with
-   `busy`, "waiting" with `waiting`, any other value with `status-unknown`,
+   least 30 seconds before now and not after now. Amended 2026-11-13, fix
+   round 1, the coordinator, not Tom (story 787 comment 7645, section 9.4):
+   `status` "shell" is accepted on the same 30 seconds. It is what a session
+   shows between turns while a background shell command is running. "busy"
+   holds with `busy`, "waiting" with `waiting`, any other value with `status-unknown`,
    an "idle" whose `updatedAt` is less than 30 seconds old with `quiet`,
    a future `updatedAt` with `clock`. Reason "waiting" is never acceptable:
    it means the CLI waits on a person (`claudeWaiting` in `activity.go`), so
@@ -798,13 +850,24 @@ start with a hyphen and holds no control character. agentd then:
 
 If the second check fails, agentd does not press Enter. The text stays in
 the input line, unsent. agentd records Failed, reason `left-in-input`, and
-does not type this T again (Q-065-13). Reason: a prompt that opened between
+does not type this T again (Q-065-13). Amended 2026-11-13, fix round 1, the
+coordinator, not Tom (section 9.4): when the input row still holds exactly
+the text just typed, with the cursor directly after it, agentd sends one
+Backspace per character of that text, checks the row is empty, and records
+Held, reason `interrupted`. That does not count as one of the two attempts
+when the row came back empty. In every other case the line is left alone.
+This is the only case in which a key other than the text and one Enter is
+sent. Reason: a prompt that opened between
 the first read and the typing would have taken the text, and an Enter there
 would choose an option, which is the 7450 harm. Withholding the Enter turns
 that case into visible, unsent text.
 
 agentd never sends Escape, Backspace or any Ctrl key, never clears the input
-line (its own text included, since a person may have typed beside it),
+line (its own text included, since a person may have typed beside it).
+Amended 2026-11-13, fix round 1, the coordinator, not Tom: the Backspace
+named in the paragraph above is the one exception, and only for text this
+pod just typed. The sentence continues: agentd never clears an input line
+a person typed,
 never pastes other text, never sends a second Enter, never types while the
 guard holds, and never retries inside one heartbeat.
 
@@ -1012,3 +1075,361 @@ with an access rule. So it gets an adversarial review by another model
 family before it merges, read-only, on its final head, with ADR-024's
 findings as the starting list, and every finding answered on the PR. Its
 first live use is on the unused test session.
+
+### 9.3 Fix round 1 (the coordinator, 2026-11-13, not Tom)
+
+Each item below is the coordinator's decision on the adversarial review of
+pull request 1127. It amends the sentence it names. The first text of
+sections 9.1 and 9.2 stays.
+
+1. **The screen (review F1).** Rule 8.5 condition 9's "last four non-blank
+   rows" reading is not enough. The parser reads the whole visible screen
+   and answers "empty input" only when all of these hold: exactly one input
+   box, and it is the last element before the status row or rows; the input
+   row holds the prompt mark, the no-break space and nothing else, or the
+   dim placeholder in the placeholder fixture; no row anywhere is a
+   selection hint ("Enter to select", "Esc to cancel"), a numbered option
+   list, or a spinner or interrupt hint; the cursor is on the input row
+   directly after the prompt mark and the no-break space. The cursor is
+   read with `tmux display-message -p -t <pane id>` for `cursor_x` and
+   `cursor_y`. A read error is unknown. Spaces-only, newline-only or
+   multi-row input is not empty. "Holds exactly this text" needs the same
+   structure, the exact text, and the cursor directly after it. Everything
+   else is unknown. The recorded fixture `question-open.2.1.321.ansi` is
+   unknown, and nothing is typed on it. Answered on the advisory review of
+   this fix, and not a new ruling by Tom: a numbered list in the
+   conversation is one of those rows. That hold is expected, because the
+   check is the whole screen, not only the rows next to the box.
+2. **The off switch (F1b).** The operator flag `--title-rename-sessions` is
+   a comma-separated list of session names, or the single value `*`. Empty,
+   the default, names no session. The heartbeat answer carries the title
+   object only for a session the flag names. For every other session the
+   answer is 204 with no body, which is what main answers today, so agentd
+   types nothing (the first bullet of rule 8.3). The PUT title route stays
+   on and only records. `agent-run show` says "not enabled for this
+   session" in the rename line when the flag does not name it. A malformed
+   value refuses startup. This supersedes the sentence in rule 8.3 that
+   every heartbeat answers 200 with a title object.
+3. **The state file before the keys (F2).** agentd writes `title.json` with
+   the new `lastTypedAt` and the incremented `attempts`, and syncs the file
+   and its directory, before it types. If that write fails, it types
+   nothing and holds with reason `state`.
+4. **Time limits (F3).** Every subprocess of the guard and of the typing,
+   each tmux call and `claude --version`, has its own timeout of 2 seconds.
+   `claude --version` runs once per boot, outside the delivery lock, and is
+   cached. The whole guard-and-type sequence has a budget of 5 seconds,
+   after which it holds. A timeout or error holds with the reason of the
+   condition being read. The delivery lock is released on every path. A
+   hung tmux does not stop a later heartbeat. The advisory review of this
+   fix is answered here, and it is not a new ruling by Tom. agentd does not
+   send the text unless one 2-second call still fits in the budget;
+   otherwise it holds with reason `screen-unknown` and types nothing, and
+   it does not keep the attempt. After the text is sent, the second check,
+   the clear and Enter run on a 4-second deadline taken from the caller's
+   context, so the budget ending does not skip the clear. That deadline is
+   the only time past the 5 seconds, and only once the text is already
+   sent. The confirmation poll of rule 8.8 runs only while the 5-second
+   budget remains. A poll that stops leaves Typed, and later heartbeats
+   continue the 10-second window.
+5. **A later title in the same boot (F4).** "Nothing is typed after a first
+   launch" in rule 8.4 means only that the launch title itself is not typed
+   again. A title change recorded later, in the same pod's life, is applied
+   under the guard. At a first launch `applied` is set to what was passed.
+   A later answer whose target differs is applied. This supersedes "a first
+   launch is never followed by a typed rename" for a target that is not the
+   launch value.
+6. **The pane format (F5).** The list-panes format is the one recorded in
+   `internal/sessiontitle/testdata/tmux-facts.txt`. It uses
+   `pane_synchronized`, which tmux 3.3a has. It does not use
+   `window_synchronized`. A line whose field count is not the recorded
+   eight, or whose flags are not exactly `0` or `1`, is reason `pane`.
+7. **The last read (F6).** The CLI record is read again as the last read
+   before the first `send-keys`, and the rename holds if anything changed
+   since condition 5. Nothing else runs between that read and the
+   keystrokes. This supersedes rule 8.6's window, which started at the
+   second check.
+8. **`updatedAt` (F7).** It must be a positive number. Null, zero, a string
+   or a missing value is Unknown, reason `record-shape`.
+9. **Attached clients (F8).** Any attached client counts, whatever its
+   fields. Empty output is zero. One newline is one client. An error holds
+   as `attached` and is never read as zero.
+10. **Foreground again (F9).** The second check also re-checks that the CLI
+    is still the terminal's foreground process group.
+11. **Semicolon and backslash (F10).** A title may not end with a semicolon
+    and may not contain a backslash. The reason is `title_characters`, in
+    `sessiontitle.Validate` and in the CEL rules. A semicolon in the middle
+    stays allowed. agentd also refuses to type any text ending in a
+    semicolon (Failed, `invalid-title`), because tmux's argument parser
+    strips a trailing semicolon. This decides the question rule 8.6 left
+    as Q-065-10.
+12. **The cursor again (F11).** The second check reads the cursor, as in
+    item 1.
+13. **A clear (F12).** A clear types only when `applied` is a title the
+    platform put there. If `applied` already equals the session name, the
+    state is Applied with reason `already` and nothing is typed.
+14. **The title text (F13).** The heartbeat title object must hold a string
+    `text`. A missing or null `text` is unknown: nothing is typed and
+    nothing is cleared. `{"title": null}` stays "not present".
+15. **Generation (F14).** A title-only change bumps `metadata.generation`
+    and does not start a drain or replace a pod: drain eligibility compares
+    the pod template revision, and `ensure` returns when the pod is already
+    there. The title is not in the pod template. The title route does not
+    clear a stored decision answer. These comparisons were left unchanged
+    and asked of the coordinator on 2026-11-13: the drain restart proof,
+    an in-flight decision write, a published canary's generation, and a
+    rescue record. Same-pass freshness checks retry on the next reconcile
+    and do not clear the stored record.
+16. **When the file is written (F15).** `title.json` is written only when
+    its content changes. A session that never had a title reports no rename
+    object: this supersedes the sentence in rule 8.4 that sets `applied` to
+    the session name when the file is missing and the session has no title.
+    `since` is set once per state, not on every heartbeat.
+17. **`agent-run title` (F16).** It prints the composed text, or the session
+    name when the title is cleared, and one sentence that it is typed when
+    the session is idle with an empty input line. A session that does not
+    exist gets "no such session". A missing route still says the operator
+    has no session title route and that nothing was changed.
+18. **A command named rename (F17).** Before typing, agentd checks whether a
+    command or skill named `rename` exists. The paths are
+    `<project>/.claude/commands`, `<project>/.claude/skills`,
+    `<claude-config>/commands`, `<claude-config>/skills`, and the same two
+    directories under each plugin that a readable settings file lists as
+    enabled. The settings files are `<claude-config>/settings.json`,
+    `<project>/.claude/settings.json` and
+    `<project>/.claude/settings.local.json`. Enabled plugins are read from
+    `<claude-config>/plugins/installed_plugins.json`. The project directory
+    is the launch record's `dir`. The claude config directory is
+    `$CLAUDE_CONFIG_DIR`, or `~/.claude`. If one of those names exists, or
+    the check cannot be made, the rename holds with reason
+    `command-shadowed`.
+19. **`shell` (with F18).** The record status "shell" holds with reason
+    `shell`, not `status-unknown`, and is never treated as idle. The reason
+    codes `state`, `shell` and `command-shadowed` are in the status enum,
+    the CRD and the show text. Show says how long a held rename has waited.
+20. **Tests (F18).** A test that expects nothing to be typed fails if the
+    fake runner saw any tmux subcommand other than `list-panes`,
+    `list-clients`, `capture-pane` and `display-message`. `claude --version`
+    is allowed. The cases added with this round are a launch for another
+    session, UID or a launch that is not a TUI; a title change during a
+    first-launch boot; a failed `title.json` write; `updatedAt` null, zero,
+    a string and missing; a hung runner; whitespace-only and multi-row
+    input; and a title ending in `;`.
+
+### 9.4 The title stays out of spec (the coordinator, 2026-11-13, not Tom)
+
+The coordinator answered the generation question the same day. These
+rulings replace the sentences they name. ADR-026 stays Accepted and is not
+edited. [ADR-027](../adrs/027-session-title-annotation.md) is Proposed. It
+supersedes ADR-026's decision that `spec.title` may change, and it keeps
+ADR-026's guarded typed rename.
+
+1. **The record (replaces rule 8.1's opening, the patch bullet, the clearing
+   sentence, and 9.3 item 15).** `spec.title` stays exactly as slice 1
+   installed it: set at create, immutable. The two CEL relaxations are
+   removed. D-39 is not amended. `PUT /v1/sessions/{name}/title` writes
+   `dev-env.haynesops.com/title` and keeps `title-set-by` and `title-set-at`.
+   The access rule, the `expect` check, the `resourceVersion` precondition
+   and retry, the 60-second limit and the refusals (a summoned target, a
+   session being reaped) stay. The value is validated with
+   `sessiontitle.Validate` before it is written. An empty value means no
+   title. The effective title is the annotation when it is present and
+   valid, and `spec.title` otherwise. `expect` is compared with the
+   effective title. A clear writes the annotation with an empty value.
+   Every reader validates the annotation. A value that fails is ignored,
+   the session keeps `spec.title`, and `agent-run show` says the annotation
+   was ignored. Nothing types a value that failed validation. The heartbeat
+   and the API view use the effective title. The view also carries the
+   title given at create when it differs. A title change leaves
+   `metadata.generation` unchanged, so a drain restart proof, an in-flight
+   decision write, a published canary and a rescue record are unchanged by
+   it. The same-pass generation checks are unchanged because they no longer
+   see a new generation.
+2. **`shell` (replaces the work order's hold, the sentence in 9.1, and 9.3
+   item 19).** Story 787 comment 7645: `shell` is what a session shows
+   between turns while a background shell command is running, and `idle` is
+   the same with none running. Condition 5 accepts `shell` exactly as it
+   accepts `idle`, including the 30 seconds of quiet. `waiting`, `busy` and
+   any unknown value still hold. The reason code `shell` is not in the enum.
+3. **An interrupted line (rule 8.6 and 8.9).** When the second check fails
+   and the input row still holds exactly the text agentd typed, with the
+   cursor directly after it, agentd sends one Backspace per character,
+   checks that the row is empty, and records Held with reason `interrupted`.
+   That attempt does not count toward the two when the row came back empty.
+   Otherwise the line is left alone and the state is Failed,
+   `left-in-input`. This is the only key other than the text and one Enter.
+   A title with a non-ASCII letter counts one Backspace per character. A
+   row that differs by one character, a cursor elsewhere, or a capture that
+   fails sends no Backspace.
+
+### 9.5 Fix round 2 (the coordinator, 2026-11-13, not Tom)
+
+These rulings are the coordinator's, from the second review of pull request
+1127. They are not Tom's. ADR-027 stays Proposed. ADR-026 stays Accepted and
+is not edited. Tom's ruling stands: a rename is typed only while the session
+is idle with an empty input line. A rename is not typed while a turn runs.
+
+1. **Characters.** A title may hold only printable ASCII (U+0020 to U+007E)
+   and U+00A1 to U+024F, except U+00AD. `sessiontitle.Validate` refuses
+   anything else with reason `title_characters`, so creation and rename share
+   one rule. The same bound is a CEL rule on `spec.title`. agentd refuses to
+   type any text that holds another character, whatever its source: the state
+   is Failed, `invalid-title`, and nothing is typed. A session that already
+   has such a title keeps it. It is never typed. When the heartbeat answer is
+   that launch title, the state stays Applied with reason `launch`. It is not
+   Failed `invalid-title`, because the provider already shows it. A resume
+   does the same when `title.json` already records that composed text, or
+   when the CLI record's name is that text: the state is Applied, reason
+   `already` when the record is what shows it. A different text that the
+   character rule refuses is still Failed `invalid-title`, and nothing is
+   typed. A wide character, a combining mark, a zero-width character and
+   U+00AD are refused. é is accepted.
+2. **Cleanup.** The Backspace cleanup of this pod's own unsent text does not
+   depend on busy or idle, and a spinner row does not block it. All of these
+   are read fresh, directly before the keys: no attached client; the same
+   pane id; the CLI still the pane's foreground process with the same pid;
+   the record readable with a status that is not "waiting"; the screen has
+   the one input box whose row holds exactly the typed text, with the cursor
+   directly after it.    `ClassifyBox` answers that question and does not treat
+   a spinner row as a disqualifier. A numbered line or a selection hint
+   anywhere on the screen still holds before typing. `ClassifyBox` applies
+   those checks only to the three rows of the input box, so a numbered line
+   left in the conversation does not block cleanup or delivery once the input
+   row is empty. A question, a selection or a permission screen has no input
+   box and stays unknown. After the Backspaces, the row
+   must be empty with the cursor at column 2. Otherwise the state is
+   `left-in-input`.
+3. **Self-heal.** While `title.json` records `left-in-input`, every later
+   pass for a session the flag names first tries that cleanup with the
+   recorded text. If the one input box shows an empty row instead, cursor at
+   column 2, the leftover is gone and the mark is cleared. No new text is
+   typed in the same pass as a cleanup or a cleared mark. When the flag does
+   not name the session, agentd sends no key at all.
+4. **Delivery.** `Deliver` checks `title.json` under its lock. When the file
+   records `left-in-input`, Deliver reads the screen and the cursor, read
+   only, with the same two-second limits. It pastes only when the one input
+   box shows an empty row with the cursor at column 2, and then clears the
+   mark. Otherwise it sends nothing, including no Backspace, and returns
+   `not delivered: the session's input line holds unsent rename text`.
+   `agent-run msg` prints that sentence. With no mark, Deliver does what it
+   does on main.
+5. **Spinner rows.** A spinner row is a row whose first character is one of
+   U+273B, U+2722, U+273D, U+2736, U+00B7, U+002A, U+2733 and U+273A, followed
+   by one space and a word that ends in "…". It is an extra hold before
+   typing. It is not the busy signal. The record is the busy signal. A
+   finished row ("✻ Crunched for 15s · done 8:31 AM", "✻ Worked for 12s ·
+   done 8:29 AM") does not match. A streaming frame with no spinner row reads
+   as an empty input, and the guard still holds when the record says busy.
+6. **Interrupted.** At most three interrupted cycles for one target. The
+   fourth sets Failed with reason `interrupted`. A new target starts the
+   count again. The cleanup conditions are item 2.
+7. **The read after the write.** agentd reads the client count, the screen
+   and the cursor again after the staged state write, directly before the
+   last record read. The earlier reads stay, so a hold before the write costs
+   no write. Any hold or failure after the staged write and before the text
+   is sent refunds the attempt and `lastTypedAt`. A failure of the text
+   send-keys stays `left-in-input`: the text may have been sent.
+8. **The command scan.** Each scanned directory is opened with `O_DIRECTORY`
+   and `O_NONBLOCK`. A link to a directory is followed. A FIFO, or a link to
+   one, fails at once and the rename holds `command-shadowed`. The whole scan
+   runs inside the five-second budget. A hard stop holds `command-shadowed`
+   and releases the lock. Commands directories are walked to depth 3, with a
+   cap on entries. Each skill's frontmatter `name` is read with `readBounded`.
+   Still not checked: managed settings, `--plugin-dir` and `--add-dir`.
+   agentd's launch line does not pass those flags. `claudeArgs` passes the
+   model, the effort and `--dangerously-skip-permissions`.
+9. **An untyped clear, and an untitled launch.** When `applied` is empty,
+   `attempts` is 0 and the target is the session name, agentd sets `applied`
+   to that name and does not type it. `attempts` and the state are the values
+   from before a target change. A title that was typed, and whose confirm did
+   not finish, is not treated as never typed: a later clear types the session
+   name under the guard. A missing `title.json` is not created for an untyped
+   clear. An untitled first launch, whose text is empty and whose launch
+   value is the session name, is not seeded and does not report a rename.
+10. **The version cache.** `cliMinor` caches only a parsed answer. A timeout
+    or unparsed output is not cached. A parsed minor that is not one of the
+    recorded minors is cached as not ok.
+11. **`agent-run title`.** When the session's title rename is off, the
+    command prints "not enabled for this session" instead of the idle
+    sentence. `show` already says that.
+12. **A failed Enter.** The result of the Enter send-keys is kept. On an
+    error or a timeout, agentd reads the record once. If the record's name is
+    the target, the state is Applied. Otherwise it runs the cleanup in item
+    2. Otherwise the state is `left-in-input`. It does not set Typed.
+
+### 9.6 Fix round 3 (the coordinator, 2026-11-13, not Tom)
+
+These rulings are the coordinator's, from the third review of pull request
+1127. They are not Tom's. ADR-027 stays Proposed. Tom's ruling stands: a
+rename is typed only while the session is idle with an empty input line.
+
+1. **A refused text does not wipe the mark.** While `title.json` records
+   `left-in-input`, a pass does the cleanup or the empty-row clear and
+   nothing else, whatever text the heartbeat answer carries. That branch
+   runs directly after the file is loaded, above first-launch seeding, above
+   `renameTarget` and its refusal, and above `keepShownTitle`.
+2. **A clear after any typed title is typed.** The untyped-clear shortcut
+   also needs `lastTypedAt` to be zero. If anything was ever typed in this
+   file's life, a clear is typed under the guard. `lastTypedAt` is not
+   cleared when the target changes.
+3. **Selection phrases are refused.** `sessiontitle.Validate` refuses a title
+   that contains "enter to select", "esc to cancel" or "esc to interrupt",
+   compared without regard to letter case, with reason `title_characters`.
+   The Explain sentence names the phrases. agentd refuses to type a text
+   that holds one of them, whatever its source: Failed, `invalid-title`,
+   nothing typed. Validate and agentd share one function. The CEL rule on
+   `spec.title` does not carry the phrases: the phrases are a property of
+   the screen this build types into, and `spec.title` stays the immutable
+   create-time field. The screen parser stays strict and is not changed. The
+   title is drawn in the input box's top rule, so a title that contained one
+   of the phrases would make every later screen unknown.
+4. **The typed line must fit the pane.** agentd reads the pane width in the
+   same display-message call as the cursor, format
+   `#{cursor_x} #{cursor_y} #{pane_width} #{pane_height}`. It types only when
+   `runes(typed) + 8 <= pane_width`, four columns more than the measured
+   limit in section 9.1. Otherwise the state is Held, reason `pane`, nothing
+   is typed and no attempt is spent. The check runs on the early cursor read
+   and again on the read after the staged write. A hold on the second read
+   refunds the attempt, as the other post-write holds do. A width that is
+   missing or not a positive number is a cursor read error. A height that is
+   not a positive number is the same error, because the four numbers are one
+   read.
+5. **The later Backspace is bound to the process that received the text.**
+   The mark records the pane id, the CLI pid and that process's `procStart`.
+   They are written when the mark is set and cleared when it clears. On a
+   later pass, Backspace is sent only when the live pane id, pid and
+   `procStart` equal the recorded ones and the CLI minor is a recorded one,
+   on top of the round-2 conditions. If they differ, no key is sent. The
+   empty-row clear is not bound to them. A mark written by an older file,
+   with none of the fields, gets no Backspace, only the empty-row clear.
+   Deliver does not gain this check. When Deliver clears the mark because
+   the row is empty, it clears the fields with it.
+6. **The command scan reads only the entries the cap still allows.**
+   `ReadDir` is given a count, not -1. More entries than the cap still holds
+   `command-shadowed`. The stop is checked between entries. Every open is
+   non-blocking. A hung network mount is not bounded. The home and project
+   directories are on the pod's own volume. There is no goroutine.
+7. **A resume whose record does not show the title.** A launch title does
+   not appear in the CLI record, and `nameSource` is "user" only after a
+   rename. The branch that keeps a shown title stays for a title someone
+   typed by hand: the record's name equals the composed text and
+   `nameSource` is "user". A resumed session with no `title.json`, a spec
+   title outside the set, and the measured record (a derived name) reports
+   Failed `invalid-title`, and nothing is typed. On 2026-11-13 the
+   coordinator found no live session with a title outside the set: 6 titles
+   on 365 sessions, all inside the set.
+8. **Guards that a removed line must fail.** Tests cover the "waiting" check
+   before Backspace in the same pass and in a later pass, the screen and
+   cursor re-read after the staged write, the check that the row is empty
+   after the Backspace keys, the refund when a client appears on the
+   post-write client read, and the box-row selection check in `ClassifyBox`.
+   The box-row test uses a derived screen, not a recording. An answer with
+   no title object still sends no key when every cleanup condition is true
+   and the exact text is on the screen.
+9. **The interrupt cap, and the gap after the keys.** Three interrupted
+   cycles end Held `interrupted`. The fourth types, erases and sets Failed
+   `interrupted`. A send that is skipped because agentd is stopping costs
+   one attempt and no key. Known limit: the mark is written after the keys.
+   A kill of agentd ends the container and the CLI with it, because tini is
+   process 1, so no text outlives agentd. The only gap is a final
+   `title.json` write that fails after a good staged write, together with a
+   failed cleanup.

@@ -42,12 +42,12 @@ func TestUsageCaptureSeparateFromRollupAndSurvivesChildRemoval(t *testing.T) {
 	u := fixtureUsage(f, "child", token)
 	st := status("child")
 	st.UsageObservation = &u
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	f.srv.ChildUsageCapture = true
 	before := usageRollup(f.session("parent"), []v1alpha1.AgentSession{*f.session("parent"), *f.session("child")})
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	got := f.session("parent")
@@ -60,7 +60,7 @@ func TestUsageCaptureSeparateFromRollupAndSurvivesChildRemoval(t *testing.T) {
 	if !apiequality.Semantic.DeepEqual(before, after) {
 		t.Fatalf("rollup changed\nbefore %+v\nafter %+v", before, after)
 	}
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	replay := f.session("parent")
@@ -70,7 +70,7 @@ func TestUsageCaptureSeparateFromRollupAndSurvivesChildRemoval(t *testing.T) {
 	other := u
 	other.ResultState = "Partial"
 	st.UsageObservation = &other
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	gotParent := f.session("parent")
@@ -118,7 +118,7 @@ func TestUsageCaptureRefusesUnboundAndReplacedParents(t *testing.T) {
 		}
 		return c.Get(ctx, key, obj, opts...)
 	}})
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	f.srv.Live = f.c
@@ -131,7 +131,7 @@ func TestUsageCaptureRefusesUnboundAndReplacedParents(t *testing.T) {
 	if err := f.c.Update(context.Background(), child); err != nil {
 		t.Fatal(err)
 	}
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	if f.session("parent").Status.CapturedUsage != nil {
@@ -445,7 +445,7 @@ func TestUsageCaptureValidatedSourceConflictAndRetry(t *testing.T) {
 		}
 		return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
 	}})
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	if f.session("parent").Status.CapturedUsage != nil || f.session("parent").Status.NodeName != "kept" || f.session("child").Status.UsageObservation == nil || f.session("child").Status.UsageConflict != nil {
@@ -454,7 +454,7 @@ func TestUsageCaptureValidatedSourceConflictAndRetry(t *testing.T) {
 	finalObs := partial
 	finalObs.ResultState = "Final"
 	st.UsageObservation = &finalObs
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	if f.session("parent").Status.CapturedUsage != nil || f.session("child").Status.UsageConflict == nil || f.session("child").Status.UsageConflict.Reason != "ConflictingSnapshot" || f.session("child").Status.UsageObservation.ResultState != "Partial" {
@@ -480,11 +480,11 @@ func TestUsageCaptureValidatedSourceConflictAndRetry(t *testing.T) {
 		}
 		return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
 	}})
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent || f.session("child").Status.UsageObservation != nil || f.session("child").Status.Agent == nil || f.session("parent").Status.CapturedUsage != nil {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK || f.session("child").Status.UsageObservation != nil || f.session("child").Status.Agent == nil || f.session("parent").Status.CapturedUsage != nil {
 		t.Fatal("child status conflict captured an unpersisted observation", w.Code)
 	}
 	f.srv.Client = f.c
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	got := f.session("parent")
@@ -500,14 +500,14 @@ func TestUsageCaptureValidatedSourceConflictAndRetry(t *testing.T) {
 	changed.Source.AttemptID = strings.Repeat("b", 64)
 	changed.ID = protocol.UsageObservationID(changed.Source)
 	st.UsageObservation = &changed
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent || len(f.session("parent").Status.CapturedUsage.Receipts) != 1 || f.session("child").Status.UsageConflict == nil {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK || len(f.session("parent").Status.CapturedUsage.Receipts) != 1 || f.session("child").Status.UsageConflict == nil {
 		t.Fatal("replaced attempt added a row")
 	}
 	otherPod := partial
 	otherPod.Source.PodUID = "other-pod"
 	otherPod.ID = protocol.UsageObservationID(otherPod.Source)
 	st.UsageObservation = &otherPod
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent || len(f.session("parent").Status.CapturedUsage.Receipts) != 1 {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK || len(f.session("parent").Status.CapturedUsage.Receipts) != 1 {
 		t.Fatal("replaced pod added a row")
 	}
 
@@ -518,7 +518,7 @@ func TestUsageCaptureValidatedSourceConflictAndRetry(t *testing.T) {
 	}
 	before := len(f.session("parent").Status.CapturedUsage.Receipts)
 	st.UsageObservation = &partial
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent || len(f.session("parent").Status.CapturedUsage.Receipts) != before {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK || len(f.session("parent").Status.CapturedUsage.Receipts) != before {
 		t.Fatal("mismatched private executor captured another row")
 	}
 }
@@ -540,7 +540,7 @@ func TestUsageCaptureDistinctChildAndMatchingExecutor(t *testing.T) {
 	u.ServedModels = []protocol.ModelUsage{{Model: "claude-opus-5-5", InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadInputTokens: u.CacheReadInputTokens, CacheCreationInputTokens: u.CacheCreationInputTokens, Cost: u.Cost}}
 	st := status("reused")
 	st.UsageObservation = &u
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("reused"), token, st); w.Code != http.StatusNoContent || len(f.session("parent").Status.CapturedUsage.Receipts) != 1 {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("reused"), token, st); w.Code != http.StatusOK || len(f.session("parent").Status.CapturedUsage.Receipts) != 1 {
 		t.Fatal("matching executor was not captured", w.Code, w.Body.String())
 	}
 	firstUID := string(f.session("reused").UID)
@@ -566,7 +566,7 @@ func TestUsageCaptureDistinctChildAndMatchingExecutor(t *testing.T) {
 	u = fixtureUsage(f, "reused", token)
 	st = status("reused")
 	st.UsageObservation = &u
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("reused"), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("reused"), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	rows := f.session("parent").Status.CapturedUsage.Receipts
@@ -585,7 +585,7 @@ func TestUsageCaptureDistinctChildAndMatchingExecutor(t *testing.T) {
 	cu.ID, cu.ObservedAt, cu.ResultState = protocol.UsageObservationID(cu.Source), f.now, "Final"
 	st = status("codex-child")
 	st.UsageObservation = &cu
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("codex-child"), codexTok, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("codex-child"), codexTok, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	got := f.session("parent").Status.CapturedUsage.Receipts
@@ -625,7 +625,7 @@ func TestUsageCaptureRefusesMismatchedPrivateExecutor(t *testing.T) {
 		}
 		return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
 	}})
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent || f.session("parent").Status.CapturedUsage != nil || f.session("child").Status.UsageConflict != nil {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK || f.session("parent").Status.CapturedUsage != nil || f.session("child").Status.UsageConflict != nil {
 		t.Fatal("setup did not leave an uncaptured observation", w.Code)
 	}
 	f.srv.Client = f.c
@@ -634,7 +634,7 @@ func TestUsageCaptureRefusesMismatchedPrivateExecutor(t *testing.T) {
 	if err := f.c.Status().Update(context.Background(), child); err != nil {
 		t.Fatal(err)
 	}
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("child"), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	if f.session("parent").Status.CapturedUsage != nil || f.session("child").Status.UsageObservation == nil || f.session("child").Status.UsageObservation.ResultState != "Partial" || f.session("child").Status.UsageConflict != nil {

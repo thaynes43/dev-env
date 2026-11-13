@@ -35,6 +35,8 @@ Usage:
                                                   report this summoned session's outcome
   agent-run show <name> [--captured-usage -o json]
                                               show one session; --captured-usage adds direct-child receipts
+  agent-run title <session> "<text>" | --clear
+                                              record a new role title, or clear it
   agent-run usage -o json [--from-file FILE|-]  offline allowance read
   agent-run usage-export --manifest <path> --output-dir <private-dir> [--allowance-read <path>]
                                               export selected usage evidence privately
@@ -126,6 +128,16 @@ Exit codes:
 `
 
 var commandHelp = map[string]string{
+	"title": `Usage: agent-run title <session> "<text>"
+       agent-run title <session> --clear
+
+Record a new role title on a session that already exists, or clear it.
+agent-run reads the current title and sends it as expect, so a stale read is
+refused (title_changed) and nothing is written. The session's own agentd types
+the provider rename when the session is idle with an empty input line; until
+then show says the rename is held. A second recorded change within a minute
+is refused.
+`,
 	"coordinator": `Usage: agent-run coordinator start|status|stop|brief
 
 Start a bounded task on an OpenProject item, read its state and retained outcome,
