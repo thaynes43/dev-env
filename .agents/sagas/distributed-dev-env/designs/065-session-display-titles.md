@@ -1409,9 +1409,9 @@ rename is typed only while the session is idle with an empty input line.
    non-blocking. A hung network mount is not bounded. The home and project
    directories are on the pod's own volume. There is no goroutine. The bound
    is per directory read: a subdirectory's read does not subtract the parent's
-   entries that were read and not yet counted, so the whole scan can hold up
-   to about three times the cap at depth 3; the total stays bounded and the
-   hold is unchanged.
+   entries that were read and not yet counted, so the whole scan can keep up
+   to about three times the cap in memory at depth 3; the total stays bounded
+   and the hold is unchanged.
 7. **A resume whose record does not show the title.** A launch title does
    not appear in the CLI record, and `nameSource` is "user" only after a
    rename. The branch that keeps a shown title stays for a title someone
