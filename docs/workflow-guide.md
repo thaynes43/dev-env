@@ -1877,7 +1877,9 @@ hours. The keeper's pager (below) sends them.
 The keeper pages Tom by Pushover when a summoned session needs him
 (DESIGN-064 6.8; story 782, slice a of 742). It is off by default. The rules
 marked "fix round 1" are story 782 fix round 1, coordinator rulings in PR 1102
-comment 6839324435; not a ruling by Tom.
+comment 6839324435; those marked "fix round 2" are story 782 fix round 2,
+coordinator rulings in PR 1102 comment 6840605385 and the coordinator's answer
+op782-fix2-a-1. Neither is a ruling by Tom.
 
 - **What pages.** One terminal page per closed session, `failed`, `lost` or
   `escalated`, and one page per lifecycle event recorded in
@@ -1914,7 +1916,13 @@ comment 6839324435; not a ruling by Tom.
   delivery. An entry is pruned only on proof that its session is gone (fix
   round 1): an hour after it was written, a read of its stored session name
   finds nothing, or a session with another UID. At most 20 such reads a tick,
-  and only in a tick that has an entry to add; the rest wait. A drill id is
+  and only in a tick that has an entry to add; the rest wait. A tick's reads
+  start after the session the last answered read was for, oldest entry
+  first, and go round to the oldest at the end (fix round 2), so sessions
+  that are still there cannot use every read and a full ledger gets room
+  again. A failed read ends the tick's reads, and the next tick starts with
+  it. The place is kept in memory: a restarted keeper starts from the
+  oldest. A drill id is
   never forgotten: the ledger keeps up to 16, and past that a new id is refused
   and logged, and nothing is sent. Every member of `state.json` but an entry's
   `session` must be present and not null; a ledger that lacks one, or holds it
@@ -1934,10 +1942,13 @@ comment 6839324435; not a ruling by Tom.
   that leaves a host is redacted again. A link is a scheme URL, a `www.` host,
   a dotted host or address with a port, path, query or fragment, or a dotted
   host whose last label is two or more letters or starts `xn--`, with or
-  without them (fix round 1, and the coordinator's answer op782-fix1-a-1):
-  `evil.example`, `evil.example:443`, `10.0.0.1:8080`, `evil.xn--p1ai` and a
-  file name such as `main.go` all become `[link removed]`; a dotted number
-  alone, such as `2.105.0`, stays. The only link is `status.remoteControl.url` when it is
+  without them (fix round 1, and the coordinator's answer op782-fix1-a-1).
+  A label is letters with their combining marks, decimal digits and hyphens,
+  of any script; any other character, an underscore included, ends it (fix
+  round 2). `evil.example`, `evil.example:443`, `10.0.0.1:8080`,
+  `evil.xn--p1ai`, `é.example`, `例.example:443`, `пример.xn--p1ai`,
+  `उदाहरण.भारत`, `ตัวอย่าง.ไทย` and a file name such as `main.go` all become
+  `[link removed]`; a dotted number alone, such as `2.105.0`, stays. The only link is `status.remoteControl.url` when it is
   `https://claude.ai/code/session_...`; otherwise the console's sessions list.
   Page records hold the fixed title, the session name and the note's byte
   count, never the note.
@@ -1952,12 +1963,17 @@ comment 6839324435; not a ruling by Tom.
   flags keep their parsing and failures. A missing or unreadable ledger logs
   `summon page state unavailable` and sends nothing. The pager never stops
   the keeper or its login refresher, and leaves the Ask notifier and its
-  ledger as they are. It has its own Kubernetes client, REST mapper,
-  transport and rate limiter, whose 5-second request timeout also bounds
-  discovery, and its own Pushover transport (fix round 1): a stalled pager
+  ledger as they are. It has its own Kubernetes client, REST mapper and
+  transport, and its own Pushover transport (fix round 1): a stalled pager
   request holds nothing the login refresher, the credential fence or the Ask
   notifier uses, and its tick ends with `summon page scan unavailable` or
-  `summon page state unavailable`.
+  `summon page state unavailable`. Its client does no client-side rate
+  limiting (fix round 2), so the 5-second request timeout bounds every
+  request, discovery included; it makes one list, at most 20 proof reads and
+  a few ledger calls a minute. A keeper REST config that carries a transport,
+  a transport wrapper or a dialer of its own turns the pager off and logs
+  `summon pages disabled: the pager's own client could not be built` with
+  which one (fix round 2); the keeper's in-cluster config carries none.
 - **Reading the record.** `kubectl -n dev-env-system get cm
   dev-env-keeper-summon-pages -o json | agent-run pages list`.
 

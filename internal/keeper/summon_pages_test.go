@@ -143,6 +143,9 @@ type summonFix struct {
 	getErr         error
 	listHook       func(list *v1alpha1.AgentSessionList, n int) error
 	sessionGets    int
+	// sessionGet, when set, sees each session read by name first; an error it
+	// returns answers that read.
+	sessionGet func(name string) error
 }
 
 var summonLedgerName = types.NamespacedName{Namespace: "dev-env-system", Name: DefaultSummonPagesConfigMap}
@@ -169,6 +172,11 @@ func newSummonFix(t *testing.T) *summonFix {
 				}
 				if _, ok := obj.(*v1alpha1.AgentSession); ok {
 					f.sessionGets++
+					if f.sessionGet != nil {
+						if err := f.sessionGet(key.Name); err != nil {
+							return err
+						}
+					}
 				}
 				return c.Get(ctx, key, obj, opts...)
 			},

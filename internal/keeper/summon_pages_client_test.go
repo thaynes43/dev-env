@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kruntime "k8s.io/apimachinery/pkg/runtime"
@@ -23,6 +24,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/flowcontrol"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
@@ -89,10 +91,13 @@ func TestSummonPagesRESTConfigIsItsOwn(t *testing.T) {
 }
 
 // F1, behaviour: a stalled pager request, its discovery or its list, holds
-// nothing the keeper's other workers use. A Claude publication and an Ask send
-// through the keeper's shared client, built as Run builds it, finish while it
-// is held; the pager's tick then ends on its own request timeout, which also
-// bounds discovery (discovery runs on a background context).
+// nothing the keeper's other workers use. While it is held, a synthetic Claude
+// refresh runs through the login worker's own tick (journal, generation floor,
+// fence, refresh, journal save, fence, publication) and an Ask send finishes,
+// both through the keeper's shared client, built as Run builds it (story 782
+// fix round 2); only then is the pager released. Its tick then ends on its own
+// request timeout, which also bounds discovery (discovery runs on a background
+// context).
 func TestSummonPagesStalledRequestBlocksNothingElse(t *testing.T) {
 	cfg := envConfig(t)
 	scheme := kruntime.NewScheme()
@@ -123,6 +128,8 @@ func TestSummonPagesStalledRequestBlocksNothingElse(t *testing.T) {
 			ctx := context.Background()
 			keeperNS, agentsNS := "summon-stall-keeper-"+tc.name, "summon-stall-agents-"+tc.name
 			live := types.NamespacedName{Namespace: agentsNS, Name: DefaultClaudeLiveSecret}
+			journal := types.NamespacedName{Namespace: keeperNS, Name: DefaultClaudeJournalSecret}
+			lease := types.NamespacedName{Namespace: keeperNS, Name: LeaderElectionID}
 			askLedger := types.NamespacedName{Namespace: keeperNS, Name: DefaultAskNotificationConfigMap}
 			for _, obj := range []client.Object{
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: keeperNS}},
@@ -130,10 +137,27 @@ func TestSummonPagesStalledRequestBlocksNothingElse(t *testing.T) {
 				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: keeperNS, Name: DefaultSummonPagesConfigMap}},
 				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: askLedger.Namespace, Name: askLedger.Name}},
 				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: live.Namespace, Name: live.Name}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: journal.Namespace, Name: journal.Name}},
 			} {
 				if err := shared.Create(ctx, obj); err != nil {
 					t.Fatal(err)
 				}
+			}
+			// The login worker as claudeRunnable builds it, on the shared
+			// client, with the synthetic refresh endpoint the Claude worker
+			// tests use and the real Lease fence. Its refresh is due.
+			clk := clocktesting.NewFakeClock(claudeNow)
+			tr := &claudeTestTransport{Run: rotated}
+			worker := &claudeWorker{Journal: &claudeJournal{Client: shared, Secret: journal}, Transport: tr,
+				Publisher: &claudePublicSecret{Client: shared, Secret: live},
+				Fence:     (&LeaseFence{Reader: shared, Lease: lease, Identity: "summon-stall-keeper", Clock: clk, MaxAge: 10 * time.Second}).CheckBudget,
+				Clock:     clk, Log: logr.Discard()}
+			saveClaude(t, worker.Journal, syntheticClaudeRecord(1))
+			clk.Step(6 * time.Hour) // the life is 8 hours: due at 5 hours 20 minutes
+			holder, renewed, seconds := "summon-stall-keeper", metav1.NewMicroTime(clk.Now()), int32(15)
+			if err := shared.Create(ctx, &coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{Namespace: lease.Namespace, Name: lease.Name},
+				Spec: coordinationv1.LeaseSpec{HolderIdentity: &holder, RenewTime: &renewed, LeaseDurationSeconds: &seconds}}); err != nil {
+				t.Fatal(err)
 			}
 			stalled, release := make(chan struct{}, 1), make(chan struct{})
 			var held atomic.Int32
@@ -173,10 +197,15 @@ func TestSummonPagesStalledRequestBlocksNothingElse(t *testing.T) {
 			case <-time.After(30 * time.Second):
 				t.Fatal("the pager's request never reached the hook")
 			}
-			// While it is held: a Claude publication through the shared client.
-			pub := &claudePublicSecret{Client: shared, Secret: live}
-			if err := pub.publish(ctx, syntheticClaudeAccess(1, time.Now(), 8*time.Hour), time.Time{}, time.Now()); err != nil {
-				t.Fatalf("the Claude publication did not finish: %v", err)
+			// While it is held: a Claude refresh through the worker's own tick.
+			worker.tick(ctx)
+			_, rec, err := worker.Journal.load(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			published, err := worker.Publisher.generation(ctx)
+			if err != nil || tr.Calls != 1 || rec.Stage != claudeReady || rec.Access.Generation != 2 || rec.Refresh.Reveal() != claudeNewRefreshCanary || published != 2 {
+				t.Fatalf("the Claude refresh did not finish: calls %d, stage %s, generation %d, published %d (%v)", tr.Calls, rec.Stage, rec.Access.Generation, published, err)
 			}
 			// And an Ask send whose ledger is on the shared client.
 			af := newAskNoticeFixture(t)
@@ -189,6 +218,11 @@ func TestSummonPagesStalledRequestBlocksNothingElse(t *testing.T) {
 			}
 			if held.Load() < 1 {
 				t.Fatal("the pager's request was not held while they ran")
+			}
+			select {
+			case <-done:
+				t.Fatal("the pager's tick ended before it was released")
+			default:
 			}
 			close(release)
 			select {

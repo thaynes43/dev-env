@@ -395,6 +395,24 @@ func TestSummonPagesNoteRedactsHostsAndSeparators(t *testing.T) {
 		{"one\u2028two\u2029three", "one two three"},
 		{"one\u0085two\r\nthree\vfour\ffive", "one two  three four five"},
 		{"evil\u2028.example", "evil .example"},
+		// Story 782 fix round 2, F6: labels of any script, with and without a
+		// port, path, query or fragment; a dotted number of any script stays.
+		{"see é.example now", "see [link removed] now"},
+		{"see é.example:443 now", "see [link removed] now"},
+		{"see 例.example now", "see [link removed] now"},
+		{"see 例.example:8443/x?y#z now", "see [link removed] now"},
+		{"see пример.xn--p1ai now", "see [link removed] now"},
+		{"see пример.xn--p1ai:443 now", "see [link removed] now"},
+		{"see пример.рф/путь now", "see [link removed] now"},
+		{"see ПРИМЕР.РФ.", "see [link removed]."},
+		{"see उदाहरण.भारत now", "see [link removed] now"},
+		{"see ตัวอย่าง.ไทย:443 now", "see [link removed] now"},
+		{"see a_b.example now", "see a_[link removed] now"},
+		{"see a.example-b now", "see [link removed]-b now"},
+		{"see a.example.123 now", "see [link removed].123 now"},
+		{"версия 2.105.0 и ٢.١٠٥.٠ готова", "версия 2.105.0 и ٢.١٠٥.٠ готова"},
+		{"пример.рф1x", "пример.рф1x"},
+		{"т.е. это", "т.е. это"},
 	} {
 		if got := summonNote(tc.in); got != tc.want {
 			t.Errorf("summonNote(%q) = %q, want %q", tc.in, got, tc.want)
