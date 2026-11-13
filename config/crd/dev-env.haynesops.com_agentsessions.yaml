@@ -3401,10 +3401,12 @@ spec:
                         && !has(self.podUID))'
                   pages:
                     description: |-
-                      Pages are the session's page events, each recorded once by the operator
-                      leader (DESIGN-064 6.8, ruling D9 on item 741, OP779). The keeper sends
-                      them (story 742); nothing sends them yet. Story 742 adds the terminal
-                      events. An entry is never removed or changed.
+                      Pages are the session's lifecycle page events, each recorded once by
+                      the operator leader (DESIGN-064 6.8, ruling D9 on item 741, OP779). The
+                      keeper sends them (story 742); nothing sends them yet. No terminal event
+                      is stored here or anywhere: the keeper derives a session's terminal page
+                      from its close record (ruling Q1 on item 742, built in PR 1102). An
+                      entry is never removed or changed.
                     items:
                       description: |-
                         SummonPage is one page event: what happened and when the operator
@@ -3415,9 +3417,11 @@ spec:
                           type: string
                         event:
                           description: |-
-                            SummonPageEvent is a page event of DESIGN-064 6.8 recorded on a session.
-                            This slice writes the two lifecycle events it decides; story 742 adds the
-                            terminal events and the rest of 6.8's lifecycle events.
+                            SummonPageEvent is a lifecycle page event of DESIGN-064 6.8 recorded on a
+                            session. This slice writes the two lifecycle events it decides; story 742
+                            adds the rest of 6.8's lifecycle events. A terminal event is never a page
+                            event here: the keeper derives it from the close record (ruling Q1 on item
+                            742, built in PR 1102).
                           enum:
                           - escalation-held
                           - escalation-reminder

@@ -1136,9 +1136,9 @@ above stays; where it differs, this governs.
      this bound, a pod the operator can stop frees its lane when it has
      stopped, so the next session of a single-flight lane does not overlap
      it. A pod that cannot go (never scheduled, a partitioned node, a rescue
-     that hangs) holds its lane for at most 5 minutes after the close, not
-     forever. That is the "What still runs" case above and story 779's known
-     limit.
+     that hangs) holds its lane until the later of the two bounds, subject to
+     a reconcile, not forever (fix round 2 below states it). That is the
+     "What still runs" case above and story 779's known limit.
 
    Before both have passed, the release waits for the pod to go, by the rows
    above: the recorded pod gone or replaced, a terminal phase with its
@@ -1153,13 +1153,68 @@ above stays; where it differs, this governs.
    The floor is right only while no agent release at or above it was cut
    before this code merged; the coordinator checks that at merge. The
    operator's suspend of 6.6's correction (ruling D3) is written before such
-   a release, so the pod still goes. A process paused between run-agent's
+   a release, and a task's stop stays due after it (fix round 2 below), so
+   the pod still goes. A process paused between run-agent's
    check and its spawn for longer than the minute is the "What still runs"
    limit above; it is not fenced further.
 6. *Start refusals (ruling D8).* The operator no longer refuses `remote` in
    `--summon-create-kinds`: the remote latch is in this binary. Naming
    `remote` still waits for #745 and a pinned agent image with this slice's
    agentd half; that gate is the haynes-ops switch, not code.
+
+**Correction, 2026-11-13: story 780 fix round 2, coordinator rulings in PR
+1100 comment 6839380816; not a ruling by Tom.** They answer the
+second-model-family review in PR 1100 comment 6839329693. Where this differs
+from the correction above or from 6.6's corrections, this governs.
+
+1. *A summoned launch's record is never deleted (F1).* When the tmux start
+   of a summoned session's first launch returns an error, `launch.json`
+   stays, whether or not the provider may have started, so no later boot
+   starts anything (item 3 above). agentd writes `~/.agentd/start-failed.json`
+   for that launch, and the status says how the launch ended. It is never a
+   state the operator counts as running (`busy`, `idle`, `waiting`),
+   whatever the pid file or the start window says:
+   - `failed` when nothing of this launch can have started: tmux was never
+     asked (its session already existed), or the tmux client could not be
+     found or executed, so it sent its server nothing; and when run-agent's
+     start fence refused the spawn (`start-refused.json` for that launch).
+     The session closes `agent-failed`.
+   - `interrupted` for any other error (a non-zero exit, a signal, a time
+     limit, no answer): the tmux server may have started run-agent and so
+     the provider. The session closes `agent-interrupted`, and for a task
+     the stop of item 2 ends a provider that did start. A task result the
+     provider wrote still reaches the operator in `status.agent.task`, the
+     close table's first row.
+
+   The evidence that decides is the error tmux returned, read when it
+   returns, and the fence's own record. agentd infers neither a start nor
+   its absence from a pid file, a log or the time. If `start-failed.json`
+   cannot be written, the launch record still stays and the status reads
+   the record alone, as for any summoned launch (item 3). An ordinary launch
+   keeps its removal, and so its retry on a later boot; a native Codex
+   launch keeps its own record, as before.
+2. *The stop outlives the release (F2).* The private executor stop is due
+   for a summoned task that is admitted, closed by the operator
+   (`closed.source` `unreported`), suspended and not being deleted, whether
+   or not `closed.released` is set, with its retries (30 seconds after a
+   failure), until its recorded executor has ended: its terminal record is
+   stored, or its pod is terminal or already has the stop's deadline. A
+   release on the start fence and the two bounds alone (item 5 above) does
+   not end the stop. A first reconcile that comes only after both bounds
+   suspends, releases and then still stops the recorded executor, and a
+   stop that fails through the five minutes is retried after the release. A
+   session that reported its own outcome keeps its pod for the post-mortem,
+   as before. Every hold of the stop path still applies, the owner's
+   HOME-expiry hold among them. This replaces "unreleased" in 6.6's
+   correction of the operator's suspend (ruling D3).
+3. *The bound as it is (F3).* A fenced pod that cannot go holds its lane
+   until the later of the start deadline plus one minute (`admittedAt` plus
+   16 minutes) and five minutes after the close, subject to a reconcile
+   (item 5's recheck); not "at most 5 minutes after the close". A close five
+   minutes after admission holds its lane until eleven minutes after the
+   close. The pod itself can outlive the release: the stop of item 2 ends a
+   task's pod once it can, and a pod that never starts is 6.6's stated
+   limit.
 
 ## 6. Contracts per build story
 

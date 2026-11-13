@@ -21,6 +21,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -846,4 +847,197 @@ func TestOrdinaryRemoteSessionBuildsAsToday(t *testing.T) {
 	if w.podCreates(s.Name) != 2 || w.pod(s.Name) == nil {
 		t.Fatalf("an evicted ordinary remote session was not rebuilt as before: %v", w.pods)
 	}
+}
+
+// stopRequested reports whether name's recorded executor has its stop: the
+// intent stored for the recorded executor's UID and the pod with that UID
+// carrying activeDeadlineSeconds (DESIGN-025 4).
+func (w *summonWorld) stopRequested(name string) bool {
+	w.t.Helper()
+	pod := w.pod(name)
+	h := w.get(name).Status.PrivateHistory
+	return pod != nil && h != nil && h.LastExecutor != nil && h.StopRequest != nil &&
+		h.StopRequest.PodUID == h.LastExecutor.PodUID && string(pod.UID) == h.LastExecutor.PodUID && pod.Spec.ActiveDeadlineSeconds != nil
+}
+
+// F2 of story 780 fix round 2 (coordinator rulings in PR 1100 comment
+// 6839380816): the stop of a summoned task the operator closed outlives the
+// release of its lane. Each task runs on the fenced image, is closed
+// deadline by the leader's watchdog (its own timer did not stop it), and its
+// pod keeps running, so only the start fence and the two time bounds
+// release it (ruling C1).
+//
+//   - The first reconcile after the close comes only once both bounds have
+//     passed: the operator suspends the session, releases it, the next
+//     session of the lane is admitted, and a later reconcile still asks the
+//     recorded executor to end.
+//   - The stop request fails through the five minutes after the close: the
+//     lane is released at five minutes all the same, and the stop, retried,
+//     succeeds after the release.
+//   - The owner's HOME-expiry hold still blocks the stop after the release,
+//     until it is lifted.
+//   - A session that reported its own outcome gets no stop, even suspended
+//     by a person after its release: its pod stays for the post-mortem.
+func TestSummonTaskStopOutlivesItsRelease(t *testing.T) {
+	ctx := context.Background()
+	// closedTask is a remediation task admitted and running on the fenced
+	// image, closed deadline at 65 minutes, with b queued behind it.
+	closedTask := func(t *testing.T, hooks *interceptor.Funcs) (*summonWorld, string, string, time.Time) {
+		t.Helper()
+		w := newSummonWorld(t, summonPolicyObject(callerA, 2, ptr.To[int32](1)))
+		w.useAgentImage(fencedImage)
+		if hooks != nil {
+			w.r = w.leader(hooks)
+		}
+		a := summonedFor("a-1", callerA, v1alpha1.LaneRemediation, 2*time.Minute)
+		b := summonedFor("b-1", callerA, v1alpha1.LaneRemediation, time.Minute)
+		b.Spec.Summon.MaxHold = "24h"
+		w.queue(a, b)
+		w.pass()
+		w.reconcile(a.Name)
+		w.schedule(a.Name, nil)
+		w.heartbeat(a.Name, protocol.AgentBusy)
+		w.reconcile(a.Name)
+		if h := w.get(a.Name).Status.PrivateHistory; h == nil || h.LastExecutor == nil || h.LastExecutor.PodUID != string(w.pod(a.Name).UID) {
+			t.Fatalf("no recorded executor: %+v", h)
+		}
+		// 15m start allowance + the task's 40m timeout + 10m.
+		w.now = summonT0.Add(65 * time.Minute)
+		w.pass()
+		w.wantClosed(a.Name, summonoutcome.ReasonDeadline, v1alpha1.OutcomeEscalated)
+		return w, a.Name, b.Name, w.closed(a.Name).At.Time
+	}
+	req := func(name string) ctrl.Request {
+		return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "dev-agents", Name: name}}
+	}
+
+	t.Run("the first reconcile comes after both bounds", func(t *testing.T) {
+		w, a, b, closedAt := closedTask(t, nil)
+		w.now = closedAt.Add(6 * time.Minute)
+		suspended := false
+		for i := 0; !w.released(a); i++ {
+			if i == 3 {
+				t.Fatal("not released past both bounds")
+			}
+			if _, err := w.r.Reconcile(ctx, req(a)); err != nil {
+				t.Fatal(err)
+			}
+			if s := w.get(a); s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && s.Annotations[v1alpha1.AnnotationSuspendedBy] == SummonCloseSuspender {
+				suspended = true
+			}
+		}
+		if !suspended || w.pod(a) == nil {
+			t.Fatalf("released without the operator's suspend first (%v), or with the pod gone", suspended)
+		}
+		w.pass()
+		w.wantAdmitted("a released", map[string]bool{b: true})
+		for i := 0; !w.stopRequested(a); i++ {
+			if i == 3 {
+				t.Fatalf("no stop for the recorded executor after the release: %+v", w.get(a).Status.PrivateHistory.StopRequest)
+			}
+			if _, err := w.r.Reconcile(ctx, req(a)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+
+	t.Run("the stop fails through five minutes and succeeds after the release", func(t *testing.T) {
+		failing, patches := true, 0
+		w, a, b, closedAt := closedTask(t, &interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, o client.Object, p client.Patch, opts ...client.PatchOption) error {
+			if _, ok := o.(*corev1.Pod); ok {
+				patches++
+				if failing {
+					return apierrors.NewServiceUnavailable("the API server is unavailable")
+				}
+			}
+			return c.Patch(ctx, o, p, opts...)
+		}})
+		for after := time.Duration(0); after < 5*time.Minute; after += 30 * time.Second {
+			w.now = closedAt.Add(after)
+			before := patches
+			w.reconcile(a)
+			if w.released(a) || w.stopRequested(a) || patches == before {
+				t.Fatalf("%s after the close: released %v, stop %v, stop patches %d then %d", after, w.released(a), w.stopRequested(a), before, patches)
+			}
+		}
+		if w.get(a).Spec.OperatingMode != v1alpha1.OperatingModeSuspended {
+			t.Fatal("not suspended")
+		}
+		w.now = closedAt.Add(5 * time.Minute)
+		w.reconcile(a)
+		if !w.released(a) || w.pod(a) == nil {
+			t.Fatalf("at five minutes: released %v, pod present %v", w.released(a), w.pod(a) != nil)
+		}
+		w.pass()
+		w.wantAdmitted("a released", map[string]bool{b: true})
+		failing = false
+		released := patches
+		w.now = closedAt.Add(5*time.Minute + 30*time.Second)
+		w.reconcile(a)
+		if !w.stopRequested(a) || patches == released {
+			t.Fatalf("the stop was not retried after the release: stop %v, patches %d then %d", w.stopRequested(a), released, patches)
+		}
+	})
+
+	t.Run("the owner's HOME-expiry hold still blocks the stop after the release", func(t *testing.T) {
+		w, a, _, closedAt := closedTask(t, nil)
+		s := w.get(a)
+		if s.Annotations == nil {
+			s.Annotations = map[string]string{}
+		}
+		s.Annotations[v1alpha1.AnnotationHomeExpiry] = v1alpha1.HomeExpiryHold
+		if err := w.base.Update(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		w.now = closedAt.Add(6 * time.Minute)
+		w.reconcile(a)
+		w.reconcile(a)
+		if !w.released(a) || w.stopRequested(a) || w.pod(a).Spec.ActiveDeadlineSeconds != nil {
+			t.Fatalf("held: released %v, stop %v", w.released(a), w.stopRequested(a))
+		}
+		s = w.get(a)
+		delete(s.Annotations, v1alpha1.AnnotationHomeExpiry)
+		if err := w.base.Update(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		w.reconcile(a)
+		if !w.stopRequested(a) {
+			t.Fatal("no stop once the hold was lifted")
+		}
+	})
+
+	t.Run("a reported close gets no stop", func(t *testing.T) {
+		w := newSummonWorld(t, summonPolicyObject(callerA, 2, ptr.To[int32](1)))
+		w.useAgentImage(fencedImage)
+		a := summonedFor("a-1", callerA, v1alpha1.LaneRemediation, 2*time.Minute)
+		w.queue(a)
+		w.pass()
+		w.reconcile(a.Name)
+		w.schedule(a.Name, nil)
+		w.heartbeat(a.Name, protocol.AgentBusy)
+		w.reconcile(a.Name)
+		w.now = summonT0.Add(3 * time.Minute)
+		w.close(a.Name, summonoutcome.Report)
+		w.reconcile(a.Name)
+		if !w.released(a.Name) {
+			t.Fatal("a report did not release at once")
+		}
+		// A person suspends it after its release.
+		s := w.get(a.Name)
+		s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+		if s.Annotations == nil {
+			s.Annotations = map[string]string{}
+		}
+		s.Annotations[v1alpha1.AnnotationSuspendedBy] = "human/dev-env-system/dev-env-human"
+		if err := w.base.Update(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		for _, after := range []time.Duration{0, 10 * time.Minute, time.Hour} {
+			w.now = summonT0.Add(3*time.Minute + after)
+			w.reconcile(a.Name)
+			if pod := w.pod(a.Name); pod == nil || pod.Spec.ActiveDeadlineSeconds != nil || w.get(a.Name).Status.PrivateHistory.StopRequest != nil {
+				t.Fatalf("%s after the report: a reported session's pod was stopped or went (present %v, stop intent %+v)", after, pod != nil, w.get(a.Name).Status.PrivateHistory.StopRequest)
+			}
+		}
+	})
 }

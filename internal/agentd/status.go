@@ -140,7 +140,15 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	// happen.
 	summonedRun := sess.Caller != "" && launched
 	var refused startRefused
+	// The tmux start of a summoned session's first launch returned an error
+	// (OP780 fix round 2): its record says how that launch ended, whatever
+	// this boot's step, pid file or start window would say.
+	var startErr startFailed
+	summonedStartErr := summonedRun && readJSONFile(s.statePath(startFailedFile), &startErr) == nil &&
+		startErr.ConversationID == first.ConversationID && startErr.BootID == first.BootID
 	switch {
+	case summonedStartErr:
+		st.Agent = summonedStartFailedState(s, first, startErr)
 	case boot.AgentError != "":
 		st.Agent = protocol.AgentState{State: protocol.AgentFailed, Error: boot.AgentError}
 	case launched && readJSONFile(s.statePath(startRefusedFile), &refused) == nil && refused.ConversationID == first.ConversationID && refused.BootID == first.BootID:
@@ -250,6 +258,26 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		case protocol.AgentBusy, protocol.AgentIdle, protocol.AgentWaiting:
 			st.Agent.Error = rejectionHeartbeatText(s, now)
 		}
+	}
+	return st
+}
+
+// summonedStartFailedState is how a summoned session's first launch ended
+// when its tmux start returned an error (DESIGN-064 5.9, OP780 fix round 2):
+// failed when the fence refused the spawn or nothing can have started,
+// otherwise interrupted, since the provider may have started. It is never a
+// running state, whatever the pid file says: agentd never starts the session
+// again, and the operator closes it once and stops its pod.
+func summonedStartFailedState(s Settings, first Launch, rec startFailed) protocol.AgentState {
+	created := first.CreatedAt
+	st := protocol.AgentState{State: protocol.AgentInterrupted, StartedAt: &created,
+		Error: "the tmux start of the summoned session's first launch returned an error (" + rec.Reason + "), so its provider may have started; agentd never starts it again (DESIGN-064 5.9)"}
+	var refused startRefused
+	switch {
+	case readJSONFile(s.statePath(startRefusedFile), &refused) == nil && refused.ConversationID == first.ConversationID && refused.BootID == first.BootID:
+		st.State, st.Error = protocol.AgentFailed, "run-agent refused to start the provider: "+refused.Reason
+	case !rec.MayHaveStarted:
+		st.State, st.Error = protocol.AgentFailed, "the tmux start of the summoned session's first launch failed before anything could start ("+rec.Reason+"); agentd never starts it again (DESIGN-064 5.9)"
 	}
 	return st
 }
