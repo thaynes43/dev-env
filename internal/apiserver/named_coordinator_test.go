@@ -90,7 +90,7 @@ func TestNamedCoordinatorSessionPodIsTheSession(t *testing.T) {
 	f.srv.Policy.NamedCoordinatorIdentities = true
 
 	// The heartbeat route, the first route a session pod calls.
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, status(name)); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, status(name)); w.Code != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	// A heartbeat for another session is still refused.

@@ -58,7 +58,11 @@ func TestCreateTitle(t *testing.T) {
 
 	bad := []struct{ title, reason string }{
 		{strings.Repeat("a", 49), sessiontitle.ReasonTooLong},
-		{strings.Repeat("é", 47) + "€", sessiontitle.ReasonTooLong},
+		{strings.Repeat("é", 47) + "€", sessiontitle.ReasonCharacters},
+		{"测", sessiontitle.ReasonCharacters},
+		{"e\u0301", sessiontitle.ReasonCharacters},
+		{"a\u200bb", sessiontitle.ReasonCharacters},
+		{"a\u00adb", sessiontitle.ReasonCharacters},
 		{"a|b", sessiontitle.ReasonCharacters},
 		{"-Main", sessiontitle.ReasonCharacters},
 		{".Main", sessiontitle.ReasonCharacters},

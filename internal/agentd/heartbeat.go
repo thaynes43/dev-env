@@ -62,36 +62,85 @@ func NewHeartbeatClient(s Settings, session string) (*HeartbeatClient, error) {
 // kubelet rotates the projected token. Errors name the status code, never the
 // token.
 func (h *HeartbeatClient) Send(ctx context.Context, st protocol.Status) error {
+	// Any 2xx is success. The body, including a title object this process does
+	// not understand, is discarded (DESIGN-065 rule 8.3).
+	_, err := h.post(ctx, st)
+	return err
+}
+
+// Exchange posts one status and reads the title object in the answer
+// (DESIGN-065 rule 8.3). Send stays the older contract: any 2xx succeeds and
+// the body is discarded.
+func (h *HeartbeatClient) Exchange(ctx context.Context, st protocol.Status) (HeartbeatTitle, error) {
+	body, err := h.post(ctx, st)
+	if err != nil {
+		return HeartbeatTitle{}, err
+	}
+	return parseHeartbeatTitle(body), nil
+}
+
+func (h *HeartbeatClient) post(ctx context.Context, st protocol.Status) ([]byte, error) {
 	tok, err := tokenfile.Read(h.TokenFile, tokenfile.MaxBytes)
 	if err != nil {
-		return fmt.Errorf("API token: %w", err)
+		return nil, fmt.Errorf("API token: %w", err)
 	}
 	// Guard the final wire boundary too: callers can construct Status directly.
 	// Keep the caller's raw evidence intact; this value copy sends typed usage only.
 	st.Usage = nil
 	body, err := json.Marshal(st)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, heartbeatTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.URL+protocol.HeartbeatPath(h.Session), bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
 	resp, err := h.HTTP.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 == 2 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-		return nil
+		got, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		return got, nil
 	}
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
-	return fmt.Errorf("heartbeat refused: %s: %s", resp.Status, strings.TrimSpace(string(snippet)))
+	return nil, fmt.Errorf("heartbeat refused: %s: %s", resp.Status, strings.TrimSpace(string(snippet)))
+}
+
+func parseHeartbeatTitle(body []byte) HeartbeatTitle {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return HeartbeatTitle{}
+	}
+	var doc struct {
+		Title json.RawMessage `json:"title"`
+	}
+	if json.Unmarshal(body, &doc) != nil {
+		return HeartbeatTitle{}
+	}
+	title := bytes.TrimSpace(doc.Title)
+	if len(title) == 0 || string(title) == "null" {
+		return HeartbeatTitle{}
+	}
+	var obj struct {
+		Text json.RawMessage `json:"text"`
+	}
+	if json.Unmarshal(title, &obj) != nil {
+		return HeartbeatTitle{Unknown: true}
+	}
+	raw := bytes.TrimSpace(obj.Text)
+	if len(raw) == 0 || string(raw) == "null" || raw[0] != '"' {
+		return HeartbeatTitle{Unknown: true}
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return HeartbeatTitle{Unknown: true}
+	}
+	return HeartbeatTitle{Present: true, Text: text}
 }
 
 // ReadDecisionAuthority uses the pod's rotating authenticated API token and an

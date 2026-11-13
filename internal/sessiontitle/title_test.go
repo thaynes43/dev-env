@@ -25,15 +25,20 @@ func TestValidate(t *testing.T) {
 		{"Main coordinator", ""},
 		{"Café", ""},
 		{"1a", ""},
-		{"e\u0301", ""},
+		{"é", ""},
+		{"e\u0301", ReasonCharacters},
 		{"Main-coordinator", ""},
+		{"a;b", ""},
 		{strings.Repeat("a", 48), ""},
 		{title96, ""},
 		{strings.Repeat("a", 49), ReasonTooLong},
-		{title97, ReasonTooLong},
-		{strings.Repeat("\u4e00", 48), ReasonTooLong},
+		{title97, ReasonCharacters},
+		{strings.Repeat("\u4e00", 48), ReasonCharacters},
+		{"测", ReasonCharacters},
 		{"|", ReasonCharacters},
 		{"a|b", ReasonCharacters},
+		{"ab;", ReasonCharacters},
+		{"a\\b", ReasonCharacters},
 		{"a\u0007b", ReasonCharacters},
 		{"a\tb", ReasonCharacters},
 		{"a\nb", ReasonCharacters},
@@ -45,6 +50,9 @@ func TestValidate(t *testing.T) {
 		{".Main", ReasonCharacters},
 		{"!Main", ReasonCharacters},
 		{"€", ReasonCharacters},
+		{"Enter to select", ReasonCharacters},
+		{"Esc to Cancel", ReasonCharacters},
+		{"eSC to INTERRUPT", ReasonCharacters},
 		{" Main", ReasonSpacing},
 		{"Main ", ReasonSpacing},
 		{"Main  coordinator", ReasonSpacing},
@@ -97,5 +105,26 @@ func TestFamilyAndCompose(t *testing.T) {
 	}
 	if strings.Contains(Explain(ReasonTooLong), "Main") {
 		t.Fatal("Explain included a title")
+	}
+	explained := Explain(ReasonCharacters)
+	for _, phrase := range []string{"enter to select", "esc to cancel", "esc to interrupt"} {
+		if !strings.Contains(explained, phrase) {
+			t.Fatalf("Explain omitted %q: %s", phrase, explained)
+		}
+	}
+}
+
+func TestEffective(t *testing.T) {
+	if got, ignored := Effective("", false, "Old"); got != "Old" || ignored {
+		t.Fatalf("absent %q %v", got, ignored)
+	}
+	if got, ignored := Effective("New", true, "Old"); got != "New" || ignored {
+		t.Fatalf("annotation %q %v", got, ignored)
+	}
+	if got, ignored := Effective("", true, "Old"); got != "" || ignored {
+		t.Fatalf("clear %q %v", got, ignored)
+	}
+	if got, ignored := Effective("ab;", true, "Old"); got != "Old" || !ignored {
+		t.Fatalf("ignored %q %v", got, ignored)
 	}
 }

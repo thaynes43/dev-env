@@ -460,7 +460,9 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 		if err != nil {
 			return 0, nil, err
 		}
-		return http.StatusOK, view(sess, true), nil
+		v := view(sess, true)
+		s.noteTitleRename(sess, &v)
+		return http.StatusOK, v, nil
 	}
 	if c.kind == kindSummon {
 		if s.Live == nil {
@@ -470,7 +472,9 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 		if s.Live.Get(ctx, key, &own) != nil || !summonOwns(c, &own) {
 			return 0, nil, summonReadDenied()
 		}
-		return http.StatusOK, view(&own, true), nil
+		v := view(&own, true)
+		s.noteTitleRename(&own, &v)
+		return http.StatusOK, v, nil
 	}
 	opted := r.Header.Get(apiv1.UsageCaptureHeader) == apiv1.UsageCaptureDirectV1
 	if c.kind == kindCoordinator {
@@ -504,7 +508,24 @@ func (s *Server) withUsageRollup(ctx context.Context, sess *v1alpha1.AgentSessio
 	if capture {
 		v.CapturedUsage = capturedUsageView(sess, c, s.ChildUsageCapture)
 	}
+	s.noteTitleRename(sess, &v)
 	return v
+}
+
+// noteTitleRename tells show that typing is off for this session. It is set
+// only on a session that has a recorded title change (the title annotation).
+// A session nobody renamed keeps the view it had before this field existed:
+// an older agent-run's strict readers (show --json --once, usage export)
+// refuse a key they do not know (DESIGN-065 section 9.7). A session the flag
+// names, and the value *, leave the field out.
+func (s *Server) noteTitleRename(sess *v1alpha1.AgentSession, v *apiv1.Session) {
+	if s == nil || sess == nil || v == nil || s.TitleRename.Allows(sess.Name) {
+		return
+	}
+	if _, present := titleAnnotation(sess); !present {
+		return
+	}
+	v.TitleRename = "off"
 }
 
 // reapSession serves DELETE /v1/sessions/{name}: it deletes an ordinary

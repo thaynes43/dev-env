@@ -787,13 +787,38 @@ create sessions (a v2 session, a workbench session or the v1 pod) runs:
 "${v2run[@]}" show <name>    # wait for "remote control: registered"
 ```
 
-`--title "Main coordinator"` sets optional role text at create. It cannot be
-changed afterwards. For `claude-opus-5-5` the Claude app shows
-`Opus | Main coordinator`. The session's stable name stays the pod name, the
-hostname and the volume name. An empty title leaves the app showing that
-stable name. The first character of a title is a letter or a digit. `agent-run rc start --title` sets the same text on a fresh remote
-session. `agent-run` trims the ends of `--title` and refuses a value the API
-would refuse, without sending it.
+`--title "Main coordinator"` sets optional role text at create. For
+`claude-opus-5-5` the Claude app shows `Opus | Main coordinator`. The session's
+stable name stays the pod name, the hostname and the volume name. An empty
+title leaves the app showing that stable name. The first character of a title
+is a letter or a digit. `agent-run rc start --title` sets the same text on a
+fresh remote session. `agent-run` trims the ends of `--title` and refuses a
+value the API would refuse, without sending it.
+
+`agent-run title <session> "<text>"` records a new role title on a session that
+already exists, and `agent-run title <session> --clear` removes it. The
+recorded title is the annotation `dev-env.haynesops.com/title`. `spec.title`
+stays the text from create. agent-run reads the effective title and sends it
+back as `expect`, so a stale read is refused (`title_changed`) and nothing is
+written. A second recorded change within a minute is refused. The session's
+own agentd learns the text from its heartbeat and types `/rename` plus Enter
+into its own pane only when that session is a Claude remote session, idle or
+between turns with a background shell (`shell`), quiet, with nobody attached
+and an empty input line, on a Claude Code version this build has recorded.
+If the second check fails while the input row still holds exactly that text,
+agentd removes it with one Backspace per character and tries again later. The
+operator flag `--title-rename-sessions` names the sessions whose heartbeat
+answers carry that text, or `*` for every session. Empty, the default,
+names no session: the heartbeat is the old empty answer and agentd types
+nothing, while `agent-run title` still only records and says so. For a
+session with a recorded title change, `agent-run show` then
+says the rename is not enabled for this session. A session nobody renamed
+gets no new key in its view, so an older `agent-run`, whose
+`show --json --once` and `usage export` refuse a key they do not know,
+still reads it. A title set at launch is
+not typed again; a different title recorded later in the same pod is typed
+under the same guard. A title may not end with a semicolon and may not
+contain a backslash. This typed rename is built and not installed.
 
 It needs no flag, pairing or sign-in on the default profile, which follows the
 keeper's shared login. Tell Tom the session name once `show` reads
@@ -1062,6 +1087,10 @@ The operator flag `--enable-parent-notes` defaults to false and requires
 nothing; an operator older than this feature answers 404. The wait needs the
 verb watch on inboxmessages for the operator's Role, granted in haynes-ops
 before the flag is on. This source does not enable the flag in the cluster.
+The child's project must also be in the operator's `--inbox-projects` list.
+A child of any other project is hidden, and its `parent tell` answers 404
+(`internal/apiserver/parent_note.go:87`). On 2026-11-13 the live list is
+`dev-env,haynes-studio` (OpenProject #799).
 The parent finds notes by listing them or with `parent wait-any`. A child whose recorded parent is the
 Meatball account `dev-env-system/dev-env-meatball` uses the same `parent tell`.
 The server stores `callerRecipient` from the live CallerPolicy. Any other

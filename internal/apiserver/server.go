@@ -80,6 +80,10 @@ import (
 
 // Server holds the API's handlers and what they read and write.
 type Server struct {
+	// TitleRename names the sessions whose heartbeat answers carry a title.
+	// The zero value names none: those heartbeats stay the empty 204 of main,
+	// so agentd types nothing. The title route itself stays on.
+	TitleRename  TitleRename
 	OriginalHome *homeguard.Binding // nil leaves original-HOME admission off
 	// PortalConversationTargets is an explicit Session UID to name read scope; nil disables it.
 	PortalConversationTargets map[string]string
@@ -390,6 +394,9 @@ func (s *Server) Handler() http.Handler {
 	}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/resume", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodPost: s.resumeSession,
+	}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/title", s.serve(route{coordinator: true, methods: map[string]handler{
+		http.MethodPut: s.setTitle,
 	}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/decision-authority", s.serve(route{methods: map[string]handler{http.MethodGet: s.ownDecisionAuthority}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/outcome", s.serve(route{methods: map[string]handler{http.MethodPost: s.reportOutcome}}))

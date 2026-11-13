@@ -7,11 +7,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/sessiontitle"
 )
 
 // deliverRig is a pod whose agent runs: a boot record, this boot's launch and
@@ -71,6 +73,122 @@ func TestDeliverToAClaudeTUI(t *testing.T) {
 	}
 	if strings.HasSuffix(msg, " ") {
 		t.Errorf("the text was not trimmed: %q", msg)
+	}
+	// No title.json mark: Deliver makes these three calls and does not read
+	// the screen or send a Backspace.
+	for _, line := range l {
+		if strings.Contains(line, "display-message") || strings.Contains(line, "capture-pane") || strings.Contains(line, "Backspace") {
+			t.Fatalf("a delivery with no mark read the screen: %s", line)
+		}
+	}
+}
+
+func deliverScreenRunner(t *testing.T, screen, cursor string) (*fakeRunner, *[]string) {
+	t.Helper()
+	var calls []string
+	f := &fakeRunner{handle: func(c Cmd) (Result, error) {
+		line := c.Name
+		if len(c.Args) > 0 {
+			line += " " + strings.Join(c.Args, " ")
+		}
+		calls = append(calls, line)
+		if c.Name != "tmux" || len(c.Args) == 0 {
+			return Result{}, nil
+		}
+		switch c.Args[0] {
+		case "list-panes":
+			return Result{Stdout: []byte("0 0 %0 0 0 0 2028 claude\n")}, nil
+		case "capture-pane":
+			return Result{Stdout: []byte(screen)}, nil
+		case "display-message":
+			if len(strings.Fields(cursor)) == 2 {
+				cursor += " 200 50"
+			}
+			return Result{Stdout: []byte(cursor + "\n")}, nil
+		default:
+			return Result{}, nil
+		}
+	}}
+	return f, &calls
+}
+
+func TestDeliverPastesWhenTheRenameLineIsEmpty(t *testing.T) {
+	s, _, _ := deliverRig(t, true)
+	sess := protocol.Session{Name: "s-1", SessionUID: "uid-deliver", Agent: protocol.AgentClaude}
+	if err := writeJSONFile(s.statePath(titleStateFile), titleDisk{
+		UID: sess.SessionUID, State: "Failed", Reason: "left-in-input", Target: "zz", Stopped: true,
+		PaneID: "%0", CLIPid: 7, ProcStart: "boot",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f, calls := deliverScreenRunner(t, sessiontitle.IdleEmptyScreen, "2 46")
+	if err := Deliver(context.Background(), f, s, sess, "session/x", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(*calls, "\n")
+	if strings.Contains(joined, "Backspace") {
+		t.Fatalf("Deliver sent a Backspace:\n%s", joined)
+	}
+	if !strings.Contains(joined, "list-panes") || !strings.Contains(joined, "capture-pane") || !strings.Contains(joined, "display-message") || !strings.Contains(joined, "load-buffer") {
+		t.Fatalf("calls:\n%s", joined)
+	}
+	var disk titleDisk
+	if readJSONFile(s.statePath(titleStateFile), &disk) != nil || disk.State != "" || disk.Reason != "" || disk.Stopped || disk.PaneID != "" || disk.CLIPid != 0 || disk.ProcStart != "" {
+		t.Fatalf("mark stayed %+v", disk)
+	}
+}
+
+func TestDeliverPastesWhenTheConversationHoldsANumberedLine(t *testing.T) {
+	s, _, _ := deliverRig(t, true)
+	sess := protocol.Session{Name: "s-1", SessionUID: "uid-deliver", Agent: protocol.AgentClaude}
+	if err := writeJSONFile(s.statePath(titleStateFile), titleDisk{
+		UID: sess.SessionUID, State: "Failed", Reason: "left-in-input", Target: "zz", Stopped: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const mark = "❯\u00a0"
+	base := sessiontitle.IdleEmptyScreen
+	at := strings.LastIndex(base, mark)
+	promptLine := strings.LastIndex(base[:at], "\n")
+	topLine := strings.LastIndex(base[:promptLine], "\n")
+	if at < 0 || promptLine < 0 || topLine < 0 {
+		t.Fatal("idle fixture has no input box")
+	}
+	// Derived from the recorded idle screen by a numbered line above the box.
+	// The cursor is that box's row. ObservedCursor is not used: it follows
+	// the typing rule, which calls this screen unknown.
+	screen := base[:topLine+1] + "1. Fix the bug\n" + base[topLine+1:]
+	row := strings.Count(screen[:strings.LastIndex(screen, mark)], "\n")
+	f, calls := deliverScreenRunner(t, screen, "2 "+strconv.Itoa(row))
+	if err := Deliver(context.Background(), f, s, sess, "session/x", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(*calls, "\n")
+	if !strings.Contains(joined, "load-buffer") || strings.Contains(joined, "Backspace") {
+		t.Fatalf("calls:\n%s", joined)
+	}
+}
+
+func TestDeliverRefusesWhileRenameTextIsUnsent(t *testing.T) {
+	s, _, _ := deliverRig(t, true)
+	sess := protocol.Session{Name: "s-1", SessionUID: "uid-deliver", Agent: protocol.AgentClaude}
+	if err := writeJSONFile(s.statePath(titleStateFile), titleDisk{
+		UID: sess.SessionUID, State: "Failed", Reason: "left-in-input", Target: "zz", Stopped: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f, calls := deliverScreenRunner(t, sessiontitle.TypedRenameScreen, "12 46")
+	err := Deliver(context.Background(), f, s, sess, "session/x", "hello")
+	if err == nil || !strings.Contains(err.Error(), "not delivered: the session's input line holds unsent rename text") {
+		t.Fatalf("%v", err)
+	}
+	joined := strings.Join(*calls, "\n")
+	if strings.Contains(joined, "load-buffer") || strings.Contains(joined, "Backspace") || strings.Contains(joined, "paste-buffer") {
+		t.Fatalf("sent keys:\n%s", joined)
+	}
+	var disk titleDisk
+	if readJSONFile(s.statePath(titleStateFile), &disk) != nil || disk.Reason != "left-in-input" {
+		t.Fatalf("mark cleared %+v", disk)
 	}
 }
 
