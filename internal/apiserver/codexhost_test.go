@@ -1525,7 +1525,7 @@ func (f *fixture) callHeartbeat(name string, pod *corev1.Pod, body string) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	code, _, err := f.srv.heartbeat(context.Background(), w, req, c)
-	if err != nil || code != http.StatusNoContent {
+	if err != nil || code != http.StatusOK {
 		f.t.Fatalf("heartbeat: code %d err %v body %s", code, err, w.Body.String())
 	}
 }
@@ -1576,7 +1576,7 @@ func TestPresentPodHeartbeatConflictsWithThePreviousPodsLaterWrite(t *testing.T)
 	})
 	stored := f.session("paired")
 	agent := stored.Status.Agent
-	if !conflicted || herr == nil || code == http.StatusNoContent {
+	if !conflicted || herr == nil || code == http.StatusOK {
 		t.Fatalf("present heartbeat applied over the previous pod's later write: conflicted %v code %d err %v agent %+v remote %+v",
 			conflicted, code, herr, agent, stored.Status.RemoteControl)
 	}
@@ -1755,7 +1755,7 @@ func TestHeartbeatBodyPodUIDDoesNotSetStatus(t *testing.T) {
 		agent["podUID"] = fromBody
 	}
 	w := f.do(http.MethodPost, protocol.HeartbeatPath("paired"), tok, fields)
-	if w.Code != http.StatusNoContent {
+	if w.Code != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	got := f.session("paired").Status.Agent

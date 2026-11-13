@@ -43,7 +43,7 @@ func TestHeartbeatWritesConversationUsageForTheReportingInteractiveSession(t *te
 	interactive(f, name, v1alpha1.ModeRemote)
 	st := status(name)
 	st.ConversationUsage = convFigure(f.now.Add(-time.Minute))
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	got := f.session(name).Status.ConversationUsage
@@ -60,7 +60,7 @@ func TestHeartbeatWritesConversationUsageForTheReportingInteractiveSession(t *te
 	// An old agentd's heartbeat (the field absent) leaves the stored figure as it is.
 	before := f.session(name).Status.ConversationUsage.DeepCopy()
 	f.now = f.now.Add(time.Minute)
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, status(name)); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, status(name)); w.Code != http.StatusOK {
 		t.Fatal(w.Code)
 	}
 	if !apiequality.Semantic.DeepEqual(before, f.session(name).Status.ConversationUsage) {
@@ -71,7 +71,7 @@ func TestHeartbeatWritesConversationUsageForTheReportingInteractiveSession(t *te
 	newer.Turns, newer.ResultState, newer.ReasonCode, newer.Skipped = 9, protocol.ConversationPartial, protocol.ReasonSkippedRecords, 2
 	st = status(name)
 	st.ConversationUsage = newer
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code)
 	}
 	if got := f.session(name).Status.ConversationUsage; got.Turns != 9 || got.ResultState != "Partial" || got.ReasonCode != "skipped_records" || got.Skipped != 2 {
@@ -80,7 +80,7 @@ func TestHeartbeatWritesConversationUsageForTheReportingInteractiveSession(t *te
 	stale := convFigure(f.now.Add(-time.Hour))
 	stale.Turns = 1
 	st.ConversationUsage = stale
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code)
 	}
 	if got := f.session(name).Status.ConversationUsage; got.Turns != 9 {
@@ -90,7 +90,7 @@ func TestHeartbeatWritesConversationUsageForTheReportingInteractiveSession(t *te
 	final := convFigure(f.now.Add(time.Minute))
 	final.Turns = 10
 	st.ConversationUsage = final
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code)
 	}
 	if got := f.session(name).Status.ConversationUsage; got.ResultState != "Final" || got.ReasonCode != "" || got.Turns != 10 {
@@ -130,7 +130,7 @@ func TestHeartbeatIgnoresConversationUsageItWillNotKeepWithoutRefusingTheHeartbe
 			st := status(session)
 			st.ConversationUsage = valid(f)
 			tc.edit(st.ConversationUsage)
-			if w := f.do(http.MethodPost, protocol.HeartbeatPath(session), token, st); w.Code != http.StatusNoContent {
+			if w := f.do(http.MethodPost, protocol.HeartbeatPath(session), token, st); w.Code != http.StatusOK {
 				t.Fatalf("the heartbeat was refused over its usage field: %d", w.Code)
 			}
 			got := f.session(session)
@@ -150,7 +150,7 @@ func TestHeartbeatMalformedConversationUsageKeepsLivenessAndTheStoredFigure(t *t
 	interactive(f, name, v1alpha1.ModeLocal)
 	st := status(name)
 	st.ConversationUsage = convFigure(f.now)
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code)
 	}
 	stored := f.session(name).Status.ConversationUsage.DeepCopy()
@@ -159,7 +159,7 @@ func TestHeartbeatMalformedConversationUsageKeepsLivenessAndTheStoredFigure(t *t
 		body := `{"session":"` + name + `","agent":{"state":"busy"},"conversationUsage":` + malformed + `}`
 		w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, body)
 		got := f.session(name)
-		if w.Code != http.StatusNoContent || got.Status.Agent.Status != protocol.AgentBusy || !apiequality.Semantic.DeepEqual(stored, got.Status.ConversationUsage) {
+		if w.Code != http.StatusOK || got.Status.Agent.Status != protocol.AgentBusy || !apiequality.Semantic.DeepEqual(stored, got.Status.ConversationUsage) {
 			t.Fatalf("%s: %d %+v", malformed, w.Code, got.Status.ConversationUsage)
 		}
 	}
@@ -175,7 +175,7 @@ func TestHeartbeatNeverOverwritesTheInitialUsageObservation(t *testing.T) {
 	u := fixtureUsage(f, name, token)
 	st := status(name)
 	st.UsageObservation = &u
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code)
 	}
 	original := f.session(name).Status.UsageObservation.DeepCopy()
@@ -185,7 +185,7 @@ func TestHeartbeatNeverOverwritesTheInitialUsageObservation(t *testing.T) {
 	// A task session offering a conversation figure keeps only its own observation.
 	st = status(name)
 	st.ConversationUsage = convFigure(f.now)
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code)
 	}
 	got := f.session(name).Status
@@ -194,7 +194,7 @@ func TestHeartbeatNeverOverwritesTheInitialUsageObservation(t *testing.T) {
 	}
 	// An interactive session's figure leaves any observation exactly as it is.
 	interactive(f, name, v1alpha1.ModeRemote)
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusOK {
 		t.Fatal(w.Code)
 	}
 	got = f.session(name).Status
@@ -211,7 +211,7 @@ func TestConversationUsageCannotBeWrittenForAnotherSession(t *testing.T) {
 	interactive(f, "conv-other", v1alpha1.ModeRemote)
 	st := status("conv-other")
 	st.ConversationUsage = convFigure(f.now)
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("conv-other"), mine, st); w.Code == http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("conv-other"), mine, st); w.Code == http.StatusOK {
 		t.Fatal("a session wrote another session's heartbeat")
 	}
 	if f.session("conv-other").Status.ConversationUsage != nil {
@@ -257,7 +257,7 @@ func TestHeartbeatBodyAcceptsUnknownFieldsFromANewerAgent(t *testing.T) {
 	const name = "conv-future"
 	token := f.sessionPod(name, "full", 0)
 	body := `{"session":"` + name + `","agent":{"state":"busy"},"conversationUsageV2":{"a":1},"futureThing":[1,2]}`
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, body); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, body); w.Code != http.StatusOK {
 		t.Fatalf("an unknown field refused the heartbeat: %d %s", w.Code, w.Body.String())
 	}
 }
@@ -269,7 +269,7 @@ func TestHeartbeatBodyAcceptsTheHomeHeadroomField(t *testing.T) {
 	const name = "home-headroom"
 	token := f.sessionPod(name, "full", 0)
 	body := `{"session":"` + name + `","agent":{"state":"busy"},"homeHeadroom":{"version":1,"state":"ok","observedAt":"2026-11-03T22:00:00Z","bytes":{"state":"ok","total":21474836480,"available":9663676416},"inodes":{"state":"ok","total":1310720,"available":1120779}}}`
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, body); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, body); w.Code != http.StatusOK {
 		t.Fatalf("a homeHeadroom body refused the heartbeat: %d %s", w.Code, w.Body.String())
 	}
 }
