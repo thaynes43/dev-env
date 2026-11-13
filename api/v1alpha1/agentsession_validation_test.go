@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -812,6 +813,17 @@ func TestSpecImmutableExceptOperatingModeAndLifecycle(t *testing.T) {
 		}, "spec.agent"},
 		{"change mode", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Mode = v1alpha1.ModeLocal }, "spec.mode"},
 		{"change model", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Model = "claude-opus-5" }, "spec.model"},
+		{"change title", func() *v1alpha1.AgentSession {
+			s := remoteSession()
+			s.Spec.Title = "Main coordinator"
+			return s
+		}, func(s *v1alpha1.AgentSessionSpec) { s.Title = "Ops migration" }, "spec.title"},
+		{"add title", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Title = "Main coordinator" }, presence},
+		{"remove title", func() *v1alpha1.AgentSession {
+			s := remoteSession()
+			s.Spec.Title = "Main coordinator"
+			return s
+		}, func(s *v1alpha1.AgentSessionSpec) { s.Title = "" }, presence},
 		{"change base", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Base = "origin/dev" }, "spec.base"},
 		{"change size", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Size = v1alpha1.SizeL }, "spec.size"},
 		{"change the prompt", taskSession, func(s *v1alpha1.AgentSessionSpec) { s.Prompt = "something else" }, "spec.prompt"},
@@ -2788,4 +2800,131 @@ func TestSummonExecutorLatchRules(t *testing.T) {
 			wantInvalid(t, err, tc.want)
 		})
 	}
+}
+
+// TestTitleBounds is DESIGN-065 ruling 1: each bound accepts and refuses, and
+// a title cannot be changed, added or removed after create.
+func TestTitleBounds(t *testing.T) {
+	title96 := strings.Repeat("é", 48)
+	title97 := strings.Repeat("é", 47) + "€"
+	if len(title96) != 96 || utf8.RuneCountInString(title96) != 48 {
+		t.Fatalf("96-byte fixture is %d bytes and %d runes", len(title96), utf8.RuneCountInString(title96))
+	}
+	if len(title97) != 97 || utf8.RuneCountInString(title97) != 48 {
+		t.Fatalf("97-byte fixture is %d bytes and %d runes", len(title97), utf8.RuneCountInString(title97))
+	}
+	accept := []struct{ name, title string }{
+		{"absent", ""},
+		{"role text", "Main coordinator"},
+		{"accented letter", "Café"},
+		{"leading digit", "1a"},
+		{"letter then combining mark", "e\u0301"},
+		{"hyphen later", "Main-coordinator"},
+		{"48 characters", strings.Repeat("a", 48)},
+		{"96 bytes", title96},
+	}
+	for _, c := range accept {
+		t.Run("accept "+c.name, func(t *testing.T) {
+			var sent any
+			if c.name != "absent" {
+				sent = c.title
+			}
+			got := createTitle(t, sent)
+			if got.Spec.Title != c.title {
+				t.Fatalf("stored %q", got.Spec.Title)
+			}
+		})
+	}
+	cjk144 := strings.Repeat("\u4e00", 48)
+	euro48 := strings.Repeat("€", 48)
+	if len(cjk144) != 144 || utf8.RuneCountInString(cjk144) != 48 || len(euro48) != 144 {
+		t.Fatalf("144-byte fixtures are %d and %d bytes", len(cjk144), len(euro48))
+	}
+	refuse := []struct{ name, title, want string }{
+		{"empty", "", "spec.title"},
+		{"49 characters", strings.Repeat("a", 49), "spec.title"},
+		{"97 bytes", title97, "at most 96 bytes"},
+		{"144 bytes", cjk144, "at most 96 bytes"},
+		{"48 euros", euro48, "at most 96 bytes"},
+		{"bar", "|", "no bar"},
+		{"bar in text", "a|b", "no bar"},
+		{"control character", "a\u0007b", "no control"},
+		{"tab", "a\tb", "letter or a digit"},
+		{"newline", "a\nb", "letter or a digit"},
+		{"no-break space", "a\u00a0b", "letter or a digit"},
+		{"format character", "a\u200bb", "letter or a digit"},
+		{"above U+FFFF", "a\U00010000", "nothing above U+FFFF"},
+		{"leading hyphen", "-Main", "letter or a digit"},
+		{"leading full stop", ".Main", "letter or a digit"},
+		{"leading punctuation", "!Main", "letter or a digit"},
+		{"leading symbol", "€Main", "letter or a digit"},
+		{"leading space", " Main", "no leading or trailing space"},
+		{"trailing space", "Main ", "no leading or trailing space"},
+		{"double space", "Main  coordinator", "no leading or trailing space"},
+	}
+	for _, c := range refuse {
+		t.Run("refuse "+c.name, func(t *testing.T) {
+			wantInvalid(t, createTitleErr(t, c.title), c.want)
+		})
+	}
+
+	s := remoteSession()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Status.RemoteControl = &v1alpha1.RemoteControlStatus{Title: "Opus | Main coordinator"}
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(t, s).Status.RemoteControl; got == nil || got.Title != "Opus | Main coordinator" {
+		t.Fatalf("status title %+v", got)
+	}
+	got := get(t, s)
+	got.Status.RemoteControl.Title = strings.Repeat("a", 128)
+	if err := k8s.Status().Update(ctx(t), got); err != nil {
+		t.Fatal(err)
+	}
+	got = get(t, s)
+	got.Status.RemoteControl.Title = strings.Repeat("b", 129)
+	wantInvalid(t, k8s.Status().Update(ctx(t), got), "status.remoteControl.title")
+	got = get(t, s)
+	got.Status.RemoteControl.Title = strings.Repeat("€", 43)
+	if len(got.Status.RemoteControl.Title) != 129 {
+		t.Fatalf("status byte fixture is %d bytes", len(got.Status.RemoteControl.Title))
+	}
+	wantInvalid(t, k8s.Status().Update(ctx(t), got), "at most 128 bytes")
+}
+
+func createTitle(t *testing.T, title any) *v1alpha1.AgentSession {
+	t.Helper()
+	n := name()
+	if err := createTitleErrNamed(t, n, title); err != nil {
+		t.Fatal(err)
+	}
+	got := &v1alpha1.AgentSession{}
+	if err := k8s.Get(ctx(t), client.ObjectKey{Namespace: ns, Name: n}, got); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func createTitleErr(t *testing.T, title any) error {
+	t.Helper()
+	return createTitleErrNamed(t, name(), title)
+}
+
+func createTitleErrNamed(t *testing.T, n string, title any) error {
+	t.Helper()
+	spec := map[string]any{
+		"repo": "haynes-ops", "agent": "claude", "mode": "task",
+		"model": "claude-opus-5-5", "prompt": "fix the typo",
+	}
+	if title != nil {
+		spec["title"] = title
+	}
+	u := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	u.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("AgentSession"))
+	u.SetName(n)
+	u.SetNamespace(ns)
+	return k8s.Create(ctx(t), u)
 }

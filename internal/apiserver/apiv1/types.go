@@ -147,6 +147,9 @@ type CreateSessionRequest struct {
 	Mode string `json:"mode"`
 	// Model is a full model id, never an alias, for example claude-opus-5-5.
 	Model string `json:"model"`
+	// Title is optional role text, set at create and not changed later
+	// (DESIGN-065). Empty is absent. The API stores an accepted value unchanged.
+	Title string `json:"title,omitempty"`
 	// Effort is a level the model takes (low, medium, high, xhigh, max, or
 	// ultracode where the model takes xhigh). Empty leaves the CLI's default.
 	Effort string `json:"effort,omitempty"`
@@ -234,6 +237,7 @@ type Session struct {
 	Agent          string          `json:"agent"`
 	Mode           string          `json:"mode"`
 	Model          string          `json:"model"`
+	Title          string          `json:"title,omitempty"`
 	Effort         string          `json:"effort,omitempty"`
 	Size           string          `json:"size,omitempty"`
 	Profile        string          `json:"profile,omitempty"`
@@ -748,6 +752,9 @@ type Error struct {
 type FieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
+	// Reason is a fixed code for a field the API checked itself, such as a
+	// title. Schema refusals leave it empty.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Error codes, with the HTTP status each comes with.

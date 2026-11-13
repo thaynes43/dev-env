@@ -185,6 +185,7 @@ func remoteControlStatus(rc *protocol.RemoteControl) *v1alpha1.RemoteControlStat
 		SessionID: clip(rc.SessionID, maxShort),
 		URL:       clip(rc.URL, maxMessage),
 		State:     clip(rc.State, maxShort),
+		Title:     clipRemoteTitle(rc.Title),
 	}
 }
 
@@ -295,6 +296,16 @@ func usageStatus(u protocol.Usage) *v1alpha1.UsageStatus {
 		InputTokens:  max(u.InputTokens, 0),
 		OutputTokens: max(u.OutputTokens, 0),
 	}
+}
+
+// clipRemoteTitle keeps a launch title inside the 128-byte status field.
+// clip adds an ellipsis after the cut, so the cut itself is shorter than 128.
+func clipRemoteTitle(s string) string {
+	const mark = "…"
+	if len(s) <= maxShort {
+		return s
+	}
+	return clip(s, maxShort-len(mark))
 }
 
 // clip cuts s to at most n bytes on a rune boundary.

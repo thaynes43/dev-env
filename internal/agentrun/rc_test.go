@@ -113,6 +113,42 @@ func rcServe(h *harness, createStatus int, view func(int) apiv1.Session, message
 	}
 }
 
+func TestRCTitle(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(int) apiv1.Session { return rcView(0) }, http.StatusAccepted)
+	h.mustRun(ExitPending, rcArgs(h, "--wait", "0", "--title", "  Main coordinator  ")...)
+	posts := sessionPosts(h)
+	if len(posts) != 1 || decodeCreate(t, posts[0].body).Title != "Main coordinator" {
+		t.Fatalf("rc posts %d", len(posts))
+	}
+
+	h = newHarness(t)
+	h.mustRun(ExitUsage, rcArgs(h, "--title", "bad|title")...)
+	res := rcResult(t, h)
+	if len(h.api.requests()) != 0 || res.Error == nil || !strings.Contains(res.Error.Message, "title_characters") || strings.Contains(res.Error.Message, "bad|title") {
+		t.Fatalf("bad title %+v requests %d", res.Error, len(h.api.requests()))
+	}
+
+	h = newHarness(t)
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if r.Method == http.MethodPost && r.URL.Path == apiv1.SessionsPath {
+			apiError(w, http.StatusBadRequest, apiv1.CodeBadRequest, `the body is not a valid request: json: unknown field "title"`)
+			return
+		}
+		t.Errorf("retried %s %s", r.Method, r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	}
+	h.mustRun(ExitFailed, rcArgs(h, "--wait", "0", "--title", "Main coordinator")...)
+	res = rcResult(t, h)
+	posts = sessionPosts(h)
+	if len(posts) != 1 || decodeCreate(t, posts[0].body).Title != "Main coordinator" {
+		t.Fatalf("older operator posts %d", len(posts))
+	}
+	if res.Error == nil || !strings.Contains(res.Error.Message, "did not retry") || strings.Contains(res.Error.Message, "unknown field") || strings.Contains(res.Error.Message, "Main coordinator") {
+		t.Fatalf("older operator %+v", res.Error)
+	}
+}
+
 func rcCountMessages(h *harness) int {
 	n := 0
 	for _, req := range h.api.requests() {

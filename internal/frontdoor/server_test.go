@@ -263,8 +263,8 @@ func TestFrontDoorTools(t *testing.T) {
 				}
 			}
 		}
-		if total != descriptionWordBound || descriptionWordBound != 214 {
-			t.Fatalf("tools/list descriptions have %d words; bound %d; measured contract 214", total, descriptionWordBound)
+		if total != descriptionWordBound || descriptionWordBound != 222 {
+			t.Fatalf("tools/list descriptions have %d words; bound %d; measured contract 222", total, descriptionWordBound)
 		}
 	})
 
@@ -368,7 +368,10 @@ func TestFrontDoorTools(t *testing.T) {
 				}
 				var keys map[string]json.RawMessage
 				_ = json.Unmarshal(body, &keys)
-				if _, ok := keys["effort"]; ok || req.Model != "claude-opus-5-5" || req.Agent != "claude" || req.Mode != "task" || req.Profile != "dev" || req.Size != "M" || req.Repo != "dev-env" || req.IdempotencyKey != "coordinator-528" || req.Limits == nil || req.Limits.Timeout != "2h" || req.Limits.MaxWorkers == nil || *req.Limits.MaxWorkers != 3 {
+				if _, effort := keys["effort"]; effort || req.Title != "" {
+					t.Errorf("untitled create sent effort or title: %s", body)
+				}
+				if _, ok := keys["title"]; ok || req.Model != "claude-opus-5-5" || req.Agent != "claude" || req.Mode != "task" || req.Profile != "dev" || req.Size != "M" || req.Repo != "dev-env" || req.IdempotencyKey != "coordinator-528" || req.Limits == nil || req.Limits.Timeout != "2h" || req.Limits.MaxWorkers == nil || *req.Limits.MaxWorkers != 3 {
 					t.Errorf("request %+v", req)
 				}
 				if !strings.Contains(req.Prompt, "opwork show 528 --history") || !strings.Contains(req.Prompt, "2 hours") || !strings.Contains(req.Prompt, "3 workers") {
@@ -398,6 +401,67 @@ func TestFrontDoorTools(t *testing.T) {
 			if strings.Contains(req.auth, testBearer) || strings.Contains(string(req.body), testTracker) {
 				t.Fatal("operator call carried the wrong credential")
 			}
+		}
+	})
+
+	t.Run("coordinator start with title", func(t *testing.T) {
+		api.reset()
+		api.set(func(w http.ResponseWriter, r *http.Request, body []byte) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionsPath:
+				writeJSON(w, 200, apiv1.SessionList{})
+			case r.Method == http.MethodPost && r.URL.Path == apiv1.SessionsPath:
+				var req apiv1.CreateSessionRequest
+				if json.Unmarshal(body, &req) != nil || req.Title != "Nightly upgrades" || !strings.Contains(string(body), `"title":"Nightly upgrades"`) {
+					t.Errorf("title body %s", body)
+				}
+				writeJSON(w, 201, apiv1.Session{Name: "dev-env-1110-060001", Phase: "Pending", IdempotencyKey: req.IdempotencyKey, Title: req.Title})
+			default:
+				t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+				writeJSON(w, 500, apiv1.ErrorResponse{Error: apiv1.Error{Code: "internal", Message: "unexpected"}})
+			}
+		})
+		text, isError := tool(t, "coordinator_start", map[string]any{"item": 528, "repo": "dev-env", "model": "claude-opus-5-5", "hours": 2, "workers": 3, "title": "Nightly upgrades"})
+		if isError || !strings.Contains(text, "dev-env-1110-060001") {
+			t.Fatalf("text %q error %v", text, isError)
+		}
+	})
+
+	t.Run("coordinator start trims the title", func(t *testing.T) {
+		api.reset()
+		api.set(func(w http.ResponseWriter, r *http.Request, body []byte) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionsPath:
+				writeJSON(w, 200, apiv1.SessionList{})
+			case r.Method == http.MethodPost && r.URL.Path == apiv1.SessionsPath:
+				var req apiv1.CreateSessionRequest
+				if json.Unmarshal(body, &req) != nil || req.Title != "Nightly upgrades" {
+					t.Errorf("trimmed title body %s", body)
+				}
+				writeJSON(w, 201, apiv1.Session{Name: "dev-env-1110-060002", Phase: "Pending", IdempotencyKey: req.IdempotencyKey, Title: req.Title})
+			default:
+				t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+				writeJSON(w, 500, apiv1.ErrorResponse{Error: apiv1.Error{Code: "internal", Message: "unexpected"}})
+			}
+		})
+		text, isError := tool(t, "coordinator_start", map[string]any{"item": 528, "repo": "dev-env", "model": "claude-opus-5-5", "hours": 2, "workers": 3, "title": "  Nightly upgrades  "})
+		if isError || !strings.Contains(text, "dev-env-1110-060002") {
+			t.Fatalf("text %q error %v", text, isError)
+		}
+	})
+
+	t.Run("coordinator start refuses a bad title before the operator", func(t *testing.T) {
+		api.reset()
+		api.set(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			t.Errorf("a bad title reached %s %s", r.Method, r.URL.Path)
+			writeJSON(w, 500, apiv1.ErrorResponse{Error: apiv1.Error{Code: "internal", Message: "unexpected"}})
+		})
+		text, isError := tool(t, "coordinator_start", map[string]any{"item": 528, "repo": "dev-env", "model": "claude-opus-5-5", "hours": 2, "workers": 3, "title": "bad|title"})
+		if !isError || !strings.Contains(text, "title:") || !strings.Contains(text, "title_characters") || strings.Contains(text, "--title") || strings.Contains(text, "bad|title") {
+			t.Fatalf("text %q error %v", text, isError)
+		}
+		if len(api.requests()) != 0 {
+			t.Fatal("a request was sent")
 		}
 	})
 

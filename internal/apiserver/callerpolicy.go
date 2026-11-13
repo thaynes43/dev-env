@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -272,21 +273,43 @@ func (s *Server) admitCallerCapacityExcept(ctx context.Context, c *caller, excep
 	return nil
 }
 
+// olderTitleCRD is the refusal when a create carried a title and the
+// installed AgentSession CRD does not know the field. Strict validation
+// makes that a refusal instead of a silent drop.
+const olderTitleCRD = "the cluster's AgentSession CRD is older than the operator"
+
 // createWithCallerCap writes a session admitted by admitCallerCapacity. A
 // bounded create asks for strict field validation: an older installed CRD
 // must refuse it, never silently prune limits.maxWorkers and launch an
-// unbounded coordinator. A bounded parent's worker records the parent's UID.
+// unbounded coordinator. A create that carries a title asks for the same
+// check, so an older CRD refuses spec.title instead of dropping it. A
+// create without a title keeps the options it sent before that field
+// existed. A bounded parent's worker records the parent's UID.
 func (s *Server) createWithCallerCap(ctx context.Context, sess *v1alpha1.AgentSession, c *caller) error {
-	if c.kind != kindPolicy && callerWorkerCap(c) == nil && (sess.Spec.Limits == nil || sess.Spec.Limits.MaxWorkers == nil) {
+	unbounded := c.kind != kindPolicy && callerWorkerCap(c) == nil && (sess.Spec.Limits == nil || sess.Spec.Limits.MaxWorkers == nil)
+	if unbounded && sess.Spec.Title == "" {
 		return s.Client.Create(ctx, sess)
 	}
-	if c.kind == kindSession {
+	if !unbounded && c.kind == kindSession {
 		if sess.Annotations == nil {
 			sess.Annotations = map[string]string{}
 		}
 		sess.Annotations[callerParentUID] = string(c.session.UID)
 	}
-	return s.Client.Create(ctx, sess, client.FieldValidation(metav1.FieldValidationStrict))
+	err := s.Client.Create(ctx, sess, client.FieldValidation(metav1.FieldValidationStrict))
+	if err != nil && sess.Spec.Title != "" && staleTitleCRD(err) {
+		return badRequest("%s", olderTitleCRD)
+	}
+	return err
+}
+
+// staleTitleCRD is an API-server refusal that the stored schema has no spec.title.
+func staleTitleCRD(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "unknown field") && strings.Contains(msg, "spec.title")
 }
 
 // Only newly bounded targets enter this path, whoever requested their resume.
