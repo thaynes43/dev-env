@@ -67,6 +67,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/homeguard"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
+	"github.com/thaynes43/dev-env/internal/summonquota"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
@@ -290,8 +291,12 @@ type Reconciler struct {
 	// SummonAdmissionEvery is the admission's interval; zero means
 	// SummonAdmissionEvery.
 	SummonAdmissionEvery time.Duration
-	// SummonQuota is story 743's quota gate for admission; nil admits.
-	SummonQuota func(*v1alpha1.AgentSession) bool
+	// SummonQuota is story 743's quota gate for admission
+	// (summonquota.Gate.DecideSession); nil admits. The admission pass calls
+	// it last in the hold switch, only for a Queued session with spec.caller,
+	// with the pass's context, marked by summonquota.WithPass, and keeps its
+	// decision: a hold's condition names what the gate read (story 790).
+	SummonQuota func(context.Context, *v1alpha1.AgentSession) summonquota.Decision
 	// summonNudge asks the leader's admission for a pass now; nil when the
 	// admission does not run.
 	summonNudge chan struct{}

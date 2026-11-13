@@ -1,9 +1,10 @@
 package summonquota
 
-// The gate's proofs of story 783: the one read per 30 seconds, the bounded
-// read, the read that never happens, and the one log line per decision. A
-// fake read and a clock the test moves; the timeout test waits on the read's
-// own context, never on a sleep.
+// The gate's proofs of story 783, with story 790's read bound: the one read
+// per admission pass, the bounded read, the read that never happens, the
+// decision the seam returns, and the one log line per decision. A fake read
+// and a clock the test moves; the timeout test waits on the read's own
+// context, never on a sleep.
 
 import (
 	"context"
@@ -64,10 +65,14 @@ type gateWorld struct {
 	store *fakeStore
 	logs  *logLines
 	g     *Gate
+	ctx   context.Context
 }
 
+// admits is the gate's decision on s, under the world's context.
+func (w *gateWorld) admits(s *v1alpha1.AgentSession) bool { return w.g.DecideSession(w.ctx, s).Admit }
+
 func newGate(lines Lines, readings map[string]Reading) *gateWorld {
-	w := &gateWorld{now: t0, store: &fakeStore{readings: readings}, logs: &logLines{}}
+	w := &gateWorld{now: t0, store: &fakeStore{readings: readings}, logs: &logLines{}, ctx: context.Background()}
 	w.g = &Gate{Lines: lines, Read: w.store.read, Now: func() time.Time { return w.now }, Log: w.logs.logger()}
 	return w
 }
@@ -76,34 +81,111 @@ func claudeAt(windows ...any) map[string]Reading {
 	return map[string]Reading{protocol.AgentClaude: reading(windows...)}
 }
 
-// Proof 6 as the coordinator ruled it (op783-q-1, gap A): the boolean seam
-// gets no pass id, so the bound is one read per 30 seconds on the gate's own
-// clock. Several Queued sessions in one pass share one read.
-func TestGateReadsAtMostOncePerThirtySeconds(t *testing.T) {
+// Story 790 replaces slice a's 30-second reuse with an exact bound: every
+// decision under one admission pass's context (WithPass) shares one read,
+// made by the first decision that needs it, however long the pass takes; the
+// next pass reads again at once; a decision outside a pass is a pass of its
+// own.
+func TestGateReadsAtMostOncePerPass(t *testing.T) {
 	w := newGate(installLines, claudeAt(FiveHourMinutes, "81"))
+	w.ctx = WithPass(context.Background())
 	for _, s := range []*v1alpha1.AgentSession{summoned("a", v1alpha1.SummonPriorityBulk), summoned("b", v1alpha1.SummonPriorityBulk), summoned("c", v1alpha1.SummonPriorityNormal), summoned("d", v1alpha1.SummonPriorityBulk)} {
-		w.g.Admits(s)
+		w.admits(s)
 	}
 	if w.store.reads != 1 {
 		t.Fatalf("four Queued sessions in one pass: %d reads, want 1", w.store.reads)
 	}
-	w.now = t0.Add(29 * time.Second)
-	w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk))
+	w.now = t0.Add(time.Minute)
+	w.admits(summoned("e", v1alpha1.SummonPriorityBulk))
 	if w.store.reads != 1 {
-		t.Fatalf("29 s later: %d reads, want 1", w.store.reads)
+		t.Fatalf("a minute later in the same pass: %d reads, want 1", w.store.reads)
 	}
-	w.now = t0.Add(DefaultReuse)
-	w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk))
-	w.g.Admits(summoned("b", v1alpha1.SummonPriorityBulk))
+	w.now = t0.Add(time.Minute + time.Second)
+	w.ctx = WithPass(context.Background())
+	w.admits(summoned("a", v1alpha1.SummonPriorityBulk))
+	w.admits(summoned("b", v1alpha1.SummonPriorityBulk))
 	if w.store.reads != 2 {
-		t.Fatalf("30 s later: %d reads, want 2", w.store.reads)
+		t.Fatalf("the next pass, a second later: %d reads, want 2", w.store.reads)
 	}
-	// A clock that went back past the last read reads again rather than keep
-	// an old read; that is the only early read.
+	// A clock that went back is just another pass.
 	w.now = t0.Add(-time.Minute)
-	w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk))
+	w.ctx = WithPass(context.Background())
+	w.admits(summoned("a", v1alpha1.SummonPriorityBulk))
 	if w.store.reads != 3 {
-		t.Fatalf("clock back a minute: %d reads, want 3", w.store.reads)
+		t.Fatalf("clock back a minute, a new pass: %d reads, want 3", w.store.reads)
+	}
+	w.ctx = context.Background()
+	w.admits(summoned("a", v1alpha1.SummonPriorityBulk))
+	w.admits(summoned("b", v1alpha1.SummonPriorityBulk))
+	if w.store.reads != 5 {
+		t.Fatalf("two decisions outside a pass: %d reads, want 5", w.store.reads)
+	}
+}
+
+// The read runs under the pass's context, bounded by the read timeout: a
+// value the pass carries reaches the store, and so does a deadline no later
+// than ReadTimeout. A pass whose context is already done admits.
+func TestGateReadsUnderThePassContext(t *testing.T) {
+	type key struct{}
+	w := newGate(installLines, claudeAt(FiveHourMinutes, "81"))
+	var got context.Context
+	w.g.Read = func(ctx context.Context) (map[string]Reading, error) {
+		got = ctx
+		return w.store.read(ctx)
+	}
+	w.ctx = WithPass(context.WithValue(context.Background(), key{}, "pass"))
+	if w.admits(summoned("a", v1alpha1.SummonPriorityBulk)) {
+		t.Fatal("bulk at 81 %, line 80, admitted")
+	}
+	if got == nil || got.Value(key{}) != "pass" {
+		t.Fatal("the read did not run under the pass's context")
+	}
+	if dl, ok := got.Deadline(); !ok || dl.After(time.Now().Add(DefaultReadTimeout)) {
+		t.Fatalf("the read's deadline %v, %v", dl, ok)
+	}
+	done, cancel := context.WithCancel(context.Background())
+	cancel()
+	w = newGate(installLines, claudeAt(FiveHourMinutes, "81"))
+	w.store.block = true
+	w.ctx = WithPass(done)
+	if !w.admits(summoned("a", v1alpha1.SummonPriorityBulk)) || w.store.reads != 1 || !strings.Contains(w.logs.lines[0], `"reason"="read-error"`) {
+		t.Fatalf("a pass already done: %d reads, logs %q", w.store.reads, w.logs.lines)
+	}
+}
+
+// Story 790's seam: the decision names what it read. A hold names its
+// window, the percentage, the line and the reading's readAt; an admit on an
+// unusable reading names why, with no readAt.
+func TestGateDecisionCarriesWhatItRead(t *testing.T) {
+	weekly := installLines
+	weekly.BulkSevenDay = 90
+	r := reading(FiveHourMinutes, "81", SevenDayMinutes, "91")
+	w := newGate(weekly, map[string]Reading{protocol.AgentClaude: r})
+	d := w.g.DecideSession(w.ctx, summoned("a", v1alpha1.SummonPriorityBulk))
+	if d.Admit || d.Reason != WhyFiveHourPast || d.FiveHour.Used != "81" || d.FiveHour.Line != 80 || !d.ReadAt.Equal(r.ReadAt) || d.ReadAt.IsZero() {
+		t.Fatalf("5-hour hold: %+v", d)
+	}
+	r = reading(FiveHourMinutes, "10", SevenDayMinutes, "91")
+	w = newGate(weekly, map[string]Reading{protocol.AgentClaude: r})
+	d = w.g.DecideSession(w.ctx, summoned("a", v1alpha1.SummonPriorityBulk))
+	if d.Admit || d.Reason != WhySevenDayPast || d.SevenDay.Used != "91" || d.SevenDay.Line != 90 || !d.ReadAt.Equal(r.ReadAt) {
+		t.Fatalf("7-day hold: %+v", d)
+	}
+	stale := reading(FiveHourMinutes, "99")
+	stale.ReadAt = t0.Add(-16 * time.Minute)
+	w = newGate(weekly, map[string]Reading{protocol.AgentClaude: stale})
+	d = w.g.DecideSession(w.ctx, summoned("a", v1alpha1.SummonPriorityBulk))
+	if !d.Admit || d.Reason != WhyStale || !d.ReadAt.Equal(stale.ReadAt) {
+		t.Fatalf("stale admit: %+v", d)
+	}
+	w = newGate(weekly, nil)
+	w.store.err = errors.New("store unavailable")
+	d = w.g.DecideSession(w.ctx, summoned("a", v1alpha1.SummonPriorityBulk))
+	if !d.Admit || d.Reason != WhyReadError || !d.ReadAt.IsZero() || d.HaveReading {
+		t.Fatalf("read-error admit: %+v", d)
+	}
+	if d := w.g.DecideSession(w.ctx, summoned("u", v1alpha1.SummonPriorityUrgent)); !d.Admit || d.Reason != WhyUrgent {
+		t.Fatalf("urgent: %+v", d)
 	}
 }
 
@@ -112,7 +194,7 @@ func TestGateReadsAtMostOncePerThirtySeconds(t *testing.T) {
 func TestGateWithEveryLineUnsetReadsNothing(t *testing.T) {
 	w := newGate(Lines{MaxAge: time.Minute}, claudeAt(FiveHourMinutes, "100", SevenDayMinutes, "100"))
 	for _, p := range []v1alpha1.SummonPriority{v1alpha1.SummonPriorityUrgent, v1alpha1.SummonPriorityNormal, v1alpha1.SummonPriorityBulk} {
-		if !w.g.Admits(summoned("a", p)) {
+		if !w.admits(summoned("a", p)) {
 			t.Errorf("%s held with no line set", p)
 		}
 	}
@@ -125,10 +207,10 @@ func TestGateWithEveryLineUnsetReadsNothing(t *testing.T) {
 // reads.
 func TestGateReadsOnlyForAPriorityWithALine(t *testing.T) {
 	w := newGate(Lines{BulkFiveHour: 80, MaxAge: 15 * time.Minute}, claudeAt(FiveHourMinutes, "100"))
-	if !w.g.Admits(summoned("u", v1alpha1.SummonPriorityUrgent)) || !w.g.Admits(summoned("n", v1alpha1.SummonPriorityNormal)) || w.store.reads != 0 {
+	if !w.admits(summoned("u", v1alpha1.SummonPriorityUrgent)) || !w.admits(summoned("n", v1alpha1.SummonPriorityNormal)) || w.store.reads != 0 {
 		t.Fatalf("urgent or normal with only the bulk line set: %d reads", w.store.reads)
 	}
-	if w.g.Admits(summoned("b", v1alpha1.SummonPriorityBulk)) || w.store.reads != 1 {
+	if w.admits(summoned("b", v1alpha1.SummonPriorityBulk)) || w.store.reads != 1 {
 		t.Fatalf("bulk at 100 %%, line 80: admitted or %d reads", w.store.reads)
 	}
 }
@@ -141,19 +223,21 @@ func TestGateSessionWithoutCallerReadsNothing(t *testing.T) {
 	w := newGate(installLines, claudeAt(FiveHourMinutes, "100"))
 	s := summoned("tom", v1alpha1.SummonPriorityBulk)
 	s.Spec.Caller = ""
-	if !w.g.Admits(s) || w.store.reads != 0 || len(w.logs.lines) != 0 {
+	if !w.admits(s) || w.store.reads != 0 || len(w.logs.lines) != 0 {
 		t.Fatalf("a session without spec.caller: %d reads, logs %q", w.store.reads, w.logs.lines)
 	}
 }
 
 // Proof 4 at the seam: a read error, a timeout and a missing reading each
-// admit and log why; a failed read is reused for 30 seconds like a good one.
+// admit and log why; a failed read answers the rest of its pass like a good
+// one.
 func TestGateReadFailuresAdmitAndLogWhy(t *testing.T) {
 	t.Run("read error", func(t *testing.T) {
 		w := newGate(installLines, nil)
 		w.store.err = errors.New("store unavailable")
+		w.ctx = WithPass(context.Background())
 		for _, name := range []string{"a", "b"} {
-			if !w.g.Admits(summoned(name, v1alpha1.SummonPriorityBulk)) {
+			if !w.admits(summoned(name, v1alpha1.SummonPriorityBulk)) {
 				t.Fatal("held on a read error")
 			}
 		}
@@ -165,7 +249,7 @@ func TestGateReadFailuresAdmitAndLogWhy(t *testing.T) {
 		w := newGate(installLines, nil)
 		w.store.block = true
 		w.g.ReadTimeout = 20 * time.Millisecond
-		if !w.g.Admits(summoned("a", v1alpha1.SummonPriorityNormal)) {
+		if !w.admits(summoned("a", v1alpha1.SummonPriorityNormal)) {
 			t.Fatal("held on a read timeout")
 		}
 		if w.store.reads != 1 || len(w.logs.lines) != 1 || !strings.Contains(w.logs.lines[0], `"reason"="read-timeout"`) {
@@ -174,14 +258,14 @@ func TestGateReadFailuresAdmitAndLogWhy(t *testing.T) {
 	})
 	t.Run("no reading for the agent", func(t *testing.T) {
 		w := newGate(installLines, map[string]Reading{protocol.AgentCodex: reading(FiveHourMinutes, "100")})
-		if !w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk)) || !strings.Contains(w.logs.lines[0], `"reason"="no-reading"`) {
+		if !w.admits(summoned("a", v1alpha1.SummonPriorityBulk)) || !strings.Contains(w.logs.lines[0], `"reason"="no-reading"`) {
 			t.Fatalf("logs %q", w.logs.lines)
 		}
 	})
 	t.Run("nil read", func(t *testing.T) {
 		w := newGate(installLines, nil)
 		w.g.Read = nil
-		if !w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk)) || !strings.Contains(w.logs.lines[0], `"reason"="read-error"`) {
+		if !w.admits(summoned("a", v1alpha1.SummonPriorityBulk)) || !strings.Contains(w.logs.lines[0], `"reason"="read-error"`) {
 			t.Fatalf("logs %q", w.logs.lines)
 		}
 	})
@@ -194,13 +278,13 @@ func TestGateLogsOneLinePerDecision(t *testing.T) {
 	weekly := installLines
 	weekly.BulkSevenDay = 90
 	w := newGate(weekly, claudeAt(FiveHourMinutes, "81", SevenDayMinutes, "91"))
-	if w.g.Admits(summoned("held-one", v1alpha1.SummonPriorityBulk)) {
+	if w.admits(summoned("held-one", v1alpha1.SummonPriorityBulk)) {
 		t.Fatal("bulk past both lines admitted")
 	}
-	if !w.g.Admits(summoned("normal-one", v1alpha1.SummonPriorityNormal)) {
+	if !w.admits(summoned("normal-one", v1alpha1.SummonPriorityNormal)) {
 		t.Fatal("normal at 81 %% held")
 	}
-	w.g.Admits(summoned("urgent-one", v1alpha1.SummonPriorityUrgent))
+	w.admits(summoned("urgent-one", v1alpha1.SummonPriorityUrgent))
 	if len(w.logs.lines) != 2 {
 		t.Fatalf("%d log lines, want 2: %q", len(w.logs.lines), w.logs.lines)
 	}
@@ -231,18 +315,15 @@ func TestGateLogsOneLinePerDecision(t *testing.T) {
 func TestGateClockRolledBackBehindAHighReadingAdmits(t *testing.T) {
 	stored := claudeAt(FiveHourMinutes, "99")
 	w := newGate(installLines, stored)
-	if w.g.Admits(summoned("before", v1alpha1.SummonPriorityBulk)) || w.store.reads != 1 {
+	if w.admits(summoned("before", v1alpha1.SummonPriorityBulk)) || w.store.reads != 1 {
 		t.Fatalf("bulk at 99 %%, line 80, before the clock went back: admitted, or %d reads", w.store.reads)
 	}
 	w.now = t0.Add(-time.Hour)
-	if !w.g.Admits(summoned("after", v1alpha1.SummonPriorityBulk)) {
+	if !w.admits(summoned("after", v1alpha1.SummonPriorityBulk)) {
 		t.Fatal("the clock went back an hour behind a 99 % reading and the session was held")
 	}
 	if w.store.reads != 2 {
 		t.Fatalf("the clock went back: %d reads, want a new read (2)", w.store.reads)
-	}
-	if got := w.g.readings[protocol.AgentClaude]; !got.ReadAt.Equal(stored[protocol.AgentClaude].ReadAt) {
-		t.Fatalf("the new read returned another reading: %+v", got)
 	}
 	if len(w.logs.lines) != 2 {
 		t.Fatalf("%d log lines, want 2: %q", len(w.logs.lines), w.logs.lines)
@@ -261,7 +342,7 @@ func TestGateLogsAFutureReadingsNegativeAge(t *testing.T) {
 	r := reading(FiveHourMinutes, "99")
 	r.ReadAt = t0.Add(500 * time.Millisecond)
 	w := newGate(installLines, map[string]Reading{protocol.AgentClaude: r})
-	if !w.g.Admits(summoned("ahead", v1alpha1.SummonPriorityNormal)) {
+	if !w.admits(summoned("ahead", v1alpha1.SummonPriorityNormal)) {
 		t.Fatal("a reading half a second in the future held")
 	}
 	if l := w.logs.lines[0]; !strings.Contains(l, `"reason"="reading-from-future"`) || !strings.Contains(l, `"readingAge"="-500ms"`) {
@@ -269,7 +350,7 @@ func TestGateLogsAFutureReadingsNegativeAge(t *testing.T) {
 	}
 	r.ReadAt = t0
 	w = newGate(installLines, map[string]Reading{protocol.AgentClaude: r})
-	if w.g.Admits(summoned("at", v1alpha1.SummonPriorityNormal)) {
+	if w.admits(summoned("at", v1alpha1.SummonPriorityNormal)) {
 		t.Fatal("a 99 % reading taken exactly at the clock admitted")
 	}
 	if l := w.logs.lines[0]; !strings.Contains(l, `"reason"="five-hour-past-line"`) || !strings.Contains(l, `"readingAge"="0s"`) {
@@ -286,7 +367,7 @@ func TestGateDecidesOnTheClockAfterTheRead(t *testing.T) {
 		r.Windows[0].ResetsAt = t0.Add(time.Second)
 		w := newGate(installLines, map[string]Reading{protocol.AgentClaude: r})
 		w.store.during = func() { w.now = w.now.Add(4 * time.Second) }
-		if !w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk)) {
+		if !w.admits(summoned("a", v1alpha1.SummonPriorityBulk)) {
 			t.Fatal("held on a window that reset during the read")
 		}
 		if l := w.logs.lines[0]; !strings.Contains(l, `"reason"="window-reset"`) || !strings.Contains(l, `"readingAge"="2m4s"`) {
@@ -298,39 +379,41 @@ func TestGateDecidesOnTheClockAfterTheRead(t *testing.T) {
 		r.ReadAt = t0.Add(-15*time.Minute + time.Second)
 		w := newGate(installLines, map[string]Reading{protocol.AgentClaude: r})
 		w.store.during = func() { w.now = w.now.Add(4 * time.Second) }
-		if !w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk)) {
+		if !w.admits(summoned("a", v1alpha1.SummonPriorityBulk)) {
 			t.Fatal("held on a reading that went stale during the read")
 		}
 		if l := w.logs.lines[0]; !strings.Contains(l, `"reason"="stale"`) || !strings.Contains(l, `"readingAge"="15m3s"`) {
 			t.Fatalf("log %q", l)
 		}
 	})
-	t.Run("the reuse is measured as before, from before the read", func(t *testing.T) {
-		w := newGate(installLines, claudeAt(FiveHourMinutes, "81"))
+	t.Run("in one pass each decision is on its own clock after the one read", func(t *testing.T) {
+		r := reading(FiveHourMinutes, "99")
+		r.ReadAt = t0.Add(-15*time.Minute + 10*time.Second)
+		w := newGate(installLines, map[string]Reading{protocol.AgentClaude: r})
+		w.ctx = WithPass(context.Background())
 		w.store.during = func() { w.now = w.now.Add(4 * time.Second) }
-		w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk))
-		w.store.during = nil
-		w.now = t0.Add(29 * time.Second)
-		w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk))
-		if w.store.reads != 1 {
-			t.Fatalf("29 s after the read began: %d reads, want 1", w.store.reads)
+		if w.admits(summoned("a", v1alpha1.SummonPriorityBulk)) {
+			t.Fatal("a 99 % reading 14m54s old after the read held nothing")
 		}
-		w.now = t0.Add(DefaultReuse)
-		w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk))
-		if w.store.reads != 2 {
-			t.Fatalf("30 s after the read began (26 s after it ended): %d reads, want 2", w.store.reads)
+		w.store.during = nil
+		w.now = t0.Add(11 * time.Second)
+		if !w.admits(summoned("b", v1alpha1.SummonPriorityBulk)) {
+			t.Fatal("later in the pass the reading is 15m1s old and still held")
+		}
+		if w.store.reads != 1 || !strings.Contains(w.logs.lines[1], `"readingAge"="15m1s"`) {
+			t.Fatalf("%d reads, logs %q", w.store.reads, w.logs.lines)
 		}
 	})
 }
 
 // The review's gaps: the log lines of a stale reading and of a missing window
-// name their reason, and a cached reading that passes the max age inside the
-// 30-second reuse admits without another read.
+// name their reason, and a reading that passes the max age later in its pass
+// admits without another read.
 func TestGateLogsStaleAndMissingWindow(t *testing.T) {
 	stale := reading(FiveHourMinutes, "99")
 	stale.ReadAt = t0.Add(-15*time.Minute - time.Second)
 	w := newGate(installLines, map[string]Reading{protocol.AgentClaude: stale})
-	if !w.g.Admits(summoned("stale-one", v1alpha1.SummonPriorityBulk)) {
+	if !w.admits(summoned("stale-one", v1alpha1.SummonPriorityBulk)) {
 		t.Fatal("held on a stale reading")
 	}
 	for _, want := range []string{`"msg"="quota gate admitted a summoned session"`, `"session"="stale-one"`, `"reason"="stale"`,
@@ -340,7 +423,7 @@ func TestGateLogsStaleAndMissingWindow(t *testing.T) {
 		}
 	}
 	w = newGate(installLines, claudeAt(SevenDayMinutes, "99"))
-	if !w.g.Admits(summoned("no-window", v1alpha1.SummonPriorityBulk)) {
+	if !w.admits(summoned("no-window", v1alpha1.SummonPriorityBulk)) {
 		t.Fatal("held with no 5-hour window")
 	}
 	for _, want := range []string{`"msg"="quota gate admitted a summoned session"`, `"reason"="window-missing"`,
@@ -351,16 +434,17 @@ func TestGateLogsStaleAndMissingWindow(t *testing.T) {
 	}
 }
 
-func TestGateCachedReadingGoesStaleInsideTheReuse(t *testing.T) {
+func TestGateReadingGoesStaleLaterInItsPass(t *testing.T) {
 	r := reading(FiveHourMinutes, "99")
 	r.ReadAt = t0.Add(-15*time.Minute + 10*time.Second)
 	w := newGate(installLines, map[string]Reading{protocol.AgentClaude: r})
-	if w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk)) {
+	w.ctx = WithPass(context.Background())
+	if w.admits(summoned("a", v1alpha1.SummonPriorityBulk)) {
 		t.Fatal("bulk at 99 %, a fresh reading, admitted")
 	}
 	w.now = t0.Add(20 * time.Second)
-	if !w.g.Admits(summoned("a", v1alpha1.SummonPriorityBulk)) {
-		t.Fatal("the cached reading passed the max age and still held")
+	if !w.admits(summoned("a", v1alpha1.SummonPriorityBulk)) {
+		t.Fatal("the pass's reading passed the max age and still held")
 	}
 	if w.store.reads != 1 || !strings.Contains(w.logs.lines[1], `"reason"="stale"`) || !strings.Contains(w.logs.lines[1], `"readingAge"="15m10s"`) {
 		t.Fatalf("%d reads, logs %q", w.store.reads, w.logs.lines)
@@ -371,7 +455,7 @@ func TestGateCachedReadingGoesStaleInsideTheReuse(t *testing.T) {
 // a reading the gate has once judged stale never holds again, whatever the
 // clock says later. The clock first sees a 99 % reading 16 minutes old, then
 // goes back to a time still after the reading, where the same data would
-// look a minute old. It admits as stale on that call, on a cache hit and
+// look a minute old. It admits as stale on that call, later in its pass and
 // after a later read; an older reading stays stale too, even when the clock
 // goes back before its time; a strictly newer one is judged normally.
 func TestGateReadingOnceJudgedStaleNeverHoldsAgain(t *testing.T) {
@@ -382,11 +466,16 @@ func TestGateReadingOnceJudgedStaleNeverHoldsAgain(t *testing.T) {
 		return map[string]Reading{protocol.AgentClaude: r}
 	}
 	w := newGate(installLines, at(watermark))
-	step := func(name string, now time.Time, reads int, admit bool, reason Why) {
+	// step decides one bulk session at now, in a new pass when pass is
+	// set, else later in the last one.
+	step := func(name string, pass bool, now time.Time, reads int, admit bool, reason Why) {
 		t.Helper()
+		if pass {
+			w.ctx = WithPass(context.Background())
+		}
 		w.now = now
 		n := len(w.logs.lines)
-		if got := w.g.Admits(summoned(name, v1alpha1.SummonPriorityBulk)); got != admit {
+		if got := w.admits(summoned(name, v1alpha1.SummonPriorityBulk)); got != admit {
 			t.Fatalf("%s: admit %v, want %v; logs %q", name, got, admit, w.logs.lines[n:])
 		}
 		if w.store.reads != reads {
@@ -396,31 +485,31 @@ func TestGateReadingOnceJudgedStaleNeverHoldsAgain(t *testing.T) {
 			t.Fatalf("%s: logs %q, want one line with reason %s", name, w.logs.lines[n:], reason)
 		}
 	}
-	step("first-seen-stale", t0, 1, true, WhyStale)
+	step("first-seen-stale", true, t0, 1, true, WhyStale)
 	// The clock goes back 15 minutes: a new read, the same data, a minute old
 	// on this clock. Before the fix it held with five-hour-past-line.
 	back := t0.Add(-15 * time.Minute)
-	step("rollback-call", back, 2, true, WhyStale)
+	step("rollback-call", true, back, 2, true, WhyStale)
 	// The marked reading reaches Decide as Missing: no age, no percent.
 	if l := w.logs.lines[1]; !strings.Contains(l, `"readingAge"="none"`) || !strings.Contains(l, `"fiveHourUsed"="none"`) || !strings.Contains(l, `"fiveHourLine"="80"`) {
 		t.Fatalf("rollback-call log %q", l)
 	}
-	step("cache-hit", back.Add(10*time.Second), 2, true, WhyStale)
-	step("later-read", back.Add(DefaultReuse), 3, true, WhyStale)
+	step("same-pass", false, back.Add(10*time.Second), 2, true, WhyStale)
+	step("later-read", true, back.Add(30*time.Second), 3, true, WhyStale)
 	// The clock goes back before the reading's own time: still stale, not
 	// reading-from-future.
-	step("clock-before-the-reading", watermark.Add(-time.Minute), 4, true, WhyStale)
+	step("clock-before-the-reading", true, watermark.Add(-time.Minute), 4, true, WhyStale)
 	// An older reading, fresh on this clock, is stale too.
 	w.store.readings = at(watermark.Add(-time.Minute))
-	step("older-reading", watermark.Add(-30*time.Second), 5, true, WhyStale)
+	step("older-reading", true, watermark.Add(-30*time.Second), 5, true, WhyStale)
 	// A reading one nanosecond newer than the mark is judged normally: fresh
-	// and past the line, it holds, and so does its cache hit.
+	// and past the line, it holds, and so does the next decision of its pass.
 	w.store.readings = at(watermark.Add(time.Nanosecond))
-	step("newer-reading", watermark.Add(time.Minute), 6, false, WhyFiveHourPast)
-	step("newer-reading-cache-hit", watermark.Add(time.Minute+10*time.Second), 6, false, WhyFiveHourPast)
+	step("newer-reading", true, watermark.Add(time.Minute), 6, false, WhyFiveHourPast)
+	step("newer-reading-same-pass", false, watermark.Add(time.Minute+10*time.Second), 6, false, WhyFiveHourPast)
 	// A newer reading from the future keeps its own reason.
 	w.store.readings = at(watermark.Add(5 * time.Minute))
-	step("future-reading", watermark.Add(2*time.Minute), 7, true, WhyFromFuture)
+	step("future-reading", true, watermark.Add(2*time.Minute), 7, true, WhyFromFuture)
 }
 
 // The mark is per provider: a Codex reading judged stale does not make a
@@ -432,15 +521,16 @@ func TestGateStaleMarkIsPerProvider(t *testing.T) {
 	w := newGate(installLines, map[string]Reading{protocol.AgentCodex: codex})
 	cx := summoned("codex-one", v1alpha1.SummonPriorityBulk)
 	cx.Spec.Agent = v1alpha1.AgentCodex
-	if !w.g.Admits(cx) || !strings.Contains(w.logs.lines[0], `"reason"="stale"`) {
+	if !w.admits(cx) || !strings.Contains(w.logs.lines[0], `"reason"="stale"`) {
 		t.Fatalf("a stale Codex reading: logs %q", w.logs.lines)
 	}
 	w.store.readings = map[string]Reading{protocol.AgentCodex: codex, protocol.AgentClaude: claude}
 	w.now = t0.Add(-15 * time.Minute)
-	if w.g.Admits(summoned("claude-one", v1alpha1.SummonPriorityBulk)) || !strings.Contains(w.logs.lines[1], `"reason"="five-hour-past-line"`) {
+	w.ctx = WithPass(context.Background())
+	if w.admits(summoned("claude-one", v1alpha1.SummonPriorityBulk)) || !strings.Contains(w.logs.lines[1], `"reason"="five-hour-past-line"`) {
 		t.Fatalf("a fresh Claude reading at 99 %% was not held after a Codex reading went stale: logs %q", w.logs.lines)
 	}
-	if !w.g.Admits(cx) || !strings.Contains(w.logs.lines[2], `"reason"="stale"`) {
+	if !w.admits(cx) || !strings.Contains(w.logs.lines[2], `"reason"="stale"`) {
 		t.Fatalf("the Codex reading held again after it was judged stale: logs %q", w.logs.lines)
 	}
 	if w.store.reads != 2 {
@@ -457,7 +547,7 @@ func TestGateWithEveryLineUnsetReadsNothingAcrossARollback(t *testing.T) {
 	for _, now := range []time.Time{t0, t0.Add(-15 * time.Minute), t0.Add(time.Hour)} {
 		w.now = now
 		for _, p := range []v1alpha1.SummonPriority{v1alpha1.SummonPriorityUrgent, v1alpha1.SummonPriorityNormal, v1alpha1.SummonPriorityBulk} {
-			if !w.g.Admits(summoned("a", p)) {
+			if !w.admits(summoned("a", p)) {
 				t.Fatalf("%s held with no line set at %s", p, now)
 			}
 		}
