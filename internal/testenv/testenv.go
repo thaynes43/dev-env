@@ -46,16 +46,26 @@ func Start() (*Env, error) {
 		return nil, err
 	}
 
-	env := &envtest.Environment{
-		BinaryAssetsDirectory: assets,
-		CRDDirectoryPaths:     []string{filepath.Join(root, "config", "crd")},
-		ErrorIfCRDPathMissing: true,
-	}
+	env := environment(root, assets)
 	cfg, err := env.Start()
 	if err != nil {
 		return nil, fmt.Errorf("start envtest (binaries in %s): %w", assets, err)
 	}
 	return &Env{Config: cfg, env: env}, nil
+}
+
+// environment is the envtest environment Start starts. It is pinned to a
+// local control plane: left unset, UseExistingCluster follows an inherited
+// USE_EXISTING_CLUSTER=true, and envtest then takes the process's kubeconfig
+// or in-cluster config and installs the CRDs there (story 782 fix round 2).
+func environment(root, assets string) *envtest.Environment {
+	local := false
+	return &envtest.Environment{
+		BinaryAssetsDirectory: assets,
+		CRDDirectoryPaths:     []string{filepath.Join(root, "config", "crd")},
+		ErrorIfCRDPathMissing: true,
+		UseExistingCluster:    &local,
+	}
 }
 
 // Stop stops the API server and etcd.

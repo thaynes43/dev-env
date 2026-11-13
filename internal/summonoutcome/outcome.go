@@ -87,7 +87,8 @@ func Write(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, d Dec
 		// the leader's release step (internal/controller, OP777).
 		released := d.Source == Report || d.Released
 		s.Status.Summon.Closed = &v1alpha1.SummonClosedStatus{At: at, Source: d.Source, Reason: d.Reason, Released: released}
-		// OP742: derive and add the terminal page event here, before this same CAS.
+		// The terminal page event is not stored: the keeper derives it from
+		// this close record with TerminalPage (story 782, ruling Q1 on item 742).
 		if filing {
 			// OP768 step 1: retain Pending here; the leader's filing worker will charge,
 			// resolve an occupied name and create the child. Nothing creates a child now.

@@ -7,8 +7,10 @@
 //
 // Decide is the one decision, pure: a priority, the newest reading, the lines
 // and the clock in; admit or hold, with what it read, out. Gate (gate.go) is
-// the admission's hook around it: one read per 30 seconds at most, a bounded
-// read, and one log line per decision.
+// the admission's hook around it: at most one read per admission pass (story
+// 790, slice b of item 743), a bounded read, and one log line per decision.
+// The admission keeps the decision: a hold's condition names the window, the
+// percentage, the line and the reading's readAt.
 //
 // The gate is best effort and fails open (ruling Q13 on item 743 comment
 // 7458, and C8 in DESIGN-064 section 10): an unset line is off; a reading that
@@ -139,10 +141,14 @@ type Decision struct {
 	// line's Missing, within-lines.
 	Reason             Why
 	FiveHour, SevenDay Window
-	// HaveReading says Age is the reading's age at now. It is negative for a
-	// reading from the future, never made zero.
+	// HaveReading says Age is the reading's age at now and ReadAt its
+	// readAt, when its numbers last changed. Age is negative for a reading
+	// from the future, never made zero. A hold always has a reading; the
+	// admission's QuotaHold condition names its ReadAt, never its Age, so the
+	// condition changes only when the reading does (story 790).
 	HaveReading bool
 	Age         time.Duration
+	ReadAt      time.Time
 }
 
 // Decide admits or holds a summoned session of priority p by the reading r,
@@ -168,7 +174,7 @@ func Decide(p v1alpha1.SummonPriority, r Reading, l Lines, now time.Time) Decisi
 		missing = WhyNoReading
 	}
 	if missing == "" {
-		d.HaveReading = true
+		d.HaveReading, d.ReadAt = true, r.ReadAt
 		d.Age = now.Sub(r.ReadAt)
 		d.FiveHour.Used, d.FiveHour.Missing = window(r.Windows, FiveHourMinutes, now)
 		d.SevenDay.Used, d.SevenDay.Missing = window(r.Windows, SevenDayMinutes, now)

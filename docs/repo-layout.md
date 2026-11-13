@@ -83,7 +83,7 @@ internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-6
 internal/frontdoor/      Meatball's MCP server (DESIGN-060): one bearer, fifteen tools, opwork as a fixed-argument subprocess, coordinator start/status/stop and parent notes through agent-run's operator client
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol, and the standard-library helpers maintenancecontract, pages, version, and tokenfile (`make build` checks the binary does not link Kubernetes); tests run against an httptest TLS server
-internal/keeper/         the keeper (D-52), including the default-off Ask notifier (DESIGN-034): mints the haynes-dev-bot token
+internal/keeper/         the keeper (D-52), including the default-off Ask notifier (DESIGN-034) and summoned-session pager (DESIGN-064 6.8): mints the haynes-dev-bot token
                          into dev-agents/dev-env-gh-token every 40 minutes, and with --enable-ops-gh-token (default off,
                          DESIGN-064 6.2) the haynes-ops-bot token into dev-env-ops-gh-token. Both sit behind one Lease.
                          Only those non-rotating installation tokens are Keeper Jobs; the rotating Codex login and the
@@ -139,7 +139,7 @@ internal/delegatedresult/  pure delegated-result codec: strict bounded request a
 internal/sessiondirectory/  the SessionDirectory store: bounded original session metadata and CAS witnesses
 internal/sessiontitle/  DESIGN-065: validates a session title, names the model family, composes the display title, and classifies a recorded Claude Code capture-pane screen
 internal/summonledger/  DESIGN-064 5.9: the create ledger's entry and charge types, codec and time rules (window, attempt hold, prune), shared by the API's write paths and the operator leader's admission
-internal/summonoutcome/  DESIGN-064 6.6: the shared optimistic outcome/closure/pending-filing write and the one ordered guaranteed-close reason table
+internal/summonoutcome/  DESIGN-064 6.6 and 6.8: the shared optimistic outcome/closure/pending-filing write, the one ordered guaranteed-close reason table, and the terminal page table
 internal/summonquota/    DESIGN-064 6.9 (OP783): the leader's quota gate for summoned sessions: Decide (priority, reading, flag lines, clock) and the Gate the operator sets as Reconciler.SummonQuota; fails open
 internal/taskbudget/     the task budget ledger: retained, deterministic task admission in ConfigMaps behind CAS (KubeStore)
 internal/coordretention/ read-only paged coordination-record summaries and fail-closed release eligibility evaluation (DESIGN-024 R3 prerequisite)

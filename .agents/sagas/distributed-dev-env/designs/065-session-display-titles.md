@@ -23,7 +23,7 @@
 - **Origin:** Tom, relayed by Meatball on 2026-11-12 (item 774 comment 7348),
   quoted in section 1. Nothing else here is Tom's.
 - **ADR:** [ADR-026](../adrs/026-agents-rename-a-running-session.md),
-  Proposed 2026-11-13, for slice 3. In slice 1 the title is
+  Accepted 2026-11-13, for slice 3. In slice 1 the title is
   set at create and cannot change, like the rest of spec, so D-39 stands
   (decision 23: spec is immutable except `operatingMode` and `lifecycle`).
   Slice 3 lets it change after create, ruling 4 decides who may change
@@ -451,7 +451,7 @@ image whose agentd applies it (rule 8.10).
 ## 8. Not built here
 
 Any code, CRD, API or generated file. ADR-026 is written with section 9 and
-is Proposed. As first written, a live rename by the platform was out: the
+is Accepted. As first written, a live rename by the platform was out: the
 provider documents no way for another process to do it, and typing
 `/rename` was ruled out. Section 9 designs it, under ruling 8, and builds
 nothing. A Codex rename, or a change to the explicit
