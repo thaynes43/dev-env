@@ -680,23 +680,24 @@ spec:
                   text; this field holds only the role text.
 
                   MaxLength bounds code points. The CEL rules also bound UTF-8 bytes, the
-                  character set and the spacing, on create and on every update. Letters,
-                  marks, digits, punctuation and symbols are allowed, plus ASCII space.
-                  The first character is a letter or a digit. A bar, a control or format
-                  character, and anything above U+FFFF are not.
+                  character set and the spacing, on create and on every update. A title
+                  may hold printable ASCII (U+0020 to U+007E) and U+00A1 to U+024F except
+                  U+00AD. The first character is a letter or a digit. A bar, a backslash,
+                  a trailing semicolon, a control or format character, and anything above
+                  U+FFFF are not.
                 maxLength: 48
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
                 - message: at most 96 bytes
                   rule: size(bytes(self)) <= 96
-                - message: letters, marks, digits, punctuation and symbols only; the
+                - message: printable ASCII and U+00A1 to U+024F except U+00AD; the
                     first character is a letter or a digit; no bar, no backslash,
                     no trailing semicolon, no control or format character, and nothing
                     above U+FFFF
-                  rule: self.matches('^[\\p{L}\\p{Nd}][\\p{L}\\p{M}\\p{Nd}\\p{P}\\p{S}
-                    ]*$') && !self.contains('|') && !self.endsWith(';') && !self.contains('\\')
-                    && !self.matches('[\\x{10000}-\\x{10FFFF}]')
+                  rule: self.matches('^[\\x20-\\x7E\\x{00A1}-\\x{00AC}\\x{00AE}-\\x{024F}]*$')
+                    && self.matches('^[\\p{L}\\p{Nd}]') && !self.contains('|') &&
+                    !self.endsWith(';') && !self.contains('\\')
                 - message: no leading or trailing space, and no two spaces in a row
                   rule: '!self.startsWith('' '') && !self.endsWith('' '') && !self.contains(''  '')'
                 - message: immutable after create; only operatingMode and lifecycle

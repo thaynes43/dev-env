@@ -30,12 +30,16 @@ const (
 	renameTypedFor   = 2 * time.Minute
 	renameCallFor    = 2 * time.Second
 	renameBudget     = 5 * time.Second
-	// renameAfter bounds the second check, the clear and Enter once the text
-	// has been sent. It comes from the caller's context, so the five-second
-	// budget ending does not skip the clear.
-	renameAfter    = 4 * time.Second
-	titleStateFile = "title.json"
+	titleStateFile   = "title.json"
+	// renameInterruptCap is the most interrupted cycles one target may record.
+	// The next one is Failed.
+	renameInterruptCap = 3
 )
+
+// renameTailFor bounds the second check, the clear and Enter once the text
+// has been sent. It comes from the caller's context, so the five-second
+// budget ending does not skip the clear. Tests shorten it.
+var renameTailFor = 4 * time.Second
 
 // HeartbeatTitle is the title object in a heartbeat answer. Present is false
 // for a 204, an empty body, or a body with no title object: agentd then types
@@ -89,6 +93,7 @@ type titleDisk struct {
 	Since         time.Time `json:"since,omitempty"`
 	Stopped       bool      `json:"stopped,omitempty"`
 	ProviderTitle string    `json:"providerTitle,omitempty"`
+	Interrupted   int       `json:"interrupted,omitempty"`
 	found         bool      `json:"-"`
 }
 
@@ -119,12 +124,16 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 	prev := disk
 	// A first launch records the title the CLI was given. Only that value is
 	// left untyped. A different target later in this pod's life is applied.
+	// An untitled session, whose launch value is the session name and whose
+	// text is empty, is not seeded and reports no rename object.
 	if value, ok := firstLaunchValue(s, sess); ok && disk.Applied == "" {
-		disk.UID = sess.SessionUID
-		disk.Applied = value
-		disk.Stopped = false
-		if disk.State == "" {
-			disk.set("Applied", "launch", value, a.now())
+		if ans.Text != "" || value != sess.Name {
+			disk.UID = sess.SessionUID
+			disk.Applied = value
+			disk.Stopped = false
+			if disk.State == "" {
+				disk.set("Applied", "launch", value, a.now())
+			}
 		}
 	}
 	target, ok := renameTarget(sess, ans.Text)
@@ -138,14 +147,31 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 	if !disk.found && ans.Text == "" && disk.Applied == "" {
 		return
 	}
+	// While the mark is set, this pass only tries to remove the recorded
+	// text. It does not type a new title, whether or not the cleanup runs.
+	if disk.State == "Failed" && disk.Reason == "left-in-input" && disk.Target != "" {
+		a.healLeft(ctx, r, s, &disk)
+		disk.save(s, log, prev)
+		return
+	}
 	disk.UID = sess.SessionUID
 	if disk.Target != target {
 		disk.Attempts = 0
+		disk.Interrupted = 0
 		disk.Stopped = false
 		disk.Since = time.Time{}
 		disk.State = ""
 		disk.Reason = ""
 		disk.Target = target
+	}
+	// A clear of a title that was never typed sets the session name as
+	// applied and does not type it.
+	if disk.found && disk.Applied == "" && disk.Attempts == 0 && target == sess.Name {
+		disk.Applied = target
+		disk.Stopped = false
+		disk.set("Applied", "already", target, a.now())
+		disk.save(s, log, prev)
+		return
 	}
 	a.applyFloor(&disk, target)
 	if !a.willType(disk, target) {
@@ -321,7 +347,7 @@ func (a *TitleApplier) guardAndType(parent, ctx context.Context, r Runner, s Set
 	if launch, ok := currentLaunch(s); ok {
 		project = launch.Dir
 	}
-	if commandShadowed(project, s.ClaudeConfigDir) {
+	if ctx.Err() != nil || commandShadowed(ctx, project, s.ClaudeConfigDir) {
 		return hold("Held", "command-shadowed")
 	}
 	typed := "/rename " + target
@@ -341,33 +367,56 @@ func (a *TitleApplier) guardAndType(parent, ctx context.Context, r Runner, s Set
 	}
 	disk.Attempts = staged.Attempts
 	disk.LastTypedAt = staged.LastTypedAt
-	// The log is before this read. The read is the last thing before the keys.
-	log.Info("session title keystroke", "kind", "text", "titleHash", sessiontitle.HashPrefix(target))
-	fresh, fail := readTitleRecord(s, p)
-	if fail == "process" {
-		return hold("Held", "process")
-	}
-	if fail == "record-shape" {
-		return hold("Unknown", "record-shape")
-	}
-	if fresh.status != rec.status || fresh.updated != rec.updated {
-		if reason := idleReason(fresh, a.now()); reason != "" {
-			return hold("Held", reason)
-		}
-		return hold("Held", "quiet")
-	}
-	// Do not start the text unless one full call still fits. A budget that
-	// is already nearly gone holds, and the attempt recorded above is undone.
-	if d, ok := ctx.Deadline(); ok && time.Until(d) < renameCallFor {
+	// The early reads stay above, so a hold there costs no write. These
+	// reads are after the write and directly before the last record read.
+	// A hold here refunds the attempt, because the text has not been sent.
+	refund := func(state, reason string) bool {
 		disk.Attempts = prevAttempts
 		disk.LastTypedAt = prevTypedAt
 		a.rememberPace(target, prevAttempts, prevTypedAt)
 		if err := writeTitleFile(s, disk); err != nil {
 			return hold("Held", "state")
 		}
-		return hold("Held", "screen-unknown")
+		return hold(state, reason)
 	}
-	tail, stopTail := context.WithTimeout(parent, renameAfter)
+	if n, err = strictClientCount(ctx, r, s); err != nil || n != 0 {
+		return refund("Held", "attached")
+	}
+	screen, err = capturePane(ctx, r, s, pane.id)
+	if err != nil {
+		return refund("Held", "screen-unknown")
+	}
+	cur, err = readCursor(ctx, r, s, pane.id)
+	if err != nil {
+		return refund("Held", "screen-unknown")
+	}
+	switch sessiontitle.ClassifyInput(screen, "", cur) {
+	case sessiontitle.InputEmpty:
+	case sessiontitle.InputOther:
+		return refund("Held", "input")
+	default:
+		return refund("Held", "screen-unknown")
+	}
+	log.Info("session title keystroke", "kind", "text", "titleHash", sessiontitle.HashPrefix(target))
+	fresh, fail := readTitleRecord(s, p)
+	if fail == "process" {
+		return refund("Held", "process")
+	}
+	if fail == "record-shape" {
+		return refund("Unknown", "record-shape")
+	}
+	if fresh.status != rec.status || fresh.updated != rec.updated {
+		if reason := idleReason(fresh, a.now()); reason != "" {
+			return refund("Held", reason)
+		}
+		return refund("Held", "quiet")
+	}
+	// Do not start the text unless one full call still fits. A budget that
+	// is already nearly gone holds, and the attempt recorded above is undone.
+	if d, ok := ctx.Deadline(); ok && time.Until(d) < renameCallFor {
+		return refund("Held", "screen-unknown")
+	}
+	tail, stopTail := context.WithTimeout(parent, renameTailFor)
 	defer stopTail()
 	if _, err := renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: []string{"send-keys", "-t", pane.id, "-l", "--", typed}}); err != nil {
 		disk.Stopped = true
@@ -377,33 +426,105 @@ func (a *TitleApplier) guardAndType(parent, ctx context.Context, r Runner, s Set
 	a.sleep(renameSettle)
 	began := a.now()
 	if !secondCheck(tail, r, s, p, pane, rec, typed) || a.now().Sub(began) >= renameEnterFor {
-		return a.afterKeys(tail, r, s, disk, pane.id, typed, target)
+		return a.afterKeys(tail, r, s, disk, p, pane, typed, target)
 	}
 	log.Info("session title keystroke", "kind", "enter", "titleHash", sessiontitle.HashPrefix(target))
-	_, _ = renameRun(tail, r, Cmd{Name: s.TmuxBin, Args: []string{"send-keys", "-t", pane.id, "Enter"}})
+	if _, err := renameRun(tail, r, Cmd{Name: s.TmuxBin, Args: []string{"send-keys", "-t", pane.id, "Enter"}}); err != nil {
+		confirmed, fail := readTitleRecord(s, p)
+		if fail == "" && confirmed.name == target {
+			disk.ProviderTitle = providerTitle(confirmed)
+			disk.Applied = target
+			disk.Stopped = false
+			disk.set("Applied", "confirmed", target, a.now())
+			return false
+		}
+		return a.afterKeys(tail, r, s, disk, p, pane, typed, target)
+	}
 	disk.set("Typed", "", target, a.now())
 	return true
 }
 
 // afterKeys removes the text this pod just typed when the second check did
-// not pass. The row coming back empty refunds the attempt. Anything else
-// leaves the line and stops.
-func (a *TitleApplier) afterKeys(ctx context.Context, r Runner, s Settings, disk *titleDisk, paneID, typed, target string) bool {
-	if clearTyped(ctx, r, s, paneID, typed) {
-		if disk.Attempts > 0 {
-			disk.Attempts--
-		}
-		a.rememberPace(target, disk.Attempts, disk.LastTypedAt)
+// not pass, or when Enter failed and the record does not yet show the name.
+// The row coming back empty refunds the attempt. Anything else leaves the
+// line and stops.
+func (a *TitleApplier) afterKeys(ctx context.Context, r Runner, s Settings, disk *titleDisk, p agentPid, pane paneSnap, typed, target string) bool {
+	if clearTyped(ctx, r, s, p, pane, typed) {
+		a.noteInterrupted(disk, target)
 		if err := writeTitleFile(s, disk); err != nil {
 			disk.set("Held", "state", target, a.now())
 			return false
 		}
-		disk.set("Held", "interrupted", target, a.now())
 		return false
 	}
 	disk.Stopped = true
 	disk.set("Failed", "left-in-input", target, a.now())
 	return false
+}
+
+// noteInterrupted records one cleanup of this target. The fourth is Failed.
+// The attempt is refunded because the row came back empty.
+func (a *TitleApplier) noteInterrupted(disk *titleDisk, target string) {
+	if disk.Attempts > 0 {
+		disk.Attempts--
+	}
+	a.rememberPace(target, disk.Attempts, disk.LastTypedAt)
+	disk.Interrupted++
+	if disk.Interrupted > renameInterruptCap {
+		disk.Stopped = true
+		disk.set("Failed", "interrupted", target, a.now())
+		return
+	}
+	disk.Stopped = false
+	disk.set("Held", "interrupted", target, a.now())
+}
+
+// healLeft tries to remove the recorded unsent text, or clears the mark when
+// the input row is already empty. It sends no new title text.
+func (a *TitleApplier) healLeft(ctx context.Context, r Runner, s Settings, disk *titleDisk) {
+	typed := "/rename " + disk.Target
+	budget, stop := context.WithTimeout(ctx, renameBudget)
+	defer stop()
+	unlock, locked := tryDeliverLock(s)
+	if !locked {
+		return
+	}
+	defer unlock()
+	p := liveCLI(s)
+	if !pidAlive(p) {
+		return
+	}
+	pane, err := readAgentPane(budget, r, s)
+	if err != nil || !paneForeground(p.Pid, pane) {
+		return
+	}
+	rec, fail := readTitleRecord(s, p)
+	if fail != "" || rec.status == "waiting" {
+		return
+	}
+	n, err := strictClientCount(budget, r, s)
+	if err != nil || n != 0 {
+		return
+	}
+	screen, err := capturePane(budget, r, s, pane.id)
+	if err != nil {
+		return
+	}
+	cur, err := readCursor(budget, r, s, pane.id)
+	if err != nil {
+		return
+	}
+	switch sessiontitle.ClassifyBox(screen, typed, cur) {
+	case sessiontitle.InputEmpty:
+		disk.Stopped = false
+		disk.State = ""
+		disk.Reason = ""
+		disk.Since = time.Time{}
+	case sessiontitle.InputExact:
+		if clearTyped(budget, r, s, p, pane, typed) {
+			a.noteInterrupted(disk, disk.Target)
+		}
+	}
 }
 
 func (a *TitleApplier) confirm(ctx context.Context, s Settings, disk *titleDisk, target string) {
@@ -448,15 +569,20 @@ func (a *TitleApplier) sleep(d time.Duration) {
 func (a *TitleApplier) cliMinor(ctx context.Context, r Runner, s Settings) (string, bool) {
 	a.versions.mu.Lock()
 	defer a.versions.mu.Unlock()
-	if !a.versions.done {
-		a.versions.done = true
-		res, err := renameRun(ctx, r, Cmd{Name: s.ClaudeBin, Args: []string{"--version"}})
-		if err == nil {
-			minor, ok := sessiontitle.CLIMinor(string(res.Stdout))
-			a.versions.minor = minor
-			a.versions.ok = ok && sessiontitle.MinorRecorded(minor)
-		}
+	if a.versions.done {
+		return a.versions.minor, a.versions.ok
 	}
+	res, err := renameRun(ctx, r, Cmd{Name: s.ClaudeBin, Args: []string{"--version"}})
+	if err != nil {
+		return "", false
+	}
+	minor, ok := sessiontitle.CLIMinor(string(res.Stdout))
+	if !ok {
+		return "", false
+	}
+	a.versions.done = true
+	a.versions.minor = minor
+	a.versions.ok = sessiontitle.MinorRecorded(minor)
 	return a.versions.minor, a.versions.ok
 }
 
@@ -477,13 +603,19 @@ func titleKind(ctx context.Context, r Runner, s Settings, sess protocol.Session,
 
 func renameTarget(sess protocol.Session, text string) (string, bool) {
 	if text == "" {
-		return sess.Name, sess.Name != "" && sessiontitle.StartsWithLetterOrDigit(sess.Name)
+		if sess.Name == "" || !sessiontitle.StartsWithLetterOrDigit(sess.Name) || !sessiontitle.Typeable(sess.Name) {
+			return "", false
+		}
+		return sess.Name, true
 	}
 	if sessiontitle.Validate(text) != "" {
 		return "", false
 	}
 	target := sessiontitle.Compose(sess.Model, text)
-	return target, sessiontitle.StartsWithLetterOrDigit(target)
+	if !sessiontitle.StartsWithLetterOrDigit(target) || !sessiontitle.Typeable(target) {
+		return "", false
+	}
+	return target, true
 }
 
 func firstLaunchValue(s Settings, sess protocol.Session) (string, bool) {
@@ -816,36 +948,49 @@ func quietStatus(status string) bool {
 }
 
 // clearTyped removes exactly the text this pod just typed, one Backspace per
-// rune, and only when the input row still holds that text with the cursor
-// directly after it. It reports whether the row is empty again.
-func clearTyped(ctx context.Context, r Runner, s Settings, paneID, typed string) bool {
-	screen, err := capturePane(ctx, r, s, paneID)
+// rune. It does not depend on busy or idle, and a spinner row does not block
+// it. Every condition is read again immediately before the keys. It reports
+// whether the row is empty again with the cursor at column 2.
+func clearTyped(ctx context.Context, r Runner, s Settings, p agentPid, pane paneSnap, typed string) bool {
+	n, err := strictClientCount(ctx, r, s)
+	if err != nil || n != 0 {
+		return false
+	}
+	again, err := readAgentPane(ctx, r, s)
+	if err != nil || again.id != pane.id || again.pid != pane.pid || !paneForeground(p.Pid, again) {
+		return false
+	}
+	rec, fail := readTitleRecord(s, p)
+	if fail != "" || rec.status == "waiting" {
+		return false
+	}
+	screen, err := capturePane(ctx, r, s, pane.id)
 	if err != nil {
 		return false
 	}
-	cur, err := readCursor(ctx, r, s, paneID)
+	cur, err := readCursor(ctx, r, s, pane.id)
 	if err != nil {
 		return false
 	}
-	if sessiontitle.ClassifyInput(screen, typed, cur) != sessiontitle.InputExact {
+	if sessiontitle.ClassifyBox(screen, typed, cur) != sessiontitle.InputExact {
 		return false
 	}
-	args := []string{"send-keys", "-t", paneID}
+	args := []string{"send-keys", "-t", pane.id}
 	for range utf8.RuneCountInString(typed) {
 		args = append(args, "Backspace")
 	}
 	if _, err := renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: args}); err != nil {
 		return false
 	}
-	again, err := capturePane(ctx, r, s, paneID)
+	empty, err := capturePane(ctx, r, s, pane.id)
 	if err != nil {
 		return false
 	}
-	cur, err = readCursor(ctx, r, s, paneID)
+	cur, err = readCursor(ctx, r, s, pane.id)
 	if err != nil {
 		return false
 	}
-	return sessiontitle.ClassifyInput(again, "", cur) == sessiontitle.InputEmpty
+	return sessiontitle.ClassifyBox(empty, "", cur) == sessiontitle.InputEmpty
 }
 
 func secondCheck(ctx context.Context, r Runner, s Settings, p agentPid, pane paneSnap, rec titleRecord, typed string) bool {

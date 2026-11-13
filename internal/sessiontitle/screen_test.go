@@ -8,18 +8,20 @@ import (
 )
 
 func TestClassifyRecordedFixtures(t *testing.T) {
-	empty := ObservedCursor(IdleEmptyScreen)
-	if ClassifyInput(IdleEmptyScreen, "", empty) != InputEmpty {
+	empty, ok := RecordedCursor(IdleEmptyScreen)
+	if !ok || ClassifyInput(IdleEmptyScreen, "", empty) != InputEmpty {
 		t.Fatal("empty input")
 	}
 	if ClassifyInput(IdleEmptyScreen, "/rename zz", empty) != InputEmpty {
 		t.Fatal("empty input is not the typed text")
 	}
+	// IdlePlaceholderScreen has no recorded cursor. ObservedCursor is used
+	// because the placeholder row is a derived reading of that fixture.
 	if ClassifyInput(IdlePlaceholderScreen, "", ObservedCursor(IdlePlaceholderScreen)) != InputEmpty {
 		t.Fatal("dim placeholder")
 	}
-	typed := ObservedCursor(TypedRenameScreen)
-	if ClassifyInput(TypedRenameScreen, "/rename zz", typed) != InputExact {
+	typed, ok := RecordedCursor(TypedRenameScreen)
+	if !ok || ClassifyInput(TypedRenameScreen, "/rename zz", typed) != InputExact {
 		t.Fatal("typed /rename zz")
 	}
 	if ClassifyInput(TypedRenameScreen, "/rename zz ", typed) != InputOther {
@@ -35,7 +37,9 @@ func TestClassifyRecordedFixtures(t *testing.T) {
 
 func TestClassifyQuestionOpenIsUnknown(t *testing.T) {
 	// question-open.2.1.321.ansi is the recorded AskUserQuestion screen.
-	if got := ClassifyInput(QuestionOpenScreen, "", Cursor{}); got != InputUnknown {
+	// It has no recorded cursor. Column 2 on row 46 is the empty-input cursor,
+	// so the unknown result is the screen.
+	if got := ClassifyInput(QuestionOpenScreen, "", Cursor{X: 2, Y: 46, Known: true}); got != InputUnknown {
 		t.Fatalf("recorded question classified %d", got)
 	}
 	if got := ClassifyInput(QuestionOpenScreen, "", ObservedCursor(QuestionOpenScreen)); got != InputUnknown {
@@ -84,7 +88,7 @@ func TestClassifyInputOtherAndUnknown(t *testing.T) {
 		"",
 		IdleEmptyScreen[:len(IdleEmptyScreen)/2],
 	} {
-		if got := ClassifyInput(screen, "", Cursor{}); got != InputUnknown {
+		if got := ClassifyInput(screen, "", Cursor{X: 2, Y: 46, Known: true}); got != InputUnknown {
 			t.Fatalf("%q classified %d", screen, got)
 		}
 	}
@@ -140,22 +144,62 @@ func TestRecordedCLIMinorsMatchFixtures(t *testing.T) {
 }
 
 func TestListPanesFormatIsTheRecordedLine(t *testing.T) {
-	raw, err := os.ReadFile("testdata/tmux-facts.txt")
-	if err != nil {
-		t.Fatal(err)
+	var format string
+	for _, line := range strings.Split(CursorFactsText(), "\n") {
+		if after, ok := strings.CutPrefix(line, "list-panes format: "); ok {
+			format = after
+		}
 	}
-	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("facts %q", lines)
+	if format == "" || ListPanesFormat() != format {
+		t.Fatalf("format %q recorded %q", ListPanesFormat(), format)
 	}
-	if ListPanesFormat() != lines[3] || RecordedPaneLine() != lines[1] {
-		t.Fatalf("format %q line %q", ListPanesFormat(), RecordedPaneLine())
+	if !strings.Contains(format, "#{pane_synchronized}") || strings.Contains(format, "window_synchronized") {
+		t.Fatal(format)
 	}
-	if !strings.Contains(lines[3], "#{pane_synchronized}") || strings.Contains(lines[3], "window_synchronized") {
-		t.Fatal(lines[3])
+	pane := RecordedPaneLine()
+	if len(strings.Fields(pane)) != 8 || !strings.Contains(pane, "2028") {
+		t.Fatal(pane)
 	}
-	if len(strings.Fields(lines[1])) != 8 {
-		t.Fatal(lines[1])
+}
+
+func TestBusyScreensAndFinishedRows(t *testing.T) {
+	for name, screen := range BusySpinnerScreens() {
+		cur, ok := RecordedCursor(screen)
+		if !ok || cur.X != 2 || cur.Y != 46 {
+			t.Fatalf("%s cursor %+v %v", name, cur, ok)
+		}
+		if ClassifyInput(screen, "", cur) != InputUnknown {
+			t.Fatalf("%s was known before typing", name)
+		}
+		if ClassifyBox(screen, "", cur) != InputEmpty {
+			t.Fatalf("%s box was not an empty input", name)
+		}
+	}
+	stream, ok := RecordedCursor(BusyStreamingScreen)
+	if !ok || ClassifyInput(BusyStreamingScreen, "", stream) != InputEmpty {
+		t.Fatal("streaming frame")
+	}
+	typed, ok := RecordedCursor(BusyThinkingTypedScreen)
+	if !ok || typed.X != 12 || ClassifyBox(BusyThinkingTypedScreen, "/rename zz", typed) != InputExact {
+		t.Fatal("busy typed box")
+	}
+	if ClassifyInput(BusyThinkingTypedScreen, "/rename zz", typed) != InputUnknown {
+		t.Fatal("a spinner row did not hold ClassifyInput")
+	}
+	for _, row := range []string{
+		"✻ Crunched for 15s · done 8:31 AM",
+		"✻ Worked for 12s · done 8:29 AM",
+	} {
+		if spinnerRow(row) {
+			t.Fatalf("finished row matched: %q", row)
+		}
+	}
+	if !spinnerRow("✻ Hatching… (8s)") || !spinnerRow("* Thinking… (1s)") {
+		t.Fatal("recorded spinner shape")
+	}
+	idle, ok := RecordedCursor(IdleEmptyScreen)
+	if !ok || ClassifyInput(IdleEmptyScreen, "", idle) != InputEmpty {
+		t.Fatal("a finished row held the idle screen")
 	}
 }
 

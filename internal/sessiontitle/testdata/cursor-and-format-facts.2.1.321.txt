@@ -1,0 +1,16 @@
+tmux version: tmux 3.3a
+list-panes format: #{window_index} #{pane_index} #{pane_id} #{pane_dead} #{pane_in_mode} #{pane_synchronized} #{pane_pid} #{pane_current_command}
+list-panes output: 0 0 %0 0 0 0 2078 claude
+list-clients output lines: 0
+display-message format: #{cursor_x} #{cursor_y} #{pane_width} #{pane_height}
+record status before: idle
+cursor, idle with empty input: 2 46 200 50
+input row number (0-based) in capture, idle: 46
+cursor, with /rename zz typed and not sent: 12 46 200 50
+input row number (0-based) in capture, typed: 46
+cursor, after ten Backspace keys: 2 46 200 50
+cursor, with /rename é|z typed (one non-ASCII letter, one bar): 13 46 200 50
+cursor, after eleven Backspace keys: 2 46 200 50
+❯ go ahead, run the sleep
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

@@ -86,7 +86,11 @@ func (a *app) title(ctx context.Context, args []string) error {
 	if next.Title != "" {
 		shown = sessiontitle.Compose(next.Model, next.Title)
 	}
-	a.outf("%s\nIt is typed when the session is idle with an empty input line.\n", shown)
+	sentence := "It is typed when the session is idle with an empty input line."
+	if next.TitleRename == "off" {
+		sentence = "not enabled for this session"
+	}
+	a.outf("%s\n%s\n", shown, sentence)
 	return nil
 }
 

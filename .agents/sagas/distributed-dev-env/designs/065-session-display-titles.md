@@ -583,6 +583,22 @@ of the command runs it; whether the owner's rename in the Claude app
 reaches the record; whether a resume with a different name replaces a name
 that was only set at launch.
 
+Measured by the coordinator on 2026-11-13, fix round 2, and written here by
+that round (not Tom). These are the coordinator's readings, quoted, not
+measured again:
+
+- The cursor: idle empty input is column 2 on the input row; "/rename zz"
+  typed is column 12; "/rename é|z" is column 13; ten Backspace keys return
+  it to column 2 with an empty row.
+- The screen does not show that a turn is running. In 70 frames of one
+  running turn the record status was "busy" every time, the footer never
+  showed "esc to interrupt", 54 frames had no spinner row, and 16 had a row
+  "<mark> <Word>… (...)" with the marks U+273B, U+2722, U+273D, U+2736,
+  U+00B7 and U+002A. The record is the only busy signal.
+- "/rename <text>" and Enter sent while a turn runs renames at once and does
+  not disturb the turn. Backspace keys during a running turn erase typed
+  text and do not disturb the turn.
+
 ### 9.2 Rules
 
 **8.1 The record.** `spec.title` becomes the third spec field that may
@@ -634,14 +650,13 @@ does for an untitled session. Reason: a resume does not replace a typed
 title (item 774 comment 7546), so only a typed rename takes back a title that
 was typed. Leaving it would show a role nobody records.
 
-**CRD copy.** haynes-ops gets `config/crd/` before the operator pin that
-serves the route. Without it the API server refuses the PUT under the old
-rule and prunes the status fields of rule 8.8 (haynes-ops #3502). One copy
-serves both. Safety rule 6's rollback rule gets stronger: with the add and
-remove term gone, an operator older than slice 1 that drops `spec.title` on
-a full-object update is no longer refused, so the title would be lost with
-no error. Roll the operator back below slice 1 only when no session has a
-title.
+**CRD copy.** Amended 2026-11-13, fix round 2, the coordinator, not Tom.
+haynes-ops still gets a copy of `config/crd/` before the operator pin that
+needs it. The title route writes only annotations, so an old CRD does not
+refuse the PUT. An old CRD does still prune
+`status.remoteControl.providerTitle` and `status.remoteControl.rename`
+(haynes-ops #3502). `spec.title` stays immutable, so rolling the operator
+back does not drop a spec title.
 
 **8.2 Who may change it.** Ruling 4's rule stands. By caller kind
 (`internal/apiserver/caller.go`):
@@ -1232,3 +1247,84 @@ ADR-026's guarded typed rename.
    A title with a non-ASCII letter counts one Backspace per character. A
    row that differs by one character, a cursor elsewhere, or a capture that
    fails sends no Backspace.
+
+### 9.5 Fix round 2 (the coordinator, 2026-11-13, not Tom)
+
+These rulings are the coordinator's, from the second review of pull request
+1127. They are not Tom's. ADR-027 stays Proposed. ADR-026 stays Accepted and
+is not edited. Tom's ruling stands: a rename is typed only while the session
+is idle with an empty input line. A rename is not typed while a turn runs.
+
+1. **Characters.** A title may hold only printable ASCII (U+0020 to U+007E)
+   and U+00A1 to U+024F, except U+00AD. `sessiontitle.Validate` refuses
+   anything else with reason `title_characters`, so creation and rename share
+   one rule. The same bound is a CEL rule on `spec.title`. agentd refuses to
+   type any text that holds another character, whatever its source: the state
+   is Failed, `invalid-title`, and nothing is typed. A session that already
+   has such a title keeps it. It is never typed. A wide character, a combining
+   mark, a zero-width character and U+00AD are refused. é is accepted.
+2. **Cleanup.** The Backspace cleanup of this pod's own unsent text does not
+   depend on busy or idle, and a spinner row does not block it. All of these
+   are read fresh, directly before the keys: no attached client; the same
+   pane id; the CLI still the pane's foreground process with the same pid;
+   the record readable with a status that is not "waiting"; the screen has
+   the one input box whose row holds exactly the typed text, with the cursor
+   directly after it. `ClassifyBox` answers that question and does not treat
+   a spinner row as a disqualifier. A question, a selection or a permission
+   screen has no input box and stays unknown. After the Backspaces, the row
+   must be empty with the cursor at column 2. Otherwise the state is
+   `left-in-input`.
+3. **Self-heal.** While `title.json` records `left-in-input`, every later
+   pass for a session the flag names first tries that cleanup with the
+   recorded text. If the one input box shows an empty row instead, cursor at
+   column 2, the leftover is gone and the mark is cleared. No new text is
+   typed in the same pass as a cleanup or a cleared mark. When the flag does
+   not name the session, agentd sends no key at all.
+4. **Delivery.** `Deliver` checks `title.json` under its lock. When the file
+   records `left-in-input`, Deliver reads the screen and the cursor, read
+   only, with the same two-second limits. It pastes only when the one input
+   box shows an empty row with the cursor at column 2, and then clears the
+   mark. Otherwise it sends nothing, including no Backspace, and returns
+   `not delivered: the session's input line holds unsent rename text`.
+   `agent-run msg` prints that sentence. With no mark, Deliver does what it
+   does on main.
+5. **Spinner rows.** A spinner row is a row whose first character is one of
+   U+273B, U+2722, U+273D, U+2736, U+00B7, U+002A, U+2733 and U+273A, followed
+   by one space and a word that ends in "…". It is an extra hold before
+   typing. It is not the busy signal. The record is the busy signal. A
+   finished row ("✻ Crunched for 15s · done 8:31 AM", "✻ Worked for 12s ·
+   done 8:29 AM") does not match. A streaming frame with no spinner row reads
+   as an empty input, and the guard still holds when the record says busy.
+6. **Interrupted.** At most three interrupted cycles for one target. The
+   fourth sets Failed with reason `interrupted`. A new target starts the
+   count again. The cleanup conditions are item 2.
+7. **The read after the write.** agentd reads the client count, the screen
+   and the cursor again after the staged state write, directly before the
+   last record read. The earlier reads stay, so a hold before the write costs
+   no write. Any hold or failure after the staged write and before the text
+   is sent refunds the attempt and `lastTypedAt`. A failure of the text
+   send-keys stays `left-in-input`: the text may have been sent.
+8. **The command scan.** Each scanned directory is opened with `O_DIRECTORY`
+   and `O_NONBLOCK`. A link to a directory is followed. A FIFO, or a link to
+   one, fails at once and the rename holds `command-shadowed`. The whole scan
+   runs inside the five-second budget. A hard stop holds `command-shadowed`
+   and releases the lock. Commands directories are walked to depth 3, with a
+   cap on entries. Each skill's frontmatter `name` is read with `readBounded`.
+   Still not checked: managed settings, `--plugin-dir` and `--add-dir`.
+   agentd's launch line does not pass those flags. `claudeArgs` passes the
+   model, the effort and `--dangerously-skip-permissions`.
+9. **An untyped clear, and an untitled launch.** When `applied` is empty,
+   `attempts` is 0 and the target is the session name, agentd sets `applied`
+   to that name and does not type it. A missing `title.json` is not created
+   for that. An untitled first launch, whose text is empty and whose launch
+   value is the session name, is not seeded and does not report a rename.
+10. **The version cache.** `cliMinor` caches only a parsed answer. A timeout
+    or unparsed output is not cached. A parsed minor that is not one of the
+    recorded minors is cached as not ok.
+11. **`agent-run title`.** When the session's title rename is off, the
+    command prints "not enabled for this session" instead of the idle
+    sentence. `show` already says that.
+12. **A failed Enter.** The result of the Enter send-keys is kept. On an
+    error or a timeout, agentd reads the record once. If the record's name is
+    the target, the state is Applied. Otherwise it runs the cleanup in item
+    2. Otherwise the state is `left-in-input`. It does not set Typed.

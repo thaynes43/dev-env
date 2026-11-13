@@ -9,25 +9,34 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 // A title is not part of the pod template. Changing the title annotation does
 // not make a current pod look outdated, and ensure does not build a
 // replacement while the pod is already there.
 func TestTitleDoesNotStartADrainOrReplaceAPod(t *testing.T) {
-	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "title-only", Namespace: "dev-agents", Generation: 9}}
-	s.Spec.Title = "Cafe"
-	s.Annotations = map[string]string{v1alpha1.AnnotationTitle: "Other"}
+	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "title-only", Namespace: "dev-agents"}}
 	s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
-	s.Spec.Mode = v1alpha1.ModeRemote
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "title-only", Namespace: "dev-agents", Labels: map[string]string{v1alpha1.LabelRevision: "old"}}}
-	if drainEligible(s, pod, "new") {
-		t.Fatal("a remote session with a title became drain eligible")
-	}
 	s.Spec.Mode = v1alpha1.ModeLocal
-	pod.Labels[v1alpha1.LabelRevision] = "same"
-	if drainEligible(s, pod, "same") {
-		t.Fatal("a title made a current pod look outdated")
+	s.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentIdle, Attached: 0}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "title-only", Namespace: "dev-agents", Labels: map[string]string{v1alpha1.LabelRevision: "old"}},
+		Status: corev1.PodStatus{
+			Phase:      corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	if !drainEligible(s, pod, "new") {
+		t.Fatal("an outdated idle local pod was not drain eligible")
+	}
+	s.Annotations = map[string]string{v1alpha1.AnnotationTitle: "Other"}
+	if !drainEligible(s, pod, "new") {
+		t.Fatal("a title annotation made an outdated idle pod ineligible")
+	}
+	s.Spec.Mode = v1alpha1.ModeRemote
+	if drainEligible(s, pod, "new") {
+		t.Fatal("a remote session became drain eligible")
 	}
 	r := &Reconciler{}
 	obs := &observation{pod: owned[*corev1.Pod]{obj: pod}}

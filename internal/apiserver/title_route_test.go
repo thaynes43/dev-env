@@ -556,11 +556,13 @@ func TestEffectiveTitleLeavesSpecAndFeedsHeartbeat(t *testing.T) {
 	if err := f.c.Update(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
-	before := f.session(name).Generation
 	w := putTitle(f, tokHuman, name, "New", "Old")
 	got := f.session(name)
-	if w.Code != http.StatusOK || got.Spec.Title != "Old" || got.Annotations[v1alpha1.AnnotationTitle] != "New" || got.Generation != before || publishedGeneration(got) != before {
-		t.Fatalf("code %d spec %q ann %q generation %d/%d canary %d body %s", w.Code, got.Spec.Title, got.Annotations[v1alpha1.AnnotationTitle], before, got.Generation, publishedGeneration(got), w.Body.String())
+	// Generation stays put is the envtest's job
+	// (TestTitleAnnotationLeavesGenerationProofs). This fake client does not
+	// bump it, so a generation assertion here cannot fail.
+	if w.Code != http.StatusOK || got.Spec.Title != "Old" || got.Annotations[v1alpha1.AnnotationTitle] != "New" {
+		t.Fatalf("code %d spec %q ann %q body %s", w.Code, got.Spec.Title, got.Annotations[v1alpha1.AnnotationTitle], w.Body.String())
 	}
 	var view apiv1.Session
 	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil || view.Title != "New" || view.CreatedTitle == nil || *view.CreatedTitle != "Old" || view.TitleIgnored {

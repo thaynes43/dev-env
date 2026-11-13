@@ -45,6 +45,32 @@ func TestTitleCommandReadsExpectThenPuts(t *testing.T) {
 	}
 }
 
+func TestTitleCommandSaysNotEnabled(t *testing.T) {
+	h := newHarness(t)
+	cur := testSession(name, "Running")
+	cur.Title = "Cafe"
+	cur.TitleRename = "off"
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		if r.Method == http.MethodGet {
+			writeTestJSON(w, http.StatusOK, cur)
+			return
+		}
+		var req struct {
+			Title string `json:"title"`
+		}
+		if json.Unmarshal(body, &req) != nil || req.Title != "Later" {
+			t.Errorf("put %s", body)
+		}
+		cur.Title = req.Title
+		writeTestJSON(w, http.StatusOK, cur)
+	}
+	h.mustRun(ExitOK, "title", name, "Later")
+	contains(t, "stdout", h.stdout.String(), "not enabled for this session")
+	if strings.Contains(h.stdout.String(), "It is typed when the session is idle") {
+		t.Fatalf("off session kept the idle sentence:\n%s", h.stdout.String())
+	}
+}
+
 func TestTitleCommandClear(t *testing.T) {
 	h := newHarness(t)
 	cur := testSession(name, "Running")

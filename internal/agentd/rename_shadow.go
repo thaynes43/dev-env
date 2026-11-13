@@ -1,11 +1,13 @@
 package agentd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // A command or skill named rename in the session's project or user directories
@@ -15,24 +17,31 @@ import (
 // <claude-config>/settings.json, <project>/.claude/settings.json and
 // <project>/.claude/settings.local.json. Enabled plugins are read from
 // <claude-config>/plugins/installed_plugins.json.
-const renameShadowLimit = 256 << 10
+const (
+	renameShadowLimit = 256 << 10
+	// shadowEntryCap is the most directory entries one scan reads. Past that
+	// the check cannot be finished, so the rename holds.
+	shadowEntryCap = 256
+	// shadowCommandDepth is how far under a commands directory a rename file
+	// is still seen. The commands directory's own entries are depth 1.
+	shadowCommandDepth = 3
+)
 
 // commandShadowed reports whether a rename command or skill is installed, or
 // the check cannot be made. Either one means the typed rename must not run.
-func commandShadowed(project, claudeConfig string) bool {
-	if project == "" || claudeConfig == "" {
+// The scan stops when ctx ends, which holds the rename and lets the caller
+// release the delivery lock. A link to a directory is followed. A FIFO, or a
+// link to one, fails at open.
+func commandShadowed(ctx context.Context, project, claudeConfig string) bool {
+	if ctx.Err() != nil || project == "" || claudeConfig == "" {
 		return true
 	}
-	dirs := []string{
-		filepath.Join(project, ".claude", "commands"),
-		filepath.Join(project, ".claude", "skills"),
-		filepath.Join(claudeConfig, "commands"),
-		filepath.Join(claudeConfig, "skills"),
-	}
-	for _, dir := range dirs {
-		if hit, bad := renameNamed(dir); hit || bad {
-			return true
-		}
+	n := 0
+	if shadowedCommands(ctx, filepath.Join(project, ".claude", "commands"), &n) ||
+		shadowedSkills(ctx, filepath.Join(project, ".claude", "skills"), &n) ||
+		shadowedCommands(ctx, filepath.Join(claudeConfig, "commands"), &n) ||
+		shadowedSkills(ctx, filepath.Join(claudeConfig, "skills"), &n) {
+		return true
 	}
 	var enabled, paths []string
 	for _, path := range []string{
@@ -51,7 +60,7 @@ func commandShadowed(project, claudeConfig string) bool {
 		paths = append(paths, doc.paths...)
 	}
 	for _, path := range paths {
-		if path == "" || shadowedTree(path) {
+		if ctx.Err() != nil || path == "" || shadowedTree(ctx, path, &n) {
 			return true
 		}
 	}
@@ -64,24 +73,35 @@ func commandShadowed(project, claudeConfig string) bool {
 	}
 	for _, name := range enabled {
 		path, ok := installs[name]
-		if !ok || path == "" || shadowedTree(path) {
+		if ctx.Err() != nil || !ok || path == "" || shadowedTree(ctx, path, &n) {
 			return true
 		}
 	}
 	return false
 }
 
-func shadowedTree(root string) bool {
-	for _, dir := range []string{filepath.Join(root, "commands"), filepath.Join(root, "skills")} {
-		if hit, bad := renameNamed(dir); hit || bad {
-			return true
-		}
-	}
-	return false
+func shadowedTree(ctx context.Context, root string, n *int) bool {
+	return shadowedCommands(ctx, filepath.Join(root, "commands"), n) || shadowedSkills(ctx, filepath.Join(root, "skills"), n)
 }
 
-func renameNamed(dir string) (bool, bool) {
-	entries, err := os.ReadDir(dir)
+func shadowedCommands(ctx context.Context, dir string, n *int) bool {
+	hit, bad := walkCommands(ctx, dir, 1, n)
+	return hit || bad
+}
+
+func shadowedSkills(ctx context.Context, dir string, n *int) bool {
+	hit, bad := walkSkills(ctx, dir, n)
+	return hit || bad
+}
+
+func walkCommands(ctx context.Context, dir string, depth int, n *int) (bool, bool) {
+	if ctx.Err() != nil {
+		return false, true
+	}
+	if depth > shadowCommandDepth {
+		return false, false
+	}
+	entries, err := readShadowDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, false
@@ -89,12 +109,121 @@ func renameNamed(dir string) (bool, bool) {
 		return false, true
 	}
 	for _, entry := range entries {
-		switch entry.Name() {
-		case "rename", "rename.md", "rename.markdown":
+		if ctx.Err() != nil {
+			return false, true
+		}
+		*n++
+		if *n > shadowEntryCap {
+			return false, true
+		}
+		if renameFileName(entry.Name()) {
+			return true, false
+		}
+		path := filepath.Join(dir, entry.Name())
+		if shadowIsDir(entry, path) {
+			hit, bad := walkCommands(ctx, path, depth+1, n)
+			if hit || bad {
+				return hit, bad
+			}
+		}
+	}
+	return false, false
+}
+
+func walkSkills(ctx context.Context, dir string, n *int) (bool, bool) {
+	if ctx.Err() != nil {
+		return false, true
+	}
+	entries, err := readShadowDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, false
+		}
+		return false, true
+	}
+	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return false, true
+		}
+		*n++
+		if *n > shadowEntryCap {
+			return false, true
+		}
+		if renameFileName(entry.Name()) {
+			return true, false
+		}
+		path := filepath.Join(dir, entry.Name())
+		if !shadowIsDir(entry, path) {
+			continue
+		}
+		data, err := readBounded(filepath.Join(path, "SKILL.md"), renameShadowLimit)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return false, true
+		}
+		if skillFrontmatterName(data) == "rename" {
 			return true, false
 		}
 	}
 	return false, false
+}
+
+func shadowIsDir(entry os.DirEntry, path string) bool {
+	if entry.IsDir() {
+		return true
+	}
+	if entry.Type()&os.ModeSymlink == 0 {
+		return false
+	}
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
+}
+
+func renameFileName(name string) bool {
+	switch name {
+	case "rename", "rename.md", "rename.markdown":
+		return true
+	default:
+		return false
+	}
+}
+
+func skillFrontmatterName(data []byte) string {
+	text := string(data)
+	if !strings.HasPrefix(text, "---") {
+		return ""
+	}
+	rest := strings.TrimPrefix(text, "---")
+	rest = strings.TrimPrefix(rest, "\r\n")
+	rest = strings.TrimPrefix(rest, "\n")
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return ""
+	}
+	for _, line := range strings.Split(rest[:end], "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		name, ok := strings.CutPrefix(line, "name:")
+		if !ok {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		name = strings.Trim(name, `"'`)
+		return name
+	}
+	return ""
+}
+
+// readShadowDir opens a directory with O_DIRECTORY and O_NONBLOCK. A symlink
+// to a directory is followed. A FIFO, or a symlink to one, fails at once.
+func readShadowDir(path string) ([]os.DirEntry, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return f.ReadDir(-1)
 }
 
 type renameSettings struct {

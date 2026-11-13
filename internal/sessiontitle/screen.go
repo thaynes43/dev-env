@@ -23,17 +23,66 @@ var TypedRenameScreen string
 //go:embed testdata/question-open.2.1.321.ansi
 var QuestionOpenScreen string
 
+//go:embed testdata/busy-thinking-empty-input.2.1.321.ansi
+var BusyThinkingEmptyScreen string
+
+//go:embed testdata/busy-thinking-typed-rename-zz.2.1.321.ansi
+var BusyThinkingTypedScreen string
+
+//go:embed testdata/busy-streaming-no-spinner-empty-input.2.1.321.ansi
+var BusyStreamingScreen string
+
+//go:embed testdata/busy-spinner-U273B-empty-input.2.1.321.ansi
+var BusySpinner273BScreen string
+
+//go:embed testdata/busy-spinner-U2722-empty-input.2.1.321.ansi
+var BusySpinner2722Screen string
+
+//go:embed testdata/busy-spinner-U273D-empty-input.2.1.321.ansi
+var BusySpinner273DScreen string
+
+//go:embed testdata/busy-spinner-U2736-empty-input.2.1.321.ansi
+var BusySpinner2736Screen string
+
+//go:embed testdata/busy-spinner-U00B7-empty-input.2.1.321.ansi
+var BusySpinner00B7Screen string
+
+//go:embed testdata/busy-spinner-U002A-empty-input.2.1.321.ansi
+var BusySpinner002AScreen string
+
+//go:embed testdata/cursor-and-format-facts.2.1.321.txt
+var cursorFacts string
+
 //go:embed testdata/tmux-facts.txt
 var tmuxFacts string
 
-// ListPanesFormat is the tmux 3.3a list-panes format in testdata/tmux-facts.txt.
-// The recorded line was produced with pane_synchronized.
+// listPanesFormat is the list-panes format recorded in
+// cursor-and-format-facts.2.1.321.txt. It is a constant so a test can compare
+// it with that recording; it is not read back out of the file it is checked
+// against.
+const listPanesFormat = "#{window_index} #{pane_index} #{pane_id} #{pane_dead} #{pane_in_mode} #{pane_synchronized} #{pane_pid} #{pane_current_command}"
+
+// ListPanesFormat is the tmux 3.3a list-panes format. The recorded line was
+// produced with pane_synchronized.
 func ListPanesFormat() string {
-	lines := tmuxFactLines()
-	if len(lines) < 4 {
-		return ""
+	return listPanesFormat
+}
+
+// CursorFactsText is the coordinator's cursor and format recording.
+func CursorFactsText() string {
+	return cursorFacts
+}
+
+// BusySpinnerScreens are the six recorded spinner frames, each an empty input.
+func BusySpinnerScreens() map[string]string {
+	return map[string]string{
+		"U+273B": BusySpinner273BScreen,
+		"U+2722": BusySpinner2722Screen,
+		"U+273D": BusySpinner273DScreen,
+		"U+2736": BusySpinner2736Screen,
+		"U+00B7": BusySpinner00B7Screen,
+		"U+002A": BusySpinner002AScreen,
 	}
-	return lines[3]
 }
 
 // RecordedPaneLine is the list-panes line recorded beside that format.
@@ -89,11 +138,23 @@ type Cursor struct {
 
 // ClassifyInput reads the whole visible screen. exact is the input text a
 // second check wants; an empty exact never returns InputExact. Empty input
-// and an exact match both require the cursor. Anything else is unknown,
-// except other non-blank text in the one well-formed input row.
+// and an exact match both require the cursor. A spinner row makes the screen
+// unknown. Anything else is unknown, except other non-blank text in the one
+// well-formed input row.
 func ClassifyInput(screen, exact string, cur Cursor) InputKind {
+	return classifyInput(screen, exact, cur, true)
+}
+
+// ClassifyBox answers the same question as ClassifyInput and does not treat a
+// spinner row as disqualifying. A question, a selection or a permission
+// screen has no input box and stays unknown. Cleanup and delivery use this.
+func ClassifyBox(screen, exact string, cur Cursor) InputKind {
+	return classifyInput(screen, exact, cur, false)
+}
+
+func classifyInput(screen, exact string, cur Cursor, spinnersHold bool) InputKind {
 	lines := parseScreen(screen)
-	row, ok := findInputRow(lines)
+	row, ok := findInputRow(lines, spinnersHold)
 	if !ok || !cur.Known {
 		return InputUnknown
 	}
@@ -124,12 +185,29 @@ func ClassifyInput(screen, exact string, cur Cursor) InputKind {
 	return InputUnknown
 }
 
-// ObservedCursor is the cursor a recorded box would have: on the input row,
+// RecordedCursor is the cursor the coordinator measured for a recorded
+// screen. Derived screens are not in the set. Empty-input frames from the
+// same session use column 2 on row 46. The typed "/rename zz" frames use
+// column 12 on row 46.
+func RecordedCursor(screen string) (Cursor, bool) {
+	switch screen {
+	case IdleEmptyScreen, BusyThinkingEmptyScreen, BusyStreamingScreen,
+		BusySpinner273BScreen, BusySpinner2722Screen, BusySpinner273DScreen,
+		BusySpinner2736Screen, BusySpinner00B7Screen, BusySpinner002AScreen:
+		return Cursor{X: 2, Y: 46, Known: true}, true
+	case TypedRenameScreen, BusyThinkingTypedScreen:
+		return Cursor{X: 12, Y: 46, Known: true}, true
+	default:
+		return Cursor{}, false
+	}
+}
+
+// ObservedCursor is the cursor a derived box would have: on the input row,
 // just after the prompt mark when the row is empty or a dim placeholder, and
 // just after any other text. A screen with no such box is not known.
 func ObservedCursor(screen string) Cursor {
 	lines := parseScreen(screen)
-	row, ok := findInputRow(lines)
+	row, ok := findInputRow(lines, true)
 	if !ok {
 		return Cursor{}
 	}
@@ -147,9 +225,9 @@ func ObservedCursor(screen string) Cursor {
 // findInputRow reports the input row when the screen is exactly one input box
 // and that box is the last element before the status row. A selection hint, a
 // numbered option or a spinner anywhere on the screen is not that box.
-func findInputRow(lines [][]cell) (int, bool) {
+func findInputRow(lines [][]cell, spinnersHold bool) (int, bool) {
 	for _, line := range lines {
-		if disqualifyingRow(line) {
+		if disqualifyingRow(line, spinnersHold) {
 			return 0, false
 		}
 	}
@@ -200,7 +278,7 @@ func isPromptRow(line []cell) bool {
 
 var numberedOption = regexp.MustCompile(`^(?:❯[ \t]+)?\d+\.\s+\S`)
 
-func disqualifyingRow(line []cell) bool {
+func disqualifyingRow(line []cell, spinnersHold bool) bool {
 	text := strings.TrimSpace(rowText(line))
 	if text == "" {
 		return false
@@ -212,21 +290,37 @@ func disqualifyingRow(line []cell) bool {
 	if numberedOption.MatchString(text) {
 		return true
 	}
-	return spinnerRow(text)
+	return spinnersHold && spinnerRow(text)
 }
 
+// spinnerRow matches the recorded shape: a mark, one space, and a word that
+// ends in "…". A finished row such as "✻ Crunched for 15s · done 8:31 AM"
+// does not match, because its first word does not end in "…".
 func spinnerRow(text string) bool {
-	low := strings.ToLower(text)
-	if strings.Contains(low, "done") || strings.Contains(low, "crunched") {
-		return false
-	}
 	t := strings.TrimLeft(text, " \t")
-	if t == "" {
+	r, size := utf8.DecodeRuneInString(t)
+	if size == 0 || !spinnerMark(r) {
 		return false
 	}
-	r, _ := utf8.DecodeRuneInString(t)
+	rest := t[size:]
+	if !strings.HasPrefix(rest, " ") {
+		return false
+	}
+	rest = rest[1:]
+	end := len(rest)
+	for i, rr := range rest {
+		if rr == ' ' || rr == '\t' {
+			end = i
+			break
+		}
+	}
+	word := rest[:end]
+	return word != "" && word != "…" && strings.HasSuffix(word, "…")
+}
+
+func spinnerMark(r rune) bool {
 	switch r {
-	case '✻', '✽', '✶', '✢', '✳', '✺':
+	case '\u273B', '\u2722', '\u273D', '\u2736', '\u00B7', '\u002A', '\u2733', '\u273A':
 		return true
 	default:
 		return false
