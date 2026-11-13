@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.109.0](https://github.com/thaynes43/dev-env/compare/v2.108.0...v2.109.0) (2026-11-13)
+
+
+### Features
+
+* **agentd:** an agent renames a running session by a guarded typed rename, off by default (DESIGN-065 slice 3, OP787) ([#1127](https://github.com/thaynes43/dev-env/issues/1127)) ([96d4fcd](https://github.com/thaynes43/dev-env/commit/96d4fcd77de437c6a8d5b1aaed97a7dd2efe90f8))
+* **keeper:** page Tom once per failed, lost or escalated summoned session, off by default (DESIGN-064 6.8, OP782) ([#1102](https://github.com/thaynes43/dev-env/issues/1102)) ([331ff7b](https://github.com/thaynes43/dev-env/commit/331ff7b3e896396c74bfc888def8a78c0446911a))
+* **operator:** a quota-held curation run closes quota-hold-expired, and its hold names the numbers (DESIGN-064 6.9, OP790) ([#1119](https://github.com/thaynes43/dev-env/issues/1119)) ([42552fa](https://github.com/thaynes43/dev-env/commit/42552fa343ac24a62db1072313f44823da561f73))
+
 ## [2.108.0](https://github.com/thaynes43/dev-env/compare/v2.107.0...v2.108.0) (2026-11-13)
 
 
