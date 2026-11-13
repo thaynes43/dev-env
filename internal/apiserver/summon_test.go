@@ -324,6 +324,17 @@ func TestSummonCreateWritesEscalationAndUpgrade(t *testing.T) {
 	}
 }
 
+func TestSummonCreateRefusesTitle(t *testing.T) {
+	f := summonFixture(t)
+	body := remediationBody("rem-responder-title", nil)
+	body["title"] = "Main coordinator"
+	e := wantError(t, summonPost(t, f, body), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantField(t, e, "title")
+	if !strings.Contains(e.Message, "cannot set title") {
+		t.Fatalf("message %q", e.Message)
+	}
+}
+
 func TestSummonCreateRefusesPromptAndData(t *testing.T) {
 	f := summonFixture(t)
 	for _, body := range []map[string]any{

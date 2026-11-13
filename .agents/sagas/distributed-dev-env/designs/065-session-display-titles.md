@@ -1,9 +1,13 @@
 # DESIGN-065: Session display titles and safe renaming
 
-- **Status:** Proposed 2026-11-12 for the coordinator
-  (dev-env-fable-coordinator-1109, story OP774, slice 1). Its rulings
-  (section 4) stand when the coordinator merges it. Nothing is built; the
-  phone test (section 5) has not run.
+- **Status:** Slice 1 (the field, creation and the launch argument) is built,
+  not installed (2026-11-12). The owner's phone test of section 5 is
+  withdrawn: asked to do it on 2026-11-13, Tom answered that he could always
+  rename a session himself and that his ask is for agents to do the naming
+  (ruling 7, as amended). Slice 1 merges on its reviews and checks.
+  The coordinator amended ruling 1, safety rule 6 and the slice table on
+  2026-11-13; that amendment is not Tom's. Slices 2 and 3 are not built.
+  Rulings in section 4 stand.
 - **Tracking:** [Story OP774](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/774)
   under [Epic #91](https://work.haynesnetwork.com/work_packages/91). Builds
   on [DESIGN-038](038-remote-control-launch.md),
@@ -16,8 +20,8 @@
   (decision 23: spec is immutable except `operatingMode` and `lifecycle`).
   Slice 3 lets it change after create, and ruling 4 decides who may change
   it. That amends D-39 and adds an access rule, so ADR-026 (the next free
-  number) is accepted before slice 3 merges, and only if the phone test
-  shows slice 3 is needed.
+  number) is accepted before slice 3 merges. Slice 3 is required
+  since ruling 7 was amended.
 - **Evidence:** dev-env `59169f1f` (origin/main), source reads only. Nothing
   in the cluster or the tracker was written for this document.
 
@@ -112,7 +116,10 @@ text, for example `Main dev-env coordinator`: 1 to 48 characters and at most
 96 bytes of UTF-8 (`MaxLength` plus a CEL `size(bytes(self))` rule, as on
 `OutcomeStatus.Note`). Allowed: letters, marks, digits, punctuation, symbols
 and the ASCII space. Refused: `|`, control and format characters, anything
-above U+FFFF, a leading or trailing space, two spaces in a row. agent-run
+above U+FFFF, a leading or trailing space, two spaces in a row. The first
+character must be a letter or a digit, because the CLI's `--remote-control`
+takes an optional value, so a value that begins with a hyphen would be read
+as an option (coordinator, 2026-11-13, not Tom). agent-run
 trims the ends; the API refuses an unclean value and never rewrites one.
 Empty means no title; `""` is treated as absent and never stored.
 
@@ -125,7 +132,9 @@ never changes `metadata.name`, the UID,
 `status.agent.conversationId`, `status.remoteControl.sessionId` or `url`,
 the pod or the volume. `status.remoteControl.name` stays the session name. A
 new `status.remoteControl.title` records what agentd passed at this pod's
-launch, empty when it passed the name.
+launch, empty when it passed the name. The report stays empty until that
+CLI process is live (coordinator, 2026-11-13, not Tom). The API view's
+`title`, the `show` row and this report stay in slice 1.
 
 **Ruling 2. The convention.** The display title is `<Family> | <title>`, as
 in the labels proposed on item 774 (`Fable | Main dev-env coordinator`).
@@ -203,20 +212,39 @@ before the operator that sends it.
    that writes a new field, or the API server prunes it (haynes-ops #3502).
    Slice 1 adds `spec.title` and `status.remoteControl.title` together, so
    one copy serves both. Slice 3 changes the rule that lets the title
-   change, which is a second copy.
+   change, which is a second copy. An operator older than this slice must
+   not manage titled sessions, because its full-object updates drop the
+   field and the immutability rule then refuses them; roll the operator
+   back only when no session has a title (coordinator, 2026-11-13, not Tom).
 7. Display only: no routing, authority, idempotency or selection decides by
    the title.
 
-**Ruling 7. The proof gates the change path.** Slices 1 and 2 may start
-before the phone test: they use only the launch name, the top of the
-documented precedence. Slice 1 does not merge before step 2's reading of `|`
-and `é`, because it ships the separator and the character rule, and a change
-to either after it merged would be a second CRD copy. Slice 3 waits for its readings; slice 4 for slices 1
-to 3 installed and the test passed. If the readings show that a resume keeps
-the owner's rename, slice 3 is scoped again before it starts, because the
-record is then not needed to keep a title on the phone.
+**Ruling 7. No slice waits for a reading by Tom (amended 2026-11-13, the
+coordinator).** As first written, slice 1 did not merge before Tom's reading
+of `|` and `é` on a test session. On 2026-11-13 he was asked by phone prompt
+to rename the test session and answered, word for word: "I could always do
+this my ask is agents can rename or set useful names that follow a pattern"
+(item 774 comment 7543). The coordinator reads that as follows; the reading
+is not Tom's. He renames sessions in the app already, so that path needs no
+proof from him. What he asks for is that agents set names that follow a
+pattern and that agents rename. So:
+
+- Slice 1 merges on its reviews and checks. The first titled session Tom
+  sees is the reading of the bar and of a non-ASCII letter. The separator is
+  one constant in the composer, and the schema only refuses a bar inside the
+  role text, so a different separator is a code change, not a CRD change.
+- Slice 3 (an agent changes a title) is required, not conditional. How the
+  new title reaches a running session is Q-065-07.
+- Slice 4 waits for slices 1 to 3 installed.
+- The readings of section 5 are taken by agents on a test session when
+  slice 3 is built. They no longer need Tom.
 
 ## 5. The proof: one phone test
+
+Withdrawn as a gate on 2026-11-13 (ruling 7). The readings and the outcomes
+below stay as the method for slice 3's own proof: agents take them on an
+unused test session, and the rename is made by the route slice 3 builds, not
+by Tom. The text below is as first written.
 
 The coordinator later creates one fresh Remote Control session for the test,
 T, on the current image. Nobody types into T or uses it for work. Tom spends
@@ -272,9 +300,9 @@ session. Tests use fakes at two CPUs. The new package gets its line in
 
 | Slice | What it changes | Acceptance | CRD copy | Operator pin | Agent image pin | Front door pin |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1. Field and creation | `spec.title`, immutable after create, and `status.remoteControl.title` with CEL bounds; the composer; `title` on create, `--title` on create and `rc`, `title` on `coordinator_start`; agentd passes the composed title at launch and resume | `agentsession_validation_test.go` accepts and refuses each bound: empty, 48 and 49 characters, 96 and 97 bytes, `|`, a control character, U+10000, spacing. Launch and resume argv with and without a title; an untitled argv is byte-identical to today's; an old agentd ignores the key | Yes, first | Yes | Yes | Yes |
-| 2. Listings | TITLE in `list` and `fleet`; `title` in `show`; `title` and `displayTitle` in the API view; `displayTitle` in the portal; `session_status` | Golden tests with no, long and Unicode titles; the portal decoder takes the key and still refuses others; no script in dev-env or haynes-ops that parses these tables breaks | No | Yes, after a portal pin | Yes (agent-run) | Yes |
-| 3. Change it, keep it on resume | ADR-026; the CEL rule lets `spec.title` change; `PUT /v1/sessions/{name}/title` with `expect`; `agent-run title`; agentd reports `status.remoteControl.title`; `show` drops `registered as <name>` | Fakes: parent, human, trusted client and workbench allowed; the session itself and another session refused; stale `expect` is 409; a change leaves the pod, its UID and annotations alone; a resume after a change passes the new title and the same `--resume` id. Live on a fresh test session: section 5's readings after a change and one resume. An adversarial review by another model family before merge, because it adds a write route with an access rule | Yes, first | Yes | Yes | No |
+| 1. Field and creation | `spec.title`, immutable after create, and `status.remoteControl.title` with CEL bounds; the composer; `title` on create, `--title` on create and `rc`, `title` on `coordinator_start`; agentd passes the composed title at launch and resume; `title` in the API view; `title` in `show`; agentd reports `status.remoteControl.title` once the CLI was launched with it | `agentsession_validation_test.go` accepts and refuses each bound: empty, 48 and 49 characters, 96 and 97 bytes, `|`, a control character, U+10000, spacing. Launch and resume argv with and without a title; an untitled argv is byte-identical to today's; an old agentd ignores the key | Yes, first | Yes | Yes | Yes |
+| 2. Listings | TITLE in `list` and `fleet`; `displayTitle` in the API view; `displayTitle` in the portal; `session_status` | Golden tests with no, long and Unicode titles; the portal decoder takes the key and still refuses others; no script in dev-env or haynes-ops that parses these tables breaks | No | Yes, after a portal pin | Yes (agent-run) | Yes |
+| 3. Change it, keep it on resume | Required since ruling 7 was amended. ADR-026; the CEL rule lets `spec.title` change; `PUT /v1/sessions/{name}/title` with `expect`; `agent-run title`; `show` drops `registered as <name>` | Fakes: parent, human, trusted client and workbench allowed; the session itself and another session refused; stale `expect` is 409; a change leaves the pod, its UID and annotations alone; a resume after a change passes the new title and the same `--resume` id. Live on a fresh test session: section 5's readings after a change and one resume. An adversarial review by another model family before merge, because it adds a write route with an access rule | Yes, first | Yes | Yes | No |
 | 4. Backfill | For each session below: `agent-run title`, then the owner's app rename to the printed text, with R0 and R1 | Title in `agent-run list` and the same text in the app; no identity reading changed; nothing typed, resumed or restarted | No | No | No | No |
 
 The five, with the labels proposed on item 774 (not applied):
@@ -304,6 +332,18 @@ on the phone only by the app rename until its next resume.
   `Coordinator for item <n>` when Meatball gives no title.
 - **Q-065-05. Reading the provider's title back.** Recommendation: no; an
   undocumented local file is not a contract.
+- **Q-065-07. How an agent's rename reaches a running session.** Tom's
+  answer of 2026-11-13 makes agent renames a requirement. Two routes exist.
+  (a) The platform records the title and passes it at the session's next
+  launch or resume; nothing is typed, and an agent can suspend and resume an
+  idle session to apply it. Whether the launch name replaces an earlier title
+  at resume is not documented and is read on a test session. (b) The platform
+  types the provider's rename command into the session. It is immediate, and
+  it is terminal input: on 2026-11-12 a routine `agent-run msg` landed in an
+  open phone question on another coordinator and came back as its answer
+  (item 501 comment 7450). Recommendation: build (a); try (b) on an unused
+  test session first, and use it on a working session only if Tom chooses it
+  knowing that risk.
 - **Q-065-06. Codex.** Recommendation: read what the ChatGPT app shows at the
   next Codex pairing, and design nothing until then.
 

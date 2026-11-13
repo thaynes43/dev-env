@@ -63,11 +63,14 @@ const (
 // CLI's own session record (backlog 03 "Links"). The URL is set only once the
 // entry is registered.
 type RemoteControl struct {
-	// Name is the name agentd passed to --remote-control.
+	// Name is the session's stable name. Title is the display title passed to
+	// --remote-control when the session has role text; empty means the stable
+	// name was passed (DESIGN-065).
 	Name      string `json:"name,omitempty"`
 	SessionID string `json:"sessionId,omitempty"`
 	URL       string `json:"url,omitempty"`
 	State     string `json:"state,omitempty"`
+	Title     string `json:"title,omitempty"`
 }
 
 // Step is the outcome of one boot step. Steps never stop the boot: a failed

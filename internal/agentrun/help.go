@@ -155,7 +155,7 @@ wait for completion. JSON is one Session document.
 Print the embedded coordinator instructions without connecting. Supply all three
 flags to render a concrete item and budget; otherwise placeholders are shown.
 `,
-	"rc": `Usage: agent-run rc start --project P [--repo R] --agent claude --model <full id> [--effort e] --handoff FILE [--wait 5m] [--idempotency-key K] -o json
+	"rc": `Usage: agent-run rc start --project P [--repo R] --agent claude --model <full id> [--title TEXT] [--effort e] --handoff FILE [--wait 5m] [--idempotency-key K] -o json
        agent-run rc status <session> -o json
        agent-run rc fresh --session NAME --request FILE -o json
 
@@ -170,7 +170,9 @@ native thread+turn ACKs; phoneRegistration remains unobserved until a supported
 client witnesses it. An uncertain result must never be blindly repeated.
 
 Launches a Claude remote session through the existing session API and observes
-its bounded startup phases. The project catalog chooses the repository/base.
+its bounded startup phases. --title sets optional role text at create. agent-run
+trims its ends, checks it before the call, and does not retry without it when
+an older operator refuses the field. The project catalog chooses the repository/base.
 The idempotency key is always sent and printed; retain it and the session handle.
 --wait 0 creates only, returning exit 7 without polling or sending the handoff.
 --wait defaults to 5m and cannot exceed 10m. A positive wait that expires reports
@@ -498,7 +500,8 @@ work on the session's volume. With -p it runs the agent once on the task,
 headless. With --local it starts the agent's TUI in tmux, which Tom attaches to
 with agent-run attach. With --interactive it starts the same TUI with Remote
 Control, so the session also shows in the Claude app, about two minutes after it
-is created (agent-run show says remote control: registered). A profile that
+is created (agent-run show says remote control: registered). --title sets role
+text for that phone entry; the session name stays the stable name. A profile that
 mounts the keeper's projection (today the default and workbench profiles)
 follows the keeper's shared Claude login, so nobody signs in; agent-run login
 <name> status says which login a session uses, and its url and code are only for
@@ -547,6 +550,12 @@ Flags:
                              every agent
   --model <id>               a full model id, never an alias such as opus (default
                              $DEV_ENV_CLAUDE_MODEL, else ` + DefaultClaudeModel + `)
+  --title <text>             optional role text, set at create and not changed
+                             later. 1 to 48 characters, at most 96 bytes, no bar.
+                             The first character is a letter or a digit.
+                             For claude-opus-5-5 the Claude app shows
+                             Opus | Main coordinator. An empty title leaves the
+                             app showing the session name
   --effort <level>           low, medium, high, xhigh, max or ultracode, as the
                              model takes them (default xhigh, or the highest level
                              below it the model takes; none on models without effort
@@ -634,9 +643,10 @@ the layout are listed as unrecognized and never pruned.
   --session <name>   only this session's rescues
   -o json            the API's list as JSON
 
-rescue restore starts a new session that fetches one rescue (D-67). It is a run:
-it takes the same flags (-p or --local, --agent, --model, --effort, --base, --size,
---wait and the rest; agent-run help run lists them). Only a complete rescue can be
+rescue restore starts a new session that fetches one rescue (D-67). It is a create:
+it takes the same flags (-p or --local, --agent, --model, --title, --effort, --base, --size,
+--wait and the rest; agent-run help run lists them). --title sets optional role text on
+the new session, the same way it does on run. Only a complete rescue can be
 restored. The repo is the rescue's only clone, or --repo <name> when it holds several.
 On its first boot the new session's clone fetches the bundle into refs/rescued/. If
 you give no --base and the bundle holds the old session's branch, the worktree

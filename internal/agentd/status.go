@@ -85,6 +85,7 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		}
 		st.Agent.Error = boot.CurrentStep
 		if sess.Mode == protocol.ModeRemote {
+			// Nothing has been passed yet: the title stays empty until the CLI is live.
 			st.RemoteControl = &protocol.RemoteControl{Name: sess.Name, State: protocol.RemoteStarting}
 		}
 		return st
@@ -207,7 +208,9 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	applyActivity(ctx, r, s, &st, pid, hasCur && cur.TUI, now)
 	switch {
 	case sess.Mode == protocol.ModeRemote && sess.Agent == protocol.AgentClaude:
-		st.RemoteControl = collectRemoteControl(s, sess, checkLogin(s).Usable(now), live, hasCur)
+		rc := collectRemoteControl(s, sess, checkLogin(s).Usable(now), live, hasCur)
+		rc.Title = remoteTitleForReport(sess, hasCur, st.Agent.State)
+		st.RemoteControl = rc
 	case hasCur && hasExplicit && explicitState != explicitClaudeRCUncertain && explicitRCAccepted(s, sess, cur):
 		rc := collectRemoteControl(s, sess, checkLogin(s).Usable(now), live, true)
 		rc.Name = cur.ExplicitClaudeRC.Title
@@ -228,6 +231,28 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		}
 	}
 	return st
+}
+
+// remoteTitleForReport is status.remoteControl.title. It stays empty until
+// this boot's CLI process is live, and it keeps the value passed at launch
+// after that process exits. Empty also means the launch passed the session name.
+func remoteTitleForReport(sess protocol.Session, hasCur bool, state string) string {
+	if !hasCur || !cliHasLaunched(state) {
+		return ""
+	}
+	return remoteControlTitle(sess)
+}
+
+// cliHasLaunched is true once this boot's agent process is or has been live.
+// Pending, login-required and failed have not passed a launch argument.
+// Exited and interrupted have, so the record of what was passed stays.
+func cliHasLaunched(state string) bool {
+	switch state {
+	case protocol.AgentBusy, protocol.AgentIdle, protocol.AgentWaiting, protocol.AgentExited, protocol.AgentInterrupted:
+		return true
+	default:
+		return false
+	}
 }
 
 // A shared run-agent can queue for the common Git lock before its final

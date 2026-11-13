@@ -70,6 +70,33 @@ func TestSessionUIDTransportPreservesLegacyDocuments(t *testing.T) {
 	}
 }
 
+func TestOlderAgentdIgnoresTitle(t *testing.T) {
+	current := validTask()
+	current.Title = "Main coordinator"
+	data, err := json.Marshal(current)
+	if err != nil || !strings.Contains(string(data), `"title":"Main coordinator"`) {
+		t.Fatalf("titled document %s %v", data, err)
+	}
+	parsed, err := ParseSession(data)
+	if err != nil || parsed.Title != "Main coordinator" || parsed.Name != current.Name || parsed.Prompt != current.Prompt {
+		t.Fatalf("current parser %+v %v", parsed, err)
+	}
+	// An agentd built before the title field unmarshals the same document and
+	// keeps the launch fields. encoding/json ignores the unknown key.
+	var oldReader struct {
+		Name, Repo, Base, Agent, Mode, Model, Effort, Prompt string
+		Limits                                               *Limits
+	}
+	if json.Unmarshal(data, &oldReader) != nil || oldReader.Name != current.Name || oldReader.Model != current.Model || oldReader.Prompt != current.Prompt {
+		t.Fatal("title changed the legacy launch contract")
+	}
+	current.Title = ""
+	bare, err := json.Marshal(current)
+	if err != nil || strings.Contains(string(bare), `"title"`) {
+		t.Fatalf("empty title changed the document: %s", bare)
+	}
+}
+
 func TestValidate(t *testing.T) {
 	cases := []struct {
 		name    string

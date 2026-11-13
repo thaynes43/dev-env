@@ -530,7 +530,7 @@ func TestHeartbeatCopiesRemoteControl(t *testing.T) {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	rc := f.session(name).Status.RemoteControl
-	if rc == nil || rc.Name != name || rc.SessionID != "session_abc" || rc.URL != "https://claude.ai/code/session_abc" || rc.State != protocol.RemoteRegistered {
+	if rc == nil || rc.Name != name || rc.SessionID != "session_abc" || rc.URL != "https://claude.ai/code/session_abc" || rc.State != protocol.RemoteRegistered || rc.Title != "" {
 		t.Fatalf("status.remoteControl %+v", rc)
 	}
 
@@ -548,5 +548,46 @@ func TestHeartbeatCopiesRemoteControl(t *testing.T) {
 	}
 	if rc := f.session(name).Status.RemoteControl; rc != nil {
 		t.Errorf("a heartbeat without an entry kept %+v", rc)
+	}
+}
+
+func TestHeartbeatStoresRemoteTitle(t *testing.T) {
+	if got := clipRemoteTitle("Opus | Main coordinator"); got != "Opus | Main coordinator" {
+		t.Fatalf("short title %q", got)
+	}
+	exact := strings.Repeat("a", 128)
+	if got := clipRemoteTitle(exact); got != exact {
+		t.Fatalf("128-byte title changed: %d", len(got))
+	}
+	long := strings.Repeat("é", 80)
+	if got := clipRemoteTitle(long); len(got) > 128 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("clipped title len %d %q", len(got), got)
+	}
+
+	f := newFixture(t)
+	const name = "haynes-ops-1006-100100"
+	tok := f.sessionPod(name, "full", 0)
+	st := status(name)
+	st.Agent = protocol.AgentState{State: protocol.AgentBusy}
+	st.RemoteControl = &protocol.RemoteControl{Name: name, State: protocol.RemoteRegistered, Title: "Opus | Main coordinator"}
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
+	}
+	if rc := f.session(name).Status.RemoteControl; rc == nil || rc.Title != "Opus | Main coordinator" || rc.Name != name {
+		t.Fatalf("stored %+v", rc)
+	}
+	st.RemoteControl.Title = long
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
+	}
+	if rc := f.session(name).Status.RemoteControl; rc == nil || len(rc.Title) > 128 || !strings.HasSuffix(rc.Title, "…") {
+		t.Fatalf("clipped status %+v", rc)
+	}
+	st.RemoteControl.Title = ""
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
+	}
+	if rc := f.session(name).Status.RemoteControl; rc == nil || rc.Title != "" || rc.Name != name || rc.State != protocol.RemoteRegistered {
+		t.Fatalf("a report with no title kept %+v", rc)
 	}
 }

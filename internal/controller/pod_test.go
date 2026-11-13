@@ -106,6 +106,40 @@ func TestWorkspacePodRequiresBothOptInsAndRetainsPrivateHome(t *testing.T) {
 	}
 }
 
+func TestSessionDocumentCarriesTitle(t *testing.T) {
+	// The untitled document is the JSON origin/main at b9e23135 writes for
+	// taskSession. The title key is omitted, so the bytes stay the same.
+	const untitledDocument = `{"sessionUID":"uid-1","name":"haynes-ops-1006-120000","repo":"haynes-ops","base":"origin/main","agent":"claude","mode":"task","model":"claude-opus-5-5","effort":"xhigh","prompt":"fix the docs","limits":{"timeout":"40m0s","maxTurns":50}}`
+	s := taskSession()
+	without, err := sessionDocument(s, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if without != untitledDocument {
+		t.Fatalf("untitled document\n got %s\nwant %s", without, untitledDocument)
+	}
+	s.Spec.Title = "Main coordinator"
+	with, err := sessionDocument(s, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(with, `"title":"Main coordinator"`) {
+		t.Fatalf("document %s", with)
+	}
+	parsed, err := protocol.ParseSession([]byte(with))
+	if err != nil || parsed.Title != "Main coordinator" {
+		t.Fatalf("parsed title %q %v", parsed.Title, err)
+	}
+	s.Spec.Title = ""
+	again, err := sessionDocument(s, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != untitledDocument {
+		t.Fatalf("clearing the title changed the document\n%s\n%s", again, untitledDocument)
+	}
+}
+
 func TestPodShape(t *testing.T) {
 	tmpl := exampleTemplates(t)
 	s := taskSession()

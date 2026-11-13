@@ -51,7 +51,7 @@ func TestParentTools(t *testing.T) {
 			}
 		}
 	}
-	if len(seen) != len(want) || total != descriptionWordBound || descriptionWordBound != 214 {
+	if len(seen) != len(want) || total != descriptionWordBound || descriptionWordBound != 222 {
 		t.Fatalf("parent tools %d; descriptions %d; bound %d", len(seen), total, descriptionWordBound)
 	}
 

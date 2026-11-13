@@ -787,6 +787,14 @@ create sessions (a v2 session, a workbench session or the v1 pod) runs:
 "${v2run[@]}" show <name>    # wait for "remote control: registered"
 ```
 
+`--title "Main coordinator"` sets optional role text at create. It cannot be
+changed afterwards. For `claude-opus-5-5` the Claude app shows
+`Opus | Main coordinator`. The session's stable name stays the pod name, the
+hostname and the volume name. An empty title leaves the app showing that
+stable name. The first character of a title is a letter or a digit. `agent-run rc start --title` sets the same text on a fresh remote
+session. `agent-run` trims the ends of `--title` and refuses a value the API
+would refuse, without sending it.
+
 It needs no flag, pairing or sign-in on the default profile, which follows the
 keeper's shared login. Tell Tom the session name once `show` reads
 `registered` (about two minutes; [quickstart section
