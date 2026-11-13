@@ -674,15 +674,16 @@ spec:
               title:
                 description: |-
                   Title is optional role text for the phone and the listings (DESIGN-065).
-                  It is set at create and stays unchanged in this slice. Empty is absent
-                  and is never stored. The display title is the model family plus this
-                  text; this field holds only the role text.
+                  It may be added, changed or removed after create, and the only writer
+                  after create is PUT /v1/sessions/{name}/title. Empty is absent and is
+                  never stored. The display title is the model family plus this text;
+                  this field holds only the role text.
 
                   MaxLength bounds code points. The CEL rules also bound UTF-8 bytes, the
-                  character set and the spacing. Letters, marks, digits, punctuation and
-                  symbols are allowed, plus ASCII space. The first character is a letter
-                  or a digit. A bar, a control or format character, and anything above
-                  U+FFFF are not.
+                  character set and the spacing, on create and on every update. Letters,
+                  marks, digits, punctuation and symbols are allowed, plus ASCII space.
+                  The first character is a letter or a digit. A bar, a control or format
+                  character, and anything above U+FFFF are not.
                 maxLength: 48
                 minLength: 1
                 type: string
@@ -696,9 +697,6 @@ spec:
                     ]*$') && !self.contains('|') && !self.matches('[\\x{10000}-\\x{10FFFF}]')
                 - message: no leading or trailing space, and no two spaces in a row
                   rule: '!self.startsWith('' '') && !self.endsWith('' '') && !self.contains(''  '')'
-                - message: immutable after create; only operatingMode and lifecycle
-                    may change
-                  rule: self == oldSelf
               tools:
                 description: |-
                   Tools are the tool pools registered at boot (DESIGN-001 8.1), by ToolPool
@@ -800,7 +798,7 @@ spec:
               rule: '!has(self.summon) || !(self.lane == ''remediation'' || self.lane
                 == ''escalation'') || self.summon.priority == ''urgent'''
             - message: 'immutable after create: no spec field may be added or removed,
-                except operatingMode and lifecycle'
+                except operatingMode, lifecycle and title'
               rule: has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort)
                 && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size)
                 && has(self.profile) == has(oldSelf.profile) && has(self.tools) ==
@@ -814,7 +812,7 @@ spec:
                 == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot)
                 && has(self.usageCaptureParentUID) == has(oldSelf.usageCaptureParentUID)
                 && has(self.coordinatorInstructionParentUID) == has(oldSelf.coordinatorInstructionParentUID)
-                && has(self.summon) == has(oldSelf.summon) && has(self.title) == has(oldSelf.title)
+                && has(self.summon) == has(oldSelf.summon)
             - message: project canaries require their fixed private bounded subscription
                 task contract
               rule: '!has(self.projectCanary) || (self.mode == ''task'' && self.agent
@@ -3000,6 +2998,72 @@ spec:
                     description: Name is the entry's name, which equals the session's
                       name.
                     type: string
+                  providerTitle:
+                    description: |-
+                      ProviderTitle is the CLI record's name when nameSource is "user"
+                      (DESIGN-065 rule 8.8). Empty means the record holds a derived name.
+                      MaxLength bounds code points; the CEL rule also bounds UTF-8 bytes.
+                      The heartbeat clips a longer value so the stored text fits both.
+                    maxLength: 128
+                    type: string
+                    x-kubernetes-validations:
+                    - message: at most 128 bytes
+                      rule: size(bytes(self)) <= 128
+                  rename:
+                    description: |-
+                      Rename is agentd's typed-rename report. It is absent while nothing
+                      was ever to apply.
+                    properties:
+                      attempts:
+                        description: Attempts is how many times agentd has typed the
+                          current target.
+                        format: int32
+                        maximum: 2
+                        minimum: 0
+                        type: integer
+                      reason:
+                        description: Reason is the code for State. Typed has none.
+                          Held includes quiet.
+                        enum:
+                        - launch
+                        - confirmed
+                        - already
+                        - process
+                        - not-registered
+                        - busy
+                        - waiting
+                        - status-unknown
+                        - quiet
+                        - clock
+                        - attached
+                        - pane
+                        - cli-version
+                        - input
+                        - screen-unknown
+                        - paced
+                        - delivering
+                        - left-in-input
+                        - not-confirmed
+                        - invalid-title
+                        - record-shape
+                        maxLength: 32
+                        type: string
+                      since:
+                        description: Since is when this state began for the current
+                          target.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is Applied, Held, Typed, Failed or Unknown.
+                        enum:
+                        - Applied
+                        - Held
+                        - Typed
+                        - Failed
+                        - Unknown
+                        maxLength: 16
+                        type: string
+                    type: object
                   sessionId:
                     description: SessionID is the Remote Control session id.
                     type: string

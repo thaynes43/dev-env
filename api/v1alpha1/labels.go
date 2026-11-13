@@ -55,6 +55,12 @@ const (
 	// the stop; the leader closes the outcome before deleting (DESIGN-064 6.6,
 	// OP779 fix round 1). A delete without this marker is unattributed.
 	AnnotationReapedBy = LabelPrefix + "reaped-by"
+	// AnnotationTitleSetBy names who last changed spec.title (DESIGN-065 rule
+	// 8.1): the API caller, as caller.String().
+	AnnotationTitleSetBy = LabelPrefix + "title-set-by"
+	// AnnotationTitleSetAt is when that change was recorded, RFC 3339. The
+	// title route allows one recorded change per 60 seconds from this time.
+	AnnotationTitleSetAt = LabelPrefix + "title-set-at"
 	// AnnotationResumedAt is when the API last resumed the session (RFC 3339,
 	// D-60). The idle timer counts from it too, so a resume that lands while
 	// an idle suspend's rescue still runs, and keeps the old pod, is not

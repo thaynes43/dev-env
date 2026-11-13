@@ -6,14 +6,15 @@
   rename a session himself and that his ask is for agents to do the naming
   (ruling 7, as amended). Slice 1 merges on its reviews and checks.
   The coordinator amended ruling 1, safety rule 6 and the slice table on
-  2026-11-13; that amendment is not Tom's. Slices 2 and 3 are not built.
+  2026-11-13; that amendment is not Tom's. Slice 2 is not built. Slice 3 (an
+  agent renames a running session) is built, not installed (2026-11-13, OP787).
   Rulings in section 4 stand.
   Slice 1 is installed except its front door pin (item 785 comment 7560,
   2026-11-13). Section 9 designs slice 3 (amendment of 2026-11-13, OP787):
   Tom chose a typed rename under a guard (Q-065-07), and ruling 8 and the
   rules of section 9 are the coordinator's design of it. That amendment
   also changes ruling 4, safety rule 1, Q-065-05, Q-065-07 and the slice 3
-  and 4 rows. Nothing of it is built.
+  and 4 rows. Slice 3's code is built and not installed. Slice 4 is not built.
 - **Tracking:** [Story OP774](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/774)
   under [Epic #91](https://work.haynesnetwork.com/work_packages/91). Builds
   on [DESIGN-038](038-remote-control-launch.md),

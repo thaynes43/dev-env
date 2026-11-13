@@ -98,7 +98,17 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 		}
 	}
 	if rc := s.Status.RemoteControl; rc != nil {
-		v.RemoteControl = &apiv1.RemoteControl{Name: rc.Name, URL: rc.URL, State: rc.State}
+		v.RemoteControl = &apiv1.RemoteControl{
+			Name: rc.Name, URL: rc.URL, State: rc.State,
+			Title: rc.Title, ProviderTitle: rc.ProviderTitle,
+		}
+		if rn := rc.Rename; rn != nil {
+			view := &apiv1.RemoteRename{State: rn.State, Reason: rn.Reason, Attempts: int(rn.Attempts)}
+			if rn.Since != nil {
+				view.Since = rn.Since.UTC()
+			}
+			v.RemoteControl.Rename = view
+		}
 	}
 	if o := s.Status.Outcome; o != nil {
 		v.Outcome = outcomeView(o)

@@ -43,6 +43,9 @@ func SessionSuspendPath(name string) string { return SessionPath(name) + "/suspe
 // SessionResumePath is a session's resume route; see SessionSuspendPath.
 func SessionResumePath(name string) string { return SessionPath(name) + "/resume" }
 
+// SessionTitlePath is PUT /v1/sessions/{name}/title (DESIGN-065 rule 8.1).
+func SessionTitlePath(name string) string { return SessionPath(name) + "/title" }
+
 // SessionLogPath is a session's log route, GET with ?tail=N (D-65).
 func SessionLogPath(name string) string { return SessionPath(name) + "/log" }
 
@@ -440,10 +443,23 @@ func (s Session) TaskVerdict() *TaskVerdict {
 }
 
 // RemoteControl is a remote session's Remote Control entry (plan 03).
+// Title is what agentd passed at this pod's launch. ProviderTitle and Rename
+// are the typed-rename report (DESIGN-065 rule 8.8).
 type RemoteControl struct {
-	Name  string `json:"name,omitempty"`
-	URL   string `json:"url,omitempty"`
-	State string `json:"state,omitempty"`
+	Name          string        `json:"name,omitempty"`
+	URL           string        `json:"url,omitempty"`
+	State         string        `json:"state,omitempty"`
+	Title         string        `json:"title,omitempty"`
+	ProviderTitle string        `json:"providerTitle,omitempty"`
+	Rename        *RemoteRename `json:"rename,omitempty"`
+}
+
+// RemoteRename is the API view of status.remoteControl.rename.
+type RemoteRename struct {
+	State    string    `json:"state,omitempty"`
+	Reason   string    `json:"reason,omitempty"`
+	Since    time.Time `json:"since,omitempty"`
+	Attempts int       `json:"attempts,omitempty"`
 }
 
 // Outcome is what a summoned session reported (plan 10).
@@ -743,9 +759,12 @@ type ErrorResponse struct {
 // Error is a refusal: a stable code for programs, a sentence for people, and the
 // fields at fault when the request was invalid.
 type Error struct {
-	Code    string       `json:"code"`
-	Message string       `json:"message"`
-	Fields  []FieldError `json:"fields,omitempty"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	// Reason is a fixed code for a conflict the caller can branch on, such
+	// as title_changed. Other refusals leave it empty.
+	Reason string       `json:"reason,omitempty"`
+	Fields []FieldError `json:"fields,omitempty"`
 }
 
 // FieldError is one invalid field, named as in the request (limits.timeout).

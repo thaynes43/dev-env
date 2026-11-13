@@ -84,7 +84,7 @@ func TestWorkbenchSessionHeartbeats(t *testing.T) {
 	id.PodName, id.PodUID = f.auth[tok].PodName, f.auth[tok].PodUID
 	f.auth[tok] = id
 	w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, status(name))
-	if w.Code != http.StatusNoContent {
+	if w.Code != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 }
@@ -125,7 +125,7 @@ func TestWorkbenchSessionCreatesCodexHost(t *testing.T) {
 	wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, plain, req), http.StatusForbidden, apiv1.CodeForbidden)
 
 	// The workbench session is still its session for the heartbeat route.
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath("haynes-ops-1019-100002"), wbTok, status("haynes-ops-1019-100002")); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("haynes-ops-1019-100002"), wbTok, status("haynes-ops-1019-100002")); w.Code != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 }

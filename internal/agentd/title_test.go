@@ -136,6 +136,34 @@ func TestRemoteTitleArgvAndStatus(t *testing.T) {
 	}
 }
 
+func TestResumeAfterTitleChangeKeepsResumeID(t *testing.T) {
+	s, _, ws := launchFixture(t)
+	s.Getenv = envOf(nil)
+	sess := remoteSession()
+	sess.Repo = "haynes-ops"
+	first, err := BuildLaunch(s, sess, ws, "boot1", rescueNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Title = "Café"
+	resumed, err := BuildResume(s, sess, ws, first, "boot2", rescueNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resumeID, title string
+	for i := 0; i+1 < len(resumed.Argv); i++ {
+		switch resumed.Argv[i] {
+		case "--resume":
+			resumeID = resumed.Argv[i+1]
+		case "--remote-control":
+			title = resumed.Argv[i+1]
+		}
+	}
+	if resumeID != first.ConversationID || title != "Haiku | Café" {
+		t.Fatalf("resume %q title %q argv %q", resumeID, title, resumed.Argv)
+	}
+}
+
 func argvSignature(argv []string) (name, rest string) {
 	cp := append([]string(nil), argv...)
 	for i := 0; i+1 < len(cp); i++ {

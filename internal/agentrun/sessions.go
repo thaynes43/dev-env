@@ -385,6 +385,9 @@ func remoteControlLine(s apiv1.Session, rc apiv1.RemoteControl) string {
 	codex := s.Agent == protocol.AgentCodex
 	switch rc.State {
 	case protocol.RemoteRegistered:
+		if !codex {
+			return claudeRegisteredLine(s, rc)
+		}
 		return line + ": registered with the Claude app (-o json has the link)"
 	case protocol.RemoteStarting:
 		if codex {
@@ -409,6 +412,55 @@ func remoteControlLine(s apiv1.Session, rc apiv1.RemoteControl) string {
 		return line + ": the Codex daemon reports its connection as errored"
 	}
 	return line
+}
+
+// claudeRegisteredLine replaces "registered as <name>" (DESIGN-065 rule 8.8).
+func claudeRegisteredLine(s apiv1.Session, rc apiv1.RemoteControl) string {
+	recorded := s.Title
+	if recorded == "" {
+		recorded = "none"
+	}
+	provider := rc.ProviderTitle
+	if provider == "" {
+		provider = "none"
+	}
+	line := "registered; recorded title " + recorded + "; provider title " + provider
+	if rc.Rename != nil {
+		if extra := renameShowLine(*rc.Rename); extra != "" {
+			line += "; " + extra
+		}
+	}
+	return line
+}
+
+func renameShowLine(rn apiv1.RemoteRename) string {
+	when := "unknown"
+	if !rn.Since.IsZero() {
+		when = rn.Since.UTC().Format("15:04Z")
+	}
+	switch rn.State {
+	case "Applied":
+		return "applied"
+	case "Held":
+		return "held since " + when + ": " + rn.Reason + "; it is typed when the session is idle with an empty input line"
+	case "Typed":
+		return "typed at " + when + ", not yet confirmed"
+	case "Failed":
+		switch rn.Reason {
+		case "left-in-input":
+			return "failed: the rename text is in the session's input line, unsent; its owner may send or delete it"
+		case "not-confirmed":
+			return "failed: the provider did not confirm the rename"
+		case "invalid-title":
+			return "failed: the recorded title cannot be typed"
+		default:
+			return "failed: " + rn.Reason
+		}
+	case "Unknown":
+		return "unknown: the CLI's record has a shape agentd does not know, so nothing is typed"
+	default:
+		return ""
+	}
 }
 
 // servedModelsText names the provider-reported served models, or Unknown.

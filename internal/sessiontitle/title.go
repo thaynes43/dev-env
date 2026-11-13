@@ -1,9 +1,13 @@
 // Package sessiontitle is the one check and the one composer for a session's
-// role title (DESIGN-065). Callers do not trim or rewrite a value: agent-run
-// trims before it calls, and the API stores the text it accepted.
+// role title (DESIGN-065), and the classifier for a Claude Code capture-pane
+// screen. Callers do not trim or rewrite a value: agent-run trims before it
+// calls, and the API stores the text it accepted.
 package sessiontitle
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -105,6 +109,46 @@ func Family(model string) string {
 	default:
 		return ""
 	}
+}
+
+// HashPrefix is the first 12 hex characters of the SHA-256 of s. Audit logs
+// use it so a line can be matched to a title without holding the title.
+func HashPrefix(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:6])
+}
+
+// recordedMinors are the major.minor pairs of Claude Code for which this
+// build has capture-pane fixtures (DESIGN-065 rule 8.5 condition 8).
+var recordedMinors = []string{"2.1"}
+
+// RecordedCLIMinors is the major.minor list a rename may type into.
+func RecordedCLIMinors() []string {
+	out := make([]string, len(recordedMinors))
+	copy(out, recordedMinors)
+	return out
+}
+
+var cliVersionRE = regexp.MustCompile(`(\d+)\.(\d+)\.\d+`)
+
+// CLIMinor returns the major.minor in a `claude --version` line such as
+// "2.1.321 (Claude Code)". A patch difference is the same minor.
+func CLIMinor(output string) (string, bool) {
+	m := cliVersionRE.FindStringSubmatch(output)
+	if m == nil {
+		return "", false
+	}
+	return m[1] + "." + m[2], true
+}
+
+// MinorRecorded reports whether minor is one RecordedCLIMinors names.
+func MinorRecorded(minor string) bool {
+	for _, m := range recordedMinors {
+		if m == minor {
+			return true
+		}
+	}
+	return false
 }
 
 // Compose is the string passed to the provider. It is empty when there is no
