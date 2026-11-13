@@ -43,10 +43,19 @@ Session must have no workspace. `spec.project` alone is not what is checked.
   [the return route for a parent without a project](#return-route-for-a-parent-without-a-project).
 - The inbox serves only the projects the operator lists in `--inbox-projects`
   (`internal/apiserver/inbox.go:101-103` for reads, `:172-173` for send and
-  ask). As read from the live operator Deployment on 2026-11-04, that list is
-  `dev-env` only. In any other project, for example `haynes-studio`, every
-  inbox call answers 404, even between two project-bound Sessions, and starting
-  the coordinator as a project task does not change that.
+  ask). As read from the live operator Deployment on 2026-11-13, that list is
+  `dev-env` and `haynes-studio` (haynes-ops#4877, OpenProject #799; it was
+  `dev-env` only until then). In any other project every inbox call answers
+  404, even between two project-bound Sessions, and starting the coordinator
+  as a project task does not change that.
+- The same list gates three more routes. A child's `agent-run parent tell` is
+  hidden with **404** when the child's project is not in it
+  (`internal/apiserver/parent_note.go:87`). So are Meatball's notes for a
+  session of that project (`parent_note_policy.go`) and a parent's instruction
+  to its own child (`coordinator_instruction.go`). Before you start a
+  coordinator for another project, read the live value:
+  `kubectl get deploy dev-env-operator -n dev-env-system -o jsonpath='{.spec.template.spec.containers[0].args}'`.
+  A project is added in haynes-ops, in the operator HelmRelease.
 - Session depth is limited to two levels (DESIGN-001 3.4). A Session at depth 2
   cannot start children, so it cannot coordinate workers it would start itself.
 - Proven on 2026-10-31 through the live operator (OpenProject #321):

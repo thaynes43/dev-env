@@ -1,8 +1,13 @@
 # ADR-027: A changed title is an annotation, and spec.title stays immutable
 
-- **Status:** Proposed 2026-11-13 by the coordinator session
-  `dev-env-fable-coordinator-1109`, answering the generation question on
-  dev-env PR 1127. It installs nothing.
+- **Status:** Accepted 2026-11-13 by the coordinator session
+  `dev-env-fable-coordinator-1109`, after four independent reviews of the
+  build on dev-env PR 1127 (merged as `96d4fcd7`). It was proposed the same
+  day, answering the generation question on that pull request. Before
+  acceptance, decision 5 was rewritten and decisions 6 and 7 were added, so
+  the text matches what fix rounds 2 and 3 built (DESIGN-065 sections 9.5
+  and 9.6). It installs nothing: the operator flag `--title-rename-sessions`
+  is empty, and with it empty agentd types nothing.
 - **Date:** 2026-11-13
 - **Decider:** The coordinator session `dev-env-fable-coordinator-1109`,
   under OpenProject #787. This is the coordinator's ruling, not Tom's.
@@ -60,14 +65,38 @@ A title is display text. It must not move those.
    runs, and `idle` is the same with none running. The rename guard accepts
    `shell` on the same 30 seconds of quiet. `waiting`, `busy` and any unknown
    value still hold. There is no reason code `shell`.
-5. **One Backspace sequence, and only for this pod's own unsent text.** When
-   the second check fails and the input row still holds exactly the text just
-   typed, with the cursor directly after it, agentd sends one Backspace per
-   character, checks the row is empty, and records Held, reason `interrupted`.
-   That does not count as one of the two attempts when the row came back
-   empty. Every other failure leaves the line alone and records Failed,
-   `left-in-input`. No Escape, no Ctrl, no second Enter, and no Backspace for
-   text this pod did not just type.
+5. **Backspace only for this pod's own unsent text.** When the second check
+   fails, or Enter fails and the record does not show the name, and the one
+   input box still holds exactly the text just typed with the cursor directly
+   after it, agentd sends one Backspace per character. It then checks that
+   the row is empty with the cursor at column 2, and records Held, reason
+   `interrupted`. That does not count as one of the two attempts. Three such
+   cycles for one target end Held; the fourth types, erases and sets Failed,
+   `interrupted`. The conditions are read fresh directly before the keys: no
+   attached client, the same pane, the CLI still the pane's foreground
+   process, and a record status that is not `waiting`. Busy or idle does not
+   matter for the cleanup. Every other failure leaves the line alone and
+   records Failed, `left-in-input`, with the pane id, the CLI pid and its
+   start time. While that mark stands, a pass does only this: it sends the
+   same Backspace sequence, to that same pane and process and only when the
+   row still holds exactly that text, or it clears the mark when the row is
+   already empty. It types no title in that pass, whatever text the answer
+   carries. No Escape, no Ctrl, no second Enter, and no Backspace for text
+   this pod did not type.
+6. **Delivery does not paste behind unsent rename text.** While `title.json`
+   records `left-in-input`, `Deliver` (the path of `agent-run msg`) reads the
+   screen and the cursor. It pastes only when the one input box shows an
+   empty row, and then clears the mark. Otherwise it sends nothing, and
+   `agent-run msg` prints why. It sends no Backspace. With no mark it does
+   what it did before.
+7. **What may be typed.** A title holds only printable ASCII and U+00A1 to
+   U+024F without U+00AD, so one character is one column, and none of the
+   phrases "enter to select", "esc to cancel" and "esc to interrupt".
+   `sessiontitle.Validate` refuses anything else at create and at rename.
+   agentd types no other text, whatever its source, and types only when the
+   whole typed text fits on one input row of the pane (its character count
+   plus 8 is at most the pane width). A session that already shows such a title keeps it; it is
+   never typed.
 
 ## What this rejects
 
@@ -83,8 +112,9 @@ A title is display text. It must not move those.
 - A title change does not bump `metadata.generation` and does not restart,
   drain or replace a pod.
 - ADR-026's statement that `spec.title` may change is superseded here. The
-  guarded typed rename is unchanged apart from `shell` and the one Backspace
-  sequence.
+  guarded typed rename is unchanged apart from `shell`, the Backspace
+  cleanup, the delivery refusal and the limits on what is typed (decisions 4
+  to 7).
 - haynes-ops still needs the CRD copy before an operator pin, because the
   character rules and the rename status enum change. `spec.title` itself is
   immutable again, as on slice 1.
