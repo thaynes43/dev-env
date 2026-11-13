@@ -2302,8 +2302,9 @@ session without one is built exactly as before.
     that hangs) holds its lane until the later of the start deadline plus
     one minute and 5 minutes after the close, subject to a reconcile; not
     forever, and not always within 5 minutes of the close: a close 5 minutes
-    after admission holds until 11 minutes after it (story 780 fix round 2,
-    coordinator rulings in PR 1100 comment 6839380816; not a ruling by Tom).
+    after admission holds until 11 minutes after the close, which is 16
+    minutes after admission (story 780 fix round 2, coordinator rulings in
+    PR 1100 comment 6839380816; not a ruling by Tom).
 
   Before both have passed, the release waits for the pod to go, by the rows
   above. While only the two bounds hold such a pod, the operator reconciles
