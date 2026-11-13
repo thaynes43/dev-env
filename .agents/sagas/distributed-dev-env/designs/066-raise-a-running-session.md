@@ -674,9 +674,9 @@ below the build of slice (b) stays a written procedure (section 7.6).
 14. **Fenced state.** Admission rules in haynes-ops let only the operator's
     account change the annotation and its ledger, only the keeper's account
     change its notice ledger, only each owner change its public key and its
-    private-key Secret, and nobody change the depth label after create.
-    Admission cannot fence who reads a private key (known limit 7). They are install steps of
-    slice (a), each with its check (section 11).
+    private-key Secret, and nobody change the depth label after create. The
+    rules are install steps of slice (a), each with its check (section 11).
+    Admission cannot fence who reads a private key (known limit 7).
 15. **Rate limits that survive a restart, never on a take-back.** Per
     target: one raise in any 60 seconds after the target's last raise or
     take-back. Per performer: at most three raises in any rolling hour. Both
@@ -1138,7 +1138,10 @@ profile label is P. Otherwise the reconciler suspends the session.
   its status today (multus, the scheduler and other controllers, the
   cluster's admin subjects), and no admission rule fenced pod labels. So
   slice (a) adds one as an install step (section 11, rule 2), for `pods` and
-  for `pods/status`.
+  for `pods/status`. A label set through the first bind leaves no
+  `managedFields` entry of its own; the bind rule refuses it, and for a
+  listed session a label that no longer equals `spec.profile` is itself the
+  mismatch.
 - **Who is touched.** A session the ledger never listed is never touched, so
   a template change cannot suspend never-raised sessions. With both flags off
   no record is honoured, so every raised pod is uncovered and is suspended.
@@ -1496,7 +1499,15 @@ sessions.**
      The pod rule also refuses anyone but the operator who changes or removes
      that `app.kubernetes.io/name` label, so a pod cannot first be taken out
      of the rule, and it matches the `pods/status` subresource as well,
-     because the API server keeps a label sent there (section 15.4).
+     because the API server keeps a label sent there (section 15.4). One
+     more rule covers the bind: on Kubernetes 1.35 the first bind of a pod
+     copies the labels of the Binding onto the pod without admission on the
+     pod, so a Binding in `dev-agents` that carries either label is refused.
+     That rule alone has `failurePolicy: Ignore`: every start and resume of a
+     session pod passes through it, an evaluation error must never stop a
+     session from being scheduled, and the only accounts that can bind there
+     are the scheduler, the daemon-set controller and the cluster's admin
+     subjects.
   3. *The operator ledger, its public key and its private key:* only the
      operator's account may update or delete `dev-env-session-raise-ledger`,
      `dev-env-session-raise-operator-public` and the Secret
@@ -1537,7 +1548,8 @@ sessions.**
   <name> -o yaml` and `kubectl get validatingadmissionpolicybinding <name> -o
   yaml` show the expression naming only the owner account, `failurePolicy:
   Fail`, `validationActions: [Deny]`, and no type-checking warnings in the
-  policy's status. The check for rule 5: each object exists by name, and the
+  policy's status. The bind rule of rule 2 shows `failurePolicy: Ignore`
+  instead. The check for rule 5: each object exists by name, and the
   owner's first start has filled its key and published its public key. The
   coordinator's account cannot read Secrets, so for the two key Secrets it
   reads the Flux Kustomization's inventory and the published public keys.
@@ -1676,8 +1688,9 @@ coordinator's rulings of 2026-11-13).
 7. **The signing keys can be read by the cluster's Secret readers** (install
    review, section 15.4; ADR-029). Beside each key's owner and the cluster's
    admin subjects, about 36 controller ServiceAccounts hold Secret read
-   across the whole cluster, and admission cannot fence a read. They can
-   already read every other Secret in `dev-env-system`. The key alone raises
+   across the whole cluster, and admission cannot fence a read. Those
+   accounts can already read every other Secret in `dev-env-system`. The key
+   alone raises
    nothing: only the operator can write the record and its ledger, and only
    the keeper its notice ledger (section 11, rules 1, 3 and 4). The signature
    is the second line, for a missing rule, and there it holds only against
@@ -1818,4 +1831,16 @@ updates them. The rulings are the coordinator's, of 2026-11-13.
 | 2, HIGH | The API server keeps a label sent through `pods/status`, and the rule did not match it; multus, the scheduler and other controllers hold that right | Match `pods/status` too; a status write that leaves the labels alone passes for every caller | Section 11, rule 2; section 7.5; slice (b) tests |
 | 3, HIGH | The key Secrets are not owner-only: about 36 controller ServiceAccounts read every Secret, some write them | Writes and deletes owner-only by admission; reads accepted as a stated limit | Section 11, rules 3, 4 and 6; Ruling 2; safety rule 14; section 6.6; known limit 7; ADR-029 |
 | 4, LOW | The test missed the two-update case and the status route; the workflow would not run on a later policy edit | Fix both in the install pull request | haynes-ops PR 4888 |
+
+Second pass, Grok 4.7 on the delta `bf254008..e4c178e4`,
+`~/.shared/handoffs/op830/install-review-grok-2.md`: findings 1 to 3 closed.
+It read the Kubernetes v1.35.5 source for every ordinary writer of a session
+pod's status (the kubelet, the scheduler, node lifecycle, disruption, the
+garbage collectors, multus) and found that none can be refused by the pod
+rule: each sends a patch without labels, or a full object whose stale copy
+is turned away as a conflict before admission. One new finding:
+
+| Finding | What it said | Ruling | Where the design answers it |
+| --- | --- | --- | --- |
+| 1, HIGH | On v1.35 the first bind copies the Binding's labels onto the pod (`BindingREST.setPodNodeAndMetadata`), with no admission on the pod | A separate rule refuses a Binding in `dev-agents` that carries either label, with `failurePolicy: Ignore`; the coordinator's read-only resolution found only the scheduler, the daemon-set controller and the cluster's admin subjects can bind there | Section 11, rule 2; section 7.5 |
 
