@@ -73,7 +73,9 @@ func TestAgentStartStatusCopiesOnlyTheFixedSet(t *testing.T) {
 
 // End to end: the first heartbeat that carries a valid record stores it;
 // later heartbeats that carry another record, or none, leave it as it is;
-// an invalid record is dropped and the heartbeat still answers 204.
+// an invalid record is dropped and the heartbeat still answers. (200 here:
+// since dev-env PR 1127 the test fixture lets every session take a title, so
+// the route answers with the title body, as main's own heartbeat tests expect.)
 func TestHeartbeatStoresTheStartRecordOnce(t *testing.T) {
 	f := newFixture(t)
 	const name = "rem-responder-1113-030000"
@@ -89,7 +91,7 @@ func TestHeartbeatStoresTheStartRecordOnce(t *testing.T) {
 		st := status(name)
 		st.Agent.State, st.Agent.Task, st.Usage = protocol.AgentBusy, nil, nil
 		st.Start = rec
-		if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusNoContent {
+		if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusOK {
 			t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 		}
 		return f.session(name).Status.Agent.Start
