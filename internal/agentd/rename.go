@@ -94,7 +94,13 @@ type titleDisk struct {
 	Stopped       bool      `json:"stopped,omitempty"`
 	ProviderTitle string    `json:"providerTitle,omitempty"`
 	Interrupted   int       `json:"interrupted,omitempty"`
-	found         bool      `json:"-"`
+	// PaneID, CLIPid and ProcStart are the pane and the CLI process that
+	// received the unsent text. They are set with the left-in-input mark and
+	// cleared when that mark clears. An older file has none of them.
+	PaneID    string `json:"paneId,omitempty"`
+	CLIPid    int    `json:"cliPid,omitempty"`
+	ProcStart string `json:"procStart,omitempty"`
+	found     bool   `json:"-"`
 }
 
 func (d *titleDisk) set(state, reason, target string, now time.Time) {
@@ -108,6 +114,31 @@ func (d *titleDisk) set(state, reason, target string, now time.Time) {
 	if !keep {
 		d.Since = now.UTC()
 	}
+	if state != "Failed" || reason != "left-in-input" {
+		d.PaneID = ""
+		d.CLIPid = 0
+		d.ProcStart = ""
+	}
+}
+
+// markLeft records that text was left in the input of this pane and CLI.
+func (d *titleDisk) markLeft(target string, now time.Time, p agentPid, pane paneSnap) {
+	d.Stopped = true
+	d.set("Failed", "left-in-input", target, now)
+	d.PaneID = pane.id
+	d.CLIPid = p.Pid
+	d.ProcStart = p.Start
+}
+
+// clearLeft drops the left-in-input mark and the process it was bound to.
+func (d *titleDisk) clearLeft() {
+	d.Stopped = false
+	d.State = ""
+	d.Reason = ""
+	d.Since = time.Time{}
+	d.PaneID = ""
+	d.CLIPid = 0
+	d.ProcStart = ""
 }
 
 // Apply types the recorded title when the guard allows it (DESIGN-065 rules
@@ -122,6 +153,14 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 	}
 	disk := loadTitle(s, sess)
 	prev := disk
+	// While the mark is set, this pass only removes the recorded text or
+	// clears the mark when the row is already empty. It does not seed a
+	// launch title and it does not type, whatever text the answer carries.
+	if disk.State == "Failed" && disk.Reason == "left-in-input" && disk.Target != "" {
+		a.healLeft(ctx, r, s, &disk)
+		disk.save(s, log, prev)
+		return
+	}
 	// A first launch records the title the CLI was given. Only that value is
 	// left untyped. A different target later in this pod's life is applied.
 	// An untitled session, whose launch value is the session name and whose
@@ -153,13 +192,6 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 	if !disk.found && ans.Text == "" && disk.Applied == "" {
 		return
 	}
-	// While the mark is set, this pass only tries to remove the recorded
-	// text. It does not type a new title, whether or not the cleanup runs.
-	if disk.State == "Failed" && disk.Reason == "left-in-input" && disk.Target != "" {
-		a.healLeft(ctx, r, s, &disk)
-		disk.save(s, log, prev)
-		return
-	}
 	disk.UID = sess.SessionUID
 	// The attempt count is the one from before a target change. The reset
 	// below zeroes it, and a clear must not treat a typed title as never typed.
@@ -175,8 +207,9 @@ func (a *TitleApplier) Apply(ctx context.Context, r Runner, s Settings, sess pro
 		disk.Target = target
 	}
 	// A clear of a title that was never typed sets the session name as
-	// applied and does not type it.
-	if disk.found && disk.Applied == "" && prevAttempts == 0 && prevState != "Typed" && target == sess.Name {
+	// applied and does not type it. lastTypedAt stays for the life of this
+	// file, so a title typed under an earlier target is not "never typed".
+	if disk.found && disk.Applied == "" && disk.LastTypedAt.IsZero() && prevAttempts == 0 && prevState != "Typed" && target == sess.Name {
 		disk.Applied = target
 		disk.Stopped = false
 		disk.set("Applied", "already", target, a.now())
@@ -343,12 +376,16 @@ func (a *TitleApplier) guardAndType(parent, ctx context.Context, r Runner, s Set
 	if err != nil {
 		return hold("Held", "screen-unknown")
 	}
+	typed := "/rename " + target
 	switch sessiontitle.ClassifyInput(screen, "", cur) {
 	case sessiontitle.InputEmpty:
 	case sessiontitle.InputOther:
 		return hold("Held", "input")
 	default:
 		return hold("Held", "screen-unknown")
+	}
+	if !typedFits(typed, cur.Width) {
+		return hold("Held", "pane")
 	}
 	if (!disk.LastTypedAt.IsZero() && now.Sub(disk.LastTypedAt) < renamePaceFor) || disk.Attempts >= renameMaxTries {
 		return hold("Held", "paced")
@@ -360,7 +397,6 @@ func (a *TitleApplier) guardAndType(parent, ctx context.Context, r Runner, s Set
 	if ctx.Err() != nil || commandShadowed(ctx, project, s.ClaudeConfigDir) {
 		return hold("Held", "command-shadowed")
 	}
-	typed := "/rename " + target
 	if strings.HasSuffix(typed, ";") {
 		return hold("Failed", "invalid-title")
 	}
@@ -407,6 +443,9 @@ func (a *TitleApplier) guardAndType(parent, ctx context.Context, r Runner, s Set
 	default:
 		return refund("Held", "screen-unknown")
 	}
+	if !typedFits(typed, cur.Width) {
+		return refund("Held", "pane")
+	}
 	log.Info("session title keystroke", "kind", "text", "titleHash", sessiontitle.HashPrefix(target))
 	fresh, fail := readTitleRecord(s, p)
 	if fail == "process" {
@@ -429,8 +468,7 @@ func (a *TitleApplier) guardAndType(parent, ctx context.Context, r Runner, s Set
 	tail, stopTail := context.WithTimeout(parent, renameTailFor)
 	defer stopTail()
 	if _, err := renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: []string{"send-keys", "-t", pane.id, "-l", "--", typed}}); err != nil {
-		disk.Stopped = true
-		disk.set("Failed", "left-in-input", target, a.now())
+		disk.markLeft(target, a.now(), p, pane)
 		return false
 	}
 	a.sleep(renameSettle)
@@ -467,9 +505,15 @@ func (a *TitleApplier) afterKeys(ctx context.Context, r Runner, s Settings, disk
 		}
 		return false
 	}
-	disk.Stopped = true
-	disk.set("Failed", "left-in-input", target, a.now())
+	disk.markLeft(target, a.now(), p, pane)
 	return false
+}
+
+// typedFits reports whether the text about to be typed stays on one input
+// row. The measured limit at width 200 is N <= width-4. Eight columns of
+// margin are four more than that.
+func typedFits(typed string, width int) bool {
+	return utf8.RuneCountInString(typed)+8 <= width
 }
 
 // noteInterrupted records one cleanup of this target. The fourth is Failed.
@@ -526,11 +570,17 @@ func (a *TitleApplier) healLeft(ctx context.Context, r Runner, s Settings, disk 
 	}
 	switch sessiontitle.ClassifyBox(screen, typed, cur) {
 	case sessiontitle.InputEmpty:
-		disk.Stopped = false
-		disk.State = ""
-		disk.Reason = ""
-		disk.Since = time.Time{}
+		disk.clearLeft()
 	case sessiontitle.InputExact:
+		// Backspace only for the pane and CLI that received the text, and
+		// only on a recorded CLI minor. The empty-row clear above is not
+		// bound to them. An older file has no fields, so it gets no key.
+		if pane.id != disk.PaneID || p.Pid != disk.CLIPid || p.Start != disk.ProcStart || disk.PaneID == "" || disk.ProcStart == "" || disk.CLIPid == 0 {
+			return
+		}
+		if _, ok := a.cliMinor(budget, r, s); !ok {
+			return
+		}
 		if clearTyped(budget, r, s, p, pane, typed) {
 			a.noteInterrupted(disk, disk.Target)
 		}
@@ -651,7 +701,7 @@ func (a *TitleApplier) keepShownTitle(disk *titleDisk, s Settings, sess protocol
 
 func renameTarget(sess protocol.Session, text string) (string, bool) {
 	if text == "" {
-		if sess.Name == "" || !sessiontitle.StartsWithLetterOrDigit(sess.Name) || !sessiontitle.Typeable(sess.Name) {
+		if sess.Name == "" || !sessiontitle.StartsWithLetterOrDigit(sess.Name) || !sessiontitle.Typeable(sess.Name) || sessiontitle.ContainsSelectionPhrase(sess.Name) {
 			return "", false
 		}
 		return sess.Name, true
@@ -660,7 +710,7 @@ func renameTarget(sess protocol.Session, text string) (string, bool) {
 		return "", false
 	}
 	target := sessiontitle.Compose(sess.Model, text)
-	if !sessiontitle.StartsWithLetterOrDigit(target) || !sessiontitle.Typeable(target) {
+	if !sessiontitle.StartsWithLetterOrDigit(target) || !sessiontitle.Typeable(target) || sessiontitle.ContainsSelectionPhrase(target) {
 		return "", false
 	}
 	return target, true
@@ -949,21 +999,23 @@ func capturePane(ctx context.Context, r Runner, s Settings, paneID string) (stri
 
 func readCursor(ctx context.Context, r Runner, s Settings, paneID string) (sessiontitle.Cursor, error) {
 	res, err := renameRun(ctx, r, Cmd{Name: s.TmuxBin, Args: []string{
-		"display-message", "-p", "-t", paneID, "#{cursor_x} #{cursor_y}",
+		"display-message", "-p", "-t", paneID, sessiontitle.DisplayMessageFormat(),
 	}})
 	if err != nil {
 		return sessiontitle.Cursor{}, err
 	}
 	fields := strings.Fields(string(res.Stdout))
-	if len(fields) != 2 {
+	if len(fields) != 4 {
 		return sessiontitle.Cursor{}, errors.New("cursor")
 	}
 	x, errX := strconv.Atoi(fields[0])
 	y, errY := strconv.Atoi(fields[1])
-	if errX != nil || errY != nil || x < 0 || y < 0 {
+	width, errW := strconv.Atoi(fields[2])
+	height, errH := strconv.Atoi(fields[3])
+	if errX != nil || errY != nil || errW != nil || errH != nil || x < 0 || y < 0 || width <= 0 || height <= 0 {
 		return sessiontitle.Cursor{}, errors.New("cursor")
 	}
-	return sessiontitle.Cursor{X: x, Y: y, Known: true}, nil
+	return sessiontitle.Cursor{X: x, Y: y, Width: width, Height: height, Known: true}, nil
 }
 
 // renameRun gives one subprocess its own two-second limit and does not wait

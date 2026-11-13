@@ -22,9 +22,9 @@ const (
 	// ReasonTooLong is more than 48 code points or more than 96 bytes.
 	ReasonTooLong = "title_too_long"
 	// ReasonCharacters is a bar, a backslash, a trailing semicolon, a first
-	// character that is not a letter or a digit, or a character outside the
-	// set a title may hold: printable ASCII (U+0020 to U+007E) and U+00A1 to
-	// U+024F except U+00AD.
+	// character that is not a letter or a digit, a selection phrase, or a
+	// character outside the set a title may hold: printable ASCII (U+0020 to
+	// U+007E) and U+00A1 to U+024F except U+00AD.
 	ReasonCharacters = "title_characters"
 	// ReasonSpacing is a leading space, a trailing space, or two spaces in a row.
 	ReasonSpacing = "title_spacing"
@@ -70,10 +70,25 @@ func Validate(title string) string {
 	if !StartsWithLetterOrDigit(title) {
 		return ReasonCharacters
 	}
+	// These phrases are drawn as selection hints. A title that contains one
+	// would sit in the input box's top rule and make later screens unknown.
+	if ContainsSelectionPhrase(title) {
+		return ReasonCharacters
+	}
 	if utf8.RuneCountInString(title) > MaxRunes || len(title) > MaxBytes {
 		return ReasonTooLong
 	}
 	return ""
+}
+
+// ContainsSelectionPhrase reports whether s contains "enter to select",
+// "esc to cancel" or "esc to interrupt", compared without regard to letter
+// case. Validate and agentd both use it. The screen parser does not.
+func ContainsSelectionPhrase(s string) bool {
+	low := strings.ToLower(s)
+	return strings.Contains(low, "enter to select") ||
+		strings.Contains(low, "esc to cancel") ||
+		strings.Contains(low, "esc to interrupt")
 }
 
 // StartsWithLetterOrDigit reports whether the first rune is a letter or a
@@ -115,7 +130,7 @@ func Explain(reason string) string {
 	case ReasonTooLong:
 		return "title_too_long: a title is 1 to 48 characters and at most 96 bytes"
 	case ReasonCharacters:
-		return "title_characters: printable ASCII and U+00A1 to U+024F except U+00AD; the first character is a letter or a digit; no bar, no backslash, no trailing semicolon, no control or format character, and nothing above U+FFFF"
+		return "title_characters: printable ASCII and U+00A1 to U+024F except U+00AD; the first character is a letter or a digit; no bar, no backslash, no trailing semicolon, no control or format character, and nothing above U+FFFF; no \"enter to select\", \"esc to cancel\" or \"esc to interrupt\""
 	case ReasonSpacing:
 		return "title_spacing: no leading or trailing space, and no two spaces in a row"
 	default:

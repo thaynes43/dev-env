@@ -129,11 +129,26 @@ const (
 	fgCycle      = 246
 )
 
+// displayMessageFormat is the display-message format recorded in
+// cursor-and-format-facts.2.1.321.txt. It is a constant so a test can compare
+// it with that recording; it is not read back out of the file it is checked
+// against.
+const displayMessageFormat = "#{cursor_x} #{cursor_y} #{pane_width} #{pane_height}"
+
+// DisplayMessageFormat is the tmux 3.3a display-message format: cursor column,
+// cursor row, pane width and pane height.
+func DisplayMessageFormat() string {
+	return displayMessageFormat
+}
+
 // Cursor is a pane cursor from tmux display-message. Known is false when that
-// read failed or was not supplied; ClassifyInput then answers unknown.
+// read failed or was not supplied; ClassifyInput then answers unknown. Width
+// and Height are the pane size from the same read. The classifiers do not use
+// them.
 type Cursor struct {
-	X, Y  int
-	Known bool
+	X, Y          int
+	Width, Height int
+	Known         bool
 }
 
 // ClassifyInput reads the whole visible screen. exact is the input text a

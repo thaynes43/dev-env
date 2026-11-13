@@ -50,6 +50,9 @@ func TestValidate(t *testing.T) {
 		{".Main", ReasonCharacters},
 		{"!Main", ReasonCharacters},
 		{"€", ReasonCharacters},
+		{"Enter to select", ReasonCharacters},
+		{"Esc to Cancel", ReasonCharacters},
+		{"eSC to INTERRUPT", ReasonCharacters},
 		{" Main", ReasonSpacing},
 		{"Main ", ReasonSpacing},
 		{"Main  coordinator", ReasonSpacing},
@@ -102,6 +105,12 @@ func TestFamilyAndCompose(t *testing.T) {
 	}
 	if strings.Contains(Explain(ReasonTooLong), "Main") {
 		t.Fatal("Explain included a title")
+	}
+	explained := Explain(ReasonCharacters)
+	for _, phrase := range []string{"enter to select", "esc to cancel", "esc to interrupt"} {
+		if !strings.Contains(explained, phrase) {
+			t.Fatalf("Explain omitted %q: %s", phrase, explained)
+		}
 	}
 }
 

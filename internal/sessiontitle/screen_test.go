@@ -172,6 +172,31 @@ func TestListPanesFormatIsTheRecordedLine(t *testing.T) {
 	}
 }
 
+func TestDisplayMessageFormatIsTheRecordedLine(t *testing.T) {
+	var format string
+	for _, line := range strings.Split(CursorFactsText(), "\n") {
+		if after, ok := strings.CutPrefix(line, "display-message format: "); ok {
+			format = after
+		}
+	}
+	if format == "" || DisplayMessageFormat() != format {
+		t.Fatalf("format %q recorded %q", DisplayMessageFormat(), format)
+	}
+}
+
+func TestClassifyBoxHintOnABoxRowIsUnknown(t *testing.T) {
+	// Derived from the recorded idle screen: the title drawn in the box's
+	// top rule is replaced by a selection hint. This is not a recording.
+	screen := strings.ReplaceAll(IdleEmptyScreen, "Test | Title probe é", "esc to cancel")
+	if screen == IdleEmptyScreen {
+		t.Fatal("the idle fixture has no title in the top rule")
+	}
+	cur := Cursor{X: 2, Y: 46, Known: true}
+	if got := ClassifyBox(screen, "", cur); got != InputUnknown {
+		t.Fatalf("derived box with a hint classified %v", got)
+	}
+}
+
 func TestBusyScreensAndFinishedRows(t *testing.T) {
 	for name, screen := range BusySpinnerScreens() {
 		cur, ok := RecordedCursor(screen)

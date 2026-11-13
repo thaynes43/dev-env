@@ -223,10 +223,7 @@ func deliverClearLeftInInput(ctx context.Context, r Runner, s Settings, sess pro
 	if sessiontitle.ClassifyBox(screen, "", cur) != sessiontitle.InputEmpty {
 		return errUnsentRename
 	}
-	disk.Stopped = false
-	disk.State = ""
-	disk.Reason = ""
-	disk.Since = time.Time{}
+	disk.clearLeft()
 	if err := writeTitleFile(s, &disk); err != nil {
 		return errUnsentRename
 	}

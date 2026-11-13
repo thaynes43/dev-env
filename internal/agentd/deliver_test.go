@@ -101,6 +101,9 @@ func deliverScreenRunner(t *testing.T, screen, cursor string) (*fakeRunner, *[]s
 		case "capture-pane":
 			return Result{Stdout: []byte(screen)}, nil
 		case "display-message":
+			if len(strings.Fields(cursor)) == 2 {
+				cursor += " 200 50"
+			}
 			return Result{Stdout: []byte(cursor + "\n")}, nil
 		default:
 			return Result{}, nil
@@ -114,6 +117,7 @@ func TestDeliverPastesWhenTheRenameLineIsEmpty(t *testing.T) {
 	sess := protocol.Session{Name: "s-1", SessionUID: "uid-deliver", Agent: protocol.AgentClaude}
 	if err := writeJSONFile(s.statePath(titleStateFile), titleDisk{
 		UID: sess.SessionUID, State: "Failed", Reason: "left-in-input", Target: "zz", Stopped: true,
+		PaneID: "%0", CLIPid: 7, ProcStart: "boot",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +133,7 @@ func TestDeliverPastesWhenTheRenameLineIsEmpty(t *testing.T) {
 		t.Fatalf("calls:\n%s", joined)
 	}
 	var disk titleDisk
-	if readJSONFile(s.statePath(titleStateFile), &disk) != nil || disk.State != "" || disk.Reason != "" || disk.Stopped {
+	if readJSONFile(s.statePath(titleStateFile), &disk) != nil || disk.State != "" || disk.Reason != "" || disk.Stopped || disk.PaneID != "" || disk.CLIPid != 0 || disk.ProcStart != "" {
 		t.Fatalf("mark stayed %+v", disk)
 	}
 }

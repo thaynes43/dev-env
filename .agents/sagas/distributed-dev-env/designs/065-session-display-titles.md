@@ -599,6 +599,19 @@ measured again:
   not disturb the turn. Backspace keys during a running turn erase typed
   text and do not disturb the turn.
 
+Measured by the coordinator on 2026-11-13, fix round 3, on its own idle test
+session, and written here from `wrap-facts.2.1.321.txt` (not measured again).
+The pane was 200 columns by 50 rows. The display-message format was
+`#{cursor_x} #{cursor_y} #{pane_width} #{pane_height}`. At N = 196 the cursor
+read `198 46 200 50`, and after 196 Backspace keys it read `2 46 200 50`. At
+N = 197 the cursor read `3 46 200 50`, and after 197 Backspace keys it read
+`2 46 200 50`. The file's reading: text of N characters stays on the one
+input row while N <= pane_width - 4, with the cursor at column 2 + N. At
+N = pane_width - 3 the input wraps and the cursor column is no longer 2 + N.
+N Backspace keys still empty a wrapped input. Not measured at any other pane
+width, and not measured whether tmux keeps a narrow size after a client
+detaches.
+
 ### 9.2 Rules
 
 **8.1 The record.** `spec.title` becomes the third spec field that may
@@ -1342,3 +1355,81 @@ is idle with an empty input line. A rename is not typed while a turn runs.
     error or a timeout, agentd reads the record once. If the record's name is
     the target, the state is Applied. Otherwise it runs the cleanup in item
     2. Otherwise the state is `left-in-input`. It does not set Typed.
+
+### 9.6 Fix round 3 (the coordinator, 2026-11-13, not Tom)
+
+These rulings are the coordinator's, from the third review of pull request
+1127. They are not Tom's. ADR-027 stays Proposed. Tom's ruling stands: a
+rename is typed only while the session is idle with an empty input line.
+
+1. **A refused text does not wipe the mark.** While `title.json` records
+   `left-in-input`, a pass does the cleanup or the empty-row clear and
+   nothing else, whatever text the heartbeat answer carries. That branch
+   runs directly after the file is loaded, above first-launch seeding, above
+   `renameTarget` and its refusal, and above `keepShownTitle`.
+2. **A clear after any typed title is typed.** The untyped-clear shortcut
+   also needs `lastTypedAt` to be zero. If anything was ever typed in this
+   file's life, a clear is typed under the guard. `lastTypedAt` is not
+   cleared when the target changes.
+3. **Selection phrases are refused.** `sessiontitle.Validate` refuses a title
+   that contains "enter to select", "esc to cancel" or "esc to interrupt",
+   compared without regard to letter case, with reason `title_characters`.
+   The Explain sentence names the phrases. agentd refuses to type a text
+   that holds one of them, whatever its source: Failed, `invalid-title`,
+   nothing typed. Validate and agentd share one function. The CEL rule on
+   `spec.title` does not carry the phrases: the phrases are a property of
+   the screen this build types into, and `spec.title` stays the immutable
+   create-time field. The screen parser stays strict and is not changed. The
+   title is drawn in the input box's top rule, so a title that contained one
+   of the phrases would make every later screen unknown.
+4. **The typed line must fit the pane.** agentd reads the pane width in the
+   same display-message call as the cursor, format
+   `#{cursor_x} #{cursor_y} #{pane_width} #{pane_height}`. It types only when
+   `runes(typed) + 8 <= pane_width`, four columns more than the measured
+   limit in section 9.1. Otherwise the state is Held, reason `pane`, nothing
+   is typed and no attempt is spent. The check runs on the early cursor read
+   and again on the read after the staged write. A hold on the second read
+   refunds the attempt, as the other post-write holds do. A width that is
+   missing or not a positive number is a cursor read error. A height that is
+   not a positive number is the same error, because the four numbers are one
+   read.
+5. **The later Backspace is bound to the process that received the text.**
+   The mark records the pane id, the CLI pid and that process's `procStart`.
+   They are written when the mark is set and cleared when it clears. On a
+   later pass, Backspace is sent only when the live pane id, pid and
+   `procStart` equal the recorded ones and the CLI minor is a recorded one,
+   on top of the round-2 conditions. If they differ, no key is sent. The
+   empty-row clear is not bound to them. A mark written by an older file,
+   with none of the fields, gets no Backspace, only the empty-row clear.
+   Deliver does not gain this check. When Deliver clears the mark because
+   the row is empty, it clears the fields with it.
+6. **The command scan reads only the entries the cap still allows.**
+   `ReadDir` is given a count, not -1. More entries than the cap still holds
+   `command-shadowed`. The stop is checked between entries. Every open is
+   non-blocking. A hung network mount is not bounded. The home and project
+   directories are on the pod's own volume. There is no goroutine.
+7. **A resume whose record does not show the title.** A launch title does
+   not appear in the CLI record, and `nameSource` is "user" only after a
+   rename. The branch that keeps a shown title stays for a title someone
+   typed by hand: the record's name equals the composed text and
+   `nameSource` is "user". A resumed session with no `title.json`, a spec
+   title outside the set, and the measured record (a derived name) reports
+   Failed `invalid-title`, and nothing is typed. On 2026-11-13 the
+   coordinator found no live session with a title outside the set: 6 titles
+   on 365 sessions, all inside the set.
+8. **Guards that a removed line must fail.** Tests cover the "waiting" check
+   before Backspace in the same pass and in a later pass, the screen and
+   cursor re-read after the staged write, the check that the row is empty
+   after the Backspace keys, the refund when a client appears on the
+   post-write client read, and the box-row selection check in `ClassifyBox`.
+   The box-row test uses a derived screen, not a recording. An answer with
+   no title object still sends no key when every cleanup condition is true
+   and the exact text is on the screen.
+9. **The interrupt cap, and the gap after the keys.** Three interrupted
+   cycles end Held `interrupted`. The fourth types, erases and sets Failed
+   `interrupted`. A send that is skipped because agentd is stopping costs
+   one attempt and no key. Known limit: the mark is written after the keys.
+   A kill of agentd ends the container and the CLI with it, because tini is
+   process 1, so no text outlives agentd. The only gap is a final
+   `title.json` write that fails after a good staged write, together with a
+   failed cleanup.

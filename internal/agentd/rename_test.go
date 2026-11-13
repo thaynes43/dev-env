@@ -87,6 +87,22 @@ type renameWorld struct {
 	cursorY        int
 	cursorSet      bool
 	onSecondClient func()
+	// paneWidth and paneHeight are the four-number cursor reply. Zero means
+	// the recorded 200 by 50.
+	paneWidth  int
+	paneHeight int
+	cursorN    int
+	// narrowFrom makes display-message reads at that count and after use
+	// narrowWidth. Zero leaves every read at paneWidth.
+	narrowFrom  int
+	narrowWidth int
+	// cursorRaw, when set, is the whole display-message reply.
+	cursorRaw string
+	// preCaps counts captures before the title text is sent. secondScreen
+	// replaces the frame from the second of those captures.
+	preCaps            int
+	secondScreen       string
+	keepAfterBackspace bool
 
 	versionErr bool
 	clientErr  bool
@@ -225,6 +241,8 @@ func (w *renameWorld) apply(text string) titleDisk {
 	w.capN = 0
 	w.paneN = 0
 	w.clientN = 0
+	w.cursorN = 0
+	w.preCaps = 0
 	w.textSent = false
 	log := slog.New(slog.DiscardHandler)
 	if w.log != nil {
@@ -274,7 +292,8 @@ func (w *renameWorld) answer(c Cmd) (Result, error) {
 			return Result{}, errTest("capture")
 		}
 		// Before the text is sent, every capture is the first screen, so the
-		// early read and the read after the staged write see the same frame.
+		// early read and the read after the staged write see the same frame
+		// unless secondScreen replaces the second of those captures.
 		// After the text, captures walk the frames that follow it.
 		screen := sessiontitle.IdleEmptyScreen
 		frames := w.screens
@@ -290,7 +309,11 @@ func (w *renameWorld) answer(c Cmd) (Result, error) {
 				screen = frames[i]
 				w.capN++
 			} else {
+				w.preCaps++
 				screen = frames[0]
+				if w.preCaps >= 2 && w.secondScreen != "" {
+					screen = w.secondScreen
+				}
 			}
 		}
 		w.lastScreen = screen
@@ -299,16 +322,19 @@ func (w *renameWorld) answer(c Cmd) (Result, error) {
 		if w.cursorErr {
 			return Result{}, errTest("cursor")
 		}
+		if w.cursorRaw != "" {
+			return Result{Stdout: []byte(w.cursorRaw + "\n")}, nil
+		}
 		if w.cursorSet {
-			return Result{Stdout: []byte(strconv.Itoa(w.cursorX) + " " + strconv.Itoa(w.cursorY) + "\n")}, nil
+			return Result{Stdout: []byte(w.cursorLine(w.cursorX, w.cursorY) + "\n")}, nil
 		}
 		if cur, ok := sessiontitle.RecordedCursor(w.lastScreen); ok {
-			return Result{Stdout: []byte(strconv.Itoa(cur.X) + " " + strconv.Itoa(cur.Y) + "\n")}, nil
+			return Result{Stdout: []byte(w.cursorLine(cur.X, cur.Y) + "\n")}, nil
 		}
 		if w.derivedCursor {
 			cur := sessiontitle.ObservedCursor(w.lastScreen)
 			if cur.Known {
-				return Result{Stdout: []byte(strconv.Itoa(cur.X) + " " + strconv.Itoa(cur.Y) + "\n")}, nil
+				return Result{Stdout: []byte(w.cursorLine(cur.X, cur.Y) + "\n")}, nil
 			}
 		}
 		return Result{}, errTest("cursor")
@@ -331,11 +357,13 @@ func (w *renameWorld) answer(c Cmd) (Result, error) {
 			w.writeRecord()
 		}
 		if slices.Contains(c.Args, "Backspace") {
-			w.screens = []string{sessiontitle.IdleEmptyScreen}
-			w.capN = 0
-			w.textSent = true
-			w.lastScreen = sessiontitle.IdleEmptyScreen
-			w.cursorSet = false
+			if !w.keepAfterBackspace {
+				w.screens = []string{sessiontitle.IdleEmptyScreen}
+				w.capN = 0
+				w.textSent = true
+				w.lastScreen = sessiontitle.IdleEmptyScreen
+				w.cursorSet = false
+			}
 			return Result{}, nil
 		}
 		if w.enterErr {
@@ -355,6 +383,29 @@ func (f *fakeRunner) snapshot() []Cmd {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]Cmd(nil), f.calls...)
+}
+
+func (w *renameWorld) cursorLine(x, y int) string {
+	w.cursorN++
+	width := w.paneWidth
+	if width <= 0 {
+		width = 200
+	}
+	height := w.paneHeight
+	if height <= 0 {
+		height = 50
+	}
+	if w.narrowFrom > 0 && w.cursorN >= w.narrowFrom {
+		width = w.narrowWidth
+	}
+	return strconv.Itoa(x) + " " + strconv.Itoa(y) + " " + strconv.Itoa(width) + " " + strconv.Itoa(height)
+}
+
+func (w *renameWorld) leftDisk(target string) titleDisk {
+	return titleDisk{
+		State: "Failed", Reason: "left-in-input", Target: target, Stopped: true,
+		PaneID: "%0", CLIPid: w.pid, ProcStart: w.start,
+	}
 }
 
 func (w *renameWorld) writes() [][]string {
@@ -399,6 +450,24 @@ func (w *renameWorld) assertNoWriteSince(t *testing.T, mark int) {
 			t.Fatalf("command %s %q", c.Name, c.Args)
 		}
 	}
+}
+
+func (w *renameWorld) writesSince(mark int) [][]string {
+	var out [][]string
+	calls := w.run.snapshot()
+	if mark > len(calls) {
+		return nil
+	}
+	for _, c := range calls[mark:] {
+		if c.Name != "tmux" || len(c.Args) == 0 {
+			continue
+		}
+		switch c.Args[0] {
+		case "send-keys", "load-buffer", "paste-buffer", "set-buffer", "delete-buffer":
+			out = append(out, append([]string(nil), c.Args...))
+		}
+	}
+	return out
 }
 
 func (w *renameWorld) assertTyped(t *testing.T, target string) {
@@ -990,6 +1059,9 @@ func TestRenameNoBackspaceWhenTheRowDiffers(t *testing.T) {
 	if disk.State != "Failed" || disk.Reason != "left-in-input" || !disk.Stopped || disk.Attempts != 1 {
 		t.Fatalf("disk %+v", disk)
 	}
+	if disk.PaneID != "%0" || disk.CLIPid != w.pid || disk.ProcStart != w.start {
+		t.Fatalf("mark did not record the process %+v", disk)
+	}
 	want := [][]string{{"send-keys", "-t", "%0", "-l", "--", typed}}
 	if !reflect.DeepEqual(w.writes(), want) {
 		t.Fatalf("writes %q", w.writes())
@@ -1035,6 +1107,9 @@ func TestRenameSendKeysErrorLeftInInput(t *testing.T) {
 	disk := w.apply("Café")
 	if disk.State != "Failed" || disk.Reason != "left-in-input" || !disk.Stopped {
 		t.Fatalf("disk %+v", disk)
+	}
+	if disk.PaneID != "%0" || disk.CLIPid != w.pid || disk.ProcStart != w.start {
+		t.Fatalf("mark did not record the process %+v", disk)
 	}
 	for _, args := range w.writes() {
 		if slices.Contains(args, "Enter") {
@@ -1298,7 +1373,10 @@ func TestRenameResumeKeepsATitleTheRecordAlreadyShows(t *testing.T) {
 	w.boot(false)
 	title := "Cost \u2014 review"
 	shown := sessiontitle.Compose(w.sess.Model, title)
+	// A launch title is not in the record. nameSource "user" is a title
+	// someone typed by hand.
 	w.spec.name = shown
+	w.spec.source = "user"
 	w.writeRecord()
 	disk := w.apply(title)
 	if disk.State != "Applied" || disk.Reason != "already" || disk.Applied != shown || disk.Stopped {
@@ -1686,6 +1764,18 @@ func TestRenameListPanesFormatIsRecorded(t *testing.T) {
 	if !saw {
 		t.Fatal("no list-panes")
 	}
+	saw = false
+	for _, c := range w.run.snapshot() {
+		if c.Name == "tmux" && len(c.Args) > 0 && c.Args[0] == "display-message" {
+			saw = true
+			if !slices.Contains(c.Args, sessiontitle.DisplayMessageFormat()) {
+				t.Fatalf("argv %q", c.Args)
+			}
+		}
+	}
+	if !saw {
+		t.Fatal("no display-message")
+	}
 }
 
 func TestRenameBlankClientCounts(t *testing.T) {
@@ -1939,7 +2029,7 @@ func TestRenameCleanupSkipsAnAttachedClientAndAChangedPID(t *testing.T) {
 func TestRenameLeftInInputCleansThenRetries(t *testing.T) {
 	w := newRenameWorld(t)
 	w.sess.Model = "custom-model"
-	w.saveDisk(titleDisk{State: "Failed", Reason: "left-in-input", Target: "zz", Stopped: true})
+	w.saveDisk(w.leftDisk("zz"))
 	w.screens = []string{sessiontitle.BusyThinkingTypedScreen}
 	disk := w.apply("zz")
 	if disk.State != "Held" || disk.Reason != "interrupted" || disk.Interrupted != 1 || disk.Attempts != 0 {
@@ -1975,7 +2065,11 @@ func TestRenameLeftInInputClearsWhenTheRowIsEmpty(t *testing.T) {
 
 func TestRenameFlagAbsentSendsNoKeyWhileLeftInInput(t *testing.T) {
 	w := newRenameWorld(t)
-	w.saveDisk(titleDisk{State: "Failed", Reason: "left-in-input", Target: "zz", Stopped: true})
+	// Every cleanup condition holds and the screen has the exact text. The
+	// answer has no title object. A pass that ignored that and entered the
+	// cleanup would send Backspace.
+	w.saveDisk(w.leftDisk("zz"))
+	w.screens = []string{sessiontitle.BusyThinkingTypedScreen}
 	before, err := os.ReadFile(w.s.statePath(titleStateFile))
 	if err != nil {
 		t.Fatal(err)
@@ -2198,6 +2292,384 @@ func TestRenameCommandShadowNestedAndFrontmatter(t *testing.T) {
 			t.Fatalf("%+v", disk)
 		}
 	})
+}
+
+func TestRenameRefusedTextDoesNotWipeLeftInInput(t *testing.T) {
+	refused := func(t *testing.T, applied string) *renameWorld {
+		t.Helper()
+		w := newRenameWorld(t)
+		disk := titleDisk{State: "Failed", Reason: "left-in-input", Target: "zz", Stopped: true, Applied: applied}
+		w.saveDisk(disk)
+		w.screens = []string{sessiontitle.BusyThinkingTypedScreen}
+		return w
+	}
+	deliverRefuses := func(t *testing.T, w *renameWorld) {
+		t.Helper()
+		f, calls := deliverScreenRunner(t, sessiontitle.BusyThinkingTypedScreen, "12 46")
+		err := Deliver(context.Background(), f, w.s, w.sess, "session/x", "hello")
+		if err == nil || !strings.Contains(err.Error(), "not delivered: the session's input line holds unsent rename text") {
+			t.Fatalf("%v", err)
+		}
+		joined := strings.Join(*calls, "\n")
+		if strings.Contains(joined, "load-buffer") || strings.Contains(joined, "paste-buffer") || strings.Contains(joined, "Backspace") {
+			t.Fatalf("sent keys:\n%s", joined)
+		}
+	}
+	t.Run("refused", func(t *testing.T) {
+		w := refused(t, "")
+		before, err := os.ReadFile(w.s.statePath(titleStateFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		disk := w.apply("测")
+		if disk.State != "Failed" || disk.Reason != "left-in-input" || disk.Target != "zz" || !disk.Stopped {
+			t.Fatalf("%+v", disk)
+		}
+		after, err := os.ReadFile(w.s.statePath(titleStateFile))
+		if err != nil || string(after) != string(before) {
+			t.Fatalf("state rewritten %s", after)
+		}
+		w.assertNoWrite(t)
+		deliverRefuses(t, w)
+	})
+	t.Run("shown", func(t *testing.T) {
+		shown := sessiontitle.Compose(newRenameWorld(t).sess.Model, "测")
+		w := refused(t, shown)
+		disk := w.apply("测")
+		if disk.State != "Failed" || disk.Reason != "left-in-input" || disk.Target != "zz" || disk.Applied != shown {
+			t.Fatalf("%+v", disk)
+		}
+		w.assertNoWrite(t)
+		deliverRefuses(t, w)
+	})
+	t.Run("cleanup", func(t *testing.T) {
+		w := newRenameWorld(t)
+		w.saveDisk(w.leftDisk("zz"))
+		w.screens = []string{sessiontitle.BusyThinkingTypedScreen}
+		disk := w.apply("测")
+		if disk.State != "Held" || disk.Reason != "interrupted" || disk.Reason == "invalid-title" {
+			t.Fatalf("%+v", disk)
+		}
+		if len(w.writes()) != 1 || !slices.Contains(w.writes()[0], "Backspace") {
+			t.Fatalf("writes %q", w.writes())
+		}
+	})
+}
+
+func TestRenameClearAfterAHeldReplacementTypesTheSessionName(t *testing.T) {
+	w := newRenameWorld(t)
+	bee := w.composed("Bee")
+	w.arm(bee, false)
+	typed := w.apply("Bee")
+	if typed.State != "Typed" || typed.Attempts != 1 || typed.Applied != "" || typed.LastTypedAt.IsZero() {
+		t.Fatalf("typed %+v", typed)
+	}
+	w.spec.status = "busy"
+	w.spec.updated = 0
+	w.writeRecord()
+	held := w.apply("Cee")
+	if held.State != "Held" || held.Reason != "busy" || held.Attempts != 0 || held.Applied != "" || held.LastTypedAt.IsZero() {
+		t.Fatalf("held %+v", held)
+	}
+	w.clock.Advance(renamePaceFor)
+	w.spec.status = "idle"
+	w.spec.age = 30 * time.Second
+	w.spec.updated = 0
+	w.writeRecord()
+	w.arm(w.sess.Name, true)
+	mark := len(w.run.snapshot())
+	disk := w.apply("")
+	want := [][]string{
+		{"send-keys", "-t", "%0", "-l", "--", "/rename " + w.sess.Name},
+		{"send-keys", "-t", "%0", "Enter"},
+	}
+	if !reflect.DeepEqual(w.writesSince(mark), want) {
+		t.Fatalf("writes\n got %q\nwant %q", w.writesSince(mark), want)
+	}
+	if disk.State != "Applied" || disk.Reason != "confirmed" || disk.Applied != w.sess.Name {
+		t.Fatalf("%+v", disk)
+	}
+}
+
+func TestRenameSelectionPhraseTypesNothing(t *testing.T) {
+	for _, title := range []string{"Enter to select", "Esc to Cancel", "eSC to INTERRUPT"} {
+		t.Run(title, func(t *testing.T) {
+			w := newRenameWorld(t)
+			disk := w.apply(title)
+			if disk.State != "Failed" || disk.Reason != "invalid-title" || !disk.Stopped {
+				t.Fatalf("%+v", disk)
+			}
+			w.assertNoWrite(t)
+		})
+	}
+	t.Run("session name", func(t *testing.T) {
+		w := newRenameWorld(t)
+		w.sess.Name = "Esc to cancel"
+		w.saveDisk(titleDisk{Applied: "Haiku | Café", Target: "Haiku | Café", State: "Applied", Reason: "confirmed"})
+		disk := w.apply("")
+		if disk.State != "Failed" || disk.Reason != "invalid-title" || !disk.Stopped {
+			t.Fatalf("%+v", disk)
+		}
+		w.assertNoWrite(t)
+	})
+}
+
+func TestRenamePaneWidthHoldsALongTitle(t *testing.T) {
+	title := strings.Repeat("a", 48)
+	t.Run("narrow", func(t *testing.T) {
+		w := newRenameWorld(t)
+		w.paneWidth = 60
+		disk := w.hold(t, title, "pane")
+		if disk.Attempts != 0 {
+			t.Fatalf("attempt spent %+v", disk)
+		}
+	})
+	t.Run("wide", func(t *testing.T) {
+		w := newRenameWorld(t)
+		w.paneWidth = 200
+		target := w.composed(title)
+		w.arm(target, true)
+		disk := w.apply(title)
+		w.assertTyped(t, target)
+		if disk.State != "Applied" || disk.Reason != "confirmed" {
+			t.Fatalf("%+v", disk)
+		}
+	})
+}
+
+func TestRenamePaneWidthBoundary(t *testing.T) {
+	w := newRenameWorld(t)
+	target := w.composed("Café")
+	n := utf8.RuneCountInString("/rename " + target)
+	t.Run("fits", func(t *testing.T) {
+		w := newRenameWorld(t)
+		w.paneWidth = n + 8
+		w.arm(target, true)
+		disk := w.apply("Café")
+		w.assertTyped(t, target)
+		if disk.State != "Applied" {
+			t.Fatalf("%+v", disk)
+		}
+	})
+	t.Run("one narrower", func(t *testing.T) {
+		w := newRenameWorld(t)
+		w.paneWidth = n + 7
+		disk := w.hold(t, "Café", "pane")
+		if disk.Attempts != 0 {
+			t.Fatalf("attempt spent %+v", disk)
+		}
+	})
+	t.Run("narrows after the write", func(t *testing.T) {
+		w := newRenameWorld(t)
+		w.narrowFrom = 2
+		w.narrowWidth = 10
+		disk := w.apply("Café")
+		if disk.State != "Held" || disk.Reason != "pane" || disk.Attempts != 0 {
+			t.Fatalf("%+v", disk)
+		}
+		w.assertNoWrite(t)
+	})
+}
+
+func TestRenameCursorWidthMustBePositive(t *testing.T) {
+	for _, raw := range []string{"2 46", "2 46 0 50", "2 46 -1 50"} {
+		t.Run(raw, func(t *testing.T) {
+			w := newRenameWorld(t)
+			w.cursorRaw = raw
+			w.hold(t, "Café", "screen-unknown")
+		})
+	}
+}
+
+func TestRenameLeftInInputBackspaceFollowsTheProcess(t *testing.T) {
+	type edit func(*renameWorld, *titleDisk)
+	cases := []struct {
+		name  string
+		minor string
+		edit  edit
+	}{
+		{"pid", "", func(w *renameWorld, d *titleDisk) { d.CLIPid = w.pid + 1 }},
+		{"procStart", "", func(_ *renameWorld, d *titleDisk) { d.ProcStart = "other-start" }},
+		{"pane", "", func(_ *renameWorld, d *titleDisk) { d.PaneID = "%9" }},
+		{"minor", "9.9.0 (Claude Code)\n", func(*renameWorld, *titleDisk) {}},
+		{"old file", "", func(_ *renameWorld, d *titleDisk) {
+			d.PaneID = ""
+			d.CLIPid = 0
+			d.ProcStart = ""
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newRenameWorld(t)
+			if tc.minor != "" {
+				w.version = tc.minor
+			}
+			disk := w.leftDisk("zz")
+			tc.edit(w, &disk)
+			w.saveDisk(disk)
+			w.screens = []string{sessiontitle.BusyThinkingTypedScreen}
+			got := w.apply("zz")
+			if got.State != "Failed" || got.Reason != "left-in-input" || !got.Stopped || got.Target != "zz" {
+				t.Fatalf("%+v", got)
+			}
+			w.assertNoWrite(t)
+		})
+		t.Run(tc.name+" empty", func(t *testing.T) {
+			w := newRenameWorld(t)
+			if tc.minor != "" {
+				w.version = tc.minor
+			}
+			disk := w.leftDisk("zz")
+			tc.edit(w, &disk)
+			w.saveDisk(disk)
+			w.screens = []string{sessiontitle.IdleEmptyScreen}
+			got := w.apply("zz")
+			if got.State != "" || got.Reason != "" || got.Stopped || got.PaneID != "" || got.CLIPid != 0 || got.ProcStart != "" {
+				t.Fatalf("empty row %+v", got)
+			}
+			w.assertNoWrite(t)
+		})
+	}
+	t.Run("match", func(t *testing.T) {
+		w := newRenameWorld(t)
+		w.saveDisk(w.leftDisk("zz"))
+		w.screens = []string{sessiontitle.BusyThinkingTypedScreen}
+		got := w.apply("zz")
+		if got.State != "Held" || got.Reason != "interrupted" || got.PaneID != "" || got.CLIPid != 0 || got.ProcStart != "" {
+			t.Fatalf("%+v", got)
+		}
+		if len(w.writes()) != 1 || !slices.Contains(w.writes()[0], "Backspace") {
+			t.Fatalf("writes %q", w.writes())
+		}
+	})
+}
+
+func TestRenameCommandShadowStopsAtTheCap(t *testing.T) {
+	w := newRenameWorld(t)
+	dir := filepath.Join(w.s.Home, "proj", ".claude", "commands")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const extra = 20
+	files := shadowEntryCap + extra
+	for i := 0; i < files; i++ {
+		if err := os.WriteFile(filepath.Join(dir, "e"+strconv.Itoa(i)+".txt"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig := readShadowDir
+	got := 0
+	readShadowDir = func(path string, limit int) ([]os.DirEntry, error) {
+		if limit < 1 {
+			t.Errorf("ReadDir limit %d", limit)
+		}
+		entries, err := orig(path, limit)
+		got += len(entries)
+		return entries, err
+	}
+	t.Cleanup(func() { readShadowDir = orig })
+	w.hold(t, "Café", "command-shadowed")
+	if got != shadowEntryCap+1 || got >= files {
+		t.Fatalf("read %d entries from a directory of %d", got, files)
+	}
+}
+
+func TestRenameResumeOutsideTheSetReportsInvalidTitle(t *testing.T) {
+	w := newRenameWorld(t)
+	w.boot(false)
+	title := "Cost \u2014 review"
+	w.sess.Title = title
+	w.spec.name = "derived-name"
+	w.spec.source = "derived"
+	w.writeRecord()
+	disk := w.apply(title)
+	if disk.State != "Failed" || disk.Reason != "invalid-title" || !disk.Stopped {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertNoWrite(t)
+}
+
+func TestRenameWaitingBlocksBackspaceAfterTheText(t *testing.T) {
+	w := newRenameWorld(t)
+	target := w.composed("Café")
+	w.arm(target, false)
+	w.afterText = func() {
+		w.spec.status = "waiting"
+		w.writeRecord()
+	}
+	disk := w.apply("Café")
+	if disk.State != "Failed" || disk.Reason != "left-in-input" || disk.Attempts != 1 {
+		t.Fatalf("%+v", disk)
+	}
+	for _, args := range w.writes() {
+		if slices.Contains(args, "Backspace") {
+			t.Fatalf("Backspace while waiting: %q", w.writes())
+		}
+	}
+}
+
+func TestRenameWaitingBlocksHealLeftBeforeTheScreen(t *testing.T) {
+	w := newRenameWorld(t)
+	w.saveDisk(w.leftDisk("zz"))
+	w.spec.status = "waiting"
+	w.spec.updated = 0
+	w.writeRecord()
+	w.screens = []string{sessiontitle.BusyThinkingTypedScreen}
+	disk := w.apply("zz")
+	if disk.State != "Failed" || disk.Reason != "left-in-input" || !disk.Stopped {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertNoWrite(t)
+	for _, c := range w.run.snapshot() {
+		if c.Name == "tmux" && len(c.Args) > 0 && c.Args[0] == "capture-pane" {
+			t.Fatal("healLeft read the screen while the record was waiting")
+		}
+	}
+}
+
+func TestRenameSecondCaptureBeforeTheTextHolds(t *testing.T) {
+	w := newRenameWorld(t)
+	w.derivedCursor = true
+	w.secondScreen = screenHolding("hello")
+	disk := w.apply("Café")
+	if disk.State != "Held" || disk.Reason != "input" || disk.Attempts != 0 {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertNoWrite(t)
+}
+
+func TestRenameBackspaceThatLeavesTextIsLeftInInput(t *testing.T) {
+	w := newRenameWorld(t)
+	target := w.composed("Café")
+	w.arm(target, false)
+	w.keepAfterBackspace = true
+	w.afterText = func() {
+		w.spec.status = "busy"
+		w.writeRecord()
+	}
+	disk := w.apply("Café")
+	if disk.State != "Failed" || disk.Reason != "left-in-input" || !disk.Stopped || disk.Attempts != 1 {
+		t.Fatalf("%+v", disk)
+	}
+	saw := false
+	for _, args := range w.writes() {
+		if slices.Contains(args, "Backspace") {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatal("no Backspace")
+	}
+}
+
+func TestRenameClientAfterTheWriteRefunds(t *testing.T) {
+	w := newRenameWorld(t)
+	w.onSecondClient = func() { w.clients = "/dev/pts/4" }
+	disk := w.apply("Café")
+	if disk.State != "Held" || disk.Reason != "attached" || disk.Attempts != 0 {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertNoWrite(t)
 }
 
 type lineLog struct{ b *strings.Builder }

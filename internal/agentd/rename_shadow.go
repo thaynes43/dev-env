@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,7 +102,7 @@ func walkCommands(ctx context.Context, dir string, depth int, n *int) (bool, boo
 	if depth > shadowCommandDepth {
 		return false, false
 	}
-	entries, err := readShadowDir(dir)
+	entries, err := readShadowEntries(dir, n)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, false
@@ -134,7 +135,7 @@ func walkSkills(ctx context.Context, dir string, n *int) (bool, bool) {
 	if ctx.Err() != nil {
 		return false, true
 	}
-	entries, err := readShadowDir(dir)
+	entries, err := readShadowEntries(dir, n)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, false
@@ -215,15 +216,38 @@ func skillFrontmatterName(data []byte) string {
 	return ""
 }
 
-// readShadowDir opens a directory with O_DIRECTORY and O_NONBLOCK. A symlink
-// to a directory is followed. A FIFO, or a symlink to one, fails at once.
-func readShadowDir(path string) ([]os.DirEntry, error) {
+// readShadowEntries reads at most the entries the cap still allows, plus one
+// so a directory past the cap is seen without reading the rest. The stop
+// between entries is the caller's ctx check. The open is non-blocking. A
+// hung network mount is not bounded by this.
+func readShadowEntries(dir string, n *int) ([]os.DirEntry, error) {
+	room := shadowEntryCap - *n + 1
+	if room < 1 {
+		return nil, errors.New("shadow cap")
+	}
+	return readShadowDir(dir, room)
+}
+
+// readShadowDir opens a directory with O_DIRECTORY and O_NONBLOCK and reads
+// at most limit entries. A symlink to a directory is followed. A FIFO, or a
+// symlink to one, fails at once. limit is at least 1; ReadDir(0) would read
+// the whole directory.
+var readShadowDir = readShadowDirN
+
+func readShadowDirN(path string, limit int) ([]os.DirEntry, error) {
+	if limit < 1 {
+		return nil, errors.New("shadow cap")
+	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	return f.ReadDir(-1)
+	entries, err := f.ReadDir(limit)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return entries, nil
 }
 
 type renameSettings struct {
