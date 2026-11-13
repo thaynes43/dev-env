@@ -2384,21 +2384,16 @@ governs.
    limit. That is v1's rule (`probe_model`: a credential match tries no
    fallback, any other failure does). agentd cannot know every wording the
    CLI uses for a refusal, so recognition names the cause and does not decide
-   the try. An answer is agentd's existing transcript classifier's
-   `Accepted` (a real model name and non-zero usage) from a CLI that exited
-   0; a rejected login is its `Revoked`. Quota and model refusals are named
-   by v1's fragments ("out of usage credits", "usage limit", "rate limit";
-   "unknown model", "invalid model", "not available", "/model to switch"),
-   matched only on an entry the classifier already calls an API error. Not
-   verified against the real CLI.
+   the try. How an answer and each refusal are recognised is item 11
+   (story 791 fix round 1), which replaces this item's first account of it.
 4. *A rejected login tries no fallback (ruling (d)),* on either turn: both
    models use the same static token. Nothing starts.
 5. *One provider process at a time (op791-a-1).* A turn is stopped and
    waited for before the next turn or the real start is spawned. One that
    cannot be shown gone starts nothing further, and its cause is no answer.
-   The turn runs `--tools ""`, `--strict-mcp-config`,
-   `--no-session-persistence` and `--max-turns 1`, with no
-   `--dangerously-skip-permissions`, so no tool can run in it.
+   The turn runs `--tools ""`, `--setting-sources ""` (item 11),
+   `--strict-mcp-config`, `--no-session-persistence` and `--max-turns 1`,
+   with no `--dangerously-skip-permissions`, so no tool can run in it.
 6. *The typed record.* agentd reports it in its status and the operator's
    API copies it into `status.agent.start`: `model`, the model the task
    started on; `fallbackCause` beside a fallback model, why `spec.model` did
@@ -2437,6 +2432,53 @@ governs.
     the launch record agentd wrote, and the receipt bound to it, are not
     changed; the result event's served models name the fallback when the CLI
     reports them.
+11. *How the turn is read, and which model answered* (story 791 fix round 1,
+    coordinator rulings in PR 1120 comment 6843361182; not a ruling by Tom).
+    The first account in item 3 read the turn with the transcript's field
+    names, which the stream does not carry. Four real streams of Claude Code
+    2.1.321, captured on 2026-11-13 with the pre-flight's flags
+    (`internal/agentd/testdata/preflight`), show what it does write: the
+    API-error flag `is_api_error_message`, the status `api_error_status` (a
+    number) and the error code in the entry's top-level `error`. The turn has
+    its own reader now; the transcript's classifier is unchanged.
+    - *An entry is an API error* when it carries the flag (in the stream's
+      spelling or the transcript's `isApiErrorMessage`), an error code, a
+      status (`api_error_status` or `apiErrorStatus`), or, with no real
+      response, text that starts "API Error". Its cause comes from the code
+      first, then the status, and only then from the wording. A reply that
+      quotes the wording is not an API error, so it stays an answer.
+    - *A rejected login*: code `authentication_failed` or status 401, or the
+      wording "not logged in", "failed to authenticate", or the transcript's
+      markers ("please run /login", "oauth token has been revoked", "oauth
+      token has expired", "authentication_error"). **From real
+      streams**: a session pod's tool shell, which has no login in reach of
+      a child `claude` ("Not logged in · Please run /login", code, no
+      status), and a made-up token in a cleared environment ("Failed to
+      authenticate. API Error: 401 Invalid bearer token", code and 401). No
+      fallback is tried.
+    - *A refused model*: code `model_not_found` or status 404, or the
+      wording "issue with the selected model", "may not exist or you may not
+      have access", or v1's fragments. **From a real stream** (a model id
+      that does not exist: code, 404, "There's an issue with the selected
+      model (...). It may not exist or you may not have access to it.").
+    - *A quota refusal*: code `rate_limit` or `billing_error`, status 429, or
+      v1's fragments ("out of usage credits", "usage limit", "rate limit").
+      **Not verified against a real stream**: none could be captured; the
+      codes are the CLI's own strings.
+    - *An answer*: a real response (a model name other than `<synthetic>`
+      and non-zero usage) from the model asked, from a CLI that exited 0.
+      **From a real stream**: its `message.model` is exactly the asked id,
+      with no date suffix, and it carries no error field. The asked id with
+      a date suffix (`-YYYYMMDD`) or `[1m]` also counts. A real response
+      from any other model is a refused model, so the fallback is tried: the
+      CLI can switch models by itself (`model_fallback`). The real start's
+      arguments are unchanged, and `CLAUDE_CODE_NO_MODEL_FALLBACK` is not
+      set.
+    - *Settings.* The turn passes `--setting-sources ""`, so it loads no
+      user, project or local settings and runs none of their hooks. A task's
+      login comes from `CLAUDE_CODE_OAUTH_TOKEN` in its environment, which no
+      settings source carries; the real answer was captured with this flag.
+      `--bare` is not used, because it reads no OAuth token.
 
 ### 6.10 OP745: joinable remote sessions with a verified link
 
