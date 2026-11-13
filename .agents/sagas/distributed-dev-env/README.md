@@ -21,7 +21,7 @@ that runs raised without a record, whatever the flags say. A raised profile
 applies at the session's next pod, and a depth-2 session may be raised to
 start sessions one level deeper that start nothing. Two design reviews by
 another model family were answered by the coordinator's rulings (the
-design's section 15); four limits are stated (its section 12). No question
+design's section 15); seven limits are stated (its section 12). No question
 for Tom remains. Nothing is built or installed.
 [Decision 108](#decision-log).
 After the review of the haynes-ops install rules the coordinator added
