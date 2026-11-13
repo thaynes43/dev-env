@@ -48,6 +48,9 @@ func TestClassifyQuestionOpenIsUnknown(t *testing.T) {
 	if ObservedCursor(QuestionOpenScreen).Known {
 		t.Fatal("the recorded question has no idle input box")
 	}
+	if got := ClassifyBox(QuestionOpenScreen, "", Cursor{X: 2, Y: 46, Known: true}); got != InputUnknown {
+		t.Fatalf("question box classified %d", got)
+	}
 }
 
 func TestClassifyInputOtherAndUnknown(t *testing.T) {
@@ -99,15 +102,22 @@ func TestClassifyInputOtherAndUnknown(t *testing.T) {
 	if ClassifyInput(IdleEmptyScreen, "", wrong) != InputUnknown {
 		t.Fatal("cursor not after the prompt")
 	}
-	// Derived from the recorded idle fixture by inserting a numbered list in
-	// the conversation. The whole-screen rule makes that unknown.
-	mark := strings.LastIndex(IdleEmptyScreen, "❯\u00a0")
-	if mark < 0 {
-		t.Fatal("idle fixture has no input mark")
+	// Derived from the recorded idle fixture by a numbered line above the box.
+	// The cursor is that box's row. ObservedCursor is not used: it follows
+	// the typing rule, and this screen is unknown to that rule.
+	numbered, row, placed := screenWithConversationLine(IdleEmptyScreen, "1. Fix the bug")
+	if !placed {
+		t.Fatal("could not place a line above the box")
 	}
-	numbered := IdleEmptyScreen[:mark] + "1. Fix the bug\n" + IdleEmptyScreen[mark:]
-	if ClassifyInput(numbered, "", ObservedCursor(numbered)) != InputUnknown {
+	box := Cursor{X: 2, Y: row, Known: true}
+	if ClassifyInput(numbered, "", box) != InputUnknown {
 		t.Fatal("numbered list in the conversation")
+	}
+	if ObservedCursor(numbered).Known {
+		t.Fatal("ObservedCursor follows the typing rule")
+	}
+	if ClassifyBox(numbered, "", box) != InputEmpty {
+		t.Fatal("a numbered line above the box blocked the empty input")
 	}
 }
 
@@ -201,6 +211,25 @@ func TestBusyScreensAndFinishedRows(t *testing.T) {
 	if !ok || ClassifyInput(IdleEmptyScreen, "", idle) != InputEmpty {
 		t.Fatal("a finished row held the idle screen")
 	}
+}
+
+func screenWithConversationLine(screen, text string) (string, int, bool) {
+	const mark = "❯\u00a0"
+	at := strings.LastIndex(screen, mark)
+	if at < 0 {
+		return "", 0, false
+	}
+	promptLine := strings.LastIndex(screen[:at], "\n")
+	if promptLine < 0 {
+		return "", 0, false
+	}
+	topLine := strings.LastIndex(screen[:promptLine], "\n")
+	if topLine < 0 {
+		return "", 0, false
+	}
+	out := screen[:topLine+1] + text + "\n" + screen[topLine+1:]
+	row := strings.Count(out[:strings.LastIndex(out, mark)], "\n")
+	return out, row, true
 }
 
 func screenWithInput(screen, text string) string {

@@ -223,12 +223,19 @@ func ObservedCursor(screen string) Cursor {
 }
 
 // findInputRow reports the input row when the screen is exactly one input box
-// and that box is the last element before the status row. A selection hint, a
-// numbered option or a spinner anywhere on the screen is not that box.
+// and that box is the last element before the status row. For typing, a
+// selection hint, a numbered option or a spinner anywhere on the screen is
+// not that box. For cleanup and delivery, those hints count only on the
+// box's own rows, and a spinner row does not count.
 func findInputRow(lines [][]cell, spinnersHold bool) (int, bool) {
-	for _, line := range lines {
-		if disqualifyingRow(line, spinnersHold) {
-			return 0, false
+	// Typing looks at the whole screen: a numbered line or a selection hint
+	// anywhere holds. Cleanup and delivery look at the box only, so a numbered
+	// line left in the conversation does not block an empty input row.
+	if spinnersHold {
+		for _, line := range lines {
+			if disqualifyingRow(line, true) {
+				return 0, false
+			}
 		}
 	}
 	var content []int
@@ -260,6 +267,9 @@ func findInputRow(lines [][]cell, spinnersHold bool) (int, bool) {
 	if !dashRule(lines[bottom]) || !isPromptRow(lines[input]) || !topRule(lines[top]) {
 		return 0, false
 	}
+	if !spinnersHold && (selectionRow(lines[top]) || selectionRow(lines[input]) || selectionRow(lines[bottom])) {
+		return 0, false
+	}
 	n := 0
 	for _, line := range lines {
 		if isPromptRow(line) {
@@ -279,6 +289,13 @@ func isPromptRow(line []cell) bool {
 var numberedOption = regexp.MustCompile(`^(?:❯[ \t]+)?\d+\.\s+\S`)
 
 func disqualifyingRow(line []cell, spinnersHold bool) bool {
+	if selectionRow(line) {
+		return true
+	}
+	return spinnersHold && spinnerRow(strings.TrimSpace(rowText(line)))
+}
+
+func selectionRow(line []cell) bool {
 	text := strings.TrimSpace(rowText(line))
 	if text == "" {
 		return false
@@ -287,10 +304,7 @@ func disqualifyingRow(line []cell, spinnersHold bool) bool {
 	if strings.Contains(low, "enter to select") || strings.Contains(low, "esc to cancel") || strings.Contains(low, "esc to interrupt") {
 		return true
 	}
-	if numberedOption.MatchString(text) {
-		return true
-	}
-	return spinnersHold && spinnerRow(text)
+	return numberedOption.MatchString(text)
 }
 
 // spinnerRow matches the recorded shape: a mark, one space, and a word that

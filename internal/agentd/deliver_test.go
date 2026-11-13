@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +131,37 @@ func TestDeliverPastesWhenTheRenameLineIsEmpty(t *testing.T) {
 	var disk titleDisk
 	if readJSONFile(s.statePath(titleStateFile), &disk) != nil || disk.State != "" || disk.Reason != "" || disk.Stopped {
 		t.Fatalf("mark stayed %+v", disk)
+	}
+}
+
+func TestDeliverPastesWhenTheConversationHoldsANumberedLine(t *testing.T) {
+	s, _, _ := deliverRig(t, true)
+	sess := protocol.Session{Name: "s-1", SessionUID: "uid-deliver", Agent: protocol.AgentClaude}
+	if err := writeJSONFile(s.statePath(titleStateFile), titleDisk{
+		UID: sess.SessionUID, State: "Failed", Reason: "left-in-input", Target: "zz", Stopped: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const mark = "❯\u00a0"
+	base := sessiontitle.IdleEmptyScreen
+	at := strings.LastIndex(base, mark)
+	promptLine := strings.LastIndex(base[:at], "\n")
+	topLine := strings.LastIndex(base[:promptLine], "\n")
+	if at < 0 || promptLine < 0 || topLine < 0 {
+		t.Fatal("idle fixture has no input box")
+	}
+	// Derived from the recorded idle screen by a numbered line above the box.
+	// The cursor is that box's row. ObservedCursor is not used: it follows
+	// the typing rule, which calls this screen unknown.
+	screen := base[:topLine+1] + "1. Fix the bug\n" + base[topLine+1:]
+	row := strings.Count(screen[:strings.LastIndex(screen, mark)], "\n")
+	f, calls := deliverScreenRunner(t, screen, "2 "+strconv.Itoa(row))
+	if err := Deliver(context.Background(), f, s, sess, "session/x", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(*calls, "\n")
+	if !strings.Contains(joined, "load-buffer") || strings.Contains(joined, "Backspace") {
+		t.Fatalf("calls:\n%s", joined)
 	}
 }
 

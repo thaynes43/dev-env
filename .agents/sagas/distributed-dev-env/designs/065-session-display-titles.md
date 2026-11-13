@@ -1269,9 +1269,13 @@ is idle with an empty input line. A rename is not typed while a turn runs.
    pane id; the CLI still the pane's foreground process with the same pid;
    the record readable with a status that is not "waiting"; the screen has
    the one input box whose row holds exactly the typed text, with the cursor
-   directly after it. `ClassifyBox` answers that question and does not treat
-   a spinner row as a disqualifier. A question, a selection or a permission
-   screen has no input box and stays unknown. After the Backspaces, the row
+   directly after it.    `ClassifyBox` answers that question and does not treat
+   a spinner row as a disqualifier. A numbered line or a selection hint
+   anywhere on the screen still holds before typing. `ClassifyBox` applies
+   those checks only to the three rows of the input box, so a numbered line
+   left in the conversation does not block cleanup or delivery once the input
+   row is empty. A question, a selection or a permission screen has no input
+   box and stays unknown. After the Backspaces, the row
    must be empty with the cursor at column 2. Otherwise the state is
    `left-in-input`.
 3. **Self-heal.** While `title.json` records `left-in-input`, every later
