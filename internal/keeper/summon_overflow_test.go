@@ -560,8 +560,9 @@ func TestSummonOverflowOnceAcrossRestartsAndRaces(t *testing.T) {
 // minutes (ruling Q5): it goes after the drill and before the session pages
 // of its tick (op793-q-1, answer 1). Past the cap it is capped: never paged,
 // counted in the more-events page, listed in the next digest as
-// "<caller> unknown capped overflow"; its refusals are in that event, and the
-// caller's next event waits an hour and carries only later refusals.
+// "<caller> unknown capped overflow". It takes the caller's hour and keeps its
+// refusals (story 793 fix round 1, ruling 1): the caller's next event waits
+// an hour and its page carries them with the later ones.
 func TestSummonOverflowCountsTowardTheCap(t *testing.T) {
 	f := newSummonFix(t)
 	f.opts.Drill = "d1"
@@ -584,7 +585,7 @@ func TestSummonOverflowCountsTowardTheCap(t *testing.T) {
 	f.tick()
 	l := f.ledger()
 	capped := overflowEntries(l)
-	if f.push.count() != 6 || l.State.Capped != 3 || l.State.Overflow[summonCallerB].LastPagedCount != 4 || l.State.Overflow[summonCallerB].LastPagedAt != f.clock.Now().Unix() {
+	if f.push.count() != 6 || l.State.Capped != 3 || l.State.Overflow[summonCallerB].LastPagedCount != 0 || l.State.Overflow[summonCallerB].LastPagedAt != f.clock.Now().Unix() {
 		t.Fatalf("pages %v capped %d members %+v", f.push.titles(), l.State.Capped, l.State.Overflow)
 	}
 	key := summonOverflowKey(summonCallerB, f.clock.Now())
@@ -593,14 +594,14 @@ func TestSummonOverflowCountsTowardTheCap(t *testing.T) {
 	}
 	cappedAt := f.clock.Now()
 	// The window has room again: the summary counts the three capped events;
-	// B's refusals are in its capped event and are not paged again.
+	// B's hour, from its capped event, has not passed.
 	f.clock.SetTime(since.Add(2*time.Minute + time.Hour))
 	f.tick()
 	if !strings.HasPrefix(f.push.form(6).Get("message"), "[dev-env] more-events: 3 more events were not paged") || len(f.overflows()) != 1 {
 		t.Fatalf("pages %v", f.push.titles())
 	}
-	// B's next event waits for the hour from its capped event, and carries
-	// only later refusals.
+	// B's next event waits for the hour from its capped event, and its page
+	// carries the capped refusals with the later one.
 	f.clock.SetTime(cappedAt.Add(time.Hour - time.Second))
 	f.refused(summonCallerB, 5)
 	f.tick()
@@ -609,7 +610,7 @@ func TestSummonOverflowCountsTowardTheCap(t *testing.T) {
 	}
 	f.clock.SetTime(cappedAt.Add(time.Hour))
 	f.tick()
-	if got := f.overflowCounts(); len(got) != 2 || got[1] != summonCallerB+"=1" {
+	if got := f.overflowCounts(); len(got) != 2 || got[1] != summonCallerB+"=5" {
 		t.Fatalf("pages %v", got)
 	}
 	// The next digest lists the capped overflow event once, by its caller.
@@ -888,4 +889,236 @@ func TestSummonOverflowCappedLineCaller(t *testing.T) {
 	if s.Session != "wo-upgrade-1" || s.Lane != "upgrade" || s.Reason != "failed" {
 		t.Fatalf("a session's line %+v", s)
 	}
+}
+
+// overflowTotals sums the counts of the overflow pages sent, by caller.
+func (f *summonFix) overflowTotals() map[string]int64 {
+	out := map[string]int64{}
+	for _, c := range f.overflowCounts() {
+		caller, n, ok := strings.Cut(c, "=")
+		var v int64
+		if _, err := fmt.Sscanf(n, "%d", &v); !ok || err != nil {
+			f.t.Fatalf("count %q: %v", c, err)
+		}
+		out[caller] += v
+	}
+	return out
+}
+
+// cappedOverflows counts the capped overflow dedupe entries of the ledger.
+func cappedOverflows(l *summonPageLedger) int {
+	n := 0
+	for _, e := range overflowEntries(l) {
+		if e.State == summonStateCapped {
+			n++
+		}
+	}
+	return n
+}
+
+// Story 793 fix round 1, ruling 1 (PR 1130 comment 6846451603; the
+// coordinator's, not Tom's): a capped overflow event takes its caller's hour
+// and keeps its refusals. It advances lastPagedAt and leaves lastPagedCount
+// as it was, zero for a caller with no member yet; the next overflow page for
+// that caller carries them. So across a capped hour and the page after it,
+// the counts in the pages that were attempted add up to the create ledger's
+// count, and a capped event still takes the hour: no capped event every
+// tick.
+func TestSummonOverflowCappedEventKeepsItsRefusals(t *testing.T) {
+	f := newSummonFix(t)
+	t0 := f.clock.Now()
+	// A is paged once, with 2 refusals, before the window fills.
+	f.refused(summonCallerA, 2)
+	f.tick()
+	if got := f.overflowCounts(); len(got) != 1 || got[0] != summonCallerA+"=2" {
+		t.Fatalf("pages %v", got)
+	}
+	// An hour later six session pages fill the window.
+	f.clock.SetTime(t0.Add(time.Hour + time.Minute))
+	for i := 1; i <= summonPagesCap; i++ {
+		f.add(f.failedSession(fmt.Sprintf("wo-upgrade-%d", i), time.Duration(20-i)*time.Second))
+	}
+	f.tick()
+	if f.push.count() != 1+summonPagesCap || f.ledger().State.Capped != 0 {
+		t.Fatalf("pages %v", f.push.titles())
+	}
+	// A minute on, A (paged before) and B (never paged) have refusals and
+	// the window is full: both events are capped. Each takes the hour; A's
+	// reference stays 2, and B's member starts at reference 0.
+	capped := t0.Add(time.Hour + 2*time.Minute)
+	f.clock.SetTime(capped)
+	f.refused(summonCallerA, 5)
+	f.refused(summonCallerB, 3)
+	f.tick()
+	l := f.ledger()
+	a, b := l.State.Overflow[summonCallerA], l.State.Overflow[summonCallerB]
+	if a.LastPagedCount != 2 || a.LastPagedAt != capped.Unix() || b.LastPagedCount != 0 || b.LastPagedAt != capped.Unix() {
+		t.Fatalf("members %+v", l.State.Overflow)
+	}
+	if l.State.Capped != 2 || cappedOverflows(l) != 2 || f.push.count() != 1+summonPagesCap {
+		t.Fatalf("capped %d entries %+v pages %v", l.State.Capped, overflowEntries(l), f.push.titles())
+	}
+	// More refusals within the hour, the window still full: no new event,
+	// capped or paged, on any tick.
+	for i, step := range []struct {
+		at   time.Duration
+		a, b int64
+	}{{3 * time.Minute, 6, 3}, {20 * time.Minute, 6, 4}, {58 * time.Minute, 7, 4}} {
+		f.clock.SetTime(t0.Add(time.Hour + step.at))
+		f.refused(summonCallerA, step.a)
+		f.refused(summonCallerB, step.b)
+		f.tick()
+		l = f.ledger()
+		if l.State.Capped != 2 || cappedOverflows(l) != 2 || f.push.count() != 1+summonPagesCap {
+			t.Fatalf("step %d: capped %d entries %+v pages %v", i, l.State.Capped, overflowEntries(l), f.push.titles())
+		}
+		if o := l.State.Overflow[summonCallerA]; o.LastPagedCount != 2 || o.LastPagedAt != capped.Unix() {
+			t.Fatalf("step %d: A %+v", i, o)
+		}
+	}
+	// The window has room: the more-events page counts the two capped
+	// events. A and B wait for the hour from their capped events.
+	f.clock.SetTime(capped.Add(time.Hour - time.Second))
+	f.tick()
+	if f.push.count() != 2+summonPagesCap || !strings.HasPrefix(f.push.form(1+summonPagesCap).Get("message"), "[dev-env] more-events: 2 more events were not paged") ||
+		len(f.overflows()) != 1 {
+		t.Fatalf("pages %v", f.push.titles())
+	}
+	// At the hour, each pages every refusal not yet in an attempted page,
+	// the capped ones included.
+	f.clock.SetTime(capped.Add(time.Hour))
+	f.tick()
+	got := f.overflowCounts()[1:]
+	sort.Strings(got)
+	if strings.Join(got, ",") != summonCallerA+"=5,"+summonCallerB+"=4" {
+		t.Fatalf("pages %v", f.overflowCounts())
+	}
+	if totals := f.overflowTotals(); totals[summonCallerA] != 7 || totals[summonCallerB] != 4 {
+		t.Fatalf("the pages carried %v; the create ledger counts %s=7 and %s=4", totals, summonCallerA, summonCallerB)
+	}
+	l = f.ledger()
+	if l.State.Overflow[summonCallerA].LastPagedCount != 7 || l.State.Overflow[summonCallerB].LastPagedCount != 4 {
+		t.Fatalf("members %+v", l.State.Overflow)
+	}
+	// Nothing more without new refusals.
+	f.clock.Step(2 * time.Hour)
+	f.tick()
+	if len(f.overflows()) != 3 {
+		t.Fatalf("paged again: %v", f.overflowCounts())
+	}
+}
+
+// Story 793 fix round 1, ruling 5: two overflow callers in one tick with one
+// slot left. The one with the older last refusal pages; the other is capped
+// and, by ruling 1, keeps its refusals for its next page. Both orders are
+// tried, so the order is the last refusal's time, not the caller's name or
+// key.
+func TestSummonOverflowOlderRefusalPagesFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		older, newer   string
+		olderN, newerN int64
+	}{
+		{"B older", summonCallerB, summonCallerA, 2, 3},
+		{"A older", summonCallerA, summonCallerB, 4, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSummonFix(t)
+			t0 := f.clock.Now()
+			for i := 1; i < summonPagesCap; i++ {
+				f.add(f.failedSession(fmt.Sprintf("wo-upgrade-%d", i), time.Duration(20-i)*time.Second))
+			}
+			f.tick()
+			if f.push.count() != summonPagesCap-1 {
+				t.Fatalf("pages %v", f.push.titles())
+			}
+			t1 := t0.Add(time.Minute)
+			f.clock.SetTime(t1)
+			f.creates(map[string]string{
+				tc.older: refusals(t, tc.olderN, t1.Add(-10*time.Minute)),
+				tc.newer: refusals(t, tc.newerN, t1.Add(-time.Second)),
+			})
+			f.tick()
+			l := f.ledger()
+			if got := f.overflowCounts(); len(got) != 1 || got[0] != fmt.Sprintf("%s=%d", tc.older, tc.olderN) || l.State.Capped != 1 {
+				t.Fatalf("pages %v capped %d", got, l.State.Capped)
+			}
+			key := summonOverflowKey(tc.newer, t1)
+			if e := l.State.Events[key]; e.State != summonStateCapped {
+				t.Fatalf("entries %+v", overflowEntries(l))
+			}
+			if o := l.State.Overflow[tc.newer]; o.LastPagedCount != 0 || o.LastPagedAt != t1.Unix() {
+				t.Fatalf("the capped caller's member %+v", o)
+			}
+			// The window frees and the capped caller's hour passes: the
+			// more-events page, then its page with every refusal.
+			f.clock.SetTime(t1.Add(time.Hour))
+			f.tick()
+			if got := f.overflowCounts(); len(got) != 2 || got[1] != fmt.Sprintf("%s=%d", tc.newer, tc.newerN) {
+				t.Fatalf("pages %v", f.push.titles())
+			}
+			if !strings.HasPrefix(f.push.form(summonPagesCap).Get("message"), "[dev-env] more-events: 1 more event was not paged") {
+				t.Fatalf("pages %v", f.push.titles())
+			}
+		})
+	}
+}
+
+// Story 793 fix round 1, ruling 3: what the order costs session pages.
+// Overflow pages go before session pages (op793-q-1, answer 1). In an hour
+// whose window opens with a more-events page owed, two overflow callers and
+// six session pages: the more-events page, both overflow pages (the older
+// last refusal first) and three session pages are sent, oldest first; three
+// session pages are capped and the next hour's more-events page counts them.
+// This shows one hour's usual split, 6 - k - 1 slots for session pages with
+// k = 2, not a guarantee for every 60 minutes: the window slides, the
+// more-events page can go twice inside one 60 minutes, a drill takes a slot
+// once, and a send deadline can overlap a caller's hour by seconds (answer
+// op793-fix1-q-1, the coordinator's, not Tom's).
+func TestSummonOverflowOrderCostsSessionPages(t *testing.T) {
+	f := newSummonFix(t)
+	t0 := f.clock.Now()
+	// The hour before: seven session pages, one capped.
+	for i := 1; i <= summonPagesCap+1; i++ {
+		f.add(f.failedSession(fmt.Sprintf("wo-before-%d", i), time.Duration(30-i)*time.Second))
+	}
+	f.tick()
+	if f.push.count() != summonPagesCap || f.ledger().State.Capped != 1 {
+		t.Fatalf("pages %v", f.push.titles())
+	}
+	t1 := t0.Add(time.Hour + time.Minute)
+	f.clock.SetTime(t1)
+	f.creates(map[string]string{
+		summonCallerA: refusals(t, 2, t1.Add(-time.Minute)),
+		summonCallerB: refusals(t, 3, t1.Add(-5*time.Minute)),
+	})
+	for i := 1; i <= summonPagesCap; i++ {
+		f.add(f.failedSession(fmt.Sprintf("wo-upgrade-%d", i), time.Duration(20-i)*time.Second))
+	}
+	f.tick()
+	titles := f.push.titles()[summonPagesCap:]
+	if len(titles) != summonPagesCap || titles[0] != "[dev-env] "+summonEventMore || titles[1] != summonOverflowTitle || titles[2] != summonOverflowTitle {
+		t.Fatalf("pages %v", titles)
+	}
+	if got := strings.Join(f.overflowCounts(), ","); got != summonCallerB+"="+"3,"+summonCallerA+"=2" {
+		t.Fatalf("overflow pages %s", got)
+	}
+	l := f.ledger()
+	for i := 1; i <= summonPagesCap; i++ {
+		name := fmt.Sprintf("wo-upgrade-%d", i)
+		if sent := f.sentFor(name); (i <= 3) != (sent == 1) || sent > 1 {
+			t.Fatalf("%s sent %d times; pages %v", name, sent, titles)
+		}
+	}
+	if l.State.Capped != 3 {
+		t.Fatalf("capped %d", l.State.Capped)
+	}
+	// The next hour: the more-events page counts the three capped session
+	// pages; nothing else is due.
+	f.clock.SetTime(t1.Add(time.Hour + time.Minute))
+	f.tick()
+	if f.push.count() != 2*summonPagesCap+1 || !strings.HasPrefix(f.push.form(2*summonPagesCap).Get("message"), "[dev-env] more-events: 3 more events were not paged") {
+		t.Fatalf("pages %v", f.push.titles())
+	}
+	f.assertRollingCap()
 }

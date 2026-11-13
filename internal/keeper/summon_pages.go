@@ -435,7 +435,8 @@ type summonJob struct {
 	named   bool                   // a terminal page whose close a row names
 	count   int                    // a more-events page's count
 	// An overflow page's caller, its count of urgent refusals (the new
-	// reference) and the refusals since its last overflow event (story 793).
+	// reference once a page is attempted) and the refusals since its caller's
+	// reference (story 793).
 	caller         string
 	refused, since int64
 }
@@ -553,7 +554,9 @@ func (p *summonPager) tick(ctx context.Context) {
 		if !ledger.State.room(now) {
 			ledger.State.Events[j.key] = summonPageEntry{At: now.Unix(), State: summonStateCapped, Session: sessionName(j.session)}
 			ledger.State.Capped++
-			ledger.State.markOverflow(j, now)
+			// A capped overflow event takes its caller's hour and keeps its
+			// refusals for the next page (story 793 fix round 1, ruling 1).
+			ledger.State.markOverflow(j, now, false)
 			dirty = true
 			continue
 		}
@@ -705,7 +708,7 @@ func (p *summonPager) attempt(ctx context.Context, ledger *summonPageLedger, j s
 	dispatchBy := now.Add(noticeStoreTimeout)
 	ledger.State.reserve(now, dispatchBy)
 	ledger.State.Events[j.key] = summonPageEntry{At: now.Unix(), State: string(pages.StateRecorded), Session: sessionName(j.session)}
-	ledger.State.markOverflow(j, now)
+	ledger.State.markOverflow(j, now, true)
 	if j.event == summonEventMore {
 		ledger.State.Capped -= j.count
 		ledger.State.More++

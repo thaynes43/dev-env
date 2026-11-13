@@ -38,9 +38,12 @@ import (
 //   - The page. For each caller whose count is above the count its member in
 //     the pager's ledger last recorded (lastPagedCount), at most one overflow
 //     event an hour (from lastPagedAt), carrying the caller and the refusals
-//     since. The event is a page, or capped when the hourly window is full;
-//     either way it takes the count as the new reference, so every refusal is
-//     in exactly one event and refusals after it wait for the next.
+//     since. A page that is attempted takes the count as the new reference
+//     and the hour. An event capped because the hourly window is full takes
+//     only the hour: the reference stays (0 for a caller with no member yet),
+//     and the caller's next page carries those refusals too. So every refused
+//     urgent create is in exactly one page attempt (story 793 fix round 1,
+//     ruling 1 in PR 1130 comment 6846451603; the coordinator's, not Tom's).
 //   - A count that went down. A caller whose count is below its reference,
 //     its key reset, or whose key is gone (an absent key is an empty entry,
 //     count 0), gets the reference 0 at once: every refusal its key then
@@ -51,7 +54,9 @@ import (
 //     (ruling Q5): it goes after the drill and before the session pages of
 //     the tick, callers by the time of their last refusal, oldest first
 //     (op793-q-1, answer 1); past the cap it is capped, counted in the
-//     more-events page and listed in the next digest.
+//     more-events page and listed in the next digest, and its refusals wait
+//     for the caller's next page. With k callers refusing in an hour, overflow
+//     pages take about k of its 6 slots (fix round 1, ruling 3).
 const (
 	summonEventOverflow = "overflow"
 	// summonOverflowEvery is the least time between two overflow events of
@@ -60,7 +65,12 @@ const (
 	// summonOverflowMaxCallers bounds the callers the overflow member keeps.
 	// It is below the store's schema bound (summonPagesMaxCaller), so a keeper
 	// of story 782 or 792 still reads it, and it keeps the ledger with every
-	// bound filled under the store's byte cap (item 793 comment 7633).
+	// bound filled under the store's byte cap (item 793 comment 7633). The
+	// bound is for all time (fix round 1, ruling 2): the create ledger never
+	// removes a caller or lowers its count, so a member with a reference
+	// above 0 is never dropped (dropping it would page its old refusals
+	// again). The first 64 callers ever refused keep their slots; a 65th is
+	// never paged, and freeing a slot is an operator's edit of the ledger.
 	summonOverflowMaxCallers = 64
 	// summonOverflowOwner starts the owner part of an overflow event's
 	// dedupe key, overflow-<unix second>-<16 hex of the caller's SHA-256>.
@@ -83,7 +93,8 @@ type summonCreatesReader interface {
 }
 
 // kubeSummonCreates reads the create ledger by name through the pager's own
-// uncached client; the keeper's Role grants get on that one name only.
+// uncached client. The install grants the keeper's Role get on that one name
+// only; that rule is not installed yet, and until it is the read is refused.
 type kubeSummonCreates struct {
 	reader client.Reader
 }
@@ -190,10 +201,10 @@ func (p *summonPager) overflowJobs(ctx context.Context, l *summonPageLedger, now
 }
 
 // overflowSpare is the member the bound may drop to make room: one whose
-// reference is 0 (its caller's key is gone, or was reset to zero) and whose
-// last overflow event is at least an hour old, the oldest first. Dropping it
-// changes nothing: a caller with no member counts from 0, and its hour has
-// passed. "" when there is none.
+// reference is 0 (its caller's key is gone or was reset to zero, or it has
+// had only capped events) and whose last overflow event is at least an hour
+// old, the oldest first. Dropping it changes nothing: a caller with no member
+// counts from 0, and its hour has passed. "" when there is none.
 func (s summonPageState) overflowSpare(now time.Time) string {
 	spare, at := "", int64(0)
 	for caller, o := range s.Overflow {
@@ -216,19 +227,27 @@ func (s summonPageState) overflowRoom(caller string, now time.Time) bool {
 	return len(s.Overflow) < summonOverflowMaxCallers || s.overflowSpare(now) != ""
 }
 
-// markOverflow takes an overflow event's count as its caller's reference, in
-// memory, with the event's time; it drops a spare member first when the
-// member is at its bound. Other jobs are left alone.
-func (s *summonPageState) markOverflow(j summonJob, now time.Time) {
+// markOverflow records an overflow event in its caller's member, in memory:
+// the event's time always, and the event's count as the reference only for a
+// page that is attempted. A capped event leaves the reference as it was (0
+// for a caller with no member yet), so its refusals wait for the caller's next
+// page (fix round 1, ruling 1). It drops a spare member first when the member
+// is at its bound. Other jobs are left alone.
+func (s *summonPageState) markOverflow(j summonJob, now time.Time, attempted bool) {
 	if j.event != summonEventOverflow {
 		return
 	}
-	if _, ok := s.Overflow[j.caller]; !ok && len(s.Overflow) >= summonOverflowMaxCallers {
+	o, ok := s.Overflow[j.caller]
+	if !ok && len(s.Overflow) >= summonOverflowMaxCallers {
 		if spare := s.overflowSpare(now); spare != "" {
 			delete(s.Overflow, spare)
 		}
 	}
-	s.Overflow[j.caller] = summonOverflowEntry{LastPagedCount: j.refused, LastPagedAt: now.Unix()}
+	if attempted {
+		o.LastPagedCount = j.refused
+	}
+	o.LastPagedAt = now.Unix()
+	s.Overflow[j.caller] = o
 }
 
 // overflowCallers maps the hash in an overflow event's key to its caller,

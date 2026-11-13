@@ -2470,6 +2470,12 @@ transport, goroutine or flag. It folds in the coordinator's answer op793-q-1
 (also not Tom's). Where this differs from the text below and the corrections
 above, this governs. As built:
 
+*Amended, 2026-11-13: story 793 fix round 1, coordinator rulings in PR 1130
+comment 6846451603 and the answer op793-fix1-q-1; not a ruling by Tom.* The
+bullets marked "fix round 1" below are that round's. Ruling 1 changes the
+code: a capped overflow event keeps its refusals. Rulings 2 to 6 change only
+these words and the tests.
+
 - *The read.* Each tick, after the pager's ledger load and its scan, one get of
   `dev-env-summon-creates` in `dev-env-system` by name, bounded like the
   pager's other requests, decoded per caller key with `summonledger.Decode`.
@@ -2482,16 +2488,23 @@ above, this governs. As built:
   caller's create ledger entry is unreadable; that caller waits` and no value
   from the entry, and the other callers page (op793-q-1, answer 2). Each line
   is at most once a tick, and the pages and the digest go on. A tick whose
-  ledger load or scan fails sends no overflow page either.
-- *The event and its reference.* "The refusal count it last paged and when"
-  is the overflow member, `{lastPagedCount, lastPagedAt}` per caller: the
-  count and the time of the caller's last overflow event, a page or a capped
-  one. A caller whose count is above `lastPagedCount` and whose
-  `lastPagedAt` is at least an hour old gets one event, carrying the caller
-  and the count minus `lastPagedCount`; the event takes the count and the
-  time. So "at most one per caller per hour" holds for events, a capped one
-  included, and every refused urgent create is in exactly one event. This
-  replaces "the refusals since its last `overflow` page".
+  ledger load or scan fails sends no overflow page either. The read comes
+  before the tick's sends, so it can delay that tick's pages by at most its
+  request timeout, 5 seconds, which bounds the request's network I/O (a
+  local reload of the bearer token file is outside it) (fix round 1, ruling
+  4).
+- *The event and its reference (fix round 1, ruling 1).* "The refusal count
+  it last paged and when" is the overflow member, `{lastPagedCount,
+  lastPagedAt}` per caller. A caller whose count is above `lastPagedCount`
+  and whose `lastPagedAt` is at least an hour old gets one event, carrying
+  the caller and the count minus `lastPagedCount`. A page that is attempted
+  takes the count and the time. An event the cap leaves out (`capped`) takes
+  only the time: it takes the caller's hour, so a capped event does not come
+  every tick, and `lastPagedCount` stays as it was (0 for a caller with no
+  member yet). The caller's next overflow page carries those refusals with
+  the later ones. So "at most one per caller per hour" holds for events, a
+  capped one included, and, as "Overflow (N6, R1)" below says, every refused
+  urgent create is in exactly one page attempt.
 - *A count that went down.* A count below `lastPagedCount` (the key was
   reset) and a key that is gone (an absent key is an empty entry, count 0)
   set `lastPagedCount` to 0 at once; `lastPagedAt` and the member are kept.
@@ -2503,7 +2516,25 @@ above, this governs. As built:
   session first, is unchanged. Past the cap the event is recorded `capped`,
   counted in the `more-events` page and listed in the next digest as
   `<caller> unknown capped overflow`; the lane is `unknown` because the count
-  does not say which lane was refused.
+  does not say which lane was refused. Its refusals wait for the caller's
+  next page (ruling 1). Of two callers in one tick with one slot left, the
+  one with the older last refusal pages and the other is capped (fix round
+  1, ruling 5).
+- *What the order costs session pages (fix round 1, ruling 3, as worded by
+  the answer op793-fix1-q-1).* Overflow pages go before session pages. A
+  caller has at most one overflow event an hour, so k callers with refusals
+  take about k of an hour's 6 slots, and session pages keep about 6 − k − 1
+  (one for the `more-events` page; a drill takes one more, once). This is the
+  usual figure, not a floor for every 60 minutes: the window slides, so the
+  `more-events` page can go twice inside one 60 minutes, and a page's slot is
+  stamped at its send deadline, up to 6 seconds after the second its caller's
+  hour runs from, so one caller's two overflow pages can both count for up to
+  6 seconds. Only
+  callers that make urgent creates (lanes `remediation` and `escalation`) can
+  have refusals. On 2026-11-13 three CallerPolicies in `dev-env-system` allow
+  one (`upgrade-agent.alert-responder`, `upgrade-agent.upgrade-shepherd` and
+  `upgrade-agent.upgrade-health-gate`), so k is at most 3 today, and session
+  pages keep about 2 in an hour when all three refuse.
 - *Once.* The dedupe key is not "caller and hour" (Limits, below) but
   `overflow-<unix second>-<16 hex of the caller's SHA-256>/overflow`, a key
   the store of stories 782 and 792 already accepts; the member is the
@@ -2518,12 +2549,17 @@ above, this governs. As built:
   (as the page shows it) and the count; never a link. The template is fixed
   in keeper source; its one link is the console's sessions list.
 - *Bounds.* The member keeps at most 64 callers, below the store's schema
-  bound of 256, so a keeper of story 782 or 792 still reads it. At 64 a new
-  caller waits and the keeper logs `summon overflow caller capacity reached`
-  once a tick, unless a member has `lastPagedCount` 0 (its key gone or reset
-  to zero) and a `lastPagedAt` at least an hour old: that member goes first,
-  the oldest first, which changes nothing (a caller with no member counts
-  from 0, and its hour has passed). With every bound filled and each value at
+  bound of 256, so a keeper of story 782 or 792 still reads it. The bound is
+  for all time (fix round 1, ruling 2). The create ledger never removes a
+  caller or lowers its count, so a member with `lastPagedCount` above 0 is
+  never dropped: dropping it would page its old refusals again. So the first
+  64 callers ever refused keep their slots, and a 65th is never paged; the
+  keeper logs `summon overflow caller capacity reached` once a tick. Freeing
+  a slot is an operator's edit of the pager's ledger. The one exception is a
+  member with `lastPagedCount` 0 and a `lastPagedAt` at least an hour old
+  (its key removed or reset to zero by hand, or only capped events so far):
+  it goes for a new caller, the oldest first, which changes nothing (a
+  caller with no member counts from 0, and its hour has passed). With every bound filled and each value at
   the longest this code writes (2048 dedupe entries, 256 pending lines with
   127-character callers and 64-character words, 2304 listed keys, 64 members
   of 127-character callers), `state.json` is 642,103 bytes, under the
@@ -2533,8 +2569,13 @@ above, this governs. As built:
   bound the ledger is over the cap even without an overflow member. At the
   cap a save refuses and nothing is sent, as today (`summon page reservation
   unconfirmed`).
-- *Stated limits.* A key reset and refilled past its old count between two
-  reads is not seen as reset, and that many of its refusals are not paged.
+- *Stated limits (fix round 1, ruling 6).* A key reset and refilled past its
+  old count between two successful reads of the create ledger is not seen as
+  reset, and that many of its refusals are not paged. That time can be hours,
+  not one tick: while reads fail, while the keeper's Role rule is missing, or
+  while the keeper is down. The reverse also holds: an old copy of the create
+  ledger restored after a reset brings back a count above the reference, and
+  pages old refusals again.
   A record ahead of the keeper's clock holds that caller until the clock has
   passed it by the hour, logged once a tick as `summon overflow ledger time
   is ahead of the keeper's clock`. A rolled-back keeper of story 782 or 792
