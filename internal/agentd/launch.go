@@ -366,7 +366,10 @@ func claudeArgs(s Settings, sess protocol.Session) []string {
 
 // remoteControlArgs register the CLI's Remote Control entry. With no role
 // title the argument is the session name. With one, it is the composed
-// display title (DESIGN-065). Codex does not use this.
+// display title (DESIGN-065). Codex does not use this. A composed value that
+// does not start with a letter or a digit is not passed: the CLI's
+// --remote-control takes an optional value, so a value that begins with a
+// hyphen would be read as an option. The session name is passed instead.
 func remoteControlArgs(sess protocol.Session) []string {
 	name := sess.Name
 	if title := remoteControlTitle(sess); title != "" {
@@ -377,12 +380,18 @@ func remoteControlArgs(sess protocol.Session) []string {
 
 // remoteControlTitle is what a Claude remote session passes to
 // --remote-control when it has role text. Empty means the session name is
-// passed, and the rest of the argv stays as it is. Codex returns empty.
+// passed, and the rest of the argv stays as it is. Codex returns empty. A
+// composed value that does not start with a letter or a digit is empty here
+// too, so the status report and the argv agree on what was passed.
 func remoteControlTitle(sess protocol.Session) string {
 	if sess.Agent != protocol.AgentClaude || sess.Mode != protocol.ModeRemote {
 		return ""
 	}
-	return sessiontitle.Compose(sess.Model, sess.Title)
+	title := sessiontitle.Compose(sess.Model, sess.Title)
+	if !sessiontitle.StartsWithLetterOrDigit(title) {
+		return ""
+	}
+	return title
 }
 
 // claudeCredentialCheck checks what agentd runs: Claude task and local

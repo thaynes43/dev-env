@@ -1,11 +1,16 @@
 package apiserver
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -55,6 +60,10 @@ func TestCreateTitle(t *testing.T) {
 		{strings.Repeat("a", 49), sessiontitle.ReasonTooLong},
 		{strings.Repeat("é", 47) + "€", sessiontitle.ReasonTooLong},
 		{"a|b", sessiontitle.ReasonCharacters},
+		{"-Main", sessiontitle.ReasonCharacters},
+		{".Main", sessiontitle.ReasonCharacters},
+		{"!Main", sessiontitle.ReasonCharacters},
+		{"€Main", sessiontitle.ReasonCharacters},
 		{"a\u0007b", sessiontitle.ReasonCharacters},
 		{"a\U00010000", sessiontitle.ReasonCharacters},
 		{" Main", sessiontitle.ReasonSpacing},
@@ -89,5 +98,57 @@ func TestCallerPolicyCreateStoresTitle(t *testing.T) {
 	}
 	if stored.Spec.Title != "Main coordinator" {
 		t.Fatalf("stored %q", stored.Spec.Title)
+	}
+}
+
+func TestCreateTitleStrictFieldValidation(t *testing.T) {
+	record := func(f *fixture) *[]client.CreateOptions {
+		got := &[]client.CreateOptions{}
+		f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*v1alpha1.AgentSession); ok {
+				*got = append(*got, *(&client.CreateOptions{}).ApplyOptions(opts))
+			}
+			return c.Create(ctx, obj, opts...)
+		}})
+		return got
+	}
+	bare := func(opts client.CreateOptions) bool {
+		return opts.FieldValidation == "" && len(opts.DryRun) == 0 && opts.FieldManager == ""
+	}
+
+	f := newFixture(t)
+	untitled := record(f)
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, task()); w.Code != http.StatusCreated {
+		t.Fatalf("untitled create: %d %s", w.Code, w.Body.String())
+	}
+	if len(*untitled) != 1 || !bare((*untitled)[0]) {
+		t.Fatalf("untitled create options %+v", *untitled)
+	}
+
+	f = newFixture(t)
+	titled := record(f)
+	req := task()
+	req.Title = "Main coordinator"
+	w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("titled create: %d %s", w.Code, w.Body.String())
+	}
+	if len(*titled) != 1 || (*titled)[0].FieldValidation != metav1.FieldValidationStrict || len((*titled)[0].DryRun) != 0 || (*titled)[0].FieldManager != "" {
+		t.Fatalf("titled create options %+v", *titled)
+	}
+
+	f = newFixture(t)
+	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if s, ok := obj.(*v1alpha1.AgentSession); ok && s.Spec.Title != "" {
+			if (&client.CreateOptions{}).ApplyOptions(opts).FieldValidation != metav1.FieldValidationStrict {
+				t.Errorf("old CRD was not asked for strict validation")
+			}
+			return apierrors.NewBadRequest(`strict decoding error: unknown field "spec.title"`)
+		}
+		return c.Create(ctx, obj, opts...)
+	}})
+	e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, req), http.StatusBadRequest, apiv1.CodeBadRequest)
+	if e.Message != olderTitleCRD || f.sessionCount() != 0 {
+		t.Fatalf("old CRD refusal %q sessions %d", e.Message, f.sessionCount())
 	}
 }

@@ -2740,6 +2740,9 @@ func TestTitleBounds(t *testing.T) {
 		{"absent", ""},
 		{"role text", "Main coordinator"},
 		{"accented letter", "Café"},
+		{"leading digit", "1a"},
+		{"letter then combining mark", "e\u0301"},
+		{"hyphen later", "Main-coordinator"},
 		{"48 characters", strings.Repeat("a", 48)},
 		{"96 bytes", title96},
 	}
@@ -2755,14 +2758,29 @@ func TestTitleBounds(t *testing.T) {
 			}
 		})
 	}
+	cjk144 := strings.Repeat("\u4e00", 48)
+	euro48 := strings.Repeat("€", 48)
+	if len(cjk144) != 144 || utf8.RuneCountInString(cjk144) != 48 || len(euro48) != 144 {
+		t.Fatalf("144-byte fixtures are %d and %d bytes", len(cjk144), len(euro48))
+	}
 	refuse := []struct{ name, title, want string }{
 		{"empty", "", "spec.title"},
 		{"49 characters", strings.Repeat("a", 49), "spec.title"},
 		{"97 bytes", title97, "at most 96 bytes"},
+		{"144 bytes", cjk144, "at most 96 bytes"},
+		{"48 euros", euro48, "at most 96 bytes"},
 		{"bar", "|", "no bar"},
 		{"bar in text", "a|b", "no bar"},
 		{"control character", "a\u0007b", "no control"},
+		{"tab", "a\tb", "letter or a digit"},
+		{"newline", "a\nb", "letter or a digit"},
+		{"no-break space", "a\u00a0b", "letter or a digit"},
+		{"format character", "a\u200bb", "letter or a digit"},
 		{"above U+FFFF", "a\U00010000", "nothing above U+FFFF"},
+		{"leading hyphen", "-Main", "letter or a digit"},
+		{"leading full stop", ".Main", "letter or a digit"},
+		{"leading punctuation", "!Main", "letter or a digit"},
+		{"leading symbol", "€Main", "letter or a digit"},
 		{"leading space", " Main", "no leading or trailing space"},
 		{"trailing space", "Main ", "no leading or trailing space"},
 		{"double space", "Main  coordinator", "no leading or trailing space"},

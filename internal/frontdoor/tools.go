@@ -363,7 +363,7 @@ func (h *handler) coordinatorStart(ctx context.Context, args map[string]any) (st
 		return "", need(err, "workers")
 	}
 	// PrepareCoordinatorStart refuses a missing model before Execute talks to the operator.
-	in := agentrun.CoordinatorStartInput{Item: item, Repo: repo, Project: project, Model: strings.TrimSpace(model), Title: title, Hours: int(hours), Workers: int(workers)}
+	in := agentrun.CoordinatorStartInput{Item: item, Repo: repo, Project: project, Model: strings.TrimSpace(model), Title: strings.TrimSpace(title), Hours: int(hours), Workers: int(workers)}
 	out, err := agentrun.ExecuteCoordinatorStart(ctx, h.op, in)
 	if err != nil {
 		return "", plainRefusal(err)

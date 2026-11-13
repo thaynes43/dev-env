@@ -127,12 +127,13 @@ func PrepareCoordinatorStart(in CoordinatorStartInput) (apiv1.CreateSessionReque
 	if agent == "codex" && in.Project == "" {
 		return apiv1.CreateSessionRequest{}, usageError("gpt-6-astra needs --project: managed Codex tasks run in a declared project")
 	}
-	if reason := sessiontitle.Validate(in.Title); reason != "" {
-		return apiv1.CreateSessionRequest{}, usageError("--title: %s", sessiontitle.Explain(reason))
+	title := strings.TrimSpace(in.Title)
+	if reason := sessiontitle.Validate(title); reason != "" {
+		return apiv1.CreateSessionRequest{}, usageError("title: %s", sessiontitle.Explain(reason))
 	}
 	workerCap := int32(in.Workers)
 	return apiv1.CreateSessionRequest{
-		Repo: in.Repo, Project: in.Project, Agent: agent, Model: in.Model, Title: in.Title, Mode: "task", Profile: "dev", Size: "M",
+		Repo: in.Repo, Project: in.Project, Agent: agent, Model: in.Model, Title: title, Mode: "task", Profile: "dev", Size: "M",
 		Prompt:         fmt.Sprintf(coordinatorBriefTemplate, strconv.FormatInt(in.Item, 10), strconv.Itoa(in.Hours), strconv.Itoa(in.Workers)),
 		Limits:         &apiv1.Limits{Timeout: fmt.Sprintf("%dh", in.Hours), MaxWorkers: &workerCap},
 		IdempotencyKey: key,

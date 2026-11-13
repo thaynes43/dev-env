@@ -167,7 +167,8 @@ about 1.2 MiB.
 `coordinator_start` takes `item`, exactly one of `repo` or `project`, `model`,
 `hours` (1 to 4) and `workers` (1 to 4). `model` is required. There is no
 default and there is no effort argument. An optional `title` is role text,
-set at create and not changed later. There is no default title. An `effort` field is refused before
+set at create and not changed later. The front door trims its ends, as
+agent-run does, and a refusal names the title argument. There is no default title. An `effort` field is refused before
 any operator request, and so is a missing or unknown model. The accepted full
 ids are `claude-opus-5-5`, `claude-fable-5-2` and `gpt-6-astra`. The Codex id
 needs `project`.

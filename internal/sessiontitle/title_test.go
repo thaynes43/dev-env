@@ -15,25 +15,36 @@ func TestValidate(t *testing.T) {
 	if len(title97) != 97 || utf8.RuneCountInString(title97) != 48 {
 		t.Fatalf("97-byte fixture is %d bytes and %d runes", len(title97), utf8.RuneCountInString(title97))
 	}
+	if n := strings.Repeat("\u4e00", 48); len(n) != 144 || utf8.RuneCountInString(n) != 48 {
+		t.Fatalf("144-byte fixture is %d bytes and %d runes", len(n), utf8.RuneCountInString(n))
+	}
 	cases := []struct {
 		title, reason string
 	}{
 		{"", ""},
 		{"Main coordinator", ""},
 		{"Café", ""},
-		{"€", ""},
+		{"1a", ""},
+		{"e\u0301", ""},
+		{"Main-coordinator", ""},
 		{strings.Repeat("a", 48), ""},
 		{title96, ""},
 		{strings.Repeat("a", 49), ReasonTooLong},
 		{title97, ReasonTooLong},
+		{strings.Repeat("\u4e00", 48), ReasonTooLong},
 		{"|", ReasonCharacters},
 		{"a|b", ReasonCharacters},
 		{"a\u0007b", ReasonCharacters},
+		{"a\tb", ReasonCharacters},
 		{"a\nb", ReasonCharacters},
 		{"a\u200bb", ReasonCharacters},
 		{"a\u00adb", ReasonCharacters},
 		{"a\u00a0b", ReasonCharacters},
 		{"a\U00010000", ReasonCharacters},
+		{"-Main", ReasonCharacters},
+		{".Main", ReasonCharacters},
+		{"!Main", ReasonCharacters},
+		{"€", ReasonCharacters},
 		{" Main", ReasonSpacing},
 		{"Main ", ReasonSpacing},
 		{"Main  coordinator", ReasonSpacing},

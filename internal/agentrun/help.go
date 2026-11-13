@@ -552,6 +552,7 @@ Flags:
                              $DEV_ENV_CLAUDE_MODEL, else ` + DefaultClaudeModel + `)
   --title <text>             optional role text, set at create and not changed
                              later. 1 to 48 characters, at most 96 bytes, no bar.
+                             The first character is a letter or a digit.
                              For claude-opus-5-5 the Claude app shows
                              Opus | Main coordinator. An empty title leaves the
                              app showing the session name
@@ -642,9 +643,10 @@ the layout are listed as unrecognized and never pruned.
   --session <name>   only this session's rescues
   -o json            the API's list as JSON
 
-rescue restore starts a new session that fetches one rescue (D-67). It is a run:
-it takes the same flags (-p or --local, --agent, --model, --effort, --base, --size,
---wait and the rest; agent-run help run lists them). Only a complete rescue can be
+rescue restore starts a new session that fetches one rescue (D-67). It is a create:
+it takes the same flags (-p or --local, --agent, --model, --title, --effort, --base, --size,
+--wait and the rest; agent-run help run lists them). --title sets optional role text on
+the new session, the same way it does on run. Only a complete rescue can be
 restored. The repo is the rescue's only clone, or --repo <name> when it holds several.
 On its first boot the new session's clone fetches the bundle into refs/rescued/. If
 you give no --base and the bundle holds the old session's branch, the worktree

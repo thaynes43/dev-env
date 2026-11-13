@@ -583,4 +583,11 @@ func TestHeartbeatStoresRemoteTitle(t *testing.T) {
 	if rc := f.session(name).Status.RemoteControl; rc == nil || len(rc.Title) > 128 || !strings.HasSuffix(rc.Title, "…") {
 		t.Fatalf("clipped status %+v", rc)
 	}
+	st.RemoteControl.Title = ""
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
+	}
+	if rc := f.session(name).Status.RemoteControl; rc == nil || rc.Title != "" || rc.Name != name || rc.State != protocol.RemoteRegistered {
+		t.Fatalf("a report with no title kept %+v", rc)
+	}
 }

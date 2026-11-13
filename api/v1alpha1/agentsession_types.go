@@ -246,12 +246,13 @@ type AgentSessionSpec struct {
 	//
 	// MaxLength bounds code points. The CEL rules also bound UTF-8 bytes, the
 	// character set and the spacing. Letters, marks, digits, punctuation and
-	// symbols are allowed, plus ASCII space. A bar, a control or format
-	// character, and anything above U+FFFF are not.
+	// symbols are allowed, plus ASCII space. The first character is a letter
+	// or a digit. A bar, a control or format character, and anything above
+	// U+FFFF are not.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=48
 	// +kubebuilder:validation:XValidation:rule="size(bytes(self)) <= 96",message="at most 96 bytes"
-	// +kubebuilder:validation:XValidation:rule="self.matches('^[\\\\p{L}\\\\p{M}\\\\p{Nd}\\\\p{P}\\\\p{S} ]+$') && !self.contains('|') && !self.matches('[\\\\x{10000}-\\\\x{10FFFF}]')",message="letters, marks, digits, punctuation and symbols only, with no bar, no control or format character, and nothing above U+FFFF"
+	// +kubebuilder:validation:XValidation:rule="self.matches('^[\\\\p{L}\\\\p{Nd}][\\\\p{L}\\\\p{M}\\\\p{Nd}\\\\p{P}\\\\p{S} ]*$') && !self.contains('|') && !self.matches('[\\\\x{10000}-\\\\x{10FFFF}]')",message="letters, marks, digits, punctuation and symbols only; the first character is a letter or a digit; no bar, no control or format character, and nothing above U+FFFF"
 	// +kubebuilder:validation:XValidation:rule="!self.startsWith(' ') && !self.endsWith(' ') && !self.contains('  ')",message="no leading or trailing space, and no two spaces in a row"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
@@ -1585,9 +1586,10 @@ type RemoteControlStatus struct {
 	State string `json:"state,omitempty"`
 
 	// Title is the display title agentd passed to the provider at this pod's
-	// launch (DESIGN-065). Empty means it passed the session name. MaxLength
-	// bounds code points; the CEL rule also bounds UTF-8 bytes. The heartbeat
-	// clips a longer value so the stored text fits both.
+	// launch (DESIGN-065). It stays empty until that CLI process is live, and
+	// empty when agentd passed the session name. MaxLength bounds code points;
+	// the CEL rule also bounds UTF-8 bytes. The heartbeat clips a longer value
+	// so the stored text fits both.
 	// +kubebuilder:validation:MaxLength=128
 	// +kubebuilder:validation:XValidation:rule="size(bytes(self)) <= 128",message="at most 128 bytes"
 	// +optional

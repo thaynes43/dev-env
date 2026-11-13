@@ -50,6 +50,13 @@ func TestCreateTitle(t *testing.T) {
 	if len(h.api.requests()) != 0 || !strings.Contains(h.stderr.String(), "title_characters") {
 		t.Fatalf("bar stderr %q", h.stderr.String())
 	}
+	for _, title := range []string{"-Main", ".Main", "!Main", "€Main"} {
+		resetRequests(h)
+		h.mustRun(ExitUsage, "--repo", "haynes-ops", "-p", "fix the docs", "--wait", "0", "--title", title)
+		if len(h.api.requests()) != 0 || !strings.Contains(h.stderr.String(), "title_characters") {
+			t.Fatalf("leading %q stderr %q requests %d", title, h.stderr.String(), len(h.api.requests()))
+		}
+	}
 	h.mustRun(ExitUsage, "--repo", "haynes-ops", "-p", "fix the docs", "--wait", "0", "--title", "Main  coordinator")
 	if len(h.api.requests()) != 0 || !strings.Contains(h.stderr.String(), "title_spacing") {
 		t.Fatalf("spacing stderr %q requests %d", h.stderr.String(), len(h.api.requests()))

@@ -317,7 +317,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		var raw json.RawMessage
 		status, err := a.callWith(ctx, &one, http.MethodPost, apiv1.PilotPreflightPath, nil, req, &raw, false)
 		if err != nil {
-			if next := titleRefusal(err, req.Title); next != err {
+			if next := titleRefusal(err, req.Title); !errors.Is(next, err) {
 				return next
 			}
 			return codexProjectHint(err, req)
@@ -344,7 +344,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		var raw json.RawMessage
 		status, err := a.callWith(ctx, &one, http.MethodPost, apiv1.SessionsPath, nil, req, &raw, false)
 		if err != nil {
-			if next := titleRefusal(err, req.Title); next != err {
+			if next := titleRefusal(err, req.Title); !errors.Is(next, err) {
 				return next
 			}
 			return codexProjectHint(err, req)
@@ -366,7 +366,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	var sess apiv1.Session
 	status, err := a.call(ctx, c, http.MethodPost, apiv1.SessionsPath, nil, req, &sess)
 	if err != nil {
-		if next := titleRefusal(err, req.Title); next != err {
+		if next := titleRefusal(err, req.Title); !errors.Is(next, err) {
 			return next
 		}
 		return codexProjectHint(err, req)

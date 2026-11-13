@@ -680,18 +680,20 @@ spec:
 
                   MaxLength bounds code points. The CEL rules also bound UTF-8 bytes, the
                   character set and the spacing. Letters, marks, digits, punctuation and
-                  symbols are allowed, plus ASCII space. A bar, a control or format
-                  character, and anything above U+FFFF are not.
+                  symbols are allowed, plus ASCII space. The first character is a letter
+                  or a digit. A bar, a control or format character, and anything above
+                  U+FFFF are not.
                 maxLength: 48
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
                 - message: at most 96 bytes
                   rule: size(bytes(self)) <= 96
-                - message: letters, marks, digits, punctuation and symbols only, with
-                    no bar, no control or format character, and nothing above U+FFFF
-                  rule: self.matches('^[\\p{L}\\p{M}\\p{Nd}\\p{P}\\p{S} ]+$') && !self.contains('|')
-                    && !self.matches('[\\x{10000}-\\x{10FFFF}]')
+                - message: letters, marks, digits, punctuation and symbols only; the
+                    first character is a letter or a digit; no bar, no control or
+                    format character, and nothing above U+FFFF
+                  rule: self.matches('^[\\p{L}\\p{Nd}][\\p{L}\\p{M}\\p{Nd}\\p{P}\\p{S}
+                    ]*$') && !self.contains('|') && !self.matches('[\\x{10000}-\\x{10FFFF}]')
                 - message: no leading or trailing space, and no two spaces in a row
                   rule: '!self.startsWith('' '') && !self.endsWith('' '') && !self.contains(''  '')'
                 - message: immutable after create; only operatingMode and lifecycle
@@ -3008,9 +3010,10 @@ spec:
                   title:
                     description: |-
                       Title is the display title agentd passed to the provider at this pod's
-                      launch (DESIGN-065). Empty means it passed the session name. MaxLength
-                      bounds code points; the CEL rule also bounds UTF-8 bytes. The heartbeat
-                      clips a longer value so the stored text fits both.
+                      launch (DESIGN-065). It stays empty until that CLI process is live, and
+                      empty when agentd passed the session name. MaxLength bounds code points;
+                      the CEL rule also bounds UTF-8 bytes. The heartbeat clips a longer value
+                      so the stored text fits both.
                     maxLength: 128
                     type: string
                     x-kubernetes-validations:

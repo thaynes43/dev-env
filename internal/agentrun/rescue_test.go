@@ -122,7 +122,7 @@ func TestRescueUsage(t *testing.T) {
 	contains(t, "stderr", h.stderr.String(), "agent-run rescue restore", `unknown rescue command "frob"`)
 	h.stdout.Reset()
 	h.mustRun(ExitOK, "rescue", "-h")
-	contains(t, "stdout", h.stdout.String(), "rescue restore starts a new session")
+	contains(t, "stdout", h.stdout.String(), "rescue restore starts a new session", "--title")
 	h.stdout.Reset()
 	h.mustRun(ExitOK, "help", "rescue")
 	contains(t, "stdout", h.stdout.String(), "rescue list shows them")
@@ -142,14 +142,14 @@ func TestRescueRestoreDefaultsTheRepoAndHints(t *testing.T) {
 		rescueAt("20261006-2104", repoWith("haynes-ops",
 			"refs/heads/main", "refs/heads/agent/"+rescueSession, "refs/heads/rescue/"+rescueSession+"-0123")),
 	}})
-	h.mustRun(ExitOK, "rescue", "restore", id, "--local", "--wait", "0")
+	h.mustRun(ExitOK, "rescue", "restore", id, "--local", "--wait", "0", "--title", "  Nightly upgrades  ")
 
 	reqs := h.api.requests()
 	if len(reqs) != 2 || reqs[0].method != http.MethodGet || reqs[0].query["session"][0] != rescueSession || reqs[1].method != http.MethodPost {
 		t.Fatalf("requests %+v, want the rescue lookup, then the create", reqs)
 	}
 	got := decodeCreate(t, reqs[1].body)
-	if got.Restore != id || got.Repo != "haynes-ops" || got.Mode != "local" || got.Base != "" {
+	if got.Restore != id || got.Repo != "haynes-ops" || got.Mode != "local" || got.Base != "" || got.Title != "Nightly upgrades" {
 		t.Errorf("create body %+v", got)
 	}
 	contains(t, "stdout", h.stdout.String(),

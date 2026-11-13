@@ -3,6 +3,8 @@ package agentd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,37 +17,39 @@ func TestRemoteTitleArgvAndStatus(t *testing.T) {
 	sess := remoteSession()
 	sess.Repo = "haynes-ops"
 
-	bareArgs := remoteControlArgs(sess)
-	if len(bareArgs) != 2 || bareArgs[0] != "--remote-control" || bareArgs[1] != sess.Name {
-		t.Fatalf("untitled args %q", bareArgs)
-	}
-	if again := remoteControlArgs(sess); strings.Join(again, "\x00") != strings.Join(bareArgs, "\x00") {
-		t.Fatalf("untitled args changed %q", again)
-	}
+	// These argv are what origin/main at b9e23135 builds for an untitled Claude
+	// remote session. The conversation id is minted; everything else is fixed.
+	guard := fmt.Sprintf("You are working in an isolated git worktree (%s) on branch %s. "+
+		"Stay inside it. NEVER push to main: commit to %s, push that branch, and "+
+		"open a PR with 'gh pr create' when the work is ready. If the work needs extra "+
+		"git worktrees, create them under %s and 'git worktree remove' each once its PR "+
+		"merges; never leave stranded worktrees behind.", ws.Worktree, ws.Branch, ws.Branch, s.WorkDir())
 
 	first, err := BuildLaunch(s, sess, ws, "boot1", rescueNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := BuildLaunch(s, sess, ws, "boot1", rescueNow)
-	if err != nil {
-		t.Fatal(err)
+	wantLaunch := []string{
+		"claude", "--model", "claude-haiku-4-5", "--dangerously-skip-permissions",
+		"--session-id", first.ConversationID,
+		"--remote-control", "dev-env-1019-120000",
+		"--append-system-prompt", guard,
 	}
-	nameA, sigA := argvSignature(first.Argv)
-	nameB, sigB := argvSignature(second.Argv)
-	if nameA != sess.Name || nameB != sess.Name || sigA != sigB {
-		t.Fatal("two untitled launches differ aside from the minted session id")
+	if !slices.Equal(first.Argv, wantLaunch) {
+		t.Fatalf("untitled launch argv\n got %q\nwant %q", first.Argv, wantLaunch)
 	}
 	resumeA, err := BuildResume(s, sess, ws, first, "boot2", rescueNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumeB, err := BuildResume(s, sess, ws, first, "boot2", rescueNow)
-	if err != nil {
-		t.Fatal(err)
+	wantResume := []string{
+		"claude", "--model", "claude-haiku-4-5", "--dangerously-skip-permissions",
+		"--resume", first.ConversationID,
+		"--remote-control", "dev-env-1019-120000",
+		"--append-system-prompt", guard,
 	}
-	if strings.Join(resumeA.Argv, "\x00") != strings.Join(resumeB.Argv, "\x00") {
-		t.Fatalf("untitled resume argv differs\n%q\n%q", resumeA.Argv, resumeB.Argv)
+	if !slices.Equal(resumeA.Argv, wantResume) {
+		t.Fatalf("untitled resume argv\n got %q\nwant %q", resumeA.Argv, wantResume)
 	}
 
 	sess.Title = "Main coordinator"
@@ -73,8 +77,17 @@ func TestRemoteTitleArgvAndStatus(t *testing.T) {
 	}
 
 	sess.Title = ""
-	if strings.Join(remoteControlArgs(sess), "\x00") != strings.Join(bareArgs, "\x00") {
+	if !slices.Equal(remoteControlArgs(sess), []string{"--remote-control", "dev-env-1019-120000"}) {
 		t.Fatal("clearing the title did not restore the arguments")
+	}
+
+	// A title that somehow starts with a hyphen, on a model outside the family
+	// table, must not be passed: the CLI would read it as an option.
+	unsafe := remoteSession()
+	unsafe.Model = "claude-3-5-haiku-20241022"
+	unsafe.Title = "-settings"
+	if got := remoteControlArgs(unsafe); !slices.Equal(got, []string{"--remote-control", unsafe.Name}) {
+		t.Fatalf("hyphen title args %q", got)
 	}
 
 	codex := remoteSession()
@@ -85,6 +98,9 @@ func TestRemoteTitleArgvAndStatus(t *testing.T) {
 		t.Fatalf("codex args %q", got)
 	}
 	rc := collectRemoteControl(s, sess, false, agentPid{}, false)
+	if rc.Title != "" || rc.Name != sess.Name {
+		t.Fatalf("untitled collectRemoteControl: %+v", rc)
+	}
 	sess.Title = "Main coordinator"
 	rc = collectRemoteControl(s, sess, false, agentPid{}, false)
 	if rc.Title != "" || rc.Name != sess.Name {
@@ -99,13 +115,20 @@ func TestRemoteTitleArgvAndStatus(t *testing.T) {
 	titledSess := remoteSession()
 	titledSess.Title = "Main coordinator"
 	st := CollectStatus(context.Background(), &fakeRunner{}, s, titledSess, rescueNow)
-	if st.RemoteControl == nil || st.RemoteControl.Title != "Haiku | Main coordinator" || st.RemoteControl.Name != titledSess.Name {
-		t.Fatalf("boot status %+v", st.RemoteControl)
+	if st.RemoteControl == nil || st.RemoteControl.Title != "" || st.RemoteControl.Name != titledSess.Name {
+		t.Fatalf("boot status reported a title before launch: %+v", st.RemoteControl)
 	}
 	writeJSON(t, s.statePath(bootFile), bootRecord{BootID: "boot-ready", Boot: protocol.BootReady})
+	waiting := CollectStatus(context.Background(), &fakeRunner{}, s, titledSess, rescueNow)
+	if waiting.RemoteControl == nil || waiting.RemoteControl.Title != "" {
+		t.Fatalf("login wait reported a title: %+v", waiting.RemoteControl)
+	}
+	writeJSON(t, s.statePath(launchFile), Launch{
+		Session: titledSess.Name, BootID: "boot-ready", TUI: true, CreatedAt: rescueNow, ConversationID: "conv-1",
+	})
 	ready := CollectStatus(context.Background(), &fakeRunner{}, s, titledSess, rescueNow)
-	if ready.RemoteControl == nil || ready.RemoteControl.Title != "Haiku | Main coordinator" {
-		t.Fatalf("ready status %+v", ready.RemoteControl)
+	if ready.RemoteControl == nil || ready.RemoteControl.Title != "Haiku | Main coordinator" || ready.Agent.State != protocol.AgentBusy {
+		t.Fatalf("live status %+v agent %s", ready.RemoteControl, ready.Agent.State)
 	}
 	codexBoot := CollectStatus(context.Background(), &fakeRunner{}, s, codex, rescueNow)
 	if codexBoot.RemoteControl != nil && codexBoot.RemoteControl.Title != "" {
