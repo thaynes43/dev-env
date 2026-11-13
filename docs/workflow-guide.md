@@ -1962,10 +1962,11 @@ None is a ruling by Tom.
   capped events at or after the pager's first run (`digest.since`, set by
   the first tick of a keeper with the digest) are listed. The digest goes 24
   hours after the last one, to the second, or early once 8 lines are
-  pending, and never while nothing is pending. Before the first digest the
-  reference is the pager's first run, so the first real digest after install
-  can wait up to a day; v1's went at once. It is outside the cap: it takes no
-  slot and a full hour of pages does not delay it. Its one link is the
+  pending and at least an hour has passed since the last one, and never
+  while nothing is pending. Before the first digest the reference is the
+  pager's first run, so the first real digest after install can wait up to a
+  day (an hour with 8 lines); v1's went at once. It is outside the cap: it
+  takes no slot and a full hour of pages does not delay it. Its one link is the
   console's sessions list. The message, footer included, is at most 950
   characters of whole lines; when lines are left out, a footer says how many,
   and they are in that same digest, never sent again. Once each: a line's
@@ -1978,8 +1979,21 @@ None is a ruling by Tom.
   holds the title, priority, time, state, line count and request id, never
   the text. An entry the digest still needs is never pruned. At most 256
   lines wait at once (`summon digest pending capacity reached`). A session
-  deleted before the next tick can miss its line, and a capped event a keeper
-  without the digest recorded is in no digest.
+  deleted before the next tick can miss its line. A capped event is in no
+  digest when it was recorded before the pager's first run, or when its
+  entry was pruned before a digest listed it.
+  *Correction, 2026-11-13: story 792 fix round 1, coordinator rulings in PR
+  1126 comment 6844882457; not a ruling by Tom.* The early digest has a floor
+  of one hour: 8 or more pending lines wait until an hour has passed since the
+  last digest (before the first, since the pager's first run), so 8 new lines
+  a minute mean at most one digest an hour; the 24-hour rule is unchanged,
+  and the 256-line pending bound and the 2048-entry dedupe bound still hold
+  while lines wait. When `digest.since` or
+  `digest.lastAt` is ahead of the keeper's clock, the pager logs one fixed
+  line a tick, `summon digest ledger time is ahead of the keeper's clock`,
+  with no name or value, and no digest goes until the clock has passed the
+  last one by the hour or the day. A close already in `digest.listed` is not
+  listed again, even when its ledger entry is gone.
 - **The text.** Fixed templates in keeper source. A page starts `[dev-env]`
   and the event; a drill starts `DRILL`. A session's note follows the label
   `session note:`. Every control or format character and every line or

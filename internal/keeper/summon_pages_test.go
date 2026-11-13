@@ -862,6 +862,11 @@ func TestSummonPagesLedgerSchemaRoundTrip(t *testing.T) {
 		l.State.Overflow["upgrade-agent.alert-responder"].LastPagedCount != 3 {
 		t.Fatalf("later members not kept: %+v", l.State)
 	}
+	// The listed key whose dedupe entry is absent was proved gone, so the
+	// reservation drops it on purpose (story 792 fix round 1, ruling 4).
+	if _, ok := l.State.Digest.Listed["00000000-0000-4000-8000-000000000008/digest"]; ok {
+		t.Fatalf("a listed key without its dedupe entry stayed after the reservation: %+v", l.State.Digest.Listed)
+	}
 	// A fresh ledger writes every member, empty.
 	g := newSummonFix(t)
 	g.opts.Drill = "d1"
