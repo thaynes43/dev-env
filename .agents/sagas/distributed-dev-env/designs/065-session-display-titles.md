@@ -555,11 +555,22 @@ the parent of `dev-env-1111-143337` and `haynes-ops-1109-230612`, and
 `haynes-ops-1111-144013` (read-only `kubectl -n dev-agents get
 agentsessions`, 2026-11-13).
 
+Tested after the first draft, on the same unused test session at about
+03:28Z on 2026-11-13 (the coordinator): text typed into the input line and
+not sent left the record's `status`, `updatedAt` and `statusUpdatedAt`
+unchanged, and the input row showed the prompt mark followed by exactly that
+text. So the second check of rule 8.6 can require an unchanged `updatedAt`.
+
 Not tested: what a question or permission prompt sets in the record's
-`status`; how an empty input line renders in `tmux capture-pane`; whether a
-bracketed paste of the command runs it; whether the owner's rename in the
-Claude app reaches the record; whether a resume with a different name
-replaces a name that was only set at launch.
+`status`; what the record's `status` "shell" means, and so whether a
+session that keeps a background command running ever reads "idle" (two of
+the four working coordinators read "shell", one of them for hours; rule 8.5
+holds on it, and a held rename has no expiry, so such a session may wait
+for its title until this is known); how a question or a permission prompt
+renders in `tmux capture-pane`; whether a bracketed paste of the command
+runs it; whether the owner's rename in the Claude app reaches the record;
+whether a resume with a different name replaces a name that was only set at
+launch.
 
 ### 9.2 Rules
 
@@ -723,6 +734,7 @@ held reason. A read that fails or times out holds the rename.
 5. **Idle and quiet.** `status` is exactly "idle", and `updatedAt` is at
    least 30 seconds before now and not after now. "busy" holds with
    `busy`, "waiting" with `waiting`, any other value with `status-unknown`,
+   an "idle" whose `updatedAt` is less than 30 seconds old with `quiet`,
    a future `updatedAt` with `clock`. Reason "waiting" is never acceptable:
    it means the CLI waits on a person (`claudeWaiting` in `activity.go`), so
    the open input is that person's answer, which is the harm of item 501
@@ -760,9 +772,11 @@ held reason. A read that fails or times out holds the rename.
 10. **Pacing.** At least 10 minutes since `lastTypedAt`, and fewer than 2
     attempts at this T. Reason `paced`.
 11. **The delivery lock.** agentd takes `deliver.lock` (`deliverLockFile` in
-    `deliver.go`) without waiting and holds it from condition 2 to the
-    Enter, so an `agent-run msg` delivery and a rename never interleave.
-    Reason `delivering`.
+    `deliver.go`) without waiting, right after condition 1 and before any
+    other read, and holds it to the Enter, so an `agent-run msg` delivery
+    and a rename never interleave. If a delivery holds the lock, the rename
+    is held with reason `delivering` and conditions 2 to 10 are not read.
+    It is listed last only because it brackets the others.
 
 **8.6 The keystrokes.** The text is exactly `/rename ` followed by T. T is
 the `remoteControlTitle` value (`sessiontitle.Compose` of a title that passes
@@ -855,7 +869,7 @@ Status fields, in `status.remoteControl` (`protocol.RemoteControl` and
   - `state`: Applied, Held, Typed, Failed or Unknown (enum, `MaxLength` 16);
   - `reason`: one code (enum, `MaxLength` 32): `launch`, `confirmed` or
     `already` when Applied; `process`, `not-registered`, `busy`, `waiting`,
-    `status-unknown`, `clock`, `attached`, `pane`, `cli-version`, `input`,
+    `status-unknown`, `quiet`, `clock`, `attached`, `pane`, `cli-version`, `input`,
     `screen-unknown`, `paced` or `delivering` when Held; none when Typed;
     `left-in-input`, `not-confirmed` or `invalid-title` when Failed;
     `record-shape` when Unknown;
@@ -974,7 +988,11 @@ record file the test writes, a fake clock and a fake heartbeat answer.
 **Live proof**, on the unused test session `dev-env-1113-004614` only (or
 another fresh, unused one), after install, by the coordinator:
 
-1. Record the screen fixtures from it first, read-only, with `capture-pane`.
+1. Record the screen fixtures from it first, read-only, with `capture-pane`:
+   an idle screen with an empty input line, with and without the CLI's
+   placeholder text, and the screen while the command is typed. Read what
+   `status` the record shows while a background command runs and while a
+   question is open, and write both into section 9.1 before slice 4.
 2. R0 of section 5.
 3. A recorded change while it is idle with an empty input line: within two
    heartbeats, `rename` is Applied, `providerTitle` is the composed title,

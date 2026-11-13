@@ -16,7 +16,8 @@ coordinator. A session gets an optional title beside its stable name,
 shown as `<Family> | <role>`, set at create, recorded by the platform when
 it changes, and passed to the provider at the next launch or resume. The
 platform types into a session only for the guarded rename of ADR-026
-(OP787, above). Slice 1 is built, not installed. The
+(OP787, above). Slice 1 is installed, except its front door pin (item 785
+comment 7560). The
 owner's phone test of its section 5 is withdrawn after Tom's answer of
 2026-11-13 (ruling 7, amended): agents do the naming, so slice 3 is required,
 and ADR-026 comes before it.

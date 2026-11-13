@@ -102,8 +102,8 @@ and no ordering of checks makes a read atomic with a keystroke.
    belongs to this boot's live process; "waiting" is never accepted.
    Remote Control is registered. No tmux client is attached. The pane is
    the only pane, unsynchronised, not in a mode, and runs the CLI in the
-   foreground; keys go to its pane id. The CLI version is one whose screens
-   the build recorded. The screen shows an empty input line and no prompt.
+   foreground; keys go to its pane id. The CLI version has the same major and
+   minor number as one whose screens the build recorded. The screen shows an empty input line and no prompt.
    The last typed rename is at least 10 minutes old.
 5. **A second check before Enter.** After typing the text, agentd reads the
    pane, the record and the clients again. Enter is pressed only if nothing
