@@ -81,10 +81,7 @@ type lastTurn struct {
 	// Unknown until a checkpoint, and if it lacks these fields nothing is Accepted
 	// and a marker clears only by a newer generation.
 	Accepted bool
-	// ErrorText is an API-error entry's text, lower-cased; empty otherwise.
-	// The model pre-flight names a refusal's cause by it (preflight.go).
-	ErrorText string
-	At        time.Time
+	At       time.Time
 	// RequestAt: for an assistant entry, the timestamp of the nearest earlier
 	// non-sidechain user entry (the prompt or the tool_result that triggered the
 	// request); zero when none is in the tail. The rejection marker attributes a
@@ -193,7 +190,6 @@ func classifyEntries(tail []byte, assistantOnly bool) lastTurn {
 			response := acceptedResponse(e.Message)
 			if e.IsAPIError || (!response && strings.HasPrefix(strings.TrimSpace(text), "api error")) {
 				t.APIError = true
-				t.ErrorText = text
 				if string(e.APIErrorStatus) == "401" || string(e.Error) == `"`+authErrorCode+`"` {
 					t.Revoked = true
 				}

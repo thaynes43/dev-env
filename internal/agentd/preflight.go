@@ -1,11 +1,14 @@
 package agentd
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -103,13 +106,17 @@ type preflightOutcome struct {
 var preflightTurn = runPreflightTurn
 
 // preflightArgv is a pre-flight turn's command: one headless turn on model
-// with no tools (--tools ""), no MCP servers, no saved session and one turn
-// at most, its output as stream-json for classifyPreflight. The prompt goes
-// to stdin. No --dangerously-skip-permissions: with no tools there is
-// nothing to permit.
+// with no tools (--tools ""), no user, project or local settings and so none
+// of their hooks (--setting-sources "", ruling 4 of story 791 fix round 1),
+// no MCP servers, no saved session and one turn at most, its output as
+// stream-json for classifyPreflight. The prompt goes to stdin. No
+// --dangerously-skip-permissions: with no tools there is nothing to permit.
+// No --bare: it reads no OAuth token. The login still comes from the
+// environment, which no settings source carries: the answer in
+// testdata/preflight was captured with these flags.
 func preflightArgv(bin, model string) []string {
 	return []string{bin, "--model", model,
-		"--tools", "", "--strict-mcp-config", "--no-session-persistence", "--max-turns", "1",
+		"--tools", "", "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence", "--max-turns", "1",
 		"--output-format", "stream-json", "--verbose", "-p"}
 }
 
@@ -290,45 +297,172 @@ func runPreflightTurn(l Launch, model string, limit time.Duration, signals <-cha
 		out.Failure = protocol.StartFailureNoAnswer
 		return out
 	}
-	out.Answered, out.Failure = classifyPreflight(stdout.Bytes(), exitCode(cmd, werr) == 0)
+	out.Answered, out.Failure = classifyPreflight(stdout.Bytes(), exitCode(cmd, werr) == 0, model)
 	return out
 }
 
-// The fragments v1's probe_model reads as a refusal (session-launch.sh line
-// 121), split by cause. They are matched only on an entry classifyEntries
-// already calls an API error, so a reply that quotes them is never one. Not
-// verified against the real CLI: no test calls a provider.
+// How a pre-flight turn's stream is read (story 791 fix round 1, coordinator
+// rulings 1 and 2 in PR 1120 comment 6843361182; not rulings by Tom). Claude
+// Code 2.1.321 really writes these (testdata/preflight): the stream's own
+// field names, not the transcript's, so the session transcript's classifier
+// (classifyLastAssistant) is not used here and is unchanged.
+//
+// An entry is an API error when it carries the flag (is_api_error_message,
+// or the transcript's isApiErrorMessage), an error code, an error status
+// (api_error_status or apiErrorStatus), or, without a real response, text
+// that starts "API Error". Its cause is read from the error code first, then
+// the status, and only then from the CLI's wording. A reply that quotes those
+// words is not an API error, so it is still an answer.
+
+// The CLI's error codes (the entry's top-level "error") and statuses that
+// name a cause. authentication_failed (a missing login and a rejected token)
+// and model_not_found with 404 are from real streams; rate_limit,
+// billing_error and 429 are the CLI's own strings, NOT VERIFIED AGAINST A
+// REAL STREAM (no quota refusal could be captured).
 var (
-	preflightQuotaFragments = []string{"out of usage credits", "usage limit", "rate limit"}
-	preflightModelFragments = []string{"unknown model", "invalid model", "not available", "/model to switch"}
+	preflightLoginCodes = []string{"authentication_failed"}
+	preflightModelCodes = []string{"model_not_found"}
+	preflightQuotaCodes = []string{"rate_limit", "billing_error"}
 )
 
-// classifyPreflight reads a pre-flight turn's stream-json output with the
-// classifier agentd already uses for a session's transcript
-// (classifyLastAssistant). A rejected login is its Revoked; an answer is its
-// Accepted, a real model response, from a CLI that exited 0. An API error
-// names a quota or a model refusal by v1's fragments. Anything else, an
-// unmatched API error or no entry at all, is no answer (op791-a-1).
-func classifyPreflight(stdout []byte, exitOK bool) (answered bool, failure string) {
-	t := classifyLastAssistant(stdout)
-	switch {
-	case t.Revoked:
-		return false, protocol.StartFailureLoginRejected
-	case t.Accepted && exitOK:
+// The wordings, lower-case, read only when the code and the status name no
+// cause. A rejected login: the transcript's markers (authErrorMarkers) and
+// the two real streams' "not logged in" and "failed to authenticate". A
+// refused model: v1's fragments (session-launch.sh line 121) and the real
+// stream's wording. A quota refusal: v1's fragments, not verified.
+var (
+	preflightLoginFragments = []string{"not logged in", "failed to authenticate"}
+	preflightModelFragments = []string{"unknown model", "invalid model", "not available", "/model to switch",
+		"issue with the selected model", "may not exist or you may not have access"}
+	preflightQuotaFragments = []string{"out of usage credits", "usage limit", "rate limit"}
+)
+
+// preflightEntry is one line of a pre-flight turn's stream-json output. Each
+// field is kept raw, so one of an unexpected type never fails the line.
+type preflightEntry struct {
+	Type        string          `json:"type"`
+	Flag        json.RawMessage `json:"is_api_error_message"`
+	FlagCamel   json.RawMessage `json:"isApiErrorMessage"`
+	Status      json.RawMessage `json:"api_error_status"`
+	StatusCamel json.RawMessage `json:"apiErrorStatus"`
+	Error       json.RawMessage `json:"error"`
+	Message     json.RawMessage `json:"message"`
+}
+
+// classifyPreflight reads the last assistant entry of a pre-flight turn's
+// stream for asked, the model the turn was run on. Answered: a real response
+// (a model name other than "<synthetic>" and non-zero usage, as
+// acceptedResponse reads it) from asked (answeredBy), from a CLI that exited
+// 0. A real response from another model is a refused model: the CLI can fall
+// back to another model by itself (ruling 2). An API error is a rejected
+// login, a refused model or a quota refusal by its code, its status or its
+// wording, else no answer; so is anything else (op791-a-1).
+func classifyPreflight(stdout []byte, exitOK bool, asked string) (answered bool, failure string) {
+	lines := bytes.Split(stdout, []byte("\n"))
+	for i := len(lines) - 1; i >= 0; i-- {
+		var e preflightEntry
+		if json.Unmarshal(bytes.TrimSpace(lines[i]), &e) != nil || e.Type != "assistant" {
+			continue
+		}
+		text := strings.ToLower(entryText(e.Message))
+		response := acceptedResponse(e.Message)
+		code := rawJSONString(e.Error)
+		status := rawJSONStatus(e.Status)
+		if status == 0 {
+			status = rawJSONStatus(e.StatusCamel)
+		}
+		apiError := rawJSONTrue(e.Flag) || rawJSONTrue(e.FlagCamel) || code != "" || status != 0 ||
+			(!response && strings.HasPrefix(strings.TrimSpace(text), "api error"))
+		switch {
+		case apiError:
+			return false, preflightRefusal(code, status, text)
+		case !response:
+			return false, protocol.StartFailureNoAnswer
+		case !answeredBy(asked, responseModel(e.Message)):
+			return false, protocol.StartFailureModelRefused
+		case !exitOK:
+			return false, protocol.StartFailureNoAnswer
+		}
 		return true, ""
-	case t.APIError:
-		for _, f := range preflightQuotaFragments {
-			if strings.Contains(t.ErrorText, f) {
-				return false, protocol.StartFailureQuotaRefused
-			}
-		}
-		for _, f := range preflightModelFragments {
-			if strings.Contains(t.ErrorText, f) {
-				return false, protocol.StartFailureModelRefused
-			}
-		}
 	}
 	return false, protocol.StartFailureNoAnswer
+}
+
+// preflightRefusal is an API-error entry's cause: by its code, then its
+// status, then its wording; no answer when none names one.
+func preflightRefusal(code string, status int, text string) string {
+	switch {
+	case slices.Contains(preflightLoginCodes, code):
+		return protocol.StartFailureLoginRejected
+	case slices.Contains(preflightModelCodes, code):
+		return protocol.StartFailureModelRefused
+	case slices.Contains(preflightQuotaCodes, code):
+		return protocol.StartFailureQuotaRefused
+	case status == 401:
+		return protocol.StartFailureLoginRejected
+	case status == 404:
+		return protocol.StartFailureModelRefused
+	case status == 429:
+		return protocol.StartFailureQuotaRefused
+	case containsFragment(text, authErrorMarkers) || containsFragment(text, preflightLoginFragments):
+		return protocol.StartFailureLoginRejected
+	case containsFragment(text, preflightQuotaFragments):
+		return protocol.StartFailureQuotaRefused
+	case containsFragment(text, preflightModelFragments):
+		return protocol.StartFailureModelRefused
+	}
+	return protocol.StartFailureNoAnswer
+}
+
+// answeredBy reports whether got, the model an answer names, is asked: the
+// same id, or asked with a date suffix (-YYYYMMDD), either with or without
+// "[1m]". The real answer names exactly the asked id (testdata/preflight).
+func answeredBy(asked, got string) bool {
+	a, g := strings.TrimSuffix(asked, "[1m]"), strings.TrimSuffix(got, "[1m]")
+	if a == "" || g == "" {
+		return false
+	}
+	if g == a {
+		return true
+	}
+	date, ok := strings.CutPrefix(g, a+"-")
+	return ok && len(date) == 8 && strings.Trim(date, "0123456789") == ""
+}
+
+// responseModel is the model a message names.
+func responseModel(msg json.RawMessage) string {
+	var m struct {
+		Model string `json:"model"`
+	}
+	_ = json.Unmarshal(msg, &m)
+	return m.Model
+}
+
+func containsFragment(text string, fragments []string) bool {
+	return slices.ContainsFunc(fragments, func(f string) bool { return strings.Contains(text, f) })
+}
+
+// rawJSONTrue: the value is JSON true.
+func rawJSONTrue(r json.RawMessage) bool { return string(bytes.TrimSpace(r)) == "true" }
+
+// rawJSONString is a JSON string's value; "" for anything else.
+func rawJSONString(r json.RawMessage) string {
+	var s string
+	_ = json.Unmarshal(r, &s)
+	return s
+}
+
+// rawJSONStatus is an HTTP status given as a JSON number or string; 0 for
+// anything else.
+func rawJSONStatus(r json.RawMessage) int {
+	var n int
+	if json.Unmarshal(r, &n) == nil {
+		return n
+	}
+	if n, err := strconv.Atoi(rawJSONString(r)); err == nil {
+		return n
+	}
+	return 0
 }
 
 // readPreflight reads start-preflight.json for the summoned launch first.

@@ -4,14 +4,18 @@ package agentd
 // model before it starts and falls back once. Every test runs on run-agent's
 // fake clock (runAgentNow). The pre-flight turns are an in-process provider
 // stand-in (preflightTurn), so no turn depends on goroutine timing; the real
-// start is the fake CLI, which records the argv it was started with. Two
-// tests run the real turn runner on a fake CLI, to show its argument list
-// and its stop at the limit. No test calls a real provider, and every test
-// that starts a child process scrubs the cluster environment first.
+// start is the fake CLI, which records the argv it was started with. Three
+// tests run the real turn runner: two on a fake CLI, to show its argument
+// list and its stop at the limit, and one on TestMain's claude guard, to show
+// no test can reach the real CLI. The classifier's cases are the streams the
+// real CLI wrote (testdata/preflight) and fields taken from them. No test
+// calls a real provider, and every test that starts a child process scrubs
+// the cluster environment first.
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,14 +33,6 @@ const preflightFallback = "claude-opus-5"
 const preflightAccepted = `{"type":"system","subtype":"init","model":"claude-opus-5-5","session_id":"probe"}
 {"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":3,"output_tokens":1},"content":[{"type":"text","text":"ok"}]}}
 {"type":"result","subtype":"success","is_error":false,"num_turns":1}`
-
-// preflightAnswerSh answers a pre-flight turn in a fake CLI (fakeCLI).
-const preflightAnswerSh = `case " $* " in *" --no-session-persistence "*)
-cat > /dev/null
-printf '%s\n' '{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":3,"output_tokens":1},"content":[{"type":"text","text":"ok"}]}}' '{"type":"result","subtype":"success","is_error":false,"num_turns":1}'
-exit 0;;
-esac
-`
 
 // scrubClusterEnv removes every KUBERNETES_* variable from this test
 // process's environment for the test and points KUBECONFIG at a missing
@@ -667,39 +663,121 @@ func TestOrdinaryTaskRunsNoPreflight(t *testing.T) {
 	}
 }
 
-// classifyPreflight reads a turn with agentd's transcript classifier: an
-// answer is a real model response from a CLI that exited 0; a rejected login
-// is its Revoked; an API error names a quota or model refusal by v1's
-// fragments; anything else is no answer.
+// preflightStream is one stream Claude Code 2.1.321 really wrote for a
+// pre-flight turn (testdata/preflight/README.md says whose capture each is).
+func preflightStream(t *testing.T, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "preflight", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// Ruling 1 of story 791 fix round 1 (PR 1120 comment 6843361182): the
+// pre-flight reads the fields the stream really carries. Each case is a real
+// stream: an answer, a refused model, a missing login and a rejected token.
+// Ruling 2: the answer counts only for the model that was asked.
+func TestClassifyPreflightRealStreams(t *testing.T) {
+	for _, tc := range []struct {
+		name, file, asked string
+		exitOK            bool
+		answered          bool
+		failure           string
+	}{
+		{"an answer", "answer.jsonl", "claude-opus-5-5", true, true, ""},
+		{"an answer from a CLI that exited non-zero", "answer.jsonl", "claude-opus-5-5", false, false, protocol.StartFailureNoAnswer},
+		{"an answer from a model that was not asked", "answer.jsonl", "claude-opus-5", true, false, protocol.StartFailureModelRefused},
+		{"a refused model", "refused-model.jsonl", "claude-nonexistent-0-0", false, false, protocol.StartFailureModelRefused},
+		{"a missing login", "login-missing.jsonl", "claude-opus-5-5", false, false, protocol.StartFailureLoginRejected},
+		{"a rejected token", "login-rejected.jsonl", "claude-opus-5-5", false, false, protocol.StartFailureLoginRejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			answered, failure := classifyPreflight([]byte(preflightStream(t, tc.file)), tc.exitOK, tc.asked)
+			if answered != tc.answered || failure != tc.failure {
+				t.Fatalf("answered=%v failure=%q, want %v %q", answered, failure, tc.answered, tc.failure)
+			}
+		})
+	}
+}
+
+// The classifier's other cases, each built from a real stream's fields with
+// one thing changed. The error code and status decide first, in either
+// spelling of the flag and the status; the CLI's wordings are a second line,
+// read only on an API-error entry, so a reply that quotes them is an answer.
+// The quota cases are NOT VERIFIED AGAINST A REAL STREAM: no quota refusal
+// could be captured, so they rest on the CLI's own error codes and strings
+// (rate_limit, billing_error, 429) and v1's fragments.
 func TestClassifyPreflight(t *testing.T) {
-	apiError := func(text, extra string) string {
-		return `{"type":"assistant","message":{"model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0},"content":[{"type":"text","text":"` + text + `"}]}` + extra + `}
-{"type":"result","subtype":"success","is_error":true,"num_turns":1}`
+	const asked = "claude-opus-5-5"
+	// apiError is the refused-model stream's assistant entry with its text and
+	// its top-level fields replaced.
+	apiError := func(text, fields string) string {
+		return `{"type":"system","subtype":"init","model":"claude-opus-5-5"}
+{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"` + text + `"}],"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}` + fields + `}
+{"type":"result","subtype":"success","is_error":true}`
+	}
+	// answer is the answer stream with its model and text replaced.
+	answer := func(model, text string) string {
+		return `{"type":"system","subtype":"init","model":"` + asked + `"}
+{"type":"assistant","message":{"model":"` + model + `","content":[{"type":"text","text":"` + text + `"}],"usage":{"input_tokens":2,"output_tokens":4}}}
+{"type":"result","subtype":"success","is_error":false}`
 	}
 	for _, tc := range []struct {
 		name     string
 		stream   string
+		asked    string
 		exitOK   bool
 		answered bool
 		failure  string
 	}{
-		{"an answer", preflightAccepted, true, true, ""},
-		{"an answer from a CLI that exited non-zero", preflightAccepted, false, false, protocol.StartFailureNoAnswer},
-		{"an answer that quotes a refusal", strings.Replace(preflightAccepted, `"text":"ok"`, `"text":"ok, no rate limit or unknown model here"`, 1), true, true, ""},
-		{"a 401 by its error code", apiError("API Error: 401 OAuth token has been revoked", `,"error":"authentication_failed"`), false, false, protocol.StartFailureLoginRejected},
-		{"a 401 by its text", apiError("API Error: 401 authentication_error: invalid bearer token", ""), false, false, protocol.StartFailureLoginRejected},
-		{"a quota refusal", apiError("API Error: You're out of usage credits for this model", ""), false, false, protocol.StartFailureQuotaRefused},
-		{"a usage limit", apiError("API Error: 429 Claude usage limit reached", ""), false, false, protocol.StartFailureQuotaRefused},
-		{"a rate limit", apiError("API Error: Rate limit exceeded", ""), false, false, protocol.StartFailureQuotaRefused},
-		{"an unknown model", apiError("API Error: 404 unknown model claude-fable-9", ""), false, false, protocol.StartFailureModelRefused},
-		{"a model not available", apiError("API Error: claude-fable-5-2 is not available on this plan; use /model to switch", ""), false, false, protocol.StartFailureModelRefused},
-		{"an unmatched API error", apiError("API Error: 500 internal server error", ""), false, false, protocol.StartFailureNoAnswer},
-		{"refusal words outside an API error", `{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"usage limit"}]}}`, false, false, protocol.StartFailureNoAnswer},
-		{"no output at all", "", false, false, protocol.StartFailureNoAnswer},
-		{"output that is not JSON", "Error: something went wrong\n", false, false, protocol.StartFailureNoAnswer},
+		// Ruling 2: which model answered.
+		{"the asked model with a date suffix", answer("claude-opus-5-5-20261101", "ok"), asked, true, true, ""},
+		{"the asked model with [1m]", answer("claude-opus-5-5[1m]", "ok"), asked, true, true, ""},
+		{"asked with [1m], answered without", answer("claude-opus-5-5", "ok"), "claude-opus-5-5[1m]", true, true, ""},
+		{"another model answered", answer("claude-sonnet-5-5", "ok"), asked, true, false, protocol.StartFailureModelRefused},
+		{"a longer id is another model", answer("claude-opus-5-5", "ok"), "claude-opus-5", true, false, protocol.StartFailureModelRefused},
+		{"another dated snapshot is another model", answer("claude-opus-5-5-20250101", "ok"), "claude-opus-5-5-20261101", true, false, protocol.StartFailureModelRefused},
+		{"a suffix that is not a date", answer("claude-opus-5-5-beta", "ok"), asked, true, false, protocol.StartFailureModelRefused},
+		// The model_fallback entry is the CLI's own schema (2.1.321), not a
+		// captured stream.
+		{"the CLI fell back to another model by itself",
+			apiError("There's an issue with the selected model (claude-opus-5-5).", `,"error":"model_not_found","is_api_error_message":true,"api_error_status":404`) + "\n" +
+				`{"type":"system","subtype":"model_fallback","trigger":"model_not_found","original_model":"claude-opus-5-5","fallback_model":"claude-sonnet-5-5"}` + "\n" +
+				answer("claude-sonnet-5-5", "ok"), asked, true, false, protocol.StartFailureModelRefused},
+		{"a reply that quotes every wording", answer(asked, "ok: not logged in, please run /login, failed to authenticate, model_not_found, usage limit, rate limit, unknown model, may not exist or you may not have access"), asked, true, true, ""},
+		// Both spellings of the flag and the status.
+		{"the transcript's flag spelling", apiError("There's an issue with the selected model (x). It may not exist or you may not have access to it.", `,"isApiErrorMessage":true`), asked, false, false, protocol.StartFailureModelRefused},
+		{"the transcript's status spelling", apiError("Failed to authenticate.", `,"isApiErrorMessage":true,"apiErrorStatus":401`), asked, false, false, protocol.StartFailureLoginRejected},
+		{"a status as a string", apiError("Failed.", `,"is_api_error_message":true,"api_error_status":"401"`), asked, false, false, protocol.StartFailureLoginRejected},
+		// The code and the status decide before the text.
+		{"a 401 by its status alone", apiError("API Error: request failed", `,"is_api_error_message":true,"api_error_status":401`), asked, false, false, protocol.StartFailureLoginRejected},
+		{"a 404 by its status alone", apiError("API Error: request failed", `,"is_api_error_message":true,"api_error_status":404`), asked, false, false, protocol.StartFailureModelRefused},
+		{"the error code before the text", apiError("Please run /login", `,"error":"model_not_found","is_api_error_message":true`), asked, false, false, protocol.StartFailureModelRefused},
+		{"an error code without the flag", apiError("Not logged in", `,"error":"authentication_failed"`), asked, false, false, protocol.StartFailureLoginRejected},
+		// The wordings, as a second line.
+		{"a missing login by its text", apiError("Not logged in · Please run /login", `,"is_api_error_message":true`), asked, false, false, protocol.StartFailureLoginRejected},
+		{"a rejected token by its text", apiError("Failed to authenticate. API Error: 401 Invalid bearer token", `,"is_api_error_message":true`), asked, false, false, protocol.StartFailureLoginRejected},
+		{"a revoked token by its text", apiError("API Error: 401 OAuth token has been revoked", ""), asked, false, false, protocol.StartFailureLoginRejected},
+		{"a refused model by its text", apiError("There's an issue with the selected model (x). It may not exist or you may not have access to it.", `,"is_api_error_message":true`), asked, false, false, protocol.StartFailureModelRefused},
+		{"a refused model by v1's fragment", apiError("API Error: 404 unknown model claude-fable-9", ""), asked, false, false, protocol.StartFailureModelRefused},
+		// Quota: NOT VERIFIED AGAINST A REAL STREAM.
+		{"quota, not verified: rate_limit", apiError("API Error: Request rejected (429) · this may be a temporary capacity issue.", `,"error":"rate_limit","is_api_error_message":true,"api_error_status":429`), asked, false, false, protocol.StartFailureQuotaRefused},
+		{"quota, not verified: billing_error", apiError("API Error: credit balance too low", `,"error":"billing_error","is_api_error_message":true,"api_error_status":400`), asked, false, false, protocol.StartFailureQuotaRefused},
+		{"quota, not verified: a 429 alone", apiError("API Error: request failed", `,"is_api_error_message":true,"api_error_status":429`), asked, false, false, protocol.StartFailureQuotaRefused},
+		{"quota, not verified: v1's fragment", apiError("You're out of usage credits for this model", `,"is_api_error_message":true`), asked, false, false, protocol.StartFailureQuotaRefused},
+		{"quota, not verified: a usage limit", apiError("API Error: Claude usage limit reached", ""), asked, false, false, protocol.StartFailureQuotaRefused},
+		// No answer.
+		{"an unmatched API error", apiError("API Error: 500 internal server error", `,"error":"server_error","is_api_error_message":true,"api_error_status":500`), asked, false, false, protocol.StartFailureNoAnswer},
+		{"an overloaded model", apiError("API Error: the API is at capacity", `,"error":"overloaded","is_api_error_message":true,"api_error_status":529`), asked, false, false, protocol.StartFailureNoAnswer},
+		{"refusal words outside an API error", `{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"usage limit, not logged in"}]}}`, asked, false, false, protocol.StartFailureNoAnswer},
+		{"a synthetic entry is never an answer", answer("<synthetic>", "ok"), asked, true, false, protocol.StartFailureNoAnswer},
+		{"no assistant entry", `{"type":"system","subtype":"init","model":"claude-opus-5-5"}`, asked, false, false, protocol.StartFailureNoAnswer},
+		{"no output at all", "", asked, false, false, protocol.StartFailureNoAnswer},
+		{"output that is not JSON", "Error: something went wrong\n", asked, false, false, protocol.StartFailureNoAnswer},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			answered, failure := classifyPreflight([]byte(tc.stream), tc.exitOK)
+			answered, failure := classifyPreflight([]byte(tc.stream), tc.exitOK, tc.asked)
 			if answered != tc.answered || failure != tc.failure {
 				t.Fatalf("answered=%v failure=%q, want %v %q", answered, failure, tc.answered, tc.failure)
 			}
@@ -708,25 +786,29 @@ func TestClassifyPreflight(t *testing.T) {
 }
 
 // The real turn runner: the CLI it starts gets exactly the pre-flight's
-// argument list, with no tools (--tools ""), no MCP servers, no saved
-// session, one turn and no --dangerously-skip-permissions, and "reply with
-// ok" on stdin; its answer is read from its stream (op791-a-1, point 7).
+// argument list, with no tools (--tools ""), no user, project or local
+// settings and so none of their hooks (--setting-sources "", ruling 4 of
+// story 791 fix round 1), no MCP servers, no saved session, one turn and no
+// --dangerously-skip-permissions, and "reply with ok" on stdin; its answer is
+// read from its stream (op791-a-1, point 7). The limit is the real one, so
+// only a CLI that does not exit could reach it.
 func TestPreflightTurnArgumentsAndPrompt(t *testing.T) {
 	scrubClusterEnv(t)
 	dir := t.TempDir()
 	args, stdin := filepath.Join(dir, "args"), filepath.Join(dir, "stdin")
 	cli := filepath.Join(dir, "fake-claude")
-	script := "#!/bin/sh\nfor a in \"$@\"; do printf '[%s]\\n' \"$a\"; done > '" + args + "'\ncat > '" + stdin + "'\ncat <<'EOF'\n" + preflightAccepted + "\nEOF\n"
+	answer := strings.ReplaceAll(preflightAccepted, `"claude-opus-5-5"`, `"claude-opus-5"`)
+	script := "#!/bin/sh\nfor a in \"$@\"; do printf '[%s]\\n' \"$a\"; done > '" + args + "'\ncat > '" + stdin + "'\ncat <<'EOF'\n" + answer + "\nEOF\n"
 	if err := os.WriteFile(cli, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	l := Launch{Argv: []string{cli, "--model", "claude-opus-5-5"}, Dir: dir}
-	out := runPreflightTurn(l, "claude-opus-5", time.Minute, make(chan os.Signal))
+	out := runPreflightTurn(l, "claude-opus-5", preflightTurnLimit, make(chan os.Signal))
 	if !out.Answered || !out.Gone || out.Failure != "" {
 		t.Fatalf("outcome %+v, want answered", out)
 	}
 	gotArgs, _ := os.ReadFile(args)
-	want := "[--model]\n[claude-opus-5]\n[--tools]\n[]\n[--strict-mcp-config]\n[--no-session-persistence]\n[--max-turns]\n[1]\n[--output-format]\n[stream-json]\n[--verbose]\n[-p]\n"
+	want := "[--model]\n[claude-opus-5]\n[--tools]\n[]\n[--setting-sources]\n[]\n[--strict-mcp-config]\n[--no-session-persistence]\n[--max-turns]\n[1]\n[--output-format]\n[stream-json]\n[--verbose]\n[-p]\n"
 	if string(gotArgs) != want {
 		t.Fatalf("argument list\n%s\nwant\n%s", gotArgs, want)
 	}
@@ -738,9 +820,46 @@ func TestPreflightTurnArgumentsAndPrompt(t *testing.T) {
 	}
 }
 
+// Ruling 6 of story 791 fix round 1: no test in this package can reach the
+// real Claude CLI by accident. Settings.ClaudeBin defaults to "claude", so a
+// test that builds a launch and forgets its fake CLI would start whatever
+// "claude" PATH names, the real one in a session pod. TestMain puts
+// realClaudeGuard first on PATH; its claude answers nothing and exits 97.
+// The bare name, the default settings' launch and a pre-flight turn on that
+// launch each reach the guard. The first check fails before anything starts.
+func TestNoTestReachesTheRealClaude(t *testing.T) {
+	scrubClusterEnv(t)
+	if realClaudeGuard == "" {
+		t.Fatal("TestMain put no claude guard on PATH")
+	}
+	want := filepath.Join(realClaudeGuard, "claude")
+	if got, err := exec.LookPath("claude"); err != nil || got != want {
+		t.Fatalf("claude resolves to %q (%v), want the guard %s", got, err, want)
+	}
+	s, sess, ws := summonedFixture(t, protocol.ModeTask)
+	l, err := BuildLaunch(s, sess, ws, "b1", loginNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Argv[0] != "claude" || l.Preflight == nil {
+		t.Fatalf("the default settings' launch: argv %q pre-flight %+v", l.Argv, l.Preflight)
+	}
+	out, err := exec.Command(l.Argv[0], "--version").CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 97 || !strings.Contains(string(out), "not the real claude") {
+		t.Fatalf("the default CLI ran: %v %q", err, out)
+	}
+	l.Dir = t.TempDir()
+	if res := runPreflightTurn(l, sess.Model, preflightTurnLimit, make(chan os.Signal)); res.Answered || !res.Gone || res.Failure != protocol.StartFailureNoAnswer {
+		t.Fatalf("a pre-flight turn on the default CLI: %+v", res)
+	}
+}
+
 // The real turn runner stops a turn at its limit and waits for its process
 // before it returns, so the next turn or the real start never runs beside it
-// (op791-a-1, point 6). The CLI sleeps far longer than the limit.
+// (op791-a-1, point 6). The CLI sleeps far longer than the limit. Under load
+// the turn may be stopped before its script wrote its pid: then Gone alone
+// shows it ended (ruling 3 of story 791 fix round 1).
 func TestPreflightTurnStoppedAtItsLimit(t *testing.T) {
 	scrubClusterEnv(t)
 	dir := t.TempDir()
@@ -754,15 +873,16 @@ func TestPreflightTurnStoppedAtItsLimit(t *testing.T) {
 	if !out.TimedOut || !out.Gone || out.Answered || out.Failure != protocol.StartFailureNoAnswer {
 		t.Fatalf("outcome %+v, want stopped at its limit, gone, no answer", out)
 	}
-	raw, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pid := strings.TrimSpace(string(raw))
-	if _, err := os.Stat("/proc/" + pid); err == nil {
-		if stat, _ := os.ReadFile("/proc/" + pid + "/stat"); !strings.Contains(string(stat), ") Z ") {
-			t.Fatalf("the turn's process %s still runs", pid)
+	if raw, err := os.ReadFile(pidFile); err == nil {
+		// Empty when the stop came between the shell's open and its write.
+		pid := strings.TrimSpace(string(raw))
+		if _, err := os.Stat("/proc/" + pid); pid != "" && err == nil {
+			if stat, _ := os.ReadFile("/proc/" + pid + "/stat"); !strings.Contains(string(stat), ") Z ") {
+				t.Fatalf("the turn's process %s still runs", pid)
+			}
 		}
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
 	}
 	if out := runPreflightTurn(l, "claude-opus-5-5", 0, make(chan os.Signal)); out.Answered || !out.TimedOut || !out.Gone {
 		t.Fatalf("a turn with no time left: %+v", out)

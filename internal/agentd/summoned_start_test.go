@@ -271,7 +271,10 @@ exit 0`)
 
 // run-agent's start fence (N2): a launch that carries a start deadline spawns
 // its provider before it and spawns nothing at or past it, for a task and a
-// TUI; a launch without one spawns whatever the time.
+// TUI; a launch without one spawns whatever the time. A summoned task's model
+// pre-flight runs in the in-process stand-in fakeCLI installs, so a spawn one
+// nanosecond before the deadline does not depend on how fast a process
+// starts (ruling 3 of story 791 fix round 1).
 func TestRunAgentStartFence(t *testing.T) {
 	deadline := loginNow.Add(15 * time.Minute)
 	for _, mode := range []string{protocol.ModeTask, protocol.ModeRemote} {
@@ -282,6 +285,7 @@ func TestRunAgentStartFence(t *testing.T) {
 			spawns   bool
 		}{
 			{"before", deadline.Format(time.RFC3339), deadline.Add(-time.Second), true},
+			{"just-before", deadline.Format(time.RFC3339), deadline.Add(-time.Nanosecond), true},
 			{"at", deadline.Format(time.RFC3339), deadline, false},
 			{"past", deadline.Format(time.RFC3339), deadline.Add(time.Hour), false},
 			{"invalid", "tomorrow", loginNow, false},

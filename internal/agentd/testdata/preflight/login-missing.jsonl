@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","model":"claude-opus-5-5"}
+{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"Not logged in · Please run /login"}],"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"error":"authentication_failed","is_api_error_message":true}
+{"type":"result","subtype":"success","is_error":true}
