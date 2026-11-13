@@ -9,8 +9,9 @@
   once more for the advisory reviewer's threads on the pull request (section
   15.3). Amended 2026-11-13 after the review of the haynes-ops install rules
   (section 15.4): who can read the signing keys is now a stated limit
-  ([ADR-029](../adrs/029-raise-keys-readers.md)), and install rules 2 to 4
-  are tighter. [ADR-028](../adrs/028-raise-a-running-session.md) was proposed
+  ([ADR-029](../adrs/029-raise-keys-readers.md)), and install rules 2 to 6
+  change: 2 to 4 are tighter, 5 says what the grants do not take away, and 6
+  accepts the cluster-wide readers (known limit 7). [ADR-028](../adrs/028-raise-a-running-session.md) was proposed
   with it and is Accepted. **Approved by Tom on 2026-11-13** as summarised to him in a
   phone prompt: he tells a superuser coordinator or Meatball; his phone gets a
   notice naming the session, who raised it and the words attributed to him;
