@@ -22,13 +22,17 @@ package controller
 //     first (creationTimestamp, then UID). A session is admitted only when an
 //     uncached read of the create ledger binds its dispatch id to its own name
 //     (item 741 comment 7228), its CallerPolicy still names its account, its
-//     latch applies, its lane is free, its pool has a slot and the quota hook
-//     (story 743's seam) lets it. A grant is committed by the ledger's shared
-//     CAS before admittedAt is written on the Session. A conflict starts a
-//     fresh decision; an unknown write result stops the pass. A grant without
-//     admittedAt is completed, never decided again. A session the ledger does
-//     not bind is closed by its onUnreported
-//     with reason not-charged (ruling D5) and never admitted.
+//     latch applies, its lane is free, its pool has a slot and the quota gate
+//     (story 743's seam, Reconciler.SummonQuota) lets it. The gate returns
+//     its decision; a hold's condition names what it read (story 790). A
+//     Queued session past its maxHold closes by its onUnreported:
+//     quota-hold-expired when its recorded hold is QuotaHold, else
+//     hold-expired (ruling (f) on item 743). A grant is committed by the
+//     ledger's shared CAS before admittedAt is written on the Session. A
+//     conflict starts a fresh decision; an unknown write result stops the
+//     pass. A grant without admittedAt is completed, never decided again. A
+//     session the ledger does not bind is closed by its onUnreported with
+//     reason not-charged (ruling D5) and never admitted.
 //   - Release (reconcileSummonRelease) sets status.summon.closed.released:
 //     at once for a report (summonoutcome.Write), for an operator close once
 //     no launch can follow: no attempt, the latch's recorded pod gone by an
@@ -64,6 +68,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/summonledger"
 	"github.com/thaynes43/dev-env/internal/summonoutcome"
+	"github.com/thaynes43/dev-env/internal/summonquota"
 )
 
 const (
@@ -79,11 +84,16 @@ const (
 	SummonReasonNotCharged = "NotCharged"
 	// SummonReasonHoldExpired: Queued past its maxHold and closed (OP779).
 	SummonReasonHoldExpired = "HoldExpired"
+	// SummonReasonQuotaHoldExpired: Queued past its maxHold while its
+	// recorded hold was QuotaHold, and closed (OP790).
+	SummonReasonQuotaHoldExpired = "QuotaHoldExpired"
 	// SummonReasonTaskLatchMissing holds a summoned task while the operator
 	// runs without both latch flags (--enable-private-history-retention and
 	// --enable-terminal-task-pod-reclaim).
 	SummonReasonTaskLatchMissing = "TaskLatchMissing"
-	// SummonReasonQuotaHold is story 743's hold; its hook admits today.
+	// SummonReasonQuotaHold: the quota gate holds it (story 743, DESIGN-064
+	// 6.9); the message names the window, the percentage, the line and the
+	// reading's readAt (story 790).
 	SummonReasonQuotaHold = "QuotaHold"
 
 	// SummonAdmissionEvery is the leader's admission interval.
@@ -499,12 +509,23 @@ func summonTaskLatchStartable(s *v1alpha1.AgentSession) bool {
 	return privateHistoryProtected(s) && terminalTaskReclaimScope(s) && h != nil && h.Admission != "Unknown" && !h.ExecutorAttempted
 }
 
-// summonQuotaAdmits is story 743's seam: the quota gate. It admits today.
-func (r *Reconciler) summonQuotaAdmits(s *v1alpha1.AgentSession) bool {
+// summonQuotaAdmits is story 743's seam: the quota gate's decision on s,
+// under the pass's context, which carries the pass (summonquota.WithPass), so
+// the gate reads the readings at most once per pass. With no gate it admits.
+func (r *Reconciler) summonQuotaAdmits(ctx context.Context, s *v1alpha1.AgentSession) summonquota.Decision {
 	if r.SummonQuota != nil {
-		return r.SummonQuota(s)
+		return r.SummonQuota(ctx, s)
 	}
-	return true
+	return summonquota.Decision{Admit: true}
+}
+
+// summonRecordedHold is the reason of the hold recorded on s, as this pass
+// read it: its SummonAdmitted condition while False, or "".
+func summonRecordedHold(s *v1alpha1.AgentSession) string {
+	if c := meta.FindStatusCondition(s.Status.Conditions, ConditionSummonAdmitted); c != nil && c.Status == metav1.ConditionFalse {
+		return c.Reason
+	}
+	return ""
 }
 
 // summonLedgerRead is one pass's uncached read of the create ledger.
@@ -563,6 +584,9 @@ func (r *Reconciler) SummonAdmissionPass(ctx context.Context) error {
 		return errors.New("summoned admission requires the uncached API reader and the session namespace")
 	}
 	r.summonWatchdogStart.Do(func() { r.summonWatchdogStartedAt = r.now() })
+	// One pass, every attempt: the quota gate reads the readings at most once
+	// under it (story 790).
+	ctx = summonquota.WithPass(ctx)
 	// As in the API's ledger writer, bound contention and leave the next
 	// interval to retry. Never spin indefinitely against API writes.
 	p := &summonPass{}
@@ -706,11 +730,15 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context, p *summonPass) 
 	for _, s := range queued {
 		entry, ok := ledger.entry(s.Spec.Caller)
 		// A Queued session's own rows of the one table: its charge (ruling
-		// D5) and its hold bound (6.7, C2). Story 743 adds QuotaHoldExpired
-		// when the hold was QuotaHold; until then a quota hold never happens.
+		// D5) and its hold bound (6.7, C2). Past its maxHold, counted from its
+		// creation whatever its holds were, the hold recorded on it at this
+		// pass decides: QuotaHold adds QuotaHoldExpired, which FirstReason
+		// ranks first (ruling (f) on item 743 comment 7540, story 790).
 		// Grants are readable and this Session has none. Its independent hold
 		// bound still applies when the caller's charge entry cannot be read.
-		in := summonoutcome.Inputs{NotCharged: ok && !entry.Binds(s.Spec.Summon.DispatchID, s.Name), HoldExpired: summonHoldExpired(s, r.now())}
+		expired := summonHoldExpired(s, r.now())
+		in := summonoutcome.Inputs{NotCharged: ok && !entry.Binds(s.Spec.Summon.DispatchID, s.Name), HoldExpired: expired,
+			QuotaHoldExpired: expired && summonRecordedHold(s) == SummonReasonQuotaHold}
 		if reason := summonoutcome.FirstReason(in); reason != "" {
 			if err := r.closeSummonQueued(ctx, s, reason, now); err != nil {
 				errs = append(errs, err)
@@ -741,11 +769,16 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context, p *summonPass) 
 			reason = SummonReasonLaneBusy
 		case pools[pool] >= summonPoolCap(p, pool):
 			reason = SummonReasonPoolBusy
-		case !r.summonQuotaAdmits(s):
-			reason = SummonReasonQuotaHold
+		}
+		message := summonHoldMessages[reason]
+		if reason == "" {
+			// The gate is last: only a session every other check admits.
+			if d := r.summonQuotaAdmits(ctx, s); !d.Admit {
+				reason, message = SummonReasonQuotaHold, summonQuotaHoldMessage(d)
+			}
 		}
 		if reason != "" {
-			if err := r.holdSummon(ctx, s, reason); err != nil {
+			if err := r.holdSummonWith(ctx, s, reason, message); err != nil {
 				errs = append(errs, err)
 			}
 			if err := r.summonHeldPage(ctx, s); err != nil {
@@ -836,18 +869,51 @@ var summonHoldMessages = map[string]string{
 	SummonReasonPolicyGone:       "held: its CallerPolicy is gone or no longer names its account",
 	SummonReasonNotCharged:       "never admitted: the create ledger does not bind its dispatch id to this name",
 	SummonReasonHoldExpired:      "never admitted: Queued past its maxHold, and closed by its onUnreported",
+	SummonReasonQuotaHoldExpired: "never admitted: Queued past its maxHold while held for quota, and closed by its onUnreported",
 	SummonReasonTaskLatchMissing: "held: the private task latch does not apply (both task latch flags, and a startable latch record)",
 	SummonReasonQuotaHold:        "held: quota",
 }
 
-// holdSummon records why a Queued session waits, once per reason.
+// summonQuotaHoldMessage is the QuotaHold condition's message for the gate's
+// hold d (story 790, DESIGN-064 6.9): the window that holds the session, the
+// percentage the reading showed, the line, and the reading's readAt, when
+// its numbers last changed. It never names the reading's age, so it changes,
+// and the status is written, only when the window, the percentage, the line
+// or readAt does. Every value is the operator's own or a checked reading's:
+// a fixed window name, a canonical percentage (digits and one dot), the
+// flag's whole number and a time; no session-controlled text. A decision
+// that names no window past its line gets slice a's text.
+func summonQuotaHoldMessage(d summonquota.Decision) string {
+	window, w := "5-hour", d.FiveHour
+	switch d.Reason {
+	case summonquota.WhyFiveHourPast:
+	case summonquota.WhySevenDayPast:
+		window, w = "7-day", d.SevenDay
+	default:
+		return summonHoldMessages[SummonReasonQuotaHold]
+	}
+	if !d.HaveReading || !w.Past || w.Used == "" || w.Line <= 0 {
+		return summonHoldMessages[SummonReasonQuotaHold]
+	}
+	return fmt.Sprintf("held: quota: the %s window is %s%% used, past its line of %d%% (reading taken at %s)", window, w.Used, w.Line, d.ReadAt.UTC().Format(time.RFC3339Nano))
+}
+
+// holdSummon records why a Queued session waits, with the reason's fixed
+// message.
 func (r *Reconciler) holdSummon(ctx context.Context, s *v1alpha1.AgentSession, reason string) error {
-	if c := meta.FindStatusCondition(s.Status.Conditions, ConditionSummonAdmitted); c != nil && c.Status == metav1.ConditionFalse && c.Reason == reason {
+	return r.holdSummonWith(ctx, s, reason, summonHoldMessages[reason])
+}
+
+// holdSummonWith records why a Queued session waits. It writes only when the
+// recorded hold's reason or message differs, so a hold that stays the same,
+// numbers and all, gets no status write per pass.
+func (r *Reconciler) holdSummonWith(ctx context.Context, s *v1alpha1.AgentSession, reason, message string) error {
+	if c := meta.FindStatusCondition(s.Status.Conditions, ConditionSummonAdmitted); c != nil && c.Status == metav1.ConditionFalse && c.Reason == reason && c.Message == message {
 		return nil
 	}
 	base := s.DeepCopy()
 	meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{Type: ConditionSummonAdmitted, Status: metav1.ConditionFalse,
-		Reason: reason, Message: summonHoldMessages[reason], ObservedGeneration: s.Generation, LastTransitionTime: metav1.NewTime(r.now().UTC().Truncate(time.Second))})
+		Reason: reason, Message: message, ObservedGeneration: s.Generation, LastTransitionTime: metav1.NewTime(r.now().UTC().Truncate(time.Second))})
 	if err := r.Client.Status().Patch(ctx, s, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsConflict(err) && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("hold %s: %w", s.Name, err)
 	}
@@ -856,9 +922,10 @@ func (r *Reconciler) holdSummon(ctx context.Context, s *v1alpha1.AgentSession, r
 
 // closeSummonQueued closes a Queued session by its onUnreported with the
 // reason FirstReason chose from its own rows: not-charged, the ledger does
-// not bind it (ruling D5), or hold-expired, Queued past its maxHold (6.7,
-// OP779). It releases at once: it was never admitted. The condition follows
-// in its own write.
+// not bind it (ruling D5); quota-hold-expired, Queued past its maxHold while
+// its recorded hold was QuotaHold (story 790); or hold-expired, Queued past
+// its maxHold otherwise (6.7, OP779). It releases at once: it was never
+// admitted. The condition follows in its own write and names which it was.
 func (r *Reconciler) closeSummonQueued(ctx context.Context, s *v1alpha1.AgentSession, reason string, now time.Time) error {
 	state := v1alpha1.OutcomeState(s.Spec.Summon.OnUnreported)
 	if state != v1alpha1.OutcomeFailed && state != v1alpha1.OutcomeEscalated {
@@ -878,8 +945,11 @@ func (r *Reconciler) closeSummonQueued(ctx context.Context, s *v1alpha1.AgentSes
 		r.nudgeSummonAdmission()
 	}
 	hold := SummonReasonNotCharged
-	if reason == summonoutcome.ReasonHoldExpired {
+	switch reason {
+	case summonoutcome.ReasonHoldExpired:
 		hold = SummonReasonHoldExpired
+	case summonoutcome.ReasonQuotaHoldExpired:
+		hold = SummonReasonQuotaHoldExpired
 	}
 	return r.holdSummon(ctx, s, hold)
 }

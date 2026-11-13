@@ -2603,6 +2603,60 @@ Tom).** The text above stays; where it differs, this governs.
    condition. Until then the condition reads "held: quota" and a curation
    run held past its `maxHold` closes `hold-expired`.
 
+**Correction, 2026-11-13 (story 790, slice b of #743; coordinator rulings
+on item 743 comments 7458 and 7540; not a ruling by Tom).** What was built.
+The text above stays; where it differs, this governs, and it replaces item 4
+of the correction above.
+
+1. *The seam carries the decision* (Q15). `Reconciler.SummonQuota` is
+   `func(context.Context, *AgentSession) summonquota.Decision`, set in
+   `cmd/dev-env-operator/main.go` to the gate's `DecideSession`. The
+   admission pass calls it last in the hold switch, only for a Queued
+   session with `spec.caller`, with the pass's context. The decision is
+   admit or hold; for a hold the window past its line, the percentage read,
+   the line and the reading's `readAt`; for an admit the fixed reason
+   (`stale`, `no-reading`, `read-error`, `read-timeout`,
+   `reading-from-future`, `window-missing`, `window-reset`, `within-lines`,
+   `no-line`, `unknown-priority`, `urgent`). Items 1 to 3 above hold
+   unchanged, the stale mark among them.
+2. *One read per pass, exactly.* The 30-second reuse of item 4 above is
+   gone. The pass marks its context once, before its first attempt
+   (`summonquota.WithPass`); the first decision of the pass that needs a
+   reading reads, under that context and the 5-second timeout, and every
+   later decision of the pass, in any attempt, is answered from that read.
+   The next pass reads again however soon it follows, so a hold lifts in
+   the first pass after a lower reading is stored; a pass where no session
+   reaches the gate reads nothing; a decision without a pass reads for
+   itself. Why: the bound is then exact, not a property of the pass's
+   timing, and a pass never decides on a reading from an earlier pass. A
+   read is one uncached GET of one ConfigMap, beside the two lists and the
+   ledger read every pass already makes. A read cut off by its timeout
+   logs `read-timeout`; one cut off because the pass's context is done
+   logs `read-error`; both admit.
+3. *The hold's message.* The `QuotaHold` condition reads "held: quota: the
+   5-hour window is 81% used, past its line of 80% (reading taken at
+   2026-11-12T15:59:00Z)": the window (5-hour or 7-day), the percentage as
+   the reading has it, the line and `readAt` in RFC 3339 UTC, exactly. It
+   never names the reading's age, and the admission writes the condition
+   only when its reason or message changes, so a session held on one
+   reading gets one status write, not one per pass. Every value is the
+   operator's own or a checked reading's; no session text. `agent-run show`
+   prints it, as it prints every condition; it needed no change.
+4. *The bound* (ruling (f)). One clock: `maxHold` counts from the session's
+   creation (`summonHoldExpired`), and a change of hold does not restart it.
+   A Queued session found past it closes `quota-hold-expired` when its
+   `SummonAdmitted` condition, as the pass reads it, is False with reason
+   `QuotaHold`, and `hold-expired` otherwise; 6.7's "if the hold was
+   `QuotaHold`" means that recorded hold. The pass fills
+   `summonoutcome.Inputs.QuotaHoldExpired` beside `HoldExpired`, and
+   `FirstReason` ranks it first; there is no second choice of reason. The
+   close is `closeSummonQueued`'s: by `onUnreported`, once, released at
+   once, and the condition after it reads `QuotaHoldExpired` or
+   `HoldExpired`. A `normal` session has no `maxHold`, so its quota hold
+   never expires; an `urgent` one is never held by the gate, so it never
+   closes on this row (a remediation held for its lane still closes
+   `hold-expired`).
+
 ### 6.10 OP745: joinable remote sessions with a verified link
 
 - A summoned `remote` session on profile `ops` is created with the caller's
