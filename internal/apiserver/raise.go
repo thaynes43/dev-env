@@ -1,0 +1,1097 @@
+package apiserver
+
+import (
+	"context"
+	"crypto/ed25519"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/controller"
+	"github.com/thaynes43/dev-env/internal/grantattest"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
+	"github.com/thaynes43/dev-env/internal/sessionraise"
+	"github.com/thaynes43/dev-env/internal/taskbudget"
+	"github.com/thaynes43/dev-env/internal/templates"
+)
+
+// RaiseConfig is DESIGN-066 on this operator. Both flags default off. With
+// both off, POST is refused and depthExempt grants nothing. GET and DELETE
+// stay on: a take-back is never switched off.
+type RaiseConfig struct {
+	Dispatch       bool
+	Profiles       []string
+	Namespace      string
+	OperatorSecret string
+	OperatorPublic string
+	Ledger         string
+	KeeperPublic   string
+	KeeperLedger   string
+}
+
+func (c RaiseConfig) filled() RaiseConfig {
+	if c.Namespace == "" {
+		c.Namespace = sessionraise.ObjectNamespace
+	}
+	if c.OperatorSecret == "" {
+		c.OperatorSecret = sessionraise.OperatorSecretName
+	}
+	if c.OperatorPublic == "" {
+		c.OperatorPublic = sessionraise.OperatorPublicName
+	}
+	if c.Ledger == "" {
+		c.Ledger = sessionraise.LedgerName
+	}
+	if c.KeeperPublic == "" {
+		c.KeeperPublic = sessionraise.KeeperPublicName
+	}
+	if c.KeeperLedger == "" {
+		c.KeeperLedger = sessionraise.NoticeLedgerName
+	}
+	return c
+}
+
+func (s *Server) raiseConfig() (RaiseConfig, bool) {
+	if s == nil || s.Raise == nil {
+		return RaiseConfig{}, false
+	}
+	return s.Raise.filled(), true
+}
+
+func (s *Server) raiseStore(cfg RaiseConfig) sessionraise.Kube {
+	return sessionraise.Kube{
+		Reader: s.Live, Writer: s.Client, Namespace: cfg.Namespace,
+		Secrets: map[string]bool{cfg.OperatorSecret: true},
+	}
+}
+
+const (
+	raiseOff           = "This operator does not raise sessions."
+	raiseNoKey         = "This operator has no raise key yet."
+	raiseKeyUnreadable = "This operator cannot read its raise key."
+	raiseKeyMismatch   = "This operator's raise key does not match its published key."
+	raiseLedgerUnread  = "The operator cannot read its raise ledger, so it raises nothing now. Try again."
+	raiseNeedsWords    = "A raise needs Tom's words: what he said, where and when."
+	raiseWordsLong     = "Tom's words must fit in 300 characters so the notice shows them whole."
+	raiseWordsControl  = "Tom's words must be plain text, with no control or format characters."
+	raiseWordsTime     = "The time you give for Tom's words must be within the last 24 hours. Ask him again."
+	raiseTooBig        = "This raise does not fit in its record. Shorten the words or the reference."
+	raiseNeedsOne      = "A raise names a profile or the right to start sessions."
+	raiseNeedsUID      = "A raise names the session UID it read. Read the session and send that UID."
+	raiseOtherCaller   = "Only a superuser session, an always-on agent whose policy allows it, or Tom may raise a session."
+	raisePolicy        = "This caller's policy does not allow raising sessions."
+	raiseSelf          = "A session may not raise itself."
+)
+
+func raiseInvalid(sentence string) *apiError {
+	return newError(http.StatusUnprocessableEntity, apiv1.CodeInvalid, "%s", sentence)
+}
+
+func raiseConflict(format string, args ...any) *apiError {
+	return newError(http.StatusConflict, apiv1.CodeConflict, format, args...)
+}
+
+func raiseUnavailable(format string, args ...any) *apiError {
+	return newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, format, args...)
+}
+
+func (s *Server) getRaise(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	sess, err := s.raiseTarget(ctx, r)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := s.authorizeRaise(ctx, c, sess, true); err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, s.raiseStatus(ctx, sess), nil
+}
+
+func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	cfg, ok := s.raiseConfig()
+	if !ok || (!cfg.Dispatch && len(cfg.Profiles) == 0) {
+		return 0, nil, forbidden("%s", raiseOff)
+	}
+	var req apiv1.RaiseRequest
+	if err := decodeRaiseBody(r, &req); err != nil {
+		return 0, nil, err
+	}
+	if req.StartSessions && !cfg.Dispatch {
+		return 0, nil, forbidden("%s", raiseOff)
+	}
+	sess, err := s.raiseTarget(ctx, r)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := s.authorizeRaise(ctx, c, sess, false); err != nil {
+		return 0, nil, err
+	}
+	if err := s.expectSession(sess, req.ExpectUID); err != nil {
+		return 0, nil, err
+	}
+	if err := s.eligibleTarget(ctx, sess, req.StartSessions); err != nil {
+		return 0, nil, err
+	}
+	if err := s.checkRaiseWords(c, req.Owner); err != nil {
+		return 0, nil, err
+	}
+	if err := s.checkRaiseProfile(ctx, cfg, req.Profile, req.StartSessions); err != nil {
+		return 0, nil, err
+	}
+	priv, err := s.raiseKey(ctx, cfg)
+	if err != nil {
+		return 0, nil, err
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	fresh, err := s.raiseTarget(ctx, r)
+	if err != nil {
+		return 0, nil, err
+	}
+	if fresh.UID != sess.UID {
+		return 0, nil, raiseConflict("Session %s was replaced: its UID is not the one you read. Read it again.", fresh.Name)
+	}
+	if err := s.eligibleTarget(ctx, fresh, req.StartSessions); err != nil {
+		return 0, nil, err
+	}
+	now := s.now().UTC().Truncate(time.Second)
+	performedAt := now.Format(time.RFC3339)
+	hash := sessionraise.WordsHash(req.Owner.Words)
+	saidAt, _ := time.Parse(time.RFC3339, req.Owner.SaidAt)
+	in := sessionraise.AdmitInput{
+		Name: fresh.Name, UID: string(fresh.UID),
+		ID:      sessionraise.RecordID(string(fresh.UID), performedAt, hash),
+		Profile: req.Profile, FromProfile: s.podProfile(ctx, fresh),
+		StartSessions: req.StartSessions, Depth: fresh.Labels[v1alpha1.LabelDepth],
+		WordsHash: hash, PerformedBy: c.String(), PerformedAt: performedAt,
+		Where: req.Owner.Where, SaidAt: saidAt.UTC().Truncate(time.Second).Format(time.RFC3339),
+		Ref: req.Owner.Ref, OwnerSession: ownerSession(c),
+	}
+	var entry sessionraise.SessionEntry
+	var same bool
+	writeLedger := false
+	err = s.commitLedger(ctx, cfg, func(led *sessionraise.Ledger) (bool, error) {
+		result, err := led.Admit(now, in, s.liveUIDs(ctx))
+		if err != nil {
+			return false, err
+		}
+		entry, same = result.Entry, result.Same
+		if same {
+			return false, nil
+		}
+		rec := recordFrom(entry, req.Owner.Words)
+		signed, err := sessionraise.Sign(rec, priv)
+		if err != nil {
+			return false, err
+		}
+		if big, err := signed.TooBig(); err != nil || big {
+			return false, sessionraise.ErrTooBig
+		}
+		writeLedger = true
+		return true, nil
+	})
+	if err != nil {
+		return 0, nil, s.raiseLedgerErr(err, c, fresh.Name)
+	}
+	if same && annotationCounts(fresh, pub, &entry) {
+		v := s.withUsageRollup(ctx, fresh, c, false)
+		return http.StatusOK, v, nil
+	}
+	// A retry of the same body uses the row's id and time, so the word is
+	// not spent again, and rewrites a missing annotation.
+	if same {
+		in.ID = entry.ID
+		in.PerformedAt = entry.PerformedAt
+		in.Profile = entry.Profile
+		in.FromProfile = entry.FromProfile
+		in.StartSessions = entry.StartSessions
+		in.Depth = entry.Depth
+		in.Where = entry.Where
+		in.SaidAt = entry.SaidAt
+		in.Ref = entry.Ref
+		in.OwnerSession = entry.OwnerSession
+		in.PerformedBy = entry.PerformedBy
+	}
+	rec := recordFrom(sessionraise.SessionEntry{
+		ID: in.ID, UID: in.UID, State: sessionraise.StatePending,
+		Profile: in.Profile, FromProfile: in.FromProfile, StartSessions: in.StartSessions,
+		Depth: in.Depth, WordsHash: hash, PerformedBy: in.PerformedBy, PerformedAt: in.PerformedAt,
+		Where: in.Where, SaidAt: in.SaidAt, Ref: in.Ref, OwnerSession: in.OwnerSession,
+	}, req.Owner.Words)
+	if same {
+		rec.State = entry.State
+	}
+	signed, err := sessionraise.Sign(rec, priv)
+	if err != nil {
+		return 0, nil, raiseUnavailable("%s", raiseKeyUnreadable)
+	}
+	if big, err := signed.TooBig(); err != nil || big {
+		return 0, nil, raiseInvalid(raiseTooBig)
+	}
+	if !same && !writeLedger {
+		return 0, nil, raiseUnavailable("%s", raiseLedgerUnread)
+	}
+	raw, err := signed.Encode()
+	if err != nil {
+		return 0, nil, raiseUnavailable("%s", raiseLedgerUnread)
+	}
+	if err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw)); err != nil {
+		return 0, nil, raiseUnavailable("The raise was recorded but the session annotation could not be written. Send the same request again.")
+	}
+	target := "start sessions"
+	if req.Profile != "" {
+		target = req.Profile
+	}
+	s.Log.Info(fmt.Sprintf("Raised %s to %s. Tom is being told; it takes effect two minutes after the notice is accepted, unless taken back.", fresh.Name, target), "id", signed.ID)
+	updated, err := s.raiseTarget(ctx, r)
+	if err != nil {
+		updated = fresh
+	}
+	status := http.StatusAccepted
+	if same {
+		status = http.StatusOK
+	}
+	return status, s.withUsageRollup(ctx, updated, c, false), nil
+}
+
+func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	cfg, ok := s.raiseConfig()
+	if !ok {
+		return 0, nil, forbidden("%s", raiseOff)
+	}
+	var req apiv1.TakeBackRequest
+	if err := decodeRaiseBody(r, &req); err != nil {
+		return 0, nil, err
+	}
+	sess, err := s.raiseTarget(ctx, r)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := s.authorizeRaise(ctx, c, sess, true); err != nil {
+		return 0, nil, err
+	}
+	if err := s.expectSession(sess, req.ExpectUID); err != nil {
+		return 0, nil, err
+	}
+	if sess.Annotations[v1alpha1.AnnotationRaise] == "" {
+		led, lerr := s.readLedger(ctx, cfg)
+		if lerr != nil {
+			return 0, nil, raiseUnavailable("%s", raiseLedgerUnread)
+		}
+		if led.Find(string(sess.UID)) == nil {
+			return 0, nil, notFound("Session %s has no raise to take back.", sess.Name)
+		}
+	}
+	priv, err := s.raiseKey(ctx, cfg)
+	if err != nil {
+		return 0, nil, err
+	}
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	fresh, err := s.raiseTarget(ctx, r)
+	if err != nil {
+		return 0, nil, err
+	}
+	if fresh.UID != sess.UID {
+		return 0, nil, raiseConflict("Session %s was replaced: its UID is not the one you read. Read it again.", fresh.Name)
+	}
+	now := s.now().UTC().Truncate(time.Second)
+	at := now.Format(time.RFC3339)
+	var entry sessionraise.SessionEntry
+	err = s.commitLedger(ctx, cfg, func(led *sessionraise.Ledger) (bool, error) {
+		cur := led.Find(string(fresh.UID))
+		if cur == nil {
+			return false, sessionraise.ErrNoEntry
+		}
+		if cur.State == sessionraise.StateTakenBack {
+			entry = *cur
+			return false, nil
+		}
+		got, err := led.TakeBack(string(fresh.UID), c.String(), at, now)
+		if err != nil {
+			return false, err
+		}
+		entry = got
+		return true, nil
+	})
+	if errors.Is(err, sessionraise.ErrNoEntry) {
+		return 0, nil, notFound("Session %s has no raise to take back.", fresh.Name)
+	}
+	if err != nil {
+		return 0, nil, s.raiseLedgerErr(err, c, fresh.Name)
+	}
+	if !annotationTakenBack(fresh, priv.Public().(ed25519.PublicKey), &entry) {
+		rec, words := takenBackRecord(fresh, entry)
+		signed, err := sessionraise.Sign(rec, priv)
+		if err != nil {
+			return 0, nil, raiseUnavailable("%s", raiseKeyUnreadable)
+		}
+		_ = words
+		raw, err := signed.Encode()
+		if err != nil {
+			return 0, nil, raiseUnavailable("%s", raiseLedgerUnread)
+		}
+		if err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw)); err != nil {
+			return 0, nil, raiseUnavailable("The take-back is recorded but the session annotation could not be written. Send the take-back again.")
+		}
+	}
+	s.releaseRaisedGrants(ctx, fresh.UID, entry.Profile)
+	if err := s.suspendIfRaisedAccount(ctx, fresh, entry.Profile, c.String()); err != nil {
+		s.Log.Error(err, "raise take-back suspend", "session", fresh.Name)
+	}
+	s.Log.Info("took back a raise", "session", fresh.Name, "by", c.String(), "id", entry.ID)
+	updated, err := s.raiseTarget(ctx, r)
+	if err != nil {
+		updated = fresh
+	}
+	return http.StatusOK, s.withUsageRollup(ctx, updated, c, false), nil
+}
+
+func recordFrom(entry sessionraise.SessionEntry, words string) sessionraise.Record {
+	return sessionraise.Record{
+		V: sessionraise.Version, ID: entry.ID, SessionUID: entry.UID, State: entry.State,
+		Profile: entry.Profile, FromProfile: entry.FromProfile, StartSessions: entry.StartSessions,
+		Depth: entry.Depth,
+		Owner: sessionraise.Owner{
+			Words: words, WordsHash: entry.WordsHash, Where: entry.Where,
+			Session: entry.OwnerSession, SaidAt: entry.SaidAt, Ref: entry.Ref,
+		},
+		PerformedBy: entry.PerformedBy, PerformedAt: entry.PerformedAt,
+		NoticeSentAt: entry.NoticeSentAt, ActiveFrom: entry.ActiveFrom,
+		TakenBackBy: entry.TakenBackBy, TakenBackAt: entry.TakenBackAt,
+	}
+}
+
+func takenBackRecord(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry) (sessionraise.Record, string) {
+	words := ""
+	if prev, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise]); err == nil {
+		words = prev.Owner.Words
+		if entry.WordsHash == "" {
+			entry.WordsHash = prev.Owner.WordsHash
+		}
+	}
+	entry.State = sessionraise.StateTakenBack
+	if entry.UID == "" {
+		entry.UID = string(sess.UID)
+	}
+	return recordFrom(entry, words), words
+}
+
+func annotationCounts(sess *v1alpha1.AgentSession, pub ed25519.PublicKey, entry *sessionraise.SessionEntry) bool {
+	rec, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
+	if err != nil {
+		return false
+	}
+	return sessionraise.Counts(rec, string(sess.UID), pub, entry) == ""
+}
+
+func annotationTakenBack(sess *v1alpha1.AgentSession, pub ed25519.PublicKey, entry *sessionraise.SessionEntry) bool {
+	if entry == nil || entry.State != sessionraise.StateTakenBack {
+		return false
+	}
+	return annotationCounts(sess, pub, entry)
+}
+
+func (s *Server) raiseTarget(ctx context.Context, r *http.Request) (*v1alpha1.AgentSession, error) {
+	key, err := s.sessionKey(r)
+	if err != nil {
+		return nil, err
+	}
+	var sess v1alpha1.AgentSession
+	if s.Live == nil {
+		return nil, raiseUnavailable("%s", raiseLedgerUnread)
+	}
+	if err := s.Live.Get(ctx, key, &sess); err != nil {
+		return nil, fromKubeError(err, "session "+key.Name)
+	}
+	return &sess, nil
+}
+
+func (s *Server) expectSession(sess *v1alpha1.AgentSession, uid string) error {
+	if uid == "" {
+		return raiseInvalid(raiseNeedsUID)
+	}
+	if uid != string(sess.UID) {
+		return raiseConflict("Session %s was replaced: its UID is not the one you read. Read it again.", sess.Name)
+	}
+	return nil
+}
+
+// authorizeRaise is who may perform a raise, and, when takeBack is set, also
+// the target itself. A record is not consulted except for the "raised to
+// workbench" refusal, which requires one that counts.
+func (s *Server) authorizeRaise(ctx context.Context, c *caller, target *v1alpha1.AgentSession, takeBack bool) error {
+	if c == nil || target == nil {
+		return forbidden("%s", raiseOtherCaller)
+	}
+	if c.kind == kindPolicy {
+		return forbidden("%s", raisePolicy)
+	}
+	self := c.kind == kindSession && c.session != nil && (c.session.UID == target.UID || c.session.Name == target.Name)
+	if self && !takeBack {
+		return forbidden("%s", raiseSelf)
+	}
+	if self && takeBack {
+		return nil
+	}
+	if c.kind == kindHuman {
+		return nil
+	}
+	if c.kind != kindSession || c.session == nil {
+		return forbidden("%s", raiseOtherCaller)
+	}
+	byCreation, err := s.workbenchByCreation(ctx, c.session)
+	if err != nil {
+		byCreation = false
+	}
+	if !byCreation {
+		if raised, err := s.raisedToWorkbench(ctx, c.session); err != nil {
+			return err
+		} else if raised {
+			return forbidden("%s was raised to workbench, not started on it, so it may not raise others.", c.session.Name)
+		}
+		return forbidden("%s", raiseOtherCaller)
+	}
+	switch s.sessionAncestry(ctx, c.session, target.Name, target.UID) {
+	case ancestryFound:
+		return forbidden("%s works under %s, so it may not raise it.", c.session.Name, target.Name)
+	case ancestryUnverified:
+		return forbidden("The parent chain of %s cannot be read, so the operator cannot tell that it is not under %s. Try again.", c.session.Name, target.Name)
+	case ancestryTooDeep:
+		return forbidden("The parent chain of %s is too deep to read, so the operator cannot tell that it is not under %s.", c.session.Name, target.Name)
+	}
+	return nil
+}
+
+func (s *Server) workbenchByCreation(ctx context.Context, sess *v1alpha1.AgentSession) (bool, error) {
+	if s.Templates == nil || sess == nil {
+		return false, nil
+	}
+	t, err := s.Templates(ctx)
+	if err != nil || t == nil {
+		return false, nil
+	}
+	_, profile, err := t.Profile(sess.Spec.Profile)
+	if err != nil {
+		return false, nil
+	}
+	return profile.ServiceAccount == templates.WorkbenchServiceAccount, nil
+}
+
+func (s *Server) raisedToWorkbench(ctx context.Context, sess *v1alpha1.AgentSession) (bool, error) {
+	raw := sess.Annotations[v1alpha1.AnnotationRaise]
+	if raw == "" {
+		return false, nil
+	}
+	cfg, ok := s.raiseConfig()
+	if !ok {
+		return false, nil
+	}
+	rec, err := sessionraise.Parse(raw)
+	if err != nil {
+		return false, nil
+	}
+	pub, err := sessionraise.ReadPublic(ctx, s.raiseStore(cfg), cfg.OperatorPublic)
+	if err != nil {
+		return false, raiseUnavailable("%s", raiseLedgerUnread)
+	}
+	entry, err := s.raiseEntry(ctx, cfg, string(sess.UID))
+	if err != nil {
+		return false, raiseUnavailable("%s", raiseLedgerUnread)
+	}
+	if sessionraise.Counts(rec, string(sess.UID), pub, entry) != "" || rec.State != sessionraise.StateActive || rec.Profile == "" {
+		return false, nil
+	}
+	if s.Templates == nil {
+		return false, raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile %s runs as.", rec.Profile)
+	}
+	t, err := s.Templates(ctx)
+	if err != nil || t == nil {
+		return false, raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile %s runs as.", rec.Profile)
+	}
+	_, profile, err := t.Profile(rec.Profile)
+	if err != nil {
+		return false, nil
+	}
+	return profile.ServiceAccount == templates.WorkbenchServiceAccount, nil
+}
+
+func (s *Server) eligibleTarget(ctx context.Context, sess *v1alpha1.AgentSession, startSessions bool) error {
+	if sess.Spec.Agent != v1alpha1.AgentClaude {
+		return raiseConflict("Session %s is not a Claude session; only a Claude session is raised.", sess.Name)
+	}
+	if sess.Spec.Mode != v1alpha1.ModeRemote && sess.Spec.Mode != v1alpha1.ModeLocal {
+		return raiseConflict("Session %s is not a remote or local session; only those are raised.", sess.Name)
+	}
+	if sess.Spec.Caller != "" {
+		return raiseConflict("Session %s is a summoned session; summoned sessions are never raised.", sess.Name)
+	}
+	if sess.Spec.ProjectCanary != nil {
+		return raiseConflict("Session %s is a project canary; a canary is never raised.", sess.Name)
+	}
+	if projectcanary.IsPilot(sess) {
+		return raiseConflict("Session %s is a private pilot; a pilot is never raised.", sess.Name)
+	}
+	if sess.Annotations[taskbudget.UIDAnnotation] != "" {
+		return raiseConflict("Session %s is bound to a task budget; a budget-bound session is never raised.", sess.Name)
+	}
+	if !sess.DeletionTimestamp.IsZero() {
+		return raiseConflict("Session %s is being reaped; a session being reaped is never raised.", sess.Name)
+	}
+	if sess.Status.Phase == v1alpha1.PhaseArchived || sess.Status.ArchivedAt != nil {
+		return raiseConflict("Session %s is archived; an archived session is never raised.", sess.Name)
+	}
+	named, err := s.namedCoordinatorSession(ctx, sess)
+	if err != nil {
+		return err
+	}
+	if named {
+		return raiseConflict("Session %s runs as a named coordinator; a named coordinator is never raised.", sess.Name)
+	}
+	child, err := s.coordinatorChild(ctx, sess)
+	if err != nil {
+		return err
+	}
+	if child {
+		return raiseConflict("Session %s is a coordinator host's child; that child is never raised.", sess.Name)
+	}
+	if startSessions {
+		switch sess.Labels[v1alpha1.LabelDepth] {
+		case "2":
+		case "0", "1":
+			return raiseInvalid(fmt.Sprintf("Session %s sits at depth %s and may already start sessions.", sess.Name, sess.Labels[v1alpha1.LabelDepth]))
+		default:
+			return raiseInvalid("Only a session at depth 2 may be raised to start sessions.")
+		}
+	}
+	return nil
+}
+
+func (s *Server) namedCoordinatorSession(ctx context.Context, sess *v1alpha1.AgentSession) (bool, error) {
+	if templates.IsCoordinatorServiceAccount(sess.Labels[templates.CoordinatorIdentityLabel]) {
+		return true, nil
+	}
+	if s.Templates == nil {
+		return false, raiseUnavailable("The templates cannot be read, so the operator cannot tell whether %s is a named coordinator.", sess.Name)
+	}
+	t, err := s.Templates(ctx)
+	if err != nil || t == nil {
+		return false, raiseUnavailable("The templates cannot be read, so the operator cannot tell whether %s is a named coordinator.", sess.Name)
+	}
+	_, profile, err := t.Profile(sess.Spec.Profile)
+	if err != nil {
+		return false, raiseUnavailable("The templates cannot be read, so the operator cannot tell whether %s is a named coordinator.", sess.Name)
+	}
+	return templates.IsCoordinatorServiceAccount(profile.ServiceAccount), nil
+}
+
+func (s *Server) coordinatorChild(ctx context.Context, sess *v1alpha1.AgentSession) (bool, error) {
+	for _, host := range s.Policy.Coordinators {
+		if host.ServiceAccount != "" && sess.Spec.Parent == host.ServiceAccount {
+			return true, nil
+		}
+	}
+	if s.Live == nil {
+		return false, raiseUnavailable("The operator cannot read the session pod, so it cannot tell whether %s is a coordinator host's child.", sess.Name)
+	}
+	var pod corev1.Pod
+	err := s.Live.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, &pod)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, raiseUnavailable("The operator cannot read the session pod, so it cannot tell whether %s is a coordinator host's child.", sess.Name)
+	}
+	return pod.Annotations[CoordinatorHostAnnotation] != "", nil
+}
+
+func (s *Server) checkRaiseWords(c *caller, owner apiv1.RaiseOwner) error {
+	if owner.Words == "" || owner.Where == "" || owner.SaidAt == "" {
+		return raiseInvalid(raiseNeedsWords)
+	}
+	switch sessionraise.WordsProblem(owner.Words) {
+	case "empty":
+		return raiseInvalid(raiseNeedsWords)
+	case "long":
+		return raiseInvalid(raiseWordsLong)
+	case "control":
+		return raiseInvalid(raiseWordsControl)
+	}
+	if shape := sessionraise.SecretShape(owner.Words); shape != "" {
+		return raiseInvalid(fmt.Sprintf("Tom's words look like they hold %s. Leave it out and send his words again.", shape))
+	}
+	allowed := sessionraise.WherePhone
+	kind := "session"
+	if c.kind == kindHuman {
+		allowed = sessionraise.WhereOwn
+		kind = "human"
+	}
+	if owner.Where != allowed {
+		return raiseInvalid(fmt.Sprintf("A %s records only words Tom gave it directly (%s); have the agent he told perform the raise.", kind, allowed))
+	}
+	said, err := time.Parse(time.RFC3339, owner.SaidAt)
+	if err != nil {
+		return raiseInvalid(raiseWordsTime)
+	}
+	now := s.now()
+	if said.After(now.Add(5*time.Minute)) || said.Before(now.Add(-24*time.Hour)) {
+		return raiseInvalid(raiseWordsTime)
+	}
+	if owner.Ref != "" && !grantattest.ValidRef(owner.Ref) {
+		return raiseInvalid("The reference must be 1 to 128 characters of letters, digits and . _ : / # -.")
+	}
+	return nil
+}
+
+func (s *Server) checkRaiseProfile(ctx context.Context, cfg RaiseConfig, profile string, start bool) error {
+	if profile == "" && !start {
+		return raiseInvalid(raiseNeedsOne)
+	}
+	if profile == "" {
+		return nil
+	}
+	shown := profile
+	if len(shown) > 63 || strings.ContainsAny(shown, "\r\n") {
+		shown = "that name"
+	}
+	if len(validation.IsDNS1123Label(profile)) != 0 {
+		return raiseInvalid(fmt.Sprintf("This caller may not raise sessions to profile %s on this operator.", shown))
+	}
+	if s.Templates == nil {
+		return raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile %s runs as.", shown)
+	}
+	t, err := s.Templates(ctx)
+	if err != nil || t == nil {
+		return raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile %s runs as.", shown)
+	}
+	_, parsed, err := t.Profile(profile)
+	if err == nil && templates.IsCoordinatorServiceAccount(parsed.ServiceAccount) {
+		return raiseInvalid(fmt.Sprintf("Profile %s runs as a named coordinator identity; a raise never gives one.", shown))
+	}
+	if err != nil || !slices.Contains(cfg.Profiles, profile) {
+		return raiseInvalid(fmt.Sprintf("This caller may not raise sessions to profile %s on this operator.", shown))
+	}
+	return nil
+}
+
+func ownerSession(c *caller) string {
+	if c != nil && c.kind == kindSession && c.session != nil {
+		return c.session.Name
+	}
+	return ""
+}
+
+func (s *Server) raiseKey(ctx context.Context, cfg RaiseConfig) (ed25519.PrivateKey, error) {
+	priv, err := sessionraise.Load(ctx, s.raiseStore(cfg), cfg.OperatorSecret, cfg.OperatorPublic)
+	if err == nil {
+		return priv, nil
+	}
+	switch {
+	case errors.Is(err, sessionraise.ErrNoKey):
+		return nil, raiseUnavailable("%s", raiseNoKey)
+	case errors.Is(err, sessionraise.ErrMismatch):
+		return nil, raiseUnavailable("%s", raiseKeyMismatch)
+	default:
+		return nil, raiseUnavailable("%s", raiseKeyUnreadable)
+	}
+}
+
+func (s *Server) raiseLedgerErr(err error, c *caller, name string) error {
+	var rate *sessionraise.RateError
+	if errors.As(err, &rate) {
+		if rate.Target {
+			secs := int((rate.Wait + time.Second - 1) / time.Second)
+			if secs < 1 {
+				secs = 1
+			}
+			return tooManyRequests("Session %s's raise changed less than a minute ago. Try again in %d seconds.", name, secs)
+		}
+		return tooManyRequests("%s has made three raises in the last hour. Try again after %s.", c.String(), rate.Until.UTC().Format(time.RFC3339))
+	}
+	var full *sessionraise.FullError
+	if errors.As(err, &full) {
+		return raiseUnavailable("The operator's raise ledger is full. Raises resume as old entries expire on %s.", full.Resume.UTC().Format("2006-01-02"))
+	}
+	if errors.Is(err, sessionraise.ErrUsedWords) {
+		return raiseConflict("%s already used these words for a raise. A new raise needs a new word from Tom.", c.String())
+	}
+	if errors.Is(err, sessionraise.ErrTooBig) {
+		return raiseInvalid(raiseTooBig)
+	}
+	if errors.Is(err, sessionraise.ErrUnreadable) || errors.Is(err, sessionraise.ErrConflict) {
+		return raiseUnavailable("%s", raiseLedgerUnread)
+	}
+	return raiseUnavailable("%s", raiseLedgerUnread)
+}
+
+func (s *Server) readLedger(ctx context.Context, cfg RaiseConfig) (*sessionraise.Ledger, error) {
+	obj, err := s.raiseStore(cfg).Get(ctx, cfg.Ledger)
+	if err != nil {
+		return nil, err
+	}
+	return sessionraise.Unmarshal(obj.Data[sessionraise.LedgerField])
+}
+
+func (s *Server) raiseEntry(ctx context.Context, cfg RaiseConfig, uid string) (*sessionraise.SessionEntry, error) {
+	led, err := s.readLedger(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	cur := led.Find(uid)
+	if cur == nil {
+		return nil, nil
+	}
+	copy := *cur
+	return &copy, nil
+}
+
+// commitLedger reads the ledger uncached and writes it back with its
+// resourceVersion. write false leaves it unchanged. A conflict retries.
+func (s *Server) commitLedger(ctx context.Context, cfg RaiseConfig, mut func(*sessionraise.Ledger) (bool, error)) error {
+	store := s.raiseStore(cfg)
+	var last error
+	for range 5 {
+		obj, err := store.Get(ctx, cfg.Ledger)
+		if err != nil {
+			return err
+		}
+		led, err := sessionraise.Unmarshal(obj.Data[sessionraise.LedgerField])
+		if err != nil {
+			return err
+		}
+		write, err := mut(led)
+		if err != nil {
+			return err
+		}
+		if !write {
+			return nil
+		}
+		raw, err := led.Marshal()
+		if err != nil {
+			return err
+		}
+		last = store.Update(ctx, cfg.Ledger, map[string][]byte{sessionraise.LedgerField: raw}, obj.RV)
+		if errors.Is(last, sessionraise.ErrConflict) {
+			continue
+		}
+		return last
+	}
+	if last == nil {
+		last = sessionraise.ErrConflict
+	}
+	return last
+}
+
+func (s *Server) liveUIDs(ctx context.Context) map[string]bool {
+	if s.Live == nil {
+		return nil
+	}
+	var list v1alpha1.AgentSessionList
+	if err := s.Live.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(list.Items))
+	for i := range list.Items {
+		out[string(list.Items[i].UID)] = true
+	}
+	return out
+}
+
+func (s *Server) writeRaiseAnnotation(ctx context.Context, key types.NamespacedName, uid types.UID, raw string) error {
+	var last error
+	for range 5 {
+		var sess v1alpha1.AgentSession
+		if err := s.Live.Get(ctx, key, &sess); err != nil {
+			return err
+		}
+		if sess.UID != uid {
+			return raiseConflict("Session %s was replaced: its UID is not the one you read. Read it again.", key.Name)
+		}
+		if sess.Annotations == nil {
+			sess.Annotations = map[string]string{}
+		}
+		sess.Annotations[v1alpha1.AnnotationRaise] = raw
+		last = s.Client.Update(ctx, &sess)
+		if apierrors.IsConflict(last) {
+			continue
+		}
+		return last
+	}
+	return last
+}
+
+func (s *Server) podProfile(ctx context.Context, sess *v1alpha1.AgentSession) string {
+	pod, ok := s.raisePod(ctx, sess)
+	if !ok {
+		return sess.Spec.Profile
+	}
+	if label := pod.Labels[v1alpha1.LabelProfile]; label != "" {
+		return label
+	}
+	return sess.Spec.Profile
+}
+
+func (s *Server) raisePod(ctx context.Context, sess *v1alpha1.AgentSession) (*corev1.Pod, bool) {
+	if s.Live == nil || sess == nil {
+		return nil, false
+	}
+	var pod corev1.Pod
+	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, &pod); err != nil {
+		return nil, false
+	}
+	return &pod, true
+}
+
+func (s *Server) suspendIfRaisedAccount(ctx context.Context, sess *v1alpha1.AgentSession, profile, by string) error {
+	if profile == "" || s.Templates == nil {
+		return nil
+	}
+	t, err := s.Templates(ctx)
+	if err != nil || t == nil {
+		return err
+	}
+	_, parsed, err := t.Profile(profile)
+	if err != nil {
+		return err
+	}
+	account := parsed.ServiceAccount
+	if account == "" {
+		account = controller.ServiceAccountName
+	}
+	pod, ok := s.raisePod(ctx, sess)
+	if !ok || pod.Spec.ServiceAccountName != account {
+		return nil
+	}
+	return s.suspendRaised(ctx, client.ObjectKeyFromObject(sess), sess.UID, by)
+}
+
+func (s *Server) suspendRaised(ctx context.Context, key types.NamespacedName, uid types.UID, by string) error {
+	var last error
+	for range 5 {
+		var sess v1alpha1.AgentSession
+		if err := s.Live.Get(ctx, key, &sess); err != nil {
+			return err
+		}
+		if sess.UID != uid || !sess.DeletionTimestamp.IsZero() || sess.Spec.OperatingMode == v1alpha1.OperatingModeSuspended {
+			return nil
+		}
+		orig := sess.DeepCopy()
+		sess.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+		if sess.Annotations == nil {
+			sess.Annotations = map[string]string{}
+		}
+		sess.Annotations[v1alpha1.AnnotationSuspendedBy] = by
+		last = s.Client.Patch(ctx, &sess, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
+		if apierrors.IsConflict(last) {
+			continue
+		}
+		return last
+	}
+	return last
+}
+
+func (s *Server) releaseRaisedGrants(ctx context.Context, uid types.UID, profile string) {
+	if profile == "" || s.Live == nil || s.Client == nil {
+		return
+	}
+	var list v1alpha1.AccessGrantList
+	if err := s.Live.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
+		s.Log.Error(err, "raise take-back grant list")
+		return
+	}
+	for i := range list.Items {
+		g := &list.Items[i]
+		if g.Spec.Requester.SessionUID != uid || g.Spec.Requester.Profile != profile || g.Spec.Release {
+			continue
+		}
+		if g.Status.Phase != v1alpha1.GrantPending && g.Status.Phase != v1alpha1.GrantActive {
+			continue
+		}
+		orig := g.DeepCopy()
+		g.Spec.Release = true
+		if err := s.Client.Patch(ctx, g, client.MergeFrom(orig)); err != nil {
+			s.Log.Error(err, "raise take-back grant release", "grant", g.Name)
+		}
+	}
+}
+
+func decodeRaiseBody(r *http.Request, dest any) error {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dest); err != nil {
+		return badRequest("the raise body is not valid JSON")
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return badRequest("the raise body is not valid JSON")
+	}
+	return nil
+}
+
+// attachRaise adds the raise object when the annotation is present. It reads
+// the ledger only then. An unraised session is left unchanged.
+func (s *Server) attachRaise(ctx context.Context, sess *v1alpha1.AgentSession, v *apiv1.Session, podAccount bool) {
+	if s == nil || sess == nil || v == nil {
+		return
+	}
+	raw, ok := sess.Annotations[v1alpha1.AnnotationRaise]
+	if !ok || raw == "" {
+		return
+	}
+	view := &apiv1.SessionRaise{}
+	rec, err := sessionraise.Parse(raw)
+	if err != nil {
+		view.State = "ignored"
+		view.Ignored = sessionraise.IgnoreSignature
+		v.Raise = view
+		return
+	}
+	fillRaise(view, rec)
+	cfg, configured := s.raiseConfig()
+	var pub ed25519.PublicKey
+	var entry *sessionraise.SessionEntry
+	reason := sessionraise.IgnoreLedger
+	if configured {
+		var err error
+		pub, err = sessionraise.ReadPublic(ctx, s.raiseStore(cfg), cfg.OperatorPublic)
+		if err != nil {
+			reason = sessionraise.IgnoreSignature
+			if errors.Is(err, sessionraise.ErrUnreadable) {
+				reason = sessionraise.IgnoreLedger
+			}
+		} else if entry, err = s.raiseEntry(ctx, cfg, string(sess.UID)); err != nil {
+			reason = sessionraise.IgnoreLedger
+		} else {
+			reason = sessionraise.Counts(rec, string(sess.UID), pub, entry)
+		}
+	}
+	if reason != "" {
+		view.Ignored = reason
+		view.State = "ignored"
+	} else if rec.State == sessionraise.StatePending {
+		s.overlayNotice(ctx, cfg, view, entry, pub)
+	}
+	if podAccount {
+		if pod, ok := s.raisePod(ctx, sess); ok {
+			view.PodAccount = pod.Spec.ServiceAccountName
+		}
+	}
+	v.Raise = view
+}
+
+func fillRaise(view *apiv1.SessionRaise, rec sessionraise.Record) {
+	view.ID = rec.ID
+	view.State = rec.State
+	view.Profile = rec.Profile
+	view.FromProfile = rec.FromProfile
+	view.StartSessions = rec.StartSessions
+	view.PerformedBy = rec.PerformedBy
+	view.PerformedAt = rec.PerformedAt
+	view.NoticeSentAt = rec.NoticeSentAt
+	view.ActiveFrom = rec.ActiveFrom
+	view.TakenBackBy = rec.TakenBackBy
+	view.TakenBackAt = rec.TakenBackAt
+	view.Owner = &apiv1.RaiseOwner{
+		Words: rec.Owner.Words, Where: rec.Owner.Where, Session: rec.Owner.Session,
+		SaidAt: rec.Owner.SaidAt, Ref: rec.Owner.Ref,
+	}
+}
+
+func (s *Server) overlayNotice(ctx context.Context, cfg RaiseConfig, view *apiv1.SessionRaise, entry *sessionraise.SessionEntry, pub ed25519.PublicKey) {
+	if entry == nil {
+		return
+	}
+	notices, keeperPub, err := s.readNotices(ctx, cfg)
+	if err != nil || notices == nil {
+		return
+	}
+	view.NoticeAttempt = sessionraise.AttemptCount(*entry, notices.Items, keeperPub)
+	sent, ok := sessionraise.SentTime(*entry, notices.Items, keeperPub)
+	if !ok {
+		return
+	}
+	at, err := time.Parse(time.RFC3339, sent)
+	if err != nil {
+		return
+	}
+	view.NoticeSentAt = sent
+	view.ActiveFrom = at.Add(sessionraise.EffectDelay).UTC().Format(time.RFC3339)
+	_ = pub
+}
+
+func (s *Server) raiseStatus(ctx context.Context, sess *v1alpha1.AgentSession) apiv1.RaiseStatus {
+	v := view(sess, false)
+	s.attachRaise(ctx, sess, &v, false)
+	profile := sess.Spec.Profile
+	if profile == "" && s.Templates != nil {
+		if t, err := s.Templates(ctx); err == nil && t != nil {
+			profile = t.DefaultProfile
+		}
+	}
+	podProfile := ""
+	if pod, ok := s.raisePod(ctx, sess); ok {
+		podProfile = pod.Labels[v1alpha1.LabelProfile]
+	}
+	return apiv1.RaiseStatus{
+		Name: sess.Name, UID: string(sess.UID), Depth: sess.Labels[v1alpha1.LabelDepth],
+		Profile: profile, PodProfile: podProfile, Raise: v.Raise,
+	}
+}
+
+// depthExempt is the only way a create passes the depth check above 2.
+// The caller holds createMu. Every failed read returns false, so the create
+// is refused rather than admitted.
+func (s *Server) depthExempt(ctx context.Context, c *caller) bool {
+	cfg, ok := s.raiseConfig()
+	if !ok || !cfg.Dispatch || c == nil || c.session == nil || c.depth != maxSessionDepth+1 {
+		return false
+	}
+	if c.session.Labels[v1alpha1.LabelDepth] != "2" || s.Live == nil {
+		return false
+	}
+	var live v1alpha1.AgentSession
+	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: c.session.Namespace, Name: c.session.Name}, &live); err != nil {
+		return false
+	}
+	if live.UID != c.session.UID || live.Labels[v1alpha1.LabelDepth] != "2" {
+		return false
+	}
+	rec, err := sessionraise.Parse(live.Annotations[v1alpha1.AnnotationRaise])
+	if err != nil {
+		return false
+	}
+	pub, err := sessionraise.ReadPublic(ctx, s.raiseStore(cfg), cfg.OperatorPublic)
+	if err != nil {
+		return false
+	}
+	entry, err := s.raiseEntry(ctx, cfg, string(live.UID))
+	if err != nil || entry == nil {
+		return false
+	}
+	if sessionraise.Counts(rec, string(live.UID), pub, entry) != "" {
+		return false
+	}
+	return rec.State == sessionraise.StateActive && rec.StartSessions && rec.Depth == "2"
+}
+
+func (s *Server) depthRefusal(c *caller) *apiError {
+	msg := fmt.Sprintf("session %s is %d levels deep and may not start sessions: two levels is the limit (DESIGN-001 3.4)", c.parent, c.depth-1)
+	if c.session != nil && c.session.Labels[v1alpha1.LabelDepth] == "2" {
+		msg += ". A session at depth 2 can be raised to start sessions (agent-run help raise)."
+	}
+	return forbidden("%s", msg)
+}

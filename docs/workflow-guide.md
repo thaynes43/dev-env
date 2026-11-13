@@ -820,6 +820,12 @@ not typed again; a different title recorded later in the same pod is typed
 under the same guard. A title may not end with a semicolon and may not
 contain a backslash. This typed rename is built and not installed.
 
+`agent-run raise` gives a running session a profile or the right to start
+sessions, on Tom's own words given to this agent. It takes effect two
+minutes after his notice is accepted. Take-back needs no words. This build
+does not restart the session. The command is built and not installed: the
+operator flags are off by default, and with them off a raise is refused.
+
 It needs no flag, pairing or sign-in on the default profile, which follows the
 keeper's shared login. Tell Tom the session name once `show` reads
 `registered` (about two minutes; [quickstart section

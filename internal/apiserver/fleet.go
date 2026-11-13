@@ -71,6 +71,8 @@ func (s *Server) fleet(ctx context.Context, _ http.ResponseWriter, r *http.Reque
 			Node: v.Node, Revision: v.Revision, Outdated: v.Outdated, Parent: v.Parent,
 			Reaping: v.Reaping, CreatedAt: v.CreatedAt,
 		}
+		s.attachRaise(ctx, sess, &v, false)
+		fs.Raise = v.Raise
 		if a := v.AgentStatus; a != nil {
 			fs.AgentState, fs.LastHeartbeat = a.State, a.LastHeartbeat
 		}

@@ -65,6 +65,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/scheduledwork/executor"
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
+	"github.com/thaynes43/dev-env/internal/sessionraise"
 	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/standby"
 	"github.com/thaynes43/dev-env/internal/summonquota"
@@ -219,6 +220,12 @@ type options struct {
 	// titleRename names the sessions whose heartbeat answers carry the title
 	// object. Empty names none (DESIGN-065 rule 8.3).
 	titleRename apiserver.TitleRename
+	// sessionRaiseDispatch lets a raised depth-2 session start one level of
+	// children. Off by default. A non-empty profile list refuses startup
+	// until DESIGN-066 slice (b) changes the pod.
+	sessionRaiseDispatch  bool
+	sessionRaiseProfiles  string
+	sessionRaiseKeySecret string
 }
 
 func parseFlags(args []string) (options, error) {
@@ -396,6 +403,9 @@ func parseFlags(args []string) (options, error) {
 	collectorFile := fs.String("allowance-collector-config-file", "", "absolute private operator-owned collector configuration; requires explicit enable and aggregate selection")
 	handoffFile := fs.String("allowance-handoff-file", "", "absolute private file with one human-approved allowance handoff request, applied once by the elected operator that already holds the slot write authority; requires the enabled collector and an absolute path (a misuse of the flag is a startup error); an unreadable or invalid file is refused and logged without stopping the operator")
 	titleRename := fs.String("title-rename-sessions", "", "comma-separated session names whose heartbeat answers carry the title object, or *; empty, the default, names no session, so agentd types nothing (DESIGN-065 rule 8.3)")
+	fs.BoolVar(&o.sessionRaiseDispatch, "enable-session-raise-dispatch", false, "let a session at depth 2 that Tom raised start one level of children; default off (DESIGN-066)")
+	fs.StringVar(&o.sessionRaiseProfiles, "session-raise-profiles", "", "comma-separated profiles a raise may name; empty, the default, names none. A non-empty list refuses startup until DESIGN-066 slice (b)")
+	fs.StringVar(&o.sessionRaiseKeySecret, "session-raise-operator-key-secret", sessionraise.OperatorSecretName, "Secret holding the operator raise signing key; a missing Secret is logged and skipped")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -404,6 +414,13 @@ func parseFlags(args []string) (options, error) {
 		return o, parseErr
 	}
 	o.titleRename = parsedTitleRename
+	if strings.TrimSpace(o.sessionRaiseProfiles) != "" {
+		// The period is part of the sentence DESIGN-066 requires.
+		return o, errors.New("Profile raises need the pod change of DESIGN-066 slice (b).") //nolint:staticcheck // ST1005: the sentence is fixed by the design
+	}
+	if o.sessionRaiseKeySecret == "" {
+		o.sessionRaiseKeySecret = sessionraise.OperatorSecretName
+	}
 	if fs.NArg() > 0 {
 		return o, fmt.Errorf("unexpected arguments %q", fs.Args())
 	}
@@ -1174,7 +1191,12 @@ func run(args []string) error {
 			}
 		}
 		api := &apiserver.Server{
-			TitleRename:                      o.titleRename,
+			TitleRename: o.titleRename,
+			Raise: &apiserver.RaiseConfig{
+				Dispatch:       o.sessionRaiseDispatch,
+				Namespace:      o.templatesNamespace,
+				OperatorSecret: o.sessionRaiseKeySecret,
+			},
 			CoordinatorInstructionAgentImage: o.coordinatorInstructionAgentImage,
 
 			PortalMessageTargets:      o.portalMessageTargets,
@@ -1263,6 +1285,14 @@ func run(args []string) error {
 					Enabled: true, Sessions: sessions,
 					PortalNamespace: aggregatePortalNamespace, PortalServiceAccount: aggregatePortalAccount,
 				}
+			}
+		}
+		if err := mgr.Add(&apiserver.RaiseKeyOwner{Server: api}); err != nil {
+			return err
+		}
+		if o.sessionRaiseDispatch {
+			if err := mgr.Add(&apiserver.RaiseActivator{Server: api}); err != nil {
+				return err
 			}
 		}
 		// The standby session is default off. It is made through the API's own

@@ -134,7 +134,7 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 			return http.StatusOK, view(existing, false), nil
 		}
 	}
-	if err := s.admitCreate(ctx, c, sess); err != nil {
+	if err := s.admitCreateDirect(ctx, c, sess); err != nil {
 		return 0, nil, err
 	}
 
@@ -370,7 +370,9 @@ func (s *Server) listSessions(ctx context.Context, _ http.ResponseWriter, r *htt
 			continue
 		}
 		if (c.kind != kindCoordinator || items[i].Spec.Parent == c.parent) && f.match(&items[i], c) {
-			out.Sessions = append(out.Sessions, view(&items[i], false))
+			v := view(&items[i], false)
+			s.attachRaise(ctx, &items[i], &v, false)
+			out.Sessions = append(out.Sessions, v)
 		}
 	}
 	return http.StatusOK, out, nil
@@ -462,6 +464,7 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 		}
 		v := view(sess, true)
 		s.noteTitleRename(sess, &v)
+		s.attachRaise(ctx, sess, &v, true)
 		return http.StatusOK, v, nil
 	}
 	if c.kind == kindSummon {
@@ -474,6 +477,7 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 		}
 		v := view(&own, true)
 		s.noteTitleRename(&own, &v)
+		s.attachRaise(ctx, &own, &v, true)
 		return http.StatusOK, v, nil
 	}
 	opted := r.Header.Get(apiv1.UsageCaptureHeader) == apiv1.UsageCaptureDirectV1
@@ -509,6 +513,7 @@ func (s *Server) withUsageRollup(ctx context.Context, sess *v1alpha1.AgentSessio
 		v.CapturedUsage = capturedUsageView(sess, c, s.ChildUsageCapture)
 	}
 	s.noteTitleRename(sess, &v)
+	s.attachRaise(ctx, sess, &v, true)
 	return v
 }
 
@@ -649,13 +654,21 @@ func refuseRetainedExecutor(c *caller) error {
 }
 
 // admitCreate is the part of a create's admission that reads the session it
-// would make and the sessions already there: a parent that is itself a
-// summoned session, the instruction image, the private project gate, the
-// portal launch cap, the named coordinator rule and a session caller's depth
-// and child cap. Every create path that makes an ordinary session runs it
-// under the create lock, after a repeat of the same create has had its answer
-// (createSessionMode, CreateScheduledSession).
+// would make and the sessions already there. It does not apply the ADR-028
+// depth exemption. Scheduled work and summoned creates call it.
 func (s *Server) admitCreate(ctx context.Context, c *caller, sess *v1alpha1.AgentSession) error {
+	return s.admitCreatePath(ctx, c, sess, false)
+}
+
+// admitCreateDirect is admitCreate for the direct create route. It is the
+// only path that can admit a depth-2 session whose raise grants startSessions.
+func (s *Server) admitCreateDirect(ctx context.Context, c *caller, sess *v1alpha1.AgentSession) error {
+	return s.admitCreatePath(ctx, c, sess, true)
+}
+
+// admitCreatePath is the shared admission. direct is true only for
+// createSessionMode, which already holds createMu.
+func (s *Server) admitCreatePath(ctx context.Context, c *caller, sess *v1alpha1.AgentSession, direct bool) error {
 	if err := s.refuseSummonedParent(ctx, c, sess); err != nil {
 		return err
 	}
@@ -697,8 +710,8 @@ func (s *Server) admitCreate(ctx context.Context, c *caller, sess *v1alpha1.Agen
 	}
 
 	if c.kind == kindSession {
-		if c.depth > maxSessionDepth {
-			return forbidden("session %s is %d levels deep and may not start sessions: two levels is the limit (DESIGN-001 3.4)", c.parent, c.depth-1)
+		if c.depth > maxSessionDepth && (!direct || !s.depthExempt(ctx, c)) {
+			return s.depthRefusal(c)
 		}
 		n, err := s.runningChildren(ctx, c.parent, sess.Spec.Agent)
 		if err != nil {

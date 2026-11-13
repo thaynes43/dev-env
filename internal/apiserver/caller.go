@@ -48,7 +48,9 @@ const (
 
 // maxSessionDepth is the deepest a session may sit (DESIGN-001 3.4, "two levels
 // deep"): depth 0 is a session Tom or a client created, 1 its child, 2 a
-// grandchild, which creates no children.
+// grandchild, which creates no children. ADR-028 is the one exemption: a
+// session at depth 2 whose raise record is active and grants startSessions
+// may create a child, and that child is labelled 3.
 const maxSessionDepth = 2
 
 // maxRunningChildrenPerAgent is how many unfinished children one session may have per canonical agent at a

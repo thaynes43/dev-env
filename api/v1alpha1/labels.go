@@ -113,8 +113,12 @@ const (
 	// LabelDepth is how many sessions stand between this one and the human or
 	// client that started the chain: 0 for a session Tom or a client created, 1
 	// for its child, 2 for a grandchild. A session at depth 2 creates no children
-	// (DESIGN-001 3.4: two levels deep).
+	// except the one exemption in ADR-028: a raised session whose record is
+	// active and grants startSessions. That child is labelled 3 and starts nothing.
 	LabelDepth = LabelPrefix + "depth"
+	// AnnotationRaise is the signed raise record (DESIGN-066). It is metadata,
+	// like the title annotation, so writing it does not move metadata.generation.
+	AnnotationRaise = LabelPrefix + "raise"
 )
 
 // The finalizer, label and annotations a scheduled session carries (DESIGN-054

@@ -1,8 +1,9 @@
 # DESIGN-066: Raise a running session from outside it
 
-- **Status:** Accepted for building 2026-11-13; nothing is built or
-  installed. No flag, CRD change, route, command or haynes-ops change exists
-  for it. Proposed the same day for the coordinator's review and revised
+- **Status:** Accepted for building 2026-11-13. Slice (a) is built and not
+  installed: the record, the routes, the notice and the start-sessions
+  exemption, all off by default. Slices (b), (c) and (d) are not built. No
+  haynes-ops change exists for it. Proposed the same day for the coordinator's review and revised
   three times: after Tom answered Q-066-01 (section 1.2), so the go-ahead is
   his word to an agent; then after two design reviews by another model
   family, with the coordinator's rulings on each finding (section 15); and
