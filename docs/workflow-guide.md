@@ -1062,6 +1062,10 @@ The operator flag `--enable-parent-notes` defaults to false and requires
 nothing; an operator older than this feature answers 404. The wait needs the
 verb watch on inboxmessages for the operator's Role, granted in haynes-ops
 before the flag is on. This source does not enable the flag in the cluster.
+The child's project must also be in the operator's `--inbox-projects` list.
+A child of any other project is hidden, and its `parent tell` answers 404
+(`internal/apiserver/parent_note.go:87`). On 2026-11-13 the live list is
+`dev-env,haynes-studio` (OpenProject #799).
 The parent finds notes by listing them or with `parent wait-any`. A child whose recorded parent is the
 Meatball account `dev-env-system/dev-env-meatball` uses the same `parent tell`.
 The server stores `callerRecipient` from the live CallerPolicy. Any other

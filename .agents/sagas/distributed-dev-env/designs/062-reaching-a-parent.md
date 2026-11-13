@@ -61,6 +61,13 @@ Live operator flags that this section depends on:
 `--enable-inbox-questions=true`, `--inbox-coordinator-read-projects=dev-env`,
 `--enable-asks=true`. The keeper has `--enable-ask-notifications=true`.
 
+**Note, 2026-11-13 (the coordinator, OpenProject #799, not Tom).** The live
+value is now `--inbox-projects=dev-env,haynes-studio` (haynes-ops#4877). The
+list also gates the parent notes this design adds: a child whose project
+is not in it gets 404 from `agent-run parent tell`
+(`internal/apiserver/parent_note.go:87`). A Studio worker met that refusal on
+2026-11-13 before the project was added.
+
 ### 2.1 agent-run msg
 
 `agent-run msg` posts once to `POST /v1/sessions/{name}/messages`
