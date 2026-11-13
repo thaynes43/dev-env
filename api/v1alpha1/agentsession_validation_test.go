@@ -2835,6 +2835,7 @@ func TestSummonRegistrationRules(t *testing.T) {
 		together = "the registration result and its time are set together"
 		exactly  = "a registration reason is set exactly when the result is unavailable"
 		pages    = "pages hold escalation-started exactly when the registration has a result"
+		oneEvent = "pages hold at most one escalation-started"
 	)
 	for _, tc := range []struct {
 		name          string
@@ -2896,6 +2897,20 @@ func TestSummonRegistrationRules(t *testing.T) {
 		{"other-events-without-result", none, func(st *v1alpha1.SummonStatus) {
 			st.Pages = append(st.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationHeld, At: seenAt})
 		}, ""},
+		// One escalation-started, never two (story 794 fix round 1, ruling 4,
+		// PR 1132 comment 6856616130; not a ruling by Tom).
+		{"one-event-beside-others", none, func(st *v1alpha1.SummonStatus) {
+			st.Pages = append(st.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationHeld, At: seenAt})
+			registered(st)
+			st.Pages = append(st.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationReminder, At: otherAt})
+		}, ""},
+		{"second-event-appended", registered, func(st *v1alpha1.SummonStatus) {
+			st.Pages = append(st.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationStarted, At: otherAt})
+		}, oneEvent},
+		{"two-events-at-once", none, func(st *v1alpha1.SummonStatus) {
+			registered(st)
+			st.Pages = append(st.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationStarted, At: otherAt})
+		}, oneEvent},
 		// The enums and their bounds.
 		{"result-unknown", none, func(st *v1alpha1.SummonStatus) {
 			registered(st)

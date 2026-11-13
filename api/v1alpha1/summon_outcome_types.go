@@ -12,6 +12,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.executor) || has(self.executor)",message="the executor latch cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.registration) || has(self.registration)",message="the registration record cannot be removed"
 // +kubebuilder:validation:XValidation:rule="(has(self.registration) && has(self.registration.result)) == (has(self.pages) && self.pages.exists(p, p.event == 'escalation-started'))",message="pages hold escalation-started exactly when the registration has a result"
+// +kubebuilder:validation:XValidation:rule="!has(self.pages) || self.pages.filter(p, p.event == 'escalation-started').size() <= 1",message="pages hold at most one escalation-started"
 type SummonStatus struct {
 	// AdmittedAt is when the operator leader admitted the session: its charge
 	// was in the create ledger under its own name, its single-flight lane was
@@ -47,8 +48,9 @@ type SummonStatus struct {
 	// registration (DESIGN-064 6.10; story 794, coordinator rulings O1, O2,
 	// O3 and O13 on item 745 comments 7680 and 7685, not rulings by Tom).
 	// The operator leader writes it, and appends escalation-started to
-	// pages in the same write as its result. Each field is set once; the
-	// record is never removed.
+	// pages in the same write as its result; pages hold at most one
+	// escalation-started (story 794 fix round 1, ruling 4). Each field is set
+	// once; the record is never removed.
 	// +optional
 	Registration *SummonRegistrationStatus `json:"registration,omitempty"`
 }

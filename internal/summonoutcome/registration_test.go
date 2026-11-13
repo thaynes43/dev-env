@@ -340,3 +340,104 @@ func TestRegistrationSettledIsFinal(t *testing.T) {
 		t.Errorf("no summon record: %+v", got)
 	}
 }
+
+// beatAt is the reading with its heartbeat taken at at, the agent word kept.
+func (in regInputs) beatAt(at time.Time) regInputs {
+	a := in.agent.DeepCopy()
+	a.LastHeartbeat = regTime(at)
+	in.agent = a
+	return in
+}
+
+// Story 794 fix round 1, ruling 1 (coordinator rulings in PR 1132 comment
+// 6856616130 and item 745 comment 7855; not a ruling by Tom): unavailable
+// needs a heartbeat taken at or after its bound (agentSeenAt plus 5 minutes,
+// or admittedAt plus 10 minutes when the agent was never seen), as well as
+// now at or after that bound. An older reading, fresh or not, is nothing yet.
+// registered keeps the 3-minute window.
+func TestRegistrationUnavailableNeedsAReadingFromItsBound(t *testing.T) {
+	seen := regAdmitted.Add(2 * time.Minute)
+	seenBound := seen.Add(5 * time.Minute)
+	for _, tc := range []struct {
+		name  string
+		read  func(now time.Time) regInputs
+		bound time.Time
+		want  RegistrationDecision
+	}{
+		{"seen, starting", func(now time.Time) regInputs {
+			return regRead(now, protocol.AgentBusy, rcState(protocol.RemoteStarting)).seenAt(seen)
+		}, seenBound, unavailable(v1alpha1.RegistrationReasonStarting)},
+		{"never seen, login-required", func(now time.Time) regInputs {
+			return regRead(now, protocol.AgentLoginRequired, rcState(protocol.RemoteLoginRequired))
+		}, regAdmitted.Add(10 * time.Minute), unavailable(v1alpha1.RegistrationReasonLoginRequired)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.read(tc.bound).beatAt(tc.bound.Add(-150 * time.Second)).decide(); got != nothingYet {
+				t.Errorf("now at the bound, the reading 2m30s before it: %+v, want nothing yet", got)
+			}
+			if got := tc.read(tc.bound.Add(time.Minute)).beatAt(tc.bound.Add(-time.Second)).decide(); got != nothingYet {
+				t.Errorf("now past the bound, the reading a second before it: %+v, want nothing yet", got)
+			}
+			if got := tc.read(tc.bound).beatAt(tc.bound).decide(); got != tc.want {
+				t.Errorf("now and the reading at the bound: %+v, want %+v", got, tc.want)
+			}
+			if got := tc.read(tc.bound.Add(2 * time.Minute)).beatAt(tc.bound.Add(time.Minute)).decide(); got != tc.want {
+				t.Errorf("a reading after the bound: %+v, want %+v", got, tc.want)
+			}
+			if got := tc.read(tc.bound.Add(-10 * time.Second)).beatAt(tc.bound).decide(); got != nothingYet {
+				t.Errorf("a reading at the bound, now 10 seconds before it: %+v, want nothing yet", got)
+			}
+		})
+	}
+	// registered reads any heartbeat at most 3 minutes old, from before a
+	// bound or not.
+	for _, in := range []regInputs{
+		regRead(regAdmitted.Add(4*time.Minute), protocol.AgentBusy, registeredRC()).beatAt(regAdmitted.Add(time.Minute)),
+		regRead(seenBound.Add(time.Minute), protocol.AgentBusy, registeredRC()).seenAt(seen).beatAt(seenBound.Add(-2 * time.Minute)),
+	} {
+		if got := in.decide(); got != registered {
+			t.Errorf("registered, a reading 3 minutes old, at %s: %+v, want registered", in.now, got)
+		}
+	}
+}
+
+// Story 794 fix round 1, ruling 3: a heartbeat stamped more than 30 seconds
+// after now is no reading, for every answer; 30 seconds ahead is read.
+func TestRegistrationHeartbeatAheadIsNotRead(t *testing.T) {
+	if RegistrationHeartbeatAhead != 30*time.Second {
+		t.Fatalf("RegistrationHeartbeatAhead is %s, want 30s (ruling 3)", RegistrationHeartbeatAhead)
+	}
+	now := regAdmitted.Add(time.Minute)
+	for _, tc := range []struct {
+		name string
+		in   regInputs
+		want RegistrationDecision
+	}{
+		{"registered", regRead(now, protocol.AgentBusy, registeredRC()), registered},
+		{"agent seen", regRead(now, protocol.AgentBusy, rcState(protocol.RemoteStarting)), agentSeen},
+	} {
+		if got := tc.in.beatAt(now.Add(31 * time.Second)).decide(); got != nothingYet {
+			t.Errorf("%s, now+31s: %+v, want nothing yet", tc.name, got)
+		}
+		if got := tc.in.beatAt(now.Add(30 * time.Second)).decide(); got != tc.want {
+			t.Errorf("%s, now+30s: %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+	late := regAdmitted.Add(time.Hour) // past both bounds
+	for _, in := range []regInputs{
+		regRead(late, protocol.AgentBusy, rcState(protocol.RemoteOffline)).seenAt(regAdmitted),
+		regRead(late, protocol.AgentPending, rcState(protocol.RemoteLoginRequired)),
+		regRead(late, protocol.AgentBusy, registeredRC()),
+	} {
+		if got := in.beatAt(late.Add(4 * time.Minute)).decide(); got != nothingYet {
+			t.Errorf("%s past a bound, now+4m: %+v, want nothing yet", in.rc.State, got)
+		}
+		want := registered
+		if in.rc.State != protocol.RemoteRegistered {
+			want = unavailable(v1alpha1.SummonRegistrationReason(in.rc.State))
+		}
+		if got := in.beatAt(late.Add(30 * time.Second)).decide(); got != want {
+			t.Errorf("%s past a bound, now+30s: %+v, want %+v", in.rc.State, got, want)
+		}
+	}
+}

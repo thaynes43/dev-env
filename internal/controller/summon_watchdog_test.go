@@ -847,7 +847,7 @@ func TestSummonWatchdogEscalationReminderAndBound(t *testing.T) {
 		t.Fatalf("want one reminder at 24 hours: %+v", p)
 	}
 	if p := startedPages(w.pages(s.Name)); len(p) != 1 || !p[0].At.Time.Equal(summonT0.Add(25*time.Hour)) {
-		t.Fatalf("want one escalation-started at 25 hours, 5 minutes after the agent was seen: %+v", p)
+		t.Fatalf("want one escalation-started at 25 hours, the first pass after the bound (the agent was seen at 24 hours less a second, so its bound fell 5 minutes later): %+v", p)
 	}
 	step(72 * time.Hour)
 	w.wantClosed(s.Name, summonoutcome.ReasonEscalationBound, v1alpha1.OutcomeFailed)
