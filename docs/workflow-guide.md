@@ -787,6 +787,23 @@ create sessions (a v2 session, a workbench session or the v1 pod) runs:
 "${v2run[@]}" show <name>    # wait for "remote control: registered"
 ```
 
+For a summoned remote session with a stored registration record, `agent-run
+show <name>` adds a `registration` row: the current Remote Control state,
+the operator's settlement (`registered at <time>` or `unavailable at <time>`
+with its reason), or `not yet settled` with when the agent was first seen.
+The row says whether the link is present in `-o json` at `remoteControl.url`;
+it never prints the link. A later Remote Control state does not change the
+stored settlement.
+
+The single-session API view and `show -o json` carry that record as
+`summonRegistration` (`agentSeenAt`, `result`, `reason`, `at`, each omitted
+when unset). No record means no row and no key, preserving the session's
+existing output. Session lists, fleet and portal lists never carry the new
+key. Older strict clients (`show --json --once` and `usage export`) still
+read sessions without the record; for a session with it, their detail read
+rejects the unknown `summonRegistration` key. Updated clients accept it;
+usage export continues to export usage only.
+
 `--title "Main coordinator"` sets optional role text at create. For
 `claude-opus-5-5` the Claude app shows `Opus | Main coordinator`. The session's
 stable name stays the pod name, the hostname and the volume name. An empty
@@ -2040,6 +2057,70 @@ None is a ruling by Tom.
   pruning resume on the next tick. A whole message that fits in 950
   characters goes without a footer; otherwise the largest prefix of whole
   lines that fits with its footer goes.
+
+- **Overflow** (story 793, slice c of 742; coordinator rulings on item 742
+  comment 7457 and answer op793-q-1; story 793 fix round 1, coordinator
+  rulings in PR 1130 comment 6846451603 and answer op793-fix1-q-1; none a
+  ruling by Tom). An urgent create
+  the API refuses (a full queue of urgent sessions, or the hour's creates
+  spent) has no session to page, so the API counts it in the create ledger,
+  `urgentRefusals` per caller in the ConfigMap `dev-env-summon-creates` in
+  `dev-env-system`, and the keeper reads that count by name each tick,
+  through the pager's own client, after its scan. It never writes it. For a
+  caller whose count is above the one its last overflow event took, at most
+  one overflow event an hour: a page, `[dev-env] overflow: N urgent session
+  creates from caller <caller> were refused and not yet paged`, at priority
+  0 with the console's sessions list as its one link, or, past the cap,
+  `capped`. Either way the event takes the caller's hour. A page that is
+  attempted also takes the count, and refusals after it wait for the next;
+  a capped event leaves the count where it was (0 for a caller never paged),
+  so the caller's next page carries its refusals too. So every refused
+  urgent create is in exactly one page attempt. An overflow page counts
+  toward the 6 an hour; it goes after the drill and before the session pages
+  of its tick, callers by their last refusal, oldest first: of two callers
+  with one slot left, the older last refusal pages and the other is capped.
+  A capped one is counted in the `more-events` page and listed in the next
+  digest as `<caller> unknown capped overflow` (the count does not say which
+  lane was refused). So k callers with refusals take about k of an hour's 6
+  slots, and session pages keep about 6 − k − 1 (one for the `more-events`
+  page; a drill takes one more, once). That is the usual figure, not a floor
+  for every 60 minutes: the window slides, so the `more-events` page can go
+  twice inside one 60 minutes, and a page's slot is stamped at its send
+  deadline, so one caller's two overflow pages can both count for up to 6
+  seconds. Only callers with urgent lanes (`remediation`, `escalation`) can
+  have refusals: three CallerPolicies on 2026-11-13, so k is at most 3
+  today. A count below the one last taken (the
+  key was reset) or a key that is gone sets the reference to 0 at once: every
+  refusal the key then holds is new; the caller keeps its record and its
+  hour. Once each, as for a page: the caller's record, the dedupe entry and
+  the page record are written in one update before the send, an unknown
+  result is `ambiguous`, and nothing is retried, across restarts and between
+  two keepers. The record holds the title, the caller and the count. A
+  create ledger that is missing, refused (the keeper's Role needs `get` on
+  it) or cannot be read as a whole sends no overflow page and logs `summon
+  overflow: the create ledger is unavailable` once a tick; one caller's entry
+  that cannot be decoded makes only that caller wait, with `summon overflow:
+  a caller's create ledger entry is unreadable; that caller waits`, and no
+  value from it. The pages and the digest go on either way. The ledger keeps
+  at most 64 callers, for all time: the create ledger never removes a caller
+  or lowers its count, so a record whose count is above 0 is never dropped
+  (that would page its old refusals again). The first 64 callers ever
+  refused keep their places; a 65th is never paged, and the keeper logs
+  `summon overflow caller capacity reached` once a tick. Freeing a place is
+  an operator's edit of the pager's ledger. The one exception is a record
+  whose key is gone or holds a count of 0 (removed or reset to zero by hand)
+  and that has had no overflow event for an hour: it goes for a new caller,
+  the oldest first. A record that still owes refusals (only capped events so
+  far, or a key reset to a lower count above 0), or whose entry cannot be
+  decoded, keeps its place. A record ahead of the keeper's clock
+  holds that caller until the clock has passed it by the hour, with
+  `summon overflow ledger time is ahead of the keeper's clock`. Stated
+  limits: a key reset and refilled past its old count between two
+  successful reads of the create ledger is not seen as reset, and that many
+  of its refusals are not paged; that time can be hours while reads fail,
+  the keeper's Role rule is missing or the keeper is down. The reverse: an
+  old copy of the create ledger restored after a reset pages old refusals
+  again.
 - **The text.** Fixed templates in keeper source. A page starts `[dev-env]`
   and the event; a drill starts `DRILL`. A session's note follows the label
   `session note:`. Every control or format character and every line or
@@ -2098,7 +2179,12 @@ None is a ruling by Tom.
   bearer token file is local I/O outside it, and discovery and a tick are
   several requests, each bounded, not one bounded operation (fix round 3). A
   tick makes one paginated scan of at most 20 list calls, at most 20 reads by
-  name and the ledger calls, then waits 60 seconds. A keeper REST config that
+  name, one read of the create ledger (story 793) and the ledger calls, then
+  waits 60 seconds. A stalled read of the create ledger holds nothing either:
+  it ends on the same timeout, and the tick goes on without overflow pages.
+  The read comes before the tick's sends, so it can delay that tick's pages
+  by at most that timeout, 5 seconds (the local reload of the bearer token
+  file above aside). A keeper REST config that
   carries a transport, a transport wrapper, a dialer, a proxy function, an
   auth provider, an auth config persister, an exec credential plugin or a
   warning handler of either kind turns the pager off and logs `summon pages

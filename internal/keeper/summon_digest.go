@@ -206,11 +206,12 @@ func (p *summonPager) pend(l *summonPageLedger, outcomes []summonDigestLine, lan
 		}
 		return capped[i] < capped[j]
 	})
+	callers := st.overflowCallers()
 	for _, key := range capped {
 		if full() {
 			break
 		}
-		d.Pending = append(d.Pending, summonCappedLine(key, st.Events[key], lanes))
+		d.Pending = append(d.Pending, summonCappedLine(key, st.Events[key], lanes, callers))
 		changed = true
 	}
 	for _, line := range st.newDigestOutcomes(outcomes) {
@@ -231,13 +232,18 @@ func (p *summonPager) pend(l *summonPageLedger, outcomes []summonDigestLine, lan
 }
 
 // summonCappedLine is a capped event's line: "<session> <lane> capped
-// <event>". A drill's line is "<id> drill capped drill". A lane the tick did
-// not list is unknown.
-func summonCappedLine(key string, e summonPageEntry, lanes map[string]string) summonDigestLine {
+// <event>". A drill's line is "<id> drill capped drill". An overflow event's
+// is "<caller> unknown capped overflow" (story 793): its caller from the
+// overflow member (callers, by the hash its key carries), and unknown for the
+// lane, which the create ledger's count does not say. A lane the tick did not
+// list is unknown.
+func summonCappedLine(key string, e summonPageEntry, lanes, callers map[string]string) summonDigestLine {
 	owner, event, _ := cutSummonKey(key)
 	line := summonDigestLine{Key: key, Session: summonStoredName(e.Session), Lane: "unknown", State: summonStateCapped, Reason: summonWord(event), At: e.At}
 	if owner == "drill" {
 		line.Session, line.Lane, line.Reason = summonStoredName(event), summonEventDrill, summonEventDrill
+	} else if summonOverflowEntryKey(key) {
+		line.Session = summonOverflowLineCaller(owner, callers)
 	} else if lane, ok := lanes[owner]; ok {
 		line.Lane = lane
 	}
