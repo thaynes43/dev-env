@@ -2642,6 +2642,76 @@ func TestSummonAdmittedAtIsSetOnce(t *testing.T) {
 	}
 }
 
+// OP798 (DESIGN-064 5.9): a close record's at, source and reason are set once.
+// Each refusal changes only one field; the API must retain the original record.
+func TestSummonClosedRecordIsSetOnce(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 11, 14, 4, 0, 0, 0, time.UTC))
+	initial := &v1alpha1.SummonClosedStatus{At: at, Source: "unreported", Reason: "never-started"}
+	closed := func(st *v1alpha1.SummonStatus) { st.Closed = initial.DeepCopy() }
+	none := func(*v1alpha1.SummonStatus) {}
+	for _, tc := range []struct {
+		name          string
+		first, second func(*v1alpha1.SummonStatus)
+		want          string
+	}{
+		{"first-set", none, closed, ""},
+		{"unchanged", closed, none, ""},
+		{"released-to-true", closed, func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, ""},
+		{"at-changed", closed, func(st *v1alpha1.SummonStatus) { st.Closed.At = metav1.NewTime(at.Add(time.Minute)) }, "the close time never changes"},
+		{"source-changed", closed, func(st *v1alpha1.SummonStatus) { st.Closed.Source = "report" }, "the close source never changes"},
+		{"reason-changed", closed, func(st *v1alpha1.SummonStatus) { st.Closed.Reason = "agent-failed" }, "the close reason never changes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := summonedTask()
+			if err := k8s.Create(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			s.Status.Summon = &v1alpha1.SummonStatus{}
+			tc.first(s.Status.Summon)
+			if err := k8s.Status().Update(ctx(t), s); err != nil {
+				t.Fatalf("first write: %v", err)
+			}
+			s = get(t, s)
+			tc.second(s.Status.Summon)
+			want := s.Status.Summon.Closed.DeepCopy()
+			err := k8s.Status().Update(ctx(t), s)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				wantInvalid(t, err, tc.want)
+				want = initial
+			}
+			if got := get(t, s).Status.Summon; got == nil || !apiequality.Semantic.DeepEqual(got.Closed, want) {
+				t.Fatalf("stored close record = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+// A typed false is omitted from JSON. Also prove an explicitly stored false
+// can become true while the rest of the close record stays unchanged.
+func TestSummonClosedExplicitFalseCanBeReleased(t *testing.T) {
+	s := summonedTask()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	patch := []byte(`{"status":{"summon":{"closed":{"at":"2026-11-14T04:00:00Z","source":"unreported","reason":"never-started","released":false}}}}`)
+	if err := k8s.Status().Patch(ctx(t), s, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		t.Fatalf("first close with explicit false: %v", err)
+	}
+	s = get(t, s)
+	s.Status.Summon.Closed.Released = true
+	want := s.Status.Summon.Closed.DeepCopy()
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if got := get(t, s).Status.Summon; got == nil || !apiequality.Semantic.DeepEqual(got.Closed, want) {
+		t.Fatalf("released close record = %+v, want %+v", got, want)
+	}
+}
+
 // OP777: status.summon.closed.released may go from absent or false to true,
 // never back, and the closed record that holds it cannot be removed.
 func TestSummonClosedReleasedIsNeverReversed(t *testing.T) {
@@ -2654,7 +2724,7 @@ func TestSummonClosedReleasedIsNeverReversed(t *testing.T) {
 		{"absent-to-true", func(*v1alpha1.SummonStatus) {}, func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, ""},
 		{"true-to-false", func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, func(st *v1alpha1.SummonStatus) { st.Closed.Released = false }, "released is never reversed"},
 		{"true-closed-removed", func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, func(st *v1alpha1.SummonStatus) { st.Closed = nil }, "the closed record cannot be removed"},
-		{"true-stays-true", func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, func(st *v1alpha1.SummonStatus) { st.Closed.Reason = "agent-failed" }, ""},
+		{"true-stays-true", func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, func(*v1alpha1.SummonStatus) {}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := summonedTask()
