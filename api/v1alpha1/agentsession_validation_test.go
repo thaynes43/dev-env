@@ -582,7 +582,9 @@ func TestSummonSnapshotRules(t *testing.T) {
 			return s
 		}},
 		{"filing dispatch id", func() *v1alpha1.AgentSession {
-			s := summonedTask()
+			s := summonedRemote()
+			s.Spec.IdempotencyKey = ""
+			s.Spec.Summon.FiledFor = &v1alpha1.SummonFiledFor{Name: "rem-test", UID: "01234567-89ab-cdef-0123-456789abcdef"}
 			s.Spec.Summon.DispatchID = "filing:01234567-89ab-cdef-0123-456789abcdef"
 			return s
 		}},
