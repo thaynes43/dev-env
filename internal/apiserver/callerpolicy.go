@@ -143,6 +143,11 @@ func policyCallerAllowed(c *caller, r *http.Request) error {
 	if name := r.PathValue("name"); name != "" && r.URL.Path == apiv1.SessionPath(name) && (r.Method == http.MethodGet || r.Method == http.MethodDelete) {
 		return nil
 	}
+	if name := r.PathValue("name"); name != "" && r.URL.Path == apiv1.SessionRaisePath(name) {
+		// The raise handler returns the section 6.7 sentence. Slice (c) is
+		// what adds spec.raise; until then every policy caller is refused there.
+		return nil
+	}
 	if policyParentNoteRoute(r) {
 		return nil
 	}

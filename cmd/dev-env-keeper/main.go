@@ -35,6 +35,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/thaynes43/dev-env/internal/keeper"
+	"github.com/thaynes43/dev-env/internal/sessionraise"
 	"github.com/thaynes43/dev-env/internal/version"
 )
 
@@ -137,6 +138,7 @@ type options struct {
 	reminders        keeper.RemindersOptions
 	askNotifications keeper.AskNotificationOptions
 	summonPages      keeper.SummonPageOptions
+	raiseKeySecret   string
 }
 
 func defaultPermissions() string {
@@ -251,6 +253,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.claudeAuth.LiveSecret, "claude-live-secret", keeper.DefaultClaudeLiveSecret, "access-only Claude projection Secret in secret-namespace")
 	fs.StringVar(&o.claudeAuth.LoginDir, "claude-login-dir", keeper.DefaultClaudeLoginDir, "keeper/helper-only memory-backed staging and private control socket for the Claude login ceremony")
 	fs.StringVar(&o.proxmoxGrants.SessionNamespace, "session-namespace", "dev-agents", "namespace containing credential grants and session pods")
+	fs.StringVar(&o.raiseKeySecret, "session-raise-keeper-key-secret", sessionraise.KeeperSecretName, "Secret holding the keeper raise-notice signing key; a missing Secret is logged and skipped")
 	fs.StringVar(&o.proxmoxGrants.JournalSecret, "credential-journal-secret", keeper.DefaultCredentialJournalSecret, "keeper-only durable credential journal Secret in its own namespace")
 	fs.StringVar(&o.proxmoxGrants.CADir, "ssh-ca-dir", keeper.DefaultSSHCAPath, "mounted Ed25519 CA directory (private-key/public-key)")
 	fs.StringVar(&o.proxmoxGrants.TargetsFile, "proxmox-ssh-targets-file", keeper.DefaultSSHTargetsFile, "mounted JSON list of explicit pinned SSH host:22 targets")
@@ -387,10 +390,14 @@ func (o options) keeperOptions(userAgent string) keeper.Options {
 		Reminders:        o.reminders,
 		AskNotifications: o.askNotifications,
 		SummonPages:      o.summonPages,
-		Interval:         o.interval,
-		LeaderElect:      o.leaderElect,
-		MetricsAddr:      o.metricsAddr,
-		ProbeAddr:        o.probeAddr,
+		RaisePages: keeper.RaisePageOptions{
+			SessionNamespace: o.proxmoxGrants.SessionNamespace,
+			KeySecret:        o.raiseKeySecret,
+		},
+		Interval:    o.interval,
+		LeaderElect: o.leaderElect,
+		MetricsAddr: o.metricsAddr,
+		ProbeAddr:   o.probeAddr,
 	}
 	if !o.opsGHToken {
 		return k

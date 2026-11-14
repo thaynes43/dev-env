@@ -138,6 +138,7 @@ internal/asks/           the Ask store: create, list, withdraw, a set-once answe
 internal/contextpublication/  the PublishedContext store: immutable published excerpts, Create only, uncached reads
 internal/delegatedresult/  pure delegated-result codec: strict bounded request and receipt decoding, frozen attempt identity and digest; Admission and Store have only the refusing Disabled implementation; no route, storage, provider or caller
 internal/sessiondirectory/  the SessionDirectory store: bounded original session metadata and CAS witnesses
+internal/sessionraise/  DESIGN-066 slice (a): the raise record, its signature, the operator ledger, the notice text and the two key pairs. A record counts only in Counts. Off by default and not installed
 internal/sessiontitle/  DESIGN-065: validates a session title, names the model family, composes the display title, and classifies a recorded Claude Code capture-pane screen
 internal/summonbrief/    DESIGN-064 5.6 (OP800): the summon brief: the platform line, the renderer and the sanitizer that fences caller data; the API's create renders with it, and the operator leader's filing (OP768) can import it
 internal/summonledger/  DESIGN-064 5.9: the create ledger's entry and charge types, codec and time rules (window, attempt hold, prune), the request hash, name sequence, queue attribution and queue count, and the prune's keep rule (Keep) (OP800), shared by the API's write paths and the operator leader's admission, and importable by its filing (OP768)

@@ -249,12 +249,16 @@ type Session struct {
 	TitleIgnored bool `json:"titleIgnored,omitempty"`
 	// TitleRename is "off" when this operator's --title-rename-sessions does
 	// not name the session. It is omitted when typing is enabled for it.
-	TitleRename string   `json:"titleRename,omitempty"`
-	Effort      string   `json:"effort,omitempty"`
-	Size        string   `json:"size,omitempty"`
-	Profile     string   `json:"profile,omitempty"`
-	Tools       []string `json:"tools,omitempty"`
-	Limits      *Limits  `json:"limits,omitempty"`
+	TitleRename string `json:"titleRename,omitempty"`
+	Effort      string `json:"effort,omitempty"`
+	Size        string `json:"size,omitempty"`
+	Profile     string `json:"profile,omitempty"`
+	// Raise is set only when the session carries a raise annotation
+	// (DESIGN-066). An unraised session omits it, so an older reader of
+	// show --json --once and usage export still accepts the view.
+	Raise  *SessionRaise `json:"raise,omitempty"`
+	Tools  []string      `json:"tools,omitempty"`
+	Limits *Limits       `json:"limits,omitempty"`
 	// Lifecycle is the session's own timers, when it has any.
 	Lifecycle      *Lifecycle `json:"lifecycle,omitempty"`
 	Parent         string     `json:"parent,omitempty"`
@@ -302,6 +306,10 @@ type Session struct {
 	// descendants.
 	UsageRollup *UsageRollup `json:"usageRollup,omitempty"`
 	Conditions  []Condition  `json:"conditions,omitempty"`
+	// SummonRegistration is the stored registration record of a summoned
+	// remote session, only in GET /v1/sessions/{name}, never in a list.
+	// Omit it without a record: older strict clients reject an unknown key.
+	SummonRegistration *SummonRegistration `json:"summonRegistration,omitempty"`
 }
 
 // PrivateHistory is bounded retained provenance under the existing Session ACL.
@@ -469,6 +477,16 @@ type RemoteRename struct {
 	Reason   string    `json:"reason,omitempty"`
 	Since    time.Time `json:"since,omitempty"`
 	Attempts int       `json:"attempts,omitempty"`
+}
+
+// SummonRegistration is status.summon.registration (DESIGN-064 6.10).
+// An absent result means the record has not settled. The stored settlement
+// is independent of the current RemoteControl state; the link stays there.
+type SummonRegistration struct {
+	AgentSeenAt *time.Time `json:"agentSeenAt,omitempty"`
+	Result      string     `json:"result,omitempty"`
+	Reason      string     `json:"reason,omitempty"`
+	At          *time.Time `json:"at,omitempty"`
 }
 
 // Outcome is what a summoned session reported (plan 10).
@@ -686,6 +704,9 @@ type FleetSession struct {
 	LastHeartbeat *time.Time `json:"lastHeartbeat,omitempty"`
 	Reaping       bool       `json:"reaping,omitempty"`
 	CreatedAt     time.Time  `json:"createdAt"`
+	// Raise is the session's raise record, omitted when it has none.
+	// podAccount is not copied here: it is only on the single-session view.
+	Raise *SessionRaise `json:"raise,omitempty"`
 	// TaskResult is how a task-mode session's task ended, once it has. Phase
 	// stays the pod's (D-44): an ended canary is Failed whatever its task did.
 	TaskResult *TaskVerdict `json:"taskResult,omitempty"`

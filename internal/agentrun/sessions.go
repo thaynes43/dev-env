@@ -102,6 +102,9 @@ func note(s apiv1.Session) string {
 			parts = append(parts, m)
 		}
 	}
+	if n := raiseNote(s.Raise); n != "" {
+		parts = append(parts, n)
+	}
 	return strings.Join(parts, "; ")
 }
 
@@ -216,8 +219,13 @@ func (a *app) printSession(s apiv1.Session) {
 	row("agent", "%s %s, %s, %s mode", s.Agent, s.Model, effortText(s.Effort), s.Mode)
 	row("size", "%s", firstOf(s.Size, "M"))
 	if s.Profile != "" {
-		row("profile", "%s", s.Profile)
+		shown := s.Profile
+		if s.Raise != nil && s.Raise.Ignored == "" && s.Raise.State != "" && s.Raise.State != "ignored" {
+			shown += " (at creation)"
+		}
+		row("profile", "%s", shown)
 	}
+	a.printRaise(row, s)
 	if l := s.Limits; l != nil {
 		row("limits", "timeout %s, max turns %s", dash(l.Timeout), countOrNone(l.MaxTurns))
 	}
@@ -235,6 +243,9 @@ func (a *app) printSession(s apiv1.Session) {
 	}
 	if rc := s.RemoteControl; rc != nil && rc.State != "" {
 		row("remote control", "%s", remoteControlLine(s, *rc, now))
+	}
+	if r := s.SummonRegistration; r != nil && s.Caller != "" && s.Mode == "remote" {
+		row("registration", "%s", summonRegistrationLine(s, *r))
 	}
 	if st := s.AgentStatus; st != nil {
 		row("agent state", "%s", firstOf(st.State, "-"))
@@ -382,6 +393,29 @@ func (a *app) printSession(s apiv1.Session) {
 			a.outf("  %s\n", line)
 		}
 	}
+}
+
+// summonRegistrationLine keeps the current Remote Control state separate from
+// the operator's stored settlement. Like remoteControlLine, it prints no link.
+func summonRegistrationLine(s apiv1.Session, r apiv1.SummonRegistration) string {
+	state, link := "not-reported", "no link reported in -o json (remoteControl.url)"
+	if rc := s.RemoteControl; rc != nil {
+		state = firstOf(rc.State, state)
+		if rc.URL != "" {
+			link = "link in -o json (remoteControl.url)"
+		}
+	}
+	settlement := firstOf(r.Result, "not yet settled")
+	if r.At != nil {
+		settlement += " at " + r.At.UTC().Format(time.RFC3339)
+	}
+	if r.Reason != "" {
+		settlement += " (" + r.Reason + ")"
+	}
+	if r.Result == "" && r.AgentSeenAt != nil {
+		settlement += "; agent seen at " + r.AgentSeenAt.UTC().Format(time.RFC3339)
+	}
+	return "remote control " + state + "; " + settlement + "; " + link
 }
 
 // remoteControlLine is show's one-line reading of status.remoteControl. The
@@ -693,6 +727,9 @@ func (a *app) fleet(ctx context.Context, args []string) error {
 	if len(f.Outdated) > 0 {
 		a.outf("outdated: %s\n", strings.Join(f.Outdated, ", "))
 	}
+	if line := fleetRaised(f.Sessions); line != "" {
+		a.outf("raised:   %s\n", line)
+	}
 	if len(f.Sessions) == 0 {
 		a.outf("\nNo session holds or waits for a pod.\n")
 		return nil
@@ -722,6 +759,9 @@ func (a *app) fleet(ctx context.Context, args []string) error {
 		}
 		if s.Phase == "Pending" && s.Pending != "" {
 			parts = append(parts, s.Pending)
+		}
+		if n := raiseNote(s.Raise); n != "" {
+			parts = append(parts, n)
 		}
 		if resources {
 			podUID, specNode, observed := formatFleetResources(s.Resources)

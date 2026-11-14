@@ -253,6 +253,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.suspend(ctx, rest)
 	case "title":
 		return a.title(ctx, rest)
+	case "raise":
+		return a.raise(ctx, rest)
 	case "resume":
 		return a.resume(ctx, rest)
 	case "log":
@@ -313,7 +315,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 }
 
 // commands are the words agent-run takes first, built or not yet.
-var commands = []string{"run", "rc", "thread", "codex-host", "coordinator", "list", "inbox", "instruction", "directory", "canary", "show", "title", "usage", "usage-source", "usage-export", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "budget", "mcp", "pages-mcp", "breakglass", "declare-activity", "maintenance", "pages", "remind", "schedule", "fleet", "version", "help", "attach", "detach", "login", "pair", "auth", "keeper-login", "prune", "sweep", "codex-remote"}
+var commands = []string{"run", "rc", "thread", "codex-host", "coordinator", "list", "inbox", "instruction", "directory", "canary", "show", "title", "raise", "usage", "usage-source", "usage-export", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "budget", "mcp", "pages-mcp", "breakglass", "declare-activity", "maintenance", "pages", "remind", "schedule", "fleet", "version", "help", "attach", "detach", "login", "pair", "auth", "keeper-login", "prune", "sweep", "codex-remote"}
 
 // nearestCommand is the command within two edits of word, or "". The
 // distance must also be shorter than the command, so a short repository name
