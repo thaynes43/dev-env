@@ -1331,7 +1331,9 @@ stays; where it differs, this governs.
    Session only by the charge of that Session's own id. The limit: each
    kept charge adds up to about 280 bytes to the caller's entry, which is
    bounded at 64 KiB (`MaxEntry`; past it a write is refused with 503), so
-   at most about 230 fit. Nothing charges a filing before #768's slice b, so this
+   about 230 charges of the largest size fit before the entry's other data
+   (shorter names fit more; the byte limit is what is enforced, not a
+   count). Nothing charges a filing before #768's slice b, so this
    changes nothing today. How many filings can be charged and still Pending
    at once is for slices b and c to bound.
 
