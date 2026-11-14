@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/summonledger"
 	"github.com/thaynes43/dev-env/internal/summonoutcome"
 )
 
@@ -336,16 +336,12 @@ func summonChargedFailure(err error) error {
 	return &out
 }
 
-// summonRequestHash is what a repeat of a key must match: mode, lane, the
-// requested name and the entry's priority, not data. Binding priority keeps a
-// charge from moving queues on a retry after a policy edit (OP778 F2).
-// A re-fire with fresher data returns the session
-// already running and does not change its brief. The requested name, not the
-// name the session took, so the repeat of a create that took a suffix still
-// matches.
+// summonRequestHash is what a repeat of a key must match: the request's mode,
+// lane and requested name and the entry's priority, not data
+// (summonledger.RequestHash, which story 800 moved there so the operator
+// leader's filing hashes the same way; OP778 F2).
 func summonRequestHash(req summonWire, priority v1alpha1.SummonPriority) string {
-	sum := sha256.Sum256([]byte("dev-env.summon.request.v2\x00" + req.Mode + "\x00" + req.Lane + "\x00" + req.Name + "\x00" + string(priority)))
-	return hex.EncodeToString(sum[:])
+	return summonledger.RequestHash(req.Mode, req.Lane, req.Name, priority)
 }
 
 // summonDispatchID is a keyed create's dispatch id (DESIGN-064 5.9, Q-21): a
@@ -474,14 +470,9 @@ func checkSummonTransport(sess *v1alpha1.AgentSession, requested, id string, bri
 }
 
 // summonNameSequence is every name a create for requested may take, in
-// order: requested, then -2 to -99.
+// order: requested, then -2 to -99 (summonledger.NameSequence).
 func summonNameSequence(requested string) []string {
-	all := make([]string, 0, summonMaxSuffix)
-	all = append(all, requested)
-	for i := 2; i <= summonMaxSuffix; i++ {
-		all = append(all, fmt.Sprintf("%s-%d", requested, i))
-	}
-	return all
+	return summonledger.NameSequence(requested)
 }
 
 // summonPool counts the caller's unfinished summoned sessions in the entry's
