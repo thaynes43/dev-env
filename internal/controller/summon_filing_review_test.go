@@ -593,3 +593,48 @@ func TestSummonFilingRenewedAttemptReplacesReason(t *testing.T) {
 		})
 	}
 }
+
+func TestSummonFilingOlderAttemptPreservesNewerRefusal(t *testing.T) {
+	w := newFilingWorld(t)
+	writes, aCreates, bCreates, cCreates := 0, 0, 0, 0
+	countWrite := func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {
+		err := c.Update(ctx, o, opts...)
+		if _, ok := o.(*corev1.ConfigMap); ok && err == nil {
+			writes++
+		}
+		return err
+	}
+	refuse := func(o client.Object) error {
+		return apierrors.NewInvalid(schema.GroupKind{Kind: "AgentSession"}, o.GetName(), field.ErrorList{field.Forbidden(field.NewPath("spec"), "fixture refusal")})
+	}
+	b := filingLeader(w, interceptor.Funcs{Update: countWrite, Create: func(_ context.Context, _ client.WithWatch, o client.Object, _ ...client.CreateOption) error {
+		bCreates++
+		return refuse(o)
+	}})
+	unknown := errors.New("fixture older create response is unknown")
+	a := filingLeader(w, interceptor.Funcs{Update: countWrite, Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+		aCreates++
+		if err := b.SummonAdmissionPass(context.Background()); !apierrors.IsInvalid(err) {
+			t.Fatalf("B refusal: %v", err)
+		}
+		return unknown
+	}})
+	if err := a.SummonAdmissionPass(context.Background()); !errors.Is(err, unknown) {
+		t.Fatalf("lost A result: %v", err)
+	}
+	before := writes
+	w.now = summonT0.Add(time.Minute)
+	c := filingLeader(w, interceptor.Funcs{Update: countWrite, Create: func(_ context.Context, _ client.WithWatch, o client.Object, _ ...client.CreateOption) error {
+		cCreates++
+		return refuse(o)
+	}})
+	_ = c.SummonAdmissionPass(context.Background())
+	if aCreates != 1 || bCreates != 1 || cCreates != 0 || writes != before {
+		t.Fatalf("older result erased newer refusal: A=%d B=%d C=%d writes=%d before=%d", aCreates, bCreates, cCreates, writes, before)
+	}
+	filingBlocked(t, w, summonoutcome.FilingCreateRefused)
+	e, _ := filingLedger(t, w)
+	if len(e.Charges) != 1 || !e.Charges[0].At.Equal(summonT0) {
+		t.Fatal("overlap recharged")
+	}
+}

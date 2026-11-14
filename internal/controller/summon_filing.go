@@ -181,6 +181,7 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 	}
 	// At most one pass through the bounded candidate sequence. A missing
 	// object after AlreadyExists waits for the next pass, without rebinding.
+	var attemptVersion string
 	for range summonledger.MaxSuffix {
 		child, err := r.findSummonFiling(ctx, s)
 		if err != nil {
@@ -191,7 +192,7 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 		}
 		m, err := r.filingLedgerStep(ctx, s, filingMark, "")
 		if m.reason != "" {
-			return errors.Join(err, r.recordSummonFilingBlock(ctx, s, m.reason, !m.marked.IsZero()))
+			return errors.Join(err, r.recordSummonFilingBlock(ctx, s, m.reason, m.statusVersion))
 		}
 		if err != nil || m.done {
 			return err
@@ -199,6 +200,7 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 		if m.child != nil {
 			return r.finishSummonFiling(ctx, s, m.child)
 		}
+		attemptVersion = m.statusVersion
 		child, err = summonFilingChild(s, m.charge.Name, boundary)
 		if err != nil {
 			return err
@@ -224,7 +226,7 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 				apierrors.IsNotAcceptable(err) || apierrors.IsRequestEntityTooLargeError(err) {
 				reason = summonoutcome.FilingCreateRefused
 			}
-			return errors.Join(err, r.recordSummonFilingBlock(ctx, s, reason, true))
+			return errors.Join(err, r.recordSummonFilingBlock(ctx, s, reason, attemptVersion))
 		}
 		var held v1alpha1.AgentSession
 		err = r.APIReader.Get(callCtx, client.ObjectKeyFromObject(child), &held)
@@ -237,7 +239,7 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 		}
 		b, err = r.filingLedgerStep(ctx, s, filingRebind, child.Name)
 		if b.reason != "" {
-			return errors.Join(err, r.recordSummonFilingBlock(ctx, s, b.reason, true))
+			return errors.Join(err, r.recordSummonFilingBlock(ctx, s, b.reason, attemptVersion))
 		}
 		if err != nil || b.done {
 			return err
@@ -246,7 +248,7 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 			return r.finishSummonFiling(ctx, s, b.child)
 		}
 	}
-	return r.recordSummonFilingBlock(ctx, s, summonoutcome.FilingNoFreeName, true)
+	return r.recordSummonFilingBlock(ctx, s, summonoutcome.FilingNoFreeName, attemptVersion)
 }
 
 func filingRetryReason(reason v1alpha1.SummonFilingReason) bool {
@@ -331,8 +333,10 @@ type filingBinding struct {
 	charge summonledger.Charge
 	marked time.Time
 	child  *v1alpha1.AgentSession
-	reason v1alpha1.SummonFilingReason
-	done   bool
+	// Session version read by a successful mark, fixed across status retries.
+	statusVersion string
+	reason        v1alpha1.SummonFilingReason
+	done          bool
 }
 
 // filingLedgerStep charges, marks, or moves the name. Only filingCharge may
@@ -483,6 +487,9 @@ func (r *Reconciler) filingLedgerStep(ctx context.Context, s *v1alpha1.AgentSess
 		if action == filingCharge {
 			logSummonFiling(s, "charged", "")
 		}
+		if action == filingMark {
+			b.statusVersion = live.ResourceVersion
+		}
 		return b, nil
 	}
 	return unavailable, errors.New("the filing ledger is busy")
@@ -500,13 +507,14 @@ func (r *Reconciler) writeSummonFilingLedger(ctx context.Context, cm *corev1.Con
 }
 
 func (r *Reconciler) blockSummonFiling(ctx context.Context, s *v1alpha1.AgentSession, reason v1alpha1.SummonFilingReason) error {
-	return r.recordSummonFilingBlock(ctx, s, reason, false)
+	return r.recordSummonFilingBlock(ctx, s, reason, "")
 }
 
-// newAttempt permits recording the result of this pass's confirmed mark.
-// Without one, a transient failure must preserve another leader's held
-// refusal. It authorizes only a status update, never a charge or create.
-func (r *Reconciler) recordSummonFilingBlock(ctx context.Context, s *v1alpha1.AgentSession, reason v1alpha1.SummonFilingReason, newAttempt bool) error {
+// attemptVersion is the Session version this pass's successful mark read.
+// Only that unchanged snapshot permits replacing a held word with this
+// attempt's result. An older in-flight result preserves a newer refusal.
+// The fixed version authorizes only a status update, never a charge/create.
+func (r *Reconciler) recordSummonFilingBlock(ctx context.Context, s *v1alpha1.AgentSession, reason v1alpha1.SummonFilingReason, attemptVersion string) error {
 	switch reason {
 	case summonoutcome.FilingPolicyGone, summonoutcome.FilingPolicyNoEscalations,
 		summonoutcome.FilingHourFull, summonoutcome.FilingQueueFull, summonoutcome.FilingRemoteOff,
@@ -527,7 +535,8 @@ func (r *Reconciler) recordSummonFilingBlock(ctx context.Context, s *v1alpha1.Ag
 		*s = live
 		// The caller may have read before a competing leader's refusal.
 		// Do not replace that leader's held reason with a transient error.
-		if !newAttempt && filingRetryReason(s.Status.Summon.Escalation.Reason) && s.Status.Summon.Escalation.Reason != reason {
+		if (attemptVersion == "" || s.ResourceVersion != attemptVersion) &&
+			filingRetryReason(s.Status.Summon.Escalation.Reason) && s.Status.Summon.Escalation.Reason != reason {
 			if held, err := r.filingRetryHeld(ctx, s); held || err != nil {
 				return errors.Join(append(conflicts, err)...)
 			}

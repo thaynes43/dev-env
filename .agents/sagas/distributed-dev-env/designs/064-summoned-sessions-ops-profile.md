@@ -2469,6 +2469,10 @@ the joined ledger clock; the mark CAS loop rechecks the live typed reason.
 Transient reads cannot replace a held refusal or permit another attempt.
 Recovery still records Filed immediately for an existing child found by label,
 including inside the window. After the window the normal pass runs.
+The successful mark remembers the remediation's resourceVersion. A result
+from that attempt may replace a held word only while that version still
+matches; a newer status write conservatively preserves the recorded refusal.
+The version stays fixed across status retries and authorizes no create.
 
 A Blocked patch gets at most five attempts, each against a fresh same-UID
 Pending read; Filed, Abandoned, another UID or a non-conflict error stops it.
