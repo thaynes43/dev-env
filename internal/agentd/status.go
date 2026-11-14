@@ -318,6 +318,9 @@ func summonedRunState(s Settings, first Launch, bootID string, now time.Time) (s
 	h := summonedHandoff(s, first)
 	var refused startRefused
 	switch {
+	case preflightLive(s, first):
+		st.State = protocol.AgentBusy
+		return st, true
 	case readJSONFile(s.statePath(startRefusedFile), &refused) == nil && refused.ConversationID == first.ConversationID && refused.BootID == first.BootID:
 		st.State, st.Error = protocol.AgentFailed, "run-agent refused to start the provider: "+refused.Reason
 		return st, true

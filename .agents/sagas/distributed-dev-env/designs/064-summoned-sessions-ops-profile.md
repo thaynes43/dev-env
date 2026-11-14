@@ -1278,6 +1278,29 @@ differs from fix round 2's correction, this governs.
    client and copies its output), may have started the provider, so it is
    `ambiguous`.
 
+**Correction, 2026-11-14 (story 791 fix round 2, coordinator rulings; not a
+ruling by Tom).** A summoned task's pre-flight also obeys a permanent stop
+fence. `stopAgent`, including rescue and pod shutdown, durably writes
+`start-stopped.json` before signalling anything. Every probe and the task
+check it at their final start fence. The marker is never removed for that
+launch. The task's final check, `cmd.Start` and publication of `agent.pid`
+hold `start-spawn.lock`; stop takes that same lock, with a bound, after
+writing the marker and before deciding which processes to stop. Thus a task
+already crossing the final check is recorded and stopped before stop can
+report it gone. A stop that cannot obtain the lock reports running. The
+checking receipt also durably records task-start intent before the final
+fence. If run-agent dies after starting the separate task group but before
+publishing its identity, that unresolved intent keeps status busy and stop
+running. It is evidence of uncertainty, not a recoverable group identity.
+The task PID receipt is durable and preserves an unreaped zombie leader's
+start time, so an already-exited leader cannot hide its surviving children.
+Only a confirmed PID publication or proof that no task remains settles the
+intent. This is the fix's conservative implementation choice for an
+interrupted publication; it adds no guardian or recovery authority. The
+recorded launcher group makes the probe visible even when run-agent dies;
+6.9 defines the distinct proofs between turns and after stop. Ordinary
+launches retain their existing start and stop paths.
+
 ## 6. Contracts per build story
 
 ### 6.1 OP735: the ops egress tier
@@ -2816,6 +2839,61 @@ governs.
       login comes from `CLAUDE_CODE_OAUTH_TOKEN` in its environment, which no
       settings source carries; the real answer was captured with this flag.
       `--bare` is not used, because it reads no OAuth token.
+
+**Correction, 2026-11-14 (story 791 fix round 2, coordinator rulings; not a
+ruling by Tom).** This answers review R1–R6 and coordinator answer
+`op791-fix-2b-q-1` to session `dev-env-1114-034156`. Earlier corrections stay;
+where this differs, it governs.
+
+1. *Stop owns the pre-flight.* run-agent establishes itself as its process
+   group's leader before claiming the launch; tmux may already have made
+   it that leader. Each probe inherits the group and gets parent-death
+   SIGKILL. Its creating OS thread stays pinned until its Wait and cleanup
+   finish. The checking record names the launcher PID, its start time and
+   its group ownership before any probe starts. Stop writes 5.9's durable
+   marker, drains the start lock, signals the launcher and, after the grace,
+   kills the recorded group. The real task still leads a separate group;
+   the lock makes its PID visible before stop can kill the launcher. The
+   durable task-start intent in 5.9 covers a launcher killed independently
+   before PID publication: stop stays running and status stays busy when
+   the task identity is unconfirmed. No unknown group is reported gone.
+2. *"Gone" has two precise meanings.* Between turns, the launcher's own
+   Wait must reap its direct probe, and a bounded strict `/proc` observation
+   must show no group member except the launcher's verified PID. Leftover
+   members are killed individually, with their group checked immediately
+   before each kill. Zombies count as members; unreadable state, a remaining
+   member or any uncertain observation means `Gone: false`, and no fallback
+   or task starts. The existing bounded native-invocation absence helper
+   supplies this wait; native invocation retains its whole-group check.
+   **After stop there is no launcher exception:** its leader must be gone
+   and `kill(-pgid, 0)` must return `ESRCH` for every recorded owned group.
+   Otherwise stop reports running. A dead launcher with a leftover probe
+   group stays visible as busy, and the stop path can end it from disk state.
+3. *One invocation, independent of usage.* The initial checking record is
+   created exclusively, synced along with its directory, before usage or
+   capture admission. It is also the pre-flight's once-only claim. Updates
+   replace it atomically and never remove it, even after failure. A second
+   direct run-agent invocation starts no probe or task and leaves the first
+   record unchanged, including when `UsageSource` is absent. Usage behavior
+   is unchanged.
+4. *The absolute deadline reaches the command runner.* After preparing the
+   command and acquiring its start lock, the runner recomputes the turn's
+   limit from the remaining absolute window, arms that timer before starting,
+   and checks the fence immediately before `cmd.Start`. It also checks the
+   absolute deadline after the turn. Preparation or a running turn exhausting
+   the window produces `start-refused`, never a typed model failure.
+5. *An optional malformed heartbeat record is dropped.* Even `start: []`
+   or `start: {model: 7}` cannot reject the remaining valid heartbeat. Both
+   response paths store it: 200 with a title body for sessions named by the
+   title flag, otherwise 204 without a body. No schema or API field changes.
+
+Proofs use stand-in processes, FIFO readiness and fake clocks: stop and rescue
+in the primary, fallback and accepted-probe/task gap; launcher death with a
+surviving descendant; a pause inside the final task-start critical section;
+leader exit with a descendant that closed its output; uncertain group
+observation; prepared-command deadline expiry on both models; and direct
+replay at five boundaries with no usage or capture identity. These are source
+and local test evidence, not installed or live provider acceptance.
 
 ### 6.10 OP745: joinable remote sessions with a verified link
 

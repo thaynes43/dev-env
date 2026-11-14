@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"net/http"
@@ -41,9 +42,20 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	if c.kind != kindSession || c.session.Name != key.Name {
 		return 0, nil, forbidden("only session %s's own pod may post its heartbeat", key.Name)
 	}
-	var st protocol.Status
-	if err := decodeJSON(w, r, maxHeartbeatBody, &st, false); err != nil {
+	// Optional pre-flight evidence is decoded separately so a malformed
+	// record cannot block the rest of the heartbeat. All other fields keep
+	// the normal heartbeat decoding rules.
+	var body struct {
+		protocol.Status
+		Start json.RawMessage `json:"start"`
+	}
+	if err := decodeJSON(w, r, maxHeartbeatBody, &body, false); err != nil {
 		return 0, nil, err
+	}
+	st := body.Status
+	var start *protocol.StartRecord
+	if err := json.Unmarshal(body.Start, &start); err == nil {
+		st.Start = start
 	}
 	if st.Session != key.Name {
 		return 0, nil, invalid(fieldError("session", "%q is not %s, the session in the path", st.Session, key.Name))

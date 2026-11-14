@@ -755,7 +755,11 @@ func (d *Daemon) expireCredentials() {
 func (d *Daemon) shutdown() {
 	d.stopCodexRemote()
 	var p agentPid
-	if readJSONFile(d.S.statePath(pidFile), &p) == nil && pidAlive(p) {
+	var first Launch
+	if readJSONFile(d.S.statePath(launchFile), &first) == nil && first.Preflight != nil {
+		st := stopAgent(d.S, d.StopGrace)
+		d.Log.Info("SIGTERM: stopped the summoned launch", "running", st.Running, "killed", st.Killed)
+	} else if readJSONFile(d.S.statePath(pidFile), &p) == nil && pidAlive(p) {
 		d.Log.Info("SIGTERM: forwarding to the agent", "pid", p.Pid, "grace", d.StopGrace)
 		if err := syscall.Kill(p.Pid, syscall.SIGTERM); err != nil {
 			d.Log.Warn("SIGTERM to the agent", "err", err)

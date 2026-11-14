@@ -7,11 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"k8s.io/utils/clock"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
@@ -80,6 +83,8 @@ type startPreflight struct {
 	Failure        string    `json:"failure,omitempty"`
 	Pid            int       `json:"pid"`
 	Start          string    `json:"start"`
+	GroupOwned     bool      `json:"groupOwned,omitempty"`
+	TaskPending    bool      `json:"taskPending,omitempty"`
 	At             time.Time `json:"at"`
 	ConversationID string    `json:"conversationId"`
 	BootID         string    `json:"bootId"`
@@ -96,14 +101,23 @@ type preflightOutcome struct {
 	TimedOut bool
 	// Stopped: run-agent received a signal during the turn.
 	Stopped bool
-	// Gone: the turn's process was shown to have ended. When it was not,
-	// nothing further starts.
+	// Refused is the final spawn fence's refusal, never a model failure.
+	Refused string
+	// DeadlineCut says preparation shortened the turn to the absolute deadline.
+	DeadlineCut bool
+	// Gone: the owned leader was waited for and the recorded group was
+	// observed to contain only the verified launcher. Otherwise nothing starts.
 	Gone bool
 }
 
 // preflightTurn runs one pre-flight turn of l on model, stopped at limit. It
 // is runPreflightTurn; tests replace it with a provider stand-in.
 var preflightTurn = runPreflightTurn
+
+// Test seams at the prepared-command boundary and the bounded exit proof.
+var beforePreflightStart func(string)
+var preflightGroupAbsent = waitNativeGroupAbsent
+var preflightNewTimer = clock.RealClock{}.NewTimer
 
 // preflightArgv is a pre-flight turn's command: one headless turn on model
 // with no tools (--tools ""), no user, project or local settings and so none
@@ -168,14 +182,12 @@ func runPreflight(l Launch, stateDir string, note func(string, ...any), signals 
 		note("the launch does not name its model where the pre-flight expects it; the provider was not started")
 		return "", "", false
 	}
-	self := os.Getpid()
-	rec := startPreflight{State: preflightChecking, Pid: self, Start: procStartTime(self), At: runAgentNow().UTC(), ConversationID: l.ConversationID, BootID: l.BootID}
-	// Without this record the status cannot tell a running pre-flight from a
-	// process that is gone, so nothing starts without it.
-	if err := writeWorkspaceJSON(statePathIn(stateDir, startPreflightFile), rec); err != nil {
-		note("the pre-flight record could not be written; the provider was not started")
+	var rec startPreflight
+	if readJSONFile(statePathIn(stateDir, startPreflightFile), &rec) != nil || rec.Pid != os.Getpid() || rec.Start != procStartTime(os.Getpid()) {
+		note("the pre-flight invocation claim is unconfirmed; the provider was not started")
 		return "", "", false
 	}
+	l.preflightStateDir = stateDir
 	models := []string{pf.Model}
 	if pf.Fallback != "" && pf.Fallback != pf.Model {
 		models = append(models, pf.Fallback)
@@ -192,7 +204,10 @@ func runPreflight(l Launch, stateDir string, note func(string, ...any), signals 
 		case res.Stopped:
 			note("the model pre-flight was stopped by a signal; the provider was not started")
 			return "", "", false
-		case res.TimedOut && cut:
+		case res.Refused != "":
+			note("%s; the provider was not started", res.Refused)
+			return "", "", false
+		case res.TimedOut && (cut || res.DeadlineCut), startDeadlineRefusal(l.StartDeadline, false, runAgentNow()) != "":
 			// The start deadline cut this turn short: no model was refused,
 			// time ran out. That is the fence's refusal (ruling (c)).
 			now := runAgentNow()
@@ -242,14 +257,21 @@ func recordPreflightStarted(l Launch, stateDir, model, fallbackCause string) {
 		return
 	}
 	rec.State, rec.Model, rec.FallbackCause, rec.At = preflightStarted, model, fallbackCause, runAgentNow().UTC()
+	rec.TaskPending = false // agent.pid was durably published before this update.
 	_ = writeWorkspaceJSON(statePathIn(stateDir, startPreflightFile), rec)
 }
 
-// runPreflightTurn runs one pre-flight turn as a provider process in its own
-// process group, on the launch's environment and worktree, and stops it at
-// limit or at a signal. It returns once the process has ended, or after the
-// stop could not be shown within drainWait plus a second; then Gone is false.
+// runPreflightTurn inherits the launcher's recorded group. It waits for its
+// own child, then proves no member except that verified launcher remains.
+// Stop uses the same group without that exception. Neither signal delivery
+// nor the leader's Wait alone proves Gone (OP791 round 2 coordinator ruling).
 func runPreflightTurn(l Launch, model string, limit time.Duration, signals <-chan os.Signal) preflightOutcome {
+	runtime.LockOSThread() // Linux parent-death signalling is tied to this thread.
+	defer runtime.UnlockOSThread()
+	if err := leadPreflightGroup(); err != nil {
+		return preflightOutcome{Failure: protocol.StartFailureNoAnswer}
+	}
+	self := agentPid{Pid: os.Getpid(), Start: procStartTime(os.Getpid())}
 	argv := preflightArgv(l.Argv[0], model)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = l.Dir
@@ -258,42 +280,71 @@ func runPreflightTurn(l Launch, model string, limit time.Duration, signals <-cha
 	stdout := &tailBuffer{max: preflightOutputMax}
 	cmd.Stdout, cmd.Stderr = stdout, io.Discard
 	cmd.WaitDelay = drainWait
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	if limit <= 0 {
 		return preflightOutcome{Failure: protocol.StartFailureNoAnswer, TimedOut: true, Gone: true}
 	}
+	if beforePreflightStart != nil {
+		beforePreflightStart(model)
+	}
+	unlock, err := preflightSpawnLock(l, l.preflightStateDir)
+	if err != nil {
+		return preflightOutcome{Stopped: true, Gone: true}
+	}
+	// Command preparation and lock acquisition can consume the window.
+	// Check again at the actual start and arm the timer from what is left.
+	if why := checkSpawnFence(l, l.preflightStateDir); why != "" {
+		unlock()
+		return preflightOutcome{Refused: why, Gone: true}
+	}
+	remaining, cut := preflightLimit(l, runAgentNow())
+	limit = min(limit, remaining)
+	if limit <= 0 {
+		unlock()
+		return preflightOutcome{TimedOut: true, DeadlineCut: cut, Gone: true}
+	}
+	select {
+	case <-signals:
+		unlock()
+		return preflightOutcome{Stopped: true, Gone: true}
+	default:
+	}
+	timer := preflightNewTimer(limit)
+	defer timer.Stop()
+	if why := checkSpawnFence(l, l.preflightStateDir); why != "" {
+		unlock()
+		return preflightOutcome{Refused: why, Gone: true}
+	}
 	if err := cmd.Start(); err != nil {
+		unlock()
 		// Nothing ran: the CLI could not be started.
 		return preflightOutcome{Failure: protocol.StartFailureNoAnswer, Gone: true}
 	}
-	pid := cmd.Process.Pid
+	unlock()
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
-	timer := time.NewTimer(limit)
-	defer timer.Stop()
-	var out preflightOutcome
+	out := preflightOutcome{DeadlineCut: cut}
 	var werr error
 	exited := false
 	select {
 	case werr = <-waitDone:
 		exited = true
-	case <-timer.C:
+	case <-timer.C():
 		out.TimedOut = true
 	case <-signals:
 		out.Stopped = true
 	}
 	if !exited {
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = killPreflightMembers(self)
 		select {
 		case werr = <-waitDone:
 			exited = true
 		case <-time.After(drainWait + time.Second):
 		}
 	}
-	// Whatever the CLI left in its process group goes with it.
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	out.Gone = exited
-	if !exited || out.TimedOut || out.Stopped {
+	cleanup := killPreflightMembers(self)
+	out.Gone = exited && cleanup == nil && preflightGroupAbsent(self.Pid, time.Second, self)
+	if !out.Gone || out.TimedOut || out.Stopped {
 		out.Failure = protocol.StartFailureNoAnswer
 		return out
 	}
@@ -475,12 +526,30 @@ func readPreflight(s Settings, first Launch) (startPreflight, bool) {
 	return rec, true
 }
 
-// preflightLive reports whether the run-agent of first is still in its
-// pre-flight: the record says checking, the run-agent it names is the same
-// live process, and no provider of the task has a pid file yet.
+// preflightLive keeps a recorded group visible after its launcher dies.
+// Terminal evidence cannot hide a probe descendant whose absence is uncertain.
+// Older checking records retain their original PID-only interpretation.
 func preflightLive(s Settings, first Launch) bool {
 	rec, ok := readPreflight(s, first)
-	if !ok || rec.State != preflightChecking || !pidAlive(agentPid{Pid: rec.Pid, Start: rec.Start}) {
+	if !ok || rec.Pid <= 0 || rec.Start == "" {
+		return false
+	}
+	if pendingPreflightTask(s, rec) {
+		return true
+	}
+	if rec.State == preflightStarted {
+		return false
+	}
+	p := agentPid{Pid: rec.Pid, Start: rec.Start}
+	if rec.GroupOwned {
+		var refused startRefused
+		terminal := rec.State == preflightNoUsableModel || (readJSONFile(s.statePath(startRefusedFile), &refused) == nil && refused.ConversationID == first.ConversationID && refused.BootID == first.BootID)
+		if terminal && preflightGroupOnlyLauncher(rec.Pid, p) {
+			return false
+		}
+		return pidAlive(p) || !waitNativeGroupAbsent(rec.Pid, 0)
+	}
+	if rec.State != preflightChecking || !pidAlive(p) {
 		return false
 	}
 	_, err := os.Lstat(s.statePath(pidFile))
@@ -491,7 +560,7 @@ func preflightLive(s Settings, first Launch) bool {
 // was usable, so nothing started.
 func preflightFailed(s Settings, first Launch) bool {
 	rec, ok := readPreflight(s, first)
-	return ok && rec.State == preflightNoUsableModel && protocol.InSet(protocol.StartFailures, rec.Failure)
+	return ok && rec.State == preflightNoUsableModel && protocol.InSet(protocol.StartFailures, rec.Failure) && !preflightLive(s, first)
 }
 
 // preflightStartRecord is the status's start record from first's pre-flight
@@ -509,7 +578,7 @@ func preflightStartRecord(s Settings, first Launch) *protocol.StartRecord {
 			out.FallbackCause = rec.FallbackCause
 		}
 		return out
-	case rec.State == preflightNoUsableModel && protocol.InSet(protocol.StartFailures, rec.Failure):
+	case rec.State == preflightNoUsableModel && protocol.InSet(protocol.StartFailures, rec.Failure) && !preflightLive(s, first):
 		return &protocol.StartRecord{Failure: rec.Failure}
 	}
 	return nil

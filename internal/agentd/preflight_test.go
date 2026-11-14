@@ -850,6 +850,7 @@ func TestNoTestReachesTheRealClaude(t *testing.T) {
 		t.Fatalf("the default CLI ran: %v %q", err, out)
 	}
 	l.Dir = t.TempDir()
+	l.preflightStateDir = l.Dir
 	if res := runPreflightTurn(l, sess.Model, preflightTurnLimit, make(chan os.Signal)); res.Answered || !res.Gone || res.Failure != protocol.StartFailureNoAnswer {
 		t.Fatalf("a pre-flight turn on the default CLI: %+v", res)
 	}

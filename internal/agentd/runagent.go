@@ -37,6 +37,14 @@ var runAgentNow = time.Now
 // launch record and the provider spawn, to prove the start fence (N2).
 var beforeProviderSpawn func(Launch)
 
+// beforeTaskStart is nil in production. Tests pause after the final fence,
+// immediately before the task start and its PID publication.
+var beforeTaskStart func()
+
+// beforeTaskPIDRecord is nil in production. Tests hold an owned task before
+// its identity is published, including a leader that has already exited.
+var beforeTaskPIDRecord func(int)
+
 // startRefused is ~/.agentd/start-refused.json: run-agent refused to spawn the
 // provider of the launch it names because its start deadline had passed
 // (DESIGN-064 5.9, N2, OP780). The status reports the launch failed, so the
@@ -57,6 +65,13 @@ type startRefused struct {
 func spawnFence(l Launch, stateDir string) string {
 	if beforeProviderSpawn != nil {
 		beforeProviderSpawn(l)
+	}
+	return checkSpawnFence(l, stateDir)
+}
+
+func checkSpawnFence(l Launch, stateDir string) string {
+	if why := preflightStopRefusal(l, stateDir); why != "" {
+		return why
 	}
 	if l.StartDeadline == "" {
 		return ""
@@ -128,6 +143,10 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		}
 	}
 	stateDir := filepath.Dir(launchPath)
+	if err := claimPreflight(l, stateDir); err != nil {
+		_, _ = fmt.Fprintln(pane, "agentd: the summoned first launch is already claimed or its claim is unconfirmed")
+		return 1
+	}
 	var res streamResult
 	protocolRefused := false
 	nativeLease, err := beginNativeInvocation(l, stateDir)
@@ -226,13 +245,37 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		_, _ = fmt.Fprintln(out, "agentd: shared writer proof changed before spawn")
 		return 1
 	}
-	if why := spawnFence(l, stateDir); why != "" {
+	if beforeProviderSpawn != nil {
+		beforeProviderSpawn(l)
+	}
+	unlockSpawn, err := preflightSpawnLock(l, stateDir)
+	if err != nil {
+		_ = pr.Close()
+		_ = pw.Close()
+		_, _ = fmt.Fprintln(out, "agentd: the summoned start lock is unconfirmed")
+		return 1
+	}
+	if err := recordPreflightTaskPending(l, stateDir, true); err != nil {
+		unlockSpawn()
+		_ = pr.Close()
+		_ = pw.Close()
+		_, _ = fmt.Fprintln(out, "agentd: the summoned task start intent is unconfirmed")
+		return 1
+	}
+	if why := checkSpawnFence(l, stateDir); why != "" {
+		_ = recordPreflightTaskPending(l, stateDir, false) // no task was started.
+		unlockSpawn()
 		_ = pr.Close()
 		_ = pw.Close()
 		_, _ = fmt.Fprintf(out, "[agentd] task %s: %s; the provider was not started (DESIGN-064 5.9)\n", l.Session, why)
 		return 1
 	}
+	if beforeTaskStart != nil {
+		beforeTaskStart()
+	}
 	if err := cmd.Start(); err != nil {
+		_ = recordPreflightTaskPending(l, stateDir, false) // Start created no child.
+		unlockSpawn()
 		_ = pr.Close()
 		_ = pw.Close()
 		_, _ = fmt.Fprintf(out, "agentd run-agent: start %s: %v\n", l.Argv[0], err)
@@ -240,12 +283,33 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		_, _ = fmt.Fprintf(out, "TASK-EXIT:%d\n", 127)
 		return 127
 	}
+	if beforeTaskPIDRecord != nil {
+		beforeTaskPIDRecord(cmd.Process.Pid)
+	}
 	_ = pw.Close()
 	pid := cmd.Process.Pid
-	_ = writeJSONFile(filepath.Join(stateDir, pidFile), agentPid{Pid: pid, Start: procStartTime(pid)})
+	var pidErr error
+	if l.Preflight != nil {
+		pidErr = publishPreflightTaskPID(stateDir, pid)
+	} else {
+		pidErr = writeJSONFile(filepath.Join(stateDir, pidFile), agentPid{Pid: pid, Start: procStartTime(pid)})
+	}
+	if pidErr != nil && l.Preflight != nil {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		gone := waitNativeGroupAbsent(pid, stopKillWait)
+		if gone {
+			_ = recordPreflightTaskPending(l, stateDir, false)
+		}
+		_ = pr.Close()
+		unlockSpawn()
+		_, _ = fmt.Fprintf(out, "agentd: task PID publication failed; task group absence confirmed: %t\n", gone)
+		return 1
+	}
 	if l.Preflight != nil {
 		recordPreflightStarted(l, stateDir, argv[preflightModelArg(l.Argv, l.Preflight.Model)], fallbackCause)
 	}
+	unlockSpawn()
 	if err := nativeLease.recordStarted(l, pid); err != nil {
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		_ = cmd.Wait()
