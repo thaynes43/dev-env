@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.110.0](https://github.com/thaynes43/dev-env/compare/v2.109.0...v2.110.0) (2026-11-14)
+
+
+### Features
+
+* **agent-run:** show a remote escalation's registration settlement (DESIGN-064 6.10, OP797) ([#1152](https://github.com/thaynes43/dev-env/issues/1152)) ([bda614f](https://github.com/thaynes43/dev-env/commit/bda614f53c662f7171ef981cf778fe13ce6200ea))
+* **agentd:** a summoned task checks its model before it starts and falls back once (DESIGN-064 6.9, OP791) ([#1120](https://github.com/thaynes43/dev-env/issues/1120)) ([c55f894](https://github.com/thaynes43/dev-env/commit/c55f894b7c7743c13ee39e1fd3c7c1925991245a))
+* **api:** a summoned session's close record cannot be rewritten once set (DESIGN-064 5.9, OP798) ([#1150](https://github.com/thaynes43/dev-env/issues/1150)) ([bb7209f](https://github.com/thaynes43/dev-env/commit/bb7209f854e7d5a563943dc635b723dfb1fbe026))
+* **keeper:** one overflow page per caller per hour when urgent creates are refused (DESIGN-064 6.8, OP793) ([#1130](https://github.com/thaynes43/dev-env/issues/1130)) ([37fe1e3](https://github.com/thaynes43/dev-env/commit/37fe1e3f113927e6298c5f7c6d96127550fc58fb))
+* **keeper:** one quiet daily digest of the summoned outcomes that did not page (DESIGN-064 6.8, OP792) ([#1126](https://github.com/thaynes43/dev-env/issues/1126)) ([3fe6774](https://github.com/thaynes43/dev-env/commit/3fe677412789e3d62e78ad00ca8a5a05ad0c5101))
+* **operator:** no Codex host on the workbench account unless the operator names it, off by default (DESIGN-067 slice a, OP858) ([#1156](https://github.com/thaynes43/dev-env/issues/1156)) ([308e442](https://github.com/thaynes43/dev-env/commit/308e442ab70f12424a1c73fac9bdec15f9260275))
+* **operator:** the leader files one escalation for a Pending remediation, replay-safe (DESIGN-064 6.6, OP801) ([#1158](https://github.com/thaynes43/dev-env/issues/1158)) ([dc82483](https://github.com/thaynes43/dev-env/commit/dc824832d8cfd1a96fc5dc5c65622ad5ebe2ec37))
+* **operator:** the leader settles a remote escalation's registration and records escalation-started (DESIGN-064 6.10, OP794) ([#1132](https://github.com/thaynes43/dev-env/issues/1132)) ([4f1c411](https://github.com/thaynes43/dev-env/commit/4f1c4114e094087ac879aa2b2424f408df28a495))
+* **raise:** the record, routes, notice and start-sessions exemption for raising a session, off by default (DESIGN-066 slice a, OP830) ([#1145](https://github.com/thaynes43/dev-env/issues/1145)) ([2957518](https://github.com/thaynes43/dev-env/commit/29575187b733f5b2fa27fd3349787013edc0f621))
+
+
+### Bug Fixes
+
+* **apiserver:** a session nobody renamed keeps its old view, so older strict readers still read it (OP787) ([#1137](https://github.com/thaynes43/dev-env/issues/1137)) ([e28fbd8](https://github.com/thaynes43/dev-env/commit/e28fbd8ccc3251b86431e58909224407e9d8cc6b))
+
 ## [2.109.0](https://github.com/thaynes43/dev-env/compare/v2.108.0...v2.109.0) (2026-11-13)
 
 
