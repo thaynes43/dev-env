@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","model":"claude-opus-5-5"}
+{"type":"system","subtype":"api_retry"}
+{"type":"system","subtype":"api_retry"}
+{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"Failed to authenticate. API Error: 401 Invalid bearer token"}],"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"error":"authentication_failed","is_api_error_message":true,"api_error_status":401}
+{"type":"result","subtype":"success","is_error":true}

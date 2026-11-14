@@ -1656,6 +1656,29 @@ stays; where it differs, this governs.
    changes nothing today. How many filings can be charged and still Pending
    at once is for slices b and c to bound.
 
+**Correction, 2026-11-14 (story 791 fix round 2, coordinator rulings; not a
+ruling by Tom).** A summoned task's pre-flight also obeys a permanent stop
+fence. `stopAgent`, including rescue and pod shutdown, durably writes
+`start-stopped.json` before signalling anything. Every probe and the task
+check it at their final start fence. The marker is never removed for that
+launch. The task's final check, `cmd.Start` and publication of `agent.pid`
+hold `start-spawn.lock`; stop takes that same lock, with a bound, after
+writing the marker and before deciding which processes to stop. Thus a task
+already crossing the final check is recorded and stopped before stop can
+report it gone. A stop that cannot obtain the lock reports running. The
+checking receipt also durably records task-start intent before the final
+fence. If run-agent dies after starting the separate task group but before
+publishing its identity, that unresolved intent keeps status busy and stop
+running. It is evidence of uncertainty, not a recoverable group identity.
+The task PID receipt is durable and preserves an unreaped zombie leader's
+start time, so an already-exited leader cannot hide its surviving children.
+Only a confirmed PID publication or proof that no task remains settles the
+intent. This is the fix's conservative implementation choice for an
+interrupted publication; it adds no guardian or recovery authority. The
+recorded launcher group makes the probe visible even when run-agent dies;
+6.9 defines the distinct proofs between turns and after stop. Ordinary
+launches retain their existing start and stop paths.
+
 **Correction, 2026-11-14: story 801, coordinator rulings on item 768 comment
 7702 and item 801 comment 7852; not a ruling by Tom.** The leader's filing
 writer uses `summonledger.Keep` and the same ConfigMap resourceVersion as the
@@ -3535,6 +3558,355 @@ of the correction above.
    never expires; an `urgent` one is never held by the gate, so it never
    closes on this row (a remediation held for its lane still closes
    `hold-expired`).
+
+**Correction, 2026-11-13 (story 791, slice c of #743; coordinator rulings
+on item 743 comments 7458 and 7540, and coordinator answer op791-a-1; not a
+ruling by Tom).** The fallback text above stays; where it differs, this
+governs.
+
+1. *Who gets the pre-flight.* A summoned **task**'s first launch only. "For
+   a summoned session" above is narrowed: a summoned remote session's TUI
+   gets none in this slice (743d), and no ordinary session ever does. The
+   operator copies `spec.summon.fallbackModel` into the session document as
+   `fallbackModel`, for a summoned session only; agentd puts both models in
+   the first launch record (`preflight`). A launch record or a session
+   document without them runs as before.
+2. *The pre-flight sits inside the start fence (ruling (c)).* Each turn is a
+   provider process. run-agent checks the start deadline before each turn
+   (the model, then the fallback) and again before the real start, and cuts
+   each turn's limit to the smaller of 90 seconds and the time left. A turn
+   the deadline cut short, or a deadline already passed, is the fence's
+   refusal (`start-refused.json`, status `failed`, close `agent-failed`):
+   time ran out, no model was refused.
+3. *When the fallback is tried (op791-a-1).* This replaces "If that is
+   refused, for a model error or a quota error" as the condition. The
+   fallback is tried once whenever `spec.model` did not answer and its login
+   was not rejected: a recognised model refusal, a recognised quota refusal,
+   an unmatched API error, a non-zero exit with no entry, or the turn's own
+   limit. That is v1's rule (`probe_model`: a credential match tries no
+   fallback, any other failure does). agentd cannot know every wording the
+   CLI uses for a refusal, so recognition names the cause and does not decide
+   the try. How an answer and each refusal are recognised is item 11
+   (story 791 fix round 1), which replaces this item's first account of it.
+4. *A rejected login tries no fallback (ruling (d)),* on either turn: both
+   models use the same static token. Nothing starts.
+5. *One provider process at a time (op791-a-1).* A turn is stopped and
+   waited for before the next turn or the real start is spawned. One that
+   cannot be shown gone starts nothing further, and its cause is no answer.
+   The turn runs `--tools ""`, `--setting-sources ""` (item 11),
+   `--strict-mcp-config`, `--no-session-persistence` and `--max-turns 1`,
+   with no `--dangerously-skip-permissions`, so no tool can run in it.
+6. *The typed record.* agentd reports it in its status and the operator's
+   API copies it into `status.agent.start`: `model`, the model the task
+   started on; `fallbackCause` beside a fallback model, why `spec.model` did
+   not answer; or `failure` when nothing started, the cause of the last model
+   tried (`ModelRefused`, `QuotaRefused`, `LoginRejected`, `NoAnswer`). The
+   API copies only those shapes, only for a summoned task and only with
+   `spec.model` (no cause) or `spec.summon.fallbackModel` (with one);
+   anything else is dropped, not refused, so the heartbeat still counts.
+   Once recorded it never changes; the CRD's rules refuse a change or a
+   removal. The CRD bounds the record's shape but does not bind its model to
+   the spec: a root rule that reads `spec.summon` does not compile against an
+   installed spec schema that predates it
+   (`TestPrivatePilotPreflightRealSchemaAdmission`), so that binding is the
+   API's alone. The session's own pod writes it, and that pod can already end
+   its session with a reported outcome, so a forged start failure gains it
+   no more than that (item 791 comment 7542; for the reviewer to check).
+   Slice 742d raises `static-token-rejected` from `failure: LoginRejected`.
+7. *The close.* The controller sets `Inputs.NoUsableModel` from
+   `status.agent.start.failure` only, never from a message, and
+   `summonoutcome.FirstReason` stays the one table: `no-usable-model` before
+   `agent-failed` (6.6). A failure starts no provider and writes no task
+   result, so the agent reports `failed` and the session closes once, by its
+   `onUnreported`.
+8. *`no-usable-model` pages `failed` for every priority (ruling (e)),* a
+   curation run whose two models both refused for quota included. This
+   slice changes no page table; the typed cause lets a later ruling move the
+   quota case to the digest without a schema change.
+9. *While it runs,* the status reads `busy`, as the start window does
+   before a pid file appears: the run-agent named in
+   `~/.agentd/start-preflight.json` lives and no provider has a pid yet. A
+   restart at any point starts nothing again (5.9's latch): the later boot
+   finds the launch record, and the status reads `interrupted`.
+10. *Usage.* The pre-flight's own usage is not recorded, one short turn a
+    start and two when the fallback is tried. A task that starts on the
+    fallback keeps `spec.model` as its usage source's requested model, since
+    the launch record agentd wrote, and the receipt bound to it, are not
+    changed; the result event's served models name the fallback when the CLI
+    reports them.
+11. *How the turn is read, and which model answered* (story 791 fix round 1,
+    coordinator rulings in PR 1120 comment 6843361182; not a ruling by Tom).
+    The first account in item 3 read the turn with the transcript's field
+    names, which the stream does not carry. Four real streams of Claude Code
+    2.1.321, captured on 2026-11-13 with the pre-flight's flags
+    (`internal/agentd/testdata/preflight`), show what it does write: the
+    API-error flag `is_api_error_message`, the status `api_error_status` (a
+    number) and the error code in the entry's top-level `error`. The turn has
+    its own reader now; the transcript's classifier is unchanged.
+    - *An entry is an API error* when it carries the flag (in the stream's
+      spelling or the transcript's `isApiErrorMessage`), an error code, a
+      status (`api_error_status` or `apiErrorStatus`), or, with no real
+      response, text that starts "API Error". Its cause comes from the code
+      first, then the status, and only then from the wording. A reply that
+      quotes the wording is not an API error, so it stays an answer.
+    - *A rejected login*: code `authentication_failed` or status 401, or the
+      wording "not logged in", "failed to authenticate", or the transcript's
+      markers ("please run /login", "oauth token has been revoked", "oauth
+      token has expired", "authentication_error"). **From real
+      streams**: a session pod's tool shell, which has no login in reach of
+      a child `claude` ("Not logged in · Please run /login", code, no
+      status), and a made-up token in a cleared environment ("Failed to
+      authenticate. API Error: 401 Invalid bearer token", code and 401). No
+      fallback is tried.
+    - *A refused model*: code `model_not_found` or status 404, or the
+      wording "issue with the selected model", "may not exist or you may not
+      have access", or v1's fragments. **From a real stream** (a model id
+      that does not exist: code, 404, "There's an issue with the selected
+      model (...). It may not exist or you may not have access to it.").
+    - *A quota refusal*: code `rate_limit` or `billing_error`, status 429, or
+      v1's fragments ("out of usage credits", "usage limit", "rate limit").
+      **Not verified against a real stream**: none could be captured; the
+      codes are the CLI's own strings.
+    - *An answer*: a real response (a model name other than `<synthetic>`
+      and non-zero usage) from the model asked, from a CLI that exited 0.
+      **From a real stream**: its `message.model` is exactly the asked id,
+      with no date suffix, and it carries no error field. The asked id with
+      a date suffix (`-YYYYMMDD`) or `[1m]` also counts. A real response
+      from any other model is a refused model, so the fallback is tried: the
+      CLI can switch models by itself (`model_fallback`). The real start's
+      arguments are unchanged, and `CLAUDE_CODE_NO_MODEL_FALLBACK` is not
+      set.
+    - *Settings.* The turn passes `--setting-sources ""`, so it loads no
+      user, project or local settings and runs none of their hooks. A task's
+      login comes from `CLAUDE_CODE_OAUTH_TOKEN` in its environment, which no
+      settings source carries; the real answer was captured with this flag.
+      `--bare` is not used, because it reads no OAuth token.
+
+**Correction, 2026-11-14 (story 791 fix round 2, coordinator rulings; not a
+ruling by Tom).** This answers review R1–R6 and coordinator answer
+`op791-fix-2b-q-1` to session `dev-env-1114-034156`. Earlier corrections stay;
+where this differs, it governs.
+
+1. *Stop owns the pre-flight.* run-agent establishes itself as its process
+   group's leader before claiming the launch; tmux may already have made
+   it that leader. Each probe inherits the group and gets parent-death
+   SIGKILL. Its creating OS thread stays pinned until its Wait and cleanup
+   finish. The checking record names the launcher PID, its start time and
+   its group ownership before any probe starts. Stop writes 5.9's durable
+   marker, drains the start lock, signals the launcher and, after the grace,
+   kills the recorded group. The real task still leads a separate group;
+   the lock makes its PID visible before stop can kill the launcher. The
+   durable task-start intent in 5.9 covers a launcher killed independently
+   before PID publication: stop stays running and status stays busy when
+   the task identity is unconfirmed. No unknown group is reported gone.
+2. *"Gone" has two precise meanings.* Between turns, the launcher's own
+   Wait must reap its direct probe, and a bounded strict `/proc` observation
+   must show no group member except the launcher's verified PID. Leftover
+   members are killed individually, with their group checked immediately
+   before each kill. Zombies count as members; unreadable state, a remaining
+   member or any uncertain observation means `Gone: false`, and no fallback
+   or task starts. The existing bounded native-invocation absence helper
+   supplies this wait; native invocation retains its whole-group check.
+   **After stop there is no launcher exception:** its leader must be gone
+   and `kill(-pgid, 0)` must return `ESRCH` for every recorded owned group.
+   Otherwise stop reports running. A dead launcher with a leftover probe
+   group stays visible as busy, and the stop path can end it from disk state.
+3. *One invocation, independent of usage.* The initial checking record is
+   created exclusively, synced along with its directory, before usage or
+   capture admission. It is also the pre-flight's once-only claim. Updates
+   replace it atomically and never remove it, even after failure. A second
+   direct run-agent invocation starts no probe or task and leaves the first
+   record unchanged, including when `UsageSource` is absent. Usage behavior
+   is unchanged.
+4. *The absolute deadline reaches the command runner.* After preparing the
+   command and acquiring its start lock, the runner recomputes the turn's
+   limit from the remaining absolute window, arms that timer before starting,
+   and checks the fence immediately before `cmd.Start`. It also checks the
+   absolute deadline after the turn. Preparation or a running turn exhausting
+   the window produces `start-refused`, never a typed model failure.
+5. *An optional malformed heartbeat record is dropped.* Even `start: []`
+   or `start: {model: 7}` cannot reject the remaining valid heartbeat. Both
+   response paths store it: 200 with a title body for sessions named by the
+   title flag, otherwise 204 without a body. No schema or API field changes.
+
+Proofs use stand-in processes, FIFO readiness and fake clocks: stop and rescue
+in the primary, fallback and accepted-probe/task gap; launcher death with a
+surviving descendant; a pause inside the final task-start critical section;
+leader exit with a descendant that closed its output; uncertain group
+observation; prepared-command deadline expiry on both models; and direct
+replay at five boundaries with no usage or capture identity. These are source
+and local test evidence, not installed or live provider acceptance.
+
+**Correction, 2026-11-14 (story 791 fix round 3, coordinator rulings; not a
+ruling by Tom).** This answers M1 and L1–L5 in the review of PR 1153
+(comment 6872311374). Earlier corrections stay; where this differs, it
+governs.
+
+1. *A live launcher must obey the marker.* A stop before run-agent claims
+   the launch reports not running, but still durably fences every later
+   probe and task start. With a grace, a launcher released between the
+   accepted probe and the task reaches that fence and starts no task. During
+   either probe it handles SIGTERM, ends and reaps the probe, and can exit
+   without group SIGKILL. Failed marker persistence or failure to acquire
+   the start lock signals nothing and reports running. An unreadable claim
+   or unpublished task identity remains uncertainty, never proof of a stop.
+2. *One stop deadline; preserve a started task's result (L3).* Stop chooses
+   one group under the start lock. Once `agent.pid` is published it stops
+   only the task's group and leaves run-agent to finish its end-of-task work
+   and write its result, even when that work outlasts the stop grace. It
+   never signals that launcher or kills its group. A `started` claim whose
+   finished task removed its PID also leaves the launcher alone. The
+   launcher-group path applies only during pre-flight or task hand-over.
+   All summoned-stop waits share a deadline made at entry: at most **40
+   seconds**, from 5 seconds for the lock, a grace capped at 30 seconds,
+   and 5 seconds to observe group absence after SIGKILL. Work before a wait
+   consumes its remaining budget; no second grace is added. This leaves
+   20 seconds within the pod's 60-second termination grace at the production
+   limits. Ordinary launches keep their prior stop path. The deadline bounds
+   waits, not a kernel or filesystem operation that never returns, and the
+   pod's outer termination deadline still bounds result retention.
+3. *Settle before removing the PID (L2).* A failed `started` write is logged
+   and retried after the task's Wait, before removing `agent.pid`. If that
+   settlement fails too, the error is logged and the PID receipt stays, so
+   status and stop can prove that recorded task group absent. Errors clearing
+   an intent when nothing started are logged as well. These writes do not
+   remove or reopen the once-only claim. If the launcher died before PID
+   publication, or its records are unreadable and no task identity can be
+   proved, local stop still cannot settle that uncertainty. The operator
+   ends it through the existing authorized executor/pod termination path,
+   preserving the workspace under the existing rescue rules and verifying
+   the executor ended; it must not clear the claim or invent a task PID.
+   A later boot ignores the old process records and never replays the task.
+   This correction grants no new lifecycle or rescue authority.
+4. *Ownership belongs to the launch's boot (L1).* When the readable current
+   `boot.json` has a nonempty boot ID different from `launch.json`, stop and
+   status treat `start-preflight.json` and `agent.pid` as absent, even if
+   their numeric PID, start time and group now happen to name a live process.
+   The historical task result remains readable. This is a boot boundary,
+   not a kernel namespace attestation: a missing or unreadable current boot
+   record proves no change. Within a boot, leader identity/group checks stay;
+   a leaderless historical group still cannot attest its origin after reuse.
+5. *Cleanup uncertainty is a start refusal (L5), not a model failure.* If
+   the group is not shown gone within the one-second between-turn bound,
+   nothing else starts. `start-refused.json` records the group uncertainty,
+   even if the model answered; no typed `NoAnswer` or `no-usable-model`
+   record is emitted. Status remains busy while an owned group is live or
+   uncertain; after absence is established the existing refusal reports
+   failed (`agent-failed`). A turn's start-lock failure uses the same
+   refusal record and names the lock in its log, rather than claiming a
+   signal. No enum, API or CRD change is needed.
+6. *The group boundary remains a limit.* A descendant that leaves the
+   launcher's group, for example with `setsid`, is outside both the
+   between-turn absence proof and that group's stop. This mechanism is
+   process-group ownership, not containment. Tests use stand-in binaries;
+   they do not attest a provider's descendant behavior. Tests that become
+   launchers now re-execute in their own group. The descendant cleanup proof
+   observes its real SIGKILL and injects the absence observation, so it
+   requires no particular PID 1 reap latency inside one second.
+
+**Correction, 2026-11-14 (story 791 fix round 4, coordinator rulings; not a
+ruling by Tom).** This answers N1 and N2 and the limits noted in the review
+of PR 1157 (comment 6873220158). Earlier corrections stay. This narrows fix
+round 3's ruling 4: another boot invalidates process ownership, not settled
+start history.
+
+1. *A settled start outcome survives a later boot (N1).* Status keeps a
+   `no-usable-model` record as `failed` with `start.failure`, and a `started`
+   record keeps `start.model` and any valid `fallbackCause`. These remain
+   bound to the original launch's conversation ID and boot ID. Its PID,
+   start time, group and pending intent cannot establish ownership in a
+   different boot: stop ignores them, and they cannot make status busy. An
+   old `checking` record has no settled start outcome; without a task result
+   it reads `interrupted` with no start record. The launch latch and
+   exclusive pre-flight claim are unchanged: a later boot starts no new
+   pre-flight or task for the same launch. Historical outcomes are not
+   attributed to a different launch.
+2. *Shutdown waits briefly for a started task's result (N2).* When stop
+   finds a published task under the start lock, or a settled `started`
+   record whose task already removed its PID, shutdown waits up to **2
+   seconds** for the result before copying the log and sending its last
+   heartbeat. It adds no result wait for a pre-flight with no started task,
+   an unconfirmed stop fence or another boot's launch. The bounded waits
+   total at most **50 seconds**: 40 for stop, 2 for the result, 3 for the log
+   copy and 5 for the last heartbeat, within the pod's 60-second termination
+   grace. As in round 3, this bounds waits, not a kernel or filesystem call
+   that never returns. It does not bound the launcher's end-of-task work or
+   guarantee its result arrives in time. No further heartbeat is scheduled
+   for a result arriving after the wait: if the final heartbeat misses that
+   result, it is reported only if the pod boots again. A result appearing
+   during the log copy can still be picked up by that final heartbeat.
+3. *One boot assumes one daemon per container.* The image runs
+   `tini -- agentd run`, so a daemon exit normally ends the container. A
+   second `agentd run` started by hand in the same container would rewrite
+   `boot.json` and make stop and status ignore a live launch's ownership.
+   Nothing guards against this; the boot ID is not a namespace attestation
+   or an exclusive-daemon lock.
+4. *A persistently failed settle write retains the PID.* After both
+   `started` writes fail, `agent.pid` remains even after the launcher exits,
+   until the pod ends; on a later boot it is no longer ownership evidence.
+   Within that boot the leaderless historical group and PID reuse limit in
+   round 3 still applies. The pre-flight record stays `checking`, so its
+   start record never names the model, even when a task result reports the
+   task exited. This round does not change the writes or their retry.
+5. *Task-start failures differ from a turn's lock refusal.* Failure to
+   acquire the task-start lock or write its pending intent writes no refusal
+   record. Once the launcher is gone and the start window has passed, status
+   reads `interrupted` rather than the `failed` reported for a turn's lock
+   refusal. This is an existing limit; this round changes no start sequence.
+
+The later-boot status table, the held-result shutdown proof and its fake
+42-second stop-plus-wait bound are source and local test evidence. They are
+not installed or live-provider acceptance, nor a demonstration of a second
+daemon in one container.
+
+**Correction, 2026-11-14 (story 791 fix round 5, coordinator ruling; not a
+ruling by Tom).** This answers the reused-PID stop and status findings on
+PR 1120 (review comments 4571659668 and 4572019700). Earlier corrections
+stay; where this differs, it governs.
+
+1. *A different start time proves the recorded group gone.* A readable
+   `/proc/<pid>/stat` with a valid start time different from the recorded
+   one proves the PID was reused. POSIX Base Definitions,
+   [Process ID Reuse](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html#tag_04_17)
+   (also [committee draft, 4.13](https://www.open-std.org/jtc1/sc22/open/n4217.pdf)),
+   reserves that PID until the group sharing its number has no members.
+   Linux's [`__change_pid` and `free_pid`](https://github.com/torvalds/linux/blob/v6.12/kernel/pid.c)
+   retain the allocation until all PID-type lists are empty;
+   [`release_task` and `__unhash_process`](https://github.com/torvalds/linux/blob/v6.12/kernel/exit.c)
+   detach zombie membership on release. An unrelated group at the same
+   number therefore cannot keep the recorded group alive.
+2. *Stop never signals the reused identity.* The shared proof runs at the
+   first group check and again before group SIGKILL. Each checkpoint
+   classifies one stat snapshot, so a later readable reuse observation cannot
+   be discarded as uncertainty after an earlier matching read. On either
+   proof, stop reports `Running: false`, `WasRunning: false`, `Killed: false`. A prior
+   SIGTERM may have preceded reuse during the grace; no later signal goes
+   to the reused PID or group. Identity is still read immediately before
+   each signal. The stop order and its single 40-second deadline stay.
+3. *Status reads the settled record again.* The shared proof makes the
+   launcher's group inactive for `preflightLive`, and the published task
+   inactive for `pendingPreflightTask`. An unrelated group leader no longer
+   makes the session busy or hides a same-boot `no-usable-model` failure.
+   A live or unpublished pending task still owns its independent uncertainty,
+   even after launcher reuse. The ordinary `stopAgent` and `pidAlive` paths
+   and round 4's start-history and shutdown work are unchanged.
+4. *What stays uncertain.* Unreadable or malformed stat data, a record with
+   no start time, and the same start time with a different process group
+   prove no reuse; stop still reports running and signals nothing. A malformed
+   nonempty recorded start also cannot prove reuse; its other handling is
+   unchanged. A missing leader keeps the whole-group absence check, because
+   descendants may outlive it. The PID-reuse limit described in rounds 2
+   and 3, including the retained PID receipt and the leaderless historical
+   group, no longer necessarily lasts to the pod's end: observing a new
+   process at that PID settles it. Without that observation, existing group
+   absence and boot-boundary rules still apply. A descendant that left the
+   owned group remains outside this proof.
+
+Proofs use live shell stand-ins, wrong recorded start times, an injected stat
+read, and the existing wait/signal seams. They cover both stop owners,
+same-boot failure status, a retained pending-task PID, uncertainty, and reuse
+between TERM and KILL. These are source and local test evidence, not installed
+or live provider acceptance.
 
 ### 6.10 OP745: joinable remote sessions with a verified link
 

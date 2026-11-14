@@ -60,6 +60,9 @@ func (r *Reconciler) closeSummon(ctx context.Context, s *v1alpha1.AgentSession, 
 	}
 	if s.Status.Agent != nil {
 		in.AgentStatus = s.Status.Agent.Status
+		// OP791: no-usable-model comes only from the typed start record
+		// (DESIGN-064 6.9), never from a message.
+		in.NoUsableModel = s.Status.Agent.Start != nil && s.Status.Agent.Start.Failure != ""
 	}
 	reason := summonoutcome.FirstReason(in)
 	if reason == "" {
@@ -80,8 +83,9 @@ func (r *Reconciler) closeSummon(ctx context.Context, s *v1alpha1.AgentSession, 
 		}
 		reason = summonoutcome.FirstReason(in)
 	}
-	// OP743 supplies no-usable-model. Feed it into Inputs above, retaining
-	// summonoutcome.FirstReason as the one table. No heartbeat age hides an input.
+	// OP791 supplies no-usable-model above, from status.agent.start, and
+	// summonoutcome.FirstReason stays the one table. No heartbeat age hides
+	// an input.
 	next := summonoutcome.Decision{}
 	if reason != "" {
 		if s.Spec.Summon == nil {

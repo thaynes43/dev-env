@@ -18,9 +18,17 @@ var stopKillWait = 5 * time.Second
 // SIGTERM to the CLI that run-agent recorded, as the pod's own shutdown does
 // (D-42), and waits up to grace for it to exit. Then whatever is left of the
 // CLI's process group (run-agent starts the CLI as its group's leader), the
-// CLI itself or a background command it started, gets SIGKILL. run-agent is
-// not in that group, so it still writes the task's result.
+// CLI itself or a background command it started, gets SIGKILL. Once a task
+// PID is published, run-agent is left to write its result. A summoned launch
+// still in pre-flight or task hand-over instead fences further starts and
+// stops its launcher group, with one deadline of at most 40s for all waits.
+// Ordinary launches retain the original task-group stop below.
 func stopAgent(s Settings, grace time.Duration) *protocol.AgentStop {
+	var first Launch
+	if readJSONFile(s.statePath(launchFile), &first) == nil && first.Preflight != nil {
+		st, _ := stopPreflightLaunch(s, first, grace)
+		return st
+	}
 	st := &protocol.AgentStop{}
 	var p agentPid
 	if readJSONFile(s.statePath(pidFile), &p) != nil || !pidAlive(p) {

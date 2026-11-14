@@ -192,9 +192,14 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		st.Agent = protocol.AgentState{StartedAt: &created}
 		var p agentPid
 		switch {
-		case readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p):
+		case !preflightBootChanged(first, boot.BootID) && readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p):
 			st.Agent.State = protocol.AgentBusy
 		case first.BootID == boot.BootID && now.Sub(first.CreatedAt) < startWindow:
+			st.Agent.State = protocol.AgentBusy
+		case summonedRun && preflightLive(s, first):
+			// A summoned task's model pre-flight (DESIGN-064 6.9, OP791): its
+			// run-agent lives and no provider has a pid yet, so it counts as
+			// busy, as the start window does before the pid file appears.
 			st.Agent.State = protocol.AgentBusy
 		default:
 			st.Agent.State = protocol.AgentInterrupted
@@ -230,6 +235,11 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		if launched {
 			st.UsageObservation = collectedInitialUsage(first, s.StateDir, res.UsageObservation)
 		}
+	}
+	// How a summoned task's start went after its model pre-flight
+	// (DESIGN-064 6.9, OP791): the model it started on, or why nothing did.
+	if summonedRun && sess.Mode == protocol.ModeTask {
+		st.Start = preflightStartRecord(s, first)
 	}
 	if launched {
 		if t := newestMtime(first.LogPath, first.EventsPath); !t.IsZero() {
@@ -308,8 +318,18 @@ func summonedRunState(s Settings, first Launch, bootID string, now time.Time) (s
 	h := summonedHandoff(s, first)
 	var refused startRefused
 	switch {
+	case preflightLive(s, first):
+		st.State = protocol.AgentBusy
+		return st, true
 	case readJSONFile(s.statePath(startRefusedFile), &refused) == nil && refused.ConversationID == first.ConversationID && refused.BootID == first.BootID:
 		st.State, st.Error = protocol.AgentFailed, "run-agent refused to start the provider: "+refused.Reason
+		return st, true
+	case preflightFailed(s, first):
+		// The model pre-flight found no usable model, so no provider of the
+		// task started (DESIGN-064 6.9, OP791). Whatever tmux answered,
+		// run-agent ran and recorded that.
+		rec, _ := readPreflightRecord(s, first)
+		st.State, st.Error = protocol.AgentFailed, "no usable model: the model pre-flight ended "+rec.Failure+"; the provider was not started (DESIGN-064 6.9)"
 		return st, true
 	case h.State == handoffNothingStarted:
 		st.State, st.Error = protocol.AgentFailed, "the tmux start of the summoned session's first launch failed before anything could start ("+h.Reason+"); agentd never starts it again (DESIGN-064 5.9)"
@@ -319,9 +339,12 @@ func summonedRunState(s Settings, first Launch, bootID string, now time.Time) (s
 	}
 	var p agentPid
 	switch {
-	case readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p):
+	case !preflightBootChanged(first, bootID) && readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p):
 		st.State = protocol.AgentBusy
 	case first.BootID == bootID && now.Sub(first.CreatedAt) < startWindow:
+		st.State = protocol.AgentBusy
+	case preflightLive(s, first):
+		// run-agent is in the task's model pre-flight (OP791).
 		st.State = protocol.AgentBusy
 	default:
 		why := "tmux's answer is not recorded"

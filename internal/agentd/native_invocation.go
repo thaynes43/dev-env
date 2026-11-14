@@ -318,13 +318,21 @@ func (lease *nativeInvocationLease) afterWait(l Launch, state *os.ProcessState, 
 	return nil
 }
 
-func waitNativeGroupAbsent(pgid int, bound time.Duration) bool {
+func waitNativeGroupAbsent(pgid int, bound time.Duration, launcher ...agentPid) bool {
+	if pgid <= 0 || len(launcher) > 1 {
+		return false
+	}
 	timer := time.NewTimer(bound)
 	defer timer.Stop()
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if errors.Is(syscall.Kill(-pgid, 0), syscall.ESRCH) {
+		// Native invocation and stop retain the whole-group ESRCH proof.
+		// Only a pre-flight between turns excludes its verified launcher.
+		if len(launcher) == 0 && errors.Is(syscall.Kill(-pgid, 0), syscall.ESRCH) {
+			return true
+		}
+		if len(launcher) == 1 && preflightGroupOnlyLauncher(pgid, launcher[0]) {
 			return true
 		}
 		select {

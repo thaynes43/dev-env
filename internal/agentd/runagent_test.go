@@ -23,9 +23,23 @@ not json at all
 {"type":"result","subtype":"success","is_error":false,"num_turns":3,"result":"Done.","session_id":"conv-1","total_cost_usd":0.0123,"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":5000,"cache_creation_input_tokens":300}}
 `
 
-// fakeCLI writes a shell script that stands in for the claude CLI.
+// fakeCLI writes a shell script that stands in for the claude CLI's real
+// start. A summoned task's model pre-flight turns (OP791) are answered in
+// process: fakeCLI installs a stand-in for preflightTurn that accepts every
+// model, so no turn is a process on a real timer and no test depends on how
+// fast one starts (ruling 3 of story 791 fix round 1). A test that needs
+// other answers installs its own after this (installStandIn). The test's
+// environment loses every KUBERNETES_* variable and points KUBECONFIG at a
+// missing file, so the stand-in cannot reach a cluster (item 782 comment
+// 7521).
 func fakeCLI(t *testing.T, dir, body string) string {
 	t.Helper()
+	scrubClusterEnv(t)
+	restore := preflightTurn
+	t.Cleanup(func() { preflightTurn = restore })
+	preflightTurn = func(Launch, string, time.Duration, <-chan os.Signal) preflightOutcome {
+		return preflightOutcome{Answered: true, Gone: true}
+	}
 	p := filepath.Join(dir, "fake-claude")
 	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
 		t.Fatal(err)
