@@ -20,9 +20,20 @@ import (
 const (
 	startStoppedFile   = "start-stopped.json"
 	startSpawnLockFile = "start-spawn.lock"
+	// One deadline for lock + grace + kill observation, inside the pod's
+	// 60s termination grace. The production bounds are 5s + 30s + 5s.
+	preflightStopMaxWait = 40 * time.Second
 )
 
 var preflightLockWait = 5 * time.Second
+
+// Narrow seams for deterministic stop deadlines, signal observations and
+// failed ownership writes. Production uses the same kernel and durable I/O.
+var preflightStopNow = time.Now
+var preflightStopLock = lockFileWait
+var preflightStopWait = waitNativeGroupAbsent
+var preflightSignal = syscall.Kill
+var writePreflightRecord = writeWorkspaceJSON
 
 // claimPreflight is independent of usage/capture identity. The exclusive
 // checking record is never removed, even on an incomplete write or failure.
@@ -92,7 +103,7 @@ func recordPreflightTaskPending(l Launch, stateDir string, pending bool) error {
 		return errors.New("pre-flight ownership record is unconfirmed")
 	}
 	rec.TaskPending = pending
-	return writeWorkspaceJSON(statePathIn(stateDir, startPreflightFile), rec)
+	return writePreflightRecord(statePathIn(stateDir, startPreflightFile), rec)
 }
 
 func pendingPreflightTask(s Settings, rec startPreflight) bool {
@@ -106,17 +117,37 @@ func pendingPreflightTask(s Settings, rec startPreflight) bool {
 	return !waitNativeGroupAbsent(task.Pid, 0)
 }
 
+// A boot may have a new PID namespace; old numeric identities cannot prove
+// ownership across that boundary. A missing boot record proves no change.
+func preflightBootChanged(l Launch, bootID string) bool {
+	return l.Preflight != nil && bootID != "" && l.BootID != bootID
+}
+
+func preflightFromAnotherBoot(s Settings, l Launch) bool {
+	var boot bootRecord
+	return readJSONFile(s.statePath(bootFile), &boot) == nil && preflightBootChanged(l, boot.BootID)
+}
+
+func preflightStopRemaining(deadline time.Time, bound time.Duration) time.Duration {
+	return max(0, min(bound, deadline.Sub(preflightStopNow())))
+}
+
 // stopPreflightLaunch publishes the irreversible fence first, then acquires
 // the same bounded lock as check/start/PID publication. A timeout is running,
 // never proof of a stop. Nothing can spawn once that critical section drains.
 func stopPreflightLaunch(s Settings, l Launch, grace time.Duration) *protocol.AgentStop {
 	st := &protocol.AgentStop{}
-	marker := startRefused{Reason: "stop requested", At: time.Now().UTC(), ConversationID: l.ConversationID, BootID: l.BootID}
+	grace = max(0, min(grace, 30*time.Second))
+	deadline := preflightStopNow().Add(min(preflightLockWait+grace+stopKillWait, preflightStopMaxWait))
+	if preflightFromAnotherBoot(s, l) {
+		return st
+	}
+	marker := startRefused{Reason: "stop requested", At: preflightStopNow().UTC(), ConversationID: l.ConversationID, BootID: l.BootID}
 	if err := writeWorkspaceJSON(s.statePath(startStoppedFile), marker); err != nil {
 		st.Running = true
 		return st
 	}
-	unlock, err := preflightSpawnLock(l, s.StateDir)
+	unlock, err := preflightStopLock(s.statePath(startSpawnLockFile), preflightStopRemaining(deadline, preflightLockWait))
 	if err != nil {
 		st.Running = true
 		return st
@@ -128,12 +159,16 @@ func stopPreflightLaunch(s Settings, l Launch, grace time.Duration) *protocol.Ag
 	// The task was published before stop took the lock, or the marker refused
 	// it. Stop the task while its launcher can still reap it/write the result.
 	if taskErr == nil {
-		mergePreflightStop(st, stopPreflightGroup(task, grace))
+		return stopPreflightGroup(task, grace, deadline)
+	} else if os.IsNotExist(taskErr) && found && rec.State == preflightStarted {
+		// The finished task removed its PID. Its launcher still owns result
+		// retention and must never receive a second grace or group SIGKILL.
+		return st
 	} else if !os.IsNotExist(taskErr) || rec.TaskPending {
 		st.Running = true
 	}
 	if found && rec.GroupOwned {
-		mergePreflightStop(st, stopPreflightGroup(agentPid{Pid: rec.Pid, Start: rec.Start}, grace))
+		mergePreflightStop(st, stopPreflightGroup(agentPid{Pid: rec.Pid, Start: rec.Start}, grace, deadline))
 	} else if found && pidAlive(agentPid{Pid: rec.Pid, Start: rec.Start}) {
 		// An older checking record did not prove group leadership. Do not infer
 		// ownership of an unrelated group from it.
@@ -152,7 +187,7 @@ func mergePreflightStop(dst, src *protocol.AgentStop) {
 	dst.Running = dst.Running || src.Running
 }
 
-func stopPreflightGroup(p agentPid, grace time.Duration) *protocol.AgentStop {
+func stopPreflightGroup(p agentPid, grace time.Duration, deadline time.Time) *protocol.AgentStop {
 	st := &protocol.AgentStop{}
 	if p.Pid <= 0 || p.Start == "" {
 		st.Running = true
@@ -164,21 +199,24 @@ func stopPreflightGroup(p agentPid, grace time.Duration) *protocol.AgentStop {
 		st.Running = true
 		return st
 	}
-	if !pidAlive(p) && waitNativeGroupAbsent(p.Pid, 0) {
+	if !pidAlive(p) && preflightStopWait(p.Pid, 0) {
 		return st
 	}
 	st.WasRunning = true
 	if pidAlive(p) {
-		_ = syscall.Kill(p.Pid, syscall.SIGTERM)
+		_ = preflightSignal(p.Pid, syscall.SIGTERM)
 	}
-	if !waitNativeGroupAbsent(p.Pid, grace) {
+	// Reserve the kill observation inside this same deadline. Marker I/O,
+	// the lock and process observations all consume its remaining time.
+	termWait := min(grace, max(0, deadline.Sub(preflightStopNow())-stopKillWait))
+	if !preflightStopWait(p.Pid, termWait) {
 		if preflightGroupIdentityUncertain(p) {
 			st.Running = true
 			return st
 		}
 		st.Killed = true
-		_ = syscall.Kill(-p.Pid, syscall.SIGKILL)
-		st.Running = !waitNativeGroupAbsent(p.Pid, stopKillWait)
+		_ = preflightSignal(-p.Pid, syscall.SIGKILL)
+		st.Running = !preflightStopWait(p.Pid, preflightStopRemaining(deadline, stopKillWait))
 	}
 	st.Running = st.Running || pidAlive(p)
 	return st
@@ -284,7 +322,7 @@ func killPreflightMembers(self agentPid) error {
 		if err != nil || group != self.Pid {
 			return errors.New("pre-flight member group is unconfirmed")
 		}
-		if err := syscall.Kill(member.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		if err := preflightSignal(member.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 			return err
 		}
 	}

@@ -45,9 +45,14 @@ var beforeTaskStart func()
 // its identity is published, including a leader that has already exited.
 var beforeTaskPIDRecord func(int)
 
+// beforeTaskResultWrite is nil in production. Tests hold end-of-task work
+// after Wait to prove a stop leaves the launcher able to retain its result.
+var beforeTaskResultWrite func()
+
 // startRefused is ~/.agentd/start-refused.json: run-agent refused to spawn the
-// provider of the launch it names because its start deadline had passed
-// (DESIGN-064 5.9, N2, OP780). The status reports the launch failed, so the
+// provider of the launch it names: its deadline passed, or the pre-flight's
+// start lock or group cleanup was unconfirmed (DESIGN-064 5.9 and 6.9).
+// The status reports the launch failed once no owned group remains, so the
 // operator closes the session agent-failed; no task result or TUI exit is
 // written, since no provider ran.
 type startRefused struct {
@@ -86,8 +91,8 @@ func checkSpawnFence(l Launch, stateDir string) string {
 }
 
 // writeStartRefused records the start fence's refusal of l's provider spawn:
-// spawnFence's, or the model pre-flight's when the start deadline cut a turn
-// short (DESIGN-064 6.9, ruling (c)).
+// spawnFence's, or the model pre-flight's deadline, lock or group refusal
+// (DESIGN-064 6.9). These are never typed model failures.
 func writeStartRefused(l Launch, stateDir, why string, now time.Time) {
 	_ = writeJSONFile(filepath.Join(stateDir, startRefusedFile), startRefused{Reason: why, At: now.UTC(), ConversationID: l.ConversationID, BootID: l.BootID})
 }
@@ -255,6 +260,20 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		_, _ = fmt.Fprintln(out, "agentd: the summoned start lock is unconfirmed")
 		return 1
 	}
+	clearPending := func() {
+		if err := recordPreflightTaskPending(l, stateDir, false); err != nil {
+			_, _ = fmt.Fprintln(out, "agentd: the pre-flight's task-start intent could not be settled")
+		}
+	}
+	recordStarted := func() bool {
+		if l.Preflight != nil {
+			if err := recordPreflightStarted(l, stateDir, argv[preflightModelArg(l.Argv, l.Preflight.Model)], fallbackCause); err != nil {
+				_, _ = fmt.Fprintln(out, "agentd: the pre-flight's started record could not be written; retaining the task PID until settlement")
+				return false
+			}
+		}
+		return true
+	}
 	if err := recordPreflightTaskPending(l, stateDir, true); err != nil {
 		unlockSpawn()
 		_ = pr.Close()
@@ -263,7 +282,7 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		return 1
 	}
 	if why := checkSpawnFence(l, stateDir); why != "" {
-		_ = recordPreflightTaskPending(l, stateDir, false) // no task was started.
+		clearPending() // no task was started.
 		unlockSpawn()
 		_ = pr.Close()
 		_ = pw.Close()
@@ -274,7 +293,7 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		beforeTaskStart()
 	}
 	if err := cmd.Start(); err != nil {
-		_ = recordPreflightTaskPending(l, stateDir, false) // Start created no child.
+		clearPending() // Start created no child.
 		unlockSpawn()
 		_ = pr.Close()
 		_ = pw.Close()
@@ -299,16 +318,14 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		_ = cmd.Wait()
 		gone := waitNativeGroupAbsent(pid, stopKillWait)
 		if gone {
-			_ = recordPreflightTaskPending(l, stateDir, false)
+			clearPending()
 		}
 		_ = pr.Close()
 		unlockSpawn()
 		_, _ = fmt.Fprintf(out, "agentd: task PID publication failed; task group absence confirmed: %t\n", gone)
 		return 1
 	}
-	if l.Preflight != nil {
-		recordPreflightStarted(l, stateDir, argv[preflightModelArg(l.Argv, l.Preflight.Model)], fallbackCause)
-	}
+	recordStarted() // a failed write is retried after Wait, before removing agent.pid.
 	unlockSpawn()
 	if err := nativeLease.recordStarted(l, pid); err != nil {
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
@@ -529,8 +546,14 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	if instructionErr != nil && code == 0 {
 		code = 1
 	}
+	if beforeTaskResultWrite != nil {
+		beforeTaskResultWrite()
+	}
+	settled := recordStarted()
 	writeResult(stateDir, l, started, code, to, res, true)
-	_ = os.Remove(filepath.Join(stateDir, pidFile))
+	if settled {
+		_ = os.Remove(filepath.Join(stateDir, pidFile))
+	}
 	_, _ = fmt.Fprintf(out, "TASK-EXIT:%d\n", code)
 	return code
 }

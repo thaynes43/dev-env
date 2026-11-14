@@ -192,7 +192,7 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		st.Agent = protocol.AgentState{StartedAt: &created}
 		var p agentPid
 		switch {
-		case readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p):
+		case !preflightBootChanged(first, boot.BootID) && readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p):
 			st.Agent.State = protocol.AgentBusy
 		case first.BootID == boot.BootID && now.Sub(first.CreatedAt) < startWindow:
 			st.Agent.State = protocol.AgentBusy
@@ -339,7 +339,7 @@ func summonedRunState(s Settings, first Launch, bootID string, now time.Time) (s
 	}
 	var p agentPid
 	switch {
-	case readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p):
+	case !preflightBootChanged(first, bootID) && readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p):
 		st.State = protocol.AgentBusy
 	case first.BootID == bootID && now.Sub(first.CreatedAt) < startWindow:
 		st.State = protocol.AgentBusy

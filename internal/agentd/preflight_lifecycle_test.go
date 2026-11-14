@@ -81,7 +81,7 @@ func newLifecycleRig(t *testing.T, point string) *lifecycleRig {
 	if err := os.MkdirAll(r.s.StateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"events", "hook", "primary", "fallback", "task", "descendant", "pid-record", "task-published"} {
+	for _, name := range []string{"events", "hook", "primary", "fallback", "task", "descendant", "pid-record", "task-published", "result"} {
 		path := filepath.Join(r.root, name+".fifo")
 		if err := syscall.Mkfifo(path, 0o600); err != nil {
 			t.Fatal(err)
@@ -123,6 +123,12 @@ func newLifecycleRig(t *testing.T, point string) *lifecycleRig {
 	// rely on: the pre-flight claim alone has to make a retry refuse.
 	r.l.UsageSource, r.l.CaptureOutput = nil, false
 	writeLaunch(t, r.s, r.l)
+	if err := writeJSONFile(r.s.statePath(bootFile), bootRecord{BootID: r.l.BootID, Boot: protocol.BootReady}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeStartHandoff(r.s, r.l, handoffStarted, ""); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(r.cleanup)
 	return r
 }
@@ -347,6 +353,17 @@ func TestPreflightLifecycleHelper(t *testing.T) {
 	switch role {
 	case "launcher":
 		runAgentNow = func() time.Time { return loginNow.Add(time.Minute) }
+		if strings.HasPrefix(point, "settle-") {
+			writes := 0
+			writePreflightRecord = func(path string, value any) error {
+				writes++
+				if writes == 2 || (point == "settle-persistent" && writes > 2) {
+					lifecycleInvocation(root, lifecycleEvent{Kind: "settle-write-failed", ID: id})
+					return fmt.Errorf("injected ownership write failure")
+				}
+				return writeWorkspaceJSON(path, value)
+			}
+		}
 		n := 0
 		beforeProviderSpawn = func(Launch) {
 			n++
@@ -365,6 +382,9 @@ func TestPreflightLifecycleHelper(t *testing.T) {
 		}
 		var pidRecord lifecycleEvent
 		beforeTaskPIDRecord = func(pid int) {
+			// Count the actual successful Start, even if the stop reaches the
+			// child before its first instruction or readiness write.
+			lifecycleInvocation(root, lifecycleEvent{Kind: "task-spawn", ID: id, PID: pid, Start: procStartTime(pid)})
 			if id != "first" || (point != "zombie-before-pid" && point != "live-before-pid") {
 				return
 			}
@@ -392,12 +412,21 @@ func TestPreflightLifecycleHelper(t *testing.T) {
 			lifecycleGate(root, "pid-record")
 		}
 		beforeTaskInstructionPublish = func(Launch) {
+			if point == "slow-result" {
+				lifecycleEmit(root, lifecycleEvent{Kind: "task-published", ID: id})
+			}
 			if id == "first" && point == "zombie-before-pid" {
 				// The spawn lock has been released; the task Wait goroutine
 				// can reap its leader while this keeps agent.pid observable.
 				pidRecord.Kind = "pid-published"
 				lifecycleEmit(root, pidRecord)
 				lifecycleGate(root, "task-published")
+			}
+		}
+		beforeTaskResultWrite = func() {
+			if point == "slow-result" {
+				lifecycleEmit(root, lifecycleEvent{Kind: "before-result", ID: id})
+				lifecycleGate(root, "result")
 			}
 		}
 		sigs := make(chan os.Signal, 1)
@@ -417,8 +446,9 @@ func TestPreflightLifecycleHelper(t *testing.T) {
 		// Record the owned probe before it creates or waits on a child, so
 		// cleanup also finds it if readiness itself ever fails.
 		lifecycleInvocation(root, e)
-		blocked := id == "first" && ((point == "primary" && model == "claude-opus-5-5") || (point == "fallback" && model == preflightFallback))
-		if blocked {
+		phase := strings.TrimPrefix(point, "grace-")
+		blocked := id == "first" && ((phase == "primary" && model == "claude-opus-5-5") || (phase == "fallback" && model == preflightFallback))
+		if blocked && !strings.HasPrefix(point, "grace-") {
 			bin, err := os.Executable()
 			if err != nil {
 				t.Fatal(err)
@@ -451,7 +481,7 @@ func TestPreflightLifecycleHelper(t *testing.T) {
 				lifecycleGate(root, "primary")
 			}
 		}
-		if point == "failure" || ((point == "fallback") && model == "claude-opus-5-5") {
+		if point == "failure" || (phase == "fallback" && model == "claude-opus-5-5") {
 			fmt.Println(`{"type":"assistant","is_api_error_message":true,"error":"model_not_found","message":{"content":[{"type":"text","text":"unknown model"}]}}`)
 			os.Exit(1)
 		}
@@ -463,7 +493,7 @@ func TestPreflightLifecycleHelper(t *testing.T) {
 			e.Descendant, e.DescendantStart = lifecycleTaskDescendant(t, root, id)
 		}
 		lifecycleEmit(root, e)
-		if point == "spawn-race" || point == "live-before-pid" {
+		if point == "spawn-race" || point == "live-before-pid" || point == "slow-result" {
 			lifecycleGate(root, "task")
 		}
 		fmt.Print(streamLines)
@@ -517,7 +547,7 @@ func (r *lifecycleRig) assertNoTask() {
 	r.t.Helper()
 	for _, line := range bytes.Split(r.invocations(), []byte{'\n'}) {
 		var e lifecycleEvent
-		if json.Unmarshal(line, &e) == nil && e.Kind == "task" {
+		if json.Unmarshal(line, &e) == nil && (e.Kind == "task" || e.Kind == "task-spawn") {
 			r.t.Errorf("task started after stop: %+v", e)
 		}
 	}

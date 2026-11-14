@@ -3,6 +3,7 @@ package agentd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -72,8 +73,8 @@ const (
 )
 
 // startPreflight is start-preflight.json. Pid and Start name the run-agent
-// process that runs the pre-flight, so the status reads busy only while it
-// lives (procStartTime, as for agent.pid).
+// process that runs the pre-flight. In that boot, its live group or an
+// unresolved task-start intent keeps status busy. A later boot ignores it.
 type startPreflight struct {
 	State string `json:"state"`
 	Model string `json:"model,omitempty"`
@@ -214,7 +215,14 @@ func runPreflight(l Launch, stateDir string, note func(string, ...any), signals 
 			writeStartRefused(l, stateDir, protocol.StartDeadlinePassed, now)
 			note("%s during the model pre-flight of %s; the provider was not started (DESIGN-064 5.9)", protocol.StartDeadlinePassed, m)
 			return "", "", false
-		case res.Answered && res.Gone:
+		case !res.Gone:
+			// A cleanup/ownership failure says nothing about the model's
+			// answer. Reuse the start fence, never a typed model failure.
+			why := "the pre-flight's process group could not be shown stopped"
+			writeStartRefused(l, stateDir, why, runAgentNow())
+			note("%s; nothing further starts", why)
+			return "", "", false
+		case res.Answered:
 			if i > 0 {
 				note("model pre-flight: %s did not answer (%s); starting on the fallback %s", pf.Model, failure, m)
 				return m, failure, true
@@ -227,13 +235,6 @@ func runPreflight(l Launch, stateDir string, note func(string, ...any), signals 
 			failure = protocol.StartFailureNoAnswer
 		}
 		note("model pre-flight: %s did not answer: %s", m, failure)
-		if !res.Gone {
-			// One provider process at a time: one that cannot be shown gone
-			// starts nothing further (op791-a-1, point 6).
-			failure = protocol.StartFailureNoAnswer
-			note("the pre-flight's process could not be shown stopped; nothing further starts")
-			break
-		}
 		if failure == protocol.StartFailureLoginRejected {
 			// Ruling (d): the fallback runs on the same token.
 			break
@@ -249,16 +250,17 @@ func runPreflight(l Launch, stateDir string, note func(string, ...any), signals 
 
 // recordPreflightStarted updates start-preflight.json once the provider
 // started on model (and why the session's model did not answer, when model
-// is the fallback). A failed write leaves the checking record, whose status
-// follows the live provider as for any launch.
-func recordPreflightStarted(l Launch, stateDir, model, fallbackCause string) {
+// is the fallback). A failed write leaves a pending intent. The caller logs
+// it and retries after Wait, retaining agent.pid if that settlement also
+// fails so status and stop can still resolve the recorded task group.
+func recordPreflightStarted(l Launch, stateDir, model, fallbackCause string) error {
 	var rec startPreflight
 	if readJSONFile(statePathIn(stateDir, startPreflightFile), &rec) != nil || rec.ConversationID != l.ConversationID || rec.BootID != l.BootID {
-		return
+		return errors.New("pre-flight ownership record is unconfirmed")
 	}
 	rec.State, rec.Model, rec.FallbackCause, rec.At = preflightStarted, model, fallbackCause, runAgentNow().UTC()
 	rec.TaskPending = false // agent.pid was durably published before this update.
-	_ = writeWorkspaceJSON(statePathIn(stateDir, startPreflightFile), rec)
+	return writePreflightRecord(statePathIn(stateDir, startPreflightFile), rec)
 }
 
 // runPreflightTurn inherits the launcher's recorded group. It waits for its
@@ -289,7 +291,9 @@ func runPreflightTurn(l Launch, model string, limit time.Duration, signals <-cha
 	}
 	unlock, err := preflightSpawnLock(l, l.preflightStateDir)
 	if err != nil {
-		return preflightOutcome{Stopped: true, Gone: true}
+		why := "the summoned start lock is unconfirmed"
+		writeStartRefused(l, l.preflightStateDir, why, runAgentNow())
+		return preflightOutcome{Refused: why, Gone: true}
 	}
 	// Command preparation and lock acquisition can consume the window.
 	// Check again at the actual start and arm the timer from what is left.
@@ -517,10 +521,10 @@ func rawJSONStatus(r json.RawMessage) int {
 }
 
 // readPreflight reads start-preflight.json for the summoned launch first.
-// false when it is missing, unreadable or of another launch.
+// false when it is missing, unreadable, of another launch or a prior boot.
 func readPreflight(s Settings, first Launch) (startPreflight, bool) {
 	var rec startPreflight
-	if readJSONFile(s.statePath(startPreflightFile), &rec) != nil || rec.ConversationID != first.ConversationID || rec.BootID != first.BootID {
+	if preflightFromAnotherBoot(s, first) || readJSONFile(s.statePath(startPreflightFile), &rec) != nil || rec.ConversationID != first.ConversationID || rec.BootID != first.BootID {
 		return startPreflight{}, false
 	}
 	return rec, true
