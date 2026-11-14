@@ -97,7 +97,7 @@ ARG SOPS_VERSION=3.13.3
 # renovate: datasource=github-releases depName=FiloSottile/age extractVersion=^v(?<version>.+)$
 ARG AGE_VERSION=1.3.2
 # renovate: datasource=github-releases depName=mikefarah/yq extractVersion=^v(?<version>.+)$
-ARG YQ_VERSION=4.54.1
+ARG YQ_VERSION=4.54.3
 # renovate: datasource=github-releases depName=go-task/task extractVersion=^v(?<version>.+)$
 ARG TASK_VERSION=3.54.0
 # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.+)$
