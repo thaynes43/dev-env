@@ -616,7 +616,7 @@ func (f *fixture) putActiveProfile(sess *v1alpha1.AgentSession, start bool, prof
 		Name: sess.Name, UID: string(sess.UID), ID: id, State: sessionraise.StateActive, ChangedAt: now,
 		Profile: profile, StartSessions: start, Depth: "2", WordsHash: hash, PerformedBy: "human/" + humanSA,
 		PerformedAt: at, Where: sessionraise.WhereOwn, SaidAt: at,
-		NoticeSentAt: at, ActiveFrom: now.Add(sessionraise.EffectDelay).Format(time.RFC3339),
+		NoticeSentAt: now.Add(-sessionraise.EffectDelay).Format(time.RFC3339), ActiveFrom: at,
 	}
 	led, err := f.srv.readLedger(ctx, cfg)
 	if err != nil {

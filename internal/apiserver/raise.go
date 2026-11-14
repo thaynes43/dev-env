@@ -1247,6 +1247,11 @@ func (s *Server) depthExempt(ctx context.Context, c *caller) bool {
 		s.logIgnored(rec.ID, "does not grant start sessions")
 		return false
 	}
+	activeFrom, err := time.Parse(time.RFC3339, rec.ActiveFrom)
+	if err != nil || s.now().Before(activeFrom) {
+		s.logIgnored(rec.ID, "activation time has not arrived")
+		return false
+	}
 	return true
 }
 

@@ -1031,6 +1031,24 @@ live session and from a ledger row read after that session. The repair reads
 the row once more just before the annotation write, and writes only when the
 row still has that id and that state.
 
+The coordinator's ruling of 2026-11-14 on the fourth slice (a) review:
+the ledger alone never raises anything. Every activator signature starts
+from the stored annotation that verifies under the operator key and names
+the row's id and session UID. All grant fields must agree: profile,
+fromProfile, startSessions, depth, every owner field and words hash,
+performedBy and performedAt. A difference is logged once and nothing is
+written. Only state, noticeSentAt, activeFrom, takenBackBy and takenBackAt
+may change. Allowed transitions are pending to active, unannounced or
+taken-back, active to taken-back, and unannounced to taken-back. The last
+transition is the coordinator's answer to fix-worker question Q1 on
+2026-11-14: it records only revocation. All other pairs are refused and
+logged once; their mismatch does not count. Activation and active repair
+use one evidence check: a verified keeper Sent of kind raise for this id
+and UID, not earlier than performedAt, followed by two minutes. Its time
+sets noticeSentAt and activeFrom; a row saying active without this evidence
+is not followed. The depth exemption also requires the signed activeFrom
+to be present and no later than now.
+
 **When a send fails.** Failed and Ambiguous both leave the raise `pending`.
 The keeper tries again 5 minutes later (`askRequesterInterval`,
 `ask_notifications.go:26`), up to 12 attempts in all. A second push for the
