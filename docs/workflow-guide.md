@@ -2026,6 +2026,17 @@ None is a ruling by Tom.
   with no name or value, and no digest goes until the clock has passed the
   last one by the hour or the day. A close already in `digest.listed` is not
   listed again, even when its ledger entry is gone.
+  *Correction, 2026-11-14: story 792 fix round 2, coordinator rulings; not a
+  ruling by Tom.* Recorded capped events take available pending slots first,
+  oldest first, then unseen outcomes; existing pending lines keep their
+  slots. When all 256 slots are occupied, or more capped events wait than
+  fit, the rest wait until after a digest drains the buffer. With a full
+  pending buffer, an unseen outcome alone starts no proof reads; a missing
+  pending entry can still be repaired, and page work and pruning for dedupe
+  capacity keep their rules. After the buffer drains, admission and bounded
+  pruning resume on the next tick. A whole message that fits in 950
+  characters goes without a footer; otherwise the largest prefix of whole
+  lines that fits with its footer goes.
 - **The text.** Fixed templates in keeper source. A page starts `[dev-env]`
   and the event; a drill starts `DRILL`. A session's note follows the label
   `session note:`. Every control or format character and every line or

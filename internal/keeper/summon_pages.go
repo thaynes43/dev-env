@@ -475,7 +475,10 @@ func (p *summonPager) tick(ctx context.Context) {
 	// notifier's is, so a saved ledger never has an empty dedupe beside its
 	// page records (which load refuses as a reset). Its proof reads are made
 	// only in a tick that may add one: a page, or a digest line's entry.
-	if p.fresh(ledger, jobs, now) || len(ledger.State.newDigestOutcomes(outcomes)) > 0 || ledger.State.digestMissingEntries() {
+	// An unseen outcome needs a pending slot; repairing a missing pending
+	// entry does not. Pruning for dedupe room still runs (fix round 2, F2).
+	digestAdmission := len(ledger.State.Digest.Pending) < summonPagesMaxLines && len(ledger.State.newDigestOutcomes(outcomes)) > 0
+	if p.fresh(ledger, jobs, now) || digestAdmission || ledger.State.digestMissingEntries() {
 		p.prune(ctx, ledger, live, now)
 	}
 	dedupeFull := false
