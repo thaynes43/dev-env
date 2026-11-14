@@ -1,6 +1,7 @@
 package usagecollector
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -324,5 +325,26 @@ func TestCursorDashboardFooterDoesNotHideQuestionsOrAuthorizeInput(t *testing.T)
 				t.Fatal("footer hid a question or authorized input/capture")
 			}
 		})
+	}
+}
+
+// Rows other than Included, Auto and API are ignored today. This pins that
+// behaviour so a later capture with an extra row (for example a Sand line) can
+// be read against it. It qualifies no such row.
+func TestCursorProtocolIgnoresRowsOtherThanIncludedAutoAndAPI(t *testing.T) {
+	for _, extra := range []string{"Grok Bot 12% used\r\n", "Sand 12% used\r\n", "On-demand $0.00 used\r\n", "Autopilot 9% used\r\n"} {
+		p := cursorProtocol{state: 3}
+		body := strings.Replace(cursorScreen, "Esc to close", extra+"Esc to close", 1)
+		input, report, err := feedCursorFrame(&p, body)
+		if err != nil || input != "" || report == nil {
+			t.Fatal("extra row changed acceptance", extra)
+		}
+		if report.IncludedPercentDisplay == nil || *report.IncludedPercentDisplay != 61 || report.Plan != "fixture-tier" {
+			t.Fatal("extra row changed the captured values", extra)
+		}
+		raw, err := json.Marshal(report)
+		if err != nil || strings.Contains(string(raw), "Grok") || strings.Contains(string(raw), "Sand") || strings.Contains(string(raw), "12") {
+			t.Fatal("extra row leaked into the capture", extra)
+		}
 	}
 }
