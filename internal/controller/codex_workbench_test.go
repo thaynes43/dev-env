@@ -169,7 +169,7 @@ func TestCodexWorkbenchRunningPodPreserved(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := &Reconciler{CodexWorkbenchHosts: codexworkbench.Policy{Name: s.Name, Namespace: s.Namespace}}
-			pod, err := r.sessionPod(s, tm)
+			pod, err := r.sessionPod(s, tm, r.resolveCodexHost(s, tm))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -250,7 +250,9 @@ func TestCodexWorkbenchBuildersAndRescue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, build := range []func() (*corev1.Pod, error){func() (*corev1.Pod, error) { return buildPod(s, tm, "") }, func() (*corev1.Pod, error) { return (&Reconciler{}).sessionPod(s, tm) }} {
+	for _, build := range []func() (*corev1.Pod, error){func() (*corev1.Pod, error) { return buildPod(s, tm, "") }, func() (*corev1.Pod, error) {
+		return (&Reconciler{}).sessionPod(s, tm, (&Reconciler{}).resolveCodexHost(s, tm))
+	}} {
 		if p, e := build(); p != nil || e == nil {
 			t.Fatalf("builder admitted unlisted host: %v", e)
 		}

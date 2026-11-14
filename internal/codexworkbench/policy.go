@@ -68,11 +68,15 @@ func Resolve(t *templates.Templates, profile string) *Resolution {
 	}
 	var err error
 	r.name, r.profile, err = t.Profile(profile)
+	// templates.Validate permits only empty (ordinary), workbench or named
+	// coordinator accounts. Treat an unvalidated unknown account as unavailable.
 	r.unavailable = err != nil || r.profile.ServiceAccount != "" && r.profile.ServiceAccount != templates.WorkbenchServiceAccount && !templates.IsCoordinatorServiceAccount(r.profile.ServiceAccount)
 	return r
 }
 
 func (r *Resolution) Profile() (string, templates.Profile) { return r.name, r.profile }
+func (r *Resolution) Available() bool                      { return r != nil && !r.unavailable }
+
 func (r *Resolution) Workbench() bool {
 	return r != nil && !r.unavailable && r.profile.ServiceAccount == templates.WorkbenchServiceAccount
 }

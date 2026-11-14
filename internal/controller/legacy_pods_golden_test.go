@@ -123,7 +123,7 @@ func legacySessionPods(t *testing.T) map[string]*corev1.Pod {
 		if r.APIURL == "" {
 			r.APIURL = legacyPodsAPI
 		}
-		pod, err := r.sessionPod(s, tmpl)
+		pod, err := r.sessionPod(s, tmpl, r.resolveCodexHost(s, tmpl))
 		if err != nil {
 			t.Fatal(err)
 		}

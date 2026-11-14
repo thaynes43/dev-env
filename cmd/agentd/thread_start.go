@@ -21,6 +21,10 @@ func threadStartCtl(ctx context.Context, args []string, stdin io.Reader, stdout,
 	fs := flag.NewFlagSet(binaryName+" ctl thread-start", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var req agentd.CodexThreadRequest
+	fs.BoolVar(&req.Coordinator, "coordinator", false, "")
+	fs.StringVar(&req.Host, "host", "", "")
+	fs.StringVar(&req.ExpectedSessionUID, "expected-session-uid", "", "")
+	fs.StringVar(&req.ExpectedPodUID, "expected-pod-uid", "", "")
 	fs.StringVar(&req.Model, "model", "", "")
 	fs.StringVar(&req.Effort, "effort", "", "")
 	fs.StringVar(&req.Repo, "repo", "", "")

@@ -744,7 +744,7 @@ func TestDecisionPodFeatureCannotBeEnabledByTemplateOrPrivateTask(t *testing.T) 
 			case "no-configured-parents":
 				parents = nil
 			}
-			p, err := buildManagedPod(s, tmpl, "", managed, enabled, parents, false)
+			p, err := buildManagedPod(s, tmpl, "", managed, enabled, parents, false, (&Reconciler{}).resolveCodexHost(s, tmpl))
 			if kind == "hold" {
 				p, err = buildHoldPod(s, tmpl)
 			}

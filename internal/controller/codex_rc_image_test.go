@@ -12,12 +12,12 @@ func TestCodexRCImageExactIdentityAndExclusions(t *testing.T) {
 	s.Spec.Repo = "haynes-ops"
 	target := &CodexRCAgent{Image: remotePilotTestImage, Name: s.Name, UID: string(s.UID)}
 	r := &Reconciler{APIURL: "https://api"}
-	plain, err := r.sessionPod(s, exampleTemplates(t))
+	plain, err := r.sessionPod(s, exampleTemplates(t), r.resolveCodexHost(s, exampleTemplates(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.CodexRCAgent = target
-	pod, err := r.sessionPod(s, exampleTemplates(t))
+	pod, err := r.sessionPod(s, exampleTemplates(t), r.resolveCodexHost(s, exampleTemplates(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,18 +63,18 @@ func TestCodexRCImageExactIdentityAndExclusions(t *testing.T) {
 func TestCodexRCImagePreservesExistingRemotePilot(t *testing.T) {
 	s := remotePilotTestSession()
 	r := &Reconciler{RemotePilotAgent: remotePilotTestAgent()}
-	want, err := r.sessionPod(s, exampleTemplates(t))
+	want, err := r.sessionPod(s, exampleTemplates(t), r.resolveCodexHost(s, exampleTemplates(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.CodexRCAgent = &CodexRCAgent{Image: "other-image", Name: s.Name, UID: string(s.UID)}
-	got, err := r.sessionPod(s, exampleTemplates(t))
+	got, err := r.sessionPod(s, exampleTemplates(t), r.resolveCodexHost(s, exampleTemplates(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertRemotePilotPodBytes(t, want, got)
 	r.CodexRCAgent.Name = "different-target"
-	got, err = r.sessionPod(s, exampleTemplates(t))
+	got, err = r.sessionPod(s, exampleTemplates(t), r.resolveCodexHost(s, exampleTemplates(t)))
 	if err != nil {
 		t.Fatal(err)
 	}

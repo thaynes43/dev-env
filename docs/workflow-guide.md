@@ -884,6 +884,52 @@ check: `registered` proves the CLI registered its entry, not that he saw it.
 The standby (quickstart section 1) is the zero-step alternative when it is
 awake. A suspended standby has an archived phone entry until it is resumed.
 
+### Named workbench coordinator threads (source draft, OP858)
+
+DESIGN-067 slice (b) is source and local-test work only. Independent-family
+review is pending; nothing here is installed or accepted. Slice (c1), owner
+confirmation and the reviewed install packet still precede a privileged host.
+The existing Fable coordinator keeps custody and watch lanes.
+
+After that separate installation, a coordinator launch must name the reserved
+host explicitly, with `--coordinator`, `--model gpt-6.1-sol`, `--effort medium`
+and a fresh unique `--name`. It must supply a bounded handoff that states its
+actual lane custody and asks for a worktree before edits. This spelling is not
+an instruction to launch one now. Missing hosts, pool hosts and uncertain
+results never fall back to another host, ordinary intent or a fresh launch.
+
+The structured coordinator command always uses the operator's thread API,
+including for trusted clients and workbench sessions. Before exec, the operator
+checks the shared host policy, the live host pod account and both target UIDs.
+Only Tom, a configured trusted client, or a session whose creation profile
+resolves to workbench **and** whose authenticated pod runs as workbench passes.
+Defaults and aliases resolve through the request's templates snapshot. A raised
+session, profile-label patch, named coordinator account or unreadable creation
+profile supplies no substitute. Ordinary threads retain their existing profile
+and ancestry fence. The one-use `rc fresh` route refuses the privileged host
+before a reservation or exec; this work does not enable that route.
+
+Controller admission supplies the host name and Session UID to agentd. The
+receiver checks them against its immutable session input, explicit purpose and
+expected Session/Pod UIDs before any native operation. Direct exec still relies
+on existing Kubernetes rights. This metadata is not a credential: a workbench
+process can forge its own environment, and a flag change cannot revoke a live
+pod. Installation must use consistent reviewed replicas and stop-before-removal.
+
+After binding the exact new native thread, agentd sets its name metadata to
+`GPT | Dev-env coordinator 2` and reads the same ID, cwd and name back through
+the peer-verified daemon RPC. This is separate from tmux and the platform host
+title. A lost ACK is `title_unconfirmed`, with the known thread ID retained;
+inspect it and never relaunch to repair uncertainty. Phone rendering, owner
+visibility, pairing and served-model evidence remain separate live proof.
+
+Ordinary host selection excludes the configured reserved name regardless of
+annotations or profile. It also excludes workbench accounts (including defaults,
+aliases and the actual pod account) and unavailable account resolutions, before
+fit and capacity counting. Fact collection and fresh lease checks apply the
+same exclusions. A requested workbench or unavailable profile yields no pool
+capacity. Keep the visible hands-off GitOps entry as a second protection.
+
 ### Start an owner-interactive Codex task on a paired v2 host
 
 Use this when Tom must see and drive the thread on his phone.

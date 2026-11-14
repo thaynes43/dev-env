@@ -176,13 +176,13 @@ func TestAScheduledSessionKeepsTheTemplatesImage(t *testing.T) {
 		"task pilot": {&Reconciler{APIURL: "https://api", ManagedCodexTasks: true, TaskPilotAgent: pilotTestAgent()}, func() *v1alpha1.AgentSession { return taskPilotSession(t) }},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if pod, err := c.r.sessionPod(c.session(), tmpl); err != nil || pod.Spec.Containers[0].Image == tmpl.Image {
+			if pod, err := c.r.sessionPod(c.session(), tmpl, c.r.resolveCodexHost(c.session(), tmpl)); err != nil || pod.Spec.Containers[0].Image == tmpl.Image {
 				t.Fatalf("the fixture does not select an override: %v", err)
 			}
 			// Every build, the first and any rebuild after a launch, succeeds
 			// on the templates image: a rebuild never fails the session.
 			for build := 0; build < 2; build++ {
-				pod, err := c.r.sessionPod(scheduledSession(c.session(), deadline), tmpl)
+				pod, err := c.r.sessionPod(scheduledSession(c.session(), deadline), tmpl, c.r.resolveCodexHost(scheduledSession(c.session(), deadline), tmpl))
 				if err != nil || pod == nil || pod.Spec.Containers[0].Image != tmpl.Image || len(startDeadlineValues(pod)) != 1 {
 					t.Fatalf("build %d of a scheduled session: pod %v, %v", build, pod != nil, err)
 				}
@@ -198,14 +198,14 @@ func TestAScheduledSessionKeepsTheTemplatesImage(t *testing.T) {
 		// A creator that skips the API precheck is refused by the reconciler,
 		// before any launch, as invalid.
 		r := &Reconciler{APIURL: "https://api", CoordinatorInstructionAgentImage: instructionImage}
-		if pod, err := r.sessionPod(s, tmpl); err == nil || pod != nil || !errors.As(err, new(sessionInvalidError)) {
+		if pod, err := r.sessionPod(s, tmpl, r.resolveCodexHost(s, tmpl)); err == nil || pod != nil || !errors.As(err, new(sessionInvalidError)) {
 			t.Fatalf("the reconciler built a scheduled session with coordinator instructions (publisher %v): pod %v, %v", publisher, pod != nil, err)
 		}
 	}
 	// Not selected: the scheduled session builds on the templates image.
 	other := scheduledSession(pilotTestSession(), deadline)
 	other.Labels[v1alpha1.LabelIdempotencyKey] = "another-key"
-	pod, err := (&Reconciler{APIURL: "https://api", PilotAgent: pilotTestAgent()}).sessionPod(other, tmpl)
+	pod, err := (&Reconciler{APIURL: "https://api", PilotAgent: pilotTestAgent()}).sessionPod(other, tmpl, (&Reconciler{APIURL: "https://api", PilotAgent: pilotTestAgent()}).resolveCodexHost(other, tmpl))
 	if err != nil || pod.Spec.Containers[0].Image != tmpl.Image || len(startDeadlineValues(pod)) != 1 {
 		t.Fatalf("an unselected scheduled session: %v", err)
 	}

@@ -18,17 +18,11 @@ import (
 	"github.com/thaynes43/dev-env/internal/threadlaunch"
 )
 
-// The thread route (DESIGN-057 section 10, OP495). An ordinary session pod has
-// no exec into another pod (D-19), so `agent-run thread start --agent codex`
-// from one asks the operator, which runs the host's own `agentd ctl
-// thread-start` there by exec, as it delivers a message (D-65). The caller gets
-// no exec. The rule is narrower than the message route's in two ways. A
-// coordinator host is refused: thread-start takes none of the target fences
-// (--expected-pod-uid and --expected-session-uid) a coordinator's exec carries.
-// A session caller passes a profile fence (threadProfileFence): a handoff is
-// the first instruction of an always-allow thread, stronger than a message, so
-// a session reaches only a host of its own profile or one below it. Tom and
-// the trusted clients keep the message route's rule: any session.
+// The thread route (DESIGN-057 section 10, OP495) gives an ordinary session
+// operator-mediated thread start without granting exec. Ordinary hosts retain
+// their profile/strict-ancestry fence. DESIGN-067 reserves the named workbench
+// host: explicit intent and the privileged caller gate run first, and agentd
+// receives both expected UIDs. Intent is never caller authorization.
 
 const (
 	// threadExecGrace stops a stuck exec this long after the host's own wait
@@ -94,8 +88,13 @@ func (s *Server) startThread(ctx context.Context, w http.ResponseWriter, r *http
 	if err != nil {
 		return 0, nil, err
 	}
-	if err := s.threadProfileFence(ctx, c, sess, pod); err != nil {
+	if err := s.admitThreadHost(ctx, c, sess, pod, req.Coordinator); err != nil {
 		return 0, nil, err
+	}
+	if !req.Coordinator {
+		if err := s.threadProfileFence(ctx, c, sess, pod); err != nil {
+			return 0, nil, err
+		}
 	}
 	if s.Exec == nil {
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "this API cannot exec into pods")
@@ -108,6 +107,28 @@ func (s *Server) startThread(ctx context.Context, w http.ResponseWriter, r *http
 	argv := []string{"agentd", "ctl", "thread-start", "--model", req.Model, "--effort", req.Effort, "--name", req.Name, "--wait", wait.String()}
 	if req.Repo != "" {
 		argv = append(argv, "--repo", req.Repo)
+	}
+	if req.Coordinator {
+		// Recheck the live target immediately before name-addressed exec. The
+		// receiver checks both UIDs too, closing a replacement after this read.
+		current, err := s.liveSession(ctx, r, c)
+		if err != nil {
+			return 0, nil, err
+		}
+		if current.Status.Phase != v1alpha1.PhaseRunning || current.Spec.OperatingMode == v1alpha1.OperatingModeSuspended || !current.DeletionTimestamp.IsZero() {
+			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "coordinator host is stopping")
+		}
+		currentPod, err := s.runningPod(ctx, current)
+		if err != nil {
+			return 0, nil, err
+		}
+		if current.UID != sess.UID || currentPod.UID != pod.UID || sess.UID == "" || pod.UID == "" {
+			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "coordinator target identity changed")
+		}
+		if err := s.admitThreadHost(ctx, c, current, currentPod, true); err != nil {
+			return 0, nil, err
+		}
+		argv = append(argv, "--coordinator", "--host", sess.Name, "--expected-session-uid", string(sess.UID), "--expected-pod-uid", string(pod.UID))
 	}
 	stdout, stderr := &limitedBuffer{max: apiv1.ThreadLaunchMaxBytes + 1}, &limitedBuffer{max: 4 << 10}
 	// The handoff goes on stdin only, exactly as given: never in argv or a log.
@@ -147,6 +168,9 @@ func (s *Server) threadProfileFence(ctx context.Context, c *caller, host *v1alph
 // repeats a value the caller sent.
 func validThreadStart(req apiv1.ThreadStartRequest) (time.Duration, []apiv1.FieldError) {
 	var fields []apiv1.FieldError
+	if req.Coordinator && (req.Model != "gpt-6.1-sol" || req.Effort != "medium") {
+		fields = append(fields, fieldError("coordinator", "requires gpt-6.1-sol and medium effort"))
+	}
 	if err := protocol.ValidateCodexEffort(req.Model, req.Effort); err != nil || req.Effort == "" {
 		fields = append(fields, fieldError("model", "a full Codex model id and an effort it takes"))
 	}

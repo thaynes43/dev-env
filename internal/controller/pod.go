@@ -81,16 +81,16 @@ func HomeClaimName(session string) string { return "home-" + session }
 // updated after create: a change in the templates reaches a session only through
 // a drain (5.2).
 func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex ...bool) (*corev1.Pod, error) {
-	return buildManagedPod(s, t, apiURL, len(managedCodex) > 0 && managedCodex[0], false, nil, false)
+	return buildManagedPod(s, t, apiURL, len(managedCodex) > 0 && managedCodex[0], false, nil, false, (&Reconciler{}).resolveCodexHost(s, t))
 }
 
 // buildManagedPod's retentionLatch is the reconciler's terminalTaskReclaimOn:
 // agentd refuses automatic TUI resume only for a task the operator can reclaim.
-func buildManagedPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex, childDecisions bool, coordinatorParents []string, retentionLatch bool, admission ...*codexHostBuild) (*corev1.Pod, error) {
+func buildManagedPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex, childDecisions bool, coordinatorParents []string, retentionLatch bool, admission *codexHostBuild) (*corev1.Pod, error) {
 	// The API assigns Parent from authenticated caller identity. Only exact
 	// configured coordinator SAs can use the coordinator-only decision route.
 	childDecisions = childDecisions && s.Spec.Parent != "" && slices.Contains(coordinatorParents, s.Spec.Parent)
-	return buildSessionPod(s, t, apiURL, false, managedCodex, childDecisions, retentionLatch, admission...)
+	return buildSessionPod(s, t, apiURL, false, managedCodex, childDecisions, retentionLatch, admission)
 }
 
 // PilotAgent selects the sessions with one parent and idempotency key for a
@@ -186,14 +186,11 @@ func applyRemotePilotImage(pod *corev1.Pod, s *v1alpha1.AgentSession, p *PilotAg
 
 // sessionPod is the session's own pod as the reconciler creates it: the managed
 // pod, on the pilot image when the session is the selected one.
-func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates, admission ...*codexHostBuild) (*corev1.Pod, error) {
-	if len(admission) == 0 {
-		admission = []*codexHostBuild{r.resolveCodexHost(s, t)}
-	}
-	if err := admission[0].check(s); err != nil {
+func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates, admission *codexHostBuild) (*corev1.Pod, error) {
+	if err := admission.check(s); err != nil {
 		return nil, err
 	}
-	pod, err := buildManagedPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions, r.ManagedChildDecisionParents, r.terminalTaskReclaimOn(), admission...)
+	pod, err := buildManagedPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions, r.ManagedChildDecisionParents, r.terminalTaskReclaimOn(), admission)
 	if err != nil {
 		return nil, err
 	}
@@ -307,20 +304,16 @@ func applyCoordinatorInstructionEnv(env []corev1.EnvVar, enable bool) []corev1.E
 // /creds for GitHub fetch. Other profile mounts are only for agents.
 // Heartbeats are off, because no agent runs in it.
 func buildHoldPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
-	return buildSessionPod(s, t, "", true, false, false, false)
+	return buildSessionPod(s, t, "", true, false, false, false, nil)
 }
 
 // isHoldPod reports whether the pod is a session's rescue pod (D-55).
 func isHoldPod(p *corev1.Pod) bool { return p.Labels[v1alpha1.LabelHold] == "true" }
 
-func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool, managedCodex bool, childDecisions bool, retentionLatch bool, admission ...*codexHostBuild) (*corev1.Pod, error) {
+func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool, managedCodex bool, childDecisions bool, retentionLatch bool, admission *codexHostBuild) (*corev1.Pod, error) {
 	var guarded *codexHostBuild
 	if !hold {
-		if len(admission) > 0 {
-			guarded = admission[0]
-		} else {
-			guarded = (&Reconciler{}).resolveCodexHost(s, t)
-		}
+		guarded = admission
 		if err := guarded.check(s); err != nil {
 			return nil, err
 		}
@@ -465,6 +458,27 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		if remoteProfileContent(s, hold) && profile.Remote != nil {
 			env = append(env, profile.Remote.Env...)
 		}
+	}
+	// For the admitted host, explicit controller metadata overrides envFrom and
+	// template env. Ordinary/hold pods carry no such explicit metadata.
+	coordinatorHost, coordinatorUID := "", ""
+	if !hold && guarded != nil && guarded.policy.Name != "" && guarded.policy.Name == s.Name && guarded.resolved.Workbench() {
+		if s.UID == "" {
+			return nil, fmt.Errorf("coordinator host requires its Session UID")
+		}
+		coordinatorHost, coordinatorUID = s.Name, string(s.UID)
+	}
+	for _, key := range []string{protocol.CodexCoordinatorHostEnv, protocol.CodexCoordinatorUIDEnv} {
+		kept := env[:0]
+		for _, e := range env {
+			if e.Name != key {
+				kept = append(kept, e)
+			}
+		}
+		env = kept
+	}
+	if coordinatorHost != "" {
+		env = append(env, corev1.EnvVar{Name: protocol.CodexCoordinatorHostEnv, Value: coordinatorHost}, corev1.EnvVar{Name: protocol.CodexCoordinatorUIDEnv, Value: coordinatorUID})
 	}
 	// Only the accepted common route receives a fixed file transport.
 	if s.Spec.CommonRules != nil {

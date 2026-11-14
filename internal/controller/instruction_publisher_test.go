@@ -21,12 +21,12 @@ func publisherSession(t *testing.T) *v1alpha1.AgentSession {
 func TestInstructionPublisherImageChangesOnlyProspectiveImage(t *testing.T) {
 	r := &Reconciler{CoordinatorInstructionAgentImage: "ghcr.io/thaynes43/dev-env:2.87.0@sha256:" + strings.Repeat("a", 64)}
 	s := publisherSession(t)
-	plain, err := r.sessionPod(s, exampleTemplates(t))
+	plain, err := r.sessionPod(s, exampleTemplates(t), r.resolveCodexHost(s, exampleTemplates(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Spec.CoordinatorInstructionPublisher = true
-	got, err := r.sessionPod(s, exampleTemplates(t))
+	got, err := r.sessionPod(s, exampleTemplates(t), r.resolveCodexHost(s, exampleTemplates(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
