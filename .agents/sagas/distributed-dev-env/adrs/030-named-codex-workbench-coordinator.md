@@ -74,12 +74,20 @@ does not narrow that authority.
    profile. If the resolved default uses the workbench account, refuse it. This
    does not introduce a workbench-session named-host create exception.
 6. **Privileged threads have privileged entry points.** On the reserved host,
-   require the shared eligibility check and human, trusted-client or workbench
-   caller before generic same-profile/ancestry allowances. Add UID fences to
-   operator-mediated thread exec. Ordinary sessions cannot start the thread.
+   require the shared eligibility check and human, trusted-client or
+   workbench-by-creation session caller before generic same-profile/ancestry
+   allowances. Resolve the session's `spec.profile`, including the default, to the
+   workbench account, and require its pod to run as that account. Unreadable
+   templates refuse. A session raised to workbench cannot enter through this gate
+   (DESIGN-067 sections 6.1 and 11.1; DESIGN-066 Ruling 7; ADR-028 decision 9).
+   Add UID fences to operator-mediated thread exec. Ordinary sessions cannot start the thread.
    Keep existing exec RBAC; the phone remains the owner's paired-computer route.
    The coordinator launch explicitly selects the reserved host, model
    `gpt-6.1-sol` and effort `medium`. The one-use RC route is not activated here.
+   Each thread is a superuser session under DESIGN-066 and may perform a raise on
+   Tom's word with the same gates once that route is installed. The host itself is
+   depth 0 on workbench, so it is not a raise target. The adjacent raise readers
+   are on PR 1145, not yet on main (DESIGN-067 section 11.1's pinned source).
 7. **Never cross the ordinary pool.** Derive protection from the allowed name and
    resolved workbench account in selection, lease rechecks and later lifecycle
    automation. Keep a GitOps hands-off entry as a second protection. An explicit
@@ -104,6 +112,11 @@ does not narrow that authority.
     Watch-dependent lanes stay with the outgoing coordinator until all three
     sources are proved. Missing provider support is an explicit blocker, not an
     invitation to patch the installed CLI or substitute a different route.
+    Separate safe stop and retention (c1) from wake (c2). Host installation (d)
+    depends only on (a), (b) and (c1); (d) and (e) may proceed for phone-driven lanes
+    while (c2) is blocked. Item 772's acceptance watch, item 829's acceptance, a
+    Meatball handoff channel and any worker's parent note stay with the outgoing
+    coordinator until (c2) passes (DESIGN-067 section 11).
 11. **Custody and ending are explicit.** Keep OP812 custody until lane release and
     checkpoint ACK. Quiesce all remote writers before rescue; generic git rescue
     alone does not prove that. Suspend before removing allowance or downgrading.
@@ -114,6 +127,11 @@ does not narrow that authority.
     reviews, pins and install checks. Record source, tested, installed and usable
     acceptance separately. Owner questions in DESIGN-067 section 13 are pending.
     This ADR grants no installation, pairing, lifecycle or credential authority.
+    Q-067-01 and the packet must state that after (a), nobody, including Tom's own
+    account and the v1 pod, can create another workbench-account Codex host. The
+    existing suspended host `haynes-ops-1023-041051` can no longer be resumed.
+    DESIGN-067 sections 2.1/2.2 cite today's create and builder behavior; section
+    13 states this loss explicitly before owner confirmation.
 
 ## Alternatives considered
 

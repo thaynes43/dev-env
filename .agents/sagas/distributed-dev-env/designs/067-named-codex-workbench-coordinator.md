@@ -12,7 +12,8 @@
   remain separate work.
 - **Evidence pin:** dev-env main
   `768935da630b2675e55860ece925f0e3b390c880`, fetched 2026-11-14. Every dev-env source
-  link below pins that commit. haynes-ops main
+  link below pins that commit, except the explicitly marked PR 1145 raise readers
+  in section 11.1, which are not yet on main. haynes-ops main
   `dec3c06241bd6bd74b4d5f9017bd8d804d5596f9`, fetched the same day, supplies the GitOps
   evidence. Git is evidence of declarations, not proof of their installation.
   No host, Secret value, session log or conversation transcript was read for this
@@ -278,8 +279,9 @@ Before its manifest is applied, the accountable installer must record:
   persistence, wake plan, costs and stop procedure in sections 5, 10 and 13.
 - Accepted ADR-030 and reviewed build; required CI on every implementation head.
 - All operator replicas on the guarded build and the same setting. The agent
-  image must contain the reviewed thread and wake support. No automatic restart
-  of an existing session is part of this rollout.
+  image must contain the reviewed thread and safe-stop support. Watch-dependent
+  lanes also require proved wake support from slice (c2). No automatic restart of
+  an existing session is part of this rollout.
 - The current profile and account match the reviewed packet, mounted references
   exist, and the keeper's projection is healthy. Never inspect credential values.
 - No active unlisted workbench-account Codex host and no collision with the chosen
@@ -303,7 +305,10 @@ parent identity. Do not claim separate per-thread worker quotas.
    empty profiles and later template changes are tested.
 3. **No ordinary session drives it.** Before a generic profile or ancestry
    allowance, privileged thread routes admit only Tom, a trusted client or a
-   workbench session. A forged title or same-profile label grants nothing.
+   session that is workbench by creation **and** whose pod runs as the workbench
+   account. Resolve its `spec.profile`, including the default; an unreadable
+   template refuses. A session raised to workbench fails this gate. A forged title
+   or same-profile label grants nothing (section 6.1).
 4. **No pool crossover.** Protection applies to every pool decision and lease
    recheck. The coordinator launcher requires an explicit reserved host.
 5. **Every thread has the host's power.** This host does not isolate native
@@ -343,7 +348,7 @@ rights.
 
 | Route | Today | Proposal for the reserved host |
 | --- | --- | --- |
-| Operator `POST /v1/sessions/{host}/threads` | Starts the host's `agentd ctl thread-start`. Session callers pass equal-profile or strict-ancestor fence. Human/client callers bypass that fence. | Apply section 3 eligibility and the privileged caller gate first, using the live host pod account and resolved template. Ordinary and named coordinator sessions fail even if an ancestry/profile test would otherwise pass. Workbench sessions remain allowed. Add expected Session/Pod UID fences to this host's exec. |
+| Operator `POST /v1/sessions/{host}/threads` | Starts the host's `agentd ctl thread-start`. Session callers pass equal-profile or strict-ancestor fence. Human/client callers bypass that fence. | Apply section 3 eligibility and the privileged caller gate first, using the live host pod account and resolved template. Require a session caller to be workbench by creation (its `spec.profile`, default resolved, runs as the workbench account) and its pod to run as that account. Unreadable templates refuse. Ordinary, named coordinator and raised-to-workbench sessions fail even if an ancestry/profile test would otherwise pass. Add expected Session/Pod UID fences to this host's exec. |
 | CLI exec route with explicit `--host` | v1, workbench or an authorized external client execs `thread-start`; ordinary session pods use the API. Kubernetes rights are the final exec gate. | Keep those rights. Check reserved-host eligibility in agentd as well as the operator-mediated path. This does not claim to constrain a superuser issuing arbitrary exec. |
 | Phone on the paired computer | The documented owner route can create a remote interactive thread on that host. | Supported owner route after confirmation. It has the same host power. Source cannot prevent Tom creating a second conversation there. |
 | One-use `/codex-thread` route (`rc fresh`) | Separate feature and UID/PID/boot/pairing/deadline qualification, with an operator reservation and host one-use marker. Not a repeatable replacement for `thread start`. | Do not enable it for this coordinator. If it is independently enabled later, it must run the same privileged-host check before its qualification and mutation. No bypass through a trusted client. |
@@ -353,6 +358,15 @@ Evidence: [threads.go:21–31,79–115][thread-api],
 [attach.go:99–148][exec-client], [workflow guide:838–877][phone-workflow],
 [codex_rc.go:20–55][rc-gate], [codex_rc.go:74–111][rc-qualify],
 [codex_rc.go:124–156][rc-reserve].
+
+Today `isWorkbenchSession` checks the pod's authenticated account, not creation
+profile. DESIGN-066 Ruling 7 and sections 8.2/8.4 require the creation distinction
+so a raise cannot spread through platform routes. The reserved-host gate must
+check both creation profile and pod account; an active raise is never a substitute.
+([caller.go:255–281][workbench-predicate],
+[DESIGN-066:516–552][design066-no-spread],
+[DESIGN-066:1219–1254][design066-child-profile],
+[DESIGN-066:1280–1297][design066-readers], [ADR-028 decision 9][adr028-no-spread])
 
 For the supported exec route, carry the controller's admitted host name and
 Session UID in a controller-owned pod environment field, proposed
@@ -533,6 +547,13 @@ thread bridge as a side effect of section 9.
 
 ## 9. Wake and watch
 
+Today nothing wakes an idle Codex thread by itself. Until that is proved, a Codex
+coordinator works when Tom or another session writes to it. It does not watch on
+its own. The current daemon and completion paths do not supply that wake; section
+9.2 separates a completed command from a new idle-thread turn.
+([daemon.go:341–344][daemon-remote], [codex_remote.go:309–340][remote-poll],
+[async_watcher.rs:327–379][native-exit-event])
+
 ### 9.1 What exists today
 
 “Command returned”, “event reached a process”, “turn started” and “coordinator
@@ -668,7 +689,7 @@ the supported lifecycle route. The operator rescues before removing a pod that
 ran. Shutdown sends SIGTERM to the daemon; pod removal ends all remaining tmux
 clients. A successful git rescue does **not** prove every remote thread stopped
 before the snapshot: the generic rescue stop reads the normal agent PID, which
-this remote boot does not create. Slice (c) below must explicitly quiesce remote
+this remote boot does not create. Slice (c1) below must explicitly quiesce remote
 threads/daemon before rescue for this host and prove they cannot mutate the HOME
 while it is saved.
 ([controller/rescue.go:25–32][rescue-controller],
@@ -714,18 +735,21 @@ permission to restart a running host.
 
 ## 11. Build slices and evidence gates
 
-These are future bounded stories, executed serially. Each gets its own tracker
-scope, budget and exact-head review by another model family before merge. The
-coordinator owns that review and the install decision. This docs PR ends after
-its own CI/review handoff and must not implement a slice.
+These are future bounded stories. Ready dependent slices run serially. Each gets
+its own tracker scope, budget and exact-head review by another model family before
+merge. The coordinator owns that review and the install decision. Slice (d) depends
+on (a), (b) and (c1) only. If provider support blocks (c2), (d) and (e) still proceed
+for lanes Tom drives from the phone. Only watch-dependent lane transfer waits on
+(c2). This docs PR ends after its own CI/review handoff and implements no slice.
 
 | Slice | Source and tests | Install step and its checks | Owner confirmation |
 | --- | --- | --- | --- |
 | (a) Shared account guard and reserved host | Flag parser; shared predicate; API create/final admission/resume; controller agent-pod and status paths. Tests: empty setting; zero/one/duplicate/two names; raw manifest; human/client API create; ordinary and workbench origins; T30 explicit refusal; default/alias on workbench; missing templates; wrong parent/depth/namespace/shape; no new HOME/pod on refusal; rescue hold allowed; resume of unlisted legacy refused. Remove each guard in mutation checks and show its test fail. | Publish guarded operator only after tests and review. Install with an empty allowed set after inventory shows no active unlisted workbench Codex host. Verify every replica's pin/config and a separately authorized negative canary's condition/no pod. Running sessions keep their pods. | No host is created. Existing legacy-host suspension or any disruptive test requires its own in-scope authorization. Stop before adding a name or manifest until Q-067-01 is answered. |
-| (b) Thread and pool fences | Explicit coordinator intent/host; privileged gate on both thread routes, UID-fenced operator exec; controller-to-agentd metadata/purpose checks; pool facts/pure selector/lease exclusions; exact-ID native thread title setter. Tests: ordinary same-profile and ancestor spoof; named coordinator caller; human/client/workbench allowed; pool with only reserved host; default/account alias; removed annotation/hands-off list; lease race; explicit ordinary intent to reserved host; coordinator intent to pool/missing host; no fallback; title metadata/readback and lost ACK without relaunch. Existing ordinary thread cases stay green. Update workflow/preflight docs. | Publish operator and agent image; pin both without restarting any host. Install reserved-name/pool setting only with the confirmed packet, all replicas consistent. Verify read-only selection never offers the reserved host and negative requests do not exec. | Q-067-01 before nonempty allowance or any host manifest. |
-| (c) Wake, safe stop and retention | Resolve section 9's harness hook first. Tests with fake clock/events: timer, addressed child note, new file, idle tool completion; unrelated note; replay/coalescing/resync; path traversal/symlink; lost ACK; question/hold; budget end; suspend cancellation; resume requires explicit same-thread bind. Stop tests prove every remote writer is quiesced before rescue and no daemon restart races it. No CPU-heavy/timing stress suite. | Publish/pin supported hook and stop handling. On an authorized ordinary disposable host, prove each source wakes the **same idle thread** once; prove a stop leaves no writer and preserved history can be reopened. If the provider hook is unavailable, record the blocker; do not substitute terminal input. | The proof host/test needs its own approved story; no experiment in this design task. Q-067-02 controls unattended work and budget. No coordinator watch-lane transfer without all three proofs. |
-| (d) One GitOps host and phone proof | Separate haynes-ops app and allow-name/hands-off settings, reviewed together. Render and validate exact account/mounts/depth/parent/name; check no copied API or credential state. Source checks cannot prove pairing. | After (a)–(c), apply flags/protection first, then manifest. Read back Session and pod UID/account/profile/mount **references**. Authorized custodian runs pair privately; Tom enters it. Launch one fresh explicit coordinator thread on `gpt-6.1-sol`/`medium`; observe response, default-list presence and Tom's phone display/title. Verify harmless question and reply; test existing Ask/notice/read path if used. | Tom's concrete confirmation of the full packet **before flags/manifest/host/pairing**. His pairing step and phone/question confirmation remain required. |
-| (e) Custody and end rehearsal | Exact OP812 checkpoint and ACK; defined lane list; budget/stop record; documented suspend/resume/removal procedure. No new source unless earlier proof finds a fault, which returns to its owner. | Prove timer, child note and file wake on the installed host; record model evidence and owner question return. Checkpoint, perform an authorized quiet suspend/resume proof, verify retained computer/history and re-arm same-thread watch. Then record the lane release and ACK. Record source, tested, installed and accepted separately. | OP812 owner/coordinator lane release. Any stop/restart proof is explicitly included in the confirmed install plan. |
+| (b) Thread and pool fences | Explicit coordinator intent/host; privileged gate on both thread routes, UID-fenced operator exec; controller-to-agentd metadata/purpose checks; pool facts/pure selector/lease exclusions; exact-ID native thread title setter. Tests: ordinary same-profile and ancestor spoof; named coordinator caller; raised-to-workbench caller refused despite matching pod account or patched profile label; unreadable creation profile refused; human/client and workbench-by-creation caller with workbench pod allowed; pool with only reserved host; default/account alias; removed annotation/hands-off list; lease race; explicit ordinary intent to reserved host; coordinator intent to pool/missing host; no fallback; title metadata/readback and lost ACK without relaunch. Existing ordinary thread cases stay green. Update workflow/preflight docs. | Publish operator and agent image; pin both without restarting any host. Install reserved-name/pool setting only with the confirmed packet, all replicas consistent. Verify read-only selection never offers the reserved host and negative requests do not exec. | Q-067-01 before nonempty allowance or any host manifest. |
+| (c1) Safe stop and retention | Stop tests prove every remote writer is quiesced before rescue and no daemon restart races it. Test retained native history and explicit same-thread binding after resume. No wake hook is required for safe stop. | Publish/pin stop handling. On an authorized ordinary disposable host, prove a stop leaves no writer and preserved history can be reopened. Required before (d), independently of (c2). | The proof host/test needs its own approved story; no experiment in this design task. Any stop proof needs its own in-scope authorization. |
+| (c2) Wake | Resolve section 9's harness hook. Tests with fake clock/events: timer, addressed child note, new file, idle tool completion; unrelated note; replay/coalescing/resync; path traversal/symlink; lost ACK; question/hold; budget end; suspend cancellation; resume requires explicit same-thread bind. No CPU-heavy/timing stress suite. | Publish/pin supported hook. On an authorized ordinary disposable host, prove each source wakes the **same idle thread** once. If the provider has no supported hook, (c2) is blocked; record that fact and do not substitute terminal input. This does not block (d) or (e) for phone-driven lanes. | The proof host/test needs its own approved story. Q-067-02 controls unattended work and budget. Required only before a watch-dependent lane moves; all three wake proofs must pass. |
+| (d) One GitOps host and phone proof | Separate haynes-ops app and allow-name/hands-off settings, reviewed together. Render and validate exact account/mounts/depth/parent/name; check no copied API or credential state. Source checks cannot prove pairing. | After (a), (b) and (c1) only, apply flags/protection first, then manifest. A blocked (c2) does not block this phone-driven host. Read back Session and pod UID/account/profile/mount **references**. Authorized custodian runs pair privately; Tom enters it. Launch one fresh explicit coordinator thread on `gpt-6.1-sol`/`medium`; observe response, default-list presence and Tom's phone display/title. Verify harmless question and reply; test existing Ask/notice/read path if used. | Tom's concrete confirmation of the full packet **before flags/manifest/host/pairing**. His pairing step and phone/question confirmation remain required. |
+| (e) Custody and end rehearsal | Exact OP812 checkpoint and ACK; defined lane list; budget/stop record; documented suspend/resume/removal procedure. No new source unless earlier proof finds a fault, which returns to its owner. | For phone-driven lanes, record model evidence and owner question return. Checkpoint, perform an authorized quiet suspend/resume proof and verify retained computer/history. Record each ready lane release and ACK. For watch-dependent lanes, first pass (c2), prove timer, child note and file wake on the installed host and re-arm the same-thread watch after resume. Item 772's acceptance watch, item 829's acceptance, a Meatball handoff channel and any worker's parent note need a watch. They stay with the outgoing coordinator until (c2) passes; phone-driven lanes can move meanwhile. Record source, tested, installed and accepted separately. | OP812 owner/coordinator lane release. Any stop/restart proof is explicitly included in the confirmed install plan. |
 
 For this design PR: `make check-layout`; own diff/citation review; independent
 native review at the final head; ready PR; required `CI - Success` on that head;
@@ -768,6 +792,26 @@ client, delegate or configured coordinator-host account.
 [threads.go:128–143][thread-fence], [pod.go:378–394][pod-account],
 [attach.go:139–148][exec-client])
 
+DESIGN-066 adds adjacent readers in `internal/apiserver/raise.go` on
+[PR 1145][raise-pr], head `4d0f77de1269b22bc52a22205b9fa4a728417a22`, **not yet on
+main**. These are branch-source facts, not installed behavior:
+
+| Adjacent reader | Branch behavior | For the reserved host |
+| --- | --- | --- |
+| `workbenchByCreation`, `raise.go:588–601` | Resolves `spec.profile`, including the default, and tests the workbench account. A failed templates/profile read returns false. | True for this host's declared workbench profile. Reuse this creation test alongside the authenticated pod-account check at privileged thread entry; a raised caller cannot substitute its pod account. |
+| `raisedToWorkbench`, `raise.go:603–639` | Checks an active profile raise against its signature, UID and ledger, then resolves whether that profile uses the workbench account. Key/ledger/template read errors refuse. | A raise record does not grant entry to this host. The host needs no raise; its creation profile already gives the account. |
+
+A thread on this host is a **superuser session** in DESIGN-066's sense. It may
+perform a raise on Tom's word like any workbench-by-creation session, under the
+same notice, ancestry and other raise gates once that route is installed. The host
+itself is depth 0 on the workbench profile, so it is not a raise target. PR 1145
+also rejects a Codex target outright; its caller test permits a workbench-created
+session without restricting its provider. This does not reclassify the host as
+the separately configured coordinator-host caller.
+([DESIGN-066:407–428][design066-performer],
+[raise.go:545–601][raise-performer], [raise.go:603–639][raise-raised],
+[raise.go:641–689][raise-target])
+
 ## 12. Known limits and Unknowns
 
 1. **Whole workbench power.** The guards constrain supported operator routes.
@@ -807,7 +851,7 @@ client, delegate or configured coordinator-host account.
     A provider turn and available served-model metadata, not the request or the
     host spec, establish what ran. If unavailable, served model stays Unknown.
 11. **Rescue and retention are different.** Existing generic rescue does not prove
-    remote writers were quiesced. Slice (c) must fix that for this host. A git
+    remote writers were quiesced. Slice (c1) must fix that for this host. A git
     bundle is not a native-history/enrollment backup. Suspend retains HOME only
     until the applicable archive policy allows removal.
 12. **Watch data remains untrusted.** A child note or shared file may contain
@@ -828,7 +872,12 @@ that the questions reached Tom.
 - **Q-067-01:** May we install `dev-env-codex-coordinator-2` as the always-allow
   workbench computer described here, so you can direct superuser work from the
   phone and every thread on that computer can exec into privileged pods and reach
-  their credentials? Saying no leaves that work with the existing coordinator.
+  their credentials? Saying yes also means that after slice (a), nobody, including
+  your own account and the v1 pod, can create another Codex host on the workbench
+  account. The existing suspended host `haynes-ops-1023-041051` can no longer be
+  resumed. Today the API permits those callers and the builder accepts that profile
+  (sections 2.1/2.2); the new guard deliberately removes those paths. Saying no
+  leaves that work with the existing coordinator.
 - **Q-067-02:** May the coordinator run unattended on an hourly timer and child/file
   events within a stated operating budget and stop threshold, so it keeps watches
   while you are away at the cost of ongoing model and pod usage? Without that
@@ -849,7 +898,21 @@ Before Q-067-01 is delivered, the packet must state the exact operator/agent
 pins, size L resource limits and HOME/retention policy, target name/account/mount
 references, any reviewed wake hook, the separate pairing step, all known limits,
 and the concrete suspend/remove order. Do not turn a general “Do codex” into
-confirmation of those effects.
+confirmation of those effects. The packet must also say:
+
+- After slice (a), nobody, including Tom's own account and the v1 pod, can create
+  another Codex host on the workbench account. The suspended
+  `haynes-ops-1023-041051` can no longer be resumed. Today's API create and pod
+  builder allow that account; the historical host's state is coordinator-supplied
+  context, not a new live check (sections 2.1/2.2).
+  ([validate.go:152–170,315–369][create-profile], [pod.go:320–394][pod-account])
+- Each thread is a superuser session under DESIGN-066 and may perform a raise on
+  Tom's word like any workbench-by-creation session once the raise route is
+  installed, with the same gates. The host itself is depth 0 on workbench, so it is
+  not a raise target. PR 1145's implementation is not yet on main (section 11.1).
+  ([DESIGN-066:407–428][design066-performer],
+  [raise.go:545–601][raise-performer], [raise.go:641–689][raise-target])
+
 The pinned size L declaration is 1 CPU/6 GiB requested and 8 CPU/24 GiB limited,
 with a 20 GiB HOME default. Re-read those declarations for the actual packet.
 ([templates:165–194][ops-size-home])
@@ -869,6 +932,17 @@ label. The author fixed all three. The advisory review on that head also asked
 for explicit non-remote scope and one other citation-label correction; section
 3.1 now states why task/local policy is unchanged, and both labels match their
 source targets. Final-head review and CI evidence belong in the PR handoff.
+
+The coordinator session `dev-env-fable-coordinator-1109` (`claude-fable-5-2`)
+reviewed this design and ADR-030 on 2026-11-14 at head `159f487f`. Verdict: accept
+after four changes; HIGH 0, MEDIUM 2, LOW 2. These are the coordinator's rulings:
+
+| Finding | Change |
+| --- | --- |
+| M1 | Require workbench by creation and the workbench pod account at reserved-host thread entry; record the adjacent raise readers and the host's performer/target roles in section 11.1 and the owner's packet. |
+| M2 | Split safe stop/retention (c1) from wake (c2); (d) depends only on (a), (b), (c1), and phone-driven custody can proceed while watch lanes wait. |
+| L1 | State in Q-067-01 and the packet that nobody can create another workbench Codex host after (a), and the existing suspended host cannot resume. |
+| L2 | State plainly at the top of section 9 that idle threads do not wake or watch on their own today. |
 
 <!-- Evidence links pin source, not deployment state. -->
 
@@ -981,3 +1055,12 @@ source targets. Final-head review and CI evidence belong in the PR handoff.
 [title-kind]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/agentd/rename.go#L656-L660
 [workbench-predicate]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/apiserver/caller.go#L255-L281
 [wrapper-model]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/scripts/codex-clean-session.py#L68-L139
+[adr028-no-spread]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/.agents/sagas/distributed-dev-env/adrs/028-raise-a-running-session.md#L133-L152
+[design066-no-spread]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/.agents/sagas/distributed-dev-env/designs/066-raise-a-running-session.md#L516-L552
+[design066-child-profile]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/.agents/sagas/distributed-dev-env/designs/066-raise-a-running-session.md#L1219-L1254
+[design066-readers]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/.agents/sagas/distributed-dev-env/designs/066-raise-a-running-session.md#L1280-L1297
+[design066-performer]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/.agents/sagas/distributed-dev-env/designs/066-raise-a-running-session.md#L407-L428
+[raise-pr]: https://github.com/thaynes43/dev-env/pull/1145
+[raise-performer]: https://github.com/thaynes43/dev-env/blob/4d0f77de1269b22bc52a22205b9fa4a728417a22/internal/apiserver/raise.go#L545-L601
+[raise-raised]: https://github.com/thaynes43/dev-env/blob/4d0f77de1269b22bc52a22205b9fa4a728417a22/internal/apiserver/raise.go#L603-L639
+[raise-target]: https://github.com/thaynes43/dev-env/blob/4d0f77de1269b22bc52a22205b9fa4a728417a22/internal/apiserver/raise.go#L641-L689
