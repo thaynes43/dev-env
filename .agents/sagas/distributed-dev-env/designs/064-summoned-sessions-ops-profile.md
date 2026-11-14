@@ -1673,7 +1673,22 @@ Abandoned; ordinary pruning still waits for the charge window, attempt hold,
 and any unsettled child. A direct deletion of the remediation removes its
 Pending keep, the previously stated limit. Without OP802 a charged blocked
 filing has no time bound. Do not install OP801 for a real remediation caller
-before OP802.
+before OP802 and OP803.
+
+**Correction, 2026-11-14: story 801 fix round 1, coordinator rulings; not a
+ruling by Tom (item 801 comment 8446).** The shared ledger encoder reserves
+worst-case RFC3339Nano timestamp lengths for the entry clock and every filing
+charge's mutable attempt time. It checks encoded bytes plus that reserve
+against 64 KiB on every writer, preserving unknown members. Thus a new charge
+cannot consume the bytes its later mark needs merely because a clock acquires
+a longer fractional second. Existing entries written without the reserve, or
+extra data added outside this encoder, can still refuse a mark as `entry-full`.
+Once its typed refusal is durably recorded, a `create-refused` or
+`no-free-name` filing renews its attempt at most once per 15-minute attempt
+window, using the joined ledger clock. It writes nothing between those attempts
+unless recovering an existing child; at the boundary its old attempt leaves the queue count
+before the retry must obtain a queue place. The original charge time never
+moves. Other blocked checks do not renew an attempt while they remain blocked.
 
 ## 6. Contracts per build story
 
@@ -2415,7 +2430,7 @@ Blocked words are `policy-gone`, `policy-no-escalations`, `hour-full`,
 `entry-full` (801 comment 7852). They never include note text. The condition
 is `EscalationPending=True`, `Reason=Blocked`, `Message=<exact word>`;
 Kubernetes forbids hyphens in a condition reason. This representation was
-confirmed by the coordinator in answer `op801-build-1-a-1` on 2026-11-14,
+confirmed by the coordinator in item 801 comment 8423 on 2026-11-14,
 not by Tom. The first blocked patch appends `escalation-pending` atomically;
 later patches change the word only when it differs. Filed sets the condition
 False with Reason Filed. Nothing sends a page here.
@@ -2429,7 +2444,74 @@ that word. OP801 does not widen the schema independently. The full agreed
 Abandoned schema lands here, but abandonment, its reap hold, sending and the
 view remain OP802/803 and later work. Installation is the CRD copy first,
 then one operator pin; no flag or RBAC change, and no real remediation caller
-before OP802. Remote off records only the blocked condition and event.
+before OP802 and OP803. Remote off records only the blocked condition and event.
+
+**Correction, 2026-11-14: story 801 fix round 1, coordinator rulings; not a
+ruling by Tom (item 801 comments 8446, 8480 and 8482, superseding the open
+typed-member point above and part of comment 8423).** Pending may carry the last blocked word in
+`status.summon.escalation.reason`; Abandoned requires it; Filed forbids it.
+Pending cannot use the abandonment fallback `not-filed`. The ten blocked words
+are the earlier eight plus `child-invalid` (building or previewing the child
+failed, before any charge) and `create-refused` (the API server finally refused
+the create, including Invalid, Forbidden or an admission denial). The typed
+reason, its human-readable condition and the first `escalation-pending` event
+are written atomically. Filed clears the typed reason in its own patch. A
+settled filing still never changes. Code reads the typed reason, never parses
+the condition. Comments 8423, 8429 and 8430 on item 801 record the three build
+answers; the latter two authorize only the named API test adaptations.
+
+Before marking, the ledger step uses its uncached Session list to detect an
+occupied name and select a free suffix. An exhausted sequence records a mark
+without a create. Once `create-refused` or `no-free-name` is durably recorded,
+the next attempt waits for that mark's 15-minute window. Its start is the
+caller entry's charge `attempt`, read from the ledger by every leader, using
+the joined ledger clock; the mark CAS loop rechecks the live typed reason.
+Transient reads cannot replace a held refusal or permit another attempt.
+Recovery still records Filed immediately for an existing child found by label,
+including inside the window. After the window the normal pass runs.
+The successful mark remembers the remediation's resourceVersion. A result
+from that attempt may replace a held word only while that version still
+matches; a newer status write conservatively preserves the recorded refusal.
+The version stays fixed across status retries and authorizes no create.
+
+A Blocked patch gets at most five attempts, each against a fresh same-UID
+Pending read; Filed, Abandoned, another UID or a non-conflict error stops it.
+If all five conflict, every patch error is joined with the original refusal,
+and nothing claims the refusal was recorded. This exception costs at most
+one renewed mark and one refused create per later pass, with no second charge.
+The original `at` never moves: hourly accounting ends 65 minutes after it.
+Each renewed `attempt` counts in the caller's applicable queue for another
+15 minutes (all queues if no current policy entry matches its hash), so
+continued create refusals plus exhausted status conflicts can keep that queue
+count occupied without a time bound. One successful Blocked patch activates
+the normal retry window; finding the child by label records Filed instead.
+This is a rate exception, not permission to charge twice or create a second
+child. No pre-create fence or new schema member is introduced (item 801
+comments 8480 and 8482). Unknown storage/create results use
+`ledger-unavailable` and retain their error for next-pass replay. A Blocked
+patch conflict must not hide another error. A listed Filed or
+Abandoned remediation needs no uncached GET; open listed remediations are
+re-read because the watch pass may just have closed them.
+
+**Install gate: not for a real remediation before stories 802 and 803.** A
+blocked or abandoned filing tells nobody until the keeper has a template for
+it. The review's 2026-11-14 06:19Z read found the live CallerPolicy
+`upgrade-agent.alert-responder` already had task remediation and remote
+escalation entries. The step was inert because the operator's
+`--summon-create-kinds` was unset and no Session had a caller. The gate that
+matters is enabling `task` in that flag; first make that policy's task entry
+inert or install both stories. Install the CRD copy before the operator pin.
+Story 803 must check that a filing is still Pending before sending its pending
+page, since a transient failure can already have recovered.
+
+**Rollback:** do not pin the operator back to a version predating filing status
+support once a charge exists. Its full status updates omit `uid` and
+`chargedAt`; the new immutability rules refuse those updates on charged/Filed
+remediations. Keep the compatible operator and CRD, and fix forward. Nothing
+here changes live flags, installs a CRD or operator, abandons a filing, holds a
+reap, or sends a page. The existing limit remains: a create already received
+by Kubernetes is not server-fenced against a later deletion/rebinding of its
+name while the old request is in flight.
 
 ### 6.7 OP741: lanes, holds, the latch and the watchdog
 

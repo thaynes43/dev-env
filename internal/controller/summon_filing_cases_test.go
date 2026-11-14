@@ -28,7 +28,7 @@ func filingBlocked(t *testing.T, w *summonWorld, why v1alpha1.SummonFilingReason
 	t.Helper()
 	s := w.get(filingRem)
 	c := meta.FindStatusCondition(s.Status.Conditions, summonoutcome.ConditionEscalationPending)
-	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != "Blocked" || c.Message != string(why) {
+	if s.Status.Summon.Escalation.Reason != why || c == nil || c.Status != metav1.ConditionTrue || c.Reason != "Blocked" || c.Message != string(why) {
 		t.Fatalf("condition=%+v, want Blocked/%s", c, why)
 	}
 	n := 0
@@ -592,7 +592,7 @@ func TestSummonFilingReportRacesGuaranteedClose(t *testing.T) {
 // The by-ID fallback is useful recovery, but cannot replace the required
 // uncached label read. Consume one successful label read per Create RPC.
 func TestSummonFilingListsByLabelBeforeEveryCreate(t *testing.T) {
-	for _, which := range []string{"plain", "collision", "label-read-fails"} {
+	for _, which := range []string{"plain", "collision", "late-collision", "label-read-fails"} {
 		t.Run(which, func(t *testing.T) {
 			w := newFilingWorld(t)
 			s := w.get(filingRem)
@@ -604,6 +604,9 @@ func TestSummonFilingListsByLabelBeforeEveryCreate(t *testing.T) {
 			w.r = filingLeader(w, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
 				if _, ok := o.(*v1alpha1.AgentSession); ok {
 					creates++
+					if which == "late-collision" && creates == 1 {
+						w.add(&v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: o.GetName(), Namespace: s.Namespace, UID: "late-occupant"}})
+					}
 					if !freshLabelRead {
 						return errors.New("create without its own successful uncached filed-for-uid list")
 					}
@@ -639,7 +642,7 @@ func TestSummonFilingListsByLabelBeforeEveryCreate(t *testing.T) {
 				w.pass()
 			} else {
 				want := 1
-				if which == "collision" {
+				if which == "late-collision" {
 					want = 2
 				}
 				if err != nil || lists != want || creates != want {

@@ -62,6 +62,7 @@ func filingLeader(w *summonWorld, hooks interceptor.Funcs) *Reconciler {
 	}
 	r := w.leader(&hooks)
 	r.SummonCreateKinds = []v1alpha1.SummonKind{v1alpha1.SummonKindRemote}
+	r.SummonFilingClock = &filingTestClock{now: w.now}
 	return r
 }
 
@@ -219,7 +220,7 @@ func TestSummonFilingEntryByteBound(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			data["padding"] = strings.Repeat("p", summonledger.MaxEntry-len(withCharge)+extra)
+			data["padding"] = strings.Repeat("p", summonledger.MaxEntry-len(withCharge)-20+extra)
 			raw, err = json.Marshal(data)
 			if err != nil {
 				t.Fatal(err)
@@ -235,6 +236,15 @@ func TestSummonFilingEntryByteBound(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := cm.Data[callerA]
+			w.r = filingLeader(w, interceptor.Funcs{Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {
+				if err := c.Update(ctx, o, opts...); err != nil {
+					return err
+				}
+				// After the whole-second charge, both clock and attempt grow by
+				// ten bytes. The charge must already have reserved those bytes.
+				w.now = summonT0.Add(123456789 * time.Nanosecond)
+				return nil
+			}})
 			w.pass()
 			got, after := filingLedger(t, w)
 			if after.Data["other-caller"] != "untouched" {

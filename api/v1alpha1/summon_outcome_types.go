@@ -222,7 +222,7 @@ const (
 // SummonFilingReason is a closed word, never caller text. Blocked conditions
 // use these words too; not-filed is the abandonment fallback (OP802).
 // +kubebuilder:validation:MaxLength=32
-// +kubebuilder:validation:Enum=policy-gone;policy-no-escalations;hour-full;queue-full;remote-off;ledger-unavailable;no-free-name;entry-full;not-filed
+// +kubebuilder:validation:Enum=policy-gone;policy-no-escalations;hour-full;queue-full;remote-off;ledger-unavailable;no-free-name;entry-full;child-invalid;create-refused;not-filed
 type SummonFilingReason string
 
 // SummonEscalationStatus reserves a name at close, then records the charge
@@ -230,7 +230,9 @@ type SummonFilingReason string
 //
 // +kubebuilder:validation:XValidation:rule="oldSelf.state == 'Pending' || self == oldSelf",message="a filing never changes once it is not Pending"
 // +kubebuilder:validation:XValidation:rule="has(self.uid) == (self.state == 'Filed')",message="a filing UID is present exactly when Filed"
-// +kubebuilder:validation:XValidation:rule="has(self.reason) == (self.state == 'Abandoned')",message="a filing reason is present exactly when Abandoned"
+// +kubebuilder:validation:XValidation:rule="self.state != 'Abandoned' || has(self.reason)",message="an Abandoned filing requires a reason"
+// +kubebuilder:validation:XValidation:rule="self.state != 'Filed' || !has(self.reason)",message="a Filed filing has no reason"
+// +kubebuilder:validation:XValidation:rule="self.state != 'Pending' || !has(self.reason) || self.reason != 'not-filed'",message="a Pending filing requires a blocked reason"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.chargedAt) || (has(self.chargedAt) && self.chargedAt == oldSelf.chargedAt)",message="chargedAt is set once and never changes"
 // +kubebuilder:validation:XValidation:rule="self.state != 'Filed' || has(self.chargedAt)",message="a Filed escalation requires chargedAt"
 type SummonEscalationStatus struct {
@@ -247,7 +249,8 @@ type SummonEscalationStatus struct {
 	// ChargedAt is the original ledger charge's time, never a retry time.
 	// +optional
 	ChargedAt *metav1.Time `json:"chargedAt,omitempty"`
-	// Reason is the last blocked word, or not-filed, on abandonment only.
+	// Reason is the last blocked word while Pending, required (or not-filed)
+	// on abandonment, and absent once Filed.
 	// +optional
 	Reason SummonFilingReason `json:"reason,omitempty"`
 }
