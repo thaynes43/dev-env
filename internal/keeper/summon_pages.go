@@ -35,8 +35,10 @@ import (
 // the AgentSessions the API's summoning create labelled, still requires
 // spec.caller, and sends each session's terminal page (derived from its close
 // record by summonoutcome.TerminalPage, ruling Q1) and each lifecycle event in
-// status.summon.pages[], once each, at priority 0, any hour (ruling Q7). Its
-// ledger is written before every send. It is off by default.
+// status.summon.pages[], once each, at priority 0, any hour (ruling Q7). A
+// close whose row is the digest goes, once, into the daily digest at priority
+// -1 (summon_digest.go; story 792). Its ledger is written before every send.
+// It is off by default.
 //
 // It never stops the keeper: Start returns no error, a bad flag set disables
 // only the pager (DisableInvalid), and an unavailable ledger, list or
@@ -448,7 +450,9 @@ func (p *summonPager) tick(ctx context.Context) {
 	}
 	now := p.clock.Now()
 	live := map[string]bool{}
+	lanes := map[string]string{} // for a capped event's digest line
 	var jobs []summonJob
+	var outcomes []summonDigestLine
 	if p.drill != "" {
 		jobs = append(jobs, summonJob{key: "drill/" + p.drill, event: summonEventDrill})
 	}
@@ -458,16 +462,26 @@ func (p *summonPager) tick(ctx context.Context) {
 			continue // a session without spec.caller is never paged
 		}
 		live[string(s.UID)] = true
+		lanes[string(s.UID)] = summonWord(string(s.Spec.Lane))
 		jobs = append(jobs, summonJobs(s)...)
+		if line, ok := summonDigestOutcome(s); ok {
+			outcomes = append(outcomes, line)
+		}
 	}
+	// The digest's watermark is the pager's first run (story 792, ruling Q6);
+	// it is saved with this tick's first write, or alone.
+	dirty := ledger.State.watermark(now)
 	// A prune is saved only with a write that adds an entry, as the Ask
 	// notifier's is, so a saved ledger never has an empty dedupe beside its
 	// page records (which load refuses as a reset). Its proof reads are made
-	// only in a tick that may add one.
-	if p.fresh(ledger, jobs, now) {
+	// only in a tick that may add one: a page, or a digest line's entry.
+	// An unseen outcome needs a pending slot; repairing a missing pending
+	// entry does not. Pruning for dedupe room still runs (fix round 2, F2).
+	digestAdmission := len(ledger.State.Digest.Pending) < summonPagesMaxLines && len(ledger.State.newDigestOutcomes(outcomes)) > 0
+	if p.fresh(ledger, jobs, now) || digestAdmission || ledger.State.digestMissingEntries() {
 		p.prune(ctx, ledger, live, now)
 	}
-	dirty := false
+	dedupeFull := false
 	sort.SliceStable(jobs, func(i, j int) bool {
 		a, b := jobs[i], jobs[j]
 		if (a.session == nil) != (b.session == nil) {
@@ -509,6 +523,7 @@ func (p *summonPager) tick(ctx context.Context) {
 		}
 		if len(ledger.State.Events) >= summonPagesMaxEvents {
 			p.log.Error(nil, "summon page dedupe capacity reached")
+			dedupeFull = true
 			break
 		}
 		if !ledger.State.room(now) {
@@ -522,7 +537,21 @@ func (p *summonPager) tick(ctx context.Context) {
 		}
 		dirty = false
 	}
-	if dirty && ctx.Err() == nil {
+	if ctx.Err() != nil {
+		return
+	}
+	// The digest (story 792) comes after the pages and outside their cap: its
+	// lines, this tick's capped events included, then the digest when it is
+	// due, whose reservation carries every change above.
+	now = p.clock.Now()
+	if p.pend(ledger, outcomes, lanes, now, dedupeFull) {
+		dirty = true
+	}
+	if ledger.State.Digest.due(now) {
+		p.sendDigest(ctx, ledger, now)
+		return
+	}
+	if dirty {
 		if err := p.store.save(ctx, ledger); err != nil {
 			p.log.Error(nil, "summon page ledger update unconfirmed")
 		}
@@ -560,11 +589,13 @@ func (p *summonPager) fresh(l *summonPageLedger, jobs []summonJob, now time.Time
 // tick's reads and logs one line, and the next tick starts with it: while
 // reads fail, proof pruning stops, and a full ledger then records nothing new
 // (fix round 3, a stated limit). A summary's entry goes after a day. A drill
-// id is never forgotten.
+// id is never forgotten. An entry the digest still needs, a pending line's or
+// a capped event's not yet listed, stays whatever the proof says (story 792).
 func (p *summonPager) prune(ctx context.Context, l *summonPageLedger, live map[string]bool, now time.Time) {
 	type owner struct{ uid, name string }
 	oldest := map[owner]int64{}
 	old := func(e summonPageEntry) bool { return !now.Before(time.Unix(e.At, 0).Add(time.Hour)) }
+	holds := l.State.digestHolds()
 	for key, e := range l.State.Events {
 		uid, _, _ := cutSummonKey(key)
 		switch uid {
@@ -574,7 +605,7 @@ func (p *summonPager) prune(ctx context.Context, l *summonPageLedger, live map[s
 				delete(l.State.Events, key)
 			}
 		default:
-			if live[uid] || e.Session == "" || !old(e) {
+			if live[uid] || e.Session == "" || !old(e) || holds[key] {
 				continue
 			}
 			o := owner{uid, e.Session}
@@ -606,7 +637,7 @@ func (p *summonPager) prune(ctx context.Context, l *summonPageLedger, live map[s
 	}
 	for key, e := range l.State.Events {
 		uid, _, _ := cutSummonKey(key)
-		if gone[owner{uid, e.Session}] && old(e) {
+		if gone[owner{uid, e.Session}] && old(e) && !holds[key] {
 			delete(l.State.Events, key)
 		}
 	}

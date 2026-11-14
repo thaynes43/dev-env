@@ -27,6 +27,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/summonbrief"
 )
 
 // summonTestAccount is the summoning caller's account, spec.parent.
@@ -402,7 +403,7 @@ func TestSummonNameClashRebindsTheCharge(t *testing.T) {
 // transport check passes on it.
 func wantBriefNames(t *testing.T, s *v1alpha1.AgentSession, requested string) {
 	t.Helper()
-	line := summonPlatformLine(s.Name, s.Spec.Caller, string(s.Spec.Lane))
+	line := summonbrief.PlatformLine(s.Name, s.Spec.Caller, string(s.Spec.Lane))
 	if !strings.Contains(s.Spec.Prompt, "\n"+line+"\n") {
 		t.Fatalf("brief of %s does not carry %q:\n%s", s.Name, line, s.Spec.Prompt)
 	}
