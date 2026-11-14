@@ -834,8 +834,12 @@ caller's record, not from a read of the target.
   answers 202 with the session view. The log says "The raise was recorded."
   It does not promise that Tom is being told before an annotation counts.
 - The same raise already pending or active: 200. An already-counting
-  annotation is left alone and logs nothing; a missing annotation is
-  repaired. The same
+  annotation is left alone and logs nothing. A missing pending annotation
+  is repaired only when every grant field still matches the fresh
+  authorized request and live target, and the original id matches its
+  persisted performedAt and words hash. POST does not re-sign a stored
+  non-counting annotation or an unsigned active row; valid active repair
+  belongs to the activator's verified transition and Sent checks. The same
   raise is the same words, the same profile, the same `startSessions`, the
   same performer and the same where (the coordinator's ruling of 2026-11-13
   on the slice (a) reviews). Any other body for a `pending` or `active` row
@@ -2261,7 +2265,8 @@ off. ADR-028 and ADR-029 are not edited.
 
 | Finding | Ruling | Where |
 | --- | --- | --- |
-| R4-H1 / K1 | The ledger alone never raises. Start every signature from the verified annotation, preserve every grant field, and allow only the five transitions of section 6.4. Activation and active repair share the full Sent/delay check. The exemption requires an elapsed signed activeFrom. | Sections 6.4, 8.1 and 11; activator and route tests |
+| R4-H1 / K1 | The ledger alone never raises. Activator signatures start from the verified annotation, preserve every grant field, and allow only the five transitions of section 6.4. Activation and active repair share the full Sent/delay check. The exemption requires an elapsed signed activeFrom. | Sections 6.4, 8.1 and 11; activator and route tests |
+| Native review of the round-4 delta, same K1 invariant | Same-body POST never promotes an active row or revives a terminal annotation. Only a missing pending annotation is recovered, from the fresh authorized request/live grant with the persisted id/time checked. | Section 6.2; three additional route regression tests |
 | R4-M1 / K2 | Write against the deciding live resourceVersion without a helper Get. After success re-read the row; a changed id/state re-decides within the same bounded pass. The two-object interval does not count. | Section 6.4; repair, activate and unannounce ledger-only take-back tests |
 | R4-M2 / K3 | Every POST/DELETE annotation attempt reads live session then ledger and stops if its id/state moved. An old retry never overwrites a newer raise. | Section 6.2; two-server POST and DELETE tests, with keeper announcement and activation of the newer raise |
 | R4-L1 / K4 | Audit at least once, and once per operator process, including ambiguous ledger writes repaired by request or pass. An already-counting same-body retry is silent. | Ruling 2; sections 6.1, 6.2 and 9; audit probes |

@@ -230,6 +230,15 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 		v := s.withUsageRollup(ctx, fresh, c, false)
 		return http.StatusOK, v, nil
 	}
+	// A same-body request is not permission to promote an unsigned ledger
+	// state or replay over an authenticated terminal annotation. Active
+	// repair belongs to the activator's verified transition/evidence path.
+	// Only a missing pending annotation can be recovered from this fresh,
+	// authorized request, whose live grant fields must still match the row.
+	if same && !pendingRequestRepair(fresh, entry, in) {
+		s.logOnce(entry.ID, "request repair lacks authenticated grant", "raise request did not re-sign an unsigned state or changed grant")
+		return http.StatusOK, s.withUsageRollup(ctx, fresh, c, false), nil
+	}
 	// A retry of the same body uses the row's id and time, so the word is
 	// not spent again, and rewrites a missing annotation.
 	if same {
@@ -426,6 +435,27 @@ func recordFrom(entry sessionraise.SessionEntry, words string) sessionraise.Reco
 		NoticeSentAt: entry.NoticeSentAt, ActiveFrom: entry.ActiveFrom,
 		TakenBackBy: entry.TakenBackBy, TakenBackAt: entry.TakenBackAt,
 	}
+}
+
+// pendingRequestRepair separates recovery of the first POST's missing
+// annotation from repair of a stored record. The authorized request and live
+// target supply the grant; only the persisted id/time survive a retry.
+func pendingRequestRepair(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, in sessionraise.AdmitInput) bool {
+	if sess.Annotations[v1alpha1.AnnotationRaise] != "" || entry.State != sessionraise.StatePending || entry.NoticeSentAt != "" || entry.ActiveFrom != "" || entry.TakenBackBy != "" || entry.TakenBackAt != "" {
+		return false
+	}
+	if _, err := time.Parse(time.RFC3339, entry.PerformedAt); err != nil {
+		return false
+	}
+	in.ID = sessionraise.RecordID(in.UID, entry.PerformedAt, in.WordsHash)
+	in.PerformedAt = entry.PerformedAt
+	want := sessionraise.SessionEntry{
+		ID: in.ID, UID: in.UID, Profile: in.Profile, FromProfile: in.FromProfile,
+		StartSessions: in.StartSessions, Depth: in.Depth, WordsHash: in.WordsHash,
+		PerformedBy: in.PerformedBy, PerformedAt: in.PerformedAt, Where: in.Where,
+		SaidAt: in.SaidAt, Ref: in.Ref, OwnerSession: in.OwnerSession,
+	}
+	return raiseGrantMatches(recordFrom(want, ""), entry)
 }
 
 func takenBackRecord(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, pub ed25519.PublicKey) sessionraise.Record {

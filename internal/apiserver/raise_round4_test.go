@@ -341,7 +341,7 @@ func (c *noticeCommittedClient) Update(ctx context.Context, obj client.Object, o
 	return err
 }
 
-func (f *fixture) announceAndActivateRaise(uid, id string) {
+func (f *fixture) announceAndActivateRaise(uid, id string) keeper.Notice {
 	f.t.Helper()
 	ctx := context.Background()
 	if err := f.c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: sessionraise.ObjectNamespace, Name: sessionraise.KeeperSecretName}}); err != nil {
@@ -396,6 +396,7 @@ func (f *fixture) announceAndActivateRaise(uid, id string) {
 	if rec.ID != id || rec.State != sessionraise.StateActive || f.ledgerEntry(uid).State != sessionraise.StateActive {
 		f.t.Fatal("new raise did not activate")
 	}
+	return sender.last
 }
 
 func TestReview4OldDeleteCannotOverwriteANewerRaise(t *testing.T) {
@@ -593,5 +594,163 @@ func TestDelayedPostCannotOverwriteTakeBack(t *testing.T) {
 	}
 	if !fired || annotationState(*f.session("target")) != sessionraise.StateTakenBack || f.ledgerEntry(uid).State != sessionraise.StateTakenBack {
 		t.Fatal("delayed POST overwrote take-back of the same id")
+	}
+}
+
+func TestSameBodyRetryNeverSignsALedgerOnlyActiveGrant(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	uid := string(target.UID)
+	body := f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("POST %d", w.Code)
+	}
+	before := f.session("target").Annotations[v1alpha1.AnnotationRaise]
+	f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) {
+		r.State = sessionraise.StateActive
+		r.ActiveFrom = f.now.Add(-time.Minute).Format(time.RFC3339)
+	})
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusOK {
+		t.Fatalf("retry %d %s", w.Code, w.Body.String())
+	}
+	if f.session("target").Annotations[v1alpha1.AnnotationRaise] != before {
+		t.Fatal("same-body POST signed ledger-only active grant")
+	}
+	if f.srv.depthExempt(context.Background(), &caller{kind: kindSession, depth: 3, session: f.session("target")}) {
+		t.Fatal("same-body POST granted depth exemption without Sent")
+	}
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, "tok-session-target", task()); w.Code != http.StatusForbidden {
+		t.Fatalf("child create %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSameBodyRetryNeverRevivesATerminalAnnotation(t *testing.T) {
+	for _, state := range []string{sessionraise.StateTakenBack, sessionraise.StateUnannounced} {
+		t.Run(state, func(t *testing.T) {
+			f := newFixture(t)
+			f.raiseReady(true)
+			tok := f.workbench("bench")
+			target := f.remoteTarget("target", 2)
+			uid := string(target.UID)
+			body := f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true)
+			if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+				t.Fatalf("POST %d", w.Code)
+			}
+			f.raiseSent(uid)
+			if state == sessionraise.StateTakenBack {
+				if w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: uid}); w.Code != http.StatusOK {
+					t.Fatalf("DELETE %d", w.Code)
+				}
+			} else {
+				f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) { r.State = state })
+				f.rewriteAnnotation("target", func(r *sessionraise.Record) { r.State = state })
+			}
+			before := f.session("target").Annotations[v1alpha1.AnnotationRaise]
+			f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) { r.State = sessionraise.StatePending })
+			if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusOK {
+				t.Fatalf("retry %d %s", w.Code, w.Body.String())
+			}
+			f.srv.activateRaises(context.Background())
+			if f.session("target").Annotations[v1alpha1.AnnotationRaise] != before {
+				t.Fatal("same-body POST revived terminal grant with an old Sent")
+			}
+		})
+	}
+}
+
+func TestMissingPendingAnnotationRepairMatchesTheAuthorizedRequest(t *testing.T) {
+	for _, field := range []string{"unchanged", "depth", "fromProfile", "ownerSession", "saidAt", "ref", "performedAt"} {
+		t.Run(field, func(t *testing.T) {
+			f := newFixture(t)
+			f.raiseReady(true)
+			tok := f.workbench("bench")
+			target := f.remoteTarget("target", 2)
+			uid := string(target.UID)
+			body := f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true)
+			f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+				if _, ok := obj.(*v1alpha1.AgentSession); ok {
+					return context.DeadlineExceeded
+				}
+				return nil
+			}}
+			if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("partial POST %d", w.Code)
+			}
+			f.srv.Client = f.c
+			f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) {
+				switch field {
+				case "depth":
+					r.Depth = "1"
+				case "fromProfile":
+					r.FromProfile = "other"
+				case "ownerSession":
+					r.OwnerSession = "other"
+				case "saidAt":
+					r.SaidAt = f.now.Add(-2 * time.Minute).Format(time.RFC3339)
+				case "ref":
+					r.Ref = "op:changed"
+				case "performedAt":
+					r.PerformedAt = f.now.Add(-time.Minute).Format(time.RFC3339)
+				}
+			})
+			if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusOK {
+				t.Fatalf("retry %d %s", w.Code, w.Body.String())
+			}
+			raw := f.session("target").Annotations[v1alpha1.AnnotationRaise]
+			if field == "unchanged" {
+				if raw == "" {
+					t.Fatal("authorized pending recovery failed")
+				}
+			} else if raw != "" {
+				t.Fatal("pending retry signed edited ledger grant")
+			}
+		})
+	}
+}
+
+func TestPostTitleRedactionUsesKeeperFallback(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	uid := string(target.UID)
+	target.Spec.Title = strings.TrimSpace(strings.Repeat("a.io ", 9))
+	if err := f.c.Update(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	saidAt := f.now.Add(-time.Minute).Format(time.RFC3339)
+	words := ""
+	// A small deterministic string search chooses a request that fits the
+	// placeholder but whose legal title expands past it under redaction.
+	for n := 20; n <= 55; n++ {
+		candidate := strings.TrimSpace(strings.Repeat("a.io ", n))
+		fits, err := sessionraise.NoticeFits(target.Name, "session/bench", sessionraise.WherePhone, saidAt, candidate, keeper.NoticeRedact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := sessionraise.NoticeText{Session: target.Name, Title: target.Spec.Title, Performer: "session/bench", Words: candidate, Where: sessionraise.WherePhone, SaidAt: saidAt, Effect: f.now.Add(sessionraise.EffectDelay).Format(time.RFC3339)}
+		_, body, err := sessionraise.Message(text, keeper.NoticeRedact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fits && len(body) > sessionraise.NoticeBodyMax {
+			words = candidate
+			break
+		}
+	}
+	if words == "" {
+		t.Fatal("no title expansion fixture found")
+	}
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, f.raiseReq(uid, "", words, sessionraise.WherePhone, true)); w.Code != http.StatusAccepted {
+		t.Fatalf("POST %d %s", w.Code, w.Body.String())
+	}
+	notice := f.announceAndActivateRaise(uid, f.ledgerEntry(uid).ID)
+	if len(notice.Message) > sessionraise.NoticeBodyMax || strings.Contains(notice.Message, "Its title is") {
+		t.Fatalf("keeper did not use the bounded fallback (%d bytes)", len(notice.Message))
+	}
+	if !strings.Contains(notice.Message, keeper.NoticeRedact(words)) {
+		t.Fatal("fallback cut the claimed words")
 	}
 }
