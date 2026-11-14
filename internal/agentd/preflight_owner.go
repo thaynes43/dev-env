@@ -158,9 +158,9 @@ func stopPreflightGroup(p agentPid, grace time.Duration) *protocol.AgentStop {
 		st.Running = true
 		return st
 	}
-	// A live different leader is not ours. A group ID cannot be reused while
-	// one of the original members lives; a dead leader does not lose the group.
-	if start := procStartTime(p.Pid); start != "" && start != p.Start {
+	// A different leader, including a zombie, is not ours. A group ID cannot
+	// be reused while an original member lives; a dead leader keeps the group.
+	if preflightGroupIdentityUncertain(p) {
 		st.Running = true
 		return st
 	}
@@ -172,12 +172,24 @@ func stopPreflightGroup(p agentPid, grace time.Duration) *protocol.AgentStop {
 		_ = syscall.Kill(p.Pid, syscall.SIGTERM)
 	}
 	if !waitNativeGroupAbsent(p.Pid, grace) {
+		if preflightGroupIdentityUncertain(p) {
+			st.Running = true
+			return st
+		}
 		st.Killed = true
 		_ = syscall.Kill(-p.Pid, syscall.SIGKILL)
 		st.Running = !waitNativeGroupAbsent(p.Pid, stopKillWait)
 	}
 	st.Running = st.Running || pidAlive(p)
 	return st
+}
+
+func preflightGroupIdentityUncertain(p agentPid) bool {
+	current, group, err := readPreflightProcess(p.Pid)
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+		return false // surviving group members can outlive their leader.
+	}
+	return err != nil || current != p || group != p.Pid
 }
 
 // strictPreflightGroup includes zombies and treats unreadable or malformed

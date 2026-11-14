@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"k8s.io/utils/clock"
 	clocktesting "k8s.io/utils/clock/testing"
+
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 // These proofs exercise the actual command runner; only its clock and its
