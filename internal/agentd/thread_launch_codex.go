@@ -55,8 +55,10 @@ var (
 
 // CodexThreadRequest is one launch. Handoff is the new thread's first message.
 type CodexThreadRequest struct {
-	Model, Effort, Repo, Name, Handoff string
-	Wait                               time.Duration
+	Model, Effort, Repo, Name, Handoff       string
+	Coordinator                              bool
+	Host, ExpectedSessionUID, ExpectedPodUID string
+	Wait                                     time.Duration
 }
 
 // codexThreadSummary is the part of a native Thread this adapter reads.
@@ -87,6 +89,7 @@ type codexThreadDeps struct {
 	turn    func(ctx context.Context, s Settings, pid int, threadID string) (codexTurnObservation, error)
 	launch  func(context.Context, codexWrapperCall) ([]byte, error)
 	trust   func(context.Context, Settings, int, string) error
+	title   func(context.Context, Settings, int, string, string) error
 	python  func() (string, error)
 	wrapper func() (string, error)
 	now     func() time.Time
@@ -108,6 +111,7 @@ func realCodexThreadDeps() codexThreadDeps {
 		turn:   readCodexFirstTurn,
 		launch: runCodexThreadWrapper,
 		trust:  writeCodexProjectTrust,
+		title:  setCodexCoordinatorTitle,
 		python: func() (string, error) { return exec.LookPath("python3") },
 		wrapper: func() (string, error) {
 			info, err := os.Stat(CodexThreadWrapper)
@@ -178,7 +182,7 @@ func observeCodexThread(ctx context.Context, s Settings, sess protocol.Session, 
 // interpreter or poll clock: only the host reads and the read-only observers.
 // A later change that reached for one on this path would stop, not launch.
 func (d codexThreadDeps) observeOnly() codexThreadDeps {
-	d.launch, d.python, d.wrapper, d.sleep, d.trust = nil, nil, nil, nil, nil
+	d.launch, d.python, d.wrapper, d.sleep, d.trust, d.title = nil, nil, nil, nil, nil, nil
 	return d
 }
 
@@ -285,6 +289,9 @@ func (a *codexThreadAdapter) Preflight(ctx context.Context, r *threadlaunch.Reco
 	}
 	if !validCodexThreadRequest(a.req) {
 		return threadlaunch.Halt(apiv1.ThreadFailed, "invalid_input", apiv1.ThreadPhaseHostReady)
+	}
+	if !codexCoordinatorEntry(a.s, a.sess, a.req) {
+		return threadlaunch.Halt(apiv1.ThreadFailed, "coordinator_required", apiv1.ThreadPhaseHostReady)
 	}
 	r.Result.Name, r.Result.RequestedModel = a.req.Name, a.req.Model
 	if err := a.hostReady(ctx, r); err != nil {
@@ -450,6 +457,14 @@ func (a *codexThreadAdapter) Visible(ctx context.Context, r *threadlaunch.Record
 		a.thread = id
 		r.Result.ThreadID = id
 		r.Phase(apiv1.ThreadPhaseThreadCreated, "ok", "thread_list", "new_thread_for_cwd")
+		if a.req.Coordinator {
+			// One mutation only, after exact new-ID binding. A lost ACK cannot
+			// turn into a fresh launch or a second setter attempt.
+			if !codexCoordinatorEntry(a.s, a.sess, a.req) || a.d.title == nil || a.d.title(ctx, a.s, a.pid, id, a.cwd) != nil {
+				return false, threadlaunch.Halt(apiv1.ThreadUnconfirmed, "title_unconfirmed", apiv1.ThreadPhaseThreadCreated)
+			}
+		}
+
 	}
 	shown, err := a.d.list(ctx, a.s, a.pid, a.cwd, false)
 	if err := a.observed(err); err != nil {

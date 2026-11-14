@@ -939,6 +939,29 @@ templates are unreadable, including an unlisted session; its pod is neither
 deleted nor replaced. With no pod, nothing changes: no Codex host pod is built
 while templates are unreadable. This account observation permits no construction.
 
+2026-11-14 recovery build record: **slice (b) source draft; independent-family
+review pending, not installed or accepted**. Worker `dev-env-1114-160847` owns
+only this source branch and draft PR; `dev-env-fable-coordinator-1109` retains
+story and lane custody. No live action or provider review was run. The structured
+coordinator CLI always uses the operator API, including for workbench and client
+callers, so both account/caller checks and UID fences apply on that route.
+Existing authorized direct exec remains subject to agentd's metadata/purpose/UID
+checks and existing RBAC; metadata does not contain a superuser.
+
+The draft includes the deferred slice (a) findings from OP858 comment 8481:
+L1 makes the three internal builder admission parameters explicit and refuses a
+missing admission (ordinary rescue holds remain possible). L2 documents that
+`templates.Validate` permits only ordinary, workbench and named coordinator
+accounts; an unvalidated unknown account remains unavailable. L3 extends the
+ordinary-owned-pod exception to every unavailable profile resolution, including
+a removed profile with readable templates, and skips construction admission when
+`ensure` already has a pod. No missing-pod construction is admitted by that
+exception. Tests compare the whole ordinary status/result and preserve pod/HOME.
+The PR and recovery handoff record exact source, tests, mutations and CI.
+Slices (c1/c2/d/e), owner rulings, another-family review and installation remain
+held with their existing owners. Meatball must obtain any missing ruling;
+silence is not consent.
+
 2026-11-14 source review: session `dev-env-fable-coordinator-1109`
 (`claude-fable-5-2`) reviewed PR 1156 at `55ece571`. Verdict: **request one change**;
 HIGH 0, MEDIUM 1, LOW 2. M1 found that a templates read error marked an ordinary

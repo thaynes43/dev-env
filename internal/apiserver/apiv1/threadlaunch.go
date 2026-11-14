@@ -34,6 +34,9 @@ const (
 // ThreadStartRequest is the body of POST /v1/sessions/{name}/threads. The
 // operator takes the caller from the token; nothing here names one.
 type ThreadStartRequest struct {
+	// Coordinator is untrusted intent; authorization is checked separately.
+	Coordinator bool `json:"coordinator,omitempty"`
+
 	// Model is a full Codex model id and Effort a level it takes.
 	Model  string `json:"model"`
 	Effort string `json:"effort"`

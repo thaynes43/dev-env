@@ -18,8 +18,11 @@ import (
 // pod's container: the session as one JSON document (D-40). SessionFileEnv,
 // when set, names a file holding the same document instead.
 const (
-	SessionEnv     = "AGENTD_SESSION"
-	SessionFileEnv = "AGENTD_SESSION_FILE"
+	// Controller-owned deployment metadata, never a credential or approval.
+	CodexCoordinatorHostEnv = "AGENTD_CODEX_COORDINATOR_HOST"
+	CodexCoordinatorUIDEnv  = "AGENTD_CODEX_COORDINATOR_SESSION_UID"
+	SessionEnv              = "AGENTD_SESSION"
+	SessionFileEnv          = "AGENTD_SESSION_FILE"
 )
 
 // Agent kinds and modes, as in the AgentSession spec (DESIGN-001 3.3).

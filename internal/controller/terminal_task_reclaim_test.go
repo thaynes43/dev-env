@@ -579,7 +579,7 @@ func TestTerminalTaskRetentionLatchFollowsReclaimFlags(t *testing.T) {
 	} {
 		r := &Reconciler{PrivateTerminalRecord: test.record, PrivateExecutorStop: test.stop, TerminalTaskPodReclaim: test.reclaim}
 		s, _ := privateHistoryFixture()
-		pod, err := r.sessionPod(s, exampleTemplates(t))
+		pod, err := r.sessionPod(s, exampleTemplates(t), r.resolveCodexHost(s, exampleTemplates(t)))
 		if err != nil {
 			t.Fatal(err)
 		}

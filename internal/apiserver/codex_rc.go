@@ -55,6 +55,12 @@ func (s *Server) codexRCThread(ctx context.Context, w http.ResponseWriter, r *ht
 	if string(sess.UID) != req.SessionUID {
 		return 0, nil, newError(409, apiv1.CodeConflict, "codex RC session UID changed")
 	}
+	// The one-use route has no coordinator purpose. Check declaration before
+	// receipt replay too; actual pod account is checked in qualify before any
+	// exec or reservation. Replaying an ordinary receipt needs no running pod.
+	if err := s.admitThreadHost(ctx, c, &sess, nil, false); err != nil {
+		return 0, nil, err
+	}
 	digest := apiv1.CodexRCClientHash(c.identity.Username, req)
 	if saved, ok := sess.Annotations[apiv1.CodexRCIntentAnnotation]; ok {
 		var receipt apiv1.CodexRCReceipt
@@ -78,6 +84,9 @@ func (s *Server) codexRCThread(ctx context.Context, w http.ResponseWriter, r *ht
 		}
 		pod, err := s.runningPod(ctx, &current)
 		if err != nil {
+			return err
+		}
+		if err := s.admitThreadHost(ctx, c, &current, pod, false); err != nil {
 			return err
 		}
 		if string(pod.UID) != target.PodUID {

@@ -582,8 +582,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	// During a templates outage an owned pod proves its current account.
 	// Ordinary-account pods keep their normal status and reconcile path;
 	// construction still requires readable templates and the build admission.
-	if tErr == nil || pod.missing || pod.foreign != "" || pod.obj.Spec.ServiceAccountName == templates.WorkbenchServiceAccount {
-		obs.codexHostErr = obs.codexHost.check(&s)
+	obs.codexHostErr = obs.codexHost.check(&s)
+	// An owned ordinary-account pod proves the running account even when its
+	// creation profile disappeared. This permits observation, never construction.
+	var hostRefusal *codexworkbench.Refusal
+	if !pod.missing && pod.foreign == "" && pod.obj.Spec.ServiceAccountName != templates.WorkbenchServiceAccount &&
+		errors.As(obs.codexHostErr, &hostRefusal) && hostRefusal.Reason == codexworkbench.TemplatesUnavailable {
+		obs.codexHostErr = nil
 	}
 	if obs.codexHostErr != nil && !wantsPodGone(&s) {
 		// Admission drift never triggers drain, idle suspension or replacement of
@@ -1381,6 +1386,9 @@ func releaseSession(ctx context.Context, c client.Client, s *v1alpha1.AgentSessi
 // one the templates cannot serve) gets no volume either. A pod or volume of the
 // session's names that the session does not control is left alone and reported.
 func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates, obs *observation) error {
+	if !obs.pod.missing {
+		return nil
+	}
 	if obs.codexHost == nil {
 		obs.codexHost = r.resolveCodexHost(s, t)
 	}
@@ -1389,9 +1397,6 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 		return nil
 	}
 
-	if !obs.pod.missing {
-		return nil
-	}
 	// Every resource-building caller, including a stored shared-workspace
 	// lifecycle, must pass the summoned-session gate (OP777, G1).
 	if build, err := r.summonGate(ctx, s); err != nil || !build {

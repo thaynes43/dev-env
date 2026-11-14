@@ -37,6 +37,7 @@ const threadAPIGrace = 2 * time.Minute
 
 type threadArgs struct {
 	agent, host, project, repo, model, effort, handoff, name, key string
+	coordinator                                                   bool
 	wait                                                          time.Duration
 }
 
@@ -75,6 +76,7 @@ func (a *app) threadEmit(r apiv1.ThreadLaunchResult, exit int) error {
 func (a *app) threadStart(ctx context.Context, args []string) error {
 	cmd := newCommand("thread", outputJSON)
 	var t threadArgs
+	cmd.fs.BoolVar(&t.coordinator, "coordinator", false, "")
 	cmd.fs.StringVar(&t.agent, "agent", "", "")
 	cmd.fs.StringVar(&t.host, "host", "", "")
 	cmd.fs.StringVar(&t.project, "project", "", "")
@@ -98,6 +100,9 @@ func (a *app) threadStart(ctx context.Context, args []string) error {
 		if !known {
 			_, _ = io.WriteString(a.env.Stderr, "agent-run: thread start --agent is one of "+strings.Join(threadlaunch.Names(), ", ")+"\n")
 		}
+		return a.threadRefuse(t.agent, apiv1.ThreadFailed, "invalid_input", ExitUsage)
+	}
+	if t.coordinator && (p.Name != "codex" || t.host == "" || t.name == "" || t.model != "gpt-6.1-sol" || t.effort != "medium") {
 		return a.threadRefuse(t.agent, apiv1.ThreadFailed, "invalid_input", ExitUsage)
 	}
 	switch p.Route {
@@ -152,7 +157,7 @@ func (a *app) threadOnHost(ctx context.Context, cmd *command, t threadArgs) erro
 	}
 	rec := threadlaunch.NewRecorder("codex", a.env.Now)
 	rec.Result.Host, rec.Result.SessionName, rec.Result.Name, rec.Result.RequestedModel = t.host, t.host, t.name, t.model
-	if a.inSessionPod() && !a.inWorkbenchPod() {
+	if t.coordinator || a.inSessionPod() && !a.inWorkbenchPod() {
 		return a.threadViaAPI(ctx, cmd, t, handoff, rec)
 	}
 	argv, s, err := a.sessionExecTarget(ctx, cmd, "thread start", t.host)
@@ -241,7 +246,7 @@ func (a *app) threadViaAPI(ctx context.Context, cmd *command, t threadArgs, hand
 		}
 		return refuse("api_unreachable", ExitFailed)
 	}
-	payload, err := json.Marshal(apiv1.ThreadStartRequest{Model: t.model, Effort: t.effort, Name: t.name, Repo: t.repo, Wait: t.wait.String(), Handoff: string(handoff)})
+	payload, err := json.Marshal(apiv1.ThreadStartRequest{Coordinator: t.coordinator, Model: t.model, Effort: t.effort, Name: t.name, Repo: t.repo, Wait: t.wait.String(), Handoff: string(handoff)})
 	if err != nil {
 		return refuse("invalid_input", ExitUsage)
 	}

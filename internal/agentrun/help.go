@@ -805,6 +805,8 @@ or the operator is older, the command reports route_unsupported.
 `,
 	"thread": `Usage: agent-run thread start --agent codex --host <codex-host> --model <full id> --effort <e>
                          --handoff FILE [--repo R] [--name N] [--wait 5m] [-o json]
+       agent-run thread start --agent codex --coordinator --host <reserved-host>
+                         --model gpt-6.1-sol --effort medium --name <fresh-unique-name> --handoff FILE
        agent-run thread start --agent claude --project P [--repo R] --model <full id> [--effort e]
                          --handoff FILE [--wait 5m] [--idempotency-key K] [-o json]
        agent-run thread status --agent codex --host <codex-host> --thread <id> [--repo R] [-o json]
@@ -814,6 +816,17 @@ Starts one fresh interactive thread that Tom can see in his provider's phone app
 thread's first message, one rule for every provider: 1 to 4096 UTF-8 bytes,
 not blank, no control character but newline and tab. Ask the thread to make its own
 worktree, as on the phone. --wait (at most 10m) bounds the whole launch.
+
+--coordinator     explicit purpose for the operator-named workbench host (DESIGN-067).
+                  Requires --host, --name, gpt-6.1-sol and medium. Always uses the
+                  operator API; only Tom, a trusted client or a workbench-by-creation
+                  session with a workbench pod is admitted. Raised sessions cannot
+                  substitute their pod account or profile label. Both target UIDs
+                  and controller host metadata are checked before launch. No pool
+                  selection, other host or ordinary-intent fallback. After exact-ID
+                  binding, native title metadata is set and read back. A lost ACK
+                  stays unconfirmed; never relaunch it. This is source-only work,
+                  pending independent-family review and separate installation.
 
 --agent codex     an existing Codex --interactive session (--host), paired once with
                   agent-run pair. It runs agentd ctl thread-start in that pod. From Tom's

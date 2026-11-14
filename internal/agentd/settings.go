@@ -53,6 +53,10 @@ type Settings struct {
 	WorkspaceID string
 	// PodUID comes from the downward API, never a persisted PID or hostname.
 	PodUID string
+	// Controller admission metadata for the supported coordinator exec route.
+	// It is not an authorization credential or a running-pod revocation mechanism.
+	CodexCoordinatorHost, CodexCoordinatorUID string
+	WorkbenchPod                              bool
 	// StateDir is agentd's own state on the session volume, ~/.agentd.
 	StateDir string
 	// OAuthAccountFile is the seam for plan 03 (AGENTD_OAUTH_ACCOUNT_FILE): a
@@ -140,25 +144,28 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		return def
 	}
 	s := Settings{
-		Home:              home,
-		ConfigDir:         or("AGENTD_CONFIG_DIR", "/opt/dev-env/config"),
-		RuntimeDir:        getenv("XDG_RUNTIME_DIR"),
-		PlaywrightStaging: or("AGENTD_PLAYWRIGHT_STAGING", "/opt/dev-env/ms-playwright"),
-		PlaywrightCache:   or("PLAYWRIGHT_BROWSERS_PATH", filepath.Join(home, ".cache", "ms-playwright")),
-		Bashrc:            or("AGENTD_BASHRC", "/opt/dev-env/scripts/bashrc.sh"),
-		DefaultModel:      getenv("DEV_ENV_CLAUDE_MODEL"),
-		GHTokenFile:       or("AGENTD_GH_TOKEN_FILE", "/creds/gh_token"),
-		GitUserName:       or("AGENTD_GIT_USER_NAME", "haynes-dev-bot[bot]"),
-		GitUserEmail:      or("AGENTD_GIT_USER_EMAIL", "304655321+haynes-dev-bot[bot]@users.noreply.github.com"),
-		SharedDir:         or("AGENTD_SHARED_DIR", filepath.Join(home, ".shared")),
-		WorkspaceID:       getenv("AGENTD_WORKSPACE_ID"),
-		PodUID:            getenv("DEV_ENV_POD_UID"),
-		StateDir:          filepath.Join(home, ".agentd"),
-		OAuthAccountFile:  getenv("AGENTD_OAUTH_ACCOUNT_FILE"),
-		ClaudeLiveFile:    getenv("AGENTD_CLAUDE_LIVE_FILE"),
-		CodexAccessFile:   getenv("AGENTD_CODEX_ACCESS_FILE"),
-		CodexHome:         or("CODEX_HOME", filepath.Join(home, ".codex")),
-		CodexBin:          "codex", ManagedCodexTasks: getenv("AGENTD_ENABLE_CODEX_TASKS") == "true",
+		Home:                 home,
+		ConfigDir:            or("AGENTD_CONFIG_DIR", "/opt/dev-env/config"),
+		RuntimeDir:           getenv("XDG_RUNTIME_DIR"),
+		PlaywrightStaging:    or("AGENTD_PLAYWRIGHT_STAGING", "/opt/dev-env/ms-playwright"),
+		PlaywrightCache:      or("PLAYWRIGHT_BROWSERS_PATH", filepath.Join(home, ".cache", "ms-playwright")),
+		Bashrc:               or("AGENTD_BASHRC", "/opt/dev-env/scripts/bashrc.sh"),
+		DefaultModel:         getenv("DEV_ENV_CLAUDE_MODEL"),
+		GHTokenFile:          or("AGENTD_GH_TOKEN_FILE", "/creds/gh_token"),
+		GitUserName:          or("AGENTD_GIT_USER_NAME", "haynes-dev-bot[bot]"),
+		GitUserEmail:         or("AGENTD_GIT_USER_EMAIL", "304655321+haynes-dev-bot[bot]@users.noreply.github.com"),
+		SharedDir:            or("AGENTD_SHARED_DIR", filepath.Join(home, ".shared")),
+		WorkspaceID:          getenv("AGENTD_WORKSPACE_ID"),
+		PodUID:               getenv("DEV_ENV_POD_UID"),
+		CodexCoordinatorHost: getenv(protocol.CodexCoordinatorHostEnv),
+		CodexCoordinatorUID:  getenv(protocol.CodexCoordinatorUIDEnv),
+		WorkbenchPod:         getenv("DEV_ENV_WORKBENCH") == "1",
+		StateDir:             filepath.Join(home, ".agentd"),
+		OAuthAccountFile:     getenv("AGENTD_OAUTH_ACCOUNT_FILE"),
+		ClaudeLiveFile:       getenv("AGENTD_CLAUDE_LIVE_FILE"),
+		CodexAccessFile:      getenv("AGENTD_CODEX_ACCESS_FILE"),
+		CodexHome:            or("CODEX_HOME", filepath.Join(home, ".codex")),
+		CodexBin:             "codex", ManagedCodexTasks: getenv("AGENTD_ENABLE_CODEX_TASKS") == "true",
 		RetainedCommonRules:     getenv("AGENTD_ENABLE_RETAINED_COMMON_RULES") == "true",
 		ManagedChildDecisions:   getenv("AGENTD_ENABLE_CHILD_DECISIONS") == "true",
 		PrivateProjectBootstrap: getenv("AGENTD_ENABLE_PRIVATE_PROJECT_BOOTSTRAP") == "true",

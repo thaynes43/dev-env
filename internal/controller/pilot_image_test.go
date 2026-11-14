@@ -43,7 +43,7 @@ func pilotTestSession() *v1alpha1.AgentSession {
 // buildPilotPod builds the session's pod the way the reconciler does.
 func buildPilotPod(t *testing.T, s *v1alpha1.AgentSession, p *PilotAgent) *corev1.Pod {
 	t.Helper()
-	pod, err := buildManagedPod(s, exampleTemplates(t), "https://api", false, false, nil, false)
+	pod, err := buildManagedPod(s, exampleTemplates(t), "https://api", false, false, nil, false, (&Reconciler{}).resolveCodexHost(s, exampleTemplates(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestPilotAgentSelectionIsExact(t *testing.T) {
 				t.Fatalf("pilotImageFor %q, want empty", got)
 			}
 			if s.Spec.Agent == "unknown" {
-				if _, err := buildManagedPod(s, tmpl, "https://api", false, false, nil, false); err == nil {
+				if _, err := buildManagedPod(s, tmpl, "https://api", false, false, nil, false, (&Reconciler{}).resolveCodexHost(s, tmpl)); err == nil {
 					t.Fatal("unknown agent was accepted by pod builder")
 				}
 				return
@@ -205,7 +205,7 @@ func TestReconcilerSessionPodUsesThePilotImage(t *testing.T) {
 	tmpl := exampleTemplates(t)
 	r := &Reconciler{APIURL: "https://api", PilotAgent: pilotTestAgent()}
 	selected := pilotTestSession()
-	pod, err := r.sessionPod(selected, tmpl)
+	pod, err := r.sessionPod(selected, tmpl, r.resolveCodexHost(selected, tmpl))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestReconcilerSessionPodUsesThePilotImage(t *testing.T) {
 	}
 	other := pilotTestSession()
 	other.Labels[v1alpha1.LabelIdempotencyKey] = "another-key"
-	pod, err = r.sessionPod(other, tmpl)
+	pod, err = r.sessionPod(other, tmpl, r.resolveCodexHost(other, tmpl))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,11 +223,11 @@ func TestReconcilerSessionPodUsesThePilotImage(t *testing.T) {
 	}
 
 	off := &Reconciler{APIURL: "https://api"}
-	got, err := off.sessionPod(selected, tmpl)
+	got, err := off.sessionPod(selected, tmpl, off.resolveCodexHost(selected, tmpl))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := buildManagedPod(selected, tmpl, off.APIURL, off.ManagedCodexTasks, off.ManagedChildDecisions, off.ManagedChildDecisionParents, off.terminalTaskReclaimOn())
+	want, err := buildManagedPod(selected, tmpl, off.APIURL, off.ManagedCodexTasks, off.ManagedChildDecisions, off.ManagedChildDecisionParents, off.terminalTaskReclaimOn(), (&Reconciler{}).resolveCodexHost(selected, tmpl))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestPilotAgentCodexRemoteChangesOnlyImage(t *testing.T) {
 		t.Fatal("Codex remote pod changed beyond image")
 	}
 	r := &Reconciler{APIURL: "https://api", PilotAgent: pilotTestAgent()}
-	pod, err := r.sessionPod(s, exampleTemplates(t))
+	pod, err := r.sessionPod(s, exampleTemplates(t), r.resolveCodexHost(s, exampleTemplates(t)))
 	if err != nil || pod.Spec.Containers[0].Image != pilotTestImage {
 		t.Fatalf("reconciler did not select Codex remote: %v", err)
 	}
@@ -281,12 +281,12 @@ func TestTaskPilotSelectionAndOwnership(t *testing.T) {
 	s.Annotations = map[string]string{v1alpha1.AnnotationProjectSnapshot: string(raw)}
 	tmpl := exampleTemplates(t)
 	r := &Reconciler{APIURL: "https://api", ManagedCodexTasks: true, TaskPilotAgent: pilotTestAgent()}
-	pod, err := r.sessionPod(s, tmpl)
+	pod, err := r.sessionPod(s, tmpl, r.resolveCodexHost(s, tmpl))
 	if err != nil || pod.Spec.Containers[0].Image != pilotTestImage || pod.Labels[v1alpha1.LabelRevision] != tmpl.Revision() {
 		t.Fatal("selected task pod", err)
 	}
 	off := &Reconciler{APIURL: "https://api", ManagedCodexTasks: true}
-	plain, err := off.sessionPod(s, tmpl)
+	plain, err := off.sessionPod(s, tmpl, off.resolveCodexHost(s, tmpl))
 	if err != nil {
 		t.Fatal(err)
 	}
