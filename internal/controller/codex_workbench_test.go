@@ -157,7 +157,7 @@ func TestCodexWorkbenchRawManifestAdmission(t *testing.T) {
 }
 
 func TestCodexWorkbenchRunningPodPreserved(t *testing.T) {
-	for _, failure := range []string{"empty", "shape", "templates"} {
+	for _, failure := range []string{"empty", "shape", "templates", "ordinary-templates"} {
 		t.Run(failure, func(t *testing.T) {
 			s, cm := workbenchHostSession(), workbenchHostTemplate()
 			s.Status.Phase = v1alpha1.PhaseRunning
@@ -168,6 +168,10 @@ func TestCodexWorkbenchRunningPodPreserved(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := &Reconciler{CodexWorkbenchHosts: codexworkbench.Policy{Name: s.Name, Namespace: s.Namespace}}
+			if failure == "ordinary-templates" {
+				s.Spec.Profile = "dev"
+				r.CodexWorkbenchHosts.Name = ""
+			}
 			pod, err := r.sessionPod(s, tm)
 			if err != nil {
 				t.Fatal(err)
@@ -184,13 +188,13 @@ func TestCodexWorkbenchRunningPodPreserved(t *testing.T) {
 				return nil
 			}}, pod, claim)
 			switch failure {
-			case "empty":
+			case "empty", "ordinary-templates":
 				r.CodexWorkbenchHosts.Name = ""
 			case "shape":
 				r.CodexWorkbenchHosts.Namespace = "other"
 			}
 			// Missing-template variant uses a read failure rather than deleting any resource.
-			if failure == "templates" {
+			if failure == "templates" || failure == "ordinary-templates" {
 				r.Client = interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, k client.ObjectKey, o client.Object, opts ...client.GetOption) error {
 					if _, ok := o.(*corev1.ConfigMap); ok {
 						return errors.New("template unavailable")
@@ -212,11 +216,16 @@ func TestCodexWorkbenchRunningPodPreserved(t *testing.T) {
 			if got.Status.Phase != v1alpha1.PhaseRunning {
 				t.Fatal(got.Status.Phase)
 			}
+			var home corev1.PersistentVolumeClaim
+			if err := r.Client.Get(context.Background(), client.ObjectKeyFromObject(claim), &home); err != nil || home.UID != claim.UID {
+				t.Fatalf("HOME changed: %v", err)
+			}
+
 			want := codexworkbench.NotNamed
 			if failure == "shape" {
 				want = codexworkbench.InvalidShape
 			}
-			if failure == "templates" {
+			if failure == "templates" || failure == "ordinary-templates" {
 				want = codexworkbench.TemplatesUnavailable
 			}
 			assertHostReason(t, got, want)

@@ -379,7 +379,10 @@ depth `"0"`, parent `flux-system/kustomize-controller`, with the ordinary remote
 shape can qualify. Defaults and aliases resolve once per request or reconcile;
 unreadable templates refuse. A refusal allocates no new HOME or agent pod and
 reports a recoverable condition. Existing running pods remain intact, and an
-ordinary-account rescue hold pod remains possible.
+ordinary-account rescue hold pod remains possible. When templates cannot be
+read, a running ordinary Codex host also shows the admission-blocked condition:
+its current construction account is unknown. Its pod and HOME remain intact,
+and an explicit suspend still follows the rescue path.
 
 Naming a host and declaring its manifest require the later confirmed install
 from [DESIGN-067 sections 4 and 10.3](../.agents/sagas/distributed-dev-env/designs/067-named-codex-workbench-coordinator.md).
