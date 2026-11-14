@@ -236,6 +236,9 @@ func (a *app) printSession(s apiv1.Session) {
 	if rc := s.RemoteControl; rc != nil && rc.State != "" {
 		row("remote control", "%s", remoteControlLine(s, *rc, now))
 	}
+	if r := s.SummonRegistration; r != nil && s.Caller != "" && s.Mode == "remote" {
+		row("registration", "%s", summonRegistrationLine(s, *r))
+	}
 	if st := s.AgentStatus; st != nil {
 		row("agent state", "%s", firstOf(st.State, "-"))
 		if st.Branch != "" {
@@ -382,6 +385,29 @@ func (a *app) printSession(s apiv1.Session) {
 			a.outf("  %s\n", line)
 		}
 	}
+}
+
+// summonRegistrationLine keeps the current Remote Control state separate from
+// the operator's stored settlement. Like remoteControlLine, it prints no link.
+func summonRegistrationLine(s apiv1.Session, r apiv1.SummonRegistration) string {
+	state, link := "not-reported", "no link reported in -o json (remoteControl.url)"
+	if rc := s.RemoteControl; rc != nil {
+		state = firstOf(rc.State, state)
+		if rc.URL != "" {
+			link = "link in -o json (remoteControl.url)"
+		}
+	}
+	settlement := firstOf(r.Result, "not yet settled")
+	if r.At != nil {
+		settlement += " at " + r.At.UTC().Format(time.RFC3339)
+	}
+	if r.Reason != "" {
+		settlement += " (" + r.Reason + ")"
+	}
+	if r.Result == "" && r.AgentSeenAt != nil {
+		settlement += "; agent seen at " + r.AgentSeenAt.UTC().Format(time.RFC3339)
+	}
+	return "remote control " + state + "; " + settlement + "; " + link
 }
 
 // remoteControlLine is show's one-line reading of status.remoteControl. The

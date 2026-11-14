@@ -3583,6 +3583,33 @@ differs, this governs.
    joined. After a close the session reported, its pod stays until the idle
    suspend. 5.9's correction of this date says the same.
 
+**Amendment, 2026-11-14: story 797 (slice d of #745), the API view; a
+coordinator ruling, not a ruling by Tom.** The settlement is also shown by
+the operator's API and by `agent-run show`. This is a change to the
+contract of `GET /v1/sessions/{name}`, so it is stated here.
+
+1. *The member.* The single-session view gains `summonRegistration`, with
+   four members: `agentSeenAt`, `result`, `reason` and `at`. They are
+   `status.summon.registration` as stored. An absent `result` means the
+   record has not settled. `result` and `reason` are the closed sets of
+   this section, not free text.
+2. *No link.* The member carries no URL. The link stays in
+   `remoteControl.url`, where it was.
+3. *The gate.* The member is present only when the session has a caller,
+   is remote, and has the stored record. It is present only in the
+   single-session view. No list, fleet, portal or lifecycle response
+   carries it.
+4. *Older clients.* An older `agent-run` reads some views strictly and
+   refuses a key it does not know (`show --json --once`, the usage
+   export). So the member is omitted, not empty, when the gate is closed:
+   every session without the record gets the bytes it got before. An older
+   strict client is refused only on the detail view of a session that has
+   the record, which can exist only once a summoned remote escalation has
+   run. The usage export never carries the member.
+5. *`agent-run show`* prints one row, `registration`, under the same gate:
+   the current Remote Control state, the stored settlement and where the
+   link is. It prints no link.
+
 ### 6.11 OP746: move curation
 
 - A new app in haynes-ops `upgrade-agent/cigar-curation/` (not inside the

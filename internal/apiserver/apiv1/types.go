@@ -302,6 +302,10 @@ type Session struct {
 	// descendants.
 	UsageRollup *UsageRollup `json:"usageRollup,omitempty"`
 	Conditions  []Condition  `json:"conditions,omitempty"`
+	// SummonRegistration is the stored registration record of a summoned
+	// remote session, only in GET /v1/sessions/{name}, never in a list.
+	// Omit it without a record: older strict clients reject an unknown key.
+	SummonRegistration *SummonRegistration `json:"summonRegistration,omitempty"`
 }
 
 // PrivateHistory is bounded retained provenance under the existing Session ACL.
@@ -469,6 +473,16 @@ type RemoteRename struct {
 	Reason   string    `json:"reason,omitempty"`
 	Since    time.Time `json:"since,omitempty"`
 	Attempts int       `json:"attempts,omitempty"`
+}
+
+// SummonRegistration is status.summon.registration (DESIGN-064 6.10).
+// An absent result means the record has not settled. The stored settlement
+// is independent of the current RemoteControl state; the link stays there.
+type SummonRegistration struct {
+	AgentSeenAt *time.Time `json:"agentSeenAt,omitempty"`
+	Result      string     `json:"result,omitempty"`
+	Reason      string     `json:"reason,omitempty"`
+	At          *time.Time `json:"at,omitempty"`
 }
 
 // Outcome is what a summoned session reported (plan 10).

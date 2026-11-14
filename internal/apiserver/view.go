@@ -12,7 +12,7 @@ import (
 )
 
 // view is a session as the API shows it. The prompt is in a single session's
-// view only, never in a list.
+// view only, never in a list. The stored summon registration is detail-only too.
 func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 	title, ignored := sessionEffectiveTitle(s)
 	v := apiv1.Session{
@@ -58,6 +58,16 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 	}
 	if withPrompt {
 		v.Prompt = s.Spec.Prompt
+		if s.Spec.Caller != "" && s.Spec.Mode == v1alpha1.ModeRemote && s.Status.Summon != nil {
+			if r := s.Status.Summon.Registration; r != nil {
+				v.SummonRegistration = &apiv1.SummonRegistration{
+					AgentSeenAt: timeOf(r.AgentSeenAt),
+					Result:      string(r.Result),
+					Reason:      string(r.Reason),
+					At:          timeOf(r.At),
+				}
+			}
+		}
 	}
 	if t := s.Status.SuspendedAt; t != nil {
 		at := t.UTC()

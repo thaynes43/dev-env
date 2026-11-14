@@ -787,6 +787,23 @@ create sessions (a v2 session, a workbench session or the v1 pod) runs:
 "${v2run[@]}" show <name>    # wait for "remote control: registered"
 ```
 
+For a summoned remote session with a stored registration record, `agent-run
+show <name>` adds a `registration` row: the current Remote Control state,
+the operator's settlement (`registered at <time>` or `unavailable at <time>`
+with its reason), or `not yet settled` with when the agent was first seen.
+The row says whether the link is present in `-o json` at `remoteControl.url`;
+it never prints the link. A later Remote Control state does not change the
+stored settlement.
+
+The single-session API view and `show -o json` carry that record as
+`summonRegistration` (`agentSeenAt`, `result`, `reason`, `at`, each omitted
+when unset). No record means no row and no key, preserving the session's
+existing output. Session lists, fleet and portal lists never carry the new
+key. Older strict clients (`show --json --once` and `usage export`) still
+read sessions without the record; for a session with it, their detail read
+rejects the unknown `summonRegistration` key. Updated clients accept it;
+usage export continues to export usage only.
+
 `--title "Main coordinator"` sets optional role text at create. For
 `claude-opus-5-5` the Claude app shows `Opus | Main coordinator`. The session's
 stable name stays the pod name, the hostname and the volume name. An empty
