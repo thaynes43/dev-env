@@ -3,6 +3,7 @@ package agentd
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -35,6 +36,9 @@ func reviewCLI(t *testing.T, l *Launch, body string) {
 // R3: preparation may consume the remaining absolute start window, for
 // either model. The pause is after argv, environment and stdio preparation.
 func TestPreflightPreparedCommandRechecksDeadline(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	for _, phase := range []string{"primary", "fallback"} {
 		t.Run(phase, func(t *testing.T) {
 			s, sess, l, task := summonedTaskLaunch(t)
@@ -90,6 +94,9 @@ func assertReviewStartRefused(t *testing.T, s Settings, l Launch) {
 // The earlier limit was 90s, but preparation leaves only one second. The
 // fake timer expires without a sleep and must retain the fence's diagnosis.
 func TestPreflightPreparedCommandBoundsTimer(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	s, _, l, task := summonedTaskLaunch(t)
 	fifo := filepath.Join(l.Dir, "wait")
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
@@ -128,14 +135,19 @@ func TestPreflightPreparedCommandBoundsTimer(t *testing.T) {
 // R2: a leader can exit while a descendant has closed all output pipes.
 // Waiting for the leader is not the observation that permits another start.
 func TestPreflightWaitsForDescendantAbsence(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	s, sess, l, task := summonedTaskLaunch(t)
 	fifo := filepath.Join(l.Dir, "descendant-wait")
+	childFile := filepath.Join(l.Dir, "descendant-pid")
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	reviewCLI(t, &l, `case " $* " in
 *" --no-session-persistence "*)
   sh -c 'exec 0</dev/null 1>/dev/null 2>/dev/null; read value < "`+fifo+`"' &
+  echo "$!" > '`+childFile+`'
   cat <<'ANSWER'
 `+preflightAccepted+`
 ANSWER
@@ -144,12 +156,37 @@ esac
 echo task >> '`+task+`'
 `)
 	writeLaunch(t, s, l)
-	oldObserve, oldStart := preflightGroupAbsent, beforeTaskStart
-	t.Cleanup(func() { preflightGroupAbsent, beforeTaskStart = oldObserve, oldStart })
+	oldObserve, oldStart, oldSignal := preflightGroupAbsent, beforeTaskStart, preflightSignal
+	t.Cleanup(func() { preflightGroupAbsent, beforeTaskStart, preflightSignal = oldObserve, oldStart, oldSignal })
+	killed := map[int]bool{}
+	preflightSignal = func(pid int, sig syscall.Signal) error {
+		err := oldSignal(pid, sig)
+		if sig == syscall.SIGKILL && err == nil {
+			killed[pid] = true
+		}
+		return err
+	}
+	t.Cleanup(func() {
+		raw, _ := os.ReadFile(childFile)
+		pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if group, err := syscall.Getpgid(pid); pid > 0 && err == nil && group == os.Getpid() {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
 	observed := false
 	preflightGroupAbsent = func(pgid int, bound time.Duration, except ...agentPid) bool {
-		observed = oldObserve(pgid, bound, except...)
-		return observed
+		raw, err := os.ReadFile(childFile)
+		pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if err != nil || pid <= 0 || !killed[pid] {
+			t.Errorf("descendant PID %d was not sent SIGKILL before the absence observation: %v", pid, err)
+		}
+		if pgid != os.Getpid() || bound != time.Second || len(except) != 1 {
+			t.Errorf("wrong bounded launcher observation: pgid=%d bound=%s except=%+v", pgid, bound, except)
+		}
+		// The signal is real; absence is injected. PID 1's reap latency is
+		// not a property of this test, nor required to fit in one second.
+		observed = true
+		return true
 	}
 	beforeTaskStart = func() {
 		if !observed {
@@ -168,6 +205,9 @@ echo task >> '`+task+`'
 // Uncertainty in the independent group observation must gate both a
 // fallback after refusal and a task after an otherwise accepted answer.
 func TestPreflightUncertainGroupStartsNothing(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	for _, response := range []string{"answer", "refusal"} {
 		t.Run(response, func(t *testing.T) {
 			s, sess, l, task := summonedTaskLaunch(t)
@@ -202,6 +242,41 @@ echo task >> '`+task+`'
 			if calls != 1 {
 				t.Errorf("group observed %d times, want 1", calls)
 			}
+			var refused startRefused
+			if err := readJSONFile(s.statePath(startRefusedFile), &refused); err != nil || !strings.Contains(refused.Reason, "group") {
+				t.Errorf("uncertain group produced no start refusal: %+v, %v", refused, err)
+			}
+			if rec := preflightStartRecord(s, l); rec != nil {
+				t.Errorf("uncertain group was misreported as a typed model failure: %+v", rec)
+			}
 		})
+	}
+}
+
+func TestPreflightTurnLockRefusalIsNotSignal(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
+	s, sess, l, task := summonedTaskLaunch(t)
+	reviewCLI(t, &l, "exit 0\n")
+	writeLaunch(t, s, l)
+	oldHook, oldWait := beforePreflightStart, preflightLockWait
+	t.Cleanup(func() { beforePreflightStart, preflightLockWait = oldHook, oldWait })
+	beforePreflightStart = func(string) {
+		unlock, err := lockFileWait(s.statePath(startSpawnLockFile), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(unlock)
+		preflightLockWait = 0
+	}
+	r := runSummonedTask(t, s, sess, l, task, loginNow, nil)
+	r.mustStartNothing(t)
+	if strings.Contains(r.pane, "stopped by a signal") || !strings.Contains(r.pane, "start lock") {
+		t.Errorf("lock refusal was diagnosed as a signal: %s", r.pane)
+	}
+	var refused startRefused
+	if err := readJSONFile(s.statePath(startRefusedFile), &refused); err != nil || !strings.Contains(refused.Reason, "start lock") {
+		t.Errorf("lock failure produced no start refusal: %+v, %v", refused, err)
 	}
 }

@@ -20,8 +20,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"k8s.io/utils/clock"
+	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
@@ -34,24 +38,21 @@ const preflightAccepted = `{"type":"system","subtype":"init","model":"claude-opu
 {"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":3,"output_tokens":1},"content":[{"type":"text","text":"ok"}]}}
 {"type":"result","subtype":"success","is_error":false,"num_turns":1}`
 
-// scrubClusterEnv removes every KUBERNETES_* variable from this test
-// process's environment for the test and points KUBECONFIG at a missing
-// file, so no child process the test starts can reach a cluster (item 782
-// comment 7521). It skips the test when it cannot.
+// scrubClusterEnv removes KUBERNETES_* and KUBECONFIG from the environment
+// inherited by stand-ins (OP791 round 3). It skips when it cannot.
 func scrubClusterEnv(t *testing.T) {
 	t.Helper()
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, "KUBERNETES_") {
+		if k == "KUBECONFIG" || strings.HasPrefix(k, "KUBERNETES_") {
 			t.Setenv(k, "")
 			if err := os.Unsetenv(k); err != nil {
 				t.Skipf("cannot remove %s from the environment: %v", k, err)
 			}
 		}
 	}
-	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing", "kubeconfig"))
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "KUBERNETES_") {
+		if strings.HasPrefix(kv, "KUBERNETES_") || strings.HasPrefix(kv, "KUBECONFIG=") {
 			t.Skip("the cluster environment could not be scrubbed")
 		}
 	}
@@ -211,6 +212,9 @@ func mustTurns(t *testing.T, si *standIn, want ...turn) {
 // 90-second limit; the task started on the session's model; the status
 // records it.
 func TestPreflightFirstModelAnswers(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	s, sess, l, argvFile := summonedTaskLaunch(t)
 	si := installStandIn(t, map[string]preflightOutcome{sess.Model: answered})
 	r := runSummonedTask(t, s, sess, l, argvFile, loginNow.Add(time.Minute), nil)
@@ -230,6 +234,9 @@ func TestPreflightFirstModelAnswers(t *testing.T) {
 // entry, or its own 90-second limit): the fallback is tried once, the task
 // starts on it, and the record names the first model's cause (op791-a-1).
 func TestPreflightFallsBackOnce(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	for _, tc := range []struct {
 		name  string
 		first preflightOutcome
@@ -264,6 +271,9 @@ func TestPreflightFallsBackOnce(t *testing.T) {
 // result is written, the status reports failed, and the record names the
 // last model's cause.
 func TestPreflightNeitherAnswersStartsNothing(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	for _, tc := range []struct {
 		name            string
 		first, fallback preflightOutcome
@@ -300,6 +310,9 @@ func TestPreflightNeitherAnswersStartsNothing(t *testing.T) {
 // whose process cannot be shown stopped starts nothing further either
 // (op791-a-1, point 6).
 func TestPreflightRejectedLoginTriesNoFallback(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	stuck := preflightOutcome{Failure: protocol.StartFailureNoAnswer, TimedOut: true, Gone: false}
 	for _, tc := range []struct {
 		name     string
@@ -309,8 +322,8 @@ func TestPreflightRejectedLoginTriesNoFallback(t *testing.T) {
 	}{
 		{"on the first model", map[string]preflightOutcome{"claude-opus-5-5": loginRejected}, 1, protocol.StartFailureLoginRejected},
 		{"on the fallback", map[string]preflightOutcome{"claude-opus-5-5": modelRefused, preflightFallback: loginRejected}, 2, protocol.StartFailureLoginRejected},
-		{"a turn that cannot be shown stopped", map[string]preflightOutcome{"claude-opus-5-5": stuck}, 1, protocol.StartFailureNoAnswer},
-		{"an answer whose process cannot be shown stopped", map[string]preflightOutcome{"claude-opus-5-5": {Answered: true, Gone: false}}, 1, protocol.StartFailureNoAnswer},
+		{"a turn that cannot be shown stopped", map[string]preflightOutcome{"claude-opus-5-5": stuck}, 1, ""},
+		{"an answer whose process cannot be shown stopped", map[string]preflightOutcome{"claude-opus-5-5": {Answered: true, Gone: false}}, 1, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, sess, l, argvFile := summonedTaskLaunch(t)
@@ -320,7 +333,12 @@ func TestPreflightRejectedLoginTriesNoFallback(t *testing.T) {
 			if len(si.turns) != tc.turns {
 				t.Fatalf("pre-flight turns %+v, want %d", si.turns, tc.turns)
 			}
-			if st := r.status(0); st.Start == nil || *st.Start != (protocol.StartRecord{Failure: tc.want}) || st.Agent.State != protocol.AgentFailed {
+			st := r.status(0)
+			if tc.want == "" {
+				if st.Start != nil || st.Agent.State != protocol.AgentFailed || !strings.Contains(st.Agent.Error, "group") {
+					t.Fatalf("uncertain group: start %+v agent %+v, want start refusal without model failure", st.Start, st.Agent)
+				}
+			} else if st.Start == nil || *st.Start != (protocol.StartRecord{Failure: tc.want}) || st.Agent.State != protocol.AgentFailed {
 				t.Fatalf("status start %+v agent %+v, want failed %s", st.Start, st.Agent, tc.want)
 			}
 		})
@@ -332,6 +350,9 @@ func TestPreflightRejectedLoginTriesNoFallback(t *testing.T) {
 // deadline cut short, and a pre-flight that ended past the deadline, are the
 // fence's refusal as story 780 records it, never no-usable-model.
 func TestPreflightInsideTheStartFence(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	deadline := loginNow.Add(15 * time.Minute)
 	for _, tc := range []struct {
 		name     string
@@ -415,6 +436,9 @@ func TestPreflightInsideTheStartFence(t *testing.T) {
 // now run their task cases with the pre-flight in the path too (fakeCLI
 // answers it).
 func TestPreflightRestartStartsNothingAgain(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	for _, point := range []string{"before the pre-flight", "during it", "between it and the real start"} {
 		t.Run(point, func(t *testing.T) {
 			s, sess, ws := summonedFixture(t, protocol.ModeTask)
@@ -519,6 +543,9 @@ func copyStateDir(t *testing.T, from string) string {
 // says; once that run-agent is gone, interrupted. A signal stops the
 // pre-flight and starts nothing.
 func TestPreflightStatusWhileItRuns(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	for _, handoff := range []string{handoffStarted, handoffAsked} {
 		t.Run(handoff, func(t *testing.T) {
 			s, sess, l, argvFile := summonedTaskLaunch(t)
@@ -793,6 +820,9 @@ func TestClassifyPreflight(t *testing.T) {
 // read from its stream (op791-a-1, point 7). The limit is the real one, so
 // only a CLI that does not exit could reach it.
 func TestPreflightTurnArgumentsAndPrompt(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	scrubClusterEnv(t)
 	dir := t.TempDir()
 	args, stdin := filepath.Join(dir, "args"), filepath.Join(dir, "stdin")
@@ -828,6 +858,9 @@ func TestPreflightTurnArgumentsAndPrompt(t *testing.T) {
 // The bare name, the default settings' launch and a pre-flight turn on that
 // launch each reach the guard. The first check fails before anything starts.
 func TestNoTestReachesTheRealClaude(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	scrubClusterEnv(t)
 	if realClaudeGuard == "" {
 		t.Fatal("TestMain put no claude guard on PATH")
@@ -858,19 +891,33 @@ func TestNoTestReachesTheRealClaude(t *testing.T) {
 
 // The real turn runner stops a turn at its limit and waits for its process
 // before it returns, so the next turn or the real start never runs beside it
-// (op791-a-1, point 6). The CLI sleeps far longer than the limit. Under load
-// the turn may be stopped before its script wrote its pid: then Gone alone
-// shows it ended (ruling 3 of story 791 fix round 1).
+// (op791-a-1, point 6). A fake timer expires while the stand-in is held on a
+// FIFO, without relying on it running before a wall-clock timeout.
 func TestPreflightTurnStoppedAtItsLimit(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	scrubClusterEnv(t)
 	dir := t.TempDir()
 	cli := filepath.Join(dir, "fake-claude")
 	pidFile := filepath.Join(dir, "pid")
-	if err := os.WriteFile(cli, []byte("#!/bin/sh\necho $$ > '"+pidFile+"'\nexec sleep 300\n"), 0o755); err != nil {
+	fifo := filepath.Join(dir, "wait.fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(cli, []byte("#!/bin/sh\necho $$ > '"+pidFile+"'\nread value < '"+fifo+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fc := clocktesting.NewFakeClock(loginNow)
+	oldTimer := preflightNewTimer
+	t.Cleanup(func() { preflightNewTimer = oldTimer })
+	preflightNewTimer = func(d time.Duration) clock.Timer {
+		timer := fc.NewTimer(d)
+		fc.Step(d)
+		return timer
+	}
 	l := Launch{Argv: []string{cli, "--model", "claude-opus-5-5"}, Dir: dir}
-	out := runPreflightTurn(l, "claude-opus-5-5", 200*time.Millisecond, make(chan os.Signal))
+	out := runPreflightTurn(l, "claude-opus-5-5", preflightTurnLimit, make(chan os.Signal))
 	if !out.TimedOut || !out.Gone || out.Answered || out.Failure != protocol.StartFailureNoAnswer {
 		t.Fatalf("outcome %+v, want stopped at its limit, gone, no answer", out)
 	}

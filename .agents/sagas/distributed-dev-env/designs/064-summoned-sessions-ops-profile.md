@@ -3105,6 +3105,73 @@ observation; prepared-command deadline expiry on both models; and direct
 replay at five boundaries with no usage or capture identity. These are source
 and local test evidence, not installed or live provider acceptance.
 
+**Correction, 2026-11-14 (story 791 fix round 3, coordinator rulings; not a
+ruling by Tom).** This answers M1 and L1–L5 in the review of PR 1153
+(comment 6872311374). Earlier corrections stay; where this differs, it
+governs.
+
+1. *A live launcher must obey the marker.* A stop before run-agent claims
+   the launch reports not running, but still durably fences every later
+   probe and task start. With a grace, a launcher released between the
+   accepted probe and the task reaches that fence and starts no task. During
+   either probe it handles SIGTERM, ends and reaps the probe, and can exit
+   without group SIGKILL. Failed marker persistence or failure to acquire
+   the start lock signals nothing and reports running. An unreadable claim
+   or unpublished task identity remains uncertainty, never proof of a stop.
+2. *One stop deadline; preserve a started task's result (L3).* Stop chooses
+   one group under the start lock. Once `agent.pid` is published it stops
+   only the task's group and leaves run-agent to finish its end-of-task work
+   and write its result, even when that work outlasts the stop grace. It
+   never signals that launcher or kills its group. A `started` claim whose
+   finished task removed its PID also leaves the launcher alone. The
+   launcher-group path applies only during pre-flight or task hand-over.
+   All summoned-stop waits share a deadline made at entry: at most **40
+   seconds**, from 5 seconds for the lock, a grace capped at 30 seconds,
+   and 5 seconds to observe group absence after SIGKILL. Work before a wait
+   consumes its remaining budget; no second grace is added. This leaves
+   20 seconds within the pod's 60-second termination grace at the production
+   limits. Ordinary launches keep their prior stop path. The deadline bounds
+   waits, not a kernel or filesystem operation that never returns, and the
+   pod's outer termination deadline still bounds result retention.
+3. *Settle before removing the PID (L2).* A failed `started` write is logged
+   and retried after the task's Wait, before removing `agent.pid`. If that
+   settlement fails too, the error is logged and the PID receipt stays, so
+   status and stop can prove that recorded task group absent. Errors clearing
+   an intent when nothing started are logged as well. These writes do not
+   remove or reopen the once-only claim. If the launcher died before PID
+   publication, or its records are unreadable and no task identity can be
+   proved, local stop still cannot settle that uncertainty. The operator
+   ends it through the existing authorized executor/pod termination path,
+   preserving the workspace under the existing rescue rules and verifying
+   the executor ended; it must not clear the claim or invent a task PID.
+   A later boot ignores the old process records and never replays the task.
+   This correction grants no new lifecycle or rescue authority.
+4. *Ownership belongs to the launch's boot (L1).* When the readable current
+   `boot.json` has a nonempty boot ID different from `launch.json`, stop and
+   status treat `start-preflight.json` and `agent.pid` as absent, even if
+   their numeric PID, start time and group now happen to name a live process.
+   The historical task result remains readable. This is a boot boundary,
+   not a kernel namespace attestation: a missing or unreadable current boot
+   record proves no change. Within a boot, leader identity/group checks stay;
+   a leaderless historical group still cannot attest its origin after reuse.
+5. *Cleanup uncertainty is a start refusal (L5), not a model failure.* If
+   the group is not shown gone within the one-second between-turn bound,
+   nothing else starts. `start-refused.json` records the group uncertainty,
+   even if the model answered; no typed `NoAnswer` or `no-usable-model`
+   record is emitted. Status remains busy while an owned group is live or
+   uncertain; after absence is established the existing refusal reports
+   failed (`agent-failed`). A turn's start-lock failure uses the same
+   refusal record and names the lock in its log, rather than claiming a
+   signal. No enum, API or CRD change is needed.
+6. *The group boundary remains a limit.* A descendant that leaves the
+   launcher's group, for example with `setsid`, is outside both the
+   between-turn absence proof and that group's stop. This mechanism is
+   process-group ownership, not containment. Tests use stand-in binaries;
+   they do not attest a provider's descendant behavior. Tests that become
+   launchers now re-execute in their own group. The descendant cleanup proof
+   observes its real SIGKILL and injects the absence observation, so it
+   requires no particular PID 1 reap latency inside one second.
+
 ### 6.10 OP745: joinable remote sessions with a verified link
 
 - A summoned `remote` session on profile `ops` is created with the caller's
