@@ -143,6 +143,11 @@ func policyCallerAllowed(c *caller, r *http.Request) error {
 	if name := r.PathValue("name"); name != "" && r.URL.Path == apiv1.SessionPath(name) && (r.Method == http.MethodGet || r.Method == http.MethodDelete) {
 		return nil
 	}
+	if name := r.PathValue("name"); name != "" && r.URL.Path == apiv1.SessionRaisePath(name) {
+		// The raise handler returns the section 6.7 sentence. Slice (c) is
+		// what adds spec.raise; until then every policy caller is refused there.
+		return nil
+	}
 	if policyParentNoteRoute(r) {
 		return nil
 	}
@@ -288,7 +293,7 @@ const olderTitleCRD = "the cluster's AgentSession CRD is older than the operator
 func (s *Server) createWithCallerCap(ctx context.Context, sess *v1alpha1.AgentSession, c *caller) error {
 	unbounded := c.kind != kindPolicy && callerWorkerCap(c) == nil && (sess.Spec.Limits == nil || sess.Spec.Limits.MaxWorkers == nil)
 	if unbounded && sess.Spec.Title == "" {
-		return s.Client.Create(ctx, sess)
+		return s.createAdmittedSession(ctx, sess)
 	}
 	if !unbounded && c.kind == kindSession {
 		if sess.Annotations == nil {
@@ -296,7 +301,7 @@ func (s *Server) createWithCallerCap(ctx context.Context, sess *v1alpha1.AgentSe
 		}
 		sess.Annotations[callerParentUID] = string(c.session.UID)
 	}
-	err := s.Client.Create(ctx, sess, client.FieldValidation(metav1.FieldValidationStrict))
+	err := s.createAdmittedSession(ctx, sess, client.FieldValidation(metav1.FieldValidationStrict))
 	if err != nil && sess.Spec.Title != "" && staleTitleCRD(err) {
 		return badRequest("%s", olderTitleCRD)
 	}

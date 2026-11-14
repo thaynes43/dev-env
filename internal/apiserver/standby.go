@@ -23,6 +23,7 @@ const StandbyParent = "dev-env-system/dev-env-operator-standby"
 // idempotency: the runnable's label lookup and circuit breaker decide whether
 // to call.
 func (s *Server) CreateStandby(ctx context.Context, req apiv1.CreateSessionRequest) (string, error) {
+	ctx = withCodexHostAdmission(ctx)
 	c := &caller{kind: kindClient, parent: StandbyParent}
 	sess, err := s.newSession(ctx, req, c)
 	if err != nil {
@@ -46,7 +47,7 @@ func (s *Server) CreateStandby(ctx context.Context, req apiv1.CreateSessionReque
 		if err := checkAgentd(sess); err != nil {
 			return "", err
 		}
-		err := s.Client.Create(ctx, sess)
+		err := s.createAdmittedSession(ctx, sess)
 		if apierrors.IsAlreadyExists(err) {
 			sess.ResourceVersion = ""
 			continue

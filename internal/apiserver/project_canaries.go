@@ -104,7 +104,7 @@ func (s *Server) createProjectCanary(ctx context.Context, w http.ResponseWriter,
 	if err := s.admitNamedCoordinator(ctx, sess); err != nil {
 		return 0, nil, err
 	}
-	createErr := s.Client.Create(ctx, sess)
+	createErr := s.createAdmittedSession(ctx, sess)
 	// A lost acknowledgement or another replica's atomic create is resolved
 	// only through the original exact name; no generated suffix or new key.
 	if err := s.Live.Get(ctx, key, &existing); err != nil {

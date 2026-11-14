@@ -364,7 +364,31 @@ the caller is allowed to choose it. A session child normally inherits its
 parent's profile. A workbench session's child is the exception (OP502): it runs
 on the profile it names, `workbench` included, or on the default profile when it
 names none. A Codex remote host created by a workbench session takes no
-`--profile` at all; the server uses the default profile, not workbench.
+`--profile` at all; the server resolves the template default and refuses it
+if that account is `dev-env-workbench`. Human and trusted-client API creates
+also refuse any workbench-account Codex remote host, including profile aliases,
+with `403 codex_workbench_host_git_only`.
+
+DESIGN-067 slice (a) is built, not installed. In this build the operator setting
+`--codex-workbench-hosts` defaults to empty and accepts at most one exact DNS
+session name. The account guard is always active. With an empty setting, no
+workbench-account Codex remote host can start or resume; this includes the
+reported suspended legacy host. A configured name is reserved against other
+accounts, agents and modes. Only a manifest in the session namespace, at exact
+depth `"0"`, parent `flux-system/kustomize-controller`, with the ordinary remote
+shape can qualify. Defaults and aliases resolve once per request or reconcile;
+unreadable templates refuse. A refusal allocates no new HOME or agent pod and
+reports a recoverable condition. Existing running pods remain intact, and an
+ordinary-account rescue hold pod remains possible. When templates cannot be
+read, a running ordinary Codex host also shows the admission-blocked condition:
+its current construction account is unknown. Its pod and HOME remain intact,
+and an explicit suspend still follows the rescue path.
+
+Naming a host and declaring its manifest require the later confirmed install
+from [DESIGN-067 sections 4 and 10.3](../.agents/sagas/distributed-dev-env/designs/067-named-codex-workbench-coordinator.md).
+Thread fences, pool exclusion and safe stop are later slices. This source change
+grants no install authority. Suspend and preserve the host before removing its
+allowance or rolling back; removing the setting does not revoke a live pod.
 Starting a native thread does not select a Kubernetes profile.
 
 A headless `-p` task runs its prompt once. `msg` applies to a local TUI session; a headless task does not accept messages. Coordinator custody of that result is recorded separately in the [coordinator result handoff](coordinator-result-handoff.md). A delivery receipt is not acknowledgment, ownership, or completion. The offline checker only validates a bounded handoff record.
@@ -836,6 +860,18 @@ still reads it. A title set at launch is
 not typed again; a different title recorded later in the same pod is typed
 under the same guard. A title may not end with a semicolon and may not
 contain a backslash. This typed rename is built and not installed.
+
+`agent-run raise`, in this build, gives a running session only the right to
+start sessions, on Tom's own words given to this agent. A profile comes
+with slice (b). That is the coordinator's ruling of 2026-11-14 on the
+second slice (a) reviews. It takes effect
+two minutes after his notice is accepted. The notice quotes those words
+last, as the performer's claim, after the take-back command. Take-back
+needs no words. This build does not restart the session. The command is
+built and not installed: the operator flags are off by default, and with
+them off a raise is refused. A view of a pending or active record then
+says the raise is ignored because raising is switched off. A taken-back
+or unannounced record is shown as it is.
 
 It needs no flag, pairing or sign-in on the default profile, which follows the
 keeper's shared login. Tell Tom the session name once `show` reads

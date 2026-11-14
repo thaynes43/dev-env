@@ -63,6 +63,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/codexworkbench"
 	"github.com/thaynes43/dev-env/internal/eventnote"
 	"github.com/thaynes43/dev-env/internal/homeguard"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
@@ -122,6 +123,8 @@ func CacheOptions(sessionNamespace string, tmpl types.NamespacedName) cache.Opti
 
 // Reconciler builds and watches session pods and volumes.
 type Reconciler struct {
+	// CodexWorkbenchHosts is always enforced; an empty name permits none.
+	CodexWorkbenchHosts codexworkbench.Policy
 	// OriginalHome is an exact default-off lifecycle restriction, never an access grant.
 	OriginalHome *homeguard.Binding
 	// Client reads from the manager's cache and writes to the API server.
@@ -575,6 +578,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	t, tErr := r.loadTemplates(ctx)
 	obs := observation{pod: pod, claim: claim, templates: t, templatesErr: tErr, now: time.Now(), homeExpiryOn: r.homeExpiryOn(),
 		taskCleanupOn: r.taskCleanupOn(), taskCleanupGrace: r.taskCleanupGrace()}
+	obs.codexHost = r.resolveCodexHost(&s, t)
+	// During a templates outage an owned pod proves its current account.
+	// Ordinary-account pods keep their normal status and reconcile path;
+	// construction still requires readable templates and the build admission.
+	if tErr == nil || pod.missing || pod.foreign != "" || pod.obj.Spec.ServiceAccountName == templates.WorkbenchServiceAccount {
+		obs.codexHostErr = obs.codexHost.check(&s)
+	}
+	if obs.codexHostErr != nil && !wantsPodGone(&s) {
+		// Admission drift never triggers drain, idle suspension or replacement of
+		// an existing agent pod. Its custodian owns the explicit stop.
+		next := s.Status.DeepCopy()
+		observe(&s, obs, next)
+		if !apiequality.Semantic.DeepEqual(&s.Status, next) {
+			s.Status = *next
+			return r.writeStatus(ctx, &s, ctrl.Result{})
+		}
+		return ctrl.Result{}, nil
+	}
 	if s.Spec.Workspace != nil {
 		result, err := r.reconcileSharedWorkspace(ctx, &s, &obs)
 		if err != nil {
@@ -1360,6 +1381,14 @@ func releaseSession(ctx context.Context, c client.Client, s *v1alpha1.AgentSessi
 // one the templates cannot serve) gets no volume either. A pod or volume of the
 // session's names that the session does not control is left alone and reported.
 func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates, obs *observation) error {
+	if obs.codexHost == nil {
+		obs.codexHost = r.resolveCodexHost(s, t)
+	}
+	if err := obs.codexHost.check(s); err != nil {
+		obs.codexHostErr = err
+		return nil
+	}
+
 	if !obs.pod.missing {
 		return nil
 	}
@@ -1421,7 +1450,7 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			return err
 		}
 	}
-	pod, err := r.sessionPod(s, t)
+	pod, err := r.sessionPod(s, t, obs.codexHost)
 	if err != nil {
 		obs.buildErr = err
 		return nil
@@ -1567,6 +1596,11 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 		}
 		addOriginalHomeVerifier(pod, *b)
 	}
+	// Final construction boundary uses the same policy and resolved account.
+	if err := obs.codexHost.check(s); err != nil {
+		obs.codexHostErr = err
+		return nil
+	}
 	if err := r.create(ctx, "pod", pod); err != nil {
 		return err
 	}
@@ -1635,6 +1669,8 @@ func describeOwner(o metav1.Object) string {
 
 // observation is what one reconcile found.
 type observation struct {
+	codexHost    *codexHostBuild
+	codexHostErr error
 	pod          owned[*corev1.Pod]
 	claim        owned[*corev1.PersistentVolumeClaim]
 	templates    *templates.Templates
@@ -1850,6 +1886,19 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 	}
 	pod := obs.pod.obj
 	switch {
+	case obs.codexHostErr != nil && !wantsPodGone(s):
+		var refusal *codexworkbench.Refusal
+		if errors.As(obs.codexHostErr, &refusal) {
+			phase := v1alpha1.PhasePending
+			if !obs.pod.missing {
+				// Keep observing a preserved pod, including a later terminal state.
+				present := obs
+				present.codexHostErr = nil
+				phase, _ = podPhase(s, present)
+			}
+			return phase, notReady(refusal.Reason, refusal.Message)
+		}
+		return v1alpha1.PhasePending, notReady(codexworkbench.TemplatesUnavailable, obs.codexHostErr.Error())
 	case privateHistoryProtected(s) && obs.pod.missing && obs.privateHistoryUnknown != nil:
 		if s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && s.DeletionTimestamp.IsZero() {
 			return v1alpha1.PhaseSuspended, notReady("PreservationUnknown", obs.privateHistoryUnknown.Error())

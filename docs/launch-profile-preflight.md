@@ -13,7 +13,7 @@ The current profiles, their ServiceAccounts, profile labels, mounts, and standin
 | Explicit workbench-only control or hardware/host operations | Start from, or dispatch to, an existing authorized `workbench`-profile session when the work record explicitly names that role. A workbench session's child runs on `workbench` only when the request names it. | `workbench` uses `dev-env-workbench`, `DEV_ENV_WORKBENCH`, and its workbench-specific mounts and profile labels. The required grant or standing policy, egress, target authorization, and any action-specific approval remain separate checks. |
 | Accepted-project task from a configured coordinator host | The existing coordinator API ceiling permits only `dev`, task mode, S/M sizes, and a declared project. | `dev` is the accepted-project executor profile for this narrowly configured route; it is not an automatic substitute for `workbench`. |
 | Summoned automation | `ops` is reserved for the restricted `dev-env-ops`/summoned-session route. | `ops` is not a manual escalation profile and is excluded from the ordinary grant-policy match. A trusted client or a workbench session may still name it for a child, as it may name any profile in the templates (OP502); it holds less than `workbench`. |
-| A remote Codex coordinator host | A workbench-session origin must omit `profile`, which selects the templates' default. A human or trusted client may explicitly select a valid profile. | A workbench-origin host does not inherit workbench capability. Every later native thread or turn has the host's already-selected resolved profile; it cannot choose a Kubernetes profile. Dispatch hardware/host work to an authorized workbench session instead of treating a coordinator host as workbench. |
+| A remote Codex coordinator host | A workbench-session origin must omit `profile`, which selects the templates' default. A human or trusted client may select a valid profile whose account is not `dev-env-workbench`. | The resolved default must also use an ordinary account. In the DESIGN-067 guarded build, all API creates of workbench-account Codex remote hosts refuse with `403 codex_workbench_host_git_only`. Every later native thread or turn has the host's already-selected resolved profile; it cannot choose a Kubernetes profile. Dispatch hardware/host work to an authorized workbench session instead of treating a coordinator host as workbench. |
 
 The `hw-ssh` key is mounted only for `workbench` sessions. General agent SSH certificates remain unfinished, and the keeper's Proxmox token minting is a separate path. Neither the image's binaries nor an existing host's profile replace those controls.
 
@@ -39,7 +39,7 @@ and the owner's direction are recorded in
 | --- | --- | --- |
 | Native Codex thread or turn on an existing host | Nowhere in the native thread/turn operation. The host's pod was already created with its resolved profile. | The dispatcher must select an already-authorized host and inspect its resolved profile and relevant existing capability metadata before starting the task. Native start cannot change that profile. |
 | `agent-run` CLI | `--profile` is the only structured profile input, sent in `CreateSessionRequest`. An omitted profile uses the deployed template default for a trusted client and for a workbench session's child, its Codex remote host included, and the parent's resolved profile for an ordinary session's child. | The CLI has no declared capability or role field and must not scan the prompt for words such as `ssh`, `Unraid`, or `hardware`. An ordinary session's child inherits its parent's profile, so it cannot self-upgrade. |
-| Managed session API | `CreateSessionRequest.profile`, validated against the deployed templates. | An ordinary session's child is pinned to its parent profile. A workbench session's child runs on the profile it names, or on the deployed template default when it names none. The explicit Codex-remote exception above is enforced by the API only for a workbench-session origin: it must omit the profile and then uses the deployed template default. |
+| Managed session API | `CreateSessionRequest.profile`, validated against the deployed templates. | An ordinary session's child is pinned to its parent profile. A workbench session's child runs on the profile it names, or on the deployed template default when it names none. The explicit Codex-remote exception above is enforced by the API only for a workbench-session origin: it must omit the profile; the resolved default must not use the workbench account. |
 | `agent-run mcp` toolbox | It does not select a profile or launch a session. | Its three tools only use existing grant routes; they do not approve or install grants. An external terminal wrapper has the same already-selected host/CLI profile rules and no inferred selector. |
 | Phone/browser UI | No v2 web UI currently selects a profile. Phone remote-control opens an existing session or host. | A future UI needs a reviewed structured role/capability contract before it can choose profiles. It must not claim enforcement merely by displaying this map. |
 
@@ -56,11 +56,28 @@ does not substitute its own profile policy.
 | A session that is not a workbench session tries to create a child with a profile other than its own | `403`: `a session's child runs on its parent's profile <parent>, not <asked>`. | Use the inherited profile, or have a separately authorized trusted client dispatch the intended profile. A child cannot elevate itself. |
 | A workbench session creates a child (not a Codex remote host) and names no profile | Created on the deployed template default, not `workbench`. | Name `--profile workbench` only when the work record explicitly needs a workbench child. Workbench automation that relied on inheritance must pass it. |
 | A workbench session creates a child (not a Codex remote host) and names a valid profile, `workbench` included | Created on that profile, subject to the later checks (an unknown profile is a `422`; a named coordinator profile keeps its own launch rule). | None needed. |
-| A workbench session creates a Codex remote host and sends any `profile` | `403`: `a codex host started by a workbench session runs on the default profile; omit the profile`. | Omit `--profile`; that creates the intentionally downscoped host on the deployed template default. Dispatch hardware/host work separately to an authorized workbench session. |
-| A client explicitly names a profile missing from the deployed templates | `422` profile validation; the profile lookup says it is not in the templates. | Choose a current deployed profile after inspecting its metadata. Do not add or guess a profile at launch time. |
+| A workbench session creates a Codex remote host and sends any `profile` | `403`: `a codex host started by a workbench session runs on the default profile; omit the profile`. | Omit `--profile`; the API also refuses if that default resolves to the workbench account. Dispatch hardware/host work separately to an authorized workbench session. |
+| A client explicitly names a profile missing from the deployed templates (other than a Codex remote host) | `422` profile validation; the profile lookup says it is not in the templates. | Choose a current deployed profile after inspecting its metadata. Do not add or guess a profile at launch time. |
 
-An eligible trusted client may still explicitly create a workbench session. That
-is the structured selection route; its success says only that the session used
+DESIGN-067 slice (a) is built, not installed. Its always-active account guard
+resolves defaults and aliases once, and refuses unreadable templates. The new
+`--codex-workbench-hosts` setting is empty by default; it accepts zero or one
+exact DNS name. Only that name, in the session namespace at depth `"0"`, with
+parent `flux-system/kustomize-controller` and the ordinary remote shape can
+qualify through a manifest. The name cannot be used by another account, agent
+or mode. No fresh HOME or agent pod is allocated on refusal. Existing running
+pods are preserved; the ordinary-account rescue hold remains possible.
+
+An operator with this build and an empty setting cannot resume the reported
+suspended legacy workbench Codex host. Installation, including the named host,
+is held for the confirmed packet in [DESIGN-067](../.agents/sagas/distributed-dev-env/designs/067-named-codex-workbench-coordinator.md).
+Its thread and pool fences and safe stop are later slices. Stop and preserve
+any privileged host before removing its name or rolling back; a flag change
+does not revoke a running pod.
+
+An eligible trusted client may still explicitly create a workbench Claude
+session or an admitted Codex task. A Codex remote host uses the guarded manifest
+route above. Successful creation says only that the session uses
 the selected template profile. It does not establish the availability of a key,
 an egress path, a target account, or an approval.
 

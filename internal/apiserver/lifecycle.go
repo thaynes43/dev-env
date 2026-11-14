@@ -38,6 +38,7 @@ func (s *Server) resumeSession(ctx context.Context, _ http.ResponseWriter, r *ht
 // mode, and 202 once the change is made. A session being reaped is a 409: a
 // reap is final.
 func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *caller, mode v1alpha1.OperatingMode) (int, any, error) {
+	ctx = withCodexHostAdmission(ctx)
 	key, err := s.sessionKey(r)
 	if err != nil {
 		return 0, nil, err
@@ -55,6 +56,11 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 		}
 		if err := s.authorizeChildMutation(ctx, &sess, c); err != nil {
 			return 0, nil, err
+		}
+		if mode == v1alpha1.OperatingModeRunning {
+			if err := s.admitCodexHost(ctx, &sess, nil, false); err != nil {
+				return 0, nil, err
+			}
 		}
 		if mode == v1alpha1.OperatingModeRunning && sess.Spec.Caller != "" {
 			// N3 (DESIGN-064 5.9, OP779): nobody resumes a summoned session, a

@@ -873,6 +873,11 @@ func summonNote(note string) string {
 // link runs to the next space, so neither its delimiter nor its target
 // survives, and no host match can take its word. The text between scheme
 // links then goes through summonRedactHosts.
+// NoticeRedact is the redaction a raise notice uses. It is the same
+// redaction a summon page uses, so a raise admitted against this length
+// is the raise the keeper sends.
+func NoticeRedact(note string) string { return summonRedact(note) }
+
 func summonRedact(note string) string {
 	var b strings.Builder
 	last, pos := 0, 0
