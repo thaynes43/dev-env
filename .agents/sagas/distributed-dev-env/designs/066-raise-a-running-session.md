@@ -856,8 +856,12 @@ The pending overwrite guard also runs on every attempt's live snapshot,
 including the first POST and a conflict retry. A stored record with this
 same id is never replayed as pending. The missing pending annotation may
 still have the previous raise's different-id annotation in its place;
-recovery of the new grant may replace it, using only the fresh authorized
-request and matching row for the new grant's fields.
+recovery may replace it only when its signature authenticates a strictly
+earlier performedAt. A different id alone does not establish order: an old
+row could otherwise reuse a retained Sent. The new grant's fields still
+come from the fresh authorized request and matching row. The take-back
+also preserves the verified grant; it never turns unsigned ledger grant
+metadata into a signed record that recovery could treat as evidence.
 
 **`DELETE /v1/sessions/{name}/raise`** takes a raise back:
 
@@ -1842,11 +1846,18 @@ sessions.**
   coordinator's account cannot read Secrets, so for the two key Secrets it
   reads the Flux Kustomization's inventory and the published public keys.
   The coordinator's ruling of 2026-11-14 on the fourth slice (a) review:
-  when the operator-ledger write rule alone is missing, a ledger-only writer
-  can take a raise away or strand it, and cannot make one count. The
-  activator preserves every authenticated grant field, refuses backward
-  transitions and requires the verified Sent and its delay for active
-  repair. With the record
+  when only the operator-ledger write rule is missing, a ledger writer
+  alone cannot make the operator sign a new or changed grant, and cannot
+  revive a signed taken-back or unannounced annotation. The activator
+  preserves authenticated grant fields, refuses backward transitions and
+  requires the verified Sent and delay for active repair. Request recovery
+  uses the fresh authorized grant and authenticated ordering against any
+  previous record. DELETE also preserves verified grant fields, so a
+  revocation cannot authenticate unsigned grant metadata as later recovery
+  evidence. The coordinator's answer to fix-worker Q2 on 2026-11-14 narrows
+  the earlier stronger claim: known limit 10 covers rollback of a take-back
+  before its terminal annotation commits. Rule 3 and its install check are
+  required before any flag. With the record
   rule and the ledger rule both missing, an account that can read the
   operator's key and write both objects could forge a record that counts:
   the admission rules are the fence, and the signature is the second line
@@ -1871,6 +1882,10 @@ does not read the templates ConfigMap for that, and does not send a
 profile raise. The coordinator's ruling of 2026-11-14 on the third slice
 (a) reviews: a session labelled depth 3 never gets a workbench or
 coordinator account at pod build, whatever the templates say then.
+The coordinator's ruling of 2026-11-14 on the fourth slice (a) review,
+answer Q2: consider a signed, durable record of a take-back, for example
+writing the signed taken-back annotation before the ledger when the key
+is readable, as a separate design step. This is not decided here.
 
 - **Builds.** The effective profile in `buildSessionPod`; the watchdog of
   7.5, running whatever the flags say; the raised-parent child case of 8.2;
@@ -2004,6 +2019,18 @@ coordinator's rulings of 2026-11-13).
 9. **A keeper that cannot load its key records no attempt.** Its pending
    raises stay pending until taken back, and its take-back notices wait.
    The coordinator's ruling of 2026-11-14 on the third slice (a) reviews.
+
+10. **Ledger rollback before the taken-back annotation commits.** A
+    take-back takes effect at its ledger write, and that row is not signed.
+    Until the taken-back annotation is written (normally at once; after a
+    failed write, by the retry or next activation pass), the stored
+    annotation is still the genuine active record. In that interval, and
+    only if the ledger write rule is missing, someone who can edit the
+    ledger ConfigMap could set the row back to active and the old record
+    would count again. The admission rule on the ledger closes it; section
+    11 rule 3 and its install check are required before any flag. This is
+    the coordinator's ruling of 2026-11-14 on the fourth slice (a) review,
+    answer Q2. No new revocation store is built in this round.
 
 ## 13. Open questions for the owner
 
@@ -2272,10 +2299,12 @@ off. ADR-028 and ADR-029 are not edited.
 | Finding | Ruling | Where |
 | --- | --- | --- |
 | R4-H1 / K1 | The ledger alone never raises. Activator signatures start from the verified annotation, preserve every grant field, and allow only the five transitions of section 6.4. Activation and active repair share the full Sent/delay check. The exemption requires an elapsed signed activeFrom. | Sections 6.4, 8.1 and 11; activator and route tests |
-| Native review of the round-4 delta, same K1 invariant | Same-body POST never promotes an active row or revives a terminal annotation. Only this id's missing pending annotation is recovered, from the fresh authorized request/live grant with persisted id/time checked. Every attempt checks its actual live snapshot, and recovery may replace an older different-id annotation. | Section 6.2; route, late-read/conflict and replacement-recovery regressions |
+| Native review of the round-4 delta, same K1 invariant | Same-body POST never promotes an active row or revives a terminal annotation. Only this id's missing pending annotation is recovered, from the fresh authorized request/live grant with persisted id/time checked. Every attempt checks its actual live snapshot, and recovery may replace a different-id annotation only with authenticated earlier time. DELETE preserves verified grant metadata too. | Section 6.2; route, late-read/conflict, historical replay, take-back metadata and replacement-recovery regressions |
 | R4-M1 / K2 | Write against the deciding live resourceVersion without a helper Get. After success re-read the row; a changed id/state re-decides within the same bounded pass. The two-object interval does not count. | Section 6.4; repair, activate and unannounce ledger-only take-back tests |
 | R4-M2 / K3 | Every POST/DELETE annotation attempt reads live session then ledger and stops if its id/state moved. An old retry never overwrites a newer raise. | Section 6.2; two-server POST and DELETE tests, with keeper announcement and activation of the newer raise |
 | R4-L1 / K4 | Audit at least once, and once per operator process, including ambiguous ledger writes repaired by request or pass. An already-counting same-body retry is silent. | Ruling 2; sections 6.1, 6.2 and 9; audit probes |
 | R4-L2 / L1 | The PR install checklist copies all requirements of section 11 and ADR-029, including app label, status, Binding Ignore, each private-key Secret and all three reader classes plus Secret update/delete subjects. | Section 11 and PR body; no install change |
 | R4-L2 / L2 | Correct every Q9 proof claim: placeholder title and fallback, one extra depth level under the unchanged cap, admission versus later pod construction, used-word expiry only, selection versus deciding reads, per-process audit, notice-ledger limits and exact-head CI evidence. The earlier comment's `&e` survivor bullet names the stale-decision-row mutant, not removal of the settled-row skip. | Sections 6.1 to 6.4, 8.1 and 11; corrected historical rows in this section; PR test table |
 | R4-L2 / L3 | Preserve the Accepted ADRs and add this fourth review table, its counts, finding, ruling and location. | Section 15.5 |
+
+| Q2, coordinator's answer of 2026-11-14 | Narrow the missing-rule claim: no new/changed signed grant and no revival of a signed terminal annotation. State unsigned ledger rollback before the take-back annotation commits as known limit 10. Rule 3 is mandatory before flags. A signed durable take-back is a separate slice (b) design input, not decided or built here. | Section 11; section 12 limit 10; `TestKnownLimit10LedgerRollbackBeforeTakenBackAnnotation`; PR body |

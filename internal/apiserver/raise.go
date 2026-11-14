@@ -235,7 +235,7 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 	// repair belongs to the activator's verified transition/evidence path.
 	// Only a missing pending annotation can be recovered from this fresh,
 	// authorized request, whose live grant fields must still match the row.
-	if same && !pendingRequestRepair(fresh, entry, in) {
+	if same && !pendingRequestRepair(fresh, entry, in, pub) {
 		s.logOnce(entry.ID, "request repair lacks authenticated grant", "raise request did not re-sign an unsigned state or changed grant")
 		return http.StatusOK, s.withUsageRollup(ctx, fresh, c, false), nil
 	}
@@ -284,7 +284,7 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 	if !same && writeLedger {
 		s.logRaiseState(raisedAudit(fresh.Name, entry.Profile), signed)
 	}
-	annotationWritten, err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw))
+	annotationWritten, err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw), pub)
 	if err != nil {
 		return 0, nil, raiseUnavailable("The raise was recorded but the session annotation could not be written. Send the same request again.")
 	}
@@ -394,17 +394,21 @@ func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http
 	if keyErr != nil {
 		s.Log.Info("The take-back stands. The session annotation could not be re-signed.", "session", fresh.Name, "error", keyErr.Error())
 	} else if !s.annotationTakenBack(fresh, priv.Public().(ed25519.PublicKey), &entry) {
-		rec := takenBackRecord(fresh, entry, priv.Public().(ed25519.PublicKey))
-		signed, err := sessionraise.Sign(rec, priv)
-		if err != nil {
-			annErr = err
-		} else if raw, err := signed.Encode(); err != nil {
-			annErr = err
+		rec, verified := takenBackRecord(fresh, entry, priv.Public().(ed25519.PublicKey))
+		if !verified {
+			s.logOnce(entry.ID, "take-back source does not verify", "take-back stands but no changed or unverified grant was re-signed")
 		} else {
-			annotationWritten, err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw))
-			annErr = err
-			if annotationWritten {
-				s.logRaiseState("took back a raise of "+fresh.Name, signed)
+			signed, err := sessionraise.Sign(rec, priv)
+			if err != nil {
+				annErr = err
+			} else if raw, err := signed.Encode(); err != nil {
+				annErr = err
+			} else {
+				annotationWritten, err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw), priv.Public().(ed25519.PublicKey))
+				annErr = err
+				if annotationWritten {
+					s.logRaiseState("took back a raise of "+fresh.Name, signed)
+				}
 			}
 		}
 	}
@@ -440,11 +444,11 @@ func recordFrom(entry sessionraise.SessionEntry, words string) sessionraise.Reco
 // pendingRequestRepair separates recovery of the first POST's missing
 // annotation from repair of a stored record. The authorized request and live
 // target supply the grant; only the persisted id/time survive a retry.
-func pendingRequestRepair(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, in sessionraise.AdmitInput) bool {
+func pendingRequestRepair(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, in sessionraise.AdmitInput, pub ed25519.PublicKey) bool {
 	if entry.State != sessionraise.StatePending || entry.NoticeSentAt != "" || entry.ActiveFrom != "" || entry.TakenBackBy != "" || entry.TakenBackAt != "" {
 		return false
 	}
-	if !pendingAnnotationMayBeWritten(sess, recordFrom(entry, "")) {
+	if !pendingAnnotationMayBeWritten(sess, recordFrom(entry, ""), pub) {
 		return false
 	}
 	if _, err := time.Parse(time.RFC3339, entry.PerformedAt); err != nil {
@@ -465,29 +469,34 @@ func pendingRequestRepair(sess *v1alpha1.AgentSession, entry sessionraise.Sessio
 // live snapshot, not just the earlier request read. The same id's signed
 // state is never replayed by POST. A different id can be the previous raise
 // left behind by the new POST's failed annotation write.
-func pendingAnnotationMayBeWritten(sess *v1alpha1.AgentSession, record sessionraise.Record) bool {
+func pendingAnnotationMayBeWritten(sess *v1alpha1.AgentSession, record sessionraise.Record, pub ed25519.PublicKey) bool {
 	if sess.Annotations[v1alpha1.AnnotationRaise] == "" {
 		return true
 	}
 	stored, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
-	// No field of an older record supplies authority: the newly authorized
-	// request supplies the pending grant. Even a take-back with missing
-	// words can be the previous record after a partial first POST.
-	return err == nil && stored.ID != record.ID
+	if err != nil || stored.ID == record.ID || stored.SessionUID != record.SessionUID || !sessionraise.Verify(stored, pub) {
+		return false
+	}
+	// Different ids alone do not establish order: an old row and its Sent
+	// can be replayed. Authenticate the previous time and require a newer
+	// grant. No old grant field supplies authority for the new request.
+	// Verify the signature directly: an earlier partial POST's take-back
+	// can legitimately have no words while retaining its signed time.
+	previous, previousErr := time.Parse(time.RFC3339, stored.PerformedAt)
+	next, nextErr := time.Parse(time.RFC3339, record.PerformedAt)
+	return previousErr == nil && nextErr == nil && next.After(previous)
 }
 
-func takenBackRecord(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, pub ed25519.PublicKey) sessionraise.Record {
-	words := ""
-	// Words are copied only from an annotation that verifies under the
-	// operator key, names this ledger row, and passes the words check.
-	if prev, ok := verifiedRaiseWords(sess, pub, entry.ID); ok && sessionraise.WordsHash(prev.Owner.Words) == entry.WordsHash {
-		words = prev.Owner.Words
+func takenBackRecord(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, pub ed25519.PublicKey) (sessionraise.Record, bool) {
+	prev, ok := verifiedRaiseWords(sess, pub, entry.ID)
+	if !ok || !raiseGrantMatches(prev, entry) {
+		return sessionraise.Record{}, false
 	}
-	entry.State = sessionraise.StateTakenBack
-	if entry.UID == "" {
-		entry.UID = string(sess.UID)
-	}
-	return recordFrom(entry, words)
+	// Revocation must not turn unsigned ledger fields into authenticated
+	// grant metadata that request recovery could later use as evidence.
+	prev.State = sessionraise.StateTakenBack
+	prev.TakenBackBy, prev.TakenBackAt = entry.TakenBackBy, entry.TakenBackAt
+	return prev, true
 }
 
 // verifiedRaiseWords is an annotation that parses as its own canonical
@@ -986,7 +995,7 @@ func (s *Server) liveUIDs(ctx context.Context) map[string]bool {
 
 var errRaiseAnnotationMoved = errors.New("raise annotation moved")
 
-func (s *Server) writeRaiseAnnotation(ctx context.Context, key types.NamespacedName, uid types.UID, raw string) (bool, error) {
+func (s *Server) writeRaiseAnnotation(ctx context.Context, key types.NamespacedName, uid types.UID, raw string, pub ed25519.PublicKey) (bool, error) {
 	cfg, ok := s.raiseConfig()
 	if !ok {
 		return false, sessionraise.ErrUnreadable
@@ -1017,7 +1026,7 @@ func (s *Server) writeRaiseAnnotation(ctx context.Context, key types.NamespacedN
 		if sess.Annotations[v1alpha1.AnnotationRaise] == raw {
 			return false, nil
 		}
-		if record.State == sessionraise.StatePending && (!raiseGrantMatches(record, *entry) || !pendingAnnotationMayBeWritten(&sess, record)) {
+		if record.State == sessionraise.StatePending && (!raiseGrantMatches(record, *entry) || !pendingAnnotationMayBeWritten(&sess, record, pub)) {
 			s.logOnce(record.ID, "request snapshot moved", "raise request did not overwrite a changed grant or stored raise")
 			return false, nil
 		}

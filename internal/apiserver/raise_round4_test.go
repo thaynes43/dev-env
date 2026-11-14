@@ -809,7 +809,7 @@ func (h round4SessionReadHook) Get(ctx context.Context, key types.NamespacedName
 }
 
 func TestPendingRequestChecksEveryAttemptSnapshot(t *testing.T) {
-	for _, point := range []string{"helper-read", "conflict-retry"} {
+	for _, point := range []string{"helper-read", "conflict-retry", "historical-helper-read", "historical-conflict-retry"} {
 		t.Run(point, func(t *testing.T) {
 			f := newFixture(t)
 			f.raiseReady(true)
@@ -832,6 +832,7 @@ func TestPendingRequestChecksEveryAttemptSnapshot(t *testing.T) {
 					return
 				} // Earlier target reads precede Admit.
 				fired = true
+				original := *led.Find(uid)
 				if w := replica.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusOK {
 					t.Fatalf("concurrent POST %d %s", w.Code, w.Body.String())
 				}
@@ -840,11 +841,19 @@ func TestPendingRequestChecksEveryAttemptSnapshot(t *testing.T) {
 					t.Fatalf("DELETE %d", w.Code)
 				}
 				terminal = f.session("target").Annotations[v1alpha1.AnnotationRaise]
+				if strings.HasPrefix(point, "historical-") {
+					f.now = f.now.Add(61 * time.Second)
+					w := replica.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, f.raiseReq(uid, "", "allow second raise", sessionraise.WherePhone, true))
+					if w.Code != http.StatusAccepted {
+						t.Fatalf("B POST %d %s", w.Code, w.Body.String())
+					}
+					terminal = f.session("target").Annotations[v1alpha1.AnnotationRaise]
+				}
 				// Only the unsigned ledger write fence is missing. Keep the genuine
 				// authenticated terminal annotation and the old verified Sent.
-				f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) { r.State = sessionraise.StatePending })
+				f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) { *r = original })
 			}
-			if point == "helper-read" {
+			if strings.HasSuffix(point, "helper-read") {
 				f.srv.Live = round4SessionReadHook{Reader: f.c, before: attack}
 			} else {
 				f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
@@ -861,11 +870,117 @@ func TestPendingRequestChecksEveryAttemptSnapshot(t *testing.T) {
 			f.srv.Client = f.c
 			f.srv.activateRaises(context.Background())
 			if !fired || f.session("target").Annotations[v1alpha1.AnnotationRaise] != terminal {
-				t.Fatal("pending request replayed over the terminal snapshot")
+				t.Fatal("pending request replayed over a terminal or newer snapshot")
 			}
 			if f.srv.depthExempt(context.Background(), &caller{kind: kindSession, depth: 3, session: f.session("target")}) {
 				t.Fatal("replayed old Sent granted an exemption")
 			}
 		})
+	}
+}
+
+func TestSameBodyRetryCannotReplayAHistoricalRaise(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	uid := string(target.UID)
+	a := f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, a); w.Code != http.StatusAccepted {
+		t.Fatalf("A POST %d", w.Code)
+	}
+	original := f.ledgerEntry(uid)
+	f.raiseSent(uid)
+	f.srv.activateRaises(context.Background())
+	if w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: uid}); w.Code != http.StatusOK {
+		t.Fatalf("A DELETE %d", w.Code)
+	}
+	f.now = f.now.Add(61 * time.Second)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, f.raiseReq(uid, "", "allow second raise", sessionraise.WherePhone, true)); w.Code != http.StatusAccepted {
+		t.Fatalf("B POST %d", w.Code)
+	}
+	newer := f.session("target").Annotations[v1alpha1.AnnotationRaise]
+	f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) { *r = original })
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, a); w.Code != http.StatusOK {
+		t.Fatalf("A replay %d %s", w.Code, w.Body.String())
+	}
+	f.srv.activateRaises(context.Background())
+	if f.session("target").Annotations[v1alpha1.AnnotationRaise] != newer {
+		t.Fatal("historical A replaced newer B and reused A's Sent")
+	}
+	if f.srv.depthExempt(context.Background(), &caller{kind: kindSession, depth: 3, session: f.session("target")}) {
+		t.Fatal("historical replay granted an exemption")
+	}
+}
+
+func TestTakeBackNeverAuthenticatesAnUnsignedGrantTime(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	uid := string(target.UID)
+	body := f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("POST %d", w.Code)
+	}
+	original := f.ledgerEntry(uid)
+	f.raiseSent(uid)
+	f.srv.activateRaises(context.Background())
+	before := f.session("target").Annotations[v1alpha1.AnnotationRaise]
+	f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) {
+		r.ID = "0123456789abcdef"
+		r.PerformedAt = f.now.Add(-time.Hour).Format(time.RFC3339)
+	})
+	if w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: uid}); w.Code != http.StatusOK {
+		t.Fatalf("DELETE %d", w.Code)
+	}
+	if f.session("target").Annotations[v1alpha1.AnnotationRaise] != before {
+		t.Fatal("take-back authenticated an unsigned ledger grant/time")
+	}
+	f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) { *r = original })
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusOK {
+		t.Fatalf("retry %d", w.Code)
+	}
+	f.srv.activateRaises(context.Background())
+	if f.srv.depthExempt(context.Background(), &caller{kind: kindSession, depth: 3, session: f.session("target")}) {
+		t.Fatal("forged take-back metadata enabled reuse of an old Sent")
+	}
+}
+
+// TestKnownLimit10LedgerRollbackBeforeTakenBackAnnotation documents known
+// limit 10, not the installed fence. Section 11 rule 3 (ledger admission)
+// closes it. The operator cannot distinguish a rollback of the only unsigned
+// revocation evidence before its protected terminal annotation is committed.
+func TestKnownLimit10LedgerRollbackBeforeTakenBackAnnotation(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	uid := string(target.UID)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true)); w.Code != http.StatusAccepted {
+		t.Fatalf("POST %d", w.Code)
+	}
+	f.raiseSent(uid)
+	f.srv.activateRaises(context.Background())
+	original := f.ledgerEntry(uid)
+	f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+		if _, ok := obj.(*v1alpha1.AgentSession); ok {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}}
+	if w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: uid}); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("partial DELETE %d", w.Code)
+	}
+	f.srv.Client = f.c
+	c := &caller{kind: kindSession, depth: 3, session: f.session("target")}
+	if f.srv.depthExempt(context.Background(), c) {
+		t.Fatal("committed take-back did not stop the active record")
+	}
+	// Simulate rule 3 missing: only the ledger is rolled back, while the
+	// stored annotation is still the genuine active signature.
+	f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) { *r = original })
+	if !f.srv.depthExempt(context.Background(), c) {
+		t.Fatal("known limit 10 fixture no longer demonstrates the documented missing-rule boundary")
 	}
 }
