@@ -833,7 +833,8 @@ caller's record, not from a read of the target.
   the signed pending annotation with a resourceVersion precondition and
   answers 202 with the session view. The log says "The raise was recorded."
   It does not promise that Tom is being told before an annotation counts.
-- The same raise already pending or active: 200. An already-counting
+- The same raise already pending or active: 200, except for the failed
+  pending recovery listed in section 6.7. An already-counting
   annotation is left alone and logs nothing. A missing pending annotation
   is repaired only when every grant field still matches the fresh
   authorized request and live target, and the original id matches its
@@ -1245,6 +1246,7 @@ Every refusal is one plain sentence.
 | The ledger cannot be read | 503 | "The operator cannot read its raise ledger, so it raises nothing now. Try again." |
 | A ledger list is full | 503 | "The operator's raise ledger is full. Raises resume as old entries expire on `<date>`." The words list only. A full sessions list says "The operator's raise ledger holds 512 sessions, so it records no new raise." and names no date. A raise that would pass the 768 KiB encoded budget says "This raise would make the operator's raise ledger too big. Take a raise back before recording another." The coordinator's ruling of 2026-11-13 on the slice (a) reviews. |
 | A session already has a pending or active raise that is not this same one | 409 | "Session `<name>` already has a raise that is `<state>`. Take it back first: agent-run raise `<name>` --take-back". The same raise is the same words, profile, `startSessions`, performer and where. |
+| The same raise has a pending row, its annotation is missing or names another id, and the fresh authorized request does not pass `pendingRequestRepair` | 409 | "Session `<name>` has a raise that was recorded but whose record could not be written, and this request does not match it. Take it back and raise again with a new word from Tom: agent-run raise `<name>` --take-back". Nothing is written and no word is spent. This is the coordinator's ruling of 2026-11-14 on the advisory review of round 4. |
 | An exempt child's profile runs as workbench or a named coordinator | 403 | "A raised session's child never runs as the workbench or a named coordinator; name another profile." |
 | The templates cannot be read for that child | 503 | "The templates cannot be read, so the operator cannot tell what profile the child runs as." |
 | The key Secret is not its seed | 503 | "This operator cannot read its raise key." An empty Secret stays the no-key sentence. |

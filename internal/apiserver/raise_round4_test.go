@@ -705,7 +705,11 @@ func TestMissingPendingAnnotationRepairMatchesTheAuthorizedRequest(t *testing.T)
 					r.PerformedAt = f.now.Add(-time.Minute).Format(time.RFC3339)
 				}
 			})
-			if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusOK {
+			status := http.StatusOK
+			if field != "unchanged" {
+				status = http.StatusConflict
+			}
+			if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != status {
 				t.Fatalf("retry %d %s", w.Code, w.Body.String())
 			}
 			raw := f.session("target").Annotations[v1alpha1.AnnotationRaise]
@@ -911,7 +915,7 @@ func TestSameBodyRetryCannotReplayAHistoricalRaise(t *testing.T) {
 	}
 	newer := f.session("target").Annotations[v1alpha1.AnnotationRaise]
 	f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) { *r = original })
-	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, a); w.Code != http.StatusOK {
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, a); w.Code != http.StatusConflict {
 		t.Fatalf("A replay %d %s", w.Code, w.Body.String())
 	}
 	f.srv.activateRaises(context.Background())
