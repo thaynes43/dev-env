@@ -1929,8 +1929,8 @@ None is a ruling by Tom.
   `status.summon.pages[]` (`escalation-held`, `escalation-reminder`). The
   terminal page is not stored on the Session: the keeper derives it from
   `status.summon.closed` (lane, state, source, reason) with one table,
-  `summonoutcome.TerminalPage`. A close whose row says digest pages nothing; the
-  daily digest is story 742b, not built yet.
+  `summonoutcome.TerminalPage`. A close whose row says digest pages nothing;
+  it goes into the daily digest (below).
 - **The table.** A report of `failed` pages `failed` and a report of
   `escalate` pages `escalated`, in every lane but remediation. A remediation
   never pages for itself: its filing will (story 768). Unreported, a quiet exit
@@ -1984,6 +1984,59 @@ None is a ruling by Tom.
   event that finds the window full is recorded `capped` and never paged. When the window has room again,
   the first page is `[dev-env] more-events: N more events were not paged`,
   which counts each capped event once. Ask pushes keep their own cap.
+- **The digest** (story 792, slice b of 742; coordinator rulings on item 742
+  comment 7457 and answer op792-q-1, none a ruling by Tom). Every close whose
+  row says digest gets one line in one quiet message, `[dev-env] digest`, at
+  priority -1 and at any hour: `<session> <lane> <state> <reason>`, with no
+  note text, each word in the shape a page shows it (else `unknown`). An
+  event the cap held back gets a line too, `<session> <lane> capped
+  <event>`, and stays counted in the `more-events` page. Only closes and
+  capped events at or after the pager's first run (`digest.since`, set by
+  the first tick of a keeper with the digest) are listed. The digest goes 24
+  hours after the last one, to the second, or early once 8 lines are
+  pending and at least an hour has passed since the last one, and never
+  while nothing is pending. Before the first digest the reference is the
+  pager's first run, so the first real digest after install can wait up to a
+  day (an hour with 8 lines); v1's went at once. It is outside the cap: it
+  takes no slot and a full hour of pages does not delay it. Its one link is the
+  console's sessions list. The message, footer included, is at most 950
+  characters of whole lines; when lines are left out, a footer says how many,
+  and they are in that same digest, never sent again. Once each: a line's
+  ledger entry (`<session UID>/digest`) and its pending line are written
+  together; the digest's reservation moves every pending line to
+  `digest.listed` and begins its record in one write before the send. A
+  refused, conflicting or unconfirmed reservation sends nothing, one saved
+  past its deadline is `failed`, an unknown result is `ambiguous`, and
+  nothing is retried, across restarts and between two keepers. Its record
+  holds the title, priority, time, state, line count and request id, never
+  the text. An entry the digest still needs is never pruned. At most 256
+  lines wait at once (`summon digest pending capacity reached`). A session
+  deleted before the next tick can miss its line. A capped event is in no
+  digest when it was recorded before the pager's first run, or when its
+  entry was pruned before a digest listed it.
+  *Correction, 2026-11-13: story 792 fix round 1, coordinator rulings in PR
+  1126 comment 6844882457; not a ruling by Tom.* The early digest has a floor
+  of one hour: 8 or more pending lines wait until an hour has passed since the
+  last digest (before the first, since the pager's first run), so 8 new lines
+  a minute mean at most one digest an hour; the 24-hour rule is unchanged,
+  and the 256-line pending bound and the 2048-entry dedupe bound still hold
+  while lines wait. When `digest.since` or
+  `digest.lastAt` is ahead of the keeper's clock, the pager logs one fixed
+  line a tick, `summon digest ledger time is ahead of the keeper's clock`,
+  with no name or value, and no digest goes until the clock has passed the
+  last one by the hour or the day. A close already in `digest.listed` is not
+  listed again, even when its ledger entry is gone.
+  *Correction, 2026-11-14: story 792 fix round 2, coordinator rulings; not a
+  ruling by Tom.* Recorded capped events take available pending slots first,
+  oldest first, then unseen outcomes; existing pending lines keep their
+  slots. When all 256 slots are occupied, or more capped events wait than
+  fit, the rest wait until after a digest drains the buffer. With a full
+  pending buffer, an unseen outcome alone starts no proof reads; a missing
+  pending entry can still be repaired, and page work and pruning for dedupe
+  capacity keep their rules. After the buffer drains, admission and bounded
+  pruning resume on the next tick. A whole message that fits in 950
+  characters goes without a footer; otherwise the largest prefix of whole
+  lines that fits with its footer goes.
 - **The text.** Fixed templates in keeper source. A page starts `[dev-env]`
   and the event; a drill starts `DRILL`. A session's note follows the label
   `session note:`. Every control or format character and every line or
