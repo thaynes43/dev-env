@@ -3535,7 +3535,7 @@ spec:
                       rule: self.state != 'Abandoned' || has(self.reason)
                     - message: a Filed filing has no reason
                       rule: self.state != 'Filed' || !has(self.reason)
-                    - message: a Pending filing requires a blocked reason
+                    - message: a Pending filing's reason is never not-filed
                       rule: self.state != 'Pending' || !has(self.reason) || self.reason
                         != 'not-filed'
                     - message: chargedAt is set once and never changes

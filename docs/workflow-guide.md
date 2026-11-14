@@ -1976,9 +1976,36 @@ mark counts for 15 minutes. It does not move the original charge time or
 extend its 65-minute hourly count. A successful Blocked patch starts the
 normal retry rate; a child found by label is recovered immediately.
 
+**Correction, 2026-11-14: story 801 fix round 2, coordinator rulings; not a
+ruling by Tom.** A recorded `create-refused` or `no-free-name` keeps one place
+in the remediation caller's queue for as long as it stays blocked, apart
+from at most one pass in every 15-minute window. This is the escalations
+pool's `limits.queuedUrgent` when a matching remote, escalation, urgent policy
+entry supplies the charge hash; without a match it counts in every queue.
+It blocks that caller's API creates and later filings in those queues.
+Filed ends the absent-child hold and ordinary child queue accounting takes
+over. Deleting the remediation, a renewal that finds `queue-full` and writes
+no mark, or story 802's Abandoned ends further renewal; the last mark still
+counts until its 15 minutes expire. Freeing this place sooner is for story
+802. The recording exception costs more writes, rather than a longer queue
+hold. An unknown create result (`ledger-unavailable`) also renews one mark
+and tries one create per pass. Neither case moves `at` or its hourly count.
+
+A recorded retry word with no matching charge becomes `ledger-unavailable`
+without another charge or create; transient read errors preserve a held word.
+A late foreign-name collision during a recorded retry can consume that
+attempt: the pass marks and rebinds, then its next mark meets the retry gate
+and stops. It keeps the recorded word and tries the rebound name in the next
+15-minute window. This round preserves that delay and the replay protocol;
+a safe bypass would also change stale-leader rebind checks.
+Five exhausted status conflicts are reported even without a create error.
+A webhook denial with status code 400 and no reason is final; timeout and
+500 create results are unknown and retried next pass.
+
 The caller entry's 64 KiB bound includes reserved bytes for the longest mutable
-filing timestamps. The shared encoder preserves this reserve for every writer,
-so a later fractional second alone cannot fill the entry. Pending charges stay
+filing timestamps, not for a longer rebound name. The shared encoder preserves
+this reserve for every writer, so a later fractional second alone cannot
+fill the entry. Pending charges stay
 as evidence after the hourly and queue windows; they still count in a queue
 only while their latest attempt is younger than 15 minutes. A retry must find
 a queue place before renewing its mark. Other charges and unknown fields also

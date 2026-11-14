@@ -232,7 +232,7 @@ type SummonFilingReason string
 // +kubebuilder:validation:XValidation:rule="has(self.uid) == (self.state == 'Filed')",message="a filing UID is present exactly when Filed"
 // +kubebuilder:validation:XValidation:rule="self.state != 'Abandoned' || has(self.reason)",message="an Abandoned filing requires a reason"
 // +kubebuilder:validation:XValidation:rule="self.state != 'Filed' || !has(self.reason)",message="a Filed filing has no reason"
-// +kubebuilder:validation:XValidation:rule="self.state != 'Pending' || !has(self.reason) || self.reason != 'not-filed'",message="a Pending filing requires a blocked reason"
+// +kubebuilder:validation:XValidation:rule="self.state != 'Pending' || !has(self.reason) || self.reason != 'not-filed'",message="a Pending filing's reason is never not-filed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.chargedAt) || (has(self.chargedAt) && self.chargedAt == oldSelf.chargedAt)",message="chargedAt is set once and never changes"
 // +kubebuilder:validation:XValidation:rule="self.state != 'Filed' || has(self.chargedAt)",message="a Filed escalation requires chargedAt"
 type SummonEscalationStatus struct {

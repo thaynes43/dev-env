@@ -2671,7 +2671,7 @@ func TestSummonFilingStatusRules(t *testing.T) {
 		{"pending-child-invalid", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "child-invalid" }, ""},
 		{"pending-create-refused", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "create-refused" }, ""},
 		{"pending-unknown-reason", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "unknown" }, "Unsupported value"},
-		{"pending-not-filed", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "not-filed" }, "a Pending filing requires a blocked reason"},
+		{"pending-not-filed", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "not-filed" }, "a Pending filing's reason is never not-filed"},
 		{"filed-reason", pending, func(st *v1alpha1.SummonStatus) { filed(st); st.Escalation.Reason = "entry-full" }, "a Filed filing has no reason"},
 		{"abandoned-no-page", pending, func(st *v1alpha1.SummonStatus) { abandoned(st); st.Pages = nil }, "pages hold escalation-abandoned exactly when the filing is Abandoned"},
 		{"page-not-abandoned", pending, func(st *v1alpha1.SummonStatus) {

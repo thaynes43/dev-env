@@ -35,6 +35,11 @@ const (
 	summonFilingTemplate = "An autonomous remediation could not finish and the platform filed this escalation. Tom will join this session. Report what the data block says in one message. Change nothing until Tom speaks."
 )
 
+var (
+	errFilingChargeMissing  = errors.New("the refused filing has no matching charge")
+	errFilingBlockExhausted = errors.New("recording the filing block exhausted five conflicts")
+)
+
 // SummonFilingClock measures the create's deadline independently of the
 // joined ledger clock. Tests advance it without sleeps.
 type SummonFilingClock interface {
@@ -138,6 +143,11 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 			return r.finishSummonFiling(ctx, s, child)
 		}
 		if held, err := r.filingRetryHeld(ctx, s); held || err != nil {
+			if errors.Is(err, errFilingChargeMissing) {
+				// Unlike a transient read failure, missing evidence cannot hold
+				// a retry window. Name it without authorizing another charge.
+				return errors.Join(err, r.recordSummonFilingBlock(ctx, s, summonoutcome.FilingLedgerUnavailable, s.ResourceVersion))
+			}
 			return err
 		}
 	}
@@ -270,7 +280,7 @@ func (r *Reconciler) filingRetryHeld(ctx context.Context, s *v1alpha1.AgentSessi
 	}
 	i := entry.Index(summonledger.FilingID(s.UID))
 	if i < 0 || entry.Charges[i].Hash != summonFilingHash(s) {
-		return false, errors.New("the refused filing has no matching charge")
+		return false, errFilingChargeMissing
 	}
 	return entry.Now(r.now()).Sub(entry.Charges[i].Attempt) < summonledger.AttemptHold, nil
 }
@@ -552,7 +562,7 @@ func (r *Reconciler) recordSummonFilingBlock(ctx context.Context, s *v1alpha1.Ag
 	}
 	// A refusal whose status could not be saved has no durable retry gate.
 	// Return every patch error; the caller joins the original refusal (L3).
-	return errors.Join(conflicts...)
+	return errors.Join(append([]error{errFilingBlockExhausted}, conflicts...)...)
 }
 
 func (r *Reconciler) blockSummonFilingOnce(ctx context.Context, s *v1alpha1.AgentSession, reason v1alpha1.SummonFilingReason) error {

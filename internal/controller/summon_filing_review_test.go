@@ -21,7 +21,7 @@ import (
 )
 
 func TestSummonFilingRefusalAttemptWindow(t *testing.T) {
-	for _, kind := range []string{"invalid", "forbidden", "no-free-name"} {
+	for _, kind := range []string{"invalid", "forbidden", "bad-request", "no-free-name"} {
 		t.Run(kind, func(t *testing.T) {
 			w := newFilingWorld(t)
 			reason := v1alpha1.SummonFilingReason("create-refused")
@@ -44,6 +44,10 @@ func TestSummonFilingRefusalAttemptWindow(t *testing.T) {
 					creates++
 					if recoverCreate {
 						return c.Create(ctx, o, opts...)
+					}
+					if kind == "bad-request" {
+						// Default admission denial: code alone, no StatusReason.
+						return &apierrors.StatusError{ErrStatus: metav1.Status{Code: 400}}
 					}
 					if kind == "forbidden" {
 						return apierrors.NewForbidden(schema.GroupResource{Resource: "agentsessions"}, o.GetName(), errors.New("admission webhook denied fixture"))
@@ -471,63 +475,87 @@ func TestSummonFilingHeldWindowRecoversChild(t *testing.T) {
 }
 
 func TestSummonFilingUnrecordedRefusalReplay(t *testing.T) {
-	w := newFilingWorld(t)
-	writes, creates := 0, 0
-	var conflicts []error
-	refusal := apierrors.NewInvalid(schema.GroupKind{Kind: "AgentSession"}, "fixture", field.ErrorList{field.Forbidden(field.NewPath("spec"), "fixture refusal")})
-	hooks := interceptor.Funcs{
-		Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {
-			if _, ok := o.(*corev1.ConfigMap); ok {
-				writes++
+	for _, kind := range []string{"create-refused", "exhausted-search"} {
+		t.Run(kind, func(t *testing.T) {
+			exhausted := kind == "exhausted-search"
+			w := newFilingWorld(t)
+			writes, creates := 0, 0
+			if exhausted {
+				for _, name := range summonledger.NameSequence(summonoutcome.EscalationName(w.get(filingRem))) {
+					w.add(&v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "dev-agents"}})
+				}
 			}
-			return c.Update(ctx, o, opts...)
-		},
-		Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
-			creates++
-			if creates == 1 {
-				return refusal
+			var conflicts []error
+			refusal := apierrors.NewInvalid(schema.GroupKind{Kind: "AgentSession"}, "fixture", field.ErrorList{field.Forbidden(field.NewPath("spec"), "fixture refusal")})
+			hooks := interceptor.Funcs{
+				Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {
+					if _, ok := o.(*corev1.ConfigMap); ok {
+						writes++
+					}
+					return c.Update(ctx, o, opts...)
+				},
+				Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+					creates++
+					if !exhausted && creates == 1 {
+						return refusal
+					}
+					return c.Create(ctx, o, opts...)
+				},
+				SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
+					s := o.(*v1alpha1.AgentSession)
+					if s.Status.Summon.Escalation.Reason == summonoutcome.FilingCreateRefused || s.Status.Summon.Escalation.Reason == summonoutcome.FilingNoFreeName {
+						err := apierrors.NewConflict(schema.GroupResource{Resource: "agentsessions"}, s.Name, errors.New("fixture conflict"))
+						conflicts = append(conflicts, err)
+						return err
+					}
+					return c.SubResource(sub).Patch(ctx, o, p, opts...)
+				},
 			}
-			return c.Create(ctx, o, opts...)
-		},
-		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
-			s := o.(*v1alpha1.AgentSession)
-			if s.Status.Summon.Escalation.Reason == summonoutcome.FilingCreateRefused {
-				err := apierrors.NewConflict(schema.GroupResource{Resource: "agentsessions"}, s.Name, errors.New("fixture conflict"))
-				conflicts = append(conflicts, err)
-				return err
+			w.r = filingLeader(w, hooks)
+			errs := w.r.summonFilings(context.Background(), []v1alpha1.AgentSession{*w.get(filingRem)})
+			if len(errs) != 1 {
+				t.Fatalf("exhausted recording was not reported: conflicts=%d errors=%v", len(conflicts), errs)
 			}
-			return c.SubResource(sub).Patch(ctx, o, p, opts...)
-		},
-	}
-	w.r = filingLeader(w, hooks)
-	err := w.r.summonFile(context.Background(), w.get(filingRem))
-	if len(conflicts) != 5 || !errors.Is(err, refusal) {
-		t.Fatalf("unrecorded refusal: conflicts=%d error=%v", len(conflicts), err)
-	}
-	for _, conflict := range conflicts {
-		if !errors.Is(err, conflict) {
-			t.Fatal("exhausted retry dropped a patch error")
-		}
-	}
-	if s := w.get(filingRem); s.Status.Summon.Escalation.Reason != "" || len(s.Status.Summon.Pages) != 0 {
-		t.Fatal("claimed an unrecorded refusal was durable")
-	}
-	// The accepted exception: a fresh leader can mark/create again before
-	// 15m, but it reuses the charge and later passes recover the same child.
-	w.now = summonT0.Add(time.Minute)
-	w.r = filingLeader(w, hooks)
-	if err := w.r.summonFile(context.Background(), w.get(filingRem)); err != nil {
-		t.Fatal(err)
-	}
-	assertOneFiling(t, w, summonT0)
-	w.now = summonT0.Add(2 * time.Minute)
-	w.r = filingLeader(w, hooks)
-	if errs := w.r.summonFilings(context.Background(), []v1alpha1.AgentSession{*w.get(filingRem)}); len(errs) != 0 {
-		t.Fatal(errs)
-	}
-	assertOneFiling(t, w, summonT0)
-	if writes != 3 || creates != 2 {
-		t.Fatalf("unrecorded refusal replay: writes=%d creates=%d", writes, creates)
+			err := errors.Join(errs...)
+			if len(conflicts) != 5 || !exhausted && !errors.Is(err, refusal) {
+				t.Fatalf("unrecorded refusal: conflicts=%d error=%v", len(conflicts), err)
+			}
+			for _, conflict := range conflicts {
+				if !errors.Is(err, conflict) {
+					t.Fatal("exhausted retry dropped a patch error")
+				}
+			}
+			if s := w.get(filingRem); s.Status.Summon.Escalation.Reason != "" || len(s.Status.Summon.Pages) != 0 {
+				t.Fatal("claimed an unrecorded refusal was durable")
+			}
+			// The accepted exception: a fresh leader can mark/create again before
+			// 15m, but it reuses the charge and later passes recover the same child.
+			if exhausted {
+				name := summonoutcome.EscalationName(w.get(filingRem))
+				if err := w.base.Delete(context.Background(), &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "dev-agents"}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			w.now = summonT0.Add(time.Minute)
+			w.r = filingLeader(w, hooks)
+			if err := w.r.summonFile(context.Background(), w.get(filingRem)); err != nil {
+				t.Fatal(err)
+			}
+			assertOneFiling(t, w, summonT0)
+			w.now = summonT0.Add(2 * time.Minute)
+			w.r = filingLeader(w, hooks)
+			if errs := w.r.summonFilings(context.Background(), []v1alpha1.AgentSession{*w.get(filingRem)}); len(errs) != 0 {
+				t.Fatal(errs)
+			}
+			assertOneFiling(t, w, summonT0)
+			wantCreates := 2
+			if exhausted {
+				wantCreates = 1
+			}
+			if writes != 3 || creates != wantCreates {
+				t.Fatalf("unrecorded refusal replay: writes=%d creates=%d", writes, creates)
+			}
+		})
 	}
 }
 
