@@ -3619,10 +3619,11 @@ stay; where this differs, it governs.
    A live or unpublished pending task still owns its independent uncertainty,
    even after launcher reuse. The ordinary `stopAgent` and `pidAlive` paths
    and round 4's start-history and shutdown work are unchanged.
-4. *What stays uncertain.* Unreadable or malformed stat data, a missing or
-   malformed recorded start time, and the same start time with a different
-   process group prove no reuse; stop still reports running and signals
-   nothing. A missing leader keeps the whole-group absence check, because
+4. *What stays uncertain.* Unreadable or malformed stat data, a record with
+   no start time, and the same start time with a different process group
+   prove no reuse; stop still reports running and signals nothing. A malformed
+   nonempty recorded start also cannot prove reuse; its other handling is
+   unchanged. A missing leader keeps the whole-group absence check, because
    descendants may outlive it. The PID-reuse limit described in rounds 2
    and 3, including the retained PID receipt and the leaderless historical
    group, no longer necessarily lasts to the pod's end: observing a new
