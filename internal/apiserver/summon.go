@@ -77,6 +77,10 @@ func summonCallerAllowed(c *caller, r *http.Request) error {
 	if name := r.PathValue("name"); name != "" && r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath(name) {
 		return nil
 	}
+	if name := r.PathValue("name"); name != "" && r.URL.Path == apiv1.SessionRaisePath(name) {
+		// The raise handler returns the section 6.7 sentence.
+		return nil
+	}
 	return summonRouteDenied()
 }
 

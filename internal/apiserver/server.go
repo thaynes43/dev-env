@@ -284,6 +284,16 @@ type Server struct {
 	// allowance route serves them. Nil, the default, ignores the heartbeat
 	// field and leaves the route as it was.
 	SessionAllowances *SessionAllowanceStore
+	// Raise is DESIGN-066. Nil leaves POST refused. With both flags off, POST
+	// is refused, a pending or active record is shown as ignored, and the
+	// depth exemption grants nothing. GET and DELETE still run.
+	Raise *RaiseConfig
+	// raiseIgnored remembers an ignored record's id and reason so the
+	// operator logs that pair once.
+	raiseIgnored sync.Map
+	// raiseLogged remembers a state-change line's record id and state so
+	// the operator logs that pair once, from whichever place first sees it.
+	raiseLogged sync.Map
 
 	// createMu serialises this replica's creates, so its idempotency,
 	// child-count, grant-merge and pending-grant checks see each other's writes.
@@ -372,6 +382,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.SessionsPath+"/{name}", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodGet:    s.getSession,
 		http.MethodDelete: s.reapSession,
+	}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/raise", s.serve(route{coordinator: false, methods: map[string]handler{
+		http.MethodGet:    s.getRaise,
+		http.MethodPost:   s.postRaise,
+		http.MethodDelete: s.deleteRaise,
 	}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/log", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodGet: s.sessionLog,
@@ -526,6 +541,8 @@ func (s *Server) serve(rt route) http.Handler {
 			if c.kind == kindPortalReader {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionsPath:
+				case r.PathValue("name") != "" && r.URL.Path == apiv1.SessionRaisePath(r.PathValue("name")):
+					// The raise handler returns the section 6.7 sentence.
 				case len(s.PortalMessageTargets) > 0 && r.Method == http.MethodPost && r.URL.Path == apiv1.PortalSessionMessagesPath:
 				case len(s.PortalLaunchRepos) > 0 && r.Method == http.MethodPost && r.URL.Path == apiv1.PortalLaunchPath:
 				case len(s.PortalConversationTargets) > 0 && r.Method == http.MethodGet && r.URL.Path == apiv1.PortalConversationPrefix+r.PathValue("uid")+"/conversation":

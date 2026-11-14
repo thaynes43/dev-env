@@ -37,6 +37,8 @@ Usage:
                                               show one session; --captured-usage adds direct-child receipts
   agent-run title <session> "<text>" | --clear
                                               record a new role title, or clear it
+  agent-run raise <session> --profile <name> | --start-sessions --words "..." --said-at <time>
+                                              raise a running session on Tom's words; --take-back undoes it
   agent-run usage -o json [--from-file FILE|-]  offline allowance read
   agent-run usage-export --manifest <path> --output-dir <private-dir> [--allowance-read <path>]
                                               export selected usage evidence privately
@@ -128,6 +130,12 @@ Exit codes:
 `
 
 var commandHelp = map[string]string{
+	"raise": `Usage: agent-run raise <session> --profile <name> --words "<Tom's words>" --said-at <time> [--ref <ref>]
+       agent-run raise <session> --start-sessions --words "<Tom's words>" --said-at <time> [--ref <ref>]
+       agent-run raise <session> --take-back
+
+A raise gives a running session a profile or the right to start sessions, on Tom's own words given to this agent. It takes effect two minutes after Tom's notice is accepted. This build does not restart the session. Take-back needs no words.
+`,
 	"title": `Usage: agent-run title <session> "<text>"
        agent-run title <session> --clear
 
