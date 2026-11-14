@@ -192,6 +192,13 @@ func TestSummonPagesPrunesOnProofOfDeletion(t *testing.T) {
 // that saves nothing reads nothing.
 func TestSummonPagesProofReadsBounded(t *testing.T) {
 	f := newSummonFix(t)
+	// The digest's watermark is two hours before the first tick, so that
+	// tick's early digest lists the nineteen capped events at once, as before
+	// story 792 fix round 1: its one-hour floor would otherwise hold their
+	// entries from pruning until the second tick's digest (coordinator answer
+	// op792-fix1-q-1, not a ruling by Tom).
+	writeSummonLedger(t, f, fmt.Sprintf(`{"version":1,"events":{},"window":[],"capped":0,"more":0,"digest":{"since":%d,"lastAt":0,"pending":[],"listed":{}},"overflow":{}}`,
+		f.clock.Now().Add(-2*time.Hour).Unix()), false)
 	var gone []*v1alpha1.AgentSession
 	for i := 1; i <= 25; i++ {
 		gone = append(gone, f.failedSession(fmt.Sprintf("wo-gone-%d", i), time.Duration(60-i)*time.Minute))
@@ -346,12 +353,13 @@ func TestSummonPagesLedgerRequiresEveryMember(t *testing.T) {
 		}
 	}
 	// The populated ledger itself is read, scanned and sent from: the summary
-	// of its two capped events, then the session's page.
+	// of its two capped events, then the session's page, then (story 792) the
+	// digest of its pending line, whose last digest was a year before.
 	f := newSummonFix(t)
 	f.add(f.failedSession("wo-upgrade-1", time.Minute))
 	set(f, summonPopulatedLedger)
 	f.tick()
-	if f.push.count() != 2 || f.lists != 1 {
+	if f.push.count() != 3 || f.lists != 1 {
 		t.Fatalf("the populated ledger was not read: sends %d lists %d logs %s", f.push.count(), f.lists, f.logs.String())
 	}
 	for _, c := range cases {
