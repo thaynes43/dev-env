@@ -885,6 +885,13 @@ that ends `escalated`, the pending filing `status.summon.escalation = {state:
 Pending, name}` (6.6), all at once. Lane release, the pool counts, the keeper's
 page or digest and the platform's filing all key on that one record.
 
+**2026-11-14 (story 798, coordinator's follow-up, not a ruling by Tom).**
+The CRD refuses changes to `status.summon.closed.at`, `source` and `reason`
+once the close record exists. Its first write and updates that keep those
+fields unchanged are accepted, including `released` moving from false to
+true. The existing rules still refuse removal of the close record and reversal
+of `released`.
+
 **When a reservation is released.**
 
 - A terminal outcome the session reported itself, through the report route
@@ -1277,6 +1284,89 @@ differs from fix round 2's correction, this governs.
    other error, another path error included (the runner also waits for the
    client and copies its output), may have started the provider, so it is
    `ambiguous`.
+
+**Correction, 2026-11-13: story 794, coordinator rulings on item 745 comments
+7680 and 7685; not a ruling by Tom.** The text above stays; where it
+differs, this governs.
+
+- *A new record.* `status.summon.registration` (6.10's correction of this
+  date) is the operator leader's record of a remote escalation's Remote
+  Control registration: `agentSeenAt`, `result`, `reason` and `at`, each set
+  once, the record never removed, and the result written with the
+  `escalation-started` page event in one status write. *Since story 794 fix
+  round 1 (coordinator rulings in PR 1132 comment 6856616130 and item 745
+  comment 7855; not a ruling by Tom):* `pages[]` holds at most one
+  `escalation-started`, which the CRD enforces, and a session whose `pages[]`
+  already holds it counts as settled. It holds nothing (no lane, no slot) and
+  counts in no pool or queue. Only an admitted, open
+  remote escalation gets one; a Queued session, a task, an upgrade and a
+  closed session never do. The observation it settles from is the pod's own
+  claim, copied by the heartbeat, not an attestation by the provider.
+- *"Stays joinable", made exact* (the slice plan's 1.3, item 9; ruling O5).
+  "A terminal remote session ... whose pod still runs stays joinable until
+  its idle suspend" (No resume, above) holds only for a close the session
+  reported. An operator close of an admitted remote session suspends it at
+  once (`suspendClosedSummon`, ruling D3), so its pod goes and it cannot be
+  joined after that close. The timers are not changed.
+
+**Correction, 2026-11-13: story 800, coordinator rulings on item 768 comment
+7702; not a ruling by Tom.** Story 800 is slice a of #768. The text above
+stays; where it differs, this governs.
+
+1. *Where the shared pieces live.* `internal/apiserver` imports
+   `internal/controller`, so the operator leader cannot call the API's
+   create path. The pure pieces both need now live in leaf packages that
+   import neither. `internal/summonledger` holds the request hash
+   (`RequestHash`), the name sequence (`NameSequence`: the name, then `-2`
+   to `-99`, `MaxSuffix`), the queues (`Queue`, `QueueOf`, `AllQueues`),
+   which queues a charge counts in (`ChargeQueues`), whether a grant admits
+   a session (`Granted`), the count of one queue (`QueueCount`), the
+   filing's id (`FilingID`, `filing:<UID>`) and the prune's keep rule
+   (`Keep`, item 2; fix round 1, PR 1133 comment 6856570556). `QueueCount`
+   takes the caller's name as its own argument and never dereferences the
+   policy: with no policy, a policy that is gone, each charge counts in
+   every queue, as `ChargeQueues` already does, and sessions count by their
+   own priority and lane. A new package `internal/summonbrief` holds the
+   brief of 5.6: the platform line (`PlatformLine`), the renderer (`Render`)
+   and the sanitizer (`Sanitize`). The API calls them. The queue bounds and
+   their default, the refusals, the ledger's compare-and-set and the create
+   stay in the API. What a caller's create checks, charges, counts and
+   answers is unchanged: the existing suites pass, and the golden brief
+   renders byte for byte from both packages.
+2. *A Pending filing keeps its charge.* Item 4 above says a filing's entry
+   stays until it is an hour old and its child is admitted or closed, or the
+   filing is `Abandoned`. The prune kept an old charge only while an
+   existing Session that is neither admitted nor closed carries its id. A
+   blocked filing has no child, so the caller's next ledger write would have
+   dropped the charge, and the child would later close `not-charged`. As
+   built: before each ledger write the API lists the sessions uncached, as
+   before, and keeps from pruning the id `filing:<UID>` of every listed
+   Session whose `status.summon.escalation.state` is `Pending`, `<UID>`
+   being that Session's own UID. These ids join the ids of unsettled
+   Sessions in one set, and only the prune reads that set. One function,
+   `summonledger.Keep`, builds the set from the listed Sessions: every
+   ledger write of the API prunes by it, and the operator leader's filing
+   write (#801) is to prune by it too, so the two keep one rule. Once the
+   record is no longer `Pending`, or the remediation's Session is gone, the
+   existing rule decides: the child carries the same id and keeps the charge
+   while it is neither admitted nor closed. A Session being deleted is still
+   listed, so its Pending filing keeps the charge until the Session is gone.
+   While the record is `Pending` the charge stays even if its child is
+   already admitted, which is longer than item 4 says.
+3. *What a kept charge changes.* Nothing a caller's create counts or
+   answers, with one limit. The rule keeps only a charge outside its window
+   (the window keeps the rest), so it does not count toward
+   `createsPerHour`. Its attempt mark is past the 15 minute hold (the hold
+   keeps the rest), so it is in no queue count. No caller's create can draw
+   its id: a caller's ids are 32 hex characters. The leader admits a
+   Session only by the charge of that Session's own id. The limit: each
+   kept charge adds up to about 280 bytes to the caller's entry, which is
+   bounded at 64 KiB (`MaxEntry`; past it a write is refused with 503), so
+   about 230 charges of the largest size fit before the entry's other data
+   (shorter names fit more; the byte limit is what is enforced, not a
+   count). Nothing charges a filing before #768's slice b, so this
+   changes nothing today. How many filings can be charged and still Pending
+   at once is for slices b and c to bound.
 
 ## 6. Contracts per build story
 
@@ -2404,6 +2494,126 @@ from the corrections above, this governs. As built:
   `a_b.example`, the 200-character cut after redaction and a host at the cut
   keep their rules.
 
+**Correction, 2026-11-13: story 792, coordinator rulings on item 742 comment
+7457; not a ruling by Tom.** Story 792 (slice b of #742) builds the digest
+described under "The digest" below, in the keeper's pager tick
+(`internal/keeper/summon_digest.go`), with the pager's own client, ledger and
+Pushover sender: no new client, lock, transport, goroutine or flag. It also
+folds in the coordinator's answer op792-q-1 (also not Tom's). Where this
+differs from the text below and the corrections above, this governs. As
+built:
+
+- *What is listed.* A close whose terminal row is the digest gets one line,
+  `<session> <lane> <state> <reason>`, with no note text (Q6). Each word is
+  shown only in the shape a page shows it: the stored session name or
+  `unknown`, and each operator word only when it is at most 64 lower-case
+  letters, digits and hyphens, else `unknown`. An event the hourly cap left
+  out gets a line too (Q5): `<session> <lane> capped <event>`, told apart by
+  the state word `capped`, which no outcome state uses; a capped drill reads
+  `<id> drill capped drill`. The capped event stays `capped` in the dedupe
+  and is still counted in the `more-events` page.
+- *The watermark (Q6).* `digest.since` is set at the first tick of a keeper
+  that has the digest, which loads the ledger with the Pushover credentials
+  present; story 782's keeper writes it 0. A close is in a digest when its
+  close time is at or after that second; so is a capped event recorded at or
+  after it. Earlier closes and capped events are in no digest.
+- *When it goes.* 24 hours after the last digest, to the second, or early
+  once 8 lines are pending; never while nothing is pending; at any hour (Q7).
+  Before the first digest the reference is the watermark (op792-q-1): the
+  first digest goes 24 hours after the pager's first run, or early at 8. This
+  differs from v1 (`ops-digest.sh`, whose first digest goes at once) only
+  inside the first 24 hours after the pager's first run, so the first real
+  digest after install can wait up to a day. The digest is outside the hourly
+  cap (Q5): it takes no slot of the window and a full window does not delay
+  it.
+- *The message.* Title `[dev-env] digest`, priority -1, a fixed head, the
+  lines in the order they were pended, and the one link, the console's
+  sessions list. The message, footer included, is at most 950 characters and
+  shows only whole lines. When the lines do not all fit, a footer says how
+  many were left out; a line left out is in that same attempt, listed and
+  never sent again, and only the footer's number names it. v1 cuts at 950 in
+  the middle of a line and adds its footer after the cut.
+- *Once, across restarts.* A line's dedupe entry, `<session UID>/digest`
+  (state `recorded`), and its pending line are written together, so a close is
+  pended once. The digest's reservation moves every pending line to
+  `digest.listed` with the attempt's time, sets `digest.lastAt` and begins the
+  digest's record, in one write before the send. A refused, conflicting or
+  unconfirmed reservation sends nothing; a reservation that commits but
+  answers an error, or a keeper stopped after it, sends nothing and the
+  attempt stays `recorded`; a reservation saved after its dispatch deadline
+  is `failed`, as a page's is; an unknown result is `ambiguous`; nothing is
+  retried. Two keepers racing for one reservation send once. Each outcome
+  entry then takes its digest's state.
+- *Content-free (Q9).* The digest's record holds the fixed title, priority
+  -1, its time, its state, its line count and how many were left out, and the
+  Pushover request id once sent; never the text or a link. Once sent, what
+  stays of its lines is their keys in `digest.listed`.
+- *Pruning.* An entry still goes only on proof (story 782's rule), and never
+  while the digest needs it: a pending line's entry, and a capped event's not
+  yet listed, stay whatever the proof says, and cost no proof read. A listed
+  key whose entry was pruned is dropped at the next digest's reservation. A
+  pending line whose entry a keeper without the digest pruned gets it back,
+  and the store never saves an empty dedupe beside page or digest records,
+  which load refuses as a reset.
+- *Bounds.* At most 256 lines wait at once; more wait for the next tick, and
+  the keeper logs `summon digest pending capacity reached`, at most once a
+  tick. A line needs a dedupe entry: a full dedupe logs `summon page dedupe
+  capacity reached` and the line waits.
+- *Stated limits.* As Q10 says, a session deleted before the keeper's next
+  tick can miss its line. A capped event is in no digest when it was recorded
+  before the watermark, or when its entry was pruned before a digest listed
+  it. The digest proves attempts, not delivery; 742's acceptance asks Tom
+  once whether the first real digest arrived.
+
+**Correction, 2026-11-13: story 792 fix round 1, coordinator rulings in PR
+1126 comment 6844882457; not a ruling by Tom.** Where this differs from the
+correction above, this governs. As built:
+
+- *The early digest has a floor of one hour.* Eight or more pending lines
+  send a digest only when at least one hour has passed since the last digest
+  (`digest.lastAt`), or, before the first digest, since the watermark
+  (`digest.since`), to the second. Eight new lines a minute therefore mean at
+  most one digest an hour, not one a minute. The 24-hour rule is unchanged.
+  While the floor makes lines wait, their entries are held from pruning for
+  up to an hour longer; the 256-line pending bound and the 2048-entry dedupe
+  bound still hold, each with its one log line a tick.
+- *A clock behind the ledger is said.* When `digest.since` or
+  `digest.lastAt` is ahead of the keeper's clock, the pager logs one fixed
+  line a tick, `summon digest ledger time is ahead of the keeper's clock`,
+  with no name and no value. Nothing from before the watermark is listed,
+  and both rules count from `digest.lastAt` (before the first digest,
+  `digest.since`), so no digest goes until the clock has passed that time by
+  the hour or the day; nothing is sent twice. A reservation whose second is
+  not after `digest.lastAt` takes the next second as its record key, so two
+  attempts never share one.
+- *`digest.listed` is a guard too.* A close whose key is already in
+  `digest.listed` is not pended again, even when its dedupe entry is gone.
+
+**Correction, 2026-11-14: story 792 fix round 2, coordinator rulings; not a
+ruling by Tom.** These address F1, F2 and F3 in PR 1126 comment 6871037091.
+The earlier corrections stay in force except where this changes them:
+
+- *Admission order (F1).* Eligible recorded capped events not yet pending or
+  listed take the available pending slots first, oldest entry time first
+  (key order breaks ties), then unseen outcomes, oldest close first. This
+  includes events capped by the page work earlier in the same tick. Existing
+  pending lines keep their slots and order. If those lines already fill the
+  256 slots, or more capped events are waiting than fit, the remaining capped
+  events stay held for the next admission after a digest drains the buffer.
+  New outcomes wait behind them; they also wait when the 2048-entry dedupe
+  has no room. No capacity bound changes.
+- *Proof-read gate (F2).* An unseen digest outcome starts proof pruning only
+  when the pending buffer has room to admit work. A missing pending line's
+  dedupe entry can still start pruning for its repair, even with all 256
+  pending slots occupied. Fresh page work and pruning to make dedupe room
+  keep story 782's rules and the 20-read ceiling. A full pending buffer with
+  no repair or fresh page work spends no proof reads, including the tick
+  that drains it; admission and bounded pruning resume on the next tick.
+- *Whole message first (F3).* When the entire message fits in 950 characters,
+  it is sent whole with no footer. Otherwise the largest prefix of whole
+  lines that fits with its footer is sent. The record counts only the lines
+  actually omitted; their reservation and at-most-once rules are unchanged.
+
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row
 says: one terminal event or the digest. The reason is the one 6.6's close
@@ -2765,6 +2975,119 @@ of the correction above.
 - Retention follows Q-12. A drill page starts `DRILL`.
 - Not verified: whether the keeper's phone-list archive treats summoned
   remote sessions like others.
+
+**Correction, 2026-11-13: story 794, coordinator rulings on item 745 comments
+7680 and 7685; not a ruling by Tom.** Comment 7685 amends ruling O3 of comment
+7680; where they differ, 7685 governs. The text above stays; where it
+differs, this governs.
+
+1. *Who settles (O1).* The operator leader, in its watch pass (`summonWatch`,
+   every 60 seconds, after the reminder step), on its own clock, with no
+   timer of its own. The caller does not wait and the keeper does not decide.
+   It reads only a session with `spec.caller`, mode `remote`, lane
+   `escalation`, `status.summon.admittedAt`, no terminal outcome, no
+   `status.summon.closed` and no settled result. Lane `upgrade` records
+   nothing: it is quiet on success. A task, an ordinary session and a Queued
+   session are never read. A session the same pass closes gets nothing: its
+   terminal page speaks.
+2. *Where (O2).* `status.summon.registration`: `agentSeenAt`, `result`
+   (`registered` or `unavailable`), `reason` and `at`. Each field is set once
+   and never changes or goes, and the record is never removed. `result` and
+   `at` are written together, `reason` exactly when the result is
+   `unavailable`, and `{escalation-started, at}` is appended to
+   `status.summon.pages[]` in the same status write, under the optimistic
+   lock. The CRD refuses a result without the event and the event without a
+   result. A conflict or a not-found waits for the next pass, which decides
+   again from the stored record. With `pages[]` at its 8 entries the leader
+   logs and writes neither the event nor the result.
+
+   *The write is checked, and one event* (story 794 fix round 1,
+   coordinator rulings in PR 1132 comment 6856616130 and item 745 comment
+   7855; not a ruling by Tom). The leader decodes the patch's answer into a
+   separate object, as `summonoutcome.Write` does, and requires what the API
+   server stored to carry what was written: `agentSeenAt` for the agent-seen
+   write; `result`, `at` and exactly one `escalation-started` for a
+   settlement. If it does not, because the cluster's CRD copy is older than
+   this story and prunes the field, the write succeeds and stores nothing;
+   the step then returns an error that says to install the current
+   AgentSession CRD before the operator, logs nothing as recorded, and keeps
+   no change on the object in memory. A session whose `pages[]` already
+   holds `escalation-started` counts as settled and is not read again, so a
+   copy that kept the event but pruned the record cannot repeat it. The CRD
+   holds `pages[]` to at most one `escalation-started`.
+3. *The rules (O3 as amended),* in this order, by one pure function,
+   `summonoutcome.Registration`, from the session's name,
+   `status.remoteControl`, `status.agent`, `status.summon` and the leader's
+   clock:
+   1. **A fresh heartbeat or nothing.** No `status.agent.lastHeartbeat`, one
+      more than 3 minutes old, or one stamped more than 30 seconds after the
+      leader's clock settles nothing. The stamp is the API replica's clock,
+      not the leader's; the 30 seconds are story 794 fix round 1's
+      (coordinator rulings in PR 1132 comment 6856616130 and item 745 comment
+      7855; not a ruling by Tom). A pod that does not report is the
+      watchdog's `never-started` and `heartbeat-lost` rows' business.
+   2. **Registered:** Remote Control state `registered`, `url` matching the
+      shared pattern (item 5), and `name` equal to the session's name,
+      whether or not the agent was seen first.
+   3. **Agent seen:** the first pass that reads the agent's word `busy`,
+      `idle` or `waiting` records the leader's clock, to the second, as
+      `agentSeenAt`. No other word counts. A session that settles before that
+      keeps it unset: it is never invented.
+   4. **Unavailable, 5 minutes after `agentSeenAt`** without registering.
+   5. **Unavailable, 10 minutes after `admittedAt`** when the agent was never
+      seen. This is wider than comment 7680, which named only a reported
+      `login-required`: a pod that reports while its agent stays `pending`
+      would otherwise be silent until the 72-hour bound.
+   6. Otherwise nothing yet.
+
+   *A reading from the bound or later* (story 794 fix round 1, coordinator
+   rulings in PR 1132 comment 6856616130 and item 745 comment 7855; not a
+   ruling by Tom). For rules 4 and 5, the leader's clock and the heartbeat
+   it reads must both be at or after the bound: `agentSeenAt` plus 5
+   minutes, or `admittedAt` plus 10 minutes when the agent was never seen.
+   A reading taken before the bound settles nothing, however fresh; a pod
+   that keeps reporting settles within one heartbeat after the bound.
+   Comment 7685 let an `unavailable` settlement rest on any heartbeat up to
+   3 minutes old, so a session could be told to Tom as having no link from a
+   reading taken before its bound, after as little as about 2 minutes.
+   `registered` (rule 2) still reads any heartbeat rule 1 lets through.
+
+   So one `offline` reading, a pending login or a slow start never settles
+   early; the two bounds are the only way to `unavailable`. A settled session
+   is never written again: a registration after `unavailable` and a link that
+   goes after `registered` change nothing. This replaces "`login-required`,
+   or `starting` (or absent) for 120 seconds after the agent started ..., or
+   `offline` before it registered" above. The Session has no durable agent
+   start time, a heartbeat of `busy` can come before any provider process
+   (the comment in `summonWatchdogInputs`, agent 2.105.0), one `offline`
+   reading shows on a healthy start, and on the ops
+   profile `login-required` is also the state while the keeper's projection
+   is pending or refreshing (the slice plan's 1.3, items 2, 3 and 4).
+4. *The reason word* of an `unavailable` settlement is read at that pass,
+   from a closed set: `starting`, `offline` and `login-required` (the Remote
+   Control state as reported); `link-unverified` (state `registered` under
+   the session's name, but the URL does not match the pattern);
+   `name-mismatch` (state `registered` under another name); `not-reported`
+   (no `status.remoteControl`, or a state word outside those four). No other
+   text from the status is copied, and no log line carries the URL.
+5. *The shared pattern (O13).* `summonoutcome.RemoteControlLinkPattern`,
+   `^https://claude\.ai/code/session_[A-Za-z0-9_-]{1,120}$`, the one agentd
+   and the keeper use today. This replaces "a URL matching
+   `https://claude.ai/code/<id>`" above. In story 794 only the operator's
+   settlement reads it; agentd and the keeper move to it in stories 795 and
+   796.
+6. *What the record is.* The observation is the pod's own claim: agentd's
+   reading of the CLI's record for its live process, copied by the heartbeat
+   route into `status.remoteControl` and `status.agent`. It is not an
+   attestation by the provider, as the text above says.
+7. *Nothing sends it yet.* The keeper skips an event with no template row;
+   story 796 adds the page for `escalation-started`, chosen by the recorded
+   settlement.
+8. *Joinable after a close only if the session reported it* (the slice
+   plan's 1.3, item 9; ruling O5). An operator close of an admitted remote
+   session suspends it at once (ruling D3), so its pod goes and it cannot be
+   joined. After a close the session reported, its pod stays until the idle
+   suspend. 5.9's correction of this date says the same.
 
 ### 6.11 OP746: move curation
 

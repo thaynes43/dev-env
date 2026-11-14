@@ -3439,6 +3439,12 @@ spec:
                     - source
                     type: object
                     x-kubernetes-validations:
+                    - message: the close time never changes
+                      rule: self.at == oldSelf.at
+                    - message: the close source never changes
+                      rule: self.source == oldSelf.source
+                    - message: the close reason never changes
+                      rule: self.reason == oldSelf.reason
                     - message: released is never reversed
                       rule: '!has(oldSelf.released) || !oldSelf.released || (has(self.released)
                         && self.released)'
@@ -3531,13 +3537,15 @@ spec:
                         event:
                           description: |-
                             SummonPageEvent is a lifecycle page event of DESIGN-064 6.8 recorded on a
-                            session. This slice writes the two lifecycle events it decides; story 742
-                            adds the rest of 6.8's lifecycle events. A terminal event is never a page
-                            event here: the keeper derives it from the close record (ruling Q1 on item
-                            742, built in PR 1102).
+                            session. Story 779 writes escalation-held and escalation-reminder; story
+                            794 writes escalation-started, only with status.summon.registration's
+                            result (6.10); story 742 adds the rest of 6.8's lifecycle events. A
+                            terminal event is never a page event here: the keeper derives it from the
+                            close record (ruling Q1 on item 742, built in PR 1102).
                           enum:
                           - escalation-held
                           - escalation-reminder
+                          - escalation-started
                           maxLength: 32
                           type: string
                       required:
@@ -3547,6 +3555,62 @@ spec:
                     maxItems: 8
                     type: array
                     x-kubernetes-list-type: atomic
+                  registration:
+                    description: |-
+                      Registration is a remote escalation's settled Remote Control
+                      registration (DESIGN-064 6.10; story 794, coordinator rulings O1, O2,
+                      O3 and O13 on item 745 comments 7680 and 7685, not rulings by Tom).
+                      The operator leader writes it, and appends escalation-started to
+                      pages in the same write as its result; pages hold at most one
+                      escalation-started (story 794 fix round 1, ruling 4). Each field is set
+                      once; the record is never removed.
+                    properties:
+                      agentSeenAt:
+                        description: AgentSeenAt is when the leader first saw the
+                          agent started.
+                        format: date-time
+                        type: string
+                      at:
+                        description: At is when the leader settled the registration.
+                        format: date-time
+                        type: string
+                      reason:
+                        description: Reason is set exactly when Result is unavailable.
+                        enum:
+                        - starting
+                        - offline
+                        - login-required
+                        - link-unverified
+                        - name-mismatch
+                        - not-reported
+                        maxLength: 32
+                        type: string
+                      result:
+                        description: Result is the settlement.
+                        enum:
+                        - registered
+                        - unavailable
+                        maxLength: 16
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: agentSeenAt is set once and never changes
+                      rule: '!has(oldSelf.agentSeenAt) || (has(self.agentSeenAt) &&
+                        self.agentSeenAt == oldSelf.agentSeenAt)'
+                    - message: the registration result is set once and never changes
+                      rule: '!has(oldSelf.result) || (has(self.result) && self.result
+                        == oldSelf.result)'
+                    - message: the registration reason is set once and never changes
+                      rule: '!has(oldSelf.reason) || (has(self.reason) && self.reason
+                        == oldSelf.reason)'
+                    - message: the registration time is set once and never changes
+                      rule: '!has(oldSelf.at) || (has(self.at) && self.at == oldSelf.at)'
+                    - message: the registration result and its time are set together
+                      rule: has(self.result) == has(self.at)
+                    - message: a registration reason is set exactly when the result
+                        is unavailable
+                      rule: has(self.reason) == (has(self.result) && self.result ==
+                        'unavailable')
                 type: object
                 x-kubernetes-validations:
                 - message: admittedAt is set once and never changes
@@ -3559,6 +3623,15 @@ spec:
                     p in self.pages))'
                 - message: the executor latch cannot be removed
                   rule: '!has(oldSelf.executor) || has(self.executor)'
+                - message: the registration record cannot be removed
+                  rule: '!has(oldSelf.registration) || has(self.registration)'
+                - message: pages hold escalation-started exactly when the registration
+                    has a result
+                  rule: (has(self.registration) && has(self.registration.result))
+                    == (has(self.pages) && self.pages.exists(p, p.event == 'escalation-started'))
+                - message: pages hold at most one escalation-started
+                  rule: '!has(self.pages) || self.pages.filter(p, p.event == ''escalation-started'').size()
+                    <= 1'
               suspendedAt:
                 description: |-
                   SuspendedAt is when the operator first saw the session suspended with

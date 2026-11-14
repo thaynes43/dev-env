@@ -139,7 +139,8 @@ internal/delegatedresult/  pure delegated-result codec: strict bounded request a
 internal/sessiondirectory/  the SessionDirectory store: bounded original session metadata and CAS witnesses
 internal/sessionraise/  DESIGN-066 slice (a): the raise record, its signature, the operator ledger, the notice text and the two key pairs. A record counts only in Counts. Off by default and not installed
 internal/sessiontitle/  DESIGN-065: validates a session title, names the model family, composes the display title, and classifies a recorded Claude Code capture-pane screen
-internal/summonledger/  DESIGN-064 5.9: the create ledger's entry and charge types, codec and time rules (window, attempt hold, prune), shared by the API's write paths and the operator leader's admission
+internal/summonbrief/    DESIGN-064 5.6 (OP800): the summon brief: the platform line, the renderer and the sanitizer that fences caller data; the API's create renders with it, and the operator leader's filing (OP768) can import it
+internal/summonledger/  DESIGN-064 5.9: the create ledger's entry and charge types, codec and time rules (window, attempt hold, prune), the request hash, name sequence, queue attribution and queue count, and the prune's keep rule (Keep) (OP800), shared by the API's write paths and the operator leader's admission, and importable by its filing (OP768)
 internal/summonoutcome/  DESIGN-064 6.6 and 6.8: the shared optimistic outcome/closure/pending-filing write, the one ordered guaranteed-close reason table, and the terminal page table
 internal/summonquota/    DESIGN-064 6.9 (OP783): the leader's quota gate for summoned sessions: Decide (priority, reading, flag lines, clock) and the Gate the operator sets as Reconciler.SummonQuota; fails open
 internal/taskbudget/     the task budget ledger: retained, deterministic task admission in ConfigMaps behind CAS (KubeStore)

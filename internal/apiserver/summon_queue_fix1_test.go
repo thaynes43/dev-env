@@ -164,7 +164,7 @@ func actualQueueCounts(f *fixture) map[summonQueue]int {
 	counts := map[summonQueue]int{}
 	for _, s := range f.summonedSessions() {
 		if summonoutcome.Queued(&s, false) {
-			counts[summonQueueOf(s.Spec.Summon.Priority, s.Spec.Lane)]++
+			counts[summonledger.QueueOf(s.Spec.Summon.Priority, s.Spec.Lane)]++
 		}
 	}
 	return counts
@@ -307,7 +307,7 @@ func TestSummonQueueLeaderGrantConflictsWithCreate(t *testing.T) {
 			t.Fatal(err)
 		}
 		g, err := summonledger.DecodeGrants(cm.Data[summonledger.GrantsKey], true)
-		if err != nil || !summonGranted(g, f.session("rem-responder-1")) {
+		if err != nil || !summonledger.Granted(g, f.session("rem-responder-1")) {
 			t.Fatalf("leader did not commit the grant: %+v, %v", g, err)
 		}
 		granted = true
@@ -321,7 +321,7 @@ func TestSummonQueueLeaderGrantConflictsWithCreate(t *testing.T) {
 	if e := f.ledger(); len(e.Charges) != 3 || e.UrgentRefusals != 0 {
 		t.Fatalf("the superseded refusal was written: %+v", e)
 	}
-	if got := actualQueueCounts(f); got[summonQueue{urgent: true}] != 1 {
+	if got := actualQueueCounts(f); got[summonQueue{Urgent: true}] != 1 {
 		t.Fatalf("the granted Session still counts as Queued: %v", got)
 	}
 }

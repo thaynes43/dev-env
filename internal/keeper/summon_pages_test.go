@@ -850,13 +850,22 @@ func TestSummonPagesLedgerSchemaRoundTrip(t *testing.T) {
 	}
 	f.add(f.close(f.session("wo-upgrade-1", v1alpha1.LaneUpgrade), v1alpha1.OutcomeFailed, summonoutcome.Report, "failed", ""))
 	f.tick()
-	if f.push.count() != 1 {
-		t.Fatal("a ledger with digest and overflow members was not read")
+	// The page, then (story 792) the digest of the pending line, whose last
+	// digest was a year before.
+	if f.push.count() != 2 || f.push.form(1).Get("title") != "[dev-env] digest" {
+		t.Fatalf("a ledger with digest and overflow members was not read: %v", f.push.titles())
 	}
 	l := f.ledger()
-	if l.State.Digest.Since != 1762948800 || len(l.State.Digest.Pending) != 1 || l.State.Digest.Listed["00000000-0000-4000-8000-000000000008/digest"] != 1762950000 ||
+	// The overflow member is kept as read; the digest members are the
+	// digest's own: the watermark kept, the line listed once.
+	if l.State.Digest.Since != 1762948800 || len(l.State.Digest.Pending) != 0 || l.State.Digest.Listed["00000000-0000-4000-8000-000000000009/digest"] != f.clock.Now().Unix() ||
 		l.State.Overflow["upgrade-agent.alert-responder"].LastPagedCount != 3 {
 		t.Fatalf("later members not kept: %+v", l.State)
+	}
+	// The listed key whose dedupe entry is absent was proved gone, so the
+	// reservation drops it on purpose (story 792 fix round 1, ruling 4).
+	if _, ok := l.State.Digest.Listed["00000000-0000-4000-8000-000000000008/digest"]; ok {
+		t.Fatalf("a listed key without its dedupe entry stayed after the reservation: %+v", l.State.Digest.Listed)
 	}
 	// A fresh ledger writes every member, empty.
 	g := newSummonFix(t)
@@ -876,7 +885,8 @@ func TestSummonPagesLedgerSchemaRoundTrip(t *testing.T) {
 			t.Fatalf("member %s missing from %s", member, fresh.Data[summonPagesStateKey])
 		}
 	}
-	if string(generic["digest"]) != `{"since":0,"lastAt":0,"pending":[],"listed":{}}` || string(generic["overflow"]) != `{}` {
+	// Story 792: the first run sets the digest's watermark.
+	if string(generic["digest"]) != fmt.Sprintf(`{"since":%d,"lastAt":0,"pending":[],"listed":{}}`, g.clock.Now().Unix()) || string(generic["overflow"]) != `{}` {
 		t.Fatalf("digest %s overflow %s", generic["digest"], generic["overflow"])
 	}
 }
