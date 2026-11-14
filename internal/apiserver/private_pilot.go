@@ -94,7 +94,7 @@ func (s *Server) createPrivatePilot(ctx context.Context, w http.ResponseWriter, 
 		return 0, nil, err
 	}
 	if dryRun {
-		if err := s.Client.Create(ctx, sess, client.DryRunAll); err != nil {
+		if err := s.createAdmittedSession(ctx, sess, client.DryRunAll); err != nil {
 			return 0, nil, fromKubeError(err, "validate sealed pilot dry-run")
 		}
 		var absent v1alpha1.AgentSession
@@ -105,7 +105,7 @@ func (s *Server) createPrivatePilot(ctx context.Context, w http.ResponseWriter, 
 		sess.ResourceVersion = ""
 		return http.StatusOK, apiv1.PilotPreflight{DryRun: "All", Persisted: false, Session: view(sess, false)}, nil
 	}
-	createErr := s.Client.Create(ctx, sess)
+	createErr := s.createAdmittedSession(ctx, sess)
 	var original v1alpha1.AgentSession
 	if err = s.Live.Get(ctx, client.ObjectKeyFromObject(sess), &original); err != nil {
 		if createErr != nil {

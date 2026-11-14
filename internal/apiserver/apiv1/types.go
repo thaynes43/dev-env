@@ -816,6 +816,8 @@ const (
 	CodeUnauthenticated = "unauthenticated"
 	// CodeForbidden (403): the caller may not do this.
 	CodeForbidden = "forbidden"
+	// CodeCodexWorkbenchHostGitOnly (403): only the declared GitOps host may run on the workbench account.
+	CodeCodexWorkbenchHostGitOnly = "codex_workbench_host_git_only"
 	// CodeNotFound (404): no such session, grant or route.
 	CodeNotFound = "not_found"
 	// CodeMethodNotAllowed (405).

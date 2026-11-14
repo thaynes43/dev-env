@@ -54,6 +54,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/asks"
 	"github.com/thaynes43/dev-env/internal/broker"
 	"github.com/thaynes43/dev-env/internal/codexhostpool"
+	"github.com/thaynes43/dev-env/internal/codexworkbench"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/coordretention"
@@ -158,6 +159,7 @@ type options struct {
 	legacyGrantDelegates         []broker.LegacyDelegateBinding
 	maintenanceEnabled           bool
 	asksEnabled                  bool
+	codexWorkbenchHosts          codexworkbench.Policy
 	codexHostSelect              bool
 	codexHostMaxPerCell          int
 	codexHostMaxRunning          int
@@ -275,6 +277,17 @@ func parseFlags(args []string) (options, error) {
 	policyDelegates := fs.String("grant-policy-delegates", "", "HELD (DESIGN-042 6.6): default-empty subset of --grant-delegates allowed exact live delegated-policy reach outside their tree. Must match both services")
 	legacyDelegates := fs.String("grant-legacy-delegates", "", "HELD: exact existing baseline Claude actors ns/sa:saUID:session:sessionUID:pod:podUID, at most four; requires both delegate lists. Default empty")
 	fs.BoolVar(&o.asksEnabled, "enable-asks", false, "serve /v1/asks and /v1/portal/asks and run the leader-only expiry sweeper (OpenProject Epic #254); default off, asks live in dev-agents, and v1 does not deliver answers through the inbox")
+	var codexWorkbenchSet bool
+	var codexWorkbenchRaw string
+	fs.Func("codex-workbench-hosts", "zero or one exact GitOps Codex host name allowed on the workbench account; empty permits none", func(v string) error {
+		if codexWorkbenchSet {
+			return errors.New("codex-workbench-hosts may be set only once")
+		}
+		codexWorkbenchSet = true
+		codexWorkbenchRaw = v
+		_, err := codexworkbench.Parse(v, "")
+		return err
+	})
 	fs.BoolVar(&o.codexHostSelect, "enable-codex-host-select", false, "serve POST /v1/codex-hosts/select and /release (DESIGN-063); default off, and with it off the routes are not registered; needs the API")
 	fs.IntVar(&o.codexHostMaxPerCell, "codex-host-max-running-per-cell", codexhostpool.DefaultMaxRunningPerCell, "most running Codex hosts in one profile cell when host selection is on")
 	fs.IntVar(&o.codexHostMaxRunning, "codex-host-max-running", codexhostpool.DefaultMaxRunning, "most running Codex hosts when host selection is on")
@@ -436,6 +449,11 @@ func parseFlags(args []string) (options, error) {
 	}
 	if *handoffFile != "" && (!*collectorEnabled || !filepath.IsAbs(*handoffFile)) {
 		return o, allowancecollector.ErrCollector
+	}
+	var codexWorkbenchErr error
+	o.codexWorkbenchHosts, codexWorkbenchErr = codexworkbench.Parse(codexWorkbenchRaw, o.sessionNamespace)
+	if codexWorkbenchErr != nil {
+		return o, codexWorkbenchErr
 	}
 	if o.sessionNamespace == "" || o.templatesNamespace == "" || o.templatesName == "" || o.policyNamespace == "" {
 		return o, errors.New("--session-namespace, --templates-namespace, --templates-name and --policy-namespace must not be empty")
@@ -873,6 +891,7 @@ func reconcilerForOptions(o options) *controller.Reconciler {
 		}
 	}
 	return &controller.Reconciler{
+		CodexWorkbenchHosts:              o.codexWorkbenchHosts,
 		CoordinatorInstructionAgentImage: o.coordinatorInstructionAgentImage,
 
 		TaskBudgetWorkerImage:       o.taskBudgetWorkerImage,
@@ -1198,7 +1217,8 @@ func run(args []string) error {
 			}
 		}
 		api := &apiserver.Server{
-			TitleRename: o.titleRename,
+			CodexWorkbenchHosts: o.codexWorkbenchHosts,
+			TitleRename:         o.titleRename,
 			Raise: &apiserver.RaiseConfig{
 				Dispatch:       o.sessionRaiseDispatch,
 				Namespace:      o.templatesNamespace,

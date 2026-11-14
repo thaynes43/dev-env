@@ -67,6 +67,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/asks"
 	"github.com/thaynes43/dev-env/internal/broker"
+	"github.com/thaynes43/dev-env/internal/codexworkbench"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/homeguard"
 	"github.com/thaynes43/dev-env/internal/inbox"
@@ -80,6 +81,8 @@ import (
 
 // Server holds the API's handlers and what they read and write.
 type Server struct {
+	// CodexWorkbenchHosts is always enforced; an empty name permits none.
+	CodexWorkbenchHosts codexworkbench.Policy
 	// TitleRename names the sessions whose heartbeat answers carry a title.
 	// The zero value names none: those heartbeats stay the empty 204 of main,
 	// so agentd types nothing. The title route itself stays on.
@@ -495,6 +498,7 @@ func (s *Server) serve(rt route) http.Handler {
 	slices.Sort(allowed)
 	allow := strings.Join(allowed, ", ")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(withCodexHostAdmission(r.Context()))
 		start := s.now()
 		var c *caller
 		status, err := func() (int, error) {

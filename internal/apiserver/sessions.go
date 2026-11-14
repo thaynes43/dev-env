@@ -44,6 +44,7 @@ func (s *Server) preflightPrivatePilot(ctx context.Context, w http.ResponseWrite
 	return s.createSessionMode(ctx, w, r, c, true)
 }
 func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller, dryRun bool) (int, any, error) {
+	ctx = withCodexHostAdmission(ctx)
 	if err := refuseRetainedExecutor(c); err != nil {
 		return 0, nil, err
 	}
@@ -153,6 +154,9 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 		sess.Name = base
 		if i > 1 {
 			sess.Name = fmt.Sprintf("%s-%d", base, i)
+		}
+		if err := s.admitCodexHost(ctx, sess, nil, true); err != nil {
+			return 0, nil, err
 		}
 		if err := refuseReservedSessionName(sess.Name); err != nil {
 			return 0, nil, err
@@ -669,6 +673,11 @@ func (s *Server) admitCreateDirect(ctx context.Context, c *caller, sess *v1alpha
 // admitCreatePath is the shared admission. direct is true only for
 // createSessionMode, which already holds createMu.
 func (s *Server) admitCreatePath(ctx context.Context, c *caller, sess *v1alpha1.AgentSession, direct bool) error {
+	// DESIGN-067: every admitted create, direct or not, passes the Codex host
+	// guard first, on the session it would make.
+	if err := s.admitCodexHost(ctx, sess, nil, true); err != nil {
+		return err
+	}
 	if err := s.refuseSummonedParent(ctx, c, sess); err != nil {
 		return err
 	}
