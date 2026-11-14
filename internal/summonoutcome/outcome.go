@@ -90,9 +90,9 @@ func Write(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, d Dec
 		// The terminal page event is not stored: the keeper derives it from
 		// this close record with TerminalPage (story 782, ruling Q1 on item 742).
 		if filing {
-			// OP768 step 1: retain Pending here; the leader's filing worker will charge,
-			// resolve an occupied name and create the child. Nothing creates a child now.
-			s.Status.Summon.Escalation = &v1alpha1.SummonEscalationStatus{State: "Pending", Name: EscalationName(s)}
+			// Reserve Pending with the terminal outcome. The leader separately
+			// charges, resolves an occupied name and creates the child (OP801).
+			s.Status.Summon.Escalation = &v1alpha1.SummonEscalationStatus{State: v1alpha1.SummonEscalationPending, Name: EscalationName(s)}
 		}
 	}
 	patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})

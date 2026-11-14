@@ -291,6 +291,12 @@ type Reconciler struct {
 	// is admitted; the gate before ensure applies whatever it says, so a
 	// summoned session never gets a volume or a pod without admission.
 	SummonedLanes bool
+	// SummonCreateKinds is the existing create switch, shared with the API.
+	// A Pending filing records remote-off unless remote is enabled (OP801).
+	SummonCreateKinds []v1alpha1.SummonKind
+	// SummonFilingClock is the monotonic create-deadline clock; nil uses the
+	// process clock. Now remains the injectable wall clock for ledger/status.
+	SummonFilingClock SummonFilingClock
 	// SummonAdmissionEvery is the admission's interval; zero means
 	// SummonAdmissionEvery.
 	SummonAdmissionEvery time.Duration

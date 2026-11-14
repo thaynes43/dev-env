@@ -166,6 +166,8 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.summon) || ((self.lane == 'remediation') == has(self.summon.escalation))",message="summon.escalation is present exactly for a remediation"
 // +kubebuilder:validation:XValidation:rule="!has(self.summon) || (self.lane == 'remediation' ? self.summon.onUnreported == 'escalated' : self.summon.onUnreported == 'failed')",message="summon.onUnreported is escalated for remediation and failed for every other lane"
 // +kubebuilder:validation:XValidation:rule="!has(self.summon) || !(self.lane == 'remediation' || self.lane == 'escalation') || self.summon.priority == 'urgent'",message="summon.priority is urgent for lanes remediation and escalation"
+// +kubebuilder:validation:XValidation:rule="!has(self.summon) || !has(self.summon.filedFor) || (self.lane == 'escalation' && self.mode == 'remote' && !has(self.idempotencyKey) && self.summon.dispatchID == 'filing:' + self.summon.filedFor.uid)",message="filedFor is a keyless remote escalation whose dispatchID names the remediation UID"
+// +kubebuilder:validation:XValidation:rule="!has(self.summon) || !self.summon.dispatchID.startsWith('filing:') || has(self.summon.filedFor)",message="a filing dispatchID requires filedFor"
 // +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot) && has(self.usageCaptureParentUID) == has(oldSelf.usageCaptureParentUID) && has(self.coordinatorInstructionParentUID) == has(oldSelf.coordinatorInstructionParentUID) && has(self.summon) == has(oldSelf.summon) && has(self.title) == has(oldSelf.title)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
 // +kubebuilder:validation:XValidation:rule="!has(self.projectCanary) || (self.mode == 'task' && self.agent in ['claude', 'codex'] && self.size == 'S' && has(self.parent) && self.parent == self.projectCanary.client && !has(self.workspace) && !has(self.restore) && !has(self.tools) && !has(self.llm) && !has(self.caller) && !has(self.lane) && !has(self.lifecycle) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) <= duration('180s') && (self.agent == 'codex' ? (!has(self.limits.maxTurns) || self.limits.maxTurns == 0) : (has(self.limits.maxTurns) && self.limits.maxTurns > 0 && self.limits.maxTurns <= 3)))",message="project canaries require their fixed private bounded subscription task contract"
 // +kubebuilder:validation:XValidation:rule="!has(self.commonRules) || (has(self.projectCanary) && has(self.projectCanary.commonRevision) && self.projectCanary.commonRevision == self.commonRules.commonRevision) || (has(self.privatePilot) && self.privatePilot.commonRevision == self.commonRules.commonRevision) || (!has(self.projectCanary) && !has(self.privatePilot) && !has(self.workspace) && self.mode == 'task' && self.agent in ['claude', 'codex'] && has(self.profile) && self.profile == 'dev' && has(self.parent) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) > duration('0s') && duration(self.limits.timeout) <= duration('45m'))",message="common rules require a matching managed canary or finite private task binding"
@@ -449,6 +451,22 @@ type SessionSummon struct {
 	// so a later policy change cannot widen or remove the filing's settings.
 	// +optional
 	Escalation *SessionSummonEscalation `json:"escalation,omitempty"`
+
+	// FiledFor identifies the remediation for which the operator leader filed
+	// this escalation (DESIGN-064 6.6, OP801). No HTTP create accepts it.
+	// +optional
+	FiledFor *SummonFiledFor `json:"filedFor,omitempty"`
+}
+
+// SummonFiledFor binds the platform's filing to one remediation incarnation.
+type SummonFiledFor struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=36
+	UID string `json:"uid"`
 }
 
 // SessionSummonEscalation is that copied escalation entry (DESIGN-064 6.4):

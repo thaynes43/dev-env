@@ -332,8 +332,8 @@ func TestOnlyTheGuardDeletes(t *testing.T) {
 	for _, v := range scan.violations {
 		t.Error(v)
 	}
-	if n := scan.seen["ledger ConfigMap Update"]; n != 1 {
-		t.Errorf("ledger ConfigMap Update: seen %d call sites, want exactly one", n)
+	if n := scan.seen["ledger ConfigMap Update"]; n != 2 {
+		t.Errorf("ledger ConfigMap Update: seen %d call sites, want exactly two (grants and filing)", n)
 	}
 	// The test must see every call it guards, once, and every release writer
 	// write, or it proves nothing.
@@ -412,6 +412,10 @@ func TestGuardScanPinsSummonLedgerUpdate(t *testing.T) {
 		allowed      bool
 	}{
 		{"ledger", `func (r *Reconciler) writeSummonGrants(ctx context.Context, cm *corev1.ConfigMap) { r.Client.Update(ctx, cm) }`, true},
+		{"filing ledger", `func (r *Reconciler) writeSummonFilingLedger(ctx context.Context, cm *corev1.ConfigMap) { r.Client.Update(ctx, cm) }`, true},
+		{"filing pod", `func (r *Reconciler) writeSummonFilingLedger(ctx context.Context, cm *corev1.Pod) { r.Client.Update(ctx, cm) }`, false},
+		{"filing finalizers", `func (r *Reconciler) writeSummonFilingLedger(ctx context.Context, cm *corev1.ConfigMap) { cm.Finalizers = nil; r.Client.Update(ctx, cm) }`, false},
+		{"filing owners", `func (r *Reconciler) writeSummonFilingLedger(ctx context.Context, cm *corev1.ConfigMap) { cm.OwnerReferences = nil; r.Client.Update(ctx, cm) }`, false},
 		{"different function", `func (r *Reconciler) other(ctx context.Context, cm *corev1.ConfigMap) { r.Client.Update(ctx, cm) }`, false},
 		{"pod", `func (r *Reconciler) writeSummonGrants(ctx context.Context, cm *corev1.Pod) { r.Client.Update(ctx, cm) }`, false},
 		{"volume", `func (r *Reconciler) writeSummonGrants(ctx context.Context, cm *corev1.PersistentVolumeClaim) { r.Client.Update(ctx, cm) }`, false},
@@ -666,7 +670,7 @@ func scanBody(scan *guardScan, report func(token.Pos, string, string, ...any), r
 // This exception requires the exact function and a ConfigMap parameter. A
 // same-named helper taking a Pod, PVC, Session or generic Object gets none.
 func summonLedgerWriter(fn *ast.FuncDecl) bool {
-	if fn.Name.Name != "writeSummonGrants" || fn.Type.Params == nil {
+	if (fn.Name.Name != "writeSummonGrants" && fn.Name.Name != "writeSummonFilingLedger") || fn.Type.Params == nil {
 		return false
 	}
 	for _, param := range fn.Type.Params.List {

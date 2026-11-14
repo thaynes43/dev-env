@@ -264,13 +264,16 @@ func TestSummonOperatorCloseSuspendsStopsAndFreesTheLane(t *testing.T) {
 				t.Fatal("the volume or the pod object was deleted")
 			}
 
-			// One close: a second pass and a new leader write nothing more.
+			// One close: the filing scan may record remote-off after the
+			// close, but a second pass or a new leader never closes again.
 			w.r = w.leader(nil)
 			w.pass()
 			w.reconcile(a.Name)
 			got := w.get(a.Name).Status
+			wantFiling := first.Summon.Escalation.DeepCopy()
+			wantFiling.Reason = summonoutcome.FilingRemoteOff
 			if !apiequality.Semantic.DeepEqual(first.Outcome, got.Outcome) || got.Summon.Closed.At != first.Summon.Closed.At || got.Summon.Closed.Reason != tc.reason ||
-				!apiequality.Semantic.DeepEqual(first.Summon.Escalation, got.Summon.Escalation) {
+				!apiequality.Semantic.DeepEqual(wantFiling, got.Summon.Escalation) {
 				t.Fatalf("a second close: %+v then %+v", first.Summon, got.Summon)
 			}
 		})

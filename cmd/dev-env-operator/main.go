@@ -905,6 +905,7 @@ func reconcilerForOptions(o options) *controller.Reconciler {
 		RetainedCommonRules:         o.retainedCommonRules,
 		PrivateHistoryRetention:     o.privateHistoryRetention,
 		SummonedLanes:               o.summonedLanes,
+		SummonCreateKinds:           o.summonCreateKinds,
 		PrivateTerminalRecord:       o.privateTerminalRecord,
 		TerminalTaskPodReclaim:      o.terminalTaskPodReclaim,
 		LegacyTerminalTaskReclaim:   o.legacyTerminalTaskReclaim,

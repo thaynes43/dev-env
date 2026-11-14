@@ -1938,8 +1938,103 @@ The outcome describes the work, so a process may succeed while reporting `failed
 One optimistic status write stores the terminal outcome and
 `status.summon.closed` (`at`, `source`, `reason`). A remediation ending `escalated`
 also stores `status.summon.escalation = {state: Pending, name}` in that write.
-Other lanes file nothing. This release retains the pending record; story 768
-adds the filing, name-collision handling and its blocked/abandoned states.
+Other lanes file nothing. Story 801 adds the operator leader's filing: it
+charges `filing:<remediation UID>` once, records `chargedAt`, finds any
+existing child by label, marks the ledger binding before creating, and
+records Filed with the child's name and UID. Retries and leader changes
+recover those stored records; a mark never re-charges, even in a later hour.
+An unrelated occupied name takes the next suffix by the same ledger CAS.
+The child is a remote Claude escalation with the remediation's caller and
+parent, its saved escalation settings, urgent priority, and no caller key.
+The brief asks it to describe the data block once and wait for Tom.
+
+A blocked filing remains Pending with its last blocked word in
+`status.summon.escalation.reason`. The same patch sets `EscalationPending=True`,
+`Reason=Blocked`, mirrors the word in `Message`, and records the first
+`escalation-pending` event. The closed words are `policy-gone`,
+`policy-no-escalations`, `hour-full`, `queue-full`, `remote-off`,
+`ledger-unavailable`, `no-free-name`, `entry-full`, `child-invalid` and
+`create-refused`. Code reads the typed member. Filed clears it; Abandoned
+requires it (or the fallback `not-filed`). This slice sends no page.
+
+`child-invalid` is decided before charging. `create-refused` covers a final API
+create refusal, including Invalid, Forbidden and an admission denial. An
+unchanged blocked reason adds no status write or event. `create-refused` and
+`no-free-name` retry at most once per 15-minute ledger attempt window once
+the typed refusal is durably recorded. Every leader reads the start from the
+caller entry's charge `attempt`. There are no writes between attempts except
+recording a child recovered by label as Filed. Transient read errors preserve
+the recorded refusal. An uncached list detects known name collisions before
+the mark. Unknown storage/create results use `ledger-unavailable` and retain
+the error for retry. Remote creates off permits only the first Blocked status
+write. Listed Filed or Abandoned remediations need no uncached GET; open ones
+are re-read because the watch pass may have just closed them.
+
+A Blocked status patch retries conflicts at most five times, with a fresh
+same-UID Pending read each time. If all fail, it returns every error and claims
+nothing durable. A later pass can renew one mark and try one create again;
+it never charges twice. That exception can keep the caller's applicable queue
+count occupied while creates are refused and all status retries fail: each
+mark counts for 15 minutes. It does not move the original charge time or
+extend its 65-minute hourly count. A successful Blocked patch starts the
+normal retry rate; a child found by label is recovered immediately.
+
+**Correction, 2026-11-14: story 801 fix round 2, coordinator rulings; not a
+ruling by Tom.** A recorded `create-refused` or `no-free-name` keeps one place
+in the remediation caller's queue for as long as it stays blocked, apart
+from at most one pass in every 15-minute window. This is the escalations
+pool's `limits.queuedUrgent` when a matching remote, escalation, urgent policy
+entry supplies the charge hash; without a match it counts in every queue.
+It blocks that caller's API creates and later filings in those queues.
+Filed ends the absent-child hold and ordinary child queue accounting takes
+over. Deleting the remediation, a renewal that finds `queue-full` and writes
+no mark, or story 802's Abandoned ends further renewal; the last mark still
+counts until its 15 minutes expire. Freeing this place sooner is for story
+802. The recording exception costs more writes, rather than a longer queue
+hold. An unknown create result (`ledger-unavailable`) also renews one mark
+and tries one create per pass. Neither case moves `at` or its hourly count.
+
+A recorded retry word with no matching charge becomes `ledger-unavailable`
+without another charge or create; transient read errors preserve a held word.
+A late foreign-name collision during a recorded retry can consume that
+attempt: the pass marks and rebinds, then its next mark meets the retry gate
+and stops. It keeps the recorded word and tries the rebound name in the next
+15-minute window. This round preserves that delay and the replay protocol;
+a safe bypass would also change stale-leader rebind checks.
+Five exhausted status conflicts are reported even without a create error.
+A webhook denial with status code 400 and no reason is final; timeout and
+500 create results are unknown and retried next pass.
+
+The caller entry's 64 KiB bound includes reserved bytes for the longest mutable
+filing timestamps, not for a longer rebound name. The shared encoder preserves
+this reserve for every writer, so a later fractional second alone cannot
+fill the entry. Pending charges stay
+as evidence after the hourly and queue windows; they still count in a queue
+only while their latest attempt is younger than 15 minutes. A retry must find
+a queue place before renewing its mark. Other charges and unknown fields also
+consume space, and legacy or externally altered entries can still be full.
+
+These are coordinator rulings, not rulings by Tom: item 768 comment 7702 and
+item 801 comments 7852, 8423, 8429, 8430, 8446, 8480 and 8482 (2026-11-14,
+story 801 fix round 1). Comment 8446 supersedes the build's open question about Pending's typed
+reason. Story 802 owns abandonment and the reap hold; story 803 owns page
+text and delivery and must recheck Pending before sending its pending page.
+Install the CRD copy before the operator pin. **Not for a real remediation
+before stories 802 and 803:** a blocked or abandoned filing tells nobody until
+the keeper has its template. The review's 2026-11-14 06:19Z live read found
+CallerPolicy `upgrade-agent.alert-responder` already had task remediation and
+remote escalation entries. The step was inert because `--summon-create-kinds`
+was unset and no Session had a caller. The gate that matters is `task` in that
+flag; make the existing task entry inert or install both stories first. Story
+747 must still confirm or replace the fixed brief before moving a remediation
+caller. No installation or live acceptance is claimed here.
+
+Do not roll the operator back to a version before filing status support once
+a charge exists: its full status updates omit `uid` and `chargedAt`, and the
+new CRD refuses them on charged/Filed remediations. Keep the compatible CRD and
+operator and fix forward. A create already received by Kubernetes remains
+subject to the documented deletion/rebinding race within its deadline; this
+step supplies no server-side fence for that request.
 
 Each confirmed terminal write that retains `status.summon.closed` emits one
 operator stdout line beginning

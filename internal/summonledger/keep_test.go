@@ -24,7 +24,7 @@ func TestKeep(t *testing.T) {
 			Status:     v1alpha1.AgentSessionStatus{Summon: st},
 		}
 	}
-	filing := func(state string) *v1alpha1.SummonEscalationStatus {
+	filing := func(state v1alpha1.SummonEscalationState) *v1alpha1.SummonEscalationStatus {
 		return &v1alpha1.SummonEscalationStatus{State: state, Name: "esc-1"}
 	}
 	for _, tc := range []struct {

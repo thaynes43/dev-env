@@ -582,7 +582,9 @@ func TestSummonSnapshotRules(t *testing.T) {
 			return s
 		}},
 		{"filing dispatch id", func() *v1alpha1.AgentSession {
-			s := summonedTask()
+			s := summonedRemote()
+			s.Spec.IdempotencyKey = ""
+			s.Spec.Summon.FiledFor = &v1alpha1.SummonFiledFor{Name: "rem-test", UID: "01234567-89ab-cdef-0123-456789abcdef"}
 			s.Spec.Summon.DispatchID = "filing:01234567-89ab-cdef-0123-456789abcdef"
 			return s
 		}},
@@ -2570,6 +2572,160 @@ func TestSummonOutcomeNoteByteValidation(t *testing.T) {
 				}
 			} else {
 				wantInvalid(t, err, "note")
+			}
+		})
+	}
+}
+
+// OP801: the complete filing schema, including OP802's later transition.
+// Each CEL rule has an accepting and refusing write against the installed CRD.
+func TestSummonFiledForRules(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*v1alpha1.AgentSession)
+		want   string
+	}{
+		{"platform-filing", func(*v1alpha1.AgentSession) {}, ""},
+		{"ordinary-escalation", func(s *v1alpha1.AgentSession) { s.Spec.Summon.FiledFor = nil; s.Spec.Summon.DispatchID = "caller-id" }, ""},
+		{"wrong-lane", func(s *v1alpha1.AgentSession) { s.Spec.Lane = v1alpha1.LaneUpgrade }, "filedFor is a keyless remote escalation"},
+		{"task", func(s *v1alpha1.AgentSession) { s.Spec.Mode = v1alpha1.ModeTask; s.Spec.Prompt = "task" }, "filedFor is a keyless remote escalation"},
+		{"caller-key", func(s *v1alpha1.AgentSession) { s.Spec.IdempotencyKey = "alert-key" }, "filedFor is a keyless remote escalation"},
+		{"wrong-id", func(s *v1alpha1.AgentSession) { s.Spec.Summon.DispatchID = "filing:other" }, "filedFor is a keyless remote escalation"},
+		{"no-filed-for", func(s *v1alpha1.AgentSession) { s.Spec.Summon.FiledFor = nil }, "a filing dispatchID requires filedFor"},
+		{"name-bound", func(s *v1alpha1.AgentSession) { s.Spec.Summon.FiledFor.Name = strings.Repeat("a", 63) }, ""},
+		{"name-too-long", func(s *v1alpha1.AgentSession) { s.Spec.Summon.FiledFor.Name = strings.Repeat("a", 64) }, "Too long"},
+		{"name-empty", func(s *v1alpha1.AgentSession) { s.Spec.Summon.FiledFor.Name = "" }, "filedFor.name"},
+		{"name-invalid", func(s *v1alpha1.AgentSession) { s.Spec.Summon.FiledFor.Name = "bad.name" }, "filedFor.name"},
+		{"uid-too-long", func(s *v1alpha1.AgentSession) {
+			s.Spec.Summon.FiledFor.UID = strings.Repeat("u", 37)
+			s.Spec.Summon.DispatchID = "filing:" + s.Spec.Summon.FiledFor.UID
+		}, "Too long"},
+		{"uid-empty", func(s *v1alpha1.AgentSession) { s.Spec.Summon.FiledFor.UID = ""; s.Spec.Summon.DispatchID = "filing:" }, "filedFor.uid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := summonedRemote()
+			s.Spec.IdempotencyKey = ""
+			s.Spec.Summon.FiledFor = &v1alpha1.SummonFiledFor{Name: "rem-test", UID: "00000000-0000-0000-0000-000000000001"}
+			s.Spec.Summon.DispatchID = "filing:" + s.Spec.Summon.FiledFor.UID
+			tc.change(s)
+			want := s.Spec.Summon.DeepCopy()
+			err := k8s.Create(ctx(t), s)
+			if tc.want != "" {
+				wantInvalid(t, err, tc.want)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !apiequality.Semantic.DeepEqual(get(t, s).Spec.Summon, want) {
+				t.Fatal("CRD pruned the filing identity")
+			}
+		})
+	}
+}
+
+func TestSummonFilingStatusRules(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 11, 14, 5, 0, 0, 0, time.UTC))
+	later := metav1.NewTime(at.Add(time.Minute))
+	none := func(*v1alpha1.SummonStatus) {}
+	pending := func(st *v1alpha1.SummonStatus) {
+		st.Escalation = &v1alpha1.SummonEscalationStatus{State: v1alpha1.SummonEscalationPending, Name: "esc-rem-test"}
+	}
+	charged := func(st *v1alpha1.SummonStatus) { pending(st); st.Escalation.ChargedAt = &at }
+	filed := func(st *v1alpha1.SummonStatus) {
+		charged(st)
+		st.Escalation.State = v1alpha1.SummonEscalationFiled
+		st.Escalation.UID = "00000000-0000-0000-0000-000000000002"
+	}
+	abandoned := func(st *v1alpha1.SummonStatus) {
+		pending(st)
+		st.Escalation.State = v1alpha1.SummonEscalationAbandoned
+		st.Escalation.Reason = "not-filed"
+		st.Pages = []v1alpha1.SummonPage{{Event: v1alpha1.PageEscalationAbandoned, At: at}}
+	}
+	for _, tc := range []struct {
+		name          string
+		first, second func(*v1alpha1.SummonStatus)
+		want          string
+	}{
+		{"pending-with-close", none, pending, ""},
+		{"pending-without-close", none, func(st *v1alpha1.SummonStatus) { pending(st); st.Closed = nil }, "an escalation filing requires a closed record"},
+		{"record-kept", pending, none, ""},
+		{"record-removed", pending, func(st *v1alpha1.SummonStatus) { st.Escalation = nil }, "the escalation filing cannot be removed"},
+		{"charge-recorded", pending, charged, ""},
+		{"charge-kept", charged, none, ""},
+		{"charge-removed", charged, func(st *v1alpha1.SummonStatus) { st.Escalation.ChargedAt = nil }, "chargedAt is set once and never changes"},
+		{"charge-changed", charged, func(st *v1alpha1.SummonStatus) { st.Escalation.ChargedAt = &later }, "chargedAt is set once and never changes"},
+		{"filed", charged, filed, ""},
+		{"filed-kept", filed, none, ""},
+		{"filed-changed", filed, func(st *v1alpha1.SummonStatus) { st.Escalation.Name = "another-child" }, "a filing never changes once it is not Pending"},
+		{"filed-back-to-pending", filed, charged, "a filing never changes once it is not Pending"},
+		{"filed-no-uid", pending, func(st *v1alpha1.SummonStatus) { filed(st); st.Escalation.UID = "" }, "a filing UID is present exactly when Filed"},
+		{"pending-uid", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.UID = "child" }, "a filing UID is present exactly when Filed"},
+		{"filed-no-charge", pending, func(st *v1alpha1.SummonStatus) { filed(st); st.Escalation.ChargedAt = nil }, "a Filed escalation requires chargedAt"},
+		{"abandoned", pending, abandoned, ""},
+		{"abandoned-kept", abandoned, none, ""},
+		{"abandoned-changed", abandoned, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "entry-full" }, "a filing never changes once it is not Pending"},
+		{"abandoned-no-reason", pending, func(st *v1alpha1.SummonStatus) { abandoned(st); st.Escalation.Reason = "" }, "an Abandoned filing requires a reason"},
+		{"pending-reason", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "entry-full" }, ""},
+		{"pending-child-invalid", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "child-invalid" }, ""},
+		{"pending-create-refused", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "create-refused" }, ""},
+		{"pending-unknown-reason", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "unknown" }, "Unsupported value"},
+		{"pending-not-filed", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "not-filed" }, "a Pending filing's reason is never not-filed"},
+		{"filed-reason", pending, func(st *v1alpha1.SummonStatus) { filed(st); st.Escalation.Reason = "entry-full" }, "a Filed filing has no reason"},
+		{"abandoned-no-page", pending, func(st *v1alpha1.SummonStatus) { abandoned(st); st.Pages = nil }, "pages hold escalation-abandoned exactly when the filing is Abandoned"},
+		{"page-not-abandoned", pending, func(st *v1alpha1.SummonStatus) {
+			st.Pages = []v1alpha1.SummonPage{{Event: v1alpha1.PageEscalationAbandoned, At: at}}
+		}, "pages hold escalation-abandoned exactly when the filing is Abandoned"},
+		{"pending-page", pending, func(st *v1alpha1.SummonStatus) {
+			st.Pages = []v1alpha1.SummonPage{{Event: v1alpha1.PageEscalationPending, At: at}}
+		}, ""},
+		{"pending-page-duplicate", pending, func(st *v1alpha1.SummonStatus) {
+			st.Pages = []v1alpha1.SummonPage{{Event: v1alpha1.PageEscalationPending, At: at}, {Event: v1alpha1.PageEscalationPending, At: later}}
+		}, "pages hold at most one escalation-pending"},
+		{"abandoned-page-duplicate", pending, func(st *v1alpha1.SummonStatus) {
+			abandoned(st)
+			st.Pages = append(st.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationAbandoned, At: later})
+		}, "pages hold at most one escalation-abandoned"},
+		{"unknown-state", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.State = "Blocked" }, "Unsupported value"},
+		{"long-state", pending, func(st *v1alpha1.SummonStatus) {
+			st.Escalation.State = v1alpha1.SummonEscalationState(strings.Repeat("s", 17))
+		}, "Too long"},
+		{"unknown-reason", pending, func(st *v1alpha1.SummonStatus) { abandoned(st); st.Escalation.Reason = "secret-text" }, "Unsupported value"},
+		{"long-reason", pending, func(st *v1alpha1.SummonStatus) {
+			abandoned(st)
+			st.Escalation.Reason = v1alpha1.SummonFilingReason(strings.Repeat("r", 33))
+		}, "Too long"},
+		{"long-uid", pending, func(st *v1alpha1.SummonStatus) { filed(st); st.Escalation.UID = strings.Repeat("u", 37) }, "Too long"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := summonedTask()
+			if err := k8s.Create(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			s.Status.Summon = &v1alpha1.SummonStatus{Closed: &v1alpha1.SummonClosedStatus{At: at, Source: "report", Reason: "escalate"}}
+			tc.first(s.Status.Summon)
+			// The no-close negative starts without a close so the existing close
+			// immutability rule does not hide the filing rule under test.
+			if tc.name == "pending-without-close" {
+				s.Status.Summon.Closed = nil
+			}
+			if err := k8s.Status().Update(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			s = get(t, s)
+			tc.second(s.Status.Summon)
+			want := s.Status.Summon.DeepCopy()
+			err := k8s.Status().Update(ctx(t), s)
+			if tc.want != "" {
+				wantInvalid(t, err, tc.want)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !apiequality.Semantic.DeepEqual(get(t, s).Status.Summon, want) {
+				t.Fatal("CRD pruned the filing status")
 			}
 		})
 	}

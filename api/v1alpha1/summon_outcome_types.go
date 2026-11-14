@@ -13,6 +13,11 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.registration) || has(self.registration)",message="the registration record cannot be removed"
 // +kubebuilder:validation:XValidation:rule="(has(self.registration) && has(self.registration.result)) == (has(self.pages) && self.pages.exists(p, p.event == 'escalation-started'))",message="pages hold escalation-started exactly when the registration has a result"
 // +kubebuilder:validation:XValidation:rule="!has(self.pages) || self.pages.filter(p, p.event == 'escalation-started').size() <= 1",message="pages hold at most one escalation-started"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.escalation) || has(self.escalation)",message="the escalation filing cannot be removed"
+// +kubebuilder:validation:XValidation:rule="!has(self.escalation) || has(self.closed)",message="an escalation filing requires a closed record"
+// +kubebuilder:validation:XValidation:rule="(has(self.escalation) && self.escalation.state == 'Abandoned') == (has(self.pages) && self.pages.exists(p, p.event == 'escalation-abandoned'))",message="pages hold escalation-abandoned exactly when the filing is Abandoned"
+// +kubebuilder:validation:XValidation:rule="!has(self.pages) || self.pages.filter(p, p.event == 'escalation-pending').size() <= 1",message="pages hold at most one escalation-pending"
+// +kubebuilder:validation:XValidation:rule="!has(self.pages) || self.pages.filter(p, p.event == 'escalation-abandoned').size() <= 1",message="pages hold at most one escalation-abandoned"
 type SummonStatus struct {
 	// AdmittedAt is when the operator leader admitted the session: its charge
 	// was in the create ledger under its own name, its single-flight lane was
@@ -23,8 +28,8 @@ type SummonStatus struct {
 	// Closed is written atomically with the first terminal outcome.
 	// +optional
 	Closed *SummonClosedStatus `json:"closed,omitempty"`
-	// Escalation is the pending filing for a remediation ending escalated.
-	// OP768 adds filing, blocked and abandoned transitions; this slice files nothing.
+	// Escalation is the platform's filing for a remediation ending escalated.
+	// OP801 files it; OP802 owns abandonment and the reap hold.
 	// +optional
 	Escalation *SummonEscalationStatus `json:"escalation,omitempty"`
 	// Pages are the session's lifecycle page events, each recorded once by
@@ -153,7 +158,7 @@ type SummonExecutorStatus struct {
 // result (6.10); story 742 adds the rest of 6.8's lifecycle events. A
 // terminal event is never a page event here: the keeper derives it from the
 // close record (ruling Q1 on item 742, built in PR 1102).
-// +kubebuilder:validation:Enum=escalation-held;escalation-reminder;escalation-started
+// +kubebuilder:validation:Enum=escalation-held;escalation-reminder;escalation-started;escalation-pending;escalation-abandoned
 // +kubebuilder:validation:MaxLength=32
 type SummonPageEvent string
 
@@ -165,6 +170,10 @@ const (
 	// PageEscalationStarted: a remote escalation's registration settled
 	// (6.10, story 794), written with status.summon.registration's result.
 	PageEscalationStarted SummonPageEvent = "escalation-started"
+	// PageEscalationPending: the platform's filing first became blocked.
+	PageEscalationPending SummonPageEvent = "escalation-pending"
+	// PageEscalationAbandoned: the platform gave up a Pending filing (OP802).
+	PageEscalationAbandoned SummonPageEvent = "escalation-abandoned"
 )
 
 // SummonPage is one page event: what happened and when the operator
@@ -199,15 +208,49 @@ type SummonClosedStatus struct {
 	Released bool `json:"released,omitempty"`
 }
 
-// SummonEscalationStatus reserves a filing name in the terminal write.
-// OP768 resolves name collisions and records the child; spec.summon.filedFor
-// and the filing's charge, retry and abandonment are deliberately its seam.
+// SummonEscalationState is the filing's durable state (DESIGN-064 6.6).
+// +kubebuilder:validation:MaxLength=16
+// +kubebuilder:validation:Enum=Pending;Filed;Abandoned
+type SummonEscalationState string
+
+const (
+	SummonEscalationPending   SummonEscalationState = "Pending"
+	SummonEscalationFiled     SummonEscalationState = "Filed"
+	SummonEscalationAbandoned SummonEscalationState = "Abandoned"
+)
+
+// SummonFilingReason is a closed word, never caller text. Blocked conditions
+// use these words too; not-filed is the abandonment fallback (OP802).
+// +kubebuilder:validation:MaxLength=32
+// +kubebuilder:validation:Enum=policy-gone;policy-no-escalations;hour-full;queue-full;remote-off;ledger-unavailable;no-free-name;entry-full;child-invalid;create-refused;not-filed
+type SummonFilingReason string
+
+// SummonEscalationStatus reserves a name at close, then records the charge
+// and the child, or abandonment. A settled filing never changes or retries.
+//
+// +kubebuilder:validation:XValidation:rule="oldSelf.state == 'Pending' || self == oldSelf",message="a filing never changes once it is not Pending"
+// +kubebuilder:validation:XValidation:rule="has(self.uid) == (self.state == 'Filed')",message="a filing UID is present exactly when Filed"
+// +kubebuilder:validation:XValidation:rule="self.state != 'Abandoned' || has(self.reason)",message="an Abandoned filing requires a reason"
+// +kubebuilder:validation:XValidation:rule="self.state != 'Filed' || !has(self.reason)",message="a Filed filing has no reason"
+// +kubebuilder:validation:XValidation:rule="self.state != 'Pending' || !has(self.reason) || self.reason != 'not-filed'",message="a Pending filing's reason is never not-filed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.chargedAt) || (has(self.chargedAt) && self.chargedAt == oldSelf.chargedAt)",message="chargedAt is set once and never changes"
+// +kubebuilder:validation:XValidation:rule="self.state != 'Filed' || has(self.chargedAt)",message="a Filed escalation requires chargedAt"
 type SummonEscalationStatus struct {
-	// +kubebuilder:validation:MaxLength=16
-	// +kubebuilder:validation:Enum=Pending
-	State string `json:"state"`
+	State SummonEscalationState `json:"state"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Name string `json:"name"`
+	// UID is the escalation child's UID, recorded with Filed.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=36
+	// +optional
+	UID string `json:"uid,omitempty"`
+	// ChargedAt is the original ledger charge's time, never a retry time.
+	// +optional
+	ChargedAt *metav1.Time `json:"chargedAt,omitempty"`
+	// Reason is the last blocked word while Pending, required (or not-filed)
+	// on abandonment, and absent once Filed.
+	// +optional
+	Reason SummonFilingReason `json:"reason,omitempty"`
 }

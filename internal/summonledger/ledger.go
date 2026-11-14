@@ -35,6 +35,7 @@ import (
 	"io"
 	"math"
 	"regexp"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -342,8 +343,10 @@ func walkValue(dec *json.Decoder, depth int) error {
 	return nil
 }
 
-// Encode writes one caller's key. A document over MaxEntry is ErrUnreadable:
-// the write is refused, never truncated.
+// Encode writes one caller's key. Encoded bytes plus space for the longest
+// mutable filing timestamps must fit MaxEntry. Every writer preserves that
+// reserve, so an accepted filing charge can later mark at nanosecond precision.
+// A refused write is never truncated; the on-wire schema is unchanged.
 func Encode(e Entry) (string, error) {
 	top := map[string]any{}
 	for k, v := range e.extra {
@@ -374,8 +377,23 @@ func Encode(e Entry) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(b) > MaxEntry {
+	if len(b)+filingTimestampReserve(e) > MaxEntry {
 		return "", ErrUnreadable
 	}
 	return string(b), nil
+}
+
+func filingTimestampReserve(e Entry) int {
+	const longest = len("2006-01-02T15:04:05.999999999Z")
+	reserve, filings := 0, false
+	for _, ch := range e.Charges {
+		if strings.HasPrefix(ch.ID, FilingID("")) {
+			filings = true
+			reserve += longest - len(ch.Attempt.UTC().Format(time.RFC3339Nano))
+		}
+	}
+	if filings {
+		reserve += longest - len(e.Clock.UTC().Format(time.RFC3339Nano))
+	}
+	return reserve
 }
