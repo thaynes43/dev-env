@@ -189,9 +189,10 @@ func TestPreflightPIDReuseUncertainIdentity(t *testing.T) {
 				}
 				return oldRead(name)
 			}
-			if fault == "no-recorded-start" {
+			switch fault {
+			case "no-recorded-start":
 				p.Start = ""
-			} else if fault == "malformed-recorded-start" {
+			case "malformed-recorded-start":
 				p.Start = "not-a-start-time"
 			}
 			signals := 0
@@ -276,5 +277,37 @@ func TestPreflightPIDReuseBeforeKill(t *testing.T) {
 	}
 	if !reread || terms != 1 || kills != 0 || !pidAlive(live) {
 		t.Errorf("reuse before KILL: reread=%t TERM=%d KILL=%d alive=%t", reread, terms, kills, pidAlive(live))
+	}
+}
+
+func TestPreflightPIDReuseAfterMatchingObservation(t *testing.T) {
+	live := pidReuseStandIn(t, true)
+	reused := pidReuseStat(t, live, pidReuseDifferentStart(t, live).Start)
+	path := "/proc/" + strconv.Itoa(live.Pid) + "/stat"
+	oldRead, oldSignal, oldWait := readPreflightStat, preflightSignal, preflightStopWait
+	t.Cleanup(func() { readPreflightStat, preflightSignal, preflightStopWait = oldRead, oldSignal, oldWait })
+	reads, kills := 0, 0
+	readPreflightStat = func(name string) ([]byte, error) {
+		if name == path {
+			reads++
+			if reads > 1 {
+				return reused, nil
+			}
+		}
+		return oldRead(name)
+	}
+	preflightSignal = func(_ int, sig syscall.Signal) error {
+		if sig == syscall.SIGKILL {
+			kills++
+		}
+		return nil
+	}
+	preflightStopWait = func(int, time.Duration, ...agentPid) bool { return false }
+	st := stopPreflightGroup(live, 0, loginNow)
+	if st.Running || st.WasRunning || st.Killed {
+		t.Errorf("observed PID reuse after a matching read was discarded: %+v; want all false", st)
+	}
+	if reads < 2 || kills != 0 || !pidAlive(live) {
+		t.Errorf("reuse observation missing or unsafe: reads=%d KILL=%d alive=%t", reads, kills, pidAlive(live))
 	}
 }

@@ -3607,8 +3607,10 @@ stay; where this differs, it governs.
    detach zombie membership on release. An unrelated group at the same
    number therefore cannot keep the recorded group alive.
 2. *Stop never signals the reused identity.* The shared proof runs at the
-   first group check and again before group SIGKILL. On either proof, stop
-   reports `Running: false`, `WasRunning: false`, `Killed: false`. A prior
+   first group check and again before group SIGKILL. Each checkpoint
+   classifies one stat snapshot, so a later readable reuse observation cannot
+   be discarded as uncertainty after an earlier matching read. On either
+   proof, stop reports `Running: false`, `WasRunning: false`, `Killed: false`. A prior
    SIGTERM may have preceded reuse during the grace; no later signal goes
    to the reused PID or group. Identity is still read immediately before
    each signal. The stop order and its single 40-second deadline stay.

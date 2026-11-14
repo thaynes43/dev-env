@@ -115,7 +115,8 @@ func pendingPreflightTask(s Settings, rec startPreflight) bool {
 	if readJSONFile(s.statePath(pidFile), &task) != nil || task.Pid <= 0 || task.Start == "" {
 		return true
 	}
-	return !preflightGroupProvenGone(task) && !waitNativeGroupAbsent(task.Pid, 0)
+	gone, _ := preflightGroupIdentity(task)
+	return !gone && !waitNativeGroupAbsent(task.Pid, 0)
 }
 
 // A boot may have a new PID namespace; old numeric identities cannot prove
@@ -196,10 +197,11 @@ func stopPreflightGroup(p agentPid, grace time.Duration, deadline time.Time) *pr
 	}
 	// Reuse proves absence of the recorded group even when an unrelated
 	// process now leads a group with that number. Never signal its identity.
-	if preflightGroupProvenGone(p) {
+	gone, uncertain := preflightGroupIdentity(p)
+	if gone {
 		return st
 	}
-	if preflightGroupIdentityUncertain(p) {
+	if uncertain {
 		st.Running = true
 		return st
 	}
@@ -214,10 +216,11 @@ func stopPreflightGroup(p agentPid, grace time.Duration, deadline time.Time) *pr
 	// the lock and process observations all consume its remaining time.
 	termWait := min(grace, max(0, deadline.Sub(preflightStopNow())-stopKillWait))
 	if !preflightStopWait(p.Pid, termWait) {
-		if preflightGroupProvenGone(p) {
+		gone, uncertain := preflightGroupIdentity(p)
+		if gone {
 			return &protocol.AgentStop{}
 		}
-		if preflightGroupIdentityUncertain(p) {
+		if uncertain {
 			st.Running = true
 			return st
 		}
@@ -229,7 +232,9 @@ func stopPreflightGroup(p agentPid, grace time.Duration, deadline time.Time) *pr
 	return st
 }
 
-// preflightGroupProvenGone requires a readable, different start time. POSIX
+// preflightGroupIdentity classifies one snapshot so a later observation of
+// reuse cannot be discarded as uncertainty after an earlier matching read.
+// Proven absence requires a readable, different start time. POSIX
 // "Process ID Reuse" reserves the PID while its former group has members:
 // https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html#tag_04_17
 // See also the committee draft, Base Definitions 4.13:
@@ -239,23 +244,24 @@ func stopPreflightGroup(p agentPid, grace time.Duration, deadline time.Time) *pr
 // https://github.com/torvalds/linux/blob/v6.12/kernel/pid.c
 // https://github.com/torvalds/linux/blob/v6.12/kernel/exit.c
 // A missing leader alone proves nothing: its group can still have members.
-func preflightGroupProvenGone(p agentPid) bool {
+func preflightGroupIdentity(p agentPid) (provenGone, uncertain bool) {
 	if p.Pid <= 0 || p.Start == "" {
-		return false
+		return false, true
 	}
-	if _, err := strconv.ParseUint(p.Start, 10, 64); err != nil {
-		return false
-	}
-	current, _, err := readPreflightProcess(p.Pid)
-	return err == nil && current.Start != p.Start
-}
-
-func preflightGroupIdentityUncertain(p agentPid) bool {
 	current, group, err := readPreflightProcess(p.Pid)
 	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
-		return false // surviving group members can outlive their leader.
+		return false, false // surviving group members can outlive their leader.
 	}
-	return err != nil || current != p || group != p.Pid
+	if err != nil {
+		return false, true
+	}
+	if _, err := strconv.ParseUint(p.Start, 10, 64); err != nil {
+		return false, true
+	}
+	if current.Start != p.Start {
+		return true, false
+	}
+	return false, current != p || group != p.Pid
 }
 
 // strictPreflightGroup includes zombies and treats unreadable or malformed

@@ -546,7 +546,7 @@ func preflightLive(s Settings, first Launch) bool {
 	}
 	p := agentPid{Pid: rec.Pid, Start: rec.Start}
 	if rec.GroupOwned {
-		if preflightGroupProvenGone(p) {
+		if gone, _ := preflightGroupIdentity(p); gone {
 			return false
 		}
 		var refused startRefused
