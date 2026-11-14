@@ -767,8 +767,11 @@ item 751, session `dev-env-1111-143337`; not rulings by Tom).**
    that namespace and the night lane's runbook already says a session
    cannot write these ConfigMaps. The cost is stated above: the upgrade
    lane's state repairs cannot be delegated to a granted session; they
-   stay with Tom and the workbench. A later need for one of them is a
-   named exception in its own PR, with its own review.
+   stay with Tom and with the accounts that write that state today, the
+   callers' own and v1's `dev-env-ops`. The workbench is not matched by
+   the rule, and that gives it nothing: it has no ConfigMap write in this
+   namespace. A later need for one of them is a named exception in its
+   own PR, with its own review.
 2. **`pods/proxy` and `pods/portforward` join the exec guard's match** for
    privileged targets, as recommended, with the Pod name resolved from
    every proxy name form. Before building, the builder searches the
