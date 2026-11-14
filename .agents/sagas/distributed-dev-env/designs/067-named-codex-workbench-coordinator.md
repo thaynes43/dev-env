@@ -60,7 +60,7 @@ next child depth is its own depth plus one.
 Evidence for the table: [validate.go:106–123][create-name],
 [validate.go:152–170][create-codex], [validate.go:315–369][create-profile],
 [validate.go:384–389][create-depth], [caller.go:98–110][caller-parent],
-[caller.go:138–153][caller-class], [templates.go:473–484][profile-resolve],
+[caller.go:138–153][caller-class], [templates.go:472–481][profile-resolve],
 [operator manifest:577–581][ops-clients]. Model and effort are checked by
 [validate.go:168–170,236–239][create-effort].
 
@@ -154,6 +154,16 @@ flowchart TD
 ```
 
 ### 3.1 One small setting, a guard with no bypass flag
+
+Here **Codex host** means the platform's `agent: codex`, `mode: remote` computer.
+That is the exact existing host predicate, not a rule for every Codex process.
+Codex task/local modes are outside this access change. The proposal leaves their
+existing admission and profile policy intact; in particular, workbench workers
+may already request the workbench profile. Extending this allow-list to every
+Codex mode would remove that existing worker behavior and exceeds OP858's named
+remote-host scope. Arbitrary daemon launch from a powerful task/exec process is
+part of the superuser trust limit in section 12, not prevented by this guard.
+([codexhost.go:325–326][host-kind], [validate.go:171–175,324–347][create-profile])
 
 Add operator argument `--codex-workbench-hosts`, default empty, in the session
 namespace. Accept zero or one exact DNS session name. Refuse duplicates, wildcards,
@@ -413,13 +423,16 @@ class, not a new pool cell that anyone can select.
 ## 7. Pairing, visibility and names
 
 **Pairing prerequisites today:** the host must be Running, the daemon live and
-connected, and the keeper projection current. `agent-run pair` uses pod exec;
+the keeper projection current. `codexPair` does not separately probe connection
+state; the native pair call must return a valid code. Thread launch later checks
+that the daemon is connected. `agent-run pair` uses pod exec;
 Tom, v1, a workbench session or another already authorized exec client runs it.
 An ordinary session's CLI refuses that path. The owner enters the private,
 short-lived code in the ChatGPT app's Remote “add a computer” flow. Never put the
 code in Git, a work order, a PR, a tracker comment or a shared handoff.
 ([pair.go:7–26][pair-cli], [attach.go:99–148][exec-client],
-[codex_remote.go:417–463][pair-server], [workflow guide:427–435][pair-workflow])
+[codex_remote.go:417–463][pair-server], [agent-run help pair:913–923][pair-workflow],
+[thread_launch_codex.go:326–348][thread-host-ready])
 
 The host keeps enrollment under its private CODEX_HOME on HOME. A connected
 status with `pair-code-issued` means only that a code was issued at least once.
@@ -736,7 +749,7 @@ A valid Codex host on the workbench account therefore returns true.
 | `codex_rc.go:29`, one-use RC route | Passes caller-class gate; all target qualifications still apply. | Keep gate; add shared reserved-host checks at target admission; do not activate route here. |
 | `codexhost.go:238`, asked profile | May ask pool for any named profile; absent means default. | Keep ordinary requests, but never return a workbench-account/reserved host. |
 | `codexhost.go:271`, pool caller facts | Sets `Workbench=true`. | Keep; exclusions win before caller suitability. |
-| `title.go:152`, title access | May title any other session; own-session refusal runs first. | Keep. Codex native thread title is still separate/Unknown. |
+| `title.go:152`, title access | May title any other session; own-session refusal runs first. | Keep. Native thread metadata has a separate setter; phone rendering is Unknown. |
 | `keeper_login.go:339`, `isWorkbench` helper | Returns true. `keeperLoginGate` at `:350` accepts that class, then checks provider and enabled keeper route. | Keep existing ceremony route; it does not authorize `codex login` in this pod. |
 
 Evidence: [validate.go:152–170,315–348][create-profile],
@@ -849,6 +862,14 @@ remaining Unknowns and owner questions are recorded in the PR and the one worker
 handoff comment on OP858. Cross-family design review and acceptance remain the
 coordinator's next step. No merge is authorized to this worker.
 
+The independent native review of `00cf485121ec191b9f569309c3254c567e13092b`
+found three precision issues: distinguish native name metadata from phone
+rendering, state the actual pairing checks, and correct the pairing citation
+label. The author fixed all three. The advisory review on that head also asked
+for explicit non-remote scope and one other citation-label correction; section
+3.1 now states why task/local policy is unchanged, and both labels match their
+source targets. Final-head review and CI evidence belong in the PR handoff.
+
 <!-- Evidence links pin source, not deployment state. -->
 
 [adr024]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/.agents/sagas/distributed-dev-env/adrs/024-parent-held-wait.md
@@ -885,6 +906,7 @@ coordinator's next step. No merge is authorized to this worker.
 [ensure-build]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/controller/reconciler.go#L1356-L1446
 [exec-client]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/agentrun/attach.go#L99-L148
 [hold-status]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/controller/reconciler.go#L1915-L1922
+[host-kind]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/apiserver/codexhost.go#L325-L326
 [keeper-workbench]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/apiserver/keeper_login.go#L334-L355
 [message-api]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/apiserver/podcmd.go#L198-L246
 [message-deliver]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/agentd/deliver.go#L95-L167
@@ -949,6 +971,7 @@ coordinator's next step. No merge is authorized to this worker.
 [thread-create]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/agentd/thread_launch_codex.go#L381-L405
 [thread-env]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/agentd/thread_launch_codex.go#L533-L539
 [thread-fence]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/apiserver/threads.go#L118-L164
+[thread-host-ready]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/agentd/thread_launch_codex.go#L326-L348
 [thread-observe]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/agentd/thread_launch_codex.go#L446-L528
 [thread-preflight]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/agentd/thread_launch_codex.go#L280-L323
 [thread-request]: https://github.com/thaynes43/dev-env/blob/768935da630b2675e55860ece925f0e3b390c880/internal/agentd/thread_launch_codex.go#L22-L60

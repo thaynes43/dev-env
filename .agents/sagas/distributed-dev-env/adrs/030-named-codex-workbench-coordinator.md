@@ -51,6 +51,8 @@ does not narrow that authority.
    with zero or one exact session name in the session namespace. Reject ambiguous
    or multi-host configuration. The account guard is always active in the new
    build; no independent bypass flag disables it.
+   A host means `codex`/`remote`; task/local admission and existing workbench
+   worker rights are outside this change (DESIGN-067 section 3.1).
 2. **Account-based enforcement in both places.** Resolve defaults and aliases.
    Every Codex remote host whose profile uses `dev-env-workbench` must meet the
    shared name, namespace and creation-shape predicate. Reserve that name against
@@ -86,8 +88,9 @@ does not narrow that authority.
 8. **Prove phone behavior.** The pairing code is delivered privately by an
    authorized exec custodian and entered by Tom. A code-issued marker is not proof
    of pairing. Prove an exact new thread's response and visibility on his phone.
-   Set the platform host title at create; native computer/thread title control
-   remains Unknown until measured. Do not equate a tmux name with a phone title.
+   Set the platform host title at create and native thread metadata through the
+   pinned name setter after exact-ID binding. Computer naming and the phone's
+   rendered title remain Unknown until measured. A tmux name is separate.
 9. **Reuse the existing question routes.** Prove Tom's direct thread reply. Use
    the existing session Ask/MCP and portal board for asynchronous notice and answer
    when agreed, with the coordinator reading the answer on its next supported
