@@ -113,6 +113,9 @@ type Launch struct {
 	// provider starts. Absent, as in every ordinary launch, every TUI and
 	// every record an older agentd wrote, run-agent starts as before.
 	Preflight *launchPreflight `json:"preflight,omitempty"`
+	// Runtime-only: the runner carries its state directory to the final probe
+	// fence. The absolute deadline above travels with the same launch value.
+	preflightStateDir string
 }
 
 // ErrNotInPlan01 marks a session kind that a later plan builds.

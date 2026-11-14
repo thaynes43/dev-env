@@ -7,6 +7,7 @@ package apiserver
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -112,6 +113,83 @@ func TestHeartbeatStoresTheStartRecordOnce(t *testing.T) {
 	for _, rec := range []*protocol.StartRecord{nil, {Model: "claude-opus-5-5"}, {Failure: protocol.StartFailureNoAnswer}} {
 		if got := beat(rec); got == nil || *got != want {
 			t.Fatalf("a later heartbeat with %+v changed the record to %+v", rec, got)
+		}
+	}
+}
+
+// Malformed optional evidence cannot block liveness, usage, or the response
+// selected by the title flag. A later malformed record also cannot erase a
+// summoned task's already stored start record.
+func TestHeartbeatDropsMalformedStartRecord(t *testing.T) {
+	for _, kind := range []struct {
+		name     string
+		summoned bool
+	}{{"ordinary", false}, {"summoned", true}} {
+		for _, title := range []struct {
+			name    string
+			enabled bool
+			want    int
+		}{{"title-enabled", true, http.StatusOK}, {"title-disabled", false, http.StatusNoContent}} {
+			for _, shape := range []struct {
+				name string
+				raw  string
+			}{{"wrong-field-type", `{"model":7}`}, {"wrong-container-type", `[]`}} {
+				t.Run(kind.name+"/"+title.name+"/"+shape.name, func(t *testing.T) {
+					f := newFixture(t)
+					if !title.enabled {
+						f.srv.TitleRename = TitleRename{}
+					}
+					const name = "malformed-start-1114-034156"
+					tok := f.sessionPod(name, "ops", 0)
+					sess := f.session(name)
+					sess.Spec.Title = "Preflight model check"
+					if kind.summoned {
+						summonedTaskSession(sess)
+					}
+					if err := f.c.Update(context.Background(), sess); err != nil {
+						t.Fatal(err)
+					}
+					path := protocol.HeartbeatPath(name)
+					body := `{"session":"` + name + `","boot":"ready","agent":{"state":"busy","error":"preflight pending"},"usage":{"inputTokens":17,"outputTokens":23},"start":` + shape.raw + `}`
+					beat := func(wantStart *v1alpha1.AgentStartStatus) {
+						t.Helper()
+						w := f.do(http.MethodPost, path, tok, body)
+						if w.Code != title.want {
+							t.Errorf("heartbeat: %d %s, want %d", w.Code, w.Body.String(), title.want)
+						} else if title.enabled {
+							var reply heartbeatTitleBody
+							if err := json.Unmarshal(w.Body.Bytes(), &reply); err != nil || reply.Title.Text != sess.Spec.Title {
+								t.Errorf("title response: %s, error %v", w.Body.String(), err)
+							}
+						} else if w.Body.Len() != 0 {
+							t.Errorf("204 heartbeat has a body: %s", w.Body.String())
+						}
+						stored := f.session(name)
+						a := stored.Status.Agent
+						if a == nil {
+							t.Fatal("the rest of the heartbeat was not stored")
+						}
+						if a.Status != protocol.AgentBusy || a.Boot != protocol.BootReady || a.Message != "preflight pending" || a.LastHeartbeat == nil || !a.LastHeartbeat.Time.Equal(f.now) {
+							t.Errorf("the rest of the agent status was not stored: %+v", a)
+						}
+						if u := stored.Status.Usage; u == nil || u.InputTokens != 17 || u.OutputTokens != 23 {
+							t.Errorf("the heartbeat usage was not stored: %+v", u)
+						}
+						if (a.Start == nil) != (wantStart == nil) || (a.Start != nil && *a.Start != *wantStart) {
+							t.Errorf("stored start %+v, want %+v", a.Start, wantStart)
+						}
+					}
+					beat(nil)
+					if kind.summoned {
+						st := status(name)
+						st.Start = &protocol.StartRecord{Model: sess.Spec.Model}
+						if w := f.do(http.MethodPost, path, tok, st); w.Code != title.want {
+							t.Fatalf("store valid start: %d %s", w.Code, w.Body.String())
+						}
+						beat(&v1alpha1.AgentStartStatus{Model: sess.Spec.Model})
+					}
+				})
+			}
 		}
 	}
 }

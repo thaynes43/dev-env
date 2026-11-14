@@ -2698,9 +2698,15 @@ session without one is built exactly as before.
   `spec.model` did not answer and its login was not rejected, run-agent
   tries the fallback once, then starts the task on the first model that
   answered. One provider process runs at a time: a turn is stopped and
-  waited for before the next spawn, and one that cannot be shown gone starts
-  nothing further. The start deadline is checked before each turn and before
-  the real start, and a turn's limit is the smaller of 90 seconds and the
+  waited for before the next spawn. A strict bounded observation must also
+  show that its shared process group contains only the verified run-agent
+  launcher; uncertainty starts nothing further. Stop and rescue write a
+  permanent stop marker, then require the whole owned group to be absent
+  before reporting stopped. The task's final fence, start and PID publication
+  share a lock with stop. The checking record is an exclusive once-only claim,
+  independent of usage or capture identity. The start deadline is checked
+  after command preparation, immediately before each turn and the real start,
+  and a turn's limit is the smaller of 90 seconds and the
   time left; a turn the deadline cut short is the fence's refusal
   (`start-refused.json`, `agent-failed`). While the pre-flight runs the
   status reads `busy`. Its outcome is in `~/.agentd/start-preflight.json`
@@ -2712,7 +2718,10 @@ session without one is built exactly as before.
   `failed` and the session closes by its `onUnreported`, reason
   `no-usable-model` (DESIGN-064 6.8 maps it to the `failed` page). The API
   copies the record only for a summoned task, only in those shapes and only
-  with `spec.model` or the fallback; anything else is dropped and the heartbeat still answers 204.
+  with `spec.model` or the fallback; anything else, including a malformed
+  record, is dropped and the rest of the heartbeat is stored. The heartbeat
+  answers 200 with a title body when `--title-rename-sessions` names the
+  session (or is `*`), and 204 with no body otherwise.
   Once stored, the record never changes, by the API and by the CRD's rules.
   A summoned remote session and every ordinary session get no pre-flight.
   The pre-flight's own usage is not recorded: one short turn a start, two

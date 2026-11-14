@@ -169,6 +169,7 @@ var agentdLayout = []historyRule{
 	// A summoned task's model pre-flight (OP791): the model it started on,
 	// or why no model was usable and nothing started.
 	{"start-preflight.json", classHistory, kindFile},
+	{"start-stopped.json", classHistory, kindFile},
 	{"task-events.jsonl", classHistory, kindFile},
 	{"task-source.json", classHistory, kindFile},
 	{"child-decision.json", classHistory, kindFile},
@@ -177,6 +178,7 @@ var agentdLayout = []historyRule{
 	{"initial-usage", classHistory, kindDir},
 	// Locks.
 	{"agent.pid", protocol.HistoryClassNotHistory, kindAny},
+	{"start-spawn.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"deliver.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"login.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"rescue.lock", protocol.HistoryClassNotHistory, kindAny},

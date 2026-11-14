@@ -21,6 +21,10 @@ var stopKillWait = 5 * time.Second
 // CLI itself or a background command it started, gets SIGKILL. run-agent is
 // not in that group, so it still writes the task's result.
 func stopAgent(s Settings, grace time.Duration) *protocol.AgentStop {
+	var first Launch
+	if readJSONFile(s.statePath(launchFile), &first) == nil && first.Preflight != nil {
+		return stopPreflightLaunch(s, first, grace)
+	}
 	st := &protocol.AgentStop{}
 	var p agentPid
 	if readJSONFile(s.statePath(pidFile), &p) != nil || !pidAlive(p) {
