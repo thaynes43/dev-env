@@ -7,7 +7,7 @@
 # The runtime is Python so opwork can run. The process does not call the
 # Kubernetes API: it presents one projected ServiceAccount token to the operator.
 
-FROM golang:1.27.3@sha256:2920bb124f1a2e12a1d39f0cab756ae0068441ee1da7655dec7f5e374944095b AS build
+FROM golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d AS build
 WORKDIR /src
 # renovate: datasource=github-releases depName=google/go-licenses
 ARG GO_LICENSES_VERSION=v2.0.1
