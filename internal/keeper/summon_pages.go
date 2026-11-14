@@ -554,6 +554,14 @@ func (p *summonPager) tick(ctx context.Context) {
 			dedupeFull = true
 			break
 		}
+		if j.event == summonEventOverflow {
+			// Selection used the time before the create-ledger read. Recheck
+			// with this iteration's time before either path records an event:
+			// a clock rollback must not take the caller's hour twice.
+			if o, kept := ledger.State.Overflow[j.caller]; kept && now.Before(time.Unix(o.LastPagedAt, 0).Add(summonOverflowEvery)) {
+				continue
+			}
+		}
 		if !ledger.State.room(now) {
 			ledger.State.Events[j.key] = summonPageEntry{At: now.Unix(), State: summonStateCapped, Session: sessionName(j.session)}
 			ledger.State.Capped++
