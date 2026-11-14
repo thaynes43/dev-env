@@ -2342,6 +2342,40 @@ func TestRenameRefusedTextDoesNotWipeLeftInInput(t *testing.T) {
 		w.assertNoWrite(t)
 		deliverRefuses(t, w)
 	})
+	// The mark sits above first-launch seeding. A first launch whose
+	// --remote-control value is not the session name would otherwise write
+	// that value into applied while the mark is set. The text is one the
+	// character rule accepts, and the screen is not an empty row, so the
+	// pass is this order and not the empty-row clear.
+	t.Run("first launch", func(t *testing.T) {
+		w := newRenameWorld(t)
+		w.boot(true)
+		var l Launch
+		if readJSONFile(w.s.statePath(launchFile), &l) != nil || l.Resume || !l.TUI {
+			t.Fatal("launch")
+		}
+		const launched = "Haiku | Other"
+		if launched == w.sess.Name {
+			t.Fatal("launch value matches the session name")
+		}
+		l.Argv = []string{"claude", "--remote-control", launched}
+		writeJSON(t, w.s.statePath(launchFile), l)
+		w.screens = []string{sessiontitle.BusyThinkingTypedScreen}
+		w.saveDisk(titleDisk{State: "Failed", Reason: "left-in-input", Target: "zz", Stopped: true, Applied: ""})
+		before, err := os.ReadFile(w.s.statePath(titleStateFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		disk := w.apply("Café")
+		if disk.State != "Failed" || disk.Reason != "left-in-input" || disk.Target != "zz" || disk.Applied != "" || !disk.Stopped {
+			t.Fatalf("%+v", disk)
+		}
+		after, err := os.ReadFile(w.s.statePath(titleStateFile))
+		if err != nil || string(after) != string(before) {
+			t.Fatalf("state rewritten %s", after)
+		}
+		w.assertNoWrite(t)
+	})
 	t.Run("cleanup", func(t *testing.T) {
 		w := newRenameWorld(t)
 		w.saveDisk(w.leftDisk("zz"))
@@ -2419,9 +2453,55 @@ func TestRenamePaneWidthHoldsALongTitle(t *testing.T) {
 	t.Run("narrow", func(t *testing.T) {
 		w := newRenameWorld(t)
 		w.paneWidth = 60
+		path := w.s.statePath(titleStateFile)
+		writes, scans := 0, 0
+		origWrite := writeTitleFile
+		origScan := readShadowDir
+		writeTitleFile = func(s Settings, d *titleDisk) error {
+			writes++
+			return origWrite(s, d)
+		}
+		readShadowDir = func(dir string, limit int) ([]os.DirEntry, error) {
+			scans++
+			return origScan(dir, limit)
+		}
+		t.Cleanup(func() {
+			writeTitleFile = origWrite
+			readShadowDir = origScan
+		})
 		disk := w.hold(t, title, "pane")
 		if disk.Attempts != 0 {
 			t.Fatalf("attempt spent %+v", disk)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The early width check returns before the command scan and before
+		// the staged title.json write. This first pass still records the
+		// hold, which is the one title-file write. A removed early check
+		// scans and writes the attempt, then the later check refunds it.
+		if scans != 0 {
+			t.Fatalf("command scan ran %d times", scans)
+		}
+		if writes != 1 {
+			t.Fatalf("title writes %d, want the one outcome save", writes)
+		}
+		// The next pass finds that hold already recorded. title.json stays
+		// byte-identical, and neither the title-file writer nor the command
+		// scan runs.
+		before := after
+		writes, scans = 0, 0
+		again := w.hold(t, title, "pane")
+		if again.Attempts != 0 {
+			t.Fatalf("attempt spent %+v", again)
+		}
+		after, err = os.ReadFile(path)
+		if err != nil || string(after) != string(before) {
+			t.Fatalf("title.json changed %s", after)
+		}
+		if writes != 0 || scans != 0 {
+			t.Fatalf("later pass writes %d scans %d", writes, scans)
 		}
 	})
 	t.Run("wide", func(t *testing.T) {
@@ -2472,7 +2552,7 @@ func TestRenamePaneWidthBoundary(t *testing.T) {
 }
 
 func TestRenameCursorWidthMustBePositive(t *testing.T) {
-	for _, raw := range []string{"2 46", "2 46 0 50", "2 46 -1 50"} {
+	for _, raw := range []string{"2 46", "2 46 0 50", "2 46 -1 50", "2 46 200 0"} {
 		t.Run(raw, func(t *testing.T) {
 			w := newRenameWorld(t)
 			w.cursorRaw = raw
@@ -2572,6 +2652,26 @@ func TestRenameCommandShadowStopsAtTheCap(t *testing.T) {
 	if got != shadowEntryCap+1 || got >= files {
 		t.Fatalf("read %d entries from a directory of %d", got, files)
 	}
+}
+
+func TestRenameCommandShadowAtTheCapIsNotHeld(t *testing.T) {
+	w := newRenameWorld(t)
+	dir := filepath.Join(w.s.Home, "proj", ".claude", "commands")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < shadowEntryCap; i++ {
+		if err := os.WriteFile(filepath.Join(dir, "e"+strconv.Itoa(i)+".txt"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := w.composed("Café")
+	w.arm(target, true)
+	disk := w.apply("Café")
+	if disk.State != "Applied" || disk.Reason == "command-shadowed" {
+		t.Fatalf("%+v", disk)
+	}
+	w.assertTyped(t, target)
 }
 
 func TestRenameResumeOutsideTheSetReportsInvalidTitle(t *testing.T) {

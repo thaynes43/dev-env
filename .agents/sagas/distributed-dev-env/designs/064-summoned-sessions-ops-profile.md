@@ -467,6 +467,43 @@ fallback (R23). What 6.1 narrows is the session's direct network reach; it
 does not isolate credentials or data. #747's RBAC check (6.12) and the
 second-family review of every story that grants access stay as they are.
 
+**Correction, 2026-11-13 (story 811; the coordinator's, not a ruling by Tom).**
+An independent read of haynes-ops PR 4884 found two things wrong with the
+table above, and the coordinator checked both in the files.
+
+- **The exec row is wider than "an ops session", and it is being closed for
+  the callers' pods.** The agent role is shared: every session that runs as
+  `dev-agents/dev-env-agent`, on any profile, can exec into a caller's pod
+  while it runs and read its token for the operator API, the plan token and
+  the metered key. With a summoning create kind switched on, that token
+  starts sessions on profile `ops` under the caller's policy, with a name
+  and data the holder chooses. No create kind is switched on, so nothing
+  can be started this way today. Story 811 (haynes-ops PR 4885, open and
+  not merged when this was written) puts the four summoning callers (`upgrade-agent/alert-responder`,
+  `upgrade-agent/upgrade-shepherd`, `upgrade-agent/upgrade-health-gate`,
+  `upgrade-agent/cigar-curation`) on the privileged list of
+  `dev-env-exec-guard`, so a session identity other than the workbench is
+  refused exec and attach into a pod of those accounts. A workload or a
+  token request as one of those accounts was already refused for every
+  session identity by `dev-env-identity-guard`. Every new summoning caller
+  joins that list in the PR that adds its CallerPolicy. **No summoning
+  create kind is switched on before story 811 is installed** (items 806 and
+  811). The "separate story" this section promises (item 759, an ops
+  session's own ServiceAccount) stays open for the rest: exec and proxy into
+  other pods that hold credentials an ops session does not need.
+- **What still can hold a caller's token after 811:** the workbench (the
+  superuser tier, exempt from the guards by design) and the two v1 pods
+  `dev/dev-env` and `upgrade-agent/dev-env-ops` (operator tier, no guard),
+  by exec or by a Job that runs as the caller's account. The v1 pods go with
+  #749 and #750.
+- **The cigar-journal row is wrong.** v1's curation does not use the token
+  profile `ops` holds. v1 uses a curation token of its own, minted with
+  cigar-journal's `--allow-curation` and kept in a file on the dev-env-ops
+  volume. The token in `dev-env-cigar-secret` is the owner's journal token
+  and holds no curation scope: one read-only curation call with it was
+  refused on 2026-11-13 ("Insufficient scope"). Q-26 (8.1) settles which
+  token v2's curation uses.
+
 ### 5.9 One accounting model (F2, C2, F5, F3)
 
 Every limit, lane, page and filing is computed from records on the sessions
@@ -2860,6 +2897,50 @@ of the correction above.
   no order pending or claimed.
 - Accepted as item 746 states it; #115 is completed with the same evidence.
 
+**Correction, 2026-11-13 (story 746's plan; the coordinator's rulings on item
+746 comment 7709, not rulings by Tom, except Q-26).** Read with the list
+above; where they differ, this governs.
+
+- **Four slices, no dev-env change.** 805: the caller, its policy, the
+  contract and a selftest, installed with summoning creates still off; its
+  first scheduled run is refused with 403 "not switched on", which proves
+  the token, the network path, the policy and the request and creates
+  nothing. 806: `--summon-create-kinds=task` and the removal of v1's
+  `curation-order` controller in one PR, merged after one day's v1 run and
+  read back before the next, so no date runs twice and one revert undoes
+  both. 807: the curation token for profile `ops` (Q-26). 808: the
+  common-rules paragraph of 5.6, as its own PR, read by the coordinator who
+  keeps that file.
+- **The token.** The bullet list above and 5.8 assumed profile `ops` already
+  held a token that can curate. It does not (5.8's correction). Tom ruled
+  Q-26 on 2026-11-13: v2's curation gets a new cigar-journal token minted
+  for it. Profile `ops` reads `CIGAR_JOURNAL_TOKEN` from that token's own
+  Secret, in place of the journal token, which ops sessions then no longer
+  hold.
+- **Reports.** "Publishes them as today" rested on a wrong premise: v1's
+  daily run publishes nothing (no issue comment and no relay PR since
+  September 2026; its counts reach Tom as the first 170 characters of the
+  note in v1's digest). So v2's daily run publishes nothing either. Its
+  counts are the note of its `agent-run report done`, kept on the Session
+  for 7 days; the v2 digest carries a line without them (742's ruling Q6).
+  That the counts no longer reach the phone is a difference from v1, listed
+  for gate T-2. `publish-report.sh` does not move. Item 746's Accepted line
+  is read as: the next scheduled run creates a v2 session in lane curation
+  that ends `done` with a counts note and `closed.source: report`, and
+  `upgrade-work-orders` has no `wo-cigar-curate` key for that date.
+- **The contract is copied, not moved**, to haynes-ops
+  `.agents/runbooks/ops/cigar-curation.md`; v1's copy stays until #750,
+  because changing `dev-env-ops-scripts` rolls dev-env-ops. It checks the
+  brief's data: the date equals the date in the session's name and is
+  today's or yesterday's UTC date (a run held for quota may start up to 12
+  hours after its create).
+- **With `task` switched on**, every `remote` entry stays refused. The
+  alert responder's inert `task` entry is removed in 806 until #747 gives
+  it its real brief.
+- **Before 806:** 805 accepted, 807, 808 and 811 installed, the agent image
+  at 2.108.0 or later, and the keeper's pager and daily digest installed
+  with a drill Tom confirmed.
+
 ### 6.12 OP747: move remediation
 
 - `remediate.sh` calls the client: `mode: task`, `lane: remediation`, `name:
@@ -3126,6 +3207,7 @@ narrowed Q-17.
 | Q-21 | the dispatch id of a caller's create | a summoned key is reused after its session ends (6.4's suffix rule); a hash of the caller and the key alone would let a re-fire find its id charged (5.9, N1) | A hash of caller, key and the key's newest earlier Session's UID; B a ledger entry reused per key; C a hash with the name | A | **Ruled A**, coordinator, 2026-11-11, with a correction to the ageing rule and, by note `op734-fix2-q-5`, the filing's entry (5.9, 10.3) | #738, #740 |
 | Q-22 | what Tom keeps of a terminal summoned session | `agent-run history` reads private Sessions only; remote sessions are never marked; ADR-020 keeps no conversation archive for tasks (5.9, N3) | A write it as the code is; B mark summoned remote sessions private | A | **Ruled A**, coordinator, 2026-11-11, with a precision on ADR-020 (5.9, 8.1, 10.3) | nothing |
 | Q-23 | an escalation caller's fallback when its create is refused | `escalate.sh` lines 44–47: call sites do not gate on its exit code; `remediate.sh` lines 43–47 fail open (6.12, 6.13, N6) | A state the premise, build nothing in the callers; B a caller-side page | A | **Ruled A**, coordinator, 2026-11-11 (6.12, 6.13, 10.3) | #748's acceptance wording |
+| Q-26 | which cigar-journal token v2's curation uses | the token profile `ops` holds is refused for curation ("Insufficient scope", 2026-11-13); v1's curation token is a file on the dev-env-ops volume with no 1Password field (5.8's correction, 6.11's correction) | A mint a new token for v2; B copy v1's token; C leave curation on v1 | A | **Ruled A by Tom, 2026-11-13**, on the coordinator's phone prompt, quoted in 8.1 | #807, #806 |
 
 Q-10 (#747) and Q-11 (#749) belong to those items; Q-14 (#736) is ruled
 inside gate T-1 (8.1). Q-04's and
@@ -3137,6 +3219,8 @@ the filing's ledger entry under Q-21, and were ruled the same day (10.3).
 Notes `op734-fix2-q-6` and `op734-fix2-q-7` answered the advisory review's two
 findings on `8bcdfc3d` (10.3). Three gates are Tom's (8.1): T-1 is ruled,
 T-2 and T-3 are Pending.
+Q-26 was asked on 2026-11-13, during story 746's planning: it is Tom's, and
+8.1 quotes the prompt and his answer. This design has no Q-24 or Q-25.
 
 ### 8.1 Tom's gates (F8)
 
@@ -3164,6 +3248,26 @@ The two options he did not choose were "Yes, but not the bot key yet" and
 not typed words. The coordinator recorded it on OpenProject item 751
 (comment 7112) and item 734 (comment 7113) and told Tom in its session what
 it had recorded. It is not a yes to T-2 or T-3.
+
+**Q-26, as asked and answered (2026-11-13).** Which cigar-journal token v2's
+curation uses is a credential, so it was Tom's. The coordinator first checked
+the premise (5.8's correction: the token profile `ops` holds is refused for
+curation), then asked on Tom's phone, with a native prompt in session
+`dev-env-1111-143337`:
+
+> The daily cigar curation is the first job I am moving off dev-env-ops onto v2. It needs a cigar-journal token that is allowed to curate. I checked: the token v2 sessions hold today is refused for curation, and the one dev-env-ops uses lives only in a file on its volume. Which token should v2's curation use?
+
+Tom chose **"Mint a new one for v2 (Recommended)"**. That option read:
+
+> You get: v2's curation has its own token that you can revoke by itself, and the old pod's token is untouched until that pod is retired. What it takes from you: run the cigar-journal mint once more (the same command you used for dev-env-ops, with a new client name such as dev-env-v2-curate) and paste the value into 1Password; I wire it to v2's ops sessions by pull request. What changes: v2 ops sessions hold a token that can edit the shared catalog, as every dev-env-ops session can today, and they stop holding your personal journal token.
+
+The options he did not choose were "Copy the old pod's token" and "Leave
+curation on v1 for now". The answer was read in that session at about
+2026-11-13T14:04Z by the shell clock. It is a selection on a phone prompt,
+not typed words. It is recorded on OpenProject item 746 (comment 7807). It
+covers a new token for the v2 curation lane, minted and stored by Tom and
+wired to profile `ops` only (story 807). It is not a yes to T-2 or T-3, and
+it covers no other profile and no copy of v1's token.
 
 ## 9. Not verified
 
