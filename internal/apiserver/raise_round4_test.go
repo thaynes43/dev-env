@@ -578,21 +578,31 @@ func TestDelayedPostCannotOverwriteTakeBack(t *testing.T) {
 	uid := string(target.UID)
 	replica := f.raiseReplica()
 	fired := false
-	f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
-		if s, ok := obj.(*v1alpha1.AgentSession); ok && !fired && annotationState(*s) == sessionraise.StatePending {
-			fired = true
-			w := replica.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: uid})
-			if w.Code != http.StatusOK {
-				t.Fatalf("DELETE %d %s", w.Code, w.Body.String())
-			}
+	f.srv.Live = round4SessionReadHook{Reader: f.c, before: func() {
+		if fired {
+			return
 		}
-		return nil
+		led, err := f.srv.readLedger(context.Background(), f.srv.Raise.filled())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if led.Find(uid) == nil {
+			return // Earlier target reads precede Admit.
+		}
+		fired = true
+		w := replica.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: uid})
+		if w.Code != http.StatusOK {
+			t.Fatalf("DELETE %d %s", w.Code, w.Body.String())
+		}
 	}}
 	w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true))
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("POST %d %s", w.Code, w.Body.String())
 	}
-	if !fired || annotationState(*f.session("target")) != sessionraise.StateTakenBack || f.ledgerEntry(uid).State != sessionraise.StateTakenBack {
+	// DELETE precedes the first pending annotation. It has no verified grant
+	// to sign taken-back; the ledger revocation stands, and POST must leave
+	// the annotation absent when it reads that changed state.
+	if !fired || f.session("target").Annotations[v1alpha1.AnnotationRaise] != "" || f.ledgerEntry(uid).State != sessionraise.StateTakenBack {
 		t.Fatal("delayed POST overwrote take-back of the same id")
 	}
 }
