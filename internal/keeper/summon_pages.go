@@ -224,6 +224,9 @@ type summonPager struct {
 	// tick's reads start after it (story 782 fix round 2, F3). It lives in
 	// memory only; a new process starts from the oldest again.
 	proofAfter summonProofKey
+	// creates reads the create ledger for the overflow page (story 793,
+	// summon_overflow.go); nil reads nothing and sends no overflow page.
+	creates summonCreatesReader
 }
 
 // summonProofKey orders prune candidates: oldest entry first, then UID, then
@@ -276,9 +279,14 @@ func summonPagerFor(o Options, cfg *rest.Config, log logr.Logger) *summonPager {
 		return nil
 	}
 	notices := o.Notices.withDefaults()
-	return newSummonPager(sp, &kubeSummonSessions{reader: c, namespace: sp.SessionNamespace},
+	p := newSummonPager(sp, &kubeSummonSessions{reader: c, namespace: sp.SessionNamespace},
 		&configMapSummonPageStore{client: c, name: types.NamespacedName{Namespace: o.Namespace, Name: sp.StateConfigMap}},
 		&PushoverSender{URL: notices.URL, TokenFile: notices.TokenFile, UserFile: notices.UserFile, Client: newSummonPushClient()}, o.Clock, log)
+	if p != nil {
+		// The create ledger is read through the same own client (story 793).
+		p.creates = &kubeSummonCreates{reader: c}
+	}
+	return p
 }
 
 // newSummonPagesClient builds the pager's own uncached client (story 782 fix
@@ -423,9 +431,14 @@ type summonJob struct {
 	key     string // the ledger key
 	event   string
 	at      time.Time
-	session *v1alpha1.AgentSession // nil for the drill
+	session *v1alpha1.AgentSession // nil for the drill and an overflow page
 	named   bool                   // a terminal page whose close a row names
 	count   int                    // a more-events page's count
+	// An overflow page's caller, its count of urgent refusals (the new
+	// reference once a page is attempted) and the refusals since its caller's
+	// reference (story 793).
+	caller         string
+	refused, since int64
 }
 
 func (p *summonPager) tick(ctx context.Context) {
@@ -468,9 +481,15 @@ func (p *summonPager) tick(ctx context.Context) {
 			outcomes = append(outcomes, line)
 		}
 	}
+	// The overflow events (story 793): read after the scan, never stopping
+	// the pages or the digest. A job without a session sorts after the drill
+	// and before the session pages, by its caller's last refusal.
+	overflow, lowered, owing := p.overflowJobs(ctx, ledger, now)
+	jobs = append(jobs, overflow...)
 	// The digest's watermark is the pager's first run (story 792, ruling Q6);
 	// it is saved with this tick's first write, or alone.
 	dirty := ledger.State.watermark(now)
+	dirty = lowered || dirty
 	// A prune is saved only with a write that adds an entry, as the Ask
 	// notifier's is, so a saved ledger never has an empty dedupe beside its
 	// page records (which load refuses as a reset). Its proof reads are made
@@ -478,10 +497,10 @@ func (p *summonPager) tick(ctx context.Context) {
 	// An unseen outcome needs a pending slot; repairing a missing pending
 	// entry does not. Pruning for dedupe room still runs (fix round 2, F2).
 	digestAdmission := len(ledger.State.Digest.Pending) < summonPagesMaxLines && len(ledger.State.newDigestOutcomes(outcomes)) > 0
-	if p.fresh(ledger, jobs, now) || digestAdmission || ledger.State.digestMissingEntries() {
+	if p.fresh(ledger, jobs, now, owing) || digestAdmission || ledger.State.digestMissingEntries() {
 		p.prune(ctx, ledger, live, now)
 	}
-	dedupeFull := false
+	dedupeFull, overflowFull := false, false
 	sort.SliceStable(jobs, func(i, j int) bool {
 		a, b := jobs[i], jobs[j]
 		if (a.session == nil) != (b.session == nil) {
@@ -521,18 +540,38 @@ func (p *summonPager) tick(ctx context.Context) {
 			}
 			continue
 		}
+		if j.event == summonEventOverflow && !ledger.State.overflowRoom(j.caller, now, owing) {
+			// The member is at its bound and holds no spare: the caller waits,
+			// its refusals still counted in the create ledger (story 793).
+			if !overflowFull {
+				overflowFull = true
+				p.log.Error(nil, "summon overflow caller capacity reached")
+			}
+			continue
+		}
 		if len(ledger.State.Events) >= summonPagesMaxEvents {
 			p.log.Error(nil, "summon page dedupe capacity reached")
 			dedupeFull = true
 			break
 		}
+		if j.event == summonEventOverflow {
+			// Selection used the time before the create-ledger read. Recheck
+			// with this iteration's time before either path records an event:
+			// a clock rollback must not take the caller's hour twice.
+			if o, kept := ledger.State.Overflow[j.caller]; kept && now.Before(time.Unix(o.LastPagedAt, 0).Add(summonOverflowEvery)) {
+				continue
+			}
+		}
 		if !ledger.State.room(now) {
 			ledger.State.Events[j.key] = summonPageEntry{At: now.Unix(), State: summonStateCapped, Session: sessionName(j.session)}
 			ledger.State.Capped++
+			// A capped overflow event takes its caller's hour and keeps its
+			// refusals for the next page (story 793 fix round 1, ruling 1).
+			ledger.State.markOverflow(j, now, false, owing)
 			dirty = true
 			continue
 		}
-		if !p.attempt(ctx, ledger, j, now) {
+		if !p.attempt(ctx, ledger, j, now, owing) {
 			return
 		}
 		dirty = false
@@ -560,8 +599,9 @@ func (p *summonPager) tick(ctx context.Context) {
 
 // fresh reports whether this tick may add a ledger entry: a summary the
 // window has room for, or a page whose key the dedupe lacks (a drill past the
-// bound excepted).
-func (p *summonPager) fresh(l *summonPageLedger, jobs []summonJob, now time.Time) bool {
+// bound excepted, and an overflow event whose caller the overflow member has
+// no room for; story 793).
+func (p *summonPager) fresh(l *summonPageLedger, jobs []summonJob, now time.Time, owing map[string]bool) bool {
 	if l.State.Capped > 0 && l.State.room(now) {
 		return true
 	}
@@ -570,6 +610,9 @@ func (p *summonPager) fresh(l *summonPageLedger, jobs []summonJob, now time.Time
 			continue
 		}
 		if j.event == summonEventDrill && l.State.drills() >= summonPagesMaxDrills {
+			continue
+		}
+		if j.event == summonEventOverflow && !l.State.overflowRoom(j.caller, now, owing) {
 			continue
 		}
 		return true
@@ -598,10 +641,17 @@ func (p *summonPager) prune(ctx context.Context, l *summonPageLedger, live map[s
 	holds := l.State.digestHolds()
 	for key, e := range l.State.Events {
 		uid, _, _ := cutSummonKey(key)
-		switch uid {
-		case "drill":
-		case "more":
+		switch {
+		case uid == "drill":
+		case uid == "more":
 			if !now.Before(time.Unix(e.At, 0).Add(24 * time.Hour)) {
+				delete(l.State.Events, key)
+			}
+		case summonOverflowEntryKey(key):
+			// An overflow event has no session to prove gone, and its
+			// caller's member, not this entry, is its dedupe (story 793): it
+			// goes once an hour old, unless the digest still needs it.
+			if old(e) && !holds[key] {
 				delete(l.State.Events, key)
 			}
 		default:
@@ -664,11 +714,13 @@ func summonJobs(s *v1alpha1.AgentSession) []summonJob {
 
 // attempt reserves one page in the ledger, sends it only once that write is
 // confirmed, and stores the result. It reports whether the tick may go on.
-func (p *summonPager) attempt(ctx context.Context, ledger *summonPageLedger, j summonJob, now time.Time) bool {
+// owing is the tick's callers that owe overflow refusals (overflowJobs).
+func (p *summonPager) attempt(ctx context.Context, ledger *summonPageLedger, j summonJob, now time.Time, owing map[string]bool) bool {
 	notice, record := p.render(j)
 	dispatchBy := now.Add(noticeStoreTimeout)
 	ledger.State.reserve(now, dispatchBy)
 	ledger.State.Events[j.key] = summonPageEntry{At: now.Unix(), State: string(pages.StateRecorded), Session: sessionName(j.session)}
+	ledger.State.markOverflow(j, now, true, owing)
 	if j.event == summonEventMore {
 		ledger.State.Capped -= j.count
 		ledger.State.More++
@@ -968,6 +1020,8 @@ func (p *summonPager) render(j summonJob) (Notice, pages.Page) {
 		n.Message = fmt.Sprintf("DRILL [dev-env] drill %s: a test page from the keeper's summoned-session pager. Nothing needs you.", p.drill)
 		rec.Title, rec.Body, rec.Correlation = n.Title, "drill "+p.drill, p.drill
 		return n, rec
+	case summonEventOverflow:
+		return p.renderOverflow(j)
 	case summonEventMore:
 		n.Title = "[dev-env] " + summonEventMore
 		events := "events were"
