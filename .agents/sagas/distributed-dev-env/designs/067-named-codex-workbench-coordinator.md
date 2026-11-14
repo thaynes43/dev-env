@@ -929,6 +929,18 @@ the implementation PR. No flag, host, manifest or installed configuration has
 changed. Slices (b), (c1), (c2), (d) and (e), owner confirmation and usable
 acceptance remain with the coordinator. ADR-030 remains Proposed.
 
+Slice (a) template-error behavior: when the current template/account is unreadable,
+the guard also reports admission blocked for a running ordinary Codex remote
+host. It cannot establish the current account from the old pod's account or
+profile label (sections 3.1 and 3.2). `PodReady=False` reports that refusal; the
+observed pod phase, existing pod, HOME, spec and annotations are preserved.
+Explicit suspend/delete still reaches the existing rescue path. The ordinary
+reconcile tests with readable templates and an empty setting remain unchanged;
+`TestCodexWorkbenchRunningPodPreserved/ordinary-templates` separately proves this
+unavailable-template case. This is source behavior, not an installation or a
+new owner ruling. The advisory review raised this effect; the implementation PR
+records the design/source explanation and the regression evidence.
+
 
 This proposal leaves the coordinator's source-versus-install hold intact. The
 independent native review, final head, layout result, CI result, advisory findings,
