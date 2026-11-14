@@ -11,14 +11,14 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/thaynes43/dev-env/internal/keeper"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/keeper"
 	"github.com/thaynes43/dev-env/internal/sessionraise"
 )
 
@@ -752,5 +752,120 @@ func TestPostTitleRedactionUsesKeeperFallback(t *testing.T) {
 	}
 	if !strings.Contains(notice.Message, keeper.NoticeRedact(words)) {
 		t.Fatal("fallback cut the claimed words")
+	}
+}
+
+func TestReplacementPendingRaiseRecoversAfterAnnotationFailure(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	uid := string(target.UID)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true)); w.Code != http.StatusAccepted {
+		t.Fatalf("A POST %d", w.Code)
+	}
+	if w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: uid}); w.Code != http.StatusOK {
+		t.Fatalf("A DELETE %d", w.Code)
+	}
+	f.now = f.now.Add(61 * time.Second)
+	body := f.raiseReq(uid, "", "allow second raise", sessionraise.WherePhone, true)
+	f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+		if _, ok := obj.(*v1alpha1.AgentSession); ok {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}}
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("B partial POST %d", w.Code)
+	}
+	id := f.ledgerEntry(uid).ID
+	if annotationState(*f.session("target")) != sessionraise.StateTakenBack {
+		t.Fatal("expected previous annotation to remain")
+	}
+	f.srv.Client = f.c
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusOK {
+		t.Fatalf("B retry %d %s", w.Code, w.Body.String())
+	}
+	rec, err := sessionraise.Parse(f.session("target").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.ID != id || rec.State != sessionraise.StatePending {
+		t.Fatal("replacement pending annotation was stranded")
+	}
+	f.announceAndActivateRaise(uid, id)
+}
+
+type round4SessionReadHook struct {
+	client.Reader
+	before func()
+}
+
+func (h round4SessionReadHook) Get(ctx context.Context, key types.NamespacedName, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*v1alpha1.AgentSession); ok && key.Name == "target" {
+		h.before()
+	}
+	return h.Reader.Get(ctx, key, obj, opts...)
+}
+
+func TestPendingRequestChecksEveryAttemptSnapshot(t *testing.T) {
+	for _, point := range []string{"helper-read", "conflict-retry"} {
+		t.Run(point, func(t *testing.T) {
+			f := newFixture(t)
+			f.raiseReady(true)
+			tok := f.workbench("bench")
+			target := f.remoteTarget("target", 2)
+			uid := string(target.UID)
+			body := f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true)
+			replica := f.raiseReplica()
+			fired := false
+			terminal := ""
+			attack := func() {
+				if fired {
+					return
+				}
+				led, err := f.srv.readLedger(context.Background(), f.srv.Raise.filled())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if led.Find(uid) == nil {
+					return
+				} // Earlier target reads precede Admit.
+				fired = true
+				if w := replica.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusOK {
+					t.Fatalf("concurrent POST %d %s", w.Code, w.Body.String())
+				}
+				f.raiseSent(uid)
+				if w := replica.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: uid}); w.Code != http.StatusOK {
+					t.Fatalf("DELETE %d", w.Code)
+				}
+				terminal = f.session("target").Annotations[v1alpha1.AnnotationRaise]
+				// Only the unsigned ledger write fence is missing. Keep the genuine
+				// authenticated terminal annotation and the old verified Sent.
+				f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) { r.State = sessionraise.StatePending })
+			}
+			if point == "helper-read" {
+				f.srv.Live = round4SessionReadHook{Reader: f.c, before: attack}
+			} else {
+				f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+					if s, ok := obj.(*v1alpha1.AgentSession); ok && annotationState(*s) == sessionraise.StatePending {
+						attack()
+					}
+					return nil
+				}}
+			}
+			if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+				t.Fatalf("delayed POST %d %s", w.Code, w.Body.String())
+			}
+			f.srv.Live = f.c
+			f.srv.Client = f.c
+			f.srv.activateRaises(context.Background())
+			if !fired || f.session("target").Annotations[v1alpha1.AnnotationRaise] != terminal {
+				t.Fatal("pending request replayed over the terminal snapshot")
+			}
+			if f.srv.depthExempt(context.Background(), &caller{kind: kindSession, depth: 3, session: f.session("target")}) {
+				t.Fatal("replayed old Sent granted an exemption")
+			}
+		})
 	}
 }

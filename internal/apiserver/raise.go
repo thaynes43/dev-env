@@ -441,7 +441,10 @@ func recordFrom(entry sessionraise.SessionEntry, words string) sessionraise.Reco
 // annotation from repair of a stored record. The authorized request and live
 // target supply the grant; only the persisted id/time survive a retry.
 func pendingRequestRepair(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, in sessionraise.AdmitInput) bool {
-	if sess.Annotations[v1alpha1.AnnotationRaise] != "" || entry.State != sessionraise.StatePending || entry.NoticeSentAt != "" || entry.ActiveFrom != "" || entry.TakenBackBy != "" || entry.TakenBackAt != "" {
+	if entry.State != sessionraise.StatePending || entry.NoticeSentAt != "" || entry.ActiveFrom != "" || entry.TakenBackBy != "" || entry.TakenBackAt != "" {
+		return false
+	}
+	if !pendingAnnotationMayBeWritten(sess, recordFrom(entry, "")) {
 		return false
 	}
 	if _, err := time.Parse(time.RFC3339, entry.PerformedAt); err != nil {
@@ -456,6 +459,21 @@ func pendingRequestRepair(sess *v1alpha1.AgentSession, entry sessionraise.Sessio
 		SaidAt: in.SaidAt, Ref: in.Ref, OwnerSession: in.OwnerSession,
 	}
 	return raiseGrantMatches(recordFrom(want, ""), entry)
+}
+
+// pendingAnnotationMayBeWritten is checked on every annotation attempt's
+// live snapshot, not just the earlier request read. The same id's signed
+// state is never replayed by POST. A different id can be the previous raise
+// left behind by the new POST's failed annotation write.
+func pendingAnnotationMayBeWritten(sess *v1alpha1.AgentSession, record sessionraise.Record) bool {
+	if sess.Annotations[v1alpha1.AnnotationRaise] == "" {
+		return true
+	}
+	stored, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
+	// No field of an older record supplies authority: the newly authorized
+	// request supplies the pending grant. Even a take-back with missing
+	// words can be the previous record after a partial first POST.
+	return err == nil && stored.ID != record.ID
 }
 
 func takenBackRecord(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, pub ed25519.PublicKey) sessionraise.Record {
@@ -997,6 +1015,10 @@ func (s *Server) writeRaiseAnnotation(ctx context.Context, key types.NamespacedN
 			return false, nil
 		}
 		if sess.Annotations[v1alpha1.AnnotationRaise] == raw {
+			return false, nil
+		}
+		if record.State == sessionraise.StatePending && (!raiseGrantMatches(record, *entry) || !pendingAnnotationMayBeWritten(&sess, record)) {
+			s.logOnce(record.ID, "request snapshot moved", "raise request did not overwrite a changed grant or stored raise")
 			return false, nil
 		}
 		if sess.Annotations == nil {
