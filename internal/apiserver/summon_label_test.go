@@ -16,8 +16,8 @@ import (
 )
 
 // Proof 8 of story 782 (DESIGN-064 6.8, ruling Q2 on item 742): the summoning
-// create labels its session for the keeper's pager, and no other create path
-// does.
+// create labels its session for the keeper's pager, and no other HTTP create
+// path does. OP801's platform filing is the separate writer checked below.
 func TestSummonCreateLabelsTheSession(t *testing.T) {
 	f := summonFixture(t)
 	w := summonPost(t, f, remediationBody("rem-responder-1", map[string]string{"alert": "disk full"}))
@@ -39,14 +39,16 @@ func TestSummonCreateLabelsTheSession(t *testing.T) {
 	}
 }
 
-// Only the summoning create's builder names the label among the packages that
-// create AgentSessions; the keeper only reads it.
-func TestSummonedLabelHasOneWriter(t *testing.T) {
+// Only the summoning API builder and the leader's platform escalation child
+// builder (OP801) write this label; the keeper only reads it. The leader
+// labels its new child from a closed remediation's snapshot, not request input.
+func TestSummonedLabelHasOnlySummoningWriters(t *testing.T) {
 	root := filepath.Join("..", "..")
 	allowed := map[string]bool{
-		filepath.Join("internal", "summonoutcome", "pages.go"): true, // the constant
-		filepath.Join("internal", "apiserver", "summon.go"):    true, // the one create that sets it
-		filepath.Join("internal", "keeper", "summon_pages.go"): true, // the pager's selector
+		filepath.Join("internal", "summonoutcome", "pages.go"):      true, // the constant
+		filepath.Join("internal", "apiserver", "summon.go"):         true, // the caller's create
+		filepath.Join("internal", "controller", "summon_filing.go"): true, // the platform's own child create
+		filepath.Join("internal", "keeper", "summon_pages.go"):      true, // the pager's selector
 	}
 	var users []string
 	for _, dir := range []string{"api", "cmd", "internal"} {
@@ -81,7 +83,7 @@ func TestSummonedLabelHasOneWriter(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(users) != 2 { // summon.go and summon_pages.go select it; pages.go declares it by name, not by selector
+	if len(users) != 3 { // the two builders and the pager select it; pages.go declares it by name, not by selector
 		t.Fatalf("label users %v", users)
 	}
 }

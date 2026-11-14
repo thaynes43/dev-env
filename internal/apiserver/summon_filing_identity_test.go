@@ -55,8 +55,12 @@ func TestNoAPICreateCanSetFilingIdentity(t *testing.T) {
 					t.Fatal(err)
 				}
 				w := f.do(http.MethodPost, apiv1.SessionsPath, token, body)
-				if w.Code < 400 || w.Code >= 500 {
-					t.Fatalf("identity injection returned %d", w.Code)
+				want := http.StatusBadRequest
+				if class == "summoning-caller" {
+					want = http.StatusUnprocessableEntity
+				}
+				if w.Code != want {
+					t.Fatalf("identity injection returned %d, want %d", w.Code, want)
 				}
 				var after v1alpha1.AgentSessionList
 				if err := f.c.List(context.Background(), &after); err != nil {
@@ -64,6 +68,14 @@ func TestNoAPICreateCanSetFilingIdentity(t *testing.T) {
 				}
 				if len(after.Items) != len(before.Items) || len(f.ledger().Charges) != 0 {
 					t.Fatal("refused identity injection created or charged")
+				}
+				if field == "filedFor" {
+					// Prove each identity class is otherwise authorized to create
+					// this body: an authentication refusal cannot pass the test.
+					delete(body, field)
+					if valid := f.do(http.MethodPost, apiv1.SessionsPath, token, body); valid.Code != http.StatusCreated {
+						t.Fatalf("control without the injected field returned %d", valid.Code)
+					}
 				}
 			})
 		}

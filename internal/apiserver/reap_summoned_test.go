@@ -13,6 +13,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -256,17 +258,40 @@ func TestSummonMalformedCallerStillExpiresAndPrunes(t *testing.T) {
 		st.Closed.Reason != summonoutcome.ReasonHoldExpired || !st.Closed.Released || st.AdmittedAt != nil || st.Escalation == nil || st.Escalation.State != "Pending" {
 		t.Fatalf("malformed accounting suppressed maxHold: outcome=%+v summon=%+v", closed.Status.Outcome, st)
 	}
+	closeBytes := func(s *v1alpha1.AgentSession) string {
+		t.Helper()
+		b, err := json.Marshal([]any{s.Status.Outcome, s.Status.Summon.Closed})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	originalClose := closeBytes(closed)
 	f.now = t0.Add(21 * time.Minute)
 	if err := r.SummonAdmissionPass(ctx); err != nil {
 		t.Fatal(err)
+	}
+	// A queued hold closes after the filing scan. The next pass records
+	// OP801's remote-off condition/event beside that unchanged close.
+	blocked := f.session(name)
+	condition := meta.FindStatusCondition(blocked.Status.Conditions, summonoutcome.ConditionEscalationPending)
+	pendingEvents := 0
+	for _, page := range blocked.Status.Summon.Pages {
+		if page.Event == v1alpha1.PageEscalationPending {
+			pendingEvents++
+		}
+	}
+	if closes != 1 || closeBytes(blocked) != originalClose || pendingEvents != 1 || condition == nil ||
+		condition.Status != metav1.ConditionTrue || condition.Reason != "Blocked" || condition.Message != string(summonoutcome.FilingRemoteOff) {
+		t.Fatal("Blocked must preserve the exact outcome/close and record one remote-off pending event")
 	}
 	r = &controller.Reconciler{Client: writer, APIReader: f.c, SessionNamespace: sessionNS, SummonedLanes: true,
 		PrivateHistoryRetention: true, PrivateTerminalRecord: true, Now: func() time.Time { return f.now }}
 	if err := r.SummonAdmissionPass(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if closes != 1 || f.session(name).ResourceVersion != closed.ResourceVersion {
-		t.Fatalf("a repeated pass or new leader rewrote the close: writes=%d", closes)
+	if closes != 1 || closeBytes(f.session(name)) != originalClose || f.session(name).ResourceVersion != blocked.ResourceVersion {
+		t.Fatalf("a new leader rewrote the close or Blocked record: writes=%d", closes)
 	}
 	for _, o := range []client.Object{&corev1.Pod{}, &corev1.PersistentVolumeClaim{}} {
 		n := name
