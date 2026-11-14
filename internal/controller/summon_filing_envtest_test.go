@@ -17,7 +17,7 @@ import (
 func TestSummonFilingBlockedVocabularyOnTheCRD(t *testing.T) {
 	for _, word := range []v1alpha1.SummonFilingReason{
 		summonoutcome.FilingPolicyGone, summonoutcome.FilingPolicyNoEscalations, summonoutcome.FilingHourFull, summonoutcome.FilingQueueFull,
-		summonoutcome.FilingRemoteOff, summonoutcome.FilingLedgerUnavailable, summonoutcome.FilingNoFreeName, summonoutcome.FilingEntryFull,
+		summonoutcome.FilingRemoteOff, summonoutcome.FilingLedgerUnavailable, summonoutcome.FilingNoFreeName, summonoutcome.FilingEntryFull, "child-invalid", "create-refused",
 	} {
 		t.Run(string(word), func(t *testing.T) {
 			s := newSession(t, func(s *v1alpha1.AgentSession) {
@@ -40,7 +40,7 @@ func TestSummonFilingBlockedVocabularyOnTheCRD(t *testing.T) {
 			}
 			stored := session(t, s.Name)
 			c := meta.FindStatusCondition(stored.Status.Conditions, summonoutcome.ConditionEscalationPending)
-			if c == nil || c.Reason != "Blocked" || c.Status != metav1.ConditionTrue || c.Message != string(word) || len(stored.Status.Summon.Pages) != 1 || stored.Status.Summon.Pages[0].Event != v1alpha1.PageEscalationPending {
+			if stored.Status.Summon.Escalation.Reason != word || c == nil || c.Reason != "Blocked" || c.Status != metav1.ConditionTrue || c.Message != string(word) || len(stored.Status.Summon.Pages) != 1 || stored.Status.Summon.Pages[0].Event != v1alpha1.PageEscalationPending {
 				t.Fatalf("blocked patch=%+v", stored.Status)
 			}
 			// Finish through the production patch too: chargedAt, then Filed.
@@ -60,7 +60,7 @@ func TestSummonFilingBlockedVocabularyOnTheCRD(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := session(t, s.Name)
-			if got.Status.Summon.Escalation.State != v1alpha1.SummonEscalationFiled || got.Status.Summon.Escalation.UID != string(child.UID) || meta.FindStatusCondition(got.Status.Conditions, summonoutcome.ConditionEscalationPending).Status != metav1.ConditionFalse {
+			if got.Status.Summon.Escalation.Reason != "" || got.Status.Summon.Escalation.State != v1alpha1.SummonEscalationFiled || got.Status.Summon.Escalation.UID != string(child.UID) || meta.FindStatusCondition(got.Status.Conditions, summonoutcome.ConditionEscalationPending).Status != metav1.ConditionFalse {
 				t.Fatal("Filed patch did not survive")
 			}
 		})

@@ -1909,26 +1909,54 @@ The child is a remote Claude escalation with the remediation's caller and
 parent, its saved escalation settings, urgent priority, and no caller key.
 The brief asks it to describe the data block once and wait for Tom.
 
-A blocked filing remains Pending with `EscalationPending=True`,
-`Reason=Blocked`, and the exact reason word in `Message`: `policy-gone`,
+A blocked filing remains Pending with its last blocked word in
+`status.summon.escalation.reason`. The same patch sets `EscalationPending=True`,
+`Reason=Blocked`, mirrors the word in `Message`, and records the first
+`escalation-pending` event. The closed words are `policy-gone`,
 `policy-no-escalations`, `hour-full`, `queue-full`, `remote-off`,
-`ledger-unavailable`, `no-free-name`, or `entry-full`. Its first blocked
-write also records `escalation-pending`; this slice sends no page. Remote
-creates off permits only that status write. No remediation means no filing
-work. A prospective charge that exceeds the caller entry's 64 KiB encoded
-bound is refused before writing. Kept Pending charges can outlive the hourly
-and queue windows, so the byte bound also limits their accumulation.
+`ledger-unavailable`, `no-free-name`, `entry-full`, `child-invalid` and
+`create-refused`. Code reads the typed member. Filed clears it; Abandoned
+requires it (or the fallback `not-filed`). This slice sends no page.
 
-These are coordinator rulings on item 768 comment 7702, item 801 comment
-7852, and answer `op801-build-1-a-1` (2026-11-14), not rulings by Tom. The
-schema includes Abandoned, but story 802 owns abandonment and the reap hold;
-story 803 owns page delivery. The plan reserves the typed escalation reason
-for Abandoned, so Pending has no typed blocked member yet. OP802 needs the
-coordinator's ruling on that member; consumers must not parse the condition
-message. Install the CRD copy before the operator pin, and **do not install
-this filing for a real remediation caller before story 802**. Nothing here
-installs it or proves a live session is joinable. Story 747 must confirm or
-replace the fixed brief before moving a remediation caller.
+`child-invalid` is decided before charging. `create-refused` covers a final API
+create refusal, including Invalid, Forbidden and an admission denial. An
+unchanged blocked reason adds no status write or event. `create-refused` and
+`no-free-name` retry at most once per 15-minute ledger attempt window, with no
+writes between attempts. An uncached list detects known name collisions before
+the mark. Unknown storage/create results use `ledger-unavailable` and retain
+the error for retry. Remote creates off permits only the first Blocked status
+write. Listed Filed or Abandoned remediations need no uncached GET; open ones
+are re-read because the watch pass may have just closed them.
+
+The caller entry's 64 KiB bound includes reserved bytes for the longest mutable
+filing timestamps. The shared encoder preserves this reserve for every writer,
+so a later fractional second alone cannot fill the entry. Pending charges stay
+as evidence after the hourly and queue windows; they still count in a queue
+only while their latest attempt is younger than 15 minutes. A retry must find
+a queue place before renewing its mark. Other charges and unknown fields also
+consume space, and legacy or externally altered entries can still be full.
+
+These are coordinator rulings, not rulings by Tom: item 768 comment 7702 and
+item 801 comments 7852, 8423, 8429, 8430 and 8446 (2026-11-14, story 801 fix
+round 1). The last supersedes the build's open question about Pending's typed
+reason. Story 802 owns abandonment and the reap hold; story 803 owns page
+text and delivery and must recheck Pending before sending its pending page.
+Install the CRD copy before the operator pin. **Not for a real remediation
+before stories 802 and 803:** a blocked or abandoned filing tells nobody until
+the keeper has its template. The review's 2026-11-14 06:19Z live read found
+CallerPolicy `upgrade-agent.alert-responder` already had task remediation and
+remote escalation entries. The step was inert because `--summon-create-kinds`
+was unset and no Session had a caller. The gate that matters is `task` in that
+flag; make the existing task entry inert or install both stories first. Story
+747 must still confirm or replace the fixed brief before moving a remediation
+caller. No installation or live acceptance is claimed here.
+
+Do not roll the operator back to a version before filing status support once
+a charge exists: its full status updates omit `uid` and `chargedAt`, and the
+new CRD refuses them on charged/Filed remediations. Keep the compatible CRD and
+operator and fix forward. A create already received by Kubernetes remains
+subject to the documented deletion/rebinding race within its deadline; this
+step supplies no server-side fence for that request.
 
 Each confirmed terminal write that retains `status.summon.closed` emits one
 operator stdout line beginning

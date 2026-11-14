@@ -2666,8 +2666,13 @@ func TestSummonFilingStatusRules(t *testing.T) {
 		{"abandoned", pending, abandoned, ""},
 		{"abandoned-kept", abandoned, none, ""},
 		{"abandoned-changed", abandoned, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "entry-full" }, "a filing never changes once it is not Pending"},
-		{"abandoned-no-reason", pending, func(st *v1alpha1.SummonStatus) { abandoned(st); st.Escalation.Reason = "" }, "a filing reason is present exactly when Abandoned"},
-		{"pending-reason", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "entry-full" }, "a filing reason is present exactly when Abandoned"},
+		{"abandoned-no-reason", pending, func(st *v1alpha1.SummonStatus) { abandoned(st); st.Escalation.Reason = "" }, "an Abandoned filing requires a reason"},
+		{"pending-reason", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "entry-full" }, ""},
+		{"pending-child-invalid", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "child-invalid" }, ""},
+		{"pending-create-refused", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "create-refused" }, ""},
+		{"pending-unknown-reason", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "unknown" }, "Unsupported value"},
+		{"pending-not-filed", pending, func(st *v1alpha1.SummonStatus) { st.Escalation.Reason = "not-filed" }, "a Pending filing requires a blocked reason"},
+		{"filed-reason", pending, func(st *v1alpha1.SummonStatus) { filed(st); st.Escalation.Reason = "entry-full" }, "a Filed filing has no reason"},
 		{"abandoned-no-page", pending, func(st *v1alpha1.SummonStatus) { abandoned(st); st.Pages = nil }, "pages hold escalation-abandoned exactly when the filing is Abandoned"},
 		{"page-not-abandoned", pending, func(st *v1alpha1.SummonStatus) {
 			st.Pages = []v1alpha1.SummonPage{{Event: v1alpha1.PageEscalationAbandoned, At: at}}

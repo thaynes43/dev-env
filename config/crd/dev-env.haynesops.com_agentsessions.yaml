@@ -3490,8 +3490,9 @@ spec:
                         pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                         type: string
                       reason:
-                        description: Reason is the last blocked word, or not-filed,
-                          on abandonment only.
+                        description: |-
+                          Reason is the last blocked word while Pending, required (or not-filed)
+                          on abandonment, and absent once Filed.
                         enum:
                         - policy-gone
                         - policy-no-escalations
@@ -3501,6 +3502,8 @@ spec:
                         - ledger-unavailable
                         - no-free-name
                         - entry-full
+                        - child-invalid
+                        - create-refused
                         - not-filed
                         maxLength: 32
                         type: string
@@ -3528,8 +3531,13 @@ spec:
                       rule: oldSelf.state == 'Pending' || self == oldSelf
                     - message: a filing UID is present exactly when Filed
                       rule: has(self.uid) == (self.state == 'Filed')
-                    - message: a filing reason is present exactly when Abandoned
-                      rule: has(self.reason) == (self.state == 'Abandoned')
+                    - message: an Abandoned filing requires a reason
+                      rule: self.state != 'Abandoned' || has(self.reason)
+                    - message: a Filed filing has no reason
+                      rule: self.state != 'Filed' || !has(self.reason)
+                    - message: a Pending filing requires a blocked reason
+                      rule: self.state != 'Pending' || !has(self.reason) || self.reason
+                        != 'not-filed'
                     - message: chargedAt is set once and never changes
                       rule: '!has(oldSelf.chargedAt) || (has(self.chargedAt) && self.chargedAt
                         == oldSelf.chargedAt)'
