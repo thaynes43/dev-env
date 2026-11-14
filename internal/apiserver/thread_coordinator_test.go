@@ -269,3 +269,22 @@ func TestCoordinatorGatePinsTemplatesOnce(t *testing.T) {
 		t.Fatalf("%d %s exec=%d templates=%d", w.Code, w.Body, ex.calls(), reads)
 	}
 }
+
+func TestCoordinatorAPIRejectsDifferentModelOrEffort(t *testing.T) {
+	for _, field := range []string{"model", "effort"} {
+		t.Run(field, func(t *testing.T) {
+			f := newFixture(t)
+			ex := coordinatorHostFixture(t, f, "reserved")
+			req := coordinatorRequest()
+			if field == "model" {
+				req.Model = "gpt-6-astra"
+			} else {
+				req.Effort = "high"
+			}
+			w := f.do(http.MethodPost, apiv1.SessionThreadsPath("reserved"), tokHuman, req)
+			if w.Code != 422 || ex.calls() != 0 {
+				t.Fatalf("changed coordinator request reached exec: %d %s calls=%d", w.Code, w.Body, ex.calls())
+			}
+		})
+	}
+}

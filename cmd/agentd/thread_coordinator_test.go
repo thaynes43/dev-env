@@ -3,10 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
-	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
 func TestCtlCoordinatorThreadMetadataAndTargetFences(t *testing.T) {

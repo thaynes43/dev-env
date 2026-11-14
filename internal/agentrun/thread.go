@@ -132,7 +132,9 @@ func threadReadHandoff(path string) ([]byte, bool) {
 }
 
 // threadOnHost is the Codex adapter's client half: check the host, then exec
-// agentd ctl thread-start in it with the handoff on stdin. Authorization is
+// agentd ctl thread-start in it with the handoff on stdin. Explicit coordinator
+// launches always use threadViaAPI so they receive its privileged caller gate.
+// Ordinary exec authorization is
 // sessionExecTarget's: RBAC decides where kubectl exec runs (the v1 pod, a
 // workbench session, a laptop). An ordinary session pod has no exec (D-19), so
 // it asks the operator's API to run the same command (threadViaAPI). No grant

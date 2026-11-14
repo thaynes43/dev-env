@@ -957,7 +957,9 @@ ordinary-owned-pod exception to every unavailable profile resolution, including
 a removed profile with readable templates, and skips construction admission when
 `ensure` already has a pod. No missing-pod construction is admitted by that
 exception. Tests compare the whole ordinary status/result and preserve pod/HOME.
-The PR and recovery handoff record exact source, tests, mutations and CI.
+The [source test evidence](../evidence/067-slice-b-source-tests.md) records the
+acceptance tests and all 58 killed/restored guard mutants. The PR and recovery
+handoff record the exact head and CI separately.
 Slices (c1/c2/d/e), owner rulings, another-family review and installation remain
 held with their existing owners. Meatball must obtain any missing ruling;
 silence is not consent.

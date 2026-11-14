@@ -49,9 +49,12 @@ func TestCoordinatorPoolFactsAndLease(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			hosts, _, err := f.srv.codexHostFacts(context.Background(), f.tmpl)
+			hosts, login, err := f.srv.codexHostFacts(context.Background(), f.tmpl)
 			if err != nil || len(hosts) != 1 {
 				t.Fatalf("facts: %v %+v", err, hosts)
+			}
+			if login != codexhostpool.LoginUnknown {
+				t.Fatalf("excluded host supplied shared-login facts: %s", login)
 			}
 			h := hosts[0]
 			if codexhostpool.Suitable(h, codexhostpool.Caller{Kind: codexhostpool.KindClient}, h.ResolvedProfile, "dev-env", f.now) {

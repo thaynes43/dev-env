@@ -29,8 +29,9 @@ import (
 // `thread/start`, and passes no sandbox or approval flag. Before that client
 // starts, thread start writes folder trust for the one platform repository
 // through the host daemon's config/value/write (DESIGN-057 section 12).
-// thread status does not. Everything else is
-// read-only observation over the peer-verified control socket. It never pairs,
+// thread status does not. A coordinator launch also sets and reads back native
+// title metadata after exact-ID binding. All other native access is read-only
+// observation over the peer-verified control socket. It never pairs,
 // logs in, resumes, forks or retries a launch.
 
 // CodexThreadWrapper is where the agent image installs the clean-session wrapper.

@@ -920,7 +920,8 @@ After binding the exact new native thread, agentd sets its name metadata to
 `GPT | Dev-env coordinator 2` and reads the same ID, cwd and name back through
 the peer-verified daemon RPC. This is separate from tmux and the platform host
 title. A lost ACK is `title_unconfirmed`, with the known thread ID retained;
-inspect it and never relaunch to repair uncertainty. Phone rendering, owner
+inspect it and never relaunch to repair uncertainty. A later response observation
+from `thread status` does not confirm the name metadata ACK. Phone rendering, owner
 visibility, pairing and served-model evidence remain separate live proof.
 
 Ordinary host selection excludes the configured reserved name regardless of

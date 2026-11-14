@@ -151,12 +151,12 @@ func TestCodexCoordinatorNativeTitleRPC(t *testing.T) {
 						cwd = "/other"
 					}
 					if reads > 1 && fault != "readback-name" {
-						name = codexCoordinatorTitle
+						name = "GPT | Dev-env coordinator 2"
 					}
 					return map[string]any{"thread": map[string]any{"id": id, "cwd": cwd, "name": name}}
 				case "thread/name/set":
 					sets++
-					if params["threadId"] != newThread || params["name"] != codexCoordinatorTitle || len(params) != 2 {
+					if params["threadId"] != newThread || params["name"] != "GPT | Dev-env coordinator 2" || len(params) != 2 {
 						t.Error("wrong title mutation", params)
 					}
 					if fault == "set-ack" {
@@ -170,6 +170,9 @@ func TestCodexCoordinatorNativeTitleRPC(t *testing.T) {
 			err := setCodexCoordinatorTitle(context.Background(), s, os.Getpid(), newThread, "/synthetic/repo")
 			if (fault == "none") != (err == nil) {
 				t.Fatalf("fault=%s err=%v", fault, err)
+			}
+			if fault == "none" && (sets != 1 || reads != 2) {
+				t.Fatalf("title setter/readback missing: sets=%d reads=%d", sets, reads)
 			}
 			if sets > 1 || (fault == "read-id" || fault == "read-cwd") && sets != 0 {
 				t.Fatalf("sets=%d", sets)
