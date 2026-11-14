@@ -588,3 +588,65 @@ func TestSummonFilingReportRacesGuaranteedClose(t *testing.T) {
 		})
 	}
 }
+
+// The by-ID fallback is useful recovery, but cannot replace the required
+// uncached label read. Consume one successful label read per Create RPC.
+func TestSummonFilingListsByLabelBeforeEveryCreate(t *testing.T) {
+	for _, which := range []string{"plain", "collision", "label-read-fails"} {
+		t.Run(which, func(t *testing.T) {
+			w := newFilingWorld(t)
+			s := w.get(filingRem)
+			if which == "collision" {
+				w.add(&v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: summonoutcome.EscalationName(s), Namespace: s.Namespace, UID: "another-object"}})
+			}
+			lists, creates := 0, 0
+			freshLabelRead := false
+			w.r = filingLeader(w, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+				if _, ok := o.(*v1alpha1.AgentSession); ok {
+					creates++
+					if !freshLabelRead {
+						return errors.New("create without its own successful uncached filed-for-uid list")
+					}
+					freshLabelRead = false
+				}
+				return c.Create(ctx, o, opts...)
+			}})
+			w.r.APIReader = interceptor.NewClient(w.base, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				options := (&client.ListOptions{}).ApplyOptions(opts)
+				if options.LabelSelector != nil {
+					uid, exact := options.LabelSelector.RequiresExactMatch(summonoutcome.LabelFiledForUID)
+					if exact && uid == string(s.UID) && options.Namespace == s.Namespace {
+						lists++
+						if which == "label-read-fails" {
+							return errors.New("uncached label list unavailable")
+						}
+						if err := c.List(ctx, list, opts...); err != nil {
+							return err
+						}
+						freshLabelRead = true
+						return nil
+					}
+				}
+				return c.List(ctx, list, opts...)
+			}})
+			err := w.r.summonFile(context.Background(), s)
+			if which == "label-read-fails" {
+				if err == nil || creates != 0 || lists != 1 {
+					t.Fatalf("failed label read: err=%v lists=%d creates=%d", err, lists, creates)
+				}
+				filingBlocked(t, w, summonoutcome.FilingLedgerUnavailable)
+				w.r = filingLeader(w, interceptor.Funcs{})
+				w.pass()
+			} else {
+				want := 1
+				if which == "collision" {
+					want = 2
+				}
+				if err != nil || lists != want || creates != want {
+					t.Fatalf("label/create order: err=%v lists=%d creates=%d want=%d", err, lists, creates, want)
+				}
+			}
+			assertOneFiling(t, w, summonT0)
+		})
+	}
+}
