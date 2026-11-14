@@ -33,14 +33,17 @@ func (s *Server) readNotices(ctx context.Context, cfg RaiseConfig) (*sessionrais
 
 // activateRaises moves pending rows the keeper has announced. It runs when
 // dispatch is on or a profile list is configured. One pass reads the
-// operator ledger once. That read, like the informer cache, is only a hint
+// operator ledger once for selection. That read, like the cache, is a hint
 // for which rows to visit: a missing session is skipped, and a row is
 // visited only when it is pending or the cached annotation's state differs
 // from the row. The hint decides nothing. For each visited row the live
 // session is read first and that session's ledger row second, and the
 // repair, the activation or the unannounce is made from those two. The
 // activator never writes an annotation whose state differs from the ledger
-// row it read after the live session. On a conflict both are read again.
+// row it read after the live session. Update uses that snapshot's resourceVersion,
+// without a further Get. After a successful write the ledger is read again;
+// a changed id/state re-decides in this same bounded pass. A cross-object
+// mismatch never counts. On a conflict both objects are read again.
 // The ledger is written before the annotation. A row that is no longer
 // pending is left alone, so a take-back wins over a later Sent.
 func (s *Server) activateRaises(ctx context.Context) {
@@ -117,6 +120,10 @@ func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1
 	}
 	opPub := priv.Public().(ed25519.PublicKey)
 	ann, annOK := verifiedRaiseWords(&live, opPub, entry.ID)
+	if annOK && !raiseGrantMatches(ann, *entry) {
+		s.logOnce(entry.ID, "grant fields differ", "raise ledger grant fields differ from the verified annotation")
+		return
+	}
 	// The annotation and the ledger disagree. Re-sign from the ledger row
 	// and the verified words, including a taken-back row. An annotation that
 	// does not verify is left as it is and logged.
@@ -146,9 +153,9 @@ func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1
 				return
 			}
 			writeFrom = fresh
-			s.logRaiseState(observedAudit(live.Name, writeFrom.State), recordFrom(*writeFrom, ann.Owner.Words))
+
 		}
-		if err := s.writeSignedFromLedger(ctx, &live, *writeFrom, ann.Owner.Words, ann.State, priv); errors.Is(err, errRaiseAnnotationMoved) {
+		if err := s.writeSignedFromLedger(ctx, &live, *writeFrom, ann, notices, pub, priv, now); errors.Is(err, errRaiseAnnotationMoved) {
 			s.activateOneDepth(ctx, cfg, &live, nil, notices, pub, priv, now, depth+1)
 		}
 		return
@@ -180,17 +187,12 @@ func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1
 	state := sessionraise.StateUnannounced
 	sentAt, activeFrom := "", ""
 	if action == sessionraise.ActionActivate {
-		sent, ok := sessionraise.SentTime(*entry, notices.Items, pub)
+		var ok bool
+		sentAt, activeFrom, ok = maySignRaiseActive(ann, notices, pub, now)
 		if !ok {
 			return
 		}
-		at, err := time.Parse(time.RFC3339, sent)
-		if err != nil {
-			return
-		}
 		state = sessionraise.StateActive
-		sentAt = sent
-		activeFrom = at.Add(sessionraise.EffectDelay).UTC().Format(time.RFC3339)
 	}
 	var finished sessionraise.SessionEntry
 	ok := false
@@ -215,7 +217,7 @@ func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1
 	} else {
 		s.logRaiseState("raise active", signed)
 	}
-	if err := s.writeSignedFromLedger(ctx, &live, finished, ann.Owner.Words, sessionraise.StatePending, priv); errors.Is(err, errRaiseAnnotationMoved) {
+	if err := s.writeSignedFromLedger(ctx, &live, finished, ann, notices, pub, priv, now); errors.Is(err, errRaiseAnnotationMoved) {
 		s.activateOneDepth(ctx, cfg, &live, nil, notices, pub, priv, now, depth+1)
 		return
 	} else if err != nil {
@@ -234,15 +236,59 @@ func annotationState(sess v1alpha1.AgentSession) string {
 	return rec.State
 }
 
-// writeSignedFromLedger signs the ledger row with words that have already
-// been verified, and writes that annotation only while the stored annotation
-// still has the same id and the state this decision was made from.
-func (s *Server) writeSignedFromLedger(ctx context.Context, sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, words, fromState string, priv ed25519.PrivateKey) error {
-	if sessionraise.WordsProblem(words) != "" || sessionraise.WordsHash(words) != entry.WordsHash {
-		s.logOnce(entry.ID, "words do not verify", "raise words do not verify, so the annotation was not re-signed")
+// raiseGrantMatches compares every immutable grant field with authenticated
+// evidence. Only the state and its notice/take-back times may come from a row.
+func raiseGrantMatches(ann sessionraise.Record, entry sessionraise.SessionEntry) bool {
+	want := recordFrom(entry, ann.Owner.Words)
+	want.State, want.NoticeSentAt, want.ActiveFrom = ann.State, ann.NoticeSentAt, ann.ActiveFrom
+	want.TakenBackBy, want.TakenBackAt = ann.TakenBackBy, ann.TakenBackAt
+	want.KeyID, want.Sig = ann.KeyID, ann.Sig
+	return want == ann
+}
+
+// maySignRaiseActive is shared by activation and repair. A ledger state is
+// never activation evidence: only a verified raise Sent for this id and UID,
+// at or after performedAt, followed by the full delay, permits active.
+func maySignRaiseActive(ann sessionraise.Record, notices *sessionraise.NoticeLedger, pub ed25519.PublicKey, now time.Time) (string, string, bool) {
+	if notices == nil {
+		return "", "", false
+	}
+	entry := sessionraise.SessionEntry{ID: ann.ID, UID: ann.SessionUID}
+	sent, ok := sessionraise.SentTime(entry, notices.Items, pub)
+	at, err := time.Parse(time.RFC3339, sent)
+	performed, performedErr := time.Parse(time.RFC3339, ann.PerformedAt)
+	if !ok || err != nil || performedErr != nil || at.Before(performed) || now.Before(at.Add(sessionraise.EffectDelay)) {
+		return "", "", false
+	}
+	return sent, at.Add(sessionraise.EffectDelay).UTC().Format(time.RFC3339), true
+}
+
+// writeSignedFromLedger starts from the verified annotation, retaining every
+// grant field. A terminal annotation cannot be revived by editing the ledger.
+func (s *Server) writeSignedFromLedger(ctx context.Context, sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, ann sessionraise.Record, notices *sessionraise.NoticeLedger, pub ed25519.PublicKey, priv ed25519.PrivateKey, now time.Time) error {
+	if !raiseGrantMatches(ann, entry) {
+		s.logOnce(entry.ID, "grant fields differ", "raise ledger grant fields differ from the verified annotation")
 		return nil
 	}
-	signed, err := sessionraise.Sign(recordFrom(entry, words), priv)
+	allowed := ann.State == sessionraise.StatePending && (entry.State == sessionraise.StateActive || entry.State == sessionraise.StateUnannounced || entry.State == sessionraise.StateTakenBack) || (ann.State == sessionraise.StateActive || ann.State == sessionraise.StateUnannounced) && entry.State == sessionraise.StateTakenBack
+	if !allowed {
+		s.logOnce(entry.ID, "invalid state transition", "raise ledger transition from the verified annotation is refused")
+		return nil
+	}
+	rec := ann
+	rec.State = entry.State
+	if entry.State == sessionraise.StateActive {
+		var ok bool
+		rec.NoticeSentAt, rec.ActiveFrom, ok = maySignRaiseActive(ann, notices, pub, now)
+		if !ok {
+			s.logOnce(entry.ID, "activation evidence missing", "raise active annotation needs a verified Sent and its full delay")
+			return nil
+		}
+	}
+	if entry.State == sessionraise.StateTakenBack {
+		rec.TakenBackBy, rec.TakenBackAt = entry.TakenBackBy, entry.TakenBackAt
+	}
+	signed, err := sessionraise.Sign(rec, priv)
 	if err != nil {
 		s.Log.Error(err, "raise activation sign", "session", sess.Name, "id", entry.ID)
 		return err
@@ -251,10 +297,20 @@ func (s *Server) writeSignedFromLedger(ctx context.Context, sess *v1alpha1.Agent
 	if err != nil {
 		return err
 	}
-	return s.writeRaiseAnnotationWhen(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, sess.UID, string(raw), func(cur *v1alpha1.AgentSession) bool {
-		rec, err := sessionraise.Parse(cur.Annotations[v1alpha1.AnnotationRaise])
-		return err == nil && rec.ID == entry.ID && rec.State == fromState
-	})
+	err = s.writeRaiseAnnotationWhen(ctx, sess, string(raw))
+	if err == nil {
+		s.logRaiseState(observedAudit(sess.Name, signed.State), signed)
+		// The two objects are not a transaction. Close a ledger-only
+		// take-back in the cross-object interval in this same bounded pass.
+		fresh, readErr := s.raiseEntry(ctx, s.Raise.filled(), string(sess.UID))
+		if readErr != nil {
+			return readErr
+		}
+		if fresh == nil || fresh.ID != signed.ID || fresh.State != signed.State {
+			return errRaiseAnnotationMoved
+		}
+	}
+	return err
 }
 
 // RaiseActivator is the leader loop. It does nothing when the dispatch flag

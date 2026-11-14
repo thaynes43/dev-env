@@ -616,7 +616,7 @@ func (f *fixture) putActiveProfile(sess *v1alpha1.AgentSession, start bool, prof
 		Name: sess.Name, UID: string(sess.UID), ID: id, State: sessionraise.StateActive, ChangedAt: now,
 		Profile: profile, StartSessions: start, Depth: "2", WordsHash: hash, PerformedBy: "human/" + humanSA,
 		PerformedAt: at, Where: sessionraise.WhereOwn, SaidAt: at,
-		NoticeSentAt: at, ActiveFrom: now.Add(sessionraise.EffectDelay).Format(time.RFC3339),
+		NoticeSentAt: now.Add(-sessionraise.EffectDelay).Format(time.RFC3339), ActiveFrom: at,
 	}
 	led, err := f.srv.readLedger(ctx, cfg)
 	if err != nil {
@@ -1070,44 +1070,19 @@ func TestSameRaiseKeepsWhenItTookEffect(t *testing.T) {
 	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
 		t.Fatalf("raise: %d %s", w.Code, w.Body.String())
 	}
-	cfg := f.srv.Raise.filled()
-	led, err := f.srv.readLedger(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	row := led.Find(string(target.UID))
-	sent := f.now.Add(-3 * time.Minute).UTC().Truncate(time.Second).Format(time.RFC3339)
-	from := f.now.Add(-time.Minute).UTC().Truncate(time.Second).Format(time.RFC3339)
-	row.State = sessionraise.StateActive
-	row.NoticeSentAt = sent
-	row.ActiveFrom = from
-	saved, err := led.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cm := &corev1.ConfigMap{}
-	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: cfg.Namespace, Name: cfg.Ledger}, cm); err != nil {
-		t.Fatal(err)
-	}
-	cm.Data[sessionraise.LedgerField] = string(saved)
-	if err := f.c.Update(context.Background(), cm); err != nil {
-		t.Fatal(err)
-	}
-	current := f.session("target")
-	delete(current.Annotations, v1alpha1.AnnotationRaise)
-	if err := f.c.Update(context.Background(), current); err != nil {
-		t.Fatal(err)
+	f.raiseSent(string(target.UID))
+	f.srv.activateRaises(context.Background())
+	before := f.session("target").Annotations[v1alpha1.AnnotationRaise]
+	active, err := sessionraise.Parse(before)
+	if err != nil || active.State != sessionraise.StateActive || active.NoticeSentAt == "" || active.ActiveFrom == "" {
+		t.Fatal("raise did not activate with real evidence")
 	}
 	w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("same raise: %d %s", w.Code, w.Body.String())
 	}
-	got, err := sessionraise.Parse(f.session("target").Annotations[v1alpha1.AnnotationRaise])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.State != sessionraise.StateActive || got.NoticeSentAt != sent || got.ActiveFrom != from {
-		t.Fatalf("retry dropped when the raise took effect: state %s sent %s from %s", got.State, got.NoticeSentAt, got.ActiveFrom)
+	if got := f.session("target").Annotations[v1alpha1.AnnotationRaise]; got != before {
+		t.Fatal("retry changed the active record or when it took effect")
 	}
 }
 

@@ -193,8 +193,9 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 		Where: req.Owner.Where, SaidAt: saidAt.UTC().Truncate(time.Second).Format(time.RFC3339),
 		Ref: req.Owner.Ref, OwnerSession: ownerSession(c),
 	}
-	// Before the word is spent. The title and the effect time are the
-	// longest the notice can grow to, not the session's title today.
+	// Before the word is spent, check a placeholder title and a full time.
+	// Redaction can lengthen the real title; keeper also checks the final
+	// message and falls back to omitting that title before any send.
 	fits, err := sessionraise.NoticeFits(fresh.Name, c.String(), in.Where, in.SaidAt, req.Owner.Words, keeper.NoticeRedact)
 	if err != nil || !fits {
 		return 0, nil, raiseInvalid(raiseNoticeLong)
@@ -225,14 +226,18 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 	if err != nil {
 		return 0, nil, s.raiseLedgerErr(err, c, fresh.Name)
 	}
-	// A retry can be the first place that sees a raise whose ledger write
-	// was applied and whose answer was lost. The line is once per id and state.
-	if same && entry.State == sessionraise.StatePending {
-		s.logRaiseState(raisedAudit(fresh.Name, entry.Profile), recordFrom(entry, req.Owner.Words))
-	}
 	if same && s.annotationCounts(fresh, pub, &entry) {
 		v := s.withUsageRollup(ctx, fresh, c, false)
 		return http.StatusOK, v, nil
+	}
+	// A same-body request is not permission to promote an unsigned ledger
+	// state or replay over an authenticated terminal annotation. Active
+	// repair belongs to the activator's verified transition/evidence path.
+	// Only a missing pending annotation can be recovered from this fresh,
+	// authorized request, whose live grant fields must still match the row.
+	if same && !pendingRequestRepair(fresh, entry, in, pub) {
+		s.logOnce(entry.ID, "request repair lacks authenticated grant", "raise request did not re-sign an unsigned state or changed grant")
+		return http.StatusOK, s.withUsageRollup(ctx, fresh, c, false), nil
 	}
 	// A retry of the same body uses the row's id and time, so the word is
 	// not spent again, and rewrites a missing annotation.
@@ -279,8 +284,14 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 	if !same && writeLedger {
 		s.logRaiseState(raisedAudit(fresh.Name, entry.Profile), signed)
 	}
-	if err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw)); err != nil {
+	annotationWritten, err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw), pub)
+	if err != nil {
 		return 0, nil, raiseUnavailable("The raise was recorded but the session annotation could not be written. Send the same request again.")
+	}
+	// Recovery can first observe an applied ledger write whose response was
+	// lost. A retry of an already-counting annotation makes no audit line.
+	if same && annotationWritten && entry.State == sessionraise.StatePending {
+		s.logRaiseState(raisedAudit(fresh.Name, entry.Profile), signed)
 	}
 	updated, err := s.raiseTarget(ctx, r)
 	if err != nil {
@@ -339,7 +350,8 @@ func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http
 	var wrote bool
 	err = s.commitLedger(ctx, cfg, func(led *sessionraise.Ledger) (bool, error) {
 		// wrote belongs to this attempt. A later attempt that finds the
-		// row already taken back did not write it, and must not log it.
+		// row already taken back did not commit it. Annotation repair below
+		// may still log the transition it first observes.
 		wrote = false
 		cur := led.Find(string(fresh.UID))
 		if cur == nil {
@@ -382,14 +394,22 @@ func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http
 	if keyErr != nil {
 		s.Log.Info("The take-back stands. The session annotation could not be re-signed.", "session", fresh.Name, "error", keyErr.Error())
 	} else if !s.annotationTakenBack(fresh, priv.Public().(ed25519.PublicKey), &entry) {
-		rec := takenBackRecord(fresh, entry, priv.Public().(ed25519.PublicKey))
-		signed, err := sessionraise.Sign(rec, priv)
-		if err != nil {
-			annErr = err
-		} else if raw, err := signed.Encode(); err != nil {
-			annErr = err
-		} else if err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw)); err != nil {
-			annErr = err
+		rec, verified := takenBackRecord(fresh, entry, priv.Public().(ed25519.PublicKey))
+		if !verified {
+			s.logOnce(entry.ID, "take-back source does not verify", "take-back stands but no changed or unverified grant was re-signed")
+		} else {
+			signed, err := sessionraise.Sign(rec, priv)
+			if err != nil {
+				annErr = err
+			} else if raw, err := signed.Encode(); err != nil {
+				annErr = err
+			} else {
+				annotationWritten, err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw), priv.Public().(ed25519.PublicKey))
+				annErr = err
+				if annotationWritten {
+					s.logRaiseState("took back a raise of "+fresh.Name, signed)
+				}
+			}
 		}
 	}
 	s.releaseRaisedGrants(ctx, fresh.UID, entry.Profile)
@@ -421,18 +441,62 @@ func recordFrom(entry sessionraise.SessionEntry, words string) sessionraise.Reco
 	}
 }
 
-func takenBackRecord(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, pub ed25519.PublicKey) sessionraise.Record {
-	words := ""
-	// Words are copied only from an annotation that verifies under the
-	// operator key, names this ledger row, and passes the words check.
-	if prev, ok := verifiedRaiseWords(sess, pub, entry.ID); ok && sessionraise.WordsHash(prev.Owner.Words) == entry.WordsHash {
-		words = prev.Owner.Words
+// pendingRequestRepair separates recovery of the first POST's missing
+// annotation from repair of a stored record. The authorized request and live
+// target supply the grant; only the persisted id/time survive a retry.
+func pendingRequestRepair(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, in sessionraise.AdmitInput, pub ed25519.PublicKey) bool {
+	if entry.State != sessionraise.StatePending || entry.NoticeSentAt != "" || entry.ActiveFrom != "" || entry.TakenBackBy != "" || entry.TakenBackAt != "" {
+		return false
 	}
-	entry.State = sessionraise.StateTakenBack
-	if entry.UID == "" {
-		entry.UID = string(sess.UID)
+	if !pendingAnnotationMayBeWritten(sess, recordFrom(entry, ""), pub) {
+		return false
 	}
-	return recordFrom(entry, words)
+	if _, err := time.Parse(time.RFC3339, entry.PerformedAt); err != nil {
+		return false
+	}
+	in.ID = sessionraise.RecordID(in.UID, entry.PerformedAt, in.WordsHash)
+	in.PerformedAt = entry.PerformedAt
+	want := sessionraise.SessionEntry{
+		ID: in.ID, UID: in.UID, Profile: in.Profile, FromProfile: in.FromProfile,
+		StartSessions: in.StartSessions, Depth: in.Depth, WordsHash: in.WordsHash,
+		PerformedBy: in.PerformedBy, PerformedAt: in.PerformedAt, Where: in.Where,
+		SaidAt: in.SaidAt, Ref: in.Ref, OwnerSession: in.OwnerSession,
+	}
+	return raiseGrantMatches(recordFrom(want, ""), entry)
+}
+
+// pendingAnnotationMayBeWritten is checked on every annotation attempt's
+// live snapshot, not just the earlier request read. The same id's signed
+// state is never replayed by POST. A different id can be the previous raise
+// left behind by the new POST's failed annotation write.
+func pendingAnnotationMayBeWritten(sess *v1alpha1.AgentSession, record sessionraise.Record, pub ed25519.PublicKey) bool {
+	if sess.Annotations[v1alpha1.AnnotationRaise] == "" {
+		return true
+	}
+	stored, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
+	if err != nil || stored.ID == record.ID || stored.SessionUID != record.SessionUID || !sessionraise.Verify(stored, pub) {
+		return false
+	}
+	// Different ids alone do not establish order: an old row and its Sent
+	// can be replayed. Authenticate the previous time and require a newer
+	// grant. No old grant field supplies authority for the new request.
+	// Verify the signature directly: an earlier partial POST's take-back
+	// can legitimately have no words while retaining its signed time.
+	previous, previousErr := time.Parse(time.RFC3339, stored.PerformedAt)
+	next, nextErr := time.Parse(time.RFC3339, record.PerformedAt)
+	return previousErr == nil && nextErr == nil && next.After(previous)
+}
+
+func takenBackRecord(sess *v1alpha1.AgentSession, entry sessionraise.SessionEntry, pub ed25519.PublicKey) (sessionraise.Record, bool) {
+	prev, ok := verifiedRaiseWords(sess, pub, entry.ID)
+	if !ok || !raiseGrantMatches(prev, entry) {
+		return sessionraise.Record{}, false
+	}
+	// Revocation must not turn unsigned ledger fields into authenticated
+	// grant metadata that request recovery could later use as evidence.
+	prev.State = sessionraise.StateTakenBack
+	prev.TakenBackBy, prev.TakenBackAt = entry.TakenBackBy, entry.TakenBackAt
+	return prev, true
 }
 
 // verifiedRaiseWords is an annotation that parses as its own canonical
@@ -931,15 +995,40 @@ func (s *Server) liveUIDs(ctx context.Context) map[string]bool {
 
 var errRaiseAnnotationMoved = errors.New("raise annotation moved")
 
-func (s *Server) writeRaiseAnnotation(ctx context.Context, key types.NamespacedName, uid types.UID, raw string) error {
+func (s *Server) writeRaiseAnnotation(ctx context.Context, key types.NamespacedName, uid types.UID, raw string, pub ed25519.PublicKey) (bool, error) {
+	cfg, ok := s.raiseConfig()
+	if !ok {
+		return false, sessionraise.ErrUnreadable
+	}
+	record, err := sessionraise.Parse(raw)
+	if err != nil {
+		return false, err
+	}
 	var last error
 	for range 5 {
 		var sess v1alpha1.AgentSession
 		if err := s.Live.Get(ctx, key, &sess); err != nil {
-			return err
+			return false, err
 		}
 		if sess.UID != uid {
-			return raiseConflict("Session %s was replaced: its UID is not the one you read. Read it again.", key.Name)
+			return false, raiseConflict("Session %s was replaced: its UID is not the one you read. Read it again.", key.Name)
+		}
+		// Read the live session first, then its row, on every attempt.
+		// Another raise supersedes this request's annotation repair. Its
+		// response still reports this request's completed ledger outcome.
+		entry, err := s.raiseEntry(ctx, cfg, string(uid))
+		if err != nil {
+			return false, err
+		}
+		if entry == nil || entry.ID != record.ID || entry.State != record.State {
+			return false, nil
+		}
+		if sess.Annotations[v1alpha1.AnnotationRaise] == raw {
+			return false, nil
+		}
+		if record.State == sessionraise.StatePending && (!raiseGrantMatches(record, *entry) || !pendingAnnotationMayBeWritten(&sess, record, pub)) {
+			s.logOnce(record.ID, "request snapshot moved", "raise request did not overwrite a changed grant or stored raise")
+			return false, nil
 		}
 		if sess.Annotations == nil {
 			sess.Annotations = map[string]string{}
@@ -949,31 +1038,21 @@ func (s *Server) writeRaiseAnnotation(ctx context.Context, key types.NamespacedN
 		if apierrors.IsConflict(last) {
 			continue
 		}
-		return last
+		return last == nil, last
 	}
-	return last
+	return false, last
 }
 
-// writeRaiseAnnotationWhen writes raw only when ready accepts the session
-// just read. The update carries that resourceVersion. A conflict or a
-// ready refusal is errRaiseAnnotationMoved: the caller re-reads and decides
-// again, and does not write the same bytes over a taken-back record.
-func (s *Server) writeRaiseAnnotationWhen(ctx context.Context, key types.NamespacedName, uid types.UID, raw string, ready func(*v1alpha1.AgentSession) bool) error {
-	var sess v1alpha1.AgentSession
-	if err := s.Live.Get(ctx, key, &sess); err != nil {
-		return err
-	}
-	if sess.UID != uid {
-		return raiseConflict("Session %s was replaced: its UID is not the one you read. Read it again.", key.Name)
-	}
-	if ready != nil && !ready(&sess) {
-		return errRaiseAnnotationMoved
-	}
+// writeRaiseAnnotationWhen uses exactly the live snapshot the decision was
+// made from. It performs no Get. Update's resourceVersion rejects any change
+// to that object since the read; a conflict re-reads both session and ledger.
+func (s *Server) writeRaiseAnnotationWhen(ctx context.Context, snapshot *v1alpha1.AgentSession, raw string) error {
+	sess := snapshot.DeepCopy()
 	if sess.Annotations == nil {
 		sess.Annotations = map[string]string{}
 	}
 	sess.Annotations[v1alpha1.AnnotationRaise] = raw
-	err := s.Client.Update(ctx, &sess)
+	err := s.Client.Update(ctx, sess)
 	if apierrors.IsConflict(err) {
 		return errRaiseAnnotationMoved
 	}
@@ -1247,6 +1326,11 @@ func (s *Server) depthExempt(ctx context.Context, c *caller) bool {
 		s.logIgnored(rec.ID, "does not grant start sessions")
 		return false
 	}
+	activeFrom, err := time.Parse(time.RFC3339, rec.ActiveFrom)
+	if err != nil || s.now().Before(activeFrom) {
+		s.logIgnored(rec.ID, "activation time has not arrived")
+		return false
+	}
 	return true
 }
 
@@ -1318,9 +1402,9 @@ func observedAudit(name, state string) string {
 	}
 }
 
-// logRaiseState writes one state-change line per record id and state. The
-// write and the repair branch both call it; whichever sees the state first
-// logs it.
+// logRaiseState records transitions at least once, and once per operator
+// process for each id and state. Memory deduplication resets on restart; it
+// is not a global once guarantee. The write and repair both call it.
 func (s *Server) logRaiseState(msg string, rec sessionraise.Record) {
 	if s == nil || msg == "" || rec.ID == "" || rec.State == "" {
 		return

@@ -213,7 +213,7 @@ const NoticeBodyMax = 1024
 
 // noticeFullTime is a full-length whole-second RFC 3339 time, with a numeric
 // offset. The keeper's clock writes the shorter UTC form. Admission uses this
-// longer one, so a raise that fits here still fits when it is sent.
+// longer one for the POST placeholder check; keeper enforces the final size.
 const noticeFullTime = "2006-01-02T15:04:05-07:00"
 
 // errProfileNotice is the refusal for a raise that names a profile. Slice (b)
@@ -272,10 +272,10 @@ func Message(in NoticeText, redact func(string) string) (string, string, error) 
 	return title, body, nil
 }
 
-// NoticeFits reports whether the raise notice for these request fields stays
-// within NoticeBodyMax. The title is 48 two-byte runes, the longest a session
-// title can be, and the effect time is a full-length RFC 3339 time. name,
-// performer, where, saidAt and words are the request's own.
+// NoticeFits checks the rendered request against NoticeBodyMax using a
+// 96-byte placeholder title and a full-length RFC 3339 time. Redaction can
+// lengthen an actual title beyond that placeholder; keeper's title-free
+// fallback and final size check still apply. The other fields are real.
 func NoticeFits(name, performer, where, saidAt, words string, redact func(string) string) (bool, error) {
 	_, body, err := Message(NoticeText{
 		Session: name, Title: strings.Repeat("\u00e9", 48), Performer: performer,
@@ -350,7 +350,8 @@ func quoteRune(r rune) bool {
 }
 
 // NoticeLedger is the keeper's map of the latest signed outcome per record
-// and kind. One row, not a growing history, so the ConfigMap stays bounded.
+// and kind. Put bounds history per id/kind; distinct ids and total bytes
+// are not capped. Keeper prunes eligible old rows with fallible writes.
 // A Sent's sentAt stays inside the next signature.
 type NoticeLedger struct {
 	Items []Notice `json:"items"`

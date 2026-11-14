@@ -461,6 +461,7 @@ func TestTakeBackOnTheFirstLiveGetStaysTakenBack(t *testing.T) {
 		return nil
 	}}
 	f.srv.Live = &takeBackOnGet{Reader: inner, f: f}
+	f.raiseSent(string(f.session("creator").UID))
 	f.srv.activateRaises(context.Background())
 	hook := f.srv.Live.(*takeBackOnGet)
 	if !hook.fired {
@@ -584,6 +585,7 @@ func TestTakeBackInsideTheRepairWriteStaysTakenBack(t *testing.T) {
 		}
 		return apierrors.NewConflict(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "agentsessions"}, sess.Name, errors.New("taken back"))
 	}}
+	f.raiseSent(string(f.session("creator").UID))
 	f.srv.activateRaises(context.Background())
 	if !fired {
 		t.Fatal("the repair did not write the annotation")
@@ -749,11 +751,16 @@ func TestTakeBackBeforeTheActivationGetStaysTakenBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.now = at.Add(sessionraise.EffectDelay)
-	f.srv.Live = &takeBackOnGet{Reader: f.c, f: f}
+	hook := &takeBackOnGet{Reader: f.c, f: f}
+	f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+		if sess, ok := obj.(*v1alpha1.AgentSession); ok && !hook.fired {
+			return hook.Get(context.Background(), client.ObjectKeyFromObject(sess), &v1alpha1.AgentSession{})
+		}
+		return nil
+	}}
 	f.srv.activateRaises(context.Background())
-	hook := f.srv.Live.(*takeBackOnGet)
 	if !hook.fired {
-		t.Fatal("the get after Finish did not see an active ledger row")
+		t.Fatal("the take-back before the annotation write did not fire")
 	}
 	if got := f.ledgerEntry(entry.UID); got.State != sessionraise.StateTakenBack {
 		t.Fatalf("ledger %s", got.State)
@@ -1280,6 +1287,7 @@ func TestActivationRepairsAVerifiedPendingAnnotation(t *testing.T) {
 	if err := f.c.Update(context.Background(), pending); err != nil {
 		t.Fatal(err)
 	}
+	f.raiseSent(string(f.session("creator").UID))
 	f.srv.activateRaises(context.Background())
 	got, err := sessionraise.Parse(f.session("creator").Annotations[v1alpha1.AnnotationRaise])
 	if err != nil {
@@ -1703,7 +1711,7 @@ func TestLostRaiseAnswerIsLoggedOnTheRetry(t *testing.T) {
 	}
 }
 
-func TestTakeBackLogFollowsOnlyTheWritingAttempt(t *testing.T) {
+func TestTakeBackRepairLogsAnObservedTransition(t *testing.T) {
 	f := newFixture(t)
 	f.raiseReady(true)
 	tok := f.workbench("bench")
@@ -1755,8 +1763,8 @@ func TestTakeBackLogFollowsOnlyTheWritingAttempt(t *testing.T) {
 		t.Fatal("ledger was not taken back")
 	}
 	joined := strings.Join(sink.msgs, "\n")
-	if strings.Contains(joined, "took back") {
-		t.Fatalf("logged a take-back this attempt did not write: %s", joined)
+	if strings.Count(joined, "took back a raise of target") != 1 {
+		t.Fatalf("annotation repair must log the observed take-back once: %s", joined)
 	}
 }
 
@@ -1773,6 +1781,7 @@ func TestRepairLogsTheActiveState(t *testing.T) {
 	f.sessionPod("creator", "full", 2)
 	f.putPending(f.session("creator"))
 	f.setRaiseState(string(f.session("creator").UID), sessionraise.StateActive)
+	f.raiseSent(string(f.session("creator").UID))
 	f.srv.activateRaises(context.Background())
 	ann, err := sessionraise.Parse(f.session("creator").Annotations[v1alpha1.AnnotationRaise])
 	if err != nil || ann.State != sessionraise.StateActive {
