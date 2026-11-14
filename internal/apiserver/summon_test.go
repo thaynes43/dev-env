@@ -19,6 +19,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/summonbrief"
 )
 
 const summonTestBoundary = "0123456789abcdef"
@@ -202,7 +203,7 @@ func TestSummonBriefStripsFenceWords(t *testing.T) {
 		{"a\u200b\nb\tc", "a\nb\tc"},
 	}
 	for _, tc := range cases {
-		if got := sanitizeSummonValue(tc.in); got != tc.want {
+		if got := summonbrief.Sanitize(tc.in); got != tc.want {
 			t.Errorf("sanitize %q = %q, want %q", tc.in, got, tc.want)
 		}
 	}

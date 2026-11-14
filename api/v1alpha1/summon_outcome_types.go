@@ -177,7 +177,11 @@ type SummonPage struct {
 }
 
 // SummonClosedStatus identifies the one terminal transition (DESIGN-064 5.9).
+// At, Source and Reason never change once the record exists.
 //
+// +kubebuilder:validation:XValidation:rule="self.at == oldSelf.at",message="the close time never changes"
+// +kubebuilder:validation:XValidation:rule="self.source == oldSelf.source",message="the close source never changes"
+// +kubebuilder:validation:XValidation:rule="self.reason == oldSelf.reason",message="the close reason never changes"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.released) || !oldSelf.released || (has(self.released) && self.released)",message="released is never reversed"
 type SummonClosedStatus struct {
 	At metav1.Time `json:"at"`

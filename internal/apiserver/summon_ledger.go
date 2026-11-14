@@ -63,7 +63,12 @@ import (
 // only when it is summonledger.ChargeWindow old and its last attempt mark is at
 // least summonledger.AttemptHold old, and no session of its id exists that is
 // neither admitted nor closed (summonledger.Prune; DESIGN-064 5.9 item 4,
-// OP777): a Queued session keeps the charge the leader admits it by.
+// OP777): a Queued session keeps the charge the leader admits it by. Nor is
+// it pruned while it is the charge of a filing that waits: the id
+// filing:<UID> of a listed session whose status.summon.escalation.state is
+// Pending (story 800), whose child may not exist yet. Both are the shared
+// keep rule, summonledger.Keep, which the operator leader's filing write
+// (story 801) prunes by too.
 //
 // Limits of this slice (the correction's amendment). A client-side deadline
 // does not stop a request the API server has already received, nor a process
@@ -118,26 +123,23 @@ func summonLedgerKey(c *caller) string {
 
 // summonSessions is an uncached read of the sessions a ledger write decides
 // on: those carrying a dispatch id, by that id, and every name held.
-// unsettled holds the dispatch id of every session that exists and is neither
-// admitted nor closed: the prune keeps its charge (summonledger.Prune, 7233).
-// items are the listed sessions, which the queue counts read (OP778), and
-// grantsRaw and grantsPresent the ledger's reserved key summonledger.GrantsKey
-// as this write read it: the queue counts decode it, read only, to tell a
-// granted session from a Queued one. Every write carries it byte-for-byte.
+// keep holds the dispatch ids whose charges the prune keeps
+// (summonledger.Prune), and is read by nothing else. It is the shared keep
+// rule's set over the listed sessions (summonledger.Keep): the id of every
+// session that exists and is neither admitted nor closed (7233), and the id
+// filing:<UID> of every session whose filing is Pending (story 800). items
+// are the listed sessions, which the queue counts read (OP778), and
+// grantsRaw and grantsPresent the ledger's reserved key
+// summonledger.GrantsKey as this write read it: the queue counts decode it,
+// read only, to tell a granted session from a Queued one. Every write carries
+// it byte-for-byte.
 type summonSessions struct {
 	byID          map[string]*v1alpha1.AgentSession
 	names         map[string]bool
-	unsettled     map[string]bool
+	keep          map[string]bool
 	items         []v1alpha1.AgentSession
 	grantsRaw     string
 	grantsPresent bool
-}
-
-// summonUnsettled is a session the leader may still admit by its charge: not
-// admitted and not closed (DESIGN-064 5.9 item 4).
-func summonUnsettled(sess *v1alpha1.AgentSession) bool {
-	st := sess.Status.Summon
-	return st == nil || st.AdmittedAt == nil && st.Closed == nil
 }
 
 func (s *Server) readSummonSessions(ctx context.Context) (summonSessions, error) {
@@ -146,19 +148,16 @@ func (s *Server) readSummonSessions(ctx context.Context) (summonSessions, error)
 		return summonSessions{}, err
 	}
 	out := summonSessions{
-		byID:      make(map[string]*v1alpha1.AgentSession, len(list.Items)),
-		names:     make(map[string]bool, len(list.Items)),
-		unsettled: map[string]bool{},
-		items:     list.Items,
+		byID:  make(map[string]*v1alpha1.AgentSession, len(list.Items)),
+		names: make(map[string]bool, len(list.Items)),
+		keep:  summonledger.Keep(list.Items),
+		items: list.Items,
 	}
 	for i := range list.Items {
 		it := &list.Items[i]
 		out.names[it.Name] = true
 		if it.Spec.Summon != nil && it.Spec.Summon.DispatchID != "" {
 			out.byID[it.Spec.Summon.DispatchID] = it
-			if summonUnsettled(it) {
-				out.unsettled[it.Spec.Summon.DispatchID] = true
-			}
 		}
 	}
 	return out, nil
@@ -243,7 +242,7 @@ func (s *Server) updateSummonLedger(ctx context.Context, c *caller, decide func(
 			return time.Time{}, nil
 		}
 		entry.Clock = now
-		entry.Charges = summonledger.Prune(entry.Charges, now, live.unsettled)
+		entry.Charges = summonledger.Prune(entry.Charges, now, live.keep)
 		raw, err := summonledger.Encode(entry)
 		if err != nil {
 			return time.Time{}, summonLedgerUnavailable("entry for this caller is too large")

@@ -885,6 +885,13 @@ that ends `escalated`, the pending filing `status.summon.escalation = {state:
 Pending, name}` (6.6), all at once. Lane release, the pool counts, the keeper's
 page or digest and the platform's filing all key on that one record.
 
+**2026-11-14 (story 798, coordinator's follow-up, not a ruling by Tom).**
+The CRD refuses changes to `status.summon.closed.at`, `source` and `reason`
+once the close record exists. Its first write and updates that keep those
+fields unchanged are accepted, including `released` moving from false to
+true. The existing rules still refuse removal of the close record and reversal
+of `released`.
+
 **When a reservation is released.**
 
 - A terminal outcome the session reported itself, through the report route
@@ -1301,6 +1308,65 @@ differs, this governs.
   reported. An operator close of an admitted remote session suspends it at
   once (`suspendClosedSummon`, ruling D3), so its pod goes and it cannot be
   joined after that close. The timers are not changed.
+
+**Correction, 2026-11-13: story 800, coordinator rulings on item 768 comment
+7702; not a ruling by Tom.** Story 800 is slice a of #768. The text above
+stays; where it differs, this governs.
+
+1. *Where the shared pieces live.* `internal/apiserver` imports
+   `internal/controller`, so the operator leader cannot call the API's
+   create path. The pure pieces both need now live in leaf packages that
+   import neither. `internal/summonledger` holds the request hash
+   (`RequestHash`), the name sequence (`NameSequence`: the name, then `-2`
+   to `-99`, `MaxSuffix`), the queues (`Queue`, `QueueOf`, `AllQueues`),
+   which queues a charge counts in (`ChargeQueues`), whether a grant admits
+   a session (`Granted`), the count of one queue (`QueueCount`), the
+   filing's id (`FilingID`, `filing:<UID>`) and the prune's keep rule
+   (`Keep`, item 2; fix round 1, PR 1133 comment 6856570556). `QueueCount`
+   takes the caller's name as its own argument and never dereferences the
+   policy: with no policy, a policy that is gone, each charge counts in
+   every queue, as `ChargeQueues` already does, and sessions count by their
+   own priority and lane. A new package `internal/summonbrief` holds the
+   brief of 5.6: the platform line (`PlatformLine`), the renderer (`Render`)
+   and the sanitizer (`Sanitize`). The API calls them. The queue bounds and
+   their default, the refusals, the ledger's compare-and-set and the create
+   stay in the API. What a caller's create checks, charges, counts and
+   answers is unchanged: the existing suites pass, and the golden brief
+   renders byte for byte from both packages.
+2. *A Pending filing keeps its charge.* Item 4 above says a filing's entry
+   stays until it is an hour old and its child is admitted or closed, or the
+   filing is `Abandoned`. The prune kept an old charge only while an
+   existing Session that is neither admitted nor closed carries its id. A
+   blocked filing has no child, so the caller's next ledger write would have
+   dropped the charge, and the child would later close `not-charged`. As
+   built: before each ledger write the API lists the sessions uncached, as
+   before, and keeps from pruning the id `filing:<UID>` of every listed
+   Session whose `status.summon.escalation.state` is `Pending`, `<UID>`
+   being that Session's own UID. These ids join the ids of unsettled
+   Sessions in one set, and only the prune reads that set. One function,
+   `summonledger.Keep`, builds the set from the listed Sessions: every
+   ledger write of the API prunes by it, and the operator leader's filing
+   write (#801) is to prune by it too, so the two keep one rule. Once the
+   record is no longer `Pending`, or the remediation's Session is gone, the
+   existing rule decides: the child carries the same id and keeps the charge
+   while it is neither admitted nor closed. A Session being deleted is still
+   listed, so its Pending filing keeps the charge until the Session is gone.
+   While the record is `Pending` the charge stays even if its child is
+   already admitted, which is longer than item 4 says.
+3. *What a kept charge changes.* Nothing a caller's create counts or
+   answers, with one limit. The rule keeps only a charge outside its window
+   (the window keeps the rest), so it does not count toward
+   `createsPerHour`. Its attempt mark is past the 15 minute hold (the hold
+   keeps the rest), so it is in no queue count. No caller's create can draw
+   its id: a caller's ids are 32 hex characters. The leader admits a
+   Session only by the charge of that Session's own id. The limit: each
+   kept charge adds up to about 280 bytes to the caller's entry, which is
+   bounded at 64 KiB (`MaxEntry`; past it a write is refused with 503), so
+   about 230 charges of the largest size fit before the entry's other data
+   (shorter names fit more; the byte limit is what is enforced, not a
+   count). Nothing charges a filing before #768's slice b, so this
+   changes nothing today. How many filings can be charged and still Pending
+   at once is for slices b and c to bound.
 
 ## 6. Contracts per build story
 
