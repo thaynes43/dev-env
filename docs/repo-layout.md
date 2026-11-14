@@ -110,6 +110,7 @@ internal/agentd/protocol/  what agentd and the operator exchange: the session do
                          the rescue report, and the rescue layout and manifest on the shared volume; the history
                          archive's wire types and the canonical JSON both sides hash (canonical.go, DESIGN-025 5.4)
 internal/agentd/hostexecutor/  owns one foreground native computer for one immutable budget binding (no budget authority, no pairing)
+internal/codexworkbench/ DESIGN-067 shared account and GitOps creation-shape guard for the one operator-named workbench Codex remote host; empty setting permits none
 internal/codexhostpool/  DESIGN-063's pure Codex host choice (OP698): host facts, a three-valued login fact (current, lapsed, unknown) and the caller in, the section 5 result out; standard library only, no I/O, the clock is an argument
 internal/codexrc/        pure pinned Codex project/host discovery and rc-launch error mapping; no I/O, launch or pairing authority
 internal/threadlaunch/   DESIGN-057's provider-neutral thread launch: registry (codex host, claude session, cursor/grok unqualified), Adapter interface, phase recorder and driver, and the read-only Observer pass behind thread status; pure, no I/O

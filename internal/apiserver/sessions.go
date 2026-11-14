@@ -44,6 +44,7 @@ func (s *Server) preflightPrivatePilot(ctx context.Context, w http.ResponseWrite
 	return s.createSessionMode(ctx, w, r, c, true)
 }
 func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller, dryRun bool) (int, any, error) {
+	ctx = withCodexHostAdmission(ctx)
 	if err := refuseRetainedExecutor(c); err != nil {
 		return 0, nil, err
 	}
@@ -153,6 +154,9 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 		sess.Name = base
 		if i > 1 {
 			sess.Name = fmt.Sprintf("%s-%d", base, i)
+		}
+		if err := s.admitCodexHost(ctx, sess, nil, true); err != nil {
+			return 0, nil, err
 		}
 		if err := refuseReservedSessionName(sess.Name); err != nil {
 			return 0, nil, err
@@ -656,6 +660,9 @@ func refuseRetainedExecutor(c *caller) error {
 // under the create lock, after a repeat of the same create has had its answer
 // (createSessionMode, CreateScheduledSession).
 func (s *Server) admitCreate(ctx context.Context, c *caller, sess *v1alpha1.AgentSession) error {
+	if err := s.admitCodexHost(ctx, sess, nil, true); err != nil {
+		return err
+	}
 	if err := s.refuseSummonedParent(ctx, c, sess); err != nil {
 		return err
 	}

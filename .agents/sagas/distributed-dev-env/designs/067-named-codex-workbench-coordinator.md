@@ -1,6 +1,6 @@
 # DESIGN-067: A Codex coordinator on the workbench profile, named by the operator
 
-- **Status:** Proposed. Docs only. Nothing is built, installed or accepted.
+- **Status:** Proposed. Slice (a) built, not installed. Nothing is accepted.
 - **Date:** 2026-11-14.
 - **Tracking:** [OP858](https://work.haynesnetwork.com/work_packages/858), under epic
   #91 and the distributed-dev-env saga. Coordinator: `dev-env-fable-coordinator-1109`.
@@ -735,12 +735,13 @@ permission to restart a running host.
 
 ## 11. Build slices and evidence gates
 
-These are future bounded stories. Ready dependent slices run serially. Each gets
+Slice (a) is built as recorded in section 14; the remaining slices are future
+bounded work. Ready dependent slices run serially. Each gets
 its own tracker scope, budget and exact-head review by another model family before
 merge. The coordinator owns that review and the install decision. Slice (d) depends
 on (a), (b) and (c1) only. If provider support blocks (c2), (d) and (e) still proceed
 for lanes Tom drives from the phone. Only watch-dependent lane transfer waits on
-(c2). This docs PR ends after its own CI/review handoff and implements no slice.
+(c2). The original design PR implemented no slice; section 14 records later builds.
 
 | Slice | Source and tests | Install step and its checks | Owner confirmation |
 | --- | --- | --- | --- |
@@ -918,6 +919,16 @@ with a 20 GiB HOME default. Re-read those declarations for the actual packet.
 ([templates:165–194][ops-size-home])
 
 ## 14. Review and handoff
+
+2026-11-14 build record: **slice (a) built, not installed** (OP858). The source
+adds the default-empty name setting, shared account/shape predicate, API
+create/final admission/resume checks and controller construction/status checks.
+Tests cover manifest and API refusal, defaults/aliases, preservation, rescue
+and one account answer per request/reconcile, with guard mutation evidence in
+the implementation PR. No flag, host, manifest or installed configuration has
+changed. Slices (b), (c1), (c2), (d) and (e), owner confirmation and usable
+acceptance remain with the coordinator. ADR-030 remains Proposed.
+
 
 This proposal leaves the coordinator's source-versus-install hold intact. The
 independent native review, final head, layout result, CI result, advisory findings,
