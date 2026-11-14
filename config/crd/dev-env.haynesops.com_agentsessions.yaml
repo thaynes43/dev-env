@@ -627,6 +627,24 @@ spec:
                     minLength: 1
                     pattern: ^claude-[a-z]+(-[0-9]+)+$
                     type: string
+                  filedFor:
+                    description: |-
+                      FiledFor identifies the remediation for which the operator leader filed
+                      this escalation (DESIGN-064 6.6, OP801). No HTTP create accepts it.
+                    properties:
+                      name:
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                      uid:
+                        maxLength: 36
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - uid
+                    type: object
                   maxHold:
                     description: MaxHold is set for remediation and curation only,
                       at most 24h.
@@ -803,6 +821,14 @@ spec:
             - message: summon.priority is urgent for lanes remediation and escalation
               rule: '!has(self.summon) || !(self.lane == ''remediation'' || self.lane
                 == ''escalation'') || self.summon.priority == ''urgent'''
+            - message: filedFor is a keyless remote escalation whose dispatchID names
+                the remediation UID
+              rule: '!has(self.summon) || !has(self.summon.filedFor) || (self.lane
+                == ''escalation'' && self.mode == ''remote'' && !has(self.idempotencyKey)
+                && self.summon.dispatchID == ''filing:'' + self.summon.filedFor.uid)'
+            - message: a filing dispatchID requires filedFor
+              rule: '!has(self.summon) || !self.summon.dispatchID.startsWith(''filing:'')
+                || has(self.summon.filedFor)'
             - message: 'immutable after create: no spec field may be added or removed,
                 except operatingMode and lifecycle'
               rule: has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort)
@@ -3450,23 +3476,65 @@ spec:
                         && self.released)'
                   escalation:
                     description: |-
-                      Escalation is the pending filing for a remediation ending escalated.
-                      OP768 adds filing, blocked and abandoned transitions; this slice files nothing.
+                      Escalation is the platform's filing for a remediation ending escalated.
+                      OP801 files it; OP802 owns abandonment and the reap hold.
                     properties:
+                      chargedAt:
+                        description: ChargedAt is the original ledger charge's time,
+                          never a retry time.
+                        format: date-time
+                        type: string
                       name:
                         maxLength: 63
                         minLength: 1
                         pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                         type: string
+                      reason:
+                        description: Reason is the last blocked word, or not-filed,
+                          on abandonment only.
+                        enum:
+                        - policy-gone
+                        - policy-no-escalations
+                        - hour-full
+                        - queue-full
+                        - remote-off
+                        - ledger-unavailable
+                        - no-free-name
+                        - entry-full
+                        - not-filed
+                        maxLength: 32
+                        type: string
                       state:
+                        description: SummonEscalationState is the filing's durable
+                          state (DESIGN-064 6.6).
                         enum:
                         - Pending
+                        - Filed
+                        - Abandoned
                         maxLength: 16
+                        type: string
+                      uid:
+                        description: UID is the escalation child's UID, recorded with
+                          Filed.
+                        maxLength: 36
+                        minLength: 1
                         type: string
                     required:
                     - name
                     - state
                     type: object
+                    x-kubernetes-validations:
+                    - message: a filing never changes once it is not Pending
+                      rule: oldSelf.state == 'Pending' || self == oldSelf
+                    - message: a filing UID is present exactly when Filed
+                      rule: has(self.uid) == (self.state == 'Filed')
+                    - message: a filing reason is present exactly when Abandoned
+                      rule: has(self.reason) == (self.state == 'Abandoned')
+                    - message: chargedAt is set once and never changes
+                      rule: '!has(oldSelf.chargedAt) || (has(self.chargedAt) && self.chargedAt
+                        == oldSelf.chargedAt)'
+                    - message: a Filed escalation requires chargedAt
+                      rule: self.state != 'Filed' || has(self.chargedAt)
                   executor:
                     description: |-
                       Executor is a summoned remote session's executor latch (DESIGN-064 5.9,
@@ -3546,6 +3614,8 @@ spec:
                           - escalation-held
                           - escalation-reminder
                           - escalation-started
+                          - escalation-pending
+                          - escalation-abandoned
                           maxLength: 32
                           type: string
                       required:
@@ -3631,6 +3701,20 @@ spec:
                     == (has(self.pages) && self.pages.exists(p, p.event == 'escalation-started'))
                 - message: pages hold at most one escalation-started
                   rule: '!has(self.pages) || self.pages.filter(p, p.event == ''escalation-started'').size()
+                    <= 1'
+                - message: the escalation filing cannot be removed
+                  rule: '!has(oldSelf.escalation) || has(self.escalation)'
+                - message: an escalation filing requires a closed record
+                  rule: '!has(self.escalation) || has(self.closed)'
+                - message: pages hold escalation-abandoned exactly when the filing
+                    is Abandoned
+                  rule: (has(self.escalation) && self.escalation.state == 'Abandoned')
+                    == (has(self.pages) && self.pages.exists(p, p.event == 'escalation-abandoned'))
+                - message: pages hold at most one escalation-pending
+                  rule: '!has(self.pages) || self.pages.filter(p, p.event == ''escalation-pending'').size()
+                    <= 1'
+                - message: pages hold at most one escalation-abandoned
+                  rule: '!has(self.pages) || self.pages.filter(p, p.event == ''escalation-abandoned'').size()
                     <= 1'
               suspendedAt:
                 description: |-

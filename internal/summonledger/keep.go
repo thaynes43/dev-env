@@ -45,5 +45,5 @@ func unsettled(sess *v1alpha1.AgentSession) bool {
 // and nothing has moved it on.
 func pendingFiling(sess *v1alpha1.AgentSession) bool {
 	st := sess.Status.Summon
-	return st != nil && st.Escalation != nil && st.Escalation.State == "Pending"
+	return st != nil && st.Escalation != nil && st.Escalation.State == v1alpha1.SummonEscalationPending
 }

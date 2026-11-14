@@ -1368,6 +1368,25 @@ stays; where it differs, this governs.
    changes nothing today. How many filings can be charged and still Pending
    at once is for slices b and c to bound.
 
+**Correction, 2026-11-14: story 801, coordinator rulings on item 768 comment
+7702 and item 801 comment 7852; not a ruling by Tom.** The leader's filing
+writer uses `summonledger.Keep` and the same ConfigMap resourceVersion as the
+API's writer. A filing charges once: neither its attempt mark nor its name
+rebind changes `at`, including after the 65-minute window. Before a new
+charge it encodes the prospective pruned entry, including unknown members,
+and refuses `entry-full` if it exceeds 64 KiB. No urgent refusal is counted.
+The byte cap, not `queuedUrgent`, bounds all retained Pending charges:
+attempts older than 15 minutes leave the queue count while their Pending
+filings keep the ledger evidence. Other charges and unknown members consume
+the same bytes. With 36-character UIDs, 63-character child names, nanosecond
+timestamps and no extra data, 232 charges fit; shorter names and timestamps
+fit more. Filing ends when the child is recorded Filed, or OP802 records
+Abandoned; ordinary pruning still waits for the charge window, attempt hold,
+and any unsettled child. A direct deletion of the remediation removes its
+Pending keep, the previously stated limit. Without OP802 a charged blocked
+filing has no time bound. Do not install OP801 for a real remediation caller
+before OP802.
+
 ## 6. Contracts per build story
 
 ### 6.1 OP735: the ops egress tier
@@ -2074,6 +2093,56 @@ not in the log.
 line 102). `docs/workflow-guide.md` gets a section on summoned sessions, and
 `agent-run help report` says who may call it.
 
+**Correction, 2026-11-14: story 801, coordinator rulings on item 768 comment
+7702; not a ruling by Tom.** The leader runs the filing step once after its
+watch pass, with an uncached re-read of each remediation. It does nothing
+without a closed Pending remediation. A deleting remediation is still
+eligible while its record exists. The order is: check the remote switch and
+current policy/account/escalations pool; read the ledger; charge by CAS if
+neither its id nor `chargedAt` exists; record the original `chargedAt`; list
+uncached by `filed-for-uid`; recover an existing child, otherwise mark the
+ledger binding and create under a two-minute deadline from that mark; record
+Filed with the child's name and UID. Each create, including after a name
+collision, first lists by label. A collision for another remediation takes
+the next free suffix through the ledger CAS. A retry never re-charges. A
+missing charge after `chargedAt` cannot authorize another charge or create.
+Unknown write/create results end that attempt and are recovered from stored
+records next pass. The API's documented limits on a request already received
+by Kubernetes or a process paused past its deadline still apply (5.9).
+
+The child carries the remediation's caller and parent, the snapshot's repo,
+profile, model, fallback and effort, remote mode, Claude, urgent priority,
+onUnreported failed, and no caller key, limits or title. It has `summoned=true`,
+`depth=0`, `filed-for-uid`, immutable `filedFor {name, uid}`, and dispatch id
+`filing:<remediation UID>`. No HTTP create accepts those platform identity
+fields. The source-fixed brief says a remediation could not finish, that Tom
+will join, to report the data block in one message, and to change nothing
+until he speaks. It names no contract file. Story 747 must confirm or replace
+this text before a remediation caller moves. Its data block uses the shared
+sanitizer and a fresh fence; the longest name and largest allowed note are
+checked against agentd's transport bound before charging.
+
+Blocked words are `policy-gone`, `policy-no-escalations`, `hour-full`,
+`queue-full`, `remote-off`, `ledger-unavailable`, `no-free-name`, and
+`entry-full` (801 comment 7852). They never include note text. The condition
+is `EscalationPending=True`, `Reason=Blocked`, `Message=<exact word>`;
+Kubernetes forbids hyphens in a condition reason. This representation was
+confirmed by the coordinator in answer `op801-build-1-a-1` on 2026-11-14,
+not by Tom. The first blocked patch appends `escalation-pending` atomically;
+later patches change the word only when it differs. Filed sets the condition
+False with Reason Filed. Nothing sends a page here.
+
+**Open for OP802:** the approved plan reserves the typed escalation `reason`
+for Abandoned. While Pending the word exists only in the condition Message;
+the page event stores its kind and time, not a reason. The coordinator's
+answer forbids future code from parsing the condition to select a reason.
+OP802 needs a ruling on a typed blocked member before it or OP803 can consume
+that word. OP801 does not widen the schema independently. The full agreed
+Abandoned schema lands here, but abandonment, its reap hold, sending and the
+view remain OP802/803 and later work. Installation is the CRD copy first,
+then one operator pin; no flag or RBAC change, and no real remediation caller
+before OP802. Remote off records only the blocked condition and event.
+
 ### 6.7 OP741: lanes, holds, the latch and the watchdog
 
 **Correction, 2026-11-12 (story 779, slice c of #741; written by the
@@ -2723,6 +2792,13 @@ real digest arrived.
 
 Under Q-16 option B the operator would mount its own Pushover token and send
 directly; that is a new holder of a credential and needs Tom.
+
+**Correction, 2026-11-14: story 801, coordinator rulings on item 768 comment
+7702; not a ruling by Tom.** A platform-filed escalation carries
+`summoned=true`, so the existing lifecycle readers can find it. The leader
+records `escalation-pending` on the remediation, once, when first blocked.
+The schema also admits `escalation-abandoned`, atomically with Abandoned, for
+OP802. OP803 owns both sends; this slice adds no page text or delivery.
 
 ### 6.9 OP743: quota priority and the fallback model
 

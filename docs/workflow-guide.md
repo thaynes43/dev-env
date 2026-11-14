@@ -1882,8 +1882,36 @@ The outcome describes the work, so a process may succeed while reporting `failed
 One optimistic status write stores the terminal outcome and
 `status.summon.closed` (`at`, `source`, `reason`). A remediation ending `escalated`
 also stores `status.summon.escalation = {state: Pending, name}` in that write.
-Other lanes file nothing. This release retains the pending record; story 768
-adds the filing, name-collision handling and its blocked/abandoned states.
+Other lanes file nothing. Story 801 adds the operator leader's filing: it
+charges `filing:<remediation UID>` once, records `chargedAt`, finds any
+existing child by label, marks the ledger binding before creating, and
+records Filed with the child's name and UID. Retries and leader changes
+recover those stored records; a mark never re-charges, even in a later hour.
+An unrelated occupied name takes the next suffix by the same ledger CAS.
+The child is a remote Claude escalation with the remediation's caller and
+parent, its saved escalation settings, urgent priority, and no caller key.
+The brief asks it to describe the data block once and wait for Tom.
+
+A blocked filing remains Pending with `EscalationPending=True`,
+`Reason=Blocked`, and the exact reason word in `Message`: `policy-gone`,
+`policy-no-escalations`, `hour-full`, `queue-full`, `remote-off`,
+`ledger-unavailable`, `no-free-name`, or `entry-full`. Its first blocked
+write also records `escalation-pending`; this slice sends no page. Remote
+creates off permits only that status write. No remediation means no filing
+work. A prospective charge that exceeds the caller entry's 64 KiB encoded
+bound is refused before writing. Kept Pending charges can outlive the hourly
+and queue windows, so the byte bound also limits their accumulation.
+
+These are coordinator rulings on item 768 comment 7702, item 801 comment
+7852, and answer `op801-build-1-a-1` (2026-11-14), not rulings by Tom. The
+schema includes Abandoned, but story 802 owns abandonment and the reap hold;
+story 803 owns page delivery. The plan reserves the typed escalation reason
+for Abandoned, so Pending has no typed blocked member yet. OP802 needs the
+coordinator's ruling on that member; consumers must not parse the condition
+message. Install the CRD copy before the operator pin, and **do not install
+this filing for a real remediation caller before story 802**. Nothing here
+installs it or proves a live session is joinable. Story 747 must confirm or
+replace the fixed brief before moving a remediation caller.
 
 Each confirmed terminal write that retains `status.summon.closed` emits one
 operator stdout line beginning

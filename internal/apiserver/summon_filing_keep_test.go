@@ -166,11 +166,11 @@ func TestSummonLedgerKeepsAPendingFilingsCharge(t *testing.T) {
 		wantCharge(t, f, ch.ID, true)
 	})
 
-	// The CRD's enum has only Pending today; Filed and Abandoned are the
-	// states story 768b and 768c add (6.6). The fake store applies no enum.
+	// OP801 adds Filed and Abandoned. The fake store applies no enum, so it
+	// also checks that a differently cased word never counts as Pending.
 	// An empty state here stands for no filing record at all.
-	for _, state := range []string{"", "Filed", "Abandoned", "pending"} {
-		label := state
+	for _, state := range []v1alpha1.SummonEscalationState{"", "Filed", "Abandoned", "pending"} {
+		label := string(state)
 		if label == "" {
 			label = "no filing record"
 		}

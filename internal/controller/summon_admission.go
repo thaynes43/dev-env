@@ -627,6 +627,7 @@ func (r *Reconciler) summonAdmissionAttempt(ctx context.Context, p *summonPass) 
 		// the second list below sees its closes.
 		p.watched = true
 		p.errs = append(p.errs, r.summonWatch(ctx, list.Items)...)
+		p.errs = append(p.errs, r.summonFilings(ctx, list.Items)...)
 	}
 	ledger := summonLedgerRead{cm: &corev1.ConfigMap{}}
 	if err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: summonledger.Namespace, Name: summonledger.Name}, ledger.cm); err != nil {
