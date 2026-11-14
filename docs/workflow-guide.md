@@ -820,8 +820,10 @@ not typed again; a different title recorded later in the same pod is typed
 under the same guard. A title may not end with a semicolon and may not
 contain a backslash. This typed rename is built and not installed.
 
-`agent-run raise` gives a running session a profile, the right to start
-sessions, or both, on Tom's own words given to this agent. It takes effect
+`agent-run raise`, in this build, gives a running session only the right to
+start sessions, on Tom's own words given to this agent. A profile comes
+with slice (b). That is the coordinator's ruling of 2026-11-14 on the
+second slice (a) reviews. It takes effect
 two minutes after his notice is accepted. The notice quotes those words
 last, as the performer's claim, after the take-back command. Take-back
 needs no words. This build does not restart the session. The command is

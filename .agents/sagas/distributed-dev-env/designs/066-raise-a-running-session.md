@@ -905,49 +905,67 @@ summoned-session pager already did (`summon_pages.go:32-47`).
 **What it reads.** Every 30 seconds, as the Ask push does, the leader keeper
 reads the operator ledger first. The coordinator's ruling of 2026-11-13 on
 the slice (a) reviews: the pager stays on whatever the flags say, because a
-take-back notice must not depend on a flag, and it is quiet. A pass fetches,
-by name, only the sessions whose rows need a notice. It lists AgentSessions
-only when a needed row cannot name its session, and never when no row needs
-a notice. A missing or forbidden key Secret, ConfigMap or read logs one
-line an hour at most and retries no faster than every 5 minutes, and never
-fails the keeper. A raise notice still needs a record that counts. A
-take-back notice is decided from the operator ledger row (the same session
-UID, state `taken-back`, `takenBackBy` and `takenBackAt` from that row),
-not from whether the annotation counts. The keeper does not read the
-templates ConfigMap in slice (a). A record that names a profile is not
-sent, is logged once ("profile raises need slice (b)") and never blocks a
-take-back notice. Notice rows are pruned only by records that count; an
-annotation that does not count never resets an attempt count. A notice
-whose session UID is not in the operator ledger is also dropped on that
-pass, with no session list. Admit drops a gone session's row only when
-the ledger is already full, and the notice must not outlive that row.
-This is the answer to the advisory finding on dev-env PR 1145. The keeper
-takes a fresh time just before the reservation and the push, and that time
-is the effect time in the message. It signs `sentAt` with a time read after
-the push returned. A verified Sent whose `sentAt` is earlier than the
-record's `performedAt` leaves the row pending, and the operator logs it.
+take-back notice must not depend on a flag, and it is quiet. A missing or
+forbidden key Secret, ConfigMap or read logs one line an hour at most and
+retries no faster than every 5 minutes, and never fails the keeper. A raise
+notice still needs a record that counts. A take-back notice is decided from
+the operator ledger row (the same session UID, state `taken-back`,
+`takenBackBy` and `takenBackAt` from that row), not from whether the
+annotation counts. The keeper does not read the templates ConfigMap in
+slice (a). A record that names a profile is not sent, is logged once
+("profile raises need slice (b)") and never blocks a take-back notice. The
+coordinator's ruling of 2026-11-14 on the second slice (a) reviews: the
+keeper makes its key once at start, with Ensure retried quietly until it
+succeeds, so the install check finds the public key published. After that
+an idle pass reads the operator ledger first and reads the key Secret only
+when a row needs a notice. The pager never lists AgentSessions. It fetches
+a needed row's session by name. NotFound, or a session with another UID,
+means that session is gone: names are not reused for the same UID, the row
+needs no notice, and the keeper remembers the UID as gone for this process
+so it is not fetched again. A row with no name is skipped and logged once.
+Any other read error keeps the row and its notice rows untouched. Three
+prune rules, and no others: a notice whose session UID is absent from a
+successful read of the operator ledger; a notice for a session remembered
+as gone; a notice whose id is not the counting record's id. A counting
+record's own rows are kept, and an annotation that does not count never
+resets an attempt count. Admit drops a gone session's row only when the
+ledger is already full, and the notice must not outlive that row. This is
+the answer to the advisory finding on dev-env PR 1145, commit `2bc2665d`.
+The keeper takes a fresh time just before the reservation and the push,
+and that time is the effect time in the message. It signs `sentAt` with a
+time read after the push returned, rounded up to the next whole second. A
+time already on a whole second stays, so `sentAt` is never earlier than the
+push. A verified Sent whose `sentAt` is earlier than the record's
+`performedAt` leaves the row pending, and the operator logs it. A
+reservation with no outcome that is older than the five-minute wait counts
+as one finished attempt (Ambiguous), so a keeper that fails after each
+push stops at 12 and the operator can unannounce. A failed prune,
+reservation or outcome write logs one line an hour at most.
 
 **Any hour** (N5). The raise notifier does not use the Ask push's window
 (`--ask-notify-window`, `cmd/dev-env-keeper/main.go:271`): a raise Tom did not
 ask for is exactly what should reach him at night. Like the summoned-session
 pager, it sends at any hour.
 
-**What it says.** Title: "[dev-env] raise: `<session>`". Message: "`<session>`
-(`<title>`) was raised by `<performer>`: profile `<from>` to `<profile>`;
-it will run as the superuser account (said when that profile runs as the
-workbench account); may start sessions one level deeper. It takes effect at
-`<time>`, two minutes after this notice is accepted, unless taken back. To
-stop it: agent-run raise `<session>` --take-back. `<performer>` says you
-said: "`<words>`" (`<where>`, `<saidAt>`)." The coordinator's ruling of
-2026-11-13 on the slice (a) reviews, on review C: the words are the
-performer's claim, quoted, and last, after the take-back command. Every
-double quote inside the words is replaced by a single quote, so the words
-cannot close the quotation or imitate the system text. The words, at most
-300 characters, are shown in full. The title and the words both go through
-the summoned-session pager's redaction, which makes links inert
-(`summonRedact`, `summon_pages.go:793`; N11). A take-back notice says who
-took it back and when, and does not repeat the words. A watchdog notice
-says the pod ran raised without a record and was suspended.
+**What it says.** Title: "[dev-env] raise: `<session>`". The coordinator's
+ruling of 2026-11-14 on the second slice (a) reviews: the message is
+"`<session>` was raised by `<performer>`. It may start sessions one level
+deeper. It takes effect at `<time>`, two minutes after this notice is
+accepted, unless taken back. To stop it: agent-run raise `<session>`
+--take-back. Its title is "`<title>`". `<performer>` says you said:
+"`<words>`" (`<where>`, `<saidAt>`)." The title is the effective title.
+When there is no title, that sentence is left out, and the notice never
+prints "()". The title sentence follows the take-back command. The words
+are the performer's claim, quoted, and last. A take-back notice says who
+took it back and when, then the same title sentence last, and does not
+repeat the words. Every rune a phone may draw as a quotation mark, in the
+words and in the title, becomes a single quote: ASCII `"`, every rune in
+Unicode classes Pi and Pf, U+201E, U+201F, U+FF02, U+301D, U+301E, U+301F,
+U+00AB and U+00BB. The words, at most 300 characters, are shown in full.
+The title and the words both go through the summoned-session pager's
+redaction, which makes links inert (`summonRedact`, `summon_pages.go:793`;
+N11). A watchdog notice says the pod ran raised without a record and was
+suspended.
 
 **The signed outcome** (N1). For each notice the keeper writes a reservation
 to its own ledger ConfigMap, `dev-env-system/dev-env-keeper-raise-notices`,
@@ -970,10 +988,14 @@ signature verifies, for a record that is still `pending` with the same
 activation write of the annotation is conditional: only when the stored
 annotation still has that id and state `pending`, with a `resourceVersion`
 precondition. On a conflict the operator re-reads and re-decides, and
-never overwrites a taken-back record. When a row's state and its
-annotation's state differ, the activator re-signs the annotation from the
+never overwrites a taken-back record. When a row that has left pending
+differs from its annotation, the activator re-signs the annotation from the
 ledger row and from words that verify under the operator key and carry
-that id, including a taken-back row. Words are not re-signed from an
+that id, including a taken-back row. The coordinator's ruling of
+2026-11-14 on the second slice (a) reviews: a row that is still pending is
+not re-signed from an annotation that verifies but is not pending. That
+gate, and the words check beside it, each refuse the ledger swap on their
+own, and the row stays pending. Words are not re-signed from an
 annotation that does not verify or that names another id: the operator
 logs it and the ledger row stands. The words check runs again before any
 re-sign.
@@ -1327,6 +1349,12 @@ In `admitCreate`, where it now refuses (`sessions.go:699-702`):
 - The child cap (`sessions.go:703-710`) and every other admission run
   unchanged. `newSession` writes the true label `"3"` (`validate.go:387`)
   and `spec.parent` the raised session (`:268`).
+- The coordinator's ruling of 2026-11-14 on the second slice (a) reviews:
+  the exemption is one call and one boolean. That boolean both admits the
+  create past the depth check and subjects it to the raised-child refusal.
+  A caller that is not exempt still meets the named-coordinator rule
+  before the depth refusal. A second read of the same fact does not decide
+  a second gate.
 - Only the direct create (`createSessionMode`). Scheduled work
   (`CreateScheduledSession`), the standby and summoned creates keep today's
   rule.
@@ -1511,7 +1539,7 @@ the signature or the key id.
 
 ```
 profile:      full (at creation)
-raised:       workbench; may start sessions (performed by session/<performer> at 2026-11-13T15:52:40Z; active from 15:55:10Z)
+raised:       workbench; may start sessions (performed by session/<performer> at 2026-11-13T15:52:40Z; active from 2026-11-13T15:55:10Z)
 on Tom's word: "<verbatim>" (phone prompt in <performer>, 2026-11-13T15:50:02Z; op:830#7980)
 pod runs as:  dev-env-agent; the raised profile applies at its next start (agent-run raise <name> --restart)
 ```
@@ -1520,7 +1548,12 @@ Other forms: "raise pending: notice not yet accepted (attempt `<n>` of 12)";
 "raise pending: notice accepted at `<time>`, takes effect at `<time>`";
 "raise unannounced: the notice could not be sent, so it never took effect";
 "raise taken back by `<who>` at `<time>`"; "raise record ignored:
-`<reason>`". It never says Tom saw a notice.
+`<reason>`". It never says Tom saw a notice. The coordinator's ruling of
+2026-11-14 on the second slice (a) reviews: `show` prints the full time,
+as in `active from 2026-11-13T15:55:10Z`. A verified Sent earlier than the
+raise gives no effect time. The view's reason is "The notice time is
+before the raise. A take-back and a new raise are needed." The row stays
+pending.
 
 **`agent-run list`** adds to its NOTE column (`internal/agentrun/sessions.go:68`,
 `note` at `:82`): `raised: workbench`, `raised: may start sessions`,
@@ -1665,8 +1698,10 @@ sessions.**
      object's owner only, and takes no right from any other account (rule
      6); the
      operator's get on the keeper's ledger and public key; the keeper's get
-     on the operator ledger and public key, and list on AgentSessions in
-     `dev-agents`.
+     on the operator ledger and public key, and get, not list, on
+     AgentSessions in `dev-agents`. The coordinator's ruling of 2026-11-14
+     on the second slice (a) reviews: the keeper fetches one session by
+     name and never lists AgentSessions.
   6. *Who can read a private key:* a read-only pass over every RoleBinding in
      `dev-env-system` and every ClusterRoleBinding (`kubectl get rolebindings
      -n dev-env-system -o json`, `kubectl get clusterrolebindings -o json`),
@@ -2036,3 +2071,36 @@ ADR-028 and ADR-029 are not edited.
 | A-L6 | Parse refuses an annotation whose bytes are not exactly Encode of the record. | Section 6.1 |
 | A-L7 | The secret-shape check also runs on the NFKC form of the words. | Section 6.3 |
 | B-L2, B-L3, B-L7 | A 404 for no raise prints that sentence. `--profile` and `--start-sessions` may be given together. `show`, `list` and `fleet` match section 10, including "(at creation)" and no empty "in ,". | Section 10 |
+
+A second pair of reviews, both by Claude Opus 5.5, each a request for
+changes, on the head after the first fix round. Review A (operator): 1
+HIGH, 2 MEDIUM, 6 LOW. Review B (keeper, CLI, documents): 0 HIGH, 4
+MEDIUM, 10 LOW. The rulings are the coordinator's of 2026-11-14 on the
+second slice (a) reviews. Nothing is installed. Both flags stay off.
+ADR-028 and ADR-029 are not edited.
+
+| Finding | Ruling | Where |
+| --- | --- | --- |
+| 2A-H1 | The depth exemption is one call and one boolean. That boolean both admits the create past the depth check and subjects it to the raised-child refusal. A caller that is not exempt still meets the named-coordinator rule first. | Section 8.1 |
+| 2A-M1 | A live session with another UID, and a live session labelled 3, are not exempt. | Section 8.1 |
+| 2A-M2 | The activator's annotation write also requires the state it decided from. A take-back written before the Get that follows Finish stays taken back. | Section 6.4 |
+| 2A-L1 | The raise, the take-back, and "raise active" or "raise unannounced" are logged when the ledger write succeeds, whatever the annotation write does. A record `depthExempt` or `annotationCounts` does not honour is logged once per id and reason. Never `sig`, `keyId`, or the raw annotation. | Section 6.1 |
+| 2A-L2 | The same body on a taken-back row, and on an unannounced row, is used words. | Section 6.1 |
+| 2A-L3 | POST refuses a start-sessions raise while dispatch is off. | Section 6.2 |
+| 2A-L4 | Each activation pass reads the operator ledger once and does not list sessions. The informer cache is a hint. The decision reads the live session. | Section 6.4 |
+| 2A-L5 | Not changed. A take-back of a never-raised session answers 503 when the ledger cannot be read. The ledger decides whether a session is raised, so "cannot read" is the answer. | Section 6.7 |
+| 2A-L6 | A verified Sent earlier than the raise gives no effect time. The reason says the notice time is before the raise and that a take-back and a new raise are needed. The row stays pending. | Section 10 |
+| 2B-M1, 2B-L1 | The keeper gets one session by name and never lists AgentSessions. NotFound or another UID means the session is gone and is remembered for this process. A row with no name is logged once. Any other read error keeps the notice. The install verb is get. | Section 6.4; section 11 rule 5 |
+| 2B-M2 | Before a send, the keeper checks the signature and the words hash, not only the id, state and UID. | Section 6.4 |
+| 2B-M3 | A notice is due under the cap of 12 and the five-minute wait, and a reservation counts. A failed row at attempt 5 reaches 6 and is kept. | Section 6.4 |
+| 2B-M4, 2B-L6 | The title is quoted and follows the take-back command. No title omits that sentence. Quotation marks a phone may draw, in the words and the title, become a single quote. | Section 6.4 |
+| 2B-L2 | The keeper key is made once at start. An idle pass reads the ledger and does not read the key Secret. | Section 6.4 |
+| 2B-L3 | A failed prune, reservation or outcome write logs one line an hour at most. | Section 6.4 |
+| 2B-L4 | A reservation with no outcome, older than the five-minute wait, counts as one Ambiguous attempt. The keeper stops at 12. | Section 6.4 |
+| 2B-L5 | `sentAt` is rounded up to the next whole second, never down. | Section 6.4 |
+| 2B-L7 | The keeper writes `sentAt` only on Sent. | Section 6.4 |
+| 2B-L8 | An old operator's JSON "no route" 404 prints the no-raise-routes sentence. `show` of a session that was never raised has no "(at creation)". `show` prints the full time. | Section 10 |
+| 2B-L9 | After the ledger write, the take-back releases grants and suspends when the annotation write fails, when the operator key cannot be read, and when the annotation does not count. Slice (a) installs no profile list, so a start-sessions take-back has an empty profile and nothing to release. The tests use a profile the server still accepts when the list is set. | Section 9 |
+| 2B-L10 | This table, the notice text, the one exemption, the full time, and the keeper's get. The saga records that slice (a) is built. The workflow guide says this build gives only the right to start sessions. | Sections 6.4, 8.1, 10 and 11; the saga decision log; `docs/workflow-guide.md` |
+| Review A, mutant A3a | Both checks stay. An annotation that verifies with good words but is not pending does not activate. An annotation whose words do not match the ledger does not activate. | Section 6.4 |
+| Advisory, commit `2bc2665d` | A notice whose session has left the operator ledger is dropped. | Section 6.4 |
