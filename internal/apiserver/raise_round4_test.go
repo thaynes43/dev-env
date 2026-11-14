@@ -4,9 +4,16 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-logr/logr"
+	"github.com/thaynes43/dev-env/internal/keeper"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -224,5 +231,367 @@ func TestActiveRepairRequiresTheFullSentEvidence(t *testing.T) {
 				t.Fatal("active repair accepted incomplete evidence")
 			}
 		})
+	}
+}
+
+func TestReview4LedgerOnlyTakeBackBeforeWrite(t *testing.T) {
+	for _, path := range []string{"repair", "activate", "unannounce"} {
+		t.Run(path, func(t *testing.T) {
+			f := newFixture(t)
+			f.raiseReady(true)
+			f.sessionPod("target", "full", 2)
+			f.putPending(f.session("target"))
+			uid := string(f.session("target").UID)
+			wantWritten := sessionraise.StateActive
+			if path == "unannounce" {
+				wantWritten = sessionraise.StateUnannounced
+				pub, priv, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.publishKeeper(pub)
+				row := f.ledgerEntry(uid)
+				n, err := sessionraise.SignNotice(sessionraise.Notice{ID: row.ID, SessionUID: uid, Kind: sessionraise.KindRaise, Attempt: sessionraise.NoticeAttempts, Outcome: sessionraise.OutcomeFailed, At: row.PerformedAt}, priv)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.putNotice(n)
+			} else {
+				f.raiseSent(uid)
+			}
+			if path == "repair" {
+				f.editRaiseRow(uid, func(r *sessionraise.SessionEntry) { r.State = sessionraise.StateActive })
+			}
+			fired := false
+			f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+				sess, ok := obj.(*v1alpha1.AgentSession)
+				if !ok || fired || annotationState(*sess) != wantWritten {
+					return nil
+				}
+				fired = true
+				// Only the ledger moves. The annotation resourceVersion is unchanged,
+				// so the activator's write succeeds and must be followed in this pass.
+				return f.srv.commitLedger(context.Background(), f.srv.Raise.filled(), func(l *sessionraise.Ledger) (bool, error) {
+					_, err := l.TakeBack(uid, "human/"+humanSA, f.now.Format(time.RFC3339), f.now)
+					return err == nil, err
+				})
+			}}
+			f.srv.activateRaises(context.Background())
+			if !fired {
+				t.Fatal("did not reach the selected write path")
+			}
+			rec, err := sessionraise.Parse(f.session("target").Annotations[v1alpha1.AnnotationRaise])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.ledgerEntry(uid).State != sessionraise.StateTakenBack || rec.State != sessionraise.StateTakenBack {
+				t.Fatalf("after ONE pass: ledger %s annotation %s", f.ledgerEntry(uid).State, rec.State)
+			}
+			if rec.TakenBackBy != "human/"+humanSA {
+				t.Fatal("take-back fields were lost")
+			}
+		})
+	}
+}
+
+func TestActivatorWritesTheDecisionResourceVersion(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	f.sessionPod("target", "full", 2)
+	f.putPending(f.session("target"))
+	snapshot := f.session("target")
+	fresh := snapshot.DeepCopy()
+	fresh.Annotations["example.com/concurrent"] = "kept"
+	if err := f.c.Update(context.Background(), fresh); err != nil {
+		t.Fatal(err)
+	}
+	err := f.srv.writeRaiseAnnotationWhen(context.Background(), snapshot, snapshot.Annotations[v1alpha1.AnnotationRaise])
+	if !errors.Is(err, errRaiseAnnotationMoved) {
+		t.Fatalf("stale decision write returned %v", err)
+	}
+	if f.session("target").Annotations["example.com/concurrent"] != "kept" {
+		t.Fatal("concurrent metadata lost")
+	}
+}
+
+func (f *fixture) raiseReplica() *fixture {
+	f.t.Helper()
+	s := &Server{Client: f.c, Live: f.c, Auth: f.auth, Policy: f.srv.Policy, Templates: f.srv.Templates, Raise: f.srv.Raise, Now: f.srv.Now, Log: logr.Discard()}
+	return &fixture{t: f.t, c: f.c, auth: f.auth, srv: s, h: s.Handler()}
+}
+
+type noticeCommittedClient struct {
+	client.Client
+	sent chan struct{}
+}
+
+func (c *noticeCommittedClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	err := c.Client.Update(ctx, obj, opts...)
+	if cm, ok := obj.(*corev1.ConfigMap); ok && err == nil && cm.Name == sessionraise.NoticeLedgerName {
+		led, e := sessionraise.UnmarshalNotice([]byte(cm.Data[sessionraise.LedgerField]))
+		if e == nil {
+			for _, n := range led.Items {
+				if n.Outcome == sessionraise.OutcomeSent {
+					close(c.sent)
+					break
+				}
+			}
+		}
+	}
+	return err
+}
+
+func (f *fixture) announceAndActivateRaise(uid, id string) {
+	f.t.Helper()
+	ctx := context.Background()
+	if err := f.c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: sessionraise.ObjectNamespace, Name: sessionraise.KeeperSecretName}}); err != nil {
+		f.t.Fatal(err)
+	}
+	sender := &recSender{sent: make(chan struct{}, 1)}
+	writer := &noticeCommittedClient{Client: f.c, sent: make(chan struct{})}
+	pager := &keeper.RaisePager{Client: writer, Live: f.c, Namespace: sessionraise.ObjectNamespace, SessionNamespace: sessionNS, Sender: sender, Now: f.srv.Now, Log: logr.Discard()}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- pager.Start(runCtx) }()
+	select {
+	case <-writer.sent:
+	case <-time.After(3 * time.Second):
+		f.t.Fatal("new raise was not announced")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			f.t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		f.t.Fatal("pager did not stop")
+	}
+	if sender.n != 1 {
+		f.t.Fatalf("sent %d notices", sender.n)
+	}
+	notices, pub, err := f.srv.readNotices(ctx, f.srv.Raise.filled())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	row := f.ledgerEntry(uid)
+	if row.ID != id {
+		f.t.Fatal("new raise id lost before activation")
+	}
+	sent, ok := sessionraise.SentTime(row, notices.Items, pub)
+	if !ok {
+		f.t.Fatal("no verified Sent for new raise")
+	}
+	at, err := time.Parse(time.RFC3339, sent)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.now = at.Add(sessionraise.EffectDelay)
+	f.srv.activateRaises(ctx)
+	rec, err := sessionraise.Parse(f.session("target").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if rec.ID != id || rec.State != sessionraise.StateActive || f.ledgerEntry(uid).State != sessionraise.StateActive {
+		f.t.Fatal("new raise did not activate")
+	}
+}
+
+func TestReview4OldDeleteCannotOverwriteANewerRaise(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	uid := string(target.UID)
+	a := f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, a); w.Code != http.StatusAccepted {
+		t.Fatalf("A POST %d %s", w.Code, w.Body.String())
+	}
+	oldID := f.ledgerEntry(uid).ID
+	f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+		if s, ok := obj.(*v1alpha1.AgentSession); ok && annotationState(*s) == sessionraise.StateTakenBack {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}}
+	back := apiv1.TakeBackRequest{ExpectUID: uid}
+	if w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, back); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("partial DELETE %d %s", w.Code, w.Body.String())
+	}
+	f.now = f.now.Add(61 * time.Second)
+	replica := f.raiseReplica()
+	fired := false
+	newID := ""
+	f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+		if s, ok := obj.(*v1alpha1.AgentSession); ok && !fired && annotationState(*s) == sessionraise.StateTakenBack {
+			fired = true
+			b := f.raiseReq(uid, "", "allow second raise", sessionraise.WherePhone, true)
+			w := replica.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, b)
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("B POST %d %s", w.Code, w.Body.String())
+			}
+			newID = f.ledgerEntry(uid).ID
+		}
+		return nil
+	}}
+	if w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, back); w.Code != http.StatusOK {
+		t.Fatalf("DELETE retry %d %s", w.Code, w.Body.String())
+	}
+	if !fired || oldID == newID || annotationState(*f.session("target")) != sessionraise.StatePending {
+		t.Fatal("B annotation overwritten by A DELETE retry")
+	}
+	f.srv.Client = f.c
+	f.announceAndActivateRaise(uid, newID)
+}
+
+func TestReview4OldPostCannotOverwriteANewerRaise(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	uid := string(target.UID)
+	replica := f.raiseReplica()
+	fired := false
+	newID := ""
+	f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+		if s, ok := obj.(*v1alpha1.AgentSession); ok && !fired && annotationState(*s) == sessionraise.StatePending {
+			fired = true
+			w := replica.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: uid})
+			if w.Code != http.StatusOK {
+				t.Fatalf("A DELETE %d %s", w.Code, w.Body.String())
+			}
+			f.now = f.now.Add(61 * time.Second)
+			w = replica.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, f.raiseReq(uid, "", "allow second raise", sessionraise.WherePhone, true))
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("B POST %d %s", w.Code, w.Body.String())
+			}
+			newID = f.ledgerEntry(uid).ID
+		}
+		return nil
+	}}
+	w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("delayed A POST %d %s", w.Code, w.Body.String())
+	}
+	rec, err := sessionraise.Parse(f.session("target").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fired || rec.ID != newID || rec.State != sessionraise.StatePending {
+		t.Fatal("B annotation overwritten by delayed A POST")
+	}
+	f.srv.Client = f.c
+	f.announceAndActivateRaise(uid, newID)
+}
+
+func TestReview4AmbiguousDeleteAudit(t *testing.T) {
+	for _, repair := range []string{"request", "pass"} {
+		t.Run(repair, func(t *testing.T) {
+			f := newFixture(t)
+			f.raiseReady(true)
+			tok := f.workbench("bench")
+			target := f.remoteTarget("target", 2)
+			uid := string(target.UID)
+			if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true)); w.Code != http.StatusAccepted {
+				t.Fatalf("POST %d %s", w.Code, w.Body.String())
+			}
+			sink := &lineSink{}
+			f.srv.Log = logr.New(sink)
+			applied := false
+			f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+				cm, ok := obj.(*corev1.ConfigMap)
+				if !ok || cm.Name != sessionraise.LedgerName || applied {
+					return nil
+				}
+				applied = true
+				if err := f.c.Update(context.Background(), cm); err != nil {
+					return err
+				}
+				return context.DeadlineExceeded
+			}}
+			back := apiv1.TakeBackRequest{ExpectUID: uid}
+			if w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, back); w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("ambiguous DELETE %d %s", w.Code, w.Body.String())
+			}
+			if !applied || f.ledgerEntry(uid).State != sessionraise.StateTakenBack {
+				t.Fatal("ledger write was not applied")
+			}
+			f.srv.Client = f.c
+			if repair == "request" {
+				if w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, back); w.Code != http.StatusOK {
+					t.Fatalf("retry %d %s", w.Code, w.Body.String())
+				}
+			} else {
+				pub, _, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.publishKeeper(pub)
+				f.srv.activateRaises(context.Background())
+			}
+			if annotationState(*f.session("target")) != sessionraise.StateTakenBack {
+				t.Fatal("annotation not repaired")
+			}
+			if n := strings.Count(strings.Join(sink.msgs, "\n"), "took back a raise of target"); n != 1 {
+				t.Fatalf("take-back audit lines %d, want one: %v", n, sink.msgs)
+			}
+			// A settled retry is silent in this operator process too.
+			if w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, back); w.Code != http.StatusOK {
+				t.Fatalf("settled retry %d", w.Code)
+			}
+			if n := strings.Count(strings.Join(sink.msgs, "\n"), "took back a raise of target"); n != 1 {
+				t.Fatalf("duplicate audit line: %v", sink.msgs)
+			}
+		})
+	}
+}
+
+func TestReview4SuccessfulPostRetryAuditAcrossReplicas(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	uid := string(target.UID)
+	sink := &lineSink{}
+	f.srv.Log = logr.New(sink)
+	body := f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("POST %d %s", w.Code, w.Body.String())
+	}
+	replica := f.raiseReplica()
+	replica.srv.Log = logr.New(sink)
+	if w := replica.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusOK {
+		t.Fatalf("retry %d %s", w.Code, w.Body.String())
+	}
+	if n := strings.Count(strings.Join(sink.msgs, "\n"), "Raised target"); n != 1 {
+		t.Fatalf("raised audit lines %d, want one: %v", n, sink.msgs)
+	}
+}
+
+func TestDelayedPostCannotOverwriteTakeBack(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	uid := string(target.UID)
+	replica := f.raiseReplica()
+	fired := false
+	f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+		if s, ok := obj.(*v1alpha1.AgentSession); ok && !fired && annotationState(*s) == sessionraise.StatePending {
+			fired = true
+			w := replica.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: uid})
+			if w.Code != http.StatusOK {
+				t.Fatalf("DELETE %d %s", w.Code, w.Body.String())
+			}
+		}
+		return nil
+	}}
+	w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, f.raiseReq(uid, "", "allow first raise", sessionraise.WherePhone, true))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("POST %d %s", w.Code, w.Body.String())
+	}
+	if !fired || annotationState(*f.session("target")) != sessionraise.StateTakenBack || f.ledgerEntry(uid).State != sessionraise.StateTakenBack {
+		t.Fatal("delayed POST overwrote take-back of the same id")
 	}
 }

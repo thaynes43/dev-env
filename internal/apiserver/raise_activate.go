@@ -33,14 +33,17 @@ func (s *Server) readNotices(ctx context.Context, cfg RaiseConfig) (*sessionrais
 
 // activateRaises moves pending rows the keeper has announced. It runs when
 // dispatch is on or a profile list is configured. One pass reads the
-// operator ledger once. That read, like the informer cache, is only a hint
+// operator ledger once for selection. That read, like the cache, is a hint
 // for which rows to visit: a missing session is skipped, and a row is
 // visited only when it is pending or the cached annotation's state differs
 // from the row. The hint decides nothing. For each visited row the live
 // session is read first and that session's ledger row second, and the
 // repair, the activation or the unannounce is made from those two. The
 // activator never writes an annotation whose state differs from the ledger
-// row it read after the live session. On a conflict both are read again.
+// row it read after the live session. Update uses that snapshot's resourceVersion,
+// without a further Get. After a successful write the ledger is read again;
+// a changed id/state re-decides in this same bounded pass. A cross-object
+// mismatch never counts. On a conflict both objects are read again.
 // The ledger is written before the annotation. A row that is no longer
 // pending is left alone, so a take-back wins over a later Sent.
 func (s *Server) activateRaises(ctx context.Context) {
@@ -294,11 +297,18 @@ func (s *Server) writeSignedFromLedger(ctx context.Context, sess *v1alpha1.Agent
 	if err != nil {
 		return err
 	}
-	err = s.writeRaiseAnnotationWhen(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, sess.UID, string(raw), func(cur *v1alpha1.AgentSession) bool {
-		return cur.Annotations[v1alpha1.AnnotationRaise] == sess.Annotations[v1alpha1.AnnotationRaise]
-	})
+	err = s.writeRaiseAnnotationWhen(ctx, sess, string(raw))
 	if err == nil {
 		s.logRaiseState(observedAudit(sess.Name, signed.State), signed)
+		// The two objects are not a transaction. Close a ledger-only
+		// take-back in the cross-object interval in this same bounded pass.
+		fresh, readErr := s.raiseEntry(ctx, s.Raise.filled(), string(sess.UID))
+		if readErr != nil {
+			return readErr
+		}
+		if fresh == nil || fresh.ID != signed.ID || fresh.State != signed.State {
+			return errRaiseAnnotationMoved
+		}
 	}
 	return err
 }
