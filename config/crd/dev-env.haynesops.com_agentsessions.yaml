@@ -1103,6 +1103,58 @@ spec:
                     required:
                     - state
                     type: object
+                  start:
+                    description: |-
+                      Start is how a summoned task's start went after its model pre-flight
+                      (DESIGN-064 6.9, OP791): the model it started on, or why no model was
+                      usable. The API copies it from the session's own heartbeat once, for a
+                      summoned task only and only with spec.model or
+                      spec.summon.fallbackModel, and keeps it on every later heartbeat; it
+                      never changes once recorded. The schema bounds its shape and refuses a
+                      change; the binding to spec is the API's, since a root rule that reads
+                      spec.summon does not compile against an installed spec schema that
+                      predates it (TestPrivatePilotPreflightRealSchemaAdmission).
+                    properties:
+                      failure:
+                        description: |-
+                          Failure is why nothing started, the cause of the last model tried: a
+                          refused model, a quota refusal, a rejected login (the fallback is not
+                          tried) or no answer in time. A start the start deadline refused is not
+                          recorded here.
+                        enum:
+                        - ModelRefused
+                        - QuotaRefused
+                        - LoginRejected
+                        - NoAnswer
+                        maxLength: 32
+                        type: string
+                      fallbackCause:
+                        description: |-
+                          FallbackCause is set only beside a model that is
+                          spec.summon.fallbackModel: why spec.model did not answer. A rejected
+                          login tries no fallback, so it is never a fallback's cause.
+                        enum:
+                        - ModelRefused
+                        - QuotaRefused
+                        - NoAnswer
+                        maxLength: 32
+                        type: string
+                      model:
+                        description: |-
+                          Model is the full model id the task started on: spec.model, or
+                          spec.summon.fallbackModel when spec.model did not answer.
+                        maxLength: 128
+                        minLength: 1
+                        pattern: ^\S+$
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: a start record names either the model the task started
+                        on or why no model was usable
+                      rule: has(self.model) != has(self.failure)
+                    - message: a fallback's cause goes only beside the model the task
+                        started on
+                      rule: '!has(self.fallbackCause) || has(self.model)'
                   status:
                     description: |-
                       Status is the agent's state, agentd's: pending, busy, idle, waiting,
@@ -4252,6 +4304,10 @@ spec:
         - message: the summon record cannot be removed, including with status
           rule: '!has(oldSelf.status) || !has(oldSelf.status.summon) || (has(self.status)
             && has(self.status.summon))'
+        - message: a summoned task's start record never changes once recorded
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.agent) || !has(oldSelf.status.agent.start)
+            || (has(self.status) && has(self.status.agent) && has(self.status.agent.start)
+            && self.status.agent.start == oldSelf.status.agent.start)'
     served: true
     storage: true
     subresources:

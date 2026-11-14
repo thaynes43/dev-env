@@ -271,8 +271,14 @@ exit 0`)
 
 // run-agent's start fence (N2): a launch that carries a start deadline spawns
 // its provider before it and spawns nothing at or past it, for a task and a
-// TUI; a launch without one spawns whatever the time.
+// TUI; a launch without one spawns whatever the time. A summoned task's model
+// pre-flight runs in the in-process stand-in fakeCLI installs, so a spawn one
+// nanosecond before the deadline does not depend on how fast a process
+// starts (ruling 3 of story 791 fix round 1).
 func TestRunAgentStartFence(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	deadline := loginNow.Add(15 * time.Minute)
 	for _, mode := range []string{protocol.ModeTask, protocol.ModeRemote} {
 		for _, tc := range []struct {
@@ -282,6 +288,7 @@ func TestRunAgentStartFence(t *testing.T) {
 			spawns   bool
 		}{
 			{"before", deadline.Format(time.RFC3339), deadline.Add(-time.Second), true},
+			{"just-before", deadline.Format(time.RFC3339), deadline.Add(-time.Nanosecond), true},
 			{"at", deadline.Format(time.RFC3339), deadline, false},
 			{"past", deadline.Format(time.RFC3339), deadline.Add(time.Hour), false},
 			{"invalid", "tomorrow", loginNow, false},
@@ -332,6 +339,9 @@ func TestRunAgentStartFence(t *testing.T) {
 // in internal/controller runs both halves together); resumed, run-agent
 // refuses and no provider starts. For a task and for a remote session.
 func TestSummonedPausedLaunchRefusedPastStartDeadline(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	for _, mode := range []string{protocol.ModeTask, protocol.ModeRemote} {
 		t.Run(mode, func(t *testing.T) {
 			s, sess, ws := summonedFixture(t, mode)
@@ -397,6 +407,9 @@ func TestSummonedPausedLaunchRefusedPastStartDeadline(t *testing.T) {
 // An ordinary session keeps today's behaviour: the record goes and a later
 // boot starts the launch again.
 func TestSummonedTmuxStartFailureKeepsTheLaunch(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	deadline := loginNow.Add(15 * time.Minute)
 	lost := errors.New("tmux: signal: killed")
 	for _, mode := range []string{protocol.ModeTask, protocol.ModeRemote} {
@@ -585,6 +598,9 @@ const handoffRecordName = "start-handoff.json"
 // For a task and for a remote session, no later boot starts tmux or the
 // provider again.
 func TestSummonedStartHandoffRecord(t *testing.T) {
+	if isolatePreflightTest(t) {
+		return
+	}
 	ambiguous := &CmdError{Name: "tmux", Sub: "new-session", ExitCode: 1, Stderr: "server exited unexpectedly"}
 	readErr := fmt.Errorf("tmux: %w", &fs.PathError{Op: "read", Path: "|0", Err: os.ErrClosed})
 	for _, mode := range []string{protocol.ModeTask, protocol.ModeRemote} {
@@ -707,7 +723,7 @@ exit 0`)
 						return protocol.AgentBusy
 					case tc.record == "started":
 						return protocol.AgentExited
-					case live, boot == "first-boot" && at < startWindow:
+					case live && (mode == protocol.ModeRemote || boot == "first-boot"), boot == "first-boot" && at < startWindow:
 						return protocol.AgentBusy
 					}
 					return protocol.AgentInterrupted
@@ -840,7 +856,9 @@ func TestSummonedStartHandoffStatusTable(t *testing.T) {
 					switch {
 					case rec == "nothing-started" || rec == "fence-refused":
 						want = protocol.AgentFailed
-					case p.live:
+					case p.live && (mode == protocol.ModeRemote || p.boot == "first-boot"):
+						// OP791 round 3: task pre-flight ownership and its PID
+						// belong to the launch's boot, even on a PID coincidence.
 						want = protocol.AgentBusy
 					case p.boot == "first-boot" && p.at < startWindow:
 						// "started" as today; "asked" and "ambiguous" alike.

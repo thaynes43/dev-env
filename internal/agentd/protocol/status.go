@@ -135,9 +135,49 @@ type Status struct {
 	// Allowance is one passive allowance reading from this session's own CLI
 	// (DESIGN-059): absent when there is none, or when agentd refused to send
 	// it. An operator that does not know the field ignores it.
-	Allowance  *AllowanceReading `json:"allowance,omitempty"`
-	ObservedAt time.Time         `json:"observedAt"`
+	Allowance *AllowanceReading `json:"allowance,omitempty"`
+	// Start is how a summoned task's start went after its model pre-flight
+	// (DESIGN-064 6.9, OP791): the model it started on, or why no model was
+	// usable. Absent for every other session, and while the pre-flight
+	// runs. An operator that does not know the field ignores it.
+	Start      *StartRecord `json:"start,omitempty"`
+	ObservedAt time.Time    `json:"observedAt"`
 }
+
+// StartRecord is a summoned task's start after its model pre-flight
+// (DESIGN-064 6.9, OP791). Exactly one of Model and Failure is set.
+type StartRecord struct {
+	// Model is the full model id the task started on: the session's model,
+	// or its fallback when the model did not answer.
+	Model string `json:"model,omitempty"`
+	// FallbackCause is set only beside a Model that is the fallback: why the
+	// session's own model did not answer. One of StartFailures except
+	// StartFailureLoginRejected, which tries no fallback.
+	FallbackCause string `json:"fallbackCause,omitempty"`
+	// Failure is why nothing started: one of StartFailures, the cause of the
+	// last model tried. A start the start deadline refused is not recorded
+	// here; it is run-agent's start fence refusal (DESIGN-064 5.9).
+	Failure string `json:"failure,omitempty"`
+}
+
+// The causes of a summoned task's start failure (DESIGN-064 6.9, OP791).
+const (
+	// StartFailureModelRefused: the provider's API error names the model as
+	// unknown, invalid or unavailable.
+	StartFailureModelRefused = "ModelRefused"
+	// StartFailureQuotaRefused: the provider's API error names a usage limit,
+	// a rate limit or spent credits.
+	StartFailureQuotaRefused = "QuotaRefused"
+	// StartFailureLoginRejected: the provider rejected the login. The
+	// fallback runs on the same token, so it is not tried.
+	StartFailureLoginRejected = "LoginRejected"
+	// StartFailureNoAnswer: no answer inside the turn's own 90-second
+	// limit, or a failure agentd does not recognise.
+	StartFailureNoAnswer = "NoAnswer"
+)
+
+// StartFailures is the fixed set of StartRecord.Failure values.
+var StartFailures = []string{StartFailureModelRefused, StartFailureQuotaRefused, StartFailureLoginRejected, StartFailureNoAnswer}
 
 // Workspace is the session's clone and worktree (D-15).
 type Workspace struct {
