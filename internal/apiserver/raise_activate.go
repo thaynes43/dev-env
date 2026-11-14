@@ -33,12 +33,16 @@ func (s *Server) readNotices(ctx context.Context, cfg RaiseConfig) (*sessionrais
 
 // activateRaises moves pending rows the keeper has announced. It runs when
 // dispatch is on or a profile list is configured. One pass reads the
-// operator ledger once. The informer cache is only a hint for which rows
-// to decide: a missing session is skipped, and a row is decided only when
-// it is pending or the cached annotation's state differs from the row.
-// The decision reads the live session and, after a conflict, the ledger
-// again. The ledger is written before the annotation. A row that is no
-// longer pending is left alone, so a take-back wins over a later Sent.
+// operator ledger once. That read, like the informer cache, is only a hint
+// for which rows to visit: a missing session is skipped, and a row is
+// visited only when it is pending or the cached annotation's state differs
+// from the row. The hint decides nothing. For each visited row the live
+// session is read first and that session's ledger row second, and the
+// repair, the activation or the unannounce is made from those two. The
+// activator never writes an annotation whose state differs from the ledger
+// row it read after the live session. On a conflict both are read again.
+// The ledger is written before the annotation. A row that is no longer
+// pending is left alone, so a take-back wins over a later Sent.
 func (s *Server) activateRaises(ctx context.Context) {
 	cfg, ok := s.raiseConfig()
 	if !ok || s.Live == nil || s.Client == nil || (!cfg.Dispatch && len(cfg.Profiles) == 0) {
@@ -82,7 +86,9 @@ func (s *Server) activateRaises(ctx context.Context) {
 		e := visit[i]
 		hint := &v1alpha1.AgentSession{}
 		hint.Namespace, hint.Name = ns, e.Name
-		s.activateOneDepth(ctx, cfg, hint, &e, notices, pub, priv, now, 0)
+		// The row that chose this visit is not the decision. Nil makes
+		// activateOneDepth read the ledger after the live session.
+		s.activateOneDepth(ctx, cfg, hint, nil, notices, pub, priv, now, 0)
 	}
 }
 
@@ -94,6 +100,11 @@ func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1
 	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, &live); err != nil {
 		return
 	}
+	// Every caller passes nil, so the row is read here, after the live
+	// session. A non-nil row was read before this Get. The conflict paths
+	// pass nil: passing the earlier row skips this read and can sign a
+	// state the ledger no longer has.
+	loaded := entry == nil
 	if entry != nil && entry.UID != string(live.UID) {
 		return
 	}
@@ -117,7 +128,26 @@ func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1
 			s.logOnce(entry.ID, "words do not verify", "raise words do not verify, so the annotation was not re-signed")
 			return
 		}
-		if err := s.writeSignedFromLedger(ctx, &live, *entry, ann.Owner.Words, ann.State, priv); errors.Is(err, errRaiseAnnotationMoved) {
+		// This call read the row after the live session. Read it again just
+		// before the write, and write only when it still has the id and the
+		// state just decided. If it does not, re-decide from fresh reads.
+		// A row passed in from before this Get skips that re-read. The
+		// conflict path passes nil, so the next call reads again. The
+		// activator never writes an annotation whose state differs from the
+		// ledger row it read after the live session.
+		writeFrom := entry
+		if loaded {
+			fresh, err := s.raiseEntry(ctx, cfg, string(live.UID))
+			if err != nil {
+				return
+			}
+			if fresh == nil || fresh.ID != entry.ID || fresh.State != entry.State {
+				s.activateOneDepth(ctx, cfg, &live, nil, notices, pub, priv, now, depth+1)
+				return
+			}
+			writeFrom = fresh
+		}
+		if err := s.writeSignedFromLedger(ctx, &live, *writeFrom, ann.Owner.Words, ann.State, priv); errors.Is(err, errRaiseAnnotationMoved) {
 			s.activateOneDepth(ctx, cfg, &live, nil, notices, pub, priv, now, depth+1)
 		}
 		return

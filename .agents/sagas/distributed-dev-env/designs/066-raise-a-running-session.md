@@ -998,7 +998,13 @@ gate, and the words check beside it, each refuse the ledger swap on their
 own, and the row stays pending. Words are not re-signed from an
 annotation that does not verify or that names another id: the operator
 logs it and the ledger row stands. The words check runs again before any
-re-sign.
+re-sign. The coordinator's ruling of 2026-11-14 on the third slice (a)
+reviews: the activator never writes an annotation whose state differs from
+the ledger row it read after the live session. The ledger read that opens a
+pass only chooses which rows to visit. Each visited row is decided from the
+live session and from a ledger row read after that session. The repair reads
+the row once more just before the annotation write, and writes only when the
+row still has that id and that state.
 
 **When a send fails.** Failed and Ambiguous both leave the raise `pending`.
 The keeper tries again 5 minutes later (`askRequesterInterval`,

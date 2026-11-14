@@ -406,11 +406,194 @@ func TestActivationPassReadsTheLedgerOnce(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		f.sessionPod(fmt.Sprintf("idle-%02d", i), "full", 0)
 	}
+	// Settled rows (active with active, taken-back with taken-back) are
+	// skipped from the hint. The pass still reads the ledger once and does
+	// not read a live session. Removing the skip, or reading the hint
+	// through the live reader, counts a session read or a second ConfigMap.
+	for i := 0; i < 20; i++ {
+		name := fmt.Sprintf("settled-%02d", i)
+		f.sessionPod(name, "full", 0)
+		f.putActive(f.session(name), true)
+		if i%2 == 0 {
+			continue
+		}
+		f.setRaiseState(string(f.session(name).UID), sessionraise.StateTakenBack)
+		f.rewriteAnnotation(name, func(rec *sessionraise.Record) {
+			rec.State = sessionraise.StateTakenBack
+			rec.TakenBackBy = "human/" + humanSA
+			rec.TakenBackAt = f.now.UTC().Format(time.RFC3339)
+		})
+	}
 	reads := &activationReads{Reader: f.c}
 	f.srv.Live = reads
 	f.srv.activateRaises(context.Background())
 	if reads.configMaps != 1 || reads.sessions != 0 {
 		t.Fatalf("configmaps %d sessions %d", reads.configMaps, reads.sessions)
+	}
+}
+
+// TestTakeBackOnTheFirstLiveGetStaysTakenBack is reviewer A's probe. The
+// ledger row is active and the annotation is still pending. The take-back
+// lands on the first live Get. After one pass the annotation is taken-back.
+func TestTakeBackOnTheFirstLiveGetStaysTakenBack(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.publishKeeper(pub)
+	f.sessionPod("creator", "full", 2)
+	f.putPending(f.session("creator"))
+	uid := string(f.session("creator").UID)
+	f.setRaiseState(uid, sessionraise.StateActive)
+	inner := f.c
+	var wroteActive bool
+	f.srv.Client = sessionHook{Client: inner, hook: func(obj client.Object) error {
+		sess, ok := obj.(*v1alpha1.AgentSession)
+		if !ok {
+			return nil
+		}
+		rec, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
+		if err == nil && rec.State == sessionraise.StateActive {
+			wroteActive = true
+		}
+		return nil
+	}}
+	f.srv.Live = &takeBackOnGet{Reader: inner, f: f}
+	f.srv.activateRaises(context.Background())
+	hook := f.srv.Live.(*takeBackOnGet)
+	if !hook.fired {
+		t.Fatal("the take-back did not land on the first live Get")
+	}
+	if wroteActive {
+		t.Fatal("the pass wrote an active annotation over the take-back")
+	}
+	if got := f.ledgerEntry(uid); got.State != sessionraise.StateTakenBack {
+		t.Fatalf("ledger %s", got.State)
+	}
+	ann, err := sessionraise.Parse(f.session("creator").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil || ann.State != sessionraise.StateTakenBack {
+		t.Fatalf("annotation %v %s", err, ann.State)
+	}
+}
+
+// TestPendingTakeBackDuringThePassIsNotLoggedAsUnverified takes a pending
+// row back on the first live Get. The pass must not log that the annotation
+// is not a verified pending record: the ledger row is taken-back.
+func TestPendingTakeBackDuringThePassIsNotLoggedAsUnverified(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.publishKeeper(pub)
+	sink := &lineSink{}
+	f.srv.Log = logr.New(sink)
+	f.sessionPod("creator", "full", 2)
+	f.putPending(f.session("creator"))
+	uid := string(f.session("creator").UID)
+	f.srv.Live = &takeBackOnGet{Reader: f.c, f: f, anyState: true}
+	f.srv.activateRaises(context.Background())
+	hook := f.srv.Live.(*takeBackOnGet)
+	if !hook.fired {
+		t.Fatal("the take-back did not land on the first live Get")
+	}
+	if got := f.ledgerEntry(uid); got.State != sessionraise.StateTakenBack {
+		t.Fatalf("ledger %s", got.State)
+	}
+	ann, err := sessionraise.Parse(f.session("creator").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil || ann.State != sessionraise.StateTakenBack {
+		t.Fatalf("annotation %v %s", err, ann.State)
+	}
+	joined := strings.Join(sink.msgs, "\n")
+	if strings.Contains(joined, "not a verified pending record") {
+		t.Fatalf("logged a pending refusal for a taken-back row: %s", joined)
+	}
+}
+
+// TestTakeBackInsideTheRepairWriteStaysTakenBack takes the raise back inside
+// the repair branch's annotation Update. The annotation ends taken-back.
+// Passing the row from before that write into the conflict retry, instead
+// of nil, leaves the annotation active.
+func TestTakeBackInsideTheRepairWriteStaysTakenBack(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.publishKeeper(pub)
+	f.sessionPod("creator", "full", 2)
+	f.putPending(f.session("creator"))
+	uid := string(f.session("creator").UID)
+	f.setRaiseState(uid, sessionraise.StateActive)
+	inner := f.c
+	var fired bool
+	f.srv.Client = sessionHook{Client: inner, hook: func(obj client.Object) error {
+		sess, ok := obj.(*v1alpha1.AgentSession)
+		if !ok || fired {
+			return nil
+		}
+		rec, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
+		if err != nil || rec.State != sessionraise.StateActive {
+			return nil
+		}
+		fired = true
+		cfg := f.srv.Raise.filled()
+		led, err := f.srv.readLedger(context.Background(), cfg)
+		if err != nil {
+			return err
+		}
+		if _, err := led.TakeBack(string(sess.UID), "human/"+humanSA, f.now.Format(time.RFC3339), f.now); err != nil {
+			return err
+		}
+		raw, err := led.Marshal()
+		if err != nil {
+			return err
+		}
+		cm := &corev1.ConfigMap{}
+		if err := inner.Get(context.Background(), types.NamespacedName{Namespace: cfg.Namespace, Name: cfg.Ledger}, cm); err != nil {
+			return err
+		}
+		cm.Data[sessionraise.LedgerField] = string(raw)
+		if err := inner.Update(context.Background(), cm); err != nil {
+			return err
+		}
+		priv, err := sessionraise.Load(context.Background(), f.srv.raiseStore(cfg), cfg.OperatorSecret, cfg.OperatorPublic)
+		if err != nil {
+			return err
+		}
+		row := led.Find(string(sess.UID))
+		signed, err := sessionraise.Sign(recordFrom(*row, "please start"), priv)
+		if err != nil {
+			return err
+		}
+		encoded, err := signed.Encode()
+		if err != nil {
+			return err
+		}
+		live := &v1alpha1.AgentSession{}
+		if err := inner.Get(context.Background(), types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, live); err != nil {
+			return err
+		}
+		live.Annotations[v1alpha1.AnnotationRaise] = string(encoded)
+		if err := inner.Update(context.Background(), live); err != nil {
+			return err
+		}
+		return apierrors.NewConflict(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "agentsessions"}, sess.Name, errors.New("taken back"))
+	}}
+	f.srv.activateRaises(context.Background())
+	if !fired {
+		t.Fatal("the repair did not write the annotation")
+	}
+	if got := f.ledgerEntry(uid); got.State != sessionraise.StateTakenBack {
+		t.Fatalf("ledger %s", got.State)
+	}
+	ann, err := sessionraise.Parse(f.session("creator").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil || ann.State != sessionraise.StateTakenBack {
+		t.Fatalf("annotation %v %s", err, ann.State)
 	}
 }
 
@@ -488,8 +671,9 @@ func TestTakenBackAnnotationIsRepaired(t *testing.T) {
 // before the Get that follows Finish returns.
 type takeBackOnGet struct {
 	client.Reader
-	f     *fixture
-	fired bool
+	f        *fixture
+	fired    bool
+	anyState bool
 }
 
 func (h *takeBackOnGet) Get(ctx context.Context, key types.NamespacedName, obj client.Object, opts ...client.GetOption) error {
@@ -505,7 +689,7 @@ func (h *takeBackOnGet) Get(ctx context.Context, key types.NamespacedName, obj c
 		}
 		uid := string(h.f.session("creator").UID)
 		row := led.Find(uid)
-		if row != nil && row.State == sessionraise.StateActive {
+		if row != nil && (h.anyState || row.State == sessionraise.StateActive) {
 			h.fired = true
 			if _, err := led.TakeBack(uid, "human/"+humanSA, h.f.now.Format(time.RFC3339), h.f.now); err != nil {
 				return err
