@@ -2562,6 +2562,8 @@ bullets marked "fix round 1" below are that round's. Ruling 1 changes the
 code: a capped overflow event keeps its refusals. Rulings 2 to 6 change only
 these words and the tests.
 
+*Correction, 2026-11-14: story 793 fix round 2, coordinator ruling; not a ruling by Tom.* Before either an attempted or capped overflow event is recorded, recheck the caller's `lastPagedAt` against the fresh loop time; inside its hour, send nothing, record no capped event, and leave its timestamp and reference count unchanged.
+
 - *The read.* Each tick, after the pager's ledger load and its scan, one get of
   `dev-env-summon-creates` in `dev-env-system` by name, bounded like the
   pager's other requests, decoded per caller key with `summonledger.Decode`.

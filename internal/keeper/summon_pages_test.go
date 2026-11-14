@@ -151,6 +151,9 @@ type summonFix struct {
 	// 793); createsGets counts them.
 	createsErr  error
 	createsGets int
+	// createsGet runs before the create-ledger Get; a test can clear it to
+	// make the hook one-shot.
+	createsGet func()
 }
 
 var summonLedgerName = types.NamespacedName{Namespace: "dev-env-system", Name: DefaultSummonPagesConfigMap}
@@ -176,6 +179,9 @@ func newSummonFix(t *testing.T) *summonFix {
 					}
 					if key.Namespace == summonledger.Namespace && key.Name == summonledger.Name {
 						f.createsGets++
+						if f.createsGet != nil {
+							f.createsGet()
+						}
 						if f.createsErr != nil {
 							return f.createsErr
 						}

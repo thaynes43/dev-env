@@ -867,6 +867,97 @@ func TestSummonOverflowClockBehindTheLedger(t *testing.T) {
 	}
 }
 
+// Story 793 fix round 2, F1: the create-ledger read can move the clock back
+// after selection's time was sampled. Both the attempted and capped paths
+// must check the caller's hour again against the fresh reservation time.
+func TestSummonOverflowRechecksCallerHourAfterCreateLedgerRead(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		name := "available_window"
+		if full {
+			name = "full_window"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newSummonFix(t)
+			t0 := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+			f.clock.SetTime(t0)
+			f.refused(summonCallerA, 3)
+			f.tick()
+			if got := f.overflowCounts(); len(got) != 1 || got[0] != summonCallerA+"=3" {
+				t.Fatalf("initial pages %v", got)
+			}
+			// Every reservation is at 10:00:05, so a full window remains
+			// full at both 10:30 and the caller's 11:00 boundary.
+			windowSize := 1
+			if full {
+				for i := 1; i < summonPagesCap; i++ {
+					f.add(f.failedSession(fmt.Sprintf("wo-upgrade-%d", i), time.Duration(i)*time.Second))
+				}
+				f.tick()
+				windowSize = summonPagesCap
+			}
+			before := f.ledger()
+			member := before.State.Overflow[summonCallerA]
+			if len(before.State.Window) != windowSize || before.State.Capped != 0 ||
+				member.LastPagedAt != t0.Unix() || member.LastPagedCount != 3 {
+				t.Fatalf("initial window %v capped %d member %+v", before.State.Window, before.State.Capped, member)
+			}
+			f.clock.SetTime(t0.Add(10 * time.Minute))
+			f.refused(summonCallerA, 5)
+			f.clock.SetTime(t0.Add(time.Hour))
+			gets := f.createsGets
+			f.createsGet = func() {
+				f.createsGet = nil
+				f.clock.SetTime(t0.Add(30 * time.Minute))
+			}
+			f.tick()
+			if f.createsGet != nil || f.createsGets != gets+1 || !f.clock.Now().Equal(t0.Add(30*time.Minute)) {
+				t.Fatal("the create-ledger Get did not rewind the clock once")
+			}
+			assertHeld := func() {
+				t.Helper()
+				l := f.ledger()
+				if got := f.overflowCounts(); len(got) != 1 {
+					t.Errorf("sent inside the caller's hour: %v", got)
+				}
+				if l.State.Capped != 0 || cappedOverflows(l) != 0 {
+					t.Errorf("capped inside the caller's hour: count %d entries %d", l.State.Capped, cappedOverflows(l))
+				}
+				if got := l.State.Overflow[summonCallerA]; got != member {
+					t.Errorf("changed the caller inside its hour: got %+v, want %+v", got, member)
+				}
+				if len(l.State.Window) != windowSize {
+					t.Errorf("reserved inside the caller's hour: window %v", l.State.Window)
+				}
+			}
+			assertHeld()
+			if t.Failed() {
+				return
+			}
+			f.clock.SetTime(t0.Add(time.Hour - time.Second))
+			f.tick()
+			assertHeld()
+
+			// At 11:00 exactly, the caller may attempt its two new refusals
+			// or record one capped event without consuming those refusals.
+			f.clock.SetTime(t0.Add(time.Hour))
+			f.tick()
+			l := f.ledger()
+			wantMember := summonOverflowEntry{LastPagedAt: t0.Add(time.Hour).Unix(), LastPagedCount: 5}
+			if full {
+				wantMember.LastPagedCount = 3
+				if len(f.overflows()) != 1 || l.State.Capped != 1 || cappedOverflows(l) != 1 {
+					t.Errorf("at the hour: pages %v capped %d entries %d", f.overflowCounts(), l.State.Capped, cappedOverflows(l))
+				}
+			} else if got := f.overflowCounts(); len(got) != 2 || got[1] != summonCallerA+"=2" || l.State.Capped != 0 || cappedOverflows(l) != 0 {
+				t.Errorf("at the hour: pages %v capped %d entries %d", got, l.State.Capped, cappedOverflows(l))
+			}
+			if got := l.State.Overflow[summonCallerA]; got != wantMember {
+				t.Errorf("at the hour: member %+v, want %+v", got, wantMember)
+			}
+		})
+	}
+}
+
 // A capped overflow event's digest line names its caller through the member
 // whose hash its key carries; when the bound has dropped that member, the
 // line says unknown. Its lane is unknown: the create ledger's count does not
