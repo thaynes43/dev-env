@@ -929,17 +929,27 @@ the implementation PR. No flag, host, manifest or installed configuration has
 changed. Slices (b), (c1), (c2), (d) and (e), owner confirmation and usable
 acceptance remain with the coordinator. ADR-030 remains Proposed.
 
-Slice (a) template-error behavior: when the current template/account is unreadable,
-the guard also reports admission blocked for a running ordinary Codex remote
-host. It cannot establish the current account from the old pod's account or
-profile label (sections 3.1 and 3.2). `PodReady=False` reports that refusal; the
-observed pod phase, existing pod, HOME, spec and annotations are preserved.
-Explicit suspend/delete still reaches the existing rescue path. The ordinary
-reconcile tests with readable templates and an empty setting remain unchanged;
-`TestCodexWorkbenchRunningPodPreserved/ordinary-templates` separately proves this
-unavailable-template case. This is source behavior, not an installation or a
-new owner ruling. The advisory review raised this effect; the implementation PR
-records the design/source explanation and the regression evidence.
+Slice (a) template-error behavior: templates are required to build a pod. When
+an owned agent pod already exists and templates cannot be read, the controller
+uses that pod's `spec.serviceAccountName`. An ordinary-account pod records no
+admission refusal, has the status main computes and follows the normal reconcile
+path (including main's existing templates-error break before construction, drain
+and idle processing). A workbench-account pod remains admission blocked while
+templates are unreadable, including an unlisted session; its pod is neither
+deleted nor replaced. With no pod, nothing changes: no Codex host pod is built
+while templates are unreadable. This account observation permits no construction.
+
+2026-11-14 source review: session `dev-env-fable-coordinator-1109`
+(`claude-fable-5-2`) reviewed PR 1156 at `55ece571`. Verdict: **request one change**;
+HIGH 0, MEDIUM 1, LOW 2. M1 found that a templates read error marked an ordinary
+running Codex host not ready and stopped its normal reconcile. The review's
+ruling is the existing-pod account behavior above. The M1 fix compares the whole
+status and reconcile result with main for ordinary Codex and Claude sessions,
+checks an unlisted workbench-account pod during the outage, and verifies that
+no missing host pod is built. L1 (optional builder admission parameters) and
+L2 (the unavailable reason for other resolved accounts) are deferred to slice
+(b), with no change in this round. The fix is source and tests only; nothing is
+installed and usable acceptance remains with the coordinator.
 
 
 This proposal leaves the coordinator's source-versus-install hold intact. The

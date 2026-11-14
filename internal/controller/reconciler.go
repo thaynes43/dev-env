@@ -573,7 +573,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	obs := observation{pod: pod, claim: claim, templates: t, templatesErr: tErr, now: time.Now(), homeExpiryOn: r.homeExpiryOn(),
 		taskCleanupOn: r.taskCleanupOn(), taskCleanupGrace: r.taskCleanupGrace()}
 	obs.codexHost = r.resolveCodexHost(&s, t)
-	obs.codexHostErr = obs.codexHost.check(&s)
+	// During a templates outage an owned pod proves its current account.
+	// Ordinary-account pods keep their normal status and reconcile path;
+	// construction still requires readable templates and the build admission.
+	if tErr == nil || pod.missing || pod.foreign != "" || pod.obj.Spec.ServiceAccountName == templates.WorkbenchServiceAccount {
+		obs.codexHostErr = obs.codexHost.check(&s)
+	}
 	if obs.codexHostErr != nil && !wantsPodGone(&s) {
 		// Admission drift never triggers drain, idle suspension or replacement of
 		// an existing agent pod. Its custodian owns the explicit stop.
