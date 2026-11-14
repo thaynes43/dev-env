@@ -60,7 +60,7 @@ RUN mkdir -p /out/licenses/go-stdlib \
  && cp "$(go env GOROOT)/LICENSE" /out/licenses/go-stdlib/LICENSE
 
 # Pinned by digest, as every base image here is; Renovate (docker:pinDigests) keeps it fresh.
-FROM node:24-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
+FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║ DO NOT put a version number in a comment BETWEEN a `# renovate:` annotation  ║
