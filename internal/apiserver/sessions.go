@@ -705,10 +705,14 @@ func (s *Server) admitCreatePath(ctx context.Context, c *caller, sess *v1alpha1.
 		}
 	}
 
-	// The depth exemption is the only create that reaches here above depth 2.
-	// Refuse a workbench or coordinator child before the named-coordinator
-	// launch rule, so the refusal is the design 8.2 sentence.
-	if direct && c.kind == kindSession && c.depth > maxSessionDepth && s.depthExempt(ctx, c) {
+	// The depth exemption is decided once. That one boolean both admits the
+	// create past the depth check and subjects it to the raised-child
+	// refusal. A second read could see a different annotation or a ledger
+	// that the first read could not, and the two answers would let a
+	// workbench child through at depth 3. A caller that is not exempt still
+	// meets the named-coordinator rule before the depth refusal.
+	exempt := direct && c.kind == kindSession && c.depth > maxSessionDepth && s.depthExempt(ctx, c)
+	if exempt {
 		if err := s.refuseRaisedChild(ctx, sess); err != nil {
 			return err
 		}
@@ -718,7 +722,7 @@ func (s *Server) admitCreatePath(ctx context.Context, c *caller, sess *v1alpha1.
 	}
 
 	if c.kind == kindSession {
-		if c.depth > maxSessionDepth && (!direct || !s.depthExempt(ctx, c)) {
+		if c.depth > maxSessionDepth && !exempt {
 			return s.depthRefusal(c)
 		}
 		n, err := s.runningChildren(ctx, c.parent, sess.Spec.Agent)

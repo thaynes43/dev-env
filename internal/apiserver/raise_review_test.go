@@ -895,6 +895,150 @@ func TestRaiseLogNamesTheRecordOnceAndNotTheSignature(t *testing.T) {
 	}
 }
 
+// onceRaiseLive splits one fact across two readings. Session reads of name
+// return pendingAnn until the operator ledger has been read once; every
+// later session read returns the stored annotation, which stays active.
+// A create live-reads the caller before the depth exemption, so the flip
+// is keyed off the ledger read the exemption itself performs, not off the
+// first session read of the request. The first ledger read fails when
+// failLedger is set, and later ledger reads succeed.
+type onceRaiseLive struct {
+	client.Reader
+	name       string
+	pendingAnn string
+	failLedger bool
+	ledgers    int
+}
+
+func (r *onceRaiseLive) Get(ctx context.Context, key types.NamespacedName, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*corev1.ConfigMap); ok && key.Name == sessionraise.LedgerName {
+		r.ledgers++
+		if r.failLedger && r.ledgers == 1 {
+			return fmt.Errorf("timeout")
+		}
+	}
+	if err := r.Reader.Get(ctx, key, obj, opts...); err != nil {
+		return err
+	}
+	if s, ok := obj.(*v1alpha1.AgentSession); ok && key.Name == r.name && r.pendingAnn != "" && r.ledgers == 0 {
+		if s.Annotations == nil {
+			s.Annotations = map[string]string{}
+		}
+		s.Annotations[v1alpha1.AnnotationRaise] = r.pendingAnn
+	}
+	return nil
+}
+
+// signedAnnotation is a signed record for the session's ledger row with
+// state substituted. It does not write the row or the annotation.
+func (f *fixture) signedAnnotation(name, state string) string {
+	f.t.Helper()
+	ctx := context.Background()
+	sess := f.session(name)
+	cfg := f.srv.Raise.filled()
+	led, err := f.srv.readLedger(ctx, cfg)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	row := led.Find(string(sess.UID))
+	if row == nil {
+		f.t.Fatal("no row")
+	}
+	copy := *row
+	copy.State = state
+	if state != sessionraise.StateActive {
+		copy.NoticeSentAt = ""
+		copy.ActiveFrom = ""
+	}
+	priv, err := sessionraise.Load(ctx, f.srv.raiseStore(cfg), cfg.OperatorSecret, cfg.OperatorPublic)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	signed, err := sessionraise.Sign(recordFrom(copy, "please start"), priv)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	encoded, err := signed.Encode()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return string(encoded)
+}
+
+func TestDepthExemptionIsDecidedOnce(t *testing.T) {
+	const depthSentence = "session creator is 2 levels deep and may not start sessions: two levels is the limit (DESIGN-001 3.4). A session at depth 2 can be raised to start sessions (agent-run help raise)."
+	const (
+		flipAnnotation = "flip"
+		failLedger     = "ledger"
+		clean          = "clean"
+	)
+	cases := []struct {
+		name             string
+		mode             string
+		profile          string
+		defaultWorkbench bool
+		want             int
+	}{
+		{name: "pending then active, named workbench", mode: flipAnnotation, profile: "workbench", want: http.StatusForbidden},
+		{name: "ledger fails once, named workbench", mode: failLedger, profile: "workbench", want: http.StatusForbidden},
+		{name: "pending then active, default workbench", mode: flipAnnotation, defaultWorkbench: true, want: http.StatusForbidden},
+		{name: "ledger fails once, default workbench", mode: failLedger, defaultWorkbench: true, want: http.StatusForbidden},
+		{name: "ordinary profile, every read good", mode: clean, profile: "dev", want: http.StatusCreated},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.raiseReady(true)
+			if tc.defaultWorkbench {
+				full := f.tmpl.Profiles["full"]
+				full.ServiceAccount = templates.WorkbenchServiceAccount
+				f.tmpl.Profiles["full"] = full
+			}
+			tok := f.workbenchAt("creator", 2)
+			f.putActive(f.session("creator"), true)
+			if tc.mode != clean {
+				live := &onceRaiseLive{Reader: f.c, name: "creator"}
+				switch tc.mode {
+				case flipAnnotation:
+					live.pendingAnn = f.signedAnnotation("creator", sessionraise.StatePending)
+				case failLedger:
+					live.failLedger = true
+				}
+				f.srv.Live = live
+			}
+			req := task()
+			req.Profile = tc.profile
+			w := f.do(http.MethodPost, apiv1.SessionsPath, tok, req)
+			if tc.want == http.StatusForbidden {
+				wantSentence(t, w, http.StatusForbidden, depthSentence)
+			} else {
+				if w.Code != http.StatusCreated {
+					t.Fatalf("child: %d %s", w.Code, w.Body.String())
+				}
+				child := f.session(decode[apiv1.Session](t, w).Name)
+				if child.Labels[v1alpha1.LabelDepth] != "3" {
+					t.Fatalf("depth %s", child.Labels[v1alpha1.LabelDepth])
+				}
+			}
+			var list v1alpha1.AgentSessionList
+			if err := f.c.List(context.Background(), &list); err != nil {
+				t.Fatal(err)
+			}
+			wantN := 1
+			if tc.want == http.StatusCreated {
+				wantN = 2
+			}
+			if len(list.Items) != wantN {
+				names := make([]string, len(list.Items))
+				for i := range list.Items {
+					names[i] = list.Items[i].Name
+				}
+				t.Fatalf("sessions %v, want %d", names, wantN)
+			}
+		})
+	}
+}
+
 func TestDepthHintIsOnlyWhenDispatchIsOn(t *testing.T) {
 	f := newFixture(t)
 	f.raiseReady(false)
