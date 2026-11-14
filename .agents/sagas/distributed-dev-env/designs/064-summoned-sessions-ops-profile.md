@@ -754,6 +754,41 @@ evidence, live-rule readback with no restart, and operational acceptance
 are separate gates. A refused installation read stays unverified until an
 authorized reader supplies it.
 
+**Rulings on the correction above, 2026-11-14 (story 859; the coordinator of
+item 751, session `dev-env-1111-143337`; not rulings by Tom).**
+
+1. **The guard is option A.** A `dev-agents` identity, with or without a
+   grant and other than the workbench, cannot create, update or delete any
+   ConfigMap in `upgrade-agent`. Reasons: it needs no name list and no
+   label, so a new caller's code is covered the day it lands; it also
+   covers the state a caller is steered by (the work orders, the lane
+   state, the change lock), not only its scripts; and it takes away
+   nothing a session has today, because no workload grant is bound in
+   that namespace and the night lane's runbook already says a session
+   cannot write these ConfigMaps. The cost is stated above: the upgrade
+   lane's state repairs cannot be delegated to a granted session; they
+   stay with Tom and the workbench. A later need for one of them is a
+   named exception in its own PR, with its own review.
+2. **`pods/proxy` and `pods/portforward` join the exec guard's match** for
+   privileged targets, as recommended, with the Pod name resolved from
+   every proxy name form. Before building, the builder searches the
+   runbooks, scripts and session rules of both repositories for a session
+   that proxies to a pod of a privileged account; if one exists it stops
+   and reports it instead of breaking it.
+3. **Caller to caller is deferred, and the risk is recorded.** The
+   responder's and the shepherd's Roles are not changed in story 859. They
+   belong to the upgrade lanes' workloads, and a missed state name there
+   stops a nightly run. Until they are narrowed, code running as one of
+   those two accounts can rewrite another caller's code ConfigMap and so
+   act under that caller's policy. Reaching that needs code execution as a
+   caller: story 811 and rule 1 close the session routes, and the callers'
+   own code comes from git. The exact state names and the create rule
+   above are handed to the owners of those workloads as a proposal; it is
+   not a gate for switching a create kind on.
+
+The gate stands as written: no summoning create kind is switched on before
+story 859 (rules 1 and 2) is installed.
+
 ### 5.9 One accounting model (F2, C2, F5, F3)
 
 Every limit, lane, page and filing is computed from records on the sessions
