@@ -3590,6 +3590,52 @@ governs.
    observes its real SIGKILL and injects the absence observation, so it
    requires no particular PID 1 reap latency inside one second.
 
+**Correction, 2026-11-14 (story 791 fix round 5, coordinator ruling; not a
+ruling by Tom).** This answers the reused-PID stop and status findings on
+PR 1120 (review comments 4571659668 and 4572019700). Earlier corrections
+stay; where this differs, it governs.
+
+1. *A different start time proves the recorded group gone.* A readable
+   `/proc/<pid>/stat` with a valid start time different from the recorded
+   one proves the PID was reused. POSIX Base Definitions,
+   [Process ID Reuse](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html#tag_04_17)
+   (also [committee draft, 4.13](https://www.open-std.org/jtc1/sc22/open/n4217.pdf)),
+   reserves that PID until the group sharing its number has no members.
+   Linux's [`__change_pid` and `free_pid`](https://github.com/torvalds/linux/blob/v6.12/kernel/pid.c)
+   retain the allocation until all PID-type lists are empty;
+   [`release_task` and `__unhash_process`](https://github.com/torvalds/linux/blob/v6.12/kernel/exit.c)
+   detach zombie membership on release. An unrelated group at the same
+   number therefore cannot keep the recorded group alive.
+2. *Stop never signals the reused identity.* The shared proof runs at the
+   first group check and again before group SIGKILL. On either proof, stop
+   reports `Running: false`, `WasRunning: false`, `Killed: false`. A prior
+   SIGTERM may have preceded reuse during the grace; no later signal goes
+   to the reused PID or group. Identity is still read immediately before
+   each signal. The stop order and its single 40-second deadline stay.
+3. *Status reads the settled record again.* The shared proof makes the
+   launcher's group inactive for `preflightLive`, and the published task
+   inactive for `pendingPreflightTask`. An unrelated group leader no longer
+   makes the session busy or hides a same-boot `no-usable-model` failure.
+   A live or unpublished pending task still owns its independent uncertainty,
+   even after launcher reuse. The ordinary `stopAgent` and `pidAlive` paths
+   and round 4's start-history and shutdown work are unchanged.
+4. *What stays uncertain.* Unreadable or malformed stat data, a missing or
+   malformed recorded start time, and the same start time with a different
+   process group prove no reuse; stop still reports running and signals
+   nothing. A missing leader keeps the whole-group absence check, because
+   descendants may outlive it. The PID-reuse limit described in rounds 2
+   and 3, including the retained PID receipt and the leaderless historical
+   group, no longer necessarily lasts to the pod's end: observing a new
+   process at that PID settles it. Without that observation, existing group
+   absence and boot-boundary rules still apply. A descendant that left the
+   owned group remains outside this proof.
+
+Proofs use live shell stand-ins, wrong recorded start times, an injected stat
+read, and the existing wait/signal seams. They cover both stop owners,
+same-boot failure status, a retained pending-task PID, uncertainty, and reuse
+between TERM and KILL. These are source and local test evidence, not installed
+or live provider acceptance.
+
 ### 6.10 OP745: joinable remote sessions with a verified link
 
 - A summoned `remote` session on profile `ops` is created with the caller's

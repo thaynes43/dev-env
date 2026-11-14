@@ -27,13 +27,14 @@ const (
 
 var preflightLockWait = 5 * time.Second
 
-// Narrow seams for deterministic stop deadlines, signal observations and
-// failed ownership writes. Production uses the same kernel and durable I/O.
+// Narrow seams for deterministic stop deadlines, signal/identity observations
+// and failed ownership writes. Production uses the same kernel and durable I/O.
 var preflightStopNow = time.Now
 var preflightStopLock = lockFileWait
 var preflightStopWait = waitNativeGroupAbsent
 var preflightSignal = syscall.Kill
 var writePreflightRecord = writeWorkspaceJSON
+var readPreflightStat = os.ReadFile
 
 // claimPreflight is independent of usage/capture identity. The exclusive
 // checking record is never removed, even on an incomplete write or failure.
@@ -114,7 +115,7 @@ func pendingPreflightTask(s Settings, rec startPreflight) bool {
 	if readJSONFile(s.statePath(pidFile), &task) != nil || task.Pid <= 0 || task.Start == "" {
 		return true
 	}
-	return !waitNativeGroupAbsent(task.Pid, 0)
+	return !preflightGroupProvenGone(task) && !waitNativeGroupAbsent(task.Pid, 0)
 }
 
 // A boot may have a new PID namespace; old numeric identities cannot prove
@@ -193,8 +194,11 @@ func stopPreflightGroup(p agentPid, grace time.Duration, deadline time.Time) *pr
 		st.Running = true
 		return st
 	}
-	// A different leader, including a zombie, is not ours. A group ID cannot
-	// be reused while an original member lives; a dead leader keeps the group.
+	// Reuse proves absence of the recorded group even when an unrelated
+	// process now leads a group with that number. Never signal its identity.
+	if preflightGroupProvenGone(p) {
+		return st
+	}
 	if preflightGroupIdentityUncertain(p) {
 		st.Running = true
 		return st
@@ -210,6 +214,9 @@ func stopPreflightGroup(p agentPid, grace time.Duration, deadline time.Time) *pr
 	// the lock and process observations all consume its remaining time.
 	termWait := min(grace, max(0, deadline.Sub(preflightStopNow())-stopKillWait))
 	if !preflightStopWait(p.Pid, termWait) {
+		if preflightGroupProvenGone(p) {
+			return &protocol.AgentStop{}
+		}
 		if preflightGroupIdentityUncertain(p) {
 			st.Running = true
 			return st
@@ -220,6 +227,27 @@ func stopPreflightGroup(p agentPid, grace time.Duration, deadline time.Time) *pr
 	}
 	st.Running = st.Running || pidAlive(p)
 	return st
+}
+
+// preflightGroupProvenGone requires a readable, different start time. POSIX
+// "Process ID Reuse" reserves the PID while its former group has members:
+// https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html#tag_04_17
+// See also the committee draft, Base Definitions 4.13:
+// https://www.open-std.org/jtc1/sc22/open/n4217.pdf
+// Linux __change_pid/free_pid retain the allocation until every PID-type list
+// is empty; exit.c detaches zombie membership only through release_task:
+// https://github.com/torvalds/linux/blob/v6.12/kernel/pid.c
+// https://github.com/torvalds/linux/blob/v6.12/kernel/exit.c
+// A missing leader alone proves nothing: its group can still have members.
+func preflightGroupProvenGone(p agentPid) bool {
+	if p.Pid <= 0 || p.Start == "" {
+		return false
+	}
+	if _, err := strconv.ParseUint(p.Start, 10, 64); err != nil {
+		return false
+	}
+	current, _, err := readPreflightProcess(p.Pid)
+	return err == nil && current.Start != p.Start
 }
 
 func preflightGroupIdentityUncertain(p agentPid) bool {
@@ -262,7 +290,7 @@ func strictPreflightGroup(pgid int) ([]agentPid, error) {
 // while its process group still has live descendants. procStartTime keeps
 // its existing live-only semantics for ordinary sessions.
 func readPreflightProcess(pid int) (agentPid, int, error) {
-	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	raw, err := readPreflightStat("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
 		return agentPid{}, 0, err
 	}
@@ -276,6 +304,9 @@ func readPreflightProcess(pid int) (agentPid, int, error) {
 	}
 	group, err := strconv.Atoi(fields[2])
 	if err != nil {
+		return agentPid{}, 0, err
+	}
+	if _, err := strconv.ParseUint(fields[19], 10, 64); err != nil {
 		return agentPid{}, 0, err
 	}
 	return agentPid{Pid: pid, Start: fields[19]}, group, nil

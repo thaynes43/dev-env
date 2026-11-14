@@ -546,6 +546,9 @@ func preflightLive(s Settings, first Launch) bool {
 	}
 	p := agentPid{Pid: rec.Pid, Start: rec.Start}
 	if rec.GroupOwned {
+		if preflightGroupProvenGone(p) {
+			return false
+		}
 		var refused startRefused
 		terminal := rec.State == preflightNoUsableModel || (readJSONFile(s.statePath(startRefusedFile), &refused) == nil && refused.ConversationID == first.ConversationID && refused.BootID == first.BootID)
 		if terminal && preflightGroupOnlyLauncher(rec.Pid, p) {
