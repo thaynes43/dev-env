@@ -1683,9 +1683,10 @@ against 64 KiB on every writer, preserving unknown members. Thus a new charge
 cannot consume the bytes its later mark needs merely because a clock acquires
 a longer fractional second. Existing entries written without the reserve, or
 extra data added outside this encoder, can still refuse a mark as `entry-full`.
-A `create-refused` or `no-free-name` filing renews its attempt at most once per
-15-minute attempt window, using the joined ledger clock. It writes nothing
-between those attempts; at the boundary its old attempt leaves the queue count
+Once its typed refusal is durably recorded, a `create-refused` or
+`no-free-name` filing renews its attempt at most once per 15-minute attempt
+window, using the joined ledger clock. It writes nothing between those attempts
+unless recovering an existing child; at the boundary its old attempt leaves the queue count
 before the retry must obtain a queue place. The original charge time never
 moves. Other blocked checks do not renew an attempt while they remain blocked.
 
@@ -2446,8 +2447,8 @@ then one operator pin; no flag or RBAC change, and no real remediation caller
 before OP802 and OP803. Remote off records only the blocked condition and event.
 
 **Correction, 2026-11-14: story 801 fix round 1, coordinator rulings; not a
-ruling by Tom (item 801 comment 8446, superseding the open typed-member point
-above and part of comment 8423).** Pending may carry the last blocked word in
+ruling by Tom (item 801 comments 8446, 8480 and 8482, superseding the open
+typed-member point above and part of comment 8423).** Pending may carry the last blocked word in
 `status.summon.escalation.reason`; Abandoned requires it; Filed forbids it.
 Pending cannot use the abandonment fallback `not-filed`. The ten blocked words
 are the earlier eight plus `child-invalid` (building or previewing the child
@@ -2461,12 +2462,30 @@ answers; the latter two authorize only the named API test adaptations.
 
 Before marking, the ledger step uses its uncached Session list to detect an
 occupied name and select a free suffix. An exhausted sequence records a mark
-without a create. After `create-refused` or `no-free-name`, the next attempt
-waits for that mark's 15-minute window; each retry rechecks the live typed
-reason and ledger clock inside the CAS loop. Recovery can still find an
-existing child by label before the mark. Unknown storage/create results record
-`ledger-unavailable` and return their error for replay on the next pass. A
-Blocked patch conflict must not hide another error. A listed Filed or
+without a create. Once `create-refused` or `no-free-name` is durably recorded,
+the next attempt waits for that mark's 15-minute window. Its start is the
+caller entry's charge `attempt`, read from the ledger by every leader, using
+the joined ledger clock; the mark CAS loop rechecks the live typed reason.
+Transient reads cannot replace a held refusal or permit another attempt.
+Recovery still records Filed immediately for an existing child found by label,
+including inside the window. After the window the normal pass runs.
+
+A Blocked patch gets at most five attempts, each against a fresh same-UID
+Pending read; Filed, Abandoned, another UID or a non-conflict error stops it.
+If all five conflict, every patch error is joined with the original refusal,
+and nothing claims the refusal was recorded. This exception costs at most
+one renewed mark and one refused create per later pass, with no second charge.
+The original `at` never moves: hourly accounting ends 65 minutes after it.
+Each renewed `attempt` counts in the caller's applicable queue for another
+15 minutes (all queues if no current policy entry matches its hash), so
+continued create refusals plus exhausted status conflicts can keep that queue
+count occupied without a time bound. One successful Blocked patch activates
+the normal retry window; finding the child by label records Filed instead.
+This is a rate exception, not permission to charge twice or create a second
+child. No pre-create fence or new schema member is introduced (item 801
+comments 8480 and 8482). Unknown storage/create results use
+`ledger-unavailable` and retain their error for next-pass replay. A Blocked
+patch conflict must not hide another error. A listed Filed or
 Abandoned remediation needs no uncached GET; open listed remediations are
 re-read because the watch pass may just have closed them.
 

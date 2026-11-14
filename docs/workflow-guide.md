@@ -1921,12 +1921,24 @@ requires it (or the fallback `not-filed`). This slice sends no page.
 `child-invalid` is decided before charging. `create-refused` covers a final API
 create refusal, including Invalid, Forbidden and an admission denial. An
 unchanged blocked reason adds no status write or event. `create-refused` and
-`no-free-name` retry at most once per 15-minute ledger attempt window, with no
-writes between attempts. An uncached list detects known name collisions before
+`no-free-name` retry at most once per 15-minute ledger attempt window once
+the typed refusal is durably recorded. Every leader reads the start from the
+caller entry's charge `attempt`. There are no writes between attempts except
+recording a child recovered by label as Filed. Transient read errors preserve
+the recorded refusal. An uncached list detects known name collisions before
 the mark. Unknown storage/create results use `ledger-unavailable` and retain
 the error for retry. Remote creates off permits only the first Blocked status
 write. Listed Filed or Abandoned remediations need no uncached GET; open ones
 are re-read because the watch pass may have just closed them.
+
+A Blocked status patch retries conflicts at most five times, with a fresh
+same-UID Pending read each time. If all fail, it returns every error and claims
+nothing durable. A later pass can renew one mark and try one create again;
+it never charges twice. That exception can keep the caller's applicable queue
+count occupied while creates are refused and all status retries fail: each
+mark counts for 15 minutes. It does not move the original charge time or
+extend its 65-minute hourly count. A successful Blocked patch starts the
+normal retry rate; a child found by label is recovered immediately.
 
 The caller entry's 64 KiB bound includes reserved bytes for the longest mutable
 filing timestamps. The shared encoder preserves this reserve for every writer,
@@ -1937,8 +1949,8 @@ a queue place before renewing its mark. Other charges and unknown fields also
 consume space, and legacy or externally altered entries can still be full.
 
 These are coordinator rulings, not rulings by Tom: item 768 comment 7702 and
-item 801 comments 7852, 8423, 8429, 8430 and 8446 (2026-11-14, story 801 fix
-round 1). The last supersedes the build's open question about Pending's typed
+item 801 comments 7852, 8423, 8429, 8430, 8446, 8480 and 8482 (2026-11-14,
+story 801 fix round 1). Comment 8446 supersedes the build's open question about Pending's typed
 reason. Story 802 owns abandonment and the reap hold; story 803 owns page
 text and delivery and must recheck Pending before sending its pending page.
 Install the CRD copy before the operator pin. **Not for a real remediation

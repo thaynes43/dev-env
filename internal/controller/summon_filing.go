@@ -96,19 +96,16 @@ func (r *Reconciler) summonFilings(ctx context.Context, items []v1alpha1.AgentSe
 // IsConflict on an errors.Join also matches a sibling's status-patch
 // conflict. Ignore an error only when every leaf is a harmless stale read.
 func filingOnlyStaleErrors(err error) bool {
-	switch e := err.(type) {
-	case interface{ Unwrap() []error }:
-		for _, child := range e.Unwrap() {
+	var branches interface{ Unwrap() []error }
+	if errors.As(err, &branches) {
+		for _, child := range branches.Unwrap() {
 			if !filingOnlyStaleErrors(child) {
 				return false
 			}
 		}
 		return true
-	case interface{ Unwrap() error }:
-		return filingOnlyStaleErrors(e.Unwrap())
-	default:
-		return apierrors.IsConflict(err) || apierrors.IsNotFound(err)
 	}
+	return apierrors.IsConflict(err) || apierrors.IsNotFound(err)
 }
 
 func (r *Reconciler) filingPolicy(ctx context.Context, s *v1alpha1.AgentSession) (*v1alpha1.CallerPolicy, v1alpha1.SummonFilingReason, error) {
@@ -129,6 +126,21 @@ func (r *Reconciler) filingPolicy(ctx context.Context, s *v1alpha1.AgentSession)
 }
 
 func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) error {
+	if filingRetryReason(s.Status.Summon.Escalation.Reason) {
+		// A different in-flight leader may have created the child. Recover
+		// it even during the hold; transient reads must not erase the
+		// durable refusal that gates this pass's attempt.
+		child, err := r.findSummonFiling(ctx, s)
+		if err != nil {
+			return err
+		}
+		if child != nil {
+			return r.finishSummonFiling(ctx, s, child)
+		}
+		if held, err := r.filingRetryHeld(ctx, s); held || err != nil {
+			return err
+		}
+	}
 	if _, reason, err := r.filingPolicy(ctx, s); reason != "" {
 		return errors.Join(err, r.blockSummonFiling(ctx, s, reason))
 	}
@@ -179,7 +191,7 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 		}
 		m, err := r.filingLedgerStep(ctx, s, filingMark, "")
 		if m.reason != "" {
-			return errors.Join(err, r.blockSummonFiling(ctx, s, m.reason))
+			return errors.Join(err, r.recordSummonFilingBlock(ctx, s, m.reason, !m.marked.IsZero()))
 		}
 		if err != nil || m.done {
 			return err
@@ -212,7 +224,7 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 				apierrors.IsNotAcceptable(err) || apierrors.IsRequestEntityTooLargeError(err) {
 				reason = summonoutcome.FilingCreateRefused
 			}
-			return errors.Join(err, r.blockSummonFiling(ctx, s, reason))
+			return errors.Join(err, r.recordSummonFilingBlock(ctx, s, reason, true))
 		}
 		var held v1alpha1.AgentSession
 		err = r.APIReader.Get(callCtx, client.ObjectKeyFromObject(child), &held)
@@ -225,7 +237,7 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 		}
 		b, err = r.filingLedgerStep(ctx, s, filingRebind, child.Name)
 		if b.reason != "" {
-			return errors.Join(err, r.blockSummonFiling(ctx, s, b.reason))
+			return errors.Join(err, r.recordSummonFilingBlock(ctx, s, b.reason, true))
 		}
 		if err != nil || b.done {
 			return err
@@ -234,7 +246,31 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 			return r.finishSummonFiling(ctx, s, b.child)
 		}
 	}
-	return r.blockSummonFiling(ctx, s, summonoutcome.FilingNoFreeName)
+	return r.recordSummonFilingBlock(ctx, s, summonoutcome.FilingNoFreeName, true)
+}
+
+func filingRetryReason(reason v1alpha1.SummonFilingReason) bool {
+	return reason == summonoutcome.FilingCreateRefused || reason == summonoutcome.FilingNoFreeName
+}
+
+// The window starts at the caller entry's durable charge.attempt, never a
+// condition timestamp or process-local clock. Failed reads keep the recorded
+// refusal: without the ledger we cannot prove the window has elapsed.
+func (r *Reconciler) filingRetryHeld(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
+	var cm corev1.ConfigMap
+	if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: summonledger.Namespace, Name: summonledger.Name}, &cm); err != nil {
+		return false, err
+	}
+	raw, present := cm.Data[s.Spec.Caller]
+	entry, err := summonledger.Decode(raw, present)
+	if err != nil {
+		return false, err
+	}
+	i := entry.Index(summonledger.FilingID(s.UID))
+	if i < 0 || entry.Charges[i].Hash != summonFilingHash(s) {
+		return false, errors.New("the refused filing has no matching charge")
+	}
+	return entry.Now(r.now()).Sub(entry.Charges[i].Attempt) < summonledger.AttemptHold, nil
 }
 
 func summonFiledFor(child, rem *v1alpha1.AgentSession) bool {
@@ -373,8 +409,8 @@ func (r *Reconciler) filingLedgerStep(ctx context.Context, s *v1alpha1.AgentSess
 		}
 		mono := r.filingClock().Now()
 		now := entry.Now(r.now())
-		if action == filingMark && (live.Status.Summon.Escalation.Reason == summonoutcome.FilingCreateRefused ||
-			live.Status.Summon.Escalation.Reason == summonoutcome.FilingNoFreeName) && now.Sub(entry.Charges[i].Attempt) < summonledger.AttemptHold {
+		if action == filingMark && filingRetryReason(live.Status.Summon.Escalation.Reason) &&
+			now.Sub(entry.Charges[i].Attempt) < summonledger.AttemptHold {
 			return filingBinding{done: true}, nil
 		}
 		if action == filingCharge && entry.InWindow(now) >= int(policy.Spec.Summon.Limits.CreatesPerHour) {
@@ -464,6 +500,13 @@ func (r *Reconciler) writeSummonFilingLedger(ctx context.Context, cm *corev1.Con
 }
 
 func (r *Reconciler) blockSummonFiling(ctx context.Context, s *v1alpha1.AgentSession, reason v1alpha1.SummonFilingReason) error {
+	return r.recordSummonFilingBlock(ctx, s, reason, false)
+}
+
+// newAttempt permits recording the result of this pass's confirmed mark.
+// Without one, a transient failure must preserve another leader's held
+// refusal. It authorizes only a status update, never a charge or create.
+func (r *Reconciler) recordSummonFilingBlock(ctx context.Context, s *v1alpha1.AgentSession, reason v1alpha1.SummonFilingReason, newAttempt bool) error {
 	switch reason {
 	case summonoutcome.FilingPolicyGone, summonoutcome.FilingPolicyNoEscalations,
 		summonoutcome.FilingHourFull, summonoutcome.FilingQueueFull, summonoutcome.FilingRemoteOff,
@@ -472,6 +515,38 @@ func (r *Reconciler) blockSummonFiling(ctx context.Context, s *v1alpha1.AgentSes
 	default:
 		return errors.New("unknown filing blocked word")
 	}
+	var conflicts []error
+	for range summonFilingAttempts {
+		var live v1alpha1.AgentSession
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &live); err != nil {
+			return errors.Join(append(conflicts, err)...)
+		}
+		if live.UID != s.UID || !summonFilingDue(&live) {
+			return nil
+		}
+		*s = live
+		// The caller may have read before a competing leader's refusal.
+		// Do not replace that leader's held reason with a transient error.
+		if !newAttempt && filingRetryReason(s.Status.Summon.Escalation.Reason) && s.Status.Summon.Escalation.Reason != reason {
+			if held, err := r.filingRetryHeld(ctx, s); held || err != nil {
+				return errors.Join(append(conflicts, err)...)
+			}
+		}
+		err := r.blockSummonFilingOnce(ctx, s, reason)
+		if err == nil {
+			return nil
+		}
+		if !apierrors.IsConflict(err) {
+			return errors.Join(append(conflicts, err)...)
+		}
+		conflicts = append(conflicts, err)
+	}
+	// A refusal whose status could not be saved has no durable retry gate.
+	// Return every patch error; the caller joins the original refusal (L3).
+	return errors.Join(conflicts...)
+}
+
+func (r *Reconciler) blockSummonFilingOnce(ctx context.Context, s *v1alpha1.AgentSession, reason v1alpha1.SummonFilingReason) error {
 	if !summonFilingDue(s) {
 		return nil
 	}
