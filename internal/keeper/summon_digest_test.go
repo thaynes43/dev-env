@@ -672,7 +672,8 @@ func TestSummonDigestListsCappedEvents(t *testing.T) {
 	if len(d) != 1 {
 		t.Fatalf("pages %v", f.push.titles())
 	}
-	if got := strings.Join(digestLines(d[0].Get("message")), ","); got != "wo-cigar-curate-9 curation done done,wo-upgrade-7 upgrade capped failed,esc-8 escalation capped escalation-held" {
+	// Fix round 2, F1: recorded capped events take the pending slots first.
+	if got := strings.Join(digestLines(d[0].Get("message")), ","); got != "wo-upgrade-7 upgrade capped failed,esc-8 escalation capped escalation-held,wo-cigar-curate-9 curation done done" {
 		t.Fatalf("lines %q", got)
 	}
 	l = f.ledger()
