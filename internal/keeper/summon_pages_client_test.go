@@ -29,6 +29,7 @@ import (
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/summonledger"
 )
 
 // Story 782 fix round 1, F1 and F7: the pager's own client, and its session
@@ -90,10 +91,11 @@ func TestSummonPagesRESTConfigIsItsOwn(t *testing.T) {
 	}
 }
 
-// F1, behaviour: a stalled pager request, its discovery or its list, holds
-// nothing the keeper's other workers use. While it is held, a synthetic Claude
-// refresh runs through the login worker's own tick (journal, generation floor,
-// fence, refresh, journal save, fence, publication) and an Ask send finishes,
+// F1, behaviour: a stalled pager request, its discovery, its list or (story
+// 793) its read of the create ledger, holds nothing the keeper's other
+// workers use. While it is held, a synthetic Claude refresh runs through the
+// login worker's own tick (journal, generation floor, fence, refresh, journal
+// save, fence, publication) and an Ask send finishes,
 // both through the keeper's shared client, built as Run builds it (story 782
 // fix round 2); only then is the pager released. Its tick then ends on its own
 // request timeout, which also bounds discovery (discovery runs on a background
@@ -119,10 +121,17 @@ func TestSummonPagesStalledRequestBlocksNothingElse(t *testing.T) {
 		name   string
 		stall  func(*http.Request) bool
 		expect string
+		// timeout, when set, replaces the pager's 300 ms request timeout: the
+		// creates case lets its list and discovery finish first (story 793).
+		timeout time.Duration
 	}{
 		// The pager's first request needs the REST mapper's discovery.
 		{name: "discovery", stall: func(r *http.Request) bool { return !strings.Contains(r.URL.Path, "/namespaces/") }, expect: "summon page state unavailable"},
 		{name: "list", stall: func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/agentsessions") }, expect: "summon page scan unavailable"},
+		// Story 793: the read of the create ledger, by name, after the scan.
+		{name: "creates", stall: func(r *http.Request) bool {
+			return strings.HasSuffix(r.URL.Path, "/namespaces/"+summonledger.Namespace+"/configmaps/"+summonledger.Name)
+		}, expect: "summon overflow: the create ledger is unavailable", timeout: 5 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -165,7 +174,7 @@ func TestSummonPagesStalledRequestBlocksNothingElse(t *testing.T) {
 			o := Options{Namespace: keeperNS, LeaderElect: true,
 				Notices: NoticeOptions{URL: "https://push.invalid", TokenFile: tokenFile, UserFile: userFile},
 				SummonPages: SummonPageOptions{Enabled: true, PortalOrigin: "https://portal.example", SessionNamespace: agentsNS,
-					requestTimeout: 300 * time.Millisecond,
+					requestTimeout: max(tc.timeout, 300*time.Millisecond),
 					wrapTransport: func(rt http.RoundTripper) http.RoundTripper {
 						return summonRoundTrip(func(r *http.Request) (*http.Response, error) {
 							if !tc.stall(r) {
@@ -195,7 +204,7 @@ func TestSummonPagesStalledRequestBlocksNothingElse(t *testing.T) {
 			select {
 			case <-stalled:
 			case <-time.After(30 * time.Second):
-				t.Fatal("the pager's request never reached the hook")
+				t.Fatalf("the pager's request never reached the hook: %s", logs.String())
 			}
 			// While it is held: a Claude refresh through the worker's own tick.
 			worker.tick(ctx)
