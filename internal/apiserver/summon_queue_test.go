@@ -443,7 +443,7 @@ func TestSummonQueueEscalationsAndRemediationsApart(t *testing.T) {
 func TestSummonQueueChargeAttribution(t *testing.T) {
 	p := queuePolicy(1, 1, 4, 4, 6)
 	hash := summonRequestHash(summonWire{Mode: "task", Lane: "remediation", Name: "rem-responder-1"}, v1alpha1.SummonPriorityUrgent)
-	remediations := []summonQueue{{urgent: true}}
+	remediations := []summonQueue{{Urgent: true}}
 	for _, tc := range []struct {
 		name string
 		want []summonQueue
@@ -451,17 +451,17 @@ func TestSummonQueueChargeAttribution(t *testing.T) {
 		{"rem-responder-1", remediations},
 		{"rem-responder-1-2", remediations},
 		{"rem-responder-1-99", remediations},
-		{"rem-responder-1-100", summonQueues},
-		{"rem-responder-1-02", summonQueues},
-		{"rem-responder-1-1", summonQueues},
-		{"rem-responder-12", summonQueues},
+		{"rem-responder-1-100", summonledger.AllQueues()},
+		{"rem-responder-1-02", summonledger.AllQueues()},
+		{"rem-responder-1-1", summonledger.AllQueues()},
+		{"rem-responder-12", summonledger.AllQueues()},
 	} {
-		if got := summonChargeQueues(p, hash, tc.name); !slices.Equal(got, tc.want) {
+		if got := summonledger.ChargeQueues(p, hash, tc.name); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: queues %v, want %v", tc.name, got, tc.want)
 		}
 	}
 	upgrade := summonRequestHash(summonWire{Mode: "remote", Lane: "upgrade", Name: "wo-1"}, v1alpha1.SummonPriorityNormal)
-	if got := summonChargeQueues(p, upgrade, "wo-1"); !slices.Equal(got, []summonQueue{{}}) {
+	if got := summonledger.ChargeQueues(p, upgrade, "wo-1"); !slices.Equal(got, []summonQueue{{}}) {
 		t.Errorf("upgrade: %v", got)
 	}
 
