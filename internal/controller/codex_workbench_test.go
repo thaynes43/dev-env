@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -157,7 +158,7 @@ func TestCodexWorkbenchRawManifestAdmission(t *testing.T) {
 }
 
 func TestCodexWorkbenchRunningPodPreserved(t *testing.T) {
-	for _, failure := range []string{"empty", "shape", "templates", "ordinary-templates"} {
+	for _, failure := range []string{"empty", "shape", "templates", "unlisted-templates"} {
 		t.Run(failure, func(t *testing.T) {
 			s, cm := workbenchHostSession(), workbenchHostTemplate()
 			s.Status.Phase = v1alpha1.PhaseRunning
@@ -168,10 +169,6 @@ func TestCodexWorkbenchRunningPodPreserved(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := &Reconciler{CodexWorkbenchHosts: codexworkbench.Policy{Name: s.Name, Namespace: s.Namespace}}
-			if failure == "ordinary-templates" {
-				s.Spec.Profile = "dev"
-				r.CodexWorkbenchHosts.Name = ""
-			}
 			pod, err := r.sessionPod(s, tm)
 			if err != nil {
 				t.Fatal(err)
@@ -180,6 +177,10 @@ func TestCodexWorkbenchRunningPodPreserved(t *testing.T) {
 			pod.Status.Phase = corev1.PodRunning
 			pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
 			claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: HomeClaimName(s.Name), Namespace: s.Namespace, UID: "keep-home", OwnerReferences: pod.OwnerReferences}}
+			if failure == "unlisted-templates" {
+				// Only the retained pod proves its account during the outage.
+				s.Spec.Profile = "dev"
+			}
 			r = hostReconciler(t, s, cm, interceptor.Funcs{Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
 				t.Fatal("guard deleted a running resource")
 				return nil
@@ -188,13 +189,13 @@ func TestCodexWorkbenchRunningPodPreserved(t *testing.T) {
 				return nil
 			}}, pod, claim)
 			switch failure {
-			case "empty", "ordinary-templates":
+			case "empty", "unlisted-templates":
 				r.CodexWorkbenchHosts.Name = ""
 			case "shape":
 				r.CodexWorkbenchHosts.Namespace = "other"
 			}
 			// Missing-template variant uses a read failure rather than deleting any resource.
-			if failure == "templates" || failure == "ordinary-templates" {
+			if failure == "templates" || failure == "unlisted-templates" {
 				r.Client = interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, k client.ObjectKey, o client.Object, opts ...client.GetOption) error {
 					if _, ok := o.(*corev1.ConfigMap); ok {
 						return errors.New("template unavailable")
@@ -225,7 +226,7 @@ func TestCodexWorkbenchRunningPodPreserved(t *testing.T) {
 			if failure == "shape" {
 				want = codexworkbench.InvalidShape
 			}
-			if failure == "templates" || failure == "ordinary-templates" {
+			if failure == "templates" || failure == "unlisted-templates" {
 				want = codexworkbench.TemplatesUnavailable
 			}
 			assertHostReason(t, got, want)
@@ -395,6 +396,131 @@ func TestCodexWorkbenchEnvtestRefusesManifestBeforeHOME(t *testing.T) {
 		}
 		if err := k8s.Get(context.Background(), client.ObjectKey{Namespace: s.Namespace, Name: name}, o); !apierrors.IsNotFound(err) {
 			t.Fatalf("envtest resource %T: %v", o, err)
+		}
+	}
+}
+
+// These whole-status and result expectations are characterized against
+// origin/main bda614f53c662f7171ef981cf778fe13ce6200ea. Seed transition times
+// so an exact comparison needs no clock normalization. The rescue row proves
+// the ordinary reconcile continues beyond admission, before the templates break.
+func TestOrdinaryRunningSessionTemplatesErrorMatchesMain(t *testing.T) {
+	for _, agent := range []v1alpha1.AgentKind{v1alpha1.AgentCodex, v1alpha1.AgentClaude} {
+		for _, supersede := range []bool{false, true} {
+			name := string(agent) + "/observe"
+			if supersede {
+				name = string(agent) + "/supersede-rescue"
+			}
+			t.Run(name, func(t *testing.T) {
+				s := workbenchHostSession()
+				s.Name, s.Generation = "ordinary", 3
+				s.Spec.Agent, s.Spec.Profile = agent, "dev"
+				if agent == v1alpha1.AgentClaude {
+					s.Spec.Model = "claude-opus-5-5"
+				}
+				s.Spec.Lifecycle = &v1alpha1.Lifecycle{IdleSuspendAfter: &metav1.Duration{Duration: time.Second}}
+				at := metav1.NewTime(time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC))
+				pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+					Name: s.Name, Namespace: s.Namespace, UID: "ordinary-pod", OwnerReferences: []metav1.OwnerReference{ownerRef(s)},
+					Labels: map[string]string{v1alpha1.LabelRevision: "old-revision"},
+				}, Spec: corev1.PodSpec{ServiceAccountName: ServiceAccountName, NodeName: "test-node"},
+					Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}}
+				claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+					Name: HomeClaimName(s.Name), Namespace: s.Namespace, UID: "ordinary-home", OwnerReferences: pod.OwnerReferences,
+				}}
+				s.Status = v1alpha1.AgentSessionStatus{
+					Phase: v1alpha1.PhaseRunning, PodName: s.Name, NodeName: "test-node", Revision: "old-revision",
+					Agent: &v1alpha1.AgentStatus{Status: protocol.AgentIdle, LastActivity: &at},
+					Conditions: []metav1.Condition{
+						{Type: ConditionPodReady, Status: metav1.ConditionTrue, Reason: "PodReady", Message: "the pod is Ready on test-node", ObservedGeneration: 3, LastTransitionTime: at},
+						{Type: ConditionOutdated, Status: metav1.ConditionUnknown, Reason: "TemplatesInvalid", Message: "previous templates error", ObservedGeneration: 3, LastTransitionTime: at},
+					},
+				}
+				if supersede {
+					s.Status.Rescue = &v1alpha1.RescueStatus{Result: v1alpha1.RescueVerified, PodUID: "earlier-pod", At: &at}
+				}
+				want := s.Status.DeepCopy()
+				wantResult := ctrl.Result{}
+				if supersede {
+					want.Rescue.Superseded = true
+					wantResult.RequeueAfter = time.Second
+				} else {
+					want.Conditions[1].Message = "the current template revision is unknown: templates: template unavailable"
+				}
+				reads := 0
+				r := hostReconciler(t, s, nil, interceptor.Funcs{
+					Get: func(ctx context.Context, c client.WithWatch, k client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+						if _, ok := o.(*corev1.ConfigMap); ok && k == templatesKey {
+							reads++
+							return errors.New("template unavailable")
+						}
+						return c.Get(ctx, k, o, opts...)
+					},
+					Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+						t.Fatal("templates outage created a resource")
+						return nil
+					},
+					Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+						t.Fatal("templates outage deleted a resource")
+						return nil
+					},
+				}, pod, claim)
+				r.CodexWorkbenchHosts.Name = ""
+				ctx := context.Background()
+				var before corev1.Pod
+				if err := r.Client.Get(ctx, client.ObjectKeyFromObject(pod), &before); err != nil {
+					t.Fatal(err)
+				}
+				result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(s)})
+				if err != nil || result != wantResult {
+					t.Errorf("reconcile = %+v, %v; main = %+v, nil", result, err, wantResult)
+				}
+				var got v1alpha1.AgentSession
+				if err := r.Client.Get(ctx, client.ObjectKeyFromObject(s), &got); err != nil {
+					t.Fatal(err)
+				}
+				if !apiequality.Semantic.DeepEqual(&got.Status, want) {
+					t.Errorf("whole status differs from main:\ngot  %+v\nwant %+v", got.Status, *want)
+				}
+				if reads != 1 || !reflect.DeepEqual(s.Spec, got.Spec) || !reflect.DeepEqual(s.Annotations, got.Annotations) {
+					t.Fatalf("templates reads = %d, or session spec/annotations changed", reads)
+				}
+				var kept corev1.Pod
+				if err := r.Client.Get(ctx, client.ObjectKeyFromObject(pod), &kept); err != nil || !reflect.DeepEqual(before, kept) {
+					t.Fatalf("pod changed: %v", err)
+				}
+				var home corev1.PersistentVolumeClaim
+				if err := r.Client.Get(ctx, client.ObjectKeyFromObject(claim), &home); err != nil || home.UID != claim.UID {
+					t.Fatalf("HOME changed: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestCodexHostTemplatesErrorNeverBuildsPod(t *testing.T) {
+	for _, profile := range []string{"dev", "workbench", "alias", ""} {
+		for _, setting := range []string{"", "other", "named-codex"} {
+			t.Run(profile+"/setting="+setting, func(t *testing.T) {
+				s := workbenchHostSession()
+				s.Spec.Profile = profile
+				r := hostReconciler(t, s, nil, interceptor.Funcs{
+					Get: func(ctx context.Context, c client.WithWatch, k client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+						if _, ok := o.(*corev1.ConfigMap); ok && k == templatesKey {
+							return errors.New("template unavailable")
+						}
+						return c.Get(ctx, k, o, opts...)
+					},
+					Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+						t.Fatal("built a resource without templates")
+						return nil
+					},
+				})
+				r.CodexWorkbenchHosts.Name = setting
+				got := runHostReconcile(t, r, s)
+				assertHostReason(t, got, codexworkbench.TemplatesUnavailable)
+				assertNoHostResources(t, r, s)
+			})
 		}
 	}
 }
