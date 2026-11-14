@@ -110,6 +110,7 @@ internal/agentd/protocol/  what agentd and the operator exchange: the session do
                          the rescue report, and the rescue layout and manifest on the shared volume; the history
                          archive's wire types and the canonical JSON both sides hash (canonical.go, DESIGN-025 5.4)
 internal/agentd/hostexecutor/  owns one foreground native computer for one immutable budget binding (no budget authority, no pairing)
+internal/codexworkbench/ DESIGN-067 shared account and GitOps creation-shape guard for the one operator-named workbench Codex remote host; empty setting permits none
 internal/codexhostpool/  DESIGN-063's pure Codex host choice (OP698): host facts, a three-valued login fact (current, lapsed, unknown) and the caller in, the section 5 result out; standard library only, no I/O, the clock is an argument
 internal/codexrc/        pure pinned Codex project/host discovery and rc-launch error mapping; no I/O, launch or pairing authority
 internal/threadlaunch/   DESIGN-057's provider-neutral thread launch: registry (codex host, claude session, cursor/grok unqualified), Adapter interface, phase recorder and driver, and the read-only Observer pass behind thread status; pure, no I/O
@@ -137,6 +138,7 @@ internal/asks/           the Ask store: create, list, withdraw, a set-once answe
 internal/contextpublication/  the PublishedContext store: immutable published excerpts, Create only, uncached reads
 internal/delegatedresult/  pure delegated-result codec: strict bounded request and receipt decoding, frozen attempt identity and digest; Admission and Store have only the refusing Disabled implementation; no route, storage, provider or caller
 internal/sessiondirectory/  the SessionDirectory store: bounded original session metadata and CAS witnesses
+internal/sessionraise/  DESIGN-066 slice (a): the raise record, its signature, the operator ledger, the notice text and the two key pairs. A record counts only in Counts. Off by default and not installed
 internal/sessiontitle/  DESIGN-065: validates a session title, names the model family, composes the display title, and classifies a recorded Claude Code capture-pane screen
 internal/summonbrief/    DESIGN-064 5.6 (OP800): the summon brief: the platform line, the renderer and the sanitizer that fences caller data; the API's create renders with it, and the operator leader's filing (OP768) can import it
 internal/summonledger/  DESIGN-064 5.9: the create ledger's entry and charge types, codec and time rules (window, attempt hold, prune), the request hash, name sequence, queue attribution and queue count, and the prune's keep rule (Keep) (OP800), shared by the API's write paths and the operator leader's admission, and importable by its filing (OP768)

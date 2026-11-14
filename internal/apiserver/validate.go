@@ -22,6 +22,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/codexworkbench"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/sessiontitle"
@@ -107,6 +108,19 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		return nil, forbidden("name and lane are for summoning callers, by their CallerPolicy (DESIGN-001 3.7), which arrive in plan 10")
 	}
 
+	var hostProfile *codexworkbench.Resolution
+	if req.Agent == string(v1alpha1.AgentCodex) && req.Mode == string(v1alpha1.ModeRemote) {
+		// Story110 T30 stays first, even if the requested profile is unreadable.
+		if s.isWorkbenchSession(c) && req.Profile != "" {
+			return nil, forbidden("a codex host started by a workbench session runs on the default profile; omit the profile")
+		}
+		candidate := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: s.Policy.SessionNamespace}, Spec: v1alpha1.AgentSessionSpec{Agent: v1alpha1.AgentCodex, Mode: v1alpha1.ModeRemote, Profile: req.Profile}}
+		hostProfile = s.codexHostProfile(ctx, candidate.Spec.Profile)
+		if err := s.admitCodexHost(ctx, candidate, hostProfile, true); err != nil {
+			return nil, err
+		}
+	}
+
 	if c.kind == kindCoordinator {
 		if req.Profile != "dev" || (req.Size != "S" && req.Size != "M") || req.Mode != "task" || req.Restore != "" || req.Base != "" || req.Project == "" || (req.Agent != "claude" && req.Agent != "codex" && req.Agent != "cursor") {
 			return nil, coordinatorDenied()
@@ -150,6 +164,10 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	case v1alpha1.AgentCodex:
 		switch {
 		case req.Mode == "remote":
+			if c.kind != kindHuman && c.kind != kindClient && !s.isWorkbenchSession(c) {
+				return nil, forbidden("a codex remote session runs on the keeper's login and is started by Tom or his workbench, not by a session")
+			}
+
 			// Story110 T17: Codex remote runs the phone-pairing daemon on the
 			// session's HOME and the keeper's access-only login. It starts no
 			// task, so it needs neither the managed-task feature nor a project
@@ -159,9 +177,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			// session token. The coordinator class is refused above. A session
 			// whose pod runs as the workbench ServiceAccount is the workbench, but the
 			// host it starts runs on the default profile (the profile rule below).
-			if c.kind != kindHuman && c.kind != kindClient && !s.isWorkbenchSession(c) {
-				return nil, forbidden("a codex remote session runs on the keeper's login and is started by Tom or his workbench, not by a session")
-			}
+
 			if req.Project != "" {
 				add("project", "a codex remote session is not a project task")
 			}
@@ -329,9 +345,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	// a named coordinator identity keeps its own launch rule.
 	switch {
 	case s.isWorkbenchSession(c) && v1alpha1.AgentKind(req.Agent) == v1alpha1.AgentCodex && req.Mode == "remote":
-		if spec.Profile != "" {
-			return nil, forbidden("a codex host started by a workbench session runs on the default profile; omit the profile")
-		}
+		// T30 and the resolved default account were checked above.
 	case c.kind == kindSession && c.profile != "" && s.profileIdentity(ctx, c.profile) != "":
 		if spec.Profile != "" {
 			return nil, forbidden("a child of a session on profile %s, which runs as a named coordinator identity, runs on the default profile; omit the profile", c.profile)
@@ -346,7 +360,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			return nil, forbidden("a session's child runs on its parent's profile %s, not %s", c.profile, spec.Profile)
 		}
 	}
-	if spec.Profile != "" && s.Templates != nil {
+	if hostProfile == nil && spec.Profile != "" && s.Templates != nil {
 		if t, err := s.Templates(ctx); err == nil {
 			if _, _, err := t.Profile(spec.Profile); err != nil {
 				add("profile", "%v", err)
@@ -359,7 +373,15 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	if cursorRefusal != nil {
 		return nil, cursorRefusal
 	}
-	identity := s.profileIdentity(ctx, spec.Profile)
+	identity := ""
+	if hostProfile != nil {
+		_, p := hostProfile.Profile()
+		if s.Policy.NamedCoordinatorIdentities && templates.IsCoordinatorServiceAccount(p.ServiceAccount) {
+			identity = p.ServiceAccount
+		}
+	} else {
+		identity = s.profileIdentity(ctx, spec.Profile)
+	}
 	if identity != "" {
 		if !s.mayLaunchNamedCoordinator(c) {
 			return nil, forbidden("profile %s runs as a named coordinator identity; only Tom, a client or a top-level workbench session launches it (DESIGN-042 6.4)", spec.Profile)

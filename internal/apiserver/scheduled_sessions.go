@@ -59,6 +59,7 @@ const ScheduledWorkParent = "dev-env-system/scheduled-work"
 // charged to a task budget: a budget-bound caller is refused rather than
 // dispatched outside its reservation.
 func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSessionRequest, d scheduledwork.Dispatch) (name string, uid types.UID, adopted bool, err error) {
+	ctx = withCodexHostAdmission(ctx)
 	name, err = scheduledwork.SessionName(string(d.ItemUID), d.At)
 	if err != nil {
 		return "", "", false, &scheduledwork.RefusedError{Reason: err.Error()}

@@ -102,6 +102,9 @@ func note(s apiv1.Session) string {
 			parts = append(parts, m)
 		}
 	}
+	if n := raiseNote(s.Raise); n != "" {
+		parts = append(parts, n)
+	}
 	return strings.Join(parts, "; ")
 }
 
@@ -216,8 +219,13 @@ func (a *app) printSession(s apiv1.Session) {
 	row("agent", "%s %s, %s, %s mode", s.Agent, s.Model, effortText(s.Effort), s.Mode)
 	row("size", "%s", firstOf(s.Size, "M"))
 	if s.Profile != "" {
-		row("profile", "%s", s.Profile)
+		shown := s.Profile
+		if s.Raise != nil && s.Raise.Ignored == "" && s.Raise.State != "" && s.Raise.State != "ignored" {
+			shown += " (at creation)"
+		}
+		row("profile", "%s", shown)
 	}
+	a.printRaise(row, s)
 	if l := s.Limits; l != nil {
 		row("limits", "timeout %s, max turns %s", dash(l.Timeout), countOrNone(l.MaxTurns))
 	}
@@ -719,6 +727,9 @@ func (a *app) fleet(ctx context.Context, args []string) error {
 	if len(f.Outdated) > 0 {
 		a.outf("outdated: %s\n", strings.Join(f.Outdated, ", "))
 	}
+	if line := fleetRaised(f.Sessions); line != "" {
+		a.outf("raised:   %s\n", line)
+	}
 	if len(f.Sessions) == 0 {
 		a.outf("\nNo session holds or waits for a pod.\n")
 		return nil
@@ -748,6 +759,9 @@ func (a *app) fleet(ctx context.Context, args []string) error {
 		}
 		if s.Phase == "Pending" && s.Pending != "" {
 			parts = append(parts, s.Pending)
+		}
+		if n := raiseNote(s.Raise); n != "" {
+			parts = append(parts, n)
 		}
 		if resources {
 			podUID, specNode, observed := formatFleetResources(s.Resources)

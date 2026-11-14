@@ -86,11 +86,11 @@ func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, m
 
 // buildManagedPod's retentionLatch is the reconciler's terminalTaskReclaimOn:
 // agentd refuses automatic TUI resume only for a task the operator can reclaim.
-func buildManagedPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex, childDecisions bool, coordinatorParents []string, retentionLatch bool) (*corev1.Pod, error) {
+func buildManagedPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex, childDecisions bool, coordinatorParents []string, retentionLatch bool, admission ...*codexHostBuild) (*corev1.Pod, error) {
 	// The API assigns Parent from authenticated caller identity. Only exact
 	// configured coordinator SAs can use the coordinator-only decision route.
 	childDecisions = childDecisions && s.Spec.Parent != "" && slices.Contains(coordinatorParents, s.Spec.Parent)
-	return buildSessionPod(s, t, apiURL, false, managedCodex, childDecisions, retentionLatch)
+	return buildSessionPod(s, t, apiURL, false, managedCodex, childDecisions, retentionLatch, admission...)
 }
 
 // PilotAgent selects the sessions with one parent and idempotency key for a
@@ -186,8 +186,14 @@ func applyRemotePilotImage(pod *corev1.Pod, s *v1alpha1.AgentSession, p *PilotAg
 
 // sessionPod is the session's own pod as the reconciler creates it: the managed
 // pod, on the pilot image when the session is the selected one.
-func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
-	pod, err := buildManagedPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions, r.ManagedChildDecisionParents, r.terminalTaskReclaimOn())
+func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates, admission ...*codexHostBuild) (*corev1.Pod, error) {
+	if len(admission) == 0 {
+		admission = []*codexHostBuild{r.resolveCodexHost(s, t)}
+	}
+	if err := admission[0].check(s); err != nil {
+		return nil, err
+	}
+	pod, err := buildManagedPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions, r.ManagedChildDecisionParents, r.terminalTaskReclaimOn(), admission...)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +313,19 @@ func buildHoldPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod
 // isHoldPod reports whether the pod is a session's rescue pod (D-55).
 func isHoldPod(p *corev1.Pod) bool { return p.Labels[v1alpha1.LabelHold] == "true" }
 
-func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool, managedCodex bool, childDecisions bool, retentionLatch bool) (*corev1.Pod, error) {
+func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool, managedCodex bool, childDecisions bool, retentionLatch bool, admission ...*codexHostBuild) (*corev1.Pod, error) {
+	var guarded *codexHostBuild
+	if !hold {
+		if len(admission) > 0 {
+			guarded = admission[0]
+		} else {
+			guarded = (&Reconciler{}).resolveCodexHost(s, t)
+		}
+		if err := guarded.check(s); err != nil {
+			return nil, err
+		}
+	}
+
 	if s.Spec.ProjectCanary != nil || projectcanary.IsPilot(s) {
 		if validateProjectCanaryPod(s, t, !hold && (s.Spec.Agent != v1alpha1.AgentCodex || managedCodex)) != nil {
 			return nil, projectcanary.ErrRefused
@@ -317,9 +335,16 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	if w := s.Spec.Workspace; w != nil && (t.Workspace == nil || !t.Workspace.Enabled || t.Workspace.Claim == "" || t.Workspace.ID != w.ID) {
 		return nil, fmt.Errorf("session workspace %q does not match an enabled template", w.ID)
 	}
-	profileName, profile, err := t.Profile(s.Spec.Profile)
-	if err != nil {
-		return nil, err
+	var profileName string
+	var profile templates.Profile
+	var err error
+	if guarded != nil && guarded.resolved != nil {
+		profileName, profile = guarded.resolved.Profile()
+	} else {
+		profileName, profile, err = t.Profile(s.Spec.Profile)
+		if err != nil {
+			return nil, err
+		}
 	}
 	sizeClass := s.Spec.Size
 	if hold {

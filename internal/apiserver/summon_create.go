@@ -248,7 +248,7 @@ func (s *Server) createSummonCharged(ctx context.Context, w http.ResponseWriter,
 			return 0, nil, summonChargedFailure(newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
 				"the session create could not be issued within %s of the ledger write naming its dispatch id; no session was created", summonCreateDeadline))
 		}
-		err = s.Client.Create(callCtx, sess, client.FieldValidation(metav1.FieldValidationStrict))
+		err = s.createAdmittedSession(callCtx, sess, client.FieldValidation(metav1.FieldValidationStrict))
 		if err == nil {
 			cancel()
 			charge := b.result

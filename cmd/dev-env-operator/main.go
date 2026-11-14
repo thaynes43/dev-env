@@ -54,6 +54,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/asks"
 	"github.com/thaynes43/dev-env/internal/broker"
 	"github.com/thaynes43/dev-env/internal/codexhostpool"
+	"github.com/thaynes43/dev-env/internal/codexworkbench"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/coordretention"
@@ -65,6 +66,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/scheduledwork/executor"
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
+	"github.com/thaynes43/dev-env/internal/sessionraise"
 	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/standby"
 	"github.com/thaynes43/dev-env/internal/summonquota"
@@ -157,6 +159,7 @@ type options struct {
 	legacyGrantDelegates         []broker.LegacyDelegateBinding
 	maintenanceEnabled           bool
 	asksEnabled                  bool
+	codexWorkbenchHosts          codexworkbench.Policy
 	codexHostSelect              bool
 	codexHostMaxPerCell          int
 	codexHostMaxRunning          int
@@ -219,6 +222,19 @@ type options struct {
 	// titleRename names the sessions whose heartbeat answers carry the title
 	// object. Empty names none (DESIGN-065 rule 8.3).
 	titleRename apiserver.TitleRename
+	// sessionRaiseDispatch lets a raised depth-2 session start one level of
+	// children. Off by default. A non-empty profile list refuses startup
+	// until DESIGN-066 slice (b) changes the pod.
+	sessionRaiseDispatch  bool
+	sessionRaiseProfiles  string
+	sessionRaiseKeySecret string
+}
+
+// raiseActivationOn is when the activation loop is added. Dispatch or a
+// profile list turns it on. Slice (a) refuses a non-empty profile list at
+// startup, so that branch waits for slice (b).
+func raiseActivationOn(dispatch bool, profiles string) bool {
+	return dispatch || strings.TrimSpace(profiles) != ""
 }
 
 func parseFlags(args []string) (options, error) {
@@ -261,6 +277,17 @@ func parseFlags(args []string) (options, error) {
 	policyDelegates := fs.String("grant-policy-delegates", "", "HELD (DESIGN-042 6.6): default-empty subset of --grant-delegates allowed exact live delegated-policy reach outside their tree. Must match both services")
 	legacyDelegates := fs.String("grant-legacy-delegates", "", "HELD: exact existing baseline Claude actors ns/sa:saUID:session:sessionUID:pod:podUID, at most four; requires both delegate lists. Default empty")
 	fs.BoolVar(&o.asksEnabled, "enable-asks", false, "serve /v1/asks and /v1/portal/asks and run the leader-only expiry sweeper (OpenProject Epic #254); default off, asks live in dev-agents, and v1 does not deliver answers through the inbox")
+	var codexWorkbenchSet bool
+	var codexWorkbenchRaw string
+	fs.Func("codex-workbench-hosts", "zero or one exact GitOps Codex host name allowed on the workbench account; empty permits none", func(v string) error {
+		if codexWorkbenchSet {
+			return errors.New("codex-workbench-hosts may be set only once")
+		}
+		codexWorkbenchSet = true
+		codexWorkbenchRaw = v
+		_, err := codexworkbench.Parse(v, "")
+		return err
+	})
 	fs.BoolVar(&o.codexHostSelect, "enable-codex-host-select", false, "serve POST /v1/codex-hosts/select and /release (DESIGN-063); default off, and with it off the routes are not registered; needs the API")
 	fs.IntVar(&o.codexHostMaxPerCell, "codex-host-max-running-per-cell", codexhostpool.DefaultMaxRunningPerCell, "most running Codex hosts in one profile cell when host selection is on")
 	fs.IntVar(&o.codexHostMaxRunning, "codex-host-max-running", codexhostpool.DefaultMaxRunning, "most running Codex hosts when host selection is on")
@@ -396,6 +423,9 @@ func parseFlags(args []string) (options, error) {
 	collectorFile := fs.String("allowance-collector-config-file", "", "absolute private operator-owned collector configuration; requires explicit enable and aggregate selection")
 	handoffFile := fs.String("allowance-handoff-file", "", "absolute private file with one human-approved allowance handoff request, applied once by the elected operator that already holds the slot write authority; requires the enabled collector and an absolute path (a misuse of the flag is a startup error); an unreadable or invalid file is refused and logged without stopping the operator")
 	titleRename := fs.String("title-rename-sessions", "", "comma-separated session names whose heartbeat answers carry the title object, or *; empty, the default, names no session, so agentd types nothing (DESIGN-065 rule 8.3)")
+	fs.BoolVar(&o.sessionRaiseDispatch, "enable-session-raise-dispatch", false, "let a session at depth 2 that Tom raised start one level of children; default off (DESIGN-066)")
+	fs.StringVar(&o.sessionRaiseProfiles, "session-raise-profiles", "", "comma-separated profiles a raise may name; empty, the default, names none. A non-empty list refuses startup until DESIGN-066 slice (b)")
+	fs.StringVar(&o.sessionRaiseKeySecret, "session-raise-operator-key-secret", sessionraise.OperatorSecretName, "Secret holding the operator raise signing key; a missing Secret is logged and skipped")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -404,6 +434,13 @@ func parseFlags(args []string) (options, error) {
 		return o, parseErr
 	}
 	o.titleRename = parsedTitleRename
+	if strings.TrimSpace(o.sessionRaiseProfiles) != "" {
+		// The period is part of the sentence DESIGN-066 requires.
+		return o, errors.New("Profile raises need the pod change of DESIGN-066 slice (b).") //nolint:staticcheck // ST1005: the sentence is fixed by the design
+	}
+	if o.sessionRaiseKeySecret == "" {
+		o.sessionRaiseKeySecret = sessionraise.OperatorSecretName
+	}
 	if fs.NArg() > 0 {
 		return o, fmt.Errorf("unexpected arguments %q", fs.Args())
 	}
@@ -412,6 +449,11 @@ func parseFlags(args []string) (options, error) {
 	}
 	if *handoffFile != "" && (!*collectorEnabled || !filepath.IsAbs(*handoffFile)) {
 		return o, allowancecollector.ErrCollector
+	}
+	var codexWorkbenchErr error
+	o.codexWorkbenchHosts, codexWorkbenchErr = codexworkbench.Parse(codexWorkbenchRaw, o.sessionNamespace)
+	if codexWorkbenchErr != nil {
+		return o, codexWorkbenchErr
 	}
 	if o.sessionNamespace == "" || o.templatesNamespace == "" || o.templatesName == "" || o.policyNamespace == "" {
 		return o, errors.New("--session-namespace, --templates-namespace, --templates-name and --policy-namespace must not be empty")
@@ -849,6 +891,7 @@ func reconcilerForOptions(o options) *controller.Reconciler {
 		}
 	}
 	return &controller.Reconciler{
+		CodexWorkbenchHosts:              o.codexWorkbenchHosts,
 		CoordinatorInstructionAgentImage: o.coordinatorInstructionAgentImage,
 
 		TaskBudgetWorkerImage:       o.taskBudgetWorkerImage,
@@ -1174,7 +1217,13 @@ func run(args []string) error {
 			}
 		}
 		api := &apiserver.Server{
-			TitleRename:                      o.titleRename,
+			CodexWorkbenchHosts: o.codexWorkbenchHosts,
+			TitleRename:         o.titleRename,
+			Raise: &apiserver.RaiseConfig{
+				Dispatch:       o.sessionRaiseDispatch,
+				Namespace:      o.templatesNamespace,
+				OperatorSecret: o.sessionRaiseKeySecret,
+			},
 			CoordinatorInstructionAgentImage: o.coordinatorInstructionAgentImage,
 
 			PortalMessageTargets:      o.portalMessageTargets,
@@ -1263,6 +1312,14 @@ func run(args []string) error {
 					Enabled: true, Sessions: sessions,
 					PortalNamespace: aggregatePortalNamespace, PortalServiceAccount: aggregatePortalAccount,
 				}
+			}
+		}
+		if err := mgr.Add(&apiserver.RaiseKeyOwner{Server: api}); err != nil {
+			return err
+		}
+		if raiseActivationOn(o.sessionRaiseDispatch, o.sessionRaiseProfiles) {
+			if err := mgr.Add(&apiserver.RaiseActivator{Server: api}); err != nil {
+				return err
 			}
 		}
 		// The standby session is default off. It is made through the API's own
