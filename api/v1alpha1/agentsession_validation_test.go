@@ -2642,6 +2642,76 @@ func TestSummonAdmittedAtIsSetOnce(t *testing.T) {
 	}
 }
 
+// OP798 (DESIGN-064 5.9): a close record's at, source and reason are set once.
+// Each refusal changes only one field; the API must retain the original record.
+func TestSummonClosedRecordIsSetOnce(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 11, 14, 4, 0, 0, 0, time.UTC))
+	initial := &v1alpha1.SummonClosedStatus{At: at, Source: "unreported", Reason: "never-started"}
+	closed := func(st *v1alpha1.SummonStatus) { st.Closed = initial.DeepCopy() }
+	none := func(*v1alpha1.SummonStatus) {}
+	for _, tc := range []struct {
+		name          string
+		first, second func(*v1alpha1.SummonStatus)
+		want          string
+	}{
+		{"first-set", none, closed, ""},
+		{"unchanged", closed, none, ""},
+		{"released-to-true", closed, func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, ""},
+		{"at-changed", closed, func(st *v1alpha1.SummonStatus) { st.Closed.At = metav1.NewTime(at.Add(time.Minute)) }, "the close time never changes"},
+		{"source-changed", closed, func(st *v1alpha1.SummonStatus) { st.Closed.Source = "report" }, "the close source never changes"},
+		{"reason-changed", closed, func(st *v1alpha1.SummonStatus) { st.Closed.Reason = "agent-failed" }, "the close reason never changes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := summonedTask()
+			if err := k8s.Create(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			s.Status.Summon = &v1alpha1.SummonStatus{}
+			tc.first(s.Status.Summon)
+			if err := k8s.Status().Update(ctx(t), s); err != nil {
+				t.Fatalf("first write: %v", err)
+			}
+			s = get(t, s)
+			tc.second(s.Status.Summon)
+			want := s.Status.Summon.Closed.DeepCopy()
+			err := k8s.Status().Update(ctx(t), s)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				wantInvalid(t, err, tc.want)
+				want = initial
+			}
+			if got := get(t, s).Status.Summon; got == nil || !apiequality.Semantic.DeepEqual(got.Closed, want) {
+				t.Fatalf("stored close record = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+// A typed false is omitted from JSON. Also prove an explicitly stored false
+// can become true while the rest of the close record stays unchanged.
+func TestSummonClosedExplicitFalseCanBeReleased(t *testing.T) {
+	s := summonedTask()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	patch := []byte(`{"status":{"summon":{"closed":{"at":"2026-11-14T04:00:00Z","source":"unreported","reason":"never-started","released":false}}}}`)
+	if err := k8s.Status().Patch(ctx(t), s, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		t.Fatalf("first close with explicit false: %v", err)
+	}
+	s = get(t, s)
+	s.Status.Summon.Closed.Released = true
+	want := s.Status.Summon.Closed.DeepCopy()
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if got := get(t, s).Status.Summon; got == nil || !apiequality.Semantic.DeepEqual(got.Closed, want) {
+		t.Fatalf("released close record = %+v, want %+v", got, want)
+	}
+}
+
 // OP777: status.summon.closed.released may go from absent or false to true,
 // never back, and the closed record that holds it cannot be removed.
 func TestSummonClosedReleasedIsNeverReversed(t *testing.T) {
@@ -2654,7 +2724,7 @@ func TestSummonClosedReleasedIsNeverReversed(t *testing.T) {
 		{"absent-to-true", func(*v1alpha1.SummonStatus) {}, func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, ""},
 		{"true-to-false", func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, func(st *v1alpha1.SummonStatus) { st.Closed.Released = false }, "released is never reversed"},
 		{"true-closed-removed", func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, func(st *v1alpha1.SummonStatus) { st.Closed = nil }, "the closed record cannot be removed"},
-		{"true-stays-true", func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, func(st *v1alpha1.SummonStatus) { st.Closed.Reason = "agent-failed" }, ""},
+		{"true-stays-true", func(st *v1alpha1.SummonStatus) { st.Closed.Released = true }, func(*v1alpha1.SummonStatus) {}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := summonedTask()
@@ -2794,6 +2864,162 @@ func TestSummonExecutorLatchRules(t *testing.T) {
 				}
 				if got := get(t, s).Status.Summon; got == nil || !apiequality.Semantic.DeepEqual(got.Executor, want) {
 					t.Fatalf("the executor latch did not round trip: %+v, want %+v", got, want)
+				}
+				return
+			}
+			wantInvalid(t, err, tc.want)
+		})
+	}
+}
+
+// Story 794 (DESIGN-064 6.10; coordinator rulings O2 and O3 on item 745,
+// not rulings by Tom): status.summon.registration. Each field is set once
+// and never changes or goes; the record is never removed; the result and its
+// time come together; a reason comes exactly with unavailable; and pages[]
+// holds escalation-started exactly when the result is set, both ways. Each
+// rule accepts the write it allows and refuses the one it forbids.
+func TestSummonRegistrationRules(t *testing.T) {
+	t0 := time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	seenAt, settledAt := metav1.NewTime(t0.Add(time.Minute)), metav1.NewTime(t0.Add(6*time.Minute))
+	otherAt := metav1.NewTime(t0.Add(7 * time.Minute))
+	started := v1alpha1.SummonPage{Event: v1alpha1.PageEscalationStarted, At: settledAt}
+	seen := func(st *v1alpha1.SummonStatus) {
+		st.Registration = &v1alpha1.SummonRegistrationStatus{AgentSeenAt: &seenAt}
+	}
+	registered := func(st *v1alpha1.SummonStatus) {
+		st.Registration = &v1alpha1.SummonRegistrationStatus{Result: v1alpha1.RegistrationRegistered, At: &settledAt}
+		st.Pages = append(st.Pages, started)
+	}
+	unavailable := func(st *v1alpha1.SummonStatus) {
+		seen(st)
+		st.Registration.Result, st.Registration.Reason, st.Registration.At = v1alpha1.RegistrationUnavailable, v1alpha1.RegistrationReasonOffline, &settledAt
+		st.Pages = append(st.Pages, started)
+	}
+	none := func(*v1alpha1.SummonStatus) {}
+	const (
+		removed  = "the registration record cannot be removed"
+		seenOnce = "agentSeenAt is set once and never changes"
+		result   = "the registration result is set once and never changes"
+		reason   = "the registration reason is set once and never changes"
+		atOnce   = "the registration time is set once and never changes"
+		together = "the registration result and its time are set together"
+		exactly  = "a registration reason is set exactly when the result is unavailable"
+		pages    = "pages hold escalation-started exactly when the registration has a result"
+		oneEvent = "pages hold at most one escalation-started"
+	)
+	for _, tc := range []struct {
+		name          string
+		first, second func(*v1alpha1.SummonStatus)
+		want          string
+	}{
+		// agentSeenAt: set once, never changes or goes.
+		{"seen-recorded", none, seen, ""},
+		{"seen-changed", seen, func(st *v1alpha1.SummonStatus) { st.Registration.AgentSeenAt = &otherAt }, seenOnce},
+		{"seen-removed", seen, func(st *v1alpha1.SummonStatus) { st.Registration.AgentSeenAt = nil }, seenOnce},
+		// The record is never removed.
+		{"record-kept", seen, func(st *v1alpha1.SummonStatus) {
+			st.Pages = append(st.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationReminder, At: otherAt})
+		}, ""},
+		{"record-removed", seen, func(st *v1alpha1.SummonStatus) { st.Registration = nil }, removed},
+		// A settlement, with its event, in one write.
+		{"registered-recorded", none, registered, ""},
+		{"registered-after-seen", seen, func(st *v1alpha1.SummonStatus) {
+			st.Registration.Result, st.Registration.At = v1alpha1.RegistrationRegistered, &settledAt
+			st.Pages = append(st.Pages, started)
+		}, ""},
+		{"unavailable-recorded", none, unavailable, ""},
+		{"settled-record-removed", registered, func(st *v1alpha1.SummonStatus) { st.Registration = nil }, removed},
+		// result and at: each set once, never changes or goes.
+		{"result-changed", registered, func(st *v1alpha1.SummonStatus) {
+			st.Registration.Result, st.Registration.Reason = v1alpha1.RegistrationUnavailable, v1alpha1.RegistrationReasonOffline
+		}, result},
+		{"result-removed", registered, func(st *v1alpha1.SummonStatus) { st.Registration.Result = "" }, result},
+		{"at-changed", registered, func(st *v1alpha1.SummonStatus) { st.Registration.At = &otherAt }, atOnce},
+		{"at-removed", registered, func(st *v1alpha1.SummonStatus) { st.Registration.At = nil }, atOnce},
+		// reason: set once, never changes or goes.
+		{"reason-changed", unavailable, func(st *v1alpha1.SummonStatus) { st.Registration.Reason = v1alpha1.RegistrationReasonStarting }, reason},
+		{"reason-removed", unavailable, func(st *v1alpha1.SummonStatus) { st.Registration.Reason = "" }, reason},
+		// result and at are set together.
+		{"result-without-at", none, func(st *v1alpha1.SummonStatus) {
+			registered(st)
+			st.Registration.At = nil
+		}, together},
+		{"at-without-result", none, func(st *v1alpha1.SummonStatus) {
+			st.Registration = &v1alpha1.SummonRegistrationStatus{At: &settledAt}
+		}, together},
+		// reason is set exactly when the result is unavailable.
+		{"unavailable-without-reason", none, func(st *v1alpha1.SummonStatus) {
+			unavailable(st)
+			st.Registration.Reason = ""
+		}, exactly},
+		{"registered-with-reason", none, func(st *v1alpha1.SummonStatus) {
+			registered(st)
+			st.Registration.Reason = v1alpha1.RegistrationReasonOffline
+		}, exactly},
+		{"reason-without-result", seen, func(st *v1alpha1.SummonStatus) { st.Registration.Reason = v1alpha1.RegistrationReasonOffline }, exactly},
+		// escalation-started exactly when the result is set, both ways.
+		{"result-without-event", none, func(st *v1alpha1.SummonStatus) {
+			st.Registration = &v1alpha1.SummonRegistrationStatus{Result: v1alpha1.RegistrationRegistered, At: &settledAt}
+		}, pages},
+		{"event-without-result", seen, func(st *v1alpha1.SummonStatus) { st.Pages = append(st.Pages, started) }, pages},
+		{"event-without-record", none, func(st *v1alpha1.SummonStatus) { st.Pages = append(st.Pages, started) }, pages},
+		{"event-removed", registered, func(st *v1alpha1.SummonStatus) { st.Pages = nil }, pages},
+		{"other-events-without-result", none, func(st *v1alpha1.SummonStatus) {
+			st.Pages = append(st.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationHeld, At: seenAt})
+		}, ""},
+		// One escalation-started, never two (story 794 fix round 1, ruling 4,
+		// PR 1132 comment 6856616130; not a ruling by Tom).
+		{"one-event-beside-others", none, func(st *v1alpha1.SummonStatus) {
+			st.Pages = append(st.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationHeld, At: seenAt})
+			registered(st)
+			st.Pages = append(st.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationReminder, At: otherAt})
+		}, ""},
+		{"second-event-appended", registered, func(st *v1alpha1.SummonStatus) {
+			st.Pages = append(st.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationStarted, At: otherAt})
+		}, oneEvent},
+		{"two-events-at-once", none, func(st *v1alpha1.SummonStatus) {
+			registered(st)
+			st.Pages = append(st.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationStarted, At: otherAt})
+		}, oneEvent},
+		// The enums and their bounds.
+		{"result-unknown", none, func(st *v1alpha1.SummonStatus) {
+			registered(st)
+			st.Registration.Result = "joined"
+		}, "Unsupported value"},
+		{"reason-unknown", none, func(st *v1alpha1.SummonStatus) {
+			unavailable(st)
+			st.Registration.Reason = "bridge-said-so"
+		}, "Unsupported value"},
+		{"reason-too-long", none, func(st *v1alpha1.SummonStatus) {
+			unavailable(st)
+			st.Registration.Reason = v1alpha1.SummonRegistrationReason(strings.Repeat("r", 33))
+		}, "Too long"},
+		{"result-too-long", none, func(st *v1alpha1.SummonStatus) {
+			registered(st)
+			st.Registration.Result = v1alpha1.SummonRegistrationResult(strings.Repeat("r", 17))
+		}, "Too long"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := summonedRemote()
+			if err := k8s.Create(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			at := metav1.NewTime(t0)
+			s.Status.Summon = &v1alpha1.SummonStatus{AdmittedAt: &at}
+			tc.first(s.Status.Summon)
+			if err := k8s.Status().Update(ctx(t), s); err != nil {
+				t.Fatalf("first write: %v", err)
+			}
+			s = get(t, s)
+			tc.second(s.Status.Summon)
+			want := s.Status.Summon.DeepCopy()
+			err := k8s.Status().Update(ctx(t), s)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := get(t, s).Status.Summon; !apiequality.Semantic.DeepEqual(got, want) {
+					t.Fatalf("the registration did not round trip: %+v, want %+v", got, want)
 				}
 				return
 			}

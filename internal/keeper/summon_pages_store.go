@@ -66,7 +66,8 @@ type summonPageState struct {
 	// the more-events pages reserved, and names the next one.
 	Capped int `json:"capped"`
 	More   int `json:"more"`
-	// Digest is story 742b's; this slice writes it empty and keeps it as read.
+	// Digest is story 742b's (story 792, summon_digest.go). Story 782's keeper
+	// writes it empty and keeps it as read.
 	Digest summonDigestState `json:"digest"`
 	// Overflow is story 742c's, per caller; written empty and kept as read.
 	Overflow map[string]summonOverflowEntry `json:"overflow"`
@@ -81,11 +82,13 @@ type summonPageEntry struct {
 	Session string `json:"session,omitempty"`
 }
 
-// summonDigestState is the daily digest's (story 742b): Since is the
-// watermark (only closes after it are in a digest, ruling Q6), LastAt when
-// the last digest was reserved, Pending the content-free lines waiting for
-// the next one, and Listed every Events key a digest attempt has carried, so
-// each outcome gets one digest attempt, ever.
+// summonDigestState is the daily digest's (story 742b, built by story 792):
+// Since is the watermark, the pager's first run (only closes and capped
+// events at or after it are in a digest, ruling Q6), LastAt when the last
+// digest was reserved, Pending the content-free lines waiting for the next
+// one, and Listed every Events key a digest attempt has carried, with that
+// attempt's time, so each outcome gets one digest attempt, ever. An outcome's
+// key is "<session UID>/digest"; a capped event's is its own entry's key.
 type summonDigestState struct {
 	Since   int64              `json:"since"`
 	LastAt  int64              `json:"lastAt"`
@@ -234,6 +237,11 @@ func (s *configMapSummonPageStore) load(ctx context.Context) (*summonPageLedger,
 
 func (s *configMapSummonPageStore) save(ctx context.Context, l *summonPageLedger) error {
 	if l == nil || l.cm == nil || !l.State.valid() {
+		return errSummonPages
+	}
+	// Never write what load refuses as a reset dedupe (story 792): an empty
+	// dedupe beside page or digest records.
+	if len(l.State.Events) == 0 && l.Pages != nil && len(l.Pages.Records) > 0 {
 		return errSummonPages
 	}
 	raw, err := json.Marshal(l.State)
