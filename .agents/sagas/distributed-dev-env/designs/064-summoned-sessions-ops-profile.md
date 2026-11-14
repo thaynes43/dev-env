@@ -504,6 +504,294 @@ table above, and the coordinator checked both in the files.
   refused on 2026-11-13 ("Insufficient scope"). Q-26 (8.1) settles which
   token v2's curation uses.
 
+**Correction, 2026-11-14 (story 859, coordinator's follow-up to the review of
+story 811; not a ruling by Tom; the choice between the options below is the
+coordinator's and is not made in this text).** The preceding corrections
+stay as written. Story 811 closes exec and attach, but an approved workload
+grant in `upgrade-agent` can still replace a caller's mounted code. The next
+normal run then executes it as the caller. Read-only volume mounts do not
+prevent a ConfigMap API write. This is review finding H1 of haynes-ops PR
+4885, not a capability of the plain agent without a grant.
+
+The rule to enforce is: **a session identity, with or without a grant,
+cannot create, change or delete the code a summoning caller runs.** Match
+`system:serviceaccount:dev-agents:` identities, including `grant-*`, and
+exempt exactly `system:serviceaccount:dev-agents:dev-env-workbench`. Flux
+and identities outside `dev-agents` are exempt from this session rule.
+Exemption does not grant RBAC permission. In particular, today's workbench
+has no direct ConfigMap write in this namespace; its unguarded exec and
+Job rights still let it act through a more powerful account. Caller-to-caller
+writes need the separate treatment below. This is an authenticated-identity
+boundary, not protection against an exempt administrator.
+
+**The source and the inputs.** The inventory below is from haynes-ops
+`fa32d2565ee54b0a8d2292d57a3111f0cdc52e38` and, for cigar-curation, PR
+4884 branch `agent/dev-env-1113-140923` at
+`bce7412152ce606b4097af14282dd0f7fb1604ae`. Paths in this correction are
+relative to haynes-ops. `U` means `kubernetes/main/apps/upgrade-agent/`;
+`R` means `kubernetes/main/apps/dev-env-system/rbac/app/`.
+
+Every generated name in this table is fixed: each generator has
+`disableNameSuffixHash: true`. None has a hash suffix. The three shepherd
+CronJobs are `upgrade-shepherd`, `upgrade-shepherd-triage` and
+`upgrade-shepherd-upgrade-night`; all use account `upgrade-shepherd`.
+
+| ConfigMap in `upgrade-agent` | Contents and consumers | Mounted by `dev-env-ops`? | Source |
+|---|---|---|---|
+| `alert-responder-scripts` | `respond.sh`, `prom-query.sh`, `loki-query.sh`; responder runs `/opt/responder/respond.sh` | No | `U/alert-responder/app/kustomization.yaml:12–22`; `helmrelease.yaml:40,126–140` |
+| `upgrade-shepherd-scripts` | The run, triage, silence and work-order scripts; night-lane modules, `upgrade-rules.json`, schemas and state/format mappings. Mounted by all three shepherd CronJobs, including their init containers. | No | `U/shepherd/app/kustomization.yaml:12–37`; `helmrelease.yaml:73,294,394,429–442` |
+| `upgrade-health-gate-scripts` | `gate.sh` and `page.sh`; health gate runs `/opt/gate/gate.sh` | No | `U/health-gate/app/kustomization.yaml:12–16,42–46`; `helmrelease.yaml:32,63–75` |
+| `upgrade-coordination-lib` | `coordination-lib.sh`, `escalate.sh`, `remediate.sh`; responder, gate, all three shepherd CronJobs, `dev-env-ops` Deployment and `dev-env-ops-curation-order` CronJob | **Yes** | `U/health-gate/app/kustomization.yaml:17–30`; responder `helmrelease.yaml:135–140`, gate `:70–75`, shepherd `:437–442`, dev-env-ops `:286–291` |
+| `dev-env-api-client` | `dev-env-api.sh`; responder, gate, shepherd and triage main containers, and cigar-curation. Neither upgrade-night nor the shepherd init containers mount it. | No | `U/health-gate/app/kustomization.yaml:31–46`; responder `helmrelease.yaml:157–168`, gate `:91–102`, shepherd `:448–476`, cigar-curation `:107–118` |
+| `cigar-curation-scripts` | `summon.sh`; only cigar-curation, from PR 4884 | No | PR 4884 `U/cigar-curation/app/kustomization.yaml:10–21`; `helmrelease.yaml:52,89–94` |
+| `dev-env-api-ca` | Public API trust anchor, an input to the client, not executable code; same main-container consumers as `dev-env-api-client` | No | `kubernetes/main/apps/dev-env-system/pki/app/kustomization.yaml:53–62`; client `U/health-gate/app/resources/dev-env-api.sh:67–69,125` |
+| `dev-env-ops-scripts` | v1 executor scripts and `ops-claude.md`/`cigar-curation.md`; only `dev-env-ops` and its curation-order CronJob. No summoning caller mounts it. | **Yes** | `U/dev-env-ops/app/kustomization.yaml:13–37`; `helmrelease.yaml:191–225,275–291` |
+
+The public API CA belongs in the protected-input set if the coordinator
+chooses a narrow rule. The last row records v1's restart exposure; it is
+not an extra v2 caller. `dev-env-ops` has Reloader enabled
+(`U/dev-env-ops/app/helmrelease.yaml:30`). This story changes no mounted
+ConfigMap data. A label option needs evidence that its metadata-only
+change will not roll that pod before it is installed.
+
+There is no separate mounted v2 brief ConfigMap. The operator reads the
+brief from each CallerPolicy in `dev-env-system`; the policies themselves
+are already protected by the identity guard. Cigar-curation sends date,
+run, name and key, and its policy names the checked-out contract
+`.agents/runbooks/ops/cigar-curation.md` (`upgrade-agent.cigar-curation.yaml:30–34,61–71`
+on PR 4884). The older callers build their local prompts in their scripts
+and consult repository runbooks. Their runtime inputs include
+`alert-responder-state`, `alert-responder-spend`, `upgrade-work-orders`,
+`upgrade-shepherd-spend`, `upgrade-shepherd-defers`, `upgrade-orphan-report`,
+`upgrade-remediation-state`, `upgrade-lane-state`, `upgrade-change-lock`,
+`upgrade-ledger` and `upgrade-ledger-marker`. These affect decisions and
+accounting; they are not mounted executable files. The current responder,
+gate, shepherd and triage operator-API integration only lists sessions;
+cigar-curation adds a create request while the create switch stays off.
+
+**Who can write today.** The plain agent has ConfigMap reads only
+(`R/agent.yaml:23–40`). `dev-env-grant-workloads`, bound by a namespaced
+RoleBinding, adds create, update, patch and delete (`R/grant-catalog.yaml:20–48`).
+A grant identity does not inherit the baseline role. The agent guard
+matches only the baseline username and does not match ConfigMaps; the
+identity guard matches grants too but protects no ConfigMap in
+`upgrade-agent` (`R/agent-guard.yaml:35–59`; `R/identity-guard.yaml:45–55,183–192,210–268`).
+
+The responder's `alert-responder-state` Role and the shepherd's
+`upgrade-shepherd-spend` Role allow create/update/patch of every ConfigMap
+in this namespace, without delete. Either can replace its own or another
+caller's code. The gate can only get/update `upgrade-remediation-state`,
+`upgrade-orphan-report` and `upgrade-work-orders`. Cigar-curation has no
+Role or binding and disables the ordinary Kubernetes-token automount
+(`U/{alert-responder,shepherd,health-gate}/app/rbac.yaml:28–54,37–63,95–136`
+respectively; PR 4884 cigar-curation `helmrelease.yaml:65–87`).
+
+The v1 `dev-env-ops-state` Role also writes every ConfigMap here
+(`U/dev-env-ops/app/rbac.yaml:24–54`). v1 `dev/dev-env` and the workbench
+have no direct ConfigMap-write binding here in the observed RBAC, but
+retain the exec/Job routes described above. Flux's kustomize and Helm
+controllers have `cluster-admin`; its other controller accounts also have
+ConfigMap writes through `crd-controller-flux-system`. The live RBAC read
+also found cluster-wide ConfigMap write permissions for headlamp,
+ceph-csi, cloudnative-pg, dragonfly-operator, the Prometheus operator,
+Kyverno's background controller, openebs-localpv-provisioner, reflector,
+rook-ceph-system, and the generic garbage collector, namespace controller
+and root-CA publisher. The verbs differ; this is RBAC reach, not evidence
+that any of them changes caller code. `system:masters` is also a
+cluster-admin subject. Cilium's named `cilium-config` patch permission
+does not cover these caller ConfigMaps. These outside identities are not
+newly fenced by this story.
+
+**Legitimate writes and the choice.** Searches of the runbooks, session
+rules and scripts found no documented `dev-agents` session workflow that
+requires a workload grant to write a ConfigMap in `upgrade-agent`. This is
+not proof that no off-repository practice exists. The hand-run and history
+recovery instructions explicitly say a session cannot write these
+ConfigMaps (`.agents/runbooks/upgrade-night-lane.md:575–580,1401–1409`).
+Work orders and outcome updates do exist: `work-order.sh:30–60`, shared
+`remediate.sh:50,97–119`/`escalate.sh:50,90–106`, and v1
+`order-status.sh:36–68` write `upgrade-work-orders`, as caller or v1
+accounts outside `dev-agents`. The orphan report and remediation state
+have the same caller ownership. `publish-report.sh:37–51` publishes files
+to GitHub, not a report ConfigMap. `silence.sh:45–55` writes Alertmanager,
+not Kubernetes. The manual Job recipe sets `UPGRADE_AGENT_PROMPT` in the
+Job's environment, not a new ConfigMap (`.agents/runbooks/upgrade-shepherd.md:410–424`);
+borrowing its caller account is already refused to a session.
+
+There are legitimate owner operations which an approved workload grant
+could presently make possible: patch `upgrade-lane-state.data.pause` or
+its retry halt, delete `upgrade-change-lock`, reset
+`upgrade-shepherd-spend`, restore `upgrade-ledger`, or delete
+`upgrade-ledger-marker` (`upgrade-night-lane.md:520–521,1401–1409,1629–1657`;
+`upgrade-shepherd.md:450–452`). No such grant is bound in the observed
+namespace. Option A would refuse those operations when delegated to a
+`dev-agents` grant identity. It leaves the existing outside-identity
+writers unchanged. The coordinator must explicitly choose whether that
+future delegation is needed; this text does not approve or remove it.
+
+| Option | What it refuses | Legitimate-write effect | Drift and replacement | Location |
+|---|---|---|---|---|
+| **A. Every ConfigMap write in `upgrade-agent` by a matched session identity** | CREATE, UPDATE (including patch/apply) and DELETE of any ConfigMap; data and metadata alike | No located current v2 grant workflow breaks. The owner operations above would no longer work through a workload grant. Existing caller/v1 writers are exempt. | New names, hashes, missing labels and delete/recreate are covered automatically. A new caller in another namespace must extend the namespace scope in its own PR. | A validation in `R/identity-guard.yaml`, under its existing identity match and fail-closed binding |
+| **B. Reserved names plus a drift check** | The same operations for the six executable ConfigMaps above and `dev-env-api-ca`, even when absent or unlabelled | Runtime work orders, reports, pause/reset/recovery and unrelated manual-Job inputs remain outside this new refusal; their existing RBAC still applies | Derive the caller inventory from CallerPolicies and follow every controller's ConfigMap references through the generators, including shared and PKI inputs. Fail on an uncovered reference, changed generator naming/hash mode or new caller/namespace. A fixed hand-maintained test list is insufficient. | A named-object validation in `R/identity-guard.yaml`; offline coverage in `scripts/tests/dev-env-archive-guard` |
+| **C. A protected-input label from the generators, checked on the stored object** | UPDATE and DELETE when `oldObject` has the label; refuse label removal as well as data edits. Also reject a labelled CREATE. | Ordinary unlabelled runtime writes remain possible. Labelling `upgrade-coordination-lib` needs the Reloader check above. | **Insufficient alone for CREATE:** there is no stored object then. A session could create an unlabelled object at a missing caller name. It needs reserved names as in B, or refusal of every session CREATE in the namespace, plus generator/reference coverage and safe label rollout. Never trust only the request's new labels. | Prefer a separate ConfigMap ValidatingAdmissionPolicy and binding in the rbac app, with explicit old/new-object handling; wire it into the existing fixture runner and workflow |
+
+**Recommendation, for the coordinator to rule on:** A. It covers all of
+the caller's executable, rule and trust inputs without a second name list
+or a label migration, and needs no change to a mounted ConfigMap. The
+located operational writers are outside its identity match. Its cost is
+the explicit restriction on future delegated state repair above. Choose B
+instead if preserving those grant-based operations is a requirement. C
+adds bootstrap and rollout hazards without replacing B's name inventory
+or A's create restriction.
+
+**Proxy and port-forward recommendation:** extend the existing
+`dev-env-exec-guard` CONNECT match to `pods/proxy` and `pods/portforward`
+for its privileged targets, with the same actor exemptions. Baseline
+`agent.yaml:86–90` allows get/create on `pods/proxy`. Neither baseline nor
+the ordinary workload, storage, secrets-read or node grant role allows
+port-forward; the workload grant adds neither subresource. The catalog's
+root-equivalent break-glass proposal is not an ordinary workload grant
+and has no observed binding here. Do not describe ordinary grant RBAC as
+inheriting baseline proxy access.
+
+The inspected caller commands run Bash scripts, or Node for upgrade-night,
+with no declared ports and no located server startup. The gate/curation
+toolbox and shepherd image definitions use a Bash entrypoint, overridden
+by those commands (`scripts/{upgrade-agent,upgrade-shepherd}/Dockerfile`;
+the HelmReleases above). This is source/spec evidence, not a runtime socket
+inspection or image-digest attestation. A port declaration is not required
+to listen. A normal HTTP pod proxy to a reachable pod with no listener
+fails to connect and returns ServiceUnavailable (503, with a connection
+error); it does not serve the pod's filesystem. That is an inference from
+[Kubernetes v1.35 pod routing](https://github.com/kubernetes/kubernetes/blob/v1.35.0/pkg/registry/core/pod/strategy.go#L514-L554)
+and its [proxy transport](https://github.com/kubernetes/apimachinery/blob/v0.35.0/pkg/util/proxy/transport.go#L78-L99),
+not a live probe. Other failures, such as no usable Pod IP, can fail earlier.
+Do not rely on today's lack of a listener as the future boundary.
+
+`kyverno/policies/app/maintenance-exec.yaml:14–35` already matches both
+subresources for maintenance executors in `dev-agents`; it does not cover
+`upgrade-agent`. The exec guard currently matches only exec/attach
+(`dev-env-exec-guard.yaml:58–68`). Pod proxy is a CONNECT admission even
+for an HTTP GET. Its target may be `pod`, `pod:port` or `scheme:pod:port`;
+the builder must resolve the Pod name before the guard's resource lookup,
+and prove ordinary nonprivileged proxy use still works. Blindly looking
+up the whole colon-bearing request name would refuse legitimate targets
+on lookup failure. No new RBAC verb is part of this recommendation.
+
+**Caller-to-caller recommendation:** narrow the responder and shepherd
+Roles' update/patch rights by `resourceNames`. They need the following
+writes, all in `upgrade-agent`, and no code ConfigMap write:
+
+| Account | Runtime ConfigMaps it writes | Script evidence under `U` |
+|---|---|---|
+| `alert-responder` | `alert-responder-state`, `alert-responder-spend`, `upgrade-work-orders` | `alert-responder/app/resources/respond.sh:91–101,209–211,262–273,288–313`; shared `escalate.sh` and `remediate.sh` |
+| `upgrade-shepherd` (all three CronJobs) | `upgrade-shepherd-spend`, `upgrade-shepherd-defers`, `upgrade-orphan-report`, `upgrade-remediation-state`, `upgrade-work-orders`, `upgrade-lane-state`, `upgrade-change-lock`, `upgrade-ledger`, `upgrade-ledger-marker` | `shepherd/app/resources/run-shepherd.sh:57–58,117–119,192–199,557,618–619`; `triage.sh:107–142`; `work-order.sh:30–60`; `run-night.mjs:101,697–709`; `night-merge.mjs:81,403–416`; `upgrade-history.mjs:57–58,673–698` |
+
+Keep reads separate: upgrade-night lists all namespace ConfigMaps
+(`run-night.mjs:371`), so putting that list verb under `resourceNames`
+would break it. Both callers also create their state when absent.
+[Kubernetes RBAC cannot restrict top-level CREATE by resourceNames](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#referring-to-resources).
+Narrowing every verb in place would break first-run recovery; leaving an
+unrestricted create would still allow code-name squatting when a code map
+is absent. Prefer retaining lazy state creation with a separate admission
+rule allowing those two authenticated caller accounts to CREATE only
+their respective state names. Cover apply-on-absent as well as explicit
+create. Precreating state and removing create is an alternative, but needs
+a recovery/field-ownership design and is not a mechanical Role change.
+The gate's existing three-name get/update rule and cigar-curation's lack
+of Kubernetes writes need no widening. Cross-caller code writes are not
+accepted here; the coordinator must approve the Role/create-rule scope
+or record its deferral and risk before a builder acts.
+
+**Builder evidence and boundaries.** Add offline fixtures to
+`scripts/tests/dev-env-archive-guard` which exercise the real admission
+matches, not only an extracted predicate. For every protected input,
+baseline and grant identities must be refused on CREATE, UPDATE and
+DELETE, with patch/server-side apply represented at their admission
+operation and absent-object recreation covered. Include data,
+`binaryData`, metadata/label removal, and DELETE with a null `object`.
+Check the exact workbench exemption, Flux's kustomize/Helm accounts and an
+outside identity; these are admission allows, not an assertion of RBAC.
+Under A, unrelated ConfigMap writes in this namespace must refuse and
+other namespaces stay unchanged. Under B/C, legitimate runtime objects
+must remain unaffected. B/C need the drift and missing-label/create
+cases described in the table; every option needs a new-caller namespace
+coverage check and workflow path filters that run it.
+
+For CONNECT, cover all four caller accounts, baseline and grant actors,
+exec/attach/proxy/port-forward, PodProxyOptions for GET and POST, every
+proxy name form, a missing Pod, and allowed ordinary targets and exempt
+actors. Removing one resource from the match must fail its fixture. If
+the caller Role work is approved, prove each named state's existing and
+absent write paths, preserve namespace-wide reads, and refuse writes or
+creates at every caller-code name and unrelated names. Do not use a live
+session dry run, exec, attach, proxy or port-forward as evidence.
+
+The 2026-11-14 live reads at 04:57 UTC confirmed the three installed caller
+policies, the mounted fixed names, no declared caller ports, no workload
+grant binding in this namespace, and no `--summon-create-kinds` argument.
+Only the node role had a Kubernetes GrantPolicy; none automatically
+approved a workload grant. ConfigMap metadata showed the existing code
+maps were not immutable. A later live Kyverno policy list was refused:
+`Error from server (Forbidden): validatingpolicies.policies.kyverno.io is forbidden: User "system:serviceaccount:dev-agents:dev-env-agent" cannot list resource "validatingpolicies" in API group "policies.kyverno.io" at the cluster scope`.
+That read stopped without a different route. Story 811's installed state
+is the coordinator's supplied premise, not a new live-policy verification
+by this designer. The design PR carries the read commands and source
+links. This correction is source design only: no policy, Role, test or
+live state changed, no suite or request probe ran, and no installation or
+acceptance is claimed.
+
+Out of this story are grants in other namespaces, redesigning caller
+credentials or their API limits, the remaining credential-bearing pods in
+item 759, v1 retirement, root-equivalent break-glass/administrator trust,
+runtime state semantics, and switching on summoning creates. The proxy
+match extension is the bounded follow-up to 811 proposed here, not a
+rewrite of that guard. A second session builds only after the coordinator
+chooses and this design correction merges; Role changes need that review.
+**No summoning create kind is switched on before story 859 is installed**,
+as already required for story 811. Merge/check evidence, offline fixture
+evidence, live-rule readback with no restart, and operational acceptance
+are separate gates. A refused installation read stays unverified until an
+authorized reader supplies it.
+
+**Rulings on the correction above, 2026-11-14 (story 859; the coordinator of
+item 751, session `dev-env-1111-143337`; not rulings by Tom).**
+
+1. **The guard is option A.** A `dev-agents` identity, with or without a
+   grant and other than the workbench, cannot create, update or delete any
+   ConfigMap in `upgrade-agent`. Reasons: it needs no name list and no
+   label, so a new caller's code is covered the day it lands; it also
+   covers the state a caller is steered by (the work orders, the lane
+   state, the change lock), not only its scripts; and it takes away
+   nothing a session has today, because no workload grant is bound in
+   that namespace and the night lane's runbook already says a session
+   cannot write these ConfigMaps. The cost is stated above: the upgrade
+   lane's state repairs cannot be delegated to a granted session; they
+   stay with Tom and with the accounts that write that state today, the
+   callers' own and v1's `dev-env-ops`. The workbench is not matched by
+   the rule, and that gives it nothing: it has no ConfigMap write in this
+   namespace. A later need for one of them is a named exception in its
+   own PR, with its own review.
+2. **`pods/proxy` and `pods/portforward` join the exec guard's match** for
+   privileged targets, as recommended, with the Pod name resolved from
+   every proxy name form. Before building, the builder searches the
+   runbooks, scripts and session rules of both repositories for a session
+   that proxies to a pod of a privileged account; if one exists it stops
+   and reports it instead of breaking it.
+3. **Caller to caller is deferred, and the risk is recorded.** The
+   responder's and the shepherd's Roles are not changed in story 859. They
+   belong to the upgrade lanes' workloads, and a missed state name there
+   stops a nightly run. Until they are narrowed, code running as one of
+   those two accounts can rewrite another caller's code ConfigMap and so
+   act under that caller's policy. Reaching that needs code execution as a
+   caller: story 811 and rule 1 close the session routes, and the callers'
+   own code comes from git. The exact state names and the create rule
+   above are handed to the owners of those workloads as a proposal; it is
+   not a gate for switching a create kind on.
+
+The gate stands as written: no summoning create kind is switched on before
+story 859 (rules 1 and 2) is installed.
+
 ### 5.9 One accounting model (F2, C2, F5, F3)
 
 Every limit, lane, page and filing is computed from records on the sessions
