@@ -74,7 +74,8 @@ const (
 
 // startPreflight is start-preflight.json. Pid and Start name the run-agent
 // process that runs the pre-flight. In that boot, its live group or an
-// unresolved task-start intent keeps status busy. A later boot ignores it.
+// unresolved task-start intent keeps status busy. A later boot ignores that
+// ownership but still reports the settled start outcome for this launch.
 type startPreflight struct {
 	State string `json:"state"`
 	Model string `json:"model,omitempty"`
@@ -523,8 +524,17 @@ func rawJSONStatus(r json.RawMessage) int {
 // readPreflight reads start-preflight.json for the summoned launch first.
 // false when it is missing, unreadable, of another launch or a prior boot.
 func readPreflight(s Settings, first Launch) (startPreflight, bool) {
+	if preflightFromAnotherBoot(s, first) {
+		return startPreflight{}, false
+	}
+	return readPreflightRecord(s, first)
+}
+
+// readPreflightRecord also reads settled history on a later boot. It still
+// matches the original launch; it cannot establish current process ownership.
+func readPreflightRecord(s Settings, first Launch) (startPreflight, bool) {
 	var rec startPreflight
-	if preflightFromAnotherBoot(s, first) || readJSONFile(s.statePath(startPreflightFile), &rec) != nil || rec.ConversationID != first.ConversationID || rec.BootID != first.BootID {
+	if readJSONFile(s.statePath(startPreflightFile), &rec) != nil || rec.ConversationID != first.ConversationID || rec.BootID != first.BootID {
 		return startPreflight{}, false
 	}
 	return rec, true
@@ -566,15 +576,15 @@ func preflightLive(s Settings, first Launch) bool {
 // preflightFailed reports whether first's pre-flight recorded that no model
 // was usable, so nothing started.
 func preflightFailed(s Settings, first Launch) bool {
-	rec, ok := readPreflight(s, first)
+	rec, ok := readPreflightRecord(s, first)
 	return ok && rec.State == preflightNoUsableModel && protocol.InSet(protocol.StartFailures, rec.Failure) && !preflightLive(s, first)
 }
 
 // preflightStartRecord is the status's start record from first's pre-flight
-// record: the model the task started on, or why nothing started. nil while
-// it runs, and for any other launch.
+// record, on any boot: the model the task started on, or why nothing started.
+// nil while it runs, for an unsettled record, and for any other launch.
 func preflightStartRecord(s Settings, first Launch) *protocol.StartRecord {
-	rec, ok := readPreflight(s, first)
+	rec, ok := readPreflightRecord(s, first)
 	if !ok {
 		return nil
 	}

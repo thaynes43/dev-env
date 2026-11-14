@@ -3590,6 +3590,61 @@ governs.
    observes its real SIGKILL and injects the absence observation, so it
    requires no particular PID 1 reap latency inside one second.
 
+**Correction, 2026-11-14 (story 791 fix round 4, coordinator rulings; not a
+ruling by Tom).** This answers N1 and N2 and the limits noted in the review
+of PR 1157 (comment 6873220158). Earlier corrections stay. This narrows fix
+round 3's ruling 4: another boot invalidates process ownership, not settled
+start history.
+
+1. *A settled start outcome survives a later boot (N1).* Status keeps a
+   `no-usable-model` record as `failed` with `start.failure`, and a `started`
+   record keeps `start.model` and any valid `fallbackCause`. These remain
+   bound to the original launch's conversation ID and boot ID. Its PID,
+   start time, group and pending intent cannot establish ownership in a
+   different boot: stop ignores them, and they cannot make status busy. An
+   old `checking` record has no settled start outcome; without a task result
+   it reads `interrupted` with no start record. The launch latch and
+   exclusive pre-flight claim are unchanged: a later boot starts no new
+   pre-flight or task for the same launch. Historical outcomes are not
+   attributed to a different launch.
+2. *Shutdown waits briefly for a started task's result (N2).* When stop
+   finds a published task under the start lock, or a settled `started`
+   record whose task already removed its PID, shutdown waits up to **2
+   seconds** for the result before copying the log and sending its last
+   heartbeat. It adds no result wait for a pre-flight with no started task,
+   an unconfirmed stop fence or another boot's launch. The bounded waits
+   total at most **50 seconds**: 40 for stop, 2 for the result, 3 for the log
+   copy and 5 for the last heartbeat, within the pod's 60-second termination
+   grace. As in round 3, this bounds waits, not a kernel or filesystem call
+   that never returns. It does not bound the launcher's end-of-task work or
+   guarantee its result arrives in time. No further heartbeat is scheduled
+   for a result arriving after the wait: if the final heartbeat misses that
+   result, it is reported only if the pod boots again. A result appearing
+   during the log copy can still be picked up by that final heartbeat.
+3. *One boot assumes one daemon per container.* The image runs
+   `tini -- agentd run`, so a daemon exit normally ends the container. A
+   second `agentd run` started by hand in the same container would rewrite
+   `boot.json` and make stop and status ignore a live launch's ownership.
+   Nothing guards against this; the boot ID is not a namespace attestation
+   or an exclusive-daemon lock.
+4. *A persistently failed settle write retains the PID.* After both
+   `started` writes fail, `agent.pid` remains even after the launcher exits,
+   until the pod ends; on a later boot it is no longer ownership evidence.
+   Within that boot the leaderless historical group and PID reuse limit in
+   round 3 still applies. The pre-flight record stays `checking`, so its
+   start record never names the model, even when a task result reports the
+   task exited. This round does not change the writes or their retry.
+5. *Task-start failures differ from a turn's lock refusal.* Failure to
+   acquire the task-start lock or write its pending intent writes no refusal
+   record. Once the launcher is gone and the start window has passed, status
+   reads `interrupted` rather than the `failed` reported for a turn's lock
+   refusal. This is an existing limit; this round changes no start sequence.
+
+The later-boot status table, the held-result shutdown proof and its fake
+42-second stop-plus-wait bound are source and local test evidence. They are
+not installed or live-provider acceptance, nor a demonstration of a second
+daemon in one container.
+
 **Correction, 2026-11-14 (story 791 fix round 5, coordinator ruling; not a
 ruling by Tom).** This answers the reused-PID stop and status findings on
 PR 1120 (review comments 4571659668 and 4572019700). Earlier corrections

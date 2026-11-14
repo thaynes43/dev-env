@@ -26,7 +26,8 @@ var stopKillWait = 5 * time.Second
 func stopAgent(s Settings, grace time.Duration) *protocol.AgentStop {
 	var first Launch
 	if readJSONFile(s.statePath(launchFile), &first) == nil && first.Preflight != nil {
-		return stopPreflightLaunch(s, first, grace)
+		st, _ := stopPreflightLaunch(s, first, grace)
+		return st
 	}
 	st := &protocol.AgentStop{}
 	var p agentPid

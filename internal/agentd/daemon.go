@@ -757,8 +757,16 @@ func (d *Daemon) shutdown() {
 	var p agentPid
 	var first Launch
 	if readJSONFile(d.S.statePath(launchFile), &first) == nil && first.Preflight != nil {
-		st := stopAgent(d.S, d.StopGrace)
+		st, taskStarted := stopPreflightLaunch(d.S, first, d.StopGrace)
 		d.Log.Info("SIGTERM: stopped the summoned launch", "running", st.Running, "killed", st.Killed)
+		if taskStarted {
+			// Stop leaves run-agent alive to retain the task's result. Give
+			// it the ordinary branch's 2s before the last heartbeat. Total
+			// bounded waits: 40s stop + 2s result + 3s log + 5s heartbeat.
+			for i := 0; i < 20 && !exists(d.S.statePath(resultFile)); i++ {
+				preflightResultSleep(100 * time.Millisecond)
+			}
+		}
 	} else if readJSONFile(d.S.statePath(pidFile), &p) == nil && pidAlive(p) {
 		d.Log.Info("SIGTERM: forwarding to the agent", "pid", p.Pid, "grace", d.StopGrace)
 		if err := syscall.Kill(p.Pid, syscall.SIGTERM); err != nil {
