@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -109,6 +110,9 @@ func Activation(now time.Time, entry SessionEntry, notices []Notice, pub ed25519
 	}
 	sent, ok := raisedSent(entry, notices, pub)
 	finished := finishedAttempts(entry, notices, pub)
+	if aged := agedReservations(now, entry, notices, pub); aged > finished {
+		finished = aged
+	}
 	if ok {
 		at, err := time.Parse(time.RFC3339, sent.SentAt)
 		if err != nil {
@@ -178,6 +182,27 @@ func finishedAttempts(entry SessionEntry, notices []Notice, pub ed25519.PublicKe
 	return finished
 }
 
+// agedReservations is the attempt on a verified reservation whose time is
+// at least NoticeRetry ago. That reservation had no outcome, so it counts
+// as one Ambiguous attempt and the operator can unannounce at twelve.
+func agedReservations(now time.Time, entry SessionEntry, notices []Notice, pub ed25519.PublicKey) int {
+	finished := 0
+	for i := range notices {
+		n := notices[i]
+		if n.ID != entry.ID || n.SessionUID != entry.UID || n.Kind != KindRaise || n.Outcome != OutcomeReserved || !VerifyNotice(n, pub) {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, n.At)
+		if err != nil || now.Before(at.Add(NoticeRetry)) {
+			continue
+		}
+		if n.Attempt > finished {
+			finished = n.Attempt
+		}
+	}
+	return finished
+}
+
 // NoticeText is what the keeper says. Title and Words are redacted by the caller.
 type NoticeText struct {
 	Session       string
@@ -196,35 +221,51 @@ type NoticeText struct {
 	TakenAt       string
 }
 
-// Message is the Pushover title and body. redact runs on the title and on
-// Tom's words. The command in the body is not redacted.
+// Message is the Pushover title and body. redact runs on the session title
+// and on Tom's words. The command in the body is not redacted. The session
+// title is the performer's text, so it is quoted and follows the take-back
+// command. An empty title leaves that sentence out.
 func Message(in NoticeText, redact func(string) string) (string, string) {
 	if redact == nil {
 		redact = func(s string) string { return s }
 	}
+	shownTitle := foldQuotes(redact(in.Title))
 	if in.TakeBack {
 		title := redact("[dev-env] raise taken back: " + in.Session)
-		body := in.Session + " (" + redact(in.Title) + ") was taken back by " + in.TakenBy + " at " + in.TakenAt + "."
+		body := in.Session + " was taken back by " + in.TakenBy + " at " + in.TakenAt + "."
+		if shownTitle != "" {
+			body += ` Its title is "` + shownTitle + `".`
+		}
 		return title, body
 	}
 	title := redact("[dev-env] raise: " + in.Session)
-	body := in.Session + " (" + redact(in.Title) + ") was raised by " + in.Performer
-	if in.Profile != "" {
-		body += " from " + in.From + " to " + in.Profile
+	body := in.Session + " was raised by " + in.Performer + ". It may start sessions one level deeper. It takes effect at " + in.Effect + ", two minutes after this notice is accepted, unless taken back. To stop it: agent-run raise " + in.Session + " --take-back."
+	if shownTitle != "" {
+		body += ` Its title is "` + shownTitle + `".`
 	}
-	if in.Superuser {
-		body += ". It will run as the superuser account"
-	}
-	if in.StartSessions {
-		body += ". It may start sessions one level deeper"
-	}
-	body += ". It takes effect at " + in.Effect + ", two minutes after this notice is accepted, unless taken back."
-	body += " To stop it: agent-run raise " + in.Session + " --take-back."
-	// The words are the performer's claim, quoted, and last. A double quote
-	// inside them becomes a single quote, so it cannot close the quotation.
-	shown := strings.ReplaceAll(redact(in.Words), `"`, "'")
+	shown := foldQuotes(redact(in.Words))
 	body += " " + in.Performer + ` says you said: "` + shown + `" (` + in.Where + ", " + in.SaidAt + ")."
 	return title, body
+}
+
+// foldQuotes turns every rune a phone may draw as a quotation mark into an
+// apostrophe, in the words and in the title, so neither can close the
+// quotation the notice puts around them.
+func foldQuotes(s string) string {
+	return strings.Map(func(r rune) rune {
+		if quoteRune(r) {
+			return '\''
+		}
+		return r
+	}, s)
+}
+
+func quoteRune(r rune) bool {
+	switch r {
+	case '"', '\u201E', '\u201F', '\uFF02', '\u301D', '\u301E', '\u301F', '\u00AB', '\u00BB':
+		return true
+	}
+	return unicode.Is(unicode.Pi, r) || unicode.Is(unicode.Pf, r)
 }
 
 // NoticeLedger is the keeper's map of the latest signed outcome per record

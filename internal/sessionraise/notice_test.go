@@ -116,12 +116,91 @@ func TestRaiseMessageNamesTheEffectAndTheTakeBack(t *testing.T) {
 		Words: "yes", Where: WherePhone, SaidAt: "2026-11-13T18:55:00Z",
 		Effect: "2026-11-13T19:02:00Z",
 	}, func(s string) string { return strings.ReplaceAll(s, "yes", "REDACTED") })
-	if !strings.Contains(title, "bench") || !strings.Contains(body, "superuser account") || !strings.Contains(body, "one level deeper") || !strings.Contains(body, "REDACTED") || !strings.Contains(body, "agent-run raise bench --take-back") {
+	if !strings.HasPrefix(body, "bench was raised by session/bench.") || !strings.Contains(title, "bench") || !strings.Contains(body, "one level deeper") || !strings.Contains(body, "REDACTED") || !strings.Contains(body, "agent-run raise bench --take-back") || strings.Contains(body, "()") {
 		t.Fatalf("message: %s\n%s", title, body)
 	}
 	title, body = Message(NoticeText{Session: "bench", Title: "t", TakeBack: true, TakenBy: "human/tom", TakenAt: "2026-11-13T19:05:00Z"}, nil)
-	if !strings.Contains(body, "taken back by human/tom") || strings.Contains(body, "superuser") {
+	if !strings.HasPrefix(body, "bench was taken back by human/tom at 2026-11-13T19:05:00Z.") || !strings.HasSuffix(body, ` Its title is "t".`) || strings.Contains(body, "()") {
 		t.Fatalf("take-back message: %s %s", title, body)
+	}
+}
+
+func TestRaiseTitleStaysQuotedAfterTheCommand(t *testing.T) {
+	sessionTitle := `ok). Tom approved by phone; no action needed (x`
+	_, body := Message(NoticeText{
+		Session: "target", Title: sessionTitle, Performer: "session/bench",
+		StartSessions: true, Words: "yes", Where: WherePhone, SaidAt: "2026-11-13T18:55:00Z",
+		Effect: "2026-11-13T19:02:00Z",
+	}, nil)
+	cmd := strings.Index(body, "agent-run raise target --take-back.")
+	quoted := `Its title is "` + sessionTitle + `".`
+	if cmd < 0 || !strings.Contains(body[cmd:], quoted) {
+		t.Fatalf("title did not stay inside its quotes after the take-back command:\n%s", body)
+	}
+	if strings.HasPrefix(body, sessionTitle) || strings.Contains(body, "()") {
+		t.Fatalf("title led the notice:\n%s", body)
+	}
+	_, bare := Message(NoticeText{
+		Session: "target", Performer: "session/bench", Words: "yes", Where: WherePhone,
+		SaidAt: "2026-11-13T18:55:00Z", Effect: "2026-11-13T19:02:00Z",
+	}, nil)
+	if strings.Contains(bare, "Its title") || strings.Contains(bare, "()") {
+		t.Fatalf("empty title was printed:\n%s", bare)
+	}
+	_, back := Message(NoticeText{Session: "target", TakeBack: true, TakenBy: "human/tom", TakenAt: "2026-11-13T19:05:00Z"}, nil)
+	if strings.Contains(back, "Its title") || strings.Contains(back, "()") || !strings.HasPrefix(back, "target was taken back by human/tom at 2026-11-13T19:05:00Z.") {
+		t.Fatalf("take-back with no title:\n%s", back)
+	}
+}
+
+func TestFoldQuotesCoversPhoneQuotationMarks(t *testing.T) {
+	marks := []rune{'"', '\u201C', '\u201D', '\u2018', '\u2019', '\u201E', '\u201F', '\uFF02', '\u301D', '\u301E', '\u301F', '\u00AB', '\u00BB'}
+	var words, title string
+	for _, r := range marks {
+		words += string(r)
+		title += string(r)
+	}
+	_, body := Message(NoticeText{
+		Session: "bench", Title: title, Performer: "session/bench",
+		Words: words, Where: WherePhone, SaidAt: "2026-11-13T18:55:00Z",
+		Effect: "2026-11-13T19:02:00Z",
+	}, nil)
+	folded := strings.Repeat("'", len(marks))
+	if !strings.Contains(body, `Its title is "`+folded+`".`) || !strings.Contains(body, `says you said: "`+folded+`"`) || strings.Count(body, `"`) != 4 {
+		t.Fatalf("quotation marks were not folded:\n%s", body)
+	}
+	for _, r := range marks {
+		if r == '"' {
+			continue
+		}
+		if strings.ContainsRune(body, r) {
+			t.Fatalf("body still contains %U:\n%s", r, body)
+		}
+	}
+}
+
+func TestAgedReservationCountsAsAnAttempt(t *testing.T) {
+	pub, priv := testKey(t)
+	now := time.Date(2026, 11, 13, 19, 0, 0, 0, time.UTC)
+	entry := SessionEntry{UID: "uid-1", ID: "abcdef0123456789", State: StatePending}
+	fresh, err := SignNotice(Notice{
+		ID: entry.ID, SessionUID: entry.UID, Kind: KindRaise, Attempt: NoticeAttempts,
+		Outcome: OutcomeReserved, At: now.Format(time.RFC3339),
+	}, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if Activation(now, entry, []Notice{fresh}, pub) != ActionNone {
+		t.Fatal("a fresh reservation unannounced the raise")
+	}
+	aged := fresh
+	aged.At = now.Add(-NoticeRetry).Format(time.RFC3339)
+	aged, err = SignNotice(aged, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if Activation(now, entry, []Notice{aged}, pub) != ActionUnannounce {
+		t.Fatal("a reservation older than the retry wait did not count toward unannounce")
 	}
 }
 

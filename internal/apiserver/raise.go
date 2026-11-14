@@ -94,6 +94,10 @@ const (
 	raiseOtherCaller   = "Only a superuser session, an always-on agent whose policy allows it, or Tom may raise a session."
 	raisePolicy        = "This caller's policy does not allow raising sessions."
 	raiseSelf          = "A session may not raise itself."
+	// noticeBeforeRaise is the view reason when a verified Sent is earlier
+	// than the raise. The row stays pending. The coordinator's ruling of
+	// 2026-11-14 on the second slice (a) reviews.
+	noticeBeforeRaise = "The notice time is before the raise. A take-back and a new raise are needed."
 )
 
 func raiseInvalid(sentence string) *apiError {
@@ -213,7 +217,7 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 	if err != nil {
 		return 0, nil, s.raiseLedgerErr(err, c, fresh.Name)
 	}
-	if same && annotationCounts(fresh, pub, &entry) {
+	if same && s.annotationCounts(fresh, pub, &entry) {
 		v := s.withUsageRollup(ctx, fresh, c, false)
 		return http.StatusOK, v, nil
 	}
@@ -257,14 +261,18 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 	if err != nil {
 		return 0, nil, raiseUnavailable("%s", raiseLedgerUnread)
 	}
+	// The raise is logged once the ledger write has succeeded. A failed
+	// annotation write does not wait for a retry before the line exists.
+	if !same && writeLedger {
+		target := "start sessions"
+		if req.Profile != "" {
+			target = req.Profile
+		}
+		s.logRaise(fmt.Sprintf("Raised %s to %s. Tom is being told; it takes effect two minutes after the notice is accepted, unless taken back.", fresh.Name, target), signed)
+	}
 	if err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw)); err != nil {
 		return 0, nil, raiseUnavailable("The raise was recorded but the session annotation could not be written. Send the same request again.")
 	}
-	target := "start sessions"
-	if req.Profile != "" {
-		target = req.Profile
-	}
-	s.logRaise(fmt.Sprintf("Raised %s to %s. Tom is being told; it takes effect two minutes after the notice is accepted, unless taken back.", fresh.Name, target), signed)
 	updated, err := s.raiseTarget(ctx, r)
 	if err != nil {
 		updated = fresh
@@ -319,6 +327,7 @@ func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http
 	now := s.now().UTC().Truncate(time.Second)
 	at := now.Format(time.RFC3339)
 	var entry sessionraise.SessionEntry
+	var wrote bool
 	err = s.commitLedger(ctx, cfg, func(led *sessionraise.Ledger) (bool, error) {
 		cur := led.Find(string(fresh.UID))
 		if cur == nil {
@@ -333,6 +342,7 @@ func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http
 			return false, err
 		}
 		entry = got
+		wrote = true
 		return true, nil
 	})
 	if errors.Is(err, sessionraise.ErrNoEntry) {
@@ -343,11 +353,23 @@ func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http
 	}
 	// The ledger write is what stops the record counting. The grant release
 	// and the suspend run after it, whatever the annotation write does.
+	// The audit line follows the ledger write and carries the verified
+	// words when the annotation had them, even if that write then fails.
 	var annErr error
+	words := ""
 	priv, keyErr := s.raiseKey(ctx, cfg)
+	if keyErr == nil {
+		pub := priv.Public().(ed25519.PublicKey)
+		if prev, ok := verifiedRaiseWords(fresh, pub, entry.ID); ok && sessionraise.WordsHash(prev.Owner.Words) == entry.WordsHash {
+			words = prev.Owner.Words
+		}
+	}
+	if wrote {
+		s.logRaise("took back a raise of "+fresh.Name, recordFrom(entry, words))
+	}
 	if keyErr != nil {
 		s.Log.Info("The take-back stands. The session annotation could not be re-signed.", "session", fresh.Name, "error", keyErr.Error())
-	} else if !annotationTakenBack(fresh, priv.Public().(ed25519.PublicKey), &entry) {
+	} else if !s.annotationTakenBack(fresh, priv.Public().(ed25519.PublicKey), &entry) {
 		rec := takenBackRecord(fresh, entry, priv.Public().(ed25519.PublicKey))
 		signed, err := sessionraise.Sign(rec, priv)
 		if err != nil {
@@ -365,7 +387,6 @@ func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http
 	if annErr != nil {
 		return 0, nil, raiseUnavailable("The take-back is recorded but the session annotation could not be written. Send the take-back again.")
 	}
-	s.logRaise("took back a raise of "+fresh.Name, recordFrom(entry, ""))
 	updated, err := s.raiseTarget(ctx, r)
 	if err != nil {
 		updated = fresh
@@ -455,19 +476,23 @@ func (s *Server) refuseRaiseCaller(ctx context.Context, c *caller, name string) 
 	}
 }
 
-func annotationCounts(sess *v1alpha1.AgentSession, pub ed25519.PublicKey, entry *sessionraise.SessionEntry) bool {
+func (s *Server) annotationCounts(sess *v1alpha1.AgentSession, pub ed25519.PublicKey, entry *sessionraise.SessionEntry) bool {
 	rec, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
 	if err != nil {
 		return false
 	}
-	return sessionraise.Counts(rec, string(sess.UID), pub, entry) == ""
+	if reason := sessionraise.Counts(rec, string(sess.UID), pub, entry); reason != "" {
+		s.logIgnored(rec.ID, reason)
+		return false
+	}
+	return true
 }
 
-func annotationTakenBack(sess *v1alpha1.AgentSession, pub ed25519.PublicKey, entry *sessionraise.SessionEntry) bool {
+func (s *Server) annotationTakenBack(sess *v1alpha1.AgentSession, pub ed25519.PublicKey, entry *sessionraise.SessionEntry) bool {
 	if entry == nil || entry.State != sessionraise.StateTakenBack {
 		return false
 	}
-	return annotationCounts(sess, pub, entry)
+	return s.annotationCounts(sess, pub, entry)
 }
 
 func (s *Server) raiseTarget(ctx context.Context, r *http.Request) (*v1alpha1.AgentSession, error) {
@@ -1137,6 +1162,11 @@ func (s *Server) overlayNotice(ctx context.Context, cfg RaiseConfig, view *apiv1
 		return
 	}
 	view.NoticeSentAt = sent
+	if sessionraise.SentBeforePerformed(sent, entry.PerformedAt) {
+		view.ActiveFrom = ""
+		view.Ignored = noticeBeforeRaise
+		return
+	}
 	view.ActiveFrom = at.Add(sessionraise.EffectDelay).UTC().Format(time.RFC3339)
 	_ = pub
 }
@@ -1190,10 +1220,15 @@ func (s *Server) depthExempt(ctx context.Context, c *caller) bool {
 	if err != nil || entry == nil {
 		return false
 	}
-	if sessionraise.Counts(rec, string(live.UID), pub, entry) != "" {
+	if reason := sessionraise.Counts(rec, string(live.UID), pub, entry); reason != "" {
+		s.logIgnored(rec.ID, reason)
 		return false
 	}
-	return rec.State == sessionraise.StateActive && rec.StartSessions && rec.Depth == "2"
+	if rec.State != sessionraise.StateActive || !rec.StartSessions || rec.Depth != "2" {
+		s.logIgnored(rec.ID, "does not grant start sessions")
+		return false
+	}
+	return true
 }
 
 func (s *Server) depthRefusal(c *caller) *apiError {

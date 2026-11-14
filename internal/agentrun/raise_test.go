@@ -182,6 +182,35 @@ func TestNoRaisePrintsTheAPISentence(t *testing.T) {
 	if !strings.Contains(h.stderr.String(), "This operator does not have the raise routes.") {
 		t.Fatalf("bare 404: %s", h.stderr.String())
 	}
+	h.stderr.Reset()
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		if r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath(name) {
+			writeTestJSON(w, http.StatusOK, cur)
+			return
+		}
+		apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "no route "+r.Method+" "+r.URL.Path)
+	}
+	h.mustRun(ExitNotFound, "raise", name, "--take-back")
+	if !strings.Contains(h.stderr.String(), "This operator does not have the raise routes.") {
+		t.Fatalf("json no route: %s", h.stderr.String())
+	}
+}
+
+func TestShowOfAnUnraisedSessionMatchesThePlainProfile(t *testing.T) {
+	h := newHarness(t)
+	s := testSession("plain", "Running")
+	s.Profile = "full"
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		if r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath("plain") {
+			writeTestJSON(w, http.StatusOK, s)
+			return
+		}
+		apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "no such route")
+	}
+	h.mustRun(ExitOK, "show", "plain")
+	if strings.Contains(h.stdout.String(), "(at creation)") || !strings.Contains(h.stdout.String(), "full") {
+		t.Fatalf("unraised show:\n%s", h.stdout.String())
+	}
 }
 
 func TestShowSaysProfileAtCreation(t *testing.T) {
@@ -201,7 +230,7 @@ func TestShowSaysProfileAtCreation(t *testing.T) {
 		apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "no such route")
 	}
 	h.mustRun(ExitOK, "show", "raised")
-	if !strings.Contains(h.stdout.String(), "full (at creation)") || strings.Contains(h.stdout.String(), "in ,") {
+	if !strings.Contains(h.stdout.String(), "full (at creation)") || strings.Contains(h.stdout.String(), "in ,") || !strings.Contains(h.stdout.String(), "active from 2026-11-13T19:02:00Z") {
 		t.Fatalf("show:\n%s", h.stdout.String())
 	}
 }

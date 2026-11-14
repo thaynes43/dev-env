@@ -12,6 +12,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/sessionraise"
+	"github.com/thaynes43/dev-env/internal/sessiontitle"
 )
 
 // RaisePageOptions selects the keeper's raise notices. The zero value uses
@@ -38,6 +39,9 @@ type RaisePager struct {
 	quietUntil       time.Time
 	lastQuiet        time.Time
 	profileLogged    map[string]struct{}
+	unnamedLogged    map[string]struct{}
+	goneUID          map[string]struct{}
+	keyReady         bool
 }
 
 // NeedLeaderElection is true: only the leader sends and signs.
@@ -102,18 +106,22 @@ func (p *RaisePager) sessionNamespace() string {
 }
 
 // announce sends a pending raise whose record counts, and a take-back from
-// the operator ledger row. It reads the ledger first and fetches, by name,
-// only the sessions whose rows need a notice. It does not look at the time
-// of day, and a missing object never fails the keeper.
+// the operator ledger row. The first pass publishes the keeper key. Later
+// passes read the operator ledger first, and read the key Secret only when
+// a row needs a notice. A session is fetched by name. The pager does not
+// list AgentSessions. It does not look at the time of day, and a missing
+// object never fails the keeper.
 func (p *RaisePager) announce(ctx context.Context) {
 	if p.Client == nil || p.Sender == nil || p.quiet() {
 		return
 	}
 	store := p.store()
-	priv, err := sessionraise.Ensure(ctx, store, p.secretName(), sessionraise.KeeperPublicName, true)
-	if err != nil {
-		p.noteQuiet("raise notice key was not published", err)
-		return
+	if !p.keyReady {
+		if _, err := sessionraise.Ensure(ctx, store, p.secretName(), sessionraise.KeeperPublicName, true); err != nil {
+			p.noteQuiet("raise notice key was not published", err)
+			return
+		}
+		p.keyReady = true
 	}
 	ledObj, err := store.Get(ctx, sessionraise.LedgerName)
 	if err != nil {
@@ -145,6 +153,11 @@ func (p *RaisePager) announce(ctx context.Context) {
 		p.dropNotices(ctx, absent, nil)
 	}
 	if len(need) == 0 {
+		return
+	}
+	priv, err := sessionraise.Load(ctx, store, p.secretName(), sessionraise.KeeperPublicName)
+	if err != nil {
+		p.noteQuiet("raise notice key was not read", err)
 		return
 	}
 	pub, pubErr := sessionraise.ReadPublic(ctx, store, sessionraise.OperatorPublicName)
@@ -223,20 +236,28 @@ func rowNeedsNotice(now time.Time, e sessionraise.SessionEntry, notices *session
 	return due
 }
 
-// sessionsFor fetches each needed row by name. It lists AgentSessions only
-// when a needed row has no name, or the named session has a different UID.
+// sessionsFor fetches each needed row by name. It does not list
+// AgentSessions. NotFound, or a session whose UID is not the row's, means
+// that session is gone: names are not reused for the same UID. The UID is
+// remembered for this process so it is not fetched again. A row with no
+// name is skipped and logged once. Any other read error leaves the row and
+// its notices untouched.
 func (p *RaisePager) sessionsFor(ctx context.Context, need []sessionraise.SessionEntry) ([]v1alpha1.AgentSession, []string) {
 	var found []v1alpha1.AgentSession
 	var gone []string
-	var unnamed []sessionraise.SessionEntry
 	for _, e := range need {
 		if e.Name == "" {
-			unnamed = append(unnamed, e)
+			p.logUnnamed(e)
+			continue
+		}
+		if p.knownGone(e.UID) {
+			gone = append(gone, e.UID)
 			continue
 		}
 		var sess v1alpha1.AgentSession
 		err := p.reader().Get(ctx, client.ObjectKey{Namespace: p.sessionNamespace(), Name: e.Name}, &sess)
 		if apierrors.IsNotFound(err) {
+			p.rememberGone(e.UID)
 			gone = append(gone, e.UID)
 			continue
 		}
@@ -245,32 +266,49 @@ func (p *RaisePager) sessionsFor(ctx context.Context, need []sessionraise.Sessio
 			continue
 		}
 		if string(sess.UID) != e.UID {
-			unnamed = append(unnamed, e)
-			continue
-		}
-		found = append(found, sess)
-	}
-	if len(unnamed) == 0 {
-		return found, gone
-	}
-	var list v1alpha1.AgentSessionList
-	if err := p.reader().List(ctx, &list, client.InNamespace(p.sessionNamespace())); err != nil {
-		p.noteQuiet("raise notice list", err)
-		return found, gone
-	}
-	byUID := map[string]v1alpha1.AgentSession{}
-	for i := range list.Items {
-		byUID[string(list.Items[i].UID)] = list.Items[i]
-	}
-	for _, e := range unnamed {
-		sess, ok := byUID[e.UID]
-		if !ok {
+			p.rememberGone(e.UID)
 			gone = append(gone, e.UID)
 			continue
 		}
 		found = append(found, sess)
 	}
 	return found, gone
+}
+
+func (p *RaisePager) knownGone(uid string) bool {
+	if uid == "" || p.goneUID == nil {
+		return false
+	}
+	_, ok := p.goneUID[uid]
+	return ok
+}
+
+func (p *RaisePager) rememberGone(uid string) {
+	if uid == "" {
+		return
+	}
+	if p.goneUID == nil {
+		p.goneUID = map[string]struct{}{}
+	}
+	p.goneUID[uid] = struct{}{}
+}
+
+func (p *RaisePager) logUnnamed(e sessionraise.SessionEntry) {
+	key := e.UID
+	if key == "" {
+		key = e.ID
+	}
+	if key == "" {
+		return
+	}
+	if p.unnamedLogged == nil {
+		p.unnamedLogged = map[string]struct{}{}
+	}
+	if _, ok := p.unnamedLogged[key]; ok {
+		return
+	}
+	p.unnamedLogged[key] = struct{}{}
+	p.Log.Info("raise notice row has no session name", "id", e.ID)
 }
 
 // countingIDs is the id of a record that counts, by session UID. An
@@ -340,7 +378,7 @@ func (p *RaisePager) dropNotices(ctx context.Context, gone []string, counting ma
 	}
 	data[sessionraise.LedgerField] = raw
 	if err := store.Update(ctx, sessionraise.NoticeLedgerName, data, obj.RV); err != nil {
-		p.Log.Info("raise notice ledger was not pruned", "error", err.Error())
+		p.noteQuiet("raise notice ledger was not pruned", err)
 	}
 }
 
@@ -391,8 +429,10 @@ func (p *RaisePager) sendNotice(ctx context.Context, priv ed25519.PrivateKey, se
 	if !ok {
 		return
 	}
+	ann, present := sess.Annotations[v1alpha1.AnnotationTitle]
+	effective, _ := sessiontitle.Effective(ann, present, sess.Spec.Title)
 	text := sessionraise.NoticeText{
-		Session: sess.Name, Title: sess.Annotations[v1alpha1.AnnotationTitle],
+		Session: sess.Name, Title: effective,
 		TakeBack: kind == sessionraise.KindTakeBack, TakenBy: entry.TakenBackBy, TakenAt: entry.TakenBackAt,
 	}
 	if kind == sessionraise.KindRaise {
@@ -411,7 +451,7 @@ func (p *RaisePager) sendNotice(ctx context.Context, priv ed25519.PrivateKey, se
 		ID: entry.ID, SessionUID: entry.UID, Kind: kind, Attempt: attempt,
 		Outcome: sessionraise.OutcomeReserved, At: at,
 	}); err != nil {
-		p.Log.Info("raise notice reservation was not written", "session", sess.Name, "error", err.Error())
+		p.noteQuiet("raise notice reservation was not written", err)
 		return
 	}
 	outcome := classifyRaiseSend(ctx, p.Sender, Notice{Title: title, Message: body})
@@ -420,11 +460,21 @@ func (p *RaisePager) sendNotice(ctx context.Context, priv ed25519.PrivateKey, se
 		Outcome: outcome, At: at,
 	}
 	if outcome == sessionraise.OutcomeSent {
-		sent.SentAt = p.now().UTC().Truncate(time.Second).Format(time.RFC3339)
+		sent.SentAt = ceilSecond(p.now().UTC()).Format(time.RFC3339)
 	}
 	if err := p.writeNotice(ctx, priv, sent); err != nil {
-		p.Log.Info("raise notice outcome was not written", "session", sess.Name, "error", err.Error())
+		p.noteQuiet("raise notice outcome was not written", err)
 	}
+}
+
+// ceilSecond rounds t up to the next whole second. A time already on a
+// whole second stays there, so sentAt is never earlier than the push.
+func ceilSecond(t time.Time) time.Time {
+	t = t.UTC()
+	if t.Nanosecond() == 0 {
+		return t
+	}
+	return t.Add(time.Second).Truncate(time.Second)
 }
 
 func noticeDue(now time.Time, cur *sessionraise.Notice) (int, bool) {
@@ -441,7 +491,13 @@ func noticeDue(now time.Time, cur *sessionraise.Notice) (int, bool) {
 		if cur.Attempt < 1 {
 			return 1, true
 		}
-		return cur.Attempt, true
+		// The wait above already returned while the reservation is younger
+		// than NoticeRetry. An older reservation counts as one Ambiguous
+		// attempt, so a keeper that never records an outcome still stops at 12.
+		if cur.Attempt >= sessionraise.NoticeAttempts {
+			return 0, false
+		}
+		return cur.Attempt + 1, true
 	}
 	if cur.Attempt >= sessionraise.NoticeAttempts {
 		return 0, false

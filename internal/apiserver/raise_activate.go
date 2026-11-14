@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/sessionraise"
@@ -33,17 +32,41 @@ func (s *Server) readNotices(ctx context.Context, cfg RaiseConfig) (*sessionrais
 }
 
 // activateRaises moves pending rows the keeper has announced. It runs when
-// dispatch is on or a profile list is configured. The ledger is written
-// before the annotation. A row that is no longer pending is left alone, so
-// a take-back wins over a later Sent.
+// dispatch is on or a profile list is configured. One pass reads the
+// operator ledger once. The informer cache is only a hint for which rows
+// to decide: a missing session is skipped, and a row is decided only when
+// it is pending or the cached annotation's state differs from the row.
+// The decision reads the live session and, after a conflict, the ledger
+// again. The ledger is written before the annotation. A row that is no
+// longer pending is left alone, so a take-back wins over a later Sent.
 func (s *Server) activateRaises(ctx context.Context) {
 	cfg, ok := s.raiseConfig()
-	if !ok || s.Live == nil || (!cfg.Dispatch && len(cfg.Profiles) == 0) {
+	if !ok || s.Live == nil || s.Client == nil || (!cfg.Dispatch && len(cfg.Profiles) == 0) {
 		return
 	}
-	var list v1alpha1.AgentSessionList
-	if err := s.Live.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
-		s.Log.Error(err, "raise activation list")
+	led, err := s.readLedger(ctx, cfg)
+	if err != nil || led == nil {
+		if err != nil {
+			s.Log.Error(err, "raise activation ledger")
+		}
+		return
+	}
+	ns := s.Policy.SessionNamespace
+	var visit []sessionraise.SessionEntry
+	for _, e := range led.Sessions {
+		if e.Name == "" || e.UID == "" {
+			continue
+		}
+		var cached v1alpha1.AgentSession
+		if s.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: e.Name}, &cached) != nil || string(cached.UID) != e.UID {
+			continue
+		}
+		if e.State != sessionraise.StatePending && annotationState(cached) == e.State {
+			continue
+		}
+		visit = append(visit, e)
+	}
+	if len(visit) == 0 {
 		return
 	}
 	notices, pub, err := s.readNotices(ctx, cfg)
@@ -55,16 +78,15 @@ func (s *Server) activateRaises(ctx context.Context) {
 		return
 	}
 	now := s.now().UTC().Truncate(time.Second)
-	for i := range list.Items {
-		s.activateOne(ctx, cfg, &list.Items[i], notices, pub, priv, now)
+	for i := range visit {
+		e := visit[i]
+		hint := &v1alpha1.AgentSession{}
+		hint.Namespace, hint.Name = ns, e.Name
+		s.activateOneDepth(ctx, cfg, hint, &e, notices, pub, priv, now, 0)
 	}
 }
 
-func (s *Server) activateOne(ctx context.Context, cfg RaiseConfig, sess *v1alpha1.AgentSession, notices *sessionraise.NoticeLedger, pub ed25519.PublicKey, priv ed25519.PrivateKey, now time.Time) {
-	s.activateOneDepth(ctx, cfg, sess, notices, pub, priv, now, 0)
-}
-
-func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1alpha1.AgentSession, notices *sessionraise.NoticeLedger, pub ed25519.PublicKey, priv ed25519.PrivateKey, now time.Time, depth int) {
+func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1alpha1.AgentSession, entry *sessionraise.SessionEntry, notices *sessionraise.NoticeLedger, pub ed25519.PublicKey, priv ed25519.PrivateKey, now time.Time, depth int) {
 	if depth > 2 || sess == nil || s.Live == nil {
 		return
 	}
@@ -72,22 +94,31 @@ func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1
 	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}, &live); err != nil {
 		return
 	}
-	entry, err := s.raiseEntry(ctx, cfg, string(live.UID))
-	if err != nil || entry == nil || entry.ID == "" {
+	if entry != nil && entry.UID != string(live.UID) {
 		return
+	}
+	if entry == nil {
+		got, err := s.raiseEntry(ctx, cfg, string(live.UID))
+		if err != nil || got == nil || got.ID == "" {
+			return
+		}
+		entry = got
 	}
 	opPub := priv.Public().(ed25519.PublicKey)
 	ann, annOK := verifiedRaiseWords(&live, opPub, entry.ID)
 	// The annotation and the ledger disagree. Re-sign from the ledger row
 	// and the verified words, including a taken-back row. An annotation that
 	// does not verify is left as it is and logged.
-	if annOK && ann.State != entry.State {
+	// A pending row is not repaired here. The gate before Finish refuses an
+	// annotation that verifies but is not pending, so that gate is the one
+	// a test can remove. A row that has already moved is re-signed to match.
+	if annOK && ann.State != entry.State && entry.State != sessionraise.StatePending {
 		if sessionraise.WordsHash(ann.Owner.Words) != entry.WordsHash || sessionraise.WordsProblem(ann.Owner.Words) != "" {
 			s.logOnce(entry.ID, "words do not verify", "raise words do not verify, so the annotation was not re-signed")
 			return
 		}
 		if err := s.writeSignedFromLedger(ctx, &live, *entry, ann.Owner.Words, ann.State, priv); errors.Is(err, errRaiseAnnotationMoved) {
-			s.activateOneDepth(ctx, cfg, &live, notices, pub, priv, now, depth+1)
+			s.activateOneDepth(ctx, cfg, &live, nil, notices, pub, priv, now, depth+1)
 		}
 		return
 	}
@@ -132,7 +163,7 @@ func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1
 	}
 	var finished sessionraise.SessionEntry
 	ok := false
-	err = s.commitLedger(ctx, cfg, func(led *sessionraise.Ledger) (bool, error) {
+	err := s.commitLedger(ctx, cfg, func(led *sessionraise.Ledger) (bool, error) {
 		got, wrote := led.Finish(string(live.UID), entry.ID, state, sentAt, activeFrom, now)
 		finished = got
 		ok = wrote
@@ -142,22 +173,23 @@ func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1
 		return
 	}
 	if !ok {
-		s.activateOneDepth(ctx, cfg, &live, notices, pub, priv, now, depth+1)
+		s.activateOneDepth(ctx, cfg, &live, nil, notices, pub, priv, now, depth+1)
 		return
 	}
-	if err := s.writeSignedFromLedger(ctx, &live, finished, ann.Owner.Words, sessionraise.StatePending, priv); errors.Is(err, errRaiseAnnotationMoved) {
-		s.activateOneDepth(ctx, cfg, &live, notices, pub, priv, now, depth+1)
-		return
-	} else if err != nil {
-		s.Log.Error(err, "raise activation annotation", "session", live.Name, "id", entry.ID)
-		return
-	}
+	// The audit line follows Finish, before the annotation write, so a
+	// conflict that the repair branch then finishes is still logged.
 	signed := recordFrom(finished, ann.Owner.Words)
 	if state == sessionraise.StateUnannounced {
 		s.logRaise("raise unannounced", signed)
-		return
+	} else {
+		s.logRaise("raise active", signed)
 	}
-	s.logRaise("raise active", signed)
+	if err := s.writeSignedFromLedger(ctx, &live, finished, ann.Owner.Words, sessionraise.StatePending, priv); errors.Is(err, errRaiseAnnotationMoved) {
+		s.activateOneDepth(ctx, cfg, &live, nil, notices, pub, priv, now, depth+1)
+		return
+	} else if err != nil {
+		s.Log.Error(err, "raise activation annotation", "session", live.Name, "id", entry.ID)
+	}
 }
 
 // annotationState is the state in the stored annotation, or "" when it does
@@ -223,9 +255,10 @@ func (a *RaiseActivator) Start(ctx context.Context) error {
 	}
 }
 
-// RaiseKeyOwner publishes the operator raise key on the leader. It retries
-// Ensure until the key is published, then keeps waiting. A missing Secret
-// is logged at most once an hour. POST refuses until Ensure succeeds.
+// RaiseKeyOwner publishes the operator raise key on the leader. It calls
+// Ensure on every tick, including after a success, so an emptied Secret is
+// filled again. A missing Secret is logged at most once an hour. POST
+// refuses until Ensure succeeds.
 type RaiseKeyOwner struct {
 	Server  *Server
 	Every   time.Duration
@@ -242,7 +275,7 @@ func (k *RaiseKeyOwner) interval() time.Duration {
 	return sessionraise.QuietRetry
 }
 
-// Start retries Ensure on a ticker, then waits until the manager stops.
+// Start calls Ensure once, then again on every tick, until the manager stops.
 func (k *RaiseKeyOwner) Start(ctx context.Context) error {
 	tick := time.NewTicker(k.interval())
 	defer tick.Stop()

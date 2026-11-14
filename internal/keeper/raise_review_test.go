@@ -3,6 +3,7 @@ package keeper
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -19,12 +21,16 @@ import (
 	"github.com/thaynes43/dev-env/internal/sessionraise"
 )
 
-type quietSink struct{ n int }
+type quietSink struct {
+	n    int
+	msgs []string
+}
 
 func (s *quietSink) Init(logr.RuntimeInfo) {}
 func (s *quietSink) Enabled(int) bool      { return true }
-func (s *quietSink) Info(int, string, ...any) {
+func (s *quietSink) Info(_ int, msg string, _ ...any) {
 	s.n++
+	s.msgs = append(s.msgs, msg)
 }
 func (s *quietSink) Error(error, string, ...any)    {}
 func (s *quietSink) WithValues(...any) logr.LogSink { return s }
@@ -425,5 +431,471 @@ func TestUncountedAnnotationDoesNotResetAttempts(t *testing.T) {
 	row := got.Find(id, sessionraise.KindRaise)
 	if row == nil || row.Attempt != 5 {
 		t.Fatalf("attempt was reset: %+v", row)
+	}
+}
+
+type sessionCounter struct {
+	client.Client
+	sessions int
+	secrets  int
+	lists    int
+}
+
+func (c *sessionCounter) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	switch obj.(type) {
+	case *v1alpha1.AgentSession:
+		c.sessions++
+	case *corev1.Secret:
+		c.secrets++
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+func (c *sessionCounter) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	c.lists++
+	return c.Client.List(ctx, list, opts...)
+}
+
+func TestGoneSessionsAreFetchedOnceAndNeverListed(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, base)
+	ctx := context.Background()
+	if err := base.Create(ctx, &v1alpha1.AgentSession{
+		ObjectMeta: metav1.ObjectMeta{Name: "reused", Namespace: "dev-agents", UID: "uid-new"},
+		Spec:       v1alpha1.AgentSessionSpec{Repo: "haynes-ops", Agent: v1alpha1.AgentClaude, Mode: v1alpha1.ModeRemote, Model: "claude-opus-5-5", Prompt: "x"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	at := when.Format(time.RFC3339)
+	writeLedger(t, base,
+		sessionraise.SessionEntry{Name: "reused", UID: "uid-old", ID: "reusednotice0001", State: sessionraise.StateTakenBack, ChangedAt: when, TakenBackBy: "human/tom", TakenBackAt: at},
+		sessionraise.SessionEntry{Name: "deleted", UID: "uid-deleted", ID: "deletednotice001", State: sessionraise.StatePending, ChangedAt: when},
+	)
+	counter := &sessionCounter{Client: base}
+	sender := &fakeRaiseSender{}
+	p := &RaisePager{
+		Client: base, Live: counter, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: sender, Now: func() time.Time { return when }, Log: logr.Discard(),
+	}
+	for i := 0; i < 4; i++ {
+		p.announce(ctx)
+	}
+	if counter.lists != 0 || counter.sessions != 2 || sender.n != 0 {
+		t.Fatalf("lists %d session gets %d notices %d", counter.lists, counter.sessions, sender.n)
+	}
+}
+
+func TestSessionReadErrorKeepsTheNoticeRow(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, base)
+	ctx := context.Background()
+	id, _ := plantRaise(t, base, "raised", "uid-err", sessionraise.StatePending, "")
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	at := when.Add(-time.Hour).Format(time.RFC3339)
+	writeLedger(t, base, sessionraise.SessionEntry{
+		Name: "raised", UID: "uid-err", ID: id, State: sessionraise.StatePending, ChangedAt: when,
+		StartSessions: true, Depth: "2", WordsHash: sessionraise.WordsHash("yes please"), PerformedBy: "session/bench", PerformedAt: at,
+	})
+	notes := &sessionraise.NoticeLedger{}
+	notes.Put(sessionraise.Notice{ID: id, SessionUID: "uid-err", Kind: sessionraise.KindRaise, Attempt: 5, Outcome: sessionraise.OutcomeFailed, At: at})
+	raw, err := notes.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := sessionraise.Kube{Reader: base, Writer: base, Namespace: sessionraise.ObjectNamespace}
+	if err := store.Update(ctx, sessionraise.NoticeLedgerName, map[string][]byte{sessionraise.LedgerField: raw}, mustRV(t, base, sessionraise.NoticeLedgerName)); err != nil {
+		t.Fatal(err)
+	}
+	sender := &fakeRaiseSender{}
+	p := &RaisePager{
+		Client: base, Live: refuseSessionGet{Client: base}, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: sender, Now: func() time.Time { return when }, Log: logr.Discard(),
+	}
+	p.announce(ctx)
+	if sender.n != 0 {
+		t.Fatalf("a failed session read sent %d", sender.n)
+	}
+	obj, err := store.Get(ctx, sessionraise.NoticeLedgerName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := sessionraise.UnmarshalNotice(obj.Data[sessionraise.LedgerField])
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := got.Find(id, sessionraise.KindRaise)
+	if row == nil || row.Attempt != 5 || row.Outcome != sessionraise.OutcomeFailed {
+		t.Fatalf("notice row: %+v", row)
+	}
+}
+
+type refuseSessionGet struct{ client.Client }
+
+func (r refuseSessionGet) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*v1alpha1.AgentSession); ok {
+		return apierrors.NewInternalError(errors.New("unavailable"))
+	}
+	return r.Client.Get(ctx, key, obj, opts...)
+}
+
+func TestIdlePassAfterStartReadsNoSecret(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, base)
+	counter := &sessionCounter{Client: base}
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	p := &RaisePager{
+		Client: base, Live: counter, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: &fakeRaiseSender{}, Now: func() time.Time { return when }, Log: logr.Discard(),
+	}
+	p.announce(context.Background())
+	if !p.keyReady || counter.secrets == 0 {
+		t.Fatal("start did not publish the keeper key")
+	}
+	counter.secrets = 0
+	p.announce(context.Background())
+	if counter.secrets != 0 {
+		t.Fatalf("idle pass read the key secret %d times", counter.secrets)
+	}
+}
+
+func TestUnnamedRaiseRowIsSkippedAndLoggedOnce(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, base)
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	writeLedger(t, base, sessionraise.SessionEntry{
+		UID: "uid-unnamed", ID: "unnamednotice001", State: sessionraise.StatePending, ChangedAt: when,
+	})
+	op := sessionraise.Kube{Reader: base, Writer: base, Namespace: sessionraise.ObjectNamespace, Secrets: map[string]bool{sessionraise.OperatorSecretName: true}}
+	if _, err := sessionraise.Ensure(context.Background(), op, sessionraise.OperatorSecretName, sessionraise.OperatorPublicName, true); err != nil {
+		t.Fatal(err)
+	}
+	counter := &sessionCounter{Client: base}
+	sink := &quietSink{}
+	p := &RaisePager{
+		Client: base, Live: counter, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: &fakeRaiseSender{}, Now: func() time.Time { return when }, Log: logr.New(sink),
+	}
+	p.announce(context.Background())
+	p.announce(context.Background())
+	if counter.lists != 0 || counter.sessions != 0 || sink.n != 1 {
+		t.Fatalf("lists %d gets %d logs %d", counter.lists, counter.sessions, sink.n)
+	}
+}
+
+func TestNoticeDueCapsWaitsAndCountsAReservation(t *testing.T) {
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-time.Hour).Format(time.RFC3339)
+	waited := now.Add(-sessionraise.NoticeRetry).Format(time.RFC3339)
+	recent := now.Add(-sessionraise.NoticeRetry + time.Second).Format(time.RFC3339)
+	cases := []struct {
+		name    string
+		cur     *sessionraise.Notice
+		attempt int
+		due     bool
+	}{
+		{name: "no row", attempt: 1, due: true},
+		{name: "sent", cur: &sessionraise.Notice{Outcome: sessionraise.OutcomeSent, Attempt: 1, At: old}, due: false},
+		{name: "failed under the cap", cur: &sessionraise.Notice{Outcome: sessionraise.OutcomeFailed, Attempt: 5, At: old}, attempt: 6, due: true},
+		{name: "failed at the cap", cur: &sessionraise.Notice{Outcome: sessionraise.OutcomeFailed, Attempt: 12, At: old}, due: false},
+		{name: "failed inside the wait", cur: &sessionraise.Notice{Outcome: sessionraise.OutcomeFailed, Attempt: 3, At: recent}, due: false},
+		{name: "failed once the wait has elapsed", cur: &sessionraise.Notice{Outcome: sessionraise.OutcomeFailed, Attempt: 3, At: waited}, attempt: 4, due: true},
+		{name: "reservation inside the wait", cur: &sessionraise.Notice{Outcome: sessionraise.OutcomeReserved, Attempt: 4, At: recent}, due: false},
+		{name: "old reservation", cur: &sessionraise.Notice{Outcome: sessionraise.OutcomeReserved, Attempt: 5, At: old}, attempt: 6, due: true},
+		{name: "old reservation at the cap", cur: &sessionraise.Notice{Outcome: sessionraise.OutcomeReserved, Attempt: 12, At: old}, due: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			attempt, due := noticeDue(now, tc.cur)
+			if due != tc.due || attempt != tc.attempt {
+				t.Fatalf("noticeDue = %d, %v; want %d, %v", attempt, due, tc.attempt, tc.due)
+			}
+		})
+	}
+}
+
+func TestFailedAttemptAdvancesAndKeepsTheRow(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, base)
+	ctx := context.Background()
+	id, _ := plantRaise(t, base, "raised", "uid-step", sessionraise.StatePending, "")
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	at := when.Format(time.RFC3339)
+	old := when.Add(-time.Hour).Format(time.RFC3339)
+	writeLedger(t, base, sessionraise.SessionEntry{
+		Name: "raised", UID: "uid-step", ID: id, State: sessionraise.StatePending, ChangedAt: when,
+		StartSessions: true, Depth: "2", WordsHash: sessionraise.WordsHash("yes please"), PerformedBy: "session/bench", PerformedAt: at,
+	})
+	notes := &sessionraise.NoticeLedger{}
+	notes.Put(sessionraise.Notice{ID: id, SessionUID: "uid-step", Kind: sessionraise.KindRaise, Attempt: 5, Outcome: sessionraise.OutcomeFailed, At: old})
+	raw, err := notes.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := sessionraise.Kube{Reader: base, Writer: base, Namespace: sessionraise.ObjectNamespace}
+	if err := store.Update(ctx, sessionraise.NoticeLedgerName, map[string][]byte{sessionraise.LedgerField: raw}, mustRV(t, base, sessionraise.NoticeLedgerName)); err != nil {
+		t.Fatal(err)
+	}
+	p := &RaisePager{
+		Client: base, Live: base, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: &fakeRaiseSender{}, Now: func() time.Time { return when }, Log: logr.Discard(),
+	}
+	p.announce(ctx)
+	obj, err := store.Get(ctx, sessionraise.NoticeLedgerName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := sessionraise.UnmarshalNotice(obj.Data[sessionraise.LedgerField])
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := got.Find(id, sessionraise.KindRaise)
+	if row == nil || row.Attempt != 6 {
+		t.Fatalf("attempt: %+v", row)
+	}
+}
+
+func TestSentAtRoundsUpToTheNextSecond(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, base)
+	ctx := context.Background()
+	id, _ := plantRaise(t, base, "raised", "uid-sec", sessionraise.StatePending, "")
+	when := time.Date(2026, 11, 13, 3, 15, 0, int(100*time.Millisecond), time.UTC)
+	at := when.Add(-time.Hour).Format(time.RFC3339)
+	writeLedger(t, base, sessionraise.SessionEntry{
+		Name: "raised", UID: "uid-sec", ID: id, State: sessionraise.StatePending, ChangedAt: when,
+		StartSessions: true, Depth: "2", WordsHash: sessionraise.WordsHash("yes please"), PerformedBy: "session/bench", PerformedAt: at,
+	})
+	p := &RaisePager{
+		Client: base, Live: base, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: &fakeRaiseSender{}, Now: func() time.Time { return when }, Log: logr.Discard(),
+	}
+	p.announce(ctx)
+	obj, err := p.store().Get(ctx, sessionraise.NoticeLedgerName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := sessionraise.UnmarshalNotice(obj.Data[sessionraise.LedgerField])
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := got.Find(id, sessionraise.KindRaise)
+	want := "2026-11-13T03:15:01Z"
+	if row == nil || row.Outcome != sessionraise.OutcomeSent || row.SentAt != want {
+		t.Fatalf("sentAt: %+v, want %s", row, want)
+	}
+}
+
+type ambiguousSender struct{}
+
+func (ambiguousSender) Send(context.Context, Notice) error { return errors.New("timeout") }
+func (ambiguousSender) SendReceipt(context.Context, Notice) (Receipt, error) {
+	return Receipt{}, errors.New("timeout")
+}
+
+func TestSentAtIsWrittenOnlyForSent(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, base)
+	ctx := context.Background()
+	id, _ := plantRaise(t, base, "raised", "uid-fail", sessionraise.StatePending, "")
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	at := when.Format(time.RFC3339)
+	writeLedger(t, base, sessionraise.SessionEntry{
+		Name: "raised", UID: "uid-fail", ID: id, State: sessionraise.StatePending, ChangedAt: when,
+		StartSessions: true, Depth: "2", WordsHash: sessionraise.WordsHash("yes please"), PerformedBy: "session/bench", PerformedAt: at,
+	})
+	p := &RaisePager{
+		Client: base, Live: base, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: ambiguousSender{}, Now: func() time.Time { return when }, Log: logr.Discard(),
+	}
+	p.announce(ctx)
+	obj, err := p.store().Get(ctx, sessionraise.NoticeLedgerName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := sessionraise.UnmarshalNotice(obj.Data[sessionraise.LedgerField])
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := got.Find(id, sessionraise.KindRaise)
+	if row == nil || row.Outcome != sessionraise.OutcomeAmbiguous || row.SentAt != "" {
+		t.Fatalf("notice: %+v", row)
+	}
+}
+
+func TestRaiseSendChecksTheSignatureAndTheWordsHash(t *testing.T) {
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	at := when.Format(time.RFC3339)
+	run := func(t *testing.T, edit func(rec sessionraise.Record, priv ed25519.PrivateKey) sessionraise.Record) {
+		t.Helper()
+		base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+		raiseObjects(t, base)
+		ctx := context.Background()
+		id, priv := plantRaise(t, base, "raised", "uid-sig", sessionraise.StatePending, "")
+		sess := &v1alpha1.AgentSession{}
+		if err := base.Get(ctx, client.ObjectKey{Namespace: "dev-agents", Name: "raised"}, sess); err != nil {
+			t.Fatal(err)
+		}
+		rec, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec = edit(rec, priv)
+		raw, err := rec.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sessionraise.Parse(string(raw)); err != nil {
+			t.Fatal(err)
+		}
+		sess.Annotations[v1alpha1.AnnotationRaise] = string(raw)
+		if err := base.Update(ctx, sess); err != nil {
+			t.Fatal(err)
+		}
+		writeLedger(t, base, sessionraise.SessionEntry{
+			Name: "raised", UID: "uid-sig", ID: id, State: sessionraise.StatePending, ChangedAt: when,
+			StartSessions: true, Depth: "2", WordsHash: sessionraise.WordsHash("yes please"), PerformedBy: "session/bench", PerformedAt: at,
+		})
+		sender := &fakeRaiseSender{}
+		p := &RaisePager{
+			Client: base, Live: base, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+			Sender: sender, Now: func() time.Time { return when }, Log: logr.Discard(),
+		}
+		p.announce(ctx)
+		if sender.n != 0 {
+			t.Fatalf("sent %d", sender.n)
+		}
+	}
+	t.Run("flipped signature byte", func(t *testing.T) {
+		run(t, func(rec sessionraise.Record, _ ed25519.PrivateKey) sessionraise.Record {
+			sig, err := base64.StdEncoding.DecodeString(rec.Sig)
+			if err != nil || len(sig) == 0 {
+				t.Fatal(err)
+			}
+			sig[0] ^= 0xff
+			rec.Sig = base64.StdEncoding.EncodeToString(sig)
+			return rec
+		})
+	})
+	t.Run("edited words and the old hash", func(t *testing.T) {
+		run(t, func(rec sessionraise.Record, priv ed25519.PrivateKey) sessionraise.Record {
+			rec.Owner.Words = "no please"
+			signed, err := sessionraise.Sign(rec, priv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return signed
+		})
+	})
+}
+
+func TestFailedNoticeWriteIsQuiet(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, base)
+	ctx := context.Background()
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	now := when
+	notes := &sessionraise.NoticeLedger{}
+	notes.Put(sessionraise.Notice{ID: "absentnotice0001", SessionUID: "uid-absent", Kind: sessionraise.KindRaise, Attempt: 1, Outcome: sessionraise.OutcomeFailed, At: when.Format(time.RFC3339)})
+	raw, err := notes.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := sessionraise.Kube{Reader: base, Writer: base, Namespace: sessionraise.ObjectNamespace}
+	if err := store.Update(ctx, sessionraise.NoticeLedgerName, map[string][]byte{sessionraise.LedgerField: raw}, mustRV(t, base, sessionraise.NoticeLedgerName)); err != nil {
+		t.Fatal(err)
+	}
+	sink := &quietSink{}
+	p := &RaisePager{
+		Client: failUpdate{Client: base, name: sessionraise.NoticeLedgerName}, Live: base,
+		Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: &fakeRaiseSender{}, Now: func() time.Time { return now }, Log: logr.New(sink),
+	}
+	p.announce(ctx)
+	if sink.n != 1 {
+		t.Fatalf("logs %d", sink.n)
+	}
+	now = when.Add(sessionraise.QuietRetry)
+	p.announce(ctx)
+	if sink.n != 1 {
+		t.Fatalf("logged again inside the hour: %d", sink.n)
+	}
+	now = when.Add(sessionraise.QuietLog)
+	p.announce(ctx)
+	if sink.n != 2 {
+		t.Fatalf("logs after an hour %d", sink.n)
+	}
+}
+
+func TestReservationWriteIsQuiet(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, base)
+	id, _ := plantRaise(t, base, "raised", "uid-res", sessionraise.StatePending, "")
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	writeLedger(t, base, sessionraise.SessionEntry{
+		Name: "raised", UID: "uid-res", ID: id, State: sessionraise.StatePending, ChangedAt: when,
+		StartSessions: true, Depth: "2", WordsHash: sessionraise.WordsHash("yes please"),
+		PerformedBy: "session/bench", PerformedAt: when.Format(time.RFC3339),
+	})
+	now := when
+	sink := &quietSink{}
+	p := &RaisePager{
+		Client: failUpdate{Client: base, name: sessionraise.NoticeLedgerName}, Live: base,
+		Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: &fakeRaiseSender{}, Now: func() time.Time { return now }, Log: logr.New(sink),
+	}
+	p.announce(context.Background())
+	if sink.n != 1 || !strings.Contains(strings.Join(sink.msgs, " "), "reservation") {
+		t.Fatalf("logs %d %v", sink.n, sink.msgs)
+	}
+	now = when.Add(sessionraise.QuietRetry)
+	p.announce(context.Background())
+	if sink.n != 1 {
+		t.Fatalf("logged again inside the hour: %d", sink.n)
+	}
+}
+
+type failNonReservedNotice struct {
+	client.Client
+}
+
+func (f failNonReservedNotice) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == sessionraise.NoticeLedgerName {
+		if led, err := sessionraise.UnmarshalNotice([]byte(cm.Data[sessionraise.LedgerField])); err == nil {
+			for _, n := range led.Items {
+				if n.Outcome != "" && n.Outcome != sessionraise.OutcomeReserved {
+					return errors.New("outcome failed")
+				}
+			}
+		}
+	}
+	return f.Client.Update(ctx, obj, opts...)
+}
+
+func TestOutcomeWriteIsQuiet(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, base)
+	id, _ := plantRaise(t, base, "raised", "uid-out", sessionraise.StatePending, "")
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	writeLedger(t, base, sessionraise.SessionEntry{
+		Name: "raised", UID: "uid-out", ID: id, State: sessionraise.StatePending, ChangedAt: when,
+		StartSessions: true, Depth: "2", WordsHash: sessionraise.WordsHash("yes please"),
+		PerformedBy: "session/bench", PerformedAt: when.Format(time.RFC3339),
+	})
+	now := when
+	sink := &quietSink{}
+	p := &RaisePager{
+		Client: failNonReservedNotice{Client: base}, Live: base,
+		Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: &fakeRaiseSender{}, Now: func() time.Time { return now }, Log: logr.New(sink),
+	}
+	p.announce(context.Background())
+	if sink.n != 1 || !strings.Contains(strings.Join(sink.msgs, " "), "outcome") {
+		t.Fatalf("logs %d %v", sink.n, sink.msgs)
+	}
+	now = when.Add(sessionraise.NoticeRetry)
+	p.announce(context.Background())
+	if sink.n != 1 {
+		t.Fatalf("logged again inside the hour: %d %v", sink.n, sink.msgs)
 	}
 }

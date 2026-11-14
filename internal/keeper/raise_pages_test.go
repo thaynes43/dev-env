@@ -139,7 +139,7 @@ func TestRaiseNoticeSendsAtAnyHour(t *testing.T) {
 	}
 }
 
-func TestRaiseNoticeSkipsUnknownProfile(t *testing.T) {
+func TestProfileRaiseIsNotSent(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
 	raiseObjects(t, c)
 	ctx := context.Background()
@@ -187,7 +187,7 @@ func TestRaiseNoticeSkipsUnknownProfile(t *testing.T) {
 	p := &RaisePager{Client: c, Live: c, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents", Sender: sender, Now: func() time.Time { return when }}
 	p.announce(ctx)
 	if sender.n != 0 {
-		t.Fatalf("sent without knowing whether the profile is workbench: %d", sender.n)
+		t.Fatalf("sent a profile raise: %d", sender.n)
 	}
 }
 

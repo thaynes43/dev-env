@@ -333,11 +333,25 @@ func (r *staleLive) Get(ctx context.Context, key types.NamespacedName, obj clien
 }
 
 func TestDepthExemptReadsTheLiveSession(t *testing.T) {
+	exempt := func(t *testing.T, liveSess *v1alpha1.AgentSession, cached *v1alpha1.AgentSession) bool {
+		t.Helper()
+		f := newFixture(t)
+		f.raiseReady(true)
+		f.sessionPod("creator", "full", 2)
+		f.putActive(f.session("creator"), true)
+		if liveSess.UID != cached.UID {
+			f.putActive(liveSess, true)
+			stored := f.session("creator")
+			liveSess.Annotations = stored.Annotations
+		}
+		f.srv.Live = &staleLive{Reader: f.c, name: "creator", sess: *liveSess}
+		c := &caller{kind: kindSession, depth: 3, parent: "creator", session: cached}
+		return f.srv.depthExempt(context.Background(), c)
+	}
 	f := newFixture(t)
 	f.raiseReady(true)
 	f.sessionPod("creator", "full", 2)
-	sess := f.session("creator")
-	f.putActive(sess, true)
+	f.putActive(f.session("creator"), true)
 	cached := f.session("creator").DeepCopy()
 	broken := cached.DeepCopy()
 	broken.Annotations[v1alpha1.AnnotationRaise] = "not-a-record"
@@ -349,6 +363,220 @@ func TestDepthExemptReadsTheLiveSession(t *testing.T) {
 	}
 	if live.n == 0 {
 		t.Fatal("depthExempt did not read the live session")
+	}
+	other := cached.DeepCopy()
+	other.UID = "uid-replaced"
+	if exempt(t, other, cached) {
+		t.Fatal("a live session with another UID was exempt")
+	}
+	relabelled := cached.DeepCopy()
+	relabelled.Labels[v1alpha1.LabelDepth] = "3"
+	f.srv.Live = &staleLive{Reader: f.c, name: "creator", sess: *relabelled}
+	if f.srv.depthExempt(context.Background(), c) {
+		t.Fatal("a live session labelled 3 was exempt")
+	}
+}
+
+type activationReads struct {
+	client.Reader
+	configMaps int
+	sessions   int
+}
+
+func (r *activationReads) Get(ctx context.Context, key types.NamespacedName, obj client.Object, opts ...client.GetOption) error {
+	switch obj.(type) {
+	case *corev1.ConfigMap:
+		r.configMaps++
+	case *v1alpha1.AgentSession:
+		r.sessions++
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
+func (r *activationReads) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*v1alpha1.AgentSessionList); ok {
+		r.sessions++
+	}
+	return r.Reader.List(ctx, list, opts...)
+}
+
+func TestActivationPassReadsTheLedgerOnce(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	for i := 0; i < 50; i++ {
+		f.sessionPod(fmt.Sprintf("idle-%02d", i), "full", 0)
+	}
+	reads := &activationReads{Reader: f.c}
+	f.srv.Live = reads
+	f.srv.activateRaises(context.Background())
+	if reads.configMaps != 1 || reads.sessions != 0 {
+		t.Fatalf("configmaps %d sessions %d", reads.configMaps, reads.sessions)
+	}
+}
+
+func TestPendingRaiseStillActivates(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.publishKeeper(pub)
+	f.sessionPod("creator", "full", 2)
+	f.putPending(f.session("creator"))
+	entry := f.ledgerEntry(string(f.session("creator").UID))
+	sentAt := entry.PerformedAt
+	notice, err := sessionraise.SignNotice(sessionraise.Notice{
+		ID: entry.ID, SessionUID: entry.UID, Kind: sessionraise.KindRaise, Attempt: 1,
+		Outcome: sessionraise.OutcomeSent, At: sentAt, SentAt: sentAt,
+	}, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.putNotice(notice)
+	at, err := time.Parse(time.RFC3339, sentAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.now = at.Add(sessionraise.EffectDelay)
+	f.srv.activateRaises(context.Background())
+	if got := f.ledgerEntry(entry.UID); got.State != sessionraise.StateActive {
+		t.Fatalf("pending row stayed %s", got.State)
+	}
+}
+
+func TestTakenBackAnnotationIsRepaired(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.publishKeeper(pub)
+	f.sessionPod("creator", "full", 2)
+	sess := f.session("creator")
+	f.putActive(sess, true)
+	cfg := f.srv.Raise.filled()
+	led, err := f.srv.readLedger(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := led.Find(string(sess.UID))
+	row.State = sessionraise.StateTakenBack
+	row.TakenBackBy = "human/" + humanSA
+	row.TakenBackAt = f.now.UTC().Format(time.RFC3339)
+	raw, err := led.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm := &corev1.ConfigMap{}
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: cfg.Namespace, Name: cfg.Ledger}, cm); err != nil {
+		t.Fatal(err)
+	}
+	cm.Data[sessionraise.LedgerField] = string(raw)
+	if err := f.c.Update(context.Background(), cm); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.activateRaises(context.Background())
+	got, err := sessionraise.Parse(f.session("creator").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil || got.State != sessionraise.StateTakenBack {
+		t.Fatalf("annotation %v %s", err, got.State)
+	}
+}
+
+// takeBackOnGet writes a take-back of creator once the ledger row is active,
+// before the Get that follows Finish returns.
+type takeBackOnGet struct {
+	client.Reader
+	f     *fixture
+	fired bool
+}
+
+func (h *takeBackOnGet) Get(ctx context.Context, key types.NamespacedName, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*v1alpha1.AgentSession); ok && key.Name == "creator" && !h.fired {
+		cfg := h.f.srv.Raise.filled()
+		cm := &corev1.ConfigMap{}
+		if err := h.Reader.Get(ctx, types.NamespacedName{Namespace: cfg.Namespace, Name: cfg.Ledger}, cm); err != nil {
+			return err
+		}
+		led, err := sessionraise.Unmarshal([]byte(cm.Data[sessionraise.LedgerField]))
+		if err != nil {
+			return err
+		}
+		uid := string(h.f.session("creator").UID)
+		row := led.Find(uid)
+		if row != nil && row.State == sessionraise.StateActive {
+			h.fired = true
+			if _, err := led.TakeBack(uid, "human/"+humanSA, h.f.now.Format(time.RFC3339), h.f.now); err != nil {
+				return err
+			}
+			raw, err := led.Marshal()
+			if err != nil {
+				return err
+			}
+			cm.Data[sessionraise.LedgerField] = string(raw)
+			if err := h.f.c.Update(ctx, cm); err != nil {
+				return err
+			}
+			priv, err := sessionraise.Load(ctx, sessionraise.Kube{Reader: h.Reader, Writer: h.f.c, Namespace: cfg.Namespace, Secrets: map[string]bool{cfg.OperatorSecret: true}}, cfg.OperatorSecret, cfg.OperatorPublic)
+			if err != nil {
+				return err
+			}
+			back := led.Find(uid)
+			signed, err := sessionraise.Sign(recordFrom(*back, "please start"), priv)
+			if err != nil {
+				return err
+			}
+			encoded, err := signed.Encode()
+			if err != nil {
+				return err
+			}
+			sess := h.f.session("creator")
+			sess.Annotations[v1alpha1.AnnotationRaise] = string(encoded)
+			if err := h.f.c.Update(ctx, sess); err != nil {
+				return err
+			}
+		}
+	}
+	return h.Reader.Get(ctx, key, obj, opts...)
+}
+
+func TestTakeBackBeforeTheActivationGetStaysTakenBack(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	keeperPub, keeperPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.publishKeeper(keeperPub)
+	f.sessionPod("creator", "full", 2)
+	f.putPending(f.session("creator"))
+	entry := f.ledgerEntry(string(f.session("creator").UID))
+	notice, err := sessionraise.SignNotice(sessionraise.Notice{
+		ID: entry.ID, SessionUID: entry.UID, Kind: sessionraise.KindRaise, Attempt: 1,
+		Outcome: sessionraise.OutcomeSent, At: entry.PerformedAt, SentAt: entry.PerformedAt,
+	}, keeperPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.putNotice(notice)
+	at, err := time.Parse(time.RFC3339, entry.PerformedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.now = at.Add(sessionraise.EffectDelay)
+	f.srv.Live = &takeBackOnGet{Reader: f.c, f: f}
+	f.srv.activateRaises(context.Background())
+	hook := f.srv.Live.(*takeBackOnGet)
+	if !hook.fired {
+		t.Fatal("the get after Finish did not see an active ledger row")
+	}
+	if got := f.ledgerEntry(entry.UID); got.State != sessionraise.StateTakenBack {
+		t.Fatalf("ledger %s", got.State)
+	}
+	ann, err := sessionraise.Parse(f.session("creator").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil || ann.State != sessionraise.StateTakenBack {
+		t.Fatalf("annotation %v %s", err, ann.State)
 	}
 }
 
@@ -517,6 +745,14 @@ func TestSentBeforeTheRaiseStaysPending(t *testing.T) {
 	f.srv.activateRaises(context.Background())
 	if got := f.ledgerEntry(entry.UID); got.State != sessionraise.StatePending {
 		t.Fatalf("early sentAt activated: %s", got.State)
+	}
+	w := f.do(http.MethodGet, apiv1.SessionPath("creator"), tokHuman, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("view: %d %s", w.Code, w.Body.String())
+	}
+	view := decode[apiv1.Session](t, w)
+	if view.Raise == nil || view.Raise.ActiveFrom != "" || view.Raise.Ignored != noticeBeforeRaise || view.Raise.State == sessionraise.StateActive {
+		t.Fatalf("early notice view: %+v", view.Raise)
 	}
 }
 
@@ -782,6 +1018,7 @@ func TestTakeBackStillSuspendsWhenTheAnnotationWriteFails(t *testing.T) {
 	if err := f.c.Update(context.Background(), pod); err != nil {
 		t.Fatal(err)
 	}
+	grant := f.activeWorkbenchGrant("target")
 	inner := f.c
 	f.srv.Client = sessionHook{Client: inner, hook: func(obj client.Object) error {
 		sess, ok := obj.(*v1alpha1.AgentSession)
@@ -803,6 +1040,9 @@ func TestTakeBackStillSuspendsWhenTheAnnotationWriteFails(t *testing.T) {
 	}
 	if f.session("target").Spec.OperatingMode != v1alpha1.OperatingModeSuspended {
 		t.Fatal("the suspend did not run")
+	}
+	if !f.grant(grant).Spec.Release {
+		t.Fatal("the grant was not released")
 	}
 }
 
@@ -1051,5 +1291,375 @@ func TestDepthHintIsOnlyWhenDispatchIsOn(t *testing.T) {
 	w = f.do(http.MethodPost, apiv1.SessionsPath, tok, task())
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "can be raised") {
 		t.Fatalf("no hint while dispatch is on: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func (f *fixture) activeWorkbenchGrant(name string) string {
+	f.t.Helper()
+	g := f.putGrant(name, func(g *v1alpha1.AccessGrant) {
+		g.Spec.Requester.Profile = "workbench"
+	})
+	f.setGrantStatus(g.Name, v1alpha1.GrantActive, nil)
+	return g.Name
+}
+
+func (f *fixture) setRaiseState(uid, state string) {
+	f.t.Helper()
+	cfg := f.srv.Raise.filled()
+	led, err := f.srv.readLedger(context.Background(), cfg)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	row := led.Find(uid)
+	if row == nil {
+		f.t.Fatal("no ledger row")
+	}
+	row.State = state
+	raw, err := led.Marshal()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	cm := &corev1.ConfigMap{}
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: cfg.Namespace, Name: cfg.Ledger}, cm); err != nil {
+		f.t.Fatal(err)
+	}
+	cm.Data[sessionraise.LedgerField] = string(raw)
+	if err := f.c.Update(context.Background(), cm); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f *fixture) rewriteAnnotation(name string, edit func(*sessionraise.Record)) {
+	f.t.Helper()
+	rec, err := sessionraise.Parse(f.session(name).Annotations[v1alpha1.AnnotationRaise])
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	edit(&rec)
+	rec.Sig = ""
+	cfg := f.srv.Raise.filled()
+	priv, err := sessionraise.Load(context.Background(), f.srv.raiseStore(cfg), cfg.OperatorSecret, cfg.OperatorPublic)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	signed, err := sessionraise.Sign(rec, priv)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	raw, err := signed.Encode()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	sess := f.session(name)
+	sess.Annotations[v1alpha1.AnnotationRaise] = string(raw)
+	if err := f.c.Update(context.Background(), sess); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f *fixture) sentNoticeDue(entry sessionraise.SessionEntry) {
+	f.t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.publishKeeper(pub)
+	notice, err := sessionraise.SignNotice(sessionraise.Notice{
+		ID: entry.ID, SessionUID: entry.UID, Kind: sessionraise.KindRaise, Attempt: 1,
+		Outcome: sessionraise.OutcomeSent, At: entry.PerformedAt, SentAt: entry.PerformedAt,
+	}, priv)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.putNotice(notice)
+	at, err := time.Parse(time.RFC3339, entry.PerformedAt)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.now = at.Add(sessionraise.EffectDelay)
+}
+
+func TestRaiseIsLoggedWhenTheAnnotationWriteFails(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	sink := &lineSink{}
+	f.srv.Log = logr.New(sink)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+		sess, ok := obj.(*v1alpha1.AgentSession)
+		if ok && sess.Annotations[v1alpha1.AnnotationRaise] != "" {
+			return errors.New("annotation write failed")
+		}
+		return nil
+	}}
+	body := f.raiseReq(string(target.UID), "", "please start sessions", sessionraise.WherePhone, true)
+	w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("raise: %d %s", w.Code, w.Body.String())
+	}
+	joined := strings.Join(sink.msgs, "\n")
+	if strings.Count(joined, "Raised target") != 1 || !strings.Contains(joined, "please start sessions") || strings.Contains(joined, " sig ") {
+		t.Fatalf("log: %s", joined)
+	}
+}
+
+func TestTakeBackLogKeepsTheVerifiedWords(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	sink := &lineSink{}
+	f.srv.Log = logr.New(sink)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	body := f.raiseReq(string(target.UID), "", "please start sessions", sessionraise.WherePhone, true)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("raise: %d %s", w.Code, w.Body.String())
+	}
+	f.srv.Client = sessionHook{Client: f.c, hook: func(obj client.Object) error {
+		sess, ok := obj.(*v1alpha1.AgentSession)
+		if !ok {
+			return nil
+		}
+		rec, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
+		if err == nil && rec.State == sessionraise.StateTakenBack {
+			return errors.New("annotation write failed")
+		}
+		return nil
+	}}
+	w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: string(target.UID)})
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("take-back: %d %s", w.Code, w.Body.String())
+	}
+	joined := strings.Join(sink.msgs, "\n")
+	if strings.Count(joined, "took back a raise of target") != 1 || !strings.Contains(joined, "please start sessions") || strings.Contains(joined, " sig ") {
+		t.Fatalf("log: %s", joined)
+	}
+}
+
+func TestRaiseActiveIsLoggedBeforeTheAnnotationWrite(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	sink := &lineSink{}
+	f.srv.Log = logr.New(sink)
+	f.sessionPod("creator", "full", 2)
+	f.putPending(f.session("creator"))
+	f.sentNoticeDue(f.ledgerEntry(string(f.session("creator").UID)))
+	f.srv.Client = &conflictOnce{Client: f.c}
+	f.srv.activateRaises(context.Background())
+	joined := strings.Join(sink.msgs, "\n")
+	if strings.Count(joined, "raise active") != 1 {
+		t.Fatalf("log: %s", joined)
+	}
+	if got := f.ledgerEntry(string(f.session("creator").UID)); got.State != sessionraise.StateActive {
+		t.Fatalf("ledger %s", got.State)
+	}
+}
+
+type conflictOnce struct {
+	client.Client
+	fired bool
+}
+
+func (h *conflictOnce) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	sess, ok := obj.(*v1alpha1.AgentSession)
+	if ok && !h.fired {
+		rec, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
+		if err == nil && rec.State == sessionraise.StateActive {
+			h.fired = true
+			return apierrors.NewConflict(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "agentsessions"}, sess.Name, errors.New("conflict"))
+		}
+	}
+	return h.Client.Update(ctx, obj, opts...)
+}
+
+func TestDepthExemptLogsARecordItDoesNotHonour(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	sink := &lineSink{}
+	f.srv.Log = logr.New(sink)
+	f.sessionPod("creator", "full", 2)
+	f.putPending(f.session("creator"))
+	c := &caller{kind: kindSession, depth: 3, parent: "creator", session: f.session("creator")}
+	if f.srv.depthExempt(context.Background(), c) {
+		t.Fatal("a pending record was exempt")
+	}
+	if f.srv.depthExempt(context.Background(), c) {
+		t.Fatal("a pending record was exempt")
+	}
+	n := 0
+	for _, msg := range sink.msgs {
+		if strings.Contains(msg, "does not grant start sessions") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("logged %d times: %v", n, sink.msgs)
+	}
+}
+
+func TestAnnotationCountsLogsARecordItDoesNotHonour(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	sink := &lineSink{}
+	f.srv.Log = logr.New(sink)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	body := f.raiseReq(string(target.UID), "", "please start sessions", sessionraise.WherePhone, true)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("raise: %d %s", w.Code, w.Body.String())
+	}
+	f.rewriteAnnotation("target", func(rec *sessionraise.Record) {
+		rec.SessionUID = "other-uid"
+	})
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusOK {
+		t.Fatalf("retry: %d %s", w.Code, w.Body.String())
+	}
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusOK {
+		t.Fatalf("second retry: %d %s", w.Code, w.Body.String())
+	}
+	n := 0
+	for _, msg := range sink.msgs {
+		if strings.Contains(msg, "raise record ignored") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("logged %d times: %v", n, sink.msgs)
+	}
+}
+
+func TestSameBodyOnAFinishedRaiseIsUsedWords(t *testing.T) {
+	for _, state := range []string{sessionraise.StateTakenBack, sessionraise.StateUnannounced} {
+		t.Run(state, func(t *testing.T) {
+			f := newFixture(t)
+			f.raiseReady(true)
+			tok := f.workbench("bench")
+			target := f.remoteTarget("target", 2)
+			body := f.raiseReq(string(target.UID), "", "please start sessions", sessionraise.WherePhone, true)
+			if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+				t.Fatalf("raise: %d %s", w.Code, w.Body.String())
+			}
+			f.setRaiseState(string(target.UID), state)
+			wantSentence(t, f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body), http.StatusConflict,
+				"session/bench already used these words for a raise. A new raise needs a new word from Tom.")
+		})
+	}
+}
+
+func TestStartSessionsRaiseRefusedWhenDispatchIsOff(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(false, "workbench")
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	body := f.raiseReq(string(target.UID), "", "please start sessions", sessionraise.WherePhone, true)
+	wantSentence(t, f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body), http.StatusForbidden, raiseOff)
+}
+
+func TestVerifiedNonPendingAnnotationDoesNotActivate(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	f.sessionPod("creator", "full", 2)
+	f.putPending(f.session("creator"))
+	f.rewriteAnnotation("creator", func(rec *sessionraise.Record) {
+		rec.State = sessionraise.StateActive
+	})
+	entry := f.ledgerEntry(string(f.session("creator").UID))
+	f.sentNoticeDue(entry)
+	f.srv.activateRaises(context.Background())
+	if got := f.ledgerEntry(entry.UID); got.State != sessionraise.StatePending {
+		t.Fatalf("a non-pending annotation activated the row: %s", got.State)
+	}
+}
+
+func TestPendingAnnotationWithOtherWordsDoesNotActivate(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	f.sessionPod("creator", "full", 2)
+	f.putPending(f.session("creator"))
+	f.rewriteAnnotation("creator", func(rec *sessionraise.Record) {
+		rec.Owner.Words = "other words please"
+		rec.Owner.WordsHash = sessionraise.WordsHash(rec.Owner.Words)
+	})
+	entry := f.ledgerEntry(string(f.session("creator").UID))
+	f.sentNoticeDue(entry)
+	f.srv.activateRaises(context.Background())
+	if got := f.ledgerEntry(entry.UID); got.State != sessionraise.StatePending {
+		t.Fatalf("words that do not match the ledger activated the row: %s", got.State)
+	}
+}
+
+func TestTakeBackReleasesAndSuspendsWhenTheKeyIsUnreadable(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true, "workbench")
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 0)
+	body := f.raiseReq(string(target.UID), "workbench", "raise then stop", sessionraise.WherePhone, false)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("raise: %d %s", w.Code, w.Body.String())
+	}
+	pod := &corev1.Pod{}
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "target"}, pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Spec.ServiceAccountName = templates.WorkbenchServiceAccount
+	if err := f.c.Update(context.Background(), pod); err != nil {
+		t.Fatal(err)
+	}
+	grant := f.activeWorkbenchGrant("target")
+	sec := &corev1.Secret{}
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionraise.ObjectNamespace, Name: sessionraise.OperatorSecretName}, sec); err != nil {
+		t.Fatal(err)
+	}
+	sec.Data = map[string][]byte{}
+	if err := f.c.Update(context.Background(), sec); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: string(target.UID)})
+	if w.Code != http.StatusOK {
+		t.Fatalf("take-back: %d %s", w.Code, w.Body.String())
+	}
+	if f.ledgerEntry(string(target.UID)).State != sessionraise.StateTakenBack {
+		t.Fatal("ledger was not taken back")
+	}
+	if f.session("target").Spec.OperatingMode != v1alpha1.OperatingModeSuspended {
+		t.Fatal("the suspend did not run")
+	}
+	if !f.grant(grant).Spec.Release {
+		t.Fatal("the grant was not released")
+	}
+}
+
+func TestTakeBackReleasesAndSuspendsWhenTheAnnotationDoesNotCount(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true, "workbench")
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 0)
+	body := f.raiseReq(string(target.UID), "workbench", "raise then stop", sessionraise.WherePhone, false)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("raise: %d %s", w.Code, w.Body.String())
+	}
+	pod := &corev1.Pod{}
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "target"}, pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Spec.ServiceAccountName = templates.WorkbenchServiceAccount
+	if err := f.c.Update(context.Background(), pod); err != nil {
+		t.Fatal(err)
+	}
+	grant := f.activeWorkbenchGrant("target")
+	sess := f.session("target")
+	sess.Annotations[v1alpha1.AnnotationRaise] = "not-a-record"
+	if err := f.c.Update(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: string(target.UID)})
+	if w.Code != http.StatusOK {
+		t.Fatalf("take-back: %d %s", w.Code, w.Body.String())
+	}
+	if f.session("target").Spec.OperatingMode != v1alpha1.OperatingModeSuspended {
+		t.Fatal("the suspend did not run")
+	}
+	if !f.grant(grant).Spec.Release {
+		t.Fatal("the grant was not released")
 	}
 }
