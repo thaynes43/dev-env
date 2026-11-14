@@ -291,6 +291,9 @@ type Server struct {
 	// raiseIgnored remembers an ignored record's id and reason so the
 	// operator logs that pair once.
 	raiseIgnored sync.Map
+	// raiseLogged remembers a state-change line's record id and state so
+	// the operator logs that pair once, from whichever place first sees it.
+	raiseLogged sync.Map
 
 	// createMu serialises this replica's creates, so its idempotency,
 	// child-count, grant-merge and pending-grant checks see each other's writes.

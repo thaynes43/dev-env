@@ -139,8 +139,20 @@ func (p *RaisePager) announce(ctx context.Context) {
 		return
 	}
 	now := p.now().UTC().Truncate(time.Second)
+	p.pruneMemory(led)
 	var need []sessionraise.SessionEntry
 	for _, e := range led.Sessions {
+		// A gone session, and a nameless row already logged, need no notice.
+		// Skip them before the key is loaded and before any further read.
+		if e.Name == "" {
+			if !p.unnamedSeen(e) {
+				p.logUnnamed(e)
+			}
+			continue
+		}
+		if p.knownGone(e.UID) {
+			continue
+		}
 		if rowNeedsNotice(now, e, notices) {
 			need = append(need, e)
 		}
@@ -290,7 +302,63 @@ func (p *RaisePager) rememberGone(uid string) {
 	if p.goneUID == nil {
 		p.goneUID = map[string]struct{}{}
 	}
+	if _, ok := p.goneUID[uid]; ok {
+		return
+	}
 	p.goneUID[uid] = struct{}{}
+	p.Log.Info("raise notice session is gone", "uid", uid)
+}
+
+func (p *RaisePager) unnamedSeen(e sessionraise.SessionEntry) bool {
+	key := e.UID
+	if key == "" {
+		key = e.ID
+	}
+	if key == "" || p.unnamedLogged == nil {
+		return false
+	}
+	_, ok := p.unnamedLogged[key]
+	return ok
+}
+
+// pruneMemory drops remembered UIDs and ids that the operator ledger no
+// longer holds. goneUID is keyed by UID. unnamedLogged is keyed by UID or
+// id. profileLogged is keyed by id.
+func (p *RaisePager) pruneMemory(led *sessionraise.Ledger) {
+	uids := map[string]struct{}{}
+	ids := map[string]struct{}{}
+	if led != nil {
+		for _, e := range led.Sessions {
+			if e.UID != "" {
+				uids[e.UID] = struct{}{}
+			}
+			if e.ID != "" {
+				ids[e.ID] = struct{}{}
+			}
+		}
+	}
+	both := map[string]struct{}{}
+	for k := range uids {
+		both[k] = struct{}{}
+	}
+	for k := range ids {
+		both[k] = struct{}{}
+	}
+	p.goneUID = keepMemory(p.goneUID, uids)
+	p.unnamedLogged = keepMemory(p.unnamedLogged, both)
+	p.profileLogged = keepMemory(p.profileLogged, ids)
+}
+
+func keepMemory(set, allow map[string]struct{}) map[string]struct{} {
+	if len(set) == 0 {
+		return set
+	}
+	for k := range set {
+		if _, ok := allow[k]; !ok {
+			delete(set, k)
+		}
+	}
+	return set
 }
 
 func (p *RaisePager) logUnnamed(e sessionraise.SessionEntry) {
@@ -437,16 +505,37 @@ func (p *RaisePager) sendNotice(ctx context.Context, priv ed25519.PrivateKey, se
 	}
 	if kind == sessionraise.KindRaise {
 		text.Performer = rec.PerformedBy
-		text.From = rec.FromProfile
 		text.Profile = rec.Profile
-		text.StartSessions = rec.StartSessions
 		text.Words = rec.Owner.Words
 		text.Where = rec.Owner.Where
 		text.SaidAt = rec.Owner.SaidAt
 		text.Effect = atTime.Add(sessionraise.EffectDelay).Format(time.RFC3339)
 	}
-	title, body := sessionraise.Message(text, summonRedact)
+	title, body, err := sessionraise.Message(text, summonRedact)
+	if err != nil {
+		return
+	}
+	// A body over the phone's limit is rebuilt once, without the title
+	// sentence. The words are never cut. A body that is still too long is
+	// not sent; the outcome is Failed.
+	if len(body) > sessionraise.NoticeBodyMax && text.Title != "" {
+		text.Title = ""
+		title, body, err = sessionraise.Message(text, summonRedact)
+		if err != nil {
+			return
+		}
+	}
 	at := atTime.Format(time.RFC3339)
+	if len(body) > sessionraise.NoticeBodyMax {
+		p.Log.Info("raise notice is too long for the phone", "id", entry.ID)
+		if err := p.writeNotice(ctx, priv, sessionraise.Notice{
+			ID: entry.ID, SessionUID: entry.UID, Kind: kind, Attempt: attempt,
+			Outcome: sessionraise.OutcomeFailed, At: at,
+		}); err != nil {
+			p.noteQuiet("raise notice outcome was not written", err)
+		}
+		return
+	}
 	if err := p.writeNotice(ctx, priv, sessionraise.Notice{
 		ID: entry.ID, SessionUID: entry.UID, Kind: kind, Attempt: attempt,
 		Outcome: sessionraise.OutcomeReserved, At: at,

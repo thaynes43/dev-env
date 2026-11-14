@@ -22,6 +22,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/grantattest"
+	"github.com/thaynes43/dev-env/internal/keeper"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/sessionraise"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
@@ -88,6 +89,7 @@ const (
 	raiseWordsLong     = "Tom's words must fit in 300 characters so the notice shows them whole."
 	raiseWordsControl  = "Tom's words must be plain text, with no control or format characters."
 	raiseWordsTime     = "The time you give for Tom's words must be within the last 24 hours. Ask him again."
+	raiseNoticeLong    = "Tom's words are too long for the phone notice once links are removed. Shorten them."
 	raiseTooBig        = "This raise does not fit in its record. Shorten the words or the reference."
 	raiseNeedsOne      = "A raise names a profile or the right to start sessions."
 	raiseNeedsUID      = "A raise names the session UID it read. Read the session and send that UID."
@@ -191,6 +193,12 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 		Where: req.Owner.Where, SaidAt: saidAt.UTC().Truncate(time.Second).Format(time.RFC3339),
 		Ref: req.Owner.Ref, OwnerSession: ownerSession(c),
 	}
+	// Before the word is spent. The title and the effect time are the
+	// longest the notice can grow to, not the session's title today.
+	fits, err := sessionraise.NoticeFits(fresh.Name, c.String(), in.Where, in.SaidAt, req.Owner.Words, keeper.NoticeRedact)
+	if err != nil || !fits {
+		return 0, nil, raiseInvalid(raiseNoticeLong)
+	}
 	var entry sessionraise.SessionEntry
 	var same bool
 	writeLedger := false
@@ -216,6 +224,11 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 	})
 	if err != nil {
 		return 0, nil, s.raiseLedgerErr(err, c, fresh.Name)
+	}
+	// A retry can be the first place that sees a raise whose ledger write
+	// was applied and whose answer was lost. The line is once per id and state.
+	if same && entry.State == sessionraise.StatePending {
+		s.logRaiseState(raisedAudit(fresh.Name, entry.Profile), recordFrom(entry, req.Owner.Words))
 	}
 	if same && s.annotationCounts(fresh, pub, &entry) {
 		v := s.withUsageRollup(ctx, fresh, c, false)
@@ -264,11 +277,7 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 	// The raise is logged once the ledger write has succeeded. A failed
 	// annotation write does not wait for a retry before the line exists.
 	if !same && writeLedger {
-		target := "start sessions"
-		if req.Profile != "" {
-			target = req.Profile
-		}
-		s.logRaise(fmt.Sprintf("Raised %s to %s. Tom is being told; it takes effect two minutes after the notice is accepted, unless taken back.", fresh.Name, target), signed)
+		s.logRaiseState(raisedAudit(fresh.Name, entry.Profile), signed)
 	}
 	if err := s.writeRaiseAnnotation(ctx, client.ObjectKeyFromObject(fresh), fresh.UID, string(raw)); err != nil {
 		return 0, nil, raiseUnavailable("The raise was recorded but the session annotation could not be written. Send the same request again.")
@@ -329,6 +338,9 @@ func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http
 	var entry sessionraise.SessionEntry
 	var wrote bool
 	err = s.commitLedger(ctx, cfg, func(led *sessionraise.Ledger) (bool, error) {
+		// wrote belongs to this attempt. A later attempt that finds the
+		// row already taken back did not write it, and must not log it.
+		wrote = false
 		cur := led.Find(string(fresh.UID))
 		if cur == nil {
 			return false, sessionraise.ErrNoEntry
@@ -365,7 +377,7 @@ func (s *Server) deleteRaise(ctx context.Context, _ http.ResponseWriter, r *http
 		}
 	}
 	if wrote {
-		s.logRaise("took back a raise of "+fresh.Name, recordFrom(entry, words))
+		s.logRaiseState("took back a raise of "+fresh.Name, recordFrom(entry, words))
 	}
 	if keyErr != nil {
 		s.Log.Info("The take-back stands. The session annotation could not be re-signed.", "session", fresh.Name, "error", keyErr.Error())
@@ -488,11 +500,18 @@ func (s *Server) annotationCounts(sess *v1alpha1.AgentSession, pub ed25519.Publi
 	return true
 }
 
+// annotationTakenBack reports whether the stored annotation is already the
+// re-signed taken-back record. It does not log: nothing is being honoured.
+// "raise record ignored" is only for a record a reader is asked to honour.
 func (s *Server) annotationTakenBack(sess *v1alpha1.AgentSession, pub ed25519.PublicKey, entry *sessionraise.SessionEntry) bool {
-	if entry == nil || entry.State != sessionraise.StateTakenBack {
+	if sess == nil || entry == nil || entry.State != sessionraise.StateTakenBack {
 		return false
 	}
-	return s.annotationCounts(sess, pub, entry)
+	rec, err := sessionraise.Parse(sess.Annotations[v1alpha1.AnnotationRaise])
+	if err != nil {
+		return false
+	}
+	return sessionraise.Counts(rec, string(sess.UID), pub, entry) == ""
 }
 
 func (s *Server) raiseTarget(ctx context.Context, r *http.Request) (*v1alpha1.AgentSession, error) {
@@ -1152,7 +1171,7 @@ func (s *Server) overlayNotice(ctx context.Context, cfg RaiseConfig, view *apiv1
 	if err != nil || notices == nil {
 		return
 	}
-	view.NoticeAttempt = sessionraise.AttemptCount(*entry, notices.Items, keeperPub)
+	view.NoticeAttempt = sessionraise.AttemptCount(s.now(), *entry, notices.Items, keeperPub)
 	sent, ok := sessionraise.SentTime(*entry, notices.Items, keeperPub)
 	if !ok {
 		return
@@ -1249,31 +1268,67 @@ func (s *Server) raisingOff() bool {
 // refuseRaisedChild refuses a child admitted through the depth exemption
 // when the child's profile, named or the templates' default, runs as the
 // workbench account or a named coordinator. A failed templates read refuses
-// the create. The sentence is design 8.2.
-func (s *Server) refuseRaisedChild(ctx context.Context, sess *v1alpha1.AgentSession) error {
+// the create. The sentence is design 8.2. The name it returns is the one
+// that check resolved, from this single templates read.
+func (s *Server) refuseRaisedChild(ctx context.Context, sess *v1alpha1.AgentSession) (string, error) {
 	const sentence = "A raised session's child never runs as the workbench or a named coordinator; name another profile."
 	if s.Templates == nil {
-		return raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile the child runs as.")
+		return "", raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile the child runs as.")
 	}
 	t, err := s.Templates(ctx)
 	if err != nil || t == nil {
-		return raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile the child runs as.")
+		return "", raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile the child runs as.")
 	}
 	name := ""
 	if sess != nil {
 		name = sess.Spec.Profile
 	}
-	if name == "" {
-		name = t.DefaultProfile
-	}
-	_, profile, err := t.Profile(name)
+	resolved, profile, err := t.Profile(name)
 	if err != nil {
-		return raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile the child runs as.")
+		return "", raiseUnavailable("The templates cannot be read, so the operator cannot tell what profile the child runs as.")
 	}
 	if profile.ServiceAccount == templates.WorkbenchServiceAccount || templates.IsCoordinatorServiceAccount(profile.ServiceAccount) {
-		return forbidden("%s", sentence)
+		return "", forbidden("%s", sentence)
 	}
-	return nil
+	return resolved, nil
+}
+
+// raisedAudit is the line for a recorded raise. It does not say Tom is
+// being told: the notice waits until the annotation counts.
+func raisedAudit(name, profile string) string {
+	target := "start sessions"
+	if profile != "" {
+		target = profile
+	}
+	return fmt.Sprintf("Raised %s to %s. The raise was recorded; it takes effect two minutes after the notice is accepted, unless taken back.", name, target)
+}
+
+// observedAudit is the line for a ledger state the repair brings the
+// annotation up to. Pending is logged by the raise itself.
+func observedAudit(name, state string) string {
+	switch state {
+	case sessionraise.StateActive:
+		return "raise active"
+	case sessionraise.StateUnannounced:
+		return "raise unannounced"
+	case sessionraise.StateTakenBack:
+		return "took back a raise of " + name
+	default:
+		return ""
+	}
+}
+
+// logRaiseState writes one state-change line per record id and state. The
+// write and the repair branch both call it; whichever sees the state first
+// logs it.
+func (s *Server) logRaiseState(msg string, rec sessionraise.Record) {
+	if s == nil || msg == "" || rec.ID == "" || rec.State == "" {
+		return
+	}
+	if _, loaded := s.raiseLogged.LoadOrStore(rec.ID+"\n"+rec.State, struct{}{}); loaded {
+		return
+	}
+	s.logRaise(msg, rec)
 }
 
 func (s *Server) logRaise(msg string, rec sessionraise.Record) {

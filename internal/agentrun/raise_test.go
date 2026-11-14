@@ -1,11 +1,14 @@
 package agentrun
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"text/tabwriter"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/sessionraise"
@@ -208,9 +211,40 @@ func TestShowOfAnUnraisedSessionMatchesThePlainProfile(t *testing.T) {
 		apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "no such route")
 	}
 	h.mustRun(ExitOK, "show", "plain")
-	if strings.Contains(h.stdout.String(), "(at creation)") || !strings.Contains(h.stdout.String(), "full") {
-		t.Fatalf("unraised show:\n%s", h.stdout.String())
+	got := h.stdout.Bytes()
+	want := showWithoutRaise(s)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("show differs from the output without this feature:\n got:\n%s\nwant:\n%s", got, want)
 	}
+}
+
+// showWithoutRaise is the show text for a session that was never raised: the
+// lines show printed before this feature, with no raise row and no
+// "(at creation)" on the profile.
+func showWithoutRaise(s apiv1.Session) []byte {
+	var buf bytes.Buffer
+	tw := tabwriter.NewWriter(&buf, 0, 0, 1, ' ', 0)
+	row := func(k, format string, args ...any) {
+		_, _ = fmt.Fprintf(tw, "%s:\t%s\n", k, fmt.Sprintf(format, args...))
+	}
+	row("name", "%s", s.Name)
+	row("phase", "%s", s.Phase)
+	row("repo", "%s from %s", s.Repo, "origin/main")
+	row("agent", "%s %s, %s, %s mode", s.Agent, s.Model, effortText(s.Effort), s.Mode)
+	row("size", "%s", s.Size)
+	row("profile", "%s", s.Profile)
+	row("parent", "%s", s.Parent)
+	row("created", "%s (%s ago)", s.CreatedAt.UTC().Format(time.RFC3339), age(testNow, s.CreatedAt))
+	row("Task claims", "Unknown (%s)", "NotReported")
+	row("Actual model", "%s", "Unknown")
+	row("Requested model", "%s", s.Model)
+	row("Initial task cost", "%s", "Unknown")
+	row("Input tokens", "%s", "Unknown")
+	row("Output tokens", "%s", "Unknown")
+	row("Cache read tokens", "%s", "Unknown")
+	row("Cache create tokens", "%s", "Unknown")
+	_ = tw.Flush()
+	return buf.Bytes()
 }
 
 func TestShowSaysProfileAtCreation(t *testing.T) {

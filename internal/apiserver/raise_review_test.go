@@ -999,7 +999,19 @@ func (s *lineSink) Init(logr.RuntimeInfo) {}
 func (s *lineSink) Enabled(int) bool      { return true }
 func (s *lineSink) Info(_ int, msg string, keys ...any) {
 	s.n++
-	s.msgs = append(s.msgs, msg+" "+strings.TrimSpace(strings.ReplaceAll(fmt.Sprint(keys...), "\n", " ")))
+	var b strings.Builder
+	b.WriteString(msg)
+	for i := 0; i+1 < len(keys); i += 2 {
+		fmt.Fprintf(&b, " %v=%v", keys[i], keys[i+1])
+	}
+	s.msgs = append(s.msgs, strings.ReplaceAll(b.String(), "\n", " "))
+}
+
+func assertNoRaiseSignature(t *testing.T, joined string, rec sessionraise.Record) {
+	t.Helper()
+	if strings.Contains(joined, "sig=") || strings.Contains(joined, "keyId=") || (rec.Sig != "" && strings.Contains(joined, rec.Sig)) || (rec.KeyID != "" && strings.Contains(joined, rec.KeyID)) {
+		t.Fatalf("log carries a signature: %s", joined)
+	}
 }
 func (s *lineSink) Error(error, string, ...any)    {}
 func (s *lineSink) WithValues(...any) logr.LogSink { return s }
@@ -1294,10 +1306,15 @@ func TestRaiseLogNamesTheRecordOnceAndNotTheSignature(t *testing.T) {
 		t.Fatalf("raise: %d %s", w.Code, w.Body.String())
 	}
 	raw := f.session("target").Annotations[v1alpha1.AnnotationRaise]
+	rec, err := sessionraise.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
 	joined := strings.Join(sink.msgs, "\n")
-	if strings.Count(joined, "Raised target") != 1 || !strings.Contains(joined, f.ledgerEntry(string(target.UID)).ID) || strings.Contains(joined, raw) || strings.Contains(joined, " sig ") {
+	if strings.Count(joined, "Raised target") != 1 || !strings.Contains(joined, f.ledgerEntry(string(target.UID)).ID) || strings.Contains(joined, raw) {
 		t.Fatalf("log: %s", joined)
 	}
+	assertNoRaiseSignature(t, joined, rec)
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: sessionraise.ObjectNamespace, Name: sessionraise.LedgerName}}
 	if err := f.c.Delete(context.Background(), cm); err != nil {
 		t.Fatal(err)
@@ -1583,9 +1600,10 @@ func TestRaiseIsLoggedWhenTheAnnotationWriteFails(t *testing.T) {
 		t.Fatalf("raise: %d %s", w.Code, w.Body.String())
 	}
 	joined := strings.Join(sink.msgs, "\n")
-	if strings.Count(joined, "Raised target") != 1 || !strings.Contains(joined, "please start sessions") || strings.Contains(joined, " sig ") {
+	if strings.Count(joined, "Raised target") != 1 || !strings.Contains(joined, "The raise was recorded") || strings.Contains(joined, "Tom is being told") || !strings.Contains(joined, "please start sessions") {
 		t.Fatalf("log: %s", joined)
 	}
+	assertNoRaiseSignature(t, joined, sessionraise.Record{})
 }
 
 func TestTakeBackLogKeepsTheVerifiedWords(t *testing.T) {
@@ -1615,8 +1633,212 @@ func TestTakeBackLogKeepsTheVerifiedWords(t *testing.T) {
 		t.Fatalf("take-back: %d %s", w.Code, w.Body.String())
 	}
 	joined := strings.Join(sink.msgs, "\n")
-	if strings.Count(joined, "took back a raise of target") != 1 || !strings.Contains(joined, "please start sessions") || strings.Contains(joined, " sig ") {
+	if strings.Count(joined, "took back a raise of target") != 1 || !strings.Contains(joined, "please start sessions") {
 		t.Fatalf("log: %s", joined)
+	}
+	assertNoRaiseSignature(t, joined, sessionraise.Record{})
+}
+
+func TestPlainTakeBackLogsNoIgnoredRecord(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	sink := &lineSink{}
+	f.srv.Log = logr.New(sink)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	body := f.raiseReq(string(target.UID), "", "please start sessions", sessionraise.WherePhone, true)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("raise: %d %s", w.Code, w.Body.String())
+	}
+	w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: string(target.UID)})
+	if w.Code != http.StatusOK {
+		t.Fatalf("take-back: %d %s", w.Code, w.Body.String())
+	}
+	ann, err := sessionraise.Parse(f.session("target").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil || ann.State != sessionraise.StateTakenBack {
+		t.Fatalf("annotation %v %s", err, ann.State)
+	}
+	joined := strings.Join(sink.msgs, "\n")
+	if strings.Contains(joined, "raise record ignored") {
+		t.Fatalf("a plain take-back logged an ignored record: %s", joined)
+	}
+}
+
+func TestLostRaiseAnswerIsLoggedOnTheRetry(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	sink := &lineSink{}
+	f.srv.Log = logr.New(sink)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	inner := f.c
+	var fired bool
+	f.srv.Client = sessionHook{Client: inner, hook: func(obj client.Object) error {
+		cm, ok := obj.(*corev1.ConfigMap)
+		if !ok || cm.Name != sessionraise.LedgerName || fired {
+			return nil
+		}
+		fired = true
+		if err := inner.Update(context.Background(), cm); err != nil {
+			return err
+		}
+		return errors.New("timeout")
+	}}
+	body := f.raiseReq(string(target.UID), "", "please start sessions", sessionraise.WherePhone, true)
+	w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("lost answer: %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(strings.Join(sink.msgs, "\n"), "Raised target") {
+		t.Fatal("the lost answer was logged before the retry")
+	}
+	f.srv.Client = inner
+	w = f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body)
+	if w.Code != http.StatusAccepted && w.Code != http.StatusOK {
+		t.Fatalf("retry: %d %s", w.Code, w.Body.String())
+	}
+	joined := strings.Join(sink.msgs, "\n")
+	if strings.Count(joined, "Raised target") != 1 || !strings.Contains(joined, "The raise was recorded") || strings.Contains(joined, "Tom is being told") {
+		t.Fatalf("log: %s", joined)
+	}
+}
+
+func TestTakeBackLogFollowsOnlyTheWritingAttempt(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	body := f.raiseReq(string(target.UID), "", "please start sessions", sessionraise.WherePhone, true)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body); w.Code != http.StatusAccepted {
+		t.Fatalf("raise: %d %s", w.Code, w.Body.String())
+	}
+	sink := &lineSink{}
+	f.srv.Log = logr.New(sink)
+	inner := f.c
+	var fired bool
+	f.srv.Client = sessionHook{Client: inner, hook: func(obj client.Object) error {
+		cm, ok := obj.(*corev1.ConfigMap)
+		if !ok || cm.Name != sessionraise.LedgerName || fired {
+			return nil
+		}
+		fired = true
+		cfg := f.srv.Raise.filled()
+		led, err := sessionraise.Unmarshal([]byte(cm.Data[sessionraise.LedgerField]))
+		if err != nil {
+			return err
+		}
+		if _, err := led.TakeBack(string(target.UID), "human/"+humanSA, f.now.Format(time.RFC3339), f.now); err != nil {
+			return err
+		}
+		raw, err := led.Marshal()
+		if err != nil {
+			return err
+		}
+		stored := &corev1.ConfigMap{}
+		if err := inner.Get(context.Background(), types.NamespacedName{Namespace: cfg.Namespace, Name: cfg.Ledger}, stored); err != nil {
+			return err
+		}
+		stored.Data[sessionraise.LedgerField] = string(raw)
+		if err := inner.Update(context.Background(), stored); err != nil {
+			return err
+		}
+		return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, cm.Name, errors.New("other replica"))
+	}}
+	w := f.do(http.MethodDelete, apiv1.SessionRaisePath("target"), tokHuman, apiv1.TakeBackRequest{ExpectUID: string(target.UID)})
+	if w.Code != http.StatusOK {
+		t.Fatalf("take-back: %d %s", w.Code, w.Body.String())
+	}
+	if !fired {
+		t.Fatal("the ledger write did not conflict")
+	}
+	if f.ledgerEntry(string(target.UID)).State != sessionraise.StateTakenBack {
+		t.Fatal("ledger was not taken back")
+	}
+	joined := strings.Join(sink.msgs, "\n")
+	if strings.Contains(joined, "took back") {
+		t.Fatalf("logged a take-back this attempt did not write: %s", joined)
+	}
+}
+
+func TestRepairLogsTheActiveState(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.publishKeeper(pub)
+	sink := &lineSink{}
+	f.srv.Log = logr.New(sink)
+	f.sessionPod("creator", "full", 2)
+	f.putPending(f.session("creator"))
+	f.setRaiseState(string(f.session("creator").UID), sessionraise.StateActive)
+	f.srv.activateRaises(context.Background())
+	ann, err := sessionraise.Parse(f.session("creator").Annotations[v1alpha1.AnnotationRaise])
+	if err != nil || ann.State != sessionraise.StateActive {
+		t.Fatalf("annotation %v %s", err, ann.State)
+	}
+	if strings.Count(strings.Join(sink.msgs, "\n"), "raise active") != 1 {
+		t.Fatalf("log: %s", strings.Join(sink.msgs, "\n"))
+	}
+}
+
+func TestExemptCreateStoresTheResolvedProfile(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbenchAt("creator", 2)
+	f.putActive(f.session("creator"), true)
+	w := f.do(http.MethodPost, apiv1.SessionsPath, tok, task())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("child: %d %s", w.Code, w.Body.String())
+	}
+	child := f.session(decode[apiv1.Session](t, w).Name)
+	if child.Spec.Profile != f.tmpl.DefaultProfile || child.Spec.Profile == "" {
+		t.Fatalf("unnamed child profile %q, default %q", child.Spec.Profile, f.tmpl.DefaultProfile)
+	}
+	req := task()
+	req.Profile = "dev"
+	w = f.do(http.MethodPost, apiv1.SessionsPath, tok, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("named child: %d %s", w.Code, w.Body.String())
+	}
+	named := f.session(decode[apiv1.Session](t, w).Name)
+	if named.Spec.Profile != "dev" {
+		t.Fatalf("named child profile %q", named.Spec.Profile)
+	}
+}
+
+func TestExemptCreateResolvesTheProfileOnce(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	calls := 0
+	real := f.srv.Templates
+	f.srv.Templates = func(ctx context.Context) (*templates.Templates, error) {
+		calls++
+		got, err := real(ctx)
+		if err != nil || got == nil || calls < 2 {
+			return got, err
+		}
+		next := *got
+		profiles := make(map[string]templates.Profile, len(got.Profiles))
+		for name, profile := range got.Profiles {
+			profiles[name] = profile
+		}
+		def := profiles[got.DefaultProfile]
+		def.ServiceAccount = templates.WorkbenchServiceAccount
+		profiles[got.DefaultProfile] = def
+		next.Profiles = profiles
+		return &next, nil
+	}
+	tok := f.workbenchAt("creator", 2)
+	f.putActive(f.session("creator"), true)
+	w := f.do(http.MethodPost, apiv1.SessionsPath, tok, task())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("child: %d %s (templates read %d times)", w.Code, w.Body.String(), calls)
+	}
+	child := f.session(decode[apiv1.Session](t, w).Name)
+	if child.Spec.Profile != "full" {
+		t.Fatalf("profile %q after %d template reads", child.Spec.Profile, calls)
 	}
 }
 
@@ -1845,5 +2067,59 @@ func TestTakeBackReleasesAndSuspendsWhenTheAnnotationDoesNotCount(t *testing.T) 
 	}
 	if !f.grant(grant).Spec.Release {
 		t.Fatal("the grant was not released")
+	}
+}
+
+func TestWordsThatExpandPastTheNoticeAreRefusedBeforeTheWordIsSpent(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	tok := f.workbench("bench")
+	target := f.remoteTarget("target", 2)
+	words := strings.TrimSpace(strings.Repeat("a.io ", 60))
+	if sessionraise.WordsProblem(words) != "" {
+		t.Fatalf("words rejected before the notice check: %s", sessionraise.WordsProblem(words))
+	}
+	body := f.raiseReq(string(target.UID), "", words, sessionraise.WherePhone, true)
+	wantSentence(t, f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body), http.StatusUnprocessableEntity, raiseNoticeLong)
+	led, err := f.srv.readLedger(context.Background(), f.srv.Raise.filled())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(led.Words) != 0 || len(led.Sessions) != 0 {
+		t.Fatalf("a refused raise spent a word: %+v", led)
+	}
+	wantSentence(t, f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, body), http.StatusUnprocessableEntity, raiseNoticeLong)
+	short := f.raiseReq(string(target.UID), "", "please start sessions", sessionraise.WherePhone, true)
+	if w := f.do(http.MethodPost, apiv1.SessionRaisePath("target"), tok, short); w.Code != http.StatusAccepted {
+		t.Fatalf("short raise: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestViewShowsTheAgedReservation(t *testing.T) {
+	f := newFixture(t)
+	f.raiseReady(true)
+	f.sessionPod("creator", "full", 2)
+	f.putPending(f.session("creator"))
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.publishKeeper(pub)
+	entry := f.ledgerEntry(string(f.session("creator").UID))
+	aged, err := sessionraise.SignNotice(sessionraise.Notice{
+		ID: entry.ID, SessionUID: entry.UID, Kind: sessionraise.KindRaise, Attempt: 7,
+		Outcome: sessionraise.OutcomeReserved, At: f.now.Add(-sessionraise.NoticeRetry).Format(time.RFC3339),
+	}, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.putNotice(aged)
+	w := f.do(http.MethodGet, apiv1.SessionPath("creator"), tokHuman, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("view: %d %s", w.Code, w.Body.String())
+	}
+	view := decode[apiv1.Session](t, w)
+	if view.Raise == nil || view.Raise.NoticeAttempt != 7 {
+		t.Fatalf("attempt %+v", view.Raise)
 	}
 }

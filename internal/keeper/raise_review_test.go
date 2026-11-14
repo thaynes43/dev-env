@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -28,9 +29,9 @@ type quietSink struct {
 
 func (s *quietSink) Init(logr.RuntimeInfo) {}
 func (s *quietSink) Enabled(int) bool      { return true }
-func (s *quietSink) Info(_ int, msg string, _ ...any) {
+func (s *quietSink) Info(_ int, msg string, keys ...any) {
 	s.n++
-	s.msgs = append(s.msgs, msg)
+	s.msgs = append(s.msgs, strings.TrimSpace(msg+" "+fmt.Sprint(keys...)))
 }
 func (s *quietSink) Error(error, string, ...any)    {}
 func (s *quietSink) WithValues(...any) logr.LogSink { return s }
@@ -203,7 +204,7 @@ func writeLedger(t *testing.T, c client.Client, rows ...sessionraise.SessionEntr
 	}
 }
 
-func TestBadSignatureAndFailedReservationSendNothing(t *testing.T) {
+func TestUnparsedRaiseAnnotationSendsNothing(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
 	raiseObjects(t, c)
 	ctx := context.Background()
@@ -226,13 +227,183 @@ func TestBadSignatureAndFailedReservationSendNothing(t *testing.T) {
 	p := &RaisePager{Client: c, Live: c, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents", Sender: sender, Now: func() time.Time { return when }}
 	p.announce(ctx)
 	if sender.n != 0 {
-		t.Fatalf("bad signature sent %d", sender.n)
+		t.Fatalf("an annotation that does not parse sent %d", sender.n)
 	}
-	sess.Annotations[v1alpha1.AnnotationRaise] = raw
+}
+
+func TestNoticeUsesTheEffectiveTitle(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, c)
+	ctx := context.Background()
+	id, _ := plantRaise(t, c, "raised", "uid-title", sessionraise.StatePending, "")
+	sess := &v1alpha1.AgentSession{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "dev-agents", Name: "raised"}, sess); err != nil {
+		t.Fatal(err)
+	}
+	sess.Spec.Title = "Spec Title"
+	sess.Annotations[v1alpha1.AnnotationTitle] = "bad\ntitle"
 	if err := c.Update(ctx, sess); err != nil {
 		t.Fatal(err)
 	}
-	p.Client = failUpdate{Client: c, name: sessionraise.NoticeLedgerName}
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	writeLedger(t, c, sessionraise.SessionEntry{
+		Name: "raised", UID: "uid-title", ID: id, State: sessionraise.StatePending, ChangedAt: when,
+		StartSessions: true, Depth: "2", WordsHash: sessionraise.WordsHash("yes please"), PerformedBy: "session/bench",
+	})
+	sender := &fakeRaiseSender{}
+	p := &RaisePager{Client: c, Live: c, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents", Sender: sender, Now: func() time.Time { return when }, Log: logr.Discard()}
+	p.announce(ctx)
+	if sender.n != 1 || !strings.Contains(sender.last.Message, `Its title is "Spec Title".`) || strings.Contains(sender.last.Message, "bad") {
+		t.Fatalf("notice %d %q", sender.n, sender.last.Message)
+	}
+}
+
+func TestNoticeDropsTheTitleWhenThatIsWhatFits(t *testing.T) {
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	at := when.Format(time.RFC3339)
+	effect := when.Add(sessionraise.EffectDelay).Format(time.RFC3339)
+	title := strings.Repeat("é", 48)
+	var words string
+	for n := 20; n <= 55; n++ {
+		candidate := strings.TrimSpace(strings.Repeat("a.io ", n))
+		if sessionraise.WordsProblem(candidate) != "" {
+			t.Fatalf("words: %s", sessionraise.WordsProblem(candidate))
+		}
+		text := sessionraise.NoticeText{
+			Session: "raised", Title: title, Performer: "session/bench",
+			Words: candidate, Where: sessionraise.WherePhone, SaidAt: at, Effect: effect,
+		}
+		_, body, err := sessionraise.Message(text, NoticeRedact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text.Title = ""
+		_, bare, err := sessionraise.Message(text, NoticeRedact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(body) > sessionraise.NoticeBodyMax && len(bare) <= sessionraise.NoticeBodyMax {
+			words = candidate
+			break
+		}
+	}
+	if words == "" {
+		t.Fatal("no word length fits only without the title")
+	}
+	c := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, c)
+	_, priv := plantRaise(t, c, "raised", "uid-fit", sessionraise.StatePending, "")
+	id := noticeID(t, "uid-fit", when, words)
+	resignWords(t, c, "raised", "uid-fit", id, priv, words, title)
+	writeLedger(t, c, sessionraise.SessionEntry{
+		Name: "raised", UID: "uid-fit", ID: id, State: sessionraise.StatePending, ChangedAt: when,
+		StartSessions: true, Depth: "2", WordsHash: sessionraise.WordsHash(words), PerformedBy: "session/bench",
+		PerformedAt: at, Where: sessionraise.WherePhone, SaidAt: at,
+	})
+	sender := &fakeRaiseSender{}
+	p := &RaisePager{Client: c, Live: c, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents", Sender: sender, Now: func() time.Time { return when }, Log: logr.Discard()}
+	p.announce(context.Background())
+	if sender.n != 1 || strings.Contains(sender.last.Message, "Its title is") || len(sender.last.Message) > sessionraise.NoticeBodyMax || !strings.Contains(sender.last.Message, "[link removed]") {
+		t.Fatalf("notice %d (%d bytes) %q", sender.n, len(sender.last.Message), sender.last.Message)
+	}
+}
+
+func TestNoticeThatStaysTooLongIsFailedAndNotSent(t *testing.T) {
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	at := when.Format(time.RFC3339)
+	words := strings.TrimSpace(strings.Repeat("a.io ", 60))
+	c := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, c)
+	_, priv := plantRaise(t, c, "raised", "uid-long", sessionraise.StatePending, "")
+	id := noticeID(t, "uid-long", when, words)
+	resignWords(t, c, "raised", "uid-long", id, priv, words, strings.Repeat("é", 48))
+	writeLedger(t, c, sessionraise.SessionEntry{
+		Name: "raised", UID: "uid-long", ID: id, State: sessionraise.StatePending, ChangedAt: when,
+		StartSessions: true, Depth: "2", WordsHash: sessionraise.WordsHash(words), PerformedBy: "session/bench",
+		PerformedAt: at, Where: sessionraise.WherePhone, SaidAt: at,
+	})
+	sender := &fakeRaiseSender{}
+	sink := &quietSink{}
+	p := &RaisePager{Client: c, Live: c, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents", Sender: sender, Now: func() time.Time { return when }, Log: logr.New(sink)}
+	p.announce(context.Background())
+	if sender.n != 0 {
+		t.Fatalf("sent a notice of %d bytes", len(sender.last.Message))
+	}
+	logs := 0
+	for _, msg := range sink.msgs {
+		if strings.Contains(msg, "raise notice is too long for the phone") {
+			logs++
+			if strings.Contains(msg, "a.io") || strings.Contains(msg, "[link removed]") {
+				t.Fatalf("the log carries the words: %s", msg)
+			}
+		}
+	}
+	if logs != 1 {
+		t.Fatalf("logs %d %v", logs, sink.msgs)
+	}
+	store := sessionraise.Kube{Reader: c, Writer: c, Namespace: sessionraise.ObjectNamespace}
+	obj, err := store.Get(context.Background(), sessionraise.NoticeLedgerName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes, err := sessionraise.UnmarshalNotice(obj.Data[sessionraise.LedgerField])
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := notes.Find(id, sessionraise.KindRaise)
+	if row == nil || row.Outcome != sessionraise.OutcomeFailed {
+		t.Fatalf("outcome %+v", row)
+	}
+}
+
+func noticeID(t *testing.T, uid string, when time.Time, words string) string {
+	t.Helper()
+	return sessionraise.RecordID(uid, when.Format(time.RFC3339), sessionraise.WordsHash(words))
+}
+
+func resignWords(t *testing.T, c client.Client, name, uid, id string, priv ed25519.PrivateKey, words, title string) {
+	t.Helper()
+	at := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC).Format(time.RFC3339)
+	hash := sessionraise.WordsHash(words)
+	rec, err := sessionraise.Sign(sessionraise.Record{
+		ID: id, SessionUID: uid, State: sessionraise.StatePending, StartSessions: true, Depth: "2",
+		Owner:       sessionraise.Owner{Words: words, WordsHash: hash, Where: sessionraise.WherePhone, Session: "bench", SaidAt: at},
+		PerformedBy: "session/bench", PerformedAt: at,
+	}, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := rec.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := &v1alpha1.AgentSession{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "dev-agents", Name: name}, sess); err != nil {
+		t.Fatal(err)
+	}
+	sess.Annotations[v1alpha1.AnnotationRaise] = string(raw)
+	sess.Spec.Title = title
+	if err := c.Update(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBadSignatureAndFailedReservationSendNothing(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, c)
+	ctx := context.Background()
+	id, _ := plantRaise(t, c, "raised", "uid-bad", sessionraise.StatePending, "")
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	writeLedger(t, c, sessionraise.SessionEntry{
+		Name: "raised", UID: "uid-bad", ID: id, State: sessionraise.StatePending, ChangedAt: when,
+		StartSessions: true, Depth: "2", WordsHash: sessionraise.WordsHash("yes please"), PerformedBy: "session/bench",
+	})
+	sender := &fakeRaiseSender{}
+	p := &RaisePager{
+		Client: failUpdate{Client: c, name: sessionraise.NoticeLedgerName}, Live: c,
+		Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: sender, Now: func() time.Time { return when },
+	}
 	p.announce(ctx)
 	if sender.n != 0 {
 		t.Fatalf("failed reservation sent %d", sender.n)
@@ -528,6 +699,18 @@ func TestSessionReadErrorKeepsTheNoticeRow(t *testing.T) {
 	if row == nil || row.Attempt != 5 || row.Outcome != sessionraise.OutcomeFailed {
 		t.Fatalf("notice row: %+v", row)
 	}
+	if len(p.goneUID) != 0 {
+		t.Fatalf("a read error was remembered as gone: %v", p.goneUID)
+	}
+	p.Live = base
+	p.Now = func() time.Time { return when.Add(sessionraise.QuietRetry) }
+	p.announce(ctx)
+	if sender.n != 1 {
+		t.Fatalf("the retry sent %d", sender.n)
+	}
+	if len(p.goneUID) != 0 {
+		t.Fatalf("gone memory after a successful read: %v", p.goneUID)
+	}
 }
 
 type refuseSessionGet struct{ client.Client }
@@ -577,10 +760,82 @@ func TestUnnamedRaiseRowIsSkippedAndLoggedOnce(t *testing.T) {
 		Sender: &fakeRaiseSender{}, Now: func() time.Time { return when }, Log: logr.New(sink),
 	}
 	p.announce(context.Background())
+	counter.secrets = 0
 	p.announce(context.Background())
-	if counter.lists != 0 || counter.sessions != 0 || sink.n != 1 {
-		t.Fatalf("lists %d gets %d logs %d", counter.lists, counter.sessions, sink.n)
+	if counter.lists != 0 || counter.sessions != 0 || counter.secrets != 0 || sink.n != 1 {
+		t.Fatalf("lists %d gets %d secrets %d logs %d", counter.lists, counter.sessions, counter.secrets, sink.n)
 	}
+}
+
+func TestGoneRowDoesNotReadTheKeyAfterTheFirstPass(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(raiseScheme(t)).Build()
+	raiseObjects(t, base)
+	when := time.Date(2026, 11, 13, 3, 15, 0, 0, time.UTC)
+	at := when.Format(time.RFC3339)
+	reads := &passReads{Client: base}
+	sink := &quietSink{}
+	p := &RaisePager{
+		Client: base, Live: reads, Namespace: sessionraise.ObjectNamespace, SessionNamespace: "dev-agents",
+		Sender: &fakeRaiseSender{}, Now: func() time.Time { return when }, Log: logr.New(sink),
+	}
+	p.announce(context.Background())
+	if !p.keyReady {
+		t.Fatal("start did not publish the keeper key")
+	}
+	writeLedger(t, base, sessionraise.SessionEntry{
+		Name: "deleted", UID: "uid-deleted", ID: "deletednotice001", State: sessionraise.StateTakenBack,
+		ChangedAt: when, TakenBackBy: "human/tom", TakenBackAt: at,
+	})
+	p.goneUID = map[string]struct{}{"not-in-ledger": {}}
+	p.unnamedLogged = map[string]struct{}{"not-in-ledger": {}}
+	p.profileLogged = map[string]struct{}{"not-in-ledger": {}}
+	reads.secrets, reads.publics, reads.sessions = 0, 0, 0
+	p.announce(context.Background())
+	if reads.secrets == 0 || reads.publics == 0 || reads.sessions != 1 {
+		t.Fatalf("first pass secrets %d publics %d sessions %d", reads.secrets, reads.publics, reads.sessions)
+	}
+	if _, ok := p.goneUID["not-in-ledger"]; ok || len(p.unnamedLogged) != 0 || len(p.profileLogged) != 0 {
+		t.Fatalf("memory was not pruned: gone %v unnamed %v profile %v", p.goneUID, p.unnamedLogged, p.profileLogged)
+	}
+	if !p.knownGone("uid-deleted") {
+		t.Fatal("the deleted session was not remembered")
+	}
+	goneLogs := 0
+	for _, msg := range sink.msgs {
+		if strings.Contains(msg, "raise notice session is gone") && strings.Contains(msg, "uid-deleted") {
+			goneLogs++
+		}
+	}
+	if goneLogs != 1 {
+		t.Fatalf("gone logs %d %v", goneLogs, sink.msgs)
+	}
+	reads.secrets, reads.publics, reads.sessions = 0, 0, 0
+	p.announce(context.Background())
+	p.announce(context.Background())
+	if reads.secrets != 0 || reads.publics != 0 || reads.sessions != 0 {
+		t.Fatalf("later passes secrets %d publics %d sessions %d", reads.secrets, reads.publics, reads.sessions)
+	}
+}
+
+type passReads struct {
+	client.Client
+	secrets  int
+	publics  int
+	sessions int
+}
+
+func (c *passReads) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	switch obj.(type) {
+	case *corev1.Secret:
+		c.secrets++
+	case *v1alpha1.AgentSession:
+		c.sessions++
+	case *corev1.ConfigMap:
+		if key.Name == sessionraise.KeeperPublicName || key.Name == sessionraise.OperatorPublicName {
+			c.publics++
+		}
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
 }
 
 func TestNoticeDueCapsWaitsAndCountsAReservation(t *testing.T) {

@@ -713,8 +713,14 @@ func (s *Server) admitCreatePath(ctx context.Context, c *caller, sess *v1alpha1.
 	// meets the named-coordinator rule before the depth refusal.
 	exempt := direct && c.kind == kindSession && c.depth > maxSessionDepth && s.depthExempt(ctx, c)
 	if exempt {
-		if err := s.refuseRaisedChild(ctx, sess); err != nil {
+		// The profile checked here is the one stored. A later read of the
+		// templates must not choose a different name.
+		profile, err := s.refuseRaisedChild(ctx, sess)
+		if err != nil {
 			return err
+		}
+		if sess != nil && profile != "" {
+			sess.Spec.Profile = profile
 		}
 	}
 	if err := s.admitNamedCoordinator(ctx, sess); err != nil {

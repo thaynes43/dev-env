@@ -15,7 +15,8 @@ type SessionRaise struct {
 	ActiveFrom    string      `json:"activeFrom,omitempty"`
 	TakenBackBy   string      `json:"takenBackBy,omitempty"`
 	TakenBackAt   string      `json:"takenBackAt,omitempty"`
-	// NoticeAttempt is how many finished notice attempts a pending raise has.
+	// NoticeAttempt is the larger of the finished notice attempts and the
+	// aged reservations, the same count the activator uses.
 	// It is omitted once the raise is no longer pending.
 	NoticeAttempt int `json:"noticeAttempt,omitempty"`
 	// PodAccount is the current pod's ServiceAccount, and only on the

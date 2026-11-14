@@ -146,6 +146,7 @@ func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1
 				return
 			}
 			writeFrom = fresh
+			s.logRaiseState(observedAudit(live.Name, writeFrom.State), recordFrom(*writeFrom, ann.Owner.Words))
 		}
 		if err := s.writeSignedFromLedger(ctx, &live, *writeFrom, ann.Owner.Words, ann.State, priv); errors.Is(err, errRaiseAnnotationMoved) {
 			s.activateOneDepth(ctx, cfg, &live, nil, notices, pub, priv, now, depth+1)
@@ -210,9 +211,9 @@ func (s *Server) activateOneDepth(ctx context.Context, cfg RaiseConfig, sess *v1
 	// conflict that the repair branch then finishes is still logged.
 	signed := recordFrom(finished, ann.Owner.Words)
 	if state == sessionraise.StateUnannounced {
-		s.logRaise("raise unannounced", signed)
+		s.logRaiseState("raise unannounced", signed)
 	} else {
-		s.logRaise("raise active", signed)
+		s.logRaiseState("raise active", signed)
 	}
 	if err := s.writeSignedFromLedger(ctx, &live, finished, ann.Owner.Words, sessionraise.StatePending, priv); errors.Is(err, errRaiseAnnotationMoved) {
 		s.activateOneDepth(ctx, cfg, &live, nil, notices, pub, priv, now, depth+1)
