@@ -32,6 +32,9 @@ var preflightLockWait = 5 * time.Second
 var preflightStopNow = time.Now
 var preflightStopLock = lockFileWait
 var preflightStopWait = waitNativeGroupAbsent
+
+// Only the summoned shutdown's result wait uses this sleep seam.
+var preflightResultSleep = time.Sleep
 var preflightSignal = syscall.Kill
 var writePreflightRecord = writeWorkspaceJSON
 
@@ -135,22 +138,24 @@ func preflightStopRemaining(deadline time.Time, bound time.Duration) time.Durati
 // stopPreflightLaunch publishes the irreversible fence first, then acquires
 // the same bounded lock as check/start/PID publication. A timeout is running,
 // never proof of a stop. Nothing can spawn once that critical section drains.
-func stopPreflightLaunch(s Settings, l Launch, grace time.Duration) *protocol.AgentStop {
-	st := &protocol.AgentStop{}
+// taskStarted comes from that locked decision, so shutdown can wait for a
+// result even when the task group is already gone. It is not an API field.
+func stopPreflightLaunch(s Settings, l Launch, grace time.Duration) (st *protocol.AgentStop, taskStarted bool) {
+	st = &protocol.AgentStop{}
 	grace = max(0, min(grace, 30*time.Second))
 	deadline := preflightStopNow().Add(min(preflightLockWait+grace+stopKillWait, preflightStopMaxWait))
 	if preflightFromAnotherBoot(s, l) {
-		return st
+		return st, false
 	}
 	marker := startRefused{Reason: "stop requested", At: preflightStopNow().UTC(), ConversationID: l.ConversationID, BootID: l.BootID}
 	if err := writeWorkspaceJSON(s.statePath(startStoppedFile), marker); err != nil {
 		st.Running = true
-		return st
+		return st, false
 	}
 	unlock, err := preflightStopLock(s.statePath(startSpawnLockFile), preflightStopRemaining(deadline, preflightLockWait))
 	if err != nil {
 		st.Running = true
-		return st
+		return st, false
 	}
 	var task agentPid
 	taskErr := readJSONFile(s.statePath(pidFile), &task)
@@ -159,11 +164,11 @@ func stopPreflightLaunch(s Settings, l Launch, grace time.Duration) *protocol.Ag
 	// The task was published before stop took the lock, or the marker refused
 	// it. Stop the task while its launcher can still reap it/write the result.
 	if taskErr == nil {
-		return stopPreflightGroup(task, grace, deadline)
+		return stopPreflightGroup(task, grace, deadline), task.Pid > 0 && task.Start != ""
 	} else if os.IsNotExist(taskErr) && found && rec.State == preflightStarted {
 		// The finished task removed its PID. Its launcher still owns result
 		// retention and must never receive a second grace or group SIGKILL.
-		return st
+		return st, true
 	} else if !os.IsNotExist(taskErr) || rec.TaskPending {
 		st.Running = true
 	}
@@ -178,7 +183,7 @@ func stopPreflightLaunch(s Settings, l Launch, grace time.Duration) *protocol.Ag
 			st.Running = true
 		}
 	}
-	return st
+	return st, false
 }
 
 func mergePreflightStop(dst, src *protocol.AgentStop) {

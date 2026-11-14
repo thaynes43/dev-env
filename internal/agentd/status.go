@@ -328,7 +328,7 @@ func summonedRunState(s Settings, first Launch, bootID string, now time.Time) (s
 		// The model pre-flight found no usable model, so no provider of the
 		// task started (DESIGN-064 6.9, OP791). Whatever tmux answered,
 		// run-agent ran and recorded that.
-		rec, _ := readPreflight(s, first)
+		rec, _ := readPreflightRecord(s, first)
 		st.State, st.Error = protocol.AgentFailed, "no usable model: the model pre-flight ended "+rec.Failure+"; the provider was not started (DESIGN-064 6.9)"
 		return st, true
 	case h.State == handoffNothingStarted:
