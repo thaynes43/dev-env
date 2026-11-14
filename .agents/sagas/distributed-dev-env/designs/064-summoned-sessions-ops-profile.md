@@ -2499,6 +2499,31 @@ correction above, this governs. As built:
 - *`digest.listed` is a guard too.* A close whose key is already in
   `digest.listed` is not pended again, even when its dedupe entry is gone.
 
+**Correction, 2026-11-14: story 792 fix round 2, coordinator rulings; not a
+ruling by Tom.** These address F1, F2 and F3 in PR 1126 comment 6871037091.
+The earlier corrections stay in force except where this changes them:
+
+- *Admission order (F1).* Eligible recorded capped events not yet pending or
+  listed take the available pending slots first, oldest entry time first
+  (key order breaks ties), then unseen outcomes, oldest close first. This
+  includes events capped by the page work earlier in the same tick. Existing
+  pending lines keep their slots and order. If those lines already fill the
+  256 slots, or more capped events are waiting than fit, the remaining capped
+  events stay held for the next admission after a digest drains the buffer.
+  New outcomes wait behind them; they also wait when the 2048-entry dedupe
+  has no room. No capacity bound changes.
+- *Proof-read gate (F2).* An unseen digest outcome starts proof pruning only
+  when the pending buffer has room to admit work. A missing pending line's
+  dedupe entry can still start pruning for its repair, even with all 256
+  pending slots occupied. Fresh page work and pruning to make dedupe room
+  keep story 782's rules and the 20-read ceiling. A full pending buffer with
+  no repair or fresh page work spends no proof reads, including the tick
+  that drains it; admission and bounded pruning resume on the next tick.
+- *Whole message first (F3).* When the entire message fits in 950 characters,
+  it is sent whole with no footer. Otherwise the largest prefix of whole
+  lines that fits with its footer is sent. The record counts only the lines
+  actually omitted; their reservation and at-most-once rules are unchanged.
+
 **The terminal table (N8).** Every closed summoned session matches exactly
 one row, by lane, outcome, source and reason, and gets exactly what that row
 says: one terminal event or the digest. The reason is the one 6.6's close

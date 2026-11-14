@@ -186,20 +186,9 @@ func (p *summonPager) pend(l *summonPageLedger, outcomes []summonDigestLine, lan
 		st.Events[line.Key] = summonPageEntry{At: now.Unix(), State: state, Session: summonStoredName(line.Session)}
 		changed = true
 	}
-	for _, line := range st.newDigestOutcomes(outcomes) {
-		if full() {
-			break
-		}
-		if len(st.Events) >= summonPagesMaxEvents {
-			if !dedupeFull {
-				p.log.Error(nil, "summon page dedupe capacity reached")
-			}
-			break
-		}
-		st.Events[line.Key] = summonPageEntry{At: now.Unix(), State: string(pages.StateRecorded), Session: line.Session}
-		d.Pending = append(d.Pending, line)
-		changed = true
-	}
+	// Recorded capped events get the free slots first, oldest first. They
+	// must not lose the next digest to a burst of newer outcomes (fix round
+	// 2, F1). Existing pending lines keep their slots; excess work waits.
 	pending := map[string]bool{}
 	for _, line := range d.Pending {
 		pending[line.Key] = true
@@ -222,6 +211,20 @@ func (p *summonPager) pend(l *summonPageLedger, outcomes []summonDigestLine, lan
 			break
 		}
 		d.Pending = append(d.Pending, summonCappedLine(key, st.Events[key], lanes))
+		changed = true
+	}
+	for _, line := range st.newDigestOutcomes(outcomes) {
+		if full() {
+			break
+		}
+		if len(st.Events) >= summonPagesMaxEvents {
+			if !dedupeFull {
+				p.log.Error(nil, "summon page dedupe capacity reached")
+			}
+			break
+		}
+		st.Events[line.Key] = summonPageEntry{At: now.Unix(), State: string(pages.StateRecorded), Session: line.Session}
+		d.Pending = append(d.Pending, line)
 		changed = true
 	}
 	return changed
@@ -343,13 +346,15 @@ func (p *summonPager) renderDigest(lines []summonDigestLine, at int64) (Notice, 
 		}
 		return fmt.Sprintf("\n%d more %s left out to fit; %s not sent again.", left, summonPlural(left, "line", "lines"), summonPlural(left, "it is", "they are"))
 	}
-	n, size := 0, utf8.RuneCountInString(head)
-	for n < len(shown) {
-		next := size + utf8.RuneCountInString(shown[n])
-		if next+utf8.RuneCountInString(footer(len(shown)-n-1)) > summonDigestBodyMax {
-			break
-		}
-		n, size = n+1, next
+	// Start with the whole message: it needs no footer and may fit even
+	// when a shorter prefix with a footer does not (fix round 2, F3).
+	n, size := len(shown), utf8.RuneCountInString(head)
+	for _, line := range shown {
+		size += utf8.RuneCountInString(line)
+	}
+	for n > 0 && size+utf8.RuneCountInString(footer(len(shown)-n)) > summonDigestBodyMax {
+		n--
+		size -= utf8.RuneCountInString(shown[n])
 	}
 	msg := head + strings.Join(shown[:n], "") + footer(len(shown)-n)
 	console := p.origin + summonConsolePath
