@@ -2703,7 +2703,9 @@ session without one is built exactly as before.
   launcher; uncertainty starts nothing further. Stop and rescue write a
   permanent stop marker, then require the whole owned group to be absent
   before reporting stopped. The task's final fence, start and PID publication
-  share a lock with stop. The checking record is an exclusive once-only claim,
+  share a lock with stop. If the launcher dies before publishing the task
+  PID, unresolved durable start intent keeps status busy and stop uncertain.
+  The checking record is an exclusive once-only claim,
   independent of usage or capture identity. The start deadline is checked
   after command preparation, immediately before each turn and the real start,
   and a turn's limit is the smaller of 90 seconds and the

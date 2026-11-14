@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"golang.org/x/sys/unix"
 )
 
 const lifecycleChildEnv = "AGENTD_PREFLIGHT_LIFECYCLE_CHILD"
@@ -32,7 +33,7 @@ const lifecycleWait = 15 * time.Second
 // lifecycleEvent includes start times, so even failure cleanup addresses only
 // the processes this test created, never a PID that has since been reused.
 type lifecycleEvent struct {
-	Kind, ID, Model        string
+	Kind, ID, Model, State string
 	PID, Descendant        int
 	Start, DescendantStart string
 }
@@ -79,7 +80,7 @@ func newLifecycleRig(t *testing.T, point string) *lifecycleRig {
 	if err := os.MkdirAll(r.s.StateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"events", "hook", "primary", "fallback", "task", "descendant"} {
+	for _, name := range []string{"events", "hook", "primary", "fallback", "task", "descendant", "pid-record", "task-published"} {
 		path := filepath.Join(r.root, name+".fifo")
 		if err := syscall.Mkfifo(path, 0o600); err != nil {
 			t.Fatal(err)
@@ -168,6 +169,34 @@ func (r *lifecycleRig) waitEvent(kind string) lifecycleEvent {
 			r.t.Fatalf("launcher never reached %s", kind)
 		}
 	}
+}
+
+func (r *lifecycleRig) waitOwnedEvent(kind string) lifecycleEvent {
+	r.t.Helper()
+	for _, e := range r.owned {
+		if e.Kind == kind && e.ID == "first" {
+			return e
+		}
+	}
+	return r.waitEvent(kind)
+}
+
+// The live-only production helper deliberately rejects zombies. These
+// publication proofs need the kernel identity that a zombie still retains.
+func lifecycleRawIdentity(pid int) (start, state string, err error) {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return "", "", err
+	}
+	i := strings.LastIndexByte(string(raw), ')')
+	if i < 0 {
+		return "", "", fmt.Errorf("PID %d has no process name terminator", pid)
+	}
+	fields := strings.Fields(string(raw)[i+1:])
+	if len(fields) < 20 {
+		return "", "", fmt.Errorf("PID %d has incomplete process identity", pid)
+	}
+	return fields[19], fields[0], nil
 }
 
 func (r *lifecycleRig) release(gate string) {
@@ -333,6 +362,43 @@ func TestPreflightLifecycleHelper(t *testing.T) {
 				lifecycleGate(root, "hook")
 			}
 		}
+		var pidRecord lifecycleEvent
+		beforeTaskPIDRecord = func(pid int) {
+			if id != "first" || (point != "zombie-before-pid" && point != "live-before-pid") {
+				return
+			}
+			if point == "zombie-before-pid" {
+				// RunAgent is the direct parent and has not called Wait yet.
+				// WNOWAIT observes exit without consuming the zombie identity.
+				for {
+					var info unix.Siginfo
+					err := unix.Waitid(unix.P_PID, pid, &info, unix.WEXITED|unix.WNOWAIT, nil)
+					if err == unix.EINTR {
+						continue
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					break
+				}
+			}
+			start, state, err := lifecycleRawIdentity(pid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pidRecord = lifecycleEvent{Kind: "pid-record", ID: id, PID: pid, Start: start, State: state}
+			lifecycleEmit(root, pidRecord)
+			lifecycleGate(root, "pid-record")
+		}
+		beforeTaskInstructionPublish = func(Launch) {
+			if id == "first" && point == "zombie-before-pid" {
+				// The spawn lock has been released; the task Wait goroutine
+				// can reap its leader while this keeps agent.pid observable.
+				pidRecord.Kind = "pid-published"
+				lifecycleEmit(root, pidRecord)
+				lifecycleGate(root, "task-published")
+			}
+		}
 		sigs := make(chan os.Signal, 1)
 		signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 		code := RunAgent(os.Getenv("AGENTD_LIFECYCLE_LAUNCH"), os.Stdout, sigs, 0)
@@ -392,8 +458,11 @@ func TestPreflightLifecycleHelper(t *testing.T) {
 		os.Exit(0)
 	case "task":
 		lifecycleInvocation(root, e)
+		if point == "zombie-before-pid" {
+			e.Descendant, e.DescendantStart = lifecycleTaskDescendant(t, root, id)
+		}
 		lifecycleEmit(root, e)
-		if point == "spawn-race" {
+		if point == "spawn-race" || point == "live-before-pid" {
 			lifecycleGate(root, "task")
 		}
 		fmt.Print(streamLines)
@@ -401,6 +470,34 @@ func TestPreflightLifecycleHelper(t *testing.T) {
 	default:
 		t.Fatalf("unknown lifecycle role %q", role)
 	}
+}
+
+func lifecycleTaskDescendant(t *testing.T, root, id string) (int, string) {
+	t.Helper()
+	bin, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rd, wr, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := exec.Command(bin, "-test.run=^TestPreflightLifecycleHelper$")
+	child.Env = lifecycleEnv(os.Environ(), lifecycleChildEnv+"=descendant", "AGENTD_LIFECYCLE_ROOT="+root, "AGENTD_LIFECYCLE_ID="+id)
+	child.ExtraFiles = []*os.File{wr}
+	child.Stdout, child.Stderr = io.Discard, io.Discard
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	_ = wr.Close()
+	var b [1]byte
+	if _, err := io.ReadFull(rd, b[:]); err != nil {
+		t.Fatal(err)
+	}
+	_ = rd.Close()
+	start := procStartTime(child.Process.Pid)
+	go func() { _ = child.Wait() }()
+	return child.Process.Pid, start
 }
 
 func (r *lifecycleRig) invocations() []byte {
@@ -641,4 +738,86 @@ func TestPreflightLifecycleStopSerializesFinalTaskSpawn(t *testing.T) {
 			t.Fatal("launcher remained live after stop completed")
 		}
 	}
+}
+
+func TestPreflightLifecycleZombieTaskLeaderRetainsPublishedIdentity(t *testing.T) {
+	r := newLifecycleRig(t, "zombie-before-pid")
+	first := r.start("first")
+	identity := r.waitEvent("pid-record")
+	task := r.waitOwnedEvent("task")
+	if identity.State != "Z" || identity.Start == "" || identity.PID != task.PID || identity.Start != task.Start {
+		t.Fatalf("publication boundary has identity %+v, want task %+v as a verified zombie", identity, task)
+	}
+	if !lifecycleLive(task.Descendant, task.DescendantStart) {
+		t.Fatal("the exited task leader did not leave its verified live descendant")
+	}
+	if _, err := os.Lstat(r.s.statePath(pidFile)); !os.IsNotExist(err) {
+		t.Fatalf("task PID was already published before its publication hook: %v", err)
+	}
+	r.release("pid-record")
+	r.waitEvent("pid-published")
+	var published agentPid
+	if err := readJSONFile(r.s.statePath(pidFile), &published); err != nil {
+		t.Fatal(err)
+	}
+	if published.Pid != identity.PID || published.Start != identity.Start {
+		t.Errorf("task PID publication lost zombie identity: got %+v, want PID %d start %q", published, identity.PID, identity.Start)
+	}
+	stopped := stopAgent(r.s, 0)
+	if stopped.Running {
+		t.Errorf("stop did not finish the task whose exited leader retained its identity: %+v", stopped)
+	}
+	if lifecycleLive(task.Descendant, task.DescendantStart) {
+		t.Errorf("stop left the published task's descendant alive: %+v; stop %+v", task, stopped)
+	}
+	if err := syscall.Kill(-task.PID, 0); !stopped.Running && err != syscall.ESRCH {
+		t.Errorf("stop reported not running while published task group %d remains: %v", task.PID, err)
+	}
+	r.release("task-published")
+	r.wait(first)
+	r.assertLauncherGroupAbsent(first)
+}
+
+func TestPreflightLifecycleLauncherDeathBeforePIDPublicationFailsClosed(t *testing.T) {
+	r := newLifecycleRig(t, "live-before-pid")
+	if err := writeStartHandoff(r.s, r.l, handoffStarted, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONFile(r.s.statePath(bootFile), bootRecord{BootID: r.l.BootID, Boot: protocol.BootReady}); err != nil {
+		t.Fatal(err)
+	}
+	first := r.start("first")
+	identity := r.waitEvent("pid-record")
+	task := r.waitOwnedEvent("task")
+	if identity.PID != task.PID || identity.Start != task.Start || !lifecycleLive(task.PID, task.Start) {
+		t.Fatalf("PID publication hook did not hold the verified live task: hook %+v; task %+v", identity, task)
+	}
+	if _, err := os.Lstat(r.s.statePath(pidFile)); !os.IsNotExist(err) {
+		t.Fatalf("task PID was already published before launcher death: %v", err)
+	}
+	if err := syscall.Kill(first.cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	r.wait(first)
+	if !lifecycleLive(task.PID, task.Start) {
+		t.Fatal("the pending publication proof lost its unrecorded live task")
+	}
+	stopped := stopAgent(r.s, 0)
+	if !stopped.Running {
+		t.Errorf("stop reported not running after launcher died before publishing its live task: task %+v; stop %+v", task, stopped)
+	}
+	if !preflightLive(r.s, r.l) {
+		t.Error("unconfirmed task PID publication stopped counting as a live pre-flight")
+	}
+	sess := protocol.Session{Name: r.l.Session, Agent: protocol.AgentClaude, Mode: protocol.ModeTask, Model: r.l.Preflight.Model, Caller: summonedCaller}
+	status := CollectStatus(context.Background(), &fakeRunner{}, r.s, sess, loginNow.Add(3*time.Minute))
+	if status.Agent.State != protocol.AgentBusy {
+		t.Errorf("unconfirmed task PID publication status %q, want busy beyond the start window", status.Agent.State)
+	}
+	// The pending receipt has no confirmed task identity and therefore must
+	// remain conservative even after test-owned cleanup ends that task.
+	if err := syscall.Kill(-task.PID, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+		t.Fatal(err)
+	}
+	r.assertLauncherGroupAbsent(first)
 }

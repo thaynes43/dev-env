@@ -1288,6 +1288,15 @@ hold `start-spawn.lock`; stop takes that same lock, with a bound, after
 writing the marker and before deciding which processes to stop. Thus a task
 already crossing the final check is recorded and stopped before stop can
 report it gone. A stop that cannot obtain the lock reports running. The
+checking receipt also durably records task-start intent before the final
+fence. If run-agent dies after starting the separate task group but before
+publishing its identity, that unresolved intent keeps status busy and stop
+running. It is evidence of uncertainty, not a recoverable group identity.
+The task PID receipt is durable and preserves an unreaped zombie leader's
+start time, so an already-exited leader cannot hide its surviving children.
+Only a confirmed PID publication or proof that no task remains settles the
+intent. This is the fix's conservative implementation choice for an
+interrupted publication; it adds no guardian or recovery authority. The
 recorded launcher group makes the probe visible even when run-agent dies;
 6.9 defines the distinct proofs between turns and after stop. Ordinary
 launches retain their existing start and stop paths.
@@ -2844,7 +2853,10 @@ where this differs, it governs.
    its group ownership before any probe starts. Stop writes 5.9's durable
    marker, drains the start lock, signals the launcher and, after the grace,
    kills the recorded group. The real task still leads a separate group;
-   the lock makes its PID visible to stop before the launcher can be killed.
+   the lock makes its PID visible before stop can kill the launcher. The
+   durable task-start intent in 5.9 covers a launcher killed independently
+   before PID publication: stop stays running and status stays busy when
+   the task identity is unconfirmed. No unknown group is reported gone.
 2. *"Gone" has two precise meanings.* Between turns, the launcher's own
    Wait must reap its direct probe, and a bounded strict `/proc` observation
    must show no group member except the launcher's verified PID. Leftover

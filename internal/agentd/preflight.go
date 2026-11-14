@@ -84,6 +84,7 @@ type startPreflight struct {
 	Pid            int       `json:"pid"`
 	Start          string    `json:"start"`
 	GroupOwned     bool      `json:"groupOwned,omitempty"`
+	TaskPending    bool      `json:"taskPending,omitempty"`
 	At             time.Time `json:"at"`
 	ConversationID string    `json:"conversationId"`
 	BootID         string    `json:"bootId"`
@@ -256,6 +257,7 @@ func recordPreflightStarted(l Launch, stateDir, model, fallbackCause string) {
 		return
 	}
 	rec.State, rec.Model, rec.FallbackCause, rec.At = preflightStarted, model, fallbackCause, runAgentNow().UTC()
+	rec.TaskPending = false // agent.pid was durably published before this update.
 	_ = writeWorkspaceJSON(statePathIn(stateDir, startPreflightFile), rec)
 }
 
@@ -529,7 +531,13 @@ func readPreflight(s Settings, first Launch) (startPreflight, bool) {
 // Older checking records retain their original PID-only interpretation.
 func preflightLive(s Settings, first Launch) bool {
 	rec, ok := readPreflight(s, first)
-	if !ok || rec.Pid <= 0 || rec.Start == "" || rec.State == preflightStarted {
+	if !ok || rec.Pid <= 0 || rec.Start == "" {
+		return false
+	}
+	if pendingPreflightTask(s, rec) {
+		return true
+	}
+	if rec.State == preflightStarted {
 		return false
 	}
 	p := agentPid{Pid: rec.Pid, Start: rec.Start}

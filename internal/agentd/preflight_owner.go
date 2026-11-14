@@ -80,6 +80,32 @@ func preflightSpawnLock(l Launch, stateDir string) (func(), error) {
 	return lockFileWait(filepath.Join(stateDir, startSpawnLockFile), preflightLockWait)
 }
 
+// A launcher can die after task Start but before its independent group is
+// recorded. The durable intent keeps that unconfirmed interval visible; it
+// does not invent a group identity or claim that an unknown task was stopped.
+func recordPreflightTaskPending(l Launch, stateDir string, pending bool) error {
+	if l.Preflight == nil {
+		return nil
+	}
+	rec, ok := readPreflight(Settings{StateDir: stateDir}, l)
+	if !ok {
+		return errors.New("pre-flight ownership record is unconfirmed")
+	}
+	rec.TaskPending = pending
+	return writeWorkspaceJSON(statePathIn(stateDir, startPreflightFile), rec)
+}
+
+func pendingPreflightTask(s Settings, rec startPreflight) bool {
+	if !rec.TaskPending {
+		return false
+	}
+	var task agentPid
+	if readJSONFile(s.statePath(pidFile), &task) != nil || task.Pid <= 0 || task.Start == "" {
+		return true
+	}
+	return !waitNativeGroupAbsent(task.Pid, 0)
+}
+
 // stopPreflightLaunch publishes the irreversible fence first, then acquires
 // the same bounded lock as check/start/PID publication. A timeout is running,
 // never proof of a stop. Nothing can spawn once that critical section drains.
@@ -96,13 +122,15 @@ func stopPreflightLaunch(s Settings, l Launch, grace time.Duration) *protocol.Ag
 		return st
 	}
 	var task agentPid
-	_ = readJSONFile(s.statePath(pidFile), &task)
+	taskErr := readJSONFile(s.statePath(pidFile), &task)
 	rec, found := readPreflight(s, l)
 	unlock()
 	// The task was published before stop took the lock, or the marker refused
 	// it. Stop the task while its launcher can still reap it/write the result.
-	if task.Pid > 0 && task.Start != "" {
+	if taskErr == nil {
 		mergePreflightStop(st, stopPreflightGroup(task, grace))
+	} else if !os.IsNotExist(taskErr) || rec.TaskPending {
+		st.Running = true
 	}
 	if found && rec.GroupOwned {
 		mergePreflightStop(st, stopPreflightGroup(agentPid{Pid: rec.Pid, Start: rec.Start}, grace))
@@ -110,6 +138,10 @@ func stopPreflightLaunch(s Settings, l Launch, grace time.Duration) *protocol.Ag
 		// An older checking record did not prove group leadership. Do not infer
 		// ownership of an unrelated group from it.
 		st.WasRunning, st.Running = true, true
+	} else if !found {
+		if _, err := os.Lstat(s.statePath(startPreflightFile)); !os.IsNotExist(err) {
+			st.Running = true
+		}
 	}
 	return st
 }
@@ -162,30 +194,52 @@ func strictPreflightGroup(pgid int) ([]agentPid, error) {
 		if err != nil {
 			continue
 		}
-		raw, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		member, group, err := readPreflightProcess(pid)
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		i := strings.LastIndexByte(string(raw), ')')
-		if i < 0 {
-			return nil, errors.New("unreadable process identity")
-		}
-		fields := strings.Fields(string(raw)[i+1:])
-		if len(fields) < 20 {
-			return nil, errors.New("incomplete process identity")
-		}
-		group, err := strconv.Atoi(fields[2])
-		if err != nil {
-			return nil, err
-		}
 		if group == pgid {
-			members = append(members, agentPid{Pid: pid, Start: fields[19]})
+			members = append(members, member)
 		}
 	}
 	return members, nil
+}
+
+// Include unreaped zombies: a fast task can exit before PID publication,
+// while its process group still has live descendants. procStartTime keeps
+// its existing live-only semantics for ordinary sessions.
+func readPreflightProcess(pid int) (agentPid, int, error) {
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return agentPid{}, 0, err
+	}
+	i := strings.LastIndexByte(string(raw), ')')
+	if i < 0 {
+		return agentPid{}, 0, errors.New("unreadable process identity")
+	}
+	fields := strings.Fields(string(raw)[i+1:])
+	if len(fields) < 20 {
+		return agentPid{}, 0, errors.New("incomplete process identity")
+	}
+	group, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return agentPid{}, 0, err
+	}
+	return agentPid{Pid: pid, Start: fields[19]}, group, nil
+}
+
+func publishPreflightTaskPID(stateDir string, pid int) error {
+	p, group, err := readPreflightProcess(pid)
+	if err != nil {
+		return err
+	}
+	if group != pid || p.Start == "" {
+		return errors.New("task process group identity is unconfirmed")
+	}
+	return writeWorkspaceJSON(statePathIn(stateDir, pidFile), p)
 }
 
 func preflightGroupOnlyLauncher(pgid int, self agentPid) bool {
