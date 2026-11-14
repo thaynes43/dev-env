@@ -237,6 +237,13 @@ func (s *Server) postRaise(ctx context.Context, _ http.ResponseWriter, r *http.R
 	// authorized request, whose live grant fields must still match the row.
 	if same && !pendingRequestRepair(fresh, entry, in, pub) {
 		s.logOnce(entry.ID, "request repair lacks authenticated grant", "raise request did not re-sign an unsigned state or changed grant")
+		// A pending row with no annotation for this id needs request
+		// recovery. Refusing that recovery must not report a successful
+		// retry; the word is already spent and the activator cannot supply
+		// the missing grant. Existing records still belong to its repair path.
+		if stored, err := sessionraise.Parse(fresh.Annotations[v1alpha1.AnnotationRaise]); entry.State == sessionraise.StatePending && (err != nil || stored.ID != entry.ID) {
+			return 0, nil, raiseConflict("Session %s has a raise that was recorded but whose record could not be written, and this request does not match it. Take it back and raise again with a new word from Tom: agent-run raise %s --take-back", fresh.Name, fresh.Name)
+		}
 		return http.StatusOK, s.withUsageRollup(ctx, fresh, c, false), nil
 	}
 	// A retry of the same body uses the row's id and time, so the word is
