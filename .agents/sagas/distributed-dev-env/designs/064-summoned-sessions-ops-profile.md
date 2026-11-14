@@ -885,6 +885,13 @@ that ends `escalated`, the pending filing `status.summon.escalation = {state:
 Pending, name}` (6.6), all at once. Lane release, the pool counts, the keeper's
 page or digest and the platform's filing all key on that one record.
 
+**2026-11-14 (story 798, coordinator's follow-up, not a ruling by Tom).**
+The CRD refuses changes to `status.summon.closed.at`, `source` and `reason`
+once the close record exists. Its first write and updates that keep those
+fields unchanged are accepted, including `released` moving from false to
+true. The existing rules still refuse removal of the close record and reversal
+of `released`.
+
 **When a reservation is released.**
 
 - A terminal outcome the session reported itself, through the report route

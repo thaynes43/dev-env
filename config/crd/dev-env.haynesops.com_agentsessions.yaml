@@ -3439,6 +3439,12 @@ spec:
                     - source
                     type: object
                     x-kubernetes-validations:
+                    - message: the close time never changes
+                      rule: self.at == oldSelf.at
+                    - message: the close source never changes
+                      rule: self.source == oldSelf.source
+                    - message: the close reason never changes
+                      rule: self.reason == oldSelf.reason
                     - message: released is never reversed
                       rule: '!has(oldSelf.released) || !oldSelf.released || (has(self.released)
                         && self.released)'
