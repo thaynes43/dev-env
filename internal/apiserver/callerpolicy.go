@@ -194,7 +194,7 @@ func withoutCallerWorkerCap(body any) any {
 		out := strip(*b)
 		return &out
 	case apiv1.SessionList:
-		b.Sessions = slices.Clone(b.Sessions)
+		b.Sessions = append([]apiv1.Session{}, b.Sessions...)
 		for i := range b.Sessions {
 			b.Sessions[i] = strip(b.Sessions[i])
 		}
