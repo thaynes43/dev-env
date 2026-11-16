@@ -440,3 +440,49 @@ func TestOrdinaryThreadAdmissionUsesLivePod(t *testing.T) {
 		}
 	}
 }
+
+func TestOrdinaryOneUseReplayKeepsMainReadinessBehavior(t *testing.T) {
+	for _, setting := range []string{"", "another-host"} {
+		for _, templateState := range []string{"unreadable", "removed"} {
+			t.Run("setting="+setting+"/"+templateState, func(t *testing.T) {
+				f, req, ex := rcFixture(t)
+				creationProfile(t, f, "rc-host", "dev")
+				f.srv.CodexWorkbenchHosts = codexworkbench.Policy{Name: setting, Namespace: sessionNS}
+				if w := f.do(http.MethodPost, rcPath, tokClient, req); w.Code != http.StatusCreated {
+					t.Fatalf("initial launch: %d %s", w.Code, w.Body)
+				}
+				var pod corev1.Pod
+				key := client.ObjectKey{Namespace: sessionNS, Name: "rc-host"}
+				if err := f.c.Get(context.Background(), key, &pod); err != nil {
+					t.Fatal(err)
+				}
+				// Main returns the retained receipt even if this same owned pod
+				// is no longer Ready. The replay launches nothing.
+				pod.Status.Conditions = nil
+				if err := f.c.Status().Update(context.Background(), &pod); err != nil {
+					t.Fatal(err)
+				}
+				delete(f.tmpl.Profiles, "dev")
+				reads := 0
+				f.srv.Templates = func(context.Context) (*templates.Templates, error) {
+					reads++
+					if templateState == "unreadable" {
+						return nil, errors.New("templates unavailable")
+					}
+					return f.tmpl, nil
+				}
+				podReads := 0
+				f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*corev1.Pod); ok {
+						podReads++
+					}
+					return c.Get(ctx, key, obj, opts...)
+				}})
+				w := f.do(http.MethodPost, rcPath, tokClient, req)
+				if w.Code != http.StatusOK || len(ex.calls) != 2 || reads != 0 || podReads != 1 {
+					t.Fatalf("replay changed: %d %s exec=%d templates=%d podReads=%d", w.Code, w.Body, len(ex.calls), reads, podReads)
+				}
+			})
+		}
+	}
+}

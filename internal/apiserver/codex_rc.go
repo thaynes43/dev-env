@@ -59,11 +59,12 @@ func (s *Server) codexRCThread(ctx context.Context, w http.ResponseWriter, r *ht
 	if saved, ok := sess.Annotations[apiv1.CodexRCIntentAnnotation]; ok {
 		// A replay cannot bypass the reserved-host gate. Its one live pod
 		// read supplies both the account proof and this request's UID fence.
-		pod, err := s.runningPod(ctx, &sess)
+		// Readiness does not decide a retained receipt, as on main.
+		pod, err := s.codexHostPod(ctx, &sess)
 		if err != nil {
 			return 0, nil, err
 		}
-		if string(pod.UID) != target.PodUID {
+		if pod == nil || string(pod.UID) != target.PodUID {
 			return 0, nil, newError(409, apiv1.CodeConflict, "codex RC pod UID changed")
 		}
 		if err := s.admitThreadHost(ctx, c, &sess, pod, false); err != nil {

@@ -228,3 +228,19 @@ at `47fa7bc31d658f10e5fac3e4810a394b349c5bce` reported no findings, including
 the subsequent account-remapped case and guide clarification. The reviewer ran
 no tests and makes no live claim. This does not replace the coordinator's
 required `claude-sonnet-5-5` re-review of the integrated draft's new head.
+
+
+### Retained-receipt compatibility
+
+Own final diff review found that requiring readiness for the new replay pod
+proof would change main's saved-receipt response. The worker first ran
+`TestOrdinaryOneUseReplayKeepsMainReadinessBehavior` RED: all four empty/nonempty
+setting × unreadable/removed profile cases returned 409 after the same pod lost
+readiness. The replay now uses one live owned pod read for account and configured
+UID, independent of readiness; new launches retain every original qualification
+readiness check. Focused GREEN passed (`0.124s` before the added read-count
+assertion); the final full API run includes that assertion. Replay launches
+nothing and reads no templates. Missing/replaced/unprovable pods still refuse.
+
+Full `internal/agentd` suite passed (`247.108s`), unfiltered. Its source is
+unchanged by the retained-receipt correction. `make check-layout` passed.

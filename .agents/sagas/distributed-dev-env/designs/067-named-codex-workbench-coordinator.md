@@ -407,6 +407,8 @@ and the route's UID fence. Empty, unfamiliar or missing pod accounts cannot
 supply that exception; coordinator intent and the reserved name never take it.
 The one-use route repeats this decision on each existing qualification read and
 uses one such read before receipt replay, without an extra account-only read.
+A retained receipt does not require pod readiness; it returns as on main when
+the same live owned pod still proves the ordinary account and configured UID.
 
 ### 6.2 Pool isolation in both directions
 
