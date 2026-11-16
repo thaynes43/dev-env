@@ -55,7 +55,7 @@ func IsHost(s *v1alpha1.AgentSession) bool {
 // OrdinaryAccount recognizes accounts a managed pod can use without workbench
 // power. Empty or unfamiliar accounts prove nothing; templates are not needed.
 func OrdinaryAccount(account string) bool {
-	return account == "dev-env-agent" || templates.IsCoordinatorServiceAccount(account)
+	return account == templates.AgentServiceAccount || templates.IsCoordinatorServiceAccount(account)
 }
 
 // Resolution is one immutable profile/account answer for a request/reconcile.

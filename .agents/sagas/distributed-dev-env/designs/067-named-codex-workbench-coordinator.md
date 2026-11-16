@@ -409,6 +409,13 @@ The one-use route repeats this decision on each existing qualification read and
 uses one such read before receipt replay, without an extra account-only read.
 A retained receipt does not require pod readiness; it returns as on main when
 the same live owned pod still proves the ordinary account and configured UID.
+**Difference from main:** replay of a saved one-use receipt returns 409 when
+the host's pod is gone, terminating or replaced; main returned the saved receipt.
+This can only refuse more than main. The route is off:
+`--enable-codex-rc-thread` is false by default and is not set in the running
+operator. This source round does not enable it.
+Before switching on `--enable-codex-rc-thread`, decide whether replay after the
+host's pod was replaced should return the saved receipt.
 
 ### 6.2 Pool isolation in both directions
 
@@ -449,6 +456,20 @@ Proposed changes:
 Amend the implementation-facing workflow and preflight docs in the build slice.
 DESIGN-063 remains the ordinary-pool contract; this design supplies a reserved
 class, not a new pool cell that anyone can select.
+
+With the reserved-name setting empty, these pool differences from main remain:
+
+- (a) A host with no live owned agent pod and an unresolvable profile is
+  `account_unresolved` and ineligible.
+- (b) A requested profile that cannot resolve, with no matching ordinary live
+  host to prove its account, yields `account_unresolved` and no create action;
+  main answered create.
+- (c) A live owned agent pod on an account that is neither ordinary nor
+  workbench makes the host ineligible (`account_unresolved`).
+- (d) A hold pod proves no agent account; account proof falls back to the
+  profile, so an unresolved profile is ineligible.
+- (e) The legacy suspended workbench host is protected: exclude every host
+  whose resolved account is workbench, even with no reserved name configured.
 
 ## 7. Pairing, visibility and names
 
@@ -769,7 +790,7 @@ for lanes Tom drives from the phone. Only watch-dependent lane transfer waits on
 | (b) Thread and pool fences | Explicit coordinator intent/host; privileged gate on both thread routes, UID-fenced operator exec; controller-to-agentd metadata/purpose checks; pool facts/pure selector/lease exclusions; exact-ID native thread title setter. Tests: ordinary same-profile and ancestor spoof; named coordinator caller; raised-to-workbench caller refused despite matching pod account or patched profile label; unreadable creation profile refused; human/client and workbench-by-creation caller with workbench pod allowed; pool with only reserved host; default/account alias; removed annotation/hands-off list; lease race; explicit ordinary intent to reserved host; coordinator intent to pool/missing host; no fallback; title metadata/readback and lost ACK without relaunch. Existing ordinary thread cases stay green. Update workflow/preflight docs. | Publish operator and agent image; pin both without restarting any host. Install reserved-name/pool setting only with the confirmed packet, all replicas consistent. Verify read-only selection never offers the reserved host and negative requests do not exec. | Q-067-01 before nonempty allowance or any host manifest. |
 | (c1) Safe stop and retention | Stop tests prove every remote writer is quiesced before rescue and no daemon restart races it. Test retained native history and explicit same-thread binding after resume. No wake hook is required for safe stop. | Publish/pin stop handling. On an authorized ordinary disposable host, prove a stop leaves no writer and preserved history can be reopened. Required before (d), independently of (c2). | The proof host/test needs its own approved story; no experiment in this design task. Any stop proof needs its own in-scope authorization. |
 | (c2) Wake | Resolve section 9's harness hook. Tests with fake clock/events: timer, addressed child note, new file, idle tool completion; unrelated note; replay/coalescing/resync; path traversal/symlink; lost ACK; question/hold; budget end; suspend cancellation; resume requires explicit same-thread bind. No CPU-heavy/timing stress suite. | Publish/pin supported hook. On an authorized ordinary disposable host, prove each source wakes the **same idle thread** once. If the provider has no supported hook, (c2) is blocked; record that fact and do not substitute terminal input. This does not block (d) or (e) for phone-driven lanes. | The proof host/test needs its own approved story. Q-067-02 controls unattended work and budget. Required only before a watch-dependent lane moves; all three wake proofs must pass. |
-| (d) One GitOps host and phone proof | Separate haynes-ops app and allow-name/hands-off settings, reviewed together. Render and validate exact account/mounts/depth/parent/name; check no copied API or credential state. Source checks cannot prove pairing. | After (a), (b) and (c1) only, apply flags/protection first, then manifest. A blocked (c2) does not block this phone-driven host. Read back Session and pod UID/account/profile/mount **references**. Authorized custodian runs pair privately; Tom enters it. Launch one fresh explicit coordinator thread on `gpt-6.1-sol`/`medium`; observe response, default-list presence and Tom's phone display/title. The title step has fake-only proof so far: against a real daemon a title failure ends the launch as unconfirmed while the thread and its answer may be fine; prove the title/readback on this host. Verify harmless question and reply; test existing Ask/notice/read path if used. | Tom's concrete confirmation of the full packet **before flags/manifest/host/pairing**. His pairing step and phone/question confirmation remain required. |
+| (d) One GitOps host and phone proof | Separate haynes-ops app and allow-name/hands-off settings, reviewed together. Render and validate exact account/mounts/depth/parent/name; check no copied API or credential state. Source checks cannot prove pairing. | After (a), (b) and (c1) only, apply flags/protection first, then manifest. A blocked (c2) does not block this phone-driven host. Read back Session and pod UID/account/profile/mount **references**. Authorized custodian runs pair privately; Tom enters it. Launch one fresh explicit coordinator thread on `gpt-6.1-sol`/`medium`; observe response, default-list presence and Tom's phone display/title. The title step has fake-only proof so far: against a real daemon a title failure ends the launch as unconfirmed while the thread and its answer may be fine; prove the daemon's thread preview length (including a long handoff), exact cwd/read timing and title/name readback on this host. A shortened preview ends a coordinator launch as `title_binding_unconfirmed` before its answer is observed. Verify harmless question and reply; test existing Ask/notice/read path if used. | Tom's concrete confirmation of the full packet **before flags/manifest/host/pairing**. His pairing step and phone/question confirmation remain required. |
 | (e) Custody and end rehearsal | Exact OP812 checkpoint and ACK; defined lane list; budget/stop record; documented suspend/resume/removal procedure. No new source unless earlier proof finds a fault, which returns to its owner. | For phone-driven lanes, record model evidence and owner question return. Checkpoint, perform an authorized quiet suspend/resume proof and verify retained computer/history. Record each ready lane release and ACK. For watch-dependent lanes, first pass (c2), prove timer, child note and file wake on the installed host and re-arm the same-thread watch after resume. Item 772's acceptance watch, item 829's acceptance, a Meatball handoff channel and any worker's parent note need a watch. They stay with the outgoing coordinator until (c2) passes; phone-driven lanes can move meanwhile. Record source, tested, installed and accepted separately. | OP812 owner/coordinator lane release. Any stop/restart proof is explicitly included in the confirmed install plan. |
 
 For this design PR: `make check-layout`; own diff/citation review; independent
@@ -881,8 +902,14 @@ the separately configured coordinator-host caller.
 
 13. **Native title proof uses fakes only.** Against a real daemon a title
     failure ends a launch as unconfirmed while the thread and its answer may be
-    fine. Exact cwd/read timing and name readback remain slice (d) proof, beyond
-    the fake daemon and offline schema checks.
+    fine. The daemon's thread preview length, exact cwd/read timing and name
+    readback remain slice (d) proof, beyond the fake daemon and offline schema
+    checks. If the real daemon shortens a preview, a coordinator launch with a
+    long handoff ends `title_binding_unconfirmed` before its answer is observed.
+    "Exact" means equality of normalized text, not launch identity: two launches
+    with the same handoff text in the same directory within the same second
+    could bind each other's thread if only the other thread is listed at the
+    first poll. Both listed gives `thread_ambiguous` and no title write.
 
 Limits 1–4 rest on the source boundaries and GitOps rights cited in sections 2,
 3, 5 and 6. Unknowns are acceptance work, not facts inferred from the historical
@@ -944,6 +971,32 @@ with a 20 GiB HOME default. Re-read those declarations for the actual packet.
 ([templates:165–194][ops-size-home])
 
 ## 14. Review and handoff
+
+2026-11-16 cross-family re-check: `claude-sonnet-5-5` reviewed PR 1165 at
+`15de34da` (`15de34dadb6a55f2c9f4b85a074a0ca6fd8656b0`). Verdict:
+**APPROVE** the round-1 delta, HIGH 0, MEDIUM 0, LOW 4. Round 2 closes the
+four notes under the coordinator's rulings:
+
+- N1, accepted as a stated difference, no code change: section 6.1 and the
+  retained-receipt evidence explicitly distinguish the 409 on a gone,
+  terminating or replaced pod from main's saved receipt. Record the replay
+  decision before enabling the default-off one-use route.
+- N2, documentation: section 12 and row (d) add daemon preview length to the
+  live title proof; a shortened long-handoff preview halts before answer
+  observation as `title_binding_unconfirmed`.
+- N3, accepted, the only code change: `templates.AgentServiceAccount` supplies
+  both the controller's `ServiceAccountName` alias and `OrdinaryAccount`.
+  A regression test pins their agreement; account behavior is unchanged.
+- N4, documentation: section 12 states normalized text equality and the
+  same-text/same-directory/same-second cross-binding limit; both candidates
+  listed gives `thread_ambiguous` and no title write.
+
+Fix worker `dev-env-1116-212653` owns only its follow-up branch/PR into
+`agent/dev-env-1114-160847`. Main was merged first as a separate commit without
+conflicts. Section 6.2 and the evidence file list all five empty-setting pool
+differences from re-check part B(4). Source/tests/docs only; nothing is installed
+or accepted. Neither PR is merged; PR 1165 remains draft. The coordinator owns
+integration and the next exact-head cross-family re-check.
 
 2026-11-16 cross-family source review: `claude-sonnet-5-5` reviewed draft PR
 1165 at `9ace0954` (`9ace0954079e3ee4d09c973df72226378888cb1d`). Verdict:

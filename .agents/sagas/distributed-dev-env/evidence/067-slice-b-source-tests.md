@@ -243,7 +243,13 @@ readiness. The replay now uses one live owned pod read for account and configure
 UID, independent of readiness; new launches retain every original qualification
 readiness check. Focused GREEN passed (`0.144s` before the added read-count
 assertion); the final full API run includes that assertion. Replay launches
-nothing and reads no templates. Missing/replaced/unprovable pods still refuse.
+nothing and reads no templates. **Difference from main:** replay of a saved
+one-use receipt returns 409 when the host's pod is gone, terminating or replaced;
+main returned the saved receipt. This can only refuse more than main. The route
+is off: `--enable-codex-rc-thread` is false by default and is not set in the
+running operator. Unprovable pod accounts still refuse. Before enabling the
+route, decide whether replay after a replaced host pod should return the saved
+receipt (design section 6.1).
 
 Full `internal/agentd` suite passed (`247.108s`), unfiltered. Its source is
 unchanged by the retained-receipt correction. `make check-layout` passed.
@@ -270,3 +276,51 @@ commits record evidence only. Exact pushed/PR head and CI belong in the fix PR
 and OP858 handoff, without changing that head merely to record CI. The fix PR
 stays draft and unmerged; integrated-draft CI and cross-family re-review belong
 to the coordinator. No installation, host action or usable acceptance occurred.
+
+## 2026-11-16 fix round 2 (N1–N4)
+
+Cross-family re-check by `claude-sonnet-5-5` at
+`15de34dadb6a55f2c9f4b85a074a0ca6fd8656b0`: **APPROVE** the round-1 delta,
+HIGH 0, MEDIUM 0, LOW 4. Worker `dev-env-1116-212653` started from that
+pinned head and merged freshly fetched main first, as a separate commit, without
+conflicts. This round makes no replay, launch, title or pool behavior change.
+
+- N1: explicitly document the retained-receipt difference from main above and
+  in design 6.1, plus the decision needed before enabling the one-use route.
+- N2: add daemon thread preview length to design 12's title limit and row (d)'s
+  proof list. A shortened preview for a long handoff ends a coordinator launch
+  as `title_binding_unconfirmed` before answer observation. Only fake daemon
+  proof exists; no real daemon was tested.
+- N3: define `templates.AgentServiceAccount` beside `WorkbenchServiceAccount`;
+  use it in `controller.ServiceAccountName` and `codexworkbench.OrdinaryAccount`.
+  `TestOrdinaryAccountMatchesControllerAccount` pins their agreement. The
+  account-proof matrix uses the shared constant too; accepted accounts are unchanged.
+- N4: design 12 states that exact binding is normalized text equality. Two
+  launches with the same handoff text in the same directory within the same
+  second could bind each other's thread if only the other appears at first
+  poll. Both listed gives `thread_ambiguous` and no title write.
+
+### All empty-setting pool differences from main
+
+These are re-check part B(4)(a)–(e), each also stated in design 6.2:
+
+- (a) A host with no live owned agent pod and an unresolvable profile is
+  `account_unresolved` and ineligible.
+- (b) A requested profile that cannot resolve, with no matching ordinary live
+  host to prove its account, yields `account_unresolved` and no create action;
+  main answered create.
+- (c) A live owned agent pod on an account that is neither ordinary nor
+  workbench makes the host ineligible (`account_unresolved`).
+- (d) A hold pod proves no agent account; account proof falls back to the
+  profile, so an unresolved profile is ineligible.
+- (e) The legacy suspended workbench host is protected: exclude every host
+  whose resolved account is workbench, even with no reserved name configured.
+
+The selection route still requires readable templates, as on main. A live
+owned ordinary-account agent pod proves its account despite an unreadable or
+removed creation profile; selection with unreadable templates still returns
+main's 503. These facts do not remove any of the five differences above.
+
+Source, tests and documentation only. No installation, Codex host action,
+provider turn or acceptance. PR 1165 stays draft; the coordinator owns
+integration, its body edits and the next cross-family re-check.

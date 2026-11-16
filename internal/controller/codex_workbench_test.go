@@ -25,6 +25,15 @@ import (
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
+func TestOrdinaryAccountMatchesControllerAccount(t *testing.T) {
+	if ServiceAccountName != templates.AgentServiceAccount {
+		t.Fatalf("controller account %q differs from shared ordinary account %q", ServiceAccountName, templates.AgentServiceAccount)
+	}
+	if !codexworkbench.OrdinaryAccount(ServiceAccountName) {
+		t.Fatalf("controller account %q is not recognized as ordinary", ServiceAccountName)
+	}
+}
+
 func workbenchHostSession() *v1alpha1.AgentSession {
 	s := taskSession()
 	s.Name = "named-codex"

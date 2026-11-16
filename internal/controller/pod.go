@@ -32,7 +32,7 @@ const (
 	// ContainerName is the session pod's one container.
 	ContainerName = "agent"
 	// ServiceAccountName is the agents' identity (DESIGN-001 6.11).
-	ServiceAccountName = "dev-env-agent"
+	ServiceAccountName = templates.AgentServiceAccount
 	// PriorityClassName is -10 with preemptionPolicy Never (D-20), created by
 	// haynes-ops.
 	PriorityClassName = "dev-env-agent"
