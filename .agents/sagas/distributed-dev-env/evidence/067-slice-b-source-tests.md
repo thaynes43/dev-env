@@ -8,8 +8,8 @@ OP858 history, all-state PR search and running session metadata before edits.
 No duplicate slice-(b) owner or PR was found. The worker's branch is
 `agent/dev-env-1114-160847`; the deliverable is draft PR #1165.
 
-This records source and local tests only. Another-family review is unavailable
-and pending. No host, flag, live policy, account, credentials, deployment,
+This records source and local tests only. The original worker had no
+another-family review; the 2026-11-16 review/fix record is appended below. No host, flag, live policy, account, credentials, deployment,
 provider reset, managed worker dispatch or Studio resource was changed. No
 advisory review was manually invoked. Existing owners retain all custody.
 Meatball must obtain any missing ruling; silence is not consent.
@@ -43,7 +43,8 @@ ordinary test callers supply explicit resolution. L2 documents the existing
 `templates.Validate` account restriction; no policy was broadened. L3 applies
 only to observation of an owned ordinary-account pod when resolution is
 unavailable, including a removed profile. It never admits missing-pod
-construction or a new thread with an unresolved account.
+construction. The fix round below uses a live ordinary pod to prove an existing
+thread host account without resolving its creation profile.
 
 ## Test boundaries
 
@@ -69,7 +70,8 @@ with `-count=1`, and restores the original source bytes in a `finally` block.
 Only a named test failure counts as a kill; build errors do not. These are
 local experiments, not a stress loop or live proof. No mutant is pushed.
 
-**58 killed; 0 surviving or invalid mutants. All original source bytes restored and hash-checked.**
+**Original worker report: 58 killed; 0 surviving or invalid mutants; source
+bytes restored and hash-checked. Historical, not rerun in this fix round.**
 
 | # | Guard broken | Test that failed | Source |
 | --- | --- | --- | --- |
@@ -134,9 +136,56 @@ local experiments, not a stress loop or live proof. No mutant is pushed.
 
 ## Remaining gates
 
-Independent-family review is pending; a skipped advisory job is no review.
+The 2026-11-16 independent-family review requested changes; re-review of the
+fixed draft head is pending. A skipped advisory job is no review.
 The PR stays draft. No merge, release, installation, flags, host operations or
 acceptance is authorized to this worker. Slices (c1/c2/d/e) were not started.
 Owner confirmation and the concrete install packet remain required. Source
 merely merged is not installed. Watch lanes and OP812 custody remain with their
 existing owners; neither this PR nor successful CI transfers them.
+
+## 2026-11-16 cross-family fix round (F1–F8)
+
+Fix worker `dev-env-1116-202344`, base `9ace0954079e3ee4d09c973df72226378888cb1d`,
+branch `agent/dev-env-1116-202344`. Reviewer `claude-sonnet-5-5`, 2026-11-16,
+requested changes (HIGH 1, LOW 7) on that base. The coordinator's exact rulings
+are recorded in design section 14. This round changes source, tests and docs;
+nothing is installed, accepted or operated on a host. PR 1165 stays draft.
+
+- F1/F5: the shared ordinary-account predicate uses the live owned agent pod.
+  Both thread routes skip every template admission for that ordinary path.
+  `TestOrdinaryThreadAdmissionUsesLivePod` covers empty/nonempty setting ×
+  readable/unreadable/removed profile on both routes, zero template reads, live
+  Session-before-Pod ordering and the existing pod read counts (one on `threads`,
+  three existing qualification reads on `codex-thread`). The one-use route has
+  one preflight exec and one start exec, exactly as on main; `threads` has one.
+  Workbench, reserved, coordinator intent, unknown account, foreign/no pod and
+  a workbench account visible only through the live reader all refuse without
+  exec/reservation. Receipt replay uses one live pod for both account and UID.
+- F5: `TestOrdinaryPoolAccountProofMatchesMain` compares complete selection
+  results for ready/busy/not-ready ordinary hosts with readable and removed
+  profiles; unreadable templates keep main's 503 `templates are not usable`.
+  Removed-profile leases still use the proved ordinary account. No-pod account
+  uncertainty remains ineligible, with `account_unresolved`, per design 6.2.
+- F2: `TestNamedHostAbsentRefused` covers the pure selector's absent named host.
+- F3: `TestCodexCoordinatorTitleAfterExactBinding` now includes empty and partial
+  preview binding: `title_binding_unconfirmed`, no title write, one launch.
+  Full normalized handoff match can write; lost ACK remains unconfirmed.
+- F4: fixed platform title documented in section 7 and workflow-guide; choosing
+  the name belongs to slice (d). No title-text code change.
+- F6: premise verified by source: list/show already expose phases to `kindSession`;
+  no refusal reorder. Exact route/caller citations are in the fix PR.
+- F7: raised caller keeps its original dev pod label; separate unraised caller
+  has a workbench-patched label. Both carry the workbench pod account and a dev
+  creation profile. `TestCoordinatorThreadEntry/raised` and `/patched-label`
+  refuse. The review's two equivalent mutants are **equivalent, defence in
+  depth**, not kills: dropping only the explicit Session UID comparison is
+  redundant with `runningPod`'s owner reference; dropping the controller metadata
+  `resolved.Workbench()` clause is redundant with builder admission. The original
+  row 11 kill is the Pod UID comparison, not that equivalent Session UID half.
+- F8: section 12 and row (d) state fake-only title proof and the real-daemon
+  limit: a title failure may end unconfirmed despite a healthy thread/answer.
+
+The original worker's 58-kill table above is historical, author-reported evidence,
+not rerun by this worker or independently verified by the cross-family reviewer.
+This round's focused/full test and mutation results are recorded below when run.

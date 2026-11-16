@@ -586,7 +586,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	// An owned ordinary-account pod proves the running account even when its
 	// creation profile disappeared. This permits observation, never construction.
 	var hostRefusal *codexworkbench.Refusal
-	if !pod.missing && pod.foreign == "" && pod.obj.Spec.ServiceAccountName != templates.WorkbenchServiceAccount &&
+	if !pod.missing && pod.foreign == "" && codexworkbench.OrdinaryAccount(pod.obj.Spec.ServiceAccountName) &&
 		errors.As(obs.codexHostErr, &hostRefusal) && hostRefusal.Reason == codexworkbench.TemplatesUnavailable {
 		obs.codexHostErr = nil
 	}

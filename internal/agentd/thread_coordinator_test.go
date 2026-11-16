@@ -86,7 +86,7 @@ func TestCodexCoordinatorEntryMetadataAndUIDs(t *testing.T) {
 }
 
 func TestCodexCoordinatorTitleAfterExactBinding(t *testing.T) {
-	for _, end := range []string{"confirmed", "lost-ack", "ambiguous"} {
+	for _, end := range []string{"confirmed", "lost-ack", "ambiguous", "empty-preview", "partial-preview"} {
 		t.Run(end, func(t *testing.T) {
 			s, sess, cwd := threadHost(t)
 			meta, bound, req := coordinatorEntryFixture()
@@ -99,6 +99,15 @@ func TestCodexCoordinatorTitleAfterExactBinding(t *testing.T) {
 				other := f.all[0]
 				other.ID = twoThread
 				f.all = append(f.all, other)
+			}
+			if end == "empty-preview" {
+				f.all[0].Preview = ""
+			}
+			if end == "partial-preview" {
+				f.all[0].Preview = "Make a worktree"
+			}
+			if end == "confirmed" || end == "lost-ack" {
+				f.all[0].Preview = req.Handoff
 			}
 			d.title = func(_ context.Context, got Settings, pid int, id, dir string) error {
 				titles++
@@ -122,6 +131,10 @@ func TestCodexCoordinatorTitleAfterExactBinding(t *testing.T) {
 			case "lost-ack":
 				if result.Outcome != apiv1.ThreadUnconfirmed || result.ThreadID != newThread || result.Error.Code != "title_unconfirmed" || titles != 1 {
 					t.Fatalf("%+v titles=%d", result, titles)
+				}
+			case "empty-preview", "partial-preview":
+				if result.Outcome != apiv1.ThreadUnconfirmed || result.ThreadID != newThread || result.Error == nil || result.Error.Code != "title_binding_unconfirmed" || titles != 0 {
+					t.Fatalf("guessed binding renamed: %+v titles=%d", result, titles)
 				}
 			case "ambiguous":
 				if result.Outcome != apiv1.ThreadUnconfirmed || titles != 0 {

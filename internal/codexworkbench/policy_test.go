@@ -164,3 +164,12 @@ func TestCodexWorkbenchResolutionIsStable(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestOrdinaryPodAccountProof(t *testing.T) {
+	for _, account := range []string{"dev-env-agent", "dev-env-coordinator-test", "", "default", templates.WorkbenchServiceAccount, "unknown", "dev-env-coordinator-"} {
+		want := account == "dev-env-agent" || account == "dev-env-coordinator-test"
+		if OrdinaryAccount(account) != want {
+			t.Errorf("OrdinaryAccount(%q) != %v", account, want)
+		}
+	}
+}

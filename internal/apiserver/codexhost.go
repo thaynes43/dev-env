@@ -107,13 +107,14 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 	who.LaunchID = req.LaunchID
 	requestedAccount := codexworkbench.Resolve(tmpl, asked)
 	in := codexhostpool.Input{
-		ProfileExcluded:   !requestedAccount.Available() || requestedAccount.Workbench(),
-		Caller:            who,
-		Request:           codexhostpool.Request{Repository: req.Repo},
-		ResolvedProfile:   asked,
-		DefaultProfile:    tmpl.DefaultProfile,
-		MaxRunningPerCell: s.CodexHosts.MaxRunningPerCell,
-		MaxRunning:        s.CodexHosts.MaxRunning,
+		ProfileExcluded:    requestedAccount.Workbench(),
+		ProfileUnavailable: !requestedAccount.Available(),
+		Caller:             who,
+		Request:            codexhostpool.Request{Repository: req.Repo},
+		ResolvedProfile:    asked,
+		DefaultProfile:     tmpl.DefaultProfile,
+		MaxRunningPerCell:  s.CodexHosts.MaxRunningPerCell,
+		MaxRunning:         s.CodexHosts.MaxRunning,
 	}
 	var last string
 	for range codexHostSelectPasses {
@@ -401,10 +402,21 @@ func (s *Server) codexHostPod(ctx context.Context, sess *v1alpha1.AgentSession) 
 
 func (s *Server) codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates.Templates, handsOff bool, now time.Time) codexhostpool.Host {
 	resolved := codexworkbench.Resolve(tmpl, sess.Spec.Profile)
+	accountResolved, workbench := resolved.Available(), resolved.Workbench()
+	// An owned live pod proves its account even when the profile disappeared.
+	// Unknown pod accounts fail closed; a hold pod cannot prove an agent account.
+	if pod != nil && metav1.IsControlledBy(pod, sess) && pod.DeletionTimestamp.IsZero() && pod.Labels[v1alpha1.LabelHold] != "true" {
+		accountResolved = codexworkbench.OrdinaryAccount(pod.Spec.ServiceAccountName) || pod.Spec.ServiceAccountName == templates.WorkbenchServiceAccount
+		workbench = pod.Spec.ServiceAccountName == templates.WorkbenchServiceAccount
+	}
+	def := ""
+	if tmpl != nil {
+		def = tmpl.DefaultProfile
+	}
 	h := codexhostpool.Host{
 		Reserved:         s.CodexWorkbenchHosts.Name != "" && sess.Name == s.CodexWorkbenchHosts.Name,
-		AccountResolved:  resolved.Available(),
-		WorkbenchAccount: resolved.Workbench() || pod != nil && pod.Spec.ServiceAccountName == templates.WorkbenchServiceAccount,
+		AccountResolved:  accountResolved,
+		WorkbenchAccount: workbench,
 		Name:             sess.Name,
 		UID:              string(sess.UID),
 		Agent:            string(sess.Spec.Agent),
@@ -412,7 +424,7 @@ func (s *Server) codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmp
 		Phase:            string(sess.Status.Phase),
 		OperatingMode:    codexOperatingMode(sess),
 		Deletion:         !sess.DeletionTimestamp.IsZero(),
-		ResolvedProfile:  codexResolvedProfile(sess, pod, tmpl.DefaultProfile),
+		ResolvedProfile:  codexResolvedProfile(sess, pod, def),
 		ReadyRepos:       codexReadyRepos(sess.Status.Agent),
 		SpecRepo:         sess.Spec.Repo,
 		HandsOff:         handsOff,

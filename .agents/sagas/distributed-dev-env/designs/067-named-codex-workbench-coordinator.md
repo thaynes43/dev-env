@@ -400,6 +400,14 @@ turns a `kindSession` into a human or configured coordinator caller.
 ([codex-clean-session.py:68–79][wrapper-model],
 [threads.go:118–127][thread-fence], [caller.go:138–153][caller-class])
 
+An ordinary launch to a nonreserved host uses main's profile/ancestry path
+without reading templates when the live owned pod proves an ordinary account.
+The Session is read first; the same live pod reading supplies the account proof
+and the route's UID fence. Empty, unfamiliar or missing pod accounts cannot
+supply that exception; coordinator intent and the reserved name never take it.
+The one-use route repeats this decision on each existing qualification read and
+uses one such read before receipt replay, without an extra account-only read.
+
 ### 6.2 Pool isolation in both directions
 
 Today hands-off and protected hosts are rejected before profile matching. The
@@ -415,6 +423,12 @@ Proposed changes:
   existing hands-off list and protected annotation. Exclude **every** host whose
   resolved account is workbench, even an invalid/unlisted one. Protect the reserved
   name regardless of account. Failure to resolve an account makes it ineligible.
+  An owned live ordinary-account agent pod proves its account independently of
+  templates, including a removed creation profile. Its ordinary pool answer and
+  reason stay main's with the setting empty. With no such pod, an unresolved
+  account remains ineligible and is described as `account_unresolved`, rather
+  than protected. The selection route still requires readable templates for the
+  requested profile/default, as on main.
 - Apply it in fact collection, pure suitability/selection, lease recheck and any
   later resume/create automation. The host never counts as spare ordinary pool
   capacity and is never adopted, leased, resumed, rotated or cleaned up by it.
@@ -494,9 +508,13 @@ proof. The pinned handler is the version evidence.
 
 Add a bounded setter to the existing peer-verified daemon RPC client in slice (b),
 after the fresh thread ID is unambiguously bound. Set `GPT | Dev-env coordinator 2`
-as native thread metadata, separately from the tmux name and host title. Admit
+as native thread metadata, separately from the tmux name and host title.
+The title is fixed platform text, `GPT | Dev-env coordinator 2`; choosing the
+name belongs to slice (d). Admit
 only the reserved coordinator launch; validate the exact Session/Pod/thread
-binding and title. Read name metadata back; a lost ACK stays unconfirmed and must
+binding and title. A full normalized handoff preview match is required for
+a title write; empty or partial-preview guesses return `title_binding_unconfirmed`
+without writing or relaunching. Read name metadata back; a lost ACK stays unconfirmed and must
 not relaunch the thread. No shell/TUI rename, resume or new turn is needed.
 The daemon RPC transport already checks its Unix peer PID and UID.
 ([codex_host_rpc.go:51–99][native-rpc-peer])
@@ -749,7 +767,7 @@ for lanes Tom drives from the phone. Only watch-dependent lane transfer waits on
 | (b) Thread and pool fences | Explicit coordinator intent/host; privileged gate on both thread routes, UID-fenced operator exec; controller-to-agentd metadata/purpose checks; pool facts/pure selector/lease exclusions; exact-ID native thread title setter. Tests: ordinary same-profile and ancestor spoof; named coordinator caller; raised-to-workbench caller refused despite matching pod account or patched profile label; unreadable creation profile refused; human/client and workbench-by-creation caller with workbench pod allowed; pool with only reserved host; default/account alias; removed annotation/hands-off list; lease race; explicit ordinary intent to reserved host; coordinator intent to pool/missing host; no fallback; title metadata/readback and lost ACK without relaunch. Existing ordinary thread cases stay green. Update workflow/preflight docs. | Publish operator and agent image; pin both without restarting any host. Install reserved-name/pool setting only with the confirmed packet, all replicas consistent. Verify read-only selection never offers the reserved host and negative requests do not exec. | Q-067-01 before nonempty allowance or any host manifest. |
 | (c1) Safe stop and retention | Stop tests prove every remote writer is quiesced before rescue and no daemon restart races it. Test retained native history and explicit same-thread binding after resume. No wake hook is required for safe stop. | Publish/pin stop handling. On an authorized ordinary disposable host, prove a stop leaves no writer and preserved history can be reopened. Required before (d), independently of (c2). | The proof host/test needs its own approved story; no experiment in this design task. Any stop proof needs its own in-scope authorization. |
 | (c2) Wake | Resolve section 9's harness hook. Tests with fake clock/events: timer, addressed child note, new file, idle tool completion; unrelated note; replay/coalescing/resync; path traversal/symlink; lost ACK; question/hold; budget end; suspend cancellation; resume requires explicit same-thread bind. No CPU-heavy/timing stress suite. | Publish/pin supported hook. On an authorized ordinary disposable host, prove each source wakes the **same idle thread** once. If the provider has no supported hook, (c2) is blocked; record that fact and do not substitute terminal input. This does not block (d) or (e) for phone-driven lanes. | The proof host/test needs its own approved story. Q-067-02 controls unattended work and budget. Required only before a watch-dependent lane moves; all three wake proofs must pass. |
-| (d) One GitOps host and phone proof | Separate haynes-ops app and allow-name/hands-off settings, reviewed together. Render and validate exact account/mounts/depth/parent/name; check no copied API or credential state. Source checks cannot prove pairing. | After (a), (b) and (c1) only, apply flags/protection first, then manifest. A blocked (c2) does not block this phone-driven host. Read back Session and pod UID/account/profile/mount **references**. Authorized custodian runs pair privately; Tom enters it. Launch one fresh explicit coordinator thread on `gpt-6.1-sol`/`medium`; observe response, default-list presence and Tom's phone display/title. Verify harmless question and reply; test existing Ask/notice/read path if used. | Tom's concrete confirmation of the full packet **before flags/manifest/host/pairing**. His pairing step and phone/question confirmation remain required. |
+| (d) One GitOps host and phone proof | Separate haynes-ops app and allow-name/hands-off settings, reviewed together. Render and validate exact account/mounts/depth/parent/name; check no copied API or credential state. Source checks cannot prove pairing. | After (a), (b) and (c1) only, apply flags/protection first, then manifest. A blocked (c2) does not block this phone-driven host. Read back Session and pod UID/account/profile/mount **references**. Authorized custodian runs pair privately; Tom enters it. Launch one fresh explicit coordinator thread on `gpt-6.1-sol`/`medium`; observe response, default-list presence and Tom's phone display/title. The title step has fake-only proof so far: against a real daemon a title failure ends the launch as unconfirmed while the thread and its answer may be fine; prove the title/readback on this host. Verify harmless question and reply; test existing Ask/notice/read path if used. | Tom's concrete confirmation of the full packet **before flags/manifest/host/pairing**. His pairing step and phone/question confirmation remain required. |
 | (e) Custody and end rehearsal | Exact OP812 checkpoint and ACK; defined lane list; budget/stop record; documented suspend/resume/removal procedure. No new source unless earlier proof finds a fault, which returns to its owner. | For phone-driven lanes, record model evidence and owner question return. Checkpoint, perform an authorized quiet suspend/resume proof and verify retained computer/history. Record each ready lane release and ACK. For watch-dependent lanes, first pass (c2), prove timer, child note and file wake on the installed host and re-arm the same-thread watch after resume. Item 772's acceptance watch, item 829's acceptance, a Meatball handoff channel and any worker's parent note need a watch. They stay with the outgoing coordinator until (c2) passes; phone-driven lanes can move meanwhile. Record source, tested, installed and accepted separately. | OP812 owner/coordinator lane release. Any stop/restart proof is explicitly included in the confirmed install plan. |
 
 For this design PR: `make check-layout`; own diff/citation review; independent
@@ -859,6 +877,11 @@ the separately configured coordinator-host caller.
     misleading instructions. Metadata delivery grants no owner authority. A burst
     may delay a wake; overflow requires resync, never silent event loss.
 
+13. **Native title proof uses fakes only.** Against a real daemon a title
+    failure ends a launch as unconfirmed while the thread and its answer may be
+    fine. Exact cwd/read timing and name readback remain slice (d) proof, beyond
+    the fake daemon and offline schema checks.
+
 Limits 1–4 rest on the source boundaries and GitOps rights cited in sections 2,
 3, 5 and 6. Unknowns are acceptance work, not facts inferred from the historical
 host or coordinator handoff. This design does not authorize probing any of them.
@@ -920,6 +943,36 @@ with a 20 GiB HOME default. Re-read those declarations for the actual packet.
 
 ## 14. Review and handoff
 
+2026-11-16 cross-family source review: `claude-sonnet-5-5` reviewed draft PR
+1165 at `9ace0954` (`9ace0954079e3ee4d09c973df72226378888cb1d`). Verdict:
+**REQUEST CHANGES**, HIGH 1, LOW 7. The coordinator's fix rulings are:
+
+- F1 (HIGH), accepted: ordinary thread entry on both routes depends on the live
+  owned ordinary-account pod, never templates; keep the same pod/UID reading and
+  main's ordinary profile/ancestry fence. Reserved name, coordinator intent,
+  workbench or unprovable accounts still fail closed.
+- F2, accepted: the pure selector refuses a named host absent from its host list.
+- F3, accepted: guessed bindings cannot write a native title; report a reasoned
+  unconfirmed result and never relaunch. Test empty and partial previews.
+- F4, documentation: keep the fixed title; section 7 and the workflow guide name
+  the exact platform text. Choosing a name belongs to slice (d).
+- F5, accepted with F1: ordinary live-pod pool answers/reasons match main even
+  after profile removal. No-pod unresolved accounts stay ineligible under 6.2,
+  with an account-resolution reason instead of protected.
+- F6, premise verified: session callers already read other sessions' phases via
+  list/show. Leave refusal order unchanged; cite routes and caller checks in the
+  fix PR. Configured coordinator/policy/summon callers keep their narrower rules.
+- F7, accepted: distinct raised/untouched-label and unraised/patched-label
+  fixtures. Mark the redundant Session UID comparison and redundant controller
+  metadata workbench clause as equivalent mutants, defence in depth.
+- F8, documentation: section 12 and slice (d)'s proof list record the fake-only
+  title proof and the possible unconfirmed launch despite a healthy thread/answer.
+
+Fix worker `dev-env-1116-202344` owns only its branch/PR into the slice (b) draft.
+Source/tests/docs only; no installation, host change or acceptance. The
+coordinator merges the fix into the draft and returns its new head to the
+cross-family reviewer. PR 1165 stays draft; this review is not approval.
+
 2026-11-14 build record: **slice (a) built, not installed** (OP858). The source
 adds the default-empty name setting, shared account/shape predicate, API
 create/final admission/resume checks and controller construction/status checks.
@@ -958,7 +1011,8 @@ a removed profile with readable templates, and skips construction admission when
 `ensure` already has a pod. No missing-pod construction is admitted by that
 exception. Tests compare the whole ordinary status/result and preserve pod/HOME.
 The [source test evidence](../evidence/067-slice-b-source-tests.md) records the
-acceptance tests and all 58 killed/restored guard mutants. The PR and recovery
+acceptance tests and the original worker’s 58 reported killed/restored guard
+mutants, plus the cross-family corrections and fix-worker reruns. The PR and recovery
 handoff record the exact head and CI separately.
 Slices (c1/c2/d/e), owner rulings, another-family review and installation remain
 held with their existing owners. Meatball must obtain any missing ruling;

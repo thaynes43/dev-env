@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -35,11 +37,11 @@ func TestCoordinatorPoolFactsAndLease(t *testing.T) {
 			case "unknown-profile":
 				profile = "removed"
 			}
-			f.addCodexHost(name, codexHostOpt{profile: profile})
+			f.addCodexHost(name, codexHostOpt{profile: profile, skipPod: shape == "unknown-profile"})
 			if shape == "workbench-default" {
 				creationProfile(t, f, name, "")
 			}
-			if shape == "workbench-pod" {
+			if shape == "workbench-pod" || shape == "workbench-alias" || shape == "workbench-default" {
 				var p corev1.Pod
 				if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: name}, &p); err != nil {
 					t.Fatal(err)
@@ -90,6 +92,14 @@ func TestCoordinatorLeaseRejectsProtectionRace(t *testing.T) {
 				if err := f.c.Update(context.Background(), s); err != nil {
 					t.Fatal(err)
 				}
+				var p corev1.Pod
+				if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: s.Name}, &p); err != nil {
+					t.Fatal(err)
+				}
+				p.Labels[v1alpha1.LabelProfile] = "wb-alias"
+				if err := f.c.Update(context.Background(), &p); err != nil {
+					t.Fatal(err)
+				}
 			case "pod-account":
 				var p corev1.Pod
 				if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: s.Name}, &p); err != nil {
@@ -132,9 +142,74 @@ func TestCoordinatorPoolRequestedAccount(t *testing.T) {
 				t.Fatalf("%d %s", w.Code, w.Body)
 			}
 			var result codexhostpool.Result
-			if json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Host != "" || result.Action != "" || result.Reason != codexhostpool.ReasonProtected {
+			if json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Host != "" || result.Action != "" || result.Reason != map[bool]string{true: codexhostpool.ReasonAccountUnresolved, false: codexhostpool.ReasonProtected}[profile == "removed"] {
 				t.Fatalf("pool account result %+v", result)
 			}
 		})
+	}
+}
+
+func TestOrdinaryPoolAccountProofMatchesMain(t *testing.T) {
+	for _, state := range []string{"ready", "busy", "not-ready"} {
+		for _, templateState := range []string{"readable", "unreadable", "removed"} {
+			t.Run(state+"/"+templateState, func(t *testing.T) {
+				f := newCodexFixture(t)
+				opt := codexHostOpt{profile: "dev", notReady: state == "not-ready"}
+				if state == "busy" {
+					opt.lease = formatCodexHostLease("use", f.now.Add(10*60*1e9), "another", "anotherlaunchidentifier")
+				}
+				f.addCodexHost("ordinary", opt)
+				req := apiv1.CodexHostSelectRequest{Repo: "dev-env", Profile: "dev", LaunchID: "launchidentifier0123"}
+				path := apiv1.CodexHostsSelectPath + "?check=true"
+				baseline := f.do(http.MethodPost, path, tokClient, req)
+				if baseline.Code != 200 {
+					t.Fatalf("baseline: %d %s", baseline.Code, baseline.Body)
+				}
+				var want codexhostpool.Result
+				if err := json.Unmarshal(baseline.Body.Bytes(), &want); err != nil {
+					t.Fatal(err)
+				}
+				// These are main's answers for the three ordinary host states.
+				switch state {
+				case "ready":
+					if want.Host != "ordinary" || want.Action != "use" || want.Reason != "" {
+						t.Fatal(want)
+					}
+				case "busy":
+					if want.Reason != "host_busy" {
+						t.Fatal(want)
+					}
+				case "not-ready":
+					if want.Action != "report" || want.Reason != "not_running" {
+						t.Fatal(want)
+					}
+				}
+				if templateState == "removed" {
+					delete(f.tmpl.Profiles, "dev")
+				}
+				if templateState == "unreadable" {
+					f.tmplOK = false
+				}
+				got := f.do(http.MethodPost, path, tokClient, req)
+				// main requires templates to resolve the requested pool profile too.
+				if templateState == "unreadable" {
+					if got.Code != 503 || !strings.Contains(got.Body.String(), "templates are not usable") {
+						t.Fatalf("main outage result changed: %d %s", got.Code, got.Body)
+					}
+					return
+				}
+				var answer codexhostpool.Result
+				if got.Code != baseline.Code || json.Unmarshal(got.Body.Bytes(), &answer) != nil || !reflect.DeepEqual(answer, want) {
+					t.Fatalf("ordinary pool changed: %d %s want=%+v", got.Code, got.Body, want)
+				}
+				// The lease must use the same proof after profile removal.
+				if state == "ready" {
+					leased := f.do(http.MethodPost, apiv1.CodexHostsSelectPath, tokClient, req)
+					if leased.Code != 200 || !strings.Contains(leased.Body.String(), `"action":"use"`) {
+						t.Fatalf("lease: %d %s", leased.Code, leased.Body)
+					}
+				}
+			})
+		}
 	}
 }

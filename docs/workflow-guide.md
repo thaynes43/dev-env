@@ -905,8 +905,11 @@ Only Tom, a configured trusted client, or a session whose creation profile
 resolves to workbench **and** whose authenticated pod runs as workbench passes.
 Defaults and aliases resolve through the request's templates snapshot. A raised
 session, profile-label patch, named coordinator account or unreadable creation
-profile supplies no substitute. Ordinary threads retain their existing profile
-and ancestry fence. The one-use `rc fresh` route refuses the privileged host
+profile supplies no substitute. On a nonreserved host, a live owned pod on an
+ordinary account keeps ordinary thread starts on the existing profile/ancestry
+path without reading templates, even when its creation profile was removed.
+Coordinator intent, the reserved name, workbench and unprovable accounts cannot
+take that path. The one-use `rc fresh` route refuses the privileged host
 before a reservation or exec; this work does not enable that route.
 
 Controller admission supplies the host name and Session UID to agentd. The
@@ -919,15 +922,20 @@ pod. Installation must use consistent reviewed replicas and stop-before-removal.
 After binding the exact new native thread, agentd sets its name metadata to
 `GPT | Dev-env coordinator 2` and reads the same ID, cwd and name back through
 the peer-verified daemon RPC. This is separate from tmux and the platform host
-title. A lost ACK is `title_unconfirmed`, with the known thread ID retained;
+title. The title is fixed platform text, `GPT | Dev-env coordinator 2`; choosing
+the name belongs to slice (d). Empty or partial-preview guesses skip the write
+and return `title_binding_unconfirmed`. A lost ACK is `title_unconfirmed`, with the known thread ID retained;
 inspect it and never relaunch to repair uncertainty. A later response observation
 from `thread status` does not confirm the name metadata ACK. Phone rendering, owner
 visibility, pairing and served-model evidence remain separate live proof.
 
 Ordinary host selection excludes the configured reserved name regardless of
 annotations or profile. It also excludes workbench accounts (including defaults,
-aliases and the actual pod account) and unavailable account resolutions, before
-fit and capacity counting. Fact collection and fresh lease checks apply the
+aliases and the actual pod account) and unprovable accounts, before fit and
+capacity counting. An owned live ordinary-account agent pod proves its account
+without templates, including a removed profile. Missing-pod account resolution
+failures are `account_unresolved`; the selection route's existing templates-read
+requirement for the requested profile/default remains. Fact collection and fresh lease checks apply the
 same exclusions. A requested workbench or unavailable profile yields no pool
 capacity. Keep the visible hands-off GitOps entry as a second protection.
 

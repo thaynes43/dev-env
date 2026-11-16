@@ -28,6 +28,8 @@ const (
 	ReasonCallerCannotResume = "caller_cannot_resume"
 	ReasonRemoteUnavailable  = "remote_unavailable"
 	ReasonProtected          = "protected"
+	ReasonAccountUnresolved  = "account_unresolved"
+	ReasonHostNotFound       = "host_not_found"
 	ReasonRescueBlocked      = "rescue_blocked"
 	ReasonPairingUnknown     = "pairing_unknown"
 	ReasonUnpaired           = "unpaired"
@@ -185,17 +187,20 @@ type Request struct {
 // resolved. DefaultProfile is the templates' default. Select has no default
 // of its own. A workbench session may create only when the two are equal.
 type Input struct {
-	// ProfileExcluded means the requested profile resolves to workbench or cannot resolve.
-	ProfileExcluded   bool
-	Hosts             []Host
-	Login             Login
-	Caller            Caller
-	Request           Request
-	ResolvedProfile   string
-	DefaultProfile    string
-	Now               time.Time
-	MaxRunningPerCell int
-	MaxRunning        int
+	// ProfileExcluded refuses new workbench capacity. ProfileUnavailable refuses
+	// construction when the requested account cannot resolve. Existing ordinary
+	// pod facts still decide use/report independently of that resolution.
+	ProfileExcluded    bool
+	ProfileUnavailable bool
+	Hosts              []Host
+	Login              Login
+	Caller             Caller
+	Request            Request
+	ResolvedProfile    string
+	DefaultProfile     string
+	Now                time.Time
+	MaxRunningPerCell  int
+	MaxRunning         int
 }
 
 // Skip is one host selection did not choose.
@@ -229,16 +234,20 @@ type judged struct {
 // pairing test is its last remote-control state. The durable record from
 // ruling E is not an input yet.
 func Select(in Input) Result {
-	if in.ProfileExcluded {
-		return Result{Reason: ReasonProtected}
-	}
 	if in.Request.NamedHost != "" {
 		for _, h := range in.Hosts {
-			if h.Name == in.Request.NamedHost && (h.Reserved || !h.AccountResolved || h.WorkbenchAccount) {
+			if h.Name != in.Request.NamedHost {
+				continue
+			}
+			if h.Reserved || h.WorkbenchAccount {
 				return Result{Reason: ReasonProtected}
 			}
+			if !h.AccountResolved {
+				return Result{Reason: ReasonAccountUnresolved}
+			}
+			return Result{Host: h.Name, Action: ActionUse, Ready: true}
 		}
-		return Result{Host: in.Request.NamedHost, Action: ActionUse, Ready: true}
+		return Result{Reason: ReasonHostNotFound}
 	}
 	// A lapsed login stops every path before any host is considered. Unknown
 	// does not: a suspended host's frozen login-required is not a reading,
@@ -282,6 +291,17 @@ func Select(in Input) Result {
 	}
 	if len(busy) > 0 {
 		return finish(rows, -1, "", false, ReasonHostBusy)
+	}
+	if in.ProfileExcluded || in.ProfileUnavailable {
+		if len(fillers) > 0 && cellN >= perCell {
+			best := pickRunning(fillers)
+			return finish(rows, best.index, ActionReport, false, best.reason)
+		}
+		reason := ReasonAccountUnresolved
+		if in.ProfileExcluded {
+			reason = ReasonProtected
+		}
+		return finish(rows, -1, "", false, reason)
 	}
 	if len(eligible) > 0 && room {
 		best := pickSuspended(eligible)
@@ -344,8 +364,11 @@ func judge(h Host, c Caller, requested, repo string, now time.Time) (reason stri
 	if rescueBlocked(h) {
 		return ReasonRescueBlocked, false, false
 	}
-	if poolExcluded(h) {
+	if h.Reserved || h.WorkbenchAccount || h.HandsOff || h.ProtectedAnnotation {
 		return ReasonProtected, false, false
+	}
+	if !h.AccountResolved {
+		return ReasonAccountUnresolved, false, false
 	}
 	if !profileFits(c, h, requested) {
 		return ReasonProfileMismatch, false, false

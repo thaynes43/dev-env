@@ -5,9 +5,11 @@ import (
 	"net/http"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/codexworkbench"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
@@ -15,11 +17,20 @@ import (
 // Creation spec and authenticated pod account are separate requirements: a
 // raised workbench pod and a patched profile label cannot supply creation rights.
 func (s *Server) admitThreadHost(ctx context.Context, c *caller, host *v1alpha1.AgentSession, pod *corev1.Pod, coordinator bool) error {
+	reserved := s.CodexWorkbenchHosts.Name != "" && host.Name == s.CodexWorkbenchHosts.Name
+	// The route supplies its live, UID-fenced pod. One decision skips every
+	// templates-dependent admission for an existing ordinary host, as on main.
+	ordinary := !coordinator && !reserved && pod != nil && metav1.IsControlledBy(pod, host) && codexworkbench.OrdinaryAccount(pod.Spec.ServiceAccountName)
+	if ordinary {
+		return nil
+	}
+	if pod == nil || !metav1.IsControlledBy(pod, host) || !codexworkbench.OrdinaryAccount(pod.Spec.ServiceAccountName) && pod.Spec.ServiceAccountName != templates.WorkbenchServiceAccount {
+		return forbidden("the live pod cannot prove this Codex host account")
+	}
 	resolved := s.codexHostProfile(ctx, host.Spec.Profile)
 	if err := s.admitCodexHost(ctx, host, resolved, false); err != nil {
 		return err
 	}
-	reserved := s.CodexWorkbenchHosts.Name != "" && host.Name == s.CodexWorkbenchHosts.Name
 	podWorkbench := pod != nil && pod.Spec.ServiceAccountName == templates.WorkbenchServiceAccount
 	privileged := reserved || resolved.Workbench() || podWorkbench
 	if !privileged {

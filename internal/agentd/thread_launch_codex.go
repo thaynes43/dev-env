@@ -451,7 +451,7 @@ func (a *codexThreadAdapter) Visible(ctx context.Context, r *threadlaunch.Record
 		if err := a.observed(err); err != nil {
 			return false, retryable(err)
 		}
-		id, err := a.bind(all)
+		id, exact, err := a.bind(all)
 		if err != nil || id == "" {
 			return false, err
 		}
@@ -459,6 +459,9 @@ func (a *codexThreadAdapter) Visible(ctx context.Context, r *threadlaunch.Record
 		r.Result.ThreadID = id
 		r.Phase(apiv1.ThreadPhaseThreadCreated, "ok", "thread_list", "new_thread_for_cwd")
 		if a.req.Coordinator {
+			if !exact {
+				return false, threadlaunch.Halt(apiv1.ThreadUnconfirmed, "title_binding_unconfirmed", apiv1.ThreadPhaseThreadCreated)
+			}
 			// One mutation only, after exact new-ID binding. A lost ACK cannot
 			// turn into a fresh launch or a second setter attempt.
 			if !codexCoordinatorEntry(a.s, a.sess, a.req) || a.d.title == nil || a.d.title(ctx, a.s, a.pid, id, a.cwd) != nil {
@@ -494,8 +497,10 @@ func retryable(err error) error {
 // in the cwd, created at or after the launch and not a sub-agent's. A
 // non-empty preview must match the handoff, so another thread started there
 // meanwhile (from the phone, say) is never adopted. None is "poll again";
-// several, after preferring preview matches, is ambiguous.
-func (a *codexThreadAdapter) bind(all []codexThreadSummary) (string, error) {
+// several, after preferring preview matches, is ambiguous. Only a full
+// normalized handoff match confirms a binding for title writes; truncated or
+// empty previews retain the ordinary observer heuristic but permit no rename.
+func (a *codexThreadAdapter) bind(all []codexThreadSummary) (string, bool, error) {
 	handoff := normalizedText(a.req.Handoff)
 	var matched, unknown []codexThreadSummary
 	for _, t := range all {
@@ -511,13 +516,13 @@ func (a *codexThreadAdapter) bind(all []codexThreadSummary) (string, error) {
 	}
 	switch {
 	case len(matched) == 1:
-		return matched[0].ID, nil
+		return matched[0].ID, normalizedText(matched[0].Preview) == handoff, nil
 	case len(matched) > 1 || len(unknown) > 1:
-		return "", threadlaunch.Halt(apiv1.ThreadUnconfirmed, "thread_ambiguous", apiv1.ThreadPhaseThreadCreated)
+		return "", false, threadlaunch.Halt(apiv1.ThreadUnconfirmed, "thread_ambiguous", apiv1.ThreadPhaseThreadCreated)
 	case len(unknown) == 1:
-		return unknown[0].ID, nil
+		return unknown[0].ID, false, nil
 	}
-	return "", nil
+	return "", false, nil
 }
 
 // normalizedText collapses whitespace, as a thread preview may.

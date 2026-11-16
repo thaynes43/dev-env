@@ -57,7 +57,7 @@ func creationProfile(t *testing.T, f *fixture, name, profile string) {
 }
 
 func TestCoordinatorThreadEntry(t *testing.T) {
-	for _, kind := range []string{"human", "client", "target-default", "target-alias", "workbench-created", "default-created", "alias-created", "ordinary-same-profile", "ordinary-ancestor", "raised", "raised-patched-label", "named-account", "wrong-pod-account", "creation-profile-missing", "templates-unreadable", "ordinary-intent", "unlisted-host", "target-account-drift", "target-shape-drift"} {
+	for _, kind := range []string{"human", "client", "target-default", "target-alias", "workbench-created", "default-created", "alias-created", "ordinary-same-profile", "ordinary-ancestor", "raised", "patched-label", "named-account", "wrong-pod-account", "creation-profile-missing", "templates-unreadable", "ordinary-intent", "unlisted-host", "target-account-drift", "target-shape-drift"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newFixture(t)
 			ex := coordinatorHostFixture(t, f, "reserved")
@@ -77,9 +77,29 @@ func TestCoordinatorThreadEntry(t *testing.T) {
 			case "target-alias":
 				creationProfile(t, f, "reserved", "wb-alias")
 				allowed = true
-			case "workbench-created", "default-created", "alias-created", "raised", "raised-patched-label", "wrong-pod-account", "creation-profile-missing":
-				tok = hostCaller(t, f, "workbench")
-				creationProfile(t, f, "workbench-parent", "workbench")
+			case "workbench-created", "default-created", "alias-created", "raised", "patched-label", "wrong-pod-account", "creation-profile-missing":
+				if kind == "raised" || kind == "patched-label" {
+					f.srv.Policy.WorkbenchServiceAccount = templates.WorkbenchServiceAccount
+					tok = f.sessionPod("workbench-parent", "dev", 0)
+					id := f.auth[tok]
+					id.ServiceAccount = templates.WorkbenchServiceAccount
+					f.auth[tok] = id
+					creationProfile(t, f, "workbench-parent", "dev")
+					var p corev1.Pod
+					if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: "workbench-parent"}, &p); err != nil {
+						t.Fatal(err)
+					}
+					p.Spec.ServiceAccountName = templates.WorkbenchServiceAccount
+					if kind == "patched-label" {
+						p.Labels[v1alpha1.LabelProfile] = "workbench"
+					}
+					if err := f.c.Update(context.Background(), &p); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					tok = hostCaller(t, f, "workbench")
+					creationProfile(t, f, "workbench-parent", "workbench")
+				}
 				switch kind {
 				case "default-created":
 					f.tmpl.DefaultProfile = "workbench"
@@ -88,12 +108,17 @@ func TestCoordinatorThreadEntry(t *testing.T) {
 				case "alias-created":
 					creationProfile(t, f, "workbench-parent", "wb-alias")
 					allowed = true
-				case "raised", "raised-patched-label":
+				case "raised":
 					creationProfile(t, f, "workbench-parent", "dev")
 					f.raiseReady(true, "workbench")
 					f.putActiveProfile(f.session("workbench-parent"), false, "workbench")
 					if raised, err := f.srv.raisedToWorkbench(context.Background(), f.session("workbench-parent")); err != nil || !raised {
 						t.Fatalf("raise fixture not active: %v %v", raised, err)
+					}
+				case "patched-label":
+					creationProfile(t, f, "workbench-parent", "dev")
+					if raised, err := f.srv.raisedToWorkbench(context.Background(), f.session("workbench-parent")); err != nil || raised {
+						t.Fatalf("patched-label fixture is raised: %v %v", raised, err)
 					}
 				case "creation-profile-missing":
 					creationProfile(t, f, "workbench-parent", "removed")
@@ -286,5 +311,132 @@ func TestCoordinatorAPIRejectsDifferentModelOrEffort(t *testing.T) {
 				t.Fatalf("changed coordinator request reached exec: %d %s calls=%d", w.Code, w.Body, ex.calls())
 			}
 		})
+	}
+}
+
+// Ordinary entry uses the same live owned pod as the route's UID fence. No
+// templates read (including the caller's profile) may decide this path.
+func TestOrdinaryThreadAdmissionUsesLivePod(t *testing.T) {
+	for _, route := range []string{"threads", "codex-thread"} {
+		for _, setting := range []string{"", "another-host"} {
+			for _, shape := range []string{"readable", "unreadable", "removed", "workbench-account", "reserved", "coordinator", "unknown-account", "live-workbench-account", "foreign", "no-pod"} {
+				t.Run(route+"/setting="+setting+"/"+shape, func(t *testing.T) {
+					var f *fixture
+					var body any
+					var calls func() int
+					wantStatus, wantCalls := 200, 1
+					host := "ordinary"
+					if route == "threads" {
+						f = newFixture(t)
+						f.codexHostPod(host)
+						ex := &threadExec{out: hostThreadOutput(t, host, apiv1.ThreadResponded, "")}
+						f.srv.Exec = ex
+						req := threadRequest()
+						if shape == "coordinator" {
+							req = coordinatorRequest()
+						}
+						body, calls = req, ex.calls
+					} else {
+						var req apiv1.CodexRCRequest
+						var ex *rcExec
+						f, req, ex = rcFixture(t)
+						body, calls = req, func() int { return len(ex.calls) }
+						host = "rc-host"
+						wantStatus, wantCalls = 201, 2 // one preflight, one start, as on main
+					}
+					creationProfile(t, f, host, "dev")
+					f.srv.CodexWorkbenchHosts = codexworkbench.Policy{Name: setting, Namespace: sessionNS}
+					if shape == "reserved" {
+						f.srv.CodexWorkbenchHosts.Name = host
+					}
+					if shape == "removed" {
+						delete(f.tmpl.Profiles, "dev")
+					}
+					var pod corev1.Pod
+					key := client.ObjectKey{Namespace: sessionNS, Name: host}
+					if err := f.c.Get(context.Background(), key, &pod); err != nil {
+						t.Fatal(err)
+					}
+					switch shape {
+					case "workbench-account":
+						pod.Spec.ServiceAccountName = templates.WorkbenchServiceAccount
+					case "unknown-account":
+						pod.Spec.ServiceAccountName = "unrecognised"
+					case "foreign":
+						pod.OwnerReferences[0].UID = "another-session"
+					}
+					if err := f.c.Update(context.Background(), &pod); err != nil {
+						t.Fatal(err)
+					}
+					if shape == "no-pod" {
+						if err := f.c.Delete(context.Background(), &pod); err != nil {
+							t.Fatal(err)
+						}
+					}
+					allowed := shape == "readable" || shape == "unreadable" || shape == "removed"
+					reads := 0
+					f.srv.Templates = func(context.Context) (*templates.Templates, error) {
+						reads++
+						if shape != "readable" && shape != "removed" {
+							return nil, errors.New("templates unavailable")
+						}
+						return f.tmpl, nil
+					}
+					path := apiv1.SessionThreadsPath(host)
+					if route == "codex-thread" {
+						path = apiv1.SessionPath(host) + "/codex-thread"
+					}
+					// The one-use route has no coordinator purpose field; an attempted
+					// coordinator request must fail strict decoding without exec.
+					if route == "codex-thread" && shape == "coordinator" {
+						body = map[string]any{"coordinator": true}
+					}
+					sessionReads, podReads := 0, 0
+					sessionSincePod := false
+					f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if key.Name == host {
+							switch obj.(type) {
+							case *v1alpha1.AgentSession:
+								sessionReads++
+								sessionSincePod = true
+							case *corev1.Pod:
+								podReads++
+								if !sessionSincePod {
+									t.Error("pod read before live Session or second account-only pod read")
+								}
+								sessionSincePod = false
+							}
+						}
+						if err := c.Get(ctx, key, obj, opts...); err != nil {
+							return err
+						}
+						if p, ok := obj.(*corev1.Pod); ok && key.Name == host && shape == "live-workbench-account" {
+							p.Spec.ServiceAccountName = templates.WorkbenchServiceAccount
+						}
+						return nil
+					}})
+					w := f.do(http.MethodPost, path, tokClient, body)
+					if allowed {
+						wantPods := 1
+						if route == "codex-thread" {
+							wantPods = 3
+						}
+						if podReads != wantPods || sessionReads < 1 {
+							t.Fatalf("extra/missing live reads: session=%d pod=%d want pod=%d", sessionReads, podReads, wantPods)
+						}
+						if w.Code != wantStatus || calls() != wantCalls || reads != 0 {
+							t.Fatalf("ordinary changed: status=%d body=%s exec=%d templates=%d", w.Code, w.Body, calls(), reads)
+						}
+					} else {
+						if calls() != 0 || (w.Code < 400 && !strings.Contains(w.Body.String(), "host_not_running")) {
+							t.Fatalf("unproven host admitted: %d %s exec=%d", w.Code, w.Body, calls())
+						}
+						if f.session(host).Annotations[apiv1.CodexRCIntentAnnotation] != "" {
+							t.Fatal("refusal reserved one-use intent")
+						}
+					}
+				})
+			}
+		}
 	}
 }
