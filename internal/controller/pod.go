@@ -195,7 +195,7 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 		return nil, err
 	}
 	if r.CodexRemoteStopHosts.Names(s) && s.UID == "" {
-		return nil, fmt.Errorf("Codex remote stop requires its Session UID")
+		return nil, errors.New("codex remote stop requires its Session UID")
 	}
 	r.applyCodexRemoteStop(pod, s)
 	templatesImage := agentImage(pod)

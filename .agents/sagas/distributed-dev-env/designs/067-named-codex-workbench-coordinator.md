@@ -1100,7 +1100,7 @@ turn is cut and lost. The same PR updates the workflow guide. Its PR body record
 guard mutations, exact head, local checks and CI result. Same-family native
 review supplements those tests. The independent-family review below requested
 changes. This build stays a draft pending the coordinator's acceptance of the
-fixes and the then-required closure of M4. The round-2 ruling below supersedes
+fixes and the then-required closure of M4. The round-2 ruling above supersedes
 that merge hold by restricting the new stop to named hosts; story 877 owns M4. No merge or ready transition
 is authorized to this worker. No host, flag, manifest, pairing, haynes-ops or
 live-session change occurred. Slices (c2), (d), (e), installation, custody and
@@ -1116,11 +1116,11 @@ coordinator's rulings and this fix round are:
 | M1 — descendants untested | Accepted. Fake tmux server → pane shell → client → worker; every writer must receive the stop and have whole-group exit proven. Direct-PID-1-only scan mutant must fail. |
 | M2 — empty HOME hold guard untested | Accepted. Empty initial HOME and run supervisor (boot identity appears during inspection) refuse before signals or Git without a verified hold. Dropping the hold guard must fail. |
 | M3 — unparseable session refusal untested | Accepted. Set invalid inline/file session documents refuse stop before Git; dropping the refusal must fail. |
-| M4 — resume keeps frozen/fenced pod | Accepted, behavior fix **not built in this round**. Envtest characterizes current resume retention. Guide, section 10.2 and limit 8 state recovery and limits. Written proposal: private `op858/c1-m4-proposal.md`; the later coordinator ruling below rejects that proposal as written and moves M4 to story 877. PR 1171 stays draft for review; only a named host can reach M4 after round 2. |
+| M4 — resume keeps frozen/fenced pod | Accepted, behavior fix **not built in this round**. Envtest characterizes current resume retention. Guide, section 10.2 and limit 8 state recovery and limits. Written proposal: private `op858/c1-m4-proposal.md`; the later coordinator ruling recorded above rejects that proposal as written and moves M4 to story 877. PR 1171 stays draft for review; only a named host can reach M4 after round 2. |
 | L1 — vanished process | Accepted. At most three bounded relists per stop, only for a process already signalled by this call with whole-group exit proven; other disappearance refuses. |
 | L2 — full grace always waited | Accepted. Whole-group exit readiness can end grace early; a separate final confirmed inventory still precedes snapshot. No busy loop or changed read order. |
 | L3 — supported-launch boundary | Accepted documents. Row (c1), guide and limit 8 exclude raw exec after the final reading. |
-| L4 — other session types | Round 1 stated the then-universal unparseable-document refusal. Round 2 removes the added parse/refusal from the absent-decision legacy path: hosts not named and other session types keep main's stop. Present-but-unparseable stop input still refuses as ruled below. |
+| L4 — other session types | Round 1 stated the then-universal unparseable-document refusal. Round 2 removes the added parse/refusal from the absent-decision legacy path: hosts not named and other session types keep main's stop. Present-but-unparseable stop input still refuses as ruled above. |
 | L5 — nonexistent reopen verb | Accepted documents. Exact-ID status observes only; re-attachment remains (d)/(c2). |
 | L6 — records and unknowns | Accepted. Correct reviewed main base and distinguish author commit 41131fa5 from later main merges; add pod-delete latency and all report real-kernel unknowns to limit 8. |
 

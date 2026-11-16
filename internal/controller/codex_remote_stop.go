@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"fmt"
+	"errors"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -29,7 +29,7 @@ func (r *Reconciler) holdPod(s *v1alpha1.AgentSession, t *templates.Templates) (
 		return nil, err
 	}
 	if r.CodexRemoteStopHosts.Names(s) && s.UID == "" {
-		return nil, fmt.Errorf("Codex remote stop requires its Session UID")
+		return nil, errors.New("codex remote stop requires its Session UID")
 	}
 	r.applyCodexRemoteStop(pod, s)
 	return pod, nil
