@@ -87,9 +87,6 @@ func newRemoteStopRig(t *testing.T) *remoteStopRig {
 	if err := os.Chmod(r.s.StateDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(r.s.StateDir, 0700); err != nil {
-		t.Fatal(err)
-	}
 	r.p = codexRemoteProcesses{self: 20, initExe: func() bool { return r.initOK }, sameExe: func(int) bool { return r.exe }, now: func() time.Time { return r.clock }, close: func(fd int) error {
 		if _, ok := r.fds[fd]; !ok {
 			t.Error("pidfd closed twice")
@@ -731,6 +728,9 @@ func TestCodexRemoteLifecycleRejectsUnsafeLock(t *testing.T) {
 			case "symlink":
 				target := filepath.Join(r.s.RuntimeDir, "target")
 				writeFile(t, target, "unchanged")
+				if err := os.Chmod(target, 0600); err != nil {
+					t.Fatal(err)
+				}
 				if err := os.Symlink(target, path); err != nil {
 					t.Fatal(err)
 				}
@@ -1032,5 +1032,80 @@ func TestCodexRemoteStopRefusesLostFenceBeforeSnapshot(t *testing.T) {
 	rep, err := Rescue(context.Background(), &fakeRunner{handle: func(Cmd) (Result, error) { t.Fatal("snapshot after fence loss"); return Result{}, nil }}, r.s, r.sess.Name, rescueNow, RescueOptions{StopAgent: true})
 	if err == nil || rep.OK {
 		t.Fatalf("lost fence accepted: %+v %v", rep, err)
+	}
+}
+
+func TestCodexRemoteStopDrainsOrphanGroupForkDuringKill(t *testing.T) {
+	r := newRemoteStopRig(t)
+	r.stubborn[30], r.stubborn[40] = true, true
+	r.afterSignal = func(pid int, sig unix.Signal) {
+		if pid == 30 && sig == unix.SIGKILL {
+			// Killing a parent resumes a stopped orphaned job-control group.
+			// Its child forks before the next queued pidfd KILL arrives.
+			r.procs[44] = codexRemoteProcess{pid: 44, parent: 1, start: "4400", state: "S"}
+		}
+	}
+	read := r.p.read
+	once := true
+	r.p.read = func(path string) ([]byte, error) {
+		if path == "/proc/44/stat" && once {
+			once = false
+			proc := r.procs[44]
+			proc.state = "Z"
+			r.procs[44] = proc
+			r.procs[45] = codexRemoteProcess{pid: 45, parent: 1, start: "4500", state: "S"}
+		}
+		return read(path)
+	}
+	st, err := r.stop(context.Background(), 0)
+	if err != nil || st.Running || !st.Killed || !r.quiesced() || !slices.Contains(r.signals, "45:9") {
+		t.Fatalf("orphan-group descendant survived forced drain: %+v %v signals=%v procs=%v", st, err, r.signals, r.procs)
+	}
+}
+
+func TestCodexRemoteLifecycleRejectsUnsafeDirectory(t *testing.T) {
+	for _, name := range []string{"relative", "public", "symlink"} {
+		t.Run(name, func(t *testing.T) {
+			r := newRemoteStopRig(t)
+			switch name {
+			case "relative":
+				r.s.RuntimeDir = "."
+			case "public":
+				if err := os.Chmod(r.s.RuntimeDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				link := filepath.Join(t.TempDir(), "link")
+				if err := os.Symlink(r.s.RuntimeDir, link); err != nil {
+					t.Fatal(err)
+				}
+				r.s.RuntimeDir = link
+			}
+			if release, err := codexRemoteLifecycle(r.s, false); err == nil {
+				release()
+				t.Fatal("unsafe runtime admitted lifecycle mutation")
+			}
+		})
+	}
+}
+func TestCodexRemoteStopInventoryCapsBeforeOpeningAnyWriter(t *testing.T) {
+	r := newRemoteStopRig(t)
+	for pid := 100; pid < 100+codexRemoteProcessCap; pid++ {
+		r.procs[pid] = codexRemoteProcess{pid: pid, parent: 1, start: "1", state: "S"}
+	}
+	if _, err := r.p.inventory(r.procs[10]); err == nil {
+		t.Fatal("unbounded process inventory")
+	}
+	r.init = "/usr/local/bin/tini\x00--\x00/usr/local/bin/agentd\x00hold\x00"
+	if _, err := r.p.supervisor(r.s, r.sess); err == nil || !strings.Contains(err.Error(), "bound") {
+		t.Fatalf("unbounded hold inventory: %v", err)
+	}
+}
+func TestCodexRemoteStopSignalRefusalStopsImmediately(t *testing.T) {
+	r := newRemoteStopRig(t)
+	r.signalErr = unix.EPERM
+	st, err := r.stop(context.Background(), 0)
+	if err == nil || !strings.Contains(err.Error(), "could not signal") || !st.Running || !r.clock.Equal(rescueNow) {
+		t.Fatalf("signal refusal continued drain: %+v %v clock=%s", st, err, r.clock)
 	}
 }

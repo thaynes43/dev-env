@@ -19,8 +19,8 @@ const (
 )
 
 var (
-	errCodexRemoteStopping = errors.New("Codex host is stopped for rescue; only a new pod may start its daemon")
-	errCodexRemotePath     = errors.New("Codex host lifecycle path is not private")
+	errCodexRemoteStopping = errors.New("codex host is stopped for rescue; only a new pod may start its daemon")
+	errCodexRemotePath     = errors.New("codex host lifecycle path is not private")
 )
 
 func codexRemoteStateDir(s Settings, create bool) error {
@@ -80,11 +80,11 @@ func codexRemoteStopped(s Settings) error {
 		}
 		var rec codexRemoteStop
 		if err != nil || decodeHostJSON(raw, &rec) != nil || rec.Version != 1 || rec.SessionUID == "" || rec.PodUID == "" || s.PodUID == "" || s.Getenv == nil {
-			return errors.New("Codex host stop binding is unreadable; refusing a writer")
+			return errors.New("codex host stop binding is unreadable; refusing a writer")
 		}
 		sess, err := LoadSession(s.Getenv)
 		if err != nil || !codexRemoteSession(sess) || sess.SessionUID != rec.SessionUID {
-			return errors.New("Codex host stop binding does not match the retained Session")
+			return errors.New("codex host stop binding does not match the retained Session")
 		}
 		if rec.PodUID == s.PodUID {
 			return errCodexRemoteStopping
@@ -99,7 +99,7 @@ func codexRemoteStopped(s Settings) error {
 func codexRemoteLifecycle(s Settings, exclusive bool) (func(), error) {
 	dir := codexRemoteGateDir(s)
 	if !filepath.IsAbs(dir) {
-		return nil, errors.New("Codex lifecycle requires an absolute private directory")
+		return nil, errors.New("codex lifecycle requires an absolute private directory")
 	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, errors.New("cannot prepare Codex host lifecycle gate")
@@ -115,7 +115,7 @@ func codexRemoteLifecycle(s Settings, exclusive bool) (func(), error) {
 	st, err := f.Stat()
 	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0077 != 0 || !ownedByProcess(st) {
 		_ = f.Close()
-		return nil, errors.New("Codex host lifecycle gate is not a private regular file")
+		return nil, errors.New("codex host lifecycle gate is not a private regular file")
 	}
 	mode := syscall.LOCK_SH
 	if exclusive {
@@ -123,7 +123,7 @@ func codexRemoteLifecycle(s Settings, exclusive bool) (func(), error) {
 	}
 	if err := syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB); err != nil {
 		_ = f.Close()
-		return nil, errors.New("Codex host lifecycle is busy; stop and launch cannot overlap")
+		return nil, errors.New("codex host lifecycle is busy; stop and launch cannot overlap")
 	}
 	unlock := func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }
 	if !exclusive {
@@ -141,12 +141,12 @@ func codexRemoteLifecycle(s Settings, exclusive bool) (func(), error) {
 // leaves the supervisor frozen until pod deletion, including on failure.
 func stopCodexRemoteForRescue(ctx context.Context, s Settings, sess protocol.Session, grace time.Duration) (*protocol.AgentStop, func(), error) {
 	if !codexRemoteSession(sess) || sess.SessionUID == "" || s.PodUID == "" {
-		return nil, nil, errors.New("Codex host stop requires the Session and pod UID")
+		return nil, nil, errors.New("codex host stop requires the Session and pod UID")
 	}
 	runtime := filepath.Clean(s.RuntimeDir)
 	home := filepath.Clean(s.Home)
 	if !filepath.IsAbs(s.RuntimeDir) || runtime == home || strings.HasPrefix(runtime, home+string(filepath.Separator)) {
-		return nil, nil, errors.New("Codex host stop requires its private runtime directory outside HOME")
+		return nil, nil, errors.New("codex host stop requires its private runtime directory outside HOME")
 	}
 	unlock, err := codexRemoteLifecycle(s, true)
 	if err != nil {
@@ -161,7 +161,7 @@ func stopCodexRemoteForRescue(ctx context.Context, s Settings, sess protocol.Ses
 	processes := codexRemoteProcessesFor()
 	empty, err := volumeEmpty(s)
 	if err != nil {
-		return fail(errors.New("Codex stop cannot inspect HOME"))
+		return fail(errors.New("codex stop cannot inspect HOME"))
 	}
 	marker := s.statePath(codexRemoteStopFile)
 	if empty {
@@ -170,11 +170,6 @@ func stopCodexRemoteForRescue(ctx context.Context, s Settings, sess protocol.Ses
 			return fail(errors.New("only a verified empty rescue hold may omit the HOME stop fence"))
 		}
 		marker = codexRemoteGatePath(s, codexRemoteStopFile)
-	}
-	if !empty {
-		if err := codexRemoteStateDir(s, true); err != nil {
-			return fail(err)
-		}
 	}
 	if !empty {
 		if err := codexRemoteStateDir(s, true); err != nil {
@@ -199,7 +194,7 @@ func stopCodexRemoteForRescue(ctx context.Context, s Settings, sess protocol.Ses
 	raw, readErr := boundedHostFile(marker, 4096, true)
 	var stopped codexRemoteStop
 	if readErr != nil || decodeHostJSON(raw, &stopped) != nil || stopped != (codexRemoteStop{1, sess.SessionUID, s.PodUID}) {
-		return fail(errors.New("Codex stop fence changed during quiesce; rescue blocked"))
+		return fail(errors.New("codex stop fence changed during quiesce; rescue blocked"))
 	}
 	if empty {
 		stillEmpty, err := volumeEmpty(s)

@@ -927,7 +927,9 @@ now fences supported remote mutations, verifies the immutable tini/agentd
 container shape and the exact supervisor, freezes that supervisor, and drains
 the rest of its dedicated PID namespace before Git rescue. It includes tmux
 clients, shells and detached descendants, checks every native thread, and takes
-a fresh frozen inventory after graceful shutdown before forced termination.
+confirmed frozen inventories after graceful shutdown and between forced
+termination rounds, including orphaned job-control groups that can resume and
+fork when a parent dies.
 Unknown identity, inaccessible process state, busy launch admission, failed
 signaling or an expired stop budget blocks rescue with a fixed reason. The
 supervisor remains frozen through the snapshot; a durable Session/pod-bound HOME

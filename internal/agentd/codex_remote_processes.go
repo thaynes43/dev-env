@@ -144,7 +144,7 @@ func (p codexRemoteProcesses) threadStates(proc codexRemoteProcess, stopped bool
 		if parseErr != nil || t.pid != tid {
 			return false, errors.New("thread identity did not match")
 		}
-		if !remoteProcessGone(t) && !(stopped && (t.state == "T" || t.state == "t")) {
+		if !remoteProcessGone(t) && (!stopped || t.state != "T" && t.state != "t") {
 			return false, nil
 		}
 	}
@@ -162,7 +162,7 @@ func (p codexRemoteProcesses) supervisor(s Settings, sess protocol.Session) (cod
 	init, err := p.read("/proc/1/cmdline")
 	argv := strings.Split(strings.TrimSuffix(string(init), "\x00"), "\x00")
 	if err != nil || len(argv) < 3 || len(argv) > 4 || argv[0] != "/usr/local/bin/tini" || argv[1] != "--" || argv[2] != "/usr/local/bin/agentd" || len(argv) == 4 && argv[3] != "run" && argv[3] != "hold" || !p.initExe() || p.self <= 1 {
-		return codexRemoteProcess{}, errors.New("Codex stop requires the dedicated tini/agentd PID namespace")
+		return codexRemoteProcess{}, errors.New("codex stop requires the dedicated tini/agentd PID namespace")
 	}
 	if len(argv) == 4 && argv[3] == "hold" {
 		// A D-55 hold has no boot writer and retains the old executor's boot.json.
@@ -181,7 +181,7 @@ func (p codexRemoteProcesses) supervisor(s Settings, sess protocol.Session) (cod
 			}
 			count++
 			if count > codexRemoteProcessCap {
-				return hold, errors.New("Codex hold process enumeration exceeds its bound")
+				return hold, errors.New("codex hold process enumeration exceeds its bound")
 			}
 			if pid <= 1 || pid == p.self {
 				continue
@@ -201,27 +201,27 @@ func (p codexRemoteProcesses) supervisor(s Settings, sess protocol.Session) (cod
 				continue
 			}
 			if hold.pid != 0 {
-				return hold, errors.New("Codex hold supervisor is ambiguous")
+				return hold, errors.New("codex hold supervisor is ambiguous")
 			}
 			hold = proc
 		}
 		if hold.pid == 0 {
-			return hold, errors.New("Codex hold supervisor is unproven")
+			return hold, errors.New("codex hold supervisor is unproven")
 		}
 		hold.hold = true
 		return hold, nil
 	}
 	var boot bootRecord
 	if readJSONFile(s.statePath(bootFile), &boot) != nil || boot.Daemon == nil {
-		return codexRemoteProcess{}, errors.New("Codex stop cannot identify this pod's supervisor")
+		return codexRemoteProcess{}, errors.New("codex stop cannot identify this pod's supervisor")
 	}
 	d := boot.Daemon
 	if d.SessionUID != sess.SessionUID || d.PodUID != s.PodUID || d.Pid <= 1 || d.Pid == p.self || d.Start == "" {
-		return codexRemoteProcess{}, errors.New("Codex stop supervisor binding does not match this Session and pod")
+		return codexRemoteProcess{}, errors.New("codex stop supervisor binding does not match this Session and pod")
 	}
 	proc, err := p.process(d.Pid)
 	if err != nil || proc.start != d.Start || proc.parent != 1 || remoteProcessGone(proc) || !p.sameExe(d.Pid) {
-		return codexRemoteProcess{}, errors.New("Codex stop supervisor process identity is unproven")
+		return codexRemoteProcess{}, errors.New("codex stop supervisor process identity is unproven")
 	}
 	return proc, nil
 }
@@ -229,7 +229,7 @@ func (p codexRemoteProcesses) supervisor(s Settings, sess protocol.Session) (cod
 func (p codexRemoteProcesses) inventory(supervisor codexRemoteProcess) ([]codexRemoteProcess, error) {
 	entries, err := p.list("/proc")
 	if err != nil {
-		return nil, errors.New("Codex stop cannot enumerate the PID namespace")
+		return nil, errors.New("codex stop cannot enumerate the PID namespace")
 	}
 	var out []codexRemoteProcess
 	count := 0
@@ -240,38 +240,17 @@ func (p codexRemoteProcesses) inventory(supervisor codexRemoteProcess) ([]codexR
 		}
 		count++
 		if count > codexRemoteProcessCap {
-			return nil, errors.New("Codex stop process enumeration exceeds its bound")
+			return nil, errors.New("codex stop process enumeration exceeds its bound")
 		}
 		if pid == 1 || pid == p.self || pid == supervisor.pid {
 			continue
 		}
 		proc, err := p.process(pid)
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, errors.New("Codex process disappeared during enumeration; rescue blocked")
+			return nil, errors.New("codex process disappeared during enumeration; rescue blocked")
 		}
 		if err != nil {
-			return nil, errors.New("Codex stop cannot inspect every process")
-		}
-		out = append(out, proc)
-	}
-	return out, nil
-}
-
-func (p codexRemoteProcesses) writers(supervisor codexRemoteProcess) ([]codexRemoteProcess, error) {
-	inventory, err := p.inventory(supervisor)
-	if err != nil {
-		return nil, err
-	}
-	var out []codexRemoteProcess
-	for _, proc := range inventory {
-		if remoteProcessGone(proc) {
-			dead, err := p.threadStates(proc, false)
-			if err != nil {
-				return nil, err
-			}
-			if dead {
-				continue
-			}
+			return nil, errors.New("codex stop cannot inspect every process")
 		}
 		out = append(out, proc)
 	}
@@ -289,7 +268,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 	until := p.now().Add(grace + 10*time.Second)
 	check := func() error {
 		if ctx.Err() != nil || !p.now().Before(until) {
-			return errors.New("Codex writers did not quiesce within the stop budget; rescue blocked")
+			return errors.New("codex writers did not quiesce within the stop budget; rescue blocked")
 		}
 		return nil
 	}
@@ -306,7 +285,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 	}()
 	signal := func(fd int, sig unix.Signal) error {
 		if err := p.signal(fd, sig); err != nil && !errors.Is(err, unix.ESRCH) {
-			return errors.New("Codex stop could not signal an exact process; rescue blocked")
+			return errors.New("codex stop could not signal an exact process; rescue blocked")
 		}
 		return nil
 	}
@@ -318,7 +297,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 		var err error
 		if !held {
 			if len(fds) >= codexRemoteProcessCap {
-				return errors.New("Codex stop identity enumeration exceeds its bound")
+				return errors.New("codex stop identity enumeration exceeds its bound")
 			}
 			fd, err = p.open(proc.pid)
 		}
@@ -326,14 +305,14 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 			return nil
 		}
 		if err != nil {
-			return errors.New("Codex stop requires exact pidfd process control")
+			return errors.New("codex stop requires exact pidfd process control")
 		}
 		cur, err := p.process(proc.pid)
 		if err != nil || !sameCodexRemoteProcess(proc, cur) {
 			if !held {
 				_ = p.close(fd)
 			}
-			return errors.New("Codex stop process identity changed before signalling")
+			return errors.New("codex stop process identity changed before signalling")
 		}
 		fds[key(proc)] = fd
 		if err := signal(fd, unix.SIGSTOP); err != nil {
@@ -366,15 +345,9 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 	frozenSupervisor := func() error {
 		ok, err := p.frozen(supervisor)
 		if err != nil || !ok {
-			return errors.New("Codex supervisor is not quiescent; rescue blocked")
+			return errors.New("codex supervisor is not quiescent; rescue blocked")
 		}
 		return check()
-	}
-	census := func() ([]codexRemoteProcess, error) {
-		if err := frozenSupervisor(); err != nil {
-			return nil, err
-		}
-		return p.writers(supervisor)
 	}
 	freezeAll := func() ([]codexRemoteProcess, error) {
 		settled := map[processKey]bool{}
@@ -452,26 +425,24 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 			return st, err
 		}
 	}
-	// Grace can fork new detached children. Freeze a fresh complete census,
-	// then kill only exact held identities. No frozen writer can fork again.
-	writers, err = freezeAll()
-	if err != nil {
-		return st, err
-	}
-	st.Killed = len(writers) > 0
-	for _, proc := range writers {
-		if err := signal(fds[key(proc)], unix.SIGKILL); err != nil {
-			return st, err
-		}
-	}
+	// Grace can fork detached children. Killing a parent can also cause the
+	// kernel to continue an orphaned job-control group, which may fork before
+	// its own KILL arrives. Confirm a frozen inventory before every kill round
+	// and again before success, including newly dead parents in that proof.
 	for {
-		writers, err = census()
+		writers, err = freezeAll()
 		if err != nil {
 			return st, err
 		}
 		if len(writers) == 0 {
 			st.Running = false
 			return st, nil
+		}
+		st.Killed = true
+		for _, proc := range writers {
+			if err := signal(fds[key(proc)], unix.SIGKILL); err != nil {
+				return st, err
+			}
 		}
 		if err := p.pause(ctx); err != nil {
 			return st, err
