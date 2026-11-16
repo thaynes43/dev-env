@@ -333,7 +333,7 @@ func TestSummonedSessionGetsNoPodOrVolumeBeforeAdmission(t *testing.T) {
 			if envOf(pod.Spec.Containers[0], protocol.StartDeadlineEnv) != nil {
 				t.Fatal("an ordinary pod got a start deadline")
 			}
-			want, err := w.r.sessionPod(w.get(ordinary.Name), mustTemplates(t))
+			want, err := w.r.sessionPod(w.get(ordinary.Name), mustTemplates(t), w.r.resolveCodexHost(w.get(ordinary.Name), mustTemplates(t)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -457,7 +457,7 @@ func TestSummonStartDeadlineOnlyOnAnAdmittedSummonedPod(t *testing.T) {
 			if tc.hold {
 				pod, err = buildHoldPod(tc.s, tm)
 			} else {
-				pod, err = buildManagedPod(tc.s, tm, "", false, false, nil, false)
+				pod, err = buildManagedPod(tc.s, tm, "", false, false, nil, false, (&Reconciler{}).resolveCodexHost(tc.s, tm))
 			}
 			if err != nil {
 				t.Fatal(err)

@@ -63,7 +63,7 @@ func TestHomeCapacityKeepsReviewedExecutorIdentity(t *testing.T) {
 		"pilot":  {pilot.Session(t, 0), pilot.Templates},
 	} {
 		t.Run(name, func(t *testing.T) {
-			pod, err := buildManagedPod(fixture.s, fixture.t, "https://synthetic.invalid", true, false, nil, false)
+			pod, err := buildManagedPod(fixture.s, fixture.t, "https://synthetic.invalid", true, false, nil, false, (&Reconciler{}).resolveCodexHost(fixture.s, fixture.t))
 			if err != nil {
 				t.Fatal(err)
 			}

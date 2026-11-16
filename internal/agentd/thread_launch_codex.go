@@ -29,8 +29,9 @@ import (
 // `thread/start`, and passes no sandbox or approval flag. Before that client
 // starts, thread start writes folder trust for the one platform repository
 // through the host daemon's config/value/write (DESIGN-057 section 12).
-// thread status does not. Everything else is
-// read-only observation over the peer-verified control socket. It never pairs,
+// thread status does not. A coordinator launch also sets and reads back native
+// title metadata after exact-ID binding. All other native access is read-only
+// observation over the peer-verified control socket. It never pairs,
 // logs in, resumes, forks or retries a launch.
 
 // CodexThreadWrapper is where the agent image installs the clean-session wrapper.
@@ -55,8 +56,10 @@ var (
 
 // CodexThreadRequest is one launch. Handoff is the new thread's first message.
 type CodexThreadRequest struct {
-	Model, Effort, Repo, Name, Handoff string
-	Wait                               time.Duration
+	Model, Effort, Repo, Name, Handoff       string
+	Coordinator                              bool
+	Host, ExpectedSessionUID, ExpectedPodUID string
+	Wait                                     time.Duration
 }
 
 // codexThreadSummary is the part of a native Thread this adapter reads.
@@ -87,6 +90,7 @@ type codexThreadDeps struct {
 	turn    func(ctx context.Context, s Settings, pid int, threadID string) (codexTurnObservation, error)
 	launch  func(context.Context, codexWrapperCall) ([]byte, error)
 	trust   func(context.Context, Settings, int, string) error
+	title   func(context.Context, Settings, int, string, string) error
 	python  func() (string, error)
 	wrapper func() (string, error)
 	now     func() time.Time
@@ -108,6 +112,7 @@ func realCodexThreadDeps() codexThreadDeps {
 		turn:   readCodexFirstTurn,
 		launch: runCodexThreadWrapper,
 		trust:  writeCodexProjectTrust,
+		title:  setCodexCoordinatorTitle,
 		python: func() (string, error) { return exec.LookPath("python3") },
 		wrapper: func() (string, error) {
 			info, err := os.Stat(CodexThreadWrapper)
@@ -189,7 +194,7 @@ func observeCodexThread(ctx context.Context, s Settings, sess protocol.Session, 
 // interpreter or poll clock: only the host reads and the read-only observers.
 // A later change that reached for one on this path would stop, not launch.
 func (d codexThreadDeps) observeOnly() codexThreadDeps {
-	d.launch, d.python, d.wrapper, d.sleep, d.trust = nil, nil, nil, nil, nil
+	d.launch, d.python, d.wrapper, d.sleep, d.trust, d.title = nil, nil, nil, nil, nil, nil
 	return d
 }
 
@@ -296,6 +301,9 @@ func (a *codexThreadAdapter) Preflight(ctx context.Context, r *threadlaunch.Reco
 	}
 	if !validCodexThreadRequest(a.req) {
 		return threadlaunch.Halt(apiv1.ThreadFailed, "invalid_input", apiv1.ThreadPhaseHostReady)
+	}
+	if !codexCoordinatorEntry(a.s, a.sess, a.req) {
+		return threadlaunch.Halt(apiv1.ThreadFailed, "coordinator_required", apiv1.ThreadPhaseHostReady)
 	}
 	r.Result.Name, r.Result.RequestedModel = a.req.Name, a.req.Model
 	if err := a.hostReady(ctx, r); err != nil {
@@ -454,13 +462,24 @@ func (a *codexThreadAdapter) Visible(ctx context.Context, r *threadlaunch.Record
 		if err := a.observed(err); err != nil {
 			return false, retryable(err)
 		}
-		id, err := a.bind(all)
+		id, exact, err := a.bind(all)
 		if err != nil || id == "" {
 			return false, err
 		}
 		a.thread = id
 		r.Result.ThreadID = id
 		r.Phase(apiv1.ThreadPhaseThreadCreated, "ok", "thread_list", "new_thread_for_cwd")
+		if a.req.Coordinator {
+			if !exact {
+				return false, threadlaunch.Halt(apiv1.ThreadUnconfirmed, "title_binding_unconfirmed", apiv1.ThreadPhaseThreadCreated)
+			}
+			// One mutation only, after exact new-ID binding. A lost ACK cannot
+			// turn into a fresh launch or a second setter attempt.
+			if !codexCoordinatorEntry(a.s, a.sess, a.req) || a.d.title == nil || a.d.title(ctx, a.s, a.pid, id, a.cwd) != nil {
+				return false, threadlaunch.Halt(apiv1.ThreadUnconfirmed, "title_unconfirmed", apiv1.ThreadPhaseThreadCreated)
+			}
+		}
+
 	}
 	shown, err := a.d.list(ctx, a.s, a.pid, a.cwd, false)
 	if err := a.observed(err); err != nil {
@@ -489,8 +508,10 @@ func retryable(err error) error {
 // in the cwd, created at or after the launch and not a sub-agent's. A
 // non-empty preview must match the handoff, so another thread started there
 // meanwhile (from the phone, say) is never adopted. None is "poll again";
-// several, after preferring preview matches, is ambiguous.
-func (a *codexThreadAdapter) bind(all []codexThreadSummary) (string, error) {
+// several, after preferring preview matches, is ambiguous. Only a full
+// normalized handoff match confirms a binding for title writes; truncated or
+// empty previews retain the ordinary observer heuristic but permit no rename.
+func (a *codexThreadAdapter) bind(all []codexThreadSummary) (string, bool, error) {
 	handoff := normalizedText(a.req.Handoff)
 	var matched, unknown []codexThreadSummary
 	for _, t := range all {
@@ -506,13 +527,13 @@ func (a *codexThreadAdapter) bind(all []codexThreadSummary) (string, error) {
 	}
 	switch {
 	case len(matched) == 1:
-		return matched[0].ID, nil
+		return matched[0].ID, normalizedText(matched[0].Preview) == handoff, nil
 	case len(matched) > 1 || len(unknown) > 1:
-		return "", threadlaunch.Halt(apiv1.ThreadUnconfirmed, "thread_ambiguous", apiv1.ThreadPhaseThreadCreated)
+		return "", false, threadlaunch.Halt(apiv1.ThreadUnconfirmed, "thread_ambiguous", apiv1.ThreadPhaseThreadCreated)
 	case len(unknown) == 1:
-		return unknown[0].ID, nil
+		return unknown[0].ID, false, nil
 	}
-	return "", nil
+	return "", false, nil
 }
 
 // normalizedText collapses whitespace, as a thread preview may.
