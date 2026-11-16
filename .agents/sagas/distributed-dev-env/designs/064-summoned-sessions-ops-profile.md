@@ -2694,6 +2694,9 @@ as with deletion before the hold. Requester identity remains available for
 token cleanup. A closed session without a reap retains its grants; delegated
 approval's own checks and expiry/release rules are unchanged. No operator
 release API is needed: access enforcement and revocation belong to the broker.
+This fix round needs compatible operator **and broker** image pins; the earlier
+one-operator-pin install note is insufficient for the grant fix. Slice b's
+CRD must already be installed. The story 803 gate for real remediations stays.
 
 ### 6.7 OP741: lanes, holds, the latch and the watchdog
 

@@ -2041,6 +2041,8 @@ An accepted reap of a closed, terminal summoned session ends its grants
 through the broker's usual revocation path, independently of the retained
 filing record or an owner stop hold. Session changes wake those grants;
 revocation still requires broker reconciliation and successful cleanup.
+The fix requires compatible operator and broker image pins, with slice b's
+CRD already installed; real remediations still wait for story 803's pages.
 
 A charged Pending filing keeps one place in its applicable caller queue even
 when its last mark ages out. Abandoned ends that keep immediately. Its
