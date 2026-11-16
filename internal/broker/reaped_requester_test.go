@@ -33,6 +33,7 @@ func TestBrokerHeldReapEndsGrants(t *testing.T) {
 						t.Fatal(err)
 					}
 					s.Spec.Caller = "alert-responder"
+					s.Spec.Mode = v1alpha1.ModeTask
 					s.Spec.Lane = v1alpha1.LaneRemediation
 					s.Spec.Summon = &v1alpha1.SessionSummon{DispatchID: "rem-held-reap"}
 					s.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated}
