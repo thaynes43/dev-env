@@ -2606,9 +2606,15 @@ None is a ruling by Tom.
   links the console page and names `agent-run attach <name>` in text. A late
   live registration never overrides that recorded result. State and reason
   use closed sets; unrecognized values become `unknown`. This page contains
-  no session note, title or agent message. Every branch ends
-  `Brief: unknown.` until story 795 adds the delivery field and connects it
-  to the renderer. Every page of a session whose `spec.caller` is exactly
+  no session note, title or agent message. **Edited in place, 2026-11-16:
+  story 796 with story 795, coordinator ruling; not a ruling by Tom.** Every
+  branch ends `Brief: <state>.`, including a DRILL page. The keeper chooses
+  exactly `pending`, `launched`, `unconfirmed` or `not-launched` from
+  `status.agent.brief`; missing agent status, an empty field or any other
+  value gives `unknown`. It prints the pod's own delivery claim as recorded
+  when the page is built, not proof that the provider read or answered the
+  brief. A later claim change sends no second page and changes no stored
+  page record. Every page of a session whose `spec.caller` is exactly
   `dev-env-drill.summon-drill` starts `DRILL` in title and message; names,
   titles and session reports cannot choose that label. The eventual drill
   must use that exact CallerPolicy name for `dev-env-drill/summon-drill`
