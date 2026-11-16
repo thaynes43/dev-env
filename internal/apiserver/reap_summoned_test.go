@@ -192,8 +192,18 @@ func TestSummonedCreateThenReapClosesBeforeDelete(t *testing.T) {
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatal(err)
 			}
-			if deletes != 1 || closes != 1 {
-				t.Fatalf("closes=%d deletes=%d, want one each", closes, deletes)
+			wantDeletes := 1
+			if who == "session" {
+				wantDeletes = 0
+			}
+			if deletes != wantDeletes || closes != 1 {
+				t.Fatalf("closes=%d deletes=%d, want one close and %d deletes", closes, deletes, wantDeletes)
+			}
+			if who == "session" {
+				held := f.session(name)
+				if !held.DeletionTimestamp.IsZero() || held.Status.Summon.Escalation.State != v1alpha1.SummonEscalationPending {
+					t.Fatal("recorded reap did not retain its Pending filing")
+				}
 			}
 		})
 	}
