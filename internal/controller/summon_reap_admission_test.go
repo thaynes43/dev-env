@@ -132,7 +132,11 @@ func TestSummonRecordedReapLeavesAdmissionQueue(t *testing.T) {
 				if _, err := w.r.Reconcile(ctx, req); err != nil {
 					t.Fatal(err)
 				}
-				if deletes != 1 || w.get(s.Name).DeletionTimestamp.IsZero() {
+				if state == v1alpha1.OutcomeEscalated {
+					if deletes != 0 || !w.get(s.Name).DeletionTimestamp.IsZero() {
+						t.Fatal("reap did not wait for its Pending filing")
+					}
+				} else if deletes != 1 || w.get(s.Name).DeletionTimestamp.IsZero() {
 					t.Fatalf("leader did not begin the recorded reap after closing: deletes=%d", deletes)
 				}
 			})
@@ -190,6 +194,7 @@ func TestSummonRecordedReapDeleteFailureStillSuspendsAndReleases(t *testing.T) {
 	w, s, waiting := launchSummoned(t)
 	w.schedule(s.Name, nil)
 	w.close(s.Name, summonoutcome.Unreported)
+	settleReapFilingFixture(t, w, s.Name)
 	live := w.get(s.Name)
 	if live.Annotations == nil {
 		live.Annotations = map[string]string{}

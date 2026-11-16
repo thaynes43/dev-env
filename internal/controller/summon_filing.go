@@ -30,6 +30,8 @@ import (
 const (
 	summonFilingDeadline = 2 * time.Minute
 	summonFilingAttempts = 5
+	// OP802, coordinator rulings on item 768 comment 7702.
+	summonFilingBound = 24 * time.Hour
 	// Coordinator ruling 5 on item 768 comment 7702. Story 747 must confirm
 	// or replace this inert text before a remediation caller moves.
 	summonFilingTemplate = "An autonomous remediation could not finish and the platform filed this escalation. Tom will join this session. Report what the data block says in one message. Change nothing until Tom speaks."
@@ -131,6 +133,14 @@ func (r *Reconciler) filingPolicy(ctx context.Context, s *v1alpha1.AgentSession)
 }
 
 func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) error {
+	if !summonFilingDue(s) {
+		return nil
+	}
+	// Recovery and abandonment precede even a held retry word, a disabled
+	// create kind or an unreadable ledger. This pass never charges or marks.
+	if summonFilingExpired(s, r.now()) {
+		return r.abandonSummonFiling(ctx, s)
+	}
 	if filingRetryReason(s.Status.Summon.Escalation.Reason) {
 		// A different in-flight leader may have created the child. Recover
 		// it even during the hold; transient reads must not erase the
@@ -211,11 +221,28 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 			return r.finishSummonFiling(ctx, s, m.child)
 		}
 		attemptVersion = m.statusVersion
+		// A leader may have settled the filing while this pass was paused
+		// in its mark. Never start a create from that old Pending snapshot.
+		var live v1alpha1.AgentSession
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &live); err != nil {
+			return err
+		}
+		if live.UID != s.UID || !summonFilingDue(&live) || summonFilingExpired(&live, r.now()) {
+			return nil
+		}
+		*s = live
 		child, err = summonFilingChild(s, m.charge.Name, boundary)
 		if err != nil {
 			return err
 		}
-		callCtx, cancel := r.filingClock().WithDeadline(ctx, m.marked.Add(summonFilingDeadline))
+		deadline := m.marked.Add(summonFilingDeadline)
+		// Translate the remaining wall-clock bound to the process clock used
+		// for the create deadline; the ledger's joined clock is independent.
+		bound := r.filingClock().Now().Add(s.Status.Summon.Closed.At.Add(summonFilingBound).Sub(r.now()))
+		if bound.Before(deadline) {
+			deadline = bound
+		}
+		callCtx, cancel := r.filingClock().WithDeadline(ctx, deadline)
 		if err := callCtx.Err(); err != nil {
 			cancel()
 			return err
@@ -259,6 +286,41 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 		}
 	}
 	return r.recordSummonFilingBlock(ctx, s, summonoutcome.FilingNoFreeName, attemptVersion)
+}
+
+func summonFilingExpired(s *v1alpha1.AgentSession, now time.Time) bool {
+	return !now.Before(s.Status.Summon.Closed.At.Add(summonFilingBound))
+}
+
+// One final uncached label list before the status CAS. A competing Filed or
+// Abandoned write conflicts with this patch; the next pass reads the winner.
+// A lost response is likewise recovered from the immutable final record.
+func (r *Reconciler) abandonSummonFiling(ctx context.Context, s *v1alpha1.AgentSession) error {
+	child, err := r.findSummonFiling(ctx, s)
+	if err != nil {
+		return err
+	}
+	if child != nil {
+		return r.finishSummonFiling(ctx, s, child)
+	}
+	if len(s.Status.Summon.Pages) >= summonMaxPages {
+		return errors.New("the filing has no room for its abandoned event")
+	}
+	base := s.DeepCopy()
+	st := s.Status.Summon.Escalation
+	st.State = v1alpha1.SummonEscalationAbandoned
+	if st.Reason == "" {
+		st.Reason = summonoutcome.FilingNotFiled
+	}
+	at := metav1.NewTime(r.now().UTC().Truncate(time.Second))
+	s.Status.Summon.Pages = append(s.Status.Summon.Pages, v1alpha1.SummonPage{Event: v1alpha1.PageEscalationAbandoned, At: at})
+	meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{Type: summonoutcome.ConditionEscalationPending, Status: metav1.ConditionFalse,
+		Reason: "Abandoned", Message: string(st.Reason), ObservedGeneration: s.Generation, LastTransitionTime: at})
+	if err := r.patchSummonFiling(ctx, base, s); err != nil {
+		return err
+	}
+	logSummonFiling(s, "abandoned", st.Reason)
+	return nil
 }
 
 func filingRetryReason(reason v1alpha1.SummonFilingReason) bool {
@@ -359,7 +421,7 @@ func (r *Reconciler) filingLedgerStep(ctx context.Context, s *v1alpha1.AgentSess
 		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &live); err != nil {
 			return unavailable, err
 		}
-		if live.UID != s.UID || !summonFilingDue(&live) {
+		if live.UID != s.UID || !summonFilingDue(&live) || summonFilingExpired(&live, r.now()) {
 			return filingBinding{done: true}, nil
 		}
 		policy, reason, err := r.filingPolicy(ctx, &live)

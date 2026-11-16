@@ -66,6 +66,8 @@ const (
 	// summonEscalationHeld is how long an escalation may be Queued before its
 	// one held event (DESIGN-064 6.7).
 	summonEscalationHeld = 15 * time.Minute
+	// Keep the abandoned filing readable for the keeper (OP802).
+	summonAbandonedReapHold = 10 * time.Minute
 
 	// summonMaxPages is status.summon.pages' MaxItems (DESIGN-064 6.8).
 	summonMaxPages = 8
@@ -104,12 +106,46 @@ func (r *Reconciler) reconcileSummonReap(ctx context.Context, s *v1alpha1.AgentS
 	if _, recorded := s.Annotations[v1alpha1.AnnotationReapedBy]; !recorded {
 		return false, nil
 	}
+	if reason := summonReapFilingHold(s, r.now()); reason != "" {
+		log.FromContext(ctx).Info("held summoned Session delete for its filing",
+			"session", s.Name, "uid", s.UID, "caller", s.Spec.Caller, "reason", reason)
+		// Continue the ordinary stop/release work. Holding the Session
+		// record must not keep an executor running or its lane reserved.
+		return false, nil
+	}
 	err := r.Client.Delete(ctx, s, client.Preconditions{UID: &s.UID, ResourceVersion: &s.ResourceVersion},
 		client.PropagationPolicy(metav1.DeletePropagationBackground))
 	if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
 		return true, nil
 	}
 	return true, err
+}
+
+func summonReapFilingHold(s *v1alpha1.AgentSession, now time.Time) string {
+	st := s.Status.Summon
+	if s.Spec.Caller == "" || s.Spec.Lane != v1alpha1.LaneRemediation || st == nil || st.Escalation == nil ||
+		!s.DeletionTimestamp.IsZero() || !summonoutcome.Terminal(s.Status.Outcome) {
+		return ""
+	}
+	if _, recorded := s.Annotations[v1alpha1.AnnotationReapedBy]; !recorded {
+		return ""
+	}
+	switch st.Escalation.State {
+	case v1alpha1.SummonEscalationPending:
+		return "filing-pending"
+	case v1alpha1.SummonEscalationAbandoned:
+		for _, page := range st.Pages {
+			if page.Event == v1alpha1.PageEscalationAbandoned {
+				if now.Before(page.At.Add(summonAbandonedReapHold)) {
+					return "filing-abandoned-window"
+				}
+				return ""
+			}
+		}
+		// The installed CRD requires this event atomically with Abandoned.
+		return "filing-abandoned-event-missing"
+	}
+	return ""
 }
 
 // summonTaskDeadline is the operator's task deadline (DESIGN-064 6.6, N7):

@@ -1736,6 +1736,27 @@ An unknown create result (`ledger-unavailable`) and an unrecorded refusal
 can each renew one mark and attempt one create per pass; their repeated
 renewals can also keep the queue place occupied without a time bound.
 
+**Correction, 2026-11-16: story 802, coordinator rulings; not a ruling by Tom.**
+The shared encoder reserves the longest mutable clock and attempt timestamps
+and the name growth still possible for every filing charge: up to three bytes
+for `-2` through `-99`. It identifies the base by the charge's request hash,
+including a base that itself ends in a numeric suffix. Rebinding consumes that
+reserve; every other writer preserves it. The wire schema is unchanged.
+Legacy or externally grown entries can still be full.
+
+A charged Pending filing keeps one place in its caller's applicable queue,
+even after its last attempt is 15 minutes old; a missing policy match still
+counts it in every queue. There is no gap at a retry window boundary. Filed
+hands accounting to the child. Abandoned removes the Pending keep immediately
+and never renews a mark. With no unsettled child, its ledger charge is eligible
+for pruning on the first shared write at or after all three conditions hold:
+Abandoned is recorded, `at + 65 minutes`, and `attempt + 15 minutes`. Its
+absent-child queue count ends at the later of Abandoned and
+`attempt + 15 minutes`. These are eligibility times; the ledger entry bytes
+are removed only by a later writer's prune. No abandonment pass charges,
+marks or creates. This correction supersedes the queue gaps and the missing
+name reserve described above; it preserves the original charge time.
+
 ## 6. Contracts per build story
 
 ### 6.1 OP735: the ops egress tier
@@ -2592,6 +2613,38 @@ reap, or sends a page. The existing limit remains: a create already received
 by Kubernetes is not server-fenced against a later deletion/rebinding of its
 name while the old request is in flight.
 
+**Correction, 2026-11-16: story 802, coordinator rulings; not a ruling by Tom.**
+At the first filing pass at or after `closed.at + 24 hours`, before policy,
+retry-window or ledger checks, the leader lists uncached by `filed-for-uid`
+once more. An existing child is recorded Filed, at any age. Otherwise one
+optimistic status patch sets Abandoned, keeps the last typed blocked word
+(or `not-filed` if absent), clears the pending condition and appends exactly
+one `escalation-abandoned` event at that pass's time. No charge, mark or create
+runs in that abandonment step. A failed list leaves Pending; a conflict or
+unknown write result is replayed from an uncached Session read next pass.
+Filed and Abandoned never change. Before every later ledger step and create,
+the leader rechecks the same-UID Pending record and the 24-hour bound; the
+create deadline is also capped at the bound. The existing limit on a request
+already received by Kubernetes remains; this adds no server-side create fence.
+The late name-collision delay described above is unchanged.
+
+The operator's `reconcileSummonReap` holds its Session delete while a
+remediation's filing is Pending. Filed deletes immediately. Abandoned deletes
+at or after its event's `at + 10 minutes`; this replaces the earlier proposal
+that the filing takes it from a record that survives the Session (768 comment
+7415). No new store exists. A person's reap closed failed with no filing
+still deletes immediately. Stop and lane release continue while deletion is
+held; the held reap is checked again within a minute. A healthy controller
+that abandons at the bound deliberately retains the Session for at most
+24 hours 10 minutes from close, plus pass/reconcile scheduling. A delayed
+abandonment starts its ten minutes at the actual event time. API failures,
+controller downtime and a failed final list can delay this; no finite outage
+bound is claimed. Other deletion paths, including deletion past the API, are
+unchanged and can still remove a record before the keeper sees it.
+One identifier-only log line describes each held delete. Sending either
+filing event is story 803: install one compatible operator pin, with no CRD,
+RBAC or flag change, and do not use a real remediation before 803 pages them.
+
 ### 6.7 OP741: lanes, holds, the latch and the watchdog
 
 **Correction, 2026-11-12 (story 779, slice c of #741; written by the
@@ -2818,6 +2871,14 @@ worker (notes op782-q-1 and op782-q-2, also not Tom's) are folded in.
   close; with a 60-second tick its page (or digest line) can be missed. It is
   revisited with story 768's record that survives the Session (768 comment
   7415).
+- *Correction, 2026-11-16: story 802, coordinator rulings; not a ruling by
+  Tom.* Q10's immediate-delete limit is narrowed only for the operator's own
+  reap of a remediation with a filing: Pending is kept, Filed deletes at
+  once, Abandoned is kept until its event plus ten minutes (6.6). A person's
+  failed reap has no filing and still deletes at once. There is no record
+  surviving the Session. Other deletes, or keeper downtime longer than the
+  retained window, can still lose the page or digest line. The hold is an
+  opportunity to read the record, never proof of a send.
 - *Nothing is retried.* Each event gets one attempt: an unknown result is
   recorded `ambiguous`, a refusal `failed`, an attempt whose result was never
   stored stays `recorded`, and none is sent again. While the Pushover

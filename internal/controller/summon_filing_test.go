@@ -220,7 +220,7 @@ func TestSummonFilingEntryByteBound(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			data["padding"] = strings.Repeat("p", summonledger.MaxEntry-len(withCharge)-20+extra)
+			data["padding"] = strings.Repeat("p", summonledger.MaxEntry-len(withCharge)-23+extra)
 			raw, err = json.Marshal(data)
 			if err != nil {
 				t.Fatal(err)
@@ -252,8 +252,8 @@ func TestSummonFilingEntryByteBound(t *testing.T) {
 			}
 			if extra == 0 {
 				assertOneFiling(t, w, summonT0)
-				if n := len(after.Data[callerA]); n != summonledger.MaxEntry {
-					t.Fatalf("encoded bytes=%d, want %d", n, summonledger.MaxEntry)
+				if n := len(after.Data[callerA]); n != summonledger.MaxEntry-3 {
+					t.Fatalf("encoded bytes=%d, want %d", n, summonledger.MaxEntry-3)
 				}
 			} else {
 				condition := meta.FindStatusCondition(w.get(filingRem).Status.Conditions, summonoutcome.ConditionEscalationPending)
@@ -278,7 +278,7 @@ func TestSummonFilingPendingCapacityExample(t *testing.T) {
 		for i := range n {
 			e.Charges = append(e.Charges, summonledger.Charge{
 				ID: summonledger.FilingID(types.UID(fmt.Sprintf("00000000-0000-0000-0000-%012d", i))),
-				At: at, Attempt: at, Hash: strings.Repeat("a", 64), Name: strings.Repeat("n", 63),
+				At: at, Attempt: at, Hash: summonledger.RequestHash("remote", "escalation", strings.Repeat("n", 60), v1alpha1.SummonPriorityUrgent), Name: strings.Repeat("n", 60) + "-99",
 			})
 		}
 		encoded, err := summonledger.Encode(e)

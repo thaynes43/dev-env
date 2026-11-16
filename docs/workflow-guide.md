@@ -2014,6 +2014,44 @@ only while their latest attempt is younger than 15 minutes. A retry must find
 a queue place before renewing its mark. Other charges and unknown fields also
 consume space, and legacy or externally altered entries can still be full.
 
+**Correction, 2026-11-16: story 802, coordinator rulings; not a ruling by Tom.**
+The first filing pass at or after `closed.at + 24 hours` lists uncached by
+`filed-for-uid` before any policy or retry-window check. A child found at any
+age is recorded Filed instead. With no child, one optimistic status patch
+records Abandoned, its last typed blocked word (or `not-filed`), the pending
+condition as False, and one `escalation-abandoned` event. It charges, marks and
+creates nothing. A failed list keeps Pending; crashes, conflicts and lost
+write responses replay from the stored record. Abandoned is final and never
+retried. Ledger steps and creates also recheck the same-UID Pending record
+and the bound, and the create deadline is capped at the bound. A request
+already received by Kubernetes retains the existing server-fencing limit.
+
+A charged Pending filing keeps one place in its applicable caller queue even
+when its last mark ages out. Abandoned ends that keep immediately. Its
+absent-child queue count is free at the later of abandonment and the last
+mark plus 15 minutes. Its ledger charge is eligible for the next writer's
+prune at the later of abandonment, its original `at` plus 65 minutes, and
+its last mark plus 15 minutes, provided no unsettled child keeps it. The
+abandon step itself does not write the ledger. The shared encoder now reserves
+the longest mutable timestamps and up to three bytes of remaining name growth
+for every filing charge, so a later `-99` rebind cannot fill a correctly
+reserved entry merely by growing its name. Other writers preserve this
+reserve. These rules supersede the earlier queue gaps and timestamp-only
+reserve; the late collision's next-window retry delay remains.
+
+Only the operator's own reap delete waits for the remediation's filing:
+Pending stays, Filed deletes immediately, and Abandoned stays until its event
+time plus ten minutes. A person's reap closed failed without a filing still
+deletes immediately. Executor stop and lane release continue during the hold,
+with a reap recheck within a minute. The longest deliberate hold is 24 hours
+10 minutes from close when abandonment runs at its bound, plus scheduling;
+a delayed event starts its ten minutes when actually recorded. API errors or
+controller downtime add delay. Other deletes can still remove the record.
+The hold gives the keeper a window to read, and proves no page delivery.
+Install one operator pin, with no CRD copy, RBAC or flag change for story 802.
+**Not for a real remediation before story 803 pages these filing events.**
+No page text, send or view is part of this change.
+
 These are coordinator rulings, not rulings by Tom: item 768 comment 7702 and
 item 801 comments 7852, 8423, 8429, 8430, 8446, 8480 and 8482 (2026-11-14,
 story 801 fix round 1). Comment 8446 supersedes the build's open question about Pending's typed

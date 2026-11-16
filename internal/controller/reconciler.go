@@ -430,6 +430,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	if handled && reapErr == nil {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
+	if summonReapFilingHold(&s, r.now()) != "" {
+		// A held reap still runs the stop/release work below. Revisit its
+		// timed hold even when no later Session event arrives (OP802).
+		defer func() {
+			if outcomeErr == nil {
+				out = sooner(out, ctrl.Result{RequeueAfter: time.Minute})
+			}
+		}()
+	}
 	// DESIGN-064 5.9: a closed summoned session's reservation is released once
 	// no launch can follow (OP777); until then the operator suspends it so
 	// its pod goes (OP779). A failed reap must not skip this step; return
