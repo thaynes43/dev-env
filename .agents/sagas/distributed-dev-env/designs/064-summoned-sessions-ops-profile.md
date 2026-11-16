@@ -4220,6 +4220,43 @@ corrections stay; where they differ, this governs.
   and typing into a live session is never a fallback. Source and test
   evidence do not count as installed or accepted evidence.
 
+**Correction, 2026-11-16: story 795 fix round 1, coordinator rulings; not a
+ruling by Tom.** This answers F1 and F2 in PR 1179 comment 6923479739.
+Earlier corrections stay; where they differ, this governs.
+
+- *Unreadable evidence (F1).* `pending` requires a genuinely absent launch
+  record, a free first-launch latch (no launch or task-result entry, even a
+  dangling link), and no recorded pre-launch error. A dangling launch entry
+  is `unconfirmed`. `launched` requires the brief-carrying launch and a
+  matching `started` handoff with nonempty conversation and boot identities.
+  An existing refusal entry that cannot be read, including a dangling link,
+  or decoded refusal evidence missing either identity is `unconfirmed`.
+  Both identities must be present before a refusal can be matched to this
+  launch (`not-launched`) or ignored as belonging to another launch. A
+  matching `nothing-started` handoff still takes precedence. No uncertain
+  evidence frees the latch or causes a resend, on the same or a later boot.
+- *NUL refusal (F2).* A rendered summoned brief containing U+0000 gets 422
+  at create before any charge or Session write. agentd refuses it when
+  building the first launch, before a launch, handoff or task-result write
+  or tmux call, without echoing the brief. The boot records the plain error:
+  agent `failed`, remote brief `not-launched`. This refusal does not consume
+  the first-launch latch. Like the existing `-` check, it applies to summoned
+  tasks too; ordinary task stdin bytes are unchanged.
+- *Argument bounds.* NUL is the only byte that Go's exec argument conversion
+  rejects. Other control bytes, quotes, newlines and Unicode are literal
+  argv bytes. The existing rendered-brief and Session validation cap is
+  65,536 bytes. Including its terminator, that is 65,537 bytes, below Linux's
+  131,072-byte single-argument limit on the session image's 4 KiB pages.
+  Overlong arguments can fail with `E2BIG`; a brief within the existing cap
+  fits this limit. The aggregate argv/environment limit is separate and
+  depends on the runtime environment; this adds no general exec guarantee.
+  A stand-in exec test receives the maximum brief and the literal-byte
+  cases unchanged. No new schema rule or broader input filter is added.
+
+This is source and test evidence only. Nothing is installed or accepted by
+this correction. The real positional-prompt/Remote Control probe and the
+other-model-family review remain the coordinator's separate gates.
+
 ### 6.11 OP746: move curation
 
 - A new app in haynes-ops `upgrade-agent/cigar-curation/` (not inside the

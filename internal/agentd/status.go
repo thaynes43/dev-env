@@ -293,7 +293,7 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 // or unreadable start. A legacy argv that omitted the brief cannot claim it
 // launched. No extra delivery record or operator action is needed (OP795).
 func summonedBriefState(s Settings, sess protocol.Session, first Launch, launchErr error, agentError string) string {
-	if errors.Is(launchErr, os.ErrNotExist) {
+	if errors.Is(launchErr, os.ErrNotExist) && !summonedLaunched(s, sess) {
 		if agentError != "" {
 			return protocol.BriefNotLaunched
 		}
@@ -302,7 +302,7 @@ func summonedBriefState(s Settings, sess protocol.Session, first Launch, launchE
 	if launchErr != nil {
 		return protocol.BriefUnconfirmed
 	}
-	if first.Session != sess.Name || first.Resume {
+	if first.Session != sess.Name || first.Resume || first.ConversationID == "" || first.BootID == "" {
 		return protocol.BriefUnconfirmed
 	}
 	if len(first.Argv) == 0 || first.Argv[len(first.Argv)-1] != sess.Prompt {
@@ -312,14 +312,18 @@ func summonedBriefState(s Settings, sess protocol.Session, first Launch, launchE
 	if h.State == handoffNothingStarted {
 		return protocol.BriefNotLaunched
 	}
-	var refused startRefused
-	refusedErr := readJSONFile(s.statePath(startRefusedFile), &refused)
-	if refusedErr == nil && refused.ConversationID == first.ConversationID && refused.BootID == first.BootID {
-		return protocol.BriefNotLaunched
-	}
-	if refusedErr != nil && !errors.Is(refusedErr, os.ErrNotExist) {
-		// A refusal may have been recorded after tmux confirmed the start.
-		return protocol.BriefUnconfirmed
+	refusedPath := s.statePath(startRefusedFile)
+	if _, err := os.Lstat(refusedPath); !errors.Is(err, os.ErrNotExist) {
+		// ENOENT from ReadFile is not absence: a dangling link is still an
+		// existing entry. A refusal may follow tmux's confirmed start;
+		// require both identities before matching or ignoring the record.
+		var refused startRefused
+		if err != nil || readJSONFile(refusedPath, &refused) != nil || refused.ConversationID == "" || refused.BootID == "" {
+			return protocol.BriefUnconfirmed
+		}
+		if refused.ConversationID == first.ConversationID && refused.BootID == first.BootID {
+			return protocol.BriefNotLaunched
+		}
 	}
 	if h.State == handoffStarted {
 		return protocol.BriefLaunched
