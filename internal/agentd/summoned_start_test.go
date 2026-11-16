@@ -37,6 +37,7 @@ func summonedFixture(t *testing.T, mode string) (Settings, protocol.Session, pro
 	t.Helper()
 	s, sess, ws := launchFixture(t)
 	sess.Mode, sess.Caller = mode, summonedCaller
+	sess.Prompt = "Follow the runbook."
 	if mode != protocol.ModeTask {
 		sess.Limits = nil
 		if mode == protocol.ModeLocal {

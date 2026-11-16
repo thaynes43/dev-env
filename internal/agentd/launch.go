@@ -74,8 +74,8 @@ type Launch struct {
 	// every existing private workspace launch.
 	WorkspaceOwner *taskOwner `json:"workspaceOwner,omitempty"`
 	Session        string     `json:"session"`
-	// Argv is the agent CLI and its arguments. The prompt is not among them:
-	// it goes to the CLI's stdin.
+	// Argv is the agent CLI and its arguments. A task's prompt goes to stdin;
+	// a summoned remote first launch carries its brief as the last argument.
 	Argv   []string `json:"argv"`
 	Prompt string   `json:"prompt,omitempty"`
 	Dir    string   `json:"dir"`
@@ -211,6 +211,11 @@ func sharedGuard(ws protocol.Workspace, task bool) string {
 // agent is named: an agent this agentd does not know is refused, never run
 // as Claude.
 func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootID string, now time.Time) (Launch, error) {
+	// O11 (DESIGN-064 6.10, OP795): a brief cannot become a CLI option.
+	// Refuse before any launch record exists, and never echo the brief.
+	if sess.Caller != "" && strings.HasPrefix(sess.Prompt, "-") {
+		return Launch{}, errors.New("a summoned session's brief must not start with '-'")
+	}
 	l, err := buildFirstLaunch(s, sess, ws, bootID, now)
 	if err != nil {
 		return Launch{}, err
@@ -287,6 +292,11 @@ func buildFirstLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 			return Launch{}, err
 		}
 		l.Argv = append(argv, rules...)
+		if sess.Mode == protocol.ModeRemote && sess.Caller != "" && sess.Prompt != "" {
+			// One positional argument, after all rules. No shell handoff and
+			// no resend: the existing summoned launch latch owns the start.
+			l.Argv = append(l.Argv, sess.Prompt)
+		}
 		return l, nil
 	}
 	if n := sess.MaxTurns(); n > 0 {

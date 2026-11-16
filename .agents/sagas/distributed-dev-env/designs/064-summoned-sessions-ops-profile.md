@@ -4170,6 +4170,56 @@ contract of `GET /v1/sessions/{name}`, so it is stated here.
    the current Remote Control state, the stored settlement and where the
    link is. It prints no link.
 
+**Correction, 2026-11-16: story 795, coordinator rulings; not a ruling by
+Tom.** Rulings O11 and O12 are item 745 comment 7680. Earlier text and
+corrections stay; where they differ, this governs.
+
+- *The first launch.* For a remote session with a caller and a nonempty
+  prompt, agentd appends the brief as the CLI's last positional argument,
+  after the rules. `--remote-control` still carries the session name;
+  summoned sessions have no title. A task keeps its prompt on stdin. No
+  ordinary remote launch gains a prompt. The resume path is unchanged and
+  refuses every summoned session.
+- *Refusal (O11).* A rendered brief whose first byte is `-` is refused at
+  create with 422, before a session or a create charge is written. agentd
+  also refuses it when building a summoned session's first launch, without
+  echoing the brief. That refusal writes no launch or handoff record; the
+  boot records the error, and reports agent `failed`, brief `not-launched`.
+  This check applies to summoned tasks too; an ordinary task may still use
+  an option-looking stdin prompt.
+- *The pod's claim (O12).* The heartbeat's optional `brief` string is copied
+  to `status.agent.brief`, beside `status.agent.start`, only for a summoned
+  remote session with a prompt. The short name keeps the earlier `brief`
+  name while moving it under the pod's status. The operator does not act on
+  it. It says whether the brief was handed to a start, never that the
+  provider read it or answered it. Its four closed words follow the durable
+  first-launch and matching start-handoff records:
+  - `pending`: no launch record and no recorded pre-launch refusal.
+  - `launched`: the launch carries the brief and tmux confirmed its start.
+  - `unconfirmed`: the handoff is `asked` or `ambiguous`, missing, unreadable
+    or bound to another launch. An unreadable launch or fence-refusal record
+    is also unconfirmed.
+    No boot resends it, even if no process is live.
+  - `not-launched`: nothing started, the start fence refused, a pre-launch
+    error records that nothing started, or an older launch's argv did not
+    carry the brief. A matching fence refusal overrides a confirmed handoff.
+- *Mixed versions.* The field is optional, MaxLength 12, with that enum.
+  There is no transition or cross-spec schema rule: a heartbeat from an
+  older agentd omits it, leaving it absent, and an operator may replace
+  `status.agent` without it. Unknown words or malformed optional evidence
+  are dropped without refusing the heartbeat. An older operator's
+  non-strict heartbeat decoder ignores the unknown member. No client view
+  gains a key in this story, including a summoned remote view; old clients
+  see no brief-delivery state. Story 797's separate registration key keeps
+  its own compatibility rule above.
+- *Installation and the open probe.* Copy the CRD first, then pin the
+  operator, then release the agent image and pin it. Stand-in tests prove
+  the argv and recorded state. Whether a positional prompt actually works
+  with `--remote-control` in the v2 image remains open: the coordinator
+  checks it at story 745's drill. No provider CLI probe runs in story 795,
+  and typing into a live session is never a fallback. Source and test
+  evidence do not count as installed or accepted evidence.
+
 ### 6.11 OP746: move curation
 
 - A new app in haynes-ops `upgrade-agent/cigar-curation/` (not inside the

@@ -140,9 +140,22 @@ type Status struct {
 	// (DESIGN-064 6.9, OP791): the model it started on, or why no model was
 	// usable. Absent for every other session, and while the pre-flight
 	// runs. An operator that does not know the field ignores it.
-	Start      *StartRecord `json:"start,omitempty"`
-	ObservedAt time.Time    `json:"observedAt"`
+	Start *StartRecord `json:"start,omitempty"`
+	// Brief is a summoned remote session's brief delivery claim, derived from
+	// its first-launch handoff (DESIGN-064 6.10, OP795). Absent for every
+	// other session. It says nothing about the provider reading or answering
+	// the brief. An older operator ignores it.
+	Brief      string    `json:"brief,omitempty"`
+	ObservedAt time.Time `json:"observedAt"`
 }
+
+// The closed set of brief delivery claims (DESIGN-064 6.10, OP795).
+const (
+	BriefPending     = "pending"
+	BriefLaunched    = "launched"
+	BriefUnconfirmed = "unconfirmed"
+	BriefNotLaunched = "not-launched"
+)
 
 // StartRecord is a summoned task's start after its model pre-flight
 // (DESIGN-064 6.9, OP791). Exactly one of Model and Failure is set.
