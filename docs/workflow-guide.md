@@ -2469,8 +2469,40 @@ removed too. The fence is the random boundary. Nothing here says how a model
 reads other text. A `prompt` on the create is refused. A data key the entry
 does not name is refused. Each value is at most 4096 bytes and the values
 together at most 16384. An ordinary remote session still cannot carry a prompt. A summoned
-remote session can, because the brief is that prompt. Handing the brief to
-the CLI at first launch is a later story.
+remote session can, because the brief is that prompt.
+
+**Source, 2026-11-16 (story 795, coordinator rulings; not a ruling by Tom).**
+At a summoned remote session's first launch, agentd appends that brief after
+the rules as the CLI's last positional argument. `--remote-control` carries
+the session name, with no title. No ordinary remote launch gains a prompt;
+a task still receives its prompt on stdin. A summoned session never resumes,
+and an ambiguous first start is never resent. A rendered brief beginning
+with `-`, or containing NUL, gets 422 at create before any charge or session
+is written; agentd also refuses it at launch, with no launch record and a
+plain error. A refused launch leaves the first-launch latch free and reports
+agent `failed`, remote brief `not-launched`. These checks also apply to
+summoned tasks; ordinary task stdin is unchanged (story 795 fix round 1,
+2026-11-16, coordinator rulings; not a ruling by Tom).
+
+The pod reports its delivery claim as `status.agent.brief`, beside the task
+start record. It is `pending` only with no launch record, a free launch latch
+and no pre-launch error; `launched` when tmux confirmed the brief-carrying
+launch with matching conversation and boot identities and no refusal
+evidence for that launch; `unconfirmed` when the handoff is asked or
+ambiguous, or launch/refusal evidence is unreadable or lacks those identities
+(including dangling links); and `not-launched` when
+nothing started, a fence refused it, a pre-launch error was recorded, or a
+legacy launch did not carry the brief. This is the pod's claim about its
+handoff, not proof that the provider answered; the operator does not act on
+it. An older agentd omits the field. Unknown or malformed evidence is
+dropped without blocking its heartbeat. No `agent-run` view gains the field
+in this story, so an old client sees no new brief key.
+
+Install the CRD copy before the operator pin, then release and pin the agent
+image. The positional prompt with `--remote-control` still needs the
+coordinator's probe at story 745's drill in the v2 image. The source tests
+use stand-ins; they do not establish installed or accepted behavior. Nothing
+is typed into a live session as a fallback.
 
 ### Repeating a create, the hourly limit and the pool
 

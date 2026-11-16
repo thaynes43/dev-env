@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -71,7 +72,12 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	// must retain this history: the operator replaces status.agent wholesale,
 	// and private history reads its conversation ID even during boot.
 	var first Launch
-	launched := readJSONFile(s.statePath(launchFile), &first) == nil
+	launchErr := readJSONFile(s.statePath(launchFile), &first)
+	launched := launchErr == nil
+	if sess.Caller != "" && sess.Mode == protocol.ModeRemote && sess.Prompt != "" {
+		// Even a boot heartbeat retains the first handoff's delivery claim.
+		st.Brief = summonedBriefState(s, sess, first, launchErr, boot.AgentError)
+	}
 	var res taskResult
 	finished := readJSONFile(s.statePath(resultFile), &res) == nil
 	if finished && launched && sess.Mode == protocol.ModeTask && res.TaskOutcome != nil && res.TaskOutcome.Validate() == nil && res.TaskOutcome.SessionUID == sess.SessionUID && res.TaskOutcome.PodUID == s.PodUID {
@@ -280,6 +286,49 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		}
 	}
 	return st
+}
+
+// summonedBriefState is the pod's delivery claim, not provider acceptance.
+// The existing launch latch prevents every resend, including an ambiguous
+// or unreadable start. A legacy argv that omitted the brief cannot claim it
+// launched. No extra delivery record or operator action is needed (OP795).
+func summonedBriefState(s Settings, sess protocol.Session, first Launch, launchErr error, agentError string) string {
+	if errors.Is(launchErr, os.ErrNotExist) && !summonedLaunched(s, sess) {
+		if agentError != "" {
+			return protocol.BriefNotLaunched
+		}
+		return protocol.BriefPending
+	}
+	if launchErr != nil {
+		return protocol.BriefUnconfirmed
+	}
+	if first.Session != sess.Name || first.Resume || first.ConversationID == "" || first.BootID == "" {
+		return protocol.BriefUnconfirmed
+	}
+	if len(first.Argv) == 0 || first.Argv[len(first.Argv)-1] != sess.Prompt {
+		return protocol.BriefNotLaunched
+	}
+	h := summonedHandoff(s, first)
+	if h.State == handoffNothingStarted {
+		return protocol.BriefNotLaunched
+	}
+	refusedPath := s.statePath(startRefusedFile)
+	if _, err := os.Lstat(refusedPath); !errors.Is(err, os.ErrNotExist) {
+		// ENOENT from ReadFile is not absence: a dangling link is still an
+		// existing entry. A refusal may follow tmux's confirmed start;
+		// require both identities before matching or ignoring the record.
+		var refused startRefused
+		if err != nil || readJSONFile(refusedPath, &refused) != nil || refused.ConversationID == "" || refused.BootID == "" {
+			return protocol.BriefUnconfirmed
+		}
+		if refused.ConversationID == first.ConversationID && refused.BootID == first.BootID {
+			return protocol.BriefNotLaunched
+		}
+	}
+	if h.State == handoffStarted {
+		return protocol.BriefLaunched
+	}
+	return protocol.BriefUnconfirmed
 }
 
 // summonedHandoff is the handoff record of the summoned session's first
