@@ -825,8 +825,10 @@ worktree, as on the phone. --wait (at most 10m) bounds the whole launch.
                   and controller host metadata are checked before launch. No pool
                   selection, other host or ordinary-intent fallback. After exact-ID
                   binding, native title metadata is set and read back. A lost ACK
-                  stays unconfirmed; never relaunch it. This is source-only work,
-                  pending independent-family review and separate installation.
+                  stays unconfirmed; never relaunch it. The review by another model
+                  family is done, recorded on story 858 and in DESIGN-067 section 14.
+                  Nothing is installed or accepted; the setting is empty and no named
+                  coordinator host exists.
 
 --agent codex     an existing Codex --interactive session (--host), paired once with
                   agent-run pair. It runs agentd ctl thread-start in that pod. From Tom's

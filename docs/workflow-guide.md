@@ -886,8 +886,9 @@ awake. A suspended standby has an archived phone entry until it is resumed.
 
 ### Named workbench coordinator threads (source draft, OP858)
 
-DESIGN-067 slice (b) is source and local-test work only. Independent-family
-review is pending; nothing here is installed or accepted. Slice (c1), owner
+DESIGN-067 slice (b) is source and local-test work only. The review by another
+model family is done, recorded on story 858 and in design section 14. Nothing
+is installed or accepted; the setting is empty and no named coordinator host exists. Slice (c1), owner
 confirmation and the reviewed install packet still precede a privileged host.
 The existing Fable coordinator keeps custody and watch lanes.
 

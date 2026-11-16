@@ -12,6 +12,7 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/threadlaunch"
 )
 
 func coordinatorEntryFixture() (Settings, protocol.Session, CodexThreadRequest) {
@@ -135,6 +136,9 @@ func TestCodexCoordinatorTitleAfterExactBinding(t *testing.T) {
 			case "empty-preview", "partial-preview":
 				if result.Outcome != apiv1.ThreadUnconfirmed || result.ThreadID != newThread || result.Error == nil || result.Error.Code != "title_binding_unconfirmed" || titles != 0 {
 					t.Fatalf("guessed binding renamed: %+v titles=%d", result, titles)
+				}
+				if result.Error.Message == "" || result.Error.Message != threadlaunch.Message(result.Error.Code) {
+					t.Fatalf("missing fixed binding diagnostic: %+v", result.Error)
 				}
 			case "ambiguous":
 				if result.Outcome != apiv1.ThreadUnconfirmed || titles != 0 {

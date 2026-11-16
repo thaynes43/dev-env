@@ -294,3 +294,25 @@ func TestDecodeRefuses(t *testing.T) {
 		t.Error("responded with an error accepted")
 	}
 }
+
+// Coordinator launches use the API route, the Codex adapter and the shared driver.
+// Keep their result diagnostics explicit so deleting a map entry fails this test.
+func TestCoordinatorResultMessages(t *testing.T) {
+	for _, code := range []string{
+		"coordinator_required", "title_unconfirmed", "title_binding_unconfirmed",
+		"invalid_input", "not_codex_host", "host_not_running", "host_unsupported",
+		"login_required", "daemon_unavailable", "remote_disconnected", "pairing_required",
+		"repo_unavailable", "folder_not_qualified", "codex_config_invalid", "codex_trust_unconfirmed",
+		"name_consumed", "client_unavailable", "launch_unconfirmed", "client_not_running",
+		"thread_not_observed", "thread_ambiguous", "hidden_source", "turn_failed",
+		"response_pending", "response_not_observable", "observation_unavailable", "launch_deadline",
+		"unauthenticated", "caller_not_allowed", "exec_failed", "host_result_unconfirmed",
+		"host_not_found", "route_unsupported", "api_unreachable", "api_refused", "api_result_unconfirmed",
+	} {
+		t.Run(code, func(t *testing.T) {
+			if strings.TrimSpace(Message(code)) == "" {
+				t.Fatalf("result code %q has no fixed message", code)
+			}
+		})
+	}
+}

@@ -95,6 +95,7 @@ func Names() []string {
 // Fixed diagnostics. Messages are client text, never reflected native output.
 var messages = map[string]string{
 	"coordinator_required":             "This host requires explicit coordinator intent and matching controller metadata and target UIDs",
+	"title_binding_unconfirmed":        "The new thread exists; its title was not set because the thread could not be identified exactly. Do not start it again",
 	"title_unconfirmed":                "The exact thread title metadata is unconfirmed; do not relaunch",
 	"invalid_input":                    "Invalid launch input",
 	"no_host_selected":                 "Host selection did not choose a host to use, so no thread was started",

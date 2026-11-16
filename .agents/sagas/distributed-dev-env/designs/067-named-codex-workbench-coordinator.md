@@ -972,6 +972,9 @@ with a 20 GiB HOME default. Re-read those declarations for the actual packet.
 
 ## 14. Review and handoff
 
+2026-11-16 advisory fix round 3: fixed both MEDIUM findings, the missing `title_binding_unconfirmed` message and stale review-status text.
+The review by another model family is done, recorded on story 858 and here; nothing is installed or accepted, the setting is empty and no named coordinator host exists.
+
 2026-11-16 cross-family re-check: `claude-sonnet-5-5` reviewed PR 1165 at
 `15de34da` (`15de34dadb6a55f2c9f4b85a074a0ca6fd8656b0`). Verdict:
 **APPROVE** the round-1 delta, HIGH 0, MEDIUM 0, LOW 4. Round 2 closes the
@@ -995,8 +998,9 @@ Fix worker `dev-env-1116-212653` owns only its follow-up branch/PR into
 `agent/dev-env-1114-160847`. Main was merged first as a separate commit without
 conflicts. Section 6.2 and the evidence file list all five empty-setting pool
 differences from re-check part B(4). Source/tests/docs only; nothing is installed
-or accepted. Neither PR is merged; PR 1165 remains draft. The coordinator owns
-integration and the next exact-head cross-family re-check.
+or accepted. The review by another model family is now done, recorded on story
+858 and in this section; PR 1165 is ready and unmerged. The setting is empty
+and no named coordinator host exists. The coordinator owns integration.
 
 2026-11-16 cross-family source review: `claude-sonnet-5-5` reviewed draft PR
 1165 at `9ace0954` (`9ace0954079e3ee4d09c973df72226378888cb1d`). Verdict:
@@ -1025,8 +1029,9 @@ integration and the next exact-head cross-family re-check.
 
 Fix worker `dev-env-1116-202344` owns only its branch/PR into the slice (b) draft.
 Source/tests/docs only; no installation, host change or acceptance. The
-coordinator merges the fix into the draft and returns its new head to the
-cross-family reviewer. PR 1165 stays draft; this review is not approval.
+coordinator subsequently integrated the fix and obtained approval from the
+other model family, recorded on story 858 and in this section. Nothing is
+installed or accepted; the setting is empty and no named coordinator host exists.
 
 2026-11-14 build record: **slice (a) built, not installed** (OP858). The source
 adds the default-empty name setting, shared account/shape predicate, API
@@ -1047,10 +1052,11 @@ templates are unreadable, including an unlisted session; its pod is neither
 deleted nor replaced. With no pod, nothing changes: no Codex host pod is built
 while templates are unreadable. This account observation permits no construction.
 
-2026-11-14 recovery build record: **slice (b) source draft; independent-family
-review pending, not installed or accepted**. Worker `dev-env-1114-160847` owns
-only this source branch and draft PR; `dev-env-fable-coordinator-1109` retains
-story and lane custody. No live action or provider review was run. The structured
+2026-11-14 recovery build record: **slice (b) source and tests only**. The review
+by another model family is now done, recorded on story 858 and in this section;
+nothing is installed or accepted, the setting is empty and no named coordinator
+host exists. Worker `dev-env-1114-160847` owns only this source branch and PR;
+`dev-env-fable-coordinator-1109` retains story and lane custody. No live action was run. The structured
 coordinator CLI always uses the operator API, including for workbench and client
 callers, so both account/caller checks and UID fences apply on that route.
 Existing authorized direct exec remains subject to agentd's metadata/purpose/UID
@@ -1069,8 +1075,8 @@ The [source test evidence](../evidence/067-slice-b-source-tests.md) records the
 acceptance tests and the original worker’s 58 reported killed/restored guard
 mutants, plus the cross-family corrections and fix-worker reruns. The PR and recovery
 handoff record the exact head and CI separately.
-Slices (c1/c2/d/e), owner rulings, another-family review and installation remain
-held with their existing owners. Meatball must obtain any missing ruling;
+Slices (c1/c2/d/e), owner rulings and installation remain with their existing
+owners; the slice (b) review by another model family is done as recorded above. Meatball must obtain any missing ruling;
 silence is not consent.
 
 2026-11-14 source review: session `dev-env-fable-coordinator-1109`
