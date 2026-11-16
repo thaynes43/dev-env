@@ -16,12 +16,12 @@ func TestInstructionAgentImageOrdinaryEnrollmentAndIsolation(t *testing.T) {
 	image := "ghcr.io/thaynes43/dev-env:2.86.0@sha256:" + strings.Repeat("a", 64)
 	r := &Reconciler{CoordinatorInstructionAgentImage: image}
 	s := ordinaryOptInSession(t)
-	plain, err := r.sessionPod(s, exampleTemplates(t))
+	plain, err := r.sessionPod(s, exampleTemplates(t), r.resolveCodexHost(s, exampleTemplates(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Spec.CoordinatorInstructions = true
-	got, err := r.sessionPod(s, exampleTemplates(t))
+	got, err := r.sessionPod(s, exampleTemplates(t), r.resolveCodexHost(s, exampleTemplates(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestInstructionAgentImageOrdinaryEnrollmentAndIsolation(t *testing.T) {
 	if got.UID != "" || got.OwnerReferences[0].UID != s.UID {
 		t.Fatal("receiver identity changed")
 	}
-	plainOff, err := (&Reconciler{}).sessionPod(ordinaryOptInSession(t), exampleTemplates(t))
+	plainOff, err := (&Reconciler{}).sessionPod(ordinaryOptInSession(t), exampleTemplates(t), (&Reconciler{}).resolveCodexHost(ordinaryOptInSession(t), exampleTemplates(t)))
 	if err != nil || !apiequality.Semantic.DeepEqual(plain.Spec, plainOff.Spec) {
 		t.Fatal("configuration changed a non-enrolled task", err)
 	}

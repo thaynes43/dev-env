@@ -109,6 +109,9 @@ var ReservedEnv = []string{
 // (https://cursor.com/docs/cli/reference/authentication, DESIGN-058).
 const CursorAPIKeyEnv = "CURSOR_API_KEY"
 
+// AgentServiceAccount is the ordinary agents' identity (DESIGN-001 6.11).
+const AgentServiceAccount = "dev-env-agent"
+
 // WorkbenchServiceAccount is a non-default identity a profile may name
 // (DESIGN-001 6.11, D-46): the trusted client the operator already knows, exempt from
 // the identity guard, and held by haynes-ops' RBAC to pods get/list and pods/exec

@@ -52,6 +52,12 @@ func IsHost(s *v1alpha1.AgentSession) bool {
 	return s.Spec.Agent == v1alpha1.AgentCodex && s.Spec.Mode == v1alpha1.ModeRemote
 }
 
+// OrdinaryAccount recognizes accounts a managed pod can use without workbench
+// power. Empty or unfamiliar accounts prove nothing; templates are not needed.
+func OrdinaryAccount(account string) bool {
+	return account == templates.AgentServiceAccount || templates.IsCoordinatorServiceAccount(account)
+}
+
 // Resolution is one immutable profile/account answer for a request/reconcile.
 // Both the guard and pod builder consume it; rechecking never rereads templates.
 type Resolution struct {
@@ -68,11 +74,15 @@ func Resolve(t *templates.Templates, profile string) *Resolution {
 	}
 	var err error
 	r.name, r.profile, err = t.Profile(profile)
+	// templates.Validate permits only empty (ordinary), workbench or named
+	// coordinator accounts. Treat an unvalidated unknown account as unavailable.
 	r.unavailable = err != nil || r.profile.ServiceAccount != "" && r.profile.ServiceAccount != templates.WorkbenchServiceAccount && !templates.IsCoordinatorServiceAccount(r.profile.ServiceAccount)
 	return r
 }
 
 func (r *Resolution) Profile() (string, templates.Profile) { return r.name, r.profile }
+func (r *Resolution) Available() bool                      { return r != nil && !r.unavailable }
+
 func (r *Resolution) Workbench() bool {
 	return r != nil && !r.unavailable && r.profile.ServiceAccount == templates.WorkbenchServiceAccount
 }

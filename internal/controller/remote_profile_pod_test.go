@@ -156,7 +156,7 @@ func TestRemoteBlockAbsentFromRenderedCanaryAndPilot(t *testing.T) {
 	rec.TemplateRevision = rev
 	canary.Session.Spec.ProjectCanary.TemplateRevision = rev
 	canary.Session.Spec.ProjectCanary.PolicyDigest = rec.Digest()
-	pod, err := buildManagedPod(canary.Session, canaryTmpl, "https://operator.example", true, true, nil, false)
+	pod, err := buildManagedPod(canary.Session, canaryTmpl, "https://operator.example", true, true, nil, false, (&Reconciler{}).resolveCodexHost(canary.Session, canaryTmpl))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestRemoteBlockAbsentFromRenderedCanaryAndPilot(t *testing.T) {
 	policy.TemplateRevision = rev
 	pilotFix.Policy = &policy
 	session := pilotFix.Session(t, 0)
-	pod, err = buildManagedPod(session, pilotTmpl, "https://operator.example", true, false, nil, false)
+	pod, err = buildManagedPod(session, pilotTmpl, "https://operator.example", true, false, nil, false, (&Reconciler{}).resolveCodexHost(session, pilotTmpl))
 	if err != nil {
 		t.Fatal(err)
 	}
