@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -337,5 +338,170 @@ func TestSummonedBriefRefusalLeavesNoLaunch(t *testing.T) {
 	st := CollectStatus(context.Background(), r, s, sess, loginNow)
 	if st.Agent.State != protocol.AgentFailed || reportedBrief(t, st) != "not-launched" || !strings.Contains(st.Agent.Error, "brief must not start with '-'") {
 		t.Fatalf("refusal status: %+v", st)
+	}
+}
+
+// OP795 F1: unreadable or incomplete evidence is never a confirmed start,
+// and the consumed one-shot latch still prohibits a resend on every boot.
+func TestSummonedBriefIncompleteEvidenceNeverConfirms(t *testing.T) {
+	for _, name := range []string{"dangling-refusal", "empty-refusal", "null-refusal", "conversation-only-refusal", "boot-only-refusal", "dangling-launch", "result-without-launch", "launch-without-identity"} {
+		t.Run(name, func(t *testing.T) {
+			s, sess, ws := summonedFixture(t, protocol.ModeRemote)
+			first, err := BuildLaunch(s, sess, ws, "first", loginNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeJSONFile(s.statePath(launchFile), first); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeJSONFile(s.statePath(startHandoffFile), startHandoff{State: handoffStarted, ConversationID: first.ConversationID, BootID: first.BootID}); err != nil {
+				t.Fatal(err)
+			}
+			switch name {
+			case "dangling-refusal":
+				err = os.Symlink("missing-refusal", s.statePath(startRefusedFile))
+			case "empty-refusal":
+				err = os.WriteFile(s.statePath(startRefusedFile), []byte(`{}`), 0o600)
+			case "null-refusal":
+				err = os.WriteFile(s.statePath(startRefusedFile), []byte(`null`), 0o600)
+			case "conversation-only-refusal":
+				err = writeJSONFile(s.statePath(startRefusedFile), map[string]string{"conversationId": first.ConversationID})
+			case "boot-only-refusal":
+				err = writeJSONFile(s.statePath(startRefusedFile), map[string]string{"bootId": "other"})
+			case "dangling-launch":
+				if err = os.Remove(s.statePath(launchFile)); err == nil {
+					err = os.Symlink("missing-launch", s.statePath(launchFile))
+				}
+			case "result-without-launch":
+				if err = os.Remove(s.statePath(launchFile)); err == nil {
+					err = writeJSONFile(s.statePath(resultFile), taskResult{})
+				}
+			case "launch-without-identity":
+				first.ConversationID, first.BootID = "", ""
+				err = writeJSONFile(s.statePath(launchFile), first)
+				if err == nil {
+					err = writeJSONFile(s.statePath(startHandoffFile), startHandoff{State: handoffStarted})
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := &fakeRunner{handle: func(Cmd) (Result, error) {
+				t.Error("an uncertain first launch was resent")
+				return Result{}, errors.New("must not run")
+			}}
+			for _, bootID := range []string{"first", "later"} {
+				if !summonedLaunched(s, sess) {
+					t.Fatal("the first-launch latch is free")
+				}
+				d := quietDaemon(s, sess, r, loginNow.Add(time.Hour))
+				step, why := d.startAgent(context.Background(), ws, Step{State: StepOK}, bootID)
+				if step.State != StepOK || why != "" || len(r.calls) != 0 {
+					t.Fatalf("start: %+v %q, calls %v", step, why, r.calls)
+				}
+				for _, phase := range []string{protocol.BootBooting, protocol.BootReady, protocol.BootFailed} {
+					if err := writeJSONFile(s.statePath(bootFile), bootRecord{Boot: phase, BootID: bootID}); err != nil {
+						t.Fatal(err)
+					}
+					st := CollectStatus(context.Background(), &fakeRunner{}, s, sess, loginNow.Add(time.Hour))
+					if got := reportedBrief(t, st); got != protocol.BriefUnconfirmed {
+						t.Errorf("%s/%s brief=%q, want unconfirmed", phase, bootID, got)
+					}
+				}
+			}
+			if len(r.calls) != 0 {
+				t.Fatalf("runner calls: %v", r.calls)
+			}
+			if _, err := os.Lstat(s.statePath(resumeFile)); !os.IsNotExist(err) {
+				t.Fatalf("resume was written: %v", err)
+			}
+		})
+	}
+}
+
+func TestSummonedBriefNULRefusalLeavesLatchFree(t *testing.T) {
+	for _, mode := range []string{protocol.ModeRemote, protocol.ModeTask} {
+		t.Run(mode, func(t *testing.T) {
+			s, sess, ws := summonedFixture(t, mode)
+			sess.Prompt = "Follow\x00the runbook. private brief text"
+			l, err := BuildLaunch(s, sess, ws, "first", loginNow)
+			if err == nil || !strings.Contains(err.Error(), "brief must not contain NUL") || len(l.Argv) != 0 {
+				t.Error("BuildLaunch did not refuse the NUL brief")
+			}
+			r := &fakeRunner{}
+			d := quietDaemon(s, sess, r, loginNow)
+			step, why := d.startAgent(context.Background(), ws, Step{State: StepOK}, "first")
+			if step.State != StepFail || !strings.Contains(why, "brief must not contain NUL") {
+				t.Fatalf("not refused plainly: state=%s", step.State)
+			}
+			if strings.Contains(why, "private brief text") || len(r.calls) != 0 {
+				t.Fatal("refusal echoed the brief or reached tmux")
+			}
+			for _, file := range []string{launchFile, startHandoffFile, startRefusedFile, resultFile, resumeFile} {
+				if _, err := os.Lstat(s.statePath(file)); !os.IsNotExist(err) {
+					t.Fatalf("refusal left %s: %v", file, err)
+				}
+			}
+			if summonedLaunched(s, sess) {
+				t.Fatal("refusal consumed the one-shot latch")
+			}
+			if err := writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "first", Boot: protocol.BootFailed, AgentError: why}); err != nil {
+				t.Fatal(err)
+			}
+			st := CollectStatus(context.Background(), r, s, sess, loginNow)
+			if st.Agent.State != protocol.AgentFailed || !strings.Contains(st.Agent.Error, "brief must not contain NUL") {
+				t.Fatalf("refusal status: state=%s", st.Agent.State)
+			}
+			if mode == protocol.ModeRemote && reportedBrief(t, st) != protocol.BriefNotLaunched {
+				t.Fatal("refused remote brief is not reported not-launched")
+			}
+		})
+	}
+	// An ordinary task still carries arbitrary stdin bytes, including NUL.
+	s, sess, ws := launchFixture(t)
+	sess.Prompt = "ordinary\x00task"
+	l, err := BuildLaunch(s, sess, ws, "ordinary", loginNow)
+	if err != nil || l.Prompt != sess.Prompt {
+		t.Fatalf("ordinary task stdin changed: %v", err)
+	}
+}
+
+func TestSummonedBriefLiteralExecArguments(t *testing.T) {
+	controls := ""
+	for b := byte(1); b < 128; b++ {
+		controls += string(b)
+	}
+	for _, tc := range []struct{ name, prompt string }{
+		{"controls-and-unicode", "Follow " + controls + "\n'quotes' `literal` $variable; — 🦀\n --resume other"},
+		{"maximum", strings.Repeat("x", protocol.MaxPromptBytes)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, sess, ws := summonedFixture(t, protocol.ModeRemote)
+			sess.Prompt = tc.prompt
+			if err := sess.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			l, err := BuildLaunch(s, sess, ws, "first", loginNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The stand-in prints each positional argument literally, separated
+			// by NUL. No provider or shell evaluation of a brief is involved.
+			args := append([]string{"-c", `for arg do printf '%s\000' "$arg"; done`, "stand-in"}, l.Argv[1:]...)
+			cmd := exec.Command("/bin/sh", args...)
+			cmd.Env = []string{"PATH=/usr/bin:/bin"} // no KUBERNETES_* or KUBECONFIG
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := strings.Join(l.Argv[1:], "\x00") + "\x00"; string(out) != want {
+				t.Fatal("exec did not preserve every argument byte")
+			}
+		})
+	}
+	_, sess, _ := summonedFixture(t, protocol.ModeRemote)
+	sess.Prompt = strings.Repeat("x", protocol.MaxPromptBytes+1)
+	if err := sess.Validate(); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatal("an over-limit brief passed Session validation")
 	}
 }

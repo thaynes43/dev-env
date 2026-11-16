@@ -2451,13 +2451,20 @@ the rules as the CLI's last positional argument. `--remote-control` carries
 the session name, with no title. No ordinary remote launch gains a prompt;
 a task still receives its prompt on stdin. A summoned session never resumes,
 and an ambiguous first start is never resent. A rendered brief beginning
-with `-` gets 422 at create before any charge or session is written; agentd
-also refuses it at launch, with no launch record and a plain error.
+with `-`, or containing NUL, gets 422 at create before any charge or session
+is written; agentd also refuses it at launch, with no launch record and a
+plain error. A refused launch leaves the first-launch latch free and reports
+agent `failed`, remote brief `not-launched`. These checks also apply to
+summoned tasks; ordinary task stdin is unchanged (story 795 fix round 1,
+2026-11-16, coordinator rulings; not a ruling by Tom).
 
 The pod reports its delivery claim as `status.agent.brief`, beside the task
-start record. It is `pending` before a launch record, `launched` when tmux
-confirmed the launch carrying the brief, `unconfirmed` when the handoff is
-asked or ambiguous (including unreadable evidence), and `not-launched` when
+start record. It is `pending` only with no launch record, a free launch latch
+and no pre-launch error; `launched` when tmux confirmed the brief-carrying
+launch with matching conversation and boot identities and no refusal
+evidence for that launch; `unconfirmed` when the handoff is asked or
+ambiguous, or launch/refusal evidence is unreadable or lacks those identities
+(including dangling links); and `not-launched` when
 nothing started, a fence refused it, a pre-launch error was recorded, or a
 legacy launch did not carry the brief. This is the pod's claim about its
 handoff, not proof that the provider answered; the operator does not act on

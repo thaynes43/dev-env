@@ -634,6 +634,9 @@ func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWi
 	if strings.HasPrefix(rendered, "-") {
 		return nil, nil, nil, invalid(fieldError("brief", "the rendered brief must not start with '-'"))
 	}
+	if strings.ContainsRune(rendered, 0) {
+		return nil, nil, nil, invalid(fieldError("brief", "the rendered brief must not contain NUL"))
+	}
 	names := summonNameSequence(req.Name)
 	if longest := brief(names[len(names)-1]); len(longest) > protocol.MaxPromptBytes {
 		return nil, nil, nil, invalid(fieldError("data", "the rendered brief is %d bytes, more than %d", len(longest), protocol.MaxPromptBytes))

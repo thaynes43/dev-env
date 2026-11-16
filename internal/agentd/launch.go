@@ -216,6 +216,11 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 	if sess.Caller != "" && strings.HasPrefix(sess.Prompt, "-") {
 		return Launch{}, errors.New("a summoned session's brief must not start with '-'")
 	}
+	// OP795 F2: exec cannot carry a NUL in an argument. As with O11,
+	// refuse a summoned brief before any write consumes its one-shot start.
+	if sess.Caller != "" && strings.ContainsRune(sess.Prompt, 0) {
+		return Launch{}, errors.New("a summoned session's brief must not contain NUL")
+	}
 	l, err := buildFirstLaunch(s, sess, ws, bootID, now)
 	if err != nil {
 		return Launch{}, err
