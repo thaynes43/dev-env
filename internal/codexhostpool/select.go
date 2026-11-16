@@ -28,6 +28,8 @@ const (
 	ReasonCallerCannotResume = "caller_cannot_resume"
 	ReasonRemoteUnavailable  = "remote_unavailable"
 	ReasonProtected          = "protected"
+	ReasonAccountUnresolved  = "account_unresolved"
+	ReasonHostNotFound       = "host_not_found"
 	ReasonRescueBlocked      = "rescue_blocked"
 	ReasonPairingUnknown     = "pairing_unknown"
 	ReasonUnpaired           = "unpaired"
@@ -106,18 +108,24 @@ const (
 // only when the request names none. SuspendedBy is who suspended the host;
 // eligibility does not depend on it.
 type Host struct {
-	Name            string
-	UID             string
-	Agent           string
-	Mode            string
-	Phase           string
-	OperatingMode   string
-	Deletion        bool
-	PodReady        bool
-	HoldPod         bool
-	ResolvedProfile string
-	ReadyRepos      []string
-	SpecRepo        string
+	// Reserved is deployment-owned name protection, independent of annotations.
+	Reserved        bool
+	AccountResolved bool
+	// OrdinaryPod is an owned live agent pod proving an ordinary account.
+	OrdinaryPod      bool
+	WorkbenchAccount bool
+	Name             string
+	UID              string
+	Agent            string
+	Mode             string
+	Phase            string
+	OperatingMode    string
+	Deletion         bool
+	PodReady         bool
+	HoldPod          bool
+	ResolvedProfile  string
+	ReadyRepos       []string
+	SpecRepo         string
 	// HandsOff is the configured hands-off list. ProtectedAnnotation is
 	// dev-env.haynesops.com/protected=true.
 	HandsOff            bool
@@ -181,15 +189,20 @@ type Request struct {
 // resolved. DefaultProfile is the templates' default. Select has no default
 // of its own. A workbench session may create only when the two are equal.
 type Input struct {
-	Hosts             []Host
-	Login             Login
-	Caller            Caller
-	Request           Request
-	ResolvedProfile   string
-	DefaultProfile    string
-	Now               time.Time
-	MaxRunningPerCell int
-	MaxRunning        int
+	// ProfileExcluded refuses new workbench capacity. ProfileUnavailable refuses
+	// construction when the requested account cannot resolve. The API can prove
+	// the requested account from an existing ordinary pod instead of templates.
+	ProfileExcluded    bool
+	ProfileUnavailable bool
+	Hosts              []Host
+	Login              Login
+	Caller             Caller
+	Request            Request
+	ResolvedProfile    string
+	DefaultProfile     string
+	Now                time.Time
+	MaxRunningPerCell  int
+	MaxRunning         int
 }
 
 // Skip is one host selection did not choose.
@@ -223,8 +236,26 @@ type judged struct {
 // pairing test is its last remote-control state. The durable record from
 // ruling E is not an input yet.
 func Select(in Input) Result {
+	if in.ProfileExcluded {
+		return Result{Reason: ReasonProtected}
+	}
+	if in.ProfileUnavailable {
+		return Result{Reason: ReasonAccountUnresolved}
+	}
 	if in.Request.NamedHost != "" {
-		return Result{Host: in.Request.NamedHost, Action: ActionUse, Ready: true}
+		for _, h := range in.Hosts {
+			if h.Name != in.Request.NamedHost {
+				continue
+			}
+			if h.Reserved || h.WorkbenchAccount {
+				return Result{Reason: ReasonProtected}
+			}
+			if !h.AccountResolved {
+				return Result{Reason: ReasonAccountUnresolved}
+			}
+			return Result{Host: h.Name, Action: ActionUse, Ready: true}
+		}
+		return Result{Reason: ReasonHostNotFound}
 	}
 	// A lapsed login stops every path before any host is considered. Unknown
 	// does not: a suspended host's frozen login-required is not a reading,
@@ -330,8 +361,11 @@ func judge(h Host, c Caller, requested, repo string, now time.Time) (reason stri
 	if rescueBlocked(h) {
 		return ReasonRescueBlocked, false, false
 	}
-	if h.HandsOff || h.ProtectedAnnotation {
+	if h.Reserved || h.WorkbenchAccount || h.HandsOff || h.ProtectedAnnotation {
 		return ReasonProtected, false, false
+	}
+	if !h.AccountResolved {
+		return ReasonAccountUnresolved, false, false
 	}
 	if !profileFits(c, h, requested) {
 		return ReasonProfileMismatch, false, false
@@ -600,7 +634,7 @@ func runningUnprotected(h Host) bool {
 	if h.Phase != PhaseRunning || h.Deletion || h.Archived {
 		return false
 	}
-	if rescueBlocked(h) || h.HandsOff || h.ProtectedAnnotation {
+	if rescueBlocked(h) || poolExcluded(h) {
 		return false
 	}
 	return true
@@ -673,4 +707,10 @@ func contains(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// poolExcluded applies before fit and capacity: privileged and unknown accounts
+// never become ordinary pool capacity, even with all editable protection removed.
+func poolExcluded(h Host) bool {
+	return h.Reserved || !h.AccountResolved || h.WorkbenchAccount || h.HandsOff || h.ProtectedAnnotation
 }

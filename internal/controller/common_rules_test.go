@@ -50,7 +50,7 @@ func TestCommonCanaryFixedFileTransportKeepsWholeExecutorBounds(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			f := testutil.New(t, provider, "dev/dev-env")
 			accepted := commonCanaryController(t, &f, "COMMON_VALIDATION_MARKER")
-			pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil, false)
+			pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil, false, (&Reconciler{}).resolveCodexHost(f.Session, f.Templates))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -98,7 +98,7 @@ func TestCommonCanaryFixedFileTransportKeepsWholeExecutorBounds(t *testing.T) {
 			f.Session.Spec.ProjectCanary.CommonRevision = ""
 			f.Record.CommonRevision = ""
 			f.Session.Spec.ProjectCanary.PolicyDigest = f.Record.Digest()
-			old, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil, false)
+			old, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil, false, (&Reconciler{}).resolveCodexHost(f.Session, f.Templates))
 			if err != nil || envOf(old.Spec.Containers[0], protocol.SessionEnv).Value == "" || envOf(old.Spec.Containers[0], protocol.SessionFileEnv).Value != "" {
 				t.Fatal("legacy env route changed", err)
 			}

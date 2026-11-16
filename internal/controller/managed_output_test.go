@@ -56,7 +56,7 @@ func TestManagedOutputCommonCanaryOwnedFixedFile(t *testing.T) {
 			f := testutil.New(t, provider, "dev/dev-env")
 			f.Record.CaptureOutput, f.Session.Spec.ProjectCanary.CaptureOutput = true, true
 			accepted := commonCanaryController(t, &f, "ACCEPTED_COMMON")
-			pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil, false)
+			pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil, false, (&Reconciler{}).resolveCodexHost(f.Session, f.Templates))
 			if err != nil {
 				t.Fatal(err)
 			}

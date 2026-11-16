@@ -51,7 +51,7 @@ func TestPodTmpSizeByClass(t *testing.T) {
 				t.Run(fmt.Sprintf("explicit=%v/class=%s/hold=%v", explicit, class, hold), func(t *testing.T) {
 					s := taskSession()
 					s.Spec.Size = class
-					pod, err := buildSessionPod(s, tmpl, "", hold, false, false, false)
+					pod, err := buildSessionPod(s, tmpl, "", hold, false, false, false, (&Reconciler{}).resolveCodexHost(s, tmpl))
 					if err != nil {
 						t.Fatal(err)
 					}

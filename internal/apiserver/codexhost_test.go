@@ -224,7 +224,7 @@ func (f *fixture) addCodexHost(name string, o codexHostOpt) {
 			Labels:          map[string]string{v1alpha1.LabelProfile: o.profile, v1alpha1.LabelRevision: rev},
 			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(&saved, v1alpha1.GroupVersion.WithKind("AgentSession"))},
 		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "agent", Image: "x"}}},
+		Spec: corev1.PodSpec{ServiceAccountName: controller.ServiceAccountName, Containers: []corev1.Container{{Name: "agent", Image: "x"}}},
 	}
 	if err := f.c.Create(ctx, pod); err != nil {
 		f.t.Fatal(err)
