@@ -2700,6 +2700,54 @@ One identifier-only log line describes each held delete. Sending either
 filing event is story 803: install one compatible operator pin, with no CRD,
 RBAC or flag change, and do not use a real remediation before 803 pages them.
 
+
+**Correction, 2026-11-16: story 802 fix round 1, coordinator rulings; not a ruling by Tom.**
+This adds to the earlier dated corrections; none was edited in place. The
+last Pending read is an observation, not a fence against a later request.
+From `closed.at + 24 hours - 10 minutes`, by the attempting leader's own
+clock, no new filing charge, mark, name rebind or create starts. The leader
+checks the window before dependencies, again after their reads before a
+ledger write, and after the last Pending read before a create. The create's
+two-minute deadline remains anchored before its mark, so the latest allowed
+create deadline is at least eight minutes before the bound on that leader's
+clock. Abandonment still starts only at or after the 24-hour bound.
+
+Inside the guard window a label-found child can still be recorded Filed.
+Otherwise status stays Pending with exactly its previous typed blocked word
+(or no word if none was stored); there is no new guard-window word. A policy
+restored eleven minutes before the bound can file; one restored nine minutes
+before cannot attempt and, without a child, becomes Abandoned at the bound.
+
+The promise is conditional: no charge, mark, rebind or create **starts after
+Abandoned** when the attempting leader's clock lag behind the abandoning
+leader plus the delay from its final local clock check to its request is
+strictly below ten minutes. For example, lag under eight minutes and delay
+at most two minutes satisfy that combined bound. Separate limits of eight
+minutes on both lag and pause do not. The create has its existing two-minute
+deadline, anchored before the mark; charge, mark and rebind use the admission
+leader's context and Kubernetes client without a per-attempt timeout in this
+path. Those ledger requests have no enforced two-minute delay bound. A
+process pause or clock rollback outside the combined assumption voids this
+promise. A request already received by Kubernetes can still commit later:
+there is no server-side fence, transaction across the Session and ledger, or
+atomic ordering with child creation. The earlier already-received-request
+and paused-process limits remain beside this explicit clock assumption.
+
+An accepted reap of a closed, terminal summoned session also ends its access.
+The broker treats that requester as ended and wakes its grants on the
+transition, even while a Pending filing keeps the Session record and an
+owner hold delays executor stop. On reconciliation the existing end path
+revokes an Active grant and records Released (or denies an unanswered grant),
+without waiting for deletion or its original expiry. Event delivery, broker
+availability and successful cleanup still govern when revocation completes,
+as with deletion before the hold. Requester identity remains available for
+token cleanup. A closed session without a reap retains its grants; delegated
+approval's own checks and expiry/release rules are unchanged. No operator
+release API is needed: access enforcement and revocation belong to the broker.
+This fix round needs compatible operator **and broker** image pins; the earlier
+one-operator-pin install note is insufficient for the grant fix. Slice b's
+CRD must already be installed. The story 803 gate for real remediations stays.
+
 ### 6.7 OP741: lanes, holds, the latch and the watchdog
 
 **Correction, 2026-11-12 (story 779, slice c of #741; written by the

@@ -69,7 +69,7 @@ func wantAbandoned(t *testing.T, w *summonWorld, reason v1alpha1.SummonFilingRea
 }
 
 func TestSummonFilingAbandonBound(t *testing.T) {
-	for _, restored := range []time.Duration{24*time.Hour - time.Second, 24 * time.Hour, 25 * time.Hour} {
+	for _, restored := range []time.Duration{24*time.Hour - 11*time.Minute, 24 * time.Hour, 25 * time.Hour} {
 		t.Run(restored.String(), func(t *testing.T) {
 			w := newFilingWorld(t)
 			if err := w.base.Delete(context.Background(), filingPolicy()); err != nil {
@@ -403,7 +403,7 @@ func TestSummonFilingAbandonReleasesChargeAndQueue(t *testing.T) {
 
 func TestSummonFilingBoundFencesPausedPass(t *testing.T) {
 	w := newFilingWorld(t)
-	w.now = summonT0.Add(24*time.Hour - time.Second)
+	w.now = summonT0.Add(24*time.Hour - 11*time.Minute)
 	b := filingLeader(w, interceptor.Funcs{})
 	b.Now = func() time.Time { return summonT0.Add(24 * time.Hour) }
 	updates, creates := 0, 0
@@ -414,8 +414,8 @@ func TestSummonFilingBoundFencesPausedPass(t *testing.T) {
 			}
 			updates++
 			if updates == 2 {
-				// A's mark landed. B's clock is one second ahead; its whole pass
-				// settles the filing while A still believes it may create.
+				// A's mark landed outside the guard. B settles the filing
+				// before A's final read; the fresh terminal state must win.
 				if err := b.SummonAdmissionPass(ctx); err != nil {
 					t.Fatal(err)
 				}
@@ -477,17 +477,17 @@ func (c *abandonDeadlineClock) WithDeadline(ctx context.Context, at time.Time) (
 	return c.filingTestClock.WithDeadline(ctx, at)
 }
 
-func TestSummonFilingCreateDeadlineAtBound(t *testing.T) {
+func TestSummonFilingCreateDeadlineBeforeGuard(t *testing.T) {
 	w := newFilingWorld(t)
-	w.now = summonT0.Add(24*time.Hour - time.Second)
+	w.now = summonT0.Add(24*time.Hour - 10*time.Minute - time.Second)
 	w.r = filingLeader(w, interceptor.Funcs{})
-	// The deadline uses remaining wall time, even with a different process clock.
+	// The two-minute deadline stays anchored before the mark, on the process clock.
 	clock := &abandonDeadlineClock{filingTestClock: filingTestClock{now: summonT0.Add(5 * time.Minute)}}
 	w.r.SummonFilingClock = clock
 	if err := w.r.summonFile(context.Background(), w.get(filingRem)); err != nil {
 		t.Fatal(err)
 	}
-	if want := clock.now.Add(time.Second); !clock.deadline.Equal(want) {
+	if want := clock.now.Add(2 * time.Minute); !clock.deadline.Equal(want) {
 		t.Fatalf("create can outlast bound: deadline=%s want=%s", clock.deadline, want)
 	}
 	assertOneFiling(t, w, w.now)
@@ -541,7 +541,7 @@ func TestSummonFilingBoundAfterDependencyReads(t *testing.T) {
 			if action != filingCharge {
 				seedAbandonCharge(t, w, summonT0)
 			}
-			w.now = summonT0.Add(24*time.Hour - time.Second)
+			w.now = summonT0.Add(24*time.Hour - 11*time.Minute)
 			b := filingLeader(w, interceptor.Funcs{})
 			writes, barriers := 0, 0
 			w.r = filingLeader(w, interceptor.Funcs{Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {

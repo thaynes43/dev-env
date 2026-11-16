@@ -372,3 +372,72 @@ func TestSummonPendingFilingChangesNoHourlyCount(t *testing.T) {
 		return out
 	})
 }
+
+// L1: compare the unaffected queues independently of the intentionally
+// different escalation refusal, including full response and ledger projections.
+func TestSummonPendingFilingPreservesOtherQueuesAndOneSlotAdmission(t *testing.T) {
+	compareFilingWorlds(t, true, func() *v1alpha1.CallerPolicy { return queuePolicy(1, 1, 1, 1, 20) }, func(t *testing.T, f *fixture) []string {
+		var out []string
+		post := func(body map[string]any, want int) {
+			w := summonPost(t, f, body)
+			wantStatus(t, w, want)
+			out = append(out, answer(t, f, w))
+		}
+		post(keyedRemediation("rem-responder-2", "alert-2"), http.StatusCreated)
+		post(keyedRemediation("rem-responder-3", "alert-3"), http.StatusTooManyRequests)
+		// Admission orders equal timestamps by random UID. Give these
+		// independent stores the same unambiguous creation order.
+		f.now = f.now.Add(time.Second)
+		post(keyedCuration("wo-cigar-curate-1", "curate-1"), http.StatusCreated)
+		post(keyedCuration("wo-cigar-curate-2", "curate-2"), http.StatusTooManyRequests)
+		r := leaderOver(t, f)
+		names := []string{"rem-responder-2", "wo-cigar-curate-1"}
+		lead(t, f, r, names...)
+		lead(t, f, r, names...)
+		got := admittedNames(f, names...)
+		if len(got) != 1 {
+			t.Fatalf("one concurrent slot admitted %v", got)
+		}
+		wantAdmittedAndBuilt(t, f, got[0])
+		other := names[0]
+		if other == got[0] {
+			other = names[1]
+		}
+		if !summonoutcome.Queued(f.session(other), false) {
+			t.Fatalf("one-slot pool also admitted %s", other)
+		}
+		out = append(out, fmt.Sprintf("admitted=%s other=%s queued=%v hold=%s", got[0], other,
+			summonoutcome.Queued(f.session(other), false), holdReason(f, other)))
+		wantRem, wantCuration := http.StatusTooManyRequests, http.StatusTooManyRequests
+		if got[0] == names[0] {
+			wantRem = http.StatusCreated
+		} else {
+			wantCuration = http.StatusCreated
+		}
+		post(keyedRemediation("rem-responder-3", "alert-3"), wantRem)
+		post(keyedCuration("wo-cigar-curate-2", "curate-2"), wantCuration)
+		return out
+	})
+}
+
+// L1: with no Pending filing, the first escalation still fills its queue
+// until it is admitted; a second request must be refused and counted once.
+func TestSummonNoPendingFilingStillRefusesSecondQueuedEscalation(t *testing.T) {
+	f, _ := filingWorld(t, false, true, queuePolicy(1, 1, 1, 1, 20))
+	wantQueued(t, f, summonPost(t, f, keyedEscalation("esc-a", "esc-a")), "esc-a")
+	before := f.ledger()
+	wantQueueRefusal(t, summonPost(t, f, keyedEscalation("esc-b", "esc-b")), true, "escalations")
+	wantNoSession(t, f, "esc-b")
+	after := f.ledger()
+	if len(after.Charges) != len(before.Charges) || after.UrgentRefusals != before.UrgentRefusals+1 {
+		t.Fatalf("full escalation queue changed accounting: before=%+v after=%+v", before, after)
+	}
+	r := leaderOver(t, f)
+	lead(t, f, r, "esc-a")
+	wantAdmittedAndBuilt(t, f, "esc-a")
+	wantQueued(t, f, summonPost(t, f, keyedEscalation("esc-b", "esc-b")), "esc-b")
+	lead(t, f, r, "esc-a", "esc-b")
+	if got := admittedNames(f, "esc-a", "esc-b"); !slices.Equal(got, []string{"esc-a"}) {
+		t.Fatalf("one escalation slot admitted %v", got)
+	}
+}

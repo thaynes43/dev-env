@@ -150,6 +150,17 @@ func TestSummonedCreateThenReapClosesBeforeDelete(t *testing.T) {
 				t.Fatalf("reap did not leave the unfinalized Session with its marker: %+v", recorded.ObjectMeta)
 			}
 			deletes, closes := 0, 0
+			assertStoredClose := func(stored *v1alpha1.AgentSession) {
+				t.Helper()
+				st := stored.Status.Summon
+				if stored.Status.Outcome == nil || stored.Status.Outcome.State != state || st == nil || st.Closed == nil ||
+					st.Closed.Reason != reason || st.Closed.Source != summonoutcome.Unreported || !st.Closed.Released || closes != 1 {
+					t.Fatalf("expected exactly one stored close: outcome=%+v summon=%+v closes=%d", stored.Status.Outcome, st, closes)
+				}
+				if who == "person" && st.Escalation != nil || who == "session" && (st.Escalation == nil || st.Escalation.State != v1alpha1.SummonEscalationPending) {
+					t.Fatalf("wrong pending filing: %+v", st.Escalation)
+				}
+			}
 			r := leaderOver(t, f)
 			r.Client = interceptor.NewClient(f.c, interceptor.Funcs{
 				SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
@@ -165,14 +176,7 @@ func TestSummonedCreateThenReapClosesBeforeDelete(t *testing.T) {
 					}
 					deletes++
 					stored := f.session(name)
-					st := stored.Status.Summon
-					if stored.Status.Outcome == nil || stored.Status.Outcome.State != state || st == nil || st.Closed == nil ||
-						st.Closed.Reason != reason || st.Closed.Source != summonoutcome.Unreported || !st.Closed.Released || closes != 1 {
-						t.Fatalf("delete before exactly one stored close: outcome=%+v summon=%+v closes=%d", stored.Status.Outcome, st, closes)
-					}
-					if who == "person" && st.Escalation != nil || who == "session" && (st.Escalation == nil || st.Escalation.State != "Pending") {
-						t.Fatalf("wrong pending filing: %+v", st.Escalation)
-					}
+					assertStoredClose(stored)
 					options := (&client.DeleteOptions{}).ApplyOptions(opts)
 					p := options.Preconditions
 					if p == nil || p.UID == nil || *p.UID != stored.UID || p.ResourceVersion == nil || *p.ResourceVersion != stored.ResourceVersion {
@@ -199,6 +203,8 @@ func TestSummonedCreateThenReapClosesBeforeDelete(t *testing.T) {
 			if deletes != wantDeletes || closes != 1 {
 				t.Fatalf("closes=%d deletes=%d, want one close and %d deletes", closes, deletes, wantDeletes)
 			}
+			// The session reap retains its record and never enters Delete.
+			assertStoredClose(f.session(name))
 			if who == "session" {
 				held := f.session(name)
 				if !held.DeletionTimestamp.IsZero() || held.Status.Summon.Escalation.State != v1alpha1.SummonEscalationPending {
