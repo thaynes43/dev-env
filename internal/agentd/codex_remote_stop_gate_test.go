@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -156,7 +155,7 @@ func TestCodexRemoteStopUnnamedIgnoresLifecycleRefusals(t *testing.T) {
 				t.Fatal("fixture did not select bootstrap refusal")
 			}
 			d := &Daemon{S: r.s, Session: r.sess}
-			if err := d.Run(context.Background()); !errors.Is(err, wantBoot) && (err == nil || err.Error() != wantBoot.Error()) {
+			if err := d.Run(context.Background()); err == nil || err.Error() != wantBoot.Error() {
 				t.Fatalf("new agentd-start refusal: got=%v main=%v", err, wantBoot)
 			}
 			// Thread entry reaches main's invalid-input check despite the bad gate/fence.

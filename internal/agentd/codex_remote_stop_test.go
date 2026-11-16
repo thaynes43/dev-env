@@ -1574,22 +1574,32 @@ func TestCodexRemoteStopGraceIncludesUnlistedChild(t *testing.T) {
 	for _, exitsInGrace := range []bool{true, false} {
 		t.Run(fmt.Sprintf("exits_in_grace=%v", exitsInGrace), func(t *testing.T) {
 			r := newRemoteStopRig(t)
+			r.stubborn[30] = true // parent survives TERM and enters the grace wait
 			born := false
-			var bornAt, killedAt time.Time
+			var graceStart, bornAt, killedAt time.Time
 			r.afterSignal = func(pid int, sig unix.Signal) {
-				if pid == 30 && sig == unix.SIGCONT {
-					born, bornAt = true, r.clock
-					r.procs[99] = codexRemoteProcess{pid: 99, parent: 1, start: "9900", state: "S"}
-				}
 				if pid == 99 && sig == unix.SIGKILL {
 					killedAt = r.clock
+				}
+				if pid == 99 && r.clock.Before(graceStart.Add(2*time.Second)) {
+					t.Fatalf("flush helper signalled during its remaining grace: %v", sig)
 				}
 			}
 			pause := r.p.pause
 			r.p.pause = func(ctx context.Context) error {
+				before := r.clock
 				err := pause(ctx)
+				if r.term[30] && !born {
+					// First grace pause: parent forks half a second into the
+					// original grace, then exits before its retained fd is read.
+					graceStart = before
+					r.clock = r.clock.Add(450 * time.Millisecond)
+					born, bornAt = true, r.clock
+					r.procs[99] = codexRemoteProcess{pid: 99, parent: 1, start: "9900", state: "S"}
+					delete(r.procs, 30)
+				}
 				if born && exitsInGrace && r.clock.Sub(bornAt) >= 500*time.Millisecond {
-					delete(r.procs, 99) // the flush helper finishes without a signal
+					delete(r.procs, 99) // flush helper finishes without a signal
 				}
 				return err
 			}
@@ -1598,11 +1608,11 @@ func TestCodexRemoteStopGraceIncludesUnlistedChild(t *testing.T) {
 				t.Fatalf("grace child stop=%+v err=%v signals=%v", st, err, r.attempts)
 			}
 			if exitsInGrace {
-				if !killedAt.IsZero() || st.Killed || r.clock.Sub(bornAt) < 500*time.Millisecond || r.clock.Sub(bornAt) >= 2*time.Second {
+				if !killedAt.IsZero() || st.Killed || r.clock.Sub(bornAt) < 500*time.Millisecond || !r.clock.Before(graceStart.Add(2*time.Second)) {
 					t.Fatalf("flush helper lost grace: stop=%+v elapsed=%v killedAt=%v", st, r.clock.Sub(bornAt), killedAt)
 				}
-			} else if killedAt.IsZero() || killedAt.Sub(bornAt) < 2*time.Second || !st.Killed {
-				t.Fatalf("live child did not get the remaining grace: stop=%+v killedAfter=%v", st, killedAt.Sub(bornAt))
+			} else if killedAt.IsZero() || killedAt.Before(graceStart.Add(2*time.Second)) || killedAt.Sub(bornAt) >= 2*time.Second || !st.Killed {
+				t.Fatalf("child did not keep the original grace deadline: stop=%+v killedAfter=%v originalDeadline=%v", st, killedAt.Sub(bornAt), graceStart.Add(2*time.Second))
 			}
 		})
 	}
