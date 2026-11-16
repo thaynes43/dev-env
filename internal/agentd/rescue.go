@@ -47,6 +47,24 @@ const rescueLockFile = "rescue.lock"
 // nothing else: the rescue writes nothing to it, so it stays empty for the
 // next look (D-55).
 func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.Time, opt RescueOptions) (protocol.RescueReport, error) {
+	// Remote hosts do not publish the ordinary agent PID. Fence and drain
+	// their whole dedicated container before even inspecting Git for rescue.
+	// A refusal returns no snapshot, rather than an apparently stopped CLI.
+	var remoteStop *protocol.AgentStop
+	if opt.StopAgent && s.Getenv != nil {
+		sess, err := LoadSession(s.Getenv)
+		if err != nil && (s.Getenv(protocol.SessionEnv) != "" || s.Getenv(protocol.SessionFileEnv) != "") {
+			return protocol.RescueReport{}, errors.New("cannot identify the session to stop before rescue")
+		}
+		if err == nil && codexRemoteSession(sess) {
+			var unlock func()
+			remoteStop, unlock, err = stopCodexRemoteForRescue(ctx, s, sess, opt.StopGrace)
+			if err != nil {
+				return protocol.RescueReport{}, err
+			}
+			defer unlock()
+		}
+	}
 	if s.WorkspaceID != "" {
 		if opt.StrictHome {
 			return protocol.RescueReport{}, errors.New("--strict-home checks a private HOME; this session works in a shared workspace")
@@ -70,7 +88,11 @@ func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.
 			Repos: []protocol.RepoRescue{}, OK: true, CleanAndPushed: true, VolumeEmpty: true}
 		if opt.StopAgent {
 			// Only reads agentd's pid file, which an empty volume lacks.
-			rep.Agent = stopAgent(s, opt.StopGrace)
+			if remoteStop != nil {
+				rep.Agent = remoteStop
+			} else {
+				rep.Agent = stopAgent(s, opt.StopGrace)
+			}
 		}
 		if opt.StrictHome {
 			// Nothing on the volume holds .git, so the check passes.
@@ -90,7 +112,11 @@ func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.
 
 	rep := protocol.RescueReport{Session: session, Stamp: now.UTC().Format("20060102-1504"), StartedAt: now.UTC(), Repos: []protocol.RepoRescue{}, OK: true, CleanAndPushed: true}
 	if opt.StopAgent {
-		rep.Agent = stopAgent(s, opt.StopGrace)
+		if remoteStop != nil {
+			rep.Agent = remoteStop
+		} else {
+			rep.Agent = stopAgent(s, opt.StopGrace)
+		}
 	}
 	repos, err := clonesIn(s.ReposDir())
 	if err != nil {

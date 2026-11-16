@@ -413,6 +413,35 @@ A headless `-p` task runs its prompt once. `msg` applies to a local TUI session;
 Follow transitions with `show`/`list`; `reap` returning does not mean cleanup has
 already finished. An archived session is restored into a new session, not resumed.
 
+**Suspending a Codex host (DESIGN-067 slice c1, source only).** The stop applies
+to every Codex remote host, including ordinary hosts. Before Git rescue, agentd
+fences supported daemon, thread and pairing starts, verifies the dedicated
+container, freezes its supervisor, and ends the other processes in that container.
+This includes every tmux session, its shells and clients, the native daemon and
+detached children. It allows a bounded graceful exit, then freezes a fresh process
+inventory and kills remaining writers. It checks every process thread; a zombie
+leader alone does not prove its worker threads stopped. The supervisor stays
+frozen through rescue and until pod deletion. A stop fence retained on HOME also
+prevents a container restart in the same pod from starting another daemon.
+
+If a launch still holds the lifecycle gate, process identity or namespace
+ownership is uncertain, process inspection or signaling fails, or a writer cannot
+stop within the budget, rescue refuses before taking a Git snapshot. The operator
+keeps the pod and HOME and reports the refusal in `RemovalBlocked`. A partially
+stopped host stays fenced; a failed rescue does not re-arm it. A verified rescue
+hold uses its current hold process, rather than the old executor's boot record.
+A never-written hold keeps its HOME empty. These are stop protections; the build
+does not change host selection, permissions, Claude stops or Codex task stops.
+
+Suspend retains the original private `CODEX_HOME`, including native history,
+enrollment and database journals, on the retained HOME. Git rescue does not copy
+or back up that history. Resume on a new pod of the same Session starts daemon
+supervision only. Reopen the intended native thread explicitly by its exact ID;
+there is no automatic latest-thread selection, client relaunch or watch re-arm.
+Phone reopening, active-turn recovery and installed suspend/resume behavior still
+need the separately authorized proof in DESIGN-067; native history remains subject
+to the HOME archive policy below. Nothing is installed by this source change.
+
 **Reaping a private session (DESIGN-025 section 25).** With private history
 retention on, as the live operator runs, a reaped private task session is not
 rescued to a bundle and its volume is not archived. The operator asks its agent

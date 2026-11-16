@@ -920,6 +920,35 @@ with a 20 GiB HOME default. Re-read those declarations for the actual packet.
 
 ## 14. Review and handoff
 
+2026-11-16 build record: **slice (c1) source and fake tests, not installed or
+accepted** (OP858). Based on main `dc824832d8cfd1a96fc5dc5c65622ad5ebe2ec37`,
+independent of slice (b)'s draft PR 1165. Every Codex remote host's rescue stop
+now fences supported remote mutations, verifies the immutable tini/agentd
+container shape and the exact supervisor, freezes that supervisor, and drains
+the rest of its dedicated PID namespace before Git rescue. It includes tmux
+clients, shells and detached descendants, checks every native thread, and takes
+a fresh frozen inventory after graceful shutdown before forced termination.
+Unknown identity, inaccessible process state, busy launch admission, failed
+signaling or an expired stop budget blocks rescue with a fixed reason. The
+supervisor remains frozen through the snapshot; a durable Session/pod-bound HOME
+fence also blocks same-pod container restarts. A verified D-55 hold identifies
+its own process rather than trusting the retained executor boot record; a
+never-written hold keeps its HOME empty using only a private runtime fence.
+
+Native private CODEX_HOME history, enrollment and journals are left in place.
+Tests prove retained synthetic history and that a new pod resumes supervision
+only: thread observation requires an explicit exact native ID, and neither a
+latest thread nor a retained launch record selects a conversation. This source
+proof does not settle Unknown U4's phone behavior, active-turn recovery or watch
+re-arm. The same PR updates the workflow guide. Its PR body records the deciding
+guard mutations, exact head, local checks and CI result. Same-family native
+review supplements those tests; **the required independent-family review is
+unavailable and pending**. This build stays a draft until the coordinator can
+obtain that review (Grok expected around 2026-11-19). No merge or ready transition
+is authorized to this worker. No host, flag, manifest, pairing, haynes-ops or
+live-session change occurred. Slices (c2), (d), (e), installation, custody and
+owner acceptance remain held separately; ADR-030 remains Proposed.
+
 2026-11-14 build record: **slice (a) built, not installed** (OP858). The source
 adds the default-empty name setting, shared account/shape predicate, API
 create/final admission/resume checks and controller construction/status checks.
