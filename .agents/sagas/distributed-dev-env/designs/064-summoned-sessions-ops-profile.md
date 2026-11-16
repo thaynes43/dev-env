@@ -4249,6 +4249,22 @@ above; where they differ, this governs.
   at 2.108.0 or later, and the keeper's pager and daily digest installed
   with a drill Tom confirmed.
 
+**Empty-list encoding correction, 2026-11-16 (OP805).** The first two
+scheduled curation Jobs stopped at the list read, before the expected 403:
+legacy response copiers converted an allocated empty session slice to nil,
+which encoded as `{"sessions":null}`. The API fix keeps `sessions` an array
+on every `SessionList` response path, including each compatibility copier:
+no visible sessions is `{"sessions":[]}`, for both nil and allocated empty
+input slices. Non-empty entries, their order and the existing negotiated
+field omissions stay unchanged; no new wire keys or admission changes.
+The portal's separate `PortalSessionPage` already initializes its array
+and passes through these copiers unchanged. The caller workaround in
+[haynes-ops PR 4909](https://github.com/thaynes43/haynes-ops/pull/4909) treats
+only an explicit null member as empty until the operator fix is installed;
+a missing member, another type, a non-object body or a malformed entry
+still cannot cause a create. This follow-up is source and regression-test
+work, not proof that either fix is installed or that 805 is accepted.
+
 ### 6.12 OP747: move remediation
 
 - `remediate.sh` calls the client: `mode: task`, `lane: remediation`, `name:
