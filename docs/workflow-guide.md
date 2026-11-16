@@ -2043,7 +2043,9 @@ Only the operator's own reap delete waits for the remediation's filing:
 Pending stays, Filed deletes immediately, and Abandoned stays until its event
 time plus ten minutes. A person's reap closed failed without a filing still
 deletes immediately. Executor stop and lane release continue during the hold,
-with a reap recheck within a minute. The longest deliberate hold is 24 hours
+including a reported/released task: the accepted reap suspends it and uses
+the existing executor-stop path, retaining owner holds. The reap is checked
+again within a minute. The longest deliberate hold is 24 hours
 10 minutes from close when abandonment runs at its bound, plus scheduling;
 a delayed event starts its ten minutes when actually recorded. API errors or
 controller downtime add delay. Other deletes can still remove the record.

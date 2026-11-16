@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thaynes43/dev-env/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
 
 func TestPendingFilingKeepsQueueUntilAbandoned(t *testing.T) {

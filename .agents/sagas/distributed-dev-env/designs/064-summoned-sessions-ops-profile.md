@@ -1746,7 +1746,10 @@ Legacy or externally grown entries can still be full.
 
 A charged Pending filing keeps one place in its caller's applicable queue,
 even after its last attempt is 15 minutes old; a missing policy match still
-counts it in every queue. There is no gap at a retry window boundary. Filed
+counts it in every queue. There is no gap at a retry window boundary: a full queue cannot acquire another
+charged filing merely because an older mark ages out. The 232-charge example
+above remains a byte-cap illustration, not queue capacity under unchanged
+limits. Filed
 hands accounting to the child. Abandoned removes the Pending keep immediately
 and never renews a mark. With no unsettled child, its ledger charge is eligible
 for pruning on the first shared write at or after all three conditions hold:
@@ -2634,7 +2637,9 @@ at or after its event's `at + 10 minutes`; this replaces the earlier proposal
 that the filing takes it from a record that survives the Session (768 comment
 7415). No new store exists. A person's reap closed failed with no filing
 still deletes immediately. Stop and lane release continue while deletion is
-held; the held reap is checked again within a minute. A healthy controller
+held, including a reported/released task: its accepted reap suspends it and
+uses the existing executor-stop path, retaining owner holds. The held reap is
+checked again within a minute. A healthy controller
 that abandons at the bound deliberately retains the Session for at most
 24 hours 10 minutes from close, plus pass/reconcile scheduling. A delayed
 abandonment starts its ten minutes at the actual event time. API failures,

@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	corev1 "k8s.io/api/core/v1"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -292,7 +292,14 @@ func TestSummonReapLongestFilingHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Full reconciliation must requeue a held reap even with no later event.
-	out, err := w.r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(s)})
+	var out ctrl.Result
+	var err error
+	for range reconcileRounds {
+		out, err = w.r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(s)})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err != nil || out.RequeueAfter <= 0 || out.RequeueAfter > time.Minute {
 		t.Fatalf("no bounded reap recheck: %+v %v", out, err)
 	}
@@ -398,6 +405,7 @@ func TestSummonFilingBoundFencesPausedPass(t *testing.T) {
 	w := newFilingWorld(t)
 	w.now = summonT0.Add(24*time.Hour - time.Second)
 	b := filingLeader(w, interceptor.Funcs{})
+	b.Now = func() time.Time { return summonT0.Add(24 * time.Hour) }
 	updates, creates := 0, 0
 	w.r = filingLeader(w, interceptor.Funcs{
 		Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {
@@ -406,8 +414,8 @@ func TestSummonFilingBoundFencesPausedPass(t *testing.T) {
 			}
 			updates++
 			if updates == 2 {
-				// A's mark landed. B's whole pass settles the filing before A returns.
-				w.now = summonT0.Add(24 * time.Hour)
+				// A's mark landed. B's clock is one second ahead; its whole pass
+				// settles the filing while A still believes it may create.
 				if err := b.SummonAdmissionPass(ctx); err != nil {
 					t.Fatal(err)
 				}
@@ -422,7 +430,7 @@ func TestSummonFilingBoundFencesPausedPass(t *testing.T) {
 	if err := w.r.summonFile(context.Background(), w.get(filingRem)); err != nil {
 		t.Fatal(err)
 	}
-	wantAbandoned(t, w, summonoutcome.FilingNotFiled, w.now)
+	wantAbandoned(t, w, summonoutcome.FilingNotFiled, summonT0.Add(24*time.Hour))
 	if updates != 2 || creates != 0 || len(filingChildren(t, w)) != 0 {
 		t.Fatalf("paused pass escaped final state: writes=%d creates=%d", updates, creates)
 	}
@@ -483,4 +491,84 @@ func TestSummonFilingCreateDeadlineAtBound(t *testing.T) {
 		t.Fatalf("create can outlast bound: deadline=%s want=%s", clock.deadline, want)
 	}
 	assertOneFiling(t, w, w.now)
+}
+
+func TestSummonReapReportedFilingStillStopsExecutor(t *testing.T) {
+	for _, heldByOwner := range []bool{false, true} {
+		t.Run(fmt.Sprintf("owner-hold=%v", heldByOwner), func(t *testing.T) {
+			w, s, _ := launchSummoned(t)
+			w.schedule(s.Name, nil)
+			if changed, err := summonoutcome.Write(context.Background(), w.base, w.get(s.Name), summonoutcome.Decision{State: v1alpha1.OutcomeEscalated, Source: summonoutcome.Report, Reason: "escalate", Released: true}, w.now); err != nil || !changed {
+				t.Fatalf("report close: %v %v", changed, err)
+			}
+			live := w.get(s.Name)
+			if live.Annotations == nil {
+				live.Annotations = map[string]string{}
+			}
+			live.Annotations[v1alpha1.AnnotationReapedBy] = "session/worker"
+			if heldByOwner {
+				live.Annotations[v1alpha1.AnnotationHomeExpiry] = "hold"
+			}
+			if err := w.base.Update(context.Background(), live); err != nil {
+				t.Fatal(err)
+			}
+			w.reconcile(s.Name)
+			live = w.get(s.Name)
+			if !live.DeletionTimestamp.IsZero() || live.Status.Summon.Escalation.State != v1alpha1.SummonEscalationPending || !live.Status.Summon.Closed.Released {
+				t.Fatal("reported reap did not keep its filing and release")
+			}
+			if got := w.stopRequested(s.Name); got == heldByOwner {
+				t.Fatalf("reported held reap stop=%v owner-hold=%v", got, heldByOwner)
+			}
+			if heldByOwner {
+				delete(live.Annotations, v1alpha1.AnnotationHomeExpiry)
+				if err := w.base.Update(context.Background(), live); err != nil {
+					t.Fatal(err)
+				}
+				w.reconcile(s.Name)
+				if !w.stopRequested(s.Name) {
+					t.Fatal("released owner hold did not permit executor stop")
+				}
+			}
+		})
+	}
+}
+
+func TestSummonFilingBoundAfterDependencyReads(t *testing.T) {
+	for _, action := range []filingLedgerAction{filingCharge, filingMark, filingRebind} {
+		t.Run(fmt.Sprint(action), func(t *testing.T) {
+			w := newFilingWorld(t)
+			if action != filingCharge {
+				seedAbandonCharge(t, w, summonT0)
+			}
+			w.now = summonT0.Add(24*time.Hour - time.Second)
+			b := filingLeader(w, interceptor.Funcs{})
+			writes, barriers := 0, 0
+			w.r = filingLeader(w, interceptor.Funcs{Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {
+				writes++
+				return c.Update(ctx, o, opts...)
+			}})
+			w.r.APIReader = interceptor.NewClient(w.base, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, o client.ObjectList, opts ...client.ListOption) error {
+				if err := c.List(ctx, o, opts...); err != nil {
+					return err
+				}
+				barriers++
+				if barriers == 1 {
+					w.now = summonT0.Add(24 * time.Hour)
+					if err := b.SummonAdmissionPass(ctx); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return nil
+			}})
+			result, err := w.r.filingLedgerStep(context.Background(), w.get(filingRem), action, summonoutcome.EscalationName(w.get(filingRem)))
+			if err != nil || barriers != 1 {
+				t.Fatalf("dependency barrier: count=%d err=%v", barriers, err)
+			}
+			if writes != 0 || !result.done {
+				t.Fatalf("settled filing wrote ledger after dependency reads: writes=%d done=%v", writes, result.done)
+			}
+			wantAbandoned(t, w, summonoutcome.FilingNotFiled, w.now)
+		})
+	}
 }

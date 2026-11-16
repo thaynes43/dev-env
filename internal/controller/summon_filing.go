@@ -550,6 +550,17 @@ func (r *Reconciler) filingLedgerStep(ctx context.Context, s *v1alpha1.AgentSess
 		if err != nil {
 			return filingBinding{reason: summonoutcome.FilingEntryFull}, nil
 		}
+		// Policy, ledger and list reads can outlast the bound or another
+		// leader's settlement. Revalidate after them, immediately before
+		// the ledger CAS. A changed snapshot is reconsidered next pass.
+		var latest v1alpha1.AgentSession
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &latest); err != nil {
+			return unavailable, err
+		}
+		if latest.UID != live.UID || latest.ResourceVersion != live.ResourceVersion ||
+			!summonFilingDue(&latest) || summonFilingExpired(&latest, r.now()) {
+			return filingBinding{done: true}, nil
+		}
 		if err := r.writeSummonFilingLedger(ctx, &cm, s.Spec.Caller, encoded); err != nil {
 			if apierrors.IsConflict(err) {
 				continue
