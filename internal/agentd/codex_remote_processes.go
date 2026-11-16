@@ -226,7 +226,7 @@ func (p codexRemoteProcesses) supervisor(s Settings, sess protocol.Session) (cod
 	return proc, nil
 }
 
-func (p codexRemoteProcesses) writers(supervisor codexRemoteProcess) ([]codexRemoteProcess, error) {
+func (p codexRemoteProcesses) inventory(supervisor codexRemoteProcess) ([]codexRemoteProcess, error) {
 	entries, err := p.list("/proc")
 	if err != nil {
 		return nil, errors.New("Codex stop cannot enumerate the PID namespace")
@@ -247,18 +247,25 @@ func (p codexRemoteProcesses) writers(supervisor codexRemoteProcess) ([]codexRem
 		}
 		proc, err := p.process(pid)
 		if errors.Is(err, os.ErrNotExist) {
-			continue // Reaped before the read. A replacement is caught next pass.
+			return nil, errors.New("Codex process disappeared during enumeration; rescue blocked")
 		}
 		if err != nil {
 			return nil, errors.New("Codex stop cannot inspect every process")
 		}
+		out = append(out, proc)
+	}
+	return out, nil
+}
+
+func (p codexRemoteProcesses) writers(supervisor codexRemoteProcess) ([]codexRemoteProcess, error) {
+	inventory, err := p.inventory(supervisor)
+	if err != nil {
+		return nil, err
+	}
+	var out []codexRemoteProcess
+	for _, proc := range inventory {
 		if remoteProcessGone(proc) {
-			// A zombie leader can still have live worker threads (pthread_exit).
-			// Only an entirely dead thread group is harmless to the snapshot.
 			dead, err := p.threadStates(proc, false)
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
 			if err != nil {
 				return nil, err
 			}
@@ -370,22 +377,40 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 		return p.writers(supervisor)
 	}
 	freezeAll := func() ([]codexRemoteProcess, error) {
+		settled := map[processKey]bool{}
 		for {
-			writers, err := census()
+			if err := frozenSupervisor(); err != nil {
+				return nil, err
+			}
+			inventory, err := p.inventory(supervisor)
 			if err != nil {
 				return nil, err
 			}
 			all := true
-			for _, proc := range writers {
-				ok, err := p.frozen(proc)
-				if errors.Is(err, os.ErrNotExist) {
-					all = false
-					continue
+			var writers []codexRemoteProcess
+			for _, proc := range inventory {
+				if err := check(); err != nil {
+					return nil, err
 				}
+				// Even a dead group may have forked just before this listing. A
+				// confirmatory pass is required after every new identity is quiescent.
+				if !settled[key(proc)] {
+					all = false
+				}
+				if remoteProcessGone(proc) {
+					dead, err := p.threadStates(proc, false)
+					if err != nil {
+						return nil, err
+					}
+					if dead {
+						settled[key(proc)] = true
+						continue
+					}
+				}
+				ok, err := p.frozen(proc)
 				if err != nil {
 					return nil, err
 				}
-				// Even a previously stopped process needs an authenticated pidfd.
 				_, held := fds[key(proc)]
 				if !ok || !held {
 					all = false
@@ -393,6 +418,8 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 						return nil, err
 					}
 				}
+				settled[key(proc)] = true
+				writers = append(writers, proc)
 			}
 			if all {
 				return writers, nil
@@ -402,6 +429,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 			}
 		}
 	}
+
 	writers, err := freezeAll()
 	if err != nil {
 		return st, err
@@ -417,13 +445,8 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 	}
 	graceUntil := p.now().Add(grace)
 	for p.now().Before(graceUntil) {
-		writers, err = census()
-		if err != nil {
+		if err := check(); err != nil {
 			return st, err
-		}
-		if len(writers) == 0 {
-			st.Running = false
-			return st, nil
 		}
 		if err := p.pause(ctx); err != nil {
 			return st, err

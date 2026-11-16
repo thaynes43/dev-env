@@ -143,7 +143,11 @@ func startCodexThread(ctx context.Context, s Settings, sess protocol.Session, re
 	if codexRemoteSession(sess) {
 		unlock, err := codexRemoteLifecycle(s, false)
 		if err != nil {
-			return rec.Finish(apiv1.ThreadFailed, "host_stopping", apiv1.ThreadPhaseHostReady, 0)
+			code := "host_stopping"
+			if errors.Is(err, errCodexRemotePath) {
+				code = "folder_not_qualified"
+			}
+			return rec.Finish(apiv1.ThreadFailed, code, apiv1.ThreadPhaseHostReady, 0)
 		}
 		defer unlock()
 	}

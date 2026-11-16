@@ -154,7 +154,6 @@ var codexLayout = []historyRule{
 // lacks one, so a new agentd file is classified in the change that adds it.
 var agentdLayout = []historyRule{
 	{"codex-remote-stop.json", protocol.HistoryClassNotHistory, kindAny},
-	{"codex-remote-lifecycle.lock", protocol.HistoryClassNotHistory, kindAny},
 	// History: the task records, the child decisions, captured assistant text
 	// and the initial usage observation.
 	{"boot.json", classHistory, kindFile},

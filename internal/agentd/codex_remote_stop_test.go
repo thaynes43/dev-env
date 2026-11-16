@@ -35,7 +35,6 @@ type remoteStopRig struct {
 	threads  map[int]map[int]string
 	cmdlines map[int]string
 
-	t                  *testing.T
 	s                  Settings
 	sess               protocol.Session
 	p                  codexRemoteProcesses
@@ -66,7 +65,7 @@ func remoteStat(proc codexRemoteProcess) []byte {
 }
 func newRemoteStopRig(t *testing.T) *remoteStopRig {
 	t.Helper()
-	r := &remoteStopRig{t: t, s: testSettings(t, t.TempDir()), procs: map[int]codexRemoteProcess{}, fds: map[int]codexRemoteProcess{}, term: map[int]bool{}, stubborn: map[int]bool{}, exe: true, init: "/usr/local/bin/tini\x00--\x00/usr/local/bin/agentd\x00run\x00", clock: rescueNow, next: 1000}
+	r := &remoteStopRig{s: testSettings(t, t.TempDir()), procs: map[int]codexRemoteProcess{}, fds: map[int]codexRemoteProcess{}, term: map[int]bool{}, stubborn: map[int]bool{}, exe: true, init: "/usr/local/bin/tini\x00--\x00/usr/local/bin/agentd\x00run\x00", clock: rescueNow, next: 1000}
 	r.s.RuntimeDir = filepath.Join(t.TempDir(), "runtime")
 	if err := os.Mkdir(r.s.RuntimeDir, 0700); err != nil {
 		t.Fatal(err)
@@ -85,6 +84,12 @@ func newRemoteStopRig(t *testing.T) *remoteStopRig {
 		r.procs[pid] = codexRemoteProcess{pid: pid, parent: 1, start: strconv.Itoa(pid * 100), state: "S"}
 	}
 	writeJSON(t, r.s.statePath(bootFile), bootRecord{BootID: "boot-c1", Daemon: &daemonProcess{SessionUID: r.sess.SessionUID, PodUID: r.s.PodUID, Pid: 10, Start: "1000"}})
+	if err := os.Chmod(r.s.StateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(r.s.StateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	r.p = codexRemoteProcesses{self: 20, initExe: func() bool { return r.initOK }, sameExe: func(int) bool { return r.exe }, now: func() time.Time { return r.clock }, close: func(fd int) error {
 		if _, ok := r.fds[fd]; !ok {
 			t.Error("pidfd closed twice")
@@ -771,6 +776,12 @@ func TestCodexRemoteStopDoesNotChangeClaudeOrCodexTaskStop(t *testing.T) {
 
 func writeRemoteStop(t *testing.T, s Settings, rec codexRemoteStop) {
 	t.Helper()
+	if err := os.MkdirAll(s.StateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(s.StateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	writeJSON(t, s.statePath(codexRemoteStopFile), rec)
 	if err := os.Chmod(s.statePath(codexRemoteStopFile), 0600); err != nil {
 		t.Fatal(err)
@@ -910,5 +921,116 @@ func TestCodexRemoteResumeStartsOnlyDaemon(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(s.CodexHome, "sessions", "rollout.jsonl")); err != nil || string(got) != "synthetic retained thread" {
 		t.Fatal("resume changed native thread history")
+	}
+}
+
+func TestCodexRemoteStopRejectsEphemeralStateDirRedirect(t *testing.T) {
+	for _, name := range []string{"symlink", "alternate path", "public directory"} {
+		t.Run(name, func(t *testing.T) {
+			r := newRemoteStopRig(t)
+			r.install(t)
+			switch name {
+			case "symlink":
+				if err := os.RemoveAll(r.s.StateDir); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(r.s.RuntimeDir, r.s.StateDir); err != nil {
+					t.Fatal(err)
+				}
+			case "alternate path":
+				r.s.StateDir = r.s.RuntimeDir
+			case "public directory":
+				if err := os.Chmod(r.s.StateDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := codexRemoteStopped(r.s); err == nil {
+				t.Fatal("ephemeral or public HOME stop location accepted")
+			}
+			_, unlock, err := stopCodexRemoteForRescue(context.Background(), r.s, r.sess, 0)
+			if unlock != nil {
+				unlock()
+			}
+			if err == nil || len(r.signals) != 0 {
+				t.Fatalf("unsafe durable marker admitted stop: %v %v", err, r.signals)
+			}
+		})
+	}
+}
+func TestCodexRemoteStopCreatesPrivateStateForNonemptyHold(t *testing.T) {
+	r := newRemoteStopRig(t)
+	r.install(t)
+	if err := os.RemoveAll(r.s.StateDir); err != nil {
+		t.Fatal(err)
+	}
+	writeHostFixture(t, filepath.Join(r.s.Home, "synthetic-work"), "retained")
+	r.init = "/usr/local/bin/tini\x00--\x00/usr/local/bin/agentd\x00hold\x00"
+	r.cmdlines[10] = "/usr/local/bin/agentd\x00hold\x00"
+	_, unlock, err := stopCodexRemoteForRescue(context.Background(), r.s, r.sess, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	st, err := os.Stat(r.s.StateDir)
+	if err != nil || st.Mode().Perm() != 0700 {
+		t.Fatalf("nonprivate stop parent: %v %v", st, err)
+	}
+	if err := codexRemoteStopped(r.s); !errors.Is(err, errCodexRemoteStopping) {
+		t.Fatalf("hold lost durable fence: %v", err)
+	}
+}
+func TestCodexRemoteStopRefusesParentGoneDuringInventory(t *testing.T) {
+	r := newRemoteStopRig(t)
+	read := r.p.read
+	once := true
+	r.p.read = func(path string) ([]byte, error) {
+		if path == "/proc/30/stat" && once {
+			once = false
+			delete(r.procs, 30)
+			r.procs[44] = codexRemoteProcess{pid: 44, parent: 1, start: "4400", state: "S"}
+			return nil, os.ErrNotExist
+		}
+		return read(path)
+	}
+	st, err := r.stop(context.Background(), 0)
+	if err == nil || !st.Running {
+		t.Fatalf("fork/exit census accepted: %+v %v procs=%v", st, err, r.procs)
+	}
+}
+func TestCodexRemoteStopConfirmsDeadParentsBeforeGrace(t *testing.T) {
+	r := newRemoteStopRig(t)
+	for pid := range r.procs {
+		if pid != 10 && pid != 30 {
+			delete(r.procs, pid)
+		}
+	}
+	read := r.p.read
+	once := true
+	r.p.read = func(path string) ([]byte, error) {
+		if path == "/proc/30/stat" && once {
+			once = false
+			p := r.procs[30]
+			p.state = "Z"
+			r.procs[30] = p
+			r.procs[44] = codexRemoteProcess{pid: 44, parent: 1, start: "4400", state: "S"}
+		}
+		return read(path)
+	}
+	st, err := r.stop(context.Background(), time.Second)
+	if err != nil || st.Running || st.Killed || !r.quiesced() || !slices.Contains(r.signals, "44:15") {
+		t.Fatalf("dead-parent child missed graceful freeze: %+v %v signals=%v", st, err, r.signals)
+	}
+}
+func TestCodexRemoteStopRefusesLostFenceBeforeSnapshot(t *testing.T) {
+	r := newRemoteStopRig(t)
+	r.install(t)
+	r.afterSignal = func(pid int, sig unix.Signal) {
+		if pid == 43 && sig == unix.SIGCONT {
+			_ = os.Remove(r.s.statePath(codexRemoteStopFile))
+		}
+	}
+	rep, err := Rescue(context.Background(), &fakeRunner{handle: func(Cmd) (Result, error) { t.Fatal("snapshot after fence loss"); return Result{}, nil }}, r.s, r.sess.Name, rescueNow, RescueOptions{StopAgent: true})
+	if err == nil || rep.OK {
+		t.Fatalf("lost fence accepted: %+v %v", rep, err)
 	}
 }

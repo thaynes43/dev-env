@@ -18,7 +18,30 @@ const (
 	codexRemoteStopFile      = "codex-remote-stop.json"
 )
 
-var errCodexRemoteStopping = errors.New("Codex host is stopped for rescue; only a new pod may start its daemon")
+var (
+	errCodexRemoteStopping = errors.New("Codex host is stopped for rescue; only a new pod may start its daemon")
+	errCodexRemotePath     = errors.New("Codex host lifecycle path is not private")
+)
+
+func codexRemoteStateDir(s Settings, create bool) error {
+	if !filepath.IsAbs(s.Home) || s.StateDir != filepath.Join(s.Home, ".agentd") || noSymlinkComponents(s.Home) != nil {
+		return errCodexRemotePath
+	}
+	fi, err := os.Lstat(s.StateDir)
+	if errors.Is(err, os.ErrNotExist) {
+		if !create {
+			return nil
+		}
+		if os.Mkdir(s.StateDir, 0700) != nil {
+			return errCodexRemotePath
+		}
+		fi, err = os.Lstat(s.StateDir)
+	}
+	if err != nil || noSymlinkComponents(s.StateDir) != nil || !fi.IsDir() || fi.Mode().Perm()&0077 != 0 || !ownedByProcess(fi) {
+		return errCodexRemotePath
+	}
+	return nil
+}
 
 // The stop survives ctl exit and a supervisor restart in the same pod. A new
 // pod on the same Session/HOME may supervise the daemon again; this record
@@ -44,6 +67,9 @@ func codexRemoteGatePath(s Settings, name string) string {
 }
 
 func codexRemoteStopped(s Settings) error {
+	if err := codexRemoteStateDir(s, false); err != nil {
+		return err
+	}
 	// HOME is authoritative across container restarts in the same Pod. The
 	// runtime-only marker is used solely by a verified never-written hold.
 	paths := []string{s.statePath(codexRemoteStopFile), codexRemoteGatePath(s, codexRemoteStopFile)}
@@ -80,7 +106,7 @@ func codexRemoteLifecycle(s Settings, exclusive bool) (func(), error) {
 	}
 	stDir, dirErr := os.Stat(dir)
 	if noSymlinkComponents(dir) != nil || dirErr != nil || !stDir.IsDir() || stDir.Mode().Perm()&0077 != 0 || !ownedByProcess(stDir) {
-		return nil, errors.New("Codex host lifecycle directory is not private")
+		return nil, errCodexRemotePath
 	}
 	f, err := os.OpenFile(codexRemoteGatePath(s, codexRemoteLifecycleLock), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
 	if err != nil {
@@ -145,6 +171,16 @@ func stopCodexRemoteForRescue(ctx context.Context, s Settings, sess protocol.Ses
 		}
 		marker = codexRemoteGatePath(s, codexRemoteStopFile)
 	}
+	if !empty {
+		if err := codexRemoteStateDir(s, true); err != nil {
+			return fail(err)
+		}
+	}
+	if !empty {
+		if err := codexRemoteStateDir(s, true); err != nil {
+			return fail(err)
+		}
+	}
 	data, _ := json.Marshal(codexRemoteStop{1, sess.SessionUID, s.PodUID})
 	if err := writeFileDurable(marker, data, 0600); err != nil {
 		return fail(errors.New("cannot retain Codex host stop fence; rescue blocked"))
@@ -152,6 +188,18 @@ func stopCodexRemoteForRescue(ctx context.Context, s Settings, sess protocol.Ses
 	st, err := quiesceCodexRemote(ctx, s, sess, grace, processes)
 	if err != nil {
 		return fail(err)
+	}
+	// Recheck the exact marker after writers have stopped. A path or fence
+	// changed during the drain is not persistence evidence for the snapshot.
+	if !empty {
+		if err := codexRemoteStateDir(s, false); err != nil {
+			return fail(err)
+		}
+	}
+	raw, readErr := boundedHostFile(marker, 4096, true)
+	var stopped codexRemoteStop
+	if readErr != nil || decodeHostJSON(raw, &stopped) != nil || stopped != (codexRemoteStop{1, sess.SessionUID, s.PodUID}) {
+		return fail(errors.New("Codex stop fence changed during quiesce; rescue blocked"))
 	}
 	if empty {
 		stillEmpty, err := volumeEmpty(s)
