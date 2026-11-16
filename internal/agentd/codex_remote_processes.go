@@ -35,6 +35,7 @@ type codexRemoteProcesses struct {
 	sameExe func(int) bool
 	initExe func() bool
 	open    func(int) (int, error)
+	exited  func(int) (bool, error)
 	signal  func(int, unix.Signal) error
 	close   func(int) error
 	now     func() time.Time
@@ -58,7 +59,8 @@ func realCodexRemoteProcesses() codexRemoteProcesses {
 			b, berr := os.Stat(fmt.Sprintf("/proc/%d/exe", pid))
 			return aerr == nil && berr == nil && os.SameFile(a, b)
 		},
-		open: func(pid int) (int, error) { return unix.PidfdOpen(pid, 0) },
+		open:   func(pid int) (int, error) { return unix.PidfdOpen(pid, 0) },
+		exited: func(fd int) (bool, error) { return codexRemotePidfdExited(fd, unix.Poll) },
 		signal: func(fd int, sig unix.Signal) error {
 			return unix.PidfdSendSignal(fd, sig, nil, 0)
 		},
@@ -75,6 +77,19 @@ func realCodexRemoteProcesses() codexRemoteProcesses {
 			}
 		},
 	}
+}
+
+// A flags=0 pidfd reports whole-thread-group exit, not merely leader exit:
+// https://github.com/torvalds/linux/blob/v6.12/fs/pidfs.c#L86-L107
+// /proc task samples cannot prove absence: an exiting worker may create an
+// unlisted replacement before it is sampled as X.
+func codexRemotePidfdExited(fd int, poll func([]unix.PollFd, int) (int, error)) (bool, error) {
+	fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	_, err := poll(fds, 0)
+	if err != nil || fds[0].Revents&(unix.POLLERR|unix.POLLNVAL) != 0 {
+		return false, errors.New("codex stop cannot prove whole-group exit; rescue blocked")
+	}
+	return fds[0].Revents&(unix.POLLIN|unix.POLLHUP) != 0, nil
 }
 
 func parseCodexRemoteProcess(raw []byte) (codexRemoteProcess, error) {
@@ -289,32 +304,39 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 		}
 		return nil
 	}
-	freeze := func(proc codexRemoteProcess) error {
+	acquire := func(proc codexRemoteProcess) (int, error) {
 		if err := check(); err != nil {
-			return err
+			return -1, err
 		}
 		fd, held := fds[key(proc)]
 		var err error
 		if !held {
 			if len(fds) >= codexRemoteProcessCap {
-				return errors.New("codex stop identity enumeration exceeds its bound")
+				return -1, errors.New("codex stop identity enumeration exceeds its bound")
 			}
 			fd, err = p.open(proc.pid)
 		}
 		if errors.Is(err, unix.ESRCH) {
-			return nil
+			return -1, errors.New("codex process disappeared before pidfd acquisition; rescue blocked")
 		}
 		if err != nil {
-			return errors.New("codex stop requires exact pidfd process control")
+			return -1, errors.New("codex stop requires exact pidfd process control")
 		}
 		cur, err := p.process(proc.pid)
 		if err != nil || !sameCodexRemoteProcess(proc, cur) {
 			if !held {
 				_ = p.close(fd)
 			}
-			return errors.New("codex stop process identity changed before signalling")
+			return -1, errors.New("codex stop process identity changed before signalling")
 		}
 		fds[key(proc)] = fd
+		return fd, nil
+	}
+	freeze := func(proc codexRemoteProcess) error {
+		fd, err := acquire(proc)
+		if err != nil {
+			return err
+		}
 		if err := signal(fd, unix.SIGSTOP); err != nil {
 			return err
 		}
@@ -370,22 +392,23 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 				if !settled[key(proc)] {
 					all = false
 				}
-				if remoteProcessGone(proc) {
-					dead, err := p.threadStates(proc, false)
-					if err != nil {
-						return nil, err
-					}
-					if dead {
-						settled[key(proc)] = true
-						continue
-					}
+				fd, err := acquire(proc)
+				if err != nil {
+					return nil, err
+				}
+				dead, err := p.exited(fd)
+				if err != nil {
+					return nil, err
+				}
+				if dead {
+					settled[key(proc)] = true
+					continue
 				}
 				ok, err := p.frozen(proc)
 				if err != nil {
 					return nil, err
 				}
-				_, held := fds[key(proc)]
-				if !ok || !held {
+				if !ok || !settled[key(proc)] {
 					all = false
 					if err := freeze(proc); err != nil {
 						return nil, err

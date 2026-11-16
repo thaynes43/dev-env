@@ -95,6 +95,25 @@ func newRemoteStopRig(t *testing.T) *remoteStopRig {
 		delete(r.fds, fd)
 		return nil
 	},
+		exited: func(fd int) (bool, error) {
+			held, ok := r.fds[fd]
+			if !ok {
+				t.Fatal("unowned exit pidfd")
+			}
+			cur, exists := r.procs[held.pid]
+			if !exists || cur.start != held.start {
+				return true, nil
+			}
+			if !remoteProcessGone(cur) {
+				return false, nil
+			}
+			for _, state := range r.threads[cur.pid] {
+				if state != "Z" && state != "X" {
+					return false, nil
+				}
+			}
+			return true, nil
+		},
 		pause: func(ctx context.Context) error {
 			r.clock = r.clock.Add(50 * time.Millisecond)
 			if r.clock.Sub(rescueNow) > 45*time.Second {
@@ -1183,5 +1202,65 @@ func TestCodexRemoteStopBoundsAccumulatedProcessIdentities(t *testing.T) {
 	st, err := r.stop(context.Background(), 0)
 	if err == nil || !strings.Contains(err.Error(), "identity enumeration exceeds") || !st.Running || len(r.fds) != 0 {
 		t.Fatalf("accumulated identities escaped their bound: %+v %v fds=%d", st, err, len(r.fds))
+	}
+}
+
+func TestCodexRemoteStopUsesGroupExitInsteadOfDeadTaskSamples(t *testing.T) {
+	r := newRemoteStopRig(t)
+	p := r.procs[30]
+	p.state = "Z"
+	r.procs[30] = p
+	r.threads[30] = map[int]string{31: "R"}
+	read := r.p.read
+	r.p.read = func(path string) ([]byte, error) {
+		if strings.HasPrefix(path, "/proc/30/task/") {
+			// Every listed worker can be sampled X after creating an unlisted
+			// live replacement. Until STOP, the kernel pidfd remains not ready.
+			if !slices.Contains(r.signals, "30:19") {
+				p := r.procs[30]
+				p.state = "X"
+				parts := strings.Split(path, "/")
+				p.pid, _ = strconv.Atoi(parts[4])
+				return remoteStat(p), nil
+			}
+		}
+		return read(path)
+	}
+	st, err := r.stop(context.Background(), 0)
+	if err != nil || st.Running || !slices.Contains(r.signals, "30:19") || !r.quiesced() {
+		t.Fatalf("dead task samples hid a live group: %+v %v signals=%v", st, err, r.signals)
+	}
+}
+func TestCodexRemoteStopRefusesUnknownGroupExit(t *testing.T) {
+	r := newRemoteStopRig(t)
+	r.p.exited = func(int) (bool, error) { return false, errors.New("synthetic exit-readiness failure") }
+	st, err := r.stop(context.Background(), 0)
+	if err == nil || !st.Running {
+		t.Fatalf("unknown whole-group exit accepted: %+v %v", st, err)
+	}
+}
+func TestCodexRemoteStopPidfdExitReadiness(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		events        int16
+		err           error
+		dead, refused bool
+	}{
+		{"running", 0, nil, false, false}, {"exited", unix.POLLIN, nil, true, false}, {"reaped", unix.POLLHUP, nil, true, false},
+		{"poll error", 0, unix.EINTR, false, true}, {"invalid descriptor", unix.POLLNVAL, nil, false, true},
+		{"error event", unix.POLLERR, nil, false, true}, {"mixed error", unix.POLLIN | unix.POLLERR, nil, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dead, err := codexRemotePidfdExited(99, func(fds []unix.PollFd, timeout int) (int, error) {
+				if len(fds) != 1 || fds[0].Fd != 99 || fds[0].Events != unix.POLLIN || timeout != 0 {
+					t.Fatal("exit proof is not one nonblocking pidfd read")
+				}
+				fds[0].Revents = tc.events
+				return 1, tc.err
+			})
+			if dead != tc.dead || (err != nil) != tc.refused {
+				t.Fatalf("exit proof=%v %v", dead, err)
+			}
+		})
 	}
 }

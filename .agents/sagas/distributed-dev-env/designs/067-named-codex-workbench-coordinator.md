@@ -926,7 +926,8 @@ independent of slice (b)'s draft PR 1165. Every Codex remote host's rescue stop
 now fences supported remote mutations, verifies the immutable tini/agentd
 container shape and the exact supervisor, freezes that supervisor, and drains
 the rest of its dedicated PID namespace before Git rescue. It includes tmux
-clients, shells and detached descendants, checks every native thread, and takes
+clients, shells and detached descendants, checks every native thread, uses
+kernel pidfd readiness for whole-group exit rather than dead-task samples, and takes
 confirmed frozen inventories after graceful shutdown and between forced
 termination rounds, including orphaned job-control groups that can resume and
 fork when a parent dies.

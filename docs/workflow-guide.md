@@ -421,8 +421,8 @@ This includes every tmux session, its shells and clients, the native daemon and
 detached children. It allows a bounded graceful exit, then freezes a fresh process
 inventory and kills remaining writers. It repeats confirmed inventories and kill
 rounds to catch children born when an orphaned tmux process group resumes.
-It checks every process thread; a zombie
-leader alone does not prove its worker threads stopped. The supervisor stays
+It checks every process thread and uses kernel pidfd exit readiness to prove
+whole-group exit; zombie or dead task samples alone do not prove absence. The supervisor stays
 frozen through rescue and until pod deletion. A stop fence retained on HOME also
 prevents a container restart in the same pod from starting another daemon.
 
