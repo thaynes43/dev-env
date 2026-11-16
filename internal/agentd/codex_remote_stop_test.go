@@ -47,6 +47,7 @@ type remoteStopRig struct {
 	clock              time.Time
 	next               int
 	signals            []string
+	attempts           []string
 	readErr, listErr   string
 	openErr, signalErr error
 	afterOpen          func(int)
@@ -185,6 +186,7 @@ func newRemoteStopRig(t *testing.T) *remoteStopRig {
 				return r.signalErr
 			}
 			held, ok := r.fds[fd]
+			r.attempts = append(r.attempts, fmt.Sprintf("%d:%d", held.pid, sig))
 			if !ok {
 				t.Fatal("unowned pidfd")
 			}
@@ -431,6 +433,7 @@ func TestCodexRemoteRescueRefusesBeforeGitOnStopFailure(t *testing.T) {
 }
 func TestCodexRemoteLifecycleExcludesSnapshotRaces(t *testing.T) {
 	r := newRemoteStopRig(t)
+	r.install(t)
 	launch, err := codexRemoteLifecycle(r.s, false)
 	if err != nil {
 		t.Fatal(err)
@@ -439,7 +442,6 @@ func TestCodexRemoteLifecycleExcludesSnapshotRaces(t *testing.T) {
 		t.Fatal("stop overlapped admitted launcher")
 	}
 	launch()
-	r.install(t)
 	_, snapshot, err := stopCodexRemoteForRescue(context.Background(), r.s, r.sess, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -455,7 +457,12 @@ func TestCodexRemoteLifecycleExcludesSnapshotRaces(t *testing.T) {
 }
 func TestCodexRemoteStopFenceSurvivesSupervisorRestart(t *testing.T) {
 	r := newRemoteStopRig(t)
-	writeRemoteStop(t, r.s, codexRemoteStop{1, r.sess.SessionUID, r.s.PodUID})
+	r.install(t)
+	_, unlock, err := stopCodexRemoteForRescue(context.Background(), r.s, r.sess, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock()
 	w := newFakeCodexWorld(t)
 	w.s = r.s
 	c := &codexRemote{deps: w.deps(), boot: "replacement"}
@@ -637,7 +644,7 @@ func TestCodexRemoteStopRejectsReusedPIDBeforeSignal(t *testing.T) {
 		}
 	}
 	st, err := r.stop(context.Background(), 0)
-	if err == nil || !st.Running || slices.Contains(r.signals, "30:19") || len(r.fds) != 0 {
+	if err == nil || !st.Running || slices.Contains(r.attempts, "30:19") || len(r.fds) != 0 {
 		t.Fatalf("replacement signalled: %+v %v %v fds=%v", st, err, r.signals, r.fds)
 	}
 }
@@ -670,6 +677,9 @@ func TestCodexRemoteStopBoundsAndCancellation(t *testing.T) {
 			if err == nil || !st.Running {
 				t.Fatalf("uncertain stop accepted: %+v %v", st, err)
 			}
+			if name == "cancelled" && len(r.attempts) != 0 {
+				t.Fatal("signaled a process after cancellation")
+			}
 			if r.clock.Sub(rescueNow) > 11*time.Second {
 				t.Fatal("unbounded drain")
 			}
@@ -677,7 +687,7 @@ func TestCodexRemoteStopBoundsAndCancellation(t *testing.T) {
 	}
 }
 func TestCodexRemoteStopFenceBindingAndPrivateFiles(t *testing.T) {
-	for _, name := range []string{"bad json", "version", "missing session", "missing pod", "new Session", "missing current pod", "missing environment", "symlink", "public file"} {
+	for _, name := range []string{"bad json", "version", "missing session", "missing pod", "new Session", "missing current pod", "missing environment", "symlink", "public file", "oversized"} {
 		t.Run(name, func(t *testing.T) {
 			r := newRemoteStopRig(t)
 			rec := codexRemoteStop{1, r.sess.SessionUID, r.s.PodUID}
@@ -690,6 +700,7 @@ func TestCodexRemoteStopFenceBindingAndPrivateFiles(t *testing.T) {
 				rec.PodUID = ""
 			case "new Session":
 				rec.SessionUID = "other-session"
+				r.s.PodUID = "new-resume-pod"
 			case "missing current pod":
 				r.s.PodUID = ""
 			case "missing environment":
@@ -700,6 +711,11 @@ func TestCodexRemoteStopFenceBindingAndPrivateFiles(t *testing.T) {
 			switch name {
 			case "bad json":
 				writeFile(t, path, "invalid")
+			case "oversized":
+				raw, _ := os.ReadFile(path)
+				if err := os.WriteFile(path, append(raw, []byte(strings.Repeat(" ", 4096))...), 0600); err != nil {
+					t.Fatal(err)
+				}
 			case "public file":
 				if err := os.Chmod(path, 0644); err != nil {
 					t.Fatal(err)
@@ -713,8 +729,8 @@ func TestCodexRemoteStopFenceBindingAndPrivateFiles(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := codexRemoteStopped(r.s); err == nil {
-				t.Fatal("unproven stop binding admitted a writer")
+			if err := codexRemoteStopped(r.s); err == nil || errors.Is(err, errCodexRemoteStopping) {
+				t.Fatalf("unproven stop binding did not report its uncertainty: %v", err)
 			}
 		})
 	}
@@ -819,6 +835,7 @@ func TestCodexRemoteStopRequiresUIDsAndSeparateRuntime(t *testing.T) {
 	for _, name := range []string{"Session UID", "pod UID", "runtime missing", "runtime in HOME", "runtime is HOME", "wrong provider", "task"} {
 		t.Run(name, func(t *testing.T) {
 			r := newRemoteStopRig(t)
+			r.install(t)
 			switch name {
 			case "Session UID":
 				r.sess.SessionUID = ""
@@ -839,7 +856,11 @@ func TestCodexRemoteStopRequiresUIDsAndSeparateRuntime(t *testing.T) {
 			if unlock != nil {
 				unlock()
 			}
-			if err == nil || st != nil || len(r.signals) != 0 {
+			want := "requires the Session and pod UID"
+			if strings.HasPrefix(name, "runtime") {
+				want = "runtime directory outside HOME"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) || st != nil || len(r.attempts) != 0 {
 				t.Fatalf("unsafe stop admitted: %+v %v", st, err)
 			}
 		})
