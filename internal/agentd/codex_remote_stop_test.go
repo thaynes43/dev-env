@@ -1130,3 +1130,58 @@ func TestCodexRemoteStopSignalRefusalStopsImmediately(t *testing.T) {
 		t.Fatalf("signal refusal continued drain: %+v %v clock=%s", st, err, r.clock)
 	}
 }
+
+func TestCodexRemoteRescueRejectsForeignRetainedFenceBeforeMutation(t *testing.T) {
+	r := newRemoteStopRig(t)
+	r.install(t)
+	writeRemoteStop(t, r.s, codexRemoteStop{1, "foreign-retained-session", "old-pod"})
+	before, err := os.ReadFile(r.s.statePath(codexRemoteStopFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Rescue(context.Background(), &fakeRunner{}, r.s, r.sess.Name, rescueNow, RescueOptions{StopAgent: true})
+	after, readErr := os.ReadFile(r.s.statePath(codexRemoteStopFile))
+	if err == nil || !strings.Contains(err.Error(), "retained Session") || rep.OK || len(r.attempts) != 0 || readErr != nil || !bytes.Equal(before, after) {
+		t.Fatalf("foreign retained HOME admitted a stop mutation: %+v %v attempts=%v", rep, err, r.attempts)
+	}
+}
+
+func TestCodexRemoteRescueRefusesChangedEmptyHoldHome(t *testing.T) {
+	r := newRemoteStopRig(t)
+	r.install(t)
+	if err := os.RemoveAll(r.s.StateDir); err != nil {
+		t.Fatal(err)
+	}
+	r.init = "/usr/local/bin/tini\x00--\x00/usr/local/bin/agentd\x00hold\x00"
+	r.cmdlines[10] = "/usr/local/bin/agentd\x00hold\x00"
+	r.afterSignal = func(pid int, sig unix.Signal) {
+		if pid == 10 && sig == unix.SIGSTOP {
+			writeFile(t, filepath.Join(r.s.Home, "synthetic-unexpected-write"), "changed")
+		}
+	}
+	rep, err := Rescue(context.Background(), &fakeRunner{}, r.s, r.sess.Name, rescueNow, RescueOptions{StopAgent: true})
+	if err == nil || !strings.Contains(err.Error(), "HOME changed") || rep.OK {
+		t.Fatalf("runtime-only stop accepted a changed HOME: %+v %v", rep, err)
+	}
+}
+
+func TestCodexRemoteStopBoundsAccumulatedProcessIdentities(t *testing.T) {
+	r := newRemoteStopRig(t)
+	r.procs = map[int]codexRemoteProcess{10: r.procs[10]}
+	for pid := 100; pid < 600; pid++ {
+		r.procs[pid] = codexRemoteProcess{pid: pid, parent: 1, start: strconv.Itoa(pid * 100), state: "S"}
+		r.stubborn[pid] = true
+	}
+	r.afterSignal = func(pid int, sig unix.Signal) {
+		if pid == 100 && sig == unix.SIGKILL {
+			// Neither inventory exceeds its cap; retained exact identities do.
+			for child := 1000; child < 1500; child++ {
+				r.procs[child] = codexRemoteProcess{pid: child, parent: 1, start: strconv.Itoa(child * 100), state: "S"}
+			}
+		}
+	}
+	st, err := r.stop(context.Background(), 0)
+	if err == nil || !strings.Contains(err.Error(), "identity enumeration exceeds") || !st.Running || len(r.fds) != 0 {
+		t.Fatalf("accumulated identities escaped their bound: %+v %v fds=%d", st, err, len(r.fds))
+	}
+}
