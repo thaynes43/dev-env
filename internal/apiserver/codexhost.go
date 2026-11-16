@@ -19,6 +19,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/codexhostpool"
+	"github.com/thaynes43/dev-env/internal/codexworkbench"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/scheduledwork/authority"
 	"github.com/thaynes43/dev-env/internal/templates"
@@ -104,13 +105,16 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 	}
 	who := s.codexHostCaller(c)
 	who.LaunchID = req.LaunchID
+	requestedAccount := codexworkbench.Resolve(tmpl, asked)
 	in := codexhostpool.Input{
-		Caller:            who,
-		Request:           codexhostpool.Request{Repository: req.Repo},
-		ResolvedProfile:   asked,
-		DefaultProfile:    tmpl.DefaultProfile,
-		MaxRunningPerCell: s.CodexHosts.MaxRunningPerCell,
-		MaxRunning:        s.CodexHosts.MaxRunning,
+		ProfileExcluded:    requestedAccount.Workbench(),
+		ProfileUnavailable: !requestedAccount.Available(),
+		Caller:             who,
+		Request:            codexhostpool.Request{Repository: req.Repo},
+		ResolvedProfile:    asked,
+		DefaultProfile:     tmpl.DefaultProfile,
+		MaxRunningPerCell:  s.CodexHosts.MaxRunningPerCell,
+		MaxRunning:         s.CodexHosts.MaxRunning,
 	}
 	var last string
 	for range codexHostSelectPasses {
@@ -118,6 +122,12 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 		if err != nil {
 			return 0, nil, fromKubeError(err, "sessions")
 		}
+		ordinaryProfile := false
+		for _, h := range hosts {
+			ordinaryProfile = ordinaryProfile || h.OrdinaryPod && !h.Reserved && h.Agent == codexhostpool.AgentCodex && h.Mode == codexhostpool.ModeRemote && h.ResolvedProfile == asked
+		}
+		in.ProfileExcluded = requestedAccount.Workbench() && !ordinaryProfile
+		in.ProfileUnavailable = !requestedAccount.Available() && !ordinaryProfile
 		in.Hosts, in.Login, in.Now = hosts, login, s.now()
 		res := codexhostpool.Select(in)
 		last = res.Host
@@ -300,7 +310,11 @@ func (s *Server) codexHostFacts(ctx context.Context, tmpl *templates.Templates) 
 		if err != nil {
 			return nil, "", err
 		}
-		hosts = append(hosts, codexHostFrom(sess, pod, tmpl, off, now))
+		host := s.codexHostFrom(sess, pod, tmpl, off, now)
+		hosts = append(hosts, host)
+		if host.Reserved || host.WorkbenchAccount || !host.AccountResolved {
+			continue
+		}
 		if !codexLoginReading(sess, pod, now) {
 			continue
 		}
@@ -392,21 +406,39 @@ func (s *Server) codexHostPod(ctx context.Context, sess *v1alpha1.AgentSession) 
 	return &pod, nil
 }
 
-func codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates.Templates, handsOff bool, now time.Time) codexhostpool.Host {
+func (s *Server) codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates.Templates, handsOff bool, now time.Time) codexhostpool.Host {
+	resolved := codexworkbench.Resolve(tmpl, sess.Spec.Profile)
+	accountResolved, workbench := resolved.Available(), resolved.Workbench()
+	ordinaryPod := false
+	// An owned live pod proves its account even when the profile disappeared.
+	// Unknown pod accounts fail closed; a hold pod cannot prove an agent account.
+	if pod != nil && metav1.IsControlledBy(pod, sess) && pod.DeletionTimestamp.IsZero() && pod.Labels[v1alpha1.LabelHold] != "true" {
+		accountResolved = codexworkbench.OrdinaryAccount(pod.Spec.ServiceAccountName) || pod.Spec.ServiceAccountName == templates.WorkbenchServiceAccount
+		workbench = pod.Spec.ServiceAccountName == templates.WorkbenchServiceAccount
+		ordinaryPod = codexworkbench.OrdinaryAccount(pod.Spec.ServiceAccountName)
+	}
+	def := ""
+	if tmpl != nil {
+		def = tmpl.DefaultProfile
+	}
 	h := codexhostpool.Host{
-		Name:            sess.Name,
-		UID:             string(sess.UID),
-		Agent:           string(sess.Spec.Agent),
-		Mode:            string(sess.Spec.Mode),
-		Phase:           string(sess.Status.Phase),
-		OperatingMode:   codexOperatingMode(sess),
-		Deletion:        !sess.DeletionTimestamp.IsZero(),
-		ResolvedProfile: codexResolvedProfile(sess, pod, tmpl.DefaultProfile),
-		ReadyRepos:      codexReadyRepos(sess.Status.Agent),
-		SpecRepo:        sess.Spec.Repo,
-		HandsOff:        handsOff,
-		Parent:          sess.Spec.Parent,
-		Archived:        sess.Status.ArchivedAt != nil,
+		Reserved:         s.CodexWorkbenchHosts.Name != "" && sess.Name == s.CodexWorkbenchHosts.Name,
+		AccountResolved:  accountResolved,
+		OrdinaryPod:      ordinaryPod,
+		WorkbenchAccount: workbench,
+		Name:             sess.Name,
+		UID:              string(sess.UID),
+		Agent:            string(sess.Spec.Agent),
+		Mode:             string(sess.Spec.Mode),
+		Phase:            string(sess.Status.Phase),
+		OperatingMode:    codexOperatingMode(sess),
+		Deletion:         !sess.DeletionTimestamp.IsZero(),
+		ResolvedProfile:  codexResolvedProfile(sess, pod, def),
+		ReadyRepos:       codexReadyRepos(sess.Status.Agent),
+		SpecRepo:         sess.Spec.Repo,
+		HandsOff:         handsOff,
+		Parent:           sess.Spec.Parent,
+		Archived:         sess.Status.ArchivedAt != nil,
 	}
 	if pod != nil {
 		h.PodReady = codexHostPodReady(sess, pod)
@@ -484,7 +516,7 @@ func codexReadyRepos(agent *v1alpha1.AgentStatus) []string {
 }
 
 func (s *Server) codexHostHandsOff(name string) bool {
-	return s.CodexHosts != nil && slices.Contains(s.CodexHosts.HandsOff, name)
+	return s.CodexWorkbenchHosts.Name != "" && s.CodexWorkbenchHosts.Name == name || s.CodexHosts != nil && slices.Contains(s.CodexHosts.HandsOff, name)
 }
 
 func (s *Server) codexHostBlocked(sess *v1alpha1.AgentSession) bool {
@@ -524,7 +556,7 @@ func (s *Server) leaseCodexHost(ctx context.Context, want codexLeaseTarget) (cod
 			return 0, codexhostpool.Host{}, err
 		}
 		now := s.now()
-		host := codexHostFrom(&sess, pod, want.tmpl, s.codexHostHandsOff(sess.Name), now)
+		host := s.codexHostFrom(&sess, pod, want.tmpl, s.codexHostHandsOff(sess.Name), now)
 		if !codexhostpool.Suitable(host, want.caller, want.profile, want.repo, now) {
 			return codexLeaseBusy, host, nil
 		}

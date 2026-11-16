@@ -22,5 +22,8 @@ func (r *Reconciler) resolveCodexHost(s *v1alpha1.AgentSession, t *templates.Tem
 }
 
 func (a *codexHostBuild) check(s *v1alpha1.AgentSession) error {
+	if a == nil {
+		return &codexworkbench.Refusal{Reason: codexworkbench.TemplatesUnavailable, Message: "Codex host build admission is required."}
+	}
 	return a.policy.Check(s, a.resolved)
 }
