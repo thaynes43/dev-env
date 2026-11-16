@@ -187,13 +187,20 @@ func runEvidenceLifecycle(t *testing.T, pid1 bool) {
 		return nil
 	}}
 	gate.c = c
-	r, err := Run(context.Background(), c, gate)
+	readinessStages := make(chan nativeReadinessStage, 1)
+	ctx := context.WithValue(context.Background(), nativeReadinessObserverKey{}, readinessStages)
+	r, err := Run(ctx, c, gate)
 	if err != nil || !gate.ready || !gate.stopped || !afterStopped || r.State != "Stopped" {
 		select {
 		case stage := <-refusals:
 			t.Logf("actual guard refusal stage=%s", stage)
 		case <-time.After(100 * time.Millisecond):
 			t.Log("no guard refusal stage received")
+		}
+		select {
+		case stage := <-readinessStages:
+			t.Logf("actual native readiness refusal stage=%s", stage)
+		default:
 		}
 		t.Fatalf("actual lifecycle: ready=%v stopped=%v receipt=%+v err=%v", gate.ready, gate.stopped, r, err)
 	}
