@@ -71,9 +71,32 @@ pods are preserved; the ordinary-account rescue hold remains possible.
 An operator with this build and an empty setting cannot resume the reported
 suspended legacy workbench Codex host. Installation, including the named host,
 is held for the confirmed packet in [DESIGN-067](../.agents/sagas/distributed-dev-env/designs/067-named-codex-workbench-coordinator.md).
-Its thread and pool fences and safe stop are later slices. Stop and preserve
+Its thread and pool fences are source-only slice (b). The review by another model
+family is done, recorded on story 858 and in design section 14. Nothing is installed
+or accepted; the setting is empty and no named coordinator host exists. Safe stop
+remains slice (c1). Stop and preserve
 any privileged host before removing its name or rolling back; a flag change
 does not revoke a running pod.
+
+For the later named host, the slice (b) draft requires `thread start --agent
+codex --coordinator --host <reserved-name>`, full model `gpt-6.1-sol`, effort
+`medium`, a fresh explicit tmux name and a bounded handoff. The command uses
+the operator API for every caller. It verifies both the resolved host account
+and actual pod account, creation eligibility, caller authority and target UIDs.
+Only Tom, configured trusted clients and workbench-by-creation sessions on an
+actual workbench pod qualify. A raise or profile label does not qualify. Agentd
+independently checks controller host/Session metadata, purpose and both expected
+UIDs. The one-use RC route stays unavailable for this host. No failed request
+falls back to ordinary intent, pool selection, another host or a new thread.
+
+Pool selection, facts and lease rechecks exclude the reserved name, workbench
+accounts through defaults/aliases or a present pod, and unknown accounts. They
+need no editable annotation or hands-off list to enforce those exclusions.
+Native title metadata is set and read back on the exact bound ID; phone display
+and pairing are still unproved. The review by another model family is done,
+recorded on story 858 and in design section 14. Nothing is installed or accepted;
+the setting is empty and no named coordinator host exists. These source contracts
+grant no permissions or custody transfer.
 
 An eligible trusted client may still explicitly create a workbench Claude
 session or an admitted Codex task. A Codex remote host uses the guarded manifest

@@ -48,12 +48,12 @@ func TestPilotRemoteExactMatchChangesOnlyImage(t *testing.T) {
 	s := remotePilotTestSession()
 	tmpl := exampleTemplates(t)
 	r := &Reconciler{APIURL: "https://api"}
-	plain, err := r.sessionPod(s, tmpl)
+	plain, err := r.sessionPod(s, tmpl, r.resolveCodexHost(s, tmpl))
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.RemotePilotAgent = remotePilotTestAgent()
-	pod, err := r.sessionPod(s, tmpl)
+	pod, err := r.sessionPod(s, tmpl, r.resolveCodexHost(s, tmpl))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestPilotRemoteExactMatchChangesOnlyImage(t *testing.T) {
 func TestPilotRemoteSelectionExclusionsPreserveBytes(t *testing.T) {
 	s := remotePilotTestSession()
 	r := &Reconciler{APIURL: "https://api"}
-	plain, err := r.sessionPod(s, exampleTemplates(t))
+	plain, err := r.sessionPod(s, exampleTemplates(t), r.resolveCodexHost(s, exampleTemplates(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestPilotRemoteUnsetPreservesPodBytes(t *testing.T) {
 		}
 		for _, p := range []*PilotAgent{nil, {}} {
 			r := &Reconciler{APIURL: "https://api", RemotePilotAgent: p}
-			pod, err := r.sessionPod(s, tmpl)
+			pod, err := r.sessionPod(s, tmpl, r.resolveCodexHost(s, tmpl))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -156,12 +156,12 @@ func TestPilotRemoteCoexistenceAndPrecedence(t *testing.T) {
 	for _, mode := range []v1alpha1.SessionMode{v1alpha1.ModeLocal, v1alpha1.ModeRemote} {
 		s := pilotTestSession()
 		s.Spec.Mode = mode
-		plain, err := r.sessionPod(s, tmpl)
+		plain, err := r.sessionPod(s, tmpl, r.resolveCodexHost(s, tmpl))
 		if err != nil {
 			t.Fatal(err)
 		}
 		r.RemotePilotAgent = remotePilotTestAgent()
-		pod, err := r.sessionPod(s, tmpl)
+		pod, err := r.sessionPod(s, tmpl, r.resolveCodexHost(s, tmpl))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -171,7 +171,7 @@ func TestPilotRemoteCoexistenceAndPrecedence(t *testing.T) {
 	s := pilotTestSession()
 	s.Spec.Agent, s.Spec.Model = v1alpha1.AgentCodex, "gpt-6.1-sol"
 	r.RemotePilotAgent = &PilotAgent{Image: remotePilotTestImage, Parent: legacy.Parent, Key: legacy.Key}
-	pod, err := r.sessionPod(s, tmpl)
+	pod, err := r.sessionPod(s, tmpl, r.resolveCodexHost(s, tmpl))
 	if err != nil || pod.Spec.Containers[0].Image != legacy.Image {
 		t.Fatalf("legacy overlap precedence changed: %v", err)
 	}
@@ -180,19 +180,19 @@ func TestPilotRemoteCoexistenceAndPrecedence(t *testing.T) {
 	r.ManagedCodexTasks = true
 	r.TaskPilotAgent = &PilotAgent{Image: task.Image, Parent: legacy.Parent, Key: legacy.Key}
 	r.RemotePilotAgent = nil
-	plain, err := r.sessionPod(s, tmpl)
+	plain, err := r.sessionPod(s, tmpl, r.resolveCodexHost(s, tmpl))
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.RemotePilotAgent = &PilotAgent{Image: remotePilotTestImage, Parent: legacy.Parent, Key: legacy.Key}
-	pod, err = r.sessionPod(s, tmpl)
+	pod, err = r.sessionPod(s, tmpl, r.resolveCodexHost(s, tmpl))
 	if err != nil || pod.Spec.Containers[0].Image != task.Image {
 		t.Fatalf("task pilot image changed: %v", err)
 	}
 	assertRemotePilotPodBytes(t, plain, pod)
 	// All flags remain set; a separate exact remote target gets its own image.
 	r.RemotePilotAgent = remotePilotTestAgent()
-	pod, err = r.sessionPod(remotePilotTestSession(), tmpl)
+	pod, err = r.sessionPod(remotePilotTestSession(), tmpl, r.resolveCodexHost(remotePilotTestSession(), tmpl))
 	if err != nil || pod.Spec.Containers[0].Image != remotePilotTestImage {
 		t.Fatalf("remote pilot displaced by nonmatching existing pilots: %v", err)
 	}

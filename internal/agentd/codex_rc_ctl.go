@@ -47,7 +47,7 @@ func codexRCControl(ctx context.Context, s Settings, sess protocol.Session, oper
 	}
 	check := func(context.Context) error {
 		now := deps.now()
-		if ctx.Err() != nil || !codexRemoteSession(sess) || sess.Name != d.Target.SessionName || sess.SessionUID != d.Target.SessionUID || s.PodUID != d.Target.PodUID || !d.Valid(now) {
+		if s.WorkbenchPod || s.CodexCoordinatorHost != "" || s.CodexCoordinatorUID != "" || ctx.Err() != nil || !codexRemoteSession(sess) || sess.Name != d.Target.SessionName || sess.SessionUID != d.Target.SessionUID || s.PodUID != d.Target.PodUID || !d.Valid(now) {
 			return errCodexRCRefused
 		}
 		// Config is outside HOME's mutable platform state; missing/unknown pairing

@@ -57,6 +57,19 @@ func (s *Server) codexRCThread(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 	digest := apiv1.CodexRCClientHash(c.identity.Username, req)
 	if saved, ok := sess.Annotations[apiv1.CodexRCIntentAnnotation]; ok {
+		// A replay cannot bypass the reserved-host gate. Its one live pod
+		// read supplies both the account proof and this request's UID fence.
+		// Readiness does not decide a retained receipt, as on main.
+		pod, err := s.codexHostPod(ctx, &sess)
+		if err != nil {
+			return 0, nil, err
+		}
+		if pod == nil || string(pod.UID) != target.PodUID {
+			return 0, nil, newError(409, apiv1.CodeConflict, "codex RC pod UID changed")
+		}
+		if err := s.admitThreadHost(ctx, c, &sess, pod, false); err != nil {
+			return 0, nil, err
+		}
 		var receipt apiv1.CodexRCReceipt
 		if apiv1.DecodeCodexRC([]byte(saved), &receipt, apiv1.CodexRCMaxPacket) != nil || receipt.ClientSHA256 != digest || receipt.RequestID != req.RequestID {
 			return 0, nil, newError(409, apiv1.CodeConflict, "codex RC intent already reserved; do not replay")
@@ -78,6 +91,9 @@ func (s *Server) codexRCThread(ctx context.Context, w http.ResponseWriter, r *ht
 		}
 		pod, err := s.runningPod(ctx, &current)
 		if err != nil {
+			return err
+		}
+		if err := s.admitThreadHost(ctx, c, &current, pod, false); err != nil {
 			return err
 		}
 		if string(pod.UID) != target.PodUID {
