@@ -190,3 +190,41 @@ nothing is installed, accepted or operated on a host. PR 1165 stays draft.
 The original worker's 58-kill table above is historical, author-reported evidence,
 not rerun by this worker or independently verified by the cross-family reviewer.
 This round's focused/full test and mutation results are recorded below when run.
+
+### Fix-worker mutation results
+
+Pinned source/test head `47fa7bc31d658f10e5fac3e4810a394b349c5bce`, six
+sequential local mutants. Before each: exact branch/head and completely clean
+index/worktree checked; original bytes read from that pinned commit. Restoration
+required the file still equal the mutant bytes, then restored those original
+bytes and checked the clean tree again. No mutant was committed or pushed.
+All six compiled and failed the named assertions: **6 killed, 0 survivors,
+0 build failures/errors**. No timeout counts as a kill.
+
+| Mutant | Change | Named failures |
+| --- | --- | --- |
+| M1 | Disable the new ordinary short path | `TestOrdinaryThreadAdmissionUsesLivePod/{threads,codex-thread}/setting={empty,another-host}/{readable,unreadable,removed}`: all 12 ordinary cases fail; outage/removed profile return 503/no exec, and readable templates are read instead of bypassed |
+| M2 | Short path ignores the pod account | Same matrix, both settings/routes: `workbench-account`, `unknown-account`, `live-workbench-account` (12 failures); unproved/privileged accounts exec |
+| M3 | Remove the skip before title write on guessed binding | `TestCodexCoordinatorTitleAfterExactBinding/{empty-preview,partial-preview}`: setter called and outcome proceeds instead of returning unconfirmed |
+| M4 | Return use for an absent named host | `TestNamedHostAbsentRefused` |
+| M5 | Disable live-pod pool account proof | `TestOrdinaryPoolAccountProofMatchesMain/{ready,busy,not-ready,not-ready-room}/{removed,account-remapped}` (8 failures), including spare-capacity create |
+| M6 | Allow a requested account that cannot resolve without pod proof | `TestCoordinatorPoolRequestedAccount/removed`: returns create instead of account_unresolved |
+
+The full unfiltered controller suite passed (`217.056s`), after the successful
+`make envtest`. It includes `guard_test.go` syntax guards and ordinary pod
+checks. The controller source is unchanged since the tested commit. The first
+full API suite passed (`96.790s`); the final API rerun includes the subsequent
+pool spare-capacity/account-remap correction. Final suite/check results follow.
+
+Final full API suite: passed (`97.119s`) on the source/test head above, after
+all mutants were restored. Full `internal/codexhostpool` (`0.005s`) and shared
+`internal/codexworkbench` (`0.011s`) suites passed. No package test filter was
+used for these full runs.
+
+Independent native source review requested `gpt-6.1-sol`/`xhigh`. It found the
+spare-cell F5 case in the first fix commit; the worker added the `OrdinaryPod`
+requested-profile proof and the `not-ready-room` regression. Final native review
+at `47fa7bc31d658f10e5fac3e4810a394b349c5bce` reported no findings, including
+the subsequent account-remapped case and guide clarification. The reviewer ran
+no tests and makes no live claim. This does not replace the coordinator's
+required `claude-sonnet-5-5` re-review of the integrated draft's new head.
