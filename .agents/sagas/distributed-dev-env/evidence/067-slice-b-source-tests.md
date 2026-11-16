@@ -193,22 +193,24 @@ This round's focused/full test and mutation results are recorded below when run.
 
 ### Fix-worker mutation results
 
-Pinned source/test head `47fa7bc31d658f10e5fac3e4810a394b349c5bce`, six
-sequential local mutants. Before each: exact branch/head and completely clean
+Pinned source/test head `353d8213c319dd82f18cfc5c241ad050873bf553`, seven
+sequential local mutants (the first six were also run at `47fa7bc3` before the
+retained-receipt correction). Before each: exact branch/head and completely clean
 index/worktree checked; original bytes read from that pinned commit. Restoration
 required the file still equal the mutant bytes, then restored those original
 bytes and checked the clean tree again. No mutant was committed or pushed.
-All six compiled and failed the named assertions: **6 killed, 0 survivors,
+All seven compiled and failed the named assertions: **7 killed, 0 survivors,
 0 build failures/errors**. No timeout counts as a kill.
 
 | Mutant | Change | Named failures |
 | --- | --- | --- |
-| M1 | Disable the new ordinary short path | `TestOrdinaryThreadAdmissionUsesLivePod/{threads,codex-thread}/setting={empty,another-host}/{readable,unreadable,removed}`: all 12 ordinary cases fail; outage/removed profile return 503/no exec, and readable templates are read instead of bypassed |
+| M1 | Disable the new ordinary short path | `TestOrdinaryThreadAdmissionUsesLivePod/{threads,codex-thread}/setting={empty,another-host}/{readable,unreadable,removed}`: all 12 ordinary cases fail; outage/removed profile return 503/no exec, and readable templates are read instead of bypassed. All four retained-receipt cases fail too |
 | M2 | Short path ignores the pod account | Same matrix, both settings/routes: `workbench-account`, `unknown-account`, `live-workbench-account` (12 failures); unproved/privileged accounts exec |
 | M3 | Remove the skip before title write on guessed binding | `TestCodexCoordinatorTitleAfterExactBinding/{empty-preview,partial-preview}`: setter called and outcome proceeds instead of returning unconfirmed |
 | M4 | Return use for an absent named host | `TestNamedHostAbsentRefused` |
 | M5 | Disable live-pod pool account proof | `TestOrdinaryPoolAccountProofMatchesMain/{ready,busy,not-ready,not-ready-room}/{removed,account-remapped}` (8 failures), including spare-capacity create |
 | M6 | Allow a requested account that cannot resolve without pod proof | `TestCoordinatorPoolRequestedAccount/removed`: returns create instead of account_unresolved |
+| M7 | Require readiness again for retained-receipt account proof | `TestOrdinaryOneUseReplayKeepsMainReadinessBehavior/setting={empty,another-host}/{unreadable,removed}`: all four return 409 instead of the saved 200 receipt |
 
 The full unfiltered controller suite passed (`217.056s`), after the successful
 `make envtest`. It includes `guard_test.go` syntax guards and ordinary pod
@@ -238,9 +240,15 @@ proof would change main's saved-receipt response. The worker first ran
 setting × unreadable/removed profile cases returned 409 after the same pod lost
 readiness. The replay now uses one live owned pod read for account and configured
 UID, independent of readiness; new launches retain every original qualification
-readiness check. Focused GREEN passed (`0.124s` before the added read-count
+readiness check. Focused GREEN passed (`0.144s` before the added read-count
 assertion); the final full API run includes that assertion. Replay launches
 nothing and reads no templates. Missing/replaced/unprovable pods still refuse.
 
 Full `internal/agentd` suite passed (`247.108s`), unfiltered. Its source is
 unchanged by the retained-receipt correction. `make check-layout` passed.
+
+
+Independent native delta review at
+`353d8213c319dd82f18cfc5c241ad050873bf553`: no findings on the retained-receipt
+correction. The reviewer checked source/tests only; the worker ran the tests.
+The final full API rerun below includes that correction and all read counts.
