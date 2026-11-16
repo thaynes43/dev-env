@@ -3429,6 +3429,53 @@ records `escalation-pending` on the remediation, once, when first blocked.
 The schema also admits `escalation-abandoned`, atomically with Abandoned, for
 OP802. OP803 owns both sends; this slice adds no page text or delivery.
 
+**Correction, 2026-11-16: story 796, coordinator rulings; not a ruling by
+Tom.** Item 745 comment 7680 (O4, O9, O13), slice plan 745c and coordinator
+answer `op796-build-1-q-1` govern the following. Earlier corrections stay.
+
+- The keeper now renders `escalation-started`, only for a remote escalation
+  with the recorded event and a settled `status.summon.registration`
+  (`registered` or `unavailable`, with its settlement time). Live Remote
+  Control state alone never causes a page or consumes an attempt.
+- With recorded `registered` and a live URL passing
+  `summonoutcome.VerifiedRemoteControlLink`, the page says
+  `[dev-env] escalation-started: escalation <name> is running and registered
+  with the Claude app. Brief: unknown.` Its link says `Open the session`.
+  With recorded `registered` but no verified live URL it says
+  `escalation <name> registered, but its link is gone (Remote Control
+  <state>). Brief: unknown.` and links that session's console page.
+  With recorded `unavailable` it says `escalation <name> is running, but
+  Remote Control is not available (<reason>). Join it from the console, or
+  attach: agent-run attach <name>. Brief: unknown.` and links the console
+  page, even if a live link has since appeared. These last two texts have
+  the same `[dev-env] escalation-started:` prefix.
+- The state is only `registered`, `starting`, `offline` or `login-required`;
+  any other or absent state is `unknown`. The recorded reason is only
+  `starting`, `offline`, `login-required`, `link-unverified`, `name-mismatch`
+  or `not-reported`; any other is `unknown`. No session note, title, caller
+  text or agent message enters this new page. Older templates keep their
+  existing note contract. Story 795 has not defined the delivery field:
+  `Brief: unknown` is deliberate, with no invented wire field; story 795
+  must connect its delivery state to this renderer.
+- Every session page's console fallback is now
+  `/portal/projects/dev-env/environments/internal/sessions?session=<uid>`.
+  The UID must match the portal's `^[A-Za-z0-9-]{1,64}$`; otherwise the link
+  stays the sessions list. The standalone pager drill, `more-events`,
+  overflow and the digest still link the list because they have no session.
+- O9's drill policy is reserved as exactly
+  `spec.caller: dev-env-system.summon-drill`. Every page of such a session
+  starts `DRILL` in both title and message. Another namespace, suffix, case,
+  or the same text in a session's name, title or note cannot choose it.
+  The eventual drill must use a CallerPolicy of that exact name; another
+  name is a code change. This story creates no flag, policy or identity,
+  and does not settle who may start the drill (O8).
+- The existing write-before-send ledger, one attempt per UID and event
+  across keeper restarts, no retry and rolling six-per-hour cap apply.
+  Install with a keeper pin together with or after stories 782, 792 and
+  793, with story 794's settlement available. No new RBAC is needed. Source
+  and fake-endpoint tests do not prove install or phone delivery; story
+  745's drill remains the acceptance check.
+
 ### 6.9 OP743: quota priority and the fallback model
 
 **The gate.** At admission, for summoned sessions only, by

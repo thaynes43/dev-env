@@ -2077,7 +2077,8 @@ None is a ruling by Tom.
 
 - **What pages.** One terminal page per closed session, `failed`, `lost` or
   `escalated`, and one page per lifecycle event recorded in
-  `status.summon.pages[]` (`escalation-held`, `escalation-reminder`). The
+  `status.summon.pages[]` (`escalation-held`, `escalation-reminder`,
+  `escalation-started`). The
   terminal page is not stored on the Session: the keeper derives it from
   `status.summon.closed` (lane, state, source, reason) with one table,
   `summonoutcome.TerminalPage`. A close whose row says digest pages nothing;
@@ -2286,7 +2287,12 @@ None is a ruling by Tom.
   link, and `profile:ops`, `metadata:x`, `hotel:5` and `éfile:x` stay whole
   (fix round 4).
   The only link is `status.remoteControl.url` when it is
-  `https://claude.ai/code/session_...`; otherwise the console's sessions list.
+  `https://claude.ai/code/session_...`, checked by the shared
+  `summonoutcome.VerifiedRemoteControlLink`; otherwise that session's console
+  page (`sessions?session=<uid>`). The UID must match
+  `^[A-Za-z0-9-]{1,64}$`, as in the portal, or the fallback stays the sessions
+  list. Pages without a session (the standalone drill, `more-events`,
+  overflow and the digest) link the list.
   Page records hold the fixed title, the session name and the note's byte
   count, never the note.
 - **Flags.** `--enable-summon-pages`, `--summon-pages-portal-origin` (the
@@ -2344,10 +2350,30 @@ None is a ruling by Tom.
   each write: if the cluster's AgentSession CRD is older than the operator,
   the pass returns an error saying to install the current CRD first, and
   nothing is logged as recorded. A settled record never changes. Lane
-  `upgrade` records nothing. **Nothing sends `escalation-started` yet:** the
-  keeper skips an event that has no template, and the page is story 796.
+  `upgrade` records nothing.
   Read it with `kubectl -n dev-agents get agentsession <name> -o
   jsonpath='{.status.summon.registration}'`.
+- **The escalation-started page** (story 796, 2026-11-16, coordinator rulings
+  O4, O9, O13 and answer `op796-build-1-q-1`; not a ruling by Tom). The keeper
+  requires both the lifecycle event and a settled registration with its
+  time, for a remote escalation. It chooses the text from that recorded
+  result. Recorded `registered` with a live verified URL says the escalation
+  is running and registered with the Claude app, with `Open the session`.
+  If that URL is gone or unverified, it says `registered, but its link is
+  gone (Remote Control <state>)` and links the session's console page. A
+  recorded `unavailable` says `Remote Control is not available (<reason>)`,
+  links the console page and names `agent-run attach <name>` in text. A late
+  live registration never overrides that recorded result. State and reason
+  use closed sets; unrecognized values become `unknown`. This page contains
+  no session note, title or agent message. Every branch ends
+  `Brief: unknown.` until story 795 adds the delivery field and connects it
+  to the renderer. Every page of a session whose `spec.caller` is exactly
+  `dev-env-system.summon-drill` starts `DRILL` in title and message; names,
+  titles and session reports cannot choose that label. The eventual drill
+  must use that exact CallerPolicy name; another name needs a code change.
+  No policy or identity is created here. The one-attempt rule and hourly cap
+  above apply. Install by pinning the keeper together with or after stories
+  782, 792 and 793, with story 794 available; no new RBAC.
 
 ## Summoning callers
 
