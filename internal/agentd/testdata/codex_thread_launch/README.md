@@ -24,3 +24,12 @@ codex app-server generate-json-schema --out <scratch>
 ```
 
 The scratch directory was removed. No client, daemon or model was started.
+
+DESIGN-067 slice (b), 2026-11-14: `ThreadSetNameParams` and
+`ThreadSetNameResponse` were generated offline with the same 0.160.1 binary and
+`--experimental` command. The existing pinned `ThreadListResponse` contains
+`Thread.name`, the metadata field also returned by `thread/read`. The setter
+returns an object, then the adapter reads the exact ID/cwd/name back. Current
+[official app-server documentation](https://learn.chatgpt.com/docs/app-server#api-overview)
+corroborates the method and metadata read; the schema pin is version evidence.
+No daemon, client, account or model was started for schema generation.

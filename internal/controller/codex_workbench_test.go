@@ -25,6 +25,15 @@ import (
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
+func TestOrdinaryAccountMatchesControllerAccount(t *testing.T) {
+	if ServiceAccountName != templates.AgentServiceAccount {
+		t.Fatalf("controller account %q differs from shared ordinary account %q", ServiceAccountName, templates.AgentServiceAccount)
+	}
+	if !codexworkbench.OrdinaryAccount(ServiceAccountName) {
+		t.Fatalf("controller account %q is not recognized as ordinary", ServiceAccountName)
+	}
+}
+
 func workbenchHostSession() *v1alpha1.AgentSession {
 	s := taskSession()
 	s.Name = "named-codex"
@@ -169,7 +178,7 @@ func TestCodexWorkbenchRunningPodPreserved(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := &Reconciler{CodexWorkbenchHosts: codexworkbench.Policy{Name: s.Name, Namespace: s.Namespace}}
-			pod, err := r.sessionPod(s, tm)
+			pod, err := r.sessionPod(s, tm, r.resolveCodexHost(s, tm))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -250,7 +259,9 @@ func TestCodexWorkbenchBuildersAndRescue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, build := range []func() (*corev1.Pod, error){func() (*corev1.Pod, error) { return buildPod(s, tm, "") }, func() (*corev1.Pod, error) { return (&Reconciler{}).sessionPod(s, tm) }} {
+	for _, build := range []func() (*corev1.Pod, error){func() (*corev1.Pod, error) { return buildPod(s, tm, "") }, func() (*corev1.Pod, error) {
+		return (&Reconciler{}).sessionPod(s, tm, (&Reconciler{}).resolveCodexHost(s, tm))
+	}} {
 		if p, e := build(); p != nil || e == nil {
 			t.Fatalf("builder admitted unlisted host: %v", e)
 		}

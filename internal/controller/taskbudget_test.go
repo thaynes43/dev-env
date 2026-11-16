@@ -8,11 +8,10 @@ import (
 	"testing"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -161,7 +160,7 @@ func TestManagedBudgetPodEnvironmentIsFixedAndHoldHasNoTimer(t *testing.T) {
 	f.s.Annotations = budgetAnnotations(b, "child")
 	_, obs := workspaceFixtureController(t, f, c)
 	obs.templates.Env = append(obs.templates.Env, corev1.EnvVar{Name: protocol.TaskBudgetEnv, Value: "arbitrary profile override"})
-	pod, err := buildManagedPod(f.s, obs.templates, "", true, false, nil, false)
+	pod, err := buildManagedPod(f.s, obs.templates, "", true, false, nil, false, (&Reconciler{}).resolveCodexHost(f.s, obs.templates))
 	if err != nil {
 		t.Fatal(err)
 	}

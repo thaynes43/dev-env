@@ -34,6 +34,7 @@ func baseInput(c Caller, hosts []Host) Input {
 
 func runningPaired(name string) Host {
 	return Host{
+		AccountResolved: true,
 		Name:            name,
 		UID:             "uid-" + name,
 		Agent:           AgentCodex,
@@ -721,7 +722,7 @@ func TestSection3InventoryLiveCheck(t *testing.T) {
 				"haynes-ops-1109-115326": ReasonProtected,
 				"dev-env-1027-010042":    ReasonProfileMismatch,
 				"dev-env-1019-205125":    ReasonProfileMismatch,
-				"haynes-ops-1023-041051": ReasonProfileMismatch,
+				"haynes-ops-1023-041051": ReasonProtected,
 				"dev-env-1020-002245":    ReasonRescueBlocked,
 			},
 		},
@@ -765,7 +766,7 @@ func section3Hosts() []Host {
 	}
 	return []Host{
 		{
-			Name: "dev-env-1110-230548", UID: "inventory-1110",
+			AccountResolved: true, Name: "dev-env-1110-230548", UID: "inventory-1110",
 			Agent: AgentCodex, Mode: ModeRemote,
 			Phase: PhaseRunning, OperatingMode: ModeRunning, PodReady: true,
 			ResolvedProfile: "dev", ReadyRepos: []string{"dev-env"}, SpecRepo: "dev-env",
@@ -774,7 +775,7 @@ func section3Hosts() []Host {
 			Parent:       "dev-env-system/dev-env-human",
 		},
 		{
-			Name: "haynes-ops-1109-115326", UID: "inventory-1109",
+			AccountResolved: true, Name: "haynes-ops-1109-115326", UID: "inventory-1109",
 			Agent: AgentCodex, Mode: ModeRemote,
 			Phase: PhaseRunning, OperatingMode: ModeRunning, PodReady: true,
 			ResolvedProfile: "full", SpecRepo: "haynes-ops",
@@ -783,7 +784,7 @@ func section3Hosts() []Host {
 			Parent:       "dev/dev-env",
 		},
 		{
-			Name: "dev-env-1027-010042", UID: "inventory-1027",
+			AccountResolved: true, Name: "dev-env-1027-010042", UID: "inventory-1027",
 			Agent: AgentCodex, Mode: ModeRemote,
 			Phase: PhaseSuspended, OperatingMode: ModeSuspended,
 			ResolvedProfile: "full", SpecRepo: "dev-env",
@@ -793,7 +794,7 @@ func section3Hosts() []Host {
 			Parent:       "haynes-ops-1022-015547",
 		},
 		{
-			Name: "dev-env-1019-205125", UID: "inventory-1019",
+			AccountResolved: true, Name: "dev-env-1019-205125", UID: "inventory-1019",
 			Agent: AgentCodex, Mode: ModeRemote,
 			Phase: PhaseSuspended, OperatingMode: ModeSuspended,
 			ResolvedProfile: "full", SpecRepo: "dev-env",
@@ -803,17 +804,17 @@ func section3Hosts() []Host {
 			Parent:       "dev/dev-env",
 		},
 		{
-			Name: "haynes-ops-1023-041051", UID: "inventory-1023",
+			AccountResolved: true, Name: "haynes-ops-1023-041051", UID: "inventory-1023",
 			Agent: AgentCodex, Mode: ModeRemote,
 			Phase: PhaseSuspended, OperatingMode: ModeSuspended,
-			ResolvedProfile: "workbench", SpecRepo: "haynes-ops",
+			WorkbenchAccount: true, ResolvedProfile: "workbench", SpecRepo: "haynes-ops",
 			RescueState: RescueVerified, UnpushedRefs: 42, RemoteState: StateLoginRequired,
 			SuspendedBy: "idle-timer", SuspendedAt: act("2026-11-07T21:11:01Z"),
 			LastActivity: act("2026-10-28T12:12:23Z"),
 			Parent:       "dev/dev-env",
 		},
 		{
-			Name: "dev-env-1020-002245", UID: "inventory-1020",
+			AccountResolved: true, Name: "dev-env-1020-002245", UID: "inventory-1020",
 			Agent: AgentCodex, Mode: ModeRemote,
 			Phase: PhaseSuspended, OperatingMode: ModeRunning,
 			Deletion: true, HoldPod: true,
