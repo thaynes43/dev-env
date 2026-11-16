@@ -4,6 +4,7 @@ package usagecollector
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -97,7 +98,7 @@ func collectCursor(ctx context.Context, options CursorOptions, now func() time.T
 		ready, pollErr := poll(fds, 100)
 		// Signals (including Go's preemption signal) can interrupt ppoll.
 		// An interruption is neither a terminal failure nor a quiet interval.
-		if pollErr == unix.EINTR && ctx.Err() == nil {
+		if errors.Is(pollErr, unix.EINTR) && ctx.Err() == nil {
 			continue
 		}
 		if pollErr != nil || ctx.Err() != nil {
