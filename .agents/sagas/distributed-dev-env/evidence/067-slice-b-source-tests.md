@@ -189,7 +189,7 @@ nothing is installed, accepted or operated on a host. PR 1165 stays draft.
 
 The original worker's 58-kill table above is historical, author-reported evidence,
 not rerun by this worker or independently verified by the cross-family reviewer.
-This round's focused/full test and mutation results are recorded below when run.
+This round's focused/full test and mutation results are recorded below.
 
 ### Fix-worker mutation results
 
@@ -218,7 +218,7 @@ checks. The controller source is unchanged since the tested commit. The first
 full API suite passed (`96.790s`); the final API rerun includes the subsequent
 pool spare-capacity/account-remap correction. Final suite/check results follow.
 
-Final full API suite: passed (`97.119s`) on the source/test head above, after
+Pool-fix full API suite: passed (`97.119s`) on the source/test head above, after
 all mutants were restored. Full `internal/codexhostpool` (`0.005s`) and shared
 `internal/codexworkbench` (`0.011s`) suites passed. No package test filter was
 used for these full runs.
@@ -252,3 +252,20 @@ Independent native delta review at
 `353d8213c319dd82f18cfc5c241ad050873bf553`: no findings on the retained-receipt
 correction. The reviewer checked source/tests only; the worker ran the tests.
 The final full API rerun below includes that correction and all read counts.
+
+### Final local validation
+
+Final full `internal/apiserver` after the replay correction: **PASS**, `97.331s`,
+unfiltered, including the new retained-receipt read-count assertion. All required
+full package suites passed: API, pool, agentd and the touched controller; the
+shared policy suite passed too. No controller or agentd source changed after its
+full suite. `make lint`: **PASS**, 0 issues. `make check-layout`: **PASS**.
+`make generate`: **PASS**, started from a clean tree and left it completely clean
+(`git status --short` empty; `git diff --exit-code` 0). `git diff --check`: pass.
+Seven compiled final mutants killed, zero survivors/errors, originals restored.
+
+Source/test review pin is `353d8213c319dd82f18cfc5c241ad050873bf553`; later
+commits record evidence only. Exact pushed/PR head and CI belong in the fix PR
+and OP858 handoff, without changing that head merely to record CI. The fix PR
+stays draft and unmerged; integrated-draft CI and cross-family re-review belong
+to the coordinator. No installation, host action or usable acceptance occurred.
