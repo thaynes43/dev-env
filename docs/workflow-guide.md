@@ -2026,6 +2026,22 @@ retried. Ledger steps and creates also recheck the same-UID Pending record
 and the bound, and the create deadline is capped at the bound. A request
 already received by Kubernetes retains the existing server-fencing limit.
 
+**Correction, 2026-11-16: story 802 fix round 1, coordinator rulings; not a ruling by Tom.**
+The final Pending read alone cannot prevent a later request. The last ten
+minutes before the 24-hour bound permit only child recovery, not a new
+charge, mark, rebind or create. Pending and its existing blocked word remain
+visible until recovery or abandonment; no new word names this window. The
+create deadline stays two minutes from before its mark. No such request
+starts after Abandoned provided clock lag plus delay from the final local
+clock check to the request is strictly below ten minutes (for example, lag
+under eight minutes with delay at most two). Ledger requests have no
+per-attempt deadline here; arbitrary pauses and requests already received by
+Kubernetes remain outside this promise. DESIGN-064 6.6 states the limits.
+An accepted reap of a closed, terminal summoned session ends its grants
+through the broker's usual revocation path, independently of the retained
+filing record or an owner stop hold. Session changes wake those grants;
+revocation still requires broker reconciliation and successful cleanup.
+
 A charged Pending filing keeps one place in its applicable caller queue even
 when its last mark ages out. Abandoned ends that keep immediately. Its
 absent-child queue count is free at the later of abandonment and the last

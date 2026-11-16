@@ -32,6 +32,9 @@ const (
 	summonFilingAttempts = 5
 	// OP802, coordinator rulings on item 768 comment 7702.
 	summonFilingBound = 24 * time.Hour
+	// OP802 fix round 1: leave room for clock lag and check-to-request delay.
+	// This is a conditional timing guard, not a server-side create fence.
+	summonFilingGuard = 10 * time.Minute
 	// Coordinator ruling 5 on item 768 comment 7702. Story 747 must confirm
 	// or replace this inert text before a remediation caller moves.
 	summonFilingTemplate = "An autonomous remediation could not finish and the platform filed this escalation. Tom will join this session. Report what the data block says in one message. Change nothing until Tom speaks."
@@ -141,6 +144,15 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 	if summonFilingExpired(s, r.now()) {
 		return r.abandonSummonFiling(ctx, s)
 	}
+	if summonFilingAttemptClosed(s, r.now()) {
+		// Retain the last typed word, but recover an already-created child
+		// even when policy/ledger reads cannot authorize another attempt.
+		child, err := r.findSummonFiling(ctx, s)
+		if err != nil || child == nil {
+			return err
+		}
+		return r.finishSummonFiling(ctx, s, child)
+	}
 	if filingRetryReason(s.Status.Summon.Escalation.Reason) {
 		// A different in-flight leader may have created the child. Recover
 		// it even during the hold; transient reads must not erase the
@@ -187,6 +199,9 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 	if err != nil || b.done {
 		return err
 	}
+	if summonFilingAttemptClosed(s, r.now()) {
+		return nil
+	}
 	if s.Status.Summon.Escalation.ChargedAt == nil {
 		if b.charge.At.IsZero() {
 			return errors.Join(errors.New("the filing charge has no time"), r.blockSummonFiling(ctx, s, summonoutcome.FilingLedgerUnavailable))
@@ -221,13 +236,13 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 			return r.finishSummonFiling(ctx, s, m.child)
 		}
 		attemptVersion = m.statusVersion
-		// A leader may have settled the filing while this pass was paused
-		// in its mark. Never start a create from that old Pending snapshot.
+		// Re-read after the mark, then check the local guard. A Pending
+		// observation alone cannot fence a request against another leader.
 		var live v1alpha1.AgentSession
 		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &live); err != nil {
 			return err
 		}
-		if live.UID != s.UID || !summonFilingDue(&live) || summonFilingExpired(&live, r.now()) {
+		if live.UID != s.UID || !summonFilingDue(&live) || summonFilingAttemptClosed(&live, r.now()) {
 			return nil
 		}
 		*s = live
@@ -243,6 +258,10 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 			deadline = bound
 		}
 		callCtx, cancel := r.filingClock().WithDeadline(ctx, deadline)
+		if summonFilingAttemptClosed(s, r.now()) {
+			cancel()
+			return nil
+		}
 		if err := callCtx.Err(); err != nil {
 			cancel()
 			return err
@@ -286,6 +305,12 @@ func (r *Reconciler) summonFile(ctx context.Context, s *v1alpha1.AgentSession) e
 		}
 	}
 	return r.recordSummonFilingBlock(ctx, s, summonoutcome.FilingNoFreeName, attemptVersion)
+}
+
+// Recovery remains allowed; only new filing attempts stop in this window.
+// DESIGN-064 6.6 states the combined clock-lag/check-to-request assumption.
+func summonFilingAttemptClosed(s *v1alpha1.AgentSession, now time.Time) bool {
+	return !now.Before(s.Status.Summon.Closed.At.Add(summonFilingBound - summonFilingGuard))
 }
 
 func summonFilingExpired(s *v1alpha1.AgentSession, now time.Time) bool {
@@ -421,7 +446,7 @@ func (r *Reconciler) filingLedgerStep(ctx context.Context, s *v1alpha1.AgentSess
 		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &live); err != nil {
 			return unavailable, err
 		}
-		if live.UID != s.UID || !summonFilingDue(&live) || summonFilingExpired(&live, r.now()) {
+		if live.UID != s.UID || !summonFilingDue(&live) || summonFilingAttemptClosed(&live, r.now()) {
 			return filingBinding{done: true}, nil
 		}
 		policy, reason, err := r.filingPolicy(ctx, &live)
@@ -550,15 +575,15 @@ func (r *Reconciler) filingLedgerStep(ctx context.Context, s *v1alpha1.AgentSess
 		if err != nil {
 			return filingBinding{reason: summonoutcome.FilingEntryFull}, nil
 		}
-		// Policy, ledger and list reads can outlast the bound or another
-		// leader's settlement. Revalidate after them, immediately before
-		// the ledger CAS. A changed snapshot is reconsidered next pass.
+		// Policy, ledger and list reads can cross the guard or another
+		// leader's settlement. Check again after the last read, before
+		// the ledger CAS. The read itself is not an atomic settlement fence.
 		var latest v1alpha1.AgentSession
 		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &latest); err != nil {
 			return unavailable, err
 		}
 		if latest.UID != live.UID || latest.ResourceVersion != live.ResourceVersion ||
-			!summonFilingDue(&latest) || summonFilingExpired(&latest, r.now()) {
+			!summonFilingDue(&latest) || summonFilingAttemptClosed(&latest, r.now()) {
 			return filingBinding{done: true}, nil
 		}
 		if err := r.writeSummonFilingLedger(ctx, &cm, s.Spec.Caller, encoded); err != nil {
@@ -612,7 +637,7 @@ func (r *Reconciler) recordSummonFilingBlock(ctx context.Context, s *v1alpha1.Ag
 		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &live); err != nil {
 			return errors.Join(append(conflicts, err)...)
 		}
-		if live.UID != s.UID || !summonFilingDue(&live) {
+		if live.UID != s.UID || !summonFilingDue(&live) || summonFilingAttemptClosed(&live, r.now()) {
 			return nil
 		}
 		*s = live
@@ -639,7 +664,7 @@ func (r *Reconciler) recordSummonFilingBlock(ctx context.Context, s *v1alpha1.Ag
 }
 
 func (r *Reconciler) blockSummonFilingOnce(ctx context.Context, s *v1alpha1.AgentSession, reason v1alpha1.SummonFilingReason) error {
-	if !summonFilingDue(s) {
+	if !summonFilingDue(s) || summonFilingAttemptClosed(s, r.now()) {
 		return nil
 	}
 	// The typed member is authoritative; the condition mirrors it for a

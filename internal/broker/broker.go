@@ -69,6 +69,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/eventnote"
 	"github.com/thaynes43/dev-env/internal/grantattest"
+	"github.com/thaynes43/dev-env/internal/summonoutcome"
 )
 
 const (
@@ -264,7 +265,7 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	}
 
 	sess, err := b.requestingSession(ctx, &g)
-	if sess != nil && !sess.DeletionTimestamp.IsZero() {
+	if requestingSessionEnded(sess) {
 		sess = nil
 	}
 	if err != nil {
@@ -753,6 +754,17 @@ func retryOn(err error, what string) (ctrl.Result, error) {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	return ctrl.Result{}, fmt.Errorf("%s: %w", what, err)
+}
+
+// requestingSessionEnded is separate from identity lookup so revocation can
+// still remove a delivered token from the original requester's retained pod.
+func requestingSessionEnded(s *v1alpha1.AgentSession) bool {
+	if s == nil || !s.DeletionTimestamp.IsZero() {
+		return true
+	}
+	_, reaped := s.Annotations[v1alpha1.AnnotationReapedBy]
+	return reaped && s.Spec.Caller != "" && s.Spec.Summon != nil &&
+		s.Status.Summon != nil && s.Status.Summon.Closed != nil && summonoutcome.Terminal(s.Status.Outcome)
 }
 
 // requestingSession includes a deleting session for token cleanup. UID-bound
