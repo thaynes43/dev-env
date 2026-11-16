@@ -826,7 +826,8 @@ The rulings above stand.
    identity guard.
 5. **One more owner repair that a granted session can no longer do:**
    `kubectl -n upgrade-agent delete cm alert-responder-spend` (the alert
-   responder's runbook). It joins the repairs named in ruling 1.
+   responder's runbook). It joins the owner operations listed before the
+   option table, which ruling 1 accepted as its cost.
 
 Limits 3 and 4 are not closed by story 859. Story 866 holds them for
 grooming. They are not a gate for switching a create kind on: a caller's
