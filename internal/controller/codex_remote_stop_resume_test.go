@@ -12,6 +12,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/codexworkbench"
 )
 
 // Characterize M4, without implementing its proposed recovery. Only envtest's
@@ -31,6 +32,11 @@ func TestCodexRemoteResumeAfterRefusedStopKeepsTheExistingPod(t *testing.T) {
 		return protocol.RescueReport{}, errors.New("codex writers did not quiesce within the stop budget; rescue blocked")
 	}
 	r := &Reconciler{Client: writes, APIReader: k8s, Templates: templatesKey, Rescuer: fake, SessionNamespace: sessionNS}
+	var err error
+	r.CodexRemoteStopHosts, err = codexworkbench.ParseRemoteStopHosts(s.Name, s.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
 	reconcile := func() ctrl.Result {
 		t.Helper()
 		result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(s)})
@@ -41,6 +47,9 @@ func TestCodexRemoteResumeAfterRefusedStopKeepsTheExistingPod(t *testing.T) {
 	}
 	reconcile()
 	original := markRunning(t, waitPod(t, s.Name), "envtest-node")
+	if env := envOf(original.Spec.Containers[0], protocol.CodexRemoteStopEnv); env == nil || env.Value != string(s.UID) {
+		t.Fatal("fixture is not a named stop host")
+	}
 	home := waitClaim(t, s.Name)
 	reconcile()
 	setMode(t, s.Name, v1alpha1.OperatingModeSuspended)

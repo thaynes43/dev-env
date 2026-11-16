@@ -245,7 +245,7 @@ func (p codexRemoteProcesses) supervisor(s Settings, sess protocol.Session) (cod
 // processes can authorize a bounded re-list. The diagnostic exposes no PID.
 type codexRemoteVanished struct {
 	pid   int
-	start string // Known after inventory; never substitute an older reused PID.
+	start string // When known, require this exact start; inventory ENOENT has only PID.
 }
 
 func (*codexRemoteVanished) Error() string {
@@ -273,6 +273,9 @@ func (p codexRemoteProcesses) inventory(supervisor codexRemoteProcess) ([]codexR
 		}
 		proc, err := p.process(pid)
 		if errors.Is(err, os.ErrNotExist) {
+			// Stat has vanished, so its start time is unavailable here and
+			// re-list matches a retained identity by PID alone. This cannot hide
+			// a writer: the final inventory must still see every live process.
 			return nil, &codexRemoteVanished{pid: pid}
 		}
 		if err != nil {
@@ -319,7 +322,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 	}
 	// Re-list at most three times in this call, and only after signalling that
 	// PID through a retained exact pidfd whose whole-group exit is now proven.
-	// An unobserved exit, reused identity, or uncertain readiness still refuses.
+	// An unsignalled exit, a mismatching known start, or uncertain readiness refuses.
 	relists := 0
 	relist := func(err error) (bool, error) {
 		var vanished *codexRemoteVanished
@@ -506,6 +509,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 		}
 	}
 	graceUntil := p.now().Add(grace)
+graceWait:
 	for p.now().Before(graceUntil) {
 		if err := check(); err != nil {
 			return st, err
@@ -522,7 +526,38 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 			allDead = allDead && dead
 		}
 		if allDead {
-			break
+			// A terminating writer may have forked a flush helper during grace.
+			// Do not freeze it or end its remaining grace just because the old
+			// list has exited: only a fresh inventory can prove no live writer.
+			inventory, err := p.inventory(supervisor)
+			if err != nil {
+				if retry, err := relist(err); retry {
+					continue
+				} else {
+					return st, err
+				}
+			}
+			writers = nil
+			for _, proc := range inventory {
+				fd, err := acquire(proc)
+				if err != nil {
+					if retry, err := relist(err); retry {
+						continue graceWait
+					} else {
+						return st, err
+					}
+				}
+				dead, err := p.exited(fd)
+				if err != nil {
+					return st, err
+				}
+				if !dead {
+					writers = append(writers, proc)
+				}
+			}
+			if len(writers) == 0 {
+				break
+			}
 		}
 		if err := p.pause(ctx); err != nil {
 			return st, err

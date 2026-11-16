@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,28 @@ var (
 	errCodexRemoteStopping = errors.New("codex host is stopped for rescue; only a new pod may start its daemon")
 	errCodexRemotePath     = errors.New("codex host lifecycle path is not private")
 )
+
+// Read the controller's construction decision once per operation. The UID is
+// read from this ctl process's container environment, never from a HOME marker.
+// Absent input takes main's path without adding a session-document parse.
+func codexRemoteStopDecision(s Settings) (protocol.Session, bool, error) {
+	if s.Getenv == nil {
+		return protocol.Session{}, false, nil
+	}
+	uid := s.Getenv(protocol.CodexRemoteStopEnv)
+	if uid == "" {
+		return protocol.Session{}, false, nil
+	}
+	sess, err := LoadSession(s.Getenv)
+	if err != nil {
+		return protocol.Session{}, false, errors.New("cannot identify the session to stop before rescue")
+	}
+	if uid != sess.SessionUID {
+		slog.Info("a stop decision for another session was ignored")
+		return sess, false, nil
+	}
+	return sess, codexRemoteSession(sess), nil
+}
 
 func codexRemoteStateDir(s Settings, create bool) error {
 	if !filepath.IsAbs(s.Home) || s.StateDir != filepath.Join(s.Home, ".agentd") || noSymlinkComponents(s.Home) != nil {
@@ -93,10 +116,21 @@ func codexRemoteStopped(s Settings) error {
 	return nil
 }
 
-// Each supported remote writer takes a shared lock before its first mutation.
+// On a named host, each supported remote writer locks before its first mutation.
 // Rescue takes the exclusive lock, publishes the durable stop, and holds the
 // lock through its snapshot. Busy/unknown is a refusal, never permission to race.
 func codexRemoteLifecycle(s Settings, exclusive bool) (func(), error) {
+	// Rescue has already read its decision and calls the exclusive path only
+	// when enabled. Supported starts read it here before touching the gate.
+	if !exclusive {
+		_, enabled, err := codexRemoteStopDecision(s)
+		if err != nil {
+			return nil, err
+		}
+		if !enabled {
+			return func() {}, nil
+		}
+	}
 	dir := codexRemoteGateDir(s)
 	if !filepath.IsAbs(dir) {
 		return nil, errors.New("codex lifecycle requires an absolute private directory")

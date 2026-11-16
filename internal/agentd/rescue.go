@@ -47,16 +47,16 @@ const rescueLockFile = "rescue.lock"
 // nothing else: the rescue writes nothing to it, so it stays empty for the
 // next look (D-55).
 func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.Time, opt RescueOptions) (protocol.RescueReport, error) {
-	// Remote hosts do not publish the ordinary agent PID. Fence and drain
+	// Named remote hosts do not publish the ordinary agent PID. Fence and drain
 	// their whole dedicated container before even inspecting Git for rescue.
 	// A refusal returns no snapshot, rather than an apparently stopped CLI.
 	var remoteStop *protocol.AgentStop
-	if opt.StopAgent && s.Getenv != nil {
-		sess, err := LoadSession(s.Getenv)
-		if err != nil && (s.Getenv(protocol.SessionEnv) != "" || s.Getenv(protocol.SessionFileEnv) != "") {
-			return protocol.RescueReport{}, errors.New("cannot identify the session to stop before rescue")
+	if opt.StopAgent {
+		sess, enabled, err := codexRemoteStopDecision(s)
+		if err != nil {
+			return protocol.RescueReport{}, err
 		}
-		if err == nil && codexRemoteSession(sess) {
+		if enabled {
 			var unlock func()
 			remoteStop, unlock, err = stopCodexRemoteForRescue(ctx, s, sess, opt.StopGrace)
 			if err != nil {

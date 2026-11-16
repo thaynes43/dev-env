@@ -194,6 +194,10 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	if err != nil {
 		return nil, err
 	}
+	if r.CodexRemoteStopHosts.Names(s) && s.UID == "" {
+		return nil, fmt.Errorf("Codex remote stop requires its Session UID")
+	}
+	r.applyCodexRemoteStop(pod, s)
 	templatesImage := agentImage(pod)
 	if _, scheduled := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]; scheduled && (s.Spec.CoordinatorInstructions || s.Spec.CoordinatorInstructionPublisher) {
 		return nil, sessionInvalidError{errScheduledInstructions}
@@ -459,6 +463,9 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 			env = append(env, profile.Remote.Env...)
 		}
 	}
+	// Only the controller's pod-build decision may supply this value. With no
+	// template entry, removal changes no bytes of an unlisted pod (envFrom too).
+	env = slices.DeleteFunc(env, func(e corev1.EnvVar) bool { return e.Name == protocol.CodexRemoteStopEnv })
 	// For the admitted host, explicit controller metadata overrides envFrom and
 	// template env. Ordinary/hold pods carry no such explicit metadata.
 	coordinatorHost, coordinatorUID := "", ""

@@ -411,9 +411,10 @@ A retained receipt does not require pod readiness; it returns as on main when
 the same live owned pod still proves the ordinary account and configured UID.
 **Difference from main:** replay of a saved one-use receipt returns 409 when
 the host's pod is gone, terminating or replaced; main returned the saved receipt.
-This can only refuse more than main. The route is off:
-`--enable-codex-rc-thread` is false by default and is not set in the running
-operator. This source round does not enable it.
+This can only refuse more than main. The flag `--enable-codex-rc-thread` is
+false by default in source (`cmd/dev-env-operator/main.go`), and it was not among
+the running operator's arguments when the coordinator read them on 2026-11-16.
+This source round does not enable it.
 Before switching on `--enable-codex-rc-thread`, decide whether replay after the
 host's pod was replaced should return the saved receipt.
 
@@ -726,18 +727,49 @@ those are defaults, not a backup of native enrollment/history.
 
 Checkpoint all threads and worker ownership, stop/re-arm the wait hook
 deliberately, then have an authorized custodian suspend the host through the
-supported lifecycle route. Slice (c1)'s source (not installed) fences supported
-launches, freezes the supervisor and stops the other processes in the dedicated
-container before Git rescue. It leaves a durable Session/pod-bound HOME fence.
-The read order is the last signal, the final confirmed “no writer left” inventory,
-then the snapshot; the stop writes nothing to HOME after that inventory. Raw exec
-after the final reading is not fenced. A turn in flight when the stop arrives is
-cut and lost. Claude and Codex tasks with valid session documents use main's
-existing stop path; a set but unparseable session document now refuses rescue
-with stop for every session type, before Git runs.
+supported lifecycle route. Slice (c1)'s source (not installed) adds
+`--codex-remote-stop-hosts`, a strict list of up to 16 unique exact session names,
+empty by default. Only a named Codex remote host gets the new stop: it fences
+supported launches, freezes the supervisor and stops the other processes in its
+dedicated container before Git rescue, retaining a Session/pod-bound HOME fence.
+Every other host and every other session type keeps main's existing rescue/stop,
+without a quiesce, freeze, fence or new lifecycle-lock refusal at agentd or thread
+start. L4's extra unparseable-document refusal therefore goes away for hosts that
+are not named and have no stop decision.
 
-After the supervisor has been frozen and the fence published, a blocked or
-interrupted stop leaves the pod frozen and fenced. Resume currently keeps that
+The controller decides at pod construction for both the agent pod and rescue
+hold pod. It writes the Session UID in the explicit container environment entry
+`AGENTD_CODEX_REMOTE_STOP_SESSION_UID` only for a named Codex remote host. No key
+is added to other pods, including envFrom profiles; existing goldens are unchanged.
+An explicit template/profile/remote-block entry of that name is dropped on every
+pod and replaced only on a named host. The explicit controller value beats envFrom.
+A shared Secret or ConfigMap cannot hold each session's UID, so it cannot switch
+the stop on for a pod the operator did not name. Whoever can write the pod spec or
+the operator's flags can name a host; this is not a fence against a cluster admin.
+
+Agentd has one decision reader: once per rescue it reads that entry from its own
+container environment, never a file a pod process can edit. Absent or empty takes
+main's path without an added session-document parse. Present input requires a
+parseable document; otherwise rescue refuses before Git. A different Session UID
+is ignored with one fixed log line and uses main's path; a matching UID enables
+the stop only for a Codex remote host. That one boolean gates the new rescue path;
+supported starts use the same decision rule before the lifecycle lock.
+Naming a host changes nothing for its running pod; it takes effect when that
+host's next pod is built. An operator upgrade restarts, replaces or relabels no pod.
+With the setting empty an operator pin of this code changes nothing for today's
+hosts.
+
+For a named host the read order is the last signal, the final confirmed “no writer
+left” inventory, then the snapshot; the stop writes nothing to HOME after that
+inventory. Grace ends early only after a fresh inventory sees no live writer.
+A newly discovered child keeps the remaining grace in the same bounded wait.
+Raw exec after the final reading is not fenced. A turn in flight when the new
+stop arrives is cut and lost.
+
+Only on a named host, after the supervisor has been frozen and the fence
+published, a blocked or interrupted stop leaves the pod frozen and fenced.
+This M4 recovery gap is story **877**, which must close before a named host is
+one the owner relies on; it is not fixed by this round. Resume currently keeps that
 same pod and does not bring the host back. The controller characterization
 `TestCodexRemoteResumeAfterRefusedStopKeepsTheExistingPod` exercises a stop error
 then Running in envtest; it checks pod/volume identity, no delete, no retry, and
@@ -791,8 +823,8 @@ permission to restart a running host.
 
 ## 11. Build slices and evidence gates
 
-Slice (a) is built as recorded in section 14; the remaining slices are future
-bounded work. Ready dependent slices run serially. Each gets
+Slices (a) and (b) are merged source, with nothing installed, as recorded in
+section 14; (c1) remains a draft and later slices are future bounded work. Ready dependent slices run serially. Each gets
 its own tracker scope, budget and exact-head review by another model family before
 merge. The coordinator owns that review and the install decision. Slice (d) depends
 on (a), (b) and (c1) only. If provider support blocks (c2), (d) and (e) still proceed
@@ -803,9 +835,9 @@ for lanes Tom drives from the phone. Only watch-dependent lane transfer waits on
 | --- | --- | --- | --- |
 | (a) Shared account guard and reserved host | Flag parser; shared predicate; API create/final admission/resume; controller agent-pod and status paths. Tests: empty setting; zero/one/duplicate/two names; raw manifest; human/client API create; ordinary and workbench origins; T30 explicit refusal; default/alias on workbench; missing templates; wrong parent/depth/namespace/shape; no new HOME/pod on refusal; rescue hold allowed; resume of unlisted legacy refused. Remove each guard in mutation checks and show its test fail. | Publish guarded operator only after tests and review. Install with an empty allowed set after inventory shows no active unlisted workbench Codex host. Verify every replica's pin/config and a separately authorized negative canary's condition/no pod. Running sessions keep their pods. | No host is created. Existing legacy-host suspension or any disruptive test requires its own in-scope authorization. Stop before adding a name or manifest until Q-067-01 is answered. |
 | (b) Thread and pool fences | Explicit coordinator intent/host; privileged gate on both thread routes, UID-fenced operator exec; controller-to-agentd metadata/purpose checks; pool facts/pure selector/lease exclusions; exact-ID native thread title setter. Tests: ordinary same-profile and ancestor spoof; named coordinator caller; raised-to-workbench caller refused despite matching pod account or patched profile label; unreadable creation profile refused; human/client and workbench-by-creation caller with workbench pod allowed; pool with only reserved host; default/account alias; removed annotation/hands-off list; lease race; explicit ordinary intent to reserved host; coordinator intent to pool/missing host; no fallback; title metadata/readback and lost ACK without relaunch. Existing ordinary thread cases stay green. Update workflow/preflight docs. | Publish operator and agent image; pin both without restarting any host. Install reserved-name/pool setting only with the confirmed packet, all replicas consistent. Verify read-only selection never offers the reserved host and negative requests do not exec. | Q-067-01 before nonempty allowance or any host manifest. |
-| (c1) Safe stop and retention | Stop tests prove writers reached through supported launches are quiesced before rescue and no supported daemon restart races it. Raw exec after the final reading is not fenced. Test retained native history and exact-ID thread observation after resume; re-attachment remains (d)/(c2). No wake hook is required for safe stop. | Publish/pin stop handling. On an authorized ordinary disposable host, prove a stop leaves no writer and preserved history can be reopened. Required before (d), independently of (c2). | The proof host/test needs its own approved story; no experiment in this design task. Any stop proof needs its own in-scope authorization. |
+| (c1) Safe stop and retention | Default-empty `--codex-remote-stop-hosts` (up to 16 exact unique names); only a named Codex remote host's next agent/hold pod receives the controller's Session-UID stop decision. All other hosts/types keep main's stop and pod goldens. Tests compare legacy calls/results, no added document parse without a decision, named quiesce, UID equality, template/envFrom precedence, already-dead unsignalled disappearance refusal, grace for unlisted children, retained history and exact-ID observation. Stop tests prove supported writers quiesce before rescue and supported daemon restarts cannot race it; raw exec after the final reading is not fenced. Re-attachment remains (d)/(c2); no wake hook is required. | Publish/pin stop handling with the setting empty: nothing changes for today's hosts. Naming a host changes nothing for its running pod; it takes effect when that host's next pod is built. An operator upgrade restarts, replaces or relabels no pod. On a separately authorized named ordinary disposable proof host, prove no writer remains and retained history can reopen. M4's frozen/fenced state after refused stop is possible only on a named host; story 877 must close before a named host is relied on. Required before (d), independently of (c2). | The proof host/test and nonempty setting need their own approved story and in-scope stop authority. No experiment or installation in this source task. |
 | (c2) Wake | Resolve section 9's harness hook. Tests with fake clock/events: timer, addressed child note, new file, idle tool completion; unrelated note; replay/coalescing/resync; path traversal/symlink; lost ACK; question/hold; budget end; suspend cancellation; resume requires explicit same-thread bind. No CPU-heavy/timing stress suite. | Publish/pin supported hook. On an authorized ordinary disposable host, prove each source wakes the **same idle thread** once. If the provider has no supported hook, (c2) is blocked; record that fact and do not substitute terminal input. This does not block (d) or (e) for phone-driven lanes. | The proof host/test needs its own approved story. Q-067-02 controls unattended work and budget. Required only before a watch-dependent lane moves; all three wake proofs must pass. |
-| (d) One GitOps host and phone proof | Separate haynes-ops app and allow-name/hands-off settings, reviewed together. Render and validate exact account/mounts/depth/parent/name; check no copied API or credential state. Source checks cannot prove pairing. | After (a), (b) and (c1) only, apply flags/protection first, then manifest. A blocked (c2) does not block this phone-driven host. Read back Session and pod UID/account/profile/mount **references**. Authorized custodian runs pair privately; Tom enters it. Launch one fresh explicit coordinator thread on `gpt-6.1-sol`/`medium`; observe response, default-list presence and Tom's phone display/title. The title step has fake-only proof so far: against a real daemon a title failure ends the launch as unconfirmed while the thread and its answer may be fine; prove the daemon's thread preview length (including a long handoff), exact cwd/read timing and title/name readback on this host. A shortened preview ends a coordinator launch as `title_binding_unconfirmed` before its answer is observed. Verify harmless question and reply; test existing Ask/notice/read path if used. | Tom's concrete confirmation of the full packet **before flags/manifest/host/pairing**. His pairing step and phone/question confirmation remain required. |
+| (d) One GitOps host and phone proof | Separate haynes-ops app and allow-name/hands-off settings, reviewed together. Render and validate exact account/mounts/depth/parent/name; check no copied API or credential state. Source checks cannot prove pairing. | After (a), (b), (c1) and story 877 close, apply the confirmed name settings (including `--codex-remote-stop-hosts`) and protection first, then manifest. A blocked (c2) does not block this phone-driven host. Read back Session and pod UID/account/profile/mount **references**. Authorized custodian runs pair privately; Tom enters it. Launch one fresh explicit coordinator thread on `gpt-6.1-sol`/`medium`; observe response, default-list presence and Tom's phone display/title. The title step has fake-only proof so far: against a real daemon a title failure ends the launch as unconfirmed while the thread and its answer may be fine; prove the daemon's thread preview length (including a long handoff), exact cwd/read timing and title/name readback on this host. A shortened preview ends a coordinator launch as `title_binding_unconfirmed` before its answer is observed. Verify harmless question and reply; test existing Ask/notice/read path if used. | Tom's concrete confirmation of the full packet **before flags/manifest/host/pairing**. His pairing step and phone/question confirmation remain required. |
 | (e) Custody and end rehearsal | Exact OP812 checkpoint and ACK; defined lane list; budget/stop record; documented suspend/resume/removal procedure. No new source unless earlier proof finds a fault, which returns to its owner. | For phone-driven lanes, record model evidence and owner question return. Checkpoint, perform an authorized quiet suspend/resume proof and verify retained computer/history. Record each ready lane release and ACK. For watch-dependent lanes, first pass (c2), prove timer, child note and file wake on the installed host and re-arm the same-thread watch after resume. Item 772's acceptance watch, item 829's acceptance, a Meatball handoff channel and any worker's parent note need a watch. They stay with the outgoing coordinator until (c2) passes; phone-driven lanes can move meanwhile. Record source, tested, installed and accepted separately. | OP812 owner/coordinator lane release. Any stop/restart proof is explicitly included in the confirmed install plan. |
 
 For this design PR: `make check-layout`; own diff/citation review; independent
@@ -899,12 +931,18 @@ the separately configured coordinator-host caller.
 8. **Unknown U4 — resume.** Enrollment is persisted by source; same phone entry,
    thread reopening and watch re-arm on the installed CLI require a separately
    authorized quiet suspend/resume proof. A turn in flight at stop is cut and
-   lost. The (c1) fence covers supported launches only; raw exec after the final
-   reading is not fenced. No current verb re-attaches a thread. After a blocked
-   or interrupted stop has frozen/fenced the pod, resume keeps that pod and does
+   lost on the new stop. The (c1) stop and lifecycle refusals apply only to Codex
+   remote hosts named in `--codex-remote-stop-hosts`, empty by default, from their
+   next pod construction; all others retain main's stop. Its fence covers supported
+   launches only; raw exec after the final reading is not fenced. At the inventory
+   site a vanished process is matched by PID alone because its start time can no
+   longer be read. This cannot hide a writer: the final inventory must still see
+   every live process. No current verb re-attaches a thread. Only on a named host,
+   after a blocked or interrupted stop has frozen/fenced the pod, resume keeps that pod and does
    not restore service. Suspend again retries the stop; after successful removal,
    resume builds a fresh pod on the same volume. No automatic path removes a pod
-   whose writer can never be killed; manual recovery requires Tom or his explicitly
+   whose writer can never be killed; this M4 gap is story 877, required before a
+   named host is relied on. Manual recovery requires Tom or his explicitly
    authorized custodian and the unchanged rescue rules (section 10.2).
    The disposable-host proof must also measure pod-delete time after stop and
    verify pidfd readiness for a whole thread group, SIGSTOP of multi-threaded
@@ -998,13 +1036,47 @@ with a 20 GiB HOME default. Re-read those declarations for the actual packet.
 
 ## 14. Review and handoff
 
+2026-11-16 slice (c1) re-check and fix round 2: reviewer model id
+`claude-sonnet-5-5`, head `bb7385ac`, verdict **APPROVE** the fix delta with N1–N3
+(all LOW) and M4 open. Report: private `op858/slice-c1-recheck1-crossfamily.md`,
+including part D. The coordinator's ruling is OP858 comment **8742**: reject the
+M4 proposal as written (it needs its own lifecycle/contract design), move it to
+story **877**, and gate all new stop behavior on an empty-by-default operator
+name setting. M4 need not block merging gated source; it must close before a
+named host is one the owner relies on. PR 1171 stays draft for the coordinator's
+integration and cross-family review.
+
+Round 2 implements R1/R5 with `--codex-remote-stop-hosts` and the controller-owned
+Session-UID environment decision on both agent and rescue hold pods. The parent
+answer to Q1 (2026-11-16) rules: no absent/false key on unlisted pods, explicit
+template entries removed, matching Session UID only, unequal input ignored with
+a fixed log line, present unparseable input refused. Sections 10.2 and 12 state
+the envFrom assumption and cluster-admin boundary. Existing pods stay byte-identical;
+a flag change takes effect only at the next build. R2/N1 adds an already-dead,
+never-signalled process that vanishes after its first inventory; it must refuse.
+R3/N3 makes early grace exit require a fresh inventory and gives a newly found
+child the remaining grace. R4/N2 comments and limit 8 state PID-only matching at
+the vanished-stat inventory site and why it cannot hide a writer. R6 replaces
+undated live-state claims with the source default and coordinator observation
+date. R7 records slice (b) as merged source, nothing installed, settings empty.
+
+This branch started at `bb7385ac` and first merged main `16921a30` (PR 1165).
+The only textual conflict was this section: retain both c1 and b review/build
+records. The automatic code merge keeps c1's lifecycle lock plus b's coordinator
+entry/title checks in `thread_launch_codex.go` and workbench/metadata refusals in
+`codex_rc_ctl.go`; pod construction and guide changes from both sides remain.
+Only source, tests and docs change. Local checks, six required mutants plus the
+UID equality/constant mutants, exact-head native review and CI are recorded in
+the fix PR and handoff. No host was touched; nothing installed or accepted.
+
+
 2026-11-16 build record: **slice (c1) source and fake tests, not installed or
 accepted** (OP858). The reviewed branch is based on main
 `1dd336a95824db2631e70a3e9b1acd5316b90e26` (merge base at reviewed head
 `2ffa3fb242a06971f82a230ac5f098ca0b90e613`), independent of slice (b)'s draft
 PR 1165. The author's last source commit was `41131fa5`; only merges of main
-followed it before that reviewed head. Every Codex remote host's rescue stop
-now fences supported remote mutations, verifies the immutable tini/agentd
+followed it before that reviewed head. At that historical head every Codex remote host's rescue stop
+fenced supported remote mutations, verifies the immutable tini/agentd
 container shape and the exact supervisor, freezes that supervisor, and drains
 the rest of its dedicated PID namespace before Git rescue. It includes tmux
 clients, shells and detached descendants, checks every native thread, uses
@@ -1028,7 +1100,8 @@ turn is cut and lost. The same PR updates the workflow guide. Its PR body record
 guard mutations, exact head, local checks and CI result. Same-family native
 review supplements those tests. The independent-family review below requested
 changes. This build stays a draft pending the coordinator's acceptance of the
-fixes and closure of M4; PR 1171 does not merge before M4 is closed. No merge or ready transition
+fixes and the then-required closure of M4. The round-2 ruling below supersedes
+that merge hold by restricting the new stop to named hosts; story 877 owns M4. No merge or ready transition
 is authorized to this worker. No host, flag, manifest, pairing, haynes-ops or
 live-session change occurred. Slices (c2), (d), (e), installation, custody and
 owner acceptance remain held separately; ADR-030 remains Proposed.
@@ -1043,11 +1116,11 @@ coordinator's rulings and this fix round are:
 | M1 — descendants untested | Accepted. Fake tmux server → pane shell → client → worker; every writer must receive the stop and have whole-group exit proven. Direct-PID-1-only scan mutant must fail. |
 | M2 — empty HOME hold guard untested | Accepted. Empty initial HOME and run supervisor (boot identity appears during inspection) refuse before signals or Git without a verified hold. Dropping the hold guard must fail. |
 | M3 — unparseable session refusal untested | Accepted. Set invalid inline/file session documents refuse stop before Git; dropping the refusal must fail. |
-| M4 — resume keeps frozen/fenced pod | Accepted, behavior fix **not built in this round**. Envtest characterizes current resume retention. Guide, section 10.2 and limit 8 state recovery and limits. Written proposal: private `op858/c1-m4-proposal.md`; coordinator ruling and a later build are required. PR 1171 stays draft and unmerged until M4 is closed. |
+| M4 — resume keeps frozen/fenced pod | Accepted, behavior fix **not built in this round**. Envtest characterizes current resume retention. Guide, section 10.2 and limit 8 state recovery and limits. Written proposal: private `op858/c1-m4-proposal.md`; the later coordinator ruling below rejects that proposal as written and moves M4 to story 877. PR 1171 stays draft for review; only a named host can reach M4 after round 2. |
 | L1 — vanished process | Accepted. At most three bounded relists per stop, only for a process already signalled by this call with whole-group exit proven; other disappearance refuses. |
 | L2 — full grace always waited | Accepted. Whole-group exit readiness can end grace early; a separate final confirmed inventory still precedes snapshot. No busy loop or changed read order. |
 | L3 — supported-launch boundary | Accepted documents. Row (c1), guide and limit 8 exclude raw exec after the final reading. |
-| L4 — other session types | Accepted. State universal refusal for set but unparseable documents; valid Claude/Codex-task documents retain exactly main's legacy stop path, covered by the comparison test. |
+| L4 — other session types | Round 1 stated the then-universal unparseable-document refusal. Round 2 removes the added parse/refusal from the absent-decision legacy path: hosts not named and other session types keep main's stop. Present-but-unparseable stop input still refuses as ruled below. |
 | L5 — nonexistent reopen verb | Accepted documents. Exact-ID status observes only; re-attachment remains (d)/(c2). |
 | L6 — records and unknowns | Accepted. Correct reviewed main base and distinguish author commit 41131fa5 from later main merges; add pod-delete latency and all report real-kernel unknowns to limit 8. |
 
@@ -1057,7 +1130,7 @@ host touched, no lifecycle authority added. Full check results, new-head native
 review and the fix-round mutant table belong in the fix PR and OP858 handoff.
 
 2026-11-16 advisory fix round 3: fixed both MEDIUM findings, the missing `title_binding_unconfirmed` message and stale review-status text.
-The review by another model family is done, recorded on story 858 and here; nothing is installed or accepted, the setting is empty and no named coordinator host exists.
+The review by another model family approved heads `15de34da` and `0782e3fc`; `cf4a607a` added only a message and wording and was read as well (story 858). PR 1165 is merged source as `16921a30` (2026-11-16); nothing is installed or accepted, the setting is empty and no named coordinator host exists.
 
 2026-11-16 cross-family re-check: `claude-sonnet-5-5` reviewed PR 1165 at
 `15de34da` (`15de34dadb6a55f2c9f4b85a074a0ca6fd8656b0`). Verdict:
@@ -1082,8 +1155,9 @@ Fix worker `dev-env-1116-212653` owns only its follow-up branch/PR into
 `agent/dev-env-1114-160847`. Main was merged first as a separate commit without
 conflicts. Section 6.2 and the evidence file list all five empty-setting pool
 differences from re-check part B(4). Source/tests/docs only; nothing is installed
-or accepted. The review by another model family is now done, recorded on story
-858 and in this section; PR 1165 is ready and unmerged. The setting is empty
+or accepted. The review by another model family approved heads `15de34da` and `0782e3fc`; `cf4a607a` added only
+a message and wording and was read as well (story 858). PR 1165 is merged source as
+`16921a30` (2026-11-16), with nothing installed. The setting is empty
 and no named coordinator host exists. The coordinator owns integration.
 
 2026-11-16 cross-family source review: `claude-sonnet-5-5` reviewed draft PR
@@ -1112,9 +1186,9 @@ and no named coordinator host exists. The coordinator owns integration.
   title proof and the possible unconfirmed launch despite a healthy thread/answer.
 
 Fix worker `dev-env-1116-202344` owns only its branch/PR into the slice (b) draft.
-Source/tests/docs only; no installation, host change or acceptance. The
-coordinator subsequently integrated the fix and obtained approval from the
-other model family, recorded on story 858 and in this section. Nothing is
+Source/tests/docs only; no installation, host change or acceptance. The coordinator subsequently integrated the fix: heads `15de34da` and `0782e3fc`
+were approved by the other model family, and `cf4a607a` added only a message and
+wording and was read as well (story 858). Nothing is
 installed or accepted; the setting is empty and no named coordinator host exists.
 
 2026-11-14 build record: **slice (a) built, not installed** (OP858). The source
@@ -1137,8 +1211,9 @@ deleted nor replaced. With no pod, nothing changes: no Codex host pod is built
 while templates are unreadable. This account observation permits no construction.
 
 2026-11-14 recovery build record: **slice (b) source and tests only**. The review
-by another model family is now done, recorded on story 858 and in this section;
-nothing is installed or accepted, the setting is empty and no named coordinator
+by another model family approved heads `15de34da` and `0782e3fc`; `cf4a607a`
+added only a message and wording and was read as well (story 858). Nothing is
+installed or accepted, the setting is empty and no named coordinator
 host exists. Worker `dev-env-1114-160847` owns only this source branch and PR;
 `dev-env-fable-coordinator-1109` retains story and lane custody. No live action was run. The structured
 coordinator CLI always uses the operator API, including for workbench and client
@@ -1160,7 +1235,8 @@ acceptance tests and the original worker’s 58 reported killed/restored guard
 mutants, plus the cross-family corrections and fix-worker reruns. The PR and recovery
 handoff record the exact head and CI separately.
 Slices (c1/c2/d/e), owner rulings and installation remain with their existing
-owners; the slice (b) review by another model family is done as recorded above. Meatball must obtain any missing ruling;
+owners; the slice (b) review approved `15de34da` and `0782e3fc`, and read
+`cf4a607a` (only a message and wording) as recorded above. Meatball must obtain any missing ruling;
 silence is not consent.
 
 2026-11-14 source review: session `dev-env-fable-coordinator-1109`

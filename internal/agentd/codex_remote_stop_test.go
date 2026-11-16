@@ -78,7 +78,7 @@ func newRemoteStopRig(t *testing.T) *remoteStopRig {
 	r.sess.SessionUID = "session-c1"
 	r.s.PodUID = "pod-c1"
 	raw, _ := json.Marshal(r.sess)
-	r.s.Getenv = envOf(map[string]string{protocol.SessionEnv: string(raw)})
+	r.s.Getenv = envOf(map[string]string{protocol.SessionEnv: string(raw), protocol.CodexRemoteStopEnv: r.sess.SessionUID})
 	for _, pid := range []int{10, 30, 40, 41, 42, 43, 46} {
 		// 10 agentd; 30 daemon; 40 tmux server; 41 pane; 42 client;
 		// 43 already detached/orphaned child; 46 worker under the client.
@@ -1322,7 +1322,7 @@ func TestRescueStopRefusesUnparseableSessionBeforeGit(t *testing.T) {
 				value = filepath.Join(t.TempDir(), "session.json")
 				writeFile(t, value, "{invalid")
 			}
-			r.s.Getenv = envOf(map[string]string{source: value})
+			r.s.Getenv = envOf(map[string]string{source: value, protocol.CodexRemoteStopEnv: r.sess.SessionUID})
 			// Without the refusal the legacy stop would reach this fake Git clone.
 			writeFile(t, filepath.Join(r.s.ReposDir(), "haynes-ops", ".git", "config"), "fake")
 			runner := &fakeRunner{handle: func(Cmd) (Result, error) { t.Fatal("Git ran with an unparseable session"); return Result{}, nil }}
@@ -1535,5 +1535,75 @@ func TestCodexRemoteStopRefusesUnsignalledReplacementWithPreviouslySignalledPID(
 	st, err := r.stop(context.Background(), 0)
 	if !replaced || !vanished || err == nil || !st.Running || len(r.fds) != 0 {
 		t.Fatalf("unsignalled replacement used old PID's signal: stop=%+v err=%v replaced=%v vanished=%v fds=%v", st, err, replaced, vanished, r.fds)
+	}
+}
+
+// A retained pidfd proves exit, but only a signal from this call permits a
+// vanished process to authorize a re-list. This group was dead before we came.
+func TestCodexRemoteStopRefusesUnsignalledDeadProcessThatVanishes(t *testing.T) {
+	r := newRemoteStopRig(t)
+	r.procs = map[int]codexRemoteProcess{10: r.procs[10], 30: r.procs[30]}
+	dead := r.procs[30]
+	dead.state = "Z"
+	r.procs[30] = dead
+	read := r.p.read
+	reads, vanished := 0, false
+	r.p.read = func(path string) ([]byte, error) {
+		if path == "/proc/30/stat" {
+			reads++
+			if reads == 3 { // initial inventory, acquire, then the next inventory
+				delete(r.procs, 30)
+				vanished = true
+				return nil, os.ErrNotExist
+			}
+		}
+		return read(path)
+	}
+	st, err := r.stop(context.Background(), time.Second)
+	if !vanished || err == nil || !st.Running || !strings.Contains(err.Error(), "disappeared") || len(r.fds) != 0 {
+		t.Fatalf("unsignalled dead disappearance: stop=%+v err=%v vanished=%v signals=%v", st, err, vanished, r.attempts)
+	}
+	for _, attempt := range r.attempts {
+		if strings.HasPrefix(attempt, "30:") {
+			t.Fatalf("already-dead process was signalled: %v", r.attempts)
+		}
+	}
+}
+
+func TestCodexRemoteStopGraceIncludesUnlistedChild(t *testing.T) {
+	for _, exitsInGrace := range []bool{true, false} {
+		t.Run(fmt.Sprintf("exits_in_grace=%v", exitsInGrace), func(t *testing.T) {
+			r := newRemoteStopRig(t)
+			born := false
+			var bornAt, killedAt time.Time
+			r.afterSignal = func(pid int, sig unix.Signal) {
+				if pid == 30 && sig == unix.SIGCONT {
+					born, bornAt = true, r.clock
+					r.procs[99] = codexRemoteProcess{pid: 99, parent: 1, start: "9900", state: "S"}
+				}
+				if pid == 99 && sig == unix.SIGKILL {
+					killedAt = r.clock
+				}
+			}
+			pause := r.p.pause
+			r.p.pause = func(ctx context.Context) error {
+				err := pause(ctx)
+				if born && exitsInGrace && r.clock.Sub(bornAt) >= 500*time.Millisecond {
+					delete(r.procs, 99) // the flush helper finishes without a signal
+				}
+				return err
+			}
+			st, err := r.stop(context.Background(), 2*time.Second)
+			if err != nil || st.Running || !born || !r.quiesced() {
+				t.Fatalf("grace child stop=%+v err=%v signals=%v", st, err, r.attempts)
+			}
+			if exitsInGrace {
+				if !killedAt.IsZero() || st.Killed || r.clock.Sub(bornAt) < 500*time.Millisecond || r.clock.Sub(bornAt) >= 2*time.Second {
+					t.Fatalf("flush helper lost grace: stop=%+v elapsed=%v killedAt=%v", st, r.clock.Sub(bornAt), killedAt)
+				}
+			} else if killedAt.IsZero() || killedAt.Sub(bornAt) < 2*time.Second || !st.Killed {
+				t.Fatalf("live child did not get the remaining grace: stop=%+v killedAfter=%v", st, killedAt.Sub(bornAt))
+			}
+		})
 	}
 }
