@@ -792,6 +792,56 @@ item 751, session `dev-env-1111-143337`; not rulings by Tom).**
 The gate stands as written: no summoning create kind is switched on before
 story 859 (rules 1 and 2) is installed.
 
+**Correction, 2026-11-16 (story 859 as installed; the coordinator's rulings
+on its two reviews; not rulings by Tom).** Two sessions of another model
+family read the guard (haynes-ops PR 4897 comment 6873244921 and PR 4898
+comment 6873767904). Their findings added one rule and four stated limits.
+The rulings above stand.
+
+1. **One more rule, the Service proxy** (the identity guard's rule 8; it is
+   not the deferred rule 3 above). The identity guard refuses CONNECT
+   `services/proxy` in `upgrade-agent` for every `dev-agents` identity
+   except the workbench. Rule 2 was written so that the guard does not rest
+   on "no caller listens today"; the same holds for a Service that a
+   workload grant could create beside a caller's pod. The exec guard
+   matches only Pod subresources and does not see this request.
+2. **That rule is by the Service's namespace.** A Service in another
+   namespace could reach a caller's pod only through a hand-written
+   Endpoints or EndpointSlice object. No ordinary grant role can write
+   either; the break-glass role can. This is the reviewer's reading of the
+   API server's Service proxy, not a tested fact.
+3. **Outside `upgrade-agent` the Service proxy stays open.** A session can
+   still reach a pod behind a Service through `services/proxy`, also when
+   the pod runs as an account the exec guard lists. The runbook's
+   Prometheus route is of this kind and is unchanged.
+4. **Two namespace limits of the exec guard, older than this story.** For
+   the plain session account, a pod proxy in `kube-system` or `kyverno` is
+   covered by neither guard: the identity guard's controller-namespace rule
+   covers exec and attach only, and Kyverno does not receive requests for
+   those namespaces. Kyverno's resource filters also skip `kube-public` and
+   `kube-node-lease`, which are not in the identity guard's controller
+   namespaces: there neither guard covers any Pod connection. Both held no
+   pod on 2026-11-14. Grant identities are refused in `flux-system`,
+   `external-secrets`, `kube-system` and `kyverno` by another rule of the
+   identity guard.
+5. **One more owner repair that a granted session can no longer do:**
+   `kubectl -n upgrade-agent delete cm alert-responder-spend` (the alert
+   responder's runbook). It joins the owner operations listed before the
+   option table, which ruling 1 accepted as its cost.
+
+Limits 3 and 4 are not closed by story 859. Story 866 holds them for
+grooming. They are not a gate for switching a create kind on: a caller's
+code and a caller's pod are covered by rules 1 and 2 and by the Service
+proxy rule.
+
+Installed on 2026-11-14 (haynes-ops PR 4897, merged as `93d4ab27`): the
+identity guard's two new validations and the exec guard's webhook for the
+four Pod subresources were read back from the cluster; no pod restarted.
+The Kyverno policy's body, which holds the Pod-name rule for proxy
+requests, is not readable by a session or by the workbench account and was
+not read back; its evidence is the offline fixtures and the applied
+revision.
+
 ### 5.9 One accounting model (F2, C2, F5, F3)
 
 Every limit, lane, page and filing is computed from records on the sessions
@@ -4265,6 +4315,22 @@ above; where they differ, this governs.
 - **Before 806:** 805 accepted, 807, 808 and 811 installed, the agent image
   at 2.108.0 or later, and the keeper's pager and daily digest installed
   with a drill Tom confirmed.
+
+**Empty-list encoding correction, 2026-11-16 (OP805).** The first two
+scheduled curation Jobs stopped at the list read, before the expected 403:
+legacy response copiers converted an allocated empty session slice to nil,
+which encoded as `{"sessions":null}`. The API fix keeps `sessions` an array
+on every `SessionList` response path, including each compatibility copier:
+no visible sessions is `{"sessions":[]}`, for both nil and allocated empty
+input slices. Non-empty entries, their order and the existing negotiated
+field omissions stay unchanged; no new wire keys or admission changes.
+The portal's separate `PortalSessionPage` already initializes its array
+and passes through these copiers unchanged. The caller workaround in
+[haynes-ops PR 4909](https://github.com/thaynes43/haynes-ops/pull/4909) treats
+only an explicit null member as empty until the operator fix is installed;
+a missing member, another type, a non-object body or a malformed entry
+still cannot cause a create. This follow-up is source and regression-test
+work, not proof that either fix is installed or that 805 is accepted.
 
 ### 6.12 OP747: move remediation
 
