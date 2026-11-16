@@ -218,8 +218,9 @@ checks. The controller source is unchanged since the tested commit. The first
 full API suite passed (`96.790s`); the final API rerun includes the subsequent
 pool spare-capacity/account-remap correction. Final suite/check results follow.
 
-Pool-fix full API suite: passed (`97.119s`) on the source/test head above, after
-all mutants were restored. Full `internal/codexhostpool` (`0.005s`) and shared
+Pool-fix full API suite: passed (`97.119s`) at
+`47fa7bc31d658f10e5fac3e4810a394b349c5bce`, before the retained-receipt
+correction, after all six initial mutants were restored. Full `internal/codexhostpool` (`0.005s`) and shared
 `internal/codexworkbench` (`0.011s`) suites passed. No package test filter was
 used for these full runs.
 
