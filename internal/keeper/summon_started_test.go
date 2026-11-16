@@ -133,6 +133,120 @@ func TestSummonStartedText(t *testing.T) {
 	}
 }
 
+func TestSummonStartedBriefText(t *testing.T) {
+	const link = "https://claude.ai/code/session_verified"
+	const poison = "BRIEF-INJECTED\nhttps://evil.example/approve DRILL"
+	for _, branch := range []struct {
+		name   string
+		result v1alpha1.SummonRegistrationResult
+		rc     *v1alpha1.RemoteControlStatus
+		head   string
+		url    string
+	}{
+		{"registered", v1alpha1.RegistrationRegistered, &v1alpha1.RemoteControlStatus{State: "registered", URL: link}, "escalation esc-1 is running and registered with the Claude app.", link},
+		{"gone", v1alpha1.RegistrationRegistered, &v1alpha1.RemoteControlStatus{State: "offline"}, "escalation esc-1 registered, but its link is gone (Remote Control offline).", ""},
+		{"unavailable", v1alpha1.RegistrationUnavailable, nil, "escalation esc-1 is running, but Remote Control is not available (offline). Join it from the console, or attach: agent-run attach esc-1.", ""},
+	} {
+		for _, brief := range []struct {
+			name  string
+			agent *v1alpha1.AgentStatus
+			word  string
+		}{
+			{"launched", &v1alpha1.AgentStatus{Brief: "launched"}, "launched"},
+			{"pending", &v1alpha1.AgentStatus{Brief: "pending"}, "pending"},
+			{"unconfirmed", &v1alpha1.AgentStatus{Brief: "unconfirmed"}, "unconfirmed"},
+			{"not-launched", &v1alpha1.AgentStatus{Brief: "not-launched"}, "not-launched"},
+			{"absent", nil, "unknown"},
+			{"empty", &v1alpha1.AgentStatus{}, "unknown"},
+			{"hostile", &v1alpha1.AgentStatus{Brief: poison}, "unknown"},
+			{"other-word", &v1alpha1.AgentStatus{Brief: "delivered"}, "unknown"},
+			{"wrong-case", &v1alpha1.AgentStatus{Brief: "Launched"}, "unknown"},
+			{"whitespace", &v1alpha1.AgentStatus{Brief: "launched "}, "unknown"},
+		} {
+			t.Run(branch.name+"/"+brief.name, func(t *testing.T) {
+				f := newSummonFix(t)
+				s := startedSession(f, "esc-1", branch.result)
+				s.Status.RemoteControl = branch.rc
+				_, recordBefore := f.p.render(summonJob{session: s, event: "escalation-started"})
+				s.Status.Agent = brief.agent
+				n, recordAfter := f.p.render(summonJob{session: s, event: "escalation-started"})
+				if !reflect.DeepEqual(recordBefore, recordAfter) {
+					t.Fatal("brief claim changed the content-free page record")
+				}
+				f.add(s)
+				f.tick()
+				if f.push.count() != 1 {
+					t.Fatalf("pages=%d, want one", f.push.count())
+				}
+				form := f.push.form(0)
+				want := "[dev-env] escalation-started: " + branch.head + " Brief: " + brief.word + "."
+				if got := form.Get("message"); got != want {
+					t.Fatalf("message = %q, want %q", got, want)
+				}
+				url := branch.url
+				if url == "" {
+					url = summonConsole + "?session=" + string(s.UID)
+				}
+				if form.Get("title") != "[dev-env] escalation-started" || form.Get("url") != url || form.Get("url_title") != "Open the session" || form.Get("priority") != "0" {
+					t.Fatal("brief claim changed the title, link, link label or priority")
+				}
+				// Inspect the rendered notice and record as well as the sent
+				// fields and persisted ledger; JSON escaping cannot hide a leak.
+				raw := fmt.Sprintf("%+v %+v", n, recordAfter) + form.Get("title") + form.Get("message") + form.Get("url") + form.Get("url_title") + f.rawLedger() + f.logs.String()
+				for _, forbidden := range []string{"BRIEF-INJECTED", "evil.example", "DRILL"} {
+					if strings.Contains(raw, forbidden) {
+						t.Fatalf("hostile brief reached page, record or log: %s", forbidden)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestSummonStartedBriefDrill(t *testing.T) {
+	f := newSummonFix(t)
+	s := startedSession(f, "esc-1", v1alpha1.RegistrationUnavailable)
+	s.Spec.Caller = summonDrillCaller
+	s.Status.Agent = &v1alpha1.AgentStatus{Brief: "launched"}
+	f.add(s)
+	f.tick()
+	if f.push.count() != 1 {
+		t.Fatalf("pages=%d, want one", f.push.count())
+	}
+	form := f.push.form(0)
+	want := "DRILL [dev-env] escalation-started: escalation esc-1 is running, but Remote Control is not available (offline). Join it from the console, or attach: agent-run attach esc-1. Brief: launched."
+	if form.Get("title") != "DRILL [dev-env] escalation-started" || form.Get("message") != want {
+		t.Fatalf("drill title=%q message=%q", form.Get("title"), form.Get("message"))
+	}
+	if form.Get("url") != summonConsole+"?session="+string(s.UID) || form.Get("url_title") != "Open the session" || form.Get("priority") != "0" {
+		t.Fatal("drill link, link label or priority changed")
+	}
+	if got := f.ledger().Pages.Records[0].Title; got != "DRILL [dev-env] escalation-started" {
+		t.Fatalf("record title=%q", got)
+	}
+}
+
+func TestSummonStartedBriefChangeDoesNotResend(t *testing.T) {
+	f := newSummonFix(t)
+	s := startedSession(f, "esc-1", v1alpha1.RegistrationUnavailable)
+	s.Status.Agent = &v1alpha1.AgentStatus{Brief: "launched"}
+	f.add(s)
+	f.tick()
+	if f.push.count() != 1 || !strings.HasSuffix(f.push.form(0).Get("message"), " Brief: launched.") {
+		t.Fatal("first page did not carry the claim recorded when built")
+	}
+	recordBefore := f.ledger().Pages.Records[0]
+	s.Status.Agent.Brief = "unconfirmed"
+	f.update(s)
+	f.tick()
+	f.restart()
+	f.clock.Step(time.Hour + time.Minute)
+	f.tick()
+	if f.push.count() != 1 || !reflect.DeepEqual(recordBefore, f.ledger().Pages.Records[0]) {
+		t.Fatal("changed brief claim resent the page or changed its record")
+	}
+}
+
 func TestSummonStartedAttemptSurvivesRestart(t *testing.T) {
 	for _, status := range []int{http.StatusOK, http.StatusBadRequest, http.StatusInternalServerError} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
@@ -241,6 +355,9 @@ func TestSummonStartedHostileSessionText(t *testing.T) {
 	// Populate every exported text field, including nested status records,
 	// so adding another session-reported text field keeps this proof useful.
 	summonPoisonStrings(reflect.ValueOf(&s.Status.Agent).Elem(), poison)
+	if s.Status.Agent == nil || s.Status.Agent.Brief != poison {
+		t.Fatal("hostile-text fixture did not populate the brief field")
+	}
 	summonPoisonStrings(reflect.ValueOf(&s.Status.RemoteControl).Elem(), poison)
 	s.Status.Outcome = &v1alpha1.OutcomeStatus{Note: poison}
 	before, recordBefore := f.p.render(summonJob{session: original, event: "escalation-started"})

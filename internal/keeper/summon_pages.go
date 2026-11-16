@@ -1126,9 +1126,22 @@ func (p *summonPager) renderStarted(j summonJob, n Notice, rec pages.Page) (Noti
 		head = fmt.Sprintf("escalation %s is running, but Remote Control is not available (%s). Join it from the console, or attach: agent-run attach %s.", name, reason, name)
 	}
 	n.Title = "[dev-env] " + j.event
-	// Story 795 supplies the delivery field; it does not exist in this API.
-	// Do not infer delivery from the agent's state or invent a wire field.
-	n.Message = fmt.Sprintf("[dev-env] %s: %s Brief: unknown.", j.event, head)
+	// The pod's claim as recorded when this page is built, not evidence that
+	// the provider read the brief. Only fixed words may enter the page.
+	brief := "unknown"
+	if agent := s.Status.Agent; agent != nil {
+		switch agent.Brief {
+		case "pending":
+			brief = "pending"
+		case "launched":
+			brief = "launched"
+		case "unconfirmed":
+			brief = "unconfirmed"
+		case "not-launched":
+			brief = "not-launched"
+		}
+	}
+	n.Message = fmt.Sprintf("[dev-env] %s: %s Brief: %s.", j.event, head, brief)
 	rec.Title, rec.Correlation, rec.Body = n.Title, name, "session "+name
 	summonMarkDrill(s, &n, &rec)
 	return n, rec

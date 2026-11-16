@@ -3476,6 +3476,20 @@ answer `op796-build-1-q-1` govern the following. Earlier corrections stay.
   and fake-endpoint tests do not prove install or phone delivery; story
   745's drill remains the acceptance check.
 
+**Correction, 2026-11-16: story 796 with story 795, coordinator ruling;
+not a ruling by Tom.** Earlier corrections stay; this connects story 795's
+delivery field to all three `escalation-started` texts above, including a
+DRILL page. Each ends `Brief: <state>.` The keeper chooses a fixed word from
+`status.agent.brief`: exactly `pending`, `launched`, `unconfirmed` or
+`not-launched`; no agent status, an empty field or any other value gives
+`unknown`. No field bytes are copied into the page or its content-free
+record. This is the pod's own delivery claim as recorded when the page is
+built, not proof that the provider read or answered the brief. A later claim
+change does not send another page or change the stored page record. The
+links, titles, DRILL label, one-attempt rule and hourly cap stay as above.
+Source and fake-endpoint tests remain separate from installed and accepted
+evidence.
+
 ### 6.9 OP743: quota priority and the fallback model
 
 **The gate.** At admission, for summoned sessions only, by
