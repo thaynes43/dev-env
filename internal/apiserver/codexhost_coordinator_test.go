@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -150,15 +151,18 @@ func TestCoordinatorPoolRequestedAccount(t *testing.T) {
 }
 
 func TestOrdinaryPoolAccountProofMatchesMain(t *testing.T) {
-	for _, state := range []string{"ready", "busy", "not-ready"} {
+	for _, state := range []string{"ready", "busy", "not-ready", "not-ready-room"} {
 		for _, templateState := range []string{"readable", "unreadable", "removed"} {
 			t.Run(state+"/"+templateState, func(t *testing.T) {
 				f := newCodexFixture(t)
-				opt := codexHostOpt{profile: "dev", notReady: state == "not-ready"}
+				opt := codexHostOpt{profile: "dev", notReady: state == "not-ready" || state == "not-ready-room"}
 				if state == "busy" {
-					opt.lease = formatCodexHostLease("use", f.now.Add(10*60*1e9), "another", "anotherlaunchidentifier")
+					opt.lease = formatCodexHostLease("use", f.now.Add(10*time.Minute), "another", "anotherlaunchidentifier")
 				}
 				f.addCodexHost("ordinary", opt)
+				if state == "not-ready-room" {
+					f.srv.CodexHosts.MaxRunningPerCell = 2
+				}
 				req := apiv1.CodexHostSelectRequest{Repo: "dev-env", Profile: "dev", LaunchID: "launchidentifier0123"}
 				path := apiv1.CodexHostsSelectPath + "?check=true"
 				baseline := f.do(http.MethodPost, path, tokClient, req)
@@ -177,6 +181,10 @@ func TestOrdinaryPoolAccountProofMatchesMain(t *testing.T) {
 					}
 				case "busy":
 					if want.Reason != "host_busy" {
+						t.Fatal(want)
+					}
+				case "not-ready-room":
+					if want.Action != "create" || len(want.Skipped) != 1 || want.Skipped[0].Reason != "not_running" {
 						t.Fatal(want)
 					}
 				case "not-ready":

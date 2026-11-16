@@ -163,7 +163,8 @@ nothing is installed, accepted or operated on a host. PR 1165 stays draft.
   a workbench account visible only through the live reader all refuse without
   exec/reservation. Receipt replay uses one live pod for both account and UID.
 - F5: `TestOrdinaryPoolAccountProofMatchesMain` compares complete selection
-  results for ready/busy/not-ready ordinary hosts with readable and removed
+  results for ready/busy/not-ready ordinary hosts (including a cell with spare
+  room, where main answers create) with readable and removed
   profiles; unreadable templates keep main's 503 `templates are not usable`.
   Removed-profile leases still use the proved ordinary account. No-pod account
   uncertainty remains ineligible, with `account_unresolved`, per design 6.2.

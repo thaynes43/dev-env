@@ -109,8 +109,10 @@ const (
 // eligibility does not depend on it.
 type Host struct {
 	// Reserved is deployment-owned name protection, independent of annotations.
-	Reserved         bool
-	AccountResolved  bool
+	Reserved        bool
+	AccountResolved bool
+	// OrdinaryPod is an owned live agent pod proving an ordinary account.
+	OrdinaryPod      bool
 	WorkbenchAccount bool
 	Name             string
 	UID              string
@@ -188,8 +190,8 @@ type Request struct {
 // of its own. A workbench session may create only when the two are equal.
 type Input struct {
 	// ProfileExcluded refuses new workbench capacity. ProfileUnavailable refuses
-	// construction when the requested account cannot resolve. Existing ordinary
-	// pod facts still decide use/report independently of that resolution.
+	// construction when the requested account cannot resolve. The API can prove
+	// the requested account from an existing ordinary pod instead of templates.
 	ProfileExcluded    bool
 	ProfileUnavailable bool
 	Hosts              []Host
@@ -234,6 +236,12 @@ type judged struct {
 // pairing test is its last remote-control state. The durable record from
 // ruling E is not an input yet.
 func Select(in Input) Result {
+	if in.ProfileExcluded {
+		return Result{Reason: ReasonProtected}
+	}
+	if in.ProfileUnavailable {
+		return Result{Reason: ReasonAccountUnresolved}
+	}
 	if in.Request.NamedHost != "" {
 		for _, h := range in.Hosts {
 			if h.Name != in.Request.NamedHost {
@@ -291,17 +299,6 @@ func Select(in Input) Result {
 	}
 	if len(busy) > 0 {
 		return finish(rows, -1, "", false, ReasonHostBusy)
-	}
-	if in.ProfileExcluded || in.ProfileUnavailable {
-		if len(fillers) > 0 && cellN >= perCell {
-			best := pickRunning(fillers)
-			return finish(rows, best.index, ActionReport, false, best.reason)
-		}
-		reason := ReasonAccountUnresolved
-		if in.ProfileExcluded {
-			reason = ReasonProtected
-		}
-		return finish(rows, -1, "", false, reason)
 	}
 	if len(eligible) > 0 && room {
 		best := pickSuspended(eligible)

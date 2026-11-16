@@ -122,6 +122,12 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 		if err != nil {
 			return 0, nil, fromKubeError(err, "sessions")
 		}
+		ordinaryProfile := false
+		for _, h := range hosts {
+			ordinaryProfile = ordinaryProfile || h.OrdinaryPod && !h.Reserved && h.Agent == codexhostpool.AgentCodex && h.Mode == codexhostpool.ModeRemote && h.ResolvedProfile == asked
+		}
+		in.ProfileExcluded = requestedAccount.Workbench() && !ordinaryProfile
+		in.ProfileUnavailable = !requestedAccount.Available() && !ordinaryProfile
 		in.Hosts, in.Login, in.Now = hosts, login, s.now()
 		res := codexhostpool.Select(in)
 		last = res.Host
@@ -403,11 +409,13 @@ func (s *Server) codexHostPod(ctx context.Context, sess *v1alpha1.AgentSession) 
 func (s *Server) codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmpl *templates.Templates, handsOff bool, now time.Time) codexhostpool.Host {
 	resolved := codexworkbench.Resolve(tmpl, sess.Spec.Profile)
 	accountResolved, workbench := resolved.Available(), resolved.Workbench()
+	ordinaryPod := false
 	// An owned live pod proves its account even when the profile disappeared.
 	// Unknown pod accounts fail closed; a hold pod cannot prove an agent account.
 	if pod != nil && metav1.IsControlledBy(pod, sess) && pod.DeletionTimestamp.IsZero() && pod.Labels[v1alpha1.LabelHold] != "true" {
 		accountResolved = codexworkbench.OrdinaryAccount(pod.Spec.ServiceAccountName) || pod.Spec.ServiceAccountName == templates.WorkbenchServiceAccount
 		workbench = pod.Spec.ServiceAccountName == templates.WorkbenchServiceAccount
+		ordinaryPod = codexworkbench.OrdinaryAccount(pod.Spec.ServiceAccountName)
 	}
 	def := ""
 	if tmpl != nil {
@@ -416,6 +424,7 @@ func (s *Server) codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmp
 	h := codexhostpool.Host{
 		Reserved:         s.CodexWorkbenchHosts.Name != "" && sess.Name == s.CodexWorkbenchHosts.Name,
 		AccountResolved:  accountResolved,
+		OrdinaryPod:      ordinaryPod,
 		WorkbenchAccount: workbench,
 		Name:             sess.Name,
 		UID:              string(sess.UID),
