@@ -1457,9 +1457,11 @@ func TestCodexRemoteStopBoundsVanishedRelists(t *testing.T) {
 func TestCodexRemoteStopRefusesVanishedSignalledGroupWithoutExitProof(t *testing.T) {
 	r := newRemoteStopRig(t)
 	list := r.p.list
+	staleListed := false
 	r.p.list = func(path string) ([]os.DirEntry, error) {
 		out, err := list(path)
-		if path == "/proc" && r.term[30] {
+		if path == "/proc" && r.term[30] && !staleListed {
+			staleListed = true
 			out = append(out, remoteProcEntry("30"))
 		}
 		return out, err
@@ -1474,5 +1476,64 @@ func TestCodexRemoteStopRefusesVanishedSignalledGroupWithoutExitProof(t *testing
 	st, err := r.stop(context.Background(), 0)
 	if err == nil || !st.Running {
 		t.Fatalf("vanish accepted without whole-group exit: stop=%+v err=%v", st, err)
+	}
+}
+
+// Main's legacy preflight stop has observable fencing and an uncertainty result
+// without launching a process or reading/signalling any real PID.
+func TestRescueStopValidDocumentsUseLegacyPreflightPath(t *testing.T) {
+	for _, sess := range []protocol.Session{
+		{Name: "ordinary-claude", Repo: "demo", Agent: protocol.AgentClaude, Mode: protocol.ModeRemote, Model: "claude-opus-5-5"},
+		{Name: "ordinary-task", Repo: "demo", Agent: protocol.AgentCodex, Mode: protocol.ModeTask, Model: "gpt-6.1-sol", Prompt: "synthetic"},
+	} {
+		t.Run(sess.Name, func(t *testing.T) {
+			r := newRemoteStopRig(t)
+			old := codexRemoteProcessesFor
+			codexRemoteProcessesFor = func() codexRemoteProcesses { t.Fatal("legacy session used remote drain"); return r.p }
+			t.Cleanup(func() { codexRemoteProcessesFor = old })
+			raw, _ := json.Marshal(sess)
+			r.s.Getenv = envOf(map[string]string{protocol.SessionEnv: string(raw)})
+			writeJSON(t, r.s.statePath(launchFile), Launch{BootID: "boot-c1", ConversationID: "synthetic", Preflight: &launchPreflight{}})
+			writeFile(t, r.s.statePath(startPreflightFile), "invalid")
+			want := stopAgent(r.s, 0)
+			if !want.Running {
+				t.Fatal("fixture did not exercise legacy uncertainty")
+			}
+			if err := os.Remove(r.s.statePath(startStoppedFile)); err != nil {
+				t.Fatal(err)
+			}
+			rep, err := Rescue(context.Background(), &fakeRunner{}, r.s, sess.Name, rescueNow, RescueOptions{StopAgent: true})
+			if err != nil || rep.Agent == nil || *rep.Agent != *want {
+				t.Fatalf("legacy stop changed: got=%+v want=%+v err=%v", rep.Agent, want, err)
+			}
+			var marker startRefused
+			if err := readJSONFile(r.s.statePath(startStoppedFile), &marker); err != nil || marker.BootID != "boot-c1" || marker.ConversationID != "synthetic" {
+				t.Fatalf("legacy stop fence missing: %+v %v", marker, err)
+			}
+			if _, err := os.Stat(r.s.statePath(codexRemoteStopFile)); !os.IsNotExist(err) {
+				t.Fatal("legacy stop acquired remote fence")
+			}
+		})
+	}
+}
+
+func TestCodexRemoteStopRefusesUnsignalledReplacementWithPreviouslySignalledPID(t *testing.T) {
+	r := newRemoteStopRig(t)
+	replaced, vanished := false, false
+	r.afterSignal = func(pid int, sig unix.Signal) {
+		if pid == 30 && sig == unix.SIGCONT {
+			r.procs[30] = codexRemoteProcess{pid: 30, parent: 1, start: "9000", state: "S"}
+			replaced = true
+		}
+	}
+	r.afterOpen = func(pid int) {
+		if pid == 30 && r.procs[30].start == "9000" {
+			delete(r.procs, 30)
+			vanished = true
+		}
+	}
+	st, err := r.stop(context.Background(), 0)
+	if !replaced || !vanished || err == nil || !st.Running || len(r.fds) != 0 {
+		t.Fatalf("unsignalled replacement used old PID's signal: stop=%+v err=%v replaced=%v vanished=%v fds=%v", st, err, replaced, vanished, r.fds)
 	}
 }

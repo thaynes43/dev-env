@@ -243,7 +243,10 @@ func (p codexRemoteProcesses) supervisor(s Settings, sess protocol.Session) (cod
 
 // Carry the vanished PID privately so only this stop's already-signalled
 // processes can authorize a bounded re-list. The diagnostic exposes no PID.
-type codexRemoteVanished struct{ pid int }
+type codexRemoteVanished struct {
+	pid   int
+	start string // Known after inventory; never substitute an older reused PID.
+}
 
 func (*codexRemoteVanished) Error() string {
 	return "codex process disappeared during stop; rescue blocked"
@@ -270,7 +273,7 @@ func (p codexRemoteProcesses) inventory(supervisor codexRemoteProcess) ([]codexR
 		}
 		proc, err := p.process(pid)
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, &codexRemoteVanished{pid}
+			return nil, &codexRemoteVanished{pid: pid}
 		}
 		if err != nil {
 			return nil, errors.New("codex stop cannot inspect every process")
@@ -324,7 +327,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 			return false, err
 		}
 		for identity, fd := range fds {
-			if identity.pid != vanished.pid || !signalled[fd] {
+			if identity.pid != vanished.pid || vanished.start != "" && identity.start != vanished.start || !signalled[fd] {
 				continue
 			}
 			dead, exitErr := p.exited(fd)
@@ -357,7 +360,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 			fd, err = p.open(proc.pid)
 		}
 		if errors.Is(err, unix.ESRCH) {
-			return -1, &codexRemoteVanished{proc.pid}
+			return -1, &codexRemoteVanished{pid: proc.pid, start: proc.start}
 		}
 		if err != nil {
 			return -1, errors.New("codex stop requires exact pidfd process control")
@@ -368,7 +371,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 				_ = p.close(fd)
 			}
 			if errors.Is(err, os.ErrNotExist) {
-				return -1, &codexRemoteVanished{proc.pid}
+				return -1, &codexRemoteVanished{pid: proc.pid, start: proc.start}
 			}
 			return -1, errors.New("codex stop process identity changed before signalling")
 		}
@@ -459,7 +462,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 				ok, err := p.frozen(proc)
 				if err != nil {
 					if errors.Is(err, os.ErrNotExist) {
-						err = &codexRemoteVanished{proc.pid}
+						err = &codexRemoteVanished{pid: proc.pid, start: proc.start}
 					}
 					if retry, err := relist(err); retry {
 						continue scan
