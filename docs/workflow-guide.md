@@ -429,20 +429,37 @@ prevents a container restart in the same pod from starting another daemon.
 If a launch still holds the lifecycle gate, process identity or namespace
 ownership is uncertain, process inspection or signaling fails, or a writer cannot
 stop within the budget, rescue refuses before taking a Git snapshot. The operator
-keeps the pod and HOME and reports the refusal in `RemovalBlocked`. A partially
-stopped host stays fenced; a failed rescue does not re-arm it. A verified rescue
-hold uses its current hold process, rather than the old executor's boot record.
-A never-written hold keeps its HOME empty. These are stop protections; the build
-does not change host selection, permissions, Claude stops or Codex task stops.
+keeps the pod and HOME and reports the refusal in `RemovalBlocked`. Once the
+supervisor has been frozen and the fence published, a blocked or interrupted
+stop leaves that pod frozen and fenced. Resume currently keeps that same pod;
+it does not bring the host back, even if status reports `Running` and clears
+`RemovalBlocked`. The supported recovery today is to suspend again so the stop
+is retried. After the stop and rescue permit removal, the next resume builds a
+fresh pod on the same original volume. Nothing automatically removes a pod whose
+writer can never be killed. Manual recovery requires Tom, or a custodian he
+explicitly authorizes for that disruptive recovery, to resolve the writer/node
+problem and arrange rescue and pod removal while retaining HOME. A manual pod
+delete alone proves neither writer exit nor rescue. Do not thaw or clear the
+fence in place or bypass the rescue rules.
+
+A turn in flight when the stop arrives is cut and lost. A verified rescue hold
+uses its current hold process, rather than the old executor's boot record. A
+never-written hold keeps its HOME empty. Host selection and permissions are
+unchanged. Claude and Codex task sessions with valid session documents use their
+existing stop path; for every session type, a session document that is set but
+cannot be parsed now refuses rescue with a requested stop before Git runs.
 
 Suspend retains the original private `CODEX_HOME`, including native history,
 enrollment and database journals, on the retained HOME. Git rescue does not copy
 or back up that history. Resume on a new pod of the same Session starts daemon
-supervision only. Reopen the intended native thread explicitly by its exact ID;
-there is no automatic latest-thread selection, client relaunch or watch re-arm.
-Phone reopening, active-turn recovery and installed suspend/resume behavior still
-need the separately authorized proof in DESIGN-067; native history remains subject
-to the HOME archive policy below. Nothing is installed by this source change.
+supervision only. `thread status --thread EXACT_ID` observes that exact native
+thread; no current verb re-attaches a thread after resume. Re-attachment belongs
+to slices (d) and (c2). There is no automatic latest-thread selection, client
+relaunch or watch re-arm. Phone reopening and installed suspend/resume behavior
+still need the separately authorized proof in DESIGN-067; native history remains
+subject to the HOME archive policy below. The fence covers supported launches
+only; raw exec after the final process reading is not fenced. Nothing is installed
+by this source change.
 
 **Reaping a private session (DESIGN-025 section 25).** With private history
 retention on, as the live operator runs, a reaped private task session is not

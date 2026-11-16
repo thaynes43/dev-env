@@ -241,6 +241,14 @@ func (p codexRemoteProcesses) supervisor(s Settings, sess protocol.Session) (cod
 	return proc, nil
 }
 
+// Carry the vanished PID privately so only this stop's already-signalled
+// processes can authorize a bounded re-list. The diagnostic exposes no PID.
+type codexRemoteVanished struct{ pid int }
+
+func (*codexRemoteVanished) Error() string {
+	return "codex process disappeared during stop; rescue blocked"
+}
+
 func (p codexRemoteProcesses) inventory(supervisor codexRemoteProcess) ([]codexRemoteProcess, error) {
 	entries, err := p.list("/proc")
 	if err != nil {
@@ -262,7 +270,7 @@ func (p codexRemoteProcesses) inventory(supervisor codexRemoteProcess) ([]codexR
 		}
 		proc, err := p.process(pid)
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, errors.New("codex process disappeared during enumeration; rescue blocked")
+			return nil, &codexRemoteVanished{pid}
 		}
 		if err != nil {
 			return nil, errors.New("codex stop cannot inspect every process")
@@ -293,6 +301,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 	}
 	key := func(proc codexRemoteProcess) processKey { return processKey{proc.pid, proc.start} }
 	fds := map[processKey]int{}
+	signalled := map[int]bool{}
 	defer func() {
 		for _, fd := range fds {
 			_ = p.close(fd)
@@ -302,7 +311,38 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 		if err := p.signal(fd, sig); err != nil && !errors.Is(err, unix.ESRCH) {
 			return errors.New("codex stop could not signal an exact process; rescue blocked")
 		}
+		signalled[fd] = true
 		return nil
+	}
+	// Re-list at most three times in this call, and only after signalling that
+	// PID through a retained exact pidfd whose whole-group exit is now proven.
+	// An unobserved exit, reused identity, or uncertain readiness still refuses.
+	relists := 0
+	relist := func(err error) (bool, error) {
+		var vanished *codexRemoteVanished
+		if !errors.As(err, &vanished) || relists >= 3 {
+			return false, err
+		}
+		for identity, fd := range fds {
+			if identity.pid != vanished.pid || !signalled[fd] {
+				continue
+			}
+			dead, exitErr := p.exited(fd)
+			if exitErr != nil {
+				return false, exitErr
+			}
+			if dead {
+				relists++
+				if err := check(); err != nil {
+					return false, err
+				}
+				if err := p.pause(ctx); err != nil {
+					return false, err
+				}
+				return true, nil
+			}
+		}
+		return false, err
 	}
 	acquire := func(proc codexRemoteProcess) (int, error) {
 		if err := check(); err != nil {
@@ -317,7 +357,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 			fd, err = p.open(proc.pid)
 		}
 		if errors.Is(err, unix.ESRCH) {
-			return -1, errors.New("codex process disappeared before pidfd acquisition; rescue blocked")
+			return -1, &codexRemoteVanished{proc.pid}
 		}
 		if err != nil {
 			return -1, errors.New("codex stop requires exact pidfd process control")
@@ -326,6 +366,9 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 		if err != nil || !sameCodexRemoteProcess(proc, cur) {
 			if !held {
 				_ = p.close(fd)
+			}
+			if errors.Is(err, os.ErrNotExist) {
+				return -1, &codexRemoteVanished{proc.pid}
 			}
 			return -1, errors.New("codex stop process identity changed before signalling")
 		}
@@ -373,13 +416,18 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 	}
 	freezeAll := func() ([]codexRemoteProcess, error) {
 		settled := map[processKey]bool{}
+	scan:
 		for {
 			if err := frozenSupervisor(); err != nil {
 				return nil, err
 			}
 			inventory, err := p.inventory(supervisor)
 			if err != nil {
-				return nil, err
+				if retry, err := relist(err); retry {
+					continue scan
+				} else {
+					return nil, err
+				}
 			}
 			all := true
 			var writers []codexRemoteProcess
@@ -394,7 +442,11 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 				}
 				fd, err := acquire(proc)
 				if err != nil {
-					return nil, err
+					if retry, err := relist(err); retry {
+						continue scan
+					} else {
+						return nil, err
+					}
 				}
 				dead, err := p.exited(fd)
 				if err != nil {
@@ -406,12 +458,23 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 				}
 				ok, err := p.frozen(proc)
 				if err != nil {
-					return nil, err
+					if errors.Is(err, os.ErrNotExist) {
+						err = &codexRemoteVanished{proc.pid}
+					}
+					if retry, err := relist(err); retry {
+						continue scan
+					} else {
+						return nil, err
+					}
 				}
 				if !ok || !settled[key(proc)] {
 					all = false
 					if err := freeze(proc); err != nil {
-						return nil, err
+						if retry, err := relist(err); retry {
+							continue scan
+						} else {
+							return nil, err
+						}
 					}
 				}
 				settled[key(proc)] = true
@@ -444,10 +507,26 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 		if err := check(); err != nil {
 			return st, err
 		}
+		allDead := true
+		for _, proc := range writers {
+			if err := check(); err != nil {
+				return st, err
+			}
+			dead, err := p.exited(fds[key(proc)])
+			if err != nil {
+				return st, err
+			}
+			allDead = allDead && dead
+		}
+		if allDead {
+			break
+		}
 		if err := p.pause(ctx); err != nil {
 			return st, err
 		}
 	}
+	// Leaving grace early is only a wait optimization. The fresh confirmed
+	// inventory below remains mandatory after the last signal and before rescue.
 	// Grace can fork detached children. Killing a parent can also cause the
 	// kernel to continue an orphaned job-control group, which may fork before
 	// its own KILL arrives. Confirm a frozen inventory before every kill round

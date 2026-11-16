@@ -79,10 +79,16 @@ func newRemoteStopRig(t *testing.T) *remoteStopRig {
 	r.s.PodUID = "pod-c1"
 	raw, _ := json.Marshal(r.sess)
 	r.s.Getenv = envOf(map[string]string{protocol.SessionEnv: string(raw)})
-	for _, pid := range []int{10, 30, 40, 41, 42, 43} {
+	for _, pid := range []int{10, 30, 40, 41, 42, 43, 46} {
 		// 10 agentd; 30 daemon; 40 tmux server; 41 pane; 42 client;
-		// 43 already detached/orphaned child. Names never drive selection.
+		// 43 already detached/orphaned child; 46 worker under the client.
+		// Names never drive selection.
 		r.procs[pid] = codexRemoteProcess{pid: pid, parent: 1, start: strconv.Itoa(pid * 100), state: "S"}
+	}
+	for pid, parent := range map[int]int{41: 40, 42: 41, 46: 42} {
+		proc := r.procs[pid]
+		proc.parent = parent
+		r.procs[pid] = proc
 	}
 	writeJSON(t, r.s.statePath(bootFile), bootRecord{BootID: "boot-c1", Daemon: &daemonProcess{SessionUID: r.sess.SessionUID, PodUID: r.s.PodUID, Pid: 10, Start: "1000"}})
 	if err := os.Chmod(r.s.StateDir, 0700); err != nil {
@@ -270,6 +276,15 @@ func (r *remoteStopRig) stop(ctx context.Context, grace time.Duration) (*protoco
 }
 func TestCodexRemoteStopQuiescesEveryWriter(t *testing.T) {
 	r := newRemoteStopRig(t)
+	deadProof := map[int]bool{}
+	exited := r.p.exited
+	r.p.exited = func(fd int) (bool, error) {
+		dead, err := exited(fd)
+		if dead && err == nil {
+			deadProof[r.fds[fd].pid] = true
+		}
+		return dead, err
+	}
 	st, err := r.stop(context.Background(), time.Second)
 	if err != nil || st.Running || !st.WasRunning || st.Killed || !r.quiesced() {
 		t.Fatalf("stop=%+v err=%v procs=%v", st, err, r.procs)
@@ -277,11 +292,14 @@ func TestCodexRemoteStopQuiescesEveryWriter(t *testing.T) {
 	if len(r.fds) != 0 {
 		t.Fatal("pidfds leaked")
 	}
-	for _, pid := range []int{30, 40, 41, 42, 43} {
+	for _, pid := range []int{30, 40, 41, 42, 43, 46} {
 		for _, sig := range []unix.Signal{unix.SIGSTOP, unix.SIGTERM, unix.SIGCONT} {
 			if !slices.Contains(r.signals, fmt.Sprintf("%d:%d", pid, sig)) {
 				t.Fatalf("writer %d missed %v", pid, sig)
 			}
+		}
+		if _, alive := r.procs[pid]; alive || !deadProof[pid] {
+			t.Fatalf("writer %d was signalled but its whole-group exit was not proven", pid)
 		}
 	}
 }
@@ -798,8 +816,9 @@ func TestCodexRemoteStopDoesNotChangeClaudeOrCodexTaskStop(t *testing.T) {
 			t.Cleanup(func() { codexRemoteProcessesFor = old })
 			raw, _ := json.Marshal(sess)
 			r.s.Getenv = envOf(map[string]string{protocol.SessionEnv: string(raw)})
+			want := stopAgent(r.s, 0) // The exact legacy stop used on main. No PID file exists.
 			rep, err := Rescue(context.Background(), &fakeRunner{}, r.s, sess.Name, rescueNow, RescueOptions{StopAgent: true})
-			if err != nil || rep.Agent == nil || rep.Agent.Running {
+			if err != nil || rep.Agent == nil || *rep.Agent != *want {
 				t.Fatalf("ordinary stop changed: %+v %v", rep, err)
 			}
 			if _, err := os.Stat(r.s.statePath(codexRemoteStopFile)); !os.IsNotExist(err) {
@@ -1262,5 +1281,198 @@ func TestCodexRemoteStopPidfdExitReadiness(t *testing.T) {
 				t.Fatalf("exit proof=%v %v", dead, err)
 			}
 		})
+	}
+}
+
+// Boot can publish its identity after the initial empty-HOME reading. It is
+// still a run supervisor, not a verified never-written hold.
+func TestCodexRemoteRescueEmptyHomeRunRefusesBeforeSignalsAndGit(t *testing.T) {
+	r := newRemoteStopRig(t)
+	r.install(t)
+	if err := os.RemoveAll(r.s.StateDir); err != nil {
+		t.Fatal(err)
+	}
+	if empty, err := volumeEmpty(r.s); err != nil || !empty {
+		t.Fatalf("initial HOME not empty: %v %v", empty, err)
+	}
+	read := r.p.read
+	r.p.read = func(path string) ([]byte, error) {
+		if path == "/proc/1/cmdline" {
+			writeJSON(t, r.s.statePath(bootFile), bootRecord{BootID: "boot-c1", Daemon: &daemonProcess{SessionUID: r.sess.SessionUID, PodUID: r.s.PodUID, Pid: 10, Start: "1000"}})
+			if err := os.Chmod(r.s.StateDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return read(path)
+	}
+	runner := &fakeRunner{handle: func(Cmd) (Result, error) { t.Fatal("Git ran without a verified empty hold"); return Result{}, nil }}
+	rep, err := Rescue(context.Background(), runner, r.s, r.sess.Name, rescueNow, RescueOptions{StopAgent: true})
+	if err == nil || !strings.Contains(err.Error(), "only a verified empty rescue hold") || rep.OK || len(r.attempts) != 0 || len(runner.calls) != 0 {
+		t.Fatalf("unverified empty run: report=%+v err=%v signals=%v commands=%v", rep, err, r.attempts, runner.calls)
+	}
+}
+
+func TestRescueStopRefusesUnparseableSessionBeforeGit(t *testing.T) {
+	for _, source := range []string{protocol.SessionEnv, protocol.SessionFileEnv} {
+		t.Run(source, func(t *testing.T) {
+			r := newRemoteStopRig(t)
+			r.install(t)
+			value := "{invalid"
+			if source == protocol.SessionFileEnv {
+				value = filepath.Join(t.TempDir(), "session.json")
+				writeFile(t, value, "{invalid")
+			}
+			r.s.Getenv = envOf(map[string]string{source: value})
+			// Without the refusal the legacy stop would reach this fake Git clone.
+			writeFile(t, filepath.Join(r.s.ReposDir(), "haynes-ops", ".git", "config"), "fake")
+			runner := &fakeRunner{handle: func(Cmd) (Result, error) { t.Fatal("Git ran with an unparseable session"); return Result{}, nil }}
+			rep, err := Rescue(context.Background(), runner, r.s, r.sess.Name, rescueNow, RescueOptions{StopAgent: true})
+			if err == nil || !strings.Contains(err.Error(), "cannot identify the session") || rep.OK || len(runner.calls) != 0 || len(r.attempts) != 0 {
+				t.Fatalf("unparseable session: report=%+v err=%v commands=%v signals=%v", rep, err, runner.calls, r.attempts)
+			}
+		})
+	}
+}
+
+func TestCodexRemoteStopLeavesGraceEarlyButConfirmsFinalInventoryBeforeGit(t *testing.T) {
+	r := newRemoteStopRig(t)
+	r.install(t)
+	lastSignal, finalRead, snapshots := 0, 0, 0
+	event := 0
+	signal := r.p.signal
+	r.p.signal = func(fd int, sig unix.Signal) error { event++; lastSignal = event; return signal(fd, sig) }
+	list := r.p.list
+	r.p.list = func(path string) ([]os.DirEntry, error) {
+		if path == "/proc" && r.quiesced() {
+			event++
+			finalRead = event
+		}
+		return list(path)
+	}
+	runner := &fakeRunner{handle: func(Cmd) (Result, error) {
+		event++
+		if finalRead <= lastSignal || finalRead >= event {
+			t.Fatalf("snapshot without final reading after last signal: signal=%d read=%d snapshot=%d", lastSignal, finalRead, event)
+		}
+		snapshots++
+		return Result{}, nil
+	}}
+	writeFile(t, filepath.Join(r.s.ReposDir(), "haynes-ops", ".git", "config"), "fake")
+	rep, err := Rescue(context.Background(), runner, r.s, r.sess.Name, rescueNow, RescueOptions{StopAgent: true, StopGrace: 30 * time.Second})
+	if err != nil || rep.Agent == nil || rep.Agent.Running || snapshots == 0 || r.clock.Sub(rescueNow) >= time.Second {
+		t.Fatalf("grace not left early with final proof: report=%+v err=%v elapsed=%v snapshots=%d", rep, err, r.clock.Sub(rescueNow), snapshots)
+	}
+}
+
+func TestCodexRemoteStopGraceWaitsForWholeGroupExit(t *testing.T) {
+	r := newRemoteStopRig(t)
+	exited := r.p.exited
+	r.p.exited = func(fd int) (bool, error) {
+		if r.fds[fd].pid == 30 && r.quiesced() && r.clock.Sub(rescueNow) < 500*time.Millisecond {
+			return false, nil
+		}
+		return exited(fd)
+	}
+	st, err := r.stop(context.Background(), 30*time.Second)
+	if err != nil || st.Running || st.Killed || r.clock.Sub(rescueNow) < 500*time.Millisecond || r.clock.Sub(rescueNow) >= time.Second {
+		t.Fatalf("grace ignored group readiness: stop=%+v err=%v elapsed=%v", st, err, r.clock.Sub(rescueNow))
+	}
+}
+
+func TestCodexRemoteStopRelistsOnlySignalledVanishedProcesses(t *testing.T) {
+	for _, stage := range []string{"inventory", "acquire"} {
+		for _, signalled := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/signalled=%v", stage, signalled), func(t *testing.T) {
+				r := newRemoteStopRig(t)
+				vanished := false
+				reads := 0
+				read := r.p.read
+				r.p.read = func(path string) ([]byte, error) {
+					if path == "/proc/30/stat" {
+						reads++
+						// inventory, acquire and freeze-read: fail acquisition's second read.
+						if !vanished && (signalled && r.term[30] || !signalled && (stage == "inventory" || reads == 2)) {
+							vanished = true
+							return nil, os.ErrNotExist
+						}
+					}
+					return read(path)
+				}
+				if signalled {
+					// Leave a stale proc directory in the first listing after TERM reaped
+					// this exact identity. Acquisition case vanishes on its second stat.
+					list := r.p.list
+					r.p.list = func(path string) ([]os.DirEntry, error) {
+						out, err := list(path)
+						if path == "/proc" && r.term[30] && !vanished {
+							out = append(out, remoteProcEntry("30"))
+							if stage == "acquire" {
+								r.procs[30] = codexRemoteProcess{pid: 30, parent: 1, start: "3000", state: "Z"}
+								reads = 0
+							}
+						}
+						return out, err
+					}
+					if stage == "acquire" {
+						r.p.read = func(path string) ([]byte, error) {
+							if path == "/proc/30/stat" && r.term[30] && !vanished {
+								reads++
+								if reads == 2 {
+									vanished = true
+									delete(r.procs, 30)
+									return nil, os.ErrNotExist
+								}
+							}
+							return read(path)
+						}
+					}
+				}
+				st, err := r.stop(context.Background(), 0)
+				if !vanished || (err == nil) != signalled || st.Running == signalled || signalled && !r.quiesced() {
+					t.Fatalf("vanish policy: stop=%+v err=%v vanished=%v signals=%v", st, err, vanished, r.signals)
+				}
+			})
+		}
+	}
+}
+
+func TestCodexRemoteStopBoundsVanishedRelists(t *testing.T) {
+	r := newRemoteStopRig(t)
+	list := r.p.list
+	relists := 0
+	r.p.list = func(path string) ([]os.DirEntry, error) {
+		out, err := list(path)
+		if path == "/proc" && r.term[30] {
+			relists++
+			out = append(out, remoteProcEntry("30"))
+		}
+		return out, err
+	}
+	st, err := r.stop(context.Background(), 0)
+	if err == nil || !st.Running || relists != 4 || r.clock.Sub(rescueNow) > time.Second {
+		t.Fatalf("unbounded vanished relists: stop=%+v err=%v scans=%d elapsed=%v", st, err, relists, r.clock.Sub(rescueNow))
+	}
+}
+
+func TestCodexRemoteStopRefusesVanishedSignalledGroupWithoutExitProof(t *testing.T) {
+	r := newRemoteStopRig(t)
+	list := r.p.list
+	r.p.list = func(path string) ([]os.DirEntry, error) {
+		out, err := list(path)
+		if path == "/proc" && r.term[30] {
+			out = append(out, remoteProcEntry("30"))
+		}
+		return out, err
+	}
+	exited := r.p.exited
+	r.p.exited = func(fd int) (bool, error) {
+		if r.fds[fd].pid == 30 {
+			return false, nil
+		}
+		return exited(fd)
+	}
+	st, err := r.stop(context.Background(), 0)
+	if err == nil || !st.Running {
+		t.Fatalf("vanish accepted without whole-group exit: stop=%+v err=%v", st, err)
 	}
 }
