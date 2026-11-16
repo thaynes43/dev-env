@@ -28,6 +28,10 @@ type CursorOptions struct {
 // AccountRef remains nil: an independently qualified metadata reader is required
 // for binding, rather than copying caller assertions into provider evidence.
 func CollectCursor(ctx context.Context, options CursorOptions, now func() time.Time) (capture providerallowance.CursorCLIUsageCapture, captureErr error) {
+	return collectCursor(ctx, options, now, unix.Poll)
+}
+
+func collectCursor(ctx context.Context, options CursorOptions, now func() time.Time, poll func([]unix.PollFd, int) (int, error)) (capture providerallowance.CursorCLIUsageCapture, captureErr error) {
 	fail := func() (providerallowance.CursorCLIUsageCapture, error) {
 		return providerallowance.CursorCLIUsageCapture{}, refusedWithContext(ctx, "capture_refused")
 	}
@@ -90,7 +94,12 @@ func CollectCursor(ctx context.Context, options CursorOptions, now func() time.T
 
 	for {
 		fds := []unix.PollFd{{Fd: masterFD, Events: unix.POLLIN}}
-		ready, pollErr := unix.Poll(fds, 100)
+		ready, pollErr := poll(fds, 100)
+		// Signals (including Go's preemption signal) can interrupt ppoll.
+		// An interruption is neither a terminal failure nor a quiet interval.
+		if pollErr == unix.EINTR && ctx.Err() == nil {
+			continue
+		}
 		if pollErr != nil || ctx.Err() != nil {
 			return capture, refusedWithContext(ctx, "builtin_terminal_unavailable")
 		}
