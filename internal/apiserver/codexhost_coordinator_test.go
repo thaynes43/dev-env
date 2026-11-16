@@ -152,7 +152,7 @@ func TestCoordinatorPoolRequestedAccount(t *testing.T) {
 
 func TestOrdinaryPoolAccountProofMatchesMain(t *testing.T) {
 	for _, state := range []string{"ready", "busy", "not-ready", "not-ready-room"} {
-		for _, templateState := range []string{"readable", "unreadable", "removed"} {
+		for _, templateState := range []string{"readable", "unreadable", "removed", "account-remapped"} {
 			t.Run(state+"/"+templateState, func(t *testing.T) {
 				f := newCodexFixture(t)
 				opt := codexHostOpt{profile: "dev", notReady: state == "not-ready" || state == "not-ready-room"}
@@ -194,6 +194,9 @@ func TestOrdinaryPoolAccountProofMatchesMain(t *testing.T) {
 				}
 				if templateState == "removed" {
 					delete(f.tmpl.Profiles, "dev")
+				}
+				if templateState == "account-remapped" {
+					f.tmpl.Profiles["dev"] = templates.Profile{ServiceAccount: templates.WorkbenchServiceAccount}
 				}
 				if templateState == "unreadable" {
 					f.tmplOK = false

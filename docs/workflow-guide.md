@@ -924,8 +924,8 @@ After binding the exact new native thread, agentd sets its name metadata to
 the peer-verified daemon RPC. This is separate from tmux and the platform host
 title. The title is fixed platform text, `GPT | Dev-env coordinator 2`; choosing
 the name belongs to slice (d). Empty or partial-preview guesses skip the write
-and return `title_binding_unconfirmed`. A lost ACK is `title_unconfirmed`, with the known thread ID retained;
-inspect it and never relaunch to repair uncertainty. A later response observation
+and return `title_binding_unconfirmed`. A lost ACK is `title_unconfirmed`, with
+the known thread ID retained; inspect it and never relaunch to repair uncertainty. A later response observation
 from `thread status` does not confirm the name metadata ACK. Phone rendering, owner
 visibility, pairing and served-model evidence remain separate live proof.
 
@@ -935,9 +935,12 @@ aliases and the actual pod account) and unprovable accounts, before fit and
 capacity counting. An owned live ordinary-account agent pod proves its account
 without templates, including a removed profile. Missing-pod account resolution
 failures are `account_unresolved`; the selection route's existing templates-read
-requirement for the requested profile/default remains. Fact collection and fresh lease checks apply the
-same exclusions. A requested workbench or unavailable profile yields no pool
-capacity. Keep the visible hands-off GitOps entry as a second protection.
+requirement for the requested profile/default remains. Fact collection and
+fresh lease checks apply the same exclusions. A requested workbench or
+unavailable profile yields no pool capacity unless a matching nonreserved live
+ordinary pod proves its account; actual construction still requires valid
+template admission. Keep the visible hands-off GitOps entry as a second
+protection.
 
 ### Start an owner-interactive Codex task on a paired v2 host
 
