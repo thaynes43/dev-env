@@ -287,7 +287,7 @@ func legacyUsageShape(body any) any {
 		return &c
 	case apiv1.SessionList:
 		c := b
-		c.Sessions = append([]apiv1.Session(nil), b.Sessions...)
+		c.Sessions = append([]apiv1.Session{}, b.Sessions...)
 		for i := range c.Sessions {
 			legacy(&c.Sessions[i])
 		}
