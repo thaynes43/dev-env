@@ -6,10 +6,11 @@ OP858 recovery worker `dev-env-1114-160847`, 2026-11-14. Source base
 `29575187b733f5b2fa27fd3349787013edc0f621` (PR1145). Duplicate-work checks used
 OP858 history, all-state PR search and running session metadata before edits.
 No duplicate slice-(b) owner or PR was found. The worker's branch is
-`agent/dev-env-1114-160847`; the deliverable is ready, unmerged PR #1165.
+`agent/dev-env-1114-160847`; the deliverable was PR #1165, now merged as `16921a30` (2026-11-16).
 
-This records source and local tests only. The review by another model family
-is done, recorded on story 858 and in design section 14. Nothing is installed
+This records source and local tests only. The review by another model family approved heads `15de34da` and `0782e3fc`;
+`cf4a607a` added only a message and wording and was read as well (story 858 and
+design section 14). Nothing is installed
 or accepted; the setting is empty and no named coordinator host exists.
 The 2026-11-16 review/fix record is appended below. No host, flag, live policy, account, credentials, deployment,
 provider reset, managed worker dispatch or Studio resource was changed. No
@@ -138,10 +139,11 @@ bytes restored and hash-checked. Historical, not rerun in this fix round.**
 
 ## Remaining gates
 
-The review by another model family is done, recorded on story 858 and in
-design section 14; its re-check approved the fixes. Nothing is installed or
+The review by another model family approved heads `15de34da` and `0782e3fc`;
+`cf4a607a` added only a message and wording and was read as well (story 858 and
+design section 14). Nothing is installed or
 accepted; the setting is empty and no named coordinator host exists.
-The PR is ready and unmerged. No merge, release, installation, flags, host operations or
+PR 1165 is merged source as `16921a30` (2026-11-16). No merge, release, installation, flags, host operations or
 acceptance is authorized to this worker. Slices (c1/c2/d/e) were not started.
 Owner confirmation and the concrete install packet remain required. Source
 merely merged is not installed. Watch lanes and OP812 custody remain with their
@@ -251,8 +253,10 @@ assertion); the final full API run includes that assertion. Replay launches
 nothing and reads no templates. **Difference from main:** replay of a saved
 one-use receipt returns 409 when the host's pod is gone, terminating or replaced;
 main returned the saved receipt. This can only refuse more than main. The route
-is off: `--enable-codex-rc-thread` is false by default and is not set in the
-running operator. Unprovable pod accounts still refuse. Before enabling the
+has `--enable-codex-rc-thread` false by default in source
+(`cmd/dev-env-operator/main.go`), and it was not among the running operator's
+arguments when the coordinator read them on 2026-11-16. Unprovable pod accounts
+still refuse. Before enabling the
 route, decide whether replay after a replaced host pod should return the saved
 receipt (design section 6.1).
 
@@ -279,8 +283,9 @@ Seven compiled final mutants killed, zero survivors/errors, originals restored.
 Source/test review pin is `353d8213c319dd82f18cfc5c241ad050873bf553`; later
 commits record evidence only. Exact pushed/PR head and CI belong in the fix PR
 and OP858 handoff, without changing that head merely to record CI. The fix PR
-stayed draft and unmerged at that handoff. The review by another model family
-is now done, recorded on story 858 and in design section 14. Nothing is installed
+stayed draft and unmerged at that handoff. The review by another model family approved heads `15de34da` and `0782e3fc`;
+`cf4a607a` added only a message and wording and was read as well (story 858 and
+design section 14). Nothing is installed
 or accepted; the setting is empty and no named coordinator host exists.
 
 ## 2026-11-16 fix round 2 (N1–N4)
@@ -328,7 +333,7 @@ removed creation profile; selection with unreadable templates still returns
 main's 503. These facts do not remove any of the five differences above.
 
 Source, tests and documentation only. No installation, Codex host action,
-provider turn or acceptance. The review by another model family is now done,
-recorded on story 858 and in design section 14. PR 1165 is ready and unmerged;
-the coordinator owns integration and its body edits. Nothing is installed or
+provider turn or acceptance. The review by another model family approved heads `15de34da` and `0782e3fc`;
+`cf4a607a` added only a message and wording and was read as well (story 858 and
+design section 14). PR 1165 is merged source as `16921a30` (2026-11-16). Nothing is installed or
 accepted; the setting is empty and no named coordinator host exists.

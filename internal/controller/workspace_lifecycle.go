@@ -234,6 +234,7 @@ func (r *Reconciler) reconcileSharedWorkspace(ctx context.Context, s *v1alpha1.A
 		if err != nil {
 			return block(err)
 		}
+		r.applyCodexRemoteStop(pod, s)
 		if _, _, err := r.verifyWorkspaceStop(ctx, s, old.UID); err != nil {
 			return block(err)
 		}

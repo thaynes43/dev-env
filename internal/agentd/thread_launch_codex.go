@@ -145,6 +145,17 @@ func StartCodexThread(ctx context.Context, s Settings, sess protocol.Session, re
 
 func startCodexThread(ctx context.Context, s Settings, sess protocol.Session, req CodexThreadRequest, d codexThreadDeps) apiv1.ThreadLaunchResult {
 	rec := threadlaunch.NewRecorder("codex", d.now)
+	if codexRemoteSession(sess) {
+		unlock, err := codexRemoteLifecycle(s, false)
+		if err != nil {
+			code := "host_stopping"
+			if errors.Is(err, errCodexRemotePath) {
+				code = "folder_not_qualified"
+			}
+			return rec.Finish(apiv1.ThreadFailed, code, apiv1.ThreadPhaseHostReady, 0)
+		}
+		defer unlock()
+	}
 	a := &codexThreadAdapter{s: s, sess: sess, req: req, d: d}
 	wait := req.Wait
 	if wait <= 0 || wait > 10*time.Minute {
