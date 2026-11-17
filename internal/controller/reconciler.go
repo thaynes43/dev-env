@@ -125,6 +125,8 @@ func CacheOptions(sessionNamespace string, tmpl types.NamespacedName) cache.Opti
 type Reconciler struct {
 	// CodexWorkbenchHosts is always enforced; an empty name permits none.
 	CodexWorkbenchHosts codexworkbench.Policy
+	// CodexRemoteStopHosts affects construction only; existing pods are untouched.
+	CodexRemoteStopHosts codexworkbench.RemoteStopHosts
 	// OriginalHome is an exact default-off lifecycle restriction, never an access grant.
 	OriginalHome *homeguard.Binding
 	// Client reads from the manager's cache and writes to the API server.
@@ -988,7 +990,7 @@ func (r *Reconciler) startHoldPod(ctx context.Context, s *v1alpha1.AgentSession,
 		obs.removalBlocked = fmt.Errorf("%w; no hold pod can start until the templates are fixed: %w", why, obs.templatesErr)
 		return nil
 	}
-	pod, err := buildHoldPod(s, obs.templates)
+	pod, err := r.holdPod(s, obs.templates)
 	if err != nil {
 		obs.removalBlocked = fmt.Errorf("%w; the hold pod cannot be built: %w", why, err)
 		return nil
