@@ -171,6 +171,21 @@ func (d *Daemon) now() time.Time {
 // that fails is reported in the status, and the heartbeat goes on, so the
 // operator sees why a session is not working.
 func (d *Daemon) Run(ctx context.Context) error {
+	bootUnlock := func() {}
+	if codexRemoteSession(d.Session) {
+		// Before any boot writer, including credential expiry and boot.json.
+		unlock, err := codexRemoteLifecycle(d.S, false)
+		if err != nil {
+			return err
+		}
+		bootUnlock = unlock
+	}
+	defer func() { bootUnlock() }()
+	supervise := func() error {
+		bootUnlock()
+		bootUnlock = func() {}
+		return d.supervise(ctx)
+	}
 	if err := ValidatePrivateProjectBootstrap(d.S); err != nil {
 		return err
 	}
@@ -225,7 +240,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return fmt.Errorf("failed admission boot record: %w", err)
 		}
 		d.beat(ctx)
-		return d.supervise(ctx)
+		return supervise()
 	}
 
 	progress("admitting project")
@@ -238,7 +253,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return fmt.Errorf("failed project boot record: %w", err)
 		}
 		d.beat(ctx)
-		return d.supervise(ctx)
+		return supervise()
 	}
 	progress("rendering configuration")
 	steps := Render(ctx, d.R, d.S, d.Session)
@@ -274,7 +289,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.Log.Error("boot record", "err", err)
 	}
 	d.beat(ctx)
-	return d.supervise(ctx)
+	return supervise()
 }
 
 const bootHeartbeatEvery = 10 * time.Second
