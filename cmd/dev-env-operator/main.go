@@ -160,6 +160,7 @@ type options struct {
 	maintenanceEnabled           bool
 	asksEnabled                  bool
 	codexWorkbenchHosts          codexworkbench.Policy
+	codexRemoteStopHosts         codexworkbench.RemoteStopHosts
 	codexHostSelect              bool
 	codexHostMaxPerCell          int
 	codexHostMaxRunning          int
@@ -286,6 +287,17 @@ func parseFlags(args []string) (options, error) {
 		codexWorkbenchSet = true
 		codexWorkbenchRaw = v
 		_, err := codexworkbench.Parse(v, "")
+		return err
+	})
+	var codexRemoteStopSet bool
+	var codexRemoteStopRaw string
+	fs.Func("codex-remote-stop-hosts", "up to 16 exact Codex remote session names whose next pod uses the safe rescue stop; empty keeps the legacy stop everywhere", func(v string) error {
+		if codexRemoteStopSet {
+			return errors.New("codex-remote-stop-hosts may be set only once")
+		}
+		codexRemoteStopSet = true
+		codexRemoteStopRaw = v
+		_, err := codexworkbench.ParseRemoteStopHosts(v, "")
 		return err
 	})
 	fs.BoolVar(&o.codexHostSelect, "enable-codex-host-select", false, "serve POST /v1/codex-hosts/select and /release (DESIGN-063); default off, and with it off the routes are not registered; needs the API")
@@ -454,6 +466,11 @@ func parseFlags(args []string) (options, error) {
 	o.codexWorkbenchHosts, codexWorkbenchErr = codexworkbench.Parse(codexWorkbenchRaw, o.sessionNamespace)
 	if codexWorkbenchErr != nil {
 		return o, codexWorkbenchErr
+	}
+	var codexRemoteStopErr error
+	o.codexRemoteStopHosts, codexRemoteStopErr = codexworkbench.ParseRemoteStopHosts(codexRemoteStopRaw, o.sessionNamespace)
+	if codexRemoteStopErr != nil {
+		return o, codexRemoteStopErr
 	}
 	if o.sessionNamespace == "" || o.templatesNamespace == "" || o.templatesName == "" || o.policyNamespace == "" {
 		return o, errors.New("--session-namespace, --templates-namespace, --templates-name and --policy-namespace must not be empty")
@@ -892,6 +909,7 @@ func reconcilerForOptions(o options) *controller.Reconciler {
 	}
 	return &controller.Reconciler{
 		CodexWorkbenchHosts:              o.codexWorkbenchHosts,
+		CodexRemoteStopHosts:             o.codexRemoteStopHosts,
 		CoordinatorInstructionAgentImage: o.coordinatorInstructionAgentImage,
 
 		TaskBudgetWorkerImage:       o.taskBudgetWorkerImage,

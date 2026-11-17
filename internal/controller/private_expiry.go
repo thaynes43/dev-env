@@ -1099,6 +1099,7 @@ func (r *Reconciler) createExpiryHold(ctx context.Context, v *expiryView, obs *o
 	if err != nil {
 		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryIdentityChanged, "the hold pod cannot be built: %v", err))
 	}
+	r.applyCodexRemoteStop(pod, v.s)
 	if err := r.Client.Create(ctx, pod); err != nil {
 		switch {
 		case apierrors.IsAlreadyExists(err):

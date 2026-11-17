@@ -227,6 +227,11 @@ var (
 // files out, the settings (remote control on, auto-update off), the start, and
 // the settings again, because the start rewrites them. now gates the backoff.
 func (c *codexRemote) ensure(ctx context.Context, s Settings, now time.Time) error {
+	unlock, err := codexRemoteLifecycle(s, false)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	p, err := c.deps.daemonState(s)
 	if err != nil {
 		// Unknown (a held lock, an odd pid file): touch nothing.
@@ -424,6 +429,11 @@ func CodexPair(ctx context.Context, s Settings, sess protocol.Session, w io.Writ
 }
 
 func codexPair(ctx context.Context, s Settings, sess protocol.Session, w io.Writer, now func() time.Time, d codexRemoteDeps) error {
+	unlock, err := codexRemoteLifecycle(s, false)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if !codexRemoteSession(sess) {
 		return errors.New("pair is for a codex --interactive session")
 	}
