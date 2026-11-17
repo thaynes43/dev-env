@@ -153,6 +153,7 @@ var codexLayout = []historyRule{
 // internal/agentd for every name agentd writes there and fails when this table
 // lacks one, so a new agentd file is classified in the change that adds it.
 var agentdLayout = []historyRule{
+	{"codex-remote-stop.json", protocol.HistoryClassNotHistory, kindAny},
 	// History: the task records, the child decisions, captured assistant text
 	// and the initial usage observation.
 	{"boot.json", classHistory, kindFile},

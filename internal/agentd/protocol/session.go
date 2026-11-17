@@ -19,6 +19,7 @@ import (
 // when set, names a file holding the same document instead.
 const (
 	// Controller-owned deployment metadata, never a credential or approval.
+	CodexRemoteStopEnv      = "AGENTD_CODEX_REMOTE_STOP_SESSION_UID"
 	CodexCoordinatorHostEnv = "AGENTD_CODEX_COORDINATOR_HOST"
 	CodexCoordinatorUIDEnv  = "AGENTD_CODEX_COORDINATOR_SESSION_UID"
 	SessionEnv              = "AGENTD_SESSION"

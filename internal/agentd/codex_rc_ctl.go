@@ -42,6 +42,14 @@ func CodexRCControl(ctx context.Context, s Settings, sess protocol.Session, oper
 func codexRCControl(ctx context.Context, s Settings, sess protocol.Session, operation string, d apiv1.CodexRCDispatch, deps codexRCDeps) (apiv1.CodexRCReceipt, error) {
 	rec := apiv1.CodexRCReceipt{Caller: d.Caller, RequestID: d.Request.RequestID, ClientSHA256: d.ClientSHA256, DispatchSHA256: apiv1.CodexRCHash(d), Target: d.Target, Model: d.Request.Model, Effort: d.Request.Effort, State: "refused", Reason: "qualification_refused", StartedAt: deps.now().UTC()}
 	finish := func() (apiv1.CodexRCReceipt, error) { rec.FinishedAt = deps.now().UTC(); return rec, nil }
+	if operation == "start" && codexRemoteSession(sess) {
+		unlock, err := codexRemoteLifecycle(s, false)
+		if err != nil {
+			rec.Reason = "host_stopping"
+			return finish()
+		}
+		defer unlock()
+	}
 	if operation != "preflight" && operation != "start" {
 		return rec, errCodexRCRefused
 	}

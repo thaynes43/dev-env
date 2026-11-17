@@ -413,6 +413,77 @@ A headless `-p` task runs its prompt once. `msg` applies to a local TUI session;
 Follow transitions with `show`/`list`; `reap` returning does not mean cleanup has
 already finished. An archived session is restored into a new session, not resumed.
 
+**Suspending a Codex host (DESIGN-067 slice c1, source only).** The operator
+setting `--codex-remote-stop-hosts` is a strict list of up to 16 unique exact
+session names, empty by default. A name that is not a Codex remote host, or does
+not exist, is accepted and does nothing. Only a named Codex remote host gets the
+new stop. Every other host, Claude session and Codex task keeps main's existing stop:
+no new quiesce, freeze, fence or lifecycle-lock refusal at agentd/thread start.
+With the setting empty, an operator pin of this code changes nothing for today's
+hosts. Naming a host changes nothing for its running pod; it takes effect when
+that host's next pod is built. An operator upgrade restarts, replaces or relabels
+no pod.
+
+The controller writes the Session UID in `AGENTD_CODEX_REMOTE_STOP_SESSION_UID`
+when building a named host's agent or rescue hold pod; other pods get no key and
+retain their golden bytes, including envFrom profiles. Explicit entries of that
+name in templates/profile env are removed. On a named host the controller's
+explicit UID overrides envFrom. A shared Secret or ConfigMap would need that
+exact session's UID to switch the stop on for a pod the operator did not name.
+A pod-spec or operator-flag writer can name a host; this does not fence a cluster
+admin. Agentd reads the decision once per rescue from its own container
+environment. Absent/empty input adds no session-document parse. A present value
+requires a readable document with a non-empty Session UID or rescue refuses
+before Git. A different non-empty UID is ignored with a fixed log line and uses
+main's stop; a matching UID enables the
+new stop only for a Codex remote host. L4's added unparseable-document refusal
+goes away for hosts that are not named and have no decision.
+
+On a named host, before Git rescue, agentd fences supported daemon, thread and
+pairing starts, verifies the dedicated container, freezes its supervisor and
+ends the other processes there, including tmux shells, clients, the native daemon
+and detached children. Grace ends early only after a fresh inventory shows no
+live writer; a newly found child keeps the remaining grace. During grace only,
+a process that vanishes before its stat or pidfd can be read counts as gone.
+The final inventory still refuses an unsignalled vanish; only a proven exit of
+a process signalled by this stop permits the bounded re-list. Agentd then freezes
+a fresh inventory and kills remaining writers, repeating confirmed inventories
+and kill rounds to catch orphaned process-group children. It checks every process
+thread and uses kernel pidfd readiness to prove whole-group exit. The read order
+stays the last signal, the final confirmed “no writer left” reading, then the
+snapshot. Raw exec after that reading is not fenced. The supervisor stays frozen
+through rescue and until pod deletion; a HOME fence blocks a same-pod daemon
+restart. A turn in flight when this stop arrives is cut and lost.
+
+If a launch holds the gate, identity or namespace ownership is uncertain,
+inspection/signaling fails, or a writer cannot stop within budget, the named
+host's rescue refuses before the snapshot. The operator keeps the pod and HOME
+and reports `RemovalBlocked`. Once frozen and fenced, a refused or interrupted
+stop leaves that named host stuck: resume keeps the same pod, even if status
+reports `Running` and clears `RemovalBlocked`. This M4 state can only occur on a
+named host; story **877** owns its recovery design and must close before a named
+host is one the owner relies on. Supported recovery today is suspend again to
+retry the stop. After rescue allows removal, the next resume builds a fresh pod
+on the same HOME. Nothing automatically removes a pod whose writer cannot be
+killed. Tom, or his explicitly authorized custodian, must resolve the writer/node
+problem and arrange rescue/removal while retaining HOME. A manual pod delete
+alone proves neither exit nor rescue. Thawing or clearing the fence in place is
+unsupported. A verified rescue hold uses its current process, not the old boot
+record; a never-written hold keeps HOME empty. Host selection and permissions
+are unchanged.
+
+Suspend retains the original private `CODEX_HOME`, including native history,
+enrollment and database journals, on the retained HOME. Git rescue does not copy
+or back up that history. Resume on a new pod of the same Session starts daemon
+supervision only. `thread status --thread EXACT_ID` observes that exact native
+thread; no current verb re-attaches a thread after resume. Re-attachment belongs
+to slices (d) and (c2). There is no automatic latest-thread selection, client
+relaunch or watch re-arm. Phone reopening and installed suspend/resume behavior
+still need the separately authorized proof in DESIGN-067; native history remains
+subject to the HOME archive policy below. The fence covers supported launches
+only; raw exec after the final process reading is not fenced. Nothing is installed
+by this source change.
+
 **Reaping a private session (DESIGN-025 section 25).** With private history
 retention on, as the live operator runs, a reaped private task session is not
 rescued to a bundle and its volume is not archived. The operator asks its agent
@@ -884,10 +955,12 @@ check: `registered` proves the CLI registered its entry, not that he saw it.
 The standby (quickstart section 1) is the zero-step alternative when it is
 awake. A suspended standby has an archived phone entry until it is resumed.
 
-### Named workbench coordinator threads (source draft, OP858)
+### Named workbench coordinator threads (merged source, OP858)
 
-DESIGN-067 slice (b) is source and local-test work only. The review by another
-model family is done, recorded on story 858 and in design section 14. Nothing
+DESIGN-067 slice (b) is merged source and local-test work only (PR 1165,
+`16921a30`, 2026-11-16). The review by another model family approved heads
+`15de34da` and `0782e3fc`; `cf4a607a` added only a message and wording and was read
+as well, recorded on story 858 and in design section 14. Nothing
 is installed or accepted; the setting is empty and no named coordinator host exists. Slice (c1), owner
 confirmation and the reviewed install packet still precede a privileged host.
 The existing Fable coordinator keeps custody and watch lanes.
