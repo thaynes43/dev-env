@@ -415,8 +415,9 @@ already finished. An archived session is restored into a new session, not resume
 
 **Suspending a Codex host (DESIGN-067 slice c1, source only).** The operator
 setting `--codex-remote-stop-hosts` is a strict list of up to 16 unique exact
-session names, empty by default. Only a named Codex remote host gets the new
-stop. Every other host, Claude session and Codex task keeps main's existing stop:
+session names, empty by default. A name that is not a Codex remote host, or does
+not exist, is accepted and does nothing. Only a named Codex remote host gets the
+new stop. Every other host, Claude session and Codex task keeps main's existing stop:
 no new quiesce, freeze, fence or lifecycle-lock refusal at agentd/thread start.
 With the setting empty, an operator pin of this code changes nothing for today's
 hosts. Naming a host changes nothing for its running pod; it takes effect when
@@ -427,13 +428,14 @@ The controller writes the Session UID in `AGENTD_CODEX_REMOTE_STOP_SESSION_UID`
 when building a named host's agent or rescue hold pod; other pods get no key and
 retain their golden bytes, including envFrom profiles. Explicit entries of that
 name in templates/profile env are removed. On a named host the controller's
-explicit UID overrides envFrom. A shared Secret or ConfigMap cannot hold each
-session's UID, so it cannot switch the stop on for a pod the operator did not
-name. A pod-spec or operator-flag writer can name a host; this does not fence a
-cluster admin. Agentd reads the decision once per rescue from its own container
+explicit UID overrides envFrom. A shared Secret or ConfigMap would need that
+exact session's UID to switch the stop on for a pod the operator did not name.
+A pod-spec or operator-flag writer can name a host; this does not fence a cluster
+admin. Agentd reads the decision once per rescue from its own container
 environment. Absent/empty input adds no session-document parse. A present value
-requires a parseable document or rescue refuses before Git. A different UID is
-ignored with a fixed log line and uses main's stop; a matching UID enables the
+requires a readable document with a non-empty Session UID or rescue refuses
+before Git. A different non-empty UID is ignored with a fixed log line and uses
+main's stop; a matching UID enables the
 new stop only for a Codex remote host. L4's added unparseable-document refusal
 goes away for hosts that are not named and have no decision.
 
@@ -441,7 +443,10 @@ On a named host, before Git rescue, agentd fences supported daemon, thread and
 pairing starts, verifies the dedicated container, freezes its supervisor and
 ends the other processes there, including tmux shells, clients, the native daemon
 and detached children. Grace ends early only after a fresh inventory shows no
-live writer; a newly found child keeps the remaining grace. Agentd then freezes
+live writer; a newly found child keeps the remaining grace. During grace only,
+a process that vanishes before its stat or pidfd can be read counts as gone.
+The final inventory still refuses an unsignalled vanish; only a proven exit of
+a process signalled by this stop permits the bounded re-list. Agentd then freezes
 a fresh inventory and kills remaining writers, repeating confirmed inventories
 and kill rounds to catch orphaned process-group children. It checks every process
 thread and uses kernel pidfd readiness to prove whole-group exit. The read order

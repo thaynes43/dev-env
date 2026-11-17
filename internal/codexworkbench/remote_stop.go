@@ -39,5 +39,10 @@ func ParseRemoteStopHosts(raw, namespace string) (RemoteStopHosts, error) {
 }
 
 func (p RemoteStopHosts) Names(s *v1alpha1.AgentSession) bool {
-	return s != nil && IsHost(s) && p.Namespace != "" && s.Namespace == p.Namespace && slices.Contains(p.names, s.Name)
+	return p.Lists(s) && IsHost(s)
+}
+
+// Lists reports an exact configured name, even when the session is not a host.
+func (p RemoteStopHosts) Lists(s *v1alpha1.AgentSession) bool {
+	return s != nil && p.Namespace != "" && s.Namespace == p.Namespace && slices.Contains(p.names, s.Name)
 }

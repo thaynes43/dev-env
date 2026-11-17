@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -14,6 +15,9 @@ import (
 // replaces or restarts a running pod. An explicit UID overrides envFrom.
 func (r *Reconciler) applyCodexRemoteStop(pod *corev1.Pod, s *v1alpha1.AgentSession) {
 	if !r.CodexRemoteStopHosts.Names(s) {
+		if r.CodexRemoteStopHosts.Lists(s) {
+			log.Log.Info("codex-remote-stop-hosts name has no effect on this session: it is not a Codex remote host", "session", s.Name)
+		}
 		return
 	}
 	for i := range pod.Spec.Containers {

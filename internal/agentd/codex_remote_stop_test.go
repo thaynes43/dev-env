@@ -1152,7 +1152,7 @@ func TestCodexRemoteStopInventoryCapsBeforeOpeningAnyWriter(t *testing.T) {
 	for pid := 100; pid < 100+codexRemoteProcessCap; pid++ {
 		r.procs[pid] = codexRemoteProcess{pid: pid, parent: 1, start: "1", state: "S"}
 	}
-	if _, err := r.p.inventory(r.procs[10]); err == nil {
+	if _, err := r.p.inventory(r.procs[10], false); err == nil {
 		t.Fatal("unbounded process inventory")
 	}
 	r.init = "/usr/local/bin/tini\x00--\x00/usr/local/bin/agentd\x00hold\x00"
@@ -1615,5 +1615,126 @@ func TestCodexRemoteStopGraceIncludesUnlistedChild(t *testing.T) {
 				t.Fatalf("child did not keep the original grace deadline: stop=%+v killedAfter=%v originalDeadline=%v", st, killedAt.Sub(bornAt), graceStart.Add(2*time.Second))
 			}
 		})
+	}
+}
+
+func TestRescueStopRefusesEmptySessionUIDBeforeGit(t *testing.T) {
+	for _, source := range []string{protocol.SessionEnv, protocol.SessionFileEnv} {
+		t.Run(source, func(t *testing.T) {
+			r := newRemoteStopRig(t)
+			r.install(t)
+			sess := r.sess
+			sess.SessionUID = ""
+			raw, err := json.Marshal(sess)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value := string(raw)
+			if source == protocol.SessionFileEnv {
+				value = filepath.Join(t.TempDir(), "session.json")
+				writeFile(t, value, string(raw))
+			}
+			r.s.Getenv = envOf(map[string]string{source: value, protocol.CodexRemoteStopEnv: r.sess.SessionUID})
+			writeFile(t, filepath.Join(r.s.ReposDir(), "demo", ".git", "config"), "fake")
+			runner := &fakeRunner{handle: func(Cmd) (Result, error) { t.Fatal("Git ran without a Session UID"); return Result{}, nil }}
+			rep, err := Rescue(context.Background(), runner, r.s, r.sess.Name, rescueNow, RescueOptions{StopAgent: true})
+			if err == nil || !strings.Contains(err.Error(), "non-empty Session UID") || rep.OK || len(runner.calls) != 0 || len(r.attempts) != 0 {
+				t.Fatalf("empty Session UID: report=%+v err=%v commands=%v signals=%v", rep, err, runner.calls, r.attempts)
+			}
+		})
+	}
+}
+
+func TestCodexRemoteStopVanishPolicyDuringGraceAndFinalInventory(t *testing.T) {
+	for _, phase := range []string{"grace", "final"} {
+		for _, stage := range []string{"inventory-stat", "pidfd", "acquire-stat"} {
+			t.Run(phase+"/"+stage, func(t *testing.T) {
+				r := newRemoteStopRig(t)
+				r.install(t)
+				born, vanished := false, false
+				addChild := func() {
+					born = true
+					r.procs[99] = codexRemoteProcess{pid: 99, parent: 1, start: "9900", state: "S"}
+				}
+				if phase == "grace" {
+					r.stubborn[30] = true
+					pause := r.p.pause
+					r.p.pause = func(ctx context.Context) error {
+						err := pause(ctx)
+						if r.term[30] && !born {
+							addChild() // Born during the wait, then outlives its parent.
+							delete(r.procs, 30)
+						}
+						return err
+					}
+				}
+				list := r.p.list
+				graceRead, finalRead, lastSignal, event := 0, 0, 0, 0
+				signal := r.p.signal
+				r.p.signal = func(fd int, sig unix.Signal) error {
+					event++
+					lastSignal = event
+					if r.fds[fd].pid == 99 {
+						t.Fatal("vanishing child must never be signalled")
+					}
+					return signal(fd, sig)
+				}
+				r.p.list = func(path string) ([]os.DirEntry, error) {
+					if path == "/proc" && r.term[30] {
+						event++
+						if graceRead == 0 {
+							graceRead = event
+						} else {
+							finalRead = event
+							if phase == "final" && !born {
+								addChild() // First strict inventory after grace.
+							}
+						}
+					}
+					return list(path)
+				}
+				read := r.p.read
+				reads := 0
+				r.p.read = func(path string) ([]byte, error) {
+					if path == "/proc/99/stat" {
+						reads++
+						if stage == "inventory-stat" || stage == "acquire-stat" && reads == 2 {
+							delete(r.procs, 99)
+							vanished = true
+						}
+					}
+					return read(path)
+				}
+				open := r.p.open
+				r.p.open = func(pid int) (int, error) {
+					if pid == 99 && stage == "pidfd" {
+						delete(r.procs, 99)
+						vanished = true
+					}
+					return open(pid)
+				}
+				snapshots := 0
+				runner := &fakeRunner{handle: func(Cmd) (Result, error) {
+					event++
+					if finalRead <= lastSignal || finalRead >= event {
+						t.Fatal("snapshot lacks a final inventory after the last signal")
+					}
+					snapshots++
+					return Result{}, nil
+				}}
+				writeFile(t, filepath.Join(r.s.ReposDir(), "demo", ".git", "config"), "fake")
+				rep, err := Rescue(context.Background(), runner, r.s, r.sess.Name, rescueNow, RescueOptions{StopAgent: true, StopGrace: time.Second})
+				if !born || !vanished || graceRead == 0 || finalRead == 0 || len(r.fds) != 0 {
+					t.Fatalf("fixture missed vanish or final scan: born=%v vanished=%v grace=%d final=%d fds=%v", born, vanished, graceRead, finalRead, r.fds)
+				}
+				if phase == "grace" {
+					if err != nil || rep.Agent == nil || rep.Agent.Running || rep.Agent.Killed || snapshots == 0 {
+						t.Fatalf("grace vanish refused: report=%+v err=%v snapshots=%d", rep, err, snapshots)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "disappeared") || rep.OK || snapshots != 0 {
+					t.Fatalf("final unsignalled vanish accepted: report=%+v err=%v snapshots=%d", rep, err, snapshots)
+				}
+			})
+		}
 	}
 }

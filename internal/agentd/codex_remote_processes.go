@@ -252,7 +252,7 @@ func (*codexRemoteVanished) Error() string {
 	return "codex process disappeared during stop; rescue blocked"
 }
 
-func (p codexRemoteProcesses) inventory(supervisor codexRemoteProcess) ([]codexRemoteProcess, error) {
+func (p codexRemoteProcesses) inventory(supervisor codexRemoteProcess, allowVanished bool) ([]codexRemoteProcess, error) {
 	entries, err := p.list("/proc")
 	if err != nil {
 		return nil, errors.New("codex stop cannot enumerate the PID namespace")
@@ -273,6 +273,9 @@ func (p codexRemoteProcesses) inventory(supervisor codexRemoteProcess) ([]codexR
 		}
 		proc, err := p.process(pid)
 		if errors.Is(err, os.ErrNotExist) {
+			if allowVanished {
+				continue // Grace only: this is a wait, not the final absence proof.
+			}
 			// Stat has vanished, so its start time is unavailable here and
 			// re-list matches a retained identity by PID alone. This cannot hide
 			// a writer: the final inventory must still see every live process.
@@ -427,7 +430,7 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 			if err := frozenSupervisor(); err != nil {
 				return nil, err
 			}
-			inventory, err := p.inventory(supervisor)
+			inventory, err := p.inventory(supervisor, false)
 			if err != nil {
 				if retry, err := relist(err); retry {
 					continue scan
@@ -509,7 +512,6 @@ func quiesceCodexRemote(ctx context.Context, s Settings, sess protocol.Session, 
 		}
 	}
 	graceUntil := p.now().Add(grace)
-graceWait:
 	for p.now().Before(graceUntil) {
 		if err := check(); err != nil {
 			return st, err
@@ -528,8 +530,8 @@ graceWait:
 		if allDead {
 			// A terminating writer may have forked a flush helper during grace.
 			// Do not freeze it or end its remaining grace just because the old
-			// list has exited: only a fresh inventory can prove no live writer.
-			inventory, err := p.inventory(supervisor)
+			// list has exited: check a fresh inventory for another live writer.
+			inventory, err := p.inventory(supervisor, true)
 			if err != nil {
 				if retry, err := relist(err); retry {
 					continue
@@ -541,11 +543,11 @@ graceWait:
 			for _, proc := range inventory {
 				fd, err := acquire(proc)
 				if err != nil {
-					if retry, err := relist(err); retry {
-						continue graceWait
-					} else {
-						return st, err
+					var vanished *codexRemoteVanished
+					if errors.As(err, &vanished) {
+						continue // Grace only; freezeAll still requires strict evidence.
 					}
+					return st, err
 				}
 				dead, err := p.exited(fd)
 				if err != nil {

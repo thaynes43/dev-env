@@ -36,8 +36,8 @@ func codexRemoteStopDecision(s Settings) (protocol.Session, bool, error) {
 		return protocol.Session{}, false, nil
 	}
 	sess, err := LoadSession(s.Getenv)
-	if err != nil {
-		return protocol.Session{}, false, errors.New("cannot identify the session to stop before rescue")
+	if err != nil || sess.SessionUID == "" {
+		return protocol.Session{}, false, errors.New("cannot identify the session to stop before rescue: session document must be readable and carry a non-empty Session UID")
 	}
 	if uid != sess.SessionUID {
 		slog.Info("a stop decision for another session was ignored")

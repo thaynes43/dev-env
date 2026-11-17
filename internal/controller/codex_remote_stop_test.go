@@ -1,11 +1,16 @@
 package controller
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -18,6 +23,10 @@ func TestCodexRemoteStopPodDecision(t *testing.T) {
 			for _, hold := range []bool{false, true} {
 				for _, spoof := range []bool{false, true} {
 					t.Run(kind+"/named="+boolText(named)+"/hold="+boolText(hold)+"/spoof="+boolText(spoof), func(t *testing.T) {
+						var logs bytes.Buffer
+						oldLog := log.Log
+						log.Log = logr.FromSlogHandler(slog.NewTextHandler(&logs, nil))
+						t.Cleanup(func() { log.Log = oldLog })
 						s := remotePilotTestSession()
 						switch kind {
 						case "claude":
@@ -64,6 +73,13 @@ func TestCodexRemoteStopPodDecision(t *testing.T) {
 							}
 						}
 						pod := build(r)
+						wantLog := 0
+						if named && kind != "host" {
+							wantLog = 1
+						}
+						if got := strings.Count(logs.String(), "name has no effect on this session"); got != wantLog {
+							t.Fatalf("non-host notice count=%d want=%d: %s", got, wantLog, logs.String())
+						}
 						c := &pod.Spec.Containers[0]
 						count := 0
 						for _, env := range c.Env {

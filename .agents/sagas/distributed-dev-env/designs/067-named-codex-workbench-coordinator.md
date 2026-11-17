@@ -743,15 +743,16 @@ hold pod. It writes the Session UID in the explicit container environment entry
 is added to other pods, including envFrom profiles; existing goldens are unchanged.
 An explicit template/profile/remote-block entry of that name is dropped on every
 pod and replaced only on a named host. The explicit controller value beats envFrom.
-A shared Secret or ConfigMap cannot hold each session's UID, so it cannot switch
-the stop on for a pod the operator did not name. Whoever can write the pod spec or
+A shared Secret or ConfigMap would need that exact session's UID to switch the
+stop on for a pod the operator did not name. Whoever can write the pod spec or
 the operator's flags can name a host; this is not a fence against a cluster admin.
 
 Agentd has one decision reader: once per rescue it reads that entry from its own
 container environment, never a file a pod process can edit. Absent or empty takes
 main's path without an added session-document parse. Present input requires a
-parseable document; otherwise rescue refuses before Git. A different Session UID
-is ignored with one fixed log line and uses main's path; a matching UID enables
+readable document with a non-empty Session UID; otherwise rescue refuses before
+Git. A different non-empty Session UID is ignored with one fixed log line and
+uses main's path; a matching UID enables
 the stop only for a Codex remote host. That one boolean gates the new rescue path;
 supported starts use the same decision rule before the lifecycle lock.
 Naming a host changes nothing for its running pod; it takes effect when that
@@ -763,6 +764,10 @@ For a named host the read order is the last signal, the final confirmed “no wr
 left” inventory, then the snapshot; the stop writes nothing to HOME after that
 inventory. Grace ends early only after a fresh inventory sees no live writer.
 A newly discovered child keeps the remaining grace in the same bounded wait.
+During grace only, a process that vanishes before its stat or pidfd can be read
+counts as gone, even if this stop did not signal it. The final inventory keeps
+the strict rule: an unsignalled vanish refuses; only a proven exit of a process
+signalled by this stop permits the bounded re-list.
 Raw exec after the final reading is not fenced. A turn in flight when the new
 stop arrives is cut and lost.
 
@@ -937,7 +942,10 @@ the separately configured coordinator-host caller.
    launches only; raw exec after the final reading is not fenced. At the inventory
    site a vanished process is matched by PID alone because its start time can no
    longer be read. This cannot hide a writer: the final inventory must still see
-   every live process. No current verb re-attaches a thread. Only on a named host,
+   every live process. During grace only, a listed process that vanishes before
+   its stat or pidfd can be read counts as gone; the final inventory still
+   refuses an unsignalled vanish and keeps the bounded re-list rule. No current
+   verb re-attaches a thread. Only on a named host,
    after a blocked or interrupted stop has frozen/fenced the pod, resume keeps that pod and does
    not restore service. Suspend again retries the stop; after successful removal,
    resume builds a fresh pod on the same volume. No automatic path removes a pod
@@ -1035,6 +1043,27 @@ with a 20 GiB HOME default. Re-read those declarations for the actual packet.
 ([templates:165–194][ops-size-home])
 
 ## 14. Review and handoff
+
+2026-11-17 slice (c1) re-check 2 and fix round 3: reviewer model id
+`claude-sonnet-5-5`, head `d9fd97e7`, verdict **APPROVE**, HIGH 0, MEDIUM 0,
+LOW 5 (N1–N5). Report: private `op858/slice-c1-recheck2-crossfamily.md`, including
+sections A, B and D. The advisory review of that head (2026-11-17T00:05Z)
+said “Looks good”, with no finding or inline thread. The coordinator ruled:
+
+| Finding | Round-3 ruling and change |
+| --- | --- |
+| N1 — empty Session UID | Accepted, fixed. A present non-empty decision requires a readable document with a non-empty Session UID. Empty UID refuses before Git; absent/empty decisions still add no parse. Only a different non-empty UID takes the legacy path. |
+| N2 — shared Secret/ConfigMap wording | Accepted, corrected in section 10.2 and the guide: it would need that exact session's UID. The next sentence states the pod-spec/operator-flag writer boundary. |
+| N3 — grace inventory vanish | Accepted, fixed for grace only. A listed process that vanishes before stat or pidfd acquisition counts as gone during the wait, whether signalled or not. The final confirmed inventory remains strict and precedes the snapshot after the last signal; an unsignalled vanish still refuses there, with the existing bounded re-list rule. |
+| N4 — inert configured name | Accepted. Building a pod for a listed non-host logs one notice that the name has no effect. No condition, status or refusal is added. The guide states that a non-host or nonexistent name is accepted and does nothing. |
+| N5 — unnamed envFrom residual | Accepted as documented, no change. An unnamed pod's envFrom would need the exact Session UID; the writer boundary remains stated. |
+
+Round-3 tests use fake processes only. The PR records the empty-UID mutant,
+grace-tolerance removal and final-scan tolerance mutant with their failing tests,
+the full agentd/controller checks, lint, layout, generation and exact-head CI.
+This round is source, tests and docs only: nothing installed or accepted, no host
+touched. Story 877 still owns M4. The worker opens one fix PR into PR 1171's
+branch and does not merge it or reply on the review threads.
 
 2026-11-16 slice (c1) re-check and fix round 2: reviewer model id
 `claude-sonnet-5-5`, head `bb7385ac`, verdict **APPROVE** the fix delta with N1–N3
