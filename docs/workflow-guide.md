@@ -944,23 +944,35 @@ them off a raise is refused. A view of a pending or active record then
 says the raise is ignored because raising is switched off. A taken-back
 or unannounced record is shown as it is.
 
-The keeper's raise notices and signing-key initialization require
-`--enable-session-raise-notices`, false by default and decided at startup.
-Pinning the keeper image with it unset leaves the raise key Secret, public
-ConfigMap and notice ledger untouched. After the admission and reader checks
-in DESIGN-066 section 11, enable the keeper switch and check its published
-public key before enabling the operator's `--enable-session-raise-dispatch`.
-With the keeper switch off and dispatch on, a pending raise gets no notice
-and so does not activate: this is the closed direction. Turning the keeper
-switch off preserves earlier keys and signed notice evidence.
+The keepers of releases 2.110.0 and 2.111.0 do not have the raise-notice
+switch and create the signing key at their first start as leader when its
+field is empty. Do not pin either before the admission and reader checks in
+DESIGN-066 section 11. The switch first exists in the release after 2.111.0,
+which contains OP919. From that release, keeper raise notices and signing-key
+initialization require `--enable-session-raise-notices=true`, false by default
+and decided at startup. Write the boolean with an equals sign (`=true` or
+`=false`): the two-argument form `--enable-session-raise-notices true` (or
+`false`) leaves an unexpected positional argument and stops the whole keeper.
+A malformed value (`=x`) disables only this pager.
+Pinning that keeper image with the switch unset leaves the raise key Secret,
+public ConfigMap and notice ledger untouched. After the admission and reader
+checks, enable keeper notices and check the published public key before
+enabling the operator's `--enable-session-raise-dispatch`. With keeper notices
+off and dispatch on, a new pending raise gets no notice and cannot activate
+from new notice evidence while the keeper stays off. Pending raises do not
+expire: when keeper notices are enabled later, all still-eligible queued
+raises are notified and can activate two minutes after their signed Sent
+notice, even if requested days earlier. Enable keeper notices first for this
+reason (DESIGN-066 known limit 11). Turning the keeper switch off preserves
+earlier keys and signed notice evidence, which can still satisfy activation.
 To turn it off, disable operator dispatch first, take back pending and active
 raises while keeper notices remain enabled, and confirm the signed take-back
 Sent outcomes before disabling keeper notices (DESIGN-066 section 11).
 Otherwise a later take-back still ends the raise but sends no notice while
 the keeper switch is off.
 
-It needs no flag, pairing or sign-in on the default profile, which follows the
-keeper's shared login. Tell Tom the session name once `show` reads
+A Claude Remote Control session needs no flag, pairing or sign-in on the
+default profile, which follows the keeper's shared login. Tell Tom the session name once `show` reads
 `registered` (about two minutes; [quickstart section
 1](v2-quickstart.md#1-a-claude-session-on-your-phone) has the measured
 timings). If it reads `login-required`, the keeper's login needs renewing
