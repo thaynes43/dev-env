@@ -2754,8 +2754,10 @@ This replaces the two-term clock-lag-plus-delay promise and the claim that no
 request starts inside the final ten minutes in PR #1172's 2026-11-16 correction
 (story 802 fix round 1) above. Earlier dated lines are retained as history. The
 gate review is the Codex review named by the owner on 2026-11-18 (item 751,
-comment 8880),
-report `reviews/op802-review-3.md` in the coordinator's handoff.
+comment 8880). Reports `reviews/op802-review-3.md` (gate) and
+`reviews/op802-review-4.md` (re-read) are in the coordinator's handoff folder
+`~/.shared/handoffs/ops-profile-20261111/`, outside this repository.
+Story 802 comments 8905 (gate) and 8927 (re-read) summarise them.
 
 R4 keeps the behavior and withdraws the review order's claim that creates off
 alone makes installation inert. The historical install observation above and
@@ -3660,6 +3662,22 @@ answer `op796-build-1-q-1` govern the following. Earlier corrections stay.
   and fake-endpoint tests do not prove install or phone delivery; story
   745's drill remains the acceptance check.
 
+**Correction, 2026-11-16: story 796 with story 795, coordinator ruling;
+not a ruling by Tom.** Earlier corrections stay; this connects story 795's
+delivery field to all three `escalation-started` texts above, including a
+DRILL page. Each ends `Brief: <state>.` The keeper chooses a fixed word from
+`status.agent.brief`: exactly `pending`, `launched`, `unconfirmed` or
+`not-launched`; no agent status, an empty field or any other value gives
+`unknown`. No field bytes are copied into the page or its content-free
+record. This is the pod's own delivery claim as recorded when the page is
+built, not proof that the provider read or answered the brief. A later claim
+change does not send another page or change the stored page record. The
+links, titles, DRILL label, one-attempt rule and hourly cap stay as above.
+Source and fake-endpoint tests remain separate from installed and accepted
+evidence.
+
+Re-applied, 2026-11-18: first written as commit `db03b2ff` on draft PR 1181; re-applied on `main` after stories 795 and 796 landed.
+
 **Correction, 2026-11-18: story 796 gate review (gpt-6-astra, 2026-11-18), finding A-1; coordinator ruling R1; not a ruling by Tom.**
 The first reserved name, `dev-env-system.summon-drill`, could not be admitted
 by any CallerPolicy: its required account `dev-env-system/summon-drill` is
@@ -3685,6 +3703,11 @@ CallerPolicy"); give the policy one remote escalation entry; remove the
 policy, account and namespace after the drill; and forbid reuse of the name
 for any other purpose. None of these enrollment actions is part of story
 796. Who may start the drill remains Tom's open question O8.
+
+Reports `reviews/op796-review-2.md` (gate) and `reviews/op796-review-3.md`
+(re-read) are in the coordinator's handoff folder
+`~/.shared/handoffs/ops-profile-20261111/`, outside this repository.
+Story 796 comments 8887 (gate) and 8922 (re-read) summarise them.
 
 ### 6.9 OP743: quota priority and the fallback model
 
@@ -4555,8 +4578,10 @@ Earlier dated corrections stay; where they differ, this governs.
   This does not prove persistence ordering or behavior under actual power
   loss. Neither `writeFileAtomic` nor the ordinary launch writer changes.
 - *Review and the open drill.* The owner named Codex (`gpt-6-astra`) for the
-  gate review on 2026-11-18 (item 751, comment 8880); its report is
-  `reviews/op795-review-3.md`. That replaces the earlier promise of a
+  gate review on 2026-11-18 (item 751, comment 8880). Its report,
+  `reviews/op795-review-3.md`, is in the coordinator's handoff folder
+  `~/.shared/handoffs/ops-profile-20261111/`, outside this repository.
+  Story 795 comment 8897 summarises it. That replaces the earlier promise of a
   reviewer from another model family. The fix round is reviewed before any
   merge. The positional-prompt/`--remote-control` probe stays open and
   assigned to the coordinator's drill in the v2 image. Typing into a live
@@ -4565,6 +4590,9 @@ Earlier dated corrections stay; where they differ, this governs.
 
 **Correction, 2026-11-18: story 795 re-read (gpt-6-astra, 2026-11-18),
 findings R4-F1 and R4-F2; coordinator ruling R7; not a ruling by Tom.**
+Report `reviews/op795-review-4.md` is in the coordinator's handoff folder
+`~/.shared/handoffs/ops-profile-20261111/`, outside this repository.
+Story 795 comment 8929 summarises it.
 Earlier dated lines stay; this replaces the claim that the structure check
 alone distinguishes a legacy launch from a brief-carrying one.
 
@@ -4592,6 +4620,9 @@ alone distinguishes a legacy launch from a brief-carrying one.
 Story 795 second re-read (gpt-6-astra, 2026-11-18), finding R5-F1;
 coordinator ruling R8; not a ruling by Tom: the held-login sentence above
 was replaced because an unusable login keeps the launch held, not refused.
+Report `reviews/op795-review-5.md` is in the coordinator's handoff folder
+`~/.shared/handoffs/ops-profile-20261111/`, outside this repository.
+Story 795 comment 8942 summarises it.
 
 ### 6.11 OP746: move curation
 
