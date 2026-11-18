@@ -30,6 +30,9 @@ type noteAnswer struct {
 // leaves its last unconsumed cursor intact, so an arrival in the race is retried
 // by the next parent-owned wait, never skipped. There is no source-list loop.
 func (rt Runtime) Run(ctx context.Context, r *Record) (*Result, error) {
+	if r.Outstanding != nil {
+		return rt.finish(r, rt.Clock.Now(), false)
+	}
 	waitCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var answers <-chan noteAnswer

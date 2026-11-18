@@ -79,9 +79,9 @@ func TestCoordinatorWaitAddressedAPIAndOutputAllowlist(t *testing.T) {
 	}
 	// A lost ACK reaches neither the API nor a second result, and explicit wrong
 	// thread binding cannot adopt the record by cwd, wait-id or title.
-	h.mustRun(ExitUnconfirmed, args...)
-	if h.stdout.Len() != 0 || len(h.api.requests()) != 2 {
-		t.Fatal("lost ACK replay")
+	h.mustRun(ExitOK, args...)
+	if replay := resultFrom(t, h); replay != r || len(h.api.requests()) != 2 {
+		t.Fatal("lost ACK did not replay whole result")
 	}
 	changed := append([]string(nil), args...)
 	changed[3] = "other-thread"
@@ -123,9 +123,9 @@ func TestCoordinatorWaitResyncAndNoRetryOnRefusal(t *testing.T) {
 				if r.Kind != "resync" || r.Cursor != "77" {
 					t.Fatal("lost server cursor")
 				}
-				h.mustRun(ExitUnconfirmed, append(args, "--ack", r.ID)...)
+				h.mustRun(ExitUnconfirmed, append(args, "--ack", "wrong")...)
 				if len(h.api.requests()) != 2 {
-					t.Fatal("resync without source reconciliation")
+					t.Fatal("resync accepted wrong acknowledgement")
 				}
 			} else if h.stdout.Len() != 0 {
 				t.Fatal("unconfirmed API result printed")
@@ -214,9 +214,9 @@ func TestCoordinatorWaitPersistsBeforeLostOutput(t *testing.T) {
 	if err != nil || r == nil || r.LastID == "" || !r.Ended {
 		t.Fatal("output before durable receipt")
 	}
-	h.mustRun(ExitUnconfirmed, args...)
-	if h.stdout.Len() != 0 {
-		t.Fatal("lost output replayed")
+	h.mustRun(ExitOK, args...)
+	if replay := resultFrom(t, h); r.Outstanding == nil || replay != *r.Outstanding {
+		t.Fatal("lost output not replayed unchanged")
 	}
 }
 func TestCoordinatorWaitCancelledContextPersistsStop(t *testing.T) {
@@ -291,9 +291,9 @@ func TestCoordinatorWaitResumeWithoutCursorRequiresFreshResync(t *testing.T) {
 	if resync.Kind != "resync" || resync.Cursor != "77" || resync.ID == stopped.ID || len(h.api.requests()) != 1 {
 		t.Fatal("unconfirmed baseline resumed without resync")
 	}
-	h.mustRun(ExitUnconfirmed, append(args, "--ack", resync.ID)...)
-	if len(h.api.requests()) != 1 {
-		t.Fatal("unreconciled cursor rearmed")
+	h.mustRun(ExitOK, args...)
+	if replay := resultFrom(t, h); replay != resync || len(h.api.requests()) != 1 {
+		t.Fatal("resync not replayed unchanged")
 	}
 }
 
@@ -320,7 +320,7 @@ func TestCoordinatorWaitRefusedEntryThenNote(t *testing.T) {
 			}
 			h.mustRun(ExitOK, args...)
 			refusal := resultFrom(t, h)
-			if refusal.Kind != "resync" || refusal.Reason == "" || refusal.Path != "" || refusal.Note != "" || strings.Contains(h.stdout.String(), "bad") {
+			if refusal.Kind != "resync" || refusal.Reason == "" || refusal.Path != "" || refusal.Note != "" {
 				t.Fatal("unsafe refusal output")
 			}
 			h.mustRun(ExitOK, append(args, "--ack", refusal.ID)...)

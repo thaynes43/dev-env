@@ -175,11 +175,13 @@ JSON contains only kind, id, note or path, cursor, watermark and time. Kinds:
 timer, note, file, resync, stopped, budget_end. No note text, file text or command.
 
 Rearm the same explicit binding with --after/--watermark from the result and
---ack its id. Output is committed before printing: a missing/lost ACK returns
-no second event. Inspect the private record, reconcile sources and acknowledge
-its lastID. No automatic replay. On resync read every parent list page (pass
---continue until none is returned), inspect directory metadata, then rearm with
---reconciled and the returned wait cursor, never a list continuation.
+--ack its id. The complete result is committed before printing. Without an ACK,
+the next call returns that result unchanged with the same id; acknowledge only
+that stored result. On resync read every parent list page (pass --continue until
+none is returned), inspect directory metadata, then --ack the result with its
+returned wait cursor, never a list continuation. --reconciled is ONLY for an
+unreadable stored result: reconcile all sources and pass --ack its saved lastID
+--reconciled; recovery returns resync. A corrupt outer record refuses.
 SIGTERM/cancellation or a regular .stop marker beside the record returns stopped
 with cursors saved. To resume, remove that marker deliberately and pass --resume,
 --ack and the SAME thread ID. Another thread, changed limits or an ended budget

@@ -75,6 +75,9 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 	} else if ack != "" || resume || reconciled || mark != "" {
 		return usageError("coordinator wait cannot acknowledge or resume an absent record")
 	}
+	if r != nil && r.Outstanding != nil {
+		return a.printJSON(r.Outstanding)
+	}
 	waitClock := a.env.WaitClock
 	if waitClock == nil {
 		waitClock = coordinatorwait.RealClock{}

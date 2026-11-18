@@ -30,7 +30,7 @@ func requireKind(t *testing.T, r *Record, now time.Time, stop bool, kind string)
 }
 func ack(t *testing.T, r *Record, reconciled bool) {
 	t.Helper()
-	if err := r.Bind(r.Options, r.LastID, r.Stopped, reconciled); err != nil {
+	if err := r.Bind(r.Options, r.LastID, r.Stopped, false); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -108,19 +108,25 @@ func TestOverflowToResync(t *testing.T) {
 			if len(r.Pending) != 0 || len(r.Seen) > 1 {
 				t.Fatal("unbounded pending/seen")
 			}
-			if r.Bind(r.Options, r.LastID, false, false) == nil {
-				t.Fatal("resync rearmed without reconciliation")
+			if r.Bind(r.Options, "wrong", false, false) == nil {
+				t.Fatal("resync accepted wrong acknowledgement")
 			}
 			ack(t, r, true)
 		})
 	}
 }
-func TestLostAcknowledgementNeverReplays(t *testing.T) {
+func TestLostAcknowledgementReplaysWholeResult(t *testing.T) {
 	r := record()
 	r.Note("one", "43", false)
 	v := requireKind(t, r, epoch, false, "note")
+	if err := r.Bind(r.Options, "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if replay := r.Take(epoch.Add(time.Minute), true); !reflect.DeepEqual(v, replay) {
+		t.Fatal("lost acknowledgement did not replay unchanged")
+	}
 	before, _ := json.Marshal(r)
-	for _, id := range []string{"", "wrong"} {
+	for _, id := range []string{"wrong"} {
 		if r.Bind(r.Options, id, false, false) == nil {
 			t.Fatal("lost ACK allowed replay")
 		}

@@ -53,8 +53,8 @@ type Result struct {
 	Time      time.Time `json:"time"`
 }
 
-// Record is private to this Session and caller-named native thread. LastID is
-// committed before output: a lost output/ACK must be reconciled, never replayed.
+// Record is private to this Session and caller-named native thread. Outstanding
+// is committed before output and replayed whole until its exact ID is acknowledged.
 type Record struct {
 	Options     Options           `json:"options"`
 	NextTimer   time.Time         `json:"nextTimer"`
@@ -65,6 +65,7 @@ type Record struct {
 	Pending     []Result          `json:"pending"`
 	Seen        []string          `json:"seen"`
 	Sequence    uint64            `json:"sequence"`
+	Outstanding *Result           `json:"outstanding,omitempty"`
 	LastID      string            `json:"lastID,omitempty"`
 	Stopped     bool              `json:"stopped"`
 	Ended       bool              `json:"ended"`
@@ -81,17 +82,27 @@ func (r *Record) Bind(o Options, ack string, resume, reconciled bool) error {
 	if r.Options != o {
 		return errors.New("wait binding or limits differ from the saved record")
 	}
-	if r.Ended {
-		return errors.New("wait budget has ended")
+	if r.Outstanding != nil && ack == "" {
+		if reconciled {
+			return errors.New("--reconciled is only for an unreadable stored result")
+		}
+		return nil // replay the exact stored result, including stopped/budget_end
 	}
 	if r.LastID != "" && ack != r.LastID {
-		return errors.New("unacknowledged result: reconcile saved cursors and sources, then acknowledge the saved lastID")
+		return errors.New("acknowledgement must name the stored pending result")
 	}
 	if r.LastID == "" && ack != "" {
 		return errors.New("no result to acknowledge")
 	}
-	if r.NeedsResync && !reconciled {
-		return errors.New("resync requires reading all source pages and directory metadata, then --reconciled")
+	lost := r.LastID != "" && r.Outstanding == nil
+	if lost && !reconciled {
+		return errors.New("stored result is unreadable: reconcile all sources, then --ack lastID --reconciled")
+	}
+	if !lost && reconciled {
+		return errors.New("--reconciled is only for an unreadable stored result")
+	}
+	if r.Ended {
+		return errors.New("wait budget has ended")
 	}
 	if r.Stopped && !resume {
 		return errors.New("stopped wait requires explicit --resume with the same thread ID")
@@ -100,8 +111,13 @@ func (r *Record) Bind(o Options, ack string, resume, reconciled bool) error {
 		r.Seen = nil
 	}
 	r.LastID = ""
+	r.Outstanding = nil
 	r.NeedsResync = false
 	r.Stopped = false
+	if lost {
+		r.resync()
+	}
+
 	return nil
 }
 
@@ -188,6 +204,10 @@ func (r *Record) Scan(files map[string]string, overflow bool) {
 // Take coalesces missed timer periods; stop and budget take precedence over work.
 // Callers must persist this transition successfully BEFORE printing a result.
 func (r *Record) Take(now time.Time, stop bool) *Result {
+	if r.Outstanding != nil {
+		e := *r.Outstanding
+		return &e
+	}
 	var e Result
 	switch {
 	case stop:
@@ -221,6 +241,8 @@ func (r *Record) Take(now time.Time, stop bool) *Result {
 		r.Seen = append(r.Seen, e.ID)
 	}
 	r.LastID = e.ID
+	saved := e
+	r.Outstanding = &saved
 	return &e
 }
 
@@ -262,26 +284,44 @@ func (r *Record) validate() error {
 			return errors.New("invalid event ID")
 		}
 	}
+	if r.Outstanding != nil {
+		if r.Outstanding.ID != r.LastID || r.validateResult(*r.Outstanding, true) != nil {
+			return errors.New("invalid outstanding result")
+		}
+	}
 	for _, e := range r.Pending {
-		if !validID(e.ID) {
-			return errors.New("invalid pending ID")
+		if err := r.validateResult(e, false); err != nil {
+			return err
 		}
-		switch e.Kind {
-		case "resync":
-			if !refusalReason(e.Reason) || e.Note != "" || e.Path != "" {
-				return errors.New("invalid refusal result")
-			}
-		case "note":
-			if e.Note == "" || len(e.Note) > 253 || !safeEntry(e.Note) || e.Path != "" {
-				return errors.New("invalid note reference")
-			}
-		case "file":
-			if e.Path != r.Options.Directory || e.Note != "" {
-				return errors.New("pending path escapes handoff directory")
-			}
-		default:
-			return errors.New("invalid pending kind")
+	}
+	return nil
+}
+func (r *Record) validateResult(e Result, complete bool) error {
+	if !validID(e.ID) {
+		return errors.New("invalid pending ID")
+	}
+	if complete && (e.Time.IsZero() || e.Cursor != r.Cursor || e.Watermark != r.Watermark) {
+		return errors.New("invalid outstanding checkpoint")
+	}
+	switch e.Kind {
+	case "timer", "stopped", "budget_end":
+		if !complete || e.Note != "" || e.Path != "" || e.Reason != "" {
+			return errors.New("invalid terminal result")
 		}
+	case "resync":
+		if !(refusalReason(e.Reason) || (complete && e.Reason == "")) || e.Note != "" || e.Path != "" {
+			return errors.New("invalid refusal result")
+		}
+	case "note":
+		if e.Reason != "" || e.Note == "" || len(e.Note) > 253 || !safeEntry(e.Note) || e.Path != "" {
+			return errors.New("invalid note reference")
+		}
+	case "file":
+		if e.Reason != "" || e.Path != r.Options.Directory || e.Note != "" {
+			return errors.New("pending path escapes handoff directory")
+		}
+	default:
+		return errors.New("invalid pending kind")
 	}
 	return nil
 }

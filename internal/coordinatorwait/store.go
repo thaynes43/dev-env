@@ -1,6 +1,7 @@
 package coordinatorwait
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -93,9 +94,28 @@ func (s *Store) Load() (*Record, error) {
 		return nil, errors.New("wait record changed")
 	}
 	var r Record
+	raw := struct {
+		*Record
+		Outstanding json.RawMessage `json:"outstanding"`
+	}{Record: &r}
 	dec := json.NewDecoder(io.LimitReader(f, (2<<20)+1))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&r) != nil || dec.Decode(&struct{}{}) != io.EOF || r.Options.Validate() != nil || r.validate() != nil || r.Options.MaxPending < len(r.Pending) || len(r.Seen) > r.Options.MaxPending || len(r.Files) > r.Options.MaxEntries || r.NextTimer.IsZero() {
+	if dec.Decode(&raw) != nil || dec.Decode(&struct{}{}) != io.EOF {
+		return nil, errors.New("invalid wait record")
+	}
+	if len(raw.Outstanding) > 0 && string(raw.Outstanding) != "null" {
+		var result Result
+		d := json.NewDecoder(bytes.NewReader(raw.Outstanding))
+		d.DisallowUnknownFields()
+		if d.Decode(&result) == nil && r.validateResult(result, true) == nil && result.ID == r.LastID {
+			r.Outstanding = &result
+		}
+		if r.Outstanding == nil && r.LastID == "" {
+			return nil, errors.New("invalid wait record")
+		}
+		// An unreadable result alone retains lastID for explicit source reconciliation.
+	}
+	if r.Options.Validate() != nil || r.validate() != nil || r.Options.MaxPending < len(r.Pending) || len(r.Seen) > r.Options.MaxPending || len(r.Files) > r.Options.MaxEntries || r.NextTimer.IsZero() {
 		return nil, errors.New("invalid wait record")
 	}
 	return &r, nil
