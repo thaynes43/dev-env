@@ -169,3 +169,24 @@ review status belong to the corresponding PR/head, recorded in the story
 handoff; an agent-only CLI candidate remains draft if its required auth claims
 cannot be established. Model-admission tests exercise each source-rule caller
 and still refuse an unknown ID. No CRD, defaults or privileged policy changes.
+
+### Later evidence from the separately assigned newest-client worker
+
+The coordinator's probe worker completed the 0.170.0 control and both 6.2
+requests at 2026-11-18T20:12Z. Sanitized receipts were appended to the story
+handoff as `probe-receipts-newer-cli.json`; this worker checked their completion,
+usage and unchanged-login/deletion fields without modifying that section.
+
+| Requested ID | CLI | Receipt / input, cached-input, output tokens |
+| --- | --- | --- |
+| `gpt-6.2-sol` | 0.170.0 | exit 0, turn.completed / 13,785, 11,136, 6 |
+| `gpt-6.2-astra` | 0.170.0 | exit 0, turn.completed / 13,734, 11,136, 6 |
+
+Both requests completed successfully. Native turn_context.model names the exact
+requested IDs, but the receipts expose no separate provider served-model field;
+no fallback is evidenced or claimed. These additional results do not erase the
+earlier 0.160.1 refusals or isolate client version from different pod/time. They
+also do not test 0.169.1, install a platform upgrade or establish the required
+unconditional no-refresh claim. The agent-only CLI candidate is held as draft
+[PR #1220](https://github.com/thaynes43/dev-env/pull/1220). The keeper prerequisite
+remains separate, and #955 must not merge as it stands.
