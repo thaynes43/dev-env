@@ -17,6 +17,8 @@ import (
 // a names-only listing of a HOME those versions wrote, Claude Code's own list
 // of config-directory names and the Codex source at rust-v0.160.1. DESIGN-025
 // 6.3 records what the confirmation added.
+// Codex names were rechecked against 0.169.1 in OP921's agent-image job;
+// docs/codex-169-upgrade-audit.md records its actions, names and limits.
 
 // historyKind is what a history entry must be. A history name that is some
 // other kind of file refuses the export (unexpected_entry); a link is listed
