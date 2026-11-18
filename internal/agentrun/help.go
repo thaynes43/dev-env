@@ -165,7 +165,8 @@ One custodian holds a nonblocking lock. Only changed records are written. At
 start, the lock holder removes only this record's exact regular crash temp in
 its own directory; a symlink/nonregular temp refuses. All limits and the directory are fixed
 for this wait identity. Defaults are parameters, not unattended-work approval.
-Timer/scan cadence: whole seconds >=1s; entries: 1..4096; pending: 1..1024.
+Timer: whole seconds >=1s; scan cadence: whole seconds >=5s (smaller refused at start).
+Entries: 1..4096; pending: 1..1024.
 Budget end must be at most 24 hours after wait start. This is a bound, not approval.
 
 Existing notes/files form the initial baseline unless --after names an earlier
@@ -175,14 +176,17 @@ Scans read bounded immediate directory metadata; no file text or recursion.
 Symlinked directories/ancestors, replacement and path traversal are refused;
 resolved path/device/inode stay pinned across calls. Unsafe entries (invalid
 UTF-8, controls, >255-byte names, unsafe paths or symlinks) yield one resync per
-changed entry, with no name and only reason: encoding, control, length, name or
-symlink. Only hashes persist; notes/timer/safe files still run. A file burst is
+scan batch, with a count, no names and one reason: encoding, control, length, name,
+symlink or limit (history bound). Only hashes persist; stale queued refusals are
+dropped. Entry overflow retains reported hashes and does not repeat refusals.
+Notes/timer/safe files still run. A file burst is
 one directory reference. Each changed snapshot has a persisted increasing
 transition number, including returns to an earlier state; replay keeps its id.
 A counter below a pending file result refuses. Receipt/counter bounds yield
 resync (pending bound above, counter ceiling 2^63). Entry overflow yields one
 resync, then ordinary pacing.
-JSON contains only kind, id, note or path, optional reason, cursor, watermark and time. Kinds:
+JSON contains only kind, id, note or path, optional reason/count, cursor, watermark,
+time and optional directoryUnchecked diagnostic. Kinds:
 timer, note, file, resync, stopped, budget_end. No note text, file text or command.
 
 Rearm the same explicit binding with --after/--watermark from the result and
@@ -197,7 +201,10 @@ unreadable stored result: reconcile all sources and pass --ack its saved lastID
 SIGTERM/cancellation or a regular .stop marker beside the record returns stopped
 with cursors saved. To resume, remove that marker deliberately and pass --resume,
 --ack and the SAME thread ID. Another thread, changed limits or an ended budget
-refuses. budget_end never rearms.
+refuses. budget_end never rearms. Stop, budget end and stored-result replay work
+when the directory is gone or replaced: directoryUnchecked=true says its pin
+could not be checked. That diagnostic is per call; stored event metadata and id
+stay unchanged. New waits and ordinary rearming still require the pinned directory.
 A stop before the first confirmed parent cursor needs a fresh cursor capture on
 explicit resume; that returns resync before any held read can rearm. A held owner question pauses its own lane;
 this wait does not read answers or release any hold. No wake grants authority.

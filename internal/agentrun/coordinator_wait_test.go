@@ -360,9 +360,7 @@ func TestCoordinatorWaitPinsDirectoryAcrossCalls(t *testing.T) {
 				}
 				code = ExitUnconfirmed
 			}
-			// If the identity guard is removed, fail on the immediate local budget
-			// result instead of holding an unadvanced fake clock indefinitely.
-			h.env.WaitClock = &waitTestClock{testingclock.NewFakeClock(testNow.Add(5 * time.Hour))}
+			// The fake API returns at once if a broken identity guard adopts it.
 			h.mustRun(code, append(args, "--ack", first.ID)...)
 			if h.stdout.Len() != 0 || len(h.api.requests()) != 2 {
 				t.Fatal("another directory adopted across calls")
@@ -425,5 +423,95 @@ func TestCoordinatorWaitReplayIgnoresPreviousCallCursors(t *testing.T) {
 	h.mustRun(ExitUsage, append(retry, "--ack", first.ID)...)
 	if h.stdout.Len() != 0 || len(h.api.requests()) != 2 {
 		t.Fatal("ACK advanced with stale source cursors")
+	}
+}
+
+func TestCoordinatorWaitLocalResultsWithoutDirectory(t *testing.T) {
+	for _, change := range []string{"gone", "replaced"} {
+		for _, kind := range []string{"stopped", "budget_end", "replay", "rearm"} {
+			t.Run(change+"/"+kind, func(t *testing.T) {
+				h, args := waitHarness(t)
+				h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+					if r.URL.Query().Get("seconds") == "0" {
+						writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "waiting", Cursor: "42"})
+						return
+					}
+					writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "note", Name: parentTestMetadata().Name, Child: "child", Kind: "result", CreatedAt: testNow, Cursor: "43"})
+				}
+				h.mustRun(ExitOK, args...)
+				first := resultFrom(t, h)
+				if err := os.Rename(args[7], args[7]+"-old"); err != nil {
+					t.Fatal(err)
+				}
+				if change == "replaced" {
+					if err := os.Mkdir(args[7], 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if kind == "replay" {
+					h.mustRun(ExitOK, args...)
+					got := resultFrom(t, h)
+					if !got.DirectoryUnchecked {
+						t.Fatal("replay omitted directory diagnostic")
+					}
+					got.DirectoryUnchecked = false
+					if got != first {
+						t.Fatal("stored replay metadata changed")
+					}
+				} else {
+					next := append(append([]string(nil), args...), "--ack", first.ID)
+					switch kind {
+					case "stopped":
+						records, err := filepath.Glob(filepath.Join(h.dir, ".dev-env-coordinator-waits", "*.json"))
+						if err != nil || len(records) != 1 {
+							t.Fatal("missing record")
+						}
+						if err := os.WriteFile(strings.TrimSuffix(records[0], ".json")+".stop", nil, 0600); err != nil {
+							t.Fatal(err)
+						}
+					case "budget_end":
+						h.env.WaitClock = &waitTestClock{testingclock.NewFakeClock(testNow.Add(5 * time.Hour))}
+					}
+					if kind == "rearm" {
+						h.mustRun(ExitFailed, next...)
+						if h.stdout.Len() != 0 {
+							t.Fatal("unavailable directory adopted")
+						}
+					} else {
+						h.mustRun(ExitOK, next...)
+						got := resultFrom(t, h)
+						if got.Kind != kind || !got.DirectoryUnchecked || got.Cursor != first.Cursor || got.Watermark != first.Watermark {
+							t.Fatalf("local result: %#v", got)
+						}
+						// The diagnostic is per call; the durable result still loads and replays.
+						h.mustRun(ExitOK, args...)
+						if !resultFrom(t, h).DirectoryUnchecked {
+							t.Fatal("terminal replay omitted diagnostic")
+						}
+					}
+				}
+				if len(h.api.requests()) != 2 {
+					t.Fatal("local result made another read")
+				}
+			})
+		}
+	}
+}
+
+func TestCoordinatorWaitMinimumScanInterval(t *testing.T) {
+	for _, interval := range []string{"1s", "4s", "4999ms", "5s", "6s"} {
+		t.Run(interval, func(t *testing.T) {
+			h, args := waitHarness(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			code := Run(ctx, append(args, "--scan-every", interval), h.env)
+			want := ExitUsage
+			if interval == "5s" || interval == "6s" {
+				want = ExitOK
+			}
+			if code != want || len(h.api.requests()) != 0 {
+				t.Fatalf("interval %s exit %d want %d: %s", interval, code, want, h.stderr.String())
+			}
+		})
 	}
 }

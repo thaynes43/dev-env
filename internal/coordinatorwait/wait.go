@@ -36,45 +36,48 @@ func (o Options) Validate() error {
 	if !filepath.IsAbs(o.Directory) || filepath.Clean(o.Directory) != o.Directory || len(o.Directory) > 4096 {
 		return errors.New("directory must be an absolute clean path")
 	}
-	if o.Timer < time.Second || o.ScanEvery < time.Second || o.Timer%time.Second != 0 || o.ScanEvery%time.Second != 0 || o.MaxEntries < 1 || o.MaxEntries > 4096 || o.MaxPending < 1 || o.MaxPending > 1024 || o.BudgetEnd.IsZero() {
-		return errors.New("require whole-second timer/scan cadence >=1s, entries 1..4096, pending 1..1024 and budget end")
+	if o.Timer < time.Second || o.ScanEvery < 5*time.Second || o.Timer%time.Second != 0 || o.ScanEvery%time.Second != 0 || o.MaxEntries < 1 || o.MaxEntries > 4096 || o.MaxPending < 1 || o.MaxPending > 1024 || o.BudgetEnd.IsZero() {
+		return errors.New("require whole-second timer >=1s and scan cadence >=5s, entries 1..4096, pending 1..1024 and budget end")
 	}
 	return nil
 }
 
 // Result is the complete output allowlist. References are data, never commands.
 type Result struct {
-	Kind      string    `json:"kind"`
-	Reason    string    `json:"reason,omitempty"`
-	ID        string    `json:"id"`
-	Note      string    `json:"note,omitempty"`
-	Path      string    `json:"path,omitempty"`
-	Cursor    string    `json:"cursor"`
-	Watermark string    `json:"watermark"`
-	Time      time.Time `json:"time"`
+	Kind               string    `json:"kind"`
+	Reason             string    `json:"reason,omitempty"`
+	Count              int       `json:"count,omitempty"`
+	DirectoryUnchecked bool      `json:"directoryUnchecked,omitempty"`
+	ID                 string    `json:"id"`
+	Note               string    `json:"note,omitempty"`
+	Path               string    `json:"path,omitempty"`
+	Cursor             string    `json:"cursor"`
+	Watermark          string    `json:"watermark"`
+	Time               time.Time `json:"time"`
 }
 
 // Record is private to this Session and caller-named native thread. Outstanding
 // is committed before output and replayed whole until its exact ID is acknowledged.
 type Record struct {
-	Started       time.Time          `json:"started"`
-	DirectoryPin  *DirectoryIdentity `json:"directoryPin,omitempty"`
-	EntryOverflow bool               `json:"entryOverflow"`
-	Options       Options            `json:"options"`
-	NextTimer     time.Time          `json:"nextTimer"`
-	Cursor        string             `json:"cursor"`
-	Watermark     string             `json:"watermark"`
-	Files         map[string]string  `json:"files"`
-	Refused       []string           `json:"refused,omitempty"`
-	Pending       []Result           `json:"pending"`
-	Seen          []string           `json:"seen"`
-	Transitions   uint64             `json:"transitions"`
-	Sequence      uint64             `json:"sequence"`
-	Outstanding   *Result            `json:"outstanding,omitempty"`
-	LastID        string             `json:"lastID,omitempty"`
-	Stopped       bool               `json:"stopped"`
-	Ended         bool               `json:"ended"`
-	NeedsResync   bool               `json:"needsResync"`
+	Started         time.Time          `json:"started"`
+	DirectoryPin    *DirectoryIdentity `json:"directoryPin,omitempty"`
+	EntryOverflow   bool               `json:"entryOverflow"`
+	Options         Options            `json:"options"`
+	NextTimer       time.Time          `json:"nextTimer"`
+	Cursor          string             `json:"cursor"`
+	Watermark       string             `json:"watermark"`
+	Files           map[string]string  `json:"files"`
+	Refused         []string           `json:"refused,omitempty"`
+	PendingRefusals []string           `json:"pendingRefusals,omitempty"`
+	Pending         []Result           `json:"pending"`
+	Seen            []string           `json:"seen"`
+	Transitions     uint64             `json:"transitions"`
+	Sequence        uint64             `json:"sequence"`
+	Outstanding     *Result            `json:"outstanding,omitempty"`
+	LastID          string             `json:"lastID,omitempty"`
+	Stopped         bool               `json:"stopped"`
+	Ended           bool               `json:"ended"`
+	NeedsResync     bool               `json:"needsResync"`
 }
 
 func New(o Options, now time.Time, cursor string, files map[string]string) *Record {
@@ -152,30 +155,48 @@ func (r *Record) add(e Result) {
 func (r *Record) resync() {
 	r.NeedsResync = true
 	r.Pending = nil
+	r.PendingRefusals = nil
 }
 
-// Refuse reports each changed refused entry once without retaining its name or
-// identity. Queue only available slots; later scans report the rest without
-// displacing notes or file events. Sorting makes bounded selection deterministic.
+// Refuse rebuilds one redacted batch from the current complete scan. Stale
+// queued reports are dropped. During entry overflow the subset is incomplete:
+// retain history and let the single overflow resync cover directory refusals.
 func (r *Record) Refuse(refused map[string]string) {
-	kept := make([]string, 0, len(r.Refused))
+	r.Pending = slices.DeleteFunc(r.Pending, func(e Result) bool { return e.Kind == "resync" && e.Reason != "" })
+	r.PendingRefusals = nil
+	if r.EntryOverflow {
+		return
+	}
+	kept := make([]string, 0, min(len(r.Refused), r.Options.MaxEntries))
 	for _, hash := range r.Refused {
-		if _, ok := refused[hash]; ok {
+		if _, ok := refused[hash]; ok && !slices.Contains(kept, hash) && len(kept) < r.Options.MaxEntries {
 			kept = append(kept, hash)
 		}
 	}
 	r.Refused = kept
 	keys := make([]string, 0, len(refused))
 	for hash := range refused {
-		keys = append(keys, hash)
+		if !slices.Contains(r.Refused, hash) {
+			keys = append(keys, hash)
+		}
 	}
 	slices.Sort(keys)
-	for _, hash := range keys {
-		if slices.Contains(r.Refused, hash) || slices.ContainsFunc(r.Pending, func(e Result) bool { return e.ID == hash }) || len(r.Pending) >= r.Options.MaxPending || r.NeedsResync {
-			continue
-		}
-		r.Pending = append(r.Pending, Result{Kind: "resync", ID: hash, Reason: refused[hash]})
+	if len(keys) == 0 || r.NeedsResync {
+		return
 	}
+	if len(r.Pending) >= r.Options.MaxPending {
+		r.resync()
+		return
+	}
+	reason := refused[keys[0]]
+	count := len(keys)
+	if count > r.Options.MaxEntries-len(r.Refused) {
+		// A partial/legacy queue must never make the next save fail.
+		reason = "limit"
+		keys = keys[:r.Options.MaxEntries-len(r.Refused)]
+	}
+	r.PendingRefusals = keys
+	r.Pending = append(r.Pending, Result{Kind: "resync", ID: digest(fmt.Sprint(keys)), Reason: reason, Count: count})
 }
 
 // Scan coalesces one metadata burst to one directory reference. No entry text is
@@ -258,7 +279,12 @@ func (r *Record) Take(now time.Time, stop bool) *Result {
 		r.Seen = append(r.Seen, e.ID)
 	}
 	if e.Kind == "resync" && e.Reason != "" {
-		r.Refused = append(r.Refused, e.ID)
+		if len(r.Refused)+len(r.PendingRefusals) > r.Options.MaxEntries {
+			e.Reason = "limit"
+			r.PendingRefusals = r.PendingRefusals[:max(0, r.Options.MaxEntries-len(r.Refused))]
+		}
+		r.Refused = append(r.Refused, r.PendingRefusals...)
+		r.PendingRefusals = nil
 	}
 	r.LastID = e.ID
 	saved := e
@@ -308,10 +334,10 @@ func (r *Record) validate() error {
 	if r.Watermark != watermark(r.Files) || r.Sequence > 1<<63 || r.Transitions > 1<<63 {
 		return errors.New("invalid checkpoint")
 	}
-	if len(r.Refused) > r.Options.MaxEntries {
+	if len(r.Refused) > r.Options.MaxEntries || len(r.PendingRefusals) > r.Options.MaxEntries {
 		return errors.New("invalid refusal bound")
 	}
-	for _, hash := range r.Refused {
+	for _, hash := range append(slices.Clone(r.Refused), r.PendingRefusals...) {
 		if !validID(hash) {
 			return errors.New("invalid refusal hash")
 		}
@@ -339,8 +365,8 @@ func (r *Record) validate() error {
 	return nil
 }
 func (r *Record) validateResult(e Result, complete bool) error {
-	if !validID(e.ID) {
-		return errors.New("invalid pending ID")
+	if !validID(e.ID) || e.Count < 0 || e.Count > 4096 || e.Count != 0 && (e.Kind != "resync" || e.Reason == "") || e.DirectoryUnchecked {
+		return errors.New("invalid pending ID or diagnostic metadata")
 	}
 	if complete && (e.Time.IsZero() || e.Cursor != r.Cursor || e.Watermark != r.Watermark) {
 		return errors.New("invalid outstanding checkpoint")

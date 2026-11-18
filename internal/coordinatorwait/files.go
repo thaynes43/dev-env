@@ -164,7 +164,7 @@ func entryReason(name string) string {
 }
 func refusalReason(reason string) bool {
 	switch reason {
-	case "encoding", "control", "length", "name", "symlink":
+	case "encoding", "control", "length", "name", "symlink", "limit":
 		return true
 	}
 	return false

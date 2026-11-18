@@ -84,7 +84,7 @@ c2_thread=$(cat "$HOME/.dev-env-c2-proof/thread-id")
 c2_end=$(cat "$HOME/.dev-env-c2-proof/budget-end")
 agent-run coordinator wait --thread "$c2_thread" --wait-id c2-timer \
   --directory "$HOME/.dev-env-c2-proof/handoffs" --budget-end "$c2_end" \
-  --timer 30s --scan-every 2s --max-entries 32 --max-pending 16
+  --timer 30s --scan-every 5s --max-entries 32 --max-pending 16
 ```
 
 Do not use `write_stdin`/a wait-tool poll to fetch completion during the idle
@@ -112,7 +112,7 @@ c2_thread=$(cat "$HOME/.dev-env-c2-proof/thread-id")
 c2_end=$(cat "$HOME/.dev-env-c2-proof/budget-end")
 agent-run coordinator wait --thread "$c2_thread" --wait-id c2-note \
   --directory "$HOME/.dev-env-c2-proof/handoffs" --budget-end "$c2_end" \
-  --timer 5m --scan-every 2s --max-entries 32 --max-pending 16
+  --timer 5m --scan-every 5s --max-entries 32 --max-pending 16
 ```
 
 The observer confirms the held read was armed and the thread is idle. In the
@@ -140,7 +140,7 @@ c2_thread=$(cat "$HOME/.dev-env-c2-proof/thread-id")
 c2_end=$(cat "$HOME/.dev-env-c2-proof/budget-end")
 agent-run coordinator wait --thread "$c2_thread" --wait-id c2-file \
   --directory "$HOME/.dev-env-c2-proof/handoffs" --budget-end "$c2_end" \
-  --timer 5m --scan-every 2s --max-entries 32 --max-pending 16
+  --timer 5m --scan-every 5s --max-entries 32 --max-pending 16
 ```
 
 The observer confirms its baseline is saved and the thread is idle. An authorized ordinary local writer,

@@ -84,22 +84,23 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 	if fresh && o.BudgetEnd.After(waitClock.Now().Add(24*time.Hour)) {
 		return usageError("coordinator wait budget end must be at most 24 hours after the wait starts")
 	}
-	directory, err := coordinatorwait.OpenDirectory(o.Directory)
-	if err != nil {
-		return fail(ExitFailed, "coordinator wait: %s", err)
-	}
-	defer func() { _ = directory.Close() }()
 	if fresh {
 		r = coordinatorwait.New(o, waitClock.Now(), after, nil)
 	}
-	if err = r.BindDirectory(directory); err != nil {
-		return fail(ExitFailed, "coordinator wait: %s", err)
+	directory, directoryErr := coordinatorwait.OpenDirectory(o.Directory)
+	if directoryErr == nil {
+		defer func() { _ = directory.Close() }()
+		directoryErr = r.BindDirectory(directory)
+	}
+	// A new binding always requires the real directory. Existing local terminal
+	// results and durable replay survive its disappearance or replacement.
+	if fresh && directoryErr != nil {
+		return fail(ExitFailed, "coordinator wait: %s", directoryErr)
 	}
 	if r.Outstanding != nil {
-		if err = store.Save(r); err != nil {
-			return fail(ExitFailed, "coordinator wait: %s", err)
-		}
-		return a.printJSON(r.Outstanding)
+		result := *r.Outstanding
+		result.DirectoryUnchecked = directoryErr != nil
+		return a.printJSON(&result)
 	}
 	stop, err := store.StopRequested()
 	if err != nil {
@@ -111,7 +112,11 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 		if err = store.Save(r); err != nil {
 			return fail(ExitFailed, "coordinator wait: %s", err)
 		}
+		result.DirectoryUnchecked = directoryErr != nil
 		return a.printJSON(result)
+	}
+	if directoryErr != nil {
+		return fail(ExitFailed, "coordinator wait: %s", directoryErr)
 	}
 	setupCtx, finishSetup := coordinatorWaitSetupContext(ctx, waitClock, o.BudgetEnd)
 	defer finishSetup()
@@ -149,10 +154,10 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 			r.Scan(snapshot.Files, snapshot.Overflow)
 			r.Note("", initial.Cursor, true)
 		}
-		r.Refuse(snapshot.Refused)
 		if snapshot.Overflow {
 			r.Scan(snapshot.Files, true)
 		}
+		r.Refuse(snapshot.Refused)
 	}
 	if err = store.Save(r); err != nil {
 		return fail(ExitFailed, "coordinator wait: %s", err)

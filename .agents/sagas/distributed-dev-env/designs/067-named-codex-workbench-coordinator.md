@@ -962,6 +962,9 @@ the separately configured coordinator-host caller.
 **Slice (c2) known limit, coordinator ruling 2026-11-18:** a note re-created under
 the same name is skipped while its name-derived ID is in the bounded receipt
 history. Its cursor still advances. This fix round does not change note identity.
+A directory deleted and recreated at the same path with the same device and inode
+number passes the directory pin. Inode reuse is a known limit; no workaround is
+built in this slice.
 
 1. **Whole workbench power.** The guards constrain supported operator routes.
    They cannot contain a malicious or mistaken workbench agent that can exec into
@@ -1150,6 +1153,23 @@ clears only that history, preserving the counter. The counter's own 2^63 upper
 bound also yields resync without wrapping. Fake-clock A-add/A-delete/B-add/B-delete,
 replay, stop/resume and rollback tests cover this ruling; the watermark-only
 ID mutant is listed in the PR. This is source-only and grants no new wake.
+
+**Fix round 2 (G1–G5), 2026-11-18:** `agent/dev-env-1118-190256` retains
+reviewed head `6f23c46000d6807f8cc5f800e31548430e3a9e43`. Refusal queues are rebuilt
+from the current scan, dropping gone entries, and one batch returns one redacted
+resync with a count and a closed reason. Hash-only history is bounded; its limit
+yields reason `limit`, never a failed save. Partial entry-overflow scans retain
+reported hashes and do not repeat refusals. Stop, budget end and durable result
+replay survive a gone/replaced directory with per-call `directoryUnchecked: true`;
+new waits and ordinary rearming still refuse it. Replay keeps the stored event
+metadata and ID. A package-level regression kills the removed directory-pin guard.
+The minimum whole-second scan cadence is five seconds and smaller values refuse
+at start. Tests include the max-entries=2 rename/stale-queue probe, batch count and
+note/timer progress, overflow suppression, terminal/replay directory loss, pinning
+and cadence boundaries. The PR extends the deciding-guard mutant table. The inode
+reuse limit is recorded in section 12. Source/fakes only; nothing installed or
+accepted. Independent delta review and merge remain with the coordinator; older
+PRs 1210 and 1207 and their branches are untouched.
 
 The worker starts no other agent/session and performs its own diff review.
 Independent/cross-family review remains with the coordinator, per this work

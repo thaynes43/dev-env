@@ -1352,12 +1352,13 @@ agent-run coordinator wait --thread <same-id> --wait-id <same-tool-call-id> \
 The timer, scan cadence and bounds are parameters; hourly operation is not an
 answer to pending Q-067-02. A budget end is mandatory and cannot be extended on
 an existing wait. It must be at most 24 hours after the wait starts; this upper
-bound grants no unattended-work authority. `budget_end` persists the end and never rearms. Default scans
-are ten seconds apart, immediate entries only, at most 256 metadata records
+bound grants no unattended-work authority. `budget_end` persists the end and never rearms. Scans must be whole seconds and at least five seconds apart; smaller values
+are refused at start. Default scans are ten seconds apart, immediate entries only, at most 256 metadata records
 (ceiling 4096). They open no handoff contents or subdirectories and use no
 inotify. Symlinked directories/ancestors, directory replacement and unclean/outside
 paths refuse. The resolved directory path, device and inode stay pinned across
-all calls for this wait. File results reference that directory, so a burst
+all calls for this wait. A removed directory recreated with the same device and
+inode number passes the pin; inode reuse is a known limit. File results reference that directory, so a burst
 produces one result and the coordinator deliberately reads its files. Each
 changed snapshot gets an increasing persisted transition number: returning to a
 previous state still reports a new event. The number survives stop/resume; a
@@ -1365,12 +1366,21 @@ record below a pending file result's number refuses as corrupt. Receipt history
 is bounded by `--max-pending`; reaching it yields resync. The transition counter
 has a 2^63 ceiling, which also yields resync without wrapping.
 
+Stop, budget end and replay of a stored unacknowledged result still return when
+the directory is gone or replaced. Their result includes `directoryUnchecked: true`
+when its pin could not be checked. This per-call diagnostic does not alter the
+stored event's metadata or ID. New waits and ordinary rearms require a valid pin.
+
 An entry with invalid UTF-8, a control character, a name over 255 bytes, an unsafe
 path name or a symlink is refused without blocking the other lanes. Each changed
-refusal yields one `resync` with only a closed reason word: `encoding`, `control`,
-`length`, `name` or `symlink`. No refused name or link target is output or saved;
+scan batches its changed refusals into one `resync` with a count and one closed
+reason word: `encoding`, `control`, `length`, `name`, `symlink` or `limit`
+(the refusal-history bound). No refused name or link target is output or saved;
 the record remembers only a hash of raw name bytes and metadata/identity.
-Unchanged refused entries are suppressed after acknowledgement. A directory over
+Queued refusal reports for entries no longer present are dropped. History stays
+bounded; reaching its limit returns a resync instead of failing a save. Unchanged
+refused entries are suppressed after acknowledgement. Partial scans during entry
+overflow retain the reported hashes and do not report those refusals again. A directory over
 the entry bound yields one resync per overflow episode, then keeps the ordinary
 scan/read cadence instead of yielding resync on every call.
 
@@ -1383,7 +1393,8 @@ Unrelated notes and replies remain filtered by the existing server contract.
 A refusal/lost API receipt stops the command; it does not retry automatically.
 
 Every success prints one JSON object containing only `kind`, `id`, optional
-`note` or `path`, optional refused-entry `reason`, `cursor`, `watermark` and `time`. Kinds are `timer`, `note`,
+`note` or `path`, optional refused-entry `reason`/`count`, `cursor`, `watermark`,
+`time` and optional `directoryUnchecked`. Kinds are `timer`, `note`,
 `file`, `resync`, `stopped`, `budget_end`. It carries no file/note text, key or
 command. Metadata is untrusted evidence, never an owner answer or permission.
 An unanswered question holds only its dependent lane; event collection does
