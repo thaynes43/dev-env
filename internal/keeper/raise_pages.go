@@ -9,18 +9,55 @@ import (
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/sessionraise"
 	"github.com/thaynes43/dev-env/internal/sessiontitle"
 )
 
-// RaisePageOptions selects the keeper's raise notices. The zero value uses
-// the DESIGN-066 object names. Notices go out at any hour: they do not
-// follow the ask quiet window.
+// RaisePageOptions selects the keeper's raise notices. The zero value is
+// off; when enabled, empty names use the DESIGN-066 defaults. Notices go
+// out at any hour: they do not follow the ask quiet window.
 type RaisePageOptions struct {
+	Enabled          bool
 	SessionNamespace string
 	KeySecret        string
+}
+
+// registerRaisePager is Run's startup decision. Off means no pager, client
+// acquisition, object access or Ensure call. Invalid settings disable only
+// this feature, like summonPagerFor; credential work still starts.
+func registerRaisePager(o Options, mgr interface {
+	GetClient() client.Client
+	GetAPIReader() client.Reader
+	Add(manager.Runnable) error
+}) error {
+	if !o.RaisePages.Enabled {
+		return nil
+	}
+	log := o.Log
+	if log.GetSink() == nil {
+		log = logr.Discard()
+	}
+	if !o.LeaderElect || o.Notices.Disabled || o.Notices.Validate() != nil {
+		log.Error(nil, "raise notices disabled: invalid configuration")
+		return nil
+	}
+	notices := o.Notices.withDefaults()
+	clk := o.Clock
+	return mgr.Add(&RaisePager{
+		Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.Namespace,
+		SessionNamespace: o.RaisePages.SessionNamespace, KeySecret: o.RaisePages.KeySecret,
+		Sender: &PushoverSender{URL: notices.URL, TokenFile: notices.TokenFile, UserFile: notices.UserFile},
+		Now: func() time.Time {
+			if clk != nil {
+				return clk.Now()
+			}
+			return time.Now()
+		},
+		Log: log.WithName("raise-notices"),
+	})
 }
 
 // RaisePager announces a pending raise and a take-back. It signs each

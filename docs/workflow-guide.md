@@ -944,8 +944,50 @@ them off a raise is refused. A view of a pending or active record then
 says the raise is ignored because raising is switched off. A taken-back
 or unannounced record is shown as it is.
 
-It needs no flag, pairing or sign-in on the default profile, which follows the
-keeper's shared login. Tell Tom the session name once `show` reads
+The keepers of releases 2.110.0 and 2.111.0 do not have the raise-notice
+switch and create the signing key at their first start as leader when its
+field is empty. Do not pin either before the admission and reader checks in
+DESIGN-066 section 11. The keeper ships in the dev-env-operator image,
+which haynes-ops pins by sha, including main builds between releases. Every
+build from commit `29575187` (PR 1145) up to, but excluding, the merge commit
+of OP919 has no switch and creates the key at its first start as leader when
+its field is empty, released or not; this includes `sha-e8f8184` and
+`sha-4f3ef3d`. Before pinning, check
+`git merge-base --is-ancestor <the merge commit of OP919> <the commit to pin>`;
+exit 0 confirms that the commit contains the switch. The switch first exists
+in the release after 2.111.0, which contains OP919.
+
+From the merge commit of OP919, keeper raise notices and signing-key
+initialization require `--enable-session-raise-notices=true`, false by default
+and decided at startup. Write the boolean with an equals sign (`=true` or
+`=false`): the two-argument form `--enable-session-raise-notices true` (or
+`false`) leaves an unexpected positional argument and stops the whole keeper.
+A malformed value (`=x`) disables only this pager.
+
+**Enable notices.** Pinning that keeper image with the switch unset leaves the raise key Secret,
+public ConfigMap and notice ledger untouched. After the admission and reader
+checks, enable keeper notices and check the published public key before
+enabling the operator's `--enable-session-raise-dispatch`. See
+[DESIGN-066 section 11](../.agents/sagas/distributed-dev-env/designs/066-raise-a-running-session.md#11-slices)
+for the install checks.
+
+With keeper notices off and dispatch on, a new pending raise gets no notice and cannot activate
+from new notice evidence while the keeper stays off. Pending raises do not
+expire: when keeper notices are enabled later, all still-eligible queued
+raises are notified and can activate two minutes after their signed Sent
+notice, even if requested days earlier. Enable keeper notices first for this
+reason (DESIGN-066 known limit 11). Turning the keeper switch off preserves
+earlier keys and signed notice evidence, which can still satisfy activation.
+
+**Disable notices.** Disable operator dispatch first, take back pending and active
+raises while keeper notices remain enabled, and confirm the signed take-back
+Sent outcomes before disabling keeper notices (DESIGN-066 section 11).
+Otherwise a later take-back still ends the raise but sends no notice while
+the keeper switch is off.
+
+A Claude Remote Control session needs no flag, pairing or sign-in on the
+default profile, which follows the keeper's shared login. Tell Tom the
+session name once `show` reads
 `registered` (about two minutes; [quickstart section
 1](v2-quickstart.md#1-a-claude-session-on-your-phone) has the measured
 timings). If it reads `login-required`, the keeper's login needs renewing
@@ -1329,6 +1371,130 @@ printed. Read every page of `agent-run parent list`, passing `--continue`
 until none is returned. Then start `agent-run parent wait-any --after` with
 the kept cursor. The wait cursor and the list continuation are different
 things.
+
+### A coordinator combines timer, note and handoff metadata
+
+`agent-run coordinator wait` (DESIGN-067 slice c2) is a source-only adapter for a
+wait started by the coordinator thread's own tool call. It starts no provider
+turn. An idle Codex wake is **unconfirmed**; current async Hooks documentation
+says completion waits for the next user turn. Watch custody stays with the
+outgoing coordinator until the [three idle-thread proofs](coordinator-wait-proof.md)
+pass under their own authorized story.
+
+```sh
+agent-run coordinator wait --thread <explicit-native-thread-id> --wait-id <tool-call-id> \
+  --directory /absolute/handoff/directory --budget-end <RFC3339-UTC-time> \
+  --timer 1h --scan-every 10s --max-entries 256 --max-pending 64
+# After consuming a result, explicitly re-arm the same binding and fixed limits:
+agent-run coordinator wait --thread <same-id> --wait-id <same-tool-call-id> \
+  --directory /absolute/handoff/directory --budget-end <same-time> \
+  --after <returned-cursor> --watermark <returned-watermark> --ack <event-id>
+```
+
+The timer, scan cadence and bounds are parameters; hourly operation is not an
+answer to pending Q-067-02. A budget end is mandatory and cannot be extended on
+an existing wait. It must be at most 24 hours after the wait starts; this upper
+bound grants no unattended-work authority. `budget_end` persists the end and never rearms. Scans must be whole seconds and at least five seconds apart; smaller values
+are refused at start. Default scans are ten seconds apart, immediate entries only, at most 256 metadata records
+(ceiling 1024; larger values refuse at start). They open no handoff contents or subdirectories and use no
+inotify. Symlinked directories/ancestors, directory replacement and unclean/outside
+paths refuse. The resolved directory path, device and inode stay pinned across
+all calls for this wait. A removed directory recreated with the same device and
+inode number passes the pin; inode reuse is a known limit. File results reference that directory, so a burst
+produces one result and the coordinator deliberately reads its files. Each
+changed snapshot gets an increasing persisted transition number: returning to a
+previous state still reports a new event. The number survives stop/resume; a
+record below a pending file result's number refuses as corrupt. Receipt history
+is bounded by `--max-pending`; reaching it yields resync. The transition counter
+has a 2^63 ceiling, which also yields resync without wrapping.
+
+Stop, budget end and replay of a stored unacknowledged result still return when
+the directory is gone or replaced. Their result includes `directoryUnchecked: true`
+when its pin could not be checked. This per-call diagnostic does not alter the
+stored event's metadata or ID. New waits and ordinary rearms require a valid pin.
+
+An entry with invalid UTF-8, a control character, a name over 255 bytes, an unsafe
+path name or a symlink is refused without blocking the other lanes. Each changed
+scan batches its changed refusals into one `resync` with a count and one closed
+reason word: `encoding`, `control`, `length`, `name`, `symlink` or `limit`
+(the refusal-history bound). No refused name or link target is output or saved;
+the record remembers only a hash of raw name bytes and metadata/identity.
+Queued refusal reports for entries no longer present are dropped. History stays
+bounded; reaching its limit returns a resync instead of failing a save. Unchanged
+refused entries are suppressed after acknowledgement. Partial scans during entry
+overflow retain the reported hashes and do not report those refusals again. A directory over
+the entry bound yields one resync per overflow episode, then keeps the ordinary
+scan/read cadence instead of yielding resync on every call.
+
+At most one existing parent wait-any read is held, at most 900 seconds per
+request, with the existing cursor and resync semantics. Initial notes and files
+are a baseline; take a parent cursor before dispatch if earlier arrivals matter.
+Stored replay goes first, then a due timer immediately. Otherwise a new directory
+result first makes one held parent read of at most one second: a note wins once,
+then the owed directory wins the next work call even if another note is there.
+That note stays at its original cursor for the next call. Timer calls do not
+consume this alternation. The private record preserves owed state across stop
+and resume; owed state without a directory change returns a directory resync.
+Every rearm uses the confirmed returned cursor. No list or retry loop is added.
+A response that ends early is rearmed no sooner than the configured scan cadence.
+Unrelated notes and replies remain filtered by the existing server contract.
+A refusal/lost API receipt stops the command; it does not retry automatically.
+
+Every success prints one JSON object containing only `kind`, `id`, optional
+`note` or `path`, optional refused-entry `reason`/`count`, resync `lane`, `cursor`, `watermark`,
+`time` and optional `directoryUnchecked`. Kinds are `timer`, `note`,
+`file`, `resync`, `stopped`, `budget_end`. It carries no file/note text, key or
+command. Metadata is untrusted evidence, never an owner answer or permission.
+An unanswered question holds only its dependent lane; event collection does
+not release that hold or resume a paused worker.
+
+The Session UID comes from the caller's bounded `AGENTD_SESSION[_FILE]`, and the
+native thread and tool/wait identity must be explicit. The fixed directory,
+limits, next timer, parent cursor, directory watermark/snapshot, bounded pending
+IDs/receipts, budget and stop state are stored under private HOME in
+`.dev-env-coordinator-waits/`. Directory mode is 0700, records and locks 0600.
+The filename stem is SHA256 of `SessionUID:wait-id`. An exclusive nonblocking
+process lock admits one custodian. A changed record fsyncs a temporary file,
+renames it atomically and fsyncs the directory before a result can escape.
+Unchanged records are not rewritten. At the next start, under that same lock,
+only the record's exact regular temporary file in its own directory is removed;
+a symlink or nonregular temporary refuses. Other files are untouched.
+
+Rearm requires `--ack` of the stored outstanding result; supplied
+`--after`/`--watermark` must equal the checkpoint when acknowledging/rearming.
+A call without ACK replays the stored result even with its previous cursor flags.
+The complete result is saved
+before output. Without an ACK, the next call returns it unchanged with the same
+ID, timestamp, cursor and watermark, without reading sources. Consumers handle
+that ID once and acknowledge it; a wrong ID cannot advance the wait. A crash
+before a successful save emits no result. Bounded receipt history also overflows
+to `resync`. Its `lane` tells the caller what to reconcile:
+
+- `directory`: inspect directory metadata only, including refused entries and too
+  many entries; no parent list read is needed.
+- `notes`: read **all** parent list pages with `--continue` until none remains.
+- `all`: do both. Queue/receipt overflow or unreadable-result recovery can need
+  both lanes. For a legacy result without `lane`, a reason means directory only;
+  no reason means both.
+
+Then rearm with `--ack` and the saved wait cursor. The list continuation is not
+that cursor.
+
+`--reconciled` is only for a stored result that itself cannot be read while the surrounding record remains valid:
+reconcile every source, then pass
+`--ack` with its saved `lastID` and `--reconciled`. Recovery returns resync. The
+flag is refused for a readable result and cannot bypass a corrupt outer record.
+A note re-created under the same name is skipped while that name's ID remains
+in the bounded receipt history; section 12 of DESIGN-067 records this limit.
+
+SIGTERM/cancellation or a regular `<stem>.stop` beside the record returns
+`stopped` with cursors/pending work saved. No stop-marker text is read. A
+symlinked marker refuses. Remove a marker deliberately; resume requires a new
+own tool call with `--resume`, the same thread/wait identity, `--ack` and fixed
+budget/limits. A different thread refuses. The adapter never discovers or adopts
+the latest native thread and never resumes a host, thread or provider turn.
+A stop before the first confirmed parent cursor needs a fresh cursor capture on
+explicit resume; that returns resync before any held read can rearm.
 
 The record is an InboxMessage marked by the server-set label
 `coordination.dev-env.haynesops.com/parent-note=true`. The label distinguishes
