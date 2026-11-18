@@ -287,6 +287,7 @@ func TestSummonPagesDrillOnlyFromCaller(t *testing.T) {
 		{"derived drill", derived, true},
 		{"ordinary admitted caller", summonTestCaller, false},
 		{"other namespace", "other.summon-drill", false},
+		{"prefixed namespace", "x-" + summonoutcome.DrillCaller, false},
 		{"suffix", summonoutcome.DrillCaller + "-extra", false},
 		{"case", strings.Replace(summonoutcome.DrillCaller, "summon", "Summon", 1), false},
 		{"old forbidden caller", "dev-env-system.summon-drill", false},
