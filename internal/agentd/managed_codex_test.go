@@ -56,7 +56,15 @@ func TestManagedCodexModelEffortAdmission(t *testing.T) {
 		model, effort string
 		accepted      bool
 	}{
-		{"gpt-6.1-terra", "", true}, {"gpt-6.1-terra", "low", true}, {"gpt-6.1-terra", "medium", true}, {"gpt-6.1-terra", "high", true}, {"gpt-6.1-terra", "xhigh", true}, {"gpt-6.1-terra", "max", true}, {"gpt-6.1-terra", "ultra", true}, {"gpt-6.1-terra", "none", false}, {"terra", "medium", false},
+		{"gpt-6.2-sol", "", true},
+		{"gpt-6.2-sol", "medium", true},
+		{"gpt-6.2-sol", "ultra", true},
+		{"gpt-6.2-sol", "none", false},
+		{"gpt-6.2-astra", "", true},
+		{"gpt-6.2-astra", "medium", true},
+		{"gpt-6.2-astra", "ultra", true},
+		{"gpt-6.2-astra", "none", false},
+		{"gpt-6.1-terra", "", true}, {"gpt-6.1-terra", "low", true}, {"gpt-6.1-terra", "medium", true}, {"gpt-6.1-terra", "high", true}, {"gpt-6.1-terra", "xhigh", true}, {"gpt-6.1-terra", "max", true}, {"gpt-6.1-terra", "ultra", true}, {"gpt-6.1-terra", "none", false}, {"terra", "medium", false}, {"gpt-unknown-921", "medium", false},
 		{"gpt-6-astra", "ultra", true}, {"gpt-6.1-sol", "ultra", true},
 		{"gpt-6-luna", "max", true}, {"gpt-6-luna", "ultra", false},
 		{"gpt-5.6-luna", "ultra", false}, {"gpt-5.5", "xhigh", true},

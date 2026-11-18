@@ -42,6 +42,14 @@ func TestProjectCodexModelEffortAdmission(t *testing.T) {
 		model, effort string
 		accepted      bool
 	}{
+		{"gpt-6.2-sol", "", true},
+		{"gpt-6.2-sol", "medium", true},
+		{"gpt-6.2-sol", "ultra", true},
+		{"gpt-6.2-sol", "none", false},
+		{"gpt-6.2-astra", "", true},
+		{"gpt-6.2-astra", "medium", true},
+		{"gpt-6.2-astra", "ultra", true},
+		{"gpt-6.2-astra", "none", false},
 		{"gpt-6.1-sol", "ultra", true}, {"gpt-6.1-terra", "", true}, {"gpt-6.1-terra", "low", true}, {"gpt-6.1-terra", "medium", true}, {"gpt-6.1-terra", "high", true}, {"gpt-6.1-terra", "xhigh", true}, {"gpt-6.1-terra", "max", true}, {"gpt-6.1-terra", "ultra", true}, {"gpt-6.1-terra", "none", false}, {"gpt-6-luna", "max", true},
 		{"gpt-6-luna", "ultra", false}, {"gpt-5.6-luna", "ultra", false},
 		{"gpt-5.5", "max", false}, {"gpt-5.5", "ultra", false},
@@ -306,5 +314,19 @@ func TestCoordinatorProjectAdmissionRefusesWideningAndUnavailableAuthority(t *te
 		bindCatalogFixture(t, f)
 		body := map[string]any{"project": "sample", "repo": "alias", "profile": "dev", "size": "S", "mode": "task", "agent": "claude", "model": "claude-opus-5-5", "prompt": "synthetic", claim: "client-authority"}
 		wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, body), http.StatusBadRequest, apiv1.CodeBadRequest)
+	}
+}
+
+func TestProjectCodexUnknownModelRefused(t *testing.T) {
+	f := coordinatorFixture(t)
+	bindCatalogFixture(t, f)
+	r := coordinatorTask()
+	r.Agent, r.Model, r.Effort = "codex", "gpt-unknown-921", "medium"
+	r.Limits = &apiv1.Limits{Timeout: "1m"}
+	w := f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r)
+	wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	var sessions v1alpha1.AgentSessionList
+	if err := f.c.List(context.Background(), &sessions); err != nil || len(sessions.Items) != 0 {
+		t.Fatal("unknown model wrote a Session", err)
 	}
 }

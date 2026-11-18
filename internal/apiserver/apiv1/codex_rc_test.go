@@ -92,3 +92,13 @@ func TestCodexRCTargetStructureAndFreshness(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexRCExplicit62Models(t *testing.T) {
+	now := time.Now()
+	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra", "gpt-unknown-921"} {
+		r := CodexRCRequest{RequestID: "once", SessionUID: "session", PodUID: "pod", Project: "project", Repository: "repo", Model: model, Effort: "medium", Handoff: "synthetic", Deadline: now.Add(20 * time.Second)}
+		if got := r.Valid(now); got != (model != "gpt-unknown-921") {
+			t.Fatalf("%s accepted=%v", model, got)
+		}
+	}
+}
