@@ -59,7 +59,14 @@ is needed for this pod-bound lifecycle intent.
    thaw or receipt reuse (DESIGN-068 section 3.2/J43). After a capable binding
    exists, a failed probe/request means uncertain dispatch: confirm/reuse the
    operation, never select legacy.
-   No upgrade restarts an agent pod; c1-only old binaries retain their known M4.
+   A capable answer without a recordable pullable digest also takes the clean
+   unbound refusal, not a successful legacy stop (J48/section 5.5). Show the
+   missing-image-record reason and retain the untouched instance on resume;
+   an installer/custodian under an owner-authorized incident must repair the
+   original-image mapping, or the owner authorize a separate audited image
+   repair/migration, before full qualification and bound stop. Never guess a
+   digest or delete an unrescued pod. No upgrade restarts an agent pod;
+   c1-only old binaries retain their known M4.
 3. Confirm `status.codexRemoteStop` before the qualified request, bound to the
    Session, operation, original pod, original HOME and node. The agent validates
    expected Session/pod UIDs before any mutation. A confirmed operation commits
@@ -82,15 +89,22 @@ is needed for this pod-bound lifecycle intent.
    continued suspension needs successful rescue. Only a recovery hold built to
    finish an existing stop must successfully rescue regardless of desired mode.
    That is a new recovery block. Build its capability from the record and a
-   qualified image: copy capability.imageDigest into immutable
+   qualified image: copy capability.imageDigest into ordinarily immutable
    operation.recoveryImageDigest and use that exact digest, never the current
    template or flag. Before admitting rescue require the hold's own successful
-   capability/digest probe. An unpullable digest keeps recovery pending; only
-   a strictly proved never-ran hold may then be ordinarily removed without
-   rescue, and that removal completes nothing. A failed probe keeps admission
-   false: repair/retry it, or prove ended/never-ran before replacement. A running
-   hold cannot be deleted just because its probe failed (J35/J36). No archive
-   or retry caller may build an ordinary hold during an active operation.
+   capability/digest probe. An unpullable digest keeps recovery pending. A
+   present hold with admission explicitly false may be ordinarily removed,
+   including while running, because only the no-write hold command and version
+   probe were admitted, never rescue ([main.go:331–347](https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/cmd/agentd/main.go#L331-L347)).
+   Reconfirm false admission, operation/hold/HOME identity and serialise against
+   dispatch; use UID/RV preconditions and normal grace. Removal completes nothing.
+   True/unknown admission still needs rescue or positive exit evidence. For a
+   permanently gone/unusable digest, Q-068-03 asks the owner whether to approve
+   one incident replacement that passes the installer check, its own hold probe
+   and rescue, preserving original bindings and exit evidence. The immutable
+   field requires a separately approved, audited schema repair/migration; no
+   automatic template swap or decided exception. J35/J36 give these exits.
+   No archive or retry caller may build an ordinary hold during an active operation.
 6. An original pod that ended but remains present has a positive-evidence exit.
    Confirm the exact pod UID, original HOME and bound node UID; require that
    live node's kubelet reports every admitted container terminated with a
@@ -118,14 +132,26 @@ is needed for this pod-bound lifecycle intent.
    Tom the choice between his own administrator login and a new narrow right for
    a named account, a separate access decision. **Either choice also requires
    owner approval of the exact admission rule in DESIGN-068 section 7.1**:
-   only the operator and one configured authenticated ACK_ACTOR may change the
-   ACK slots; the actor may only add its correctly bound ACK, changing nothing
-   else. Infrastructure/admin wildcard RBAC grants are no exception. Use an
+   only one configured authenticated ACK_ACTOR may add a correctly bound ACK,
+   changing nothing else; nobody may change a present ACK. The operator may
+   preserve it unchanged or remove a consumed ACK during validated hold
+   replacement or replacement of Complete by a new operation, never add/set one.
+   Retain the source ACK through Complete.
+   Today's API/controller code has no ACK field/write path; section 7.1 lists
+   the status writers. The operator account also serves the session API, so
+   its ACK addition must be refused even during otherwise legal transitions
+   (J46), rather than permitting a session-facing API to release itself. Infrastructure/admin wildcard RBAC grants are no exception. Use an
    in-process CEL ValidatingAdmissionPolicy, matching protected-record changes;
-   unrelated heartbeat/status writes bypass it. Evaluation failure denies those
-   protected changes and leaves recovery pending; there is no external webhook
-   availability dependency. Policy and effective enforcement are proposed,
-   not assumed or approved.
+   a total guarded change predicate skips unrelated heartbeat/status writes.
+   Validation failure denies protected changes, operator writes included. A
+   matching-expression error is wider: with no false match condition and
+   failurePolicy=Fail, all matching dev-agents AgentSession main/status UPDATEs
+   can be rejected, including unchanged heartbeats, suspend/resume and operator
+   recovery writes. J47 proves the stall and restoration after policy repair;
+   no fail-open or operator exemption. This follows the [Kubernetes 1.35 match
+   semantics](https://v1-35.docs.kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/#matching-requests-matchconditions),
+   checked 2026-11-18. There is no external webhook dependency, but the namespace
+   lifecycle stall risk belongs in Q-068-01. Policy/enforcement remain proposed.
 8. Confirm Complete only after exact committed removal, retaining the bounded
    operation as the original-HOME latch for later resumes. Only a fresh pod on
    that HOME may serve. RecoveryRequired must remain visible in ADR-018's
@@ -155,17 +181,29 @@ is needed for this pod-bound lifecycle intent.
     Protected entry points prevent that shim from answering. A separate current
     mutable producer, `$HOME/.local/bin/git`, can falsify bare-Git rescue data
     ([clone.go:189–202](https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/internal/agentd/clone.go#L189-L202)).
-    Protected `/usr/bin/git` calls and audit of helpers/hooks are an activation
-    gate for this recovery report. The receipt is built in agentd memory and
+    `/usr/bin/git` alone leaves session-controlled hooks, filters, aliases,
+    fsmonitor, credentials, SSH, editor/pager programs, config/includes and
+    attributes able to run after the final writer inventory. Section 2.2 names
+    the actual inherited environment, partial config overrides and every
+    unresolved class. G-068-01 blocks activation until the build supplies and
+    tests exact per-call environment/config isolation and preservation evidence
+    for direct rescue, submodule and bundle calls as well (J42). No complete
+    neutralisation measure is claimed present today. The receipt is built in agentd memory and
     encoded to stdout, not supplied by a HOME file. No kernel attestation or
     global repair of unrelated legacy rescue paths is claimed.
 12. Before any name is added, or template image changes while names remain,
     the installer/GitOps preflight requires release-qualification evidence from
     that exact candidate digest: explicit capability plus released semver at
-    or above minimumCodexStopRecoveryVersion. Refuse absent evidence, missing
+    or above minimumCodexStopRecoveryVersion. Qualification is an isolated CI
+    container run, not cluster exec. The haynes-ops check is required, including
+    Renovate template bumps, and pulls/probes the candidate itself; its trusted
+    run produces the digest-bound evidence, never a file supplied in the PR. Refuse absent evidence, missing
     capability, unknown/below-minimum version or digest mismatch. This installer
     gate also applies after the first install and to rollbacks; it does not
-    veto stopping a capable development binary already present.
+    veto stopping a capable development binary already present. A merge/check
+    bypass or direct cluster edit bypasses the installer fence; runtime retains
+    the actual old binary's stop limits (c1-only M4, or no c1 on pre-c1 images),
+    not permission to clear a record. No runtime digest allowlist is assumed.
 13. A contradictory capability binding stays blocked under J41. Its exit is
     an audited, owner-authorized incident correction under exclusive operator
     ownership with exact UID/RV preconditions (a separately approved schema
@@ -176,8 +214,10 @@ is needed for this pod-bound lifecycle intent.
 
 DESIGN-068 sections 2–7 define the exact schema, version/receipt, commit points,
 compatibility, live RBAC observation and manual evidence. Section 8 gives one
-named future envtest for each of J1–J45. Section 10 is a written, unrun proof;
-section 12 leaves the acknowledgement/access and disposable-host choices open.
+named future envtest for each of J1–J48, with J44 tooling owned by slice A. Section 10 is a written, unrun proof;
+section 12 leaves acknowledgement/access, disposable-host and incident-image
+replacement choices open. G-068-01 is a technical activation block, not an owner
+choice that can stand in for implemented Git protections.
 
 The Kubernetes 1.35 [pod lifecycle documentation](https://v1-35.docs.kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#garbage-collection-of-pods)
 confirms failed objects can remain until removal. Its [node shutdown documentation](https://v1-35.docs.kubernetes.io/docs/concepts/cluster-administration/node-shutdown/#graceful-node-shutdown)
