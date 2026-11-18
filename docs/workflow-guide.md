@@ -972,7 +972,8 @@ Otherwise a later take-back still ends the raise but sends no notice while
 the keeper switch is off.
 
 A Claude Remote Control session needs no flag, pairing or sign-in on the
-default profile, which follows the keeper's shared login. Tell Tom the session name once `show` reads
+default profile, which follows the keeper's shared login. Tell Tom the
+session name once `show` reads
 `registered` (about two minutes; [quickstart section
 1](v2-quickstart.md#1-a-claude-session-on-your-phone) has the measured
 timings). If it reads `login-required`, the keeper's login needs renewing

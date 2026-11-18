@@ -945,7 +945,8 @@ ruling of 2026-11-18 (OP919) amends the earlier ruling that a take-back notice
 must not depend on a flag: key creation and all keeper raise work now wait
 for the keeper's `--enable-session-raise-notices=true`, false by default and
 decided once at startup. The accepted tradeoff is that take-back notices
-wait while this switch is off; section 11 gives the shutdown order. Off, it constructs no raise pager, acquires no client for it, reads
+wait while this switch is off; section 11 gives the shutdown order. Off, it
+constructs no raise pager, acquires no client for it, reads
 or writes no raise objects, calls no Ensure and registers no raise runnable.
 This includes the keeper key Secret, public-key ConfigMap and notice ledger.
 On, it sends both raise and take-back notices at any hour. An invalid notice
@@ -1181,7 +1182,8 @@ secret is shared between the operator and the keeper (N1, N10).
   The switch first exists in the release after 2.111.0, which contains OP919.
   From that release, the keeper also requires
   `--enable-session-raise-notices=true` at startup. Pinning that keeper with
-  the switch unset touches neither the key nor its publication or notice ledger. Turning the switch off on a
+  the switch unset touches neither the key nor its publication or notice
+  ledger. Turning the switch off on a
   later start preserves any existing key, public key and ledger; it does not
   remove or rotate them. The operator's key path is unchanged by OP919.
   It makes the pair with `ed25519.GenerateKey`, writes the private key into
