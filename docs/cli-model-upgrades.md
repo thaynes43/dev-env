@@ -20,8 +20,8 @@ lowest catalog tag containing both 6.2 IDs, the pinned upstream hashes, protocol
 compatibility and the coordinator's four auth claims. The independent review
 closed the refresh concern: an empty refresh grant carries no keeper credential
 and a failed refresh writes nothing. Readiness requires retained-host and layout
-qualification in image CI; CI does not grant rollout or installation authority. The helper is
-intentionally not bumped; its native-login schema requires a separate reviewed
+qualification in image CI; CI does not grant rollout or installation authority.
+The helper is intentionally not bumped; its native-login schema requires a separate reviewed
 keeper story. Historical 0.160.1 catalog/probe evidence above is preserved.
 
 For 6.2 admission, pin the agent image containing both the model ids and client
@@ -31,3 +31,12 @@ refuses a Session naming a 6.2 model. Retained 0.160.1 hosts use the bounded
 other versions and incomplete lifecycle evidence remain refused. The 0.169.1
 catalog ranks gpt-6.2-sol first, but platform config/launch paths name their
 models explicitly, so no platform default changes.
+
+The [OP921 gate and compatibility audit](codex-62-audit.md) records the
+2026-11-18 explicit 6.2 probes, complete source-gate inventory and the first
+stable upstream catalog containing both IDs (0.169.1). Ordinary source admission
+for `gpt-6.2-sol` and `gpt-6.2-astra` does not establish provider availability:
+the installed 0.160.1 probes sent both IDs and received provider refusals.
+Upgrading the login helper requires a separate keeper schema prerequisite;
+Renovate's two-pin bump is insufficient. No default or privileged coordinator
+model is promoted by ordinary admission.

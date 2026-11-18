@@ -194,3 +194,13 @@ func TestPromptRepeatingBoundRulesIsRefused(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexExplicit62Models(t *testing.T) {
+	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra", "gpt-unknown-921"} {
+		r := testutil.New(t, "codex", "dev/dev-env").Record
+		r.Model, r.Effort = model, "medium"
+		if got := r.Validate() == nil; got != (model != "gpt-unknown-921") {
+			t.Fatalf("%s accepted=%v", model, got)
+		}
+	}
+}
