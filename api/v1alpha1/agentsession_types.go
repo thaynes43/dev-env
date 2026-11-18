@@ -1445,6 +1445,15 @@ type AgentStatus struct {
 	// predates it (TestPrivatePilotPreflightRealSchemaAdmission).
 	// +optional
 	Start *AgentStartStatus `json:"start,omitempty"`
+
+	// Brief is the pod's brief delivery claim for a summoned remote session
+	// with a prompt (DESIGN-064 6.10, OP795). The heartbeat copies only these
+	// words, and the operator does not act on them. Optional and replaceable:
+	// an older agentd or operator may omit it on any status update.
+	// +kubebuilder:validation:MaxLength=12
+	// +kubebuilder:validation:Enum=pending;launched;unconfirmed;not-launched
+	// +optional
+	Brief string `json:"brief,omitempty"`
 }
 
 // AgentStartStatus is a summoned task's start after its model pre-flight

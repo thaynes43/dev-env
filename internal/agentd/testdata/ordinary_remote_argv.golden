@@ -1,0 +1,50 @@
+{
+  "/first": [
+    "claude",
+    "--model",
+    "claude-haiku-4-5",
+    "--dangerously-skip-permissions",
+    "--session-id",
+    "\u003cconversation-id\u003e",
+    "--remote-control",
+    "dev-env-1019-120000",
+    "--append-system-prompt",
+    "You are working in an isolated git worktree (/golden/home/work/dev-env-1019-120000) on branch agent/dev-env-1019-120000. Stay inside it. NEVER push to main: commit to agent/dev-env-1019-120000, push that branch, and open a PR with 'gh pr create' when the work is ready. If the work needs extra git worktrees, create them under /golden/home/work and 'git worktree remove' each once its PR merges; never leave stranded worktrees behind."
+  ],
+  "/resume": [
+    "claude",
+    "--model",
+    "claude-haiku-4-5",
+    "--dangerously-skip-permissions",
+    "--resume",
+    "\u003cconversation-id\u003e",
+    "--remote-control",
+    "dev-env-1019-120000",
+    "--append-system-prompt",
+    "You are working in an isolated git worktree (/golden/home/work/dev-env-1019-120000) on branch agent/dev-env-1019-120000. Stay inside it. NEVER push to main: commit to agent/dev-env-1019-120000, push that branch, and open a PR with 'gh pr create' when the work is ready. If the work needs extra git worktrees, create them under /golden/home/work and 'git worktree remove' each once its PR merges; never leave stranded worktrees behind."
+  ],
+  "Main coordinator/first": [
+    "claude",
+    "--model",
+    "claude-haiku-4-5",
+    "--dangerously-skip-permissions",
+    "--session-id",
+    "\u003cconversation-id\u003e",
+    "--remote-control",
+    "Haiku | Main coordinator",
+    "--append-system-prompt",
+    "You are working in an isolated git worktree (/golden/home/work/dev-env-1019-120000) on branch agent/dev-env-1019-120000. Stay inside it. NEVER push to main: commit to agent/dev-env-1019-120000, push that branch, and open a PR with 'gh pr create' when the work is ready. If the work needs extra git worktrees, create them under /golden/home/work and 'git worktree remove' each once its PR merges; never leave stranded worktrees behind."
+  ],
+  "Main coordinator/resume": [
+    "claude",
+    "--model",
+    "claude-haiku-4-5",
+    "--dangerously-skip-permissions",
+    "--resume",
+    "\u003cconversation-id\u003e",
+    "--remote-control",
+    "Haiku | Main coordinator",
+    "--append-system-prompt",
+    "You are working in an isolated git worktree (/golden/home/work/dev-env-1019-120000) on branch agent/dev-env-1019-120000. Stay inside it. NEVER push to main: commit to agent/dev-env-1019-120000, push that branch, and open a PR with 'gh pr create' when the work is ready. If the work needs extra git worktrees, create them under /golden/home/work and 'git worktree remove' each once its PR merges; never leave stranded worktrees behind."
+  ]
+}

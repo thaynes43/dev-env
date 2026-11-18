@@ -628,6 +628,15 @@ func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWi
 	brief := func(name string) string {
 		return renderSummonBrief(name, c.policy.Name, string(entry.Lane), entry.Brief.Template, entry.Brief.Fields, data, boundary)
 	}
+	// O11 (DESIGN-064 6.10, OP795): a rendered brief must never be read as
+	// a provider option. Refuse before any create charge or session write.
+	rendered := brief(req.Name)
+	if strings.HasPrefix(rendered, "-") {
+		return nil, nil, nil, invalid(fieldError("brief", "the rendered brief must not start with '-'"))
+	}
+	if strings.ContainsRune(rendered, 0) {
+		return nil, nil, nil, invalid(fieldError("brief", "the rendered brief must not contain NUL"))
+	}
 	names := summonNameSequence(req.Name)
 	if longest := brief(names[len(names)-1]); len(longest) > protocol.MaxPromptBytes {
 		return nil, nil, nil, invalid(fieldError("data", "the rendered brief is %d bytes, more than %d", len(longest), protocol.MaxPromptBytes))
@@ -642,7 +651,7 @@ func (s *Server) buildSummonSession(ctx context.Context, c *caller, req summonWi
 		Mode:    v1alpha1.SessionMode(entry.Kind),
 		Model:   entry.Model.Default,
 		Effort:  entry.Effort,
-		Prompt:  brief(req.Name),
+		Prompt:  rendered,
 		Profile: entry.Profile,
 		Parent:  c.parent,
 		Caller:  c.policy.Name,
