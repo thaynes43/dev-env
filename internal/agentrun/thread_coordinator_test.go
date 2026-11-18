@@ -66,13 +66,16 @@ func TestCoordinatorLaunchRequiresExplicitHostAndModel(t *testing.T) {
 }
 
 func TestCoordinatorLaunchRejectsDifferentModelOrEffort(t *testing.T) {
-	for _, change := range []string{"model", "effort"} {
+	for _, change := range []string{"model", "effort", "gpt-6.2-sol", "gpt-6.2-astra"} {
 		t.Run(change, func(t *testing.T) {
 			h, c := threadAPIHarness(t, serveThread(200, nil))
 			args := coordinatorThreadArgs(h)
 			for i := range args {
-				if change == "model" && args[i] == "gpt-6.1-sol" {
-					args[i] = "gpt-6-astra"
+				if args[i] == "gpt-6.1-sol" && change != "effort" {
+					args[i] = change
+					if change == "model" {
+						args[i] = "gpt-6-astra"
+					}
 				}
 				if change == "effort" && args[i] == "medium" {
 					args[i] = "high"

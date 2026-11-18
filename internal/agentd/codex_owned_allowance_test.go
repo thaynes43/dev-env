@@ -309,7 +309,7 @@ func TestOwnedAllowanceActualSyntheticRPC(t *testing.T) {
 				var result any
 				switch req.Method {
 				case "initialize":
-					result = map[string]any{"userAgent": "codex/0.160.1"}
+					result = map[string]any{"userAgent": "codex/0.169.1"}
 				case "account/read":
 					result = map[string]any{"account": map[string]string{"email": "SYNTHETIC_PRIVATE"}}
 				case "account/rateLimits/read":

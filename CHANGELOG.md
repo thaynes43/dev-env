@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.112.0](https://github.com/thaynes43/dev-env/compare/v2.111.0...v2.112.0) (2026-11-18)
+
+
+### Features
+
+* **agentrun:** coordinator wait, the parent-owned wake adapter (DESIGN-067 slice c2, OP858) ([#1222](https://github.com/thaynes43/dev-env/issues/1222)) ([9179203](https://github.com/thaynes43/dev-env/commit/9179203bb06357d62462a75ab67fc8ba65c3a139))
+* **codex:** admit explicitly requested GPT-6.2 models (OP921) ([#1219](https://github.com/thaynes43/dev-env/issues/1219)) ([e913a49](https://github.com/thaynes43/dev-env/commit/e913a490dcf328adaa62cfc2dde5a4e717280ec9))
+* **codex:** Codex client 0.169.1 in the agent image, retained 0.160.1 hosts start (OP921) ([#1223](https://github.com/thaynes43/dev-env/issues/1223)) ([298841e](https://github.com/thaynes43/dev-env/commit/298841e61d05e60ff281eed988874e51910a0690))
+* **keeper:** the raise notices and their signing key wait for a switch, off by default (OP919) ([#1216](https://github.com/thaynes43/dev-env/issues/1216)) ([adce101](https://github.com/thaynes43/dev-env/commit/adce1019344a62ebdb65ade85927410e241776c2))
+
+
+### Bug Fixes
+
+* **broker:** no Ask read on a denial while grant Asks are off (OP918) ([#1208](https://github.com/thaynes43/dev-env/issues/1208)) ([4f3ef3d](https://github.com/thaynes43/dev-env/commit/4f3ef3d9bf02ec9b9f4172b06345751d15389be2))
+
 ## [2.111.0](https://github.com/thaynes43/dev-env/compare/v2.110.0...v2.111.0) (2026-11-18)
 
 

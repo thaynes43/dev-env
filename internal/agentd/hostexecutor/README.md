@@ -91,7 +91,9 @@ This adapter cannot create provider refresh credentials. The helper inherits
 only PATH, private HOME/CODEX_HOME, fixed TMPDIR and locale, excluding alternate
 ambient auth, storage and transport settings.
 
-The CLI forces the image's `/usr/local/bin/codex` and version `0.160.1`. After
+The agent candidate forces the image's `/usr/local/bin/codex` and version
+`0.169.1`; its [audit](../../../docs/codex-169-upgrade-audit.md) records the closed
+refresh concern and CI limits. Installation and acceptance remain separate. After
 confirmed launch, a two-second readiness context permits at most 40 paced startup
 socket connects, retrying only absent/refused sockets. It authenticates Unix
 SO_PEERCRED UID/PID against the original boot/start identity and verifies the
@@ -316,3 +318,11 @@ real native readiness handshakes completed within the original300ms limit
 (maximum5.8ms) during that cold fallback. These tests diagnose
 processing composition, not the unobserved historical source of live latency.
 They do not prove rolling-upgrade, live-model, continuation or phone acceptance.
+
+
+OP921 preserves the historical 0.160.1 proof above. The agent-image CI now
+runs the same finite loopback reconnect test with its packaged 0.169.1 binary
+and no real credential/provider, remote enrollment or pairing. Passing that
+source compatibility test does not remove the separate auth hold or establish
+native lifecycle acceptance. The optional cold-catalog fixture is not claimed
+as requalified without its explicitly supplied frozen inputs.

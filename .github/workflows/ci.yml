@@ -491,6 +491,28 @@ jobs:
       - name: Smoke-test the agent image
         timeout-minutes: 5
         run: images/agent/smoke-test.sh dev-env-agent:ci "${{ github.event.pull_request.head.sha }}"
+      - name: Set up Go for isolated native compatibility test
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Qualify native control, retained hosts and CODEX_HOME layout
+        timeout-minutes: 8
+        env:
+          GOMAXPROCS: "2"
+          GOTOOLCHAIN: local
+        run: |
+          # Keep the complete package: native --from-cli verifies its manifest
+          # and bundled files, not just the executable. Extract without a host-wide install.
+          native_root="${RUNNER_TEMP}/codex-compatibility"
+          mkdir -p "$native_root"
+          docker run --rm --network none --entrypoint /bin/tar dev-env-agent:ci -C /opt/dev-env/codex -cf - . | tar -xf - -C "$native_root"
+          native="$(find "$native_root/packages/standalone/releases" -type f -path '*/bin/codex')"
+          test -f "$native"
+          export DEV_ENV_PINNED_NATIVE_BINARY="$native"
+          nice -n 19 go test -p 2 -timeout 2m ./internal/agentd/hostexecutor -run '^TestPinnedNativeTurnSurvivesControlDisconnectAndHistoryReconnect$' -count=1
+          nice -n 19 go test -p 2 -timeout 3m ./internal/agentd -run '^TestPinnedCodex(PreviousHostStarts|HomeLayout)$' -count=1 -v
+          nice -n 19 python3 -I -B images/agent/testdata/codex-compatibility-mutants.py
       - name: Report the image size
         run: |
           size="$(docker image inspect --format '{{.Size}}' dev-env-agent:ci)"

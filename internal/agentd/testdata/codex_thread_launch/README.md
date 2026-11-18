@@ -1,35 +1,17 @@
-# Pinned Codex thread observation protocol (DESIGN-057)
+# Codex 0.169.1 protocol fixtures
 
-Generated offline on 2026-11-09 for OpenProject #489, the same way as
-`../codex_rc_create`:
+Exact `v2/` bytes from upstream tag `rust-v0.169.1`, commit
+`c376cf7396eff83ce4c6ac61b9553df142e7a0be`, embedded file
+`codex-rs/app-server-protocol/schema/precomputed/app-server-exports-experimental.json.zst`
+(SHA-256 `015daa0d0c1f645c1085ca11ae8e2057d02df357b50f2eaa5fc3b6726972014f`).
+Extracted offline on 2026-11-18; no client, daemon, credential or provider used.
+Upstream's `precomputed_exports.rs` writes these exact strings for:
 
-```
-codex --version
-# codex-cli 0.160.1
+```sh
 codex app-server generate-json-schema --experimental --out <scratch>
 ```
 
-Copied from `<scratch>/v2/`: `ThreadListParams`, `ThreadListResponse`,
-`ThreadTurnsListParams`, `ThreadTurnsListResponse`, `ThreadItemsListParams`
-and `ThreadItemsListResponse`. `TestCodexThreadPinnedSchema` pins their
-digests and the fields the thread-launch observer reads. No live daemon,
-credential or account was involved.
-
-`ConfigValueWriteParams` and `ConfigWriteResponse` were generated the same
-way on 2026-11-11, without `--experimental`, because `config/value/write` is
-in the stable schema:
-
-```
-codex app-server generate-json-schema --out <scratch>
-```
-
-The scratch directory was removed. No client, daemon or model was started.
-
-DESIGN-067 slice (b), 2026-11-14: `ThreadSetNameParams` and
-`ThreadSetNameResponse` were generated offline with the same 0.160.1 binary and
-`--experimental` command. The existing pinned `ThreadListResponse` contains
-`Thread.name`, the metadata field also returned by `thread/read`. The setter
-returns an object, then the adapter reads the exact ID/cwd/name back. Current
-[official app-server documentation](https://learn.chatgpt.com/docs/app-server#api-overview)
-corroborates the method and metadata read; the schema pin is version evidence.
-No daemon, client, account or model was started for schema generation.
+The agent image smoke test executes that command with no network or login and
+compares all retained schema bytes. Go tests pin hashes and the fields consumed
+by dev-env. These are protocol contracts, not live rollout, model entitlement,
+phone pairing or acceptance evidence. See [the upgrade audit](../../../../docs/codex-169-upgrade-audit.md).

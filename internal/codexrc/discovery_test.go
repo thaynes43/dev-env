@@ -320,3 +320,19 @@ func withPages(host HostInventory, pages []json.RawMessage) HostInventory {
 	host.ProjectPages = pages
 	return host
 }
+
+func TestDiscoveryQualifiedCLIVersions(t *testing.T) {
+	target := targetFixture(t)
+	for _, version := range []string{"0.160.1", SupportedCLIVersion, "0.169.0", "0.170.0", "unknown"} {
+		host := hostFixture(t, target)
+		host.CLIVersion = version
+		got := Discover(target, []HostInventory{host})
+		if version == "0.160.1" || version == SupportedCLIVersion {
+			if got.Outcome != Matched {
+				t.Fatalf("%s outcome=%s", version, got.Outcome)
+			}
+		} else if got.Outcome != UnsupportedVersion {
+			t.Fatalf("%s outcome=%s", version, got.Outcome)
+		}
+	}
+}

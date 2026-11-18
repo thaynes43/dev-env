@@ -70,7 +70,7 @@ func acquireOne(ctx context.Context, binding ProviderBinding, now func() time.Ti
 		if err != nil {
 			return RemoteCapture{}, atAcquisitionStage("version", err)
 		}
-		if strings.TrimSpace(string(version)) != "codex-cli 0.160.1" {
+		if !qualifiedCodexVersion(string(version)) {
 			return RemoteCapture{}, atAcquisitionStage("version", unqualifiedVersion(string(version)))
 		}
 		report, err := CollectCodex(ctx, codexExecutable, now)
@@ -175,4 +175,15 @@ var qualifiedClaudeVersions = map[string]bool{
 
 func qualifiedClaudeVersion(output string) bool {
 	return qualifiedClaudeVersions[strings.TrimSpace(output)]
+}
+
+// Both exact versions retain the audited account/quota contract. Existing hosts
+// remain on their installed CLI until a separately authorized upgrade.
+func qualifiedCodexVersion(version string) bool {
+	switch strings.TrimSpace(version) {
+	case "codex-cli 0.160.1", "codex-cli 0.169.1":
+		return true
+	default:
+		return false
+	}
 }

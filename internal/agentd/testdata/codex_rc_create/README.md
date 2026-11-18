@@ -1,22 +1,17 @@
-# Pinned Codex thread/start protocol
+# Codex 0.169.1 protocol fixtures
 
-Generated offline by coordinator dev-env-1030-005602 on 2026-10-30:
+Exact `v2/` bytes from upstream tag `rust-v0.169.1`, commit
+`c376cf7396eff83ce4c6ac61b9553df142e7a0be`, embedded file
+`codex-rs/app-server-protocol/schema/precomputed/app-server-exports-experimental.json.zst`
+(SHA-256 `015daa0d0c1f645c1085ca11ae8e2057d02df357b50f2eaa5fc3b6726972014f`).
+Extracted offline on 2026-11-18; no client, daemon, credential or provider used.
+Upstream's `precomputed_exports.rs` writes these exact strings for:
 
-```
-codex --version
-# codex-cli 0.160.1
+```sh
 codex app-server generate-json-schema --experimental --out <scratch>
 ```
 
-Only the complete `v2/ThreadStartParams.json` and `v2/ThreadStartResponse.json`
-outputs were copied, unchanged. No daemon, proxy, socket or provider was used.
-
-SHA-256:
-
-- ThreadStartParams.json: `80a40a7fac15b4bf70efb7f893fb353acc0a0d30c68f54aee4f01923deca85de`
-- ThreadStartResponse.json: `92f5ddc37717b922de1dc0b0405e9a6d463f370554e2091610c6e595bc2616d4`
-
-The request has no required fields. `cwd`, `model` and `projectId` are optional;
-the create adapter sends cwd/model without guessing a connector project ID.
-These fixtures establish protocol shape, not live pairing, caller authority,
-provider model entitlement, RC visibility or a usable launch route.
+The agent image smoke test executes that command with no network or login and
+compares all retained schema bytes. Go tests pin hashes and the fields consumed
+by dev-env. These are protocol contracts, not live rollout, model entitlement,
+phone pairing or acceptance evidence. See [the upgrade audit](../../../../docs/codex-169-upgrade-audit.md).
