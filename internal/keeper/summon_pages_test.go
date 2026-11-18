@@ -598,7 +598,7 @@ func TestSummonPagesRollingCap(t *testing.T) {
 }
 
 // Proof 5: the fixed text, the note cut and marked, a URL in a note replaced,
-// and only the verified link or the console list.
+// and only the verified link or the session console page.
 func TestSummonPagesText(t *testing.T) {
 	f := newSummonFix(t)
 	note := "fixed it; see https://evil.example/approve?x=1 or www.evil.example and evil.example/path and mailto:x@evil.example. " + strings.Repeat("é", 300)
@@ -641,7 +641,7 @@ func TestSummonPagesText(t *testing.T) {
 	}
 	e := f.push.form(2)
 	if e.Get("title") != "[dev-env] escalated" || !strings.HasPrefix(e.Get("message"), "[dev-env] escalated: summoned session wo-upgrade-2 ") ||
-		e.Get("url") != summonConsole || e.Get("url_title") != "Open dev-env sessions" {
+		e.Get("url") != summonConsole+"?session="+string(escalated.UID) || e.Get("url_title") != "Open the session" {
 		t.Fatalf("escalated page with an unverified link %v", e)
 	}
 	u := f.push.form(3).Get("message")
@@ -649,7 +649,7 @@ func TestSummonPagesText(t *testing.T) {
 		!strings.Contains(u, "lane upgrade, state escalated, source unreported, reason unknown") {
 		t.Fatalf("unnamed close %q", u)
 	}
-	if lp := f.push.form(4); lp.Get("title") != "[dev-env] lost" || lp.Get("url") != summonConsole || !strings.Contains(lp.Get("message"), "(session-lost)") {
+	if lp := f.push.form(4); lp.Get("title") != "[dev-env] lost" || lp.Get("url") != summonConsole+"?session="+string(lost.UID) || !strings.Contains(lp.Get("message"), "(session-lost)") {
 		t.Fatalf("lost page %v", lp)
 	}
 	for i := 0; i < f.push.count(); i++ {
@@ -704,7 +704,7 @@ func TestSummonPagesNoteRules(t *testing.T) {
 		want bool
 	}{{"https://claude.ai/code/session_01AbC-d_9", true}, {"https://claude.ai/code/session_", false}, {"http://claude.ai/code/session_a", false},
 		{"https://claude.ai/code/session_a/x", false}, {"https://claude.ai.evil/code/session_a", false}, {"https://claude.ai/code/session_a?x=1", false}, {"https://user@claude.ai/code/session_a", false}} {
-		if got := summonVerifiedLink.MatchString(tc.url); got != tc.want {
+		if got := summonoutcome.VerifiedRemoteControlLink(tc.url); got != tc.want {
 			t.Errorf("verified %q = %v", tc.url, got)
 		}
 	}

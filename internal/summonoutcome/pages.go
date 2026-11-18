@@ -18,6 +18,13 @@ const (
 	LabelSummonedValue = "true"
 )
 
+// DrillCaller is the exact CallerPolicy name that marks session pages DRILL.
+// Story 796 gate review A-1, coordinator ruling R1 (2026-11-18; not Tom's).
+// Kept here so the keeper, admission tests and API derivation tests share one
+// definition. Reserving the name creates no policy or identity; a different
+// name requires a code change.
+const DrillCaller = "dev-env-drill.summon-drill"
+
 // TerminalEvent is what a closed summoned session gets by DESIGN-064 6.8's
 // terminal table: one terminal page, or the daily digest.
 type TerminalEvent string
