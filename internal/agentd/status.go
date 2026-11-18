@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -289,9 +291,9 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 }
 
 // summonedBriefState is the pod's delivery claim, not provider acceptance.
-// The existing launch latch prevents every resend, including an ambiguous
-// or unreadable start. A legacy argv that omitted the brief cannot claim it
-// launched. No extra delivery record or operator action is needed (OP795).
+// Any retained launch, handoff or result entry consumes the summoned start,
+// including ambiguous or unreadable evidence. Only a complete remote argv can
+// distinguish a legacy launch from a brief-carrying one (OP795, R2 and R3).
 func summonedBriefState(s Settings, sess protocol.Session, first Launch, launchErr error, agentError string) string {
 	if errors.Is(launchErr, os.ErrNotExist) && !summonedLaunched(s, sess) {
 		if agentError != "" {
@@ -305,7 +307,19 @@ func summonedBriefState(s Settings, sess protocol.Session, first Launch, launchE
 	if first.Session != sess.Name || first.Resume || first.ConversationID == "" || first.BootID == "" {
 		return protocol.BriefUnconfirmed
 	}
-	if len(first.Argv) == 0 || first.Argv[len(first.Argv)-1] != sess.Prompt {
+	// A final string alone proves neither a positional brief nor a legacy
+	// launch. Require an executable slot and the session's Remote Control
+	// pair; no other provider flag parsing is needed for this distinction.
+	if len(first.Argv) < 3 || first.Argv[0] == "" || first.Argv[0] == sess.Prompt || strings.HasPrefix(first.Argv[0], "-") {
+		return protocol.BriefUnconfirmed
+	}
+	rc := slices.Index(first.Argv[1:], "--remote-control") + 1
+	if rc == 0 || rc+1 >= len(first.Argv) || first.Argv[rc+1] != sess.Name {
+		return protocol.BriefUnconfirmed
+	}
+	// The flag's own name value is never the positional brief, even when
+	// the brief's text happens to equal the session name.
+	if rc+2 == len(first.Argv) || first.Argv[len(first.Argv)-1] != sess.Prompt {
 		return protocol.BriefNotLaunched
 	}
 	h := summonedHandoff(s, first)

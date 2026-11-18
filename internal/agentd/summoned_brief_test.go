@@ -685,3 +685,79 @@ func TestSummonedBriefHeldForLoginWindowStartsOnce(t *testing.T) {
 		t.Fatalf("after window ended: starts=%d consumed=%t", starts, summonedLaunched(s, sess))
 	}
 }
+
+// R3-F2 / coordinator R3: a last string alone proves neither a legacy
+// remote launch nor a positional brief. Keep both complete shapes working.
+func TestReview795IncompleteArgv(t *testing.T) {
+	for _, tc := range []struct{ shape, want string }{
+		{"null-argv", protocol.BriefUnconfirmed},
+		{"empty-argv", protocol.BriefUnconfirmed},
+		{"command-only", protocol.BriefUnconfirmed},
+		{"empty-executable", protocol.BriefUnconfirmed},
+		{"brief-as-executable", protocol.BriefUnconfirmed},
+		{"option-as-executable", protocol.BriefUnconfirmed},
+		{"missing-remote-control", protocol.BriefUnconfirmed},
+		{"missing-remote-name", protocol.BriefUnconfirmed},
+		{"wrong-remote-name", protocol.BriefUnconfirmed},
+		{"complete-legacy", protocol.BriefNotLaunched},
+		{"complete-brief", protocol.BriefLaunched},
+		{"name-equals-brief-without-positional-brief", protocol.BriefNotLaunched},
+	} {
+		t.Run(tc.shape, func(t *testing.T) {
+			s, sess, ws := summonedFixture(t, protocol.ModeRemote)
+			if tc.shape == "name-equals-brief-without-positional-brief" {
+				sess.Prompt = sess.Name
+			}
+			first, err := BuildLaunch(s, sess, ws, "first", loginNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch tc.shape {
+			case "null-argv":
+				first.Argv = nil
+			case "empty-argv":
+				first.Argv = []string{}
+			case "command-only":
+				first.Argv = []string{sess.Prompt}
+			case "empty-executable":
+				first.Argv[0] = ""
+			case "brief-as-executable":
+				first.Argv[0] = sess.Prompt
+			case "option-as-executable":
+				first.Argv[0] = "--version"
+			case "missing-remote-control":
+				first.Argv = []string{s.ClaudeBin, sess.Prompt}
+			case "missing-remote-name":
+				first.Argv = []string{s.ClaudeBin, "--remote-control"}
+			case "wrong-remote-name":
+				first.Argv[slices.Index(first.Argv, "--remote-control")+1] = "other-session"
+			case "complete-legacy", "name-equals-brief-without-positional-brief":
+				first.Argv = []string{s.ClaudeBin, "--remote-control", sess.Name}
+			}
+			if err := writeJSONFile(s.statePath(launchFile), first); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeJSONFile(s.statePath(startHandoffFile), startHandoff{State: handoffStarted, At: loginNow, ConversationID: first.ConversationID, BootID: first.BootID}); err != nil {
+				t.Fatal(err)
+			}
+			r := &fakeRunner{}
+			for _, bootID := range []string{"first", "later"} {
+				if err := writeJSONFile(s.statePath(bootFile), bootRecord{Boot: protocol.BootReady, BootID: bootID}); err != nil {
+					t.Fatal(err)
+				}
+				st := CollectStatus(context.Background(), &fakeRunner{}, s, sess, loginNow)
+				if st.Brief != tc.want || !summonedLaunched(s, sess) {
+					t.Errorf("%s: incomplete argv=%s brief=%s latch=%t; want %s and consumed", bootID, tc.shape, st.Brief, summonedLaunched(s, sess), tc.want)
+				}
+				d := quietDaemon(s, sess, r, loginNow)
+				step, why := d.startAgent(context.Background(), ws, Step{State: StepOK}, bootID)
+				if step.State != StepOK || why != "" || len(r.calls) != 0 {
+					t.Errorf("%s: incomplete argv reached a runner or failed: state=%s calls=%d", bootID, step.State, len(r.calls))
+				}
+				if _, err := os.Lstat(s.statePath(resumeFile)); !os.IsNotExist(err) {
+					t.Fatalf("resume was written: %v", err)
+				}
+			}
+		})
+	}
+}
