@@ -514,3 +514,13 @@ func TestThreadStartExplicit62Models(t *testing.T) {
 		}
 	}
 }
+
+func TestCoordinatorStillRefuses62Models(t *testing.T) {
+	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
+		r := apiv1.ThreadStartRequest{Coordinator: true, Model: model, Effort: "medium", Name: "model-probe", Handoff: "synthetic", Wait: "1m"}
+		_, fields := validThreadStart(r)
+		if len(fields) != 1 || fields[0].Field != "coordinator" {
+			t.Fatalf("%s coordinator boundary changed: %+v", model, fields)
+		}
+	}
+}

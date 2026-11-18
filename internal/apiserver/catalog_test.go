@@ -330,3 +330,17 @@ func TestProjectCodexUnknownModelRefused(t *testing.T) {
 		t.Fatal("unknown model wrote a Session", err)
 	}
 }
+
+func TestCodexRemoteExplicit62Models(t *testing.T) {
+	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra", "gpt-unknown-921"} {
+		f := newFixture(t)
+		r := task()
+		r.Agent, r.Mode, r.Model, r.Effort, r.Prompt, r.Limits = "codex", "remote", model, "medium", "", nil
+		w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, r)
+		if model == "gpt-unknown-921" {
+			wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+		} else if w.Code != http.StatusCreated {
+			t.Fatalf("%s: %d %s", model, w.Code, w.Body.String())
+		}
+	}
+}
