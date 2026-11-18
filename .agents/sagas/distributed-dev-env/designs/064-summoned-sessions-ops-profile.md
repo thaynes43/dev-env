@@ -4257,6 +4257,55 @@ This is source and test evidence only. Nothing is installed or accepted by
 this correction. The real positional-prompt/Remote Control probe and the
 other-model-family review remain the coordinator's separate gates.
 
+**Correction, 2026-11-18: story 795 gate review (gpt-6-astra, 2026-11-18),
+findings R3-F1 to R3-F3; coordinator rulings R2 and R3; not a ruling by Tom.**
+Earlier dated corrections stay; where they differ, this governs.
+
+- *Any start evidence consumes the one start (R2).* In every summoned mode
+  (remote, task and local), any launch, start-handoff or task-result entry
+  consumes the start. agentd checks each with `Lstat`: its state, contents
+  and readability do not matter, and a dangling link counts. A surviving
+  handoff with no launch record makes a remote brief `unconfirmed`. This
+  boot and later boots build no new conversation, start nothing, write no
+  resume record and preserve that handoff; closure uses the existing
+  unreported path. The no-resend boundary depends on at least one of these
+  entries surviving; it is not a guarantee after all start evidence is lost.
+  `pending` requires no such entry and no pre-launch error.
+- *Write order and refusals.* The first-launch latch is checked before
+  building the launch or writing its handoff. All three summoned modes write
+  a handoff when they reach the shared first-launch writer. A `-` or NUL
+  refusal, or a missing prerequisite that refuses before the writer, leaves
+  neither launch nor handoff and keeps the start free. A launch held for a
+  login window also leaves no launch, handoff or task-result entry: it can
+  still start once when that window ends. These rules change no ordinary
+  session's launch, resume or report.
+- *Incomplete argv (R3).* Before distinguishing a legacy launch from one
+  carrying the brief, agentd requires a nonempty executable slot that is
+  neither the brief nor an option, followed somewhere by `--remote-control`
+  and this session's name. Missing, null, empty, command-only or otherwise
+  structurally incomplete argv is `unconfirmed`, with the start consumed.
+  A complete remote launch without a final positional brief remains
+  `not-launched`; the Remote Control name alone is not a positional brief.
+  A complete brief-carrying launch still requires a matching `started`
+  handoff and the existing refusal checks before it reads `launched`.
+  Incomplete launch identities, unreadable evidence and incomplete refusal
+  identities also remain `unconfirmed`; a matching `nothing-started`
+  handoff keeps its existing precedence.
+- *Persistence wording.* The Claude launch record uses an atomic rename
+  without file or directory fsync (`writeFileAtomic`). The handoff writer
+  fsyncs both file and directory. Once the handoff is written, either
+  surviving record consumes the start, even if the other entry is lost.
+  This does not prove persistence ordering or behavior under actual power
+  loss. Neither `writeFileAtomic` nor the ordinary launch writer changes.
+- *Review and the open drill.* The owner named Codex (`gpt-6-astra`) for the
+  gate review on 2026-11-18 (item 751, comment 8880); its report is
+  `reviews/op795-review-3.md`. That replaces the earlier promise of a
+  reviewer from another model family. The fix round is reviewed before any
+  merge. The positional-prompt/`--remote-control` probe stays open and
+  assigned to the coordinator's drill in the v2 image. Typing into a live
+  session is never a fallback. Source and stand-in tests do not establish
+  installed or accepted behavior.
+
 ### 6.11 OP746: move curation
 
 - A new app in haynes-ops `upgrade-agent/cigar-curation/` (not inside the

@@ -2581,28 +2581,47 @@ remote session can, because the brief is that prompt.
 At a summoned remote session's first launch, agentd appends that brief after
 the rules as the CLI's last positional argument. `--remote-control` carries
 the session name, with no title. No ordinary remote launch gains a prompt;
-a task still receives its prompt on stdin. A summoned session never resumes,
-and an ambiguous first start is never resent. A rendered brief beginning
+a task still receives its prompt on stdin. A summoned session never resumes.
+Any retained launch, start-handoff or task-result entry consumes its one
+start in remote, task and local modes, regardless of its state or readability
+(including a dangling link). This boot and later boots start nothing and
+preserve the handoff, even if the launch entry is lost. This no-resend rule
+depends on some start evidence surviving. A rendered brief beginning
 with `-`, or containing NUL, gets 422 at create before any charge or session
 is written; agentd also refuses it at launch, with no launch record and a
 plain error. A refused launch leaves the first-launch latch free and reports
 agent `failed`, remote brief `not-launched`. These checks also apply to
 summoned tasks; ordinary task stdin is unchanged (story 795 fix round 1,
-2026-11-16, coordinator rulings; not a ruling by Tom).
+2026-11-16, coordinator rulings; not a ruling by Tom). A missing prerequisite
+that refuses before the launch writer also leaves the start free. A launch
+held for a login window leaves no launch, handoff or result entry and starts
+once when the window ends.
 
 The pod reports its delivery claim as `status.agent.brief`, beside the task
-start record. It is `pending` only with no launch record, a free launch latch
-and no pre-launch error; `launched` when tmux confirmed the brief-carrying
-launch with matching conversation and boot identities and no refusal
-evidence for that launch; `unconfirmed` when the handoff is asked or
-ambiguous, or launch/refusal evidence is unreadable or lacks those identities
-(including dangling links); and `not-launched` when
-nothing started, a fence refused it, a pre-launch error was recorded, or a
-legacy launch did not carry the brief. This is the pod's claim about its
+start record. It is `pending` only with no launch, handoff or task-result
+entry and no pre-launch error; `launched` when tmux confirmed a structurally
+complete brief-carrying remote launch with matching conversation and boot
+identities and no refusal evidence for that launch; `unconfirmed` when a
+handoff survives without the launch, the handoff is asked or ambiguous,
+launch/refusal evidence is unreadable or lacks those identities (including
+dangling links), or argv is incomplete. The argv needs a nonempty executable
+that is neither the brief nor an option, plus `--remote-control` followed by
+this session's name. A complete remote launch without a final positional
+brief remains `not-launched`; the flag's session name is not a positional
+brief. A matching nothing-started handoff, fence refusal or pre-launch error
+with a free latch also reports `not-launched`, with the existing precedence.
+This is the pod's claim about its
 handoff, not proof that the provider answered; the operator does not act on
 it. An older agentd omits the field. Unknown or malformed evidence is
 dropped without blocking its heartbeat. No `agent-run` view gains the field
-in this story, so an old client sees no new brief key.
+in this story, so an old client sees no new brief key. These start-evidence
+and argv corrections are story 795 gate review findings R3-F1 to R3-F3,
+coordinator rulings R2 and R3 (2026-11-18), not rulings by Tom.
+
+The Claude launch record is atomically renamed without fsync; the handoff
+writer fsyncs its file and directory. Once the handoff is written, either
+surviving record consumes the start. The tests inject lost evidence; they
+do not establish power-loss persistence.
 
 Install the CRD copy before the operator pin, then release and pin the agent
 image. The positional prompt with `--remote-control` still needs the

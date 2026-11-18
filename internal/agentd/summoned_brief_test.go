@@ -210,7 +210,7 @@ func TestSummonedBriefDeliveryFromHandoff(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if tc.name != "missing-handoff" {
+			if tc.name != "missing-handoff" && tc.name != "no-launch" && tc.name != "refused-before-launch" {
 				if err := writeJSONFile(s.statePath(startHandoffFile), h); err != nil {
 					t.Fatal(err)
 				}
@@ -331,6 +331,9 @@ func TestSummonedBriefRefusalLeavesNoLaunch(t *testing.T) {
 		if _, err := os.Lstat(s.statePath(file)); !os.IsNotExist(err) {
 			t.Fatalf("refusal left %s: %v", file, err)
 		}
+	}
+	if summonedLaunched(s, sess) {
+		t.Fatal("refusal consumed the one-shot latch")
 	}
 	if err := writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "first", Boot: protocol.BootFailed, AgentError: why}); err != nil {
 		t.Fatal(err)
@@ -503,5 +506,258 @@ func TestSummonedBriefLiteralExecArguments(t *testing.T) {
 	sess.Prompt = strings.Repeat("x", protocol.MaxPromptBytes+1)
 	if err := sess.Validate(); err == nil || !strings.Contains(err.Error(), "more than") {
 		t.Fatal("an over-limit brief passed Session validation")
+	}
+}
+
+// R3-F1 / coordinator R2: a surviving handoff consumes the start even if
+// launch.json was lost. Exercise both the fixture and a bounded start window.
+func TestReview795OrphanHandoff(t *testing.T) {
+	for _, state := range []string{handoffAsked, handoffAmbiguous, handoffStarted} {
+		for _, deadline := range []string{"unset", "future"} {
+			t.Run(state+"/"+deadline, func(t *testing.T) {
+				s, sess, ws := summonedFixture(t, protocol.ModeRemote)
+				if deadline == "future" {
+					s.StartDeadline = loginNow.Add(time.Hour).Format(time.RFC3339)
+				}
+				first, err := BuildLaunch(s, sess, ws, "first", loginNow)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := writeJSONFile(s.statePath(launchFile), first); err != nil {
+					t.Fatal(err)
+				}
+				path := s.statePath(startHandoffFile)
+				if err := writeJSONFile(path, startHandoff{State: state, At: loginNow, ConversationID: first.ConversationID, BootID: first.BootID}); err != nil {
+					t.Fatal(err)
+				}
+				before, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Model loss of this entry, not a demonstrated power-loss failure.
+				if err := os.Remove(s.statePath(launchFile)); err != nil {
+					t.Fatal(err)
+				}
+				r := &fakeRunner{handle: func(c Cmd) (Result, error) {
+					if len(c.Args) > 0 && c.Args[0] == "new-session" {
+						return Result{}, nil
+					}
+					return Result{}, errNoSession
+				}}
+				for i, bootID := range []string{"first", "later"} {
+					now := loginNow.Add(time.Duration(i) * time.Minute)
+					if err := writeJSONFile(s.statePath(bootFile), bootRecord{Boot: protocol.BootReady, BootID: bootID}); err != nil {
+						t.Fatal(err)
+					}
+					check := func() {
+						t.Helper()
+						st := CollectStatus(context.Background(), &fakeRunner{}, s, sess, now)
+						if st.Brief != protocol.BriefUnconfirmed || !summonedLaunched(s, sess) {
+							t.Errorf("%s: surviving handoff brief=%s latch=%t; want unconfirmed and consumed", bootID, st.Brief, summonedLaunched(s, sess))
+						}
+						if st.Agent.ConversationID != "" {
+							t.Error("a new conversation was reported")
+						}
+					}
+					check()
+					d := quietDaemon(s, sess, r, now)
+					step, why := d.startAgent(context.Background(), ws, Step{State: StepOK}, bootID)
+					if step.State != StepOK || why != "" || len(r.calls) != 0 || d.remote != nil {
+						t.Errorf("%s: surviving handoff start state=%s reason=%q calls=%d held=%t", bootID, step.State, why, len(r.calls), d.remote != nil)
+					}
+					check()
+					for _, file := range []string{launchFile, resumeFile, resultFile} {
+						if _, err := os.Lstat(s.statePath(file)); !os.IsNotExist(err) {
+							t.Errorf("%s: new %s entry: %v", bootID, file, err)
+						}
+					}
+					after, err := os.ReadFile(path)
+					if err != nil || !bytes.Equal(before, after) {
+						t.Errorf("%s: surviving handoff changed: %v", bootID, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+// All summoned modes use the same Lstat boundary, regardless of readability
+// or the handoff's decoded state. Ordinary sessions ignore these entries.
+func TestSummonedHandoffEntryConsumesStart(t *testing.T) {
+	for _, mode := range []string{protocol.ModeRemote, protocol.ModeTask, protocol.ModeLocal} {
+		for _, shape := range []string{handoffNothingStarted, "unknown", "corrupt", "unreadable", "directory", "dangling-link"} {
+			t.Run(mode+"/"+shape, func(t *testing.T) {
+				s, sess, ws := summonedFixture(t, mode)
+				path := s.statePath(startHandoffFile)
+				var err error
+				switch shape {
+				case "directory":
+					err = os.Mkdir(path, 0o700)
+				case "dangling-link":
+					err = os.Symlink("missing-handoff", path)
+				case "unreadable":
+					err = os.WriteFile(path, []byte(`{}`), 0)
+				case "corrupt":
+					err = os.WriteFile(path, []byte(`{"state":`), 0o600)
+				default:
+					err = writeJSONFile(path, startHandoff{State: shape})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !summonedLaunched(s, sess) {
+					t.Error("surviving handoff did not consume the start")
+				}
+				r := &fakeRunner{}
+				d := quietDaemon(s, sess, r, loginNow)
+				_, _ = d.startAgent(context.Background(), ws, Step{State: StepOK}, "later")
+				if len(r.calls) != 0 {
+					t.Error("surviving handoff reached the runner")
+				}
+				sess.Caller = ""
+				if summonedLaunched(s, sess) {
+					t.Error("ordinary session consumed the summoned latch")
+				}
+			})
+		}
+	}
+}
+
+func TestSummonedMissingPrerequisiteLeavesStartFree(t *testing.T) {
+	s, sess, ws := summonedFixture(t, protocol.ModeTask)
+	s.Getenv = envOf(nil) // no admitted static-token prerequisite
+	r := &fakeRunner{}
+	d := quietDaemon(s, sess, r, loginNow)
+	step, why := d.startAgent(context.Background(), ws, Step{State: StepOK}, "first")
+	if step.State != StepFail || why == "" || len(r.calls) != 0 || summonedLaunched(s, sess) {
+		t.Fatalf("missing prerequisite: state=%s calls=%d consumed=%t", step.State, len(r.calls), summonedLaunched(s, sess))
+	}
+	for _, file := range []string{launchFile, startHandoffFile, resultFile, resumeFile} {
+		if _, err := os.Lstat(s.statePath(file)); !os.IsNotExist(err) {
+			t.Fatalf("missing prerequisite left %s: %v", file, err)
+		}
+	}
+}
+
+func TestSummonedBriefHeldForLoginWindowStartsOnce(t *testing.T) {
+	s, sess, ws := summonedFixture(t, protocol.ModeRemote)
+	s.StartDeadline = loginNow.Add(time.Hour).Format(time.RFC3339)
+	tm := &loginTmux{window: true, pane: loginPaneWithURL}
+	r := &fakeRunner{handle: tm.handle}
+	d := quietDaemon(s, sess, r, loginNow)
+	release, err := acquireLoginLock(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, why := d.startAgent(context.Background(), ws, Step{State: StepOK}, "first")
+	release()
+	if step.State != StepOK || why != "" || d.remote == nil || !d.remote.deferred || tm.agent {
+		t.Fatal("summoned first launch was not held for the login window")
+	}
+	assertFree := func() {
+		t.Helper()
+		if summonedLaunched(s, sess) {
+			t.Fatal("held launch consumed the start")
+		}
+		for _, file := range []string{launchFile, startHandoffFile, resultFile, resumeFile} {
+			if _, err := os.Lstat(s.statePath(file)); !os.IsNotExist(err) {
+				t.Fatalf("held launch left %s: %v", file, err)
+			}
+		}
+	}
+	assertFree()
+	d.pollRemoteLogin(context.Background())
+	assertFree()
+	tm.pane += "Login successful.\nLOGIN_EXIT=0\n"
+	d.pollRemoteLogin(context.Background())
+	d.pollRemoteLogin(context.Background())
+	starts := 0
+	for _, c := range r.calls {
+		if len(c.Args) > 3 && c.Args[0] == "new-session" && c.Args[3] == TmuxSession {
+			starts++
+		}
+	}
+	var first Launch
+	if err := readJSONFile(s.statePath(launchFile), &first); err != nil {
+		t.Fatal(err)
+	}
+	if starts != 1 || !summonedLaunched(s, sess) || first.Argv[len(first.Argv)-1] != sess.Prompt || summonedHandoff(s, first).State != handoffStarted {
+		t.Fatalf("after window ended: starts=%d consumed=%t", starts, summonedLaunched(s, sess))
+	}
+}
+
+// R3-F2 / coordinator R3: a last string alone proves neither a legacy
+// remote launch nor a positional brief. Keep both complete shapes working.
+func TestReview795IncompleteArgv(t *testing.T) {
+	for _, tc := range []struct{ shape, want string }{
+		{"null-argv", protocol.BriefUnconfirmed},
+		{"empty-argv", protocol.BriefUnconfirmed},
+		{"command-only", protocol.BriefUnconfirmed},
+		{"empty-executable", protocol.BriefUnconfirmed},
+		{"brief-as-executable", protocol.BriefUnconfirmed},
+		{"option-as-executable", protocol.BriefUnconfirmed},
+		{"missing-remote-control", protocol.BriefUnconfirmed},
+		{"missing-remote-name", protocol.BriefUnconfirmed},
+		{"wrong-remote-name", protocol.BriefUnconfirmed},
+		{"complete-legacy", protocol.BriefNotLaunched},
+		{"complete-brief", protocol.BriefLaunched},
+		{"name-equals-brief-without-positional-brief", protocol.BriefNotLaunched},
+	} {
+		t.Run(tc.shape, func(t *testing.T) {
+			s, sess, ws := summonedFixture(t, protocol.ModeRemote)
+			if tc.shape == "name-equals-brief-without-positional-brief" {
+				sess.Prompt = sess.Name
+			}
+			first, err := BuildLaunch(s, sess, ws, "first", loginNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch tc.shape {
+			case "null-argv":
+				first.Argv = nil
+			case "empty-argv":
+				first.Argv = []string{}
+			case "command-only":
+				first.Argv = []string{sess.Prompt}
+			case "empty-executable":
+				first.Argv[0] = ""
+			case "brief-as-executable":
+				first.Argv[0] = sess.Prompt
+			case "option-as-executable":
+				first.Argv[0] = "--version"
+			case "missing-remote-control":
+				first.Argv = []string{s.ClaudeBin, sess.Prompt}
+			case "missing-remote-name":
+				first.Argv = []string{s.ClaudeBin, "--remote-control"}
+			case "wrong-remote-name":
+				first.Argv[slices.Index(first.Argv, "--remote-control")+1] = "other-session"
+			case "complete-legacy", "name-equals-brief-without-positional-brief":
+				first.Argv = []string{s.ClaudeBin, "--remote-control", sess.Name}
+			}
+			if err := writeJSONFile(s.statePath(launchFile), first); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeJSONFile(s.statePath(startHandoffFile), startHandoff{State: handoffStarted, At: loginNow, ConversationID: first.ConversationID, BootID: first.BootID}); err != nil {
+				t.Fatal(err)
+			}
+			r := &fakeRunner{}
+			for _, bootID := range []string{"first", "later"} {
+				if err := writeJSONFile(s.statePath(bootFile), bootRecord{Boot: protocol.BootReady, BootID: bootID}); err != nil {
+					t.Fatal(err)
+				}
+				st := CollectStatus(context.Background(), &fakeRunner{}, s, sess, loginNow)
+				if st.Brief != tc.want || !summonedLaunched(s, sess) {
+					t.Errorf("%s: incomplete argv=%s brief=%s latch=%t; want %s and consumed", bootID, tc.shape, st.Brief, summonedLaunched(s, sess), tc.want)
+				}
+				d := quietDaemon(s, sess, r, loginNow)
+				step, why := d.startAgent(context.Background(), ws, Step{State: StepOK}, bootID)
+				if step.State != StepOK || why != "" || len(r.calls) != 0 {
+					t.Errorf("%s: incomplete argv reached a runner or failed: state=%s calls=%d", bootID, step.State, len(r.calls))
+				}
+				if _, err := os.Lstat(s.statePath(resumeFile)); !os.IsNotExist(err) {
+					t.Fatalf("resume was written: %v", err)
+				}
+			}
+		})
 	}
 }

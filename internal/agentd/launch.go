@@ -669,15 +669,15 @@ func writeJSONFile(path string, v any) error {
 }
 
 // summonedLaunched reports whether a summoned session (DESIGN-064, spec.caller
-// set) already has its first launch: a saved launch record, or a task result,
-// whatever the mode. Such a session starts nothing again on any boot
+// set) already has start evidence: a saved launch, start handoff or task result,
+// whatever the mode or handoff state. Such a session starts nothing on any boot
 // (DESIGN-064 5.9, OP780): no TUI resume and no provider. As for a retained
 // private task, a record agentd cannot stat counts as present.
 func summonedLaunched(s Settings, sess protocol.Session) bool {
 	if sess.Caller == "" {
 		return false
 	}
-	for _, name := range []string{launchFile, resultFile} {
+	for _, name := range []string{launchFile, startHandoffFile, resultFile} {
 		if _, err := os.Lstat(s.statePath(name)); !errors.Is(err, os.ErrNotExist) {
 			return true
 		}
