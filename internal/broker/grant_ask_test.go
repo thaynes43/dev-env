@@ -61,6 +61,91 @@ func TestGrantAskFlagOffDeniesAtThirtyMinutesWithoutAnAsk(t *testing.T) {
 	}
 }
 
+func TestGrantAskFlagOffBrokerDenialRetainsWithoutAskReads(t *testing.T) {
+	f := newGrantAskFixture(t, false)
+	g := f.grant()
+	ended := f.b.now()
+	g.Status.Phase = v1alpha1.GrantDenied
+	g.Status.DeniedBy = DeniedByBroker
+	g.Status.Message = "invalid scope"
+	g.Status.EndedAt = &ended
+	if err := f.base.Status().Update(f.ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	askReads, grantReads := 0, 0
+	f.b.APIReader = interceptor.NewClient(f.base.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			switch obj.(type) {
+			case *coord.Ask:
+				askReads++
+				return apierrors.NewForbidden(coord.GroupVersion.WithResource("asks").GroupResource(), key.Name, errors.New("synthetic Ask read denied"))
+			case *v1alpha1.AccessGrant:
+				grantReads++
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	const passes = 11
+	for i := range passes {
+		res, err := f.reconcile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := ended.Add(Retention).Sub(f.clk.Now())
+		if res != (ctrl.Result{RequeueAfter: want}) {
+			t.Errorf("retain pass %d: requeue %+v, want retention wait %s", i, res, want)
+		}
+		got := f.grant()
+		if got.Status.Phase != v1alpha1.GrantDenied || got.Status.DeniedBy != DeniedByBroker || got.Status.Ask != "" || got.Status.ApprovedBy != "" || got.Spec.Requester.SessionUID == "" {
+			t.Fatalf("retain pass %d: %+v", i, got)
+		}
+		f.clk.Step(time.Minute)
+	}
+	if askReads != 0 || grantReads != passes || len(f.b.grantAskCleanupWait) != 0 {
+		t.Fatalf("Ask reads %d, want 0; grant reads %d, want %d; cleanup waits %v", askReads, grantReads, passes, f.b.grantAskCleanupWait)
+	}
+}
+
+func TestGrantAskFlagOffBrokerDenialCleansStoredAsk(t *testing.T) {
+	f := newGrantAskFixture(t, true)
+	f.openAsk()
+	g := f.grant()
+	if g.Status.Ask == "" {
+		t.Fatal("grant has no stored Ask route")
+	}
+	route := g.Status.Ask
+	ended := f.b.now()
+	g.Status.Phase = v1alpha1.GrantDenied
+	g.Status.DeniedBy = DeniedByBroker
+	g.Status.Message = "the scope no longer matches"
+	g.Status.EndedAt = &ended
+	if err := f.base.Status().Update(f.ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	f.b.EnableGrantAsks = false
+	f.meta.failAskGet = apierrors.NewServiceUnavailable("synthetic Ask read failed")
+	res, err := f.reconcile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.grant()
+	if res.RequeueAfter != time.Second || got.Status.Phase != v1alpha1.GrantDenied || got.Status.Ask != route || got.Status.ApprovedBy != "" || f.onlyAsk().Status.State != string(apiv1.AskStateOpen) {
+		t.Fatalf("failed read: requeue %s grant %+v Ask %s", res.RequeueAfter, got.Status, f.onlyAsk().Status.State)
+	}
+	f.meta.failAskGet = nil
+	f.clk.Step(time.Second)
+	res, err = f.reconcile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = f.grant()
+	ask := f.onlyAsk()
+	want := ended.Add(Retention).Sub(f.clk.Now())
+	if res.RequeueAfter != want || got.Status.Phase != v1alpha1.GrantDenied || got.Status.Ask != route || got.Status.ApprovedBy != "" || ask.Status.State != string(apiv1.AskStateWithdrawn) || ask.Labels[asks.StateLabel] != string(apiv1.AskStateWithdrawn) || len(f.b.grantAskCleanupWait) != 0 {
+		t.Fatalf("cleanup: requeue %s grant %+v Ask %s label %s waits %v", res.RequeueAfter, got.Status, ask.Status.State, ask.Labels[asks.StateLabel], f.b.grantAskCleanupWait)
+	}
+}
+
 func TestGrantAskFlagOnHoldsPastThirtyMinutesAndOpensOneAsk(t *testing.T) {
 	f := newGrantAskFixture(t, true)
 	f.until(func(g *v1alpha1.AccessGrant) bool {

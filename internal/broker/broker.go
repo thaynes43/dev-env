@@ -718,18 +718,19 @@ func (b *Broker) finalize(ctx context.Context, g *v1alpha1.AccessGrant) (ctrl.Re
 
 // withdrawTerminalAsk closes the broker's open Ask after a terminal write.
 // A deny withdraws when the broker denied a routed grant, including one whose
-// stored route is empty: cleanup then uses the computed Ask name. A pending
-// release withdraws after Released is stored. A read failure that is not
+// stored route is empty while grant Asks are enabled: cleanup then uses the
+// computed Ask name. A stored route keeps its cleanup when the flag is off.
+// A pending release withdraws after Released is stored. A read failure that is not
 // NotFound returns an error so the caller backs off, from one second up to
 // five minutes. The Ask is not modified on that pass.
 func (b *Broker) withdrawTerminalAsk(ctx context.Context, g *v1alpha1.AccessGrant) error {
+	if g == nil || (!b.EnableGrantAsks && g.Status.Ask == "") {
+		return nil
+	}
 	if err := b.withdrawBrokerDenial(ctx, g); err != nil {
 		return err
 	}
-	if g == nil || g.Status.Phase != v1alpha1.GrantReleased || !g.Spec.Release || g.Status.Message != "released before an answer" {
-		return nil
-	}
-	if !b.EnableGrantAsks && g.Status.Ask == "" {
+	if g.Status.Phase != v1alpha1.GrantReleased || !g.Spec.Release || g.Status.Message != "released before an answer" {
 		return nil
 	}
 	return b.withdrawOpenGrantAsk(ctx, g)

@@ -714,6 +714,8 @@ ADR-021, not a lane of Epic #254. Its build plan is ADR-021, seven PRs
 behind broker `--enable-grant-asks`, default off. Budget and
 native-decision adapters remain their own stories. Q-255-04 is unchanged.
 
+Build record (OP918, 2026-11-18): with `--enable-grant-asks` off and no `status.ask`, broker-denial cleanup makes no Ask read or Ask-caused retry, while a stored Ask route keeps its cleanup; source and tests only, not installed.
+
 ## 13. Questions for Tom
 
 These IDs belong to #255. Q-255-02 and Q-255-04 have the dated rulings below;
