@@ -92,7 +92,8 @@ var claudeLayout = []historyRule{
 	{".*.agentd-*", protocol.HistoryClassNotHistory, kindAny},
 }
 
-// codexLayout is $CODEX_HOME.
+// codexLayout is $CODEX_HOME. The image job rechecks names produced by the
+// pinned client; see TestPinnedCodexHomeLayout and the upgrade audit.
 var codexLayout = []historyRule{
 	// History: rollouts, the session index, prompt history, the state
 	// databases with their -wal and -shm files, and what the model made.
@@ -137,6 +138,8 @@ var codexLayout = []historyRule{
 	{".sandbox_migration", protocol.HistoryClassNotHistory, kindAny},
 	// Environment captures.
 	{"shell_snapshots", protocol.HistoryClassNotHistory, kindAny},
+	// Native auth writer coordination; the lock carries no login material (0.169.1).
+	{"auth.lock", protocol.HistoryClassNotHistory, kindAny},
 	// Credentials.
 	{"auth.json", protocol.HistoryClassCredential, kindAny},
 	{"auth.json.*", protocol.HistoryClassCredential, kindAny},

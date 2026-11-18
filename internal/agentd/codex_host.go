@@ -205,7 +205,7 @@ func hostLifecycle(s Settings) (codexHostLifecycle, error) {
 		return codexHostLifecycle{}, err
 	}
 	var saved codexHostLifecycle
-	if decodeHostJSON(raw, &saved) != nil || saved.Version != 1 || saved.CLI != managedCodexVersion || saved.WorkspaceID != s.WorkspaceID || saved.PodUID == "" {
+	if decodeHostJSON(raw, &saved) != nil || saved.Version != 1 || (saved.CLI != managedCodexVersion && saved.CLI != previousPinnedCodexVersion) || saved.WorkspaceID != s.WorkspaceID || saved.PodUID == "" {
 		return codexHostLifecycle{}, errCodexHostUnknown
 	}
 	if s.PrivateCodexHost != (saved.Private != nil) || saved.Private != nil && (!saved.Private.valid(s) || !privateHostPreparationMatches(saved)) || saved.Private == nil && len(saved.Preparation) != 0 {
@@ -268,21 +268,14 @@ func startCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d codex
 	if hostVersion(ctx, s, d, s.CodexBin) != nil {
 		return errCodexHostUnknown
 	}
-	// A fresh native installation bootstraps from the invoking package. Existing
-	// managed packages must match before start; malformed/broken current refuses.
-	managed, err := codexHostManagedBin(s)
-	if err == nil {
-		if hostVersion(ctx, s, d, managed) != nil {
+	if prepareCodexHostPackage(ctx, s, d.native, func() error {
+		p, err := d.process(s)
+		if err != nil || p.State != "Absent" {
 			return errCodexHostUnknown
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil
+	}) != nil {
 		return errCodexHostUnknown
-	} else {
-		for _, root := range []string{"app-server-daemon", "standalone"} {
-			if _, err := os.Lstat(filepath.Join(s.CodexHome, "packages", root, "current")); !errors.Is(err, os.ErrNotExist) {
-				return errCodexHostUnknown
-			}
-		}
 	}
 	if s.PrivateCodexHost {
 		absent, err := d.process(s)

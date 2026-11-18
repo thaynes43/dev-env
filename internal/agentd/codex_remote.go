@@ -291,6 +291,15 @@ func (c *codexRemote) start(ctx context.Context, s Settings, now time.Time) erro
 	if privateCodexHome(s) != nil {
 		return errCodexRemoteState
 	}
+	if prepareCodexHostPackage(ctx, s, c.deps.native, func() error {
+		p, err := c.deps.daemonState(s)
+		if err != nil || p.State != "Absent" {
+			return errCodexHostUnknown
+		}
+		return nil
+	}) != nil {
+		return errCodexRemoteState
+	}
 	cleanCodexStale(s)
 	if err := setCodexDaemonSettings(s); err != nil {
 		return err

@@ -24,6 +24,9 @@ import (
 
 const managedCodexVersion = "0.169.1"
 
+// Only this previously pinned client may migrate its retained host state.
+const previousPinnedCodexVersion = "0.160.1"
+
 var nativeThreadID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // prepareProjectTask binds the received immutable platform snapshot before any
