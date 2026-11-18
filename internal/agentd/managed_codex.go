@@ -65,7 +65,7 @@ func acceptedProjectTask(s Settings, sess protocol.Session) (projectcatalog.Snap
 
 func providerProjectArgs(s Settings, sess protocol.Session, guard string, resumes ...bool) ([]string, error) {
 	if len(sess.ProjectSnapshot) == 0 {
-		return []string{"--append-system-prompt", guard}, nil
+		return []string{claudeValueFlags[claudeFlagAppendSystemPrompt], guard}, nil
 	}
 	snapshot, err := projectcatalog.ParseSnapshot(sess.ProjectSnapshot)
 	if err != nil {

@@ -4427,6 +4427,172 @@ contract of `GET /v1/sessions/{name}`, so it is stated here.
    the current Remote Control state, the stored settlement and where the
    link is. It prints no link.
 
+**Correction, 2026-11-16: story 795, coordinator rulings; not a ruling by
+Tom.** Rulings O11 and O12 are item 745 comment 7680. Earlier text and
+corrections stay; where they differ, this governs.
+
+- *The first launch.* For a remote session with a caller and a nonempty
+  prompt, agentd appends the brief as the CLI's last positional argument,
+  after the rules. `--remote-control` still carries the session name;
+  summoned sessions have no title. A task keeps its prompt on stdin. No
+  ordinary remote launch gains a prompt. The resume path is unchanged and
+  refuses every summoned session.
+- *Refusal (O11).* A rendered brief whose first byte is `-` is refused at
+  create with 422, before a session or a create charge is written. agentd
+  also refuses it when building a summoned session's first launch, without
+  echoing the brief. That refusal writes no launch or handoff record; the
+  boot records the error, and reports agent `failed`, brief `not-launched`.
+  This check applies to summoned tasks too; an ordinary task may still use
+  an option-looking stdin prompt.
+- *The pod's claim (O12).* The heartbeat's optional `brief` string is copied
+  to `status.agent.brief`, beside `status.agent.start`, only for a summoned
+  remote session with a prompt. The short name keeps the earlier `brief`
+  name while moving it under the pod's status. The operator does not act on
+  it. It says whether the brief was handed to a start, never that the
+  provider read it or answered it. Its four closed words follow the durable
+  first-launch and matching start-handoff records:
+  - `pending`: no launch record and no recorded pre-launch refusal.
+  - `launched`: the launch carries the brief and tmux confirmed its start.
+  - `unconfirmed`: the handoff is `asked` or `ambiguous`, missing, unreadable
+    or bound to another launch. An unreadable launch or fence-refusal record
+    is also unconfirmed.
+    No boot resends it, even if no process is live.
+  - `not-launched`: nothing started, the start fence refused, a pre-launch
+    error records that nothing started, or an older launch's argv did not
+    carry the brief. A matching fence refusal overrides a confirmed handoff.
+- *Mixed versions.* The field is optional, MaxLength 12, with that enum.
+  There is no transition or cross-spec schema rule: a heartbeat from an
+  older agentd omits it, leaving it absent, and an operator may replace
+  `status.agent` without it. Unknown words or malformed optional evidence
+  are dropped without refusing the heartbeat. An older operator's
+  non-strict heartbeat decoder ignores the unknown member. No client view
+  gains a key in this story, including a summoned remote view; old clients
+  see no brief-delivery state. Story 797's separate registration key keeps
+  its own compatibility rule above.
+- *Installation and the open probe.* Copy the CRD first, then pin the
+  operator, then release the agent image and pin it. Stand-in tests prove
+  the argv and recorded state. Whether a positional prompt actually works
+  with `--remote-control` in the v2 image remains open: the coordinator
+  checks it at story 745's drill. No provider CLI probe runs in story 795,
+  and typing into a live session is never a fallback. Source and test
+  evidence do not count as installed or accepted evidence.
+
+**Correction, 2026-11-16: story 795 fix round 1, coordinator rulings; not a
+ruling by Tom.** This answers F1 and F2 in PR 1179 comment 6923479739.
+Earlier corrections stay; where they differ, this governs.
+
+- *Unreadable evidence (F1).* `pending` requires a genuinely absent launch
+  record, a free first-launch latch (no launch or task-result entry, even a
+  dangling link), and no recorded pre-launch error. A dangling launch entry
+  is `unconfirmed`. `launched` requires the brief-carrying launch and a
+  matching `started` handoff with nonempty conversation and boot identities.
+  An existing refusal entry that cannot be read, including a dangling link,
+  or decoded refusal evidence missing either identity is `unconfirmed`.
+  Both identities must be present before a refusal can be matched to this
+  launch (`not-launched`) or ignored as belonging to another launch. A
+  matching `nothing-started` handoff still takes precedence. No uncertain
+  evidence frees the latch or causes a resend, on the same or a later boot.
+- *NUL refusal (F2).* A rendered summoned brief containing U+0000 gets 422
+  at create before any charge or Session write. agentd refuses it when
+  building the first launch, before a launch, handoff or task-result write
+  or tmux call, without echoing the brief. The boot records the plain error:
+  agent `failed`, remote brief `not-launched`. This refusal does not consume
+  the first-launch latch. Like the existing `-` check, it applies to summoned
+  tasks too; ordinary task stdin bytes are unchanged.
+- *Argument bounds.* NUL is the only byte that Go's exec argument conversion
+  rejects. Other control bytes, quotes, newlines and Unicode are literal
+  argv bytes. The existing rendered-brief and Session validation cap is
+  65,536 bytes. Including its terminator, that is 65,537 bytes, below Linux's
+  131,072-byte single-argument limit on the session image's 4 KiB pages.
+  Overlong arguments can fail with `E2BIG`; a brief within the existing cap
+  fits this limit. The aggregate argv/environment limit is separate and
+  depends on the runtime environment; this adds no general exec guarantee.
+  A stand-in exec test receives the maximum brief and the literal-byte
+  cases unchanged. No new schema rule or broader input filter is added.
+
+This is source and test evidence only. Nothing is installed or accepted by
+this correction. The real positional-prompt/Remote Control probe and the
+other-model-family review remain the coordinator's separate gates.
+
+**Correction, 2026-11-18: story 795 gate review (gpt-6-astra, 2026-11-18),
+findings R3-F1 to R3-F3; coordinator rulings R2 and R3; not a ruling by Tom.**
+Earlier dated corrections stay; where they differ, this governs.
+
+- *Any start evidence consumes the one start (R2).* In every summoned mode
+  (remote, task and local), any launch, start-handoff or task-result entry
+  consumes the start. agentd checks each with `Lstat`: its state, contents
+  and readability do not matter, and a dangling link counts. A surviving
+  handoff with no launch record makes a remote brief `unconfirmed`. This
+  boot and later boots build no new conversation, start nothing, write no
+  resume record and preserve that handoff; closure uses the existing
+  unreported path. The no-resend boundary depends on at least one of these
+  entries surviving; it is not a guarantee after all start evidence is lost.
+  `pending` requires no such entry and no pre-launch error.
+- *Write order and refusals.* The first-launch latch is checked before
+  building the launch or writing its handoff. All three summoned modes write
+  a handoff when they reach the shared first-launch writer. A `-` or NUL
+  refusal, or a missing prerequisite that refuses before the writer, leaves
+  neither launch nor handoff and keeps the start free. A launch held for a
+  login window also leaves no launch, handoff or task-result entry: it can
+  still start once when that window ends. These rules change no ordinary
+  session's launch, resume or report.
+- *Incomplete argv (R3).* Before distinguishing a legacy launch from one
+  carrying the brief, agentd requires a nonempty executable slot that is
+  neither the brief nor an option, followed somewhere by `--remote-control`
+  and this session's name. Missing, null, empty, command-only or otherwise
+  structurally incomplete argv is `unconfirmed`, with the start consumed.
+  A complete remote launch without a final positional brief remains
+  `not-launched`; the Remote Control name alone is not a positional brief.
+  A complete brief-carrying launch still requires a matching `started`
+  handoff and the existing refusal checks before it reads `launched`.
+  Incomplete launch identities, unreadable evidence and incomplete refusal
+  identities also remain `unconfirmed`; a matching `nothing-started`
+  handoff keeps its existing precedence.
+- *Persistence wording.* The Claude launch record uses an atomic rename
+  without file or directory fsync (`writeFileAtomic`). The handoff writer
+  fsyncs both file and directory. Once the handoff is written, either
+  surviving record consumes the start, even if the other entry is lost.
+  This does not prove persistence ordering or behavior under actual power
+  loss. Neither `writeFileAtomic` nor the ordinary launch writer changes.
+- *Review and the open drill.* The owner named Codex (`gpt-6-astra`) for the
+  gate review on 2026-11-18 (item 751, comment 8880); its report is
+  `reviews/op795-review-3.md`. That replaces the earlier promise of a
+  reviewer from another model family. The fix round is reviewed before any
+  merge. The positional-prompt/`--remote-control` probe stays open and
+  assigned to the coordinator's drill in the v2 image. Typing into a live
+  session is never a fallback. Source and stand-in tests do not establish
+  installed or accepted behavior.
+
+**Correction, 2026-11-18: story 795 re-read (gpt-6-astra, 2026-11-18),
+findings R4-F1 and R4-F2; coordinator ruling R7; not a ruling by Tom.**
+Earlier dated lines stay; this replaces the claim that the structure check
+alone distinguishes a legacy launch from a brief-carrying one.
+
+- *Positional role (R7).* After the executable and Remote Control structure
+  checks, the last string is not a positional brief when it follows an
+  option that the launch builder writes with a value: it is that option's
+  value and the brief reads `not-launched`. Those options are defined once
+  for the builder and reader, including the inline and file rule options.
+  If it follows any other string starting with `-`, the option's role is
+  unknown and the brief reads `unconfirmed`. Otherwise the existing brief,
+  handoff and refusal checks decide. The Remote Control value is the name
+  or composed title returned by the builder; that value alone is never the
+  positional brief. Every saved launch in these cases keeps the one start
+  consumed. Builder argv is unchanged, including ordinary sessions.
+- *Held login (R4-F2).* A launch held for a login window leaves no launch,
+  handoff or task-result entry. It starts once after the window ends and the
+  login is usable, while its start deadline has not passed; until then it
+  stays held. If the deadline passes first, it is refused, nothing starts,
+  the one start stays free and the remote brief reads `not-launched`. An
+  error that refuses the first launch before the launch writer, such as a
+  brief beginning with `-` or containing NUL or a failed prerequisite, also
+  starts nothing and leaves the one start free. This documents existing
+  behavior; the deadline and first-start code do not change.
+
+Story 795 second re-read (gpt-6-astra, 2026-11-18), finding R5-F1;
+coordinator ruling R8; not a ruling by Tom: the held-login sentence above
+was replaced because an unusable login keeps the launch held, not refused.
+
 ### 6.11 OP746: move curation
 
 - A new app in haynes-ops `upgrade-agent/cigar-curation/` (not inside the

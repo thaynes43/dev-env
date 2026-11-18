@@ -3406,3 +3406,68 @@ func createTitleErrNamed(t *testing.T, n string, title any) error {
 	u.SetNamespace(ns)
 	return k8s.Create(ctx(t), u)
 }
+
+// Story 795: optional, bounded pod evidence. No transition or cross-spec rule:
+// an older heartbeat may omit it, and an operator may replace status.agent.
+func TestAgentBriefDeliveryState(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, want string
+		valid           bool
+	}{
+		{"pending", `"pending"`, "pending", true},
+		{"launched", `"launched"`, "launched", true},
+		{"unconfirmed", `"unconfirmed"`, "unconfirmed", true},
+		{"not-launched", `"not-launched"`, "not-launched", true},
+		{"absent", "", "", true},
+		{"unknown", `"delivered"`, "", false},
+		{"empty", `""`, "", false},
+		{"too-long", `"unconfirmed-x"`, "", false},
+		{"wrong-type", `7`, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := summonedRemote()
+			s.Spec.Prompt = "Follow the runbook."
+			if err := k8s.Create(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			got := get(t, s)
+			patch := `{"status":{"agent":{"status":"busy"`
+			if tc.raw != "" {
+				patch += `,"brief":` + tc.raw
+			}
+			patch += `}}}`
+			err := k8s.Status().Patch(ctx(t), got, client.RawPatch(types.MergePatchType, []byte(patch)))
+			if !tc.valid {
+				wantInvalid(t, err, "status.agent.brief")
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(get(t, s).Status.Agent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var agent struct {
+				Brief string `json:"brief"`
+			}
+			if err := json.Unmarshal(raw, &agent); err != nil {
+				t.Fatal(err)
+			}
+			if agent.Brief != tc.want {
+				t.Fatalf("stored brief=%q, want %q", agent.Brief, tc.want)
+			}
+			// Today's older agentd and operator updates may omit/remove the field.
+			got = get(t, s)
+			got.Status.Agent = &v1alpha1.AgentStatus{Status: "idle"}
+			if err := k8s.Status().Update(ctx(t), got); err != nil {
+				t.Fatalf("legacy heartbeat refused: %v", err)
+			}
+			got = get(t, s)
+			got.Status.Agent = nil
+			if err := k8s.Status().Update(ctx(t), got); err != nil {
+				t.Fatalf("operator update refused: %v", err)
+			}
+		})
+	}
+}

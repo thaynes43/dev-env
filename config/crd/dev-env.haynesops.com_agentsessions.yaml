@@ -920,6 +920,19 @@ spec:
                   branch:
                     description: Branch is the worktree's branch, for example agent/haynes-ops-1005-202504.
                     type: string
+                  brief:
+                    description: |-
+                      Brief is the pod's brief delivery claim for a summoned remote session
+                      with a prompt (DESIGN-064 6.10, OP795). The heartbeat copies only these
+                      words, and the operator does not act on them. Optional and replaceable:
+                      an older agentd or operator may omit it on any status update.
+                    enum:
+                    - pending
+                    - launched
+                    - unconfirmed
+                    - not-launched
+                    maxLength: 12
+                    type: string
                   conversationId:
                     description: |-
                       ConversationID is the agent's own session id (claude --session-id), the

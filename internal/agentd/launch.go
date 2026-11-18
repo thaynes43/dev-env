@@ -22,6 +22,31 @@ import (
 // attaches with `kubectl exec -it <pod> -- tmux attach -t agent`.
 const TmuxSession = "agent"
 
+// Claude first-launch options with an argv value. The builder uses these
+// entries directly; summonedBriefState uses the same definition to avoid
+// treating an option value as the final positional brief (OP795, R7).
+const (
+	claudeFlagModel = iota
+	claudeFlagEffort
+	claudeFlagSessionID
+	claudeFlagRemoteControl
+	claudeFlagMaxTurns
+	claudeFlagOutputFormat
+	claudeFlagAppendSystemPrompt
+	claudeFlagAppendSystemPromptFile
+)
+
+var claudeValueFlags = [...]string{
+	claudeFlagModel:                  "--model",
+	claudeFlagEffort:                 "--effort",
+	claudeFlagSessionID:              "--session-id",
+	claudeFlagRemoteControl:          "--remote-control",
+	claudeFlagMaxTurns:               "--max-turns",
+	claudeFlagOutputFormat:           "--output-format",
+	claudeFlagAppendSystemPrompt:     "--append-system-prompt",
+	claudeFlagAppendSystemPromptFile: "--append-system-prompt-file",
+}
+
 // State files in ~/.agentd. They live on the session volume, so a resume sees
 // what the last pod did.
 const (
@@ -74,8 +99,8 @@ type Launch struct {
 	// every existing private workspace launch.
 	WorkspaceOwner *taskOwner `json:"workspaceOwner,omitempty"`
 	Session        string     `json:"session"`
-	// Argv is the agent CLI and its arguments. The prompt is not among them:
-	// it goes to the CLI's stdin.
+	// Argv is the agent CLI and its arguments. A task's prompt goes to stdin;
+	// a summoned remote first launch carries its brief as the last argument.
 	Argv   []string `json:"argv"`
 	Prompt string   `json:"prompt,omitempty"`
 	Dir    string   `json:"dir"`
@@ -211,6 +236,16 @@ func sharedGuard(ws protocol.Workspace, task bool) string {
 // agent is named: an agent this agentd does not know is refused, never run
 // as Claude.
 func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootID string, now time.Time) (Launch, error) {
+	// O11 (DESIGN-064 6.10, OP795): a brief cannot become a CLI option.
+	// Refuse before any launch record exists, and never echo the brief.
+	if sess.Caller != "" && strings.HasPrefix(sess.Prompt, "-") {
+		return Launch{}, errors.New("a summoned session's brief must not start with '-'")
+	}
+	// OP795 F2: exec cannot carry a NUL in an argument. As with O11,
+	// refuse a summoned brief before any write consumes its one-shot start.
+	if sess.Caller != "" && strings.ContainsRune(sess.Prompt, 0) {
+		return Launch{}, errors.New("a summoned session's brief must not contain NUL")
+	}
 	l, err := buildFirstLaunch(s, sess, ws, bootID, now)
 	if err != nil {
 		return Launch{}, err
@@ -249,7 +284,7 @@ func buildFirstLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 		return Launch{}, err
 	}
 	argv := claudeArgs(s, sess)
-	argv = append(argv, "--session-id", conv)
+	argv = append(argv, claudeValueFlags[claudeFlagSessionID], conv)
 	l := Launch{
 		Session:        sess.Name,
 		Dir:            ws.Worktree,
@@ -287,10 +322,15 @@ func buildFirstLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 			return Launch{}, err
 		}
 		l.Argv = append(argv, rules...)
+		if sess.Mode == protocol.ModeRemote && sess.Caller != "" && sess.Prompt != "" {
+			// One positional argument, after all rules. No shell handoff and
+			// no resend: the existing summoned launch latch owns the start.
+			l.Argv = append(l.Argv, sess.Prompt)
+		}
 		return l, nil
 	}
 	if n := sess.MaxTurns(); n > 0 {
-		argv = append(argv, "--max-turns", strconv.Itoa(int(n)))
+		argv = append(argv, claudeValueFlags[claudeFlagMaxTurns], strconv.Itoa(int(n)))
 	}
 	guard := taskGuard(ws, s.WorkDir())
 	if sess.Workspace != nil {
@@ -311,7 +351,7 @@ func buildFirstLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 		return Launch{}, err
 	}
 	l.Argv = append(argv,
-		"--output-format", "stream-json", "--verbose",
+		claudeValueFlags[claudeFlagOutputFormat], "stream-json", "--verbose",
 		"-p")
 	l.Prompt = sess.Prompt
 	l.Timeout = sess.TimeoutDuration()
@@ -408,9 +448,9 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 // the always-allow launch contract (DESIGN-057 section 6a). Claude Code's
 // critical-path check is not covered by it and stays on (Tom, 2026-11-09).
 func claudeArgs(s Settings, sess protocol.Session) []string {
-	argv := []string{s.ClaudeBin, "--model", sess.Model}
+	argv := []string{s.ClaudeBin, claudeValueFlags[claudeFlagModel], sess.Model}
 	if sess.Effort != "" {
-		argv = append(argv, "--effort", sess.Effort)
+		argv = append(argv, claudeValueFlags[claudeFlagEffort], sess.Effort)
 	}
 	return append(argv, "--dangerously-skip-permissions")
 }
@@ -426,7 +466,7 @@ func remoteControlArgs(sess protocol.Session) []string {
 	if title := remoteControlTitle(sess); title != "" {
 		name = title
 	}
-	return []string{"--remote-control", name}
+	return []string{claudeValueFlags[claudeFlagRemoteControl], name}
 }
 
 // remoteControlTitle is what a Claude remote session passes to
@@ -654,15 +694,15 @@ func writeJSONFile(path string, v any) error {
 }
 
 // summonedLaunched reports whether a summoned session (DESIGN-064, spec.caller
-// set) already has its first launch: a saved launch record, or a task result,
-// whatever the mode. Such a session starts nothing again on any boot
+// set) already has start evidence: a saved launch, start handoff or task result,
+// whatever the mode or handoff state. Such a session starts nothing on any boot
 // (DESIGN-064 5.9, OP780): no TUI resume and no provider. As for a retained
 // private task, a record agentd cannot stat counts as present.
 func summonedLaunched(s Settings, sess protocol.Session) bool {
 	if sess.Caller == "" {
 		return false
 	}
-	for _, name := range []string{launchFile, resultFile} {
+	for _, name := range []string{launchFile, startHandoffFile, resultFile} {
 		if _, err := os.Lstat(s.statePath(name)); !errors.Is(err, os.ErrNotExist) {
 			return true
 		}

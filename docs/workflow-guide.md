@@ -2727,8 +2727,72 @@ removed too. The fence is the random boundary. Nothing here says how a model
 reads other text. A `prompt` on the create is refused. A data key the entry
 does not name is refused. Each value is at most 4096 bytes and the values
 together at most 16384. An ordinary remote session still cannot carry a prompt. A summoned
-remote session can, because the brief is that prompt. Handing the brief to
-the CLI at first launch is a later story.
+remote session can, because the brief is that prompt.
+
+**Source, 2026-11-16 (story 795, coordinator rulings; not a ruling by Tom).**
+At a summoned remote session's first launch, agentd appends that brief after
+the rules as the CLI's last positional argument. `--remote-control` carries
+the session name, with no title. No ordinary remote launch gains a prompt;
+a task still receives its prompt on stdin. A summoned session never resumes.
+Any retained launch, start-handoff or task-result entry consumes its one
+start in remote, task and local modes, regardless of its state or readability
+(including a dangling link). This boot and later boots start nothing and
+preserve the handoff, even if the launch entry is lost. This no-resend rule
+depends on some start evidence surviving. A rendered brief beginning
+with `-`, or containing NUL, gets 422 at create before any charge or session
+is written; agentd also refuses it at launch, with no launch record and a
+plain error. A refused launch leaves the first-launch latch free and reports
+agent `failed`, remote brief `not-launched`. These checks also apply to
+summoned tasks; ordinary task stdin is unchanged (story 795 fix round 1,
+2026-11-16, coordinator rulings; not a ruling by Tom). A missing prerequisite
+that refuses before the launch writer also leaves the start free. A launch
+held for a login window leaves no launch, handoff or result entry. It starts
+once after the window ends and the login is usable, while its start deadline
+has not passed; until then it stays held. If the deadline passes first, it is
+refused, nothing starts, the one start stays free and the remote brief reads
+`not-launched`. An error that refuses the first launch before the launch
+writer, such as a brief beginning with `-` or containing NUL or a failed
+prerequisite, also starts nothing and leaves the one start free.
+
+The pod reports its delivery claim as `status.agent.brief`, beside the task
+start record. It is `pending` only with no launch, handoff or task-result
+entry and no pre-launch error; `launched` when tmux confirmed a structurally
+complete brief-carrying remote launch with matching conversation and boot
+identities and no refusal evidence for that launch; `unconfirmed` when a
+handoff survives without the launch, the handoff is asked or ambiguous,
+launch/refusal evidence is unreadable or lacks those identities (including
+dangling links), or argv is incomplete. The argv needs a nonempty executable
+that is neither the brief nor an option, plus `--remote-control` followed by
+the name or composed title returned by the launch builder. These structure
+checks alone do not establish a positional brief. The builder and reader
+share the definition of options that take a value: a final string following
+one of those options is its value and reports `not-launched`. Following any
+other string starting with `-`, its role is unknown and reports `unconfirmed`.
+Otherwise the existing brief and handoff checks decide. The Remote Control
+name or title alone is never a positional brief. Every such saved launch
+keeps the one start consumed. A matching nothing-started handoff, fence
+refusal or pre-launch error with a free latch also reports `not-launched`, with the existing precedence.
+This is the pod's claim about its
+handoff, not proof that the provider answered; the operator does not act on
+it. An older agentd omits the field. Unknown or malformed evidence is
+dropped without blocking its heartbeat. No `agent-run` view gains the field
+in this story, so an old client sees no new brief key. These start-evidence
+and argv corrections are story 795 gate review findings R3-F1 to R3-F3,
+coordinator rulings R2 and R3 (2026-11-18), not rulings by Tom. The option-value
+and held-login qualifications above follow story 795 re-read (gpt-6-astra,
+2026-11-18), findings R4-F1 and R4-F2; coordinator ruling R7; not a ruling
+by Tom.
+
+The Claude launch record is atomically renamed without fsync; the handoff
+writer fsyncs its file and directory. Once the handoff is written, either
+surviving record consumes the start. The tests inject lost evidence; they
+do not establish power-loss persistence.
+
+Install the CRD copy before the operator pin, then release and pin the agent
+image. The positional prompt with `--remote-control` still needs the
+coordinator's probe at story 745's drill in the v2 image. The source tests
+use stand-ins; they do not establish installed or accepted behavior. Nothing
+is typed into a live session as a fallback.
 
 ### Repeating a create, the hourly limit and the pool
 

@@ -2,8 +2,11 @@ package agentd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -71,7 +74,12 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	// must retain this history: the operator replaces status.agent wholesale,
 	// and private history reads its conversation ID even during boot.
 	var first Launch
-	launched := readJSONFile(s.statePath(launchFile), &first) == nil
+	launchErr := readJSONFile(s.statePath(launchFile), &first)
+	launched := launchErr == nil
+	if sess.Caller != "" && sess.Mode == protocol.ModeRemote && sess.Prompt != "" {
+		// Even a boot heartbeat retains the first handoff's delivery claim.
+		st.Brief = summonedBriefState(s, sess, first, launchErr, boot.AgentError)
+	}
 	var res taskResult
 	finished := readJSONFile(s.statePath(resultFile), &res) == nil
 	if finished && launched && sess.Mode == protocol.ModeTask && res.TaskOutcome != nil && res.TaskOutcome.Validate() == nil && res.TaskOutcome.SessionUID == sess.SessionUID && res.TaskOutcome.PodUID == s.PodUID {
@@ -280,6 +288,71 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		}
 	}
 	return st
+}
+
+// summonedBriefState is the pod's delivery claim, not provider acceptance.
+// Any retained launch, handoff or result entry consumes the summoned start,
+// including ambiguous or unreadable evidence. Only a complete remote argv can
+// distinguish a legacy launch from a brief-carrying one after checking the
+// final string's option role (OP795, R2, R3 and R7).
+func summonedBriefState(s Settings, sess protocol.Session, first Launch, launchErr error, agentError string) string {
+	if errors.Is(launchErr, os.ErrNotExist) && !summonedLaunched(s, sess) {
+		if agentError != "" {
+			return protocol.BriefNotLaunched
+		}
+		return protocol.BriefPending
+	}
+	if launchErr != nil {
+		return protocol.BriefUnconfirmed
+	}
+	if first.Session != sess.Name || first.Resume || first.ConversationID == "" || first.BootID == "" {
+		return protocol.BriefUnconfirmed
+	}
+	// A final string alone proves neither a positional brief nor a legacy
+	// launch. Require an executable slot and the session's Remote Control
+	// pair, then check whether the builder assigns the last string to an option.
+	if len(first.Argv) < 3 || first.Argv[0] == "" || first.Argv[0] == sess.Prompt || strings.HasPrefix(first.Argv[0], "-") {
+		return protocol.BriefUnconfirmed
+	}
+	remote := remoteControlArgs(sess)
+	rc := slices.Index(first.Argv[1:], remote[0]) + 1
+	if rc == 0 || rc+1 >= len(first.Argv) || first.Argv[rc+1] != remote[1] {
+		return protocol.BriefUnconfirmed
+	}
+	// A known value-taking option owns the final string. For an unknown
+	// option-shaped predecessor, its role is uncertain. Neither case can
+	// confirm a positional brief, and the saved launch still consumes start.
+	previous := first.Argv[len(first.Argv)-2]
+	if rc+2 == len(first.Argv) || slices.Contains(claudeValueFlags[:], previous) {
+		return protocol.BriefNotLaunched
+	}
+	if strings.HasPrefix(previous, "-") {
+		return protocol.BriefUnconfirmed
+	}
+	if first.Argv[len(first.Argv)-1] != sess.Prompt {
+		return protocol.BriefNotLaunched
+	}
+	h := summonedHandoff(s, first)
+	if h.State == handoffNothingStarted {
+		return protocol.BriefNotLaunched
+	}
+	refusedPath := s.statePath(startRefusedFile)
+	if _, err := os.Lstat(refusedPath); !errors.Is(err, os.ErrNotExist) {
+		// ENOENT from ReadFile is not absence: a dangling link is still an
+		// existing entry. A refusal may follow tmux's confirmed start;
+		// require both identities before matching or ignoring the record.
+		var refused startRefused
+		if err != nil || readJSONFile(refusedPath, &refused) != nil || refused.ConversationID == "" || refused.BootID == "" {
+			return protocol.BriefUnconfirmed
+		}
+		if refused.ConversationID == first.ConversationID && refused.BootID == first.BootID {
+			return protocol.BriefNotLaunched
+		}
+	}
+	if h.State == handoffStarted {
+		return protocol.BriefLaunched
+	}
+	return protocol.BriefUnconfirmed
 }
 
 // summonedHandoff is the handoff record of the summoned session's first

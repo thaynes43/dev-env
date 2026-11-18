@@ -42,12 +42,13 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	if c.kind != kindSession || c.session.Name != key.Name {
 		return 0, nil, forbidden("only session %s's own pod may post its heartbeat", key.Name)
 	}
-	// Optional pre-flight evidence is decoded separately so a malformed
-	// record cannot block the rest of the heartbeat. All other fields keep
+	// Optional start and brief evidence is decoded separately so a malformed
+	// claim cannot block the rest of the heartbeat. All other fields keep
 	// the normal heartbeat decoding rules.
 	var body struct {
 		protocol.Status
 		Start json.RawMessage `json:"start"`
+		Brief json.RawMessage `json:"brief"`
 	}
 	if err := decodeJSON(w, r, maxHeartbeatBody, &body, false); err != nil {
 		return 0, nil, err
@@ -56,6 +57,10 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	var start *protocol.StartRecord
 	if err := json.Unmarshal(body.Start, &start); err == nil {
 		st.Start = start
+	}
+	var brief string
+	if err := json.Unmarshal(body.Brief, &brief); err == nil {
+		st.Brief = brief
 	}
 	if st.Session != key.Name {
 		return 0, nil, invalid(fieldError("session", "%q is not %s, the session in the path", st.Session, key.Name))
@@ -113,6 +118,7 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	// A summoned task's start record is written once and kept on every later
 	// heartbeat (DESIGN-064 6.9, OP791).
 	sess.Status.Agent.Start = agentStartStatus(&sess, base.Status.Agent, st.Start)
+	sess.Status.Agent.Brief = agentBriefStatus(&sess, st.Brief)
 	// The reporting pod is the caller resolveSession authenticated, never a
 	// field of the body. A caller with no pod leaves it empty.
 	if c.pod != nil {
@@ -303,6 +309,20 @@ func agentStatus(st protocol.Status, now metav1.Time) *v1alpha1.AgentStatus {
 		}
 	}
 	return a
+}
+
+// agentBriefStatus copies only a summoned remote session's closed delivery
+// word. This is the pod's claim; the operator never acts on it (OP795, O12).
+// Missing or malformed evidence is omitted, including on an older heartbeat.
+func agentBriefStatus(sess *v1alpha1.AgentSession, brief string) string {
+	if sess.Spec.Caller == "" || sess.Spec.Mode != v1alpha1.ModeRemote || sess.Spec.Prompt == "" {
+		return ""
+	}
+	switch brief {
+	case protocol.BriefPending, protocol.BriefLaunched, protocol.BriefUnconfirmed, protocol.BriefNotLaunched:
+		return brief
+	}
+	return ""
 }
 
 // agentStartStatus is status.agent.start (DESIGN-064 6.9, OP791): how a

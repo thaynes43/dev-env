@@ -37,6 +37,7 @@ func summonedFixture(t *testing.T, mode string) (Settings, protocol.Session, pro
 	t.Helper()
 	s, sess, ws := launchFixture(t)
 	sess.Mode, sess.Caller = mode, summonedCaller
+	sess.Prompt = "Follow the runbook."
 	if mode != protocol.ModeTask {
 		sess.Limits = nil
 		if mode == protocol.ModeLocal {
@@ -649,9 +650,6 @@ exit 0`)
 						t.Fatal(err)
 					}
 				}
-				if tc.blockFirst {
-					block()
-				}
 				var atTmux handoffOnDisk
 				runner := &fakeRunner{handle: func(c Cmd) (Result, error) {
 					switch {
@@ -693,6 +691,14 @@ exit 0`)
 					return n
 				}
 				d := quietDaemon(s, sess, runner, loginNow)
+				if tc.blockFirst {
+					// Inject the write failure after the start-evidence latch.
+					// An entry present before it now consumes the start (R2).
+					d.admitLaunch = func(context.Context, Settings, protocol.Session, *Launch) error {
+						block()
+						return nil
+					}
+				}
 				step, why := d.startAgent(ctx, ws, Step{Name: "repo", State: StepOK}, "first-boot")
 				if tc.stepFails != (why != "" && step.State == StepFail) {
 					t.Fatalf("start step %+v %q, want failed=%v", step, why, tc.stepFails)
