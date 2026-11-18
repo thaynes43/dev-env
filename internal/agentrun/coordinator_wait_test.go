@@ -360,6 +360,9 @@ func TestCoordinatorWaitPinsDirectoryAcrossCalls(t *testing.T) {
 				}
 				code = ExitUnconfirmed
 			}
+			// If the identity guard is removed, fail on the immediate local budget
+			// result instead of holding an unadvanced fake clock indefinitely.
+			h.env.WaitClock = &waitTestClock{testingclock.NewFakeClock(testNow.Add(5 * time.Hour))}
 			h.mustRun(code, append(args, "--ack", first.ID)...)
 			if h.stdout.Len() != 0 || len(h.api.requests()) != 2 {
 				t.Fatal("another directory adopted across calls")

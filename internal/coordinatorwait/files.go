@@ -59,7 +59,7 @@ func (r *Record) BindDirectory(d *Directory) error {
 	if !ok {
 		return errors.New("handoff directory has no stable identity")
 	}
-	pin := DirectoryIdentity{Path: d.path, Device: raw.Dev, Inode: raw.Ino}
+	pin := DirectoryIdentity{Path: d.path, Device: uint64(raw.Dev), Inode: raw.Ino} //nolint:unconvert // Stat_t.Dev is int32 on Darwin.
 	if pin.Path != r.Options.Directory || r.DirectoryPin != nil && *r.DirectoryPin != pin {
 		return errors.New("wait handoff directory identity differs from the saved record")
 	}
