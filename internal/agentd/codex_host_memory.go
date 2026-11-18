@@ -10,6 +10,7 @@ import (
 )
 
 // The container's cgroup namespace places its own v2 memory controller here.
+// The working set subtracts inactive file cache from memory.current.
 // Older/v1 hosts, unlimited budgets and read failures report unknown (absent).
 // There is no process inspection, native RPC, command or log.
 func sampleCodexHostMemory(now time.Time, read func(string) ([]byte, error)) *protocol.CodexHostMemory {

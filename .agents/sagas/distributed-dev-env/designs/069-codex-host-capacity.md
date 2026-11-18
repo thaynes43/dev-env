@@ -69,8 +69,9 @@ Only after no host has room may capacity yield `create` with `host_full`.
 
 An explicit `freshHost` request is also needed: the existing old host cannot
 report the new observation and must not be restarted to add it. Only the
-existing human or trusted-client caller classes may ask; no session, including
-a workbench session, and no coordinator may do so. It does not grant creation
+existing human or trusted-client caller classes may ask; no v2 session pod,
+including a workbench session, and no coordinator may do so. The trusted-client
+class includes the v1 service account and retains its existing create authority. It does not grant creation
 rights. CLI spelling is `--fresh-host`, only for new Codex interactive hosts.
 Record the reason and authenticated requester as operator-owned annotations on
 the new session. Do not expose new fields in legacy Session/list/fleet views.
@@ -187,7 +188,7 @@ a new unconditional Session key. The new fields do not enter any of these
 response DTOs. Tests cover populated telemetry through show/list/fleet and
 normal versus fresh CLI request serialization.
 
-## Source validation checkpoint
+## Initial worker validation checkpoint (superseded by fix round 1)
 
 The full apiserver suite passed with envtest 1.35.0 installed after correcting
 the new admission path to reuse the already pinned per-request template/account
@@ -221,3 +222,32 @@ passed during this delivery. All 28 final mutation runs failed their acceptance
 assertion and restored the original files. The second Claude Opus advisory
 review said “Looks good” with no new findings; R2 answers Q-069-02 with its stated limit.
 CI must still finish on the delivered head; the PR/handoff records that result.
+
+## Fix round 1 compatibility and evidence
+
+G2 changes two answer shapes, with no added keys:
+
+- `POST /v1/sessions` errors and ledger-dependent selection errors retain
+  `ErrorResponse.error.{code,message,reason,fields}`. Names and attempts go only
+  in the existing `message` string, and `create_unconfirmed` /
+  `capacity_ledger_unavailable` use `reason`. Released v2.111.0 already declares
+  that reason field. v2.104.0 lacks it but decodes refusals with tolerant
+  `json.Unmarshal` (`internal/agentrun/client.go:280–282` at that tag).
+- Successful `POST /v1/codex-hosts/select` retains `host`, `action`, `ready`,
+  `outdated`, `reason`, and `skipped` rows with only `name` and `reason`.
+  A phantom appears only in skipped, as `create_unconfirmed`. v2.104.0 reads
+  selection with tolerant `json.Unmarshal` (`internal/agentrun/codexhost.go:103–104`);
+  v2.111.0's DTO already has the full shape. No attempt/requester field is added.
+
+The strict released paths (`internal/agentrun/show_once.go:34–35,46–55` at
+v2.111.0, directory/budget/canary readers) validate Session and other successful
+DTOs, which are unchanged. `TestMemoryHeartbeatAndLegacyViews` still checks
+populated telemetry through show/list/fleet. `TestCreateUnconfirmedIsNamed`
+strictly decodes both changed answers against frozen v2.111.0 field sets.
+
+[Fix-round mutation evidence](../evidence/069-capacity-fix1-mutations.md)
+records each isolated broken guard, its failing named test, and restoration.
+Tests use fake clients or local envtest, sanitized child environments, two CPUs,
+one package at a time and no real sleeps in the new cases. Source/tested results
+are recorded on the replacement PR and tracker handoff at the delivered head;
+this worker performs no install, host action or acceptance.

@@ -305,8 +305,8 @@ func (s *Server) createOrdinaryCodexHost(ctx context.Context, sess *v1alpha1.Age
 	if readErr := s.Live.Get(readCtx, types.NamespacedName{Namespace: sess.Namespace, Name: pending.Name}, &made); readErr == nil && made.Annotations[codexCapacityAttempt] == pending.Attempt {
 		s.finishCodexCapacity(ctx, pending.Attempt)
 	}
-	refusal := unconfirmedCodexCreates([]codexCapacityPending{pending})
-	refusal.status, refusal.body.Code = http.StatusServiceUnavailable, apiv1.CodeUnavailable
+	refusal := newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "Codex host create response was unconfirmed for %s (attempt %s); check the session before retrying.", pending.Name, pending.Attempt)
+	refusal.body.Reason = codexhostpool.ReasonCreateUnconfirmed
 	return refusal
 }
 

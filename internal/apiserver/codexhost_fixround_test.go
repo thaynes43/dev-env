@@ -186,7 +186,7 @@ func TestCreateUnconfirmedIsNamed(t *testing.T) {
 	assertNamed(raw)
 }
 
-// Frozen released-client shapes: DisallowUnknownFields catches added keys,
+// Frozen v2.111.0 client shapes: DisallowUnknownFields catches added keys,
 // including nested skipped rows. All reason fields remain ordinary strings.
 func assertLegacyCapacityJSON(t *testing.T, raw []byte, selection bool) {
 	t.Helper()
@@ -419,5 +419,70 @@ func TestCapacitySelectionRefusalMessage(t *testing.T) {
 	w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, capacityCreate(false))
 	if w.Code != 409 || !strings.Contains(w.Body.String(), "host_busy") || strings.Contains(w.Body.String(), "returned  for") {
 		t.Fatalf("empty refusal fields: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMalformedCapacityLedgerPreserved(t *testing.T) {
+	for _, raw := range []string{"null", "{}", "[", `[{"name":"missing-fields"}]`, strings.Repeat("x", (64<<10)+1)} {
+		t.Run(raw[:min(len(raw), 24)], func(t *testing.T) {
+			f := newCodexFixture(t)
+			key := types.NamespacedName{Namespace: codexCapacityNamespace, Name: codexCapacityName}
+			var cm corev1.ConfigMap
+			if err := f.c.Get(context.Background(), key, &cm); err != nil {
+				t.Fatal(err)
+			}
+			cm.Data = map[string]string{"pending": raw}
+			if err := f.c.Update(context.Background(), &cm); err != nil {
+				t.Fatal(err)
+			}
+			err := f.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "new", Profile: "dev", Attempt: "attempt-new"})
+			var refusal *apiError
+			if !errors.As(err, &refusal) || refusal.status != 503 || refusal.body.Reason != "capacity_ledger_unavailable" {
+				t.Errorf("malformed ledger admitted: %v", err)
+			}
+			var after corev1.ConfigMap
+			if err := f.c.Get(context.Background(), key, &after); err != nil || after.Data["pending"] != raw || after.ResourceVersion != cm.ResourceVersion {
+				t.Fatalf("malformed ledger overwritten: %v", err)
+			}
+		})
+	}
+}
+
+func TestCapacityLedgerWriteUnavailable(t *testing.T) {
+	for _, state := range []string{"missing", "forbidden"} {
+		t.Run(state, func(t *testing.T) {
+			f := newCodexFixture(t, interceptor.Funcs{Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == codexCapacityName {
+					resource := schema.GroupResource{Resource: "configmaps"}
+					if state == "missing" {
+						return apierrors.NewNotFound(resource, cm.Name)
+					}
+					return apierrors.NewForbidden(resource, cm.Name, errors.New("update denied"))
+				}
+				return c.Update(ctx, obj, opts...)
+			}})
+			w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, capacityCreate(true))
+			var refusal apiv1.ErrorResponse
+			if w.Code != 503 || json.Unmarshal(w.Body.Bytes(), &refusal) != nil || refusal.Error.Reason != "capacity_ledger_unavailable" || !strings.Contains(refusal.Error.Message, state) || !strings.Contains(refusal.Error.Message, codexCapacityName) {
+				t.Fatalf("untyped ledger write refusal: %d %s", w.Code, w.Body.String())
+			}
+			_, pending, err := f.srv.codexCapacity(context.Background())
+			if err != nil || len(pending) != 0 {
+				t.Fatalf("refusal wrote reservation: %+v %v", pending, err)
+			}
+			var sessions v1alpha1.AgentSessionList
+			if err := f.c.List(context.Background(), &sessions, client.InNamespace(sessionNS)); err != nil || len(sessions.Items) != 0 {
+				t.Fatalf("refusal created session: %+v %v", sessions.Items, err)
+			}
+		})
+	}
+}
+
+func TestCapacityLedgerUnavailableWithoutReader(t *testing.T) {
+	s := &Server{}
+	_, _, err := s.codexCapacity(context.Background())
+	var refusal *apiError
+	if !errors.As(err, &refusal) || refusal.status != 503 || refusal.body.Reason != "capacity_ledger_unavailable" {
+		t.Fatalf("untyped missing reader: %v", err)
 	}
 }

@@ -74,6 +74,8 @@ func TestCodexHostWorkingSetFixtures(t *testing.T) {
 		{"negative inactive", "123", "inactive_file -1\n", 0, true},
 		{"overflow inactive", "123", "inactive_file 9223372036854775808\n", 0, true},
 		{"duplicate inactive", "123", "inactive_file 1\ninactive_file 2\n", 0, true},
+		{"oversized stat", "123", strings.Repeat("anon 0\n", 10000) + "inactive_file 0\n", 0, true},
+		{"malformed line shape", "123", "inactive_file 0\nbroken\n", 0, true},
 		{"malformed other line", "123", "inactive_file 1\nanon nope\n", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
