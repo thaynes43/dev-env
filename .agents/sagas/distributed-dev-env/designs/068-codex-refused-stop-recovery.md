@@ -530,7 +530,7 @@ may be created. No table entry authorizes force removal or volume deletion.
 | J15 Resume after refusal | StopPending | Pending, PodReady=False, RemovalBlocked retained. Retry stop; later completed rescue/removal permits a fresh UID on same HOME. | `TestCodexStopResumeAfterRefusalQueuesFreshPod` |
 | J16 Resume races report or committed delete | StopPending then RemovalCommitted | Stale-generation report before commit is discarded; resume after commit waits through delete and Complete. Never relabel old report generation. | `TestCodexStopResumeRaceHonorsCommitBoundary` |
 | J17 Restart during manual recovery | RecoveryRequired/RecoveryHold, bound ACK/hold | Recover only original HOME after verified ACK; discover the one owned hold after lost Create ACK; receipt plus successful hold rescue precede hold deletion and Complete. | `TestCodexStopManualRecoveryRestartClearsOnlyAfterHoldRescue` |
-| J18 Recovery hold disappears or is resumed mid-rescue | RecoveryHold or its RemovalCommitted decision | Resume cannot bypass rescue. Unexpected absence needs a new ACK for that hold; committed removal can finish normally. No repeated adoption or stale ACK. | `TestCodexStopRecoveryHoldLossNeedsFreshEvidence` |
+| J18 Recovery hold disappears or is resumed mid-rescue | RecoveryHold with admission bit true/unknown, or its RemovalCommitted decision | Resume cannot bypass rescue. Unexpected absence after admission is true/unknown needs new evidence for that hold; committed removal can finish normally. An explicitly false admission bit follows J20. No stale ACK. | `TestCodexStopRecoveryHoldLossNeedsFreshEvidence` |
 | J19 Second suspend after completed replacement | Complete, fresh owned executor on original HOME | New operationID and target UID on same HOME. No inheritance of the old receipt or removal decision. | `TestCodexStopSecondLifecycleCannotReusePriorReceipt` |
 | J20 Restart after recovery-hold Create or before rescue dispatch | RecoveryHold, explicit admission bit and possibly observed hold binding | Lost Create ACK discovers only the operation-bound hold. Missing hold with false bit permits only another no-writer hold; true/unknown bit requires recovery evidence. True is persisted before exec, after exact pod/node/HOME reads. | `TestCodexStopRecoveryHoldAdmissionSurvivesLostCreateAndRestart` |
 
@@ -627,10 +627,19 @@ window cannot be observed safely, stop and revise the proof; do not shorten
 production grace or add a production fault-injection flag.
 
 ```sh
-kubectl -n "$PROOF_NS" exec -i "$PROOF_HOST" -c agent -- python3 - --writer < scripts/proofs/op877-interrupt.py > "$PROOF_DIR/writer.txt" 2>&1 &
+kubectl -n "$PROOF_NS" exec -i "$PROOF_HOST" -c agent -- python3 - --writer < scripts/proofs/op877-interrupt.py > "$PROOF_DIR/writer.txt" 2> "$PROOF_DIR/writer-stderr.txt" &
 PROOF_WRITER_CLIENT=$!
-sleep 1
-test "$(cat "$PROOF_DIR/writer.txt")" = writer-ready
+PROOF_WRITER_READY=false
+for PROOF_READY_TRY in 1 2 3 4 5 6 7 8 9 10; do
+  PROOF_READY_LINE=''
+  IFS= read -r PROOF_READY_LINE < "$PROOF_DIR/writer.txt" || true
+  if test "$PROOF_READY_LINE" = writer-ready; then
+    PROOF_WRITER_READY=true
+    break
+  fi
+  sleep 1
+done
+test "$PROOF_WRITER_READY" = true
 agent-run suspend "$PROOF_HOST" -o json > "$PROOF_DIR/suspend.json"
 # One deliberate observation delay, within the helper's bounded proof window.
 sleep 3
