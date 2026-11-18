@@ -33,6 +33,8 @@ func (a *app) coordinator(ctx context.Context, args []string) error {
 		return a.help(append([]string{"coordinator"}, args[1:]...))
 	}
 	switch args[0] {
+	case "wait":
+		return a.coordinatorWait(ctx, args[1:])
 	case "start":
 		return a.coordinatorStart(ctx, args[1:])
 	case "status":
@@ -42,7 +44,7 @@ func (a *app) coordinator(ctx context.Context, args []string) error {
 	case "brief":
 		return a.coordinatorBrief(args[1:])
 	default:
-		return usageError("coordinator takes start, status, stop or brief")
+		return usageError("coordinator takes start, status, stop, brief or wait")
 	}
 }
 
