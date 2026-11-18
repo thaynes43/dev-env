@@ -149,17 +149,28 @@ func TestCreateUnconfirmedIsNamed(t *testing.T) {
 	// One phantom alone used to be returned as report(repo_not_ready).
 	req := apiv1.CodexHostSelectRequest{Repo: "dev-env", Profile: "dev", LaunchID: codexTestLaunch}
 	w = f.do(http.MethodPost, apiv1.CodexHostsSelectPath+"?check=true", tokClient, req)
-	var res codexhostpool.Result
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &res) != nil || res.Host != "" || res.Reason != "create_unconfirmed" || len(res.Skipped) != 1 || res.Skipped[0].Name != p.Name || res.Skipped[0].Reason != "create_unconfirmed" {
-		t.Fatalf("phantom offered: %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusConflict {
+		t.Fatalf("bound refusal lost attempt details: %d %s", w.Code, w.Body.String())
 	}
-	assertLegacyCapacityJSON(t, w.Body.Bytes(), true)
+	assertNamed(w.Body.Bytes())
 	// One real host plus one unknown fills the bound.
 	g := newCodexFixture(t)
 	g.addCodexHost("old", codexHostOpt{})
 	if err := g.srv.reserveCodexCapacity(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
+	w = g.do(http.MethodPost, apiv1.CodexHostsSelectPath+"?check=true", tokClient, req)
+	var res codexhostpool.Result
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &res) != nil || res.Host != "old" || res.Action != "use" || len(res.Skipped) != 1 || res.Skipped[0].Name != p.Name || res.Skipped[0].Reason != "create_unconfirmed" {
+		t.Fatalf("phantom not safely skipped: %d %s", w.Code, w.Body.String())
+	}
+	assertLegacyCapacityJSON(t, w.Body.Bytes(), true)
+	req.FreshHost = true
+	w = g.do(http.MethodPost, apiv1.CodexHostsSelectPath+"?check=true", tokClient, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("fresh bound refusal lost attempt details: %d %s", w.Code, w.Body.String())
+	}
+	assertNamed(w.Body.Bytes())
 	for _, off := range []bool{false, true} {
 		if off {
 			g.srv.CodexHosts = nil

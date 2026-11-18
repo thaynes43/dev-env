@@ -872,3 +872,22 @@ func TestFreshHostCLI(t *testing.T) {
 		}
 	}
 }
+
+func TestUnconfirmedSelectionNamesAttempt(t *testing.T) {
+	for _, args := range [][]string{
+		{"dev-env", "--interactive", "--agent", "codex", "--model", "gpt-6-astra", "--wait=0"},
+		{"codex-host", "select", "--repo", "dev-env", "--check"},
+	} {
+		h := newHarness(t)
+		h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			if r.URL.Path != apiv1.CodexHostsSelectPath {
+				t.Errorf("unconfirmed selection reached create: %s", r.URL.Path)
+			}
+			writeTestJSON(w, http.StatusConflict, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeConflict, Reason: "create_unconfirmed", Message: "Unconfirmed Codex host create occupies capacity: unknown-host (attempt unknown-attempt); its reservation is retained."}})
+		}
+		h.mustRun(ExitFailed, args...)
+		if len(h.api.requests()) != 1 || !strings.Contains(h.stderr.String(), "unknown-host") || !strings.Contains(h.stderr.String(), "unknown-attempt") {
+			t.Fatalf("refusal lost identifying details: %s", h.stderr.String())
+		}
+	}
+}

@@ -229,7 +229,11 @@ G2 changes two answer shapes, with no added keys:
 
 - `POST /v1/sessions` errors and ledger-dependent selection errors retain
   `ErrorResponse.error.{code,message,reason,fields}`. Names and attempts go only
-  in the existing `message` string, and `create_unconfirmed` /
+  in the existing `message` string. An unconfirmed bound from selection is
+  HTTP 409 in this existing error envelope: released CLI code collapses a
+  200 refusal choice to its reason sentence and would hide the attempt.
+  `TestUnconfirmedSelectionNamesAttempt` checks both interactive preflight
+  and `codex-host select` preserve the name and attempt. `create_unconfirmed` /
   `capacity_ledger_unavailable` use `reason`. Released v2.111.0 already declares
   that reason field. v2.104.0 lacks it but decodes refusals with tolerant
   `json.Unmarshal` (`internal/agentrun/client.go:280–282` at that tag).

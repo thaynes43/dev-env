@@ -4,7 +4,7 @@ Date: 2026-11-18. Base: `47dacbe51d6ff8b79ec5a29fd442379c1b72b018`.
 Coordinator review probes P1–P6 are reconstructed in
 `internal/apiserver/codexhost_fixround_test.go`; X1–X3 are the reviewer mutants.
 
-Each of these 39 mutations was applied alone. Its named test compiled and failed
+Each of these 40 mutations was applied alone. Its named test compiled and failed
 an acceptance assertion (F25/F30 fail with the corresponding guarded panic).
 The test ran under `GOMAXPROCS=2`, `nice -n 19`, `go test -p 2`, one package at a
 time, with KUBECONFIG and every KUBERNETES_* variable omitted. Original bytes
@@ -23,7 +23,7 @@ was committed, no new test sleeps, and no live cluster was used.
 | F05 | capacity refusal names create_unconfirmed instead of claiming two real hosts | `TestCreateUnconfirmedIsNamed` | Killed; restored |
 | F06 | unknown-outcome log names attempt, session and requester | `TestCreateUnconfirmedIsNamed` | Killed; restored |
 | F07 | phantom never qualifies for use or resume | `TestUnconfirmedRowsAreOnlySkipped` | Killed; restored |
-| F08 | phantom never becomes report filler | `TestCreateUnconfirmedIsNamed` | Killed; restored |
+| F08 | phantom never becomes report filler | `TestUnconfirmedRowsAreOnlySkipped` | Killed; restored |
 | F09 | named phantom cannot be offered as use | `TestUnconfirmedRowsAreOnlySkipped` | Killed; restored |
 | F10 | selection names a bound filled by an unknown | `TestCreateUnconfirmedIsNamed` | Killed; restored |
 | F11 | create ignores client cancellation | `TestCodexCreateIgnoresClientCancellation` | Killed; restored |
@@ -46,6 +46,7 @@ was committed, no new test sleeps, and no live cluster was used.
 | F28 | overflowing inactive_file is unknown | `TestCodexHostWorkingSetFixtures/overflow_inactive` | Killed; restored |
 | F29 | unreadable memory.stat is unknown, never zero cache | `TestCodexHostWorkingSetFixtures/missing_stat` | Killed; restored |
 | F30 | malformed memory.stat rows are unknown | `TestCodexHostWorkingSetFixtures/malformed_line_shape` | Killed; restored |
+| F31 | select bound refusal uses existing error envelope to preserve attempt in released CLIs | `TestCreateUnconfirmedIsNamed` | Killed; restored |
 | HTTP429 | Kubernetes 429 definitely refuses and releases | `TestKubernetesCreateOutcomeClasses/Too_Many_Requests` | Killed; restored |
 | HTTP404 | Kubernetes 404 definitely refuses and releases | `TestKubernetesCreateOutcomeClasses/Not_Found` | Killed; restored |
 | HTTP405 | Kubernetes 405 definitely refuses and releases | `TestKubernetesCreateOutcomeClasses/Method_Not_Allowed` | Killed; restored |
@@ -438,6 +439,17 @@ len(fields) != 2 ||
 with:
 ```go
 // removed
+```
+
+### F31: internal/apiserver/codexhost.go
+
+Replace:
+```go
+if res.Reason == codexhostpool.ReasonCreateUnconfirmed {
+```
+with:
+```go
+if false && res.Reason == codexhostpool.ReasonCreateUnconfirmed {
 ```
 
 ### HTTP429: internal/apiserver/codexhost_capacity.go
