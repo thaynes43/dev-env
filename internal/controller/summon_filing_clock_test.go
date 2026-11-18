@@ -144,9 +144,10 @@ func filingForwardStepSchedule(t *testing.T, kind string, step time.Duration, ou
 		err = w.r.summonFile(ctx, w.get(filingRem))
 	} else {
 		action := filingCharge
-		if kind == "mark" {
+		switch kind {
+		case "mark":
 			action = filingMark
-		} else if kind == "rebind" {
+		case "rebind":
 			action = filingRebind
 		}
 		_, err = w.r.filingLedgerStep(ctx, w.get(filingRem), action, summonoutcome.EscalationName(w.get(filingRem)))
