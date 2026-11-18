@@ -86,7 +86,22 @@ func TestPinnedCodexPreviousHostStarts(t *testing.T) {
 				}
 				if strings.Join(args, " ") == "remote-control start --json" {
 					starts++
-					// Real native lifecycle, explicit remote suppression: no enrollment.
+					// Native --remote-control wins over the suppression environment.
+					// Disable the retained preference while lifecycle builds its argv;
+					// DisabledEphemeral then ignores the restored preference. This is
+					// an offline fixture seam, not the production remote-start path.
+					path := filepath.Join(s.CodexHome, "app-server-daemon", "settings.json")
+					original, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var settings map[string]any
+					if json.Unmarshal(original, &settings) != nil {
+						t.Fatal("fixture settings")
+					}
+					settings["remoteControlEnabled"] = false
+					writeHostFixture(t, path, string(nativeFixtureJSON(settings)))
+					defer writeHostFixture(t, path, string(original))
 					args = []string{"app-server", "daemon", "start"}
 				}
 				cmd := pinnedCodexCommand(ctx, bin, s.Home, args...)
