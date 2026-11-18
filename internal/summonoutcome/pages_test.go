@@ -14,6 +14,12 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
 
+func TestDrillCallerReservedValue(t *testing.T) {
+	if DrillCaller != "dev-env-drill.summon-drill" {
+		t.Fatalf("reserved drill caller = %q, want coordinator ruling R1's value", DrillCaller)
+	}
+}
+
 // stringConsts parses one Go file and returns the string value of every
 // constant whose name starts with prefix. It reads the source, so a constant
 // added later is walked without editing this test.

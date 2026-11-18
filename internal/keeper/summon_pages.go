@@ -73,10 +73,6 @@ const (
 	summonPageSource  = "summon-pages"
 	summonEventDrill  = "drill"
 	summonEventMore   = "more-events"
-	// Coordinator answer op796-build-1-q-1 (2026-11-16), ruling O9:
-	// the eventual drill must use this exact CallerPolicy name. No policy
-	// or identity is created here; another name needs a code change.
-	summonDrillCaller = "dev-env-system.summon-drill"
 )
 
 // SummonPageOptions configure the pager; every field is off or empty by default.
@@ -1135,7 +1131,7 @@ func (p *summonPager) renderStarted(j summonJob, n Notice, rec pages.Page) (Noti
 }
 
 func summonMarkDrill(s *v1alpha1.AgentSession, n *Notice, rec *pages.Page) {
-	if s.Spec.Caller == summonDrillCaller {
+	if s.Spec.Caller == summonoutcome.DrillCaller {
 		n.Title, n.Message = "DRILL "+n.Title, "DRILL "+n.Message
 		rec.Title = n.Title
 	}
