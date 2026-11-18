@@ -4323,11 +4323,18 @@ alone distinguishes a legacy launch from a brief-carrying one.
   positional brief. Every saved launch in these cases keeps the one start
   consumed. Builder argv is unchanged, including ordinary sessions.
 - *Held login (R4-F2).* A launch held for a login window leaves no launch,
-  handoff or task-result entry. It starts once when the window ends if its
-  start deadline has not passed and its prerequisites still hold; otherwise
-  it is refused and nothing starts. The deadline refusal leaves the one
-  start free and the remote brief `not-launched`. This documents existing
+  handoff or task-result entry. It starts once after the window ends and the
+  login is usable, while its start deadline has not passed; until then it
+  stays held. If the deadline passes first, it is refused, nothing starts,
+  the one start stays free and the remote brief reads `not-launched`. An
+  error that refuses the first launch before the launch writer, such as a
+  brief beginning with `-` or containing NUL or a failed prerequisite, also
+  starts nothing and leaves the one start free. This documents existing
   behavior; the deadline and first-start code do not change.
+
+Story 795 second re-read (gpt-6-astra, 2026-11-18), finding R5-F1;
+coordinator ruling R8; not a ruling by Tom: the held-login sentence above
+was replaced because an unusable login keeps the launch held, not refused.
 
 ### 6.11 OP746: move curation
 
