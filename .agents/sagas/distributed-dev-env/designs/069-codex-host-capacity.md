@@ -124,6 +124,14 @@ predict a large turn, a tool's allocation, or launches directly from the phone.
 This source proposal grants no deployment or live-host authority. The coordinator
 reviews the contract and Claude Opus reads the PR before merge.
 
+Q-069-02: May two unresolved create outcomes occupy the default fleet's two
+slots until their creators can be independently fenced? Recommendation: keep
+this fail-closed limit; an elapsed timer is not proof a delayed create stopped.
+The second Claude Opus review reported no new findings and asked for explicit
+owner acceptance of this limit before ADR-031 leaves Proposed. No owner ruling
+is claimed here. This question gates accepting the ADR and rollout, not this
+worker's already authorized source/test delivery.
+
 ## Evidence and delivery
 
 Source, tests, installation and acceptance are separate. This PR will carry the
@@ -172,3 +180,12 @@ regression test commits/releases another create during the live list. Restore
 has an explicit preserved path with bound tests. The ConfigMap follows the
 configured policy namespace and names the outstanding GitOps RBAC prerequisite.
 All 28 final mutation runs are recorded in the linked evidence.
+
+Final local verification on code head `67165313736c6922ca4d4ee90c234e7684af62f4`:
+all apiserver tests passed in 98.945s; selector, operator command and API wire
+suites passed. `make generate lint check-layout` passed with zero lint issues
+and no generation diff. Full agentd (245.090s), protocol, CLI and CRD suites
+passed during this delivery. All 28 final mutation runs failed their acceptance
+assertion and restored the original files. The second Claude Opus advisory
+review said “Looks good” with no new findings; Q-069-02 retains its stated limit.
+CI must still finish on the delivered head; the PR/handoff records that result.
