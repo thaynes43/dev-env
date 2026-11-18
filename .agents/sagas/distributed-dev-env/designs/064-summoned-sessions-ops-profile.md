@@ -2748,6 +2748,75 @@ This fix round needs compatible operator **and broker** image pins; the earlier
 one-operator-pin install note is insufficient for the grant fix. Slice b's
 CRD must already be installed. The story 803 gate for real remediations stays.
 
+**Correction, 2026-11-18: story 802 gate review (gpt-6-astra, 2026-11-18),
+findings H1, H2, M1; coordinator rulings R4 and R5; not a ruling by Tom.**
+This replaces the two-term clock-lag-plus-delay promise and the claim that no
+request starts inside the final ten minutes in this PR's 2026-11-16 fix-round-1
+correction above. Earlier dated lines are retained as history. The gate review
+is the Codex review named by the owner on 2026-11-18 (item 751, comment 8880),
+report `reviews/op802-review-3.md` in the coordinator's handoff.
+
+R4 keeps the behavior and withdraws the review order's claim that creates off
+alone makes installation inert. The historical install observation above and
+in the workflow guide already has two conditions: creates are off **and no
+Session with a caller exists**. The flag prevents new creates; it does not
+stop recovery or abandonment of stored Pending filings at 24 hours, the reap
+hold while Pending and for ten minutes after Abandoned, or the broker ending
+a reaped summoned requester's grants. Existing caller ledger entries also
+receive the queue/reserve rules when a shared writer processes them. Before
+requesting any pin, the coordinator must read and record absence of caller
+Sessions as well as the flag state; the flag alone is insufficient. The
+coordinator reported a 2026-11-18T01:25Z read of 502 Sessions with no
+`spec.caller` or `status.summon`, and no operator `--summon-create-kinds` flag.
+That is a dated coordinator observation, not a live check by this fixer.
+Caller-empty Sessions bypass the filing, reap-hold and new broker end rules.
+
+R5 keeps the guard code. Each request's **last local check** must observe a
+time strictly before `closed.at + 23h50m`. A delay after that check may carry
+the request start into the window. No charge, mark, rebind or create starts
+after stored Abandoned only when, at request start, the abandoning leader's
+wall clock is ahead of the attempting leader's last local reading by
+**strictly less than ten minutes**. That quantity includes the sum of replica
+clock lag, elapsed check-to-request delay, and any forward wall-clock step in
+between. All three must fit the margin together. DESIGN-064 5.9's older
+allowance of five minutes of skew and a five-minute forward step consumes the
+whole margin and leaves none for delay; equality does not meet this promise.
+
+This is an assumption about clocks that no code enforces. The create has a
+two-minute process-clock deadline anchored before its mark, also capped
+against the wall-clock bound. Ledger writes have no per-attempt timeout.
+Nothing bounds a process pause between any successful local check and its
+request invocation; a client deadline is not server-side exclusion. No code
+bounds replica lag or forward steps. A backward step is outside the promise:
+it can reopen the local guard while the filing is Pending and delays
+abandonment and reap. Nothing persists that the window was entered.
+
+Two exceptions remain: a request already received by the API server may commit
+after abandonment, and a schedule outside the bound may start a request after
+Abandoned. A fence without this clock assumption would need a server-side
+exclusion protocol and its own design. The coordinator accepts the assumption
+for this story; this is not a ruling by Tom. The child and its parent's status
+are different objects: a late child may coexist with Abandoned, while the
+record never becomes both Filed and Abandoned.
+
+`TestSummonFilingForwardStepBeyondMarginIsOutsidePromise` preserves the gate
+review's eleven-minute shared-clock step after the final sample for charge,
+mark, rebind and create: exactly one request starts after stored Abandoned.
+`TestSummonFilingForwardStepWithinRemainingMargin` pairs each with a nine-minute
+step: the request starts before abandonment, and no request starts after it.
+`TestSummonFilingGuardAfterDeadlineConstruction` crosses the window inside the
+injected deadline hook, after the earlier Pending-read check, and independently
+requires the last pre-create check to suppress Create (M1).
+`TestSummonFilingAbandonedOnTheCRD` abandons with create kinds unset;
+`TestSummonReapLongestFilingHold` now proves the whole Pending/Abandoned hold
+with them unset too. `TestBrokerHeldReapEndsGrants` exercises the broker, which
+has no create switch. Caller-empty controls are
+`TestSummonFilingAndReapIgnoreSessionWithoutCaller` and
+`TestBrokerReapEndRequiresClosedSummonedRequester/ordinary`.
+Installation requires compatible operator **and broker** pins with slice b's
+CRD already installed. Real remediations still wait for story 803's pages.
+Nothing in this correction is installation or live acceptance evidence.
+
 ### 6.7 OP741: lanes, holds, the latch and the watchdog
 
 **Correction, 2026-11-12 (story 779, slice c of #741; written by the

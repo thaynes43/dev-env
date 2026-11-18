@@ -182,8 +182,8 @@ func TestSummonFilingGuardAfterDependencyRead(t *testing.T) {
 	}
 }
 
-// Assert the create's final check too: entering the guard after its mark
-// must not consume the marked name with a new Create request.
+// Entering the guard after the mark is caught by the Pending-read check.
+// TestSummonFilingGuardAfterDeadlineConstruction isolates the later check.
 func TestSummonFilingGuardAfterMark(t *testing.T) {
 	w := newFilingWorld(t)
 	w.now = summonT0.Add(24*time.Hour - 11*time.Minute)
