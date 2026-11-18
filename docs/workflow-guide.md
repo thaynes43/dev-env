@@ -2254,6 +2254,8 @@ a delayed event starts its ten minutes when actually recorded. API errors or
 controller downtime add delay. Other deletes can still remove the record.
 The hold gives the keeper a window to read, and proves no page delivery.
 Install one operator pin, with no CRD copy, RBAC or flag change for story 802.
+(Superseded on 2026-11-18: the install needs the operator pin and the broker
+pin; see the correction above.)
 **Not for a real remediation before story 803 pages these filing events.**
 No page text, send or view is part of this change.
 
@@ -2621,14 +2623,20 @@ None is a ruling by Tom.
   titles and session reports cannot choose that label. The eventual drill
   must use that exact CallerPolicy name for `dev-env-drill/summon-drill`
   (coordinator ruling R1, 2026-11-18); another name needs a code change.
-  The name labels the caller rather than the purpose, so anyone allowed to
-  use that account after enrollment can send a real escalation whose eligible
-  pages say `DRILL`; its enrollment PR must reserve the namespace/account for
-  drill-only use, name who may create/use them, add the account to the protected
-  identity lists (DESIGN-064 5.8), give its policy one remote escalation entry,
-  remove all three after the drill and forbid other reuse, while who may start
-  the drill remains Tom's open O8 (coordinator ruling R6, 2026-11-18, not a
-  ruling by Tom).
+  The name marks a caller, not a purpose. Once its policy exists, anyone
+  allowed to use the account `dev-env-drill/summon-drill` can send a real
+  escalation whose eligible pages say `DRILL`. The pull request that enrolls
+  the drill identity must:
+
+  - Create the namespace and the account for the drill only.
+  - Name who may create and use them.
+  - Add the account to the protected identity lists (DESIGN-064 5.8).
+  - Give the policy one remote escalation entry.
+  - Remove the policy, the account and the namespace after the drill.
+  - Forbid later reuse of the drill name.
+
+  Who may start the drill remains Tom's open question O8. This is coordinator
+  ruling R6 of 2026-11-18, not a ruling by Tom.
   No policy or identity is created here. The one-attempt rule and hourly cap
   above apply. Install by pinning the keeper together with or after stories
   782, 792 and 793, with story 794 available; no new RBAC.
