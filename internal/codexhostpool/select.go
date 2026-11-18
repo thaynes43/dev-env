@@ -121,6 +121,10 @@ const MemoryReserveBytes int64 = 1 << 30
 // only when the request names none. SuspendedBy is who suspended the host;
 // eligibility does not depend on it.
 type Host struct {
+	// CreateAttempt deduplicates a committed host from its reservation.
+	CreateAttempt string
+	// ReservationAttempt is set only on an unconfirmed create's capacity row.
+	ReservationAttempt string
 	// Pending means a not-yet-running API create also occupies running capacity.
 	Pending          bool
 	MemoryCurrent    int64

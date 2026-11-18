@@ -1151,7 +1151,7 @@ Use this when Tom must see and drive the thread on his phone.
    `--check` writes nothing. A `use` without `--check` still writes the lease.
    `agent-run --agent codex --interactive` calls select before create, and
    creates a host only when the choice is `create`. The API repeats this
-   decision under a shared admission reservation; direct POSTs cannot bypass
+   decision with shared counted reservations; direct POSTs cannot bypass
    the fixed two-retained-host profile bound or running fleet cap. Pending
    creates count before their first status update.
 
@@ -1169,7 +1169,9 @@ Use this when Tom must see and drive the thread on his phone.
    It requires enabled selection, records reason/requester annotations on the
    new session, and does not alter or pair the old one. Suspended/failed hosts
    also occupy the fixed two-host profile bound until archive/removal. An
-   uncertain create retains a reservation for owner review; never bypass it.
+   uncertain create retains one capacity slot for owner review; other slots may
+   still be used. Rescue restore skips reuse selection and keeps the bounds.
+   Never expire or manually clear an uncertain reservation.
    See [ordinary host capacity](codex-coordinator-hosts.md#room-on-an-ordinary-reusable-host).
 
    Either way `agentd ctl thread-start` runs in the host, which checks the daemon is

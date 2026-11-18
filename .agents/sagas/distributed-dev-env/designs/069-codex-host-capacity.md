@@ -34,6 +34,12 @@ DESIGN-067 section 6.2's ordinary/workbench isolation.
    automatic capacity-aware fallback. Ordinary sessions/coordinators cannot
    create Codex remote hosts. CLI rescue restore skips the selection preflight,
    but restore validation and ordinary remote creation authority still apply.
+   Existing operator flags `--codex-host-max-running-per-cell` and
+   `--codex-host-max-running` can raise count caps after a reviewed deployment;
+   they never override reuse of a suitable running host. With higher caps and
+   no suitable/busy host the old selector can already return `create`.
+   Disabling selection skips CLI preflight too. None of these is a client
+   fresh request, and no setting is changed here.
 4. `protocol.Status`/`AgentStatus` report agent state, attached tmux clients,
    heartbeat, reporting pod UID, version and repository bootstrap; remote status
    reports pairing/daemon state. There is no native live-thread count, memory
@@ -71,19 +77,44 @@ the new session. Do not expose new fields in legacy Session/list/fleet views.
 Reuse stays the default. Normal profile cap remains one; `host_full` or an
 explicit fresh request may use a second slot, with a fixed upper bound of two
 ordinary retained hosts per profile and the existing fleet running cap. Pending
-creates count. The operator creates/owns `dev-env-system/dev-env-codex-host-capacity` on first
-admission (normal ConfigMap RBAC is an installation prerequisite). One global
-CAS reservation fences concurrent API replicas;
-uncertain creates retain their slot rather than expire into duplicate launches.
+creates count. The operator creates/owns `dev-env-codex-host-capacity` in its
+configured policy namespace (`--policy-namespace`, default `dev-env-system`).
+Compare-and-swap appends one counted reservation per create, capped by profile
+and fleet; uncertain creates occupy one slot, rather than block the whole fleet.
+A snapshot of reservations is read **before** the live session list: a create
+that commits and releases during that list is still counted. Hosts and their
+reservation are deduplicated only by the exact attempt annotation, not name.
+No operator/session mutex or TTL is the authority for capacity.
+
 The create API rechecks selection and bounds, so bypassing CLI cannot exceed
 them. With selection disabled it still enforces two retained hosts per profile
 and the default running fleet bound; explicit fresh intent requires selection.
+Rescue restore skips reuse selection, since using an existing host cannot restore
+the rescued state, but still observes the fixed profile and fleet bounds. Portal
+callers already lack Codex remote creation authority; this does not expand it.
+
 A pending session counts before it becomes Running. A reservation is reclaimed
 only when its exact attempt annotation is observed on the created session;
-absence or another attempt holds it for operator-owner review. No automatic
-expiry or unproved absence releases an uncertain create. Definite refusals
-release their own reservation, and compare-and-swap prevents a stale release
-from clearing another attempt. Same-key creates are rechecked under the lock. No host is stopped, resumed, resized, reimaged or paired by this work.
+absence or another attempt keeps that one slot for operator-owner review. No
+automatic expiry or unproved absence releases an uncertain create. At the bound,
+creation stops; use of existing suitable hosts continues. A safe reset for an
+absent unknown attempt requires independent fencing of the old creator and is
+outside this story. No unsupported reset or manual ConfigMap edit is prescribed.
+Definite refusals, including the API's own typed admission and stale-schema
+refusals, release their own reservation. CAS prevents a stale release from
+clearing another attempt. Same-key in-flight creates are fenced by a parent/key
+hash in the reservation; committed same-key creates are rechecked before write.
+No host is stopped, resumed, resized, reimaged or paired by this work.
+
+### Installation prerequisites (not performed here)
+
+The coordinator must arrange the haynes-ops CRD copy before the operator pin,
+and confirm `get`, `create` and `update` ConfigMap permissions in the configured
+policy namespace (creation is not resource-name scoped in Kubernetes RBAC).
+No RBAC prerequisite PR has been supplied or opened by this worker: haynes-ops
+changes are expressly outside this work order. Installation remains unfulfilled
+until that GitOps prerequisite is linked and verified. New agentd is needed for
+memory samples; an authorized fresh request works with an old reporting host.
 
 ## Owner question
 
@@ -124,10 +155,20 @@ snapshot (`TestCodexWorkbenchAPIResolvesOnce`). Full agentd, protocol, CLI,
 selector and CRD suites passed. The final PR records lint, generated-code,
 layout and CI results separately.
 
-[Mutation evidence](../evidence/069-capacity-mutations.md) records all 22
+[Mutation evidence](../evidence/069-capacity-mutations.md) records all capacity
 independent removals, the exact edits and the assertion failures. Originals were
 restored byte for byte. Existing hands-off, protected/reserved/workbench and
 lease cases remain part of the full suites. No native independent agent was
 started: this work order explicitly forbids other agents/sessions. The advisory
 Claude Opus PR review and coordinator's pre-merge Opus read remain the review
 route authorized by this story.
+
+## Advisory review corrections
+
+The first Claude Opus review found a definite-refusal cleanup bug and a
+fleet-wide unknown-create hold. Both were corrected: typed API refusals release
+their slot, and counted reservations leave other slots usable. A read-order
+regression test commits/releases another create during the live list. Restore
+has an explicit preserved path with bound tests. The ConfigMap follows the
+configured policy namespace and names the outstanding GitOps RBAC prerequisite.
+All 28 final mutation runs are recorded in the linked evidence.

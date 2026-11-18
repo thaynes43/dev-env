@@ -5,7 +5,7 @@
 Each mutation below was applied alone, then its named acceptance test was run
 under `GOMAXPROCS=2 nice -n 19 go test -p 2 -timeout 15m <package> -run <test> -count=1`.
 KUBECONFIG and every KUBERNETES_* variable were removed from the test process.
-All 22 mutations compiled and failed the named test. Every edited file was
+All 28 mutations compiled and failed the named test. Every edited file was
 restored byte for byte in a finally block before the next mutation.
 
 | Mutation | Decision removed | Test that failed |
@@ -32,6 +32,12 @@ restored byte for byte in a finally block before the next mutation.
 | M20 | Fresh refuses an old/disabled selection route | `TestFreshHostCLI/fresh_refuses_older_operator` |
 | M21 | Record creation reason on new session | `TestFreshHostAPI|TestCapacityAPISelectAndCreate/full` |
 | M22 | Persist valid memory reports | `TestMemoryHeartbeatAndLegacyViews` |
+| M23 | Definite own API refusals release their slot | `TestDefiniteCreateRefusalReleasesCapacity` |
+| M24 | One unknown occupies one slot, not the whole fleet | `TestUnknownCreateOccupiesOneSlot` |
+| M25 | Snapshot reservations before live session list | `TestCapacitySnapshotCountsCommitDuringList` |
+| M26 | Restore skips reuse but keeps host bounds | `TestCodexRestoreSkipsReuseWithinBound` |
+| M27 | Use configured policy namespace | `TestCapacityConfiguredNamespace` |
+| M28 | Fence same-key in-flight creates | `TestCapacityFencesSameIdempotencyKey` |
 
 ## Exact edits and observed failures
 
@@ -196,11 +202,11 @@ File: `internal/apiserver/codexhost_capacity.go`.
 
 Before:
 ```go
-if s.CodexHosts != nil {
+if s.CodexHosts != nil && sess.Spec.Restore == "" {
 ```
 After:
 ```go
-if false && s.CodexHosts != nil {
+if false && s.CodexHosts != nil && sess.Spec.Restore == "" {
 ```
 
 Observed:
@@ -227,7 +233,7 @@ if false && codexhostpool.RetainedInProfile(filtered, profile) >= codexhostpool.
 
 Observed:
 ```text
---- FAIL: TestCapacityBoundWithSelectionOff (0.05s)
+--- FAIL: TestCapacityBoundWithSelectionOff (0.06s)
 ```
 
 ### M10: Count pending creates
@@ -282,16 +288,16 @@ File: `internal/apiserver/codexhost_capacity.go`.
 
 Before:
 ```go
-if err == nil || apierrors.IsAlreadyExists(err) || apierrors.IsInvalid(err) || apierrors.IsForbidden(err) || apierrors.IsBadRequest(err) {
+if err == nil || errors.As(err, &refused) || apierrors.IsAlreadyExists(err) || apierrors.IsInvalid(err) || apierrors.IsForbidden(err) || apierrors.IsBadRequest(err) {
 ```
 After:
 ```go
-if true {
+if true || err == nil || errors.As(err, &refused) || apierrors.IsAlreadyExists(err) || apierrors.IsInvalid(err) || apierrors.IsForbidden(err) || apierrors.IsBadRequest(err) {
 ```
 
 Observed:
 ```text
---- FAIL: TestCapacityUnknownCreateRetainsReservation (0.04s)
+--- FAIL: TestCapacityUnknownCreateRetainsReservation (0.05s)
 ```
 
 ### M13: Release only the same attempt
@@ -302,16 +308,16 @@ File: `internal/apiserver/codexhost_capacity.go`.
 
 Before:
 ```go
- || pending.Attempt != attempt
+if p.Attempt != attempt {
 ```
 After:
 ```go
-
+if false && p.Attempt != attempt {
 ```
 
 Observed:
 ```text
---- FAIL: TestCapacityReservationAcrossReplicas (0.04s)
+--- FAIL: TestCapacityReservationAcrossReplicas (0.05s)
 ```
 
 ### M14: Omit false request keys for old clients
@@ -500,9 +506,9 @@ delete(sess.Annotations, codexCapacityReason)
 
 Observed:
 ```text
---- FAIL: TestCapacityAPISelectAndCreate (0.05s)
---- FAIL: TestCapacityAPISelectAndCreate/full (0.05s)
---- FAIL: TestFreshHostAPI (0.03s)
+--- FAIL: TestCapacityAPISelectAndCreate (0.06s)
+--- FAIL: TestCapacityAPISelectAndCreate/full (0.06s)
+--- FAIL: TestFreshHostAPI (0.04s)
 --- FAIL: TestFreshHostAPI/tok-human (0.01s)
 --- FAIL: TestFreshHostAPI/tok-client (0.01s)
 ```
@@ -525,6 +531,144 @@ if false && codexRemoteSession(&sess) && st.CodexHostMemory != nil
 Observed:
 ```text
 --- FAIL: TestMemoryHeartbeatAndLegacyViews (0.05s)
+```
+
+### M23: Definite own API refusals release their slot
+
+Package: `./internal/apiserver`. Exit: 1 with an assertion failure.
+
+File: `internal/apiserver/codexhost_capacity.go`.
+
+Before:
+```go
+errors.As(err, &refused)
+```
+After:
+```go
+(errors.As(err, &refused) && false)
+```
+
+Observed:
+```text
+--- FAIL: TestDefiniteCreateRefusalReleasesCapacity (0.05s)
+--- FAIL: TestDefiniteCreateRefusalReleasesCapacity/own_admission_refusal (0.05s)
+--- FAIL: TestDefiniteCreateRefusalReleasesCapacity/old_title_schema (0.00s)
+```
+
+### M24: One unknown occupies one slot, not the whole fleet
+
+Package: `./internal/apiserver`. Exit: 1 with an assertion failure.
+
+File: `internal/apiserver/codexhost_capacity.go`.
+
+Before:
+```go
+if cell >= codexhostpool.MaxHostsPerProfile || len(retained) >= fleetCap {
+```
+After:
+```go
+if len(retained) > 0 || cell >= codexhostpool.MaxHostsPerProfile || len(retained) >= fleetCap {
+```
+
+Observed:
+```text
+--- FAIL: TestUnknownCreateOccupiesOneSlot (0.04s)
+```
+
+### M25: Snapshot reservations before live session list
+
+Package: `./internal/apiserver`. Exit: 1 with an assertion failure.
+
+File: `internal/apiserver/codexhost.go`.
+
+Before:
+```go
+	_, pending, err := s.codexCapacity(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	var list v1alpha1.AgentSessionList
+	if err := s.Live.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
+		return nil, "", err
+	}
+
+```
+After:
+```go
+	var list v1alpha1.AgentSessionList
+	if err := s.Live.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
+		return nil, "", err
+	}
+	_, pending, err := s.codexCapacity(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+
+```
+
+Observed:
+```text
+--- FAIL: TestCapacitySnapshotCountsCommitDuringList (0.06s)
+```
+
+### M26: Restore skips reuse but keeps host bounds
+
+Package: `./internal/apiserver`. Exit: 1 with an assertion failure.
+
+File: `internal/apiserver/codexhost_capacity.go`.
+
+Before:
+```go
+if s.CodexHosts != nil && sess.Spec.Restore == "" {
+```
+After:
+```go
+if s.CodexHosts != nil {
+```
+
+Observed:
+```text
+--- FAIL: TestCodexRestoreSkipsReuseWithinBound (0.05s)
+```
+
+### M27: Use configured policy namespace
+
+Package: `./internal/apiserver`. Exit: 1 with an assertion failure.
+
+File: `internal/apiserver/codexhost_capacity.go`.
+
+Before:
+```go
+namespace := s.PolicyNamespace
+```
+After:
+```go
+namespace := "ignored-configured-namespace"
+```
+
+Observed:
+```text
+--- FAIL: TestCapacityConfiguredNamespace (0.05s)
+```
+
+### M28: Fence same-key in-flight creates
+
+Package: `./internal/apiserver`. Exit: 1 with an assertion failure.
+
+File: `internal/apiserver/codexhost_capacity.go`.
+
+Before:
+```go
+if want.RequestKey != "" && p.RequestKey == want.RequestKey {
+```
+After:
+```go
+if false && want.RequestKey != "" && p.RequestKey == want.RequestKey {
+```
+
+Observed:
+```text
+--- FAIL: TestCapacityFencesSameIdempotencyKey (0.04s)
 ```
 
 The committed source contains none of these mutations. Source tests are not

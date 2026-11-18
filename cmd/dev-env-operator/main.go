@@ -301,7 +301,7 @@ func parseFlags(args []string) (options, error) {
 		return err
 	})
 	fs.BoolVar(&o.codexHostSelect, "enable-codex-host-select", false, "serve POST /v1/codex-hosts/select and /release (DESIGN-063); default off, and with it off the routes are not registered; needs the API")
-	fs.IntVar(&o.codexHostMaxPerCell, "codex-host-max-running-per-cell", codexhostpool.DefaultMaxRunningPerCell, "most running Codex hosts in one profile cell when host selection is on")
+	fs.IntVar(&o.codexHostMaxPerCell, "codex-host-max-running-per-cell", codexhostpool.DefaultMaxRunningPerCell, "normal running Codex hosts per profile; full or authorized fresh intent may use a second slot, within the fixed two-retained-host bound")
 	fs.IntVar(&o.codexHostMaxRunning, "codex-host-max-running", codexhostpool.DefaultMaxRunning, "most running Codex hosts when host selection is on")
 	var codexHostHandsOffSet bool
 	fs.Func("codex-host-hands-off", "comma-separated Codex host names selection treats as protected; required with --enable-codex-host-select, and an empty value is a stated choice", func(v string) error {

@@ -77,11 +77,15 @@ expand to the second. The API enforces these bounds even for direct create
 clients. With selection off, direct ordinary create still has the fixed profile
 and fleet bounds; fresh intent is refused.
 
-A shared operator ConfigMap serializes admission across replicas. An uncertain
-create retains its reservation without a timeout; a later admission can reclaim
-it only after observing the exact created attempt. If no such object can be
-proved, report the retained reservation to the operator owner for review. Do
-not clear it or retry by another route. Legacy show/list/fleet and select
+An operator ConfigMap in the configured policy namespace counts reservations
+across replicas. An uncertain create retains one slot without a timeout; other
+available slots can still be used. A later admission reclaims its reservation
+only after observing the exact created attempt. If no such object can be proved,
+report that occupied slot for owner review. There is no reset based on age or
+unproved absence; do not edit the reservation or retry by another route. Rescue
+restore skips reuse selection but keeps the fixed profile and fleet bounds.
+Installation requires the GitOps CRD copy and ConfigMap get/create/update RBAC;
+this source PR changes neither the deployment nor haynes-ops. Legacy show/list/fleet and select
 responses gain no fields; new reason values use the existing `reason` key.
 
 ## Open, request and continue work

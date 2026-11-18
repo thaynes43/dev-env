@@ -294,6 +294,10 @@ func (s *Server) codexHostFacts(ctx context.Context, tmpl *templates.Templates) 
 	if s.Live == nil {
 		return nil, "", newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "sessions cannot be read")
 	}
+	_, pending, err := s.codexCapacity(ctx)
+	if err != nil {
+		return nil, "", err
+	}
 	var list v1alpha1.AgentSessionList
 	if err := s.Live.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
 		return nil, "", err
@@ -331,16 +335,9 @@ func (s *Server) codexHostFacts(ctx context.Context, tmpl *templates.Templates) 
 		}
 	}
 	if !have {
-		hosts, err := s.withPendingCodexHost(ctx, hosts)
-		if err != nil {
-			return nil, "", err
-		}
-		return hosts, codexhostpool.LoginUnknown, nil
+		return withPendingCodexHosts(hosts, pending), codexhostpool.LoginUnknown, nil
 	}
-	hosts, err := s.withPendingCodexHost(ctx, hosts)
-	if err != nil {
-		return nil, "", err
-	}
+	hosts = withPendingCodexHosts(hosts, pending)
 	if bestState == codexhostpool.StateLoginRequired {
 		return hosts, codexhostpool.LoginLapsed, nil
 	}
@@ -438,6 +435,7 @@ func (s *Server) codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmp
 		OrdinaryPod:      ordinaryPod,
 		WorkbenchAccount: workbench,
 		Name:             sess.Name,
+		CreateAttempt:    sess.Annotations[codexCapacityAttempt],
 		UID:              string(sess.UID),
 		Agent:            string(sess.Spec.Agent),
 		Mode:             string(sess.Spec.Mode),

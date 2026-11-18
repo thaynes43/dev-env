@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -191,11 +192,11 @@ func TestCapacityReservationAcrossReplicas(t *testing.T) {
 			success++
 		}
 	}
-	if success != 1 {
+	if success != 2 {
 		t.Fatalf("concurrent reservations admitted %d", success)
 	}
 	_, pending, err := f.srv.codexCapacity(ctx)
-	if err != nil || pending == nil {
+	if err != nil || len(pending) != success {
 		t.Fatalf("pending %+v %v", pending, err)
 	}
 	if err = f.srv.releaseCodexCapacity(ctx, "another-attempt"); err != nil {
@@ -204,7 +205,7 @@ func TestCapacityReservationAcrossReplicas(t *testing.T) {
 	if err = other.reserveCodexCapacity(ctx, codexCapacityPending{Name: "third", Profile: "dev", Attempt: "attempt-three"}); err == nil {
 		t.Fatal("unknown create reservation was lost")
 	}
-	if err = f.srv.releaseCodexCapacity(ctx, pending.Attempt); err != nil {
+	if err = f.srv.releaseCodexCapacity(ctx, pending[0].Attempt); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -221,12 +222,20 @@ func TestCapacityUnknownCreateRetainsReservation(t *testing.T) {
 		t.Fatalf("unknown create %d %s", w.Code, w.Body.String())
 	}
 	_, pending, err := f.srv.codexCapacity(context.Background())
-	if err != nil || pending == nil {
+	if err != nil || len(pending) != 1 {
 		t.Fatalf("reservation lost %+v %v", pending, err)
 	}
 	w = f.do(http.MethodPost, apiv1.SessionsPath, tokClient, capacityCreate(true))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("second unknown %d %s", w.Code, w.Body.String())
+	}
+	_, pending, err = f.srv.codexCapacity(context.Background())
+	if err != nil || len(pending) != 2 {
+		t.Fatalf("unknown slots lost %+v %v", pending, err)
+	}
+	w = f.do(http.MethodPost, apiv1.SessionsPath, tokClient, capacityCreate(true))
 	if w.Code != http.StatusConflict {
-		t.Fatalf("second attempted %d %s", w.Code, w.Body.String())
+		t.Fatalf("third attempted %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -325,5 +334,217 @@ func TestPendingCreateCountsAcrossProfiles(t *testing.T) {
 	w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, req)
 	if w.Code != http.StatusConflict || !bytes.Contains(w.Body.Bytes(), []byte("at_capacity")) {
 		t.Fatalf("pending fleet bypass %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDefiniteCreateRefusalReleasesCapacity(t *testing.T) {
+	t.Run("own admission refusal", func(t *testing.T) {
+		f := newCodexFixture(t)
+		ctx := withCodexHostAdmission(context.Background())
+		c := &caller{kind: kindClient, parent: clientSA, identity: saIdentity(clientSA)}
+		sess, err := f.srv.newSession(ctx, capacityCreate(true), c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sess.Name = "reserved-during-admission"
+		f.srv.CodexWorkbenchHosts.Name = sess.Name
+		err = f.srv.createOrdinaryCodexHost(ctx, sess, c, capacityCreate(true))
+		var refused *apiError
+		if !errors.As(err, &refused) || refused.status != http.StatusForbidden {
+			t.Fatalf("expected definite admission refusal: %v", err)
+		}
+		_, pending, err := f.srv.codexCapacity(ctx)
+		if err != nil || len(pending) != 0 {
+			t.Fatalf("refusal kept reservation %+v %v", pending, err)
+		}
+	})
+	t.Run("old title schema", func(t *testing.T) {
+		f := newCodexFixture(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*v1alpha1.AgentSession); ok {
+				return apierrors.NewBadRequest(`unknown field "spec.title"`)
+			}
+			return c.Create(ctx, obj, opts...)
+		}})
+		req := capacityCreate(true)
+		req.Title = "Coordinator"
+		w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("old schema %d %s", w.Code, w.Body.String())
+		}
+		_, pending, err := f.srv.codexCapacity(context.Background())
+		if err != nil || len(pending) != 0 {
+			t.Fatalf("refusal kept reservation %+v %v", pending, err)
+		}
+	})
+}
+
+func TestUnknownCreateOccupiesOneSlot(t *testing.T) {
+	var fail atomic.Bool
+	fail.Store(true)
+	f := newCodexFixture(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if _, ok := obj.(*v1alpha1.AgentSession); ok && fail.Swap(false) {
+			return errors.New("unknown create outcome")
+		}
+		return c.Create(ctx, obj, opts...)
+	}})
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, capacityCreate(true)); w.Code != http.StatusServiceUnavailable {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	req := capacityCreate(false)
+	req.Profile = "full"
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, req); w.Code != http.StatusCreated {
+		t.Fatalf("one unknown blocked fleet %d %s", w.Code, w.Body.String())
+	}
+	_, pending, err := f.srv.codexCapacity(context.Background())
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("unknown slot lost %+v %v", pending, err)
+	}
+}
+
+func TestCapacitySnapshotCountsCommitDuringList(t *testing.T) {
+	armed := false
+	f := newCodexFixture(t, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, obj client.ObjectList, opts ...client.ListOption) error {
+		if err := c.List(ctx, obj, opts...); err != nil {
+			return err
+		}
+		if _, ok := obj.(*v1alpha1.AgentSessionList); ok && armed {
+			armed = false
+			made := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: "late-commit", Annotations: map[string]string{codexCapacityAttempt: "late-attempt"}}, Spec: v1alpha1.AgentSessionSpec{Repo: "dev-env", Profile: "dev", Agent: v1alpha1.AgentCodex, Mode: v1alpha1.ModeRemote, Model: "gpt-6-astra"}}
+			if err := c.Create(ctx, made); err != nil {
+				return err
+			}
+			var cm corev1.ConfigMap
+			if err := c.Get(ctx, types.NamespacedName{Namespace: codexCapacityNamespace, Name: codexCapacityName}, &cm); err != nil {
+				return err
+			}
+			var pending []codexCapacityPending
+			if err := json.Unmarshal([]byte(cm.Data["pending"]), &pending); err != nil {
+				return err
+			}
+			kept := pending[:0]
+			for _, p := range pending {
+				if p.Attempt != "late-attempt" {
+					kept = append(kept, p)
+				}
+			}
+			raw, _ := json.Marshal(kept)
+			cm.Data["pending"] = string(raw)
+			if err := c.Update(ctx, &cm); err != nil {
+				return err
+			}
+		}
+		return nil
+	}})
+	f.addCodexHost("existing", codexHostOpt{})
+	if err := f.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "late-commit", Profile: "dev", Attempt: "late-attempt"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := withCodexHostAdmission(context.Background())
+	c := &caller{kind: kindClient, parent: clientSA, identity: saIdentity(clientSA)}
+	req := capacityCreate(true)
+	sess, err := f.srv.newSession(ctx, req, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Name = "would-be-third"
+	armed = true
+	err = f.srv.createOrdinaryCodexHost(ctx, sess, c, req)
+	var refusal *apiError
+	if !errors.As(err, &refusal) || refusal.body.Reason != "at_capacity" {
+		t.Fatalf("missed late commit: %v", err)
+	}
+}
+
+func TestCapacityConfiguredNamespace(t *testing.T) {
+	f := newCodexFixture(t)
+	f.srv.PolicyNamespace = "operator-control"
+	if err := f.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "pending", Profile: "dev", Attempt: "attempt"}); err != nil {
+		t.Fatal(err)
+	}
+	var cm corev1.ConfigMap
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: "operator-control", Name: codexCapacityName}, &cm); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCodexRestoreSkipsReuseWithinBound(t *testing.T) {
+	f := newCodexFixture(t)
+	f.addCodexHost("paired", codexHostOpt{})
+	const old = "dev-env-1001-090000"
+	f.srv.Shelf = &fakeShelf{list: protocol.RescueList{Rescues: []protocol.RescueEntry{rescueEntry(old, "20261001-1200", true, map[string][]string{"dev-env": {"refs/heads/agent/" + old}})}}}
+	req := capacityCreate(false)
+	req.Restore = old + "/20261001-1200"
+	w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("restore substituted reusable host %d %s", w.Code, w.Body.String())
+	}
+	var saved apiv1.Session
+	_ = json.Unmarshal(w.Body.Bytes(), &saved)
+	if saved.Restore != req.Restore {
+		t.Fatal("restored state lost")
+	}
+	w = f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, req)
+	if w.Code != http.StatusConflict || !bytes.Contains(w.Body.Bytes(), []byte("at_capacity")) {
+		t.Fatalf("restore bypassed bound %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestConcurrentFreshCreatesKeepHostBound(t *testing.T) {
+	f := newCodexFixture(t)
+	f.addCodexHost("paired", codexHostOpt{})
+	other := &Server{Live: f.srv.Live, Client: f.srv.Client, Policy: f.srv.Policy, Templates: f.srv.Templates, Now: f.srv.Now, CodexHosts: f.srv.CodexHosts, Log: f.srv.Log}
+	results := make(chan error, 2)
+	start := make(chan struct{})
+	for i, srv := range []*Server{f.srv, other} {
+		go func(i int, srv *Server) {
+			ctx := withCodexHostAdmission(context.Background())
+			c := &caller{kind: kindClient, parent: clientSA, identity: saIdentity(clientSA)}
+			req := capacityCreate(true)
+			sess, err := srv.newSession(ctx, req, c)
+			if err != nil {
+				results <- err
+				return
+			}
+			sess.Name = []string{"fresh-one", "fresh-two"}[i]
+			<-start
+			results <- srv.createOrdinaryCodexHost(ctx, sess, c, req)
+		}(i, srv)
+	}
+	close(start)
+	created := 0
+	for range 2 {
+		if err := <-results; err == nil {
+			created++
+		} else {
+			var refusal *apiError
+			if !errors.As(err, &refusal) {
+				t.Fatalf("unexpected create error %v", err)
+			}
+		}
+	}
+	if created > 1 {
+		t.Fatalf("created %d hosts beside existing host", created)
+	}
+	var sessions v1alpha1.AgentSessionList
+	if err := f.c.List(context.Background(), &sessions, client.InNamespace(sessionNS)); err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions.Items) > 2 {
+		t.Fatalf("profile has %d hosts", len(sessions.Items))
+	}
+}
+
+func TestCapacityFencesSameIdempotencyKey(t *testing.T) {
+	f := newCodexFixture(t)
+	ctx := context.Background()
+	first := codexCapacityPending{Name: "first", Profile: "dev", Attempt: "first-attempt", RequestKey: "parent-key-hash"}
+	if err := f.srv.reserveCodexCapacity(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.Name = "second"
+	second.Attempt = "second-attempt"
+	if err := f.srv.reserveCodexCapacity(ctx, second); err == nil {
+		t.Fatal("same-key request was admitted while unconfirmed")
 	}
 }
