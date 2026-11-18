@@ -28,6 +28,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/providerallowance"
 	"github.com/thaynes43/dev-env/internal/usagecollector"
 	"github.com/thaynes43/dev-env/internal/version"
+	"k8s.io/utils/clock"
 )
 
 // BinaryName is the command's name in messages.
@@ -66,6 +67,8 @@ const (
 // Env is what the CLI reads from and writes to outside its arguments. Tests
 // replace every part of it.
 type Env struct {
+	// WaitClock is the coordinator wait clock; nil uses the real clock.
+	WaitClock clock.Clock
 	// CollectCodex is one bounded official read-only account/quota RPC exchange.
 	CollectCodex   func(context.Context, string, func() time.Time) (providerallowance.CodexAccountCapture, error)
 	Stdout, Stderr io.Writer

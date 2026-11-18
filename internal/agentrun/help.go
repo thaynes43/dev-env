@@ -14,7 +14,7 @@ Usage:
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
   agent-run rc start|status|fresh -o json         launch or observe Remote Control
-  agent-run coordinator start|status|stop|brief   run bounded work on a tracker item
+  agent-run coordinator start|status|stop|brief|wait   run bounded work on a tracker item
   agent-run thread start --agent <provider> ...   start a fresh phone-visible thread (Codex on a host, Claude as a session)
   agent-run thread status --agent codex --host <h> --thread <id>
                                                   recheck a started Codex thread's first response; observe-only
@@ -146,12 +146,45 @@ the provider rename when the session is idle with an empty input line; until
 then show says the rename is held. A second recorded change within a minute
 is refused.
 `,
-	"coordinator": `Usage: agent-run coordinator start|status|stop|brief
+	"coordinator": `Usage: agent-run coordinator start|status|stop|brief|wait
 
 Start a bounded task on an OpenProject item, read its state and retained outcome,
 or stop it. brief prints the embedded instructions offline. Use help coordinator
 start, help coordinator status, or help coordinator stop for flags.
 `,
+	"coordinator wait": `Usage: agent-run coordinator wait --thread ID --wait-id ID --directory /absolute/path --budget-end RFC3339 [--timer 1h] [--scan-every 10s] [--max-entries 256] [--max-pending 64] [--after CURSOR] [--watermark HASH] [--ack ID] [--resume] [--reconciled]
+
+A parent-owned metadata wait; always prints one JSON result on success. It does
+not start a Codex turn. Idle wake is unconfirmed (DESIGN-067 section 9).
+The caller explicitly names its native thread. Session UID comes from its own
+AGENTD_SESSION[_FILE]. Private HOME records use mode 0600 in the mode-0700
+.dev-env-coordinator-waits directory. The record filename is SHA256(UID:wait-id).
+One custodian holds a nonblocking lock. All limits and the directory are fixed
+for this wait identity. Defaults are parameters, not unattended-work approval.
+Timer/scan cadence: whole seconds >=1s; entries: 1..4096; pending: 1..1024.
+
+Existing notes/files form the initial baseline unless --after names an earlier
+parent cursor. Only the existing addressed parent wait-any API is used, at most
+one held read, chunks <=15m. Each rearm uses its returned cursor. No list loop.
+Scans read bounded immediate directory metadata; no file text or recursion.
+Symlinked directories/entries and path traversal are refused. A file burst is
+one directory reference; inspect that directory deliberately. Overflow is resync.
+JSON contains only kind, id, note or path, cursor, watermark and time. Kinds:
+timer, note, file, resync, stopped, budget_end. No note text, file text or command.
+
+Rearm the same explicit binding with --after/--watermark from the result and
+--ack its id. Output is committed before printing: a missing/lost ACK returns
+no second event. Inspect the private record, reconcile sources and acknowledge
+its lastID. No automatic replay. On resync read every parent list page (pass
+--continue until none is returned), inspect directory metadata, then rearm with
+--reconciled and the returned wait cursor, never a list continuation.
+SIGTERM/cancellation or a regular .stop marker beside the record returns stopped
+with cursors saved. To resume, remove that marker deliberately and pass --resume,
+--ack and the SAME thread ID. Another thread, changed limits or an ended budget
+refuses. budget_end never rearms. A held owner question pauses its own lane;
+this wait does not read answers or release any hold. No wake grants authority.
+`,
+
 	"coordinator start": `Usage: agent-run coordinator start --item ID (--repo R | --project P) --model FULL_ID --hours H --workers N [--run LABEL] [-o json]
 
 Start a dev-profile task; no tracker credential needed. Model is required;
