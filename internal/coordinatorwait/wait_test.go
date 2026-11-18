@@ -460,9 +460,12 @@ func TestStoreAtomicPrivateLockAndStop(t *testing.T) {
 	}
 	// A stale temp link cannot be followed or damage the last committed record.
 	must(t, os.Symlink("outside", filepath.Join(root, s.name+".tmp")))
+	old := r.NextTimer
+	r.NextTimer = r.NextTimer.Add(time.Second)
 	if s.Save(r) == nil {
 		t.Fatal("temp symlink followed")
 	}
+	r.NextTimer = old
 	loaded, err = s.Load()
 	must(t, err)
 	if !reflect.DeepEqual(r, loaded) {

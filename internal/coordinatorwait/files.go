@@ -43,6 +43,29 @@ func OpenDirectory(path string) (*Directory, error) {
 	}
 	return &Directory{root: root, path: path, info: inside}, nil
 }
+
+// DirectoryIdentity binds the resolved path and filesystem identity across calls.
+type DirectoryIdentity struct {
+	Path   string `json:"path"`
+	Device uint64 `json:"device"`
+	Inode  uint64 `json:"inode"`
+}
+
+func (r *Record) BindDirectory(d *Directory) error {
+	if err := d.check(); err != nil {
+		return err
+	}
+	raw, ok := d.info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return errors.New("handoff directory has no stable identity")
+	}
+	pin := DirectoryIdentity{Path: d.path, Device: uint64(raw.Dev), Inode: raw.Ino}
+	if pin.Path != r.Options.Directory || r.DirectoryPin != nil && *r.DirectoryPin != pin {
+		return errors.New("wait handoff directory identity differs from the saved record")
+	}
+	r.DirectoryPin = &pin
+	return nil
+}
 func (d *Directory) Close() error { return d.root.Close() }
 
 func (d *Directory) check() error {

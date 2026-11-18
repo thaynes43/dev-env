@@ -56,24 +56,27 @@ type Result struct {
 // Record is private to this Session and caller-named native thread. Outstanding
 // is committed before output and replayed whole until its exact ID is acknowledged.
 type Record struct {
-	Options     Options           `json:"options"`
-	NextTimer   time.Time         `json:"nextTimer"`
-	Cursor      string            `json:"cursor"`
-	Watermark   string            `json:"watermark"`
-	Files       map[string]string `json:"files"`
-	Refused     []string          `json:"refused,omitempty"`
-	Pending     []Result          `json:"pending"`
-	Seen        []string          `json:"seen"`
-	Sequence    uint64            `json:"sequence"`
-	Outstanding *Result           `json:"outstanding,omitempty"`
-	LastID      string            `json:"lastID,omitempty"`
-	Stopped     bool              `json:"stopped"`
-	Ended       bool              `json:"ended"`
-	NeedsResync bool              `json:"needsResync"`
+	Started       time.Time          `json:"started"`
+	DirectoryPin  *DirectoryIdentity `json:"directoryPin,omitempty"`
+	EntryOverflow bool               `json:"entryOverflow"`
+	Options       Options            `json:"options"`
+	NextTimer     time.Time          `json:"nextTimer"`
+	Cursor        string             `json:"cursor"`
+	Watermark     string             `json:"watermark"`
+	Files         map[string]string  `json:"files"`
+	Refused       []string           `json:"refused,omitempty"`
+	Pending       []Result           `json:"pending"`
+	Seen          []string           `json:"seen"`
+	Sequence      uint64             `json:"sequence"`
+	Outstanding   *Result            `json:"outstanding,omitempty"`
+	LastID        string             `json:"lastID,omitempty"`
+	Stopped       bool               `json:"stopped"`
+	Ended         bool               `json:"ended"`
+	NeedsResync   bool               `json:"needsResync"`
 }
 
 func New(o Options, now time.Time, cursor string, files map[string]string) *Record {
-	return &Record{Options: o, NextTimer: now.Add(o.Timer), Cursor: cursor, Watermark: watermark(files), Files: files}
+	return &Record{Started: now, Options: o, NextTimer: now.Add(o.Timer), Cursor: cursor, Watermark: watermark(files), Files: files}
 }
 
 // Bind requires explicit same-thread rearming. Neither a new budget nor changed
@@ -166,17 +169,24 @@ func (r *Record) Refuse(refused map[string]string) {
 	}
 	slices.Sort(keys)
 	for _, hash := range keys {
-		if slices.Contains(r.Refused, hash) || len(r.Pending) >= r.Options.MaxPending || r.NeedsResync {
+		if slices.Contains(r.Refused, hash) || slices.ContainsFunc(r.Pending, func(e Result) bool { return e.ID == hash }) || len(r.Pending) >= r.Options.MaxPending || r.NeedsResync {
 			continue
 		}
-		r.Pending = append(r.Pending, Result{Kind: "resync", ID: digest("refused:" + hash), Reason: refused[hash]})
-		r.Refused = append(r.Refused, hash)
+		r.Pending = append(r.Pending, Result{Kind: "resync", ID: hash, Reason: refused[hash]})
 	}
 }
 
 // Scan coalesces one metadata burst to one directory reference. No entry text is
 // opened. An incomplete bounded scan requires explicit source reconciliation.
 func (r *Record) Scan(files map[string]string, overflow bool) {
+	if overflow {
+		if !r.EntryOverflow {
+			r.EntryOverflow = true
+			r.resync()
+		}
+		return
+	}
+	r.EntryOverflow = false
 	changes := 0
 	changed := len(files) != len(r.Files)
 	for name, stamp := range files {
@@ -192,7 +202,7 @@ func (r *Record) Scan(files map[string]string, overflow bool) {
 	}
 	r.Files = files
 	r.Watermark = watermark(files)
-	if overflow || changes > r.Options.MaxPending {
+	if changes > r.Options.MaxPending {
 		r.resync()
 		return
 	}
@@ -240,6 +250,9 @@ func (r *Record) Take(now time.Time, stop bool) *Result {
 	if e.Kind == "note" || e.Kind == "file" {
 		r.Seen = append(r.Seen, e.ID)
 	}
+	if e.Kind == "resync" && e.Reason != "" {
+		r.Refused = append(r.Refused, e.ID)
+	}
 	r.LastID = e.ID
 	saved := e
 	r.Outstanding = &saved
@@ -263,6 +276,12 @@ func watermark(files map[string]string) string {
 // validate refuses malformed saved metadata before it can become output. The
 // private record is a checkpoint, not a source of instructions or arbitrary paths.
 func (r *Record) validate() error {
+	if r.Started.IsZero() || r.Options.BudgetEnd.After(r.Started.Add(24*time.Hour)) {
+		return errors.New("budget end exceeds 24-hour wait bound")
+	}
+	if r.DirectoryPin != nil && (r.DirectoryPin.Path != r.Options.Directory || r.DirectoryPin.Inode == 0) {
+		return errors.New("invalid directory pin")
+	}
 	if r.Watermark != watermark(r.Files) || r.Sequence > 1<<63 {
 		return errors.New("invalid checkpoint")
 	}

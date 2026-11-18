@@ -1351,12 +1351,23 @@ agent-run coordinator wait --thread <same-id> --wait-id <same-tool-call-id> \
 
 The timer, scan cadence and bounds are parameters; hourly operation is not an
 answer to pending Q-067-02. A budget end is mandatory and cannot be extended on
-an existing wait. `budget_end` persists the end and never rearms. Default scans
+an existing wait. It must be at most 24 hours after the wait starts; this upper
+bound grants no unattended-work authority. `budget_end` persists the end and never rearms. Default scans
 are ten seconds apart, immediate entries only, at most 256 metadata records
 (ceiling 4096). They open no handoff contents or subdirectories and use no
-inotify. Symlinked directories/ancestors/entries, directory replacement and
-unclean/outside paths refuse. File results reference the one pinned directory,
-so a burst produces one result and the coordinator deliberately reads its files.
+inotify. Symlinked directories/ancestors, directory replacement and unclean/outside
+paths refuse. The resolved directory path, device and inode stay pinned across
+all calls for this wait. File results reference that directory, so a burst
+produces one result and the coordinator deliberately reads its files.
+
+An entry with invalid UTF-8, a control character, a name over 255 bytes, an unsafe
+path name or a symlink is refused without blocking the other lanes. Each changed
+refusal yields one `resync` with only a closed reason word: `encoding`, `control`,
+`length`, `name` or `symlink`. No refused name or link target is output or saved;
+the record remembers only a hash of raw name bytes and metadata/identity.
+Unchanged refused entries are suppressed after acknowledgement. A directory over
+the entry bound yields one resync per overflow episode, then keeps the ordinary
+scan/read cadence instead of yielding resync on every call.
 
 At most one existing parent wait-any read is held, at most 900 seconds per
 request, with the existing cursor and resync semantics. Initial notes and files
@@ -1367,7 +1378,7 @@ Unrelated notes and replies remain filtered by the existing server contract.
 A refusal/lost API receipt stops the command; it does not retry automatically.
 
 Every success prints one JSON object containing only `kind`, `id`, optional
-`note` or `path`, `cursor`, `watermark` and `time`. Kinds are `timer`, `note`,
+`note` or `path`, optional refused-entry `reason`, `cursor`, `watermark` and `time`. Kinds are `timer`, `note`,
 `file`, `resync`, `stopped`, `budget_end`. It carries no file/note text, key or
 command. Metadata is untrusted evidence, never an owner answer or permission.
 An unanswered question holds only its dependent lane; event collection does
@@ -1379,17 +1390,28 @@ limits, next timer, parent cursor, directory watermark/snapshot, bounded pending
 IDs/receipts, budget and stop state are stored under private HOME in
 `.dev-env-coordinator-waits/`. Directory mode is 0700, records and locks 0600.
 The filename stem is SHA256 of `SessionUID:wait-id`. An exclusive nonblocking
-process lock admits one custodian. Writes fsync a temporary file, rename it
-atomically and fsync the directory before a result can escape. A stale temporary
-file fails closed for deliberate inspection; no PID guessing or stale-lock takeover.
+process lock admits one custodian. A changed record fsyncs a temporary file,
+renames it atomically and fsyncs the directory before a result can escape.
+Unchanged records are not rewritten. At the next start, under that same lock,
+only the record's exact regular temporary file in its own directory is removed;
+a symlink or nonregular temporary refuses. Other files are untouched.
 
-Rearm requires `--ack` of the last result, and supplied `--after`/`--watermark`
-must equal the checkpoint. A lost output/ACK returns no duplicate result: inspect
-the private record, reconcile the source lists/directory, then acknowledge its
-`lastID`. Bounded receipt history also overflows to `resync`. On `resync`, read
-**all** parent list pages with `--continue` until none remains, inspect directory
-metadata, then rearm with `--reconciled`, `--ack` and the saved wait cursor.
-The list continuation is not that cursor. This is explicit recovery, not polling.
+Rearm requires `--ack` of the stored outstanding result; supplied
+`--after`/`--watermark` must equal the checkpoint. The complete result is saved
+before output. Without an ACK, the next call returns it unchanged with the same
+ID, timestamp, cursor and watermark, without reading sources. Consumers handle
+that ID once and acknowledge it; a wrong ID cannot advance the wait. A crash
+before a successful save emits no result. Bounded receipt history also overflows
+to `resync`. On `resync`, read **all** parent list pages with `--continue` until
+none remains, inspect directory metadata, then rearm with `--ack` and the saved
+wait cursor. The list continuation is not that cursor.
+
+`--reconciled` is only for a stored result that itself cannot be read while the surrounding record remains valid:
+reconcile every source, then pass
+`--ack` with its saved `lastID` and `--reconciled`. Recovery returns resync. The
+flag is refused for a readable result and cannot bypass a corrupt outer record.
+A note re-created under the same name is skipped while that name's ID remains
+in the bounded receipt history; section 12 of DESIGN-067 records this limit.
 
 SIGTERM/cancellation or a regular `<stem>.stop` beside the record returns
 `stopped` with cursors/pending work saved. No stop-marker text is read. A

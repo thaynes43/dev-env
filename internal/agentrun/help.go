@@ -161,17 +161,24 @@ not start a Codex turn. Idle wake is unconfirmed (DESIGN-067 section 9).
 The caller explicitly names its native thread. Session UID comes from its own
 AGENTD_SESSION[_FILE]. Private HOME records use mode 0600 in the mode-0700
 .dev-env-coordinator-waits directory. The record filename is SHA256(UID:wait-id).
-One custodian holds a nonblocking lock. All limits and the directory are fixed
+One custodian holds a nonblocking lock. Only changed records are written. At
+start, the lock holder removes only this record's exact regular crash temp in
+its own directory; a symlink/nonregular temp refuses. All limits and the directory are fixed
 for this wait identity. Defaults are parameters, not unattended-work approval.
 Timer/scan cadence: whole seconds >=1s; entries: 1..4096; pending: 1..1024.
+Budget end must be at most 24 hours after wait start. This is a bound, not approval.
 
 Existing notes/files form the initial baseline unless --after names an earlier
 parent cursor. Only the existing addressed parent wait-any API is used, at most
 one held read, chunks <=15m. Each rearm uses its returned cursor. No list loop.
 Scans read bounded immediate directory metadata; no file text or recursion.
-Symlinked directories/entries and path traversal are refused. A file burst is
-one directory reference; inspect that directory deliberately. Overflow is resync.
-JSON contains only kind, id, note or path, cursor, watermark and time. Kinds:
+Symlinked directories/ancestors, replacement and path traversal are refused;
+resolved path/device/inode stay pinned across calls. Unsafe entries (invalid
+UTF-8, controls, >255-byte names, unsafe paths or symlinks) yield one resync per
+changed entry, with no name and only reason: encoding, control, length, name or
+symlink. Only hashes persist; notes/timer/safe files still run. A file burst is
+one directory reference. Entry overflow yields one resync, then ordinary pacing.
+JSON contains only kind, id, note or path, optional reason, cursor, watermark and time. Kinds:
 timer, note, file, resync, stopped, budget_end. No note text, file text or command.
 
 Rearm the same explicit binding with --after/--watermark from the result and

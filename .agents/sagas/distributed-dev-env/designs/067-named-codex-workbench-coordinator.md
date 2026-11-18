@@ -720,8 +720,22 @@ stop-marker format are in the [workflow guide](../../../../docs/workflow-guide.m
 and `agent-run help coordinator wait`. Defaults are parameters, not a ruling
 on Q-067-02. The thread and wait/tool identity are caller-named; no native thread
 is discovered, resumed or rebound by the adapter. The stored binding and budget
-cannot be changed while rearming. A lost output/ACK never replays the result;
-reconciliation and explicit ACK are required before the next owned wait.
+cannot be changed while rearming. A lost output/ACK replays the complete stored
+metadata result unchanged with the same ID; only its exact ACK advances the wait.
+Consumers handle that ID once. `--reconciled` applies only when that stored result
+itself cannot be read; reconcile all sources and acknowledge its saved ID to
+obtain resync. A corrupt outer record still refuses.
+
+The directory's resolved path, device and inode are pinned for the entire wait.
+Refused entries never stop notes, the timer or safe files: invalid UTF-8,
+controls, names over 255 bytes, unsafe path names and symlinks give one redacted
+resync per changed entry. Reasons form the closed set `encoding`, `control`,
+`length`, `name`, `symlink`; only raw-name/metadata identity hashes are remembered.
+Entry overflow gives one resync per episode and then ordinary read/scan pacing.
+Only changed records are written. Under the custodian lock, the next start removes
+only its exact regular crash temporary file; symlink/nonregular temps refuse.
+The budget end is at most 24 hours after the persisted start, an upper bound
+that grants no authority for unattended work. Q-067-02 remains open.
 
 The [later proof procedure](../../../../docs/coordinator-wait-proof.md) gives
 exact commands for timer, addressed child note and file stimuli, same-thread
@@ -945,6 +959,10 @@ the separately configured coordinator-host caller.
 
 ## 12. Known limits and Unknowns
 
+**Slice (c2) known limit, coordinator ruling 2026-11-18:** a note re-created under
+the same name is skipped while its name-derived ID is in the bounded receipt
+history. Its cursor still advances. This fix round does not change note identity.
+
 1. **Whole workbench power.** The guards constrain supported operator routes.
    They cannot contain a malicious or mistaken workbench agent that can exec into
    privileged pods and use their identities. GitOps writers and cluster admins can
@@ -1092,7 +1110,8 @@ credential, pairing or haynes-ops change is included.
 
 **Source:** bounded scans of one pinned directory; fixed explicit thread binding;
 private atomic checkpoint and single custodian; metadata-only output; coalescing,
-bounded pending/receipt sets and resync; ACK-before-rearm; stop/budget persistence.
+bounded pending/receipt sets and resync; full unacknowledged-result replay with
+the same ID and exact ACK-before-rearm; stop/budget persistence.
 **Tested:** fake clocks/events and local filesystem/fake HTTP only. Guard mutation
 results and exact-head checks belong in the PR body. **Installed:** nothing.
 **Accepted:** nothing. Provider idle wake is unconfirmed. Current official async
@@ -1101,6 +1120,23 @@ alternative was established at the image's 0.160.1 pin. That part is stopped
 for the coordinator, not bypassed. Another supported extension stays Unknown.
 The outgoing coordinator retains watch-dependent lanes. Q-067-02/Q-067-04 stay
 pending; this record is not an owner answer or acceptance of ADR-030.
+
+**Fix round 1:** the coordinator's `claude-opus-5-5` review of
+`f62234fc623864796c8a79dc50e663a59a1325eb` requested changes (0 HIGH, 3 MEDIUM,
+9 LOW). The fix branch `agent/dev-env-1118-175432` retains that ancestor and takes
+main through plain merges. F1 isolates unsafe entries with hash-only refusal
+state and closed, redacted reasons. F2 tests the immediate-response pacing guard
+with a fake clock. F3 persists the whole outstanding result and replays it
+unchanged until exact ACK; `--reconciled` is only unreadable-result recovery.
+F4 adds one resync per directory overflow episode, unchanged-write suppression,
+locked regular-temp cleanup, path/device/inode binding across calls and a
+24-hour budget upper bound. Tests cover the review's invalid-byte probe and
+second call, concurrent note lane, crash save/print order, stale temp safety,
+directory replacement, existing child behind a symlinked parent, and the scan's
+name guard. The PR extends the mutant table, including M5, M6b and M8. The
+same-name note limit is recorded in section 12. Source/fakes only; nothing is
+installed or accepted. Independent delta review and merge remain with the
+coordinator; this worker does not change or close PR 1207.
 
 The worker starts no other agent/session and performs its own diff review.
 Independent/cross-family review remains with the coordinator, per this work

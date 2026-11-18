@@ -52,7 +52,9 @@ codex --version > "$HOME/.dev-env-c2-proof/codex-version"
 ```
 
 The date above is an example parameter, not permission to wait until that date.
-Use the same saved deadline for every invocation of a given wait identity. A
+The deadline must be at most 24 hours after the wait starts; that upper bound
+grants no unattended-work authority. Use the same saved deadline for every
+invocation of a given wait identity. A
 new identity does not authorize more work or extend the story budget.
 Record the setup time and baseline directory listing; no stimulus file exists
 yet. Existing directory entries are the initial baseline. `--after`, if used,

@@ -13,10 +13,11 @@ import (
 // Store owns a private record and a nonblocking process lock. Kernel locks are
 // released on death; a stale PID file never authorizes a second custodian.
 type Store struct {
-	root *os.Root
-	lock *os.File
-	name string
-	sync func(*os.File) error
+	root  *os.Root
+	lock  *os.File
+	name  string
+	sync  func(*os.File) error
+	saved []byte
 }
 
 // OpenStore uses a fixed private HOME subdirectory. IDs are hashed into names;
@@ -72,6 +73,21 @@ func OpenStore(home, uid, waitID string) (*Store, error) {
 		return nil, errors.New("wait already has a custodian")
 	}
 	s.lock = lock
+	// Under this custodian's lock, remove only this record's exact regular temp.
+	temp := s.name + ".tmp"
+	if st, err := root.Lstat(temp); err == nil {
+		if !st.Mode().IsRegular() {
+			s.Close()
+			return nil, errors.New("unsafe atomic wait temporary file")
+		}
+		if err := root.Remove(temp); err != nil {
+			s.Close()
+			return nil, errors.New("cannot remove stale wait temporary file")
+		}
+	} else if !os.IsNotExist(err) {
+		s.Close()
+		return nil, errors.New("cannot inspect wait temporary file")
+	}
 	return s, nil
 }
 func (s *Store) Close() { _ = s.lock.Close(); _ = s.root.Close() }
@@ -118,6 +134,7 @@ func (s *Store) Load() (*Record, error) {
 	if r.Options.Validate() != nil || r.validate() != nil || r.Options.MaxPending < len(r.Pending) || len(r.Seen) > r.Options.MaxPending || len(r.Files) > r.Options.MaxEntries || r.NextTimer.IsZero() {
 		return nil, errors.New("invalid wait record")
 	}
+	s.saved, _ = json.Marshal(&r)
 	return &r, nil
 }
 
@@ -130,6 +147,9 @@ func (s *Store) Save(r *Record) error {
 	data, err := json.Marshal(r)
 	if err != nil || len(data) > 2<<20 {
 		return errors.New("wait record exceeds bound")
+	}
+	if bytes.Equal(data, s.saved) {
+		return nil
 	}
 	var decoded Record
 	if json.Unmarshal(data, &decoded) != nil || decoded.validate() != nil {
@@ -160,6 +180,7 @@ func (s *Store) Save(r *Record) error {
 	if err = s.sync(dir); err != nil {
 		return errors.New("cannot sync wait directory")
 	}
+	s.saved = data
 	return nil
 }
 

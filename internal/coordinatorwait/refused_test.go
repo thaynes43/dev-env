@@ -116,3 +116,61 @@ func TestDirectoryExistingChildBehindSymlinkRefused(t *testing.T) {
 		t.Fatal("existing child behind symlinked parent accepted")
 	}
 }
+
+func TestRefusedHashIncludesRawNameAndIdentity(t *testing.T) {
+	dir := t.TempDir()
+	name := "bad\xffname"
+	path := filepath.Join(dir, name)
+	must(t, os.WriteFile(path, []byte("one"), 0600))
+	must(t, os.Chtimes(path, epoch, epoch))
+	other := filepath.Join(dir, "bad\xfename")
+	must(t, os.Link(path, other))
+	d, err := OpenDirectory(dir)
+	must(t, err)
+	defer func() { _ = d.Close() }()
+	before, err := d.Scan(10)
+	must(t, err)
+	if len(before.Refused) != 2 {
+		t.Fatal("raw name bytes missing from refusal hash")
+	}
+	// Keep the original inode alive outside the watched directory, then replace
+	// with identical ordinary metadata so only device/inode distinguishes it.
+	must(t, os.Remove(other))
+	must(t, os.Rename(path, filepath.Join(t.TempDir(), "parked")))
+	must(t, os.WriteFile(path, []byte("two"), 0600))
+	must(t, os.Chtimes(path, epoch, epoch))
+	after, err := d.Scan(10)
+	must(t, err)
+	for hash := range after.Refused {
+		if _, ok := before.Refused[hash]; ok {
+			t.Fatal("replacement identity missing from refusal hash")
+		}
+	}
+}
+func TestRefusalQueuedBeforeOverflowIsNotSilentlyForgotten(t *testing.T) {
+	r := record()
+	hash := digest("raw-name-and-identity")
+	refused := map[string]string{hash: "encoding"}
+	r.Refuse(refused)
+	r.Note("", "43", true)
+	requireKind(t, r, epoch, false, "resync")
+	ack(t, r, false)
+	r.Refuse(refused)
+	if v := requireKind(t, r, epoch, false, "resync"); v.Reason != "encoding" {
+		t.Fatal("refusal lost before it was reported")
+	}
+}
+func TestStoreRejectsInvalidRawNameBeforeWrite(t *testing.T) {
+	s, err := OpenStore(t.TempDir(), "session-uid", "tool-call")
+	must(t, err)
+	defer s.Close()
+	r := record()
+	r.Files = map[string]string{"bad\xffname": "stamp"}
+	r.Watermark = watermark(r.Files)
+	if s.Save(r) == nil {
+		t.Fatal("non-round-trippable record accepted for writing")
+	}
+	if loaded, err := s.Load(); err != nil || loaded != nil {
+		t.Fatal("invalid record touched committed file")
+	}
+}

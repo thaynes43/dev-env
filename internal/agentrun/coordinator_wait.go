@@ -75,47 +75,54 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 	} else if ack != "" || resume || reconciled || mark != "" {
 		return usageError("coordinator wait cannot acknowledge or resume an absent record")
 	}
-	if r != nil && r.Outstanding != nil {
-		return a.printJSON(r.Outstanding)
-	}
 	waitClock := a.env.WaitClock
 	if waitClock == nil {
 		waitClock = coordinatorwait.RealClock{}
 	}
-	stop, err := store.StopRequested()
-	if err != nil {
-		return fail(ExitFailed, "coordinator wait: %s", err)
-	}
-	// A stopped caller or budget already ended returns locally, without a read.
-	if r == nil && (stop || ctx.Err() != nil || !waitClock.Now().Before(o.BudgetEnd)) {
-		r = coordinatorwait.New(o, waitClock.Now(), after, nil)
-	}
-	if r != nil && (stop || ctx.Err() != nil || !waitClock.Now().Before(o.BudgetEnd)) {
-		result := r.Take(waitClock.Now(), stop || ctx.Err() != nil)
-		if err = store.Save(r); err != nil {
-			return fail(ExitFailed, "coordinator wait: %s", err)
-		}
-		return a.printJSON(result)
+	fresh := r == nil
+	if fresh && o.BudgetEnd.After(waitClock.Now().Add(24*time.Hour)) {
+		return usageError("coordinator wait budget end must be at most 24 hours after the wait starts")
 	}
 	directory, err := coordinatorwait.OpenDirectory(o.Directory)
 	if err != nil {
 		return fail(ExitFailed, "coordinator wait: %s", err)
 	}
 	defer func() { _ = directory.Close() }()
+	if fresh {
+		r = coordinatorwait.New(o, waitClock.Now(), after, nil)
+	}
+	if err = r.BindDirectory(directory); err != nil {
+		return fail(ExitFailed, "coordinator wait: %s", err)
+	}
+	if r.Outstanding != nil {
+		if err = store.Save(r); err != nil {
+			return fail(ExitFailed, "coordinator wait: %s", err)
+		}
+		return a.printJSON(r.Outstanding)
+	}
+	stop, err := store.StopRequested()
+	if err != nil {
+		return fail(ExitFailed, "coordinator wait: %s", err)
+	}
+	// A stopped caller or budget already ended returns locally, without a read.
+	if stop || ctx.Err() != nil || !waitClock.Now().Before(o.BudgetEnd) {
+		result := r.Take(waitClock.Now(), stop || ctx.Err() != nil)
+		if err = store.Save(r); err != nil {
+			return fail(ExitFailed, "coordinator wait: %s", err)
+		}
+		return a.printJSON(result)
+	}
 	setupCtx, finishSetup := coordinatorWaitSetupContext(ctx, waitClock, o.BudgetEnd)
 	defer finishSetup()
 	c, err := a.connect(setupCtx, cmd.c.conn)
 	if err != nil {
 		if ctx.Err() != nil || !waitClock.Now().Before(o.BudgetEnd) {
-			if r == nil {
-				r = coordinatorwait.New(o, waitClock.Now(), after, nil)
-			}
 			return a.coordinatorWaitTerminal(store, r, waitClock.Now(), ctx.Err() != nil)
 		}
 		return parentNoteError(0, err, "wait-any")
 	}
 	notes := a.coordinatorWaitNotes(c)
-	if r == nil || r.Cursor == "" {
+	if fresh || r.Cursor == "" {
 		snapshot, err := directory.Scan(o.MaxEntries)
 		if err != nil {
 			return fail(ExitFailed, "coordinator wait: %s", err)
@@ -125,15 +132,16 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 		initial, err := notes(setupCtx, after, 0)
 		if err != nil {
 			if ctx.Err() != nil || !waitClock.Now().Before(o.BudgetEnd) {
-				if r == nil {
-					r = coordinatorwait.New(o, waitClock.Now(), after, snapshot.Files)
-				}
 				return a.coordinatorWaitTerminal(store, r, waitClock.Now(), ctx.Err() != nil)
 			}
 			return err
 		}
-		if r == nil {
-			r = coordinatorwait.New(o, waitClock.Now(), initial.Cursor, snapshot.Files)
+		if fresh {
+			started := r.Started
+			r = coordinatorwait.New(o, started, initial.Cursor, snapshot.Files)
+			if err = r.BindDirectory(directory); err != nil {
+				return fail(ExitFailed, "coordinator wait: %s", err)
+			}
 		} else {
 			// A stop before the first confirmed cursor has no safe source baseline.
 			// Capture one now, then require source reconciliation from that position.

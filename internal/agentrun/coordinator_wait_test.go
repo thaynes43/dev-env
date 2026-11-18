@@ -330,3 +330,70 @@ func TestCoordinatorWaitRefusedEntryThenNote(t *testing.T) {
 		})
 	}
 }
+
+func TestCoordinatorWaitPinsDirectoryAcrossCalls(t *testing.T) {
+	for _, change := range []string{"replace", "different-path"} {
+		t.Run(change, func(t *testing.T) {
+			h, args := waitHarness(t)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if r.URL.Query().Get("seconds") == "0" {
+					writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "waiting", Cursor: "42"})
+					return
+				}
+				writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "note", Name: parentTestMetadata().Name, Child: "child", Kind: "result", CreatedAt: testNow, Cursor: "43"})
+			}
+			h.mustRun(ExitOK, args...)
+			first := resultFrom(t, h)
+			code := ExitFailed
+			if change == "replace" {
+				if err := os.Rename(args[7], args[7]+"-old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(args[7], 0700); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				args = append([]string(nil), args...)
+				args[7] += "-other"
+				if err := os.Mkdir(args[7], 0700); err != nil {
+					t.Fatal(err)
+				}
+				code = ExitUnconfirmed
+			}
+			h.mustRun(code, append(args, "--ack", first.ID)...)
+			if h.stdout.Len() != 0 || len(h.api.requests()) != 2 {
+				t.Fatal("another directory adopted across calls")
+			}
+		})
+	}
+}
+func TestCoordinatorWaitBudget24HourUpperBound(t *testing.T) {
+	for _, over := range []bool{false, true} {
+		t.Run(map[bool]string{false: "at-bound", true: "over-bound"}[over], func(t *testing.T) {
+			h, args := waitHarness(t)
+			end := testNow.Add(24 * time.Hour)
+			if over {
+				end = end.Add(time.Second)
+			}
+			args[len(args)-1] = end.Format(time.RFC3339)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if r.URL.Query().Get("seconds") == "0" {
+					writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "waiting", Cursor: "42"})
+					return
+				}
+				writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "note", Name: parentTestMetadata().Name, Child: "child", Kind: "result", CreatedAt: testNow, Cursor: "43"})
+			}
+			if over {
+				h.mustRun(ExitUsage, args...)
+				if h.stdout.Len() != 0 || len(h.api.requests()) != 0 {
+					t.Fatal("oversized budget started a wait")
+				}
+			} else {
+				h.mustRun(ExitOK, args...)
+				if resultFrom(t, h).Kind != "note" {
+					t.Fatal("24-hour bound refused")
+				}
+			}
+		})
+	}
+}
