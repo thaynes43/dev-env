@@ -512,6 +512,7 @@ jobs:
           export DEV_ENV_PINNED_NATIVE_BINARY="$native"
           nice -n 19 go test -p 2 -timeout 2m ./internal/agentd/hostexecutor -run '^TestPinnedNativeTurnSurvivesControlDisconnectAndHistoryReconnect$' -count=1
           nice -n 19 go test -p 2 -timeout 3m ./internal/agentd -run '^TestPinnedCodex(PreviousHostStarts|HomeLayout)$' -count=1 -v
+          nice -n 19 python3 -I -B images/agent/testdata/codex-compatibility-mutants.py
       - name: Report the image size
         run: |
           size="$(docker image inspect --format '{{.Size}}' dev-env-agent:ci)"

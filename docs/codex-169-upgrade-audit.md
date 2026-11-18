@@ -174,7 +174,9 @@ layout and history sentinel must start through real 0.169.1 package replacement;
 an unrelated receipt version or package version each refuses before mutation. This exercises
 native daemon startup and peer/version RPC, with remote enrollment suppressed,
 mount preflight and auth projection stubbed. It does not prove actual pairing,
-relay connectivity or keeper-generation adoption.
+relay connectivity or keeper-generation adoption. The same job also temporarily
+removes predecessor admission and the auth.lock classification, checks that each
+real-binary test fails at that guard, and restores the exact source bytes.
 
 ## CODEX_HOME qualification and real-binary CI limits (M2, L2, L3)
 

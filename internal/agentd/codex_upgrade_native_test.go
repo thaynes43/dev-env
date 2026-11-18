@@ -97,7 +97,11 @@ func TestPinnedCodexPreviousHostStarts(t *testing.T) {
 				return out, err
 			}
 			d.remote = func(ctx context.Context, s Settings, _ bool, pid int) (codexHostRemote, error) {
-				return probeCodexHostRemote(ctx, s, false, pid)
+				remote, err := probeCodexHostRemote(ctx, s, false, pid)
+				if err == nil && remote.Connection != "disabled" {
+					return codexHostRemote{}, errCodexHostUnknown
+				}
+				return remote, err
 			}
 			t.Cleanup(func() {
 				if starts != 0 {
@@ -123,7 +127,7 @@ func TestPinnedCodexPreviousHostStarts(t *testing.T) {
 				t.Fatalf("previous host: starts=%d updates=%d err=%v", starts, updates, err)
 			}
 			saved, err := hostLifecycle(s)
-			if err != nil || saved.CLI != managedCodexVersion || saved.Phase != "Confirmed" {
+			if err != nil || saved.CLI != managedCodexVersion || saved.Phase != "Confirmed" || saved.PodUID != s.PodUID {
 				t.Fatalf("new receipt: %+v %v", saved, err)
 			}
 			managed, err := codexHostManagedBin(s)
@@ -246,7 +250,7 @@ func TestPinnedCodexHomeLayout(t *testing.T) {
 	_ = stdin.Close()
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
-	cmd.Process = nil // Cleanup below is replaced after the explicit bounded wait.
+	cmd.Process = nil // Deferred cleanup handles only an early failure.
 	entries, err := os.ReadDir(codexHome)
 	if err != nil {
 		t.Fatal(err)
