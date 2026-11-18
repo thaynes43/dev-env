@@ -1786,6 +1786,30 @@ An unknown create result (`ledger-unavailable`) and an unrecorded refusal
 can each renew one mark and attempt one create per pass; their repeated
 renewals can also keep the queue place occupied without a time bound.
 
+**Correction, 2026-11-16: story 802, coordinator rulings; not a ruling by Tom.**
+The shared encoder reserves the longest mutable clock and attempt timestamps
+and the name growth still possible for every filing charge: up to three bytes
+for `-2` through `-99`. It identifies the base by the charge's request hash,
+including a base that itself ends in a numeric suffix. Rebinding consumes that
+reserve; every other writer preserves it. The wire schema is unchanged.
+Legacy or externally grown entries can still be full.
+
+A charged Pending filing keeps one place in its caller's applicable queue,
+even after its last attempt is 15 minutes old; a missing policy match still
+counts it in every queue. There is no gap at a retry window boundary: a full queue cannot acquire another
+charged filing merely because an older mark ages out. The 232-charge example
+above remains a byte-cap illustration, not queue capacity under unchanged
+limits. Filed
+hands accounting to the child. Abandoned removes the Pending keep immediately
+and never renews a mark. With no unsettled child, its ledger charge is eligible
+for pruning on the first shared write at or after all three conditions hold:
+Abandoned is recorded, `at + 65 minutes`, and `attempt + 15 minutes`. Its
+absent-child queue count ends at the later of Abandoned and
+`attempt + 15 minutes`. These are eligibility times; the ledger entry bytes
+are removed only by a later writer's prune. No abandonment pass charges,
+marks or creates. This correction supersedes the queue gaps and the missing
+name reserve described above; it preserves the original charge time.
+
 ## 6. Contracts per build story
 
 ### 6.1 OP735: the ops egress tier
@@ -2642,6 +2666,158 @@ reap, or sends a page. The existing limit remains: a create already received
 by Kubernetes is not server-fenced against a later deletion/rebinding of its
 name while the old request is in flight.
 
+**Correction, 2026-11-16: story 802, coordinator rulings; not a ruling by Tom.**
+At the first filing pass at or after `closed.at + 24 hours`, before policy,
+retry-window or ledger checks, the leader lists uncached by `filed-for-uid`
+once more. An existing child is recorded Filed, at any age. Otherwise one
+optimistic status patch sets Abandoned, keeps the last typed blocked word
+(or `not-filed` if absent), clears the pending condition and appends exactly
+one `escalation-abandoned` event at that pass's time. No charge, mark or create
+runs in that abandonment step. A failed list leaves Pending; a conflict or
+unknown write result is replayed from an uncached Session read next pass.
+Filed and Abandoned never change. Before every later ledger step and create,
+the leader rechecks the same-UID Pending record and the 24-hour bound; the
+create deadline is also capped at the bound. The existing limit on a request
+already received by Kubernetes remains; this adds no server-side create fence.
+The late name-collision delay described above is unchanged.
+
+The operator's `reconcileSummonReap` holds its Session delete while a
+remediation's filing is Pending. Filed deletes immediately. Abandoned deletes
+at or after its event's `at + 10 minutes`; this replaces the earlier proposal
+that the filing takes it from a record that survives the Session (768 comment
+7415). No new store exists. A person's reap closed failed with no filing
+still deletes immediately. Stop and lane release continue while deletion is
+held, including a reported/released task: its accepted reap suspends it and
+uses the existing executor-stop path, retaining owner holds. The held reap is
+checked again within a minute. A healthy controller
+that abandons at the bound deliberately retains the Session for at most
+24 hours 10 minutes from close, plus pass/reconcile scheduling. A delayed
+abandonment starts its ten minutes at the actual event time. API failures,
+controller downtime and a failed final list can delay this; no finite outage
+bound is claimed. Other deletion paths, including deletion past the API, are
+unchanged and can still remove a record before the keeper sees it.
+One identifier-only log line describes each held delete. Sending either
+filing event is story 803: install one compatible operator pin, with no CRD,
+RBAC or flag change, and do not use a real remediation before 803 pages them.
+
+
+**Correction, 2026-11-16: story 802 fix round 1, coordinator rulings; not a ruling by Tom.**
+This adds to the earlier dated corrections; none was edited in place. The
+last Pending read is an observation, not a fence against a later request.
+From `closed.at + 24 hours - 10 minutes`, by the attempting leader's own
+clock, no new filing charge, mark, name rebind or create starts. The leader
+checks the window before dependencies, again after their reads before a
+ledger write, and after the last Pending read before a create. The create's
+two-minute deadline remains anchored before its mark, so the latest allowed
+create deadline is at least eight minutes before the bound on that leader's
+clock. Abandonment still starts only at or after the 24-hour bound.
+
+Inside the guard window a label-found child can still be recorded Filed.
+Otherwise status stays Pending with exactly its previous typed blocked word
+(or no word if none was stored); there is no new guard-window word. A policy
+restored eleven minutes before the bound can file; one restored nine minutes
+before cannot attempt and, without a child, becomes Abandoned at the bound.
+
+The promise is conditional: no charge, mark, rebind or create **starts after
+Abandoned** when the attempting leader's clock lag behind the abandoning
+leader plus the delay from its final local clock check to its request is
+strictly below ten minutes. For example, lag under eight minutes and delay
+at most two minutes satisfy that combined bound. Separate limits of eight
+minutes on both lag and pause do not. The create has its existing two-minute
+deadline, anchored before the mark; charge, mark and rebind use the admission
+leader's context and Kubernetes client without a per-attempt timeout in this
+path. Those ledger requests have no enforced two-minute delay bound. A
+process pause or clock rollback outside the combined assumption voids this
+promise. A request already received by Kubernetes can still commit later:
+there is no server-side fence, transaction across the Session and ledger, or
+atomic ordering with child creation. The earlier already-received-request
+and paused-process limits remain beside this explicit clock assumption.
+
+An accepted reap of a closed, terminal summoned session also ends its access.
+The broker treats that requester as ended and wakes its grants on the
+transition, even while a Pending filing keeps the Session record and an
+owner hold delays executor stop. On reconciliation the existing end path
+revokes an Active grant and records Released (or denies an unanswered grant),
+without waiting for deletion or its original expiry. Event delivery, broker
+availability and successful cleanup still govern when revocation completes,
+as with deletion before the hold. Requester identity remains available for
+token cleanup. A closed session without a reap retains its grants; delegated
+approval's own checks and expiry/release rules are unchanged. No operator
+release API is needed: access enforcement and revocation belong to the broker.
+This fix round needs compatible operator **and broker** image pins; the earlier
+one-operator-pin install note is insufficient for the grant fix. Slice b's
+CRD must already be installed. The story 803 gate for real remediations stays.
+
+**Correction, 2026-11-18: story 802 gate review (gpt-6-astra, 2026-11-18),
+findings H1, H2, M1; coordinator rulings R4 and R5; not a ruling by Tom.**
+This replaces the two-term clock-lag-plus-delay promise and the claim that no
+request starts inside the final ten minutes in PR #1172's 2026-11-16 correction
+(story 802 fix round 1) above. Earlier dated lines are retained as history. The
+gate review is the Codex review named by the owner on 2026-11-18 (item 751,
+comment 8880),
+report `reviews/op802-review-3.md` in the coordinator's handoff.
+
+R4 keeps the behavior and withdraws the review order's claim that creates off
+alone makes installation inert. The historical install observation above and
+in the workflow guide already has two conditions: creates are off **and no
+Session with a caller exists**. The flag prevents new creates; it does not
+stop recovery or abandonment of stored Pending filings at 24 hours, the reap
+hold while Pending and for ten minutes after Abandoned, or the broker ending
+a reaped summoned requester's grants. Existing caller ledger entries also
+receive the queue/reserve rules when a shared writer processes them. Before
+requesting any pin, the coordinator must read and record absence of caller
+Sessions as well as the flag state; the flag alone is insufficient. The
+coordinator reported a 2026-11-18T01:25Z read of 502 Sessions with no
+`spec.caller` or `status.summon`, and no operator `--summon-create-kinds` flag.
+That is a dated coordinator observation, not a live check by this fixer.
+Caller-empty Sessions bypass the filing, reap-hold and new broker end rules.
+
+R5 keeps the guard code. Each request's **last local check** must observe a
+time strictly before `closed.at + 23h50m`. A delay after that check may carry
+the request start into the window. No charge, mark, rebind or create starts
+after stored Abandoned only when, at request start, the abandoning leader's
+wall clock is ahead of the attempting leader's last local reading by
+**strictly less than ten minutes**. That quantity includes the sum of replica
+clock lag, elapsed check-to-request delay, and any forward wall-clock step in
+between. All three must fit the margin together. DESIGN-064 5.9's older
+allowance of five minutes of skew and a five-minute forward step consumes the
+whole margin and leaves none for delay; equality does not meet this promise.
+
+This is an assumption about clocks that no code enforces. The create has a
+two-minute process-clock deadline anchored before its mark, also capped
+against the wall-clock bound. Ledger writes have no per-attempt timeout.
+Nothing bounds a process pause between any successful local check and its
+request invocation; a client deadline is not server-side exclusion. No code
+bounds replica lag or forward steps. A backward step is outside the promise:
+it can reopen the local guard while the filing is Pending and delays
+abandonment and reap. Nothing persists that the window was entered.
+
+Two exceptions remain: a request already received by the API server may commit
+after abandonment, and a schedule outside the bound may start a request after
+Abandoned. A fence without this clock assumption would need a server-side
+exclusion protocol and its own design. The coordinator accepts the assumption
+for this story; this is not a ruling by Tom. The child and its parent's status
+are different objects: a late child may coexist with Abandoned, while the
+record never becomes both Filed and Abandoned.
+
+`TestSummonFilingForwardStepBeyondMarginIsOutsidePromise` preserves the gate
+review's eleven-minute shared-clock step after the final sample for charge,
+mark, rebind and create: exactly one request starts after stored Abandoned.
+`TestSummonFilingForwardStepWithinRemainingMargin` pairs each with a nine-minute
+step: the request starts before abandonment, and no request starts after it.
+`TestSummonFilingGuardAfterDeadlineConstruction` crosses the window inside the
+injected deadline hook, after the earlier Pending-read check, and independently
+requires the last pre-create check to suppress Create (M1).
+`TestSummonFilingAbandonedOnTheCRD` abandons with create kinds unset;
+`TestSummonReapLongestFilingHold` now proves the whole Pending/Abandoned hold
+with them unset too. `TestBrokerHeldReapEndsGrants` exercises the broker, which
+has no create switch. Caller-empty controls are
+`TestSummonFilingAndReapIgnoreSessionWithoutCaller` and
+`TestBrokerReapEndRequiresClosedSummonedRequester/ordinary`.
+Installation requires compatible operator **and broker** pins with slice b's
+CRD already installed. Real remediations still wait for story 803's pages.
+Nothing in this correction is installation or live acceptance evidence.
+
 ### 6.7 OP741: lanes, holds, the latch and the watchdog
 
 **Correction, 2026-11-12 (story 779, slice c of #741; written by the
@@ -2868,6 +3044,14 @@ worker (notes op782-q-1 and op782-q-2, also not Tom's) are folded in.
   close; with a 60-second tick its page (or digest line) can be missed. It is
   revisited with story 768's record that survives the Session (768 comment
   7415).
+- *Correction, 2026-11-16: story 802, coordinator rulings; not a ruling by
+  Tom.* Q10's immediate-delete limit is narrowed only for the operator's own
+  reap of a remediation with a filing: Pending is kept, Filed deletes at
+  once, Abandoned is kept until its event plus ten minutes (6.6). A person's
+  failed reap has no filing and still deletes at once. There is no record
+  surviving the Session. Other deletes, or keeper downtime longer than the
+  retained window, can still lose the page or digest line. The hold is an
+  opportunity to read the record, never proof of a send.
 - *Nothing is retried.* Each event gets one attempt: an unknown result is
   recorded `ambiguous`, a refusal `failed`, an attempt whose result was never
   stored stays `recorded`, and none is sent again. While the Pushover
@@ -3428,6 +3612,79 @@ directly; that is a new holder of a credential and needs Tom.
 records `escalation-pending` on the remediation, once, when first blocked.
 The schema also admits `escalation-abandoned`, atomically with Abandoned, for
 OP802. OP803 owns both sends; this slice adds no page text or delivery.
+
+**Correction, 2026-11-16: story 796, coordinator rulings; not a ruling by
+Tom.** Item 745 comment 7680 (O4, O9, O13), slice plan 745c and coordinator
+answer `op796-build-1-q-1` govern the following. Earlier corrections stay.
+
+- The keeper now renders `escalation-started`, only for a remote escalation
+  with the recorded event and a settled `status.summon.registration`
+  (`registered` or `unavailable`, with its settlement time). Live Remote
+  Control state alone never causes a page or consumes an attempt.
+- With recorded `registered` and a live URL passing
+  `summonoutcome.VerifiedRemoteControlLink`, the page says
+  `[dev-env] escalation-started: escalation <name> is running and registered
+  with the Claude app. Brief: unknown.` Its link says `Open the session`.
+  With recorded `registered` but no verified live URL it says
+  `escalation <name> registered, but its link is gone (Remote Control
+  <state>). Brief: unknown.` and links that session's console page.
+  With recorded `unavailable` it says `escalation <name> is running, but
+  Remote Control is not available (<reason>). Join it from the console, or
+  attach: agent-run attach <name>. Brief: unknown.` and links the console
+  page, even if a live link has since appeared. These last two texts have
+  the same `[dev-env] escalation-started:` prefix.
+- The state is only `registered`, `starting`, `offline` or `login-required`;
+  any other or absent state is `unknown`. The recorded reason is only
+  `starting`, `offline`, `login-required`, `link-unverified`, `name-mismatch`
+  or `not-reported`; any other is `unknown`. No session note, title, caller
+  text or agent message enters this new page. Older templates keep their
+  existing note contract. Story 795 has not defined the delivery field:
+  `Brief: unknown` is deliberate, with no invented wire field; story 795
+  must connect its delivery state to this renderer.
+- Every session page's console fallback is now
+  `/portal/projects/dev-env/environments/internal/sessions?session=<uid>`.
+  The UID must match the portal's `^[A-Za-z0-9-]{1,64}$`; otherwise the link
+  stays the sessions list. The standalone pager drill, `more-events`,
+  overflow and the digest still link the list because they have no session.
+- O9's drill policy is reserved as exactly
+  `spec.caller: dev-env-drill.summon-drill`. Every page of such a session
+  starts `DRILL` in both title and message. Another namespace, suffix, case,
+  or the same text in a session's name, title or note cannot choose it.
+  The eventual drill must use a CallerPolicy of that exact name; another
+  name is a code change. This story creates no flag, policy or identity,
+  and does not settle who may start the drill (O8).
+- The existing write-before-send ledger, one attempt per UID and event
+  across keeper restarts, no retry and rolling six-per-hour cap apply.
+  Install with a keeper pin together with or after stories 782, 792 and
+  793, with story 794's settlement available. No new RBAC is needed. Source
+  and fake-endpoint tests do not prove install or phone delivery; story
+  745's drill remains the acceptance check.
+
+**Correction, 2026-11-18: story 796 gate review (gpt-6-astra, 2026-11-18), finding A-1; coordinator ruling R1; not a ruling by Tom.**
+The first reserved name, `dev-env-system.summon-drill`, could not be admitted
+by any CallerPolicy: its required account `dev-env-system/summon-drill` is
+in a forbidden platform namespace. R1 replaces it with
+`dev-env-drill.summon-drill`, the CallerPolicy name for
+`dev-env-drill/summon-drill`. This remains one source constant, with no flag,
+option or environment variable. The three forbidden namespaces are unchanged.
+No namespace, account or policy is created. Who may start the drill remains
+Tom's open question O8; an answer requiring another identity needs a code
+change to the constant. Local CRD admission, API caller derivation and
+fake-endpoint rendering tests prove the supported name, not installed or
+accepted phone delivery.
+
+**Correction, 2026-11-18: story 796 re-read (gpt-6-astra, 2026-11-18); coordinator ruling R6; not a ruling by Tom.**
+The reserved name marks a caller, not a purpose: once its policy exists,
+anyone allowed to use `dev-env-drill/summon-drill` can send a real escalation
+whose eligible pages say `DRILL`. The enrollment PR must create the namespace
+and account for drill-only use and name who may create and use them; add the
+account to the protected workload/token and exec identity lists
+([5.8's 2026-11-13 correction](#58-what-a-steered-ops-session-can-still-reach-f1):
+"Every new summoning caller joins that list in the PR that adds its
+CallerPolicy"); give the policy one remote escalation entry; remove the
+policy, account and namespace after the drill; and forbid reuse of the name
+for any other purpose. None of these enrollment actions is part of story
+796. Who may start the drill remains Tom's open question O8.
 
 ### 6.9 OP743: quota priority and the fallback model
 

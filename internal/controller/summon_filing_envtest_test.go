@@ -79,3 +79,51 @@ func TestSummonFilingRefusesUnknownBlockedWord(t *testing.T) {
 		}
 	}
 }
+
+// The production abandonment patch and its terminal replay run against the
+// installed, unchanged CRD. Every blocked word and the empty fallback survives.
+func TestSummonFilingAbandonedOnTheCRD(t *testing.T) {
+	for _, word := range []v1alpha1.SummonFilingReason{"", "policy-gone", "policy-no-escalations", "hour-full", "queue-full", "remote-off", "ledger-unavailable", "no-free-name", "entry-full", "child-invalid", "create-refused"} {
+		t.Run(string(word), func(t *testing.T) {
+			s := newSession(t, func(s *v1alpha1.AgentSession) {
+				s.Spec.Caller = callerA
+				s.Spec.Parent = callerParent(callerA)
+				s.Spec.Profile = "ops"
+				s.Spec.Lane = v1alpha1.LaneRemediation
+				s.Spec.Summon = remediationSummon()
+			})
+			at := metav1.NewTime(summonT0)
+			s.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, At: &at}
+			s.Status.Summon = &v1alpha1.SummonStatus{Closed: &v1alpha1.SummonClosedStatus{At: at, Source: "report", Reason: "escalate", Released: true}, Escalation: &v1alpha1.SummonEscalationStatus{State: v1alpha1.SummonEscalationPending, Name: "esc-" + s.Name, Reason: word}}
+			if err := k8s.Status().Update(context.Background(), s); err != nil {
+				t.Fatal(err)
+			}
+			now := summonT0.Add(24 * time.Hour)
+			r := &Reconciler{Client: k8s, APIReader: k8s, Now: func() time.Time { return now }}
+			if err := r.summonFile(context.Background(), session(t, s.Name)); err != nil {
+				t.Fatal(err)
+			}
+			stored := session(t, s.Name)
+			reason := word
+			if reason == "" {
+				reason = summonoutcome.FilingNotFiled
+			}
+			st := stored.Status.Summon
+			if st.Escalation.State != v1alpha1.SummonEscalationAbandoned || st.Escalation.Reason != reason || len(st.Pages) != 1 || st.Pages[0].Event != v1alpha1.PageEscalationAbandoned {
+				t.Fatalf("CRD did not retain abandonment: %+v", st)
+			}
+			if err := r.summonFile(context.Background(), stored.DeepCopy()); err != nil {
+				t.Fatal(err)
+			}
+			if got := session(t, s.Name); got.ResourceVersion != stored.ResourceVersion {
+				t.Fatal("terminal replay changed the record")
+			}
+			changed := stored.DeepCopy()
+			changed.Status.Summon.Escalation.State = v1alpha1.SummonEscalationPending
+			changed.Status.Summon.Pages = nil
+			if err := k8s.Status().Update(context.Background(), changed); err == nil {
+				t.Fatal("CRD allowed Abandoned to reopen")
+			}
+		})
+	}
+}

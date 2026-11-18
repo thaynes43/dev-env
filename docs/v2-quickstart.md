@@ -768,6 +768,8 @@ distroless, so there is no shell: that one binary is all it runs.
 
 ### Look up the pages the keeper sent
 
+The escalation-started page says it registered with the Claude app and links the session, or says why that link is unavailable and links its console page; it says `Brief: unknown` until delivery reporting is built. Pages whose API-derived caller is exactly `dev-env-drill.summon-drill` start `DRILL` in title and message; that drill account and policy have not been created.
+
 **This lists keeper pages only. It is not all Pushover history.** The keeper
 writes each page it sends into its notice ConfigMap before it sends, then the
 outcome. `agent-run pages` reads that record. It is offline: it calls no API and

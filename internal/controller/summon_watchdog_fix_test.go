@@ -84,6 +84,7 @@ func TestSummonRecordedReapDeletePreconditions(t *testing.T) {
 			}, w.now); err != nil {
 				t.Fatal(err)
 			}
+			settleReapFilingFixture(t, w, s.Name)
 			before := w.get(s.Name)
 			deletes := 0
 			refused := errors.New("delete unavailable")

@@ -66,9 +66,8 @@ const (
 	// bounded, not one bounded operation (story 782 fix round 3).
 	summonPagesRequestTimeout = noticeStoreTimeout
 	summonNoteMax             = 200
-	// summonConsolePath is the console's sessions list: the link of a page
-	// whose session has no verified link (6.8; the console has no per-session
-	// page whose pattern this slice could verify).
+	// summonConsolePath is the console's sessions list. Session pages add a
+	// checked UID query; the standalone drill and more-events use the list.
 	summonConsolePath = "/portal/projects/dev-env/environments/internal/sessions"
 	summonPageSender  = "dev-env-keeper"
 	summonPageSource  = "summon-pages"
@@ -699,6 +698,9 @@ func summonJobs(s *v1alpha1.AgentSession) []summonJob {
 	var out []summonJob
 	if s.Status.Summon != nil {
 		for _, pg := range s.Status.Summon.Pages {
+			if pg.Event == v1alpha1.PageEscalationStarted && !summonStartedSettled(s) {
+				continue // live registration alone never authorizes this page
+			}
 			if _, ok := summonLifecycle[pg.Event]; ok {
 				out = append(out, summonJob{key: string(s.UID) + "/" + string(pg.Event), event: string(pg.Event), at: pg.At.Time, session: s})
 			}
@@ -779,16 +781,16 @@ func sessionName(s *v1alpha1.AgentSession) string {
 func summonRecordKey(ledgerKey string) string { return "summon/" + ledgerKey }
 
 // summonLifecycle is the template row of each lifecycle event this keeper
-// sends. Stories 768 and 745 add theirs here when they add the event.
+// sends. The started row is rendered from its recorded settlement below.
 var summonLifecycle = map[v1alpha1.SummonPageEvent]string{
 	v1alpha1.PageEscalationHeld:     "escalation %s has waited more than 15 minutes for a slot.",
 	v1alpha1.PageEscalationReminder: "escalation %s has been idle for 24 hours.",
+	v1alpha1.PageEscalationStarted:  "escalation %s is running and registered with the Claude app.",
 }
 
 var (
-	// summonVerifiedLink is status.remoteControl.url as agentd writes it for a
-	// registered session (internal/agentd/remote.go): nothing else is a link.
-	summonVerifiedLink = regexp.MustCompile(`^https://claude\.ai/code/session_[A-Za-z0-9_-]{1,120}$`)
+	// The portal's sessionUIDQuery (web/portal/session/product_conversation.go).
+	summonConsoleUID = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 	// summonSchemeLink finds a scheme link in a note: a scheme with //, or a
 	// scheme Pushover or a phone could open written with its colon only
 	// (group 1). The pattern asks nothing of what stands before it (no \b,
@@ -1033,6 +1035,12 @@ func (p *summonPager) render(j summonJob) (Notice, pages.Page) {
 		return n, rec
 	}
 	s := j.session
+	if summonConsoleUID.MatchString(string(s.UID)) {
+		n.URL, n.URLTitle = console+"?session="+string(s.UID), "Open the session"
+	}
+	if j.event == string(v1alpha1.PageEscalationStarted) {
+		return p.renderStarted(j, n, rec)
+	}
 	name, caller, lane := summonStoredName(s.Name), summonStoredName(s.Spec.Caller), summonWord(string(s.Spec.Lane))
 	var head string
 	switch {
@@ -1060,10 +1068,71 @@ func (p *summonPager) render(j summonJob) (Notice, pages.Page) {
 	if shown := summonNote(note); shown != "" {
 		n.Message += "\nsession note: " + shown
 	}
-	if rc := s.Status.RemoteControl; rc != nil && summonVerifiedLink.MatchString(rc.URL) {
+	if rc := s.Status.RemoteControl; rc != nil && summonoutcome.VerifiedRemoteControlLink(rc.URL) {
 		n.URL, n.URLTitle = rc.URL, "Open the session"
 	}
 	rec.Title, rec.Correlation = n.Title, name
 	rec.Body = fmt.Sprintf("session %s, note %d bytes", name, len(note))
+	summonMarkDrill(s, &n, &rec)
 	return n, rec
+}
+
+// summonStartedSettled is a defensive read gate, not another settlement.
+// The operator writes the result, time and lifecycle event together (794).
+func summonStartedSettled(s *v1alpha1.AgentSession) bool {
+	if s.Spec.Mode != v1alpha1.ModeRemote || s.Spec.Lane != v1alpha1.LaneEscalation || s.Status.Summon == nil {
+		return false
+	}
+	r := s.Status.Summon.Registration
+	return r != nil && r.At != nil && !r.At.IsZero() &&
+		(r.Result == v1alpha1.RegistrationRegistered || r.Result == v1alpha1.RegistrationUnavailable)
+}
+
+// renderStarted reads the recorded result first. A later registration never
+// replaces unavailable; a missing or unverified live URL never becomes a link.
+// Only closed words and the stored name enter this page. In particular, no
+// outcome note, title, agent message or Remote Control name is rendered.
+func (p *summonPager) renderStarted(j summonJob, n Notice, rec pages.Page) (Notice, pages.Page) {
+	s := j.session
+	name := summonStoredName(s.Name)
+	r := s.Status.Summon.Registration
+	var head string
+	if r.Result == v1alpha1.RegistrationRegistered {
+		if rc := s.Status.RemoteControl; rc != nil && summonoutcome.VerifiedRemoteControlLink(rc.URL) {
+			head = fmt.Sprintf(summonLifecycle[v1alpha1.PageEscalationStarted], name)
+			n.URL, n.URLTitle = rc.URL, "Open the session"
+		} else {
+			state := "unknown"
+			if rc != nil {
+				switch rc.State {
+				case "registered", "starting", "offline", "login-required":
+					state = rc.State
+				}
+			}
+			head = fmt.Sprintf("escalation %s registered, but its link is gone (Remote Control %s).", name, state)
+		}
+	} else {
+		reason := "unknown"
+		switch r.Reason {
+		case v1alpha1.RegistrationReasonStarting, v1alpha1.RegistrationReasonOffline,
+			v1alpha1.RegistrationReasonLoginRequired, v1alpha1.RegistrationReasonLinkUnverified,
+			v1alpha1.RegistrationReasonNameMismatch, v1alpha1.RegistrationReasonNotReported:
+			reason = string(r.Reason)
+		}
+		head = fmt.Sprintf("escalation %s is running, but Remote Control is not available (%s). Join it from the console, or attach: agent-run attach %s.", name, reason, name)
+	}
+	n.Title = "[dev-env] " + j.event
+	// Story 795 supplies the delivery field; it does not exist in this API.
+	// Do not infer delivery from the agent's state or invent a wire field.
+	n.Message = fmt.Sprintf("[dev-env] %s: %s Brief: unknown.", j.event, head)
+	rec.Title, rec.Correlation, rec.Body = n.Title, name, "session "+name
+	summonMarkDrill(s, &n, &rec)
+	return n, rec
+}
+
+func summonMarkDrill(s *v1alpha1.AgentSession, n *Notice, rec *pages.Page) {
+	if s.Spec.Caller == summonoutcome.DrillCaller {
+		n.Title, n.Message = "DRILL "+n.Title, "DRILL "+n.Message
+		rec.Title = n.Title
+	}
 }

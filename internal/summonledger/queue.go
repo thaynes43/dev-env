@@ -75,16 +75,22 @@ func Granted(g Grants, s *v1alpha1.AgentSession) bool {
 // policy's name and its ledger key. It is the caller's Queued sessions in q
 // (summonoutcome.Queued; a session grants holds is admitted, not Queued), each
 // in the queue of its own priority and lane, and its charges in q that have no
-// Session and whose attempt mark is younger than AttemptHold. skip, the
-// dispatch being decided, is not counted.
+// Session and whose attempt mark is younger than AttemptHold, or whose
+// remediation still has a Pending filing (OP802). skip, the dispatch being
+// decided, is not counted. Settling the filing ends only the Pending hold;
+// the last mark still counts for its remaining AttemptHold.
 //
 // p, the caller's policy, only places a charge in its queues (ChargeQueues)
 // and is never dereferenced here. A nil p, a policy that is gone, counts each
 // such charge in every queue; the sessions are counted as with a policy.
 func QueueCount(caller string, p *v1alpha1.CallerPolicy, charges []Charge, sessions []v1alpha1.AgentSession, byID map[string]*v1alpha1.AgentSession, grants Grants, q Queue, skip string, now time.Time) int {
 	n := 0
+	pending := map[string]bool{}
 	for i := range sessions {
 		it := &sessions[i]
+		if it.Spec.Caller == caller && pendingFiling(it) {
+			pending[FilingID(it.UID)] = true
+		}
 		if it.Spec.Caller != caller || it.Spec.Summon == nil || it.Spec.Summon.DispatchID == skip {
 			continue
 		}
@@ -93,7 +99,7 @@ func QueueCount(caller string, p *v1alpha1.CallerPolicy, charges []Charge, sessi
 		}
 	}
 	for _, ch := range charges {
-		if ch.ID == skip || byID[ch.ID] != nil || now.Sub(ch.Attempt) >= AttemptHold {
+		if ch.ID == skip || byID[ch.ID] != nil || !pending[ch.ID] && now.Sub(ch.Attempt) >= AttemptHold {
 			continue
 		}
 		if slices.Contains(ChargeQueues(p, ch.Hash, ch.Name), q) {
