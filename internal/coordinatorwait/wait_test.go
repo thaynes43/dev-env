@@ -654,3 +654,41 @@ func TestDirectoryReplacementWithSameSizeAndTimeIsNew(t *testing.T) {
 		t.Fatal("new file identity hidden by matching size and timestamp")
 	}
 }
+
+func TestRuntimeImmediateWaitingReadPaced(t *testing.T) {
+	rt, c, _ := fakeRuntime(t)
+	seen := make(chan string, 2)
+	rt.Notes = func(_ context.Context, cursor string, _ time.Duration) (Note, error) {
+		seen <- cursor
+		if cursor == "42" {
+			return Note{Cursor: "43"}, nil
+		}
+		return Note{Name: "next-note", Cursor: "44"}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := runFake(ctx, rt, record())
+	if <-seen != "42" {
+		t.Fatal("initial cursor")
+	}
+	<-c.timers // initial held read's timer
+	if d := <-c.timers; d != 10*time.Second {
+		t.Fatalf("next read scheduled after %s, want one scan interval", d)
+	}
+	// The next loop is now blocked on the fake timer. Advancing short of the
+	// interval cannot release it, so a second read would violate the guard.
+	c.Step(9 * time.Second)
+	select {
+	case cursor := <-seen:
+		t.Fatalf("read before scan interval: %s", cursor)
+	default:
+	}
+	c.Step(time.Second)
+	if cursor := <-seen; cursor != "43" {
+		t.Fatal("returned cursor not used")
+	}
+	out := <-done
+	if out.err != nil || out.result.Kind != "note" {
+		t.Fatalf("paced read: %#v", out)
+	}
+}
