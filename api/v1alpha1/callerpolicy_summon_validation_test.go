@@ -26,6 +26,11 @@ func TestSummonDrillCallerPolicyAdmission(t *testing.T) {
 		if err := k8s.Create(ctx(t), p); err != nil {
 			t.Fatalf("reserved drill CallerPolicy must be admitted: %v", err)
 		}
+		t.Cleanup(func() {
+			if err := k8s.Delete(ctx(t), p); err != nil {
+				t.Errorf("delete reserved test CallerPolicy: %v", err)
+			}
+		})
 	})
 	t.Run("ordinary caller admitted", func(t *testing.T) {
 		p := summonPolicy(summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneEscalation))
@@ -36,6 +41,11 @@ func TestSummonDrillCallerPolicyAdmission(t *testing.T) {
 		if err := k8s.Create(ctx(t), p); err != nil {
 			t.Fatalf("ordinary CallerPolicy must be admitted: %v", err)
 		}
+		t.Cleanup(func() {
+			if err := k8s.Delete(ctx(t), p); err != nil {
+				t.Errorf("delete ordinary test CallerPolicy: %v", err)
+			}
+		})
 	})
 	t.Run("old platform caller refused", func(t *testing.T) {
 		p := summonPolicy(summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneEscalation))
