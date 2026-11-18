@@ -328,7 +328,7 @@ func (r *Record) validateResult(e Result, complete bool) error {
 			return errors.New("invalid terminal result")
 		}
 	case "resync":
-		if !(refusalReason(e.Reason) || (complete && e.Reason == "")) || e.Note != "" || e.Path != "" {
+		if !refusalReason(e.Reason) && (!complete || e.Reason != "") || e.Note != "" || e.Path != "" {
 			return errors.New("invalid refusal result")
 		}
 	case "note":
