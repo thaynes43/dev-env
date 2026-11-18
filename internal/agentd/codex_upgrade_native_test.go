@@ -40,13 +40,18 @@ func pinnedCodexBinary(t *testing.T) string {
 
 func TestPinnedCodexPreviousHostStarts(t *testing.T) {
 	binary := pinnedCodexBinary(t)
-	for _, version := range []string{previousPinnedCodexVersion, "0.168.0"} {
-		t.Run(version, func(t *testing.T) {
+	for _, fixture := range []struct{ receipt, pkg string }{
+		{previousPinnedCodexVersion, previousPinnedCodexVersion},
+		{"0.168.0", previousPinnedCodexVersion},
+		{previousPinnedCodexVersion, "0.168.0"},
+	} {
+		t.Run("receipt-"+fixture.receipt+"/package-"+fixture.pkg, func(t *testing.T) {
+			version := fixture.pkg
 			s, o := hostFixtureAt(t, testsock.ShortDir(t, "cu"))
 			s.CodexBin = binary
 			prior := s
 			prior.PodUID = "previous-fixture-pod"
-			before := writeVersionedHostReceipt(t, prior, "Stopped", version)
+			before := writeVersionedHostReceipt(t, prior, "Stopped", fixture.receipt)
 			// A stopped old package: no native process, real identifiers or auth.
 			root := filepath.Join(s.CodexHome, "packages", "app-server-daemon")
 			release := filepath.Join(root, "releases", version+"-x86_64-unknown-linux-musl")
@@ -104,7 +109,7 @@ func TestPinnedCodexPreviousHostStarts(t *testing.T) {
 				}
 			})
 			err := startCodexHost(ctx, s, o, d)
-			if version != previousPinnedCodexVersion {
+			if fixture.receipt != previousPinnedCodexVersion || fixture.pkg != previousPinnedCodexVersion {
 				if err == nil || starts != 0 || updates != 0 {
 					t.Fatal("unknown version was not refused before native action")
 				}

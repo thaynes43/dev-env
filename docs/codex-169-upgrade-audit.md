@@ -171,7 +171,7 @@ process state never permits replacement.
 Image CI extracts the complete package from the built image, not a bare binary.
 A synthetic retained HOME with a 0.160.1 Stopped receipt, old release/current/bin
 layout and history sentinel must start through real 0.169.1 package replacement;
-the same HOME at an unrelated version refuses before mutation. This exercises
+an unrelated receipt version or package version each refuses before mutation. This exercises
 native daemon startup and peer/version RPC, with remote enrollment suppressed,
 mount preflight and auth projection stubbed. It does not prove actual pairing,
 relay connectivity or keeper-generation adoption.
