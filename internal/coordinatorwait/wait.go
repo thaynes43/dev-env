@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -67,6 +68,7 @@ type Record struct {
 	Refused       []string           `json:"refused,omitempty"`
 	Pending       []Result           `json:"pending"`
 	Seen          []string           `json:"seen"`
+	Transitions   uint64             `json:"transitions"`
 	Sequence      uint64             `json:"sequence"`
 	Outstanding   *Result            `json:"outstanding,omitempty"`
 	LastID        string             `json:"lastID,omitempty"`
@@ -207,7 +209,12 @@ func (r *Record) Scan(files map[string]string, overflow bool) {
 		return
 	}
 	if changed {
-		r.add(Result{Kind: "file", ID: digest("file:" + r.Watermark), Path: r.Options.Directory})
+		if r.Transitions >= 1<<63 {
+			r.resync()
+			return
+		}
+		r.Transitions++
+		r.add(Result{Kind: "file", ID: fileID(r.Watermark, r.Transitions), Path: r.Options.Directory})
 	}
 }
 
@@ -259,6 +266,22 @@ func (r *Record) Take(now time.Time, stop bool) *Result {
 	return &e
 }
 
+// File IDs carry the monotonic transition in their first 16 hex digits, then
+// 192 hash bits. The private pending ID therefore also detects counter rollback
+// without adding a field to the metadata output or an unbounded receipt map.
+func fileID(mark string, transition uint64) string {
+	hash := digest(fmt.Sprintf("file:%d:%s", transition, mark))
+	return fmt.Sprintf("%016x%s", transition, hash[16:])
+}
+
+func fileTransition(id string) uint64 {
+	if !validID(id) {
+		return 0
+	}
+	transition, _ := strconv.ParseUint(id[:16], 16, 64)
+	return transition
+}
+
 func digest(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 func watermark(files map[string]string) string {
 	keys := make([]string, 0, len(files))
@@ -282,7 +305,7 @@ func (r *Record) validate() error {
 	if r.DirectoryPin != nil && (r.DirectoryPin.Path != r.Options.Directory || r.DirectoryPin.Inode == 0) {
 		return errors.New("invalid directory pin")
 	}
-	if r.Watermark != watermark(r.Files) || r.Sequence > 1<<63 {
+	if r.Watermark != watermark(r.Files) || r.Sequence > 1<<63 || r.Transitions > 1<<63 {
 		return errors.New("invalid checkpoint")
 	}
 	if len(r.Refused) > r.Options.MaxEntries {
@@ -336,6 +359,10 @@ func (r *Record) validateResult(e Result, complete bool) error {
 			return errors.New("invalid note reference")
 		}
 	case "file":
+		transition := fileTransition(e.ID)
+		if transition == 0 || transition > r.Transitions {
+			return errors.New("file transition exceeds saved counter")
+		}
 		if e.Reason != "" || e.Path != r.Options.Directory || e.Note != "" {
 			return errors.New("pending path escapes handoff directory")
 		}

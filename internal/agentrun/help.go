@@ -177,7 +177,11 @@ resolved path/device/inode stay pinned across calls. Unsafe entries (invalid
 UTF-8, controls, >255-byte names, unsafe paths or symlinks) yield one resync per
 changed entry, with no name and only reason: encoding, control, length, name or
 symlink. Only hashes persist; notes/timer/safe files still run. A file burst is
-one directory reference. Entry overflow yields one resync, then ordinary pacing.
+one directory reference. Each changed snapshot has a persisted increasing
+transition number, including returns to an earlier state; replay keeps its id.
+A counter below a pending file result refuses. Receipt/counter bounds yield
+resync (pending bound above, counter ceiling 2^63). Entry overflow yields one
+resync, then ordinary pacing.
 JSON contains only kind, id, note or path, optional reason, cursor, watermark and time. Kinds:
 timer, note, file, resync, stopped, budget_end. No note text, file text or command.
 

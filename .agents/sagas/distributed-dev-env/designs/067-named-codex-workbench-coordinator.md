@@ -1138,6 +1138,19 @@ same-name note limit is recorded in section 12. Source/fakes only; nothing is
 installed or accepted. Independent delta review and merge remain with the
 coordinator; this worker does not change or close PR 1207.
 
+**Additional F3 ruling, 2026-11-18:** coordinator reply `op858c2f1-a1` to
+`op858c2f1-q1` authorizes the advisory finding about returning to an earlier
+file watermark. Every changed directory snapshot reserves a persisted monotonic
+transition number. Its file event ID carries that number and a hash, so returning
+to an earlier state gets a new ID while unacknowledged replay retains its ID.
+A counter below any pending or outstanding file result's number refuses as
+corrupt. Stop/resume never resets it. Reported receipt history remains bounded
+by `--max-pending` (default 64, ceiling 1024); reaching it returns resync and ACK
+clears only that history, preserving the counter. The counter's own 2^63 upper
+bound also yields resync without wrapping. Fake-clock A-add/A-delete/B-add/B-delete,
+replay, stop/resume and rollback tests cover this ruling; the watermark-only
+ID mutant is listed in the PR. This is source-only and grants no new wake.
+
 The worker starts no other agent/session and performs its own diff review.
 Independent/cross-family review remains with the coordinator, per this work
 order's no-other-agents rule. The later authorized ordinary-host procedure must

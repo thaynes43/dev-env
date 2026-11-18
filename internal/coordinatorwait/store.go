@@ -123,7 +123,11 @@ func (s *Store) Load() (*Record, error) {
 		var result Result
 		d := json.NewDecoder(bytes.NewReader(raw.Outstanding))
 		d.DisallowUnknownFields()
-		if d.Decode(&result) == nil && r.validateResult(result, true) == nil && result.ID == r.LastID {
+		decodeErr := d.Decode(&result)
+		if result.Kind == "file" && fileTransition(result.ID) > r.Transitions {
+			return nil, errors.New("file result exceeds saved transition counter")
+		}
+		if decodeErr == nil && r.validateResult(result, true) == nil && result.ID == r.LastID {
 			r.Outstanding = &result
 		}
 		if r.Outstanding == nil && r.LastID == "" {

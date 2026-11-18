@@ -1358,7 +1358,12 @@ are ten seconds apart, immediate entries only, at most 256 metadata records
 inotify. Symlinked directories/ancestors, directory replacement and unclean/outside
 paths refuse. The resolved directory path, device and inode stay pinned across
 all calls for this wait. File results reference that directory, so a burst
-produces one result and the coordinator deliberately reads its files.
+produces one result and the coordinator deliberately reads its files. Each
+changed snapshot gets an increasing persisted transition number: returning to a
+previous state still reports a new event. The number survives stop/resume; a
+record below a pending file result's number refuses as corrupt. Receipt history
+is bounded by `--max-pending`; reaching it yields resync. The transition counter
+has a 2^63 ceiling, which also yields resync without wrapping.
 
 An entry with invalid UTF-8, a control character, a name over 255 bytes, an unsafe
 path name or a symlink is refused without blocking the other lanes. Each changed
