@@ -20,7 +20,9 @@
   restarts that session once at a quiet moment and keeps its conversation;
   workers it starts stay ordinary. His answer: "Approve, build all of it
   (Recommended)" (story 830). The mechanisms under that summary are the
-  coordinator's design.
+  coordinator's design. Amended by the coordinator's ruling of 2026-11-18
+  (OP919): keeper raise notices and key initialization wait for a default-off
+  startup switch; section 15.6 records the review and build.
 - **Tracking:** [Story OP830](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/830).
   Tom's ask is recorded on story 828 comment 7927, and his answer on how he
   gives the go-ahead on story 830 comment 7980. Why the case's session
@@ -938,9 +940,24 @@ records is new, in the keeper, and copies the Ask notifier, as the
 summoned-session pager already did (`summon_pages.go:32-47`).
 
 **What it reads.** Every 30 seconds, as the Ask push does, the leader keeper
-reads the operator ledger first. The coordinator's ruling of 2026-11-13 on
-the slice (a) reviews: the pager stays on whatever the flags say, because a
-take-back notice must not depend on a flag, and it is quiet. A missing or
+reads the operator ledger first after publishing its key. The coordinator's
+ruling of 2026-11-18 (OP919) amends the earlier ruling that a take-back notice
+must not depend on a flag: key creation and all keeper raise work now wait
+for the keeper's `--enable-session-raise-notices=true`, false by default and
+decided once at startup. The accepted tradeoff is that take-back notices
+wait while this switch is off; section 11 gives the shutdown order. Off, it
+constructs no raise pager, acquires no client for it, reads
+or writes no raise objects, calls no Ensure and registers no raise runnable.
+This includes the keeper key Secret, public-key ConfigMap and notice ledger.
+On, it sends both raise and take-back notices at any hour. An invalid notice
+configuration or disabled leader election disables only this pager and never
+stops credential work. This includes a bad shared notice timezone or window,
+even though raise and take-back notices are sent at any hour. Write the
+boolean with an equals sign: `--enable-session-raise-notices=true` (or
+`=false`). A malformed value (`=x`) disables only this pager, with a diagnostic
+that includes no flag value. The two-argument form
+`--enable-session-raise-notices true` (or `false`) leaves an unexpected
+positional argument and stops the whole keeper. A missing or
 forbidden key Secret, ConfigMap or read logs one line an hour at most and
 retries no faster than every 5 minutes, and never fails the keeper. A raise
 notice still needs a record that counts. A take-back notice is decided from
@@ -950,7 +967,7 @@ annotation counts. The keeper does not read the templates ConfigMap in
 slice (a). A record that names a profile is not sent, is logged once
 ("profile raises need slice (b)") and never blocks a take-back notice. The
 coordinator's ruling of 2026-11-14 on the second slice (a) reviews: the
-keeper makes its key once at start, with Ensure retried quietly until it
+keeper makes its key once at start **only with the keeper switch on**, with Ensure retried quietly until it
 succeeds, so the install check finds the public key published. After that
 an idle pass reads the operator ledger first and reads the key Secret only
 when a row needs a notice. The pager never lists AgentSessions. It fetches
@@ -1160,6 +1177,23 @@ secret is shared between the operator and the keeper (N1, N10).
   `wordsHash` from `words` and refuses a mismatch.
 - **How a pair is made.** Only the leader makes a pair (the operator and the
   keeper both run leader election), and only when its Secret holds no key.
+  The keepers of releases 2.110.0 and 2.111.0 do not have the switch and
+  create the key at their first start as leader when its field is empty.
+  The boundary is the commit: the keeper ships in the dev-env-operator
+  image, pinned by sha in haynes-ops, including main builds between releases.
+  Every build from commit `29575187` (PR 1145) up to, but excluding, the
+  merge commit of OP919 has no switch and creates the key at its first start
+  as leader when its field is empty, released or not; this includes
+  `sha-e8f8184` and `sha-4f3ef3d`. Before pinning, check
+  `git merge-base --is-ancestor <the merge commit of OP919> <the commit to pin>`;
+  exit 0 confirms that the commit contains the switch. The switch first
+  exists in the release after 2.111.0, which contains OP919.
+  From the merge commit of OP919, the keeper also requires
+  `--enable-session-raise-notices=true` at startup. Pinning that keeper with
+  the switch unset touches neither the key nor its publication or notice
+  ledger. Turning the switch off on a
+  later start preserves any existing key, public key and ledger; it does not
+  remove or rotate them. The operator's key path is unchanged by OP919.
   It makes the pair with `ed25519.GenerateKey`, writes the private key into
   its own Secret with a `resourceVersion` precondition, so when two replicas
   race only one write lands, and then publishes the public key with its
@@ -1840,7 +1874,46 @@ sessions.**
   Fail`, `validationActions: [Deny]`, and no type-checking warnings in the
   policy's status. The bind rule of rule 2 shows `failurePolicy: Ignore`
   instead. The check for rule 5: each object exists by name, and the
-  owner's first start has filled its key and published its public key. The
+  owner's enabled first start has filled its key and published its public key.
+  The keepers of releases 2.110.0 and 2.111.0 do not have the switch and
+  create the key at their first start as leader when its field is empty;
+  do not pin either before the admission and reader checks. The keeper ships
+  in the dev-env-operator image, which haynes-ops pins by sha, including
+  main builds between releases. Every build from commit `29575187` (PR 1145)
+  up to, but excluding, the merge commit of OP919 has no switch and creates
+  the key at its first start as leader when its field is empty, released or
+  not; this includes `sha-e8f8184` and `sha-4f3ef3d`. Before pinning, check
+  `git merge-base --is-ancestor <the merge commit of OP919> <the commit to pin>`;
+  exit 0 confirms that the commit contains the switch. The switch first
+  exists in the release after 2.111.0, which contains OP919. Install that
+  keeper with `--enable-session-raise-notices` unset first; this leaves its
+  raise objects untouched. After the admission and reader checks, enable
+  `--enable-session-raise-notices=true` and check its published public key
+  before enabling the operator's `--enable-session-raise-dispatch`. With the
+  keeper switch off and dispatch on, a new pending raise gets no notice and
+  cannot activate from new notice evidence while the keeper stays off.
+  Pending raises do not expire: `rowNeedsNotice` in
+  `internal/keeper/raise_pages.go` selects pending rows without an age check.
+  Once keeper notices are enabled, all queued raises that still meet the
+  normal session and record checks are notified and can activate two minutes
+  after their signed Sent notice, even if requested days earlier. This is
+  known limit 11 and a reason to enable keeper notices first. Already stored
+  signed notice evidence is preserved when the switch is turned off and can
+  still satisfy activation. No switch is enabled and no haynes-ops change is
+  made by OP919.
+
+  **Turning it off.** First disable the operator's dispatch switch (the
+  profile list stays empty in slice (a)), while leaving keeper notices on.
+  Take back every pending or active raise through the still-available
+  take-back route (section 9); raises have no automatic expiry. Check that
+  the operator ledger records those take-backs and the keeper's notice
+  ledger records their signed Sent outcomes before disabling the keeper
+  switch. If delivery cannot be confirmed, leave the keeper switch on and
+  record the blocker. With the keeper switch off, a later take-back still
+  ends the raise but sends no notice until notices are enabled again, subject
+  to the ledger and replacement rules in section 6.4.
+
+  The
   coordinator's ruling of 2026-11-14 on the third slice (a) reviews: the
   install adds no rule on AgentSessions. The keeper's get is the Role
   `dev-env-keeper-credentials`, read with `kubectl get role
@@ -1978,7 +2051,7 @@ R0 to R3 on story 830, then reap the test sessions under the normal rules.
 ## 12. Known limits
 
 These remain by design or as accepted remainders of the reviews (the
-coordinator's rulings of 2026-11-13).
+coordinator's rulings of 2026-11-13 and 2026-11-18).
 
 1. **Tom's word is an agent's statement.** The platform cannot verify it.
    Two workbench-by-creation sessions, neither under the other, could each
@@ -2033,6 +2106,14 @@ coordinator's rulings of 2026-11-13).
     11 rule 3 and its install check are required before any flag. This is
     the coordinator's ruling of 2026-11-14 on the fourth slice (a) review,
     answer Q2. No new revocation store is built in this round.
+
+11. **Pending raises outlast a disabled keeper switch.** They do not expire.
+    With operator dispatch on and keeper notices off, requests queue; once
+    keeper notices are enabled, all still-eligible queued raises are notified
+    and can activate after their signed notice and the two-minute delay.
+    Enable keeper notices before operator dispatch (section 11).
+12. The operator still creates its own raise signing key without a switch
+    (`cmd/dev-env-operator/main.go:1336`); that path is unchanged by OP919.
 
 ## 13. Open questions for the owner
 
@@ -2247,7 +2328,7 @@ ADR-028 and ADR-029 are not edited.
 | 2B-M2 | Before a send, the keeper checks the signature and the words hash, not only the id, state and UID. | Section 6.4 |
 | 2B-M3 | A notice is due under the cap of 12 and the five-minute wait, and a reservation counts. A failed row at attempt 5 reaches 6 and is kept. | Section 6.4 |
 | 2B-M4, 2B-L6 | The title is quoted and follows the take-back command. No title omits that sentence. Quotation marks a phone may draw, in the words and the title, become a single quote. | Section 6.4 |
-| 2B-L2 | The keeper key is made once at start. An idle pass reads the ledger and does not read the key Secret. | Section 6.4 |
+| 2B-L2 | As amended by the coordinator's ruling of 2026-11-18 (OP919), the keeper key is initialized once at leader start only with `--enable-session-raise-notices=true`. With the switch off no raise object is touched; an enabled idle pass reads the ledger and does not read the key Secret. | Section 6.4 |
 | 2B-L3 | A failed prune, reservation or outcome write logs one line an hour at most. | Section 6.4 |
 | 2B-L4 | A reservation with no outcome, older than the five-minute wait, counts as one Ambiguous attempt. The keeper stops at 12. | Section 6.4 |
 | 2B-L5 | `sentAt` is rounded up to the next whole second, never down. | Section 6.4 |
@@ -2310,3 +2391,36 @@ off. ADR-028 and ADR-029 are not edited.
 | R4-L2 / L3 | Preserve the Accepted ADRs and add this fourth review table, its counts, finding, ruling and location. | Section 15.5 |
 
 | Q2, coordinator's answer of 2026-11-14 | Narrow the missing-rule claim: no new/changed signed grant and no revival of a signed terminal annotation. State unsigned ledger rollback before the take-back annotation commits as known limit 10. Rule 3 is mandatory before flags. A signed durable take-back is a separate slice (b) design input, not decided or built here. | Section 11; section 12 limit 10; `TestKnownLimit10LedgerRollbackBeforeTakenBackAnnotation`; PR body |
+
+### 15.6 Keeper startup switch (OP919)
+
+The coordinator's ruling of 2026-11-18 amends the unconditional keeper-start
+rule in section 6.4. The Claude Opus 5.5 review of PR 1211 at
+`96f2d6364e70b3481b7c398813aac71399ce0fe8` requested changes: 0 HIGH,
+2 MEDIUM and 4 LOW. The switch itself worked; the fixes cover its wiring
+regression test, release boundary, flag syntax, queued raises and record wording.
+ADR-029 remains Accepted and unchanged: it requires the admission and reader
+checks before key writes, without deciding unconditional key creation.
+
+Build record: OP919 is source and tests only; nothing is installed or enabled.
+The coordinator fills in the release number when the release after 2.111.0 is cut.
+The merge commit of OP919: the coordinator fills in the hash after merge.
+
+| Finding | Coordinator's ruling | Where |
+| --- | --- | --- |
+| M1 / F1 | Prefer a behavioural Run test; allow a source guard if Run cannot use the fakes without envtest. The guard must reject pager construction or registration outside the gated helper. | `internal/keeper/raise_startup_guard_test.go`; `internal/keeper/raise_startup_test.go`. The worker's reason for the fallback: Run creates its client, manager and lease lock directly, so using the startup fakes would require a production refactor. |
+| M2 / F2 | Name 2.110.0 and 2.111.0 as lacking the switch; it first exists in the release after 2.111.0. | Sections 6.6 and 11; workflow guide |
+| L1, L2 / F3a,c | Use equals-sign syntax; state the two-argument startup failure and shared notice validation. | Section 6.4; keeper help; workflow guide |
+| L3 / F3b | Pending raises do not expire; later enabling keeper notices announces all still-eligible queued raises. | Section 11; known limit 11; workflow guide |
+| L4 / F3c | Date and attribute the amendment, state the take-back tradeoff, update the status and 2B-L2, and name the subject of the workflow paragraph. | Status; sections 6.4 and 15.5; workflow guide |
+| Operator key, noted only | Leave the operator path unchanged; record its unconditional key creation. | Known limit 12; story 830 owned by the coordinator |
+
+The same reviewer's recheck of PR 1213 at `4e0ad57688720d8618abd3c33014d648439834bc`
+requested changes (0 HIGH, 1 MEDIUM, 2 LOW). The coordinator's rulings of
+2026-11-18 for round 2 are:
+
+| Finding | Coordinator's ruling | Where |
+| --- | --- | --- |
+| N1 / H1 | Use the commit boundary, including unreleased main builds, and give the ancestry check before pinning. | Sections 6.6 and 11; workflow guide; build record above |
+| N2 / H2 | Guard the whole non-test keeper package: only raise_pages.go imports sessionraise or names RaisePager and its aliases; only Run calls registerRaisePager once; no other raise-key Ensure path. Kill G1 to G4. | `internal/keeper/raise_startup_guard_test.go`; PR mutant table |
+| N3 / H3 | Attribute the fallback reason to the worker, outside the coordinator's ruling. | M1 / F1 row above |
