@@ -4306,6 +4306,29 @@ Earlier dated corrections stay; where they differ, this governs.
   session is never a fallback. Source and stand-in tests do not establish
   installed or accepted behavior.
 
+**Correction, 2026-11-18: story 795 re-read (gpt-6-astra, 2026-11-18),
+findings R4-F1 and R4-F2; coordinator ruling R7; not a ruling by Tom.**
+Earlier dated lines stay; this replaces the claim that the structure check
+alone distinguishes a legacy launch from a brief-carrying one.
+
+- *Positional role (R7).* After the executable and Remote Control structure
+  checks, the last string is not a positional brief when it follows an
+  option that the launch builder writes with a value: it is that option's
+  value and the brief reads `not-launched`. Those options are defined once
+  for the builder and reader, including the inline and file rule options.
+  If it follows any other string starting with `-`, the option's role is
+  unknown and the brief reads `unconfirmed`. Otherwise the existing brief,
+  handoff and refusal checks decide. The Remote Control value is the name
+  or composed title returned by the builder; that value alone is never the
+  positional brief. Every saved launch in these cases keeps the one start
+  consumed. Builder argv is unchanged, including ordinary sessions.
+- *Held login (R4-F2).* A launch held for a login window leaves no launch,
+  handoff or task-result entry. It starts once when the window ends if its
+  start deadline has not passed and its prerequisites still hold; otherwise
+  it is refused and nothing starts. The deadline refusal leaves the one
+  start free and the remote brief `not-launched`. This documents existing
+  behavior; the deadline and first-start code do not change.
+
 ### 6.11 OP746: move curation
 
 - A new app in haynes-ops `upgrade-agent/cigar-curation/` (not inside the

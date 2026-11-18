@@ -293,7 +293,8 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 // summonedBriefState is the pod's delivery claim, not provider acceptance.
 // Any retained launch, handoff or result entry consumes the summoned start,
 // including ambiguous or unreadable evidence. Only a complete remote argv can
-// distinguish a legacy launch from a brief-carrying one (OP795, R2 and R3).
+// distinguish a legacy launch from a brief-carrying one after checking the
+// final string's option role (OP795, R2, R3 and R7).
 func summonedBriefState(s Settings, sess protocol.Session, first Launch, launchErr error, agentError string) string {
 	if errors.Is(launchErr, os.ErrNotExist) && !summonedLaunched(s, sess) {
 		if agentError != "" {
@@ -309,17 +310,26 @@ func summonedBriefState(s Settings, sess protocol.Session, first Launch, launchE
 	}
 	// A final string alone proves neither a positional brief nor a legacy
 	// launch. Require an executable slot and the session's Remote Control
-	// pair; no other provider flag parsing is needed for this distinction.
+	// pair, then check whether the builder assigns the last string to an option.
 	if len(first.Argv) < 3 || first.Argv[0] == "" || first.Argv[0] == sess.Prompt || strings.HasPrefix(first.Argv[0], "-") {
 		return protocol.BriefUnconfirmed
 	}
-	rc := slices.Index(first.Argv[1:], "--remote-control") + 1
-	if rc == 0 || rc+1 >= len(first.Argv) || first.Argv[rc+1] != sess.Name {
+	remote := remoteControlArgs(sess)
+	rc := slices.Index(first.Argv[1:], remote[0]) + 1
+	if rc == 0 || rc+1 >= len(first.Argv) || first.Argv[rc+1] != remote[1] {
 		return protocol.BriefUnconfirmed
 	}
-	// The flag's own name value is never the positional brief, even when
-	// the brief's text happens to equal the session name.
-	if rc+2 == len(first.Argv) || first.Argv[len(first.Argv)-1] != sess.Prompt {
+	// A known value-taking option owns the final string. For an unknown
+	// option-shaped predecessor, its role is uncertain. Neither case can
+	// confirm a positional brief, and the saved launch still consumes start.
+	previous := first.Argv[len(first.Argv)-2]
+	if rc+2 == len(first.Argv) || slices.Contains(claudeValueFlags[:], previous) {
+		return protocol.BriefNotLaunched
+	}
+	if strings.HasPrefix(previous, "-") {
+		return protocol.BriefUnconfirmed
+	}
+	if first.Argv[len(first.Argv)-1] != sess.Prompt {
 		return protocol.BriefNotLaunched
 	}
 	h := summonedHandoff(s, first)

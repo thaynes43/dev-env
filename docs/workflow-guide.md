@@ -2594,8 +2594,9 @@ agent `failed`, remote brief `not-launched`. These checks also apply to
 summoned tasks; ordinary task stdin is unchanged (story 795 fix round 1,
 2026-11-16, coordinator rulings; not a ruling by Tom). A missing prerequisite
 that refuses before the launch writer also leaves the start free. A launch
-held for a login window leaves no launch, handoff or result entry and starts
-once when the window ends.
+held for a login window leaves no launch, handoff or result entry. It starts
+once when the window ends if its start deadline has not passed and its
+prerequisites still hold; otherwise it is refused and nothing starts.
 
 The pod reports its delivery claim as `status.agent.brief`, beside the task
 start record. It is `pending` only with no launch, handoff or task-result
@@ -2606,17 +2607,25 @@ handoff survives without the launch, the handoff is asked or ambiguous,
 launch/refusal evidence is unreadable or lacks those identities (including
 dangling links), or argv is incomplete. The argv needs a nonempty executable
 that is neither the brief nor an option, plus `--remote-control` followed by
-this session's name. A complete remote launch without a final positional
-brief remains `not-launched`; the flag's session name is not a positional
-brief. A matching nothing-started handoff, fence refusal or pre-launch error
-with a free latch also reports `not-launched`, with the existing precedence.
+the name or composed title returned by the launch builder. These structure
+checks alone do not establish a positional brief. The builder and reader
+share the definition of options that take a value: a final string following
+one of those options is its value and reports `not-launched`. Following any
+other string starting with `-`, its role is unknown and reports `unconfirmed`.
+Otherwise the existing brief and handoff checks decide. The Remote Control
+name or title alone is never a positional brief. Every such saved launch
+keeps the one start consumed. A matching nothing-started handoff, fence
+refusal or pre-launch error with a free latch also reports `not-launched`, with the existing precedence.
 This is the pod's claim about its
 handoff, not proof that the provider answered; the operator does not act on
 it. An older agentd omits the field. Unknown or malformed evidence is
 dropped without blocking its heartbeat. No `agent-run` view gains the field
 in this story, so an old client sees no new brief key. These start-evidence
 and argv corrections are story 795 gate review findings R3-F1 to R3-F3,
-coordinator rulings R2 and R3 (2026-11-18), not rulings by Tom.
+coordinator rulings R2 and R3 (2026-11-18), not rulings by Tom. The option-value
+and held-login qualifications above follow story 795 re-read (gpt-6-astra,
+2026-11-18), findings R4-F1 and R4-F2; coordinator ruling R7; not a ruling
+by Tom.
 
 The Claude launch record is atomically renamed without fsync; the handoff
 writer fsyncs its file and directory. Once the handoff is written, either

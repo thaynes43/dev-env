@@ -934,7 +934,7 @@ func projectRuleInputs(provider, rulesPath, configuredDeveloper, guard string, s
 		if !filepath.IsAbs(rulesPath) {
 			return nil, errors.New("claude project rules require an absolute private path")
 		}
-		return []string{"--append-system-prompt-file", rulesPath, "--append-system-prompt", guard}, nil
+		return []string{claudeValueFlags[claudeFlagAppendSystemPromptFile], rulesPath, claudeValueFlags[claudeFlagAppendSystemPrompt], guard}, nil
 	case "codex":
 		parts := []string{configuredDeveloper, renderedRules, guard}
 		developer := strings.Join(parts, "\n\n")
