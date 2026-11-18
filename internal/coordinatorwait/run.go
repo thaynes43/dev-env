@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"time"
-
-	"k8s.io/utils/clock"
 )
 
 // Note is already addressed and validated by the parent wait-any API adapter.
@@ -16,7 +14,7 @@ type Note struct {
 }
 type Notes func(context.Context, string, time.Duration) (Note, error)
 type Runtime struct {
-	Clock clock.Clock
+	Clock Clock
 	Notes Notes
 	Scan  func() (map[string]string, bool, error)
 	Stop  func() (bool, error)

@@ -19,12 +19,18 @@ import (
 	"github.com/thaynes43/dev-env/internal/coordinatorwait"
 )
 
+type waitTestClock struct{ *testingclock.FakeClock }
+
+func (c *waitTestClock) NewTimer(d time.Duration) coordinatorwait.Timer {
+	return c.FakeClock.NewTimer(d)
+}
+
 func waitHarness(t *testing.T) (*harness, []string) {
 	t.Helper()
 	h := newHarness(t)
 	h.vars["HOME"] = h.dir
 	h.vars[protocol.SessionEnv] = `{"name":"coordinator","sessionUID":"session-uid","repo":"dev-env","agent":"codex","mode":"remote","model":"gpt-6.1-sol"}`
-	h.env.WaitClock = testingclock.NewFakeClock(testNow)
+	h.env.WaitClock = &waitTestClock{testingclock.NewFakeClock(testNow)}
 	dir := filepath.Join(h.dir, "handoffs")
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -129,7 +135,7 @@ func TestCoordinatorWaitResyncAndNoRetryOnRefusal(t *testing.T) {
 }
 func TestCoordinatorWaitBudgetEndDoesNotConnect(t *testing.T) {
 	h, args := waitHarness(t)
-	h.env.WaitClock = testingclock.NewFakeClock(testNow.Add(5 * time.Hour))
+	h.env.WaitClock = &waitTestClock{testingclock.NewFakeClock(testNow.Add(5 * time.Hour))}
 	h.mustRun(ExitOK, args...)
 	r := resultFrom(t, h)
 	if r.Kind != "budget_end" || len(h.api.requests()) != 0 || len(h.ran) != 0 {
@@ -178,7 +184,7 @@ func TestCoordinatorWaitSessionFileAndHelp(t *testing.T) {
 	h, args := waitHarness(t)
 	h.vars[protocol.SessionFileEnv] = h.write("session.json", h.vars[protocol.SessionEnv])
 	h.vars[protocol.SessionEnv] = ""
-	h.env.WaitClock = testingclock.NewFakeClock(testNow.Add(5 * time.Hour))
+	h.env.WaitClock = &waitTestClock{testingclock.NewFakeClock(testNow.Add(5 * time.Hour))}
 	h.mustRun(ExitOK, args...)
 	if resultFrom(t, h).Kind != "budget_end" {
 		t.Fatal("session file identity")
@@ -196,7 +202,7 @@ type failedWaitOutput struct{}
 func (failedWaitOutput) Write([]byte) (int, error) { return 0, errors.New("lost output") }
 func TestCoordinatorWaitPersistsBeforeLostOutput(t *testing.T) {
 	h, args := waitHarness(t)
-	h.env.WaitClock = testingclock.NewFakeClock(testNow.Add(5 * time.Hour))
+	h.env.WaitClock = &waitTestClock{testingclock.NewFakeClock(testNow.Add(5 * time.Hour))}
 	h.env.Stdout = failedWaitOutput{}
 	if code := h.run(args...); code == ExitOK {
 		t.Fatal("lost output confirmed")
@@ -259,7 +265,7 @@ func TestCoordinatorWaitFreshCancellationDoesNotConnect(t *testing.T) {
 
 func TestCoordinatorWaitBudgetDuringCursorCapture(t *testing.T) {
 	h, args := waitHarness(t)
-	c := h.env.WaitClock.(*testingclock.FakeClock)
+	c := h.env.WaitClock.(*waitTestClock)
 	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) { c.Step(4 * time.Hour); <-r.Context().Done() }
 	h.mustRun(ExitOK, args...)
 	if r := resultFrom(t, h); r.Kind != "budget_end" || len(h.api.requests()) != 1 {

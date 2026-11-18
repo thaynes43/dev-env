@@ -11,8 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"k8s.io/utils/clock"
-
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/coordinatorwait"
@@ -79,7 +77,7 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 	}
 	waitClock := a.env.WaitClock
 	if waitClock == nil {
-		waitClock = clock.RealClock{}
+		waitClock = coordinatorwait.RealClock{}
 	}
 	stop, err := store.StopRequested()
 	if err != nil {
@@ -210,7 +208,7 @@ func (a *app) coordinatorWaitNotes(c *conn) coordinatorwait.Notes {
 
 // Setup also observes the injected budget clock: a slow cursor capture must not
 // outlive the operating budget or turn into an automatic retry.
-func coordinatorWaitSetupContext(ctx context.Context, c clock.Clock, end time.Time) (context.Context, func()) {
+func coordinatorWaitSetupContext(ctx context.Context, c coordinatorwait.Clock, end time.Time) (context.Context, func()) {
 	child, cancel := context.WithCancel(ctx)
 	timer := c.NewTimer(max(0, end.Sub(c.Now())))
 	done := make(chan struct{})

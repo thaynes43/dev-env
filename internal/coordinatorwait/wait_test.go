@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/utils/clock"
 	testingclock "k8s.io/utils/clock/testing"
 )
 
@@ -219,7 +218,7 @@ type signalledClock struct {
 	timers chan time.Duration
 }
 
-func (c *signalledClock) NewTimer(d time.Duration) clock.Timer {
+func (c *signalledClock) NewTimer(d time.Duration) Timer {
 	timer := c.FakeClock.NewTimer(d)
 	c.timers <- d
 	return timer
