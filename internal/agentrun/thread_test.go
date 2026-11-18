@@ -465,3 +465,28 @@ func TestThreadStartCodexViaAPIProfileFence(t *testing.T) {
 		t.Fatalf("stderr %q\nwant %q", h.stderr.String(), want)
 	}
 }
+
+func TestThreadStartExplicit62Models(t *testing.T) {
+	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra", "gpt-unknown-921"} {
+		t.Run(model, func(t *testing.T) {
+			h, c := threadHarness(t, runningOn(codexHostView(""), "talosw02"), 0, hostResult(t, apiv1.ThreadResponded, ""))
+			args := codexThreadArgs(h)
+			for i := range args {
+				if args[i] == "gpt-6-astra" {
+					args[i] = model
+				}
+			}
+			if model == "gpt-unknown-921" {
+				h.mustRun(ExitUsage, args...)
+				if c.calls != 0 || len(h.api.requests()) != 0 {
+					t.Fatal("unknown model made a request")
+				}
+			} else {
+				h.mustRun(ExitOK, args...)
+				if !slices.Contains(c.argv, model) {
+					t.Fatal("requested model changed")
+				}
+			}
+		})
+	}
+}

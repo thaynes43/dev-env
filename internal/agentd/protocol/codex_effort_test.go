@@ -4,6 +4,7 @@ import "testing"
 
 func TestCodexEffortPinnedModelManifest(t *testing.T) {
 	models := map[string]string{
+		"gpt-6.2-sol": "ultra", "gpt-6.2-astra": "ultra",
 		"gpt-6-astra": "ultra", "gpt-6.1-sol": "ultra", "gpt-6.1-terra": "ultra", "gpt-6-sol": "ultra",
 		"gpt-5.6-sol": "ultra", "gpt-5.6-terra": "ultra",
 		"gpt-6-luna": "max", "gpt-5.6-luna": "max", "gpt-5.5": "xhigh",
@@ -17,7 +18,7 @@ func TestCodexEffortPinnedModelManifest(t *testing.T) {
 			}
 		}
 	}
-	for _, alias := range []string{"sol", "luna", "terra", "gpt-6.1-terra-latest", "default", "gpt-6"} {
+	for _, alias := range []string{"sol", "luna", "terra", "gpt-6.1-terra-latest", "default", "gpt-6", "gpt-unknown-921"} {
 		if ValidateCodexEffort(alias, "") == nil {
 			t.Errorf("model alias %s received default effort authority", alias)
 		}
@@ -32,5 +33,14 @@ func TestCodexSessionRejectsUnsupportedModelEffort(t *testing.T) {
 	s.Effort = "max"
 	if err := s.Validate(); err != nil {
 		t.Fatal("protocol refused the pinned Luna maximum", err)
+	}
+}
+
+func TestCodexSessionExplicit62Models(t *testing.T) {
+	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra", "gpt-unknown-921"} {
+		s := Session{Name: "task", Repo: "demo", Agent: AgentCodex, Mode: ModeTask, Model: model, Effort: "medium", Prompt: "synthetic task"}
+		if got := s.Validate() == nil; got != (model != "gpt-unknown-921") {
+			t.Fatalf("%s accepted=%v", model, got)
+		}
 	}
 }

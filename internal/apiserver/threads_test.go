@@ -504,3 +504,23 @@ func TestStartThreadProfileFence(t *testing.T) {
 	f.editSession("codex-full", func(s *v1alpha1.AgentSession) { s.Spec.Profile = "" })
 	refused("both empty", "codex-full", f.sessionPod("s-empty", "", 0))
 }
+
+func TestThreadStartExplicit62Models(t *testing.T) {
+	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra", "gpt-unknown-921"} {
+		r := apiv1.ThreadStartRequest{Model: model, Effort: "medium", Name: "model-probe", Handoff: "synthetic", Wait: "1m"}
+		_, fields := validThreadStart(r)
+		if (len(fields) == 0) != (model != "gpt-unknown-921") {
+			t.Fatalf("%s: %+v", model, fields)
+		}
+	}
+}
+
+func TestCoordinatorStillRefuses62Models(t *testing.T) {
+	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
+		r := apiv1.ThreadStartRequest{Coordinator: true, Model: model, Effort: "medium", Name: "model-probe", Handoff: "synthetic", Wait: "1m"}
+		_, fields := validThreadStart(r)
+		if len(fields) != 1 || fields[0].Field != "coordinator" {
+			t.Fatalf("%s coordinator boundary changed: %+v", model, fields)
+		}
+	}
+}
