@@ -130,3 +130,61 @@ func TestFreshHostIntent(t *testing.T) {
 	in.Login = LoginLapsed
 	checkResult(t, Select(in), "", "", ReasonLoginRequired, false)
 }
+
+func TestRetainedOrdinaryVolumeHolds(t *testing.T) {
+	for _, state := range []string{"rescue failed", "removal blocked", "unresolved account", "reserved", "workbench", "hands-off", "protected", "archived"} {
+		t.Run(state, func(t *testing.T) {
+			h := runningPaired("retained")
+			want := 1
+			switch state {
+			case "rescue failed":
+				h.RescueFailed = true
+			case "removal blocked":
+				h.RemovalBlocked = true
+			case "unresolved account":
+				h.AccountResolved = false
+			case "reserved":
+				h.Reserved = true
+				want = 0
+			case "workbench":
+				h.WorkbenchAccount = true
+				want = 0
+			case "hands-off":
+				h.HandsOff = true
+				want = 0
+			case "protected":
+				h.ProtectedAnnotation = true
+				want = 0
+			case "archived":
+				h.Archived = true
+				want = 0
+			}
+			if got := RetainedInProfile([]Host{h}, h.ResolvedProfile); got != want {
+				t.Fatalf("retained=%d want %d", got, want)
+			}
+			if got := RetainedInProfile([]Host{h}, "other-profile"); got != 0 {
+				t.Fatalf("wrong profile count=%d", got)
+			}
+		})
+	}
+}
+
+func TestUnconfirmedRowsAreOnlySkipped(t *testing.T) {
+	phantom := runningPaired("unknown")
+	phantom.ReservationAttempt = "attempt-unknown"
+	// Even a fully populated phantom must never become use/resume/report.
+	for _, phase := range []string{PhaseRunning, PhaseSuspended} {
+		phantom.Phase = phase
+		in := baseInput(clientCaller(), []Host{phantom})
+		res := Select(in)
+		if res.Host != "" {
+			t.Fatalf("phantom offered: %+v", res)
+		}
+		checkSkipped(t, res, map[string]string{"unknown": ReasonCreateUnconfirmed})
+		in.Request.NamedHost = phantom.Name
+		res = Select(in)
+		if res.Host != "" || res.Action != "" || res.Reason != ReasonCreateUnconfirmed {
+			t.Fatalf("named phantom offered: %+v", res)
+		}
+	}
+}

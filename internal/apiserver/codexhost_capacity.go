@@ -7,10 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 
@@ -20,11 +21,13 @@ import (
 )
 
 const (
-	codexCapacityName      = "dev-env-codex-host-capacity"
-	codexCapacityNamespace = "dev-env-system"
-	codexCapacityAttempt   = v1alpha1.LabelPrefix + "codex-host-create-attempt"
-	codexCapacityReason    = v1alpha1.LabelPrefix + "codex-host-create-reason"
-	codexCapacityRequester = v1alpha1.LabelPrefix + "codex-host-create-requester"
+	codexCapacityName           = "dev-env-codex-host-capacity"
+	codexCapacityNamespace      = "dev-env-system"
+	codexCapacityAttempt        = v1alpha1.LabelPrefix + "codex-host-create-attempt"
+	codexCapacityReason         = v1alpha1.LabelPrefix + "codex-host-create-reason"
+	codexCapacityRequester      = v1alpha1.LabelPrefix + "codex-host-create-requester"
+	codexHostCreateTimeout      = 30 * time.Second
+	codexCapacityCleanupTimeout = 10 * time.Second
 )
 
 // CAS adds counted reservations across API replicas. No TTL: a delayed create
@@ -46,20 +49,26 @@ func (s *Server) codexCapacity(ctx context.Context) (*corev1.ConfigMap, []codexC
 		namespace = codexCapacityNamespace
 	}
 	key := types.NamespacedName{Namespace: namespace, Name: codexCapacityName}
+	if s.Live == nil {
+		return nil, nil, capacityLedgerUnavailable(key, "unreadable")
+	}
 	if err := s.Live.Get(ctx, key, &cm); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, nil, nil
+			return nil, nil, capacityLedgerUnavailable(key, "missing")
 		}
-		return nil, nil, err
+		if apierrors.IsForbidden(err) {
+			return nil, nil, capacityLedgerUnavailable(key, "forbidden")
+		}
+		return nil, nil, capacityLedgerUnavailable(key, "unreadable")
 	}
 	var pending []codexCapacityPending
 	if raw := cm.Data["pending"]; raw != "" {
-		if len(raw) > 64<<10 || json.Unmarshal([]byte(raw), &pending) != nil {
-			return nil, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "Codex host capacity reservations need review")
+		if len(raw) > 64<<10 || json.Unmarshal([]byte(raw), &pending) != nil || pending == nil {
+			return nil, nil, capacityLedgerUnavailable(key, "malformed")
 		}
 		for _, p := range pending {
 			if p.Name == "" || p.Profile == "" || p.Attempt == "" {
-				return nil, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "Codex host capacity reservation needs review")
+				return nil, nil, capacityLedgerUnavailable(key, "malformed")
 			}
 		}
 	}
@@ -91,17 +100,6 @@ func (s *Server) reserveCodexCapacity(ctx context.Context, want codexCapacityPen
 		if err != nil {
 			return err
 		}
-		if cm == nil {
-			namespace := s.PolicyNamespace
-			if namespace == "" {
-				namespace = codexCapacityNamespace
-			}
-			cm = &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: codexCapacityName}}
-			if err := s.Client.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
-				return err
-			}
-			continue
-		}
 		retained := pending[:0]
 		cell := 0
 		for _, p := range pending {
@@ -114,7 +112,7 @@ func (s *Server) reserveCodexCapacity(ctx context.Context, want codexCapacityPen
 				continue
 			}
 			if want.RequestKey != "" && p.RequestKey == want.RequestKey {
-				return conflictReason("create_pending", "This idempotent Codex host create is still unconfirmed; keep its key.")
+				return unconfirmedCodexCreates([]codexCapacityPending{p})
 			}
 			// Missing or a different attempt is not proof this create stopped.
 			retained = append(retained, p)
@@ -127,7 +125,7 @@ func (s *Server) reserveCodexCapacity(ctx context.Context, want codexCapacityPen
 			fleetCap = s.CodexHosts.MaxRunning
 		}
 		if cell >= codexhostpool.MaxHostsPerProfile || len(retained) >= fleetCap {
-			return conflictReason(codexhostpool.ReasonAtCapacity, "Unconfirmed Codex host creates occupy the available capacity; reservations are retained.")
+			return unconfirmedCodexCreates(retained)
 		}
 		retained = append(retained, want)
 		raw, err := json.Marshal(retained)
@@ -144,6 +142,12 @@ func (s *Server) reserveCodexCapacity(ctx context.Context, want codexCapacityPen
 		if err := s.Client.Update(ctx, cm); err != nil {
 			if apierrors.IsConflict(err) {
 				continue
+			}
+			if apierrors.IsForbidden(err) {
+				return capacityLedgerUnavailable(types.NamespacedName{Namespace: cm.Namespace, Name: cm.Name}, "forbidden")
+			}
+			if apierrors.IsNotFound(err) {
+				return capacityLedgerUnavailable(types.NamespacedName{Namespace: cm.Namespace, Name: cm.Name}, "missing")
 			}
 			return err
 		}
@@ -218,9 +222,7 @@ func (s *Server) createOrdinaryCodexHost(ctx context.Context, sess *v1alpha1.Age
 	attempted := false
 	defer func() {
 		if !attempted {
-			if err := s.releaseCodexCapacity(context.WithoutCancel(ctx), pending.Attempt); err != nil {
-				s.Log.Error(err, "release Codex capacity reservation")
-			}
+			s.finishCodexCapacity(ctx, pending.Attempt)
 		}
 	}()
 	if req.IdempotencyKey != "" {
@@ -246,6 +248,9 @@ func (s *Server) createOrdinaryCodexHost(ctx context.Context, sess *v1alpha1.Age
 		}
 	}
 	if codexhostpool.RetainedInProfile(filtered, profile) >= codexhostpool.MaxHostsPerProfile {
+		if unknown := unconfirmedCodexHosts(filtered, profile); unknown != nil {
+			return unknown
+		}
 		return conflictReason(codexhostpool.ReasonAtCapacity, "The profile already has two retained ordinary Codex hosts.")
 	}
 	fleetCap := codexhostpool.DefaultMaxRunning
@@ -253,11 +258,20 @@ func (s *Server) createOrdinaryCodexHost(ctx context.Context, sess *v1alpha1.Age
 		fleetCap = s.CodexHosts.MaxRunning
 	}
 	if codexhostpool.RunningHosts(filtered) >= fleetCap {
+		if unknown := unconfirmedCodexHosts(filtered, ""); unknown != nil {
+			return unknown
+		}
 		return conflictReason(codexhostpool.ReasonAtCapacity, "The running Codex host fleet cap is reached.")
 	}
 	if s.CodexHosts != nil && sess.Spec.Restore == "" {
 		res := codexhostpool.Select(codexhostpool.Input{Hosts: filtered, Login: login, Caller: s.codexHostCaller(c), Request: codexhostpool.Request{Repository: sess.Spec.Repo, FreshHost: req.FreshHost}, ResolvedProfile: profile, DefaultProfile: tmpl.DefaultProfile, Now: s.now(), MaxRunningPerCell: s.CodexHosts.MaxRunningPerCell, MaxRunning: s.CodexHosts.MaxRunning})
 		if res.Action != codexhostpool.ActionCreate {
+			if res.Reason == codexhostpool.ReasonCreateUnconfirmed {
+				return unconfirmedCodexHosts(filtered, "")
+			}
+			if res.Action == "" {
+				return conflictReason(res.Reason, "Codex host selection refused creation (%s); no host was created.", res.Reason)
+			}
 			return conflictReason(res.Reason, "Codex host selection returned %s for %s; no host was created.", res.Action, res.Host)
 		}
 		if res.Reason != "" {
@@ -273,13 +287,84 @@ func (s *Server) createOrdinaryCodexHost(ctx context.Context, sess *v1alpha1.Age
 	}
 	sess.Annotations[codexCapacityAttempt] = pending.Attempt
 	attempted = true
-	err = s.createWithCallerCap(ctx, sess, c)
-	// A definite refusal cannot commit later. A transport or unknown error can.
-	var refused *apiError
-	if err == nil || errors.As(err, &refused) || apierrors.IsAlreadyExists(err) || apierrors.IsInvalid(err) || apierrors.IsForbidden(err) || apierrors.IsBadRequest(err) {
-		if releaseErr := s.releaseCodexCapacity(context.WithoutCancel(ctx), pending.Attempt); releaseErr != nil {
-			s.Log.Error(releaseErr, "release Codex capacity reservation")
+	// A client hang-up must not turn an otherwise conclusive create into an
+	// unknown outcome. The write retains request values but owns its deadline.
+	createCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codexHostCreateTimeout)
+	defer cancel()
+	err = s.createWithCallerCap(createCtx, sess, c)
+	if err == nil || definiteCodexCreateRefusal(err) {
+		s.finishCodexCapacity(ctx, pending.Attempt)
+		return err
+	}
+	s.Log.Error(err, "Codex host create outcome unknown", "attempt", pending.Attempt, "session", pending.Name, "requester", c.String())
+	// One authoritative name read can resolve a lost create response. A
+	// different attempt or any read error is still unknown and keeps the slot.
+	readCtx, readCancel := context.WithTimeout(context.WithoutCancel(ctx), codexCapacityCleanupTimeout)
+	defer readCancel()
+	var made v1alpha1.AgentSession
+	if readErr := s.Live.Get(readCtx, types.NamespacedName{Namespace: sess.Namespace, Name: pending.Name}, &made); readErr == nil && made.Annotations[codexCapacityAttempt] == pending.Attempt {
+		s.finishCodexCapacity(ctx, pending.Attempt)
+	}
+	refusal := unconfirmedCodexCreates([]codexCapacityPending{pending})
+	refusal.status, refusal.body.Code = http.StatusServiceUnavailable, apiv1.CodeUnavailable
+	return refusal
+}
+
+func capacityLedgerUnavailable(key types.NamespacedName, state string) *apiError {
+	e := newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "Codex host capacity ConfigMap %s is %s; counted create or resume is unavailable.", key, state)
+	e.body.Reason = "capacity_ledger_unavailable"
+	return e
+}
+
+func unconfirmedCodexCreates(pending []codexCapacityPending) *apiError {
+	parts := make([]string, 0, len(pending))
+	for _, p := range pending {
+		parts = append(parts, p.Name+" (attempt "+p.Attempt+")")
+	}
+	return conflictReason(codexhostpool.ReasonCreateUnconfirmed, "Unconfirmed Codex host create occupies capacity: %s; its reservation is retained.", strings.Join(parts, "; "))
+}
+
+func unconfirmedCodexHosts(hosts []codexhostpool.Host, profile string) *apiError {
+	var pending []codexCapacityPending
+	for _, h := range hosts {
+		if h.ReservationAttempt != "" && (profile == "" || h.ResolvedProfile == profile) {
+			pending = append(pending, codexCapacityPending{Name: h.Name, Attempt: h.ReservationAttempt})
 		}
 	}
-	return err
+	if len(pending) == 0 {
+		return nil
+	}
+	return unconfirmedCodexCreates(pending)
+}
+
+func definiteCodexCreateRefusal(err error) bool {
+	var refused *apiError
+	if errors.As(err, &refused) || apierrors.IsAlreadyExists(err) || apierrors.IsInvalid(err) || apierrors.IsForbidden(err) || apierrors.IsBadRequest(err) {
+		return true
+	}
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		switch status.Status().Code {
+		case 429, 404, 405, 406, 413, 415:
+			return true
+		}
+	}
+	return false
+}
+
+// Retry transient read/update failures as well as the inner CAS conflicts.
+// No sleep, expiry, or reset: exhaustion leaves this exact attempt counted.
+func (s *Server) finishCodexCapacity(ctx context.Context, attempt string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codexCapacityCleanupTimeout)
+	defer cancel()
+	var err error
+	for range codexHostLeaseTries {
+		err = s.releaseCodexCapacity(cleanupCtx, attempt)
+		if err == nil || cleanupCtx.Err() != nil {
+			break
+		}
+	}
+	if err != nil {
+		s.Log.Error(err, "release Codex capacity reservation", "attempt", attempt)
+	}
 }

@@ -24,6 +24,7 @@ const (
 	ReasonLoginRequired      = "login_required"
 	ReasonCallerCannotCreate = "caller_cannot_create"
 	ReasonAtCapacity         = "at_capacity"
+	ReasonCreateUnconfirmed  = "create_unconfirmed"
 	ReasonHostBusy           = "host_busy"
 	ReasonHostFull           = "host_full"
 	ReasonFreshHost          = "fresh_host"
@@ -271,6 +272,9 @@ func Select(in Input) Result {
 			if h.Name != in.Request.NamedHost {
 				continue
 			}
+			if h.ReservationAttempt != "" {
+				return Result{Reason: ReasonCreateUnconfirmed, Skipped: []Skip{{Name: h.Name, Reason: ReasonCreateUnconfirmed}}}
+			}
 			if h.Reserved || h.WorkbenchAccount {
 				return Result{Reason: ReasonProtected}
 			}
@@ -299,7 +303,7 @@ func Select(in Input) Result {
 	for i, h := range in.Hosts {
 		reason, okUse, okResume := judge(h, in.Caller, requested, repo, in.Now)
 		row := judged{index: i, host: h, reason: reason}
-		if inCell(h, requested) && !okUse && reason != ReasonHostBusy {
+		if inCell(h, requested) && !okUse && reason != ReasonHostBusy && reason != ReasonCreateUnconfirmed {
 			row.filler = true
 		}
 		switch {
@@ -339,13 +343,14 @@ func Select(in Input) Result {
 	// Only full/fresh intent can expand the normal one-host cell. The fleet
 	// running cap remains in force; the retained-host bound is never raised.
 	if reason != "" {
+		perCell = MaxHostsPerProfile
 		room = fleetN < fleetCap && cellN < MaxHostsPerProfile
 		if !room {
-			return finish(rows, -1, "", false, ReasonAtCapacity)
+			return finish(rows, -1, "", false, capacityReason(in, perCell))
 		}
 		if in.Request.FreshHost {
 			if RetainedInProfile(in.Hosts, requested) >= MaxHostsPerProfile {
-				return finish(rows, -1, "", false, ReasonAtCapacity)
+				return finish(rows, -1, "", false, capacityReason(in, perCell))
 			}
 			return finish(rows, -1, ActionCreate, false, reason)
 		}
@@ -359,10 +364,10 @@ func Select(in Input) Result {
 		return finish(rows, best.index, ActionReport, false, best.reason)
 	}
 	if (len(eligible) > 0 && !room) || (cellN >= perCell && reason == "") || fleetN >= fleetCap {
-		return finish(rows, -1, "", false, ReasonAtCapacity)
+		return finish(rows, -1, "", false, capacityReason(in, perCell))
 	}
 	if RetainedInProfile(in.Hosts, requested) >= MaxHostsPerProfile {
-		return finish(rows, -1, "", false, ReasonAtCapacity)
+		return finish(rows, -1, "", false, capacityReason(in, perCell))
 	}
 	if !mayCreate(in.Caller, requested, in.DefaultProfile) {
 		return finish(rows, -1, "", false, ReasonCallerCannotCreate)
@@ -408,6 +413,9 @@ func finish(rows []judged, chosen int, action string, ready bool, reason string)
 // hands-off list and the protected annotation) is recorded before profile, so
 // a protected host is not described as only the wrong profile.
 func judge(h Host, c Caller, requested, repo string, now time.Time) (reason string, suitable, eligible bool) {
+	if h.ReservationAttempt != "" {
+		return ReasonCreateUnconfirmed, false, false
+	}
 	if h.Agent != AgentCodex || h.Mode != ModeRemote {
 		return ReasonNotCodexHost, false, false
 	}
@@ -789,10 +797,25 @@ func MemoryFull(h Host, now time.Time) bool {
 // running cap, suspended/failed/starting records also occupy a profile slot.
 func RetainedInProfile(hosts []Host, profile string) int {
 	return count(hosts, func(h Host) bool {
-		return h.Agent == AgentCodex && h.Mode == ModeRemote && !h.Archived && !poolExcluded(h) && !rescueBlocked(h) && profileMatches(h.ResolvedProfile, profile)
+		return h.Agent == AgentCodex && h.Mode == ModeRemote && !h.Archived && !h.Reserved && !h.WorkbenchAccount && !h.HandsOff && !h.ProtectedAnnotation && profileMatches(h.ResolvedProfile, profile)
 	})
 }
 
 // RunningHosts includes pending API admissions so a just-created session is
 // counted before its first controller status update.
 func RunningHosts(hosts []Host) int { return count(hosts, inFleet) }
+
+// An unconfirmed row is counted but never usable. Name the state when its
+// contribution fills the relevant running or retained bound.
+func capacityReason(in Input, perCell int) string {
+	_, fleetCap := caps(in)
+	cellFull := count(in.Hosts, func(h Host) bool { return inCell(h, in.ResolvedProfile) }) >= perCell
+	retainedFull := RetainedInProfile(in.Hosts, in.ResolvedProfile) >= MaxHostsPerProfile
+	fleetFull := RunningHosts(in.Hosts) >= fleetCap
+	for _, h := range in.Hosts {
+		if h.ReservationAttempt != "" && (fleetFull || ((cellFull || retainedFull) && h.ResolvedProfile == in.ResolvedProfile)) {
+			return ReasonCreateUnconfirmed
+		}
+	}
+	return ReasonAtCapacity
+}

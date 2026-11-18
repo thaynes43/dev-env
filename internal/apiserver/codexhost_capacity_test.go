@@ -172,9 +172,6 @@ func TestCapacityReservationAcrossReplicas(t *testing.T) {
 		return c.Update(ctx, obj, opts...)
 	}})
 	ctx := context.Background()
-	if err := f.c.Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: codexCapacityNamespace, Name: codexCapacityName}}); err != nil {
-		t.Fatal(err)
-	}
 	// Two API server objects share storage, never a process mutex.
 	other := &Server{Live: f.srv.Live, Client: f.srv.Client, Policy: f.srv.Policy}
 	start := make(chan struct{})
@@ -450,7 +447,7 @@ func TestCapacitySnapshotCountsCommitDuringList(t *testing.T) {
 	armed = true
 	err = f.srv.createOrdinaryCodexHost(ctx, sess, c, req)
 	var refusal *apiError
-	if !errors.As(err, &refusal) || refusal.body.Reason != "at_capacity" {
+	if !errors.As(err, &refusal) || refusal.body.Reason != "create_unconfirmed" {
 		t.Fatalf("missed late commit: %v", err)
 	}
 }
@@ -458,6 +455,9 @@ func TestCapacitySnapshotCountsCommitDuringList(t *testing.T) {
 func TestCapacityConfiguredNamespace(t *testing.T) {
 	f := newCodexFixture(t)
 	f.srv.PolicyNamespace = "operator-control"
+	if err := f.c.Create(context.Background(), &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "operator-control", Name: codexCapacityName}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "pending", Profile: "dev", Attempt: "attempt"}); err != nil {
 		t.Fatal(err)
 	}

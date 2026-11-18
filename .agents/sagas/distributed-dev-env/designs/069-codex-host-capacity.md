@@ -2,7 +2,7 @@
 
 Status: proposed source contract, 2026-11-18. Nothing installed or accepted.
 Owner: story 922's coordinator; this branch is its worker's delivery.
-Companion decision: ADR-031. This supplements DESIGN-063 and preserves
+Companion decision: ADR-032. This supplements DESIGN-063 and preserves
 DESIGN-067 section 6.2's ordinary/workbench isolation.
 
 ## Investigation at pinned main adce1019344a62ebdb65ade85927410e241776c2
@@ -56,7 +56,8 @@ DESIGN-067 section 6.2's ordinary/workbench isolation.
 ## Proposed rule and boundaries
 
 Agentd on an ordinary Codex remote host passively reads its own cgroup v2
-`memory.current` and `memory.max`. It reports only byte counts, with sample time;
+`memory.current`, `memory.stat` and `memory.max`. It reports the working set (`memory.current` minus `inactive_file` from
+`memory.stat`, floored at zero) and the limit, with sample time;
 no process list, native RPC, path or transcript is sent. Missing/unreadable,
 unlimited, malformed, stale or old-pod reports are unknown and preserve reuse.
 A host is full when a fresh current-pod sample leaves less than 1 GiB OR less
@@ -77,8 +78,11 @@ the new session. Do not expose new fields in legacy Session/list/fleet views.
 Reuse stays the default. Normal profile cap remains one; `host_full` or an
 explicit fresh request may use a second slot, with a fixed upper bound of two
 ordinary retained hosts per profile and the existing fleet running cap. Pending
-creates count. The operator creates/owns `dev-env-codex-host-capacity` in its
-configured policy namespace (`--policy-namespace`, default `dev-env-system`).
+creates count. GitOps ships an empty `dev-env-codex-host-capacity` ConfigMap
+in the configured policy namespace (`--policy-namespace`, default `dev-env-system`),
+with no `pending` key, `kustomize.toolkit.fluxcd.io/ssa: IfNotPresent` and
+`kustomize.toolkit.fluxcd.io/prune: disabled`. Reconciliation must never reset
+operator reservations. The operator only reads and updates this named object.
 Compare-and-swap appends one counted reservation per create, capped by profile
 and fleet; uncertain creates occupy one slot, rather than block the whole fleet.
 A snapshot of reservations is read **before** the live session list: a create
@@ -109,28 +113,56 @@ No host is stopped, resumed, resized, reimaged or paired by this work.
 ### Installation prerequisites (not performed here)
 
 The coordinator must arrange the haynes-ops CRD copy before the operator pin,
-and confirm `get`, `create` and `update` ConfigMap permissions in the configured
-policy namespace (creation is not resource-name scoped in Kubernetes RBAC).
+and confirm `get` and `update` ConfigMap permissions on this one name only in
+the configured policy namespace. The operator never creates the ledger.
 No RBAC prerequisite PR has been supplied or opened by this worker: haynes-ops
 changes are expressly outside this work order. Installation remains unfulfilled
 until that GitOps prerequisite is linked and verified. New agentd is needed for
 memory samples; an authorized fresh request works with an old reporting host.
 
-## Owner question
+## Coordinator rulings, 2026-11-18
 
-Q-069-01: Is the proposed 1 GiB / 20% headroom reserve suitable for routine use?
-Recommendation: start conservatively and measure after installation. It cannot
-predict a large turn, a tool's allocation, or launches directly from the phone.
-This source proposal grants no deployment or live-host authority. The coordinator
-reviews the contract and Claude Opus reads the PR before merge.
+These are rulings by coordinator `dev-env-fable-coordinator-1109` as story 922's
+owner, not rulings by Tom. OP922 comment **9217** records R1–R4; comment **9228**
+records the independent review and dispatch of fix-round rulings G1–G9.
+Comment **9222** is the previous source/test handoff, superseded by this round.
 
-Q-069-02: May two unresolved create outcomes occupy the default fleet's two
-slots until their creators can be independently fenced? Recommendation: keep
-this fail-closed limit; an elapsed timer is not proof a delayed create stopped.
-The second Claude Opus review reported no new findings and asked for explicit
-owner acceptance of this limit before ADR-031 leaves Proposed. No owner ruling
-is claimed here. This question gates accepting the ADR and rollout, not this
-worker's already authorized source/test delivery.
+- **R1 / Q-069-01 answered:** retain less than 1 GiB OR less than 20% remaining;
+  measure after install and tune only in a later PR. **G5** requires the working
+  set in this round, overriding the review's suggestion to defer M4.
+- **R2 / Q-069-02 answered:** unknown creates retain their slot, with no expiry,
+  manual reset or extra slot. **G2** names session and attempt in refusals and
+  logs, uses `create_unconfirmed`, and lists a phantom only as skipped. A
+  supported reset must fence the old creator. Follow-up story **925** exists
+  (comment 9228); ADR-032 remains **Proposed**, with no installation or acceptance.
+- **R3 / G1:** the operator never creates the ledger. Missing, forbidden or
+  malformed ledger is HTTP 503 `capacity_ledger_unavailable`, naming the
+  ConfigMap and state. It blocks creates (including the first host and Codex
+  rescue restore) and selection-chosen resumes, while `use` and `report` keep
+  working. Malformed data is never overwritten. GitOps and named get/update
+  rights are installation prerequisites, outside this worker's scope.
+- **G3:** Kubernetes 403, 422, 429, 404, 405, 406, 413 and 415 are definite
+  refusals and release the reservation, as do existing definite API refusals.
+  Create ignores client cancellation but has its own 30-second timeout. After
+  an unknown outcome, read its name once; the exact attempt releases because
+  the committed session now counts itself. Everything else keeps its slot.
+- **G4:** rescue-blocked and unresolved-account ordinary hosts retain a profile
+  slot until archive or removal. Only reserved, workbench, hands-off and
+  protected hosts stay excluded. The existing running-cap exclusions remain.
+- **G6:** reconstruct P1–P6 and prove the fresh guard, malformed-ledger and
+  Forbidden/Invalid guards by killing review mutants X1–X3.
+- **R4 / G7:** use ADR-032 (ADR-031 already belongs to stop recovery); DESIGN-069
+  keeps its number. The decision stays Proposed.
+- **G8:** refusals must not print empty action/host fields. After a committed
+  create, retry release a bounded number of times before logging exhaustion.
+  A pod can steer its own memory report, which grants no create authority.
+  The no-session-fresh rule covers v2 session pods; trusted-client callers,
+  including the v1 service account, keep their existing create authority.
+  A future-dated memory sample is unknown. A resume takes no reservation, as
+  before this change; concurrent resume/create can still exceed the running
+  fleet cap, without changing the retained-host bound.
+- **G9:** record these coordinator rulings and provenance here; do not attribute
+  them to Tom or mark the decision Accepted.
 
 ## Evidence and delivery
 
@@ -187,5 +219,5 @@ suites passed. `make generate lint check-layout` passed with zero lint issues
 and no generation diff. Full agentd (245.090s), protocol, CLI and CRD suites
 passed during this delivery. All 28 final mutation runs failed their acceptance
 assertion and restored the original files. The second Claude Opus advisory
-review said “Looks good” with no new findings; Q-069-02 retains its stated limit.
+review said “Looks good” with no new findings; R2 answers Q-069-02 with its stated limit.
 CI must still finish on the delivered head; the PR/handoff records that result.

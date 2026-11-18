@@ -28,7 +28,33 @@ func sampleCodexHostMemory(now time.Time, read func(string) ([]byte, error)) *pr
 			return nil
 		}
 	}
-	m := &protocol.CodexHostMemory{CurrentBytes: values[0], LimitBytes: values[1], ObservedAt: now.UTC()}
+	stat, err := read("/sys/fs/cgroup/memory.stat")
+	if err != nil || len(stat) > 64<<10 {
+		return nil
+	}
+	var inactive int64
+	found := false
+	for line := range strings.Lines(string(stat)) {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || strings.IndexFunc(fields[1], func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+			return nil
+		}
+		n, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			return nil
+		}
+		if fields[0] == "inactive_file" {
+			if found {
+				return nil
+			}
+			inactive, found = n, true
+		}
+	}
+	if !found {
+		return nil
+	}
+	workingSet := max(int64(0), values[0]-inactive)
+	m := &protocol.CodexHostMemory{CurrentBytes: workingSet, LimitBytes: values[1], ObservedAt: now.UTC()}
 	if !m.Valid() {
 		return nil
 	}

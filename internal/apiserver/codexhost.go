@@ -121,7 +121,8 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 	}
 	var last string
 	for range codexHostSelectPasses {
-		hosts, login, err := s.codexHostFacts(ctx, tmpl)
+		_, pending, ledgerErr := s.codexCapacity(ctx)
+		hosts, login, err := s.codexHostFactsFrom(ctx, tmpl, pending)
 		if err != nil {
 			return 0, nil, fromKubeError(err, "sessions")
 		}
@@ -133,6 +134,9 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 		in.ProfileUnavailable = !requestedAccount.Available() && !ordinaryProfile
 		in.Hosts, in.Login, in.Now = hosts, login, s.now()
 		res := codexhostpool.Select(in)
+		if ledgerErr != nil && (res.Action == codexhostpool.ActionCreate || res.Action == codexhostpool.ActionResume) {
+			return 0, nil, ledgerErr
+		}
 		last = res.Host
 		if check || res.Action != codexhostpool.ActionUse || res.Host == "" {
 			s.logCodexHostSelect(c, res, check)
@@ -291,12 +295,16 @@ func (s *Server) logCodexHostSelect(c *caller, res codexhostpool.Result, check b
 }
 
 func (s *Server) codexHostFacts(ctx context.Context, tmpl *templates.Templates) ([]codexhostpool.Host, codexhostpool.Login, error) {
-	if s.Live == nil {
-		return nil, "", newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "sessions cannot be read")
-	}
 	_, pending, err := s.codexCapacity(ctx)
 	if err != nil {
 		return nil, "", err
+	}
+	return s.codexHostFactsFrom(ctx, tmpl, pending)
+}
+
+func (s *Server) codexHostFactsFrom(ctx context.Context, tmpl *templates.Templates, pending []codexCapacityPending) ([]codexhostpool.Host, codexhostpool.Login, error) {
+	if s.Live == nil {
+		return nil, "", newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "sessions cannot be read")
 	}
 	var list v1alpha1.AgentSessionList
 	if err := s.Live.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {

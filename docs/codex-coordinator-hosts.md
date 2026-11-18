@@ -37,11 +37,12 @@ actual commands after the supported route passes.
 ## Room on an ordinary reusable host
 
 [DESIGN-069](../.agents/sagas/distributed-dev-env/designs/069-codex-host-capacity.md)
-and proposed ADR-031 add a bounded capacity route (source only; installation and
+and proposed ADR-032 add a bounded capacity route (source only; installation and
 phone acceptance are separate). Reuse remains first. A fresh report from the
 present pod marks a host `host_full` when its agent container has less than
 1 GiB **or** less than 20% memory remaining. Agentd reads its own finite cgroup
-v2 memory budget, without exec, process inspection or native thread polling.
+v2 working set (`memory.current` minus `inactive_file` in `memory.stat`,
+floored at zero) and limit, without exec, process inspection or native thread polling.
 Missing, stale, unlimited or unmeasurable memory keeps the existing reuse rule.
 It is an admission estimate: tools and phone turns can allocate after the sample.
 
@@ -62,14 +63,16 @@ agent-run dev-env --agent codex --interactive --profile dev --size L --fresh-hos
 The first command only checks. The second creates only after the API rechecks
 selection and bounds. `--fresh-host` requires the selection route to be enabled;
 it refuses an old/disabled route. It is accepted only for a new Codex interactive
-host, never for restore, local or task mode. **No session, including a workbench
-session, may request it.** It records `codex-host-create-reason=fresh_host` and
+host, never for restore, local or task mode. **No v2 session pod, including a workbench
+session, may request it.** Trusted-client callers retain their existing Codex
+host creation authority; this class includes the v1 service account. It records `codex-host-create-reason=fresh_host` and
 the authenticated requester as operator-owned session annotations. It neither
 copies pairing nor changes the reusable host; pairing a new host remains the
 owner's action.
 
 Ordinary capacity is bounded to two retained hosts per resolved profile, including
-suspended, failed and pending hosts; protected/excluded hosts stay outside the
+suspended, failed, rescue-blocked, unresolved-account and pending hosts; only
+reserved, workbench, hands-off and protected hosts stay outside the
 pool. Archived records do not occupy a slot. The existing running fleet cap also
 applies, and pending creates count before their first status update. Default
 selection still allows one running host per profile; only full/fresh intent may
@@ -84,7 +87,11 @@ only after observing the exact created attempt. If no such object can be proved,
 report that occupied slot for owner review. There is no reset based on age or
 unproved absence; do not edit the reservation or retry by another route. Rescue
 restore skips reuse selection but keeps the fixed profile and fleet bounds.
-Installation requires the GitOps CRD copy and ConfigMap get/create/update RBAC;
+A missing, forbidden or malformed ledger refuses counted create/resume with
+`capacity_ledger_unavailable`; reuse and report continue. This also blocks Codex
+rescue restore. GitOps ships the ledger empty with no `pending` key and the
+IfNotPresent/prune-disabled annotations so reconciliation cannot reset it.
+Installation requires the GitOps CRD copy and `get`/`update` RBAC on that one name;
 this source PR changes neither the deployment nor haynes-ops. Legacy show/list/fleet and select
 responses gain no fields; new reason values use the existing `reason` key.
 
