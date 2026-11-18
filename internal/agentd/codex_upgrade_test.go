@@ -215,3 +215,30 @@ func TestCodexRemotePreviousPackage(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexHostLiveReceiptVersions(t *testing.T) {
+	for _, version := range []string{previousPinnedCodexVersion, managedCodexVersion, "0.168.0"} {
+		for _, phase := range []string{"Preparing", "Attempting", "Confirming", "Confirmed", "Stopping", "Stopped"} {
+			t.Run(version+"/"+phase, func(t *testing.T) {
+				s, o := hostFixture(t)
+				hostLiveConfig(t, s, o)
+				writeVersionedHostReceipt(t, s, phase, version)
+				d, _ := hostDeps(t, s, o)
+				d.process = func(Settings) (codexHostProcess, error) {
+					return codexHostProcess{State: "Live", PID: 123, Identity: codexHostIdentity{BootID: "fixture-boot", StartTicks: 45}}, nil
+				}
+				status, err := observeCodexHost(context.Background(), s, o, d)
+				want := "NeedsReview"
+				if version == "0.168.0" || phase == "Preparing" || phase == "Confirming" {
+					want = "Unknown"
+				}
+				if version != "0.168.0" && phase == "Confirmed" {
+					want = "NeedsLogin"
+				}
+				if status.Code != want || (err != nil) != (want == "Unknown") {
+					t.Fatalf("live receipt: %+v %v want %s", status, err, want)
+				}
+			})
+		}
+	}
+}

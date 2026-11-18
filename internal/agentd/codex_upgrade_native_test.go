@@ -241,15 +241,34 @@ func TestPinnedCodexHomeLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen := map[string]bool{}
+	var names []string
 	for _, entry := range entries {
 		// Names only, never contents or runtime identifiers below these entries.
 		t.Log(entry.Name())
 		seen[entry.Name()] = true
-		if _, known := classifyHistoryName(codexLayout, entry.Name()); !known {
-			t.Errorf("unclassified CODEX_HOME name: %s", entry.Name())
-		}
+		names = append(names, entry.Name())
+	}
+	if unknown := unclassifiedCodexHomeNames(names); len(unknown) != 0 {
+		t.Errorf("unclassified CODEX_HOME names: %v", unknown)
 	}
 	if !seen["auth.lock"] || !seen["auth.json"] || !seen["sessions"] {
 		t.Fatal("native layout actions were incomplete")
+	}
+}
+
+func unclassifiedCodexHomeNames(names []string) []string {
+	var unknown []string
+	for _, name := range names {
+		if _, known := classifyHistoryName(codexLayout, name); !known {
+			unknown = append(unknown, name)
+		}
+	}
+	return unknown
+}
+
+func TestCodexHomeQualificationRejectsUnknown(t *testing.T) {
+	unknown := unclassifiedCodexHomeNames([]string{"auth.lock", "auth.json", "config.toml", "sessions", "unqualified-fixture-name"})
+	if len(unknown) != 1 || unknown[0] != "unqualified-fixture-name" {
+		t.Fatal("layout qualification did not refuse exactly the unknown name")
 	}
 }

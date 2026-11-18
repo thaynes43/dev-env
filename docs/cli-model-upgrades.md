@@ -17,9 +17,10 @@ Cursor's inspected local HOME version symlink points to `2026.10.22-27dcf5f`; th
 
 The [agent-only 0.169.1 source audit](codex-169-upgrade-audit.md) records the
 lowest catalog tag containing both 6.2 IDs, the pinned upstream hashes, protocol
-compatibility and the coordinator's four auth claims. This source is a draft:
-the unconditional native no-refresh claim is not established. CI success is
-not permission to make it ready, merge, publish or roll it out. The helper is
+compatibility and the coordinator's four auth claims. The independent review
+closed the refresh concern: an empty refresh grant carries no keeper credential
+and a failed refresh writes nothing. Readiness requires retained-host and layout
+qualification in image CI; CI does not grant rollout or installation authority. The helper is
 intentionally not bumped; its native-login schema requires a separate reviewed
 keeper story. Historical 0.160.1 catalog/probe evidence above is preserved.
 
