@@ -166,7 +166,7 @@ start, the lock holder removes only this record's exact regular crash temp in
 its own directory; a symlink/nonregular temp refuses. All limits and the directory are fixed
 for this wait identity. Defaults are parameters, not unattended-work approval.
 Timer: whole seconds >=1s; scan cadence: whole seconds >=5s (smaller refused at start).
-Entries: 1..4096; pending: 1..1024.
+Entries: 1..1024 (larger refused at start); pending: 1..1024.
 Budget end must be at most 24 hours after wait start. This is a bound, not approval.
 
 Existing notes/files form the initial baseline unless --after names an earlier
@@ -179,13 +179,17 @@ UTF-8, controls, >255-byte names, unsafe paths or symlinks) yield one resync per
 scan batch, with a count, no names and one reason: encoding, control, length, name,
 symlink or limit (history bound). Only hashes persist; stale queued refusals are
 dropped. Entry overflow retains reported hashes and does not repeat refusals.
-Notes/timer/safe files still run. A file burst is
+Stored replay goes first, then a due timer; otherwise notes win once after a
+<=1s parent read, then the owed directory wins the next work call (timers do not
+consume that alternation). Owed state survives stop/resume; a missing owed change
+returns a directory resync. Every new directory result has that short parent read.
+A file burst is
 one directory reference. Each changed snapshot has a persisted increasing
 transition number, including returns to an earlier state; replay keeps its id.
 A counter below a pending file result refuses. Receipt/counter bounds yield
 resync (pending bound above, counter ceiling 2^63). Entry overflow yields one
 resync, then ordinary pacing.
-JSON contains only kind, id, note or path, optional reason/count, cursor, watermark,
+JSON contains only kind, id, note or path, optional reason/count/lane, cursor, watermark,
 time and optional directoryUnchecked diagnostic. Kinds:
 timer, note, file, resync, stopped, budget_end. No note text, file text or command.
 
@@ -193,9 +197,11 @@ Rearm the same explicit binding with --after/--watermark from the result and
 --ack its id. The complete result is committed before printing. Without an ACK,
 the next call returns that result unchanged with the same id, even when the
 retried call has its previous --after/--watermark; acknowledge only that stored
-result. Cursor/watermark matching still applies when acknowledging and rearming. On resync read every parent list page (pass --continue until
-none is returned), inspect directory metadata, then --ack the result with its
-returned wait cursor, never a list continuation. --reconciled is ONLY for an
+result. Cursor/watermark matching still applies when acknowledging and rearming. On resync, lane=directory asks for directory inspection only (including refused
+entries and too many entries); lane=notes asks for every parent list page (pass
+--continue until none is returned); lane=all asks for both. A legacy resync with
+no lane and a reason asks for directory inspection; with neither, inspect both.
+Then --ack the result with its returned wait cursor, never a list continuation. --reconciled is ONLY for an
 unreadable stored result: reconcile all sources and pass --ack its saved lastID
 --reconciled; recovery returns resync. A corrupt outer record refuses.
 SIGTERM/cancellation or a regular .stop marker beside the record returns stopped

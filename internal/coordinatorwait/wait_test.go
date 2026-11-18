@@ -307,6 +307,11 @@ func TestRuntimeNewFileCancelsHeldRead(t *testing.T) {
 	<-calls
 	<-c.timers
 	c.Step(10 * time.Second)
+	<-calls
+	if d := <-c.timers; d != time.Second {
+		t.Fatal("directory short read missing")
+	}
+	c.Step(time.Second)
 	out := <-done
 	if out.err != nil || out.result.Kind != "file" || scans != 2 {
 		t.Fatalf("file %#v", out)
@@ -626,7 +631,7 @@ func TestOptionsEachOperatingBound(t *testing.T) {
 			case "entries-zero":
 				o.MaxEntries = 0
 			case "entries-large":
-				o.MaxEntries = 4097
+				o.MaxEntries = 1025
 			case "pending-zero":
 				o.MaxPending = 0
 			case "pending-large":

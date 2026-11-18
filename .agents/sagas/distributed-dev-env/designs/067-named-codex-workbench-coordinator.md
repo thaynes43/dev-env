@@ -690,7 +690,7 @@ is hourly, subject to Q-067-02. Watch one explicit handoff directory only. Refus
 symlinks and paths outside it; scan bounded directory metadata at a modest cadence
 if inotify is unreliable on shared storage. File contents remain untrusted data
 for the coordinator to read deliberately. Coalesce bursts; bound the pending set;
-on overflow report `resync` and read the source list. A replayed event must not
+on overflow report `resync` and reconcile its named source lane. A replayed event must not
 create another autonomous turn.
 
 The hook must be implemented in a supported provider/harness extension, not by
@@ -726,6 +726,23 @@ Consumers handle that ID once. `--reconciled` applies only when that stored resu
 itself cannot be read; reconcile all sources and acknowledge its saved ID to
 obtain resync. A corrupt outer record still refuses.
 
+**Q-067-c2-f3-01, 2026-11-18 coordinator ruling:** question
+`op858c2f3-q1` identified that unconditional note priority conflicts with bounded
+directory delivery. The authenticated parent reply confirms: stored replay first;
+a due timer immediately next; otherwise a <=1s held parent read before every new
+directory result lets a note win once. The directory is then owed the next work
+call, even with another note waiting; its cursor is left untouched for the next
+call. Timers do not consume this alternation. Owed state is private, durable and
+survives stop/resume. An orphan owed state returns a directory resync. With all
+three lanes ready the order is timer, note, directory in three calls.
+
+Resync results carry `lane` because an empty reason formerly covered both parent
+note resync and directory-entry overflow. `directory` requires directory inspection
+only (including refusal batches and entry overflow); `notes` requires every parent
+list page; `all` requires both when a queue reset loses both lanes or the stored
+result was unreadable. Legacy reasoned results need directory inspection only;
+unreasoned legacy results need both. No parent API/cursor semantics change.
+
 The directory's resolved path, device and inode are pinned for the entire wait.
 Refused entries never stop notes, the timer or safe files: invalid UTF-8,
 controls, names over 255 bytes, unsafe path names and symlinks give one redacted
@@ -739,6 +756,10 @@ at start. Existing stop, budget end and stored-result replay survive a removed
 or replaced directory with a per-call `directoryUnchecked: true` diagnostic.
 The stored event metadata/ID stay unchanged; new waits and ordinary rearms
 still require the pinned directory. Inode reuse remains the section-12 limit.
+The entry ceiling is 1024 (larger values refuse at start). The largest allowed
+serialized private record is 2 MiB (2,097,152 bytes), including JSON escaping;
+a ceiling-sized snapshot of 255-byte names made of HTML-escaped characters
+saves and loads within that bound.
 Only changed records are written. Under the custodian lock, the next start removes
 only its exact regular crash temporary file; symlink/nonregular temps refuse.
 The budget end is at most 24 hours after the persisted start, an upper bound
@@ -1177,6 +1198,18 @@ and cadence boundaries. The PR extends the deciding-guard mutant table. The inod
 reuse limit is recorded in section 12. Source/fakes only; nothing installed or
 accepted. Independent delta review and merge remain with the coordinator; older
 PRs 1210 and 1207 and their branches are untouched.
+
+**Fix round 3 (J1–J3), 2026-11-18:** branch `agent/dev-env-1118-194527`
+retains reviewed head `822c1177cf95236ea9a940fb42d364b8c8ad6e5b`. The section-9.4
+precedence follows the parent reply to `op858c2f3-q1`, including durable owed state
+and directory resync for an orphan owed state. Fake tests exercise five ACKed
+calls with changing files/refusals/overflow, a due timer and waiting notes, the
+reverse note flood, stop/resume, locally bounded one-second reads, stable replay,
+and lane-specific reconciliation. The entry ceiling is 1024; a full snapshot of
+HTML-escaped 255-byte names saves/loads under the 2 MiB record limit. Help and guide
+distinguish directory-only resync from notes/all. The replacement PR extends the
+mutant table. Source and fakes only; nothing installed or accepted. The coordinator
+owns independent review and merge; PRs 1214, 1210 and 1207 are untouched.
 
 The worker starts no other agent/session and performs its own diff review.
 Independent/cross-family review remains with the coordinator, per this work

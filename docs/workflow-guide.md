@@ -1354,7 +1354,7 @@ answer to pending Q-067-02. A budget end is mandatory and cannot be extended on
 an existing wait. It must be at most 24 hours after the wait starts; this upper
 bound grants no unattended-work authority. `budget_end` persists the end and never rearms. Scans must be whole seconds and at least five seconds apart; smaller values
 are refused at start. Default scans are ten seconds apart, immediate entries only, at most 256 metadata records
-(ceiling 4096). They open no handoff contents or subdirectories and use no
+(ceiling 1024; larger values refuse at start). They open no handoff contents or subdirectories and use no
 inotify. Symlinked directories/ancestors, directory replacement and unclean/outside
 paths refuse. The resolved directory path, device and inode stay pinned across
 all calls for this wait. A removed directory recreated with the same device and
@@ -1387,13 +1387,19 @@ scan/read cadence instead of yielding resync on every call.
 At most one existing parent wait-any read is held, at most 900 seconds per
 request, with the existing cursor and resync semantics. Initial notes and files
 are a baseline; take a parent cursor before dispatch if earlier arrivals matter.
+Stored replay goes first, then a due timer immediately. Otherwise a new directory
+result first makes one held parent read of at most one second: a note wins once,
+then the owed directory wins the next work call even if another note is there.
+That note stays at its original cursor for the next call. Timer calls do not
+consume this alternation. The private record preserves owed state across stop
+and resume; owed state without a directory change returns a directory resync.
 Every rearm uses the confirmed returned cursor. No list or retry loop is added.
 A response that ends early is rearmed no sooner than the configured scan cadence.
 Unrelated notes and replies remain filtered by the existing server contract.
 A refusal/lost API receipt stops the command; it does not retry automatically.
 
 Every success prints one JSON object containing only `kind`, `id`, optional
-`note` or `path`, optional refused-entry `reason`/`count`, `cursor`, `watermark`,
+`note` or `path`, optional refused-entry `reason`/`count`, resync `lane`, `cursor`, `watermark`,
 `time` and optional `directoryUnchecked`. Kinds are `timer`, `note`,
 `file`, `resync`, `stopped`, `budget_end`. It carries no file/note text, key or
 command. Metadata is untrusted evidence, never an owner answer or permission.
@@ -1420,9 +1426,17 @@ before output. Without an ACK, the next call returns it unchanged with the same
 ID, timestamp, cursor and watermark, without reading sources. Consumers handle
 that ID once and acknowledge it; a wrong ID cannot advance the wait. A crash
 before a successful save emits no result. Bounded receipt history also overflows
-to `resync`. On `resync`, read **all** parent list pages with `--continue` until
-none remains, inspect directory metadata, then rearm with `--ack` and the saved
-wait cursor. The list continuation is not that cursor.
+to `resync`. Its `lane` tells the caller what to reconcile:
+
+- `directory`: inspect directory metadata only, including refused entries and too
+  many entries; no parent list read is needed.
+- `notes`: read **all** parent list pages with `--continue` until none remains.
+- `all`: do both. Queue/receipt overflow or unreadable-result recovery can need
+  both lanes. For a legacy result without `lane`, a reason means directory only;
+  no reason means both.
+
+Then rearm with `--ack` and the saved wait cursor. The list continuation is not
+that cursor.
 
 `--reconciled` is only for a stored result that itself cannot be read while the surrounding record remains valid:
 reconcile every source, then pass

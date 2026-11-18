@@ -36,8 +36,8 @@ func (o Options) Validate() error {
 	if !filepath.IsAbs(o.Directory) || filepath.Clean(o.Directory) != o.Directory || len(o.Directory) > 4096 {
 		return errors.New("directory must be an absolute clean path")
 	}
-	if o.Timer < time.Second || o.ScanEvery < 5*time.Second || o.Timer%time.Second != 0 || o.ScanEvery%time.Second != 0 || o.MaxEntries < 1 || o.MaxEntries > 4096 || o.MaxPending < 1 || o.MaxPending > 1024 || o.BudgetEnd.IsZero() {
-		return errors.New("require whole-second timer >=1s and scan cadence >=5s, entries 1..4096, pending 1..1024 and budget end")
+	if o.Timer < time.Second || o.ScanEvery < 5*time.Second || o.Timer%time.Second != 0 || o.ScanEvery%time.Second != 0 || o.MaxEntries < 1 || o.MaxEntries > 1024 || o.MaxPending < 1 || o.MaxPending > 1024 || o.BudgetEnd.IsZero() {
+		return errors.New("require whole-second timer >=1s and scan cadence >=5s, entries 1..1024, pending 1..1024 and budget end")
 	}
 	return nil
 }
@@ -45,6 +45,7 @@ func (o Options) Validate() error {
 // Result is the complete output allowlist. References are data, never commands.
 type Result struct {
 	Kind               string    `json:"kind"`
+	Lane               string    `json:"lane,omitempty"`
 	Reason             string    `json:"reason,omitempty"`
 	Count              int       `json:"count,omitempty"`
 	DirectoryUnchecked bool      `json:"directoryUnchecked,omitempty"`
@@ -78,6 +79,8 @@ type Record struct {
 	Stopped         bool               `json:"stopped"`
 	Ended           bool               `json:"ended"`
 	NeedsResync     bool               `json:"needsResync"`
+	ResyncLane      string             `json:"resyncLane,omitempty"`
+	DirectoryOwed   bool               `json:"directoryOwed,omitempty"`
 }
 
 func New(o Options, now time.Time, cursor string, files map[string]string) *Record {
@@ -115,15 +118,16 @@ func (r *Record) Bind(o Options, ack string, resume, reconciled bool) error {
 	if r.Stopped && !resume {
 		return errors.New("stopped wait requires explicit --resume with the same thread ID")
 	}
-	if r.NeedsResync {
+	if r.NeedsResync && r.Outstanding != nil && r.Outstanding.Kind == "resync" {
 		r.Seen = nil
+		r.NeedsResync = false
+		r.ResyncLane = ""
 	}
 	r.LastID = ""
 	r.Outstanding = nil
-	r.NeedsResync = false
 	r.Stopped = false
 	if lost {
-		r.resync()
+		r.resync("all")
 	}
 
 	return nil
@@ -134,7 +138,7 @@ func (r *Record) Bind(o Options, ack string, resume, reconciled bool) error {
 func (r *Record) Note(name, cursor string, resync bool) {
 	r.Cursor = cursor
 	if resync {
-		r.resync()
+		r.resync("notes")
 		return
 	}
 	if name != "" {
@@ -143,16 +147,30 @@ func (r *Record) Note(name, cursor string, resync bool) {
 }
 
 func (r *Record) add(e Result) {
-	if r.NeedsResync || slices.Contains(r.Seen, e.ID) || e.ID == r.LastID || slices.ContainsFunc(r.Pending, func(p Result) bool { return p.ID == e.ID }) {
+	if r.NeedsResync && !(r.ResyncLane == "directory" && e.Kind == "note") || slices.Contains(r.Seen, e.ID) || e.ID == r.LastID || slices.ContainsFunc(r.Pending, func(p Result) bool { return p.ID == e.ID }) {
 		return
 	}
 	if len(r.Pending) >= r.Options.MaxPending {
-		r.resync()
+		r.resync("all")
 		return
 	}
 	r.Pending = append(r.Pending, e)
 }
-func (r *Record) resync() {
+func (r *Record) resync(lane string) {
+	// A queue reset must also reconcile any other lane whose metadata it drops.
+	for _, event := range r.Pending {
+		other := "directory"
+		if event.Kind == "note" {
+			other = "notes"
+		}
+		if lane != other {
+			lane = "all"
+		}
+	}
+	if r.NeedsResync && r.ResyncLane != lane {
+		lane = "all"
+	}
+	r.ResyncLane = lane
 	r.NeedsResync = true
 	r.Pending = nil
 	r.PendingRefusals = nil
@@ -185,7 +203,7 @@ func (r *Record) Refuse(refused map[string]string) {
 		return
 	}
 	if len(r.Pending) >= r.Options.MaxPending {
-		r.resync()
+		r.resync("directory")
 		return
 	}
 	reason := refused[keys[0]]
@@ -205,7 +223,7 @@ func (r *Record) Scan(files map[string]string, overflow bool) {
 	if overflow {
 		if !r.EntryOverflow {
 			r.EntryOverflow = true
-			r.resync()
+			r.resync("directory")
 		}
 		return
 	}
@@ -226,17 +244,24 @@ func (r *Record) Scan(files map[string]string, overflow bool) {
 	r.Files = files
 	r.Watermark = watermark(files)
 	if changes > r.Options.MaxPending {
-		r.resync()
+		r.resync("directory")
 		return
 	}
 	if changed {
 		if r.Transitions >= 1<<63 {
-			r.resync()
+			r.resync("directory")
 			return
 		}
 		r.Transitions++
 		r.add(Result{Kind: "file", ID: fileID(r.Watermark, r.Transitions), Path: r.Options.Directory})
 	}
+}
+
+func directoryResult(e Result) bool {
+	return e.Kind == "file" || e.Kind == "resync" && (e.Lane == "directory" || e.Reason != "")
+}
+func (r *Record) directoryReady() bool {
+	return r.NeedsResync && r.ResyncLane != "notes" || slices.ContainsFunc(r.Pending, directoryResult)
 }
 
 // Take coalesces missed timer periods; stop and budget take precedence over work.
@@ -254,17 +279,44 @@ func (r *Record) Take(now time.Time, stop bool) *Result {
 	case !now.Before(r.Options.BudgetEnd):
 		r.Ended = true
 		e.Kind = "budget_end"
-	case r.NeedsResync:
-		e.Kind = "resync"
-	case len(r.Pending) > 0 && len(r.Seen) >= r.Options.MaxPending:
-		r.resync()
-		e.Kind = "resync"
-	case len(r.Pending) > 0:
-		e = r.Pending[0]
-		r.Pending = r.Pending[1:]
 	case !now.Before(r.NextTimer):
 		e.Kind = "timer"
 		r.NextTimer = now.Add(r.Options.Timer)
+	case !r.DirectoryOwed && (!r.NeedsResync || r.ResyncLane == "directory") && len(r.Seen) < r.Options.MaxPending && slices.ContainsFunc(r.Pending, func(p Result) bool { return p.Kind == "note" }):
+		index := slices.IndexFunc(r.Pending, func(p Result) bool { return p.Kind == "note" })
+		e = r.Pending[index]
+		r.Pending = slices.Delete(r.Pending, index, index+1)
+		r.DirectoryOwed = r.directoryReady()
+	case r.NeedsResync:
+		e.Kind = "resync"
+		e.Lane = r.ResyncLane
+		if e.Lane == "" {
+			e.Lane = "all"
+		} // legacy checkpoint
+		r.DirectoryOwed = false
+	case len(r.Pending) > 0 && len(r.Seen) >= r.Options.MaxPending:
+		r.resync("all")
+		e.Kind = "resync"
+		e.Lane = "all"
+		r.DirectoryOwed = false
+	case len(r.Pending) > 0:
+		index := 0
+		if r.DirectoryOwed {
+			if directory := slices.IndexFunc(r.Pending, directoryResult); directory >= 0 {
+				index = directory
+			}
+		}
+		e = r.Pending[index]
+		r.Pending = slices.Delete(r.Pending, index, index+1)
+		if e.Kind == "note" && r.directoryReady() {
+			r.DirectoryOwed = true
+		}
+		if directoryResult(e) {
+			r.DirectoryOwed = false
+			if e.Kind == "resync" {
+				e.Lane = "directory"
+			}
+		}
 	default:
 		return nil
 	}
@@ -325,6 +377,9 @@ func watermark(files map[string]string) string {
 // validate refuses malformed saved metadata before it can become output. The
 // private record is a checkpoint, not a source of instructions or arbitrary paths.
 func (r *Record) validate() error {
+	if r.ResyncLane != "" && r.ResyncLane != "directory" && r.ResyncLane != "notes" && r.ResyncLane != "all" {
+		return errors.New("invalid resync lane")
+	}
 	if r.Started.IsZero() || r.Options.BudgetEnd.After(r.Started.Add(24*time.Hour)) {
 		return errors.New("budget end exceeds 24-hour wait bound")
 	}
@@ -365,6 +420,9 @@ func (r *Record) validate() error {
 	return nil
 }
 func (r *Record) validateResult(e Result, complete bool) error {
+	if e.Lane != "" && (e.Kind != "resync" || e.Lane != "directory" && e.Lane != "notes" && e.Lane != "all") {
+		return errors.New("invalid result lane")
+	}
 	if !validID(e.ID) || e.Count < 0 || e.Count > 4096 || e.Count != 0 && (e.Kind != "resync" || e.Reason == "") || e.DirectoryUnchecked {
 		return errors.New("invalid pending ID or diagnostic metadata")
 	}

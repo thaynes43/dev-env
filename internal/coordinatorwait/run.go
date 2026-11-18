@@ -37,6 +37,8 @@ func (rt Runtime) Run(ctx context.Context, r *Record) (*Result, error) {
 	defer cancel()
 	var answers <-chan noteAnswer
 	var done <-chan struct{}
+	var cancelRead = func() {}
+	shortReadDone := false
 	defer func() {
 		cancel()
 		if done != nil {
@@ -56,6 +58,9 @@ func (rt Runtime) Run(ctx context.Context, r *Record) (*Result, error) {
 		if stop || !now.Before(r.Options.BudgetEnd) {
 			return rt.finish(r, now, stop)
 		}
+		if !now.Before(r.NextTimer) {
+			return rt.finish(r, now, false)
+		}
 		if !now.Before(nextScan) {
 			snapshot, err := rt.Scan()
 			if err != nil {
@@ -63,10 +68,42 @@ func (rt Runtime) Run(ctx context.Context, r *Record) (*Result, error) {
 			}
 			r.Scan(snapshot.Files, snapshot.Overflow)
 			r.Refuse(snapshot.Refused)
+			if r.DirectoryOwed && !r.directoryReady() {
+				r.resync("directory")
+			}
 			nextScan = now.Add(r.Options.ScanEvery)
 			if err := rt.Save(r); err != nil {
 				return nil, err
 			}
+		}
+		if r.directoryReady() && !shortReadDone {
+			// A long read may already be held from before this scan. Cancel and
+			// join it before opening the one-second read from the saved cursor.
+			if done != nil {
+				cancelRead()
+				<-done
+				answers = nil
+				done = nil
+			}
+			answer, received := rt.shortRead(waitCtx, r)
+			shortReadDone = true
+			if ctx.Err() != nil || !rt.Clock.Now().Before(r.Options.BudgetEnd) || !rt.Clock.Now().Before(r.NextTimer) {
+				continue
+			}
+			if received {
+				if answer.err != nil {
+					return nil, answer.err
+				}
+				if answer.note.Cursor == "" {
+					return nil, errors.New("parent wait returned no cursor")
+				}
+				// The owed directory wins this call. Leaving the cursor untouched
+				// makes a concurrent note available to the next call.
+				if !r.DirectoryOwed {
+					r.Note(answer.note.Name, answer.note.Cursor, answer.note.Resync)
+				}
+			}
+			continue // recheck stop, budget and timer after the held read
 		}
 		if result, err := rt.finish(r, now, false); result != nil || err != nil {
 			return result, err
@@ -81,7 +118,9 @@ func (rt Runtime) Run(ctx context.Context, r *Record) (*Result, error) {
 			answers = ch
 			done = ended
 			cursor := r.Cursor
-			go func() { defer close(ended); n, err := rt.Notes(waitCtx, cursor, duration); ch <- noteAnswer{n, err} }()
+			readCtx, stopRead := context.WithCancel(waitCtx)
+			cancelRead = stopRead
+			go func() { defer close(ended); n, err := rt.Notes(readCtx, cursor, duration); ch <- noteAnswer{n, err} }()
 		}
 		at := minTime(nextScan, r.NextTimer, r.Options.BudgetEnd)
 		if answers == nil {
@@ -95,6 +134,7 @@ func (rt Runtime) Run(ctx context.Context, r *Record) (*Result, error) {
 		case answer := <-answers:
 			timer.Stop()
 			<-done
+			cancelRead()
 			answers = nil
 			done = nil
 			if ctx.Err() != nil || !rt.Clock.Now().Before(r.Options.BudgetEnd) {
@@ -116,6 +156,32 @@ func (rt Runtime) Run(ctx context.Context, r *Record) (*Result, error) {
 		}
 	}
 }
+
+// shortRead bounds the held request locally too, using the injected clock.
+// An answer not consumed here never advances the saved parent cursor.
+func (rt Runtime) shortRead(ctx context.Context, r *Record) (noteAnswer, bool) {
+	readCtx, cancel := context.WithCancel(ctx)
+	answers := make(chan noteAnswer, 1)
+	done := make(chan struct{})
+	cursor := r.Cursor
+	go func() {
+		defer close(done)
+		n, err := rt.Notes(readCtx, cursor, time.Second)
+		answers <- noteAnswer{n, err}
+	}()
+	defer func() { cancel(); <-done }()
+	timer := rt.Clock.NewTimer(max(0, minTime(rt.Clock.Now().Add(time.Second), r.NextTimer, r.Options.BudgetEnd).Sub(rt.Clock.Now())))
+	defer timer.Stop()
+	select {
+	case answer := <-answers:
+		return answer, true
+	case <-timer.C():
+		return noteAnswer{}, false
+	case <-ctx.Done():
+		return noteAnswer{}, false
+	}
+}
+
 func (rt Runtime) finish(r *Record, now time.Time, stop bool) (*Result, error) {
 	result := r.Take(now, stop)
 	if result == nil {

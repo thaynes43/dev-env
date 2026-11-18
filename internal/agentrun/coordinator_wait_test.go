@@ -319,13 +319,17 @@ func TestCoordinatorWaitRefusedEntryThenNote(t *testing.T) {
 				writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "note", Name: parentTestMetadata().Name, Child: "child", Kind: "result", CreatedAt: testNow, Cursor: "43"})
 			}
 			h.mustRun(ExitOK, args...)
+			note := resultFrom(t, h)
+			if note.Kind != "note" || len(h.api.requests()) != 2 {
+				t.Fatal("refused entry prevented first note")
+			}
+			h.mustRun(ExitOK, append(args, "--ack", note.ID)...)
 			refusal := resultFrom(t, h)
-			if refusal.Kind != "resync" || refusal.Reason == "" || refusal.Path != "" || refusal.Note != "" {
+			if refusal.Kind != "resync" || refusal.Lane != "directory" || refusal.Reason == "" || refusal.Path != "" || refusal.Note != "" {
 				t.Fatal("unsafe refusal output")
 			}
-			h.mustRun(ExitOK, append(args, "--ack", refusal.ID)...)
-			if resultFrom(t, h).Kind != "note" || len(h.api.requests()) != 2 {
-				t.Fatal("refused entry prevented later note")
+			if len(h.api.requests()) != 3 {
+				t.Fatal("owed directory skipped short parent read")
 			}
 		})
 	}

@@ -91,7 +91,7 @@ type Snapshot struct {
 // Scan reads at most max+1 names and max metadata records; never file contents
 // or subdirectories. A symlinked entry is a refusal, including a dangling link.
 func (d *Directory) Scan(max int) (Snapshot, error) {
-	if max < 1 || max > 4096 {
+	if max < 1 || max > 1024 {
 		return Snapshot{}, errors.New("invalid scan bound")
 	}
 	if err := d.check(); err != nil {
