@@ -12,10 +12,11 @@ import (
 	"testing"
 	"time"
 
+	testingclock "k8s.io/utils/clock/testing"
+
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/coordinatorwait"
-	testingclock "k8s.io/utils/clock/testing"
 )
 
 func waitHarness(t *testing.T) (*harness, []string) {
@@ -244,3 +245,22 @@ func TestCoordinatorWaitCancelledContextPersistsStop(t *testing.T) {
 }
 
 var _ io.Writer = failedWaitOutput{}
+
+func TestCoordinatorWaitFreshCancellationDoesNotConnect(t *testing.T) {
+	h, args := waitHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if Run(ctx, args, h.env) != ExitOK || resultFrom(t, h).Kind != "stopped" || len(h.api.requests()) != 0 {
+		t.Fatal("fresh cancellation opened read")
+	}
+}
+
+func TestCoordinatorWaitBudgetDuringCursorCapture(t *testing.T) {
+	h, args := waitHarness(t)
+	c := h.env.WaitClock.(*testingclock.FakeClock)
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) { c.Step(4 * time.Hour); <-r.Context().Done() }
+	h.mustRun(ExitOK, args...)
+	if r := resultFrom(t, h); r.Kind != "budget_end" || len(h.api.requests()) != 1 {
+		t.Fatal("cursor capture outlived budget or rearmed")
+	}
+}

@@ -206,7 +206,7 @@ func watermark(files map[string]string) string {
 	slices.Sort(keys)
 	h := sha256.New()
 	for _, k := range keys {
-		fmt.Fprintf(h, "%d:%s:%s\n", len(k), k, files[k])
+		_, _ = fmt.Fprintf(h, "%d:%s:%s\n", len(k), k, files[k])
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

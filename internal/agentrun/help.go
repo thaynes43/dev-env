@@ -150,7 +150,9 @@ is refused.
 
 Start a bounded task on an OpenProject item, read its state and retained outcome,
 or stop it. brief prints the embedded instructions offline. Use help coordinator
-start, help coordinator status, or help coordinator stop for flags.
+start, help coordinator status, help coordinator stop or help coordinator wait
+for flags. wait holds timer/note/file metadata for its own calling thread; it
+does not create a provider turn.
 `,
 	"coordinator wait": `Usage: agent-run coordinator wait --thread ID --wait-id ID --directory /absolute/path --budget-end RFC3339 [--timer 1h] [--scan-every 10s] [--max-entries 256] [--max-pending 64] [--after CURSOR] [--watermark HASH] [--ack ID] [--resume] [--reconciled]
 

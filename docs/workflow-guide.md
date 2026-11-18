@@ -1330,6 +1330,74 @@ until none is returned. Then start `agent-run parent wait-any --after` with
 the kept cursor. The wait cursor and the list continuation are different
 things.
 
+### A coordinator combines timer, note and handoff metadata
+
+`agent-run coordinator wait` (DESIGN-067 slice c2) is a source-only adapter for a
+wait started by the coordinator thread's own tool call. It starts no provider
+turn. An idle Codex wake is **unconfirmed**; current async Hooks documentation
+says completion waits for the next user turn. Watch custody stays with the
+outgoing coordinator until the [three idle-thread proofs](coordinator-wait-proof.md)
+pass under their own authorized story.
+
+```sh
+agent-run coordinator wait --thread <explicit-native-thread-id> --wait-id <tool-call-id> \
+  --directory /absolute/handoff/directory --budget-end <RFC3339-UTC-time> \
+  --timer 1h --scan-every 10s --max-entries 256 --max-pending 64
+# After consuming a result, explicitly re-arm the same binding and fixed limits:
+agent-run coordinator wait --thread <same-id> --wait-id <same-tool-call-id> \
+  --directory /absolute/handoff/directory --budget-end <same-time> \
+  --after <returned-cursor> --watermark <returned-watermark> --ack <event-id>
+```
+
+The timer, scan cadence and bounds are parameters; hourly operation is not an
+answer to pending Q-067-02. A budget end is mandatory and cannot be extended on
+an existing wait. `budget_end` persists the end and never rearms. Default scans
+are ten seconds apart, immediate entries only, at most 256 metadata records
+(ceiling 4096). They open no handoff contents or subdirectories and use no
+inotify. Symlinked directories/ancestors/entries, directory replacement and
+unclean/outside paths refuse. File results reference the one pinned directory,
+so a burst produces one result and the coordinator deliberately reads its files.
+
+At most one existing parent wait-any read is held, at most 900 seconds per
+request, with the existing cursor and resync semantics. Initial notes and files
+are a baseline; take a parent cursor before dispatch if earlier arrivals matter.
+Every rearm uses the confirmed returned cursor. No list or retry loop is added.
+A response that ends early is rearmed no sooner than the configured scan cadence.
+Unrelated notes and replies remain filtered by the existing server contract.
+A refusal/lost API receipt stops the command; it does not retry automatically.
+
+Every success prints one JSON object containing only `kind`, `id`, optional
+`note` or `path`, `cursor`, `watermark` and `time`. Kinds are `timer`, `note`,
+`file`, `resync`, `stopped`, `budget_end`. It carries no file/note text, key or
+command. Metadata is untrusted evidence, never an owner answer or permission.
+An unanswered question holds only its dependent lane; event collection does
+not release that hold or resume a paused worker.
+
+The Session UID comes from the caller's bounded `AGENTD_SESSION[_FILE]`, and the
+native thread and tool/wait identity must be explicit. The fixed directory,
+limits, next timer, parent cursor, directory watermark/snapshot, bounded pending
+IDs/receipts, budget and stop state are stored under private HOME in
+`.dev-env-coordinator-waits/`. Directory mode is 0700, records and locks 0600.
+The filename stem is SHA256 of `SessionUID:wait-id`. An exclusive nonblocking
+process lock admits one custodian. Writes fsync a temporary file, rename it
+atomically and fsync the directory before a result can escape. A stale temporary
+file fails closed for deliberate inspection; no PID guessing or stale-lock takeover.
+
+Rearm requires `--ack` of the last result, and supplied `--after`/`--watermark`
+must equal the checkpoint. A lost output/ACK returns no duplicate result: inspect
+the private record, reconcile the source lists/directory, then acknowledge its
+`lastID`. Bounded receipt history also overflows to `resync`. On `resync`, read
+**all** parent list pages with `--continue` until none remains, inspect directory
+metadata, then rearm with `--reconciled`, `--ack` and the saved wait cursor.
+The list continuation is not that cursor. This is explicit recovery, not polling.
+
+SIGTERM/cancellation or a regular `<stem>.stop` beside the record returns
+`stopped` with cursors/pending work saved. No stop-marker text is read. A
+symlinked marker refuses. Remove a marker deliberately; resume requires a new
+own tool call with `--resume`, the same thread/wait identity, `--ack` and fixed
+budget/limits. A different thread refuses. The adapter never discovers or adopts
+the latest native thread and never resumes a host, thread or provider turn.
+
 The record is an InboxMessage marked by the server-set label
 `coordination.dev-env.haynesops.com/parent-note=true`. The label distinguishes
 the route; the stored sender and recipient identities authorize each read.

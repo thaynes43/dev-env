@@ -350,7 +350,12 @@ func TestRuntimeRefusalDoesNotRetry(t *testing.T) {
 }
 func TestRuntimeSaveFailurePrintsNoResult(t *testing.T) {
 	rt, _, _ := fakeRuntime(t)
-	rt.Save = func(*Record) error { return errors.New("disk") }
+	rt.Save = func(r *Record) error {
+		if r.LastID != "" {
+			return errors.New("disk")
+		}
+		return nil
+	}
 	r := record()
 	r.NextTimer = epoch
 	v, err := rt.Run(context.Background(), r)
@@ -367,13 +372,13 @@ func TestDirectorySymlinkAndTraversalRefused(t *testing.T) {
 	must(t, os.Symlink(dir, link))
 	for _, path := range []string{link, filepath.Join(parent, "link") + "/../handoffs", link + "/child"} {
 		if d, err := OpenDirectory(path); err == nil {
-			d.Close()
+			_ = d.Close()
 			t.Fatal("symlink/traversal directory accepted")
 		}
 	}
 	d, err := OpenDirectory(dir)
 	must(t, err)
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	must(t, os.Symlink(filepath.Join(parent, "elsewhere"), filepath.Join(dir, "bad")))
 	if _, _, err := d.Scan(10); err == nil {
 		t.Fatal("symlinked entry accepted")
@@ -389,7 +394,7 @@ func TestDirectoryMetadataBoundAndIdentity(t *testing.T) {
 	must(t, os.Mkdir(dir, 0700))
 	d, err := OpenDirectory(dir)
 	must(t, err)
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	must(t, os.WriteFile(filepath.Join(dir, "one"), []byte("PRIVATE_TEXT"), 0000)) // readable metadata, unreadable contents
 	files, overflow, err := d.Scan(1)
 	must(t, err)
@@ -487,5 +492,134 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStoreRejectsPendingOutsideDirectory(t *testing.T) {
+	s, err := OpenStore(t.TempDir(), "session-uid", "tool-call")
+	must(t, err)
+	defer s.Close()
+	r := record()
+	r.Scan(map[string]string{"one": "stamp"}, false)
+	r.Pending[0].Path = "/outside"
+	must(t, s.Save(r))
+	if _, err = s.Load(); err == nil {
+		t.Fatal("saved outside path accepted as an event")
+	}
+}
+func TestNoAckWithoutResult(t *testing.T) {
+	r := record()
+	if r.Bind(r.Options, "unknown-event", false, false) == nil {
+		t.Fatal("phantom acknowledgement")
+	}
+}
+func TestRuntimeStopMarkerNeverStartsRead(t *testing.T) {
+	rt, _, calls := fakeRuntime(t)
+	r := record()
+	rt.Stop = func() (bool, error) { return true, nil }
+	v, err := rt.Run(context.Background(), r)
+	if err != nil || v.Kind != "stopped" || len(calls) != 0 {
+		t.Fatal("stopped wait opened read")
+	}
+}
+func TestRuntimePastBudgetNeverStartsRead(t *testing.T) {
+	rt, _, calls := fakeRuntime(t)
+	r := record()
+	r.Options.BudgetEnd = epoch
+	v, err := rt.Run(context.Background(), r)
+	if err != nil || v.Kind != "budget_end" || len(calls) != 0 {
+		t.Fatal("expired wait opened read")
+	}
+}
+func TestRuntimeCancellationWinsLostAPIResponse(t *testing.T) {
+	rt, _, _ := fakeRuntime(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt.Notes = func(context.Context, string, time.Duration) (Note, error) {
+		cancel()
+		return Note{}, errors.New("lost response")
+	}
+	v, err := rt.Run(ctx, record())
+	if err != nil || v.Kind != "stopped" {
+		t.Fatal("cancel became an API error")
+	}
+}
+func TestRuntimeCursorSavedBeforeOutput(t *testing.T) {
+	rt, _, _ := fakeRuntime(t)
+	r := record()
+	saved := ""
+	rt.Notes = func(context.Context, string, time.Duration) (Note, error) {
+		return Note{Name: "child-note", Cursor: "100"}, nil
+	}
+	rt.Save = func(r *Record) error { saved = r.Cursor; return nil }
+	v, err := rt.Run(context.Background(), r)
+	if err != nil || v.Kind != "note" || saved != "100" || v.Cursor != "100" {
+		t.Fatal("returned cursor not saved")
+	}
+}
+
+func TestStoreSyncFailuresNeverConfirm(t *testing.T) {
+	for _, failAt := range []int{1, 2} {
+		t.Run(map[int]string{1: "file", 2: "directory"}[failAt], func(t *testing.T) {
+			s, err := OpenStore(t.TempDir(), "session-uid", "tool-call")
+			must(t, err)
+			defer s.Close()
+			r := record()
+			must(t, s.Save(r))
+			before, err := s.Load()
+			must(t, err)
+			n := 0
+			s.sync = func(*os.File) error {
+				n++
+				if n == failAt {
+					return errors.New("sync failed")
+				}
+				return nil
+			}
+			r.Note("new-note", "43", false)
+			requireKind(t, r, epoch, false, "note")
+			if s.Save(r) == nil {
+				t.Fatal("sync failure confirmed")
+			}
+			loaded, err := s.Load()
+			must(t, err)
+			if failAt == 1 && !reflect.DeepEqual(before, loaded) {
+				t.Fatal("failed file sync changed committed record")
+			}
+			if failAt == 2 && loaded.LastID != r.LastID {
+				t.Fatal("rename receipt lost after directory sync failure")
+			}
+		})
+	}
+}
+
+func TestOptionsEachOperatingBound(t *testing.T) {
+	for _, field := range []string{"timer-zero", "scan-zero", "timer-fraction", "scan-fraction", "entries-zero", "entries-large", "pending-zero", "pending-large", "budget"} {
+		t.Run(field, func(t *testing.T) {
+			o := options()
+			switch field {
+			case "timer-zero":
+				o.Timer = 0
+			case "scan-zero":
+				o.ScanEvery = 0
+			case "timer-fraction":
+				o.Timer = time.Millisecond
+			case "scan-fraction":
+				o.ScanEvery = time.Millisecond
+			case "entries-zero":
+				o.MaxEntries = 0
+			case "entries-large":
+				o.MaxEntries = 4097
+			case "pending-zero":
+				o.MaxPending = 0
+			case "pending-large":
+				o.MaxPending = 1025
+			case "budget":
+				o.BudgetEnd = time.Time{}
+			}
+			if o.Validate() == nil {
+				t.Fatal("operating bound removed")
+			}
+		})
 	}
 }

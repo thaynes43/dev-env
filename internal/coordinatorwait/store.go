@@ -15,6 +15,7 @@ type Store struct {
 	root *os.Root
 	lock *os.File
 	name string
+	sync func(*os.File) error
 }
 
 // OpenStore uses a fixed private HOME subdirectory. IDs are hashed into names;
@@ -41,38 +42,38 @@ func OpenStore(home, uid, waitID string) (*Store, error) {
 	}
 	inside, statErr := root.Stat(".")
 	if statErr != nil || !os.SameFile(st, inside) {
-		root.Close()
+		_ = root.Close()
 		return nil, errors.New("wait directory changed while opening")
 	}
-	s := &Store{root: root, name: digest(uid + ":" + waitID)}
+	s := &Store{root: root, name: digest(uid + ":" + waitID), sync: func(f *os.File) error { return f.Sync() }}
 	// OpenFile would follow a link, so reject existing links before opening and
 	// verify the opened inode against Lstat before taking a lock.
 	name := s.name + ".lock"
 	if st, err := root.Lstat(name); err == nil && (!st.Mode().IsRegular() || st.Mode().Perm() != 0600) {
-		root.Close()
+		_ = root.Close()
 		return nil, errors.New("unsafe wait lock")
 	}
 	lock, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		root.Close()
+		_ = root.Close()
 		return nil, errors.New("cannot open wait lock")
 	}
 	actual, err := lock.Stat()
 	current, lerr := root.Lstat(name)
 	if err != nil || lerr != nil || !current.Mode().IsRegular() || !os.SameFile(actual, current) || actual.Mode().Perm() != 0600 {
-		lock.Close()
-		root.Close()
+		_ = lock.Close()
+		_ = root.Close()
 		return nil, errors.New("unsafe wait lock")
 	}
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		lock.Close()
-		root.Close()
+		_ = lock.Close()
+		_ = root.Close()
 		return nil, errors.New("wait already has a custodian")
 	}
 	s.lock = lock
 	return s, nil
 }
-func (s *Store) Close() { s.lock.Close(); s.root.Close() }
+func (s *Store) Close() { _ = s.lock.Close(); _ = s.root.Close() }
 func (s *Store) Load() (*Record, error) {
 	name := s.name + ".json"
 	st, err := s.root.Lstat(name)
@@ -86,7 +87,7 @@ func (s *Store) Load() (*Record, error) {
 	if err != nil {
 		return nil, errors.New("cannot read wait record")
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	actual, err := f.Stat()
 	if err != nil || !os.SameFile(st, actual) {
 		return nil, errors.New("wait record changed")
@@ -113,9 +114,9 @@ func (s *Store) Save(r *Record) error {
 	if err != nil {
 		return errors.New("cannot create atomic wait record; inspect stale temporary file")
 	}
-	defer s.root.Remove(name)
+	defer func() { _ = s.root.Remove(name) }()
 	if _, err = f.Write(data); err == nil {
-		err = f.Sync()
+		err = s.sync(f)
 	}
 	cerr := f.Close()
 	if err != nil || cerr != nil {
@@ -128,8 +129,8 @@ func (s *Store) Save(r *Record) error {
 	if err != nil {
 		return errors.New("cannot sync wait directory")
 	}
-	defer dir.Close()
-	if err = dir.Sync(); err != nil {
+	defer func() { _ = dir.Close() }()
+	if err = s.sync(dir); err != nil {
 		return errors.New("cannot sync wait directory")
 	}
 	return nil

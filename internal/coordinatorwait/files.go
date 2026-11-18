@@ -35,7 +35,7 @@ func OpenDirectory(path string) (*Directory, error) {
 	}
 	inside, err := root.Stat(".")
 	if err != nil || !os.SameFile(before, inside) {
-		root.Close()
+		_ = root.Close()
 		return nil, errors.New("handoff directory changed while opening")
 	}
 	return &Directory{root: root, path: path, info: inside}, nil
@@ -67,9 +67,9 @@ func (d *Directory) Scan(max int) (map[string]string, bool, error) {
 	if err != nil {
 		return nil, false, errors.New("cannot scan handoff directory")
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	entries, err := f.ReadDir(max + 1)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, false, errors.New("cannot read handoff metadata")
 	}
 	overflow := len(entries) > max

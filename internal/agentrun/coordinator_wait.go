@@ -11,10 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	"k8s.io/utils/clock"
+
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/coordinatorwait"
-	"k8s.io/utils/clock"
 )
 
 func (a *app) coordinatorWait(ctx context.Context, args []string) error {
@@ -99,9 +100,17 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 	if err != nil {
 		return fail(ExitFailed, "coordinator wait: %s", err)
 	}
-	defer directory.Close()
-	c, err := a.connect(ctx, cmd.c.conn)
+	defer func() { _ = directory.Close() }()
+	setupCtx, finishSetup := coordinatorWaitSetupContext(ctx, waitClock, o.BudgetEnd)
+	defer finishSetup()
+	c, err := a.connect(setupCtx, cmd.c.conn)
 	if err != nil {
+		if ctx.Err() != nil || !waitClock.Now().Before(o.BudgetEnd) {
+			if r == nil {
+				r = coordinatorwait.New(o, waitClock.Now(), after, nil)
+			}
+			return a.coordinatorWaitTerminal(store, r, waitClock.Now(), ctx.Err() != nil)
+		}
 		return parentNoteError(0, err, "wait-any")
 	}
 	notes := a.coordinatorWaitNotes(c)
@@ -112,15 +121,11 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 		}
 		// Exactly one cursor capture, not a list loop. The API's no-after behavior
 		// deliberately omits preexisting notes, just like parent wait-any --for 0.
-		initial, err := notes(ctx, after, 0)
+		initial, err := notes(setupCtx, after, 0)
 		if err != nil {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || !waitClock.Now().Before(o.BudgetEnd) {
 				r = coordinatorwait.New(o, waitClock.Now(), after, files)
-				result := r.Take(waitClock.Now(), true)
-				if err = store.Save(r); err != nil {
-					return fail(ExitFailed, "coordinator wait: %s", err)
-				}
-				return a.printJSON(result)
+				return a.coordinatorWaitTerminal(store, r, waitClock.Now(), ctx.Err() != nil)
 			}
 			return err
 		}
@@ -158,11 +163,11 @@ func (a *app) coordinatorWaitUID() (string, error) {
 		}
 		st, e := f.Stat()
 		if e != nil || !st.Mode().IsRegular() || st.Size() > protocol.MaxSessionFileBytes {
-			f.Close()
+			_ = f.Close()
 			return "", usageError("coordinator wait requires a bounded regular session document")
 		}
 		data, e := io.ReadAll(io.LimitReader(f, protocol.MaxSessionFileBytes+1))
-		f.Close()
+		_ = f.Close()
 		if e != nil {
 			return "", usageError("coordinator wait cannot read its session document")
 		}
@@ -192,4 +197,28 @@ func (a *app) coordinatorWaitNotes(c *conn) coordinatorwait.Notes {
 		}
 		return coordinatorwait.Note{Name: got.Name, Cursor: got.Cursor, Resync: got.State == apiv1.ParentNoteResync}, nil
 	}
+}
+
+// Setup also observes the injected budget clock: a slow cursor capture must not
+// outlive the operating budget or turn into an automatic retry.
+func coordinatorWaitSetupContext(ctx context.Context, c clock.Clock, end time.Time) (context.Context, func()) {
+	child, cancel := context.WithCancel(ctx)
+	timer := c.NewTimer(max(0, end.Sub(c.Now())))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-child.Done():
+		case <-timer.C():
+			cancel()
+		}
+	}()
+	return child, func() { cancel(); timer.Stop(); <-done }
+}
+func (a *app) coordinatorWaitTerminal(s *coordinatorwait.Store, r *coordinatorwait.Record, now time.Time, stop bool) error {
+	result := r.Take(now, stop)
+	if err := s.Save(r); err != nil {
+		return fail(ExitFailed, "coordinator wait: %s", err)
+	}
+	return a.printJSON(result)
 }

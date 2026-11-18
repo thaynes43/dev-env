@@ -25,10 +25,11 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/utils/clock"
+
 	"github.com/thaynes43/dev-env/internal/providerallowance"
 	"github.com/thaynes43/dev-env/internal/usagecollector"
 	"github.com/thaynes43/dev-env/internal/version"
-	"k8s.io/utils/clock"
 )
 
 // BinaryName is the command's name in messages.

@@ -642,8 +642,10 @@ The worker re-read the pinned `async_watcher.rs` and the official Hooks page.
 The watcher emits `ExecCommandEnd` against the original Session, turn and call;
 that is an execution result, not evidence of a new idle-thread turn. The current
 Hooks page explicitly says asynchronous output waits for the next user turn
-when no turn is active. Hooks are a supported extension surface in current
-documentation, but that surface does not satisfy this idle-wake contract.
+when no turn is active. The pinned [hook event registry][c2-hook-registry] and
+[engine][c2-hook-engine] establish a hooks extension surface in 0.160.1; its
+async handlers cannot apply control effects. Current documentation describes
+that surface, but it does not satisfy this idle-wake contract.
 **Unknown:** another supported completion extension in pinned 0.160.1, and the
 actual remote client's response to a background tool completion. No host was
 probed. Provider integration remains blocked on that capability and, if upstream
@@ -709,6 +711,26 @@ adopt a latest thread by cwd or title. A held owner question pauses its dependen
 lane, not unrelated event collection. No wake answers a question, resumes a paused
 worker, overrides a denial or outlives the authorized budget. Re-arm from the
 returned cursor, not by repeatedly listing in a tight loop.
+
+### 9.4 Slice (c2) adapter contract and later proof
+
+The source build adds `agent-run coordinator wait`, its private checkpoint and
+fake-clock engine. The exact CLI, defaults, ACK/resync recovery, scan bounds and
+stop-marker format are in the [workflow guide](../../../../docs/workflow-guide.md#a-coordinator-combines-timer-note-and-handoff-metadata)
+and `agent-run help coordinator wait`. Defaults are parameters, not a ruling
+on Q-067-02. The thread and wait/tool identity are caller-named; no native thread
+is discovered, resumed or rebound by the adapter. The stored binding and budget
+cannot be changed while rearming. A lost output/ACK never replays the result;
+reconciliation and explicit ACK are required before the next owned wait.
+
+The [later proof procedure](../../../../docs/coordinator-wait-proof.md) gives
+exact commands for timer, addressed child note and file stimuli, same-thread
+ACKs, idle/turn/tool measurements, duplicate observation and failure criteria.
+It is written only. There is no live evidence in this build, no hook installed,
+no provider turn created and no operator/API/CRD change. If native completion
+cannot supply a new turn while the original thread is idle, record
+`wake_unconfirmed` and stop provider integration under ADR-024. No typed or
+queued fallback is implemented. Unknown U3 and Q-067-04 remain open.
 
 ## 10. Custody, rollback and ending
 
@@ -842,8 +864,9 @@ permission to restart a running host.
 
 ## 11. Build slices and evidence gates
 
-Slices (a) and (b) are merged source, with nothing installed, as recorded in
-section 14; (c1) remains a draft and later slices are future bounded work. Ready dependent slices run serially. Each gets
+Slices (a), (b) and (c1) are merged source. Slice (c2) now has a source-only
+adapter and fake tests; provider idle wake remains unconfirmed. Nothing is
+installed by this build, as recorded in section 14. Ready dependent slices run serially. Each gets
 its own tracker scope, budget and exact-head review by another model family before
 merge. The coordinator owns that review and the install decision. Slice (d) depends
 on (a), (b) and (c1) only. If provider support blocks (c2), (d) and (e) still proceed
@@ -855,7 +878,7 @@ for lanes Tom drives from the phone. Only watch-dependent lane transfer waits on
 | (a) Shared account guard and reserved host | Flag parser; shared predicate; API create/final admission/resume; controller agent-pod and status paths. Tests: empty setting; zero/one/duplicate/two names; raw manifest; human/client API create; ordinary and workbench origins; T30 explicit refusal; default/alias on workbench; missing templates; wrong parent/depth/namespace/shape; no new HOME/pod on refusal; rescue hold allowed; resume of unlisted legacy refused. Remove each guard in mutation checks and show its test fail. | Publish guarded operator only after tests and review. Install with an empty allowed set after inventory shows no active unlisted workbench Codex host. Verify every replica's pin/config and a separately authorized negative canary's condition/no pod. Running sessions keep their pods. | No host is created. Existing legacy-host suspension or any disruptive test requires its own in-scope authorization. Stop before adding a name or manifest until Q-067-01 is answered. |
 | (b) Thread and pool fences | Explicit coordinator intent/host; privileged gate on both thread routes, UID-fenced operator exec; controller-to-agentd metadata/purpose checks; pool facts/pure selector/lease exclusions; exact-ID native thread title setter. Tests: ordinary same-profile and ancestor spoof; named coordinator caller; raised-to-workbench caller refused despite matching pod account or patched profile label; unreadable creation profile refused; human/client and workbench-by-creation caller with workbench pod allowed; pool with only reserved host; default/account alias; removed annotation/hands-off list; lease race; explicit ordinary intent to reserved host; coordinator intent to pool/missing host; no fallback; title metadata/readback and lost ACK without relaunch. Existing ordinary thread cases stay green. Update workflow/preflight docs. | Publish operator and agent image; pin both without restarting any host. Install reserved-name/pool setting only with the confirmed packet, all replicas consistent. Verify read-only selection never offers the reserved host and negative requests do not exec. | Q-067-01 before nonempty allowance or any host manifest. |
 | (c1) Safe stop and retention | Default-empty `--codex-remote-stop-hosts` (up to 16 exact unique names); only a named Codex remote host's next agent/hold pod receives the controller's Session-UID stop decision. All other hosts/types keep main's stop and pod goldens. Tests compare legacy calls/results, no added document parse without a decision, named quiesce, UID equality, template/envFrom precedence, already-dead unsignalled disappearance refusal, grace for unlisted children, retained history and exact-ID observation. Stop tests prove supported writers quiesce before rescue and supported daemon restarts cannot race it; raw exec after the final reading is not fenced. Re-attachment remains (d)/(c2); no wake hook is required. | Publish/pin stop handling with the setting empty: nothing changes for today's hosts. Naming a host changes nothing for its running pod; it takes effect when that host's next pod is built. An operator upgrade restarts, replaces or relabels no pod. On a separately authorized named ordinary disposable proof host, prove no writer remains and retained history can reopen. M4's frozen/fenced state after refused stop is possible only on a named host; story 877 must close before a named host is relied on. Required before (d), independently of (c2). | The proof host/test and nonempty setting need their own approved story and in-scope stop authority. No experiment or installation in this source task. |
-| (c2) Wake | Resolve section 9's harness hook. Tests with fake clock/events: timer, addressed child note, new file, idle tool completion; unrelated note; replay/coalescing/resync; path traversal/symlink; lost ACK; question/hold; budget end; suspend cancellation; resume requires explicit same-thread bind. No CPU-heavy/timing stress suite. | Publish/pin supported hook. On an authorized ordinary disposable host, prove each source wakes the **same idle thread** once. If the provider has no supported hook, (c2) is blocked; record that fact and do not substitute terminal input. This does not block (d) or (e) for phone-driven lanes. | The proof host/test needs its own approved story. Q-067-02 controls unattended work and budget. Required only before a watch-dependent lane moves; all three wake proofs must pass. |
+| (c2) Wake | Source-only `coordinator wait`, atomic private record and bounded metadata scan built. Fake clock/events cover timer, addressed API note, new file, replay/coalescing/resync, path traversal/symlinks, lost ACK, question lane isolation, budget, cancellation and explicit same-thread resume. Existing API keeps unrelated-note filtering. Native idle-tool completion remains Unknown; documented async hooks do not wake idle threads. Written proof: [procedure](../../../../docs/coordinator-wait-proof.md). No timing stress or live proof. | Publish/pin supported hook. On an authorized ordinary disposable host, prove each source wakes the **same idle thread** once. If the provider has no supported hook, (c2) is blocked; record that fact and do not substitute terminal input. This does not block (d) or (e) for phone-driven lanes. | The proof host/test needs its own approved story. Q-067-02 controls unattended work and budget. Required only before a watch-dependent lane moves; all three wake proofs must pass. |
 | (d) One GitOps host and phone proof | Separate haynes-ops app and allow-name/hands-off settings, reviewed together. Render and validate exact account/mounts/depth/parent/name; check no copied API or credential state. Source checks cannot prove pairing. | After (a), (b), (c1) and story 877 close, apply the confirmed name settings (including `--codex-remote-stop-hosts`) and protection first, then manifest. A blocked (c2) does not block this phone-driven host. Read back Session and pod UID/account/profile/mount **references**. Authorized custodian runs pair privately; Tom enters it. Launch one fresh explicit coordinator thread on `gpt-6.1-sol`/`medium`; observe response, default-list presence and Tom's phone display/title. The title step has fake-only proof so far: against a real daemon a title failure ends the launch as unconfirmed while the thread and its answer may be fine; prove the daemon's thread preview length (including a long handoff), exact cwd/read timing and title/name readback on this host. A shortened preview ends a coordinator launch as `title_binding_unconfirmed` before its answer is observed. Verify harmless question and reply; test existing Ask/notice/read path if used. | Tom's concrete confirmation of the full packet **before flags/manifest/host/pairing**. His pairing step and phone/question confirmation remain required. |
 | (e) Custody and end rehearsal | Exact OP812 checkpoint and ACK; defined lane list; budget/stop record; documented suspend/resume/removal procedure. No new source unless earlier proof finds a fault, which returns to its owner. | For phone-driven lanes, record model evidence and owner question return. Checkpoint, perform an authorized quiet suspend/resume proof and verify retained computer/history. Record each ready lane release and ACK. For watch-dependent lanes, first pass (c2), prove timer, child note and file wake on the installed host and re-arm the same-thread watch after resume. Item 772's acceptance watch, item 829's acceptance, a Meatball handoff channel and any worker's parent note need a watch. They stay with the outgoing coordinator until (c2) passes; phone-driven lanes can move meanwhile. Record source, tested, installed and accepted separately. | OP812 owner/coordinator lane release. Any stop/restart proof is explicitly included in the confirmed install plan. |
 
@@ -944,8 +967,9 @@ the separately configured coordinator-host caller.
    are unverified. The thread and existing Ask/board return must be proved in the
    chosen installation; no transcript or native thread identity is stored by Ask.
 7. **Unknown U3 — idle wake and hook.** Completion delivery for timer, held child
-   note and new-file wait needs live proof. The supported native extension surface
-   is Unknown. Section 9 stays blocked if provider support cannot satisfy
+   note and new-file wait needs live proof. Pinned hooks exist, but documented async completion does not wake an idle
+   thread; another satisfying supported extension is Unknown. Section 9
+   provider integration stays blocked if provider support cannot satisfy
    ADR-024. A running daemon is not a waking coordinator.
 8. **Unknown U4 — resume.** Enrollment is persisted by source; same phone entry,
    thread reopening and watch re-arm on the installed CLI require a separately
@@ -1057,6 +1081,33 @@ with a 20 GiB HOME default. Re-read those declarations for the actual packet.
 ([templates:165–194][ops-size-home])
 
 ## 14. Review and handoff
+
+### Slice (c2) build record, 2026-11-18
+
+The build worker in `agent/dev-env-1118-164347` adds the CLI adapter,
+`internal/coordinatorwait`, fake-clock/events/filesystem tests, command help,
+workflow/layout docs and the written three-wake procedure. It consumes only
+the existing parent wait-any API. No operator, API, CRD, host, manifest,
+credential, pairing or haynes-ops change is included.
+
+**Source:** bounded scans of one pinned directory; fixed explicit thread binding;
+private atomic checkpoint and single custodian; metadata-only output; coalescing,
+bounded pending/receipt sets and resync; ACK-before-rearm; stop/budget persistence.
+**Tested:** fake clocks/events and local filesystem/fake HTTP only. Guard mutation
+results and exact-head checks belong in the PR body. **Installed:** nothing.
+**Accepted:** nothing. Provider idle wake is unconfirmed. Current official async
+hook semantics conflict with the required idle wake; no supported satisfying
+alternative was established at the image's 0.160.1 pin. That part is stopped
+for the coordinator, not bypassed. Another supported extension stays Unknown.
+The outgoing coordinator retains watch-dependent lanes. Q-067-02/Q-067-04 stay
+pending; this record is not an owner answer or acceptance of ADR-030.
+
+The worker starts no other agent/session and performs its own diff review.
+Independent/cross-family review remains with the coordinator, per this work
+order's no-other-agents rule. The later authorized ordinary-host procedure must
+prove each source starts exactly one new turn in the same idle thread and gets
+its ACK; fake adapter completion is not that proof. No merge by this worker.
+
 
 2026-11-17 slice (c1) re-check 2 and fix round 3: reviewer model id
 `claude-sonnet-5-5`, head `d9fd97e7`, verdict **APPROVE**, HIGH 0, MEDIUM 0,
@@ -1440,3 +1491,6 @@ after four changes; HIGH 0, MEDIUM 2, LOW 2. These are the coordinator's rulings
 [raise-performer]: https://github.com/thaynes43/dev-env/blob/4d0f77de1269b22bc52a22205b9fa4a728417a22/internal/apiserver/raise.go#L545-L601
 [raise-raised]: https://github.com/thaynes43/dev-env/blob/4d0f77de1269b22bc52a22205b9fa4a728417a22/internal/apiserver/raise.go#L603-L639
 [raise-target]: https://github.com/thaynes43/dev-env/blob/4d0f77de1269b22bc52a22205b9fa4a728417a22/internal/apiserver/raise.go#L641-L689
+
+[c2-hook-registry]: https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/hooks/src/lib.rs#L23-L37
+[c2-hook-engine]: https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/hooks/src/engine/mod.rs#L153-L171
