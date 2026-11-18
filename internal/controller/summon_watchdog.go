@@ -66,6 +66,8 @@ const (
 	// summonEscalationHeld is how long an escalation may be Queued before its
 	// one held event (DESIGN-064 6.7).
 	summonEscalationHeld = 15 * time.Minute
+	// Keep the abandoned filing readable for the keeper (OP802).
+	summonAbandonedReapHold = 10 * time.Minute
 
 	// summonMaxPages is status.summon.pages' MaxItems (DESIGN-064 6.8).
 	summonMaxPages = 8
@@ -104,12 +106,53 @@ func (r *Reconciler) reconcileSummonReap(ctx context.Context, s *v1alpha1.AgentS
 	if _, recorded := s.Annotations[v1alpha1.AnnotationReapedBy]; !recorded {
 		return false, nil
 	}
+	if reason := summonReapFilingHold(s, r.now()); reason != "" {
+		log.FromContext(ctx).Info("held summoned Session delete for its filing",
+			"session", s.Name, "uid", s.UID, "caller", s.Spec.Caller, "reason", reason)
+		if s.Spec.Mode == v1alpha1.ModeTask {
+			// A report already released its lane. The accepted reap must
+			// still stop that executor while its filing record is kept.
+			if changed, err := r.suspendClosedSummon(ctx, s); changed || err != nil {
+				return true, err
+			}
+		}
+		// Continue the ordinary stop/release work. Holding the Session
+		// record must not keep an executor running or its lane reserved.
+		return false, nil
+	}
 	err := r.Client.Delete(ctx, s, client.Preconditions{UID: &s.UID, ResourceVersion: &s.ResourceVersion},
 		client.PropagationPolicy(metav1.DeletePropagationBackground))
 	if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
 		return true, nil
 	}
 	return true, err
+}
+
+func summonReapFilingHold(s *v1alpha1.AgentSession, now time.Time) string {
+	st := s.Status.Summon
+	if s.Spec.Caller == "" || s.Spec.Lane != v1alpha1.LaneRemediation || st == nil || st.Escalation == nil ||
+		!s.DeletionTimestamp.IsZero() || !summonoutcome.Terminal(s.Status.Outcome) {
+		return ""
+	}
+	if _, recorded := s.Annotations[v1alpha1.AnnotationReapedBy]; !recorded {
+		return ""
+	}
+	switch st.Escalation.State {
+	case v1alpha1.SummonEscalationPending:
+		return "filing-pending"
+	case v1alpha1.SummonEscalationAbandoned:
+		for _, page := range st.Pages {
+			if page.Event == v1alpha1.PageEscalationAbandoned {
+				if now.Before(page.At.Add(summonAbandonedReapHold)) {
+					return "filing-abandoned-window"
+				}
+				return ""
+			}
+		}
+		// The installed CRD requires this event atomically with Abandoned.
+		return "filing-abandoned-event-missing"
+	}
+	return ""
 }
 
 // summonTaskDeadline is the operator's task deadline (DESIGN-064 6.6, N7):
@@ -258,12 +301,19 @@ func summonHoldExpired(s *v1alpha1.AgentSession, now time.Time) bool {
 // (terminalRecordApplies, privateStopNeeded): a release on the start fence
 // and the two time bounds alone (OP780) must not end it (story 780 fix round
 // 2, F2, coordinator rulings in PR 1100 comment 6839380816). A session that
-// reported its own outcome keeps its pod for the post-mortem, and every hold
-// of the stop path (the owner's HOME-expiry hold among them) still applies.
+// reported its own outcome keeps its pod for the post-mortem unless an
+// accepted reap is held for its filing (OP802). Every hold of the stop path
+// (the owner's HOME-expiry hold among them) still applies.
 func summonStopDue(s *v1alpha1.AgentSession) bool {
 	st := s.Status.Summon
-	return s.Spec.Caller != "" && s.Spec.Mode == v1alpha1.ModeTask && st != nil && st.AdmittedAt != nil &&
-		st.Closed != nil && st.Closed.Source == summonoutcome.Unreported && s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && s.DeletionTimestamp.IsZero()
+	if s.Spec.Caller == "" || s.Spec.Mode != v1alpha1.ModeTask || st == nil || st.AdmittedAt == nil ||
+		st.Closed == nil || s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended || !s.DeletionTimestamp.IsZero() {
+		return false
+	}
+	_, reaped := s.Annotations[v1alpha1.AnnotationReapedBy]
+	heldReap := reaped && s.Spec.Lane == v1alpha1.LaneRemediation && st.Escalation != nil &&
+		(st.Escalation.State == v1alpha1.SummonEscalationPending || st.Escalation.State == v1alpha1.SummonEscalationAbandoned)
+	return st.Closed.Source == summonoutcome.Unreported || heldReap
 }
 
 // suspendClosedSummon is the operator's own suspend of a closed, admitted
@@ -274,7 +324,8 @@ func summonStopDue(s *v1alpha1.AgentSession) bool {
 // task, ends it. A session already suspended or being reaped is left alone.
 func (r *Reconciler) suspendClosedSummon(ctx context.Context, live *v1alpha1.AgentSession) (bool, error) {
 	st := live.Status.Summon
-	if live.Spec.Caller == "" || st == nil || st.AdmittedAt == nil || st.Closed == nil || st.Closed.Released ||
+	if live.Spec.Caller == "" || st == nil || st.AdmittedAt == nil || st.Closed == nil ||
+		st.Closed.Released && summonReapFilingHold(live, r.now()) == "" ||
 		live.Spec.OperatingMode == v1alpha1.OperatingModeSuspended || !live.DeletionTimestamp.IsZero() {
 		return false, nil
 	}

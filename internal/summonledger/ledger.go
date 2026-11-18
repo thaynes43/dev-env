@@ -39,6 +39,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/validation"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
 
 const (
@@ -344,8 +346,9 @@ func walkValue(dec *json.Decoder, depth int) error {
 }
 
 // Encode writes one caller's key. Encoded bytes plus space for the longest
-// mutable filing timestamps must fit MaxEntry. Every writer preserves that
-// reserve, so an accepted filing charge can later mark at nanosecond precision.
+// mutable filing timestamps and remaining name suffix growth must fit
+// MaxEntry. Every writer preserves that reserve, so an accepted filing charge
+// can later mark at nanosecond precision and rebind through suffix -99.
 // A refused write is never truncated; the on-wire schema is unchanged.
 func Encode(e Entry) (string, error) {
 	top := map[string]any{}
@@ -377,23 +380,36 @@ func Encode(e Entry) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(b)+filingTimestampReserve(e) > MaxEntry {
+	if len(b)+filingReserve(e) > MaxEntry {
 		return "", ErrUnreadable
 	}
 	return string(b), nil
 }
 
-func filingTimestampReserve(e Entry) int {
+func filingReserve(e Entry) int {
 	const longest = len("2006-01-02T15:04:05.999999999Z")
 	reserve, filings := 0, false
 	for _, ch := range e.Charges {
 		if strings.HasPrefix(ch.ID, FilingID("")) {
 			filings = true
 			reserve += longest - len(ch.Attempt.UTC().Format(time.RFC3339Nano))
+			reserve += filingNameReserve(ch)
 		}
 	}
 	if filings {
 		reserve += longest - len(e.Clock.UTC().Format(time.RFC3339Nano))
 	}
 	return reserve
+}
+
+// The request hash distinguishes a rebound suffix from a base that itself
+// ends in -2 through -99. Consuming a suffix byte releases exactly one byte
+// of reserve. Unknown/legacy hashes conservatively keep all three bytes.
+func filingNameReserve(ch Charge) int {
+	for _, base := range requestedNames(ch.Name) {
+		if RequestHash("remote", "escalation", base, v1alpha1.SummonPriorityUrgent) == ch.Hash {
+			return len(base) + len("-99") - len(ch.Name)
+		}
+	}
+	return len("-99")
 }

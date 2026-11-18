@@ -198,7 +198,8 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 }
 
 // SetupWithManager registers the reconciler, one grant at a time. Besides its
-// grants it watches a session that ends (deleted, or being deleted) and a
+// grants it watches a session that ends (deleted, deleting, or a closed
+// summoned session with an accepted reap) and a
 // session pod that appears or starts Running, which enqueue that session's
 // grants, and every GrantPolicy change, which enqueues every pending grant.
 // CredentialJob receipts enqueue their immutable grant reference too.
@@ -232,10 +233,8 @@ func (b *Broker) SetupWithManager(mgr ctrl.Manager) error {
 				return b.grantsOf(ctx, o.GetName(), false)
 			}),
 			builder.WithPredicates(predicate.Funcs{
-				CreateFunc: func(event.CreateEvent) bool { return false },
-				UpdateFunc: func(e event.UpdateEvent) bool {
-					return e.ObjectOld.GetDeletionTimestamp().IsZero() && !e.ObjectNew.GetDeletionTimestamp().IsZero()
-				},
+				CreateFunc:  func(event.CreateEvent) bool { return false },
+				UpdateFunc:  requestingSessionEndedUpdate,
 				DeleteFunc:  func(event.DeleteEvent) bool { return true },
 				GenericFunc: func(event.GenericEvent) bool { return false },
 			})).
@@ -299,4 +298,11 @@ func (b *Broker) grantsOf(ctx context.Context, session string, pendingOnly bool)
 		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(g)})
 	}
 	return reqs
+}
+
+// Session termination wakes grants independently of their expiry requeue.
+func requestingSessionEndedUpdate(e event.UpdateEvent) bool {
+	oldSession, oldOK := e.ObjectOld.(*v1alpha1.AgentSession)
+	newSession, newOK := e.ObjectNew.(*v1alpha1.AgentSession)
+	return oldOK && newOK && !requestingSessionEnded(oldSession) && requestingSessionEnded(newSession)
 }

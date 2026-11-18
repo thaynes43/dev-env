@@ -19,7 +19,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/summonoutcome"
 )
 
-// P2: a recorded refusal renews its queue place at each retry boundary.
+// P2: OP802 keeps a recorded refusal's queue place across retry boundaries.
 // These are full leader passes one fake minute apart, with a fresh leader.
 func TestSummonFilingRecordedRefusalQueueHold(t *testing.T) {
 	w := newFilingWorld(t)
@@ -58,7 +58,7 @@ func TestSummonFilingRecordedRefusalQueueHold(t *testing.T) {
 		w.now = summonT0.Add(time.Duration(minute) * time.Minute)
 		before := count(filingPolicy(), q)
 		wantBefore := 1
-		if minute%15 == 0 {
+		if minute == 0 {
 			wantBefore = 0
 		}
 		if before != wantBefore {
@@ -77,7 +77,7 @@ func TestSummonFilingRecordedRefusalQueueHold(t *testing.T) {
 			t.Fatalf("minute %d pass: %v", minute, err)
 		}
 	}
-	if creates != 4 || writes != 5 || countedBefore != 42 || countedAfter != 46 {
+	if creates != 4 || writes != 5 || countedBefore != 45 || countedAfter != 46 {
 		t.Fatalf("46 passes: creates=%d writes=%d countedBefore=%d countedAfter=%d", creates, writes, countedBefore, countedAfter)
 	}
 	e, _ := filingLedger(t, w)
