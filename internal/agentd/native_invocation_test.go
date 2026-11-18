@@ -48,7 +48,7 @@ func runSyntheticNativeInvocation(t *testing.T, mode string) (Settings, protocol
 	}
 	spawns := filepath.Join(s.StateDir, "synthetic-native-spawns")
 	prompts := filepath.Join(s.StateDir, "synthetic-initial-prompts")
-	cli := fakeCLI(t, t.TempDir(), `if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.160.1'; exit 0; fi
+	cli := fakeCLI(t, t.TempDir(), `if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.169.1'; exit 0; fi
 printf '%s\n' "$1" >> "$SYNTHETIC_NATIVE_SPAWNS"
 if [ "$1" = "resume" ]; then
   if [ -n "$SYNTHETIC_NATIVE_RESUME_RELEASE" ]; then IFS= read -r ready < "$SYNTHETIC_NATIVE_RESUME_RELEASE"; fi

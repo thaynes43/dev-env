@@ -161,7 +161,7 @@ func TestCodexRCThreadAndHandoffExistingDaemonFixture(t *testing.T) {
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 func TestCodexRCTurnPinnedSchema(t *testing.T) {
-	for name, digest := range map[string]string{"TurnStartParams": "07771223642e1b61bd9aac0069fc0f98143a1c047724ca02c7ceb13653442738", "TurnStartResponse": "12c5151421bb061297c9790ff795a44aa4b9bdb91fbb68012dcf0a08cf4198b1"} {
+	for name, digest := range map[string]string{"TurnStartParams": "b64078d4310cb1fa591c7f63344bed6b8c08d216f9f81d86c00045136187a2b6", "TurnStartResponse": "e08d29ed53ac18395874d68c1b35c41e77dfc815a8aee09950462ff8098c240d"} {
 		data, err := os.ReadFile(filepath.Join("testdata", "codex_rc_create", name+".json"))
 		if err != nil || projectcatalog.Digest(data) != digest {
 			t.Fatal("pinned schema changed", name, err)

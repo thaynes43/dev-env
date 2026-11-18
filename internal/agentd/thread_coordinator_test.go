@@ -28,7 +28,7 @@ func coordinatorEntryFixture() (Settings, protocol.Session, CodexThreadRequest) 
 	return s, sess, req
 }
 func TestCodexCoordinatorEntryMetadataAndUIDs(t *testing.T) {
-	for _, guard := range []string{"ordinary-intent", "missing-metadata", "metadata-host", "metadata-uid", "session-name", "session-uid", "pod-account", "target-host", "target-session-uid", "target-pod-uid", "missing-session-fence", "missing-pod-fence", "model", "effort", "coordinator-on-pool"} {
+	for _, guard := range []string{"ordinary-intent", "missing-metadata", "metadata-host", "metadata-uid", "session-name", "session-uid", "pod-account", "target-host", "target-session-uid", "target-pod-uid", "missing-session-fence", "missing-pod-fence", "model", "gpt-6.2-sol", "gpt-6.2-astra", "effort", "coordinator-on-pool"} {
 		t.Run(guard, func(t *testing.T) {
 			s, sess, req := coordinatorEntryFixture()
 			if !codexCoordinatorEntry(s, sess, req) {
@@ -62,6 +62,8 @@ func TestCodexCoordinatorEntryMetadataAndUIDs(t *testing.T) {
 				req.ExpectedPodUID = ""
 			case "model":
 				req.Model = "gpt-6-astra"
+			case "gpt-6.2-sol", "gpt-6.2-astra":
+				req.Model = guard
 			case "effort":
 				req.Effort = "high"
 			case "coordinator-on-pool":

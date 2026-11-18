@@ -114,7 +114,7 @@ func TestDecisionActualHeadlessToOwnedTTYJourney(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.CodexBin = fakeCLI(t, t.TempDir(), `if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.160.1'; exit 0; fi
+	s.CodexBin = fakeCLI(t, t.TempDir(), `if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.169.1'; exit 0; fi
 printf '%s\n' "$1" >> "$DECISION_JOURNEY_SPAWNS"
 if [ "$1" = "resume" ]; then
  printf '%s' "$2" > "$DECISION_JOURNEY_THREAD"

@@ -70,7 +70,7 @@ func fakeAllowanceHost(t *testing.T, mode string) *allowanceFixture {
 			var result any
 			switch req.Method {
 			case "initialize":
-				ua := "codex/0.160.1 fixture"
+				ua := "codex/0.169.1 fixture"
 				if mode == "wrong-version" {
 					ua = "codex/0.159.1"
 				}
@@ -158,7 +158,7 @@ func TestCodexAllowanceReaderWireAndContext(t *testing.T) {
 	if obs.ObservationID != c.ObservationID || obs.ProducerRef != c.ProducerRef || obs.ProducerIncarnation != c.ProducerIncarnation || obs.Sequence != c.Sequence || !reflect.DeepEqual(obs.EvidenceRefs, []string{c.EvidenceRef}) || read.SnapshotRevision != c.SnapshotRevision {
 		t.Fatal("capture identity mismatch")
 	}
-	if obs.Source.Version != "app-server-reported-0.160.1" || obs.ProviderObservedAt != nil || read.Items[0].Freshness.State != providerallowance.FreshUnknown || obs.Scope.BindingState != providerallowance.BindingUnknown || len(obs.Measures) != 4 {
+	if obs.Source.Version != "app-server-reported-0.169.1" || obs.ProviderObservedAt != nil || read.Items[0].Freshness.State != providerallowance.FreshUnknown || obs.Scope.BindingState != providerallowance.BindingUnknown || len(obs.Measures) != 4 {
 		t.Fatal("coverage/freshness mismatch")
 	}
 	if obs.Measures[2].Value.Decimal == nil || *obs.Measures[2].Value.Decimal != "0" || obs.Measures[3].Value.State != providerallowance.ValueUnknown {

@@ -166,8 +166,8 @@ upgrade, CLI install, native daemon pilot, pairing, login, rotation, default
 promotion, signed-image publication or installed/accepted claim is made.
 Source documentation cannot prove account entitlement. CI/image and advisory
 review status belong to the corresponding PR/head, recorded in the story
-handoff; an agent-only CLI candidate remains draft if its required auth claims
-cannot be established. Model-admission tests exercise each source-rule caller
+handoff. The initial CLI delivery held its auth claim for review; the fix-round
+ruling and current qualification are in the [0.169.1 audit](codex-169-upgrade-audit.md). Model-admission tests exercise each source-rule caller
 and still refuse an unknown ID. No CRD, defaults or privileged policy changes.
 
 ### Later evidence from the separately assigned newest-client worker
@@ -187,6 +187,9 @@ requested IDs, but the receipts expose no separate provider served-model field;
 no fallback is evidenced or claimed. These additional results do not erase the
 earlier 0.160.1 refusals or isolate client version from different pod/time. They
 also do not test 0.169.1, install a platform upgrade or establish the required
-unconditional no-refresh claim. The agent-only CLI candidate is held as draft
-[PR #1220](https://github.com/thaynes43/dev-env/pull/1220). The keeper prerequisite
+unconditional no-refresh claim. Initial [PR #1220](https://github.com/thaynes43/dev-env/pull/1220)
+was held as draft. In fix round 1 the coordinator closed the refresh concern:
+an empty refresh grant carries no keeper credential and a failed refresh writes
+nothing. The [replacement audit](codex-169-upgrade-audit.md) records retained-host
+and layout qualification, rollout order and CI limits. The keeper prerequisite
 remains separate, and #955 must not merge as it stands.

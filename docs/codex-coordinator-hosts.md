@@ -63,7 +63,9 @@ and control socket. All containers and init containers have CPU and memory
 requests and limits. Each host has its own repo cache and task worktrees, with
 common rules and authorized context supplied through the platform.
 
-Use pinned Codex 0.160.1's persistent daemon lifecycle. Before startup, preserve
+The agent-only candidate pins Codex 0.169.1's persistent daemon lifecycle;
+[its audit](codex-169-upgrade-audit.md) records the closed refresh concern,
+retained-host migration and CI limits. Installation and acceptance remain separate. Before startup, preserve
 its settings while setting `updater.autoUpdateEnabled=false`; verify CLI and
 managed app-server versions before pairing. Display names derive from the stable
 hostname. Pairing is a separate authenticated owner action for each host, with
@@ -130,6 +132,30 @@ for an explicit recovery design with independently verified fencing; do not dele
 the receipt, invent `Stopped`, clear rendezvous files or automatically retry.
 Unplanned-loss recovery remains an acceptance gate separate from a clean idle
 host replacement.
+
+### Single predecessor client upgrade
+
+The 0.169.1 agent image accepts receipts written by exactly 0.160.1 with the same
+phase/binding checks as current receipts. A Stopped receipt still permits start;
+Preparing, Attempting, Confirming, Confirmed and Stopping retain their existing
+review requirements. Other versions, malformed receipts and mismatched bindings
+remain Unknown. A version change supplies no new stop evidence.
+
+Native start preserves the existing managed package. Only after the existing
+inspector proves every native host process absent, agentd may replace exactly
+0.160.1 using the supported image CLI command
+`app-server daemon update --from-cli --yes`. Native stages the complete local
+package and changes its current selection, without touching sessions, login or
+history. agentd rechecks absence and the exact selected version. Package work
+preserves the old lifecycle receipt bytes; the usual start then writes its own
+durable Attempting and, after readiness, Confirmed receipt. Failed replacement
+never erases or invents lifecycle evidence. An interrupted start still needs review.
+Remote-mode sessions use the same package path after their own absence check;
+a live old daemon is never upgraded in place by this supervisor.
+
+The image job tests this with a synthetic old Stopped receipt/package and real
+0.169.1 startup, with enrollment suppressed. It does not establish live pairing
+or keeper-generation adoption. See the [upgrade audit](codex-169-upgrade-audit.md).
 
 ## Management identity
 

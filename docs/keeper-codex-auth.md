@@ -160,3 +160,11 @@ The pinned implementation references are
 [device login](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/login/src/device_code_auth.rs),
 [OAuth transport](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/login/src/oauth/client.rs)
 and [auth manager](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/login/src/auth/manager.rs).
+
+
+The agent-only [Codex 0.169.1 candidate](codex-169-upgrade-audit.md) records the
+new source pin, schema/flag audit and closed refresh concern. Retained-host and
+layout qualification in CI is separate from installation and acceptance.
+Dated 0.160.1 observations above
+remain historical evidence. The codex-login helper stays at 0.160.1; its keeper
+compatibility prerequisite and every existing default/policy remain separate.

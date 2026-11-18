@@ -17,6 +17,8 @@ import (
 // a names-only listing of a HOME those versions wrote, Claude Code's own list
 // of config-directory names and the Codex source at rust-v0.160.1. DESIGN-025
 // 6.3 records what the confirmation added.
+// Codex names were rechecked against 0.169.1 in OP921's agent-image job;
+// docs/codex-169-upgrade-audit.md records its actions, names and limits.
 
 // historyKind is what a history entry must be. A history name that is some
 // other kind of file refuses the export (unexpected_entry); a link is listed
@@ -92,7 +94,8 @@ var claudeLayout = []historyRule{
 	{".*.agentd-*", protocol.HistoryClassNotHistory, kindAny},
 }
 
-// codexLayout is $CODEX_HOME.
+// codexLayout is $CODEX_HOME. The image job rechecks names produced by the
+// pinned client; see TestPinnedCodexHomeLayout and the upgrade audit.
 var codexLayout = []historyRule{
 	// History: rollouts, the session index, prompt history, the state
 	// databases with their -wal and -shm files, and what the model made.
@@ -137,6 +140,10 @@ var codexLayout = []historyRule{
 	{".sandbox_migration", protocol.HistoryClassNotHistory, kindAny},
 	// Environment captures.
 	{"shell_snapshots", protocol.HistoryClassNotHistory, kindAny},
+	// Native auth writer coordination; the lock carries no login material (0.169.1).
+	{"auth.lock", protocol.HistoryClassNotHistory, kindAny},
+	// Stable credential-commit sidecar; storage_commit.rs:29-51 writes no token data.
+	{"auth.json.lock", protocol.HistoryClassNotHistory, kindAny},
 	// Credentials.
 	{"auth.json", protocol.HistoryClassCredential, kindAny},
 	{"auth.json.*", protocol.HistoryClassCredential, kindAny},

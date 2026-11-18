@@ -204,7 +204,7 @@ func TestRunAgentCodexReportsRolloutModel(t *testing.T) {
 	home, dir := t.TempDir(), t.TempDir()
 	rollout := filepath.Join(home, "sessions", "2026", "10", "19")
 	// The CLI writes its rollout, then its exec stream, as the real one does.
-	cli := fakeCLI(t, dir, `if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.160.1'; exit 0; fi
+	cli := fakeCLI(t, dir, `if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.169.1'; exit 0; fi
 mkdir -p "`+rollout+`"
 cat > "`+filepath.Join(rollout, "rollout-2026-10-19T01-02-03-"+rolloutThread+".jsonl")+`" <<'EOF2'
 `+rolloutLine("turn_context", `"gpt-6-astra"`)+`

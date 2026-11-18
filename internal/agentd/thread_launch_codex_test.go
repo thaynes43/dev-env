@@ -444,12 +444,12 @@ func TestCodexThreadObservationEnds(t *testing.T) {
 	})
 }
 
-// codexThreadFixture is one Thread as thread/list returns it (0.160.1): the
+// codexThreadFixture is one Thread as thread/list returns it (0.169.1): the
 // fields this adapter reads, plus the others the schema requires.
 func codexThreadFixture(id, cwd, preview string, created int64, source any) map[string]any {
 	return map[string]any{
 		"id": id, "cwd": cwd, "source": source, "preview": preview, "createdAt": created,
-		"cliVersion": "0.160.1", "ephemeral": false, "modelProvider": "openai", "projectId": nil,
+		"cliVersion": "0.169.1", "ephemeral": false, "modelProvider": "openai", "projectId": nil,
 		"sessionId": id, "status": map[string]any{"type": "idle"}, "turns": []any{}, "updatedAt": created,
 	}
 }
@@ -502,9 +502,9 @@ func threadRPCFixture(t *testing.T, answer func(method string, params map[string
 			}
 			result := answer(request.Method, request.Params)
 			if request.Method == "initialize" {
-				// InitializeResponse requires these four fields (0.160.1).
+				// InitializeResponse requires these four fields (0.169.1).
 				result = map[string]any{
-					"userAgent": "codex/0.160.1 fixture", "codexHome": home,
+					"userAgent": "codex/0.169.1 fixture", "codexHome": home,
 					"platformFamily": "unix", "platformOs": "linux",
 				}
 			}
@@ -613,7 +613,7 @@ func TestCodexFirstTurnReadsNestedThreadItem(t *testing.T) {
 		case "thread/turns/list":
 			return map[string]any{"data": []any{map[string]any{"id": turnID, "status": "completed", "items": []any{}}}}
 		case "thread/items/list":
-			// The shape the old decoder accepted, which 0.160.1 does not return.
+			// The shape the old decoder accepted, which 0.169.1 does not return.
 			return map[string]any{"data": []any{map[string]any{"type": "agentMessage", "id": "i1", "text": "Done."}}}
 		}
 		return nil
@@ -656,7 +656,7 @@ func TestCodexThreadObserverRefusesMalformed(t *testing.T) {
 	}
 }
 
-// The observer's requests and fields exist in the pinned 0.160.1 protocol.
+// The observer's requests and fields exist in the pinned 0.169.1 protocol.
 func TestCodexThreadPinnedSchema(t *testing.T) {
 	read := func(name, digest string) map[string]any {
 		raw, err := os.ReadFile(filepath.Join("testdata", "codex_thread_launch", name+".json"))
@@ -675,7 +675,7 @@ func TestCodexThreadPinnedSchema(t *testing.T) {
 	}
 	props := func(m map[string]any) map[string]any { return m["properties"].(map[string]any) }
 	defs := func(m map[string]any) map[string]any { return m["definitions"].(map[string]any) }
-	list := read("ThreadListParams", "5daf371b2852c409d4405c95f79cddb2d92a1ee89da808b2c5112ef16a57432c")
+	list := read("ThreadListParams", "3c54429c202b25ab3df5c5d27aad6b13bf1203fd410b99b0a838d27ad48f9787")
 	for _, f := range []string{"cwd", "limit", "sourceKinds"} {
 		if props(list)[f] == nil {
 			t.Fatal("thread/list lacks", f)
@@ -691,7 +691,7 @@ func TestCodexThreadPinnedSchema(t *testing.T) {
 	if !slices.Equal(kinds, codexAllSourceKinds) {
 		t.Fatalf("ThreadSourceKind %v", kinds)
 	}
-	thread := defs(read("ThreadListResponse", "70d0fb1a5d747515459317281d9aa654e930122a174e8535c56de83b9f3b5dcf"))["Thread"].(map[string]any)
+	thread := defs(read("ThreadListResponse", "b81cf2ac844a39731f380105a8f960d8444e116519c7d6cfb6f1f9a190f93c39"))["Thread"].(map[string]any)
 	for _, f := range []string{"id", "cwd", "source", "preview", "createdAt"} {
 		if !slices.Contains(thread["required"].([]any), any(f)) {
 			t.Fatal("Thread no longer requires", f)
@@ -703,7 +703,7 @@ func TestCodexThreadPinnedSchema(t *testing.T) {
 			t.Fatal("thread/turns/list lacks", f)
 		}
 	}
-	turn := defs(read("ThreadTurnsListResponse", "8db83d38553204a223cf349680c59b0cc674ba95a4637e1995bfeabd73c80219"))
+	turn := defs(read("ThreadTurnsListResponse", "1771280212d97d8f5c745dfd8b95280cd2c4927ea58d4e3d6de6f6a0326dd1d0"))
 	var statuses []string
 	for _, s := range turn["TurnStatus"].(map[string]any)["enum"].([]any) {
 		statuses = append(statuses, s.(string))
@@ -711,13 +711,13 @@ func TestCodexThreadPinnedSchema(t *testing.T) {
 	if !slices.Equal(statuses, []string{"completed", "interrupted", "failed", "inProgress"}) {
 		t.Fatalf("TurnStatus %v", statuses)
 	}
-	items := read("ThreadItemsListParams", "d5cf9784413f1d1abba756e04e48b273a9d12ab2c5675442e91b6a4ee55e19f0")
+	items := read("ThreadItemsListParams", "4a65ec8077ac41db5fb0c0fb688d9421459a9168b35c4036ae78e25bbd0ce163")
 	for _, f := range []string{"threadId", "turnId", "limit", "sortDirection"} {
 		if props(items)[f] == nil {
 			t.Fatal("thread/items/list lacks", f)
 		}
 	}
-	itemsResponse := read("ThreadItemsListResponse", "bc8a8dcb9a48d9ca38b0a5faa89b80ec2fd57398cd3a8dcc15097776153f6c74")
+	itemsResponse := read("ThreadItemsListResponse", "85a74b025af54fd5ac26ee333dc96bf4e1d90974cccab8ac4df4970e7d7d2306")
 	entry := defs(itemsResponse)["ThreadItemEntry"].(map[string]any)
 	for _, f := range []string{"item", "turnId"} {
 		if !slices.Contains(entry["required"].([]any), any(f)) {

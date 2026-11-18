@@ -12,7 +12,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
-const SupportedCLIVersion = "0.160.1"
+const SupportedCLIVersion = "0.169.1"
 
 type Outcome string
 
@@ -111,7 +111,7 @@ func (r Result) RCLaunchError() *apiv1.RCLaunchError {
 			code, message = "pairing_action_unavailable", "The selected host has no verified managed-session pairing action"
 		}
 	case UnsupportedVersion:
-		message = "Codex discovery requires codex-cli 0.160.1"
+		message = "Codex discovery requires codex-cli 0.160.1 or 0.169.1"
 	case InvalidTarget:
 		code, message = "project_unavailable", "An accepted catalog repository and normalized root are required"
 	}
@@ -145,7 +145,7 @@ func Discover(target Target, hosts []HostInventory) Result {
 		if host.CatalogRevision != target.Snapshot.CatalogRevision() || host.Repository != repo || host.RepositoryRoot != target.CWD {
 			continue
 		}
-		if host.CLIVersion != SupportedCLIVersion {
+		if host.CLIVersion != SupportedCLIVersion && host.CLIVersion != "0.160.1" {
 			return Result{Outcome: UnsupportedVersion}
 		}
 		if seenHosts[*host.HostID] || !identifier(host.InstallationID) {

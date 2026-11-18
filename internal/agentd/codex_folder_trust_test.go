@@ -51,7 +51,7 @@ func gitInitRepo(t *testing.T, dir string) {
 	}
 }
 
-// trustWriteResult is a ConfigWriteResponse: the fields the 0.160.1 schema requires.
+// trustWriteResult is a ConfigWriteResponse: the fields the 0.169.1 schema requires.
 func trustWriteResult() map[string]any {
 	return map[string]any{
 		"filePath": "/home/dev/.codex/config.toml",
@@ -124,7 +124,7 @@ func trustDaemon(t *testing.T, reply func(method string, params map[string]any) 
 			}
 			if request.Method == "initialize" {
 				if conn.WriteJSON(map[string]any{"id": *request.ID, "result": map[string]any{
-					"userAgent": "codex/0.160.1 fixture", "codexHome": home,
+					"userAgent": "codex/0.169.1 fixture", "codexHome": home,
 					"platformFamily": "unix", "platformOs": "linux",
 				}}) != nil {
 					return
