@@ -170,6 +170,7 @@ All object members are listed; there are no unbounded lists or maps.
 | `rescue` | optional object with required `podUID` (1..128), `generation` (int64, minimum 1), `stamp` (1..128), `result` (enum `Verified`, `CleanAndPushed`, `Failed`) | Reference to the completed `status.rescue`, not a copied generic success flag. |
 | `removalCommittedAt` | optional date-time | Acknowledged decision to remove the receipt's pod, after its completed rescue. |
 | `recoveryAck` | optional object, exact shape below | Authorized human assertion of the old writer's exit. |
+| `recoveryHoldRescueAttempted` | optional boolean; required for RecoveryHold, explicitly initialized false before hold Create | Durable writer-admission bit; set true before any hold rescue dispatch. Absence is unknown. |
 | `recoveryHoldUID` | optional string, min 1, max 128 | Distinct current rescue hold; cannot equal original pod UID. |
 | `recoveryHoldNodeName` | optional DNS subdomain string, min 1, max 253 | Current recovery hold's node name. |
 | `recoveryHoldNodeUID` | optional string, min 1, max 128 | Current recovery hold's node UID. |
@@ -185,7 +186,8 @@ custodian authorization govern the write; the audit record identifies its caller
 
 For `recoveryHoldAck`, the pod/node UIDs equal recoveryHoldUID and
 recoveryHoldNodeUID; operation/Session/HOME IDs still equal the record. Require
-both recovery-hold node members whenever recoveryHoldUID is present. Retain the
+both recovery-hold node members before recoveryHoldRescueAttempted becomes true;
+a newly created hold may not yet be scheduled. Retain the
 original recoveryAck after a lost hold; it is not overwritten by recoveryHoldAck.
 
 The controller owns all members except `recoveryAck` and `recoveryHoldAck`, which
@@ -354,10 +356,12 @@ If the original pod has already gone without that evidence, the custodian must:
    its own stop. A cluster custodian who lacks status permission stops; this
    design grants neither credentials nor a new route.
 3. The controller validates the acknowledgement and uncached absence, then
-   enters RecoveryHold. It creates a credential-free D-55 hold on the **same
-   original HOME**, captures its UID, probes its version and runs the qualified
-   rescue. A lost Create ACK requires uncached discovery of the one owned hold;
-   never adopt an executor or different HOME. A failed hold rescue retains the
+   enters RecoveryHold. Before Create it confirms recoveryHoldRescueAttempted=false. It creates a
+   credential-free D-55 hold on the **same original HOME**, annotated with the
+   operationID, then captures its UID and, once scheduled, node name/UID. A lost
+   Create ACK requires uncached discovery of the one owned, operation-bound
+   hold; never adopt an executor or different HOME. It probes capability and
+   confirms recoveryHoldRescueAttempted=true before any qualified rescue exec. A failed hold rescue retains the
    hold and active record. A mismatching/stale acknowledgement retains the block.
 4. Require the hold's stop receipt and a successful Verified or CleanAndPushed
    rescue, recorded before its normal guarded removal. After that hold is gone,
@@ -386,8 +390,9 @@ stop-bearing rescue. Once active, a resume cannot take the existing
 remove before any attempt, first complete its stop/rescue under this rule.
 Unnamed/unsupported holds retain today's behavior. A recovery hold is a distinct
 target within the original operation; it never overwrites the original pod UID.
-Its own disappearance before a committed rescue returns to RecoveryRequired,
-with a new recoveryHoldAck required for that hold before another hold. Do not
+Once a hold rescue may have been dispatched, its disappearance before a
+committed rescue returns to RecoveryRequired, with a new recoveryHoldAck
+required for that hold before another hold. Do not
 reuse the source acknowledgement to assert the missing hold stopped. The second
 acknowledgement binds the lost recoveryHoldUID and recoveryHoldNodeUID, while
 retaining the source recoveryAck. Only a matching fresh hold acknowledgement and
@@ -396,6 +401,18 @@ new hold binding, and clear the consumed recoveryHoldAck, before its rescue.
 No active source/hold binding is rewritten merely because a pod name is free.
 Status retains one source and one current hold, not an unbounded incident ledger.
 A lost replacement hold needs its own new acknowledgement under the same rule.
+
+There is one narrower pre-dispatch case. If the stored admission bit is explicitly
+false, no hold rescue could have run: its only supported command, `agentd hold`,
+writes nothing. An uncached missing hold after a lost Create ACK may therefore
+be replaced without asserting that its process exited. No writer was admitted,
+no executor starts, and the original source acknowledgement still applies. An
+absent bit is not false. Before the bit becomes true, confirm hold UID, node UID,
+HOME and operation annotation durably. A restart after true but before exec has
+the same conservative recovery cost as any uncertain dispatch. Bind a replacement
+hold and reset the bit only after these rules permit it. This is no permission
+to delete a present hold without rescue.
+([cmd/agentd/main.go:331–347][hold-command])
 
 ## 6. What Tom sees on the phone
 
@@ -427,6 +444,16 @@ change no operationID and create no additional stop targets.
 Today observe derives phase/pending/conditions and podPhase can say Running from
 kubelet PodReady; those are the code points the build must change. The phone's
 actual rendering is future proof, not established by status fields alone.
+At the pin, show prints condition messages, but resume's initial text can say
+“is not suspended” or promise a new pod without considering this operation.
+The later build must show the waiting message even for an already-Running
+requested mode and must not print attach/success from stale kubelet readiness.
+([sessions.go:386–389][show-conditions], [lifecycle.go:89–112][resume-text])
+
+These words belong in the platform's phone-visible session detail and supported
+command result. The native Codex app may show the stopped computer as offline;
+this design does not invent an unsolicited push or claim control of its UI.
+The phone proof must record where Tom actually saw the message.
 ([reconciler.go:1767–1801][conditions], [reconciler.go:1986–2009][phase])
 
 ## 7. Schema delivery, mixed versions and rollback
@@ -503,6 +530,7 @@ may be created. No table entry authorizes force removal or volume deletion.
 | J17 Restart during manual recovery | RecoveryRequired/RecoveryHold, bound ACK/hold | Recover only original HOME after verified ACK; discover the one owned hold after lost Create ACK; receipt plus successful hold rescue precede hold deletion and Complete. | `TestCodexStopManualRecoveryRestartClearsOnlyAfterHoldRescue` |
 | J18 Recovery hold disappears or is resumed mid-rescue | RecoveryHold or its RemovalCommitted decision | Resume cannot bypass rescue. Unexpected absence needs a new ACK for that hold; committed removal can finish normally. No repeated adoption or stale ACK. | `TestCodexStopRecoveryHoldLossNeedsFreshEvidence` |
 | J19 Second suspend after completed replacement | Complete, fresh owned executor on original HOME | New operationID and target UID on same HOME. No inheritance of the old receipt or removal decision. | `TestCodexStopSecondLifecycleCannotReusePriorReceipt` |
+| J20 Restart after recovery-hold Create or before rescue dispatch | RecoveryHold, explicit admission bit and possibly observed hold binding | Lost Create ACK discovers only the operation-bound hold. Missing hold with false bit permits only another no-writer hold; true/unknown bit requires recovery evidence. True is persisted before exec, after exact pod/node/HOME reads. | `TestCodexStopRecoveryHoldAdmissionSurvivesLostCreateAndRestart` |
 
 Keep the old M4 characterization for **unnamed/unsupported** fixtures and add
 J15 for the qualified fixture; do not rewrite the old-host expectation globally.
@@ -694,7 +722,7 @@ slice that exceeds one session. All local Go commands use GOMAXPROCS=2,
 | --- | --- | --- |
 | A Protocol and schema | M, 4–6 hours; split API and agent work if needed | Capability command, operation-bound receipt/request, bounded API types, deepcopy/CRD, validation and protocol tests. No activation. Prove old command response fixtures and named-only gates. |
 | B Reconcile and guards | L, 6–10 hours, split before pickup | Durable operation writes, acknowledgement, retry, exact target removal branch, generation boundary, ensure/archive/finalizer fences, Complete HOME binding, ordinary/empty hold behavior. Implement J1–J16/J19 and old-host regression checks. Remains inactive until all pieces/review are ready. |
-| C Manual recovery | M, 4–6 hours | Custodian ACK validation/audit contract, same-HOME recovery holds, lost-hold binding and J17/J18. Q-068-01 gates first use, not the independent source checks. No new credential or permission. |
+| C Manual recovery | M, 4–6 hours | Custodian ACK validation/audit contract, same-HOME recovery holds, lost-hold binding/admission and J17/J18/J20. Q-068-01 gates first use, not the independent source checks. No new credential or permission. |
 | D Phone wording and proof preparation | S/M, 2–4 hours | Plain pending/rescue messages through show/API/phone detail, reviewed proof-only helper, private evidence checks and exact procedure validated against build output. No live run. |
 | E Cross-family review and source delivery | M, 2–4 hours | Review exact integrated head, mutate new guards, required CI green, layout check, schema copy PR prepared before operator pin. Coordinator arranges model family. Source merge alone closes no installed gate. |
 | F Authorized install and disposable proof | M, 2–4 hours plus explicit uncertainty | Separate install story and owner decision; schema first, every replica compatible, empty-list upgrade, named disposable fixture only, section 10 proof. No production coordinator until OP877's full acceptance is closed. |
@@ -754,3 +782,6 @@ with that story.
 [retry]: https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/internal/controller/reconciler.go#L95-L96
 [hold]: https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/internal/controller/pod.go#L303-L315
 [hold-supervisor]: https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/internal/agentd/codex_remote_processes.go#L173-L227
+[hold-command]: https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/cmd/agentd/main.go#L331-L347
+[show-conditions]: https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/internal/agentrun/sessions.go#L386-L389
+[resume-text]: https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/internal/agentrun/lifecycle.go#L89-L112

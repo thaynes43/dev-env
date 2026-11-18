@@ -71,7 +71,7 @@ is needed for this pod-bound lifecycle intent.
 
 DESIGN-068 sections 2–7 define the exact schema, capability/receipt, commit points,
 compatibility and manual evidence. Its section 8 binds named future envtests to
-19 restart rows. Section 10 is a written, unrun disposable-host proof. Section 12
+20 restart rows. Section 10 is a written, unrun disposable-host proof. Section 12
 leaves the manual custodian and proof host decisions with the owner.
 
 ## Alternatives
