@@ -227,7 +227,7 @@ func fakeRuntime(t *testing.T) (Runtime, *signalledClock, chan string) {
 	t.Helper()
 	c := &signalledClock{FakeClock: testingclock.NewFakeClock(epoch), timers: make(chan time.Duration, 32)}
 	calls := make(chan string, 32)
-	rt := Runtime{Clock: c, Scan: func() (map[string]string, bool, error) { return map[string]string{}, false, nil }, Stop: func() (bool, error) { return false, nil }, Save: func(*Record) error { return nil }, Notes: func(ctx context.Context, cursor string, d time.Duration) (Note, error) {
+	rt := Runtime{Clock: c, Scan: func() (Snapshot, error) { return Snapshot{Files: map[string]string{}}, nil }, Stop: func() (bool, error) { return false, nil }, Save: func(*Record) error { return nil }, Notes: func(ctx context.Context, cursor string, d time.Duration) (Note, error) {
 		calls <- cursor
 		<-ctx.Done()
 		return Note{}, ctx.Err()
@@ -290,12 +290,12 @@ func TestRuntimeAddressedNoteAndUnrelatedIgnored(t *testing.T) {
 func TestRuntimeNewFileCancelsHeldRead(t *testing.T) {
 	rt, c, calls := fakeRuntime(t)
 	scans := 0
-	rt.Scan = func() (map[string]string, bool, error) {
+	rt.Scan = func() (Snapshot, error) {
 		scans++
 		if scans == 1 {
-			return map[string]string{}, false, nil
+			return Snapshot{Files: map[string]string{}}, nil
 		}
-		return map[string]string{"new": "stamp"}, false, nil
+		return Snapshot{Files: map[string]string{"new": "stamp"}}, nil
 	}
 	done := runFake(context.Background(), rt, record())
 	<-calls
@@ -379,7 +379,7 @@ func TestDirectorySymlinkAndTraversalRefused(t *testing.T) {
 	must(t, err)
 	defer func() { _ = d.Close() }()
 	must(t, os.Symlink(filepath.Join(parent, "elsewhere"), filepath.Join(dir, "bad")))
-	if _, _, err := d.Scan(10); err == nil {
+	if snapshot, err := d.Scan(10); err != nil || len(snapshot.Refused) != 1 {
 		t.Fatal("symlinked entry accepted")
 	}
 	for _, name := range []string{"..", "../outside", "/outside", "a/b", "a\\b", "bad\nname"} {
@@ -395,20 +395,20 @@ func TestDirectoryMetadataBoundAndIdentity(t *testing.T) {
 	must(t, err)
 	defer func() { _ = d.Close() }()
 	must(t, os.WriteFile(filepath.Join(dir, "one"), []byte("PRIVATE_TEXT"), 0000)) // readable metadata, unreadable contents
-	files, overflow, err := d.Scan(1)
+	snapshot, err := d.Scan(1)
 	must(t, err)
-	if overflow || len(files) != 1 || strings.Contains(files["one"], "PRIVATE") {
+	if snapshot.Overflow || len(snapshot.Files) != 1 || strings.Contains(snapshot.Files["one"], "PRIVATE") {
 		t.Fatal("metadata scan")
 	}
 	must(t, os.WriteFile(filepath.Join(dir, "two"), nil, 0600))
-	files, overflow, err = d.Scan(1)
+	snapshot, err = d.Scan(1)
 	must(t, err)
-	if !overflow || len(files) != 1 {
+	if !snapshot.Overflow || len(snapshot.Files) != 1 {
 		t.Fatal("scan allocation unbounded")
 	}
 	must(t, os.Rename(dir, dir+"-old"))
 	must(t, os.Mkdir(dir, 0700))
-	if _, _, err = d.Scan(1); err == nil {
+	if _, err = d.Scan(1); err == nil {
 		t.Fatal("replacement directory adopted")
 	}
 }
@@ -501,7 +501,16 @@ func TestStoreRejectsPendingOutsideDirectory(t *testing.T) {
 	r := record()
 	r.Scan(map[string]string{"one": "stamp"}, false)
 	r.Pending[0].Path = "/outside"
-	must(t, s.Save(r))
+	if s.Save(r) == nil {
+		t.Fatal("unsafe pending path saved")
+	}
+	data, err := json.Marshal(r)
+	must(t, err)
+	f, err := s.root.OpenFile(s.name+".json", os.O_CREATE|os.O_WRONLY, 0600)
+	must(t, err)
+	_, err = f.Write(data)
+	must(t, err)
+	must(t, f.Close())
 	if _, err = s.Load(); err == nil {
 		t.Fatal("saved outside path accepted as an event")
 	}
@@ -632,16 +641,16 @@ func TestDirectoryReplacementWithSameSizeAndTimeIsNew(t *testing.T) {
 	d, err := OpenDirectory(dir)
 	must(t, err)
 	defer func() { _ = d.Close() }()
-	before, _, err := d.Scan(2)
+	before, err := d.Scan(2)
 	must(t, err)
 	// Allocate a distinct inode while the first is still live, then replace it
 	// atomically with matching size/mode/mtime. No contents are read by the wait.
 	must(t, os.WriteFile(replacement, []byte("two"), 0600))
 	must(t, os.Chtimes(replacement, epoch, epoch))
 	must(t, os.Rename(replacement, first))
-	after, _, err := d.Scan(2)
+	after, err := d.Scan(2)
 	must(t, err)
-	if before["handoff"] == after["handoff"] {
+	if before.Files["handoff"] == after.Files["handoff"] {
 		t.Fatal("new file identity hidden by matching size and timestamp")
 	}
 }

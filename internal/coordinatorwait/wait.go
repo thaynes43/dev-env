@@ -44,6 +44,7 @@ func (o Options) Validate() error {
 // Result is the complete output allowlist. References are data, never commands.
 type Result struct {
 	Kind      string    `json:"kind"`
+	Reason    string    `json:"reason,omitempty"`
 	ID        string    `json:"id"`
 	Note      string    `json:"note,omitempty"`
 	Path      string    `json:"path,omitempty"`
@@ -60,6 +61,7 @@ type Record struct {
 	Cursor      string            `json:"cursor"`
 	Watermark   string            `json:"watermark"`
 	Files       map[string]string `json:"files"`
+	Refused     []string          `json:"refused,omitempty"`
 	Pending     []Result          `json:"pending"`
 	Seen        []string          `json:"seen"`
 	Sequence    uint64            `json:"sequence"`
@@ -129,6 +131,31 @@ func (r *Record) add(e Result) {
 func (r *Record) resync() {
 	r.NeedsResync = true
 	r.Pending = nil
+}
+
+// Refuse reports each changed refused entry once without retaining its name or
+// identity. Queue only available slots; later scans report the rest without
+// displacing notes or file events. Sorting makes bounded selection deterministic.
+func (r *Record) Refuse(refused map[string]string) {
+	kept := make([]string, 0, len(r.Refused))
+	for _, hash := range r.Refused {
+		if _, ok := refused[hash]; ok {
+			kept = append(kept, hash)
+		}
+	}
+	r.Refused = kept
+	keys := make([]string, 0, len(refused))
+	for hash := range refused {
+		keys = append(keys, hash)
+	}
+	slices.Sort(keys)
+	for _, hash := range keys {
+		if slices.Contains(r.Refused, hash) || len(r.Pending) >= r.Options.MaxPending || r.NeedsResync {
+			continue
+		}
+		r.Pending = append(r.Pending, Result{Kind: "resync", ID: digest("refused:" + hash), Reason: refused[hash]})
+		r.Refused = append(r.Refused, hash)
+	}
 }
 
 // Scan coalesces one metadata burst to one directory reference. No entry text is
@@ -217,6 +244,14 @@ func (r *Record) validate() error {
 	if r.Watermark != watermark(r.Files) || r.Sequence > 1<<63 {
 		return errors.New("invalid checkpoint")
 	}
+	if len(r.Refused) > r.Options.MaxEntries {
+		return errors.New("invalid refusal bound")
+	}
+	for _, hash := range r.Refused {
+		if !validID(hash) {
+			return errors.New("invalid refusal hash")
+		}
+	}
 	for name, stamp := range r.Files {
 		if !safeEntry(name) || len(stamp) > 128 {
 			return errors.New("invalid file metadata")
@@ -232,6 +267,10 @@ func (r *Record) validate() error {
 			return errors.New("invalid pending ID")
 		}
 		switch e.Kind {
+		case "resync":
+			if !refusalReason(e.Reason) || e.Note != "" || e.Path != "" {
+				return errors.New("invalid refusal result")
+			}
 		case "note":
 			if e.Note == "" || len(e.Note) > 253 || !safeEntry(e.Note) || e.Path != "" {
 				return errors.New("invalid note reference")

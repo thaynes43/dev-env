@@ -144,7 +144,7 @@ func TestCoordinatorWaitBudgetEndDoesNotConnect(t *testing.T) {
 	h.mustRun(ExitUnconfirmed, append(args, "--ack", r.ID)...)
 }
 func TestCoordinatorWaitPathsAndRequiredBinding(t *testing.T) {
-	for _, which := range []string{"thread", "budget", "uid", "directory", "symlink-dir", "symlink-entry", "scan-cadence"} {
+	for _, which := range []string{"thread", "budget", "uid", "directory", "symlink-dir", "scan-cadence"} {
 		t.Run(which, func(t *testing.T) {
 			h, args := waitHarness(t)
 			switch which {
@@ -164,10 +164,7 @@ func TestCoordinatorWaitPathsAndRequiredBinding(t *testing.T) {
 				if err := os.Symlink(orig, args[7]); err != nil {
 					t.Fatal(err)
 				}
-			case "symlink-entry":
-				if err := os.Symlink("../outside", filepath.Join(args[7], "bad")); err != nil {
-					t.Fatal(err)
-				}
+
 			}
 			code := ExitUsage
 			if strings.HasPrefix(which, "symlink") {
@@ -297,5 +294,39 @@ func TestCoordinatorWaitResumeWithoutCursorRequiresFreshResync(t *testing.T) {
 	h.mustRun(ExitUnconfirmed, append(args, "--ack", resync.ID)...)
 	if len(h.api.requests()) != 1 {
 		t.Fatal("unreconciled cursor rearmed")
+	}
+}
+
+func TestCoordinatorWaitRefusedEntryThenNote(t *testing.T) {
+	for _, name := range []string{"bad\xffname", "bad\nname", "link"} {
+		t.Run(name[:3], func(t *testing.T) {
+			h, args := waitHarness(t)
+			path := filepath.Join(args[7], name)
+			var err error
+			if name == "link" {
+				err = os.Symlink("missing", path)
+			} else {
+				err = os.WriteFile(path, nil, 0600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if r.URL.Query().Get("seconds") == "0" {
+					writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "waiting", Cursor: "42"})
+					return
+				}
+				writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "note", Name: parentTestMetadata().Name, Child: "child", Kind: "result", CreatedAt: testNow, Cursor: "43"})
+			}
+			h.mustRun(ExitOK, args...)
+			refusal := resultFrom(t, h)
+			if refusal.Kind != "resync" || refusal.Reason == "" || refusal.Path != "" || refusal.Note != "" || strings.Contains(h.stdout.String(), "bad") {
+				t.Fatal("unsafe refusal output")
+			}
+			h.mustRun(ExitOK, append(args, "--ack", refusal.ID)...)
+			if resultFrom(t, h).Kind != "note" || len(h.api.requests()) != 2 {
+				t.Fatal("refused entry prevented later note")
+			}
+		})
 	}
 }

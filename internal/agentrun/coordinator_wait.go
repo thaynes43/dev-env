@@ -113,7 +113,7 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 	}
 	notes := a.coordinatorWaitNotes(c)
 	if r == nil || r.Cursor == "" {
-		files, overflow, err := directory.Scan(o.MaxEntries)
+		snapshot, err := directory.Scan(o.MaxEntries)
 		if err != nil {
 			return fail(ExitFailed, "coordinator wait: %s", err)
 		}
@@ -123,29 +123,30 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 		if err != nil {
 			if ctx.Err() != nil || !waitClock.Now().Before(o.BudgetEnd) {
 				if r == nil {
-					r = coordinatorwait.New(o, waitClock.Now(), after, files)
+					r = coordinatorwait.New(o, waitClock.Now(), after, snapshot.Files)
 				}
 				return a.coordinatorWaitTerminal(store, r, waitClock.Now(), ctx.Err() != nil)
 			}
 			return err
 		}
 		if r == nil {
-			r = coordinatorwait.New(o, waitClock.Now(), initial.Cursor, files)
+			r = coordinatorwait.New(o, waitClock.Now(), initial.Cursor, snapshot.Files)
 		} else {
 			// A stop before the first confirmed cursor has no safe source baseline.
 			// Capture one now, then require source reconciliation from that position.
-			r.Scan(files, overflow)
+			r.Scan(snapshot.Files, snapshot.Overflow)
 			r.Note("", initial.Cursor, true)
 		}
-		if overflow {
-			r.Scan(files, true)
+		r.Refuse(snapshot.Refused)
+		if snapshot.Overflow {
+			r.Scan(snapshot.Files, true)
 		}
 	}
 	if err = store.Save(r); err != nil {
 		return fail(ExitFailed, "coordinator wait: %s", err)
 	}
 	runtime := coordinatorwait.Runtime{Clock: waitClock, Notes: notes, Stop: store.StopRequested, Save: store.Save,
-		Scan: func() (map[string]string, bool, error) { return directory.Scan(o.MaxEntries) },
+		Scan: func() (coordinatorwait.Snapshot, error) { return directory.Scan(o.MaxEntries) },
 	}
 	result, err := runtime.Run(ctx, r)
 	if err != nil {

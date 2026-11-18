@@ -104,9 +104,16 @@ func (s *Store) Load() (*Record, error) {
 // Save fsyncs a mode-0600 temporary file, renames within the private directory,
 // then fsyncs the directory. A result is never printed unless all steps succeed.
 func (s *Store) Save(r *Record) error {
+	if r.Options.Validate() != nil || r.validate() != nil || len(r.Pending) > r.Options.MaxPending || len(r.Files) > r.Options.MaxEntries || len(r.Seen) > r.Options.MaxPending || r.NextTimer.IsZero() {
+		return errors.New("invalid wait record")
+	}
 	data, err := json.Marshal(r)
 	if err != nil || len(data) > 2<<20 {
 		return errors.New("wait record exceeds bound")
+	}
+	var decoded Record
+	if json.Unmarshal(data, &decoded) != nil || decoded.validate() != nil {
+		return errors.New("wait record cannot round trip")
 	}
 	name := s.name + ".tmp"
 	// Exclusivity refuses stale files and symlinks without following either.

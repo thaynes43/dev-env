@@ -16,7 +16,7 @@ type Notes func(context.Context, string, time.Duration) (Note, error)
 type Runtime struct {
 	Clock Clock
 	Notes Notes
-	Scan  func() (map[string]string, bool, error)
+	Scan  func() (Snapshot, error)
 	Stop  func() (bool, error)
 	Save  func(*Record) error
 }
@@ -54,11 +54,12 @@ func (rt Runtime) Run(ctx context.Context, r *Record) (*Result, error) {
 			return rt.finish(r, now, stop)
 		}
 		if !now.Before(nextScan) {
-			files, overflow, err := rt.Scan()
+			snapshot, err := rt.Scan()
 			if err != nil {
 				return nil, err
 			}
-			r.Scan(files, overflow)
+			r.Scan(snapshot.Files, snapshot.Overflow)
+			r.Refuse(snapshot.Refused)
 			nextScan = now.Add(r.Options.ScanEvery)
 			if err := rt.Save(r); err != nil {
 				return nil, err
