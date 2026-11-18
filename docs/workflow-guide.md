@@ -2595,8 +2595,12 @@ summoned tasks; ordinary task stdin is unchanged (story 795 fix round 1,
 2026-11-16, coordinator rulings; not a ruling by Tom). A missing prerequisite
 that refuses before the launch writer also leaves the start free. A launch
 held for a login window leaves no launch, handoff or result entry. It starts
-once when the window ends if its start deadline has not passed and its
-prerequisites still hold; otherwise it is refused and nothing starts.
+once after the window ends and the login is usable, while its start deadline
+has not passed; until then it stays held. If the deadline passes first, it is
+refused, nothing starts, the one start stays free and the remote brief reads
+`not-launched`. An error that refuses the first launch before the launch
+writer, such as a brief beginning with `-` or containing NUL or a failed
+prerequisite, also starts nothing and leaves the one start free.
 
 The pod reports its delivery claim as `status.agent.brief`, beside the task
 start record. It is `pending` only with no launch, handoff or task-result
