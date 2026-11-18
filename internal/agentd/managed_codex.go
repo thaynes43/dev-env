@@ -22,7 +22,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
-const managedCodexVersion = "0.160.1"
+const managedCodexVersion = "0.169.1"
 
 var nativeThreadID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 

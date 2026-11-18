@@ -29,7 +29,7 @@ func captureFixture(t *testing.T) (Settings, CodexHostOptions, allowanceCaptureD
 	calls := new(int)
 	d := allowanceCaptureDeps{
 		host: codexHostDeps{preflight: func(Settings) error { return nil }, process: func(Settings) (codexHostProcess, error) { return live, nil }, native: func(context.Context, Settings, string, []string, io.Writer) ([]byte, error) {
-			return []byte("codex-cli 0.160.1"), nil
+			return []byte("codex-cli 0.169.1"), nil
 		}},
 		lifecycle: func(Settings) (codexHostLifecycle, error) {
 			return codexHostLifecycle{Phase: "Confirmed", PodUID: s.PodUID, WorkspaceID: s.WorkspaceID, Process: live}, nil

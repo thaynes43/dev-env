@@ -519,7 +519,7 @@ func portalSourceVersion(provider, conversation, worktree string, raw []byte) bo
 			if json.Unmarshal(line, &fields) != nil || !portalCanonicalFields(fields["payload"], "id", "cli_version", "cwd") {
 				return false
 			}
-			return record.Type == "session_meta" && record.Payload.ID == conversation && record.Payload.CLIVersion == managedCodexVersion && record.Payload.CWD == worktree
+			return record.Type == "session_meta" && record.Payload.ID == conversation && (record.Payload.CLIVersion == managedCodexVersion || record.Payload.CLIVersion == "0.160.1") && record.Payload.CWD == worktree
 		}
 		if provider == protocol.AgentClaude && (record.Type == "user" || record.Type == "assistant") {
 			if record.Version != portalClaudeVersion || record.SessionID != conversation || record.CWD != worktree {

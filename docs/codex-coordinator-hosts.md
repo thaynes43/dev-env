@@ -63,7 +63,8 @@ and control socket. All containers and init containers have CPU and memory
 requests and limits. Each host has its own repo cache and task worktrees, with
 common rules and authorized context supplied through the platform.
 
-Use pinned Codex 0.160.1's persistent daemon lifecycle. Before startup, preserve
+The agent-only draft candidate pins Codex 0.169.1's persistent daemon lifecycle;
+[its auth hold](codex-169-upgrade-audit.md) prevents adoption. Before startup, preserve
 its settings while setting `updater.autoUpdateEnabled=false`; verify CLI and
 managed app-server versions before pairing. Display names derive from the stable
 hostname. Pairing is a separate authenticated owner action for each host, with

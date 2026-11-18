@@ -42,3 +42,11 @@ verified managed-session owner action; it never generates a code or re-pairs.
 Only normalized absolute POSIX roots are supported in this source slice. No
 filesystem, symlink or Git inspection occurs. Thread creation, launch wiring,
 handoff, links and runtime revalidation remain in 3/3b.
+
+
+`schema/codex-cli-0.169.1/` adds the exact experimental export strings embedded
+in upstream c376cf7396eff83ce4c6ac61b9553df142e7a0be. Source definitions for these
+two response types are unchanged; the new provenance records their hashes.
+CI image smoke compares the built CLI's offline generation with those bytes.
+Both exact versions remain admitted for existing retained hosts. See
+[the held agent-only audit](../../../docs/codex-169-upgrade-audit.md).

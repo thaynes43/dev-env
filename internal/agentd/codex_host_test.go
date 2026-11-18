@@ -72,7 +72,7 @@ func hostDeps(t *testing.T, s Settings, o CodexHostOptions) (codexHostDeps, *[]s
 	return codexHostDeps{preflight: func(Settings) error { return nil }, process: func(Settings) (codexHostProcess, error) { return live, nil }, native: func(_ context.Context, _ Settings, _ string, args []string, w io.Writer) ([]byte, error) {
 		calls = append(calls, strings.Join(args, " "))
 		if len(args) == 1 && args[0] == "--version" {
-			return []byte("codex-cli 0.160.1\n"), nil
+			return []byte("codex-cli 0.169.1\n"), nil
 		}
 		if w != nil {
 			_, _ = io.WriteString(w, "SYNTHETIC_PRIVATE_PAIR_CODE")
@@ -309,7 +309,7 @@ func TestCodexHostFailedStartIsNotAutomaticallyRetried(t *testing.T) {
 	starts := 0
 	d.native = func(_ context.Context, _ Settings, _ string, args []string, _ io.Writer) ([]byte, error) {
 		if args[0] == "--version" {
-			return []byte("codex-cli 0.160.1"), nil
+			return []byte("codex-cli 0.169.1"), nil
 		}
 		starts++
 		return nil, errors.New("lost native ack")
@@ -407,7 +407,7 @@ func TestCodexHostLiveAfterUnconfirmedStartRemainsNeedsReview(t *testing.T) {
 			d.native = func(_ context.Context, _ Settings, _ string, args []string, _ io.Writer) ([]byte, error) {
 				switch strings.Join(args, " ") {
 				case "--version":
-					return []byte("codex-cli 0.160.1"), nil
+					return []byte("codex-cli 0.169.1"), nil
 				case "remote-control start --json":
 					starts++
 					var err error
@@ -587,7 +587,7 @@ func TestCodexHostMonitorRetainsInitialStartFailure(t *testing.T) {
 				if args[0] == "--version" {
 					versions++
 					if mode == "lost-ack" {
-						return []byte("codex-cli 0.160.1"), nil
+						return []byte("codex-cli 0.169.1"), nil
 					}
 				} else {
 					starts++
@@ -708,7 +708,7 @@ func hostRPCFixture(t *testing.T, answer func(string) any, notification bool) Se
 func hostRPCAnswer(method string) any {
 	switch method {
 	case "initialize":
-		return map[string]any{"userAgent": "codex/0.160.1 fixture", "private": "PRIVATE_ACCOUNT"}
+		return map[string]any{"userAgent": "codex/0.169.1 fixture", "private": "PRIVATE_ACCOUNT"}
 	case "remoteControl/status/read":
 		return map[string]any{"status": "connected", "installationId": "PRIVATE_INSTALLATION"}
 	case "thread/loaded/list":
@@ -763,7 +763,7 @@ func TestCodexHostCompletedLifecyclePermitsExactlyOneNewStart(t *testing.T) {
 	d.native = func(_ context.Context, _ Settings, _ string, args []string, _ io.Writer) ([]byte, error) {
 		switch strings.Join(args, " ") {
 		case "--version":
-			return []byte("codex-cli 0.160.1"), nil
+			return []byte("codex-cli 0.169.1"), nil
 		case "remote-control start --json":
 			starts++
 			process = codexHostProcess{State: "Live", PID: 123 + starts, Identity: codexHostIdentity{BootID: "fixture", StartTicks: uint64(45 + starts)}}
@@ -827,7 +827,7 @@ func TestCodexHostFailedOrUnknownStopCannotCompleteOrReplay(t *testing.T) {
 			stopCalls, startCalls := 0, 0
 			d.native = func(_ context.Context, _ Settings, _ string, args []string, _ io.Writer) ([]byte, error) {
 				if args[0] == "--version" {
-					return []byte("codex-cli 0.160.1"), nil
+					return []byte("codex-cli 0.169.1"), nil
 				}
 				if args[1] == "stop" {
 					stopCalls++

@@ -15,7 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const PinnedNativeVersion = "0.160.1"
+const PinnedNativeVersion = "0.169.1"
 
 var errNativeReady = errors.New("owned native readiness unknown")
 

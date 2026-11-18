@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-const schemaDir = "testdata/schema/codex-cli-0.160.1/"
+const schemaDir = "testdata/schema/codex-cli-0.169.1/"
 
 func TestSchemaProvenance(t *testing.T) {
 	raw, err := os.ReadFile(schemaDir + "provenance.json")

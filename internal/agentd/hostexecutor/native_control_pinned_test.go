@@ -27,7 +27,7 @@ import (
 func TestPinnedNativeTurnSurvivesControlDisconnectAndHistoryReconnect(t *testing.T) {
 	binary := os.Getenv("DEV_ENV_PINNED_NATIVE_BINARY")
 	if binary == "" {
-		t.Skip("set DEV_ENV_PINNED_NATIVE_BINARY to verified0.160.1 for bounded local native protocol proof")
+		t.Skip("set DEV_ENV_PINNED_NATIVE_BINARY to verified0.169.1 for bounded local native protocol proof")
 	}
 	version, err := exec.Command(binary, "--version").Output()
 	if err != nil || strings.TrimSpace(string(version)) != "codex-cli "+PinnedNativeVersion {

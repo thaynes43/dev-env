@@ -24,7 +24,7 @@ func liveDecisionFixture(t *testing.T) (Settings, protocol.Session, Launch) {
 	t.Helper()
 	s, sess, first, _ := nativeInvocationFixture(t)
 	next := nextNativeInvocation(t, first)
-	cli := fakeCLI(t, t.TempDir(), `if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.160.1'; exit 0; fi
+	cli := fakeCLI(t, t.TempDir(), `if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.169.1'; exit 0; fi
 exec sleep 30
 `)
 	next.Argv[0] = cli

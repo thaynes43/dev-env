@@ -484,7 +484,7 @@ func codexHostAccessReady(s Settings, now time.Time) error {
 	return nil
 }
 
-// Native 0.160.1 LifecycleOutput reports stopped/backend=pid after
+// Native 0.169.1 LifecycleOutput reports stopped/backend=pid after
 // stop_with_grace, with no PID or appServerVersion. notRunning is also exit 0
 // and supplies no causal stop proof. Bind the typed ACK to the already verified
 // selected installation/socket; process identity remains the exact pre-bound

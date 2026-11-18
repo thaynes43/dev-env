@@ -149,3 +149,10 @@ for Codex. Thread creation and handoff are left for 3/3b; installation and usabl
 phone acceptance require separate work. Existing caller and native-control
 guards are unchanged. [Fixture provenance and source
 boundaries](../internal/codexrc/testdata/README.md) describe the offline evidence.
+
+
+The agent-only [Codex 0.169.1 candidate](codex-169-upgrade-audit.md) records the
+new source pin, schema/flag audit and remaining auth-refresh hold. It is draft
+source, not an installed or accepted upgrade. Dated 0.160.1 observations above
+remain historical evidence. The codex-login helper stays at 0.160.1; its keeper
+compatibility prerequisite and every existing default/policy remain separate.

@@ -6,10 +6,19 @@ For each future model promotion, compare the official exact model ID and release
 
 For future CLI currency work:
 
-1. Check image source pins and installed artifacts separately. At this source revision the agent image pins Codex standalone 0.160.1 and Claude Code 2.1.296; codex-login separately fixes Codex 0.160.1. An image tag alone does not prove the version installed in an existing session.
+1. Check image source pins and installed artifacts separately. This draft source candidate pins the agent image to Codex standalone 0.169.1; codex-login stays at 0.160.1 pending its separate keeper prerequisite. The installed worker probe still used 0.160.1. An image tag alone does not prove the version installed in an existing session.
 2. Renovate's annotated ARG manager tracks the agent image's Codex and Claude pins and proposes updates for the separately pinned codex-login helper on the overnight America/New_York schedule; tool pin updates do not auto-merge. Review and coordinate both Codex pins explicitly under D-78. The official Codex standalone installer checks the downloaded archive digest; Claude uses an exact npm package pin. Verify the normal published OCI signature and identity.
 3. A Codex bump must also update and qualify the exact `managedCodexVersion` guard and codex-login CI smoke expectation. Test protocol/readback, managed launch, and single remote-control daemon compatibility before adoption; an ARG update alone does not establish compatibility. Do not self-update a running user HOME or change credential ownership.
 4. Busy or attached sessions are protected by the current drain checks. Idle, unattached outdated eligible sessions can automatically drain after prepare-restart proof; a global template change is therefore not a new-sessions-only update. Source and simulated tests do not prove a safe live rollout, retained history, or pairing. Plan an explicitly authorized safe handoff and verify those properties before adoption.
 5. Managed Codex tasks require both an operator accepting the model and an agentd image accepting it, plus the existing project and profile gates. The current PilotAgent selector covers Claude remote/local and Codex remote, not Codex tasks. An exact isolated managed-task installation route and capacity remain prerequisites for a pilot; no global template change or task pilot is implied by this checklist.
 
 Cursor's inspected local HOME version symlink points to `2026.10.22-27dcf5f`; that is local artifact provenance, not a verified executable version or managed Cursor integration. The inspected agent image and Renovate pins do not track it. An owner must establish its production tracking and supported update route separately.
+
+
+The [agent-only 0.169.1 source audit](codex-169-upgrade-audit.md) records the
+lowest catalog tag containing both 6.2 IDs, the pinned upstream hashes, protocol
+compatibility and the coordinator's four auth claims. This source is a draft:
+the unconditional native no-refresh claim is not established. CI success is
+not permission to make it ready, merge, publish or roll it out. The helper is
+intentionally not bumped; its native-login schema requires a separate reviewed
+keeper story. Historical 0.160.1 catalog/probe evidence above is preserved.

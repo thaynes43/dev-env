@@ -183,3 +183,10 @@ Provider seams are grounded in the pinned Codex 0.160.1
 and [repository instruction discovery](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/core/src/agents_md.rs),
 and Claude's [system prompt flags](https://code.claude.com/docs/en/cli-reference#system-prompt-flags)
 and [additional-directory memory](https://code.claude.com/docs/en/memory#load-from-additional-directories).
+
+
+The agent-only [Codex 0.169.1 candidate](codex-169-upgrade-audit.md) records the
+new source pin, schema/flag audit and remaining auth-refresh hold. It is draft
+source, not an installed or accepted upgrade. Dated 0.160.1 observations above
+remain historical evidence. The codex-login helper stays at 0.160.1; its keeper
+compatibility prerequisite and every existing default/policy remain separate.

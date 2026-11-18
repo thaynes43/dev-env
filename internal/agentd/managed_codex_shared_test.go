@@ -27,7 +27,7 @@ func TestManagedCodexSharedRunAgentFinalizesOnceBeforeSpawn(t *testing.T) {
 		t.Fatal(err)
 	}
 	marker := filepath.Join(s.StateDir, "synthetic-native-spawns")
-	cli := fakeCLI(t, t.TempDir(), `if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.160.1'; exit 0; fi
+	cli := fakeCLI(t, t.TempDir(), `if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.169.1'; exit 0; fi
 printf '%s\n' started >> "$SYNTHETIC_NATIVE_SPAWN_RECEIPT"
 printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123456789abc"}' '{"type":"turn.started"}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1,"cached_input_tokens":0}}'
 `)

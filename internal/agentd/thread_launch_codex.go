@@ -50,7 +50,7 @@ var (
 	codexThreadSource = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,31}$`)
 	// codexThreadEfforts is the wrapper's --effort set.
 	codexThreadEfforts = []string{"low", "medium", "high", "xhigh", "max"}
-	// codexAllSourceKinds is every ThreadSourceKind in the pinned 0.160.1 protocol.
+	// codexAllSourceKinds is every ThreadSourceKind in the pinned 0.169.1 protocol.
 	codexAllSourceKinds = []string{"cli", "vscode", "exec", "appServer", "subAgent", "subAgentReview", "subAgentCompact", "subAgentThreadSpawn", "subAgentOther", "unknown"}
 )
 
@@ -706,7 +706,7 @@ func readCodexFirstTurn(ctx context.Context, s Settings, pid int, threadID strin
 		return codexTurnObservation{}, errCodexHostUnknown
 	}
 	obs := codexTurnObservation{TurnID: turn.ID, Status: turn.Status}
-	// Codex 0.160.1 returns ThreadItemEntry objects: {item, turnId, startedAtMs,
+	// Codex 0.169.1 returns ThreadItemEntry objects: {item, turnId, startedAtMs,
 	// completedAtMs}. The ThreadItem (type, text) is under item. Reading type
 	// and text on the entry itself never sees an agent message (OP694).
 	var items struct {

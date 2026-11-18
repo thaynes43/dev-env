@@ -491,6 +491,22 @@ jobs:
       - name: Smoke-test the agent image
         timeout-minutes: 5
         run: images/agent/smoke-test.sh dev-env-agent:ci "${{ github.event.pull_request.head.sha }}"
+      - name: Set up Go for isolated native compatibility test
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Qualify native control and reconnect with one loopback response
+        timeout-minutes: 5
+        env:
+          GOMAXPROCS: "2"
+          GOTOOLCHAIN: local
+        run: |
+          native="${RUNNER_TEMP}/codex-compatibility"
+          docker run --rm --network none --entrypoint /bin/cat dev-env-agent:ci /usr/local/bin/codex > "$native"
+          chmod 700 "$native"
+          export DEV_ENV_PINNED_NATIVE_BINARY="$native"
+          nice -n 19 go test -p 2 -timeout 2m ./internal/agentd/hostexecutor -run '^TestPinnedNativeTurnSurvivesControlDisconnectAndHistoryReconnect$' -count=1
       - name: Report the image size
         run: |
           size="$(docker image inspect --format '{{.Size}}' dev-env-agent:ci)"
