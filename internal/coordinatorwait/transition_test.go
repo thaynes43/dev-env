@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -74,6 +75,10 @@ func TestFileTransitionCounterBoundResyncs(t *testing.T) {
 	if r.Transitions != 1<<63 {
 		t.Fatal("transition counter wrapped or moved backwards")
 	}
+	r.Transitions++
+	if r.validate() == nil {
+		t.Fatal("out-of-bound transition counter accepted")
+	}
 }
 
 func TestOutstandingFileCounterRollbackRefused(t *testing.T) {
@@ -97,5 +102,17 @@ func TestOutstandingFileCounterRollbackRefused(t *testing.T) {
 	must(t, f.Close())
 	if _, err = s.Load(); err == nil {
 		t.Fatal("counter rollback treated as unreadable-result recovery")
+	}
+}
+
+func TestStoreRefusesFileWithZeroTransition(t *testing.T) {
+	s, err := OpenStore(t.TempDir(), "session-uid", "tool-call")
+	must(t, err)
+	defer s.Close()
+	r := record()
+	r.Scan(map[string]string{"A": "a"}, false)
+	r.Pending[0].ID = strings.Repeat("0", 64)
+	if s.Save(r) == nil {
+		t.Fatal("file without a transition accepted")
 	}
 }
