@@ -234,7 +234,13 @@ agentd ctl rescue --stop-agent --codex-stop-operation OPERATION_UUID --expected-
 ```
 
 All three identity arguments come from the confirmed operation, not a new pod
-read after a failed exec. Before acquiring a lifecycle lock, writing a fence or
+read after a failed exec. OPERATION_UUID is operationID and SESSION_UID is
+sessionUID. For the original executor or original hold, POD_UID is podUID. For
+rescue in a confirmed recovery hold, POD_UID is recoveryHoldUID; its own agent
+must match that target. Never send the original podUID to a recovery hold or
+replace the immutable source podUID with the hold's UID.
+
+Before acquiring a lifecycle lock, writing a fence or
 signalling, the new agent validates their bounded syntax and compares both
 expected UIDs with its actual Session document and Settings.PodUID. A mismatch
 returns no report and performs no stop. This prevents a name-based exec that
@@ -572,7 +578,7 @@ These tests do not prove Linux signal delivery, phone rendering or enrollment.
 | D1 Old images become unsuspendable | **Accepted.** | Section 2.1 checks non-mutating capability before any stop. Confirmed old images keep today's route and need no receipt; unknown transport is retryable. Never replace a running host for version detection. |
 | D2 All hosts and undelivered exec | **Accepted.** | Section 2 requires current operator name plus pod construction decision and capability. Section 3 states replacement cost after confirmed intent, and no cost before it, including cache-behind requeues. |
 | D3 Manual recovery cannot clear | **Accepted.** | Section 5 names Tom/authorized custodian, exact exit evidence, audited bound ACK, original-HOME hold rescue and controller completion. Section 3.1 distinguishes clearing active state from retaining bounded evidence. |
-| D4 Holds missing | **Accepted.** | Sections 4/5 and J17/J18 cover normal/empty/recovery holds, freeze, generation races, lost holds and resume's usual shortcut. |
+| D4 Holds missing | **Accepted.** | Sections 4/5 and J17/J18/J20 cover normal/empty/recovery holds, freeze, generation races, lost holds and resume's usual shortcut. |
 | D5 wantsPodGone changes 37 callers | **Accepted.** | Section 4 leaves the function unchanged, supplies a pod-aware predicate and an independent pending lane, and names the guard/deletion/construction integration points. |
 | D6 Anchors inaccurate | **Accepted.** | All source citations use the freshly fetched pin and actual numbered source. Private-history eligibility cites executable lines 45–46 as well as its comment; no uninspected haynes-ops line number is asserted. |
 | D7 Marker timing | **Accepted.** | Section 1 says HOME fence precedes quiesce, with agent-stop lines 213–217. Section 3 needs controller memory before exec because it cannot rely on receiving any agent report. |
