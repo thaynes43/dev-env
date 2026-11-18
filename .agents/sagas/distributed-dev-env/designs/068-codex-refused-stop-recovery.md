@@ -8,7 +8,7 @@
   close. This design does not close the build or installed-proof acceptance.
 - **Decision:** [ADR-031](../adrs/031-codex-refused-stop-recovery.md), proposed.
 - **Source pin:** dev-env main
-  `ffb6af5ce118b243c5c6820c235f104f4159c08b`, fetched 2026-11-18. Every source
+  `ffb6af5ce118b243c5c6820c235f104f4159c08b`, fetched 2026-11-18. Every
   current-code link below uses this pin. The three historical releases and
   upstream runtime evidence have their own explicit pins. Proposed behavior is
   identified as such.
@@ -226,6 +226,12 @@ entry point. Validate that no volume/subpath shadows it. Owned root and native
 control already use this absolute path.
 ([owned_root.go:41][owned-root], [owned_native_control.go:66][owned-control])
 
+For hold startup retain the image's absolute
+`/usr/local/bin/tini -- /usr/local/bin/agentd hold` entrypoint chain, not a new
+direct-PID-1 agentd launch: c1 verifies precisely that supervisor shape.
+([Dockerfile:529–535][image-entrypoint],
+[codex_remote_processes.go:173–182][hold-supervisor])
+
 After that rule a HOME `agentd` shim cannot answer the probe, fabricate its
 receipt/report or redirect the fallback. Leave the generic RescueCommand for
 unrelated lifecycles unchanged; its bare-name exposure predates this feature and
@@ -400,8 +406,9 @@ that omits the key are rejected by the API server, rather than silently losing
 it. A status patch which leaves it untouched can still succeed (section 7).
 
 Validation must bound every string used by CEL. Within an active operation,
-source identity members, recoveryImageDigest, role and startedAt are immutable; lastAttemptAt cannot
-move backwards. Only section 5's confirmed lost/ended-hold recovery may change the
+source identity members, recoveryImageDigest, role and startedAt are immutable;
+lastAttemptAt cannot move backwards. Only section 5's confirmed
+lost/ended/never-ran hold recovery may change the
 current recovery-hold identity. Receipt operation/Session IDs equal the record. Its pod UID is either
 the original pod or the bound recovery hold. Rescue and receipt pod UIDs agree.
 RemovalCommitted requires receipt, rescue and removalCommittedAt in one write;
@@ -650,8 +657,8 @@ matching holder and Node owner UID, a RenewTime not in the future and at most
 40 seconds old. Read the clock after the Lease as that helper does. Require
 the returned Node UID to equal the operation's nodeUID. A missing, stale,
 foreign, future or unreadable Lease is a failed liveness check, even if Ready
-is True. Repeat the same check before recording `terminated` and RecoveryRequired in
-one acknowledged status write. No elapsed interval, NotFound, phase alone or
+is True. Repeat the same check before recording `terminated` and RecoveryRequired
+in one acknowledged status write. No elapsed interval, NotFound, phase alone or
 request to shut down a node is termination evidence.
 ([workspace_stop.go:64–110][node-live])
 
@@ -666,9 +673,10 @@ trusted within Kubernetes' normal status-writer boundary; RBAC alone is not a pr
 ([workspace_stop.go:123–202][terminated-check], [pod.go:583–595][pod-shape])
 
 After confirming the termination record, revalidate the same live evidence at
-the delete boundary (including a fresh executorNodeLive/Lease check) and remove only that ended pod with ordinary grace and
-UID/resourceVersion preconditions. A changed/unreadable status or failed node liveness
-before delete keeps it present and explains the missing evidence. Persisted exit
+the delete boundary, including a fresh executorNodeLive/Lease check. Remove only
+that ended pod with ordinary grace and UID/resourceVersion preconditions.
+A changed/unreadable status or failed node liveness before delete keeps it
+present and explains the missing evidence. Persisted exit
 evidence survives a lost Delete reply or later disappearance. After uncached
 absence, enter RecoveryHold from that evidence without a human acknowledgement.
 A successful rescue in a capable hold on the original HOME and its normal
@@ -1535,3 +1543,4 @@ with that story.
 [old109-command]: https://github.com/thaynes43/dev-env/blob/4576341cafd2b68eb436deb6598c5ffe6b4cb90a/cmd/agentd/main.go#L217-L223
 [old109-format]: https://github.com/thaynes43/dev-env/blob/4576341cafd2b68eb436deb6598c5ffe6b4cb90a/internal/version/version.go#L34-L71
 [runtime-lookup]: https://github.com/opencontainers/runc/blob/v1.3.3/libcontainer/setns_init_linux.go#L115-L157
+[image-entrypoint]: https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/images/agent/Dockerfile#L529-L535

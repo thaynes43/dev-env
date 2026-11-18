@@ -39,7 +39,8 @@ is needed for this pod-bound lifecycle intent.
    `codexStopRecovery: 1`, independently of its version stamp, including dev and
    prerelease builds. Persist the first capable result and that pod's verified
    pullable image digest in bounded operator-owned status before any stop. Keep it
-   through that pod's life and flag removal. No image-release declaration replaces this probe.
+   through that pod's life and flag removal. No image-release declaration
+   replaces this probe.
    These are proposed additions to the existing construction-only decision,
    which is shown by [controller/codex_remote_stop.go:14–39](https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/internal/controller/codex_remote_stop.go#L14-L39);
    the existing version route is [cmd/agentd/main.go:217–223](https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/cmd/agentd/main.go#L217-L223).
@@ -55,8 +56,9 @@ is needed for this pod-bound lifecycle intent.
    freeze an unrecorded pod. An in-pod/raw-exec caller can still invent a bound
    operation and freeze its own pod; this known self-inflicted limit recovers
    through a real recorded same-pod stop/rescue and normal replacement, never
-   thaw or receipt reuse (DESIGN-068 section 3.2/J43). After a capable binding exists, a failed probe/request
-   means uncertain dispatch: confirm/reuse the operation, never select legacy.
+   thaw or receipt reuse (DESIGN-068 section 3.2/J43). After a capable binding
+   exists, a failed probe/request means uncertain dispatch: confirm/reuse the
+   operation, never select legacy.
    No upgrade restarts an agent pod; c1-only old binaries retain their known M4.
 3. Confirm `status.codexRemoteStop` before the qualified request, bound to the
    Session, operation, original pod, original HOME and node. The agent validates
@@ -141,7 +143,8 @@ is needed for this pod-bound lifecycle intent.
     ignores unknown receipt keys. No install follows from this ADR.
 11. Every operator command for this feature uses `/usr/local/bin/agentd` in
     the read-only root, including probes, fallback, bound rescue and hold
-    startup. Today's bare RescueCommand and HOME-first PATH permit a replaceable
+    startup, preserving the existing absolute tini/agentd entrypoint chain.
+    Today's bare RescueCommand and HOME-first PATH permit a replaceable
     `$HOME/.local/bin/agentd` to forge the entire answer
     ([rescue.go:30–37,103–108](https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/internal/controller/rescue.go#L30-L108),
     [Dockerfile:502–518](https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/images/agent/Dockerfile#L502-L518)).
@@ -163,8 +166,9 @@ is needed for this pod-bound lifecycle intent.
     an audited, owner-authorized incident correction under exclusive operator
     ownership with exact UID/RV preconditions (a separately approved schema
     migration if validation forbids repair), plus verified original-writer exit
-    and recovery rescue whenever that evidence is missing. Ordinary reconcile cannot erase/rewrite the immutable
-    binding or choose legacy. A correction alone never completes a stop.
+    and recovery rescue whenever that evidence is missing. Ordinary reconcile
+    cannot erase/rewrite the immutable binding or choose legacy. A correction
+    alone never completes a stop.
 
 DESIGN-068 sections 2–7 define the exact schema, version/receipt, commit points,
 compatibility, live RBAC observation and manual evidence. Section 8 gives one
