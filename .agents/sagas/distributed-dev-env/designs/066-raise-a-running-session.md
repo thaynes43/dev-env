@@ -1179,8 +1179,16 @@ secret is shared between the operator and the keeper (N1, N10).
   keeper both run leader election), and only when its Secret holds no key.
   The keepers of releases 2.110.0 and 2.111.0 do not have the switch and
   create the key at their first start as leader when its field is empty.
-  The switch first exists in the release after 2.111.0, which contains OP919.
-  From that release, the keeper also requires
+  The boundary is the commit: the keeper ships in the dev-env-operator
+  image, pinned by sha in haynes-ops, including main builds between releases.
+  Every build from commit `29575187` (PR 1145) up to, but excluding, the
+  merge commit of OP919 has no switch and creates the key at its first start
+  as leader when its field is empty, released or not; this includes
+  `sha-e8f8184` and `sha-4f3ef3d`. Before pinning, check
+  `git merge-base --is-ancestor <the merge commit of OP919> <the commit to pin>`;
+  exit 0 confirms that the commit contains the switch. The switch first
+  exists in the release after 2.111.0, which contains OP919.
+  From the merge commit of OP919, the keeper also requires
   `--enable-session-raise-notices=true` at startup. Pinning that keeper with
   the switch unset touches neither the key nor its publication or notice
   ledger. Turning the switch off on a
@@ -1869,7 +1877,14 @@ sessions.**
   owner's enabled first start has filled its key and published its public key.
   The keepers of releases 2.110.0 and 2.111.0 do not have the switch and
   create the key at their first start as leader when its field is empty;
-  do not pin either before the admission and reader checks. The switch first
+  do not pin either before the admission and reader checks. The keeper ships
+  in the dev-env-operator image, which haynes-ops pins by sha, including
+  main builds between releases. Every build from commit `29575187` (PR 1145)
+  up to, but excluding, the merge commit of OP919 has no switch and creates
+  the key at its first start as leader when its field is empty, released or
+  not; this includes `sha-e8f8184` and `sha-4f3ef3d`. Before pinning, check
+  `git merge-base --is-ancestor <the merge commit of OP919> <the commit to pin>`;
+  exit 0 confirms that the commit contains the switch. The switch first
   exists in the release after 2.111.0, which contains OP919. Install that
   keeper with `--enable-session-raise-notices` unset first; this leaves its
   raise objects untouched. After the admission and reader checks, enable
@@ -2389,12 +2404,23 @@ checks before key writes, without deciding unconditional key creation.
 
 Build record: OP919 is source and tests only; nothing is installed or enabled.
 The coordinator fills in the release number when the release after 2.111.0 is cut.
+The merge commit of OP919: the coordinator fills in the hash after merge.
 
 | Finding | Coordinator's ruling | Where |
 | --- | --- | --- |
-| M1 / F1 | Guard Run's direct call with unchanged raise options; the fake startup tests check the gated helper's object access and registration. Run creates its real client, manager and lease lock directly, so testing it with fakes would require a production refactor. | `internal/keeper/raise_startup_guard_test.go`; `internal/keeper/raise_startup_test.go` |
+| M1 / F1 | Prefer a behavioural Run test; allow a source guard if Run cannot use the fakes without envtest. The guard must reject pager construction or registration outside the gated helper. | `internal/keeper/raise_startup_guard_test.go`; `internal/keeper/raise_startup_test.go`. The worker's reason for the fallback: Run creates its client, manager and lease lock directly, so using the startup fakes would require a production refactor. |
 | M2 / F2 | Name 2.110.0 and 2.111.0 as lacking the switch; it first exists in the release after 2.111.0. | Sections 6.6 and 11; workflow guide |
 | L1, L2 / F3a,c | Use equals-sign syntax; state the two-argument startup failure and shared notice validation. | Section 6.4; keeper help; workflow guide |
 | L3 / F3b | Pending raises do not expire; later enabling keeper notices announces all still-eligible queued raises. | Section 11; known limit 11; workflow guide |
 | L4 / F3c | Date and attribute the amendment, state the take-back tradeoff, update the status and 2B-L2, and name the subject of the workflow paragraph. | Status; sections 6.4 and 15.5; workflow guide |
 | Operator key, noted only | Leave the operator path unchanged; record its unconditional key creation. | Known limit 12; story 830 owned by the coordinator |
+
+The same reviewer's recheck of PR 1213 at `4e0ad57688720d8618abd3c33014d648439834bc`
+requested changes (0 HIGH, 1 MEDIUM, 2 LOW). The coordinator's rulings of
+2026-11-18 for round 2 are:
+
+| Finding | Coordinator's ruling | Where |
+| --- | --- | --- |
+| N1 / H1 | Use the commit boundary, including unreleased main builds, and give the ancestry check before pinning. | Sections 6.6 and 11; workflow guide; build record above |
+| N2 / H2 | Guard the whole non-test keeper package: only raise_pages.go imports sessionraise or names RaisePager and its aliases; only Run calls registerRaisePager once; no other raise-key Ensure path. Kill G1 to G4. | `internal/keeper/raise_startup_guard_test.go`; PR mutant table |
+| N3 / H3 | Attribute the fallback reason to the worker, outside the coordinator's ruling. | M1 / F1 row above |

@@ -947,10 +947,17 @@ or unannounced record is shown as it is.
 The keepers of releases 2.110.0 and 2.111.0 do not have the raise-notice
 switch and create the signing key at their first start as leader when its
 field is empty. Do not pin either before the admission and reader checks in
-DESIGN-066 section 11. The switch first exists in the release after 2.111.0,
-which contains OP919.
+DESIGN-066 section 11. The keeper ships in the dev-env-operator image,
+which haynes-ops pins by sha, including main builds between releases. Every
+build from commit `29575187` (PR 1145) up to, but excluding, the merge commit
+of OP919 has no switch and creates the key at its first start as leader when
+its field is empty, released or not; this includes `sha-e8f8184` and
+`sha-4f3ef3d`. Before pinning, check
+`git merge-base --is-ancestor <the merge commit of OP919> <the commit to pin>`;
+exit 0 confirms that the commit contains the switch. The switch first exists
+in the release after 2.111.0, which contains OP919.
 
-From that release, keeper raise notices and signing-key
+From the merge commit of OP919, keeper raise notices and signing-key
 initialization require `--enable-session-raise-notices=true`, false by default
 and decided at startup. Write the boolean with an equals sign (`=true` or
 `=false`): the two-argument form `--enable-session-raise-notices true` (or
