@@ -120,8 +120,12 @@ is needed for this pod-bound lifecycle intent.
    owner approval of the exact admission rule in DESIGN-068 section 7.1**:
    only the operator and one configured authenticated ACK_ACTOR may change the
    ACK slots; the actor may only add its correctly bound ACK, changing nothing
-   else. Infrastructure/admin wildcard RBAC grants are no exception. Fail-closed
-   policy and effective enforcement are proposed, not assumed or approved.
+   else. Infrastructure/admin wildcard RBAC grants are no exception. Use an
+   in-process CEL ValidatingAdmissionPolicy, matching protected-record changes;
+   unrelated heartbeat/status writes bypass it. Evaluation failure denies those
+   protected changes and leaves recovery pending; there is no external webhook
+   availability dependency. Policy and effective enforcement are proposed,
+   not assumed or approved.
 8. Confirm Complete only after exact committed removal, retaining the bounded
    operation as the original-HOME latch for later resumes. Only a fresh pod on
    that HOME may serve. RecoveryRequired must remain visible in ADR-018's

@@ -1027,12 +1027,18 @@ An actor string is no fence. No such admission rule is claimed installed.
 
 Exact proposed policy shape, for a separately approved implementation:
 
-- A fail-closed validating admission webhook (`failurePolicy: Fail`,
-  `matchPolicy: Equivalent`, `sideEffects: None`) matches UPDATE of
+- An in-process `admissionregistration.k8s.io/v1` ValidatingAdmissionPolicy
+  with CEL and its binding (`validationActions: [Deny]`, `failurePolicy: Fail`,
+  `matchPolicy: Equivalent`) matches UPDATE of
   `agentsessions` and `agentsessions/status` in API group `dev-env.haynesops.com`,
-  all served versions, namespace `dev-agents`. Match the namespace by its
-  immutable name, not a mutable opt-in label. Root/status updates and attempted
-  whole-status erasure get the same field comparison; CRD latches still apply.
+  all served versions. Use matchConditions for `request.namespace ==
+  'dev-agents'` and a change in presence/value of either protected record
+  (`codexRemoteStop` or `codexRemoteStopCapability`), using guarded optional-field
+  comparisons. Unchanged records skip the policy, including heartbeat and
+  unrelated status writes. Root/status updates and attempted whole-status
+  erasure get the same comparison; CRD latches still apply. Select by namespace
+  name, not a mutable opt-in label. Inline the one approved ACK_ACTOR in this
+  reviewed policy; use no parameter object whose absence could deny every write.
   The current API group is [groupversion_info.go:24][api-group].
 - The only operator username is
   `system:serviceaccount:dev-env-system:dev-env-operator`. The owner-approved
@@ -1050,16 +1056,30 @@ Exact proposed policy shape, for a separately approved implementation:
   or edit of phase, receipt, rescue or capability is denied.
 - For ACK_ACTOR, compare the old/new status after removing only those two ACK
   slots: it must be identical. Spec and other mutable user fields must also be
-  unchanged. Compare every capability/operation field for all other callers:
+  unchanged. Implement that comparison as bounded field-by-field CEL predicates,
+  including presence checks, covering every non-ACK schema member rather than
+  assuming CEL can remove fields from a typed object. A new status member must
+  update this predicate and its tests before manual use. Compare every capability/operation field for all other callers:
   they must preserve both records exactly, although unrelated status updates
   may pass. Only the operator owns non-ACK lifecycle fields. RBAC must separately
   allow the chosen actor's narrow status call; admission grants no RBAC right.
 - Audit records identify the real authenticated caller. Test unauthorized
   session, workbench, Flux, Headlamp, unrelated administrator and forged actor
   writes as denied; operator transitions and the chosen actor's one bound add
-  as allowed. Test update, patch-to-update, status erasure, replay and unavailable
-  webhook. Pin/review its configuration before first manual use; approval and
-  effective enforcement remain pending under Q-068-01.
+  as allowed. Test update, patch-to-update, status erasure, replay and deliberate
+  validation-expression evaluation error. Prove an unrelated heartbeat/status update still
+  passes when protected-record validation is deliberately made to error. This
+  uses the API server's in-process policy, with no remote webhook outage that
+  could block all session writes. A bad expression can still deny matching
+  protected-record changes, including the operator's rescue decision; keep
+  recovery pending and repair the reviewed policy, never fail open. Pin/review
+  its configuration, type checks and CEL cost before first manual use; approval
+  and effective enforcement remain pending under Q-068-01.
+
+Kubernetes 1.35 documents the in-process CEL alternative, matchConditions and
+their fail-closed evaluation behavior. This is a proposed policy using that
+mechanism, not a live admission observation.
+([ValidatingAdmissionPolicy][k8s-admission])
 
 Until that owner decision and verification, manual acknowledgement is held.
 Do not borrow an infrastructure account, credential or route. The later proof
@@ -1141,8 +1161,6 @@ may be created. No table entry authorizes force removal or volume deletion.
 | J32 Ordinary source hold report completes after resume | StopPending for hold, valid receipt, completed failed Git rescue, desired Running | Atomic RemovalCommitted may remove under ordinary D-55 resume rule; HOME and RescueFailed stay. Recovery hold with same failed report stays. | `TestCodexStopOrdinaryHoldResumeDoesNotRequireSuccessfulGitRescue` |
 | J33 Pod's explicit decision has a different Session UID | No matching capable binding/active operation | Treat as not named; no bound request. Today's unbound path only, without inheriting another Session's capability/receipt. A contradictory existing capable binding instead blocks and follows J41/section 5.4. | `TestCodexStopMismatchedConstructionDecisionNeverGetsBoundRequest` |
 | J34 Restart around first successful version/capability write | Correct pod construction decision, explicit capability field valid with verified pullable digest; capable binding absent/unconfirmed or confirmed | No stop before confirming the intended capability binding. If stored, use capable route even after flag removal and restart; a lost ACK is reread, not assumed absent. | `TestCodexStopCapabilityAcknowledgementPrecedesEveryQualifiedStop` |
-
-
 | J35 Recorded recovery digest cannot be pulled | RecoveryHold, admission=false; exact hold provably never ran | Keep pending with download reason; ordinary UID/RV removal only with section 5.2's strict never-ran inventory, retain digest/source evidence and retry on availability. No legacy hold, executor or Complete without rescue. | `TestCodexStopUnpullableRecoveryDigestKeepsRescuePending` |
 | J36 Recovery hold's own probe fails or contradicts stored digest | RecoveryHold, admission=false, hold present | No rescue dispatch/fallback. Transient failure retries same hold; persistent conflict needs probe repair or proved ended/never-ran removal before replacement. True/unknown admission uses J18. | `TestCodexStopRecoveryHoldProbeFailureNeverAdmitsRescue` |
 | J37 Development/prerelease, old plain and malformed version answers | No binding yet; valid explicit field or missing/invalid field | Valid field qualifies regardless of stamp; old text, duplicate/wrong/absent field and large mis-stamp never qualify. Old version option refusal takes absolute legacy fallback. | `TestCodexStopExplicitCapabilityDoesNotDependOnVersionStamp` |
@@ -1153,7 +1171,7 @@ may be created. No table entry authorizes force removal or volume deletion.
 | J42 HOME contains an agentd/Git shim | Eligible named pod, probe and stop pending | Every feature exec uses protected absolute argv; shim cannot answer the version or forge stop report. Recording transport asserts argv; agent/rescue tests additionally audit protected Git calls and report producers. | `TestCodexStopFeatureExecNeverResolvesHomeShims` |
 | J43 In-pod caller invents a bound operationID | Self-frozen pod; no controller stop record | Record a real operator operation, repeat same-pod stop/rescue, then normal removal and fresh service. Invented ID/receipt grants no removal; no thaw. Agent fixture covers self-freeze; envtest covers actual controller recovery. | `TestCodexStopSelfInflictedFreezeRecoversThroughRealOperation` |
 | J44 Add name or change template while names remain | Candidate digest plus release qualification evidence | Installer refuses below-minimum, missing-capability, unpullable/unresolved or mismatched image evidence; only exact capable released digest passes. Existing pod bindings remain authoritative. | `TestCodexStopInstallerRejectsUnqualifiedNamedTemplate` |
-| J45 Acknowledgement write under either owner option | Active bound recovery operation and approved ACK_ACTOR policy | Admission denies other callers and any non-ACK actor edits; selected actor's one bound add and operator's valid transitions pass. No configured actor means manual path stays held. Test webhook outage fails closed. | `TestCodexStopAcknowledgementAdmissionNamesExactWriters` |
+| J45 Acknowledgement write under either owner option | Active bound recovery operation and approved ACK_ACTOR policy | In-process CEL denies other callers and non-ACK actor edits; bound actor add/operator transitions pass. No actor means manual hold. Evaluation error denies protected changes; unchanged-record heartbeat/status writes still pass. | `TestCodexStopAcknowledgementAdmissionNamesExactWriters` |
 
 Keep the old M4 characterization for **unnamed/unsupported** fixtures and add
 J15 for the qualified fixture; do not rewrite the old-host expectation globally.
@@ -1544,3 +1562,4 @@ with that story.
 [old109-format]: https://github.com/thaynes43/dev-env/blob/4576341cafd2b68eb436deb6598c5ffe6b4cb90a/internal/version/version.go#L34-L71
 [runtime-lookup]: https://github.com/opencontainers/runc/blob/v1.3.3/libcontainer/setns_init_linux.go#L115-L157
 [image-entrypoint]: https://github.com/thaynes43/dev-env/blob/ffb6af5ce118b243c5c6820c235f104f4159c08b/images/agent/Dockerfile#L529-L535
+[k8s-admission]: https://v1-35.docs.kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/#matching-requests-matchconditions
