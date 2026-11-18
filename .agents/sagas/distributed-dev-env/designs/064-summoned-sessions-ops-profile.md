@@ -3489,6 +3489,19 @@ change to the constant. Local CRD admission, API caller derivation and
 fake-endpoint rendering tests prove the supported name, not installed or
 accepted phone delivery.
 
+**Correction, 2026-11-18: story 796 re-read (gpt-6-astra, 2026-11-18); coordinator ruling R6; not a ruling by Tom.**
+The reserved name marks a caller, not a purpose: once its policy exists,
+anyone allowed to use `dev-env-drill/summon-drill` can send a real escalation
+whose eligible pages say `DRILL`. The enrollment PR must create the namespace
+and account for drill-only use and name who may create and use them; add the
+account to the protected workload/token and exec identity lists
+([5.8's 2026-11-13 correction](#58-what-a-steered-ops-session-can-still-reach-f1):
+"Every new summoning caller joins that list in the PR that adds its
+CallerPolicy"); give the policy one remote escalation entry; remove the
+policy, account and namespace after the drill; and forbid reuse of the name
+for any other purpose. None of these enrollment actions is part of story
+796. Who may start the drill remains Tom's open question O8.
+
 ### 6.9 OP743: quota priority and the fallback model
 
 **The gate.** At admission, for summoned sessions only, by

@@ -2504,6 +2504,14 @@ None is a ruling by Tom.
   titles and session reports cannot choose that label. The eventual drill
   must use that exact CallerPolicy name for `dev-env-drill/summon-drill`
   (coordinator ruling R1, 2026-11-18); another name needs a code change.
+  The name labels the caller rather than the purpose, so anyone allowed to
+  use that account after enrollment can send a real escalation whose eligible
+  pages say `DRILL`; its enrollment PR must reserve the namespace/account for
+  drill-only use, name who may create/use them, add the account to the protected
+  identity lists (DESIGN-064 5.8), give its policy one remote escalation entry,
+  remove all three after the drill and forbid other reuse, while who may start
+  the drill remains Tom's open O8 (coordinator ruling R6, 2026-11-18, not a
+  ruling by Tom).
   No policy or identity is created here. The one-attempt rule and hourly cap
   above apply. Install by pinning the keeper together with or after stories
   782, 792 and 793, with story 794 available; no new RBAC.
