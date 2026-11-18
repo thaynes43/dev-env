@@ -13,3 +13,12 @@ For future CLI currency work:
 5. Managed Codex tasks require both an operator accepting the model and an agentd image accepting it, plus the existing project and profile gates. The current PilotAgent selector covers Claude remote/local and Codex remote, not Codex tasks. An exact isolated managed-task installation route and capacity remain prerequisites for a pilot; no global template change or task pilot is implied by this checklist.
 
 Cursor's inspected local HOME version symlink points to `2026.10.22-27dcf5f`; that is local artifact provenance, not a verified executable version or managed Cursor integration. The inspected agent image and Renovate pins do not track it. An owner must establish its production tracking and supported update route separately.
+
+The [OP921 gate and compatibility audit](codex-62-audit.md) records the
+2026-11-18 explicit 6.2 probes, complete source-gate inventory and the first
+stable upstream catalog containing both IDs (0.169.1). Ordinary source admission
+for `gpt-6.2-sol` and `gpt-6.2-astra` does not establish provider availability:
+the installed 0.160.1 probes sent both IDs and received provider refusals.
+Upgrading the login helper requires a separate keeper schema prerequisite;
+Renovate's two-pin bump is insufficient. No default or privileged coordinator
+model is promoted by ordinary admission.

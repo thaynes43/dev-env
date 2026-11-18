@@ -509,17 +509,21 @@ func TestProjectCreateDefaultStillRetries(t *testing.T) {
 	}
 }
 
-func TestCreateTerraModelAndEffortPreserved(t *testing.T) {
-	h := newHarness(t)
-	serveCreate(h, runningOn(testSession(name, ""), "talosw02"))
-	h.mustRun(ExitOK, "--repo", "haynes-ops", "-p", "synthetic", "--agent", "codex", "--model", "gpt-6.1-terra", "--effort", "medium")
-	reqs := h.api.requests()
-	if len(reqs) == 0 {
-		t.Fatal("missing create")
-	}
-	got := decodeCreate(t, reqs[0].body)
-	if got.Agent != "codex" || got.Model != "gpt-6.1-terra" || got.Effort != "medium" {
-		t.Fatal("request changed model or effort")
+func TestCreateExplicitCodexModelAndEffortPreserved(t *testing.T) {
+	for _, model := range []string{"gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra"} {
+		t.Run(model, func(t *testing.T) {
+			h := newHarness(t)
+			serveCreate(h, runningOn(testSession(name, ""), "talosw02"))
+			h.mustRun(ExitOK, "--repo", "haynes-ops", "-p", "synthetic", "--agent", "codex", "--model", model, "--effort", "medium")
+			reqs := h.api.requests()
+			if len(reqs) == 0 {
+				t.Fatal("missing create")
+			}
+			got := decodeCreate(t, reqs[0].body)
+			if got.Agent != "codex" || got.Model != model || got.Effort != "medium" {
+				t.Fatal("request changed model or effort")
+			}
+		})
 	}
 }
 
