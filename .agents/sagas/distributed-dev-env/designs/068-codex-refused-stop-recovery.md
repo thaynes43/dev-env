@@ -574,12 +574,14 @@ CPU limit, installed pins/schema, all replica versions, current RBAC/admission,
 HOME UID, rescue destination and cleanup. A denial stops its action. No host
 creation, flag or manifest is authorized here.
 
-Run from the authorized custodian's shell. Set these values from the proof story,
-not by searching for a convenient host. Commands in this section are instructions
+Run all blocks in the same authorized custodian shell, with `set -eu` as below;
+a failed prerequisite stops before the next action. Set these values from the
+proof story, not by searching for a convenient host. Commands in this section are instructions
 for later, not commands executed by this design worker. The two new ctl verbs
 are proposed build outputs from sections 2.1 and 3.2.
 
 ```sh
+set -eu
 PROOF_HOST='ordinary-disposable-host-from-proof-story'
 PROOF_NS='dev-agents'
 PROOF_DIR="$XDG_RUNTIME_DIR/op877-proof"
