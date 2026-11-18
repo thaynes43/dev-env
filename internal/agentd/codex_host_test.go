@@ -25,7 +25,11 @@ import (
 
 func hostFixture(t *testing.T) (Settings, CodexHostOptions) {
 	t.Helper()
-	home := t.TempDir()
+	return hostFixtureAt(t, t.TempDir())
+}
+
+func hostFixtureAt(t *testing.T, home string) (Settings, CodexHostOptions) {
+	t.Helper()
 	s := Settings{Home: home, StateDir: filepath.Join(home, ".agentd"), CodexHome: filepath.Join(home, ".codex"), WorkspaceID: "fixture-workspace", PodUID: "fixture-pod", APIURL: "https://fixture.invalid", CodexBin: "fake-codex", CodexAccessFile: filepath.Join(home, "projection", "access.json")}
 	for _, dir := range []string{s.StateDir, s.CodexHome, s.workspaceDir(), s.ReposDir(), filepath.Join(home, "codex"), s.WorkDir()} {
 		if os.MkdirAll(dir, 0o700) != nil {

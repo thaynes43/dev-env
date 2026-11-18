@@ -132,6 +132,30 @@ the receipt, invent `Stopped`, clear rendezvous files or automatically retry.
 Unplanned-loss recovery remains an acceptance gate separate from a clean idle
 host replacement.
 
+### Single predecessor client upgrade
+
+The 0.169.1 agent image accepts receipts written by exactly 0.160.1 with the same
+phase/binding checks as current receipts. A Stopped receipt still permits start;
+Preparing, Attempting, Confirming, Confirmed and Stopping retain their existing
+review requirements. Other versions, malformed receipts and mismatched bindings
+remain Unknown. A version change supplies no new stop evidence.
+
+Native start preserves the existing managed package. Only after the existing
+inspector proves every native host process absent, agentd may replace exactly
+0.160.1 using the supported image CLI command
+`app-server daemon update --from-cli --yes`. Native stages the complete local
+package and changes its current selection, without touching sessions, login or
+history. agentd rechecks absence and the exact selected version. Package work
+preserves the old lifecycle receipt bytes; the usual start then writes its own
+durable Attempting and, after readiness, Confirmed receipt. Failed replacement
+never erases or invents lifecycle evidence. An interrupted start still needs review.
+Remote-mode sessions use the same package path after their own absence check;
+a live old daemon is never upgraded in place by this supervisor.
+
+The image job tests this with a synthetic old Stopped receipt/package and real
+0.169.1 startup, with enrollment suppressed. It does not establish live pairing
+or keeper-generation adoption. See the [upgrade audit](codex-169-upgrade-audit.md).
+
 ## Management identity
 
 Each host gets a dedicated ServiceAccount with `automountServiceAccountToken=false`,

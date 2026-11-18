@@ -1,24 +1,25 @@
 # Agent-only Codex 0.169.1 candidate (OP921)
 
-**Draft; not ready to merge or deploy.** The coordinator's supported answer to
-OP921 Q1 on 2026-11-18 split model admission from the CLI candidate and left the
-login helper/keeper out of scope. This candidate changes only the agent-side
-CLI/version qualification. `images/codex-login/Dockerfile`, the helper CI
-expectation, keeper code, all defaults, privileged model restrictions and
-running sessions remain unchanged.
+Fix round 1 supersedes draft PR #1220 under the coordinator's 2026-11-18
+K1–K5 rulings. The login helper and keeper remain out of scope; the helper stays
+on 0.160.1. No platform default, privileged coordinator model/effort, deployment
+or running session changes here. Source qualification, CI builds, installation
+and runtime acceptance are separate evidence.
 
-The agent-side no-refresh claim required by that ruling cannot be established
-unconditionally from upstream source. CI success does not remove this hold.
-The [model admission PR #1219](https://github.com/thaynes43/dev-env/pull/1219)
-contains the full gate inventory and helper prerequisite. Either PR can be
-reviewed against main without silently depending on the other's source changes.
-Ordinary 6.2 admission requires #1219; this CLI candidate alone grants none.
+The refresh concern is closed by source review (claim (b) below). Readiness now
+requires the retained-host migration and names-only layout checks in image CI.
+Ordinary 6.2 admission is supplied by [PR #1219](https://github.com/thaynes43/dev-env/pull/1219).
+Pin an agent image containing both the model admission and 0.169.1 client before
+or with the operator that admits 6.2 requests. Older agentd validates and refuses
+a Session naming either 6.2 model; an operator-only rollout strands that request.
+Existing sessions move images on suspend/resume or pod replacement, never because
+this source PR itself changes a running session.
 
 ## Exact source and lowest catalog version
 
 The candidate is `rust-v0.169.1`, commit
 `c376cf7396eff83ce4c6ac61b9553df142e7a0be`. [Source audit manifest](codex-cli-source-audit.json)
-pins 29 relied-on source file hashes, checked against immutable commit bytes.
+pins 31 relied-on source file hashes, checked against immutable commit bytes.
 Baseline `rust-v0.160.1` is commit
 `d27764b82f7118f674371e6d6e76271d9d606edb`.
 
@@ -42,7 +43,7 @@ All upstream paths below refer to the pinned source commit above.
 | Claim | Source evidence | Conclusion |
 | --- | --- | --- |
 | (a) Read an old-format access-only login | [login/src/auth/storage.rs:53-67](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/login/src/auth/storage.rs#L53) retains auth_mode, OPENAI_API_KEY, tokens, last_refresh. [token_data.rs:11-36](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/login/src/token_data.rs#L11) makes oauth_provenance/login_owner_id optional with serde defaults. [auth/manager.rs:657-678](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/login/src/auth/manager.rs#L657) obtains ordinary ChatGPT token data without those fields. dev-env `internal/codexauth/access.go:207-226` writes the legacy shape with a required empty refresh string. | Compatible deserialization/ordinary access use at source. No real login or installed-client test here. |
-| (b) Nothing agent-side writes or refreshes it | `internal/agentd/codex_auth.go:84,110-130` checks expiry >5 minutes at projection install and atomically writes newer access-only generations. This expected projection writer is not a token rotation owner. Upstream [auth/manager.rs:3658-3675](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/login/src/auth/manager.rs#L3658) can schedule proactive refresh near expiry or for stale last_refresh. `:3542-3578` routes Chatgpt auth to `:3742-3789`, which sends the stored refresh string without a nonempty guard and persists successful returned credentials. [oauth/client.rs:97-143](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/login/src/oauth/client.rs#L97) constructs/sends the refresh request, including an empty string. | **Not established. Draft blocker.** Normal early keeper refresh reduces exposure but cannot prove an already-running client never enters this window after delay/outage. Baseline also had an empty-refresh window; this story does not change that credential contract or test a real refresh. |
+| (b) Access-only copies cannot rotate or revoke the keeper login through refresh | [manager.rs:3742-3767](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/login/src/auth/manager.rs#L3742) calls [oauth/client.rs:97-113](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/login/src/oauth/client.rs#L97): the body contains only the public client id, grant type, reason and empty refresh token. No access token, account id or Authorization header is sent (default client at auth/default_client.rs:217,493; manager.rs:918,942). The empty string cannot identify, rotate or revoke the keeper token family. Failed refresh returns before persist_tokens (manager.rs:1758-1802,3767), so writes nothing. Successful persistence uses compare-and-save under a write lock (storage.rs:195-231). agentd's byte comparison restores its canonical access-only projection on the next valid poll (daemon.go SyncCodexAccess; codex_auth.go:122-129). | Holds for refresh at source. No background refresh timer or CPU loop: permanent failure is memoized per snapshot (manager.rs:3549-3554,3586-3590), unauthorized recovery is bounded (2164-2223); transient errors follow request/retry rate. Both clients have the same five-minute window and guarded reload (old manager.rs:203-204,2393-2407,2848-2882,2897-2940; new 232-233,2701-2715,3473-3518,3658-3676). The server's actual answer to an empty refresh token was not observed. |
 | (c) Keeper refresh does not use new CLI | `internal/keeper/codex_transport.go:47-65` directly POSTs one fenced refresh grant with its existing HTTP client; keeper worker/journal owns rotation. Native CLI is used only for separately requested login ceremonies, with `CodexLoginVersion=0.160.1` at `codex_helper.go:23,99`. Helper Dockerfile and smoke expectation remain 0.160.1. | Holds at source; no keeper change or runtime action. |
 | (d) Exact missing-metadata behavior | token_data.rs:25-34 defaults absent fields to None. No warning/refusal attributable to absence was found in the ordinary token-read path. [auth/manager.rs:2899-2916](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/login/src/auth/manager.rs#L2899) requires populated provenance/owner, a nonempty refresh token and matching account/user for account-grant eligibility; absent metadata yields no grant. | Ordinary legacy reads accepted; stronger grant unavailable. This does not disable ordinary native refresh attempts. |
 
@@ -55,7 +56,7 @@ from those provider results.
 
 | Platform contract | Pinned upstream source / qualification |
 | --- | --- |
-| Remote daemon/process identity | cli/src/main.rs:1317-1350 preserves managed-daemon Unix listeners and DisabledEphemeral for explicit remote-control suppression. app-server-transport/src/transport/remote_control/protocol.rs and cli/src/remote_control_cmd.rs retain process/lifecycle output fields consumed by agentd. managedCodexVersion and hostexecutor.PinnedNativeVersion move together. Exact version mismatches remain refused. |
+| Remote daemon/process identity | cli/src/main.rs:1317-1350 preserves managed-daemon Unix listeners and DisabledEphemeral for explicit remote-control suppression. app-server-transport/src/transport/remote_control/protocol.rs and cli/src/remote_control_cmd.rs retain process/lifecycle output fields consumed by agentd. managedCodexVersion and hostexecutor.PinnedNativeVersion move together. Live daemon/package probes still require 0.169.1. Only receipts and positively absent managed packages from the named predecessor 0.160.1 receive the bounded migration below; other versions refuse. |
 | thread/list, turns/items and title | app-server-protocol/src/protocol/v2/thread.rs, thread_data.rs and item.rs retain the fields agentd consumes, source kinds and status enum. New filters/paging, root-turn and moderation fields are additive. The full experimental schemas are repinned, not hand trimmed. Coordinator name setter schemas remain unchanged. |
 | config/value/write | protocol/v2/config.rs retains keyPath/value/mergeStrategy/expectedVersion and ConfigWriteResponse including its version. Both retained config schemas are byte-identical to baseline. Version-checked trust write/readback and conflict handling remain tested. |
 | One-use thread/start and turn/start | protocol/v2/thread.rs keeps experimental environments and optional projectId; protocol/v2/turn.rs keeps threadId/input/model/effort and adds optional parent/root turn fields. Existing exactly-once authorization and unconfirmed-result behavior stay unchanged. No native idempotency promise is inferred. |
@@ -105,13 +106,10 @@ material in logs. No keeper source, test, credential or grant was changed here.
 
 ## Readiness and what remains unknown
 
-The source candidate and regression/CI evidence can be reviewed, but the four-claim
-ruling holds it in draft because claim (b) fails. It needs an authorized resolution
-of the native auth-refresh boundary and its own acceptance evidence before ready.
-No alternate identity, token, flag, security rule or external route is used to
-bypass that hold. The model PR is independent. No defaults, privileged
-coordinator model/effort, running host/session, keeper, deployment pin, release,
-installation, restart or runtime model switch is part of this candidate.
+The coordinator closed the refresh hold after independent source review. Image CI
+must demonstrate K2/K3 before this replacement PR is ready. No provider inference,
+installation, deployment pin, release, restart or runtime model switch is included.
+The server's actual answer to an empty refresh token remains unobserved.
 
 ### Separate newest-client probe evidence received during source work
 
@@ -124,7 +122,7 @@ Copies/original login remained unchanged and copies were deleted in those
 receipts. This establishes successful completion for each requested model in
 that worker's test, not an unconditional no-refresh guarantee or a test of the
 0.169.1 candidate. Different pod/time/client prevent isolating client version as
-the cause of the earlier 0.160.1 refusals. This evidence does not remove the hold.
+the cause of the earlier 0.160.1 refusals. Those probes do not qualify 0.169.1; the refresh ruling rests on the source review.
 
 
 Additional source checks: `config/src/fingerprint.rs:54-65` still emits the
@@ -137,4 +135,71 @@ config continue to specify their existing model, so this candidate changes no
 platform default. Remote enrollment's auth path at
 `app-server-transport/src/transport/remote_control/auth.rs:174-201` still accepts
 Codex-backend ChatGPT auth with an account ID; native refresh/recovery in that
-path remains covered by the separate hold, not a live pairing qualification.
+path has the refresh properties in claim (b); live pairing remains unqualified.
+
+## Retained host package replacement (M1)
+
+A fresh host installs the invoking complete CLI package: upstream
+[lib.rs:474-482](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/app-server-daemon/src/lib.rs#L474)
+calls [prepare_install.rs:30-42,105-119](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/app-server-daemon/src/prepare_install.rs#L30).
+Its Missing mode preserves an existing current selection, even 0.160.1. Remote
+start uses the same path (lib.rs:771-792); without replacement the exact native
+RPC version check would report Unknown on the retained old daemon.
+
+The supported `app-server daemon update --from-cli --yes` command uses Replace
+mode (cli/main.rs:1423-1445; prepare_install.rs:47-65). It verifies and stages the
+invoking image's complete package, holds native operation/install locks,
+rechecks the selection/backend, and atomically switches current
+(prepare_install.rs:157-239,293-318,382-421). With no backend it starts none.
+No download, login mutation or session/history deletion is needed. Native package
+pruning concerns only package releases; the old receipt is never removed by
+agentd's package preparation.
+
+`previousPinnedCodexVersion` admits exactly 0.160.1. Every lifecycle state keeps
+its existing meaning: only a missing or Stopped receipt permits start; interrupted
+states still need review, malformed/mismatched receipts refuse. Before replacement
+agentd checks the image version and repeats its existing process-absence proof
+(PID boot/start identity, updater identities, native locks, socket rules), then
+checks absence and the selected 0.169.1 package again. A replacement failure leaves
+the original receipt bytes. The usual durable Attempting receipt still precedes
+the single native start; Confirmed requires observed readiness. Remote-mode
+sessions share this helper after their own existing absence proof; live or unknown
+process state never permits replacement.
+
+Image CI extracts the complete package from the built image, not a bare binary.
+A synthetic retained HOME with a 0.160.1 Stopped receipt, old release/current/bin
+layout and history sentinel must start through real 0.169.1 package replacement;
+the same HOME at an unrelated version refuses before mutation. This exercises
+native daemon startup and peer/version RPC, with remote enrollment suppressed,
+mount preflight and auth projection stubbed. It does not prove actual pairing,
+relay connectivity or keeper-generation adoption.
+
+## CODEX_HOME qualification and real-binary CI limits (M2, L2, L3)
+
+`auth.lock` is not-history: native storage.rs:195-213 creates a coordination lock
+with no login contents. The image job's TestPinnedCodexHomeLayout uses one scratch
+HOME for exact version, offline schema export, one loopback `exec --json`, and an
+offline file-auth write with a made-up API key through app-server stdio. No CLI
+login/logout, real account, refresh or provider authentication is used. It prints
+only top-level names and refuses every name absent from codexLayout; the fixture
+must include sessions, auth.json and auth.lock. Observed names and classifications
+are recorded after CI qualification below. The earlier 0.160.1 observations remain
+historical evidence, not an assertion that the layout never changes.
+
+The bundled catalog's first model changes from gpt-6.1-sol to gpt-6.2-sol in
+0.169.1. Base config and host config still name gpt-6-astra; managed/clean launch
+arguments still name their model. Every platform path selects explicitly, so no
+platform default changes. A bare invocation without config or a model argument
+can follow the bundled catalog instead.
+
+CI proves the exact version, required help flags (presence only), 16 byte-equal
+offline schema exports, effective policy matrix, wrapper dry-run, real native
+control/reconnect/history with one synthetic loopback response, retained-package
+migration/refusal, and the top-level layout for the listed offline actions.
+It does not prove ChatGPT auth/refresh, provider entitlement or successful 6.2
+inference, keeper adoption, remote-control enrollment/pairing, TUI remote behavior,
+thread/list/items, folder-trust config/value/write, coordinator name setter,
+rc-create or allowance account/read against a real daemon. The rollout/usage
+fixture is synthetic, not a real provider rollout. The offline API-key file write
+qualifies file layout, not the shared ChatGPT access-only path. Logout revocation
+is a pre-existing separate story (L1), unchanged here.

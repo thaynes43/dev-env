@@ -33,7 +33,9 @@
     "codex-rs/config/src/fingerprint.rs": "f045658587620e4aeef541b5d5e479a2ba1147648b263f47b034fbfd794f1db5",
     "codex-rs/app-server/src/config_manager_service.rs": "c0ee7aea0b39a9637c87e2fcb30513edb55620560e84a64e977bd2da3da85867",
     "codex-rs/models-manager/src/manager.rs": "78bafaed08a8b32ccd0b7cb963a04c95b95ea266354aca7f47e69e9199a7000d",
-    "codex-rs/app-server-transport/src/transport/remote_control/auth.rs": "526e0d0ecd6166436b6904da0b9d690b92583926a41425fba0dee7f9926c4f23"
+    "codex-rs/app-server-transport/src/transport/remote_control/auth.rs": "526e0d0ecd6166436b6904da0b9d690b92583926a41425fba0dee7f9926c4f23",
+    "codex-rs/app-server-daemon/src/prepare_install.rs": "d3a7ce5a5b61c50fa3d27cfac08e47373c18fc5d4972f29609f54cb6472331c9",
+    "codex-rs/app-server-daemon/src/managed_install.rs": "c7150be2b6486da860071b3de00d8aae23b0e5c70f4f3e2bf231f4d4ceedaa9d"
   },
   "experimentalExportsSHA256": "015daa0d0c1f645c1085ca11ae8e2057d02df357b50f2eaa5fc3b6726972014f"
 }
