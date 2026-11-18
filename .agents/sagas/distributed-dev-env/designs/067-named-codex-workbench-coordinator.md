@@ -1044,6 +1044,8 @@ with a 20 GiB HOME default. Re-read those declarations for the actual packet.
 
 ## 14. Review and handoff
 
+OP877 recovery design and proof plan: [DESIGN-068](068-codex-refused-stop-recovery.md) (proposed; nothing installed or accepted).
+
 2026-11-17 slice (c1) re-check 2 and fix round 3: reviewer model id
 `claude-sonnet-5-5`, head `d9fd97e7`, verdict **APPROVE**, HIGH 0, MEDIUM 0,
 LOW 5 (N1–N5). Report: private `op858/slice-c1-recheck2-crossfamily.md`, including
