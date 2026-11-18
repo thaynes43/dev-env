@@ -170,7 +170,10 @@ All object members are listed; there are no unbounded lists or maps.
 | `rescue` | optional object with required `podUID` (1..128), `generation` (int64, minimum 1), `stamp` (1..128), `result` (enum `Verified`, `CleanAndPushed`, `Failed`) | Reference to the completed `status.rescue`, not a copied generic success flag. |
 | `removalCommittedAt` | optional date-time | Acknowledged decision to remove the receipt's pod, after its completed rescue. |
 | `recoveryAck` | optional object, exact shape below | Authorized human assertion of the old writer's exit. |
-| `recoveryHoldUID` | optional string, min 1, max 128 | Distinct rescue hold; cannot equal original pod UID. |
+| `recoveryHoldUID` | optional string, min 1, max 128 | Distinct current rescue hold; cannot equal original pod UID. |
+| `recoveryHoldNodeName` | optional DNS subdomain string, min 1, max 253 | Current recovery hold's node name. |
+| `recoveryHoldNodeUID` | optional string, min 1, max 128 | Current recovery hold's node UID. |
+| `recoveryHoldAck` | optional object, same members and bounds as recoveryAck | Separate assertion for an unexpectedly lost recovery hold. |
 
 `recoveryAck` has required `operationID`, `sessionUID`, `podUID`,
 `homeClaimUID`, `nodeUID` (same bounds and equality to the containing record),
@@ -180,8 +183,13 @@ record, never credential material, a transcript or a phone session link. An
 actor string grants no authority. Kubernetes authorization and the incident's
 custodian authorization govern the write; the audit record identifies its caller.
 
-The controller owns all members except `recoveryAck`, which an already authorized
-cluster custodian writes only under section 5. Heartbeat input cannot write any
+For `recoveryHoldAck`, the pod/node UIDs equal recoveryHoldUID and
+recoveryHoldNodeUID; operation/Session/HOME IDs still equal the record. Require
+both recovery-hold node members whenever recoveryHoldUID is present. Retain the
+original recoveryAck after a lost hold; it is not overwritten by recoveryHoldAck.
+
+The controller owns all members except `recoveryAck` and `recoveryHoldAck`, which
+an already authorized cluster custodian writes only under section 5. Heartbeat input cannot write any
 of them. Preserve them through status observation and every status writer.
 At the pin heartbeat uses a merge patch; this does not make other whole-status
 writers safe with an unknown field.
@@ -192,7 +200,9 @@ identity members, role and startedAt are immutable; lastAttemptAt cannot move
 backwards. Receipt operation/Session IDs equal the record. Its pod UID is either
 the original pod or the bound recovery hold. Rescue and receipt pod UIDs agree.
 RemovalCommitted requires receipt, rescue and removalCommittedAt; RecoveryHold
-requires recoveryAck. Complete requires the completed removal evidence. A new
+requires recoveryAck. Hold-role RemovalCommitted additionally requires a
+successful rescue, as section 5 specifies. Complete requires the completed
+removal evidence. A new
 operation may replace a Complete record only with the same Session and HOME
 binding, a fresh operationID and a different currently owned pod UID. An invalid
 or unknown-version record fences construction and deletion; it never means absent.
@@ -240,8 +250,9 @@ contradictory report or failed status write authorizes delete.
 [controller/rescue.go:261–289,375–386][verdict])
 
 A completed report with a **failed Git rescue** is distinct from stop refusal.
-Preserve D-10: that pod may go after its completed stop/rescue, while HOME stays
-and RescueFailed blocks archive. The new receipt is additionally required for
+Preserve D-10 for an executor: that pod may go after its completed stop/rescue,
+while HOME stays and RescueFailed blocks archive. A hold retains D-55's stronger
+successful-rescue requirement; a failed hold rescue keeps the hold and record. The new receipt is additionally required for
 this qualifying pod. Do not silently require every Git rescue to be Verified in
 the normal removal path. The stricter manual recovery path in section 5 requires
 a successful hold rescue because it repairs missing original evidence.
@@ -376,21 +387,15 @@ remove before any attempt, first complete its stop/rescue under this rule.
 Unnamed/unsupported holds retain today's behavior. A recovery hold is a distinct
 target within the original operation; it never overwrites the original pod UID.
 Its own disappearance before a committed rescue returns to RecoveryRequired,
-with a new acknowledgement required for that lost target before another hold.
-Do not reuse the original acknowledgement to assert the missing hold stopped.
-For this case recoveryAck's podUID/nodeUID bind the lost recoveryHoldUID and its
-node, rather than the source; retain the original source acknowledgement in the
-incident evidenceRef. The controller must record the recovery hold's node name
-and UID with recoveryHoldUID (see the shape correction below).
-
-**Recovery-hold binding:** add optional `recoveryHoldNodeName` (DNS subdomain,
-1..253) and `recoveryHoldNodeUID` (1..128); require both with recoveryHoldUID.
-For a lost hold, recoveryAck equals that hold's pod/node binding. Its immutable
-operation/Session/HOME IDs still match the record. A replacement hold's binding
-may change only after a matching fresh acknowledgement and confirmed absence of
-the former hold. This bounds status to one source and one current hold, not an
-unbounded incident ledger. Section 3.1's recoveryAck equality rule has this one
-explicit role-dependent case. Build validation must encode both cases.
+with a new recoveryHoldAck required for that hold before another hold. Do not
+reuse the source acknowledgement to assert the missing hold stopped. The second
+acknowledgement binds the lost recoveryHoldUID and recoveryHoldNodeUID, while
+retaining the source recoveryAck. Only a matching fresh hold acknowledgement and
+confirmed absence permit replacing that hold's binding. Persist and confirm the
+new hold binding, and clear the consumed recoveryHoldAck, before its rescue.
+No active source/hold binding is rewritten merely because a pod name is free.
+Status retains one source and one current hold, not an unbounded incident ledger.
+A lost replacement hold needs its own new acknowledgement under the same rule.
 
 ## 6. What Tom sees on the phone
 
@@ -571,14 +576,15 @@ Use a bounded sleeping writer to hold the normal 30-second grace open. It does
 no CPU work and creates no native conversation. The future build supplies
 `scripts/proofs/op877-interrupt.py`, a reviewed **proof-only** helper. This is a
 build deliverable, not a file that exists at this pin. Its exact contract: one
-`--writer` invocation ignores TERM and sleeps at most 120 seconds; one
+`--writer` invocation installs its TERM-ignore handler, prints and flushes only
+`writer-ready`, then sleeps at most 120 seconds; one
 `--interrupt` invocation reads the source-bound HOME fence, verifies the exact
 boot supervisor is frozen, finds exactly one `agentd ctl rescue --stop-agent
 --codex-stop-operation` with the stored operationID, opens a pidfd, rechecks its
 identity, then sends KILL only to that ctl process. It never thaws anything,
 modifies a fence, kills tini/supervisor, invokes a provider or writes HOME. If
 any identity/check is ambiguous it exits 2 without signalling. It prints only
-`interrupted` and the operation/pod UID on success. Its own interruption is an
+bounded JSON with result `interrupted` and the operation/pod UID on success. Its own interruption is an
 inconclusive attempt, never proof. No general PID-selection argument is allowed.
 Install/copy this reviewed helper privately only within the later proof authority.
 
@@ -593,6 +599,8 @@ production grace or add a production fault-injection flag.
 ```sh
 kubectl -n "$PROOF_NS" exec -i "$PROOF_HOST" -c agent -- python3 - --writer < scripts/proofs/op877-interrupt.py > "$PROOF_DIR/writer.txt" 2>&1 &
 PROOF_WRITER_CLIENT=$!
+sleep 1
+test "$(cat "$PROOF_DIR/writer.txt")" = writer-ready
 agent-run suspend "$PROOF_HOST" -o json > "$PROOF_DIR/suspend.json"
 # One deliberate observation delay, within the helper's bounded proof window.
 sleep 3
@@ -655,7 +663,7 @@ agent-run show "$PROOF_HOST" -o json > "$PROOF_DIR/recovery-observed.json"
 ```
 
 The patch file must start with `test` operations for resourceVersion and every
-bound identity, followed by one `add` of recoveryAck. It may contain no phase,
+bound identity, followed by one `add` of the appropriate acknowledgement. It may contain no phase,
 receipt, rescue or deletion edit. Pass only after the original-HOME hold has its
 successful rescue, is removed normally, and Complete is observed. Forged/stale
 identity cases belong in envtest, never experiments against a real lost writer.
