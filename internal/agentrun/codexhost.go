@@ -33,7 +33,7 @@ func (a *app) codexHost(ctx context.Context, args []string) error {
 		return a.help([]string{"codex-host"})
 	}
 	if args[0] != "select" {
-		return usageError("codex-host select --repo <name> [--profile <name>] [--check]")
+		return usageError("codex-host select --repo <name> [--profile <name>] [--fresh-host] [--check]")
 	}
 	return a.codexHostSelect(ctx, args[1:])
 }
@@ -74,12 +74,12 @@ func (a *app) codexHostSelect(ctx context.Context, args []string) error {
 // same retries create uses. The bool is true when the route is absent (any
 // 404): the flag is off, or the operator is older. A refusal is a choice with
 // an empty action, not an error. The launch id is not a secret and is not logged.
-func (a *app) chooseCodexHost(ctx context.Context, c *conn, repo, profile string, check, retry bool, fresh ...bool) (apiv1.CodexHostChoice, bool, string, error) {
+func (a *app) chooseCodexHost(ctx context.Context, c *conn, repo, profile string, check, retry, fresh bool) (apiv1.CodexHostChoice, bool, string, error) {
 	id, err := newCodexLaunchID()
 	if err != nil {
 		return apiv1.CodexHostChoice{}, false, "", err
 	}
-	req := apiv1.CodexHostSelectRequest{Repo: repo, Profile: profile, LaunchID: id, FreshHost: len(fresh) > 0 && fresh[0]}
+	req := apiv1.CodexHostSelectRequest{Repo: repo, Profile: profile, LaunchID: id, FreshHost: fresh}
 	if retry {
 		return a.chooseCodexHostRetry(ctx, c, req, id, check)
 	}
@@ -165,13 +165,13 @@ func codexHostRefused(choice apiv1.CodexHostChoice) error {
 
 // codexBeforeCreate asks select before an interactive Codex create. False
 // means the create does not continue: the choice was printed, or it was refused.
-func (a *app) codexBeforeCreate(ctx context.Context, c *conn, repo, profile string, fresh ...bool) (bool, error) {
-	choice, off, _, err := a.chooseCodexHost(ctx, c, repo, profile, true, true, fresh...)
+func (a *app) codexBeforeCreate(ctx context.Context, c *conn, repo, profile string, fresh bool) (bool, error) {
+	choice, off, _, err := a.chooseCodexHost(ctx, c, repo, profile, true, true, fresh)
 	if err != nil {
 		return false, err
 	}
 	if off {
-		if len(fresh) > 0 && fresh[0] {
+		if fresh {
 			return false, fail(ExitFailed, "route_unsupported: --fresh-host requires Codex host selection")
 		}
 		a.errf("%s", hostSelectionOff)
@@ -211,7 +211,7 @@ func (a *app) threadChooseHost(ctx context.Context, cmd *command, t threadArgs) 
 		a.errf("%s", line)
 		return invalid()
 	}
-	choice, off, launchID, err := a.chooseCodexHost(ctx, c, t.repo, "", false, false)
+	choice, off, launchID, err := a.chooseCodexHost(ctx, c, t.repo, "", false, false, false)
 	if err != nil {
 		if line, ok := threadSelectionFallback(err); ok {
 			a.errf("%s", line)

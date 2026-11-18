@@ -104,12 +104,6 @@ const (
 	LoginUnknown Login = "unknown"
 )
 
-// Host is one Codex host as facts. Select does not read the cluster.
-//
-// UID is the session UID. The route carries it into the lease step. SpecRepo
-// is the host's default repository: the fit test
-// only when the request names none. SuspendedBy is who suspended the host;
-// eligibility does not depend on it.
 // MemoryMaxAge bounds a passive sample independently of the heartbeat.
 const MemoryMaxAge = 3 * time.Minute
 
@@ -120,6 +114,12 @@ const MaxHostsPerProfile = 2
 // MemoryReserveBytes leaves room for a modest additional turn.
 const MemoryReserveBytes int64 = 1 << 30
 
+// Host is one Codex host as facts. Select does not read the cluster.
+//
+// UID is the session UID. The route carries it into the lease step. SpecRepo
+// is the host's default repository: the fit test
+// only when the request names none. SuspendedBy is who suspended the host;
+// eligibility does not depend on it.
 type Host struct {
 	// Pending means a not-yet-running API create also occupies running capacity.
 	Pending          bool
@@ -781,7 +781,7 @@ func MemoryFull(h Host, now time.Time) bool {
 	return remaining < MemoryReserveBytes || remaining < h.MemoryLimit/5
 }
 
-// RetainedInProfile counts ordinary hosts until archive/deletion. Unlike the
+// RetainedInProfile counts ordinary hosts until archive or object removal. Unlike the
 // running cap, suspended/failed/starting records also occupy a profile slot.
 func RetainedInProfile(hosts []Host, profile string) int {
 	return count(hosts, func(h Host) bool {

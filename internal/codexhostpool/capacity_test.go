@@ -100,11 +100,21 @@ func TestMemoryObservationBounds(t *testing.T) {
 }
 
 func TestFreshHostIntent(t *testing.T) {
-	for _, caller := range []Caller{{Kind: KindHuman}, clientCaller(), devSession(), {Kind: KindSession, Workbench: true}, {Kind: KindCoordinator}} {
-		t.Run(caller.Kind+caller.Name, func(t *testing.T) {
-			in := baseInput(caller, []Host{runningPaired("room")})
+	for _, tc := range []struct {
+		name    string
+		caller  Caller
+		allowed bool
+	}{
+		{"human", Caller{Kind: KindHuman}, true},
+		{"trusted client", clientCaller(), true},
+		{"ordinary session", devSession(), false},
+		{"workbench session", Caller{Kind: KindSession, Workbench: true}, false},
+		{"coordinator", Caller{Kind: KindCoordinator}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := baseInput(tc.caller, []Host{runningPaired("room")})
 			in.Request.FreshHost = true
-			if MayRequestFresh(caller) {
+			if tc.allowed {
 				checkResult(t, Select(in), ActionCreate, "", ReasonFreshHost, false)
 			} else {
 				checkResult(t, Select(in), "", "", ReasonFreshHostDenied, false)

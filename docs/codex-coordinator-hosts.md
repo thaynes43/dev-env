@@ -46,8 +46,9 @@ Missing, stale, unlimited or unmeasurable memory keeps the existing reuse rule.
 It is an admission estimate: tools and phone turns can allocate after the sample.
 
 If another suitable host has room, selection uses it. Otherwise it can answer
-`create` with reason `host_full`. A launch lease still produces `host_busy`;
-it is not a count of live threads. All hands-off, protected, reserved-name and
+`create` with reason `host_full`. Default selection still produces `host_busy` for a launch lease;
+it is not a count of live threads. An explicit fresh request skips reuse without
+acquiring or clearing that existing host's lease. All hands-off, protected, reserved-name and
 workbench-account exclusions remain. No host is stopped to make room.
 
 For an older host that cannot report memory, Tom's account or an existing

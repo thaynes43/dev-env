@@ -83,7 +83,9 @@ func CodexHostSentence(code string) (string, bool) {
 	case "caller_cannot_create":
 		return "This caller may not create a Codex host.", true
 	case "at_capacity":
-		return "A create or a resume would exceed the running host cap.", true
+		return "A create or a resume would exceed a host cap.", true
+	case "fresh_host_denied":
+		return "Only Tom or a trusted client may request a fresh host.", true
 	case "host_busy":
 		return "Every suitable running host holds a live lease.", true
 	default:

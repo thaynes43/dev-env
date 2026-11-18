@@ -115,3 +115,19 @@ and `chooseCodexHost` use tolerant `json.Unmarshal`, but cannot justify exposing
 a new unconditional Session key. The new fields do not enter any of these
 response DTOs. Tests cover populated telemetry through show/list/fleet and
 normal versus fresh CLI request serialization.
+
+## Source validation checkpoint
+
+The full apiserver suite passed with envtest 1.35.0 installed after correcting
+the new admission path to reuse the already pinned per-request template/account
+snapshot (`TestCodexWorkbenchAPIResolvesOnce`). Full agentd, protocol, CLI,
+selector and CRD suites passed. The final PR records lint, generated-code,
+layout and CI results separately.
+
+[Mutation evidence](../evidence/069-capacity-mutations.md) records all 22
+independent removals, the exact edits and the assertion failures. Originals were
+restored byte for byte. Existing hands-off, protected/reserved/workbench and
+lease cases remain part of the full suites. No native independent agent was
+started: this work order explicitly forbids other agents/sessions. The advisory
+Claude Opus PR review and coordinator's pre-merge Opus read remain the review
+route authorized by this story.
