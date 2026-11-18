@@ -14,7 +14,7 @@ Usage:
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
   agent-run rc start|status|fresh -o json         launch or observe Remote Control
-  agent-run coordinator start|status|stop|brief   run bounded work on a tracker item
+  agent-run coordinator start|status|stop|brief|wait   run bounded work on a tracker item
   agent-run thread start --agent <provider> ...   start a fresh phone-visible thread (Codex on a host, Claude as a session)
   agent-run thread status --agent codex --host <h> --thread <id>
                                                   recheck a started Codex thread's first response; observe-only
@@ -146,12 +146,76 @@ the provider rename when the session is idle with an empty input line; until
 then show says the rename is held. A second recorded change within a minute
 is refused.
 `,
-	"coordinator": `Usage: agent-run coordinator start|status|stop|brief
+	"coordinator": `Usage: agent-run coordinator start|status|stop|brief|wait
 
 Start a bounded task on an OpenProject item, read its state and retained outcome,
 or stop it. brief prints the embedded instructions offline. Use help coordinator
-start, help coordinator status, or help coordinator stop for flags.
+start, help coordinator status, help coordinator stop or help coordinator wait
+for flags. wait holds timer/note/file metadata for its own calling thread; it
+does not create a provider turn.
 `,
+	"coordinator wait": `Usage: agent-run coordinator wait --thread ID --wait-id ID --directory /absolute/path --budget-end RFC3339 [--timer 1h] [--scan-every 10s] [--max-entries 256] [--max-pending 64] [--after CURSOR] [--watermark HASH] [--ack ID] [--resume] [--reconciled]
+
+A parent-owned metadata wait; always prints one JSON result on success. It does
+not start a Codex turn. Idle wake is unconfirmed (DESIGN-067 section 9).
+The caller explicitly names its native thread. Session UID comes from its own
+AGENTD_SESSION[_FILE]. Private HOME records use mode 0600 in the mode-0700
+.dev-env-coordinator-waits directory. The record filename is SHA256(UID:wait-id).
+One custodian holds a nonblocking lock. Only changed records are written. At
+start, the lock holder removes only this record's exact regular crash temp in
+its own directory; a symlink/nonregular temp refuses. All limits and the directory are fixed
+for this wait identity. Defaults are parameters, not unattended-work approval.
+Timer: whole seconds >=1s; scan cadence: whole seconds >=5s (smaller refused at start).
+Entries: 1..1024 (larger refused at start); pending: 1..1024.
+Budget end must be at most 24 hours after wait start. This is a bound, not approval.
+
+Existing notes/files form the initial baseline unless --after names an earlier
+parent cursor. Only the existing addressed parent wait-any API is used, at most
+one held read, chunks <=15m. Each rearm uses its returned cursor. No list loop.
+Scans read bounded immediate directory metadata; no file text or recursion.
+Symlinked directories/ancestors, replacement and path traversal are refused;
+resolved path/device/inode stay pinned across calls. Unsafe entries (invalid
+UTF-8, controls, >255-byte names, unsafe paths or symlinks) yield one resync per
+scan batch, with a count, no names and one reason: encoding, control, length, name,
+symlink or limit (history bound). Only hashes persist; stale queued refusals are
+dropped. Entry overflow retains reported hashes and does not repeat refusals.
+Stored replay goes first, then a due timer; otherwise notes win once after a
+<=1s parent read, then the owed directory wins the next work call (timers do not
+consume that alternation). Owed state survives stop/resume; a missing owed change
+returns a directory resync. Every new directory result has that short parent read.
+A file burst is
+one directory reference. Each changed snapshot has a persisted increasing
+transition number, including returns to an earlier state; replay keeps its id.
+A counter below a pending file result refuses. Receipt/counter bounds yield
+resync (pending bound above, counter ceiling 2^63). Entry overflow yields one
+resync, then ordinary pacing.
+JSON contains only kind, id, note or path, optional reason/count/lane, cursor, watermark,
+time and optional directoryUnchecked diagnostic. Kinds:
+timer, note, file, resync, stopped, budget_end. No note text, file text or command.
+
+Rearm the same explicit binding with --after/--watermark from the result and
+--ack its id. The complete result is committed before printing. Without an ACK,
+the next call returns that result unchanged with the same id, even when the
+retried call has its previous --after/--watermark; acknowledge only that stored
+result. Cursor/watermark matching still applies when acknowledging and rearming. On resync, lane=directory asks for directory inspection only (including refused
+entries and too many entries); lane=notes asks for every parent list page (pass
+--continue until none is returned); lane=all asks for both. A legacy resync with
+no lane and a reason asks for directory inspection; with neither, inspect both.
+Then --ack the result with its returned wait cursor, never a list continuation. --reconciled is ONLY for an
+unreadable stored result: reconcile all sources and pass --ack its saved lastID
+--reconciled; recovery returns resync. A corrupt outer record refuses.
+SIGTERM/cancellation or a regular .stop marker beside the record returns stopped
+with cursors saved. To resume, remove that marker deliberately and pass --resume,
+--ack and the SAME thread ID. Another thread, changed limits or an ended budget
+refuses. budget_end never rearms. Stop, budget end and stored-result replay work
+when the directory is gone or replaced: directoryUnchecked=true says its pin
+could not be checked. That diagnostic is per call; stored event metadata and id
+stay unchanged. New waits and ordinary rearming still require the pinned directory.
+A stop before the first confirmed parent cursor needs a fresh cursor capture on
+explicit resume; that returns resync before any held read can rearm. A held owner question pauses its own lane;
+this wait does not read answers or release any hold. No wake grants authority.
+`,
+
 	"coordinator start": `Usage: agent-run coordinator start --item ID (--repo R | --project P) --model FULL_ID --hours H --workers N [--run LABEL] [-o json]
 
 Start a dev-profile task; no tracker credential needed. Model is required;

@@ -138,6 +138,7 @@ type options struct {
 	reminders        keeper.RemindersOptions
 	askNotifications keeper.AskNotificationOptions
 	summonPages      keeper.SummonPageOptions
+	raiseNotices     bool
 	raiseKeySecret   string
 }
 
@@ -162,8 +163,9 @@ func mustPermissions(p map[string]string) string {
 // pager, logged without its value.
 var summonPageFlags = map[string]bool{"enable-summon-pages": true, "summon-pages-portal-origin": true, "summon-pages-drill": true, "summon-pages-state-configmap": true}
 
-// summonPagesBool is --enable-summon-pages. A value that is not a boolean
-// turns the pager off and is reported after parsing, never as a parse error.
+// summonPagesBool parses the summon and raise pager switches. A value that
+// is not a boolean turns that pager off and is reported after parsing, never
+// as a parse error.
 type summonPagesBool struct {
 	on, malformed *bool
 }
@@ -184,9 +186,9 @@ func (b summonPagesBool) Set(v string) error {
 	return nil
 }
 
-// trailingSummonPageFlag reports whether args end with a pager flag that
-// takes a value and has none, which the flag package refuses for the whole
-// command line. It walks args as the flag package does.
+// trailingSummonPageFlag reports whether args end with a summon or raise
+// pager flag that takes a value and has none, which the flag package refuses
+// for the whole command line. It walks args as the flag package does.
 func trailingSummonPageFlag(fs *flag.FlagSet, args []string) (string, bool) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -208,7 +210,7 @@ func trailingSummonPageFlag(fs *flag.FlagSet, args []string) (string, bool) {
 			continue
 		}
 		if i == len(args)-1 {
-			return name, summonPageFlags[name]
+			return name, summonPageFlags[name] || name == "session-raise-keeper-key-secret"
 		}
 		i++ // its value
 	}
@@ -253,7 +255,9 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.claudeAuth.LiveSecret, "claude-live-secret", keeper.DefaultClaudeLiveSecret, "access-only Claude projection Secret in secret-namespace")
 	fs.StringVar(&o.claudeAuth.LoginDir, "claude-login-dir", keeper.DefaultClaudeLoginDir, "keeper/helper-only memory-backed staging and private control socket for the Claude login ceremony")
 	fs.StringVar(&o.proxmoxGrants.SessionNamespace, "session-namespace", "dev-agents", "namespace containing credential grants and session pods")
-	fs.StringVar(&o.raiseKeySecret, "session-raise-keeper-key-secret", sessionraise.KeeperSecretName, "Secret holding the keeper raise-notice signing key; a missing Secret is logged and skipped")
+	var raisePagesMalformed bool
+	fs.Var(summonPagesBool{on: &o.raiseNotices, malformed: &raisePagesMalformed}, "enable-session-raise-notices", "enable raise and take-back notices at any hour and initialize/publish their signing key once at leader start (DESIGN-066); default off, decided once at startup; off touches no raise objects; needs leader election and valid Pushover configuration; write --enable-session-raise-notices=true (or =false); a malformed value (=x) disables only this pager; the two-argument form (--enable-session-raise-notices true/false) is an unexpected argument and stops the keeper")
+	fs.StringVar(&o.raiseKeySecret, "session-raise-keeper-key-secret", sessionraise.KeeperSecretName, "Secret holding the keeper raise-notice signing key; used only with --enable-session-raise-notices; a missing Secret is logged and skipped")
 	fs.StringVar(&o.proxmoxGrants.JournalSecret, "credential-journal-secret", keeper.DefaultCredentialJournalSecret, "keeper-only durable credential journal Secret in its own namespace")
 	fs.StringVar(&o.proxmoxGrants.CADir, "ssh-ca-dir", keeper.DefaultSSHCAPath, "mounted Ed25519 CA directory (private-key/public-key)")
 	fs.StringVar(&o.proxmoxGrants.TargetsFile, "proxmox-ssh-targets-file", keeper.DefaultSSHTargetsFile, "mounted JSON list of explicit pinned SSH host:22 targets")
@@ -282,15 +286,23 @@ func parseFlags(args []string) (options, error) {
 	// A pager flag given last with no value would fail the whole parse: it is
 	// dropped, and the pager is turned off below (F2).
 	summonPagesProblem, summonPagesFlag := "", ""
+	raisePagesProblem, raisePagesFlag := "", ""
 	if name, ok := trailingSummonPageFlag(fs, args); ok {
 		args = args[:len(args)-1]
-		summonPagesProblem, summonPagesFlag = "a pager flag was given last with no value", name
+		if name == "session-raise-keeper-key-secret" {
+			raisePagesProblem, raisePagesFlag = "a pager flag was given last with no value", name
+		} else {
+			summonPagesProblem, summonPagesFlag = "a pager flag was given last with no value", name
+		}
 	}
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
 	if summonPagesMalformed {
 		summonPagesProblem, summonPagesFlag = "the flag's value is not true or false", "enable-summon-pages"
+	}
+	if raisePagesMalformed {
+		raisePagesProblem, raisePagesFlag = "the flag's value is not true or false", "enable-session-raise-notices"
 	}
 	if fs.NArg() > 0 {
 		return o, fmt.Errorf("unexpected arguments %q", fs.Args())
@@ -328,6 +340,14 @@ func parseFlags(args []string) (options, error) {
 	}
 	o.summonPages = o.summonPages.DisableInvalid(o.notices, o.askNotifications, o.leaderElect,
 		logr.FromSlogHandler(slog.NewJSONHandler(noticeFailureLog, nil)).WithName(binaryName))
+	if o.raiseNotices && (!o.leaderElect || o.raiseKeySecret == "" || o.notices.Validate() != nil) && raisePagesProblem == "" {
+		raisePagesProblem = "leader election, a named key Secret and valid notice configuration are required"
+	}
+	if raisePagesProblem != "" {
+		o.raiseNotices = false
+		logr.FromSlogHandler(slog.NewJSONHandler(noticeFailureLog, nil)).WithName(binaryName).
+			Error(nil, "raise notices disabled: invalid configuration", "reason", raisePagesProblem, "flag", raisePagesFlag)
+	}
 	if err := o.notices.Validate(); err != nil {
 		// Plan 13, story 13.1 follow-up 1: a bad notice flag disables notices
 		// and is logged. It must not stop the credential keeper.
@@ -391,6 +411,7 @@ func (o options) keeperOptions(userAgent string) keeper.Options {
 		AskNotifications: o.askNotifications,
 		SummonPages:      o.summonPages,
 		RaisePages: keeper.RaisePageOptions{
+			Enabled:          o.raiseNotices,
 			SessionNamespace: o.proxmoxGrants.SessionNamespace,
 			KeySecret:        o.raiseKeySecret,
 		},
