@@ -71,10 +71,19 @@ the new session. Do not expose new fields in legacy Session/list/fleet views.
 Reuse stays the default. Normal profile cap remains one; `host_full` or an
 explicit fresh request may use a second slot, with a fixed upper bound of two
 ordinary retained hosts per profile and the existing fleet running cap. Pending
-creates count. A shared ConfigMap reservation fences concurrent API replicas;
+creates count. The operator creates/owns `dev-env-system/dev-env-codex-host-capacity` on first
+admission (normal ConfigMap RBAC is an installation prerequisite). One global
+CAS reservation fences concurrent API replicas;
 uncertain creates retain their slot rather than expire into duplicate launches.
 The create API rechecks selection and bounds, so bypassing CLI cannot exceed
-them. No host is stopped, resumed, resized, reimaged or paired by this work.
+them. With selection disabled it still enforces two retained hosts per profile
+and the default running fleet bound; explicit fresh intent requires selection.
+A pending session counts before it becomes Running. A reservation is reclaimed
+only when its exact attempt annotation is observed on the created session;
+absence or another attempt holds it for operator-owner review. No automatic
+expiry or unproved absence releases an uncertain create. Definite refusals
+release their own reservation, and compare-and-swap prevents a stale release
+from clearing another attempt. Same-key creates are rechecked under the lock. No host is stopped, resumed, resized, reimaged or paired by this work.
 
 ## Owner question
 
@@ -91,3 +100,18 @@ focused cases, all apiserver tests, lint/layout/generation and CI results, plus 
 table of decisions and actual mutation failures. Installation requires a later
 CRD/operator/agent image delivery. An owner obtaining and pairing a second host
 is acceptance and is outside this story's worker scope.
+
+## Wire compatibility
+
+There are **no new response fields**, even when this feature is used. Reasons
+`host_full` and `fresh_host` use existing keys. New request `freshHost` is omitted
+unless true. `status.agent.codexHostMemory` stays internal to the CRD; public
+Session detail/list and fleet mappings deliberately omit it and the intent
+annotations. At tags v2.104.0 and v2.111.0, checked `showOnce` →
+`strictSessionJSON` / `strictWireJSON` plus `DisallowUnknownFields` in
+`internal/agentrun/show_once.go`; directory list and budget reads use the same
+strict walker, and canary receipts validate Session too. Ordinary `callWith`
+and `chooseCodexHost` use tolerant `json.Unmarshal`, but cannot justify exposing
+a new unconditional Session key. The new fields do not enter any of these
+response DTOs. Tests cover populated telemetry through show/list/fleet and
+normal versus fresh CLI request serialization.

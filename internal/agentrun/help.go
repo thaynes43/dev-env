@@ -18,7 +18,7 @@ Usage:
   agent-run thread start --agent <provider> ...   start a fresh phone-visible thread (Codex on a host, Claude as a session)
   agent-run thread status --agent codex --host <h> --thread <id>
                                                   recheck a started Codex thread's first response; observe-only
-  agent-run codex-host select --repo <name> [--profile <name>] [--check]
+  agent-run codex-host select --repo <name> [--profile <name>] [--fresh-host] [--check]
                                                   print which paired Codex host would be reused
   agent-run inbox send|ask|reply|list|read|ack|ack-status
                                                   durable inbox
@@ -547,6 +547,8 @@ Flags:
   --interactive              --local plus Remote Control (claude: the keeper's shared login on
                              the default profile; codex: a phone daemon with no TUI, paired
                              with agent-run pair)
+  --fresh-host               new Codex --interactive host only; Tom or trusted client,
+                             never a session; at most two retained hosts per profile
   --prompt-file <path>       read the task from a file instead; - reads stdin
   --repo <name>              the repository under the GitHub owner, such as haynes-ops;
                              or give it as the first argument. With --project,
@@ -791,7 +793,7 @@ follower answers; if the operator restarts mid-ceremony, run url again. Adoption
 needs a valid code and the same account: a wrong code leaves the current login as
 it was. Renew well before the login lapses (status says when).
 `,
-	"codex-host": `Usage: agent-run codex-host select --repo <name> [--profile <name>] [--check]
+	"codex-host": `Usage: agent-run codex-host select --repo <name> [--profile <name>] [--fresh-host] [--check]
 
 Prints the Codex host selection as JSON and exits 0 for any action (use,
 resume, create or report). A refusal prints the fixed code and sentence and
@@ -802,6 +804,17 @@ to choose and write nothing. Without --check, a use writes a lease for at
 most 15 minutes; this command does not release it. The route is off unless
 the operator was started with --enable-codex-host-select. When it is off,
 or the operator is older, the command reports route_unsupported.
+
+Reuse stays the default. A fresh current-pod container sample with less than
+1 GiB or 20% memory remaining skips that host as host_full. If no host has
+room, selection may create a second, within the fleet cap. Unknown memory
+keeps reuse. --fresh-host explicitly asks for create; only Tom or a trusted
+client may use it, never any session (including workbench). The fixed profile
+bound is two retained ordinary hosts, counting suspended and pending hosts.
+Use agent-run <repo> --agent codex --interactive --fresh-host --size L to
+carry this intent into creation. That command requires enabled selection,
+rechecks at the API, and records the reason/requester on the new session.
+This select command, even with --fresh-host, never creates a host.
 `,
 	"thread": `Usage: agent-run thread start --agent codex --host <codex-host> --model <full id> --effort <e>
                          --handoff FILE [--repo R] [--name N] [--wait 5m] [-o json]

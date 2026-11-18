@@ -41,10 +41,11 @@ func (a *app) codexHost(ctx context.Context, args []string) error {
 func (a *app) codexHostSelect(ctx context.Context, args []string) error {
 	cmd := newCommand("codex-host")
 	var repo, profile string
-	var check bool
+	var check, freshHost bool
 	cmd.fs.StringVar(&repo, "repo", "", "")
 	cmd.fs.StringVar(&profile, "profile", "", "")
 	cmd.fs.BoolVar(&check, "check", false, "")
+	cmd.fs.BoolVar(&freshHost, "fresh-host", false, "")
 	pos, err := cmd.parse(a, args)
 	if err != nil {
 		return err
@@ -56,7 +57,7 @@ func (a *app) codexHostSelect(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	choice, off, _, err := a.chooseCodexHost(ctx, c, repo, profile, check, false)
+	choice, off, _, err := a.chooseCodexHost(ctx, c, repo, profile, check, false, freshHost)
 	if err != nil {
 		return err
 	}
@@ -73,12 +74,12 @@ func (a *app) codexHostSelect(ctx context.Context, args []string) error {
 // same retries create uses. The bool is true when the route is absent (any
 // 404): the flag is off, or the operator is older. A refusal is a choice with
 // an empty action, not an error. The launch id is not a secret and is not logged.
-func (a *app) chooseCodexHost(ctx context.Context, c *conn, repo, profile string, check, retry bool) (apiv1.CodexHostChoice, bool, string, error) {
+func (a *app) chooseCodexHost(ctx context.Context, c *conn, repo, profile string, check, retry bool, fresh ...bool) (apiv1.CodexHostChoice, bool, string, error) {
 	id, err := newCodexLaunchID()
 	if err != nil {
 		return apiv1.CodexHostChoice{}, false, "", err
 	}
-	req := apiv1.CodexHostSelectRequest{Repo: repo, Profile: profile, LaunchID: id}
+	req := apiv1.CodexHostSelectRequest{Repo: repo, Profile: profile, LaunchID: id, FreshHost: len(fresh) > 0 && fresh[0]}
 	if retry {
 		return a.chooseCodexHostRetry(ctx, c, req, id, check)
 	}
@@ -164,12 +165,15 @@ func codexHostRefused(choice apiv1.CodexHostChoice) error {
 
 // codexBeforeCreate asks select before an interactive Codex create. False
 // means the create does not continue: the choice was printed, or it was refused.
-func (a *app) codexBeforeCreate(ctx context.Context, c *conn, repo, profile string) (bool, error) {
-	choice, off, _, err := a.chooseCodexHost(ctx, c, repo, profile, true, true)
+func (a *app) codexBeforeCreate(ctx context.Context, c *conn, repo, profile string, fresh ...bool) (bool, error) {
+	choice, off, _, err := a.chooseCodexHost(ctx, c, repo, profile, true, true, fresh...)
 	if err != nil {
 		return false, err
 	}
 	if off {
+		if len(fresh) > 0 && fresh[0] {
+			return false, fail(ExitFailed, "route_unsupported: --fresh-host requires Codex host selection")
+		}
 		a.errf("%s", hostSelectionOff)
 		return true, nil
 	}

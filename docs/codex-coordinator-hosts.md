@@ -34,6 +34,55 @@ fourth storage attempt is authorized by this scope document. Source tests do not
 prove native startup, renewal, interrupted recovery or phone delivery. Publish
 actual commands after the supported route passes.
 
+## Room on an ordinary reusable host
+
+[DESIGN-069](../.agents/sagas/distributed-dev-env/designs/069-codex-host-capacity.md)
+and proposed ADR-031 add a bounded capacity route (source only; installation and
+phone acceptance are separate). Reuse remains first. A fresh report from the
+present pod marks a host `host_full` when its agent container has less than
+1 GiB **or** less than 20% memory remaining. Agentd reads its own finite cgroup
+v2 memory budget, without exec, process inspection or native thread polling.
+Missing, stale, unlimited or unmeasurable memory keeps the existing reuse rule.
+It is an admission estimate: tools and phone turns can allocate after the sample.
+
+If another suitable host has room, selection uses it. Otherwise it can answer
+`create` with reason `host_full`. A launch lease still produces `host_busy`;
+it is not a count of live threads. All hands-off, protected, reserved-name and
+workbench-account exclusions remain. No host is stopped to make room.
+
+For an older host that cannot report memory, Tom's account or an existing
+trusted client may explicitly request a new ordinary host:
+
+```sh
+agent-run codex-host select --repo dev-env --profile dev --fresh-host --check
+agent-run dev-env --agent codex --interactive --profile dev --size L --fresh-host
+```
+
+The first command only checks. The second creates only after the API rechecks
+selection and bounds. `--fresh-host` requires the selection route to be enabled;
+it refuses an old/disabled route. It is accepted only for a new Codex interactive
+host, never for restore, local or task mode. **No session, including a workbench
+session, may request it.** It records `codex-host-create-reason=fresh_host` and
+the authenticated requester as operator-owned session annotations. It neither
+copies pairing nor changes the reusable host; pairing a new host remains the
+owner's action.
+
+Ordinary capacity is bounded to two retained hosts per resolved profile, including
+suspended, failed and pending hosts; protected/excluded hosts stay outside the
+pool. Archived records do not occupy a slot. The existing running fleet cap also
+applies, and pending creates count before their first status update. Default
+selection still allows one running host per profile; only full/fresh intent may
+expand to the second. The API enforces these bounds even for direct create
+clients. With selection off, direct ordinary create still has the fixed profile
+and fleet bounds; fresh intent is refused.
+
+A shared operator ConfigMap serializes admission across replicas. An uncertain
+create retains its reservation without a timeout; a later admission can reclaim
+it only after observing the exact created attempt. If no such object can be
+proved, report the retained reservation to the operator owner for review. Do
+not clear it or retry by another route. Legacy show/list/fleet and select
+responses gain no fields; new reason values use the existing `reason` key.
+
 ## Open, request and continue work
 
 Open the project on host A or B. The project provides a repository map and rules;

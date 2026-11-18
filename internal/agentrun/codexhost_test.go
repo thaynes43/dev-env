@@ -804,3 +804,71 @@ func TestThreadStartSelectionRefusalIsReturned(t *testing.T) {
 		contains(t, "stderr", h.stderr.String(), "the selection answer is not the host choice")
 	})
 }
+
+func TestFreshHostCLI(t *testing.T) {
+	for _, fresh := range []bool{false, true} {
+		t.Run(map[bool]string{false: "reuse default", true: "fresh intent"}[fresh], func(t *testing.T) {
+			h := newHarness(t)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+				switch r.URL.Path {
+				case apiv1.CodexHostsSelectPath:
+					var req apiv1.CodexHostSelectRequest
+					if json.Unmarshal(body, &req) != nil || req.FreshHost != fresh || r.URL.Query().Get("check") != "true" {
+						t.Errorf("preflight intent %s", body)
+					}
+					if !fresh && bytes.Contains(body, []byte("freshHost")) {
+						t.Error("legacy request gained key")
+					}
+					writeTestJSON(w, http.StatusOK, codexChoice("create", "", "fresh_host"))
+				case apiv1.SessionsPath:
+					req := decodeCreate(t, body)
+					if req.FreshHost != fresh {
+						t.Errorf("create intent %+v", req)
+					}
+					if !fresh && bytes.Contains(body, []byte("freshHost")) {
+						t.Error("legacy create gained key")
+					}
+					writeTestJSON(w, http.StatusCreated, testSession(name, "Pending"))
+				default:
+					apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "unexpected route")
+				}
+			}
+			args := []string{"dev-env", "--interactive", "--agent", "codex", "--model", "gpt-6-astra", "--wait=0", "-o", "json"}
+			if fresh {
+				args = append(args, "--fresh-host")
+			}
+			h.mustRun(ExitOK, args...)
+			if len(h.api.requests()) != 2 {
+				t.Fatalf("requests %+v", h.api.requests())
+			}
+		})
+	}
+	t.Run("fresh refuses older operator", func(t *testing.T) {
+		h := newHarness(t)
+		h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			apiError(w, http.StatusNotFound, apiv1.CodeNotFound, "off")
+		}
+		h.mustRun(ExitFailed, "dev-env", "--interactive", "--agent", "codex", "--model", "gpt-6-astra", "--fresh-host", "--wait=0")
+		if len(h.api.requests()) != 1 || !strings.Contains(h.stderr.String(), "route_unsupported") {
+			t.Fatal("fresh silently fell through")
+		}
+	})
+	t.Run("select passes intent", func(t *testing.T) {
+		h := newHarness(t)
+		h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+			var req apiv1.CodexHostSelectRequest
+			if json.Unmarshal(body, &req) != nil || !req.FreshHost {
+				t.Errorf("intent %s", body)
+			}
+			writeTestJSON(w, http.StatusOK, codexChoice("create", "", "fresh_host"))
+		}
+		h.mustRun(ExitOK, "codex-host", "select", "--repo", "dev-env", "--fresh-host", "--check")
+	})
+	for _, args := range [][]string{{"dev-env", "--fresh-host", "-p", "task"}, {"dev-env", "--fresh-host", "--interactive"}, {"dev-env", "--fresh-host", "--agent", "codex", "--local"}} {
+		h := newHarness(t)
+		h.mustRun(ExitUsage, args...)
+		if len(h.api.requests()) != 0 {
+			t.Fatal("invalid intent reached API")
+		}
+	}
+}

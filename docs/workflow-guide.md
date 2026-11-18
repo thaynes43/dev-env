@@ -1144,13 +1144,33 @@ Use this when Tom must see and drive the thread on his phone.
    `outdated` field says that. When a lease was written, it is taken from
    that lease's read, and it does not change `ready`. `--host` never calls
    select.
-   `agent-run codex-host select --repo <name> [--profile <name>] [--check]`
+   `agent-run codex-host select --repo <name> [--profile <name>] [--fresh-host] [--check]`
    prints the same choice, including `outdated`. It prints `use`, `resume`,
    `create` and `report`; it does not carry resume or create out, and it
    prints no `thread-launch.v1` line. It exits 0 for any action.
    `--check` writes nothing. A `use` without `--check` still writes the lease.
    `agent-run --agent codex --interactive` calls select before create, and
-   creates a host only when the choice is `create`.
+   creates a host only when the choice is `create`. The API repeats this
+   decision under a shared admission reservation; direct POSTs cannot bypass
+   the fixed two-retained-host profile bound or running fleet cap. Pending
+   creates count before their first status update.
+
+   **Capacity (DESIGN-069, source only).** A fresh current-pod cgroup v2 report
+   with less than 1 GiB or 20% agent-container memory remaining skips a host
+   with reason `host_full`. Another suitable host is used first; otherwise
+   selection may answer `create` with that reason. The normal one-host profile
+   cap expands to two for full/fresh intent, within the fleet cap. Unknown
+   memory preserves reuse. This is a passive estimate, not a guarantee against
+   memory growth or direct phone launches. Leases and pool exclusions remain.
+
+   Tom or a trusted client can use `--fresh-host` on a new
+   `--agent codex --interactive` request, or check it with `codex-host select
+   --fresh-host --check`. No session, even workbench, may request fresh intent.
+   It requires enabled selection, records reason/requester annotations on the
+   new session, and does not alter or pair the old one. Suspended/failed hosts
+   also occupy the fixed two-host profile bound until archive/removal. An
+   uncertain create retains a reservation for owner review; never bypass it.
+   See [ordinary host capacity](codex-coordinator-hosts.md#room-on-an-ordinary-reusable-host).
 
    Either way `agentd ctl thread-start` runs in the host, which checks the daemon is
    connected and the host was paired, runs the clean-session wrapper once (the

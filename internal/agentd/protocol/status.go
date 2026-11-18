@@ -97,7 +97,9 @@ type Step struct {
 // Status is what agentd reports, in each heartbeat and from
 // `agentd ctl status`. The operator copies it into the AgentSession's status.
 type Status struct {
-	Session string `json:"session"`
+	// CodexHostMemory is absent unless this Codex remote host can measure its finite cgroup v2 budget.
+	CodexHostMemory *CodexHostMemory `json:"codexHostMemory,omitempty"`
+	Session         string           `json:"session"`
 	// Model and Effort are the session's configured values, not proof of the
 	// serving model (DESIGN-018).
 	Model  string `json:"model,omitempty"`

@@ -245,7 +245,7 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 				return 0, nil, invalid(fieldError("project", "private budget common inputs changed before dispatch; reservation retained"))
 			}
 		}
-		err := s.createWithCallerCap(ctx, sess, c)
+		err := s.createOrdinaryCodexHost(ctx, sess, c, req)
 		if apierrors.IsAlreadyExists(err) {
 			sess.ResourceVersion = ""
 			continue

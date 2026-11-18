@@ -22,9 +22,10 @@ const CodexHostRouteUnsupported = "The operator does not serve codex host select
 // LaunchID distinguishes this launch from another that shares the caller.
 // It is not a secret.
 type CodexHostSelectRequest struct {
-	Repo     string `json:"repo"`
-	Profile  string `json:"profile,omitempty"`
-	LaunchID string `json:"launchId"`
+	FreshHost bool   `json:"freshHost,omitempty"`
+	Repo      string `json:"repo"`
+	Profile   string `json:"profile,omitempty"`
+	LaunchID  string `json:"launchId"`
 }
 
 // ValidCodexLaunchID reports whether s is 16 to 64 characters of [a-z0-9].
