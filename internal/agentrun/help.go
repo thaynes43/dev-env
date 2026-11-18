@@ -183,7 +183,9 @@ its lastID. No automatic replay. On resync read every parent list page (pass
 SIGTERM/cancellation or a regular .stop marker beside the record returns stopped
 with cursors saved. To resume, remove that marker deliberately and pass --resume,
 --ack and the SAME thread ID. Another thread, changed limits or an ended budget
-refuses. budget_end never rearms. A held owner question pauses its own lane;
+refuses. budget_end never rearms.
+A stop before the first confirmed parent cursor needs a fresh cursor capture on
+explicit resume; that returns resync before any held read can rearm. A held owner question pauses its own lane;
 this wait does not read answers or release any hold. No wake grants authority.
 `,
 

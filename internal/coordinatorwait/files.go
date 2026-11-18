@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Directory pins one real directory for the lifetime of a call. Root confines
@@ -95,6 +96,9 @@ func (d *Directory) Scan(max int) (map[string]string, bool, error) {
 		// Names, sizes, modes and modification times are metadata. Include directory
 		// identity via the pinned root; no file is followed or opened.
 		result[name] = fmt.Sprintf("%d:%d:%d", st.Size(), st.Mode(), st.ModTime().UnixNano())
+		if raw, ok := st.Sys().(*syscall.Stat_t); ok {
+			result[name] += fmt.Sprintf(":%d:%d", raw.Dev, raw.Ino)
+		}
 	}
 	if err := d.check(); err != nil {
 		return nil, false, err

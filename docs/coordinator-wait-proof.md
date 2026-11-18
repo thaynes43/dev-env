@@ -130,9 +130,18 @@ second note and do not resend on an uncertain receipt. A note from an unrelated
 session must not produce a result: the fake/API regression tests cover that
 filter; a later authorized negative trial may also check it before acceptance.
 
-**New file:** once the note proof has passed, the same thread starts the same
-wait command with `--wait-id c2-file` and `--timer 5m`. The observer confirms its
-baseline is saved and the thread is idle. An authorized ordinary local writer,
+**New file:** once the note proof has passed, the same thread starts this
+background command and goes idle:
+
+```sh
+c2_thread=$(cat "$HOME/.dev-env-c2-proof/thread-id")
+c2_end=$(cat "$HOME/.dev-env-c2-proof/budget-end")
+agent-run coordinator wait --thread "$c2_thread" --wait-id c2-file \
+  --directory "$HOME/.dev-env-c2-proof/handoffs" --budget-end "$c2_end" \
+  --timer 5m --scan-every 2s --max-entries 32 --max-pending 16
+```
+
+The observer confirms its baseline is saved and the thread is idle. An authorized ordinary local writer,
 not the test thread, creates one file in the explicitly watched directory:
 
 ```sh

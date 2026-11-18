@@ -232,6 +232,8 @@ func TestCoordinatorWaitCancelledContextPersistsStop(t *testing.T) {
 	}
 	s.Close()
 	h.mustRun(ExitUnconfirmed, append(args, "--ack", v.ID)...)
+	h.mustRun(ExitUsage, append(args, "--ack", v.ID, "--resume", "--after", "41")...)
+	h.mustRun(ExitUsage, append(args, "--ack", v.ID, "--resume", "--watermark", "wrong")...)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	code := Run(ctx, append(args, "--ack", v.ID, "--resume"), h.env)
@@ -262,5 +264,32 @@ func TestCoordinatorWaitBudgetDuringCursorCapture(t *testing.T) {
 	h.mustRun(ExitOK, args...)
 	if r := resultFrom(t, h); r.Kind != "budget_end" || len(h.api.requests()) != 1 {
 		t.Fatal("cursor capture outlived budget or rearmed")
+	}
+}
+
+func TestCoordinatorWaitResumeWithoutCursorRequiresFreshResync(t *testing.T) {
+	h, args := waitHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if Run(ctx, args, h.env) != ExitOK {
+		t.Fatal("fresh stop failed")
+	}
+	stopped := resultFrom(t, h)
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if r.URL.Query().Get("seconds") != "0" {
+			t.Error("resume skipped cursor capture")
+			writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "note", Name: parentTestMetadata().Name, Child: "child", Kind: "result", CreatedAt: testNow, Cursor: "77"})
+			return
+		}
+		writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "waiting", Cursor: "77"})
+	}
+	h.mustRun(ExitOK, append(args, "--ack", stopped.ID, "--resume")...)
+	resync := resultFrom(t, h)
+	if resync.Kind != "resync" || resync.Cursor != "77" || resync.ID == stopped.ID || len(h.api.requests()) != 1 {
+		t.Fatal("unconfirmed baseline resumed without resync")
+	}
+	h.mustRun(ExitUnconfirmed, append(args, "--ack", resync.ID)...)
+	if len(h.api.requests()) != 1 {
+		t.Fatal("unreconciled cursor rearmed")
 	}
 }

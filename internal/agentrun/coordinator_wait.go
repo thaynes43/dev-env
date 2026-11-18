@@ -114,7 +114,7 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 		return parentNoteError(0, err, "wait-any")
 	}
 	notes := a.coordinatorWaitNotes(c)
-	if r == nil {
+	if r == nil || r.Cursor == "" {
 		files, overflow, err := directory.Scan(o.MaxEntries)
 		if err != nil {
 			return fail(ExitFailed, "coordinator wait: %s", err)
@@ -124,12 +124,21 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 		initial, err := notes(setupCtx, after, 0)
 		if err != nil {
 			if ctx.Err() != nil || !waitClock.Now().Before(o.BudgetEnd) {
-				r = coordinatorwait.New(o, waitClock.Now(), after, files)
+				if r == nil {
+					r = coordinatorwait.New(o, waitClock.Now(), after, files)
+				}
 				return a.coordinatorWaitTerminal(store, r, waitClock.Now(), ctx.Err() != nil)
 			}
 			return err
 		}
-		r = coordinatorwait.New(o, waitClock.Now(), initial.Cursor, files)
+		if r == nil {
+			r = coordinatorwait.New(o, waitClock.Now(), initial.Cursor, files)
+		} else {
+			// A stop before the first confirmed cursor has no safe source baseline.
+			// Capture one now, then require source reconciliation from that position.
+			r.Scan(files, overflow)
+			r.Note("", initial.Cursor, true)
+		}
 		if overflow {
 			r.Scan(files, true)
 		}

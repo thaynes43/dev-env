@@ -1397,6 +1397,8 @@ symlinked marker refuses. Remove a marker deliberately; resume requires a new
 own tool call with `--resume`, the same thread/wait identity, `--ack` and fixed
 budget/limits. A different thread refuses. The adapter never discovers or adopts
 the latest native thread and never resumes a host, thread or provider turn.
+A stop before the first confirmed parent cursor needs a fresh cursor capture on
+explicit resume; that returns resync before any held read can rearm.
 
 The record is an InboxMessage marked by the server-set label
 `coordination.dev-env.haynesops.com/parent-note=true`. The label distinguishes

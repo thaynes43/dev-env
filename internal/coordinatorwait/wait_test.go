@@ -623,3 +623,26 @@ func TestOptionsEachOperatingBound(t *testing.T) {
 		})
 	}
 }
+
+func TestDirectoryReplacementWithSameSizeAndTimeIsNew(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "handoff")
+	replacement := filepath.Join(dir, "replacement")
+	must(t, os.WriteFile(first, []byte("one"), 0600))
+	must(t, os.Chtimes(first, epoch, epoch))
+	d, err := OpenDirectory(dir)
+	must(t, err)
+	defer func() { _ = d.Close() }()
+	before, _, err := d.Scan(2)
+	must(t, err)
+	// Allocate a distinct inode while the first is still live, then replace it
+	// atomically with matching size/mode/mtime. No contents are read by the wait.
+	must(t, os.WriteFile(replacement, []byte("two"), 0600))
+	must(t, os.Chtimes(replacement, epoch, epoch))
+	must(t, os.Rename(replacement, first))
+	after, _, err := d.Scan(2)
+	must(t, err)
+	if before["handoff"] == after["handoff"] {
+		t.Fatal("new file identity hidden by matching size and timestamp")
+	}
+}
