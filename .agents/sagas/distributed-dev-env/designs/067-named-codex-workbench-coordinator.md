@@ -1222,6 +1222,7 @@ order's no-other-agents rule. The later authorized ordinary-host procedure must
 prove each source starts exactly one new turn in the same idle thread and gets
 its ACK; fake adapter completion is not that proof. No merge by this worker.
 
+OP877 recovery design and proof plan: [DESIGN-068](068-codex-refused-stop-recovery.md) (proposed; nothing installed or accepted).
 
 2026-11-17 slice (c1) re-check 2 and fix round 3: reviewer model id
 `claude-sonnet-5-5`, head `d9fd97e7`, verdict **APPROVE**, HIGH 0, MEDIUM 0,
