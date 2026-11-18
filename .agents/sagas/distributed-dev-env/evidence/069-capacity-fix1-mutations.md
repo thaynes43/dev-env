@@ -15,11 +15,11 @@ was committed, no new test sleeps, and no live cluster was used.
 | --- | --- | --- | --- |
 | X1 | newSession refuses fresh intent on workbench default profile | `TestFreshHostWorkbenchDefaultGuard` | Killed; restored |
 | X2 | malformed ledger fails closed and is never overwritten | `TestCapacityLedgerUnavailable/malformed` | Killed; restored |
-| X3 | Kubernetes Forbidden and Invalid release their slot | `TestKubernetesCreateOutcomeClasses/(Forbidden|Unprocessable_Entity)` | Killed; restored |
+| X3 | Kubernetes Forbidden and Invalid release their slot | `TestKubernetesCreateOutcomeClasses/(Forbidden\|Unprocessable_Entity)` | Killed; restored |
 | F01 | missing ledger refuses counted paths | `TestCapacityLedgerUnavailable/missing` | Killed; restored |
 | F02 | forbidden ledger refuses counted paths | `TestCapacityLedgerUnavailable/forbidden` | Killed; restored |
-| F03 | ledger outage preserves use and report | `TestCapacityLedgerUnavailable/(missing|forbidden|malformed)/(use|report)` | Killed; restored |
-| F04 | ledger outage refuses selected resume | `TestCapacityLedgerUnavailable/(missing|forbidden|malformed)/resume` | Killed; restored |
+| F03 | ledger outage preserves use and report | `TestCapacityLedgerUnavailable/(missing\|forbidden\|malformed)/(use\|report)` | Killed; restored |
+| F04 | ledger outage refuses selected resume | `TestCapacityLedgerUnavailable/(missing\|forbidden\|malformed)/resume` | Killed; restored |
 | F05 | capacity refusal names create_unconfirmed instead of claiming two real hosts | `TestCreateUnconfirmedIsNamed` | Killed; restored |
 | F06 | unknown-outcome log names attempt, session and requester | `TestCreateUnconfirmedIsNamed` | Killed; restored |
 | F07 | phantom never qualifies for use or resume | `TestUnconfirmedRowsAreOnlySkipped` | Killed; restored |
