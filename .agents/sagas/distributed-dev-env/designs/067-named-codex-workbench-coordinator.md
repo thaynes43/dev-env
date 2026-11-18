@@ -637,6 +637,20 @@ binary. Neither that documented hook nor the inspected exit-event path is a
 proved idle wake. No supported idle-wake hook was established by this audit.
 ([OpenAI Hooks, “How background hooks run”][official-hooks])
 
+**Slice (c2) source audit, 2026-11-18:** the image still pins 0.160.1.
+The worker re-read the pinned `async_watcher.rs` and the official Hooks page.
+The watcher emits `ExecCommandEnd` against the original Session, turn and call;
+that is an execution result, not evidence of a new idle-thread turn. The current
+Hooks page explicitly says asynchronous output waits for the next user turn
+when no turn is active. Hooks are a supported extension surface in current
+documentation, but that surface does not satisfy this idle-wake contract.
+**Unknown:** another supported completion extension in pinned 0.160.1, and the
+actual remote client's response to a background tool completion. No host was
+probed. Provider integration remains blocked on that capability and, if upstream
+work is needed, Q-067-04. The source-only wait adapter can be built independently;
+it cannot establish ADR-024 decision 3 for Codex by itself.
+([pinned watcher][native-exit-event], [official Hooks][official-hooks])
+
 ### 9.3 Smallest proposal, preserving ADR-024
 
 **Coordinator ruling, 2026-11-14:** the reply to the worker's parent-note question
