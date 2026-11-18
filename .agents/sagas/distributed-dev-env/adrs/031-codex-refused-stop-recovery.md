@@ -37,7 +37,9 @@ is needed for this pod-bound lifecycle intent.
    lifecycle. Old unsupported agents keep today's suspend and require no receipt.
    Unknown probe results send no stop. No upgrade restarts an agent pod.
 2. Confirm optional `status.codexRemoteStop` in API storage before sending the
-   qualified stop. Bind Session, operation, original pod and original HOME UIDs.
+   qualified stop. Bind Session, operation, original pod and original HOME UIDs. Carry the
+   expected Session/pod UIDs in the request; the agent refuses a replacement
+   before any fence or signal, not merely when the controller reads it afterward.
    A confirmed record commits that pod to replacement even if the request never
    arrives. Cache uncertainty before that write commits nothing.
 3. Resume requests eventual service. It cannot cancel an active stop or restore

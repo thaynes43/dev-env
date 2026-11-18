@@ -227,10 +227,24 @@ not extend a suspended host's normal retention period after completion.
 ### 3.2 Receipt and completed rescue
 
 Extend the future `protocol.AgentStop` with optional `codexRemoteStop`, shaped
-exactly as the status receipt above. The qualified stop request is
-`agentd ctl rescue --stop-agent --codex-stop-operation OPERATION_UUID`.
-The new agent accepts it only for an enabled, identity-matched remote stop.
-Emit the receipt only after c1's final inventory and fence recheck, then return
+exactly as the status receipt above. The qualified stop request is:
+
+```text
+agentd ctl rescue --stop-agent --codex-stop-operation OPERATION_UUID --expected-session-uid SESSION_UID --expected-pod-uid POD_UID
+```
+
+All three identity arguments come from the confirmed operation, not a new pod
+read after a failed exec. Before acquiring a lifecycle lock, writing a fence or
+signalling, the new agent validates their bounded syntax and compares both
+expected UIDs with its actual Session document and Settings.PodUID. A mismatch
+returns no report and performs no stop. This prevents a name-based exec that
+lands in a replacement pod from freezing it before the controller notices the
+UID change. A controller post-exec UID check alone would be too late. Keep that
+existing check as well, and keep the legacy RescueCommand unchanged. The
+qualified rescuer must receive the confirmed request binding explicitly.
+
+The new agent accepts this request only for an enabled, identity-matched remote
+stop. Emit the receipt only after c1's final inventory and fence recheck, then return
 it in the rescue report. Retry uses the same operationID. An unrelated invocation
 or a copied old receipt cannot satisfy it.
 
@@ -542,7 +556,8 @@ The pinned test already exposes the original UID/status/no-retry behavior.
 Additional build checks: capability absent/unsupported/unknown; disabled names;
 matching/absent explicit pod decision; old c1 compatibility; status conflicts,
 lost ACK and CRD pruning; malformed/oversized/unknown version records; receipt
-identity and operation replay; changed ownership/PVC UID; failed Git rescue
+identity and operation replay; exec-name reuse after the pre-read (agent refuses
+before any fence or signal); changed ownership/PVC UID; failed Git rescue
 versus stop error; normal and empty holds; heartbeat cannot set/erase record;
 all other status writers preserve it; old typed writer drops the field in a
 mixed-version fixture and activation is refused. Inventory all production
@@ -610,9 +625,10 @@ no CPU work and creates no native conversation. The future build supplies
 build deliverable, not a file that exists at this pin. Its exact contract: one
 `--writer` invocation installs its TERM-ignore handler, prints and flushes only
 `writer-ready`, then sleeps at most 120 seconds; one
-`--interrupt` invocation reads the source-bound HOME fence, verifies the exact
-boot supervisor is frozen, finds exactly one `agentd ctl rescue --stop-agent
---codex-stop-operation` with the stored operationID, opens a pidfd, rechecks its
+`--interrupt --operation OPERATION_UUID` invocation validates the supplied UUID,
+reads the source-bound HOME fence, verifies the exact boot supervisor is frozen,
+and finds exactly one qualified rescue command with that operationID and the
+matching expected Session/pod UID arguments. It opens a pidfd, rechecks its
 identity, then sends KILL only to that ctl process. It never thaws anything,
 modifies a fence, kills tini/supervisor, invokes a provider or writes HOME. If
 any identity/check is ambiguous it exits 2 without signalling. It prints only
@@ -646,7 +662,9 @@ agent-run suspend "$PROOF_HOST" -o json > "$PROOF_DIR/suspend.json"
 # One deliberate observation delay, within the helper's bounded proof window.
 sleep 3
 agent-run show "$PROOF_HOST" -o json > "$PROOF_DIR/stopping.json"
-kubectl -n "$PROOF_NS" exec -i "$PROOF_HOST" -c agent -- python3 - --interrupt < scripts/proofs/op877-interrupt.py > "$PROOF_DIR/interrupted.json"
+kubectl -n "$PROOF_NS" get agentsession "$PROOF_HOST" -o json > "$PROOF_DIR/stopping-session.json"
+PROOF_OPERATION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"]["codexRemoteStop"]["operationID"])' "$PROOF_DIR/stopping-session.json")
+kubectl -n "$PROOF_NS" exec -i "$PROOF_HOST" -c agent -- python3 - --interrupt --operation "$PROOF_OPERATION" < scripts/proofs/op877-interrupt.py > "$PROOF_DIR/interrupted.json"
 agent-run resume "$PROOF_HOST" --wait 1s -o json > "$PROOF_DIR/resume.json"
 agent-run show "$PROOF_HOST" -o json > "$PROOF_DIR/pending.json"
 ```
