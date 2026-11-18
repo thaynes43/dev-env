@@ -2182,8 +2182,10 @@ This replaces PR #1172's 2026-11-16 correction (story 802 fix round 1): its
 earlier two-term clock-lag-plus-delay promise and statement that no request
 starts in the last ten minutes. Earlier dated lines remain as history. The
 gate is the Codex review the owner named on 2026-11-18
-(item 751, comment 8880), report `reviews/op802-review-3.md` in the
-coordinator's handoff.
+(item 751, comment 8880). Reports `reviews/op802-review-3.md` (gate) and
+`reviews/op802-review-4.md` (re-read) are in the coordinator's handoff folder
+`~/.shared/handoffs/ops-profile-20261111/`, outside this repository.
+Story 802 comments 8905 (gate) and 8927 (re-read) summarise them.
 
 Creates off stops new creates, not abandonment/recovery of stored Pending
 filings at 24 hours, the reap hold while Pending and for ten minutes after
