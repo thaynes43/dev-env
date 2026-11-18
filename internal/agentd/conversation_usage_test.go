@@ -329,9 +329,10 @@ func TestConversationUsageRegisteredCodexConversationThroughTheFence(t *testing.
 		t.Fatalf("%+v", u)
 	}
 	wantRow(t, u.Models[0], "gpt-6-astra", 2500, 120, n64(900), nil)
-	// A rollout from another CLI version is not qualified.
+	// The retained fixture is 0.160.1; mutate its actual version to an
+	// unqualified one, independently of the image pin.
 	data, _ := os.ReadFile(path)
-	if os.WriteFile(path, []byte(strings.Replace(string(data), managedCodexVersion, "0.0.1", 1)), 0600) != nil {
+	if os.WriteFile(path, []byte(strings.Replace(string(data), `"cli_version":"0.160.1"`, `"cli_version":"0.0.1"`, 1)), 0600) != nil {
 		t.Fatal("rewrite")
 	}
 	if u := MeasureConversationUsage(s, sess, sess.SessionUID, s.PodUID, usageNow); u.ResultState != protocol.ConversationUnknown || u.ReasonCode != protocol.ReasonUnqualified {

@@ -112,3 +112,16 @@ No alternate identity, token, flag, security rule or external route is used to
 bypass that hold. The model PR is independent. No defaults, privileged
 coordinator model/effort, running host/session, keeper, deployment pin, release,
 installation, restart or runtime model switch is part of this candidate.
+
+### Separate newest-client probe evidence received during source work
+
+The coordinator's probe worker appended `probe-receipts-newer-cli.json` to the
+story handoff. Its 0.170.0 control and both requested 6.2 IDs completed
+successfully on 2026-11-18T20:12Z: Sol input/output 13,785/6, Astra 13,734/6
+(both cached input 11,136). Native turn_context names the exact requested IDs;
+no separate provider served-model field is exposed and no fallback is evidenced.
+Copies/original login remained unchanged and copies were deleted in those
+receipts. This establishes successful completion for each requested model in
+that worker's test, not an unconditional no-refresh guarantee or a test of the
+0.169.1 candidate. Different pod/time/client prevent isolating client version as
+the cause of the earlier 0.160.1 refusals. This evidence does not remove the hold.
