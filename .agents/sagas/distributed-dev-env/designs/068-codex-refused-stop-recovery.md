@@ -667,7 +667,7 @@ verified ended-hold path.
 
 RecoveryRequired protects the original HOME while writer/preservation evidence
 is missing; it does not create a hidden indefinite retention class. Under
-accepted [ADR-018](../adrs/018-evidence-based-two-tier-home-retention.md), unresolved
+accepted [ADR-018](../adrs/018-two-tier-home-retention.md), unresolved
 work reaches the visible owner decision batch at 168 hours using its applicable
 recorded completion/terminal clock. If no such clock exists, show a named
 missing-clock exception rather than inventing one from operation or PVC age.

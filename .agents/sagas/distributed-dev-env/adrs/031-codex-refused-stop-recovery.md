@@ -139,7 +139,7 @@ The design uses observed positive evidence, not that inferred cause.
 A resume can recover automatically after the failed operation later succeeds,
 while a permanent failure stays visibly pending with its HOME retained and the
 unresolved evidence surfaced for the owner under accepted
-[ADR-018](018-evidence-based-two-tier-home-retention.md). A
+[ADR-018](018-two-tier-home-retention.md). A
 confirmed but undelivered stop deliberately costs a full pod replacement. Old
 and unnamed hosts retain their existing path. Manual lost-writer recovery is
 slower because it needs explicit exit evidence and a successful hold rescue.
