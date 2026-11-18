@@ -22,6 +22,31 @@ import (
 // attaches with `kubectl exec -it <pod> -- tmux attach -t agent`.
 const TmuxSession = "agent"
 
+// Claude first-launch options with an argv value. The builder uses these
+// entries directly; summonedBriefState uses the same definition to avoid
+// treating an option value as the final positional brief (OP795, R7).
+const (
+	claudeFlagModel = iota
+	claudeFlagEffort
+	claudeFlagSessionID
+	claudeFlagRemoteControl
+	claudeFlagMaxTurns
+	claudeFlagOutputFormat
+	claudeFlagAppendSystemPrompt
+	claudeFlagAppendSystemPromptFile
+)
+
+var claudeValueFlags = [...]string{
+	claudeFlagModel:                  "--model",
+	claudeFlagEffort:                 "--effort",
+	claudeFlagSessionID:              "--session-id",
+	claudeFlagRemoteControl:          "--remote-control",
+	claudeFlagMaxTurns:               "--max-turns",
+	claudeFlagOutputFormat:           "--output-format",
+	claudeFlagAppendSystemPrompt:     "--append-system-prompt",
+	claudeFlagAppendSystemPromptFile: "--append-system-prompt-file",
+}
+
 // State files in ~/.agentd. They live on the session volume, so a resume sees
 // what the last pod did.
 const (
@@ -259,7 +284,7 @@ func buildFirstLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 		return Launch{}, err
 	}
 	argv := claudeArgs(s, sess)
-	argv = append(argv, "--session-id", conv)
+	argv = append(argv, claudeValueFlags[claudeFlagSessionID], conv)
 	l := Launch{
 		Session:        sess.Name,
 		Dir:            ws.Worktree,
@@ -305,7 +330,7 @@ func buildFirstLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 		return l, nil
 	}
 	if n := sess.MaxTurns(); n > 0 {
-		argv = append(argv, "--max-turns", strconv.Itoa(int(n)))
+		argv = append(argv, claudeValueFlags[claudeFlagMaxTurns], strconv.Itoa(int(n)))
 	}
 	guard := taskGuard(ws, s.WorkDir())
 	if sess.Workspace != nil {
@@ -326,7 +351,7 @@ func buildFirstLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 		return Launch{}, err
 	}
 	l.Argv = append(argv,
-		"--output-format", "stream-json", "--verbose",
+		claudeValueFlags[claudeFlagOutputFormat], "stream-json", "--verbose",
 		"-p")
 	l.Prompt = sess.Prompt
 	l.Timeout = sess.TimeoutDuration()
@@ -423,9 +448,9 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 // the always-allow launch contract (DESIGN-057 section 6a). Claude Code's
 // critical-path check is not covered by it and stays on (Tom, 2026-11-09).
 func claudeArgs(s Settings, sess protocol.Session) []string {
-	argv := []string{s.ClaudeBin, "--model", sess.Model}
+	argv := []string{s.ClaudeBin, claudeValueFlags[claudeFlagModel], sess.Model}
 	if sess.Effort != "" {
-		argv = append(argv, "--effort", sess.Effort)
+		argv = append(argv, claudeValueFlags[claudeFlagEffort], sess.Effort)
 	}
 	return append(argv, "--dangerously-skip-permissions")
 }
@@ -441,7 +466,7 @@ func remoteControlArgs(sess protocol.Session) []string {
 	if title := remoteControlTitle(sess); title != "" {
 		name = title
 	}
-	return []string{"--remote-control", name}
+	return []string{claudeValueFlags[claudeFlagRemoteControl], name}
 }
 
 // remoteControlTitle is what a Claude remote session passes to
