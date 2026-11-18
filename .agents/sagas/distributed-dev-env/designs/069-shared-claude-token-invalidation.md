@@ -65,13 +65,17 @@ See [worker](../../../../internal/keeper/claude_worker.go) and
 
 The reported login lapse is 2026-12-01T15:08:48.328561485Z. Its matching fractional
 seconds have a local explanation: `applyClaudeRefresh` adds both integer-second
-lifetimes to the same `now` when a refresh expiry is returned. If that field is
-absent and the refresh token does not rotate, it retains the previous lapse.
-A rotated token without a stated expiry instead makes the lapse unknown.
+lifetimes to the same `now` when a refresh expiry is returned. If the response
+omits both the refresh expiry and `refresh_token`, it retains the previous lapse.
+A nonempty `refresh_token` without a stated expiry instead makes the lapse
+unknown, even if the provider repeats the previous token value.
 This field is an expiry estimate, not a login-ceremony identity or timestamp.
 An unchanged lapse cannot prove that no other login happened, and matching
 nanoseconds do not prove a new login. See
 [journal](../../../../internal/keeper/claude_journal.go).
+The work order reports that the lapse stayed unchanged across the day, but
+only one exact reading was supplied. That stability was not independently
+verified; paired earlier generation/expiry readings would be needed to test it.
 
 ## 3. Hypotheses
 
@@ -92,7 +96,7 @@ The source paths cited for these limits are
 [stop](../../../../internal/agentd/stop.go),
 [shutdown](../../../../internal/agentd/daemon.go),
 [rescue](../../../../internal/agentd/rescue.go), and
-[S-6](../backlog/00-spikes.md#s-6-remote-control-on-pod-owned-credentials).
+[S-6](../backlog/00-spikes.md#s-6-resume-with-remote-control).
 
 Public primary references checked on November 18:
 [authentication](https://code.claude.com/docs/en/authentication),
