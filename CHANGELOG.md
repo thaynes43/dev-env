@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.111.0](https://github.com/thaynes43/dev-env/compare/v2.110.0...v2.111.0) (2026-11-18)
+
+
+### Features
+
+* **agentd:** a summoned remote session gets its brief at its first launch and reports whether it was launched (DESIGN-064 6.10, OP795) ([#1179](https://github.com/thaynes43/dev-env/issues/1179)) ([e0ce995](https://github.com/thaynes43/dev-env/commit/e0ce9958fb1e5395d960765c04a068209bb42ca6))
+* **keeper:** page escalation-started with the verified link, or say why there is none (DESIGN-064 6.8, OP796) ([#1177](https://github.com/thaynes43/dev-env/issues/1177)) ([82698a3](https://github.com/thaynes43/dev-env/commit/82698a325eda8f63f86389535eebe808417e9595))
+* **keeper:** the escalation-started page says the brief's delivery state (DESIGN-064 6.8, OP796) ([#1204](https://github.com/thaynes43/dev-env/issues/1204)) ([96431e9](https://github.com/thaynes43/dev-env/commit/96431e9ab6dd34c549529a7f3e7eb7f901202717))
+* **operator:** a filing still Pending after 24 hours is Abandoned, and a reap waits for its filing (DESIGN-064 6.6, OP802) ([#1172](https://github.com/thaynes43/dev-env/issues/1172)) ([acd8996](https://github.com/thaynes43/dev-env/commit/acd899624e4567d11e43fcc6de8c65d1c0b2a97b))
+
+
+### Bug Fixes
+
+* **deps:** update module golang.org/x/net to v0.63.0 ([#1201](https://github.com/thaynes43/dev-env/issues/1201)) ([5168800](https://github.com/thaynes43/dev-env/commit/5168800d19a0c8bee6ae1582d9049fcb70d6d762))
+* **deps:** update module sigs.k8s.io/controller-runtime to v0.25.3 ([#1190](https://github.com/thaynes43/dev-env/issues/1190)) ([4a1385d](https://github.com/thaynes43/dev-env/commit/4a1385df18e9b73298509fc60c67f48ffd476445))
+
 ## [2.110.0](https://github.com/thaynes43/dev-env/compare/v2.109.0...v2.110.0) (2026-11-17)
 
 
