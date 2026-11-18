@@ -147,7 +147,13 @@ func (r *Record) Note(name, cursor string, resync bool) {
 }
 
 func (r *Record) add(e Result) {
-	if r.NeedsResync && !(r.ResyncLane == "directory" && e.Kind == "note") || slices.Contains(r.Seen, e.ID) || e.ID == r.LastID || slices.ContainsFunc(r.Pending, func(p Result) bool { return p.ID == e.ID }) {
+	// Scan has already advanced its snapshot. A pending notes-only resync must
+	// also name the directory before this file event can be coalesced away.
+	if r.NeedsResync && r.ResyncLane == "notes" && e.Kind == "file" {
+		r.resync("directory")
+		return
+	}
+	if r.NeedsResync && (r.ResyncLane != "directory" || e.Kind != "note") || slices.Contains(r.Seen, e.ID) || e.ID == r.LastID || slices.ContainsFunc(r.Pending, func(p Result) bool { return p.ID == e.ID }) {
 		return
 	}
 	if len(r.Pending) >= r.Options.MaxPending {

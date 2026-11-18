@@ -987,6 +987,11 @@ the separately configured coordinator-host caller.
 
 ## 12. Known limits and Unknowns
 
+**Slice (c2) record limits:** at most 1024 directory entries; larger limits refuse
+at start. A serialized private record is at most 2 MiB (2,097,152 bytes), including
+JSON escaping. A 1024-entry snapshot with 255-byte HTML-escaped names saves and
+loads within the limit (1,683,982 bytes in the fake fixture).
+
 **Slice (c2) known limit, coordinator ruling 2026-11-18:** a note re-created under
 the same name is skipped while its name-derived ID is in the bounded receipt
 history. Its cursor still advances. This fix round does not change note identity.

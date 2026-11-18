@@ -541,3 +541,11 @@ func TestCoordinatorWaitFreshRequiresDirectoryEvenForLocalEnd(t *testing.T) {
 		})
 	}
 }
+
+func TestCoordinatorWaitEntryCeilingAtStart(t *testing.T) {
+	h, args := waitHarness(t)
+	h.mustRun(ExitUsage, append(args, "--max-entries", "1025")...)
+	if len(h.api.requests()) != 0 || !strings.Contains(h.stderr.String(), "entries 1..1024") {
+		t.Fatal("oversized entry limit not refused at start")
+	}
+}

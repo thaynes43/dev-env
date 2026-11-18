@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -295,6 +296,16 @@ func TestRuntimeAddressedNoteAndUnrelatedIgnored(t *testing.T) {
 }
 func TestRuntimeNewFileCancelsHeldRead(t *testing.T) {
 	rt, c, calls := fakeRuntime(t)
+	var active atomic.Int32
+	rt.Notes = func(ctx context.Context, cursor string, _ time.Duration) (Note, error) {
+		if active.Add(1) != 1 {
+			t.Error("more than one parent read held")
+		}
+		defer active.Add(-1)
+		calls <- cursor
+		<-ctx.Done()
+		return Note{}, ctx.Err()
+	}
 	scans := 0
 	rt.Scan = func() (Snapshot, error) {
 		scans++

@@ -37,7 +37,10 @@ func TestEntryCeilingAndEscapedRecordSave(t *testing.T) {
 	}
 	t.Logf("escaped ceiling snapshot: %d bytes (record limit %d)", st.Size(), 2<<20)
 	// The scan entry point enforces the same bound before touching a directory.
-	if _, err := (&Directory{}).Scan(1025); err == nil {
+	d, err := OpenDirectory(t.TempDir())
+	must(t, err)
+	defer func() { _ = d.Close() }()
+	if _, err := d.Scan(1025); err == nil {
 		t.Fatal("scan ceiling missing")
 	}
 }
@@ -199,7 +202,7 @@ func TestDirectoryShortReadBoundedAndLeavesCursor(t *testing.T) {
 }
 
 func TestResyncLaneSelectsReconciliation(t *testing.T) {
-	for _, which := range []string{"refused", "entries", "changes", "notes", "mixed", "recovery", "legacy"} {
+	for _, which := range []string{"refused", "entries", "changes", "notes", "mixed", "notes-then-file", "combined", "recovery", "legacy"} {
 		t.Run(which, func(t *testing.T) {
 			r := record()
 			want := "directory"
@@ -218,20 +221,34 @@ func TestResyncLaneSelectsReconciliation(t *testing.T) {
 				r.Note("pending", "43", false)
 				r.Scan(nil, true)
 				want = "all"
+			case "notes-then-file":
+				r.Note("", "43", true)
+				r.Scan(map[string]string{"file": "s"}, false)
+				want = "all"
+			case "combined":
+				r.Scan(nil, true)
+				r.Note("", "43", true)
+				want = "all"
 			case "recovery":
-				r.resync("all")
+				r.Note("child", "43", false)
+				r.Take(epoch, false)
+				r.Outstanding = nil
+				must(t, r.Bind(r.Options, r.LastID, false, true))
 				want = "all"
 			case "legacy":
 				r.NeedsResync = true
 				want = "all"
 			}
+			s, err := OpenStore(t.TempDir(), r.Options.SessionUID, r.Options.WaitID)
+			must(t, err)
+			defer s.Close()
+			must(t, s.Save(r))
+			r, err = s.Load()
+			must(t, err)
 			got := requireKind(t, r, epoch, false, "resync")
 			if got.Lane != want {
 				t.Fatalf("lane %q, want %q", got.Lane, want)
 			}
-			s, err := OpenStore(t.TempDir(), r.Options.SessionUID, r.Options.WaitID)
-			must(t, err)
-			defer s.Close()
 			must(t, s.Save(r))
 			loaded, err := s.Load()
 			must(t, err)
@@ -284,5 +301,39 @@ func TestNoteAndStopAcknowledgementsKeepPendingDirectoryResync(t *testing.T) {
 		if got.Lane != "directory" {
 			t.Fatal("ACK dropped pending directory reconciliation")
 		}
+	}
+}
+
+func TestDueTimerPrecedesPendingWorkWithoutSourceRead(t *testing.T) {
+	rt, _, _ := fakeRuntime(t)
+	r := record()
+	r.Scan(map[string]string{"file": "s"}, false)
+	r.Note("child", "43", false)
+	r.DirectoryOwed = true
+	r.NextTimer = epoch
+	rt.Scan = func() (Snapshot, error) { t.Error("due timer scanned a source"); return Snapshot{}, nil }
+	rt.Notes = func(context.Context, string, time.Duration) (Note, error) {
+		t.Error("due timer read notes")
+		return Note{Cursor: "44"}, nil
+	}
+	got, err := rt.Run(context.Background(), r)
+	must(t, err)
+	if got.Kind != "timer" || !r.DirectoryOwed || len(r.Pending) != 2 {
+		t.Fatal("timer consumed pending work or alternation")
+	}
+}
+
+func TestOwedDirectoryBeatsAlreadyQueuedNote(t *testing.T) {
+	r := record()
+	r.Scan(map[string]string{"file": "s"}, false)
+	r.Note("first", "43", false)
+	requireKind(t, r, epoch, false, "note")
+	ack(t, r, false)
+	r.Note("second", "44", false)
+	requireKind(t, r, epoch, false, "file")
+	ack(t, r, false)
+	got := requireKind(t, r, epoch, false, "note")
+	if got.Note != "second" {
+		t.Fatal("already queued note lost")
 	}
 }
