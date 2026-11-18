@@ -593,7 +593,8 @@ If the original pod has already gone without that evidence, the custodian must:
 3. The controller validates either the termination record of section 5.1 or
    the human acknowledgement, plus uncached absence, then enters RecoveryHold.
    Before Create it confirms recoveryHoldRescueAttempted=false. It creates a
-   credential-free D-55 hold on the **same original HOME**, annotated with the
+   D-55 hold without agent credentials on the **same original HOME**, annotated
+   with the
    operationID, then captures its UID and, once scheduled, node name/UID.
    **Build this recovery hold capable from the active record**, including its
    Session-UID decision and a recovery-qualified agent image. Never consult the
