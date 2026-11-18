@@ -400,3 +400,30 @@ func TestCoordinatorWaitBudget24HourUpperBound(t *testing.T) {
 		})
 	}
 }
+
+func TestCoordinatorWaitReplayIgnoresPreviousCallCursors(t *testing.T) {
+	h, args := waitHarness(t)
+	args = append(args, "--after", "42")
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if r.URL.Query().Get("seconds") == "0" {
+			writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "waiting", Cursor: "42"})
+			return
+		}
+		writeTestJSON(w, 200, apiv1.ParentNoteWaitAnyResult{State: "note", Name: parentTestMetadata().Name, Child: "child", Kind: "result", CreatedAt: testNow, Cursor: "43"})
+	}
+	h.mustRun(ExitOK, args...)
+	first := resultFrom(t, h)
+	// Retrying a lost original call necessarily has its earlier source cursors.
+	retry := append(append([]string(nil), args...), "--watermark", strings.Repeat("0", 64))
+	h.mustRun(ExitOK, retry...)
+	if replay := resultFrom(t, h); replay != first || len(h.api.requests()) != 2 {
+		t.Fatal("previous-call cursors prevented exact replay")
+	}
+	h.mustRun(ExitUsage, append(retry, "--ack", first.ID)...)
+	// Matching the new parent cursor still does not permit a stale watermark on ACK.
+	retry[len(args)-1] = "43"
+	h.mustRun(ExitUsage, append(retry, "--ack", first.ID)...)
+	if h.stdout.Len() != 0 || len(h.api.requests()) != 2 {
+		t.Fatal("ACK advanced with stale source cursors")
+	}
+}

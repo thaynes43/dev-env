@@ -66,7 +66,8 @@ func (a *app) coordinatorWait(ctx context.Context, args []string) error {
 		return fail(ExitFailed, "coordinator wait: %s", err)
 	}
 	if r != nil {
-		if (after != "" && after != r.Cursor) || (mark != "" && mark != r.Watermark) {
+		replaying := r.Outstanding != nil && ack == ""
+		if !replaying && ((after != "" && after != r.Cursor) || (mark != "" && mark != r.Watermark)) {
 			return usageError("coordinator wait requires the saved cursor and watermark")
 		}
 		if err = r.Bind(o, ack, resume, reconciled); err != nil {

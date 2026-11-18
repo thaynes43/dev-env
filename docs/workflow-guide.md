@@ -1402,7 +1402,9 @@ only the record's exact regular temporary file in its own directory is removed;
 a symlink or nonregular temporary refuses. Other files are untouched.
 
 Rearm requires `--ack` of the stored outstanding result; supplied
-`--after`/`--watermark` must equal the checkpoint. The complete result is saved
+`--after`/`--watermark` must equal the checkpoint when acknowledging/rearming.
+A call without ACK replays the stored result even with its previous cursor flags.
+The complete result is saved
 before output. Without an ACK, the next call returns it unchanged with the same
 ID, timestamp, cursor and watermark, without reading sources. Consumers handle
 that ID once and acknowledge it; a wrong ID cannot advance the wait. A crash

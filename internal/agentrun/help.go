@@ -187,8 +187,9 @@ timer, note, file, resync, stopped, budget_end. No note text, file text or comma
 
 Rearm the same explicit binding with --after/--watermark from the result and
 --ack its id. The complete result is committed before printing. Without an ACK,
-the next call returns that result unchanged with the same id; acknowledge only
-that stored result. On resync read every parent list page (pass --continue until
+the next call returns that result unchanged with the same id, even when the
+retried call has its previous --after/--watermark; acknowledge only that stored
+result. Cursor/watermark matching still applies when acknowledging and rearming. On resync read every parent list page (pass --continue until
 none is returned), inspect directory metadata, then --ack the result with its
 returned wait cursor, never a list continuation. --reconciled is ONLY for an
 unreadable stored result: reconcile all sources and pass --ack its saved lastID
