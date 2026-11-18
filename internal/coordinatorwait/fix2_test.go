@@ -107,13 +107,18 @@ func TestRefusalHistoryLimitResync(t *testing.T) {
 	r := record()
 	r.Options.MaxEntries = 2
 	r.Refuse(map[string]string{digest("1"): "encoding", digest("2"): "encoding", digest("3"): "encoding"})
+	s, err := OpenStore(t.TempDir(), "session-uid", "tool-call")
+	must(t, err)
+	defer s.Close()
+	// Runtime saves after the scan, before taking a result: both checkpoints
+	// must remain valid even when the refusal history reaches its bound.
+	must(t, s.Save(r))
+	r, err = s.Load()
+	must(t, err)
 	got := requireKind(t, r, epoch, false, "resync")
 	if got.Reason != "limit" || got.Count != 3 || len(r.Refused) != 2 {
 		t.Fatalf("history limit: %#v", got)
 	}
-	s, err := OpenStore(t.TempDir(), "session-uid", "tool-call")
-	must(t, err)
-	defer s.Close()
 	must(t, s.Save(r))
 }
 func TestRefusalsRetainedDuringEntryOverflow(t *testing.T) {
