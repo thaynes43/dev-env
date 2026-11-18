@@ -10,6 +10,7 @@ import (
 )
 
 func TestRaiseNoticeFlags(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "dev-env-system")
 	var logs bytes.Buffer
 	previous := noticeFailureLog
 	noticeFailureLog = &logs
@@ -44,6 +45,7 @@ func TestRaiseNoticeFlags(t *testing.T) {
 }
 
 func TestRaiseNoticeInvalidFlagsDisableOnlyRaise(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "dev-env-system")
 	var logs bytes.Buffer
 	previous := noticeFailureLog
 	noticeFailureLog = &logs
