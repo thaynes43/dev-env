@@ -205,8 +205,8 @@ func TestStoreRejectsMalformedRefusalBatchMetadata(t *testing.T) {
 			case "note-count":
 				r.Pending[0] = Result{Kind: "note", ID: digest("note"), Note: "child-note", Count: 1}
 			case "unreasoned-count":
-				r.Pending = nil
-				requireKind(t, r, epoch.Add(time.Hour), false, "timer")
+				r.Note("", "43", true)
+				requireKind(t, r, epoch, false, "resync")
 				r.Outstanding.Count = 1
 			case "persisted-diagnostic":
 				r.Pending[0].DirectoryUnchecked = true
@@ -218,5 +218,44 @@ func TestStoreRejectsMalformedRefusalBatchMetadata(t *testing.T) {
 				t.Fatal("malformed batch metadata accepted")
 			}
 		})
+	}
+}
+
+func TestRefusalBatchHonorsPendingBound(t *testing.T) {
+	r := record()
+	r.Options.MaxPending = 1
+	r.Note("child-note", "43", false)
+	r.Refuse(map[string]string{digest("unsafe"): "encoding"})
+	if !r.NeedsResync || len(r.Pending) != 0 {
+		t.Fatal("refusal batch exceeded pending limit")
+	}
+	requireKind(t, r, epoch, false, "resync")
+	s, err := OpenStore(t.TempDir(), "session-uid", "tool-call")
+	must(t, err)
+	defer s.Close()
+	must(t, s.Save(r))
+}
+func TestRefusalHistoryTracksCurrentCompleteScan(t *testing.T) {
+	r := record()
+	r.Options.MaxEntries = 2
+	a, b, c := digest("a"), digest("b"), digest("c")
+	r.Refuse(map[string]string{a: "encoding", b: "encoding"})
+	requireKind(t, r, epoch, false, "resync")
+	ack(t, r, false)
+	r.Refuse(map[string]string{b: "encoding", c: "encoding"})
+	if !slices.Equal(r.Refused, []string{b}) || !slices.Equal(r.PendingRefusals, []string{c}) {
+		t.Fatal("gone history retained or new refusal lost")
+	}
+	got := requireKind(t, r, epoch, false, "resync")
+	if got.Reason != "encoding" || got.Count != 1 {
+		t.Fatal("unnecessary history-limit resync")
+	}
+}
+func TestResyncDropsPendingRefusalHashes(t *testing.T) {
+	r := record()
+	r.Refuse(map[string]string{digest("unsafe"): "encoding"})
+	r.Note("", "43", true)
+	if len(r.PendingRefusals) != 0 {
+		t.Fatal("resync retained stale queued hashes")
 	}
 }

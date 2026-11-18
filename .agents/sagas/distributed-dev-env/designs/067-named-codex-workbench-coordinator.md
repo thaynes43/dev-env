@@ -729,9 +729,16 @@ obtain resync. A corrupt outer record still refuses.
 The directory's resolved path, device and inode are pinned for the entire wait.
 Refused entries never stop notes, the timer or safe files: invalid UTF-8,
 controls, names over 255 bytes, unsafe path names and symlinks give one redacted
-resync per changed entry. Reasons form the closed set `encoding`, `control`,
-`length`, `name`, `symlink`; only raw-name/metadata identity hashes are remembered.
-Entry overflow gives one resync per episode and then ordinary read/scan pacing.
+resync per scan batch with a count and no names. Reasons form the closed set
+`encoding`, `control`, `length`, `name`, `symlink`, `limit`; only raw-name/metadata
+identity hashes are remembered. Stale queued refusals are dropped; bounded history
+ends in resync instead of a failed save. Entry overflow gives one resync per
+episode, retains reported hashes, and then keeps ordinary read/scan pacing.
+Whole-second scans must be at least five seconds apart; smaller values refuse
+at start. Existing stop, budget end and stored-result replay survive a removed
+or replaced directory with a per-call `directoryUnchecked: true` diagnostic.
+The stored event metadata/ID stay unchanged; new waits and ordinary rearms
+still require the pinned directory. Inode reuse remains the section-12 limit.
 Only changed records are written. Under the custodian lock, the next start removes
 only its exact regular crash temporary file; symlink/nonregular temps refuse.
 The budget end is at most 24 hours after the persisted start, an upper bound

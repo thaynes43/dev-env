@@ -515,3 +515,25 @@ func TestCoordinatorWaitMinimumScanInterval(t *testing.T) {
 		})
 	}
 }
+
+func TestCoordinatorWaitFreshRequiresDirectoryEvenForLocalEnd(t *testing.T) {
+	for _, end := range []string{"stop", "budget"} {
+		t.Run(end, func(t *testing.T) {
+			h, args := waitHarness(t)
+			if err := os.Remove(args[7]); err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			if end == "stop" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			} else {
+				h.env.WaitClock = &waitTestClock{testingclock.NewFakeClock(testNow.Add(5 * time.Hour))}
+			}
+			if Run(ctx, args, h.env) != ExitFailed || h.stdout.Len() != 0 || len(h.api.requests()) != 0 {
+				t.Fatal("new wait skipped missing directory")
+			}
+		})
+	}
+}
