@@ -338,7 +338,7 @@ func (d *Daemon) bootHeartbeat(ctx context.Context) func() {
 func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Step, bootID string) (Step, string) {
 	if summonedLaunched(d.S, d.Session) {
 		// DESIGN-064 5.9 (OP780): a summoned session's provider starts once.
-		// A boot that finds its launch record, in any mode and whatever the
+		// A boot that finds its start evidence, in any mode and whatever the
 		// repo step did, starts nothing: no TUI resume, no explicit
 		// continuation, no provider. Its status reports how the first run
 		// ended (CollectStatus), so the operator closes it once.
