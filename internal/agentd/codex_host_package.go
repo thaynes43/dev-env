@@ -32,7 +32,9 @@ func prepareCodexHostPackage(ctx context.Context, s Settings, native func(contex
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	version := func(bin string) string {
-		out, err := native(ctx, s, bin, []string{"--version"}, nil)
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		out, err := native(probeCtx, s, bin, []string{"--version"}, nil)
 		if err != nil {
 			return ""
 		}

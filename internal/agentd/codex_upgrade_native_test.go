@@ -150,9 +150,11 @@ func TestPinnedCodexPreviousHostStarts(t *testing.T) {
 }
 
 func TestCodexAuthLockIsNotHistory(t *testing.T) {
-	rule, ok := classifyHistoryName(codexLayout, "auth.lock")
-	if !ok || rule.class != "not_history" {
-		t.Fatalf("auth writer lock unclassified: %+v", rule)
+	for _, name := range []string{"auth.lock", "auth.json.lock"} {
+		rule, ok := classifyHistoryName(codexLayout, name)
+		if !ok || rule.class != "not_history" {
+			t.Fatalf("auth writer lock %s unclassified: %+v", name, rule)
+		}
 	}
 }
 

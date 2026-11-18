@@ -19,7 +19,7 @@ this source PR itself changes a running session.
 
 The candidate is `rust-v0.169.1`, commit
 `c376cf7396eff83ce4c6ac61b9553df142e7a0be`. [Source audit manifest](codex-cli-source-audit.json)
-pins 31 relied-on source file hashes, checked against immutable commit bytes.
+pins 32 relied-on source file hashes, checked against immutable commit bytes.
 Baseline `rust-v0.160.1` is commit
 `d27764b82f7118f674371e6d6e76271d9d606edb`.
 
@@ -183,11 +183,13 @@ real-binary test fails at that guard, and restores the exact source bytes.
 `auth.lock` is not-history: native storage.rs:195-213 creates a coordination lock
 with no login contents. The image job's TestPinnedCodexHomeLayout uses one scratch
 HOME for exact version, offline schema export, one loopback `exec --json`, and an
-offline file-auth write with a made-up API key through app-server stdio. No CLI
+offline file-auth write with a made-up API key through app-server stdio's
+`account/login/start` API-key branch (a local file writer, no OAuth or account
+request). No CLI
 login/logout, real account, refresh or provider authentication is used. It prints
 only top-level names and refuses every name absent from codexLayout; the fixture
 must include sessions, auth.json and auth.lock. Observed names and classifications
-are recorded after CI qualification below. The earlier 0.160.1 observations remain
+are recorded from the successful agent-image job below. The earlier 0.160.1 observations remain
 historical evidence, not an assertion that the layout never changes.
 
 The bundled catalog's first model changes from gpt-6.1-sol to gpt-6.2-sol in
@@ -207,3 +209,49 @@ rc-create or allowance account/read against a real daemon. The rollout/usage
 fixture is synthetic, not a real provider rollout. The offline API-key file write
 qualifies file layout, not the shared ChatGPT access-only path. Logout revocation
 is a pre-existing separate story (L1), unchanged here.
+
+### Observed top-level names
+
+The [agent-image job at 7e475b88](https://github.com/thaynes43/dev-env/actions/runs/44401132719/job/135144593118)
+passed the real native migration and layout tests on 2026-11-18. Its enclosing
+run was subsequently superseded by the fix-round push. Names only were listed;
+no credential, rollout or identifier contents were printed. Final-head CI repeats
+this check. SQLite sidecars can depend on process shutdown timing.
+
+The listing also exposed `auth.json.lock`, already excluded by auth.json.* but
+now explicitly not-history: [storage_commit.rs:29-51](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/login/src/auth/storage_commit.rs#L29)
+creates an empty stable commit lock, while storage.rs:195-213 creates auth.lock.
+Neither lock carries credential contents. Both explicit rules precede the
+conservative auth.json.* credential exclusion.
+
+| Name | Class | Reason |
+| --- | --- | --- |
+| `.sandbox_migration` | NotHistory | Native sandbox migration marker. |
+| `.tmp` | NotHistory | Native temporary launch files. |
+| `auth.json` | Credential | Synthetic offline auth file; never exported. |
+| `auth.json.lock` | NotHistory | Empty stable credential-commit lock. |
+| `auth.lock` | NotHistory | Empty native auth-writer lock. |
+| `config.toml` | NotHistory | Client and fixture configuration. |
+| `goals_1.sqlite` | History | Retained native state database or its SQLite sidecar. |
+| `goals_1.sqlite-shm` | History | Retained native state database or its SQLite sidecar. |
+| `goals_1.sqlite-wal` | History | Retained native state database or its SQLite sidecar. |
+| `installation_id` | NotHistory | Retained installation identity; never exported. |
+| `logs_2.sqlite` | NotHistory | Native diagnostic database or its SQLite sidecar. |
+| `logs_2.sqlite-shm` | NotHistory | Native diagnostic database or its SQLite sidecar. |
+| `logs_2.sqlite-wal` | NotHistory | Native diagnostic database or its SQLite sidecar. |
+| `memories_1.sqlite` | History | Retained native state database or its SQLite sidecar. |
+| `memories_1.sqlite-shm` | History | Retained native state database or its SQLite sidecar. |
+| `memories_1.sqlite-wal` | History | Retained native state database or its SQLite sidecar. |
+| `queue_1.sqlite` | History | Retained native state database or its SQLite sidecar. |
+| `queue_1.sqlite-shm` | History | Retained native state database or its SQLite sidecar. |
+| `queue_1.sqlite-wal` | History | Retained native state database or its SQLite sidecar. |
+| `sessions` | History | Native rollout history. |
+| `shell_snapshots` | NotHistory | Environment captures can contain secrets. |
+| `skills` | NotHistory | Installed skill configuration and support files. |
+| `state_5.sqlite` | History | Retained native state database or its SQLite sidecar. |
+| `state_5.sqlite-shm` | History | Retained native state database or its SQLite sidecar. |
+| `state_5.sqlite-wal` | History | Retained native state database or its SQLite sidecar. |
+| `thread-writer-locks` | NotHistory | Native thread-writer coordination locks. |
+| `thread_history_1.sqlite` | History | Retained native state database or its SQLite sidecar. |
+| `thread_history_1.sqlite-shm` | History | Retained native state database or its SQLite sidecar. |
+| `thread_history_1.sqlite-wal` | History | Retained native state database or its SQLite sidecar. |

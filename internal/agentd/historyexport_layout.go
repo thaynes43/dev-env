@@ -140,6 +140,8 @@ var codexLayout = []historyRule{
 	{"shell_snapshots", protocol.HistoryClassNotHistory, kindAny},
 	// Native auth writer coordination; the lock carries no login material (0.169.1).
 	{"auth.lock", protocol.HistoryClassNotHistory, kindAny},
+	// Stable credential-commit sidecar; storage_commit.rs:29-51 writes no token data.
+	{"auth.json.lock", protocol.HistoryClassNotHistory, kindAny},
 	// Credentials.
 	{"auth.json", protocol.HistoryClassCredential, kindAny},
 	{"auth.json.*", protocol.HistoryClassCredential, kindAny},
