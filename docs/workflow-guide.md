@@ -953,6 +953,11 @@ public key before enabling the operator's `--enable-session-raise-dispatch`.
 With the keeper switch off and dispatch on, a pending raise gets no notice
 and so does not activate: this is the closed direction. Turning the keeper
 switch off preserves earlier keys and signed notice evidence.
+To turn it off, disable operator dispatch first, take back pending and active
+raises while keeper notices remain enabled, and confirm the signed take-back
+Sent outcomes before disabling keeper notices (DESIGN-066 section 11).
+Otherwise a later take-back still ends the raise but sends no notice while
+the keeper switch is off.
 
 It needs no flag, pairing or sign-in on the default profile, which follows the
 keeper's shared login. Tell Tom the session name once `show` reads

@@ -1860,7 +1860,20 @@ sessions.**
   switch off and dispatch on, a pending raise gets no notice and so does not
   activate: this is the closed direction. Already stored signed notice
   evidence is preserved when the switch is turned off. No switch is enabled
-  and no haynes-ops change is made by OP919. The
+  and no haynes-ops change is made by OP919.
+
+  **Turning it off.** First disable the operator's dispatch switch (the
+  profile list stays empty in slice (a)), while leaving keeper notices on.
+  Take back every pending or active raise through the still-available
+  take-back route (section 9); raises have no automatic expiry. Check that
+  the operator ledger records those take-backs and the keeper's notice
+  ledger records their signed Sent outcomes before disabling the keeper
+  switch. If delivery cannot be confirmed, leave the keeper switch on and
+  record the blocker. With the keeper switch off, a later take-back still
+  ends the raise but sends no notice until notices are enabled again, subject
+  to the ledger and replacement rules in section 6.4.
+
+  The
   coordinator's ruling of 2026-11-14 on the third slice (a) reviews: the
   install adds no rule on AgentSessions. The keeper's get is the Role
   `dev-env-keeper-credentials`, read with `kubectl get role
