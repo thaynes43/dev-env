@@ -2625,7 +2625,7 @@ None is a ruling by Tom.
   - Add the account to the protected identity lists (DESIGN-064 5.8).
   - Give the policy one remote escalation entry.
   - Remove the policy, the account and the namespace after the drill.
-  - Not reuse the name.
+  - Forbid later reuse of the drill name.
 
   Who may start the drill remains Tom's open question O8. This is coordinator
   ruling R6 of 2026-11-18, not a ruling by Tom.
