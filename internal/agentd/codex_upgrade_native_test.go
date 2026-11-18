@@ -44,13 +44,19 @@ func TestPinnedCodexPreviousHostStarts(t *testing.T) {
 		t.Run(version, func(t *testing.T) {
 			s, o := hostFixtureAt(t, testsock.ShortDir(t, "cu"))
 			s.CodexBin = binary
-			before := writeVersionedHostReceipt(t, s, "Stopped", version)
+			prior := s
+			prior.PodUID = "previous-fixture-pod"
+			before := writeVersionedHostReceipt(t, prior, "Stopped", version)
 			// A stopped old package: no native process, real identifiers or auth.
 			root := filepath.Join(s.CodexHome, "packages", "app-server-daemon")
 			release := filepath.Join(root, "releases", version+"-x86_64-unknown-linux-musl")
 			old := filepath.Join(release, "bin", "codex")
 			writeHostFixture(t, old, "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf 'codex-cli "+version+"\\n'\n")
 			if err := os.Chmod(old, 0700); err != nil {
+				t.Fatal(err)
+			}
+			writeHostFixture(t, filepath.Join(release, "codex-package.json"), string(nativeFixtureJSON(map[string]any{"layoutVersion": 1, "version": version, "target": "x86_64-unknown-linux-musl", "entrypoint": "bin/codex"})))
+			if err := os.Symlink("bin/codex", filepath.Join(release, "codex")); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.Symlink(release, filepath.Join(root, "current")); err != nil {

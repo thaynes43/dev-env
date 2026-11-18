@@ -108,7 +108,7 @@ func TestCodexHostReceiptVersionDoesNotRelaxBinding(t *testing.T) {
 }
 
 func TestCodexHostPackageReplacement(t *testing.T) {
-	for _, mode := range []string{"previous", "current", "other", "live", "unknown", "failed-update", "wrong-result", "became-live", "broken-current"} {
+	for _, mode := range []string{"previous", "current", "other", "live", "unknown", "failed-update", "wrong-result", "wrong-image", "became-live", "broken-current"} {
 		t.Run(mode, func(t *testing.T) {
 			s, o := hostFixture(t)
 			hostLiveConfig(t, s, o)
@@ -129,6 +129,9 @@ func TestCodexHostPackageReplacement(t *testing.T) {
 			native := func(_ context.Context, _ Settings, bin string, args []string, _ io.Writer) ([]byte, error) {
 				if strings.Join(args, " ") == "--version" {
 					if bin == s.CodexBin {
+						if mode == "wrong-image" {
+							return []byte("codex-cli " + previousPinnedCodexVersion), nil
+						}
 						return []byte("codex-cli " + managedCodexVersion), nil
 					}
 					return []byte("codex-cli " + version), nil
@@ -233,7 +236,7 @@ func TestCodexHostLiveReceiptVersions(t *testing.T) {
 					want = "Unknown"
 				}
 				if version != "0.168.0" && phase == "Confirmed" {
-					want = "NeedsLogin"
+					want = "Observed"
 				}
 				if status.Code != want || (err != nil) != (want == "Unknown") {
 					t.Fatalf("live receipt: %+v %v want %s", status, err, want)

@@ -142,7 +142,9 @@ path has the refresh properties in claim (b); live pairing remains unqualified.
 A fresh host installs the invoking complete CLI package: upstream
 [lib.rs:474-482](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/app-server-daemon/src/lib.rs#L474)
 calls [prepare_install.rs:30-42,105-119](https://github.com/openai/codex/blob/c376cf7396eff83ce4c6ac61b9553df142e7a0be/codex-rs/app-server-daemon/src/prepare_install.rs#L30).
-Its Missing mode preserves an existing current selection, even 0.160.1. Remote
+Its Missing mode preserves an existing current selection, even 0.160.1. The
+[0.160.1 installer:99-119,248-267](https://github.com/openai/codex/blob/d27764b82f7118f674371e6d6e76271d9d606edb/codex-rs/app-server-daemon/src/prepare_install.rs#L99)
+uses the same dedicated releases/current/bin layout for a fresh stable start. Remote
 start uses the same path (lib.rs:771-792); without replacement the exact native
 RPC version check would report Unknown on the retained old daemon.
 

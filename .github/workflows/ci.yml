@@ -503,7 +503,7 @@ jobs:
           GOTOOLCHAIN: local
         run: |
           # Keep the complete package: native --from-cli verifies its manifest
-          # and bundled files, not just the executable. No install in this runner.
+          # and bundled files, not just the executable. Extract without a host-wide install.
           native_root="${RUNNER_TEMP}/codex-compatibility"
           mkdir -p "$native_root"
           docker run --rm --network none --entrypoint /bin/tar dev-env-agent:ci -C /opt/dev-env/codex -cf - . | tar -xf - -C "$native_root"
