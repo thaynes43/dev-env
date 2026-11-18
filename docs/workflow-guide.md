@@ -2500,9 +2500,10 @@ None is a ruling by Tom.
   no session note, title or agent message. Every branch ends
   `Brief: unknown.` until story 795 adds the delivery field and connects it
   to the renderer. Every page of a session whose `spec.caller` is exactly
-  `dev-env-system.summon-drill` starts `DRILL` in title and message; names,
+  `dev-env-drill.summon-drill` starts `DRILL` in title and message; names,
   titles and session reports cannot choose that label. The eventual drill
-  must use that exact CallerPolicy name; another name needs a code change.
+  must use that exact CallerPolicy name for `dev-env-drill/summon-drill`
+  (coordinator ruling R1, 2026-11-18); another name needs a code change.
   No policy or identity is created here. The one-attempt rule and hourly cap
   above apply. Install by pinning the keeper together with or after stories
   782, 792 and 793, with story 794 available; no new RBAC.

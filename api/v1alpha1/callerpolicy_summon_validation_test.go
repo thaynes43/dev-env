@@ -7,13 +7,48 @@ import (
 	"strings"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/summonoutcome"
 )
+
+// Local envtest only: these policy objects enroll no live account or identity.
+func TestSummonDrillCallerPolicyAdmission(t *testing.T) {
+	t.Run("reserved caller admitted", func(t *testing.T) {
+		p := summonPolicy(summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneEscalation))
+		setAccount(p, "dev-env-drill/summon-drill")
+		p.Name = summonoutcome.DrillCaller
+		if err := k8s.Create(ctx(t), p); err != nil {
+			t.Fatalf("reserved drill CallerPolicy must be admitted: %v", err)
+		}
+	})
+	t.Run("ordinary caller admitted", func(t *testing.T) {
+		p := summonPolicy(summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneEscalation))
+		setAccount(p, "upgrade-agent/upgrade-shepherd")
+		if p.Name == summonoutcome.DrillCaller {
+			t.Fatal("ordinary caller uses the reserved drill name")
+		}
+		if err := k8s.Create(ctx(t), p); err != nil {
+			t.Fatalf("ordinary CallerPolicy must be admitted: %v", err)
+		}
+	})
+	t.Run("old platform caller refused", func(t *testing.T) {
+		p := summonPolicy(summonEntry(v1alpha1.SummonKindRemote, v1alpha1.LaneEscalation))
+		setAccount(p, "dev-env-system/summon-drill")
+		if p.Name != "dev-env-system.summon-drill" {
+			t.Fatalf("old policy/account pair = %q", p.Name)
+		}
+		err := k8s.Create(ctx(t), p)
+		if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "summon service account namespace is not dev-agents, dev-env-system or dev-tools") {
+			t.Fatalf("old platform caller must fail the namespace fence: %v", err)
+		}
+	})
+}
 
 func i32(n int32) *int32 { return &n }
 

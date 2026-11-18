@@ -13,6 +13,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/pages"
+	"github.com/thaynes43/dev-env/internal/summonoutcome"
 )
 
 // OP796: all sends use newSummonFix's fake endpoint, synthetic credentials
@@ -275,15 +276,30 @@ func summonPoisonStrings(v reflect.Value, poison string) {
 }
 
 func TestSummonPagesDrillOnlyFromCaller(t *testing.T) {
+	// The API's account-to-policy derivation, also exercised through the real
+	// request path by TestSummonDrillCallerDerivedFromAccount. Admission tests
+	// prove this account and the ordinary account below can have summon policies.
+	derived := strings.ReplaceAll("dev-env-drill/summon-drill", "/", ".")
+	callers := []struct {
+		name, caller string
+		drill        bool
+	}{
+		{"derived drill", derived, true},
+		{"ordinary admitted caller", summonTestCaller, false},
+		{"other namespace", "other.summon-drill", false},
+		{"suffix", summonoutcome.DrillCaller + "-extra", false},
+		{"case", strings.Replace(summonoutcome.DrillCaller, "summon", "Summon", 1), false},
+		{"old forbidden caller", "dev-env-system.summon-drill", false},
+	}
 	for _, event := range []string{"escalation-started", "escalation-held", "failed"} {
-		for _, caller := range []string{"dev-env-system.summon-drill", summonTestCaller, "other.summon-drill", "dev-env-system.summon-drill-extra", "dev-env-system.Summon-drill"} {
-			t.Run(event+"/"+caller, func(t *testing.T) {
+		for _, tc := range callers {
+			t.Run(event+"/"+tc.name, func(t *testing.T) {
 				f := newSummonFix(t)
-				s := startedSession(f, "esc-drill-name", v1alpha1.RegistrationUnavailable)
-				s.Spec.Caller = caller
+				s := startedSession(f, summonoutcome.DrillCaller, v1alpha1.RegistrationUnavailable)
+				s.Spec.Caller = tc.caller
 				s.Annotations = map[string]string{"drill": "false"}
 				s.Spec.Prompt = "DRILL"
-				s.Spec.Title = "dev-env-system.summon-drill"
+				s.Spec.Title = summonoutcome.DrillCaller
 				if event == "failed" {
 					f.close(s, v1alpha1.OutcomeFailed, "report", "failed", "")
 					s.Status.Summon.Pages = nil
@@ -296,8 +312,7 @@ func TestSummonPagesDrillOnlyFromCaller(t *testing.T) {
 					t.Fatalf("pages=%d", f.push.count())
 				}
 				form := f.push.form(0)
-				drill := caller == "dev-env-system.summon-drill"
-				if strings.HasPrefix(form.Get("title"), "DRILL ") != drill || strings.HasPrefix(form.Get("message"), "DRILL ") != drill {
+				if strings.HasPrefix(form.Get("title"), "DRILL ") != tc.drill || strings.HasPrefix(form.Get("message"), "DRILL ") != tc.drill {
 					t.Fatalf("DRILL followed name or session text: %v", form)
 				}
 			})

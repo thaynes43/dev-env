@@ -3463,7 +3463,7 @@ answer `op796-build-1-q-1` govern the following. Earlier corrections stay.
   stays the sessions list. The standalone pager drill, `more-events`,
   overflow and the digest still link the list because they have no session.
 - O9's drill policy is reserved as exactly
-  `spec.caller: dev-env-system.summon-drill`. Every page of such a session
+  `spec.caller: dev-env-drill.summon-drill`. Every page of such a session
   starts `DRILL` in both title and message. Another namespace, suffix, case,
   or the same text in a session's name, title or note cannot choose it.
   The eventual drill must use a CallerPolicy of that exact name; another
@@ -3475,6 +3475,19 @@ answer `op796-build-1-q-1` govern the following. Earlier corrections stay.
   793, with story 794's settlement available. No new RBAC is needed. Source
   and fake-endpoint tests do not prove install or phone delivery; story
   745's drill remains the acceptance check.
+
+**Correction, 2026-11-18: story 796 gate review (gpt-6-astra, 2026-11-18), finding A-1; coordinator ruling R1; not a ruling by Tom.**
+The first reserved name, `dev-env-system.summon-drill`, could not be admitted
+by any CallerPolicy: its required account `dev-env-system/summon-drill` is
+in a forbidden platform namespace. R1 replaces it with
+`dev-env-drill.summon-drill`, the CallerPolicy name for
+`dev-env-drill/summon-drill`. This remains one source constant, with no flag,
+option or environment variable. The three forbidden namespaces are unchanged.
+No namespace, account or policy is created. Who may start the drill remains
+Tom's open question O8; an answer requiring another identity needs a code
+change to the constant. Local CRD admission, API caller derivation and
+fake-endpoint rendering tests prove the supported name, not installed or
+accepted phone delivery.
 
 ### 6.9 OP743: quota priority and the fallback model
 
