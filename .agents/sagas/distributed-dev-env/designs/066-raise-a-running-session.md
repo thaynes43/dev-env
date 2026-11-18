@@ -938,9 +938,16 @@ records is new, in the keeper, and copies the Ask notifier, as the
 summoned-session pager already did (`summon_pages.go:32-47`).
 
 **What it reads.** Every 30 seconds, as the Ask push does, the leader keeper
-reads the operator ledger first. The coordinator's ruling of 2026-11-13 on
-the slice (a) reviews: the pager stays on whatever the flags say, because a
-take-back notice must not depend on a flag, and it is quiet. A missing or
+reads the operator ledger first after publishing its key. OP919 amends the
+earlier ruling that the pager stays on whatever the flags say: the keeper's
+`--enable-session-raise-notices` is false by default and is decided once at
+startup. Off, it constructs no raise pager, acquires no client for it, reads
+or writes no raise objects, calls no Ensure and registers no raise runnable.
+This includes the keeper key Secret, public-key ConfigMap and notice ledger.
+On, it sends both raise and take-back notices at any hour. An invalid notice
+configuration or disabled leader election disables only this pager and never
+stops credential work. A malformed raise flag also disables only this pager,
+with a diagnostic that includes no flag value. A missing or
 forbidden key Secret, ConfigMap or read logs one line an hour at most and
 retries no faster than every 5 minutes, and never fails the keeper. A raise
 notice still needs a record that counts. A take-back notice is decided from
@@ -950,7 +957,7 @@ annotation counts. The keeper does not read the templates ConfigMap in
 slice (a). A record that names a profile is not sent, is logged once
 ("profile raises need slice (b)") and never blocks a take-back notice. The
 coordinator's ruling of 2026-11-14 on the second slice (a) reviews: the
-keeper makes its key once at start, with Ensure retried quietly until it
+keeper makes its key once at start **only with the keeper switch on**, with Ensure retried quietly until it
 succeeds, so the install check finds the public key published. After that
 an idle pass reads the operator ledger first and reads the key Secret only
 when a row needs a notice. The pager never lists AgentSessions. It fetches
@@ -1160,6 +1167,11 @@ secret is shared between the operator and the keeper (N1, N10).
   `wordsHash` from `words` and refuses a mismatch.
 - **How a pair is made.** Only the leader makes a pair (the operator and the
   keeper both run leader election), and only when its Secret holds no key.
+  For the keeper, this also requires `--enable-session-raise-notices=true`
+  at startup. Merely pinning its image with the switch unset touches neither
+  the key nor its publication or notice ledger. Turning the switch off on a
+  later start preserves any existing key, public key and ledger; it does not
+  remove or rotate them. The operator's key path is unchanged by OP919.
   It makes the pair with `ed25519.GenerateKey`, writes the private key into
   its own Secret with a `resourceVersion` precondition, so when two replicas
   race only one write lands, and then publishes the public key with its
@@ -1840,7 +1852,15 @@ sessions.**
   Fail`, `validationActions: [Deny]`, and no type-checking warnings in the
   policy's status. The bind rule of rule 2 shows `failurePolicy: Ignore`
   instead. The check for rule 5: each object exists by name, and the
-  owner's first start has filled its key and published its public key. The
+  owner's enabled first start has filled its key and published its public key.
+  Install the keeper image with `--enable-session-raise-notices` unset first;
+  this leaves its raise objects untouched. After the admission and reader
+  checks, enable the keeper switch and check its published public key before
+  enabling the operator's `--enable-session-raise-dispatch`. With the keeper
+  switch off and dispatch on, a pending raise gets no notice and so does not
+  activate: this is the closed direction. Already stored signed notice
+  evidence is preserved when the switch is turned off. No switch is enabled
+  and no haynes-ops change is made by OP919. The
   coordinator's ruling of 2026-11-14 on the third slice (a) reviews: the
   install adds no rule on AgentSessions. The keeper's get is the Role
   `dev-env-keeper-credentials`, read with `kubectl get role

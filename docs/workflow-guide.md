@@ -944,6 +944,16 @@ them off a raise is refused. A view of a pending or active record then
 says the raise is ignored because raising is switched off. A taken-back
 or unannounced record is shown as it is.
 
+The keeper's raise notices and signing-key initialization require
+`--enable-session-raise-notices`, false by default and decided at startup.
+Pinning the keeper image with it unset leaves the raise key Secret, public
+ConfigMap and notice ledger untouched. After the admission and reader checks
+in DESIGN-066 section 11, enable the keeper switch and check its published
+public key before enabling the operator's `--enable-session-raise-dispatch`.
+With the keeper switch off and dispatch on, a pending raise gets no notice
+and so does not activate: this is the closed direction. Turning the keeper
+switch off preserves earlier keys and signed notice evidence.
+
 It needs no flag, pairing or sign-in on the default profile, which follows the
 keeper's shared login. Tell Tom the session name once `show` reads
 `registered` (about two minutes; [quickstart section

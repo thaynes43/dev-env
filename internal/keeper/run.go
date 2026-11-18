@@ -69,8 +69,9 @@ type Options struct {
 	// 782); off by default. A bad option set disables only the pager.
 	SummonPages SummonPageOptions
 	// RaisePages announces a pending raise and a take-back at any hour
-	// (DESIGN-066). The zero value uses the design's object names. It does
-	// not follow the ask quiet hours. A missing Secret does not stop the keeper.
+	// (DESIGN-066); off by default. Invalid options disable only the pager.
+	// It does not follow the ask quiet hours. A missing Secret does not stop
+	// the keeper.
 	RaisePages RaisePageOptions
 	// Interval is the longest wait between two refreshes; DefaultInterval when
 	// zero.
@@ -273,30 +274,10 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 			return err
 		}
 	}
-	// Raise notices run at any hour. A missing key Secret is logged and
-	// skipped; the keeper still starts.
-	{
-		notices := o.Notices.withDefaults()
-		clk := o.Clock
-		log := o.Log
-		if log.GetSink() == nil {
-			log = logr.Discard()
-		}
-		pager := &RaisePager{
-			Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.Namespace,
-			SessionNamespace: o.RaisePages.SessionNamespace, KeySecret: o.RaisePages.KeySecret,
-			Sender: &PushoverSender{URL: notices.URL, TokenFile: notices.TokenFile, UserFile: notices.UserFile},
-			Now: func() time.Time {
-				if clk != nil {
-					return clk.Now()
-				}
-				return time.Now()
-			},
-			Log: log.WithName("raise-notices"),
-		}
-		if err := mgr.Add(pager); err != nil {
-			return err
-		}
+	// Decide once at startup, before acquiring clients or constructing the
+	// raise pager. Off or invalid options leave every raise object untouched.
+	if err := registerRaisePager(o, mgr); err != nil {
+		return err
 	}
 	// The summoned-session pager: nil when off or invalid, so a bad flag
 	// stops nothing else. Its Start never returns an error. It gets the REST
