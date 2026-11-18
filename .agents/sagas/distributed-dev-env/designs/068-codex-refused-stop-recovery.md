@@ -268,7 +268,7 @@ not a claim that they are protected today:
 
 | Surface | Current code and required build closure |
 | --- | --- |
-| Environment | `gitEnv` sets only `GIT_TERMINAL_PROMPT=0`. ExecRunner otherwise inherits `os.Environ()` unless BaseEnv is supplied. `privateGitUnsetEnv` strips repository/index/object selectors plus `GIT_CONFIG`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` only for privateProjectGit; it explicitly retains credential helpers. Direct rescue calls bypass even that helper. Require an explicit environment allowlist for recovery Git, with only the rescue-owned temporary `GIT_INDEX_FILE` when needed; reject inherited config/exec/SSH/askpass/editor/pager overrides. The complete allowlist is unresolved. |
+| Environment | `gitEnv` sets only `GIT_TERMINAL_PROMPT=0`. ExecRunner otherwise inherits `os.Environ()` unless BaseEnv is supplied. `privateGitUnsetEnv` strips repository/index/object selectors plus `GIT_CONFIG`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` only for privateProjectGit; it explicitly retains credential helpers. Direct rescue calls bypass even that helper. Require an explicit environment allowlist for recovery Git, with only the rescue-owned temporary `GIT_INDEX_FILE` when needed; exclude inherited `GIT_CONFIG_*`, `GIT_EXEC_PATH`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`, `GIT_PAGER`, `PAGER`, `EDITOR` and `VISUAL` except reviewed protected replacements. The complete allowlist is unresolved. |
 | Hooks and fsmonitor | Existing `projectGitPolicyArgs` has `core.hooksPath=/dev/null` and `core.fsmonitor=false`, but ordinary remote `Settings.git` does not apply it; checkoutStaging disables hooks only for checkout. Apply and test those two overrides on every recovery Git call. |
 | Global/system config | Proposed isolation is `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_SYSTEM=/dev/null`; neither is set by these calls today. This does not suppress repository config or attributes. |
 | Repository config and executable producers | No complete policy exists here for `include.path`, `includeIf.*.path`, `filter.*.clean/smudge/process/required`, `alias.*`, `credential.helper` and scoped helpers, `core.sshCommand`, `url.*.insteadOf/pushInsteadOf`, remote helpers, `core.editor`, `sequence.editor`, `core.pager` or `pager.*`. The build must reject or isolate untrusted values and attributes, supply any necessary protected credential/transport program, and prove ref coverage and snapshot fidelity. The exact per-call config and filter/attribute handling remain unresolved; silently dropping a required filter is not preservation proof. |
@@ -811,9 +811,9 @@ for every scheduled container, or an unscheduled pod with no execution status.
 This is stricter than today's generic podNeverStarted, which short-circuits
 on no node and does not fully inventory ephemeral containers. Do not reuse
 that shortcut as this new proof. Deletion still completes no rescue and starts
-no executor. Ordinary retry creates only on the same retained digest after the normal
-retry interval and a new availability indication; Q-068-03 covers permanent loss; never spin or swap to the
-current template. Image restoration is external work, not new access here.
+no executor. Ordinary retry creates only on the same retained digest after
+the normal retry interval and a new availability indication. Q-068-03 covers
+permanent loss; never spin or swap to the current template. Image restoration is external work, not new access here.
 ([guard.go:154–170][never-started])
 
 A hold that starts must pass its own absolute-path JSON version probe before
@@ -887,8 +887,9 @@ no executor starts, and the original source exit evidence still applies. An
 absent bit is not false. Before the bit becomes true, confirm hold UID, node UID,
 HOME and operation annotation durably. A restart after true but before exec has
 the same conservative recovery cost as any uncertain dispatch. Bind a replacement
-hold and reset the bit only after these rules permit it. The same explicit-false admission proof permits ordinary removal of a present
-hold, running or never started, under the checks above. A true/unknown bit
+hold and reset the bit only after these rules permit it. The same explicit-false
+admission proof permits ordinary removal of a present hold, running or never
+started, under the checks above. A true/unknown bit
 requires the stronger rescue/exit path. Neither false-admission removal nor
 section 5.1's ended-hold removal completes the operation.
 ([cmd/agentd/main.go:331–347][hold-command])
@@ -937,18 +938,28 @@ clean refusal plus the missing-digest reason; never claim the host suspended or
 invent a digest. No stop operation or new freeze has been admitted.
 
 The owner sees: “Stop is waiting. We cannot identify the recovery image for
-this computer. Its files are kept. The installer must repair the image record
-before stopping can continue.” Show `CodexStopImageDigestUnresolved` in the
-pending detail. Resume with no recorded stop can retain the untouched instance;
-no active-stop rule is bypassed. A new capability answer alone does not clear it.
-The installer or custodian acting under an owner-authorized incident can repair
-the mapping to the *same actual image's* pullable manifest, then qualification
-and the normal bound stop can proceed. If that mapping cannot be restored, the
-owner must authorize a separate audited image repair/migration preserving the
-original files and rescue requirements. This design grants no pod deletion or
-live image replacement to do so. The incident stays visibly assigned to that
-owner decision, with its precise missing evidence, rather than being labelled
-permanently unsuspendable. Section 7.2 prevents installing such a named image.
+this computer. Its files are kept. Tom must name who will repair its image
+record before stopping can continue.” Show `CodexStopImageDigestUnresolved` in
+the pending detail. Resume with no recorded stop can retain the untouched
+instance; no active-stop rule is bypassed. A new capability answer alone does
+not clear it.
+
+The only writer of a newly confirmed `status.codexRemoteStopCapability` is the
+recovery-aware operator, authenticated as
+`system:serviceaccount:dev-env-system:dev-env-operator`. It reruns qualification
+and records that binding only when the same actual image's pullable manifest is
+proved. It neither accepts a human-supplied guessed digest nor patches the pod's
+image. If restoring registry evidence or fixing the image resolver is needed,
+**Q-068-04 holds the exact incident responder and repair target**: the owner must
+name the identity, registry record or reviewed resolver code change, allowed
+write and evidence before that repair. There is no assumed installer/custodian
+role. If the original mapping cannot be restored, Q-068-04 also holds any
+separate audited image migration, retaining original files and rescue gates.
+This design grants no repair access, pod deletion or live image replacement.
+Once evidence is repaired, the operator confirms the capability record and
+ordinary bound stop proceeds. Until then the owner sees the missing evidence
+and pending incident decision, rather than “can never be suspended”. Section
+7.2 prevents installing such a named image.
 
 ## 6. What Tom sees on the phone
 
@@ -1123,7 +1134,8 @@ Exact proposed policy shape, for a separately approved implementation:
   (`codexRemoteStop` or `codexRemoteStopCapability`), using guarded optional-field
   comparisons. Make the change predicate total over absent status/records using
   `has()` and guarded optional access to bounded fields; no unguarded dereference
-  or parsing user text. Unchanged records skip the policy, including heartbeat and
+  or parsing user text. The proposed total change expression is below.
+  Unchanged records skip the policy, including heartbeat and
   unrelated status writes. Root/status updates and attempted whole-status
   erasure get the same comparison; CRD latches still apply. Select by namespace
   name, not a mutable opt-in label. Inline the one approved ACK_ACTOR in this
@@ -1168,6 +1180,26 @@ Exact proposed policy shape, for a separately approved implementation:
   decision, while a correctly evaluated unchanged-record match skips validation.
   Pin/review type checks, cost and the matching expressions before first use;
   approval and effective enforcement remain pending under Q-068-01.
+
+Proposed change matchCondition (each field-presence test guards its value
+comparison; no absent parent is dereferenced):
+
+```text
+((has(object.status) && has(object.status.codexRemoteStop)) !=
+ (has(oldObject.status) && has(oldObject.status.codexRemoteStop))) ||
+(has(object.status) && has(object.status.codexRemoteStop) &&
+ has(oldObject.status) && has(oldObject.status.codexRemoteStop) &&
+ object.status.codexRemoteStop != oldObject.status.codexRemoteStop) ||
+((has(object.status) && has(object.status.codexRemoteStopCapability)) !=
+ (has(oldObject.status) && has(oldObject.status.codexRemoteStopCapability))) ||
+(has(object.status) && has(object.status.codexRemoteStopCapability) &&
+ has(oldObject.status) && has(oldObject.status.codexRemoteStopCapability) &&
+ object.status.codexRemoteStopCapability != oldObject.status.codexRemoteStopCapability)
+```
+
+J45 covers absent status, each absent record, one-sided presence and equal/changed
+bounded values. The build must compile/type-check and evaluate this against the
+generated schema on the 1.35 API server; this docs edit does not prove CEL execution.
 
 **Matching-expression failure has a wider limit.** Kubernetes 1.35 documents:
 if any matchCondition is false the policy is skipped despite other errors;
@@ -1221,8 +1253,8 @@ every status-writer version before activation. A pre-existing c1-only named
 pod keeps today's legacy behavior and known M4; its separately authorized
 stop/rescue/removal must precede reliance on this feature. Removing a name
 never downgrades an existing capable pod, and template changes never change
-an active operation's recoveryImageDigest outside the pending Q-068-03 incident
-option. A merge bypassing the required check, or a direct live cluster edit,
+an active operation's recoveryImageDigest. Q-068-03 is a separate pending
+incident option, not a template-change exception. A merge bypassing the required check, or a direct live cluster edit,
 bypasses this installer fence; no runtime digest allowlist is assumed. Runtime
 then follows the actual binary: a c1-only old image takes today's stop with known
 M4 (refused-stop resume can retain the frozen instance), a capable image uses
@@ -1253,7 +1285,7 @@ may be created. No table entry authorizes force removal or volume deletion.
 | J10 Pod gone after authorized removal | RemovalCommitted, matching completed stop/rescue | Absence completes the operation; exactly one fresh pod may follow on original HOME. | `TestCodexStopPodGoneWithCompletedRescueCompletes` |
 | J11 Pod gone unexpectedly, or same name/different UID | StopPending or inconsistent RemovalCommitted | RecoveryRequired. No hold/executor, no adopting the different UID, no clear from NotFound. | `TestCodexStopPodGoneWithoutProofRequiresRecovery` |
 | J12 Node gone or fails executorNodeLive; pod still present | Any active state, no confirmed writer-exit evidence | Retain pod/HOME with reason; terminal phase alone cannot permit delete. If node returns Ready, test J23. If a separate incident removes the object, test J13; no forceful-removal action is authorized here. | `TestCodexStopNodeGoneNeverBecomesExitProof` |
-| J13 Node gone and pod gone | Active record without completed removal | RecoveryRequired; only correctly bound custodian ACK permits same-HOME recovery hold. | `TestCodexStopNodeAndPodGoneNeedCustodianAcknowledgement` |
+| J13 Node gone and pod gone | Active record without completed removal | RecoveryRequired; only the correctly bound ACK from Q-068-01's chosen identity permits same-HOME recovery hold. | `TestCodexStopNodeAndPodGoneNeedChosenActorAcknowledgement` |
 | J14 Second suspend of the same target | StopPending or RemovalCommitted | Same operationID, no second record. Before commit generation change discards stale report; after commit finish the decision. | `TestCodexStopSecondSuspendKeepsOperationAndChecksGeneration` |
 | J15 Resume after refusal | StopPending | Pending, PodReady=False, RemovalBlocked retained. Retry stop; later completed rescue/removal permits a fresh UID on same HOME. | `TestCodexStopResumeAfterRefusalQueuesFreshPod` |
 | J16 Resume races report or committed delete | StopPending then RemovalCommitted | Stale-generation report before commit is discarded; resume after commit waits through delete and Complete. Never relabel old report generation. | `TestCodexStopResumeRaceHonorsCommitBoundary` |
@@ -1288,7 +1320,7 @@ may be created. No table entry authorizes force removal or volume deletion.
 | J45 Acknowledgement write under either owner option | Active bound recovery operation and approved ACK_ACTOR policy | Only bound actor add passes; nobody changes present ACK. Operator preserves or removes consumed ACK only; other callers/non-ACK actor edits denied. No actor means manual hold. Validation error denies protected changes; correctly skipped unchanged-record heartbeat/status still pass. J47 covers matching errors. | `TestCodexStopAcknowledgementAdmissionNamesExactWriters` |
 | J46 Session API or controller adds an ACK through operator account | Active operation, ACK absent, otherwise valid transition | Admission refuses add/set by operator identity on main/status Update or patch-to-update. Existing ACK preserved or validly consumed may pass; present-value edit is denied for every identity. | `TestCodexStopOperatorAccountCannotAddAcknowledgement` |
 | J47 Change-detection matchCondition errors | Matching dev-agents UPDATE, no condition false | Fail rejects unchanged heartbeat, suspend/resume and operator ordinary/recovery status writes before validation. No deletion/creation progress from rejected evidence; other namespace skips. Reviewed policy repair restores writes; no fail-open. | `TestCodexStopMatchConditionErrorStallsSessionUpdatesSafely` |
-| J48 Valid capable answer but pullable digest cannot be recorded | Named pod, no confirmed binding or operation | Unbound fallback is cleanly refused under R1; no freeze, guessed digest or false suspended status. Show section 5.5's image-record reason. Installer/custodian repairs original-image mapping under owner incident, or owner authorizes separate audited image repair/migration; fresh full qualification then bound stop. | `TestCodexStopUnresolvedCapableImageDigestShowsRepairExit` |
+| J48 Valid capable answer but pullable digest cannot be recorded | Named pod, no confirmed binding or operation | Unbound fallback is cleanly refused under R1; no freeze, guessed digest or false suspended status. Show section 5.5's image-record reason. Q-068-04 holds the exact repair identity/target or separate image migration. Only the operator then confirms status.codexRemoteStopCapability from repaired evidence; full qualification and bound stop follow. | `TestCodexStopUnresolvedCapableImageDigestShowsRepairExit` |
 
 Keep the old M4 characterization for **unnamed/unsupported** fixtures and add
 J15 for the qualified fixture; do not rewrite the old-host expectation globally.
@@ -1504,8 +1536,7 @@ in its own HOME that returns a deliberately different version; keep this private
 and remove it afterward. Require protected-path probe/stop audit records and a
 real stop receipt, not the shim's bytes. Never let the shim simulate success for
 cleanup. G-068-01's exact environment/config and adversarial Git/report-producer
-checks must already have passed before
-this live proof. The mutable interruption helper is observation-only and never
+checks must already have passed before this live proof. The mutable interruption helper is observation-only and never
 an operator-trusted receipt producer.
 
 For recovery-hold image evidence, capture the original capability imageDigest,
@@ -1568,7 +1599,7 @@ slice that exceeds one session. All local Go commands use GOMAXPROCS=2,
 | --- | --- | --- |
 | A Protocol and schema | M, 4–6 hours; split API and agent work if needed | Opt-in version JSON/explicit capability, unchanged plain output, installer minimum, protected exec/Git paths and closure of G-068-01, required installer/GitOps check and its self-produced CI evidence (J44), durable capable/digest binding, operation-bound receipt/request, unbound refusal, bounded API types and root/status removal latches, deepcopy/CRD and cost/validation tests. No activation. Prove old release fixtures and construction-bound naming. |
 | B Reconcile and guards | L, 6–10 hours, split before pickup | Durable operation writes, acknowledgement, retry, exact target removal branch, generation boundary, ensure/archive/finalizer fences, Complete HOME binding, ordinary/empty hold behavior. Implement J1–J16/J19/J21–J26/J28–J30/J32–J34/J37–J43/J48 and old-host regression checks. Remains inactive until all pieces/review are ready. |
-| C Manual recovery | M, 4–6 hours | Custodian ACK validation/audit contract, same-HOME recovery holds, lost-hold binding/admission, verified-ended source/hold recovery and J17/J18/J20/J27/J31/J35/J36/J45–J47. Q-068-03 leaves permanent-image incident replacement undecided; no implementation of that exception without owner ruling. Exact proposed admission policy requires separate owner approval. Q-068-01 gates first use, not the independent source checks. No new credential or permission. |
+| C Manual recovery | M, 4–6 hours | Chosen-identity ACK validation/audit contract, same-HOME recovery holds, lost-hold binding/admission, verified-ended source/hold recovery and J17/J18/J20/J27/J31/J35/J36/J45–J47. Q-068-03 leaves permanent-image incident replacement undecided; no implementation of that exception without owner ruling. Exact proposed admission policy requires separate owner approval. Q-068-01 gates first use, not the independent source checks. No new credential or permission. |
 | D Phone wording and proof preparation | S/M, 2–4 hours | Plain pending/rescue messages through show/API/phone detail, reviewed proof-only helper, private evidence checks and exact procedure validated against build output. No live run. |
 | E Cross-family review and source delivery | M, 2–4 hours | Review exact integrated head, mutate new guards, required CI green, layout check, schema copy PR prepared before operator pin. Coordinator arranges model family. Source merge alone closes no installed gate. |
 | F Authorized install and disposable proof | M, 2–4 hours plus explicit uncertainty | Separate install story and owner decision; schema first, every replica compatible, empty-list upgrade, section 7.2 exact-digest capability/minimum gate on every naming/template change, named disposable fixture only, section 10 proof. No production coordinator until OP877's full acceptance is closed. |
@@ -1619,6 +1650,18 @@ No answer is assumed, and no pending question authorizes an installation.
   repair/migration; this is an open choice, not an approved replacement rule.
   Hold replacement while unanswered; a false-admission hold can still be removed
   safely without completing recovery (J35/J36).
+
+- **Q-068-04 — If a capable computer's exact image cannot be identified, who
+  will you appoint to repair it, and which record or reviewed code may they
+  change?** Recommend one named incident responder, a precise registry-record
+  restoration or reviewed image-resolver fix, and proof that the result names
+  the same actual image. The operator alone then records the confirmed
+  capability; the responder cannot invent or directly set that binding. If
+  proof is impossible, any image migration needs a separate incident approval
+  preserving the files and rescue checks. This lets stopping continue after a
+  bounded repair; a wrong mapping risks using the wrong recovery program.
+  Identity, target, write authority and any migration remain pending. No generic
+  custodian right is assumed (section 5.5/J48).
 
 The conservative replacement cost and named-only compatibility rules are proposed
 engineering decisions for review in ADR-031. They do not request broader access.

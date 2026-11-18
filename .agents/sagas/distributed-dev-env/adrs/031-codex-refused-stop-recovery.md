@@ -62,9 +62,10 @@ is needed for this pod-bound lifecycle intent.
    A capable answer without a recordable pullable digest also takes the clean
    unbound refusal, not a successful legacy stop (J48/section 5.5). Show the
    missing-image-record reason and retain the untouched instance on resume;
-   an installer/custodian under an owner-authorized incident must repair the
-   original-image mapping, or the owner authorize a separate audited image
-   repair/migration, before full qualification and bound stop. Never guess a
+   Q-068-04 holds the exact incident repair identity, registry record or reviewed
+   image-resolver code change and any separately audited image migration. Only
+   the operator service account writes status.codexRemoteStopCapability after
+   proof of the original-image mapping, then full qualification and bound stop. Never guess a
    digest or delete an unrescued pod. No upgrade restarts an agent pod;
    c1-only old binaries retain their known M4.
 3. Confirm `status.codexRemoteStop` before the qualified request, bound to the
@@ -140,7 +141,7 @@ is needed for this pod-bound lifecycle intent.
    Today's API/controller code has no ACK field/write path; section 7.1 lists
    the status writers. The operator account also serves the session API, so
    its ACK addition must be refused even during otherwise legal transitions
-   (J46), rather than permitting a session-facing API to release itself. Infrastructure/admin wildcard RBAC grants are no exception. Use an
+   (J46). Infrastructure/admin wildcard RBAC grants are no exception. Use an
    in-process CEL ValidatingAdmissionPolicy, matching protected-record changes;
    a total guarded change predicate skips unrelated heartbeat/status writes.
    Validation failure denies protected changes, operator writes included. A
@@ -188,7 +189,8 @@ is needed for this pod-bound lifecycle intent.
     unresolved class. G-068-01 blocks activation until the build supplies and
     tests exact per-call environment/config isolation and preservation evidence
     for direct rescue, submodule and bundle calls as well (J42). No complete
-    neutralisation measure is claimed present today. The receipt is built in agentd memory and
+    neutralisation measure is claimed present today. The receipt is built in
+    agentd memory and
     encoded to stdout, not supplied by a HOME file. No kernel attestation or
     global repair of unrelated legacy rescue paths is claimed.
 12. Before any name is added, or template image changes while names remain,
@@ -197,7 +199,8 @@ is needed for this pod-bound lifecycle intent.
     or above minimumCodexStopRecoveryVersion. Qualification is an isolated CI
     container run, not cluster exec. The haynes-ops check is required, including
     Renovate template bumps, and pulls/probes the candidate itself; its trusted
-    run produces the digest-bound evidence, never a file supplied in the PR. Refuse absent evidence, missing
+    run produces the digest-bound evidence, never a file supplied in the PR.
+    Refuse absent evidence, missing
     capability, unknown/below-minimum version or digest mismatch. This installer
     gate also applies after the first install and to rollbacks; it does not
     veto stopping a capable development binary already present. A merge/check
@@ -214,9 +217,10 @@ is needed for this pod-bound lifecycle intent.
 
 DESIGN-068 sections 2–7 define the exact schema, version/receipt, commit points,
 compatibility, live RBAC observation and manual evidence. Section 8 gives one
-named future envtest for each of J1–J48, with J44 tooling owned by slice A. Section 10 is a written, unrun proof;
-section 12 leaves acknowledgement/access, disposable-host and incident-image
-replacement choices open. G-068-01 is a technical activation block, not an owner
+named future envtest for each of J1–J48, with J44 tooling owned by slice A.
+Section 10 is a written, unrun proof; section 12 leaves acknowledgement/access,
+disposable-host, incident-image replacement and image-repair identity/target
+choices open. G-068-01 is a technical activation block, not an owner
 choice that can stand in for implemented Git protections.
 
 The Kubernetes 1.35 [pod lifecycle documentation](https://v1-35.docs.kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#garbage-collection-of-pods)
