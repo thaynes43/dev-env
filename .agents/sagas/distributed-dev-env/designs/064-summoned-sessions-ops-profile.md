@@ -3613,6 +3613,79 @@ records `escalation-pending` on the remediation, once, when first blocked.
 The schema also admits `escalation-abandoned`, atomically with Abandoned, for
 OP802. OP803 owns both sends; this slice adds no page text or delivery.
 
+**Correction, 2026-11-16: story 796, coordinator rulings; not a ruling by
+Tom.** Item 745 comment 7680 (O4, O9, O13), slice plan 745c and coordinator
+answer `op796-build-1-q-1` govern the following. Earlier corrections stay.
+
+- The keeper now renders `escalation-started`, only for a remote escalation
+  with the recorded event and a settled `status.summon.registration`
+  (`registered` or `unavailable`, with its settlement time). Live Remote
+  Control state alone never causes a page or consumes an attempt.
+- With recorded `registered` and a live URL passing
+  `summonoutcome.VerifiedRemoteControlLink`, the page says
+  `[dev-env] escalation-started: escalation <name> is running and registered
+  with the Claude app. Brief: unknown.` Its link says `Open the session`.
+  With recorded `registered` but no verified live URL it says
+  `escalation <name> registered, but its link is gone (Remote Control
+  <state>). Brief: unknown.` and links that session's console page.
+  With recorded `unavailable` it says `escalation <name> is running, but
+  Remote Control is not available (<reason>). Join it from the console, or
+  attach: agent-run attach <name>. Brief: unknown.` and links the console
+  page, even if a live link has since appeared. These last two texts have
+  the same `[dev-env] escalation-started:` prefix.
+- The state is only `registered`, `starting`, `offline` or `login-required`;
+  any other or absent state is `unknown`. The recorded reason is only
+  `starting`, `offline`, `login-required`, `link-unverified`, `name-mismatch`
+  or `not-reported`; any other is `unknown`. No session note, title, caller
+  text or agent message enters this new page. Older templates keep their
+  existing note contract. Story 795 has not defined the delivery field:
+  `Brief: unknown` is deliberate, with no invented wire field; story 795
+  must connect its delivery state to this renderer.
+- Every session page's console fallback is now
+  `/portal/projects/dev-env/environments/internal/sessions?session=<uid>`.
+  The UID must match the portal's `^[A-Za-z0-9-]{1,64}$`; otherwise the link
+  stays the sessions list. The standalone pager drill, `more-events`,
+  overflow and the digest still link the list because they have no session.
+- O9's drill policy is reserved as exactly
+  `spec.caller: dev-env-drill.summon-drill`. Every page of such a session
+  starts `DRILL` in both title and message. Another namespace, suffix, case,
+  or the same text in a session's name, title or note cannot choose it.
+  The eventual drill must use a CallerPolicy of that exact name; another
+  name is a code change. This story creates no flag, policy or identity,
+  and does not settle who may start the drill (O8).
+- The existing write-before-send ledger, one attempt per UID and event
+  across keeper restarts, no retry and rolling six-per-hour cap apply.
+  Install with a keeper pin together with or after stories 782, 792 and
+  793, with story 794's settlement available. No new RBAC is needed. Source
+  and fake-endpoint tests do not prove install or phone delivery; story
+  745's drill remains the acceptance check.
+
+**Correction, 2026-11-18: story 796 gate review (gpt-6-astra, 2026-11-18), finding A-1; coordinator ruling R1; not a ruling by Tom.**
+The first reserved name, `dev-env-system.summon-drill`, could not be admitted
+by any CallerPolicy: its required account `dev-env-system/summon-drill` is
+in a forbidden platform namespace. R1 replaces it with
+`dev-env-drill.summon-drill`, the CallerPolicy name for
+`dev-env-drill/summon-drill`. This remains one source constant, with no flag,
+option or environment variable. The three forbidden namespaces are unchanged.
+No namespace, account or policy is created. Who may start the drill remains
+Tom's open question O8; an answer requiring another identity needs a code
+change to the constant. Local CRD admission, API caller derivation and
+fake-endpoint rendering tests prove the supported name, not installed or
+accepted phone delivery.
+
+**Correction, 2026-11-18: story 796 re-read (gpt-6-astra, 2026-11-18); coordinator ruling R6; not a ruling by Tom.**
+The reserved name marks a caller, not a purpose: once its policy exists,
+anyone allowed to use `dev-env-drill/summon-drill` can send a real escalation
+whose eligible pages say `DRILL`. The enrollment PR must create the namespace
+and account for drill-only use and name who may create and use them; add the
+account to the protected workload/token and exec identity lists
+([5.8's 2026-11-13 correction](#58-what-a-steered-ops-session-can-still-reach-f1):
+"Every new summoning caller joins that list in the PR that adds its
+CallerPolicy"); give the policy one remote escalation entry; remove the
+policy, account and namespace after the drill; and forbid reuse of the name
+for any other purpose. None of these enrollment actions is part of story
+796. Who may start the drill remains Tom's open question O8.
+
 ### 6.9 OP743: quota priority and the fallback model
 
 **The gate.** At admission, for summoned sessions only, by
