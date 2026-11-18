@@ -191,21 +191,22 @@ a newly created hold may not yet be scheduled. Retain the
 original recoveryAck after a lost hold; it is not overwritten by recoveryHoldAck.
 
 The controller owns all members except `recoveryAck` and `recoveryHoldAck`, which
-an already authorized cluster custodian writes only under section 5. Heartbeat input cannot write any
-of them. Preserve them through status observation and every status writer.
+an already authorized cluster custodian writes only under section 5. Heartbeat
+input cannot write any of them. Preserve them through status observation and every status writer.
 At the pin heartbeat uses a merge patch; this does not make other whole-status
 writers safe with an unknown field.
 ([heartbeat.go:155–175][heartbeat], [agentsession_types.go:915–947][status-type])
 
 Validation must bound every string used by CEL. Within an active operation,
-identity members, role and startedAt are immutable; lastAttemptAt cannot move
-backwards. Receipt operation/Session IDs equal the record. Its pod UID is either
+source identity members, role and startedAt are immutable; lastAttemptAt cannot
+move backwards. Only section 5's confirmed lost-hold recovery may change the
+current recovery-hold identity. Receipt operation/Session IDs equal the record. Its pod UID is either
 the original pod or the bound recovery hold. Rescue and receipt pod UIDs agree.
 RemovalCommitted requires receipt, rescue and removalCommittedAt; RecoveryHold
-requires recoveryAck. Hold-role RemovalCommitted additionally requires a
-successful rescue, as section 5 specifies. Complete requires the completed
-removal evidence. A new
-operation may replace a Complete record only with the same Session and HOME
+requires recoveryAck. RemovalCommitted for an original hold or recovery hold
+additionally requires a successful rescue, as section 5 specifies. Complete
+requires the completed removal evidence. A new operation may replace a Complete
+record only with the same Session and HOME
 binding, a fresh operationID and a different currently owned pod UID. An invalid
 or unknown-version record fences construction and deletion; it never means absent.
 Tests must show legal transitions, rejected contradictions and acceptable CEL
@@ -296,8 +297,10 @@ After recording the completed rescue, confirm an optimistic transition to
 RemovalCommitted with the exact report reference and receipt, while that report's
 generation is current. That is the durable removal decision. `podRemovalAllowed`
 gets an explicit narrow branch for this target before the generic Running/hold
-shortcuts. It validates the operation and its recorded decision. `deletePod`
-remains the sole ordinary deletion primitive with pod UID/resourceVersion
+shortcuts. It validates the operation and its recorded decision. Active operations cannot
+use podEnded/podNeverStarted shortcuts without their required completed rescue.
+If the original pod can no longer run rescue, retain the block; this design
+never directs a custodian to delete it to make room for a hold. `deletePod` remains the sole ordinary deletion primitive with pod UID/resourceVersion
 preconditions and normal grace. It also rereads Session and HOME at this boundary.
 ([guard.go:96–151,354–365][pod-guard])
 
@@ -356,13 +359,13 @@ If the original pod has already gone without that evidence, the custodian must:
    its own stop. A cluster custodian who lacks status permission stops; this
    design grants neither credentials nor a new route.
 3. The controller validates the acknowledgement and uncached absence, then
-   enters RecoveryHold. Before Create it confirms recoveryHoldRescueAttempted=false. It creates a
-   credential-free D-55 hold on the **same original HOME**, annotated with the
+   enters RecoveryHold. Before Create it confirms
+   recoveryHoldRescueAttempted=false. It creates a credential-free D-55 hold on the **same original HOME**, annotated with the
    operationID, then captures its UID and, once scheduled, node name/UID. A lost
    Create ACK requires uncached discovery of the one owned, operation-bound
    hold; never adopt an executor or different HOME. It probes capability and
-   confirms recoveryHoldRescueAttempted=true before any qualified rescue exec. A failed hold rescue retains the
-   hold and active record. A mismatching/stale acknowledgement retains the block.
+   confirms recoveryHoldRescueAttempted=true before any qualified rescue exec.
+   A failed hold rescue retains the hold and active record. A mismatching/stale acknowledgement retains the block.
 4. Require the hold's stop receipt and a successful Verified or CleanAndPushed
    rescue, recorded before its normal guarded removal. After that hold is gone,
    the controller confirms Complete. This is exactly how a manual recovery
@@ -392,8 +395,7 @@ Unnamed/unsupported holds retain today's behavior. A recovery hold is a distinct
 target within the original operation; it never overwrites the original pod UID.
 Once a hold rescue may have been dispatched, its disappearance before a
 committed rescue returns to RecoveryRequired, with a new recoveryHoldAck
-required for that hold before another hold. Do not
-reuse the source acknowledgement to assert the missing hold stopped. The second
+required for that hold before another hold. Do not reuse the source acknowledgement to assert the missing hold stopped. The second
 acknowledgement binds the lost recoveryHoldUID and recoveryHoldNodeUID, while
 retaining the source recoveryAck. Only a matching fresh hold acknowledgement and
 confirmed absence permit replacing that hold's binding. Persist and confirm the
