@@ -91,8 +91,9 @@ This adapter cannot create provider refresh credentials. The helper inherits
 only PATH, private HOME/CODEX_HOME, fixed TMPDIR and locale, excluding alternate
 ambient auth, storage and transport settings.
 
-The draft agent candidate forces the image's `/usr/local/bin/codex` and version
-`0.169.1`; its [auth hold](../../../docs/codex-169-upgrade-audit.md) prevents adoption. After
+The agent candidate forces the image's `/usr/local/bin/codex` and version
+`0.169.1`; its [audit](../../../docs/codex-169-upgrade-audit.md) records the closed
+refresh concern and CI limits. Installation and acceptance remain separate. After
 confirmed launch, a two-second readiness context permits at most 40 paced startup
 socket connects, retrying only absent/refused sockets. It authenticates Unix
 SO_PEERCRED UID/PID against the original boot/start identity and verifies the
