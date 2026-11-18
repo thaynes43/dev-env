@@ -2751,9 +2751,10 @@ CRD must already be installed. The story 803 gate for real remediations stays.
 **Correction, 2026-11-18: story 802 gate review (gpt-6-astra, 2026-11-18),
 findings H1, H2, M1; coordinator rulings R4 and R5; not a ruling by Tom.**
 This replaces the two-term clock-lag-plus-delay promise and the claim that no
-request starts inside the final ten minutes in this PR's 2026-11-16 fix-round-1
-correction above. Earlier dated lines are retained as history. The gate review
-is the Codex review named by the owner on 2026-11-18 (item 751, comment 8880),
+request starts inside the final ten minutes in PR #1172's 2026-11-16 correction
+(story 802 fix round 1) above. Earlier dated lines are retained as history. The
+gate review is the Codex review named by the owner on 2026-11-18 (item 751,
+comment 8880),
 report `reviews/op802-review-3.md` in the coordinator's handoff.
 
 R4 keeps the behavior and withdraws the review order's claim that creates off
