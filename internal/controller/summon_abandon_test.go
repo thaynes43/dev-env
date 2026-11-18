@@ -286,6 +286,8 @@ func TestSummonReapWaitsForFiling(t *testing.T) {
 
 func TestSummonReapLongestFilingHold(t *testing.T) {
 	w := newFilingWorld(t)
+	// Creates off still abandons existing filings and holds their reap.
+	w.r.SummonCreateKinds = nil
 	s := w.get(filingRem)
 	s.Annotations = map[string]string{v1alpha1.AnnotationReapedBy: "session/worker"}
 	if err := w.base.Update(context.Background(), s); err != nil {

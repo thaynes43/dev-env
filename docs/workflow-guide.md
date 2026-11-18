@@ -2176,6 +2176,56 @@ revocation still requires broker reconciliation and successful cleanup.
 The fix requires compatible operator and broker image pins, with slice b's
 CRD already installed; real remediations still wait for story 803's pages.
 
+**Correction, 2026-11-18: story 802 gate review (gpt-6-astra, 2026-11-18),
+findings H1, H2, M1; coordinator rulings R4 and R5; not a ruling by Tom.**
+This replaces this PR's earlier two-term clock-lag-plus-delay promise and its
+statement that no request starts in the last ten minutes. Earlier dated lines
+remain as history. The gate is the Codex review the owner named on 2026-11-18
+(item 751, comment 8880), report `reviews/op802-review-3.md` in the
+coordinator's handoff.
+
+Creates off stops new creates, not abandonment/recovery of stored Pending
+filings at 24 hours, the reap hold while Pending and for ten minutes after
+Abandoned, or the broker ending a reaped summoned requester's grants. Shared
+writers still apply queue/reserve rules to existing caller entries. The review
+order's flag-alone inertness claim is withdrawn (R4). The historical install
+observation below already has both necessary conditions: creates off **and no
+Session with a caller**. The coordinator must read and record the latter
+before asking for any pin. Its 2026-11-18T01:25Z observation was 502 Sessions,
+none with `spec.caller` or `status.summon`, and no operator
+`--summon-create-kinds` flag; this fixer made no live read. Caller-empty
+Sessions bypass these new filing, reap-hold and broker rules.
+
+The guard refuses a request when its **last local check** sees the final ten
+minutes; a later delay may carry its start into the window. R5's conditional
+promise is no charge, mark, rebind or create starts after stored Abandoned
+when, at request start, the abandoning leader's wall clock is ahead of the
+attempting leader's last local reading by strictly less than ten minutes.
+That sum includes replica clock lag, elapsed check-to-request delay **and any
+forward wall-clock step**. DESIGN-064 5.9's five-minute skew plus five-minute
+forward-step allowance consumes the whole margin, leaving none for delay;
+equality is insufficient. No code enforces this clock assumption or bounds
+lag/steps. Create has a two-minute process-clock deadline anchored before its
+mark and capped against the wall bound. Ledger writes have no per-attempt
+timeout; nothing bounds a pause between a check and its request. Backward
+steps are outside the promise: they can reopen the local guard while Pending
+and delay abandonment/reap; no persisted latch records entry to the window.
+
+A request already received by Kubernetes may still commit after abandonment;
+a schedule outside the bound may start one afterwards. Removing the clock
+assumption needs a server-side exclusion protocol with its own design. The
+coordinator accepts this assumption for story 802, not on Tom's behalf.
+`TestSummonFilingForwardStepBeyondMarginIsOutsidePromise` and
+`TestSummonFilingForwardStepWithinRemainingMargin` pin both sides for all four
+request kinds, retaining mutually exclusive Filed/Abandoned records even when
+a late child exists. `TestSummonFilingGuardAfterDeadlineConstruction` proves
+the final check independently of the earlier Pending-read check (M1).
+Creates-off abandonment/reap and caller-empty controls are named in
+DESIGN-064 6.6, alongside `TestBrokerHeldReapEndsGrants` (no broker create
+switch). Installation needs compatible operator **and broker** pins and slice
+b's CRD already installed; real remediations still wait for story 803's pages.
+No installation or live acceptance is claimed.
+
 A charged Pending filing keeps one place in its applicable caller queue even
 when its last mark ages out. Abandoned ends that keep immediately. Its
 absent-child queue count is free at the later of abandonment and the last
