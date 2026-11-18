@@ -18,7 +18,7 @@ Ordinary 6.2 admission requires #1219; this CLI candidate alone grants none.
 
 The candidate is `rust-v0.169.1`, commit
 `c376cf7396eff83ce4c6ac61b9553df142e7a0be`. [Source audit manifest](codex-cli-source-audit.json)
-pins 25 relied-on source file hashes, checked against immutable commit bytes.
+pins 29 relied-on source file hashes, checked against immutable commit bytes.
 Baseline `rust-v0.160.1` is commit
 `d27764b82f7118f674371e6d6e76271d9d606edb`.
 
@@ -125,3 +125,16 @@ receipts. This establishes successful completion for each requested model in
 that worker's test, not an unconditional no-refresh guarantee or a test of the
 0.169.1 candidate. Different pod/time/client prevent isolating client version as
 the cause of the earlier 0.160.1 refusals. This evidence does not remove the hold.
+
+
+Additional source checks: `config/src/fingerprint.rs:54-65` still emits the
+`sha256:` plus 64 lowercase-hex user-layer version that agentd validates;
+`app-server/src/config_manager_service.rs:341-345` refuses mismatched expected
+versions before applying edits. `models-manager/src/manager.rs:297-309` preserves
+an explicitly supplied model rather than choosing a native default. The bundled
+catalog can change its own default; platform managed-task arguments and host
+config continue to specify their existing model, so this candidate changes no
+platform default. Remote enrollment's auth path at
+`app-server-transport/src/transport/remote_control/auth.rs:174-201` still accepts
+Codex-backend ChatGPT auth with an account ID; native refresh/recovery in that
+path remains covered by the separate hold, not a live pairing qualification.

@@ -29,7 +29,11 @@
     "codex-rs/app-server-protocol/src/precomputed_exports.rs": "661397f6329f7fac05e9d7ccfc7bceead266389d0975da7d1ef57544ee5aaa0c",
     "codex-rs/cli/src/remote_control_cmd.rs": "8baf41638339d280937c63b9fa9fadbd3a9e879c71113f21be1c0fe44747079e",
     "codex-rs/app-server-daemon/src/lib.rs": "1a5477dc55b58481184dc347c09c91357f3722fc6ac4f5bf93b50a79c9fa4405",
-    "codex-rs/app-server-transport/src/transport/remote_control/protocol.rs": "0b493cb0ee57a7f4f77c3426f2dfec29f0b7d1b78346705652e96baca601922e"
+    "codex-rs/app-server-transport/src/transport/remote_control/protocol.rs": "0b493cb0ee57a7f4f77c3426f2dfec29f0b7d1b78346705652e96baca601922e",
+    "codex-rs/config/src/fingerprint.rs": "f045658587620e4aeef541b5d5e479a2ba1147648b263f47b034fbfd794f1db5",
+    "codex-rs/app-server/src/config_manager_service.rs": "c0ee7aea0b39a9637c87e2fcb30513edb55620560e84a64e977bd2da3da85867",
+    "codex-rs/models-manager/src/manager.rs": "78bafaed08a8b32ccd0b7cb963a04c95b95ea266354aca7f47e69e9199a7000d",
+    "codex-rs/app-server-transport/src/transport/remote_control/auth.rs": "526e0d0ecd6166436b6904da0b9d690b92583926a41425fba0dee7f9926c4f23"
   },
   "experimentalExportsSHA256": "015daa0d0c1f645c1085ca11ae8e2057d02df357b50f2eaa5fc3b6726972014f"
 }
