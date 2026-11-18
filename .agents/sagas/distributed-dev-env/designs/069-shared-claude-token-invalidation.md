@@ -30,6 +30,15 @@ process's actual credential generation was not captured. Neither a Mac client
 nor Meatball is identified as the actor by this evidence. Do not turn temporal
 proximity to session suspension into an attribution.
 
+Recovery also has a confirmed coverage limit relevant to the reported subagent
+failure. Agentd's rejection observer and automatic continue skip task-mode
+sessions. Their transcript classifier ignores sidechain entries and reads the
+main conversation, not every native child's result. Consequently a parent's
+merge or continue receipt cannot establish recovery of a failed child. This
+explains a gap in recovery coverage, not the initiating token revocation. See
+[continue/classifier](../../../../internal/agentd/claude_continue.go) and
+[rejection observer](../../../../internal/agentd/claude_rejection.go).
+
 ## 2. Evidence and UTC timeline
 
 The private report requested on OP927 is
