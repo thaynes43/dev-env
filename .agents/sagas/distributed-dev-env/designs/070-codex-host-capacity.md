@@ -114,9 +114,13 @@ fails before a session write is sent, detached cleanup releases its own attempt
 even if the ledger update committed and the response was lost. The operator
 logs the attempt, session and requester when the reservation outcome is unknown.
 A ledger update still in flight could commit after cleanup reads the ledger and
-leave a reservation to investigate. CAS prevents a stale release from
-clearing another attempt. Same-key in-flight creates are fenced by a parent/key
-hash in the reservation; committed same-key creates are rechecked before write.
+leave a reservation to investigate. A confirmed create can also leave a
+reservation if cleanup exhausts its retries and the session is removed before
+a later admission can observe its attempt. A subsequent NotFound keeps the
+reservation counted. These cases fall under the fenced recovery tracked in
+OP925. CAS prevents a stale release from clearing another attempt. Same-key
+in-flight creates are fenced by a parent/key hash in the reservation. Committed
+same-key creates are rechecked before write.
 No host is stopped, resumed, resized, reimaged or paired by this work.
 
 ### Installation prerequisites (not performed here)
