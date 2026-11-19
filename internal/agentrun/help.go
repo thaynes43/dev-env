@@ -875,6 +875,7 @@ room, selection may create a second, within the fleet cap. Unknown memory
 keeps reuse. --fresh-host explicitly asks for create; only Tom or a trusted
 client may use it, never any session (including workbench). The fixed profile
 bound is two retained ordinary hosts, counting suspended and pending hosts.
+Pending reservations also count toward the running fleet cap.
 Use agent-run <repo> --agent codex --interactive --fresh-host --size L to
 carry this intent into creation. That command requires enabled selection,
 rechecks at the API, and records the reason/requester on the new session.

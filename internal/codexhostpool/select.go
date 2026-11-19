@@ -109,7 +109,7 @@ const (
 const MemoryMaxAge = 3 * time.Minute
 
 // MaxHostsPerProfile is a fixed bound, including retained suspended hosts and
-// pending creates, for the supported capacity route (DESIGN-069).
+// pending creates, for the supported capacity route (DESIGN-070).
 const MaxHostsPerProfile = 2
 
 // MemoryReserveBytes leaves room for a modest additional turn.
@@ -124,7 +124,7 @@ const MemoryReserveBytes int64 = 1 << 30
 type Host struct {
 	// CreateAttempt deduplicates a committed host from its reservation.
 	CreateAttempt string
-	// ReservationAttempt is set only on an unconfirmed create's capacity row.
+	// ReservationAttempt identifies a pending or unconfirmed create's capacity row.
 	ReservationAttempt string
 	// Pending means a not-yet-running API create also occupies running capacity.
 	Pending          bool
@@ -805,8 +805,8 @@ func RetainedInProfile(hosts []Host, profile string) int {
 // counted before its first controller status update.
 func RunningHosts(hosts []Host) int { return count(hosts, inFleet) }
 
-// An unconfirmed row is counted but never usable. Name the state when its
-// contribution fills the relevant running or retained bound.
+// A pending or unconfirmed reservation counts toward the running and retained
+// bounds and cannot be selected as a host.
 func capacityReason(in Input, perCell int) string {
 	_, fleetCap := caps(in)
 	cellFull := count(in.Hosts, func(h Host) bool { return inCell(h, in.ResolvedProfile) }) >= perCell

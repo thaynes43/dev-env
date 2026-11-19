@@ -883,7 +883,7 @@ func TestUnconfirmedSelectionNamesAttempt(t *testing.T) {
 			if r.URL.Path != apiv1.CodexHostsSelectPath {
 				t.Errorf("unconfirmed selection reached create: %s", r.URL.Path)
 			}
-			writeTestJSON(w, http.StatusConflict, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeConflict, Reason: "create_unconfirmed", Message: "Unconfirmed Codex host create occupies capacity: unknown-host (attempt unknown-attempt); its reservation is retained."}})
+			writeTestJSON(w, http.StatusConflict, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeConflict, Reason: "create_unconfirmed", Message: "Codex host capacity is occupied by pending or unconfirmed creates: unknown-host (attempt unknown-attempt)."}})
 		}
 		h.mustRun(ExitFailed, args...)
 		if len(h.api.requests()) != 1 || !strings.Contains(h.stderr.String(), "unknown-host") || !strings.Contains(h.stderr.String(), "unknown-attempt") {

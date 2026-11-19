@@ -129,10 +129,10 @@ func TestCreateUnconfirmedIsNamed(t *testing.T) {
 		t.Fatalf("pending %+v %v", pending, err)
 	}
 	p := pending[0]
-	assertNamed := func(raw []byte) {
+	assertNamed := func(raw []byte, wantWording string) {
 		t.Helper()
 		var refusal apiv1.ErrorResponse
-		if json.Unmarshal(raw, &refusal) != nil || refusal.Error.Reason != "create_unconfirmed" || !strings.Contains(refusal.Error.Message, p.Name) || !strings.Contains(refusal.Error.Message, p.Attempt) {
+		if json.Unmarshal(raw, &refusal) != nil || refusal.Error.Reason != "create_unconfirmed" || !strings.Contains(refusal.Error.Message, p.Name) || !strings.Contains(refusal.Error.Message, p.Attempt) || !strings.Contains(refusal.Error.Message, wantWording) {
 			t.Fatalf("unnamed refusal: %s", raw)
 		}
 		assertLegacyCapacityJSON(t, raw, false)
@@ -140,7 +140,7 @@ func TestCreateUnconfirmedIsNamed(t *testing.T) {
 	if w.Code != 503 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	assertNamed(w.Body.Bytes())
+	assertNamed(w.Body.Bytes(), "create response was unconfirmed")
 	for _, value := range []string{p.Name, p.Attempt, "requester", "client"} {
 		if !strings.Contains(logs.String(), value) {
 			t.Fatalf("unknown outcome log missing %q: %s", value, logs.String())
@@ -152,11 +152,11 @@ func TestCreateUnconfirmedIsNamed(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("bound refusal lost attempt details: %d %s", w.Code, w.Body.String())
 	}
-	assertNamed(w.Body.Bytes())
+	assertNamed(w.Body.Bytes(), "pending or unconfirmed")
 	// One real host plus one unknown fills the bound.
 	g := newCodexFixture(t)
 	g.addCodexHost("old", codexHostOpt{})
-	if err := g.srv.reserveCodexCapacity(context.Background(), p); err != nil {
+	if err := g.srv.reserveCodexCapacity(context.Background(), p, "fixture"); err != nil {
 		t.Fatal(err)
 	}
 	w = g.do(http.MethodPost, apiv1.CodexHostsSelectPath+"?check=true", tokClient, req)
@@ -170,7 +170,7 @@ func TestCreateUnconfirmedIsNamed(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("fresh bound refusal lost attempt details: %d %s", w.Code, w.Body.String())
 	}
-	assertNamed(w.Body.Bytes())
+	assertNamed(w.Body.Bytes(), "pending or unconfirmed")
 	for _, off := range []bool{false, true} {
 		if off {
 			g.srv.CodexHosts = nil
@@ -180,21 +180,21 @@ func TestCreateUnconfirmedIsNamed(t *testing.T) {
 		if w.Code != 409 {
 			t.Fatal(w.Code, w.Body.String())
 		}
-		assertNamed(w.Body.Bytes())
+		assertNamed(w.Body.Bytes(), "pending or unconfirmed")
 		if strings.Contains(w.Body.String(), "two retained") {
 			t.Fatal("claimed a phantom exists")
 		}
 	}
-	if err := g.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "other-unknown", Profile: "dev", Attempt: "other-attempt"}); err != nil {
+	if err := g.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "other-unknown", Profile: "dev", Attempt: "other-attempt"}, "fixture"); err != nil {
 		t.Fatal(err)
 	}
-	err = g.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "third", Profile: "dev", Attempt: "third-attempt"})
+	err = g.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "third", Profile: "dev", Attempt: "third-attempt"}, "fixture")
 	var refusal *apiError
 	if !errors.As(err, &refusal) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(apiv1.ErrorResponse{Error: refusal.body})
-	assertNamed(raw)
+	assertNamed(raw, "pending or unconfirmed")
 }
 
 // Frozen v2.111.0 client shapes: DisallowUnknownFields catches added keys,
@@ -269,17 +269,25 @@ func TestCodexCreateIgnoresClientCancellation(t *testing.T) {
 	type contextKey struct{}
 	var cancel context.CancelFunc
 	called := false
-	f := newCodexFixture(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-		if _, ok := obj.(*v1alpha1.AgentSession); ok {
-			called = true
-			cancel()
-			deadline, bounded := ctx.Deadline()
-			if ctx.Err() != nil || !bounded || time.Until(deadline) > codexHostCreateTimeout || ctx.Value(contextKey{}) != "request-value" {
-				t.Fatalf("create inherited cancellation or lost deadline/value: %v %v", ctx.Err(), bounded)
+	f := newCodexFixture(t, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*v1alpha1.AgentSession); ok {
+				called = true
+				cancel()
+				deadline, bounded := ctx.Deadline()
+				if ctx.Err() != nil || !bounded || time.Until(deadline) > codexHostWriteTimeout || ctx.Value(contextKey{}) != "request-value" {
+					t.Fatalf("create inherited cancellation or lost deadline/value: %v %v", ctx.Err(), bounded)
+				}
 			}
-		}
-		return c.Create(ctx, obj, opts...)
-	}})
+			return c.Create(ctx, obj, opts...)
+		},
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.ConfigMap); ok && key.Name == codexCapacityName && ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
 	ctx, cancelRequest := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "request-value"))
 	cancel = cancelRequest
 	defer cancelRequest()
@@ -300,6 +308,83 @@ func TestCodexCreateIgnoresClientCancellation(t *testing.T) {
 	}
 }
 
+func TestLostCodexReservationResponseReleasesSlot(t *testing.T) {
+	type contextKey struct{}
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "request-value"))
+	defer cancel()
+	var lost codexCapacityPending
+	f := newCodexFixture(t, interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			cm, ok := obj.(*corev1.ConfigMap)
+			if !ok || cm.Name != codexCapacityName || lost.Attempt != "" {
+				return c.Update(ctx, obj, opts...)
+			}
+			var entries []codexCapacityPending
+			if err := json.Unmarshal([]byte(cm.Data["pending"]), &entries); err != nil || len(entries) != 1 {
+				t.Fatalf("expected one reservation write: %+v %v", entries, err)
+			}
+			if err := c.Update(ctx, obj, opts...); err != nil {
+				t.Fatal(err)
+			}
+			lost = entries[0]
+			cancel()
+			deadline, bounded := ctx.Deadline()
+			if ctx.Err() != nil || !bounded || time.Until(deadline) > codexHostWriteTimeout || ctx.Value(contextKey{}) != "request-value" {
+				t.Errorf("reservation inherited cancellation or lost deadline/value: %v %v", ctx.Err(), bounded)
+			}
+			return errors.New("reservation response lost")
+		},
+	})
+	var logs strings.Builder
+	f.srv.Log = funcr.New(func(prefix, args string) { logs.WriteString(prefix + args + "\n") }, funcr.Options{})
+	ctx = withCodexHostAdmission(ctx)
+	c := &caller{kind: kindClient, parent: clientSA, identity: saIdentity(clientSA)}
+	req := capacityCreate(false)
+	sess, err := f.srv.newSession(ctx, req, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Name = "lost-reservation"
+	if err := f.srv.createOrdinaryCodexHost(ctx, sess, c, req); err == nil || err.Error() != "reservation response lost" {
+		t.Fatalf("expected reservation response error, got %v", err)
+	}
+	if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(sess), &v1alpha1.AgentSession{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("reservation failure sent a session write: %v", err)
+	}
+	_, pending, err := f.srv.codexCapacity(context.Background())
+	if err != nil || len(pending) != 0 {
+		t.Errorf("lost response leaked a reservation: %+v %v", pending, err)
+	}
+	for _, value := range []string{"Codex host reservation outcome unknown", lost.Name, lost.Attempt, "requester", c.String()} {
+		if !strings.Contains(logs.String(), value) {
+			t.Errorf("reservation log missing %q: %s", value, logs.String())
+		}
+	}
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, req); w.Code != http.StatusCreated {
+		t.Fatalf("next create was refused: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCodexReservationEnforcesProfileCapBelowFleetCap(t *testing.T) {
+	f := newCodexFixture(t)
+	f.srv.CodexHosts.MaxRunning = codexhostpool.MaxHostsPerProfile + 1
+	ctx := context.Background()
+	for _, name := range []string{"first", "second"} {
+		if err := f.srv.reserveCodexCapacity(ctx, codexCapacityPending{Name: name, Profile: "dev", Attempt: name}, "fixture"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := f.srv.reserveCodexCapacity(ctx, codexCapacityPending{Name: "third", Profile: "dev", Attempt: "third"}, "fixture")
+	var refusal *apiError
+	if !errors.As(err, &refusal) || refusal.body.Reason != codexhostpool.ReasonCreateUnconfirmed || !strings.Contains(refusal.body.Message, "pending or unconfirmed") {
+		t.Errorf("expected pending or unconfirmed profile-cap refusal, got %v", err)
+	}
+	_, pending, err := f.srv.codexCapacity(ctx)
+	if err != nil || len(pending) != codexhostpool.MaxHostsPerProfile {
+		t.Errorf("profile reservation count changed: %+v %v", pending, err)
+	}
+}
+
 func TestUnknownCreateReadsOwnAttemptOnce(t *testing.T) {
 	for _, outcome := range []string{"own attempt", "different attempt", "absent", "unreadable"} {
 		t.Run(outcome, func(t *testing.T) {
@@ -308,10 +393,12 @@ func TestUnknownCreateReadsOwnAttemptOnce(t *testing.T) {
 				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 					if sess, ok := obj.(*v1alpha1.AgentSession); ok {
 						if outcome != "absent" && outcome != "unreadable" {
+							stored := sess.DeepCopy()
+							stored.UID = "stored-session-uid"
 							if outcome == "different attempt" {
-								sess.Annotations[codexCapacityAttempt] = "different"
+								stored.Annotations[codexCapacityAttempt] = "different"
 							}
-							if err := c.Create(ctx, obj, opts...); err != nil {
+							if err := c.Create(ctx, stored, opts...); err != nil {
 								return err
 							}
 						}
@@ -331,7 +418,12 @@ func TestUnknownCreateReadsOwnAttemptOnce(t *testing.T) {
 				},
 			})
 			w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, capacityCreate(true))
-			if w.Code != 503 {
+			if outcome == "own attempt" {
+				var made apiv1.Session
+				if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &made) != nil || made.UID != "stored-session-uid" || made.Name == "" || w.Header().Get("Location") != apiv1.SessionPath(made.Name) {
+					t.Errorf("confirmed session not returned: %d %s location=%q", w.Code, w.Body.String(), w.Header().Get("Location"))
+				}
+			} else if w.Code != http.StatusServiceUnavailable {
 				t.Fatal(w.Code, w.Body.String())
 			}
 			_, pending, err := f.srv.codexCapacity(context.Background())
@@ -446,7 +538,7 @@ func TestMalformedCapacityLedgerPreserved(t *testing.T) {
 			if err := f.c.Update(context.Background(), &cm); err != nil {
 				t.Fatal(err)
 			}
-			err := f.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "new", Profile: "dev", Attempt: "attempt-new"})
+			err := f.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "new", Profile: "dev", Attempt: "attempt-new"}, "fixture")
 			var refusal *apiError
 			if !errors.As(err, &refusal) || refusal.status != 503 || refusal.body.Reason != "capacity_ledger_unavailable" {
 				t.Errorf("malformed ledger admitted: %v", err)

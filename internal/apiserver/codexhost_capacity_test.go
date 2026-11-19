@@ -179,7 +179,7 @@ func TestCapacityReservationAcrossReplicas(t *testing.T) {
 	for i, srv := range []*Server{f.srv, other} {
 		go func(i int, srv *Server) {
 			<-start
-			results <- srv.reserveCodexCapacity(ctx, codexCapacityPending{Name: []string{"one", "two"}[i], Profile: "dev", Attempt: []string{"attempt-one", "attempt-two"}[i]})
+			results <- srv.reserveCodexCapacity(ctx, codexCapacityPending{Name: []string{"one", "two"}[i], Profile: "dev", Attempt: []string{"attempt-one", "attempt-two"}[i]}, "fixture")
 		}(i, srv)
 	}
 	close(start)
@@ -199,7 +199,7 @@ func TestCapacityReservationAcrossReplicas(t *testing.T) {
 	if err = f.srv.releaseCodexCapacity(ctx, "another-attempt"); err != nil {
 		t.Fatal(err)
 	}
-	if err = other.reserveCodexCapacity(ctx, codexCapacityPending{Name: "third", Profile: "dev", Attempt: "attempt-three"}); err == nil {
+	if err = other.reserveCodexCapacity(ctx, codexCapacityPending{Name: "third", Profile: "dev", Attempt: "attempt-three"}, "fixture"); err == nil {
 		t.Fatal("unknown create reservation was lost")
 	}
 	if err = f.srv.releaseCodexCapacity(ctx, pending[0].Attempt); err != nil {
@@ -433,7 +433,7 @@ func TestCapacitySnapshotCountsCommitDuringList(t *testing.T) {
 		return nil
 	}})
 	f.addCodexHost("existing", codexHostOpt{})
-	if err := f.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "late-commit", Profile: "dev", Attempt: "late-attempt"}); err != nil {
+	if err := f.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "late-commit", Profile: "dev", Attempt: "late-attempt"}, "fixture"); err != nil {
 		t.Fatal(err)
 	}
 	ctx := withCodexHostAdmission(context.Background())
@@ -458,7 +458,7 @@ func TestCapacityConfiguredNamespace(t *testing.T) {
 	if err := f.c.Create(context.Background(), &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "operator-control", Name: codexCapacityName}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "pending", Profile: "dev", Attempt: "attempt"}); err != nil {
+	if err := f.srv.reserveCodexCapacity(context.Background(), codexCapacityPending{Name: "pending", Profile: "dev", Attempt: "attempt"}, "fixture"); err != nil {
 		t.Fatal(err)
 	}
 	var cm corev1.ConfigMap
@@ -538,13 +538,13 @@ func TestCapacityFencesSameIdempotencyKey(t *testing.T) {
 	f := newCodexFixture(t)
 	ctx := context.Background()
 	first := codexCapacityPending{Name: "first", Profile: "dev", Attempt: "first-attempt", RequestKey: "parent-key-hash"}
-	if err := f.srv.reserveCodexCapacity(ctx, first); err != nil {
+	if err := f.srv.reserveCodexCapacity(ctx, first, "fixture"); err != nil {
 		t.Fatal(err)
 	}
 	second := first
 	second.Name = "second"
 	second.Attempt = "second-attempt"
-	if err := f.srv.reserveCodexCapacity(ctx, second); err == nil {
+	if err := f.srv.reserveCodexCapacity(ctx, second, "fixture"); err == nil {
 		t.Fatal("same-key request was admitted while unconfirmed")
 	}
 }

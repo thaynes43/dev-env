@@ -137,7 +137,7 @@ const TokenAudience = "dev-env-operator"
 // and tool pools with plan 08.
 type CreateSessionRequest struct {
 	// FreshHost requests a separate ordinary Codex remote host. Human/trusted
-	// client only; bounded by DESIGN-069. Absent preserves reuse first.
+	// client only; bounded by DESIGN-070. Absent preserves reuse first.
 	FreshHost bool `json:"freshHost,omitempty"`
 
 	// CanaryID selects one fixed operator-owned private managed rule canary.

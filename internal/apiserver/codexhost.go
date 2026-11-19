@@ -140,8 +140,11 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 		if res.Reason == codexhostpool.ReasonCreateUnconfirmed {
 			// Released CLIs collapse a 200 selection refusal to its reason
 			// sentence. The existing error message preserves name + attempt.
-			s.logCodexHostSelect(c, res, check)
-			return 0, nil, unconfirmedCodexHosts(hosts, "")
+			if err := unconfirmedCodexHosts(hosts, ""); err != nil {
+				s.logCodexHostSelect(c, res, check)
+				return 0, nil, err
+			}
+			res.Reason = codexhostpool.ReasonAtCapacity
 		}
 		last = res.Host
 		if check || res.Action != codexhostpool.ActionUse || res.Host == "" {
