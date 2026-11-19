@@ -113,7 +113,7 @@ memory file and executes only `internal-allowance-capture`. No persistent binary
 or provider is installed in the host. Raw provider streams and stderr never
 enter the report or operator logs.
 
-The helper accepts only the qualified versions: Codex 0.160.1, Claude Code
+The helper source accepts only the exact versions: Codex 0.160.1 or 0.169.1, Claude Code
 2.1.296 or 2.1.312, and Cursor 2026.10.22-27dcf5f. The Claude versions are an
 exact set of full `--version` strings, not a range: each is added only with its
 own recorded evidence (see the verification notes), and every other version
@@ -218,3 +218,10 @@ latest UI version, user sessions, keeper ownership and original access expiries.
 Do not clear an uncertain marker, reset a sequence, force auth refresh or replay
 a completed native task. Actual repeated three-provider acquisitions, restart
 recovery, native GET and UI refresh/stale/error evidence remain runtime gates.
+
+
+The agent-only [0.169.1 candidate audit](codex-169-upgrade-audit.md) retains
+0.160.1 qualification for existing hosts and adds the source-compatible
+account/quota shape for 0.169.1. This is source/synthetic evidence, not a live
+capture or private registry qualification. Its native-auth hold keeps the
+candidate draft; no collector source semantics or credential ownership changes.

@@ -281,10 +281,12 @@ func (w *claudeWorker) adopt(ctx context.Context, id string) claudelogin.Respons
 	}
 	// The profile names the account and organization and the subscription for
 	// this very access token. A GET: failing here spends nothing.
+	dispatchedAt := claudeObservedTime(w.Clock.Now())
 	profile, err := w.Transport.profile(ctx, newSecretValue(next.Access.AccessToken))
 	if err != nil {
 		return unavailable
 	}
+	respondedAt := claudeObservedTime(w.Clock.Now())
 	if prev.Access.AccountUUID != "" && prev.Access.AccountUUID != profile.AccountUUID {
 		return claudelogin.Response{Code: "AccountMismatch"}
 	}
@@ -304,16 +306,21 @@ func (w *claudeWorker) adopt(ctx context.Context, id string) claudelogin.Respons
 	}
 	// One compare-and-swap on the resourceVersion read above: a newer leader's
 	// write makes it conflict and nothing is overwritten.
-	if w.Journal.save(ctx, secret, next) != nil {
+	high, low := newClaudeIncarnation()
+	saved, err := w.Journal.saveTransition(ctx, secret, prev.Access.Generation, next, claudeTransition{
+		IncarnationHigh: high, IncarnationLow: low,
+		Operation: claudeAdoption, AccessExpirySource: claudeStagedExpiry,
+		DispatchedAt: dispatchedAt, RespondedAt: respondedAt,
+	})
+	if err != nil {
 		return unavailable
 	}
 	w.note("adopted")
 	w.observe(ctx, string(secret.UID), next)
 	// Adoption is durable even if publication is unavailable now; the next tick
 	// retries publication only.
-	if w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil || w.Publisher.publish(ctx, next.Access, next.RefreshExpiresAt, w.Clock.Now()) != nil {
+	if w.publish(ctx, saved, next) != "" {
 		return claudelogin.Response{OK: true, Code: "AdoptedPendingPublication", Generation: gen}
 	}
-	w.published = gen
 	return claudelogin.Response{OK: true, Code: "Adopted", Generation: gen}
 }

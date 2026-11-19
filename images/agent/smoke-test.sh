@@ -47,8 +47,11 @@ echo "::endgroup::"
 expect_go="$(sed -n 's/^FROM golang:\([0-9][0-9.]*\)[@ ].*/\1/p' "${here}/Dockerfile" | head -n 1)"
 [ -n "${expect_go}" ] || { echo "FAIL: no 'FROM golang:<version>' line in ${here}/Dockerfile" >&2; exit 1; }
 
+expect_codex="$(sed -n 's/^ARG CODEX_VERSION=//p' "${here}/Dockerfile")"
+[ -n "${expect_codex}" ] || { echo "FAIL: missing Codex pin" >&2; exit 1; }
+
 echo "::group::toolchain as the runtime user"
-run --entrypoint /bin/bash "${image}" -euc '
+run -e EXPECT_CODEX_VERSION="${expect_codex}" --entrypoint /bin/bash "${image}" -euc '
   test "$(id -u)" = 1000
   test "$HOME" = /home/dev
   test "$GOTMPDIR" = /home/dev/.cache/go-tmp
@@ -75,7 +78,7 @@ run --entrypoint /bin/bash "${image}" -euc '
   git --version
   gh --version
   claude --version
-  codex --version
+  test "$(codex --version)" = "codex-cli ${EXPECT_CODEX_VERSION}"
   kubectl version --client=true
   kubectl-cnpg version
   kubectl plugin list 2>/dev/null | grep -q kubectl-cnpg
@@ -142,6 +145,15 @@ EOF
   # The shell can write where the pod lets it.
   touch "$HOME/.writable" /tmp/.writable
 '
+echo "::endgroup::"
+
+echo "::group::codex pinned native protocol exports"
+# Empty HOME, no network/login/daemon; the packaged CLI emits its embedded schemas.
+run -v "${here}/testdata/codex-schema-smoke.py:/opt/codex-schema-smoke.py:ro" \
+  -v "${here}/../../internal/agentd/testdata/codex_thread_launch:/fixtures/thread:ro" \
+  -v "${here}/../../internal/agentd/testdata/codex_rc_create:/fixtures/rc:ro" \
+  -v "${here}/../../internal/codexrc/testdata/schema/codex-cli-${expect_codex}:/fixtures/discovery:ro" \
+  --entrypoint python3 "${image}" -I -B /opt/codex-schema-smoke.py
 echo "::endgroup::"
 
 echo "::group::codex thread wrapper"

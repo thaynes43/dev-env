@@ -193,8 +193,11 @@ ARG CLAUDE_CODE_VERSION=2.1.321
 # bundled default. `gpt-6.1-sol` is the Codex subagent default in config/claude/
 # CLAUDE.md since 2026-10-03 and does not exist to an older client: 0.158.0's cache
 # never lists it.
+# OP921: first stable catalog with both GPT-6.2 IDs. Agent only; the
+# codex-login helper stays at 0.160.1. The refresh review is recorded in
+# docs/codex-169-upgrade-audit.md; this source pin is not rollout authorization.
 # renovate: datasource=npm depName=@openai/codex
-ARG CODEX_VERSION=0.160.1
+ARG CODEX_VERSION=0.169.1
 # renovate: datasource=npm depName=tsx
 ARG TSX_VERSION=4.23.15
 # ── pnpm ── prose ABOVE the annotation on purpose (see the warning above).

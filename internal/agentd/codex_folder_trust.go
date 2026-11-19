@@ -225,7 +225,7 @@ type codexUserTrust struct {
 
 // readCodexUserTrust reads config/read with layers. The user layer's version
 // is what expectedVersion must match. A missing layers list, a version that
-// is not the 0.160.1 sha256 form, or more than one user layer refuses before
+// is not the 0.169.1 sha256 form, or more than one user layer refuses before
 // a write. No user layer leaves hasUser false and version empty. That is not
 // a first write: the caller refuses it and does not create the entry.
 func readCodexUserTrust(r *codexHostRPC, folder string) (codexUserTrust, error) {
@@ -274,7 +274,7 @@ func readCodexUserTrust(r *codexHostRPC, folder string) (codexUserTrust, error) 
 	return out, nil
 }
 
-// codexConfigVersion is the user-layer version 0.160.1 puts on a config
+// codexConfigVersion is the user-layer version 0.169.1 puts on a config
 // layer: sha256: and 64 lowercase hex digits.
 func codexConfigVersion(v string) bool {
 	rest, ok := strings.CutPrefix(v, "sha256:")
@@ -289,7 +289,7 @@ func codexConfigVersion(v string) bool {
 	return true
 }
 
-// codexTrustWriteRejected is a config/value/write error the 0.160.1 daemon
+// codexTrustWriteRejected is a config/value/write error the 0.169.1 daemon
 // returns before it applies the edit. configVersionConflict is one of them.
 func codexTrustWriteRejected(code string) bool {
 	switch code {

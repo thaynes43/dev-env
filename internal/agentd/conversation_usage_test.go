@@ -329,9 +329,10 @@ func TestConversationUsageRegisteredCodexConversationThroughTheFence(t *testing.
 		t.Fatalf("%+v", u)
 	}
 	wantRow(t, u.Models[0], "gpt-6-astra", 2500, 120, n64(900), nil)
-	// A rollout from another CLI version is not qualified.
+	// The retained fixture is 0.160.1; mutate its actual version to an
+	// unqualified one, independently of the image pin.
 	data, _ := os.ReadFile(path)
-	if os.WriteFile(path, []byte(strings.Replace(string(data), managedCodexVersion, "0.0.1", 1)), 0600) != nil {
+	if os.WriteFile(path, []byte(strings.Replace(string(data), `"cli_version":"0.160.1"`, `"cli_version":"0.0.1"`, 1)), 0600) != nil {
 		t.Fatal("rewrite")
 	}
 	if u := MeasureConversationUsage(s, sess, sess.SessionUID, s.PodUID, usageNow); u.ResultState != protocol.ConversationUnknown || u.ReasonCode != protocol.ReasonUnqualified {
@@ -595,5 +596,21 @@ func TestConversationUsageDaemonMeasuresInTheBackgroundOnAnInterval(t *testing.T
 	}}
 	if task.conversationUsage() != nil {
 		t.Fatal("a task session has a figure")
+	}
+}
+
+func TestConversationUsageCodex169AdditiveMetadata(t *testing.T) {
+	raw := usageFixture(t, "codex_169.jsonl", usageConversation)
+	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
+		data := []byte(strings.ReplaceAll(string(raw), "gpt-6.2-sol", model))
+		if !portalSourceVersion(protocol.AgentCodex, usageConversation, "/work/fixture", data) {
+			t.Fatal("candidate rollout version refused")
+		}
+		u := codexConversationUsage(data, usageNow)
+		if !u.Valid() || u.ResultState != protocol.ConversationFinal || len(u.Models) != 1 || u.Turns != 1 {
+			t.Fatalf("%s: %+v", model, u)
+		}
+		wantRow(t, u.Models[0], model, 10, 5, n64(3), nil)
+		assertNoText(t, u)
 	}
 }

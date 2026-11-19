@@ -21,7 +21,7 @@ import (
 func TestCodexRCStartPinnedSchema(t *testing.T) {
 	for name, digest := range map[string]string{
 		"ThreadStartParams":   "80a40a7fac15b4bf70efb7f893fb353acc0a0d30c68f54aee4f01923deca85de",
-		"ThreadStartResponse": "92f5ddc37717b922de1dc0b0405e9a6d463f370554e2091610c6e595bc2616d4",
+		"ThreadStartResponse": "98e815ee1ac1f0c840c8140ffffeb5f90dc9d78a3f62916b45261262cce0bb45",
 	} {
 		raw, err := os.ReadFile(filepath.Join("testdata", "codex_rc_create", name+".json"))
 		if err != nil {
