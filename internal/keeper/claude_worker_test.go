@@ -79,7 +79,7 @@ func (t *claudeTestTransport) profile(context.Context, secretValue) (claudeProfi
 // rotated refresh token.
 func rotated(call int, _ secretValue) (claudeTokens, error) {
 	return claudeTokens{Access: newSecretValue(fmt.Sprintf("%s-%d", claudeAccessCanary, call+1)), Refresh: newSecretValue(claudeNewRefreshCanary),
-		ExpiresIn: 8 * time.Hour, RefreshExpiresIn: 30 * 24 * time.Hour}, nil
+		ExpiresIn: 8 * time.Hour, RefreshExpiresIn: 30 * 24 * time.Hour, RefreshExpiryPresent: true}, nil
 }
 
 // failPatchClient fails every Patch on one Secret while Fail is set.
@@ -227,7 +227,7 @@ type orderPublisher struct {
 	OnPublish func(claudeauth.Access)
 }
 
-func (p *orderPublisher) publish(ctx context.Context, a claudeauth.Access, exp, now time.Time) error {
+func (p *orderPublisher) publish(ctx context.Context, a claudeauth.Access, exp, now time.Time) (bool, error) {
 	p.OnPublish(a)
 	return p.claudePublisher.publish(ctx, a, exp, now)
 }
@@ -512,7 +512,7 @@ func TestClaudeWorkerGenerationStartsAbovePublishedFloor(t *testing.T) {
 	f := newClaudeFix(t)
 	// The live Secret already holds generation 7; the journal was re-created at 1.
 	a := syntheticClaudeAccess(7, claudeNow, 8*time.Hour)
-	if err := f.w.Publisher.publish(context.Background(), a, time.Time{}, claudeNow); err != nil {
+	if _, err := f.w.Publisher.publish(context.Background(), a, time.Time{}, claudeNow); err != nil {
 		t.Fatal(err)
 	}
 	f.seed(t, syntheticClaudeRecord(1))
@@ -699,7 +699,7 @@ func TestClaudeNeedsLoginLostAckDoesNotReportBeforeRead(t *testing.T) {
 func TestClaudeReplacementLostAckSurvivesRestartAndGenerationFloor(t *testing.T) {
 	f := newClaudeFix(t)
 	a := syntheticClaudeAccess(7, claudeNow, 8*time.Hour)
-	if err := f.w.Publisher.publish(context.Background(), a, time.Time{}, claudeNow); err != nil {
+	if _, err := f.w.Publisher.publish(context.Background(), a, time.Time{}, claudeNow); err != nil {
 		t.Fatal(err)
 	}
 	f.seed(t, syntheticClaudeRecord(1))
