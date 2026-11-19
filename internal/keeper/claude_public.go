@@ -37,17 +37,19 @@ type claudePublicSecret struct {
 
 // publish writes generation a with one bounded CAS and no conflict retry. A later
 // tick may retry after reading the generation; it never repeats a refresh.
-// refreshExpiresAt, when set, is annotated.
-func (p *claudePublicSecret) publish(ctx context.Context, a claudeauth.Access, refreshExpiresAt, now time.Time) error {
+// refreshExpiresAt, when set, is annotated. The boolean confirms a new
+// access.json write. Finding an existing document or updating only its lapse
+// cannot establish when the access document was published.
+func (p *claudePublicSecret) publish(ctx context.Context, a claudeauth.Access, refreshExpiresAt, now time.Time) (bool, error) {
 	raw, err := claudeauth.Encode(a, now)
 	if err != nil {
-		return errClaudePublication
+		return false, errClaudePublication
 	}
 	c, cancel := context.WithTimeout(ctx, claudeSaveTimeout)
 	defer cancel()
 	var s corev1.Secret
 	if p.Client.Get(c, p.Secret, &s) != nil || s.ResourceVersion == "" {
-		return errClaudePublication
+		return false, errClaudePublication
 	}
 	// The lapse document (claudeauth.LoginKey) is written beside the access
 	// document, and rewritten for a generation already published, so a keeper
@@ -56,7 +58,7 @@ func (p *claudePublicSecret) publish(ctx context.Context, a claudeauth.Access, r
 	var loginRaw []byte
 	if !refreshExpiresAt.IsZero() {
 		if loginRaw, err = claudeauth.EncodeLogin(refreshExpiresAt); err != nil {
-			return errClaudePublication
+			return false, errClaudePublication
 		}
 	}
 	data := map[string]any{claudeauth.LiveKey: raw}
@@ -69,16 +71,16 @@ func (p *claudePublicSecret) publish(ctx context.Context, a claudeauth.Access, r
 	if oldRaw := s.Data[claudeauth.LiveKey]; len(oldRaw) != 0 {
 		old, err := claudeauth.Decode(oldRaw, claudeEpoch)
 		if err != nil || old.Generation > a.Generation || old.AccountUUID != a.AccountUUID {
-			return errClaudePublication
+			return false, errClaudePublication
 		}
 		if old.Generation == a.Generation {
 			canonical, err := claudeauth.Encode(old, claudeEpoch)
 			if err != nil || !bytes.Equal(canonical, raw) {
-				return errClaudePublication
+				return false, errClaudePublication
 			}
 			// The access document is current; only the lapse document may differ.
 			if bytes.Equal(s.Data[claudeauth.LoginKey], loginRaw) {
-				return nil
+				return false, nil
 			}
 			delete(data, claudeauth.LiveKey)
 			sameGeneration = true
@@ -104,9 +106,9 @@ func (p *claudePublicSecret) publish(ctx context.Context, a claudeauth.Access, r
 	patch, _ := json.Marshal(map[string]any{"metadata": meta, "data": data})
 	target := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: p.Secret.Namespace, Name: p.Secret.Name}}
 	if p.Client.Patch(c, target, client.RawPatch(types.MergePatchType, patch), client.FieldOwner(FieldOwner)) != nil {
-		return errClaudePublication
+		return false, errClaudePublication
 	}
-	return nil
+	return !sameGeneration, nil
 }
 
 // generation reads the published generation: 0 for an empty Secret. It is the

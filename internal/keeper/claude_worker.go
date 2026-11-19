@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -36,7 +37,7 @@ var (
 )
 
 type claudePublisher interface {
-	publish(ctx context.Context, a claudeauth.Access, refreshExpiresAt, now time.Time) error
+	publish(ctx context.Context, a claudeauth.Access, refreshExpiresAt, now time.Time) (bool, error)
 	generation(ctx context.Context) (uint64, error)
 }
 
@@ -67,6 +68,8 @@ type claudeWorker struct {
 	// Obs receives the journal's state for the login gauges and the notifier;
 	// nil keeps the worker as it was.
 	Obs *LoginHub
+	// Outcomes counts scheduled refresh outcomes by a fixed class.
+	Outcomes *prometheus.CounterVec
 
 	// mu serializes a refresh tick with every control request, so an adoption
 	// never overlaps a refresh in flight. Everything below is guarded by it.
@@ -196,7 +199,7 @@ func (w *claudeWorker) tick(ctx context.Context) {
 		return
 	}
 	if w.due(r) && !w.Clock.Now().Before(w.retryAfter) {
-		if r, err = w.refresh(ctx); err != nil {
+		if secret, r, err = w.refresh(ctx); err != nil {
 			return
 		}
 		// The replacement is saved; publish it even if shutdown has begun. The
@@ -207,42 +210,90 @@ func (w *claudeWorker) tick(ctx context.Context) {
 		w.note("ready")
 		return
 	}
-	if w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
-		w.note("leadership-unavailable")
+	if failure := w.publish(ctx, secret, r); failure != "" {
+		w.note(failure)
 		return
 	}
-	if w.Publisher.publish(ctx, r.Access, r.RefreshExpiresAt, w.Clock.Now()) != nil {
-		w.note("publish-failed")
-		return
+	w.note("ready")
+}
+
+// publish returns a fixed failure state or confirms the projection. Recording
+// its timestamp is best effort and cannot make a confirmed projection fail.
+func (w *claudeWorker) publish(ctx context.Context, secret *corev1.Secret, r claudeRecord) string {
+	if w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
+		return "leadership-unavailable"
+	}
+	written, err := w.Publisher.publish(ctx, r.Access, r.RefreshExpiresAt, w.Clock.Now())
+	if err != nil {
+		return "publish-failed"
 	}
 	w.published = r.Access.Generation
-	w.note("ready")
+	if written {
+		w.recordClaudePublication(ctx, secret, r.Access.Generation, claudeObservedTime(w.Clock.Now()))
+	}
+	return ""
+}
+
+func (w *claudeWorker) recordClaudePublication(ctx context.Context, secret *corev1.Secret, generation uint64, at int64) {
+	p, err := decodeClaudeProvenance(secret.Data[claudeProvenanceKey])
+	if err != nil || at == 0 {
+		return
+	}
+	last := &p.Transitions[len(p.Transitions)-1]
+	if last.Generation != generation || last.PublishedAt != 0 {
+		return
+	}
+	last.PublishedAt = at
+	// Use the snapshot whose Ready record was published. A newer journal
+	// writer wins the CAS and the time stays unknown.
+	if w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) == nil {
+		if _, err := w.Journal.patch(ctx, secret, map[string]any{claudeProvenanceKey: p.encode()}); err != nil {
+			w.Log.Info("claude publication time was not confirmed in the journal")
+		}
+	}
+}
+
+func newClaudeRefreshOutcomes() *prometheus.CounterVec {
+	c := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "dev_env_keeper_claude_refresh_outcomes_total",
+		Help: "Scheduled Claude refresh outcomes after entering the transport, by fixed class. Success means the replacement was saved.",
+	}, []string{"outcome"})
+	for _, outcome := range []string{"success", "not-sent", "possibly-spent", "status", "read", "invalid", "account-mismatch", "save-unavailable"} {
+		c.WithLabelValues(outcome)
+	}
+	return c
+}
+
+func (w *claudeWorker) countRefreshOutcome(outcome string) {
+	if w.Outcomes != nil {
+		w.Outcomes.WithLabelValues(outcome).Inc()
+	}
 }
 
 // refresh performs one journaled refresh and returns the Ready record that
 // follows it. Any error leaves the journal either Ready (nothing was sent) or
 // RefreshIntent/NeedsLogin (a send may have happened); it never retries.
-func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
+func (w *claudeWorker) refresh(ctx context.Context) (*corev1.Secret, claudeRecord, error) {
 	secret, prev, err := w.load(ctx)
 	if err != nil || prev.Stage != claudeReady {
 		w.note("journal-unavailable")
-		return claudeRecord{}, errClaudeJournal
+		return nil, claudeRecord{}, errClaudeJournal
 	}
 	journalUID := string(secret.UID)
 	floor, err := w.Publisher.generation(ctx)
 	if err != nil {
 		w.note("publish-failed")
-		return claudeRecord{}, err
+		return nil, claudeRecord{}, err
 	}
 	gen, err := nextClaudeGeneration(prev.Access.Generation, floor)
 	if err != nil {
 		w.note("generation-unavailable")
-		return claudeRecord{}, err
+		return nil, claudeRecord{}, err
 	}
 	// Leadership with room for the POST and the save, before anything is written.
 	if w.Fence(ctx, claudeRequestBudget) != nil {
 		w.note("leadership-unavailable")
-		return claudeRecord{}, errClaudeLeadership
+		return nil, claudeRecord{}, errClaudeLeadership
 	}
 	intent := prev
 	intent.Stage, intent.AttemptUID = claudeIntent, string(uuid.NewUUID())
@@ -250,7 +301,7 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 	if w.Journal.saveIntent(ctx, secret, intent) != nil {
 		// A lost acknowledgement may still have stored the intent.
 		w.rollbackUnsent(ctx, journalUID, prev, intent.AttemptUID)
-		return claudeRecord{}, errClaudeJournal
+		return nil, claudeRecord{}, errClaudeJournal
 	}
 	// Re-read the stored intent and the Lease; POST only if both still hold.
 	secret, stored, err := w.load(ctx)
@@ -258,7 +309,7 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 		// Nothing has been sent yet: return our own intent to Ready if it is
 		// still what the journal holds.
 		w.rollbackUnsent(ctx, journalUID, prev, intent.AttemptUID)
-		return claudeRecord{}, errClaudeJournal
+		return nil, claudeRecord{}, errClaudeJournal
 	}
 	requestCtx, cancelRequest := context.WithDeadline(ctx, time.Now().Add(claudeRequestTime))
 	defer cancelRequest()
@@ -268,43 +319,51 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 	if w.Fence(ctx, claudeRequestBudget) != nil {
 		w.rollbackUnsent(ctx, journalUID, prev, intent.AttemptUID)
 		w.note("leadership-unavailable")
-		return claudeRecord{}, errClaudeLeadership
+		return nil, claudeRecord{}, errClaudeLeadership
 	}
 	var committed *corev1.Secret
+	var dispatchedAt int64
 	commit := func() error {
 		var cerr error
 		committed, cerr = w.commitDispatch(ctx, secret, intent.AttemptUID)
+		if cerr == nil {
+			dispatchedAt = claudeObservedTime(w.Clock.Now())
+		}
 		return cerr
 	}
 	started := time.Now()
 	resp, err := w.Transport.refresh(requestCtx, prev.Refresh, prev.Access.Scopes, commit)
 	if err != nil {
 		phase, class := claudeFailureLabels(err)
+		w.countRefreshOutcome(class)
 		w.Log.Info("claude refresh failed", "phase", phase, "class", class, "duration_ms", time.Since(started).Milliseconds())
 		if errors.Is(err, errClaudeNotSent) {
 			if w.rollbackUnsent(ctx, journalUID, prev, intent.AttemptUID) {
 				w.retryAfter = w.Clock.Now().Add(time.Minute)
 			}
-			return claudeRecord{}, errClaudeRefresh
+			return nil, claudeRecord{}, errClaudeRefresh
 		}
 		w.needsLogin(context.WithoutCancel(ctx), intent.AttemptUID)
-		return claudeRecord{}, errClaudeRefresh
+		return nil, claudeRecord{}, errClaudeRefresh
 	}
+	respondedAt := w.Clock.Now()
 	// The provider has accepted the POST and spent the old refresh token. From
 	// here on nothing may be lost to a shutdown, so the remaining steps run on
 	// a context detached from cancellation. Each step (fence, load, save,
 	// publish) carries its own 2 s timeout, which bounds the whole.
 	ctx = context.WithoutCancel(ctx)
 	if resp.AccountUUID != "" && resp.AccountUUID != prev.Access.AccountUUID {
+		w.countRefreshOutcome("account-mismatch")
 		w.Log.Info("claude refresh failed", "phase", "validate", "class", "account-mismatch", "duration_ms", time.Since(started).Milliseconds())
 		w.needsLogin(ctx, intent.AttemptUID)
-		return claudeRecord{}, errClaudeAccount
+		return nil, claudeRecord{}, errClaudeAccount
 	}
-	next, err := applyClaudeRefresh(prev, resp, gen, w.Clock.Now())
+	next, err := applyClaudeRefresh(prev, resp, gen, respondedAt)
 	if err != nil || next.Access.Validate(w.Clock.Now()) != nil {
+		w.countRefreshOutcome("invalid")
 		w.Log.Info("claude refresh failed", "phase", "validate", "class", "invalid", "duration_ms", time.Since(started).Milliseconds())
 		w.needsLogin(ctx, intent.AttemptUID)
-		return claudeRecord{}, errClaudeRefresh
+		return nil, claudeRecord{}, errClaudeRefresh
 	}
 	// The replacement is stored BEFORE anything is published, and with no Lease
 	// check first: the old refresh token is already spent, so the save must not
@@ -314,24 +373,33 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 	// fails the journal still says RefreshIntent (or already holds the
 	// replacement); the next tick marks the first NeedsLogin and never repeats
 	// the POST.
-	if committed == nil {
+	noCommit := committed == nil
+	if noCommit {
 		// A transport that sent without the dispatch commit breaks its
 		// contract and may have left the unsent marker behind a spent token:
 		// save on the pre-commit Secret, which removes the marker, or else
 		// tombstone the attempt now.
-		if w.Journal.save(ctx, secret, next) != nil {
-			w.needsLogin(ctx, intent.AttemptUID)
-			w.note("journal-unavailable")
-			return claudeRecord{}, errClaudeJournal
-		}
-	} else if w.Journal.save(ctx, committed, next) != nil {
-		w.Log.Info("claude refresh failed", "phase", "save", "class", "unavailable", "duration_ms", time.Since(started).Milliseconds())
-		w.note("journal-unavailable")
-		return claudeRecord{}, errClaudeJournal
+		committed = secret
 	}
+	saved, err := w.Journal.saveTransition(ctx, committed, prev.Access.Generation, next, claudeTransition{
+		Operation: claudeScheduledRefresh, AccessExpirySource: claudeResponseExpiry,
+		DispatchedAt: dispatchedAt, RespondedAt: claudeObservedTime(respondedAt),
+		RefreshRotated: next.Refresh != prev.Refresh, RefreshExpiryPresent: resp.RefreshExpiryPresent,
+	})
+	if err != nil {
+		w.countRefreshOutcome("save-unavailable")
+		if noCommit {
+			w.needsLogin(ctx, intent.AttemptUID)
+		} else {
+			w.Log.Info("claude refresh failed", "phase", "save", "class", "unavailable", "duration_ms", time.Since(started).Milliseconds())
+		}
+		w.note("journal-unavailable")
+		return nil, claudeRecord{}, errClaudeJournal
+	}
+	w.countRefreshOutcome("success")
 	w.note("refreshed")
 	w.observe(ctx, string(secret.UID), next)
-	return next, nil
+	return saved, next, nil
 }
 
 // observe hands the journal's state to the gauges: words and a time, no token.

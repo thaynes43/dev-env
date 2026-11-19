@@ -15,7 +15,7 @@ func TestClaudePublicationCarriesTheLapseDateInItsOwnKey(t *testing.T) {
 	p, rc := claudePublicFixture(t, nil)
 	acc := syntheticClaudeAccess(5, claudeNow, 8*time.Hour)
 	lapse := claudeNow.Add(30 * 24 * time.Hour)
-	if err := p.publish(context.Background(), acc, lapse, claudeNow); err != nil {
+	if _, err := p.publish(context.Background(), acc, lapse, claudeNow); err != nil {
 		t.Fatal(err)
 	}
 	s := liveClaude(t, p)
@@ -29,7 +29,7 @@ func TestClaudePublicationCarriesTheLapseDateInItsOwnKey(t *testing.T) {
 
 	// The same generation and the same date: nothing is written.
 	patches := rc.Patches
-	if err := p.publish(context.Background(), acc, lapse, claudeNow.Add(time.Minute)); err != nil || rc.Patches != patches {
+	if _, err := p.publish(context.Background(), acc, lapse, claudeNow.Add(time.Minute)); err != nil || rc.Patches != patches {
 		t.Fatalf("an unchanged publication patched (%d -> %d): %v", patches, rc.Patches, err)
 	}
 
@@ -37,7 +37,7 @@ func TestClaudePublicationCarriesTheLapseDateInItsOwnKey(t *testing.T) {
 	// restart): only the lapse key and its annotation change.
 	before := s.Data[claudeauth.LiveKey]
 	later := lapse.Add(48 * time.Hour)
-	if err := p.publish(context.Background(), acc, later, claudeNow.Add(2*time.Minute)); err != nil {
+	if _, err := p.publish(context.Background(), acc, later, claudeNow.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	s = liveClaude(t, p)
@@ -49,7 +49,7 @@ func TestClaudePublicationCarriesTheLapseDateInItsOwnKey(t *testing.T) {
 	}
 
 	// A provider that gives no date removes the key: never a stale or zero date.
-	if err := p.publish(context.Background(), acc, time.Time{}, claudeNow.Add(3*time.Minute)); err != nil {
+	if _, err := p.publish(context.Background(), acc, time.Time{}, claudeNow.Add(3*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	s = liveClaude(t, p)

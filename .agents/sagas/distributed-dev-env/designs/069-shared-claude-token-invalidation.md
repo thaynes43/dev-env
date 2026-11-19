@@ -219,6 +219,20 @@ confirmed. Leave unavailable times unknown after a restart instead of
 inferring them from journal writes. Counters use fixed outcome classes. Keep
 the existing journal, fence and compare-and-swap (CAS) semantics.
 
+Slice 3 uses `refresh-provenance.json` in the private journal. Timestamps are
+Unix nanoseconds, with zero for an unknown time. The two integer halves of
+the incarnation are random at adoption and carry forward through scheduled
+refreshes. Adoption timing measures the profile request and the remaining
+staged access lifetime. Refresh timing measures the dispatch commit and
+validated response, with access expiry calculated from the response lifetime.
+The publication timestamp records confirmation of the access write. If the
+write's result is lost and a successor finds the projection already current,
+the original publication time remains unknown. The process counter
+`dev_env_keeper_claude_refresh_outcomes_total` uses fixed `outcome` values
+`success`, `not-sent`, `possibly-spent`, `status`, `read`, `invalid`,
+`account-mismatch` and `save-unavailable`. Success means the replacement was
+saved to the journal. Probe and early-recovery observations belong to slice 6.
+
 Agentd records source kind (projection, static environment, pod-owned or
 unknown), a local launch identifier, the applied generation and the actual
 successful credential-file write time. The legacy receipt is persisted before

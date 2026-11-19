@@ -69,7 +69,7 @@ func claudeObservedTime(t time.Time) int64 {
 func newClaudeIncarnation() (high, low uint64) {
 	for high == 0 && low == 0 {
 		var entropy [16]byte
-		rand.Read(entropy[:])
+		_, _ = rand.Read(entropy[:]) // crypto/rand.Read always fills the buffer
 		high, low = binary.BigEndian.Uint64(entropy[:8]), binary.BigEndian.Uint64(entropy[8:])
 	}
 	return high, low
