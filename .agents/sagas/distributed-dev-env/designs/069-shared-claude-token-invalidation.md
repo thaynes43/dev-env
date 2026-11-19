@@ -211,6 +211,9 @@ and external copies require separate evidence. [Journal Role](https://github.com
 
 ### 3.2 Offline Claude Code and review F3
 
+Finding F3 in the independent review of PR #1225 listed seven candidate
+causes and the evidence needed to distinguish them.
+
 The affected pod used agent image 2.111.0. Its Dockerfile and the investigation
 image both pin Claude Code 2.1.321. `--version` with a clean environment
 returned `2.1.321 (Claude Code)`. The local x86-64 ELF build ID was
