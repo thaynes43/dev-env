@@ -78,13 +78,11 @@ func TestClaudeEarlyDecisionHasOnlyTheKeeperCadenceEntryPoint(t *testing.T) {
 // login observations nor other reads from the publisher or Kubernetes client
 // should enter the decision. Method calls that emit metrics, persist state or
 // dispatch are allowed effects of the decision.
-func checkClaudeDecisionSelectors(t *testing.T, files *token.FileSet, file string, fn *ast.FuncDecl) {
-	t.Helper()
-	allowed := map[string]string{
-		"runClaudeProbes": `
+var claudeDecisionSelectors = map[string]string{
+	"claude_recovery.go:runClaudeProbes": `
 			w.EarlyRecovery w.EarlyRecovery.ProbeInterval w.Clock w.Clock.Now w.Clock.After w.probeClaude
 			ctx.Err ctx.Done now.Sub`,
-		"probeClaude": `
+	"claude_recovery.go:probeClaude": `
 			w.EarlyRecovery w.EarlyRecovery.Enabled w.load w.Clock w.Clock.Now w.Fence w.probeMemory
 			w.probeMemory.identity w.probeMemory.requestedAt w.probeMemory.lastHealthy w.Transport w.Transport.profile
 			w.countClaudeProbe w.mu w.mu.Lock w.mu.Unlock w.reportClaudeRecovery w.considerEarlyRefresh
@@ -94,32 +92,36 @@ func checkClaudeDecisionSelectors(t *testing.T, files *token.FileSet, file strin
 			state.lastProbe state.lastProbe(gen).ObservedAt current.UID ready.Stage ready.Access recovery.IncarnationHigh
 			recovery.IncarnationLow recovery.lastProbe previous.ObservedAt recovery.observe observation.coalesce
 			context.WithoutCancel`,
-		"considerEarlyRefresh": `
+	"claude_recovery.go:considerEarlyRefresh": `
 			state.Incident state.floor state.addAttempt state.LastAttempt state.CooldownUntil
 			w.EarlyRecovery w.EarlyRecovery.MinInterval w.EarlyRecovery.MaxAttemptsPerDay
 			w.recoveryPublished w.Clock w.Clock.Now w.Clock.Now().Before w.retryAfter now.Add
 			i.Generation i.Resolved i.Held i.page p.Generation p.Class p.ObservedAt p.FirstUsable p.First401`,
-		"claudeProbeAccessUsable":   `access.ExpiresAt access.ExpiresAt.Sub access.Validate`,
-		"claudeScheduledGeneration": `secret.Data p.Transitions last.Generation last.Operation`,
-		"classifyClaudeProbe":       `errors.As profile.AccountUUID profile.OrganizationUUID access.AccountUUID access.OrganizationUUID`,
-		"loadClaudeRecovery": `
+	"claude_recovery.go:claudeProbeAccessUsable":   `access.ExpiresAt access.ExpiresAt.Sub access.Validate`,
+	"claude_recovery.go:claudeScheduledGeneration": `secret.Data p.Transitions last.Generation last.Operation`,
+	"claude_recovery.go:classifyClaudeProbe":       `errors.As profile.AccountUUID profile.OrganizationUUID access.AccountUUID access.OrganizationUUID`,
+	"claude_recovery.go:loadClaudeRecovery": `
 			secret.Data s.Incident s.Incident.Generation s.Incident.Replacement s.Probes s.Probes[len(s.Probes)-1].Generation
 			s.EarlyTransitions s.EarlyTransitions[len(s.EarlyTransitions)-1].Generation s.useIncarnation`,
-		"recoveryPublished": `w.published i.Replacement i.Published`,
-		"load":              `context.WithTimeout w.Journal w.Journal.load`,
-		"refresh": `
+	"claude_recovery.go:recoveryPublished": `w.published i.Replacement i.Published`,
+	"claude_worker.go:load":                `context.WithTimeout w.Journal w.Journal.load`,
+	"claude_journal.go:load":               `ctx.Err corev1.Secret j.Client.Get j.Client j.Secret s.ResourceVersion s.Data`,
+	"claude_worker.go:refresh": `
 			w.load w.note w.EarlyRecovery w.EarlyRecovery.Enabled w.due w.earlyPublicationPending
 			w.Clock w.Clock.Now w.Clock.Now().Before w.dispatchClaudeRefresh prev.Stage prev.Access
 			prev.Access.Generation prev.Access.ExpiresAt`,
-		"dispatchClaudeRefresh": `
+	"claude_worker.go:dispatchClaudeRefresh": `
 			w.Publisher w.Publisher.generation w.note w.Fence w.Clock w.Clock.Now w.Clock.Now().Add
 			w.Outcomes w.Outcomes.WithLabelValues w.Outcomes.WithLabelValues(outcome,trigger).Inc
 			w.Journal w.Journal.saveIntent w.Journal.saveTransition w.load w.rollbackUnsent
 			w.commitDispatch w.Transport w.Transport.refresh w.Log w.Log.Info w.retryAfter
 			w.needsLoginAfter w.needsLogin w.EarlyRecovery w.EarlyRecovery.Enabled w.observeClaudeRecovery w.observe`,
-	}
-	list, decision := allowed[fn.Name.Name]
-	if !decision || !strings.HasPrefix(file, "claude_") {
+}
+
+func checkClaudeDecisionSelectors(t *testing.T, files *token.FileSet, file string, fn *ast.FuncDecl) {
+	t.Helper()
+	list, decision := claudeDecisionSelectors[file+":"+fn.Name.Name]
+	if !decision {
 		return
 	}
 	selectors := strings.Fields(list)
