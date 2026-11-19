@@ -252,13 +252,17 @@ func readTail(path string) ([]byte, bool) {
 		return nil, false
 	}
 	defer func() { _ = f.Close() }()
-	cut := fi.Size() > transcriptTailBytes
+	return boundedTranscriptTail(f, fi.Size(), transcriptTailBytes)
+}
+
+func boundedTranscriptTail(f *os.File, size, limit int64) ([]byte, bool) {
+	cut := size > limit
 	if cut {
-		if _, err := f.Seek(fi.Size()-transcriptTailBytes, io.SeekStart); err != nil {
+		if _, err := f.Seek(size-limit, io.SeekStart); err != nil {
 			return nil, false
 		}
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, transcriptTailBytes))
+	raw, err := io.ReadAll(io.LimitReader(f, limit))
 	if err != nil {
 		return nil, false
 	}

@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"regexp"
-	"slices"
 	"syscall"
 	"time"
 
@@ -65,18 +65,19 @@ type claudeAuthHistory struct {
 // ConfirmedAt can be set on a no-op sync (e.g. after upgrading); only a
 // successful credential-file write supplies CredentialWrittenAt.
 type claudeAuthGeneration struct {
-	AppliedGeneration                  uint64            `json:"appliedGeneration"`
-	ConfirmedAt                        time.Time         `json:"confirmedAt"`
-	CredentialWrittenAt                time.Time         `json:"credentialWrittenAt,omitzero"`
-	FirstRejectedAt                    time.Time         `json:"firstRejectedAt,omitzero"`
-	LastRejectedAt                     time.Time         `json:"lastRejectedAt,omitzero"`
-	LastAcceptedBeforeFirstRejectionAt time.Time         `json:"lastAcceptedBeforeFirstRejectionAt,omitzero"`
-	LastAcceptedAt                     time.Time         `json:"lastAcceptedAt,omitzero"`
-	FirstRejectionLaunch               *claudeAuthLaunch `json:"firstRejectionLaunch,omitempty"`
-	MainChain                          bool              `json:"mainChain,omitempty"`
-	Sidechain                          bool              `json:"sidechain,omitempty"`
-	ErrorClass                         string            `json:"errorClass,omitempty"`
-	RejectionCount                     uint8             `json:"rejectionCount,omitempty"`
+	AppliedGeneration                uint64            `json:"appliedGeneration"`
+	ConfirmedAt                      time.Time         `json:"confirmedAt"`
+	CredentialWrittenAt              time.Time         `json:"credentialWrittenAt,omitzero"`
+	FirstRejection                   claudeAuthTime    `json:"firstRejection,omitzero"`
+	LastRejection                    claudeAuthTime    `json:"lastRejection,omitzero"`
+	LastAcceptedBeforeFirstRejection claudeAuthTime    `json:"lastAcceptedBeforeFirstRejection,omitzero"`
+	LastAccepted                     claudeAuthTime    `json:"lastAccepted,omitzero"`
+	FirstRejectionLaunch             *claudeAuthLaunch `json:"firstRejectionLaunch,omitempty"`
+	LastRejectionLaunch              *claudeAuthLaunch `json:"lastRejectionLaunch,omitempty"`
+	MainChain                        bool              `json:"mainChain,omitempty"`
+	Sidechain                        bool              `json:"sidechain,omitempty"`
+	ErrorClass                       string            `json:"errorClass,omitempty"`
+	RejectionCount                   uint8             `json:"rejectionCount,omitempty"`
 	// Equal timestamps on different chains are distinct. Keep exact keys up
 	// to saturation so delayed entries and replays survive a daemon restart.
 	SeenRejections []claudeAuthRejectionKey `json:"seenRejections,omitempty"`
@@ -85,6 +86,7 @@ type claudeAuthGeneration struct {
 type claudeAuthRejectionKey struct {
 	At        time.Time `json:"at"`
 	Sidechain bool      `json:"sidechain,omitempty"`
+	Count     uint8     `json:"count"`
 }
 
 func (h claudeAuthHistory) valid() bool {
@@ -96,14 +98,19 @@ func (h claudeAuthHistory) valid() bool {
 	for _, g := range h.Generations {
 		if g.AppliedGeneration <= previous || g.ConfirmedAt.IsZero() || g.RejectionCount > claudeAuthCountLimit ||
 			(g.ErrorClass != "" && g.ErrorClass != claudeAuthRejected) ||
-			(g.FirstRejectionLaunch != nil && !g.FirstRejectionLaunch.valid()) {
+			(g.FirstRejectionLaunch != nil && !g.FirstRejectionLaunch.valid()) ||
+			(g.LastRejectionLaunch != nil && !g.LastRejectionLaunch.valid()) {
 			return false
 		}
-		wantKeys := int(g.RejectionCount)
-		if g.RejectionCount == claudeAuthCountLimit {
-			wantKeys = 0
+		var seen int
+		for _, key := range g.SeenRejections {
+			if key.At.IsZero() || key.Count == 0 {
+				return false
+			}
+			seen += int(key.Count)
 		}
-		if len(g.SeenRejections) != wantKeys {
+		if (g.RejectionCount < claudeAuthCountLimit && int(g.RejectionCount) != seen) ||
+			(g.RejectionCount == claudeAuthCountLimit && seen != 0) {
 			return false
 		}
 		previous = g.AppliedGeneration
@@ -113,11 +120,17 @@ func (h claudeAuthHistory) valid() bool {
 
 func readClaudeAuthHistory(s Settings) (claudeAuthHistory, []byte, error) {
 	var h claudeAuthHistory
-	raw, err := readBounded(s.statePath(claudeAuthHistoryFile), claudeAuthHistorySize)
+	f, err := os.OpenFile(s.statePath(claudeAuthHistoryFile), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return h, nil, err
 	}
-	if codexauth.DecodeStrict(raw, &h) != nil || !h.valid() {
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > claudeAuthHistorySize {
+		return h, nil, errors.New("invalid Claude auth history file")
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, claudeAuthHistorySize+1))
+	if err != nil || len(raw) > claudeAuthHistorySize || codexauth.DecodeStrict(raw, &h) != nil || !h.valid() {
 		return claudeAuthHistory{}, nil, errors.New("invalid Claude auth history")
 	}
 	return h, raw, nil
@@ -200,9 +213,7 @@ func (d *Daemon) observeClaudeAuthHistory() {
 	}
 	var observations []claudeAuthObservation
 	if l.TUI && launch.Source == claudeSourceProjection {
-		if tail, ok := readTranscriptTail(d.S, l.ConversationID); ok {
-			observations = claudeAuthObservations(tail, launch.CreatedAt, d.now())
-		}
+		observations = readClaudeAuthObservations(d.S, l, d.now())
 	}
 	updateClaudeAuthHistory(d.S, func(h *claudeAuthHistory) {
 		h.Launch = &launch
@@ -210,97 +221,84 @@ func (d *Daemon) observeClaudeAuthHistory() {
 		// can rebuild its lower bracket from accepted responses in the tail.
 		for _, o := range observations {
 			if o.Rejected {
-				if g := h.generationAt(o.At); g != nil {
-					g.reject(o.claudeAuthRejectionKey, launch)
+				if g := h.generationAt(o.Stamp); g != nil {
+					g.reject(o, launch)
 				}
 			}
 		}
 		for _, o := range observations {
 			if !o.Rejected {
-				if g := h.generationAt(o.At); g != nil {
-					g.accept(o.At)
+				if g := h.generationAt(o.Stamp); g != nil {
+					g.accept(o.Stamp)
 				}
 			}
 		}
 	})
 }
 
-type claudeAuthObservation struct {
-	claudeAuthRejectionKey
-	Rejected bool
-}
-
-func claudeAuthObservations(tail []byte, launchAt, now time.Time) []claudeAuthObservation {
-	var observations []claudeAuthObservation
-	for line := range bytes.SplitSeq(tail, []byte("\n")) {
-		var e transcriptEntry
-		if json.Unmarshal(line, &e) != nil || e.Type != "assistant" {
-			continue
-		}
-		at, err := time.Parse(time.RFC3339Nano, e.Timestamp)
-		// Defer future or same-tick entries. Counting them early could make a
-		// replay move an observation across a later credential write.
-		if err != nil || at.Before(launchAt) || !at.Before(now) {
-			continue
-		}
-		// Use structured error evidence for history, including sidechains.
-		// An unflagged entry needs model and usage evidence to count as accepted.
-		rejected := e.IsAPIError && (string(e.APIErrorStatus) == "401" || string(e.Error) == `"`+authErrorCode+`"`)
-		if !rejected && (e.IsAPIError || len(e.APIErrorStatus) != 0 || len(e.Error) != 0 || !acceptedResponse(e.Message)) {
-			continue
-		}
-		observations = append(observations, claudeAuthObservation{
-			claudeAuthRejectionKey{At: at.UTC(), Sidechain: e.IsSidechain}, rejected,
-		})
-	}
-	return observations
-}
-
-func (h *claudeAuthHistory) generationAt(at time.Time) *claudeAuthGeneration {
+func (h *claudeAuthHistory) generationAt(stamp claudeAuthTime) *claudeAuthGeneration {
 	for i := len(h.Generations) - 1; i >= 0; i-- {
-		if at.Equal(h.Generations[i].ConfirmedAt) {
-			return nil // This timestamp cannot order the response and the write.
-		}
-		if !at.Before(h.Generations[i].ConfirmedAt) {
+		confirmed := h.Generations[i].ConfirmedAt
+		if stamp.At.After(confirmed) {
 			return &h.Generations[i]
+		}
+		if stamp.end().After(confirmed) {
+			return nil // The recorded precision cannot order the response and the write.
 		}
 	}
 	return nil
 }
 
-func (g *claudeAuthGeneration) reject(key claudeAuthRejectionKey, launch claudeAuthLaunch) {
+func (g *claudeAuthGeneration) reject(o claudeAuthObservation, launch claudeAuthLaunch) {
 	if g.RejectionCount < claudeAuthCountLimit {
-		if slices.Contains(g.SeenRejections, key) {
-			return
-		}
-		g.RejectionCount++
-		if g.RejectionCount == claudeAuthCountLimit {
-			g.SeenRejections = nil
-		} else {
-			g.SeenRejections = append(g.SeenRejections, key)
-		}
+		g.countRejection(o)
 	}
 	g.ErrorClass = claudeAuthRejected
-	g.Sidechain = g.Sidechain || key.Sidechain
-	g.MainChain = g.MainChain || !key.Sidechain
-	if g.FirstRejectedAt.IsZero() || key.At.Before(g.FirstRejectedAt) {
-		g.FirstRejectedAt = key.At
+	g.Sidechain = g.Sidechain || o.Sidechain
+	g.MainChain = g.MainChain || !o.Sidechain
+	if g.FirstRejection.IsZero() || o.Stamp.At.Before(g.FirstRejection.At) {
+		g.FirstRejection = o.Stamp
 		g.FirstRejectionLaunch = &launch
-		if !g.LastAcceptedBeforeFirstRejectionAt.Before(key.At) {
-			g.LastAcceptedBeforeFirstRejectionAt = time.Time{}
+		if g.LastAcceptedBeforeFirstRejection.end().After(o.Stamp.At) {
+			g.LastAcceptedBeforeFirstRejection = claudeAuthTime{}
 		}
-		g.accept(g.LastAcceptedAt)
+		g.accept(g.LastAccepted)
 	}
-	if key.At.After(g.LastRejectedAt) {
-		g.LastRejectedAt = key.At
+	if o.Stamp.At.After(g.LastRejection.At) {
+		g.LastRejection = o.Stamp
+		g.LastRejectionLaunch = &launch
 	}
 }
 
-func (g *claudeAuthGeneration) accept(at time.Time) {
-	if at.After(g.LastAcceptedAt) {
-		g.LastAcceptedAt = at
+// Store only the highest observed multiplicity at each timestamp and chain.
+// A native child can appear in both its own file and the parent file.
+func (g *claudeAuthGeneration) countRejection(o claudeAuthObservation) {
+	for i := range g.SeenRejections {
+		key := &g.SeenRejections[i]
+		if key.At.Equal(o.Stamp.At) && key.Sidechain == o.Sidechain {
+			if o.Count > key.Count {
+				g.RejectionCount = min(g.RejectionCount+o.Count-key.Count, claudeAuthCountLimit)
+				key.Count = o.Count
+			}
+			if g.RejectionCount == claudeAuthCountLimit {
+				g.SeenRejections = nil
+			}
+			return
+		}
 	}
-	if at.Before(g.FirstRejectedAt) && at.After(g.LastAcceptedBeforeFirstRejectionAt) {
-		g.LastAcceptedBeforeFirstRejectionAt = at
+	g.RejectionCount = min(g.RejectionCount+o.Count, claudeAuthCountLimit)
+	if g.RejectionCount == claudeAuthCountLimit {
+		g.SeenRejections = nil
+	} else {
+		g.SeenRejections = append(g.SeenRejections, claudeAuthRejectionKey{At: o.Stamp.At, Sidechain: o.Sidechain, Count: o.Count})
+	}
+}
+
+func (g *claudeAuthGeneration) accept(stamp claudeAuthTime) {
+	if stamp.At.After(g.LastAccepted.At) {
+		g.LastAccepted = stamp
+	}
+	if !stamp.end().After(g.FirstRejection.At) && stamp.At.After(g.LastAcceptedBeforeFirstRejection.At) {
+		g.LastAcceptedBeforeFirstRejection = stamp
 	}
 }

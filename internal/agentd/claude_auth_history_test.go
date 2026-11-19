@@ -31,7 +31,7 @@ func newClaudeHistoryRig(t *testing.T) *claudeHistoryRig {
 		now: loginNow.Add(time.Hour), created: loginNow.Add(time.Hour + time.Second)}
 	writeJSON(t, r.s.statePath(bootFile), bootRecord{BootID: historyBootID})
 	writeJSON(t, r.s.statePath(launchFile), Launch{
-		BootID: historyBootID, CreatedAt: r.created, ConversationID: continueConv, TUI: true,
+		BootID: historyBootID, CreatedAt: r.created, ConversationID: continueConv, TUI: true, Dir: "/work/repo",
 	})
 	pid := os.Getpid()
 	writeJSON(t, r.s.statePath(pidFile), agentPid{Pid: pid, Start: procStartTime(pid)})
@@ -70,6 +70,12 @@ func history401(at time.Time, sidechain bool) string {
 		at.Format(time.RFC3339Nano), sidechain)
 }
 
+func (r *claudeHistoryRig) childTranscript(name string, line string) {
+	r.t.Helper()
+	path := filepath.Join(r.s.ClaudeConfigDir, "projects", "-work-repo", continueConv, "subagents", name)
+	writeRaw(r.t, path, []byte(line+"\n"))
+}
+
 func TestClaudeAuthHistoryMainChain401(t *testing.T) {
 	r := newClaudeHistoryRig(t)
 	r.apply(1)
@@ -83,7 +89,7 @@ func TestClaudeAuthHistoryMainChain401(t *testing.T) {
 		t.Fatalf("launch = %+v, first rejection launch = %+v", h.Launch, g.FirstRejectionLaunch)
 	}
 	if !g.MainChain || g.Sidechain || g.RejectionCount != 1 || g.ErrorClass != "authentication" ||
-		!g.FirstRejectedAt.Equal(at) || !g.LastRejectedAt.Equal(at) || !g.LastAcceptedBeforeFirstRejectionAt.IsZero() ||
+		!g.FirstRejection.At.Equal(at) || !g.LastRejection.At.Equal(at) || !g.LastAcceptedBeforeFirstRejection.IsZero() ||
 		h.ObservationTiming != "assistant-transcript-proxy" || !h.ClockSkewUnknown {
 		t.Fatalf("history = %+v, generation = %+v", h, g)
 	}
@@ -94,12 +100,13 @@ func TestClaudeAuthHistorySidechain401SurvivesParentSuccess(t *testing.T) {
 	r.apply(1)
 	refused := r.created.Add(5 * time.Second)
 	accepted := refused.Add(time.Second)
-	r.transcript(history401(refused, true), acceptedTurn(accepted))
+	r.childTranscript("agent-a1.jsonl", history401(refused, false))
+	r.transcript(acceptedTurn(accepted))
 	r.observeAfter(accepted)
 	h, _ := r.history()
 	g := h.Generations[0]
 	if g.MainChain || !g.Sidechain || g.RejectionCount != 1 ||
-		!g.FirstRejectedAt.Equal(refused) || !g.LastAcceptedAt.Equal(accepted) || !g.LastAcceptedBeforeFirstRejectionAt.IsZero() {
+		!g.FirstRejection.At.Equal(refused) || !g.LastAccepted.At.Equal(accepted) || !g.LastAcceptedBeforeFirstRejection.IsZero() {
 		t.Fatalf("sidechain history = %+v", g)
 	}
 	if _, err := os.Lstat(r.s.statePath(rejectionFile)); !errors.Is(err, os.ErrNotExist) || r.continues() != 0 {
@@ -122,9 +129,29 @@ func TestClaudeAuthHistoryAcceptedBeforeFirstRejection(t *testing.T) {
 	r.observeAfter(refused.Add(2 * time.Second))
 	h, _ := r.history()
 	g := h.Generations[0]
-	if !g.LastAcceptedBeforeFirstRejectionAt.Equal(accepted) || !g.LastAcceptedAt.Equal(parentSuccess) ||
-		!g.FirstRejectedAt.Equal(refused) || !g.LastRejectedAt.Equal(refused.Add(2*time.Second)) || g.RejectionCount != 2 {
+	if !g.LastAcceptedBeforeFirstRejection.At.Equal(accepted) || g.LastAcceptedBeforeFirstRejection.PrecisionNanos != 1000 ||
+		!g.LastAccepted.At.Equal(parentSuccess) ||
+		!g.FirstRejection.At.Equal(refused) || !g.LastRejection.At.Equal(refused.Add(2*time.Second)) || g.RejectionCount != 2 {
 		t.Fatalf("wrong rejection bracket: %+v", g)
+	}
+}
+
+func TestClaudeAuthHistoryTimestampPrecisionAtCredentialWrite(t *testing.T) {
+	r := newClaudeHistoryRig(t)
+	r.apply(1)
+	before := r.created.Add(10*time.Second + 122*time.Millisecond)
+	overlap := before.Add(time.Millisecond)
+	after := overlap.Add(time.Millisecond)
+	r.now = overlap.Add(500 * time.Microsecond)
+	r.apply(2)
+	r.transcript(history401(before, false), history401(overlap, false), history401(after, false))
+	r.observeAfter(after)
+	h, _ := r.history()
+	old, current := h.Generations[0], h.Generations[1]
+	if old.RejectionCount != 1 || !old.LastRejection.At.Equal(before) ||
+		current.RejectionCount != 1 || !current.FirstRejection.At.Equal(after) ||
+		old.LastRejection.PrecisionNanos != int64(time.Millisecond) {
+		t.Fatalf("overlapping timestamp was attributed to a generation: %+v", h.Generations)
 	}
 }
 
@@ -206,7 +233,7 @@ func TestClaudeAuthHistoryRetainsResolvedGeneration(t *testing.T) {
 	}
 	h, _ := r.history()
 	old, current := h.Generations[0], h.Generations[1]
-	if old.AppliedGeneration != 1 || old.RejectionCount != 1 || !old.FirstRejectedAt.Equal(at) || !old.CredentialWrittenAt.Equal(firstWrite) ||
+	if old.AppliedGeneration != 1 || old.RejectionCount != 1 || !old.FirstRejection.At.Equal(at) || !old.CredentialWrittenAt.Equal(firstWrite) ||
 		current.AppliedGeneration != 4 || !current.CredentialWrittenAt.Equal(r.now) || current.RejectionCount != 0 {
 		t.Fatalf("new generation did not preserve prior evidence: %+v", h.Generations)
 	}
@@ -234,8 +261,59 @@ func TestClaudeAuthHistoryDeduplicatesReplayAcrossPollsAndRestart(t *testing.T) 
 	r.appendTurn(history401(older, true))
 	r.observeAfter(at)
 	h, _ = r.history()
-	if g := h.Generations[0]; g.RejectionCount != 3 || !g.FirstRejectedAt.Equal(older) || !g.LastRejectedAt.Equal(at) {
+	if g := h.Generations[0]; g.RejectionCount != 3 || !g.FirstRejection.At.Equal(older) || !g.LastRejection.At.Equal(at) {
 		t.Fatalf("delayed unique event = %+v", g)
+	}
+}
+
+func TestClaudeAuthHistorySeparatesNativeChildrenWithoutPersistingIDs(t *testing.T) {
+	r := newClaudeHistoryRig(t)
+	r.apply(1)
+	at := r.created.Add(5 * time.Second)
+	r.childTranscript("agent-a1.jsonl", history401(at, false))
+	// The same sidechain observation is also visible in the parent file.
+	r.transcript(history401(at, true))
+	r.observeAfter(at)
+	h, _ := r.history()
+	if count := h.Generations[0].RejectionCount; count != 1 {
+		t.Fatalf("one child visible in two files counted %d times", count)
+	}
+	r.childTranscript("agent-b2.jsonl", history401(at, false))
+	r.observeAfter(at)
+	r.restartDaemon()
+	r.observeAfter(at)
+	h, raw := r.history()
+	if count := h.Generations[0].RejectionCount; count != 2 {
+		t.Fatalf("two children at the same timestamp counted %d times", count)
+	}
+	for _, private := range []string{"agent-a1", "agent-b2", continueConv} {
+		if bytes.Contains(raw, []byte(private)) {
+			t.Fatal("history included a transcript identifier")
+		}
+	}
+}
+
+func TestClaudeAuthHistoryRetainsLaunchAttributionAcrossResume(t *testing.T) {
+	r := newClaudeHistoryRig(t)
+	r.apply(1)
+	first := r.created.Add(5 * time.Second)
+	r.transcript(history401(first, false))
+	r.observeAfter(first)
+	r.restartDaemon()
+	laterBoot := "abcdef012345"
+	resumedAt := r.now.Add(time.Second)
+	writeJSON(t, r.s.statePath(bootFile), bootRecord{BootID: laterBoot})
+	writeJSON(t, r.s.statePath(resumeFile), Launch{
+		BootID: laterBoot, CreatedAt: resumedAt, ConversationID: continueConv, TUI: true, Dir: "/work/repo", Resume: true,
+	})
+	last := resumedAt.Add(time.Second)
+	r.appendTurn(history401(last, true))
+	r.observeAfter(last)
+	h, _ := r.history()
+	g := h.Generations[0]
+	if g.RejectionCount != 2 || g.FirstRejectionLaunch == nil || g.FirstRejectionLaunch.BootID != historyBootID ||
+		g.LastRejectionLaunch == nil || g.LastRejectionLaunch.BootID != laterBoot {
+		t.Fatalf("resume rewrote earlier launch attribution: %+v", g)
 	}
 }
 
@@ -244,7 +322,7 @@ func TestClaudeAuthHistoryGenerationAndCountBounds(t *testing.T) {
 	for generation := uint64(1); generation <= 4; generation++ {
 		r.apply(generation)
 		var lines []string
-		at := r.now.Add(time.Second)
+		at := r.now.Add(time.Second + 123456789*time.Nanosecond)
 		for range claudeAuthCountLimit - 1 {
 			at = at.Add(time.Second)
 			lines = append(lines, history401(at, true))
@@ -268,7 +346,7 @@ func TestClaudeAuthHistoryGenerationAndCountBounds(t *testing.T) {
 	r.observeAfter(at.Add(time.Second))
 	h, _ = r.history()
 	if g := h.Generations[2]; g.RejectionCount != claudeAuthCountLimit ||
-		len(g.SeenRejections) != 0 || !g.LastRejectedAt.Equal(at.Add(time.Second)) {
+		len(g.SeenRejections) != 0 || !g.LastRejection.At.Equal(at.Add(time.Second)) {
 		t.Fatalf("saturated generation = %+v", g)
 	}
 }
@@ -289,12 +367,16 @@ func TestClaudeAuthHistoryOnlyWritesSanitizedFields(t *testing.T) {
 	assertHistoryKeys(t, record["launch"], "bootId", "createdAt", "source")
 	g := record["generations"].([]any)[0].(map[string]any)
 	assertHistoryKeys(t, g, "appliedGeneration", "confirmedAt", "credentialWrittenAt", "errorClass",
-		"firstRejectedAt", "firstRejectionLaunch", "lastAcceptedAt", "lastAcceptedBeforeFirstRejectionAt",
-		"lastRejectedAt", "mainChain", "rejectionCount", "seenRejections", "sidechain")
+		"firstRejection", "firstRejectionLaunch", "lastAccepted", "lastAcceptedBeforeFirstRejection",
+		"lastRejection", "lastRejectionLaunch", "mainChain", "rejectionCount", "seenRejections", "sidechain")
 	assertHistoryKeys(t, g["firstRejectionLaunch"], "bootId", "createdAt", "source")
+	assertHistoryKeys(t, g["lastRejectionLaunch"], "bootId", "createdAt", "source")
+	for _, field := range []string{"firstRejection", "lastRejection", "lastAccepted", "lastAcceptedBeforeFirstRejection"} {
+		assertHistoryKeys(t, g[field], "at", "precisionNanos")
+	}
 	keys := g["seenRejections"].([]any)
-	assertHistoryKeys(t, keys[0], "at", "sidechain")
-	assertHistoryKeys(t, keys[1], "at")
+	assertHistoryKeys(t, keys[0], "at", "count", "sidechain")
+	assertHistoryKeys(t, keys[1], "at", "count")
 	var receipt claudeReceipt
 	if err := readJSONFile(r.s.statePath("claude-access-generation.json"), &receipt); err != nil || receipt.Fingerprint == "" {
 		t.Fatal("missing legacy receipt fingerprint")
