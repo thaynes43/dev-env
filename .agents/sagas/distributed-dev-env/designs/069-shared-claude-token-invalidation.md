@@ -110,16 +110,22 @@ verified; paired earlier generation/expiry readings would be needed to test it.
 
 ## 3. Hypotheses
 
+Slice 0 evidence on November 19 covers the deployed configuration, surviving
+pod and AgentSession metadata, Kubernetes RBAC and the pinned Claude Code
+binary. The incident bracket remains the accepted dispatch after the four
+suspensions and the reported rejection by 22:36:22 UTC. The precise last
+accepted request, the owners' action list and provider-side audit are pending.
+
 | Hypothesis | Classification | Evidence and limit |
 | --- | --- | --- |
 | H1: routine keeper refresh invalidates the old access token while consumers reload | **OBSERVED ONCE** (S-1), yet to be re-verified. **RULED OUT** for this 401 on the projection path. | Generation 128 arrived after the failure and generations 126 and earlier were expired at startup. Use §5.1 to check rejection timing against the next routine refresh windows. |
-| H2: a holder logged out or otherwise revoked the shared access token | **UNKNOWN**, compatible with the observed access-only shape | Prioritize holders of the access token. A logout that revokes the whole grant is weakened by the keeper's subsequent successful refresh. Access-only logout semantics and the actor's action are unverified. |
+| H2: a holder logged out or otherwise revoked the shared access token | **UNKNOWN** for a separate revocation action. **RULED OUT** for the traced 2.1.321 first-party logout with only the projected access credential. | Explicit logout can revoke stored refresh credentials. The projected bearer is outside those inputs. The keeper's successful refresh weakens whole-grant logout. Access opportunity and the incident action are separate evidence. |
 | H3: another holder refreshed the keeper's refresh token | **UNKNOWN**, weakened for this event | Projection excludes refresh material. The keeper recovered with the same grant, whereas rotation with reuse detection would have spent its refresh credential. The transport accepts a response without a replacement `refresh_token`, so non-rotating provider behavior leaves H3 open. Record each refresh's actual rotation result. |
-| H4: a separate login/setup-token on the same account revoked earlier tokens | **UNKNOWN** | No ceremony audit or provider guarantee about cross-login revocation was obtained. Absence of local LoginInProgress is not an account-wide audit. |
+| H4: a separate login/setup-token on the same account revoked earlier tokens | **UNKNOWN** | The v1 Remote Control path can use a separate file-backed Max login. The static-token configuration gives no evidence of a new ceremony in the bracket. Neither the client code nor local login state establishes account-wide activity or cross-grant behavior. |
 | H5: the keeper refreshed earlier than assumed | **RULED OUT** for generation 128 at the failure time, within the recorded clock/timestamp assumptions | Fixed keeper lines and bounded request agree with expiry arithmetic. Previous refresh was at 17:18:32. Clock skew was not measured; the 401 time is coordinator-supplied metadata. |
-| H6a: stale projected generation or alternate source | **RULED OUT** for an older projected generation. Alternate source **UNKNOWN**. | The main-chain 401 and the in-process subagent's 401 implicate the shared process credential. Separately launched CLIs have their own credential source and need separate attribution. |
-| H6b: provider-side early invalidation or an account event | **UNKNOWN**, compatible with the observed access-only shape | Provider-side policy or an account event could invalidate the access token alone. A 401 gives no actor or policy, and a provider audit was unavailable. |
-| H6c: suspend itself explicitly calls logout in dev-env | **RULED OUT** in the checked source paths | Stop and shutdown forward signals and rescue preserves work. S-6 saw CLI 2.1.292 archive the Remote Control entry without revoking access. Exit hooks in 2.1.321 and a delayed provider effect remain open. |
+| H6a: stale projected generation or alternate source | **RULED OUT** for an older projected generation. Alternate source **UNKNOWN**. | The affected pod had the workbench projection and a Remote Control launch that strips both OAuth environment keys. The CLI can select environment, file-descriptor or stored credentials. The observed mount and launch establish the expected source. The credential used for a specific request and separately launched CLIs remain unattributed. |
+| H6b: provider-side early invalidation or an account event | **UNKNOWN**, compatible with the observed access-only shape | Concurrent use is possible. Mount metadata provides no count of simultaneous requests or fleet-wide first rejections. The provider's reason and any server-side effect of a bridge action remain unknown. |
+| H6c: suspend itself logs out | **RULED OUT** in the checked dev-env and 2.1.321 client paths. | Agentd stops the process by signal and rescues work. The traced CLI signal and exit handlers lead to normal shutdown and bridge cleanup. Provider-side archive effects, the exact CLI versions of removed pods and any configured exit hooks remain outside this check. |
 
 The source paths cited for these limits are
 [projection merge](../../../../internal/agentd/claude_auth.go),
@@ -129,6 +135,103 @@ The source paths cited for these limits are
 [rescue](../../../../internal/agentd/rescue.go), and
 [S-6](../backlog/00-spikes.md#s-6-resume-with-remote-control), with the optional
 refresh response field in [the keeper transport](../../../../internal/keeper/claude_transport.go#L16-L24).
+
+### 3.1 Projection holders and potential readers
+
+The keeper app reads the access and refresh material from its private journal
+in `dev-env-system` and publishes a separate access-only Secret in `dev-agents`.
+Its Claude login sidecar shares ephemeral staging during a separately
+authorized ceremony. The app owns durable journal access. The session volume
+gets `access.json` and optional lapse metadata. Keeper code serializes no
+refresh token into the projection. [Journal and Secret names](../../../../internal/keeper/claude_journal.go),
+[publisher](../../../../internal/keeper/claude_public.go#L27-L66),
+[keeper deployment](https://github.com/thaynes43/haynes-ops/blob/e00c68aaaa0b75dc1b0ce7928665497fe65b5762/kubernetes/main/apps/dev-env-system/keeper/app/helmrelease.yaml).
+
+| Profile or workload | Delivery and effective use |
+| --- | --- |
+| `full` (default) and `workbench` | The base profile adds `AGENTD_CLAUDE_LIVE_FILE` and a read-only `claude-access` mount to ordinary pods across modes and providers. `full` uses `dev-env-agent` and `workbench` uses `dev-env-workbench`. A Codex pod can hold the mount even though agentd does the Claude merge only for a Claude session. In task and local Claude modes the controller also injects the separate static token and the CLI gives that environment source priority. The local-mode merge and recovery concern in §1 therefore applies to these profiles. |
+| `ops` | The projection exists in the profile's `remote` block. The controller applies that block to ordinary remote agent pods across providers. Task, local, rescue hold, project canary and pilot pods skip that block. Hold pods also skip the base credential mount. |
+| `dev`, `rule-canary-claude`, `rule-canary-codex` | The pinned templates define no Claude keeper mount for these profiles. A remote Claude launch without a projection uses the pod-owned login path. |
+| V1 in `dev` | The running pod's app and auth-watch containers reference the v1 static Claude Secret and share the home PVC. The v1 and v2 static Secrets reference the same external property, separate from keeper publication. V1's `both` launch strips the static environment key and uses its PVC-backed login. The pod spec has no keeper Secret reference. Whether any PVC, Mac or other external login contains a copy of the keeper credential is unknown. |
+
+The pinned profile definitions and observed projection pods declare no
+`CLAUDE_CODE_OAUTH_REFRESH_TOKEN` environment key. This audit checks key
+names and references in the templates and pod specs. Values delivered through
+`envFrom`, user settings and process environments remain unverified. Remote
+launch, including explicit agentd Remote Control, strips both Claude OAuth
+keys. Task and local launch retains the static key and does not strip the
+refresh key. At startup and on polls, agentd merges the current generation
+atomically into the Claude config directory for Claude sessions with the
+projection configured. It rejects an existing Claude OAuth refresh token and
+requires usable projected access before the remote launch. [Templates](https://github.com/thaynes43/haynes-ops/blob/e00c68aaaa0b75dc1b0ce7928665497fe65b5762/kubernetes/main/apps/dev-env-system/templates/app/templates.yaml#L287-L452),
+[pod construction](../../../../internal/controller/pod.go),
+[projection sync](../../../../internal/agentd/claude_auth.go),
+[agentd startup and poll](../../../../internal/agentd/daemon.go),
+[launch environment](../../../../internal/agentd/launch.go#L164-L188),
+[explicit Remote Control](../../../../internal/agentd/explicit_claude_rc.go#L404-L419),
+[v1 deployment](https://github.com/thaynes43/haynes-ops/blob/e00c68aaaa0b75dc1b0ce7928665497fe65b5762/kubernetes/main/apps/dev/dev-env/app/helmrelease.yaml),
+[v1 launcher](https://github.com/thaynes43/haynes-ops/blob/e00c68aaaa0b75dc1b0ce7928665497fe65b5762/kubernetes/main/apps/dev/dev-env/app/resources/agent-run.sh#L899-L925).
+
+The November 19 pod snapshot showed eight read-only mount holders in
+`dev-agents`. Seven had surviving pods and Ready conditions dating to the
+November 18 22:28–22:37 UTC window. They were three `full` remote Claude,
+three `workbench` remote Claude and one `full` remote Codex. The affected
+workbench pod became Ready at 22:28:13. The eighth holder began at 23:40:59.
+Four additional remote Claude AgentSessions (two `full`, two `workbench`)
+were Suspended by 22:27:24. Their retained profile and mode imply eligibility,
+while their removed pod specs and executable versions are unavailable from
+this snapshot. This is a surviving-state reconstruction. Deleted or replaced
+pods and any unstored copies could make the historical set larger. Keep the
+per-session metadata in the restricted story handoff.
+
+The live RBAC join used Roles and RoleBindings in both namespaces and
+ClusterRoles and ClusterRoleBindings. The keeper ServiceAccount in
+`dev-env-system` has named `get`/`patch` to its journal through
+`dev-env-keeper-claude-auth` and to the projection through `dev-env-keeper`.
+It was the only namespaced binding with a matching read rule on either
+target. Neither session ServiceAccount, v1's `dev-env` account, the operator
+nor the broker had direct Secret-read RBAC on the two targets. Kubelet
+projection is a separate delivery path.
+
+Cluster-wide bindings also authorize reads of **both** objects. They cover
+cluster administrators (including Flux reconcilers and the cluster UI),
+other Flux controllers, certificate and External Secrets controllers,
+network and ingress controllers, storage and database operators, secret
+reflection and reload controllers, observability controllers, backup
+controllers and Kubernetes control-plane controllers. Some bindings offer
+only `list`/`watch`, which can still return object data. The built-in
+`system:node` ClusterRole had a binding without subjects. Node authorization
+for kubelets manages assigned-pod dependencies separately. The defined
+`dev-env-grant-secrets-read` and `dev-env-grant-breakglass` ClusterRoles had
+no binding covering either target in this snapshot. The restricted story
+handoff records the matched role and ServiceAccount roster. Grants prove
+opportunity. Actual reads, historical RBAC, indirect administrative access
+and external copies require separate evidence. [Journal Role](https://github.com/thaynes43/haynes-ops/blob/e00c68aaaa0b75dc1b0ce7928665497fe65b5762/kubernetes/main/apps/dev-env-system/rbac/app/keeper-claude-auth.yaml),
+[publisher Role](https://github.com/thaynes43/haynes-ops/blob/e00c68aaaa0b75dc1b0ce7928665497fe65b5762/kubernetes/main/apps/dev-env-system/rbac/app/keeper.yaml).
+
+### 3.2 Offline Claude Code and review F3
+
+The agent image pins Claude Code 2.1.321. `--version` with a clean environment
+returned `2.1.321 (Claude Code)`. The x86-64 ELF build ID was
+`69e0821094c6c8ff81436e0a0adfc15b651a2679`. The offline read followed embedded
+JavaScript definitions and callers. The offsets below are decimal byte
+offsets in that executable. They identify the inspected code without
+running a provider or auth command. [Image pin](../../../../images/agent/Dockerfile#L156-L163).
+
+| F3 candidate | Classification and evidence |
+| --- | --- |
+| Exit of the four suspended CLIs | **RULED OUT** as a direct logout or OAuth revoke in the traced 2.1.321 paths. `SIGTERM` enters the ordinary shutdown coordinator (293534049). The interactive bridge hook tears down the transport and can archive the session (324270679, 311687400). The standalone bridge signal handler aborts polling (312216763). Cleanup stops work and either archives sessions and deregisters the environment or marks it offline for resume (312183020–312184855). Those paths did not reach the OAuth revocation helper. The successful request after all four suspensions also weakens an immediate cutoff. A delayed provider effect and other executable versions are still unknown. |
+| `claude auth logout`, `/logout` or forwarded terminal input | **RULED OUT** as first-party revocation from the projected access-only state in 2.1.321. The explicit CLI command (315387870) and interactive command (333044056) both call `performLogout` (309085958). Its first-party remote branch sends stored refresh credentials from Claude, Design or Cloud Sessions OAuth entries, or a configured profile's stored refresh credential (309075620). It appends `/revoke` to the token endpoint (286672762). The branch never passes the projected access token. Local credential removal can still disrupt that pod. Enterprise gateway logout has a separate bearer revocation branch (286874928), and MCP OAuth revocation uses separate credentials. Actual command execution and alternate auth state are unknown. |
+| Phone, web or Mac Remote Control end or archive | **UNKNOWN** as an incident cause. The inspected client maps a server-inactive session into bridge failure and suppresses re-archiving an already archived session (311686826–311687400). It can disconnect or reattach the transport. This establishes client behavior. The provider-side action list and server effects are unverified. |
+| First start of the affected session | **WEAK, UNKNOWN** for a delayed effect. The inspected bridge startup creates or reattaches a session (311622640–311624004). Profile and flag reads and bridge registration supplied no client-side revoke path. An accepted dispatch after startup weakens an immediate effect. |
+| CLI self-refresh after a 401 | **RULED OUT** for a first-party standalone process holding only the projection. The 401 handler clears the cache and reads credentials again (286933082–286937265). A different stored credential can recover a retry. Forced OAuth refresh needs a stored refresh token. SDK or desktop host callbacks and runner rotation are separate branches. The bounded wait polls environment or FD tokens (286932488). It does not poll the credentials file. Runtime file-reload behavior and independently configured refresh sources are unverified. |
+| Provider policy against concurrent use | **UNKNOWN**. Multiple pods had access during the window. Establish the policy with correlated first rejections and request concurrency or provider evidence. |
+| Other Secret readers | **OPPORTUNITY OBSERVED** in the RBAC snapshot. Attribution stays **UNKNOWN**. The journal and projection access paths above establish eligible principals. The slice collected no evidence of a read or revocation action by any principal. |
+
+The offline read established client-side branches. It did not test account
+policy, provider propagation, lifecycle actions on the Mac or v1, or the
+loaded credential in a particular process. Transcript extraction awaits
+Tom's separate decision under §6.
 
 Public primary references checked on November 18:
 [authentication](https://code.claude.com/docs/en/authentication),
