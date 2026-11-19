@@ -67,11 +67,10 @@ func readClaudeAuthObservations(s Settings, l Launch, now time.Time) []claudeAut
 	}
 	var recent []childTranscript
 	for remaining := claudeAuthChildEntries; remaining > 0; {
-		entries, readErr := children.ReadDir(min(remaining, claudeAuthChildBatch))
-		remaining -= len(entries)
-		for _, entry := range entries {
-			name := entry.Name()
-			if !strings.HasPrefix(name, "agent-") || !strings.HasSuffix(name, ".jsonl") || !entry.Type().IsRegular() {
+		names, readErr := children.Readdirnames(min(remaining, claudeAuthChildBatch))
+		remaining -= len(names)
+		for _, name := range names {
+			if !strings.HasPrefix(name, "agent-") || !strings.HasSuffix(name, ".jsonl") {
 				continue
 			}
 			var st unix.Stat_t

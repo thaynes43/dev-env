@@ -257,10 +257,13 @@ func (g *claudeAuthGeneration) reject(o claudeAuthObservation, launch claudeAuth
 			g.LastAcceptedBeforeFirstRejection = claudeAuthTime{}
 		}
 	}
-	if o.Stamp.At.After(g.LastRejection.At) {
+	// Retain the rejection that could have ended last, even when its coarser
+	// timestamp starts earlier. Recovery must follow that entire interval.
+	end, lastEnd := o.Stamp.end(), g.LastRejection.end()
+	if end.After(lastEnd) || (end.Equal(lastEnd) && o.Stamp.At.After(g.LastRejection.At)) {
 		g.LastRejection = o.Stamp
 		g.LastRejectionLaunch = &launch
-		if g.FirstAcceptedAfterLastRejection.At.Before(o.Stamp.end()) {
+		if g.FirstAcceptedAfterLastRejection.At.Before(end) {
 			g.FirstAcceptedAfterLastRejection = claudeAuthTime{}
 		}
 	}

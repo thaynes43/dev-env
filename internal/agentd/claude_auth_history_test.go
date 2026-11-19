@@ -67,8 +67,12 @@ func (r *claudeHistoryRig) history() (claudeAuthHistory, []byte) {
 }
 
 func history401(at time.Time, sidechain bool) string {
+	return history401At(at.Format(time.RFC3339Nano), sidechain)
+}
+
+func history401At(timestamp string, sidechain bool) string {
 	return fmt.Sprintf(`{"type":"assistant","timestamp":%q,"isSidechain":%t,"isApiErrorMessage":true,"apiErrorStatus":401,"message":{"content":"synthetic private text"}}`,
-		at.Format(time.RFC3339Nano), sidechain)
+		timestamp, sidechain)
 }
 
 func (r *claudeHistoryRig) childTranscript(name string, line string) {
@@ -183,6 +187,47 @@ func TestClaudeAuthHistoryFirstAcceptanceAfterLatestRejection(t *testing.T) {
 	h, _ = r.history()
 	if g := h.Generations[0]; !g.FirstAcceptedAfterLastRejection.At.Equal(recoveredAgain) || !g.FirstAccepted.At.Equal(first) {
 		t.Fatalf("same-generation recovery was not recorded: %+v", g)
+	}
+}
+
+func TestClaudeAuthHistoryRecoveryUsesLatestRejectionIntervalEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		offset time.Duration
+	}{
+		{name: "equal-start"},
+		{name: "earlier-start", offset: 500 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newClaudeHistoryRig(t)
+			r.apply(1)
+			refused := r.created.Add(5 * time.Second)
+			narrow := history401At(refused.Add(tc.offset).Format("2006-01-02T15:04:05.000Z07:00"), false)
+			overlap := refused.Add(750 * time.Millisecond)
+			r.transcript(narrow, acceptedTurn(overlap))
+			r.observeAfter(overlap)
+			h, _ := r.history()
+			if g := h.Generations[0]; !g.FirstAcceptedAfterLastRejection.At.Equal(overlap) {
+				t.Fatalf("narrow rejection interval did not establish recovery: %+v", g)
+			}
+
+			r.transcript(history401(refused, false))
+			r.observeAfter(overlap)
+			h, _ = r.history()
+			if g := h.Generations[0]; !g.LastRejection.At.Equal(refused) || g.LastRejection.PrecisionNanos != int64(time.Second) ||
+				!g.FirstAcceptedAfterLastRejection.IsZero() || !g.LastAccepted.At.Equal(overlap) {
+				t.Fatalf("wider rejection interval did not clear the recovery: %+v", g)
+			}
+
+			r.restartDaemon()
+			recovered := refused.Add(time.Second)
+			r.transcript(narrow, acceptedTurn(overlap), acceptedTurn(recovered))
+			r.observeAfter(recovered)
+			h, _ = r.history()
+			if g := h.Generations[0]; !g.FirstAcceptedAfterLastRejection.At.Equal(recovered) {
+				t.Fatalf("replay shortened the persisted rejection interval: %+v", g)
+			}
+		})
 	}
 }
 

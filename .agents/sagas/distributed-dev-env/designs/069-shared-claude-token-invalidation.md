@@ -337,6 +337,9 @@ rejection, first and latest parent acceptance, the first parent acceptance
 after the latest rejection, a saturating count, fixed error class and
 main-chain or sidechain attribution. Deduplicate observations across polls
 and restarts. Record a sidechain 401 even if the parent's next request succeeds.
+Use the rejection interval with the latest possible end, at recorded precision,
+as the last rejection for recovery. Its timestamp can precede a more precise
+rejection.
 When a poll first confirms a generation without writing credentials, leave
 the write time unknown and skip observations that could predate its confirmation.
 A new generation resolves the live rejection marker, which legacy agentd
@@ -351,12 +354,12 @@ Attribute in-process subagents through the parent's launch and source. Use
 sidechain timestamps and error class only. Each poll scans at most 4,096 child
 directory entries and reads bounded tails from the 32 newest files it finds.
 Give a Bash-launched CLI or teammate process its own launch/source attribution
-if the supported observations can identify it. Distinguish an applied generation, delivery of
-a retry prompt, and independent evidence of provider acceptance. Leave the
-request's actual loaded generation unknown unless a supported CLI signal
-establishes it. Use an accepted-request timestamp as the lower bound only at
-its recorded precision. Mark proxy timing and unknown clock skew. An
-out-of-process child with unknown source stays unknown.
+if the supported observations can identify it. Distinguish an applied
+generation, delivery of a retry prompt, and independent evidence of provider
+acceptance. Leave the request's actual loaded generation unknown unless a
+supported CLI signal establishes it. Use an accepted-request timestamp as the
+lower bound only at its recorded precision. Mark proxy timing and unknown
+clock skew. An out-of-process child with unknown source stays unknown.
 
 Send the bounded metadata through the existing heartbeat into AgentSession
 status. The operator derives the consumer-rejection metric from that status
