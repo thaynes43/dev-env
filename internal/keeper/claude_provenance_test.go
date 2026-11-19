@@ -284,7 +284,7 @@ func TestClaudeRefreshOutcomeCounters(t *testing.T) {
 			registry.MustRegister(f.w.Outcomes)
 			f.seed(t, syntheticClaudeRecord(1))
 			f.clk.Step(6 * time.Hour)
-			if tc.err == errClaudeNotSent {
+			if errors.Is(tc.err, errClaudeNotSent) {
 				f.notSent(nil)
 			}
 			f.tr.Run = func(call int, prev secretValue) (claudeTokens, error) {
