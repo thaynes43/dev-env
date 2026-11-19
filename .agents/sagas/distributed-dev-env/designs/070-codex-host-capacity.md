@@ -1,4 +1,4 @@
-# DESIGN-069: Bounded capacity for ordinary Codex hosts (OP922)
+# DESIGN-070: Bounded capacity for ordinary Codex hosts (OP922)
 
 Status: proposed source contract, 2026-11-18. Nothing installed or accepted.
 Owner: story 922's coordinator; this branch is its worker's delivery.
@@ -85,7 +85,7 @@ with no `pending` key, `kustomize.toolkit.fluxcd.io/ssa: IfNotPresent` and
 `kustomize.toolkit.fluxcd.io/prune: disabled`. Reconciliation must never reset
 operator reservations. The operator only reads and updates this named object.
 Compare-and-swap appends one counted reservation per create, capped by profile
-and fleet; uncertain creates occupy one slot, rather than block the whole fleet.
+and fleet. Each pending or unconfirmed create occupies one slot under both caps.
 A snapshot of reservations is read **before** the live session list: a create
 that commits and releases during that list is still counted. Hosts and their
 reservation are deduplicated only by the exact attempt annotation, not name.
@@ -98,15 +98,23 @@ Rescue restore skips reuse selection, since using an existing host cannot restor
 the rescued state, but still observes the fixed profile and fleet bounds. Portal
 callers already lack Codex remote creation authority; this does not expand it.
 
-A pending session counts before it becomes Running. A reservation is reclaimed
-only when its exact attempt annotation is observed on the created session;
-absence or another attempt keeps that one slot for operator-owner review. No
+A pending session counts before it becomes Running. After an uncertain session
+write, a reservation is reclaimed only when its exact attempt annotation is
+observed on the created session. If the first live name read confirms the exact
+attempt, the create returns that session as a success. Absence or another
+attempt keeps that one slot for operator-owner review. No
 automatic expiry or unproved absence releases an uncertain create. At the bound,
 creation stops; use of existing suitable hosts continues. A safe reset for an
 absent unknown attempt requires independent fencing of the old creator and is
 outside this story. No unsupported reset or manual ConfigMap edit is prescribed.
 Definite refusals, including the API's own typed admission and stale-schema
-refusals, release their own reservation. CAS prevents a stale release from
+refusals, release their own reservation. The reservation and session writes have
+bounded deadlines independent of the caller's cancellation. If reservation
+fails before a session write is sent, detached cleanup releases its own attempt
+even if the ledger update committed and the response was lost. The operator
+logs the attempt, session and requester when the reservation outcome is unknown.
+A ledger update still in flight could commit after cleanup reads the ledger and
+leave a reservation to investigate. CAS prevents a stale release from
 clearing another attempt. Same-key in-flight creates are fenced by a parent/key
 hash in the reservation; committed same-key creates are rechecked before write.
 No host is stopped, resumed, resized, reimaged or paired by this work.
@@ -128,10 +136,10 @@ owner, not rulings by Tom. OP922 comment **9217** records R1–R4; comment **922
 records the independent review and dispatch of fix-round rulings G1–G9.
 Comment **9222** is the previous source/test handoff, superseded by this round.
 
-- **R1 / Q-069-01 answered:** retain less than 1 GiB OR less than 20% remaining;
+- **R1 / Q-070-01 answered:** retain less than 1 GiB OR less than 20% remaining;
   measure after install and tune only in a later PR. **G5** requires the working
   set in this round, overriding the review's suggestion to defer M4.
-- **R2 / Q-069-02 answered:** unknown creates retain their slot, with no expiry,
+- **R2 / Q-070-02 answered:** unknown creates retain their slot, with no expiry,
   manual reset or extra slot. **G2** names session and attempt in refusals and
   logs, uses `create_unconfirmed`, and lists a phantom only as skipped. A
   supported reset must fence the old creator. Follow-up story **925** exists
@@ -152,8 +160,9 @@ Comment **9222** is the previous source/test handoff, superseded by this round.
   protected hosts stay excluded. The existing running-cap exclusions remain.
 - **G6:** reconstruct P1–P6 and prove the fresh guard, malformed-ledger and
   Forbidden/Invalid guards by killing review mutants X1–X3.
-- **R4 / G7:** use ADR-032 (ADR-031 already belongs to stop recovery); DESIGN-069
-  keeps its number. The decision stays Proposed.
+- **R4 / G7:** use ADR-032 (ADR-031 already belongs to stop recovery). The
+  original ruling kept the capacity design's number at the time. The decision
+  stays Proposed.
 - **G8:** refusals must not print empty action/host fields. After a committed
   create, retry release a bounded number of times before logging exhaustion.
   A pod can steer its own memory report, which grants no create authority.
@@ -164,6 +173,11 @@ Comment **9222** is the previous source/test handoff, superseded by this round.
   fleet cap, without changing the retained-host bound.
 - **G9:** record these coordinator rulings and provenance here; do not attribute
   them to Tom or mark the decision Accepted.
+- **2026-11-19 / M-B:** story owner and migration coordinator
+  `dev-env-1118-222802` superseded G7's numbering instruction in OP922 comment
+  9414. The [shared Claude token invalidation design](069-shared-claude-token-invalidation.md)
+  keeps DESIGN-069 because it merged first in PR 1226. Capacity moves to
+  DESIGN-070. ADR-032 stays Proposed.
 
 ## Evidence and delivery
 
@@ -196,7 +210,7 @@ snapshot (`TestCodexWorkbenchAPIResolvesOnce`). Full agentd, protocol, CLI,
 selector and CRD suites passed. The final PR records lint, generated-code,
 layout and CI results separately.
 
-[Mutation evidence](../evidence/069-capacity-mutations.md) records all capacity
+[Mutation evidence](../evidence/070-capacity-mutations.md) records all capacity
 independent removals, the exact edits and the assertion failures. Originals were
 restored byte for byte. Existing hands-off, protected/reserved/workbench and
 lease cases remain part of the full suites. No native independent agent was
@@ -220,7 +234,7 @@ suites passed. `make generate lint check-layout` passed with zero lint issues
 and no generation diff. Full agentd (245.090s), protocol, CLI and CRD suites
 passed during this delivery. All 28 final mutation runs failed their acceptance
 assertion and restored the original files. The second Claude Opus advisory
-review said “Looks good” with no new findings; R2 answers Q-069-02 with its stated limit.
+review said “Looks good” with no new findings; R2 answers Q-070-02 with its stated limit.
 CI must still finish on the delivered head; the PR/handoff records that result.
 
 ## Fix round 1 compatibility and evidence
@@ -249,7 +263,7 @@ DTOs, which are unchanged. `TestMemoryHeartbeatAndLegacyViews` still checks
 populated telemetry through show/list/fleet. `TestCreateUnconfirmedIsNamed`
 strictly decodes both changed answers against frozen v2.111.0 field sets.
 
-[Fix-round mutation evidence](../evidence/069-capacity-fix1-mutations.md)
+[Fix-round mutation evidence](../evidence/070-capacity-fix1-mutations.md)
 records each isolated broken guard, its failing named test, and restoration.
 Tests use fake clients or local envtest, sanitized child environments, two CPUs,
 one package at a time and no real sleeps in the new cases. Source/tested results

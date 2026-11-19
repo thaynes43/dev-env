@@ -36,7 +36,7 @@ actual commands after the supported route passes.
 
 ## Room on an ordinary reusable host
 
-[DESIGN-069](../.agents/sagas/distributed-dev-env/designs/069-codex-host-capacity.md)
+[DESIGN-070](../.agents/sagas/distributed-dev-env/designs/070-codex-host-capacity.md)
 and proposed ADR-032 add a bounded capacity route (source only; installation and
 phone acceptance are separate). Reuse remains first. A fresh report from the
 present pod marks a host `host_full` when its agent container has less than
@@ -81,8 +81,10 @@ clients. With selection off, direct ordinary create still has the fixed profile
 and fleet bounds; fresh intent is refused.
 
 An operator ConfigMap in the configured policy namespace counts reservations
-across replicas. An uncertain create retains one slot without a timeout; other
-available slots can still be used. A later admission reclaims its reservation
+across replicas. A pending or unconfirmed create counts toward both the profile
+bound and the running fleet cap. An unconfirmed create has no expiry. When
+reservations fill the fleet cap, counted creates and resumes are refused across
+all profiles. A later admission reclaims an unconfirmed reservation
 only after observing the exact created attempt. If no such object can be proved,
 report that occupied slot for owner review. There is no reset based on age or
 unproved absence; do not edit the reservation or retry by another route. Rescue

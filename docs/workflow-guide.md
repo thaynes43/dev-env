@@ -1155,7 +1155,7 @@ Use this when Tom must see and drive the thread on his phone.
    the fixed two-retained-host profile bound or running fleet cap. Pending
    creates count before their first status update.
 
-   **Capacity (DESIGN-069, source only).** A fresh current-pod cgroup v2 report
+   **Capacity (DESIGN-070, source only).** A fresh current-pod cgroup v2 report
    with less than 1 GiB or 20% agent-container memory remaining skips a host
    with reason `host_full`. Another suitable host is used first; otherwise
    selection may answer `create` with that reason. The normal one-host profile
