@@ -26,9 +26,11 @@ const (
 func CanaryResultPath(id string) string { return CanariesPath + "/" + id + "/result" }
 
 // ClaudeAuthHistoryQuery opts a named Session read into diagnostic history.
+// ClaudeAuthHistoryHeader acknowledges the negotiated view, even without a snapshot.
 const (
-	ClaudeAuthHistoryQuery = "claude-auth-history"
-	ClaudeAuthHistoryV1    = "v1"
+	ClaudeAuthHistoryQuery  = "claude-auth-history"
+	ClaudeAuthHistoryHeader = "Dev-Env-Claude-Auth-History"
+	ClaudeAuthHistoryV1     = "v1"
 )
 
 // CanaryResult exposes one retained managed publication to its fixed initiating
@@ -313,6 +315,8 @@ type Session struct {
 	CapturedUsage *CapturedUsage `json:"capturedUsage,omitempty"`
 	// ClaudeAuthHistory is present only on a negotiated named Session read.
 	ClaudeAuthHistory *protocol.ClaudeAuthHistory `json:"claudeAuthHistory,omitempty"`
+	// ClaudeAuthHistoryReportedAt is the operator's receipt time for that snapshot.
+	ClaudeAuthHistoryReportedAt *time.Time `json:"claudeAuthHistoryReportedAt,omitempty"`
 	// UsageRollup sums the retained descendants' own initial invocations. It is
 	// present only on a single Session's view, and only when it has
 	// descendants.

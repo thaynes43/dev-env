@@ -139,7 +139,7 @@ func (a *app) callWithRetryObserver(ctx context.Context, c *conn, method, path s
 		target += "?" + query.Encode()
 	}
 	for attempt := 0; ; attempt++ {
-		status, raw, err := a.send(ctx, c, method, target, payload)
+		status, headers, raw, err := a.sendWithHeaders(ctx, c, method, target, payload)
 		var ee *exitError
 		if errors.As(err, &ee) {
 			// A token that could not be read or minted: retrying changes nothing.
@@ -186,6 +186,10 @@ func (a *app) callWithRetryObserver(ctx context.Context, c *conn, method, path s
 			}
 			return status, refusal(c, status, raw)
 		}
+		if query.Get(apiv1.ClaudeAuthHistoryQuery) == apiv1.ClaudeAuthHistoryV1 &&
+			headers.Get(apiv1.ClaudeAuthHistoryHeader) != apiv1.ClaudeAuthHistoryV1 {
+			return status, fail(ExitFailed, "the operator does not offer the Claude auth history view")
+		}
 		if out != nil && len(raw) > 0 {
 			if err := json.Unmarshal(raw, out); err != nil {
 				if writeOnce {
@@ -201,9 +205,14 @@ func (a *app) callWithRetryObserver(ctx context.Context, c *conn, method, path s
 // send makes one attempt. A transport failure comes back as a plain error;
 // a failure to get a token as an *exitError.
 func (a *app) send(ctx context.Context, c *conn, method, target string, payload []byte) (int, []byte, error) {
+	status, _, raw, err := a.sendWithHeaders(ctx, c, method, target, payload)
+	return status, raw, err
+}
+
+func (a *app) sendWithHeaders(ctx context.Context, c *conn, method, target string, payload []byte) (int, http.Header, []byte, error) {
 	tok, err := c.token.Token(ctx)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	var rd io.Reader
 	if payload != nil {
@@ -211,7 +220,7 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, rd)
 	if err != nil {
-		return 0, nil, fail(ExitUsage, "%v", err)
+		return 0, nil, nil, fail(ExitUsage, "%v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Accept", "application/json")
@@ -243,7 +252,7 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	limit := int64(maxResponse)
@@ -252,12 +261,12 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	if c.rejectOversizeResponse && len(raw) > maxResponse {
-		return resp.StatusCode, nil, errOversizeResponse
+		return resp.StatusCode, nil, nil, errOversizeResponse
 	}
-	return resp.StatusCode, raw, nil
+	return resp.StatusCode, resp.Header, raw, nil
 }
 
 // flagOf names a request field by the flag that sets it, so a refusal points

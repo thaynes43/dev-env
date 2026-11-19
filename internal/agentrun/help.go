@@ -1068,7 +1068,7 @@ A 409 error envelope instead prints
 This command sends once; after an unconfirmed response, read agent-run show
 before retrying.
 `,
-	"show": `Usage: agent-run show <name> [-o json]
+	"show": `Usage: agent-run show <name> [-o json] [--claude-auth-history]
        agent-run show <name> --json --once [--claude-auth-history]
 
 Shows one session: phase and node, the scheduler's reason while Pending, repo,
@@ -1089,8 +1089,10 @@ oversized view is unavailable, not zero usage and not a partial receipt list.
 
 --claude-auth-history with JSON output requests the last diagnostic snapshot
 reported by Claude agentd. The claudeAuthHistory key holds up to three applied
-generations when available. Ordinary show omits the key. An older operator or a
-session with no usable snapshot leaves the key absent.
+generations when available. claudeAuthHistoryReportedAt records when the operator
+last received a usable snapshot. Ordinary show and sessions without a usable
+snapshot omit both keys. An older operator cannot serve the view, so an explicit
+request exits with an error.
 `,
 	"usage": `Usage: agent-run usage -o json [--from-file FILE|- | --claude-statusline | --read-current | --publish-file FILE|-]
        agent-run usage capture -o json --input FILE|- --trust-file FILE

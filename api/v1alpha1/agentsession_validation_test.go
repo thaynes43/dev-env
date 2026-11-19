@@ -3578,3 +3578,23 @@ func TestClaudeAuthHistorySchema(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeAuthHistoryReportedAtSchema(t *testing.T) {
+	s := taskSession()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	if stored := get(t, s).Status.ClaudeAuthHistoryReportedAt; stored != nil {
+		t.Fatal("an unreported snapshot has a receipt time")
+	}
+	at := metav1.NewTime(time.Date(2026, 11, 19, 20, 0, 0, 0, time.UTC))
+	s.Status.ClaudeAuthHistoryReportedAt = &at
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	if stored := get(t, s).Status.ClaudeAuthHistoryReportedAt; !at.Equal(stored) {
+		t.Fatal("snapshot receipt time did not round trip")
+	}
+	patch := client.RawPatch(types.MergePatchType, []byte(`{"status":{"claudeAuthHistoryReportedAt":"2026-13-19T20:00:00Z"}}`))
+	wantInvalid(t, k8s.Status().Patch(ctx(t), s, patch), "claudeAuthHistoryReportedAt")
+}

@@ -7,8 +7,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
+
+func TestShowStripsUnsolicitedClaudeAuthHistory(t *testing.T) {
+	h := newHarness(t)
+	s := testSession("claude-fixture", "Running")
+	s.ClaudeAuthHistory = &protocol.ClaudeAuthHistory{
+		Version: 1, ObservationTiming: protocol.ClaudeAuthObservationTiming, ClockSkewUnknown: true,
+	}
+	s.ClaudeAuthHistoryReportedAt = &testNow
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		writeTestJSON(w, http.StatusOK, s)
+	}
+	h.mustRun(ExitOK, "show", s.Name, "-o", "json")
+	if strings.Contains(h.stdout.String(), "claudeAuthHistory") {
+		t.Fatal("ordinary show printed unsolicited history or report time")
+	}
+}
 
 func TestList(t *testing.T) {
 	h := newHarness(t)

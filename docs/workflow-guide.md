@@ -890,9 +890,12 @@ are UTC with nanosecond precision when recorded. Request times are transcript
 proxies with their recorded precision and unknown clock skew. A credential
 write time can be absent after a generation was confirmed without a write.
 The applied generation describes the file. Claude agentd cannot tell which
-generation the CLI used for a request. The operator retains the previous
-snapshot when a heartbeat omits the history. Ordinary show omits the key. An
-older operator or a session with no usable snapshot also leaves it absent.
+generation the CLI used for a request. `claudeAuthHistoryReportedAt` is the
+operator's timestamp for the last heartbeat that carried a usable snapshot.
+Both values stay at their last usable report when a heartbeat omits the
+history or sends an invalid one. A session without a usable snapshot omits
+both keys. Ordinary show omits both keys, and an explicit request against an
+older operator exits with an error.
 
 For a summoned remote session with a stored registration record, `agent-run
 show <name>` adds a `registration` row: the current Remote Control state,

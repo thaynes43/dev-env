@@ -55,7 +55,7 @@ func strictSessionViewJSON(raw []byte, includeHistory bool) bool {
 	if includeHistory {
 		return strictWireJSON(raw, reflect.TypeFor[apiv1.Session]())
 	}
-	return strictWireJSON(raw, reflect.TypeFor[apiv1.Session](), "claudeAuthHistory")
+	return strictWireJSON(raw, reflect.TypeFor[apiv1.Session](), "claudeAuthHistory", "claudeAuthHistoryReportedAt")
 }
 
 // strictWireJSON walks raw against the canonical exported JSON tags of the

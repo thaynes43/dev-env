@@ -456,15 +456,21 @@ func (s *Server) sessionKey(r *http.Request) (types.NamespacedName, error) {
 }
 
 // getSession serves GET /v1/sessions/{name}.
-func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+func (s *Server) getSession(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	key, err := s.sessionKey(r)
 	if err != nil {
 		return 0, nil, err
 	}
 	includeClaudeAuthHistory := r.URL.Query().Get(apiv1.ClaudeAuthHistoryQuery) == apiv1.ClaudeAuthHistoryV1
 	show := func(sess *v1alpha1.AgentSession, v apiv1.Session) (int, any, error) {
-		if includeClaudeAuthHistory && sess.Spec.Agent == v1alpha1.AgentClaude && sess.Status.ClaudeAuthHistory.Valid() {
-			v.ClaudeAuthHistory = sess.Status.ClaudeAuthHistory
+		if includeClaudeAuthHistory {
+			w.Header().Set(apiv1.ClaudeAuthHistoryHeader, apiv1.ClaudeAuthHistoryV1)
+			if sess.Spec.Agent == v1alpha1.AgentClaude && sess.Status.ClaudeAuthHistory.Valid() {
+				v.ClaudeAuthHistory = sess.Status.ClaudeAuthHistory
+				if at := sess.Status.ClaudeAuthHistoryReportedAt; at != nil {
+					v.ClaudeAuthHistoryReportedAt = &at.Time
+				}
+			}
 		}
 		return http.StatusOK, v, nil
 	}

@@ -79,12 +79,14 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 		return 0, nil, forbidden("session %s was replaced; the pod belongs to the earlier one", key.Name)
 	}
 	base := sess.DeepCopy()
+	receivedAt := metav1.NewTime(s.now().Truncate(time.Second))
 	// Old agentd and unreadable snapshots leave the last usable evidence in
 	// place. The pod's claim has no role in refresh or recovery decisions.
 	if sess.Spec.Agent == v1alpha1.AgentClaude && len(body.ClaudeAuthHistory) > 0 && len(body.ClaudeAuthHistory) <= protocol.ClaudeAuthHistoryMaxBytes {
 		var history protocol.ClaudeAuthHistory
 		if codexauth.DecodeStrict(body.ClaudeAuthHistory, &history) == nil && history.Valid() {
 			sess.Status.ClaudeAuthHistory = &history
+			sess.Status.ClaudeAuthHistoryReportedAt = &receivedAt
 		}
 	}
 	if sess.Spec.Caller == "" && s.ManagedChildDecisions && sess.Spec.Agent == v1alpha1.AgentCodex && sess.Spec.Mode == v1alpha1.ModeTask && sess.Spec.Workspace != nil {
@@ -125,7 +127,7 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 		} // Omission cannot erase a pending or locally fabricated decision.
 
 	}
-	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
+	sess.Status.Agent = agentStatus(st, receivedAt)
 	if codexRemoteSession(&sess) && st.CodexHostMemory != nil && st.CodexHostMemory.Valid() &&
 		!st.CodexHostMemory.ObservedAt.After(s.now()) && s.now().Sub(st.CodexHostMemory.ObservedAt) <= codexhostpool.MemoryMaxAge {
 		m := st.CodexHostMemory
@@ -184,9 +186,14 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 		base.Status.Agent.PodUID = ""
 	}
 	patch := client.MergeFrom(base)
-	// A history is one snapshot. Fence the merge patch so concurrent writes
-	// cannot mix fields from different snapshots.
+	// Fence the snapshot and receipt time together. A heartbeat repeating the
+	// snapshot may patch only its receipt time, and a changed generations list
+	// may omit launch. Applying either patch after a concurrent write could
+	// pair data from different reports. The lock can return 409 on a concurrent
+	// status write, delaying liveness and the rest of this beat until agentd's
+	// next heartbeat.
 	if !apiequality.Semantic.DeepEqual(base.Status.ClaudeAuthHistory, sess.Status.ClaudeAuthHistory) ||
+		!apiequality.Semantic.DeepEqual(base.Status.ClaudeAuthHistoryReportedAt, sess.Status.ClaudeAuthHistoryReportedAt) ||
 		!apiequality.Semantic.DeepEqual(base.Status.Outcome, sess.Status.Outcome) || (storedPod != "" && storedPod != callerPod) {
 		patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
 	}

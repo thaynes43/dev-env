@@ -14,6 +14,7 @@ import (
 	"time"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -26,7 +27,8 @@ import (
 
 func TestClaudeAuthHistoryHeartbeatAndShow(t *testing.T) {
 	now := time.Date(2026, 11, 19, 20, 0, 0, 123456789, time.UTC)
-	l := startLiveWith(t, func(s *Server) { s.Now = func() time.Time { return now } })
+	clock := clocktesting.NewFakeClock(now)
+	l := startLiveWith(t, func(s *Server) { s.Now = clock.Now })
 	human := l.token(humanSA, []string{apiv1.TokenAudience}, nil)
 	task := newOutcomeTask(t, l, human)
 	key := client.ObjectKey{Namespace: sessionNS, Name: task.name}
@@ -82,7 +84,7 @@ func TestClaudeAuthHistoryHeartbeatAndShow(t *testing.T) {
 	// The old heartbeat wire fixture has no auth history key.
 	legacy := json.RawMessage(`{"session":` + mustJSON(t, task.name) + `,"boot":"ready","agent":{"state":"busy"}}`)
 	beat(legacy)
-	if got := stored(); got.ClaudeAuthHistory != nil || got.Agent.Status != "busy" {
+	if got := stored(); got.ClaudeAuthHistory != nil || got.ClaudeAuthHistoryReportedAt != nil || got.Agent.Status != "busy" {
 		t.Fatal("old heartbeat did not write liveness alone")
 	}
 	l.waitSession(t, task.name, human, "old heartbeat", func(v apiv1.Session) bool {
@@ -96,6 +98,10 @@ func TestClaudeAuthHistoryHeartbeatAndShow(t *testing.T) {
 	code, legacyOrdinary := l.show(human, task.name, "-o", "json")
 	if code != agentrun.ExitOK {
 		t.Fatalf("ordinary CLI rejected the response before history arrived: exit %d", code)
+	}
+	code, emptyOnce := l.show(human, task.name, "--json", "--once", "--claude-auth-history")
+	if code != agentrun.ExitOK || emptyOnce != legacyOnce {
+		t.Fatalf("strict CLI did not accept an acknowledged view without history: exit %d", code)
 	}
 
 	at := protocol.ClaudeAuthTimestamp(now.Format(time.RFC3339Nano))
@@ -114,15 +120,18 @@ func TestClaudeAuthHistoryHeartbeatAndShow(t *testing.T) {
 		return json.RawMessage(strings.TrimSuffix(string(legacy), "}") + `,"claudeAuthHistory":` + raw + `}`)
 	}
 	beat(withHistory(mustJSON(t, h)))
-	if got := stored(); !apiequality.Semantic.DeepEqual(got.ClaudeAuthHistory, h) {
-		t.Fatal("heartbeat history was changed or pruned by Kubernetes")
+	reportedAt := clock.Now().Truncate(time.Second)
+	if got := stored(); !apiequality.Semantic.DeepEqual(got.ClaudeAuthHistory, h) ||
+		got.ClaudeAuthHistoryReportedAt == nil || !got.ClaudeAuthHistoryReportedAt.Time.Equal(reportedAt) {
+		t.Fatal("heartbeat history or report time was changed or pruned by Kubernetes")
 	}
 
 	optPath := showPath + "?" + apiv1.ClaudeAuthHistoryQuery + "=" + apiv1.ClaudeAuthHistoryV1
 	deadline := time.Now().Add(cacheLagBound)
 	for {
 		v := unmarshal[apiv1.Session](t, l.want(http.MethodGet, optPath, human, nil, http.StatusOK))
-		if apiequality.Semantic.DeepEqual(v.ClaudeAuthHistory, h) {
+		if apiequality.Semantic.DeepEqual(v.ClaudeAuthHistory, h) &&
+			v.ClaudeAuthHistoryReportedAt != nil && v.ClaudeAuthHistoryReportedAt.Equal(reportedAt) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -132,7 +141,7 @@ func TestClaudeAuthHistoryHeartbeatAndShow(t *testing.T) {
 	}
 	// The response bytes and both CLI invocations are identical to the
 	// legacy fixture, even though the named read can now see stored history.
-	if got := l.want(http.MethodGet, showPath, human, nil, http.StatusOK); !bytes.Equal(legacyView, got) || bytes.Contains(got, []byte(`"claudeAuthHistory"`)) {
+	if got := l.want(http.MethodGet, showPath, human, nil, http.StatusOK); !bytes.Equal(legacyView, got) || bytes.Contains(got, []byte(`"claudeAuthHistory`)) {
 		t.Fatal("the legacy response changed when history was stored")
 	}
 	for _, check := range []struct {
@@ -150,30 +159,48 @@ func TestClaudeAuthHistoryHeartbeatAndShow(t *testing.T) {
 	for _, flags := range [][]string{{"-o", "json"}, {"--json", "--once"}} {
 		args := append([]string{task.name, "--claude-auth-history"}, flags...)
 		code, out := l.show(human, args...)
-		if code != agentrun.ExitOK || !apiequality.Semantic.DeepEqual(unmarshal[apiv1.Session](t, []byte(out)).ClaudeAuthHistory, h) {
+		if code != agentrun.ExitOK {
 			t.Fatalf("opt-in CLI arguments %v did not show the history: exit %d", flags, code)
+		}
+		got := unmarshal[apiv1.Session](t, []byte(out))
+		if !apiequality.Semantic.DeepEqual(got.ClaudeAuthHistory, h) ||
+			got.ClaudeAuthHistoryReportedAt == nil || !got.ClaudeAuthHistoryReportedAt.Equal(reportedAt) {
+			t.Fatalf("opt-in CLI arguments %v did not show history and its report time", flags)
 		}
 	}
 	for _, path := range []string{showPath + "?" + apiv1.ClaudeAuthHistoryQuery + "=unknown", apiv1.SessionsPath} {
-		if got := l.want(http.MethodGet, path, human, nil, http.StatusOK); bytes.Contains(got, []byte(`"claudeAuthHistory"`)) {
+		if got := l.want(http.MethodGet, path, human, nil, http.StatusOK); bytes.Contains(got, []byte(`"claudeAuthHistory`)) {
 			t.Fatal("history appeared outside the negotiated named view")
 		}
 	}
 	l.want(http.MethodGet, apiv1.SessionsPath+"?"+apiv1.ClaudeAuthHistoryQuery+"=v1", human, nil, http.StatusBadRequest)
+
+	// Re-reporting the same snapshot still advances its receipt time.
+	clock.Step(time.Minute)
+	beat(withHistory(mustJSON(t, h)))
+	reportedAt = clock.Now().Truncate(time.Second)
+	if got := stored(); !apiequality.Semantic.DeepEqual(got.ClaudeAuthHistory, h) ||
+		got.ClaudeAuthHistoryReportedAt == nil || !got.ClaudeAuthHistoryReportedAt.Time.Equal(reportedAt) {
+		t.Fatal("unchanged snapshot did not advance the report time")
+	}
 
 	// Older and malformed reports still refresh liveness without erasing
 	// evidence. A full snapshot is replaced only by a usable one.
 	for i, raw := range []json.RawMessage{
 		legacy,
 		withHistory(`"wrong-type"`),
+		withHistory(`{"version":2,"observationTiming":"assistant-transcript-proxy","clockSkewUnknown":true}`),
 		withHistory(`{"version":1,"observationTiming":"assistant-transcript-proxy","clockSkewUnknown":true,"unexpected":"fixture"}`),
 		withHistory(`{"version":1,"observationTiming":"assistant-transcript-proxy","clockSkewUnknown":true` + strings.Repeat(" ", protocol.ClaudeAuthHistoryMaxBytes) + `}`),
 	} {
 		state := []string{"idle", "waiting"}[i%2]
+		clock.Step(time.Minute)
 		beat(bytes.Replace(raw, []byte(`"state":"busy"`), []byte(`"state":"`+state+`"`), 1))
 		got := stored()
-		if !apiequality.Semantic.DeepEqual(got.ClaudeAuthHistory, h) || got.Agent.Status != state || got.Agent.LastHeartbeat == nil || !got.Agent.LastHeartbeat.Time.Equal(now.Truncate(time.Second)) {
-			t.Fatalf("unusable or old heartbeat fixture %d lost history or did not refresh liveness", i)
+		if !apiequality.Semantic.DeepEqual(got.ClaudeAuthHistory, h) ||
+			got.ClaudeAuthHistoryReportedAt == nil || !got.ClaudeAuthHistoryReportedAt.Time.Equal(reportedAt) ||
+			got.Agent.Status != state || got.Agent.LastHeartbeat == nil || !got.Agent.LastHeartbeat.Time.Equal(clock.Now().Truncate(time.Second)) {
+			t.Fatalf("unusable or old heartbeat fixture %d changed history or did not refresh liveness", i)
 		}
 	}
 }
@@ -202,7 +229,7 @@ func checkPreSliceClaudeAuthHistoryCLI(t *testing.T, l *live, token, name string
 		cmd.Env = []string{"PATH=/usr/bin:/bin"}
 		out, err := cmd.Output()
 		cancel()
-		if err != nil || bytes.Contains(out, []byte(`"claudeAuthHistory"`)) {
+		if err != nil || bytes.Contains(out, []byte(`"claudeAuthHistory`)) {
 			t.Fatalf("pre-slice agent-run failed %v: %v", flags, err)
 		}
 		if got := unmarshal[apiv1.Session](t, out); got.Name != name {

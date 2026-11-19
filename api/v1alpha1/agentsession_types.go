@@ -862,6 +862,10 @@ type AgentSessionStatus struct {
 	// It is pod-reported evidence and grants no authority over authentication.
 	// +optional
 	ClaudeAuthHistory *protocol.ClaudeAuthHistory `json:"claudeAuthHistory,omitempty"`
+	// ClaudeAuthHistoryReportedAt is when the operator received the last
+	// heartbeat with a usable Claude auth history snapshot.
+	// +optional
+	ClaudeAuthHistoryReportedAt *metav1.Time `json:"claudeAuthHistoryReportedAt,omitempty"`
 
 	// TaskResult is how a task-mode session's task ended, derived by the
 	// operator from agent.task (DESIGN-021). Phase stays the pod's: a session

@@ -169,6 +169,7 @@ func (a *app) show(ctx context.Context, args []string) error {
 	}
 	if !authHistory {
 		s.ClaudeAuthHistory = nil
+		s.ClaudeAuthHistoryReportedAt = nil
 	} else if s.ClaudeAuthHistory != nil && !s.ClaudeAuthHistory.Valid() {
 		return fail(ExitFailed, "show returned invalid Claude auth history")
 	}
