@@ -350,23 +350,33 @@ successful credential-file write time. The legacy receipt is persisted before
 the credentials write. Its timestamp can therefore precede the first moment
 the CLI could load the generation. For the current and two prior generations
 retain first and last rejection, last accepted request before the first
-rejection, a saturating count, fixed error class and main-chain or sidechain
-attribution. Deduplicate observations across polls and restarts. Record a
-sidechain 401 even if the parent's next request succeeds. A separate status
-for subsequent acceptance can close the observed outage interval. A new
-generation resolves the live rejection marker, which legacy agentd currently
-deletes. Retain the resolved observation in the new history file until the
-generation ages out. [Legacy marker resolution](../../../../internal/agentd/claude_rejection.go#L337-L354).
+rejection, first and latest parent acceptance, the first parent acceptance
+after the latest rejection, a saturating count, fixed error class and
+main-chain or sidechain attribution. Deduplicate observations across polls
+and restarts. Record a sidechain 401 even if the parent's next request succeeds.
+Use the rejection interval with the latest possible end, at recorded precision,
+as the last rejection for recovery. Its timestamp can precede a more precise
+rejection.
+When a poll first confirms a generation without writing credentials, leave
+the write time unknown and skip observations that could predate its confirmation.
+A new generation resolves the live rejection marker, which legacy agentd
+currently deletes. Retain the resolved observation in the new history file
+until the generation ages out. [Legacy marker resolution](../../../../internal/agentd/claude_rejection.go#L337-L354).
+
+- Text-only 401s can set the legacy live rejection marker and are omitted from the structured history.
+- The agent can forge this evidence. Slices 2 and 6 must keep it out of every refresh decision.
+- If the CLI exits before the next poll, agentd can miss observations in the last 5 s of that launch.
 
 Attribute in-process subagents through the parent's launch and source. Use
-sidechain timestamps and error class only. Give a Bash-launched CLI or
-teammate process its own launch/source attribution if the supported
-observations can identify it. Distinguish an applied generation, delivery of
-a retry prompt, and independent evidence of provider acceptance. Leave the
-request's actual loaded generation unknown unless a supported CLI signal
-establishes it. Use an accepted-request timestamp as the lower bound only at
-its recorded precision. Mark proxy timing and unknown clock skew. An
-out-of-process child with unknown source stays unknown.
+sidechain timestamps and error class only. Each poll scans at most 4,096 child
+directory entries and reads bounded tails from the 32 newest files it finds.
+Give a Bash-launched CLI or teammate process its own launch/source attribution
+if the supported observations can identify it. Distinguish an applied
+generation, delivery of a retry prompt, and independent evidence of provider
+acceptance. Leave the request's actual loaded generation unknown unless a
+supported CLI signal establishes it. Use an accepted-request timestamp as the
+lower bound only at its recorded precision. Mark proxy timing and unknown
+clock skew. An out-of-process child with unknown source stays unknown.
 
 Send the bounded metadata through the existing heartbeat into AgentSession
 status. The operator derives the consumer-rejection metric from that status
@@ -545,6 +555,7 @@ handoff latency. Prove revocation isolation and early recovery only under a
 separate acceptance story with authorized test credentials and Tom's approval
 for the specific lifecycle action.
 
+Slice 1 has no off switch. Roll back the agent image pin. The older history exporter refuses volumes containing the new history files until roll-forward.
 Roll back slice 3 by reverting the keeper image pin. Older keepers ignore and
 preserve `refresh-provenance.json`.
 Roll back early recovery by disabling it.

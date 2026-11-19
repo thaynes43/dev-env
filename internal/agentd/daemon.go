@@ -369,7 +369,7 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	if d.projectsClaude() {
 		// Projection mode: apply the keeper's login before anything starts.
 		// A pod-owned login on this HOME is a conflict, not a wait.
-		if err := SyncClaudeAccess(d.S, d.now()); errors.Is(err, ErrClaudeLoginConflict) {
+		if err := syncClaudeAccess(d.S, d.now(), d.now, writeClaudePrivateAtomic); errors.Is(err, ErrClaudeLoginConflict) {
 			return newStep(name, nil, err), err.Error()
 		}
 	}
@@ -719,6 +719,7 @@ func (d *Daemon) pollClaude(ctx context.Context) {
 	d.pollRemoteLogin(ctx)
 	d.pollCodexRemote(ctx)
 	d.continueAfterRenewal(ctx)
+	d.observeClaudeAuthHistory()
 }
 
 // syncClaudeAccess follows the keeper's newest generation on each poll. It
@@ -727,7 +728,7 @@ func (d *Daemon) syncClaudeAccess() {
 	if !d.projectsClaude() {
 		return
 	}
-	err := SyncClaudeAccess(d.S, d.now())
+	err := syncClaudeAccess(d.S, d.now(), d.now, writeClaudePrivateAtomic)
 	if errors.Is(err, d.claudeSyncErr) || (err == nil && d.claudeSyncErr == nil) {
 		return
 	}
