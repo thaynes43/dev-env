@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -136,6 +137,55 @@ func TestClaudeAuthHistoryAcceptedBeforeFirstRejection(t *testing.T) {
 	}
 }
 
+func TestClaudeAuthHistoryFirstAcceptanceAfterLatestRejection(t *testing.T) {
+	r := newClaudeHistoryRig(t)
+	r.apply(1)
+	first := r.created.Add(5 * time.Second)
+	refused := first.Add(time.Second)
+	overlap := refused.Add(500 * time.Millisecond)
+	r.transcript(acceptedTurn(first), history401(refused, false), acceptedTurn(overlap))
+	r.observeAfter(overlap)
+	h, _ := r.history()
+	if g := h.Generations[0]; !g.FirstAccepted.At.Equal(first) || !g.LastAccepted.At.Equal(overlap) || !g.FirstAcceptedAfterLastRejection.IsZero() {
+		t.Fatalf("overlapping acceptance established recovery: %+v", g)
+	}
+
+	recovered := refused.Add(time.Second)
+	later := recovered.Add(2 * time.Second)
+	r.transcript(acceptedTurn(recovered), acceptedTurn(later))
+	r.observeAfter(later)
+	h, _ = r.history()
+	if g := h.Generations[0]; !g.FirstAccepted.At.Equal(first) || !g.FirstAcceptedAfterLastRejection.At.Equal(recovered) || !g.LastAccepted.At.Equal(later) {
+		t.Fatalf("first proven recovery was lost: %+v", g)
+	}
+
+	// The later acceptance is still known after it leaves the tail. A late
+	// rejection invalidates the first recovery and leaves the later one usable.
+	lateRejection := recovered.Add(500 * time.Millisecond)
+	r.transcript(history401(lateRejection, false))
+	r.observeAfter(later)
+	h, _ = r.history()
+	if g := h.Generations[0]; !g.LastRejection.At.Equal(lateRejection) || !g.FirstAcceptedAfterLastRejection.At.Equal(later) {
+		t.Fatalf("late rejection did not rebuild recovery from retained evidence: %+v", g)
+	}
+
+	refusedAgain := later.Add(time.Second)
+	r.appendTurn(history401(refusedAgain, false))
+	r.observeAfter(refusedAgain)
+	h, _ = r.history()
+	if g := h.Generations[0]; !g.LastRejection.At.Equal(refusedAgain) || !g.FirstAcceptedAfterLastRejection.IsZero() || !g.LastAccepted.At.Equal(later) {
+		t.Fatalf("latest rejection did not clear recovery: %+v", g)
+	}
+
+	recoveredAgain := refusedAgain.Add(time.Second)
+	r.appendTurn(acceptedTurn(recoveredAgain))
+	r.observeAfter(recoveredAgain)
+	h, _ = r.history()
+	if g := h.Generations[0]; !g.FirstAcceptedAfterLastRejection.At.Equal(recoveredAgain) || !g.FirstAccepted.At.Equal(first) {
+		t.Fatalf("same-generation recovery was not recorded: %+v", g)
+	}
+}
+
 func TestClaudeAuthHistoryTimestampPrecisionAtCredentialWrite(t *testing.T) {
 	r := newClaudeHistoryRig(t)
 	r.apply(1)
@@ -213,6 +263,66 @@ func TestClaudeAuthHistoryNoWriteTimeFromLegacyReceipt(t *testing.T) {
 	}
 }
 
+func TestClaudeAuthHistorySkipsGapBeforeNoOpConfirmation(t *testing.T) {
+	r := newClaudeHistoryRig(t)
+	r.apply(1)
+	lockPath := r.s.statePath(claudeAuthHistoryLock)
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lockPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.now = r.created.Add(5 * time.Second)
+	r.apply(2) // The projection is applied while the history lock is unavailable.
+	h, _ := r.history()
+	if len(h.Generations) != 1 {
+		t.Fatal("history unexpectedly recorded generation 2 during the lock failure")
+	}
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	inGap := r.now.Add(time.Second)
+	r.transcript(history401(inGap, false))
+	r.now = inGap.Add(3 * time.Second)
+	confirmed := r.now
+	r.apply(2)
+	after := confirmed.Add(time.Second)
+	r.appendTurn(history401(after, false))
+	r.observeAfter(after)
+	h, _ = r.history()
+	old, current := h.Generations[0], h.Generations[1]
+	if old.RejectionCount != 0 || current.RejectionCount != 1 || !current.FirstRejection.At.Equal(after) ||
+		!current.CredentialWrittenAt.IsZero() || !current.ConfirmedAt.Equal(confirmed) {
+		t.Fatalf("poll-gap rejection was attributed: %+v", h.Generations)
+	}
+}
+
+func TestClaudeAuthHistorySameGenerationRewriteLeavesWriteTimeUnknown(t *testing.T) {
+	r := newClaudeHistoryRig(t)
+	r.apply(1)
+	if err := os.Remove(r.s.statePath(claudeAuthHistoryFile)); err != nil {
+		t.Fatal(err)
+	}
+	r.now = r.created.Add(5 * time.Second)
+	confirmed := r.now
+	r.apply(1)
+	writeRaw(t, filepath.Join(r.s.ClaudeConfigDir, credentialsFileName), []byte(`{}`))
+	r.now = confirmed.Add(5 * time.Second)
+	wrote := false
+	err := syncClaudeAccess(r.s, r.now, r.d.now, func(path string, raw []byte) error {
+		wrote = true
+		return writeClaudePrivateAtomic(path, raw)
+	})
+	if err != nil || !wrote {
+		t.Fatalf("same-generation credential merge: wrote = %t, err = %v", wrote, err)
+	}
+	h, _ := r.history()
+	if g := h.Generations[0]; !g.CredentialWrittenAt.IsZero() || !g.ConfirmedAt.Equal(confirmed) {
+		t.Fatalf("a rewrite changed the initial application times: %+v", g)
+	}
+}
+
 func TestClaudeAuthHistoryRetainsResolvedGeneration(t *testing.T) {
 	r := newClaudeHistoryRig(t)
 	r.apply(1)
@@ -236,6 +346,19 @@ func TestClaudeAuthHistoryRetainsResolvedGeneration(t *testing.T) {
 	if old.AppliedGeneration != 1 || old.RejectionCount != 1 || !old.FirstRejection.At.Equal(at) || !old.CredentialWrittenAt.Equal(firstWrite) ||
 		current.AppliedGeneration != 4 || !current.CredentialWrittenAt.Equal(r.now) || current.RejectionCount != 0 {
 		t.Fatalf("new generation did not preserve prior evidence: %+v", h.Generations)
+	}
+	firstAccepted := r.now.Add(time.Second)
+	r.transcript(acceptedTurn(firstAccepted))
+	r.observeAfter(firstAccepted)
+	r.restartDaemon()
+	lastAccepted := firstAccepted.Add(5 * time.Second)
+	r.transcript(acceptedTurn(lastAccepted))
+	r.observeAfter(lastAccepted)
+	h, _ = r.history()
+	current = h.Generations[1]
+	if !current.FirstAccepted.At.Equal(firstAccepted) || !current.LastAccepted.At.Equal(lastAccepted) ||
+		!current.FirstAcceptedAfterLastRejection.IsZero() || !h.Generations[0].FirstRejection.At.Equal(at) {
+		t.Fatalf("the first acceptance after a generation change was lost: %+v", h.Generations)
 	}
 }
 
@@ -293,14 +416,14 @@ func TestClaudeAuthHistorySeparatesNativeChildrenWithoutPersistingIDs(t *testing
 	}
 }
 
-func TestClaudeAuthHistoryFindsNewestChildBeyondDirectoryPrefix(t *testing.T) {
+func TestClaudeAuthHistoryFindsNewestChildWithinScanCap(t *testing.T) {
 	r := newClaudeHistoryRig(t)
 	r.apply(1)
 	dir := filepath.Join(r.s.ClaudeConfigDir, "projects", "-work-repo", continueConv, "subagents")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for i := range 1025 {
+	for i := range claudeAuthChildEntries + 1 {
 		path := filepath.Join(dir, fmt.Sprintf("agent-%04d.jsonl", i))
 		if err := os.WriteFile(path, nil, 0o600); err != nil {
 			t.Fatal(err)
@@ -312,22 +435,24 @@ func TestClaudeAuthHistoryFindsNewestChildBeyondDirectoryPrefix(t *testing.T) {
 	}
 	names, err := f.Readdirnames(-1)
 	_ = f.Close()
-	if err != nil || len(names) != 1025 {
+	if err != nil || len(names) != claudeAuthChildEntries+1 {
 		t.Fatalf("directory fixture: %d names, %v", len(names), err)
 	}
 	at := r.created.Add(5 * time.Second)
-	last := filepath.Join(dir, names[1024])
-	if err := os.WriteFile(last, []byte(history401(at, false)+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	modified := time.Now().Add(time.Hour)
-	if err := os.Chtimes(last, modified, modified); err != nil {
-		t.Fatal(err)
+	for i := range 2 {
+		path := filepath.Join(dir, names[claudeAuthChildEntries-1+i])
+		if err := os.WriteFile(path, []byte(history401(at.Add(time.Duration(i)*time.Second), false)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, modified, modified); err != nil {
+			t.Fatal(err)
+		}
 	}
-	r.observeAfter(at)
+	r.observeAfter(at.Add(time.Second))
 	h, _ := r.history()
-	if g := h.Generations[0]; g.RejectionCount != 1 || !g.Sidechain {
-		t.Fatalf("newest child outside the directory prefix was skipped: %+v", g)
+	if g := h.Generations[0]; g.RejectionCount != 1 || !g.Sidechain || !g.FirstRejection.At.Equal(at) {
+		t.Fatalf("wrong child observed at the scan cap: %+v", g)
 	}
 }
 
@@ -352,6 +477,97 @@ func TestClaudeAuthHistoryRetainsLaunchAttributionAcrossResume(t *testing.T) {
 	if g.RejectionCount != 2 || g.FirstRejectionLaunch == nil || g.FirstRejectionLaunch.BootID != historyBootID ||
 		g.LastRejectionLaunch == nil || g.LastRejectionLaunch.BootID != laterBoot {
 		t.Fatalf("resume rewrote earlier launch attribution: %+v", g)
+	}
+}
+
+func TestClaudeAuthHistoryIgnoresPreLaunchRejectionAfterResume(t *testing.T) {
+	r := newClaudeHistoryRig(t)
+	r.apply(1)
+	r.restartDaemon()
+	const laterBoot = "abcdef012345"
+	resumedAt := r.created.Add(time.Minute)
+	writeJSON(t, r.s.statePath(bootFile), bootRecord{BootID: laterBoot})
+	writeJSON(t, r.s.statePath(resumeFile), Launch{
+		BootID: laterBoot, CreatedAt: resumedAt, ConversationID: continueConv, TUI: true, Dir: "/work/repo", Resume: true,
+	})
+	after := resumedAt.Add(time.Second)
+	r.transcript(history401(resumedAt.Add(-time.Second), false), history401(after, false))
+	r.observeAfter(after)
+	h, _ := r.history()
+	if g := h.Generations[0]; g.RejectionCount != 1 || !g.FirstRejection.At.Equal(after) {
+		t.Fatalf("pre-launch rejection was attributed after resume: %+v", g)
+	}
+}
+
+func TestClaudeAuthHistoryDefersFutureIntervalAcrossGenerationWrite(t *testing.T) {
+	r := newClaudeHistoryRig(t)
+	r.apply(1)
+	at := r.created.Add(5*time.Second + 123*time.Millisecond)
+	r.transcript(history401(at, false))
+	r.now = at.Add(500 * time.Microsecond)
+	r.d.pollClaude(context.Background())
+	h, _ := r.history()
+	if g := h.Generations[0]; g.RejectionCount != 0 {
+		t.Fatalf("rejection was counted before its recorded interval ended: %+v", g)
+	}
+	r.now = at.Add(2 * time.Millisecond)
+	r.apply(2)
+	r.observeAfter(at)
+	h, _ = r.history()
+	old, current := h.Generations[0], h.Generations[1]
+	if old.RejectionCount != 1 || !old.FirstRejection.At.Equal(at) || current.RejectionCount != 0 {
+		t.Fatalf("deferred rejection was attributed incorrectly after the write: %+v", h.Generations)
+	}
+}
+
+func TestClaudeAuthHistoryIgnoresSidechainAcceptances(t *testing.T) {
+	for _, source := range []string{"parent-file", "child-file"} {
+		t.Run(source, func(t *testing.T) {
+			r := newClaudeHistoryRig(t)
+			r.apply(1)
+			accepted := r.created.Add(5 * time.Second)
+			refused := accepted.Add(time.Second)
+			r.transcript(history401(refused, false))
+			if source == "parent-file" {
+				r.appendTurn(acceptedTurnWith(accepted.Format(time.RFC3339Nano), "claude-sonnet-5-5", `{"input_tokens":3,"output_tokens":9}`, true))
+			} else {
+				r.childTranscript("agent-a1.jsonl", acceptedTurn(accepted))
+			}
+			r.observeAfter(refused)
+			h, _ := r.history()
+			if g := h.Generations[0]; g.RejectionCount != 1 || !g.FirstAccepted.IsZero() || !g.LastAccepted.IsZero() ||
+				!g.LastAcceptedBeforeFirstRejection.IsZero() || !g.FirstAcceptedAfterLastRejection.IsZero() {
+				t.Fatalf("sidechain success was recorded as parent acceptance: %+v", g)
+			}
+		})
+	}
+}
+
+func TestClaudeAuthHistoryRejectsInconsistentRejectionCounts(t *testing.T) {
+	for _, count := range []uint8{2, claudeAuthCountLimit} {
+		t.Run(fmt.Sprintf("count-%d", count), func(t *testing.T) {
+			r := newClaudeHistoryRig(t)
+			r.apply(1)
+			path := r.s.statePath(claudeAuthHistoryFile)
+			raw := fmt.Appendf(nil, `{"version":1,"observationTiming":"assistant-transcript-proxy","clockSkewUnknown":true,"generations":[{"appliedGeneration":1,"confirmedAt":%q,"rejectionCount":%d,"seenRejections":[{"at":%q,"count":1}]}]}`,
+				r.now.Format(time.RFC3339Nano), count, r.created.Format(time.RFC3339Nano))
+			writeRaw(t, path, raw)
+			if _, _, err := readClaudeAuthHistory(r.s); err == nil {
+				t.Error("history decoder accepted inconsistent rejection counts")
+			}
+			publish(t, r.live, projAccess(2, 9*time.Hour))
+			wrote := false
+			err := syncClaudeAccess(r.s, r.now, r.d.now, func(path string, raw []byte) error {
+				wrote = true
+				return writeClaudePrivateAtomic(path, raw)
+			})
+			if err != nil || !wrote {
+				t.Fatalf("corrupt history blocked the projection: wrote = %t, err = %v", wrote, err)
+			}
+			if after, err := os.ReadFile(path); err != nil || !bytes.Equal(raw, after) {
+				t.Fatal("projection changed the invalid history file")
+			}
+		})
 	}
 }
 
@@ -389,13 +605,57 @@ func TestClaudeAuthHistoryGenerationAndCountBounds(t *testing.T) {
 	}
 }
 
+func TestClaudeAuthHistoryWorstCaseSize(t *testing.T) {
+	s := Settings{StateDir: t.TempDir()}
+	at := time.Date(2026, 10, 19, 12, 0, 0, 123456789, time.UTC)
+	launch := &claudeAuthLaunch{BootID: historyBootID, CreatedAt: at, Source: claudeSourceStatic}
+	updateClaudeAuthHistory(s, func(h *claudeAuthHistory) {
+		h.Launch = launch
+		for i := range claudeAuthGenerations {
+			confirmed := at.Add(time.Duration(i) * time.Hour)
+			// Use the widest UTC timestamp and precision encodings together
+			// as an upper bound, even when these widths cannot occur together.
+			stamp := func(offset int) claudeAuthTime {
+				return claudeAuthTime{At: confirmed.Add(time.Duration(offset) * time.Second), PrecisionNanos: int64(time.Second)}
+			}
+			g := claudeAuthGeneration{
+				AppliedGeneration:                math.MaxUint64 - uint64(claudeAuthGenerations-1-i),
+				ConfirmedAt:                      confirmed,
+				CredentialWrittenAt:              confirmed,
+				FirstRejection:                   stamp(3),
+				LastRejection:                    stamp(claudeAuthCountLimit + 1),
+				LastAcceptedBeforeFirstRejection: stamp(2),
+				FirstAccepted:                    stamp(1),
+				LastAccepted:                     stamp(claudeAuthCountLimit + 3),
+				FirstAcceptedAfterLastRejection:  stamp(claudeAuthCountLimit + 2),
+				FirstRejectionLaunch:             launch,
+				LastRejectionLaunch:              launch,
+				MainChain:                        true,
+				Sidechain:                        true,
+				ErrorClass:                       claudeAuthRejected,
+				RejectionCount:                   claudeAuthCountLimit - 1,
+			}
+			for k := range claudeAuthCountLimit - 1 {
+				g.SeenRejections = append(g.SeenRejections, claudeAuthRejectionKey{At: stamp(k + 3).At, Sidechain: true, Count: 1})
+			}
+			h.Generations = append(h.Generations, g)
+		}
+	})
+	_, raw, err := readClaudeAuthHistory(s)
+	if err != nil || len(raw) >= claudeAuthHistorySize {
+		t.Fatalf("worst-case history failed the %d-byte limit: size = %d, err = %v", claudeAuthHistorySize, len(raw), err)
+	}
+	t.Logf("worst-case history: %d of %d bytes", len(raw), claudeAuthHistorySize)
+}
+
 func TestClaudeAuthHistoryOnlyWritesSanitizedFields(t *testing.T) {
 	r := newClaudeHistoryRig(t)
 	r.apply(1)
 	accepted := r.created.Add(5 * time.Second)
 	refused := accepted.Add(time.Second)
-	r.transcript(acceptedTurn(accepted), history401(refused, true), history401(refused, false))
-	r.observeAfter(refused)
+	recovered := refused.Add(time.Second)
+	r.transcript(acceptedTurn(accepted), history401(refused, true), history401(refused, false), acceptedTurn(recovered))
+	r.observeAfter(recovered)
 	_, raw := r.history()
 	var record map[string]any
 	if err := json.Unmarshal(raw, &record); err != nil {
@@ -405,11 +665,11 @@ func TestClaudeAuthHistoryOnlyWritesSanitizedFields(t *testing.T) {
 	assertHistoryKeys(t, record["launch"], "bootId", "createdAt", "source")
 	g := record["generations"].([]any)[0].(map[string]any)
 	assertHistoryKeys(t, g, "appliedGeneration", "confirmedAt", "credentialWrittenAt", "errorClass",
-		"firstRejection", "firstRejectionLaunch", "lastAccepted", "lastAcceptedBeforeFirstRejection",
+		"firstAccepted", "firstAcceptedAfterLastRejection", "firstRejection", "firstRejectionLaunch", "lastAccepted", "lastAcceptedBeforeFirstRejection",
 		"lastRejection", "lastRejectionLaunch", "mainChain", "rejectionCount", "seenRejections", "sidechain")
 	assertHistoryKeys(t, g["firstRejectionLaunch"], "bootId", "createdAt", "source")
 	assertHistoryKeys(t, g["lastRejectionLaunch"], "bootId", "createdAt", "source")
-	for _, field := range []string{"firstRejection", "lastRejection", "lastAccepted", "lastAcceptedBeforeFirstRejection"} {
+	for _, field := range []string{"firstAccepted", "firstAcceptedAfterLastRejection", "firstRejection", "lastRejection", "lastAccepted", "lastAcceptedBeforeFirstRejection"} {
 		assertHistoryKeys(t, g[field], "at", "precisionNanos")
 	}
 	keys := g["seenRejections"].([]any)

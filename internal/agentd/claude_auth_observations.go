@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	claudeAuthChildBatch = 64
-	claudeAuthChildFiles = 32
-	claudeAuthChildTail  = 16 << 10
+	claudeAuthChildBatch   = 64
+	claudeAuthChildEntries = 4096
+	claudeAuthChildFiles   = 32
+	claudeAuthChildTail    = 16 << 10
 )
 
 // Precision is the width of the timestamp's final recorded digit.
@@ -40,9 +41,8 @@ type claudeAuthObservation struct {
 }
 
 // Native child transcripts live under the launch's conversation directory.
-// Enumerate in batches so the newest children remain eligible even in a long
-// conversation. Only their bounded tails are read. A separately launched
-// process has no binding here.
+// Cap the scan and read only bounded tails from the newest children it finds.
+// A separately launched process has no binding here.
 func readClaudeAuthObservations(s Settings, l Launch, now time.Time) []claudeAuthObservation {
 	if !conversationIDPattern.MatchString(l.ConversationID) || !filepath.IsAbs(l.Dir) {
 		return nil
@@ -66,8 +66,9 @@ func readClaudeAuthObservations(s Settings, l Launch, now time.Time) []claudeAut
 		modified time.Time
 	}
 	var recent []childTranscript
-	for {
-		entries, readErr := children.ReadDir(claudeAuthChildBatch)
+	for remaining := claudeAuthChildEntries; remaining > 0; {
+		entries, readErr := children.ReadDir(min(remaining, claudeAuthChildBatch))
+		remaining -= len(entries)
 		for _, entry := range entries {
 			name := entry.Name()
 			if !strings.HasPrefix(name, "agent-") || !strings.HasSuffix(name, ".jsonl") || !entry.Type().IsRegular() {

@@ -62,8 +62,7 @@ type claudeAuthHistory struct {
 
 // The applied generation describes the file at the proxy observation time.
 // The CLI supplies no evidence of the generation actually used by a request.
-// ConfirmedAt can be set on a no-op sync (e.g. after upgrading); only a
-// successful credential-file write supplies CredentialWrittenAt.
+// A generation first confirmed by a no-op sync has no known CredentialWrittenAt.
 type claudeAuthGeneration struct {
 	AppliedGeneration                uint64            `json:"appliedGeneration"`
 	ConfirmedAt                      time.Time         `json:"confirmedAt"`
@@ -71,7 +70,9 @@ type claudeAuthGeneration struct {
 	FirstRejection                   claudeAuthTime    `json:"firstRejection,omitzero"`
 	LastRejection                    claudeAuthTime    `json:"lastRejection,omitzero"`
 	LastAcceptedBeforeFirstRejection claudeAuthTime    `json:"lastAcceptedBeforeFirstRejection,omitzero"`
+	FirstAccepted                    claudeAuthTime    `json:"firstAccepted,omitzero"`
 	LastAccepted                     claudeAuthTime    `json:"lastAccepted,omitzero"`
+	FirstAcceptedAfterLastRejection  claudeAuthTime    `json:"firstAcceptedAfterLastRejection,omitzero"`
 	FirstRejectionLaunch             *claudeAuthLaunch `json:"firstRejectionLaunch,omitempty"`
 	LastRejectionLaunch              *claudeAuthLaunch `json:"lastRejectionLaunch,omitempty"`
 	MainChain                        bool              `json:"mainChain,omitempty"`
@@ -163,17 +164,8 @@ func updateClaudeAuthHistory(s Settings, update func(*claudeAuthHistory)) {
 
 func recordClaudeApplied(s Settings, generation uint64, confirmedAt, writtenAt time.Time) {
 	updateClaudeAuthHistory(s, func(h *claudeAuthHistory) {
-		if n := len(h.Generations); n > 0 {
-			last := &h.Generations[n-1]
-			if generation < last.AppliedGeneration {
-				return
-			}
-			if generation == last.AppliedGeneration {
-				if last.CredentialWrittenAt.IsZero() {
-					last.CredentialWrittenAt = writtenAt
-				}
-				return
-			}
+		if n := len(h.Generations); n > 0 && generation <= h.Generations[n-1].AppliedGeneration {
+			return
 		}
 		h.Generations = append(h.Generations, claudeAuthGeneration{
 			AppliedGeneration: generation, ConfirmedAt: confirmedAt, CredentialWrittenAt: writtenAt,
@@ -238,12 +230,14 @@ func (d *Daemon) observeClaudeAuthHistory() {
 
 func (h *claudeAuthHistory) generationAt(stamp claudeAuthTime) *claudeAuthGeneration {
 	for i := len(h.Generations) - 1; i >= 0; i-- {
-		confirmed := h.Generations[i].ConfirmedAt
-		if stamp.At.After(confirmed) {
-			return &h.Generations[i]
+		g := &h.Generations[i]
+		if stamp.At.After(g.ConfirmedAt) {
+			return g
 		}
-		if stamp.end().After(confirmed) {
-			return nil // The recorded precision cannot order the response and the write.
+		// A no-op sync leaves the actual write boundary unknown. Otherwise
+		// the response interval must fit entirely before the known write.
+		if g.CredentialWrittenAt.IsZero() || stamp.end().After(g.ConfirmedAt) {
+			return nil
 		}
 	}
 	return nil
@@ -262,12 +256,17 @@ func (g *claudeAuthGeneration) reject(o claudeAuthObservation, launch claudeAuth
 		if g.LastAcceptedBeforeFirstRejection.end().After(o.Stamp.At) {
 			g.LastAcceptedBeforeFirstRejection = claudeAuthTime{}
 		}
-		g.accept(g.LastAccepted)
 	}
 	if o.Stamp.At.After(g.LastRejection.At) {
 		g.LastRejection = o.Stamp
 		g.LastRejectionLaunch = &launch
+		if g.FirstAcceptedAfterLastRejection.At.Before(o.Stamp.end()) {
+			g.FirstAcceptedAfterLastRejection = claudeAuthTime{}
+		}
 	}
+	// A late rejection can use a retained acceptance to rebuild its bracket
+	// even after the acceptance has left the transcript tail.
+	g.accept(g.LastAccepted)
 }
 
 // Store only the highest observed multiplicity at each timestamp and chain.
@@ -295,10 +294,20 @@ func (g *claudeAuthGeneration) countRejection(o claudeAuthObservation) {
 }
 
 func (g *claudeAuthGeneration) accept(stamp claudeAuthTime) {
+	if !stamp.At.After(g.ConfirmedAt) {
+		return
+	}
+	if g.FirstAccepted.IsZero() || stamp.At.Before(g.FirstAccepted.At) {
+		g.FirstAccepted = stamp
+	}
 	if stamp.At.After(g.LastAccepted.At) {
 		g.LastAccepted = stamp
 	}
 	if !stamp.end().After(g.FirstRejection.At) && stamp.At.After(g.LastAcceptedBeforeFirstRejection.At) {
 		g.LastAcceptedBeforeFirstRejection = stamp
+	}
+	if !g.LastRejection.IsZero() && !stamp.At.Before(g.LastRejection.end()) &&
+		(g.FirstAcceptedAfterLastRejection.IsZero() || stamp.At.Before(g.FirstAcceptedAfterLastRejection.At)) {
+		g.FirstAcceptedAfterLastRejection = stamp
 	}
 }
