@@ -269,6 +269,7 @@ func (g *claudeAuthGeneration) reject(o claudeAuthObservation, launch claudeAuth
 	}
 	// A late rejection can use a retained acceptance to rebuild its bracket
 	// even after the acceptance has left the transcript tail.
+	g.accept(g.FirstAccepted)
 	g.accept(g.LastAccepted)
 }
 

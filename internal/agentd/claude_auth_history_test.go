@@ -190,6 +190,45 @@ func TestClaudeAuthHistoryFirstAcceptanceAfterLatestRejection(t *testing.T) {
 	}
 }
 
+func TestClaudeAuthHistoryLateRejectionReusesFirstAcceptance(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		rejectedAt          time.Duration
+		wantBeforeRejection time.Duration
+		wantAfterRejection  time.Duration
+	}{
+		{name: "before first acceptance", rejectedAt: 8 * time.Second, wantAfterRejection: 10 * time.Second},
+		{name: "between acceptances", rejectedAt: 14 * time.Second, wantBeforeRejection: 10 * time.Second, wantAfterRejection: 18 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newClaudeHistoryRig(t)
+			r.apply(1)
+			first := r.created.Add(10 * time.Second)
+			last := r.created.Add(18 * time.Second)
+			r.transcript(acceptedTurn(first), acceptedTurn(last))
+			r.observeAfter(last)
+
+			// A child rejection arrives after both parent acceptances have left the tail.
+			r.transcript()
+			r.childTranscript("agent-a1.jsonl", history401(r.created.Add(tc.rejectedAt), false))
+			r.observeAfter(last)
+
+			h, _ := r.history()
+			g := h.Generations[0]
+			var wantBefore time.Time
+			if tc.wantBeforeRejection != 0 {
+				wantBefore = r.created.Add(tc.wantBeforeRejection)
+			}
+			if got := g.LastAcceptedBeforeFirstRejection.At; !got.Equal(wantBefore) {
+				t.Errorf("last acceptance before rejection = %v, want %v", got, wantBefore)
+			}
+			if got, want := g.FirstAcceptedAfterLastRejection.At, r.created.Add(tc.wantAfterRejection); !got.Equal(want) {
+				t.Errorf("first acceptance after rejection = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestClaudeAuthHistoryRecoveryUsesLatestRejectionIntervalEnd(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
