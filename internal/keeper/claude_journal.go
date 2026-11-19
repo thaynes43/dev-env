@@ -22,12 +22,12 @@ const (
 	DefaultClaudeJournalSecret = "dev-env-keeper-claude-auth"
 	DefaultClaudeLiveSecret    = "dev-env-claude-live"
 	claudeJournalKey           = "state.json"
-	// claudeUnsentKey is a second data key in the same journal Secret: the
-	// unsent marker. refresh writes it in the same compare-and-swap as its
-	// RefreshIntent and removes it in one more fenced compare-and-swap, the
-	// dispatch commit, immediately before the POST. While the marker names
-	// the journal's own incarnation and the intent's attempt, nothing has been
-	// dispatched for that attempt, so any keeper may return the intent to
+	// The journal also holds the unsent marker and refresh provenance
+	// (claudeProvenanceKey) in separate data keys. Refresh writes the marker in
+	// the same compare-and-swap as its RefreshIntent and removes it in one more
+	// fenced compare-and-swap, the dispatch commit, immediately before the POST.
+	// While the marker names the journal's own incarnation and the intent's
+	// attempt, nothing has been dispatched, so any keeper may return the intent to
 	// Ready without a provider call. Older keepers never write it and their
 	// merge patches leave it alone, so their intents are always tombstoned; a
 	// stale marker names an old attempt, which never equals a fresh UUID.
@@ -162,8 +162,17 @@ func decodeClaudeRecord(raw []byte) (claudeRecord, error) {
 //
 // Every save removes the unsent marker: only saveIntent writes one.
 func (j *claudeJournal) save(ctx context.Context, original *corev1.Secret, r claudeRecord) error {
-	_, err := j.write(ctx, original, r, nil)
+	_, err := j.write(ctx, original, r, nil, nil)
 	return err
+}
+
+// saveTransition records the replacement and its evidence in the same CAS.
+func (j *claudeJournal) saveTransition(ctx context.Context, original *corev1.Secret, previous uint64, r claudeRecord, t claudeTransition) (*corev1.Secret, error) {
+	t.Generation = r.Access.Generation
+	t.AccessLifetime = int64(r.Access.ExpiresAt.Sub(r.LastRefresh))
+	t.AccessExpiresAt = claudeObservedTime(r.Access.ExpiresAt)
+	provenance := appendClaudeTransition(original.Data[claudeProvenanceKey], previous, t)
+	return j.write(ctx, original, r, nil, provenance)
 }
 
 // saveIntent writes refresh's RefreshIntent and its unsent marker in one
@@ -177,7 +186,7 @@ func (j *claudeJournal) saveIntent(ctx context.Context, original *corev1.Secret,
 	if original.UID != "" {
 		marker, _ = json.Marshal(claudeUnsentWire{Version: 1, JournalUID: string(original.UID), AttemptUID: r.AttemptUID})
 	}
-	_, err := j.write(ctx, original, r, marker)
+	_, err := j.write(ctx, original, r, marker, nil)
 	return err
 }
 
@@ -215,7 +224,7 @@ func claudeUnsentMarked(secret *corev1.Secret, r claudeRecord) bool {
 
 // write saves r with the generation guard, and sets the unsent marker to
 // marker (nil removes it), in one compare-and-swap.
-func (j *claudeJournal) write(ctx context.Context, original *corev1.Secret, r claudeRecord, marker []byte) (*corev1.Secret, error) {
+func (j *claudeJournal) write(ctx context.Context, original *corev1.Secret, r claudeRecord, marker, provenance []byte) (*corev1.Secret, error) {
 	if ctx.Err() != nil || original == nil || original.ResourceVersion == "" || !validClaudeRecord(r) {
 		return nil, errClaudeJournal
 	}
@@ -233,6 +242,9 @@ func (j *claudeJournal) write(ctx context.Context, original *corev1.Secret, r cl
 	data := map[string]any{claudeJournalKey: raw, claudeUnsentKey: nil}
 	if marker != nil {
 		data[claudeUnsentKey] = marker
+	}
+	if provenance != nil {
+		data[claudeProvenanceKey] = provenance
 	}
 	return j.patch(ctx, original, data)
 }

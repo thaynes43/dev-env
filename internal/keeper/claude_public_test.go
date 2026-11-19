@@ -120,7 +120,7 @@ func TestClaudePublicationGenerationCAS(t *testing.T) {
 			if kind == "race" {
 				rc.Replacement = encodeClaude(t, syntheticClaudeAccess(9, claudeNow, 8*time.Hour), claudeNow)
 			}
-			err := p.publish(context.Background(), next, time.Time{}, now)
+			_, err := p.publish(context.Background(), next, time.Time{}, now)
 			if (err == nil) != wantOK {
 				t.Fatalf("publish error = %v, want ok=%v", err, wantOK)
 			}
@@ -152,7 +152,7 @@ func TestClaudePublicationHasNoRefreshMaterial(t *testing.T) {
 	p, _ := claudePublicFixture(t, nil)
 	rec := syntheticClaudeRecord(5)
 	refreshExp := claudeNow.Add(30 * 24 * time.Hour)
-	if err := p.publish(context.Background(), rec.Access, refreshExp, claudeNow); err != nil {
+	if _, err := p.publish(context.Background(), rec.Access, refreshExp, claudeNow); err != nil {
 		t.Fatal(err)
 	}
 	s := liveClaude(t, p)
@@ -176,7 +176,7 @@ func TestClaudePublicationHasNoRefreshMaterial(t *testing.T) {
 	}
 	// Without a refresh expiry the annotation is absent; an invalid generation publishes nothing.
 	p, _ = claudePublicFixture(t, nil)
-	if err := p.publish(context.Background(), rec.Access, time.Time{}, claudeNow); err != nil {
+	if _, err := p.publish(context.Background(), rec.Access, time.Time{}, claudeNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := liveClaude(t, p).Annotations[AnnotationRefreshExpiresAt]; ok {
@@ -185,10 +185,10 @@ func TestClaudePublicationHasNoRefreshMaterial(t *testing.T) {
 	p, rc := claudePublicFixture(t, nil)
 	bad := rec.Access
 	bad.Generation = 0
-	if err := p.publish(context.Background(), bad, time.Time{}, claudeNow); !errors.Is(err, errClaudePublication) || rc.Patches != 0 {
+	if _, err := p.publish(context.Background(), bad, time.Time{}, claudeNow); !errors.Is(err, errClaudePublication) || rc.Patches != 0 {
 		t.Fatal("an invalid access published")
 	}
-	if err := p.publish(context.Background(), rec.Access, time.Time{}, rec.Access.ExpiresAt.Add(time.Second)); !errors.Is(err, errClaudePublication) || rc.Patches != 0 {
+	if _, err := p.publish(context.Background(), rec.Access, time.Time{}, rec.Access.ExpiresAt.Add(time.Second)); !errors.Is(err, errClaudePublication) || rc.Patches != 0 {
 		t.Fatal("an expired access published")
 	}
 }
@@ -196,7 +196,7 @@ func TestClaudePublicationHasNoRefreshMaterial(t *testing.T) {
 func TestClaudePublicationClearsStaleRefreshExpiry(t *testing.T) {
 	p, _ := claudePublicFixture(t, nil)
 	exp := claudeNow.Add(30 * 24 * time.Hour)
-	if err := p.publish(context.Background(), syntheticClaudeAccess(1, claudeNow, 8*time.Hour), exp, claudeNow); err != nil {
+	if _, err := p.publish(context.Background(), syntheticClaudeAccess(1, claudeNow, 8*time.Hour), exp, claudeNow); err != nil {
 		t.Fatal(err)
 	}
 	if liveClaude(t, p).Annotations[AnnotationRefreshExpiresAt] != exp.Format(time.RFC3339) {
@@ -204,7 +204,7 @@ func TestClaudePublicationClearsStaleRefreshExpiry(t *testing.T) {
 	}
 	// A rotation without a stated lifetime: the old token's expiry must go.
 	later := claudeNow.Add(7 * time.Hour)
-	if err := p.publish(context.Background(), syntheticClaudeAccess(2, later, 8*time.Hour), time.Time{}, later); err != nil {
+	if _, err := p.publish(context.Background(), syntheticClaudeAccess(2, later, 8*time.Hour), time.Time{}, later); err != nil {
 		t.Fatal(err)
 	}
 	s := liveClaude(t, p)
@@ -216,7 +216,7 @@ func TestClaudePublicationClearsStaleRefreshExpiry(t *testing.T) {
 	}
 	// A new expiry is written again.
 	exp2 := later.Add(30 * 24 * time.Hour)
-	if err := p.publish(context.Background(), syntheticClaudeAccess(3, later, 8*time.Hour), exp2, later); err != nil || liveClaude(t, p).Annotations[AnnotationRefreshExpiresAt] != exp2.Format(time.RFC3339) {
+	if _, err := p.publish(context.Background(), syntheticClaudeAccess(3, later, 8*time.Hour), exp2, later); err != nil || liveClaude(t, p).Annotations[AnnotationRefreshExpiresAt] != exp2.Format(time.RFC3339) {
 		t.Fatal("refresh expiry was not re-annotated")
 	}
 }
@@ -250,7 +250,7 @@ func TestClaudePublishedGeneration(t *testing.T) {
 	if err != nil || next != 8 {
 		t.Fatalf("floor = %d, %v", next, err)
 	}
-	if err := p.publish(context.Background(), syntheticClaudeAccess(next, claudeNow, 8*time.Hour), time.Time{}, claudeNow); err != nil {
+	if _, err := p.publish(context.Background(), syntheticClaudeAccess(next, claudeNow, 8*time.Hour), time.Time{}, claudeNow); err != nil {
 		t.Fatal(err)
 	}
 }

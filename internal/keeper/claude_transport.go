@@ -72,13 +72,14 @@ func claudeFailureLabels(err error) (string, string) {
 // claudeTokens is one validated refresh response. Refresh is empty when the
 // provider did not rotate it; the caller then keeps the old one.
 type claudeTokens struct {
-	Access           secretValue
-	Refresh          secretValue
-	ExpiresIn        time.Duration
-	RefreshExpiresIn time.Duration // zero when absent
-	Scopes           []string      // nil when absent
-	AccountUUID      string        // empty when absent
-	OrganizationUUID string        // empty when absent
+	Access               secretValue
+	Refresh              secretValue
+	ExpiresIn            time.Duration
+	RefreshExpiresIn     time.Duration // zero when unknown
+	RefreshExpiryPresent bool          // the response supplied a numeric value, even zero
+	Scopes               []string      // nil when absent
+	AccountUUID          string        // empty when absent
+	OrganizationUUID     string        // empty when absent
 }
 
 // claudeProfile is the non-secret subscription metadata for one access token.
@@ -129,7 +130,7 @@ type claudeTokenWire struct {
 	Access           string             `json:"access_token"`
 	Refresh          string             `json:"refresh_token,omitempty"`
 	ExpiresIn        int64              `json:"expires_in"`
-	RefreshExpiresIn int64              `json:"refresh_token_expires_in,omitempty"`
+	RefreshExpiresIn *int64             `json:"refresh_token_expires_in,omitempty"`
 	Scope            string             `json:"scope,omitempty"`
 	Account          *claudeAccountWire `json:"account,omitempty"`
 	Organization     *claudeOrgWire     `json:"organization,omitempty"`
@@ -206,8 +207,9 @@ func validClaudeTokens(w claudeTokenWire) (claudeTokens, bool) {
 		return claudeTokens{}, false
 	}
 	out := claudeTokens{Access: newSecretValue(w.Access), Refresh: newSecretValue(w.Refresh), ExpiresIn: life}
-	if w.RefreshExpiresIn != 0 {
-		if out.RefreshExpiresIn, ok = claudeLifetime(w.RefreshExpiresIn); !ok {
+	out.RefreshExpiryPresent = w.RefreshExpiresIn != nil
+	if w.RefreshExpiresIn != nil && *w.RefreshExpiresIn != 0 {
+		if out.RefreshExpiresIn, ok = claudeLifetime(*w.RefreshExpiresIn); !ok {
 			return claudeTokens{}, false
 		}
 	}

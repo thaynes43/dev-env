@@ -243,7 +243,7 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		providers = append(providers, ProviderCodex)
 	}
 	hub := NewLoginHub(providers...)
-	if err := registerLoginCollector(NewLoginCollector(hub)); err != nil {
+	if err := registerKeeperCollector(NewLoginCollector(hub)); err != nil {
 		return err
 	}
 	// A bad notice flag sets Disabled. NewNotifier would return that validation
@@ -342,6 +342,10 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		r := claudeRunnable(o, c, credentialFence, clk)
 		if w, ok := r.(*claudeWorker); ok {
 			w.Obs = hub
+			w.Outcomes = newClaudeRefreshOutcomes()
+			if err := registerKeeperCollector(w.Outcomes); err != nil {
+				return err
+			}
 		}
 		if err := mgr.Add(r); err != nil {
 			return err
@@ -401,10 +405,9 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 	return mgr.Start(ctx)
 }
 
-// registerLoginCollector adds the login gauges to controller-runtime's metrics
-// registry, replacing a collector an earlier Run in the same process left
-// there (tests start the keeper more than once).
-func registerLoginCollector(c *LoginCollector) error {
+// registerKeeperCollector replaces a collector an earlier Run in the same
+// process left in the registry (tests start the keeper more than once).
+func registerKeeperCollector(c prometheus.Collector) error {
 	err := metrics.Registry.Register(c)
 	var already prometheus.AlreadyRegisteredError
 	if errors.As(err, &already) {

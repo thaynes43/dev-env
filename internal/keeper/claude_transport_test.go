@@ -86,20 +86,39 @@ func TestClaudeRefreshRotatedAndAbsentRefreshToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Access.Reveal() != claudeAccessCanary || got.Refresh.Reveal() != claudeNewRefreshCanary || got.ExpiresIn != 8*time.Hour || got.RefreshExpiresIn != 30*24*time.Hour ||
+	if got.Access.Reveal() != claudeAccessCanary || got.Refresh.Reveal() != claudeNewRefreshCanary || got.ExpiresIn != 8*time.Hour || got.RefreshExpiresIn != 30*24*time.Hour || !got.RefreshExpiryPresent ||
 		strings.Join(got.Scopes, ",") != "user:profile,user:inference" || got.AccountUUID != "acct-1" || got.OrganizationUUID != "org-1" {
 		t.Fatal("rotated response decoded wrongly")
 	}
 	// Absent refresh_token: success, with no replacement (the caller keeps the old one).
 	tr, _ = claudeTokenServer(t, 200, okClaudeBody(""))
 	got, err = tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit)
-	if err != nil || !got.Refresh.Empty() || got.RefreshExpiresIn != 0 || got.Scopes != nil || got.AccountUUID != "" {
+	if err != nil || !got.Refresh.Empty() || got.RefreshExpiresIn != 0 || got.RefreshExpiryPresent || got.Scopes != nil || got.AccountUUID != "" {
 		t.Fatal("absent refresh_token must succeed with no replacement")
 	}
 	// An unchanged refresh_token is also fine, unlike the Codex transport.
 	tr, _ = claudeTokenServer(t, 200, okClaudeBody(`,"refresh_token":"`+claudeOldRefreshCanary+`"`))
 	if got, err = tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit); err != nil || got.Refresh.Reveal() != claudeOldRefreshCanary {
 		t.Fatal("unchanged refresh_token must be accepted")
+	}
+}
+
+func TestClaudeRefreshExpiryPresenceWithUnknownLifetime(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		extra   string
+		present bool
+	}{
+		{name: "numeric zero", extra: `,"refresh_token_expires_in":0`, present: true},
+		{name: "null", extra: `,"refresh_token_expires_in":null`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr, _ := claudeTokenServer(t, 200, okClaudeBody(tc.extra))
+			got, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit)
+			if err != nil || got.RefreshExpiresIn != 0 || got.RefreshExpiryPresent != tc.present {
+				t.Fatal("expiry presence changed or supplied a lifetime")
+			}
+		})
 	}
 }
 
