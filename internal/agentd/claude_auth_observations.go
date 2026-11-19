@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	claudeAuthChildEntries = 1024
-	claudeAuthChildFiles   = 32
-	claudeAuthChildTail    = 16 << 10
+	claudeAuthChildBatch = 64
+	claudeAuthChildFiles = 32
+	claudeAuthChildTail  = 16 << 10
 )
 
 // Precision is the width of the timestamp's final recorded digit.
@@ -40,8 +40,9 @@ type claudeAuthObservation struct {
 }
 
 // Native child transcripts live under the launch's conversation directory.
-// The most recently modified children in a bounded directory sample get a
-// bounded tail read. A separately launched process has no binding here.
+// Enumerate in batches so the newest children remain eligible even in a long
+// conversation. Only their bounded tails are read. A separately launched
+// process has no binding here.
 func readClaudeAuthObservations(s Settings, l Launch, now time.Time) []claudeAuthObservation {
 	if !conversationIDPattern.MatchString(l.ConversationID) || !filepath.IsAbs(l.Dir) {
 		return nil
@@ -60,33 +61,39 @@ func readClaudeAuthObservations(s Settings, l Launch, now time.Time) []claudeAut
 		return observations
 	}
 	defer func() { _ = children.Close() }()
-	entries, _ := children.ReadDir(claudeAuthChildEntries)
 	type childTranscript struct {
 		name     string
 		modified time.Time
 	}
 	var recent []childTranscript
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasPrefix(name, "agent-") || !strings.HasSuffix(name, ".jsonl") || !entry.Type().IsRegular() {
-			continue
+	for {
+		entries, readErr := children.ReadDir(claudeAuthChildBatch)
+		for _, entry := range entries {
+			name := entry.Name()
+			if !strings.HasPrefix(name, "agent-") || !strings.HasSuffix(name, ".jsonl") || !entry.Type().IsRegular() {
+				continue
+			}
+			var st unix.Stat_t
+			if unix.Fstatat(int(children.Fd()), name, &st, unix.AT_SYMLINK_NOFOLLOW) == nil && st.Mode&unix.S_IFMT == unix.S_IFREG {
+				recent = append(recent, childTranscript{name, time.Unix(st.Mtim.Sec, st.Mtim.Nsec)})
+			}
 		}
-		var st unix.Stat_t
-		if unix.Fstatat(int(children.Fd()), name, &st, unix.AT_SYMLINK_NOFOLLOW) == nil && st.Mode&unix.S_IFMT == unix.S_IFREG {
-			recent = append(recent, childTranscript{name, time.Unix(st.Mtim.Sec, st.Mtim.Nsec)})
+		slices.SortFunc(recent, func(a, b childTranscript) int {
+			if byTime := b.modified.Compare(a.modified); byTime != 0 {
+				return byTime
+			}
+			return cmp.Compare(a.name, b.name)
+		})
+		recent = recent[:min(len(recent), claudeAuthChildFiles)]
+		if readErr != nil {
+			break
 		}
 	}
-	slices.SortFunc(recent, func(a, b childTranscript) int {
-		if byTime := b.modified.Compare(a.modified); byTime != 0 {
-			return byTime
-		}
-		return cmp.Compare(a.name, b.name)
-	})
 	// Two native files can report rejections at the same instant. Count
 	// each source once at that timestamp and retain no source identifiers.
 	byTimestamp := make(map[time.Time]claudeAuthObservation)
 	seen := make(map[time.Time]bool)
-	for _, child := range recent[:min(len(recent), claudeAuthChildFiles)] {
+	for _, child := range recent {
 		tail := readClaudeAuthTail(children, child.name, claudeAuthChildTail)
 		clear(seen)
 		for _, o := range appendClaudeAuthObservations(nil, tail, l.CreatedAt, now, true) {

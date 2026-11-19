@@ -293,6 +293,44 @@ func TestClaudeAuthHistorySeparatesNativeChildrenWithoutPersistingIDs(t *testing
 	}
 }
 
+func TestClaudeAuthHistoryFindsNewestChildBeyondDirectoryPrefix(t *testing.T) {
+	r := newClaudeHistoryRig(t)
+	r.apply(1)
+	dir := filepath.Join(r.s.ClaudeConfigDir, "projects", "-work-repo", continueConv, "subagents")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 1025 {
+		path := filepath.Join(dir, fmt.Sprintf("agent-%04d.jsonl", i))
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := f.Readdirnames(-1)
+	_ = f.Close()
+	if err != nil || len(names) != 1025 {
+		t.Fatalf("directory fixture: %d names, %v", len(names), err)
+	}
+	at := r.created.Add(5 * time.Second)
+	last := filepath.Join(dir, names[1024])
+	if err := os.WriteFile(last, []byte(history401(at, false)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	modified := time.Now().Add(time.Hour)
+	if err := os.Chtimes(last, modified, modified); err != nil {
+		t.Fatal(err)
+	}
+	r.observeAfter(at)
+	h, _ := r.history()
+	if g := h.Generations[0]; g.RejectionCount != 1 || !g.Sidechain {
+		t.Fatalf("newest child outside the directory prefix was skipped: %+v", g)
+	}
+}
+
 func TestClaudeAuthHistoryRetainsLaunchAttributionAcrossResume(t *testing.T) {
 	r := newClaudeHistoryRig(t)
 	r.apply(1)
