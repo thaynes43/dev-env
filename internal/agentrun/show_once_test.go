@@ -66,6 +66,33 @@ func TestShowOnceNamedGETPreservesRawPresence(t *testing.T) {
 	}
 }
 
+func TestShowOnceClaudeAuthHistoryNeedsOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		raw   string
+		optIn bool
+		want  int
+	}{
+		{"unsolicited null", `null`, false, ExitFailed},
+		{"unsolicited history", `{"version":1,"observationTiming":"assistant-transcript-proxy","clockSkewUnknown":true}`, false, ExitFailed},
+		{"negotiated invalid history", `{"version":2,"observationTiming":"assistant-transcript-proxy","clockSkewUnknown":true}`, true, ExitFailed},
+		{"negotiated history", `{"version":1,"observationTiming":"assistant-transcript-proxy","clockSkewUnknown":true}`, true, ExitOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			s := showOnceSession()
+			raw := bytes.TrimSuffix(showOnceRaw(t), []byte("}"))
+			raw = append(raw, `,"claudeAuthHistory":`+tc.raw+`}`...)
+			h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { _, _ = w.Write(raw) }
+			args := []string{"show", s.Name, "--json", "--once"}
+			if tc.optIn {
+				args = append(args, "--claude-auth-history")
+			}
+			h.mustRun(tc.want, args...)
+		})
+	}
+}
+
 func TestShowOnceRejectsArgumentsBeforeConnection(t *testing.T) {
 	cases := [][]string{
 		{"show", "--json", "--once"},

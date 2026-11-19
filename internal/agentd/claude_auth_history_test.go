@@ -732,7 +732,7 @@ func TestClaudeAuthHistoryWorstCaseSize(t *testing.T) {
 	}
 	t.Logf("worst-case history: %d of %d bytes", len(raw), claudeAuthHistorySize)
 
-	st := CollectStatus(context.Background(), nil, s, protocol.Session{Agent: protocol.AgentClaude}, at)
+	st := collectHeartbeatStatus(context.Background(), nil, s, protocol.Session{Agent: protocol.AgentClaude}, at)
 	wire, err := json.Marshal(st.ClaudeAuthHistory)
 	if err != nil || st.ClaudeAuthHistory == nil || len(wire) > protocol.ClaudeAuthHistoryMaxBytes {
 		t.Fatalf("worst-case heartbeat history failed the %d-byte limit: size = %d, err = %v", protocol.ClaudeAuthHistoryMaxBytes, len(wire), err)
@@ -772,7 +772,7 @@ func TestClaudeAuthHistoryHeartbeatOmitsUnavailableHistory(t *testing.T) {
 	s := Settings{StateDir: t.TempDir()}
 	at := time.Date(2026, 11, 19, 20, 0, 0, 0, time.UTC)
 	collect := func(agent string) *protocol.ClaudeAuthHistory {
-		return CollectStatus(context.Background(), nil, s, protocol.Session{Agent: agent}, at).ClaudeAuthHistory
+		return collectHeartbeatStatus(context.Background(), nil, s, protocol.Session{Agent: agent}, at).ClaudeAuthHistory
 	}
 	if collect(protocol.AgentClaude) != nil {
 		t.Fatal("a missing history file appeared in the heartbeat")
@@ -783,6 +783,9 @@ func TestClaudeAuthHistoryHeartbeatOmitsUnavailableHistory(t *testing.T) {
 	}
 	if collect(protocol.AgentCodex) != nil {
 		t.Fatal("a non-Claude heartbeat sent Claude history")
+	}
+	if got := CollectStatus(context.Background(), nil, s, protocol.Session{Agent: protocol.AgentClaude}, at); got.ClaudeAuthHistory != nil {
+		t.Fatal("ordinary agentd ctl status included history")
 	}
 	if err := os.WriteFile(s.statePath(claudeAuthHistoryFile), []byte(`{"version":2}`), 0o600); err != nil {
 		t.Fatal(err)

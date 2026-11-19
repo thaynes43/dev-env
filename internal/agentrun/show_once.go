@@ -32,10 +32,11 @@ func (a *app) showOnce(ctx context.Context, c *conn, name string, query url.Valu
 	var session apiv1.Session
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
-	if status != http.StatusOK || !strictSessionJSON(raw) || d.Decode(&session) != nil || d.Decode(new(any)) != io.EOF || session.Name != name {
+	includeHistory := query.Get(apiv1.ClaudeAuthHistoryQuery) == apiv1.ClaudeAuthHistoryV1
+	if status != http.StatusOK || !strictSessionViewJSON(raw, includeHistory) || d.Decode(&session) != nil || d.Decode(new(any)) != io.EOF || session.Name != name {
 		return fail(ExitFailed, "show --once returned an unconfirmed named Session")
 	}
-	if h := session.ClaudeAuthHistory; h != nil && (query.Get(apiv1.ClaudeAuthHistoryQuery) != apiv1.ClaudeAuthHistoryV1 || !h.Valid()) {
+	if h := session.ClaudeAuthHistory; h != nil && !h.Valid() {
 		return fail(ExitFailed, "show --once returned an unconfirmed named Session")
 	}
 	// Keep optional nulls, absent fields, integer zero and decimal strings exactly
@@ -47,7 +48,14 @@ func (a *app) showOnce(ctx context.Context, c *conn, name string, query url.Valu
 // Walk every canonical exported wire field before that decoder can hide an
 // unknown key or nested type error. This validator grants no status authority.
 func strictSessionJSON(raw []byte) bool {
-	return strictWireJSON(raw, reflect.TypeFor[apiv1.Session]())
+	return strictSessionViewJSON(raw, false)
+}
+
+func strictSessionViewJSON(raw []byte, includeHistory bool) bool {
+	if includeHistory {
+		return strictWireJSON(raw, reflect.TypeFor[apiv1.Session]())
+	}
+	return strictWireJSON(raw, reflect.TypeFor[apiv1.Session](), "claudeAuthHistory")
 }
 
 // strictWireJSON walks raw against the canonical exported JSON tags of the
@@ -55,7 +63,7 @@ func strictSessionJSON(raw []byte) bool {
 // keys, case aliases, unknown fields, trailing values, null scalars and nested
 // type errors that encoding/json alone would let through. show --once, canary
 // create, directory list and budget use it (DESIGN-023, history-05).
-func strictWireJSON(raw []byte, root reflect.Type) bool {
+func strictWireJSON(raw []byte, root reflect.Type, excludedRootFields ...string) bool {
 	// send fences the complete wire body before decoding. Independently bound
 	// the JSON value span here, even when this validator is called directly.
 	if len(raw) == 0 || len(raw) >= maxResponse || !utf8.Valid(raw) {
@@ -144,6 +152,11 @@ func strictWireJSON(raw []byte, root reflect.Type) bool {
 				name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 				if f.IsExported() && name != "" && name != "-" {
 					fields[name] = f
+				}
+			}
+			if depth == 0 {
+				for _, name := range excludedRootFields {
+					delete(fields, name)
 				}
 			}
 			seen := make(map[string]bool, len(fields))

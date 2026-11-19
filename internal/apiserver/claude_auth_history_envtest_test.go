@@ -4,18 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/agentrun"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/controller"
 )
 
 func TestClaudeAuthHistoryHeartbeatAndShow(t *testing.T) {
@@ -23,19 +29,55 @@ func TestClaudeAuthHistoryHeartbeatAndShow(t *testing.T) {
 	l := startLiveWith(t, func(s *Server) { s.Now = func() time.Time { return now } })
 	human := l.token(humanSA, []string{apiv1.TokenAudience}, nil)
 	task := newOutcomeTask(t, l, human)
+	key := client.ObjectKey{Namespace: sessionNS, Name: task.name}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := l.k8s.Delete(ctx, task.pod, client.GracePeriodSeconds(0)); err != nil {
+			t.Error(err)
+		}
+		var sess v1alpha1.AgentSession
+		if err := l.k8s.Get(ctx, key, &sess); err != nil {
+			t.Fatal(err)
+		}
+		controllerutil.RemoveFinalizer(&sess, controller.Finalizer)
+		if err := l.k8s.Update(ctx, &sess); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.k8s.Delete(ctx, &sess); err != nil {
+			t.Error(err)
+		}
+	})
 	heartbeatPath := protocol.HeartbeatPath(task.name)
 	showPath := apiv1.SessionPath(task.name)
 	stored := func() v1alpha1.AgentSessionStatus {
 		t.Helper()
 		var sess v1alpha1.AgentSession
-		if err := l.k8s.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: task.name}, &sess); err != nil {
+		if err := l.k8s.Get(context.Background(), key, &sess); err != nil {
 			t.Fatal(err)
 		}
 		return sess.Status
 	}
 	beat := func(raw json.RawMessage) {
 		t.Helper()
-		l.want(http.MethodPost, heartbeatPath, task.agent, raw, http.StatusOK)
+		// Preserve the actual payload size. Marshaling a RawMessage compacts JSON.
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, l.base+heartbeatPath, bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+task.agent)
+		resp, err := l.http.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("heartbeat returned HTTP %d", resp.StatusCode)
+		}
+		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// The old heartbeat wire fixture has no auth history key.
 	legacy := json.RawMessage(`{"session":` + mustJSON(t, task.name) + `,"boot":"ready","agent":{"state":"busy"}}`)
@@ -104,6 +146,7 @@ func TestClaudeAuthHistoryHeartbeatAndShow(t *testing.T) {
 			t.Fatalf("legacy CLI arguments %v changed after history arrived: exit %d", check.args[1:], code)
 		}
 	}
+	checkPreSliceClaudeAuthHistoryCLI(t, l, human, task.name)
 	for _, flags := range [][]string{{"-o", "json"}, {"--json", "--once"}} {
 		args := append([]string{task.name, "--claude-auth-history"}, flags...)
 		code, out := l.show(human, args...)
@@ -111,11 +154,12 @@ func TestClaudeAuthHistoryHeartbeatAndShow(t *testing.T) {
 			t.Fatalf("opt-in CLI arguments %v did not show the history: exit %d", flags, code)
 		}
 	}
-	for _, path := range []string{showPath + "?" + apiv1.ClaudeAuthHistoryQuery + "=unknown", apiv1.SessionsPath + "?" + apiv1.ClaudeAuthHistoryQuery + "=v1"} {
+	for _, path := range []string{showPath + "?" + apiv1.ClaudeAuthHistoryQuery + "=unknown", apiv1.SessionsPath} {
 		if got := l.want(http.MethodGet, path, human, nil, http.StatusOK); bytes.Contains(got, []byte(`"claudeAuthHistory"`)) {
 			t.Fatal("history appeared outside the negotiated named view")
 		}
 	}
+	l.want(http.MethodGet, apiv1.SessionsPath+"?"+apiv1.ClaudeAuthHistoryQuery+"=v1", human, nil, http.StatusBadRequest)
 
 	// Older and malformed reports still refresh liveness without erasing
 	// evidence. A full snapshot is replaced only by a usable one.
@@ -129,7 +173,41 @@ func TestClaudeAuthHistoryHeartbeatAndShow(t *testing.T) {
 		beat(bytes.Replace(raw, []byte(`"state":"busy"`), []byte(`"state":"`+state+`"`), 1))
 		got := stored()
 		if !apiequality.Semantic.DeepEqual(got.ClaudeAuthHistory, h) || got.Agent.Status != state || got.Agent.LastHeartbeat == nil || !got.Agent.LastHeartbeat.Time.Equal(now.Truncate(time.Second)) {
-			t.Fatal("unusable or old heartbeat lost history or did not refresh liveness")
+			t.Fatalf("unusable or old heartbeat fixture %d lost history or did not refresh liveness", i)
 		}
+	}
+}
+
+// For the mixed-version fixture, build agent-run from pre-slice 05a6b847
+// and pass its absolute path. Ordinary CI checks the unchanged response
+// bytes above and needs only the source and binary under test.
+func checkPreSliceClaudeAuthHistoryCLI(t *testing.T, l *live, token, name string) {
+	t.Helper()
+	binary := os.Getenv("DEV_ENV_TEST_LEGACY_AGENT_RUN")
+	if binary == "" {
+		return
+	}
+	if !filepath.IsAbs(binary) {
+		t.Fatal("DEV_ENV_TEST_LEGACY_AGENT_RUN must be an absolute path")
+	}
+	tokenFile := filepath.Join(t.TempDir(), "fixture-token")
+	if err := os.WriteFile(tokenFile, []byte(token), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, flags := range [][]string{{"-o", "json"}, {"--json", "--once"}} {
+		args := append([]string{"show", name}, flags...)
+		args = append(args, "--api-url", l.base, "--token-file", tokenFile, "--ca-file", l.caFile)
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		cmd := exec.CommandContext(ctx, binary, args...)
+		cmd.Env = []string{"PATH=/usr/bin:/bin"}
+		out, err := cmd.Output()
+		cancel()
+		if err != nil || bytes.Contains(out, []byte(`"claudeAuthHistory"`)) {
+			t.Fatalf("pre-slice agent-run failed %v: %v", flags, err)
+		}
+		if got := unmarshal[apiv1.Session](t, out); got.Name != name {
+			t.Fatal("pre-slice agent-run did not decode the named Session")
+		}
+		t.Logf("pre-slice agent-run accepted %v", flags)
 	}
 }
