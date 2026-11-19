@@ -22,12 +22,12 @@ const (
 	DefaultClaudeJournalSecret = "dev-env-keeper-claude-auth"
 	DefaultClaudeLiveSecret    = "dev-env-claude-live"
 	claudeJournalKey           = "state.json"
-	// claudeUnsentKey is a second data key in the same journal Secret: the
-	// unsent marker. refresh writes it in the same compare-and-swap as its
-	// RefreshIntent and removes it in one more fenced compare-and-swap, the
-	// dispatch commit, immediately before the POST. While the marker names
-	// the journal's own incarnation and the intent's attempt, nothing has been
-	// dispatched for that attempt, so any keeper may return the intent to
+	// The journal also holds the unsent marker and refresh provenance
+	// (claudeProvenanceKey) in separate data keys. Refresh writes the marker in
+	// the same compare-and-swap as its RefreshIntent and removes it in one more
+	// fenced compare-and-swap, the dispatch commit, immediately before the POST.
+	// While the marker names the journal's own incarnation and the intent's
+	// attempt, nothing has been dispatched, so any keeper may return the intent to
 	// Ready without a provider call. Older keepers never write it and their
 	// merge patches leave it alone, so their intents are always tombstoned; a
 	// stale marker names an old attempt, which never equals a fresh UUID.

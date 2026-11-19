@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -164,6 +165,83 @@ func TestClaudeProvenanceRefresh(t *testing.T) {
 				t.Fatal("refresh provenance differs from the fake-clock observation")
 			}
 		})
+	}
+}
+
+func TestClaudeProvenanceRefreshAfterRollback(t *testing.T) {
+	f := newClaudeFix(t)
+	// An older keeper advanced the journal but left provenance at generation 6.
+	f.seed(t, syntheticClaudeRecord(8))
+	prior := []claudeTransition{
+		{Generation: 5, IncarnationHigh: 7, IncarnationLow: 8, Operation: claudeAdoption,
+			AccessLifetime: int64(time.Hour), AccessExpirySource: claudeStagedExpiry},
+		{Generation: 6, IncarnationHigh: 7, IncarnationLow: 8, Operation: claudeScheduledRefresh,
+			AccessLifetime: int64(time.Hour), AccessExpirySource: claudeResponseExpiry},
+	}
+	raw := (claudeProvenance{Version: 1, Transitions: prior}).encode()
+	if _, err := f.w.Journal.patch(context.Background(), f.journalSecret(t), map[string]any{claudeProvenanceKey: raw}); err != nil {
+		t.Fatal(err)
+	}
+	f.clk.Step(6 * time.Hour)
+	f.tick()
+	rows := readClaudeProvenance(t, f)
+	if len(rows) != 3 || !slices.Equal(rows[:2], prior) {
+		t.Fatal("refresh lost the provenance history from before rollback")
+	}
+	latest := rows[2]
+	if latest.Generation != 9 || latest.IncarnationHigh != 0 || latest.IncarnationLow != 0 {
+		t.Fatal("refresh after a journal generation gap must record an unknown incarnation")
+	}
+}
+
+func TestClaudeProvenanceTrimsRowsAheadOfJournal(t *testing.T) {
+	current := claudeTransition{Generation: 5, IncarnationHigh: 7, IncarnationLow: 8, Operation: claudeAdoption,
+		AccessLifetime: int64(time.Hour), AccessExpirySource: claudeStagedExpiry}
+	replacement := claudeTransition{Generation: 6, Operation: claudeScheduledRefresh,
+		AccessLifetime: int64(time.Hour), AccessExpirySource: claudeResponseExpiry}
+	ahead := replacement
+	ahead.Generation, ahead.IncarnationHigh, ahead.IncarnationLow = 7, 9, 10
+	raw := (claudeProvenance{Version: 1, Transitions: []claudeTransition{current, replacement, ahead}}).encode()
+	got, err := decodeClaudeProvenance(appendClaudeTransition(raw, current.Generation, replacement))
+	if err != nil {
+		t.Fatal("rows ahead of the journal prevented recording the next generation")
+	}
+	replacement.IncarnationHigh, replacement.IncarnationLow = current.IncarnationHigh, current.IncarnationLow
+	if !slices.Equal(got.Transitions, []claudeTransition{current, replacement}) {
+		t.Fatal("expected the current row and its replacement after trimming newer rows")
+	}
+}
+
+func TestClaudeProvenancePublicationFence(t *testing.T) {
+	f := newClaudeFix(t)
+	ctx := context.Background()
+	record := syntheticClaudeRecord(1)
+	f.seed(t, record)
+	row := claudeTransition{Generation: 1, Operation: claudeScheduledRefresh,
+		AccessLifetime: int64(time.Hour), AccessExpirySource: claudeResponseExpiry}
+	raw := (claudeProvenance{Version: 1, Transitions: []claudeTransition{row}}).encode()
+	snapshot, err := f.w.Journal.patch(ctx, f.journalSecret(t), map[string]any{claudeProvenanceKey: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := &claudeLostAckClient{Client: f.c}
+	f.w.Journal.Client = journal
+	fences := 0
+	f.w.Fence = func(context.Context, time.Duration) error {
+		fences++
+		if fences == 2 {
+			return errClaudeLeadership
+		}
+		return nil
+	}
+	if failure := f.w.publish(ctx, snapshot, record); failure != "" || f.w.published != 1 || f.liveGeneration(t) != 1 {
+		t.Fatal("leadership loss after publication must preserve the confirmed projection")
+	}
+	if publishedAt := readClaudeProvenance(t, f)[0].PublishedAt; publishedAt != 0 || journal.patches != 0 {
+		t.Fatal("leadership loss after publication must leave the journal untouched and publication time unknown")
+	}
+	if fences != 2 {
+		t.Fatalf("expected a fence for the projection and another for its timestamp, got %d calls", fences)
 	}
 }
 

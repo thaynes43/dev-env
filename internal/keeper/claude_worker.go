@@ -256,7 +256,8 @@ func (w *claudeWorker) recordClaudePublication(ctx context.Context, secret *core
 func newClaudeRefreshOutcomes() *prometheus.CounterVec {
 	c := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "dev_env_keeper_claude_refresh_outcomes_total",
-		Help: "Scheduled Claude refresh outcomes after entering the transport, by fixed class. Success means the replacement was saved.",
+		Help: "Scheduled Claude refresh outcomes after entering the transport, by fixed class. Success means the replacement was saved. " +
+			"The save-unavailable class includes a lost acknowledgement after a successful save.",
 	}, []string{"outcome"})
 	for _, outcome := range []string{"success", "not-sent", "possibly-spent", "status", "read", "invalid", "account-mismatch", "save-unavailable"} {
 		c.WithLabelValues(outcome)

@@ -225,13 +225,16 @@ the incarnation are random at adoption and carry forward through scheduled
 refreshes. Adoption timing measures the profile request and the remaining
 staged access lifetime. Refresh timing measures the dispatch commit and
 validated response, with access expiry calculated from the response lifetime.
-The publication timestamp records confirmation of the access write. If the
-write's result is lost and a successor finds the projection already current,
-the original publication time remains unknown. The process counter
+The publication timestamp records confirmation of the access write.
+On a publication-only retry, a successor timestamps a new write with its own
+clock. Skew relative to the predecessor's clock is unknown.
+If the write's result is lost and a successor finds the projection already
+current, the original publication time remains unknown. The process counter
 `dev_env_keeper_claude_refresh_outcomes_total` uses fixed `outcome` values
 `success`, `not-sent`, `possibly-spent`, `status`, `read`, `invalid`,
 `account-mismatch` and `save-unavailable`. Success means the replacement was
-saved to the journal. Probe and early-recovery observations belong to slice 6.
+saved to the journal. `save-unavailable` includes a lost acknowledgement after
+a successful save. Probe and early-recovery observations belong to slice 6.
 
 Agentd records source kind (projection, static environment, pod-owned or
 unknown), a local launch identifier, the applied generation and the actual
@@ -434,7 +437,9 @@ handoff latency. Prove revocation isolation and early recovery only under a
 separate acceptance story with authorized test credentials and Tom's approval
 for the specific lifecycle action.
 
-Roll back diagnostics or early recovery by disabling the new behavior.
+Roll back slice 3 by reverting the keeper image pin. Older keepers ignore and
+preserve `refresh-provenance.json`.
+Roll back early recovery by disabling it.
 Preserve in-flight intent handling and the current refresh credential
 through rollback. Do not restart running sessions as a proof step.
 
