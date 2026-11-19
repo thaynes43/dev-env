@@ -61,6 +61,9 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		ObservedAt:      now.UTC(),
 		CodexHostMemory: codexHostMemory(sess, now),
 	}
+	if sess.Agent == protocol.AgentClaude {
+		st.ClaudeAuthHistory = claudeAuthHeartbeat(s)
+	}
 	var boot bootRecord
 	if readJSONFile(s.statePath(bootFile), &boot) == nil {
 		st.BootID, st.BootedAt, st.Boot = boot.BootID, boot.BootedAt, boot.Boot

@@ -18,6 +18,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/codexauth"
 	"github.com/thaynes43/dev-env/internal/codexhostpool"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
@@ -43,13 +44,14 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	if c.kind != kindSession || c.session.Name != key.Name {
 		return 0, nil, forbidden("only session %s's own pod may post its heartbeat", key.Name)
 	}
-	// Optional start and brief evidence is decoded separately so a malformed
-	// claim cannot block the rest of the heartbeat. All other fields keep
+	// Optional evidence is decoded separately so a malformed claim cannot
+	// block the rest of the heartbeat. All other fields keep
 	// the normal heartbeat decoding rules.
 	var body struct {
 		protocol.Status
-		Start json.RawMessage `json:"start"`
-		Brief json.RawMessage `json:"brief"`
+		Start             json.RawMessage `json:"start"`
+		Brief             json.RawMessage `json:"brief"`
+		ClaudeAuthHistory json.RawMessage `json:"claudeAuthHistory"`
 	}
 	if err := decodeJSON(w, r, maxHeartbeatBody, &body, false); err != nil {
 		return 0, nil, err
@@ -77,6 +79,14 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 		return 0, nil, forbidden("session %s was replaced; the pod belongs to the earlier one", key.Name)
 	}
 	base := sess.DeepCopy()
+	// Old agentd and unreadable snapshots leave the last usable evidence in
+	// place. The pod's claim has no role in refresh or recovery decisions.
+	if sess.Spec.Agent == v1alpha1.AgentClaude && len(body.ClaudeAuthHistory) > 0 && len(body.ClaudeAuthHistory) <= protocol.ClaudeAuthHistoryMaxBytes {
+		var history protocol.ClaudeAuthHistory
+		if codexauth.DecodeStrict(body.ClaudeAuthHistory, &history) == nil && history.Valid() {
+			sess.Status.ClaudeAuthHistory = &history
+		}
+	}
 	if sess.Spec.Caller == "" && s.ManagedChildDecisions && sess.Spec.Agent == v1alpha1.AgentCodex && sess.Spec.Mode == v1alpha1.ModeTask && sess.Spec.Workspace != nil {
 		if outcome := st.Decision; outcome != nil {
 			if c.pod == nil || outcome.SessionUID != string(sess.UID) || outcome.PodUID != string(c.pod.UID) || outcome.WriterGeneration == 0 ||
@@ -174,7 +184,10 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 		base.Status.Agent.PodUID = ""
 	}
 	patch := client.MergeFrom(base)
-	if !apiequality.Semantic.DeepEqual(base.Status.Outcome, sess.Status.Outcome) || (storedPod != "" && storedPod != callerPod) {
+	// A history is one snapshot. Fence the merge patch so concurrent writes
+	// cannot mix fields from different snapshots.
+	if !apiequality.Semantic.DeepEqual(base.Status.ClaudeAuthHistory, sess.Status.ClaudeAuthHistory) ||
+		!apiequality.Semantic.DeepEqual(base.Status.Outcome, sess.Status.Outcome) || (storedPod != "" && storedPod != callerPod) {
 		patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
 	}
 	if err := s.Client.Status().Patch(ctx, &sess, patch); err != nil {

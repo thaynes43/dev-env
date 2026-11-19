@@ -461,6 +461,13 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 	if err != nil {
 		return 0, nil, err
 	}
+	includeClaudeAuthHistory := r.URL.Query().Get(apiv1.ClaudeAuthHistoryQuery) == apiv1.ClaudeAuthHistoryV1
+	show := func(sess *v1alpha1.AgentSession, v apiv1.Session) (int, any, error) {
+		if includeClaudeAuthHistory && sess.Spec.Agent == v1alpha1.AgentClaude && sess.Status.ClaudeAuthHistory.Valid() {
+			v.ClaudeAuthHistory = sess.Status.ClaudeAuthHistory
+		}
+		return http.StatusOK, v, nil
+	}
 	if c.kind == kindPolicy {
 		sess, err := s.policySession(ctx, key, c)
 		if err != nil {
@@ -469,7 +476,7 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 		v := view(sess, true)
 		s.noteTitleRename(sess, &v)
 		s.attachRaise(ctx, sess, &v, true)
-		return http.StatusOK, v, nil
+		return show(sess, v)
 	}
 	if c.kind == kindSummon {
 		if s.Live == nil {
@@ -482,7 +489,7 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 		v := view(&own, true)
 		s.noteTitleRename(&own, &v)
 		s.attachRaise(ctx, &own, &v, true)
-		return http.StatusOK, v, nil
+		return show(&own, v)
 	}
 	opted := r.Header.Get(apiv1.UsageCaptureHeader) == apiv1.UsageCaptureDirectV1
 	if c.kind == kindCoordinator {
@@ -490,13 +497,13 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 		if err != nil {
 			return 0, nil, err
 		}
-		return http.StatusOK, s.sessionDetail(ctx, sess, c, r, opted), nil
+		return show(sess, s.sessionDetail(ctx, sess, c, r, opted))
 	}
 	var sess v1alpha1.AgentSession
 	if err := s.get(ctx, key, &sess); err != nil {
 		return 0, nil, fromKubeError(err, "session "+key.Name)
 	}
-	return http.StatusOK, s.sessionDetail(ctx, &sess, c, r, opted), nil
+	return show(&sess, s.sessionDetail(ctx, &sess, c, r, opted))
 }
 
 // withUsageRollup is a single Session's view with its retained descendants'

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -730,6 +731,65 @@ func TestClaudeAuthHistoryWorstCaseSize(t *testing.T) {
 		t.Fatalf("worst-case history failed the %d-byte limit: size = %d, err = %v", claudeAuthHistorySize, len(raw), err)
 	}
 	t.Logf("worst-case history: %d of %d bytes", len(raw), claudeAuthHistorySize)
+
+	st := CollectStatus(context.Background(), nil, s, protocol.Session{Agent: protocol.AgentClaude}, at)
+	wire, err := json.Marshal(st.ClaudeAuthHistory)
+	if err != nil || st.ClaudeAuthHistory == nil || len(wire) > protocol.ClaudeAuthHistoryMaxBytes {
+		t.Fatalf("worst-case heartbeat history failed the %d-byte limit: size = %d, err = %v", protocol.ClaudeAuthHistoryMaxBytes, len(wire), err)
+	}
+	// Slice 1's file has JSON numbers for generation. Preserve every other
+	// field exactly, including observation precision and rejection replay keys.
+	var file, heartbeat struct {
+		Version           int32                        `json:"version"`
+		Launch            json.RawMessage              `json:"launch"`
+		ObservationTiming string                       `json:"observationTiming"`
+		ClockSkewUnknown  bool                         `json:"clockSkewUnknown"`
+		Generations       []map[string]json.RawMessage `json:"generations"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(wire, &heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	if len(heartbeat.Generations) != claudeAuthGenerations {
+		t.Fatal("heartbeat dropped generations")
+	}
+	for _, g := range file.Generations {
+		g["appliedGeneration"] = json.RawMessage(strconv.Quote(string(g["appliedGeneration"])))
+	}
+	want, err := json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(heartbeat)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatal("heartbeat changed the bounded history fields")
+	}
+}
+
+func TestClaudeAuthHistoryHeartbeatOmitsUnavailableHistory(t *testing.T) {
+	s := Settings{StateDir: t.TempDir()}
+	at := time.Date(2026, 11, 19, 20, 0, 0, 0, time.UTC)
+	collect := func(agent string) *protocol.ClaudeAuthHistory {
+		return CollectStatus(context.Background(), nil, s, protocol.Session{Agent: agent}, at).ClaudeAuthHistory
+	}
+	if collect(protocol.AgentClaude) != nil {
+		t.Fatal("a missing history file appeared in the heartbeat")
+	}
+	recordClaudeApplied(s, 1, at, time.Time{})
+	if got := collect(protocol.AgentClaude); got == nil || len(got.Generations) != 1 || got.Generations[0].CredentialWrittenAt != "" {
+		t.Fatal("confirmation without a credential write was lost or changed")
+	}
+	if collect(protocol.AgentCodex) != nil {
+		t.Fatal("a non-Claude heartbeat sent Claude history")
+	}
+	if err := os.WriteFile(s.statePath(claudeAuthHistoryFile), []byte(`{"version":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if collect(protocol.AgentClaude) != nil {
+		t.Fatal("an invalid history file appeared in the heartbeat")
+	}
 }
 
 func TestClaudeAuthHistoryOnlyWritesSanitizedFields(t *testing.T) {

@@ -3500,3 +3500,81 @@ func TestCodexHostMemorySchema(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeAuthHistorySchema(t *testing.T) {
+	const at protocol.ClaudeAuthTimestamp = "2026-11-19T20:00:00.123456789Z"
+	const maxGeneration = "18446744073709551615"
+	valid := func() *protocol.ClaudeAuthHistory {
+		keys := make([]protocol.ClaudeAuthRejectionKey, 63)
+		for i := range keys {
+			at := time.Date(2026, 11, 19, 20, 0, i, 123456789, time.UTC)
+			keys[i] = protocol.ClaudeAuthRejectionKey{At: protocol.ClaudeAuthTimestamp(at.Format(time.RFC3339Nano)), Count: 1}
+		}
+		return &protocol.ClaudeAuthHistory{
+			Version: 1, ObservationTiming: protocol.ClaudeAuthObservationTiming, ClockSkewUnknown: true,
+			Launch: &protocol.ClaudeAuthLaunch{BootID: "012345abcdef", Source: "static-environment", CreatedAt: at},
+			Generations: []protocol.ClaudeAuthGeneration{
+				{AppliedGeneration: "9", ConfirmedAt: at},
+				{AppliedGeneration: "18446744073709551614", ConfirmedAt: at, RejectionCount: 64},
+				{AppliedGeneration: maxGeneration, ConfirmedAt: at, RejectionCount: 63, SeenRejections: keys,
+					ErrorClass: protocol.ClaudeAuthErrorClass, FirstRejection: &protocol.ClaudeAuthTime{At: at, PrecisionNanos: 1}},
+			},
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*protocol.ClaudeAuthHistory)
+		want string
+	}{
+		{"bounds", nil, ""},
+		{"empty generations", func(h *protocol.ClaudeAuthHistory) { h.Generations = nil }, ""},
+		{"version", func(h *protocol.ClaudeAuthHistory) { h.Version = 2 }, "version"},
+		{"clock skew", func(h *protocol.ClaudeAuthHistory) { h.ClockSkewUnknown = false }, "clock skew must be unknown"},
+		{"timing", func(h *protocol.ClaudeAuthHistory) { h.ObservationTiming = "wall-clock" }, "observationTiming"},
+		{"source", func(h *protocol.ClaudeAuthHistory) { h.Launch.Source = "shell" }, "launch.source"},
+		{"launch ID size", func(h *protocol.ClaudeAuthHistory) { h.Launch.BootID += "a" }, "launch.bootId"},
+		{"launch ID format", func(h *protocol.ClaudeAuthHistory) { h.Launch.BootID = "012345abcdeg" }, "launch.bootId"},
+		{"timestamp format", func(h *protocol.ClaudeAuthHistory) { h.Generations[0].ConfirmedAt = "2026-13-19T20:00:00Z" }, "confirmedAt"},
+		{"timestamp size", func(h *protocol.ClaudeAuthHistory) { h.Generations[0].ConfirmedAt = "2026-11-19T20:00:00.1234567890Z" }, "confirmedAt"},
+		{"generation cap", func(h *protocol.ClaudeAuthHistory) { h.Generations = append(h.Generations, h.Generations[2]) }, "generations"},
+		{"generation order", func(h *protocol.ClaudeAuthHistory) { h.Generations[1].AppliedGeneration = "8" }, "applied generations must increase"},
+		{"duplicate generation", func(h *protocol.ClaudeAuthHistory) { h.Generations[1].AppliedGeneration = "9" }, "applied generations must increase"},
+		{"generation overflow", func(h *protocol.ClaudeAuthHistory) { h.Generations[2].AppliedGeneration = "18446744073709551616" }, "appliedGeneration"},
+		{"generation zero", func(h *protocol.ClaudeAuthHistory) { h.Generations[0].AppliedGeneration = "0" }, "appliedGeneration"},
+		{"error class", func(h *protocol.ClaudeAuthHistory) { h.Generations[2].ErrorClass = "raw-error" }, "errorClass"},
+		{"precision below range", func(h *protocol.ClaudeAuthHistory) { h.Generations[2].FirstRejection.PrecisionNanos = 0 }, "precisionNanos"},
+		{"precision above range", func(h *protocol.ClaudeAuthHistory) { h.Generations[2].FirstRejection.PrecisionNanos = 1000000001 }, "precisionNanos"},
+		{"rejection count", func(h *protocol.ClaudeAuthHistory) { h.Generations[2].RejectionCount = 65 }, "rejectionCount"},
+		{"key count too small", func(h *protocol.ClaudeAuthHistory) { h.Generations[2].SeenRejections[0].Count = 0 }, "seenRejections[0].count"},
+		{"key count too large", func(h *protocol.ClaudeAuthHistory) { h.Generations[2].SeenRejections[0].Count = 64 }, "seenRejections[0].count"},
+		{"key cap", func(h *protocol.ClaudeAuthHistory) {
+			g := &h.Generations[2]
+			g.SeenRejections = append(g.SeenRejections, g.SeenRejections[0])
+		}, "seenRejections"},
+		{"key total", func(h *protocol.ClaudeAuthHistory) { h.Generations[2].RejectionCount = 62 }, "rejection keys must account for the count until saturation"},
+		{"saturation", func(h *protocol.ClaudeAuthHistory) { h.Generations[2].RejectionCount = 64 }, "rejection keys must account for the count until saturation"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := taskSession()
+			if err := k8s.Create(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			h := valid()
+			if tc.edit != nil {
+				tc.edit(h)
+			}
+			s.Status.ClaudeAuthHistory = h
+			err := k8s.Status().Update(ctx(t), s)
+			if tc.want != "" {
+				wantInvalid(t, err, tc.want)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored := get(t, s).Status.ClaudeAuthHistory; !apiequality.Semantic.DeepEqual(stored, h) {
+				t.Fatal("history changed through the API round trip")
+			}
+		})
+	}
+}

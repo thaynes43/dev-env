@@ -33,8 +33,8 @@ Usage:
                                                   read one retained fixed publication
   agent-run report working|done|failed|escalate [--note "..."]
                                                   report this summoned session's outcome
-  agent-run show <name> [--captured-usage -o json]
-                                              show one session; --captured-usage adds direct-child receipts
+  agent-run show <name> [-o json] [--captured-usage] [--claude-auth-history]
+                                              show one session with optional usage or diagnostic history
   agent-run title <session> "<text>" | --clear
                                               record a new role title, or clear it
   agent-run raise <session> --profile <name> | --start-sessions --words "..." --said-at <time>
@@ -1069,7 +1069,7 @@ This command sends once; after an unconfirmed response, read agent-run show
 before retrying.
 `,
 	"show": `Usage: agent-run show <name> [-o json]
-       agent-run show <name> --json --once
+       agent-run show <name> --json --once [--claude-auth-history]
 
 Shows one session: phase and node, the scheduler's reason while Pending, repo,
 agent, model and effort, size, the agent's state, branch and head from its last
@@ -1086,6 +1086,11 @@ sends Dev-Env-Attribution: provider-v1 on that read. The capture view is a
 separate capability: ordinary show output still omits the ledger. Text and
 --once are refused before a request. A missing, older, disabled, malformed, or
 oversized view is unavailable, not zero usage and not a partial receipt list.
+
+--claude-auth-history with JSON output requests the last diagnostic snapshot
+reported by Claude agentd. The claudeAuthHistory key holds up to three applied
+generations when available. Ordinary show omits the key. An older operator or a
+session with no usable snapshot leaves the key absent.
 `,
 	"usage": `Usage: agent-run usage -o json [--from-file FILE|- | --claude-statusline | --read-current | --publish-file FILE|-]
        agent-run usage capture -o json --input FILE|- --trust-file FILE

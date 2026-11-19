@@ -110,10 +110,11 @@ func note(s apiv1.Session) string {
 
 func (a *app) show(ctx context.Context, args []string) error {
 	cmd := newCommand("show", outputJSON)
-	var once, asJSON, captured bool
+	var once, asJSON, captured, authHistory bool
 	cmd.fs.BoolVar(&once, "once", false, "")
 	cmd.fs.BoolVar(&asJSON, "json", false, "")
 	cmd.fs.BoolVar(&captured, "captured-usage", false, "")
+	cmd.fs.BoolVar(&authHistory, "claude-auth-history", false, "")
 	onceFlags, jsonFlags := 0, 0
 	for _, arg := range args {
 		if arg == "--once" || arg == "-once" || strings.HasPrefix(arg, "--once=") || strings.HasPrefix(arg, "-once=") {
@@ -136,6 +137,13 @@ func (a *app) show(ctx context.Context, args []string) error {
 	if asJSON {
 		cmd.c.output = outputJSON
 	}
+	var query url.Values
+	if authHistory {
+		if cmd.c.output != outputJSON {
+			return usageError("show --claude-auth-history requires JSON output")
+		}
+		query = url.Values{apiv1.ClaudeAuthHistoryQuery: {apiv1.ClaudeAuthHistoryV1}}
+	}
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
@@ -149,15 +157,20 @@ func (a *app) show(ctx context.Context, args []string) error {
 		}
 	}
 	if once {
-		return a.showOnce(ctx, c, pos[0])
+		return a.showOnce(ctx, c, pos[0], query)
 	}
 	callCtx := withSessionTaskClaims(ctx)
 	if captured {
 		callCtx = withUsageCapture(callCtx)
 	}
 	var s apiv1.Session
-	if _, err := a.call(callCtx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(pos[0])), nil, nil, &s); err != nil {
+	if _, err := a.call(callCtx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(pos[0])), query, nil, &s); err != nil {
 		return err
+	}
+	if !authHistory {
+		s.ClaudeAuthHistory = nil
+	} else if s.ClaudeAuthHistory != nil && !s.ClaudeAuthHistory.Valid() {
+		return fail(ExitFailed, "show returned invalid Claude auth history")
 	}
 	s.TaskClaims = sessionTaskClaimsOrUnknown(s.TaskClaims)
 	if captured {

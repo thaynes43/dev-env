@@ -25,6 +25,12 @@ const (
 
 func CanaryResultPath(id string) string { return CanariesPath + "/" + id + "/result" }
 
+// ClaudeAuthHistoryQuery opts a named Session read into diagnostic history.
+const (
+	ClaudeAuthHistoryQuery = "claude-auth-history"
+	ClaudeAuthHistoryV1    = "v1"
+)
+
 // CanaryResult exposes one retained managed publication to its fixed initiating
 // client. Context contains existing publisher assertions, not private receipts.
 type CanaryResult struct {
@@ -305,6 +311,8 @@ type Session struct {
 	// CapturedUsage is set only for Dev-Env-Usage-Capture: direct-v1. It is not
 	// a usage total. Nil means this response did not carry the receipt view.
 	CapturedUsage *CapturedUsage `json:"capturedUsage,omitempty"`
+	// ClaudeAuthHistory is present only on a negotiated named Session read.
+	ClaudeAuthHistory *protocol.ClaudeAuthHistory `json:"claudeAuthHistory,omitempty"`
 	// UsageRollup sums the retained descendants' own initial invocations. It is
 	// present only on a single Session's view, and only when it has
 	// descendants.

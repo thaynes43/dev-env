@@ -410,6 +410,10 @@ func (in *AgentSessionStatus) DeepCopyInto(out *AgentSessionStatus) {
 		*out = new(AgentStatus)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ClaudeAuthHistory != nil {
+		in, out := &in.ClaudeAuthHistory, &out.ClaudeAuthHistory
+		*out = (*in).DeepCopy()
+	}
 	if in.TaskResult != nil {
 		in, out := &in.TaskResult, &out.TaskResult
 		*out = new(TaskResultStatus)

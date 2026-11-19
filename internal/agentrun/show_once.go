@@ -18,14 +18,14 @@ import (
 
 // showOnce changes only this explicit read's transport and output validation.
 // The caller's ordinary connection, identity and kube-context remain intact.
-func (a *app) showOnce(ctx context.Context, c *conn, name string) error {
+func (a *app) showOnce(ctx context.Context, c *conn, name string, query url.Values) error {
 	hc := *c.http
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	one := *c
 	one.http = &hc
 	one.rejectOversizeResponse = true
 	var raw json.RawMessage
-	status, err := a.callWith(withSessionTaskClaims(ctx), &one, http.MethodGet, apiv1.SessionPath(url.PathEscape(name)), nil, nil, &raw, false)
+	status, err := a.callWith(withSessionTaskClaims(ctx), &one, http.MethodGet, apiv1.SessionPath(url.PathEscape(name)), query, nil, &raw, false)
 	if err != nil {
 		return err
 	}
@@ -33,6 +33,9 @@ func (a *app) showOnce(ctx context.Context, c *conn, name string) error {
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if status != http.StatusOK || !strictSessionJSON(raw) || d.Decode(&session) != nil || d.Decode(new(any)) != io.EOF || session.Name != name {
+		return fail(ExitFailed, "show --once returned an unconfirmed named Session")
+	}
+	if h := session.ClaudeAuthHistory; h != nil && (query.Get(apiv1.ClaudeAuthHistoryQuery) != apiv1.ClaudeAuthHistoryV1 || !h.Valid()) {
 		return fail(ExitFailed, "show --once returned an unconfirmed named Session")
 	}
 	// Keep optional nulls, absent fields, integer zero and decimal strings exactly
