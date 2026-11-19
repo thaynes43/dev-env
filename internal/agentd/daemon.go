@@ -307,7 +307,7 @@ func (d *Daemon) bootHeartbeat(ctx context.Context) func() {
 	// status needs only these stable local paths, never the mutable writer.
 	s, sess, r := d.S, d.Session, d.R
 	beat := func() {
-		d.sendHeartbeat(ctx, CollectStatus(ctx, r, s, sess, d.now()))
+		d.sendHeartbeat(ctx, collectHeartbeatStatus(ctx, r, s, sess, d.now()))
 	}
 	beat()
 	done := make(chan struct{})
@@ -835,7 +835,7 @@ func (d *Daemon) beat(ctx context.Context) {
 	if d.Send == nil {
 		return
 	}
-	st := CollectStatus(ctx, d.R, d.S, d.Session, d.now())
+	st := collectHeartbeatStatus(ctx, d.R, d.S, d.Session, d.now())
 	st.ConversationUsage = d.conversationUsage()
 	d.overlayRejection(&st)
 	st.HomeHeadroom = d.homeHeadroom.Sample(d.S.Home, d.now(), d.Log)
@@ -847,6 +847,14 @@ func (d *Daemon) beat(ctx context.Context) {
 		st.Problems = append(st.Problems, *refused)
 	}
 	d.sendHeartbeat(ctx, st)
+}
+
+func collectHeartbeatStatus(ctx context.Context, r Runner, s Settings, sess protocol.Session, now time.Time) protocol.Status {
+	st := CollectStatus(ctx, r, s, sess, now)
+	if sess.Agent == protocol.AgentClaude {
+		st.ClaudeAuthHistory = claudeAuthHeartbeat(s)
+	}
+	return st
 }
 
 func (d *Daemon) sendHeartbeat(ctx context.Context, st protocol.Status) {

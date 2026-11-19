@@ -99,7 +99,9 @@ type Step struct {
 type Status struct {
 	// CodexHostMemory is absent unless this Codex remote host can measure its finite cgroup v2 budget.
 	CodexHostMemory *CodexHostMemory `json:"codexHostMemory,omitempty"`
-	Session         string           `json:"session"`
+	// ClaudeAuthHistory is the bounded diagnostic snapshot from a Claude session.
+	ClaudeAuthHistory *ClaudeAuthHistory `json:"claudeAuthHistory,omitempty"`
+	Session           string             `json:"session"`
 	// Model and Effort are the session's configured values, not proof of the
 	// serving model (DESIGN-018).
 	Model  string `json:"model,omitempty"`

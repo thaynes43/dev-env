@@ -2,6 +2,8 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 // The shape follows DESIGN-001 3.3, which follows kubernetes-sigs/agent-sandbox's
@@ -855,6 +857,15 @@ type AgentSessionStatus struct {
 	// Agent is the agent's own state, from agentd's heartbeat.
 	// +optional
 	Agent *AgentStatus `json:"agent,omitempty"`
+
+	// ClaudeAuthHistory is the last bounded diagnostic snapshot from agentd.
+	// It is pod-reported evidence and grants no authority over authentication.
+	// +optional
+	ClaudeAuthHistory *protocol.ClaudeAuthHistory `json:"claudeAuthHistory,omitempty"`
+	// ClaudeAuthHistoryReportedAt is when the operator received the last
+	// heartbeat with a usable Claude auth history snapshot.
+	// +optional
+	ClaudeAuthHistoryReportedAt *metav1.Time `json:"claudeAuthHistoryReportedAt,omitempty"`
 
 	// TaskResult is how a task-mode session's task ended, derived by the
 	// operator from agent.task (DESIGN-021). Phase stays the pod's: a session

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -64,6 +65,92 @@ func TestShowOnceNamedGETPreservesRawPresence(t *testing.T) {
 	if err := json.Compact(&printed, h.stdout.Bytes()); err != nil || !bytes.Equal(want.Bytes(), printed.Bytes()) {
 		t.Fatal("raw null/omission/zero/decimal fields changed", err, h.stdout.String())
 	}
+}
+
+func TestShowOnceClaudeAuthHistoryNeedsOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		raw   string
+		optIn bool
+		want  int
+	}{
+		{"unsolicited null", `null`, false, ExitFailed},
+		{"unsolicited history", `{"version":1,"observationTiming":"assistant-transcript-proxy","clockSkewUnknown":true}`, false, ExitFailed},
+		{"negotiated invalid history", `{"version":2,"observationTiming":"assistant-transcript-proxy","clockSkewUnknown":true}`, true, ExitFailed},
+		{"negotiated history", `{"version":1,"observationTiming":"assistant-transcript-proxy","clockSkewUnknown":true}`, true, ExitOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			s := showOnceSession()
+			raw := bytes.TrimSuffix(showOnceRaw(t), []byte("}"))
+			raw = append(raw, `,"claudeAuthHistory":`+tc.raw+`}`...)
+			h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+				if tc.optIn {
+					w.Header().Set(apiv1.ClaudeAuthHistoryHeader, apiv1.ClaudeAuthHistoryV1)
+				}
+				_, _ = w.Write(raw)
+			}
+			args := []string{"show", s.Name, "--json", "--once"}
+			if tc.optIn {
+				args = append(args, "--claude-auth-history")
+			}
+			h.mustRun(tc.want, args...)
+		})
+	}
+}
+
+func TestShowClaudeAuthHistoryRequiresAcknowledgement(t *testing.T) {
+	for _, mode := range []struct {
+		name  string
+		flags []string
+	}{
+		{"ordinary", []string{"-o", "json"}},
+		{"once", []string{"--json", "--once"}},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name   string
+				header string
+				want   int
+			}{
+				{"older operator", "", ExitFailed},
+				{"wrong version", "v2", ExitFailed},
+				{"supported with no snapshot", apiv1.ClaudeAuthHistoryV1, ExitOK},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					h := newHarness(t)
+					raw := showOnceRaw(t)
+					h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+						if tc.header != "" {
+							w.Header().Set(apiv1.ClaudeAuthHistoryHeader, tc.header)
+						}
+						_, _ = w.Write(raw)
+					}
+					args := append([]string{"show", showOnceSession().Name, "--claude-auth-history"}, mode.flags...)
+					h.mustRun(tc.want, args...)
+					reqs := h.api.requests()
+					if len(reqs) != 1 || url.Values(reqs[0].query).Get(apiv1.ClaudeAuthHistoryQuery) != apiv1.ClaudeAuthHistoryV1 {
+						t.Fatal("expected one request that opts into the history view")
+					}
+					if tc.want == ExitFailed {
+						if h.stdout.Len() != 0 || !strings.Contains(h.stderr.String(), "the operator does not offer the Claude auth history view") {
+							t.Fatalf("unexpected refusal: stdout %q, stderr %q", h.stdout.String(), h.stderr.String())
+						}
+					} else if !json.Valid(h.stdout.Bytes()) || bytes.Contains(h.stdout.Bytes(), []byte("claudeAuthHistory")) {
+						t.Fatal("acknowledged response without a snapshot did not print a legacy-shaped Session")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestShowOnceRefusesUnsolicitedClaudeAuthHistoryReportedAt(t *testing.T) {
+	h := newHarness(t)
+	raw := bytes.TrimSuffix(showOnceRaw(t), []byte("}"))
+	raw = append(raw, `,"claudeAuthHistoryReportedAt":"2026-11-19T20:00:00Z"}`...)
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { _, _ = w.Write(raw) }
+	h.mustRun(ExitFailed, "show", showOnceSession().Name, "--json", "--once")
 }
 
 func TestShowOnceRejectsArgumentsBeforeConnection(t *testing.T) {

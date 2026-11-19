@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -17,11 +18,11 @@ import (
 const (
 	claudeAuthHistoryFile = "claude-auth-history.json"
 	claudeAuthHistoryLock = "claude-auth-history.lock"
-	claudeAuthHistorySize = 16 << 10
-	claudeAuthGenerations = 3
-	claudeAuthCountLimit  = 64
-	claudeAuthTiming      = "assistant-transcript-proxy"
-	claudeAuthRejected    = "authentication"
+	claudeAuthHistorySize = protocol.ClaudeAuthHistoryMaxBytes
+	claudeAuthGenerations = protocol.ClaudeAuthHistoryMaxGenerations
+	claudeAuthCountLimit  = protocol.ClaudeAuthHistoryMaxRejections
+	claudeAuthTiming      = protocol.ClaudeAuthObservationTiming
+	claudeAuthRejected    = protocol.ClaudeAuthErrorClass
 )
 
 type claudeAuthSource string
@@ -135,6 +136,69 @@ func readClaudeAuthHistory(s Settings) (claudeAuthHistory, []byte, error) {
 		return claudeAuthHistory{}, nil, errors.New("invalid Claude auth history")
 	}
 	return h, raw, nil
+}
+
+// claudeAuthHeartbeat copies the history's fixed fields without changing the
+// private file format or consulting the CLI, its credentials, or observations.
+func claudeAuthHeartbeat(s Settings) *protocol.ClaudeAuthHistory {
+	h, _, err := readClaudeAuthHistory(s)
+	if err != nil {
+		return nil
+	}
+	out := &protocol.ClaudeAuthHistory{
+		Version: int32(h.Version), Launch: h.Launch.heartbeat(),
+		ObservationTiming: h.ObservationTiming, ClockSkewUnknown: h.ClockSkewUnknown,
+	}
+	for _, g := range h.Generations {
+		generation := protocol.ClaudeAuthGeneration{
+			AppliedGeneration:                strconv.FormatUint(g.AppliedGeneration, 10),
+			ConfirmedAt:                      claudeAuthHeartbeatTimestamp(g.ConfirmedAt),
+			CredentialWrittenAt:              claudeAuthHeartbeatTimestamp(g.CredentialWrittenAt),
+			FirstRejection:                   g.FirstRejection.heartbeat(),
+			LastRejection:                    g.LastRejection.heartbeat(),
+			LastAcceptedBeforeFirstRejection: g.LastAcceptedBeforeFirstRejection.heartbeat(),
+			FirstAccepted:                    g.FirstAccepted.heartbeat(),
+			LastAccepted:                     g.LastAccepted.heartbeat(),
+			FirstAcceptedAfterLastRejection:  g.FirstAcceptedAfterLastRejection.heartbeat(),
+			FirstRejectionLaunch:             g.FirstRejectionLaunch.heartbeat(),
+			LastRejectionLaunch:              g.LastRejectionLaunch.heartbeat(),
+			MainChain:                        g.MainChain,
+			Sidechain:                        g.Sidechain,
+			ErrorClass:                       g.ErrorClass,
+			RejectionCount:                   int32(g.RejectionCount),
+		}
+		for _, key := range g.SeenRejections {
+			generation.SeenRejections = append(generation.SeenRejections, protocol.ClaudeAuthRejectionKey{
+				At: claudeAuthHeartbeatTimestamp(key.At), Sidechain: key.Sidechain, Count: int32(key.Count),
+			})
+		}
+		out.Generations = append(out.Generations, generation)
+	}
+	if !out.Valid() {
+		return nil
+	}
+	return out
+}
+
+func claudeAuthHeartbeatTimestamp(t time.Time) protocol.ClaudeAuthTimestamp {
+	if t.IsZero() {
+		return ""
+	}
+	return protocol.ClaudeAuthTimestamp(t.UTC().Format(time.RFC3339Nano))
+}
+
+func (l *claudeAuthLaunch) heartbeat() *protocol.ClaudeAuthLaunch {
+	if l == nil {
+		return nil
+	}
+	return &protocol.ClaudeAuthLaunch{BootID: l.BootID, CreatedAt: claudeAuthHeartbeatTimestamp(l.CreatedAt), Source: string(l.Source)}
+}
+
+func (t claudeAuthTime) heartbeat() *protocol.ClaudeAuthTime {
+	if t.IsZero() {
+		return nil
+	}
+	return &protocol.ClaudeAuthTime{At: claudeAuthHeartbeatTimestamp(t.At), PrecisionNanos: t.PrecisionNanos}
 }
 
 // Updates serialize independently of the live rejection marker. This file is
