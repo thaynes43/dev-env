@@ -173,8 +173,8 @@ requires usable projected access before the remote launch. [Templates](https://g
 [v1 launcher](https://github.com/thaynes43/haynes-ops/blob/e00c68aaaa0b75dc1b0ce7928665497fe65b5762/kubernetes/main/apps/dev/dev-env/app/resources/agent-run.sh#L899-L925).
 
 The November 19 pod snapshot showed eight read-only mount holders in
-`dev-agents`. Seven had surviving pods and Ready conditions dating to the
-November 18 22:28–22:37 UTC window. They were three `full` remote Claude,
+`dev-agents`. Seven surviving pods had started and reached Ready by the end
+of the November 18 22:28–22:37 UTC window. They were three `full` remote Claude,
 three `workbench` remote Claude and one `full` remote Codex. The affected
 workbench pod became Ready at 22:28:13. The eighth holder began at 23:40:59.
 Four additional remote Claude AgentSessions (two `full`, two `workbench`)
@@ -211,20 +211,22 @@ and external copies require separate evidence. [Journal Role](https://github.com
 
 ### 3.2 Offline Claude Code and review F3
 
-The agent image pins Claude Code 2.1.321. `--version` with a clean environment
-returned `2.1.321 (Claude Code)`. The x86-64 ELF build ID was
+The affected pod used agent image 2.111.0. Its Dockerfile and the investigation
+image both pin Claude Code 2.1.321. `--version` with a clean environment
+returned `2.1.321 (Claude Code)`. The local x86-64 ELF build ID was
 `69e0821094c6c8ff81436e0a0adfc15b651a2679`. The offline read followed embedded
 JavaScript definitions and callers. The offsets below are decimal byte
 offsets in that executable. They identify the inspected code without
-running a provider or auth command. [Image pin](../../../../images/agent/Dockerfile#L156-L163).
+running a provider or auth command. [Incident image pin](https://github.com/thaynes43/dev-env/blob/v2.111.0/images/agent/Dockerfile#L156-L163),
+[current image pin](../../../../images/agent/Dockerfile#L156-L163).
 
 | F3 candidate | Classification and evidence |
 | --- | --- |
-| Exit of the four suspended CLIs | **RULED OUT** as a direct logout or OAuth revoke in the traced 2.1.321 paths. `SIGTERM` enters the ordinary shutdown coordinator (293534049). The interactive bridge hook tears down the transport and can archive the session (324270679, 311687400). The standalone bridge signal handler aborts polling (312216763). Cleanup stops work and either archives sessions and deregisters the environment or marks it offline for resume (312183020–312184855). Those paths did not reach the OAuth revocation helper. The successful request after all four suspensions also weakens an immediate cutoff. A delayed provider effect and other executable versions are still unknown. |
+| Exit of the four suspended CLIs | **RULED OUT** as a direct logout or OAuth revoke in the traced 2.1.321 paths. `/exit` and `/quit` invoke the exit path (295443695). `SIGTERM` enters the shutdown coordinator (293534049, 293542027). It can run configured session-end hooks and wait for an in-flight refresh. The interactive bridge hook tears down the transport and can archive the session (324270679, 311687400). The standalone bridge signal handler aborts polling (312216763). Cleanup stops work and either archives sessions and deregisters the environment or marks it offline for resume (312183020–312184855). Those built-in paths did not reach the OAuth revocation helper. The successful request after all four suspensions also weakens an immediate cutoff. A delayed provider effect and other executable versions are still unknown. |
 | `claude auth logout`, `/logout` or forwarded terminal input | **RULED OUT** as first-party revocation from the projected access-only state in 2.1.321. The explicit CLI command (315387870) and interactive command (333044056) both call `performLogout` (309085958). Its first-party remote branch sends stored refresh credentials from Claude, Design or Cloud Sessions OAuth entries, or a configured profile's stored refresh credential (309075620). It appends `/revoke` to the token endpoint (286672762). The branch never passes the projected access token. Local credential removal can still disrupt that pod. Enterprise gateway logout has a separate bearer revocation branch (286874928), and MCP OAuth revocation uses separate credentials. Actual command execution and alternate auth state are unknown. |
 | Phone, web or Mac Remote Control end or archive | **UNKNOWN** as an incident cause. The inspected client maps a server-inactive session into bridge failure and suppresses re-archiving an already archived session (311686826–311687400). It can disconnect or reattach the transport. This establishes client behavior. The provider-side action list and server effects are unverified. |
 | First start of the affected session | **WEAK, UNKNOWN** for a delayed effect. The inspected bridge startup creates or reattaches a session (311622640–311624004). Profile and flag reads and bridge registration supplied no client-side revoke path. An accepted dispatch after startup weakens an immediate effect. |
-| CLI self-refresh after a 401 | **RULED OUT** for a first-party standalone process holding only the projection. The 401 handler clears the cache and reads credentials again (286933082–286937265). A different stored credential can recover a retry. Forced OAuth refresh needs a stored refresh token. SDK or desktop host callbacks and runner rotation are separate branches. The bounded wait polls environment or FD tokens (286932488). It does not poll the credentials file. Runtime file-reload behavior and independently configured refresh sources are unverified. |
+| CLI self-refresh after a 401 | **RULED OUT** for a first-party standalone process holding only the projection. The 401 handler clears the cache and reads credentials again (286933082–286937265). A different stored credential can recover a retry. Forced OAuth refresh needs a stored refresh token. Some bridge archive 401s can call the auth-recovery callback and retry within a deadline (311670413, 329204192), with the same credential prerequisite for CLI-owned refresh. SDK or desktop host callbacks and runner rotation are separate branches. The bounded wait polls environment or FD tokens (286932488). It does not poll the credentials file. Runtime file-reload behavior and independently configured refresh sources are unverified. |
 | Provider policy against concurrent use | **UNKNOWN**. Multiple pods had access during the window. Establish the policy with correlated first rejections and request concurrency or provider evidence. |
 | Other Secret readers | **OPPORTUNITY OBSERVED** in the RBAC snapshot. Attribution stays **UNKNOWN**. The journal and projection access paths above establish eligible principals. The slice collected no evidence of a read or revocation action by any principal. |
 
