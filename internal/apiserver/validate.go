@@ -101,6 +101,17 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			req.Effort = effort
 		}
 	}
+	if req.FreshHost {
+		if c.kind != kindHuman && c.kind != kindClient {
+			return nil, forbidden("freshHost requires Tom or a trusted client; sessions cannot request it")
+		}
+		if req.Agent != "codex" || req.Mode != "remote" || req.Restore != "" {
+			return nil, invalid(fieldError("freshHost", "freshHost requires a new Codex remote host without restore"))
+		}
+		if s.CodexHosts == nil {
+			return nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "freshHost requires enabled Codex host selection")
+		}
+	}
 	if req.CanaryID != "" {
 		return nil, invalid(fieldError("canaryID", "canaries use the fixed ID-only create route"))
 	}

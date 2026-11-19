@@ -18,6 +18,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/codexhostpool"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
@@ -115,6 +116,11 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 
 	}
 	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
+	if codexRemoteSession(&sess) && st.CodexHostMemory != nil && st.CodexHostMemory.Valid() &&
+		!st.CodexHostMemory.ObservedAt.After(s.now()) && s.now().Sub(st.CodexHostMemory.ObservedAt) <= codexhostpool.MemoryMaxAge {
+		m := st.CodexHostMemory
+		sess.Status.Agent.CodexHostMemory = &v1alpha1.CodexHostMemoryStatus{CurrentBytes: m.CurrentBytes, LimitBytes: m.LimitBytes, ObservedAt: metav1.NewTime(m.ObservedAt)}
+	}
 	// A summoned task's start record is written once and kept on every later
 	// heartbeat (DESIGN-064 6.9, OP791).
 	sess.Status.Agent.Start = agentStartStatus(&sess, base.Status.Agent, st.Start)

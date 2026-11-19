@@ -22,9 +22,10 @@ const CodexHostRouteUnsupported = "The operator does not serve codex host select
 // LaunchID distinguishes this launch from another that shares the caller.
 // It is not a secret.
 type CodexHostSelectRequest struct {
-	Repo     string `json:"repo"`
-	Profile  string `json:"profile,omitempty"`
-	LaunchID string `json:"launchId"`
+	FreshHost bool   `json:"freshHost,omitempty"`
+	Repo      string `json:"repo"`
+	Profile   string `json:"profile,omitempty"`
+	LaunchID  string `json:"launchId"`
 }
 
 // ValidCodexLaunchID reports whether s is 16 to 64 characters of [a-z0-9].
@@ -82,7 +83,9 @@ func CodexHostSentence(code string) (string, bool) {
 	case "caller_cannot_create":
 		return "This caller may not create a Codex host.", true
 	case "at_capacity":
-		return "A create or a resume would exceed the running host cap.", true
+		return "A create or a resume would exceed a host cap.", true
+	case "fresh_host_denied":
+		return "Only Tom or a trusted client may request a fresh host.", true
 	case "host_busy":
 		return "Every suitable running host holds a live lease.", true
 	default:

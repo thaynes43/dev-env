@@ -60,7 +60,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		maxTurns                                                                                              int
 		wait                                                                                                  time.Duration
 		interactive, local, safe, once, coordinatorInstructions                                               bool
-		instructionPublisher                                                                                  bool
+		instructionPublisher, freshHost                                                                       bool
 	)
 	fs.Func("dry-run", "", func(value string) error {
 		if value != "server" {
@@ -88,6 +88,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	fs.StringVar(&archiveAfter, "archive-after", "", "")
 	fs.DurationVar(&wait, "wait", defaultWait, "")
 	fs.BoolVar(&interactive, "interactive", false, "")
+	fs.BoolVar(&freshHost, "fresh-host", false, "")
 	fs.BoolVar(&local, "local", false, "")
 	fs.BoolVar(&safe, "safe", false, "")
 	fs.BoolVar(&once, "once", false, "")
@@ -96,6 +97,9 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	pos, err := cmd.parse(a, args)
 	if err != nil {
 		return err
+	}
+	if freshHost && (agent != protocol.AgentCodex || !interactive || restoring || local) {
+		return usageError("--fresh-host requires a new --agent codex --interactive host")
 	}
 	if agent == protocol.AgentCursor && (local || interactive) {
 		return usageError("%s", protocol.CursorModeRefusal)
@@ -290,6 +294,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		hints = restoreHints(rescueID, rescueSession, rr, base != "")
 	}
 	req := apiv1.CreateSessionRequest{
+		FreshHost:                       freshHost,
 		Restore:                         rescueID,
 		Repo:                            repo,
 		Project:                         project,
@@ -355,7 +360,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		return a.printJSON(raw)
 	}
 	if interactive && agent == protocol.AgentCodex && !restoring {
-		cont, err := a.codexBeforeCreate(ctx, c, repo, profile)
+		cont, err := a.codexBeforeCreate(ctx, c, repo, profile, freshHost)
 		if err != nil {
 			return err
 		}

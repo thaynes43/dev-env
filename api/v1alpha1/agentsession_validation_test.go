@@ -3471,3 +3471,32 @@ func TestAgentBriefDeliveryState(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexHostMemorySchema(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		current, limit int64
+		valid          bool
+	}{
+		{"known", 3 << 30, 4 << 30, true}, {"over budget", 5 << 30, 4 << 30, true}, {"negative use", -1, 4 << 30, false}, {"unlimited", 3, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := remoteSession()
+			if err := k8s.Create(ctx(t), s); err != nil {
+				t.Fatal(err)
+			}
+			s.Status.Agent = &v1alpha1.AgentStatus{CodexHostMemory: &v1alpha1.CodexHostMemoryStatus{CurrentBytes: tc.current, LimitBytes: tc.limit, ObservedAt: metav1.Now()}}
+			err := k8s.Status().Update(ctx(t), s)
+			if tc.valid {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if get(t, s).Status.Agent.CodexHostMemory == nil {
+					t.Fatal("sample pruned")
+				}
+			} else {
+				wantInvalid(t, err, "codexHostMemory")
+			}
+		})
+	}
+}
