@@ -307,11 +307,17 @@ func (w *claudeWorker) adopt(ctx context.Context, id string) claudelogin.Respons
 	// One compare-and-swap on the resourceVersion read above: a newer leader's
 	// write makes it conflict and nothing is overwritten.
 	high, low := newClaudeIncarnation()
+	var recovery *claudeRecoveryState
+	if w.EarlyRecovery.Enabled && len(secret.Data[claudeRecoveryKey]) != 0 {
+		if state, ok := loadClaudeRecovery(secret, prev.Access.Generation); ok {
+			recovery = &state
+		}
+	}
 	saved, err := w.Journal.saveTransition(ctx, secret, prev.Access.Generation, next, claudeTransition{
 		IncarnationHigh: high, IncarnationLow: low,
 		Operation: claudeAdoption, AccessExpirySource: claudeStagedExpiry,
 		DispatchedAt: dispatchedAt, RespondedAt: respondedAt,
-	})
+	}, recovery)
 	if err != nil {
 		return unavailable
 	}

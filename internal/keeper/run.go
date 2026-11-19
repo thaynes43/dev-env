@@ -155,6 +155,9 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 	if o.ClaudeAuth.Enabled && (o.Namespace == o.GHTokenSecret.Namespace || (o.ClaudeAuth.LoginDir != "" && !filepath.IsAbs(o.ClaudeAuth.LoginDir))) {
 		return errors.New("claude auth requires separate private/public namespaces and an absolute login directory")
 	}
+	if err := o.ClaudeAuth.ValidateEarlyRecovery(); err != nil {
+		return err
+	}
 	if o.CodexAuth.Enabled && (o.Namespace == o.GHTokenSecret.Namespace || (o.CodexAuth.LoginDir != "" && !filepath.IsAbs(o.CodexAuth.LoginDir))) {
 		return errors.New("codex auth requires separate private/public namespaces and absolute private staging")
 	}

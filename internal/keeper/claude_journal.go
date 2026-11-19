@@ -162,23 +162,44 @@ func decodeClaudeRecord(raw []byte) (claudeRecord, error) {
 //
 // Every save removes the unsent marker: only saveIntent writes one.
 func (j *claudeJournal) save(ctx context.Context, original *corev1.Secret, r claudeRecord) error {
-	_, err := j.write(ctx, original, r, nil, nil)
+	_, err := j.write(ctx, original, r, nil, nil, nil)
 	return err
 }
 
 // saveTransition records the replacement and its evidence in the same CAS.
-func (j *claudeJournal) saveTransition(ctx context.Context, original *corev1.Secret, previous uint64, r claudeRecord, t claudeTransition) (*corev1.Secret, error) {
+func (j *claudeJournal) saveTransition(ctx context.Context, original *corev1.Secret, previous uint64, r claudeRecord, t claudeTransition, recovery *claudeRecoveryState) (*corev1.Secret, error) {
 	t.Generation = r.Access.Generation
 	t.AccessLifetime = int64(r.Access.ExpiresAt.Sub(r.LastRefresh))
 	t.AccessExpiresAt = claudeObservedTime(r.Access.ExpiresAt)
-	provenance := appendClaudeTransition(original.Data[claudeProvenanceKey], previous, t)
-	return j.write(ctx, original, r, nil, provenance)
+	var provenance []byte
+	switch t.Operation {
+	case claudeEarlyRefresh:
+		if recovery == nil {
+			return nil, errClaudeRecoveryJournal
+		}
+		recovery.addTransition(t)
+	case claudeAdoption:
+		if recovery != nil {
+			recovery.setIncarnation(t.IncarnationHigh, t.IncarnationLow)
+		}
+		fallthrough
+	case claudeScheduledRefresh:
+		provenance = appendClaudeTransition(original.Data[claudeProvenanceKey], previous, t)
+	}
+	var raw []byte
+	if recovery != nil {
+		raw = recovery.encode()
+		if raw == nil {
+			return nil, errClaudeRecoveryJournal
+		}
+	}
+	return j.write(ctx, original, r, nil, provenance, raw)
 }
 
 // saveIntent writes refresh's RefreshIntent and its unsent marker in one
 // compare-and-swap. A journal without a UID cannot carry a marker; its intent
 // is then saved without one and is tombstoned if it is ever found.
-func (j *claudeJournal) saveIntent(ctx context.Context, original *corev1.Secret, r claudeRecord) error {
+func (j *claudeJournal) saveIntent(ctx context.Context, original *corev1.Secret, r claudeRecord, recovery []byte) error {
 	if r.Stage != claudeIntent || original == nil {
 		return errClaudeJournal
 	}
@@ -186,7 +207,7 @@ func (j *claudeJournal) saveIntent(ctx context.Context, original *corev1.Secret,
 	if original.UID != "" {
 		marker, _ = json.Marshal(claudeUnsentWire{Version: 1, JournalUID: string(original.UID), AttemptUID: r.AttemptUID})
 	}
-	_, err := j.write(ctx, original, r, marker, nil)
+	_, err := j.write(ctx, original, r, marker, nil, recovery)
 	return err
 }
 
@@ -224,7 +245,7 @@ func claudeUnsentMarked(secret *corev1.Secret, r claudeRecord) bool {
 
 // write saves r with the generation guard, and sets the unsent marker to
 // marker (nil removes it), in one compare-and-swap.
-func (j *claudeJournal) write(ctx context.Context, original *corev1.Secret, r claudeRecord, marker, provenance []byte) (*corev1.Secret, error) {
+func (j *claudeJournal) write(ctx context.Context, original *corev1.Secret, r claudeRecord, marker, provenance, recovery []byte) (*corev1.Secret, error) {
 	if ctx.Err() != nil || original == nil || original.ResourceVersion == "" || !validClaudeRecord(r) {
 		return nil, errClaudeJournal
 	}
@@ -245,6 +266,9 @@ func (j *claudeJournal) write(ctx context.Context, original *corev1.Secret, r cl
 	}
 	if provenance != nil {
 		data[claudeProvenanceKey] = provenance
+	}
+	if recovery != nil {
+		data[claudeRecoveryKey] = recovery
 	}
 	return j.patch(ctx, original, data)
 }

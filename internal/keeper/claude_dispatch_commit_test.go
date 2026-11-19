@@ -350,7 +350,7 @@ func TestClaudeCrashAfterTheDispatchCommitTombstones(t *testing.T) {
 	}
 	intent := prev
 	intent.Stage, intent.AttemptUID = claudeIntent, claudeUID
-	if err := f.w.Journal.saveIntent(context.Background(), s, intent); err != nil {
+	if err := f.w.Journal.saveIntent(context.Background(), s, intent, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.w.Journal.clearUnsent(context.Background(), f.journalSecret(t)); err != nil {

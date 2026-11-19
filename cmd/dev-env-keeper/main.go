@@ -254,6 +254,9 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.claudeAuth.JournalSecret, "claude-auth-journal-secret", keeper.DefaultClaudeJournalSecret, "keeper-only private Claude auth journal Secret")
 	fs.StringVar(&o.claudeAuth.LiveSecret, "claude-live-secret", keeper.DefaultClaudeLiveSecret, "access-only Claude projection Secret in secret-namespace")
 	fs.StringVar(&o.claudeAuth.LoginDir, "claude-login-dir", keeper.DefaultClaudeLoginDir, "keeper/helper-only memory-backed staging and private control socket for the Claude login ceremony")
+	fs.BoolVar(&o.claudeAuth.EarlyRecovery.Enabled, "enable-claude-early-recovery", false, "probe the keeper's own Claude access token and recover once from a 401 (DESIGN-069); default off")
+	fs.DurationVar(&o.claudeAuth.EarlyRecovery.ProbeInterval, "claude-early-probe-interval", keeper.DefaultClaudeProbeInterval, "interval between keeper Claude profile probes when early recovery is enabled")
+	fs.DurationVar(&o.claudeAuth.EarlyRecovery.MinInterval, "claude-early-min-interval", keeper.DefaultClaudeEarlyInterval, "minimum interval between early Claude refresh attempts and recovery verification bound")
 	fs.StringVar(&o.proxmoxGrants.SessionNamespace, "session-namespace", "dev-agents", "namespace containing credential grants and session pods")
 	var raisePagesMalformed bool
 	fs.Var(summonPagesBool{on: &o.raiseNotices, malformed: &raisePagesMalformed}, "enable-session-raise-notices", "enable raise and take-back notices at any hour and initialize/publish their signing key once at leader start (DESIGN-066); default off, decided once at startup; off touches no raise objects; needs leader election and valid Pushover configuration; write --enable-session-raise-notices=true (or =false); a malformed value (=x) disables only this pager; the two-argument form (--enable-session-raise-notices true/false) is an unexpected argument and stops the keeper")
@@ -327,6 +330,9 @@ func parseFlags(args []string) (options, error) {
 	}
 	if o.claudeAuth.Enabled && (!o.leaderElect || o.claudeAuth.JournalSecret == "" || o.claudeAuth.LiveSecret == "" || !filepath.IsAbs(o.claudeAuth.LoginDir) || o.namespace == o.secretNamespace) {
 		return o, errors.New("claude auth requires leader election, separate private/public namespaces, an absolute login directory and nonempty named configuration")
+	}
+	if err := o.claudeAuth.ValidateEarlyRecovery(); err != nil {
+		return o, err
 	}
 	o.askNotifications = o.askNotifications.DisableInvalid(o.notices, o.leaderElect,
 		logr.FromSlogHandler(slog.NewJSONHandler(noticeFailureLog, nil)).WithName(binaryName))
