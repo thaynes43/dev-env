@@ -113,6 +113,7 @@ func newFixtureWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object
 		}
 		return c.Create(ctx, obj, opts...)
 	}
+	objs = append(objs, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: codexCapacityNamespace, Name: codexCapacityName}})
 	f.c = fake.NewClientBuilder().
 		WithScheme(testScheme).
 		WithObjects(objs...).

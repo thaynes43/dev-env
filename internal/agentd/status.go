@@ -52,13 +52,14 @@ const summonedInterrupted = "the summoned session's process is gone without a re
 // operator sees the same thing either way. It reads; it never changes state.
 func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Session, now time.Time) protocol.Status {
 	st := protocol.Status{
-		Session:    sess.Name,
-		Model:      sess.Model,
-		Effort:     sess.Effort,
-		Agentd:     version.Get().String("agentd"),
-		Boot:       protocol.BootBooting,
-		Agent:      protocol.AgentState{State: protocol.AgentPending},
-		ObservedAt: now.UTC(),
+		Session:         sess.Name,
+		Model:           sess.Model,
+		Effort:          sess.Effort,
+		Agentd:          version.Get().String("agentd"),
+		Boot:            protocol.BootBooting,
+		Agent:           protocol.AgentState{State: protocol.AgentPending},
+		ObservedAt:      now.UTC(),
+		CodexHostMemory: codexHostMemory(sess, now),
 	}
 	var boot bootRecord
 	if readJSONFile(s.statePath(bootFile), &boot) == nil {

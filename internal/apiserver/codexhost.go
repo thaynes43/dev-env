@@ -92,6 +92,9 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 	if !apiv1.ValidCodexLaunchID(req.LaunchID) {
 		return 0, nil, invalid(fieldError("launchId", codexHostLaunchIDInvalid))
 	}
+	if req.FreshHost && c.kind != kindHuman && c.kind != kindClient {
+		return 0, nil, forbidden("freshHost requires Tom or a trusted client; sessions cannot request it")
+	}
 	if c.kind == kindCoordinator && !check {
 		return 0, nil, forbidden("%s", codexHostCoordinatorCheckOnly)
 	}
@@ -110,7 +113,7 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 		ProfileExcluded:    requestedAccount.Workbench(),
 		ProfileUnavailable: !requestedAccount.Available(),
 		Caller:             who,
-		Request:            codexhostpool.Request{Repository: req.Repo},
+		Request:            codexhostpool.Request{Repository: req.Repo, FreshHost: req.FreshHost},
 		ResolvedProfile:    asked,
 		DefaultProfile:     tmpl.DefaultProfile,
 		MaxRunningPerCell:  s.CodexHosts.MaxRunningPerCell,
@@ -118,7 +121,8 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 	}
 	var last string
 	for range codexHostSelectPasses {
-		hosts, login, err := s.codexHostFacts(ctx, tmpl)
+		_, pending, ledgerErr := s.codexCapacity(ctx)
+		hosts, login, err := s.codexHostFactsFrom(ctx, tmpl, pending)
 		if err != nil {
 			return 0, nil, fromKubeError(err, "sessions")
 		}
@@ -130,6 +134,18 @@ func (s *Server) selectCodexHost(ctx context.Context, w http.ResponseWriter, r *
 		in.ProfileUnavailable = !requestedAccount.Available() && !ordinaryProfile
 		in.Hosts, in.Login, in.Now = hosts, login, s.now()
 		res := codexhostpool.Select(in)
+		if ledgerErr != nil && (res.Action == codexhostpool.ActionCreate || res.Action == codexhostpool.ActionResume) {
+			return 0, nil, ledgerErr
+		}
+		if res.Reason == codexhostpool.ReasonCreateUnconfirmed {
+			// Released CLIs collapse a 200 selection refusal to its reason
+			// sentence. The existing error message preserves name + attempt.
+			if err := unconfirmedCodexHosts(hosts, ""); err != nil {
+				s.logCodexHostSelect(c, res, check)
+				return 0, nil, err
+			}
+			res.Reason = codexhostpool.ReasonAtCapacity
+		}
 		last = res.Host
 		if check || res.Action != codexhostpool.ActionUse || res.Host == "" {
 			s.logCodexHostSelect(c, res, check)
@@ -288,6 +304,14 @@ func (s *Server) logCodexHostSelect(c *caller, res codexhostpool.Result, check b
 }
 
 func (s *Server) codexHostFacts(ctx context.Context, tmpl *templates.Templates) ([]codexhostpool.Host, codexhostpool.Login, error) {
+	_, pending, err := s.codexCapacity(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return s.codexHostFactsFrom(ctx, tmpl, pending)
+}
+
+func (s *Server) codexHostFactsFrom(ctx context.Context, tmpl *templates.Templates, pending []codexCapacityPending) ([]codexhostpool.Host, codexhostpool.Login, error) {
 	if s.Live == nil {
 		return nil, "", newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "sessions cannot be read")
 	}
@@ -328,8 +352,9 @@ func (s *Server) codexHostFacts(ctx context.Context, tmpl *templates.Templates) 
 		}
 	}
 	if !have {
-		return hosts, codexhostpool.LoginUnknown, nil
+		return withPendingCodexHosts(hosts, pending), codexhostpool.LoginUnknown, nil
 	}
+	hosts = withPendingCodexHosts(hosts, pending)
 	if bestState == codexhostpool.StateLoginRequired {
 		return hosts, codexhostpool.LoginLapsed, nil
 	}
@@ -427,10 +452,12 @@ func (s *Server) codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmp
 		OrdinaryPod:      ordinaryPod,
 		WorkbenchAccount: workbench,
 		Name:             sess.Name,
+		CreateAttempt:    sess.Annotations[codexCapacityAttempt],
 		UID:              string(sess.UID),
 		Agent:            string(sess.Spec.Agent),
 		Mode:             string(sess.Spec.Mode),
 		Phase:            string(sess.Status.Phase),
+		Pending:          (sess.Status.Phase == "" || sess.Status.Phase == v1alpha1.PhasePending) && codexOperatingMode(sess) == codexhostpool.ModeRunning,
 		OperatingMode:    codexOperatingMode(sess),
 		Deletion:         !sess.DeletionTimestamp.IsZero(),
 		ResolvedProfile:  codexResolvedProfile(sess, pod, def),
@@ -465,6 +492,14 @@ func (s *Server) codexHostFrom(sess *v1alpha1.AgentSession, pod *corev1.Pod, tmp
 	}
 	if sess.Status.Agent != nil {
 		h.Agentd = sess.Status.Agent.Agentd
+		if m := sess.Status.Agent.CodexHostMemory; m != nil && pod != nil {
+			// A self-report cannot substitute another budget for the owned pod.
+			for _, container := range pod.Spec.Containers {
+				if container.Name == "agent" && container.Resources.Limits.Memory().Value() == m.LimitBytes {
+					h.MemoryCurrent, h.MemoryLimit, h.MemoryObservedAt = m.CurrentBytes, m.LimitBytes, m.ObservedAt.Time
+				}
+			}
+		}
 		if sess.Status.Agent.LastActivity != nil {
 			h.LastActivity = sess.Status.Agent.LastActivity.Time
 		}

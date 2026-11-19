@@ -24,7 +24,11 @@ const (
 	ReasonLoginRequired      = "login_required"
 	ReasonCallerCannotCreate = "caller_cannot_create"
 	ReasonAtCapacity         = "at_capacity"
+	ReasonCreateUnconfirmed  = "create_unconfirmed"
 	ReasonHostBusy           = "host_busy"
+	ReasonHostFull           = "host_full"
+	ReasonFreshHost          = "fresh_host"
+	ReasonFreshHostDenied    = "fresh_host_denied"
 	ReasonCallerCannotResume = "caller_cannot_resume"
 	ReasonRemoteUnavailable  = "remote_unavailable"
 	ReasonProtected          = "protected"
@@ -101,6 +105,16 @@ const (
 	LoginUnknown Login = "unknown"
 )
 
+// MemoryMaxAge bounds a passive sample independently of the heartbeat.
+const MemoryMaxAge = 3 * time.Minute
+
+// MaxHostsPerProfile is a fixed bound, including retained suspended hosts and
+// pending creates, for the supported capacity route (DESIGN-070).
+const MaxHostsPerProfile = 2
+
+// MemoryReserveBytes leaves room for a modest additional turn.
+const MemoryReserveBytes int64 = 1 << 30
+
 // Host is one Codex host as facts. Select does not read the cluster.
 //
 // UID is the session UID. The route carries it into the lease step. SpecRepo
@@ -108,6 +122,16 @@ const (
 // only when the request names none. SuspendedBy is who suspended the host;
 // eligibility does not depend on it.
 type Host struct {
+	// CreateAttempt deduplicates a committed host from its reservation.
+	CreateAttempt string
+	// ReservationAttempt identifies a pending or unconfirmed create's capacity row.
+	ReservationAttempt string
+	// Pending means a not-yet-running API create also occupies running capacity.
+	Pending          bool
+	MemoryCurrent    int64
+	MemoryLimit      int64
+	MemoryObservedAt time.Time
+
 	// Reserved is deployment-owned name protection, independent of annotations.
 	Reserved        bool
 	AccountResolved bool
@@ -179,6 +203,7 @@ type Caller struct {
 // Request is the repository to fit, and an optional named host. A named host
 // does not enter selection. The profile is Input.ResolvedProfile.
 type Request struct {
+	FreshHost  bool
 	Repository string
 	NamedHost  string
 }
@@ -247,6 +272,9 @@ func Select(in Input) Result {
 			if h.Name != in.Request.NamedHost {
 				continue
 			}
+			if h.ReservationAttempt != "" {
+				return Result{Reason: ReasonCreateUnconfirmed, Skipped: []Skip{{Name: h.Name, Reason: ReasonCreateUnconfirmed}}}
+			}
 			if h.Reserved || h.WorkbenchAccount {
 				return Result{Reason: ReasonProtected}
 			}
@@ -264,6 +292,9 @@ func Select(in Input) Result {
 		return Result{Reason: ReasonLoginRequired}
 	}
 
+	if in.Request.FreshHost && !MayRequestFresh(in.Caller) {
+		return Result{Reason: ReasonFreshHostDenied}
+	}
 	requested := in.ResolvedProfile
 	repo := in.Request.Repository
 	perCell, fleetCap := caps(in)
@@ -272,7 +303,7 @@ func Select(in Input) Result {
 	for i, h := range in.Hosts {
 		reason, okUse, okResume := judge(h, in.Caller, requested, repo, in.Now)
 		row := judged{index: i, host: h, reason: reason}
-		if inCell(h, requested) && !okUse && reason != ReasonHostBusy {
+		if inCell(h, requested) && !okUse && reason != ReasonHostBusy && reason != ReasonCreateUnconfirmed {
 			row.filler = true
 		}
 		switch {
@@ -293,28 +324,55 @@ func Select(in Input) Result {
 	fleetN := count(in.Hosts, inFleet)
 	room := fleetN+1 <= fleetCap && cellN+1 <= perCell
 
-	if len(suitable) > 0 {
+	if len(suitable) > 0 && !in.Request.FreshHost {
 		best := pickRunning(suitable)
 		return finish(rows, best.index, ActionUse, true, "")
 	}
-	if len(busy) > 0 {
+	if len(busy) > 0 && !in.Request.FreshHost {
 		return finish(rows, -1, "", false, ReasonHostBusy)
+	}
+	reason := ""
+	for _, row := range rows {
+		if row.reason == ReasonHostFull {
+			reason = ReasonHostFull
+		}
+	}
+	if in.Request.FreshHost {
+		reason = ReasonFreshHost
+	}
+	// Only full/fresh intent can expand the normal one-host cell. The fleet
+	// running cap remains in force; the retained-host bound is never raised.
+	if reason != "" {
+		perCell = MaxHostsPerProfile
+		room = fleetN < fleetCap && cellN < MaxHostsPerProfile
+		if !room {
+			return finish(rows, -1, "", false, capacityReason(in, perCell))
+		}
+		if in.Request.FreshHost {
+			if RetainedInProfile(in.Hosts, requested) >= MaxHostsPerProfile {
+				return finish(rows, -1, "", false, capacityReason(in, perCell))
+			}
+			return finish(rows, -1, ActionCreate, false, reason)
+		}
 	}
 	if len(eligible) > 0 && room {
 		best := pickSuspended(eligible)
 		return finish(rows, best.index, ActionResume, false, "")
 	}
-	if len(fillers) > 0 && cellN >= perCell {
+	if len(fillers) > 0 && cellN >= perCell && reason == "" {
 		best := pickRunning(fillers)
 		return finish(rows, best.index, ActionReport, false, best.reason)
 	}
-	if (len(eligible) > 0 && !room) || cellN >= perCell || fleetN >= fleetCap {
-		return finish(rows, -1, "", false, ReasonAtCapacity)
+	if (len(eligible) > 0 && !room) || (cellN >= perCell && reason == "") || fleetN >= fleetCap {
+		return finish(rows, -1, "", false, capacityReason(in, perCell))
+	}
+	if RetainedInProfile(in.Hosts, requested) >= MaxHostsPerProfile {
+		return finish(rows, -1, "", false, capacityReason(in, perCell))
 	}
 	if !mayCreate(in.Caller, requested, in.DefaultProfile) {
 		return finish(rows, -1, "", false, ReasonCallerCannotCreate)
 	}
-	return finish(rows, -1, ActionCreate, false, "")
+	return finish(rows, -1, ActionCreate, false, reason)
 }
 
 // Suitable is the single-host test Select uses for a running host that can
@@ -355,6 +413,9 @@ func finish(rows []judged, chosen int, action string, ready bool, reason string)
 // hands-off list and the protected annotation) is recorded before profile, so
 // a protected host is not described as only the wrong profile.
 func judge(h Host, c Caller, requested, repo string, now time.Time) (reason string, suitable, eligible bool) {
+	if h.ReservationAttempt != "" {
+		return ReasonCreateUnconfirmed, false, false
+	}
 	if h.Agent != AgentCodex || h.Mode != ModeRemote {
 		return ReasonNotCodexHost, false, false
 	}
@@ -397,6 +458,9 @@ func judge(h Host, c Caller, requested, repo string, now time.Time) (reason stri
 		}
 		if leaseHeldByOther(h, c, now) {
 			return ReasonHostBusy, false, false
+		}
+		if MemoryFull(h, now) {
+			return ReasonHostFull, false, false
 		}
 		return "", true, false
 	}
@@ -631,7 +695,7 @@ func runningUnprotected(h Host) bool {
 	if h.Agent != AgentCodex || h.Mode != ModeRemote {
 		return false
 	}
-	if h.Phase != PhaseRunning || h.Deletion || h.Archived {
+	if (h.Phase != PhaseRunning && !h.Pending) || h.Deletion || h.Archived {
 		return false
 	}
 	if rescueBlocked(h) || poolExcluded(h) {
@@ -713,4 +777,45 @@ func contains(list []string, want string) bool {
 // never become ordinary pool capacity, even with all editable protection removed.
 func poolExcluded(h Host) bool {
 	return h.Reserved || !h.AccountResolved || h.WorkbenchAccount || h.HandsOff || h.ProtectedAnnotation
+}
+
+// MayRequestFresh deliberately excludes every session, including workbench.
+func MayRequestFresh(c Caller) bool { return c.Kind == KindHuman || c.Kind == KindClient }
+
+// MemoryFull treats unknown, stale and old-pod observations as unknown, keeping
+// legacy reuse. The route additionally binds the limit to the owned agent pod.
+func MemoryFull(h Host, now time.Time) bool {
+	if !h.Reported || h.MemoryCurrent < 0 || h.MemoryLimit <= 0 || h.MemoryObservedAt.IsZero() || h.MemoryObservedAt.After(now) || now.Sub(h.MemoryObservedAt) > MemoryMaxAge {
+		return false
+	}
+	remaining := h.MemoryLimit - h.MemoryCurrent
+	// Division avoids overflowing a large byte count.
+	return remaining < MemoryReserveBytes || remaining < h.MemoryLimit/5
+}
+
+// RetainedInProfile counts ordinary hosts until archive or object removal. Unlike the
+// running cap, suspended/failed/starting records also occupy a profile slot.
+func RetainedInProfile(hosts []Host, profile string) int {
+	return count(hosts, func(h Host) bool {
+		return h.Agent == AgentCodex && h.Mode == ModeRemote && !h.Archived && !h.Reserved && !h.WorkbenchAccount && !h.HandsOff && !h.ProtectedAnnotation && profileMatches(h.ResolvedProfile, profile)
+	})
+}
+
+// RunningHosts includes pending API admissions so a just-created session is
+// counted before its first controller status update.
+func RunningHosts(hosts []Host) int { return count(hosts, inFleet) }
+
+// A pending or unconfirmed reservation counts toward the running and retained
+// bounds and cannot be selected as a host.
+func capacityReason(in Input, perCell int) string {
+	_, fleetCap := caps(in)
+	cellFull := count(in.Hosts, func(h Host) bool { return inCell(h, in.ResolvedProfile) }) >= perCell
+	retainedFull := RetainedInProfile(in.Hosts, in.ResolvedProfile) >= MaxHostsPerProfile
+	fleetFull := RunningHosts(in.Hosts) >= fleetCap
+	for _, h := range in.Hosts {
+		if h.ReservationAttempt != "" && (fleetFull || ((cellFull || retainedFull) && h.ResolvedProfile == in.ResolvedProfile)) {
+			return ReasonCreateUnconfirmed
+		}
+	}
+	return ReasonAtCapacity
 }

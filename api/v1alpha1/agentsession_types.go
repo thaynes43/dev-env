@@ -1363,9 +1363,23 @@ type SharedAdmissionStatus struct {
 	State string `json:"state"`
 }
 
+// CodexHostMemoryStatus is a passive container sample, bound to AgentStatus.PodUID
+// and LastHeartbeat. It is deliberately absent from legacy public views.
+type CodexHostMemoryStatus struct {
+	// +kubebuilder:validation:Minimum=0
+	CurrentBytes int64 `json:"currentBytes"`
+	// +kubebuilder:validation:Minimum=1
+	LimitBytes int64       `json:"limitBytes"`
+	ObservedAt metav1.Time `json:"observedAt"`
+}
+
 // AgentStatus is the agent's own state. The /v1 API copies it from agentd's
 // heartbeat (D-41, D-46); nothing else writes it.
 type AgentStatus struct {
+	// CodexHostMemory is known only for a measuring Codex remote host.
+	// +optional
+	CodexHostMemory *CodexHostMemoryStatus `json:"codexHostMemory,omitempty"`
+
 	// Status is the agent's state, agentd's: pending, busy, idle, waiting,
 	// exited, failed or interrupted. idle and waiting are Claude's own, for a
 	// TUI (D-59); plan 04 derives them for Codex.

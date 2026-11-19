@@ -933,6 +933,26 @@ spec:
                     - not-launched
                     maxLength: 12
                     type: string
+                  codexHostMemory:
+                    description: CodexHostMemory is known only for a measuring Codex
+                      remote host.
+                    properties:
+                      currentBytes:
+                        format: int64
+                        minimum: 0
+                        type: integer
+                      limitBytes:
+                        format: int64
+                        minimum: 1
+                        type: integer
+                      observedAt:
+                        format: date-time
+                        type: string
+                    required:
+                    - currentBytes
+                    - limitBytes
+                    - observedAt
+                    type: object
                   conversationId:
                     description: |-
                       ConversationID is the agent's own session id (claude --session-id), the
