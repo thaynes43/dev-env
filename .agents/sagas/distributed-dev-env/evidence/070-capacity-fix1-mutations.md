@@ -434,7 +434,7 @@ if err != nil || len(stat) > 64<<10 {
 
 Replace:
 ```go
-len(fields) != 2 || 
+len(fields) != 2 ||
 ```
 with:
 ```go
